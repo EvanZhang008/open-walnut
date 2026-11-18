@@ -371,7 +371,7 @@ export async function sendMessageToSession(
   const { waitsWhenCold } = await import('./sessions/wake-policy.js');
   const mayWait = !opts?.wakeReason && !opts?.interrupt && !opts?.closesPrompt && !heldForMove && !heldForTurn && !scopedArea
     && !slashCommand && !personWords
-    && !opts?.messageId?.startsWith('qm-inbox-') && !opts?.messageId?.startsWith('qm-route-') && waitsWhenCold(framedBody);
+    && !opts?.messageId?.startsWith('qm-inbox-') && !opts?.messageId?.startsWith('qm-route-') && waitsWhenCold(framedBody, opts?.source);
   const heldCold = mayWait && await coldHold.sessionIsCold(sessionId) ? coldHold.COLD_HOLD_REASON : undefined;
   // Not in front of a slash command (it must start its line), nor for a move or a running turn's
   // hold: those rows wait for the next line that goes, or the sweep sends them.

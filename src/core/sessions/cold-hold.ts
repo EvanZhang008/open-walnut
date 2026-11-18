@@ -7,8 +7,8 @@
  * A wake of a session idle past its prompt cache's lifetime writes its whole context to the cache
  * again: about $3.50 for a 400K session, ten times a warm turn. In the week of 11-08 to 11-15 such
  * cold wakes were 2,182 turns and $6,174, 46% of the wake cost. A message that can wait
- * (wake-policy.ts waitsWhenCold: a task's FYI, a re-check, news on a linked change; never a wake the
- * task armed for itself, its trigger's fire or its wait clock, wake-policy.ts isArmedWake) to a
+ * (wake-policy.ts waitsWhenCold: only an FYI, a task's note that asks nothing or a Walnut notice with
+ * no clock in it; never a message a time brought, a trigger's fire, a wait clock, a re-check) to a
  * session that is cold (sessionIsCold) is stored in the session's queue parked under
  * COLD_HOLD_REASON: on disk like every queued row, so a restart loses nothing, and shown in the panel
  * as a queued message that says it is held and until when. No delivery path touches a parked row.
@@ -189,9 +189,9 @@ export async function sweepColdHolds(now = Date.now()): Promise<void> {
       try {
         const due = held.some((r) => coldHoldReleaseAt(r) <= now);
         if (due) await releaseAndSend(sid, 'the oldest held message reached its max hold');
-        // Held under an older rule that no longer holds it (a restart onto a build where a task's
-        // own trigger fire or wait clock goes at once, 2026-11-18): it goes now.
-        else if (held.some((r) => !waitsWhenCold(r.message))) await releaseAndSend(sid, 'a held message no longer waits');
+        // Held under an older rule that no longer holds it (a restart onto a build where a clock's
+        // message goes at once, 2026-11-18): it goes now.
+        else if (held.some((r) => !waitsWhenCold(r.message, r.coldSend?.source))) await releaseAndSend(sid, 'a held message no longer waits');
         else if (!(await sessionIsCold(sid, now))) await releaseAndSend(sid, 'the session is warm or running');
       } catch (err) {
         log.session.warn('cold hold: sweep failed for a session', { sessionId: sid, error: err instanceof Error ? err.message : String(err) });

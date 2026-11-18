@@ -25,7 +25,6 @@
 import { log } from '../../logging/index.js';
 import { hintBlocksIn } from '../hints/hint-format.js';
 import { holdFoldedNotice } from './held-notices.js';
-import { WAIT_WAKE_FROM } from '../task-wait-until.js';
 
 /**
  * Notices that ask nothing of their reader: they ride the next turn, never start one.
@@ -167,76 +166,59 @@ export function holdRidingNotice(sessionId: string, text: string, now = Date.now
  * price. One to a session gone cold (idle past its cache lifetime) pays the whole context again, so
  * a message that can wait is held (sessions/cold-hold.ts) and every held message goes in ONE wake:
  * with the next message that cannot wait, when the session wakes anyway, or when the oldest held one
- * reaches COLD_HOLD_MAX_MS. Nothing that someone waits on now waits: the user's own words, an ask
- * (a `request`) or the reply to one, a notice outside NOTICE_WAITS_COLD, a trigger outside
- * TRIGGER_FROM_WAITS, a script's note (a land's revert alert is one), anything not an envelope.
- * Nor a wake the task armed for itself (ARMED_WAKE_PREFIX, WAIT_WAKE_FROM): someone picked that
- * moment, and nothing else is due to wake the session sooner, so a hold only moves the same cold
- * wake an hour later (2026-11-18: a task's own 20:00 daily timer fired at 04:02:48Z and reached
- * its session at 05:03:08Z; of 135 releases on 11-17 and 11-18, 129 went at the max hold and 80 of those carried one row).
+ * reaches COLD_HOLD_MAX_MS.
+ *
+ * Only an FYI waits: news nobody waits on and no clock set (2026-11-18, the Walnut VP: "凡是按时间来的
+ * 消息……都是「到点」本身，一律不压；只有没人等、不催时间的 FYI 才能压"). A message that came because a
+ * time came is the moment itself, and nothing else is due to wake the session sooner, so a hold only
+ * moves the same cold wake an hour later (11-18: a task's 20:00 daily timer fired at 04:02:48Z and
+ * reached its session at 05:03:08Z; two re-checks of an ask to the user reached theirs 60 min late).
+ * Two gates, both by what sent the message, never by its words:
+ *  - its send source is in COLD_HOLD_SOURCES: another task's note or Walnut's status notice. Every
+ *    clock sends under its own source (wait-until, needs-recheck, promise-alarm, thread-recheck,
+ *    routine-*, trigger-*), as do the watches of what a task waits on (pr-watch, change-watch);
+ *  - its envelopes are FYIs: a task's note that asks nothing, a notice in NOTICE_WAITS_COLD or one
+ *    that rides. A `trigger` envelope never waits: each is a clock (a fire, a wait clock, a re-check,
+ *    a follow-up, a status check) or news the task waits on (a pull request or change watch).
+ * Everything else goes at once: the user's words, an ask or its reply, a script's note (a land's
+ * revert alert), an unknown source or shape. tests/core/sessions/cold-hold.test.ts fails when a clock
+ * in src/ sends what these gates would hold.
  */
+
+/** Send sources whose messages may wait for a cold session: an FYI only comes under these. */
+export const COLD_HOLD_SOURCES: ReadonlySet<string> = new Set([
+  'peer',          // another task's task_send (one with a request never waits)
+  'walnut-notify', // Walnut's status notices (only NOTICE_WAITS_COLD and riding ones wait)
+]);
 
 /**
- * The `from` of a wake a task armed for itself: its own trigger's fire or scheduled routine
- * (`Trigger: <name>`, trigger-envelope-core.ts). It goes at once, cold session or not, as does the
- * task's own wait clock (WAIT_WAKE_FROM, false in TRIGGER_FROM_WAITS). Walnut's own nudges (a
- * re-check, a follow-up, a status check) and its watches of a linked change still wait.
+ * Notices that start a turn (NOTICE_WAKES) but can wait for a cold session's next wake: news with
+ * no clock in it and nobody waiting on it.
  */
-export const ARMED_WAKE_PREFIX = 'Trigger: ';
-
-/** Notices that start a turn (NOTICE_WAKES) but can wait for a cold session's next wake. */
 export const NOTICE_WAITS_COLD: readonly string[] = [
   // The session's own trigger or routine is in trouble: its owner fixes the script when it next works.
   'check_failed', 'check_failing', 'check_repaired', 'trigger_disabled', 'routine_trouble',
-  // Threads past their time: the node answers them with its next turn.
-  'threads-overdue',
   // Its task directory is large on a host low on disk: cleaned up with its next turn.
   'task-dir-size',
 ];
 
-/**
- * Walnut's `trigger` envelopes, by their `from`, and whether each can wait for a cold session
- * (true) or must go at once (false, with the person who waits). A `Trigger: <name>` fire
- * (ARMED_WAKE_PREFIX) is the task's own and never waits. The guard test fails when a
- * producer in src/ writes a sender this map does not list.
- */
-export const TRIGGER_FROM_WAITS: Readonly<Record<string, boolean>> = {
-  'Walnut: re-check': true,
-  'Walnut: follow-up': true,
-  // The task's own wait clock: the time it asked to be woken at (2026-11-18).
-  [WAIT_WAKE_FROM]: false,
-  'Walnut: pull request watch': true,
-  // News on a change linked to the task (changes/watch.ts: a review, a check, a deploy stage), like a pull request's.
-  'Walnut: change watch': true,
-  'Walnut: status check': true,
-  // The user is looking at the session now, or still waits for its answer to his words.
-  'Walnut: Brief refresh': false,
-  'Walnut: unanswered': false,
-  // A machine the task waited on is fixed (machine-wake.ts): the work goes on now.
-  Walnut: false,
-  // A triage run's batch (triage/batch.ts): the run's own first message.
-  'Inbox Triage': false,
-};
-
 const WAITS_COLD = new Set(NOTICE_WAITS_COLD);
 
 /**
- * Can this message wait while its session is cold? Only a message made of nothing but envelopes
- * (and Walnut's hint blocks), each of them: a Walnut trigger whose sender can wait, a task's note
- * that asks nothing (a peer-note with no `request`, not a script's), or a notice that rides or is in
- * NOTICE_WAITS_COLD. Everything else goes at once: an unknown shape is never held by mistake.
+ * Can this message, sent under `source`, wait while its session is cold? Only an FYI (see above):
+ * a source in COLD_HOLD_SOURCES, and a message made of nothing but envelopes (and Walnut's hint
+ * blocks), each a task's note that asks nothing (a peer-note with no `request`, not a script's) or a
+ * notice that rides or is in NOTICE_WAITS_COLD. Everything else goes at once: an unknown shape or
+ * source is never held by mistake.
  */
-export function waitsWhenCold(text: string): boolean {
+export function waitsWhenCold(text: string, source: string | undefined): boolean {
+  if (!source || !COLD_HOLD_SOURCES.has(source)) return false;
   let rest = text;
   for (const block of hintBlocksIn(text)) rest = rest.replace(block, '');
   const envs = envelopesOnly(rest);
   if (!envs) return false;
   return envs.every((a) => {
     if (a.request) return false;
-    if (a.kind === 'trigger') {
-      const from = a.from ?? '';
-      return !from.startsWith(ARMED_WAKE_PREFIX) && TRIGGER_FROM_WAITS[from] === true;
-    }
     if (a.kind === 'peer-note') return a.anonymous !== 'true' && !!(a['from-task'] || a['from-session']);
     if (a.kind === 'notification') return !!a.outcome && (RIDES.has(a.outcome) || WAITS_COLD.has(a.outcome));
     return false;

@@ -415,8 +415,8 @@ describe('wait_until: the clock', () => {
  * A wake the task armed for itself reaches a cold idle session at once (2026-11-18: a 20:00 timer
  * fired at 04:02:48Z and reached its session at 05:03:08Z, held for the session's next wake; the
  * Mac was online and its load low). Cold means idle past its prompt cache's lifetime
- * (sessions/cold-hold.ts sessionIsCold); a watcher's news is held there, which proves the session
- * really is cold in this test, and goes out in front of the fire.
+ * (sessions/cold-hold.ts sessionIsCold); an FYI (a trigger check's trouble notice) is held there,
+ * which proves the session really is cold in this test, and goes out in front of the fire.
  */
 describe('a cold idle session', () => {
   async function goCold(): Promise<void> {
@@ -426,7 +426,7 @@ describe('a cold idle session', () => {
       promptCache: { tokens: 400_000, ttlMs: 3_600_000, requestAt: new Date(past - 3_600_000).toISOString(), expiresAt: new Date(past).toISOString() },
     } as never)
   }
-  const news = (body: string) => buildWalnutMessage({ kind: 'trigger', attrs: { from: 'Walnut: change watch', note: 'news on a change linked to this task' }, body })
+  const news = (body: string) => buildWalnutMessage({ kind: 'notification', attrs: { from: 'Trigger: CI watch', outcome: 'check_failed', note: 'your trigger check failed' }, body })
 
   afterAll(() => stopColdHold())
 
@@ -435,7 +435,7 @@ describe('a cold idle session', () => {
     try {
       await park()
       await goCold()
-      const held = await sendMessageToSession(sid, news('CR 1234 has a new revision'), { source: 'change-watch', taskId, endsWait: true })
+      const held = await sendMessageToSession(sid, news('CR 1234 has a new revision'), { source: 'walnut-notify', taskId })
       expect(isColdHold(held)).toBe(true)
       daemon.clearCommandHistory()
       const seen = await phasesDuring(taskId, () => fire(routineId, 1, 'epoch-cold'),
