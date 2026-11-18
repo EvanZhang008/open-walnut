@@ -46,6 +46,8 @@ export type TabEndWhy = 'closed' | 'given_back' | 'stopped' | 'gone' | 'browser_
 
 interface Controller extends ControllerInfo {
   lastSeen: number
+  /** When it last polled (dropPoll clears lastSeen, never this): a browser that went quiet is named by it. */
+  polledAt?: number
   waiter?: { resolve: (cmds: WireCommand[]) => void; timer: ReturnType<typeof setTimeout>; promise: Promise<WireCommand[]> }
   queue: WireCommand[]
 }
@@ -129,11 +131,15 @@ const tabReported = new Set<string>()
 const TAB_REPORT_GRACE_MS = 60_000
 /**
  * Browsers that left on purpose (agents turned off, or the person disconnected the extension), so
- * a command fails at once saying which, instead of waiting for a poll that never comes.
+ * a command fails at once saying which, instead of waiting for a poll that never comes. A browser
+ * that just stopped polling with agents still on is `quiet` (quit, or on macOS its profile's last
+ * window closed, which stops the extension): it comes back by itself once a window of it opens.
  */
-type GoneWhy = 'off' | 'disconnected'
-const gone = new Map<string, { label: string; at: number; why: GoneWhy }>()
+type GoneWhy = 'off' | 'disconnected' | 'quiet'
+const gone = new Map<string, { label: string; at: number; why: 'off' | 'disconnected' }>()
 const GONE_MS = 30 * 60_000
+/** How long a browser that went quiet is still named (a check the next evening still hears it). */
+const QUIET_MS = 48 * 60 * 60_000
 
 const tabFacts = new Map<string, TabFacts>()
 /** An owner whose last tab went, and why, for half an hour. */
@@ -219,7 +225,7 @@ export function hasCap(device: string, cap: string): boolean {
 export function poll(info: ControllerInfo, waitMs = POLL_MAX_MS): Promise<WireCommand[]> {
   const c: Controller = controllers.get(info.device) ?? { device: info.device, label: info.label, browser: info.browser, version: info.version, caps: info.caps, lastSeen: 0, queue: [] }
   const { tabs: _tabs, ...rest } = info
-  Object.assign(c, rest, { lastSeen: Date.now() })
+  Object.assign(c, rest, { lastSeen: Date.now(), polledAt: Date.now() })
   controllers.set(info.device, c)
   gone.delete(info.device)
   if (info.tabs) {
@@ -288,9 +294,12 @@ export function answer(device: string, id: string, ok: boolean, result: unknown,
 const DISCONNECTED = 'The person disconnected this browser from Walnut: nothing reaches it until they connect it again '
   + '(the Walnut extension\'s popup, Connect). Ask them to, if the work needs their browser.'
 const OFF = 'The person turned agents off in this browser (the Walnut extension\'s popup, Settings, "Let Walnut agents use this browser").'
+const QUIET = 'The browser stopped reaching Walnut with agents still on: it was quit, or no window of it is open (closing a '
+  + 'profile\'s last window stops its extensions). It reconnects by itself once the person opens it; never open it yourself.'
 
 /** Why the browser left, as the agent hears it. */
 function goneError(why: GoneWhy): BrowserError {
+  if (why === 'quiet') return new BrowserError(QUIET, 409, 'browser_not_connected')
   return why === 'disconnected' ? new BrowserError(DISCONNECTED, 409, 'browser_disconnected') : new BrowserError(OFF, 409, 'browser_off')
 }
 
@@ -298,7 +307,7 @@ function goneError(why: GoneWhy): BrowserError {
  * The browser stopped (the person turned agents off, `off`; disconnected the extension or its
  * device was removed, `disconnected`): nothing waits on it, and the next command hears why.
  */
-export function disconnect(device: string, why: GoneWhy = 'off'): void {
+export function disconnect(device: string, why: 'off' | 'disconnected' = 'off'): void {
   const c = controllers.get(device)
   if (c?.waiter) { clearTimeout(c.waiter.timer); c.waiter.resolve([]); c.waiter = undefined }
   const before = gone.get(device)
@@ -313,13 +322,22 @@ export function disconnect(device: string, why: GoneWhy = 'off'): void {
   for (const k of [...tabOwners.keys()]) if (k.startsWith(`${device}:`)) forgetTab(k, 'browser_left')
 }
 
-/** With no browser connected, the one that left on purpose most recently (the last half hour), for the words. */
+/**
+ * With no browser connected: the one that left on purpose most recently (the last half hour),
+ * else the one that last polled and went quiet (the last two days), for the words.
+ */
 export function lastGone(now = Date.now()): { label: string; at: number; why: GoneWhy } | undefined {
   if (connected(now).length) return undefined
   let best: { label: string; at: number; why: GoneWhy } | undefined
   for (const [d, g] of gone) {
     if (now - g.at > GONE_MS) { gone.delete(d); continue }
     if (!best || g.at > best.at) best = g
+  }
+  if (best) return best
+  for (const c of controllers.values()) {
+    const at = c.polledAt
+    if (at === undefined || now - at > QUIET_MS) continue
+    if (!best || at > best.at) best = { label: c.label, at, why: 'quiet' }
   }
   return best
 }
@@ -390,7 +408,7 @@ export function pickController(device?: string): ControllerInfo {
     const left = lastGone()
     if (left) throw goneError(left.why)
     throw new BrowserError(
-      'No browser lets agents in now: the person turns it on in the Walnut extension (popup, Settings, "Let Walnut agents use this browser").',
+      'No browser reaches Walnut now: the browser with the Walnut extension is closed or has no window open, or its agents switch is off (the extension popup, Settings, "Let Walnut agents use this browser").',
       409, 'browser_not_connected')
   }
   return live.sort((a, b) => (controllers.get(b.device)!.lastSeen - controllers.get(a.device)!.lastSeen))[0]

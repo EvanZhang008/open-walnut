@@ -81,7 +81,33 @@ describe('browser hub', () => {
     expect(hub.lastGone()).toBeUndefined()
     hub.disconnect('extension-never')
     expect(hub.lastGone()).toBeUndefined()
-    expect(() => hub.pickController()).toThrow(/turns it on/)
+    expect(() => hub.pickController()).toThrow(/closed or has no window open/)
+  })
+
+  it('a browser that stopped polling with agents on is named as quiet, with when it last reached Walnut, not as switched off', async () => {
+    vi.useFakeTimers()
+    const t0 = Date.now()
+    const polled = hub.poll(info(), 1000)
+    // Its last poll's client went away (the profile's last window closed): no more polls come.
+    hub.dropPoll('extension-aaaaaa', polled)
+    vi.setSystemTime(t0 + 10 * 60_000)
+    expect(hub.connected()).toEqual([])
+    expect(hub.lastGone()).toEqual({ label: 'Walnut extension (Chrome on Mac)', at: t0, why: 'quiet' })
+    let err: unknown
+    try { hub.pickController() } catch (e) { err = e }
+    expect(err).toMatchObject({ code: 'browser_not_connected', status: 409 })
+    expect((err as Error).message).toMatch(/agents still on/)
+    expect((err as Error).message).not.toMatch(/turned agents off/)
+    // The next evening it is still named; after two days it is not.
+    vi.setSystemTime(t0 + 30 * 60 * 60_000)
+    expect(hub.lastGone()?.why).toBe('quiet')
+    vi.setSystemTime(t0 + 49 * 60 * 60_000)
+    expect(hub.lastGone()).toBeUndefined()
+    // An "off" said by the browser wins over quiet.
+    vi.setSystemTime(t0)
+    void hub.poll(info(), 10)
+    hub.disconnect('extension-aaaaaa', 'off')
+    expect(hub.lastGone()?.why).toBe('off')
   })
 
   it('tab owners: set at open, read back, restored from the extension\'s report', async () => {

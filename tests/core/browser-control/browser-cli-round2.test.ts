@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest'
 import os from 'node:os'
 import { BROWSER_EXIT, BROWSER_USAGE, browserParseOutcome, parseBrowserArgv, runBrowser } from '../../../src/core/browser-control/browser-cli'
 import { cleanArgs, webAddress } from '../../../src/core/browser-control/act-args'
-import { noBrowserLine } from '../../../src/core/browser-control/gone-words'
+import { noBrowserLine, noBrowserNext } from '../../../src/core/browser-control/gone-words'
 
 describe('walnut browser --help', () => {
   it.each([['--help'], ['-h'], ['help'], ['click', '--help']])('%s prints the usage only, to stdout, exit 0', (...argv) => {
@@ -65,7 +65,15 @@ describe('status when no browser lets agents in', () => {
     expect(noBrowserLine({ label: 'Walnut extension (Chrome on Linux)', why: 'disconnected' }))
       .toBe('Not connected: the person disconnected Walnut extension (Chrome on Linux) from Walnut. Ask them to connect it again (the Walnut extension popup, Connect).')
     expect(noBrowserLine({ label: 'Walnut extension (Chrome on Linux)', why: 'off' })).toContain('turned agents off')
-    expect(noBrowserLine()).toContain('No browser lets agents in now')
+    expect(noBrowserLine()).toContain('closed or has no window open')
+  })
+
+  it('names a browser that went quiet with agents on, and never asks for the switch then', () => {
+    const line = noBrowserLine({ label: 'Walnut extension (Chrome on Mac)', at: '2026-11-18T03:47:05.000Z', why: 'quiet' })
+    expect(line).toContain('last reached Walnut at 2026-11-18T03:47:05.000Z with agents still on')
+    expect(line).not.toMatch(/turn(ed)? (agents )?(on|off)/)
+    expect(noBrowserNext({ label: 'x', why: 'quiet' })).toMatch(/never open it yourself/)
+    expect(noBrowserNext({ label: 'x', why: 'quiet' })).not.toContain('Let Walnut agents use this browser')
   })
 
   it('walnut browser status prints it', async () => {

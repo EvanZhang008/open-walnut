@@ -71,7 +71,7 @@ frames, real input, dialogs, recording a tab's requests, uploads, taking a tab o
 
 | Answer | Do |
 |---|---|
-| `browser_not_connected` | Tell the user in one line: the extension's popup, "Let Walnut agents use this browser". |
+| `browser_not_connected` | Pass on its one line (browser closed, or the extension's switch); never open the browser. |
 | `browser_disconnected` | Ask them to connect the extension again; do not retry. |
 | `not_your_tab` | The user took it back, or it was closed (the answer says which): do not reopen it without saying why. |
 | `site_denied` | They said no to that site: do not reach it another way. |

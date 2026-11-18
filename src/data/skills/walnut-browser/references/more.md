@@ -8,7 +8,8 @@ recording a tab's requests, uploads and downloads, and taking a tab of the user'
 
 The user lets Walnut agents into their browser from the Walnut extension's popup (Settings,
 "Let Walnut agents use this browser"). Check first: `walnut browser status` (or
-`browser_status`). If no browser is connected, tell the user in one line how to turn it on.
+`browser_status`). If no browser is connected, pass on the one line it gives: a browser that was
+quit or has no window open comes back by itself once they open it, so never ask for the switch then.
 The task's session panel shows a live picture of your tab (the Browser view) with a Stop button.
 
 ## More actions

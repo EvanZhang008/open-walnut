@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
-import { noBrowserLine, type GoneBrowser } from '../core/browser-control/gone-words.js';
+import { noBrowserLine, noBrowserNext, type GoneBrowser } from '../core/browser-control/gone-words.js';
 
 /**
  * The person's own browser, through the Walnut browser extension (routes/browser-v1.ts). One op
@@ -323,8 +323,7 @@ defineOp({
     const names = (b.browsers ?? []).map((x) => (x.caps?.includes('handed-tabs-only') ? `${x.label} (only the tab the person handed over)` : x.label))
     return withOutcome(b as Record<string, unknown>,
       names.length ? `Connected: ${names.join(', ')}. ${b.mode === 'any' ? 'Any site.' : `A new site asks the person; allowed: ${(b.sites ?? []).map((s) => s.site).join(', ') || 'none yet'}.`}` : noBrowserLine(b.gone),
-      names.length ? 'browser with action open to start.' : b.gone?.why === 'disconnected' ? 'Ask the user to connect the Walnut extension again (its popup, Connect).'
-        : 'Ask the user to turn on "Let Walnut agents use this browser" in the Walnut extension popup, Settings.')
+      names.length ? 'browser with action open to start.' : noBrowserNext(b.gone))
   },
   tags: { readonly: true, remote: 'allow', primaryOnly: true },
 });
