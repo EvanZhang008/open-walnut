@@ -1,4 +1,3 @@
-import fs from 'node:fs'
 import path from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
 import { perRunWorkers } from './tests/e2e/browser/pw-concurrency.js'
@@ -10,6 +9,7 @@ import { VIDEO_USE, withVideoReporter } from './tests/e2e/browser/pw-video.js'
 // Linux WebKit paints on the CPU: its GL painting threads crash the page on software GL.
 import './tests/e2e/browser/pw-webkit-paint.js'
 import { sideConfigSpecs } from './tests/e2e/browser/side-config-specs.js'
+import { listSpecFiles, runShardTotal, shardLayout } from './tests/e2e/browser/pw-shard-layout.js'
 import { returningVisitorStorage } from './tests/e2e/browser/pw-storage.js'
 import { bunCommand } from './tests/helpers/bun-runtime.js'
 
@@ -25,12 +25,9 @@ engageGate(testPort)
 // race each other when two workers run them at once: one loads its hosts while the
 // other's test reads them (2026-10-29: banner-placement-round4 N3-2 failed 2 of 3 runs
 // beside system-attention :267). They run in their own project, one at a time, while
-// every other spec stays parallel. Found by what they call, so a new one joins itself.
-const HOST_FIXTURE_CALL = /\b(?:loadFixture|hostFixture|resetServerHostFixture)\(/
+// every other spec stays parallel. Found by what they call, so a new one joins itself;
+// a sharded run spreads them over its shards (tests/e2e/browser/pw-shard-layout.ts).
 const browserDir = path.join(import.meta.dirname, 'tests/e2e/browser')
-const hostFixtureSpecs = fs.readdirSync(browserDir)
-  .filter((f) => f.endsWith('.spec.ts') && HOST_FIXTURE_CALL.test(fs.readFileSync(path.join(browserDir, f), 'utf8')))
-  .map((f) => `**/${f}`)
 // Specs with their own config and fixture (replica, cloud host, host alone, ...).
 // Every project names them again: a project's testIgnore replaces the top-level one.
 // A `*.local.spec.ts` is a person's own walk-through (a demo video, a one-off check) and stays
@@ -39,6 +36,27 @@ const hostFixtureSpecs = fs.readdirSync(browserDir)
 // timeout on every CI run).
 const localSpecs = process.env.CI ? ['**/*.local.spec.ts'] : []
 const sideSpecs = [...sideConfigSpecs(browserDir), ...localSpecs]
+const specFiles = listSpecFiles(browserDir, (f) => sideSpecs.includes(`**/${f}`) || (!!process.env.CI && f.endsWith('.local.spec.ts')))
+const globsOf = (files: string[]) => files.map((f) => `**/${f}`)
+const hostFixtureSpecs = globsOf(specFiles.filter((f) => f.hostFixture).map((f) => f.name))
+// `testMatch` absent: every spec but the host fixture ones (a side config keeps only such projects).
+const chromiumProject = (testMatch?: string[]) => ({
+  name: 'chromium',
+  use: { ...devices['Desktop Chrome'], launchOptions: { args: CHROMIUM_SILENT } },
+  ...(testMatch ? { testMatch } : {}),
+  testIgnore: [...sideSpecs, ...hostFixtureSpecs],
+})
+const hostFixtureProject = (testMatch: string[]) => ({
+  name: 'chromium-host-fixture',
+  use: { ...devices['Desktop Chrome'], launchOptions: { args: CHROMIUM_SILENT } },
+  testMatch,
+  testIgnore: sideSpecs,
+  workers: 1,
+})
+const spread = shardLayout(specFiles, runShardTotal())
+const chromiumProjects = spread
+  ? spread.map((part) => (part.kind === 'host-fixture' ? hostFixtureProject(globsOf(part.files)) : chromiumProject(globsOf(part.files))))
+  : [chromiumProject(), hostFixtureProject(hostFixtureSpecs)]
 
 export default defineConfig({
   testDir: 'tests/e2e/browser',
@@ -84,18 +102,7 @@ export default defineConfig({
     // Chromium mutes itself headless; `--mute-audio` keeps a headed run (--headed, a
     // debug session) silent too. WebKit has no such switch: pw-silence.ts silences
     // every frame of every context (2026-11-08).
-    {
-      name: 'chromium',
-      use: { ...devices['Desktop Chrome'], launchOptions: { args: CHROMIUM_SILENT } },
-      testIgnore: [...sideSpecs, ...hostFixtureSpecs],
-    },
-    {
-      name: 'chromium-host-fixture',
-      use: { ...devices['Desktop Chrome'], launchOptions: { args: CHROMIUM_SILENT } },
-      testMatch: hostFixtureSpecs,
-      testIgnore: sideSpecs,
-      workers: 1,
-    },
+    ...chromiumProjects,
     // The desktop app is a WKWebView, so a desktop-only scroll/paint bug needs a
     // WebKit run to count as verified. Opt in: PW_WEBKIT=1 … --project webkit
     // The replica smoke is one chromium spec (its WebKit runs are replica.config.ts's).

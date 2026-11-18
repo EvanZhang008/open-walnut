@@ -10,7 +10,7 @@
  * Real UI throughout: the fixture's long-transcript columns, the real toasts, the real server.
  */
 import { test, expect, request, type Page } from '@playwright/test'
-import { homeColumns, loadHome, seedColumns, setPanelMode } from './draft-helpers'
+import { homeColumns, loadHome, presetPanelMode, seedColumns, setPanelMode } from './draft-helpers'
 import { isolateUiPrefs, showEverything } from './todo-panel-helpers'
 import { presetPanelDesign } from './status-section-helpers'
 import { holdPanelCountLock } from './panel-count-lock'
@@ -91,7 +91,7 @@ async function caretColumn(page: Page): Promise<string | null> {
 }
 async function openColumns(page: Page, keys: Key[], opts: { undoWindow?: 'real' } = {}) {
   if (opts.undoWindow !== 'real') await stretchUndoWindow(page)
-  await setPanelMode(page, '3')
+  await presetPanelMode(page, '3')
   await seedColumns(page, keys.map(SID))
   await loadHome(page)
   await expect(homeColumns(page)).toHaveCount(keys.length, { timeout: 30_000 })
@@ -702,6 +702,8 @@ test('in a browser elsewhere, session switching uses Alt, the task keys Ctrl, an
 })
 
 /** Settings > Tasks' "Go to the next task" switch, through the real Settings page. */
+// Walks the Settings page from the app, so its tests set the panel count with setPanelMode (which
+// loads the app first) rather than presetPanelMode.
 async function setGoingOn(page: Page, on: boolean) {
   await page.locator('.sidebar a[href^="/settings"]').click()
   const toggle = page.locator('#settings-next-after-complete')
@@ -789,7 +791,7 @@ test('a column still fading out when the next one swaps in is gone, not left dra
   await resetTasks(page)
   // Needs you, newest first: C, B, A, E. C's next (B) is open; A's next (E) is not.
   await setPhases(page, { e: 'NEED_ACTION', a: 'NEED_ACTION', b: 'NEED_ACTION', c: 'NEED_ACTION' }, ['e', 'a', 'b', 'c'])
-  await setPanelMode(page, '4')
+  await presetPanelMode(page, '4')
   await seedColumns(page, ['a', 'b', 'c', 'd'].map((k) => SID(k as Key)))
   await loadHome(page)
   await expect(homeColumns(page)).toHaveCount(4, { timeout: 30_000 })
@@ -1536,7 +1538,7 @@ test('Cmd+Shift+D before the board has its list completes the column task, as it
   // own copy until the list comes, as the header's Complete does.
   await asMacApp(page)
   await resetTasks(page)
-  await setPanelMode(page, '3')
+  await presetPanelMode(page, '3')
   await seedColumns(page, ['a', 'b', 'c'].map((k) => SID(k as Key)))
   let releaseList!: () => void
   const listHeld = new Promise<void>((resolve) => { releaseList = resolve })

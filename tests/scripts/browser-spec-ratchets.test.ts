@@ -5,8 +5,9 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { testMatchNames } from '../e2e/browser/side-config-specs'
+import { listSpecFiles } from '../e2e/browser/pw-shard-layout'
 
 const DIR = path.resolve(__dirname, '../e2e/browser')
 const sources = fs.readdirSync(DIR)
@@ -270,37 +271,58 @@ describe('specs that swap the server host fixture', () => {
   // read each other's hosts. chromium-host-fixture ran them one at a time, the webkit
   // project did not (2026-11-06: banner-placement-bell BP-C49 and BP-C68 failed on every
   // commit on WebKit with 2 workers, and passed alone). Every project of every browser
-  // either leaves them out or runs them with one worker, and each browser runs them.
-  const FIXTURE_CALL = /\b(?:loadFixture|hostFixture|resetServerHostFixture)\(/
-  const fixtureSpecs = sources.filter(({ file, text }) => file.endsWith('.spec.ts') && FIXTURE_CALL.test(text)).map(({ file }) => `**/${file}`)
+  // either leaves them out or runs only them with one worker, and each browser runs them all.
+  // A whole sharded run cuts them into parts, one project each (pw-shard-layout.ts): read as a
+  // worker of CI's 16-shard run loads the config, the runner having handed the total down.
+  // Found as the config finds them (subfolders included).
+  const fixtureSpecs = listSpecFiles(DIR).filter((f) => f.hostFixture).map((f) => `**/${f.name}`)
   const globs = (v: unknown): string[] => (Array.isArray(v) ? v : v === undefined ? [] : [v]).map(String)
+  type Project = { name?: string; testMatch?: unknown; testIgnore?: unknown; workers?: number | string }
 
-  it('no project runs them beside other tests', async () => {
-    expect(fixtureSpecs.length).toBeGreaterThan(5)
-    const before = process.env.PW_WEBKIT
-    process.env.PW_WEBKIT = '1'
-    let projects: Array<{ name?: string; testMatch?: unknown; testIgnore?: unknown; workers?: number | string }>
+  async function projectsWith(env: Record<string, string>): Promise<Project[]> {
+    const saved = Object.fromEntries(Object.keys(env).map((k) => [k, process.env[k]]))
+    Object.assign(process.env, env)
     try {
-      projects = (await import('../../playwright.config')).default.projects ?? []
+      vi.resetModules()
+      return (await import('../../playwright.config')).default.projects ?? []
     } finally {
-      if (before === undefined) delete process.env.PW_WEBKIT
-      else process.env.PW_WEBKIT = before
-    }
-    const browsers = new Set(projects.map((p) => p.name!.replace(/-host-fixture$/, '')))
-    expect([...browsers].sort()).toEqual(['chromium', 'webkit'])
-    for (const p of projects) {
-      const ignored = globs(p.testIgnore)
-      const runsThem = fixtureSpecs.filter((s) => !ignored.includes(s))
-      if (runsThem.length) {
-        expect(p.workers, `${p.name} runs ${runsThem[0]} with more than one worker`).toBe(1)
-        expect(globs(p.testMatch).sort(), `${p.name} runs other specs beside them`).toEqual([...fixtureSpecs].sort())
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k]
+        else process.env[k] = v
       }
+      vi.resetModules()
     }
-    for (const b of browsers) {
-      const serial = projects.filter((p) => p.name!.startsWith(b) && p.workers === 1 && globs(p.testMatch).length)
-      expect(serial.length, `${b}: no project runs the host fixture specs`).toBe(1)
-    }
-  })
+  }
+
+  for (const [run, env, chromiumParts] of [
+    ['an unsharded run', { PW_WEBKIT: '1' }, 1],
+    ['a worker of a 16-shard run', { PW_WEBKIT: '1', TEST_WORKER_INDEX: '0', WALNUT_PW_SHARDS: '16' }, 2],
+  ] as const) {
+    it(`${run}: no project runs them beside other tests`, async () => {
+      expect(fixtureSpecs.length).toBeGreaterThan(5)
+      const projects = await projectsWith(env)
+      const browsers = new Set(projects.map((p) => p.name!.replace(/-host-fixture$/, '')))
+      expect([...browsers].sort()).toEqual(['chromium', 'webkit'])
+      for (const p of projects) {
+        const ignored = globs(p.testIgnore)
+        const matched = globs(p.testMatch)
+        const runsThem = fixtureSpecs.filter((s) => !ignored.includes(s) && (!matched.length || matched.includes(s)))
+        if (runsThem.length) {
+          expect(p.workers, `${p.name} runs ${runsThem[0]} with more than one worker`).toBe(1)
+          expect(matched.filter((g) => !fixtureSpecs.includes(g)), `${p.name} runs other specs beside them`).toEqual([])
+        }
+      }
+      for (const b of browsers) {
+        const serial = projects.filter((p) => p.name!.startsWith(b) && p.workers === 1 && globs(p.testMatch).length)
+        expect(serial.length, `${b}: no project runs the host fixture specs`).toBeGreaterThanOrEqual(1)
+        expect(serial.flatMap((p) => globs(p.testMatch)).sort(), `${b} runs each of them once`).toEqual([...fixtureSpecs].sort())
+      }
+      // The webkit pair never spreads; chromium spreads over several parts in a sharded run.
+      const chromiumSerial = projects.filter((p) => p.name === 'chromium-host-fixture').length
+      if (chromiumParts === 1) expect(chromiumSerial).toBe(1)
+      else expect(chromiumSerial).toBeGreaterThanOrEqual(chromiumParts)
+    })
+  }
 })
 
 describe('dictation setup rows', () => {

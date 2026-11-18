@@ -5,7 +5,7 @@
  * files against that server at once. 2026-11-03, CI shard 11: session-panel-lock-grant read 3
  * columns where it had made 4, then a saved count of 2, because session-panel-count was setting
  * its own count on the next worker. tests/e2e/browser/panel-count-lock.ts serializes the writers;
- * this reads every spec and fails on one that writes the count (setPanelMode, a config write of
+ * this reads every spec and fails on one that writes the count (setPanelMode, presetPanelMode, a config write of
  * session_panels, a click on a panel count option) without calling holdPanelCountLock.
  */
 import { describe, expect, it } from 'vitest';
@@ -24,7 +24,7 @@ function code(file: string): string {
 }
 
 const WRITES = [
-  /\bsetPanelMode\(/,
+  /\b(?:setPanelMode|presetPanelMode)\(/,
   /session_panels\s*[:=]/,
   /delete\s+[\w.]*session_panels/,
   /panels-opt[^\n]*\.click\(/,

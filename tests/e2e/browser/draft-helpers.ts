@@ -668,6 +668,20 @@ export async function setPanelMode(page: Page, label: '1' | '2' | '3' | '4' | '5
   }
 }
 
+/**
+ * Set the panel count through the config API, for a spec that needs a count and is not about the
+ * Settings picker (session-panel-count.spec.ts is). setPanelMode walks the picker: one more whole
+ * app load and a Settings visit, about a third of each keyboard-triage test on a CI runner, where
+ * that serial file of 46 tests alone outlasted its shard (2026-11-17). Read back before it returns,
+ * so a page loaded next never meets the old count. The caller holds the panel count lock.
+ */
+export async function presetPanelMode(page: Page, label: '1' | '2' | '3' | '4' | '5' | 'Auto'): Promise<void> {
+  const expected = label === 'Auto' ? 'auto' : label
+  const res = await page.request.put('/api/config', { data: { ui: { session_panels: expected } } })
+  expect(res.ok(), `PUT /api/config session_panels=${expected}: ${res.status()}`).toBe(true)
+  await expect.poll(async () => ((await (await page.request.get('/api/config')).json()) as { config?: { ui?: { session_panels?: unknown } } })?.config?.ui?.session_panels, { timeout: 18_000 }).toBe(expected)
+}
+
 /** Tasks whose title contains `needle` — the parallel-safe existence probe (the
  *  fixture server is SHARED, so a global row COUNT would race other specs). */
 export async function tasksTitled(
