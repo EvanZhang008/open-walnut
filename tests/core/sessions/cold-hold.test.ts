@@ -3,7 +3,8 @@
  * user: buffer what can wait for a session whose cache is cold). Pinned here:
  *  - one classifier: every trigger sender a producer in src/ writes is listed (waits or goes now), and
  *    every notice that waits is one that wakes; a new sender fails until it is classified;
- *  - a message that someone waits on is never held, cold session or not;
+ *  - a message that someone waits on is never held, cold session or not, nor a wake the task armed
+ *    for itself (its trigger's fire, its scheduled routine, its wait clock: isArmedWake);
  *  - held messages go in ONE line, in front of the message that releases them, or by their max hold;
  *  - a warm session gets everything at once; one that warms up gets its held rows;
  *  - nothing is lost across a restart; a Stop sets held rows aside like any other.
@@ -37,7 +38,9 @@ import { sendQueuedNow } from '../../../src/core/sessions/send-now.js';
 import {
   COLD_HOLD_MAX_MS, COLD_HOLD_REASON, isColdHold, startColdHold, stopColdHold, sweepColdHolds,
 } from '../../../src/core/sessions/cold-hold.js';
-import { NOTICE_WAITS_COLD, NOTICE_WAKES, TRIGGER_FROM_WAITS, waitsWhenCold } from '../../../src/core/sessions/wake-policy.js';
+import { ARMED_WAKE_PREFIX, NOTICE_WAITS_COLD, NOTICE_WAKES, TRIGGER_FROM_WAITS, waitsWhenCold } from '../../../src/core/sessions/wake-policy.js';
+import { buildScheduledMessage, buildTriggerMessage } from '../../../src/providers/trigger-envelope-core.js';
+import { WAIT_WAKE_FROM } from '../../../src/core/task-wait-until.js';
 import { _clearHeldNotices } from '../../../src/core/sessions/held-notices.js';
 
 const ROOT = path.resolve(__dirname, '../../..');
@@ -46,6 +49,10 @@ const kit = createEnvelopeKit();
 
 const triggerFire = (name = 'CI watch', body = 'build 42 failed') =>
   buildWalnutMessage({ kind: 'trigger', attrs: { from: `Trigger: ${name}`, note: 'the check fired' }, body });
+/** A watcher's news on a change linked to the task (changes/watch.ts via task-news.ts): it can wait. */
+const changeNews = (body = 'build 42 failed') =>
+  buildWalnutMessage({ kind: 'trigger', attrs: { from: 'Walnut: change watch', note: 'news on a change linked to this task' }, body });
+const NEWS = { source: 'change-watch', endsWait: true } as const;
 const fyi = (body = 'FYI: the deploy is done') => kit.buildPeerWrapper(body,
   { title: 'Walnut VP', shortId: '3ccf06d9', host: 'local', sessionId: '3ccf06d9-dbdd-49a1-ab98-1537944f64d4', taskId: 'mvm0n3bu-6910' });
 const ask = () => kit.buildPeerWrapper('please check the build',
@@ -129,11 +136,15 @@ describe('one classifier for what can wait', () => {
     for (const o of NOTICE_WAITS_COLD) expect(o in NOTICE_WAKES, o).toBe(true);
   });
 
-  it('a fire, a task\'s FYI, a re-check and a trigger in trouble wait; an ask, a reply, an alert and words do not', () => {
-    expect(waitsWhenCold(triggerFire())).toBe(true);
+  it('news on a change, a task\'s FYI, a re-check and a trigger in trouble wait; an ask, a reply, an alert, words and an armed wake do not', () => {
+    expect(waitsWhenCold(changeNews())).toBe(true);
     expect(waitsWhenCold(fyi())).toBe(true);
-    expect(waitsWhenCold(`${triggerFire()}\n\n${fyi()}`)).toBe(true);
-    expect(waitsWhenCold(buildWalnutMessage({ kind: 'trigger', attrs: { from: 'Walnut: wait until' }, body: 'the time passed' }))).toBe(true);
+    expect(waitsWhenCold(`${changeNews()}\n\n${fyi()}`)).toBe(true);
+    expect(waitsWhenCold(buildWalnutMessage({ kind: 'trigger', attrs: { from: 'Walnut: re-check' }, body: 'still needed?' }))).toBe(true);
+    // A wake the task armed for itself goes now ('a wake the task armed for itself never waits' pins the class).
+    expect(waitsWhenCold(triggerFire())).toBe(false);
+    expect(waitsWhenCold(`${triggerFire()}\n\n${fyi()}`)).toBe(false);
+    expect(waitsWhenCold(buildWalnutMessage({ kind: 'trigger', attrs: { from: 'Walnut: wait until' }, body: 'the time passed' }))).toBe(false);
     expect(waitsWhenCold(notice('check_failed'))).toBe(true);
     expect(waitsWhenCold(ask())).toBe(false);
     expect(waitsWhenCold(reply())).toBe(false);
@@ -143,14 +154,70 @@ describe('one classifier for what can wait', () => {
     expect(waitsWhenCold(buildWalnutMessage({ kind: 'trigger', attrs: { from: 'Walnut: unanswered' }, body: 'the user waits' }))).toBe(false);
     expect(waitsWhenCold(buildWalnutMessage({ kind: 'trigger', attrs: { from: 'Walnut: Brief refresh' }, body: 'look' }))).toBe(false);
     expect(waitsWhenCold('please look at the build')).toBe(false);
-    expect(waitsWhenCold(`${triggerFire()}\n\nand words`)).toBe(false);
-    expect(waitsWhenCold(`${triggerFire()}\n\n${ask()}`)).toBe(false);
+    expect(waitsWhenCold(`${changeNews()}\n\nand words`)).toBe(false);
+    expect(waitsWhenCold(`${changeNews()}\n\n${ask()}`)).toBe(false);
+  });
+});
+
+describe('a wake the task armed for itself never waits', () => {
+  // 2026-11-18: a task's 20:00 journal timer fired at 04:02:48Z and was held until
+  // 05:03:08Z, with its 20:15 wait clock behind it. The class: every wake a task arms for itself
+  // (its trigger's fire, its scheduled routine, its wait clock) goes the moment it is due.
+  it('every producer of one goes now, alone or with notes that could wait', () => {
+    const armed = [
+      buildTriggerMessage({ name: 'Nightly journal' }, { atMs: Date.now(), items: [{ id: 'day-1' }] }, 'Write the journal.'),
+      buildTriggerMessage({ name: 'CI watch' }, [{ atMs: Date.now() - 60_000, items: [{ id: 'a' }] }, { atMs: Date.now(), items: [{ id: 'b' }] }], 'Read the run.', { deliveredAtMs: Date.now() + 3_600_000 }),
+      buildScheduledMessage('Morning digest', 'Send the digest.'),
+      buildWalnutMessage({ kind: 'trigger', attrs: { from: WAIT_WAKE_FROM, note: 'the time this task was waiting for has passed' }, body: 'The wait ran until 8:15 PM.' }),
+    ];
+    for (const text of armed) {
+      expect(waitsWhenCold(text), text.slice(0, 120)).toBe(false);
+      expect(waitsWhenCold(`${fyi()}\n\n${text}`), text.slice(0, 120)).toBe(false);
+    }
+  });
+
+  it('every sender of the class goes now, and none is listed as one that waits', () => {
+    expect(TRIGGER_FROM_WAITS[WAIT_WAKE_FROM]).toBe(false);
+    for (const from of Object.keys(TRIGGER_FROM_WAITS)) expect(from.startsWith(ARMED_WAKE_PREFIX), from).toBe(false);
+    // Every `Trigger: <name>` envelope written in src/ is a fire or a scheduled run of the task's own
+    // trigger or routine, so it is armed; a new builder of one is covered by the prefix.
+    const builders: string[] = [];
+    for (const p of srcFiles(path.join(ROOT, 'src'))) {
+      const s = fs.readFileSync(p, 'utf8');
+      for (const m of s.matchAll(/kind: 'trigger',\s*attrs: \{ from: `Trigger: /g)) builders.push(`${path.relative(ROOT, p)}@${m.index}`);
+    }
+    expect(builders.length).toBeGreaterThanOrEqual(2);
+    expect(builders.every((b) => b.startsWith('src/providers/trigger-envelope-core.ts@')), builders.join(', ')).toBe(true);
+  });
+  it('goes in ONE line behind what was held before it, and ends the wait', async () => {
+    const news = await sendMessageToSession(SID, changeNews(), NEWS);
+    const note = await sendMessageToSession(SID, fyi(), { source: 'peer' });
+    expect([news, note].every(isColdHold)).toBe(true);
+    expect(sends).toEqual([]);
+    const fire = await sendMessageToSession(SID, triggerFire('Nightly journal', 'write the journal'), { source: 'routine-trigger' });
+    expect(isColdHold(fire)).toBe(false);
+    expect(sends).toEqual([{ sessionId: SID, source: 'routine-trigger', endsWait: true }]);
+    const batch = await markProcessing(SID);
+    expect(batch.map((m) => m.message.includes('build 42 failed') ? 'news' : m.message.includes('FYI') ? 'fyi' : m.message.includes('write the journal') ? 'fire' : 'other'))
+      .toEqual(['news', 'fyi', 'fire']);
+    expect(new Set(batch.map((m) => m.lineUuid)).size).toBe(1);
+  });
+
+  it('a fire held by an older build goes by the next sweep, not by its max hold', async () => {
+    const row = await sendMessageToSession(SID, changeNews(), NEWS);
+    // What an older build stored: the task's own fire, held.
+    const { mutateStore } = await import('../../../src/core/session-queue-store.js');
+    await mutateStore((st) => { st.queues[SID][0].message = triggerFire(); });
+    resetCache();
+    await startColdHold();
+    expect(sends).toEqual([{ sessionId: SID, source: 'change-watch', endsWait: true }]);
+    expect((await getQueue(SID)).find((m) => m.id === row.id)?.status).toBe('pending');
   });
 });
 
 describe('a cold session', () => {
   it('holds what can wait, shows it held, and sends it all in ONE line in front of the message that cannot', async () => {
-    const a = await sendMessageToSession(SID, triggerFire(), { source: 'routine-watcher' });
+    const a = await sendMessageToSession(SID, changeNews(), NEWS);
     const b = await sendMessageToSession(SID, fyi(), { source: 'peer' });
     expect([a, b].every(isColdHold)).toBe(true);
     expect(sends).toEqual([]);
@@ -160,10 +227,10 @@ describe('a cold session', () => {
     expect(Date.parse(shown[1].heldRetryAt!)).toBe(Date.parse(a.parkedAt!) + COLD_HOLD_MAX_MS);
 
     await sendMessageToSession(SID, 'what broke?', { source: 'ui' });
-    // One kick, and it ends the wait: a trigger's fire rode in it.
+    // One kick, and it ends the wait: a watcher's news rode in it.
     expect(sends).toEqual([{ sessionId: SID, source: 'ui', endsWait: true }]);
     const batch = await markProcessing(SID);
-    expect(batch.map((m) => m.message.includes('build 42 failed') ? 'fire' : m.message.includes('FYI') ? 'fyi' : 'words')).toEqual(['fire', 'fyi', 'words']);
+    expect(batch.map((m) => m.message.includes('build 42 failed') ? 'news' : m.message.includes('FYI') ? 'fyi' : 'words')).toEqual(['news', 'fyi', 'words']);
     expect(new Set(batch.map((m) => m.lineUuid)).size).toBe(1);
   });
 
@@ -186,13 +253,13 @@ describe('a cold session', () => {
     }
   });
 
-  it('sends what it held by the max hold, under the fire\'s own source', async () => {
-    const a = await sendMessageToSession(SID, triggerFire(), { source: 'routine-watcher' });
+  it('sends what it held by the max hold, under the held send\'s own source', async () => {
+    const a = await sendMessageToSession(SID, changeNews(), NEWS);
     startColdHold();
     await sweepColdHolds(Date.parse(a.parkedAt!) + COLD_HOLD_MAX_MS - 1000);
     expect(sends).toEqual([]);
     await sweepColdHolds(Date.parse(a.parkedAt!) + COLD_HOLD_MAX_MS);
-    expect(sends).toEqual([{ sessionId: SID, source: 'routine-watcher', endsWait: true }]);
+    expect(sends).toEqual([{ sessionId: SID, source: 'change-watch', endsWait: true }]);
     expect((await getQueue(SID)).map((m) => m.status)).toEqual(['pending']);
   });
 
@@ -207,23 +274,23 @@ describe('a cold session', () => {
 
     sends = [];
     await setCache(30 * 60_000);
-    const row = await sendMessageToSession(SID, triggerFire(), { source: 'routine-watcher' });
+    const row = await sendMessageToSession(SID, changeNews(), NEWS);
     expect(row.status).toBe('pending');
     expect(sends).toHaveLength(1);
   });
 
   it('loses nothing across a restart: the row stays held on disk and goes by its max hold', async () => {
-    const a = await sendMessageToSession(SID, triggerFire(), { source: 'routine-watcher' });
+    const a = await sendMessageToSession(SID, changeNews(), NEWS);
     stopColdHold();
     resetCache();
     await loadQueue();
     const after = await getQueue(SID);
     expect(after).toHaveLength(1);
     expect(isColdHold(after[0])).toBe(true);
-    expect(after[0].coldSend).toEqual({ source: 'routine-watcher' });
+    expect(after[0].coldSend).toEqual({ source: 'change-watch', endsWait: true });
     await startColdHold();
     await sweepColdHolds(Date.parse(a.parkedAt!) + COLD_HOLD_MAX_MS + 1);
-    expect(sends).toEqual([{ sessionId: SID, source: 'routine-watcher', endsWait: true }]);
+    expect(sends).toEqual([{ sessionId: SID, source: 'change-watch', endsWait: true }]);
     expect((await getQueue(SID))[0].coldSend).toBeUndefined();
   });
 
@@ -237,11 +304,11 @@ describe('a cold session', () => {
   });
 
   it('a queue moved to a new session id (an engine switch, a move) is still sent by its max hold', async () => {
-    const a = await sendMessageToSession(SID, triggerFire(), { source: 'routine-watcher' });
+    const a = await sendMessageToSession(SID, changeNews(), NEWS);
     const NEW = 'dddddddd-1111-4222-8333-555555555555';
     expect((await migrateSessionQueue(SID, NEW)).movedIds).toEqual([a.id]);
     await sweepColdHolds(Date.parse(a.parkedAt!) + COLD_HOLD_MAX_MS);
-    expect(sends).toEqual([{ sessionId: NEW, source: 'routine-watcher', endsWait: true }]);
+    expect(sends).toEqual([{ sessionId: NEW, source: 'change-watch', endsWait: true }]);
   });
 
   it('a slash command does not take the held rows in front of it', async () => {

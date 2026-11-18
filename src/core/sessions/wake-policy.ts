@@ -25,6 +25,7 @@
 import { log } from '../../logging/index.js';
 import { hintBlocksIn } from '../hints/hint-format.js';
 import { holdFoldedNotice } from './held-notices.js';
+import { WAIT_WAKE_FROM } from '../task-wait-until.js';
 
 /**
  * Notices that ask nothing of their reader: they ride the next turn, never start one.
@@ -169,7 +170,19 @@ export function holdRidingNotice(sessionId: string, text: string, now = Date.now
  * reaches COLD_HOLD_MAX_MS. Nothing that someone waits on now waits: the user's own words, an ask
  * (a `request`) or the reply to one, a notice outside NOTICE_WAITS_COLD, a trigger outside
  * TRIGGER_FROM_WAITS, a script's note (a land's revert alert is one), anything not an envelope.
+ * Nor a wake the task armed for itself (ARMED_WAKE_PREFIX, WAIT_WAKE_FROM): someone picked that
+ * moment, and nothing else is due to wake the session sooner, so a hold only moves the same cold
+ * wake an hour later (2026-11-18: a task's own 20:00 daily timer fired at 04:02:48Z and reached
+ * its session at 05:03:08Z; of 135 releases on 11-17 and 11-18, 129 went at the max hold and 80 of those carried one row).
  */
+
+/**
+ * The `from` of a wake a task armed for itself: its own trigger's fire or scheduled routine
+ * (`Trigger: <name>`, trigger-envelope-core.ts). It goes at once, cold session or not, as does the
+ * task's own wait clock (WAIT_WAKE_FROM, false in TRIGGER_FROM_WAITS). Walnut's own nudges (a
+ * re-check, a follow-up, a status check) and its watches of a linked change still wait.
+ */
+export const ARMED_WAKE_PREFIX = 'Trigger: ';
 
 /** Notices that start a turn (NOTICE_WAKES) but can wait for a cold session's next wake. */
 export const NOTICE_WAITS_COLD: readonly string[] = [
@@ -183,14 +196,15 @@ export const NOTICE_WAITS_COLD: readonly string[] = [
 
 /**
  * Walnut's `trigger` envelopes, by their `from`, and whether each can wait for a cold session
- * (true) or must go at once (false, with the person who waits). A `Trigger: <name>` sender (a
- * trigger's fire, a scheduled routine) can wait. The guard test fails when a producer in src/
- * writes a sender this map does not list.
+ * (true) or must go at once (false, with the person who waits). A `Trigger: <name>` fire
+ * (ARMED_WAKE_PREFIX) is the task's own and never waits. The guard test fails when a
+ * producer in src/ writes a sender this map does not list.
  */
 export const TRIGGER_FROM_WAITS: Readonly<Record<string, boolean>> = {
   'Walnut: re-check': true,
   'Walnut: follow-up': true,
-  'Walnut: wait until': true,
+  // The task's own wait clock: the time it asked to be woken at (2026-11-18).
+  [WAIT_WAKE_FROM]: false,
   'Walnut: pull request watch': true,
   // News on a change linked to the task (changes/watch.ts: a review, a check, a deploy stage), like a pull request's.
   'Walnut: change watch': true,
@@ -208,7 +222,7 @@ const WAITS_COLD = new Set(NOTICE_WAITS_COLD);
 
 /**
  * Can this message wait while its session is cold? Only a message made of nothing but envelopes
- * (and Walnut's hint blocks), each of them: a trigger fire whose sender can wait, a task's note
+ * (and Walnut's hint blocks), each of them: a Walnut trigger whose sender can wait, a task's note
  * that asks nothing (a peer-note with no `request`, not a script's), or a notice that rides or is in
  * NOTICE_WAITS_COLD. Everything else goes at once: an unknown shape is never held by mistake.
  */
@@ -221,7 +235,7 @@ export function waitsWhenCold(text: string): boolean {
     if (a.request) return false;
     if (a.kind === 'trigger') {
       const from = a.from ?? '';
-      return from.startsWith('Trigger: ') || TRIGGER_FROM_WAITS[from] === true;
+      return !from.startsWith(ARMED_WAKE_PREFIX) && TRIGGER_FROM_WAITS[from] === true;
     }
     if (a.kind === 'peer-note') return a.anonymous !== 'true' && !!(a['from-task'] || a['from-session']);
     if (a.kind === 'notification') return !!a.outcome && (RIDES.has(a.outcome) || WAITS_COLD.has(a.outcome));

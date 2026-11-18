@@ -35,6 +35,10 @@ import { applySessionPhase } from '../../src/core/phase.js'
 import { loadWaitUntilDeadlines, startWaitUntilWatch, stopWaitUntilWatch, sweepWaitUntil, trackedWaitUntil, waitUntilArmed } from '../../src/core/task-wait-until.js'
 import { updateTaskRaw } from '../../src/core/task-manager.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
+import { updateSessionRecord } from '../../src/core/session-tracker.js'
+import { getQueue, sendMessageToSession } from '../../src/core/session-message-queue.js'
+import { isColdHold, stopColdHold } from '../../src/core/sessions/cold-hold.js'
+import { buildWalnutMessage } from '../../src/core/peers/walnut-message-tag.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -404,5 +408,60 @@ describe('wait_until: the clock', () => {
       stopWaitUntilWatch()
       startWaitUntilWatch({ ephemeral: false })
     }
+  })
+})
+
+/**
+ * A wake the task armed for itself reaches a cold idle session at once (2026-11-18: a 20:00 timer
+ * fired at 04:02:48Z and reached its session at 05:03:08Z, held for the session's next wake; the
+ * Mac was online and its load low). Cold means idle past its prompt cache's lifetime
+ * (sessions/cold-hold.ts sessionIsCold); a watcher's news is held there, which proves the session
+ * really is cold in this test, and goes out in front of the fire.
+ */
+describe('a cold idle session', () => {
+  async function goCold(): Promise<void> {
+    await until('the turn to end', () => task(taskId), (t) => t.phase !== 'IN_PROGRESS')
+    const past = Date.now() - 2 * 3_600_000
+    await updateSessionRecord(sid, {
+      promptCache: { tokens: 400_000, ttlMs: 3_600_000, requestAt: new Date(past - 3_600_000).toISOString(), expiresAt: new Date(past).toISOString() },
+    } as never)
+  }
+  const news = (body: string) => buildWalnutMessage({ kind: 'trigger', attrs: { from: 'Walnut: change watch', note: 'news on a change linked to this task' }, body })
+
+  afterAll(() => stopColdHold())
+
+  it('a trigger fire goes now, with the news held before it in front', async () => {
+    const routineId = await createTrigger('cold-timer')
+    try {
+      await park()
+      await goCold()
+      const held = await sendMessageToSession(sid, news('CR 1234 has a new revision'), { source: 'change-watch', taskId, endsWait: true })
+      expect(isColdHold(held)).toBe(true)
+      daemon.clearCommandHistory()
+      const seen = await phasesDuring(taskId, () => fire(routineId, 1, 'epoch-cold'),
+        (s) => s.includes('IN_PROGRESS') && s[s.length - 1] === 'NEED_ACTION')
+      expect(seen[0]).toBe('IN_PROGRESS')
+      const line = envelopes().join('\n')
+      expect(line).toContain('Tell the user what the review said.')
+      // The held news went out in front of the fire.
+      expect(line.indexOf('CR 1234 has a new revision')).toBeGreaterThanOrEqual(0)
+      expect(line.indexOf('CR 1234 has a new revision')).toBeLessThan(line.indexOf('Tell the user what the review said.'))
+      expect((await getQueue(sid)).filter(isColdHold)).toEqual([])
+    } finally {
+      await req('DELETE', `/api/routines/${routineId}`)
+    }
+  })
+
+  it('its wait clock goes now', async () => {
+    await park({ wait_until: new Date(Date.now() + 3_600_000).toISOString() })
+    await goCold()
+    daemon.clearCommandHistory()
+    let woke: string[] = []
+    const seen = await phasesDuring(taskId, async () => { woke = await sweepWaitUntil(Date.now() + 2 * 3_600_000) },
+      (s) => s.includes('IN_PROGRESS') && s[s.length - 1] === 'NEED_ACTION')
+    expect(woke).toContain(taskId)
+    expect(seen[0]).toBe('IN_PROGRESS')
+    expect(envelopes().join('\n')).toContain('from="Walnut: wait until"')
+    expect((await getQueue(sid)).filter(isColdHold)).toEqual([])
   })
 })

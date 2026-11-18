@@ -436,7 +436,7 @@ export async function sendMessageToSession(
 
   // Tell session-runner to process the queued message (a row held for a move, for the turn's end or
   // for a cold session's next wake waits for it). Held rows that went back in line in front of it and
-  // end the task's wait (a trigger's fire) end it with this send.
+  // end the task's wait (a watcher's news) end it with this send.
   if (!heldForMove && !holdsRow && !holdsCold && !demoAdmissionClosed()) bus.emit(EventNames.SESSION_SEND, {
   sessionId,
   taskId: opts?.taskId,
