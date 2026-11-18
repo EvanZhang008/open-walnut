@@ -56,7 +56,7 @@ targets:
       path: Walnut/Support/Info.plist
       properties:
         CFBundleDisplayName: Walnut
-        CFBundleShortVersionString: "1.0.2"
+        CFBundleShortVersionString: "1.0.3"
         CFBundleVersion: "165"
         UILaunchScreen: {}
         # The lock-screen work card (WorkCardController): one Live Activity with how many
@@ -190,7 +190,7 @@ targets:
         # iOS and App Store Connect want an extension's versions to match its app's: the
         # script phase below copies the app's version and build number at build time, so the
         # app's line stays the one build-number line the TestFlight bump rewrites.
-        CFBundleShortVersionString: "1.0.2"
+        CFBundleShortVersionString: "1.0.3"
         NSFaceIDUsageDescription: Walnut uses Face ID to unlock your passwords before it fills one in.
         NSExtension:
           NSExtensionPointIdentifier: com.apple.authentication-services-credential-provider-ui
@@ -240,7 +240,7 @@ targets:
       path: WalnutWidgets/Info.plist
       properties:
         CFBundleDisplayName: Walnut
-        CFBundleShortVersionString: "1.0.2"
+        CFBundleShortVersionString: "1.0.3"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     # The build number and the version are the app's: App Store Connect warns on an
