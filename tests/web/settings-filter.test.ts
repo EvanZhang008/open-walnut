@@ -99,7 +99,9 @@ describe('Find a setting matcher', () => {
     expect(keys('slack')).toContain('triage')
     expect(keys('wifi')).toContain('devices-phones')
     expect(hit('theme', 'general')?.hint).toBe('Appearance')
-    expect(hit('qr', 'devices-phones')?.hint).toBe('Device name')
+    // Pairing lives on each way's tab (2026-11-18): "qr" finds the Cloud companion's and Tailscale's.
+    expect(hit('qr', 'cloud')?.hint).toBe('Pair a phone this way')
+    expect(hit('qr', 'devices-tailscale')?.hint).toBe('Pair a phone this way')
   })
 
   it('keeps nav order inside one rank level', () => {
