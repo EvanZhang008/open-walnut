@@ -101,7 +101,7 @@ interface TaskRows {
   actions: TaskStoreActions;
 }
 
-interface TaskStoreActions { has: (taskId: string) => boolean; update: TasksContextValue['update'] }
+export interface TaskStoreActions { has: (taskId: string) => boolean; update: TasksContextValue['update'] }
 
 /** Module level on purpose: its closures hold the rows, never a render (useLeanCallback.ts). */
 function makeTaskRows(tasks: readonly Task[], loading: boolean, error: string | null): TaskRows {

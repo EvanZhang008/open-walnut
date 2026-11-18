@@ -96,6 +96,7 @@
  */
 
 import { ownReadbackEnabled } from './own-readback-mark.js'
+import { keepsThreads } from '../org/keeps-threads.js'
 import { PROOF_IN_PLACE_RULE, THREAD_ONE_PLACE_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE, THREADS_MOVE_RULE } from '../org/thread-rules.js'
 import { TEAM_CHARTER } from '../team-charter.js'
 import { WORK_PLACE_RULE, taskDirLine } from '../work-place.js'
@@ -239,14 +240,30 @@ export const MAIN_DECISION_LINE =
 export const LEAD_DECISION_LINE =
   ' A report to the main agent that needs a decision from the user carries every one of these parts.\n\n'
 
-/** Main's and every lead's Threads (core/org/threads-model.ts): the user's own requests, one thread per subject. */
-export const THREADS_LINE =
-  'Your Threads (the Threads view beside your Brief on the Org page) are the user\'s own requests to you, one thread per '
+/** The Threads rules (core/org/threads-model.ts): the user's own requests, one thread per subject; `where` he reads them. */
+const threadsLine = (where: string, last: string): string =>
+  `Your Threads (${where}) are the user's own requests to you, one thread per `
   + 'subject: Walnut files every message he sends you and says in it which thread it went to. Keep them current with '
   + 'thread_update: a short title, what he wants, its state (working: you are on it, needs: waiting on him, answered, pending: nothing new for him), the summary (reply) '
   + 'and the tasks you handed it to. Several asks about the same thing are one thread: put a new one under the open thread '
   + 'it belongs to (merge_into). Walnut puts your chat reply under each of his messages by itself. He closes a thread with Acknowledge; a new ask about a closed subject is a new thread. '
-  + THREADS_SUMMARY_RULE + ' ' + PROOF_IN_PLACE_RULE + ' ' + THREADS_PENDING_RULE + ' ' + THREADS_KNOWN_RULE + ' ' + THREADS_OPEN_RULE + ' ' + THREADS_MOVE_RULE + '\n\n'
+  + THREADS_SUMMARY_RULE + ' ' + PROOF_IN_PLACE_RULE + ' ' + THREADS_PENDING_RULE + ' ' + THREADS_KNOWN_RULE + ' ' + THREADS_OPEN_RULE + ' ' + last + '\n\n'
+
+/** Main's and every lead's Threads. */
+export const THREADS_LINE = threadsLine('the Threads view beside your Brief on the Org page', THREADS_MOVE_RULE)
+
+/**
+ * A task the user turned Threads on for (Task.threads_on, org/keeps-threads.ts; 2026-11-18, the user:
+ * "we should be able to enable the thread for a leader, default off"): the same rules, and only
+ * there, so no other task pays for them. Its threads stay with it: no node above takes them.
+ */
+const TASK_THREADS_RULES = threadsLine('the Threads view beside your chat, opened from its ⋮ menu or its Threads chip',
+  'When you hand one of his asks to a task, name the thread (task_create, task_send or task_start with thread): the thread '
+  + 'lists that task and stays yours. ' + THREAD_ONE_PLACE_RULE).trim()
+/** A versioned block (instruction-diff.ts `task-threads`): a running session hears it at once when turned on, and that it is gone when turned off. */
+const TASK_THREADS_VERSION = `v${createHash('sha1').update(TASK_THREADS_RULES).digest('hex').slice(0, 8)}`
+export const TASK_THREADS_LINE = `Threads, the user's setting for your task (${TASK_THREADS_VERSION}): he turned Threads on for it, so you keep them. `
+  + `Each line of this version starts with [${TASK_THREADS_VERSION}]:\n[${TASK_THREADS_VERSION}] ${TASK_THREADS_RULES}\n\n`
 /** The tasks a reply is about, as live pills under it (core/org/message-about.ts; 2026-10-31, the user). */
 export const MESSAGE_ABOUT_LINE =
   'End each reply the user reads with one line of its own naming the tasks it is about: '
@@ -333,7 +350,7 @@ export const AWAY_INBOX_LINE =
  * independent goal gets a new task, the same deliverable continues its own.
  * Said at spawn because the role is the task's for good.
  */
-type OrgRoleTask = { org_role?: string; project?: string; org_leads?: readonly string[]; org_vp_only?: boolean; org_name?: string }
+type OrgRoleTask = { org_role?: string; project?: string; org_leads?: readonly string[]; org_vp_only?: boolean; org_name?: string; threads_on?: boolean }
 
 /**
  * Main's or a lead's role lines as blocks: the role, then the routing rules. Every line of the
@@ -403,13 +420,15 @@ export function orgRoleParts(task: OrgRoleTask): Array<[PromptBlockId, string]> 
       + ownReadbackLine()
     return [['org-role', body], ['task-routing', TASK_ROUTING_CONTRACT + '\n\n']]
   }
+  // Any other task: its role is its own, plus the Threads rules once the user turned them on.
+  if (keepsThreads(task)) return [['org-role', TASK_THREADS_LINE]]
   return []
 }
 
 /** The away, Brief, Threads and walnut-about rules of Main and every lead, in that order. */
 const ORG_MANUALS = (): string => AWAY_INBOX_LINE + BRIEF_LINE + THREADS_LINE + MESSAGE_ABOUT_LINE
 
-/** Main's or a lead's role lines ('' for any other task). */
+/** Main's or a lead's role lines, a task's Threads rules when it keeps them ('' for any other task). */
 export function orgRoleLine(task: OrgRoleTask): string {
   return orgRoleParts(task).map(([, text]) => text).join('')
 }
@@ -547,6 +566,7 @@ export async function composeSessionContext(
 export type InstructionTask = {
   id?: string; org_role?: string; project?: string; org_leads?: readonly string[]; walnut_agent?: boolean;
   org_instructions?: { text: string; at?: string; by?: string; by_name?: string; for_user?: boolean }; org_vp_only?: boolean; org_name?: string;
+  threads_on?: boolean;
 }
 
 /**

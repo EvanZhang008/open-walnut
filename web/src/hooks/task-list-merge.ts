@@ -104,7 +104,7 @@ export function tasksShallowEqual(a: Task, b: Task): boolean {
   // The pull request watcher's snapshots and the task's two switches (pull-requests/pr-watch.ts),
   // and the change watcher's snapshots (changes/watch.ts), written raw: the PR pill, the change
   // link pills and their cards draw them.
-  for (const k of ['transferred_to', 'transferred_from', 'transfer', 'watched_at', 'background_at', 'link_names', 'legacy_session_ids', 'engine_fallback', 'pr_status', 'change_status', 'pr_auto_complete', 'pr_wake', 'launch_source', 'self_router'] as const) {
+  for (const k of ['transferred_to', 'transferred_from', 'transfer', 'watched_at', 'background_at', 'link_names', 'legacy_session_ids', 'engine_fallback', 'pr_status', 'change_status', 'pr_auto_complete', 'pr_wake', 'threads_on', 'launch_source', 'self_router'] as const) {
     if (JSON.stringify(a[k] ?? null) !== JSON.stringify(b[k] ?? null)) return false;
   }
   if (a.router_area_id !== b.router_area_id || a.router_paused !== b.router_paused) return false;

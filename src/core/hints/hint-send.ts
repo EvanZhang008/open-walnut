@@ -30,6 +30,7 @@ import type { AwayState } from '../org/user-away.js';
 import type { BriefHintState } from '../sessions/brief-hint.js';
 import type { ThreadCapture, ThreadHintState, ThreadsTidyState } from '../org/thread-capture.js';
 import type { UserAskCapture } from '../sessions/user-asks.js';
+import { keepsThreads } from '../org/keeps-threads.js';
 
 type HintRecord = Pick<SessionRecord, 'output_mode' | 'output_mode_injected' | 'hintState' | 'lastCompactUuid' | 'lastCompactAt'>
   & Partial<Pick<SessionRecord, 'claudeSessionId' | 'taskId' | 'threadMeta' | 'asksSent' | 'profile'>>;
@@ -302,9 +303,9 @@ async function briefFor(task: Task | undefined | null, target: HintTarget, hints
   }
 }
 
-/** Main's or a lead's Threads that need its decision, for the `threads-tidy` hint; null elsewhere. */
+/** The Threads that need the node's decision (Main's, a lead's, a task with Threads on), for the `threads-tidy` hint; null elsewhere. */
 async function threadsTidyFor(task: Task | undefined | null, target: HintTarget, hints: readonly EffectiveHint[]): Promise<ThreadsTidyState | null> {
-  if (!task || (target.role !== 'main' && target.role !== 'lead') || !hints.some((h) => h.kind === 'threads-tidy' && h.enabled)) return null;
+  if (!task || !keepsThreads(task) || !hints.some((h) => h.kind === 'threads-tidy' && h.enabled)) return null;
   try {
     const { readThreads } = await import('../org/threads-store.js');
     const { threadsTidyOf } = await import('../org/thread-capture.js');
@@ -399,7 +400,8 @@ export async function prepareHintedSend(
     // The user's words to an Org node become one of its Threads, whether or not its hint is on.
     const thread = usersWords ? await captureThread(record, task, words, opts) : null;
     // Any other task's chat: the user's words are kept until its turn-end status says they are answered.
-    const userAsk = usersWords && !thread ? await captureUserAsk(record, task, words, opts) : null;
+    // A task with Threads on keeps them too (filesUserAsks): its close and compaction read them there.
+    const userAsk = usersWords ? await captureUserAsk(record, task, words, opts) : null;
     const plan = planHints({
       hints, target, record, config, away, brief, threadsTidy, inChat: opts.inChat ?? opts.sentBy === 'person', message: words,
       ...(opts.requested ? { requested: opts.requested } : {}),

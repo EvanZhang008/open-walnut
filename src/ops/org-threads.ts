@@ -11,7 +11,7 @@ import { THREAD_STATES } from '../core/org/threads-model.js'
 import { USER_KINDS, USER_KIND_PARAM, USER_KIND_WHY_PARAM } from '../core/org/user-kind.js'
 
 const THREADS_SCOPE = 'Your Threads are the user\'s own requests to you, one thread per subject, on the Org page beside your Brief '
-  + '(Main and every lead keep them; a VP is a lead). Walnut files every message he sends you, and tells you in that message which '
+  + '(Main and every lead keep them; a VP is a lead), or beside your chat on a task the user turned Threads on for. Walnut files every message he sends you, and tells you in that message which '
   + 'thread it went to. You keep each thread current: a short title in the language you write to him, one line of what he wants (ask), '
   + 'its state (working: you are on it; needs: waiting on him; answered: you answered and he may close it; pending: nothing new for him), the summary (reply) and '
   + 'the tasks you handed it to. Several asks about one subject are ONE thread: put a new one under the open thread it belongs to '
@@ -26,7 +26,7 @@ async function ownTask(args: { task?: unknown }, call: OpCall): Promise<string> 
   return id
 }
 
-const TASK_ARG = z.string().min(1).optional().describe('Task id or unique prefix of Main or a lead; default: your own task')
+const TASK_ARG = z.string().min(1).optional().describe('Task id or unique prefix of Main, a lead or a task with Threads on; default: your own task')
 
 interface ThreadView { id: string; title: string; state: string; closed?: { how: string } | null; messages?: unknown[]; snoozed?: { until: string }; pinned?: { by: string }; askedIn?: { task: string; title: string } }
 

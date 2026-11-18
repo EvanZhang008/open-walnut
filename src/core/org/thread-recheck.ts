@@ -20,6 +20,7 @@ import { agoWords } from '../user-status.js';
 import { buildWalnutMessage } from '../peers/walnut-message-tag.js';
 import { threadDeadline, threadOverdue, type ThreadOverdue } from './thread-view.js';
 import type { OrgThread, ThreadRecheck } from './threads-model.js';
+import { keepsThreads } from './keeps-threads.js';
 
 /** The send source of the note (org-enabled.ts ORG_OFF_BLOCKED_SOURCES, task-wait-resume.ts). */
 export const THREAD_RECHECK_SOURCE = 'thread-recheck';
@@ -98,7 +99,7 @@ export async function runThreadRecheck(nowMs = Date.now()): Promise<string[]> {
     // only the members the record lists (it lists those with something to bring back on resume).
     const { teamOf } = await import('../sessions/team-stop.js');
     const quieted = new Set(all.filter((t) => t.team_stop).flatMap((root) => teamOf(root, all).map((m) => m.id)));
-    const nodes = all.filter((t: Task) => (t.org_role === 'main' || t.org_role === 'lead') && t.phase !== 'COMPLETE' && !t.plugin_only && !quieted.has(t.id));
+    const nodes = all.filter((t: Task) => keepsThreads(t) && t.phase !== 'COMPLETE' && !t.plugin_only && !quieted.has(t.id));
     const store = await import('./threads-store.js');
     for (const node of nodes) {
       const file = await store.readThreads(node.id).catch(() => null);

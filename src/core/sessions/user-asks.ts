@@ -13,6 +13,7 @@ import { WALNUT_HOME } from '../../constants.js';
 import { log } from '../../logging/index.js';
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
 import type { Task } from '../types.js';
+import { keepsThreads } from '../org/keeps-threads.js';
 import {
   addAsk, applyOwed, asksToJudge, closeAll, dueToWake, MAX_ASK_STOP_NUDGES, normalizeUserAsks, openAsks, owedQuestionBlock,
   owedReadback, owedStopReason, owedWakeBody, prune, readOwedLine, recentWordsReadback, staleOwed, type UserAsk, type UserAsksFile,
@@ -223,6 +224,8 @@ export async function wakeIdleOwed(nowMs = Date.now()): Promise<string[]> {
   for (const task of tasks) {
     try {
       if (!filesUserAsks(task) || task.phase === 'COMPLETE' || task.phase === 'WAITING' || task.user_status?.snoozed) continue;
+      // A task with Threads on hears of his open asks through them (org/thread-recheck.ts): one wake, not two.
+      if (keepsThreads(task)) continue;
       const due = dueToWake(await readUserAsks(task.id), task.user_status, nowMs);
       if (!due.length) continue;
       const { getSessionsForTask } = await import('../session-tracker.js');

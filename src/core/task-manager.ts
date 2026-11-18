@@ -4256,6 +4256,8 @@ export interface UpdateTaskInput {
   pr_auto_complete?: boolean | null;
   /** Wake its session on pull request news (Task.pr_wake); null = the default. */
   pr_wake?: boolean | null;
+  /** Threads on for this task (Task.threads_on); false or null turns them off. */
+  threads_on?: boolean | null;
   /** WAITING only: when the wait ends by itself (ISO datetime; '' clears). Kept
    *  only while the task is WAITING after this update; applyPhase clears it on
    *  every move out. */
@@ -4762,6 +4764,8 @@ export async function updateTask(
   if (updates.pr_wake !== undefined) {
     if (updates.pr_wake === null) delete task.pr_wake; else task.pr_wake = updates.pr_wake;
   }
+  // Stored as presence-only (true or absent): an older Walnut reads an absent field as off.
+  if (updates.threads_on !== undefined) { if (updates.threads_on) task.threads_on = true; else delete task.threads_on; }
   // Track parent change for plugin notification (fired after writeStore)
   let parentChangeAction: (() => void) | undefined;
   if (updates.parent_task_id !== undefined) {

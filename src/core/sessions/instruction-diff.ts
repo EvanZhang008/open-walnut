@@ -40,6 +40,8 @@ const BLOCK_KINDS: Array<[string, RegExp]> = [
   // "<who> cleared the instructions for your role at <time>": who may be an agent's name.
   ['core-instructions', /^(Your core instructions[,:] |.+ cleared the instructions for your role at \d{4}-)/],
   ['reply-language', /^Reply language, the user's setting \(v[0-9a-f]{8}\): /],
+  // A task's Threads, turned on by the user (session-context.ts TASK_THREADS_LINE).
+  ['task-threads', /^Threads, the user's setting for your task \(v[0-9a-f]{8}\): /],
 ];
 
 /** The head without what changes at every save (its version, its time), so a change of form reads as one. */

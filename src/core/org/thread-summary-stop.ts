@@ -10,6 +10,7 @@
  */
 import { snoozedNow, summaryBehindHim } from './thread-view.js';
 import type { OrgThread } from './threads-model.js';
+import { keepsThreads } from './keeps-threads.js';
 
 export const MAX_SUMMARY_NUDGES = 2;
 const nudged = new Map<string, number>();
@@ -42,7 +43,7 @@ export async function staleSummariesAtStop(callerSid: string | undefined, nowMs 
     if (!taskId) return null;
     const { listTasksByIds } = await import('../task-manager.js');
     const task = (await listTasksByIds([taskId]).catch(() => []))[0];
-    if (!task || (task.org_role !== 'main' && task.org_role !== 'lead') || task.phase === 'COMPLETE') return null;
+    if (!task || !keepsThreads(task) || task.phase === 'COMPLETE') return null;
     const { readThreads } = await import('./threads-store.js');
     const stale = staleSummaries((await readThreads(taskId)).threads, nowMs)
       .filter((t) => (nudged.get(`${taskId}:${t.id}:${lastHisAt(t)}`) ?? 0) < MAX_SUMMARY_NUDGES)

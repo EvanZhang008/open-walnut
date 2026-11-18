@@ -9,6 +9,7 @@
  * - 'inbox'    → SessionInboxPane (the letters THIS session wrote to the human)
  * - 'web'      → SessionWebView (a host:port service the session started, SSH-tunnelled when remote)
  * - 'board'    → TaskBoardPane (the task's Board: the page its leader keeps, with threads and marks)
+ * - 'threads'  → SessionThreadsPane (the user's requests to the task, one per subject, once he turned Threads on)
  * - 'app'      → SessionPluginAppPane (a plugin App's `sessionPane`; which App and document: panel-view.ts `app`)
  *
  * A single `activeView` state drives which one is open (null = none). Opening any
@@ -19,4 +20,4 @@
  * branch in the diff column. Nothing here is Code-specific — Code's keep-alive
  * exists only because remounting its iframe reboots the VS Code workbench.
  */
-export type SessionSplitView = 'changed' | 'files' | 'terminal' | 'code' | 'inbox' | 'web' | 'board' | 'app';
+export type SessionSplitView = 'changed' | 'files' | 'terminal' | 'code' | 'inbox' | 'web' | 'board' | 'threads' | 'app';

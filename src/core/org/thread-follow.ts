@@ -30,6 +30,7 @@ import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
 import { leadsAlso, orgDisplayTitle, pickLead, pickMain, successorOf } from './org-tree.js';
 import { isOpen, type MoveEnd, type OrgThread, type ThreadMoveKind, type ThreadWriter } from './threads-model.js';
+import { keepsThreads } from './keeps-threads.js';
 
 /** Every route that hands work to another task, and so may hand a thread on with it (guard test). */
 export const HANDOFF_ROUTES = [
@@ -292,6 +293,8 @@ export interface HandOffResult {
   refused?: string;
 }
 
+const NO_THREADS = 'Only Main, a lead or a task with Threads on keeps Threads: no thread was handed on.';
+
 /**
  * A node handed work to task `target` (a send, a start, a create). With `threadId`, that thread of
  * the caller's goes with it: to the target's node when that is another node, else it only lists the
@@ -304,12 +307,12 @@ export async function handOffThread(input: { callerSid?: string; target: string;
     const { resolveBoardCaller } = await import('../boards/board-team.js');
     const caller = await resolveBoardCaller(input.callerSid);
     const refuse = (why: string): HandOffResult | null => (input.threadId ? { moved: [], linked: [], refused: why } : null);
-    if (caller.kind !== 'task') return refuse('Only Main or a lead keeps Threads: no thread was handed on.');
+    if (caller.kind !== 'task') return refuse(NO_THREADS);
     const { orgTasks } = await import('./org-store.js');
     const p = orgPlaces(await orgTasks());
     const from = p.byId.get(caller.taskId);
     const target = p.byId.get(input.target);
-    if (!from || !isNode(from)) return refuse('Only Main or a lead keeps Threads: no thread was handed on.');
+    if (!from || !keepsThreads(from)) return refuse(NO_THREADS);
     if (!target) return refuse(`No task ${input.target}: no thread was handed on.`);
     const store = await import('./threads-store.js');
     const open = (await store.readThreads(from.id)).threads.filter(isOpen);
@@ -317,7 +320,8 @@ export async function handOffThread(input: { callerSid?: string; target: string;
       ? open.filter((t) => t.id === input.threadId)
       : open.filter((t) => (t.tasks ?? []).includes(target.id));
     if (input.threadId && !picked.length) return refuse(`No open thread ${input.threadId} on your Threads: none was handed on.`);
-    const to = ownerNodeOf(target, p);
+    // A task with Threads on is no Org node: its threads stay with it and only list the task.
+    const to = isNode(from) ? ownerNodeOf(target, p) : undefined;
     const writer: ThreadWriter = `task:${from.id}`;
     const out: HandOffResult = { moved: [], linked: [] };
     for (const t of picked) {

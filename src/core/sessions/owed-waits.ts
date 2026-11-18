@@ -179,8 +179,13 @@ export async function threadWaitItems(task: Pick<Task, 'id' | 'parent_task_id'>,
     const { threadAskText } = await import('../org/thread-task-ask.js');
     const byId = new Map((all ?? []).map((t) => [t.id, t] as const));
     const chain = await leadChain(task, async (id) => byId.get(id) ?? null);
+    const { keepsThreads } = await import('../org/keeps-threads.js');
+    const { listTasksByIds } = await import('../task-manager.js');
     for (const node of await threadTaskIds()) {
       if (node === task.id) continue;
+      // Threads the user turned off (Task.threads_on) are on no screen: they hold nothing.
+      const keeper = byId.get(node) ?? (await listTasksByIds([node]).catch(() => []))[0];
+      if (keeper && !keepsThreads(keeper)) continue;
       const file = await readThreads(node).catch(() => null);
       const mine = (file?.threads ?? []).filter((t) => threadNamesTask(t, task.id, { node, chain, saysWaits }));
       if (!mine.length) continue;

@@ -253,6 +253,8 @@ export interface UpdateTaskInput {
    *  then marks a NEED_ACTION put back as the person's own ask only if it was one
    *  (src/core/sessions/person-needs.ts); '' when the row did not carry it. */
   undo_phase_changed_at?: string;
+  /** Threads on for the task (its ⋮ menu; src/core/org/keeps-threads.ts). */
+  threads_on?: boolean;
 }
 
 /**

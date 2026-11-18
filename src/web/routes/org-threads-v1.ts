@@ -37,6 +37,7 @@ import { followerName, isFollower } from '../../core/server-role.js'
 import { body, header, param, resolveTask, RouteError } from './board-v1.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { sendLinkFailure } from '../middleware/link-failure-answer.js'
+import { keepsThreads } from '../../core/org/keeps-threads.js'
 
 export const orgThreadsV1Router = Router()
 
@@ -53,8 +54,8 @@ function route(fn: (req: Request, res: Response) => Promise<void>) {
 
 async function nodeTask(req: Request): Promise<Task> {
   const task = await resolveTask(param(req.params.id))
-  if (task.org_role !== 'main' && task.org_role !== 'lead') {
-    throw new RouteError(409, 'not_org_node', 'Only Main and the leads (a VP is a lead) keep Threads.')
+  if (!keepsThreads(task)) {
+    throw new RouteError(409, 'not_org_node', 'Only Main, the leads (a VP is a lead) and a task the user turned Threads on for keep Threads.')
   }
   return task
 }

@@ -1,0 +1,70 @@
+/* A task's Threads beside its chat (SessionThreadsPane): the Board pane's bar, OrgThreads below. */
+.session-threads-pane {
+  width: 100%;
+  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.session-threads-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+  min-height: var(--split-bar-h, 43px);
+}
+
+.session-threads-bar-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  flex-shrink: 0;
+}
+
+.session-threads-bar-sub {
+  min-width: 0;
+  font-size: 11px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-threads-bar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.session-threads-error {
+  font-size: 11px;
+  color: var(--danger, #d14343);
+}
+
+.session-threads-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 4px 12px;
+}
+
+/* The header's Threads chip: how many threads have something for him. */
+.session-action-chip-count {
+  margin-left: 5px;
+  padding: 0 5px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+  background: var(--accent, #4f6bed);
+  color: #fff;
+}

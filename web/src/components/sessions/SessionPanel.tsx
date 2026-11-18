@@ -68,6 +68,7 @@ const DOCK_VIEW_LABEL: Partial<Record<SessionSplitView, string>> = { changed: 'C
 const SessionChangedTab = lazy(() => import('./SessionChangedTab').then((m) => ({ default: m.SessionChangedTab })));
 const SessionInboxPane = lazy(() => import('@/components/inbox/SessionInboxPane').then((m) => ({ default: m.SessionInboxPane })));
 const TaskBoardPane = lazy(() => import('@/components/board/TaskBoardPane').then((m) => ({ default: m.TaskBoardPane })));
+const SessionThreadsPane = lazy(() => import('./SessionThreadsPane').then((m) => ({ default: m.SessionThreadsPane })));
 import { useSessionLetters } from '@/hooks/useSessionLetters';
 import {
   consumeSessionInboxLink, SESSION_INBOX_LINK_EVENT,
@@ -221,6 +222,10 @@ import { SessionScriptsChip } from '@/components/workspaces/SessionScriptsChip';
 import { workspaceOf } from '@/components/workspaces/workspace-text';
 import { noteScriptDropped, noteScriptTyped } from '@/components/workspaces/script-results';
 import { ShortcutHint } from '@/keyboard/ShortcutHint';
+import { setTaskThreads, threadsKeptBy, threadsOffered } from './session-threads-model';
+import { useOrgThreads } from '@/components/org/useOrgThreads';
+import { threadCounts } from '@open-walnut/thread-view';
+import '@/styles/session-threads.css';
 
 /**
  * Below this viewport width a split view opens with the chat column collapsed:
@@ -854,6 +859,20 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   );
   // The keys acting on this column read it while the board's first list is still on the way.
   useEffect(() => noteShownTask(sessionId, sessionTask), [sessionId, sessionTask]);
+  // A leader's Threads (SessionThreadsPane): offered in the ⋮ menu, off until the user turns them
+  // on there; once on, a Threads chip beside Board opens them (Task.threads_on).
+  const threadsMenu = !inset && taskSlot === 'live' && threadsOffered(sessionTask, boardTab === 'shown');
+  // What the task says, whether or not the header can show it yet (the view kept over a reload).
+  const threadsKept = threadsKeptBy(sessionTask);
+  // Read while they are on, for the pane and the chip's count of threads with something for him.
+  // Not while the turn-on is on its way: the list shows it first, and a read then is refused.
+  const [threadsSaving, setThreadsSaving] = useState(false);
+  const threadsReadable = threadsKept && !threadsSaving;
+  const taskThreads = useOrgThreads(threadsReadable ? sessionTask?.id : undefined, threadsReadable);
+  const threadsShown = useMemo(() => (taskThreads.threads ? threadCounts(taskThreads.threads).shown : 0), [taskThreads.threads]);
+  const threadsOn = threadsMenu && threadsKept;
+  // Set while the menu's turn-on is on its way to the task (the view opens before the row shows it).
+  const threadsOpening = useRef(false);
   // The session ran in its task's workspace and that was removed: the terminal's folder is gone.
   const terminalFolderGone = useMemo(() => {
     const ws = workspaceOf(sessionTask as never);
@@ -1832,6 +1851,31 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     setTerminalInputState(null);
   }, [sessionId]);
   const terminalShownRef = useRef(false);
+  // The menu's Threads row: turns them on first when they are off, then opens them.
+  const openThreads = useCallback(async () => {
+    const taskId = sessionTask?.id;
+    if (!taskId) return;
+    // On already: the row opens or closes the view, as every view row does.
+    if (sessionTask?.threads_on) { toggleView('threads'); return; }
+    setThreadsSaving(true);
+    const saved = await setTaskThreads(taskId, true, taskStore);
+    setThreadsSaving(false);
+    if (!saved) return;
+    threadsOpening.current = true;
+    if (activeView !== 'threads') toggleView('threads');
+  }, [sessionTask?.id, sessionTask?.threads_on, taskStore, activeView, toggleView]);
+  const turnOffThreads = useCallback(async () => {
+    const taskId = sessionTask?.id;
+    if (taskId) await setTaskThreads(taskId, false, taskStore);
+  }, [sessionTask?.id, taskStore]);
+  // Threads off (turned off here, on another surface or by an agent, or a view kept over a reload
+  // after that) close their view back to the chat; not while the menu's turn-on is on its way.
+  useEffect(() => {
+    if (threadsKept) { threadsOpening.current = false; return; }
+    if (activeView !== 'threads' || !sessionTask || threadsOpening.current) return;
+    log.info('session-panel', 'threads view closed: threads are off', { sessionId, taskId: sessionTask.id });
+    toggleView('threads');
+  }, [activeView, threadsKept, sessionTask, toggleView, sessionId]);
   // An open Board whose task stops leading (its last open subtask finished and it
   // keeps no Board of its own, or the Board was deleted) closes back to the chat
   // instead of leaving an empty pane behind a tab that is gone.
@@ -3054,6 +3098,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
         },
       } : undefined}
       apps={inset ? undefined : { keptKey: panelApp?.key ?? null, onOpen: (key) => openAppView(key, { toggle: true }) }}
+      threads={threadsMenu ? { on: threadsOn, onOpen: () => void openThreads(), onTurnOff: () => void turnOffThreads() } : undefined}
       onPopout={inset ? undefined : () => openPopout('session', { id: sessionId, host: session?.host, cwd: session?.cwd })}
       onFullscreen={inset || phoneWidth ? undefined : (shownFullscreen ? exitFullscreen : enterFullscreen)}
       fullscreenLabel={shownFullscreen ? 'Exit full screen' : 'Full screen'}
@@ -3304,6 +3349,18 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                     data-hidden={hid('board')}
                   >
                     Board
+                  </button>
+                )}
+                {threadsOn && (
+                  <button
+                    className={`session-action-chip${activeView === 'threads' ? ' session-action-chip-active' : ''}`}
+                    onClick={() => toggleView('threads')}
+                    title="Your requests to this task, one thread per subject, beside the chat"
+                    data-testid="session-threads-chip"
+                    data-header-id="threads"
+                    data-hidden={hid('threads')}
+                  >
+                    Threads{threadsShown > 0 && <span className="session-action-chip-count" data-testid="session-threads-chip-count">{threadsShown}</span>}
                   </button>
                 )}
               </>
@@ -3921,6 +3978,14 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                     )}
                     {/* Board: the page the task's leader keeps. A task chip on it opens
                         that task on Home, as every task link does (useOpenTask). */}
+                    {activeView === 'threads' && sessionTask && (threadsKept || threadsOpening.current) && (
+                      <SessionThreadsPane
+                        task={sessionTask}
+                        sessionId={sessionId}
+                        threads={taskThreads}
+                        barRightSlot={chatBarSlot}
+                      />
+                    )}
                     {activeView === 'board' && session?.taskId && (
                       <TaskBoardPane
                         taskId={session.taskId}

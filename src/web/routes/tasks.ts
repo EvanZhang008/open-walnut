@@ -1571,7 +1571,7 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
       res.status(400).json({ error: 'walnut_agent must be a boolean' })
       return
     }
-    for (const field of ['pr_auto_complete', 'pr_wake'] as const) {
+    for (const field of ['pr_auto_complete', 'pr_wake', 'threads_on'] as const) {
       if (req.body[field] !== undefined && req.body[field] !== null && typeof req.body[field] !== 'boolean') {
         res.status(400).json({ error: `${field} must be a boolean, or null for the default` })
         return

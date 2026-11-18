@@ -23,7 +23,7 @@ import type { SessionSplitView } from './sessionSplitView';
 import type { WebViewRequest } from './SessionWebView';
 import { NO_TREE_SPLIT, isTreeSplitRecord, sameTreeSplit, type TreeSplitRecord } from '@/utils/tree-split-state';
 
-export const PANEL_VIEWS: readonly SessionSplitView[] = ['changed', 'files', 'terminal', 'code', 'inbox', 'web', 'board', 'app'];
+export const PANEL_VIEWS: readonly SessionSplitView[] = ['changed', 'files', 'terminal', 'code', 'inbox', 'web', 'board', 'threads', 'app'];
 
 /**
  * The App view's choice: which App (its registry key, `<plugin>:<app>`) and, per App, the

@@ -180,7 +180,7 @@ function waitClockPatch(t: Task, phase: string | undefined, named: unknown): { w
 const OPTIMISTIC_FIELDS = new Set([
   'title', 'status', 'phase', 'priority', 'project',
   'due_date', 'start_date', 'end_date', 'unread', 'parent_task_id',
-  'wait_until', 'watched_at', 'background_at',
+  'wait_until', 'watched_at', 'background_at', 'threads_on',
 ]);
 
 /** Tag INSTRUCTION fields: they carry no value to spread, so the resulting

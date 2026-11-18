@@ -4,7 +4,7 @@
  *
  * Open holds everything that opens beside the chat, in one place for every session (a Home
  * column, an Org node, a pop-out): the header's own views (Changed, Files, Terminal, Board,
- * Plan), then what the old Views group held (SessionViewItems). Window holds what moves the
+ * Threads, Plan), then what the old Views group held (SessionViewItems). Window holds what moves the
  * panel itself (Locate, Open in new tab, Full screen). Panels stays on the first level: it is
  * changed constantly while working (PanelCountRow explains).
  *
@@ -33,6 +33,11 @@ const WINDOW_ICON = (
 const BOARD_ICON = (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <rect x="3" y="4" width="18" height="16" rx="2.5" /><path d="M9 4v16M15 4v16" />
+  </svg>
+);
+const THREADS_ICON = (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M4 5h16v10H9l-5 4z" /><path d="M8 9h8M8 12h5" />
   </svg>
 );
 const APPS_ICON = (
@@ -70,6 +75,11 @@ export interface SessionMenuOpenProps {
    * the opener (the same row again closes it, as every view row does). Absent: not offered here.
    */
   apps?: { keptKey: string | null; onOpen: (key: string) => void };
+  /**
+   * The task's Threads (SessionThreadsPane): offered on a leader. `on` false: the row turns them on
+   * and opens them; on: it opens them, and a second row turns them off. Absent: not offered.
+   */
+  threads?: { on: boolean; onOpen: () => void; onTurnOff: () => void };
 }
 
 function Row({ icon, label, active, disabled, why, onClick, testId, trailing }: {
@@ -130,7 +140,7 @@ export function SessionMenuOpen(p: SessionMenuOpenProps) {
       {p.locate && <Row icon={ICON_LOCATE} label={p.locate.label} disabled={!!p.locate.waiting} why={p.locate.waiting ?? undefined} onClick={() => { close(); p.locate!.onClick(); }} testId="session-menu-locate" />}
       <KebabGroup
         label="Open"
-        hint={`changed · files${p.board !== 'none' ? ' · board' : ''}${appsRow ? ' · apps' : ''} · inbox · code · web${hintCount ? ` (${hintCount})` : ''}`}
+        hint={`changed · files${p.board !== 'none' ? ' · board' : ''}${p.threads ? ' · threads' : ''}${appsRow ? ' · apps' : ''} · inbox · code · web${hintCount ? ` (${hintCount})` : ''}`}
         icon={OPEN_ICON}
         testId="session-kebab-open"
         openWhen={summary !== null}
@@ -142,6 +152,13 @@ export function SessionMenuOpen(p: SessionMenuOpenProps) {
         {p.board !== 'none' && (
           <Row icon={BOARD_ICON} label="Board" active={views.activeView === 'board'} disabled={p.board === 'waiting'} why="Not written yet"
             onClick={() => { close(); if (p.onBoard) p.onBoard(); else views.onToggleView('board'); }} testId="session-menu-board" />
+        )}
+        {p.threads && (
+          <Row icon={THREADS_ICON} label={p.threads.on ? 'Threads' : 'Turn on Threads'} active={views.activeView === 'threads'}
+            onClick={() => { close(); p.threads!.onOpen(); }} testId="session-menu-threads" />
+        )}
+        {p.threads?.on && (
+          <Row icon={THREADS_ICON} label="Turn off Threads" onClick={() => { close(); p.threads!.onTurnOff(); }} testId="session-menu-threads-off" />
         )}
         {appsRow}
         {p.onPlan && <Row icon={PLAN_ICON} label="Plan" onClick={() => { close(); p.onPlan!(); }} testId="session-menu-plan" />}

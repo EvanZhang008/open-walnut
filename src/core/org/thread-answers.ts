@@ -22,6 +22,7 @@ import { userWordsOf } from './thread-capture.js';
 import { letterAnswerMissing, verifiedSource, type OrgThread, type ThreadAnswer, type ThreadMessage, type ThreadTextSource } from './threads-model.js';
 import { isQuietTurn } from '../sessions/quiet-turn.js';
 import { splitComposedFraming } from '../../lib/composed-framing.js';
+import { keepsThreads } from './keeps-threads.js';
 
 /** A transcript row as the projection gives it (session-projection.ts). */
 export interface AnswerRow {
@@ -419,7 +420,7 @@ async function answersForSession(sessionId: string, taskId: string | undefined, 
     if (!id) return;
     const { listTasksByIds } = await import('../task-manager.js');
     const task = (await listTasksByIds([id]))[0];
-    if (task?.org_role !== 'main' && task?.org_role !== 'lead') return;
+    if (!keepsThreads(task)) return;
     await resolveThreadAnswers(id, { endedAt });
   } catch (err) {
     log.task.warn('org threads: turn end not read', { sessionId, error: err instanceof Error ? err.message : String(err) });

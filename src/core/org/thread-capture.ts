@@ -19,6 +19,7 @@ import {
   type FileMessageInput, type ThreadCloseHow, type ThreadsFile, type ThreadState, type ThreadVia, type ThreadWriter,
 } from './threads-model.js';
 import { exchangesOf, pinnedNow, snoozedNow, summaryBehindHim, summaryOwed } from './thread-view.js';
+import { keepsThreads } from './keeps-threads.js';
 
 /** Open threads named to the node with each message (the newest). */
 export const HINT_OPEN_MAX = 12;
@@ -110,7 +111,7 @@ export interface ThreadCapture {
  * task is not an Org node or the message holds none of the user's words.
  */
 export async function prepareThreadCapture(input: {
-  task: Pick<Task, 'id' | 'org_role'> | null | undefined;
+  task: (Pick<Task, 'id' | 'org_role'> & { threads_on?: boolean }) | null | undefined;
   message: string;
   inChat: boolean;
   /** The Follow up button named this thread. */
@@ -122,7 +123,7 @@ export async function prepareThreadCapture(input: {
   now?: number;
 }): Promise<ThreadCapture | null> {
   const task = input.task;
-  if (!task || (task.org_role !== 'main' && task.org_role !== 'lead')) return null;
+  if (!task || !keepsThreads(task)) return null;
   const words = userWordsOf(input.message, { inChat: input.inChat });
   if (!words) return null;
   // Every replica keeps no Threads: the leader files his message when it gets it.
