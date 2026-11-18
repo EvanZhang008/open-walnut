@@ -101,9 +101,10 @@ describe('step 2: Tailscale on your phone', () => {
 })
 
 describe('step 3: pair the phone', () => {
-  it('already paired: done whatever the other steps say, and the row picks nothing', () => {
-    for (const s of [null, status(), running()]) {
-      expect(deriveRemoteAccessSteps(s, [PHONE]).pair).toEqual({ dot: 'done', paired: true, canChooseTailnet: false })
+  it('already paired: done once this Mac runs Tailscale, never green under an unfinished step 1; the row picks nothing', () => {
+    expect(deriveRemoteAccessSteps(running(), [PHONE]).pair).toEqual({ dot: 'done', paired: true, canChooseTailnet: false })
+    for (const s of [null, status()]) {
+      expect(deriveRemoteAccessSteps(s, [PHONE]).pair).toEqual({ dot: 'pending', paired: true, canChooseTailnet: false })
     }
   })
 

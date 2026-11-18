@@ -371,7 +371,7 @@ test('C54 C79: removing a phone and showing a new QR are two-step, and the butto
   })
   await openSettings(page)
   await clickNav(page, 'devices')
-  // No companion and no Tailscale: Phones & Cloud opens on Devices. The Cloud companion is
+  // No companion and no Tailscale: Phones & Cloud opens on All devices. The Cloud companion is
   // its own tab: not on this one, a tab in the bar.
   await expect(page.getByTestId('pc-tab-devices-phones')).toHaveAttribute('aria-current', 'page')
   await expect(page.locator('#cloud.settings-section')).toHaveCount(0)
@@ -380,15 +380,23 @@ test('C54 C79: removing a phone and showing a new QR are two-step, and the butto
   const row = page.locator('.devices-row', { hasText: 'Test phone' })
   await expect(row).toBeVisible()
 
-  // Remove: arm, let it disarm after 3s without a request, then arm and confirm.
+  // Remove asks on the row, with the warning, Cancel taking the focus; Cancel and
+  // Escape put it back as it was, with no request and the focus on Remove.
   const remove = row.getByTestId('devices-remove')
-  const before = await remove.boundingBox()
+  await expect(remove).toHaveText('Remove')
   await remove.click()
-  await expect(remove).toHaveText('Confirm remove')
-  const armed = await remove.boundingBox()
-  expect(Math.abs((armed?.width ?? 0) - (before?.width ?? 0))).toBeLessThanOrEqual(1)
-  expect(Math.abs((armed?.x ?? 0) - (before?.x ?? 0))).toBeLessThanOrEqual(1)
-  await expect(remove).toHaveText('Remove', { timeout: 5_000 })
+  await expect(row.getByRole('alert')).toContainText('Removing Test phone signs it out of this Walnut on every way')
+  const cancel = row.getByTestId('devices-remove-cancel')
+  await expect(cancel).toBeFocused()
+  await expect(row.getByTestId('devices-remove-confirm')).toHaveText('Remove Test phone')
+  await cancel.click()
+  await expect(row.getByRole('alert')).toHaveCount(0)
+  await expect(remove).toBeFocused()
+  await remove.click()
+  await expect(cancel).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(row.getByTestId('devices-remove-confirm')).toHaveCount(0)
+  await expect(remove).toBeFocused()
   expect(deletes).toEqual([])
 
   // Show QR (a new token for the same phone): a dialog says what a new code does
@@ -416,7 +424,7 @@ test('C54 C79: removing a phone and showing a new QR are two-step, and the butto
   await expect(dlg).toHaveCount(0)
 
   await remove.click()
-  await remove.click()
+  await row.getByTestId('devices-remove-confirm').click()
   await expect.poll(() => deletes).toEqual(['DELETE /api/devices/Test%20phone'])
   await expect(page.locator('#devices-phones')).toContainText('No phones paired yet.')
 })

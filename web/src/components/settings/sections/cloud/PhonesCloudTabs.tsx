@@ -1,6 +1,6 @@
 /**
  * Settings > Phones & Cloud as four tabs: Cloud companion, Tailscale, the browser
- * link (named after the tunnel plugin that brings it), and Devices. Each tab is its
+ * link (named after the tunnel plugin that brings it), and All devices. Each tab is its
  * own pane (settings-way-panes.ts); every one of them leads with this bar and with
  * what that tab is, when to use it and its state now, then its own settings. The
  * tab the phone uses also says how the phone reaches Walnut right now.
@@ -81,7 +81,7 @@ export function usePhonesCloudView(): PhonesCloudView {
   });
   const devicesTab: TabView = {
     id: DEVICES_TAB,
-    label: 'Devices',
+    label: 'All devices',
     tag: listState === 'ready' ? String(names.size) : '',
     what: DEVICES_INTRO.what,
     useWhen: DEVICES_INTRO.useWhen,

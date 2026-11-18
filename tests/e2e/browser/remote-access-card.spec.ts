@@ -84,7 +84,7 @@ async function openDevices(page: Page, way: DeviceWay | null = 'tailscale') {
   const nav = page.getByTestId('settings-nav-devices')
   await nav.click()
   await expect(nav).toHaveAttribute('aria-current', 'page')
-  // The Tailscale steps are the Tailscale tab; the phone list is the Devices tab.
+  // The Tailscale steps are the Tailscale tab; the picker and every phone are on All devices.
   if (way) return openWay(page, way)
   const section = await backToDevices(page)
   await expect(section).not.toContainText('Loading paired phones...', { timeout: 30_000 })
@@ -250,7 +250,7 @@ test.describe('Settings → Phones & Cloud: Reach Walnut from anywhere', () => {
     expect(calls.gets, 'all done: no 5s poll').toBe(before)
   })
 
-  test('(d) running, no phone yet: step 2 is your turn with the App Store QR; step 3 picks the Tailscale address below', async ({ page }) => {
+  test('(d) running, no phone yet: step 2 is your turn with the App Store QR; step 3 pairs below, on the Tailscale tab', async ({ page }) => {
     const fx: Fixture = { detail: RUNNING, list: { devices: [], cloudDevices: [SELF], targets: [LAN, TAILNET, CLOUD] } }
     await mockEndpoints(page, fx)
     const section = await openDevices(page)
@@ -278,23 +278,26 @@ test.describe('Settings → Phones & Cloud: Reach Walnut from anywhere', () => {
     expect([doneColor, actionColor]).not.toContain(pendingColor)
     await shot(page, 'd1-phone-step', card)
 
-    // The row takes the person to the Devices tab with the picker on Tailscale and the
-    // cursor in the name (the picker starts on this network otherwise).
+    // The row stays on the Tailscale tab and puts the cursor in this tab's own pairing
+    // name, whose code points at the Tailscale address (no picker here).
     const pair = step(card, 'pair')
-    await expect(pair).toContainText('Pair the phone on Phones & Cloud with the Tailscale address')
+    await expect(pair).toContainText('Pair the phone below, with a code that points at the Tailscale address.')
+    await expect(card.getByTestId('remote-access-use-tailnet')).toHaveText('Pair below')
     await pair.click()
-    await expect(page.getByTestId('pc-tab-devices-phones')).toHaveAttribute('aria-current', 'page')
-    const main = page.locator('#devices-phones')
-    await expect(main.getByTestId('devices-target-tailnet')).toHaveAttribute('aria-checked', 'true')
-    await expect(main.locator('#devices-new-name')).toBeFocused()
+    await expect(page.getByTestId('pc-tab-devices-tailscale')).toHaveAttribute('aria-current', 'page')
+    const tsPane = page.locator('#devices-tailscale')
+    const pairGroup = tsPane.getByTestId('way-pair-tailscale')
+    await expect(pairGroup).toContainText("The QR code points the phone at this Mac's Tailscale address")
+    await expect(pairGroup.getByTestId('devices-pair-new')).toHaveText('Pair phone')
+    await expect(tsPane.locator('#devices-new-name')).toBeFocused()
+    await expect(tsPane.getByRole('radiogroup', { name: 'Pairing target' })).toHaveCount(0)
     // The button does the same by keyboard.
-    await main.getByTestId('devices-target-lan').click()
-    await expect(main.getByTestId('devices-target-lan')).toHaveAttribute('aria-checked', 'true')
-    const again = await openWay(page, 'tailscale')
-    await again.getByTestId('remote-access-use-tailnet').focus()
+    await card.getByTestId('remote-access-use-tailnet').focus()
+    await expect(tsPane.locator('#devices-new-name')).not.toBeFocused()
     await page.keyboard.press('Enter')
-    await expect(page.locator('#devices-phones').getByTestId('devices-target-tailnet')).toHaveAttribute('aria-checked', 'true')
-    await shot(page, 'd2-section', page.locator('#devices-phones'))
+    await expect(tsPane.locator('#devices-new-name')).toBeFocused()
+    await expect(page.getByTestId('pc-tab-devices-tailscale')).toHaveAttribute('aria-current', 'page')
+    await shot(page, 'd2-section', tsPane)
   })
 
   test('(f) real fixture server, no mocks: the card reads this machine\'s own Tailscale state (nothing is clicked)', async ({ page }) => {

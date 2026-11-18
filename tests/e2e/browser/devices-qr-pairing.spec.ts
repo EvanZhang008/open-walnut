@@ -11,7 +11,7 @@ import { test, expect } from '@playwright/test'
 import { backToDevices, qrDialog } from './devices-ways-helpers'
 
 test.describe('Settings → Phones & Cloud pairing', () => {
-  test('Devices section is reachable and its QR never points at loopback', async ({ page }) => {
+  test('All devices tab is reachable and its QR never points at loopback', async ({ page }) => {
     await page.goto('/')
     await page.waitForLoadState('domcontentloaded')
 
@@ -20,7 +20,7 @@ test.describe('Settings → Phones & Cloud pairing', () => {
     await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
 
     // The nav entry the user remembered must exist; clicking it opens Phones &
-    // Cloud, and its Devices tab holds the phones and Add a phone.
+    // Cloud, and its All devices tab holds the phones and Add a phone.
     const devicesNav = page.getByTestId('settings-nav-devices')
     await expect(devicesNav).toHaveCount(1)
     await expect(devicesNav).toContainText('Phones & Cloud')
@@ -57,17 +57,18 @@ test.describe('Settings → Phones & Cloud pairing', () => {
     await qrDialog(page).getByTestId('devices-qr-done').click()
     await expect(qrDialog(page)).toHaveCount(0)
 
-    // Remove is two-step in place (no browser dialog): the first click arms it,
-    // the second confirms.
+    // Remove is two-step in place (no browser dialog): the first click asks on the
+    // row, with the warning, and the named confirm removes it.
     const dialogs: string[] = []
     page.on('dialog', (d) => { dialogs.push(d.type()); void d.dismiss() })
     const row = section.locator(`.devices-row[data-device-name="${name}"]`)
     const remove = row.getByTestId('devices-remove')
     await expect(remove).toHaveText('Remove')
     await remove.click()
-    await expect(remove).toHaveText('Confirm remove')
+    await expect(row.getByRole('alert')).toContainText(`Removing ${name} signs it out of this Walnut on every way`)
+    await expect(row.getByTestId('devices-remove-confirm')).toHaveText(`Remove ${name}`)
     await expect(section.locator(`.devices-row[data-device-name="${name}"]`)).toHaveCount(1)
-    await remove.click()
+    await row.getByTestId('devices-remove-confirm').click()
     await expect(section.locator(`.devices-row[data-device-name="${name}"]`)).toHaveCount(0)
     expect(dialogs).toEqual([])
   })

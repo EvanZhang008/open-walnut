@@ -37,7 +37,6 @@ import { SegmentedControl } from '../../inputs/SegmentedControl';
 import { CopyButton } from '../../inputs/CopyButton';
 import { copyTextRobust } from '@/utils/clipboard';
 import { saveErrorMessage } from '../../settings-pane-context';
-import { DEVICES_TAB } from '../../settings-way-panes';
 import { describeExpose, exposePollMs, type ExposeResponse, type ExposeStatus, optionFits } from './browser-access-status';
 import { isDeviceCaller } from './device-caller';
 import { PHONE_LINK_QR_SHOWN, phoneLinkQr } from './phone-link-qr';
@@ -445,7 +444,7 @@ export function BrowserAccessGroup({ heading = 'Open from a browser' }: { headin
           <SettingsNotice kind="success" role="status">
             {signedIn.who === 'extension'
               ? 'The Walnut extension just signed in with the code. The link below is a new one, for the next phone.'
-              : 'A browser just signed in with the link; it is listed under Devices. The link below is a new one, for the next phone.'}
+              : 'A browser just signed in with the link; it now shows under Signed-in browsers at the end of this page. The link below is a new one, for the next phone.'}
           </SettingsNotice>
         </div>
       )}
@@ -514,19 +513,6 @@ export function BrowserAccessGroup({ heading = 'Open from a browser' }: { headin
           />
         );
       })()}
-      {/* Where the phones this link signed in are, and signed out: one step from here. */}
-      {!deviceCaller && (
-        <SettingsRow
-          label="Signed-in browsers"
-          help="Listed under Devices, where each one can be signed out."
-          data-testid="browser-access-signed-in-row"
-          control={(
-            <a className="settings-button settings-button-default" href={`#${DEVICES_TAB}`} data-testid="browser-access-devices-link">
-              <span className="settings-button-stack"><span className="settings-button-label">Devices</span></span>
-            </a>
-          )}
-        />
-      )}
     </SettingsGroup>
   );
 }

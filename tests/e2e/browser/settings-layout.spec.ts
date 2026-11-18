@@ -232,7 +232,7 @@ test('F10 F24: a paired phone is a plain row with a neutral Show QR and a human 
   }))
   await openSettings(page)
   await clickNav(page, 'devices')
-  // The phone rows are on the Devices tab of Phones & Cloud.
+  // The phone rows are on the All devices tab of Phones & Cloud.
   await backToDevices(page)
   const row = page.locator('.devices-row[data-device-name="Test phone"]')
   await expect(row).toBeVisible()

@@ -329,9 +329,9 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     render: () => <DevicesWaySection way="browser" />,
   },
   {
-    owner: 'walnut', id: 'devices-phones', label: 'Devices', title: 'Devices', group: 'configure', tabOf: 'devices',
+    owner: 'walnut', id: 'devices-phones', label: 'All devices', title: 'All devices', group: 'configure', tabOf: 'devices',
     icon: 'phone', tint: '#34AADC',
-    description: 'Your paired phones and signed-in browsers, and pairing a new phone.',
+    description: 'Every paired phone, signed-in browser and Mac, and pairing a new phone.',
     keywords: ['phone', 'iphone', 'pair', 'paired phones', 'signed-in browsers', 'devices',
       { word: 'qr code', rowLabel: 'Device name', anchor: 'devices-new-name' },
       { word: 'wifi wi-fi', rowLabel: 'Pairing target' }],

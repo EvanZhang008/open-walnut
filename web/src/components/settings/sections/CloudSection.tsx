@@ -17,7 +17,6 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import type { Config } from '@open-walnut/core';
 import { apiGet } from '@/api/client';
 import { fetchDevicesList } from './cloud/devices-list';
@@ -50,8 +49,9 @@ import { CloudSetupSteps, SetupLog } from './cloud/CloudSetupSteps';
 import { PairPhoneCard } from './cloud/PairPhoneCard';
 import { CloudWayExtras } from './cloud/CloudWayExtras';
 import { PhonesCloudTabHead, usePhonesCloudView } from './cloud/PhonesCloudTabs';
-import { requestPairTarget } from './cloud/useDevicesData';
-import { DEVICES_TAB, WAY_PANES } from '../settings-way-panes';
+import { WAY_PANES } from '../settings-way-panes';
+import { DeviceList } from './cloud/DeviceList';
+import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { CLOUD_UNPAIRED_NOTICE, DEVICES_CHANGED_EVENT } from './cloud/device-rows-copy';
 
 /** The companion refuses this Mac's token: said on the Cloud card in place of "Connected". */
@@ -79,13 +79,9 @@ function isLive(job: CloudSetupJob | null): boolean {
  * settings under its status (CloudWayExtras), shown once one is set up.
  */
 export function CloudSection({ config, onSave }: { config?: Config; onSave?: (partial: Partial<Config>) => Promise<void> } = {}) {
-  const navigate = useNavigate();
   const tabView = usePhonesCloudView();
-  // "Pair a phone this way": the Devices tab, with the companion's address picked for the QR.
-  const pairThisWay = () => {
-    requestPairTarget('cloud');
-    navigate({ hash: `#${DEVICES_TAB}` }, { replace: true });
-  };
+  // A companion's own console lists its phones on All devices: its records are this box's own.
+  const replica = useIsReplicaServer();
   const [job, setJob] = useState<CloudSetupJob | null>(null);
   const [providers, setProviders] = useState<CloudSetupProvider[] | null>(null);
   const [stage, setStage] = useState<Stage>('hero');
@@ -486,15 +482,6 @@ export function CloudSection({ config, onSave }: { config?: Config; onSave?: (pa
             />
             {refusedNotice}
             <CompanionUpdatesRow />
-            <SettingsRow
-              label="Pair a phone this way"
-              help={<>The QR code points the phone at this companion, so it works off <span className="settings-nowrap">Wi-Fi</span> too.</>}
-              control={
-                <SettingsButton data-testid="cloud-pair-phone" onClick={pairThisWay}>
-                  Pair a phone
-                </SettingsButton>
-              }
-            />
             {terminalJob && (
               <SettingsRow
                 label="Old setup attempt"
@@ -509,6 +496,8 @@ export function CloudSection({ config, onSave }: { config?: Config; onSave?: (pa
           </SettingsGroup>
         )}
         {view === 'configured' && errorNotice}
+        {/* The phones and Macs that use the companion, and pairing one more this way. */}
+        {view === 'configured' && !replica && <DeviceList scope="cloud" />}
 
         {view === 'unpaired' && (
           <SettingsGroup

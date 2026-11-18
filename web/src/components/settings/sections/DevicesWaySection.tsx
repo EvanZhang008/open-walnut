@@ -3,27 +3,28 @@
  * Walnut away from home, as a tab (PhonesCloudTabs.tsx). The Cloud companion tab
  * is CloudSection itself, and the Devices tab DevicesSection.
  * Tailscale's steps need the device list (which phones are on the tailnet, and
- * whether this Mac has a tailnet address for the pairing picker).
+ * whether this Mac has a tailnet address to pair with). Under the way's own
+ * settings, the devices that use it (cloud/DeviceList.tsx).
  */
-import { useNavigate } from 'react-router-dom';
 import { SettingsGroup, SettingsEmpty } from '../SettingsSection';
 import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { RemoteAccessCard } from './cloud/RemoteAccessCard';
 import { BrowserAccessGroup } from './cloud/BrowserAccessGroup';
-import { requestPairTarget, useDevicesData } from './cloud/useDevicesData';
+import { useDevicesData } from './cloud/useDevicesData';
 import { PhonesCloudTabPane } from './cloud/PhonesCloudTabs';
-import { DEVICES_TAB, WAY_PANES } from '../settings-way-panes';
+import { WAY_PANES } from '../settings-way-panes';
+import { DeviceList } from './cloud/DeviceList';
 import '@/styles/settings-sections-addons.css';
 
 type SubWay = 'tailscale' | 'browser';
 
 function TailscaleSteps() {
-  const navigate = useNavigate();
   const { devices, cloudDevices, targets, listState, refresh } = useDevicesData({ replica: false });
-  // Step 3 picks the tailnet address in the pairing picker, which is on the Devices tab.
+  // Step 3: this tab's own Pair a phone this way, below the steps.
   const chooseTailnet = () => {
-    requestPairTarget('tailnet');
-    navigate({ hash: `#${DEVICES_TAB}` }, { replace: true });
+    const field = document.getElementById('devices-new-name');
+    field?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    field?.focus({ preventScroll: true });
   };
   return (
     <RemoteAccessCard
@@ -48,6 +49,7 @@ export function DevicesWaySection({ way }: { way: SubWay }) {
       ) : (
         <div className="devices-way-panel" id={`devices-way-panel-${way}`} data-testid={`devices-way-panel-${way}`}>
           {way === 'tailscale' ? <TailscaleSteps /> : <BrowserAccessGroup />}
+          <DeviceList scope={way} />
         </div>
       )}
     </PhonesCloudTabPane>

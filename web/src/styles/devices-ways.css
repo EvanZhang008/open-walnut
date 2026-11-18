@@ -56,9 +56,13 @@
 .pc-intro p { margin: 0; }
 .pc-intro-what { font-size: 14px; line-height: 20px; }
 .pc-intro .pc-intro-when, .pc-intro .pc-intro-now { margin-top: 4px; }
+/* The word in its own column, so a long line wraps under its text, not under the word. */
+.pc-intro .pc-intro-when { display: grid; grid-template-columns: 84px minmax(0, 1fr); column-gap: 8px; }
 .pc-intro-key { display: inline-block; min-width: 84px; margin-right: 8px; color: var(--fg-muted); }
+.pc-intro-when .pc-intro-key { min-width: 0; margin-right: 0; }
 /* A phone: each line's word above its text, so the text keeps the width. */
 @media (max-width: 560px) {
+  .pc-intro .pc-intro-when { display: block; }
   .pc-intro-when .pc-intro-key { display: block; }
   /* A finger's worth of height for each tab. */
   .pc-tab { min-height: 44px; box-sizing: border-box; }

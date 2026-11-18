@@ -82,7 +82,7 @@ async function openDevices(page: Page, { waitForList = true } = {}) {
   const nav = page.getByTestId('settings-nav-devices')
   await nav.click()
   await expect(nav).toHaveAttribute('aria-current', 'page')
-  // Phones & Cloud opens the tab in use; the phone list and Add a phone are on Devices.
+  // Phones & Cloud opens the tab in use; the phone list and Add a phone are on All devices.
   const section = await backToDevices(page)
   if (waitForList) await expect(section).not.toContainText('Loading paired phones...', { timeout: 30_000 })
   return section
@@ -187,11 +187,15 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
     await expect(link).toHaveAttribute('href', 'https://apps.apple.com/app/tailscale/id1475387142')
     await expect(link).toHaveAttribute('target', '_blank')
     await expect(link).toHaveAttribute('rel', /noopener/)
-    // Inside the section, never a banner or a notice box.
-    await expect(ts.locator('.settings-notice')).toHaveCount(0)
+    // Inside the card, never a banner or a notice box.
+    await expect(ts.getByTestId('remote-access-card').locator('.settings-notice')).toHaveCount(0)
+    // The tab's own Pair a phone this way waits for Tailscale, and says so.
+    const tsPair = ts.getByTestId('way-pair-tailscale')
+    await expect(tsPair.locator('.settings-notice')).toContainText('Set up Tailscale on this Mac first')
+    await expect(tsPair.getByTestId('devices-pair-new')).toBeDisabled()
     await shot(page, 'install-card-lan-only', ts)
 
-    // Pairing still works on Wi-Fi, back on the Devices tab.
+    // Pairing still works on Wi-Fi, back on the All devices tab.
     const main = await backToDevices(page)
     await main.locator('#devices-new-name').fill('Spare phone')
     await main.getByRole('button', { name: /Pair new device/i }).click()

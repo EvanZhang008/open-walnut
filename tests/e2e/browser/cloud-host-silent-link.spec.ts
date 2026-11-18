@@ -207,7 +207,7 @@ test('a connected companion that went silent: Files, the slash menu and the fold
   expect(errors).toEqual([])
 })
 
-/** Settings › Phones & Cloud › Devices, by clicks. */
+/** Settings › Phones & Cloud › All devices, by clicks. */
 async function openDevices(page: Page): Promise<Locator> {
   await page.getByRole('link', { name: /settings/i }).first().click()
   await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible({ timeout: 30_000 })
@@ -229,11 +229,13 @@ test('removing a cloud phone while the companion does not answer says how long t
   // The companion accepts TCP and never answers from now on.
   await setLink('drop-hold')
   try {
-    const remove = phone.getByTestId('devices-remove')
-    await remove.click()
-    await expect(remove).toHaveText('Confirm remove')
+    // A phone's Remove asks first, with the warning on the row (DeviceList.tsx).
+    await phone.getByTestId('devices-remove').click()
+    await expect(phone.getByRole('alert')).toContainText('Removing my-phone signs it out of this Walnut on every way')
+    const confirm = phone.getByTestId('devices-remove-confirm')
+    await expect(confirm).toHaveText('Remove my-phone')
     const t0 = Date.now()
-    await remove.click()
+    await confirm.click()
     const rowError = section.locator('.devices-row[data-device-name="my-phone"] + .settings-row-error')
     await expect(rowError).toBeVisible({ timeout: 60_000 })
     const waitedMs = Date.now() - t0

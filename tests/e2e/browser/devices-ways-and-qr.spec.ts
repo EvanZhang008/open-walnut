@@ -1,30 +1,37 @@
 /**
  * Settings → Phones & Cloud as four tabs, the layout the user picked (2026-11-03,
  * design 1 of 10: "A also for ech option show a descripotion of what itbis in tbhe
- * top"):
+ * top"), each way with its own devices (2026-11-18: "why this is in device not in
+ * cloud compaion confused", "each section shoud have its own paried devide or
+ * conenct devide"):
  *
- *   1. Cloud companion, Tailscale, the browser link and Devices are tabs; Phones &
+ *   1. Cloud companion, Tailscale, the browser link and All devices are tabs; Phones &
  *      Cloud opens the tab the phone uses. Each tab leads with what it is, when to
  *      use it and its state now; the tab in use also says how the phone reaches
- *      Walnut. Paired phones and browsers live only on Devices. The sidebar lists
- *      Phones & Cloud alone.
- *   2. Show QR and Pair new device open the code in a dialog in front of the user:
- *      a paired phone's new code asks first (it signs the phone out), the code says
- *      how to scan it, and the dialog cannot be closed while the code is being made.
- *   3. This Mac's own record and simulators stay folded in Advanced at the end.
+ *      Walnut. The sidebar lists Phones & Cloud alone.
+ *   2. Each way's tab lists the devices that use it, with their actions, and pairs a
+ *      phone through its own address in place: the companion's phones and Macs, the
+ *      phones paired with this Mac (Tailscale reaches those), the signed-in browsers
+ *      and the extension. All devices lists everything, each row tagged with its ways.
+ *   3. A phone shows once in each tab of its ways, and Remove says it removes the
+ *      whole phone on every way (one pairing works on all of them), then asks.
+ *   4. Show QR and Pair open the code in a dialog in front of the user: a paired
+ *      phone's new code asks first (it signs the phone out), the code says how to
+ *      scan it, and the dialog cannot be closed while the code is being made.
+ *   5. This Mac's own record and simulators stay folded in Advanced on All devices.
  *
- * 2026-11-03 report: "there are 3 connection model ... it is 3 different tab and
- * have content below, I am confused why u keep mixing them".
- *
- * Real density: three phones (one on the cloud), a signed-in browser, this Mac's
- * own cloud record and sixteen simulators. The list, the mint, Tailscale and the
- * tunnel state are page.route fixtures with neutral names; navigation is by clicks.
+ * Real density, the shape of the user's own list: a phone paired through the
+ * companion and copied to this Mac, an older phone paired with this Mac only, a third
+ * phone, a signed-in browser, the Walnut extension, this Mac's own cloud record,
+ * another Mac on the companion and sixteen simulators. The list, the mint, the
+ * removal, Tailscale and the tunnel state are page.route fixtures with neutral
+ * names; navigation is by clicks.
  *
  * Runs in both engines: Chromium by default, WebKit (the Mac app is a
  * WKWebView) with `PW_WEBKIT=1 ... --project=webkit`.
  */
 import { mkdirSync } from 'node:fs'
-import { test, expect, type Page, type Route } from '@playwright/test'
+import { test, expect, type Locator, type Page, type Route } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
 
 test.setTimeout(120_000)
@@ -32,6 +39,7 @@ test.setTimeout(120_000)
 const SHOTS = process.env.PW_SHOTS_DIR ?? '/tmp/devices-ways-and-qr'
 const LAN = { kind: 'lan', origin: 'http://192.0.2.10:3456', label: 'This network (Wi-Fi)' }
 const CLOUD = { kind: 'cloud', origin: 'https://walnut.example.com', label: 'Cloud (anywhere)' }
+const TAILNET = { kind: 'tailnet', origin: 'http://this-mac.tail0000.ts.net:3456', label: 'Tailscale' }
 
 const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString()
 const day = (n: number) => ago(n * 1440)
@@ -39,12 +47,16 @@ const SIMULATORS = Array.from({ length: 16 }, (_, i) => ({ name: `sim-${i + 1}`,
 const DEVICES = [
   { name: 'desk-phone', createdAt: day(100), lastUsedAt: day(60), role: 'phone' },
   { name: 'spare-phone', createdAt: day(50), lastUsedAt: day(50), role: 'phone', info: { model: 'iPhone18,2', os: 'iOS 26.0.1', appVersion: '1.0.0 (57)' } },
+  // Paired through the companion and copied here, as the user's own phone is.
+  { name: 'pocket-phone', createdAt: ago(60), role: 'phone', adoptedFrom: 'cloud', info: { model: 'iPhone18,2', os: 'iOS 27.0', appVersion: '1.0.2 (165)' } },
   { name: 'browser-1a2b3c', createdAt: day(14), lastUsedAt: day(2), role: 'browser' },
+  { name: 'extension-4d5e6f', createdAt: day(14), lastUsedAt: ago(5), role: 'browser', info: { deviceName: 'Walnut extension (Chrome on Mac)', appVersion: '0.6.33' } },
   ...SIMULATORS,
 ]
 const CLOUD_DEVICES = [
   { name: 'pocket-phone', createdAt: ago(60), lastUsedAt: ago(2), role: 'phone' },
   { name: 'this-mac-sync', createdAt: day(90), role: 'self' },
+  { name: 'studio-mac', createdAt: day(30), lastUsedAt: day(1), role: 'mac' },
 ]
 
 const json = (route: Route, body: unknown, status = 200) =>
@@ -56,14 +68,40 @@ interface MintControl {
   hold?: Promise<void>
   /** When set, the next mint answers this status with an error body. */
   failWith?: number
+  /** Every DELETE /api/devices/:name, as `<name>` or `<name>?target=cloud`. */
+  deletes: string[]
+  /** Removing a record here also removes its twin on the companion, as the server does by hash. */
+  twinRemoval?: boolean
 }
 
-async function mockDevices(page: Page, opts: { cloud?: boolean } = {}): Promise<MintControl> {
+async function mockDevices(page: Page, opts: { cloud?: boolean; tailscale?: boolean } = {}): Promise<MintControl> {
   const cloud = opts.cloud ?? true
-  const ctl: MintControl = { mints: [] }
+  const ts = opts.tailscale ?? false
+  const ctl: MintControl = { mints: [], deletes: [] }
+  // Each test's own copy: a removal takes the row out of this test's list only.
+  const local = DEVICES.map((d) => ({ ...d }))
+  const remote = CLOUD_DEVICES.map((d) => ({ ...d }))
+  const tsState = { installed: ts, running: ts }
   await page.route((url) => url.pathname === '/api/devices/tailscale', (route) => json(route, {
-    installed: false, running: false, peers: [], install: { brew: false, job: null },
+    ...tsState, ...(ts ? { dnsName: 'this-mac.tail0000.ts.net', address: '100.64.0.10' } : {}),
+    peers: ts ? [{ hostName: 'pocket-phone', os: 'iOS', online: true }] : [], install: { brew: false, job: null },
   }))
+  await page.route((url) => url.pathname.startsWith('/api/devices/') && url.pathname !== '/api/devices/tailscale', (route) => {
+    if (route.request().method() !== 'DELETE') return route.fallback()
+    const url = new URL(route.request().url())
+    const name = decodeURIComponent(url.pathname.slice('/api/devices/'.length))
+    const onCloud = url.searchParams.get('target') === 'cloud'
+    ctl.deletes.push(onCloud ? `${name}?target=cloud` : name)
+    const list = onCloud ? remote : local
+    const at = list.findIndex((d) => d.name === name)
+    if (at < 0) return json(route, { error: `Device "${name}" not found${onCloud ? ' on the cloud' : ''}.` }, 404)
+    list.splice(at, 1)
+    if (!onCloud && ctl.twinRemoval) {
+      const twin = remote.findIndex((d) => d.name === name)
+      if (twin >= 0) remote.splice(twin, 1)
+    }
+    return json(route, { ok: true })
+  })
   await page.route((url) => url.pathname === '/api/expose', (route) => json(route, {
     status: { enabled: true, provider: 'command', providerTitle: 'Example tunnel', state: 'connected', since: Date.now(), url: 'https://walnut.tunnel.example' },
     providers: [{ id: 'command', title: 'Example tunnel', owner: 'core', options: [] }],
@@ -87,9 +125,8 @@ async function mockDevices(page: Page, opts: { cloud?: boolean } = {}): Promise<
         pairingURI: `wn://pair?token=${token}&server=${encodeURIComponent(server)}`,
       })
     }
-    return json(route, cloud
-      ? { devices: DEVICES, cloudDevices: CLOUD_DEVICES, targets: [LAN, CLOUD], tailscale: { installed: false, running: false } }
-      : { devices: DEVICES, cloudDevices: [], targets: [LAN], tailscale: { installed: false, running: false } })
+    const targets = [LAN, ...(ts ? [TAILNET] : []), ...(cloud ? [CLOUD] : [])]
+    return json(route, { devices: local, cloudDevices: cloud ? remote : [], targets, tailscale: tsState })
   })
   return ctl
 }
@@ -111,7 +148,7 @@ async function openPhonesCloud(page: Page, landsOn = 'cloud') {
   return section
 }
 
-/** The Devices tab: paired phones and browsers, Add a phone. */
+/** The All devices tab: every device, Add a phone. */
 async function openDevices(page: Page) {
   await openPhonesCloud(page)
   await page.getByTestId('pc-tab-devices-phones').click()
@@ -129,6 +166,8 @@ async function shot(page: Page, name: string, region = page.locator('.settings-p
 
 const dialog = (page: Page) => page.locator('.devices-qr-dialog')
 const tabs = (page: Page) => page.getByTestId('pc-tabs').locator('.pc-tab')
+const row = (scope: Locator, name: string) => scope.locator(`.devices-row[data-device-name="${name}"]`)
+const rowNames = (scope: Locator) => scope.locator('.devices-row').evaluateAll((els) => els.map((e) => e.getAttribute('data-device-name')))
 
 test.beforeEach(async ({ page }) => {
   // The shared fixture's ui-prefs hold whatever another spec left there: one that opened
@@ -144,12 +183,13 @@ test('Phones & Cloud opens the tab in use: four tabs, what the way is, how the p
   const cloud = await openPhonesCloud(page)
 
   // Four tabs, the one in use open and saying so; the sidebar lists Phones & Cloud alone.
-  await expect(tabs(page).locator('.pc-tab-label')).toHaveText(['Cloud companion', 'Tailscale', 'Browser link', 'Devices'])
+  await expect(tabs(page).locator('.pc-tab-label')).toHaveText(['Cloud companion', 'Tailscale', 'Browser link', 'All devices'])
   await expect(page.getByTestId('pc-tab-cloud')).toHaveAttribute('aria-current', 'page')
   await expect(page.getByTestId('pc-tab-cloud')).toContainText('In use')
   await expect(page.getByTestId('pc-tab-devices-tailscale')).toContainText('Off')
   await expect(page.getByTestId('pc-tab-devices-browser')).toContainText('On')
-  await expect(page.getByTestId('pc-tab-devices-phones')).toContainText('4')
+  // Five phones and browsers, each once: pocket-phone is paired on both boxes.
+  await expect(page.getByTestId('pc-tab-devices-phones')).toContainText('5')
   await expect(page.locator('#cloud-title')).toHaveText('Phones & Cloud')
   await expect(page.getByTestId('settings-nav-devices')).toHaveAttribute('aria-current', 'page')
   await expect(page.locator('.settings-nav-subitem')).toHaveCount(0)
@@ -178,9 +218,32 @@ test('Phones & Cloud opens the tab in use: four tabs, what the way is, how the p
   await shot(page, 'tab-cloud')
 })
 
-test('each tab holds only its own way; Devices holds the phones; deep links open their tab', async ({ page }) => {
+test('each tab holds its own way and the devices that use it; All devices holds them all; deep links open their tab', async ({ page }) => {
   await mockDevices(page)
-  await openPhonesCloud(page)
+  const cloud = await openPhonesCloud(page)
+
+  // Cloud companion: the phones and Macs on the companion. desk-phone and spare-phone are
+  // paired with this Mac only, so they are not here.
+  const cloudPhones = cloud.getByTestId('way-devices-cloud')
+  await expect(cloudPhones).toBeVisible({ timeout: 30_000 })
+  await expect(cloudPhones.locator('.settings-group-heading')).toContainText('Phones on this companion')
+  expect(await rowNames(cloudPhones)).toEqual(['pocket-phone'])
+  // Its other way, by the tab's name; its own way is the tab itself.
+  await expect(row(cloudPhones, 'pocket-phone').locator('.settings-tag')).toHaveText(['Wi-Fi'])
+  await expect(row(cloudPhones, 'pocket-phone').getByTestId('devices-show-qr')).toBeVisible()
+  await expect(row(cloudPhones, 'pocket-phone').getByTestId('devices-remove')).toHaveText('Remove')
+  const macs = cloud.getByTestId('devices-macs')
+  await expect(macs.locator('.settings-group-heading')).toContainText('Macs on this companion')
+  expect(await rowNames(macs)).toEqual(['this-mac-sync', 'studio-mac'])
+  await expect(row(macs, 'this-mac-sync')).toContainText('This Mac')
+  await expect(row(macs, 'this-mac-sync').getByTestId('devices-unpair-self')).toBeVisible()
+  await expect(cloud.getByTestId('way-pair-cloud')).toContainText('Pair a phone this way')
+  // Read top to bottom: the way, its devices, pairing one more, then the companion's own settings.
+  const top = async (sel: string) => (await cloud.locator(sel).first().boundingBox())!.y
+  expect(await top('[data-testid="way-devices-cloud"]')).toBeLessThan(await top('[data-testid="way-pair-cloud"]'))
+  expect(await top('[data-testid="way-pair-cloud"]')).toBeLessThan(await top('[data-testid="devices-macs"]'))
+  expect(await top('[data-testid="devices-macs"]')).toBeLessThan(await top('[data-testid="devices-way-panel-cloud"]'))
+  await shot(page, 'tab-cloud-devices')
 
   await page.getByTestId('pc-tab-devices-tailscale').click()
   await expect(page).toHaveURL(/#devices-tailscale$/)
@@ -191,6 +254,19 @@ test('each tab holds only its own way; Devices holds the phones; deep links open
   await expect(ts.getByTestId('devices-way-panel-tailscale').locator('.remote-access-step[data-step="mac"]')).toContainText('Get Tailscale from the App Store')
   await expect(ts.getByTestId('devices-now')).toHaveCount(0)
   await expect(page.getByTestId('settings-nav-devices')).toHaveAttribute('aria-current', 'page')
+  // The phones paired with this Mac, the ones Tailscale reaches; while it is off they say so,
+  // and pairing this way waits for it.
+  const tsPhones = ts.getByTestId('way-devices-tailscale')
+  await expect(tsPhones).toBeVisible({ timeout: 30_000 })
+  expect((await rowNames(tsPhones)).sort()).toEqual(['desk-phone', 'pocket-phone', 'spare-phone'])
+  await expect(tsPhones).toContainText("Tailscale isn't running on this Mac, so none of these connects this way now.")
+  await expect(tsPhones).toContainText('a phone here uses this way once the Tailscale app runs on it too')
+  await expect(row(tsPhones, 'pocket-phone').locator('.settings-tag')).toHaveText(['Cloud companion', 'Wi-Fi'])
+  await expect(row(tsPhones, 'desk-phone').locator('.settings-tag')).toHaveText(['Wi-Fi'])
+  const tsPair = ts.getByTestId('way-pair-tailscale')
+  await expect(tsPair).toContainText('Set up Tailscale on this Mac first')
+  await ts.locator('#devices-new-name').fill('travel phone')
+  await expect(tsPair.getByTestId('devices-pair-new')).toBeDisabled()
   await shot(page, 'tab-tailscale')
 
   await page.getByTestId('pc-tab-devices-browser').click()
@@ -198,16 +274,27 @@ test('each tab holds only its own way; Devices holds the phones; deep links open
   await expect(br.getByTestId('pc-intro-devices-browser').locator('.pc-intro-when')).toContainText('You are on a computer or phone without the Walnut app.')
   await expect(br.getByTestId('pc-intro-devices-browser').locator('.pc-intro-now')).toContainText('Connected through Example tunnel.')
   await expect(br.getByTestId('browser-access')).toBeVisible({ timeout: 30_000 })
+  // The browsers and the extension signed in with a code from this tab; no phone, no pairing.
+  expect(await rowNames(br.getByTestId('devices-browsers-group'))).toEqual(['browser-1a2b3c'])
+  await expect(row(br, 'browser-1a2b3c').getByTestId('devices-remove')).toHaveText('Sign out')
+  expect(await rowNames(br.getByTestId('devices-extensions-group'))).toEqual(['extension-4d5e6f'])
+  await expect(br.getByTestId('way-devices-browser')).toHaveCount(0)
+  await expect(br.locator('#devices-new-name')).toHaveCount(0)
+  await expect(br.getByTestId('browser-access-signed-in-row')).toHaveCount(0)
   await shot(page, 'tab-browser')
 
   await page.getByTestId('pc-tab-devices-phones').click()
   const dev = page.locator('#devices-phones')
-  await expect(dev.getByTestId('pc-intro-devices-phones').locator('.pc-intro-what')).toHaveText('The phones and browsers that can open Walnut, and pairing a new phone.')
+  await expect(dev.getByTestId('pc-intro-devices-phones').locator('.pc-intro-what')).toHaveText("Every phone, browser and Mac that can open Walnut, each with the ways it uses. Each way's own tab lists only the devices that use it.")
   await expect(dev.getByTestId('pc-intro-devices-phones').locator('.pc-intro-now')).toHaveCount(0)
   const phones = dev.getByTestId('devices-phones-group')
   await expect(phones.locator('.devices-row')).toHaveCount(3)
-  await expect(phones.locator('.devices-row[data-device-name="pocket-phone"] .settings-tag')).toHaveText('Cloud companion')
-  await expect(phones.locator('.devices-row[data-device-name="desk-phone"] .settings-tag')).toHaveText('Direct')
+  // Each row tagged with the tabs it shows in.
+  await expect(row(phones, 'pocket-phone').locator('.settings-tag')).toHaveText(['Cloud companion', 'Wi-Fi'])
+  await expect(row(phones, 'desk-phone').locator('.settings-tag')).toHaveText(['Wi-Fi'])
+  await expect(dev.getByText('Direct', { exact: true })).toHaveCount(0)
+  expect(await rowNames(dev.getByTestId('devices-extensions-group'))).toEqual(['extension-4d5e6f'])
+  expect(await rowNames(dev.getByTestId('devices-macs'))).toEqual(['studio-mac'])
   const others = dev.getByTestId('devices-others')
   await expect(others).toContainText('17')
   await expect(others).toHaveAttribute('data-open', 'false')
@@ -301,13 +388,119 @@ test('a press dragged off the tab is no pick: Phones & Cloud then opens the tab 
   await expect(page.getByTestId('pc-tab-devices-phones')).toHaveAttribute('aria-current', 'page')
 })
 
-test('the cloud tab pairs a phone this way: Devices opens with the companion picked for the QR', async ({ page }) => {
-  await mockDevices(page)
+test('the cloud tab pairs a phone this way in place: the code points at the companion', async ({ page }) => {
+  const ctl = await mockDevices(page)
   const cloud = await openPhonesCloud(page)
-  await cloud.getByTestId('cloud-pair-phone').click()
-  await expect(page).toHaveURL(/#devices-phones$/)
-  await expect(page.getByTestId('devices-target-cloud')).toHaveAttribute('aria-checked', 'true', { timeout: 30_000 })
-  await expect(page.locator('#devices-new-name')).toBeFocused()
+  const pair = cloud.getByTestId('way-pair-cloud')
+  await expect(pair).toContainText('The QR code points the phone at your companion')
+  await expect(pair.getByRole('radiogroup')).toHaveCount(0)
+  await pair.locator('#devices-new-name').fill('travel phone')
+  await pair.locator('#devices-new-name').press('Enter')
+  await expect(dialog(page).locator('img')).toBeVisible({ timeout: 30_000 })
+  await expect(page).toHaveURL(/#cloud$/)
+  expect(ctl.mints[0]).toMatchObject({ name: 'travel-phone', target: 'cloud' })
+  await expect(dialog(page)).toContainText('Points at walnut.example.com')
+  await dialog(page).getByTestId('devices-qr-done').click()
+  await expect(pair.locator('#devices-new-name')).toHaveValue('')
+})
+
+test('with Tailscale on, its tab pairs through the tailnet address and step 3 leads to that row', async ({ page }) => {
+  const ctl = await mockDevices(page, { tailscale: true })
+  await openPhonesCloud(page)
+  await page.getByTestId('pc-tab-devices-tailscale').click()
+  const ts = page.locator('#devices-tailscale')
+  const tsPhones = ts.getByTestId('way-devices-tailscale')
+  await expect(tsPhones).toBeVisible({ timeout: 30_000 })
+  await expect(tsPhones).not.toContainText("isn't running")
+  await expect(row(tsPhones, 'pocket-phone').locator('.settings-tag')).toHaveText(['Cloud companion', 'Wi-Fi'])
+  // Show QR here carries this tab's own address.
+  await row(tsPhones, 'desk-phone').getByTestId('devices-show-qr').click()
+  await dialog(page).getByTestId('devices-show-qr-confirm').click()
+  await expect(dialog(page).locator('img')).toBeVisible({ timeout: 30_000 })
+  expect(ctl.mints[0]).toMatchObject({ name: 'desk-phone', target: 'tailnet', replace: true })
+  await dialog(page).getByTestId('devices-qr-done').click()
+  // A phone that is on the companion keeps the companion's address: a tailnet-only code
+  // would cut off a phone without Tailscale.
+  await row(tsPhones, 'pocket-phone').getByTestId('devices-show-qr').click()
+  await dialog(page).getByTestId('devices-show-qr-confirm').click()
+  await expect(dialog(page).locator('img')).toBeVisible({ timeout: 30_000 })
+  expect(ctl.mints[1]).toMatchObject({ name: 'pocket-phone', target: 'cloud', replace: true })
+  await dialog(page).getByTestId('devices-qr-done').click()
+  await page.getByTestId('pc-tab-devices-phones').click()
+  // Tailscale on this Mac says nothing about the phone: no row is tagged Tailscale.
+  await expect(row(page.locator('#devices-phones').getByTestId('devices-phones-group'), 'desk-phone').locator('.settings-tag')).toHaveText(['Wi-Fi'], { timeout: 30_000 })
+})
+
+test('Remove on a way tab removes the whole phone, after saying so: every record, every tab', async ({ page }) => {
+  const ctl = await mockDevices(page)
+  const cloud = await openPhonesCloud(page)
+  const pocket = row(cloud.getByTestId('way-devices-cloud'), 'pocket-phone')
+  await expect(pocket).toBeVisible({ timeout: 30_000 })
+
+  // The first press only asks: what Remove does, Cancel focused.
+  await pocket.getByTestId('devices-remove').click()
+  const warning = pocket.getByRole('alert')
+  await expect(warning).toContainText('Removing pocket-phone signs it out of this Walnut on every way it uses: the cloud companion and this Mac directly (Wi-Fi, or Tailscale).')
+  await expect(warning).toContainText('to use it again, scan a new QR code')
+  await expect(pocket.getByTestId('devices-remove-cancel')).toBeFocused()
+  await expect(pocket.getByTestId('devices-remove-confirm')).toHaveText('Remove pocket-phone')
+  await expect(pocket.getByTestId('devices-show-qr')).toHaveCount(0)
+  await shot(page, 'remove-ask', pocket)
+  // Cancel, and Escape, change nothing and give the focus back to Remove.
+  await pocket.getByTestId('devices-remove-cancel').click()
+  await expect(warning).toHaveCount(0)
+  await expect(pocket.getByTestId('devices-remove')).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(pocket.getByTestId('devices-remove-cancel')).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(pocket.getByRole('alert')).toHaveCount(0)
+  await expect(pocket.getByTestId('devices-remove')).toBeFocused()
+  // A double click never confirms: the second click lands on the question, not on the answer.
+  await pocket.getByTestId('devices-remove').dblclick()
+  await expect(pocket.getByTestId('devices-remove-confirm')).toBeVisible()
+  expect(ctl.deletes).toEqual([])
+
+  await pocket.getByTestId('devices-remove-confirm').click()
+  await expect(pocket).toHaveCount(0, { timeout: 30_000 })
+  expect(ctl.deletes).toEqual(['pocket-phone', 'pocket-phone?target=cloud'])
+  await expect(cloud.getByTestId('way-devices-cloud')).toContainText('No phone is paired with the companion yet.')
+  // Gone from every tab, and the count follows.
+  await expect(page.getByTestId('pc-tab-devices-phones')).toContainText('4')
+  await page.getByTestId('pc-tab-devices-tailscale').click()
+  await expect(page.locator('#devices-tailscale').getByTestId('way-devices-tailscale')).toBeVisible({ timeout: 30_000 })
+  expect((await rowNames(page.locator('#devices-tailscale').getByTestId('way-devices-tailscale'))).sort()).toEqual(['desk-phone', 'spare-phone'])
+})
+
+test("Remove of a phone whose companion copy went with it is done, not an error", async ({ page }) => {
+  // The server removes the companion's copy by hash in the background: the second DELETE
+  // finds nothing there (404). That is the phone removed, not a failure to show.
+  const ctl = await mockDevices(page)
+  ctl.twinRemoval = true
+  const cloud = await openPhonesCloud(page)
+  const pocket = row(cloud.getByTestId('way-devices-cloud'), 'pocket-phone')
+  await pocket.getByTestId('devices-remove').click({ timeout: 30_000 })
+  await pocket.getByTestId('devices-remove-confirm').click()
+  await expect(pocket).toHaveCount(0, { timeout: 30_000 })
+  expect(ctl.deletes).toEqual(['pocket-phone', 'pocket-phone?target=cloud'])
+  await expect(cloud.getByText("Couldn't remove")).toHaveCount(0)
+})
+
+test('a refused Remove says so on the row and the list is read again at once', async ({ page }) => {
+  const ctl = await mockDevices(page)
+  const cloud = await openPhonesCloud(page)
+  // The companion refuses (it is down): the row says why, and keeps its Remove in focus.
+  await page.route((url) => url.pathname === '/api/devices/studio-mac', (route) => json(route, { error: 'The cloud companion did not answer.' }, 502))
+  const reads = { n: 0 }
+  page.on('request', (r) => { if (r.method() === 'GET' && new URL(r.url()).pathname === '/api/devices') reads.n++ })
+  const mac = row(cloud.getByTestId('devices-macs'), 'studio-mac')
+  await mac.getByTestId('devices-remove').click({ timeout: 30_000 })
+  const before = reads.n
+  await mac.getByTestId('devices-remove').click()
+  // The row's error line sits right under the row (SettingsRow renders it as its sibling).
+  await expect(cloud.locator('.devices-row[data-device-name="studio-mac"] + .settings-row-error')).toContainText("Couldn't remove", { timeout: 30_000 })
+  await expect(mac.getByTestId('devices-remove')).toBeFocused()
+  await expect.poll(() => reads.n, { timeout: 5_000 }).toBeGreaterThan(before)
+  expect(ctl.deletes).toEqual([])
 })
 
 test('on a phone, Phones & Cloud opens the tab in use; tabs switch in place and Back returns to the list', async ({ page }) => {

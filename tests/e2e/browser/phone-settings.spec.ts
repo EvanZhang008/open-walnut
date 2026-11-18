@@ -204,7 +204,7 @@ test.describe('on the computer Walnut runs on, phone sized', () => {
     await openSettings(page)
     for (const [testId, name] of [['settings-nav-general', 'General'], ['settings-nav-devices', 'Phones & Cloud']] as const) {
       await openPane(page, testId, name)
-      // Phones & Cloud: measure its Devices tab (the phone list and Add a phone).
+      // Phones & Cloud: measure its All devices tab (the phone list and Add a phone).
       if (testId === 'settings-nav-devices') { await landedTab(page); await backToDevices(page) }
       await page.waitForTimeout(1_500)
       const stacked = await page.locator('.settings-pane .settings-row').evaluateAll((els) => els
@@ -246,7 +246,7 @@ test.describe('on the computer Walnut runs on, phone sized', () => {
         'voice', `${test.info().project.name}-settings-${size.width}`)
       await openPane(page, 'settings-nav-devices', 'Phones & Cloud')
       await landedTab(page)
-      // The tab bar scrolls sideways on its own; the Devices tab holds the most rows.
+      // The tab bar scrolls sideways on its own; the All devices tab holds the most rows.
       await backToDevices(page)
       await page.waitForTimeout(1_500)
       // Walk the pane a screen at a time: only what is on screen can be measured.
@@ -367,7 +367,7 @@ test.describe('a phone signed in through a tunnel', () => {
     await expect(phone.getByTestId('browser-access-code')).toHaveCount(0)
     await expect(phone.getByTestId('browser-access-link')).toHaveCount(0)
     await expect(phone.getByTestId('browser-access-codes-elsewhere')).toHaveText('The phone link shows on the computer Walnut runs on.')
-    // The Devices tab holds the list of devices.
+    // The All devices tab holds the list of devices.
     await backToDevices(phone)
     await expect(devices).not.toContainText('No phones paired yet.')
     const group = devices.getByTestId('devices-browsers-group')

@@ -1,0 +1,475 @@
+/**
+ * The devices a Phones & Cloud tab lists, their actions, and pairing a new phone
+ * (device-scope.ts says which rows each tab holds):
+ *
+ *   Cloud companion  Phones on this companion, Macs on this companion, Pair a phone this way
+ *   Tailscale        Phones paired with this Mac, Pair a phone this way
+ *   Browser link     Signed-in browsers, Walnut extension
+ *   All devices      every group, each row tagged with its ways, Add a phone (with the
+ *                    address picker), Advanced (this Mac's link, simulators)
+ *
+ * A phone shows in every tab whose way it uses, and its Remove says it removes the
+ * whole phone: one pairing works on every way, so there is no removing one way.
+ * Show QR and Pair open the code in a dialog (PairQrDialog). The token appears
+ * exactly once (only its hash is stored server-side).
+ */
+import { useState, useEffect, useRef } from 'react';
+import { SettingsEmpty, SettingsGroup, SettingsRow, SettingsTag, SettingsDisclosure, SettingsNotice } from '../../SettingsSection';
+import { SettingsButton } from '../../inputs/SettingsButton';
+import { InlineConfirmButton, isRepeatClick } from '../../inputs/InlineConfirmButton';
+import { useSettingsSaved } from '../../settings-pane-context';
+import { formatAbsoluteTime } from '../addons-format';
+import { apiDelete } from '@/api/client';
+import { ApiError } from '@/api/api-error';
+import { BROWSER_SIGNED_IN_EVENT, devicesListChanged } from './devices-list';
+import { useEvent } from '@/hooks/useWebSocket';
+import { PairQrDialog, type PairQrPhase } from './PairQrDialog';
+import { requestFailureText } from '@/utils/request-failure';
+import { browserRowLabels } from '../browser-labels';
+import { usePairDevice, type PairTargetKind } from './usePairDevice';
+import { useDevicesData, type DeviceEntry } from './useDevicesData';
+import { bestOfferedKind, preferredKind } from './pair-targets';
+import { useIsReplicaServer } from '@/hooks/useServerRole';
+import { CLOUD_CHANGE_CLIENT_TIMEOUT_MS } from './cloud-change-timeout';
+import { ownFirst, useDeviceCaller } from './device-caller';
+import { OwnDeviceSignOut } from './OwnDeviceSignOut';
+import { SIGNED_IN_BROWSER, SignOutAllBrowsers, type SignOutResult } from './SignOutAllBrowsers';
+import { describeDevice, describeMacRow, reachWords, ROLE_NOTE, UNPAIR_SELF_WARNING, CLOUD_UNPAIRED_NOTICE, DEVICES_CHANGED_EVENT } from './device-rows-copy';
+import { PairPhoneGroup } from './PairPhoneGroup';
+import { mergeDeviceRows, pairTargetForScope, removePhoneWarning, rowsForScope, wayTags, type DeviceRow, type DeviceScope } from './device-scope';
+import '@/styles/settings-sections-addons.css';
+
+type RowError = { name: string; verb: 'remove' | 're-pair' | 'unpair'; message: string };
+
+/** The pairing QR dialog: which phone, whether it replaces a paired phone's code, and its step. */
+interface QrDialogState {
+  name: string;
+  repair: boolean;
+  target?: PairTargetKind;
+  phase: PairQrPhase;
+  error: string | null;
+}
+
+/** The heading of a tab's phone list, and what it says with none. */
+const PHONES_GROUP: Record<DeviceScope, { heading: string; empty: string }> = {
+  all: { heading: 'Paired phones', empty: 'No phones paired yet.' },
+  cloud: { heading: 'Phones on this companion', empty: 'No phone is paired with the companion yet.' },
+  tailscale: { heading: 'Phones paired with this Mac', empty: 'No phone is paired with this Mac yet.' },
+  browser: { heading: '', empty: '' },
+};
+
+export function DeviceList({ scope }: { scope: DeviceScope }) {
+  const replica = useIsReplicaServer();
+  const fixedTarget = pairTargetForScope(scope);
+  const [target, setTarget] = useState<PairTargetKind>(fixedTarget && fixedTarget !== 'pick' ? fixedTarget : 'lan');
+  const data = useDevicesData({
+    replica,
+    onTargets: (kinds) => {
+      if (fixedTarget !== 'pick') return;
+      setTarget((prev) => (kinds.includes(prev) ? prev : bestOfferedKind(kinds)));
+    },
+  });
+  const { devices, cloudDevices, targets, listState, tailscale, cloudError, cloudUnpaired, cloudWithheld, refresh } = data;
+  const { created, qrDataURL, busy, mint, dismiss } = usePairDevice();
+  const [rowError, setRowError] = useState<RowError | null>(null);
+  // "Signed out 4 browsers.", after Sign out (the rows it names are gone), until the pane closes.
+  const [signedOut, setSignedOut] = useState<SignOutResult | null>(null);
+  useEvent(BROWSER_SIGNED_IN_EVENT, () => setSignedOut(null));
+  // "Unpair this Mac" and a phone's Remove are two deliberate clicks with the warning between them.
+  const [unpairArmed, setUnpairArmed] = useState(false);
+  const [removeArmed, setRemoveArmed] = useState<string | null>(null);
+  // The question takes the focus on Cancel, so a second Enter never removes the phone.
+  useEffect(() => {
+    if (!removeArmed) return;
+    document.querySelector<HTMLElement>(`.devices-row[data-device-name="${CSS.escape(removeArmed)}"] [data-testid="devices-remove-cancel"]`)?.focus();
+  }, [removeArmed]);
+  /** Cancel the question, the focus back on the row's Remove. */
+  const disarmRemove = () => {
+    const name = removeArmed;
+    setRemoveArmed(null);
+    if (name) requestAnimationFrame(() => document.querySelector<HTMLElement>(`.devices-row[data-device-name="${CSS.escape(name)}"] [data-testid="devices-remove"]`)?.focus());
+  };
+  const disarmOnEscape = (e: { key: string; stopPropagation: () => void }) => {
+    if (e.key === 'Escape') { e.stopPropagation(); disarmRemove(); }
+  };
+  const [qrDialog, setQrDialog] = useState<QrDialogState | null>(null);
+  const qrReturnFocus = useRef<HTMLElement | null>(null);
+  const { notifySaved } = useSettingsSaved();
+  // A browser signed in with a code: its own row says so, other rows offer no Remove.
+  const caller = useDeviceCaller();
+
+  const openQrDialog = (next: QrDialogState) => {
+    qrReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setQrDialog(next);
+  };
+  const closeQrDialog = () => {
+    dismiss();
+    setQrDialog(null);
+    const back = qrReturnFocus.current;
+    qrReturnFocus.current = null;
+    if (back?.isConnected) requestAnimationFrame(() => back.focus());
+  };
+
+  /** Make the code the dialog is for; a failure stays in the dialog with Try again. */
+  const runMint = async (dlg: QrDialogState): Promise<boolean> => {
+    if (busy) return false;
+    setQrDialog({ ...dlg, phase: 'working', error: null });
+    let failure: string | null = null;
+    const made = await mint({ name: dlg.name, target: dlg.target, replace: dlg.repair || undefined, onError: (m) => { failure = m; } });
+    setQrDialog((cur) => (cur && cur.name === dlg.name
+      ? { ...cur, phase: made ? 'shown' : 'failed', error: made ? null : failure }
+      : cur));
+    if (made) {
+      await refresh();
+      // The tab bar counts the devices from its own read.
+      window.dispatchEvent(new Event(DEVICES_CHANGED_EVENT));
+    }
+    return !!made;
+  };
+
+  /**
+   * Re-pair an existing phone: a FRESH token for the same name, shown as a QR again
+   * (tokens are one-time; an app reinstall wipes the phone's copy). The dialog asks
+   * first: the new code signs the phone out until it scans it.
+   */
+  const repair = (name: string, kind: PairTargetKind) => {
+    if (busy) return;
+    if (fixedTarget === 'pick') setTarget(kind);
+    setRowError(null);
+    dismiss();
+    openQrDialog({ name, repair: true, target: kind, phase: 'ask', error: null });
+  };
+  /**
+   * The address a row's new code carries: the companion's for a phone on it (a
+   * tailnet-only code on the Tailscale tab would cut off a phone without Tailscale),
+   * else this Mac's tailnet address when offered, else Wi-Fi.
+   */
+  const repairKind = (d: DeviceRow): PairTargetKind => preferredKind(d.kinds, targets.map((t) => t.kind));
+
+  const pair = async (name: string, chosen: PairTargetKind | undefined) => {
+    dismiss();
+    const dlg: QrDialogState = { name, repair: false, target: chosen, phase: 'working', error: null };
+    openQrDialog(dlg);
+    return runMint(dlg);
+  };
+
+  /**
+   * Revoke EVERY credential behind a row. A phone paired to both this Mac and the
+   * cloud has two records; one left would still let the device in.
+   */
+  const revoke = async (name: string, kinds: PairTargetKind[], verb: RowError['verb'] = 'remove') => {
+    setRowError(null);
+    let waitedMs = 15_000;
+    try {
+      for (const kind of kinds) {
+        waitedMs = kind === 'cloud' ? CLOUD_CHANGE_CLIENT_TIMEOUT_MS : 15_000;
+        try {
+          await apiDelete(`/api/devices/${encodeURIComponent(name)}${kind === 'cloud' ? '?target=cloud' : ''}`, { timeoutMs: waitedMs });
+        } catch (err) {
+          // Already gone: removing one record removes its copy on the other box too (by
+          // hash, in the background), and another console may have removed it first.
+          if (!(err instanceof ApiError && err.status === 404)) throw err;
+        }
+        devicesListChanged();
+      }
+      notifySaved();
+      await refresh();
+      window.dispatchEvent(new Event(DEVICES_CHANGED_EVENT));
+    } catch (err) {
+      // A refused or failed removal is an answer about this device, not an unsaved
+      // settings change: it shows on the row only.
+      setRowError({ name, verb, message: requestFailureText(err, waitedMs) });
+      // The confirm that had the focus is gone: back on the row's Remove, beside the reason.
+      requestAnimationFrame(() => document.querySelector<HTMLElement>(`.devices-row[data-device-name="${CSS.escape(name)}"] [data-testid="devices-remove"]`)?.focus());
+      // A record that did go is gone from the list now, not at the next poll.
+      void refresh();
+      window.dispatchEvent(new Event(DEVICES_CHANGED_EVENT));
+    }
+  };
+
+  const rows = rowsForScope(mergeDeviceRows(devices, cloudDevices), scope);
+  const tailscaleRunning = !!tailscale?.running;
+  const selfRow = scope === 'all' || scope === 'cloud' ? cloudDevices.find((d) => d.role === 'self') : undefined;
+  // The phone used most recently leads.
+  const byLastUse = (a: { lastUsedAt?: string }, b: { lastUsedAt?: string }) => (b.lastUsedAt ?? '').localeCompare(a.lastUsedAt ?? '');
+  const phones = ownFirst(rows.filter((r) => (r.role ?? 'phone') === 'phone').sort(byLastUse), caller.name);
+  const browsers = ownFirst(rows.filter((r) => r.role === 'browser').sort(byLastUse), caller.name);
+  // "iPhone Safari", "iPhone Safari 2": the kind recorded at sign-in, never the id (N2-21).
+  const browserLabels = browserRowLabels(rows.filter((r) => r.role === 'browser'));
+  // Signed in with a link, apart from the Walnut extension: the group's rows are exactly the
+  // ones its sign-out row signs out.
+  const linkBrowsers = browsers.filter((r) => SIGNED_IN_BROWSER.test(r.name));
+  const extensions = browsers.filter((r) => !SIGNED_IN_BROWSER.test(r.name));
+  const signedInBrowsers = linkBrowsers.map((r) => r.name);
+  const macs = rows.filter((r) => r.role === 'mac');
+  const others = rows.filter((r) => (r.role ?? 'phone') !== 'phone' && r.role !== 'mac' && r.role !== 'browser');
+  const rowErrorFor = (name: string) => (rowError?.name === name ? `Couldn't ${rowError.verb}: ${rowError.message}` : undefined);
+
+  /** This Mac as the companion knows it: no QR, and removal is a deliberate unpair. */
+  const renderSelfRow = (d: DeviceEntry) => (
+    <SettingsRow
+      key="this-mac"
+      className="devices-row devices-row-self"
+      data-device-name={d.name}
+      data-device-role="self"
+      label={
+        <span className="settings-addons-inline devices-name">
+          <span className="settings-addons-ellipsis" title={d.name}>This Mac</span>
+          {scope !== 'cloud' && <SettingsTag>Cloud companion</SettingsTag>}
+        </span>
+      }
+      help={<span className="devices-meta">{`${d.name}: ${ROLE_NOTE.self}`}</span>}
+      error={rowErrorFor(d.name)}
+      control={unpairArmed ? (
+        <>
+          <SettingsButton variant="text" data-testid="devices-unpair-self-cancel" onClick={() => setUnpairArmed(false)}>
+            Cancel
+          </SettingsButton>
+          <SettingsButton
+            variant="danger"
+            data-testid="devices-unpair-self-confirm"
+            onClick={(e) => { if (isRepeatClick(e)) return; setUnpairArmed(false); void revoke(d.name, ['cloud'], 'unpair'); }}
+          >
+            Unpair this Mac
+          </SettingsButton>
+        </>
+      ) : (
+        <SettingsButton variant="danger" data-testid="devices-unpair-self" onClick={() => { setRowError(null); setUnpairArmed(true); }}>
+          Unpair this Mac
+        </SettingsButton>
+      )}
+    >
+      {unpairArmed && <SettingsNotice kind="warn" role="alert">{UNPAIR_SELF_WARNING}</SettingsNotice>}
+    </SettingsRow>
+  );
+
+  const renderRow = (d: DeviceRow) => {
+    const role = d.role ?? 'phone';
+    const own = caller.name === d.name;
+    const hw = role === 'phone' ? describeDevice(d.info) : null;
+    const meta = role === 'phone'
+      ? [
+          hw ?? 'Model unknown until the app opens on this phone',
+          `paired ${formatAbsoluteTime(d.createdAt)}`,
+          ...(d.lastUsedAt ? [`last used ${formatAbsoluteTime(d.lastUsedAt)}`] : []),
+        ].join(', ')
+      : role === 'mac' ? describeMacRow(d)
+      // A signed-in browser says when it signed in and was last used, so two rows can be told apart (N18).
+      : role === 'browser' ? [
+          `signed in ${formatAbsoluteTime(d.createdAt)}`,
+          ...(d.lastUsedAt ? [`last used ${formatAbsoluteTime(d.lastUsedAt)}`] : []),
+        ].join(', ')
+      : ROLE_NOTE[role];
+    const shownName = role === 'browser' ? browserLabels.get(d.name) ?? 'Browser' : d.name;
+    const armed = role === 'phone' && removeArmed === d.name;
+    const tags = wayTags(d, { scope, replica });
+    const phoneRemove = armed ? (
+      <>
+        <SettingsButton variant="text" data-testid="devices-remove-cancel" onKeyDown={disarmOnEscape} onClick={disarmRemove}>
+          Cancel
+        </SettingsButton>
+        <SettingsButton
+          variant="danger"
+          data-testid="devices-remove-confirm"
+          onKeyDown={disarmOnEscape}
+          onClick={(e) => { if (isRepeatClick(e)) return; setRemoveArmed(null); void revoke(d.name, d.kinds); }}
+        >
+          {`Remove ${shownName}`}
+        </SettingsButton>
+      </>
+    ) : (
+      <SettingsButton
+        variant="danger"
+        aria-label={`Remove ${shownName}`}
+        data-testid="devices-remove"
+        onClick={() => { setRowError(null); setRemoveArmed(d.name); }}
+      >
+        Remove
+      </SettingsButton>
+    );
+    return (
+      <SettingsRow
+        key={d.name}
+        className="devices-row"
+        data-device-name={d.name}
+        data-device-role={role}
+        label={
+          <span className="settings-addons-inline devices-name">
+            <span className="settings-addons-ellipsis" title={d.name}>{shownName}</span>
+            {own && <span className="devices-own-tag" data-testid="devices-own-tag">{caller.touch ? 'This phone' : 'This browser'}</span>}
+            {tags.map((t) => <SettingsTag key={t}>{t}</SettingsTag>)}
+          </span>
+        }
+        help={<span className="devices-meta">{meta}</span>}
+        error={rowErrorFor(d.name)}
+        data-own-device={own ? 'true' : undefined}
+        control={own ? <OwnDeviceSignOut name={d.name} touch={caller.touch} /> : caller.isDevice ? undefined : (
+          <>
+            {role === 'phone' && !armed && (
+              <SettingsButton
+                variant="text"
+                disabled={busy}
+                aria-label={`Show a new QR code for ${shownName}`}
+                data-testid="devices-show-qr"
+                onClick={() => repair(d.name, repairKind(d))}
+              >
+                Show QR
+              </SettingsButton>
+            )}
+            {role === 'phone' ? phoneRemove : (
+              // A browser signed in with a link is signed out, in the words its group uses; a Mac or the extension is removed.
+              <InlineConfirmButton
+                {...(SIGNED_IN_BROWSER.test(d.name) ? { label: 'Sign out', confirmLabel: 'Confirm sign out' } : {})}
+                aria-label={`${SIGNED_IN_BROWSER.test(d.name) ? 'Sign out' : 'Remove'} ${shownName}`}
+                data-testid="devices-remove"
+                onConfirm={() => revoke(d.name, d.kinds)}
+              />
+            )}
+          </>
+        )}
+      >
+        {armed && <SettingsNotice kind="warn" role="alert">{removePhoneWarning(d, { replica }, shownName)}</SettingsNotice>}
+      </SettingsRow>
+    );
+  };
+
+  const phonesWords = PHONES_GROUP[scope];
+  const phonesGroup = scope !== 'browser'
+    // A phone signed in only by browser (All devices): its group is Signed-in browsers, no empty box here.
+    && (scope !== 'all' || phones.length > 0 || listState !== 'ready' || browsers.length === 0 || cloudUnpaired || cloudError) && (
+    <SettingsGroup
+      heading={phonesWords.heading}
+      headingTrailing={phones.length > 0 ? String(phones.length) : undefined}
+      footer={scope === 'tailscale' ? 'Tailscale reaches the pairing a phone has with this Mac: a phone here uses this way once the Tailscale app runs on it too, signed in to the same tailnet.' : undefined}
+      data-testid={scope === 'all' ? 'devices-phones-group' : `way-devices-${scope}`}
+    >
+      {phones.length === 0 && (scope !== 'all' || listState !== 'ready' || browsers.length === 0)
+        // The cloud tab's error notice below already says the companion's list could not be read.
+        && !(scope === 'cloud' && cloudError && listState === 'ready') && (
+        <SettingsEmpty>
+          {listState === 'loading' ? 'Loading paired phones...'
+            : listState === 'failed' ? "Couldn't load paired phones."
+              // The cloud's half is unknown: say only what is known.
+              // A caller away from this Mac is not shown the companion's phones (it says so, not "none").
+              : scope === 'cloud' && cloudWithheld ? "The companion's phones are listed only on this Mac itself."
+              : scope !== 'tailscale' && (cloudError || cloudUnpaired)
+                ? (scope === 'cloud' ? "Couldn't read the companion's phones." : 'No phones paired with this Mac.')
+                : phonesWords.empty}
+        </SettingsEmpty>
+      )}
+      {phones.map(renderRow)}
+      {scope === 'tailscale' && phones.length > 0 && !tailscaleRunning && listState === 'ready' && (
+        <SettingsNotice kind="info">Tailscale isn&apos;t running on this Mac, so none of these connects this way now. They still connect over Wi-Fi at home.</SettingsNotice>
+      )}
+      {scope !== 'tailscale' && cloudUnpaired && <SettingsNotice kind="info">{CLOUD_UNPAIRED_NOTICE}</SettingsNotice>}
+      {scope !== 'tailscale' && cloudError && <SettingsNotice kind="error" role="alert">{cloudError}</SettingsNotice>}
+    </SettingsGroup>
+  );
+
+  const pairGroup = fixedTarget !== null && (
+    <PairPhoneGroup
+      scope={scope}
+      fixedTarget={fixedTarget}
+      targets={targets}
+      target={target}
+      setTarget={setTarget}
+      listState={listState}
+      busy={busy}
+      isDevice={caller.isDevice}
+      onPair={pair}
+    />
+  );
+
+  return (
+    <div className="devices-section" data-testid={`devices-list-${scope}`}>
+      {phonesGroup}
+
+      {linkBrowsers.length > 0 && (
+        // Browsers signed in with a code (a phone's Safari, another computer): their own group,
+        // so a signed-in phone never reads "No phones paired yet".
+        <SettingsGroup heading="Signed-in browsers" headingTrailing={String(linkBrowsers.length)} data-testid="devices-browsers-group">
+          {/* First, so it stays in reach above a long list; with one browser, its own row's
+              Sign out is the same action. */}
+          {!caller.isDevice && signedInBrowsers.length >= 2 && (
+            <SignOutAllBrowsers
+              names={signedInBrowsers}
+              onDone={async (result) => {
+                // The list first, then the line: it never says "signed out" beside rows still listed.
+                devicesListChanged(); await refresh(); window.dispatchEvent(new Event(DEVICES_CHANGED_EVENT));
+                setSignedOut(result.line ? result : null);
+              }}
+            />
+          )}
+          {linkBrowsers.map(renderRow)}
+        </SettingsGroup>
+      )}
+      {scope === 'browser' && linkBrowsers.length === 0 && extensions.length === 0 && (
+        <SettingsGroup heading="Signed-in browsers" data-testid="devices-browsers-group">
+          <SettingsEmpty>
+            {listState === 'loading' ? 'Loading signed-in browsers...'
+              : listState === 'failed' ? "Couldn't load signed-in browsers."
+                : 'No browser is signed in with a link yet.'}
+          </SettingsEmpty>
+        </SettingsGroup>
+      )}
+      {/* Said where the browsers were, even when none is left to list. */}
+      {signedOut && (
+        <div data-testid="devices-signed-out-note">
+          <SettingsNotice kind={signedOut.kind} role={signedOut.kind === 'error' ? 'alert' : 'status'}>{signedOut.line}</SettingsNotice>
+        </div>
+      )}
+      {extensions.length > 0 && (
+        <SettingsGroup heading="Walnut extension" headingTrailing={extensions.length > 1 ? String(extensions.length) : undefined} data-testid="devices-extensions-group">
+          {extensions.map(renderRow)}
+        </SettingsGroup>
+      )}
+
+      {scope === 'cloud' && pairGroup}
+      {scope === 'cloud' && (macs.length > 0 || selfRow) && (
+        // This Mac's own link and the other Macs paired with the same companion.
+        <SettingsGroup heading="Macs on this companion" data-testid="devices-macs">
+          {selfRow && renderSelfRow(selfRow)}
+          {macs.map(renderRow)}
+        </SettingsGroup>
+      )}
+      {scope === 'all' && macs.length > 0 && (
+        // Other Macs paired with the same companion: never phones, so no QR and no phone wording.
+        <SettingsGroup heading="Other Macs" data-testid="devices-macs">
+          {macs.map(renderRow)}
+        </SettingsGroup>
+      )}
+
+      {scope !== 'cloud' && pairGroup}
+
+      {/* Not phones (this Mac's own cloud link, simulators): folded at the very end,
+          so the phones list holds only phones. */}
+      {scope === 'all' && (others.length > 0 || selfRow) && (
+        <SettingsGroup heading="Advanced" data-testid="devices-others-group">
+          <SettingsDisclosure
+            id="devices-others"
+            data-testid="devices-others"
+            label="This Mac and test devices"
+            help="This Mac's own link to the cloud companion, and iOS simulators. None of these is a phone."
+            summary={String(others.length + (selfRow ? 1 : 0))}
+          >
+            {selfRow && renderSelfRow(selfRow)}
+            {others.map(renderRow)}
+          </SettingsDisclosure>
+        </SettingsGroup>
+      )}
+      {qrDialog && (
+        <PairQrDialog
+          name={qrDialog.name}
+          phase={qrDialog.phase}
+          repair={qrDialog.repair}
+          reach={reachWords(qrDialog.target)}
+          created={created}
+          qrDataURL={qrDataURL}
+          error={qrDialog.error}
+          onConfirm={() => void runMint(qrDialog)}
+          onClose={closeQrDialog}
+        />
+      )}
+    </div>
+  );
+}

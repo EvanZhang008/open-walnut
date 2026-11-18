@@ -145,12 +145,3 @@ export function useExposeStatus(off: boolean): ExposeStatus | null | 'failed' {
   return expose;
 }
 
-/**
- * "Use the tailnet address" on the Tailscale sub-page: the pairing picker lives on
- * the main entry, so the choice waits here until that pane mounts and takes it.
- */
-let requestedTarget: PairTargetKind | null = null;
-export function requestPairTarget(kind: PairTargetKind): void { requestedTarget = kind; }
-/** Read in a state initializer (a render may run twice); the pane clears it once mounted. */
-export function peekRequestedPairTarget(): PairTargetKind | null { return requestedTarget; }
-export function clearRequestedPairTarget(): void { requestedTarget = null; }

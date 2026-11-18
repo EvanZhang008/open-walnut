@@ -221,8 +221,8 @@ export function deriveWays(i: WaysInput): { now: NowLine; ways: Way[] } {
 
 /** The Devices tab's own two lines, in the shape of a way's (what it is, when to use it). */
 export const DEVICES_INTRO = {
-  what: 'The phones and browsers that can open Walnut, and pairing a new phone.',
-  useWhen: 'You add a phone or remove one. Pair a phone once: it then finds its own way, at home and away.',
+  what: 'Every phone, browser and Mac that can open Walnut, each with the ways it uses. Each way\'s own tab lists only the devices that use it.',
+  useWhen: 'You look for a device, or pair a phone and pick its address yourself. Pair a phone once: it then finds its own way, at home and away.',
 } as const;
 
 /**

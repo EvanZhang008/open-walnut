@@ -1,7 +1,7 @@
 /**
  * Phones & Cloud's four tabs: the three ways to reach Walnut (Cloud companion,
- * Tailscale, the browser link) and Devices (paired phones and browsers, pairing a
- * new phone). Each tab is its own pane (core-settings-registry `tabOf: 'devices'`),
+ * Tailscale, the browser link), each with the devices that use it, and All devices
+ * (every device, pairing a new phone with the address picker). Each tab is its own pane (core-settings-registry `tabOf: 'devices'`),
  * so its address, back button and Find a setting work as for any pane; the nav
  * shows only Phones & Cloud, and the entry itself opens the tab in use. The
  * overview's old in-page anchors (`devices-way-<way>`, `devices-way-panel-<way>`)
@@ -12,7 +12,7 @@
  * the registry that imports those sections.
  */
 export const WAY_PANES = { cloud: 'cloud', tailscale: 'devices-tailscale', browser: 'devices-browser' } as const
-/** The Devices tab: paired phones, signed-in browsers, other Macs, Add a phone. */
+/** The All devices tab: every phone, browser and Mac, Add a phone. Each way's tab lists its own devices too. */
 export const DEVICES_TAB = 'devices-phones'
 /** The entry the tabs sit under. */
 export const PHONES_CLOUD_PANE = 'devices'
@@ -26,7 +26,7 @@ const WAY_ROW_PREFIXES: ReadonlyArray<readonly [string, string]> = [
   ['companion-copies', WAY_PANES.cloud],
   ['remote-access', WAY_PANES.tailscale],
   ['browser-access', WAY_PANES.browser],
-  // The Devices tab's rows (an old `#devices-new-name` link lands on the name field).
+  // The All devices tab's rows (an old `#devices-new-name` link lands on the name field).
   ['devices-new-name', DEVICES_TAB],
   ['devices-phones-group', DEVICES_TAB],
   ['devices-browsers-group', DEVICES_TAB],

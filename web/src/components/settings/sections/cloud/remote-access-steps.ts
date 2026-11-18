@@ -150,7 +150,9 @@ export function deriveRemoteAccessSteps(
   const paired = devices ? hasPairedPhone(devices) : false;
   const ready = macDone && phoneDone;
   const pair: PairStep = {
-    dot: paired ? 'done' : ready ? 'action' : 'pending',
+    // Paired already, but this way is done only once Tailscale runs on this Mac: a green
+    // step under an unfinished step 1 read as a contradiction (2026-11-18 review).
+    dot: paired ? (macDone ? 'done' : 'pending') : ready ? 'action' : 'pending',
     paired,
     canChooseTailnet: !paired && macDone && opts.tailnetOffered !== false,
   };

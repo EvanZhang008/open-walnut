@@ -5,7 +5,7 @@
  *
  *   1. Tailscale on this Mac   install (the Mac App Store, or Homebrew), open and sign in
  *   2. Tailscale on your phone the App Store QR, until a phone peer is online
- *   3. Pair the phone          already paired, or pick the tailnet address on Phones & Cloud
+ *   3. Pair the phone          already paired, or pair it below (this tab's Pair a phone this way)
  *
  * The state comes from GET /api/devices/tailscale, polled every 5s while step 1
  * or 2 is open and every 60s once both are done, never while the tab is
@@ -38,7 +38,7 @@ interface Props {
   devices: readonly PairedDeviceLike[] | null;
   /** The pairing picker offers the tailnet address right now. */
   tailnetOffered: boolean;
-  /** Step 3: pick the tailnet address in the pairing picker (on Phones & Cloud itself). */
+  /** Step 3: go to this tab's own pairing row, whose code carries the tailnet address. */
   onChooseTailnet: () => void;
   /** This Mac joined or left the tailnet: the picker's addresses changed. */
   onTailnetChange: () => void;
@@ -257,8 +257,10 @@ export function RemoteAccessCard({ devices, tailnetOffered, onChooseTailnet, onT
     : 'Install Tailscale on the phone and sign in with the same account.';
 
   const pairHelp = pair.paired
-    ? 'Already paired: open Walnut on the phone once and it learns the Tailscale route by itself.'
-    : 'Pair the phone on Phones & Cloud with the Tailscale address.';
+    ? pair.dot === 'done'
+      ? 'Already paired: open Walnut on the phone once and it learns the Tailscale route by itself.'
+      : 'Already paired: once Tailscale runs on this Mac and the phone, the phone learns the route by itself.'
+    : 'Pair the phone below, with a code that points at the Tailscale address.';
 
   return (
     <SettingsGroup heading={heading} className="remote-access-card" data-testid="remote-access-card">
@@ -328,7 +330,7 @@ export function RemoteAccessCard({ devices, tailnetOffered, onChooseTailnet, onT
         // The whole row picks the address; the button is its keyboard and screen-reader handle.
         onClick={pair.canChooseTailnet ? onChooseTailnet : undefined}
         control={pair.canChooseTailnet ? (
-          <SettingsButton variant="text" data-testid="remote-access-use-tailnet">Use the Tailscale address</SettingsButton>
+          <SettingsButton variant="text" data-testid="remote-access-use-tailnet">Pair below</SettingsButton>
         ) : undefined}
       />
     </SettingsGroup>
