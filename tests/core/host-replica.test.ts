@@ -73,7 +73,11 @@ let oldDaemon = false
 const read = (name: string, args: Record<string, unknown>) => daemon.answer(WALNUT_HOME, name, args, '')
 const cmds = () => calls.map((c) => `${c.cmd}:${String(c.params.kind)}`)
 
-beforeEach(() => {
+beforeEach(async () => {
+  // The last test's write of the kept manifests (saveTaken) runs after it returns: let it end
+  // before the slate is cleaned, or it lands after the rm below and this test's first round
+  // finds a manifest taken and sends only changes (CI 2026-11-18: "c.params.entries" undefined).
+  await _hostReplicaSavedForTesting()
   fs.rmSync(NOTES_DIR, { recursive: true, force: true })
   fs.mkdirSync(path.dirname(MEMORY_FILE), { recursive: true })
   fs.writeFileSync(MEMORY_FILE, '# Memory\n- deploy with the script\n')
