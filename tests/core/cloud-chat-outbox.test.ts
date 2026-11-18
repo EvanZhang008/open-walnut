@@ -30,6 +30,7 @@ vi.mock('../../src/web/ws/bridge-registry.js', () => ({
 
 import {
   CLOUD_CHAT_OUTBOX_DIR, bankCloudTurnStart, finishCloudTurn, listCloudTurns, flushCloudChatOutbox,
+  cloudChatOutboxIdle,
 } from '../../src/core/cloud-chat-outbox.js'
 
 async function bankAnswered(turnId: string, userText = 'q', answerText = 'a') {
@@ -42,6 +43,9 @@ async function bankAnswered(turnId: string, userText = 'q', answerText = 'a') {
 const adopted = (turnId: string) => ({ ok: true, result: { turnId, adopted: true, duplicate: false } })
 
 beforeEach(async () => {
+  // A sweep (or its queued follow-up) left over from the last test would make this
+  // test's first flush return early as busy.
+  await cloudChatOutboxIdle()
   callPrimaryControlMock.mockReset()
   bridge.connected = true
   await fs.rm(CLOUD_CHAT_OUTBOX_DIR, { recursive: true, force: true })
@@ -147,8 +151,10 @@ describe('the flush ladder', () => {
       return adopted(payload.turnId)
     })
     expect(await flushCloudChatOutbox()).toBe(1)
-    const deadline = Date.now() + 2_000
-    while ((await listCloudTurns()).length > 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10))
+    // The follow-up sweep for late1 runs after this one; wait until it has ended, not
+    // only until the outbox is empty (it deletes the file before it returns, and the
+    // next test's flush would find it still running and send nothing: CI 2026-11-18).
+    await cloudChatOutboxIdle()
     expect(await listCloudTurns()).toEqual([])
     expect(callPrimaryControlMock.mock.calls.map((c) => (c[2] as { turnId: string }).turnId))
       .toEqual(['turn-outbox-0001', 'turn-outbox-late1'])

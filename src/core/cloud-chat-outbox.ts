@@ -221,6 +221,19 @@ let flushing = false;
 /** A sweep was asked for while one ran (e.g. a turn finished mid-sweep): run
  *  once more at the end instead of leaving that turn to the 60s floor. */
 let flushAgain = false;
+/** The follow-up sweep is queued (setImmediate) and has not started yet. */
+let againQueued = false;
+let idleWaiters: Array<() => void> = [];
+
+/**
+ * Resolves once no sweep runs and none is queued. A sweep deletes a turn's file
+ * before it returns, so an empty outbox alone does not mean the sweep is over:
+ * a flush asked for in that gap returns 0 as busy and sends nothing.
+ */
+export function cloudChatOutboxIdle(): Promise<void> {
+  if (!flushing && !againQueued) return Promise.resolve();
+  return new Promise((resolve) => { idleWaiters.push(resolve); });
+}
 
 /**
  * Hand every finished banked turn to the primary, oldest first.
@@ -235,6 +248,7 @@ export async function flushCloudChatOutbox(): Promise<number> {
   if (!CLOUD_MODE) return 0;
   if (flushing) { flushAgain = true; return 0; }
   flushing = true;
+  againQueued = false;
   flushAgain = false;
   let adopted = 0;
   try {
@@ -295,7 +309,12 @@ export async function flushCloudChatOutbox(): Promise<number> {
     flushing = false;
     if (flushAgain) {
       flushAgain = false;
+      againQueued = true;
       setImmediate(() => { void flushCloudChatOutbox(); });
+    } else {
+      const waiters = idleWaiters;
+      idleWaiters = [];
+      for (const resolve of waiters) resolve();
     }
   }
 }
