@@ -104,7 +104,7 @@ import { usageTracker } from '../core/usage/index.js'
 import * as chatHistory from '../core/chat-history.js'
 import { gitPullWalnut, ensureRepo, commitIfDirty, autoSync, isGitAvailable, isLockContention, checkRepoSize, getSyncGuardState, REPO_SIZE_RECOVERY_KEY } from '../integrations/git-sync.js'
 import { registry } from '../core/integration-registry.js'
-import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, forgetBundledPlugin, getPluginLifecycleRecords, getPluginReloadIds, isPluginCatalogueLoading, loadNewPlugins, loadPlugins, migrateConfigToPlugins, pluginsKeepingTasks, reloadLoadedPlugin, reloadLoadedPlugins, runPluginMigrations, getUnconfiguredPlugins, pluginStarting } from '../core/integration-loader.js'
+import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, forgetBundledPlugin, getPluginJobSources, getPluginLifecycleRecords, getPluginReloadIds, isPluginCatalogueLoading, loadNewPlugins, loadPlugins, migrateConfigToPlugins, pluginsKeepingTasks, reloadLoadedPlugin, reloadLoadedPlugins, runPluginMigrations, getUnconfiguredPlugins, pluginStarting } from '../core/integration-loader.js'
 import { disposeCoreServices, publishCalendarSource, publishFeatureNodes } from '../core/platform-services.js'
 import type { SyncPollContext } from '../core/integration-types.js'
 import { recordSyncSuccess, recordSyncFailure, decideSyncFailureNotice, decideConnectionNotice, getSyncHealth, reconcileCardWanted, StreakWarnings, type ConnectionWatch } from '../core/plugin-sync-health.js'
@@ -116,6 +116,7 @@ import { createPluginUpdatesRouter } from './routes/plugin-updates.js'
 import { relayPrimaryPluginHttpRequest } from './routes/plugin-runtime-bridge.js'
 import { appsRouter, pluginAppStaticRouter } from './routes/apps.js'
 import { createPluginBodyParser, createPluginRouteDispatcher } from './plugin-route-dispatcher.js'
+import { pluginJobRoutes } from '../core/plugin-jobs/serve.js'
 import { setPluginApiBase } from '../core/plugins/server-api.js'
 import { setSelfApiRoot } from '../lib/self-api-root.js'
 import { guardProcessStdio } from '../lib/stdio-epipe-guard.js'
@@ -1786,7 +1787,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // off error.code). Must sit at app level right here: the parser above
   // raises before any router runs, and Express skips routers in error mode.
   app.use(['/api/v1/stt/transcribe', '/api/stt/transcribe'], sttPayloadTooLargeHandler)
-  app.use('/api/plugins/:pluginId', createPluginBodyParser(registry, isCompanion()))
+  // The leader forwards what a plugin's server half does not answer to its job that serves
+  // routes, if it has one (core/plugin-jobs/serve.ts); only the leader places jobs.
+  const pluginJobRouteDoor = bootPolicy('plugin-jobs') ? pluginJobRoutes(() => getPluginJobSources(registry)) : undefined
+  app.use('/api/plugins/:pluginId', createPluginBodyParser(registry, isCompanion(), pluginJobRouteDoor?.serves))
   // Letters carry inline media (a digest's base64 audio/video), so their write
   // routes get their own parser above the 15mb default — same shape as the STT
   // route right above. This bounds the INLINE lane only: a document bigger than
@@ -2579,6 +2583,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // disable/reload removes old handlers without mutating Express's private stack.
   const pluginRouteDispatcher = createPluginRouteDispatcher(registry, {
     ...(isCompanion() ? { relay: relayPrimaryPluginHttpRequest } : {}),
+    ...(pluginJobRouteDoor ? { jobs: pluginJobRouteDoor } : {}),
     starting: (pluginId) => pluginStarting(registry, pluginId),
   })
   // Legacy path for the calendar, which is a plugin now. Shares the dispatcher instance

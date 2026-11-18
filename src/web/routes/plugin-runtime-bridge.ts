@@ -14,6 +14,13 @@ import {
 } from '../../core/plugins/plugin-web-module.js'
 import { callPrimaryControl, type RelayFailure } from './v1-control-relay.js'
 import type { PluginOpCaller } from '../../core/plugins/server-api.js'
+import {
+  isRelayablePluginPath,
+  MAX_PLUGIN_HTTP_BODY_BYTES as MAX_RELAY_BODY_BYTES,
+  PLUGIN_HTTP_METHODS as HTTP_METHODS,
+  PluginHttpRuleError,
+  relayedPluginHeaders,
+} from '../../core/plugins/plugin-http-rules.js'
 
 const SERVER_RELAY_SID = '__server__'
 const HASH_PATTERN = /^[a-f0-9]{64}$/
@@ -34,23 +41,6 @@ const PLUGIN_LIFECYCLE_STATES = new Set([
 ])
 const MISSING_DEPENDENCY_REASONS = new Set(['absent', 'version', 'inactive', 'cycle', 'unversioned'])
 const TOMBSTONE_REASONS = new Set(['disabled', 'unloaded', 'failed', 'stale-code'])
-const HTTP_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'])
-const HOP_BY_HOP_HEADERS = new Set([
-  'authorization',
-  'connection',
-  'content-length',
-  'cookie',
-  'host',
-  'keep-alive',
-  'proxy-authenticate',
-  'proxy-authorization',
-  'te',
-  'trailer',
-  'transfer-encoding',
-  'upgrade',
-])
-const MAX_RELAY_BODY_BYTES = 2 * 1024 * 1024
-const MAX_RELAY_HEADERS_BYTES = 64 * 1024
 const MAX_PLUGIN_OP_ARGS_BYTES = 256 * 1024
 const CACHE_STALE_MS = 7 * 24 * 60 * 60 * 1_000
 const CACHE_PRUNE_INTERVAL_MS = 60 * 60 * 1_000
@@ -536,44 +526,16 @@ export async function managePrimaryPlugin(
 }
 
 function filterHeaders(input: Record<string, string>): Record<string, string> {
-  const output: Record<string, string> = {}
-  let bytes = 0
-  for (const [rawName, rawValue] of Object.entries(input)) {
-    const name = rawName.toLowerCase()
-    if (HOP_BY_HOP_HEADERS.has(name) || !/^[!#$%&'*+.^_`|~0-9a-z-]+$/.test(name)) continue
-    const value = String(rawValue)
-    if (/\r|\n/.test(value)) continue
-    bytes += Buffer.byteLength(name) + Buffer.byteLength(value)
-    if (bytes > MAX_RELAY_HEADERS_BYTES) throw new PluginRuntimeRelayError('Plugin HTTP headers are too large', 431)
-    output[name] = value
+  try {
+    return relayedPluginHeaders(input, 'drop')
+  } catch (error) {
+    if (error instanceof PluginHttpRuleError) throw new PluginRuntimeRelayError(error.message, error.status)
+    throw error
   }
-  return output
-}
-
-function hasDotPathSegment(value: string): boolean {
-  let pathname = value.split('?', 1)[0]
-  for (let depth = 0; depth < 4; depth++) {
-    const normalized = pathname.replace(/\\/g, '/')
-    if (normalized.split('/').some((segment) => segment === '.' || segment === '..')) return true
-    let decoded: string
-    try { decoded = decodeURIComponent(pathname) }
-    catch { return true }
-    if (decoded === pathname) return false
-    pathname = decoded
-  }
-  return true
 }
 
 function validateRelayPath(value: string): string {
-  if (
-    !value.startsWith('/')
-    || value.startsWith('//')
-    || value.length > 4_096
-    || value.includes('\0')
-    || value.includes('#')
-    || value.includes('\\')
-    || hasDotPathSegment(value)
-  ) throw new PluginRuntimeRelayError('Invalid Plugin HTTP path', 400)
+  if (!isRelayablePluginPath(value)) throw new PluginRuntimeRelayError('Invalid Plugin HTTP path', 400)
   return value
 }
 

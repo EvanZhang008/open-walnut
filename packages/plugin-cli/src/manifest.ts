@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { draftsOffDevice, viewStatesInMemory, type DraftHome } from './view-state-scan.js'
 import { contentTaskCalls, contentTaskWarning } from './content-task-scan.js'
+import { parseManifestJobs } from '../../../src/core/plugin-jobs/manifest.js'
 
 export interface PluginBuildConfig {
   server?: string
@@ -32,8 +33,12 @@ export interface PluginManifest {
   storage?: { files?: boolean | { maxBytes?: number }; tmp?: boolean | { ttlHours?: number } }
   /** Where the tasks the plugin's agents run in show: `everywhere` (default) or only in its own view. */
   taskVisibility?: 'everywhere' | 'plugin'
-  /** Work that keeps running on one machine: `{ "<name>": { "every": "5m" } }` or `{ "<name>": { "kind": "long-running" } }`. */
-  jobs?: Record<string, { every?: string; kind?: 'every' | 'long-running' }>
+  /**
+   * Work that keeps running on one machine: `{ "<name>": { "every": "5m" } }` or
+   * `{ "<name>": { "kind": "long-running" } }`; one long-running job may say `"serves": true`
+   * and answer the plugin's HTTP routes the server half does not.
+   */
+  jobs?: Record<string, { every?: string; kind?: 'every' | 'long-running'; serves?: boolean }>
 }
 
 export interface ValidationResult {
@@ -48,31 +53,14 @@ const ICON_MAX_BYTES = 64 * 1024
 /** The host clamps to these (src/core/plugins/plugin-file-area.ts). */
 const SYNCED_AREA_MAX_BYTES = 20 * 1024 * 1024
 const TMP_MAX_TTL_HOURS = 30 * 24
-/** The host's job rules (src/core/plugin-jobs/manifest.ts): it drops a job that breaks one. */
-const JOB_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/
-const MAX_JOBS = 16
-const JOB_UNIT_MS: Record<string, number> = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 }
 
 function jobErrors(manifest: PluginManifest): string[] {
-  const errors: string[] = []
   const jobs = manifest.jobs as unknown
   if (!jobs || typeof jobs !== 'object' || Array.isArray(jobs)) return ['manifest.jobs must be an object of job names']
+  const errors: string[] = []
   if (!manifest.server) errors.push('manifest.jobs needs a "server" entry: the jobs are exported from it')
-  if (Object.keys(jobs).length > MAX_JOBS) errors.push(`manifest.jobs holds at most ${MAX_JOBS} jobs`)
-  for (const [name, value] of Object.entries(jobs as Record<string, unknown>)) {
-    if (!JOB_NAME.test(name)) { errors.push(`manifest.jobs.${name}: a job name is 1 to 40 lowercase letters, digits or dashes`); continue }
-    const job = value as { every?: unknown; kind?: unknown } | null
-    if (!job || typeof job !== 'object' || Array.isArray(job)) { errors.push(`manifest.jobs.${name} must be an object`); continue }
-    if (job.kind === 'long-running') {
-      if (job.every !== undefined) errors.push(`manifest.jobs.${name}: a long-running job has no "every"`)
-      continue
-    }
-    if (job.kind !== undefined && job.kind !== 'every') { errors.push(`manifest.jobs.${name}.kind must be "long-running", or leave it out and give "every"`); continue }
-    const m = typeof job.every === 'string' ? /^\s*(\d{1,6})\s*([smhd])\s*$/.exec(job.every) : null
-    const ms = m ? Number(m[1]) * JOB_UNIT_MS[m[2]!]! : null
-    if (ms === null) errors.push(`manifest.jobs.${name}.every must be like "30s", "5m", "1h" or "1d"`)
-    else if (ms < 60_000 || ms > 7 * 86_400_000) errors.push(`manifest.jobs.${name}.every must be between 1m and 7d`)
-  }
+  // The host's own rules, so validate names exactly the jobs the host would drop, and why.
+  errors.push(...parseManifestJobs(jobs).dropped.map((reason) => `manifest.jobs.${reason}`))
   return errors
 }
 

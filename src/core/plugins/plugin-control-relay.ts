@@ -5,26 +5,16 @@ import { validatePluginId } from './ids.js'
 import { callPluginOp, getPluginApiBase, listPluginOps, parsePluginOpCaller } from './server-api.js'
 import { ORIGIN_HEADER, REMOTE_HTTP_ORIGIN, lowerOrigin } from '../../lib/caller-origin.js'
 import { parseTestRunLabel, testRunMarkingEnabled, withTestRun } from '../test-run.js'
+import {
+  isRelayablePluginPath,
+  MAX_PLUGIN_HTTP_BODY_BYTES as MAX_HTTP_BODY_BYTES,
+  PLUGIN_HTTP_METHODS as HTTP_METHODS,
+  PluginHttpRuleError,
+  relayedPluginHeaders,
+} from './plugin-http-rules.js'
 
 const OP_NAME_PATTERN = /^[a-z0-9_]{1,128}$/
-const HTTP_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'])
-const HOP_BY_HOP_HEADERS = new Set([
-  'authorization',
-  'connection',
-  'content-length',
-  'cookie',
-  'host',
-  'keep-alive',
-  'proxy-authenticate',
-  'proxy-authorization',
-  'te',
-  'trailer',
-  'transfer-encoding',
-  'upgrade',
-])
 const MAX_PLUGIN_OP_ARGS_BYTES = 256 * 1024
-const MAX_HTTP_BODY_BYTES = 2 * 1024 * 1024
-const MAX_HTTP_HEADERS_BYTES = 64 * 1024
 const HTTP_TIMEOUT_MS = 12_000
 const MANAGEMENT_TIMEOUT_MS = 25_000
 
@@ -81,21 +71,12 @@ function filterHeaders(value: unknown): Record<string, string> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new PluginControlFailure('Plugin HTTP headers must be an object', 400)
   }
-  const output: Record<string, string> = {}
-  let bytes = 0
-  for (const [rawName, rawValue] of Object.entries(value as Record<string, unknown>)) {
-    const name = rawName.toLowerCase()
-    if (HOP_BY_HOP_HEADERS.has(name)) continue
-    if (!/^[!#$%&'*+.^_`|~0-9a-z-]+$/.test(name) || typeof rawValue !== 'string' || /\r|\n/.test(rawValue)) {
-      throw new PluginControlFailure('Invalid Plugin HTTP header', 400)
-    }
-    bytes += Buffer.byteLength(name) + Buffer.byteLength(rawValue)
-    if (bytes > MAX_HTTP_HEADERS_BYTES) {
-      throw new PluginControlFailure('Plugin HTTP headers are too large', 431)
-    }
-    output[name] = rawValue
+  try {
+    return relayedPluginHeaders(value as Record<string, unknown>, 'refuse')
+  } catch (error) {
+    if (error instanceof PluginHttpRuleError) throw new PluginControlFailure(error.message, error.status)
+    throw error
   }
-  return output
 }
 
 function decodeBase64(value: unknown, expectedSize: unknown): Buffer {
@@ -121,31 +102,8 @@ function decodeBase64(value: unknown, expectedSize: unknown): Buffer {
   return content
 }
 
-function hasDotPathSegment(value: string): boolean {
-  let pathname = value.split('?', 1)[0]
-  for (let depth = 0; depth < 4; depth++) {
-    const normalized = pathname.replace(/\\/g, '/')
-    if (normalized.split('/').some((segment) => segment === '.' || segment === '..')) return true
-    let decoded: string
-    try { decoded = decodeURIComponent(pathname) }
-    catch { return true }
-    if (decoded === pathname) return false
-    pathname = decoded
-  }
-  return true
-}
-
 function relayPath(value: unknown): string {
-  if (
-    typeof value !== 'string'
-    || !value.startsWith('/')
-    || value.startsWith('//')
-    || value.length > 4_096
-    || value.includes('\0')
-    || value.includes('#')
-    || value.includes('\\')
-    || hasDotPathSegment(value)
-  ) throw new PluginControlFailure('Invalid Plugin HTTP path', 400)
+  if (!isRelayablePluginPath(value)) throw new PluginControlFailure('Invalid Plugin HTTP path', 400)
   return value
 }
 

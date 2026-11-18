@@ -9,6 +9,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { createPluginJobHarness, type PluginJobHarnessDeps } from '../../src/providers/plugin-job-harness.js'
+import { createPluginJobDoor } from '../../src/providers/plugin-job-door.js'
 
 let dir = ''
 let now = 0
@@ -105,6 +106,58 @@ describe('walnut.ops', () => {
     expect(err!.code).toBe('not_found')
     expect(gw.seen.map((r) => r.sid)).toEqual([SID, SID])
     expect(gw.seen[0]).toMatchObject({ v: 1, op: 'tools.call', args: { name: 'task_list', args: { limit: 1 } } })
+  })
+})
+
+describe('walnut.http', () => {
+  const realDoor = createPluginJobDoor({
+    fs, net,
+    setTimer: (fn, ms) => setTimeout(fn, ms),
+    clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
+  })
+  const get = (sock: string, p: string) => realDoor.forward(sock, { method: 'GET', path: p, headers: {}, size: 0, data: '' })
+
+  it('a serving job answers its routes on the socket the daemon named, 0600, until the run ends', async () => {
+    const sock = path.join(dir, 'run', 'serve.sock')
+    let release: () => void = () => {}
+    const h = createPluginJobHarness(deps({
+      jobs: {
+        worker: async (walnut: any) => {
+          expect(walnut.http.streams).toBe(false)
+          walnut.http.route('GET', '/status', (r: { path: string }) => ({ json: { host: walnut.host, path: r.path } }))
+          await new Promise<void>((r) => { release = r })
+        },
+      },
+    }, { env: { WALNUT_PLUGIN_JOB: info({ serveSocket: sock }) }, door: realDoor }))
+    const run = h.run(['/b.mjs', 'worker'])
+    for (let i = 0; i < 200 && !lines.some((l) => l.msg === 'serving routes'); i++) await new Promise((r) => setTimeout(r, 10))
+    expect(fs.statSync(sock).mode & 0o777).toBe(0o600)
+    const a = await get(sock, '/status?x=1')
+    expect(a.status).toBe(200)
+    expect(JSON.parse(Buffer.from(a.data, 'base64').toString())).toEqual({ host: '__local__', path: '/api/plugins/acme-jobs/status?x=1' })
+    release()
+    expect(await run).toBe(0)
+    // Its run is over: nothing listens there any more.
+    await expect(get(sock, '/status')).rejects.toMatchObject({ code: 'not_ready' })
+  })
+
+  it('a job whose spec does not serve throws a clear error on http.route, and so does one on a daemon without the door', async () => {
+    const tried: string[] = []
+    const job = { jobs: { worker: async (walnut: any) => { try { walnut.http.route("GET", "/x", () => ({})) } catch (e) { tried.push((e as Error).message) } } } }
+    expect(await createPluginJobHarness(deps(job, { door: realDoor })).run(['/b.mjs', 'worker'])).toBe(0)
+    expect(await createPluginJobHarness(deps(job, { env: { WALNUT_PLUGIN_JOB: info({ serveSocket: path.join(dir, 'run', 's.sock') }) } })).run(['/b.mjs', 'worker'])).toBe(0)
+    expect(tried).toEqual([
+      'the job "worker" does not serve routes: give it "serves": true in manifest.json (a long-running job, at most one per plugin)',
+      'the Walnut daemon on this machine cannot serve a job\'s routes yet; it is upgraded on its next connect',
+    ])
+    expect(fs.existsSync(path.join(dir, 'run', 's.sock'))).toBe(false)
+  })
+
+  it('a socket path that is not absolute is not taken from the description', async () => {
+    const tried: string[] = []
+    const job = { jobs: { worker: async (walnut: any) => { try { walnut.http.route("GET", "/x", () => ({})) } catch (e) { tried.push((e as Error).message) } } } }
+    expect(await createPluginJobHarness(deps(job, { env: { WALNUT_PLUGIN_JOB: info({ serveSocket: 'relative.sock' }) }, door: realDoor })).run(['/b.mjs', 'worker'])).toBe(0)
+    expect(tried[0]).toMatch(/does not serve routes/)
   })
 })
 

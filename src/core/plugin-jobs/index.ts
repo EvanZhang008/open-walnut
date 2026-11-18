@@ -17,6 +17,7 @@ import { isSecretKey } from '../config-secret-shape.js'
 import { semanticLaneDecision } from '../search/semantic-default.js'
 import { createJobBundler } from './bundle.js'
 import { createPluginJobsManager, jobsVerdict, LOCAL_HOST, type JobPlugin, type JobsHost, type PluginJobsManager } from './manager.js'
+import { forwardJobRoute, JobRouteError, type JobRouteRequest, type JobRouteResponse } from './serve.js'
 
 let manager: PluginJobsManager | null = null
 let unsubscribe: (() => void) | null = null
@@ -201,6 +202,17 @@ export function pluginJobsConnected(host: JobsHost): Promise<void> {
   // The Demo runs no plugin job on a remote host: what runs there is only its own daemon (providers/demo-remote-host.ts).
   if (IS_DEMO && host.hostKey !== LOCAL_HOST) return Promise.resolve()
   return getPluginJobsManager()?.connected(host) ?? Promise.resolve()
+}
+
+/** A request to a plugin's routes that its job serves (serve.ts), from the dispatcher. */
+export async function forwardPluginJobRoute(request: JobRouteRequest): Promise<JobRouteResponse> {
+  const m = getPluginJobsManager()
+  if (!m) {
+    const off = pluginJobsOffReason()
+    // No reason: a real install whose jobs are still starting (the boot), soon asked again.
+    throw new JobRouteError(`this plugin's routes come from its job, and ${off ?? 'plugin jobs are still starting'}`, 503, off ? undefined : 2)
+  }
+  return forwardJobRoute({ home: WALNUT_HOME, serveTarget: (id) => m.serveTarget(id) }, request)
 }
 
 export function pluginJobsDisconnected(hostKey: string): void {

@@ -105,6 +105,7 @@ import { createAttachmentCopy } from './attachment-copy-core.js'
 import { createFollowerReads } from './follower-reads-core.js'
 import { createHostServerSupervisor } from './host-server-core.js'
 import { createPluginJobSupervisor } from './plugin-jobs-core.js'
+import { createPluginJobDoor } from './plugin-job-door.js'
 import { createStreamRelay } from './stream-relay-core.js'
 import { createPtyStreams, type PtyChild, type PtySpawnOptions } from './pty-stream-core.js'
 import { createHostResume } from './host-resume-core.js'
@@ -2995,6 +2996,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'jobs.configure': return cmdJobsConfigure(ws, id as number, cmd)
     case 'jobs.status': return cmdJobsStatus(ws, id as number, cmd)
     case 'jobs.logs': return cmdJobsLogs(ws, id as number, cmd)
+    case 'jobs.http': return cmdJobsHttp(ws, id as number, cmd)
     case 'leader.claim': return cmdLeaderClaim(ws, id as number, cmd)
     case 'leader.witness': return cmdLeaderWitness(ws, id as number)
     case 'leader.deliver': return daemonCommands.run(() => cmdLeaderDeliver(ws, id as number, cmd))
@@ -4786,6 +4788,14 @@ const pluginJobs = createPluginJobSupervisor({
   // A test knob: never on the production daemon dir.
   minEveryMs: IS_PROD_DAEMON_DIR ? undefined : Number(process.env.WALNUT_PLUGIN_JOB_MIN_EVERY_MS) || undefined,
   maySpawn: () => !demoQuiesce.fenced,
+  // A serving job's routes ('plugin-jobs-serve-v1', plugin-job-door.ts); a socket path too deep
+  // under the jobs dir goes beside this daemon's gateway socket.
+  socketDir: () => path.join(path.dirname(GATEWAY_SOCK_PATH), 'job-sockets'),
+  door: createPluginJobDoor({
+    fs, net,
+    setTimer: (fn, ms) => setTimeout(fn, ms),
+    clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
+  }),
 })
 
 /** The leader only, on the socket its leader.configure tagged, for its own Walnut. */
@@ -4822,6 +4832,19 @@ function cmdJobsLogs(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string
   } catch (err) {
     sendError(ws, id, (err as Error).message)
   }
+}
+
+/** One request to the plugin's serving job of this Walnut ('plugin-jobs-serve-v1'); a refusal says why in `errorKind`. */
+function cmdJobsHttp(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const home = jobsLeaderHome(ws, id, cmd, 'jobs.http')
+  if (!home) return
+  // Returned, so the command drain counts it as open work (a handover waits for it, a forced one ends it).
+  return pluginJobs.http(home, cmd).then(
+    (answer) => sendOk(ws, id, answer),
+    (err: Error & { code?: string; retryAfterS?: number; level?: 'error' | 'warn' | 'info' }) => sendError(ws, id, err.message, {
+      errorKind: err.code || 'internal', ...(typeof err.retryAfterS === 'number' ? { retryAfterS: err.retryAfterS } : {}),
+    }, err.code ? err.level ?? 'error' : 'error'),
+  )
 }
 
 function cmdLeaderClaim(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
@@ -13060,9 +13083,10 @@ function sendOk(ws: ServerWebSocket<WsData>, id: number | null, data: Record<str
   safeSend(ws, JSON.stringify({ id, ok: true, ...data }))
 }
 
-function sendError(ws: ServerWebSocket<WsData>, id: number | null, error: string, data?: Record<string, unknown>) {
+/** `level`: an expected refusal (a job restarting) is logged below error. */
+function sendError(ws: ServerWebSocket<WsData>, id: number | null, error: string, data?: Record<string, unknown>, level: 'error' | 'warn' | 'info' = 'error') {
   if (ws?.data?.origin === 'follower') followerReads.settle(ws, id)
-  logMsg('error', 'command error', { id, error })
+  logMsg(level, level === 'error' ? 'command error' : 'command refused', { id, error, ...(level !== 'error' && typeof data?.errorKind === 'string' ? { errorKind: data.errorKind } : {}) })
   safeSend(ws, JSON.stringify({ ...data, id, ok: false, error }))
 }
 

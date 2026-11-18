@@ -9,6 +9,7 @@ import {
   moduleHasJobs,
   parseEvery,
   parseManifestJobs,
+  servingJobOf,
 } from '../../src/core/plugin-jobs/manifest.js'
 
 const NAME_RULE = 'a job name is 1 to 40 lowercase letters, digits or dashes'
@@ -152,6 +153,30 @@ describe('parseManifestJobs', () => {
     expect(r.dropped).toEqual([`Broken: ${NAME_RULE}`, 'job-16: at most 16 jobs', 'job-17: at most 16 jobs'])
   })
 
+  it('reads "serves" on one long-running job, and drops it anywhere else with the reason', () => {
+    const r = parseManifestJobs({
+      worker: { kind: 'long-running', serves: true },
+      second: { kind: 'long-running', serves: true },
+      sweep: { every: '5m', serves: true },
+      quiet: { kind: 'long-running', serves: false },
+      odd: { kind: 'long-running', serves: 'yes' },
+      poll: { every: '5m' },
+    })
+    expect(r.jobs).toStrictEqual({
+      worker: { kind: 'long-running', serves: true },
+      quiet: { kind: 'long-running' },
+      poll: { kind: 'every', everyMs: 300_000, every: '5m' },
+    })
+    expect(r.dropped).toEqual([
+      'second: only one job serves routes, and "worker" already does',
+      'sweep: only a long-running job serves routes',
+      'odd: "serves" is true or false',
+    ])
+    expect(servingJobOf(r.jobs)).toBe('worker')
+    expect(servingJobOf({ poll: { kind: 'every', everyMs: 300_000, every: '5m' } })).toBeUndefined()
+    expect(servingJobOf(undefined)).toBeUndefined()
+  })
+
   it('a block whose every entry is dropped has no jobs key at all', () => {
     const r = parseManifestJobs({ Bad: { every: '5m' }, fast: { every: '1s' }, worker: { kind: 'long-running', every: '1h' } })
     expect('jobs' in r).toBe(false)
@@ -186,27 +211,28 @@ describe('walnut-plugin validate: jobs', () => {
     return base
   }
 
-  it('accepts the two kinds', async () => {
-    expect((await validatePlugin(await dir({ jobs: { worker: { kind: 'long-running' }, sweep: { every: '5m' }, daily: { kind: 'every', every: '1d' } } }))).errors).toEqual([])
+  it('accepts the two kinds, and one long-running job that serves', async () => {
+    expect((await validatePlugin(await dir({ jobs: { worker: { kind: 'long-running', serves: true }, sweep: { every: '5m' }, daily: { kind: 'every', every: '1d' } } }))).errors).toEqual([])
   })
 
   it('reports what the host would drop, the same rules', async () => {
-    const r = await validatePlugin(await dir({
-      jobs: { Bad: { every: '5m' }, fast: { every: '30s' }, odd: { every: 'often' }, both: { kind: 'long-running', every: '5m' }, cron: { kind: 'cron' }, flat: 5 },
-    }))
+    const jobs = {
+      Bad: { every: '5m' }, fast: { every: '30s' }, odd: { every: 'often' }, both: { kind: 'long-running', every: '5m' }, cron: { kind: 'cron' }, flat: 5,
+      worker: { kind: 'long-running', serves: true }, twice: { kind: 'long-running', serves: true }, sweep: { every: '5m', serves: true },
+    }
+    const r = await validatePlugin(await dir({ jobs }))
     expect(r.errors).toEqual([
       'manifest.jobs.Bad: a job name is 1 to 40 lowercase letters, digits or dashes',
-      'manifest.jobs.fast.every must be between 1m and 7d',
-      'manifest.jobs.odd.every must be like "30s", "5m", "1h" or "1d"',
+      `manifest.jobs.fast: ${RANGE_RULE}`,
+      'manifest.jobs.odd: "every" must be like "30s", "5m", "1h" or "1d"',
       'manifest.jobs.both: a long-running job has no "every"',
-      'manifest.jobs.cron.kind must be "long-running", or leave it out and give "every"',
-      'manifest.jobs.flat must be an object',
+      'manifest.jobs.cron: "kind" is "long-running", or leave it out and give "every"',
+      'manifest.jobs.flat: must be an object',
+      'manifest.jobs.twice: only one job serves routes, and "worker" already does',
+      'manifest.jobs.sweep: only a long-running job serves routes',
     ])
-    for (const e of r.errors) {
-      const name = /^manifest\.jobs\.([^.:]+)/.exec(e)![1]!
-      // The host drops the same jobs.
-      expect(Object.keys(parseManifestJobs({ [name]: { Bad: { every: '5m' }, fast: { every: '30s' }, odd: { every: 'often' }, both: { kind: 'long-running', every: '5m' }, cron: { kind: 'cron' }, flat: 5 }[name] }).jobs ?? {})).toEqual([])
-    }
+    // One rule set: validate reports exactly what the host drops.
+    expect(r.errors).toEqual(parseManifestJobs(jobs).dropped.map((d) => `manifest.jobs.${d}`))
   })
 
   it('needs a server entry, and an object', async () => {

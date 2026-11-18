@@ -67,6 +67,7 @@ import { createFollowerReads } from './follower-reads-core.js'
 import { createHostServerSupervisor } from './host-server-core.js'
 import { createPluginJobSupervisor } from './plugin-jobs-core.js'
 import { createPluginJobHarness } from './plugin-job-harness.js'
+import { createPluginJobDoor } from './plugin-job-door.js'
 import { createStreamRelay } from './stream-relay-core.js'
 import { createPtyStreams } from './pty-stream-core.js'
 import { createHostResume } from './host-resume-core.js'
@@ -305,6 +306,7 @@ export function getDaemonSource(): string {
     ['__CREATE_HOST_SERVER__', createHostServerSupervisor.toString()],
     ['__CREATE_PLUGIN_JOBS__', createPluginJobSupervisor.toString()],
     ['__CREATE_PLUGIN_JOB_HARNESS__', createPluginJobHarness.toString()],
+    ['__CREATE_PLUGIN_JOB_DOOR__', createPluginJobDoor.toString()],
     ['__CREATE_FEATURE_RELAY__', createFeatureRelay.toString()],
     ['__CREATE_STREAM_RELAY__', createStreamRelay.toString()],
     ['__CREATE_PTY_STREAMS__', createPtyStreams.toString()],
@@ -1044,6 +1046,11 @@ function runWnMinimal(argv, stdinText) {
           process.on(kind, function (err) { fn(err, kind); });
         });
       },
+      door: createPluginJobDoor({
+        fs: fs, net: net,
+        setTimer: function (fn, ms) { return setTimeout(fn, ms); },
+        clearTimer: function (t) { clearTimeout(t); },
+      }),
       home: os.homedir(),
     });
     jobHarness.run(argv.slice(1)).then(function (code) { process.exit(code); }, function (err) {
@@ -4644,6 +4651,7 @@ function dispatchCommand(ws, id, cmd) {
     case 'jobs.configure': return cmdJobsConfigure(ws, id, cmd);
     case 'jobs.status': return cmdJobsStatus(ws, id, cmd);
     case 'jobs.logs': return cmdJobsLogs(ws, id, cmd);
+    case 'jobs.http': return cmdJobsHttp(ws, id, cmd);
     case 'leader.claim': return cmdLeaderClaim(ws, id, cmd);
     case 'leader.witness': return cmdLeaderWitness(ws, id);
     case 'leader.deliver': return daemonCommands.run(function () { return cmdLeaderDeliver(ws, id, cmd); });
@@ -6147,6 +6155,9 @@ function settingsEnvOf(args) {
 function sessionPathWithShim(base, throughGateway) {
   return throughGateway ? GATEWAY_SHIM_DIR + path.delimiter + base : base + path.delimiter + GATEWAY_SHIM_DIR;
 }
+// A serving job's door (plugin-job-door.ts, inlined): the daemon's forward of jobs.http and a
+// job's walnut.http.route (the harness in runWnMinimal). Twin of the import in daemon-standalone.ts.
+var createPluginJobDoor = (__CREATE_PLUGIN_JOB_DOOR__);
 var pluginJobs = (__CREATE_PLUGIN_JOBS__)({
   fs: fs, path: path,
   spawn: function (command, args, opts) { return spawn(command, args, opts); },
@@ -6169,6 +6180,14 @@ var pluginJobs = (__CREATE_PLUGIN_JOBS__)({
   // A test knob: never on the production daemon dir.
   minEveryMs: IS_PROD_DAEMON_DIR ? undefined : Number(process.env.WALNUT_PLUGIN_JOB_MIN_EVERY_MS) || undefined,
   maySpawn: function () { return !demoQuiesce.fenced; },
+  // A serving job's routes ('plugin-jobs-serve-v1'); a socket path too deep under the jobs dir
+  // goes beside this daemon's gateway socket.
+  socketDir: function () { return path.join(path.dirname(GATEWAY_SOCK_PATH), 'job-sockets'); },
+  door: createPluginJobDoor({
+    fs: fs, net: net,
+    setTimer: function (fn, ms) { return setTimeout(fn, ms); },
+    clearTimer: function (t) { clearTimeout(t); },
+  }),
 });
 
 // The leader only, on the socket its leader.configure tagged, for its own Walnut.
@@ -6206,6 +6225,21 @@ function cmdJobsLogs(ws, id, cmd) {
   } catch (err) {
     sendError(ws, id, err.message);
   }
+}
+
+// One request to the plugin's serving job of this Walnut ('plugin-jobs-serve-v1'); a refusal says why in errorKind.
+function cmdJobsHttp(ws, id, cmd) {
+  var home = jobsLeaderHome(ws, id, cmd, 'jobs.http');
+  if (!home) return;
+  // Returned, so the command drain counts it as open work (a handover waits for it, a forced one ends it).
+  return pluginJobs.http(home, cmd).then(
+    function (answer) { sendOk(ws, id, answer); },
+    function (err) {
+      var extra = { errorKind: (err && err.code) || 'internal' };
+      if (err && typeof err.retryAfterS === 'number') extra.retryAfterS = err.retryAfterS;
+      sendError(ws, id, err.message, extra, err && err.code ? err.level : 'error');
+    }
+  );
 }
 
 function cmdLeaderClaim(ws, id, cmd) {
@@ -15470,9 +15504,13 @@ function sendOk(ws, id, data) {
   try { ws.send(JSON.stringify({ id, ok: true, ...data })); } catch {}
 }
 
-function sendError(ws, id, error, data) {
+// level: an expected refusal (a job restarting) is logged below error.
+function sendError(ws, id, error, data, level) {
   if (ws && ws.origin === 'follower') followerReads.settle(ws, id);
-  logMsg('error', 'command error', { id, error });
+  var lvl = level === 'warn' || level === 'info' ? level : 'error';
+  var logged = { id, error };
+  if (lvl !== 'error' && data && typeof data.errorKind === 'string') logged.errorKind = data.errorKind;
+  logMsg(lvl, lvl === 'error' ? 'command error' : 'command refused', logged);
   try { ws.send(JSON.stringify({ ...data, id, ok: false, error })); } catch {}
 }
 

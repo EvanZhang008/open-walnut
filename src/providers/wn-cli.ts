@@ -697,6 +697,7 @@ export async function callHostDaemonTool(
 /** `walnut plugin-job <bundle> <job>` (plugin-job-harness.ts), with this process's real I/O. */
 async function runPluginJobProcess(argv: string[]): Promise<number> {
   const { createPluginJobHarness } = await import('./plugin-job-harness.js')
+  const { createPluginJobDoor } = await import('./plugin-job-door.js')
   const { pathToFileURL } = await import('node:url')
   const harness = createPluginJobHarness({
     fs, path, net, env: process.env,
@@ -714,6 +715,11 @@ async function runPluginJobProcess(argv: string[]): Promise<number> {
       }
     },
     lock: (file, fn) => withFileLock(file, fn),
+    door: createPluginJobDoor({
+      fs, net,
+      setTimer: (fn, ms) => setTimeout(fn, ms),
+      clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
+    }),
     home: os.homedir(),
   })
   return harness.run(argv)

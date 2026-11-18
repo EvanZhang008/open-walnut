@@ -21,6 +21,9 @@
  * A pass that failed, a bundle that could not be sent and a job the daemon refused for
  * its code are tried again after 30 s, doubling to 5 min.
  *
+ * A plugin with a job that serves its routes (`"serves": true`, serve.ts) goes only to a
+ * daemon with `plugin-jobs-serve-v1`; an older one keeps what it runs until its upgrade.
+ *
  * Secrets: the settings sent to a host leave out every secret-shaped field at any depth
  * (and the value of a `{ name, value }` pair named like a secret), and the password of
  * every URL is masked; a job reads its secrets on the machine it runs on (walnut.secrets).
@@ -28,10 +31,12 @@
 
 import path from 'node:path'
 import { maskByKey } from '../config-secret-shape.js'
-import type { PluginJobDeclaration } from './manifest.js'
+import { servingJobOf, type PluginJobDeclaration } from './manifest.js'
 import type { PluginJobSpec, PluginJobStatus } from '../../providers/plugin-jobs-core.js'
 
 export const PLUGIN_JOBS_CAPABILITY = 'plugin-jobs-v1'
+/** `jobs.http`: a daemon that forwards a plugin's routes to its serving job (plugin-jobs-core.ts). */
+export const PLUGIN_JOBS_SERVE_CAPABILITY = 'plugin-jobs-serve-v1'
 export const LOCAL_HOST = '__local__'
 
 /** What the manager needs of a daemon connection (DaemonConnection.hostServerHandle has it). */
@@ -129,7 +134,7 @@ export interface PluginJobsHostView { key: string; label: string; connected: boo
 
 export interface PluginJobsView {
   pluginId: string
-  declared: Array<{ name: string; kind: 'every' | 'long-running'; every?: string }>
+  declared: Array<{ name: string; kind: 'every' | 'long-running'; every?: string; serves?: true }>
   runOn: string
   runOnLabel: string
   /** One sentence for the person: where the jobs run now, or why they do not. */
@@ -192,6 +197,7 @@ export function createPluginJobsManager(deps: ManagerDeps) {
       for (const j of mine) {
         out.push({
           plugin: p.id, version: j.version, job: j.job, kind: j.kind, ...(j.everyMs ? { everyMs: j.everyMs } : {}),
+          ...(j.serves ? { serves: true as const } : {}),
           bundle: { sha256: j.bundleSha256, file: path.posix.join(bundles, `${j.bundleSha256}.mjs`) },
           config: configFor(p, hostKey), host: hostKey,
           ...(hostKey === LOCAL_HOST ? { secretsFile: deps.localSecretsFile(p.id) } : {}),
@@ -203,6 +209,11 @@ export function createPluginJobsManager(deps: ManagerDeps) {
       const verdict = jobsVerdict(p.state)
       if (verdict === 'stop') continue
       if (verdict === 'keep') { keepCurrent(p); continue }
+      if (servingJobOf(p.jobs) && !handle.hasCapability(PLUGIN_JOBS_SERVE_CAPABILITY)) {
+        keepCurrent(p)
+        limitErrors[p.id] = `the daemon on ${hostKey === LOCAL_HOST ? 'this computer' : 'that machine'} is older than jobs that serve routes, so this version's jobs start once it is upgraded (on its next connect)`
+        continue
+      }
       if (!fits(p, Object.keys(p.jobs).length)) continue
       const b = await deps.bundle(p.id)
       if ('error' in b) {
@@ -224,6 +235,7 @@ export function createPluginJobsManager(deps: ManagerDeps) {
         out.push({
           plugin: p.id, version: p.version, job: name, kind: decl.kind,
           ...(decl.kind === 'every' ? { everyMs: decl.everyMs } : {}),
+          ...(decl.kind === 'long-running' && decl.serves ? { serves: true as const } : {}),
           bundle: { sha256: b.sha256, file }, config: configFor(p, hostKey), host: hostKey,
           ...(hostKey === LOCAL_HOST ? { secretsFile: deps.localSecretsFile(p.id) } : {}),
         })
@@ -360,7 +372,9 @@ export function createPluginJobsManager(deps: ManagerDeps) {
     const list = await deps.hosts()
     const p = plugins.find((x) => x.id === pluginId)
     if (!p) return null
-    const declared = Object.entries(p.jobs).map(([name, d]) => ({ name, kind: d.kind, ...(d.kind === 'every' ? { every: d.every } : {}) }))
+    const declared = Object.entries(p.jobs).map(([name, d]) => ({
+      name, kind: d.kind, ...(d.kind === 'every' ? { every: d.every } : {}), ...(d.kind === 'long-running' && d.serves ? { serves: true as const } : {}),
+    }))
     const target = p.runOn
     const rec = hosts.get(target)
     let live = false
@@ -418,6 +432,20 @@ export function createPluginJobsManager(deps: ManagerDeps) {
     return { host: target, lines: Array.isArray(r.lines) ? r.lines.map(String) : [], bytes: Number(r.bytes) || 0 }
   }
 
+  /** The daemon to ask for a plugin's routes its job serves (serve.ts), or why there is none now (and when to ask again). */
+  async function serveTarget(pluginId: string): Promise<{ handle: JobsHost; where: string } | { error: string; retryAfterS?: number }> {
+    const plugins = await deps.plugins(0)
+    if (!plugins) return { error: 'the plugins are still loading', retryAfterS: 2 }
+    const p = plugins.find((x) => x.id === pluginId)
+    if (!p || !servingJobOf(p.jobs)) return { error: `no job of ${pluginId} serves routes` }
+    if (jobsVerdict(p.state) === 'stop') return { error: `the plugin is ${p.state === 'disabled' ? 'turned off' : p.state.replace(/-/g, ' ')}, so its job serves no routes` }
+    const where = p.runOn === LOCAL_HOST ? 'this computer' : labelOf(await deps.hosts(), p.runOn)
+    const rec = hosts.get(p.runOn)
+    if (!rec?.handle.connected) return { error: `${p.runOn === LOCAL_HOST ? 'the daemon of this computer' : where} is not connected, so the job's routes cannot be reached`, retryAfterS: 5 }
+    if (!rec.handle.hasCapability(PLUGIN_JOBS_SERVE_CAPABILITY)) return { error: `the daemon on ${where} is older than jobs that serve routes; it is upgraded on its next connect` }
+    return { handle: rec.handle, where }
+  }
+
   return {
     connected,
     disconnected,
@@ -425,6 +453,7 @@ export function createPluginJobsManager(deps: ManagerDeps) {
     reconcileAll,
     status,
     logs,
+    serveTarget,
     /** Per host: its phase and its jobs (tests, diagnostics). */
     views: () => [...hosts.entries()].map(([key, r]) => ({ key, phase: r.phase, message: r.message, jobs: r.jobs, bundleErrors: r.bundleErrors })),
   }

@@ -4,16 +4,24 @@
  *
  *   "jobs": {
  *     "poll-queue": { "every": "5m" },
- *     "worker":     { "kind": "long-running" }
+ *     "worker":     { "kind": "long-running", "serves": true }
  *   }
+ *
+ * `serves`: the job answers the plugin's HTTP routes the server half does not
+ * (walnut.http.route inside the job; the leader forwards them to it). Only a
+ * long-running job, and one per plugin.
  *
  * Parsed leniently, like the storage block: a bad entry costs that job (with a
  * reason the loader logs), never the plugin's load.
+ *
+ * One rule set for both ends: the host's loader drops the jobs it names, and
+ * `walnut-plugin validate` (packages/plugin-cli/src/manifest.ts imports this file,
+ * and its build carries it) reports the same reasons. So it imports nothing.
  */
 
 export type PluginJobDeclaration =
   | { kind: 'every'; everyMs: number; every: string }
-  | { kind: 'long-running' }
+  | { kind: 'long-running'; serves?: true }
 
 export const JOB_NAME_RE = /^[a-z0-9][a-z0-9-]{0,39}$/
 export const MIN_JOB_EVERY_MS = 60_000
@@ -35,16 +43,25 @@ export function parseManifestJobs(raw: unknown): { jobs?: Record<string, PluginJ
   if (raw === undefined) return { dropped }
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { dropped: ['"jobs" must be an object of job names'] }
   const jobs: Record<string, PluginJobDeclaration> = {}
+  let servingJob = ''
   for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
     if (Object.keys(jobs).length >= MAX_JOBS) { dropped.push(`${name}: at most ${MAX_JOBS} jobs`); continue }
     if (!JOB_NAME_RE.test(name)) { dropped.push(`${name}: a job name is 1 to 40 lowercase letters, digits or dashes`); continue }
-    const v = value as { every?: unknown; kind?: unknown } | null
+    const v = value as { every?: unknown; kind?: unknown; serves?: unknown } | null
     if (!v || typeof v !== 'object' || Array.isArray(v)) { dropped.push(`${name}: must be an object`); continue }
+    if (v.serves !== undefined && typeof v.serves !== 'boolean') { dropped.push(`${name}: "serves" is true or false`); continue }
     if (v.kind === 'long-running') {
       if (v.every !== undefined) { dropped.push(`${name}: a long-running job has no "every"`); continue }
+      if (v.serves === true) {
+        if (servingJob) { dropped.push(`${name}: only one job serves routes, and "${servingJob}" already does`); continue }
+        servingJob = name
+        jobs[name] = { kind: 'long-running', serves: true }
+        continue
+      }
       jobs[name] = { kind: 'long-running' }
       continue
     }
+    if (v.serves === true) { dropped.push(`${name}: only a long-running job serves routes`); continue }
     if (v.kind !== undefined && v.kind !== 'every') { dropped.push(`${name}: "kind" is "long-running", or leave it out and give "every"`); continue }
     const everyMs = parseEvery(v.every)
     if (everyMs === null) { dropped.push(`${name}: "every" must be like "30s", "5m", "1h" or "1d"`); continue }
@@ -52,6 +69,12 @@ export function parseManifestJobs(raw: unknown): { jobs?: Record<string, PluginJ
     jobs[name] = { kind: 'every', everyMs, every: String(v.every).trim() }
   }
   return Object.keys(jobs).length > 0 ? { jobs, dropped } : { dropped }
+}
+
+/** The job that serves the plugin's routes, if one does. */
+export function servingJobOf(jobs: Record<string, PluginJobDeclaration> | undefined): string | undefined {
+  for (const [name, d] of Object.entries(jobs ?? {})) if (d.kind === 'long-running' && d.serves) return name
+  return undefined
 }
 
 /** Whether a loaded server module exports any job function (a jobs-only plugin needs no activate). */

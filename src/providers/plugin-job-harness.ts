@@ -14,6 +14,10 @@
  *                                 which the leader shows beside the job
  *   walnut.secrets.get|set|...    the plugin's secrets ON THIS MACHINE
  *   walnut.config                 the plugin's settings
+ *   walnut.http.route(m, p, fn)   a route of the plugin, for a job whose spec says it
+ *                                 serves (plugin-job-door.ts): served on the socket the
+ *                                 daemon named, from the first route on; in any other
+ *                                 job it throws
  *   walnut.plugin, .job, .host    who and where
  *   signal                        aborted on SIGTERM/SIGINT; the run then has 8 s
  *
@@ -30,6 +34,9 @@
  * NOTHING at module scope; every side effect arrives through deps.
  */
 
+import type { DoorRouteHandler, PluginJobDoor } from './plugin-job-door.js'
+
+
 export interface PluginJobInfo {
   plugin: string
   version: string
@@ -42,6 +49,8 @@ export interface PluginJobInfo {
   secretsFile?: string
   /** The run's caller id at the agent gateway (`plugin-job:<token>`). */
   sid?: string
+  /** A job that serves the plugin's routes: the unix socket it serves them on (the daemon picks it). */
+  serveSocket?: string
 }
 
 export interface PluginJobHarnessDeps {
@@ -63,6 +72,8 @@ export interface PluginJobHarnessDeps {
   onFatal?: (fn: (err: unknown, kind: string) => void) => void
   /** Run `fn` holding the lock the server takes on the same file (utils/file-lock.ts); absent: no lock. */
   lock?: <T>(file: string, fn: () => Promise<T>) => Promise<T>
+  /** The routes' door (plugin-job-door.ts); absent: a serving job's http.route throws. */
+  door?: Pick<PluginJobDoor, 'serve'>
   home: string
 }
 
@@ -101,6 +112,7 @@ export function createPluginJobHarness(deps: PluginJobHarnessDeps) {
         stateDir: v.stateDir,
         ...(typeof v.secretsFile === 'string' ? { secretsFile: v.secretsFile } : {}),
         ...(typeof v.sid === 'string' && v.sid.startsWith('plugin-job:') ? { sid: v.sid } : {}),
+        ...(typeof v.serveSocket === 'string' && v.serveSocket.startsWith('/') && v.serveSocket.length <= 200 ? { serveSocket: v.serveSocket } : {}),
       }
     } catch {
       return null
@@ -217,6 +229,9 @@ export function createPluginJobHarness(deps: PluginJobHarnessDeps) {
       warn: (msg: string, data?: unknown) => line('warn', msg, data),
       error: (msg: string, data?: unknown) => line('error', msg, data),
     }
+    const door = info.serveSocket && deps.door
+      ? deps.door.serve(info.serveSocket, { prefix: `/api/plugins/${encodeURIComponent(info.plugin)}`, log: line })
+      : null
     const walnut = {
       plugin: { id: info.plugin, version: info.version },
       job: { name: info.job, kind: info.kind, ...(info.everyMs ? { everyMs: info.everyMs } : {}) },
@@ -234,6 +249,16 @@ export function createPluginJobHarness(deps: PluginJobHarnessDeps) {
           if (!socketPath) throw new Error('this job has no Walnut daemon to ask (WALNUT_AGENT_SOCKET is unset)')
           const r = await gateway(socketPath, sid, 'tools.list', {})
           return Array.isArray(r.ops) ? r.ops : []
+        },
+      },
+      http: {
+        // Bodies and lazy chunks are sent whole, never streamed (plugin-job-door.ts).
+        streams: false,
+        route: (method: string, routePath: string, handler: DoorRouteHandler) => {
+          if (door) return door.route(method, routePath, handler)
+          throw new Error(info.serveSocket
+            ? 'the Walnut daemon on this machine cannot serve a job\'s routes yet; it is upgraded on its next connect'
+            : `the job "${info.job}" does not serve routes: give it "serves": true in manifest.json (a long-running job, at most one per plugin)`)
         },
       },
       metrics: {
@@ -266,7 +291,7 @@ export function createPluginJobHarness(deps: PluginJobHarnessDeps) {
         keys: async (): Promise<string[]> => Object.keys(readSecrets()).sort(),
       },
     }
-    return { walnut, flush }
+    return { walnut, flush, closeDoor: () => door?.close() }
   }
 
   /** The job function the bundle exports under `jobs` (or `default.jobs`), or null. */
@@ -304,12 +329,14 @@ export function createPluginJobHarness(deps: PluginJobHarnessDeps) {
       return 2
     }
     const controller = new AbortController()
-    const { walnut, flush } = makeWalnut(info, controller.signal)
+    const { walnut, flush, closeDoor } = makeWalnut(info, controller.signal)
     let stopping = false
     const stop = (why: string) => {
       if (stopping) return
       stopping = true
       line('info', `stopping (${why})`)
+      // No new request from now on; the ones in flight have the grace.
+      closeDoor()
       controller.abort()
       deps.setTimer(() => {
         line('warn', `did not stop within ${GRACE_MS / 1000} s of ${why}; ending it`)
@@ -351,6 +378,7 @@ export function createPluginJobHarness(deps: PluginJobHarnessDeps) {
       code = 1
       line('error', 'run failed', { ms: deps.now() - started, error: err instanceof Error ? (err.stack ?? err.message) : String(err) })
     } finally {
+      closeDoor()
       deps.clearTimer(hold)
       deps.clearTimer(beatTimer)
     }
@@ -358,7 +386,8 @@ export function createPluginJobHarness(deps: PluginJobHarnessDeps) {
     return code
   }
 
-  return { run, jobFunction, readInfo }
+  // makeWalnut too: tests/typechecks/plugin-api-contract.ts holds its `walnut` to the public WalnutJobApi.
+  return { run, jobFunction, readInfo, makeWalnut }
 }
 
 export type PluginJobHarness = ReturnType<typeof createPluginJobHarness>

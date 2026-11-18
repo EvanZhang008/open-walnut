@@ -348,6 +348,7 @@ export const DAEMON_SOURCE_FILES = [
   // process runs in (imported by the walnut CLI of the standalone, inlined by the JS twin).
   'src/providers/plugin-jobs-core.ts',
   'src/providers/plugin-job-harness.ts',
+  'src/providers/plugin-job-door.ts',
   // Streams between servers through the daemon (stream-relay-v1): same rule.
   'src/providers/stream-relay-core.ts',
   // Terminal streams through the daemon (pty-stream-v1): same rule.

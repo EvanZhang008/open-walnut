@@ -2051,3 +2051,58 @@ export interface WalnutServerPlugin {
 export function defineServerPlugin<T extends WalnutServerPlugin>(plugin: T): T {
   return plugin
 }
+
+/**
+ * The `walnut` a plugin job gets: a small API of its own, not the server one, since a job
+ * runs apart from the Walnut server, under the daemon of the machine it is placed on.
+ * Declare jobs in the manifest (`"jobs": { "worker": { "kind": "long-running" } }`) and
+ * export them from the server entry (`export const jobs: PluginJobs = { ... }`).
+ */
+export interface WalnutJobApi {
+  readonly plugin: { id: string; version: string }
+  readonly job: { name: string; kind: 'every' | 'long-running'; everyMs?: number }
+  /** The machine it runs on, as Walnut names it (`__local__` for the Walnut computer itself). */
+  readonly host: string
+  /** The plugin's settings; on another machine, without its secrets. */
+  readonly config: Record<string, unknown>
+  /** Aborted when Walnut stops the run; it then has 8 s to return. */
+  readonly signal: AbortSignal
+  readonly log: {
+    debug(message: string, data?: unknown): void
+    info(message: string, data?: unknown): void
+    warn(message: string, data?: unknown): void
+    error(message: string, data?: unknown): void
+  }
+  /** Walnut's ops, as an outside caller of the Walnut that runs the job. */
+  readonly ops: {
+    call(name: string, args?: Record<string, unknown>): Promise<Record<string, unknown>>
+    list(): Promise<unknown[]>
+  }
+  /** Numbers the plugin's page shows under the job. */
+  readonly metrics: {
+    set(name: string, value: number): void
+    inc(name: string, by?: number): number
+    get(name: string): number | undefined
+    all(): Record<string, number>
+  }
+  /** The plugin's secrets on the machine the job runs on. */
+  readonly secrets: {
+    get(name: string): Promise<string | undefined>
+    set(name: string, value: string): Promise<void>
+    delete(name: string): Promise<void>
+    keys(): Promise<string[]>
+  }
+  /**
+   * The plugin's HTTP routes, for the job whose manifest entry says `"serves": true` (one
+   * long-running job per plugin): the same `route` as the server half's, answering what the
+   * server half does not. In any other job `route` throws. Bodies go whole (`streams` is false):
+   * a request body at most 256 KB (an upload to the job's machine), a reply body at most 2 MB.
+   */
+  readonly http: Pick<HttpService, 'streams' | 'route'>
+}
+
+/** One job: runs until it returns (long-running jobs are started again) or its signal aborts. */
+export type PluginJob = (walnut: WalnutJobApi, signal: AbortSignal) => void | Promise<void>
+
+/** The `jobs` export of a server entry: one function per job the manifest declares. */
+export type PluginJobs = Record<string, PluginJob>

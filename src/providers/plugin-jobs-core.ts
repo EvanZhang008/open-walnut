@@ -29,7 +29,15 @@
  *     it older than 6 h (no daemon looks after it any more) ends itself;
  *   - never runs a bundle whose sha256 is not the one the spec names, and removes a
  *     bundle no job names after a day, the run dir of a job gone for 7 days;
- *   - stops a job with SIGTERM to its group, SIGKILL after 10 s.
+ *   - stops a job with SIGTERM to its group, SIGKILL after 10 s;
+ *   - a long-running job whose spec `serves` (one per plugin) gets a unix socket of
+ *     each run's own (`<run dir>/<token>.sock`, or the same name under `<dir>/sockets/`
+ *     or the daemon's own short dir when that one is past the 100 bytes a socket path
+ *     takes; recorded with the run, so an adopting daemon finds it; plugin-job-door.ts
+ *     makes, drops and sweeps the files). `jobs.http {home,
+ *     plugin, method, path, headers, size, data}` forwards one request to the LIVE
+ *     run of that plugin's serving job for that home (never another Walnut's), at
+ *     most 8 at once, through plugin-job-door.ts; a structured `code` says why not.
  * It does not stop the jobs when the daemon itself exits: they outlive a daemon
  * upgrade the way sessions do. One spec per Walnut (keyed by the leader's data
  * dir, `home`), so a test server never touches the real one's jobs.
@@ -57,6 +65,8 @@ export interface PluginJobSpec {
   host: string
   /** Where the plugin's secrets live on this machine; absent = `$HOME/.open-walnut/secrets/plugins/<plugin>.json`. */
   secretsFile?: string
+  /** A long-running job that serves the plugin's HTTP routes (`jobs.http`). */
+  serves?: true
 }
 
 export interface PluginJobsSpec {
@@ -91,6 +101,8 @@ export interface PluginJobStatus {
   metrics?: Record<string, number>
   metricsAt?: number
   bundleSha256: string
+  /** It serves the plugin's routes (the leader keeps that when it sends the job on unchanged). */
+  serves?: true
 }
 
 interface ChildLike {
@@ -135,6 +147,10 @@ export interface PluginJobDeps {
   minEveryMs?: number
   /** Final spawn gate, read synchronously in `start`: false = no run starts (a Demo daemon that is stopping). */
   maySpawn?: () => boolean
+  /** A short dir of this daemon's own (0700) for a serving run's socket when `<dir>/sockets/` is too deep too. */
+  socketDir?: () => string
+  /** The serving jobs' door (plugin-job-door.ts); absent: no job serves here, `jobs.http` answers `unsupported`. */
+  door?: Pick<import('./plugin-job-door.js').PluginJobDoor, 'forward' | 'placeSocket' | 'dropSocket' | 'sweepSockets'>
 }
 
 export function createPluginJobSupervisor(deps: PluginJobDeps) {
@@ -164,6 +180,9 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
   /** A run that began this long before the machine booted cannot be the process its pid names now. */
   const BOOT_SLACK_MS = 60_000
   const RUN_SID_PREFIX = 'plugin-job:'
+  const SOCKETS_DIR = 'sockets'
+  /** Requests one serving run takes at once (plugin-job-door.ts serves at most 16 connections). */
+  const MAX_FORWARDS = 8
   const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
   const JOB_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/
   const SHA = /^[0-9a-f]{64}$/
@@ -172,7 +191,7 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
    * One process of a job. `spawned`: this daemon's own child whose exit it has not
    * seen, so its pid can belong to no other process. `startTime` null: not read yet.
    */
-  interface Proc { pid: number; startTime: string | null; sid: string; spawned: boolean; exited: boolean }
+  interface Proc { pid: number; startTime: string | null; sid: string; spawned: boolean; exited: boolean; sock?: string }
 
   interface Entry {
     spec: PluginJobSpec
@@ -201,6 +220,8 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
     gen: number
     /** Why this run was stopped by the daemon itself (its timeout): the exit reads as that. */
     stopping?: string
+    /** Requests being forwarded to its run now (`jobs.http`). */
+    forwards?: number
   }
 
   /** A run being stopped: until it is gone, a new run of the same job waits. */
@@ -254,12 +275,15 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
     if (j.secretsFile !== undefined && (typeof j.secretsFile !== 'string' || !j.secretsFile.startsWith('/') || j.secretsFile.length > 1024)) {
       throw new Error(`${at}.secretsFile must be an absolute path`)
     }
+    if (j.serves !== undefined && typeof j.serves !== 'boolean') throw new Error(`${at}.serves must be true or false`)
+    if (j.serves === true && j.kind !== 'long-running') throw new Error(`${at}: only a long-running job serves routes`)
     const version = typeof j.version === 'string' ? j.version.slice(0, 64) : ''
     return {
       plugin: j.plugin, version, job: j.job, kind: j.kind,
       ...(everyMs !== undefined ? { everyMs } : {}),
       bundle: { sha256: b.sha256, file: b.file as string }, config, host: j.host,
       ...(j.secretsFile ? { secretsFile: j.secretsFile } : {}),
+      ...(j.serves === true ? { serves: true as const } : {}),
     }
   }
 
@@ -272,17 +296,22 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
     if (list.length > MAX_JOBS) throw new Error(`jobs.configure: at most ${MAX_JOBS} jobs`)
     const jobs = list.map((j, i) => validateJob(j, i))
     const seen = new Set<string>()
+    const serving = new Set<string>()
     for (const j of jobs) {
       const k = keyOfJob(j)
       if (seen.has(k)) throw new Error(`jobs.configure: ${k} is named twice`)
       seen.add(k)
+      if (!j.serves) continue
+      if (serving.has(j.plugin)) throw new Error(`jobs.configure: ${j.plugin} has two jobs that serve routes`)
+      serving.add(j.plugin)
     }
     return { v: 1, home: s.home, walnutId: s.walnutId, jobs }
   }
 
   /** Everything that needs a new run when it changes. */
   function runKey(s: PluginJobSpec): string {
-    return JSON.stringify([s.version, s.kind, s.everyMs ?? null, s.bundle.sha256, s.config, s.host, s.secretsFile ?? null])
+    // `serves` only when set: a job that does not serve keeps the key it had before serving existed.
+    return JSON.stringify([s.version, s.kind, s.everyMs ?? null, s.bundle.sha256, s.config, s.host, s.secretsFile ?? null, ...(s.serves ? ['serves'] : [])])
   }
 
   function saveSpec(home: string): void {
@@ -293,7 +322,7 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
   }
 
   function procState(p: Proc): Record<string, unknown> {
-    return { pid: p.pid, startTime: p.startTime, sid: p.sid }
+    return { pid: p.pid, startTime: p.startTime, sid: p.sid, ...(p.sock ? { sock: p.sock } : {}) }
   }
 
   /**
@@ -439,6 +468,7 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
     const list = draining.get(dk)
     if (!list?.includes(d)) return
     if (d.timer) { deps.clearTimer(d.timer); d.timer = undefined }
+    dropSocket(d.proc)
     const rest = list.filter((x) => x !== d)
     if (rest.length > 0) draining.set(dk, rest)
     else draining.delete(dk)
@@ -469,6 +499,7 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
 
   function exited(e: Entry, gen: number, code: number | null, signal: string | null, error?: string): void {
     if (gen !== e.gen) return
+    if (e.proc) dropSocket(e.proc)
     if (e.poll) { deps.clearTimer(e.poll); e.poll = undefined }
     if (e.logPoll) { deps.clearTimer(e.logPoll); e.logPoll = undefined }
     if (e.killTimer) { deps.clearTimer(e.killTimer); e.killTimer = undefined }
@@ -541,6 +572,22 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
     return true
   }
 
+  /** Where a serving run's short socket may go: `<dir>/sockets/`, then the daemon's own short dir. */
+  function socketDirs(): string[] {
+    return [path.join(deps.dir, SOCKETS_DIR), ...(deps.socketDir ? [deps.socketDir()] : [])]
+  }
+
+  /** A serving run's socket: its own name, in its run dir, or a short dir when that is too deep. null: none fits. */
+  function serveSocketFor(e: Entry): string | null {
+    if (!deps.door) return null
+    const name = `${deps.randomToken().slice(0, 16)}.sock`
+    return deps.door.placeSocket([runDir(e.home, e.spec), ...socketDirs()].map((d) => path.join(d, name)))
+  }
+
+  function dropSocket(p: Proc): void {
+    if (p.sock) deps.door?.dropSocket(p.sock)
+  }
+
   function start(e: Entry): void {
     clearTimers(e)
     const gen = ++e.gen
@@ -561,6 +608,11 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
     if (have !== e.spec.bundle.sha256) { refuse(e, 'its code on this machine is not the version Walnut sent'); return }
     setState(e, 'starting')
     const dir = runDir(e.home, e.spec)
+    const sock = e.spec.serves ? serveSocketFor(e) : undefined
+    if (sock === null) {
+      refuse(e, deps.door ? 'no path for its routes socket fits the 100 bytes a unix socket path takes on this machine' : 'this daemon cannot serve a job\'s routes')
+      return
+    }
     let fd: number
     try {
       fd = openLog(logFile(e.home, e.spec))
@@ -581,6 +633,7 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
           ...(e.spec.everyMs ? { everyMs: e.spec.everyMs } : {}),
           host: e.spec.host, config: e.spec.config, stateDir: dir, sid,
           ...(e.spec.secretsFile ? { secretsFile: e.spec.secretsFile } : {}),
+          ...(sock ? { serveSocket: sock } : {}),
         }),
       }
       child = deps.spawn(program.command, [...program.args, e.spec.bundle.file, e.spec.job], {
@@ -608,7 +661,7 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
     })
     child.unref()
     if (!child.pid) return // the error event follows
-    proc = { pid: child.pid, startTime: deps.startTimeOf(child.pid), sid, spawned: true, exited: false }
+    proc = { pid: child.pid, startTime: deps.startTimeOf(child.pid), sid, spawned: true, exited: false, ...(sock ? { sock } : {}) }
     e.proc = proc
     e.startedAt = deps.now()
     setState(e, 'running')
@@ -717,6 +770,7 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
       ...(e.nextRunAt ? { nextRunAt: e.nextRunAt } : {}),
       ...(metrics ? { metrics, ...(metricsAt ? { metricsAt } : {}) } : {}),
       bundleSha256: e.spec.bundle.sha256,
+      ...(e.spec.serves ? { serves: true as const } : {}),
     }
   }
 
@@ -779,12 +833,13 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
   function num(v: unknown): number | undefined { return typeof v === 'number' && Number.isFinite(v) ? v : undefined }
 
   /** A proc saved by an earlier daemon, or null when the record is not one. */
-  function savedProc(s: { pid?: unknown; startTime?: unknown; sid?: unknown }): Proc | null {
+  function savedProc(s: { pid?: unknown; startTime?: unknown; sid?: unknown; sock?: unknown }): Proc | null {
     const pid = num(s.pid) ?? 0
     if (pid <= 1) return null
     const startTime = typeof s.startTime === 'string' ? s.startTime : null
     const sid = typeof s.sid === 'string' && s.sid.startsWith(RUN_SID_PREFIX) && s.sid.length <= 200 ? s.sid : RUN_SID_PREFIX + deps.randomToken()
-    return { pid, startTime, sid, spawned: false, exited: false }
+    const sock = typeof s.sock === 'string' && s.sock.startsWith('/') && s.sock.endsWith('.sock') && Buffer.byteLength(s.sock) <= 100 ? s.sock : undefined
+    return { pid, startTime, sid, spawned: false, exited: false, ...(sock ? { sock } : {}) }
   }
 
   /** A new daemon: finish the stops an earlier one began, adopt the runs still going, schedule or start the rest. */
@@ -903,6 +958,11 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
         deps.log('info', 'plugin jobs: removed code no job uses', { file: name })
       } catch { /* gone, or not removable */ }
     }
+    // A serving run's socket that no run holds (its run and its daemon died together), a day on.
+    const socks = new Set<string>()
+    for (const m of homes.values()) for (const e of m.values()) if (e.proc?.sock) socks.add(e.proc.sock)
+    for (const list of draining.values()) for (const d of list) if (d.proc.sock) socks.add(d.proc.sock)
+    deps.door?.sweepSockets([...socketDirs(), ...live], socks, now, BUNDLE_KEEP_MS)
     const runs = path.join(deps.dir, 'runs')
     for (const hk of readdir(runs)) {
       for (const plugin of readdir(path.join(runs, hk))) {
@@ -944,6 +1004,74 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
     }
   }
 
+  /** `retryAfterMs`: when the job is due to start again, for the leader's Retry-After. */
+  function refusal(code: string, message: string, retryAfterMs?: number): Error & { code: string; retryAfterS?: number } {
+    return Object.assign(new Error(message), { code, ...(retryAfterMs !== undefined ? { retryAfterS: Math.max(1, Math.ceil(retryAfterMs / 1000)) } : {}) })
+  }
+
+  /** Why a serving job takes no request now, in a sentence. */
+  function notRunning(e: Entry): string {
+    const name = `the job "${e.spec.job}"`
+    if (e.state === 'retrying' && e.nextRunAt) {
+      const s = Math.max(1, Math.round((e.nextRunAt - deps.now()) / 1000))
+      return `${name} is not running: it stopped${e.lastError ? ` (${e.lastError})` : ''} and starts again in ${s} s`
+    }
+    if (e.state === 'refused') return `${name} is not running: ${e.lastError ?? 'it was not started'}`
+    if (e.state === 'starting') return `${name} is starting`
+    return `${name} is not running`
+  }
+
+  /**
+   * How loud a refusal of `jobs.http` is in the daemon's log. The expected ones are no error:
+   * a page polling a restarting job (not_running, not_ready: info), and a job that is not
+   * there, busy, slow, cut off or sent too much (warn). Only what should not happen (an answer
+   * that is not one, a request our own leader malformed, anything unknown) is an error.
+   */
+  function httpLogLevel(code: unknown): 'info' | 'warn' | 'error' {
+    if (code === 'not_running' || code === 'not_ready') return 'info'
+    if (code === 'not_serving' || code === 'busy' || code === 'timeout' || code === 'no_answer'
+      || code === 'too_large' || code === 'request_too_large' || code === 'unsupported') return 'warn'
+    return 'error'
+  }
+
+  /**
+   * One request to the plugin's serving job of `home` (`jobs.http`): its live run only,
+   * at most MAX_FORWARDS at once. Refusals carry a `code`: unsupported, bad_request,
+   * not_serving, not_running, busy (and the door's: not_ready, timeout, request_too_large,
+   * too_large, no_answer, bad_answer), and the `level` to log them at (httpLogLevel).
+   */
+  async function http(home: string, raw: unknown): Promise<Record<string, unknown>> {
+    try {
+      return await forwardHttp(home, raw)
+    } catch (err) {
+      const e = (err instanceof Error ? err : new Error(String(err))) as Error & { code?: string; level?: string }
+      e.level = httpLogLevel(e.code)
+      throw e
+    }
+  }
+
+  async function forwardHttp(home: string, raw: unknown): Promise<Record<string, unknown>> {
+    if (!deps.door) throw refusal('unsupported', 'this daemon cannot forward to a job')
+    const plugin = (raw as { plugin?: unknown } | null)?.plugin
+    if (typeof plugin !== 'string' || !ID.test(plugin)) throw refusal('bad_request', 'jobs.http: plugin is not a plugin id')
+    let e: Entry | undefined
+    for (const x of homes.get(home)?.values() ?? []) if (x.spec.plugin === plugin && x.spec.serves) e = x
+    if (!e) throw refusal('not_serving', `no job of ${plugin} serves routes on this machine`)
+    // Its state, not `ps` (a sync spawn on this daemon's loop): the 5 s watch keeps an adopted run's
+    // state true, and the socket says the rest (not_ready).
+    const p = e.proc
+    if (!p || e.state !== 'running') throw refusal('not_running', notRunning(e), e.state === 'retrying' && e.nextRunAt ? e.nextRunAt - deps.now() : undefined)
+    if (!p.sock) throw refusal('not_running', `the job "${e.spec.job}" was started before it served routes; it serves them from its next start`)
+    if ((e.forwards ?? 0) >= MAX_FORWARDS) throw refusal('busy', `the job "${e.spec.job}" is answering ${MAX_FORWARDS} requests already`)
+    e.forwards = (e.forwards ?? 0) + 1
+    const entry = e
+    try {
+      return { ...(await deps.door.forward(p.sock, raw)) }
+    } finally {
+      entry.forwards = Math.max(0, (entry.forwards ?? 1) - 1)
+    }
+  }
+
   /** The Walnut (its home) whose job holds this caller id now, or null: no live run has it. */
   function homeOfRun(sid: unknown): string | null {
     if (typeof sid !== 'string' || !sid.startsWith(RUN_SID_PREFIX)) return null
@@ -960,6 +1088,7 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
     boot,
     status,
     logs,
+    http,
     prune,
     homeOfRun,
     quiesce,

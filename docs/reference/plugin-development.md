@@ -853,11 +853,57 @@ Inside a job, `walnut` is a small API, not the server one:
 | `walnut.ops.call(name, args)` / `walnut.ops.list()` | Walnut's ops, through the daemon of that machine, as an outside caller: they reach the Walnut that runs the job and no other. While that Walnut's server is away (the Mac asleep or restarting), a call throws an error with `code` `hub_unreachable`; the job keeps running, so try again later. An error answer throws an `Error` with the op's `code`. |
 | `walnut.log.debug/info/warn/error(msg, data)` | One line in the job's log, which the plugin's page shows. |
 | `walnut.metrics.set/inc/get/all` | Numbers the plugin's page shows under the job. |
+| `walnut.http.route(method, path, handler)` | Only in the job that serves the plugin's routes: see [Serving routes from a job](#serving-routes-from-a-job). In any other job it throws. |
 | `walnut.plugin`, `walnut.job`, `walnut.host` | Who is running and where. |
 
 The second argument is an `AbortSignal`, aborted when Walnut stops the job (the plugin is turned off or updated, the job moves to another machine, or a run took too long). A job has 8 s to return after that; then its process is ended. An exception or a rejected promise the job leaves uncaught ends the run as a failure, with the error in its log.
 
 A job runs from one self-contained file Walnut builds from your server entry, so it has no `node_modules` on the machine it runs on and the same file runs under Bun and Node. Keep code that only works on one kind of machine (a Mac app, a local file) behind a check of `walnut.host`, or say in your README where the job should run.
+
+### Serving routes from a job
+
+Your plugin's page in the browser talks to `/api/plugins/<plugin-id>/...`. Those routes normally come from the server half (`walnut.http.route` in `activate`), which runs inside the Walnut server. When the work behind them lives on another machine (the queue the job drains, a GPU, a local tool), the job itself can answer them. Mark one long-running job as the one that serves:
+
+```json
+"jobs": {
+  "worker": { "kind": "long-running", "serves": true }
+}
+```
+
+Inside that job, `walnut.http.route` takes exactly what the server half's does, so a route moves between the two unchanged:
+
+```ts compile=jobs-serve
+import type { PluginJobs } from '@open-walnut/plugin-api/server'
+
+const queue: string[] = []
+
+export const jobs: PluginJobs = {
+  async worker(walnut, signal) {
+    walnut.http.route('GET', '/queue', () => ({ json: { length: queue.length, host: walnut.host } }))
+    walnut.http.route('POST', '/queue', async (request) => {
+      const { item } = await request.json<{ item: string }>()
+      queue.push(item)
+      return { status: 201, json: { length: queue.length } }
+    })
+    // A serving job keeps running while it serves: wait for Walnut to stop it.
+    await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }))
+  },
+}
+```
+
+A request reaches the job only when no route of the server half answers it, so the server half's routes always win, and a plugin may keep some routes on the server and others in the job. Walnut forwards the request to the daemon of the machine the job runs on (**Runs on**), which hands it to the job's own process. The request is what a server route gets (method, path with its query, headers, body), with two differences: the caller's `Authorization` and `Cookie` headers are never forwarded, and `x-walnut-origin` says who asked. The job's own `walnut.ops` calls still run as the job, not as that caller.
+
+Rules and limits:
+
+- Only a `long-running` job serves, and at most one per plugin. `"serves": true` on an `every` job, or on a second job, drops that job with a warning when the plugin loads (`walnut-plugin validate` says so too); the rest of the manifest loads.
+- `walnut.http.route` in a job that does not serve throws. In the serving job, routes are served from the first `route` call on.
+- A request body is at most 256 KB, and a reply body at most 2 MB; headers at most 64 KB. The request is an upload to the job's machine, and some links to a remote machine (an SSH relay) drop after a few MB sent that way, so keep uploads small and send bulk data the other way. A larger request answers `413` with the limit in `error`. A reply body is sent whole: `walnut.http.streams` is `false`, and lazy chunks are gathered before they are sent.
+- The job has 9 seconds to answer a request, and takes 8 requests at once.
+- `request.signal` aborts when those 9 seconds run out or the daemon goes away, not when the browser closes its connection: Walnut cannot tell the job that.
+- A reply's `Set-Cookie` header is dropped: a job never sets a cookie on Walnut's own address.
+- Path patterns match as the server half's do: `:name` matches one segment, a last `*name` the rest, and a HEAD request is answered by a GET route (the browser gets the headers and the length, without the body).
+
+When the job cannot be reached, the browser gets `503` with a plain reason in `error` (and `Retry-After` when it is likely back soon): the plugin is still loading, the machine is not connected, its daemon is older than jobs that serve routes (it is upgraded on its next connect), the job is not running or is restarting, or it has not registered a route yet. A job that takes longer than its 9 seconds answers `504`; a reply over the limits, or a link that closed before the answer came, `502` (the request may have run, so Walnut does not send it again). A turned-off plugin serves no route at all, so its paths answer `404`.
 
 ## Storage and secrets
 

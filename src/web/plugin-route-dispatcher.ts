@@ -1,5 +1,6 @@
 import express, { Router, type Request, type RequestHandler } from 'express'
 import type { IntegrationRegistry } from '../core/integration-registry.js'
+import { JobRouteError } from '../core/plugin-jobs/serve.js'
 import { ORIGIN_HEADER, withCallerOrigin } from '../lib/caller-origin.js'
 import { requestOrigin } from './middleware/request-origin.js'
 import {
@@ -9,7 +10,17 @@ import {
 } from './routes/plugin-runtime-bridge.js'
 
 export interface PluginRouteDispatcherOptions {
+  /** A replica: a plugin with no route here is asked of the primary. */
   relay?(request: PluginHttpRelayRequest): Promise<PluginHttpRelayResponse>
+  /**
+   * The leader: a request no route of the plugin's server half answers goes to the plugin's
+   * job that serves routes, when it has one (core/plugin-jobs/serve.ts). Never with `relay`:
+   * on a replica the primary decides.
+   */
+  jobs?: {
+    serves(pluginId: string): boolean
+    forward(request: PluginHttpRelayRequest): Promise<PluginHttpRelayResponse>
+  }
   /**
    * Whether a plugin with no routes right now is on its way up (the boot load, a reload): its name
    * when it is, so the answer can say who. Such a request is answered 503 `plugin_starting` with a
@@ -27,11 +38,13 @@ function pluginBodyParser(
   registry: IntegrationRegistry,
   cloudMode: boolean,
   pluginIdOf: (request: Request) => string | undefined,
+  servesFromJob?: (pluginId: string) => boolean,
 ): RequestHandler {
   const raw = express.raw({ type: '*/*', limit: '15mb' })
   return (request, response, next) => {
     const pluginId = pluginIdOf(request)
-    if (cloudMode || (pluginId !== undefined && registry.get(pluginId)?.apiVersion === 1)) {
+    // A plugin whose job serves routes gets raw bytes too, also while its server half is not loaded.
+    if (cloudMode || (pluginId !== undefined && (registry.get(pluginId)?.apiVersion === 1 || servesFromJob?.(pluginId)))) {
       raw(request, response, next)
       return
     }
@@ -42,11 +55,12 @@ function pluginBodyParser(
 export function createPluginBodyParser(
   registry: IntegrationRegistry,
   cloudMode: boolean,
+  servesFromJob?: (pluginId: string) => boolean,
 ): RequestHandler {
   return pluginBodyParser(registry, cloudMode, (request) => {
     const rawPluginId = request.params.pluginId
     return Array.isArray(rawPluginId) ? rawPluginId[0] : rawPluginId
-  })
+  }, servesFromJob)
 }
 
 /**
@@ -71,6 +85,13 @@ function requestHeaders(request: Request): Record<string, string> {
       return [[name, Array.isArray(value) ? value.join(', ') : String(value)]]
     }),
   )
+}
+
+/** An error that says its own HTTP answer: a relay's refusal, or a job route's (with its Retry-After). */
+function httpErrorOf(error: unknown): { status: number; message: string; retryAfterS?: number } | null {
+  if (error instanceof JobRouteError) return { status: error.status, message: error.message, ...(error.retryAfterS ? { retryAfterS: error.retryAfterS } : {}) }
+  if (error instanceof PluginRuntimeRelayError) return { status: error.status, message: error.message }
+  return null
 }
 
 function requestBody(request: Request): Buffer {
@@ -105,11 +126,37 @@ export function createPluginRouteDispatcher(
     // `__local__` reached a plugin as local), as the bridge relay does.
     const origin = requestOrigin(req)
     req.headers[ORIGIN_HEADER] = origin
+    const forward = async (send: (request: PluginHttpRelayRequest) => Promise<PluginHttpRelayResponse>) => {
+      try {
+        const response = await send({
+          pluginId,
+          method: req.method,
+          path: req.url.startsWith('/') ? req.url : `/${req.url}`,
+          headers: requestHeaders(req),
+          body: requestBody(req),
+        })
+        res.status(response.status)
+        for (const [name, value] of Object.entries(response.headers)) res.setHeader(name, value)
+        res.send(response.body)
+      } catch (error) {
+        const http = httpErrorOf(error)
+        if (!http) { next(error); return }
+        if (http.retryAfterS) res.set('Retry-After', String(http.retryAfterS))
+        res.status(http.status).json({ error: http.message })
+      }
+    }
+    // The leader: what the server half does not answer, the plugin's serving job may.
+    const jobsFor = () => (!options.relay && options.jobs?.serves(pluginId) ? options.jobs : undefined)
     if (router) {
-      withCallerOrigin(origin, () => router(req, res, next))
+      withCallerOrigin(origin, () => router(req, res, (error?: unknown) => {
+        const jobs = error ? undefined : jobsFor()
+        if (!jobs) { next(error); return }
+        void forward((r) => jobs.forward(r))
+      }))
       return
     }
     if (!options.relay) {
+      // A server half on its way up comes first: one of its own routes may be what was asked.
       const starting = options.starting?.(pluginId)
       if (starting) {
         res.status(503).set('Retry-After', String(PLUGIN_STARTING_RETRY_AFTER_S)).json({
@@ -118,27 +165,16 @@ export function createPluginRouteDispatcher(
         })
         return
       }
+      const jobs = jobsFor()
+      if (jobs) {
+        await forward((r) => jobs.forward(r))
+        return
+      }
       next()
       return
     }
-    try {
-      const response = await options.relay({
-        pluginId,
-        method: req.method,
-        path: req.url.startsWith('/') ? req.url : `/${req.url}`,
-        headers: requestHeaders(req),
-        body: requestBody(req),
-      })
-      res.status(response.status)
-      for (const [name, value] of Object.entries(response.headers)) res.setHeader(name, value)
-      res.send(response.body)
-    } catch (error) {
-      if (error instanceof PluginRuntimeRelayError) {
-        res.status(error.status).json({ error: error.message })
-        return
-      }
-      next(error)
-    }
+    const relay = options.relay
+    await forward((r) => relay(r))
   }) as RequestHandler)
 
   return dispatcher

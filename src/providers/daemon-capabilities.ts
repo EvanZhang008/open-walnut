@@ -1138,6 +1138,16 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // leader.configure named `home` only; not bridge-reachable, not for followers. Both twins
   // (the cores are text-injected). Optional: without it the Mac sends no jobs to that machine.
   'plugin-jobs-v1',
+  // 'plugin-jobs-serve-v1' (plugin-jobs-core.ts http, plugin-job-door.ts): a long-running job whose
+  // spec says `serves` gets a unix socket of its own run (0600, its dir 0700; a short per-run path
+  // under the jobs dir when the run dir's is past 100 bytes), where its walnut.http.route handlers
+  // answer; `jobs.http {home, plugin, method, path, headers, size, data}` forwards one request to the
+  // LIVE run of that plugin's serving job for that home and answers `{status, headers, size, data}`:
+  // bodies at most 2 MB, headers 64 KB, 12 s, 8 at once per run; a refusal's `errorKind` says why
+  // (not_serving, not_running, not_ready, busy, timeout, too_large, ...). The same trusted leader
+  // socket as 'plugin-jobs-v1'. Both twins (the door is text-injected). Optional: without it the Mac
+  // sends no serving job to that machine and answers the plugin's job routes 503.
+  'plugin-jobs-serve-v1',
   // 'walnut-mcp-v1' (walnut-mcp-stdio.ts): this daemon's `walnut` serves `walnut mcp-server`,
   // Walnut's ops as an MCP stdio server relayed through this gateway socket, and the server
   // mounts it into a new Claude Code session on this host (core/sessions/walnut-mcp-mount.ts).
