@@ -1,8 +1,8 @@
 /**
  * Phone startup through a tunnel with 150 ms of latency (spec 5.1; C48, C49).
  *
- * A browser on another device is the fake tunnel of browser-access-tunnel
- * .spec.ts: a loopback proxy Walnut does not trust. The phone signs in once
+ * A browser on another device is the fake tunnel of sign-in-state.ts: a
+ * loopback proxy Walnut does not trust. The phone signs in once
  * with a `#pair=` code (the token lands in localStorage), then every request
  * waits 150 ms before it continues. Measured per run:
  *
@@ -34,52 +34,18 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { test, expect, devices, type Browser, type BrowserContext, type Page } from '@playwright/test'
-import { putExactSection } from './config-section-helpers'
+import { endServerTunnel, mintBrowserCode, startServerTunnel } from './sign-in-state'
 import { presetReturningFolds } from './status-section-helpers'
 
 test.setTimeout(600_000)
 test.describe.configure({ mode: 'serial' })
 
-const WORK = '/tmp/mobile-web/boot-latency'
 const OUT = '/tmp/mobile-web/boot-latency.json'
-const FAKE_TUNNEL = `${WORK}/fake-tunnel.cjs`
 const RUNS = Number(process.env.BOOT_RUNS ?? 5)
 const LATENCY_MS = 150
 const LABEL = process.env.BOOT_LABEL ?? 'candidate'
 // Routines, the day agenda's events, the scratchpad (the global notes page).
 const DESKTOP_ONLY = [/\/api\/routines/, /\/api\/calendar\/events/, /\/api\/notes\/global/]
-
-const FAKE_TUNNEL_SOURCE = `
-const http = require('node:http')
-const net = require('node:net')
-const walnutPort = Number(process.argv[2])
-const pagePort = Number(process.argv[3])
-const toWalnut = (url) => url.startsWith('/api') || url.startsWith('/ws')
-const server = http.createServer((req, res) => {
-  const up = http.request({ host: '127.0.0.1', port: toWalnut(req.url) ? walnutPort : pagePort, method: req.method, path: req.url, headers: req.headers }, (r) => {
-    res.writeHead(r.statusCode, r.headers)
-    r.pipe(res)
-  })
-  up.on('error', () => { res.statusCode = 502; res.end() })
-  req.pipe(up)
-})
-server.on('upgrade', (req, socket, head) => {
-  const up = net.connect(toWalnut(req.url) ? walnutPort : pagePort, '127.0.0.1', () => {
-    let raw = req.method + ' ' + req.url + ' HTTP/1.1\\r\\n'
-    for (let i = 0; i < req.rawHeaders.length; i += 2) raw += req.rawHeaders[i] + ': ' + req.rawHeaders[i + 1] + '\\r\\n'
-    up.write(raw + '\\r\\n')
-    if (head.length) up.write(head)
-    socket.pipe(up).pipe(socket)
-  })
-  up.on('error', () => socket.destroy())
-  socket.on('error', () => up.destroy())
-})
-server.listen(0, '127.0.0.1', () => {
-  console.log('Public: http://127.0.0.1:' + server.address().port)
-  setTimeout(() => console.log('Connected! Forwarding requests'), 300)
-})
-process.on('SIGTERM', () => process.exit(0))
-`
 
 function phoneDevice() {
   const { defaultBrowserType: _engine, ...iphone } = devices['iPhone 15']
@@ -177,32 +143,9 @@ function record(label: string, data: Record<string, unknown>): { build?: string;
   return base
 }
 
-async function startTunnel(page: Page, baseURL: string | undefined): Promise<string> {
-  mkdirSync(WORK, { recursive: true })
-  writeFileSync(FAKE_TUNNEL, FAKE_TUNNEL_SOURCE)
-  const pagePort = new URL(baseURL ?? 'http://localhost:3457').port || '80'
-  const put = await page.request.put('/api/config', { data: { expose: {
-    enabled: false, provider: 'command',
-    command: { command: process.execPath, args: [FAKE_TUNNEL, '{port}', pagePort], url_pattern: 'http://127\\.0\\.0\\.1:\\d+', ready_pattern: 'connected!' },
-  } } })
-  expect(put.ok()).toBe(true)
-  const on = await page.request.put('/api/expose', { data: { enabled: true } })
-  expect(on.ok(), await on.text()).toBe(true)
-  let url = ''
-  await expect.poll(async () => {
-    // GET /api/expose answers { status: ExposeStatus, providers, settings }.
-    const s = await (await page.request.get('/api/expose')).json() as { status?: { state?: string; url?: string } }
-    url = s.status?.state === 'connected' ? s.status.url ?? '' : ''
-    return url
-  }, { timeout: 60_000 }).toMatch(/^http:\/\/127\.0\.0\.1:\d+/)
-  return url.replace(/\/$/, '')
-}
-
 /** A phone that signed in through the tunnel once: its storage, to start contexts from. */
 async function signedInPhone(browser: Browser, page: Page, tunnelUrl: string): Promise<Awaited<ReturnType<BrowserContext['storageState']>>> {
-  const res = await page.request.post('/api/devices/browser-code')
-  expect(res.ok()).toBe(true)
-  const { code } = await res.json() as { code: string }
+  const { code } = await mintBrowserCode(page.request)
   const ctx = await browser.newContext(phoneDevice())
   // Its first visit would store the first-use folds (every region folded, first-visit-folds.ts)
   // once the board's first load is in, and the runs start from this storage: it visits as the
@@ -217,7 +160,7 @@ async function signedInPhone(browser: Browser, page: Page, tunnelUrl: string): P
 }
 
 test('boot through a 150 ms tunnel: cold and warm, 5 runs each (C48), no desktop-only fetch (C49)', async ({ page, browser, baseURL }) => {
-  const tunnelUrl = await startTunnel(page, baseURL)
+  const tunnelUrl = await startServerTunnel(page.request, baseURL)
   try {
     const storageState = await signedInPhone(browser, page, tunnelUrl)
     const cold: Run[] = []
@@ -258,7 +201,6 @@ test('boot through a 150 ms tunnel: cold and warm, 5 runs each (C48), no desktop
       expect(r.nBefore, 'the API requests before the first row were recorded').toBeGreaterThan(0)
     }
   } finally {
-    await page.request.put('/api/expose', { data: { enabled: false } }).catch(() => undefined)
-    await putExactSection(page.request, 'expose', {}).catch(() => undefined)
+    await endServerTunnel(page.request)
   }
 })

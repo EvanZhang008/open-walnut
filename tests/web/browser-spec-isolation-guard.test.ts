@@ -18,10 +18,18 @@
  *    the drawing and Latest update specs timed out on the "+" button and the narrow header
  *    spec measured a squeezed "wide" column. Every file that opens a side bar (Agenda,
  *    Scratchpad, Routines) keeps it to its own page with isolateUiPrefs.
+ * 4. Two specs moved the server's one tunnel under each other's phones (2026-11-18):
+ *    phone-settings turned the tunnel on again (a new address) and off while
+ *    browser-access-tunnel's phones were open through it, so its removed-phone test reloaded
+ *    into ERR_CONNECTION_REFUSED and phone-settings C75 timed out; each also took "the newest
+ *    browser" as its own phone. Every file that drives the tunnel or signs a browser in does
+ *    it through sign-in-state.ts, whose calls put it in the one-at-a-time sign-in group
+ *    (one-at-a-time-specs.ts), and names its phone by its own sign-in.
  */
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
+import { SIGN_IN_CALL } from '../e2e/browser/one-at-a-time-specs'
 
 const DIR = path.resolve(import.meta.dirname, '../e2e/browser')
 const specs = fs.readdirSync(DIR).filter((f) => f.endsWith('.spec.ts'))
@@ -67,5 +75,18 @@ describe('browser specs keep out of each other\'s data', () => {
     expect(opens.length).toBeGreaterThan(10)
     const missing = opens.filter((f) => !/isolateUiPrefs\(|\/api\/ui-prefs/.test(read(f)))
     expect(missing, 'call isolateUiPrefs(page) before the page opens Home').toEqual([])
+  })
+
+  it('a file that drives the tunnel or signs a browser in does it through sign-in-state', () => {
+    // A direct write of the server's tunnel (config.yaml's expose, PUT /api/expose) or of its
+    // browser sign-ins (a code, a code traded, a browser record made or removed).
+    const WRITES = /\.(?:put|post)\(\s*[`'"]\/api\/(?:expose|devices\/browser-code|v1\/browser-pair)\b|\.delete\(\s*[`'"]\/api\/devices\/|\bready_pattern\b|putExactSection\([^)]*['"]expose['"]|name:\s*`browser-/
+    expect(WRITES.test(read('sign-in-state.ts')), 'the pattern still finds the helper\'s own writes').toBe(true)
+    // A spec that writes it must call the helpers, so playwright.config.ts puts it in the group.
+    const writers = specs.filter((f) => WRITES.test(read(f)) && !SIGN_IN_CALL.test(read(f)))
+    expect(writers, 'drive the tunnel and sign browsers in with tests/e2e/browser/sign-in-state.ts').toEqual([])
+    // The group is found in spec files only: a shared helper that writes it would take its callers out.
+    const helpers = sources.filter((f) => !f.endsWith('.spec.ts') && f !== 'sign-in-state.ts' && (WRITES.test(read(f)) || SIGN_IN_CALL.test(read(f))))
+    expect(helpers, 'call sign-in-state.ts from the spec itself').toEqual([])
   })
 })

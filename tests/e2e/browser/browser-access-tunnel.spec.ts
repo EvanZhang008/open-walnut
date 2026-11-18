@@ -2,12 +2,13 @@
  * Settings → Phones & Cloud → Open from a browser, and a browser signing in
  * through the tunnel (docs/plan/walnut-servers-everywhere.md, "Exposure").
  *
- * The built-in `command` provider runs a fake tunnel this spec writes: an HTTP
- * proxy on its own loopback port that sends /api and /ws to Walnut's tunnel
+ * The built-in `command` provider runs the fake tunnel of sign-in-state.ts: an
+ * HTTP proxy on its own loopback port that sends /api and /ws to Walnut's tunnel
  * port and everything else to the fixture's page server, adding no proxy
  * header (the shape of `ssh -R`). It prints its address first and "Connected!"
  * a moment later, like the real CLI. A page opened at that address is a browser
- * on another device: Walnut must not trust it.
+ * on another device: Walnut must not trust it. The server has one tunnel, so this
+ * spec runs one at a time with the others that drive it (one-at-a-time-specs.ts).
  *
  *   1. turn it on: the phone link (address + one-time code) shows by itself
  *   2. through the tunnel: the notice asks for a code; a wrong one says why; the
@@ -25,70 +26,18 @@
  * what the person does. Runs in both engines: WebKit with
  * `PW_WEBKIT=1 ... --project=webkit`.
  */
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
 import { test, expect, devices, type Browser, type Locator, type Page } from '@playwright/test'
 import { backToDevices, openWay } from './devices-ways-helpers'
 import { browserKindFromUserAgent } from '../../../src/core/browser-kind'
 import { expectQrEncodes } from './phone-link-qr-check'
-import { putExactSection } from './config-section-helpers'
+import { endServerTunnel, mintBrowserCode, settleSignedIn, signInWithCode, useServerTunnel } from './sign-in-state'
 import { LEAN_SIGNATURE } from '../../../src/lib/ws-lean-protocol'
 
 test.setTimeout(180_000)
 
 const SHOTS = '/tmp/browser-access'
-const WORK = '/tmp/browser-access/fixture'
-const FAKE_TUNNEL = `${WORK}/fake-tunnel.cjs`
-
-const FAKE_TUNNEL_SOURCE = `
-const http = require('node:http')
-const net = require('node:net')
-const walnutPort = Number(process.argv[2])
-const pagePort = Number(process.argv[3])
-const toWalnut = (url) => url.startsWith('/api') || url.startsWith('/ws')
-const server = http.createServer((req, res) => {
-  const up = http.request({ host: '127.0.0.1', port: toWalnut(req.url) ? walnutPort : pagePort, method: req.method, path: req.url, headers: req.headers }, (r) => {
-    res.writeHead(r.statusCode, r.headers)
-    r.pipe(res)
-  })
-  up.on('error', () => { res.statusCode = 502; res.end() })
-  req.pipe(up)
-})
-server.on('upgrade', (req, socket, head) => {
-  const up = net.connect(toWalnut(req.url) ? walnutPort : pagePort, '127.0.0.1', () => {
-    let raw = req.method + ' ' + req.url + ' HTTP/1.1\\r\\n'
-    for (let i = 0; i < req.rawHeaders.length; i += 2) raw += req.rawHeaders[i] + ': ' + req.rawHeaders[i + 1] + '\\r\\n'
-    up.write(raw + '\\r\\n')
-    if (head.length) up.write(head)
-    socket.pipe(up).pipe(socket)
-  })
-  up.on('error', () => socket.destroy())
-  socket.on('error', () => up.destroy())
-})
-server.listen(0, '127.0.0.1', () => {
-  console.log('Public: http://127.0.0.1:' + server.address().port)
-  setTimeout(() => console.log('Connected! Forwarding requests'), 300)
-})
-process.on('SIGTERM', () => process.exit(0))
-`
-
-function pagePort(baseURL: string | undefined): string {
-  return new URL(baseURL ?? 'http://localhost:3457').port || '80'
-}
-
-async function putConfig(page: Page, partial: Record<string, unknown>) {
-  const res = await page.request.put('/api/config', { data: partial })
-  expect(res.ok()).toBe(true)
-}
-
-async function useFakeTunnel(page: Page, baseURL: string | undefined, command = process.execPath) {
-  await putConfig(page, {
-    expose: {
-      enabled: false,
-      provider: 'command',
-      command: { command, args: [FAKE_TUNNEL, '{port}', pagePort(baseURL)], url_pattern: 'http://127\\.0\\.0\\.1:\\d+', ready_pattern: 'connected!' },
-    },
-  })
-}
+const MISSING_TUNNEL = '/tmp/browser-access/fixture/no-such-tunnel'
 
 async function openDevices(page: Page) {
   await page.goto('/')
@@ -169,51 +118,20 @@ async function tapAtEnd(input: Locator) {
   await expect(input).toBeFocused()
 }
 
-/**
- * The server rate-limits refused tokens per address (10 a minute), and every
- * tunnel client shares the tunnel's address: right after another test's
- * refusals, a fresh sign-in is answered 429 until the minute is over. Wait
- * that out, then start the console again with nothing failed.
- */
-async function settleSignedIn(phone: Page) {
-  let limited = false
-  await expect.poll(async () => {
-    const status = await phone.evaluate(async () => (await fetch('/api/tasks', { cache: 'no-store' })).status).catch(() => 0)
-    if (status === 429) limited = true
-    return status
-  }, { timeout: 90_000, intervals: [3_000] }).toBe(200)
-  if (limited) {
-    await phone.reload()
-    await expect(phone.locator('.app-shell').first()).toBeVisible({ timeout: 60_000 })
-  }
-}
-
-async function mintCode(page: Page): Promise<{ code: string; link?: string }> {
-  const res = await page.request.post('/api/devices/browser-code')
-  expect(res.ok()).toBe(true)
-  return res.json()
-}
-
 test.describe('Open from a browser', () => {
   // One fixture server, one tunnel: these tests take turns.
   test.describe.configure({ mode: 'serial' })
   let tunnelUrl = ''
   let link = ''
 
-  test.beforeAll(() => {
-    mkdirSync(WORK, { recursive: true })
-    writeFileSync(FAKE_TUNNEL, FAKE_TUNNEL_SOURCE)
-  })
-
   test.afterAll(async ({ browser }) => {
     const context = await browser.newContext({ baseURL: test.info().project.use.baseURL })
-    await putExactSection(context.request, 'expose', {}).catch(() => {})
-    await context.request.put('/api/expose', { data: { enabled: false } }).catch(() => {})
+    await endServerTunnel(context.request)
     await context.close()
   })
 
   test('turn it on: the phone link shows by itself', async ({ page, baseURL }) => {
-    await useFakeTunnel(page, baseURL)
+    await useServerTunnel(page.request, baseURL)
     const group = await openDevices(page)
     const state = page.getByTestId('browser-access-state')
     await expect(state).toContainText('Runs Custom command while Walnut runs')
@@ -267,7 +185,7 @@ test.describe('Open from a browser', () => {
     await input.press('Backspace')
     await expect(phone.getByTestId('unpaired-code-error')).toHaveCount(0)
 
-    const { code } = await mintCode(page)
+    const { code } = await mintBrowserCode(page.request)
     await input.fill(code.toLowerCase())
     await phone.getByTestId('unpaired-code-submit').click()
     // The page reloads with its new token: no notice, the board answers.
@@ -357,9 +275,7 @@ test.describe('Open from a browser', () => {
     await phone.goto(tunnelUrl)
     await say('A phone opens Walnut through the tunnel: not signed in yet')
     await expect(phone.getByTestId('unpaired-notice')).toBeVisible({ timeout: 30_000 })
-    await phone.getByTestId('unpaired-code-input').fill((await mintCode(page)).code)
-    await phone.getByTestId('unpaired-code-submit').click()
-    await expect(phone.getByTestId('unpaired-notice')).toBeHidden({ timeout: 30_000 })
+    await signInWithCode(phone, (await mintBrowserCode(page.request)).code)
     await settleSignedIn(phone)
     const stored = () => phone.evaluate(() => ({ token: localStorage.getItem('walnut.deviceToken'), until: Number(localStorage.getItem('walnut.deviceTokenUntil')) })).catch(() => ({ token: null, until: 0 }))
     const first = await stored()
@@ -451,9 +367,7 @@ test.describe('Open from a browser', () => {
     const phone = await context.newPage()
     await phone.goto(tunnelUrl)
     await expect(phone.getByTestId('unpaired-notice')).toBeVisible({ timeout: 30_000 })
-    await phone.getByTestId('unpaired-code-input').fill((await mintCode(page)).code)
-    await phone.getByTestId('unpaired-code-submit').click()
-    await expect(phone.getByTestId('unpaired-notice')).toBeHidden({ timeout: 30_000 })
+    await signInWithCode(phone, (await mintBrowserCode(page.request)).code)
     await settleSignedIn(phone)
     const own = (await context.cookies(`${tunnelUrl}/api/auth/browser/refresh`)).find((c) => c.name.startsWith('walnut_refresh'))!
     await context.clearCookies({ name: own.name })
@@ -501,15 +415,8 @@ test.describe('Open from a browser', () => {
     const phone = await tunnelPage(browser)
     await phone.goto(tunnelUrl)
     await expect(phone.getByTestId('unpaired-notice')).toBeVisible({ timeout: 30_000 })
-    const { code } = await mintCode(page)
-    await phone.getByTestId('unpaired-code-input').fill(code)
-    await phone.getByTestId('unpaired-code-submit').click()
-    await expect(phone.getByTestId('unpaired-notice')).toBeHidden({ timeout: 30_000 })
-
-    // The newest browser entry is this one.
-    const listed = await (await page.request.get('/api/devices')).json() as { devices: Array<{ name: string; createdAt: string; role?: string }> }
-    const mine = listed.devices.filter((d) => d.role === 'browser').sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]!
-    expect(mine.name).toMatch(/^browser-[0-9a-f]{6}$/)
+    // This browser's own sign-in names its row.
+    const mine = { name: await signInWithCode(phone, (await mintBrowserCode(page.request)).code) }
 
     await openDevices(page)
     // The Browser link tab lists it under its own settings, and All devices lists it too.
@@ -547,14 +454,10 @@ test.describe('Open from a browser', () => {
     const phone = await context.newPage()
     await phone.goto(tunnelUrl)
     await expect(phone.getByTestId('unpaired-notice')).toBeVisible({ timeout: 30_000 })
-    const { code } = await mintCode(page)
-    await phone.getByTestId('unpaired-code-input').fill(code.toLowerCase())
-    await phone.getByTestId('unpaired-code-submit').click()
-    await expect(phone.getByTestId('unpaired-notice')).toBeHidden({ timeout: 30_000 })
+    const { code } = await mintBrowserCode(page.request)
+    const mine = await signInWithCode(phone, code.toLowerCase())
     await settleSignedIn(phone)
-    const listed = await (await page.request.get('/api/devices')).json() as { devices: Array<{ name: string; createdAt: string; role?: string }> }
-    const mine = listed.devices.filter((d) => d.role === 'browser').sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]!
-    expect((await page.request.delete(`/api/devices/${encodeURIComponent(mine.name)}`)).ok()).toBe(true)
+    expect((await page.request.delete(`/api/devices/${encodeURIComponent(mine)}`)).ok()).toBe(true)
 
     await phone.reload()
     const notice = phone.getByTestId('unpaired-notice')
@@ -579,9 +482,7 @@ test.describe('Open from a browser', () => {
       const phone = await context.newPage()
       await phone.goto(tunnelUrl)
       await expect(phone.getByTestId('unpaired-notice')).toBeVisible({ timeout: 30_000 })
-      await phone.getByTestId('unpaired-code-input').fill((await mintCode(page)).code)
-      await phone.getByTestId('unpaired-code-submit').click()
-      await expect(phone.getByTestId('unpaired-notice')).toBeHidden({ timeout: 30_000 })
+      await signInWithCode(phone, (await mintBrowserCode(page.request)).code)
       await settleSignedIn(phone)
       phones.push(phone)
     }
@@ -643,11 +544,9 @@ test.describe('Open from a browser', () => {
     const phone = await context.newPage()
     await phone.goto(tunnelUrl)
     await expect(phone.getByTestId('unpaired-notice')).toBeVisible({ timeout: 30_000 })
-    await phone.getByTestId('unpaired-code-input').fill((await mintCode(page)).code)
-    await phone.getByTestId('unpaired-code-submit').click()
-    await expect(phone.getByTestId('unpaired-notice')).toBeHidden({ timeout: 30_000 })
-    const listed = await (await page.request.get('/api/devices')).json() as { devices: Array<{ name: string; createdAt: string; role?: string; info?: { deviceName?: string } }> }
-    const mine = listed.devices.filter((d) => d.role === 'browser').sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]!
+    const name = await signInWithCode(phone, (await mintBrowserCode(page.request)).code)
+    const listed = await (await page.request.get('/api/devices')).json() as { devices: Array<{ name: string; info?: { deviceName?: string } }> }
+    const mine = listed.devices.find((d) => d.name === name)!
     // " 2" when an earlier run on the same fixture signed one in too (numberedDeviceName).
     expect(mine.info?.deviceName).toMatch(/^iPhone Home Screen( \d+)?$/)
     await openDevices(page)
@@ -670,12 +569,12 @@ test.describe('Open from a browser', () => {
   })
 
   test('a command that is not installed says so, with Retry', async ({ page, baseURL }) => {
-    await useFakeTunnel(page, baseURL, `${WORK}/no-such-tunnel`)
+    await useServerTunnel(page.request, baseURL, MISSING_TUNNEL)
     const group = await openDevices(page)
     await page.getByTestId('browser-access-enabled').click()
     const state = page.getByTestId('browser-access-state')
     // No "here" (src/core/expose/supervisor.ts): a host's report is read on this computer too.
-    await expect(state).toContainText(`Custom command is not installed (${WORK}/no-such-tunnel not found)`, { timeout: 30_000 })
+    await expect(state).toContainText(`Custom command is not installed (${MISSING_TUNNEL} not found)`, { timeout: 30_000 })
     await expect(state).toHaveAttribute('data-state', 'missing')
     await expect(page.getByTestId('browser-access-retry')).toBeVisible()
     await shot(page, '7-missing', group)

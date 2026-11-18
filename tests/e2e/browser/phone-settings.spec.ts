@@ -4,63 +4,28 @@
  *
  *   the computer's own browser (the fixture trusts it): list, pane, back,
  *     rows stacked, the Open on your phone row still offered
- *   a phone through a tunnel (a loopback proxy Walnut does not trust, the
- *     pattern of browser-access-tunnel.spec.ts): no code buttons, its own row
- *     marked, no Remove on other rows, Sign out this phone
+ *   a phone through a tunnel (the fake tunnel of sign-in-state.ts, a loopback
+ *     proxy Walnut does not trust): no code buttons, its own row marked, no
+ *     Remove on other rows, Sign out this phone. The server has one tunnel, so
+ *     this spec runs one at a time with the others that drive it
+ *     (one-at-a-time-specs.ts).
  *
  * Config writes are real, on the fixture server only. Navigation is by taps;
  * page.goto only for the first load. Screenshots: /tmp/mobile-web/settings-*.png.
  */
-import { mkdirSync, writeFileSync } from 'node:fs'
 import { devices, expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test'
 import { backToDevices, openWay } from './devices-ways-helpers'
 import { findSmallTargets, findSmallText } from './phone-helpers'
 import { isolateUiPrefsContext } from './status-section-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { putExactSection } from './config-section-helpers'
+import { endServerTunnel, mintBrowserCode, settleSignedIn, signInWithCode, startServerTunnel } from './sign-in-state'
 import { clearBesideMic } from './search-mic-layout-helpers'
 
 test.setTimeout(240_000)
 
 const SHOTS = '/tmp/mobile-web'
-const WORK = '/tmp/mobile-web/settings-fixture'
-const FAKE_TUNNEL = `${WORK}/fake-tunnel.cjs`
 const PHONE = devices['iPhone 15']
 const { defaultBrowserType: _engine, ...IPHONE } = PHONE
-
-// The same fake tunnel as browser-access-tunnel.spec.ts: /api and /ws to
-// Walnut's tunnel port, the page from the fixture, no proxy header.
-const FAKE_TUNNEL_SOURCE = `
-const http = require('node:http')
-const net = require('node:net')
-const walnutPort = Number(process.argv[2])
-const pagePort = Number(process.argv[3])
-const toWalnut = (url) => url.startsWith('/api') || url.startsWith('/ws')
-const server = http.createServer((req, res) => {
-  const up = http.request({ host: '127.0.0.1', port: toWalnut(req.url) ? walnutPort : pagePort, method: req.method, path: req.url, headers: req.headers }, (r) => {
-    res.writeHead(r.statusCode, r.headers)
-    r.pipe(res)
-  })
-  up.on('error', () => { res.statusCode = 502; res.end() })
-  req.pipe(up)
-})
-server.on('upgrade', (req, socket, head) => {
-  const up = net.connect(toWalnut(req.url) ? walnutPort : pagePort, '127.0.0.1', () => {
-    let raw = req.method + ' ' + req.url + ' HTTP/1.1\\r\\n'
-    for (let i = 0; i < req.rawHeaders.length; i += 2) raw += req.rawHeaders[i] + ': ' + req.rawHeaders[i + 1] + '\\r\\n'
-    up.write(raw + '\\r\\n')
-    if (head.length) up.write(head)
-    socket.pipe(up).pipe(socket)
-  })
-  up.on('error', () => socket.destroy())
-  socket.on('error', () => up.destroy())
-})
-server.listen(0, '127.0.0.1', () => {
-  console.log('Public: http://127.0.0.1:' + server.address().port)
-  setTimeout(() => console.log('Connected! Forwarding requests'), 300)
-})
-process.on('SIGTERM', () => process.exit(0))
-`
 
 async function shot(page: Page, name: string) {
   const engine = page.context().browser()?.browserType().name() ?? 'browser'
@@ -92,37 +57,6 @@ async function openPane(page: Page, testId: string, name: string) {
   await expect(page.locator('.settings-layout[data-phone-settings="pane"]')).toBeVisible({ timeout: 30_000 })
   await expect(topbar(page)).toContainText(name)
   await expect(topbar(page).getByRole('button', { name: 'Back' })).toBeVisible()
-}
-
-/**
- * The server rate-limits refused tokens per address (10 a minute), and every
- * tunnel client shares the tunnel's address: right after another test's
- * refusals, a fresh sign-in is answered 429 until the minute is over. Wait
- * that out, then start the console again with nothing failed.
- */
-async function settleSignedIn(phone: Page) {
-  let limited = false
-  await expect.poll(async () => {
-    const status = await phone.evaluate(async () => (await fetch('/api/tasks', { cache: 'no-store' })).status).catch(() => 0)
-    if (status === 429) limited = true
-    return status
-  }, { timeout: 90_000, intervals: [3_000] }).toBe(200)
-  if (limited) {
-    await phone.reload()
-    await expect(phone.locator('.app-shell').first()).toBeVisible({ timeout: 60_000 })
-  }
-}
-
-async function mintCode(page: Page): Promise<string> {
-  const res = await page.request.post('/api/devices/browser-code')
-  expect(res.ok()).toBe(true)
-  return ((await res.json()) as { code: string }).code
-}
-
-/** The newest browser sign-in on the fixture: the one this test just made. */
-async function newestBrowser(page: Page): Promise<string> {
-  const listed = await (await page.request.get('/api/devices')).json() as { devices: Array<{ name: string; createdAt: string; role?: string }> }
-  return listed.devices.filter((d) => d.role === 'browser').sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]!.name
 }
 
 /**
@@ -310,31 +244,15 @@ test.describe('a phone signed in through a tunnel', () => {
   let tunnelUrl = ''
 
   test.beforeAll(async ({ browser }) => {
-    mkdirSync(WORK, { recursive: true })
-    writeFileSync(FAKE_TUNNEL, FAKE_TUNNEL_SOURCE)
     const baseURL = test.info().project.use.baseURL
     const context = await browser.newContext({ baseURL })
-    const pagePort = new URL(baseURL ?? 'http://localhost:3457').port || '80'
-    const put = await context.request.put('/api/config', { data: { expose: {
-      enabled: false,
-      provider: 'command',
-      command: { command: process.execPath, args: [FAKE_TUNNEL, '{port}', pagePort], url_pattern: 'http://127\\.0\\.0\\.1:\\d+', ready_pattern: 'connected!' },
-    } } })
-    expect(put.ok()).toBe(true)
-    expect((await context.request.put('/api/expose', { data: { enabled: true, provider: 'command' } })).ok()).toBe(true)
-    await expect.poll(async () => {
-      const body = await (await context.request.get('/api/expose')).json() as { status?: { state?: string; url?: string } }
-      return body.status?.state === 'connected' ? body.status.url ?? '' : ''
-    }, { timeout: 60_000 }).toMatch(/^http:\/\/127\.0\.0\.1:\d+/)
-    const body = await (await context.request.get('/api/expose')).json() as { status: { url: string } }
-    tunnelUrl = body.status.url.replace(/\/+$/, '')
+    tunnelUrl = await startServerTunnel(context.request, baseURL)
     await context.close()
   })
 
   test.afterAll(async ({ browser }) => {
     const context = await browser.newContext({ baseURL: test.info().project.use.baseURL })
-    await context.request.put('/api/expose', { data: { enabled: false } }).catch(() => {})
-    await putExactSection(context.request, 'expose', {}).catch(() => {})
+    await endServerTunnel(context.request)
     await context.close()
   })
 
@@ -345,18 +263,16 @@ test.describe('a phone signed in through a tunnel', () => {
     const phone = await context.newPage()
     await phone.goto(tunnelUrl)
     await expect(phone.getByTestId('unpaired-notice')).toBeVisible({ timeout: 60_000 })
-    await phone.getByTestId('unpaired-code-input').fill((await mintCode(page)).toLowerCase())
-    await phone.getByTestId('unpaired-code-submit').click()
-    await expect(phone.getByTestId('unpaired-notice')).toHaveCount(0, { timeout: 60_000 })
+    // Its own sign-in names it: another browser may have signed in since.
+    const name = await signInWithCode(phone, (await mintBrowserCode(page.request)).code.toLowerCase(), 60_000)
     await settleSignedIn(phone)
-    const name = await newestBrowser(page)
     await meNamesDevice(context, name)
     return { phone, context, name }
   }
 
   test('C39 C74: no code buttons, its own row first and marked, no Remove on the others', async ({ page, browser }) => {
     // Another browser signed in, so the list has a row that is not this phone.
-    const other = await page.request.post('/api/v1/browser-pair', { data: { code: await mintCode(page) } })
+    const other = await page.request.post('/api/v1/browser-pair', { data: { code: (await mintBrowserCode(page.request)).code } })
     expect(other.ok()).toBe(true)
     const { phone, context, name } = await signedInPhone(browser, page)
     await openSettings(phone)

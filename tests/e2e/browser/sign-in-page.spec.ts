@@ -14,6 +14,7 @@ import fs from 'node:fs/promises'
 import { devices, expect, test, type Locator, type Page, type Route } from '@playwright/test'
 import { withCssColor } from './css-color'
 import { serveProductionBundle } from './production-bundle'
+import { mintBrowserCode } from './sign-in-state'
 
 const SHOTS = '/tmp/mobile-web'
 const PHONE = devices['iPhone 15']
@@ -65,9 +66,7 @@ async function tapAtEnd(input: Locator) {
 }
 
 async function mintCode(page: Page): Promise<string> {
-  const res = await page.request.post('/api/devices/browser-code')
-  expect(res.ok()).toBe(true)
-  return ((await res.json()) as { code: string }).code
+  return (await mintBrowserCode(page.request)).code
 }
 
 /** Hold the code exchange for `ms`, then let it through (or run `then`). */

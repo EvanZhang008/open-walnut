@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { testMatchNames } from '../e2e/browser/side-config-specs'
+import { HOST_FIXTURE_CALL, SIGN_IN_CALL } from '../e2e/browser/one-at-a-time-specs'
 
 const DIR = path.resolve(__dirname, '../e2e/browser')
 const sources = fs.readdirSync(DIR)
@@ -265,18 +266,30 @@ describe('specs with their own config', () => {
   })
 })
 
-describe('specs that swap the server host fixture', () => {
-  // The fixture server has one host fixture for every worker: two of these specs at once
-  // read each other's hosts. chromium-host-fixture ran them one at a time, the webkit
-  // project did not (2026-11-06: banner-placement-bell BP-C49 and BP-C68 failed on every
-  // commit on WebKit with 2 workers, and passed alone). Every project of every browser
-  // either leaves them out or runs them with one worker, and each browser runs them.
-  const FIXTURE_CALL = /\b(?:loadFixture|hostFixture|resetServerHostFixture)\(/
-  const fixtureSpecs = sources.filter(({ file, text }) => file.endsWith('.spec.ts') && FIXTURE_CALL.test(text)).map(({ file }) => `**/${file}`)
+describe('specs that change something the server has only one of', () => {
+  // The fixture server has one host fixture, one tunnel and one list of signed-in browsers
+  // for every worker: two specs of one group at once change it under each other.
+  // chromium-host-fixture ran the host fixture specs one at a time, the webkit project did
+  // not (2026-11-06: banner-placement-bell BP-C49 and BP-C68 failed on every commit on
+  // WebKit with 2 workers, and passed alone); browser-access-tunnel and phone-settings ran
+  // beside each other and moved the tunnel under each other's phones (2026-11-18). Every
+  // project of every browser either leaves a group out or runs that group alone with one
+  // worker, and each browser runs each group.
+  const specsOf = (call: RegExp) => sources.filter(({ file, text }) => file.endsWith('.spec.ts') && call.test(text)).map(({ file }) => `**/${file}`)
+  const hostFixture = specsOf(HOST_FIXTURE_CALL)
+  const groups: Record<string, string[]> = {
+    'host fixture': hostFixture,
+    'sign-in': specsOf(SIGN_IN_CALL).filter((s) => !hostFixture.includes(s)),
+  }
   const globs = (v: unknown): string[] => (Array.isArray(v) ? v : v === undefined ? [] : [v]).map(String)
 
+  it('no spec is in two groups', () => {
+    expect(specsOf(SIGN_IN_CALL).filter((s) => hostFixture.includes(s))).toEqual([])
+  })
+
   it('no project runs them beside other tests', async () => {
-    expect(fixtureSpecs.length).toBeGreaterThan(5)
+    expect(groups['host fixture']!.length).toBeGreaterThan(5)
+    expect(groups['sign-in']!.length).toBeGreaterThanOrEqual(4)
     const before = process.env.PW_WEBKIT
     process.env.PW_WEBKIT = '1'
     let projects: Array<{ name?: string; testMatch?: unknown; testIgnore?: unknown; workers?: number | string }>
@@ -288,17 +301,21 @@ describe('specs that swap the server host fixture', () => {
     }
     const browsers = new Set(projects.map((p) => p.name!.replace(/-host-fixture$/, '')))
     expect([...browsers].sort()).toEqual(['chromium', 'webkit'])
-    for (const p of projects) {
-      const ignored = globs(p.testIgnore)
-      const runsThem = fixtureSpecs.filter((s) => !ignored.includes(s))
-      if (runsThem.length) {
-        expect(p.workers, `${p.name} runs ${runsThem[0]} with more than one worker`).toBe(1)
-        expect(globs(p.testMatch).sort(), `${p.name} runs other specs beside them`).toEqual([...fixtureSpecs].sort())
+    for (const [group, specs] of Object.entries(groups)) {
+      for (const p of projects) {
+        const ignored = globs(p.testIgnore)
+        const matched = globs(p.testMatch)
+        const runsThem = specs.filter((s) => !ignored.includes(s) && (matched.length === 0 || matched.includes(s)))
+        if (runsThem.length) {
+          expect(p.workers, `${p.name} runs ${runsThem[0]} (${group}) with more than one worker`).toBe(1)
+          expect(matched.sort(), `${p.name} runs other specs beside the ${group} specs`).toEqual([...specs].sort())
+        }
       }
-    }
-    for (const b of browsers) {
-      const serial = projects.filter((p) => p.name!.startsWith(b) && p.workers === 1 && globs(p.testMatch).length)
-      expect(serial.length, `${b}: no project runs the host fixture specs`).toBe(1)
+      for (const b of browsers) {
+        const serial = projects.filter((p) => p.name!.startsWith(b) && p.workers === 1
+          && JSON.stringify(globs(p.testMatch).sort()) === JSON.stringify([...specs].sort()))
+        expect(serial.length, `${b}: no project runs the ${group} specs`).toBe(1)
+      }
     }
   })
 })

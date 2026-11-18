@@ -1,4 +1,3 @@
-import fs from 'node:fs'
 import path from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
 import { perRunWorkers } from './tests/e2e/browser/pw-concurrency.js'
@@ -10,6 +9,7 @@ import { VIDEO_USE, withVideoReporter } from './tests/e2e/browser/pw-video.js'
 // Linux WebKit paints on the CPU: its GL painting threads crash the page on software GL.
 import './tests/e2e/browser/pw-webkit-paint.js'
 import { sideConfigSpecs } from './tests/e2e/browser/side-config-specs.js'
+import { HOST_FIXTURE_CALL, SIGN_IN_CALL, specsCalling } from './tests/e2e/browser/one-at-a-time-specs.js'
 import { returningVisitorStorage } from './tests/e2e/browser/pw-storage.js'
 import { bunCommand } from './tests/helpers/bun-runtime.js'
 
@@ -21,16 +21,14 @@ const testPort = Number(process.env.PW_TEST_PORT ?? 3457)
 // `reuseExistingServer` silently attaches to it. See tests/e2e/browser/pw-gate.ts.
 engageGate(testPort)
 
-// Specs that swap the fixture server's one host fixture (POST /api/test/host-fixture)
-// race each other when two workers run them at once: one loads its hosts while the
-// other's test reads them (2026-10-29: banner-placement-round4 N3-2 failed 2 of 3 runs
-// beside system-attention :267). They run in their own project, one at a time, while
-// every other spec stays parallel. Found by what they call, so a new one joins itself.
-const HOST_FIXTURE_CALL = /\b(?:loadFixture|hostFixture|resetServerHostFixture)\(/
+// Specs that change something the fixture server has only one of race each other when
+// two workers run them at once (tests/e2e/browser/one-at-a-time-specs.ts): the specs that
+// swap its host fixture, and the specs that drive its tunnel or sign browsers in. Each
+// group runs in a project of its own, one at a time, while every other spec stays parallel.
+// Found by what they call, so a new one joins its group by itself.
 const browserDir = path.join(import.meta.dirname, 'tests/e2e/browser')
-const hostFixtureSpecs = fs.readdirSync(browserDir)
-  .filter((f) => f.endsWith('.spec.ts') && HOST_FIXTURE_CALL.test(fs.readFileSync(path.join(browserDir, f), 'utf8')))
-  .map((f) => `**/${f}`)
+const hostFixtureSpecs = specsCalling(browserDir, HOST_FIXTURE_CALL)
+const signInSpecs = specsCalling(browserDir, SIGN_IN_CALL).filter((s) => !hostFixtureSpecs.includes(s))
 // Specs with their own config and fixture (replica, cloud host, host alone, ...).
 // Every project names them again: a project's testIgnore replaces the top-level one.
 // A `*.local.spec.ts` is a person's own walk-through (a demo video, a one-off check) and stays
@@ -84,10 +82,20 @@ export default defineConfig({
     // Chromium mutes itself headless; `--mute-audio` keeps a headed run (--headed, a
     // debug session) silent too. WebKit has no such switch: pw-silence.ts silences
     // every frame of every context (2026-11-08).
+    // The sign-in specs come first, so a sharded run starts their one-at-a-time chain at the
+    // start of its first shard. Named `chromium` too: `--project=chromium` selects both
+    // (Playwright matches projects by name and gives each its own worker limit).
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'], launchOptions: { args: CHROMIUM_SILENT } },
+      testMatch: signInSpecs,
       testIgnore: [...sideSpecs, ...hostFixtureSpecs],
+      workers: 1,
+    },
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'], launchOptions: { args: CHROMIUM_SILENT } },
+      testIgnore: [...sideSpecs, ...hostFixtureSpecs, ...signInSpecs],
     },
     {
       name: 'chromium-host-fixture',
@@ -105,7 +113,8 @@ export default defineConfig({
     // `webkit`, so `--project webkit` keeps selecting every WebKit spec (Playwright
     // matches projects by name and gives each its own id and worker limit).
     ...(process.env.PW_WEBKIT ? [
-      { name: 'webkit', use: { ...devices['Desktop Safari'] }, testIgnore: [...sideSpecs, ...hostFixtureSpecs, '**/replica-smoke.spec.ts'] },
+      { name: 'webkit', use: { ...devices['Desktop Safari'] }, testMatch: signInSpecs, testIgnore: [...sideSpecs, ...hostFixtureSpecs], workers: 1 },
+      { name: 'webkit', use: { ...devices['Desktop Safari'] }, testIgnore: [...sideSpecs, ...hostFixtureSpecs, ...signInSpecs, '**/replica-smoke.spec.ts'] },
       { name: 'webkit', use: { ...devices['Desktop Safari'] }, testMatch: hostFixtureSpecs, testIgnore: sideSpecs, workers: 1 },
     ] : []),
   ],
