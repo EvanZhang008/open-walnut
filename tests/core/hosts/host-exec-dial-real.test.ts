@@ -35,13 +35,23 @@ import { startSilentLinkProxy, type SilentLinkProxy } from '../../helpers/silent
 
 let daemon: MockDaemon
 const cleanups: Array<() => Promise<void> | void> = []
+/**
+ * The folder every fs.ls here lists: this test's own, a few entries, so a reply is one small frame.
+ * Never os.tmpdir(): its listing is as big as this machine's temp folder (3,398 entries, 173 KB on
+ * 2026-11-18), it crosses the slow proxy in several chunks that each wait the path's delay in turn,
+ * and a reply "in flight when the path died" then landed seconds late: after the check's first half
+ * (read as the far side still sending, so 'silent', not 'dropped') or after the dial's verdict.
+ */
+let lsDir = ''
 
 beforeAll(async () => {
   daemon = await createMockDaemon()
+  lsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-dial-ls-'))
+  for (const name of ['a.txt', 'b.txt', 'c']) fs.writeFileSync(path.join(lsDir, name), name)
   fs.writeFileSync(CONFIG_FILE, 'version: 1\nhosts:\n  pcbox:\n    transport: net\n    hostname: 127.0.0.1\n')
   resetLinkTargetsForTest()
 })
-afterAll(async () => { await daemon.stop() })
+afterAll(async () => { await daemon.stop(); fs.rmSync(lsDir, { recursive: true, force: true }) })
 afterEach(async () => {
   for (const host of ['pcbox', '__local__']) setPooledConnectionForTest(host, null)
   for (const c of cleanups.splice(0).reverse()) await c()
@@ -113,12 +123,13 @@ const bulkHeard = (conn: DaemonConnection) => (conn as unknown as { _bulkHeardBy
  * A reply already on its way when the path dies (the Mac falls asleep, or its network changes):
  * the request reaches the daemon, its reply crosses the link 600 ms later, and from the moment the
  * reply is on the wire nothing else crosses. Returns right after the path died, the reply still on
- * its way (wrapped: an awaited promise would wait for it).
+ * its way (wrapped: an awaited promise would wait for it). The reply is one small frame (lsDir): the
+ * proxy delays each chunk in turn, so a reply of several chunks would land several delays late.
  */
 async function replyInFlightThenDeadPath(conn: DaemonConnection, proxy: SilentLinkProxy): Promise<{ reply: Promise<string> }> {
   proxy.setMode('slow', { delayMs: 600, bytesPerSec: 50 * 1024 * 1024 })
   daemon.clearCommandHistory()
-  const reply = conn.send('fs.ls', { path: os.tmpdir() }, 20_000).then(() => 'answered', (e: Error) => e.message)
+  const reply = conn.send('fs.ls', { path: lsDir }, 20_000).then(() => 'answered', (e: Error) => e.message)
   await waitFor(() => daemon.getCommandHistoryFor('fs.ls').length > 0, 'the request at the daemon')
   await sleep(50) // the reply is in the proxy's queue now
   proxy.setMode('blackhole')
@@ -136,7 +147,7 @@ describe('the dial\'s quiet check, on a real link', () => {
     holdAfterNextPing(conn, 3_500)
     expect(await outcome(dial('pcbox', 15_000))).toBe('sent')
     expect(conn.connected).toBe(true)
-    expect((await conn.send('fs.ls', { path: os.tmpdir() }, 5_000)).ok).toBe(true)
+    expect((await conn.send('fs.ls', { path: lsDir }, 5_000)).ok).toBe(true)
   }, 30_000)
 
   it('a hold that ends 200 ms past the check\'s deadline, in a request\'s socket callback, still sends (review 4)', async () => {
@@ -239,7 +250,7 @@ describe('after a wake or network signal, and with the main socket dead', () => 
 
   it('a busy link whose path died 2 s before a network signal is asked anyway: dropped, and the dial 11 s on sends nothing (review 4)', async () => {
     const { conn, proxy } = await pooled('pcbox')
-    for (let i = 0; i < 5; i++) { await conn.send('fs.ls', { path: os.tmpdir() }, 2_000); await sleep(300) }
+    for (let i = 0; i < 5; i++) { await conn.send('fs.ls', { path: lsDir }, 2_000); await sleep(300) }
     proxy!.setMode('blackhole')
     const diedAt = Date.now()
     await sleep(2_000)
