@@ -6,6 +6,8 @@
  * This fails on a new apt-get or curl in the matrix's workflow or its scripts without them.
  * Runs 43058047203 and 43060778879 (same day): the refresh failed on DNS, and the install then got
  * 404 for packages the runner's old lists named, so a failed install refreshes and tries again.
+ * Run 44270499339 (2026-11-18): the timeout ended a try mid-unpack and the retries refused at once
+ * on the interrupted dpkg, so each try first finishes it.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -35,7 +37,7 @@ describe('binary matrix network steps', () => {
     const bare = apts.filter(({ l }) => !/timeout \d+/.test(l) || !l.includes('$apt_opts'))
     expect(bare.map(({ at, l }) => `${at}: ${l.trim()}`)).toEqual([])
     const src = fs.readFileSync(path.join(ROOT, 'scripts/binary-old-kernel.sh'), 'utf8')
-    expect(src).toMatch(/apt_opts="-o Acquire::Retries=\d -o Acquire::http::Timeout=\d+ -o Acquire::https::Timeout=\d+"/)
+    expect(src).toMatch(/apt_opts="-o Acquire::Retries=\d -o Acquire::http::Timeout=\d+ -o Acquire::https::Timeout=\d+ -o DPkg::Lock::Timeout=\d+"/)
   })
 
   it('a failed qemu install refreshes the lists and tries again, a bounded number of times', () => {
@@ -44,6 +46,10 @@ describe('binary matrix network steps', () => {
     expect(loop).toMatch(/apt-get \$apt_opts update/)
     expect(loop).toMatch(/apt-get \$apt_opts install [^\n]*--no-install-recommends/)
     expect(loop.indexOf('update')).toBeLessThan(loop.indexOf('install -y'))
+    // A try the timeout ended can leave dpkg interrupted, and every later apt-get refuses until
+    // it is finished (run 44270499339): each try starts by finishing it.
+    expect(loop).toMatch(/echo 'timeout \d+'\) dpkg --configure -a/)
+    expect(loop.indexOf('dpkg --configure -a')).toBeLessThan(loop.indexOf('update'))
     expect(loop).toMatch(/\[ "\$tries" -lt (\d) \] \|\| \{[^}]*exit 1; \}/)
     expect(loop).toMatch(/sleep \d+/)
     // the whole loop stays well inside the job's limit

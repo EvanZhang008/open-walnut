@@ -24,7 +24,9 @@ need() { command -v "$1" >/dev/null 2>&1; }
 # 43036597217: a runner whose DNS failed sat 39 minutes in the install below, silent, until the
 # job's 40 minutes ran out; neither "downloading" nor "waiting" was printed): a stalled one fails here,
 # naming the step.
-apt_opts="-o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+# DPkg::Lock::Timeout: a try the timeout ended may leave its dpkg running a moment; wait for the
+# lock instead of failing on it.
+apt_opts="-o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60"
 if ! need qemu-system-x86_64 || ! need cloud-localds; then
   if need apt-get && sudo -n true 2>/dev/null; then
     echo "installing qemu and cloud-image-utils..."
@@ -33,13 +35,20 @@ if ! need qemu-system-x86_64 || ! need cloud-localds; then
     # image holds lists of its own; but when it fails the lists may name versions the mirror no longer
     # has (2026-11-11, Binary matrix runs 43058047203 and 43060778879: the runner's DNS failed, the
     # refresh was skipped, and the install got 404 for libsoup and libnfs), so a failed install
-    # refreshes again. Worst case about 22 minutes, inside the job's 40.
+    # refreshes again. A try the timeout ends can stop dpkg mid-unpack, and every later apt-get then
+    # refuses at once with "dpkg was interrupted, you must manually run 'sudo dpkg --configure -a'"
+    # (2026-11-18, Binary matrix run 44270499339: try 1 ran out at 300 s, tries 2 and 3 failed in a
+    # second each), so each try first finishes what an earlier one left half done. Worst case about
+    # 24 minutes, inside the job's 40.
     tries=0
     while :; do
       tries=$((tries + 1))
       # shellcheck disable=SC2086
-      sudo -n sh -c "$(command -v timeout >/dev/null 2>&1 && echo 'timeout 120') apt-get $apt_opts update -qq" \
-        || echo "::warning::binary-old-kernel: apt-get update failed or ran past 2 minutes (try $tries of 3); installing from the lists the runner has"
+      sudo -n sh -c "$(command -v timeout >/dev/null 2>&1 && echo 'timeout 60') dpkg --configure -a" \
+        || echo "::warning::binary-old-kernel: dpkg --configure -a failed or ran past 1 minute (try $tries of 3)"
+      # shellcheck disable=SC2086
+      sudo -n sh -c "$(command -v timeout >/dev/null 2>&1 && echo 'timeout 90') apt-get $apt_opts update -qq" \
+        || echo "::warning::binary-old-kernel: apt-get update failed or ran past 90 s (try $tries of 3); installing from the lists the runner has"
       # shellcheck disable=SC2086
       sudo -n sh -c "$(command -v timeout >/dev/null 2>&1 && echo 'timeout 300') apt-get $apt_opts install -y -qq --no-install-recommends qemu-system-x86 qemu-utils cloud-image-utils openssh-client >/dev/null" \
         && break
