@@ -11,7 +11,7 @@
  * - Save race conditions (focus/blur cycle)
  */
 import { test, expect, type Page } from '@playwright/test'
-import { openScratchpad } from './todo-panel-helpers'
+import { isolateUiPrefs, openScratchpad } from './todo-panel-helpers'
 import { clickCaretInto } from './prosemirror-caret'
 
 const API = 'http://localhost:3457'
@@ -80,7 +80,10 @@ function trackConsoleErrors(page: Page): string[] {
 // tests on CI). One worker, in order, and a failure does not skip the rest.
 test.describe.configure({ mode: 'default' })
 
-test.beforeEach(async () => {
+test.beforeEach(async ({ page }) => {
+  // The Scratchpad these tests open stays this page's: on the shared server's UI prefs it would
+  // open over the composer of every later spec's session column.
+  await isolateUiPrefs(page)
   await clearNotes()
 })
 

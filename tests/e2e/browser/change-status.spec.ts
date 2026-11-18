@@ -19,6 +19,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { headerLabelsButton, openHeaderLabels, openLabelsFlyout } from './session-header-labels-helpers'
+import { timeAgo } from '../../../web/src/utils/time'
 
 const SHOT_DIR = process.env.CHANGE_STATUS_SHOTS ?? (process.env.WALNUT_TASK_DIR ? path.join(process.env.WALNUT_TASK_DIR, 'shots') : '')
 const TASK = 'pw-task-changes'
@@ -57,6 +58,23 @@ async function openSession(page: Page): Promise<Locator> {
   const panel = page.locator(`.session-panel[data-session-id="${SESSION}"]`)
   await expect(panel).toBeVisible()
   return panel
+}
+
+/**
+ * What the card's foot says for the read the task keeps. The fixture writes that read two minutes
+ * before the fixture server starts, and a run reaches this spec when its turn comes, minutes later
+ * on a busy runner (2026-11-18: "Read 3 min ago" at 70 s in), so the text follows the stored time.
+ */
+async function storedReadText(request: APIRequestContext): Promise<string> {
+  const url = 'https://review.acme.dev/CR-1001'
+  // The card shows the later of the task's snapshot and the watcher's last answer (ChangePill).
+  const { task } = await (await request.get(`/api/tasks/${TASK}`)).json() as { task: { change_status?: Record<string, { checkedAt?: string }> } }
+  const view = await (await request.get(`/api/tasks/${TASK}/changes`)).json() as { changes?: Array<{ url: string; checkedAt?: string }> }
+  const reads = [task.change_status?.[url]?.checkedAt, view.changes?.find((c) => c.url === url)?.checkedAt].filter((v): v is string => !!v)
+  const at = reads.sort().at(-1) ?? ''
+  // The watcher's stored read, never a fresh one.
+  expect(Date.now() - Date.parse(at), `stored read ${at}`).toBeGreaterThanOrEqual(2 * 60_000)
+  return `Read ${timeAgo(at, { long: true })}`
 }
 
 let restore: Record<string, boolean> | null = null
@@ -147,7 +165,8 @@ test('change link pills read their status, and the card opens a stage', async ({
   await expect(fold.last()).toContainText('8 not reached')
   await expect(card.locator('[data-testid="change-card-open"]')).toHaveAttribute('href', 'https://review.acme.dev/CR-1001')
   await expect(card.locator('[data-testid="change-card-open-pipeline"]')).toHaveAttribute('href', 'https://pipelines.acme.dev/acme-deployer')
-  await expect(card.locator('[data-testid="change-card-read"]')).toHaveText('Read 2 min ago')
+  const read = card.locator('[data-testid="change-card-read"]')
+  await expect(async () => expect(await read.textContent()).toBe(await storedReadText(request))).toPass({ timeout: 15_000 })
   // A full commit hash (what a provider stores) reads short, the whole one on hover.
   await expect(card.locator('.change-card-commit')).toHaveText('a1b2c3d')
   await expect(card.locator('.change-card-commit')).toHaveAttribute('title', 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678')
@@ -251,7 +270,8 @@ test('the card shows the watcher\'s latest read, and why a merged change has no 
   await expect(card).toBeVisible()
   await expect(card.locator('[data-testid="change-card-now"]')).toContainText('Merged')
   await expect(card.locator('[data-testid="change-card-now-detail"]')).toHaveText('Could not read the deploy: the pipeline did not answer')
-  await expect(card.locator('[data-testid="change-card-read"]')).not.toHaveText('Read 2 min ago')
+  // The watcher's own read of five seconds ago, not the task's stored one of minutes before.
+  await expect(card.locator('[data-testid="change-card-read"]')).toHaveText('Read just now')
   await expect(card.locator('[data-testid="change-card-read"]')).not.toHaveAttribute('data-stale', 'true')
   expect(asks.length).toBeGreaterThan(0)
   await shot(page, 'deploy-issue', card)

@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import { expect, type Locator, type Page, type TestInfo, type WebSocketRoute } from '@playwright/test'
+import { isolateUiPrefs } from './todo-panel-helpers'
 
 /** Where the room specs put their screenshots. */
 export const SHOTS = process.env.CORNER_ROOM_SHOTS || 'test-results/corner-stack-room'
@@ -356,6 +357,9 @@ export const LISTS: Record<string, string> = {
 }
 
 export async function railWalk(page: Page, height: number, bars: Bars) {
+  // The walk opens every side bar; one a failed stop leaves open stays this page's, never the
+  // shared server's for the next spec.
+  await isolateUiPrefs(page)
   await page.setViewportSize({ width: 1280, height })
   const sock = await routeSocket(page)
   await openHome(page, sock, bars)

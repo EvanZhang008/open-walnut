@@ -12,6 +12,12 @@
  *    fell under 600px and the lane strip (wide mode only) was gone mid-test
  *    (board-kanban-controls C53). Every kanban spec keeps the corner to the board's own toasts
  *    (keepCornerToBoard), as the others already did.
+ * 3. A Home side bar one spec opened stayed open for the specs after it (2026-11-18): the
+ *    notes stress spec opened the Scratchpad, the page wrote it to the shared server's UI
+ *    prefs, and every later page booted with it open over its session column's composer, so
+ *    the drawing and Latest update specs timed out on the "+" button and the narrow header
+ *    spec measured a squeezed "wide" column. Every file that opens a side bar (Agenda,
+ *    Scratchpad, Routines) keeps it to its own page with isolateUiPrefs.
  */
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
@@ -20,6 +26,8 @@ import path from 'node:path'
 const DIR = path.resolve(import.meta.dirname, '../e2e/browser')
 const specs = fs.readdirSync(DIR).filter((f) => f.endsWith('.spec.ts'))
 const read = (f: string) => fs.readFileSync(path.join(DIR, f), 'utf-8')
+/** Specs and their helpers: a helper that opens a side bar leaks it for every spec calling it. */
+const sources = fs.readdirSync(DIR).filter((f) => f.endsWith('.ts'))
 
 /** Pairs that write different fields of one fixture task and read neither field of the other's. */
 const SHARED_WRITERS: Record<string, { files: string[]; why: string }> = {
@@ -50,5 +58,14 @@ describe('browser specs keep out of each other\'s data', () => {
     expect(kanban.length).toBeGreaterThan(5)
     const missing = kanban.filter((f) => !/await keepCornerToBoard\(/.test(read(f)))
     expect(missing, 'call keepCornerToBoard(context) in the spec\'s beforeEach').toEqual([])
+  })
+
+  it('a file that opens a Home side bar keeps it out of the shared UI prefs', () => {
+    // todo-panel-helpers defines both openScratchpad and isolateUiPrefs.
+    const opens = sources.filter((f) => f !== 'todo-panel-helpers.ts'
+      && /openScratchpad\(|sidebar-toggle-(scratchpad|calendar|routines)/.test(read(f)))
+    expect(opens.length).toBeGreaterThan(10)
+    const missing = opens.filter((f) => !/isolateUiPrefs\(|\/api\/ui-prefs/.test(read(f)))
+    expect(missing, 'call isolateUiPrefs(page) before the page opens Home').toEqual([])
   })
 })
