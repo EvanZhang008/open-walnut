@@ -1,13 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createMockConstants } from '../helpers/mock-constants.js';
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-instruction-slice'));
-import { WALNUT_HOME } from '../../src/constants.js';
+import { USER_FILE, WALNUT_HOME } from '../../src/constants.js';
 import { addTask } from '../../src/core/task-manager.js';
 import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../src/core/session-tracker.js';
 import { buildHostSlice } from '../../src/core/host-slice.js';
-import { markProcessing, removeProcessed, sendMessageToSession } from '../../src/core/session-message-queue.js';
+import { markNextProcessing, markProcessing, removeProcessed, sendMessageToSession } from '../../src/core/session-message-queue.js';
+import { refreshUserProfile } from '../../src/core/sessions/user-profile-context.js';
 import { instructionNoticeForHost, noteInstructionNoticeToldByHost } from '../../src/core/sessions/instruction-notice.js';
 import { notePlaceCompaction } from '../../src/core/sessions/place-notice.js';
 import { TEAM_CHARTER } from '../../src/core/team-charter.js';
@@ -89,3 +91,58 @@ describe('server supplies changed instructions to old host-local sessions', () =
     for (const row of (await buildHostSlice('__local__')).sessions) expect(row).not.toHaveProperty('taskRoutingPolicy');
   });
 });
+
+describe('one version of the user\'s profile reaches a remote session once (2026-11-18)', () => {
+  // The org review read two notices of USER.md vf2088c0b in one clouddev session, 3 minutes apart
+  // and the second mid-turn, as a lost "told" record. The transcript showed a compaction between
+  // them: told once per compaction boundary is the rule. Pinned here on every path a line takes:
+  // the server's queue (first line and a mid-turn one), the host's own delivery, and a compaction.
+  const RULE = 'A rule the user gave while the session ran, worded the way real ones are.'
+  const user = async (rules: string[]) => {
+    await fs.mkdir(path.dirname(USER_FILE), { recursive: true })
+    await fs.writeFile(USER_FILE, `---\nname: User Profile\n---\n\n## Standing rules\n${rules.map((r) => `- ${r}`).join('\n')}\n`)
+    await new Promise((r) => setTimeout(r, 15))
+    await refreshUserProfile()
+  }
+  const BASE = Array.from({ length: 8 }, (_, i) => `Standing rule ${i + 1}, kept as it is across every save of the profile.`)
+
+  it('told on its first line, never on a mid-turn line or by the host after it; once more only after a compaction', async () => {
+    await user(BASE)
+    const { task } = await addTask({ title: 'Remote worker', project: 'marina' })
+    const sid = randomUUID()
+    await createSessionRecord(sid, task.id, task.project, WALNUT_HOME)
+    await updateSessionRecord(sid, { appliedAppendSystemPrompt: await current(task.id), host: 'clouddev', process_status: 'running' })
+    const hostNotice = async () => instructionNoticeForHost((await getSessionByClaudeId(sid))!, task)
+    const line = async (text: string, pick = markProcessing) => {
+      await sendMessageToSession(sid, text)
+      const [row] = await pick(sid)
+      await removeProcessed(sid, [row.id])
+      return row.message
+    }
+    const copies = (text: string) => text.split(RULE).length - 1
+    expect(await hostNotice()).toBeNull()
+
+    await user([...BASE, RULE])
+    expect(copies(await line('First line after the save'))).toBe(1)
+    expect(copies(await line('Injected mid-turn', markNextProcessing))).toBe(0)
+    expect(await hostNotice()).toBeNull()
+
+    // The next save reaches the session through its host's own delivery: told there once, then by nobody.
+    const NEXT = 'Another rule the user gave a little later, also worded like a real one.'
+    await user([...BASE, RULE, NEXT])
+    const due = (await hostNotice())!
+    expect(due.policy).toContain(NEXT)
+    expect(due.policy).not.toContain(RULE)
+    await noteInstructionNoticeToldByHost(sid, due.due)
+    expect(await hostNotice()).toBeNull()
+    expect((await line('After the host told it', markNextProcessing)).includes(NEXT)).toBe(false)
+
+    // A compaction drops what was told: the next line restates it once, and only once.
+    await notePlaceCompaction(sid, 'boundary-1')
+    const restated = await line('First line after the compaction', markNextProcessing)
+    expect(copies(restated)).toBe(1)
+    expect(restated).toContain(NEXT)
+    expect(copies(await line('Mid-turn after it', markNextProcessing))).toBe(0)
+    expect(await hostNotice()).toBeNull()
+  })
+})
