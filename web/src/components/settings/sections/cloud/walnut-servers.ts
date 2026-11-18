@@ -92,7 +92,9 @@ export function walnutServerRows(i: WalnutServersInput): WalnutServerRow[] {
       role: 'Copy',
       line: `${state.text}${address}`,
       dot: state.dot,
-      href: `#${hostRowId(key)}`,
+      // The row whose server this is: its switch and its tunnel's settings live there
+      // (HostServersGroup.tsx reads one row's settings), not always the named twin's.
+      href: `#${hostRowId((carrier ?? lead).hostKey)}`,
     });
   }
   return rows;

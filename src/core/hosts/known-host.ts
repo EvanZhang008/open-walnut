@@ -16,12 +16,13 @@ import { credentialHost } from './credential-host.js'
 const TTL_MS = 60_000
 
 const kept = new Map<string, { at: number; value: { host: string; label: string } }>()
+const inflight = new Map<string, Promise<{ host: string; label: string }>>()
 
-/** What the answer depends on in config.yaml: the rows' names and whether each is on or found. */
+/** What the answer depends on in config.yaml: the rows' names, whether each is on or found, and where each connects. */
 function rowsKey(config: Config): string {
   return JSON.stringify(Object.entries(config.hosts ?? {}).map(([k, h]) => {
-    const row = h as { label?: unknown; enabled?: unknown; discovered?: unknown } | undefined
-    return [k, row?.label ?? null, row?.enabled ?? null, row?.discovered ?? null]
+    const row = h as { label?: unknown; enabled?: unknown; discovered?: unknown; hostname?: unknown; user?: unknown; port?: unknown; endpoint?: unknown } | undefined
+    return [k, row?.label ?? null, row?.enabled ?? null, row?.discovered ?? null, row?.hostname ?? null, row?.user ?? null, row?.port ?? null, row?.endpoint ?? null]
   }))
 }
 
@@ -30,7 +31,13 @@ export async function knownHost(host: string, config: Config, now = Date.now()):
   const key = `${host}\0${rowsKey(config)}`
   const hit = kept.get(key)
   if (hit && now - hit.at < TTL_MS) return hit.value
-  const value = await credentialHost(host, config)
+  // Polls that miss together share one lookup (each can run `ssh -G`).
+  let pending = inflight.get(key)
+  if (!pending) {
+    pending = credentialHost(host, config).finally(() => inflight.delete(key))
+    inflight.set(key, pending)
+  }
+  const value = await pending
   if (kept.size > 200) kept.clear()
   kept.set(key, { at: now, value })
   return value
@@ -39,4 +46,5 @@ export async function knownHost(host: string, config: Config, now = Date.now()):
 /** Test seam: forget the kept answers. */
 export function resetKnownHostsForTest(): void {
   kept.clear()
+  inflight.clear()
 }

@@ -31,13 +31,18 @@ describe('walnutServerRows', () => {
   it('one machine under two rows is one server, by the name the person gave it, with the tunnel it carries', () => {
     const big = rows.filter((r) => r.name === 'Big box')
     expect(big).toHaveLength(1)
-    expect(big[0]).toMatchObject({ id: 'host:big-box', href: '#rh-host-big-box', dot: 'done' })
+    // Its Settings opens the row whose server this is (the one carrying the tunnel holds its switch).
+    expect(big[0]).toMatchObject({ id: 'host:big-box', href: '#rh-host-found-box', dot: 'done' })
     expect(big[0].line).toContain('Acme Tunnel opens this Walnut at someone-big.acme-tunnel.example')
     expect(rows.some((r) => r.name === 'found-box' || r.line.includes('found-box'))).toBe(false)
   })
   it('a found row alone (its named row runs nothing) still shows by the machine\'s name', () => {
     const only = walnutServerRows({ companion: null, hosts: [HOSTS[1]], tunnelTitle: 'Acme Tunnel' })
     expect(only.map((r) => r.name)).toEqual(['This Mac', 'Big box'])
+    expect(only[1].href).toBe('#rh-host-found-box')
+    // Without a tunnel, the row that runs it.
+    const plain = walnutServerRows({ companion: null, hosts: [HOSTS[0]], tunnelTitle: 'Acme Tunnel' })
+    expect(plain[1].href).toBe('#rh-host-big-box')
   })
   it('the companion: its address, or that it does not answer; none when there is no companion', () => {
     expect(rows[1].line).toMatch(/^At companion\.example\.test\./)

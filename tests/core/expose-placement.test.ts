@@ -110,8 +110,9 @@ describe('statusOnHost', () => {
     const found = { hostKey: 'found-box', label: 'Big box', auto: true }
     expect(statusOnHost(found, def, { phase: 'installing', since: 1, message: 'Installing Walnut on found-box...' }).lastError).toBe('Installing Walnut on Big box...')
     expect(statusOnHost(found, def, { phase: 'error', since: 1, message: 'Could not reach found-box.' }).lastError).toBe('Could not reach Big box.')
-    const report = { phase: 'running', since: 1, server: { expose: { enabled: true, provider: 'acme-tunnel', state: 'needs-sign-in' as const, since: 6, hint: 'Sign in on found-box.', activity: 'Installing the CLI on found-box' } } }
-    expect(statusOnHost(found, def, report)).toMatchObject({ hint: 'Sign in on Big box.', activity: 'Installing the CLI on Big box' })
+    // The provider's own words stay as it said them: a CLI's error can name a real host that shares the alias.
+    const report = { phase: 'running', since: 1, server: { expose: { enabled: true, provider: 'acme-tunnel', state: 'retrying' as const, since: 6, lastError: 'lookup found-box on 10.0.0.2:53 failed' } } }
+    expect(statusOnHost(found, def, report)).toMatchObject({ lastError: 'lookup found-box on 10.0.0.2:53 failed' })
     // A hostname or a path that only contains the alias is left alone.
     expect(statusOnHost(found, def, { phase: 'error', since: 1, message: 'Failed at /srv/found-box/x.' }).lastError).toBe('Failed at /srv/found-box/x.')
   })

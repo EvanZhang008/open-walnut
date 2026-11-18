@@ -11,7 +11,7 @@
  *      host's name the person gave it.
  *   3. All devices lists the Walnut servers: this Mac, the companion, and an always-on host listed
  *      in config.yaml twice (named, and found in ~/.ssh/config, carrying the tunnel) once, with the
- *      tunnel's address; its Settings opens that host.
+ *      tunnel's address; its Settings opens the host row whose server it is.
  *
  * Every label the tab ever painted is recorded by a MutationObserver (it runs before the frame is
  * painted), so a flash of another name fails the test. The list, the tunnel's state and the host
@@ -165,6 +165,18 @@ test('1b. a plugin still loading after a restart keeps the placeholder, never "T
   expect((await tabLabels(page)).filter((l) => l !== '(placeholder)')).toEqual(['Acme Tunnel'])
 })
 
+test('Find a setting finds the tunnel by its name and by "tunnel", and shows its name', async ({ page }) => {
+  await mockAll(page, {})
+  await openPhonesCloud(page)
+  await expect(page.getByTestId('pc-tab-devices-browser').locator('.pc-tab-label')).toHaveText('Acme Tunnel', { timeout: 30_000 })
+  for (const query of ['acme', 'tunnel']) {
+    await page.getByTestId('settings-filter').fill(query)
+    await expect(page.getByTestId('settings-nav-devices-browser')).toContainText('Acme Tunnel')
+  }
+  await page.getByTestId('settings-nav-devices-browser').click()
+  await expect(page.getByTestId('pc-tab-devices-browser')).toHaveAttribute('aria-current', 'page')
+})
+
 test('2 and 3. the tab says the tunnel and its host by name; All devices lists the Walnut servers, each machine once', async ({ page }) => {
   await mockAll(page, {})
   await openPhonesCloud(page)
@@ -202,10 +214,10 @@ test('2 and 3. the tab says the tunnel and its host by name; All devices lists t
   await expect(page).toHaveURL(/#devices-browser$/)
   await expect(tab).toHaveAttribute('aria-current', 'page')
 
-  // A server's Settings opens that host.
+  // A server's Settings opens the host row whose server it is (the one carrying the tunnel).
   await page.getByTestId('pc-tab-devices-phones').click()
   await page.locator('#devices-phones').getByTestId('walnut-server-open-host:devbox').click()
-  await expect(page).toHaveURL(/#rh-host-devbox$/)
+  await expect(page).toHaveURL(/#rh-host-devbox-ssh$/)
   // The companion's opens its tab.
   await page.getByTestId('settings-nav-devices').click()
   // Phones & Cloud opens the tab in use first; then All devices.

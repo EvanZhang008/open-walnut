@@ -225,7 +225,7 @@ export function statusOnHost(
 ): ExposeStatus {
   const runsOn: ExposeRunsOn = { hostKey: placement.hostKey, label: placement.label, auto: placement.auto }
   const base = { enabled: true, provider: def.id, providerTitle: def.title, runsOn }
-  // The host's own sentences name it by its alias; the person reads the name `placement` carries.
+  // Walnut's sentences about the host's server name it by its alias; the person reads the name `placement` carries.
   const said = <T extends string | undefined>(text: T): T => (text === undefined ? text : inHostTerms(text, placement.hostKey, placement.label) as T)
   const reported = view?.phase === 'running' ? view.server?.expose : undefined
   // Another provider's report (or another tunnel of it) is the host's own tunnel from before, not this one.
@@ -236,12 +236,8 @@ export function statusOnHost(
       port: _hostPort, runsOn: _ignored, enabled: _enabled, provider: _provider, providerTitle: _title,
       tunnelKey: _key, movingTo: _moving, ...rest
     } = reported
-    return {
-      ...base, ...rest,
-      ...(rest.lastError !== undefined ? { lastError: said(rest.lastError) } : {}),
-      ...(rest.hint !== undefined ? { hint: said(rest.hint) } : {}),
-      ...(rest.activity !== undefined ? { activity: said(rest.activity) } : {}),
-    }
+    // The provider's own words (a CLI's error can name a real host that shares the alias) stay as said.
+    return { ...base, ...rest }
   }
   if (view?.phase === 'error' || view?.phase === 'unsupported') {
     return { ...base, state: 'retrying', since: view.since, lastError: said(view.message) ?? `Walnut on ${placement.label} stopped.` }

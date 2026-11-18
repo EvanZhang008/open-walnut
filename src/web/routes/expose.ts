@@ -71,7 +71,11 @@ async function placesAsKnown(places: ExposePlace[], config: Config, placedOn: st
   }))
   // The one it runs on now stays when its machine is listed twice, so the picker still shows it picked.
   const keep = new Map<string, string>()
-  for (const { place, machine } of named) if (!keep.has(machine) || place.id === placedOn) keep.set(machine, place.id)
+  // Else the alias the person uses for that machine (a found twin may be cleaned up later).
+  for (const { place, machine } of named) {
+    const held = keep.get(machine)
+    if (!held || place.id === placedOn || (held !== placedOn && place.id === machine)) keep.set(machine, place.id)
+  }
   return named.filter(({ place, machine }) => keep.get(machine) === place.id).map(({ place }) => place)
 }
 

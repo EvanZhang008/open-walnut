@@ -140,7 +140,9 @@ export function useSettingsNavModel(): SettingsNavModel {
       if (r.key !== WAY_PANES.browser || !linkName?.plugin) return r
       const meta = { ...r.meta, label: linkName.title, title: linkName.title, description: tunnelSubtitle(linkName) }
       metaByKey.set(r.key, meta)
-      return { ...r, label: linkName.title, meta }
+      // Find a setting matches and highlights the name shown, and still finds it by "tunnel".
+      const filter = { ...r.filter, label: linkName.title, names: [...(r.filter.names ?? []), r.filter.label] }
+      return { ...r, label: linkName.title, meta, filter }
     })
     return {
       rows: named,
