@@ -179,6 +179,34 @@ export async function goToSessionFolder(explorer: Locator): Promise<void> {
   await expect(root).toHaveAttribute('data-root-path', cwd, { timeout: 15_000 })
 }
 
+/**
+ * Show the panel's Files view (a no-op when it is open) and return its explorer. Whether it is open
+ * is read from the Files chip, never from whether the explorer has drawn yet: after a reload the
+ * kept view comes back open but draws a moment later (its lazy chunk, the session's record), and a
+ * click in that moment closes the view it was about to show.
+ */
+export async function showSessionFiles(panel: Locator): Promise<Locator> {
+  const chip = panel.locator('.session-action-chip[data-header-id="files"]')
+  if (!(await chip.evaluate((el) => el.classList.contains('session-action-chip-active')))) {
+    await panel.getByRole('button', { name: 'Files', exact: true }).click()
+  }
+  const explorer = panel.locator('.session-file-explorer')
+  await expect(explorer).toBeVisible({ timeout: 10_000 })
+  return explorer
+}
+
+/** Open `name` from the session's own folder in the panel's Files view; returns the file's view. */
+export async function openSessionFile(panel: Locator, name: string): Promise<Locator> {
+  const explorer = await showSessionFiles(panel)
+  await goToSessionFolder(explorer)
+  const row = explorer.locator('.session-file-explorer-node', { hasText: name }).first()
+  await expect(row).toBeVisible({ timeout: 15_000 })
+  await row.click()
+  const view = explorer.locator('.file-content-view')
+  await expect(view).toBeVisible({ timeout: 10_000 })
+  return view
+}
+
 /** Open the home Scratchpad from the rail (no-op when it is open) and return its editor. */
 export async function openScratchpad(page: Page): Promise<Locator> {
   const pane = page.getByTestId('home-companion-scratchpad')

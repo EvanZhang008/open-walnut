@@ -42,7 +42,7 @@ import fs from 'node:fs/promises'
 import { humanPress, mainComposer, openThreadsSession, readRecord, resetThreadsFixture, test } from './threads-helpers'
 import { TAGGED_READY, TAGGED_SESSION, TAGGED_TASK } from './threads-fixture'
 import { leaveFullscreen } from './draft-helpers'
-import { goToSessionFolder } from './todo-panel-helpers'
+import { openSessionFile } from './todo-panel-helpers'
 
 type Rect = { left: number; right: number; top: number; height: number }
 
@@ -60,21 +60,6 @@ async function openSession(page: Page): Promise<Locator> {
   await page.waitForLoadState('networkidle')
   await page.setViewportSize({ width: 1400, height: 820 })
   return openThreadsSession(page, TAGGED_SESSION, TAGGED_TASK, TAGGED_READY, { view: 'linear' })
-}
-
-async function openFile(panel: Locator, name: string): Promise<Locator> {
-  if (!(await panel.locator('.session-file-explorer').isVisible())) {
-    await panel.getByRole('button', { name: 'Files', exact: true }).click()
-  }
-  const explorer = panel.locator('.session-file-explorer')
-  await expect(explorer).toBeVisible({ timeout: 10_000 })
-  await goToSessionFolder(explorer)
-  const row = explorer.locator('.session-file-explorer-node', { hasText: name }).first()
-  await expect(row).toBeVisible({ timeout: 10_000 })
-  await row.click()
-  const view = explorer.locator('.file-content-view')
-  await expect(view).toBeVisible({ timeout: 10_000 })
-  return view
 }
 
 /** Viewport rects of `phrase` inside `root` (top document), the passage scrolled
@@ -467,7 +452,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
 
   test('Files: the markdown preview (WYSIWYG bubble menu)', async ({ page }) => {
     const panel = await openSession(page)
-    const view = await openFile(panel, MD_FILE)
+    const view = await openSessionFile(panel, MD_FILE)
     const editor = view.locator('.fv-wysiwyg-editor .ProseMirror')
     await expect(editor).toContainText(MD_PASSAGE)
     // The hovered block's inline Ask shows (so its absence below means something).
@@ -501,7 +486,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     const panel = await openSession(page)
     // Narrow enough that paragraphs wrap and their first line runs to the edge.
     await page.setViewportSize({ width: 1100, height: 820 })
-    let view = await openFile(panel, MD_FILE)
+    let view = await openSessionFile(panel, MD_FILE)
     const editor = view.locator('.fv-wysiwyg-editor .ProseMirror')
     await expect(editor).toContainText(MD_PASSAGE)
     const md = await chipOffWords(page, view, editor)
@@ -534,7 +519,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     expect((await page.evaluate(() => window.getSelection()?.toString() ?? '')).trim().length, 'the drag from the line end selected words').toBeGreaterThan(3)
     await page.keyboard.press('Escape')
 
-    view = await openFile(panel, MDX_FILE)
+    view = await openSessionFile(panel, MDX_FILE)
     const preview = view.locator('.fv-md-preview')
     await expect(preview).toContainText(MDX_LINE, { timeout: 10_000 })
     expect((await chipOffWords(page, view, preview)).seen, 'read-only render blocks looked at').toBeGreaterThan(0)
@@ -559,7 +544,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
       server.onMessage((message) => socket.send(message))
     })
     const panel = await openSession(page)
-    const view = await openFile(panel, MD_FILE)
+    const view = await openSessionFile(panel, MD_FILE)
     await view.getByRole('button', { name: 'Source', exact: true }).click()
     const cm = view.locator('.cm-content')
     await expect(cm).toContainText(MD_SOURCE_LINE)
@@ -643,7 +628,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     await page.reload()
     const restoredPanel = page.locator(`.main-page-session-column .session-panel[data-session-id="${TAGGED_SESSION}"]`)
     await expect(restoredPanel).toBeVisible({ timeout: 30_000 })
-    const restoredView = await openFile(restoredPanel, MD_FILE)
+    const restoredView = await openSessionFile(restoredPanel, MD_FILE)
     const rail = restoredView.getByTestId('file-question-rail')
     await rail.locator('.thread-map-rail').click()
     await rail.locator('.thread-map-row[data-kind="thread"]').last().click()
@@ -682,7 +667,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     const original = await fs.readFile(`${record.cwd}/${MD_FILE}`, 'utf8')
     expect(original).toContain('Batches are capped at 64 pages.')
     await fs.writeFile(filePath, original)
-    let view = await openFile(panel, file)
+    let view = await openSessionFile(panel, file)
     let cm = await sourceOf(view)
     const asked = [
       { line: MD_SOURCE_LINE, question: 'Which worker flushes first after a restart?' },
@@ -709,7 +694,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
       const live = page.locator(`.main-page-session-column .session-panel[data-session-id="${TAGGED_SESSION}"]`)
       await expect(live).toBeVisible({ timeout: 30_000 })
       await history
-      view = await openFile(live, file)
+      view = await openSessionFile(live, file)
       cm = await sourceOf(view)
       await expect(live).toHaveClass(/open-walnut-fullscreen/)
       // The phone surface replaces desktop chrome, never the file or its saved work.
@@ -759,7 +744,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     const original = '# Reading mode\n\nKeep this short file in the chosen view.\n'
     const filePath = `${record.cwd}/${shortFile}`
     await fs.writeFile(filePath, original)
-    let view = await openFile(panel, shortFile)
+    let view = await openSessionFile(panel, shortFile)
     const stored = () => view.evaluate((element, file) => {
       const values = JSON.parse(localStorage.getItem('open-walnut-file-view-scroll') ?? '{}') as Record<string, { top: number; source?: boolean }>
       return Object.entries(values).find(([key]) => key.endsWith(` ${file}`))?.[1] ?? null
@@ -774,13 +759,13 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     await humanPress(page, view.getByRole('button', { name: 'Preview', exact: true }))
     await expect(view.locator('.cm-content')).toHaveCount(0)
     await expect.poll(stored).toBeNull()
-    await openFile(panel, MD_FILE)
-    view = await openFile(panel, shortFile)
+    await openSessionFile(panel, MD_FILE)
+    view = await openSessionFile(panel, shortFile)
     await expect(view.getByRole('button', { name: 'Preview', exact: true })).toHaveAttribute('aria-pressed', 'true')
     await humanPress(page, view.getByRole('button', { name: 'Source', exact: true }))
     await expect.poll(stored).toEqual({ top: 0, source: true })
-    await openFile(panel, HTML_FILE)
-    view = await openFile(panel, shortFile)
+    await openSessionFile(panel, HTML_FILE)
+    view = await openSessionFile(panel, shortFile)
     await expect(view.locator('.cm-content')).toContainText('Keep this short file')
     await expect.poll(stored).toEqual({ top: 0, source: true })
     expect(await fs.readFile(filePath, 'utf8')).toBe(original)
@@ -790,7 +775,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
 
   test('Files: the markdown Source tab (pill)', async ({ page }) => {
     const panel = await openSession(page)
-    const view = await openFile(panel, MD_FILE)
+    const view = await openSessionFile(panel, MD_FILE)
     await pressBarTool(page, view.locator('.fv-doc-bar'), 'Source')
     const cm = view.locator('.cm-content')
     await expect(cm).toContainText(MD_SOURCE_LINE, { timeout: 10_000 })
@@ -804,7 +789,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
 
   test('Files: a code file in the source editor (pill)', async ({ page }) => {
     const panel = await openSession(page)
-    const view = await openFile(panel, GO_FILE)
+    const view = await openSessionFile(panel, GO_FILE)
     const cm = view.locator('.cm-content')
     await expect(cm).toContainText(GO_LINE, { timeout: 10_000 })
     const askHere = page.locator('[data-testid="file-ask-here"]')
@@ -815,7 +800,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
 
   test('Files: the read-only markdown render (.mdx, pill)', async ({ page }) => {
     const panel = await openSession(page)
-    const view = await openFile(panel, MDX_FILE)
+    const view = await openSessionFile(panel, MDX_FILE)
     const preview = view.locator('.fv-md-preview')
     await expect(preview).toContainText(MDX_LINE, { timeout: 10_000 })
     const askHere = page.locator('[data-testid="file-ask-here"]')
@@ -831,7 +816,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     // nothing: the ask returned silently. It now asks with the QUOTE taken at
     // mouseup (text, found again in the new DOM), and says why when it cannot.
     const panel = await openSession(page)
-    const view = await openFile(panel, MDX_FILE)
+    const view = await openSessionFile(panel, MDX_FILE)
     const preview = view.locator('.fv-md-preview')
     await expect(preview).toContainText(MDX_LINE, { timeout: 10_000 })
     const askHere = page.locator('[data-testid="file-ask-here"]')
@@ -861,7 +846,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
       await route.fulfill({ json: { ...body, truncated: true, size: 600 * 1024 } })
     })
     const panel = await openSession(page)
-    const view = await openFile(panel, RO_FILE)
+    const view = await openSessionFile(panel, RO_FILE)
     const pre = view.locator('pre.file-viewer-code')
     await expect(pre).toContainText(RO_LINE, { timeout: 10_000 })
     const askHere = page.locator('[data-testid="file-ask-here"]')
@@ -874,7 +859,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
 
   test('Files: the HTML preview (an iframe, pill)', async ({ page }) => {
     const panel = await openSession(page)
-    const view = await openFile(panel, HTML_FILE)
+    const view = await openSessionFile(panel, HTML_FILE)
     await expect(view.frameLocator('.fv-html-preview').locator('body')).toContainText(HTML_PASSAGE, { timeout: 15_000 })
     const askHere = page.locator('[data-testid="file-ask-here"]')
     await selectUntil(page, () => frameTextRects(view, HTML_PASSAGE), askHere)

@@ -323,7 +323,9 @@
 .org-rail-toggle .org-top-new { top: 3px; right: 3px; }
 
 .org-detail-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-.org-detail-body-team { overflow: auto; padding: 14px 18px; }
+/* The detail column starts 300px right of the rail, inside the notice stack's reach: a node's
+   teams end clear of the stack while one shows (--corner-stack-room, corner-stack.css). */
+.org-detail-body-team { overflow: auto; padding: 14px 18px; padding-bottom: max(14px, var(--corner-stack-room, 0px)); scrollbar-gutter: stable; }
 .org-detail-body-board > * { flex: 1; min-height: 0; }
 .org-detail-loading { margin: auto; font-size: 12.5px; color: var(--fg-muted); }
 
@@ -408,7 +410,7 @@
 /* Phone: the tabs take their own row under who it is. */
 .org-page.is-phone .org-detail-head { flex-wrap: wrap; gap: 10px; padding: 10px 12px; }
 .org-page.is-phone .org-composer { padding-left: 12px; padding-right: 12px; }
-.org-page.is-phone .org-detail-body-team { padding: 12px; }
+.org-page.is-phone .org-detail-body-team { padding-top: 12px; padding-left: 12px; padding-right: 12px; }
 
 /* The side panel: a task opened from the page (OrgSidePanel). A wide window gives it a column;
    a narrow one lays it over the detail, so the list and the detail never move. */

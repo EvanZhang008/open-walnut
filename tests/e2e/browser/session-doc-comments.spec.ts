@@ -33,7 +33,7 @@ import { humanPress, openThreadsSession, readRecord, resetThreadsFixture, test }
 import { DOC_COMMENTS_SESSION } from './threads-fixture'
 import { loadHome } from './draft-helpers'
 import { docBarSettled, pressBarTool } from './doc-bar-helpers'
-import { goToSessionFolder, isolateUiPrefs } from './todo-panel-helpers'
+import { isolateUiPrefs, openSessionFile } from './todo-panel-helpers'
 
 const TASK = 'pw-task-threads-doc-comments'
 const READY = 'How should the reader treat stale copies?'
@@ -67,16 +67,7 @@ function captureSends(page: Page): SentFrame[] {
 async function openDoc(page: Page, name = DOC): Promise<{ panel: Locator; view: Locator }> {
   await page.addStyleTag({ content: '.notification-toaster { display: none !important; }' })
   const panel = await openThreadsSession(page, DOC_COMMENTS_SESSION, TASK, READY, { view: 'linear' })
-  if (!(await panel.locator('.session-file-explorer').isVisible())) {
-    await panel.getByRole('button', { name: 'Files', exact: true }).click()
-  }
-  const explorer = panel.locator('.session-file-explorer')
-  await goToSessionFolder(explorer)
-  const row = explorer.locator('.session-file-explorer-node', { hasText: name }).first()
-  await expect(row).toBeVisible({ timeout: 15_000 })
-  await row.click()
-  const view = explorer.locator('.file-content-view')
-  await expect(view).toBeVisible({ timeout: 10_000 })
+  const view = await openSessionFile(panel, name)
   // The view remembers Preview or Source per file: a test that ended in Source must
   // not open the next one there. (A narrow bar may hold the switch in ⋯.)
   const docBar = view.locator('.fv-doc-bar')

@@ -24,7 +24,7 @@ import {
 } from './threads-helpers'
 import { TAGGED_READY, TAGGED_SESSION, TAGGED_TASK } from './threads-fixture'
 import { isolateUiPrefsContext } from './status-section-helpers'
-import { goToSessionFolder } from './todo-panel-helpers'
+import { openSessionFile } from './todo-panel-helpers'
 
 const MD_FILE = 'cache-design.md'
 const HTML_FILE = 'cache-report.html'
@@ -47,21 +47,6 @@ async function openSession(page: Page, baseURL: string | undefined): Promise<Loc
   await page.getByRole('link', { name: 'Open Walnut' }).click()
   await page.waitForLoadState('networkidle')
   return openThreadsSession(page, TAGGED_SESSION, TAGGED_TASK, TAGGED_READY, { view: 'linear' })
-}
-
-async function openFile(page: Page, panel: Locator, name: string): Promise<Locator> {
-  if (!(await panel.locator('.session-file-explorer').isVisible())) {
-    await panel.getByRole('button', { name: 'Files', exact: true }).click()
-  }
-  const explorer = panel.locator('.session-file-explorer')
-  await expect(explorer).toBeVisible({ timeout: 10_000 })
-  await goToSessionFolder(explorer)
-  const row = explorer.locator('.session-file-explorer-node', { hasText: name }).first()
-  await expect(row).toBeVisible({ timeout: 10_000 })
-  await row.click()
-  const view = explorer.locator('.file-content-view')
-  await expect(view).toBeVisible({ timeout: 10_000 })
-  return view
 }
 
 const fileCard = (view: Locator) => view.locator('.fv-thread-layer .thread-card')
@@ -131,7 +116,7 @@ test.describe('Questions about a file passage (Files tab)', () => {
   test('Ask here on a selection in the markdown preview: a draft card beside the passage, numbered by its send, the reply inside', async ({ page, request, baseURL }) => {
     const panel = await openSession(page, baseURL)
     const next = await nextQuestionNumber(request, TAGGED_SESSION)
-    const view = await openFile(page, panel, MD_FILE)
+    const view = await openSessionFile(panel, MD_FILE)
     const editor = view.locator('.fv-wysiwyg-editor .ProseMirror')
     await expect(editor).toContainText(MD_PASSAGE_FULL)
     await expect(view.locator('.fv-thread-layer')).toHaveCount(1)
@@ -259,7 +244,7 @@ test.describe('Questions about a file passage (Files tab)', () => {
   test('a sidebar row opens the Files tab on the file with the card beside the passage; Quote in chat targets it; × is plain chat', async ({ page, request, baseURL }) => {
     const panel = await openSession(page, baseURL)
     const next = await nextQuestionNumber(request, TAGGED_SESSION)
-    const view = await openFile(page, panel, MD_FILE)
+    const view = await openSessionFile(panel, MD_FILE)
     const editor = view.locator('.fv-wysiwyg-editor .ProseMirror')
     await scrollTextIntoView(page, editor, MD_PASSAGE_FULL)
     await dragSelect(page, await textRects(editor, MD_PASSAGE_FULL))
@@ -316,7 +301,7 @@ test.describe('Questions about a file passage (Files tab)', () => {
     // beside the passage (it used to open the file with no card).
     await card2.locator('.thread-card-input').press('Escape')
     await expect(card2).toHaveCount(0)
-    const other = await openFile(page, panel, HTML_FILE)
+    const other = await openSessionFile(panel, HTML_FILE)
     await expect(other.frameLocator('.fv-html-preview').locator('body')).toContainText(HTML_PASSAGE, { timeout: 15_000 })
     const bar = panel.locator('.session-history .session-msg--threaded', { hasText: 'Is the ledger bounded?' }).first()
     await bar.scrollIntoViewIfNeeded()
@@ -333,7 +318,7 @@ test.describe('Questions about a file passage (Files tab)', () => {
   test('the inline Ask on a hovered block asks about the whole block; Tree Mode names the file on the page', async ({ page, request, baseURL }) => {
     const panel = await openSession(page, baseURL)
     const next = await nextQuestionNumber(request, TAGGED_SESSION)
-    const view = await openFile(page, panel, MD_FILE)
+    const view = await openSessionFile(panel, MD_FILE)
     const editor = view.locator('.fv-wysiwyg-editor .ProseMirror')
     // The block sits below the first screen of the file.
     await editor.locator('p', { hasText: MD_BLOCK }).scrollIntoViewIfNeeded()
@@ -364,7 +349,7 @@ test.describe('Questions about a file passage (Files tab)', () => {
   test('the HTML preview: a selection inside the frame gets the two-action pill, Ask here opens the card over the passage', async ({ page, request, baseURL }) => {
     const panel = await openSession(page, baseURL)
     const next = await nextQuestionNumber(request, TAGGED_SESSION)
-    const view = await openFile(page, panel, HTML_FILE)
+    const view = await openSessionFile(panel, HTML_FILE)
     const frame = view.frameLocator('.fv-html-preview')
     await expect(frame.locator('body')).toContainText(HTML_PASSAGE, { timeout: 15_000 })
     /** Viewport rects of the passage: the frame's own rects plus the frame's offset. */
@@ -464,7 +449,7 @@ test.describe('Questions about a file passage (Files tab)', () => {
 
   test('an Ask here closed with nothing written leaves no card, no mark and no rail', async ({ page, baseURL }) => {
     const panel = await openSession(page, baseURL)
-    const view = await openFile(page, panel, MD_FILE)
+    const view = await openSessionFile(panel, MD_FILE)
     const editor = view.locator('.fv-wysiwyg-editor .ProseMirror')
     await expect(editor).toContainText(MD_PASSAGE_FULL)
     await expect(view.locator('.fv-thread-layer')).toHaveCount(1)
@@ -498,14 +483,14 @@ test.describe('Questions about a file passage (Files tab)', () => {
     await nothingLeft()
     // Another file takes the view while the Ask is open: it goes too.
     await askOnce()
-    await openFile(page, panel, HTML_FILE)
+    await openSessionFile(panel, HTML_FILE)
     await expect(view.frameLocator('.fv-html-preview').locator('body')).toContainText(HTML_PASSAGE, { timeout: 15_000 })
     await nothingLeft()
   })
 
   test('a long HTML page keeps the place being read when the view changes width', async ({ page, browserName, baseURL }) => {
     const panel = await openSession(page, baseURL)
-    const view = await openFile(page, panel, LONG_FILE)
+    const view = await openSessionFile(panel, LONG_FILE)
     const frame = view.frameLocator('.fv-html-preview')
     await expect(frame.locator('body')).toContainText(LONG_PASSAGE, { timeout: 15_000 })
     await frame.locator('body').evaluate((el, phrase) => {
@@ -544,7 +529,7 @@ test.describe('Questions about a file passage (Files tab)', () => {
 
   test('a long HTML page: a question reopened from the rail after scrolling away brings its passage back, card beside it', async ({ page, baseURL }) => {
     const panel = await openSession(page, baseURL)
-    const view = await openFile(page, panel, LONG_FILE)
+    const view = await openSessionFile(panel, LONG_FILE)
     const frame = view.frameLocator('.fv-html-preview')
     await expect(frame.locator('body')).toContainText(LONG_PASSAGE, { timeout: 15_000 })
     await frame.locator('body').evaluate((el, phrase) => {
