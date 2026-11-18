@@ -15,6 +15,7 @@ import { useIsReplicaServer, useServerCapability } from '@/hooks/useServerRole';
 import { DEVICES_TAB, WAY_PANES, type PhonesCloudTab } from '../../settings-way-panes';
 import { useTunnelName } from './tunnel-name';
 import { useDevicesData, useExposeStatus, type DeviceEntry } from './useDevicesData';
+import { WalnutServersStrip } from './WalnutServersStrip';
 import { DEVICES_INTRO, deriveWays, landingWay, type NowLine, type Way, type WayDot } from './ways-model';
 import '@/styles/devices-ways.css';
 
@@ -35,6 +36,8 @@ export interface PhonesCloudView {
   now: NowLine;
   /** The tab Phones & Cloud opens on; null while the list loads. */
   landing: PhonesCloudTab | null;
+  /** What the "Your Walnut runs on" line reads from the list; null on a replica's own console. */
+  servers: { companion: { origin: string } | null; companionError: string | null } | null;
 }
 
 const isPhone = (d: DeviceEntry) => (d.role ?? 'phone') === 'phone';
@@ -99,6 +102,7 @@ export function usePhonesCloudView(): PhonesCloudView {
     tabs: loaded || !lastTabs ? fresh : lastTabs,
     now,
     landing: landed === null ? null : landed === 'devices' ? DEVICES_TAB : WAY_PANES[landed],
+    servers: replica ? null : { companion: targets.find((t) => t.kind === 'cloud') ?? null, companionError: cloudError },
   };
 }
 
@@ -181,6 +185,7 @@ export function PhonesCloudTabHead({ tab, view }: { tab: PhonesCloudTab; view: P
   // browser's sign-in renews from a cookie Safari's 7-day rule never clears.
   return (
     <div className="pc-head">
+      {view.servers && <WalnutServersStrip companion={view.servers.companion} companionError={view.servers.companionError} />}
       <TabBar tabs={view.tabs} current={tab} />
       {t && (
         <div className="pc-intro" data-testid={`pc-intro-${tab}`}>

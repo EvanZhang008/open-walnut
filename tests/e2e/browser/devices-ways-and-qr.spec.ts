@@ -18,7 +18,9 @@
  *   4. Show QR and Pair open the code in a dialog in front of the user: a paired
  *      phone's new code asks first (it signs the phone out), the code says how to
  *      scan it, and the dialog cannot be closed while the code is being made.
- *   5. This Mac's own record and simulators stay folded in Advanced on All devices.
+ *   5. All devices lists phones, browsers, the extension and other Macs; pairing is on each
+ *      way's tab, and this Mac's own record and simulators are folded under Device records
+ *      in Settings > Advanced (2026-11-18).
  *
  * Real density, the shape of the user's own list: a phone paired through the
  * companion and copied to this Mac, an older phone paired with this Mac only, a third
@@ -148,7 +150,7 @@ async function openPhonesCloud(page: Page, landsOn = 'cloud') {
   return section
 }
 
-/** The All devices tab: every device, Add a phone. */
+/** The All devices tab: every phone, browser, extension and Mac. */
 async function openDevices(page: Page) {
   await openPhonesCloud(page)
   await page.getByTestId('pc-tab-devices-phones').click()
@@ -212,7 +214,7 @@ test('Phones & Cloud opens the tab in use: four tabs, what the way is, how the p
   expect(await top('[data-testid="pc-tabs"]')).toBeLessThan(await top('[data-testid="pc-intro-cloud"]'))
   expect(await top('[data-testid="pc-intro-cloud"]')).toBeLessThan(await top('[data-testid="devices-now"]'))
   expect(await top('[data-testid="devices-now"]')).toBeLessThan(await top('[data-testid="devices-way-panel-cloud"]'))
-  for (const id of ['devices-phones-group', 'devices-add-group', 'remote-access-card', 'browser-access']) {
+  for (const id of ['devices-phones-group', 'way-pair-all', 'remote-access-card', 'browser-access']) {
     await expect(page.getByTestId(id)).toHaveCount(0)
   }
   await shot(page, 'tab-cloud')
@@ -285,7 +287,7 @@ test('each tab holds its own way and the devices that use it; All devices holds 
 
   await page.getByTestId('pc-tab-devices-phones').click()
   const dev = page.locator('#devices-phones')
-  await expect(dev.getByTestId('pc-intro-devices-phones').locator('.pc-intro-what')).toHaveText("Every phone, browser and Mac that can open Walnut, each with the ways it uses, and the servers this Walnut runs on. Each way's own tab lists only the devices that use it.")
+  await expect(dev.getByTestId('pc-intro-devices-phones').locator('.pc-intro-what')).toHaveText("Every phone, browser and Mac that can open Walnut, each with the ways it uses. Each way's own tab lists only the devices that use it.")
   await expect(dev.getByTestId('pc-intro-devices-phones').locator('.pc-intro-now')).toHaveCount(0)
   const phones = dev.getByTestId('devices-phones-group')
   await expect(phones.locator('.devices-row')).toHaveCount(3)
@@ -295,23 +297,38 @@ test('each tab holds its own way and the devices that use it; All devices holds 
   await expect(dev.getByText('Direct', { exact: true })).toHaveCount(0)
   expect(await rowNames(dev.getByTestId('devices-extensions-group'))).toEqual(['extension-4d5e6f'])
   expect(await rowNames(dev.getByTestId('devices-macs'))).toEqual(['studio-mac'])
-  const others = dev.getByTestId('devices-others')
-  await expect(others).toContainText('17')
-  await expect(others).toHaveAttribute('data-open', 'false')
-  const order = await dev.evaluate((el) => ['pc-tabs', 'pc-intro-devices-phones', 'devices-phones-group', 'devices-browsers-group', 'devices-add-group', 'devices-others-group']
+  await expect(phones.locator('.settings-group-heading')).toContainText('Phones with the Walnut app')
+  await expect(phones).toContainText('Signed in once by scanning a QR code; works over every way below.')
+  // No pairing here (the companion's tab pairs), no records that are no phone.
+  for (const id of ['way-pair-all', 'devices-others-group', 'devices-add-group']) await expect(dev.getByTestId(id)).toHaveCount(0)
+  const order = await dev.evaluate((el) => ['walnut-servers', 'pc-tabs', 'pc-intro-devices-phones', 'devices-phones-group', 'devices-browsers-group']
     .map((id) => el.querySelector(`[data-testid="${id}"]`)?.getBoundingClientRect().top ?? -1))
   expect(order.every((t) => t >= 0)).toBe(true)
   expect([...order].sort((a, b) => a - b)).toEqual(order)
   await shot(page, 'tab-devices')
 
   // Old in-page anchors and rows open the tab that holds them (a link written to the hash).
-  for (const [hash, tab] of [['#devices-way-panel-tailscale', 'devices-tailscale'], ['#devices-way-browser', 'devices-browser'], ['#devices-new-name', 'devices-phones'], ['#devices-backup-leader', 'cloud']] as const) {
+  for (const [hash, tab] of [['#devices-way-panel-tailscale', 'devices-tailscale'], ['#devices-way-browser', 'devices-browser'], ['#devices-new-name', 'devices-phones'], ['#way-pair-tailscale', 'devices-tailscale'], ['#devices-backup-leader', 'cloud']] as const) {
     await page.evaluate((h) => { window.location.hash = h }, hash)
     await expect(page.getByTestId(`pc-tab-${tab}`)).toHaveAttribute('aria-current', 'page')
   }
   await expect(page.locator('#devices-backup-leader')).toBeInViewport()
   await page.getByTestId('settings-nav-general').click()
   await expect(page.getByTestId('pc-tabs')).toHaveCount(0)
+
+  // This Mac's own record and the sixteen simulators: Settings > Advanced, folded.
+  await page.getByTestId('settings-nav-advanced').click()
+  const others = page.locator('#advanced').getByTestId('devices-others')
+  await expect(others).toContainText('17', { timeout: 30_000 })
+  await expect(others).toHaveAttribute('data-open', 'false')
+  await others.click()
+  await expect(others).toHaveAttribute('data-open', 'true')
+  await expect(page.locator('#advanced').getByTestId('devices-others-group').locator('.devices-row')).toHaveCount(17)
+  await shot(page, 'advanced-device-records')
+  // An old link to the fold opens Advanced.
+  await page.getByTestId('settings-nav-devices').click()
+  await page.evaluate(() => { window.location.hash = '#devices-others' })
+  await expect(page.locator('#advanced').getByTestId('devices-others')).toBeVisible({ timeout: 30_000 })
 })
 
 test('with nothing for away, Phones & Cloud opens Devices and says the phone cannot get in from outside', async ({ page }) => {
@@ -598,12 +615,12 @@ test('Show QR asks in a dialog, then shows the code with how to scan it', async 
   await expect(showQr).toBeFocused()
 })
 
-test('Pair new device opens the code straight away; a failed code offers Try again', async ({ page }) => {
+test('Pair phone opens the code straight away; a failed code offers Try again', async ({ page }) => {
   const ctl = await mockDevices(page)
-  const section = await openDevices(page)
+  const section = await openPhonesCloud(page)
 
   await section.locator('#devices-new-name').fill('travel phone')
-  await section.getByRole('button', { name: /Pair new device/i }).click()
+  await section.getByRole('button', { name: 'Pair phone', exact: true }).click()
   await expect(dialog(page).locator('img')).toBeVisible({ timeout: 30_000 })
   await expect(dialog(page)).toHaveAttribute('data-qr-for', 'travel-phone')
   await expect(dialog(page).getByTestId('devices-show-qr-warning')).toHaveCount(0)

@@ -5,9 +5,10 @@
  *   Cloud companion  Phones on this companion, Macs on this companion, Pair a phone this way
  *   Tailscale        Phones paired with this Mac, Pair a phone this way
  *   Tunnel           Signed-in browsers, Walnut extension
- *   All devices      every group, each row tagged with its ways, Walnut servers (where this
- *                    Walnut runs, WalnutServersGroup.tsx), Add a phone (with the address
- *                    picker), Advanced (this Mac's link, simulators)
+ *   All devices      Phones with the Walnut app, Signed-in browsers, Walnut extension, Other
+ *                    Macs, each row tagged with its ways; Pair a phone on this Wi-Fi only
+ *                    when no way tab can pair
+ *   Advanced         (Settings > Advanced) this Mac's own cloud link and simulators, folded
  *
  * A phone shows in every tab whose way it uses, and its Remove says it removes the
  * whole phone: one pairing works on every way, so there is no removing one way.
@@ -29,7 +30,7 @@ import { requestFailureText } from '@/utils/request-failure';
 import { browserRowLabels } from '../browser-labels';
 import { usePairDevice, type PairTargetKind } from './usePairDevice';
 import { useDevicesData, type DeviceEntry } from './useDevicesData';
-import { bestOfferedKind, preferredKind } from './pair-targets';
+import { preferredKind } from './pair-targets';
 import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { CLOUD_CHANGE_CLIENT_TIMEOUT_MS } from './cloud-change-timeout';
 import { ownFirst, useDeviceCaller } from './device-caller';
@@ -37,7 +38,6 @@ import { OwnDeviceSignOut } from './OwnDeviceSignOut';
 import { SIGNED_IN_BROWSER, SignOutAllBrowsers, type SignOutResult } from './SignOutAllBrowsers';
 import { describeDevice, describeMacRow, reachWords, ROLE_NOTE, UNPAIR_SELF_WARNING, CLOUD_UNPAIRED_NOTICE, DEVICES_CHANGED_EVENT } from './device-rows-copy';
 import { PairPhoneGroup } from './PairPhoneGroup';
-import { WalnutServersGroup } from './WalnutServersGroup';
 import { mergeDeviceRows, pairTargetForScope, removePhoneWarning, rowsForScope, wayTags, type DeviceRow, type DeviceScope } from './device-scope';
 import '@/styles/settings-sections-addons.css';
 
@@ -54,24 +54,26 @@ interface QrDialogState {
 
 /** The heading of a tab's phone list, and what it says with none. */
 const PHONES_GROUP: Record<DeviceScope, { heading: string; empty: string }> = {
-  all: { heading: 'Paired phones', empty: 'No phones paired yet.' },
+  all: { heading: 'Phones with the Walnut app', empty: 'No phone has the Walnut app signed in yet. Pair one on the Cloud companion tab.' },
   cloud: { heading: 'Phones on this companion', empty: 'No phone is paired with the companion yet.' },
   tailscale: { heading: 'Phones paired with this Mac', empty: 'No phone is paired with this Mac yet.' },
   browser: { heading: '', empty: '' },
+  advanced: { heading: '', empty: '' },
 };
+
+/** What "a phone with the Walnut app" is, once, where All devices lists them (2026-11-18, the user: "what is a paired phone?"). */
+const PHONES_ALL_NOTE = 'Signed in once by scanning a QR code; works over every way below.';
 
 export function DeviceList({ scope }: { scope: DeviceScope }) {
   const replica = useIsReplicaServer();
-  const fixedTarget = pairTargetForScope(scope);
-  const [target, setTarget] = useState<PairTargetKind>(fixedTarget && fixedTarget !== 'pick' ? fixedTarget : 'lan');
-  const data = useDevicesData({
-    replica,
-    onTargets: (kinds) => {
-      if (fixedTarget !== 'pick') return;
-      setTarget((prev) => (kinds.includes(prev) ? prev : bestOfferedKind(kinds)));
-    },
-  });
+  const data = useDevicesData({ replica });
   const { devices, cloudDevices, targets, listState, tailscale, cloudError, cloudUnpaired, cloudWithheld, refresh } = data;
+  // A browser signed in with a code: its own row says so, other rows offer no Remove, and it pairs nothing.
+  const caller = useDeviceCaller();
+  // All devices pairs only where no way tab does (device-scope.ts); it waits for the list to know.
+  const fixedTarget = scope === 'all' && listState !== 'ready'
+    ? null
+    : pairTargetForScope(scope, targets.map((t) => t.kind), { replica, deviceCaller: caller.isDevice });
   const { created, qrDataURL, busy, mint, dismiss } = usePairDevice();
   const [rowError, setRowError] = useState<RowError | null>(null);
   // "Signed out 4 browsers.", after Sign out (the rows it names are gone), until the pane closes.
@@ -97,8 +99,6 @@ export function DeviceList({ scope }: { scope: DeviceScope }) {
   const [qrDialog, setQrDialog] = useState<QrDialogState | null>(null);
   const qrReturnFocus = useRef<HTMLElement | null>(null);
   const { notifySaved } = useSettingsSaved();
-  // A browser signed in with a code: its own row says so, other rows offer no Remove.
-  const caller = useDeviceCaller();
 
   const openQrDialog = (next: QrDialogState) => {
     qrReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -136,7 +136,6 @@ export function DeviceList({ scope }: { scope: DeviceScope }) {
    */
   const repair = (name: string, kind: PairTargetKind) => {
     if (busy) return;
-    if (fixedTarget === 'pick') setTarget(kind);
     setRowError(null);
     dismiss();
     openQrDialog({ name, repair: true, target: kind, phase: 'ask', error: null });
@@ -191,7 +190,7 @@ export function DeviceList({ scope }: { scope: DeviceScope }) {
 
   const rows = rowsForScope(mergeDeviceRows(devices, cloudDevices), scope);
   const tailscaleRunning = !!tailscale?.running;
-  const selfRow = scope === 'all' || scope === 'cloud' ? cloudDevices.find((d) => d.role === 'self') : undefined;
+  const selfRow = scope === 'advanced' || scope === 'cloud' ? cloudDevices.find((d) => d.role === 'self') : undefined;
   // The phone used most recently leads.
   const byLastUse = (a: { lastUsedAt?: string }, b: { lastUsedAt?: string }) => (b.lastUsedAt ?? '').localeCompare(a.lastUsedAt ?? '');
   const phones = ownFirst(rows.filter((r) => (r.role ?? 'phone') === 'phone').sort(byLastUse), caller.name);
@@ -336,12 +335,13 @@ export function DeviceList({ scope }: { scope: DeviceScope }) {
   };
 
   const phonesWords = PHONES_GROUP[scope];
-  const phonesGroup = scope !== 'browser'
+  const phonesGroup = scope !== 'browser' && scope !== 'advanced'
     // A phone signed in only by browser (All devices): its group is Signed-in browsers, no empty box here.
     && (scope !== 'all' || phones.length > 0 || listState !== 'ready' || browsers.length === 0 || cloudUnpaired || cloudError) && (
     <SettingsGroup
       heading={phonesWords.heading}
       headingTrailing={phones.length > 0 ? String(phones.length) : undefined}
+      description={scope === 'all' ? PHONES_ALL_NOTE : undefined}
       footer={scope === 'tailscale' ? 'Tailscale reaches the pairing a phone has with this Mac: a phone here uses this way once the Tailscale app runs on it too, signed in to the same tailnet.' : undefined}
       data-testid={scope === 'all' ? 'devices-phones-group' : `way-devices-${scope}`}
     >
@@ -356,7 +356,8 @@ export function DeviceList({ scope }: { scope: DeviceScope }) {
               : scope === 'cloud' && cloudWithheld ? "The companion's phones are listed only on this Mac itself."
               : scope !== 'tailscale' && (cloudError || cloudUnpaired)
                 ? (scope === 'cloud' ? "Couldn't read the companion's phones." : 'No phones paired with this Mac.')
-                : phonesWords.empty}
+                : scope === 'all' && fixedTarget !== null ? 'No phone has the Walnut app signed in yet. Pair one below.'
+                  : phonesWords.empty}
         </SettingsEmpty>
       )}
       {phones.map(renderRow)}
@@ -373,11 +374,8 @@ export function DeviceList({ scope }: { scope: DeviceScope }) {
       scope={scope}
       fixedTarget={fixedTarget}
       targets={targets}
-      target={target}
-      setTarget={setTarget}
       listState={listState}
       busy={busy}
-      isDevice={caller.isDevice}
       onPair={pair}
     />
   );
@@ -441,18 +439,15 @@ export function DeviceList({ scope }: { scope: DeviceScope }) {
         </SettingsGroup>
       )}
 
-      {/* Where this Walnut runs: this Mac, the companion and the hosts that keep a copy (one list,
-          not ways of their own). */}
-      {scope === 'all' && !replica && (
-        <WalnutServersGroup companion={targets.find((t) => t.kind === 'cloud') ?? null} companionError={cloudError} />
-      )}
-
       {scope !== 'cloud' && pairGroup}
 
-      {/* Not phones (this Mac's own cloud link, simulators): folded at the very end,
-          so the phones list holds only phones. */}
-      {scope === 'all' && (others.length > 0 || selfRow) && (
-        <SettingsGroup heading="Advanced" data-testid="devices-others-group">
+      {/* Not phones (this Mac's own cloud link, simulators): in Settings > Advanced, folded,
+          so Phones & Cloud lists only what a person reaches Walnut with. */}
+      {scope === 'advanced' && (others.length > 0 || selfRow || cloudUnpaired || cloudError) && (
+        <SettingsGroup heading="Device records" data-testid="devices-others-group">
+          {/* After Unpair this Mac (its row is gone), or while the companion does not answer (its row is unknown). */}
+          {cloudUnpaired && <SettingsNotice kind="info">{CLOUD_UNPAIRED_NOTICE}</SettingsNotice>}
+          {cloudError && <SettingsNotice kind="error" role="alert">{cloudError}</SettingsNotice>}
           <SettingsDisclosure
             id="devices-others"
             data-testid="devices-others"

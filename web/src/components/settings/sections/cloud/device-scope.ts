@@ -12,12 +12,13 @@
  *   cloud      phones and Macs with a record on the companion, and this Mac's own link
  *   tailscale  phones with a record on this Mac (Tailscale reaches this Mac's own pairing)
  *   browser    browsers and the Walnut extension, signed in with a code from that tab
- *   all        everything, each row tagged with the ways it uses
+ *   all        phones, browsers, the extension and other Macs, each row tagged with the ways it uses
+ *   advanced   what is no phone and no browser (simulators; Settings > Advanced), with this Mac's own link
  */
 import type { DeviceEntry } from './devices-reply';
 import type { PairTargetKind } from './usePairDevice';
 
-export type DeviceScope = 'all' | 'cloud' | 'tailscale' | 'browser';
+export type DeviceScope = 'all' | 'cloud' | 'tailscale' | 'browser' | 'advanced';
 
 /** One row per device name, with the boxes that hold a record of it. */
 export type DeviceRow = DeviceEntry & { kinds: PairTargetKind[] };
@@ -50,10 +51,11 @@ export function mergeDeviceRows(devices: readonly DeviceEntry[], cloudDevices: r
 
 const roleOf = (r: DeviceRow) => r.role ?? 'phone';
 
-/** The rows a tab lists. Simulators show only on All devices (folded under Advanced). */
+/** The rows a tab lists. Simulators show only in Settings > Advanced. */
 export function rowsForScope(rows: readonly DeviceRow[], scope: DeviceScope): DeviceRow[] {
   switch (scope) {
-    case 'all': return [...rows];
+    case 'all': return rows.filter((r) => ['phone', 'browser', 'mac'].includes(roleOf(r)));
+    case 'advanced': return rows.filter((r) => !['phone', 'browser', 'mac'].includes(roleOf(r)));
     case 'cloud': return rows.filter((r) => r.kinds.includes('cloud') && (roleOf(r) === 'phone' || roleOf(r) === 'mac'));
     case 'tailscale': return rows.filter((r) => r.kinds.includes('lan') && roleOf(r) === 'phone');
     case 'browser': return rows.filter((r) => roleOf(r) === 'browser');
@@ -87,9 +89,27 @@ function waysOf(row: DeviceRow, opts: { replica?: boolean }): WayTag[] {
   return tags;
 }
 
-/** The address a tab's pairing QR carries: its own way's, or the picker's on All devices. */
-export function pairTargetForScope(scope: DeviceScope): PairTargetKind | 'pick' | null {
-  return scope === 'all' ? 'pick' : scope === 'cloud' ? 'cloud' : scope === 'tailscale' ? 'tailnet' : null;
+/**
+ * The address a tab's pairing QR carries: its own way's (pairing lives in each way's tab,
+ * 2026-11-18). All devices pairs too where no way tab reaches every phone:
+ *   - on this Mac without a companion, on this Wi-Fi: a QR carries one address, and a phone without
+ *     Tailscale cannot reach a tailnet one, so a Tailscale address alone is no reason to drop it;
+ *   - on the companion's own console, through its own address (it has no other tab that pairs);
+ *   - never for a browser signed in with a code: the server refuses it every code.
+ */
+export function pairTargetForScope(
+  scope: DeviceScope,
+  offered: readonly PairTargetKind[] = [],
+  opts: { replica?: boolean; deviceCaller?: boolean } = {},
+): PairTargetKind | null {
+  if (opts.deviceCaller) return null;
+  if (scope === 'cloud') return 'cloud';
+  if (scope === 'tailscale') return 'tailnet';
+  if (scope === 'all') {
+    if (opts.replica) return offered.includes('cloud') ? 'cloud' : null;
+    return offered.includes('cloud') ? null : 'lan';
+  }
+  return null;
 }
 
 /**

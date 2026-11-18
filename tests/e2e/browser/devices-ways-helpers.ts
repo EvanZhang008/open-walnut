@@ -1,6 +1,8 @@
 /**
  * Settings › Phones & Cloud is four tabs: each way (Cloud companion, Tailscale,
- * the tunnel) and Devices (paired phones and browsers, Add a phone). The entry
+ * the tunnel), each pairing a phone through its own address, and All devices (the
+ * phones with the Walnut app, signed-in browsers, the extension, other Macs; it pairs
+ * on this Wi-Fi only when no way tab can). The entry
  * opens the tab in use (devices-ways-and-qr.spec.ts). Specs about one tab open it
  * from the tab bar first, the way a person does.
  */
@@ -11,7 +13,7 @@ export type DeviceWay = 'cloud' | 'tailscale' | 'browser'
 /** The tab's section id (core-settings-registry): `#cloud` kept its old deep link. */
 export const WAY_PANE: Record<DeviceWay, string> = { cloud: 'cloud', tailscale: 'devices-tailscale', browser: 'devices-browser' }
 
-/** The Devices tab's pane id: paired phones and browsers, Add a phone. */
+/** The All devices tab's pane id: phones, browsers, the extension and other Macs. */
 export const DEVICES_TAB = 'devices-phones'
 
 /** Open a tab from the bar (no-op when it is showing) and return its section. Any tab must be open. */

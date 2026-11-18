@@ -51,7 +51,8 @@ describe('resolvePane', () => {
     expect(resolvePane('#remote-access-card')).toMatchObject({ paneId: 'devices-tailscale', targetId: 'remote-access-card' })
     // The Devices tab's rows: an old link to the name field lands on Devices.
     expect(resolvePane('#devices-new-name')).toEqual({ paneId: 'devices-phones', targetId: 'devices-new-name', known: true, row: true })
-    expect(resolvePane('#devices-others')).toMatchObject({ paneId: 'devices-phones' })
+    // This Mac's own link and simulators moved to Advanced (2026-11-18).
+    expect(resolvePane('#devices-others')).toMatchObject({ paneId: 'advanced' })
     expect(resolvePane('#devices-phones')).toEqual({ paneId: 'devices-phones', targetId: null, known: true })
     // Tabs are not sub-pages: no way back to a parent (the tab bar is the way to the siblings).
     expect(parentPane('devices-tailscale')).toBeNull()

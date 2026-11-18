@@ -1,12 +1,12 @@
 /**
- * "Walnut servers" on Phones & Cloud's All devices tab (WalnutServersGroup.tsx): every place this
- * Walnut runs, in one list. Pure, so every shape is unit-tested (tests/web/walnut-servers.test.ts).
+ * "Your Walnut runs on", the line at the top of Phones & Cloud (WalnutServersStrip.tsx): every
+ * place this Walnut runs, in one line, above the tabs. Pure, so every shape is unit-tested (tests/web/walnut-servers.test.ts).
  *
  * 2026-11-18, the user: an address a replica server has "is not a separate link, more like under
  * general tab show the replica server we have". A server on an always-on host (it can carry the
  * tunnel's address, so a browser opens Walnut while this Mac sleeps) and the cloud companion are
- * copies of this Mac's Walnut, not ways of their own: they are listed here, each once, by the name
- * the person knows the machine by.
+ * copies of this Mac's Walnut, not ways of their own and not devices: they are listed here, each
+ * once, by the name the person knows the machine by, above the ways to reach them.
  *
  *   This Mac           the main Walnut: tasks, notes and sessions live here
  *   Cloud companion    a copy in the cloud; the phone reaches it while this Mac sleeps
@@ -22,9 +22,9 @@ import { hostRowId } from '@/utils/host-settings-nav';
 export interface WalnutServerRow {
   id: string;
   name: string;
-  /** `primary` for this Mac, `copy` for every other server. */
-  role: 'primary' | 'copy';
   line: string;
+  /** A few words beside the name in the overview strip ("main", the companion's address, "carries <tunnel>"). */
+  short: string;
   dot: 'done' | 'pending' | 'action' | 'error';
   /** A Settings hash that opens its own settings (none for this Mac). */
   href?: string;
@@ -50,18 +50,18 @@ export function walnutServerRows(i: WalnutServersInput): WalnutServerRow[] {
   const rows: WalnutServerRow[] = [{
     id: 'this-mac',
     name: 'This Mac',
-    role: 'primary',
     line: 'The main Walnut: your tasks, notes and sessions live here, and every other server keeps a copy.',
+    short: 'main',
     dot: 'done',
   }];
   if (i.companion || i.companionError) {
     rows.push({
       id: 'companion',
       name: 'Cloud companion',
-      role: 'copy',
       line: i.companion && !i.companionError
         ? `At ${bare(i.companion.origin)}. Your phone reaches it from anywhere, also while this Mac sleeps.`
         : 'Not answering right now; its tab says why.',
+      short: i.companion && !i.companionError ? bare(i.companion.origin) : 'not answering',
       dot: i.companion && !i.companionError ? 'done' : 'action',
       href: '#cloud',
     });
@@ -89,8 +89,8 @@ export function walnutServerRows(i: WalnutServersInput): WalnutServerRow[] {
     rows.push({
       id: `host:${key}`,
       name: m.name,
-      role: 'copy',
       line: `${state.text}${address}`,
+      short: carrier ? `carries ${i.tunnelTitle}` : state.dot === 'done' ? 'a copy' : 'not running',
       dot: state.dot,
       // The row whose server this is: its switch and its tunnel's settings live there
       // (HostServersGroup.tsx reads one row's settings), not always the named twin's.

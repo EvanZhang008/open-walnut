@@ -10,14 +10,15 @@
  *      itself, or the Mac the companion belongs to, may), and the row says so in full, as plain
  *      text, and the page's Saved / Not saved indicator stays away (a refusal is
  *      not an unsaved change). Show QR on it is refused on that same row. This Mac's own record is
- *      "This Mac" under Other entries: no QR, and Unpair warns first (Cancel
- *      here). The handover is what the row says: `walnut device owner
- *      mac-second` on the companion.
+ *      "This Mac" under Settings › Advanced › Device records (never in Phones & Cloud's
+ *      All devices): no QR, and Unpair warns first (Cancel here). The handover is what
+ *      the row says: `walnut device owner mac-second` on the companion.
  *   4. Retry on the row: this Mac mints, Cloud connects, and the box runs a
  *      daemon of this Mac's own (its own dir, keyed by its device id), never the
  *      other Mac's.
- *   5. Unpair this Mac, confirmed: the companion drops it and what it minted,
- *      and the section says the cloud list can't load, never "No phones paired yet."
+ *   5. Unpair this Mac (Settings › Advanced), confirmed: the companion drops it and what
+ *      it minted, and All devices says this Mac is no longer paired, never that no phone
+ *      has the app signed in.
  *
  * page.goto only loads the app; everything after is a real click or keystroke.
  */
@@ -48,12 +49,19 @@ async function openDevices(page: Page): Promise<Locator> {
 }
 /** The page-level Saved / Not saved indicator (settings-pane-context.tsx), wherever it renders. */
 const savedIndicator = (page: Page) => page.getByTestId('settings-saved-indicator')
-/** "Other entries" open (it remembers its state for the session). */
-async function openOthers(section: Locator): Promise<void> {
+/**
+ * Settings › Advanced, its "Device records" fold open (it remembers its state for the
+ * session): this Mac's own cloud link lives there. Settings must be open.
+ */
+async function openOthers(page: Page): Promise<Locator> {
+  await page.getByTestId('settings-nav-advanced').click()
+  const section = page.locator('#advanced')
+  await expect(section).toBeVisible({ timeout: 30_000 })
   const toggle = section.getByTestId('devices-others')
   await expect(toggle).toBeVisible({ timeout: 30_000 })
   if (await toggle.getAttribute('data-open') !== 'true') await toggle.click()
   await expect(toggle).toHaveAttribute('data-open', 'true')
+  return section
 }
 
 interface Fixture { tunnelDir: string; boxAuth: string; boxData: string; boxHome: string; base: string; ids: Record<string, string> }
@@ -179,10 +187,13 @@ test('a second Mac hears another Mac is connected, and takes the companion over 
   await macs.screenshot({ path: path.join(SHOTS, `devices-other-macs-${browserName}.png`) })
 
   // This Mac's own record is "This Mac" (the companion said which record its token
-  // matched): not a paired phone, no QR, and Unpair warns before anything happens.
-  await expect(section.locator('.devices-row[data-device-name="mac-second"]')).toHaveCount(1)
-  await openOthers(section)
-  const self = section.locator('.devices-row[data-device-role="self"]')
+  // matched), in Settings › Advanced, not among the devices a person reaches Walnut
+  // with: no QR, and Unpair warns before anything happens.
+  await expect(section.locator('.devices-row[data-device-name="mac-second"]')).toHaveCount(0)
+  await expect(section.getByTestId('devices-others')).toHaveCount(0)
+  const advanced = await openOthers(page)
+  await expect(advanced.getByTestId('devices-others-group')).toContainText('Device records')
+  const self = advanced.locator('.devices-row[data-device-role="self"]')
   await expect(self).toHaveAttribute('data-device-name', 'mac-second')
   await expect(self.locator('.settings-row-label')).toHaveText(/^This Mac/)
   await expect(self.getByTestId('devices-show-qr')).toHaveCount(0)
@@ -190,7 +201,7 @@ test('a second Mac hears another Mac is connected, and takes the companion over 
   await self.getByTestId('devices-unpair-self').click()
   await expect(self.getByRole('alert')).toHaveText(UNPAIR_WARNING)
   await self.scrollIntoViewIfNeeded()
-  await section.screenshot({ path: path.join(SHOTS, `devices-this-mac-unpair-warning-${browserName}.png`) })
+  await advanced.getByTestId('devices-others-group').screenshot({ path: path.join(SHOTS, `devices-this-mac-unpair-warning-${browserName}.png`) })
   await self.getByTestId('devices-unpair-self-cancel').click()
   await expect(self.getByRole('alert')).toHaveCount(0)
   await expect(self.getByTestId('devices-unpair-self')).toBeVisible()
@@ -219,24 +230,26 @@ test('a second Mac hears another Mac is connected, and takes the companion over 
   expect(fs.existsSync(path.join(f.tunnelDir, 'daemon.pid'))).toBe(false)
 
   // 5. Unpair this Mac, confirmed: the companion drops it and the credential it
-  // minted. The section says so plainly (no red, no "may have been"), Cloud is
-  // no longer a pairing target, and Cloud Companion no longer says Connected.
+  // minted. All devices says so plainly (no red, no "may have been"), the Cloud
+  // companion tab no longer pairs a phone, and it no longer says Connected.
   // The Cloud companion tab says Connected first.
   section = await openDevices(page)
   const cloudCard = await openWay(page, 'cloud')
   await expect(cloudCard.getByText('Connected', { exact: true })).toBeVisible({ timeout: 30_000 })
-  section = await backToDevices(page)
-  await openOthers(section)
-  const me = section.locator('.devices-row[data-device-role="self"]')
+  const advancedAgain = await openOthers(page)
+  const me = advancedAgain.locator('.devices-row[data-device-role="self"]')
   await me.getByTestId('devices-unpair-self').click()
   await expect(me.getByRole('alert')).toHaveText(UNPAIR_WARNING)
   await me.getByTestId('devices-unpair-self-confirm').click()
+  // The record is gone from Advanced, with no error there.
+  await expect(advancedAgain.locator('.devices-row[data-device-role="self"]')).toHaveCount(0, { timeout: 30_000 })
+  await expect(advancedAgain.locator('.settings-notice-error')).toHaveCount(0)
+  section = await openDevices(page)
   await expect(section.locator('.settings-notice-info', { hasText: UNPAIRED })).toHaveText(UNPAIRED, { timeout: 30_000 })
   await expect(section.locator('.settings-notice-error')).toHaveCount(0)
   await expect(section).not.toContainText('may have been unpaired')
   await expect(section.locator('.settings-empty')).toHaveText('No phones paired with this Mac.')
-  await expect(section.getByTestId('devices-target-cloud')).toHaveCount(0)
-  await expect(section).not.toContainText('No phones paired yet.')
+  await expect(section).not.toContainText('No phone has the Walnut app signed in yet.')
   await expect(section.locator('.devices-row[data-device-role="self"]')).toHaveCount(0)
   const boxNames = (JSON.parse(fs.readFileSync(f.boxAuth, 'utf-8')) as { devices: Array<{ name: string }> }).devices.map((d) => d.name)
   expect(boxNames).not.toContain('mac-second')
@@ -247,6 +260,8 @@ test('a second Mac hears another Mac is connected, and takes the companion over 
   await expect(cloudCard.getByText('Not paired', { exact: true })).toBeVisible({ timeout: 30_000 })
   await expect(cloudCard.getByText('Connected', { exact: true })).toHaveCount(0)
   await expect(cloudCard).toContainText(UNPAIRED)
+  // Cloud is no longer a pairing target: its tab has no Pair a phone this way.
+  await expect(cloudCard.getByTestId('way-pair-cloud')).toHaveCount(0)
   await cloudCard.scrollIntoViewIfNeeded()
   await cloudCard.screenshot({ path: path.join(SHOTS, `cloud-companion-unpaired-${browserName}.png`) })
   expect(errors).toEqual([])

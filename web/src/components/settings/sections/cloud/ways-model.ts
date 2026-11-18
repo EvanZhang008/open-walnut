@@ -174,7 +174,12 @@ function nowLine(i: WaysInput, cloud: Way, tailscale: Way): NowLine {
   if (i.listState === 'loading') return { tone: 'none', title: 'Checking how your phone reaches Walnut...', detail: '' };
   if (i.listState === 'failed') return { tone: 'warn', title: "Couldn't load your phones", detail: 'The list of paired phones did not load; reopen this page to try again.' };
   if (i.phoneUses.length === 0) {
-    return { tone: 'none', title: 'No phone is paired yet', detail: 'Add one below: scan a QR code with the Walnut app.' };
+    // Pairing lives in each way's tab; All devices pairs on Wi-Fi while there is no companion (device-scope.ts).
+    const awayTab = i.targets.some((t) => t.kind === 'cloud');
+    return {
+      tone: 'none', title: 'No phone is paired yet',
+      detail: awayTab ? 'Pair one on the Cloud companion tab: scan its QR code with the Walnut app.' : 'Pair one below: scan the QR code with the Walnut app.',
+    };
   }
   // The companion's half of the list is missing (it did not answer, or it is shown
   // only on the Mac itself): whatever this Mac saw last may not be the newest use.
@@ -224,8 +229,8 @@ export function deriveWays(i: WaysInput): { now: NowLine; ways: Way[] } {
 
 /** The Devices tab's own two lines, in the shape of a way's (what it is, when to use it). */
 export const DEVICES_INTRO = {
-  what: 'Every phone, browser and Mac that can open Walnut, each with the ways it uses, and the servers this Walnut runs on. Each way\'s own tab lists only the devices that use it.',
-  useWhen: 'You look for a device, or pair a phone and pick its address yourself. Pair a phone once: it then finds its own way, at home and away.',
+  what: 'Every phone, browser and Mac that can open Walnut, each with the ways it uses. Each way\'s own tab lists only the devices that use it.',
+  useWhen: 'You look for a phone, a browser or the Walnut extension, whichever way it uses.',
 } as const;
 
 /**

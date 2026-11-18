@@ -9,9 +9,10 @@
  *      plugin still loading after a restart keeps the placeholder, never "Tunnel".
  *   2. The tab and its intro say the tunnel's name, never "browser link"; where it runs is the
  *      host's name the person gave it.
- *   3. All devices lists the Walnut servers: this Mac, the companion, and an always-on host listed
- *      in config.yaml twice (named, and found in ~/.ssh/config, carrying the tunnel) once, with the
- *      tunnel's address; its Settings opens the host row whose server it is.
+ *   3. "Your Walnut runs on", above the tabs, names this Mac, the companion, and an always-on host
+ *      listed in config.yaml twice (named, and found in ~/.ssh/config, carrying the tunnel) once;
+ *      it opens the host row whose server it is. All devices keeps phones, browsers and the
+ *      extension; this Mac's own link and simulators are in Settings > Advanced.
  *
  * Every label the tab ever painted is recorded by a MutationObserver (it runs before the frame is
  * painted), so a flash of another name fails the test. The list, the tunnel's state and the host
@@ -70,14 +71,16 @@ const HOST_SERVERS = {
   providers: [ACME],
 }
 
-async function mockAll(page: Page, ctl: ExposeControl) {
+async function mockAll(page: Page, ctl: ExposeControl, opts: { simulators?: number } = {}) {
+  const sims = Array.from({ length: opts.simulators ?? 0 }, (_, i) => ({ name: `sim-${i + 1}`, createdAt: ago(5000 + i), role: 'simulator' }))
   await page.route((url) => url.pathname === '/api/devices/tailscale', (route) => json(route, { installed: false, running: false, peers: [], install: { brew: false, job: null } }))
   await page.route((url) => url.pathname === '/api/devices', (route) => json(route, {
     devices: [
       { name: 'pocket-phone', createdAt: ago(600), role: 'phone', adoptedFrom: 'cloud' },
       { name: 'browser-1a2b3c', createdAt: ago(9000), lastUsedAt: ago(100), role: 'browser' },
+      ...sims,
     ],
-    cloudDevices: [{ name: 'pocket-phone', createdAt: ago(600), lastUsedAt: ago(2), role: 'phone' }],
+    cloudDevices: [{ name: 'pocket-phone', createdAt: ago(600), lastUsedAt: ago(2), role: 'phone' }, { name: 'this-mac', createdAt: ago(20000), role: 'self' }],
     targets: [LAN, CLOUD],
     tailscale: { installed: false, running: false },
   }))
@@ -177,7 +180,7 @@ test('Find a setting finds the tunnel by its name and by "tunnel", and shows its
   await expect(page.getByTestId('pc-tab-devices-browser')).toHaveAttribute('aria-current', 'page')
 })
 
-test('2 and 3. the tab says the tunnel and its host by name; All devices lists the Walnut servers, each machine once', async ({ page }) => {
+test('2 and 3. the tab says the tunnel and its host by name; "Your Walnut runs on" names each server once, above the tabs', async ({ page }) => {
   await mockAll(page, {})
   await openPhonesCloud(page)
   const tab = page.getByTestId('pc-tab-devices-browser')
@@ -190,40 +193,49 @@ test('2 and 3. the tab says the tunnel and its host by name; All devices lists t
   await expect(pane.getByTestId('browser-access-runs-on')).toContainText('Big dev box stays on')
   await expect(pane).not.toContainText(/browser link/i)
   await expect(pane).not.toContainText('devbox-ssh')
-  await shot(page, '2-tunnel-tab')
 
-  await page.getByTestId('pc-tab-devices-phones').click()
-  const all = page.locator('#devices-phones')
-  const servers = all.getByTestId('walnut-servers')
-  await expect(servers.locator('.walnut-server-row')).toHaveCount(3, { timeout: 30_000 })
-  const names = await servers.locator('.walnut-server-row .settings-addons-ellipsis').allTextContents()
-  expect(names).toEqual(['This Mac', 'Cloud companion', 'Big dev box'])
-  await expect(servers.locator('[data-server="this-mac"]')).toContainText('Primary')
-  await expect(servers.locator('[data-server="companion"]')).toContainText('At walnut.example.com.')
-  const box = servers.locator('[data-server="host:devbox"]')
-  await expect(box).toContainText('Copy')
-  await expect(box).toContainText('Acme Tunnel opens this Walnut at someone-devbox.acme-tunnel.example, also while this Mac sleeps.')
+  // The servers line sits above the tabs, on every tab: each machine once, by the name it was given.
+  const servers = pane.getByTestId('walnut-servers')
+  await expect(servers.locator('.pc-server')).toHaveCount(3, { timeout: 30_000 })
+  expect(await servers.locator('.pc-server-name').allTextContents()).toEqual(['This Mac', 'Cloud companion', 'Big dev box'])
+  expect(await servers.locator('.pc-server-short').allTextContents()).toEqual(['main', 'walnut.example.com', 'carries Acme Tunnel'])
+  await expect(servers.getByTestId('walnut-server-host:devbox')).toHaveAttribute('title', 'Running. Acme Tunnel opens this Walnut at someone-devbox.acme-tunnel.example, also while this Mac sleeps.')
   await expect(servers).not.toContainText('devbox-ssh')
   await expect(servers).not.toContainText('Old small box')
+  const order = await pane.evaluate((el) => ['walnut-servers', 'pc-tabs'].map((id) => el.querySelector(`[data-testid="${id}"]`)!.getBoundingClientRect().top))
+  expect(order[0]).toBeLessThan(order[1])
+  await shot(page, '2-tunnel-tab')
+
+  // All devices: the phones with the app, the browsers and the extension; no servers, no pairing, no Advanced.
+  await page.getByTestId('pc-tab-devices-phones').click()
+  const all = page.locator('#devices-phones')
+  await expect(all.getByTestId('devices-phones-group')).toContainText('Phones with the Walnut app', { timeout: 30_000 })
+  await expect(all.getByTestId('devices-phones-group')).toContainText('Signed in once by scanning a QR code; works over every way below.')
+  await expect(all.getByTestId('walnut-servers')).toHaveCount(1)
+  await expect(all.locator('.settings-group-heading, h3').filter({ hasText: /Walnut servers|Add a phone|Advanced/ })).toHaveCount(0)
+  await expect(all.getByTestId('way-pair-all')).toHaveCount(0)
+  await expect(all.getByTestId('devices-others-group')).toHaveCount(0)
   await expect(all).not.toContainText(/browser link/i)
-  await box.scrollIntoViewIfNeeded()
-  await shot(page, '3-walnut-servers')
+  await shot(page, '3-all-devices')
 
-  // A phone's browser on All devices leads to the tunnel's tab, where its sign-in link is.
-  await all.getByTestId('devices-add-tunnel-link').click()
-  await expect(page).toHaveURL(/#devices-browser$/)
-  await expect(tab).toHaveAttribute('aria-current', 'page')
-
-  // A server's Settings opens the host row whose server it is (the one carrying the tunnel).
-  await page.getByTestId('pc-tab-devices-phones').click()
-  await page.locator('#devices-phones').getByTestId('walnut-server-open-host:devbox').click()
+  // A server opens the host row whose server it is (the one carrying the tunnel).
+  await all.getByTestId('walnut-server-host:devbox').click()
   await expect(page).toHaveURL(/#rh-host-devbox-ssh$/)
-  // The companion's opens its tab.
+  // The companion opens its tab.
   await page.getByTestId('settings-nav-devices').click()
-  // Phones & Cloud opens the tab in use first; then All devices.
   await expect(page).toHaveURL(/#cloud$/, { timeout: 30_000 })
-  await page.getByTestId('pc-tab-devices-phones').click()
-  await expect(page).toHaveURL(/#devices-phones$/)
-  await page.locator('#devices-phones').getByTestId('walnut-server-open-companion').click()
+  await page.locator('#cloud').getByTestId('walnut-server-companion').click()
   await expect(page).toHaveURL(/#cloud$/)
+})
+
+test('This Mac\'s own link and the simulators are in Settings > Advanced, folded', async ({ page }) => {
+  await mockAll(page, {}, { simulators: 3 })
+  await openPhonesCloud(page)
+  await page.getByTestId('settings-nav-advanced').click()
+  const adv = page.locator('#advanced')
+  const records = adv.getByTestId('devices-others-group')
+  await expect(records).toContainText('Device records', { timeout: 30_000 })
+  await records.getByTestId('devices-others').click()
+  await expect(records.locator('.devices-row')).toHaveCount(4)
+  await expect(records.locator('.devices-row').first()).toContainText('This Mac')
 })

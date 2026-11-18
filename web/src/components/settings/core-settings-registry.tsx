@@ -308,6 +308,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     icon: 'cloud', tint: '#5856D6',
     description: 'A small server of yours in the cloud that your phone talks to, even while this Mac sleeps.',
     keywords: ['cloud', 'companion', 'bridge', 'relay', 'updates',
+      { word: 'pair phone qr code', rowLabel: 'Pair a phone this way', anchor: 'way-pair-cloud' },
       { word: 'away sleep take over backup leader', rowLabel: 'Cloud companion takes over', anchor: 'devices-backup-leader' },
       { word: 'keeps copies', rowLabel: 'What the cloud companion keeps', anchor: 'companion-keep' }],
     render: ({ config, saveSection }) => <CloudSection config={config} onSave={saveSection} />,
@@ -317,7 +318,8 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     requires: 'primary',
     icon: 'network', tint: '#5856D6',
     description: 'A private network between this Mac and your phone, so the phone talks to this Mac directly.',
-    keywords: ['tailscale', 'tailnet', 'vpn', 'from anywhere'],
+    keywords: ['tailscale', 'tailnet', 'vpn', 'from anywhere',
+      { word: 'pair phone qr code', rowLabel: 'Pair a phone this way', anchor: 'way-pair-tailscale' }],
     render: () => <DevicesWaySection way="tailscale" />,
   },
   {
@@ -331,10 +333,9 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   {
     owner: 'walnut', id: 'devices-phones', label: 'All devices', title: 'All devices', group: 'configure', tabOf: 'devices',
     icon: 'phone', tint: '#34AADC',
-    description: 'Every paired phone, signed-in browser and Mac, and pairing a new phone.',
-    keywords: ['phone', 'iphone', 'pair', 'paired phones', 'signed-in browsers', 'devices',
-      { word: 'qr code', rowLabel: 'Device name', anchor: 'devices-new-name' },
-      { word: 'wifi wi-fi', rowLabel: 'Pairing target' }],
+    description: 'Every phone with the Walnut app, signed-in browser, the Walnut extension and other Macs.',
+    keywords: ['phone', 'iphone', 'paired phones', 'walnut app', 'signed-in browsers', 'extension', 'devices',
+      { word: 'wifi wi-fi', rowLabel: 'Pair a phone on this Wi-Fi', anchor: 'way-pair-all' }],
     render: () => <DevicesSection />,
   },
   {
@@ -347,11 +348,12 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   {
     owner: 'walnut', id: 'advanced', label: 'Advanced', title: 'Advanced', group: 'configure',
     icon: 'sliders', tint: '#8E8E93',
-    description: 'Keep awake and developer options.',
+    description: 'Keep awake, developer options and device records.',
     keywords: [
       'keep awake', 'lid', 'battery', 'sdk',
       { word: 'port', rowLabel: 'Port', anchor: 'sdk-port' }, // the row's real label (N17)
       'raw config', 'json', 'background jobs',
+      { word: 'simulator device records', rowLabel: 'Device records', anchor: 'devices-others' },
     ],
     render: ({ config, saveSection }) => <AdvancedSection config={config} onSave={saveSection} />,
   },

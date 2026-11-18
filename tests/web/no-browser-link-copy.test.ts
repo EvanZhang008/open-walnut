@@ -1,7 +1,7 @@
 /**
  * No screen says "browser link" (2026-11-18, the user: "browser link is very confusing"). The
  * tunnel's tab wears the tunnel's name (cloud/tunnel-name.ts), and an address a replica
- * server has is that server's, listed under All devices > Walnut servers, not a way of its own.
+ * server has is that server's, listed in "Your Walnut runs on" atop Phones & Cloud, not a way of its own.
  * This fails when any web source puts the words back in code (comments are free to name the
  * history); the one search keyword, which no one reads, is the only exception.
  */

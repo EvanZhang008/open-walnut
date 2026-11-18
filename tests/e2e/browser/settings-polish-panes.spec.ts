@@ -109,10 +109,11 @@ test('N3-03: the placeholder-shaped name "Test phone" pairs as Test-phone, no ru
   })
   await openSettings(page)
   await clickNav(page, 'devices')
-  // Add a phone is on the Devices tab of Phones & Cloud.
+  // With no companion and no Tailscale address (the fixture server), All devices pairs on this Wi-Fi.
   const section = await backToDevices(page)
-  await section.locator('#devices-new-name').fill('Test phone')
-  await section.getByRole('button', { name: 'Pair new device' }).click()
+  const pair = section.getByTestId('way-pair-all')
+  await pair.locator('#devices-new-name').fill('Test phone')
+  await pair.getByRole('button', { name: 'Pair phone' }).click()
   await expect.poll(() => names).toEqual(['Test-phone'])
   await expect(section).not.toContainText('Invalid device name')
 })

@@ -54,6 +54,43 @@
   background: var(--settings-group-border);
 }
 
+/* "Your Walnut runs on": every place this Walnut runs, one line above the tabs
+   (cloud/WalnutServersStrip.tsx). Quiet: an overview, never a fifth tab. */
+.pc-servers {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 0 0 12px;
+  padding: 0 calc(var(--settings-row-pad-x, 16px) + 1px);
+  font-size: 12.5px;
+  line-height: 18px;
+}
+.pc-servers-key { color: var(--fg-muted); }
+.pc-servers-list { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.pc-server {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 10px;
+  border: 1px solid var(--settings-group-border);
+  border-radius: 999px;
+  background: var(--settings-group-bg);
+  color: var(--fg);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.pc-server .browser-access-dot { margin: 0; }
+a.pc-server:hover { border-color: var(--fg-muted); }
+a.pc-server:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.pc-server-name { font-weight: 600; }
+.pc-server-short { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--fg-muted); }
+@media (max-width: 560px) {
+  .pc-servers { padding: 0 var(--settings-row-pad-x, 16px); }
+  .pc-server { min-height: 32px; box-sizing: border-box; }
+}
+
 /* What the tab is, when to use it, and its state now. */
 .pc-intro {
   margin: 0 0 14px;

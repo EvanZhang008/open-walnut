@@ -53,9 +53,10 @@ describe('rowsForScope', () => {
   it('Tunnel: the browsers and the extension, never a phone', () => {
     expect(names('browser')).toEqual(['browser-ab12cd', 'extension-ef34'])
   })
-  it('All devices: every row; simulators only there', () => {
-    expect(names('all')).toEqual(rows.map((r) => r.name).sort())
-    for (const scope of ['cloud', 'tailscale', 'browser'] as const) expect(names(scope)).not.toContain('sim-one')
+  it('All devices: phones, browsers, the extension and Macs; simulators only in Advanced', () => {
+    expect(names('all')).toEqual(['browser-ab12cd', 'desk-phone', 'extension-ef34', 'pocket-phone', 'studio-mac'])
+    expect(names('advanced')).toEqual(['sim-one'])
+    for (const scope of ['all', 'cloud', 'tailscale', 'browser'] as const) expect(names(scope)).not.toContain('sim-one')
   })
   it('a phone with both records shows once in each tab of its ways', () => {
     for (const scope of ['cloud', 'tailscale', 'all'] as const) {
@@ -87,11 +88,21 @@ describe('wayTags', () => {
 })
 
 describe('pairing and removal', () => {
-  it("each way's tab pairs through its own address; All devices offers the picker; the tunnel has no pairing", () => {
+  it("each way's tab pairs through its own address; All devices only on Wi-Fi while no way tab can; the tunnel never", () => {
     expect(pairTargetForScope('cloud')).toBe('cloud')
     expect(pairTargetForScope('tailscale')).toBe('tailnet')
-    expect(pairTargetForScope('all')).toBe('pick')
+    expect(pairTargetForScope('all', ['lan'])).toBe('lan')
+    expect(pairTargetForScope('all', [])).toBe('lan')
+    expect(pairTargetForScope('all', ['lan', 'cloud'])).toBeNull()
+    // A Tailscale address alone keeps Wi-Fi pairing: a phone without Tailscale cannot reach it.
+    expect(pairTargetForScope('all', ['lan', 'tailnet'])).toBe('lan')
+    // The companion's own console pairs through its own address, another replica not at all.
+    expect(pairTargetForScope('all', ['cloud'], { replica: true })).toBe('cloud')
+    expect(pairTargetForScope('all', [], { replica: true })).toBeNull()
+    // A browser signed in with a code is refused every code: no pairing anywhere.
+    for (const scope of ['all', 'cloud', 'tailscale'] as const) expect(pairTargetForScope(scope, ['lan'], { deviceCaller: true })).toBeNull()
     expect(pairTargetForScope('browser')).toBeNull()
+    expect(pairTargetForScope('advanced')).toBeNull()
   })
   it('Remove says it removes the whole phone, naming every way it uses', () => {
     const pocket = rows.find((r) => r.name === 'pocket-phone')!

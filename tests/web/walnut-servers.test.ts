@@ -1,5 +1,5 @@
 /**
- * "Walnut servers" on All devices (web/src/components/settings/sections/cloud/walnut-servers.ts):
+ * "Your Walnut runs on", the line at the top of Phones & Cloud (web/src/components/settings/sections/cloud/walnut-servers.ts):
  * every place this Walnut runs, each machine once, by the name the person knows it by, on the
  * shape the user's own list has: this Mac, the cloud companion, and one always-on host listed in
  * config.yaml twice (the row he named, and a row found in ~/.ssh/config that carries the tunnel).
@@ -26,7 +26,9 @@ const rows = walnutServerRows({ companion: { origin: 'https://companion.example.
 
 describe('walnutServerRows', () => {
   it('this Mac first as the main one, then the companion, then each host that runs a server', () => {
-    expect(rows.map((r) => [r.name, r.role])).toEqual([['This Mac', 'primary'], ['Cloud companion', 'copy'], ['Big box', 'copy']])
+    expect(rows.map((r) => [r.name, r.short])).toEqual([['This Mac', 'main'], ['Cloud companion', 'companion.example.test'], ['Big box', 'carries Acme Tunnel']])
+    // This Mac opens nothing; every copy opens its own settings.
+    expect(rows.map((r) => !!r.href)).toEqual([false, true, true])
   })
   it('one machine under two rows is one server, by the name the person gave it, with the tunnel it carries', () => {
     const big = rows.filter((r) => r.name === 'Big box')
@@ -49,6 +51,9 @@ describe('walnutServerRows', () => {
     expect(walnutServerRows({ companion: null, companionError: 'timed out', hosts: [], tunnelTitle: 'Tunnel' })[1])
       .toMatchObject({ name: 'Cloud companion', dot: 'action', line: 'Not answering right now; its tab says why.' })
     expect(walnutServerRows({ companion: null, hosts: null, tunnelTitle: 'Tunnel' }).map((r) => r.name)).toEqual(['This Mac'])
+  })
+  it('the overview line\'s few words: main, the companion\'s address, the tunnel a host carries', () => {
+    expect(rows.map((r) => r.short)).toEqual(['main', 'companion.example.test', 'carries Acme Tunnel'])
   })
   it('never says "browser link"', () => {
     for (const r of rows) expect(r.line).not.toMatch(/browser link/i)

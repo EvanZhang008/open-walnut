@@ -426,7 +426,9 @@ test('C54 C79: removing a phone and showing a new QR are two-step, and the butto
   await remove.click()
   await row.getByTestId('devices-remove-confirm').click()
   await expect.poll(() => deletes).toEqual(['DELETE /api/devices/Test%20phone'])
-  await expect(page.locator('#devices-phones')).toContainText('No phones paired yet.')
+  // Wi-Fi only (no companion, no Tailscale): the empty list points at the pairing on this tab.
+  await expect(page.locator('#devices-phones')).toContainText('No phone has the Walnut app signed in yet. Pair one below.')
+  await expect(page.getByTestId('way-pair-all')).toBeVisible()
 })
 
 test('Remote Hosts: Add host lives in the header, the empty state says so', async ({ page }) => {

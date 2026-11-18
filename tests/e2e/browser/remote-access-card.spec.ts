@@ -84,7 +84,7 @@ async function openDevices(page: Page, way: DeviceWay | null = 'tailscale') {
   const nav = page.getByTestId('settings-nav-devices')
   await nav.click()
   await expect(nav).toHaveAttribute('aria-current', 'page')
-  // The Tailscale steps are the Tailscale tab; the picker and every phone are on All devices.
+  // The Tailscale steps and its pairing are the Tailscale tab; every phone is on All devices.
   if (way) return openWay(page, way)
   const section = await backToDevices(page)
   await expect(section).not.toContainText('Loading paired phones...', { timeout: 30_000 })
@@ -103,7 +103,7 @@ const step = (card: Locator, id: 'mac' | 'phone' | 'pair') => card.locator(`.rem
 test.describe('Settings → Phones & Cloud: Reach Walnut from anywhere', () => {
   test.use({ viewport: { width: 1280, height: 900 } })
 
-  test('(a) not installed with Homebrew: both buttons; Install runs, the log shows, then Open, then connected and the picker gains Tailscale', async ({ page }) => {
+  test('(a) not installed with Homebrew: both buttons; Install runs, the log shows, then Open, then connected and the tab can pair through Tailscale', async ({ page }) => {
     const fx: Fixture = { detail: NOT_INSTALLED, list: { devices: [], cloudDevices: [SELF], targets: [LAN] } }
     const calls = await mockEndpoints(page, fx)
     const section = await openDevices(page)
@@ -131,6 +131,12 @@ test.describe('Settings → Phones & Cloud: Reach Walnut from anywhere', () => {
     await expect(step(card, 'pair')).toHaveAttribute('data-dot', 'pending')
     // The App Store QR waits until the Mac is on the tailnet.
     await expect(card.getByTestId('remote-access-stores')).toHaveCount(0)
+    // No Tailscale address yet: the tab's own pairing says why it cannot pair, and its button stays off.
+    const pairGroup = section.getByTestId('way-pair-tailscale')
+    const unoffered = "Set up Tailscale on this Mac first (step 1 above); then the code can point at this Mac's Tailscale address."
+    await expect(pairGroup).toContainText(unoffered)
+    await pairGroup.locator('#devices-new-name').fill('Travel phone')
+    await expect(pairGroup.getByTestId('devices-pair-new')).toBeDisabled()
     await shot(page, 'a1-not-installed', card)
 
     await install.click()
@@ -158,7 +164,7 @@ test.describe('Settings → Phones & Cloud: Reach Walnut from anywhere', () => {
     await expect(logBlock).toHaveCount(0)
     await shot(page, 'a3-installed-not-running', card)
 
-    // Connected: step 1 turns green, and the pairing picker is re-read and now offers Tailscale.
+    // Connected: step 1 turns green, and the pairing list is re-read and now offers the Tailscale address.
     const listReadsBefore = calls.listGets
     fx.list = { ...fx.list, targets: [LAN, TAILNET] }
     fx.detail = { ...RUNNING, install: { brew: true, job: { state: 'done', startedAt: new Date().toISOString(), log: [] } } }
@@ -166,8 +172,10 @@ test.describe('Settings → Phones & Cloud: Reach Walnut from anywhere', () => {
     await expect(mac).toContainText('Connected as studio-mac.tail1234.ts.net')
     await expect.poll(() => calls.listGets).toBeGreaterThan(listReadsBefore)
     await expect(step(card, 'phone')).toHaveAttribute('data-dot', 'action')
-    const main = await backToDevices(page)
-    await expect(main.getByTestId('devices-target-tailnet')).toBeVisible()
+    // The tab's own pairing now points at it: the notice is gone and the named phone can pair.
+    await expect(pairGroup).not.toContainText(unoffered)
+    await expect(pairGroup).toContainText("The QR code points the phone at this Mac's Tailscale address")
+    await expect(pairGroup.getByTestId('devices-pair-new')).toBeEnabled()
   })
 
   test('(a2) a failed install shows its sentence and keeps both buttons', async ({ page }) => {
@@ -332,7 +340,8 @@ test.describe('Settings → Phones & Cloud: Reach Walnut from anywhere', () => {
     }
     const calls = await mockEndpoints(page, fx)
     const section = await openDevices(page, null)
-    await expect(section.locator('#devices-new-name')).toBeVisible()
+    // The list has loaded: the paired phone shows (a replica's All devices has no pairing of its own).
+    await expect(section.getByTestId('devices-phones-group')).toContainText('Work-phone')
     await expect(section.getByTestId('remote-access-card')).toHaveCount(0)
     await page.waitForTimeout(1_000)
     await expect(section.getByTestId('remote-access-card')).toHaveCount(0)

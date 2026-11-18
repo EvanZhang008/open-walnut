@@ -4,9 +4,12 @@
  * GET /api/devices may list a third pairing target, `tailnet` (this machine's
  * 100.64/10 address), between this network and the cloud, plus a `tailscale`
  * status field. A phone paired through any address learns the others by itself,
- * so the picker only chooses the address in the QR. When the machine has no
- * tailnet address, the guided card above "Pair a phone" says how to get one
- * (its own states: remote-access-card.spec.ts).
+ * so the address only decides where the QR points first. Each way's tab pairs
+ * through its own address (the Tailscale tab's QR carries the tailnet address, the
+ * Cloud companion tab's the companion); All devices pairs, on this Wi-Fi, only when
+ * neither is offered. When the machine has no tailnet address, the guided card
+ * above the Tailscale tab's pairing says how to get one (its own states:
+ * remote-access-card.spec.ts).
  *
  * The device list and the mint are served by page.route fixtures with neutral
  * names (nothing is paired on the fixture server). Navigation is by real clicks.
@@ -15,12 +18,12 @@
  * WKWebView) with `PW_WEBKIT=1 ... --project=webkit`.
  */
 import { mkdirSync } from 'node:fs'
-import { test, expect, type Page, type Route } from '@playwright/test'
+import { test, expect, type Locator, type Page, type Route } from '@playwright/test'
 import { backToDevices, openWay, qrDialog } from './devices-ways-helpers'
 
 test.setTimeout(120_000)
 
-const SHOTS = '/tmp/tailnet-target'
+const SHOTS = process.env.PW_SHOTS_DIR ?? '/tmp/tailnet-target'
 const TAILNET_ORIGIN = 'http://100.101.102.103:3456'
 
 const LAN = { kind: 'lan', origin: 'http://192.0.2.10:3456', label: 'This network (Wi-Fi)' }
@@ -82,10 +85,17 @@ async function openDevices(page: Page, { waitForList = true } = {}) {
   const nav = page.getByTestId('settings-nav-devices')
   await nav.click()
   await expect(nav).toHaveAttribute('aria-current', 'page')
-  // Phones & Cloud opens the tab in use; the phone list and Add a phone are on All devices.
+  // Phones & Cloud opens the tab in use; every phone is on All devices.
   const section = await backToDevices(page)
   if (waitForList) await expect(section).not.toContainText('Loading paired phones...', { timeout: 30_000 })
   return section
+}
+
+/** Pair `name` from a tab's own pairing group; the mint is awaited by the caller. */
+async function pairFrom(group: Locator, name: string) {
+  await expect(group.getByTestId('devices-pair-new')).toHaveText('Pair phone')
+  await group.locator('#devices-new-name').fill(name)
+  await group.getByTestId('devices-pair-new').click()
 }
 
 /** The section (or `region` of it), at most 1280 CSS px wide; one file per engine. */
@@ -96,55 +106,50 @@ async function shot(page: Page, name: string, region = page.locator('#devices-ph
 }
 
 test.describe('Settings → Phones & Cloud tailnet pairing', () => {
-  test('three targets: picker lists Wi-Fi, Tailscale, Cloud; a Tailscale pairing QR points at the 100.x address', async ({ page }) => {
+  test('three targets: each way pairs on its own tab; the Tailscale QR points at the 100.x address, the companion QR at the companion', async ({ page }) => {
     const mints = await mockDevices(page, {
       targets: [LAN, TAILNET, CLOUD],
       tailscale: { installed: true, running: true, dnsName: 'studio-mac.example.ts.net' },
     })
     const section = await openDevices(page)
 
-    const picker = section.getByRole('radiogroup', { name: 'Pairing target' })
-    await expect(picker).toBeVisible()
-    const segments = picker.getByRole('radio')
-    await expect(segments).toHaveCount(3)
-    // Server order, server labels.
-    await expect(segments.nth(0)).toContainText('Wi-Fi')
-    await expect(segments.nth(1)).toContainText('Tailscale')
-    await expect(segments.nth(2)).toContainText('Cloud')
-    await expect(section.getByTestId('devices-target-tailnet')).toHaveAttribute('title', '100.101.102.103:3456')
-    // The first pick is unchanged: this network, the address a phone next to this machine reaches now.
-    await expect(section.getByTestId('devices-target-lan')).toHaveAttribute('aria-checked', 'true')
-    await expect(section.getByTestId('devices-target-tailnet')).toHaveAttribute('aria-checked', 'false')
-    // Every option is fully on screen: the track scrolls sideways when it overflows, which would hide Cloud.
-    const track = (await picker.boundingBox())!
-    for (let i = 0; i < 3; i++) {
-      const box = (await segments.nth(i).boundingBox())!
-      expect(box.x, `segment ${i} left edge`).toBeGreaterThanOrEqual(track.x - 0.5)
-      expect(box.x + box.width, `segment ${i} right edge`).toBeLessThanOrEqual(track.x + track.width + 0.5)
-    }
-    // Tailscale is running and offered: no install line.
+    // All devices lists the phones; it has no pairing of its own and no address picker while a way tab can pair.
+    await expect(section.getByTestId('devices-phones-group')).toContainText('Work-phone')
+    await expect(section.getByTestId('way-pair-all')).toHaveCount(0)
+    await expect(section.locator('#devices-new-name')).toHaveCount(0)
+    await expect(page.getByRole('radiogroup', { name: 'Pairing target' })).toHaveCount(0)
+    await expect(section.getByTestId('devices-phones-group')).toContainText('Signed in once by scanning a QR code; works over every way below.')
 
-    await section.getByTestId('devices-target-tailnet').click()
-    await expect(section.getByTestId('devices-target-tailnet')).toHaveAttribute('aria-checked', 'true')
-    const pickerRow = section.locator('.settings-row', { has: page.getByRole('radiogroup', { name: 'Pairing target' }) })
-    await expect(pickerRow).toContainText('Works anywhere the phone is on the same tailnet as this machine, including cellular.')
-    await shot(page, 'three-targets-tailnet-selected')
-
-    await section.locator('#devices-new-name').fill('Travel phone')
-    await section.getByRole('button', { name: /Pair new device/i }).click()
+    // The Tailscale tab pairs through the tailnet address, no picker.
+    const ts = await openWay(page, 'tailscale')
+    const tsPair = ts.getByTestId('way-pair-tailscale')
+    await expect(tsPair).toContainText("The QR code points the phone at this Mac's Tailscale address")
+    await expect(tsPair.locator('.settings-notice')).toHaveCount(0)
+    await expect(tsPair.getByRole('radiogroup')).toHaveCount(0)
+    await pairFrom(tsPair, 'Travel phone')
     await expect.poll(() => mints.length).toBe(1)
     expect(mints[0]).toMatchObject({ name: 'Travel-phone', target: 'tailnet' })
 
     const qr = qrDialog(page).locator('img')
     await expect(qr).toBeVisible({ timeout: 60_000 })
     expect(await qr.getAttribute('src')).toMatch(/^data:image\/png;base64,/)
-    const hint = qrDialog(page)
-    await expect(hint).toContainText('Points at 100.101.102.103:3456')
+    await expect(qrDialog(page)).toContainText('Points at 100.101.102.103:3456')
     await shot(page, 'three-targets-tailnet-qr', qrDialog(page))
     await qrDialog(page).getByTestId('devices-qr-done').click()
     await expect(qrDialog(page)).toHaveCount(0)
-    // The picker keeps the address the user picked for the next pairing.
-    await expect(section.getByTestId('devices-target-tailnet')).toHaveAttribute('aria-checked', 'true')
+    // A pairing ends its typed name.
+    await expect(tsPair.locator('#devices-new-name')).toHaveValue('')
+
+    // The Cloud companion tab pairs through the companion's address.
+    const cloud = await openWay(page, 'cloud')
+    const cloudPair = cloud.getByTestId('way-pair-cloud')
+    await expect(cloudPair).toContainText('The QR code points the phone at your companion')
+    await pairFrom(cloudPair, 'Desk phone')
+    await expect.poll(() => mints.length).toBe(2)
+    expect(mints[1]).toMatchObject({ name: 'Desk-phone', target: 'cloud' })
+    await expect(qrDialog(page).locator('img')).toBeVisible({ timeout: 60_000 })
+    await expect(qrDialog(page)).toContainText('Points at walnut.example.com')
+    await qrDialog(page).getByTestId('devices-qr-done').click()
   })
 
   test('re-pair: a Wi-Fi-only phone gets a tailnet QR, a phone with a cloud credential stays on the cloud', async ({ page }) => {
@@ -160,7 +165,6 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
     await expect.poll(() => mints.length).toBe(1)
     expect(mints[0]).toMatchObject({ name: 'Kitchen-tablet', target: 'tailnet', replace: true })
     await expect(qrDialog(page)).toContainText('Points at 100.101.102.103:3456')
-    await expect(section.getByTestId('devices-target-tailnet')).toHaveAttribute('aria-checked', 'true')
     await qrDialog(page).getByTestId('devices-qr-done').click()
 
     const both = section.locator('.devices-row[data-device-name="Work-phone"]').getByTestId('devices-show-qr')
@@ -168,18 +172,21 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
     await qrDialog(page).getByTestId('devices-show-qr-confirm').click()
     await expect.poll(() => mints.length).toBe(2)
     expect(mints[1]).toMatchObject({ name: 'Work-phone', target: 'cloud', replace: true })
-    await expect(section.getByTestId('devices-target-cloud')).toHaveAttribute('aria-checked', 'true')
+    await expect(qrDialog(page)).toContainText('Points at walnut.example.com')
   })
 
-  test('no tailnet address and Tailscale missing: the guided card says how', async ({ page }) => {
+  test('no tailnet address and Tailscale missing: the guided card says how, and All devices pairs on this Wi-Fi', async ({ page }) => {
     const mints = await mockDevices(page, {
       targets: [LAN],
       tailscale: { installed: false, running: false },
     })
     const section = await openDevices(page)
 
-    // One target: no picker; the card says what to do.
+    // No way tab can pair: All devices pairs on this Wi-Fi, with no picker.
     await expect(section.getByRole('radiogroup', { name: 'Pairing target' })).toHaveCount(0)
+    const wifiPair = section.getByTestId('way-pair-all')
+    await expect(wifiPair).toContainText('Pair a phone on this Wi-Fi')
+    await expect(wifiPair).toContainText('The QR code points the phone at this Mac on this Wi-Fi')
     const ts = await openWay(page, 'tailscale')
     const macStep = ts.locator('.remote-access-step[data-step="mac"]')
     await expect(macStep).toContainText('Get Tailscale from the App Store, then come back here.')
@@ -197,37 +204,62 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
 
     // Pairing still works on Wi-Fi, back on the All devices tab.
     const main = await backToDevices(page)
-    await main.locator('#devices-new-name').fill('Spare phone')
-    await main.getByRole('button', { name: /Pair new device/i }).click()
+    await pairFrom(main.getByTestId('way-pair-all'), 'Spare phone')
     await expect.poll(() => mints.length).toBe(1)
     expect(mints[0]).toMatchObject({ name: 'Spare-phone', target: 'lan' })
     await expect(qrDialog(page).locator('img')).toBeVisible({ timeout: 60_000 })
+    await expect(qrDialog(page)).toContainText('Points at 192.0.2.10:3456')
   })
 
-  test('Tailscale installed but stopped: the card asks to open it, and the picker row carries no extra line', async ({ page }) => {
+  test('Tailscale on this Mac and no companion: All devices still pairs on Wi-Fi (a phone without Tailscale), the Tailscale tab through the tailnet', async ({ page }) => {
+    // 2026-11-18 review: a QR carries one address, so a Tailscale address alone must not take
+    // away the Wi-Fi code a phone without Tailscale can reach.
+    const mints = await mockDevices(page, {
+      targets: [LAN, TAILNET],
+      tailscale: { installed: true, running: true },
+    })
+    const section = await openDevices(page)
+    await expect(section.getByTestId('devices-phones-group')).toContainText('Work-phone')
+    await pairFrom(section.getByTestId('way-pair-all'), 'Home phone')
+    await expect.poll(() => mints.length).toBe(1)
+    expect(mints[0]).toMatchObject({ name: 'Home-phone', target: 'lan' })
+    await expect(qrDialog(page)).toContainText('Points at 192.0.2.10:3456', { timeout: 60_000 })
+    await qrDialog(page).getByTestId('devices-qr-done').click()
+
+    const ts = await openWay(page, 'tailscale')
+    const tsPair = ts.getByTestId('way-pair-tailscale')
+    await expect(tsPair).toContainText('the phone needs Tailscale on to connect the first time')
+    await pairFrom(tsPair, 'Travel phone')
+    await expect.poll(() => mints.length).toBe(2)
+    expect(mints[1]).toMatchObject({ name: 'Travel-phone', target: 'tailnet' })
+    await expect(qrDialog(page)).toContainText('Points at 100.101.102.103:3456', { timeout: 60_000 })
+  })
+
+  test('Tailscale installed but stopped: the card asks to open it, and its tab pairs once the address is there', async ({ page }) => {
     await mockDevices(page, {
       targets: [LAN, CLOUD],
       tailscale: { installed: true, running: false },
     })
     const section = await openDevices(page)
+    // The companion pairs on its own tab, so All devices has no Wi-Fi pairing.
+    await expect(section.getByTestId('devices-phones-group')).toContainText('Work-phone')
+    await expect(section.getByTestId('way-pair-all')).toHaveCount(0)
 
-    const picker = section.getByRole('radiogroup', { name: 'Pairing target' })
-    await expect(picker.getByRole('radio')).toHaveCount(2)
     const ts = await openWay(page, 'tailscale')
     await expect(ts.locator('.remote-access-step[data-step="mac"]')).toContainText('Open Tailscale and sign in')
     await expect(ts.getByTestId('remote-access-open')).toBeVisible()
-    // Switching target swaps only the target sentence.
-    const main = await backToDevices(page)
-    const pickerRow = main.locator('.settings-row', { has: page.getByRole('radiogroup', { name: 'Pairing target' }) })
-    await main.getByTestId('devices-target-lan').click()
-    await expect(pickerRow).toContainText('Works only while the phone is on the same Wi-Fi as this Mac.')
-    await shot(page, 'not-connected-card-picker')
+    // No tailnet address yet: the tab's pairing waits and says why, even with a name typed.
+    const tsPair = ts.getByTestId('way-pair-tailscale')
+    await expect(tsPair.locator('.settings-notice')).toContainText('Set up Tailscale on this Mac first')
+    await tsPair.locator('#devices-new-name').fill('Travel phone')
+    await expect(tsPair.getByTestId('devices-pair-new')).toBeDisabled()
+    await shot(page, 'not-connected-card-pair', ts)
   })
 
   test('no line when the server does not report Tailscale; the card still reads its own endpoint', async ({ page }) => {
     await mockDevices(page, { targets: [LAN, CLOUD] })
     const section = await openDevices(page)
-    await expect(section.getByRole('radiogroup', { name: 'Pairing target' })).toBeVisible()
+    await expect(section.getByTestId('devices-phones-group')).toContainText('Work-phone')
     const ts = await openWay(page, 'tailscale')
     await expect(ts.locator('.remote-access-step[data-step="mac"]')).toContainText('Get Tailscale from the App Store, then come back here.')
   })
@@ -250,7 +282,12 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
       tailscale: { installed: false, running: false },
     })
     const section = await openDevices(page)
-    await expect(section.locator('#devices-new-name')).toBeVisible()
+    await expect(section.getByTestId('devices-phones-group')).toContainText('Work-phone')
+    // The companion's own console pairs a phone on All devices, through its own address.
+    const pair = section.getByTestId('way-pair-all')
+    await expect(pair).toContainText('Pair a phone')
+    await expect(pair).toContainText('The QR code points the phone at this server')
+    await expect(pair.getByTestId('devices-pair-new')).toBeVisible()
     // The replica flag hides the line and the guided card alike, and the Tailscale and
     // tunnel tabs are not offered there.
     await expect(section.getByTestId('remote-access-card')).toHaveCount(0)
@@ -260,8 +297,17 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
   })
 
   test('a phone paired while the first list read is still out shows up in the list', async ({ page }) => {
-    // The tailnet probe makes the first GET slow on a real server. Each GET answers with the
-    // list as it was when the request ARRIVED, so a read that began before the pairing is stale.
+    // A reopened page paints the list this browser kept (useDevicesData's last-good view), so
+    // its pairing is offered before the first read answers. The tailnet probe makes that read
+    // slow on a real server. Each GET answers with the list as it was when the request ARRIVED,
+    // so a read that began before the pairing is stale.
+    await page.addInitScript((lan) => {
+      const value = {
+        devices: [], cloudDevices: [], cloudReadAt: null, cloudStale: false, targets: [lan],
+        tailscaleStale: false, tailscaleAt: null, cloudError: null, cloudUnpaired: false, cloudWithheld: false,
+      }
+      localStorage.setItem('walnut:last-good:devices:v1', JSON.stringify({ v: 1, at: Date.now(), value }))
+    }, LAN)
     const paired: string[] = []
     let gets = 0
     let firstAnswered = false
@@ -282,16 +328,18 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
       if (first) firstAnswered = true
     })
     const section = await openDevices(page, { waitForList: false })
-    await expect(section).toContainText('Loading paired phones...')
-    await section.locator('#devices-new-name').fill('Early phone')
-    await section.getByRole('button', { name: /Pair new device/i }).click()
+    // The kept list shows at once (a Wi-Fi only setup pairs here) while the first read is still out.
+    await expect(section.getByTestId('way-pair-all')).toBeVisible({ timeout: 30_000 })
+    expect(firstAnswered).toBe(false)
+    await pairFrom(section.getByTestId('way-pair-all'), 'Early phone')
     await expect(qrDialog(page).locator('img')).toBeVisible({ timeout: 30_000 })
     expect(paired).toEqual(['Early-phone'])
+    expect(firstAnswered).toBe(false)
     await expect(section.locator('.devices-row[data-device-name="Early-phone"]')).toHaveCount(1, { timeout: 15_000 })
     // The slow first read lands last and must not wipe the row.
     await expect.poll(() => firstAnswered, { timeout: 15_000 }).toBe(true)
     await page.waitForTimeout(500)
     await expect(section.locator('.devices-row[data-device-name="Early-phone"]')).toHaveCount(1)
-    await expect(section).not.toContainText('No phones paired yet.')
+    await expect(section).not.toContainText('No phone has the Walnut app signed in yet.')
   })
 })

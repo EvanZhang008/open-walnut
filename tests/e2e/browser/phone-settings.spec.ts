@@ -138,7 +138,7 @@ test.describe('on the computer Walnut runs on, phone sized', () => {
     await openSettings(page)
     for (const [testId, name] of [['settings-nav-general', 'General'], ['settings-nav-devices', 'Phones & Cloud']] as const) {
       await openPane(page, testId, name)
-      // Phones & Cloud: measure its All devices tab (the phone list and Add a phone).
+      // Phones & Cloud: measure its All devices tab (the phone list, and the Wi-Fi pairing a Wi-Fi only fixture shows).
       if (testId === 'settings-nav-devices') { await landedTab(page); await backToDevices(page) }
       await page.waitForTimeout(1_500)
       const stacked = await page.locator('.settings-pane .settings-row').evaluateAll((els) => els
@@ -285,7 +285,7 @@ test.describe('a phone signed in through a tunnel', () => {
     await expect(phone.getByTestId('browser-access-codes-elsewhere')).toHaveText('The phone link shows on the computer Walnut runs on.')
     // The All devices tab holds the list of devices.
     await backToDevices(phone)
-    await expect(devices).not.toContainText('No phones paired yet.')
+    await expect(devices).not.toContainText('No phone has the Walnut app signed in yet.')
     const group = devices.getByTestId('devices-browsers-group')
     await expect(group).toContainText('Signed-in browsers')
     const rows = group.locator('[data-device-name]')

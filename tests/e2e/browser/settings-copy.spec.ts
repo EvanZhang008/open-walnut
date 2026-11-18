@@ -263,9 +263,10 @@ test('C74: Phones & Cloud claims nothing before the devices list answers', async
   const gate = new Promise<void>((r) => { release = r })
   await page.route((url) => url.pathname === '/api/devices', async (route) => {
     await gate
-    // Pin what depends on the machine's Tailscale: a tailnet address adds a picker row and
-    // a missing Tailscale adds a hint line. Both appear only once the list answers, by
-    // design; a deep link holds its target through them (settings-panes.spec.ts C74).
+    // Pin what depends on the machine's Tailscale: a tailnet address moves pairing off All
+    // devices (to the Tailscale tab) and a missing Tailscale adds a hint line. Both appear
+    // only once the list answers, by design; a deep link holds its target through them
+    // (settings-panes.spec.ts C74).
     const res = await route.fetch()
     const body = (await res.json()) as { targets?: Array<{ kind: string }> }
     return route.fulfill({
@@ -280,17 +281,21 @@ test('C74: Phones & Cloud claims nothing before the devices list answers', async
   const landing = page.locator('#devices')
   await expect(landing).toContainText('Checking how your phone reaches Walnut...')
   await expect(landing.getByTestId('pc-tabs')).toBeVisible()
-  await expect(landing).not.toContainText('No phones paired yet.')
+  await expect(landing).not.toContainText('No phone has the Walnut app signed in yet.')
+  await expect(landing).not.toContainText('No phone is paired yet')
   // The Devices tab, opened while the list is out, claims nothing either.
   const devices = await backToDevices(page)
   await expect(devices).toContainText('Loading paired phones...')
-  // No "no address" notice and no "No phones" claim while the list is unknown.
+  // No "no address" notice, no "no phone" claim and no pairing while the list is unknown
+  // (All devices pairs only once the list says no way tab can).
   await expect(devices).not.toContainText('No address for this machine')
-  await expect(devices).not.toContainText('No phones paired yet.')
+  await expect(devices).not.toContainText('No phone has the Walnut app signed in yet.')
+  await expect(devices.getByTestId('way-pair-all')).toHaveCount(0)
   release()
   await expect(devices).not.toContainText('Loading paired phones...', { timeout: 20_000 })
   // The Cloud companion it once guarded is its own tab now, so nothing deep-linked sits
   // below this list; the pane's own row link (#devices-new-name) is held by holdAnchor while
-  // content above it grows (settings-panes.spec.ts C74).
-  await expect(devices.getByTestId('devices-add-group')).toBeVisible()
+  // content above it grows (settings-panes.spec.ts C74). With no companion and no Tailscale
+  // address, the Wi-Fi pairing shows once the list has answered.
+  await expect(devices.getByTestId('way-pair-all')).toBeVisible()
 })

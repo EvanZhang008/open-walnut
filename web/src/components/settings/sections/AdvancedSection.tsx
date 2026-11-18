@@ -10,6 +10,7 @@ import { couldntSave } from '../inputs/useOptimisticSetting';
 import { AUTOSAVE_DELAY_MS } from '@/hooks/useAutoSave';
 import { apiGet, apiPost } from '@/api/client';
 import type { OnSave } from './GeneralSection';
+import { DeviceList } from './cloud/DeviceList';
 
 export interface KeepAwakeStatus {
   state: {
@@ -299,6 +300,9 @@ export function AdvancedSection({ config, onSave }: Props) {
         </SettingsDisclosure>
         {formError && <p className="settings-row-error" role="alert" data-testid="advanced-save-error">{formError}</p>}
       </SettingsGroup>
+      {/* This Mac's own link to the companion and iOS simulators: records no person reaches
+          Walnut with, so they live here, not in Phones & Cloud (cloud/DeviceList.tsx). */}
+      <DeviceList scope="advanced" />
     </SectionCard>
   );
 }
