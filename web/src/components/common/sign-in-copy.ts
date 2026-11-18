@@ -90,7 +90,7 @@ export function signInCopy({ state, touch, standalone, reason = null }: SignInCo
   return {
     title,
     tagline,
-    steps: ['On your computer, open Walnut and go to Settings > Phones & Cloud > Browser link.', step2],
+    steps: ['On your computer, open Walnut and go to Settings > Phones & Cloud, then the tunnel\'s tab.', step2],
     codeHeading: 'Sign-in code',
     // The computer shows the link with its code hidden: pasting it is the way, never typing.
     codeHint: scanning ? "Can't open the link? Paste it here." : null,

@@ -9,7 +9,7 @@ import {
   SIGN_IN_PENDING_LINE, SIGN_IN_PENDING_SLOW,
 } from '../../web/src/components/common/sign-in-copy'
 
-const STEP1 = 'On your computer, open Walnut and go to Settings > Phones & Cloud > Browser link.'
+const STEP1 = "On your computer, open Walnut and go to Settings > Phones & Cloud, then the tunnel's tab."
 const STEP2_TOUCH = 'On this phone, open the link shown under Open on your phone.'
 const STEP2_DESK = 'Open the link shown under Open on your phone in this browser, or paste it below.'
 const STEP2_HOME = 'Paste the link shown under Open on your phone into the field above. Opening the link opens Safari, not this app.'

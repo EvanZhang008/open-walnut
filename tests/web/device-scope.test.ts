@@ -50,7 +50,7 @@ describe('rowsForScope', () => {
   it("Tailscale: the phones with a record on this Mac (Tailscale reaches this Mac's own pairing)", () => {
     expect(names('tailscale')).toEqual(['desk-phone', 'pocket-phone'])
   })
-  it('Browser link: the browsers and the extension, never a phone', () => {
+  it('Tunnel: the browsers and the extension, never a phone', () => {
     expect(names('browser')).toEqual(['browser-ab12cd', 'extension-ef34'])
   })
   it('All devices: every row; simulators only there', () => {
@@ -87,7 +87,7 @@ describe('wayTags', () => {
 })
 
 describe('pairing and removal', () => {
-  it("each way's tab pairs through its own address; All devices offers the picker; Browser link has no pairing", () => {
+  it("each way's tab pairs through its own address; All devices offers the picker; the tunnel has no pairing", () => {
     expect(pairTargetForScope('cloud')).toBe('cloud')
     expect(pairTargetForScope('tailscale')).toBe('tailnet')
     expect(pairTargetForScope('all')).toBe('pick')

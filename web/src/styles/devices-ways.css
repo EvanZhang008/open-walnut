@@ -44,6 +44,15 @@
 .pc-tab:hover { color: var(--fg); }
 .pc-tab[aria-current='page'] { border-bottom-color: var(--accent); color: var(--fg); font-weight: 600; }
 .pc-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 6px; }
+/* A tab whose name is not known yet (the tunnel's, before its first answer): a blank of about its
+   width, never a name that changes a moment later (cloud/tunnel-name.ts). */
+.pc-tab-label-pending {
+  display: inline-block;
+  width: 7em;
+  height: 0.9em;
+  border-radius: 4px;
+  background: var(--settings-group-border);
+}
 
 /* What the tab is, when to use it, and its state now. */
 .pc-intro {

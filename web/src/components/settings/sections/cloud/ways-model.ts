@@ -1,7 +1,7 @@
 /**
  * Settings › Phones & Cloud, top of the pane: how the phone reaches Walnut right
  * now, and the three ways it can reach it away from home (cloud companion,
- * Tailscale, a browser link through a tunnel), each with what it is, when to use
+ * Tailscale, a tunnel that gives it an HTTPS address), each with what it is, when to use
  * it, whether it is on, and how to turn it on. Pure, so every state is
  * unit-tested (tests/web/devices-ways-model.test.ts) apart from the React pane.
  *
@@ -12,7 +12,7 @@
 import { timeAgo } from '@/utils/time';
 import type { ExposeStatus } from './browser-access-status';
 import type { PairTargetKind } from './usePairDevice';
-import { BROWSER_LINK_TITLE, browserLinkSubtitle, type BrowserLinkName } from './browser-link-name';
+import { TUNNEL_TITLE, tunnelSubtitle, type TunnelName } from './tunnel-name';
 
 export type WayId = 'cloud' | 'tailscale' | 'browser';
 export type WayDot = 'on' | 'off' | 'warn';
@@ -39,8 +39,8 @@ export interface WaysInput {
   tailscaleAsOf?: string | null;
   /** GET /api/expose `status`; null while it loads, 'failed' when it could not be read. */
   expose: ExposeStatus | null | 'failed';
-  /** What the browser link is called: a plugin's tunnel names it after itself (browser-link-name.ts). */
-  linkName?: BrowserLinkName;
+  /** What the tunnel way is called: a plugin's tunnel names it after itself; null while not known (tunnel-name.ts). */
+  linkName?: TunnelName | null;
   now?: number;
 }
 
@@ -139,8 +139,11 @@ function tailscaleWayNow(i: WaysInput): Way {
 function browserWay(i: WaysInput): Way {
   const base = {
     id: 'browser' as const,
-    title: i.linkName?.title ?? BROWSER_LINK_TITLE,
-    what: browserLinkSubtitle(i.linkName ?? { title: BROWSER_LINK_TITLE, plugin: null }),
+    // Not known yet (null): no name rather than one that changes a moment later (tunnel-name.ts).
+    title: i.linkName === null ? '' : i.linkName?.title ?? TUNNEL_TITLE,
+    what: i.linkName === null
+      ? 'An HTTPS address that opens this Walnut in any browser, from anywhere, after you sign in.'
+      : tunnelSubtitle(i.linkName ?? { title: TUNNEL_TITLE, plugin: null }),
     useWhen: 'You are on a computer or phone without the Walnut app.',
     inUse: false,
   };
@@ -221,7 +224,7 @@ export function deriveWays(i: WaysInput): { now: NowLine; ways: Way[] } {
 
 /** The Devices tab's own two lines, in the shape of a way's (what it is, when to use it). */
 export const DEVICES_INTRO = {
-  what: 'Every phone, browser and Mac that can open Walnut, each with the ways it uses. Each way\'s own tab lists only the devices that use it.',
+  what: 'Every phone, browser and Mac that can open Walnut, each with the ways it uses, and the servers this Walnut runs on. Each way\'s own tab lists only the devices that use it.',
   useWhen: 'You look for a device, or pair a phone and pick its address yourself. Pair a phone once: it then finds its own way, at home and away.',
 } as const;
 
@@ -229,7 +232,7 @@ export const DEVICES_INTRO = {
  * Which tab Phones & Cloud opens on: the way the phone last came in through, else
  * a way for the phone that is on, else a companion that is set up but not answering
  * (its tab says so), else Devices (nothing set up for away: the phone reaches this
- * Mac on Wi-Fi, or none is paired yet). Null while the list loads. The browser link
+ * Mac on Wi-Fi, or none is paired yet). Null while the list loads. The tunnel
  * is for browsers, not the phone, so it is never the landing.
  */
 export function landingWay(i: Pick<WaysInput, 'listState' | 'cloudError'>, ways: readonly Way[]): WayId | 'devices' | null {

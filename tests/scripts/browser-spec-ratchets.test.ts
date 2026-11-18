@@ -403,7 +403,7 @@ describe('specs that open a gated Settings pane', () => {
   // sets the fact itself, as that spec stubs the rest of a Mac (for macAccess, the shared
   // route in mac-console-route.ts). 2026-11-13: two specs opened the pane through a
   // `clickNav(page, 'permissions')` helper this guard did not read, and timed out the same way.
-  // `primary` (Tailscale and Browser link under Phones & Cloud) is closed only on a cloud
+  // `primary` (Tailscale and the tunnel under Phones & Cloud) is closed only on a cloud
   // companion's own console: every fixture server is a primary, so no spec sets a fact for it,
   // and a spec that stubs `cloud: true` does so to see those entries gone.
   const FACT_OF_GATE: Record<string, string | null> = { 'mac-access': 'macAccess', primary: null }

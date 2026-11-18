@@ -47,6 +47,7 @@ import path from 'node:path'
 import { WALNUT_HOME } from '../constants.js'
 import { log } from '../logging/index.js'
 import { getConfig } from '../core/config-manager.js'
+import { knownHost } from '../core/hosts/known-host.js'
 import { ExposeSupervisor, PROBE_TIMEOUT_MS, nodeSpawn, resolveRun, type SupervisorDeps } from '../core/expose/supervisor.js'
 import { answerTunnelProbe, httpProbe, probeAnswer } from '../core/expose/probe.js'
 import { getExposeProvider, onExposeProvidersChanged } from '../core/expose/registry.js'
@@ -311,7 +312,10 @@ export function startExposeRuntime(opts: ExposeRuntimeOptions): ExposeRuntime {
     providerTitle = def.title
     const placed = exposePlacement(cfg.run_on, def, config?.hosts)
     if (placed.where === 'host') {
-      const runsOn = { hostKey: placed.hostKey, label: placed.label, auto: placed.auto }
+      // Named as the person knows the machine: the tunnel's host is picked by hostname, so it can be
+      // a found alias of a machine they named under another row (core/hosts/known-host.ts).
+      const label = config ? (await knownHost(placed.hostKey, config).catch(() => null))?.label ?? placed.label : placed.label
+      const runsOn = { hostKey: placed.hostKey, label, auto: placed.auto }
       const key = tunnelKey(def, cfg.options ?? {})
       let rec = handover.read()
       if (rec && (rec.hostKey !== placed.hostKey || rec.key !== key)) {

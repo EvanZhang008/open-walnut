@@ -5,7 +5,7 @@
  * cloud compaion confused", "each section shoud have its own paried devide or
  * conenct devide"):
  *
- *   1. Cloud companion, Tailscale, the browser link and All devices are tabs; Phones &
+ *   1. Cloud companion, Tailscale, the tunnel and All devices are tabs; Phones &
  *      Cloud opens the tab the phone uses. Each tab leads with what it is, when to
  *      use it and its state now; the tab in use also says how the phone reaches
  *      Walnut. The sidebar lists Phones & Cloud alone.
@@ -183,7 +183,7 @@ test('Phones & Cloud opens the tab in use: four tabs, what the way is, how the p
   const cloud = await openPhonesCloud(page)
 
   // Four tabs, the one in use open and saying so; the sidebar lists Phones & Cloud alone.
-  await expect(tabs(page).locator('.pc-tab-label')).toHaveText(['Cloud companion', 'Tailscale', 'Browser link', 'All devices'])
+  await expect(tabs(page).locator('.pc-tab-label')).toHaveText(['Cloud companion', 'Tailscale', 'Tunnel', 'All devices'])
   await expect(page.getByTestId('pc-tab-cloud')).toHaveAttribute('aria-current', 'page')
   await expect(page.getByTestId('pc-tab-cloud')).toContainText('In use')
   await expect(page.getByTestId('pc-tab-devices-tailscale')).toContainText('Off')
@@ -285,7 +285,7 @@ test('each tab holds its own way and the devices that use it; All devices holds 
 
   await page.getByTestId('pc-tab-devices-phones').click()
   const dev = page.locator('#devices-phones')
-  await expect(dev.getByTestId('pc-intro-devices-phones').locator('.pc-intro-what')).toHaveText("Every phone, browser and Mac that can open Walnut, each with the ways it uses. Each way's own tab lists only the devices that use it.")
+  await expect(dev.getByTestId('pc-intro-devices-phones').locator('.pc-intro-what')).toHaveText("Every phone, browser and Mac that can open Walnut, each with the ways it uses, and the servers this Walnut runs on. Each way's own tab lists only the devices that use it.")
   await expect(dev.getByTestId('pc-intro-devices-phones').locator('.pc-intro-now')).toHaveCount(0)
   const phones = dev.getByTestId('devices-phones-group')
   await expect(phones.locator('.devices-row')).toHaveCount(3)
@@ -330,7 +330,7 @@ test('with nothing for away, Phones & Cloud opens Devices and says the phone can
 // before the release, did nothing: the page moved to Devices under the held pointer, the press and the
 // release landed on two different tabs, and no click happened. The tab the person pressed opens.
 
-/** Opens Phones & Cloud with Tailscale's answer held, presses the Browser link tab, then lets it answer. */
+/** Opens Phones & Cloud with Tailscale's answer held, presses the tunnel's tab, then lets it answer. */
 async function pressWhileItDecides(page: Page) {
   await mockDevices(page, { cloud: false })
   // The first read has no Tailscale answer yet (Phones & Cloud waits for it); the next one, the

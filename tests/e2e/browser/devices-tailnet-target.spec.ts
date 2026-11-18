@@ -252,7 +252,7 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
     const section = await openDevices(page)
     await expect(section.locator('#devices-new-name')).toBeVisible()
     // The replica flag hides the line and the guided card alike, and the Tailscale and
-    // Browser link tabs are not offered there.
+    // tunnel tabs are not offered there.
     await expect(section.getByTestId('remote-access-card')).toHaveCount(0)
     await expect(page.getByTestId('pc-tab-cloud')).toBeVisible()
     await expect(page.getByTestId('pc-tab-devices-tailscale')).toHaveCount(0)

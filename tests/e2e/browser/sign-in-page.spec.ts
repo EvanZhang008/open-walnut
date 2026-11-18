@@ -19,7 +19,7 @@ import { mintBrowserCode } from './sign-in-state'
 const SHOTS = '/tmp/mobile-web'
 const PHONE = devices['iPhone 15']
 const NETWORK = 'Walnut did not answer. Check the connection, then try again.'
-const STEP1 = 'On your computer, open Walnut and go to Settings > Phones & Cloud > Browser link.'
+const STEP1 = "On your computer, open Walnut and go to Settings > Phones & Cloud, then the tunnel's tab."
 
 test.setTimeout(120_000)
 test.beforeAll(async () => { await fs.mkdir(SHOTS, { recursive: true }) })

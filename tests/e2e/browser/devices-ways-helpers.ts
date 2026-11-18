@@ -1,6 +1,6 @@
 /**
  * Settings › Phones & Cloud is four tabs: each way (Cloud companion, Tailscale,
- * Browser link) and Devices (paired phones and browsers, Add a phone). The entry
+ * the tunnel) and Devices (paired phones and browsers, Add a phone). The entry
  * opens the tab in use (devices-ways-and-qr.spec.ts). Specs about one tab open it
  * from the tab bar first, the way a person does.
  */

@@ -22,7 +22,9 @@ import { isFollower } from '../../core/server-role.js'
 import { getConfig, updateConfig } from '../../core/config-manager.js'
 import { MaskedValueError, maskSecretShapes, restoreMaskedSecrets } from '../../core/config-secret-shape.js'
 import { getExposeProvider, listExposeProviders } from '../../core/expose/registry.js'
-import { RUN_ON_HERE, exposePlaces, exposePlacement, validRunOn } from '../../core/expose/placement.js'
+import { RUN_ON_HERE, exposePlaces, exposePlacement, validRunOn, type ExposePlace } from '../../core/expose/placement.js'
+import { knownHost } from '../../core/hosts/known-host.js'
+import type { Config } from '../../core/types.js'
 import { emitConfigChanged } from '../../core/config-broadcast.js'
 import { EXPOSE_PROVIDER_ID } from '../../core/expose/types.js'
 import { isLocalOrigin } from '../../lib/caller-origin.js'
@@ -57,6 +59,22 @@ function offStatus() {
   return { enabled: false, provider: null, state: 'off' as const, since: 0 }
 }
 
+/**
+ * The places named as the person knows each machine (core/hosts/known-host.ts), each machine once:
+ * two aliases of one daemon are one place, under the alias the person uses.
+ */
+async function placesAsKnown(places: ExposePlace[], config: Config, placedOn: string): Promise<ExposePlace[]> {
+  const named = await Promise.all(places.map(async (p) => {
+    if (p.id === RUN_ON_HERE) return { place: p, machine: p.id }
+    const known = await knownHost(p.id, config).catch(() => null)
+    return { place: known ? { ...p, label: known.label } : p, machine: known?.host ?? p.id }
+  }))
+  // The one it runs on now stays when its machine is listed twice, so the picker still shows it picked.
+  const keep = new Map<string, string>()
+  for (const { place, machine } of named) if (!keep.has(machine) || place.id === placedOn) keep.set(machine, place.id)
+  return named.filter(({ place, machine }) => keep.get(machine) === place.id).map(({ place }) => place)
+}
+
 exposeRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const config = await getConfig()
@@ -64,17 +82,19 @@ exposeRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
     const providers = listExposeProviders(cfg.command)
     const providerId = cfg.provider ?? providers[0]?.id ?? null
     const def = providerId ? getExposeProvider(providerId, cfg.command) : null
+    const placed = exposePlacement(cfg.run_on, def, config.hosts)
+    const placedOn = placed.where === 'host' ? placed.hostKey : RUN_ON_HERE
     res.json({
       status: getExposeRuntime()?.status() ?? offStatus(),
       providers,
       // Where it can run (a host the provider names as always on, and here); empty: here only.
-      places: exposePlaces(cfg.run_on, def, config.hosts, config.net),
+      places: await placesAsKnown(exposePlaces(cfg.run_on, def, config.hosts, config.net), config, placedOn),
       settings: {
         enabled: cfg.enabled === true,
         provider: cfg.provider ?? null,
         runOn: cfg.run_on ?? null,
         // Where it runs now: the pick, else the provider's always-on host, else here.
-        placedOn: (() => { const p = exposePlacement(cfg.run_on, def, config.hosts); return p.where === 'host' ? p.hostKey : RUN_ON_HERE })(),
+        placedOn,
         // A provider's options are a free-form map (a tunnel name, say, or its token):
         // secret-shaped values masked, as in GET /api/config. PUT puts a mask back.
         options: maskSecretShapes(cfg.options ?? {}),

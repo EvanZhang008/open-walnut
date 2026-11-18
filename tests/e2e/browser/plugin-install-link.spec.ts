@@ -161,7 +161,7 @@ test('2. the app hands a link to an open page in place; Install brings in the wh
     await expect(card).toHaveAttribute('data-plugin-status', 'active', { timeout: 30_000 })
   }
   expect(await configSources()).toContain(fixture!.packUrl)
-  // pack-board brings a tunnel: the install notice leads straight to the browser link page.
+  // pack-board brings a tunnel: the install notice leads straight to the tunnel's tab.
   const guide = page.getByTestId('expose-guide-added')
   await expect(guide).toBeVisible({ timeout: 30_000 })
   await expect(guide).toContainText('Pack Tunnel opens this Walnut from your phone or any browser')

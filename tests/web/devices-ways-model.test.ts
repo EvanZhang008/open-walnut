@@ -120,7 +120,7 @@ describe('the way cards', () => {
     expect(deriveWays(base({ tailscale: undefined, tailscaleAsOf: ago(12) })).ways[1].status).toBe('Checking...')
   })
 
-  it('browser link: loading, unreadable, connected through a provider on a host, waiting on sign-in', () => {
+  it('tunnel: loading, unreadable, connected through a provider on a host, waiting on sign-in', () => {
     expect(deriveWays(base({ expose: null })).ways[2]).toMatchObject({ status: 'Checking...', tag: '' })
     expect(deriveWays(base({ expose: 'failed' })).ways[2].dot).toBe('warn')
     expect(deriveWays(base({
@@ -141,7 +141,7 @@ describe('the tab Phones & Cloud opens on', () => {
     expect(land({ targets: [LAN, CLOUD], phoneUses: [{ name: 'p', via: 'lan', lastUsedAt: ago(1) }] })).toBe('cloud')
     expect(land({ targets: [LAN, TAILNET], tailscale: { installed: true, running: true } })).toBe('tailscale')
     expect(land({ cloudWithheld: true })).toBe('cloud')
-    // Nothing for away (only Wi-Fi), or a browser link alone: Devices, never the browser link.
+    // Nothing for away (only Wi-Fi), or a tunnel alone: Devices, never the tunnel's tab.
     expect(land({ phoneUses: [{ name: 'p', via: 'lan', lastUsedAt: ago(1) }] })).toBe('devices')
     expect(land({ expose: { enabled: true, provider: 'command', state: 'connected', since: 0 } })).toBe('devices')
     // A companion that does not answer: its tab, which says so.
@@ -150,7 +150,7 @@ describe('the tab Phones & Cloud opens on', () => {
 })
 
 describe('the landing keeps a tab picked while the list loaded', () => {
-  // 2026-11-05, a WebKit run: the Browser link tab was picked while Phones & Cloud still
+  // 2026-11-05, a WebKit run: the tunnel's tab was picked while Phones & Cloud still
   // loaded, then the list's answer moved the address to Devices on top of it.
   it('replaces only while the address names Phones & Cloud itself', () => {
     expect(landingMayReplace('#devices', 'devices')).toBe(true)

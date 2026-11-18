@@ -257,7 +257,7 @@ test.describe('Open from a browser', () => {
     expect(after).toMatch(/#pair=[2-9A-Z]{4}-[2-9A-Z]{4}$/)
     // And the computer says the sign-in worked, so the swapped link is no surprise.
     await expect(page.getByTestId('browser-access-signed-in-note')).toContainText('A browser just signed in with the link; it now shows under Signed-in browsers at the end of this page.')
-    // And it does: the Browser link tab lists its signed-in browsers under its own settings.
+    // And it does: the tunnel's tab lists its signed-in browsers under its own settings.
     await expect(page.locator('#devices-browser').getByTestId('devices-browsers-group')).toContainText('Signed-in browsers')
     await phone.context().close()
   })
@@ -419,7 +419,7 @@ test.describe('Open from a browser', () => {
     const mine = { name: await signInWithCode(phone, (await mintBrowserCode(page.request)).code) }
 
     await openDevices(page)
-    // The Browser link tab lists it under its own settings, and All devices lists it too.
+    // The tunnel's tab lists it under its own settings, and All devices lists it too.
     await expect(page.locator('#devices-browser').getByTestId('devices-browsers-group').locator(`[data-device-name="${mine.name}"]`)).toBeVisible({ timeout: 30_000 })
     const devices = await backToDevices(page)
     await expect(devices.getByTestId('devices-browsers-group')).toContainText('Signed-in browsers')

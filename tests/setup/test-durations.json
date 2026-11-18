@@ -2096,7 +2096,7 @@
   "tests/web/board-view-pref.test.ts": 230,
   "tests/web/box-dictation.test.ts": 154,
   "tests/web/browser-access-status.test.ts": 326,
-  "tests/web/browser-link-name.test.ts": 293,
+  "tests/web/tunnel-name.test.ts": 293,
   "tests/web/browser-logger-history.test.ts": 235,
   "tests/web/browser-logger-tab.test.ts": 327,
   "tests/web/bubble-absorption-fault-injection.test.ts": 276,

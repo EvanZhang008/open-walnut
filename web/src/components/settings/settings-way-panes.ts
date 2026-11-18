@@ -1,6 +1,6 @@
 /**
  * Phones & Cloud's four tabs: the three ways to reach Walnut (Cloud companion,
- * Tailscale, the browser link), each with the devices that use it, and All devices
+ * Tailscale, the tunnel), each with the devices that use it, and All devices
  * (every device, pairing a new phone with the address picker). Each tab is its own pane (core-settings-registry `tabOf: 'devices'`),
  * so its address, back button and Find a setting work as for any pane; the nav
  * shows only Phones & Cloud, and the entry itself opens the tab in use. The

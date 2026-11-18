@@ -22,7 +22,7 @@ import { compareHits, filterEntries, primaryHit, PAGE_LINK_KEYWORDS, type Filter
 import { SettingsIcon, type SettingsGlyphName } from './settings-icons'
 import { SettingsPaneTile, useFailedPanes, type SettingsPaneMeta } from './settings-pane-context'
 import { WAY_PANES } from './settings-way-panes'
-import { browserLinkSubtitle, useBrowserLinkName } from './sections/cloud/browser-link-name'
+import { tunnelSubtitle, useTunnelName } from './sections/cloud/tunnel-name'
 import { APPS_PATH } from '@/utils/open-link'
 import { pageShortcutBlocked } from '@/utils/page-shortcut'
 import '@/styles/settings-nav.css'
@@ -121,8 +121,8 @@ const PAGE_ROWS: readonly NavRow[] = MANAGE_PAGES.map((page) => ({
 /** Every nav row, its tile, and pane metadata for the page. One computation, two consumers. */
 export function useSettingsNavModel(): SettingsNavModel {
   const closedGates = useClosedPaneGates()
-  // A plugin's tunnel names the browser link after itself (browser-link-name.ts).
-  const linkName = useBrowserLinkName()
+  // A plugin's tunnel names the tunnel tab after itself (tunnel-name.ts).
+  const linkName = useTunnelName()
 
   return useMemo(() => {
     const byGroup = (g: NavGroup) => CORE_ROWS.filter((r) => {
@@ -137,8 +137,8 @@ export function useSettingsNavModel(): SettingsNavModel {
     ]
     const metaByKey = new Map<string, SettingsPaneMeta>(CORE_META)
     const named = rows.map((r) => {
-      if (r.key !== WAY_PANES.browser || !linkName.plugin) return r
-      const meta = { ...r.meta, label: linkName.title, title: linkName.title, description: browserLinkSubtitle(linkName) }
+      if (r.key !== WAY_PANES.browser || !linkName?.plugin) return r
+      const meta = { ...r.meta, label: linkName.title, title: linkName.title, description: tunnelSubtitle(linkName) }
       metaByKey.set(r.key, meta)
       return { ...r, label: linkName.title, meta }
     })

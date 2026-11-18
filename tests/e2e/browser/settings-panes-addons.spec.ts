@@ -721,7 +721,7 @@ interface PaneAudit { transformed: string[]; upper: string[]; glyphs: string[]; 
 
 /** Runs in the page: what C8, C10, C14, C19, C20 and C80 forbid, found in one pane. */
 function auditPane(root: Element, provided: string[]): PaneAudit {
-  // Acronyms read as words (the browser link says it is an HTTPS address).
+  // Acronyms read as words (the tunnel's tab says it is an HTTPS address).
   const ABBR = new Set(['JSON', 'HTML', 'TOML', 'HEARTBEAT', 'CLAUDE', 'HTTPS'])
   // Em and en dash, middle dot, arrows, triangles, check and cross marks, times, ellipsis (as escapes).
   const GLYPHS = /[\u2014\u2013\u00b7\u2192\u203a\u25b8\u25be\u2713\u2717\u00d7\u2026\u2197]/

@@ -4,9 +4,10 @@
  *
  *   Cloud companion  Phones on this companion, Macs on this companion, Pair a phone this way
  *   Tailscale        Phones paired with this Mac, Pair a phone this way
- *   Browser link     Signed-in browsers, Walnut extension
- *   All devices      every group, each row tagged with its ways, Add a phone (with the
- *                    address picker), Advanced (this Mac's link, simulators)
+ *   Tunnel           Signed-in browsers, Walnut extension
+ *   All devices      every group, each row tagged with its ways, Walnut servers (where this
+ *                    Walnut runs, WalnutServersGroup.tsx), Add a phone (with the address
+ *                    picker), Advanced (this Mac's link, simulators)
  *
  * A phone shows in every tab whose way it uses, and its Remove says it removes the
  * whole phone: one pairing works on every way, so there is no removing one way.
@@ -36,6 +37,7 @@ import { OwnDeviceSignOut } from './OwnDeviceSignOut';
 import { SIGNED_IN_BROWSER, SignOutAllBrowsers, type SignOutResult } from './SignOutAllBrowsers';
 import { describeDevice, describeMacRow, reachWords, ROLE_NOTE, UNPAIR_SELF_WARNING, CLOUD_UNPAIRED_NOTICE, DEVICES_CHANGED_EVENT } from './device-rows-copy';
 import { PairPhoneGroup } from './PairPhoneGroup';
+import { WalnutServersGroup } from './WalnutServersGroup';
 import { mergeDeviceRows, pairTargetForScope, removePhoneWarning, rowsForScope, wayTags, type DeviceRow, type DeviceScope } from './device-scope';
 import '@/styles/settings-sections-addons.css';
 
@@ -437,6 +439,12 @@ export function DeviceList({ scope }: { scope: DeviceScope }) {
         <SettingsGroup heading="Other Macs" data-testid="devices-macs">
           {macs.map(renderRow)}
         </SettingsGroup>
+      )}
+
+      {/* Where this Walnut runs: this Mac, the companion and the hosts that keep a copy (one list,
+          not ways of their own). */}
+      {scope === 'all' && !replica && (
+        <WalnutServersGroup companion={targets.find((t) => t.kind === 'cloud') ?? null} companionError={cloudError} />
       )}
 
       {scope !== 'cloud' && pairGroup}

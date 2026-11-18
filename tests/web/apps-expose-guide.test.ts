@@ -1,6 +1,6 @@
 /**
- * A plugin that registers a tunnel provider leads to the browser link page; one that does not
- * shows nothing, and the row says when the link already runs through it.
+ * A plugin that registers a tunnel provider leads to its tab under Phones & Cloud; one that does
+ * not shows nothing, and the row says when Walnut already opens through it.
  */
 import { describe, expect, it, vi } from 'vitest'
 vi.mock('@/components/common/AgentText', () => ({ AgentText: () => null }))

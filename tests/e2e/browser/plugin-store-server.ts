@@ -260,8 +260,8 @@ export function activate(walnut) {
 const packRepo = path.join(tmpBase, 'pack-repo')
 await writeFixturePlugin('pack-notes', { name: 'Pack Notes', description: 'The first plugin of a team pack.' }, packRepo)
 await writeFixturePlugin('pack-board', { name: 'Pack Board', description: 'The second plugin of a team pack.' }, packRepo)
-// pack-board also brings a tunnel provider (never started: the browser link stays off), so the
-// install notice and its page lead to the browser link page.
+// pack-board also brings a tunnel provider (never started: the tunnel stays off), so the
+// install notice and its page lead to the tunnel's tab.
 await fs.writeFile(path.join(packRepo, 'pack-board', 'dist', 'server.mjs'), `
 let registration = null
 export function activate(walnut) {

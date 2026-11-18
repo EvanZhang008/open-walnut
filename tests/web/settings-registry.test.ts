@@ -146,12 +146,12 @@ describe('core settings registry', () => {
     expect(ungated, 'sections that can render nothing with no `requires` gate').toEqual([])
   })
 
-  it('puts the three ways and All devices under Phones & Cloud as tabs, Tailscale and Browser link on the Mac only', () => {
+  it('puts the three ways and All devices under Phones & Cloud as tabs, Tailscale and the tunnel on the Mac only', () => {
     const tabs = CORE_SETTINGS_CONTRIBUTIONS.filter((e) => e.tabOf)
     expect(tabs.map((e) => [e.id, e.tabOf, e.label])).toEqual([
       ['cloud', 'devices', 'Cloud companion'],
       ['devices-tailscale', 'devices', 'Tailscale'],
-      ['devices-browser', 'devices', 'Browser link'],
+      ['devices-browser', 'devices', 'Tunnel'],
       ['devices-phones', 'devices', 'All devices'],
     ])
     // The tab bar's order is the registry's, and settings-way-panes names the same panes.

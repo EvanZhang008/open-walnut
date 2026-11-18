@@ -105,6 +105,17 @@ describe('statusOnHost', () => {
     expect(statusOnHost(placed, def, other)).toMatchObject({ state: 'starting', runsOn })
   })
 
+  it('a sentence from the host that names it by its alias says the name the person knows it by', () => {
+    // The tunnel's host can be a found alias of a machine named under another row (core/hosts/known-host.ts).
+    const found = { hostKey: 'found-box', label: 'Big box', auto: true }
+    expect(statusOnHost(found, def, { phase: 'installing', since: 1, message: 'Installing Walnut on found-box...' }).lastError).toBe('Installing Walnut on Big box...')
+    expect(statusOnHost(found, def, { phase: 'error', since: 1, message: 'Could not reach found-box.' }).lastError).toBe('Could not reach Big box.')
+    const report = { phase: 'running', since: 1, server: { expose: { enabled: true, provider: 'acme-tunnel', state: 'needs-sign-in' as const, since: 6, hint: 'Sign in on found-box.', activity: 'Installing the CLI on found-box' } } }
+    expect(statusOnHost(found, def, report)).toMatchObject({ hint: 'Sign in on Big box.', activity: 'Installing the CLI on Big box' })
+    // A hostname or a path that only contains the alias is left alone.
+    expect(statusOnHost(found, def, { phase: 'error', since: 1, message: 'Failed at /srv/found-box/x.' }).lastError).toBe('Failed at /srv/found-box/x.')
+  })
+
   it('says what it waits for before the server reports a tunnel', () => {
     expect(statusOnHost(placed, def, null)).toMatchObject({ state: 'starting', lastError: 'Starting Walnut on Zeta box.', runsOn })
     expect(statusOnHost(placed, def, { phase: 'waiting-for-host', since: 2 })).toMatchObject({ state: 'starting', lastError: 'Waiting to connect to Zeta box.' })

@@ -101,6 +101,8 @@ export interface HostServerEntry {
     program?: 'replica' | 'host-server';
   };
   view: HostServerView | null;
+  /** This row is another alias of a machine the person knows under the row `hostKey`, by `label`. */
+  knownAs?: { hostKey: string; label: string };
 }
 
 export interface HostServersResponse {

@@ -1,7 +1,7 @@
 /**
  * Pairing a new phone on a Phones & Cloud tab (DeviceList.tsx): the name, and Pair.
  * A way's own tab pairs through its own address ("Pair a phone this way"); All
- * devices offers the address picker ("Add a phone") and the browser link.
+ * devices offers the address picker ("Add a phone") and a phone browser's sign-in link.
  *
  * The picker only chooses which address goes in the QR. A phone paired through
  * any address learns the other addresses by itself, so pick the one the phone
@@ -91,15 +91,15 @@ export function PairPhoneGroup({ scope, fixedTarget, targets, target, setTarget,
 
   return (
     <SettingsGroup heading={pick ? 'Add a phone' : 'Pair a phone this way'} data-testid={pick ? 'devices-add-group' : `way-pair-${scope}`}>
-      {/* The other way in: a phone's browser, from anywhere, with a sign-in link (its own tab). */}
+      {/* The other way in: a phone's browser, from anywhere, with a sign-in link (the tunnel's tab). */}
       {pick && !isDevice && (
         <SettingsRow
           label="Phone browser"
           help="Open Walnut in a phone's browser from anywhere, signed in with a link."
           data-testid="devices-add-browser-row"
           control={(
-            <a className="settings-button settings-button-default" href={`#${WAY_PANES.browser}`} data-testid="devices-add-browser-link">
-              <span className="settings-button-stack"><span className="settings-button-label">Browser link</span></span>
+            <a className="settings-button settings-button-default" href={`#${WAY_PANES.browser}`} data-testid="devices-add-tunnel-link">
+              <span className="settings-button-stack"><span className="settings-button-label">Get a sign-in link</span></span>
             </a>
           )}
         />

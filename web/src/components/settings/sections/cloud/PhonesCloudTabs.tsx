@@ -1,6 +1,6 @@
 /**
- * Settings > Phones & Cloud as four tabs: Cloud companion, Tailscale, the browser
- * link (named after the tunnel plugin that brings it), and All devices. Each tab is its
+ * Settings > Phones & Cloud as four tabs: Cloud companion, Tailscale, the tunnel
+ * (named after the plugin that brings it, tunnel-name.ts), and All devices. Each tab is its
  * own pane (settings-way-panes.ts); every one of them leads with this bar and with
  * what that tab is, when to use it and its state now, then its own settings. The
  * tab the phone uses also says how the phone reaches Walnut right now.
@@ -13,7 +13,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { SettingsSection } from '../../SettingsSection';
 import { useIsReplicaServer, useServerCapability } from '@/hooks/useServerRole';
 import { DEVICES_TAB, WAY_PANES, type PhonesCloudTab } from '../../settings-way-panes';
-import { useBrowserLinkName } from './browser-link-name';
+import { useTunnelName } from './tunnel-name';
 import { useDevicesData, useExposeStatus, type DeviceEntry } from './useDevicesData';
 import { DEVICES_INTRO, deriveWays, landingWay, type NowLine, type Way, type WayDot } from './ways-model';
 import '@/styles/devices-ways.css';
@@ -52,7 +52,7 @@ export function usePhonesCloudView(): PhonesCloudView {
   const publicDoor = useServerCapability('public-door');
   const { devices, cloudDevices, targets, listState, tailscale, tailscaleStale, tailscaleAt, cloudError, cloudUnpaired, cloudWithheld, settled } = useDevicesData({ replica });
   const expose = useExposeStatus(replica);
-  const linkName = useBrowserLinkName();
+  const linkName = useTunnelName();
   const { now, ways } = deriveWays({
     listState,
     phoneUses: [
@@ -86,7 +86,7 @@ export function usePhonesCloudView(): PhonesCloudView {
     what: DEVICES_INTRO.what,
     useWhen: DEVICES_INTRO.useWhen,
   };
-  // A replica's own console has no Tailscale or browser link to set up (those panes need the Mac);
+  // A replica's own console has no Tailscale or tunnel to set up (those panes need the Mac);
   // it shows its own public address only when it has one (the companion's public door).
   const shown = replica ? ways.filter((w) => w.id === 'cloud' && publicDoor) : ways;
   let landed = replica ? (listState === 'loading' ? null : 'devices') : landingWay({ listState, cloudError }, ways);
@@ -145,7 +145,9 @@ export function TabBar({ tabs, current }: { tabs: readonly TabView[]; current: P
           data-testid={`pc-tab-${t.id}`}
         >
           {t.dot && <span className="devices-way-dot" data-dot={t.dot} aria-hidden="true" />}
-          <span className="pc-tab-label">{t.label}</span>
+          {t.label
+            ? <span className="pc-tab-label">{t.label}</span>
+            : <span className="pc-tab-label pc-tab-label-pending" role="img" aria-label="Loading" data-testid="pc-tab-label-pending" />}
           {t.tag && <span className="devices-way-tag" data-dot={t.tag === 'In use' ? 'on' : t.dot}>{t.tag}</span>}
         </a>
       ))}

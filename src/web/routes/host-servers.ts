@@ -2,7 +2,7 @@
  * /api/host-servers: the servers this Mac keeps on its hosts
  * (docs/plan/walnut-servers-everywhere.md, "A server on a host").
  *
- *   GET  /                    → { hosts: [{ hostKey, label, settings, view }], providers }
+ *   GET  /                    → { hosts: [{ hostKey, label, settings, view, knownAs? }], providers }
  *   PUT  /:hostKey            { enabled?, expose?: { enabled?, provider?, options? } } → { host }
  *   POST /:hostKey/retry      set it up again now (after a failed install, say)
  *   POST /:hostKey/expose/retry  start the host's tunnel again now
@@ -27,6 +27,9 @@ import { emitConfigChanged } from '../../core/config-broadcast.js'
 import { log } from '../../logging/index.js'
 import { DEFAULT_COPY_CHOICE, copyChoiceChanged, copyChoiceFrom } from '../../core/replication/kinds/copy-kind.js'
 import { isOnThisMachine, isPersonAtThisMachine } from './expose.js'
+import { knownHost } from '../../core/hosts/known-host.js'
+import { inHostTerms } from '../../core/hosts/host-display-name.js'
+import type { Config } from '../../core/types.js'
 
 export const hostServersRouter = Router()
 
@@ -47,6 +50,11 @@ async function hostEntry(hostKey: string) {
   // The host's own tunnel as set (the carried one is this computer's, set in Open from a browser),
   // with the reason when it is held back.
   const expose = settings.expose.blocked ? { ...own.expose, blocked: settings.expose.blocked } : own.expose
+  // Another alias of a machine the person knows under another row (two rows, one daemon): the
+  // Walnut servers list shows that machine once, by that row's name, and its sentences say that
+  // name (core/hosts/known-host.ts). Asked only of a host that runs a server: a lookup can run `ssh -G`.
+  const knownAs = await knownAsOf(hostKey, settings.enabled || !!settings.carriesTunnel, config)
+  const view = getHostServerManager()?.view(hostKey) ?? null
   return {
     hostKey,
     label: host.label?.trim() || hostKey,
@@ -60,7 +68,23 @@ async function hostEntry(hostKey: string) {
       copies: copyChoiceFrom((host.server as { copies?: unknown } | undefined)?.copies),
       ...(host.server_program ? { program: host.server_program } : {}),
     },
-    view: getHostServerManager()?.view(hostKey) ?? null,
+    view: knownAs && view ? viewInTermsOf(view, hostKey, knownAs.label) : view,
+    ...(knownAs ? { knownAs } : {}),
+  }
+}
+
+async function knownAsOf(hostKey: string, runs: boolean, config: Config): Promise<{ hostKey: string; label: string } | null> {
+  if (!runs) return null
+  const known = await knownHost(hostKey, config).catch(() => null)
+  return known && known.host !== hostKey ? { hostKey: known.host, label: known.label } : null
+}
+
+/** The view's sentences with the alias said as the machine's name. */
+function viewInTermsOf<V extends { message?: string; notice?: string }>(view: V, alias: string, name: string): V {
+  return {
+    ...view,
+    ...(typeof view.message === 'string' ? { message: inHostTerms(view.message, alias, name) } : {}),
+    ...(typeof view.notice === 'string' ? { notice: inHostTerms(view.notice, alias, name) } : {}),
   }
 }
 

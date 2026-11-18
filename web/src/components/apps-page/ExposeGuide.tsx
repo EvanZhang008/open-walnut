@@ -1,15 +1,15 @@
 /**
  * A plugin that brings a tunnel provider (it registers one through `walnut.expose`) is how a
- * phone or another browser reaches this Walnut, so the next step after installing it is the
- * Browser link page. This row leads there from the plugin's page and from the notice an install
- * leaves, and says so when the link already runs through it.
+ * phone or another browser reaches this Walnut, so the next step after installing it is its tab
+ * under Phones & Cloud (named after the plugin). This row leads there from the plugin's page and
+ * from the notice an install leaves, and says so when Walnut already opens through it.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useEvent } from '@/hooks/useWebSocket'
 import { SettingsNotice } from '@/components/settings/SettingsSection'
 
-/** The Settings page that turns the browser link on (Phones & Cloud, Browser link). */
+/** The Settings page that turns the tunnel on (Phones & Cloud, the tunnel's tab). */
 export const BROWSER_LINK_PANE = 'devices-browser'
 
 export interface ExposeOverview {
@@ -17,7 +17,7 @@ export interface ExposeOverview {
   status: { enabled: boolean; provider: string | null; state?: string }
 }
 
-/** The provider one of these plugins registers, and whether the browser link uses it now. */
+/** The provider one of these plugins registers, and whether the tunnel uses it now. */
 export function exposeGuideFor(view: ExposeOverview | null, pluginIds: readonly string[]): { title: string; on: boolean } | null {
   if (!view) return null
   const provider = view.providers.find((p) => p.owner && pluginIds.includes(p.owner))
@@ -53,13 +53,13 @@ export function ExposeGuide({ pluginIds, testId = 'expose-guide' }: { pluginIds:
         kind="info"
         action={(
           <Link className="settings-button settings-button-primary" to={`/settings#${BROWSER_LINK_PANE}`} data-testid={`${testId}-open`}>
-            {guide.on ? 'Open browser link settings' : 'Set up the phone link'}
+            {guide.on ? `Open ${guide.title} settings` : `Set up ${guide.title}`}
           </Link>
         )}
       >
         {guide.on
-          ? <>Your browser link runs through {guide.title}.</>
-          : <>{guide.title} opens this Walnut from your phone or any browser. Next: turn on the browser link.</>}
+          ? <>This Walnut opens from any browser through {guide.title}.</>
+          : <>{guide.title} opens this Walnut from your phone or any browser. Next: turn it on in its settings.</>}
       </SettingsNotice>
     </div>
   )

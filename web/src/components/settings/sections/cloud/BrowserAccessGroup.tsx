@@ -80,7 +80,7 @@ export function maskedLink(link: string): string {
   return link.replace(/#pair=[^&]*$/, '#pair=••••-••••');
 }
 
-/** `heading`: Phones & Cloud names the group after its card ("Browser link"). */
+/** `heading`: the group's heading ("Open from a browser" on the tunnel's tab). */
 export function BrowserAccessGroup({ heading = 'Open from a browser' }: { heading?: string } = {}) {
   // A browser signed in with a code is refused every code (403
   // person_at_this_machine): say where codes come from, no button.

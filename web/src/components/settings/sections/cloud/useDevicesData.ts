@@ -1,7 +1,7 @@
 /**
  * What Phones & Cloud and its sub-pages read from the server: GET /api/devices
  * (every paired phone, browser and Mac, both halves, the pairing addresses and
- * Tailscale's summary) and, for the Browser link card, GET /api/expose. The main
+ * Tailscale's summary) and, for the tunnel's tab, GET /api/expose. The main
  * entry and the Tailscale sub-page each mount their own copy; the list read is
  * shared while in flight (devices-list.ts).
  */

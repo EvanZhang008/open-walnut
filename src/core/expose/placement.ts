@@ -24,6 +24,7 @@ import crypto from 'node:crypto'
 import { COMMAND_PROVIDER_ID, type ExposeProviderDefinition, type ExposeRunsOn, type ExposeStatus } from './types.js'
 import { foundHostWaits } from '../hosts/found-hosts.js'
 import { joinedTwins } from '../hosts/joined-twins.js'
+import { inHostTerms } from '../hosts/host-display-name.js'
 
 export const RUN_ON_HERE = 'here'
 
@@ -224,6 +225,8 @@ export function statusOnHost(
 ): ExposeStatus {
   const runsOn: ExposeRunsOn = { hostKey: placement.hostKey, label: placement.label, auto: placement.auto }
   const base = { enabled: true, provider: def.id, providerTitle: def.title, runsOn }
+  // The host's own sentences name it by its alias; the person reads the name `placement` carries.
+  const said = <T extends string | undefined>(text: T): T => (text === undefined ? text : inHostTerms(text, placement.hostKey, placement.label) as T)
   const reported = view?.phase === 'running' ? view.server?.expose : undefined
   // Another provider's report (or another tunnel of it) is the host's own tunnel from before, not this one.
   // A report without a key comes from an older build there: it can only be this one.
@@ -233,10 +236,15 @@ export function statusOnHost(
       port: _hostPort, runsOn: _ignored, enabled: _enabled, provider: _provider, providerTitle: _title,
       tunnelKey: _key, movingTo: _moving, ...rest
     } = reported
-    return { ...base, ...rest }
+    return {
+      ...base, ...rest,
+      ...(rest.lastError !== undefined ? { lastError: said(rest.lastError) } : {}),
+      ...(rest.hint !== undefined ? { hint: said(rest.hint) } : {}),
+      ...(rest.activity !== undefined ? { activity: said(rest.activity) } : {}),
+    }
   }
   if (view?.phase === 'error' || view?.phase === 'unsupported') {
-    return { ...base, state: 'retrying', since: view.since, lastError: view.message ?? `Walnut on ${placement.label} stopped.` }
+    return { ...base, state: 'retrying', since: view.since, lastError: said(view.message) ?? `Walnut on ${placement.label} stopped.` }
   }
   return {
     ...base,
@@ -244,6 +252,6 @@ export function statusOnHost(
     since: view?.since ?? 0,
     lastError: view?.phase === 'waiting-for-host'
       ? `Waiting to connect to ${placement.label}.`
-      : view?.message ?? (view?.phase === 'running' ? `Starting ${def.title} on ${placement.label}.` : `Starting Walnut on ${placement.label}.`),
+      : said(view?.message) ?? (view?.phase === 'running' ? `Starting ${def.title} on ${placement.label}.` : `Starting Walnut on ${placement.label}.`),
   }
 }

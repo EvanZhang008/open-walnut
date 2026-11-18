@@ -1,5 +1,5 @@
 /**
- * Settings > Phones & Cloud > Tailscale, and > Browser link: one way of reaching
+ * Settings > Phones & Cloud > Tailscale, and > the tunnel's tab: one way of reaching
  * Walnut away from home, as a tab (PhonesCloudTabs.tsx). The Cloud companion tab
  * is CloudSection itself, and the Devices tab DevicesSection.
  * Tailscale's steps need the device list (which phones are on the tailnet, and

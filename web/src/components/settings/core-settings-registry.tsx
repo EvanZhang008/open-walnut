@@ -298,7 +298,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   {
     owner: 'walnut', id: 'devices', label: 'Phones & Cloud', title: 'Phones & Cloud', group: 'configure',
     icon: 'phone', tint: '#5856D6',
-    description: 'How your phone and browsers reach Walnut: the cloud companion, Tailscale, or a browser link.',
+    description: 'How your phone and browsers reach Walnut: the cloud companion, Tailscale, or a tunnel.',
     keywords: ['phone', 'iphone'],
     render: () => <PhonesCloudLanding />,
   },
@@ -321,11 +321,11 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     render: () => <DevicesWaySection way="tailscale" />,
   },
   {
-    owner: 'walnut', id: 'devices-browser', label: 'Browser link', title: 'Browser link', group: 'configure', tabOf: 'devices',
+    owner: 'walnut', id: 'devices-browser', label: 'Tunnel', title: 'Tunnel', group: 'configure', tabOf: 'devices',
     requires: 'primary',
     icon: 'globe', tint: '#5856D6',
-    description: 'An HTTPS address that opens Walnut in any browser after you sign in.',
-    keywords: ['browser link', 'tunnel', 'open from a browser', 'sign-in code', 'https'],
+    description: 'An HTTPS address that opens this Walnut in any browser, from anywhere, after you sign in.',
+    keywords: ['tunnel', 'browser link', 'open from a browser', 'sign-in code', 'https'],
     render: () => <DevicesWaySection way="browser" />,
   },
   {
