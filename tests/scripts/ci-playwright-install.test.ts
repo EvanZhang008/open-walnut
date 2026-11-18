@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { guardedPath } from '../setup/exec-guard.js'
 
 // `playwright install --with-deps` runs apt, whose mirror can stall with no output (run
 // 42763058265: a browser leg sat 58 minutes in apt-get update until the job's limit cancelled
@@ -85,7 +86,7 @@ describe('install-browsers.sh', () => {
     ].join('\n'))
     const r = spawnSync('bash', [path.join(ROOT, SCRIPT), 'chromium', 'webkit'], {
       encoding: 'utf8',
-      env: { PATH: `${bin}:/usr/bin:/bin`, HOME: dir, RUNNER_TEMP: dir },
+      env: { PATH: guardedPath([bin], '/usr/bin:/bin'), HOME: dir, RUNNER_TEMP: dir },
     })
     const log = fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8') : ''
     return { code: r.status, out: r.stdout + r.stderr, log, dir }
