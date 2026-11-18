@@ -35,6 +35,7 @@ vi.mock('node:child_process', async (importOriginal) => {
 })
 
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { accountInfo } from '../../src/lib/account.js'
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
 import { createStreamEndpoint, type StreamEndpoint, type PtyStream } from '../../src/lib/link-stream.js'
 import { ptyOverStream } from '../../src/web/terminal/link-pty.js'
@@ -174,8 +175,28 @@ afterEach(async () => {
 
 const WAIT = { timeout: 15_000, interval: 25 }
 
+/** This user's passwd shell as Walnut's own reader finds it (src/lib/account.ts), or null when it is no login shell. */
+function passwdShellHere(): string | null {
+  try {
+    const sh = accountInfo().shell
+    return sh.startsWith('/') && fs.existsSync(sh) && !/(nologin|false)$/.test(sh) ? sh : null
+  } catch { return null }
+}
+
 for (const twin of TWINS.filter((t) => t.pty)) {
   describe(`terminal streams, ${twin.name}`, () => {
+    // The daemon runs with SHELL=/bin/sh (as from cron), and bun's os.userInfo() gives that
+    // back: the terminal still gets the passwd shell, as an ssh login does (2026-11-18: clouddev's
+    // terminal came up in sh, not the user's zsh).
+    it('runs the passwd shell, not the SHELL the daemon was started with', async () => {
+      const want = passwdShellHere()
+      if (!want) return
+      const { ep } = await link(await boot(twin))
+      const t = watch(ptyOverStream(await ep.openPty('echo "shell=$SHELL"; exit 0', { cols: 80, rows: 24 })))
+      await t.exited
+      expect(t.text().replace(/\r/g, '')).toContain(`shell=${want}\n`)
+    }, 90_000)
+
     it('advertises pty-stream-v1, runs the command under the login shell on a pty, keeps UTF-8 whole and reports the exit after the output', async () => {
       const { ep, caps } = await link(await boot(twin))
       expect(caps).toContain('pty-stream-v1')

@@ -13,7 +13,11 @@
  *
  * The daemon runs `<shell> -c <command>` on a pty, what sshd runs for `ssh host CMD`:
  * the passwd shell, as sshd takes it (a daemon started from cron has SHELL=/bin/sh),
- * unless it is unusable (nologin, false, not an executable file: the cloud box's
+ * read with `getent passwd` (Linux) or `dscl` (macOS) once and kept, since bun's
+ * os.userInfo() gives the env's SHELL instead (2026-11-18: clouddev's terminal came up
+ * in sh, not the user's zsh); an open waits for that first read. The server reads the
+ * same entry with src/lib/account.ts, synchronously; a daemon may not block its loop on a
+ * child, and its source twin inlines this factory, so the read here is its own, async. Unless it is unusable (nologin, false, not an executable file: the cloud box's
  * service user is /usr/sbin/nologin), then the env's SHELL if it is usable, then
  * /bin/sh. The user's home and an sshd-like env (HOME,
  * USER, LOGNAME, SHELL, PATH, TERM=xterm-256color, and the opener's LANG / LC_*
@@ -73,6 +77,14 @@ export interface PtyStreamDeps<L> {
   user: () => { shell?: string | null; home?: string; name?: string }
   /** The daemon's own env: only PATH, TMPDIR, TZ and the locale pass from it; SHELL, HOME and USER only where passwd names none usable. */
   env: Record<string, string | undefined>
+  /**
+   * Run a program and give its stdout, or null on any failure (execFile with a timeout).
+   * The passwd shell is read with it: `getent passwd <user>` on Linux, `dscl . -read
+   * /Users/<user> UserShell` on macOS. Without it, user().shell is all there is.
+   */
+  readCommand?: (file: string, args: string[], cb: (stdout: string | null) => void) => void
+  /** process.platform: which of the two reads above. */
+  platform?: string
   /** Whether `path` is an executable file (fs.accessSync X_OK and a file). Without it, any path counts. */
   executable?: (path: string) => boolean
   /** The pty's foreground process group (`ps -o tpgid= -p <pid>`), or null; `cb` once. Without it, the pty's own process is stopped. */
@@ -105,6 +117,37 @@ export function createPtyStreams<L>(deps: PtyStreamDeps<L>) {
     stopped: number | null; pauses: number
   }
   const byLink = new Map<L, Map<string, PtyEnd>>()
+
+  /** The passwd shell once read ('' = read, none found); null until then, with the opens waiting on it. */
+  let passwdShell: string | null = deps.readCommand ? null : ''
+  const shellWaiters: Array<() => void> = []
+  function shellRead(sh: string): void {
+    if (passwdShell !== null) return
+    passwdShell = sh
+    for (const w of shellWaiters.splice(0)) w()
+  }
+  function readPasswdShell(): void {
+    if (passwdShell !== null || !deps.readCommand) return
+    let name: string | undefined
+    try { name = deps.user()?.name || deps.env.USER } catch { name = deps.env.USER }
+    if (!name || !/^[A-Za-z0-9._-]{1,64}$/.test(name)) return shellRead('')
+    const mac = deps.platform === 'darwin'
+    const t = setTimeout(() => shellRead(''), 3_000)
+    ;(t as { unref?: () => void }).unref?.()
+    try {
+      deps.readCommand(mac ? 'dscl' : 'getent', mac ? ['.', '-read', `/Users/${name}`, 'UserShell'] : ['passwd', name], (out) => {
+        clearTimeout(t)
+        const text = String(out ?? '')
+        const sh = mac ? (/UserShell:\s*(\S+)/.exec(text)?.[1] ?? '') : (text.split('\n')[0]?.split(':')[6]?.trim() ?? '')
+        shellRead(sh.startsWith('/') ? sh : '')
+      })
+    } catch { clearTimeout(t); shellRead('') }
+  }
+  readPasswdShell()
+  function whenShellKnown(go: () => void): void {
+    if (passwdShell !== null) return go()
+    shellWaiters.push(go)
+  }
 
   function tracked(end: PtyEnd): boolean {
     return byLink.get(end.link)?.get(end.sid) === end
@@ -226,6 +269,18 @@ export function createPtyStreams<L>(deps: PtyStreamDeps<L>) {
     const rows = size(msg.rows)
     if (cols === null || rows === null) return refuse('a terminal stream needs cols and rows from 1 to 4096')
     if ((byLink.get(from)?.size ?? 0) >= MAX_PER_LINK) return refuse('too many terminal streams on this link')
+    const end: PtyEnd = { link: from, sid, proc: null, terminal: null, unacked: 0, paused: false, exitSent: false, stopped: null, pauses: 0 }
+    let m = byLink.get(from)
+    if (!m) { m = new Map(); byLink.set(from, m) }
+    m.set(sid, end)
+    // A close or a dropped link while the passwd shell is read leaves nothing to start.
+    whenShellKnown(() => { if (tracked(end)) start(end, command, cols, rows, msg.env) })
+  }
+
+  function start(end: PtyEnd, command: string, cols: number, rows: number, askedEnv: unknown): void {
+    const { link: from, sid } = end
+    const refuse = (error: string) => { forget(end); deps.send(from, 'stream-close', { sid, error }) }
+    const spawn = deps.spawn!
     let who: { shell?: string | null; home?: string; name?: string } = {}
     // A uid passwd lacks makes os.userInfo() throw: the env still names the user.
     try { who = deps.user() || {} } catch { who = {} }
@@ -235,18 +290,14 @@ export function createPtyStreams<L>(deps: PtyStreamDeps<L>) {
     }
     // The passwd shell first, as sshd does (a daemon started from cron has SHELL=/bin/sh), unless
     // it is no login shell (the cloud box's service user has /usr/sbin/nologin).
-    const shell = usable(who.shell) ? who.shell : usable(deps.env.SHELL) ? deps.env.SHELL : '/bin/sh'
+    const shell = usable(passwdShell) ? passwdShell : usable(who.shell) ? who.shell : usable(deps.env.SHELL) ? deps.env.SHELL : '/bin/sh'
     const user = { shell, home: who.home || deps.env.HOME || '/', name: who.name || deps.env.USER }
-    const end: PtyEnd = { link: from, sid, proc: null, terminal: null, unacked: 0, paused: false, exitSent: false, stopped: null, pauses: 0 }
     const eof = { seen: false, wake: null as (() => void) | null }
-    let m = byLink.get(from)
-    if (!m) { m = new Map(); byLink.set(from, m) }
-    m.set(sid, end)
     let proc: PtyChild
     try {
-      proc = deps.spawn([user.shell, '-c', command], {
+      proc = spawn([user.shell, '-c', command], {
         cwd: user.home,
-        env: loginEnv(user, msg.env),
+        env: loginEnv(user, askedEnv),
         terminal: {
           cols, rows,
           data: (_t, bytes) => output(end, bytes),
@@ -254,14 +305,12 @@ export function createPtyStreams<L>(deps: PtyStreamDeps<L>) {
         },
       })
     } catch (err) {
-      forget(end)
       return refuse(`the terminal did not start: ${String((err as Error)?.message ?? err).slice(0, 160)}`)
     }
     end.proc = proc
     end.terminal = proc.terminal ?? null
     if (!end.terminal) {
       try { proc.kill('SIGKILL') } catch { /* gone */ }
-      forget(end)
       return refuse('the terminal did not start: no pty was attached')
     }
     deps.send(from, 'stream-accept', { sid, pid: proc.pid })

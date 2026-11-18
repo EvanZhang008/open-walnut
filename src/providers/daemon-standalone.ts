@@ -4516,6 +4516,9 @@ const ptyStreams = createPtyStreams<ServerWebSocket<WsData>>({
   spawn: PTY_SPAWN,
   user: () => { const u = os.userInfo(); return { shell: u.shell, home: u.homedir, name: u.username } },
   env: process.env,
+  // bun's os.userInfo().shell is the env's SHELL: the core reads the passwd shell with this.
+  readCommand: (file, args, cb) => { execFile(file, args, { timeout: 3_000 }, (err, stdout) => cb(err ? null : String(stdout))) },
+  platform: process.platform,
   executable: (p) => { try { fs.accessSync(p, fs.constants.X_OK); return fs.statSync(p).isFile() } catch { return false } },
   foregroundGroup: (pid, cb) => psGroupField(pid, 'tpgid', cb),
   ownGroup: (cb) => psGroupField(process.pid, 'pgid', cb),

@@ -23,7 +23,7 @@ interface Fake {
 
 type Deps = Parameters<typeof createPtyStreams<string>>[0]
 
-function harness(over: { env?: Record<string, string | undefined> } & Partial<Pick<Deps, 'user' | 'executable' | 'foregroundGroup' | 'ownGroup' | 'killGroup'>> = {}) {
+function harness(over: { env?: Record<string, string | undefined> } & Partial<Pick<Deps, 'user' | 'executable' | 'foregroundGroup' | 'ownGroup' | 'killGroup' | 'readCommand' | 'platform'>> = {}) {
   const sent: Array<{ link: string; ev: string; data: Record<string, unknown> }> = []
   const fakes: Fake[] = []
   const ptys = createPtyStreams<string>({
@@ -33,6 +33,8 @@ function harness(over: { env?: Record<string, string | undefined> } & Partial<Pi
     user: over.user ?? (() => ({ shell: '/bin/passwd-shell', home: '/home/passwd', name: 'pw' })),
     env: over.env ?? { SHELL: '/bin/sh', HOME: '/home/u', USER: 'u', PATH: '/usr/bin:/bin', LANG: 'en_US.UTF-8', WALNUT_TOKEN: 'secret', AWS_SECRET_ACCESS_KEY: 'x' },
     executable: over.executable,
+    readCommand: over.readCommand,
+    platform: over.platform,
     foregroundGroup: over.foregroundGroup,
     ownGroup: over.ownGroup,
     killGroup: over.killGroup,
@@ -103,6 +105,44 @@ describe('terminal streams in the daemon', () => {
     // A shell passwd names that is not there (or not executable) is passed over too.
     expect(shellOf('/opt/gone/fish', '/bin/zsh')).toBe('/bin/zsh')
     expect(shellOf(undefined, '/bin/missing')).toBe('/bin/sh')
+  })
+
+  it('reads the passwd shell itself (bun\'s os.userInfo gives the env\'s SHELL), and an open waits for that read', () => {
+    const exe = new Set(['/bin/zsh', '/bin/sh', '/usr/local/bin/fish'])
+    // As bun answers under cron: user().shell is the env's SHELL, never passwd's.
+    const bunUser = () => ({ shell: '/bin/sh', home: '/home/w', name: 'w' })
+    const asked: string[][] = []
+    let answer: ((out: string | null) => void) | null = null
+    const h = harness({ user: bunUser, env: { SHELL: '/bin/sh' }, executable: (p) => exe.has(p), platform: 'linux', readCommand: (file, args, cb) => { asked.push([file, ...args]); answer = cb } })
+    expect(asked).toEqual([['getent', 'passwd', 'w']])
+    open(h.relay, 'o1')
+    open(h.relay, 'o2')
+    h.relay.frame('a', 'close', { sid: 'o2' })
+    // Nothing starts before the read answers; o2 closed while it waited and never starts.
+    expect(h.fakes).toHaveLength(0)
+    answer!('w:x:1000:100:W:/home/w:/bin/zsh\n')
+    expect(h.fakes.map((f) => f.argv[0])).toEqual(['/bin/zsh'])
+    expect(h.fakes[0]!.opts.env.SHELL).toBe('/bin/zsh')
+    expect(h.evs('o1')).toEqual(['stream-accept'])
+    // Read once: a later open asks nothing.
+    open(h.relay, 'o3')
+    expect(asked).toHaveLength(1)
+    expect(h.fakes[1]!.argv[0]).toBe('/bin/zsh')
+
+    // macOS: dscl names it.
+    const mac: string[][] = []
+    const hm = harness({ user: bunUser, env: { SHELL: '/bin/sh' }, executable: (p) => exe.has(p), platform: 'darwin', readCommand: (file, args, cb) => { mac.push([file, ...args]); cb('UserShell: /usr/local/bin/fish\n') } })
+    open(hm.relay, 'o1')
+    expect(mac).toEqual([['dscl', '.', '-read', '/Users/w', 'UserShell']])
+    expect(hm.fakes[0]!.argv[0]).toBe('/usr/local/bin/fish')
+
+    // A failed read, or one naming nologin, leaves the order as before.
+    const hf = harness({ user: bunUser, env: { SHELL: '/bin/sh' }, executable: (p) => exe.has(p), platform: 'linux', readCommand: (_f, _a, cb) => cb(null) })
+    open(hf.relay, 'o1')
+    expect(hf.fakes[0]!.argv[0]).toBe('/bin/sh')
+    const hn = harness({ user: () => ({ shell: '/bin/zsh', home: '/srv', name: 'svc' }), env: {}, executable: (p) => exe.has(p), platform: 'linux', readCommand: (_f, _a, cb) => cb('svc:x:1:1::/srv:/usr/sbin/nologin\n') })
+    open(hn.relay, 'o1')
+    expect(hn.fakes[0]!.argv[0]).toBe('/bin/zsh')
   })
 
   it('opens from the env when passwd has no entry for the daemon\'s uid (os.userInfo throws)', () => {

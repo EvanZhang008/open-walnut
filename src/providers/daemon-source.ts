@@ -5880,6 +5880,9 @@ var ptyStreams = (__CREATE_PTY_STREAMS__)({
   spawn: PTY_SPAWN,
   user: function () { var u = os.userInfo(); return { shell: u.shell, home: u.homedir, name: u.username }; },
   env: process.env,
+  // bun's os.userInfo().shell is the env's SHELL: the core reads the passwd shell with this.
+  readCommand: function (file, args, cb) { execFile(file, args, { timeout: 3000 }, function (err, stdout) { cb(err ? null : String(stdout)); }); },
+  platform: process.platform,
   executable: function (p) { try { fs.accessSync(p, fs.constants.X_OK); return fs.statSync(p).isFile(); } catch (e) { return false; } },
   foregroundGroup: function (pid, cb) { psGroupField(pid, 'tpgid', cb); },
   ownGroup: function (cb) { psGroupField(process.pid, 'pgid', cb); },
