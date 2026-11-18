@@ -22,8 +22,8 @@ import { hostRowId } from '@/utils/host-settings-nav';
 export interface WalnutServerRow {
   id: string;
   name: string;
-  /** "Main" for this Mac, "Copy" for every other server. */
-  role: 'Main' | 'Copy';
+  /** `primary` for this Mac, `copy` for every other server. */
+  role: 'primary' | 'copy';
   line: string;
   dot: 'done' | 'pending' | 'action' | 'error';
   /** A Settings hash that opens its own settings (none for this Mac). */
@@ -50,7 +50,7 @@ export function walnutServerRows(i: WalnutServersInput): WalnutServerRow[] {
   const rows: WalnutServerRow[] = [{
     id: 'this-mac',
     name: 'This Mac',
-    role: 'Main',
+    role: 'primary',
     line: 'The main Walnut: your tasks, notes and sessions live here, and every other server keeps a copy.',
     dot: 'done',
   }];
@@ -58,7 +58,7 @@ export function walnutServerRows(i: WalnutServersInput): WalnutServerRow[] {
     rows.push({
       id: 'companion',
       name: 'Cloud companion',
-      role: 'Copy',
+      role: 'copy',
       line: i.companion && !i.companionError
         ? `At ${bare(i.companion.origin)}. Your phone reaches it from anywhere, also while this Mac sleeps.`
         : 'Not answering right now; its tab says why.',
@@ -89,7 +89,7 @@ export function walnutServerRows(i: WalnutServersInput): WalnutServerRow[] {
     rows.push({
       id: `host:${key}`,
       name: m.name,
-      role: 'Copy',
+      role: 'copy',
       line: `${state.text}${address}`,
       dot: state.dot,
       // The row whose server this is: its switch and its tunnel's settings live there

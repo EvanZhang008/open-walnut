@@ -4,7 +4,8 @@
  * /api/host-servers, read when the tab opens and again when config.yaml changes, the last answer
  * kept in this browser so a reopened tab paints it at once.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { apiGet } from '@/api/client';
 import { useEvent } from '@/hooks/useWebSocket';
 import { keepLastGood, readLastGood } from '@/utils/last-good';
@@ -22,7 +23,7 @@ const isHosts = (v: unknown): v is HostServerEntry[] =>
 
 function useHostServers(): HostServerEntry[] | null {
   const [hosts, setHosts] = useState<HostServerEntry[] | null>(() => readLastGood(KEPT_KEY, isHosts)?.value ?? null);
-  const load = useCallback(async () => {
+  const load = useLeanCallback(async () => {
     try {
       const res = await apiGet<HostServersResponse>('/api/host-servers', undefined, { timeoutMs: 10_000, quietStatuses: [404] });
       setHosts(res.hosts);
@@ -51,8 +52,8 @@ export function WalnutServersGroup({ companion, companionError }: { companion: {
           label={
             <span className="settings-addons-inline devices-name">
               <span className="browser-access-dot" data-dot={r.dot} aria-hidden="true" />
-              <span className="settings-addons-ellipsis" title={r.name}>{r.name}</span>
-              <SettingsTag tone={r.role === 'Main' ? 'success' : 'neutral'}>{r.role}</SettingsTag>
+              <span className="settings-addons-ellipsis">{r.name}</span>
+              <SettingsTag tone={r.role === 'primary' ? 'success' : 'neutral'}>{r.role === 'primary' ? 'Primary' : 'Copy'}</SettingsTag>
             </span>
           }
           help={<span className="devices-meta">{r.line}</span>}

@@ -26,7 +26,7 @@ const rows = walnutServerRows({ companion: { origin: 'https://companion.example.
 
 describe('walnutServerRows', () => {
   it('this Mac first as the main one, then the companion, then each host that runs a server', () => {
-    expect(rows.map((r) => [r.name, r.role])).toEqual([['This Mac', 'Main'], ['Cloud companion', 'Copy'], ['Big box', 'Copy']])
+    expect(rows.map((r) => [r.name, r.role])).toEqual([['This Mac', 'primary'], ['Cloud companion', 'copy'], ['Big box', 'copy']])
   })
   it('one machine under two rows is one server, by the name the person gave it, with the tunnel it carries', () => {
     const big = rows.filter((r) => r.name === 'Big box')

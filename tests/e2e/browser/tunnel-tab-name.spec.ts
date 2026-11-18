@@ -198,7 +198,7 @@ test('2 and 3. the tab says the tunnel and its host by name; All devices lists t
   await expect(servers.locator('.walnut-server-row')).toHaveCount(3, { timeout: 30_000 })
   const names = await servers.locator('.walnut-server-row .settings-addons-ellipsis').allTextContents()
   expect(names).toEqual(['This Mac', 'Cloud companion', 'Big dev box'])
-  await expect(servers.locator('[data-server="this-mac"]')).toContainText('Main')
+  await expect(servers.locator('[data-server="this-mac"]')).toContainText('Primary')
   await expect(servers.locator('[data-server="companion"]')).toContainText('At walnut.example.com.')
   const box = servers.locator('[data-server="host:devbox"]')
   await expect(box).toContainText('Copy')
