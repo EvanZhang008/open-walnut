@@ -463,6 +463,13 @@ export type CronJob = {
    * '' means no task; absent means a trigger saved before the field existed (trigger-caller.ts).
    */
   checkActsFor?: string;
+  /**
+   * The trigger watches its task's own work (trigger_create `watches: "own"`): the results of a
+   * build, test run, CI run, deploy or land of the task's own change. That is the task's work going
+   * on, never a wait outside it, so such a trigger never parks the task, never counts as outside-wait
+   * evidence and never makes the task a standing routine (sessions/outside-wait.ts, 2026-11-18).
+   */
+  ownWork?: boolean;
   state: CronJobState;
 };
 

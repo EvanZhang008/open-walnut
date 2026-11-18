@@ -4,13 +4,16 @@
  * a live trigger counts.
  */
 import { describe, it, expect } from 'vitest'
-import { validWatch, watchedBy, withWatch } from '../../src/core/sessions/recheck-watch.js'
+import { watchedBy, withWatch } from '../../src/core/sessions/recheck-watch.js'
+import { parseTriggerWatch } from '../../src/core/routines/trigger-watches.js'
 
 describe('recheck watch', () => {
-  it('accepts "ask" or a letter id, nothing else', () => {
-    expect(validWatch('ask')).toBe('ask')
-    expect(validWatch(' lt-mvszyub6-c1ec46 ')).toBe('lt-mvszyub6-c1ec46')
-    for (const bad of ['', 'the ask', 'rq-1234', 'lt-', 42, null, undefined]) expect(validWatch(bad)).toBeNull()
+  it('accepts "ask", a letter id or "own", nothing else', () => {
+    expect(parseTriggerWatch('ask')).toEqual({ kind: 'user', what: 'ask' })
+    expect(parseTriggerWatch(' lt-mvszyub6-c1ec46 ')).toEqual({ kind: 'user', what: 'lt-mvszyub6-c1ec46' })
+    expect(parseTriggerWatch(' own ')).toEqual({ kind: 'own' })
+    for (const none of ['', null, undefined]) expect(parseTriggerWatch(none)).toBeNull()
+    for (const bad of ['the ask', 'rq-1234', 'lt-', 42, 'owned']) expect(parseTriggerWatch(bad)).toBe('invalid')
   })
 
   it('counts a watch only while its trigger is live', () => {

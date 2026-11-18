@@ -28,7 +28,7 @@ type AuditEntry = Record<string, unknown> & {
 }
 
 export type ListedJob = {
-  id?: string; name?: string; description?: string; enabled?: boolean
+  id?: string; name?: string; description?: string; enabled?: boolean; ownWork?: boolean
   schedule?: { everyMs?: number }
   check?: { run?: string; host?: string; cwd?: string; timeoutSeconds?: number }
   executor?: { type?: string; config?: { target?: unknown } }
@@ -170,6 +170,8 @@ function headOf(job: ListedJob, extra: Record<string, unknown>, description: str
     host: job.check?.host ?? '__local__',
     enabled: job.enabled === true,
     state: triggerRunState(job),
+    // It watches the task's own work (watches:"own"): it never parks the task.
+    ...(job.ownWork ? { watches: 'own' } : {}),
     ...(!job.enabled && typeof job.state?.pausedAtMs === 'number'
       ? { pausedAt: new Date(job.state.pausedAtMs).toISOString() } : {}),
   }

@@ -24,6 +24,22 @@ export interface WatchingTrigger {
   /** It watches the task's ask of the user or one of its letters (trigger_create `watches`,
    *  sessions/recheck-watch.ts): a wait on the user, so it never holds a park (outside-wait.ts). */
   watchesUser?: boolean;
+  /** It watches the task's own work (trigger_create `watches: "own"`, CronJob.ownWork): work going
+   *  on, never a wait outside the task, so it never holds a park either (outside-wait.ts). */
+  ownWork?: boolean;
+}
+
+/** Whether a trigger watches something outside the task and the user, the only kind that may hold
+ *  a park: one on the user's ask or letter is a wait on the user, one on the task's own work is that
+ *  work going on (2026-11-18, the user: Waiting only when "he really waits for something external").
+ *  Every reader that lets a trigger hold or restore a park asks this. Pure. */
+export function triggerHoldsPark(t: Partial<Pick<WatchingTrigger, 'watchesUser' | 'ownWork'>>): boolean {
+  return !t.watchesUser && !t.ownWork;
+}
+
+/** Whether a trigger watches the task's own work (watches:"own"). Pure. */
+export function triggerWatchesOwnWork(t: Partial<Pick<WatchingTrigger, 'ownWork'>>): boolean {
+  return t.ownWork === true;
 }
 
 const MAX_LISTED = 5;

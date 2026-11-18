@@ -195,9 +195,12 @@ describe('handBackTaskOnSessionEnd', () => {
   })
 
   describe('a standing routine (an armed trigger that keeps firing)', () => {
-    async function routineTask(sid: string): Promise<string> {
+    // Its own last report waits on the outside thing it watches: the park is its own word (2026-11-18).
+    const waitsOutside = { state: 'waiting', waiting_kind: 'outside', waiting_on: 'the release pipeline', at: new Date().toISOString() }
+    async function routineTask(sid: string, report: Record<string, unknown> | null = waitsOutside): Promise<string> {
       const taskId = await seedTask('a watch between fires')
       await updateTask(taskId, { phase: 'IN_PROGRESS' })
+      if (report) await taskManager.updateTaskRaw(taskId, { status_report: report } as never)
       await createSessionRecord(sid, taskId, 'proj')
       await updateSessionRecord(sid, { process_status: 'stopped' })
       watching.triggers = [{ state: 'armed', fires: 5 }]
@@ -212,6 +215,21 @@ describe('handBackTaskOnSessionEnd', () => {
       const task = await getTask(taskId)
       expect(task.phase).toBe('WAITING')
       expect(task.wait_until).toBeTruthy()
+    })
+
+    it('is handed back when its own last report does not wait outside: work left, its own test run, none', async () => {
+      for (const [i, report] of [
+        { state: 'working', at: new Date().toISOString() },
+        { state: 'waiting', waiting_kind: 'own', waiting_on: 'my test run', at: new Date().toISOString() },
+        null,
+      ].entries()) {
+        const sid = `sid-reaped-own-${i}`
+        const taskId = await routineTask(sid, report)
+        vi.spyOn(sessionRunner, 'findSessionByClaudeId')
+          .mockImplementation((id) => id === sid ? { processStatus: 'stopped', teardownReason: 'idle_timeout' } as never : undefined)
+        expect(await handBackTaskOnSessionEnd(taskId, sid, 'test')).toBe(true)
+        expect((await getTask(taskId)).phase, JSON.stringify(report)).toBe(HANDBACK_PHASE)
+      }
     })
 
     it('waits too when the reap is known only from the session record', async () => {

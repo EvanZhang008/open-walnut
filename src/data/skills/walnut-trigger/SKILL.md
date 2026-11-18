@@ -277,6 +277,8 @@ or a file only that host has), and never paste one inline as `curl -H
    It does **not** park this task (see "Parking is your call" below). Pass
    `"wait":true` only when the rest of the work truly waits on the watched thing
    and nothing of this turn is for the user to read.
+   Watching your own build, test run, CI run, deploy or land? Add
+   `"watches":"own"`: it never parks the task (your work going on reads Working).
    Watching something you asked the user (your status's ask, or a letter you
    sent them)? Add `"watches":"ask"` or `"watches":"<letter id>"`. With `ask`,
    each run of the check counts as that ask's check, so Walnut's 4-hour re-check
@@ -376,12 +378,30 @@ is running it should be in progress"). One that runs in this session (a
 Claude Code wakes the session when it finishes, so just end the turn with one plain
 sentence on what runs, never the agent-ack line (2026-11-15:
 a 20-minute trigger on a session's own acceptance run woke it four times for
-nothing). Arm a trigger only on what runs outside this session (CI, a deploy
-queue, another host, a person), park as usual so the session can go idle, and
-say so in the turn-end report:
-`FOR_USER_STATE: working`, with what runs in `FOR_USER_NOW` (or
-`FOR_USER_WAITING_ON: own: the build of my change`), never `outside:`. Waiting
-is for a real block: a person's review or reply, another team, a set time.
+nothing). When your own work runs outside this session (CI, a deploy or land
+queue, a test run on another host), arm its trigger with `"watches":"own"` and
+no `wait`: it never parks the task, and its fire brings you back. The session
+goes idle by itself; the task stays out of Waiting and reads Working. Say so in
+the turn-end report: `FOR_USER_STATE: working`, with what runs in
+`FOR_USER_NOW` (or `FOR_USER_WAITING_ON: own: the build of my change`), never
+`outside:`. Walnut keeps a park out of it too: a report on your own work takes
+a park Walnut restored back to In Progress, and an `"own"` trigger never holds a
+park, keeps a routine parked or counts as an outside wait.
+
+**What is a real outside wait, and what is not** (2026-11-18, the user: Waiting
+only when the task "really waits for something external", and the task puts
+itself there):
+
+| Waiting (park it yourself) | Not Waiting |
+|---|---|
+| A colleague's CR or PR review, an approval by someone else | Work left for you: fixes, edits, the next step (In Progress) |
+| Another team's pipeline or release, a deploy you do not run | Your own build, test run, CI run, deploy or land (Working, `watches:"own"`) |
+| A reply by mail, Slack or a letter from someone else | The user's input, review, decision or sign-in (Needs you) |
+| Another task or your lead, a set date or time | A result the user has not read yet (Needs you) |
+
+Walnut never parks a task for it: only your own `task_update phase=WAITING`
+or `trigger_create` with `"wait":true` does, and Walnut only brings back a park
+you set before (after a message or a fire interrupted it).
 
 **Use it on your own.** When the rest of the work waits on something outside
 this session (a review, a merge, a deploy, a CI run, a reply from a

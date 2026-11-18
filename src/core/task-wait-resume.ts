@@ -43,8 +43,8 @@
  * loses the return (the turn ends as NEED_ACTION, the behaviour before this).
  */
 import { log } from '../logging/index.js';
-import type { Task } from './types.js';
-import type { WatchingTrigger } from './task-wait-wake.js';
+import type { Task, TaskPhase } from './types.js';
+import { triggerHoldsPark, type WatchingTrigger } from './task-wait-wake.js';
 import { parseWalnutMessage } from './peers/walnut-message-tag.js';
 
 /** Why the wait was left: a message that is not the awaited event, or a turn the CLI started itself. */
@@ -262,11 +262,12 @@ export function markInterruptedByMessage(taskId: string, source: string): void {
 
 /** What a trigger list says about the wait: may it come back? */
 export function triggersHoldWait(
-  all: ReadonlyArray<Pick<WatchingTrigger, 'state'> & Partial<Pick<WatchingTrigger, 'id' | 'fires' | 'watchesUser'>>>,
+  all: ReadonlyArray<Pick<WatchingTrigger, 'state'> & Partial<Pick<WatchingTrigger, 'id' | 'fires' | 'watchesUser' | 'ownWork'>>>,
   firesAtExit?: Readonly<Record<string, number>>,
 ): boolean {
-  // A trigger on the user's ask is a wait on the user: it never holds a park (sessions/outside-wait.ts).
-  const triggers = all.filter((t) => !t.watchesUser);
+  // A trigger on the user's ask is a wait on the user, one on the task's own work is that work going
+  // on: neither holds a park (sessions/outside-wait.ts).
+  const triggers = all.filter(triggerHoldsPark);
   if (!triggers.some((t) => t.state === 'armed') || triggers.some((t) => t.state === 'stopped')) return false;
   if (!firesAtExit) return true;
   return !triggers.some((t) => t.id !== undefined && t.fires !== undefined
@@ -402,33 +403,55 @@ const FIRE_TURN_TTL_MS = 6 * 60 * 60_000;
 
 /**
  * Every send into a task's session: a fire marks the turn as the routine's, a person's unmarks it.
- * `onUser`: the task stood on the user when the fire came (NEED_ACTION, its ask open). That turn is
- * no routine's between fires: it ends where the task stood, on the user, and its own report may
- * park it (2026-11-01: a letter watch's scheduled fire took a task whose draft waited on the
- * user's review off their list for two hours).
+ * `parked`: the task stood parked (WAITING) when the fire came, by its own choice. Only such a
+ * turn is a routine's between fires, whose end brings that park back: a fire into a task on the
+ * user or at work ends where the task stood, and its own report may park it (2026-11-01: a letter
+ * watch's fire took a task whose draft waited on the user's review off their list for two hours;
+ * 2026-11-18, the user: Waiting only when the task itself puts it there, a test-results watch's
+ * fire parked a task that still had its fix to make).
  */
-export function noteTurnSend(taskId: string, fire: boolean, person: boolean, waitUntil?: string | null, onUser = false): void {
-  if (fire && onUser) fireTurns.delete(taskId);
+export function noteTurnSend(taskId: string, fire: boolean, person: boolean, waitUntil?: string | null, parked = true): void {
+  if (fire && !parked) fireTurns.delete(taskId);
   else if (fire) {
     if (fireTurns.size > 1000) fireTurns.clear();
     fireTurns.set(taskId, { waitUntil: waitUntil ?? null, at: Date.now() });
   } else if (person) fireTurns.delete(taskId);
 }
 
-/** Tasks a turn just moved off the user (NEED_ACTION -> IN_PROGRESS), by when: the send edge of
- *  the fire that started that turn may land after its turn-start edge (phase.ts). */
-const leftNeeds = new Map<string, number>();
-const LEFT_NEEDS_MS = 60_000;
+/** The phase a turn just moved each task out of (NEED_ACTION or WAITING -> IN_PROGRESS), and when:
+ *  the send edge of the fire that started that turn may land after its turn-start edge (phase.ts),
+ *  so the send reads where the task stood from here. */
+const leftPhase = new Map<string, { phase: TaskPhase; at: number }>();
+const LEFT_PHASE_MS = 60_000;
 
-export function noteLeftNeeds(taskId: string, nowMs: number = Date.now()): void {
-  if (leftNeeds.size > 1000) leftNeeds.clear();
-  leftNeeds.set(taskId, nowMs);
+export function noteLeftPhase(taskId: string, phase: TaskPhase, nowMs: number = Date.now()): void {
+  if (leftPhase.size > 1000) leftPhase.clear();
+  leftPhase.set(taskId, { phase, at: nowMs });
 }
 
-/** Whether a turn moved the task off the user within the last minute (the turn now starting). */
-export function leftNeedsRecently(taskId: string, nowMs: number = Date.now()): boolean {
-  const at = leftNeeds.get(taskId);
-  return at !== undefined && nowMs - at <= LEFT_NEEDS_MS;
+/** Whether a turn moved the task out of `phase` within the last minute (the turn now starting). */
+export function leftRecently(taskId: string, phase: TaskPhase, nowMs: number = Date.now()): boolean {
+  const e = leftPhase.get(taskId);
+  return e !== undefined && e.phase === phase && nowMs - e.at <= LEFT_PHASE_MS;
+}
+
+/**
+ * Parks Walnut brought back at a turn end (an interrupted wait, a routine's fire turn: phase.ts),
+ * by the phase_changed_at of that write. The turn's own report outranks such a park: one that says
+ * the task's own work goes on takes it out again (sessions/report-phase.ts), while a park the turn
+ * set itself stays. In memory: after a restart a park reads as the task's own.
+ */
+const restoredParks = new Map<string, string>();
+
+export function noteRestoredPark(taskId: string, phaseChangedAt: string | undefined): void {
+  if (!phaseChangedAt) return;
+  if (restoredParks.size > 1000) restoredParks.clear();
+  restoredParks.set(taskId, phaseChangedAt);
+}
+
+/** Whether the task's current WAITING is a park Walnut restored, not one a turn or a person set. */
+export function isRestoredPark(task: Pick<Task, 'id' | 'phase' | 'phase_changed_at'>): boolean {
+  return task.phase === 'WAITING' && !!task.phase_changed_at && restoredParks.get(task.id) === task.phase_changed_at;
 }
 
 /** The fire turn ended another way (an error, a prompt for the user): it is no routine's end. */
@@ -452,7 +475,7 @@ export function takeFireTurn(taskId: string, nowMs: number = Date.now()): { wait
  * A trigger that fired once is a one-time watch: the fire is what the task waited for, and the
  * task is handed back as before.
  */
-export function triggersStanding(triggers: ReadonlyArray<Pick<WatchingTrigger, 'state'> & Partial<Pick<WatchingTrigger, 'fires' | 'watchesUser'>>>): boolean {
-  return triggersHoldWait(triggers) && triggers.some((t) => t.state === 'armed' && !t.watchesUser && (t.fires ?? 0) >= 2);
+export function triggersStanding(triggers: ReadonlyArray<Pick<WatchingTrigger, 'state'> & Partial<Pick<WatchingTrigger, 'fires' | 'watchesUser' | 'ownWork'>>>): boolean {
+  return triggersHoldWait(triggers) && triggers.some((t) => t.state === 'armed' && triggerHoldsPark(t) && (t.fires ?? 0) >= 2);
 }
 

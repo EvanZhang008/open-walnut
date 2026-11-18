@@ -8,10 +8,11 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-idle-reap-routine'))
 
-const phase = vi.hoisted(() => ({ standing: false, calls: [] as unknown[][] }))
+const phase = vi.hoisted(() => ({ standing: false, own: false, calls: [] as unknown[][] }))
 vi.mock('../../src/core/phase.js', async (orig) => ({
   ...(await orig<typeof import('../../src/core/phase.js')>()),
   standingRoutineWaits: async () => phase.standing,
+  ownWorkWakes: async () => phase.own,
   applySessionPhase: async (...args: unknown[]) => { phase.calls.push(args); return { changed: true } },
 }))
 const resume = vi.hoisted(() => ({ dropped: [] as string[] }))
@@ -44,9 +45,16 @@ async function reap(): Promise<void> {
   expect(killed).toBe('sid-watch')
 }
 
-beforeEach(() => { phase.standing = false; phase.calls = []; resume.dropped = [] })
+beforeEach(() => { phase.standing = false; phase.own = false; phase.calls = []; resume.dropped = [] })
 
 describe('an idle reap', () => {
+  // 2026-11-18 review: a task whose own CI run (watches:"own") outlasted the idle limit read Needs you.
+  it('leaves a task whose own work runs outside, and whose watch wakes it, as it is', async () => {
+    phase.own = true
+    await reap()
+    expect(phase.calls).toEqual([])
+  })
+
   it('hands an ordinary task back to the user', async () => {
     await reap()
     expect(phase.calls).toHaveLength(1)

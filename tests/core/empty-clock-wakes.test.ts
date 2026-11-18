@@ -93,7 +93,8 @@ describe('a lead parks only on a trigger of its own', () => {
         // The caller looks the evidence up for every one of them, never trusting the words.
         expect(reportNeedsEvidence(report, lead), JSON.stringify(report)).toBe(true)
       }
-      if (report.state === 'waiting' && report.waiting_kind !== 'you') expect(phaseForReport(report, lead, false, true)).toBe('WAITING')
+      // Its own work ("waiting own") is work going on, never a park (2026-11-18).
+      if (report.state === 'waiting' && report.waiting_kind !== 'you' && report.waiting_kind !== 'own') expect(phaseForReport(report, lead, false, true)).toBe('WAITING')
     }
   })
 

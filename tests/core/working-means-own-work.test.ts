@@ -242,8 +242,10 @@ describe('the self-report says own work is working', () => {
     expect(r).toMatchObject({ state: 'waiting', waiting_kind: 'own', waiting_on: 'the build of my change' })
   })
 
-  it('an own: wait may park the task (its trigger and clock bring it back)', () => {
-    expect(phaseForReport(own({ state: 'waiting', waiting_kind: 'own', waiting_on: 'my build' }), {}, true)).toBe('WAITING')
+  it('an own: wait is its work going on: In Progress, never a park (2026-11-18)', () => {
+    expect(phaseForReport(own({ state: 'waiting', waiting_kind: 'own', waiting_on: 'my build' }), {}, true)).toBe('IN_PROGRESS')
+    expect(phaseForReport(own({ state: 'waiting', waiting_kind: 'own', waiting_on: 'my build' }), {}, true, true)).toBe('IN_PROGRESS')
+    expect(phaseForReport(own({ state: 'waiting', waiting_kind: 'own', waiting_on: 'my build' }), {}, false, true)).toBeNull()
   })
 })
 

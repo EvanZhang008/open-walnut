@@ -122,7 +122,7 @@ describe('a hold stays until it is settled, whatever a later turn reports', () =
     expect(phaseForReport({ state: 'waiting', waiting_kind: 'outside', waiting_on: 'CI' }, task, true, true)).toBe('NEED_ACTION')
     expect(phaseForReport({ state: 'working' }, task, true)).toBe('IN_PROGRESS')
     const settled = { ...task, result_report: { ...task.result_report, owed: { ...owed, settled: { at: later, how: 'dropped' as const } } } }
-    expect(phaseForReport({ state: 'done' }, settled, true)).toBe('WAITING')
+    expect(phaseForReport({ state: 'done' }, settled, true)).toBeNull()
   })
 
   it('an open hold is Partial with its items; a settled one with no own items is not', () => {

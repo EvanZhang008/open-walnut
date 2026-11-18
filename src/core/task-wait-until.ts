@@ -129,6 +129,7 @@ export async function triggersWatching(taskId: string): Promise<WatchingTrigger[
       fires: job.state?.fireCount ?? 0,
       lastCheck: job.state?.lastCheck,
       ...(onUser.has(job.id) ? { watchesUser: true } : {}),
+      ...(job.ownWork ? { ownWork: true } : {}),
     }));
   } catch (err) {
     log.task.warn('wait_until: could not list the task\'s triggers for the wake note', { taskId, error: errText(err) });

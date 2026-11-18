@@ -86,6 +86,9 @@ defineOp({
     + '`description` is required: the card otherwise shows only a name and a script path, which does not '
     + 'tell the user what fires it. '
     + 'It does NOT park the task unless you pass wait:true: a watch alone is no reason to leave the user\'s list. '
+    + 'Waiting is only for a real wait outside your task and the user (a colleague\'s review, another team\'s pipeline, '
+    + 'a reply, a date), and only you put the task there. Your own build, test run, CI run, deploy or land is your work '
+    + 'going on, never a wait: arm its watch with watches:"own", which never parks the task (it reads Working). '
     + 'Pass wait:true only when the rest of the work truly waits on that outside thing and nothing of this turn '
     + 'is for the user to read (never in the turn that answers the user\'s message: that stays Needs you). Then the '
     + 'task goes to Waiting (off the user\'s list, no letter is sent) and the fire (or its clock, wait_until) '
@@ -137,8 +140,9 @@ defineOp({
       + 'the user\'s message)'),
     watches: z.string().optional().describe('What this trigger watches for you: "ask" = your status\'s ask of the user (each run of its check '
       + 'counts as that ask\'s check, so Walnut\'s 4-hour re-check stays quiet while it keeps running), or a letter id (lt-...) you sent them '
-      + '(that letter\'s re-check stays quiet while the trigger is armed). '
-      + 'Such a trigger never parks the task: it waits on the user, so it stays Needs you'),
+      + '(that letter\'s re-check stays quiet while the trigger is armed): such a trigger waits on the user, so it stays Needs you. '
+      + '"own" = your own work: the results of a build, test run, CI run, deploy or land of your change. That is your work going on, '
+      + 'so the task reads Working and the trigger never parks it, nor keeps it parked. None of these parks the task'),
     wait_until: z.string().optional().describe('When the parked task comes back by itself if nothing fired: an ISO datetime or a duration '
       + 'from now ("2h", "1d"). Set it to when you expect the event, kept short: it is the check that the trigger works. '
       + 'Default 4 hours; "" = no clock (only when the user asked for no time limit)'),
@@ -178,6 +182,7 @@ defineOp({
       ? ` The task is now Waiting, off the user's list, until it fires${w.wait_until ? ` or ${w.wait_until}` : ''}.${unnamed}`
       : w?.reason === 'main_stays_active' ? ' The task it delivers into is the main agent\'s, which never parks: it stays active and on the user\'s list, and the fire wakes it like any message.'
       : w?.reason === 'watches_user' ? ' The task was not parked: this trigger watches the user\'s ask, and a wait on the user stays Needs you.'
+      : w?.reason === 'own_work' ? ' The task was not parked: this trigger watches your own work (watches:"own"), which is work going on, so the task reads Working, never Waiting.'
       : w?.reason === 'wait_false' ? ' The task was left as it is (no wait:true); park it with task_update phase=WAITING once only the wait is left and the user has nothing of yours to read.'
       : w?.reason === 'other_task' ? ' The task it delivers into was left as it is (not your task; pass wait:true to park it).'
       : w?.reason === 'complete' ? ' The task it delivers into is complete, so it was not parked and the fire cannot land there.'
@@ -505,7 +510,7 @@ defineOp({
  * which lost the trigger's id and what it had seen).
  */
 export const TRIGGER_UPDATE_FIELDS = [
-  'every', 'timeoutSeconds', 'maxFiresPerDay', 'prompt', 'description', 'name', 'run', 'cwd',
+  'every', 'timeoutSeconds', 'maxFiresPerDay', 'prompt', 'description', 'name', 'run', 'cwd', 'watches',
 ] as const
 
 /** trigger_create fields trigger_update leaves alone, each with why. */
@@ -516,7 +521,6 @@ export const TRIGGER_UPDATE_NOT_EDITABLE: Record<string, string> = {
   host: 'the host runs the check and keeps its seen items; a trigger on another host is a new trigger',
   wait: 'parking is the task\'s, not the trigger\'s: task_update phase=WAITING',
   wait_until: 'the clock is the task\'s: task_update wait_until',
-  watches: 'set once, when the trigger is armed',
   id: 'the id is what an update keeps',
 }
 
@@ -528,7 +532,7 @@ type TriggerJob = NonNullable<RoutineJobBody['job']> & {
 
 const UPDATE_LABELS: Record<(typeof TRIGGER_UPDATE_FIELDS)[number], string> = {
   every: 'interval', timeoutSeconds: 'time limit', maxFiresPerDay: 'fire budget', prompt: 'prompt',
-  description: 'description', name: 'name', run: 'command', cwd: 'directory',
+  description: 'description', name: 'name', run: 'command', cwd: 'directory', watches: 'what it watches',
 }
 
 defineOp({
@@ -555,6 +559,9 @@ defineOp({
     name: z.string().min(1).optional().describe('New short label'),
     run: z.string().min(1).optional().describe('New shell command for the check (try it with trigger_test first)'),
     cwd: z.string().optional().describe('New working directory for the check; "" = none'),
+    watches: z.enum(['own', 'outside']).optional().describe('"own" = it watches your own work (a build, test run, CI run, deploy '
+      + 'or land of your change): it never parks the task nor keeps it parked. "outside" = it watches something outside '
+      + 'the task again. A watch of the user\'s ask or a letter is set once, at trigger_create'),
   },
   handler: async (args, call) => {
     const id = String(args.id)
@@ -570,6 +577,7 @@ defineOp({
       throw new Error(`${id} is built from a plugin template, so Walnut writes its command; change its other fields here`)
     }
     const patch: Record<string, unknown> = {}
+    if (args.watches !== undefined) patch.ownWork = args.watches === 'own'
     if (args.every !== undefined) {
       const everyMs = parseEveryMs(args.every)
       if (everyMs === null) throw new Error('every must be milliseconds, or a duration like "30s" / "5m" / "1h"')

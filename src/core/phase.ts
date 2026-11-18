@@ -103,7 +103,7 @@ import { queueSentBy } from './sessions/send-sent-by.js'
 import { isMainAgentTask } from './org/main-stays-active.js'
 import {
   consumeInterruptedWait, dropInterruptedWait, hasInterruptedWait, interruptedWaitLeftAt, markInterruptedByMessage,
-  dropFireTurn, leftNeedsRecently, noteInterruptedWait, noteLeftNeeds, noteTurnSend, resumableWait, takeFireTurn, triggersStanding, waitExitCause,
+  dropFireTurn, leftRecently, noteInterruptedWait, noteLeftPhase, noteRestoredPark, noteTurnSend, resumableWait, takeFireTurn, triggersStanding, waitExitCause,
   type InjectedLineClass,
 } from './task-wait-resume.js'
 
@@ -630,7 +630,7 @@ export async function applySessionPhase(
   // own edge may land after the turn it started already began. The clean end of
   // that turn brings it back while the task still has an armed trigger.
   if (trigger === 'session:input') {
-    noteTurnSend(taskId, opts?.sendSource === 'routine-trigger' || source === 'trigger-host-delivery', isPersonSendSource(opts?.sendSource), task.wait_until ?? null, task.phase === 'NEED_ACTION' || (task.phase === 'IN_PROGRESS' && leftNeedsRecently(taskId)))
+    noteTurnSend(taskId, opts?.sendSource === 'routine-trigger' || source === 'trigger-host-delivery', isPersonSendSource(opts?.sendSource), task.wait_until ?? null, task.phase === 'WAITING' || (task.phase === 'IN_PROGRESS' && leftRecently(taskId, 'WAITING')))
     const cause = waitExitCause(trigger, opts?.sendSource, opts?.sendEndsWait === true)
     if (!cause) dropInterruptedWait(taskId, isPersonSendSource(opts?.sendSource) ? 'person-input' : `send:${opts?.sendSource ?? 'unknown'}`)
     else markInterruptedByMessage(taskId, opts?.sendSource ?? source)
@@ -674,12 +674,15 @@ export async function applySessionPhase(
     else resume = await resumableWait(task, opts?.sessionId)
     if (resume) newPhase = 'WAITING'
   }
-  // A standing routine between fires: a turn its trigger's fire started ends cleanly, and that
-  // trigger keeps firing (armed, none stopped, fired before), so the task waits on its next fire,
-  // never on the user (2026-10-26, the user on a pipeline watch whose every fire read "needs
-  // you": "put it as working"). It goes back to the clock it had when the fire came (the default
-  // one when that has passed). Its own report can still say it needs the user
-  // (sessions/report-phase.ts), and a person's message in the turn makes it theirs.
+  // A standing routine between fires: a turn its trigger's fire started while the task stood
+  // parked by its own choice ends cleanly, and that trigger keeps firing (armed, none stopped,
+  // fired before, watching something outside the task: task-wait-wake.ts triggerHoldsPark), so the
+  // task goes back to the park it had, never on the user (2026-10-26, the user on a pipeline watch
+  // whose every fire read "needs you": "put it as working"). It goes back to the clock it had when
+  // the fire came (the default one when that has passed). Walnut only restores the task's own park,
+  // never makes one (2026-11-18), so its turn's report still decides: a concrete ask of the user
+  // or its own work going on takes it out again (sessions/report-phase.ts), and a person's message
+  // in the turn makes it theirs.
   let routine: { waitUntil: string | null } | null = null
   const fireTurn = (trigger === 'session:result' || (trigger === 'reconciler' && opts?.turnEnd)) ? takeFireTurn(taskId) : null
   if (newPhase === 'NEED_ACTION' && fireTurn && !resume && !opts?.noResume && !(await sessionEndedInError(opts?.sessionId))) {
@@ -792,10 +795,12 @@ export async function applySessionPhase(
         return { changed: false, oldPhase }
       }
 
-      // A turn that took the task off the user (NEED_ACTION -> IN_PROGRESS): a fire whose send edge
-      // lands after this one still finds the task on the user (noteTurnSend's onUser).
-      if (oldPhase === 'NEED_ACTION' && newPhase === 'IN_PROGRESS') noteLeftNeeds(taskId)
+      // A turn that took the task off the user or out of its park (-> IN_PROGRESS): a fire whose send
+      // edge lands after this one still reads where the task stood (noteTurnSend's `parked`).
+      if ((oldPhase === 'NEED_ACTION' || oldPhase === 'WAITING') && newPhase === 'IN_PROGRESS') noteLeftPhase(taskId, oldPhase)
       if (resume) consumeInterruptedWait(taskId, updated.task?.phase_changed_at)
+      // A park Walnut brought back rather than the turn's own: that turn's report may lift it.
+      if ((resume || routine) && newPhase === 'WAITING') noteRestoredPark(taskId, updated.task?.phase_changed_at)
       else if (leftWait && newPhase === 'IN_PROGRESS') {
         const cause = waitExitCause(trigger, opts?.sendSource, opts?.sendEndsWait === true, opts?.lineSource)
         const leftAt = updated.task?.phase_changed_at
@@ -837,15 +842,35 @@ export async function applySessionPhase(
 }
 
 /**
- * A standing routine (an armed trigger that keeps firing, task-wait-resume.ts) waits on its next
- * fire, so Walnut's idle reap of its quiet session parks it instead of handing it to the user
- * (2026-10-26: a watch reaped after hours of quiet read "needs you" until its lead parked it).
- * Any other stop (the user's, a crash, an error) still hands it back, and Main never parks.
+ * A standing routine (an armed trigger on something outside that keeps firing, task-wait-resume.ts)
+ * waits on its next fire, so Walnut's idle reap of its quiet session parks it instead of handing it
+ * to the user (2026-10-26: a watch reaped after hours of quiet read "needs you" until its lead
+ * parked it). Only when the task itself said so: its last report waits on something outside it
+ * (2026-11-18, the user: Waiting only when the task itself puts it there). Any other stop (the
+ * user's, a crash, an error) still hands it back, and Main never parks.
  */
 export async function standingRoutineWaits(taskId: string): Promise<boolean> {
   try {
+    const { getTask } = await import('./task-manager.js')
+    const task = await getTask(taskId).catch(() => null)
+    if (!task?.status_report) return false
     const { triggersWatching } = await import('./task-wait-until.js')
-    return triggersStanding(await triggersWatching(taskId))
+    if (!triggersStanding(await triggersWatching(taskId))) return false
+    // The park its own last report would make with that trigger armed (report-phase.ts), no other.
+    const { phaseForReport } = await import('./sessions/report-phase.js')
+    return phaseForReport(task.status_report, task, false, true) === 'WAITING'
+  } catch {
+    return false
+  }
+}
+
+/** An armed trigger of the task watches its own work (watches:"own"): it wakes the task when that
+ *  work's result comes, so an idle reap of its session leaves it In Progress. Never throws. */
+export async function ownWorkWakes(taskId: string): Promise<boolean> {
+  try {
+    const { triggersWatching } = await import('./task-wait-until.js')
+    const { triggerWatchesOwnWork } = await import('./task-wait-wake.js')
+    return (await triggersWatching(taskId)).some((t) => t.state === 'armed' && triggerWatchesOwnWork(t))
   } catch {
     return false
   }
@@ -888,8 +913,11 @@ export async function handBackTaskOnSessionEnd(
     const { getSessionsForTask, getSessionsForTaskSync } = await import('./session-tracker.js')
     const { sessionRunner } = await import('../providers/claude-code-session.js')
     await getSessionsForTask(taskId)
-    const parks = !isMainAgentTask(task) && await endedByIdleReap(sessionId)
-      && !(await sessionEndedInError(sessionId)) && await standingRoutineWaits(taskId)
+    const reaped = !isMainAgentTask(task) && await endedByIdleReap(sessionId) && !(await sessionEndedInError(sessionId))
+    // Its own work runs outside and its watch wakes it (watches:"own"): a reap of its quiet session
+    // hands nothing back, it is still at work (2026-11-18 review: a 45-minute CI run read Needs you).
+    if (reaped && task.phase === 'IN_PROGRESS' && await ownWorkWakes(taskId)) return false
+    const parks = reaped && await standingRoutineWaits(taskId)
     const res = await applySessionPhase(taskId, 'reconciler', source, {
       sessionId,
       newPhase: parks ? 'WAITING' : handback,

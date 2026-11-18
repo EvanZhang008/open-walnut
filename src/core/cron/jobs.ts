@@ -280,6 +280,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate, givenId
     ...(typeof input.ownerTaskId === 'string' && input.ownerTaskId.trim() ? { ownerTaskId: input.ownerTaskId.trim() } : {}),
     // '' is kept: the server decided "no task" (core/hosts/trigger-caller.ts checkActsForOf).
     ...(typeof input.checkActsFor === 'string' ? { checkActsFor: input.checkActsFor.trim() } : {}),
+    ...(input.ownWork === true ? { ownWork: true } : {}),
     state: { ...input.state },
   };
 
@@ -315,6 +316,10 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch): void {
   }
   // Set only by the server (routines-core.ts settleCheckActsFor); '' is "no task", kept as such.
   if (typeof patch.checkActsFor === 'string') job.checkActsFor = patch.checkActsFor.trim();
+  if (typeof patch.ownWork === 'boolean') {
+    if (patch.ownWork) job.ownWork = true;
+    else delete job.ownWork;
+  }
   if (patch.schedule) {
     job.schedule = patch.schedule;
   }

@@ -161,7 +161,8 @@ describe('a turn\'s report moves its phase (sessions/report-phase.ts)', () => {
     expect(phaseForReport({ state: 'waiting', waiting_kind: 'task' }, worker, true)).toBe('WAITING')
     expect(phaseForReport({ state: 'working' }, worker, true)).toBe('IN_PROGRESS')
     expect(phaseForReport({ state: 'working' }, worker, false)).toBeNull()
-    expect(phaseForReport({ state: 'done' }, worker, true)).toBe('WAITING')
+    // Done stays handed back; its status reads that its lead checks it (never a park for the lead).
+    expect(phaseForReport({ state: 'done' }, worker, true)).toBeNull()
     expect(phaseForReport({ state: 'done' }, solo, true)).toBeNull()
   })
   it('a wait it names no outside thing for is the user\'s unless the task has one armed', () => {

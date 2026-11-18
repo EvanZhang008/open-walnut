@@ -27,6 +27,7 @@ import { applyStatusAnswer } from '../../src/core/sessions/status-question.js'
 import { addTask, getTask, updateTaskRaw } from '../../src/core/task-manager.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { awaitsUserDecision, decisionAnswered } from '../../src/core/human-inbox/open-decision.js'
+import { noteRestoredPark } from '../../src/core/task-wait-resume.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const iso = (ms: number) => new Date(ms).toISOString()
@@ -72,6 +73,24 @@ describe('a park of its own survives the turn end', () => {
     await answerThenPark(end)
     expect(await applyStatusAnswer(id, SID, { state: 'needs', ask: 'Order two more lamps for the north path?', at: iso(end + 5_000) }, end)).toBe(true)
     expect((await getTask(id)).phase).toBe('NEED_ACTION')
+  })
+
+  it('a park it set itself stays when its report says it works on; one Walnut restored leaves for it', async () => {
+    const end = Date.now() - 15_000
+    await answerThenPark(end)
+    const working = { state: 'working' as const, now: 'Fixing the two failing checks', at: iso(end + 5_000) }
+    expect(await applyStatusAnswer(id, SID, working, end)).toBe(true)
+    expect((await getTask(id)).phase).toBe('WAITING')
+    // Walnut brought the park back at the turn end (a fire into it, a message that interrupted it):
+    // the turn's own word that its own work is what runs wins; a bare "working" keeps the park (its
+    // outside trigger still holds it).
+    for (const [report, want] of [[working, 'WAITING'], [{ state: 'waiting' as const, waiting_kind: 'own' as const, waiting_on: 'my test run' }, 'IN_PROGRESS']] as const) {
+      const e = Date.now()
+      await updateTaskRaw(id, { phase: 'WAITING', phase_changed_at: iso(e) }, { source: 'test' })
+      noteRestoredPark(id, (await getTask(id)).phase_changed_at)
+      expect(await applyStatusAnswer(id, SID, { ...report, at: iso(e + 5_000) }, e)).toBe(true)
+      expect((await getTask(id)).phase, JSON.stringify(report)).toBe(want)
+    }
   })
 
   it('a stored report with no ask moves no park at start either', async () => {
@@ -124,7 +143,7 @@ const code = (f: string) => fss.readFileSync(f, 'utf8').split('\n').filter((l) =
 
 describe('guard: every write that takes a task out of WAITING', () => {
   const SITES: Record<string, { count: number; why: string; gate?: RegExp }> = {
-    'src/core/sessions/report-phase.ts': { count: 1, why: 'a turn end\'s report: leaves a park only for a concrete ask of the user', gate: /task\.phase === 'WAITING' && next === 'NEED_ACTION' && reportAsksUser\(report\)/ },
+    'src/core/sessions/report-phase.ts': { count: 1, why: 'a turn end\'s report: leaves a park only for a concrete ask of the user, or a park Walnut restored for its own work going on', gate: /task\.phase === 'WAITING' && \(\(next === 'NEED_ACTION' && reportAsksUser\(report\)\) \|\| \(restored && next === 'IN_PROGRESS' && saysOwnWork\(report\)\)\)/ },
     'src/core/phase.ts': { count: 1, why: 'the next turn or a prompt for the user, never the turn that set it' },
     'src/core/task-wait-until.ts': { count: 2, why: 'its own wait clock ran out, or the trigger it waits on cannot run' },
     'src/core/sessions/external-session-import.ts': { count: 1, why: 'an imported session\'s own record' },

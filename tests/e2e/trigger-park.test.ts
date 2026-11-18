@@ -406,6 +406,25 @@ describe('a session parks only on a wait outside Walnut and the user', () => {
     const ok = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING' }, { 'x-walnut-caller-sid': sid })
     expect(ok.status, JSON.stringify(ok.json)).toBe(200)
   })
+
+  // 2026-11-18, the user: Waiting only when the task "really waits for something external". A watch
+  // of the task's own test results (a queue runner arms one per task) parked tasks with work left.
+  it('a trigger on the task\'s own work never parks it, and does not count as an outside wait', async () => {
+    const { sid, taskId } = await startSession('run my tests on the other host, then fix what fails')
+    const r = await createTrigger(sid, { watches: 'own', wait: true })
+    expect(r.status, JSON.stringify(r.json)).toBe(201)
+    expect(r.json.wait).toMatchObject({ parked: false, reason: 'own_work' })
+    expect(r.json.job).toMatchObject({ ownWork: true })
+    expect((await task(taskId)).phase).not.toBe('WAITING')
+    const park = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING' }, { 'x-walnut-caller-sid': sid })
+    expect(park.status, JSON.stringify(park.json)).toBe(409)
+    // Marked back as a watch of something outside (trigger_update watches:"outside"), it counts again.
+    const patched = await req('PATCH', `/api/v1/routines/${r.json.job.id}`, { ownWork: false })
+    expect(patched.status, JSON.stringify(patched.json)).toBe(200)
+    expect(patched.json.job.ownWork).toBeUndefined()
+    const ok = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING' }, { 'x-walnut-caller-sid': sid })
+    expect(ok.status, JSON.stringify(ok.json)).toBe(200)
+  })
 })
 
 describe('the fire brings it back', () => {

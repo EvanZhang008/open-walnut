@@ -33,43 +33,62 @@ function code(text: string): string {
  * the user: "wait should be wait external"; tests/core/answered-turn-stays-needs.test.ts), and the
  * code that does it. A new site names its own, or is not a park after a turn.
  */
-interface Site { count: number; gate: string; mustContain: RegExp; answered: string; answeredGate: RegExp }
+/**
+ * `chosen`: whose choice the park is, and the code that keeps it that (2026-11-18, the user: Waiting
+ * only when the task "really waits for something external", and "it puts itself there"). Every site
+ * is the task's own explicit choice (its call, its turn's report), a person's or its lead's
+ * deliberate one, or Walnut bringing back a park the task had set before. Walnut never makes one.
+ */
+interface Site { count: number; gate: string; mustContain: RegExp; answered: string; answeredGate: RegExp; chosen: string; chosenGates: RegExp[] }
 
 const SITES: Record<string, Site> = {
   'src/core/sessions/report-phase.ts': {
-    count: 2, gate: 'a waiting report parks only on a named outside wait or outsideWaitEvidence; done parks on its lead',
+    count: 1, gate: 'a waiting report parks only on a named outside wait or outsideWaitEvidence',
     mustContain: /outsideWaitEvidence\(/,
     answered: 'a report of a turn that answered a person reads NEED_ACTION', answeredGate: /case 'waiting': if \(report\.answered_person\) return 'NEED_ACTION'/,
+    chosen: 'the turn\'s own report says it waits outside; its own work is In Progress, done stays handed back',
+    chosenGates: [/report\.waiting_kind === 'own'\) return alive \? 'IN_PROGRESS' : null/, /case 'done': return null;/],
   },
   'src/core/routines/trigger-api.ts': {
     count: 1, gate: 'a trigger parks its task only when it does not watch the user (`watches`)',
     mustContain: /const park = !watches &&/,
     answered: 'parks only on the session\'s own trigger call, a step it chose (its prompt: never right after answering the user)', answeredGate: /const park = !watches &&/,
+    chosen: 'the session\'s own wait:true, never on a watch of its own work', chosenGates: [/const park = !watches && !ownWork && b\.wait === true/],
   },
   'src/core/phase.ts': {
     count: 3, gate: 'an interrupted wait, a standing routine and an idle reap come back only on triggers that are not watchesUser',
     mustContain: /resumableWait\(|triggersStanding\(/,
     answered: 'a person\'s send ends an interrupted wait for good and unmarks a fire turn', answeredGate: /noteTurnSend\([^\n]*isPersonSendSource\(/,
+    chosen: 'brings back only a park the task had: a wait a message interrupted, a fire into a parked task; an idle reap parks only on its own last report; each restored park yields to the turn\'s report',
+    chosenGates: [
+      /noteTurnSend\([^\n]*task\.phase === 'WAITING' \|\| \(task\.phase === 'IN_PROGRESS' && leftRecently\(taskId, 'WAITING'\)\)\)/,
+      /phaseForReport\(task\.status_report, task, false, true\) === 'WAITING'/,
+      /if \(\(resume \|\| routine\) && newPhase === 'WAITING'\) noteRestoredPark\(/,
+    ],
   },
   'src/core/session-health-monitor.ts': {
     count: 1, gate: 'an idle reap parks only on standingRoutineWaits (triggers that are not watchesUser)',
     mustContain: /standingRoutineWaits\(/,
     answered: 'parks only work in flight: a task handed back to the user stays so', answeredGate: /shouldApply: \(current[^\n]*sessionErrorPhase\(current\.phase\) !== null/,
+    chosen: 'standingRoutineWaits: only when the task\'s own last report parks it (phase.ts)', chosenGates: [/const parks = await standingRoutineWaits\(/],
   },
   'src/core/task-db.ts': {
     count: 1, gate: 'v12 migration: a live pre-0.5.2 `waiting` record becomes the phase once; no new park',
     mustContain: /migrateWaitingRecordsToPhase/,
     answered: 'a one-time migration, no turn', answeredGate: /migrateWaitingRecordsToPhase/,
+    chosen: 'a record its owner had set to waiting before 0.5.2, carried over once', chosenGates: [/migrateWaitingRecordsToPhase/],
   },
   'src/providers/offline-host-core.ts': {
     count: 1, gate: 'a trigger created on a host while the server is away queues its park only with wait:true and no watch of the user; the queued task_update is replayed through admitSessionPark (apply-v2.ts, or the PATCH for a v1 record)',
     mustContain: /args\.wait === true && !watches/,
     answered: 'parks only on the session\'s own trigger call with wait:true, a step it chose (its prompt: never right after answering the user)', answeredGate: /args\.wait === true && !watches/,
+    chosen: 'the session\'s own wait:true (watches:"own" is a watch, so it never parks)', chosenGates: [/args\.wait === true && !watches/],
   },
   'src/web/routes/api-v1.ts': {
     count: 1, gate: 'the phase_ignored answer for Main (no write); a session PATCH to WAITING asks admitSessionPark',
     mustContain: /admitSessionPark\(/,
     answered: 'a session\'s own deliberate park (its prompt: never right after answering the user)', answeredGate: /admitSessionPark\(/,
+    chosen: 'a session\'s own task_update, or a person\'s or lead\'s deliberate one', chosenGates: [/admitSessionPark\(/],
   },
 }
 
@@ -110,6 +129,26 @@ describe('every literal WAITING write goes through the park gate', () => {
     expect(fs.readFileSync(path.join(SRC, 'core/sessions/status-question.ts'), 'utf8')).toMatch(/turnAnsweredPerson\(rec\?\.humanInputAt, turnEndedMs, prev\)/)
   })
 
+  it('each listed site parks only by the task\'s own choice, or brings back a park it had', () => {
+    for (const [file, site] of Object.entries(SITES)) {
+      const src = fs.readFileSync(path.join(ROOT, file), 'utf8')
+      for (const gate of site.chosenGates) expect(src, `${file}: ${site.chosen}`).toMatch(gate)
+    }
+    // The idle reap's own-report rule lives in phase.ts.
+    expect(fs.readFileSync(path.join(SRC, 'core/phase.ts'), 'utf8')).toMatch(/export async function standingRoutineWaits[\s\S]{0,900}phaseForReport\(task\.status_report, task, false, true\) === 'WAITING'/)
+  })
+
+  it('every reader that lets a trigger hold a park asks triggerHoldsPark (a watch of the user or of its own work never does)', () => {
+    const inline: string[] = []
+    for (const file of walk(SRC)) {
+      const rel = path.relative(ROOT, file)
+      if (rel === 'src/core/task-wait-wake.ts') continue
+      // Any reader of the two flags outside the predicate is a second copy of the rule.
+      if (/!\s*[\w$.?]*\.(?:watchesUser|ownWork)\b|\.(?:watchesUser|ownWork)\s*(?:!==\s*true|===\s*(?:false|undefined))/.test(code(fs.readFileSync(file, 'utf8')))) inline.push(rel)
+    }
+    expect(inline, `Ask task-wait-wake.ts triggerHoldsPark instead of an inline watchesUser/ownWork check: ${inline.join(', ')}`).toEqual([])
+  })
+
   it('the session PATCH asks the gate exactly when it writes WAITING', () => {
     const src = fs.readFileSync(path.join(ROOT, 'src/web/routes/api-v1.ts'), 'utf8')
     expect(src).toMatch(/if \(phase === 'WAITING'\) \{[\s\S]{0,400}admitSessionPark\(id, actor,/)
@@ -144,6 +183,12 @@ describe('the gates', () => {
     expect(triggersHoldWait([{ state: 'armed', watchesUser: true }, { state: 'armed' }])).toBe(true)
     expect(triggersStanding([{ state: 'armed', fires: 5, watchesUser: true }])).toBe(false)
     expect(triggersStanding([{ state: 'armed', fires: 5 }])).toBe(true)
+  })
+
+  it('a trigger on the task\'s own work never holds a wait nor makes a standing routine', () => {
+    expect(triggersHoldWait([{ state: 'armed', ownWork: true }])).toBe(false)
+    expect(triggersStanding([{ state: 'armed', fires: 50, ownWork: true }])).toBe(false)
+    expect(triggersStanding([{ state: 'armed', fires: 50, ownWork: true }, { state: 'armed', fires: 3 }])).toBe(true)
   })
 
   it('a named wait is outside only when it is not the user', () => {

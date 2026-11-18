@@ -8,8 +8,9 @@
  * Waiting on the user's input, review or decision is Needs you (NEED_ACTION), always. A wait is
  * outside when the session names one (another task, its lead, the machine, or an outside thing: a
  * pipeline, CI, a deploy, a CR or PR review, a Slack or mail reply), or when the task has
- * something armed for one: a trigger of its own that does not watch the user's ask or letter, a
- * request it sent that is still unanswered, a subtask at work. Every path that parks a task asks
+ * something armed for one: a trigger of its own that does not watch the user's ask or letter nor
+ * its own work (task-wait-wake.ts triggerHoldsPark: a build, test run or land of its change is its
+ * work going on, 2026-11-18), a request it sent that is still unanswered, a subtask at work. Every path that parks a task asks
  * here (report-phase.ts, the session PATCH in api-v1.ts, trigger-api.ts, the trigger-held waits
  * in phase.ts and task-wait-resume.ts); tests/core/park-gate-ratchet.test.ts fails on a new one.
  */
@@ -63,7 +64,8 @@ export async function outsideWaitEvidence(
   }
   try {
     const { triggersWatching } = await import('../task-wait-until.js');
-    const armed = (await triggersWatching(task.id)).find((t) => t.state === 'armed' && !t.watchesUser);
+    const { triggerHoldsPark } = await import('../task-wait-wake.js');
+    const armed = (await triggersWatching(task.id)).find((t) => t.state === 'armed' && triggerHoldsPark(t));
     if (armed) return { kind: 'trigger', detail: `trigger ${armed.name ?? armed.id} is armed` };
   } catch { /* absent */ }
   if (triggerOnly) return null;

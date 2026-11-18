@@ -39,6 +39,7 @@ import type { OfflineSearch } from './offline-search-core.js'
 import type { OpenAsk, OpenItemsInput, OpenItemsText, OpenWait } from '../core/sessions/open-items-text.js'
 import type { LetterCheck } from '../core/human-inbox/letter-check.js'
 import { createTriggerLabel, type TriggerLabels } from '../core/routines/trigger-label.js'
+import { OWN_WORK_WATCH, TRIGGER_WATCH_INVALID, parseTriggerWatch } from '../core/routines/trigger-watches.js'
 
 /**
  * `aside`: an environment or lane session, which the server never picks as a message's address by name.
@@ -2575,11 +2576,10 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     }
     // TRIGGER_DESCRIPTION_MAX (trigger-api.ts).
     if (description.length > 600) return fail('bad_request', `description is ${description.length} characters; the limit is 600 (one or two sentences)`)
-    const rawWatch = args.watches
-    const watches = rawWatch === undefined || rawWatch === null || rawWatch === '' ? null : text(rawWatch)
-    if (watches !== null && watches !== 'ask' && !/^lt-[a-z0-9-]{4,60}$/i.test(watches)) {
-      return fail('bad_request', 'watches must be "ask" (your status\'s ask of the user) or a letter id (lt-...)')
-    }
+    // The server's own reading (core/routines/trigger-watches.ts): "ask", a letter, or "own".
+    const watch = parseTriggerWatch(args.watches)
+    if (watch === 'invalid') return fail('bad_request', TRIGGER_WATCH_INVALID)
+    const watches = watch === null ? null : watch.kind === 'own' ? OWN_WORK_WATCH : watch.what
     const rawEvery = args.every
     let everyMs: number | null = null
     if (typeof rawEvery === 'number' && Number.isFinite(rawEvery)) everyMs = Math.floor(rawEvery)
@@ -2657,7 +2657,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       parked = park.ok
         ? ` The task is queued to wait (Waiting) until it fires${waitUntil ? ` or ${waitUntil}` : ''}; Walnut applies that when the server is back.`
         : ` The task could not be parked here (${park.error.message}); park it with task_update phase=WAITING.`
-    } else if (watches) parked = ' The task was not parked: this trigger watches the user\'s ask, and a wait on the user stays Needs you.'
+    } else if (watches === OWN_WORK_WATCH) parked = ' The task was not parked: this trigger watches your own work (watches:"own"), which is work going on, so the task reads Working, never Waiting.'
+    else if (watches) parked = ' The task was not parked: this trigger watches the user\'s ask, and a wait on the user stays Needs you.'
     else parked = own ? '' : ' The task it delivers into was left as it is (not your task; pass wait:true to park it).'
     return ok({
       id, name, host: here, queued: true, offline: true,

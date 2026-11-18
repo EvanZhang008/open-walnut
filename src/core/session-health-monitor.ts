@@ -1547,8 +1547,10 @@ export class SessionHealthMonitor {
     // (org/main-stays-active.ts).
     if (session.taskId && !await isMainAgentTaskId(session.taskId)) {
       try {
-        const { applySessionPhase, sessionErrorPhase, standingRoutineWaits } = await import('./phase.js')
+        const { applySessionPhase, ownWorkWakes, sessionErrorPhase, standingRoutineWaits } = await import('./phase.js')
         const parks = await standingRoutineWaits(session.taskId)
+        // Its own work runs outside and its watch wakes it (watches:"own"): still at work, nothing to hand back.
+        if (!parks && await ownWorkWakes(session.taskId)) return session.claudeSessionId
         if (parks) {
           // What the session:error edge would have cleared: a fire turn or an interrupted wait
           // left from the reaped turn must not reshape the next hand-back.

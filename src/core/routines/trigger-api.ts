@@ -22,6 +22,7 @@ import { createRoutine } from './routines-core.js';
 import type { CronJob } from '../cron/types.js';
 import { HOST_TRIGGER_ID_RE } from './host-trigger-id.js';
 import { TRIGGER_DESCRIPTION_MAX, parseEveryMs } from './trigger-fields.js';
+import { TRIGGER_WATCH_INVALID, parseTriggerWatch } from './trigger-watches.js';
 import { createTriggerLabel } from './trigger-label.js';
 import { ANSWER_MARGIN_MS, startTestRun, waitTestRun, type TestRunWait } from './trigger-test-run.js';
 import {
@@ -356,7 +357,7 @@ export interface TriggerWaitResult {
   parked: boolean;
   task_id: string;
   /** Why it was not parked: the caller passed wait:false, the trigger is for another task, or the task is complete. */
-  reason?: 'wait_false' | 'other_task' | 'complete' | 'not_written' | 'main_stays_active' | 'watches_user';
+  reason?: 'wait_false' | 'other_task' | 'complete' | 'not_written' | 'main_stays_active' | 'watches_user' | 'own_work';
   /** The clock the store now holds (null = no clock), when parked. */
   wait_until?: string | null;
   /** The task was already WAITING (its clock is kept unless wait_until was passed). */
@@ -474,12 +475,12 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
       400,
     );
   }
-  // What it stands in for: the task's ask of the user, or one of its letters (sessions/recheck-watch.ts).
-  const { validWatch } = await import('../sessions/recheck-watch.js');
-  const watches = b.watches === undefined || b.watches === null || b.watches === '' ? null : validWatch(b.watches);
-  if (b.watches !== undefined && b.watches !== null && b.watches !== '' && !watches) {
-    throw new SessionControlError('watches must be "ask" (your status\'s ask of the user) or a letter id (lt-...)', 400);
-  }
+  // What it stands in for: the task's ask of the user, or one of its letters (sessions/recheck-watch.ts),
+  // or the task's own work (CronJob.ownWork): neither is a wait outside the task.
+  const watch = parseTriggerWatch(b.watches);
+  if (watch === 'invalid') throw new SessionControlError(TRIGGER_WATCH_INVALID, 400);
+  const ownWork = watch?.kind === 'own';
+  const watches = watch?.kind === 'user' ? watch.what : null;
   if (description.length > TRIGGER_DESCRIPTION_MAX) {
     throw new SessionControlError(
       `description is ${description.length} characters; the limit is ${TRIGGER_DESCRIPTION_MAX} (one or two sentences)`,
@@ -550,6 +551,7 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
       ...(fromTemplate ? { template: fromTemplate.template } : {}),
     },
     executor: { type: 'session', config: { target: resolved.target, prompt } },
+    ...(ownWork ? { ownWork: true } : {}),
   // The session that wrote the check is whose grants it uses (CronJob.checkActsFor); the owner
   // stays as it was (the task it delivers into hears of a missed run).
   }, origin, { ...(hostId ? { id: hostId } : {}), ...(callerSid ? { checkCallerSid: callerSid } : {}) });
@@ -565,10 +567,13 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
   // made when only the outside wait is left and the user has nothing of its turn to read.
   // A trigger on the user's ask or letter (`watches`) is a wait on the user: the task stays
   // Needs you, whatever `wait` says (sessions/outside-wait.ts, 2026-10-30).
-  const park = !watches && b.wait === true;
+  // A trigger on the task's own work (`watches: "own"`) is that work going on: Working, never a park.
+  const park = !watches && !ownWork && b.wait === true;
   const wait: TriggerWaitResult = park
     ? await parkForTrigger(resolved.target, { waitUntil, callerSid })
-    : watches
+    : ownWork
+      ? { parked: false, task_id: resolved.target, reason: 'own_work' }
+      : watches
       ? { parked: false, task_id: resolved.target, reason: 'watches_user' }
       : await isMainTarget(resolved.target)
       ? { parked: false, task_id: resolved.target, reason: 'main_stays_active' }

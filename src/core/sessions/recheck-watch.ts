@@ -48,10 +48,4 @@ export function withWatch(current: readonly RecheckWatch[] | null | undefined, a
   return [...kept, add].slice(-20);
 }
 
-/** What `watches` may name: "ask", or a letter id. */
-export function validWatch(raw: unknown): string | null {
-  if (typeof raw !== 'string') return null;
-  const v = raw.trim();
-  if (v === 'ask') return v;
-  return /^lt-[a-z0-9-]{4,60}$/i.test(v) ? v : null;
-}
+// What `watches` may name is read in one place: routines/trigger-watches.ts parseTriggerWatch.

@@ -10,11 +10,12 @@
  *   waiting      WAITING      only for a wait outside Walnut and the user (outside-wait.ts): one it
  *                             names (outside, task, lead, machine), or one the task has armed (a
  *                             trigger of its own, a request out, an open subtask); else NEED_ACTION
- *   working      IN_PROGRESS  it carries on by itself, and its process is still there; a task parked
- *                             on a trigger stays WAITING, and its status reads Working (user-status.ts
- *                             ownWork: its own build, test run or deploy, 2026-11-02)
- *   waiting own  WAITING      its own build, test run or deploy runs: parked on it, read as Working
- *   done         WAITING      with a leader, which checks and closes it; without one it stays handed back
+ *   working      IN_PROGRESS  it carries on by itself, and its process is still there
+ *   waiting own  IN_PROGRESS  its own build, test run, CI run, deploy or land runs: its work going on,
+ *                             never a wait (2026-11-18, the user: Waiting only when "he really waits for
+ *                             something external", and the task itself puts it there)
+ *   done         unchanged    handed back; with a leader its status reads that the lead checks and
+ *                             closes it (user-status.ts LEAD_CLOSE_WAIT), never parked for that lead
  *
  * Main and a lead never move to NEED_ACTION (Needs you is only ever an individual task, 2026-10-31):
  * a turn of theirs that asks the user keeps its question in their chat, and Main otherwise stays as it
@@ -25,7 +26,9 @@
  * while its session runs a turn, never on a finished task. A parked task moves only when its report
  * asks the user something concrete (FOR_USER_ASK): a standing routine's fire turn ends back in
  * WAITING (phase.ts), and when that turn found something only the user can give, its report is how
- * the user hears it. A turn that parked its task on a wait of its own and only answered the user
+ * the user hears it. A park Walnut brought back at the turn end (an interrupted wait, a routine's fire
+ * turn: task-wait-resume.ts isRestoredPark) is not the turn's own word, so a report naming its own
+ * work as what runs ("waiting own") takes it out to IN_PROGRESS. A turn that parked its task on a wait of its own and only answered the user
  * (needs-you with no ask: their answer to read) stays parked (2026-11-18, the user: "if this task
  * already ahve a trigger and just wating wh not it self mark it as snoozed, waiting"): the park is
  * its own word that nothing else is left for them, and its answer stays unread on its row.
@@ -72,6 +75,9 @@ function individualPhase(
   armed: boolean | 'unknown', onUser: boolean,
 ): TaskPhase | null {
   if (onUser) return 'NEED_ACTION';
+  // Its own build, test run, CI run, deploy or land is its work going on, never a wait (2026-11-18,
+  // the user: Waiting only when "he really waits for something external").
+  if (report.state === 'waiting' && report.waiting_kind === 'own') return alive ? 'IN_PROGRESS' : null;
   switch (report.state) {
     case 'working': return alive ? 'IN_PROGRESS' : null;
     // A turn that answered the user's message is theirs to read first, whatever the task waits on
@@ -80,7 +86,9 @@ function individualPhase(
     case 'waiting': if (report.answered_person) return 'NEED_ACTION';
       // A wait it cannot show is outside is the user's (2026-10-30: "the meeting notes" read as "other").
       return reportNamesOutsideWait(report, task) || armed !== false ? 'WAITING' : 'NEED_ACTION';
-    case 'done': return task.parent_task_id ? 'WAITING' : null;
+    // Finished: it stays where its turn left it (handed back), and its status reads that its lead
+    // checks and closes it (user-status.ts LEAD_CLOSE_WAIT). Walnut never parks it for that lead.
+    case 'done': return null;
     default: return null;
   }
 }
@@ -113,12 +121,23 @@ export function reportNeedsEvidence(report: Pick<StatusReport, 'state' | 'waitin
 }
 
 /** Whether a phase write to `next` may follow the report of the turn that ended at `turnEndedAt`. */
+/** The report names its own work as what runs: "waiting own" (FOR_USER_WAITING_ON own:). A bare
+ *  "working" does not lift a restored park: a task parked on a review may say it while that review
+ *  is what it waits on, and its trigger still holds the park (2026-11-18 review). */
+function saysOwnWork(report: Pick<StatusReport, 'state' | 'ask'> & Partial<Pick<StatusReport, 'waiting_kind'>> | null | undefined): boolean {
+  return report?.state === 'waiting' && report.waiting_kind === 'own';
+}
+
 export function reportMayMovePhase(
-  task: Pick<Task, 'phase' | 'phase_changed_at'>, turnEndedAt: number, next?: TaskPhase | null, report?: Pick<StatusReport, 'state' | 'ask'> | null,
+  task: Pick<Task, 'phase' | 'phase_changed_at'>, turnEndedAt: number, next?: TaskPhase | null, report?: Pick<StatusReport, 'state' | 'ask'> & Partial<Pick<StatusReport, 'waiting_kind'>> | null,
+  /** The task's WAITING is one Walnut restored at this turn end (task-wait-resume.ts isRestoredPark). */
+  restored = false,
 ): boolean {
   // A parked task only for a real ask of the user: a routine whose turn left something for the user
-  // to read "when you have time", or a turn that answered them and parked, stays waiting.
-  const from = task.phase === 'NEED_ACTION' || task.phase === 'IN_PROGRESS' || (task.phase === 'WAITING' && next === 'NEED_ACTION' && reportAsksUser(report));
+  // to read "when you have time", or a turn that answered them and parked, stays waiting. A park
+  // Walnut restored also leaves when the turn names its own work as what runs.
+  const from = task.phase === 'NEED_ACTION' || task.phase === 'IN_PROGRESS'
+    || (task.phase === 'WAITING' && ((next === 'NEED_ACTION' && reportAsksUser(report)) || (restored && next === 'IN_PROGRESS' && saysOwnWork(report))));
   if (!from) return false;
   const moved = task.phase_changed_at ? Date.parse(task.phase_changed_at) : NaN;
   return !Number.isFinite(moved) || moved <= turnEndedAt + SLACK_MS;
@@ -145,7 +164,9 @@ export async function applyReportPhase(
     log.session.info('a wait_until wake answered with only an ack: not parked again', { taskId, sessionId });
     next = task.org_role ? null : 'NEED_ACTION';
   }
-  if (!next || next === task.phase || !reportMayMovePhase(task, turnEndedAt, next, report)) return null;
+  const { isRestoredPark } = await import('../task-wait-resume.js');
+  const restored = isRestoredPark(task);
+  if (!next || next === task.phase || !reportMayMovePhase(task, turnEndedAt, next, report, restored)) return null;
   const { readMarkerForPhase } = await import('../phase.js');
   // leaveHeld: the turn's own report is the session machine's exit from a wait (reportMayMovePhase
   // lets a parked task out only for a stop on the user). Without it the raw write's held-phase
@@ -154,7 +175,7 @@ export async function applyReportPhase(
   // three draft CRs sat there for hours). The stored phase is what counts, not `changed`.
   const res = await updateTaskRaw(taskId, { phase: next, ...readMarkerForPhase(next) }, {
     emitEvent: true, push: true, source: 'status-report', leaveHeld: true,
-    shouldUpdate: (cur) => reportMayMovePhase(cur, turnEndedAt, next, report) && cur.phase === task.phase,
+    shouldUpdate: (cur) => reportMayMovePhase(cur, turnEndedAt, next, report, restored && isRestoredPark(cur)) && cur.phase === task.phase,
   });
   if (!res?.changed || res.task?.phase !== next) return null;
   log.session.info('status report moved the phase', { taskId, sessionId, from: task.phase, to: next, state: report.state });
@@ -172,7 +193,8 @@ export async function clockWakeOnlyAcked(task: Pick<Task, 'id'>, sessionId: stri
   try {
     const { clockWokeAt, triggersWatching, WAIT_WAKE_FROM } = await import('../task-wait-until.js');
     if (clockWokeAt(task.id, turnEndedAt + SLACK_MS, sessionId) === null) return false;
-    if ((await triggersWatching(task.id)).some((t) => t.state === 'armed' && !t.watchesUser)) return false;
+    const { triggerHoldsPark } = await import('../task-wait-wake.js');
+    if ((await triggersWatching(task.id)).some((t) => t.state === 'armed' && triggerHoldsPark(t))) return false;
     const { readLastTurn } = await import('./session-request-notify.js');
     const turn = await readLastTurn(sessionId);
     if (!turn?.openedBy?.text.includes(`from="${WAIT_WAKE_FROM}"`)) return false;
