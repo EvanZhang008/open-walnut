@@ -19,6 +19,8 @@
 
 import type { SessionRequest } from '../session-requests.js';
 import { createOpenItemsText, type OpenAsk, type OpenItemsInput, type OpenSubtask } from './open-items-text.js';
+import type { SessionRecord, Task } from '../types.js';
+import { INSTRUCTION_HOOK_PARTS, instructionsInPartsLine, notePartServed } from './instruction-hook-parts.js';
 
 export type { OpenAsk, OpenBoard, OpenSubtask, OpenWait } from './open-items-text.js';
 
@@ -52,9 +54,26 @@ export interface OpenItems extends OpenItemsInput {
   text: string;
   /** The user's messages in this task's chat it has not answered yet (user-asks.ts), oldest first. */
   owedUser?: Array<{ id: string; at: string; text: string }>;
+  /** A compaction hook of the instructions' own: which part `text` is, of how many (instruction-hook-parts.ts). */
+  instructionPart?: { part: number; of: number };
 }
 
 const EMPTY: OpenItems = { subtasks: [], moreSubtasks: 0, waitingOn: [], askedOfYou: [], text: '' };
+
+/**
+ * Part `part` of the changed default instructions restated after a compaction, for the hook that asks
+ * for it (one of `of`). Told once every part was served; one longer than all the hooks together is left
+ * to the next message, which carries it whole (instruction-hook-parts.ts).
+ */
+async function instructionPart(record: SessionRecord, task: Task, sid: string, part: number, of: number): Promise<OpenItems> {
+  await Promise.all([(await import('./user-profile-context.js')).refreshUserProfile(), (await import('./reply-language-context.js')).refreshReplyLanguage()]);
+  const { instructionRestatementParts, noteInstructionNoticeStatedByHook } = await import('./instruction-notice.js');
+  const split = instructionRestatementParts(record, task, HOOK_CONTEXT_MAX);
+  const count = split?.parts.length ?? 0;
+  if (!split || part > Math.min(count, of)) return { ...EMPTY, instructionPart: { part, of: count } };
+  if (count <= of && notePartServed(sid, split.key, part, count)) await noteInstructionNoticeStatedByHook(record, task);
+  return { ...EMPTY, text: split.parts[part - 1], instructionPart: { part, of: count } };
+}
 
 /** One wording for the server and for a host answering from its copy. */
 const openItemsText = createOpenItemsText();
@@ -130,7 +149,7 @@ export async function overdueFor(sid: string, taskId: string, now = Date.now()):
 export async function collectOpenItems(
   callerSid: string | undefined,
   now = Date.now(),
-  opts: { afterCompaction?: boolean; full?: boolean } = {},
+  opts: { afterCompaction?: boolean; full?: boolean; parts?: number; part?: number; of?: number } = {},
 ): Promise<OpenItems> {
   const sid = (callerSid ?? '').trim();
   if (!sid) return EMPTY;
@@ -143,6 +162,8 @@ export async function collectOpenItems(
     const tm = await import('../task-manager.js');
     const task = await tm.getTask(caller.record.taskId).catch(() => undefined);
     if (!task) return EMPTY;
+    // One compaction hook of the instructions' own: only its part (instruction-hook-parts.ts).
+    if (opts.part) return await instructionPart(caller.record, task, sid, opts.part, opts.of ?? INSTRUCTION_HOOK_PARTS);
 
     const { subtasks, more: moreSubtasks } = await listOpenSubtasks(task.id);
 
@@ -230,7 +251,7 @@ export async function collectOpenItems(
       const memory = task.phase !== 'COMPLETE' && (opts.full || !ownReadbackHooked(caller.record)) ? agentMemoryAfterCompaction(task) : '';
       if (memory) items.text = [items.text, memory].filter(Boolean).join('\n\n');
       // Every default-instruction line that changed since spawn: the summary may have dropped the notices.
-      const { instructionNoticeFor, noteInstructionNoticeStatedByHook } = await import('./instruction-notice.js');
+      const { instructionNoticeFor, instructionRestatementParts, noteInstructionNoticeStatedByHook } = await import('./instruction-notice.js');
       await Promise.all([(await import('./user-profile-context.js')).refreshUserProfile(), (await import('./reply-language-context.js')).refreshReplyLanguage()]);
       const changed = instructionNoticeFor(caller.record, task, { ignoreTold: true });
       // Only whole and within what the hook may add: a cut notice would leave rules unsaid. Left out,
@@ -246,7 +267,11 @@ export async function collectOpenItems(
       const recent = await (await import('./user-asks.js')).recentWordsReadbackFor(task, now);
       // His unanswered messages stay first, ahead of the role's rules too (a cut never takes them).
       const head = (text: string) => [owed, recent, lead, text].filter(Boolean).join('\n\n');
-      if (changed && (opts.full || changed.length + head(items.text).length + 2 <= HOOK_CONTEXT_MAX)) {
+      if (changed && opts.parts && !opts.full) {
+        // The session has hooks of the instructions' own: they carry them, whole, right now.
+        const split = instructionRestatementParts(caller.record, task, HOOK_CONTEXT_MAX);
+        items.text = head([instructionsInPartsLine(split?.parts.length ?? 1, opts.parts), items.text].filter(Boolean).join('\n\n'));
+      } else if (changed && (opts.full || changed.length + head(items.text).length + 2 <= HOOK_CONTEXT_MAX)) {
         items.text = head([changed, items.text].filter(Boolean).join('\n\n'));
         // A full read reaches the model as a tool result Claude Code may cut too: it tells nothing.
         if (!opts.full) await noteInstructionNoticeStatedByHook(caller.record, task);

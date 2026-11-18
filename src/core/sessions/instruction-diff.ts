@@ -46,7 +46,7 @@ const BLOCK_KINDS: Array<[string, RegExp]> = [
 const formOf = (head: string) => hash(head.replace(/v[0-9a-f]{8}/g, 'v').replace(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}( UTC)?/g, 't'));
 
 /** The "Added by X:" line of a Main's or lead's instructions: whose words the lines after it are. */
-const opensAuthor = (word: string) => /^Added by .+:$/.test(word);
+export const opensAuthor = (word: string) => /^Added by .+:$/.test(word);
 /** The line a block ends with when not all of it fit ("(USER.md runs past 4000 characters here; ...)"): not a rule. */
 const TRUNCATED_RE = /^\(.+ runs past \d+ characters here;.+\)$/;
 /** A sub-heading inside a block (inside an author's part, when it has one). */

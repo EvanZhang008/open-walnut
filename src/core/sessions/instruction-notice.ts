@@ -36,6 +36,7 @@ import {
   noticeToldGeneration,
 } from './instruction-notice-flight.js';
 import { log } from '../../logging/index.js';
+import { restatementKey, splitAtLines } from './instruction-hook-parts.js';
 import { isFollower } from '../server-role.js';
 import { heldStatement, hookStatementVoid, statementBoundary } from './hook-statement.js';
 import { parseHinted } from '../hints/hint-format.js';
@@ -127,15 +128,40 @@ function dueFor(record: NoticeRecord, task: InstructionTask, ignoreTold?: boolea
   return { due, views };
 }
 
+/** The notice's opening; after a compaction, as part `part` of the restatement (instructionRestatementParts). */
+function noticeIntro(part?: { i: number; n: number }): string {
+  const lead = part
+    ? `Walnut restates your default instructions that changed after this session started, part ${part.i} of ${part.n}: your `
+      + 'context was just compacted, so earlier notices of them may be gone. Below is the current wording of each rule that changed'
+    : 'Walnut changed your default instructions after this session started. Below is the current wording of each rule that changed';
+  return `${lead}; where your system prompt or an earlier summary says otherwise, these win. Follow them from now on. `
+    + 'This notice itself starts no work.\n\n';
+}
+
+const wrapNotice = (body: string) => kit.buildWalnutMessage({ kind: 'notification', attrs: NOTICE_ATTRS, body });
+
 function render(due: Due): string {
-  return kit.buildWalnutMessage({
-    kind: 'notification',
-    attrs: NOTICE_ATTRS,
-    body: 'Walnut changed your default instructions after this session started. Below is the current wording of '
-      + 'each rule that changed; where your system prompt or an earlier summary says otherwise, these win. Follow '
-      + 'them from now on. This notice itself starts no work.\n\n'
-      + renderDue(due),
-  });
+  return wrapNotice(noticeIntro() + renderDue(due));
+}
+
+/**
+ * The restatement after a compaction as parts of at most `room` characters each, envelope included
+ * (instruction-hook-parts.ts): each says which part it is, since the hooks reach the model in no fixed
+ * order. `key` names this restatement (its rules' text). Null when nothing is due.
+ */
+export function instructionRestatementParts(record: NoticeRecord, task: InstructionTask, room: number): { parts: string[]; key: string } | null {
+  const found = dueFor(record, task, true);
+  if (!found) return null;
+  const body = renderDue(found.due);
+  // The wrapper escapes text inside (a `<walnut-message` grows by a few characters), so a part is
+  // measured after wrapping and the split made tighter until every one fits.
+  let space = room - wrapNotice(noticeIntro({ i: 99, n: 99 })).length;
+  for (;;) {
+    const chunks = splitAtLines(body, space);
+    const parts = chunks.map((c, i) => wrapNotice(noticeIntro({ i: i + 1, n: chunks.length }) + c));
+    if (parts.every((p) => p.length <= room) || space < 1_000) return { parts, key: restatementKey(body) };
+    space -= 500;
+  }
 }
 
 /** A notice's told record, and the blocks it told (to merge only those onto a newer record). */

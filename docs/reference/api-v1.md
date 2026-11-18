@@ -2523,6 +2523,12 @@ directory on that host.
   `text` is the short block the session reads right after a compaction, through
   the CLI's SessionStart hook (the `open_items` op in hook mode); `''` when
   nothing is open. A caller with no task gets empty lists and `''`.
+  With `?hook=compact` (added 2026-11-18), `parts=<n>` (1 to 8) says the session has n more
+  compaction hooks that restate its changed default instructions, so `text` leaves them out
+  and says so; `part=<i>&of=<n>` answers only part i of that restatement in `text`, with
+  `"instructionPart": { part, of }` (`of` is the real count; `text` is `''` past it). An
+  older server ignores both, and the CLI prints a part only when `instructionPart.part`
+  matches the one asked for.
   `?hook=stop` (added 2026-10-29) answers only `{ "stop": { reason, requests } | null }`:
   whether the calling session holds a request it has not answered as its turn ends
   (read by the CLI's Stop hook through `open_items` hook `stop`, which prints a Stop hook

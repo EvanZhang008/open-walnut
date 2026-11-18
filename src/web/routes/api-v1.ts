@@ -17,6 +17,7 @@
  * in cloud mode, LAN bypass otherwise). This router implements none.
  */
 
+import { INSTRUCTION_HOOK_PARTS_MAX } from '../../core/sessions/instruction-hook-parts.js'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
@@ -3768,9 +3769,13 @@ apiV1Router.get('/me/open', async (req: Request, res: Response, next: NextFuncti
       return
     }
     const { collectOpenItems } = await import('../../core/sessions/open-items.js')
+    // `parts`: the session has compaction hooks of the instructions' own; `part`/`of`: one of them asks.
+    const count = (v: unknown) => { const n = Number(v); return Number.isInteger(n) && n >= 1 && n <= INSTRUCTION_HOOK_PARTS_MAX ? n : undefined }
+    const afterCompaction = req.query.hook === 'compact'
     res.json(await collectOpenItems(Array.isArray(rawSid) ? rawSid[0] : rawSid, Date.now(), {
-      afterCompaction: req.query.hook === 'compact' || req.query.full === 'true',
+      afterCompaction: afterCompaction || req.query.full === 'true',
       full: req.query.full === 'true',
+      ...(afterCompaction ? { parts: count(req.query.parts), part: count(req.query.part), of: count(req.query.of) } : {}),
     }))
   } catch (err) {
     next(err)

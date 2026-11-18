@@ -1343,6 +1343,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const text = deps.openItems!.format(items, now)
     // The Stop hook (unanswered-at-stop.ts) is the server's call; this host's copy never holds a turn.
     if (args.hook === 'stop') return ok({})
+    // A hook of the instructions' own (the server's instruction-hook-parts.ts): this copy has no parts to give.
+    if (args.hook === 'compact' && args.part !== undefined) return ok({})
     if (args.hook === 'compact') {
       let context = withTaskRouting(home, callerSid, text, true).text
       // Claude Code shows the model only a preview of a hook's text past 10,000 characters (the

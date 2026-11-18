@@ -19,7 +19,21 @@
  * WALNUT_COMPACT_OPEN_ITEMS=0 on the server turns it off.
  */
 
+import { INSTRUCTION_HOOK_PARTS } from '../core/sessions/instruction-hook-parts.js'
+
 export const OPEN_ITEMS_HOOK_COMMAND = 'walnut tools call open_items \'{"hook":"compact"}\' 2>/dev/null || true'
+
+/**
+ * The changed default instructions ride hooks of their own (core/sessions/instruction-hook-parts.ts):
+ * the main hook names how many, and each part hook asks for one. An older `walnut` on the host refuses
+ * the new arguments (exit 1, nothing printed): the main hook then asks the old way, and the part hooks
+ * print nothing, so the session is told as before. The fallback runs on any failure of the first call,
+ * not only that refusal (a shell test of the exit code would put a `$` in a command that crosses hosts
+ * as argv): when the server fails it once and then answers, the old call may restate instructions the
+ * part hooks restate too, a rare duplicate and never a loss.
+ */
+const mainCommand = `walnut tools call open_items '{"hook":"compact","parts":${INSTRUCTION_HOOK_PARTS}}' 2>/dev/null || ${OPEN_ITEMS_HOOK_COMMAND}`
+const partCommand = (i: number) => `walnut tools call open_items '{"hook":"compact","part":${i},"of":${INSTRUCTION_HOOK_PARTS}}' 2>/dev/null || true`
 
 /** Seconds the CLI waits for the hook before it gives up on it. */
 const HOOK_TIMEOUT_SECS = 20
@@ -29,7 +43,10 @@ export function compactOpenItemsHooks(env: NodeJS.ProcessEnv = process.env): Rec
   return {
     SessionStart: [{
       matcher: 'compact',
-      hooks: [{ type: 'command', command: OPEN_ITEMS_HOOK_COMMAND, timeout: HOOK_TIMEOUT_SECS }],
+      hooks: [
+        { type: 'command', command: mainCommand, timeout: HOOK_TIMEOUT_SECS },
+        ...Array.from({ length: INSTRUCTION_HOOK_PARTS }, (_, i) => ({ type: 'command', command: partCommand(i + 1), timeout: HOOK_TIMEOUT_SECS })),
+      ],
     }],
   }
 }

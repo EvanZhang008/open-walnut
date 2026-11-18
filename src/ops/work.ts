@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { INSTRUCTION_HOOK_PARTS_MAX } from '../core/sessions/instruction-hook-parts.js';
 import { REVIEW_SCORE_INPUT } from './review-score-input.js';
 // Type-only: erased at compile time, so work.ts never depends on core.ts at load
 // time (the ops modules are imported in a fixed order by ./index.ts).
@@ -551,6 +552,11 @@ defineOp({
     asked: z.string().max(4000).optional().describe('Set by the Stop hook: the Ask here thread ids your transcript was asked, comma separated'),
     answered: z.string().max(4000).optional().describe('Set by the Stop hook: the Ask here thread ids your transcript answered inside their tag, comma separated'),
     tmp_paths: z.string().max(8000).optional().describe('Set by the Stop hook: the temp-dir paths your final text names that exist on your host, | separated'),
+    parts: z.number().int().min(1).max(INSTRUCTION_HOOK_PARTS_MAX).optional().describe(
+      'Set by Walnut\'s compaction hook: your changed default instructions come in that many hooks of their own, so this one leaves them out'),
+    part: z.number().int().min(1).max(INSTRUCTION_HOOK_PARTS_MAX).optional().describe(
+      'Set by one of Walnut\'s compaction hooks: only that part of your changed default instructions (with `of`, how many hooks there are)'),
+    of: z.number().int().min(1).max(INSTRUCTION_HOOK_PARTS_MAX).optional().describe('With part: how many such hooks there are'),
     full: z.boolean().optional().describe(
       'Everything Walnut restates after a compaction, uncut (your core instructions, what is open, changed instructions, '
       + 'hints, teams, MEMORY.md), as `text`: read it when the restatement says it was cut'),
@@ -571,6 +577,9 @@ defineOp({
       return reason ? { decision: 'block', reason } : {};
     }
     if (args.hook === 'compact') {
+      // A part hook prints only a part the server says it is: an older server answers with the whole readback.
+      const piece = open.instructionPart as { part?: unknown } | undefined;
+      if (args.part !== undefined && piece?.part !== args.part) return {};
       return text ? { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } } : {};
     }
     return withOutcome(
