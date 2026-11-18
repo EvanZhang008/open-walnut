@@ -62,7 +62,7 @@ describe('the charter itself', () => {
     expect(TEAM_CHARTER).toMatch(/An answer someone is waiting for is always sent: a reply to a request, an answer in a board thread, a letter the user asked for/)
     expect(TEAM_CHARTER).toMatch(/Standing rules you were given still apply: asking the user before splitting an ask into several tasks, the inbox rule, permission prompts/)
     expect(MESSAGE_TEXT_HINT).toMatch(/always send an answer someone is waiting for/)
-    expect(MESSAGE_TEXT_HINT).toMatch(/Only the user's own decisions go to them \(outward steps, spending, credentials, permissions, cloud deletes, a hard-to-reverse choice no rule covers, a fact only they have\)/)
+    expect(MESSAGE_TEXT_HINT).toMatch(/Only the user's own decisions go to them \(outward steps and anything in their name or involving other people, spending, credentials, permissions, cloud deletes, a hard-to-reverse choice no rule covers, a fact only they have\)/)
     expect(MESSAGE_TEXT_HINT).toMatch(/undoing what an agent broke, choosing between reasonable options and anything reversible are never theirs: decide it and say what you chose/)
     expect(MESSAGE_TEXT_HINT).toMatch(/Passing on the user's request: their exact words and screenshots first, your summary after\./)
     expect(TEAM_CHARTER).toMatch(/None of this permits an outward step, a public push, a destructive action or a way around a safety limit/)

@@ -105,9 +105,9 @@ export const PROMPT_BLOCKS: readonly PromptBlockDef[] = [
   { id: 'task-routing', title: 'Task routing', part: 'context', kind: 'rules', cap: 2_900,
     holds: '',
     why: 'Measured 2.6 K with the deliverable check (2026-11-16: same file is not same deliverable, task_get before handing, search across languages); once per prompt (the persona no longer carries a second copy).' },
-  { id: 'core-instructions', title: 'Your core instructions', part: 'context', kind: 'user', cap: 8_200,
+  { id: 'core-instructions', title: 'Your core instructions', part: 'context', kind: 'user', cap: 8_400,
     holds: '',
-    why: 'Versioned. The user\'s words up to ORG_INSTRUCTIONS_MAX (4,000 characters) with their tags and Walnut\'s default after an agent\'s; today 2.7 to 2.8 K (2026-11-17: with the rule that a team\'s conclusion is no fact until checked at its source); 8.1 to 8.2 K at the builder\'s limit, Main the longer.' },
+    why: 'Versioned. The user\'s words up to ORG_INSTRUCTIONS_MAX (4,000 characters) with their tags and Walnut\'s default after an agent\'s; today 2.8 to 2.9 K (2026-11-17: with the rule that a team\'s conclusion is no fact until checked at its source, and that an ask of the user\'s own kinds needs his words); 8.2 to 8.3 K at the builder\'s limit, Main the longer.' },
   { id: 'tools', title: 'How Walnut and its tools reach you', part: 'context', kind: 'rules', cap: 900,
     holds: '',
     why: 'The ops paragraph measured 737.' },
@@ -123,9 +123,9 @@ export const PROMPT_BLOCKS: readonly PromptBlockDef[] = [
   { id: 'fleet', title: 'Your machines', part: 'context', kind: 'list', cap: 2_000, state: true,
     holds: 'the rest of the machines you can use',
     why: 'One line per host; a big fleet keeps the first hosts and reads the rest on demand.' },
-  { id: 'how-we-work', title: 'How we work', part: 'context', kind: 'rules', cap: 5_600,
+  { id: 'how-we-work', title: 'How we work', part: 'context', kind: 'rules', cap: 6_200,
     holds: '',
-    why: 'The team charter measured 5.3 K; every bullet is a rule the same for every role.' },
+    why: 'The team charter measured 6.1 K with the user\'s-own-yes rule (2026-11-17: anything involving other people, his name or no undo waits for his yes); every bullet is a rule the same for every role.' },
   { id: 'user-profile', title: 'Your user', part: 'context', kind: 'user', cap: 6_000,
     holds: '',
     why: 'Versioned. USER.md capped at USER_CHAR_BUDGET (4,000 characters) with a version tag per line; measured 4.6 K.' },
@@ -197,12 +197,13 @@ export function walnutFileKey(name: string): { block: PromptBlockId; scope: stri
  * words may still grow into at their builders' limits (the user profile to its 6,000 cap, a
  * role's core instructions to 7,500 for Main and a lead), plus 1,000: Walnut text added
  * anywhere fails its block's cap first, and this whole-prompt ceiling after.
+ * 2026-11-17: each budget +600 for the charter's user's-own-yes rule (approval-kinds.ts), the same in every role.
  */
 export const PROMPT_BUDGETS = {
-  main: 52_500,
-  lead: 39_800,
-  worker: 18_500,
-  ask: 31_600,
+  main: 53_100,
+  lead: 40_400,
+  worker: 19_100,
+  ask: 32_200,
 } as const
 
 export interface PromptOverflow {

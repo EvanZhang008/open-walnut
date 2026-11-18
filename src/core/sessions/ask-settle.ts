@@ -37,7 +37,7 @@ export interface SettleInput {
   callerTaskId?: string;
   callerSessionId?: string;
   userWords?: string;
-  /** The Approvals switch: with it off an outward step is no longer the user's (approval-kinds.ts). */
+  /** The Approvals switch; it settles no kind since 2026-11-17, so every kind stays the user's (approval-kinds.ts). */
   askMe: boolean;
 }
 

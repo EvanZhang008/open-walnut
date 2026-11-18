@@ -115,6 +115,14 @@ make refuses too.
 Settings › General › **Ask me before agents act** (`config.approvals.ask_me`, `src/core/approvals/ask-me.ts`)
 decides whether an agent's step waits for the person. It is off unless the person turns it on.
 
+The switch changes only what Walnut stops, never whose decision a step is (2026-11-17, after an
+agent signed the user up for a colleague's office hour and replied in his name with the switch
+off). Anything that involves other people or takes their time, speaks or publishes in the user's
+name, or cannot be undone waits for the user's own explicit yes either way: the charter says so in
+every session's prompt (`USERS_OWN_YES_RULE`, `src/core/approval-kinds.ts`), and `answers_ask` on
+an ask of any approval kind needs `user_words` with the switch on or off (`SWITCH_OFF_SETTLES` is
+empty). Guard: `tests/core/users-own-yes-guard.test.ts`.
+
 Off, these go ahead at once with no card, letter or wait, and each is recorded (an approved approval
 marked `unasked` with its gate, or the plugin's own sent log, or a host grant `via: approvals-off`):
 

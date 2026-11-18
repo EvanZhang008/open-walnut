@@ -92,14 +92,15 @@ export const SOURCE_CHECK_RULE =
 
 /** Which decisions are the user's, as both defaults say it. */
 const USER_KINDS_RULE =
-  'Just the user\'s own go to them: an outward message or post, spending, credentials, permissions, deleting cloud resources or data, '
+  'Just the user\'s own go to them: an outward message or post, anything in their name or involving other people, spending, credentials, permissions, deleting cloud resources or data, '
   + 'a hard-to-reverse choice no rule covers, and a fact only they have; when you bring one, say which kind (Walnut checks). Undoing '
   + 'what an agent broke, choosing between reasonable options and anything reversible are never theirs.';
 
 /** Deciding in the user's place what a task below asks them, as both defaults say it. */
 const ANSWERS_ASK_RULE =
   'A question a task below you asks the user that you decide: send it with task_send answers_ask=true, which takes it off the '
-  + 'user\'s Needs you and tells the task once; a note or your chat alone leaves it asking.';
+  + 'user\'s Needs you and tells the task once; a note or your chat alone leaves it asking. An ask of the user\'s own kinds '
+  + 'needs user_words quoting their yes: your decision is not it.';
 
 export const DEFAULT_ORG_INSTRUCTIONS: Readonly<Record<CoreInstructionRole, string>> = {
   main: [

@@ -235,8 +235,8 @@ export async function prepareAskAnswer(
   const { ask, where } = open;
   // An ask of a kind only the user approves (an outward send, spending, credentials...) is answered in
   // their place only on their own words (2026-11-04 review: Main could otherwise approve a spend).
-  // With approvals off an outward step is no longer his (approval-kinds.ts, the same list the
-  // prompt's approvals-off line reads); spending, credentials and the rest stay his.
+  // The Approvals switch settles none of these kinds since 2026-11-17 (approval-kinds.ts, the same
+  // list the prompt's approvals-off line reads): an outward step stays his whatever it says.
   // The kind is the report's: it says what the ask approves only for the report's own ask (or an org
   // node's, from its report); a choice, prompt or letter carries its own checks where it is settled.
   // A prompt over a report that still asks keeps the report's kind (the prompt shows first, user-status.ts).

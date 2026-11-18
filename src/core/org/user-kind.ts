@@ -32,7 +32,7 @@ export type UserKind = (typeof USER_KINDS)[number];
 
 /** What each kind means, in the words the refusal and the letter use. */
 export const USER_KIND_WORDS: Readonly<Record<UserKind, string>> = {
-  outward: 'a message or post to people, a public push or publish, or anything leaving the team\'s own code; not a code change, commit or change request in the team\'s own repo/package',
+  outward: 'a message, post, reply or ping to people, a sign-up, meeting, invite or application in the user\'s name, a public push, publish or release, or anything leaving the team\'s own code; not a code change, commit or change request in the team\'s own repo/package',
   spending: 'spending money or quota that is not already budgeted',
   credentials: 'a credential, key or sign-in',
   permissions: 'a permission, access or setting that widens what an agent may do',

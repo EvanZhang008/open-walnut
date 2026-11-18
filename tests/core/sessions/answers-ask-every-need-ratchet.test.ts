@@ -112,10 +112,10 @@ describe('a prompt open in the session', () => {
     sessions.splice(0, sessions.length, { claudeSessionId: 's3', pendingPermission: { requestId: 'r3', toolName: 'AskUserQuestion', input: { questions: [{ question: 'Should I pay the vendor invoice now?' }] }, receivedAt: '2026-11-13T00:00:00Z' } });
     await expect(settlerFor({ ...base, text: 'Yes' })).rejects.toMatchObject({ code: 'user_words' });
     await expect(settlerFor({ ...base, text: 'Yes', userWords: 'pay the invoice, I checked it' })).resolves.toBeTypeOf('function');
-    // An outward step is no longer his with approvals off; spending still is.
+    // An outward step stays his with approvals off too (2026-11-17: a lead signed him up for an office hour in his name).
     sessions.splice(0, sessions.length, { claudeSessionId: 's4', pendingPermission: { requestId: 'r4', toolName: 'AskUserQuestion', input: { questions: [{ question: 'Send the update to the list?' }] }, receivedAt: '2026-11-13T00:00:00Z' } });
     await expect(settlerFor({ ...base, text: 'Yes, send it to them' })).rejects.toMatchObject({ code: 'user_words' });
-    await expect(settlerFor({ ...base, askMe: false, text: 'Yes, send it to them' })).resolves.toBeTypeOf('function');
+    await expect(settlerFor({ ...base, askMe: false, text: 'Yes, send it to them' })).rejects.toMatchObject({ code: 'user_words' });
   });
 
   it('any other tool\'s prompt is denied with the answer as its reason: allowing a tool stays the person\'s', async () => {

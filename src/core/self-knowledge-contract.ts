@@ -77,7 +77,11 @@ import { TASK_ROUTING_CONTRACT } from './task-routing-contract.js';
 // Raised to 11,400 on 2026-11-16 for the charter's done line: a look that turned into work is a
 // pivot of the goal, and done means it happened, not that the user's decision was handed on (a worker
 // handed a payment decision to its lead and closed, leaving nobody to pay once he answered).
-export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 11_400;
+//
+// Raised to 12,000 on 2026-11-17 for the charter's USERS_OWN_YES_RULE (approval-kinds.ts): anything
+// that involves other people, speaks in the user's name or cannot be undone waits for his own yes,
+// whatever the Approvals switch says (a VP signed him up for a colleague's office hour in his name).
+export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 12_000;
 
 // The phase LIST comes from PHASE_ORDER, so adding or removing a phase updates
 // this prompt with no second edit. The phases the prompt names are typed

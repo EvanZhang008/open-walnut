@@ -678,7 +678,7 @@ export function composeInstructions(task: InstructionTask | undefined, state: Pr
     // The user's Reply language setting: a standing rule, so here (under no heading) and never on a
     // message (reply-language-context.ts).
     + replyLanguageLine(currentReplyLanguage())
-    // The Approvals switch, off by default: then an outward post is not the user's decision.
+    // The Approvals switch, off by default: it changes what Walnut stops, never whose decision a step is.
     + approvalsLine(currentApprovalsAsk())
     // The two words the user reaches for, pinned to the two different things
     // (2026-09-30: "use a subagent" was answered with a Walnut subtask).

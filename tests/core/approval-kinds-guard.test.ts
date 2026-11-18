@@ -28,7 +28,7 @@ describe('the Approvals switch and answers_ask read one list of kinds', () => {
     expect(needsUsersWords(undefined, true)).toBe(false)
   })
 
-  it('the prompt\'s approvals-off line names every kind still the user\'s and says answers_ask settles the rest', () => {
+  it('the prompt\'s approvals-off line names every kind still the user\'s and how answers_ask settles them', () => {
     expect(approvalsLine(true)).toBe('')
     const line = approvalsLine(false)
     for (const words of Object.values(STILL_THE_USERS)) expect(line, words).toContain(words)

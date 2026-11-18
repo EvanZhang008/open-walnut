@@ -88,14 +88,15 @@ defineOp({
       + 'Any ask the user\'s Needs you shows is taken: its own question (in its report, or an org node\'s in its chat), a Board choice (answered on its Board: your words picking an option by its name pick it), '
       + 'an AskUserQuestion prompt (answered with your words; any other tool\'s prompt is denied with them as the reason), or a decision letter (answered in the inbox by the option your text names, with user_words): delivery "settled". '
       + '409 not_above when the task is not below you, '
-      + '409 no_open_ask when it has no ask to answer (none, a failure only the user can clear, a result to read, or one shown on another task, named), 409 user_words for an ask only the user approves, '
+      + '409 no_open_ask when it has no ask to answer (none, a failure only the user can clear, a result to read, or one shown on another task, named), 409 user_words for an ask only the user approves '
+      + '(anything that involves other people or speaks in his name, or cannot be undone, whatever the Approvals switch says: your decision is not his yes), '
       + `409 user_spoke_since when the user wrote in that task after it asked. ${USER_SPOKE_TEXT}`),
     withdraw_ask: z.boolean().optional().describe(
       'With answers_ask=true: the user withdrew this ask for good (do not remind them again, in other words either, unless they bring it up). '
       + 'A task must quote their own words in user_words. This withdraws the question, not an answer: to take back an incorrect answer, use task_ask_answer_withdraw instead. '
       + 'Without answers_ask, bad_request; without their words, user_words. Stopped or finished tasks are not woken.'),
     user_words: z.string().min(1).max(4000).optional().describe(
-      'With answers_ask: the user\'s own words you act on, quoted exactly. Needed on an ask of a kind only the user approves (an outward send, spending, credentials, permissions, a cloud delete, an irreversible step), '
+      'With answers_ask: the user\'s own words you act on, quoted exactly. Needed on an ask of a kind only the user approves, whatever the Approvals switch says (an outward send, a sign-up, meeting or reply in his name, spending, credentials, permissions, a cloud delete, an irreversible step), '
       + 'where Walnut checks them in its record: they must quote a message he wrote after the ask appeared, in the task\'s chat, your own chat, or a thread linked to the task; '
       + 'however short, typos included ("cahneg" counts); else 409 user_words says what to do next; '
       + `and after 409 user_spoke_since: ${USER_WORDS_BACK} His messages in that task newer than the words you quote must be quoted too (409 user_spoke_since names them).`),

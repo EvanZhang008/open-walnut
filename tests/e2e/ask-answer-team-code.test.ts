@@ -211,9 +211,9 @@ describe('answers_ask for the team own code', () => {
   });
 });
 
-// 2026-11-12, two VPs: with approvals off the prompt told leads an outward step is
-// no longer the user's decision, yet answers_ask refused each outward ask with user_words (a reply
-// reply mail, a post) and it stayed on his Needs you.
+// 2026-11-17: with approvals off a lead read "an outward message is not the user's decision now",
+// signed the user up for a colleague's office hour and replied in his name. The switch changes what
+// Walnut stops, never whose decision a step is: an outward ask still needs his own words.
 describe('answers_ask with approvals off', () => {
   beforeAll(async () => { await setAskMe(false, { unsigned: 'test' }); });
   afterAll(async () => { await setAskMe(true, { person: true }); });
@@ -221,12 +221,13 @@ describe('answers_ask with approvals off', () => {
   it.each([
     'Send the follow-up mail to the vendor?',
     'Post the release notes to the public channel?',
-  ])('a lead settles an outward ask without the user\'s words: %s', async (ask) => {
+    'Sign the user up for the office hour and reply that they are coming?',
+  ])('a lead cannot settle an outward ask without the user\'s words: %s', async (ask) => {
     const id = await asking(ask, 'outward', 'It sends a message outside the team.');
-    const r = await answer(id);
-    expect(r.status, JSON.stringify(r.body)).toBe(202);
-    expect((await getTask(id)).ask_answered).toMatchObject({ by: lead, ask });
-    expect((await getTask(id)).ask_answered?.userWords).toBeUndefined();
+    const refused = await answer(id);
+    expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+    expect(JSON.stringify(refused.body)).toContain('user_words');
+    expect((await getTask(id)).ask_answered).toBeUndefined();
   });
 
   it('every kind the switch does not settle still needs the user\'s words', async () => {

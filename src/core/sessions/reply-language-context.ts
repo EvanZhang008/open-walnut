@@ -70,18 +70,19 @@ export function currentApprovalsAsk(): boolean {
 
 /**
  * The prompt's line while approvals are off (2026-11-12, the user: "somehow AI need my approval for
- * post etc ... I want it to be off by default don't need my approval for anything"). The charter
- * still names an outward message or post as the user's to decide; with the switch off it is not.
- * On: no line, the charter as it is.
+ * post etc ... I want it to be off by default don't need my approval for anything"). The switch
+ * changes what Walnut stops, never whose decision a step is (2026-11-17, approval-kinds.ts: a VP
+ * read the old "an outward message is not the user's decision now" and signed him up for a
+ * colleague's office hour in his name). On: no line, the charter as it is.
  */
 export function approvalsLine(ask: boolean): string {
   if (ask) return ''
   const still = Object.values(STILL_THE_USERS)
   return 'Approvals are off (the user\'s setting, Settings \u203a General): Walnut no longer stops a post, a mail, '
     + 'a browser step or a command on another host for the user\'s yes; it records each (a `walnut approve` in a '
-    + 'script still asks the user). An outward message or post is not the user\'s decision now: do it, or settle '
-    + 'a teammate\'s outward ask (task_send answers_ask) without user_words, and say what you did. Still ask the '
-    + `user before ${still.slice(0, -1).join(', ')}, or ${still[still.length - 1]}.\n\n`
+    + 'script still asks the user). The switch changes only what Walnut stops, never whose decision a step is: '
+    + `still get the user's own explicit yes before ${still.slice(0, -1).join(', ')}, or ${still[still.length - 1]}, `
+    + 'and settle a teammate\'s ask of those kinds (task_send answers_ask) only with user_words quoting them.\n\n'
 }
 
 /** Tests: forget the copy. */
