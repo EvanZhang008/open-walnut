@@ -6331,11 +6331,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const pending = [...getUnconfiguredPlugins()]
       if (pending.length === 0) return
       const { getConfig: readPluginConfig } = await import('../core/config-manager.js')
+      const { pluginsCompletedByConfig } = await import('../core/plugins/config-completion.js')
       const config = await readPluginConfig()
-      const ready = pending.filter((plugin) => {
-        const pluginConfig = config.plugins?.[plugin.id] ?? {}
-        return plugin.missing.every((field) => field in pluginConfig)
-      })
+      // A plugin the config turns off stays off, however complete its fields are.
+      const ready = pluginsCompletedByConfig(pending, config.plugins)
       if (ready.length === 0) return
 
       for (const plugin of ready) await stopPluginSyncPolling(plugin.id)
