@@ -12,6 +12,7 @@
  * all stores are redirected into a temp dir by createMockConstants.
  */
 
+import { compactOpenItemsHooks } from '../../src/providers/compact-open-items-hook.js'
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest'
 import path from 'node:path'
 import fsp from 'node:fs/promises'
@@ -73,12 +74,9 @@ function settingsEnv(args: string[]): Record<string, string> | undefined {
   return settingsOf(args)?.env
 }
 
-const COMPACT_HOOK = {
-  SessionStart: [{
-    matcher: 'compact',
-    hooks: [{ type: 'command', command: 'walnut tools call open_items \'{"hook":"compact"}\' 2>/dev/null || true', timeout: 20 }],
-  }],
-}
+// The post-compaction readback and the hooks that restate the changed instructions in parts
+// (compact-open-items-hook.ts; its own shape is pinned in instruction-hook-parts.test.ts).
+const COMPACT_HOOK = compactOpenItemsHooks({})!
 
 // The /tmp git guard rides the same settings arg (0b1a6017e, git-tmp-guard-hook.ts), then
 // the note after a Write of a draft or plan into /tmp (tmp-write-note-hook.ts), then the clone
