@@ -1,7 +1,7 @@
 /**
  * Approvals (src/core/approvals/): an approval binds to its digest, is answered once, read
  * once by its asker, needs a device signature for a biometric Approve, and expires. Device
- * keys: the first is trusted on first use, a later one waits for an active key's approval.
+ * keys: only a device app adds one, and it signs at once; nothing else adds one or asks the person.
  * Signatures are made here with a software P-256 key in the same DER form CryptoKit gives.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -29,6 +29,32 @@ function softKey() {
 
 const requester = { host: 'build-box' }
 const lookup = (id: string) => activeKey(id)
+
+/** A key signs a moment later than everything so far (answerApproval's route touches it: routes/approvals-v1.ts). */
+async function touchKeyLater(id: string): Promise<void> {
+  await new Promise((r) => setTimeout(r, 5))
+  const { touchKey } = await import('../../../src/core/approvals/keys.js')
+  await touchKey(id)
+}
+
+/**
+ * What a Walnut before 2026-11-18 left for a key it did not take at once: a pending row in keys.json
+ * and its "Let … sign your approvals" ask (Walnut makes neither now, so the test writes the files).
+ */
+async function legacyPending(k: { id: string; spki: string }, name: string, kind: 'iphone' | 'mac-app', createdAt = new Date().toISOString()) {
+  const path = await import('node:path')
+  const label = kind === 'iphone' ? 'iPhone' : 'Mac app'
+  const { approval } = await createApproval({ what: `Let "${name}" (${label}) sign your approvals`, mode: 'biometric', requester: { host: 'this Mac' } })
+  const keysPath = path.join(WALNUT_HOME, 'approvals', 'keys.json')
+  const keys = JSON.parse(await fs.readFile(keysPath, 'utf8').catch(() => '{"version":1,"keys":[]}')) as { keys: unknown[] }
+  keys.keys.push({ id: k.id, name, kind, publicKey: k.spki, createdAt, status: 'pending', enrollApprovalId: approval.id })
+  await fs.writeFile(keysPath, JSON.stringify(keys))
+  const asksPath = path.join(WALNUT_HOME, 'approvals', 'approvals.json')
+  const asks = JSON.parse(await fs.readFile(asksPath, 'utf8')) as { approvals: Array<{ id: string; enrollsKey?: string }> }
+  asks.approvals.find((a) => a.id === approval.id)!.enrollsKey = k.id
+  await fs.writeFile(asksPath, JSON.stringify(asks))
+  return approval
+}
 
 beforeEach(async () => {
   _resetApprovalTimersForTesting()
@@ -159,26 +185,50 @@ describe('biometric approvals and device keys', () => {
     expect(denied.status).toBe('denied')
   })
 
-  it('a second key with no device app proof waits until an active key signs its enrollment, and cannot sign for itself', async () => {
+  it('a key from anything but its device app adds no device and asks nothing, first or later (2026-11-18)', async () => {
+    // The person's screen showed "Let … (Mac app) sign your approvals" for a key a test's copy of the
+    // app sent: a later key with no proof became an ask. Now it is refused, whatever came before it.
     const phone = softKey()
     const mac = softKey()
     await enrollKey({ publicKey: phone.spki, name: 'iPhone', kind: 'iphone', fromDeviceApp: true })
-    const second = await enrollKey({ publicKey: mac.spki, name: 'Mac', kind: 'mac-app' })
-    expect(second.key.status).toBe('pending')
-    const enrollment = second.enrollment!
-    expect(enrollment).toMatchObject({ mode: 'biometric', enrollsKey: mac.id })
-    // Enrolling again returns the same open request, not a second one.
-    expect((await enrollKey({ publicKey: mac.spki, name: 'Mac', kind: 'mac-app' })).enrollment?.id).toBe(enrollment.id)
+    await rejects(enrollKey({ publicKey: mac.spki, name: 'Mac', kind: 'mac-app' }), 'first_key_from_phone')
+    await rejects(enrollKey({ publicKey: mac.spki, name: 'Mac', kind: 'mac-app', fromDeviceApp: false }), 'first_key_from_phone')
+    await rejects(enrollKey({ publicKey: mac.spki, name: 'iPhone', kind: 'iphone' }), 'first_key_from_phone')
+    expect((await listKeys()).map((k) => k.id)).toEqual([phone.id])
+    expect(await listApprovals({ status: 'all' })).toEqual([])
+  })
 
-    await rejects(answerApproval(enrollment.id, {
-      decision: 'approve', keyId: mac.id, signature: mac.sign(answerMessage(enrollment.digest, 'approve')), device: { name: 'Mac', kind: 'mac-app' },
-    }, lookup), 'bad_signature')
-
-    const approved = await answerApproval(enrollment.id, {
-      decision: 'approve', keyId: phone.id, signature: phone.sign(answerMessage(enrollment.digest, 'approve')), device: { name: 'iPhone', kind: 'iphone' },
-    }, lookup)
-    await applyKeyApproval(approved)
-    expect((await listKeys()).find((k) => k.id === mac.id)?.status).toBe('active')
+  it('no input to enrollKey ever opens an approval, whatever keys.json holds (the whole class)', async () => {
+    // Every kind, every proof, against every state a key can be in: none of them asks the person.
+    const kinds = ['iphone', 'mac-app'] as const
+    const proofs = [true, false, undefined]
+    const states = ['none', 'active', 'pending', 'retired', 'same-name-active'] as const
+    let tried = 0
+    for (const kind of kinds) {
+      for (const fromDeviceApp of proofs) {
+        for (const state of states) {
+          await fs.rm(WALNUT_HOME, { recursive: true, force: true })
+          const k = softKey()
+          const anchor = softKey()
+          await enrollKey({ publicKey: anchor.spki, name: 'Anchor', kind: 'iphone', fromDeviceApp: true })
+          if (state === 'active') await enrollKey({ publicKey: k.spki, name: 'Desk', kind, fromDeviceApp: true })
+          if (state === 'pending') await legacyPending(k, 'Desk', kind)
+          if (state === 'retired') {
+            await enrollKey({ publicKey: k.spki, name: 'Desk', kind: 'mac-app', fromDeviceApp: true })
+            await enrollKey({ publicKey: softKey().spki, name: 'Desk', kind: 'mac-app', fromDeviceApp: true })
+          }
+          if (state === 'same-name-active') await enrollKey({ publicKey: softKey().spki, name: 'Desk', kind, fromDeviceApp: true })
+          const before = (await listApprovals({ status: 'all' })).map((a) => a.id)
+          await enrollKey({ publicKey: k.spki, name: 'Desk', kind, fromDeviceApp }).catch(() => undefined)
+          const opened = (await listApprovals({ status: 'all' })).filter((a) => !before.includes(a.id))
+          expect(opened, `${kind} fromDeviceApp=${fromDeviceApp} on ${state}`).toEqual([])
+          expect((await listKeys()).filter((x) => x.id === k.id && x.status === 'pending' && state !== 'pending'),
+            `${kind} fromDeviceApp=${fromDeviceApp} on ${state} left a pending key`).toEqual([])
+          tried++
+        }
+      }
+    }
+    expect(tried).toBe(kinds.length * proofs.length * states.length)
   })
 
   it('a later key from a device app the person set up signs at once, with no ask (2026-11-12)', async () => {
@@ -189,18 +239,18 @@ describe('biometric approvals and device keys', () => {
     // The paired iPhone (its device token): active now, nothing for another device to approve.
     const second = await enrollKey({ publicKey: phone.spki, name: 'iPhone', kind: 'iphone', fromDeviceApp: true })
     expect(second.key.status).toBe('active')
-    expect(second.enrollment).toBeUndefined()
     // A second Mac app, with its own proof, too.
     const thirdMac = softKey()
     expect((await enrollKey({ publicKey: thirdMac.spki, name: 'Mac 2', kind: 'mac-app', fromDeviceApp: true })).key.status).toBe('active')
     expect((await listApprovals({ status: 'pending' })).filter((x) => x.enrollsKey)).toHaveLength(0)
-    // A key left pending before (a request with no proof) signs once its app asks again; its ask is withdrawn.
-    const left = await enrollKey({ publicKey: phone2.spki, name: 'Old iPhone', kind: 'iphone' })
-    expect(left.key.status).toBe('pending')
+    // A key an older Walnut left pending: refused while nothing proves it, then it signs once its app
+    // asks again, and its ask is withdrawn.
+    const left = await legacyPending(phone2, 'Old iPhone', 'iphone')
+    await rejects(enrollKey({ publicKey: phone2.spki, name: 'Old iPhone', kind: 'iphone' }), 'first_key_from_phone')
+    expect((await getApproval(left.id))?.status).toBe('pending')
     const again = await enrollKey({ publicKey: phone2.spki, name: 'Old iPhone', kind: 'iphone', fromDeviceApp: true })
     expect(again.key.status).toBe('active')
-    expect(again.enrollment).toBeUndefined()
-    expect((await getApproval(left.enrollment!.id))?.status).toBe('canceled')
+    expect((await getApproval(left.id))?.status).toBe('canceled')
     expect((await listKeys()).every((k) => k.status === 'active')).toBe(true)
   })
 
@@ -213,8 +263,7 @@ describe('biometric approvals and device keys', () => {
     const newMac = softKey()
     await enrollKey({ publicKey: oldMac.spki, name: 'Studio', kind: 'mac-app', fromDeviceApp: true })
     await enrollKey({ publicKey: phone.spki, name: 'Studio', kind: 'iphone', fromDeviceApp: true })
-    const stray = await enrollKey({ publicKey: strayMac.spki, name: 'Studio', kind: 'mac-app' })
-    expect(stray.key.status).toBe('pending')
+    const stray = await legacyPending(strayMac, 'Studio', 'mac-app')
     const fresh = await enrollKey({ publicKey: newMac.spki, name: 'Studio', kind: 'mac-app', fromDeviceApp: true })
     expect(fresh.key.status).toBe('active')
     // The same device's older active key is retired (its row stays, naming what replaced it, for a
@@ -223,15 +272,15 @@ describe('biometric approvals and device keys', () => {
     expect(active).toEqual([newMac.id, phone.id].sort())
     expect((await listKeys()).find((k) => k.id === oldMac.id)).toMatchObject({ status: 'retired', replacedBy: newMac.id })
     expect((await listKeys()).some((k) => k.id === strayMac.id)).toBe(false)
-    expect((await getApproval(stray.enrollment!.id))?.status).toBe('canceled')
+    expect((await getApproval(stray.id))?.status).toBe('canceled')
     expect((await listApprovals({ status: 'pending' })).filter((x) => x.enrollsKey)).toHaveLength(0)
     // A phone never retires another phone of the same name (many are called "iPhone").
     const phone2 = softKey()
     await enrollKey({ publicKey: phone2.spki, name: 'Studio', kind: 'iphone', fromDeviceApp: true })
     expect((await listKeys()).filter((k) => k.kind === 'iphone')).toHaveLength(2)
-    // A request with no app proof never retires anything.
+    // A request with no app proof never retires anything (it is refused: nothing added, nothing asked).
     const other = softKey()
-    await enrollKey({ publicKey: other.spki, name: 'Studio', kind: 'mac-app' })
+    await rejects(enrollKey({ publicKey: other.spki, name: 'Studio', kind: 'mac-app' }), 'first_key_from_phone')
     expect((await listKeys()).find((k) => k.id === newMac.id)?.status).toBe('active')
     // A retired key never signs, and comes back only from its own app (which keeps its key now).
     await expect(enrollKey({ publicKey: oldMac.spki, name: 'Studio', kind: 'mac-app' })).rejects.toMatchObject({ code: 'key_retired' })
@@ -257,7 +306,7 @@ describe('biometric approvals and device keys', () => {
     const phone = softKey()
     const a = softKey(); const b = softKey(); const c = softKey(); const later = softKey()
     await enrollKey({ publicKey: phone.spki, name: 'iPhone', kind: 'iphone', fromDeviceApp: true })
-    const asked = await enrollKey({ publicKey: b.spki, name: 'Studio', kind: 'mac-app' })
+    const asked = await legacyPending(b, 'Studio', 'mac-app', '2026-11-12T00:00:00.000Z')
     // The shape production held: an old active key, a pending one, then the current active key.
     const file = path.join(WALNUT_HOME, 'approvals', 'keys.json')
     const raw = JSON.parse(await fs.readFile(file, 'utf8')) as { keys: Array<Record<string, unknown>> }
@@ -270,8 +319,134 @@ describe('biometric approvals and device keys', () => {
     expect(await retireReplacedMacKeys()).toBe(2)
     expect((await listKeys()).filter((k) => k.status !== 'retired').map((k) => k.id).sort()).toEqual([phone.id, c.id, later.id].sort())
     expect((await listKeys()).find((k) => k.id === a.id)).toMatchObject({ status: 'retired', replacedBy: c.id })
-    expect((await getApproval(asked.enrollment!.id))?.status).toBe('canceled')
+    expect((await getApproval(asked.id))?.status).toBe('canceled')
     expect(await retireReplacedMacKeys()).toBe(0)
+  })
+
+  it('on boot, every "Let … sign your approvals" an older Walnut left is withdrawn with its key, and the signing devices stay (2026-11-18)', async () => {
+    // The 2026-11-18 keys.json: the Mac app's key and two iPhones sign; a test's copy of the app,
+    // started twice with a fresh home, left two pending keys of the same Mac with an ask each.
+    const { withdrawPendingEnrollments } = await import('../../../src/core/approvals/keys.js')
+    const mac = softKey(); const phoneA = softKey(); const phoneB = softKey(); const copy1 = softKey(); const copy2 = softKey()
+    await enrollKey({ publicKey: mac.spki, name: 'a1b2c3d4e5f6', kind: 'mac-app', fromDeviceApp: true })
+    await enrollKey({ publicKey: phoneA.spki, name: 'iPhone', kind: 'iphone', fromDeviceApp: true })
+    await enrollKey({ publicKey: phoneB.spki, name: 'iPhone', kind: 'iphone', fromDeviceApp: true })
+    const ask1 = await legacyPending(copy1, 'a1b2c3d4e5f6', 'mac-app', '2099-11-18T19:21:32.922Z')
+    const ask2 = await legacyPending(copy2, 'a1b2c3d4e5f6', 'mac-app', '2099-11-18T19:33:19.000Z')
+    // An ask whose key row is gone already (an older Walnut wrote them in two steps) goes too.
+    const orphan = await legacyPending(softKey(), 'Studio', 'iphone')
+    const keysPath = (await import('node:path')).join(WALNUT_HOME, 'approvals', 'keys.json')
+    const raw = JSON.parse(await fs.readFile(keysPath, 'utf8')) as { keys: Array<{ enrollApprovalId?: string }> }
+    raw.keys = raw.keys.filter((k) => k.enrollApprovalId !== orphan.id)
+    await fs.writeFile(keysPath, JSON.stringify(raw))
+    const other = await createApproval({ what: 'Deploy', mode: 'tap', requester })
+
+    // What boot runs, in order (store.ts initApprovals).
+    const { retireReplacedMacKeys } = await import('../../../src/core/approvals/keys.js')
+    await retireReplacedMacKeys()
+    expect(await withdrawPendingEnrollments()).toBe(3)
+    for (const a of [ask1, ask2, orphan]) expect((await getApproval(a.id))?.status).toBe('canceled')
+    expect((await getApproval(other.approval.id))?.status).toBe('pending')
+    expect((await listKeys()).map((k) => `${k.id} ${k.status}`).sort()).toEqual([mac.id, phoneA.id, phoneB.id].map((id) => `${id} active`).sort())
+    expect(await withdrawPendingEnrollments()).toBe(0)
+  })
+
+  it('on boot, the Mac\'s own key that a copy\'s asked-in key took the place of signs again, and the copy\'s key goes (2026-11-18)', async () => {
+    // Production that evening: the person approved "Let … (Mac app) sign your approvals" with the
+    // Mac's own Touch ID; the copy's key, newer, became active, and the next boot retired the Mac's own.
+    const { restoreMacKeysTakenByAsks, retireReplacedMacKeys, withdrawPendingEnrollments } = await import('../../../src/core/approvals/keys.js')
+    const mac = softKey(); const phone = softKey(); const copy = softKey()
+    await enrollKey({ publicKey: mac.spki, name: 'a1b2c3d4e5f6', kind: 'mac-app', fromDeviceApp: true })
+    // An iPhone an old ask let in (signed with the Mac's key) stays: it took nobody's place.
+    const phoneAsk = await legacyPending(phone, 'iPhone', 'iphone')
+    await applyKeyApproval(await answerApproval(phoneAsk.id, {
+      decision: 'approve', keyId: mac.id, signature: mac.sign(answerMessage(phoneAsk.digest, 'approve')), device: { name: 'Mac', kind: 'mac-app' },
+    }, lookup))
+    await new Promise((r) => setTimeout(r, 5))
+    const copyAsk = await legacyPending(copy, 'a1b2c3d4e5f6', 'mac-app')
+    await new Promise((r) => setTimeout(r, 5))
+    await applyKeyApproval(await answerApproval(copyAsk.id, {
+      decision: 'approve', keyId: mac.id, signature: mac.sign(answerMessage(copyAsk.digest, 'approve')), device: { name: 'Mac', kind: 'mac-app' },
+    }, lookup))
+    await touchKeyLater(mac.id)
+    expect(await retireReplacedMacKeys()).toBe(1)
+    expect((await listKeys()).find((k) => k.id === mac.id)).toMatchObject({ status: 'retired', replacedBy: copy.id })
+
+    // The boot of this version, in order (store.ts initApprovals).
+    expect(await retireReplacedMacKeys()).toBe(0)
+    expect(await restoreMacKeysTakenByAsks()).toBe(1)
+    expect(await withdrawPendingEnrollments()).toBe(0)
+    const keys = await listKeys()
+    expect(keys.map((k) => `${k.id} ${k.status}`).sort()).toEqual([`${mac.id} active`, `${phone.id} active`, `${copy.id} retired`].sort())
+    expect(keys.find((k) => k.id === mac.id)?.replacedBy).toBeUndefined()
+    // The copy's row leads back to the Mac's key, for a verifier that had followed it there.
+    expect(keys.find((k) => k.id === copy.id)?.replacedBy).toBe(mac.id)
+    expect(await restoreMacKeysTakenByAsks()).toBe(0)
+    expect(await retireReplacedMacKeys()).toBe(0)
+  })
+
+  it('the whole boot gives it back the same way when the older Walnut never restarted after the approval', async () => {
+    // The copy's key active and the Mac's own still active: the boot's own retire comes first, then the repair.
+    const mac = softKey(); const copy = softKey()
+    await enrollKey({ publicKey: mac.spki, name: 'Studio', kind: 'mac-app', fromDeviceApp: true })
+    const ask = await legacyPending(copy, 'Studio', 'mac-app')
+    await new Promise((r) => setTimeout(r, 5))
+    await applyKeyApproval(await answerApproval(ask.id, {
+      decision: 'approve', keyId: mac.id, signature: mac.sign(answerMessage(ask.digest, 'approve')), device: { name: 'Mac', kind: 'mac-app' },
+    }, lookup))
+    await touchKeyLater(mac.id)
+    expect((await listKeys()).map((k) => k.status)).toEqual(['active', 'active'])
+    const { initApprovals } = await import('../../../src/core/approvals/store.js')
+    await initApprovals()
+    const keys = await listKeys()
+    expect(keys.find((k) => k.id === mac.id)?.status).toBe('active')
+    expect(keys.find((k) => k.id === copy.id)).toMatchObject({ status: 'retired', replacedBy: mac.id })
+    _resetApprovalTimersForTesting()
+  })
+
+  it('a Mac that stopped signing with its old key after a newer one came keeps the newer one (it may be the app\'s own)', async () => {
+    const { restoreMacKeysTakenByAsks, retireReplacedMacKeys } = await import('../../../src/core/approvals/keys.js')
+    const old = softKey(); const phone = softKey(); const fresh = softKey()
+    await enrollKey({ publicKey: old.spki, name: 'Studio', kind: 'mac-app', fromDeviceApp: true })
+    await enrollKey({ publicKey: phone.spki, name: 'iPhone', kind: 'iphone', fromDeviceApp: true })
+    await touchKeyLater(old.id)
+    await new Promise((r) => setTimeout(r, 5))
+    // The app made a new key (an older app did, at every enrollment); the phone let it in.
+    const ask = await legacyPending(fresh, 'Studio', 'mac-app')
+    await applyKeyApproval(await answerApproval(ask.id, {
+      decision: 'approve', keyId: phone.id, signature: phone.sign(answerMessage(ask.digest, 'approve')), device: { name: 'iPhone', kind: 'iphone' },
+    }, lookup))
+    expect(await retireReplacedMacKeys()).toBe(1)
+    expect(await restoreMacKeysTakenByAsks()).toBe(0)
+    expect((await listKeys()).find((k) => k.id === fresh.id)?.status).toBe('active')
+    expect((await listKeys()).find((k) => k.id === old.id)?.status).toBe('retired')
+  })
+
+  it('nothing in Walnut opens an approval that enrolls a key (the whole class)', async () => {
+    // createApproval takes no `enrollsKey`, so only a record an older Walnut wrote carries one. This
+    // fails when any source file sets it again, in any form.
+    const fsSync = await import('node:fs')
+    const path = await import('node:path')
+    const root = path.resolve(__dirname, '../../../src')
+    const setters: string[] = []
+    const walk = (dir: string) => {
+      for (const e of fsSync.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name)
+        if (e.isDirectory()) { walk(full); continue }
+        if (!/\.tsx?$/.test(e.name)) continue
+        const text = fsSync.readFileSync(full, 'utf8')
+        // `enrollsKey: x`, `enrollsKey = x`, `['enrollsKey']`, a shorthand `{ enrollsKey }`: anything but a read or a type.
+        if (/\benrollsKey\s*[:=](?!=)/.test(text.replace(/\benrollsKey\?:/g, '')) || /\[\s*['"]enrollsKey['"]\s*\]\s*=(?!=)/.test(text) || /[{,]\s*enrollsKey\s*[,}]/.test(text)) {
+          setters.push(path.relative(root, full))
+        }
+      }
+    }
+    walk(root)
+    expect(setters).toEqual([])
+    const store = fsSync.readFileSync(path.join(root, 'core/approvals/store.ts'), 'utf8')
+    const input = /export interface CreateInput \{[\s\S]*?\n\}/.exec(store)?.[0] ?? ''
+    expect(input).toContain('requester: ApprovalRequester')
+    expect(input).not.toMatch(/^\s*enrollsKey\b\s*\??:/m)
   })
 
   it('only keys.ts writes the device keys, and only enrollKey adds one (where a device retires its earlier keys)', async () => {
@@ -292,12 +467,12 @@ describe('biometric approvals and device keys', () => {
     expect(src.match(/file\.keys\.push\(/g)).toHaveLength(1)
   })
 
-  it('a denied enrollment drops the pending key', async () => {
+  it('an older Walnut\'s enrollment answered before the boot sweep: a deny drops its pending key', async () => {
     const phone = softKey()
     const mac = softKey()
     await enrollKey({ publicKey: phone.spki, name: 'iPhone', kind: 'iphone', fromDeviceApp: true })
-    const second = await enrollKey({ publicKey: mac.spki, name: 'Mac', kind: 'mac-app' })
-    const denied = await answerApproval(second.enrollment!.id, { decision: 'deny', device: { name: 'iPhone', kind: 'iphone' } }, lookup)
+    const asked = await legacyPending(mac, 'Mac', 'mac-app')
+    const denied = await answerApproval(asked.id, { decision: 'deny', device: { name: 'iPhone', kind: 'iphone' } }, lookup)
     await applyKeyApproval(denied)
     expect((await listKeys()).map((k) => k.id)).toEqual([phone.id])
   })
@@ -307,9 +482,9 @@ describe('biometric approvals and device keys', () => {
     const mac = softKey()
     await enrollKey({ publicKey: phone.spki, name: 'iPhone', kind: 'iphone', fromDeviceApp: true })
     await rejects(removeKey(phone.id), 'last_key')
-    const second = await enrollKey({ publicKey: mac.spki, name: 'Mac', kind: 'mac-app' })
+    const asked = await legacyPending(mac, 'Mac', 'mac-app')
     await removeKey(mac.id)
-    expect((await getApproval(second.enrollment!.id))?.status).toBe('canceled')
+    expect((await getApproval(asked.id))?.status).toBe('canceled')
     await rejects(removeKey('ak-none'), 'not_found')
     await rejects(enrollKey({ publicKey: 'AAAA', name: 'x', kind: 'iphone' }), 'bad_key')
   })
@@ -321,18 +496,61 @@ describe('biometric approvals and device keys', () => {
     expect(await listKeys()).toEqual([])
   })
 
-  it('two enrollments of one new key at once make one ask', async () => {
+  it('two enrollments of one new key at once (the app\'s launch and a foreground refresh) add one key and ask nothing', async () => {
     const phone = softKey()
     const mac = softKey()
     await enrollKey({ publicKey: phone.spki, name: 'iPhone', kind: 'iphone', fromDeviceApp: true })
     const [a, b] = await Promise.all([
-      enrollKey({ publicKey: mac.spki, name: 'Mac', kind: 'mac-app' }),
-      enrollKey({ publicKey: mac.spki, name: 'Mac', kind: 'mac-app' }),
+      enrollKey({ publicKey: mac.spki, name: 'Mac', kind: 'mac-app', fromDeviceApp: true }),
+      enrollKey({ publicKey: mac.spki, name: 'Mac', kind: 'mac-app', fromDeviceApp: true }),
     ])
-    expect(a.enrollment?.id).toBeTruthy()
-    expect(b.enrollment?.id).toBe(a.enrollment?.id)
-    const open = (await listApprovals({ status: 'pending' })).filter((x) => x.enrollsKey === mac.id)
-    expect(open).toHaveLength(1)
+    expect([a.key.status, b.key.status]).toEqual(['active', 'active'])
+    expect((await listKeys()).filter((k) => k.id === mac.id)).toHaveLength(1)
+    expect(await listApprovals({ status: 'all' })).toEqual([])
+  })
+})
+
+describe('the name a person reads for a device (device-name.ts)', () => {
+  it('a generated id reads as the kind of device; a real name stays', async () => {
+    const { deviceLabel, machineMadeName } = await import('../../../src/core/approvals/device-name.js')
+    for (const id of ['a1b2c3d4e5f6', 'A1B2C3D4E5F6', '3f2a-91bc-77de', '6f1c9a2e-2b7d-4c55-9d1e-0a1b2c3d4e5f']) expect(machineMadeName(id), id).toBe(true)
+    for (const name of ['Studio', 'Evan’s MacBook Pro', 'iPhone', 'deadbeef', 'cafe', 'Mac-2', 'abc123', 'Desk 12345678',
+      '2024-11-18', '10.0.0.12', '12345678', 'fe80::1']) expect(machineMadeName(name), name).toBe(false)
+    expect(deviceLabel('a1b2c3d4e5f6', 'mac-app')).toBe('Mac')
+    expect(deviceLabel('a1b2c3d4e5f6', 'iphone')).toBe('iPhone')
+    expect(deviceLabel('', 'web')).toBe('Web console')
+    expect(deviceLabel('  Studio  ', 'mac-app')).toBe('Studio')
+    expect(deviceLabel(undefined, 'other')).toBe('a device')
+  })
+
+  it('an answer signed by a key named by a generated id says "Mac", and so does an older record', async () => {
+    const mac = softKey()
+    await enrollKey({ publicKey: mac.spki, name: 'a1b2c3d4e5f6', kind: 'mac-app', fromDeviceApp: true })
+    const { approval } = await createApproval({ what: 'Publish', mode: 'biometric', requester })
+    const ok = await answerApproval(approval.id, {
+      decision: 'approve', keyId: mac.id, signature: mac.sign(answerMessage(approval.digest, 'approve')), device: { name: 'a1b2c3d4e5f6', kind: 'mac-app' },
+    }, lookup)
+    expect(ok.answer?.device).toMatchObject({ id: mac.id, name: 'Mac', kind: 'mac-app' })
+    // A record an older Walnut wrote with the raw name reads the same.
+    const path = await import('node:path')
+    const asksPath = path.join(WALNUT_HOME, 'approvals', 'approvals.json')
+    const asks = JSON.parse(await fs.readFile(asksPath, 'utf8')) as { approvals: Array<{ id: string; answer?: { device: { name: string } } }> }
+    asks.approvals.find((a) => a.id === approval.id)!.answer!.device.name = 'a1b2c3d4e5f6'
+    await fs.writeFile(asksPath, JSON.stringify(asks))
+    expect((await getApproval(approval.id))?.answer?.device.name).toBe('a1b2c3d4e5f6')
+    expect((await listApprovals({ status: 'all' })).find((a) => a.id === approval.id)?.answer?.device.name).toBe('Mac')
+    expect(JSON.stringify(await listApprovals({ status: 'all' }))).not.toContain('a1b2c3d4e5f6')
+    // An older Walnut's ask in the history, once withdrawn, says "Mac" in its title too.
+    const { withdrawPendingEnrollments } = await import('../../../src/core/approvals/keys.js')
+    const old = await legacyPending(softKey(), 'a1b2c3d4e5f6', 'mac-app')
+    expect((await listApprovals()).find((a) => a.id === old.id)?.what).toBe('Let "a1b2c3d4e5f6" (Mac app) sign your approvals')
+    await withdrawPendingEnrollments()
+    expect((await listApprovals({ status: 'all' })).find((a) => a.id === old.id)?.what).toBe('Let "Mac" (Mac app) sign your approvals')
+    expect(JSON.stringify(await listApprovals({ status: 'all' }))).not.toContain('a1b2c3d4e5f6')
+    // keys.json keeps the name the Mac sent (its keys are matched by it); the view reads "Mac".
+    const { keyView } = await import('../../../src/core/approvals/keys.js')
+    expect((await listKeys())[0]!.name).toBe('a1b2c3d4e5f6')
+    expect(keyView((await listKeys())[0]!).name).toBe('Mac')
   })
 })
 

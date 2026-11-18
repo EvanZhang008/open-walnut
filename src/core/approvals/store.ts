@@ -21,6 +21,7 @@ import { tellAskerLater } from './tell-asker.js'
 import { fenceRefusal, fenceSkipped, fenced, readActivity, type FenceRefusal, type FenceSubject, type UserActivity } from './biometric-fence.js'
 import { log } from '../../logging/index.js'
 import { answerMessage, approvalDigest, verifySignature } from './digest.js'
+import { deviceLabel } from './device-name.js'
 import {
   APPROVAL_DEFAULT_TIMEOUT_MS, APPROVAL_DETAIL_MAX, APPROVAL_KEEP_MAX, APPROVAL_KEEP_MS, APPROVAL_MAX_TIMEOUT_MS,
   APPROVAL_MIN_TIMEOUT_MS, APPROVAL_WAIT_MAX_MS, APPROVAL_WHAT_MAX, isTerminal,
@@ -55,7 +56,15 @@ export class ApprovalError extends Error {
 
 export function viewOf(rec: ApprovalRecord): ApprovalView {
   const { waitTokenHash: _hidden, ...view } = rec
-  return view
+  // What an older Walnut wrote may name a device by a generated id (device-name.ts): the answer's
+  // device, and the title of its "Let … sign your approvals" asks, still in the history (a decided
+  // one only: the title is in the digest a device signs, and none of them stays pending past boot).
+  const asked = view.enrollsKey && view.status !== 'pending' ? /^Let "(.+)" \((Mac app|iPhone)\) sign your approvals$/.exec(view.what) : null
+  const what = asked ? `Let "${deviceLabel(asked[1], asked[2] === 'iPhone' ? 'iphone' : 'mac-app')}" (${asked[2]}) sign your approvals` : view.what
+  const device = view.answer?.device
+  const name = device && device.kind !== 'setting' ? deviceLabel(device.name, device.kind) : device?.name
+  if (what === view.what && name === device?.name) return view
+  return { ...view, what, ...(device ? { answer: { ...view.answer!, device: { ...device, name: name! } } } : {}) }
 }
 
 const sha = (s: string): string => crypto.createHash('sha256').update(s, 'utf8').digest('hex')
@@ -128,9 +137,14 @@ export async function initApprovals(): Promise<void> {
   const { loadAskMeLatch } = await import('./ask-me.js')
   await loadAskMeLatch().catch((err) => log.web.warn('approvals: reading the switch failed', { error: String(err) }))
   await sweepExpired()
+  const { restoreMacKeysTakenByAsks, retireReplacedMacKeys, withdrawPendingEnrollments } = await import('./keys.js')
   // Keys an older Walnut kept for a Mac that has since enrolled a newer one (keys.ts).
-  const { retireReplacedMacKeys } = await import('./keys.js')
   await retireReplacedMacKeys().catch((err) => log.web.warn('approvals: retiring replaced Mac keys failed', { error: String(err) }))
+  // Then a Mac's own key that a key an old ask let in took the place of signs again (keys.ts), the
+  // one the rule above retired in this same boot included.
+  await restoreMacKeysTakenByAsks().catch((err) => log.web.warn('approvals: giving back the Mac\'s own key failed', { error: String(err) }))
+  // An older Walnut's "Let … sign your approvals" asks, and the keys they were for (keys.ts).
+  await withdrawPendingEnrollments().catch((err) => log.web.warn('approvals: withdrawing the device asks failed', { error: String(err) }))
   const file = await readJsonFile<ApprovalsFile>(approvalsFile(), EMPTY)
   // A decision made just before a restart, inside the asker's grace, is still told.
   const { rearmAskerNotices } = await import('./tell-asker.js')
@@ -148,7 +162,8 @@ export interface CreateInput {
   requester: ApprovalRequester
   /** Set when `biometric` was asked but cannot be honored, with why (the caller decides). */
   downgraded?: string
-  enrollsKey?: string
+  // No `enrollsKey`: Walnut never asks the person to let a device sign (keys.ts); only an older
+  // Walnut's records carry one, and they are withdrawn on boot (withdrawPendingEnrollments).
   removesKey?: string
   turnsAskMeOff?: true
   testRun?: string
@@ -272,7 +287,6 @@ export async function createApproval(input: CreateInput): Promise<{ approval: Ap
     mode: input.mode,
     ...(input.downgraded ? { downgraded: input.downgraded } : {}),
     requester, createdAt, expiresAt, status: 'pending', waitTokenHash: sha(waitToken),
-    ...(input.enrollsKey ? { enrollsKey: input.enrollsKey } : {}),
     ...(input.removesKey ? { removesKey: input.removesKey } : {}),
     ...(input.turnsAskMeOff ? { turnsAskMeOff: true as const } : {}),
     ...(input.testRun ? { testRun: input.testRun } : {}),
@@ -358,7 +372,7 @@ export async function answerApproval(id: string, input: AnswerInput, lookupKey: 
     if (!verifySignature(key.publicKey, answerMessage(current.digest, input.decision), input.signature)) {
       throw new ApprovalError(403, 'bad_signature', 'The signature does not match this approval.')
     }
-    signed = { id: key.id, name: key.name, kind: key.kind }
+    signed = { id: key.id, name: deviceLabel(key.name, key.kind), kind: key.kind }
   }
   if (current.singleUse && input.decision === 'approve' && (!signed?.id || !allowedSigners(current).includes(signed.id))) {
     throw new ApprovalError(403, 'biometric_required', 'This approval needs a signature from its required signing device; an unsigned answer or another device cannot approve it.')
@@ -383,7 +397,7 @@ export async function answerApproval(id: string, input: AnswerInput, lookupKey: 
       decision: input.decision,
       at: new Date().toISOString(),
       mode: signed ? 'biometric' : 'tap',
-      device: signed ?? { name: input.device.name.slice(0, 80) || 'unknown', kind: input.device.kind },
+      device: signed ?? { name: deviceLabel(input.device.name.slice(0, 80), input.device.kind), kind: input.device.kind },
       ...(signed ? { keyId: signed.id, signature: input.signature } : {}),
     }
     out = rec

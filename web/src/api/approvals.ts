@@ -95,7 +95,7 @@ export function answerApproval(id: string, body: AnswerBody): Promise<{ approval
   return apiPost(`/api/v1/approvals/${encodeURIComponent(id)}/answer`, body, { quietStatuses: [403, 409] });
 }
 
-export function enrollApprovalKey(body: { publicKey: string; name: string; kind: 'mac-app' }): Promise<{ key: ApprovalKey; enrollment?: Approval }> {
+export function enrollApprovalKey(body: { publicKey: string; name: string; kind: 'mac-app' }): Promise<{ key: ApprovalKey }> {
   return apiPost('/api/v1/approvals/keys', body, { quietStatuses: [403, 404] });
 }
 

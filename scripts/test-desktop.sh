@@ -47,6 +47,12 @@ swiftc \
 "$OUT_DIR/walnut-app-link-tests"
 
 swiftc \
+    "$ROOT/desktop/ApprovalHome.swift" \
+    "$ROOT/tests/desktop/approval-home-tests.swift" \
+    -o "$OUT_DIR/walnut-approval-home-tests"
+"$OUT_DIR/walnut-approval-home-tests"
+
+swiftc \
     "$ROOT/desktop/AppUpdateMachine.swift" \
     "$ROOT/tests/desktop/app-update-tests.swift" \
     -o "$OUT_DIR/walnut-app-update-tests"

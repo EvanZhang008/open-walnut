@@ -213,23 +213,32 @@ requests on the phone; a user without the phone app gets tap approvals.
 
 Every device you set up signs at once, with nothing for you to do and nothing to approve on
 another device: the Walnut Mac app adds its Touch ID key when it opens, and the iPhone app its Face
-ID key the first time it opens while it reaches your computer directly (the same network or your
-tailnet; a request through the cloud companion does not carry the phone's own sign-in). Face ID or
-Touch ID is still asked at every approval, by the device itself. So your first
-approval of an agent's step on the Mac is one touch, never the Passwords master password. The Mac
-app's key counts only when the app's own process sends it: Walnut checks that the process holding
-the request runs the signed Mac app's code: its bundle identifier, a certificate Apple issued to a
-team (never ad-hoc, which anyone can make), the hardened runtime with no entitlement that lets
-another program load code into it or attach a debugger, and the same code hash as the signed
-bundle on disk. The app also makes a new key for this enrollment rather than using a key file it
-finds on disk. A Mac app built without a developer certificate cannot be the first device; its
-approvals then take the iPhone's Face ID, or an unlock in Passwords as before. A key from any other request (no
-paired device's sign-in, no Mac app proof) is never the first device, because any program on the
-computer can call the console's routes; a later one waits until an existing device approves it:
-Walnut asks "Let <device> sign your approvals" as a biometric approval on the devices that
-already sign. Known limit: a program running as you can make a device sign-in, and so add a key
-of its own; before 2026-11-12 only the first key had that limit. A single-use approval bound to
-pinned keys (below) still takes only those keys' signatures.
+ID key the first time it opens, directly or through the cloud companion (which checks the phone's
+sign-in and names the phone to your computer). Face ID or Touch ID is still asked at every
+approval, by the device itself. So your first approval of an agent's step on the Mac is one touch,
+never the Passwords master password. The Mac app's key counts only when the app's own process
+sends it: Walnut checks that the process holding the request runs the signed Mac app's code: its
+bundle identifier, a certificate Apple issued to a team (never ad-hoc, which anyone can make), the
+hardened runtime with no entitlement that lets another program load code into it or attach a
+debugger, and the same code hash as the signed bundle on disk. The app keeps its key while the key
+on disk still needs Touch ID, so whatever pinned it keeps trusting it. A Mac app built without a
+developer certificate, or without the hardened runtime, adds no key; its approvals then take the
+iPhone's Face ID, or an unlock in Passwords as before.
+
+Nothing else adds a device, and Walnut never asks you to let one sign. A key from any other
+request (no paired phone's sign-in, no Mac app proof) is refused, because any program on the
+computer can call the console's routes. So is a copy of the Mac app started with another home
+folder (a test that gives the app a fresh `HOME` or `CFFIXED_USER_HOME` so it touches nothing of
+yours): it makes no key, signs nothing and asks nothing, and the server adds a Mac key only when
+the app says it runs in your account's own home. A test window (a browser under automation, or a
+page with a test-run label) never touches the Touch ID bridge. Before 2026-11-18 Walnut asked
+"Let <device> sign your approvals" for such a key; on upgrade those asks are withdrawn and their
+pending keys dropped, with nothing for you to answer. Where one such ask was approved and the key it
+let in took the place of the Mac app's own key (the Mac kept signing with its own key after the
+newer one came, and the newer one never signed), the Mac's own key signs again and the other goes. A device shows by its own name, or by its
+kind ("Mac", "iPhone") when its name is a generated id (a work Mac named like `a1b2c3d4e5f6`).
+Known limit: a program running as you can make a device sign-in, and so add a key of its own. A
+single-use approval bound to pinned keys (below) still takes only those keys' signatures.
 `walnut approvals list` shows the devices. Removing one is done from a device while another
 remains. Walnut never removes the last one, since the next device would then be trusted on first
 use; if that phone is lost, delete `approvals/keys.json` in the Walnut data folder by hand.
@@ -241,12 +250,15 @@ What each strength guards:
   Walnut's own screens, so a program running as you on this computer that calls the console's
   route directly can answer it too.
 - **Biometric** also holds against that program: Approve needs a signature that only Face ID or
-  Touch ID on an enrolled device unlocks, the first device comes only from the paired phone or the
-  signed Mac app's own process, and each new device needs an existing one's Face ID. The Mac app signs only for the console page
+  Touch ID on an enrolled device unlocks, and a device comes only from the paired phone or the
+  signed Mac app's own process in your own home folder. The Mac app signs only for the console page
   itself, never for a frame inside it. What no check on this computer can stop is a program that
   rewrites Walnut's own files or code on disk, or that builds and signs a look-alike Mac app with
   your own developer certificate before the first device exists; Walnut's data lives in your home
-  directory, like every tool you run.
+  directory, like every tool you run. Nor can it stop your cloud companion, or a program that reaches
+  your Mac's own daemon, from adding an iPhone key: the companion names the paired phone whose sign-in
+  it checked, on that one call only, and your Mac takes its word, as it takes the companion's word for
+  every call it carries. Such a key shows in the device list like any other.
 
 ## API
 
@@ -259,7 +271,7 @@ What each strength guards:
 | `POST /api/v1/approvals/:id/cancel` | the asker | `{ token, reason? }` |
 | `POST /api/v1/approvals/:id/answer` | a person | `{ decision, keyId?, signature?, device? }` |
 | `GET /api/v1/approvals/keys` | anyone | the signing devices (public halves) |
-| `POST /api/v1/approvals/keys` | a person | `{ publicKey, name, kind }` (base64 DER P-256 SPKI) |
+| `POST /api/v1/approvals/keys` | a device app | `{ publicKey, name, kind, accountHome? }` (base64 DER P-256 SPKI) → `{ key }`; anything else is `403 first_key_from_phone` |
 | `DELETE /api/v1/approvals/keys/:id` | a person | removes one (never the last) |
 
 Ops for agents: `approval_request`, `approval_wait`, `approval_consume`, `approval_cancel`, `approval_list`.

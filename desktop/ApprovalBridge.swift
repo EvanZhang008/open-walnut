@@ -77,6 +77,8 @@ final class ApprovalBridge: NSObject, WKScriptMessageHandlerWithReply {
     // MARK: - Key and availability
 
     private func unavailableReason() -> String? {
+        // A copy started with another home folder (a test's) never makes, adds or uses a key: ApprovalHome.swift.
+        if let why = ApprovalHome.currentRefusal() { return why }
         guard SecureEnclave.isAvailable else { return "This Mac has no Secure Enclave, so it answers approvals with a click." }
         var err: NSError?
         if !LAContext().canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &err) {
@@ -152,7 +154,9 @@ final class ApprovalBridge: NSObject, WKScriptMessageHandlerWithReply {
         var request = URLRequest(url: url, timeoutInterval: 20)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: Any] = ["publicKey": spki.base64EncodedString(), "name": deviceName, "kind": "mac-app"]
+        // accountHome: this app runs in the account's own home (unavailableReason checked it above);
+        // the server adds a Mac key only with it (src/web/routes/approvals-v1.ts).
+        let body: [String: Any] = ["publicKey": spki.base64EncodedString(), "name": deviceName, "kind": "mac-app", "accountHome": true]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         // An ephemeral session: its own connection, held by this process.
         let session = URLSession(configuration: .ephemeral)

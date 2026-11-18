@@ -17,8 +17,8 @@
  *    (touch-id-bridge.ts); in a browser the card says to approve on the phone (Face ID),
  *    and Deny still works.
  *
- * In the Mac app the page also enrolls the app's Touch ID key once (keys.ts: the first
- * device is trusted on first use, a later one waits for an existing device's approval).
+ * In the Mac app the page also has the app enroll its Touch ID key once, never in a test window
+ * (approvals-store.ts startTouchId; keys.ts: the app's own key signs at once, nothing is asked).
  * Live through the `approval:changed` event; a reconnect re-reads the list.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';

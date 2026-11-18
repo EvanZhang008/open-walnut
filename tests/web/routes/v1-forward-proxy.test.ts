@@ -285,7 +285,11 @@ import { createStreamRelay } from '../../../src/providers/stream-relay-core.js'
 import { createStreamEndpoint, type StreamEndpoint } from '../../../src/lib/link-stream.js'
 import { createCompanionDoor } from '../../../src/web/v1-forward/stream-door.js'
 import { forwardUpgrade } from '../../../src/host-server/proxy.js'
+import { forwardedPhoneOf } from '../../../src/web/v1-forward/forwarded-device.js'
 import { afterAll } from 'vitest'
+
+// Which names are the paired iPhone app on the companion (approvals/phone-app.ts reads its registry).
+vi.mock('../../../src/core/approvals/phone-app.js', () => ({ isPairedPhoneApp: async (name: string) => name === 'iphone' }))
 
 type RelayLink = { name: 'bridge' | 'primary'; ep: StreamEndpoint | null; up: boolean }
 
@@ -296,7 +300,10 @@ async function macRoutes(): Promise<{ port: number; seen: Array<Record<string, u
   app.use(express.json({ limit: '15mb' }))
   app.all('/api/v1/*rest', (req, res) => {
     const body = req.body && typeof req.body === 'object' ? JSON.stringify(req.body) : ''
-    seen.push({ method: req.method, path: req.originalUrl, origin: req.headers['x-walnut-origin'], auth: req.headers.authorization ?? null, size: body.length })
+    seen.push({
+      method: req.method, path: req.originalUrl, origin: req.headers['x-walnut-origin'], auth: req.headers.authorization ?? null, size: body.length,
+      phone: forwardedPhoneOf(req), phoneHeader: req.headers['x-walnut-forwarded-phone'] ?? null,
+    })
     if (req.path === '/api/v1/big') { res.status(200).type('application/octet-stream').send(Buffer.alloc(3 * 1024 * 1024 + 5, 7)); return }
     if (req.path === '/api/v1/slow') { setTimeout(() => { if (!res.writableEnded && !res.destroyed) res.json({ from: 'mac', slow: true }) }, 1_500); return }
     res.status(req.method === 'GET' ? 200 : 201).setHeader('x-walnut-op', 'mac').json({ from: 'mac', size: body.length })
@@ -342,7 +349,7 @@ function streamHarness(macPort: () => number | null, opts: { macAccepts?: boolea
   return { relay, bridge, primary, door, opens }
 }
 
-function forwardOver(s: ReturnType<typeof streamHarness>, opts: { capable?: () => boolean; open?: () => Promise<import('node:stream').Duplex> } = {}) {
+function forwardOver(s: ReturnType<typeof streamHarness>, opts: { capable?: () => boolean; open?: () => Promise<import('node:stream').Duplex>; deviceName?: string } = {}) {
   const calls: Array<Record<string, unknown>> = []
   const fwd = createV1Forward({
     now: () => Date.now(),
@@ -353,6 +360,8 @@ function forwardOver(s: ReturnType<typeof streamHarness>, opts: { capable?: () =
   })
   const app = express()
   app.use(express.json({ limit: '15mb' }))
+  // The companion's auth names the device whose token it checked (middleware/auth.ts).
+  if (opts.deviceName) app.use((req, _res, next) => { (req as express.Request & { deviceName?: string }).deviceName = opts.deviceName; next() })
   app.use('/api/v1', fwd.middleware)
   app.all('/api/v1/*rest', (req, res) => { res.status(200).json({ from: 'companion', path: req.path }) })
   return { app, fwd, calls }
@@ -515,6 +524,49 @@ describe('no WebSocket crosses the stream (the Mac serves none under /api/v1)', 
     } finally {
       s.door.close()
       await new Promise<void>((r) => companion.close(() => r()))
+      await mac.close()
+    }
+  })
+})
+
+describe('the paired iPhone app the companion checked reaches the Mac named, and nothing else does (forwarded-device.ts)', () => {
+  // 2026-11-18: the iPhone app adding its signing key through the companion read as a stranger on
+  // the Mac (a forwarded call carries no credential), and became "Let iPhone sign your approvals".
+  const KEYS = '/api/v1/approvals/keys'
+
+  it('server.http: the call names the phone only when its token is the iPhone app\'s pairing', async () => {
+    const h = harness()
+    const app = express()
+    app.use(express.json())
+    app.use((req, _res, next) => { (req as express.Request & { deviceName?: string }).deviceName = req.headers['x-test-device'] as string | undefined; next() })
+    app.use('/api/v1', h.fwd.middleware)
+    await request(app).post(KEYS).set('x-test-device', 'iphone').send({ kind: 'iphone' })
+    await request(app).post(KEYS).set('x-test-device', 'browser-a1b2c3').send({ kind: 'iphone' })
+    await request(app).post(KEYS).set('x-walnut-companion-phone', 'iphone').set('x-walnut-forwarded-phone', 'iphone').send({ kind: 'iphone' })
+    // Only the key's own call names the phone: any other call of the same phone goes as before.
+    await request(app).patch('/api/v1/projects/Acme').set('x-test-device', 'iphone').send({ name: 'Acme 2' })
+    await request(app).post(`${KEYS}/extra`).set('x-test-device', 'iphone').send({})
+    expect(h.calls.map((c) => c.params.phone ?? null)).toEqual(['iphone', null, null, null, null])
+    // The phone's own copy of a header never crosses.
+    for (const c of h.calls) expect(Object.keys(c.params.headers as object).filter((k) => /phone/.test(k))).toEqual([])
+  })
+
+  it('on a stream: the Mac\'s routes read the phone with this process\'s proof; a header the phone sends names nothing', async () => {
+    const mac = await macRoutes()
+    try {
+      const s = streamHarness(() => mac.port)
+      const phone = forwardOver(s, { deviceName: 'iphone' })
+      expect((await request(phone.app).post(KEYS).send({ kind: 'iphone' })).status).toBe(201)
+      expect(mac.seen.at(-1)).toMatchObject({ path: KEYS, phone: 'iphone', auth: null })
+      // Any other call of that phone reaches the Mac with no name and no proof.
+      await request(phone.app).patch('/api/v1/projects/Acme').send({ name: 'Acme 2' })
+      expect(mac.seen.at(-1)).toMatchObject({ path: '/api/v1/projects/Acme', phone: null, phoneHeader: null })
+      const browser = forwardOver(s, { deviceName: 'browser-a1b2c3' })
+      await request(browser.app).post(KEYS).set('x-walnut-companion-phone', 'iphone').set('x-walnut-forwarded-phone', 'iphone')
+        .set('x-walnut-forwarded-phone-proof', 'f'.repeat(64)).send({ kind: 'iphone' })
+      expect(mac.seen.at(-1)).toMatchObject({ path: KEYS, phone: null, phoneHeader: null })
+      s.door.close()
+    } finally {
       await mac.close()
     }
   })

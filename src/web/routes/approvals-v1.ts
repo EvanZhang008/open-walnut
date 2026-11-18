@@ -8,7 +8,7 @@
  *   POST   /api/v1/approvals/:id/cancel      { token, reason? } → { approval } (the asker)
  *   POST   /api/v1/approvals/:id/answer      { decision, keyId?, signature?, device? } → { approval } (a person only)
  *   GET    /api/v1/approvals/keys            → { keys } (public halves only)
- *   POST   /api/v1/approvals/keys            { publicKey, name, kind } → { key, enrollment? } (a person only)
+ *   POST   /api/v1/approvals/keys            { publicKey, name, kind, accountHome? } → { key } (a device app only)
  *   DELETE /api/v1/approvals/keys/:id        → { ok } (a person only)
  *
  * Who is a person here: a request with no session id, no automation mark from the CLI
@@ -318,11 +318,11 @@ approvalsV1Router.get('/approvals', (req: Request, res: Response, next: NextFunc
   if (leaderOnly(res)) return
   void answer(res, next, async () => {
     const { listApprovals } = await import('../../core/approvals/store.js')
-    const { listKeys } = await import('../../core/approvals/keys.js')
+    const { listKeys, keyView } = await import('../../core/approvals/keys.js')
     const status = req.query.status === 'all' ? 'all' : 'pending'
     // Public halves only. A retired row stays, with what replaced it, so a verifier that pinned a key
     // (the Git gate) can follow it; it signs nothing.
-    const keys = (await listKeys()).map(({ id, name, kind, status: s, createdAt, activatedAt, lastUsedAt, publicKey, retiredAt, replacedBy, endorsement }) => ({
+    const keys = (await listKeys()).map(keyView).map(({ id, name, kind, status: s, createdAt, activatedAt, lastUsedAt, publicKey, retiredAt, replacedBy, endorsement }) => ({
       id, name, kind, status: s, createdAt, activatedAt, lastUsedAt, publicKey,
       ...(retiredAt ? { retiredAt } : {}), ...(replacedBy ? { replacedBy } : {}), ...(endorsement ? { endorsement } : {}),
     }))
@@ -336,23 +336,10 @@ approvalsV1Router.get('/approvals', (req: Request, res: Response, next: NextFunc
 approvalsV1Router.get('/approvals/keys', (_req: Request, res: Response, next: NextFunction) => {
   if (leaderOnly(res)) return
   void answer(res, next, async () => {
-    const { listKeys } = await import('../../core/approvals/keys.js')
-    return { keys: (await listKeys()).map(({ enrollApprovalId: _e, ...k }) => k) }
+    const { listKeys, keyView } = await import('../../core/approvals/keys.js')
+    return { keys: (await listKeys()).map(keyView) }
   })
 })
-
-/**
- * A device token the iPhone app holds: a QR pairing that never said it is anything but a phone.
- * Never a browser signed in with a code, the browser extension, or a machine credential, whose
- * tokens a page or an extension holds (2026-11-12 review: a paired browser could otherwise add a
- * signing key with WebCrypto and no Face ID).
- */
-async function isPairedPhoneApp(name: string): Promise<boolean> {
-  const { readDeviceRegistry } = await import('../../core/device-auth.js')
-  const { isBrowserSignInRecord } = await import('../../core/device-store.js')
-  const d = (await readDeviceRegistry()).devices.find((x) => x.name === name)
-  return !!d && d.kind !== 'machine' && !isBrowserSignInRecord(d) && !/^extension-/i.test(d.name) && d.platform !== 'other'
-}
 
 approvalsV1Router.post('/approvals/keys', (req: Request, res: Response, next: NextFunction) => {
   if (leaderOnly(res)) return
@@ -360,22 +347,27 @@ approvalsV1Router.post('/approvals/keys', (req: Request, res: Response, next: Ne
   if (!notInTestRun(res)) return
   void answer(res, next, async () => {
     const body = (req.body ?? {}) as Record<string, unknown>
-    const { activeKeys, enrollKey } = await import('../../core/approvals/keys.js')
+    const { enrollKey, keyView } = await import('../../core/approvals/keys.js')
     const kind = body.kind === 'mac-app' ? 'mac-app' : body.kind === 'iphone' ? 'iphone' : ''
-    // A key signs at once when its device app sends it: the iPhone app with its paired device
-    // token, or the Mac app's own signed process (core/approvals/keys.ts, mac-app-proof.ts).
-    // Anything else adds no first key, and a later one waits for an active key's approval.
+    // A key is added only when its device app sends it, and then signs at once; anything else adds
+    // none and asks nothing (core/approvals/keys.ts). The iPhone app: its paired device token, here,
+    // or checked by the cloud companion, which names that phone (v1-forward/forwarded-device.ts).
+    // The Mac app: its own signed process (mac-app-proof.ts), started in the account's own home
+    // folder: a copy a test started with another HOME has no key of the person's, and says so
+    // (ApprovalBridge.swift sends accountHome only from the account's home; 2026-11-18 such a copy's
+    // fresh key came here and became "Let … sign your approvals" on the person's screen).
+    const { isPairedPhoneApp } = await import('../../core/approvals/phone-app.js')
+    const { forwardedPhoneOf } = await import('../v1-forward/forwarded-device.js')
     const deviceName = (req as Request & { deviceName?: string }).deviceName
-    let fromDeviceApp = kind === 'iphone' && !!deviceName && await isPairedPhoneApp(deviceName)
+    let fromDeviceApp = kind === 'iphone' && (deviceName ? await isPairedPhoneApp(deviceName) : forwardedPhoneOf(req) !== null)
     if (kind === 'mac-app') {
       const { requestFromMacApp } = await import('../../core/approvals/mac-app-proof.js')
       const proof = await requestFromMacApp(connOf(req))
-      fromDeviceApp = proof.ok
-      if (!proof.ok) log.web.info('approval key not from the Mac app', { kind, why: proof.why, anyActive: (await activeKeys()).length > 0 })
+      fromDeviceApp = proof.ok && body.accountHome === true
+      if (!fromDeviceApp) log.web.info('approval key not from the Mac app', { kind, why: proof.ok ? 'the app runs with another home folder' : proof.why })
     }
     const out = await enrollKey({ publicKey: String(body.publicKey ?? ''), name: String(body.name ?? ''), kind: kind as 'iphone', fromDeviceApp })
-    const { enrollApprovalId: _e, ...key } = out.key
-    return { key, ...(out.enrollment ? { enrollment: out.enrollment } : {}) }
+    return { key: keyView(out.key) }
   })
 })
 

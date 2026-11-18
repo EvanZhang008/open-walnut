@@ -7,32 +7,36 @@
  * Who may add one:
  *  - a device app the person set up signs at once, first key or not (`fromDeviceApp`): the iPhone
  *    app over a request that carries its paired device token (a QR pairing, never a browser's or
- *    the extension's sign-in: routes/approvals-v1.ts isPairedPhoneApp), or the Mac app's own signed process
- *    (mac-app-proof.ts), which enrolls its Touch ID key when it starts. So each device's first
+ *    the extension's sign-in: phone-app.ts), directly or carried by the cloud companion, which
+ *    names the paired phone it checked (v1-forward/forwarded-device.ts); or
+ *    the Mac app's own signed process (mac-app-proof.ts) running in the account's own home folder
+ *    (ApprovalBridge.swift), which enrolls its Touch ID key when it starts. So each device's first
  *    approval is one Face ID or Touch ID with nothing to set up and nothing to approve elsewhere
  *    (2026-11-11, the user: "it must just work"; 2026-11-12, of a "Let iPhone sign your approvals"
  *    card on his phone: "我都已经连接了，为什么还要问我？"). Face ID or Touch ID is still asked at
  *    every real approval, by the device itself.
- *  - any other request (no device token, no Mac app proof) adds no first key, and a later one
- *    stays pending until an active key approves it, through a biometric approval Walnut itself
- *    asks ("Let <device> sign your approvals"), so such a key can never vouch for itself.
+ *  - any other request (no device token, no Mac app proof, a copy of the Mac app started in another
+ *    home folder) adds no key and asks the person nothing: it is refused. Walnut asked "Let <device>
+ *    sign your approvals" for those before, and that card reached the person for a test's copy of
+ *    the app (2026-11-18, the user: "I said mac and ios alreayc cna apporve, but why this"); a key
+ *    still pending from then, and its ask, are withdrawn on boot (withdrawPendingEnrollments), and
+ *    a Mac's own key that a key such an ask let in took the place of signs again (restoreMacKeysTakenByAsks).
  * Known limit: a process of this account can make a device token (devices.ts) and so add a key of
- * its own; the first key had that limit before, now every key has it. A key left pending re-enrolls
- * from its app (ApprovalCenter.swift, approvals-store.ts), which activates it. An approval bound to one
+ * its own; the first key had that limit before, now every key has it. An approval bound to one
  * key (`signingKeyId`, the Git gate's pinned Mac key) still takes only that key's signature.
  * Removing a key needs no approval while another active key remains (it only takes trust
  * away). The last active key is never removed through Walnut, since the next key would then
  * be trusted on first use again: a person who lost that phone deletes keys.json by hand.
  */
 
-import os from 'node:os'
 import path from 'node:path'
 import { WALNUT_HOME } from '../../constants.js'
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js'
 import { bus } from '../event-bus.js'
 import { log } from '../../logging/index.js'
 import { keyIdOf, parsePublicKey } from './digest.js'
-import { ApprovalError, cancelInternal, createApproval } from './store.js'
+import { deviceLabel } from './device-name.js'
+import { ApprovalError, cancelInternal } from './store.js'
 import type { ApprovalKey, ApprovalKeysFile, ApprovalView } from './types.js'
 
 export const APPROVAL_KEYS_CHANGED = 'approval-keys:changed'
@@ -54,6 +58,12 @@ export async function activeKey(id: string): Promise<ApprovalKey | undefined> {
   return (await activeKeys()).find((k) => k.id === id)
 }
 
+/** A key as every reader gets it: no ask id, and the name a person reads (device-name.ts). */
+export function keyView(k: ApprovalKey): Omit<ApprovalKey, 'enrollApprovalId'> {
+  const { enrollApprovalId: _e, ...rest } = k
+  return { ...rest, name: deviceLabel(k.name, k.kind) }
+}
+
 function changed(): void {
   bus.emit(APPROVAL_KEYS_CHANGED, {}, ['web-ui'], { source: 'approvals' })
 }
@@ -66,9 +76,15 @@ export interface EnrollInput {
   fromDeviceApp?: boolean
 }
 
-export const FIRST_KEY_MESSAGE = 'A device that signs approvals is the Walnut Mac app (Touch ID) or your iPhone (Face ID), '
-  + 'added by the app itself: open it, and for the iPhone while it reaches this computer directly (the same network or your '
-  + 'tailnet, not through the cloud companion).'
+/** Why a key was not added, in the words its own device shows (the iPhone shows it on its approval sheet). */
+export const REFUSED_KEY_MESSAGE: Record<EnrollInput['kind'], string> = {
+  'mac-app': 'Walnut adds this Mac as a device that signs approvals only from the Walnut Mac app itself, running in your '
+    + 'own account. This request could not be shown to be that (a script, a browser, a copy of the app started with another '
+    + 'home folder, or an app built before this check: update the Walnut Mac app), so nothing was added and nothing is asked.',
+  iphone: 'Walnut adds an iPhone as a device that signs approvals only from your paired iPhone app. This request could not '
+    + 'be shown to be that (a browser\'s sign-in, or a cloud companion not updated yet: open the app once on the same network '
+    + 'as your computer), so nothing was added and nothing is asked.',
+}
 
 // One enrollment at a time: a key and its enrollment approval are written in two steps, and two
 // concurrent calls for one new key (the app's launch and foreground refreshes) must make one ask.
@@ -76,8 +92,6 @@ let enrollChain: Promise<unknown> = Promise.resolve()
 
 export interface EnrollResult {
   key: ApprovalKey
-  /** Present while the key waits for an active key to approve it. */
-  enrollment?: ApprovalView
 }
 
 export function enrollKey(input: EnrollInput): Promise<EnrollResult> {
@@ -92,7 +106,6 @@ async function enrollOne(input: EnrollInput): Promise<EnrollResult> {
   const name = (input.name || '').replace(/\s+/g, ' ').trim().slice(0, 80) || (input.kind === 'iphone' ? 'iPhone' : 'Mac')
   const id = keyIdOf(input.publicKey)
   let key: ApprovalKey | undefined
-  let needsEnrollment = false
   let activated = false
   let withdraw: string | undefined
   let retired: ApprovalKey[] = []
@@ -107,22 +120,20 @@ async function enrollOne(input: EnrollInput): Promise<EnrollResult> {
       key = existing; activated = true; return file
     }
     if (existing) {
-      // A key left pending (asked before this rule, or from a request without proof) signs at
-      // once when its device app asks again; its enrollment ask is withdrawn below.
+      // A key an older Walnut left pending signs at once when its device app asks again; its
+      // enrollment ask is withdrawn below. From anything else it stays as it is and is refused.
       if (existing.status === 'pending' && input.fromDeviceApp && existing.kind === input.kind) {
         withdraw = existing.enrollApprovalId
         existing.status = 'active'; existing.activatedAt = now; delete existing.enrollApprovalId
         activated = true
       }
-      key = existing; needsEnrollment = existing.status === 'pending' && !existing.enrollApprovalId; return file
+      key = existing; return file
     }
-    const anyActive = file.keys.some((k) => k.status === 'active')
-    if (!anyActive && !input.fromDeviceApp) return file
-    const trusted = !!input.fromDeviceApp || !anyActive
-    key = { id, name, kind: input.kind, publicKey: input.publicKey, createdAt: now, status: trusted ? 'active' : 'pending', ...(trusted ? { activatedAt: now } : {}) }
+    // Only a device app the person set up adds a key (see the header): anything else adds none.
+    if (!input.fromDeviceApp) return file
+    key = { id, name, kind: input.kind, publicKey: input.publicKey, createdAt: now, status: 'active', activatedAt: now }
     file.keys.push(key)
-    needsEnrollment = !trusted
-    activated = trusted
+    activated = true
     return file
   })
   // The Mac app keeps its key while the one on disk still needs Touch ID, and makes a new one only
@@ -141,37 +152,83 @@ async function enrollOne(input: EnrollInput): Promise<EnrollResult> {
     })
     await afterRetire(retired, keep)
   }
-  if (!key) throw new ApprovalError(403, 'first_key_from_phone', FIRST_KEY_MESSAGE)
-  if (key.status === 'retired') throw new ApprovalError(409, 'key_retired', 'This key was replaced by a newer one from the same Mac; only that Mac\'s own app can bring it back.')
+  if (key?.status === 'retired') throw new ApprovalError(409, 'key_retired', 'This key was replaced by a newer one from the same Mac; only that Mac\'s own app can bring it back.')
   if (withdraw) await cancelInternal(withdraw, 'the device signs now: it was set up from its own app').catch(() => undefined)
-  if (key.status === 'active') {
-    if (activated) changed()
-    log.web.info('approval key active', { keyId: id, kind: key.kind, name: key.name })
-    return { key }
+  // Never an ask: a key that does not sign now (none added, or one an older Walnut left pending) is refused.
+  if (!key || key.status !== 'active') {
+    log.web.info('approval key refused: not from a device app', { keyId: id, kind: input.kind, ...(key ? { status: key.status } : {}) })
+    throw new ApprovalError(403, 'first_key_from_phone', REFUSED_KEY_MESSAGE[input.kind])
   }
-  // Pending: an existing pending key keeps its open enrollment approval.
-  if (!needsEnrollment && key.enrollApprovalId) {
-    const { getApproval, viewOf } = await import('./store.js')
-    const open = await getApproval(key.enrollApprovalId)
-    if (open && open.status === 'pending') return { key, enrollment: viewOf(open) }
-  }
-  const { approval } = await createApproval({
-    what: `Let "${key.name}" (${key.kind === 'iphone' ? 'iPhone' : 'Mac app'}) sign your approvals`,
-    detail: `A new device asked to sign Walnut approvals with Face ID or Touch ID.\nKey ${key.id}.\nApprove only if you just set this device up yourself.`,
-    detailRole: 'summary',
-    mode: 'biometric', outsideSwitch: true,
-    timeoutMs: 24 * 60 * 60_000,
-    requester: { host: os.hostname() || 'this computer' },
-    enrollsKey: key.id,
-  })
+  if (activated) changed()
+  log.web.info('approval key active', { keyId: id, kind: key.kind, name: key.name })
+  return { key }
+}
+
+/**
+ * On boot: every key an older Walnut left pending goes, and every "Let … sign your approvals" ask
+ * still open is withdrawn. Walnut no longer asks that (see the header), so no such card stays on the
+ * person's screen; the device's own app adds its key at once the next time it opens. Returns how
+ * many asks it withdrew.
+ */
+export async function withdrawPendingEnrollments(): Promise<number> {
+  let dropped: ApprovalKey[] = []
   await updateJsonFile<ApprovalKeysFile>(keysFile(), EMPTY, (file) => {
-    const k = file.keys.find((x) => x.id === id)
-    if (k) k.enrollApprovalId = approval.id
+    dropped = file.keys.filter((k) => k.status === 'pending')
+    if (dropped.length) file.keys = file.keys.filter((k) => k.status !== 'pending')
     return file
   })
-  changed()
-  log.web.info('approval key pending', { keyId: id, kind: key.kind, enrollApprovalId: approval.id })
-  return { key: { ...key, enrollApprovalId: approval.id }, enrollment: approval }
+  const { listApprovals } = await import('./store.js')
+  const open = (await listApprovals({ status: 'pending' })).filter((a) => a.enrollsKey)
+  for (const a of open) {
+    await cancelInternal(a.id, 'Walnut no longer asks to let a device sign: your own devices sign at once').catch(() => undefined)
+  }
+  if (dropped.length || open.length) {
+    changed()
+    log.web.info('approvals: withdrew the asks to let a device sign', {
+      asks: open.map((a) => a.id), keys: dropped.map((k) => ({ id: k.id, kind: k.kind })),
+    })
+  }
+  return open.length
+}
+
+/**
+ * On boot, after retireReplacedMacKeys: undo what the old "Let … sign your approvals" ask let happen
+ * (2026-11-18). A test's copy of the Mac app, started in another home folder, made a key of its own
+ * and sent it; the person approved the card with the Mac's own Touch ID, and that key, newer than
+ * the Mac app's own, then retired it (retireReplacedMacKeys), so the person's Mac signed no more.
+ * A Mac key that still signed after the newer key appeared is the one the Mac app holds, and the
+ * newer one, let in only by an ask and never signing since, is another program's: it is retired in
+ * turn, replaced by the Mac's own key, which signs again (a verifier that followed the first key to
+ * the newer one is led back; the row stays, so a second Mac of the same name can bring its key back
+ * from its own app). Only keys an approved enrollment ask let in are ever retired here, and Walnut
+ * makes no such ask now (enrollKey), so this repairs data an older Walnut wrote and nothing else.
+ * Returns how many keys it gave back.
+ */
+export async function restoreMacKeysTakenByAsks(): Promise<number> {
+  const { listApprovals } = await import('./store.js')
+  const askedIn = new Set((await listApprovals({ status: 'all', limit: 1_000 }))
+    .filter((a) => a.enrollsKey && a.status === 'approved').map((a) => a.enrollsKey!))
+  if (!askedIn.size) return 0
+  const at = (s?: string) => Date.parse(s ?? '') || 0
+  const restored: Array<{ id: string; retired: string }> = []
+  await updateJsonFile<ApprovalKeysFile>(keysFile(), EMPTY, (file) => {
+    for (const k of [...file.keys]) {
+      if (k.kind !== 'mac-app' || k.status !== 'retired' || !k.replacedBy || askedIn.has(k.id)) continue
+      const n = file.keys.find((x) => x.id === k.replacedBy)
+      if (!n || n.kind !== 'mac-app' || n.name !== k.name || n.status !== 'active' || !askedIn.has(n.id)) continue
+      // The Mac kept signing with its own key after the newer one came, and the newer one never signed since.
+      if (at(k.lastUsedAt) <= at(n.createdAt) || at(n.lastUsedAt) > at(k.lastUsedAt)) continue
+      k.status = 'active'; k.activatedAt = new Date().toISOString(); delete k.retiredAt; delete k.replacedBy
+      retire(file, [n], k)
+      restored.push({ id: k.id, retired: n.id })
+    }
+    return file
+  })
+  if (restored.length) {
+    changed()
+    log.web.info('approval keys: the Mac\'s own key signs again; a key an ask let in had taken its place', { restored })
+  }
+  return restored.length
 }
 
 /** Called when an approval is decided: an approved enrollment activates its key, an approved removal removes one. */
@@ -229,7 +286,7 @@ export async function removeKey(id: string): Promise<void> {
 /**
  * On boot: the same rule for keys an older Walnut kept. Per Mac (name), the key it enrolled last
  * that is active stays; its earlier keys, active or pending, go with their asks. A pending key
- * newer than that one stays (a request with no app proof, still the person's to approve).
+ * newer than that one is left to withdrawPendingEnrollments, which runs next.
  */
 export async function retireReplacedMacKeys(): Promise<number> {
   let retired: ApprovalKey[] = []

@@ -25,7 +25,7 @@ SOURCES=(
     "$SCRIPT_DIR/WebContentPolicy.swift" "$SCRIPT_DIR/WebContentWatchdog.swift" "$SCRIPT_DIR/WebContentProcess.swift" "$SCRIPT_DIR/QuietKeyWindow.swift" "$SCRIPT_DIR/LinkPolicy.swift" \
     "$SCRIPT_DIR/SessionHost.swift" "$SCRIPT_DIR/CalendarBridge.swift" "$SCRIPT_DIR/ReaderBridge.swift" "$SCRIPT_DIR/ClaudeSignInBridge.swift" \
     "$SCRIPT_DIR/BundledRuntime.swift" "$SCRIPT_DIR/AppBuiltCheckout.swift" "$SCRIPT_DIR/AppUpdateMachine.swift" "$SCRIPT_DIR/AppUpdater.swift" \
-    "$SCRIPT_DIR/AppUpdateBridge.swift" "$SCRIPT_DIR/ApprovalBridge.swift" "$SCRIPT_DIR/NotificationBridge.swift" "$SCRIPT_DIR/DesktopUpdateBridge.swift" "$SCRIPT_DIR/AppLink.swift" "$SCRIPT_DIR/CommandLineTool.swift" \
+    "$SCRIPT_DIR/AppUpdateBridge.swift" "$SCRIPT_DIR/ApprovalBridge.swift" "$SCRIPT_DIR/ApprovalHome.swift" "$SCRIPT_DIR/NotificationBridge.swift" "$SCRIPT_DIR/DesktopUpdateBridge.swift" "$SCRIPT_DIR/AppLink.swift" "$SCRIPT_DIR/CommandLineTool.swift" \
     "$SCRIPT_DIR/../src/data/walnut-calendar.swift" "$SCRIPT_DIR/../src/data/walnut-reader.swift" "$SCRIPT_DIR/WalnutIntents.swift"
 )
 source "$SCRIPT_DIR/app-intents.sh"
@@ -198,8 +198,17 @@ fi
 
 # Embedding before the final signature keeps Demo available when only Walnut.app is installed.
 WALNUT_SIGN_IDENTITY="${SIGNED_WITH:--}" bash "$SCRIPT_DIR/build-demo.sh" "$APP_BUNDLE" "$CONTENTS/Helpers/Walnut Demo.app" --uses-parent-release
+# The final signature keeps the hardened runtime and the entitlements of the first one: a plain
+# `--sign` drops both (2026-11-18: since 11-08 every app this script built ran without the hardened
+# runtime, so Walnut could not tell the Mac app from a script: tests/scripts/desktop-app-signing.test.ts).
 if [ -n "$SIGNED_WITH" ]; then
-    codesign --force --sign "$SIGNED_WITH" "$APP_BUNDLE"
+    codesign --force --options runtime --entitlements "$SCRIPT_DIR/Walnut.entitlements" --sign "$SIGNED_WITH" "$APP_BUNDLE"
+    # Read whole first: `grep -q` stops at its match, and codesign cut off mid-write fails the pipe.
+    SIGNATURE="$(codesign -dvvv "$APP_BUNDLE" 2>&1 || true)"
+    if ! printf '%s\n' "$SIGNATURE" | grep -E '^CodeDirectory .*flags=0x[0-9a-f]+\([^)]*runtime' >/dev/null; then
+        echo "The signed app does not run under the hardened runtime: Walnut would not take its approval key." >&2
+        exit 1
+    fi
 else
     codesign --force --sign - "$APP_BUNDLE"
 fi

@@ -155,8 +155,7 @@ export function approveKind(s: ApprovalsState, a: Approval): 'tap' | 'touch-id' 
   if (a.mode !== 'biometric') return 'tap';
   // Bound to one device's key (or a set): only those devices approve it, never another signer.
   if (boundElsewhere(s, a)) return null;
-  const ownEnrollment = !!a.enrollsKey && a.enrollsKey === s.touchId?.keyId;
-  return canSignHere(s) && !ownEnrollment ? 'touch-id' : null;
+  return canSignHere(s) ? 'touch-id' : null;
 }
 
 /** Why a biometric approval has no Approve here, in the words the person reads. */
@@ -166,11 +165,7 @@ export function noApproveReason(s: ApprovalsState, a: Approval): string {
   if (a.guard === 'vault' || a.guard === 'person') return howToApprove(kinds, { unlock: true });
   if (a.guard === 'vault-sensitive' && a.mode !== 'biometric') return 'Unlock Passwords in this window to approve.';
   if (boundElsewhere(s, a)) return onlyDevice(s.keys.find((k) => boundTo(a).includes(k.id)));
-  if (a.enrollsKey && a.enrollsKey === s.touchId?.keyId) {
-    return 'This is the request to let this Mac sign approvals: approve it on a device that already signs (your iPhone, with Face ID).';
-  }
   if (s.touchId && !s.touchId.available && s.touchId.reason) return `${s.touchId.reason} Approve it on your iPhone with Face ID.`;
-  if (myKeyOf(s)?.status === 'pending') return 'This Mac is waiting to be allowed to sign approvals. Approve it on your iPhone with Face ID.';
   return kinds.length ? howToApprove(kinds, { unlock: false }) : 'Approve it on your iPhone with Face ID (or in the Walnut Mac app with Touch ID).';
 }
 
@@ -259,19 +254,25 @@ export function applyApprovalEvent(a: Approval): void {
 let enrolling = false;
 let lastEnrollTry = 0;
 const ENROLL_RETRY_MS = 60_000;
-/** The server said this app cannot be the first device: retried only when the page loads again. */
+/** The server did not take this app's key (core/approvals/keys.ts): retried only when the page loads again. */
 let enrollRefused = false;
-/** The Mac app: learn whether Touch ID signs here, and enroll its key once. */
+/**
+ * The Mac app: learn whether Touch ID signs here, and enroll its key once. Never in a test window
+ * (automation, a test-run label): a test's copy of the app is not the person's Mac, and its key once
+ * reached the person's screen as "Let … sign your approvals" (2026-11-18). The app itself refuses a
+ * copy started with another home folder too (desktop/ApprovalHome.swift); this keeps a test window
+ * off the bridge altogether, so it neither makes a key nor signs.
+ */
 export async function startTouchId(): Promise<void> {
-  if (!hasTouchIdBridge()) return;
+  if (!hasTouchIdBridge() || testRunLabel()) return;
   lastEnrollTry = Date.now();
   const touchId = await touchIdStatus();
   set({ touchId });
   if (!touchId.available || !touchId.publicKey || enrolling) return;
   await refreshApprovals();
-  // Known and signing already: nothing to do. Otherwise the app sends a new key from its own
-  // process, which signs now, and the server retires this Mac's earlier keys with their
-  // "Let … sign" asks (core/approvals/keys.ts).
+  // Known and signing already: nothing to do. Otherwise the app sends its key from its own
+  // process, which signs now, and the server retires this Mac's earlier keys (core/approvals/keys.ts);
+  // a key the server does not take is refused, and nothing is asked of the person.
   const known = state.keys.find((k) => k.id === touchId.keyId);
   if (known?.status === 'active') return;
   enrolling = true;

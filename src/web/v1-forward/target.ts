@@ -18,6 +18,7 @@
 
 import { getSelfApiRoot } from '../../lib/self-api-root.js'
 import { ORIGIN_HEADER, REMOTE_HTTP_ORIGIN, lowerOrigin } from '../../lib/caller-origin.js'
+import { forwardedPhoneHeaders } from './forwarded-device.js'
 import {
   FORWARD_METHODS, FORWARD_TARGET_TIMEOUT_MS, MAX_FORWARD_REQUEST_BYTES, MAX_FORWARD_RESPONSE_BYTES,
   companionAnswers, forwardRequestHeaders, forwardResponseHeaders, noteForwardedTaskWrite, parseConsoleCopyCall, parseConsoleTaskWrite, parseForwardUrl, phoneCopyReadOf,
@@ -152,7 +153,7 @@ export async function runForwardedCall(params: Record<string, unknown>, relayOri
   const root = getSelfApiRoot()
   if (!root) throw refuse('This server is not listening yet', 503)
 
-  const headers = { ...forwardRequestHeaders(params.headers), [ORIGIN_HEADER]: lowerOrigin(REMOTE_HTTP_ORIGIN, relayOrigin) }
+  const headers = { ...forwardRequestHeaders(params.headers), ...forwardedPhoneHeaders(params.phone, method, url.path), [ORIGIN_HEADER]: lowerOrigin(REMOTE_HTTP_ORIGIN, relayOrigin) }
   const timeoutMs = typeof params.timeoutMs === 'number' && params.timeoutMs > 0
     ? Math.min(params.timeoutMs, FORWARD_TARGET_TIMEOUT_MS) : FORWARD_TARGET_TIMEOUT_MS
   let response: Response

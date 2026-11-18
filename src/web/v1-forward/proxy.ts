@@ -32,6 +32,7 @@ import type { RelayFailure } from '../routes/v1-control-relay.js'
 import { MAX_FORWARD_REQUEST_BYTES, companionAnswers, forwardRequestHeaders, isTaskCopyWrite, parseConsoleCopyCall, parseConsoleTaskWrite, parseForwardUrl, phoneCopyReadOf } from './policy.js'
 import { refuseWhenDiskFull } from '../middleware/disk-guard.js'
 import { forwardOnStream } from './stream-forward.js'
+import { companionPhoneOf } from './forwarded-device.js'
 
 /** What the companion knows of the Mac right now. */
 export interface PrimarySnapshot {
@@ -233,18 +234,22 @@ export function createV1Forward(deps: ForwardDeps) {
     if (isRead && inflightReads >= MAX_INFLIGHT_READS) return answerHere('busy', req, res, next)
 
     const timeoutMs = isRead ? FORWARD_READ_TIMEOUT_MS : FORWARD_WRITE_TIMEOUT_MS
-    if (onStream && deps.stream) return viaStream(req, res, next, method, body, isRead, timeoutMs, deps.stream.open)
-    return viaCall(req, res, next, method, body, isRead, timeoutMs)
+    // The paired iPhone app the call came from, checked here where its token is (forwarded-device.ts).
+    const phone = await companionPhoneOf(req)
+    if (onStream && deps.stream) return viaStream(req, res, next, method, body, isRead, timeoutMs, deps.stream.open, phone)
+    return viaCall(req, res, next, method, body, isRead, timeoutMs, phone)
   }
 
   /** The call as one server.http frame over the bridge (the forward before bridge-stream-v1). */
   async function viaCall(
     req: Request, res: Response, next: NextFunction, method: string, body: Buffer | null, isRead: boolean, timeoutMs: number,
+    phone?: string,
   ): Promise<void> {
     const params: Record<string, unknown> = {
       method,
       url: req.originalUrl,
       headers: forwardRequestHeaders(req.headers),
+      ...(phone ? { phone } : {}),
       // The Mac gives up a little before this side does, so its answer arrives.
       timeoutMs: timeoutMs - 2_000,
       ...(body ? { data: body.toString('base64'), size: body.byteLength } : {}),
@@ -320,12 +325,12 @@ export function createV1Forward(deps: ForwardDeps) {
   /** The same ladder as the server.http answer below, for a call carried on a stream. */
   async function viaStream(
     req: Request, res: Response, next: NextFunction, method: string, body: Buffer | null,
-    isRead: boolean, timeoutMs: number, open: () => Promise<Duplex>,
+    isRead: boolean, timeoutMs: number, open: () => Promise<Duplex>, phone?: string,
   ): Promise<void> {
     if (isRead) inflightReads++
     let o: Awaited<ReturnType<typeof forwardOnStream>>
     try {
-      o = await forwardOnStream({ req, res, method, body, timeoutMs, open })
+      o = await forwardOnStream({ req, res, method, body, timeoutMs, open, phone })
     } finally {
       if (isRead) inflightReads--
     }
@@ -350,7 +355,7 @@ export function createV1Forward(deps: ForwardDeps) {
         status.streamRefused++
         log.web.info('v1 forward: no stream to the Mac, the call goes as one frame', { method, path: req.path, message: o.message })
         if (body && body.byteLength > MAX_FORWARD_REQUEST_BYTES) return answerHere('body-size', req, res, next)
-        return viaCall(req, res, next, method, body, isRead, timeoutMs)
+        return viaCall(req, res, next, method, body, isRead, timeoutMs, phone)
       }
       suspectAt = deps.now()
       log.web.info('v1 forward: the Mac did not take a stream in time', { method, path: req.path, message: o.message })
