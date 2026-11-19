@@ -193,6 +193,10 @@ describe('PUT /api/config', () => {
       { enabled: true, destination: dest, other_destinations: [{ type: 's3', bucket: 'theirs', region: 'us-east-1' }] },
       // Less history kept deletes backups at the next prune.
       { enabled: true, destination: dest, retention: { daily: 1, weekly: 0 } },
+      // Encrypted or readable in the cloud is the person's choice, either way (unset reads as off here).
+      { enabled: true, destination: dest, encrypt: true },
+      // Marking the key saved turns encryption on for a setup with the switch unset.
+      { enabled: true, destination: dest, recovery_key_saved_at: '2026-11-19T00:00:00Z' },
     ]) {
       const r = await request(app).put('/api/config').set(agent).send({ backup });
       expect(r.status, JSON.stringify(backup)).toBe(403);
@@ -201,8 +205,31 @@ describe('PUT /api/config', () => {
     expect((await request(app).put('/api/config').set(agent).send({ backup: { enabled: false, interval_hours: 12, destination: dest } })).status).toBe(200);
     const saved = yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as { backup: { enabled: boolean; interval_hours: number; destination: { bucket: string } } };
     expect(saved.backup).toMatchObject({ enabled: false, interval_hours: 12, destination: { bucket: 'mine' } });
+    // A session's write that leaves the kind as it is still saves (the switch spelled out, same value).
+    expect((await request(app).put('/api/config').set(agent).send({ backup: { enabled: false, interval_hours: 12, destination: dest, encrypt: false } })).status).toBe(200)
     // The person moves it.
     expect((await request(app).put('/api/config').send({ backup: { enabled: true, destination: { ...dest, bucket: 'new' } } })).status).toBe(200);
+  });
+
+  it('a session never turns encryption off: not by the switch, not by dropping the saved-key mark', async () => {
+    const app = createApp();
+    const dest = { type: 'r2', bucket: 'mine', account_id: 'acct', access_key_id: 'k', secret_access_key: 's' };
+    const agent = { 'x-walnut-caller-sid': 'session-under-test' };
+    for (const start of [
+      { enabled: true, destination: dest, encrypt: true },
+      { enabled: true, destination: dest, recovery_key_saved_at: '2026-11-01T00:00:00Z' },
+    ]) {
+      await fs.writeFile(CONFIG_FILE, yaml.dump({ version: 1, backup: start }), 'utf-8');
+      for (const backup of [
+        { ...start, encrypt: false },
+        { enabled: true, destination: dest, recovery_key_saved_at: null, encrypt: null },
+      ]) {
+        const r = await request(app).put('/api/config').set(agent).send({ backup });
+        expect(r.status, `${JSON.stringify(start)} -> ${JSON.stringify(backup)}`).toBe(403);
+      }
+      const onDisk = yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as { backup: Record<string, unknown> };
+      expect(onDisk.backup).toMatchObject(start);
+    }
   });
 
   it('a real host already saved as companion keeps saving', async () => {

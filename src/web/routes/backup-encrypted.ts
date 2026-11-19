@@ -19,6 +19,7 @@ import { cancelSwitch, requestSwitch } from '../../core/backup/restore-switch.js
 import { WALNUT_HOME } from '../../constants.js';
 import { getConfig } from '../../core/config-manager.js';
 import { DEFAULT_DRIVE_FOLDER, engineOf } from '../../core/backup/destination.js';
+import { backupEncrypted } from '../../core/backup/repo-mode.js';
 import {
   adoptEncryptedBackups, checkRecoveryKey, listEncryptedBackups, restoreEncryptedBackup, testDestination,
 } from '../../core/backup/encrypted-backup.js';
@@ -104,11 +105,15 @@ function setRestore(status: RestoreStatus | undefined): void {
 // POST /api/backup/destination/test — write, read back and delete a probe; say whether backups are there.
 encryptedBackupRouter.post('/destination/test', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { dest, custom, error } = await requestDestination(req.body);
+    const { dest, cfg, custom, error } = await requestDestination(req.body);
     if (error) return void res.status(400).json({ ok: false, error });
     if (!dest) return void res.status(400).json({ ok: false, error: 'Choose where backups go first.' });
     if (custom && !personOnly(req, res, 'A new backup destination is tried')) return;
-    const result = await testDestination(dest, { dataDir: WALNUT_HOME });
+    // The kind the pane is about to use (its switch may not be saved yet), else the one set;
+    // unset (and no key step finished), what the destination already holds decides.
+    const encrypted = typeof req.body?.encrypt === 'boolean' ? req.body.encrypt
+      : typeof cfg.encrypt === 'boolean' || cfg.recovery_key_saved_at ? backupEncrypted(cfg) : undefined;
+    const result = await testDestination(dest, { dataDir: WALNUT_HOME, encrypted });
     log.web.info('backup: destination test', { ok: result.ok, type: dest.type, hasBackups: result.hasBackups });
     res.json(result);
   } catch (err) {
@@ -355,7 +360,7 @@ encryptedBackupRouter.post('/recovery-key/ensure', async (req: Request, res: Res
     const { dest, error } = await requestDestination(req.body);
     if (error) return void res.status(400).json({ error });
     if (dest) {
-      const probe = await testDestination(dest, { dataDir: WALNUT_HOME });
+      const probe = await testDestination(dest, { dataDir: WALNUT_HOME, encrypted: true });
       if (!probe.ok) return void res.status(502).json({ error: probe.error });
       // Backups are already there: they need the key that made them, not a new one.
       if (probe.hasBackups) return void res.json({ key: null, needsKey: true });

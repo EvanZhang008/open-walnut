@@ -145,14 +145,16 @@ export function registerCommands(program: Command): void {
 
   const backup = program
     .command('backup')
-    .description('Backups of the data directory (encrypted to S3, Cloudflare R2 or Google Drive; or the older S3 copy)');
+    .description('Backups of the data directory (to S3, Cloudflare R2 or Google Drive, encrypted if chosen; or the older S3 copy)');
   const backupCredFlags = (c: Command): Command => c
     .option('--bucket <bucket>', 'S3 bucket (overrides config backup.bucket)')
     .option('--region <region>', 'AWS region')
     .option('--prefix <prefix>', 'Key prefix (default: walnut)')
     .option('--profile <profile>', 'AWS profile (bare-machine restores)')
     .option('--key <recoveryKey>', 'Recovery key of encrypted backups (default: this machine\'s saved key)')
-    .option('--type <r2|s3|gdrive>', 'Encrypted backups at this kind of place, from these flags instead of config.yaml')
+    .option('--type <r2|s3|gdrive>', 'Backups at this kind of place, from these flags instead of config.yaml')
+    .option('--encrypt', 'Encrypt under a recovery key (default: as set in Settings; unset, encrypted only where encrypted backups already are)')
+    .option('--no-encrypt', 'Store unencrypted, with no key (the backups already made of the other kind stay)')
     .option('--account-id <id>', 'Cloudflare account id (with --type r2)')
     .option('--endpoint <url>', 'S3-compatible endpoint (with --type r2 or s3)')
     .option('--access-key-id <id>', 'Access key id (with --type r2, or s3 with --endpoint)')

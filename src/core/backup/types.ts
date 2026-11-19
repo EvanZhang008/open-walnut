@@ -37,6 +37,11 @@ export interface BackupConfig {
   retention?: { daily?: number; weekly?: number };
   /** When the user confirmed they saved the recovery key (Settings stops asking). */
   recovery_key_saved_at?: string;
+  /**
+   * Encrypt backups under a recovery key (Settings, "Encrypt backups"). Unset: on only for
+   * a setup that finished the key step (recovery_key_saved_at); off otherwise. repo-mode.ts.
+   */
+  encrypt?: boolean;
 }
 
 export type BackupDestinationType = 's3' | 'r2' | 'gdrive';

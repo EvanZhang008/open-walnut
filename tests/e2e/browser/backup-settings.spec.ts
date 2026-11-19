@@ -66,11 +66,17 @@ async function openBackup(page: Page) {
   return section
 }
 
-/** The tab looked at is a kept view, mirrored to ui-prefs: its writes are answered in the page. */
+/**
+ * The tab looked at is a kept view, mirrored to ui-prefs on the shared fixture server. Both ways
+ * are answered in the page: reads with no prefs (each test starts on the service in use, whatever
+ * an earlier test's page sent as it closed: a keepalive write on unload can slip past the routes),
+ * writes with ok.
+ */
 async function holdPrefsWrites(page: Page): Promise<void> {
-  await page.route('**/api/ui-prefs**', (route) => route.request().method() === 'GET'
-    ? route.continue()
-    : route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) }))
+  await page.route('**/api/ui-prefs**', (route) => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify(route.request().method() === 'GET' ? { prefs: {} } : { ok: true }),
+  }))
 }
 
 /** The end of a test: its answers go, the ui-prefs hold stays (the page still writes as it closes). */
@@ -85,8 +91,123 @@ test.describe('Backup settings', () => {
   // file's prefs writes are answered in the page and each test starts on the service in use.
   test.beforeEach(async ({ page }) => { await holdPrefsWrites(page) })
 
-  test('a new setup: R2 fields, test, recovery key, restore', async ({ page }) => {
+  test('a new setup, encryption off (the default): test and save starts backups, no recovery key; the switch turns the key steps on and off', async ({ page }) => {
     const config = await holdConfigWrites(page, {})
+    await answer(page, '**/api/backup/status', { configured: false, running: false, consecutiveFailures: 0, primary: true })
+    let testBody: Record<string, unknown> | null = null
+    await page.route('**/api/backup/destination/test', (route) => {
+      testBody = route.request().postDataJSON() as Record<string, unknown>
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, destination: 'r2://walnut-backup/walnut-backup', canWrite: true, hasBackups: false }) })
+    })
+    let keyAsked = 0
+    await page.route('**/api/backup/recovery-key**', (route) => {
+      keyAsked++
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ key: KEY, created: true }) })
+    })
+    const section = await openBackup(page)
+    const encryptRow = section.getByTestId('backup-encrypt-row')
+    await expect(encryptRow).toContainText('Off: stored as they are, with no key to keep')
+    await expect(section.locator('#backup-encrypt')).not.toBeChecked()
+    await expect(section.getByTestId('backup-backups-group')).toContainText('Not encrypted: credentials (auth.json) included')
+    await section.locator('#backup-r2-account').fill('0123456789abcdef0123456789abcdef')
+    await section.locator('#backup-r2-bucket').fill('walnut-backup')
+    await section.locator('#backup-r2-access-key').fill('AKEXAMPLE')
+    await section.locator('#backup-r2-secret').fill('secret-example')
+    await section.getByTestId('backup-test-connection').click()
+    await expect(section.getByTestId('backup-connection-row')).toContainText('saved: backups go here now')
+    expect(testBody).not.toHaveProperty('encrypt')
+    // Saved and switched on in one step: nothing waits for a key.
+    await expect.poll(() => config.last()?.backup as Record<string, unknown> | undefined).toMatchObject({ enabled: true, destination: { type: 'r2' } })
+    await expect(section.locator('#backup-enabled')).toBeChecked()
+    await expect(section.getByTestId('backup-enabled-row')).not.toContainText('Paused')
+    await expect(section.getByTestId('backup-key-row')).toHaveCount(0)
+    await expect(section.getByTestId('backup-run-now')).toBeEnabled()
+    expect(keyAsked).toBe(0)
+
+    // On: the key steps come back, and backups wait for them.
+    await section.locator('#backup-encrypt').click()
+    await expect.poll(() => (config.last()?.backup as Record<string, unknown> | undefined)?.encrypt).toBe(true)
+    await expect(encryptRow).toContainText('On: encrypted on this computer first')
+    await expect(section.getByTestId('backup-key-row')).toBeVisible({ timeout: 10000 })
+    await expect(section.getByTestId('backup-enabled-row')).toContainText('recovery key')
+    // Off again: gone at once, saved, and backups run again with no key.
+    await section.locator('#backup-encrypt').click()
+    await expect.poll(() => (config.last()?.backup as Record<string, unknown> | undefined)?.encrypt).toBe(false)
+    await expect(section.getByTestId('backup-key-row')).toHaveCount(0)
+    await expect(section.getByTestId('backup-enabled-row')).not.toContainText('Paused')
+    expect((config.last()?.backup as Record<string, unknown>).destination).toMatchObject({ type: 'r2', bucket: 'walnut-backup' })
+    await releaseRoutes(page)
+  })
+
+  test('a new computer on a folder of encrypted backups stays encrypted and asks for the key; locked ones are said in Restore', async ({ page }) => {
+    const config = await holdConfigWrites(page, {})
+    await answer(page, '**/api/backup/status', { configured: false, running: false, consecutiveFailures: 0, primary: true })
+    let testBody: Record<string, unknown> | null = null
+    await page.route('**/api/backup/destination/test', (route) => {
+      testBody = route.request().postDataJSON() as Record<string, unknown>
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, destination: 'r2://old/walnut-backup', canWrite: true, hasBackups: true, keyMatches: false, hasKey: false, encrypted: true }) })
+    })
+    await answer(page, '**/api/backup/recovery-key', { key: null, savedAt: null })
+    await answer(page, '**/api/backup/recovery-key/ensure', { key: null, needsKey: true })
+    await answer(page, '**/api/backup/snapshots', { engine: 'encrypted', encrypted: true, snapshots: [], lockedEncrypted: true })
+    const section = await openBackup(page)
+    await section.locator('#backup-r2-account').fill('0123456789abcdef0123456789abcdef')
+    await section.locator('#backup-r2-bucket').fill('old')
+    await section.locator('#backup-r2-access-key').fill('AKEXAMPLE')
+    await section.locator('#backup-r2-secret').fill('secret-example')
+    await section.getByTestId('backup-test-connection').click()
+    // The switch was never set: the pane asked without one, and the folder's own kind is kept.
+    expect(testBody).not.toHaveProperty('encrypt')
+    await expect.poll(() => config.last()?.backup as Record<string, unknown> | undefined).toMatchObject({ encrypt: true, destination: { type: 'r2', bucket: 'old' } })
+    expect((config.last()?.backup as Record<string, unknown>).enabled).toBeFalsy()
+    await expect(section.locator('#backup-encrypt')).toBeChecked()
+    // Backups are there and this computer has no key: it asks for the one saved, never makes a new one.
+    await expect(section.getByTestId('backup-recovery-group')).toBeVisible({ timeout: 10000 })
+    await expect(section.getByTestId('backup-key-needed')).toBeVisible()
+    await releaseRoutes(page)
+  })
+
+  test('Google Drive connected with its key never saved (the 2026-11-19 setup): it backs up with no key step, and both kinds restore', async ({ page }) => {
+    await holdConfigWrites(page, { enabled: true, interval_hours: 24, destination: { type: 'gdrive' } })
+    await answer(page, '**/api/backup/status', { configured: true, running: false, consecutiveFailures: 0, primary: true, engine: 'encrypted', dueNow: true })
+    await answer(page, '**/api/backup/gdrive/status', { builtinClient: true, client: 'builtin', connected: true, email: 'someone@example.com', folderName: 'Walnut Backup', pending: false, signedInWith: 'builtin' })
+    await answer(page, '**/api/backup/snapshots', {
+      engine: 'encrypted', encrypted: false,
+      snapshots: [
+        { id: 'plain-1', createdAt: '2026-11-19T19:00:00Z', hostname: 'mac', fileCount: 22597, totalBytes: 7.3e9, encrypted: false },
+        { id: 'enc-1', createdAt: '2026-11-18T06:00:00Z', hostname: 'mac', fileCount: 22501, totalBytes: 7.2e9, encrypted: true },
+      ],
+    })
+    const section = await openBackup(page)
+    await expect(section.getByTestId('backup-gdrive-connected')).toContainText('Connected as someone@example.com')
+    await expect(section.getByTestId('backup-key-row')).toHaveCount(0)
+    await expect(section.locator('#backup-encrypt')).not.toBeChecked()
+    await expect(section.getByTestId('backup-enabled-row')).not.toContainText('Paused')
+    await expect(section.getByTestId('backup-run-now')).toBeEnabled()
+    await section.getByTestId('backup-restore-open').click()
+    const list = section.getByTestId('backup-restore-list')
+    await expect(list.locator('label')).toHaveCount(2)
+    // The encrypted one says so; the newest (unencrypted) one does not.
+    await expect(list.locator('label').nth(1).getByTestId('backup-restore-encrypted')).toBeVisible()
+    await expect(list.locator('label').nth(0).getByTestId('backup-restore-encrypted')).toHaveCount(0)
+    await releaseRoutes(page)
+  })
+
+  test('encryption off on a computer with no key: Restore says encrypted backups are there too, and how to open them', async ({ page }) => {
+    await holdConfigWrites(page, { enabled: true, interval_hours: 24, encrypt: false, destination: { type: 'gdrive' } })
+    await answer(page, '**/api/backup/status', { configured: true, running: false, consecutiveFailures: 0, primary: true, engine: 'encrypted' })
+    await answer(page, '**/api/backup/gdrive/status', { builtinClient: true, client: 'builtin', connected: true, email: 'someone@example.com', folderName: 'Walnut Backup', pending: false, signedInWith: 'builtin' })
+    await answer(page, '**/api/backup/snapshots', { engine: 'encrypted', encrypted: false, lockedEncrypted: true,
+      snapshots: [{ id: 'plain-1', createdAt: '2026-11-19T19:00:00Z', hostname: 'mac', fileCount: 10, totalBytes: 1e6, encrypted: false }] })
+    const section = await openBackup(page)
+    await section.getByTestId('backup-restore-open').click()
+    await expect(section.getByTestId('backup-restore-list').locator('label')).toHaveCount(1)
+    await expect(section.getByTestId('backup-restore-locked')).toContainText('Turn on Encrypt backups above and enter the key you saved')
+    await releaseRoutes(page)
+  })
+
+  test('a new setup with encryption on: R2 fields, test, recovery key, restore', async ({ page }) => {
+    const config = await holdConfigWrites(page, { encrypt: true })
     await answer(page, '**/api/backup/status', { configured: false, running: false, consecutiveFailures: 0, primary: true })
     await answer(page, '**/api/backup/destination/test', { ok: true, destination: 'r2://walnut-backup/walnut-backup', canWrite: true, hasBackups: false, hasKey: false })
     let keyMade = false

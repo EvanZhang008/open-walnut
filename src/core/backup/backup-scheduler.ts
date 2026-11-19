@@ -13,8 +13,10 @@ import { WALNUT_HOME } from '../../constants.js';
 import { friendlyStoreError } from './errors.js';
 import { log } from '../../logging/index.js';
 import { getConfig } from '../config-manager.js';
+import { modifyConfigDoc } from '../config-store.js';
 import { describeDestination, engineOf, isDestinationReady } from './destination.js';
 import { listEncryptedBackups, runEncryptedBackup } from './encrypted-backup.js';
+import { backupEncrypted } from './repo-mode.js';
 import { backupLockHeld } from './local-state.js';
 import { currentBackupJob, runBackupJob } from './jobs.js';
 import { RepoError } from './repo/repository.js';
@@ -69,10 +71,10 @@ export async function isBackupConfigured(cfg: BackupConfig | undefined, dataDir:
   if (!cfg?.enabled) return false;
   const engine = engineOf(cfg);
   if (engine === 'mirror') return Boolean(cfg.bucket);
-  // Nothing leaves this computer before the user said the recovery key is kept
-  // somewhere (Settings, Backup, "I saved it"; a typed key counts): without it the
-  // backups could never be opened again.
-  if (engine === 'encrypted') return Boolean(cfg.recovery_key_saved_at) && isDestinationReady(cfg.destination!, dataDir);
+  // Encrypted: nothing leaves this computer before the user said the recovery key is
+  // kept somewhere (Settings, Backup, "I saved it"; a typed key counts): without it the
+  // backups could never be opened again. Unencrypted backups have no key to keep.
+  if (engine === 'encrypted') return (!backupEncrypted(cfg) || Boolean(cfg.recovery_key_saved_at)) && isDestinationReady(cfg.destination!, dataDir);
   return false;
 }
 
@@ -90,8 +92,12 @@ export function startBackupScheduler(deps: BackupSchedulerDeps): BackupScheduler
 
   const emitStatus = (): void => deps.emit('backup:status', health);
 
+  // The kind is part of where backups go: turning encryption on or off moves them to the
+  // other repository (repo-mode.ts), so the health is read again, as for a new service.
   const describe = (cfg: BackupConfig): string =>
-    engineOf(cfg) === 'encrypted' ? describeDestination(cfg.destination!) : `s3://${cfg.bucket}/${cfg.prefix ?? 'walnut'}`;
+    engineOf(cfg) === 'encrypted'
+      ? `${describeDestination(cfg.destination!)}${backupEncrypted(cfg) ? '' : ' (unencrypted)'}`
+      : `s3://${cfg.bucket}/${cfg.prefix ?? 'walnut'}`;
 
   const applyResult = (result: BackupRunResult, errorCode?: string): void => {
     health.running = false;
@@ -269,6 +275,29 @@ export function startBackupScheduler(deps: BackupSchedulerDeps): BackupScheduler
     return true;
   };
 
+  /**
+   * The kind read at the destination, kept in config (false too) so Settings, its guard
+   * and every later run agree on it and nothing relists or flips it later. Written only
+   * while the switch is still unset: a choice the person saved meanwhile wins.
+   */
+  const keepKind = async (encrypted: boolean): Promise<void> => {
+    try {
+      const wrote = await modifyConfigDoc((doc) => {
+        const backup = doc.backup as Record<string, unknown> | undefined;
+        if (!backup || typeof backup !== 'object' || typeof backup.encrypt === 'boolean') return { write: false, result: false };
+        backup.encrypt = encrypted;
+        return { write: true, result: true };
+      });
+      if (wrote) {
+        // Loaded here, as other core writers do: the broadcast pulls in the event bus.
+        const { emitSettingsConfigChanged } = await import('../config-broadcast.js');
+        emitSettingsConfigChanged(await getConfig(), { source: 'backup-kind' });
+      }
+    } catch (err) {
+      log.session.warn('backup: could not keep the backup kind in config', { error: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
   const readAnchor = async (cfg: BackupConfig): Promise<void> => {
     const at = describe(cfg);
     if (anchorFor === at) return;
@@ -278,7 +307,12 @@ export function startBackupScheduler(deps: BackupSchedulerDeps): BackupScheduler
     health.engine = engineOf(cfg) ?? undefined;
     try {
       if (health.engine === 'encrypted') {
-        const listing = await listEncryptedBackups(cfg, { dataDir });
+        const all = await listEncryptedBackups(cfg, { dataDir });
+        // Unset, the kind follows what is at the destination (repo-mode.ts resolveEncrypted):
+        // kept in config once read, so Settings, its guard and every later run agree on it.
+        if (cfg.encrypt === undefined) await keepKind(all.encrypted);
+        // The schedule and the count are this kind's: the other kind's backups are kept, not added to.
+        const listing = { ...all, snapshots: all.snapshots.filter((s) => s.encrypted === all.encrypted) };
         health.snapshotCount = listing.snapshots.length;
         // Another computer writes these: run at the next check, so the pane asks about it
         // now (a restore on a new computer), not when the schedule comes round a day later.

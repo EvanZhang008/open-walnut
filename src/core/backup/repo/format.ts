@@ -36,6 +36,11 @@ export interface RepoConfig {
   createdAt: string;
   /** HMAC of the repo id under the key's mac subkey: tells a wrong key at once. */
   keyCheck: string;
+  /**
+   * 'none': an unencrypted repository (crypto.ts PLAIN_KEYS), opened with no key.
+   * Absent: AES-256-GCM under the user's recovery key (every repository before 2026-11-19).
+   */
+  encryption?: 'none';
   chunker: { min: number; avg: number; max: number };
   /**
    * The one machine that writes backups here. Another machine only reads

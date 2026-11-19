@@ -162,6 +162,10 @@ export interface DestinationTest {
   savedNow?: boolean
   /** Connected, not saved: its backups were made with another recovery key, so the person is asked first. */
   askOtherKey?: boolean
+  /** Unencrypted backups chosen: encrypted ones are kept there too (restorable with their key). */
+  hasEncryptedBackups?: boolean
+  /** The kind backups are made in there (the switch, or what the destination already holds). */
+  encrypted?: boolean
 }
 
 /** The Connection row's words after a test. */
@@ -171,7 +175,8 @@ export function testHelp(r: DestinationTest | null, legacy: boolean): string {
   if (legacy) return `Connected as ${r.arn ?? 'unknown identity'}`
   if (r.askOtherKey) return "Connected, not saved yet: this folder has Walnut backups made with a different key from this computer's. Using it pauses backups here until you enter that key."
   const head = r.savedNow ? 'Connected and saved: backups go here now.' : 'Connected.'
-  if (!r.hasBackups) return r.savedNow ? head : `${head} Walnut can write here; no backups yet.`
+  const kept = r.hasEncryptedBackups ? ' The encrypted backups made before are kept there too.' : ''
+  if (!r.hasBackups) return (r.savedNow ? head : `${head} Walnut can write here; no backups yet.`) + kept
   if (r.keyMatches === false) return r.hasKey
     ? `${head} It holds Walnut backups made with a different key from this computer's.`
     : `${head} It already has Walnut backups: enter the recovery key you saved for them below.`
@@ -185,8 +190,18 @@ export function testHelp(r: DestinationTest | null, legacy: boolean): string {
  * fixes it, or null when it can. The rows that are blocked say this instead
  * of a grey button with no reason.
  */
+/**
+ * Backups are encrypted under a recovery key: the switch as set, else on only for a
+ * setup that finished the key step. The server reads it the same way (repo-mode.ts).
+ */
+export function backupEncryptedOf(cfg: Pick<BackupConfig, 'encrypt' | 'recovery_key_saved_at'>): boolean {
+  return cfg.encrypt ?? Boolean(cfg.recovery_key_saved_at)
+}
+
 export function blockedReason(s: {
   legacyMode: boolean
+  /** Encryption on: the recovery key steps below gate the first backup. */
+  encrypted?: boolean
   legacyBucket?: string
   saved?: BackupDestinationConfig
   driveConnected: boolean
@@ -200,6 +215,7 @@ export function blockedReason(s: {
   const missing = missingFields(s.saved)
   if (missing.length > 0) return `Fill in ${missing.join(', ')} above first.`
   if (s.saved.type === 'gdrive' && !s.driveConnected) return 'Connect Google Drive above first.'
+  if (s.encrypted === false) return null
   if (s.needsKey) return 'Enter your recovery key above first.'
   if (!s.hasKey) return 'Waiting for the recovery key above.'
   if (s.keySaved === false) return 'Save the recovery key above first.'
@@ -238,6 +254,7 @@ export function buildBackupConfig(
   const base: BackupConfig = {
     ...(saved.retention ? { retention: saved.retention } : {}),
     ...(saved.recovery_key_saved_at ? { recovery_key_saved_at: saved.recovery_key_saved_at } : {}),
+    ...(typeof saved.encrypt === 'boolean' ? { encrypt: saved.encrypt } : {}),
     ...(saved.other_destinations?.length ? { other_destinations: saved.other_destinations } : {}),
     enabled: form.enabled,
     interval_hours: Math.min(MAX_INTERVAL_HOURS, Math.max(1, Math.round(Number(form.intervalHours) || 24))),

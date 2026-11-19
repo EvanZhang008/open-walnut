@@ -170,3 +170,32 @@ describe('S3 with an endpoint keeps its keys', () => {
     expect(secretNeedsRetyping({ ...form, endpoint: 'https://other.example' }, [saved])).toBe(false);
   });
 });
+
+describe('encryption is a switch, off by default (2026-11-19)', () => {
+  const r2 = { type: 'r2' as const, bucket: 'b', account_id: 'a', access_key_id: 'k', secret_access_key: 's' };
+  it('reads as the server does: the switch as set, else on only for a setup that saved its key', async () => {
+    const { backupEncryptedOf } = await import('../../web/src/components/settings/sections/backup/backup-model');
+    const { backupEncrypted } = await import('../../src/core/backup/repo-mode');
+    for (const cfg of [{}, { encrypt: true }, { encrypt: false }, { recovery_key_saved_at: 'x' }, { encrypt: false, recovery_key_saved_at: 'x' }]) {
+      expect(backupEncryptedOf(cfg), JSON.stringify(cfg)).toBe(backupEncrypted(cfg));
+    }
+    expect(backupEncryptedOf({})).toBe(false);
+  });
+
+  it('off: nothing waits for a recovery key; on: the key steps gate the first backup', async () => {
+    const { blockedReason } = await import('../../web/src/components/settings/sections/backup/backup-model');
+    const base = { legacyMode: false, saved: r2, driveConnected: true, needsKey: false, hasKey: false, keySaved: false }
+    expect(blockedReason({ ...base, encrypted: false })).toBeNull();
+    expect(blockedReason({ ...base, encrypted: true })).toBe('Waiting for the recovery key above.');
+    // Off never skips what is really missing.
+    expect(blockedReason({ ...base, encrypted: false, saved: { type: 'gdrive' as const }, driveConnected: false })).toBe('Connect Google Drive above first.');
+  });
+
+  it('every save keeps the switch as it was set', async () => {
+    const { buildBackupConfig } = await import('../../web/src/components/settings/sections/backup/backup-model');
+    for (const encrypt of [true, false]) {
+      expect(buildBackupConfig({ encrypt, destination: r2 }, { enabled: true, intervalHours: 24, destination: r2 }).encrypt).toBe(encrypt);
+    }
+    expect('encrypt' in buildBackupConfig({ destination: r2 }, { enabled: true, intervalHours: 24, destination: r2 })).toBe(false);
+  });
+});

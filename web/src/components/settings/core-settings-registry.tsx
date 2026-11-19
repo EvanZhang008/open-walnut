@@ -288,7 +288,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   {
     owner: 'walnut', id: 'backup', label: 'Backup', title: 'Backup', group: 'configure',
     icon: 'archive-box', tint: '#34C759',
-    description: 'Encrypted backups of your Walnut data to Cloudflare R2, Google Drive or Amazon S3, and restore.',
+    description: 'Backups of your Walnut data to Cloudflare R2, Google Drive or Amazon S3, encrypted if you choose, and restore.',
     keywords: ['backup', 'restore', 'r2', 'cloudflare', 'google drive', 'drive', 's3', 'bucket', 'recovery key', 'encryption', 'aws'],
     render: ({ config, saveSection }) => <BackupSection config={config} onSave={saveSection} />,
   },

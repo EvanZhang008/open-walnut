@@ -54,7 +54,8 @@ export async function loadLiveIndex(repo: Repository): Promise<{ index: LoadedIn
 
 export async function runRepoBackup(
   store: BackupStore,
-  rawKey: Buffer,
+  /** null: an unencrypted repository. */
+  rawKey: Buffer | null,
   opts: RepoBackupOptions,
 ): Promise<RepoBackupResult> {
   const start = Date.now();

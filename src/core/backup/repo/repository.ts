@@ -8,7 +8,7 @@ import zlib from 'node:zlib';
 import { isNotFound, type BackupStore } from '../stores/types.js';
 import type { WriterIdentity } from '../local-state.js';
 import { AVG_CHUNK, MAX_CHUNK, MIN_CHUNK, chunkBuffer } from './chunker.js';
-import { blobId, deriveKeys, keyCheck, open, seal, type RepoKeys } from './crypto.js';
+import { PLAIN_KEYS, blobId, deriveKeys, keyCheck, open, seal, type RepoKeys } from './crypto.js';
 import {
   PACK_TARGET_BYTES, REPO_CONFIG_KEY, REPO_FORMAT, REPO_VERSION,
   indexKey, packKey, snapshotKey,
@@ -70,6 +70,9 @@ function sealWriter(keys: RepoKeys, me: WriterIdentity): RepoConfig['writer'] {
 }
 
 export class Repository {
+  /** An unencrypted repository (no recovery key). */
+  get plain(): boolean { return Boolean(this.keys.plain); }
+
   private constructor(
     readonly store: BackupStore,
     readonly keys: RepoKeys,
@@ -79,14 +82,16 @@ export class Repository {
   /**
    * Open the repository at `store`. With `create`, a store with no repository
    * gets a new one written by `writer`. A repository made with another key is
-   * refused, never replaced: it is somebody's backups.
+   * refused, never replaced: it is somebody's backups. `rawKey` null opens (or
+   * makes) an unencrypted one; an encrypted repository never opens without its
+   * key, and an unencrypted one never with a key (each is told apart by its config).
    */
   static async open(
     store: BackupStore,
-    rawKey: Buffer,
+    rawKey: Buffer | null,
     opts: { create?: boolean; writer?: WriterIdentity } = {},
   ): Promise<Repository> {
-    const keys = deriveKeys(rawKey);
+    const keys = rawKey ? deriveKeys(rawKey) : PLAIN_KEYS;
     let config: RepoConfig | null = null;
     try {
       config = JSON.parse((await store.get(REPO_CONFIG_KEY)).toString('utf8')) as RepoConfig;
@@ -107,6 +112,7 @@ export class Repository {
         repoId,
         createdAt: new Date().toISOString(),
         keyCheck: keyCheck(keys, repoId),
+        ...(keys.plain ? { encryption: 'none' as const } : {}),
         chunker: { min: MIN_CHUNK, avg: AVG_CHUNK, max: MAX_CHUNK },
         writer: sealWriter(keys, opts.writer),
       };
@@ -118,6 +124,11 @@ export class Repository {
     }
     if (config.version > REPO_VERSION) {
       throw new RepoError('bad_format', `These backups were written by a newer Walnut (format ${config.version}). Update Walnut to read them.`);
+    }
+    if ((config.encryption === 'none') !== Boolean(keys.plain)) {
+      throw new RepoError('bad_format', config.encryption === 'none'
+        ? `The backups at ${store.describe()} are not encrypted: they open without a recovery key.`
+        : `The backups at ${store.describe()} are encrypted: they open only with their recovery key.`);
     }
     if (config.keyCheck !== keyCheck(keys, config.repoId)) {
       throw new RepoError('key_mismatch', 'The backups here were made with another recovery key. Enter that key to use them, or start over in a new folder.');

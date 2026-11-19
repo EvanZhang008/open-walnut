@@ -38,6 +38,8 @@ interface BackupItem {
   fileCount?: number
   totalBytes?: number
   isLatest?: boolean
+  /** Made under a recovery key (the switch "Encrypt backups"); absent for the older S3 copy. */
+  encrypted?: boolean
 }
 
 interface Props {
@@ -78,6 +80,8 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
   const [from, setFrom] = useState(0)
   const source = sources[Math.min(from, Math.max(0, sources.length - 1))]?.dest ?? null
   const [items, setItems] = useState<BackupItem[] | null>(null)
+  // Encrypted backups are at the destination too, but this computer has no key that opens them.
+  const [locked, setLocked] = useState(false)
   const [loading, setLoading] = useState(false)
   const [picked, setPicked] = useState<string | null>(null)
   const [target, setTarget] = useState('')
@@ -189,8 +193,9 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
     setTarget('')
     if (restore?.finishedAt) dismiss()
     try {
-      const r = await apiPost<{ snapshots: BackupItem[] }>('/api/backup/snapshots', at ? { destination: at } : {}, { timeoutMs: 60000 })
+      const r = await apiPost<{ snapshots: BackupItem[]; lockedEncrypted?: boolean }>('/api/backup/snapshots', at ? { destination: at } : {}, { timeoutMs: 60000 })
       setItems(r.snapshots)
+      setLocked(Boolean(r.lockedEncrypted))
       setPicked(r.snapshots[0]?.id ?? null)
       setSuggested(dataDir ? `${dataDir.replace(/\/[^/]*\/?$/, '')}/open-walnut-restored-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}` : null)
     } catch (err) {
@@ -282,7 +287,12 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
           }
         />
       )}
-      {items && items.length === 0 && <SettingsRow indent label="No backups here yet." />}
+      {items && items.length === 0 && <SettingsRow indent label={locked ? 'No unencrypted backups here yet.' : 'No backups here yet.'} />}
+      {items && locked && (
+        <SettingsRow indent state="warning" label="Encrypted backups are here too"
+          help="This computer has no recovery key that opens them. Turn on Encrypt backups above and enter the key you saved to list and restore them."
+          data-testid="backup-restore-locked" />
+      )}
       {items && items.length > 0 && (
         <>
           <div className="settings-row settings-row-indent backup-restore-list" role="radiogroup" aria-label="Backups" data-testid="backup-restore-list">
@@ -293,6 +303,8 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
                   {whenOf(it.createdAt, listSeconds)}
                   {/* The list is newest first; the newest one says so, not only by its place. */}
                   {(it.isLatest || i === 0) && <span className="settings-tag settings-tag-neutral backup-restore-latest" data-testid="backup-restore-latest">Latest</span>}
+                  {/* Both kinds are kept at one destination: the encrypted ones need their recovery key. */}
+                  {it.encrypted && <span className="settings-tag settings-tag-neutral" data-testid="backup-restore-encrypted">Encrypted</span>}
                 </span>
                 <span className="backup-restore-meta">
                   {[it.fileCount !== undefined ? `${it.fileCount.toLocaleString()} files` : null,

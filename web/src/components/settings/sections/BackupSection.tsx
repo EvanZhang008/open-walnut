@@ -28,7 +28,7 @@ import { fetchAwsProfiles } from '@/api/config'
 import { useEvent } from '@/hooks/useWebSocket'
 import { usePageView } from '@/utils/view-memory'
 import {
-  DESTINATIONS, DESTINATION_NOTE, MAX_INTERVAL_HOURS, destinationSummary, RETENTION_NOTE, blockedReason, buildBackupConfig, cleanDestination,
+  DESTINATIONS, DESTINATION_NOTE, MAX_INTERVAL_HOURS, destinationSummary, RETENTION_NOTE, backupEncryptedOf, blockedReason, buildBackupConfig, cleanDestination,
   engineOf, fieldProblem, fmtBytes, legacyToEncrypted, missingFields, othersAfterSwitch, sameDestination, secretNeedsRetyping, stableJson, testHelp,
   type BackupConfig, type BackupDestinationConfig, type BackupDestinationType, type DestinationTest,
 } from './backup/backup-model'
@@ -125,6 +125,11 @@ export function BackupSection({ config, onSave }: Props) {
   const savedEngine = engineOf(saved)
   const savedDest = saved.destination
   const [enabled, setEnabled] = useState(saved.enabled ?? false)
+  // "Encrypt backups": off by default (2026-11-19, the user: "It is optional. We default, just
+  // don't add encryption."). Shown at once on a click, put back if the save fails.
+  const savedEncrypted = backupEncryptedOf(saved)
+  const [encrypted, setEncrypted] = useState(savedEncrypted)
+  useEffect(() => { setEncrypted(savedEncrypted) }, [savedEncrypted])
   // Empty while the user retypes it; a save falls back to 24.
   const [intervalHours, setIntervalHours] = useState<number | undefined>(saved.interval_hours ?? 24)
   // Said after a value out of range was put back, until the next edit (never a silent change).
@@ -261,14 +266,34 @@ export function BackupSection({ config, onSave }: Props) {
     setEnabled(on)
     writeBackup(compose(baseRef.current, { enabled: on })).catch(() => setEnabled(!on))
   }
+  /** Encrypted or not: new backups go to that kind's repository; the other kind's stay, restorable. */
+  const setEncryption = (on: boolean) => {
+    setEncrypted(on)
+    writeBackup({ ...compose(baseRef.current), encrypt: on }).catch(() => setEncrypted(!on))
+  }
 
-  /** Where backups go from now on: saved on purpose, never by looking at a tab. */
-  const saveDestination = async (d: BackupDestinationConfig) => {
+  /**
+   * Where backups go from now on: saved on purpose, never by looking at a tab. `kind`: the
+   * kind the connection test found (encrypted backups already there keep it encrypted), kept
+   * with it when the switch was never set.
+   */
+  const saveDestination = async (d: BackupDestinationConfig, kind?: boolean) => {
     // Never a destination that cannot run: the summary would say "in use" while nothing backs up.
     const lacks = missingFields(d)
     if (lacks.length > 0) throw new Error(`Fill in: ${lacks.join(', ')}.`)
     const base = baseRef.current
-    await writeBackup({ ...compose(base, { destination: d }), other_destinations: othersAfterSwitch(base, d) })
+    const fix = typeof base.encrypt !== 'boolean' && kind !== undefined ? kind : undefined
+    const willEncrypt = fix ?? encrypted
+    // A first setup with encryption off starts backing up once its service is saved: no key
+    // step ("I saved it, turn on backups") comes after it to do that.
+    const turnOn = !willEncrypt && !base.destination && !base.enabled && engineOf(base) !== 'mirror'
+    if (turnOn) setEnabled(true)
+    if (fix !== undefined) setEncrypted(fix)
+    await writeBackup({
+      ...compose(base, { destination: d, ...(turnOn ? { enabled: true } : {}) }),
+      ...(fix !== undefined ? { encrypt: fix } : {}),
+      other_destinations: othersAfterSwitch(base, d),
+    }).catch((err) => { if (turnOn) setEnabled(false); if (fix !== undefined) setEncrypted(!fix); throw err })
     const typed = readTyped()
     delete typed[d.type]
     writeTyped(typed)
@@ -321,7 +346,9 @@ export function BackupSection({ config, onSave }: Props) {
         setTestResult(await apiPost<DestinationTest>('/api/backup/test', form(), { timeoutMs: 45000 }))
         return
       }
-      const r = await apiPost<DestinationTest>('/api/backup/destination/test', { destination: draft }, { timeoutMs: 45000 })
+      // The switch as set (or just flipped); never set, the destination's own backups decide (r.encrypted).
+      const asked = typeof saved.encrypt === 'boolean' || encrypted !== savedEncrypted ? { encrypt: encrypted } : {}
+      const r = await apiPost<DestinationTest>('/api/backup/destination/test', { destination: draft, ...asked }, { timeoutMs: 45000 })
       if (r.ok && !draftIsSaved) {
         // Backups that would stop (they cannot open this folder's backups) are asked about, never switched silently.
         // A computer with no key of its own (a new one) has nothing to pause: it goes straight on, then asks for the key.
@@ -329,7 +356,7 @@ export function BackupSection({ config, onSave }: Props) {
           setTestResult({ ...r, askOtherKey: true })
           return
         }
-        await saveDestination(cleanDestination(draft))
+        await saveDestination(cleanDestination(draft), r.encrypted)
         setTestResult({ ...r, savedNow: true })
       } else {
         setTestResult(r)
@@ -436,10 +463,11 @@ export function BackupSection({ config, onSave }: Props) {
   }, [])
 
   const otherWriter = !legacyMode && status?.errorCode === 'other_writer'
-  const keyMismatch = !legacyMode && status?.errorCode === 'key_mismatch'
+  const keyMismatch = !legacyMode && encrypted && status?.errorCode === 'key_mismatch'
   const destReady = !legacyMode && !!savedDest && missingFields(savedDest).length === 0 && (savedDest.type !== 'gdrive' || driveOk)
   const blocked = blockedReason({
     legacyMode,
+    encrypted,
     legacyBucket: legacy.bucket,
     saved: savedDest,
     driveConnected: driveOk,
@@ -448,7 +476,7 @@ export function BackupSection({ config, onSave }: Props) {
     keySaved: Boolean(saved.recovery_key_saved_at),
   })
   // Nothing leaves this computer before the user has the key that opens it (the server holds to it too).
-  const keyUnsaved = !legacyMode && keyState.hasKey && !saved.recovery_key_saved_at
+  const keyUnsaved = !legacyMode && encrypted && keyState.hasKey && !saved.recovery_key_saved_at
   const runBlocked = blocked ?? (otherWriter ? 'Another computer writes these backups. Move them to this computer first.' : null)
 
   const progressPct = status?.progress && status.progress.totalBytes > 0
@@ -474,7 +502,8 @@ export function BackupSection({ config, onSave }: Props) {
   const inUse = savedDest ? labelOf(savedDest.type) : null
   // Until the status and the key are read, the rows say so, never a failure that is not there.
   const onKeyState = useCallback((k: KeyState) => { setKeyState(k); setKeyKnown(true) }, [])
-  const loading = !status || (!legacyMode && !!savedDest && !keyKnown)
+  // The key group answers only when encryption is on: without it there is no key to wait for.
+  const loading = !status || (!legacyMode && !!savedDest && encrypted && !keyKnown)
   const lastHelp = loading ? 'Checking...' : status?.notice
     // The first row of the group says why nothing can run yet; this one does not repeat it.
     ?? (runBlocked && !status?.running && !status?.lastBackupAt ? (blocked ? 'No backup yet.' : `No backup yet. ${runBlocked}`)
@@ -610,7 +639,7 @@ export function BackupSection({ config, onSave }: Props) {
         )}
       </SettingsGroup>
 
-      {!legacyMode && savedDest && (
+      {!legacyMode && savedDest && encrypted && (
         <RecoveryKeyGroup
           dest={savedDest}
           destinationLabel={labelOf(savedDest.type)}
@@ -633,7 +662,9 @@ export function BackupSection({ config, onSave }: Props) {
         footer={legacyMode
           // The older copy sends files as they are: credentials included, readable by whoever reads the bucket.
           ? <>What gets backed up: everything in your data folder, credentials (<code>auth.json</code>) included, so use a bucket only you can access.</>
-          : <>Your whole data folder is backed up, except caches, search indexes, Git sync's history and health data.</>
+          : encrypted
+            ? <>Your whole data folder is backed up, except caches, search indexes, Git sync's history and health data.</>
+            : <>Your whole data folder is backed up, except caches, search indexes, Git sync's history and health data. Not encrypted: credentials (<code>auth.json</code>) included, readable by whoever can open the backups.</>
         }
       >
         {/* The one place that says why nothing can run yet; the rows below are greyed with it. */}
@@ -643,12 +674,23 @@ export function BackupSection({ config, onSave }: Props) {
           help={loading ? 'Checking...' : blocked
             ? (enabled ? `Paused: ${blocked}` : blocked)
             : !enabled ? 'Off: backups run only when you choose Back up now.'
-              : legacyMode ? 'Only changed files upload after the first run.' : 'Encrypted on this computer first. After the first backup only changes upload.'}
+              : legacyMode || !encrypted ? 'Only changed files upload after the first run.' : 'Encrypted on this computer first. After the first backup only changes upload.'}
           state={blocked && enabled && !loading ? 'warning' : undefined}
           data-testid="backup-enabled-row"
           // On but paused (the reason is the help): the switch reads as paused too, not plainly on.
           control={<span className={enabled && blocked && !loading ? 'backup-toggle-paused' : undefined}><ToggleSwitch id="backup-enabled" checked={enabled} onChange={setAutomatic} disabled={!!blocked && !enabled} /></span>}
         />
+        {!legacyMode && (
+          <SettingsRow
+            label="Encrypt backups"
+            htmlFor="backup-encrypt"
+            help={encrypted
+              ? 'On: encrypted on this computer first, and only your recovery key opens them. Keep the key somewhere safe. Backups made before stay restorable.'
+              : 'Off: stored as they are, with no key to keep. Anyone who can open your backups can read or change them. Backups made before stay restorable.'}
+            data-testid="backup-encrypt-row"
+            control={<ToggleSwitch id="backup-encrypt" checked={encrypted} onChange={setEncryption} />}
+          />
+        )}
         <SettingsRow
           label="Every"
           htmlFor="backup-interval"

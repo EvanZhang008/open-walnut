@@ -61,6 +61,8 @@ import { configForClients, emitConfigChanged } from '../../core/config-broadcast
 import { MaskedValueError, restoreMaskedSecrets } from '../../core/config-secret-shape.js'
 import { CONFIG_MERGE_HEADER, writeConfigSection } from '../../core/config-section-write.js'
 import { storedBackupLike } from '../../core/backup/destination.js'
+import { backupEncrypted } from '../../core/backup/repo-mode.js'
+import type { BackupConfig } from '../../core/backup/types.js'
 import { getSelfRepairStatus } from '../../core/self-repair/walnut-source.js'
 import { getBuildInfo } from '../../lib/build-info.js'
 import { permissionsApplicable } from '../../core/permissions/applicable.js'
@@ -871,6 +873,8 @@ function backupTarget(b: unknown): string {
     c.bucket ?? '', c.region ?? '', c.prefix ?? '', pick(a, ['method', 'profile']),
     // How much history is kept: a smaller one deletes backups at the next prune.
     c.retention ?? null,
+    // Encrypted or readable in the cloud (as it resolves: repo-mode.ts), the person's own choice.
+    backupEncrypted(c as BackupConfig),
     pick(d, ['type', 'bucket', 'prefix', 'region', 'account_id', 'endpoint', 'client_id', 'folder_name']),
     pick((d?.auth ?? null) as Record<string, unknown> | null, ['method', 'profile']),
     // The services not in use yet: one of them becomes the destination with one click.

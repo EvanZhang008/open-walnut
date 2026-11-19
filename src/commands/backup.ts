@@ -53,6 +53,10 @@ async function encryptedConfig(options: Record<string, unknown>): Promise<Backup
   return cfg?.destination?.type ? cfg : null;
 }
 
+/** `--encrypt` / `--no-encrypt` over what is set (commander sets `encrypt` only when given). */
+const withKindFlag = (cfg: BackupConfig, options: Record<string, unknown>): BackupConfig =>
+  typeof options.encrypt === 'boolean' ? { ...cfg, encrypt: options.encrypt } : cfg;
+
 const mb = (n: number): string => `${(n / 1048576).toFixed(1)} MB`;
 const keyOf = (options: Record<string, unknown>): string | undefined =>
   typeof options.key === 'string' && options.key.trim() ? options.key : process.env.WALNUT_BACKUP_RECOVERY_KEY || undefined;
@@ -77,11 +81,12 @@ async function resolveCliConfig(options: Record<string, unknown>): Promise<Backu
 }
 
 export async function runBackupRun(options: Record<string, unknown>): Promise<void> {
-  const enc = await encryptedConfig(options);
-  if (enc) {
+  const found = await encryptedConfig(options);
+  if (found) {
+    const enc = withKindFlag(found, options);
     const { runEncryptedBackup } = await import('../core/backup/encrypted-backup.js');
     const { describeDestination } = await import('../core/backup/destination.js');
-    console.log(`Backing up (encrypted) to ${describeDestination(enc.destination!)} ...`);
+    console.log(`Backing up to ${describeDestination(enc.destination!)} ...`);
     let lastPct = -1;
     try {
       const r = await runEncryptedBackup(enc, {
@@ -91,7 +96,7 @@ export async function runBackupRun(options: Record<string, unknown>): Promise<vo
           if (pct !== lastPct && pct % 10 === 0) { lastPct = pct; console.log(`  ${pct}%`); }
         },
       });
-      console.log(`Backup complete: ${r.fileCount} files (${mb(r.totalBytes)}), ${r.changedFiles} read, ${mb(r.uploadedBytes)} uploaded in ${Math.round(r.durationMs / 1000)}s`);
+      console.log(`Backup complete (${r.encrypted ? 'encrypted' : 'unencrypted'}): ${r.fileCount} files (${mb(r.totalBytes)}), ${r.changedFiles} read, ${mb(r.uploadedBytes)} uploaded in ${Math.round(r.durationMs / 1000)}s`);
       if (r.skipped.length) console.log(`  ${r.skipped.length} file(s) could not be read and kept their previous copy.`);
       if (r.pruneError) console.log(`  Old backups were not cleaned up: ${r.pruneError}`);
     } catch (err) {
@@ -139,19 +144,22 @@ export function plainFailure(what: string): (err: unknown) => void {
 }
 
 export async function runBackupList(options: Record<string, unknown>): Promise<void> {
-  const enc = await encryptedConfig(options);
-  if (enc) {
+  const found = await encryptedConfig(options);
+  if (found) {
+    const enc = withKindFlag(found, options);
     const { listEncryptedBackups } = await import('../core/backup/encrypted-backup.js');
     const listing = await listEncryptedBackups(enc, { dataDir: WALNUT_HOME, recoveryKey: keyOf(options) });
+    const locked = listing.lockedEncrypted ? '\n  Encrypted backups are there too: list them with --key <your recovery key>.' : '';
     if (listing.snapshots.length === 0) {
-      console.log(`No backups at ${listing.destination} yet.`);
+      console.log(`No ${listing.lockedEncrypted ? 'unencrypted ' : ''}backups at ${listing.destination} yet.${locked}`);
       return;
     }
     console.log(`Backups at ${listing.destination} (written by ${listing.writer}):`);
     for (const s of listing.snapshots) {
-      console.log(`  ${s.id}  ${s.createdAt}  ${s.fileCount} files  ${mb(s.totalBytes)}  from ${s.hostname}`);
+      console.log(`  ${s.id}  ${s.createdAt}  ${s.fileCount} files  ${mb(s.totalBytes)}  from ${s.hostname}${s.encrypted ? '  (encrypted)' : ''}`);
     }
     if (listing.unreadable) console.log(`  (${listing.unreadable} could not be read)`);
+    if (locked) console.log(locked.trimStart());
     return;
   }
   const cfg = await resolveCliConfig(options);

@@ -23,6 +23,7 @@ import {
   testBackupConnection,
 } from '../../core/backup/s3-backup.js';
 import { engineOf } from '../../core/backup/destination.js';
+import { backupEncrypted } from '../../core/backup/repo-mode.js';
 import { currentBackupJob } from '../../core/backup/jobs.js';
 import type { BackupAuthConfig, BackupConfig } from '../../core/backup/types.js';
 import type { BackupSchedulerHandle } from '../../core/backup/backup-scheduler.js';
@@ -109,7 +110,7 @@ backupRouter.post('/run', async (_req: Request, res: Response, next: NextFunctio
       res.status(400).json({ error: 'Backup is not configured' });
       return;
     }
-    if (engineOf(config.backup) === 'encrypted' && !config.backup?.recovery_key_saved_at) {
+    if (engineOf(config.backup) === 'encrypted' && backupEncrypted(config.backup) && !config.backup?.recovery_key_saved_at) {
       res.status(400).json({ error: 'Save the recovery key first (Settings, Backup, "I saved it").', code: 'key_not_saved' });
       return;
     }

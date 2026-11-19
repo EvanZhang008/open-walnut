@@ -97,13 +97,13 @@ const r2 = () => ({
 
 describe('encrypted backups through the routes', () => {
   it('R2-shaped destination: test, key, back up, list, restore', async () => {
-    const t = await call('POST', '/destination/test', { destination: r2() });
+    const t = await call('POST', '/destination/test', { destination: r2(), encrypt: true });
     expect(t.body).toMatchObject({ ok: true, canWrite: true, hasBackups: false, hasKey: false });
 
     // No config saved yet: the run route refuses plainly.
     expect((await call('POST', '/run')).status).toBe(400);
 
-    await updateConfig({ backup: { enabled: true, interval_hours: 24, destination: r2() } } as never);
+    await updateConfig({ backup: { enabled: true, interval_hours: 24, encrypt: true, destination: r2() } } as never);
     const k = await call<{ key: string; created: boolean }>('POST', '/recovery-key/ensure', {});
     expect(k.body.created).toBe(true);
     expect(k.body.key).toMatch(/^WB1-/);
@@ -393,6 +393,56 @@ describe('encrypted backups through the routes', () => {
     expect((await call('GET', '/gdrive/status')).body).toMatchObject({ pending: true });
     expect((await call('POST', '/gdrive/connect/cancel', {})).body).toMatchObject({ ok: true, cancelled: true });
     await until(async () => (await call<{ pending: boolean }>('GET', '/gdrive/status')).body.pending === false);
+  }, 60_000);
+
+  it('a service connected before the switch existed (2026-11-19): unencrypted, ready at once, the kind kept', async () => {
+    // As Evan's config stood: on, a destination, neither the switch nor "I saved it" set,
+    // and a recovery key file on this machine from the key step he saw.
+    const fresh = { ...r2(), prefix: 'walnut-evan-case' };
+    await updateConfig({ backup: { enabled: true, interval_hours: 24, destination: fresh, encrypt: undefined, recovery_key_saved_at: undefined } } as never);
+    const cfg0 = (await getConfig()).backup!;
+    expect(cfg0.encrypt).toBeUndefined();
+    expect(cfg0.recovery_key_saved_at).toBeUndefined();
+    const { isBackupConfigured } = await import('../../src/core/backup/backup-scheduler.js');
+    expect(await isBackupConfigured(cfg0, WALNUT_HOME)).toBe(true);
+    // The scheduler reads the destination (empty) and keeps "unencrypted" in config.
+    scheduler.resetAnchor();
+    await until(async () => (await getConfig()).backup?.encrypt === false);
+    const prior = scheduler.health.lastSnapshotId;
+    expect((await call('POST', '/run')).status).toBe(202);
+    await until(() => !scheduler.health.running && scheduler.health.destination?.endsWith('(unencrypted)') === true && !!scheduler.health.lastSnapshotId && scheduler.health.lastSnapshotId !== prior);
+    expect(scheduler.health.error).toBeUndefined();
+    expect([...s3.objects.keys()].some((k) => k.includes('walnut-evan-case/plain/snapshots/'))).toBe(true);
+    // A choice the person makes after that is theirs: the scheduler never writes over it.
+    await updateConfig({ backup: { encrypt: true } } as never);
+    scheduler.resetAnchor();
+    await new Promise((r) => setTimeout(r, 300));
+    expect((await getConfig()).backup?.encrypt).toBe(true);
+  }, 60_000);
+
+  it('encryption off (the default): backups start at once, with no key to keep, and the encrypted ones stay listed', async () => {
+    // The same R2 destination the encrypted tests used: its encrypted backups are at the root.
+    // The switch turned off (this setup saved its key, so unset would still read as on).
+    await updateConfig({ backup: { enabled: true, interval_hours: 24, encrypt: false, destination: r2() } } as never);
+    const t = await call('POST', '/destination/test', {});
+    expect(t.body).toMatchObject({ ok: true, hasBackups: false, hasEncryptedBackups: true });
+    const prior = scheduler.health.lastSnapshotId;
+    expect((await call('POST', '/run')).status).toBe(202);
+    await until(() => !scheduler.health.running && scheduler.health.destination?.endsWith('(unencrypted)') === true && !!scheduler.health.lastSnapshotId && scheduler.health.lastSnapshotId !== prior);
+    expect(scheduler.health.error).toBeUndefined();
+    expect(scheduler.health.snapshotCount).toBe(1);
+    // It went up readable, under plain/: the unencrypted repository of this destination.
+    const plainKeys = [...s3.objects.keys()].filter((k) => k.includes('/plain/'));
+    expect(plainKeys.some((k) => k.endsWith('/plain/walnut-backup.json'))).toBe(true);
+    const listing = await call<{ snapshots: Array<{ id: string; encrypted: boolean }>; encrypted: boolean }>('POST', '/snapshots', {});
+    expect(listing.body.encrypted).toBe(false);
+    expect(listing.body.snapshots[0]).toMatchObject({ id: scheduler.health.lastSnapshotId, encrypted: false });
+    expect(listing.body.snapshots.some((x) => x.encrypted)).toBe(true);
+    // Turning it on goes back to the encrypted backups: the key step gates runs again.
+    await updateConfig({ backup: { ...(await getConfig()).backup, encrypt: true, recovery_key_saved_at: undefined } } as never);
+    const gated = await call('POST', '/run');
+    expect(gated.status).toBe(400);
+    expect(gated.body).toMatchObject({ code: 'key_not_saved' });
   }, 60_000);
 
   it('the older S3 copy keeps its own engine', async () => {

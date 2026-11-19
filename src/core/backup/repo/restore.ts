@@ -37,7 +37,8 @@ export function restorePathOf(rel: string): string {
 
 export async function restoreRepoSnapshot(
   store: BackupStore,
-  rawKey: Buffer,
+  /** null: an unencrypted repository. */
+  rawKey: Buffer | null,
   targetDir: string,
   opts: RepoRestoreOptions,
 ): Promise<RepoRestoreResult> {

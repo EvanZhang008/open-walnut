@@ -13,8 +13,14 @@
  * Sealed layout: [12-byte nonce][ciphertext][16-byte tag]. Every seal binds an
  * AAD naming what the bytes are (a blob's id, "snapshot:<name>"), so an object
  * moved to another name fails to open instead of being read as something else.
+ *
+ * Unencrypted backups (encryption off, the default since 2026-11-19) use the same
+ * repository with PLAIN_KEYS: no key to keep, and every object is stored as
+ * [32-byte SHA-256 of (aad, plaintext)][plaintext], so damage or an object moved to
+ * another name is still caught. Content ids are SHA-256 under a fixed public key:
+ * dedup works the same, and nothing about them is secret.
  */
-import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes, timingSafeEqual } from 'node:crypto';
 
 const KEY_BYTES = 32;
 const NONCE_BYTES = 12;
@@ -28,7 +34,19 @@ const KEY_PREFIX = 'WB1';
 export interface RepoKeys {
   enc: Buffer;
   mac: Buffer;
+  /** No encryption: objects are stored readable, with a digest (PLAIN_KEYS). */
+  plain?: true;
 }
+
+/** The keys of an unencrypted repository: nothing secret, nothing for the user to keep. */
+export const PLAIN_KEYS: RepoKeys = Object.freeze({
+  enc: Buffer.alloc(0),
+  mac: createHash('sha256').update('walnut-backup-plain-v1').digest(),
+  plain: true as const,
+});
+const DIGEST_BYTES = 32;
+const plainDigest = (plaintext: Buffer, aad: string): Buffer =>
+  createHash('sha256').update(Buffer.from(aad)).update(Buffer.from([0])).update(plaintext).digest();
 
 export function generateRecoveryKey(): string {
   return formatRecoveryKey(randomBytes(KEY_BYTES));
@@ -108,6 +126,7 @@ export function keyCheck(keys: RepoKeys, repoId: string): string {
 }
 
 export function seal(keys: RepoKeys, plaintext: Buffer, aad: string): Buffer {
+  if (keys.plain) return Buffer.concat([plainDigest(plaintext, aad), plaintext]);
   const nonce = randomBytes(NONCE_BYTES);
   const cipher = createCipheriv('aes-256-gcm', keys.enc, nonce);
   cipher.setAAD(Buffer.from(aad));
@@ -117,6 +136,12 @@ export function seal(keys: RepoKeys, plaintext: Buffer, aad: string): Buffer {
 
 /** Throws when the bytes were changed, the key is wrong or the AAD differs. */
 export function open(keys: RepoKeys, sealed: Buffer, aad: string): Buffer {
+  if (keys.plain) {
+    if (sealed.length < DIGEST_BYTES) throw new Error(`${aad} is truncated`);
+    const body = sealed.subarray(DIGEST_BYTES);
+    if (!timingSafeEqual(sealed.subarray(0, DIGEST_BYTES), plainDigest(body, aad))) throw new Error(`${aad} is damaged (its checksum does not match)`);
+    return Buffer.from(body);
+  }
   if (sealed.length < SEAL_OVERHEAD) throw new Error('sealed object is truncated');
   const nonce = sealed.subarray(0, NONCE_BYTES);
   const tag = sealed.subarray(sealed.length - TAG_BYTES);

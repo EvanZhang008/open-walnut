@@ -1,7 +1,8 @@
 /**
- * Encrypted backups as the scheduler, the routes and the CLI use them: one
- * place that turns config + the local recovery key into a run, a list of
- * backups, a restore, a connection test, or a writer move.
+ * Repository backups (encrypted or not, repo-mode.ts) as the scheduler, the routes
+ * and the CLI use them: one place that turns config (+ the local recovery key when
+ * encryption is on) into a run, a list of backups, a restore, a connection test, or
+ * a writer move. The name stays from when every repository was encrypted.
  */
 import { log } from '../../logging/index.js';
 import fs from 'node:fs/promises';
@@ -17,10 +18,13 @@ import { DEFAULT_RETENTION, pruneRepo, type PruneResult } from './repo/prune.js'
 import { RepoError, Repository, holdsBackupData } from './repo/repository.js';
 import { restoreRepoSnapshot, type RepoRestoreResult } from './repo/restore.js';
 import { isNotFound, type BackupStore } from './stores/types.js';
-import { REPO_CONFIG_KEY, type SnapshotSummary } from './repo/format.js';
+import { REPO_CONFIG_KEY, snapshotKey, type SnapshotSummary } from './repo/format.js';
+import { repoStore, resolveEncrypted } from './repo-mode.js';
 import type { BackupConfig, BackupDestinationConfig } from './types.js';
 
 export interface EncryptedRunResult extends RepoBackupResult {
+  /** The kind this run made (repo-mode.ts resolveEncrypted). */
+  encrypted: boolean;
   prune?: PruneResult;
   pruneError?: string;
   snapshotCount?: number;
@@ -47,24 +51,28 @@ export async function runEncryptedBackup(
   opts: { dataDir: string; onProgress?: (done: number, total: number) => void; store?: BackupStore },
 ): Promise<EncryptedRunResult> {
   const dest = cfg.destination!;
-  const store = opts.store ?? await makeStore(dest, opts.dataDir);
+  const base = opts.store ?? await makeStore(dest, opts.dataDir);
   return withBackupLock(opts.dataDir, async () => {
-    // A new key is made only for a destination with no backups yet. One that
-    // holds backups needs the key that made them, typed in by the user.
-    let key = await readRecoveryKey(opts.dataDir);
-    if (!key) {
-      if (await hasRepository(store)) {
-        throw new RepoError('key_mismatch', `${store.describe()} already holds Walnut backups. Enter the recovery key you saved to use them.`);
+    const encrypted = await resolveEncrypted(cfg, base);
+    const store = repoStore(base, encrypted);
+    let raw: Buffer | null = null;
+    if (encrypted) {
+      // A new key is made only for a destination with no backups yet. One that
+      // holds backups needs the key that made them, typed in by the user.
+      let key = await readRecoveryKey(opts.dataDir);
+      if (!key) {
+        if (await hasRepository(store)) {
+          throw new RepoError('key_mismatch', `${store.describe()} already holds Walnut backups. Enter the recovery key you saved to use them.`);
+        }
+        key = (await ensureRecoveryKey(opts.dataDir)).key;
       }
-      key = (await ensureRecoveryKey(opts.dataDir)).key;
+      raw = parseRecoveryKey(key);
     }
-    const raw = parseRecoveryKey(key);
     const writer = await localWriter(opts.dataDir);
-    const result: EncryptedRunResult = await runRepoBackup(store, raw, {
-      dataDir: opts.dataDir,
-      writer,
-      onProgress: opts.onProgress,
-    });
+    const result: EncryptedRunResult = {
+      ...await runRepoBackup(store, raw, { dataDir: opts.dataDir, writer, onProgress: opts.onProgress }),
+      encrypted,
+    };
     try {
       const repo = await Repository.open(store, raw);
       result.prune = await pruneRepo(repo, retentionOf(cfg), { writer, mustKeep: result.snapshotId });
@@ -76,6 +84,11 @@ export async function runEncryptedBackup(
     }
     return result;
   });
+}
+
+/** Backups (not only an empty repository's config) are kept here: what "encrypted backups are here too" says. */
+async function hasSnapshots(store: BackupStore): Promise<boolean> {
+  return (await store.list('snapshots/')).length > 0;
 }
 
 async function hasRepository(store: BackupStore): Promise<boolean> {
@@ -91,7 +104,12 @@ async function hasRepository(store: BackupStore): Promise<boolean> {
 
 export interface BackupListing {
   destination: string;
-  snapshots: SnapshotSummary[];
+  /** Newest first: this kind's backups, then the other kind's still kept at the destination. */
+  snapshots: Array<SnapshotSummary & { encrypted: boolean }>;
+  /** The kind new backups are made in (Settings, "Encrypt backups"). */
+  encrypted: boolean;
+  /** Encrypted backups are there that this machine cannot open (no key, or another one). */
+  lockedEncrypted?: boolean;
   unreadable: number;
   writer: string;
   /** This machine is the one that writes them. */
@@ -103,16 +121,58 @@ export async function listEncryptedBackups(
   opts: { dataDir: string; recoveryKey?: string; store?: BackupStore },
 ): Promise<BackupListing> {
   const dest = cfg.destination!;
-  const store = opts.store ?? await makeStore(dest, opts.dataDir);
-  const repo = await Repository.open(store, await keyFor(opts.dataDir, opts.recoveryKey));
-  const { snapshots, unreadable } = await repo.listSnapshots();
+  const base = opts.store ?? await makeStore(dest, opts.dataDir);
+  const encrypted = await resolveEncrypted(cfg, base);
+  const me = await localWriter(opts.dataDir);
+  // This kind first: it is the one written to, and its errors are the ones to say.
+  const mine = await openKind(base, encrypted, opts, { required: true });
+  const other = await openKind(base, !encrypted, opts, { required: false });
+  const snapshots: BackupListing['snapshots'] = [];
+  let unreadable = 0;
+  for (const repo of [mine.repo, other.repo]) {
+    if (!repo) continue;
+    const listed = await repo.listSnapshots();
+    unreadable += listed.unreadable.length;
+    for (const { tree: _tree, ...rest } of listed.snapshots) snapshots.push({ ...rest, encrypted: !repo.plain });
+  }
+  snapshots.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  // Who writes this kind: no repository of it yet means this machine starts it.
+  const shown = mine.repo;
   return {
     destination: describeDestination(dest),
-    snapshots: snapshots.map(({ tree: _tree, ...rest }) => rest),
-    unreadable: unreadable.length,
-    writer: repo.writerName(),
-    thisWriter: repo.isWriter(await localWriter(opts.dataDir)),
+    snapshots,
+    encrypted,
+    ...(mine.locked || other.locked ? { lockedEncrypted: true } : {}),
+    unreadable,
+    writer: shown?.writerName() ?? '',
+    thisWriter: shown ? shown.isWriter(me) : true,
   };
+}
+
+/**
+ * The repository of one kind at `base`. `required`: its errors are thrown (no
+ * repository there yet included); otherwise a missing or locked one is null.
+ */
+async function openKind(
+  base: BackupStore,
+  encrypted: boolean,
+  opts: { dataDir: string; recoveryKey?: string },
+  { required }: { required: boolean },
+): Promise<{ repo: Repository | null; locked?: boolean }> {
+  const store = repoStore(base, encrypted);
+  try {
+    return { repo: await Repository.open(store, encrypted ? await keyFor(opts.dataDir, opts.recoveryKey) : null) };
+  } catch (err) {
+    if (required) {
+      // No backups of this kind yet: the other kind's are still listed.
+      if (err instanceof RepoError && err.code === 'no_repo') return { repo: null };
+      throw err;
+    }
+    if (err instanceof RepoError && err.code === 'no_repo') return { repo: null };
+    if (err instanceof RepoError && err.code === 'key_mismatch') return { repo: null, locked: await hasSnapshots(store) };
+    if (err instanceof RepoError) return { repo: null };
+    throw err;
+  }
 }
 
 export async function restoreEncryptedBackup(
@@ -126,8 +186,11 @@ export async function restoreEncryptedBackup(
     onProgress?: (doneBytes: number, totalBytes: number, doneFiles: number, totalFiles: number) => void;
   },
 ): Promise<RepoRestoreResult> {
-  const store = opts.store ?? await makeStore(cfg.destination!, opts.dataDir);
-  const raw = await keyFor(opts.dataDir, opts.recoveryKey);
+  const base = opts.store ?? await makeStore(cfg.destination!, opts.dataDir);
+  // The kind that holds the backup: 'latest' is this kind's newest when it has one.
+  const encrypted = await kindHolding(base, opts.snapshotId);
+  const store = repoStore(base, encrypted);
+  const raw = encrypted ? await keyFor(opts.dataDir, opts.recoveryKey) : null;
   const run = () => restoreRepoSnapshot(store, raw, opts.targetDir, {
     snapshotId: opts.snapshotId,
     onProgress: opts.onProgress,
@@ -142,10 +205,24 @@ export async function restoreEncryptedBackup(
   return withBackupLock(opts.dataDir, run);
 }
 
+/**
+ * Which kind of repository at `base` holds `snapshotId`; 'latest' is the newest of both
+ * (snapshot ids sort by time). An id in neither: the encrypted one, which then says so.
+ */
+async function kindHolding(base: BackupStore, snapshotId: string): Promise<boolean> {
+  const ids = async (encrypted: boolean) => (await repoStore(base, encrypted).list('snapshots/')).map((o) => o.key).sort();
+  const [enc, plain] = await Promise.all([ids(true), ids(false)]);
+  if (snapshotId !== 'latest') return !plain.includes(snapshotKey(snapshotId));
+  const newest = (keys: string[]) => keys[keys.length - 1] ?? '';
+  return newest(enc) >= newest(plain) && enc.length > 0;
+}
+
 /** Make this machine the one that writes backups to this destination. */
 export async function adoptEncryptedBackups(cfg: BackupConfig, opts: { dataDir: string; store?: BackupStore }): Promise<void> {
-  const store = opts.store ?? await makeStore(cfg.destination!, opts.dataDir);
-  const raw = await keyFor(opts.dataDir);
+  const base = opts.store ?? await makeStore(cfg.destination!, opts.dataDir);
+  const encrypted = await resolveEncrypted(cfg, base);
+  const store = repoStore(base, encrypted);
+  const raw = encrypted ? await keyFor(opts.dataDir) : null;
   await withBackupLock(opts.dataDir, async () => {
     const repo = await Repository.open(store, raw);
     await repo.setWriter(await localWriter(opts.dataDir));
@@ -157,8 +234,12 @@ export interface DestinationTestResult {
   destination: string;
   /** Write, read back and delete of a small probe object all worked. */
   canWrite?: boolean;
-  /** The destination already holds Walnut backups. */
+  /** The kind backups are made in here: as asked, or (not given) as the destination already holds. */
+  encrypted?: boolean;
+  /** The destination already holds Walnut backups of the kind backups are made in. */
   hasBackups?: boolean;
+  /** Unencrypted backups: whether encrypted ones are there too (kept, restorable with their key). */
+  hasEncryptedBackups?: boolean;
   /** This machine's recovery key opens them (false: another key made them). */
   keyMatches?: boolean;
   /** This machine has a recovery key at all. */
@@ -169,10 +250,13 @@ export interface DestinationTestResult {
   error?: string;
 }
 
-/** Real round trip against the destination, no backup written. */
+/**
+ * Real round trip against the destination, no backup written. `encrypted`: the kind backups
+ * are made in; undefined, encrypted when encrypted backups are already there (resolveEncrypted).
+ */
 export async function testDestination(
   dest: BackupDestinationConfig,
-  opts: { dataDir: string; store?: BackupStore },
+  opts: { dataDir: string; encrypted?: boolean; store?: BackupStore },
 ): Promise<DestinationTestResult> {
   const destination = describeDestination(dest);
   try {
@@ -183,7 +267,22 @@ export async function testDestination(
     const back = await store.get(probe);
     await store.delete(probe);
     if (!back.equals(body)) return { ok: false, destination, error: 'Wrote a test file but read back something else.' };
-    const out: DestinationTestResult = { ok: true, destination, canWrite: true, hasBackups: false };
+    const encrypted = opts.encrypted ?? await resolveEncrypted(undefined, store);
+    const out: DestinationTestResult = { ok: true, destination, canWrite: true, hasBackups: false, encrypted };
+    if (!encrypted) {
+      // No key to match: only whether backups of this kind are there, and who writes them.
+      try {
+        const repo = await Repository.open(repoStore(store, false), null);
+        out.hasBackups = true;
+        out.keyMatches = true;
+        out.writer = repo.writerName();
+        out.thisWriter = repo.isWriter(await localWriter(opts.dataDir));
+      } catch (err) {
+        if (!(err instanceof RepoError && err.code === 'no_repo')) throw err;
+      }
+      if (await hasSnapshots(store)) out.hasEncryptedBackups = true;
+      return out;
+    }
     const key = await readRecoveryKey(opts.dataDir);
     out.hasKey = Boolean(key);
     try {
