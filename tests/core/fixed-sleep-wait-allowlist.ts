@@ -216,6 +216,7 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/host-server/proxy.test.ts", sleep: "await new Promise((r) => setTimeout(r, 500))", reason: "negative: a reset while the stream opens must raise nothing and not call onFail (the slow connect lands at 300 ms)" },
   { file: "tests/host-server/proxy.test.ts", sleep: "await new Promise((r) => setTimeout(r, 200))", reason: "negative: a cancelled forward must not fail later with handshake_timeout" },
   { file: "tests/integration/capability-boot-companion-limited.test.ts", sleep: "await new Promise((r) => setTimeout(r, 2_000))", reason: "negative: cron/backup leader must not start; the positive plugins-loaded check after it is now a vi.waitFor" },
+  { file: "tests/integration/follower-gateway-job-twins.test.ts", sleep: "await sleep(QUIET_MS + 1_000)", reason: "negative: past the quiet window, a call whose caller left was relayed to nobody" },
   { file: "tests/integration/leader-takeover-twins.test.ts", sleep: "await sleep(2 * T)", reason: "negative/time under test: the companion must not take over within two takeover windows" },
   { file: "tests/integration/leader-takeover-twins.test.ts", sleep: "await sleep(3 * T)", reason: "negative/time under test: a link-only cut must not take over for three windows; lastDecision check after it is now a vi.waitFor" },
   { file: "tests/integration/offline-handover.test.ts", sleep: "await new Promise((r) => setTimeout(r, 50))", reason: "negative: waitForOfflineHandovers must still be pending while the handover is gated" },

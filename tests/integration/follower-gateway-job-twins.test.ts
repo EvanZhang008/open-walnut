@@ -150,16 +150,24 @@ function answersAs(ws: WebSocket, who: string): Array<Record<string, any>> {
   return asked
 }
 
-/** One call on the agent gateway socket under `sid`, as the job's walnut.ops.call sends it. */
-function gatewayCall(sock: string, sid: string, name: string): Promise<{ at: number; reply: Record<string, any> }> {
-  return new Promise((resolve, reject) => {
+/**
+ * One call on the agent gateway socket under `sid`, as the job's walnut.ops.call sends it:
+ * `sent` settles once the request left this process, `done` with the daemon's answer.
+ */
+function startGatewayCall(sock: string, sid: string, name: string): { sent: Promise<void>; done: Promise<{ at: number; reply: Record<string, any> }> } {
+  let wrote!: () => void
+  const sent = new Promise<void>((resolve) => { wrote = resolve })
+  const done = new Promise<{ at: number; reply: Record<string, any> }>((resolve, reject) => {
     const c = net.connect(sock)
     let buf = ''
-    c.on('connect', () => c.write(JSON.stringify({ v: 1, op: 'tools.call', sid, args: { name, args: {} } }) + '\n'))
+    c.on('connect', () => c.write(JSON.stringify({ v: 1, op: 'tools.call', sid, args: { name, args: {} } }) + '\n', () => wrote()))
     c.on('data', (d) => { buf += d.toString(); if (buf.includes('\n')) { c.destroy(); resolve({ at: Date.now(), reply: JSON.parse(buf.slice(0, buf.indexOf('\n'))) }) } })
     c.on('error', reject)
   })
+  return { sent, done }
 }
+
+const gatewayCall = (sock: string, sid: string, name: string) => startGatewayCall(sock, sid, name).done
 
 interface Rig { d: Daemon; mac: WebSocket; follower: WebSocket; macAsked: Array<Record<string, any>>; followerAsked: Array<Record<string, any>>; jobSid: string; awake: (on: boolean) => void }
 
@@ -202,6 +210,21 @@ async function rig(twin: Twin, name: string): Promise<Rig> {
   return { d, mac, follower, macAsked, followerAsked, jobSid, awake }
 }
 
+/**
+ * Waits until the daemon passes over its silent leader: three missed beats, plus the beat of
+ * the sweep that notices them, read from the daemon's own clock for the leader (the follower
+ * view's `primaryHeardAgoMs`), never from a fixed wait here.
+ */
+async function leaderPassedOver(r: Rig): Promise<void> {
+  const end = Date.now() + 30_000
+  for (;;) {
+    const view = await cmd(r.follower, { cmd: 'follower.status' })
+    if (Number(view.primaryHeardAgoMs) >= BEAT_MS * 4 + 100) return
+    if (Date.now() > end) throw new Error('timed out waiting for the daemon to pass over its leader: ' + JSON.stringify(view).slice(0, 300))
+    await sleep(50)
+  }
+}
+
 beforeAll(() => {
   base = fs.mkdtempSync(path.join(os.tmpdir(), 'fgj-'))
 })
@@ -227,7 +250,7 @@ for (const twin of ['source', 'standalone'] as const) {
         // may write only once the whole quiet window has passed. A call in between waits.
         r.awake(false)
         const quietAt = Date.now()
-        await sleep(BEAT_MS * 3 + 500)
+        await leaderPassedOver(r)
         const { at, reply: waited } = await gatewayCall(r.d.sock, r.jobSid, 'task_create')
         expect(waited, JSON.stringify(waited)).toMatchObject({ ok: true, result: { who: 'follower', op: 'task_create' } })
         expect(at - quietAt).toBeGreaterThanOrEqual(QUIET_MS - 500)
@@ -244,11 +267,12 @@ for (const twin of ['source', 'standalone'] as const) {
       const r = await rig(twin, `${twin.slice(0, 2)}b`)
       try {
         r.awake(false)
-        await sleep(BEAT_MS * 3 + 500)
-        const pending = gatewayCall(r.d.sock, r.jobSid, 'task_update')
-        await sleep(400)
+        await leaderPassedOver(r)
+        // The call is on its way before the Mac's next beat (half a beat after it wakes).
+        const pending = startGatewayCall(r.d.sock, r.jobSid, 'task_update')
+        await pending.sent
         r.awake(true)
-        const { reply } = await pending
+        const { reply } = await pending.done
         expect(reply, JSON.stringify(reply)).toMatchObject({ ok: true, result: { who: 'mac', op: 'task_update' } })
         expect(r.followerAsked).toEqual([])
       } finally {
@@ -261,7 +285,7 @@ for (const twin of ['source', 'standalone'] as const) {
       const r = await rig(twin, `${twin.slice(0, 2)}c`)
       try {
         r.awake(false)
-        await sleep(BEAT_MS * 3 + 500)
+        await leaderPassedOver(r)
         const c = net.connect(r.d.sock)
         await new Promise<void>((resolve, reject) => { c.on('connect', () => resolve()); c.on('error', reject) })
         c.write(JSON.stringify({ v: 1, op: 'tools.call', sid: r.jobSid, args: { name: 'task_create', args: {} } }) + '\n')
