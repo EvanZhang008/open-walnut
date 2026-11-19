@@ -6,6 +6,7 @@
  * the shapes of the Mac's own routes (notes-v2.ts and api-v1.ts), so the editor and the phone
  * cannot tell the difference except by the offline header; a stale hash answers 409 with the
  * text this host shows (`serverContent`), so the editor merges without another read.
+ * This host's own callers (local-calls.ts) get the same shape plus `queued` and `offline`.
  *
  * Mounted on a host replica only, before away-writes.ts (which answers needs_leader for any
  * journaled write it has no handler for). The Mac and the companion never mount it.
@@ -116,7 +117,10 @@ export function awayNotes(deps: AwayNotesDeps): RequestHandler {
       if (r.kind === 'answered') return
       if (r.kind === 'applied') {
         deps.log('info', 'replica: note write kept on this host', { path: notePath, op: route.op, opId: w.opId, seq: r.reply.seq, coalesced: r.reply.coalesced === true })
-        answer(applied(route, r.reply, notePath))
+        const kept = applied(route, r.reply, notePath)
+        // This host's own caller (a session, a plugin job) reads only the body: it is told the
+        // write waits for the Mac, as every other away write tells it. A device keeps the Mac's shape.
+        answer(actor.kind === 'device' || kept.answered ? kept : { ...kept, body: { ...kept.body, queued: true, offline: true } })
         return
       }
       deps.log('info', 'replica: note write refused by the daemon', { path: notePath, op: route.op, opId: w.opId, code: r.code })

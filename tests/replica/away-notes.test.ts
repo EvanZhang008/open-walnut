@@ -77,6 +77,20 @@ describe('answers in the Mac\'s own shapes', () => {
     expect(asked[1].args).toEqual({ path: 'Acme/Plan', content: '# Plan\n' })
   })
 
+  it('this host\'s own caller is told the write waits for the Mac; a device keeps the Mac\'s shape', async () => {
+    for (const actor of [{ kind: 'session', sid: 'aaaaaaaa-1111-4111-8111-111111111111' }, { kind: 'plugin-job', plugin: 'acme-sync', job: 'worker' }]) {
+      const { app, asked } = rig(saved, actor)
+      const v1 = await request(app).put('/api/v1/notes/content/Acme/Plan').send({ content: '# Plan\n' })
+      expect(v1.status).toBe(200)
+      expect(v1.body).toEqual({ contentHash: 'abc123abc123', updatedAt: '2026-10-17T10:00:00.000Z', queued: true, offline: true })
+      expect(asked[0].actor).toEqual(actor)
+      const made = await request(app).post('/api/v1/notes').send({ path: 'Acme/New', content: 'x' })
+      expect(made.body).toMatchObject({ path: 'Acme/New.md', queued: true, offline: true })
+    }
+    const phone = await request(rig(saved).app).put('/api/v1/notes/content/Acme/Plan').send({ content: '# Plan\n' })
+    expect(phone.body).toEqual({ contentHash: 'abc123abc123', updatedAt: '2026-10-17T10:00:00.000Z' })
+  })
+
   it('a create is create-only and answers 201 with the path; a delete answers ok', async () => {
     const { app, asked } = rig(saved)
     const made = await request(app).post('/api/v1/notes').send({ path: 'Acme/New', content: 'x' })
