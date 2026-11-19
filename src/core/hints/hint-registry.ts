@@ -178,7 +178,7 @@ const BUILT_IN: readonly HintSpec[] = [
   {
     kind: 'user-away',
     label: 'User away',
-    description: 'Main, the leads and a task with Threads on: one line when the user has been away from this chat for a while (what needs him and is on none of his threads goes to his inbox), and one when he is back.',
+    description: 'Main, the leads and a task with Threads on hear one line when the user has been away from this chat for a while, and one when he is back. What needs him then and is on none of his threads goes to his inbox.',
     allowed: SCHEDULED,
     defaults: { enabled: true, triggers: ['session_start', 'on_change', 'after_compaction'], placement: 'after' },
     // 2026-10-31, the user: when he is not in a node's chat, an important update goes to his inbox.

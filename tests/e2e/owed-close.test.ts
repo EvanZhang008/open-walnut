@@ -91,12 +91,21 @@ async function said(task: Task, text: string): Promise<void> {
 const HIS = 'I resubmitted it on the site this morning'
 
 const KIND = { user_kind: 'spending', user_kind_why: 'Paying the invoice spends the user\'s money' }
-/** A lead's thread waiting on the user that names the task, asking `ask`. */
+/** A lead's thread waiting on the user that names the task, asking `ask`. Only a task that keeps
+ *  Threads holds its workers' closes (keepsThreads): this lead is a task with Threads on, which joins
+ *  no Org team, so the matrix's workers in one project do not fold their same asks into one. */
 async function leadThread(task: Task, ask: string): Promise<{ lead: Task; thread: string }> {
-  const lead = (await addTask({ title: `Lead ${++n}`, project: task.project })).task
+  const lead = await threadsLead(task.project)
   const th = await openNodeThread(lead.id, { title: 'Print shop invoice', text: 'A new document is an invoice.', from: 'task', state: 'needs', tasks: [task.id], ref: task.id, ...KIND }, `task:${lead.id}`)
   await patchThread(lead.id, th.id, { ask, state: 'needs', ...KIND } as never, `task:${lead.id}`)
   return { lead, thread: th.id }
+}
+
+/** A task that keeps Threads without being an Org node (Task.threads_on, the user turned them on). */
+async function threadsLead(project: string): Promise<Task> {
+  const added = (await addTask({ title: `Lead ${++n}`, project })).task
+  await updateTaskRaw(added.id, { threads_on: true } as never, { emitEvent: true })
+  return { ...added, threads_on: true } as Task
 }
 
 async function worker(project: string): Promise<{ task: Task; sid: string }> {
@@ -568,7 +577,7 @@ describe('what does not hold, and who settles', () => {
   it('a thread that only went to several tasks ("which first?") holds none whose conclusion waits on nothing', async () => {
     const { task, sid } = await worker('Wide')
     const other = await worker('Wide')
-    const lead = (await addTask({ title: `Lead ${++n}`, project: 'Wide' })).task
+    const lead = await threadsLead('Wide')
     await updateTask(task.id, { parent_task_id: lead.id })
     await openNodeThread(lead.id, { title: 'Order', text: 'Which goes first?', from: 'task', state: 'needs', tasks: [task.id, other.task.id], ...KIND }, `task:${lead.id}`)
     expect((await json('POST', `/api/v1/tasks/${task.id}/complete`, { result: 'Shipped the importer.' }, sid)).status).toBe(200)

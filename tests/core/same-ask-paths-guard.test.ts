@@ -48,6 +48,7 @@ describe('the shown status folds a same ask', () => {
       error: 'a failed session or an undelivered message is that task\'s own state, never a decision',
       letter: 'the inbox letter is where the user answers it; a second letter in the tree is refused (letter-ops.ts)',
       none: 'a person set it to need them (MARKED_ASK): their own mark, one fixed sentence for every task',
+      thread: 'a thread waiting on him is his own request to this task, one per subject; a same ask in the team folds at the thread itself (thread_update\'s same_ask check and ask_owner), not in the status',
     }
     const src = code('src/core/user-status.ts')
     const sources = new Set([...src.matchAll(/state: 'needs',\s*(?:source: '([a-z]+)')?/g)].map((m) => m[1] ?? 'none'))
