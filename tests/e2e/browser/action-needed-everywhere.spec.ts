@@ -12,6 +12,7 @@
  *     others, and an unsnooze elsewhere is not held back by a place's own earlier snooze
  *   - a reply typed on the row (the thread card's own words box) answers a letter: its task gets
  *     the words, and the item leaves the strip and the Threads
+ *   - the strip stays short: one row per ask in a wide column, two in a narrow one (buttons below)
  *   - the switch off: no strip and no "From your team"
  * Real: the fixture server, the mock CLI's prompt, the approvals and inbox routes, the status sync.
  */
@@ -265,6 +266,37 @@ test('a reply typed on the row answers the letter: its task gets the words, and 
   await expect.poll(async () => ((await statusOf(request, ids.letter)).actions ?? []).some((a) => a.id === itemId), { timeout: 30_000 }).toBe(false)
   await toThreads(page)
   await expect(page.locator(`[data-testid="team-actions-task"][data-task-id="${ids.letter}"] [data-item-id="${itemId}"]`)).toHaveCount(0)
+})
+
+test('the strip stays short: one row per ask in a wide column, two in a narrow one (its buttons below)', async ({ page }) => {
+  // Wide: one session column beside the task list.
+  await openHome(page, ids.letterSid)
+  let strip = stripOf(page, ids.letterSid)
+  let items = strip.getByTestId('action-item')
+  await expect(items.first()).toBeVisible({ timeout: 30_000 })
+  for (const item of await items.all()) {
+    const box = (await item.boundingBox())!
+    const words = (await item.getByTestId('action-summary').boundingBox())!
+    const button = (await item.getByTestId('org-answer-option').first().boundingBox())!
+    expect(box.height, 'one row').toBeLessThan(40)
+    expect(Math.abs((button.y + button.height / 2) - (words.y + words.height / 2)), 'its buttons beside its words').toBeLessThan(8)
+  }
+  await page.screenshot({ path: `test-results/strip-wide-${test.info().project.name}.png`, clip: (await strip.boundingBox())! })
+
+  // Narrow: the same column at a third of a smaller window.
+  await page.setViewportSize({ width: 820, height: 900 })
+  strip = stripOf(page, ids.letterSid)
+  items = strip.getByTestId('action-item')
+  await expect.poll(async () => (await strip.boundingBox())?.width ?? 0).toBeLessThan(600)
+  for (const item of await items.all()) {
+    const box = (await item.boundingBox())!
+    const words = (await item.getByTestId('action-summary').boundingBox())!
+    const answer = (await item.locator('.action-needed-answer').boundingBox())!
+    expect(answer.y, 'its buttons on the row below its words').toBeGreaterThanOrEqual(words.y + words.height - 1)
+    expect(box.height, 'two rows at most').toBeLessThan(70)
+  }
+  await page.screenshot({ path: `test-results/strip-narrow-${test.info().project.name}.png`, clip: (await strip.boundingBox())! })
+  await page.setViewportSize({ width: 1280, height: 900 })
 })
 
 test('the switch off: no strip and no "From your team"', async ({ page, request }) => {
