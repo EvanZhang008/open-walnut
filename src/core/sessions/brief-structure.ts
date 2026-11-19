@@ -59,10 +59,25 @@ export function headingSection(line: string): BriefSectionKey | null {
  *  before one is derived), or null for finished work (it has none). Walnut's one reading of a
  *  task's state; this file adds no rule of its own. */
 export function briefSectionOf(task: BriefSectionTask): BriefSectionKey | null {
-  const state: UserState = task.phase === 'COMPLETE' || task.status === 'done'
-    ? 'done' : task.user_status ? storedUserState(task.user_status) : fallbackUserState(task.phase, task.status);
+  const state = briefStateOf(task);
   return state === 'done' ? null : shownState(state);
 }
+
+/** A task's own live state as the Brief reads it, To read kept apart from Needs you. */
+export function briefStateOf(task: BriefSectionTask): UserState {
+  return task.phase === 'COMPLETE' || task.status === 'done'
+    ? 'done' : task.user_status ? storedUserState(task.user_status) : fallbackUserState(task.phase, task.status);
+}
+
+/**
+ * Whether a task asks the user to decide or do something. A task with only something to read sits
+ * under Needs you (shownState) but asks nothing, so the Brief never lists it as an ask nor counts it
+ * as one: Walnut folds those into one line (2026-11-18, a VP's reflection: its Brief read "53 more
+ * things need you" where about 12 asked the user, and a decision due at noon was lost among them).
+ */
+export const briefAsksUser = (task: BriefSectionTask): boolean => briefStateOf(task) === 'needs';
+/** A task with only something for the user to look at (To read): one count line in Needs you. */
+export const briefToRead = (task: BriefSectionTask): boolean => briefStateOf(task) === 'read';
 
 /** The VP who leads a task's project, named after it on Main's lines; none for a lead or Main itself. */
 export function briefVpOf(task: BriefTask, tasks: readonly BriefTask[]): BriefTask | undefined {
@@ -108,10 +123,13 @@ export const BRIEF_WALNUT_WORDS: Readonly<Record<BriefLang, {
   lastWords: (words: string) => string;
   needsYou: string;
   more: (n: number) => string;
+  /** The one line for the tasks with only something to look at (briefToRead). */
+  toLook: (n: number) => string;
 }>> = {
   en: {
     labels: NEEDS_CATEGORY_LABELS, sep: ': ', fixed: {}, lastWords: (w) => `${TURN_TO_READ}; its last words: "${w}"`, needsYou: 'Needs you',
     more: (n) => `- And ${n} more ${n === 1 ? 'ask' : 'asks'} the user: the Task view lists ${n === 1 ? 'it' : 'them'}.`,
+    toLook: (n) => `- And ${n} ${n === 1 ? 'task' : 'tasks'} only to look at, nothing to decide: the Task view lists ${n === 1 ? 'it' : 'them'}.`,
   },
   zh: {
     labels: { look: '看一下', decide: '要你决定', review: '要你审阅', close: '可以关闭' },
@@ -123,6 +141,7 @@ export const BRIEF_WALNUT_WORDS: Readonly<Record<BriefLang, {
     lastWords: (w) => `这一轮结束了，没有问你什么；最后一句：「${w}」`,
     needsYou: '需要你',
     more: (n) => `- 还有 ${n} 件事要你处理：在 Task 视图里看。`,
+    toLook: (n) => `- 另有 ${n} 件只需要你看一下，没有要你决定的：在 Task 视图里看。`,
   },
 };
 
@@ -133,8 +152,9 @@ export function briefLangOf(language: string | undefined, text = ''): BriefLang 
   return /[\u4e00-\u9fff]/.test(text.replace(/<task-ref\b[^>]*>/g, '')) ? 'zh' : 'en';
 }
 
-/** Walnut's line for the asks past ADDED_ASKS_MAX, in any of its languages: no task of its own, never a rule issue. */
-export const ADDED_MORE_RE = /^- (?:And \d+ more asks? the user: the Task view lists (?:it|them)\.|还有 \d+ 件事要你处理：在 Task 视图里看。)$/;
+/** Walnut's count lines, in any of its languages: the asks past ADDED_ASKS_MAX, and the tasks with
+ *  only something to look at. No task of their own, never a rule issue, made again from the live state. */
+export const ADDED_MORE_RE = /^- (?:And \d+ more asks? the user: the Task view lists (?:it|them)\.|还有 \d+ 件事要你处理：在 Task 视图里看。|And \d+ tasks? only to look at, nothing to decide: the Task view lists (?:it|them)\.|另有 \d+ 件只需要你看一下，没有要你决定的：在 Task 视图里看。)$/;
 
 /** A status's line words as the Brief says them in `lang`: its fixed words translated, else as written. */
 function statusWords(text: string, s: BriefSectionTask['user_status'], lang: BriefLang): string {
@@ -391,9 +411,10 @@ export function structureBrief(
   const walnut = (ln: Ln) => { body.needs.push(ln); walnutLines.push(ln.text); };
   if (opts.live) {
     const main = opts.live.org_role === 'main';
-    const missing = briefAskScope(opts.live, tasks)
-      .filter((t) => !named.has(t.id) && briefSectionOf(t) === 'needs' && !t.user_status?.transient)
-      .sort((a, b) => askedAt(b) - askedAt(a));
+    const unnamed = briefAskScope(opts.live, tasks).filter((t) => !named.has(t.id) && !t.user_status?.transient);
+    // Only a task that asks the user gets a line of its own; one with only something to read is counted.
+    const missing = unnamed.filter(briefAsksUser).sort((a, b) => askedAt(b) - askedAt(a));
+    const toLook = unnamed.filter(briefToRead).length;
     for (const t of missing.slice(0, ADDED_ASKS_MAX)) {
       const words = addedAskLine(t, main, tasks, lang);
       // The ask's words are its task's writer's (a session's report, a turn's last words), never the Brief's owner.
@@ -402,6 +423,7 @@ export function structureBrief(
     }
     const more = missing.length - ADDED_ASKS_MAX;
     if (more > 0) walnut(layout(BRIEF_WALNUT_WORDS[lang].more(more)));
+    if (toLook > 0) walnut(layout(BRIEF_WALNUT_WORDS[lang].toLook(toLook)));
   }
   const trim = (ls: Ln[]) => {
     let a = 0; let b = ls.length;
@@ -448,4 +470,4 @@ export function briefSectionsBlock(sections: Record<BriefSectionKey, readonly st
 }
 
 /** The rule every Brief follows: the three headings, each task under its own live status. */
-export const BRIEF_STRUCTURE_RULE = `It has exactly these sections, always all of them, in this order, under these exact Markdown headings: ${BRIEF_SECTIONS.filter((s) => !s.optional).map((s) => `"### ${s.heading}"`).join(', ')}. A task with only something to read (finished, or it answered the user, asking nothing) goes under Needs you, its line saying what to look at. A task goes in the section of its own live status in Walnut's lists below, never in another one; an empty section gets one line saying there is nothing. Finished work leaves the Brief. Nothing before the first heading. Walnut moves a line to its task's section and adds a missing heading.`;
+export const BRIEF_STRUCTURE_RULE = `It has exactly these sections, always all of them, in this order, under these exact Markdown headings: ${BRIEF_SECTIONS.filter((s) => !s.optional).map((s) => `"### ${s.heading}"`).join(', ')}. A task with only something to read (finished, or it answered the user, asking nothing) asks nothing: never give it a line of its own (Walnut adds one line in Needs you counting those, and the Task view lists them); name one only when the user really must look at it, saying why. A task goes in the section of its own live status in Walnut's lists below, never in another one; an empty section gets one line saying there is nothing. Finished work leaves the Brief. Nothing before the first heading. Walnut moves a line to its task's section and adds a missing heading.`;

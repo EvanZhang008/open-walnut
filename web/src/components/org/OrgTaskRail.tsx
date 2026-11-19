@@ -41,6 +41,7 @@ import type { OrgThreadsState } from './useOrgThreads';
 import { OrgInlineAnswer, type AnswerFailure, type AnswerSettle } from './OrgInlineAnswer';
 import { OrgAlertSnooze } from './OrgAlertSnooze';
 import { usePointerHold } from './hold-order';
+import { isBoolean, usePageView } from '@/utils/view-memory';
 import { writeBriefFolded, type OrgTopView } from './org-brief-model';
 import type { BriefFreshness } from '@open-walnut/brief-fresh';
 import { WithdrawAnswerButton } from '@/components/tasks/AnsweredForLine';
@@ -49,7 +50,7 @@ import { useWatchToggle } from '@/components/tasks/WatchToggle';
 import * as ICONS from '@/components/common/Icons';
 import { snoozeTakesOff } from '@open-walnut/user-status';
 import { askSummary, lineSetBy, readStatusLine } from './org-ask-form';
-import { alertCategoryLabel, cardChecked, type ChannelRow, type OrgAlertView } from './org-channels-model';
+import { alertCategoryLabel, askCount, cardChecked, isAsk, type ChannelRow, type OrgAlertView } from './org-channels-model';
 import { taskPath } from '@/utils/task-path';
 import type { Approval } from '@/api/approvals';
 import { ApprovalRows } from '@/components/approvals/ApprovalRow';
@@ -279,12 +280,23 @@ function AskList({ alerts, tasks, vpOf, ownId, ownName, onOpen, onQuote, canQuot
   const keyed = useMemo(() => alerts.map((a) => ({ key: a.taskId, a })), [alerts]);
   const hold = usePointerHold(keyed);
   const shown = hold.shown.map((x) => x.a);
+  // The cards with only something to read ask nothing: one row counts them, a click lists them.
+  const looks = shown.filter((a) => !isAsk(a));
+  const [looksOpen, setLooksOpen] = usePageView('org', 'to-look-open', false, isBoolean);
+  const row = (a: OrgAlertView) => (
+    <AskRow key={a.taskId} a={a} task={byId.get(a.taskId)} vp={a.taskId === ownId ? undefined : vpOf(a.taskId)} own={a.taskId === ownId ? ownName : undefined} onOpen={onOpen} onQuote={onQuote} canQuote={canQuote} answers={answers} />
+  );
   return (
     <div className="org-alerts" data-testid="org-alerts" role="region" aria-label="Needs you"
       onPointerEnter={hold.onPointerEnter} onPointerLeave={hold.onPointerLeave}>
-      {shown.map((a) => (
-        <AskRow key={a.taskId} a={a} task={byId.get(a.taskId)} vp={a.taskId === ownId ? undefined : vpOf(a.taskId)} own={a.taskId === ownId ? ownName : undefined} onOpen={onOpen} onQuote={onQuote} canQuote={canQuote} answers={answers} />
-      ))}
+      {shown.filter(isAsk).map(row)}
+      {looks.length > 0 && (
+        <button type="button" className="org-to-look" data-testid="org-to-look" aria-expanded={looksOpen} onClick={() => setLooksOpen(!looksOpen)}>
+          <span className="org-to-look-chev" aria-hidden="true">{looksOpen ? '▾' : '▸'}</span>
+          {looks.length} only to look at <span className="org-to-look-note">· nothing to decide</span>
+        </button>
+      )}
+      {looksOpen && looks.map(row)}
     </div>
   );
 }
@@ -315,7 +327,8 @@ function AllTasks({ tabs, alerts, approvals, flipped, onFlip, focus, onFocused, 
       {sections.length === 0 && <p className="org-task-empty" data-testid="org-task-empty">Nothing open here.</p>}
       {sections.map((sec) => {
         const open = sectionOpen(sec.tab, flipped);
-        const count = sec.tasks.length + sec.alerts.length + (sec.tab === 'needs' ? approvals.length : 0);
+        // Needs you counts what asks the user; a card with only something to read is no ask (isAsk).
+        const count = sec.tab === 'needs' ? askCount(sec.alerts) + approvals.length : sec.tasks.length + sec.alerts.length;
         return (
           <section key={sec.tab} className="org-task-section" data-testid="org-task-section" data-tab={sec.tab} data-open={open ? '1' : '0'}>
             <SectionHead tab={sec.tab} count={count} open={open} onFlip={() => onFlip(sec.tab)} />

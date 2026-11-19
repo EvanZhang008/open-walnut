@@ -109,10 +109,10 @@ describe('org chart cards', () => {
     expect(both.newsAt).toBe(Date.parse(at(5)))
   })
 
-  it('a task with only something to read counts in the card\'s Needs you, its news led by what to do with it', () => {
+  it('a task with only something to read is never counted in the card\'s Needs you (it asks nothing), its news led by what to do with it', () => {
     const done = t('Seeds', { phase: 'NEED_ACTION', title: 'Order seeds', user_status: { state: 'read', toRead: 'result', waitingOn: 'The result is ready', at: '2026-10-26T12:40:00.000Z' } as never })
     const card = cardsOf([...garden, done, seedsLead]).find((c) => c.name === 'Seeds')!
-    expect(card.needsYou).toBe(1)
+    expect(card.needsYou).toBe(0)
     expect([card.news, card.newsTask]).toEqual(['Can close: The result is ready', 'Order seeds'])
     expect(card.line).not.toContain('To read')
   })
@@ -125,7 +125,7 @@ describe('org chart cards', () => {
     const card = cardsOf([read, seedsLead]).find((c) => c.name === 'Seeds')!
     expect(card.news).toBe(news)
     expect(card.newsTask).toBe(read.title)
-    expect(card.needsYou).toBe(1)
+    expect(card.needsYou).toBe(0)
     expect(card.newsAt).toBe(Date.parse(read.user_status!.at!))
   })
 

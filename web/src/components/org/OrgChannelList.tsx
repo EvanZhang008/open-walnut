@@ -24,7 +24,7 @@ import '@/styles/org-rail.css';
 import { readOrgPlace, writeOrgPlace } from './org-place';
 import { timeAgo } from '@/utils/time';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
-import { avatarColor, initials, rowAvatarColor, type ChannelRow, type ChannelState, type MovedRow } from './org-channels-model';
+import { askCount, avatarColor, initials, rowAvatarColor, type ChannelRow, type ChannelState, type MovedRow } from './org-channels-model';
 import { usePointerHold } from './hold-order';
 import { useOpenTask } from '@/hooks/useOpenTask';
 import { OrgEditableName } from './OrgEditableName';
@@ -75,7 +75,8 @@ function Row({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; select
   // The CEO's and a VP's own row: its threads his view shows, red, else "0" in grey (2026-11-03, the
   // user: "the little red should be thread instead of need u ... even if no thread, show 0 thread").
   // Any other row: what opening it lets the user answer.
-  const own = row.alerts.length;
+  // Asks only: a card with only something to read is no ask (isAsk).
+  const own = askCount(row.alerts);
   const badge = row.threadsBadge !== undefined
     ? <span className={`org-badge ${row.threadsBadge ? 'is-alert' : 'is-none'}`} data-testid="org-channel-badge" data-threads={row.threadsBadge} title={threadCountLabel(row.threadsBadge)}>{row.threadsBadge}</span>
     : own > 0

@@ -224,8 +224,17 @@ export function threadsOf(t: Pick<Task, 'user_status'> | undefined): ThreadCount
 
 /** `parked`: for each of the row's open tasks, whether it is parked (isParkedTask). `keepsThreads`:
  *  the row is the CEO's or a VP's own, red only for its threads. */
+/**
+ * Whether a card asks the user to decide or do something. A card with only something to read
+ * (`toRead`) sits under Needs you but asks nothing: every count and red mark of the page counts
+ * asks only, and the list folds those cards into one row (2026-11-18, a VP's reflection: 53 "need
+ * you" where about 12 asked the user).
+ */
+export const isAsk = (a: Pick<OrgAlertView, 'toRead'>): boolean => !a.toRead;
+export const askCount = (alerts: readonly Pick<OrgAlertView, 'toRead'>[]): number => alerts.filter(isAsk).length;
+
 export function channelState(counts: OrgCounts, alerts: readonly OrgAlertView[], parked?: readonly boolean[], threads?: ThreadCounts, keepsThreads = false): ChannelState {
-  if (keepsThreads ? (threads?.shown ?? 0) > 0 : alerts.length > 0) return 'alert';
+  if (keepsThreads ? (threads?.shown ?? 0) > 0 : alerts.some(isAsk)) return 'alert';
   if (counts.running > 0) return 'working';
   if (parked ? parked.length > 0 && parked.every(Boolean) : counts.open > 0 && counts.waiting === counts.open) return 'parked';
   return 'quiet';
@@ -245,7 +254,8 @@ function latestOf(nodes: readonly OrgTaskNode[], byId: ReadonlyMap<string, Task>
   // should be the first one in the list"); one that only shows an answer never hides a task's ask.
   if (threads?.shown) return { text: threadLine(threads), at: taskTime(node), ...(threads.titlePinned ? { pinned: true } : {}) };
   if (alerts.length) {
-    const a = alerts[0]!;
+    // An ask names the row before a card with only something to read.
+    const a = alerts.find(isAsk) ?? alerts[0]!;
     const task = byId.get(a.taskId);
     // A live prompt or a failure is as new as the task's last move; a status ask has its own time.
     const at = a.kind === 'needs' && task ? newsItem(task as TeamNewsTask).at : taskTime(task);
@@ -282,7 +292,7 @@ function projectRow(p: OrgProjectNode, byId: ReadonlyMap<string, Task>, probe: A
     counts: p.counts,
     state: channelState(p.counts, alerts, nodes.map((n) => isParkedTask(byId.get(n.id) ?? n)), threads, keepsThreads),
     alerts,
-    needs: (threads?.needs ?? 0) + alerts.length,
+    needs: (threads?.needs ?? 0) + askCount(alerts),
     ...(threads ? { threads } : {}),
     ...(keepsThreads ? { threadsBadge: threads?.shown ?? 0 } : {}),
     latest: latest.text,
@@ -399,7 +409,7 @@ export function buildChannels(tree: OrgTree, tasks: readonly Task[], probe: Aler
   // Tasks, as Main's pills count them: what works, and what needs the user under every lead.
   // The tasks' asks under every VP (Main's Needs you tab holds these cards); a VP's own threads are
   // counted as threads on its row, never as a Needs you here.
-  const needYou = rows.reduce((n, r) => n + r.alerts.length, 0);
+  const needYou = rows.reduce((n, r) => n + askCount(r.alerts), 0);
   const working = tree.counts.running;
   const mainThreads = threadsOf(mainTask);
   // Its own Threads lead the line, 0 included; the teams' asks are in its Tasks, never a Needs you here.
@@ -419,7 +429,7 @@ export function buildChannels(tree: OrgTree, tasks: readonly Task[], probe: Aler
     // Main's own state: its threads, else whether any lead works.
     state: mainThreads?.shown ? 'alert' : working ? 'working' : 'quiet',
     alerts: mainAlerts,
-    needs: (mainThreads?.needs ?? 0) + mainAlerts.length + needYou,
+    needs: (mainThreads?.needs ?? 0) + askCount(mainAlerts) + needYou,
     ...(mainThreads ? { threads: mainThreads } : {}),
     threadsBadge: mainThreads?.shown ?? 0,
     // Its threads name the newest one, then the rest of the line (summary[0] is their count).
@@ -571,8 +581,10 @@ function columnsOf(items: readonly (TeamItem & { column: TeamColumnKey })[]): Te
  *  with it, its category), what it does, or what it waits on. */
 function statusNote(task: Task | undefined, column: TeamColumnKey): { text: string; label?: string } | undefined {
   const s = task?.user_status;
-  if (!s || shownState(storedUserState(s)) !== column) return undefined;
-  if (column === 'needs') {
+  // A team with only something to read waits (it asks nothing) and still says what to look at.
+  const toLook = !!s && storedUserState(s) === 'read' && column === 'waiting';
+  if (!s || (!toLook && shownState(storedUserState(s)) !== column)) return undefined;
+  if (column === 'needs' || toLook) {
     const line = needsLineOf(s);
     return line?.text ? { text: line.text, label: NEEDS_CATEGORY_LABELS[line.category] } : undefined;
   }
@@ -593,16 +605,16 @@ function teamNote(all: readonly OrgTaskNode[], byId: ReadonlyMap<string, Task>, 
   return undefined;
 }
 
-/** A project's teams by the user's status: a team with anything in it that needs the user (an
- *  ask, or a result or an answer to look at) sits under Needs you, else one with anything working
- *  under Working, else under Waiting. */
+/** A project's teams by the user's status: a team with anything in it that asks the user sits
+ *  under Needs you (a result or an answer only to look at asks nothing: isAsk), else one with
+ *  anything working under Working, else under Waiting. */
 export function teamColumns(row: ChannelRow, tasks: readonly Task[]): TeamColumn[] {
   if (!row.node) return [];
   const byId = new Map(tasks.map((t) => [t.id, t] as const));
-  const alerted = new Set(row.alerts.map((a) => a.taskId));
+  const alerted = new Set(row.alerts.filter(isAsk).map((a) => a.taskId));
   const items = row.node.teams.map((n) => {
     const all = [n, ...flattenNodes(n.workers)];
-    const column: TeamColumnKey = all.some((x) => alerted.has(x.id) || shownState(x.userState) === 'needs') ? 'needs'
+    const column: TeamColumnKey = all.some((x) => alerted.has(x.id) || x.userState === 'needs') ? 'needs'
       : all.some((x) => x.userState === 'working') ? 'working' : 'waiting';
     const note = teamNote(all, byId, column);
     // Every running task of the team, also under Needs you (its ask leads; what runs shows below).

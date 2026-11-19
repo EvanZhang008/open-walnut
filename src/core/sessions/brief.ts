@@ -13,12 +13,12 @@
  * task it names with its live status dot.
  */
 import {
-  BRIEF_SECTIONS, storedUserState, COMPLETE_IS_VERIFIED, agoWords, briefTeam, resultIsPartial,
+  BRIEF_SECTIONS, COMPLETE_IS_VERIFIED, agoWords, briefTeam, resultIsPartial,
 } from '../user-status.js';
 import type { Task } from '../types.js';
 import { statusDecision } from '../ask-decision.js';
 import { briefVpOf } from './brief-rules.js';
-import { BRIEF_STRUCTURE_RULE, briefSectionOf, briefSectionsBlock, type BriefSectionKey } from './brief-structure.js';
+import { BRIEF_STRUCTURE_RULE, briefAsksUser, briefSectionOf, briefSectionsBlock, briefToRead, type BriefSectionKey } from './brief-structure.js';
 import { sameAreaTasks } from '../router/same-area.js';
 
 export function keepsBrief(task: Pick<Task, 'org_role'>): boolean {
@@ -34,16 +34,15 @@ const SECTION_LIST_MAX = 15;
  * as fact), what it is doing, what it waits on. Main's Needs you covers the whole org, each with
  * its VP; its Working and Waiting are its VPs and the work below Main.
  */
-/** Every task in the node's Needs you section now, with its ask (the same scope as the list below). */
+/** Every task in the node's Needs you that asks the user now, with its ask (the same scope as the
+ *  list below). A task with only something to read asks nothing and is not one (briefAsksUser). */
 export function briefNeedsAsks(owner: Task, tasks: readonly Task[]): Record<string, string> {
   const main = owner.org_role === 'main';
   // Only the owner's own area (router/same-area.ts): an unscoped Main never reads an area task's ask.
   const org = sameAreaTasks(owner, main ? tasks.filter((t) => !t.plugin_only && t.id !== owner.id) : briefTeam(owner, tasks));
   const out: Record<string, string> = {};
   for (const t of org) {
-    const us = t.user_status;
-    const words = us && storedUserState(us) === 'read' ? us.waitingOn : us?.ask;
-    if (briefSectionOf(t) === 'needs') out[t.id] = (words ?? 'needs the user').replace(/\s+/g, ' ').trim().slice(0, 200);
+    if (briefAsksUser(t)) out[t.id] = (t.user_status?.ask ?? 'needs the user').replace(/\s+/g, ' ').trim().slice(0, 200);
   }
   return out;
 }
@@ -54,7 +53,7 @@ export function briefNeedsDecisions(owner: Task, tasks: readonly Task[]): Record
   const org = main ? tasks.filter((t) => !t.plugin_only && t.id !== owner.id) : briefTeam(owner, tasks);
   const out: Record<string, string> = {};
   for (const t of org) {
-    const decision = briefSectionOf(t) === 'needs' ? statusDecision(t.user_status) : null;
+    const decision = briefAsksUser(t) ? statusDecision(t.user_status) : null;
     if (decision) out[t.id] = decision.key;
   }
   return out;
@@ -69,14 +68,15 @@ export function briefSectionLines(owner: Task, tasks: readonly Task[], now = Dat
   const org = main ? sameAreaTasks(owner, tasks.filter((t) => !t.plugin_only && t.id !== owner.id)) : team;
   const out: Record<BriefSectionKey, Array<{ line: string; at: number }>> = { needs: [], working: [], waiting: [] };
   const inTeam = new Set(team.map((t) => t.id));
+  // A task with only something to read asks nothing: counted in one line, never listed (briefToRead).
+  let toLook = 0;
   for (const t of org) {
     const section = briefSectionOf(t);
     if (!section || (section !== 'needs' && !inTeam.has(t.id))) continue;
+    if (briefToRead(t)) { toLook++; continue; }
     const s = t.user_status;
     let words = '';
-    if (section === 'needs' && s && storedUserState(s) === 'read') {
-      words = s.waitingOn ? `to read: ${flat(s.waitingOn).slice(0, 160)}` : 'to read';
-    } else if (section === 'needs') {
+    if (section === 'needs') {
       const checked = s?.checkedAt ? Date.parse(s.checkedAt) : NaN;
       // A Board choice is checked like a session's own ask (its write on the Board is its check).
       const by = s?.source === 'choice' ? 'on its Board' : 'by its session';
@@ -108,6 +108,7 @@ export function briefSectionLines(owner: Task, tasks: readonly Task[], now = Dat
     lines[state] = rows.slice(0, SECTION_LIST_MAX).map((r) => r.line);
     if (rows.length > SECTION_LIST_MAX) lines[state].push(`- and ${rows.length - SECTION_LIST_MAX} more`);
   }
+  if (toLook) lines.needs.push(`- (${toLook} ${toLook === 1 ? 'task has' : 'tasks have'} only something to read, nothing asked: Walnut writes them as one count line; no line of yours)`);
   return lines;
 }
 

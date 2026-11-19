@@ -75,6 +75,8 @@ enum ChatOrgModel {
     static func ownNeeds(_ id: String?, phase: String?, tasks: [String: WalnutTask]) -> Int {
         guard ownState(id, phase: phase, tasks: tasks) == .needs else { return 0 }
         if let id, tasks[id]?.userStatus?.source == "thread" { return 0 }
+        // Only something to read asks nothing (the web's isAsk).
+        if let id, TeamStatusModel.isToRead(tasks[id]?.userStatus) { return 0 }
         return 1
     }
 
@@ -136,8 +138,9 @@ enum ChatOrgModel {
             let ownRow = p.lead != nil && p.vp == nil
             let threads = ownRow ? threadsOf(p.lead?.id, tasks: tasks) : nil
             let leadNeeds = ownRow ? ownNeeds(p.lead?.id, phase: p.lead?.phase, tasks: tasks) : 0
-            // To read is Needs you on the phone: the server counts it apart (`toRead`).
-            let asks = counts.needsYou + counts.read + leadNeeds
+            // Asks only: a task with only something to read (the server's `toRead`) asks nothing,
+            // so the row's number never counts it (2026-11-18, the web's isAsk).
+            let asks = counts.needsYou + leadNeeds
             let needs = (threads?.needs ?? 0) + asks
             // A VP's own row is red only for its threads; another row for any ask under it.
             let red = ownRow ? (threads?.shown ?? 0) > 0 : needs > 0

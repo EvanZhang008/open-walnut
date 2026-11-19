@@ -15,10 +15,10 @@ import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
 import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
 import type { LetterRecord } from '../human-inbox/types.js';
-import { briefTeam, needsLineText, storedUserState } from '../user-status.js';
+import { briefTeam } from '../user-status.js';
 import { ORG_REPORT } from '../human-inbox/walnut-letters/org-report.js';
 import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
-import { briefSectionOf } from '../sessions/brief-structure.js';
+import { briefAsksUser, briefSectionOf, briefToRead } from '../sessions/brief-structure.js';
 import { sameAreaTasks, sameTaskArea } from '../router/same-area.js';
 import { awaitsUserDecision } from '../human-inbox/open-decision.js';
 
@@ -71,7 +71,9 @@ export function buildMorningReport(owner: Task, tasks: readonly Task[], letters:
   };
   const decisions = letters.filter((l) => awaitsUserDecision(l) && letterInArea(l));
   const refs = new Set<string>();
-  const needs = scope.filter((t) => briefSectionOf(t) === 'needs').sort((a, b) => atOf(b) - atOf(a));
+  // Only what asks him is listed; a task with only something to read is one count line (briefAsksUser).
+  const needs = scope.filter(briefAsksUser).sort((a, b) => atOf(b) - atOf(a));
+  const toLook = scope.filter(briefToRead).length;
   const done = scope.filter((t) => t.phase === 'COMPLETE' && atOf(t) >= since).sort((a, b) => atOf(b) - atOf(a));
   const moved = scope.filter((t) => t.phase !== 'COMPLETE' && atOf(t) >= since && briefSectionOf(t) !== 'needs').sort((a, b) => atOf(b) - atOf(a));
   const shown = <T>(rows: readonly T[]): readonly T[] => rows.slice(0, LIST_MAX);
@@ -88,16 +90,15 @@ export function buildMorningReport(owner: Task, tasks: readonly Task[], letters:
       const s = t.user_status;
       const letter = decisions.find((l) => l.sender.taskId === t.id || l.taskRefs?.includes(t.id));
       const form = s?.askForm;
-      // A result or an answer to look at says what to do with it (needsLineText, 2026-11-03).
-      const toRead = !!s && storedUserState(s) === 'read';
       return {
         title: flat(t.title, 120),
-        ...(toRead ? { ask: flat(needsLineText(s!)) } : s?.ask ? { ask: flat(form?.summary ?? s.ask) } : {}),
+        ...(s?.ask ? { ask: flat(form?.summary ?? s.ask) } : {}),
         ...(s?.checkedAt ? { checked: hhmm(Date.parse(s.checkedAt)), unverified: !!s.unverified } : {}),
         ...(form?.kind === 'yes_no' ? { yesNo: true } : form?.options?.length ? { options: form.options.map((o) => o.label) } : {}),
         ...(letter ? { letter: flat(letter.subject, 120) } : {}),
       };
     }),
+    ...(toLook ? { toLook } : {}),
     decisions: orphan.map((l) => ({ subject: flat(l.subject, 160), ...(l.sender.taskTitle ? { from: flat(l.sender.taskTitle, 80) } : {}) })),
     done: done.map((t) => ({ title: flat(t.title, 120), ...(t.result_report?.result ? { result: flat(t.result_report.result) } : {}) })),
     moved: moved.map((t) => {

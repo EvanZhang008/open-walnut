@@ -20,7 +20,7 @@
  * joined Needs you, or finished, moved.
  */
 import { fallbackUserState, needsLineText, type BriefSectionTask, type TaskBrief, type UserState } from '../user-status.js';
-import { briefAskScope, briefSectionOf, headingSection, type BriefSectionKey } from './brief-structure.js';
+import { briefAskScope, briefAsksUser, briefSectionOf, headingSection, type BriefSectionKey } from './brief-structure.js';
 import { askShape, sameAskShape } from '../same-ask.js';
 import { statusDecision } from '../ask-decision.js';
 
@@ -172,7 +172,7 @@ export function briefSnapshot(
     const t = byId.get(id);
     if (t && settled(t)) marks[id] = briefLineMark(t);
   }
-  const asks = briefAskScope(owner, tasks).filter((t) => briefSectionOf(t) === 'needs').map((t) => t.id);
+  const asks = briefAskScope(owner, tasks).filter(briefAsksUser).map((t) => t.id);
   return { marks, asks };
 }
 
@@ -242,7 +242,7 @@ export function briefFreshness(owner: BriefSectionTask & { brief?: TaskBrief }, 
   const asked = new Set(brief.asks ?? []);
   const newAsks = briefAskScope(owner, tasks).filter((t) => {
     // A VP's Thread waiting on the user is his own request to it: no new ask for the letter's owner.
-    if (named.has(t.id) || briefSectionOf(t) !== 'needs' || t.user_status?.transient || t.user_status?.source === 'thread') return false;
+    if (named.has(t.id) || !briefAsksUser(t) || t.user_status?.transient || t.user_status?.source === 'thread') return false;
     if (!legacy && brief.asks) return !asked.has(t.id);
     // A letter stored before Walnut kept its asks: an ask set after the letter is new.
     const at = Date.parse(t.user_status?.at ?? t.phase_changed_at ?? '');

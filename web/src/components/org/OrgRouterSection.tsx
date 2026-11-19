@@ -13,7 +13,7 @@
  */
 import { timeAgo } from '@/utils/time';
 import { stateCountLabel } from '@open-walnut/user-status';
-import { ROUTER_AVATAR_COLOR, initials, type ChannelRow, type ChannelState } from './org-channels-model';
+import { ROUTER_AVATAR_COLOR, askCount, initials, type ChannelRow, type ChannelState } from './org-channels-model';
 
 const STATE_LABEL: Record<ChannelState, string> = {
   alert: 'Needs you', working: 'Working', quiet: 'Waiting', parked: 'Paused',
@@ -38,7 +38,7 @@ function shortAgo(ms: number, now: number): string {
 }
 
 function RouterRow({ row, selected, now, onSelect }: { row: ChannelRow; selected: boolean; now: number; onSelect: (key: string) => void }) {
-  const own = row.alerts.length;
+  const own = askCount(row.alerts);
   return (
     <button
       type="button"

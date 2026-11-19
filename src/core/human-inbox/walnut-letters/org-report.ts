@@ -13,6 +13,8 @@ export interface OrgReportParams {
   /** When the report counts from, as the report says times. */
   since: string;
   needs: Array<{ title: string; ask?: string; checked?: string; unverified?: boolean; yesNo?: boolean; options?: string[]; letter?: string }>;
+  /** Tasks with only something to read, nothing asked: one line under Needs you, never listed. */
+  toLook?: number;
   decisions: Array<{ subject: string; from?: string }>;
   done: Array<{ title: string; result?: string }>;
   moved: Array<{ title: string; snoozedUntil?: string; waitingOn?: string; waiting?: boolean; now?: string }>;
@@ -30,6 +32,7 @@ interface Words {
   movedHead: (since: string, n: number) => string;
   briefHead: (owner: string | null, at: string | undefined) => string;
   more: (n: number) => string;
+  toLook: (n: number) => string;
   nothing: string;
   noWords: string;
   checked: (at: string, unverified: boolean) => string;
@@ -55,6 +58,7 @@ const WORDS: ByLang<Words> = {
     movedHead: (since, n) => `## Moved since ${since} (${n})`,
     briefHead: (owner, at) => `## ${owner ?? 'CEO'}'s Brief (written ${at ?? 'earlier'})`,
     more: (n) => `- and ${n} more`,
+    toLook: (n) => `- And ${n} ${n === 1 ? 'task' : 'tasks'} only to look at, nothing to decide: the Org page's Needs you lists ${n === 1 ? 'it' : 'them'}.`,
     nothing: '- Nothing.',
     noWords: 'its ask has no words yet',
     checked: (at, unverified) => ` (checked ${at}${unverified ? ', not verified since' : ''})`,
@@ -78,6 +82,7 @@ const WORDS: ByLang<Words> = {
     movedHead: (since, n) => `## ${since} 以来有进展的（${n}）`,
     briefHead: (owner, at) => `## ${owner ?? 'CEO'} 的简报（写于 ${at ?? '更早'}）`,
     more: (n) => `- 还有 ${n} 项`,
+    toLook: (n) => `- 另有 ${n} 件只需要你看一下，没有要你决定的：在 Org 页的「需要你」里看。`,
     nothing: '- 没有。',
     noWords: '它的请求还没写内容',
     checked: (at, unverified) => `（${at} 核实过${unverified ? '，之后未再核实' : ''}）`,
@@ -104,16 +109,17 @@ export const ORG_REPORT = letterKind<OrgReportParams>({
   render: (lang, p) => {
     const w = WORDS[lang];
     const lines: string[] = [];
-    const list = <T>(rows: readonly T[], line: (r: T) => string): void => {
+    const list = <T>(rows: readonly T[], line: (r: T) => string, extra = 0): void => {
       for (const r of rows.slice(0, p.listMax)) lines.push(line(r));
       if (rows.length > p.listMax) lines.push(w.more(rows.length - p.listMax));
-      if (!rows.length) lines.push(w.nothing);
+      if (!rows.length && !extra) lines.push(w.nothing);
     };
     // The English line ends "...(checked X). Options: ..."; the Chinese one needs no joining period.
     const end = lang === 'en' ? '.' : '。';
     lines.push(w.needsHead(p.needs.length));
     list(p.needs, (n) => `- **${n.title}**: ${n.ask ?? w.noWords}${n.checked ? w.checked(n.checked, !!n.unverified) : ''}${end}`
-      + `${n.yesNo ? w.yesNo : n.options?.length ? w.options(n.options) : ''}${n.letter ? w.tapLetter(n.letter) : w.tapChat}`);
+      + `${n.yesNo ? w.yesNo : n.options?.length ? w.options(n.options) : ''}${n.letter ? w.tapLetter(n.letter) : w.tapChat}`, p.toLook ?? 0);
+    if (p.toLook) lines.push(w.toLook(p.toLook));
     if (p.decisions.length) {
       lines.push('', w.decisionsHead(p.decisions.length));
       list(p.decisions, (d) => w.decision(d.subject, d.from));
@@ -133,6 +139,7 @@ export const ORG_REPORT = letterKind<OrgReportParams>({
     {
       owner: 'Walnut lead', since: '2026-11-01 06:00 UTC', listMax: 20, needsPreview: ['Hosts overview'],
       needs: [{ title: 'Hosts overview', ask: 'Start step one?', checked: '2026-11-01 07:00 UTC', options: ['In settings', 'Own page'], letter: 'Hosts overview: start?' }],
+      toLook: 3,
       decisions: [{ subject: 'Pick a layout', from: 'Web redesign' }],
       done: [{ title: 'Fix the build', result: 'green on main' }],
       moved: [{ title: 'Docs', waitingOn: 'the review' }, { title: 'Later', snoozedUntil: '2026-11-03 09:00 UTC' }],

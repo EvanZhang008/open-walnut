@@ -99,6 +99,12 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 
 /* Needs you: summary first, then its task, then the answer in the row. */
 .org-alerts { display: flex; flex-direction: column; }
+/* The cards with only something to read, folded into one row after the asks (2026-11-18). */
+.org-to-look { display: flex; align-items: baseline; gap: 6px; width: 100%; padding: 7px 12px; border: 0; border-bottom: 1px solid var(--border); background: none; color: var(--fg-secondary, var(--fg)); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; box-shadow: inset 2px 0 0 var(--accent, #0a84ff); }
+.org-to-look:hover { background: var(--bg-secondary); }
+.org-to-look:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.org-to-look-chev { width: 10px; color: var(--fg-muted); }
+.org-to-look-note { color: var(--fg-muted); }
 .org-ask { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border-bottom: 1px solid var(--border); box-shadow: inset 2px 0 0 var(--error, #FF3B30); }
 .org-ask-summary { font-weight: 600; font-size: 13px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 /* What to do with it, in its own colour, ahead of the words (the home panel's needs line,

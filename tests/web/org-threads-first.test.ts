@@ -97,7 +97,7 @@ describe('threads come first', () => {
     const pills = src.slice(src.indexOf('function CountPills'), src.indexOf('function TeamLiveLine'))
     expect(pills).not.toMatch(/\} open</)
     expect(pills).toMatch(/\{keepsThreads && \(/)
-    expect(pills).toMatch(/!keepsThreads && tabs\.needs/)
+    expect(pills).toMatch(/!keepsThreads && askCount\(tabs\.needs\)/)
     expect(pills.indexOf('org-pill-threads')).toBeGreaterThan(0)
     expect(pills.indexOf('org-pill-threads')).toBeLessThan(pills.indexOf("pill('working'"))
   })

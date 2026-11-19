@@ -55,7 +55,7 @@ import { ORG_TASK_TAB_LABELS, allTasksSections, isSectionFlips, orgTaskTabs, own
 import { stateCountLabel } from '@open-walnut/user-status';
 import type { ImageAttachment } from '@/api/chat';
 import {
-  areaIdWords, mainTeamColumns, teamColumns, type ChannelRow, type OrgAlertView, type TeamColumn,
+  areaIdWords, askCount, mainTeamColumns, teamColumns, type ChannelRow, type OrgAlertView, type TeamColumn,
 } from './org-channels-model';
 
 export type OrgTab = 'board' | 'team' | 'chat';
@@ -134,7 +134,7 @@ function CountPills({ tabs, onOpen, approvals, keepsThreads, threads, onThreads 
           <i style={{ background: shown ? TAB_DOT.needs : TAB_DOT.waiting }} />{threadCountLabel(shown)}
         </button>
       )}
-      {!keepsThreads && tabs.needs.length + approvals > 0 && pill('needs', tabs.needs.length + approvals)}
+      {!keepsThreads && askCount(tabs.needs) + approvals > 0 && pill('needs', askCount(tabs.needs) + approvals)}
       {tabs.working.length > 0 && pill('working', tabs.working.length)}
       {tabs.waiting.length > 0 && pill('waiting', tabs.waiting.length)}
       {tabs.notstarted.length > 0 && pill('notstarted', tabs.notstarted.length)}

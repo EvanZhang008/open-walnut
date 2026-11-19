@@ -41,20 +41,20 @@ final class ChatOrgModelTests: XCTestCase {
         )
     }
 
-    /// To read is Needs you on the phone: a VP row's number adds the server's separate `toRead`
-    /// count to `needsYou`, once, and an older server's counts (no `toRead`) read as before.
-    func testAVPRowCountsToReadAsNeedsYouOnce() throws {
+    /// A VP row's number counts asks only: the server's separate `toRead` (only something to read,
+    /// nothing asked) is never added, and an older server's counts (no `toRead`) read as before.
+    func testAVPRowNeverCountsToReadAsAnAsk() throws {
         func rows(_ counts: String) throws -> [ChatOrgModel.Row] {
             let json = #"{"tree":{"main":null,"counts":"# + counts + #","projects":[{"project":"Walnut","needsLead":false,"vp":null,"counts":"# + counts + #","teams":[]}]}}"#
             let tree = try JSONDecoder().decode(OrgTreeResponse.self, from: Data(json.utf8)).tree
             return ChatOrgModel.rows(tree: tree, tasks: [])
         }
         let now = try XCTUnwrap(rows(#"{"open":4,"running":0,"needsYou":1,"toRead":2,"waiting":1}"#).first { $0.kind == .vp })
-        XCTAssertEqual(now.needs, 3)
+        XCTAssertEqual(now.needs, 1)
         XCTAssertEqual(now.state, .needs)
         let readOnly = try XCTUnwrap(rows(#"{"open":2,"running":0,"needsYou":0,"toRead":2,"waiting":0}"#).first { $0.kind == .vp })
-        XCTAssertEqual(readOnly.needs, 2)
-        XCTAssertEqual(readOnly.state, .needs)
+        XCTAssertEqual(readOnly.needs, 0)
+        XCTAssertNotEqual(readOnly.state, .needs)
         let old = try XCTUnwrap(rows(#"{"open":4,"running":0,"needsYou":1,"waiting":3}"#).first { $0.kind == .vp })
         XCTAssertEqual(old.needs, 1)
         // The CEO's line counts its threads, never the teams' asks (they are in its Tasks).

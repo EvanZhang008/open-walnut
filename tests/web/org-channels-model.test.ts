@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest'
 import type { Task } from '../../src/core/types.js'
 import { buildOrgTree } from '../../src/core/org/org-tree.js'
 import {
-  MAIN_KEY, alertText, buildChannels, cardChecked, channelState, filterChannels, initials, mainTeamColumns, movedProjects, pickChannel,
+  MAIN_KEY, alertText, askCount, buildChannels, cardChecked, channelState, filterChannels, initials, mainTeamColumns, movedProjects, pickChannel,
   projectRowKey, rowOf, settleDefaultNode, teamColumns, vpCount, type AlertProbe,
 } from '../../web/src/components/org/org-channels-model.js'
 
@@ -141,31 +141,34 @@ describe('org channels', () => {
     ])
   })
 
-  it('a To read task is a Needs you card with its line, counted in Needs you; no To read column or count', () => {
+  it('a To read task is a Needs you card with its line, never counted as an ask (2026-11-18); no To read column', () => {
     const read = t('p1', 'Personal', 'NEED_ACTION', { updated_at: at(1), user_status: { state: 'read', toRead: 'result', waitingOn: 'The result is ready' } })
     // An older server stored To read as Waiting with toRead.
     const legacy = t('p2', 'Personal', 'NEED_ACTION', { updated_at: at(2), user_status: { state: 'waiting', toRead: 'answer', waitingOn: 'It answered your question' } })
     const list = tasks.map((x) => (x.id === 'p1' ? read : x.id === 'p2' ? legacy : x))
     const { main, rows } = buildChannels(buildOrgTree(list), list, noAlerts)
     const personal = rows.find((r) => r.name === 'Personal')!
-    expect(personal.state).toBe('alert')
+    // It asks nothing: no red row, no count (isAsk); its card is still there, folded on the page.
+    expect(personal.state).not.toBe('alert')
     expect(personal.alerts).toEqual([
       { taskId: 'p2', title: 'p2 title', kind: 'needs', ask: 'It answered your question', category: 'look', toRead: 'answer' },
       { taskId: 'p1', title: 'p1 title', kind: 'needs', ask: 'The result is ready', category: 'close', toRead: 'result' },
     ])
     // Nothing asked: no "checked" or "Not verified" line on its card.
     expect(cardChecked(personal.alerts[0]!)).toBeNull()
-    expect(personal.needs).toBe(2)
-    // The wire still counts them apart (older phones read needsYou); the page shows the sum.
+    expect(personal.needs).toBe(0)
+    expect(askCount(personal.alerts)).toBe(0)
+    // The wire counts them apart (older phones read needsYou); the page counts asks only.
     expect([personal.counts.needsYou, personal.counts.toRead]).toEqual([0, 2])
     expect(personal.latest).toBe('Take a look: It answered your question')
-    expect(main.needs).toBe(2)
+    expect(main.needs).toBe(0)
     expect(main.latest).toBe('0 threads · 4 VPs · 1 Working')
     expect(main.latest).not.toContain('To read')
     expect(teamColumns(personal, list).map((c) => [c.key, c.items.map((i) => [i.id, i.note])])).toEqual([
-      ['needs', [['p2', 'Take a look: It answered your question'], ['p1', 'Can close: The result is ready']]],
+      ['waiting', [['p2', 'Take a look: It answered your question'], ['p1', 'Can close: The result is ready']]],
     ])
-    expect(teamColumns(personal, list).map((c) => c.label)).toEqual(['Needs you'])
+    // A team with only something to read asks nothing, so it is no Needs you column either.
+    expect(teamColumns(personal, list).map((c) => c.label)).not.toContain('Needs you')
   })
 
   it('reads by top-level task: a subtask\'s ask names the top-level task it rolls up to, right after that task\'s own', () => {

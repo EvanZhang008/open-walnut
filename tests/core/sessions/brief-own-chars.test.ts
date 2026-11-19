@@ -80,7 +80,8 @@ describe('the lines Walnut writes are recorded and left out', () => {
       const tasks = [owner, ...team()]
       const b = shape('### Needs you\n- None', owner, tasks)
       const lines = b.text.split('\n').filter((l) => l.startsWith('- ') && l !== '- None')
-      expect(lines.length).toBe(ADDED_ASKS_MAX + 1)
+      // The asks up to the cap, the count past it, and the one line for the task with only something to read.
+      expect(lines.length).toBe(ADDED_ASKS_MAX + 2)
       expect([...b.added!].sort()).toEqual([...lines].sort())
       expect(briefOwnChars(b.text, b.added)).toBe(0)
       // A letter stored before the record existed: the same lines, told by their shape.
@@ -172,6 +173,7 @@ const KNOWN_LINE_SOURCES = [
   "pieces.push({ text: '\\n', layout: true })", // the line break between two lines, Walnut's layout
   'walnut({ text: words, pieces: [{ text: words, writer: askLineWriter(t) }] })', // an ask the letter did not name
   'walnut(layout(BRIEF_WALNUT_WORDS[lang].more(more)))', // the count past the cap, in the Brief's language: ADDED_MORE_RE
+  'walnut(layout(BRIEF_WALNUT_WORDS[lang].toLook(toLook)))', // the count of tasks only to look at: ADDED_MORE_RE
 ]
 
 describe('source ratchet: every line structureBrief writes is accounted for', () => {
@@ -188,7 +190,7 @@ describe('structureBrief live records Walnut\'s asks', () => {
     const tasks = [lead, ...team()]
     const out = structureBrief('### Needs you\n- None', lead.id, tasks, { live: lead })
     const asks = out.text.split('\n').filter((l) => l.startsWith('- ') && l !== '- None')
-    expect(asks.length).toBe(ADDED_ASKS_MAX + 1)
+    expect(asks.length).toBe(ADDED_ASKS_MAX + 2)
     expect([...out.walnutLines!].sort()).toEqual([...asks].sort())
   })
 })

@@ -20,7 +20,7 @@ import { useLayoutEffect, useMemo, useRef } from 'react';
 import type { Task } from '@open-walnut/core';
 import { userStateOf } from '@open-walnut/org-tree';
 import { checkedLine } from '@open-walnut/user-status';
-import { briefSectionOf, briefSourcesOf, structureBrief } from '@open-walnut/brief-structure';
+import { briefSectionOf, briefSourcesOf, briefStateOf, structureBrief } from '@open-walnut/brief-structure';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
@@ -57,7 +57,8 @@ export function OrgBrief({ owner, tasks, name, now, folded, fresh, updating }: P
     // And every task that asks the user now with its ask: Walnut adds the ones the letter misses.
     // With who wrote each ask's words: a new writer of the same words must reshape the added line's source.
     const asks = tasks.filter((t) => briefSectionOf(t) === 'needs').map((t) => JSON.stringify([
-      t.id, t.user_status?.ask ?? '', t.user_status?.waitingOn ?? '', t.user_status?.reportBy ?? '', t.user_status?.reportSessionId ?? '', t.last_words?.session_id ?? '',
+      // Its state too: an ask turning into something only to read moves it into the count line.
+      t.id, briefStateOf(t), t.user_status?.ask ?? '', t.user_status?.waitingOn ?? '', t.user_status?.reportBy ?? '', t.user_status?.reportSessionId ?? '', t.last_words?.session_id ?? '',
       t.user_status?.waitingBy ?? '', t.user_status?.waitingSessionId ?? '', t.user_status?.askBy ?? '', t.user_status?.askSessionId ?? '',
     ])).join('|');
     return `${named}#${asks}`;
