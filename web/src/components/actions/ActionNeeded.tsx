@@ -13,8 +13,13 @@
  *
  * An answered line goes the moment it is sent and comes back with the reason when the server says
  * no; a snoozed line greys out with its time and an Unsnooze, and comes back by itself then.
+ *
+ * The same block is drawn in three places, all from the one list, so an item answered or snoozed in
+ * one goes from all (2026-11-19, the user: "我点进去之后，如果它有 needs you，它直接就能显示在……
+ * title bar，或者在下面", and asks "放到 thread 里面"): a task's row, the strip under a session's
+ * title bar (`variant="strip"`, experiment action_needed_everywhere) and a VP's Threads (TeamActions).
  */
-import { memo, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Task } from '@open-walnut/core';
 import { ACTION_KIND_LABELS, type ActionItem, type ActionKind } from '@open-walnut/user-status';
 import { apiPut } from '@/api/client';
@@ -87,15 +92,34 @@ function ApprovalAnswer({ item }: { item: ActionItem }) {
   );
 }
 
-const Line = memo(function Line({ task, item, onAnswer, failure }: {
+/** Scroll this session's own prompt card into view: the strip points at it, never answers it twice.
+ *  False when the chat has not drawn that card (still loading, or out of its window). */
+function showPromptBelow(from: HTMLElement | null): boolean {
+  const card = from?.closest('.session-panel')?.querySelector<HTMLElement>('[data-prompt-pending="true"]');
+  card?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  return !!card;
+}
+
+const Line = memo(function Line({ task, item, onAnswer, failure, below }: {
   task: Task; item: ActionItem; onAnswer: (id: string) => AnswerSettle; failure?: AnswerFailure;
+  /** Its own card is in the chat below (a session's strip, its own live prompt): point at it. */
+  below?: boolean;
 }) {
-  const [snoozing, setSnoozing] = useState<{ until: string | null } | null>(null);
+  // A snooze written here reads at once, until the server's value moves (here, or from another
+  // place showing the same item): then the server's wins.
+  const [snoozing, setSnoozing] = useState<{ until: string | null; from: string | null } | null>(null);
   const [note, setNote] = useState('');
-  const until = snoozing ? snoozing.until : item.snoozedUntil ?? null;
+  // Its card is not in the chat: the strip answers it after all (one answer still, the card's twin).
+  const [answerHere, setAnswerHere] = useState(false);
+  const server = item.snoozedUntil ?? null;
+  // Once the server's value moved, it holds from then on (a later move back, an unsnooze made in
+  // another place, must not bring this place's own write back).
+  useEffect(() => { setSnoozing((s) => (s && s.from !== server ? null : s)); }, [server]);
+  const own = snoozing && snoozing.from === server ? snoozing.until : server;
+  const until = own && Date.parse(own) > Date.now() ? own : null;
   const label = ACTION_KIND_LABELS[item.kind];
   const write = (next: string | null) => {
-    setSnoozing({ until: next });
+    setSnoozing({ until: next, from: server });
     setNote('');
     snoozeItem(task.id, item.id, next).then(() => {
       log.info('action-needed', next ? 'item snoozed' : 'item unsnoozed', { taskId: task.id, itemId: item.id, kind: item.kind, until: next ?? '' });
@@ -107,7 +131,12 @@ const Line = memo(function Line({ task, item, onAnswer, failure }: {
     });
   };
   let answer: ReactNode = null;
-  if (!until) {
+  if (!until && below && !answerHere) {
+    answer = (
+      <button type="button" className="btn btn-sm action-needed-below" data-testid="action-answer-below"
+        onClick={(e) => { if (!showPromptBelow(e.currentTarget)) setAnswerHere(true); }}>Answer below <span aria-hidden="true">↓</span></button>
+    );
+  } else if (!until) {
     answer = ANSWERS[item.kind] === 'approval' ? <ApprovalAnswer item={item} /> : (
       <OrgInlineAnswer alert={alertOfItem(task, item)} task={task} summary={item.summary} onAnswer={() => onAnswer(item.id)} failure={failure} {...(item.sessionId ? { sessionId: item.sessionId } : {})} />
     );
@@ -125,7 +154,7 @@ const Line = memo(function Line({ task, item, onAnswer, failure }: {
           : <SnoozeButton label={`${label}: ${item.summary}`} onPick={write} />}
       </div>
       {/* A live prompt's own card says its question: the line would say it twice. */}
-      {until || ANSWERS[item.kind] !== 'prompt'
+      {until || (below && !answerHere) || ANSWERS[item.kind] !== 'prompt'
         ? <div className="action-needed-summary" data-testid="action-summary" title={item.summary}>{item.summary}</div> : null}
       {until ? (
         <div className="action-needed-until" data-testid="action-snoozed-until">
@@ -138,9 +167,16 @@ const Line = memo(function Line({ task, item, onAnswer, failure }: {
   );
 });
 
-/** The block under a row; nothing when the task asks nothing. */
-export function ActionNeeded({ task }: { task: Task }) {
+/** The strip shows this many lines, then "N more": a session's chat keeps its room, and the first
+ *  asks (blocking first, then oldest: markSnoozes) are always in sight. */
+const STRIP_LINES = 2;
+
+/** The block under a row; nothing when the task asks nothing. `variant`: 'row' (a task row, whose
+ *  click opens the task: a click inside never reaches it), 'card' (a Threads card) or 'strip' (under
+ *  a session's title bar, where that session's own live prompt points at its card below). */
+export const ActionNeeded = memo(function ActionNeeded({ task, variant = 'row', sessionId }: { task: Task; variant?: 'row' | 'strip' | 'card'; sessionId?: string }) {
   const items = task.user_status?.actions ?? [];
+  const [restShown, setRestShown] = useState(false);
   // Answered from here and not yet gone from the status: hidden; a failure brings it back.
   const [sent, setSent] = useState<ReadonlySet<string>>(new Set());
   const [failures, setFailures] = useState<Record<string, AnswerFailure>>({});
@@ -156,11 +192,22 @@ export function ActionNeeded({ task }: { task: Task }) {
   const shown = items.filter((i) => !sent.has(i.id));
   if (!shown.length || task.phase === 'COMPLETE') return null;
   const stop = (e: { stopPropagation: () => void }) => e.stopPropagation();
+  const strip = variant === 'strip';
+  const lines = strip && !restShown ? shown.slice(0, STRIP_LINES) : shown;
+  const rest = shown.length - lines.length;
   return (
-    // A click, a key or a drag inside answers here: it never opens or drags the row.
-    <div className="action-needed" data-testid="action-needed" data-action-task={task.id} onClick={stop} onKeyDown={stop} onPointerDown={stop}>
-      <div className="action-needed-title">Action needed</div>
-      {shown.map((item) => <Line key={item.id} task={task} item={item} onAnswer={onAnswer} failure={failures[item.id]} />)}
+    // On a row a click, a key or a drag inside answers here: it never opens or drags the row.
+    <div className={`action-needed${strip ? ' is-strip' : ''}`} data-testid={strip ? 'session-action-needed' : 'action-needed'} data-action-task={task.id}
+      {...(variant === 'row' ? { onClick: stop, onKeyDown: stop, onPointerDown: stop } : {})}>
+      <div className="action-needed-title">Action needed{strip ? ` · ${shown.length}` : ''}</div>
+      {lines.map((item) => (
+        <Line key={item.id} task={task} item={item} onAnswer={onAnswer} failure={failures[item.id]}
+          below={strip && !!sessionId && item.sessionId === sessionId && ANSWERS[item.kind] === 'prompt'} />
+      ))}
+      {strip && (rest > 0 || restShown) && shown.length > STRIP_LINES ? (
+        <button type="button" className="action-needed-more" data-testid="action-needed-more" aria-expanded={restShown}
+          onClick={() => setRestShown(!restShown)}>{restShown ? 'Show fewer' : `${rest} more`}</button>
+      ) : null}
     </div>
   );
-}
+});

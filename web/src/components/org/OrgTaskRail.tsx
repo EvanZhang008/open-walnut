@@ -59,6 +59,8 @@ import { completeTask } from '@/api/tasks';
 import { AgentText } from '@/components/common/AgentText';
 import { taskTextSource } from '@/utils/agent-text-source';
 import { useOpenTask } from '@/hooks/useOpenTask';
+import { useExperimental } from '@/hooks/useExperimental';
+import { teamActionTasks } from '@/components/actions/team-actions';
 
 /** What the rows need from the page to answer in place. */
 export interface OrgAnswers {
@@ -406,6 +408,10 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, flipped
     return m;
   }, [row.kind, rows]);
   const brief = keepsBrief ? contact?.brief : undefined;
+  // Its team's asks on top of its Threads (experiment action_needed_everywhere): the same items as their rows.
+  const teamOn = useExperimental('action_needed_everywhere');
+  const team = useMemo(() => (teamOn && keepsBrief
+    ? teamActionTasks(row, new Map(tasks.map((t) => [t.id, t])), Math.max(now, Date.now())) : undefined), [teamOn, keepsBrief, row, tasks, now]);
   // A Board picked on a node that keeps none (any more) shows all its tasks.
   const shownMode: OrgTaskMode = mode === 'board' && !renderBoard ? 'all' : mode;
   // Full screen is the same pop-up sheet a session panel opens into, and the same one state of the
@@ -456,7 +462,7 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, flipped
         </div>
       ) : view === 'threads' ? (
         <div className="org-rail-body">
-          <OrgThreads name={title} owner={contact} state={threads} tasks={tasks} onFollowUp={onThreadFollowUp} now={now} />
+          <OrgThreads name={title} owner={contact} state={threads} tasks={tasks} onFollowUp={onThreadFollowUp} now={now} {...(team ? { team } : {})} />
         </div>
       ) : (
         <div className="org-task-view" data-testid="org-task-view" data-mode={shownMode}>

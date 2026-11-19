@@ -72,6 +72,12 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'A task\'s change links (pull requests, code reviews, commits) show how far each got inside its link pill: in review, approved, merged, deploying, deployed or blocked. Click the pill for the review and every deploy stage; Walnut tells the task\'s session when a change is approved, fails, is blocked or finishes deploying.',
     default: false,
   },
+  {
+    id: 'action_needed_everywhere',
+    name: 'Action needed in sessions and Threads',
+    description: 'What a task needs from you (an approval, a question, a letter, a choice) also shows in a strip under its session\'s title bar, and a team\'s asks show in its VP\'s Threads under "From your team". Each is the same item as on the task\'s row: answer or snooze it in any of them and it goes from all.',
+    default: false,
+  },
 ] as const;
 
 export type ExperimentalFeatureId = typeof EXPERIMENTAL_FEATURES[number]['id'];

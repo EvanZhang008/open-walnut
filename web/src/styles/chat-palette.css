@@ -98,8 +98,10 @@
   --walnut-accent-strong: var(--chat-grey-hover);
 }
 
-/* An ask that waits on the person keeps the theme's colours: it is where his eye must go. */
-.permission-request-card.is-pending {
+/* An ask that waits on the person keeps the theme's colours: it is where his eye must go (a live
+   prompt's card, and the Action needed strip under a session's title bar). */
+.permission-request-card.is-pending,
+.action-needed.is-strip {
   --accent: var(--chat-hue-accent);
   --accent-subtle: var(--chat-hue-accent-subtle);
   --warning: var(--chat-hue-warning);

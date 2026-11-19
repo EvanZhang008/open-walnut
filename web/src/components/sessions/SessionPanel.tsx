@@ -105,6 +105,7 @@ import { settleConfirmedDrafts, type DraftOrigin } from '@/utils/drafts';
 import { useEvent } from '@/hooks/useWebSocket';
 import { fetchSession, peekSessionRecord, keepSessionRecord, executePlanContinue, executePlanSession, updateSession, restartSession, recheckSession, investigateSession, type ContinueInNewFolderResult } from '@/api/sessions';
 import { FolderGoneBanner } from './FolderGoneBanner';
+import { SessionActionStrip } from '@/components/actions/SessionActionStrip';
 import { SessionBrowserChip } from './SessionBrowserChip';
 import { useBrowserView } from './useBrowserView';
 import { UsageLimitBanner, UsageLimitContinuedNote, useContinuingAfterLimit } from './UsageLimitBanner';
@@ -4154,6 +4155,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               </>
             )}
         <div className="session-panel-body" ref={bodyRef}>
+          {/* What its task asks the user, right under the title bar (experiment action_needed_everywhere):
+              the body's first flow child, so the glass header's offset rule places it. */}
+          {session?.taskId && sessionTask?.id === session.taskId && <SessionActionStrip task={sessionTask} sessionId={sessionId} />}
           {/* A transferred task names the other end in one quiet line (the header row is precious). */}
           <TransferLinks task={sessionTask} className="xfer-links-panel" testId="session-transfer-links" />
           {/* A phone says one plain sentence for a session that is gone (N29). */}

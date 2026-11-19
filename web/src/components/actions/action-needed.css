@@ -35,3 +35,27 @@
   color: var(--accent, #0a84ff); border: 1px solid color-mix(in srgb, var(--accent, #0a84ff) 45%, transparent);
 }
 .status-card-actions-below { padding: 0 8px 4px 34px; }
+
+/* The strip under a session's title bar (experiment action_needed_everywhere): the same lines, the
+   first two in sight and "N more" for the rest, so the chat keeps its room. */
+.action-needed.is-strip {
+  flex: none; margin-left: 8px; margin-right: 8px; margin-bottom: 0; max-height: 40vh; overflow-y: auto; border-radius: 6px;
+}
+.action-needed-more {
+  all: unset; cursor: pointer; align-self: flex-start; font-size: 11px; color: var(--warning-text, var(--warning, #9a6700));
+}
+.action-needed-more:hover { text-decoration: underline; }
+.action-needed-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+/* A VP's Threads: its team's asks, one card per task, above its own threads (TeamActions.tsx). */
+.team-actions { display: flex; flex-direction: column; gap: 6px; margin: 0 0 10px; }
+.team-actions-title { font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+.team-actions-task { border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; background: var(--bg); }
+.team-actions-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.team-actions-name {
+  all: unset; cursor: pointer; font-weight: 600; font-size: 13px; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.team-actions-name:hover { text-decoration: underline; }
+.team-actions-name:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+.team-actions-state { flex: none; color: var(--fg-muted); font-size: 11px; }

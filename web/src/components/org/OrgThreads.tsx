@@ -72,6 +72,10 @@ import { isBoolean, usePageView } from '@/utils/view-memory';
 import type { OrgThread, OrgThreadMessage, OrgThreadState } from '@/api/org-threads';
 import type { OrgThreadsState } from './useOrgThreads';
 import { OrgThreadSnooze } from './OrgThreadSnooze';
+import { ActionNeeded } from '@/components/actions/ActionNeeded';
+import { TeamActions } from '@/components/actions/TeamActions';
+import { askingTaskOf } from '@/components/actions/team-actions';
+import { useExperimental } from '@/hooks/useExperimental';
 import '@/styles/org-threads.css';
 
 /** A task's live status dot, the colours of the Task view's tabs (OrgTaskRail TAB_DOT). */
@@ -117,6 +121,9 @@ interface Props {
   /** Send a message filed under this thread; null when the node has no chat yet. */
   onFollowUp: ((threadId: string, text: string, images?: ImageAttachment[]) => Promise<boolean>) | null;
   now: number;
+  /** Its team's tasks that ask the user something now (experiment action_needed_everywhere):
+   *  "From your team" on top, less the ones a shown thread already answers in place. */
+  team?: readonly Task[];
 }
 
 function closedWords(t: OrgThread, now: number): string {
@@ -366,11 +373,13 @@ function AskedIn({ a }: { a: NonNullable<OrgThread['askedIn']> }) {
   );
 }
 
-function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed }: {
+function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed, asking }: {
   t: OrgThread; all: readonly OrgThread[]; shared: ReadonlySet<string>; tasks: readonly Task[];
   state: OrgThreadsState; onFollowUp: Props['onFollowUp']; name: string; now: number;
   /** It is put aside now (the Snoozed section): it says when it comes back. */
   snoozed: boolean;
+  /** A shown thread whose decision a task asks (askingTaskOf): that task, answered on this card. */
+  asking?: Task | undefined;
 }) {
   /** The whole conversation shown, in place of what the card keeps. */
   const [open, setOpen] = useState(false);
@@ -425,6 +434,8 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
       {closed && t.movedTo && <p className="org-thread-follows" data-testid="org-thread-moved-to" title={t.movedTo.why}>Moved to {t.movedTo.title}{t.movedTo.why ? `: ${t.movedTo.why}` : ''}</p>}
       {overdue && <p className="org-thread-overdue" data-testid="org-thread-overdue">{overdue}</p>}
       {asked && <AskedIn a={t.askedIn!} />}
+      {/* The task asking it: its items right here, answered in place (one record, every place). */}
+      {asking ? <ActionNeeded task={asking} variant="card" /> : null}
       {!asked && (card.summary.by === 'node'
         ? (<>
           {/* The summary opens on the machine of the session that last wrote it, never the node's current one. */}
@@ -503,7 +514,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   );
 }
 
-export function OrgThreads({ name, state, tasks, onFollowUp, now }: Props) {
+export function OrgThreads({ name, state, tasks, onFollowUp, now, team }: Props) {
   // Whether the week's closed threads are open stays as it was left (utils/view-memory.ts).
   const [showClosed, setShowClosed] = usePageView('org', 'threads.showClosed', false, isBoolean);
   const [showHidden, setShowHidden] = usePageView('org', 'threads.showInProgress', false, isBoolean);
@@ -524,18 +535,29 @@ export function OrgThreads({ name, state, tasks, onFollowUp, now }: Props) {
     };
   }, [all, shared, now]);
   const closed = useMemo(() => (all ?? []).filter((t) => !!t.closed), [all]);
+  // A task a shown thread points at is answered on that thread's card, never twice on the page
+  // (askingTaskOf decides both); the cards out of sight (snoozed, in progress) answer nothing.
+  const inPlace = useExperimental('action_needed_everywhere');
+  const { asking, teamShown } = useMemo(() => {
+    const byId = new Map(tasks.map((t) => [t.id, t] as const));
+    const of = new Map<string, Task>();
+    if (inPlace) for (const t of open) { const task = askingTaskOf(t, byId); if (task) of.set(t.id, task); }
+    const held = new Set([...of.values()].map((t) => t.id));
+    return { asking: of, teamShown: (team ?? []).filter((t) => !held.has(t.id)) };
+  }, [inPlace, tasks, open, team]);
   // Task pills outside the text blocks (an answer's About line) open the task, as they do in the
   // chat. Every block of text opens its own paths from its own writer and keeps the click; a path
   // that still reached the list has no writer to name, so it is refused, never opened on a guess.
   const listFile = useAgentFileOpener(THREAD_LIST_SOURCE);
   const onEntityClick = useEntityClickHandler(undefined, listFile.onFileOpen, listFile.fileHost, listFile.fileSessionId, listFile.refusesAll);
   const snoozedIds = useMemo(() => new Set(snoozed.map((t) => t.id)), [snoozed]);
-  const card = (t: OrgThread) => <ThreadCard key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={clock} snoozed={snoozedIds.has(t.id)} />;
+  const card = (t: OrgThread) => <ThreadCard key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={clock} snoozed={snoozedIds.has(t.id)} asking={asking.get(t.id)} />;
   return (
     <div className="org-threads" data-testid="org-threads" onClick={onEntityClick}>
       {state.error && <p className="org-thread-error" data-testid="org-threads-error">{state.error}</p>}
       {all === null && !state.error && <p className="org-threads-empty" aria-busy="true">Loading…</p>}
-      {all !== null && !open.length && (
+      <TeamActions tasks={teamShown} />
+      {all !== null && !open.length && !teamShown.length && (
         <p className="org-threads-empty" data-testid="org-threads-empty">
           {hidden.length || snoozed.length
             ? `Nothing for you now. ${hidden.length ? `${name} is on the ones below; each` : 'Each snoozed one below'} comes back here when there is news.`
