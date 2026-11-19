@@ -120,7 +120,7 @@ import { pluginJobRoutes } from '../core/plugin-jobs/serve.js'
 import { setPluginApiBase } from '../core/plugins/server-api.js'
 import { setSelfApiRoot } from '../lib/self-api-root.js'
 import { guardProcessStdio } from '../lib/stdio-epipe-guard.js'
-import { systemRouter } from './routes/system.js'
+import { livenessAliasRouter, systemRouter } from './routes/system.js'
 import { hostsRouter } from './routes/hosts.js'
 import { firstRunRouter } from './routes/first-run.js'
 import { cloudSetupRouter } from './routes/cloud-setup.js'
@@ -2425,6 +2425,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/context', contextInspectorRouter)
   app.use('/api/usage', usageRouter)
   app.use('/api/time', timeRouter)
+  // The guessed liveness addresses (routes/system.ts), exact paths, ahead of the Apple Health routes.
+  app.use('/api', livenessAliasRouter)
   app.use('/api/health', (await import('./routes/health.js')).healthRouter)
   app.use('/api/places', (await import('./routes/places.js')).placesRouter)
   app.use('/api/images', imagesRouter)

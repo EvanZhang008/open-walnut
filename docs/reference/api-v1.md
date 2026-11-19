@@ -345,6 +345,10 @@ path on the companion".
 
 ### GET /api/v1/status
 
+Clients read this. `GET /api/v1/health` and `GET /api/v1/version` (exact paths, additive
+2026-11) are only liveness aliases for scripts that guess them: they answer what
+`GET /api/system/health` answers, never Apple Health (`/api/v1/health/*`, below).
+
 ```json
 {
   "mode": "LIVE",          // "LIVE" = primary instance; "REPLICA" = cloud companion

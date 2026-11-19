@@ -30,6 +30,14 @@ deploy". Scope the commit to your own changes only (never sweep up other agents'
 uncommitted files), and run the usual pre-commit sensitive-content scan. Push still only
 happens on request.
 
+**Is the server up, and which build runs?** `GET /api/system/health` answers both (its `build`
+field names the commit). The addresses scripts and agents guess (`/api/health`,
+`/api/v1/health`, `/api/status`, `/api/version`, `/api/v1/version`, `/api/build-info`) answer
+the same (on a cloud box they need a credential; only `/api/system/health` is public there), so a
+wait loop that guesses one still sees the server come up (2026-11-19: a deploy's
+loop polled the then missing `/api/v1/health` 30 times, and every 404 counted toward a log-spike
+alarm). After a land, `walnut-cloud live <commit>` says whether production serves it.
+
 ## Deploy commands, dry run and rehearsal
 
 ```bash

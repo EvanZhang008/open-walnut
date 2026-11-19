@@ -2,7 +2,7 @@
  * System health API — exposes daemon connection status.
  */
 
-import { Router } from 'express'
+import { Router, type Request, type Response } from 'express'
 import { getSystemHealth } from '../server.js'
 import { getDaemonPoolStatus, getConnectedDaemonConnection } from '../../providers/daemon-connection.js'
 import { isOnThisMachine } from './expose.js'
@@ -32,7 +32,7 @@ async function maySeeHealthDetail(authHeader: string | undefined): Promise<boole
 
 // GET /api/system/health — liveness always; daemon + credential detail only for
 // trusted callers (auth-exempt path, so we gate the sensitive fields in-handler).
-systemRouter.get('/health', async (req, res) => {
+async function systemHealth(req: Request, res: Response): Promise<void> {
   const detailed = await maySeeHealthDetail(req.headers.authorization)
   const health = getSystemHealth()
 
@@ -73,7 +73,28 @@ systemRouter.get('/health', async (req, res) => {
   } catch { /* config not ready */ }
 
   res.json(response)
-})
+}
+systemRouter.get('/health', systemHealth)
+
+/**
+ * The addresses agents and scripts guess for "is the server up / which build runs" (seen in
+ * the server log, 2026-11-12 to 11-19: a deploy's wait loop of `curl /api/v1/health` every
+ * 10 s, 30 tries, all 404, raised a log-spike alarm). None of them existed, so each guess was
+ * a warn line and a loop that never saw the server come up. Each answers exactly what
+ * GET /api/system/health answers, under the same detail gate. Exact paths only: the Apple
+ * Health routes under /api/health/* and /api/v1/health/* are untouched (mounted before them).
+ */
+export const LIVENESS_ALIASES = [
+  '/api/health',
+  '/api/v1/health',
+  '/api/status',
+  '/api/version',
+  '/api/v1/version',
+  '/api/build-info',
+] as const
+export const livenessAliasRouter = Router()
+// Mounted on /api (server.ts), so each path is registered without that prefix.
+livenessAliasRouter.get(LIVENESS_ALIASES.map((p) => p.slice('/api'.length)), systemHealth)
 
 const desktopUpdateCache = createDesktopUpdateCache()
 
