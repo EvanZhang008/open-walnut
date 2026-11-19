@@ -185,7 +185,9 @@ export async function reflectForNode(node: Task, nodeName: string, all: readonly
   const now = deps.nowMs();
   // A guidance line the user deleted is remembered first, so it is never written again.
   await rememberDeletedGuidance(node.id, now);
-  const state = await readReflectionState(node.id, now);
+  // Read and kept in one write: a node seen for the first time keeps the `since` of this pass, never
+  // a new "now" at every pass (2026-11-19 on production: a node with no guidance file saved nothing).
+  const state = await updateReflectionState(node.id, (s) => structuredClone(s), now);
   const since = reflectionSince(node, state.since);
   const lines = await readGuidance(node.id);
   const result: ReflectResult = { candidates: 0, judged: 0, findings: [] };

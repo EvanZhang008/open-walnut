@@ -188,6 +188,22 @@ describe('reflection pass', () => {
   })
 })
 
+describe('a node seen for the first time', () => {
+  it('keeps the first pass\'s time, so a message after it is judged by a later pass', async () => {
+    await fs.rm(WALNUT_HOME, { recursive: true, force: true })
+    const later = NOW + 20 * 60_000
+    const first = deps({ messages: {} })
+    await reflectForNode(vp, NAME, ALL, first.d)
+    const second = deps({ messages: { 'w-1': [{ id: 'm1', at: iso(-10), text: ANGRY }] }, nowMs: () => later,
+      readTranscript: async () => [{ role: 'assistant', text: SESSION_TURN, timestamp: iso(-5) }, { role: 'user', text: ANGRY, timestamp: iso(-10), sentBy: 'person' }] as never })
+    // The session turn comes before his message in the record.
+    second.d.readTranscript = async () => [{ role: 'assistant', text: SESSION_TURN, timestamp: iso(-8) }, { role: 'user', text: ANGRY, timestamp: iso(-10), sentBy: 'person' }] as never
+    const r = await reflectForNode(vp, NAME, ALL, second.d)
+    expect(r.candidates).toBe(1)
+    expect(second.calls).toHaveLength(1)
+  })
+})
+
 describe('team guidance file', () => {
   it('appends a line and keeps what the user wrote in the file', async () => {
     await fs.mkdir(guidanceFileOf(vp.id).replace(/guidance\.md$/, ''), { recursive: true })
