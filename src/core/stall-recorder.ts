@@ -521,8 +521,8 @@ export async function stopStallRecorder(): Promise<void> {
 }
 
 /** Test hook: rotation and keep counters. */
-export function _stallRecorderStats(): typeof stats & { running: boolean; windowOpen: boolean; previousHeld: boolean } {
-  return { ...stats, running, windowOpen: current !== null, previousHeld: previous !== null };
+export function _stallRecorderStats(): typeof stats & { running: boolean; windowOpen: boolean; previousHeld: boolean; clusterPending: number; currentStalls: number } {
+  return { ...stats, running, windowOpen: current !== null, previousHeld: previous !== null, clusterPending: clusterPending.length, currentStalls: current?.stalls.length ?? 0 };
 }
 
 /** Test hook: force a rotation now and wait for it. */

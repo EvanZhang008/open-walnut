@@ -167,10 +167,10 @@ describe('profile windows', () => {
   // request about 1.5 s, and none was long enough for a profile.
   it('keeps one profile for shorter stalls that add up to the cluster threshold within 30 s', async () => {
     for (const late of [279, 576, 348]) observerOf().reported(report(0, late))
-    expect(_stallRecorderStats().windowOpen).toBe(true)
-    await new Promise((r) => setTimeout(r, 30))
-    expect(profilesWithMeta()).toEqual([]) // 1203 ms: not yet
+    // 1203 ms: not yet, they wait outside the window.
+    expect(_stallRecorderStats()).toMatchObject({ windowOpen: true, clusterPending: 3, currentStalls: 0 })
     observerOf().reported(report(0, 632)) // 1835 ms
+    expect(_stallRecorderStats()).toMatchObject({ clusterPending: 0, currentStalls: 4 })
     await _rotateNowForTest()
     const files = await waitForFiles(1)
     expect(files).toHaveLength(1)
@@ -207,8 +207,11 @@ describe('profile windows', () => {
   it('does not add up shorter stalls more than 30 s apart', async () => {
     observerOf().reported(report(-40_000, 900))
     observerOf().reported(report(0, 700))
+    // The 900 ms one fell out of the 30 s span: only the 700 ms one waits, and the window holds none.
+    expect(_stallRecorderStats()).toMatchObject({ clusterPending: 1, currentStalls: 0 })
     await _rotateNowForTest()
-    await new Promise((r) => setTimeout(r, 50))
+    // A window with no stall is held one rotation back, never kept.
+    expect(_stallRecorderStats()).toMatchObject({ previousHeld: true, kept: 0 })
     expect(profilesWithMeta()).toEqual([])
   })
 
