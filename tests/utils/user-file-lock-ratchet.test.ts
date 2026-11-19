@@ -48,6 +48,7 @@ const STORE_LOCKS = new Set<string>([
   'src/core/project-memory.ts: memFile',                        // project memory under WALNUT_HOME
   'src/core/routines/trigger-state.ts: file',                   // trigger state
   'src/core/send-queue.ts: target',                             // send-queue fences
+  'src/core/org/reflection/records.ts: file',                   // WALNUT_HOME/knowledge/nodes/<node>/guidance.md and reflections/<date>.md
   'src/core/send-relay-index.ts: file',                         // cache/send-queue/relays/<session>.json
   'src/core/session-queue-store.ts: SESSION_QUEUE_FILE',        // the session message queue (its one lock, persist)
   'src/core/sessions/memory-folder.ts: `${dir}.notes`',          // WALNUT_HOME/agent-memory/<task>.notes: a node's own notes folder
