@@ -203,7 +203,7 @@ import { takeTriggerStateSnapshot } from './trigger-state-snapshot-core.js'
 import { createClockSchedule } from './clock-schedule-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
 import { createDaemonPorts } from './port-scan-core.js'
-import { archiveTranscripts, bunTranspilerCacheDirs, ensureTaskDir, liveTranscriptIdsFromPs, isTaskDirId, listTaskDirs, plainFindResults, pruneHostCaches, pruneTaskBuilds, pruneTaskDirs, readOpenPaths, removeTaskDirs, restoreForRead, findNameMatch, restoreSessionAnywhere, resumeSourceId, setArchiveLog, setRemoteFetcher, RemoteHistoryError, taskDirInUse, taskDirPath, taskDirRoot, taskDirSizes, type HostWork } from './task-dir-core.js'
+import { archiveTranscripts, bunTranspilerCacheDirs, ensureTaskDir, liveTranscriptIdsFromPs, isTaskDirId, listTaskDirs, plainFindResults, pruneHostCaches, pruneTaskBuilds, pruneTaskDirs, readOpenPaths, removeTaskDirs, restoreForRead, findNameMatch, restoreSessionAnywhere, restoreForStart, resumeSourceId, setArchiveLog, setRemoteFetcher, RemoteHistoryError, taskDirInUse, taskDirPath, taskDirRoot, taskDirSizes, type HostWork } from './task-dir-core.js'
 import { ensurePwSilencePreload, pwSilenceDir, pwSilenceSessionEnv } from './pw-silence-core.js'
 import { createHostExec, runWaitMatcher } from './host-exec-core.js'
 import { createNetSupervisor, netStateDir, resolveNetBinary } from './net-core.js'
@@ -7015,9 +7015,12 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   const notOurs = ownedSid ? strictStartRefusal(ownedSid, cmd, ownerHome, resumesTranscript) : null
   if (notOurs) throw notOurs
   // An archived transcript comes back plain before the CLI resumes it, or forks it: the source a
-  // fork reads is its --resume id, not the new transcript it owns (transcript-archive.ts).
-  const archivedSource = resumeSourceId(args) ?? (resumesTranscript ? ownedSid : null)
-  if (archivedSource) await restoreSessionAnywhere(CLAUDE_PROJECTS_DIRS, archivedSource)
+  // fork reads is its --resume id, not the new transcript it owns (transcript-archive.ts). A fresh
+  // start under an id is checked the same way: history of that id archived here and not brought
+  // back (remote storage refused) refuses the start, never a new conversation in its place.
+  // Keep in sync with daemon-source.ts.
+  const archivedSource = resumeSourceId(args) ?? ownedSid
+  if (archivedSource) await restoreForStart(CLAUDE_PROJECTS_DIRS, archivedSource)
   // A start that a stop or a newer supervision request overtook ends here.
   const superseded = () => (!!canStart && !canStart()) || (!!isCurrent && !isCurrent())
   const stopIfSuperseded = () => {

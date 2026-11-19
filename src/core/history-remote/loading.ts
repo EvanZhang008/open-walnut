@@ -9,6 +9,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { HostStillLoadingError } from '../hosts/remote-read-bound.js'
 import { localProjectsDirs } from './service.js'
+import { MANIFEST_SUFFIX } from '../../providers/transcript-archive-names.js'
 
 export const REMOTE_LOADING_FROM = 'remote storage'
 /** The first request answers "still loading" after this; a request joining a running read waits longer. */
@@ -29,7 +30,7 @@ export async function remoteOnlyHere(sid: string, cwd: string | undefined, roots
   for (const root of roots) {
     const dir = path.join(root, enc)
     let m: { remote?: { offloadedAt?: number } }
-    try { m = JSON.parse(await fsp.readFile(path.join(dir, `${sid}.walnut-archive.json`), 'utf8')) } catch { continue }
+    try { m = JSON.parse(await fsp.readFile(path.join(dir, sid + MANIFEST_SUFFIX), 'utf8')) } catch { continue }
     if (m?.remote?.offloadedAt === undefined) return false
     const there = async (p: string) => fsp.access(p).then(() => true, () => false)
     return !(await there(path.join(dir, `${sid}.jsonl`))) && !(await there(path.join(dir, `${sid}.jsonl.gz`)))

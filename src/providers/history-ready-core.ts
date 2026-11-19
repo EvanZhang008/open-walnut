@@ -57,6 +57,7 @@ import { readTurnMarker } from '../lib/turn-end-marker.js';
 import { HISTORY_PARSER_VERSION } from '../core/history-parser-version.js';
 import { encodeProjectPathCore, isSafeForProjectEncodingCore } from './session-changes-core.js';
 import { rewindDeadSetAtPath, type RewindProbeCut } from './transcript-rewind-core.js';
+import { ARCHIVE_SUFFIX, MANIFEST_SUFFIX } from './transcript-archive-names.js';
 
 /** Parse windows tried in order, from the end of the transcript. */
 export const READY_STAGE_BYTES = [512 * 1024, 2 * 1024 * 1024, 8 * 1024 * 1024] as const;
@@ -104,8 +105,6 @@ const AGENT_ID_RE = /^[A-Za-z0-9_@.-]{1,128}$/;
  * its sidecar exports this, so an older sidecar never answers a subagent ask with the session's rows.
  */
 export const READY_SUBAGENT_V1 = true;
-const ARCHIVE_SUFFIX = '.gz';
-const MANIFEST_SUFFIX = '.walnut-archive.json';
 
 export interface ReadyViewRequest {
   sessionId: string;

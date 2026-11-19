@@ -28,7 +28,7 @@ export type DeliveryFailureKind = 'permanent' | 'transient';
 export interface DeliveryFailureVerdict {
   kind: DeliveryFailureKind;
   /** Stable label for logs/tests. Absent for transient failures. */
-  code?: 'cwd_missing' | 'session_missing' | 'session_stopped' | 'budget_paused' | 'inherited_session' | 'session_live' | 'too_large' | 'acp_session' | 'claude_missing';
+  code?: 'cwd_missing' | 'session_missing' | 'session_stopped' | 'budget_paused' | 'inherited_session' | 'session_live' | 'too_large' | 'acp_session' | 'claude_missing' | 'history_unavailable';
   /** Human-readable cause, stored on the parked row and shown in the UI. */
   reason: string;
   /**
@@ -57,6 +57,14 @@ const CWD_MISSING = /working directory (no longer exists|not set|not available)|
  */
 const SESSION_MISSING = /no active session found for session id/i;
 
+/**
+ * The host's daemon refused the start: the session's history is archived there and could not
+ * be brought back (transcript-archive.ts restoreForStart). A retry on every boot and reconnect
+ * would ask the storage again each time and repeat the error notifications; the batch waits,
+ * with the reason, for the user's Retry once the storage reads again.
+ */
+const HISTORY_UNAVAILABLE = /is kept in (?:remote storage|an archive here) and could not be brought back, so it was not started/i;
+
 export function classifyDeliveryFailure(err: unknown): DeliveryFailureVerdict {
   const message = err instanceof Error ? err.message : String(err ?? '');
   const reason = message.trim().slice(0, REASON_MAX) || 'delivery failed';
@@ -78,6 +86,7 @@ export function classifyDeliveryFailure(err: unknown): DeliveryFailureVerdict {
   if (err instanceof CwdMissingError) return { kind: 'permanent', code: 'cwd_missing', reason };
   if (CWD_MISSING.test(message)) return { kind: 'permanent', code: 'cwd_missing', reason };
   if (SESSION_MISSING.test(message)) return { kind: 'permanent', code: 'session_missing', reason };
+  if (HISTORY_UNAVAILABLE.test(message)) return { kind: 'permanent', code: 'history_unavailable', reason: message.trim().slice(0, HELD_REASON_MAX) };
   // Over the frame cap of the host's daemon: refused before a byte went, the same on every retry.
   if (err instanceof DaemonFrameTooLargeError || FRAME_TOO_LARGE.test(message)) {
     return { kind: 'permanent', code: 'too_large', reason: `Not sent: ${reason}. Send it in smaller parts.` };

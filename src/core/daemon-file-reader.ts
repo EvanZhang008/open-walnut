@@ -18,6 +18,7 @@ import type { FileGitCommit } from './file-history-git.js'
 // Shared with the test double of this reader (tests/helpers/mock-local-daemon-reader.ts),
 // which re-exports the same values, so a mocked module carries every export.
 import { DaemonNeedsUpgradeError, STREAM_EVIDENCE_MAX_BYTES, streamTextHeldConversation } from './daemon-file-reader-shared.js'
+import { MANIFEST_SUFFIX as ARCHIVE_MANIFEST_SUFFIX } from '../providers/transcript-archive-names.js'
 export { DaemonNeedsUpgradeError, streamTextHeldConversation }
 
 /** A file as one stat saw it: which file (epoch, when the daemon says), its size and mtime. */
@@ -741,6 +742,12 @@ export class DaemonFileReader implements SessionFileReader {
         const ownStat = await conn.send('fs.stat', { path: own }, timeoutMs)
         if (!ownStat.ok) return undefined
         if (ownStat.exists) return own
+        // An archive's manifest there proves the CLI wrote it, even while its files are only in
+        // remote storage and could not be fetched: never absent (transcript-archive.ts).
+        if (find) {
+          const kept = await conn.send('fs.stat', { path: own.slice(0, -'.jsonl'.length) + ARCHIVE_MANIFEST_SUFFIX }, timeoutMs)
+          if (!kept.ok || kept.exists) return undefined
+        }
       }
       if (!find) return null
       for (const root of roots) {

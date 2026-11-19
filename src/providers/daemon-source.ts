@@ -7972,12 +7972,18 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
   const notOurs = ownedSid ? strictStartRefusal(ownedSid, cmd, ownerHome, resumesTranscript) : null;
   if (notOurs) throw notOurs;
   // An archived transcript comes back plain before the CLI resumes it (transcript-archive.ts).
-  // A fork reads its --resume source, not the new transcript it owns.
-  const archivedSource = taskDirCore && typeof taskDirCore.resumeSourceId === 'function'
-    ? (taskDirCore.resumeSourceId(args) || (resumesTranscript ? ownedSid : null))
-    : (resumesTranscript ? ownedSid : null);
-  if (archivedSource && taskDirCore && typeof taskDirCore.restoreSessionAnywhere === 'function') {
-    await taskDirCore.restoreSessionAnywhere(CLAUDE_PROJECTS_DIRS, archivedSource).catch(() => null);
+  // A fork reads its --resume source, not the new transcript it owns. A fresh start under an id
+  // is checked the same way: history of that id archived here and not brought back (remote
+  // storage refused) refuses the start, never a new conversation in its place. Keep in sync
+  // with daemon-standalone.ts.
+  const resumedSource = taskDirCore && typeof taskDirCore.resumeSourceId === 'function' ? taskDirCore.resumeSourceId(args) : null;
+  const archivedSource = resumedSource || ownedSid;
+  if (archivedSource && taskDirCore && typeof taskDirCore.restoreForStart === 'function') {
+    await taskDirCore.restoreForStart(CLAUDE_PROJECTS_DIRS, archivedSource);
+  } else if (taskDirCore && typeof taskDirCore.restoreSessionAnywhere === 'function') {
+    // An older sidecar: restore what a resume or a fork reads, as before.
+    const source = resumedSource || (resumesTranscript ? ownedSid : null);
+    if (source) await taskDirCore.restoreSessionAnywhere(CLAUDE_PROJECTS_DIRS, source).catch(() => null);
   }
   // A start that a stop or a newer supervision request overtook ends here.
   const superseded = () => (!!canStart && !canStart()) || (!!isCurrent && !isCurrent());

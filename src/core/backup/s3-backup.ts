@@ -22,7 +22,8 @@ import {
 } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { STSClient, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
-import { fromIni, fromNodeProviderChain } from '@aws-sdk/credential-providers';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
+import { namedProfileCredentials, unnamedProfileHint } from '../aws-named-profile.js';
 import type { AwsCredentialIdentity, AwsCredentialIdentityProvider } from '@smithy/types';
 import { WALNUT_HOME } from '../../constants.js';
 import { log } from '../../logging/index.js';
@@ -57,7 +58,7 @@ export function backupCredentials(
         secretAccessKey: auth.aws_secret_access_key ?? '',
       };
     case 'profile':
-      return fromIni({ profile: auth.profile });
+      return namedProfileCredentials(auth.profile);
     case 'aws_chain':
     default:
       return fromNodeProviderChain();
@@ -349,7 +350,7 @@ async function doRunBackup(cfg: BackupConfig, opts: RunBackupOptions): Promise<B
     };
   } catch (err) {
     await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = (err instanceof Error ? err.message : String(err)) + unnamedProfileHint(cfg.auth, 'Backup');
     log.session.warn('backup: run failed', { error: msg });
     return fail(msg);
   }

@@ -81,6 +81,8 @@ export function resolveRemote(cfg: HistoryRemoteConfig | undefined | null): Reso
   const days = c.days === undefined || c.days === null || !Number.isFinite(d) || d < 0 ? DEFAULT_REMOTE_DAYS : Math.floor(d)
   const endpoint = typeof c.endpoint === 'string' && c.endpoint.trim() ? c.endpoint.trim().replace(/\/+$/, '') : undefined
   const bucket = typeof c.bucket === 'string' ? c.bucket.trim() : ''
+  // A profile setting with no name signs in with the default chain, as it always did; its failures
+  // say so (service.ts, aws-named-profile.ts unnamedProfileHint).
   const method = c.auth?.method === 'profile' && c.auth.profile ? 'profile' : 'aws_chain'
   return {
     enabled: c.enabled === true && !!bucket && days > 0,
@@ -121,8 +123,9 @@ function client(r: Pick<ResolvedRemote, 'region' | 'endpoint' | 'forcePathStyle'
 
 async function makeClient(r: Pick<ResolvedRemote, 'region' | 'endpoint' | 'forcePathStyle' | 'auth'>) {
   const s3: S3Mod = await import('@aws-sdk/client-s3')
-  const { fromIni, fromNodeProviderChain } = await import('@aws-sdk/credential-providers')
-  const credentials = r.auth.method === 'profile' ? fromIni({ profile: r.auth.profile }) : fromNodeProviderChain()
+  const { fromNodeProviderChain } = await import('@aws-sdk/credential-providers')
+  const { namedProfileCredentials } = await import('../aws-named-profile.js')
+  const credentials = r.auth.method === 'profile' ? namedProfileCredentials(r.auth.profile) : fromNodeProviderChain()
   const c = new s3.S3Client({
     region: r.region,
     credentials,
@@ -140,6 +143,14 @@ const notFound = (e: unknown) => {
   return x?.name === 'NotFound' || x?.name === 'NoSuchKey' || x?.$metadata?.httpStatusCode === 404
 }
 
+/** The way an upload recorded reaching its bucket, when it is one this server can use (manifests are files on disk). */
+export function recordedAuth(a: unknown): ResolvedRemote['auth'] | null {
+  const x = a as { method?: unknown; profile?: unknown } | null | undefined
+  if (x?.method === 'aws_chain') return { method: 'aws_chain' }
+  if (x?.method === 'profile' && typeof x.profile === 'string' && /^[A-Za-z0-9._+=,@-]{1,128}$/.test(x.profile)) return { method: 'profile', profile: x.profile }
+  return null
+}
+
 /** A store for uploads and checks against the bucket set now. */
 export async function remoteStore(r: ResolvedRemote): Promise<OffloadStore & FetchStore & { remove(key: string): Promise<void> }> {
   const { s3, c } = await client(r)
@@ -155,21 +166,38 @@ export async function remoteStore(r: ResolvedRemote): Promise<OffloadStore & Fet
       })())
     } finally { d.done() }
   }
-  const getVia = async (remote: { bucket: string; endpoint?: string; region?: string }, key: string, dst: string) => {
-    // An object kept in another bucket (the setting changed since) is read where it was put, with these credentials.
+  const getVia = async (remote: { bucket: string; endpoint?: string; region?: string; auth?: unknown }, key: string, dst: string) => {
+    // An object kept in another bucket (the setting changed or was lost since) is read where it was
+    // put, reached the way its upload recorded (a profile name, never a credential), else with these.
     const other = remote.bucket !== r.bucket || (remote.endpoint ?? '') !== (r.endpoint ?? '')
-    const use = other ? (await client({ ...r, region: remote.region || r.region, endpoint: remote.endpoint, forcePathStyle: remote.endpoint ? true : r.forcePathStyle })).c : c
-    await read(use, remote.bucket, key, () => {
+    const sink = () => {
       const out = fs.createWriteStream(dst, { mode: 0o600 })
       // pipeline() reports its errors; heard here too, so one before it takes the stream is never uncaught.
       out.on('error', () => {})
       return out
-    })
+    }
+    if (!other) return read(c, remote.bucket, key, sink)
+    const at = { ...r, region: remote.region || r.region, endpoint: remote.endpoint, forcePathStyle: remote.endpoint ? true : r.forcePathStyle }
+    const recorded = recordedAuth(remote.auth)
+    const same = !recorded || (recorded.method === r.auth.method && (recorded.profile ?? '') === (r.auth.profile ?? ''))
+    if (same) return read((await client(at)).c, remote.bucket, key, sink)
+    try {
+      await read((await client({ ...at, auth: recorded })).c, remote.bucket, key, sink)
+    } catch (e) {
+      // The recorded way is gone (a profile removed since): the credentials set now may still reach it.
+      if (notFound(e)) throw e
+      try {
+        await read((await client(at)).c, remote.bucket, key, sink)
+      } catch (again) {
+        throw new Error(`${(again as Error).message} (and the way its upload recorded failed: ${(e as Error).message})`)
+      }
+    }
   }
   return {
     bucket: r.bucket,
     ...(r.endpoint ? { endpoint: r.endpoint } : {}),
     region: r.region,
+    auth: r.auth,
     async put(key, file, info) {
       // The answer comes only after the whole body: its wait grows with the size.
       await within(info.size, (abortSignal) => c.send(new s3.PutObjectCommand({

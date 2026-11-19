@@ -36,6 +36,7 @@ const SID = '8b6dc196-0000-4000-8000-000000000001'
 const CWD = '/home/me/repo'
 const ROOT = '~/.claude/projects'
 const OWN = `${ROOT}/-home-me-repo/${SID}.jsonl`
+const KEPT = `${ROOT}/-home-me-repo/${SID}.walnut-archive.json`
 const probe = () => new DaemonFileReader('clouddev').probeSessionPath(SID, CWD, 1_000)
 
 beforeEach(() => {
@@ -49,7 +50,25 @@ beforeEach(() => {
 describe('probeSessionPath', () => {
   it('proven absent: the root exists, its own path is ENOENT, and the find holds no copy', async () => {
     expect(await probe()).toBeNull()
-    expect(wire.asked).toEqual([`fs.stat ${ROOT}`, `fs.stat ${OWN}`, `fs.find ${ROOT}`])
+    expect(wire.asked).toEqual([`fs.stat ${ROOT}`, `fs.stat ${OWN}`, `fs.stat ${KEPT}`, `fs.find ${ROOT}`])
+  })
+
+  // 2026-11-19: a resumed session whose history was only in remote storage, with the storage's
+  // credentials refused, read as never written and started over empty under its id.
+  it('unknown, never absent, when an archive manifest of it sits at its own path (its history kept in remote storage)', async () => {
+    wire.stat.set(KEPT, { ok: true, exists: true })
+    expect(await probe()).toBeUndefined()
+    expect(wire.asked).not.toContain(`fs.find ${ROOT}`)
+  })
+
+  it('unknown when the manifest at its own path cannot be stat-ed', async () => {
+    wire.stat.set(KEPT, { ok: false })
+    expect(await probe()).toBeUndefined()
+  })
+
+  it('the own-path lookup alone (no find) does not ask for the manifest', async () => {
+    expect(await new DaemonFileReader('clouddev').ownSessionPath(SID, CWD, 1_000)).toBeNull()
+    expect(wire.asked).toEqual([`fs.stat ${ROOT}`, `fs.stat ${OWN}`])
   })
 
   it('its own path exists (a symlinked project folder the find would skip): found', async () => {

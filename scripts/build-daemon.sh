@@ -114,6 +114,8 @@ SOURCES=(
   src/providers/task-dir-core.ts
   src/providers/task-dir-sizes.ts
   src/providers/transcript-archive.ts
+  src/providers/transcript-remote-retry.ts
+  src/providers/transcript-archive-names.ts
   src/providers/host-cache-prune.ts
   src/lib/task-dir.ts
   src/providers/pw-silence-core.ts

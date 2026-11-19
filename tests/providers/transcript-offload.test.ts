@@ -10,6 +10,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { MANIFEST_SUFFIX, RemoteHistoryError, archiveTranscripts, ensurePlain, findNameMatch, plainFindResults, restoreSession, setRemoteFetcher } from '../../src/providers/transcript-archive.js'
+import { resetRemoteFailures } from '../../src/providers/transcript-remote-retry.js'
 import { OFFLOAD_KEEP_MS, fetchRemoteArchive, offloadArchived, remoteTierStatus, type OffloadStore } from '../../src/providers/transcript-offload.js'
 import { LIFECYCLE_RULE_ID, remoteStore, remoteTimeouts, resolveRemote, setupBucket, testRemote } from '../../src/core/history-remote/store.js'
 import { fetchLocalArchive, remoteStatus, resetTierCount } from '../../src/core/history-remote/service.js'
@@ -53,7 +54,7 @@ beforeEach(() => {
   Object.assign(s3.faults, { dropNextPut: 0, corruptNextGet: 0, failAll: false, opaqueEtag: false, hang: false, stallBody: false })
   s3.bucketConfig.clear()
 })
-afterEach(() => { setRemoteFetcher(null); fs.rmSync(root, { recursive: true, force: true }) })
+afterEach(() => { setRemoteFetcher(null); resetRemoteFailures(); fs.rmSync(root, { recursive: true, force: true }) })
 
 const setting = () => resolveRemote({ enabled: true, bucket: s3.bucket, endpoint: s3.url, region: 'us-east-1' })
 const store = () => remoteStore(setting())
@@ -203,7 +204,7 @@ describe('remote history tier (fake S3)', () => {
     await expect(restoreSession(proj, 's-bad')).rejects.toBeInstanceOf(RemoteHistoryError)
     expect(fs.readdirSync(proj).filter((n) => n.includes('walnut-tmp'))).toEqual([])
     expect(await remoteOnlyHere('s-bad', cwd, [projects])).toBe(true)
-    expect(await ensurePlain(path.join(proj, 's-bad.jsonl'))).toBe(true)
+    expect(await restoreSession(proj, 's-bad', { retryRemote: true })).toBe(true)
     expect(fs.readFileSync(path.join(proj, 's-bad.jsonl'), 'utf8')).toBe(body.main)
   })
 
@@ -218,7 +219,7 @@ describe('remote history tier (fake S3)', () => {
     s3.faults.failAll = false
     expect(await remoteOnlyHere('s-off', cwd, [projects])).toBe(true)
     expect(manifest('s-off').remote.offloadedAt).toBeGreaterThan(0)
-    expect(await ensurePlain(path.join(proj, 's-off.jsonl'))).toBe(true)
+    expect(await restoreSession(proj, 's-off', { retryRemote: true })).toBe(true)
   })
 
   it('the server fetches only for a project dir of its own machine', async () => {
@@ -388,7 +389,7 @@ describe('review round 1 (2026-11-11): integrity, conflicts, deadlines, setup, f
       expect(Date.now() - t0).toBeLessThan(10_000)
       expect(fs.readdirSync(proj).filter((n) => n.includes('walnut-tmp'))).toEqual([])
       s3.faults.stallBody = false
-      expect(await ensurePlain(path.join(proj, 's-stall.jsonl'))).toBe(true)
+      expect(await restoreSession(proj, 's-stall', { retryRemote: true })).toBe(true)
     })
   })
 

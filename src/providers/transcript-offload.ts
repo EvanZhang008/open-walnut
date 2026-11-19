@@ -29,7 +29,7 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { pipeline } from 'node:stream/promises'
 import { Writable } from 'node:stream'
-import { ARCHIVE_SUFFIX, MANIFEST_SUFFIX, RemoteHistoryError, archiveInternals as A, type Manifest, type RemoteFile } from './transcript-archive.js'
+import { ARCHIVE_SUFFIX, MANIFEST_SUFFIX, RemoteHistoryError, archiveInternals as A, type Manifest, type RemoteAuth, type RemoteFile } from './transcript-archive.js'
 
 /** How long uploaded files stay here too before a later pass removes them. */
 export const OFFLOAD_KEEP_MS = 60 * 60_000
@@ -38,6 +38,8 @@ export interface OffloadStore {
   bucket: string
   endpoint?: string
   region?: string
+  /** How this store reaches the bucket, recorded with the upload so a fetch can reach it again. */
+  auth?: RemoteAuth
   /** Upload `file` as `key`; the store must refuse it when the bytes do not match `md5` (hex). */
   put(key: string, file: string, info: { size: number; md5: string; sha256: string }): Promise<void>
   /** The object's size and ETag, or null when there is none. */
@@ -47,8 +49,8 @@ export interface OffloadStore {
 }
 
 export interface FetchStore {
-  /** Download `key` of `bucket` (at `endpoint`, in `region`) into `dst`. */
-  get(remote: { bucket: string; endpoint?: string; region?: string }, key: string, dst: string): Promise<void>
+  /** Download `key` of `bucket` (at `endpoint`, in `region`, reached as `auth` when the upload recorded it) into `dst`. */
+  get(remote: { bucket: string; endpoint?: string; region?: string; auth?: RemoteAuth }, key: string, dst: string): Promise<void>
 }
 
 export interface OffloadOptions {
@@ -131,7 +133,7 @@ async function upload(dir: string, m: Manifest, o: OffloadOptions, now: number):
     files.push({ rel: f.rel, key, gzSize: h.size, gzSha256: h.sha256, md5: h.md5 })
     bytes += h.size
   }
-  const remote = { bucket: o.store.bucket, ...(o.store.endpoint ? { endpoint: o.store.endpoint } : {}), ...(o.store.region ? { region: o.store.region } : {}), uploadedAt: now, files }
+  const remote = { bucket: o.store.bucket, ...(o.store.endpoint ? { endpoint: o.store.endpoint } : {}), ...(o.store.region ? { region: o.store.region } : {}), ...(o.store.auth ? { auth: o.store.auth } : {}), uploadedAt: now, files }
   await A.writeManifest(dir, { ...m, remote })
   return bytes
 }

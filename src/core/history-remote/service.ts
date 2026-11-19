@@ -11,6 +11,7 @@ import path from 'node:path'
 import { log } from '../../logging/index.js'
 import type { Config } from '../types.js'
 import { hostKeyPrefix, remoteStore, resolveRemote, type ResolvedRemote } from './store.js'
+import { unnamedProfileHint } from '../aws-named-profile.js'
 
 /** This machine's Claude Code projects dirs: CLAUDE_CONFIG_DIR's and ~/.claude's, as the daemon reads them. */
 export function localProjectsDirs(env: NodeJS.ProcessEnv = process.env, home = os.homedir()): string[] {
@@ -25,9 +26,13 @@ export function isLocalProjectDir(dir: unknown, roots = localProjectsDirs()): di
   return roots.some((r) => path.dirname(abs) === path.resolve(r) && path.basename(abs) !== '..')
 }
 
-async function currentRemote(config?: Pick<Config, 'session'> | null): Promise<ResolvedRemote> {
+async function currentSetting(config?: Pick<Config, 'session'> | null) {
   const cfg = config ?? await (await import('../config-manager.js')).getConfig()
-  return resolveRemote(cfg.session?.history_remote)
+  return cfg.session?.history_remote
+}
+
+async function currentRemote(config?: Pick<Config, 'session'> | null): Promise<ResolvedRemote> {
+  return resolveRemote(await currentSetting(config))
 }
 
 /**
@@ -40,7 +45,8 @@ export async function fetchLocalArchive(dir: unknown, sid: unknown, deps?: { con
     log.session.warn('session history fetch refused: not a project dir of this machine', { dir: typeof dir === 'string' ? dir : undefined })
     throw new RemoteHistoryError('not a session of this machine')
   }
-  const r = await currentRemote(deps?.config)
+  const setting = await currentSetting(deps?.config)
+  const r = resolveRemote(setting)
   const { fetchRemoteArchive } = await import('../../providers/transcript-offload.js')
   const started = Date.now()
   try {
@@ -48,7 +54,9 @@ export async function fetchLocalArchive(dir: unknown, sid: unknown, deps?: { con
     if (got) log.session.info('session history fetched from remote storage', { sessionId: sid, files: got, ms: Date.now() - started })
     return got
   } catch (e) {
-    log.session.warn('session history could not be fetched from remote storage', { sessionId: sid, error: (e as Error).message, ms: Date.now() - started })
+    const hint = unnamedProfileHint(setting?.auth, 'Remote history storage')
+    log.session.warn('session history could not be fetched from remote storage', { sessionId: sid, error: (e as Error).message + hint, ms: Date.now() - started })
+    if (hint && e instanceof RemoteHistoryError) throw new RemoteHistoryError(e.message + hint, { stillRunning: e.stillRunning })
     throw e
   }
 }
@@ -73,7 +81,8 @@ export interface RemotePassRow {
 
 /** One pass of the tier over this machine's history; null when it is off. */
 export async function remotePassOnce(deps?: { config?: Pick<Config, 'session'> | null; roots?: string[]; host?: string; budgetMs?: number }): Promise<RemotePassRow | null> {
-  const r = await currentRemote(deps?.config)
+  const setting = await currentSetting(deps?.config)
+  const r = resolveRemote(setting)
   if (!r.enabled) return null
   const { offloadArchived } = await import('../../providers/transcript-offload.js')
   const res = await offloadArchived(deps?.roots ?? localProjectsDirs(), {
@@ -82,7 +91,8 @@ export async function remotePassOnce(deps?: { config?: Pick<Config, 'session'> |
     keyPrefix: hostKeyPrefix(r, deps?.host),
     budgetMs: deps?.budgetMs ?? 10 * 60_000,
   })
-  const row: RemotePassRow = { host: '__local__', ...res }
+  const hint = res.failed ? unnamedProfileHint(setting?.auth, 'Remote history storage') : ''
+  const row: RemotePassRow = { host: '__local__', ...res, ...(hint ? { errors: res.errors.map((e) => e + hint) } : {}) }
   if (res.uploaded || res.offloaded || res.failed) log.session.info('session history sent to remote storage', { ...row, days: r.days, bucket: r.bucket })
   return row
 }

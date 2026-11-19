@@ -239,6 +239,15 @@ describe.each(TWINS)('session history archive: $name', ({ name, command }) => {
       expect(down.ok).toBe(false)
       expect(fs.existsSync(path.join(proj, 's-alone.walnut-archive.json'))).toBe(true)
       expect(fs.readdirSync(proj).filter((n) => n.startsWith('s-alone') && (n.endsWith('.gz') || n.includes('walnut-tmp')))).toEqual([])
+
+      // 2026-11-19: a start under its id (a resume the server took for never written) is refused
+      // with the reason, and no CLI starts a new conversation where the old one belongs.
+      const ran = path.join(root, slug + '-s3', 'ran')
+      const st = await rpc(d, { cmd: 'start', sid: 's-alone', cwd: root, message: '', resume: false, args: ['/bin/sh', '-c', `touch ${JSON.stringify(ran)}`, 'sh', '--session-id', 's-alone'] })
+      expect(st.ok).toBe(false)
+      expect(JSON.stringify(st)).toMatch(/s-alone is kept in remote storage and could not be brought back/)
+      expect(fs.existsSync(ran)).toBe(false)
+      expect(fs.existsSync(path.join(proj, 's-alone.walnut-archive.json'))).toBe(true)
     } finally {
       await s3.close()
       if (keys.id === undefined) delete process.env.AWS_ACCESS_KEY_ID; else process.env.AWS_ACCESS_KEY_ID = keys.id

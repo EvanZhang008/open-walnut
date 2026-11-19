@@ -149,6 +149,8 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/task-dir-core.ts',
   'src/providers/task-dir-sizes.ts',
   'src/providers/transcript-archive.ts',
+  'src/providers/transcript-remote-retry.ts',
+  'src/providers/transcript-archive-names.ts',
   'src/providers/host-cache-prune.ts',
   'src/lib/task-dir.ts',
   // The page silencer preload, written at every session start (rides the task-dir-core sidecar).

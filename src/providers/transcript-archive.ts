@@ -61,9 +61,10 @@ import { createHash, randomBytes } from 'node:crypto'
 import { pipeline } from 'node:stream/promises'
 import { Transform, Writable } from 'node:stream'
 import { createGunzip, createGzip } from 'node:zlib'
+import { clearRemoteFailure, noteRemoteFailure, recentRemoteFailure } from './transcript-remote-retry.js'
 
-export const ARCHIVE_SUFFIX = '.gz'
-export const MANIFEST_SUFFIX = '.walnut-archive.json'
+import { ARCHIVE_SUFFIX, MANIFEST_SUFFIX } from './transcript-archive-names.js'
+export { ARCHIVE_SUFFIX, MANIFEST_SUFFIX }
 const LOCK_SUFFIX = '.walnut-archive.lock'
 const TMP_TAG = '.walnut-tmp-'
 /** Files this small save nothing on a 4 KB-block disk; they stay plain. */
@@ -92,7 +93,9 @@ export interface RemoteFile { rel: string; key: string; gzSize: number; gzSha256
  * Where a session's archive files went: uploaded and checked (`uploadedAt`), and once a later
  * pass checked them again, removed here (`offloadedAt`). A restore fetches what is missing.
  */
-export interface ManifestRemote { bucket: string; endpoint?: string; region?: string; uploadedAt: number; offloadedAt?: number; files: RemoteFile[] }
+/** How the uploading server reached the bucket: a method and a profile name, never a credential. */
+export interface RemoteAuth { method: 'aws_chain' | 'profile'; profile?: string }
+export interface ManifestRemote { bucket: string; endpoint?: string; region?: string; auth?: RemoteAuth; uploadedAt: number; offloadedAt?: number; files: RemoteFile[] }
 /** `asideAt` is set while the originals still sit aside (`<file>.walnut-orig`); a finalize clears it. */
 export interface Manifest { version: number; sessionId: string; archivedAt: string; asideAt?: number; files: ManifestFile[]; remote?: ManifestRemote }
 
@@ -602,23 +605,34 @@ const inflight = new Map<string, Promise<boolean>>()
  * is no such session here. Throws only when an archive is there and could not
  * be restored (its files are then left as they were).
  */
-export function restoreSession(dir: string, sid: string): Promise<boolean> {
+export function restoreSession(dir: string, sid: string, opts?: RestoreOptions): Promise<boolean> {
   const key = path.join(dir, sid)
   const running = inflight.get(key)
-  if (running) return running
-  const job = restoreSessionNow(dir, sid).finally(() => inflight.delete(key))
+  if (running) {
+    if (!opts?.retryRemote) return running
+    // An open that joins a read's restore must not take the read's remembered failure as its
+    // answer: once that restore is done, it asks remote storage itself.
+    return running.catch((e) => {
+      if (e instanceof RemoteHistoryError && e.repeated) return restoreSession(dir, sid, opts)
+      throw e
+    })
+  }
+  const job = restoreSessionNow(dir, sid, opts).finally(() => inflight.delete(key))
   inflight.set(key, job)
   return job
 }
 
-async function restoreSessionNow(dir: string, sid: string): Promise<boolean> {
+/** `retryRemote`: an open of the session (a resume, a start) asks remote storage again whatever failed before. */
+export interface RestoreOptions { retryRemote?: boolean }
+
+async function restoreSessionNow(dir: string, sid: string, opts?: RestoreOptions): Promise<boolean> {
   const plain = path.join(dir, sid + '.jsonl')
   // No manifest and no pass at work on it: nothing to do. A pass at work (its lock) is
   // waited for, since it may write a manifest and set the plain file aside next.
   if (!(await exists(manifestPath(dir, sid))) && !(await exists(lockPath(dir, sid)))) return exists(plain)
   const h = await lockWait(dir, sid, RESTORE_WAIT_MS)
-  if (!h) throw new Error(`session ${sid} is being archived; try again`)
-  return withBeat(h, async () => (await exists(manifestPath(dir, sid))) ? restoreLocked(dir, sid) : exists(plain))
+  if (!h) throw Object.assign(new Error(`session ${sid} is being archived; try again`), { passing: true })
+  return withBeat(h, async () => (await exists(manifestPath(dir, sid))) ? restoreLocked(dir, sid, opts) : exists(plain))
 }
 
 /**
@@ -634,7 +648,7 @@ async function restoreSessionNow(dir: string, sid: string): Promise<boolean> {
  * The archive files and the manifest go only once every file is settled; an
  * error keeps them (a later restore picks up where this one stopped).
  */
-async function restoreLocked(dir: string, sid: string): Promise<boolean> {
+async function restoreLocked(dir: string, sid: string, opts?: RestoreOptions): Promise<boolean> {
   const m = await readManifest(dir, sid)
   if (!m) throw new Error(`archive manifest of ${sid} cannot be read`)
   // Archive files kept only in remote storage come back first; until they are here nothing is touched.
@@ -646,19 +660,36 @@ async function restoreLocked(dir: string, sid: string): Promise<boolean> {
     }
     if (missing.length) {
       if (!remoteFetcher) throw new RemoteHistoryError(`the history of ${sid} is in remote storage, and this host cannot fetch it now`)
+      // A read soon after a failed fetch takes that failure as its answer (transcript-remote-retry.ts).
+      const retryKey = path.join(dir, sid)
+      const before = opts?.retryRemote ? null : recentRemoteFailure(retryKey)
+      if (before) throw new RemoteHistoryError(before.message, { repeated: true })
       try {
         await remoteFetcher(dir, sid)
       } catch (e) {
         // The download runs on past the answer's deadline (a large session): wait for its files.
-        if (!(e instanceof RemoteHistoryError && e.stillRunning)) throw e
+        if (!(e instanceof RemoteHistoryError && e.stillRunning)) {
+          noteRemoteFailure(retryKey, (e as Error).message)
+          throw e
+        }
         const until = Date.now() + FETCH_WAIT_MS
         const allHere = async () => { for (const r of missing) if (!(await exists(path.join(dir, r.rel + ARCHIVE_SUFFIX)))) return false; return true }
         while (!(await allHere())) {
-          if (Date.now() > until) throw new RemoteHistoryError(`the history of ${sid} is still coming back from remote storage; try again in a minute`)
+          if (Date.now() > until) {
+            const late = `the history of ${sid} is still coming back from remote storage; try again in a minute`
+            noteRemoteFailure(retryKey, late)
+            throw Object.assign(new RemoteHistoryError(late), { passing: true })
+          }
           await new Promise((r) => setTimeout(r, 1000))
         }
       }
-      for (const r of missing) if (!(await exists(path.join(dir, r.rel + ARCHIVE_SUFFIX)))) throw new RemoteHistoryError(`${r.rel} of ${sid} did not come back from remote storage`)
+      for (const r of missing) {
+        if (await exists(path.join(dir, r.rel + ARCHIVE_SUFFIX))) continue
+        const gone = `${r.rel} of ${sid} did not come back from remote storage`
+        noteRemoteFailure(retryKey, gone)
+        throw new RemoteHistoryError(gone)
+      }
+      clearRemoteFailure(retryKey)
     }
   }
   const files = [...m.files]
@@ -702,7 +733,11 @@ async function restoreLocked(dir: string, sid: string): Promise<boolean> {
 export class RemoteHistoryError extends Error {
   /** The fetch was not answered in time but may still be running (its files may yet come). */
   readonly stillRunning: boolean
-  constructor(message: string, opts?: { stillRunning?: boolean }) { super(message); this.name = 'RemoteHistoryError'; this.stillRunning = opts?.stillRunning === true }
+  /** The answer of an earlier failed fetch, given again to a read (transcript-remote-retry.ts): nothing was asked. */
+  readonly repeated: boolean
+  constructor(message: string, opts?: { stillRunning?: boolean; repeated?: boolean }) {
+    super(message); this.name = 'RemoteHistoryError'; this.stillRunning = opts?.stillRunning === true; this.repeated = opts?.repeated === true
+  }
 }
 /** How long a restore waits for a fetch that outran its answer. */
 const FETCH_WAIT_MS = 3 * 60_000
@@ -736,7 +771,7 @@ export async function ensurePlain(p: string): Promise<boolean> {
   if (!at) return there
   try { await restoreSession(at.dir, at.sid) } catch (e) {
     // Kept in remote storage and not fetched: the read goes on as for a missing file, so say why here.
-    if (e instanceof RemoteHistoryError) log(`restore of ${at.sid} from remote storage failed: ${e.message}`)
+    if (e instanceof RemoteHistoryError && !e.repeated) log(`restore of ${at.sid} from remote storage failed: ${e.message}`)
     return there
   }
   return fsp.lstat(p).then(() => true, () => false)
@@ -771,16 +806,56 @@ export function archivedSessionOf(p: string): { dir: string; sid: string } | nul
  * the session opened first, so a pass at work on it gives up.
  */
 export async function restoreSessionAnywhere(projectsDirs: string[], sid: string): Promise<string | null> {
-  if (!SID_RE.test(sid)) return null
-  noteSessionOpened(sid)
+  return restoreForStart(projectsDirs, sid).catch(() => null)
+}
+
+/** A restore that only ran out of time waiting: for an archive pass on the session, or a download still under way. */
+const isPassingFailure = (e: unknown): boolean => e instanceof Error && (e as { passing?: boolean }).passing === true
+
+/**
+ * The project dirs under the roots that hold an archive of `sid` (its manifest, or a pass's lock).
+ * Every start asks (thousands of project dirs on a long-used machine): the checks run a batch at
+ * a time off the event loop, never one sync stat per dir.
+ */
+async function archivedDirsOf(projectsDirs: string[], sid: string): Promise<string[]> {
+  const out: string[] = []
   for (const root of [...new Set(projectsDirs)]) {
     let projects: fs.Dirent[]
     try { projects = await fsp.readdir(root, { withFileTypes: true }) } catch { continue }
-    for (const p of projects) {
-      if (!p.isDirectory()) continue
-      const dir = path.join(root, p.name)
-      if (!fs.existsSync(manifestPath(dir, sid)) && !fs.existsSync(lockPath(dir, sid))) continue
-      try { if (await restoreSession(dir, sid)) return path.join(dir, sid + '.jsonl') } catch { return null }
+    const dirs = projects.filter((p) => p.isDirectory()).map((p) => path.join(root, p.name))
+    for (let i = 0; i < dirs.length; i += 64) {
+      const batch = dirs.slice(i, i + 64)
+      const held = await Promise.all(batch.map(async (dir) => (await exists(manifestPath(dir, sid))) || (await exists(lockPath(dir, sid)))))
+      batch.forEach((dir, j) => { if (held[j]) out.push(dir) })
+    }
+  }
+  return out
+}
+
+/**
+ * A start of session `sid` (a resume, or a fresh start under its id) brings its archived
+ * history back plain first and returns its path (null when none is archived here). Throws
+ * when an archive of it is here and cannot come back (remote storage refused or out of
+ * reach) and its transcript is not here: the CLI must not start then, since a fresh start
+ * under that id would put a new conversation where the old one belongs (2026-11-19: a resumed session whose history was
+ * only in remote storage, with the storage's credentials refused, started over empty).
+ */
+export async function restoreForStart(projectsDirs: string[], sid: string): Promise<string | null> {
+  if (!SID_RE.test(sid)) return null
+  noteSessionOpened(sid)
+  for (const dir of await archivedDirsOf(projectsDirs, sid)) {
+    try {
+      if (await restoreSession(dir, sid, { retryRemote: true })) return path.join(dir, sid + '.jsonl')
+    } catch (e) {
+      // Its transcript is here (written since, or never set aside): the CLI goes on with it, and
+      // the archive stays for a later restore, which keeps every copy.
+      if (await exists(path.join(dir, sid + '.jsonl'))) return path.join(dir, sid + '.jsonl')
+      // A wait that ran out (an archive pass on it, a download still coming) passes as it is: a
+      // later try succeeds by itself (delivery-failure.ts retries it). Every other failure refuses
+      // the start with its reason, and the message waits for the person's Retry.
+      if (isPassingFailure(e)) throw e
+      const why = `the history of session ${sid} is kept in ${e instanceof RemoteHistoryError ? 'remote storage' : 'an archive here'} and could not be brought back, so it was not started: ${(e as Error).message}`
+      throw e instanceof RemoteHistoryError ? new RemoteHistoryError(why) : new Error(why)
     }
   }
   return null
