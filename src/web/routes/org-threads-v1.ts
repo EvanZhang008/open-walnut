@@ -31,6 +31,7 @@ import { log } from '../../logging/index.js'
 import { resolveThreadCaller, type ThreadCaller } from '../../core/org/thread-caller.js'
 import { ThreadError, THREAD_ID_RE, THREAD_MESSAGE_ID_RE, sortedThreads, type OrgThread, type ThreadPatch, type ThreadSource, type ThreadState, type ThreadWriter } from '../../core/org/threads-model.js'
 import { isLineThreadId, lineThreads } from '../../core/org/line-threads.js'
+import { threadsForEveryTask } from '../../core/org/keeps-threads.js'
 import { fileThreadMessage, mergeThread, openNodeThread, patchThread, readThreads, splitThread, withTaskAsks } from '../../core/org/threads-store.js'
 import { resolveThreadAnswers } from '../../core/org/thread-answers.js'
 import { cardView, sharedAnswers, shownToHim, threadCounts } from '../../core/org/thread-view.js'
@@ -53,9 +54,9 @@ function route(fn: (req: Request, res: Response) => Promise<void>) {
   }
 }
 
-/** A task's lines as threads, only for a task that is no Org node (an Org node's lines stay its chat's). */
+/** A task's lines as threads, only under the experiment task_threads and for a task that is no Org node (an Org node's lines stay its chat's). */
 function ownLineThreads(task: Task) {
-  return task.org_role ? [] : lineThreads(task.user_status, task.user_status?.checkedAt ?? task.updated_at ?? new Date().toISOString())
+  return task.org_role || !threadsForEveryTask() ? [] : lineThreads(task.user_status, task.user_status?.checkedAt ?? task.updated_at ?? new Date().toISOString())
 }
 
 async function nodeTask(req: Request): Promise<Task> {
@@ -77,6 +78,9 @@ async function writerOf(req: Request): Promise<ThreadWriter> {
 
 function threadIdOf(req: Request): string {
   const id = param(req.params.thread)
+  // A task's line (org/line-threads.ts) is no stored thread: it is answered, snoozed and closed
+  // as its Action needed item (`line.item`), or it ends with what it waits on.
+  if (isLineThreadId(id)) throw new RouteError(409, 'line_thread', `${id} is one of the task's lines, not a stored thread: answer or snooze it as its Action needed item (line.item).`)
   if (!THREAD_ID_RE.test(id)) throw new RouteError(400, 'bad_request', `Not a thread id: ${id}`)
   return id
 }
@@ -136,9 +140,11 @@ orgThreadsV1Router.get('/tasks/:id/threads', route(async (req, res) => {
       ...markShared(answerMax === undefined ? t : clipAnswers(t, shared, answerMax), shared),
       shown: shownToHim(t, shared, now),
     })),
-    // A task's own lines, each a thread of its own (org/line-threads.ts): open, shown here, and
-    // counted where they already are (its status and Action needed), so never in shown_count.
-    ...(closedOnly ? [] : ownLineThreads(task)).map((t) => ({ ...t, shown: true })),
+    // `lines=1`: a task's own lines, each a thread of its own (org/line-threads.ts), after the
+    // stored ones and outside `limit`. Only a client that renders them asks (an older one would
+    // offer a stored thread's buttons on them); counted where they already are (its status and
+    // Action needed), never in shown_count.
+    ...(closedOnly || !flag(req.query.lines) ? [] : ownLineThreads(task)).map((t) => ({ ...t, shown: true })),
   ]
   // Answers still missing are read from the node's chat meanwhile; a kept one says so (org-threads:changed).
   void resolveThreadAnswers(task.id)
@@ -187,13 +193,14 @@ function markShared(t: OrgThread, shared: ReadonlySet<string>): OrgThread {
 orgThreadsV1Router.get('/tasks/:id/threads/:thread', route(async (req, res) => {
   const task = await nodeTask(req)
   if (isFollower()) throw primaryOnly('get the threads from')
-  const id = threadIdOf(req)
-  if (isLineThreadId(id)) {
-    const line = ownLineThreads(task).find((t) => t.id === id)
-    if (!line) throw new RouteError(404, 'no_thread', `No line ${id} on this task now.`)
+  const raw = param(req.params.thread)
+  if (isLineThreadId(raw)) {
+    const line = ownLineThreads(task).find((t) => t.id === raw)
+    if (!line) throw new RouteError(404, 'no_thread', `No line ${raw} on this task now.`)
     res.json({ task_id: task.id, thread: { ...line, shown: true } })
     return
   }
+  const id = threadIdOf(req)
   const all = await withTaskAsks(task.id, (await readThreads(task.id)).threads)
   const thread = all.find((t) => t.id === id)
   if (!thread) throw new RouteError(404, 'no_thread', `No thread ${id} on this node.`)

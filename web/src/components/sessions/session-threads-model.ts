@@ -4,6 +4,7 @@
  * panel reads it without loading the pane.
  */
 import type { Task } from '@open-walnut/core';
+import { keepsThreads } from '@open-walnut/keeps-threads';
 import { useSyncExternalStore } from 'react';
 import { apiPatch } from '@/api/client';
 import type { TaskStoreActions } from '@/contexts/TasksContext';
@@ -18,10 +19,10 @@ export function threadsOffered(task: Pick<Task, 'org_role' | 'threads_on'> | nul
 }
 
 /** Does the task keep Threads by the user's switch (Main and the leads keep theirs on the Org page)?
- *  The same rule as the server's keepsThreads (src/core/org/keeps-threads.ts): under the experiment
- *  task_threads every task does unless the user turned them off for it. */
+ *  The server's own rule (src/core/org/keeps-threads.ts): under the experiment task_threads every
+ *  task does unless the user turned them off for it. */
 export function threadsKeptBy(task: Pick<Task, 'org_role' | 'threads_on'> | null | undefined, everyTask = false): boolean {
-  return !!task && !task.org_role && (task.threads_on === true || (everyTask && task.threads_on !== false));
+  return !!task && !task.org_role && keepsThreads(task, everyTask);
 }
 
 /** Turn a task's Threads on or off: through the task list when it holds the row (it shows at once), else PATCH /api/tasks/:id. True when it saved. */

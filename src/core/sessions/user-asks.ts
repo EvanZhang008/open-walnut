@@ -14,6 +14,7 @@ import { log } from '../../logging/index.js';
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
 import type { Task } from '../types.js';
 import { keepsThreads } from '../org/keeps-threads.js';
+import { orgEnabledCached } from '../org/org-enabled.js';
 import { requeueTaskSearch } from '../search/task-requeue.js';
 import {
   addAsk, applyOwed, asksToJudge, closeAll, dueToWake, MAX_ASK_STOP_NUDGES, normalizeUserAsks, openAsks, owedQuestionBlock, personWordsText,
@@ -256,8 +257,9 @@ export async function wakeIdleOwed(nowMs = Date.now()): Promise<string[]> {
   for (const task of tasks) {
     try {
       if (!filesUserAsks(task) || task.phase === 'COMPLETE' || task.phase === 'WAITING' || task.user_status?.snoozed) continue;
-      // A task with Threads on hears of his open asks through them (org/thread-recheck.ts): one wake, not two.
-      if (keepsThreads(task)) continue;
+      // A task with Threads on hears of his open asks through them (org/thread-recheck.ts): one wake,
+      // not two. That re-check runs only with the org on; with it off, this wake is the only one.
+      if (keepsThreads(task) && orgEnabledCached()) continue;
       const due = dueToWake(await readUserAsks(task.id), task.user_status, nowMs);
       if (!due.length) continue;
       const { getSessionsForTask } = await import('../session-tracker.js');

@@ -33,6 +33,9 @@ describe('a task\'s lines as threads', () => {
       expect(THREAD_STATES, state).toContain(t.state)
     }
     expect(lineThreads(undefined, AT)).toEqual([])
+    // A status that is a stored thread's own ("Answer the thread X") is that thread: no second one.
+    const own = lineThreads({ state: 'needs', source: 'thread', lines: [{ id: 'status:needs', kind: 'ask', state: 'needs', what: 'Answer the thread "Budget"' }] } as never, AT)
+    expect(own).toEqual([])
     expect(lineThreads({ state: 'working', source: 'session' } as never, AT)).toEqual([])
   })
 })

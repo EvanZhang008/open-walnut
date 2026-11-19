@@ -43,7 +43,7 @@ import { workspaceHoldAsk } from './workspaces/decisions.js';
 import { orgEnabledCached } from './org/org-enabled.js';
 import { decisionAnswered } from './human-inbox/open-decision.js';
 import { triggerWatchesOwnWork } from './task-wait-wake.js';
-import { keepsThreads } from './org/keeps-threads.js';
+import { keepsThreads, threadsForEveryTask } from './org/keeps-threads.js';
 import { applyActions, type ActionItem } from './action-needed.js';
 import { taskLines } from './task-lines.js';
 import { approvalItemsByTask, letterItem, promptItem } from './action-needed-facts.js';
@@ -937,7 +937,7 @@ function withActions(task: Task, facts: StatusFacts, status: UserStatus, nowMs: 
   // one is kept too.
   if (task.org_role) return out;
   const lines = taskLines(input, out, nowMs);
-  return lines.length > (keepsThreads(task) ? 0 : 1) ? { ...out, lines } : out;
+  return lines.length > (threadsForEveryTask() && keepsThreads(task) ? 0 : 1) ? { ...out, lines } : out;
 }
 
 function explicitDecisionOwner(task: Task, facts: StatusFacts): RelativeAsk | undefined {

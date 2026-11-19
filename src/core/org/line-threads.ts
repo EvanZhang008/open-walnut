@@ -27,7 +27,10 @@ const STATE_OF: Record<LineState, ThreadState> = { needs: 'needs', working: 'wor
 export type LineThread = OrgThread & { line: TaskLine };
 
 export function lineThreads(status: UserStatus | undefined, at: string): LineThread[] {
-  return (status?.lines ?? []).map((line) => ({
+  // A status that is its own stored thread's (source thread: "Answer the thread X") is that thread,
+  // already in the same list: its fallback line is no second one.
+  const lines = (status?.lines ?? []).filter((l) => !(status?.source === 'thread' && l.id.startsWith('status:')));
+  return lines.map((line) => ({
     id: `${LINE_THREAD_PREFIX}${line.id}`,
     title: line.what,
     titled: true,

@@ -24,6 +24,7 @@
       "@open-walnut/content-item": ["../src/core/content-actions/content-item"],
       "@open-walnut/compaction-notice": ["../src/core/stream/compaction-notice"],
       "@open-walnut/hint-format": ["../src/core/hints/hint-format"],
+      "@open-walnut/keeps-threads": ["../src/core/org/keeps-threads"],
       "@open-walnut/budget-engines": ["../src/core/usage/budget-engines"],
       "@open-walnut/model-line": ["../src/core/usage/model-line"],
       "@open-walnut/search-transcript": ["../src/core/task-search-transcript"],

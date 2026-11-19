@@ -38,6 +38,7 @@ export default defineConfig({
       '@open-walnut/compaction-notice': path.resolve(__dirname, '../src/core/stream/compaction-notice.ts'),
       // The message-hint wire format: the client reads and strips the very blocks the server writes.
       '@open-walnut/hint-format': path.resolve(__dirname, '../src/core/hints/hint-format.ts'),
+      '@open-walnut/keeps-threads': path.resolve(__dirname, '../src/core/org/keeps-threads.ts'),
       '@open-walnut/budget-engines': path.resolve(__dirname, '../src/core/usage/budget-engines.ts'),
       '@open-walnut/model-line': path.resolve(__dirname, '../src/core/usage/model-line.ts'),
       // Same reason once more: the ✦ search's prompt and answer are BUILT by the

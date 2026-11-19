@@ -11,11 +11,11 @@
  * its report names. The task's status (deriveUserStatus) stays the one authority in this first step:
  * its own reason becomes a line when no fact line says it, so its state always has a line, and the
  * lines hold a Needs you line exactly when the task is Needs you (tests/core/task-lines.test.ts).
- * `aggregateLines` is the sum the later step derives the status from. Not the user's Threads (org/threads-store.ts): a thread is a
- * request of his with its history; a line is one live fact of one task.
+ * `aggregateLines` is the sum the later step derives the status from. Under the experiment
+ * task_threads each line reads as a thread of the task's own Threads (org/line-threads.ts), never
+ * stored there: a stored thread is a request of his with its history; a line is one live fact.
  *
- * Pure and browser-safe: the server derives it (user-status-sync.ts) and the web draws it
- * (web/src/components/tasks/TaskLines.tsx, experiment task_lines).
+ * Pure: the server derives it (user-status-sync.ts), the web and the phone read user_status.lines.
  */
 import { OUTLIVING_SOURCES } from './sessions/outliving-work.js';
 import { hasAbove, reportIsCurrent, reportWaitsOnUser, type UserStatus, type UserStatusInput } from './user-status.js';
