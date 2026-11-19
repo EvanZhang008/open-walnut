@@ -1058,6 +1058,9 @@ export interface Task {
    *  project is only its home, so the chart lists that project only while it has open work.
    *  Payload blob, local-only; an older Walnut ignores it. */
   org_vp_only?: boolean;
+  /** Main or a lead only: its duty switches (src/core/org/duties/), by duty id. No row, or
+   *  on:false, is off. Payload blob, local-only; an older Walnut ignores it. */
+  org_duties?: Record<string, { on: boolean; at: string; by?: 'human' | 'agent' | `task:${string}`; by_name?: string }>;
   /** A lead only: the VP's name the user gave it on the Org page, when not its project's. The
    *  title stays the session's own (its turn-end topic may grow it), so the chart and the Org list
    *  read this instead (orgDisplayTitle). Payload blob, local-only; an older Walnut ignores it. */

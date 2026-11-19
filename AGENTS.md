@@ -171,6 +171,7 @@ The org and the inbox (`docs/reference/org-and-inbox.md`):
 - **A thread goes with its work** (`thread-follow.ts`) to the lead whose team now does it. (`docs/reference/org-and-inbox.md`)
 - **Main and every VP never do the work themselves** (at most 3 look-only commands a turn, then hand on); Walnut reminds them and never refuses a call. (`docs/reference/org-and-inbox.md`)
 - **Main and every VP start by themselves, and one switch turns the whole org off** (`org.enabled: false`). (`docs/reference/org-and-inbox.md`)
+- **A node's duties are switches in one registry** (`src/core/org/duties/`, off until turned on); reflection over the sessions it manages is the first. (`docs/reference/org-and-inbox.md`)
 - **Only what needs the person pops up; every other error or host problem goes to Walnut Health**, which an agent looks into per category: one rule, `audienceOf` in `src/core/notifications/audience.ts`; nothing leaves the window during quiet (one exit, `system-notice.ts`; one push gate, `push/quiet-hold.ts`). (`docs/reference/notice-audience.md`)
 - **The inbox is for what needs the user**: a decision, a review, or a report he asked for; never progress, a park or an FYI. (`docs/reference/org-and-inbox.md`)
 - **Every letter says who it is from, first** (`letter-origin.ts`); **Inbox Triage keeps standing routing rules** (`triage/routing-rules.ts`). (`docs/reference/org-and-inbox.md`)

@@ -9,6 +9,7 @@
  *    or restored, the role follows the default again.
  *  - Its own MEMORY.md: the working memory the agent writes for itself (Task.agent_memory). Folded
  *    and read-only: the agent owns it.
+ *  - Its duties (NodeDuties.tsx): one switch per registry entry, saved at once.
  *  - Main also reads Walnut's memory (MEMORY.md / USER.md), edited on the Memory page, which keeps
  *    the one editor with its write lock.
  */
@@ -26,6 +27,7 @@ import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { log } from '@/utils/log';
 import { instructionsSource } from './instructions-source';
+import { NodeDuties } from './NodeDuties';
 import '@/styles/agent-memory.css';
 
 /** Org agents have instructions and a memory of their own; other tasks have neither. */
@@ -252,6 +254,7 @@ export function AgentMemoryPanel({ task, onClose }: { task: Task; onClose: () =>
         )}
         {note && <p className={`am-note${note.ok ? '' : ' am-error'}`} role={note.ok ? 'status' : 'alert'} data-testid="am-note">{note.text}</p>}
 
+        <NodeDuties task={task} />
         <OwnMemory load={own} />
         {isMain && <WalnutMemory onOpen={openMemory} held={dirty} />}
 

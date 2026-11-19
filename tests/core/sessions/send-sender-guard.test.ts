@@ -119,6 +119,7 @@ const CALL_SITES: Record<string, number> = {
   'src/core/session-message-queue.ts': 1,          // the queue's own enqueue inside sendMessageToSession
   'src/core/sessions/adopt-notice.ts': 1,
   'src/core/sessions/title-topic-notice.ts': 1,       // a task whose title gained a topic is told, as Walnut's notice
+  'src/core/org/reflection/pipeline.ts': 1,          // a node's reflection corrects a session it manages, as Walnut's note
   // A teammate's folded ask answered elsewhere: one Walnut note, source wait-until like needs-recheck.
   'src/core/sessions/ask-answer.ts': 1,
   // An answer given for the user taken back: one Walnut note into a running turn (ask-withdraw.ts tellNow).
@@ -210,6 +211,8 @@ const SOURCE_SENDER: Record<string, 'person' | 'agent'> = {
   'web-ui': 'agent', 'subagent-runner': 'agent',
   // A person's source sent by a browser under automation (sessions/automated-client.ts, sendSourceOf).
   'browser-automation': 'agent',
+  // A node's reflection correcting a session it manages (core/org/reflection/pipeline.ts).
+  'org-reflection': 'agent',
 };
 
 /** Files allowed to pass a person source to a send or a start. */

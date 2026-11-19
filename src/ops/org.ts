@@ -198,6 +198,34 @@ defineOp({
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 
+// A node's duty switches (src/core/org/duties/): one per registry entry, off by default.
+defineOp({
+  name: 'org_duty_set',
+  title: 'Turn a duty of the CEO or a VP on or off',
+  description:
+    'Turns one of the org\'s node duties on or off for the CEO or a VP, as the switch in its Memory & instructions '
+    + 'panel does. Every duty is off until turned on. With no `duty`, lists them. Duties: "reflection" '
+    + '(reads the sessions the node manages, finds where the user was frustrated, overruled a decision, or needed many rounds, '
+    + 'corrects that session and writes the lesson as team guidance).',
+  input: {
+    task_id: z.string().optional().describe('The CEO\'s or a VP\'s task id (omit with no duty to list them)'),
+    duty: z.string().optional().describe('The duty id, e.g. "reflection"'),
+    on: z.boolean().optional().describe('true turns it on, false off'),
+  },
+  handler: async ({ task_id, duty, on }, call) => {
+    if (!duty) {
+      const body = await call('GET', '/org/duties') as { duties?: Array<{ id: string; name: string }> };
+      return withOutcome(body ?? {}, `${body?.duties?.length ?? 0} duties.`, 'Pass task_id, duty and on to switch one.');
+    }
+    if (!task_id || typeof on !== 'boolean') throw new Error('Name the node (task_id) and pass on: true or false.');
+    const body = await call('PUT', `/org/nodes/${encodeURIComponent(String(task_id))}/duties/${encodeURIComponent(String(duty))}`, { on }) as { task?: { title?: string; org_name?: string } };
+    const who = body?.task?.org_name ? `the ${body.task.org_name} VP` : body?.task?.title ?? 'the node';
+    return withOutcome(body ?? {}, `${duty} is ${on ? 'on' : 'off'} for ${who}.`, on ? 'It runs from now on; no restart needed.' : 'It stops acting for this node now.');
+  },
+  routes: [{ method: 'GET', path: '/org/duties' }, { method: 'PUT', path: '/org/nodes/:id/duties/:duty' }],
+  tags: { readonly: false, remote: 'allow', primaryOnly: true },
+});
+
 // The report the user asks Main or a lead for (2026-10-31: "give me a report tomorrow morning"):
 // src/core/org/morning-report.ts, POST /api/v1/org/report.
 defineOp({

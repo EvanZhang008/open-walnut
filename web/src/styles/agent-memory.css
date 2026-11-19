@@ -40,3 +40,10 @@
 .am-link:hover:not(:disabled) { text-decoration: underline; }
 .am-link:disabled { color: var(--fg-muted); cursor: default; }
 .am-restore { display: block; margin-top: 6px; }
+
+/* The node's duty switches (NodeDuties.tsx): one row per duty, switch on the right. */
+.am-duties { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.am-duty { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
+.am-duty-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.am-duty-name { font-size: 13px; font-weight: 600; color: var(--fg); }
+.am-duty-stamp { font-style: italic; }

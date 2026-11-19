@@ -70,11 +70,25 @@ export async function saveOrgSettings(patch: Partial<OrgSettings>): Promise<OrgS
   return apiPut<OrgSettings>('/api/v1/org/settings', patch);
 }
 
+/** A duty a node can turn on (src/core/org/duties/registry.ts). */
+export interface OrgDuty { id: string; name: string; description: string; roles: Array<'main' | 'lead'> }
+
+export async function fetchOrgDuties(): Promise<OrgDuty[]> {
+  return (await apiGet<{ duties: OrgDuty[] }>('/api/v1/org/duties')).duties;
+}
+
+/** Turn one duty on or off for the CEO or a VP. Returns the node as written. */
+export async function setOrgDuty(taskId: string, duty: string, on: boolean): Promise<OrgNodeBrief> {
+  const res = await apiPut<{ task: OrgNodeBrief }>(`/api/v1/org/nodes/${encodeURIComponent(taskId)}/duties/${encodeURIComponent(duty)}`, { on });
+  return res.task;
+}
+
 /** An org node as the org routes answer it. */
 export interface OrgNodeBrief {
   id: string; title: string; project: string; phase: string; org_role?: string; org_name?: string; org_vp_only?: boolean;
   /** Who wrote its instructions, and when (additive). */
   org_instructions?: Task['org_instructions'];
+  org_duties?: Task['org_duties'];
 }
 
 /** A new project with its own VP, or a new VP to put projects under (`kind` 'vp'). Returns its lead. */

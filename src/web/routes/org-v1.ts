@@ -250,6 +250,7 @@ function nodeBrief(task: Task): Record<string, unknown> {
   return {
     ...brief(task), ...(task.org_name ? { org_name: task.org_name } : {}), ...(task.org_vp_only ? { org_vp_only: true } : {}),
     ...(task.org_instructions ? { org_instructions: task.org_instructions } : {}),
+    ...(task.org_duties ? { org_duties: task.org_duties } : {}),
   }
 }
 
@@ -318,6 +319,31 @@ async function pinRoute(req: Request, res: Response, next: NextFunction, watched
 }
 orgV1Router.put('/org/pins/:taskId', (req, res, next) => { void pinRoute(req, res, next, true) })
 orgV1Router.delete('/org/pins/:taskId', (req, res, next) => { void pinRoute(req, res, next, false) })
+
+// GET /api/v1/org/duties → { duties: [{ id, name, description, roles }] }
+// PUT /api/v1/org/nodes/:id/duties/:duty { on } → { task }
+// A node's duty switches (src/core/org/duties/): its Memory & instructions panel draws one switch per
+// registry entry, so a new duty needs no route or UI of its own.
+orgV1Router.get('/org/duties', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { dutyList } = await import('../../core/org/duties/registry.js')
+    res.json({ duties: dutyList() })
+  } catch (err) {
+    sendError(res, next, err)
+  }
+})
+
+orgV1Router.put('/org/nodes/:id/duties/:duty', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    primaryOnly('A duty is switched')
+    const { writer } = await nodeCaller(req)
+    const { setNodeDuty } = await import('../../core/org/duties/node-duties.js')
+    const task = await setNodeDuty(String(req.params.id), String(req.params.duty), req.body?.on, writer)
+    res.json({ task: nodeBrief(task) })
+  } catch (err) {
+    sendError(res, next, err)
+  }
+})
 
 orgV1Router.get('/org/settings', async (_req: Request, res: Response, next: NextFunction) => {
   try {
