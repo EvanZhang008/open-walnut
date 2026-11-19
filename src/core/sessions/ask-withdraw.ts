@@ -26,7 +26,7 @@ import { isLiveSessionStatus, pickDeliverySession } from '../routines/session-ta
 import {
   ASKS_WITHDRAWN_MAX, answerFor, answerHolds, answersOf, askKey, type AskAnswer, type AskAnswerWithdrawal,
 } from '../same-ask.js';
-import { liveDelivery, liveSendGuard, notDeliveredLive, standsAbove } from './ask-answer.js';
+import { liveDelivery, liveSendGuard, notDeliveredLive, standsAbove, unansweredHold } from './ask-answer.js';
 
 export class AskWithdrawError extends Error {
   constructor(readonly code: 'not_above' | 'no_answer' | 'reason' | 'not_found', message: string, readonly status = 409) {
@@ -146,6 +146,8 @@ export async function withdrawAskAnswer(
     return {
       asks_answered: kept.length ? kept : null,
       ask_answered: kept.length ? kept[kept.length - 1] : null,
+      // A close hold that answer ended holds again (ask-answer.ts answeredHold).
+      ...(cur.phase !== 'COMPLETE' ? unansweredHold(cur.result_report, answer) : {}),
     } as unknown as Partial<Task>;
   });
   if (!removed || !stored) throw new AskWithdrawError('no_answer', `"${target.title}" (${target.id}): that answer was already taken back.`);

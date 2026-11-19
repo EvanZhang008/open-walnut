@@ -9,11 +9,13 @@
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { OWED_STATUS_SOURCES, leadsTask, namesUser, statusAskItem, userNameOf, userProgressItems } from '../../src/core/sessions/owed-to-user.js'
+import { OWED_STATUS_SOURCES, namesUser, statusAskItem, userNameOf, userProgressItems } from '../../src/core/sessions/owed-to-user.js'
 import { extractProgressLines } from '../../src/core/task-progress.js'
 import { deriveUserStatus, type UserStatus } from '../../src/core/user-status.js'
 import { phaseForReport } from '../../src/core/sessions/report-phase.js'
 import { isPartial, partialLine } from '../../src/core/peers/structured-reply.js'
+import { standsAbove } from '../../src/core/sessions/ask-answer.js'
+import type { Task } from '../../src/core/types.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const code = (text: string) => text.split('\n').filter((l) => !/^\s*(?:\*|\/\/|\/\*)/.test(l)).join('\n')
@@ -226,25 +228,23 @@ describe('a task\'s own close asks what requests it still holds, by the one rule
   }
 })
 
-describe('leadsTask: whose close is answered to the closer, not the user', () => {
-  const tasks: Record<string, { id: string; org_role?: 'main' | 'lead' | 'router'; parent_task_id?: string }> = {
-    vp: { id: 'vp', org_role: 'lead' }, main: { id: 'main', org_role: 'main' },
-    team: { id: 'team', parent_task_id: 'vp' }, work: { id: 'work', parent_task_id: 'team' },
-    peer: { id: 'peer', parent_task_id: 'vp' }, loopA: { id: 'loopA', parent_task_id: 'loopB' }, loopB: { id: 'loopB', parent_task_id: 'loopA' },
-  }
-  const read = async (id: string) => tasks[id] ?? null
-  it('Main, a lead and any task above it lead; the task itself, a peer and an unknown caller do not', async () => {
-    expect(await leadsTask(tasks.work, 'vp', read)).toBe(true)
-    expect(await leadsTask(tasks.work, 'main', read)).toBe(true)
-    expect(await leadsTask(tasks.work, 'team', read)).toBe(true)
-    expect(await leadsTask(tasks.work, 'work', read)).toBe(false)
-    expect(await leadsTask(tasks.work, 'peer', read)).toBe(false)
-    expect(await leadsTask(tasks.work, 'gone', read)).toBe(false)
-    expect(await leadsTask(tasks.loopA, 'peer', read)).toBe(false)
-    // A lead of another project's team is not its lead.
-    const lead2 = (project: string) => async (id: string) => (id === 'vp2' ? { id: 'vp2', org_role: 'lead' as const, project } : read(id))
-    expect(await leadsTask({ ...tasks.work, project: 'Garden' }, 'vp2', lead2('Kitchen'))).toBe(false)
-    expect(await leadsTask({ ...tasks.work, project: 'Garden' }, 'vp2', lead2('garden'))).toBe(true)
+describe('who leads a task at its close: the one rule answers_ask uses', () => {
+  // 2026-11-19: a second rule here read only a lead's own project, so the VP that leads an imported
+  // task's project for the user (org_leads) could not settle it with a reason.
+  it('the close gate asks standsAbove, and keeps no rule of its own', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'src/core/sessions/owed-to-user.ts'), 'utf8')
+    expect(src).toMatch(/standsAbove\(closer, task, all\)/)
+    expect(src).not.toMatch(/org_role === 'lead' &&/)
+    expect(src).not.toMatch(/parent_task_id[^\n]*closerTaskId/)
+  })
+  it('a lead leads its own project and every project it leads for the user; another team\'s lead does not', () => {
+    const t = (id: string, x: Partial<Task> = {}) => ({ id, title: id, phase: 'TODO', ...x }) as Task
+    const org = [t('vp', { org_role: 'lead', project: 'Garden', org_leads: ['Imports'] }), t('vp2', { org_role: 'lead', project: 'Orchard' }),
+      t('imp', { project: 'imports' }), t('own', { project: 'Garden' })]
+    const by = (id: string) => org.find((x) => x.id === id)!
+    expect(standsAbove(by('vp'), by('imp'), org)).toBe(true)
+    expect(standsAbove(by('vp'), by('own'), org)).toBe(true)
+    expect(standsAbove(by('vp2'), by('imp'), org)).toBe(false)
   })
   it('a lead\'s hold never reads as Needs you and never forces NEED_ACTION', () => {
     const report = { via: 'complete' as const, at: '2026-11-15T00:00:00Z', not_done: ['You: x'],

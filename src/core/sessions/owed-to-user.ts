@@ -23,7 +23,8 @@
  *
  * The hold lives on `result_report.owed`: while open, user-status.ts reads the task as Needs you
  * and report-phase.ts keeps a later turn's report from moving it off NEED_ACTION. The not-done
- * settle (POST /tasks/:id/not-done), a person's close and a forced close end it.
+ * settle (POST /tasks/:id/not-done), a person's close, a forced close and an answer to its ask
+ * given in the user's place (answers_ask, ask-answer.ts answeredHold) end it.
  *
  * What counts (OwedSource): an open Progress item that names the user, the ask its status
  * makes of the user (its own report, a letter, a Board choice, a live prompt, a snoozed ask), an
@@ -43,6 +44,7 @@ import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
 import { openOwed, type StructuredReply, type TaskOwed, type TaskResultReport } from '../peers/structured-reply.js';
 import type { UserStatus } from '../user-status.js';
+import { answeredAbove, answersOf } from '../same-ask.js';
 import { userSaidLine } from './user-spoke.js';
 import type { OpenLineKind } from './stale-note.js';
 import { awaitsUserDecision } from '../human-inbox/open-decision.js';
@@ -102,6 +104,23 @@ export function userProgressItems(note: string | null | undefined, name: string 
   return extract(note).filter((l) => OPEN_PROGRESS.has(l.status) && namesUser(l.text, name)).map((l) => `[${l.status}] ${l.text}`);
 }
 
+/**
+ * Whether its stored status's ask was answered for the user (task_send answers_ask) by the very rule
+ * his Needs you reads it with (same-ask.ts answeredAbove: a session's ask, the decision it carries,
+ * a new fact since asks again), for a status not yet rebuilt since the answer (pure).
+ */
+export function answeredForUser(task: Pick<Task, 'ask_answered' | 'asks_answered' | 'user_status'>): boolean {
+  const s = task.user_status;
+  return !!s && answeredAbove(s, answersOf(task)) !== s;
+}
+
+/** Whether `ask` is a hold's own (its status reads it back): while it is open, or settled after that status was built (pure). */
+function holdsOwnAsk(task: Pick<Task, 'result_report' | 'user_status'>, ask: string): boolean {
+  const owed = task.result_report?.owed;
+  if (!owed || ask !== owed.ask) return false;
+  return !owed.settled || !(Date.parse(task.user_status?.at ?? '') > Date.parse(owed.settled.at));
+}
+
 /** The ask its stored status makes of the user, when that is owed (pure). */
 export function statusAskItem(s: UserStatus | null | undefined): string | undefined {
   if (!s) return undefined;
@@ -133,8 +152,10 @@ export async function owedToUser(task: Task, fields?: StructuredReply | null): P
   } catch { /* unread: nothing */ }
   // Not the ask a hold of its own wrote (its status reads it back): the items it names come below.
   const held = openOwed(task.result_report);
+  // Nor the ask of a hold already settled (a status not yet rebuilt still shows it), nor an ask a
+  // lead answered in his place (answers_ask): it is no longer his (2026-11-19).
   const ask = statusAskItem(task.user_status);
-  if (!held || ask !== held.ask) add('ask', ask);
+  if (ask && !holdsOwnAsk(task, ask) && !answeredForUser(task)) add('ask', ask);
   try {
     const { listLetters } = await import('../human-inbox/store.js');
     const { letters } = await listLetters({ archived: false });
@@ -184,29 +205,22 @@ export type CloseAdmission =
 
 interface Closer { taskId: string; /** The resolved session's own id, never the header's text. */ sessionId?: string }
 
-const LEAD_DEPTH = 8;
-
 /**
- * True when the closing task leads this one: Main, the lead of its project's team, or a task above it
- * in its parent chain (its own close never is). Another project's lead does not: its close is held
- * as the user's, never answered to it (2026-11-16 review: a hold told to another team's lead that it
- * could not settle hid the items from the user). The one rule for whose hold it is and who settles
- * with a reason alone. Unreadable links read as not leading, so the user keeps seeing the items.
+ * Whether the closing task leads this one: the one rule answers_ask uses too (ask-answer.ts
+ * standsAbove: Main, a lead whose team holds it, its own project or one it leads for the user
+ * (org_leads), or a task above it in its parent chain; never the task itself). Its hold answers that
+ * closer and it settles its team's items with a reason alone; another team's lead is held as the
+ * user's (2026-11-16 review). 2026-11-19: a second, narrower rule here read only the lead's own
+ * project, so the VP leading an imported task's project refused to close it for want of the user's
+ * words. Unreadable tasks read as not leading, so the user keeps seeing the items.
  */
-export async function leadsTask(task: Pick<Task, 'id' | 'parent_task_id'> & Partial<Pick<Task, 'project'>>, closerTaskId: string,
-  read: (id: string) => Promise<Pick<Task, 'id' | 'org_role' | 'parent_task_id'> & Partial<Pick<Task, 'project'>> | null>): Promise<boolean> {
+async function closerLeads(task: Task, closerTaskId: string): Promise<boolean> {
   if (closerTaskId === task.id) return false;
-  const closer = await read(closerTaskId).catch(() => null);
-  if (closer?.org_role === 'main') return true;
-  if (closer?.org_role === 'lead' && (closer.project ?? '').toLowerCase() === (task.project ?? '').toLowerCase()) return true;
-  let parent = task.parent_task_id;
-  const seen = new Set([task.id]);
-  for (let i = 0; parent && i < LEAD_DEPTH && !seen.has(parent); i++) {
-    if (parent === closerTaskId) return true;
-    seen.add(parent);
-    parent = (await read(parent).catch(() => null))?.parent_task_id;
-  }
-  return false;
+  const { listTasks } = await import('../task-manager.js');
+  const { standsAbove } = await import('./ask-answer.js');
+  const all = await listTasks();
+  const closer = all.find((t) => t.id === closerTaskId);
+  return !!closer && standsAbove(closer, task, all);
 }
 
 /** Who is closing: null for a person (never checked), else the closing session's task and session. */
@@ -394,10 +408,10 @@ export async function admitSessionClose(
   const heldMs = held ? Date.parse(held.at) : NaN;
   const wroteSinceHold = !!said?.spokeSince && said.words.some((w) => !(Date.parse(w.at) <= heldMs));
   const told = !!held && (held.told ?? []).includes(closer.taskId) && items.every((i) => held.items.includes(i.text)) && !wroteSinceHold;
-  const byLead = await leadsTask(task, closer.taskId, (id) => getTask(id)).catch(() => false);
+  const byLead = await closerLeads(task, closer.taskId).catch(() => false);
   // Only the user settles what waits on him: a force by its own session or a peer quotes his words,
   // written since the hold named them (2026-11-16, the Walnut VP: "force only when Evan himself said
-  // it is no longer wanted"). Its lead (leadsTask: Main, its project's team lead, a task above it)
+  // it is no longer wanted"). Its lead (closerLeads: Main, the lead of its team, a task above it)
   // settles its team's items itself, with a reason; another team's lead does not.
   const forcing = opts.force === true && reason.length >= REASON_MIN && told;
   const { userWordsQuoted } = await import('./owed-waits.js');

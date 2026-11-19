@@ -32,8 +32,9 @@ import { isLiveSessionStatus } from '../routines/session-target.js';
 import { briefTeam } from '../user-status.js';
 import { decisionSinceOf, settleCheck, usersWordsLine, verifyUsersWords, type UsersWordsCheck, type UserSaid } from './user-spoke.js';
 import { reportDecision } from '../ask-decision.js';
-import { askAnswerLine, askKey, keptAnswers, type AskAnswer, type SameAskFold } from '../same-ask.js';
+import { answerHolds, askAnswerLine, askKey, keptAnswers, type AskAnswer, type SameAskFold } from '../same-ask.js';
 import { awaitsUserDecision } from '../human-inbox/open-decision.js';
+import { openOwed } from '../peers/structured-reply.js';
 
 export class AskAnswerError extends Error {
   constructor(readonly code: 'not_above' | 'no_open_ask' | 'user_words' | 'user_spoke_since' | 'bad_request' | 'human_approval' | 'not_confirmed', message: string, readonly status = 409) {
@@ -304,11 +305,42 @@ export async function prepareAskAnswer(
       await updateTaskRaw(target.id, (cur) => ({
         ask_answered: answer,
         asks_answered: keptAnswers(cur.asks_answered ?? (cur.ask_answered ? [cur.ask_answered] : []), answer),
+        ...answeredHold(cur.result_report, answer),
       }) as Partial<Task>, { emitEvent: true, source: 'ask-answer' })
         .catch((err) => log.task.warn('ask-answer: not recorded', { taskId: target.id, error: err instanceof Error ? err.message : String(err) }));
       log.task.info('ask-answer: answered for the user', { taskId: target.id, by: answer.by });
     },
   };
+}
+
+const ANSWERED_NOTE = 'Answered in the user\'s place by ';
+
+/**
+ * The close hold (result_report.owed, owed-to-user.ts) an answer settles: the one whose ask it
+ * answers, shown on the user's Needs you while the hold is open. Answered in his place by a task
+ * above it (or by him), its items are no longer his, so every close (its own, its lead's, a batch)
+ * goes through, and his Needs you ends (2026-11-19: a VP answered a task's held ask with answers_ask,
+ * and the hold still refused every close for want of the user's own words). Pure.
+ */
+export function answeredHold(report: Task['result_report'], answer: AskAnswer): Pick<Task, 'result_report'> | Record<string, never> {
+  const owed = openOwed(report);
+  if (!report || !owed || !answerHolds(answer, owed.ask)) return {};
+  const note = `${ANSWERED_NOTE}${answer.byTitle}: ${answer.text}`.slice(0, 500);
+  return { result_report: { ...report, owed: { ...owed, settled: { at: answer.at, by: answer.by === 'human' ? 'human' : `task:${answer.by}`, how: 'taken', note } } } };
+}
+
+/**
+ * The hold an answer of this answerer settled, open again once that answer is taken back
+ * (ask-withdraw.ts): by who answered and the ask, not the time (the same ask answered again leaves
+ * the hold settled by the first). Pure.
+ */
+export function unansweredHold(report: Task['result_report'], answer: AskAnswer): Pick<Task, 'result_report'> | Record<string, never> {
+  const owed = report?.owed;
+  const by = answer.by === 'human' ? 'human' : `task:${answer.by}`;
+  if (!report || !owed?.settled || owed.settled.by !== by || owed.settled.how !== 'taken' || !owed.settled.note?.startsWith(ANSWERED_NOTE)) return {};
+  if (askKey(answer.ask) !== askKey(owed.ask) && !answerHolds(answer, owed.ask, Date.parse(answer.at))) return {};
+  const { settled: _answered, ...open } = owed;
+  return { result_report: { ...report, owed: open } };
 }
 
 /** A settle's refusal as answers_ask's own (ask-settle.ts SettleError, its code and status kept). */
