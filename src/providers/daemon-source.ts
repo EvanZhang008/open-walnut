@@ -51,7 +51,7 @@ import { createDemoDaemonQuiesce } from './demo-daemon-quiesce-core.js'
 import { demoGatewaySocketPath } from './gateway-core.js'
 import { createCronMetadataTracker, CRON_PROMPT_LIMIT } from './daemon-cron-metadata.js'
 import { createEnvelopeKit } from '../core/peers/envelope-kit.js'
-import { createOfflineHostCore } from './offline-host-core.js'
+import { createOfflineHostCore, OFFLINE_MAX_RECORDS } from './offline-host-core.js'
 import { createJournalMigration, createOfflineJournal } from './offline-journal-core.js'
 import { createLeaderBook } from './leader-core.js'
 import { createWalnutScope } from './walnut-scope-core.js'
@@ -380,8 +380,10 @@ export function getDaemonSource(): string {
       `daemon-source: expected exactly 1 '${promptLimitPlaceholder}' placeholder in DAEMON_SOURCE, found ${promptLimitMatches}`,
     )
   }
+  // The journal's capacity (offline-host-core.ts OFFLINE_MAX_RECORDS), stamped as a literal too.
+  const maxRecordsPlaceholder = '__OFFLINE_MAX_RECORDS__'
   const helpersPlaceholder = '__INJECTED_HELPERS__'
-  for (const ph of [helpersPlaceholder, ...foldInjections.map(([p]) => p)]) {
+  for (const ph of [helpersPlaceholder, maxRecordsPlaceholder, ...foldInjections.map(([p]) => p)]) {
     const n = DAEMON_SOURCE.split(ph).length - 1
     if (n !== 1) {
       throw new Error(
@@ -402,6 +404,7 @@ export function getDaemonSource(): string {
     .replaceAll(placeholder, () => capsLiteral)
     .replaceAll(versionPlaceholder, () => version)
     .replaceAll(promptLimitPlaceholder, () => String(CRON_PROMPT_LIMIT))
+    .replace(maxRecordsPlaceholder, () => String(OFFLINE_MAX_RECORDS))
     .replace(helpersPlaceholder, () => INJECTED_HELPERS_SOURCE)
   for (const [ph, body] of foldInjections) {
     // Function replacer: a literal replacement string would reinterpret any
@@ -5553,9 +5556,15 @@ function ownsDaemonDir() {
   }
 }
 
+// Pending records per Walnut before a write is refused (offline-host-core.ts
+// OFFLINE_MAX_RECORDS). Tests only (never in the real daemon dir) may lower it. Twin of daemon-standalone.ts.
+var OFFLINE_JOURNAL_MAX = !IS_PROD_DAEMON_DIR && /^[1-9][0-9]{0,6}$/.test(process.env.WALNUT_TEST_OFFLINE_MAX_RECORDS || '')
+  ? Number(process.env.WALNUT_TEST_OFFLINE_MAX_RECORDS) : __OFFLINE_MAX_RECORDS__;
+
 function createJournalStore(dir) {
   return (__CREATE_OFFLINE_JOURNAL__)({
     fs: fs, path: path, dir: dir,
+    maxRecords: OFFLINE_JOURNAL_MAX,
     now: function () { return Date.now(); },
     randomHex: function (n) { return crypto.randomBytes(n).toString('hex'); },
     keyOf: function (home) { return crypto.createHash('sha1').update(home).digest('hex').slice(0, 16); },
@@ -5630,6 +5639,7 @@ var offlineHost = (__CREATE_OFFLINE_HOST__)({
   fs: fs, path: path,
   dir: OFFLINE_HOST_DIR,
   journal: offlineJournal,
+  maxRecords: OFFLINE_JOURNAL_MAX,
   drainsOf: function (home) { return leaderBook.drainsFor(home); },
   now: function () { return Date.now(); },
   randomHex: function (n) { return crypto.randomBytes(n).toString('hex'); },

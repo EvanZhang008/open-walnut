@@ -93,7 +93,7 @@ const PHASE_READERS: Record<string, number> = {
   'src/core/boards/board-lanes.ts': 2,
   'src/core/human-inbox/item-status.ts': 2,
   'src/core/offline-merge/apply-fields.ts': 1,
-  'src/core/offline-merge/patch-check.ts': 1,
+  'src/core/offline-merge/patch-rules-core.ts': 1,
   'src/core/org/org-store.ts': 1,
   'src/core/peers/envelope-kit.ts': 1,
   'src/core/phase.ts': 5,

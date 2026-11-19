@@ -13,7 +13,7 @@ import {
   gatewayCall, journalLines, keyOf,
 } from '../helpers/offline-journal-harness.js'
 import { JOURNAL_V2_DRAINS } from '../../src/providers/offline-journal-core.js'
-import { QUEUEABLE_TASK_FIELDS } from '../../src/providers/offline-host-core.js'
+import { QUEUEABLE_TASK_FIELDS, createOfflineHost } from '../../src/providers/offline-host-core.js'
 
 const T0 = Date.parse('2026-10-14T12:00:00Z')
 const fields = (f: Record<string, [unknown, unknown]>) => ({ kind: 'task-fields', op: 'task_update', taskId: TASK_A, fields: Object.fromEntries(Object.entries(f).map(([k, [base, value]]) => [k, { base, value }])) })
@@ -722,6 +722,28 @@ describe('journal v2: v1 journals written by the 1fe1fd194 daemon migrate at eve
       expect(st.rows).toEqual({})
       expect(st.migratedV1 ?? []).toEqual([])
     }
+  })
+})
+
+describe('journal v2: how full the journal came (offline.drain `fill`)', () => {
+  it('each drain reports the peak and the writes refused as full since the last report', () => {
+    const dir = journalTmpDir()
+    const clock = { now: T0 }
+    // The twins give the host and its journal store the same limit (OFFLINE_JOURNAL_MAX).
+    const { deps } = journalHost(dir, clock, { journal: { maxRecords: 2 } })
+    const host = createOfflineHost({ ...deps, maxRecords: 2 })
+    host.configure(jslice())
+    expect(host.handleFollower(JHOME, { op: 'task_update', args: { id: TASK_A, title: 'one' }, actor: DEVICE })).toMatchObject({ ok: true })
+    expect(host.handleFollower(JHOME, { op: 'task_update', args: { id: TASK_B, title: 'two' }, actor: DEVICE })).toMatchObject({ ok: true })
+    // A third record finds no room: refused, and counted.
+    const full = host.handleFollower(JHOME, { op: 'task_move', args: { id: TASK_A, tier: 'Focus' }, actor: DEVICE })
+    expect(full).toMatchObject({ ok: false, error: { code: 'queue_full' } })
+    const first = host.drain(JHOME, JOURNAL_V2_DRAINS)
+    expect(first.fill).toEqual({ records: 2, max: 2, peak: 2, refused: 1 })
+    host.ack(JHOME, { seqs: first.records.map((r) => r.seq) })
+    // The next reply counts afresh: the Mac adds the rounds of one drain up.
+    expect(host.drain(JHOME, JOURNAL_V2_DRAINS).fill).toEqual({ records: 0, max: 2, peak: 2, refused: 0 })
+    expect(host.drain(JHOME, JOURNAL_V2_DRAINS).fill).toEqual({ records: 0, max: 2, peak: 0, refused: 0 })
   })
 })
 

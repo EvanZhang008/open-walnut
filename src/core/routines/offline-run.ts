@@ -422,17 +422,17 @@ function realDeps(): OfflineRunDeps {
       return await getSessionsForTask(taskId).catch(() => []);
     },
     async hostReady(host) {
-      const [{ getConfig, isFallbackConfig }, { hostStartDefaultEngine }, { normalizeEngine }, { VALID_SESSION_EFFORT_IDS }] = await Promise.all([
-        import('../config-manager.js'), import('../agents/default-engine.js'), import('../agents/engine-registry.js'), import('../types.js'),
+      const [{ getConfig, isFallbackConfig }, { freshClaudeEngine, configuredSessionEffort }] = await Promise.all([
+        import('../config-manager.js'), import('../sessions/fresh-claude-start.js'),
       ]);
       const config = await getConfig();
       if (isFallbackConfig(config)) return 'the config could not be read';
       if (!config.hosts?.[host]) return 'the host is not configured';
       // This is a new daemon-owned worker, not the owner's SDK conversation.
       // The primary's session-server setting does not disable the trusted CLI template.
-      if (normalizeEngine(hostStartDefaultEngine(config, host)) !== undefined) return 'its engine is not Claude Code';
-      const effort = config.agent?.session_effort;
-      return effort && VALID_SESSION_EFFORT_IDS.has(effort) ? { effort } : {};
+      if (!(await freshClaudeEngine(config, host))) return 'its engine is not Claude Code';
+      const effort = configuredSessionEffort(config);
+      return effort ? { effort } : {};
     },
     hostTags: async (host) => (await (await env()).capabilities(host))?.tags ?? null,
     async notesBlocker(host, notes) {
@@ -462,9 +462,8 @@ function realDeps(): OfflineRunDeps {
       return { sessionId: t.sessionId, savedAt: t.exportedAt, truncated: t.truncated, messages: t.messages };
     },
     async sessionContext(task, cwd, host) {
-      const { buildSessionContext } = await import('../sessions/session-context.js');
-      const asTask = { ...task } as unknown as import('../types.js').Task;
-      return (await buildSessionContext(START_TASK_TOKEN, cwd, host, { task: asTask })).systemPrompt;
+      const { freshStartContext } = await import('../sessions/fresh-claude-start.js');
+      return freshStartContext({ ...task } as unknown as import('../types.js').Task, cwd, host);
     },
   };
 }

@@ -31,7 +31,8 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { createdRow, madeByHuman, withValues } from './write-port.js'
+import { withValues } from './write-port.js'
+import { foldTaskRecord } from '../core/offline-merge/task-row-fold.js'
 
 /** How long an acked write keeps its overlay and mark when no copy round stored it. */
 export const AWAIT_COPY_MS = 10 * 60_000
@@ -362,26 +363,8 @@ export function createOverlay(deps: OverlayDeps): Overlay {
           if (r) released.push(r)
           continue
         }
-        const r = e.record
-        if (e.kind === 'task-create') {
-          if (!row) {
-            const placement = (r.placement ?? {}) as { parentTaskId?: string; project?: string; groupId?: string; tier?: string }
-            row = createdRow(id, (r.fields ?? {}) as Record<string, unknown>, placement, e.at, madeByHuman(r.actor))
-          }
-          continue
-        }
-        if (!row) continue
-        if (e.kind === 'task-fields') {
-          const values: Record<string, unknown> = {}
-          for (const [k, w] of Object.entries((r.fields ?? {}) as Record<string, { value?: unknown }>)) values[k] = w?.value
-          row = withValues(row, values, new Date(e.at).toISOString())
-        } else if (e.kind === 'task-move') {
-          if (typeof r.tier === 'string') row.focus_tier = r.tier
-        } else if (e.kind === 'op') {
-          const args = (r.args ?? {}) as Record<string, unknown>
-          if (r.op === 'task_complete') row.phase = 'COMPLETE'
-          else for (const [k, v] of Object.entries(args)) if (k !== 'id') row[k] = v
-        }
+        // The journal fold (offline-merge/task-row-fold.ts).
+        row = foldTaskRecord(row, id, { ...e.record, kind: e.kind }, e.at, withValues)
       }
       if (released.length) tell(released)
       if (!row) return null

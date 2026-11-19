@@ -38,6 +38,11 @@ export type JournalActor =
   | { kind: 'session'; sid: string }
   | { kind: 'device'; deviceId: string; name?: string }
   | { kind: 'trigger'; id: string }
+  /**
+   * A plugin's job on this host, while its Walnut is away, by its
+   * plugin id and job name: written only for a Mac whose drains list `plugin-job-actor`.
+   */
+  | { kind: 'plugin-job'; plugin: string; job: string }
 
 /** A pending record as readers see it: the v1 shape plus the v2 bookkeeping. */
 export interface JournalRecord {
@@ -122,8 +127,12 @@ export interface OfflineJournalDeps {
 
 /** v1 kinds: every Mac drains these. 'op' is v1 only. */
 export const JOURNAL_V1_KINDS = ['row', 'settle', 'delivery', 'settings', 'stop', 'resume', 'op']
-/** v2 kinds a new Mac lists in `leader.configure {drains}` (device-actor and routine-run are capabilities, not kinds). */
-export const JOURNAL_V2_DRAINS = ['task-fields', 'task-create', 'task-move', 'board', 'note', 'session', 'device-actor', 'device-revoke', 'letter', 'routine-run', 'agent-memory']
+/**
+ * v2 kinds a new Mac lists in `leader.configure {drains}`. device-actor, routine-run, plugin-job-actor
+ * (records a plugin job made) and task-start (a `session` record with `run: 'task'`, a plain task
+ * session a job started) are capabilities, not kinds.
+ */
+export const JOURNAL_V2_DRAINS = ['task-fields', 'task-create', 'task-move', 'board', 'note', 'session', 'device-actor', 'device-revoke', 'letter', 'routine-run', 'agent-memory', 'plugin-job-actor', 'task-start']
 
 /** Options of one append (a type only: the factory below stays self-contained as text). */
 export interface AppendOpts {
@@ -754,6 +763,7 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
     if (!a) return ''
     if (a.kind === 'session') return `s:${a.sid}`
     if (a.kind === 'device') return `d:${a.deviceId}`
+    if (a.kind === 'plugin-job') return `j:${a.plugin}/${a.job}`
     return `t:${a.id}`
   }
 
@@ -1360,6 +1370,11 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
     return r ? JSON.parse(JSON.stringify(r)) as JournalRecord : undefined
   }
 
+  /** How many records of a Walnut wait here now (what the per-home limit counts), without reading them. */
+  function size(home: string): number {
+    return journals.get(home)?.pending.size ?? 0
+  }
+
   function drainableCount(home: string, kinds: string[] | null | undefined): number {
     const j = journals.get(home)
     return j ? drainable(j, kinds).length : 0
@@ -1832,7 +1847,7 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
 
   return {
     append: on(append), appendNote: on(appendNote), appendBlobs: on(appendBlobs), drain: on(drain), ack: on(ack), records: on(records), pending: on(pending),
-    drainableCount: on(drainableCount), drainableRecords: on(drainableRecords), stats: on(stats), state: on(state), persist: on(persist),
+    drainableCount: on(drainableCount), drainableRecords: on(drainableRecords), stats: on(stats), size: on(size), state: on(state), persist: on(persist),
     markDirty: on(markDirty), readBlob, migrateV1: on(migrateV1), migrateSlices: on(migrateSlices),
     /** A whole note body by its sha256 (the offline host's read overlay, WP11), or null. */
     blobBody: (sha: unknown): Buffer | null => {

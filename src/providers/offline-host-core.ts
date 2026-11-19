@@ -42,6 +42,14 @@ import { createTriggerLabel, type TriggerLabels } from '../core/routines/trigger
 import { createTriggerWatches, type TriggerWatches } from '../core/routines/trigger-watches.js'
 
 /**
+ * Pending records per Walnut a host keeps for its Mac before it refuses a write: a busy day of
+ * writes while the Mac is off (sessions and plugin jobs: about 200 creates with their sessions,
+ * 2,000 updates and messages; a task's updates fold into one record while it waits) with room
+ * to spare. The twins pass it to the journal store too.
+ */
+export const OFFLINE_MAX_RECORDS = 10_000
+
+/**
  * `aside`: an environment or lane session, which the server never picks as a message's address by name.
  * `noResume`: a session the server would never wake for a trigger (an error of its own making, another
  * agent's engine), so this host does not resume it either.
@@ -240,9 +248,11 @@ export type OfflineRecordV2 =
   /**
    * A new ask started on this host while the Mac was away (WP12, host-start-core.ts): the Mac adopts it on drain.
    * `routine`: a claude-code routine's run this host started (clock-host-start-v1), not an ask (no agent).
+   * `run: 'task'`: a plain session of a task made on this host while the Mac was away (host-start-core.ts
+   * planTask), not an ask; written only for a Mac whose drains list `task-start`.
    */
   | { kind: 'session'; sid: string; taskId: string; host: string; cwd: string; agentId?: string; model?: string; effort?: string; mode: string; title: string; startedAt: number; firstMessage?: string
-    routine?: { id: string; slotMs: number } }
+    routine?: { id: string; slotMs: number }; run?: 'task' }
   /**
    * A session's letter to the user (human_inbox_send) while the Mac was away: the op's
    * arguments but the body, which is the blob `bodyBlob`; the Mac sends it with this id.
@@ -386,6 +396,8 @@ export interface OfflineHostDeps {
    * that sent none: then only v1 kinds are written, and only the v1 prefix is drainable.
    */
   drainsOf?: (home: string) => string[] | null
+  /** Pending records per Walnut before a write is refused (default OFFLINE_MAX_RECORDS). */
+  maxRecords?: number
 }
 
 /** A message the leader routes to a session of this host (`leader.deliver`). */
@@ -483,7 +495,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   }
   const refNamesId = (ref: string | null | undefined, id: string, exactExists: boolean): boolean =>
     !!ref && (id === ref || (!exactExists && id.startsWith(ref)))
-  const MAX_RECORDS = 1000
+  // OFFLINE_MAX_RECORDS (module scope, so the twins and the journal store share it): not
+  // referenced here, the factory body is inlined as text.
+  const MAX_RECORDS = deps.maxRecords ?? 10_000
   const MAX_ARGS_BYTES = 256 * 1024
   const WRITE_BUDGET = 30
   const WRITE_WINDOW_MS = 60_000
@@ -687,10 +701,32 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (!r.ok) {
       // A lock another process holds is logged per try by whenUnlocked and by the journal.
       if (r.code === 'journal_unwritable' && r.why !== 'locked') deps.log('error', 'offline host: journal write refused', { home, kind, code: r.code, why: r.why, error: r.message })
+      if (r.code === 'queue_full') noteFull(home, kind)
       return r
     }
+    notePeak(home)
     if (!r.duplicate) { try { deps.onJournal?.(home) } catch { /* a notify failure never loses the record */ } }
     return r
+  }
+
+  // ── how full the journal came (Walnut Health hears it with the next drain: offline.drain `fill`) ──
+  /** Per Walnut, since the drain that last reported it: the most records waiting at once, and writes refused as full. */
+  const fill = new Map<string, { peak: number; refused: number }>()
+  const fillOf = (home: string) => { const f = fill.get(home) ?? { peak: 0, refused: 0 }; fill.set(home, f); return f }
+  function notePeak(home: string): void {
+    const f = fillOf(home)
+    const n = journal.size(home)
+    if (n > f.peak) {
+      // Logged once as it crosses 80%: the Mac is told at its next drain, nobody can be before.
+      if (f.peak < MAX_RECORDS * 0.8 && n >= MAX_RECORDS * 0.8) deps.log('warn', 'offline host: the journal for the Walnut server is nearly full', { home, records: n, max: MAX_RECORDS })
+      f.peak = n
+    }
+  }
+  function noteFull(home: string, kind: string): void {
+    const f = fillOf(home)
+    f.refused++
+    // Never a silent refusal: the caller hears queue_full, and the log says so once per 100.
+    if (f.refused % 100 === 1) deps.log('error', 'offline host: the journal for the Walnut server is full; writes are refused until it drains', { home, kind, refused: f.refused, max: MAX_RECORDS })
   }
 
   function refusal(r: import('./offline-journal-core.js').AppendResult): GatewayResult | null {
@@ -909,12 +945,18 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
    * The server's next batch. `kinds` (journal-v2): the v2 kinds it applies; absent (an old
    * Mac), only the v1 prefix before the first record it cannot take is handed out.
    */
-  function drain(home: string, kinds?: string[] | null): { records: OfflineJournalRecord[]; more: boolean; now: number; error?: string; why?: string } {
+  function drain(home: string, kinds?: string[] | null): { records: OfflineJournalRecord[]; more: boolean; now: number; error?: string; why?: string; fill: { records: number; max: number; peak: number; refused: number } } {
     const out = journal.drain(home, { kinds: Array.isArray(kinds) ? kinds.filter((k) => typeof k === 'string') : null, batch: DRAIN_BATCH })
     // The server may notice a row it just imported; this host stays quiet on it
     // meanwhile, or the asker could hear twice.
     for (const r of out.records) if (r.kind === 'row') handingOver.set((r as unknown as { row: OfflineRequestRow }).row.id, deps.now())
-    return out as unknown as { records: OfflineJournalRecord[]; more: boolean; now: number; error?: string; why?: string }
+    // How full the journal came while the Mac was away: the Mac tells Walnut Health (offline-handover.ts).
+    // Each reply counts since the last one (the Mac adds its rounds up: journal-fill.ts mergeJournalFill).
+    const f = fillOf(home)
+    const records = journal.size(home)
+    const report = { records, max: MAX_RECORDS, peak: Math.max(f.peak, records), refused: f.refused }
+    fill.set(home, { peak: records, refused: 0 })
+    return { ...(out as unknown as { records: OfflineJournalRecord[]; more: boolean; now: number; error?: string; why?: string }), fill: report }
   }
 
   function isHandingOver(id: string): boolean {
@@ -1164,10 +1206,11 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return null
   }
 
-  function roomFor(home: string): GatewayResult | null {
-    return recordsOf(home).length >= MAX_RECORDS
-      ? fail('queue_full', `this host already holds ${MAX_RECORDS} records for the Walnut server; wait for it to reconnect`)
-      : null
+  /** Room for `need` more records, or the refusal a full journal gives. */
+  function roomFor(home: string, need = 1): GatewayResult | null {
+    if (journal.size(home) + need <= MAX_RECORDS) return null
+    noteFull(home, 'room')
+    return fail('queue_full', `this host already holds ${MAX_RECORDS} records for the Walnut server; wait for it to reconnect`, { retryAfterMs: 60_000, detail: { why: 'journal_full' } })
   }
 
   function messageId(given: unknown): string {
@@ -2034,6 +2077,14 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
 
   // ── follower.op: the replica's writes while the Mac is away (replica-ops-v1) ──
 
+  /** The write budget of a journal actor: one per session, device, trigger or plugin job. */
+  function budgetOfActor(actor: import('./offline-journal-core.js').JournalActor): string {
+    if (actor.kind === 'device') return `device:${actor.deviceId}`
+    if (actor.kind === 'session') return actor.sid
+    if (actor.kind === 'plugin-job') return `plugin-job:${actor.plugin}/${actor.job}`
+    return `trigger:${actor.id}`
+  }
+
   const FOLLOWER_OP_KINDS: Record<string, string> = { task_update: 'task-fields', task_complete: 'task-fields', task_create: 'task-create', task_move: 'task-move', device_revoke: 'device-revoke' }
   const OP_ID_RE = /^[A-Za-z0-9_-]{1,80}$/
 
@@ -2085,7 +2136,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       let size = 0
       try { size = JSON.stringify(args).length } catch { return fail('bad_request', 'arguments are not JSON') }
       if (size > MAX_ARGS_BYTES) return fail('bad_request', `arguments are too large to queue (${size} bytes, limit ${MAX_ARGS_BYTES})`)
-      const budgetKey = actor.kind === 'device' ? `device:${actor.deviceId}` : actor.kind === 'session' ? actor.sid : `trigger:${actor.id}`
+      const budgetKey = budgetOfActor(actor)
       const given = req.base && typeof req.base === 'object' && !Array.isArray(req.base) ? req.base as Record<string, unknown> : null
       let record: (OfflineRecordV2 & Record<string, unknown>) | null = null
       const taskId = typeof args.id === 'string' ? args.id.trim() : ''
@@ -3291,7 +3342,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
 
   /** follower.op note_put / note_delete: a phone save through the replica (WP11). */
   function followerNote(home: string, name: string, args: Record<string, unknown>, actor: import('./offline-journal-core.js').JournalActor, opId: string): GatewayResult {
-    const budgetKey = actor.kind === 'device' ? `device:${actor.deviceId}` : actor.kind === 'session' ? actor.sid : `trigger:${actor.id}`
+    const budgetKey = budgetOfActor(actor)
     if (actor.kind === 'device' && !drainsKind(home, 'device-actor')) {
       return fail('needs_leader', 'your Mac runs an older Walnut that cannot take this change later; it needs your Mac', { detail: { why: 'mac_too_old' } })
     }
@@ -3328,7 +3379,7 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     watches: deps.watches ?? createTriggerWatches(),
     journal: deps.journal ?? createOfflineJournal({
       fs: deps.fs, path: deps.path, dir: deps.dir, now: deps.now, randomHex: deps.randomHex, keyOf: deps.keyOf, log: deps.log,
-      sha256: (body) => createHash('sha256').update(body).digest('hex'),
+      sha256: (body) => createHash('sha256').update(body).digest('hex'), maxRecords: deps.maxRecords ?? OFFLINE_MAX_RECORDS,
     }),
   })
 }

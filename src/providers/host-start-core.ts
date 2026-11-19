@@ -149,6 +149,28 @@ export interface RoutineStartFields {
   routine: { id: string; slotMs: number }
 }
 
+/**
+ * A plain session of a task made on this host while the Mac is away (a plugin job's new
+ * task): the same fill as a routine run's, from the same plain-session template, with the
+ * task's id and title put into the Mac's context.
+ */
+export interface TaskStartFields {
+  sid: string
+  taskId: string
+  title: string
+  /** Absolute, existing on this host. */
+  cwd: string
+  mode: string
+  modeNamed?: boolean
+  model?: string
+  effort?: string
+  context?: string
+  /** Where the task id and title go in `context`. */
+  taskToken?: string
+  titleToken?: string
+  firstMessage: string
+}
+
 export interface HostStartPlan {
   sid: string
   taskId: string
@@ -167,7 +189,9 @@ export interface HostStartPlan {
     /** The first words (at most 4000 characters): the Mac titles the ask from them after adoption. */
     firstMessage?: string
     /** A routine's run (clock-host-start-v1): not an ask, so the Mac adopts it as the routine's session. */
-    routine?: { id: string; slotMs: number } }
+    routine?: { id: string; slotMs: number }
+    /** A plain session of a task made here while the Mac was away: not an ask, not a routine's run. */
+    run?: 'task' }
 }
 
 export type HostStartRefusal = { ok: false; code: string; message: string; detail?: Record<string, unknown>; retryAfterMs?: number }
@@ -214,6 +238,8 @@ export interface HostStart {
   plan(home: string, raw: unknown, hostKey: string): { ok: true; plan: HostStartPlan } | HostStartRefusal
   /** The same fill for a routine run, from the routine template (its own folder, no persona, no tool lists). Never throws. */
   planRoutine(home: string, raw: RoutineStartFields, hostKey: string): { ok: true; plan: HostStartPlan } | HostStartRefusal
+  /** The same fill for a plain session of a task made here while the Mac is away (`run: 'task'`). Never throws. */
+  planTask(home: string, raw: TaskStartFields, hostKey: string): { ok: true; plan: HostStartPlan } | HostStartRefusal
   /** Every check `plan` makes (the limits too), with no taskId needed and nothing written: null when it passes. */
   precheck(home: string, raw: unknown): HostStartRefusal | null
   /** A start is under way (limits). Returns the release. */
@@ -641,40 +667,63 @@ export function createHostStart(deps: HostStartDeps): HostStart {
    * the Mac's session context with the run's task id put in, and the same limits.
    */
   function planRoutine(home: string, raw: RoutineStartFields, hostKey: string): { ok: true; plan: HostStartPlan } | HostStartRefusal {
+    const routine = isRecord(raw) && isRecord(raw.routine) && typeof raw.routine.id === 'string' && raw.routine.id && raw.routine.id.length <= 200
+      && typeof raw.routine.slotMs === 'number' && Number.isFinite(raw.routine.slotMs) ? { id: raw.routine.id, slotMs: Math.floor(raw.routine.slotMs) } : null
+    return planPlain(home, raw, hostKey, 'routine start', routine ? { routine } : null)
+  }
+
+  /**
+   * A session of a task made here while the Mac is away (a plugin job's new task): the same
+   * plain-session (routine) template, folder, mode, model, effort and limits as a routine
+   * run's, with the task's id and title put into the Mac's context. Its record says
+   * `run: 'task'`, so the Mac adopts it as the task's own session (never an ask, never a
+   * routine's run).
+   */
+  function planTask(home: string, raw: TaskStartFields, hostKey: string): { ok: true; plan: HostStartPlan } | HostStartRefusal {
+    return planPlain(home, raw, hostKey, 'task start', { run: 'task' })
+  }
+
+  /** The plain-session fill both share; `marks` is what the record says it is (null: refused as bad). */
+  function planPlain(
+    home: string, raw: RoutineStartFields | TaskStartFields, hostKey: string, what: string,
+    marks: { routine: { id: string; slotMs: number } } | { run: 'task' } | null,
+  ): { ok: true; plan: HostStartPlan } | HostStartRefusal {
     try {
       const t = templateOf(home, 'routine')
-      if (!t) return refuse('needs_leader', 'this host has no routine spawn template from your Mac yet; the run waits for your Mac', { why: 'no_spawn_template' })
-      if (!isRecord(raw)) return refuse('bad_request', 'routine start: needs an object')
+      const routineRun = what === 'routine start'
+      if (!t) return refuse('needs_leader', routineRun ? 'this host has no routine spawn template from your Mac yet; the run waits for your Mac' : 'this host has no session template from your Mac yet; starting this task\'s session needs your Mac', { why: 'no_spawn_template' })
+      if (!isRecord(raw)) return refuse('bad_request', `${what}: needs an object`)
       const sid = typeof raw.sid === 'string' && SID_RE.test(raw.sid) ? raw.sid : ''
-      if (!sid) return refuse('bad_request', 'routine start: sid must be a v4 UUID')
+      if (!sid) return refuse('bad_request', `${what}: sid must be a v4 UUID`)
       const taskId = typeof raw.taskId === 'string' && ID_RE.test(raw.taskId) ? raw.taskId : ''
-      if (!taskId) return refuse('bad_request', 'routine start: bad taskId')
-      const routine = isRecord(raw.routine) && typeof raw.routine.id === 'string' && raw.routine.id && raw.routine.id.length <= 200
-        && typeof raw.routine.slotMs === 'number' && Number.isFinite(raw.routine.slotMs) ? { id: raw.routine.id, slotMs: Math.floor(raw.routine.slotMs) } : null
-      if (!routine) return refuse('bad_request', 'routine start: bad routine')
+      if (!taskId) return refuse('bad_request', `${what}: bad taskId`)
+      if (!marks) return refuse('bad_request', `${what}: bad routine`)
       const title = str(raw.title, 500)
-      if (!title || !title.trim()) return refuse('bad_request', 'routine start: bad title')
+      if (!title || !title.trim()) return refuse('bad_request', `${what}: bad title`)
       const cwd = typeof raw.cwd === 'string' && raw.cwd.startsWith('/') && raw.cwd.length <= 1024 && raw.cwd.split('/').indexOf('..') === -1 && raw.cwd.indexOf('\u0000') === -1 ? raw.cwd : ''
-      if (!cwd) return refuse('bad_request', 'routine start: the folder must be an absolute path')
+      if (!cwd) return refuse('bad_request', `${what}: the folder must be an absolute path`)
       let isDir = false
       try { isDir = fs.statSync(cwd).isDirectory() } catch { isDir = false }
-      if (!isDir) return refuse('cwd_missing', `routine start: the folder ${cwd} does not exist on this host`, { why: 'cwd_missing' })
+      if (!isDir) return refuse('cwd_missing', `${what}: the folder ${cwd} does not exist on this host`, { why: 'cwd_missing' })
       const mode = typeof raw.mode === 'string' && Object.prototype.hasOwnProperty.call(t.modes, raw.mode) ? (raw.modeNamed === false ? 'default' : raw.mode) : ''
-      if (!mode) return refuse('mode_not_allowed', 'routine start: your Mac does not let a routine start in that permission mode on this host', { modes: Object.keys(t.modes) })
+      if (!mode) return refuse('mode_not_allowed', `${what}: your Mac does not let a ${routineRun ? 'routine' : 'session'} start in that permission mode on this host`, { modes: Object.keys(t.modes) })
       const model = modelOf(t, raw.model)
-      if (model === undefined) return refuse('bad_request', 'routine start: a model must be one CLI value')
+      if (model === undefined) return refuse('bad_request', `${what}: a model must be one CLI value`)
       const effort = raw.effort === undefined || raw.effort === '' ? undefined : typeof raw.effort === 'string' && t.efforts.indexOf(raw.effort) !== -1 ? raw.effort : null
-      if (effort === null) return refuse('bad_request', 'routine start: unknown effort')
+      if (effort === null) return refuse('bad_request', `${what}: unknown effort`)
       const message = str(raw.firstMessage, MAX_MESSAGE_BYTES)
-      if (!message || !message.trim() || bytes(message) > MAX_MESSAGE_BYTES) return refuse('bad_request', 'routine start: bad first message')
+      if (!message || !message.trim() || bytes(message) > MAX_MESSAGE_BYTES) return refuse('bad_request', `${what}: bad first message`)
       const token = typeof raw.taskToken === 'string' && raw.taskToken.length >= 8 ? raw.taskToken : ''
+      const titleToken = 'titleToken' in raw && typeof raw.titleToken === 'string' && raw.titleToken.length >= 8 ? raw.titleToken : ''
       const given = raw.context === undefined ? '' : str(raw.context, MAX_PERSONA_FILE_BYTES)
-      if (given === undefined) return refuse('bad_request', 'routine start: bad context')
-      const context = token ? given.split(token).join(taskId) : given
+      if (given === undefined) return refuse('bad_request', `${what}: bad context`)
+      // The id first, then the title: a title that names the id token never makes a second id.
+      const withId = token ? given.split(token).join(taskId) : given
+      const context = titleToken ? withId.split(titleToken).join(title) : withId
       // A flag's value never starts with a dash: the CLI's parser must not read it as a flag.
-      if (context.startsWith('-')) return refuse('bad_request', 'routine start: a context must not start with a dash')
+      if (context.startsWith('-')) return refuse('bad_request', `${what}: a context must not start with a dash`)
       if (t.persona === 'arg' && bytes(context) > MAX_PERSONA_ARG_BYTES) {
-        return refuse('bad_request', `routine start: the context is over ${MAX_PERSONA_ARG_BYTES} bytes, too large for one argv string`, { why: 'persona_too_large' })
+        return refuse('bad_request', `${what}: the context is over ${MAX_PERSONA_ARG_BYTES} bytes, too large for one argv string`, { why: 'persona_too_large' })
       }
       const blocked = limits(home)
       if (blocked) return blocked
@@ -688,12 +737,12 @@ export function createHostStart(deps: HostStartDeps): HostStart {
             kind: 'session', sid, taskId, host: hostOf(hostKey), cwd, mode, title, startedAt: deps.now(),
             firstMessage: message.slice(0, 4000),
             ...(model ? { model: model.id } : {}), ...(effort ? { effort } : {}),
-            routine,
+            ...marks,
           },
         },
       }
     } catch (err) {
-      deps.log('warn', 'host start: the routine start could not be planned', { home, error: (err as Error).message })
+      deps.log('warn', `host start: the ${what} could not be planned`, { home, error: (err as Error).message })
       return refuse('journal_unwritable', 'this host could not prepare the session: ' + (err as Error).message)
     }
   }
@@ -777,5 +826,5 @@ export function createHostStart(deps: HostStartDeps): HostStart {
     return pushHashes.get(slotOf(home, use)) ?? null
   }
 
-  return { setTemplate, templateOf, pushHashOf, plan, planRoutine, precheck, begin, once, firstStart, holdPending, releasePending, pendingStarts }
+  return { setTemplate, templateOf, pushHashOf, plan, planRoutine, planTask, precheck, begin, once, firstStart, holdPending, releasePending, pendingStarts }
 }

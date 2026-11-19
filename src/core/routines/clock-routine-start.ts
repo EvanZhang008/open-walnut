@@ -5,7 +5,7 @@
 
 import { WALNUT_HOME } from '../../constants.js';
 import { log } from '../../logging/index.js';
-import { START_TASK_TOKEN, validateClockStartSpec, type ClockStartSpec } from '../../providers/trigger-clock-core.js';
+import { validateClockStartSpec, type ClockStartSpec } from '../../providers/trigger-clock-core.js';
 import type { CronJob } from '../cron/types.js';
 import { portableClaudeConfigOf } from './clock-portable.js';
 import { promptOf } from './trigger-push.js';
@@ -43,31 +43,28 @@ export async function routineStartOf(job: CronJob, host: string, home: string = 
     import('../../constants.js'), import('../../utils/entity-refs.js'), import('./executors/claude-code.js'),
   ]);
   if (message.length > QUICK_START_MESSAGE_SPILL_LIMIT || listEntityRefs(message).length > 0 || readTriageCountHint(message) !== undefined) return null;
-  const [{ getConfig, isFallbackConfig }, { hostStartDefaultEngine }, { normalizeEngine }, { VALID_SESSION_EFFORT_IDS }] = await Promise.all([
-    import('../config-manager.js'), import('../agents/default-engine.js'), import('../agents/engine-registry.js'), import('../types.js'),
-  ]);
+  const { getConfig, isFallbackConfig } = await import('../config-manager.js');
   const config = await getConfig();
   if (isFallbackConfig(config) || !config.hosts?.[host]) return null;
-  if (normalizeEngine(hostStartDefaultEngine(config, host)) !== undefined) return null;
   const title = (typeof c.taskTitle === 'string' && c.taskTitle.trim()) || `Routine: ${job.name}`;
   const project = (typeof c.project === 'string' && c.project.trim()) || 'Routines';
   const model = typeof c.model === 'string' && c.model.trim() ? c.model.trim() : undefined;
-  const effort = config.agent?.session_effort && VALID_SESSION_EFFORT_IDS.has(config.agent.session_effort) ? config.agent.session_effort : undefined;
-  let context = '';
+  // How this Mac starts a fresh Claude Code session there (sessions/fresh-claude-start.ts), the
+  // routine naming no engine or mode of its own.
+  let start: Awaited<ReturnType<typeof import('../sessions/fresh-claude-start.js').freshClaudeStart>>;
   try {
-    const { buildSessionContext } = await import('../sessions/session-context.js');
-    const task = { id: START_TASK_TOKEN, title, project } as unknown as import('../types.js').Task;
-    context = (await buildSessionContext(START_TASK_TOKEN, cwd, host, { task })).systemPrompt;
+    start = await (await import('../sessions/fresh-claude-start.js')).freshClaudeStart({ config, host, cwd, task: { title, project } });
   } catch (err) {
     // A run without its context would differ from this Mac's: it stays here.
     log.cron.warn('clock placement: no session context for a routine run on its host; it stays the Mac\'s to start', { host, jobId: job.id, error: err instanceof Error ? err.message : String(err) });
     return null;
   }
+  if (!start) return null;
   const spec = validateClockStartSpec({
     home, host, title, project, cwd,
     message: (await import('../sessions/send-frame.js')).frameAsWalnut(message, 'routine', `routine:${job.id}:${job.name}`),
-    mode: (await (await import('../../providers/claude-launch-mode.js')).resolveClaudeLaunchMode(host, cwd)).mode, modeNamed: false,
-    ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(context ? { context } : {}),
+    mode: start.mode, modeNamed: false,
+    ...(model ? { model } : {}), ...(start.effort ? { effort: start.effort } : {}), ...(start.context ? { context: start.context } : {}),
   });
   if (!spec.ok) {
     log.cron.debug('clock placement: a routine run cannot start on its host', { host, jobId: job.id, error: spec.error });

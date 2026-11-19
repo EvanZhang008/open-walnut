@@ -157,6 +157,9 @@ async function spawnDaemon(dir: string, twin: Twin, journalDir: string | null, e
     WALNUT_STREAMS_DIR: path.join(dir, 'streams'),
     WALNUT_SPAWN_JOURNAL: path.join(dir, 'spawn-journal.jsonl'),
     WALNUT_GATEWAY_TIMEOUT_MS: '3000',
+    // The fill below reaches the limit at 1,000 records (a real daemon holds 10,000:
+    // offline-host-core.ts OFFLINE_MAX_RECORDS; the test-only knob is ignored in the real dir).
+    WALNUT_TEST_OFFLINE_MAX_RECORDS: '1000',
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
   delete env.WALNUT_DAEMON_STATE_DIR

@@ -90,7 +90,7 @@ import { createFsLs } from './fs-ls-core.js'
 import { createTurnSnapshots } from './turn-snapshot-core.js'
 import { createTurnGuard } from './turn-guard-core.js'
 import { createClaudeCheck } from './claude-check-core.js'
-import { createOfflineHostCore, type HostSlice, type LeaderDelivery, type OfflineTrigger } from './offline-host-core.js'
+import { createOfflineHostCore, OFFLINE_MAX_RECORDS, type HostSlice, type LeaderDelivery, type OfflineTrigger } from './offline-host-core.js'
 import { createJournalMigration, createOfflineJournal } from './offline-journal-core.js'
 import { createLeaderBook } from './leader-core.js'
 import { createWalnutScope } from './walnut-scope-core.js'
@@ -4166,9 +4166,17 @@ function ownsDaemonDir(): boolean {
   }
 }
 
+/**
+ * Pending records per Walnut before a write is refused (offline-host-core.ts OFFLINE_MAX_RECORDS).
+ * Tests only (never in the real daemon dir) may lower it. Mirror daemon-source.ts.
+ */
+const OFFLINE_JOURNAL_MAX = !IS_PROD_DAEMON_DIR && /^[1-9][0-9]{0,6}$/.test(process.env.WALNUT_TEST_OFFLINE_MAX_RECORDS ?? '')
+  ? Number(process.env.WALNUT_TEST_OFFLINE_MAX_RECORDS) : OFFLINE_MAX_RECORDS
+
 function createJournalStore(dir: string) {
   return createOfflineJournal({
     fs, path, dir,
+    maxRecords: OFFLINE_JOURNAL_MAX,
     now: () => Date.now(),
     randomHex: (n) => crypto.randomBytes(n).toString('hex'),
     keyOf: (home) => crypto.createHash('sha1').update(home).digest('hex').slice(0, 16),
@@ -4244,6 +4252,7 @@ const offlineHost = createOfflineHostCore({
   fs, path,
   dir: OFFLINE_HOST_DIR,
   journal: offlineJournal,
+  maxRecords: OFFLINE_JOURNAL_MAX,
   drainsOf: (home) => leaderBook.drainsFor(home),
   now: () => Date.now(),
   randomHex: (n) => crypto.randomBytes(n).toString('hex'),

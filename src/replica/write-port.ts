@@ -46,6 +46,7 @@ import type { ReplicaWrite, ReplicaWriteResult } from './dispatch.js'
 import { deriveStatusFromPhase, phaseDerivedFields, phaseFromStatus } from '../core/phase.js'
 import { PIN_TIER_POLICY, type Task, type TaskPhase, type TaskStatus } from '../core/types.js'
 import { RefusedWrite, checkResolvedPatch } from '../core/offline-merge/patch-check.js'
+import { createdRow, madeByHuman, mintTaskId } from '../core/offline-merge/task-row-fold.js'
 
 /**
  * The fields a task write may queue (the task-outbox whitelist plus phase, parent,
@@ -161,10 +162,9 @@ export function fieldBases(row: Record<string, unknown> | null, values: Record<s
   return out
 }
 
-/** A new task's id: its time, then 8 random bytes (two writers never collide; today's generateId has 16 random bits). */
-export function mintTaskId(now: number, randomHex: (bytes: number) => string): string {
-  return `${now.toString(36)}-${randomHex(8)}`
-}
+// A new task's id (its time, then 8 random bytes: two writers never collide; today's generateId has
+// 16 random bits), the created row and its pin default: the journal fold (task-row-fold.ts).
+export { mintTaskId, createdRow, madeByHuman } from '../core/offline-merge/task-row-fold.js'
 
 /** A Board post's id, minted by the writer: the one shown here until the Mac's copy of the post comes back. */
 export function mintPostId(randomHex: (bytes: number) => string): string {
@@ -402,28 +402,4 @@ export function withValues(row: Record<string, unknown>, values: Record<string, 
   Object.assign(out, derived.set)
   for (const f of derived.clear) delete out[f]
   return out
-}
-
-/**
- * A task made here as readers show it until the Mac's row comes back in a copy. `human`:
- * a device or a trigger made it, so the Mac's create rules give it the human default
- * (pinned, on the board in Satellite, unless it said otherwise: task-manager.ts
- * newTaskPinDefault, offline-merge/apply-v2.ts createTask); a tier always means pinned.
- */
-export function createdRow(id: string, fields: Record<string, unknown>, placement: { parentTaskId?: string; project?: string; groupId?: string; tier?: string }, at: number, human = false): TaskRow {
-  const iso = new Date(at).toISOString()
-  const pinned = placement.tier ? true : typeof fields.pinned === 'boolean' ? fields.pinned : human ? true : undefined
-  return {
-    id, phase: 'TODO', status: 'todo', priority: 'none', project: placement.project ?? '', created_at: iso, updated_at: iso,
-    ...(placement.groupId ? { group_id: placement.groupId } : {}),
-    ...(placement.parentTaskId ? { parent_task_id: placement.parentTaskId } : {}),
-    ...(placement.tier ? { focus_tier: placement.tier } : {}),
-    ...fields,
-    ...(pinned !== undefined ? { pinned } : {}),
-  }
-}
-
-/** Whether a journal record's maker gets the human create defaults (a device or a trigger, not a session). */
-export function madeByHuman(actor: unknown): boolean {
-  return !(actor && typeof actor === 'object' && (actor as { kind?: unknown }).kind === 'session')
 }

@@ -11,6 +11,7 @@
  */
 
 import { VALID_PHASES } from '../phase.js';
+import { taskPatchRefusal, type TaskPatchRules } from './patch-rules-core.js';
 import { PIN_TIER_POLICY, VALID_PRIORITIES, type Task } from '../types.js';
 import type { FieldWrite } from './task-fields.js';
 
@@ -18,21 +19,9 @@ import type { FieldWrite } from './task-fields.js';
 export class RefusedWrite extends Error {}
 
 const STATUSES = new Set(['todo', 'in_progress', 'done']);
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
 const DURATION_RE = /^\d+(?:\.\d+)?\s*(ms|s|m|h|d)$/i;
-const DATE_FIELDS = ['due_date', 'start_date', 'end_date'] as const;
-const TEXT_FIELDS = ['description', 'note', 'summary', 'sprint'] as const;
 /** The tiers every board has (custom ones come from the registry). */
 const BUILTIN_TIERS: string[] = PIN_TIER_POLICY.map((p) => p.tier as string);
-
-const isClear = (v: unknown): boolean => v === '' || v === null || v === undefined;
-
-/** The route's ISO check: shape, parse, and no calendar rollover ('2030-02-30'). */
-export function isIsoDate(s: unknown): boolean {
-  if (typeof s !== 'string' || !ISO_DATE_RE.test(s) || Number.isNaN(Date.parse(s))) return false;
-  const day = s.slice(0, 10);
-  return new Date(`${day}T00:00:00Z`).toISOString().slice(0, 10) === day;
-}
 
 /**
  * Normalize a record's fields before they are merged: a wait_until duration becomes the
@@ -63,58 +52,19 @@ export interface PatchCheckContext {
   validateContent?: (task: Task, field: string, value: string) => void;
 }
 
-function refuse(message: string): never {
-  throw new RefusedWrite(`${message}; nothing of this write was applied`);
+/** The rule lists the route checks against (patch-rules-core.ts takes them as data). */
+export function macTaskPatchRules(customTiers: readonly string[] = []): TaskPatchRules {
+  return { phases: [...VALID_PHASES], statuses: [...STATUSES], priorities: VALID_PRIORITIES, tiers: [...BUILTIN_TIERS, ...customTiers] };
 }
 
 /**
  * Check the resolved patch against the row it lands on, the route's rules field by
- * field. Mutates `patch` for the two normalizations; throws RefusedWrite otherwise.
+ * field (patch-rules-core.ts, the one copy of them). Mutates `patch` for the two
+ * normalizations; throws RefusedWrite otherwise.
  */
 export function checkResolvedPatch(current: Readonly<Task>, patch: Record<string, unknown>, ctx: PatchCheckContext = {}): void {
-  const has = (f: string): boolean => Object.prototype.hasOwnProperty.call(patch, f);
-  if (has('phase') && !(typeof patch.phase === 'string' && VALID_PHASES.has(patch.phase))) refuse(`phase must be one of: ${[...VALID_PHASES].join(', ')}`);
-  if (has('status') && !(typeof patch.status === 'string' && STATUSES.has(patch.status))) refuse('status must be one of: todo, in_progress, done');
-  if (has('priority') && !(typeof patch.priority === 'string' && (VALID_PRIORITIES as readonly string[]).includes(patch.priority))) {
-    refuse(`priority must be one of: ${VALID_PRIORITIES.join(', ')}`);
-  }
-  if (has('title')) {
-    if (!(typeof patch.title === 'string' && patch.title.trim())) refuse('title must be a non-empty string');
-    if ((patch.title as string).length > 500) refuse('title too long (max 500 chars)');
-  }
-  for (const f of TEXT_FIELDS) if (has(f) && !isClear(patch[f]) && typeof patch[f] !== 'string') refuse(`${f} must be a string`);
-  for (const f of ['project', 'group_id', 'parent_task_id'] as const) {
-    if (has(f) && !isClear(patch[f]) && typeof patch[f] !== 'string') refuse(`${f} must be a string`);
-  }
-  if (has('tags') && !isClear(patch.tags) && !(Array.isArray(patch.tags) && patch.tags.every((t) => typeof t === 'string'))) refuse('tags must be an array of strings');
-  if (has('depends_on') && !isClear(patch.depends_on) && !(Array.isArray(patch.depends_on) && patch.depends_on.every((t) => typeof t === 'string'))) {
-    refuse('depends_on must be an array of task ids');
-  }
-  for (const f of ['unread', 'pinned'] as const) if (has(f) && patch[f] !== undefined && typeof patch[f] !== 'boolean') refuse(`${f} must be a boolean`);
-  if (has('pin_order') && !isClear(patch.pin_order) && !(typeof patch.pin_order === 'number' && Number.isFinite(patch.pin_order))) refuse('pin_order must be a number');
-  if (has('focus_tier') && !isClear(patch.focus_tier)) {
-    const tier = patch.focus_tier;
-    if (typeof tier !== 'string' || ![...BUILTIN_TIERS, ...(ctx.customTiers ?? [])].includes(tier)) refuse(`focus_tier ${String(tier)} is not a tier on this board`);
-  }
-  for (const f of DATE_FIELDS) if (has(f) && !isClear(patch[f]) && !isIsoDate(patch[f])) refuse(`${f} must be an ISO-8601 date string, or "" to clear`);
-  if (has('wait_until') && !isClear(patch.wait_until) && !isIsoDate(patch.wait_until)) refuse('wait_until must be an ISO-8601 datetime, or "" to clear');
-  if (has('watched_at') && !isClear(patch.watched_at) && !isIsoDate(patch.watched_at)) refuse('watched_at must be an ISO-8601 datetime, or "" to stop watching');
-  if (has('background_at') && !isClear(patch.background_at) && !isIsoDate(patch.background_at)) refuse('background_at must be an ISO-8601 datetime, or "" to take it out of Background');
-  // wait_until belongs to WAITING alone: a clock the merge kept onto a task that is not
-  // (the Mac moved it on later) is dropped, never written as a stray clock.
-  const phase = has('phase') ? patch.phase : current.phase;
-  if (has('wait_until') && !isClear(patch.wait_until) && phase !== 'WAITING') delete patch.wait_until;
-  // The working block, judged on the EFFECTIVE row (one half may be all the patch has).
-  const start = has('start_date') ? (isClear(patch.start_date) ? undefined : String(patch.start_date)) : current.start_date;
-  let end = has('end_date') ? (isClear(patch.end_date) ? undefined : String(patch.end_date)) : current.end_date;
-  if (has('start_date') && !start && end && !has('end_date')) { patch.end_date = null; end = undefined; }
-  if (end && !start) refuse('end_date requires a start_date (it is the end of a start_date working block)');
-  if (end && start && Date.parse(end) < Date.parse(start)) refuse('end_date must be greater than or equal to start_date');
-  if (ctx.validateContent && current.source !== 'local') {
-    for (const f of ['title', 'description', 'note'] as const) {
-      if (has(f) && typeof patch[f] === 'string') {
-        try { ctx.validateContent(current as Task, f, patch[f] as string); } catch (err) { refuse(err instanceof Error ? err.message : String(err)); }
-      }
-    }
-  }
+  const refused = taskPatchRefusal(current as unknown as Record<string, unknown>, patch, macTaskPatchRules(ctx.customTiers), {
+    ...(ctx.validateContent ? { validateContent: ctx.validateContent as unknown as (task: Record<string, unknown>, field: string, value: string) => void } : {}),
+  });
+  if (refused) throw new RefusedWrite(`${refused}; nothing of this write was applied`);
 }

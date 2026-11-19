@@ -24,7 +24,8 @@ import { premergeTexts, resolveTaskFields, type FieldWrite } from './task-fields
 import { RefusedWrite, checkResolvedPatch, normalizeQueuedFields } from './patch-check.js';
 import { lookupRemap } from './ledger.js';
 import { frozenFieldTimes } from '../task-field-times.js';
-import type { JournalActorLike, V2Context, V2Record } from './apply-v2.js';
+import type { V2Context, V2Record } from './apply-v2.js';
+import type { JournalActorLike } from './journal-actor.js';
 
 /** The id a host's record names, after a re-mint this Mac made for that host's create. */
 export function resolveTaskId(hostKey: string, id: string, remap?: Map<string, string>): string {

@@ -28,6 +28,7 @@ import { VALID_SESSION_EFFORT_IDS, VALID_SESSION_MODE_IDS, type SessionEffort, t
 import { APPLIED_V2_KINDS, RefusedWrite, applyV2, devicePaired, v2TaskIdOf, type V2Record } from './offline-merge/apply-v2.js';
 import { recordRemap } from './offline-merge/ledger.js';
 import { isCallId, journalCallId } from '../lib/op-call-id.js';
+import { mergeJournalFill, noteJournalFill, readJournalFill, type JournalFill } from './offline-merge/journal-fill.js';
 
 /** What the handover needs from a daemon connection. */
 export interface HandoverConnection {
@@ -197,6 +198,8 @@ async function handover(conn: HandoverConnection): Promise<HandoverResult> {
   try {
     await drainRounds(batch, measureHostClock, hostClockOffset);
   } finally {
+    // How full the host's journal got while this Mac was away: a Walnut Health item, never awaited.
+    if (batch.fill) void noteJournalFill(conn.hostKey, batch.fill);
     // Also when a round threw after a conflict was durable (the ack's link dropped, a
     // later round's drain failed): the redrain acks from the ledger with nothing to letter.
     if (batch.conflicts.entries.length > 0) await letters.sendConflictLetter(batch.conflicts);
@@ -276,6 +279,7 @@ async function drainRounds(
     const sentAt = Date.now();
     const reply = await conn.send('offline.drain', { home: WALNUT_HOME, ...(v2 ? { kinds: [...APPLIED_V2_KINDS] } : {}) }, RPC_TIMEOUT_MS);
     if (reply.ok === false) throw new Error(String(reply.error ?? 'offline.drain refused'));
+    batch.fill = mergeJournalFill(batch.fill ?? null, readJournalFill(reply.fill));
     if (v2) measureHostClock(conn.hostKey, sentAt, Date.now(), reply.now);
     batch.offset = hostClockOffset(conn.hostKey) ?? 0;
     const records = ((Array.isArray(reply.records) ? reply.records : []) as OfflineRecord[]).slice().sort((a, b) => a.seq - b.seq);
@@ -338,6 +342,8 @@ interface Batch {
   retryIn: number | null;
   /** Note or memory records were acked (WP11, stage 4d): the host's copy goes again after the drain. */
   notesAcked?: boolean;
+  /** How full the host's journal got (its rounds' `fill` together; journal-fill.ts), or null from an older daemon. */
+  fill?: JournalFill | null;
 }
 
 /** The ops a host holds while nothing can take them (offline-host-core.ts holdWrite, MAC_DRAINS `held-op`). */
@@ -1118,7 +1124,8 @@ async function applyRecord(
       return;
     }
     case 'stop': {
-      // The user stopped the session through the companion while it led. It
+      // The user stopped the session through the companion while it led (or a plugin
+      // job's task_stop stopped its task's session on the host). It
       // becomes this server's own stop request, same id and time, so the phone's
       // next message is fenced by the stop it saw; handover() then runs it
       // through the usual stop path, which parks the queued messages and finds
@@ -1134,7 +1141,7 @@ async function applyRecord(
       await updateSessionRecord(record.sid, { stopRequest: { id: record.stopRequestId, requestedAt: record.requestedAt, state: 'pending' } });
       stopsToRun.add(host);
       result.replayed++;
-      log.session.info('offline handover: a stop the companion sent is recorded', { host, sessionId: record.sid, stopRequestId: record.stopRequestId });
+      log.session.info('offline handover: a stop made while this Mac was away is recorded', { host, sessionId: record.sid, stopRequestId: record.stopRequestId, by: (record as { actor?: { kind?: string } }).actor?.kind ?? 'companion' });
       return;
     }
   }
@@ -1179,7 +1186,7 @@ async function recordScope(record: OfflineRecord): Promise<{ sessionId?: string;
   return v2Scope(record as unknown as V2Record);
 }
 
-/** Journal v2 kinds: the session that wrote it (a device or trigger names none), and its task. */
+/** Journal v2 kinds: the session that wrote it (a device, a trigger or a plugin job names none), and its task. */
 function v2Scope(record: V2Record): { sessionId?: string; taskId?: string } {
   const actor = record.actor;
   const sid = actor && actor.kind === 'session' ? actor.sid : undefined;

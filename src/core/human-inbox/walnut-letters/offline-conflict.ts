@@ -53,6 +53,8 @@ interface Words {
   attached: string;
   /** A sentence ending: after a value inserted as given. */
   stop: string;
+  /** Who made a change, when no person or session did: a plugin's job on the host (journal-actor.ts). */
+  byJob: (plugin: string, job: string) => string;
   item: {
     taskField: (field: string, keptReplica: boolean, mac: string, away: string) => string;
     taskDeleted: (field: string, away: string) => string;
@@ -105,6 +107,7 @@ const WORDS: ByLang<Words> = {
     lost: ' Its text was no longer on the host, so it could not be attached.',
     attached: ' The change is attached.',
     stop: '.',
+    byJob: (plugin, job) => ` It was made by the ${plugin} plugin's job ${job}.`,
     item: {
       taskField: (f, r, mac, away) => `${f}: kept ${r ? 'the change made while away' : 'the Mac\'s value'}. Mac: "${mac}"; while away: "${away}".`,
       taskDeleted: (f, away) => `the task was deleted on the Mac; a change made while away was dropped (${f}: "${away}").`,
@@ -152,6 +155,7 @@ const WORDS: ByLang<Words> = {
     lost: '它的内容已不在该主机上，所以没能附上。',
     attached: '改动已附上。',
     stop: '。',
+    byJob: (plugin, job) => `这处改动来自 ${plugin} 插件的后台作业 ${job}。`,
     item: {
       taskField: (f, r, mac, away) => `${f}：保留了${r ? '离线期间的改动' : ' Mac 上的值'}。Mac 上：“${mac}”；离线期间：“${away}”。`,
       taskDeleted: (f, away) => `这个任务已在 Mac 上删除，离线期间的一处改动被丢弃（${f}：“${away}”）。`,
@@ -225,6 +229,13 @@ function noteLine(w: Words, e: ConflictEntry): string {
   }
 }
 
+/** A plugin job that made the change, named after the item (a session's or a person's change names no one). */
+function byLine(w: Words, e: ConflictEntry): string {
+  const a = (e.actor ?? (e.record as { actor?: unknown } | undefined)?.actor) as { kind?: unknown; plugin?: unknown; job?: unknown } | undefined;
+  if (a?.kind !== 'plugin-job' || typeof a.plugin !== 'string' || typeof a.job !== 'string') return '';
+  return w.byJob(a.plugin, a.job);
+}
+
 function targetOf(w: Words, e: ConflictEntry): string {
   const t = w.target;
   if (e.taskId) return t.task(e.taskId, taskLink(e.taskId));
@@ -254,7 +265,7 @@ export function conflictLetterIn(lang: LetterLang, file: ConflictLogFile): Confl
   for (const i of needed) {
     const e = file.entries[i];
     const entryLink = conflictEntryLink(file.drainId, i);
-    const line = w.line(targetOf(w, e), itemLine(w, e), entryLink);
+    const line = w.line(targetOf(w, e), `${itemLine(w, e)}${byLine(w, e)}`, entryLink);
     if (Buffer.byteLength(body) + Buffer.byteLength(line) > budget) break;
     body += line;
     links.push(entryLink);

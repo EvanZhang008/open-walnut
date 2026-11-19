@@ -27,6 +27,7 @@ import { frozenFieldTimes } from '../task-field-times.js';
 import { recordRemap } from './ledger.js';
 import { journalCallId } from '../../lib/op-call-id.js';
 import { applyFields, entryBase, exactTask, opKeyOf, pairValidator, resolveTaskId } from './apply-fields.js';
+import { actorOptions, actorRules, createCaller, opWriteFields, type JournalActorLike } from './journal-actor.js';
 
 export { RefusedWrite };
 
@@ -47,11 +48,14 @@ export const APPLIED_V2_KINDS = ['task-fields', 'task-create', 'task-move', 'boa
  * `trigger_create` op record is replayed under the id the host gave it: trigger-api.ts; a host
  * arms one while this Mac is away only for a Mac that says so), plus `held-op` (a `task_send`,
  * `session_send` or `agent_memory_write` op record a host held while nothing could take it is
- * replayed once through the op: offline-handover.ts HELD_OPS).
+ * replayed once through the op: offline-handover.ts HELD_OPS), plus `plugin-job-actor` (a record a
+ * plugin's job made on its host, its actor's rules in journal-actor.ts) and `task-start` (a `session`
+ * record with `run: 'task'` is adopted as a plain session of a task the host's journal created:
+ * apply-session.ts; a host starts one only for a Mac that says so).
  */
-export const MAC_DRAINS = [...APPLIED_V2_KINDS, 'device-actor', 'routine-run', 'trigger-create', 'held-op'];
+export const MAC_DRAINS = [...APPLIED_V2_KINDS, 'device-actor', 'routine-run', 'trigger-create', 'held-op', 'plugin-job-actor', 'task-start'];
 
-export type JournalActorLike = { kind: 'session'; sid: string } | { kind: 'device'; deviceId: string; name?: string } | { kind: 'trigger'; id: string };
+export type { JournalActorLike };
 
 export interface V2Record {
   seq: number;
@@ -88,43 +92,18 @@ export function v2TaskIdOf(record: V2Record, remap?: Map<string, string>, hostKe
   return hostKey !== undefined ? resolveTaskId(hostKey, id, remap) : remap?.get(id) ?? id;
 }
 
-/**
- * A session's away write takes exactly what its op takes online (executor.ts parses the
- * op's input strictly, after dropping its retired fields): task_update its own fields,
- * task_complete the phase alone, task_create its own fields. Anything else (status,
- * summary, note, unread, pin_order, depends_on, ...) refuses the whole record, the answer
- * the same call online gets, and the session is told. A device or a trigger writes the
- * whole queueable set, as the routes it stands for do.
- */
-export async function sessionWriteFields<T>(record: V2Record, fields: Record<string, T>): Promise<Record<string, T>> {
-  if (record.actor?.kind !== 'session') return fields;
-  const name = record.kind === 'task-create' ? 'task_create' : record.op === 'task_complete' ? 'task_complete' : 'task_update';
-  const { getOp } = await import('../../ops/index.js');
-  const op = getOp(name);
-  const allowed = name === 'task_complete' ? new Set(['phase']) : new Set(Object.keys(op?.input ?? {}).filter((k) => k !== 'id'));
-  // waiting_on is the park gate's words, no task field (sessions/outside-wait.ts).
-  const retired = new Set([...(op?.retiredInput ?? []), 'waiting_on']);
-  const out: Record<string, T> = {};
-  const bad: string[] = [];
-  for (const [k, v] of Object.entries(fields)) {
-    if (retired.has(k)) continue;
-    if (allowed.has(k)) out[k] = v; else bad.push(k);
-  }
-  if (bad.length) throw new RefusedWrite(`${name} does not take ${bad.join(', ')}; nothing of this write was applied`);
-  return out;
-}
-
 async function applyTaskFields(ctx: V2Context, record: V2Record): Promise<void> {
   const raw = (record.fields ?? {}) as Record<string, FieldWrite>;
   const taskId = v2TaskIdOf(record, ctx.remap, ctx.hostKey) ?? '';
   const bad = unqueueableFields(raw);
   // All or nothing (section 7): the daemon refuses such a write, so this is a record from elsewhere.
   if (bad.length) throw new RefusedWrite(`${bad.join(', ')} can only be changed while the Mac answers; nothing of this write was applied`);
-  const fields = await sessionWriteFields(record, raw);
+  const fields = await opWriteFields(record, raw);
+  const rules = actorRules(record.actor);
   // A session's queued park meets the online gate at replay: only a wait outside Walnut and the user.
-  if (record.actor?.kind === 'session' && (fields.phase as FieldWrite | undefined)?.value === 'WAITING') {
+  if (rules.sessionSid && (fields.phase as FieldWrite | undefined)?.value === 'WAITING') {
     const { admitSessionPark } = await import('../sessions/outside-wait.js');
-    const admit = await admitSessionPark(taskId, record.actor.sid, undefined);
+    const admit = await admitSessionPark(taskId, rules.sessionSid, undefined);
     if (!admit.ok) throw new RefusedWrite(`${admit.message} Nothing of this write was applied.`);
   }
   // A session's queued close meets the online gate too: a task that still holds something for the
@@ -134,9 +113,9 @@ async function applyTaskFields(ctx: V2Context, record: V2Record): Promise<void> 
   let settle: import('../sessions/owed-to-user.js').CloseSettle | undefined;
   if (closing) {
     const { admitSessionClose } = await import('../sessions/owed-to-user.js');
-    // A session's close is checked; a person's (their device) settles a hold; a trigger's does neither.
-    if (record.actor?.kind === 'session' || record.actor?.kind === 'device') {
-      const admit = await admitSessionClose(taskId, record.actor.kind === 'session' ? record.actor.sid : undefined, { replayed: true });
+    // A session's close is checked; a person's (their device) settles a hold; a trigger's or a job's does neither.
+    if (rules.checksClose) {
+      const admit = await admitSessionClose(taskId, rules.sessionSid, { replayed: true });
       // A stale note is a reminder for the session while it works, never a refused write the person reads
       // later: a replayed close goes through it (owed-to-user.ts admitOwnNote). So does a request that
       // reached the task after its host closed it offline (`replayed`): the close came first, and the
@@ -185,10 +164,10 @@ async function applyTaskFields(ctx: V2Context, record: V2Record): Promise<void> 
   if (outcome === 'applied') ctx.result.replayed++; else ctx.result.skipped++;
 }
 
-/** A new id for a create whose id was taken: the writer's shape (time, then 8 random bytes). */
+/** A new id for a create whose id was taken: the writer's own (task-row-fold.ts mintTaskId). */
 async function remintId(): Promise<string> {
-  const crypto = await import('node:crypto');
-  return `${Date.now().toString(36)}${crypto.randomBytes(8).toString('hex')}`;
+  const [crypto, { mintTaskId }] = await Promise.all([import('node:crypto'), import('./task-row-fold.js')]);
+  return mintTaskId(Date.now(), (n) => crypto.randomBytes(n).toString('hex'));
 }
 
 /** The value a field has on a task addTask just made (the base of the fields set after it). */
@@ -206,7 +185,7 @@ async function applyTaskCreate(ctx: V2Context, record: V2Record): Promise<void> 
   const bad = unqueueableFields(fields);
   if (bad.length) throw new RefusedWrite(`${bad.join(', ')} can only be set while the Mac answers; the task was not created`);
   if (!minted) throw new RefusedWrite('task-create without the id the writer minted');
-  await sessionWriteFields(record, fields);
+  await opWriteFields(record, fields);
   // A re-mint an earlier drain made (this batch or one before a stop or a restart) is durable.
   let id = resolveTaskId(ctx.hostKey, minted, ctx.remap);
   let existing = await exactTask(id);
@@ -239,8 +218,9 @@ async function applyTaskCreate(ctx: V2Context, record: V2Record): Promise<void> 
 
 /**
  * addTask with the id (minted or re-minted), placement and the create rules re-run with
- * the actor's rules (create-rules.ts, the same helper the online create route calls): a
- * device or a trigger gets the human defaults (pinned by default), a session the caller
+ * the actor's caller (create-rules.ts, the same helper the online create route calls;
+ * journal-actor.ts createCaller): a device or a trigger gets the human defaults (pinned by
+ * default), a plugin job an outside caller's (the same defaults), a session the caller
  * rule (its depth cap, an ask's project, the caller's tier, the title brake, the folder
  * beside the caller).
  */
@@ -248,15 +228,13 @@ async function createTask(
   ctx: V2Context, record: V2Record, id: string, fields: Record<string, unknown>,
   placement: { parentTaskId?: string; project?: string; groupId?: string; tier?: string },
 ): Promise<void> {
-  const { resolveCallerPlacement, decidePlacement } = await import('../sessions/caller-placement.js');
+  const { decidePlacement } = await import('../sessions/caller-placement.js');
   const { applyCreateRules, placeBesideCaller, ProjectElsewhereError } = await import('../sessions/create-rules.js');
   const req = {
     ...(typeof placement.project === 'string' ? { project: placement.project } : {}),
     ...(placement.groupId ? { group_id: placement.groupId } : {}),
   };
-  const caller = record.actor?.kind === 'session'
-    ? await resolveCallerPlacement(record.actor.sid).catch(() => ({ kind: 'unknown' as const }))
-    : { kind: 'human' as const };
+  const caller = await createCaller(record.actor);
   const decision = decidePlacement(req, caller);
   // A parent the record names wins over the caller's own task.
   if (placement.parentTaskId) decision.parentTaskId = resolveTaskId(ctx.hostKey, placement.parentTaskId, ctx.remap);
@@ -324,8 +302,9 @@ async function createTask(
     // addTask's own validation (unknown tier, a folder of another project): the Mac's answer.
     throw new RefusedWrite(err instanceof Error ? err.message : String(err));
   }
-  const humanTouchAt = record.actor?.kind === 'device' ? created.created_at
-    : record.actor?.kind !== 'session' && typeof record.humanTouchAt === 'string' ? record.humanTouchAt : undefined;
+  const who = actorRules(record.actor);
+  const humanTouchAt = who.person ? created.created_at
+    : !who.opStrict && typeof record.humanTouchAt === 'string' ? record.humanTouchAt : undefined;
   if (humanTouchAt) await (await import('../recent-task-touch.js')).recordRecentTaskTouch(created.id, 'mobile', humanTouchAt);
   // Best-effort, as online: a failure leaves the task standalone in its project.
   await placeBesideCaller(decision, caller, created, 'offline-handover');
@@ -368,14 +347,6 @@ async function applyTaskMove(ctx: V2Context, record: V2Record): Promise<void> {
     if (order.join(',') !== pinned.join(',')) { await freeze(); await tm.reorderPins(order); moved = true; }
   }
   if (moved) ctx.result.replayed++; else ctx.result.skipped++;
-}
-
-/** The op caller a record's actor replays as: a device with paired-device rights, a session as today. */
-async function actorOptions(hostKey: string, actor: JournalActorLike | undefined): Promise<{ callerSid?: string; callerHost?: string; origin: string }> {
-  const { hostOrigin, REMOTE_HTTP_ORIGIN } = await import('../../lib/caller-origin.js');
-  if (actor?.kind === 'device') return { origin: REMOTE_HTTP_ORIGIN };
-  if (actor?.kind === 'session') return { callerSid: actor.sid, callerHost: hostKey, origin: hostOrigin(hostKey) };
-  return { callerHost: hostKey, origin: hostOrigin(hostKey) };
 }
 
 /** A Board write made away: replayed through the op, whose version checks decide. */

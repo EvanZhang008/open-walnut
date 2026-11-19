@@ -35,6 +35,12 @@
  * organize pass (a routine names both). Its mode is checked against the routine modes
  * (spawn-template.ts hostRoutineModes), never the ask rule. The run itself (its History
  * row) is recorded from the fire, which the host marked as started (trigger-events.ts).
+ *
+ * A record with `run: 'task'` is a plain session of a task made on that host while this Mac
+ * was away (a plugin job's task_create, started from its project's session defaults and the
+ * routine template: host-start-core.ts planTask). It is adopted the same way as a
+ * routine's run (adoptRun), without the routine: never an ask, the task's folder set, the
+ * session context this Mac appends. Any other `run` is refused, never taken for an ask.
  */
 
 import { log } from '../../logging/index.js';
@@ -73,7 +79,10 @@ export async function applySession(ctx: V2Context, record: V2Record): Promise<vo
   if (!task.created_by_op || lookupDrained(WALNUT_HOME, task.created_by_op, ctx.hostKey)?.outcome !== 'applied') {
     throw new RefusedWrite(`the task of that ask (${taskId}) was not created by ${ctx.hostKey} while this Mac was away`);
   }
-  if (record.routine !== undefined) return await adoptRoutineRun(ctx, record, sid, task);
+  // A run the host started from the routine template: a routine's, or a plugin job's new task's.
+  if (record.routine !== undefined) return await adoptRun(ctx, record, sid, task, routineOf(record));
+  if (record.run === 'task') return await adoptRun(ctx, record, sid, task, null);
+  if (record.run !== undefined) throw new RefusedWrite(`a session record of a run this Mac does not know (${String(record.run)})`);
   const agentId = typeof record.agentId === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(record.agentId) ? record.agentId : 'general';
   if (!task.walnut_agent || (agentId !== 'general' && task.agent_id !== agentId)) {
     // agent_id is create-time data for updateTask; the raw write takes it (lane-ask-link.ts stampAsAsk).
@@ -122,10 +131,20 @@ export async function applySession(ctx: V2Context, record: V2Record): Promise<vo
   scheduleFollowups(sid, taskId, cwd ?? '', typeof record.firstMessage === 'string' ? record.firstMessage : '', task.title ?? '', task.project ?? '');
 }
 
-/** A routine run the host started (see the header): its session record and the task's link. */
-async function adoptRoutineRun(ctx: V2Context, record: V2Record, sid: string, task: import('../types.js').Task): Promise<void> {
+/** The routine a routine run's record names (see the header); refused without one. */
+function routineOf(record: V2Record): { id: string; slotMs: number } {
   const r = record.routine as { id?: unknown; slotMs?: unknown } | null;
-  if (!r || typeof r !== 'object' || typeof r.id !== 'string' || !r.id || typeof r.slotMs !== 'number') throw new RefusedWrite('a routine session record without its routine');
+  if (!r || typeof r !== 'object' || typeof r.id !== 'string' || !r.id || typeof r.slotMs !== 'number') throw new RefusedWrite('a session record of a routine run without its routine');
+  return { id: r.id, slotMs: r.slotMs };
+}
+
+/**
+ * A run the host started from the routine template (see the header): a routine's (`routine`
+ * set) or a plugin job's new task's (`run: 'task'`). Its session record and the task's link.
+ */
+async function adoptRun(
+  ctx: V2Context, record: V2Record, sid: string, task: import('../types.js').Task, routine: { id: string; slotMs: number } | null,
+): Promise<void> {
   const { createSessionRecord } = await import('../session-tracker.js');
   const { updateTaskRaw } = await import('../task-manager.js');
   const taskId = task.id;
@@ -153,7 +172,8 @@ async function adoptRoutineRun(ctx: V2Context, record: V2Record, sid: string, ta
   rescueAfterBatch(ctx.hostKey, sid);
   await linkAdopted(taskId, sid, mode === 'plan' ? 'plan' : 'exec');
   ctx.result.replayed++;
-  log.session.info('offline handover: adopted a routine run the host started while this Mac was away', { host: ctx.hostKey, sessionId: sid, taskId, jobId: r.id, slotMs: r.slotMs, mode, model });
+  if (routine) log.session.info('offline handover: adopted a routine run the host started while this Mac was away', { host: ctx.hostKey, sessionId: sid, taskId, jobId: routine.id, slotMs: routine.slotMs, mode, model });
+  else log.session.info('offline handover: adopted the session of a task a plugin job created while this Mac was away', { host: ctx.hostKey, sessionId: sid, taskId, mode, model });
 }
 
 /**
@@ -174,12 +194,12 @@ async function adoptOutsideRecord(
   }
 }
 
-/** A routine run's mode when this Mac lets a routine run in it on a host; else the plain default. */
+/** A run's mode when this Mac lets a routine-template run start in it on a host; else the plain default. */
 async function allowedRoutineMode(hostKey: string, raw: unknown, sid: string): Promise<SessionMode | undefined> {
   if (typeof raw !== 'string' || !VALID_SESSION_MODE_IDS.has(raw)) return undefined;
   const { hostRoutineModes } = await import('../../providers/spawn-template.js');
   if (Object.prototype.hasOwnProperty.call(hostRoutineModes().modes, raw)) return raw as SessionMode;
-  log.session.warn('offline handover: an adopted routine run names a mode a routine may not start in; it keeps the default', { host: hostKey, sessionId: sid, mode: raw });
+  log.session.warn('offline handover: an adopted run names a mode the routine template may not start in; it keeps the default', { host: hostKey, sessionId: sid, mode: raw });
   return 'default';
 }
 

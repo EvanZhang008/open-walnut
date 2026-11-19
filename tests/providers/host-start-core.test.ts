@@ -512,6 +512,26 @@ describe('a routine run (planRoutine, clock-host-start-v1)', () => {
     expect(r.plan.message).toBe(INJECT)
   })
 
+  it('a task\'s own session (planTask) takes the same fill, puts the title in before the id, and its record says run: task', () => {
+    const hs = make()
+    const TITLE_TOKEN = '__TEST_TASK_TITLE__'
+    const task = {
+      sid: RSID, taskId: 'mtask1-0a1b2c3d', title: `Review ${START_TASK_TOKEN} notes`, cwd: dir, mode: 'auto', firstMessage: 'review the notes',
+      context: `You are working on the task "${TITLE_TOKEN}" (id ${START_TASK_TOKEN}).`, taskToken: START_TASK_TOKEN, titleToken: TITLE_TOKEN,
+    }
+    expect(hs.planTask(HOME, task, 'marina')).toMatchObject({ ok: false, code: 'needs_leader', detail: { why: 'no_spawn_template' } })
+    hs.setTemplate(HOME, routineTemplate(), 'routine')
+    const r = hs.planTask(HOME, task, 'marina')
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const ctx = r.plan.args[r.plan.args.indexOf('--append-system-prompt') + 1]
+    // A title naming the id token never makes a second id: the title goes in first.
+    expect(ctx).toBe(`You are working on the task "Review ${START_TASK_TOKEN} notes" (id mtask1-0a1b2c3d).`)
+    expect(r.plan.record).toMatchObject({ kind: 'session', sid: RSID, taskId: 'mtask1-0a1b2c3d', run: 'task' })
+    expect(r.plan.record.routine).toBeUndefined()
+    expect(hs.planTask(HOME, { ...task, cwd: path.join(dir, 'gone') }, 'marina')).toMatchObject({ ok: false, code: 'cwd_missing', message: expect.stringContaining('task start:') })
+  })
+
   it('a routine template keeps no agents and needs no folder of its own', () => {
     const hs = make()
     const t = hs.setTemplate(HOME, { ...routineTemplate(), agents: { general: { allowedTools: ['Bash'] } }, cwd: 'not absolute' }, 'routine')
