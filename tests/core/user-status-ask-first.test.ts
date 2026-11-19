@@ -112,6 +112,19 @@ describe('an open ask of the user is Needs you, whatever else wakes the task', (
     expect(wrong).toEqual([])
   })
 
+  // The same day, its next trigger turn reported "needs you" with no question: something to read.
+  it('a current report that needs the user but asks nothing is theirs to read in every open phase, never a wait', () => {
+    const wrong: string[] = []
+    for (const phase of open) {
+      for (const [waitName, wait] of Object.entries({ none: {}, ...WAIT_SOURCES })) {
+        if (waitName === 'reportPending') continue
+        const s = deriveUserStatus({ phase, hasSession: true, processStatus: 'idle', ...wait, report: rep({ state: 'needs' }) }, NOW)
+        if (s.state === 'waiting') wrong.push(`${phase} + ${waitName}: waiting (${s.waitingOn})`)
+      }
+    }
+    expect(wrong).toEqual([])
+  })
+
   it('the case that showed it: a watch, a trigger wake that ran no turn, and the ask from before it', () => {
     const s = deriveUserStatus({
       phase: 'IN_PROGRESS', hasSession: true, processStatus: 'idle', hasLeader: true,

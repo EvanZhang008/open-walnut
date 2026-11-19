@@ -1276,6 +1276,13 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   // on: a watch, a trigger, a clock, its own work, a park, a start waiting for a host (openAskOf).
   const asked = openAskOf(input, report, anyReport, w);
   if (asked) return asked;
+  // Its own current report says it needs the user but asks nothing (FOR_USER_STATE needs-you with no
+  // FOR_USER_ASK): its words are theirs to read, in every phase, never a wait on a watch (2026-11-19:
+  // the deploy task's trigger turn wrote exactly that and read "A watch" again). Main and a lead keep
+  // their own wait on the user's next message below.
+  if (report?.state === 'needs' && none(report.ask) && !report.kindless_ask && !input.isMain && !input.isLead) {
+    return toRead('answer', ANSWER_TO_READ, w);
+  }
   const own = ownWork(input, report, w, nowMs);
   // Its start waits for room on a host (sessions/start-queue.ts; a start clears it), whatever its
   // phase: a first start, a retry after a failed one, a parked task started again. A person's own
