@@ -33,7 +33,7 @@ import { log } from '../../src/logging/index.js'
 import { getCanaryHandle, startServer, stopServer } from '../../src/web/server.js'
 import { _resetDeviceAuthForTesting } from '../../src/core/device-auth.js'
 import { getBackupLeader } from '../../src/core/leader/backup-leader.js'
-import { CAPABILITIES } from '../../src/core/capabilities.js'
+import { CAPABILITIES, defaultCapabilities } from '../../src/core/capabilities.js'
 import { jobsOfCapability } from '../../src/core/boot-policy.js'
 
 let server: HttpServer
@@ -64,12 +64,16 @@ afterAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 }, 60_000)
 
+/** What a companion that names none has: its four defaults, never one a host replica alone takes. */
+const COMPANION_CAPS = CAPABILITIES.filter((c) => defaultCapabilities('cloud').has(c))
+
 describe('the companion with no WALNUT_CAPABILITIES has all four', () => {
   it('the role and boot policy lines name them, and every capability row is on', () => {
-    expect(logs.data('server role')).toMatchObject({ role: 'replica', placement: 'cloud', capabilities: [...CAPABILITIES] })
+    expect(COMPANION_CAPS).toHaveLength(4)
+    expect(logs.data('server role')).toMatchObject({ role: 'replica', placement: 'cloud', capabilities: COMPANION_CAPS })
     const boot = logs.data('boot policy') as { on: string[]; capabilities: string[] }
-    expect(boot.capabilities).toEqual([...CAPABILITIES])
-    for (const cap of CAPABILITIES) expect(boot.on, cap).toEqual(expect.arrayContaining(jobsOfCapability(cap)))
+    expect(boot.capabilities).toEqual(COMPANION_CAPS)
+    for (const cap of COMPANION_CAPS) expect(boot.on, cap).toEqual(expect.arrayContaining(jobsOfCapability(cap)))
     expect(logs.lines.some((l) => l.msg.startsWith('WALNUT_CAPABILITIES is ignored'))).toBe(false)
   })
 

@@ -185,6 +185,8 @@ const CAPABILITY_JOBS: Record<Capability, BootJob[]> = {
   'bridge-door': ['companion-ingest-routes', 'git-maintenance'],
   'cloud-exec': ['cloud-exec', 'local-daemon', 'stream-file-cleanup', 'send-path-canary'],
   'backup-leader': ['backup-leader', 'routine-wake', 'cron'],
+  // A host replica's own: it answers its host's calls on the follower link, which is no boot row.
+  'host-local-calls': [],
 }
 
 /** What the companion still runs on its own pipeline, and the stage that decides each. */

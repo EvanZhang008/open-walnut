@@ -31,6 +31,7 @@ import { needsLeaderAnswer, refusalAnswer, type PortAnswer, type TaskRow, type W
 import type { FreshClaudeStart } from '../core/sessions/fresh-claude-start.js'
 import { log } from '../logging/index.js'
 import { memoryLiveLimit } from '../core/sessions/live-sessions.js'
+import { defaultCwdOnHost } from '../core/sessions/launch-place.js'
 
 /** The daemon capability a task start here needs (follower.start `run: 'task'`). */
 export const TASK_START_CAP = 'follower-gateway-v1'
@@ -142,7 +143,7 @@ export function awayStarts(deps: AwayStartsDeps): RequestHandler {
     if (!deps.hostKey || str(meta?.default_host) !== deps.hostKey) {
       return needsLeaderAnswer('task_runs_elsewhere', 'This task\'s project runs its sessions on another machine; starting it needs your Mac.')
     }
-    const cwd = str(b.cwd) || str(meta?.default_cwd)
+    const cwd = str(b.cwd) || str(defaultCwdOnHost(meta as { default_cwd?: string; default_host?: string } | null, deps.hostKey))
     if (!cwd) return needsLeaderAnswer('no_folder', 'This task\'s project names no folder on this host; starting it needs your Mac.')
     if (deps.capabilities()?.includes(TASK_START_CAP) !== true) return needsLeaderAnswer('daemon_needs_upgrade', 'This host\'s Walnut daemon cannot start a task\'s session yet; it updates on your Mac\'s next connect.')
     // The brake: no more live sessions here, counting the starts under way, than this host's
