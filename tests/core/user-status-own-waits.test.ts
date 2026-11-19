@@ -22,6 +22,8 @@ const WAIT_SOURCES: Record<string, { input: Partial<UserStatusInput>; reads: 'ta
   waitingOnTasks: { input: { waitingOnTasks: ['Review: the diff'] }, reads: 'task' },
   workersAtWork: { input: { workersAtWork: ['Review: the diff'] }, reads: 'task' },
   triggers: { input: { triggers: ['CI on main'] }, reads: 'watch' },
+  // A watch of its own work (watches:"own"): that work goes on, so it reads Working, never a wait.
+  ownWorkTriggers: { input: { ownWorkTriggers: ['Results of my test run'] }, reads: 'not a wait of a hand-back' },
   // Its start waits for room on a host: read before any phase, a hand-back included.
   startQueue: { input: { startQueue: { host: 'clouddev', reason: 'no free start slot' } }, reads: 'machine' },
   // A routine's next run wakes a task in progress; a handed-back one is not parked on it (wakeSource(..., false)).

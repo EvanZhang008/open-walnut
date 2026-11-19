@@ -323,8 +323,11 @@ export interface UserStatusInput {
   openChoiceRef?: { board: string; id: string } | null;
   /** Titles of tasks this task's session waits on for a reply. */
   waitingOnTasks?: readonly string[];
-  /** Armed triggers that will wake this task (their names). */
+  /** Armed triggers that will wake this task (their names), each watching something outside it. */
   triggers?: readonly string[];
+  /** Armed triggers that watch its own work (watches:"own", CronJob.ownWork): its build, test run,
+   *  CI run, deploy or land goes on, and the result wakes it. Working, never a wait (2026-11-18). */
+  ownWorkTriggers?: readonly string[];
   /** Enabled scheduled routines that run in this task's session, with their next run (ISO). */
   schedules?: readonly { name: string; nextAt?: string | null }[];
   waitUntil?: string | null;
@@ -791,6 +794,12 @@ function ownWork(input: UserStatusInput, report: StatusReport | null, w: ReturnT
     || (report?.state === 'waiting' && !!report.waiting_kind && OTHERS_WAIT.has(report.waiting_kind));
   if (outliving.length && input.processStatus !== 'error' && !waitsOnOthers) {
     return strip<UserStatus>({ state: 'working', carriesOn: 'process', ...w, now: w.now ?? outlivingLine(outliving) });
+  }
+  // A watch of its own work is armed (watches:"own"): that work runs and its result wakes it, unless
+  // its current report asks the user or names a wait on someone else.
+  const ownWatch = (input.ownWorkTriggers ?? []).map(clean).filter(Boolean);
+  if (ownWatch.length && input.processStatus !== 'error' && !waitsOnOthers) {
+    return strip<UserStatus>({ state: 'working', carriesOn: 'watch', ...w, now: w.now ?? `Its own work runs; ${ownWatch.join(', ')} brings it back` });
   }
   if (!report) return null;
   const own = report.state === 'working' || (report.state === 'waiting' && report.waiting_kind === 'own');

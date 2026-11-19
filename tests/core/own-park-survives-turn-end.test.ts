@@ -107,6 +107,33 @@ describe('a park of its own survives the turn end', () => {
   })
 })
 
+// 2026-11-19, the user's lead: a task moved out of Waiting onto its own test-results watch still
+// read "Waiting on: A watch: Mac queue results of ..." everywhere. A watch of its own work is that
+// work going on: Working, in every phase, unless its report asks the user or waits on someone else.
+describe('a watch of its own work reads Working, never "A watch" to wait on', () => {
+  const T = Date.now()
+  const stale: StatusReport = { state: 'working', at: iso(T - 3_600_000), now: 'Waiting for the main test rerun' }
+  const base = { hasSession: true, processStatus: 'stopped' as const, report: stale, phaseChangedAt: iso(T - 60_000), ownWorkTriggers: ['Results of my test run'] }
+  it('in progress, parked or handed back, with a report older than its phase', () => {
+    for (const phase of ['IN_PROGRESS', 'WAITING', 'NEED_ACTION'] as const) {
+      const s = deriveUserStatus({ ...base, phase }, T)
+      expect(s.state, phase).toBe('working')
+      expect(s.waitingOn ?? '', phase).not.toMatch(/A watch/)
+    }
+  })
+  it('an outside watch beside it is still a wait; a report that asks the user still asks', () => {
+    expect(deriveUserStatus({ ...base, ownWorkTriggers: [], triggers: ['A colleague\'s review'], phase: 'IN_PROGRESS' }, T))
+      .toMatchObject({ state: 'waiting', waitingOn: 'A watch: A colleague\'s review' })
+    const asks: StatusReport = { state: 'needs', ask: 'Approve the release?', at: iso(T + 1_000) }
+    expect(deriveUserStatus({ ...base, report: asks, phase: 'NEED_ACTION', phaseChangedAt: iso(T) }, T + 2_000).state).toBe('needs')
+  })
+  it('the status facts keep an own-work trigger out of the watches a task waits on', () => {
+    const src = fss.readFileSync(path.join(ROOT, 'src/core/user-status-sync.ts'), 'utf8')
+    expect(src).toMatch(/triggers: liveTriggers\.filter\(\(t\) => !triggerWatchesOwnWork\(t\)\)/)
+    expect(src).toMatch(/ownWorkTriggers: liveTriggers\.filter\(triggerWatchesOwnWork\)/)
+  })
+})
+
 describe('a letter the user wrote back in is answered', () => {
   const letter = (over: Record<string, unknown> = {}) => ({
     type: 'action_required', archived: false, sender: { taskId: 't1' },
