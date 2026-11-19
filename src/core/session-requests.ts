@@ -132,6 +132,9 @@ export interface SessionRequest {
   /** When this server's deadline sweep made it overdue (ISO). Only such a row is reminded:
    *  rows an older Walnut expired never are, so an upgrade does not send a burst of them. */
   overdueAt?: string;
+  /** The ask a task start sent as its session's first message (kind 'start'): the task's brief,
+   *  which its close answers (sessions/requests-held.ts opensSession). Additive, 2026-11-19. */
+  opensSession?: true;
   /** The target queue row (`qm-…`) the asked message went out as, so a read of the request can
    *  say whether it still waits to go in and a sender can send it now (additive, 2026-10). */
   messageId?: string;
@@ -465,6 +468,7 @@ export async function createSessionRequest(input: {
     createdAt: new Date().toISOString(),
     deadlineAt: Date.now() + clampReplyTimeoutSecs(input.replyTimeoutSecs, input.implicit, input.kind) * 1000,
     ...(input.messageId ? { messageId: input.messageId } : {}),
+    ...(input.kind === 'start' ? { opensSession: true as const } : {}),
   };
   let stored = request;
   let refused: HandOnRefusal[] = [];

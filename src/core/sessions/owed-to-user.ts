@@ -46,6 +46,7 @@ import type { UserStatus } from '../user-status.js';
 import { userSaidLine } from './user-spoke.js';
 import type { OpenLineKind } from './stale-note.js';
 import { awaitsUserDecision } from '../human-inbox/open-decision.js';
+import { admitHeldRequests, type HeldRequestRefusal } from './requests-held.js';
 
 /** Every kind of thing a close owes the user. tests/e2e/owed-close.test.ts holds a close by each one. */
 export type OwedSource = 'progress' | 'ask' | 'letter' | 'choice' | 'thread' | 'decision' | 'held';
@@ -177,7 +178,9 @@ export type CloseAdmission =
   | { ok: true; settle?: CloseSettle }
   | { ok: false; code: 'owed_to_user'; message: string; items: OwedItem[] }
   /** Its own session closing it while its note still reads as unfinished (admitOwnNote): asked once. */
-  | { ok: false; code: 'stale_note'; message: string; items: Array<{ source: 'note'; kind: OpenLineKind; text: string }> };
+  | { ok: false; code: 'stale_note'; message: string; items: Array<{ source: 'note'; kind: OpenLineKind; text: string }> }
+  /** Its own session closing it while it holds a request someone waits on (requests-held.ts). */
+  | HeldRequestRefusal;
 
 interface Closer { taskId: string; /** The resolved session's own id, never the header's text. */ sessionId?: string }
 
@@ -347,12 +350,16 @@ function ownedBy(owed: TaskOwed, toCloser: boolean): TaskOwed {
 /**
  * The gate every close path a session can reach goes through (tests/core/owed-to-user.test.ts lists
  * them). A close of a task already COMPLETE, of Main or a lead, or one with nothing owed passes.
+ * Its own session's close is refused first while the task holds a request someone waits on, read
+ * or still queued (requests-held.ts admitHeldRequests).
  * A person's close passes and settles an open hold (they decided). A session's forced close passes
  * only when this closer was already told every item it would settle.
  */
 export async function admitSessionClose(
   taskId: string, callerSid: string | undefined,
-  opts: { force?: boolean; reason?: string; fields?: StructuredReply | null; userWords?: string } = {},
+  opts: { force?: boolean; reason?: string; fields?: StructuredReply | null; userWords?: string;
+    /** A close the session made on its host while Walnut was away, replayed now (apply-v2.ts). */
+    replayed?: boolean } = {},
 ): Promise<CloseAdmission> {
   const closer = await closerOf(callerSid);
   const { getTask } = await import('../task-manager.js');
@@ -371,6 +378,10 @@ export async function admitSessionClose(
   }
   const task = await getTask(taskId).catch(() => null);
   if (!task || task.phase === 'COMPLETE' || task.status === 'done' || task.org_role === 'main' || task.org_role === 'lead') return { ok: true };
+  if (closer.taskId === task.id && !opts.replayed) {
+    const held = await admitHeldRequests(task, closer.sessionId ?? callerSid);
+    if (held) return held;
+  }
   const items = await owedToUser(task, opts.fields);
   if (!items.length) return closer.taskId === task.id ? admitOwnNote(task, opts.fields) : { ok: true };
   const reason = (opts.reason ?? '').replace(/\s+/g, ' ').trim();

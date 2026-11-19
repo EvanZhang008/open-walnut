@@ -8,9 +8,9 @@
  * answer makes the CLI go on in the SAME turn with the reason as its input, so the session
  * answers (or says why not) right away, and no new turn is spent.
  *
- * Counted: an open request to this session (or its task), pending or overdue, whose message
- * reached it (no queue row still waiting or parked for it), not handed on (`hands_on`: the work
- * moved, a reply comes from where it went), from an asker whose task is still open. Not nagged at
+ * Counted: a request this session holds (the one rule, requests-held.ts: open, to it or its task,
+ * not handed on, from an asker whose task is still open) whose message reached it (no queue row
+ * still waiting or parked for it). Not nagged at
  * all, because its answer comes later and an early "where it stands" reply would settle the
  * request before the result: a turn whose own work runs on after it (a detached background
  * command, an armed wakeup: `workOutlivesTurn`), a task parked as WAITING, a session that itself
@@ -75,11 +75,9 @@ export async function unansweredAtStop(callerSid: string | undefined, now = Date
     const requests = await import('../session-requests.js');
     const taskId = caller.record.taskId;
     const rows = await requests.listAllSessionRequests().catch(() => [] as SessionRequest[]);
-    const candidates = rows.filter((r) => (r.status === 'pending' || r.status === 'expired')
-      // Addressed to another session of the task: this one never read it.
-      && (r.toSessionId ? r.toSessionId === sid : r.toTaskId === taskId)
-      && !r.carriedBy?.length && (nudged.get(r.id) ?? 0) < MAX_NUDGES);
-    if (!candidates.length) return null;
+    const { heldBy, requestsHeld } = await import('./requests-held.js');
+    const scope = { taskId, reach: { kind: 'session' as const, sessionId: sid }, rows, now };
+    if (!rows.some((r) => heldBy(r, scope, now, requests.OVERDUE_OPEN_MS, rows) && (nudged.get(r.id) ?? 0) < MAX_NUDGES)) return null;
     const { listTasksByIds } = await import('../task-manager.js');
     const own = (await listTasksByIds([taskId]).catch(() => []))[0];
     if (!own || own.phase === 'COMPLETE') return null;
@@ -88,18 +86,9 @@ export async function unansweredAtStop(callerSid: string | undefined, now = Date
     const { progressReason } = await import('./request-progress.js');
     if (await progressReason({ sessionId: sid, taskId, phase: own.phase, rows })) return null;
 
-    const { undeliveredRowFor } = await import('./undelivered-requests.js');
-    const { getSessionByClaudeId } = await import('../session-tracker.js');
-    const open: { request: SessionRequest; from: string }[] = [];
-    for (const r of candidates.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 5)) {
-      // Not read yet: still queued for this session, or parked. Its turn comes later.
-      const row = await undeliveredRowFor(r.toSessionId ?? sid, r.id).catch(() => undefined);
-      if (row && row.status !== 'processing') continue;
-      const askerTaskId = (await getSessionByClaudeId(r.fromSessionId).catch(() => undefined))?.taskId;
-      const asker = askerTaskId ? (await listTasksByIds([askerTaskId]).catch(() => []))[0] : undefined;
-      if (asker?.phase === 'COMPLETE' || askerTaskId === taskId) continue;
-      open.push({ request: r, from: asker ? `"${asker.title}" (${asker.id})` : 'another session' });
-    }
+    // Not read yet (still queued for this session, or parked): its turn comes later.
+    const open = (await requestsHeld({ ...scope, rows: rows.filter((r) => (nudged.get(r.id) ?? 0) < MAX_NUDGES), limit: 5 }))
+      .filter((h) => !h.queued);
     if (!open.length) return null;
     for (const { request } of open) nudged.set(request.id, (nudged.get(request.id) ?? 0) + 1);
     // A long-running server: forget the oldest names (a request named MAX_NUDGES times is old news).

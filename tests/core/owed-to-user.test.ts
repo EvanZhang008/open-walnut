@@ -200,6 +200,32 @@ describe('every session-reachable close asks what the user still has', () => {
   })
 })
 
+describe('a task\'s own close asks what requests it still holds, by the one rule', () => {
+  const src = (f: string) => code(fs.readFileSync(path.join(ROOT, f), 'utf8'))
+
+  it('admitSessionClose checks the requests of its own close before anything else can pass it', () => {
+    const gate = src('src/core/sessions/owed-to-user.ts')
+    const body = gate.slice(gate.indexOf('export async function admitSessionClose'))
+    const held = body.indexOf('admitHeldRequests(')
+    expect(held, 'admitSessionClose no longer asks admitHeldRequests (requests-held.ts)').toBeGreaterThan(0)
+    // Only the person, a COMPLETE task, Main and a lead pass before it; every later return is after it.
+    expect(body.indexOf('owedToUser(task'), 'the held-request check moved after the owed items').toBeGreaterThan(held)
+    expect(body.indexOf('admitOwnNote('), 'the held-request check moved after the note check').toBeGreaterThan(held)
+  })
+
+  // Every place that asks whether a task still owes an answer reads requests-held.ts; none filters
+  // the ledger by its own rule (2026-11-18: the close, the Stop hook and another task's close each
+  // had their own, and the close had none).
+  const READERS = ['src/core/sessions/owed-to-user.ts', 'src/core/sessions/unanswered-at-stop.ts', 'src/core/sessions/complete-in-use.ts']
+  for (const f of READERS) {
+    it(`${f} reads the one rule, never its own filter of the ledger`, () => {
+      const text = src(f)
+      expect(text).toMatch(/requests-held\.js/)
+      expect(text, 'filters pending requests itself: use requestsHeld').not.toMatch(/pendingRequestsForTarget|r\.status === 'pending'/)
+    })
+  }
+})
+
 describe('leadsTask: whose close is answered to the closer, not the user', () => {
   const tasks: Record<string, { id: string; org_role?: 'main' | 'lead' | 'router'; parent_task_id?: string }> = {
     vp: { id: 'vp', org_role: 'lead' }, main: { id: 'main', org_role: 'main' },

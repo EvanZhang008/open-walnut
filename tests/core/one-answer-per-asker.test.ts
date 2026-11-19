@@ -86,6 +86,7 @@ describe('every answer instruction names one call for one asker', () => {
     const KNOWN = new Set([
       'core/peers/envelope-kit.ts', // buildReplyTrailer: alsoOpen
       'core/sessions/unanswered-at-stop.ts', // grouped per asker
+      'core/sessions/requests-held.ts', // a refused own close: grouped per asker
       'core/sessions/open-items-text.ts', // oneAnswerLines
       // A letter about a task's own request: it names the one request the letter would have answered.
       'core/human-inbox/reply-instead.ts',

@@ -1280,6 +1280,8 @@ defineOp({
     '"waiting for", "pending", "is running", "you decide" in its Executive Summary) gets 409 stale_note once, naming the lines: ' +
     'update the note (task_note_write) and pass what is really open as not_done, then complete again; the same lines a second ' +
     'time go through. ' +
+    'Closing your OWN task while a request to it is unanswered (read or still queued) gets 409 unanswered_request naming it: ' +
+    'answer it (task_send in_reply_to), then complete again. ' +
     'A person\'s close is never held. On a close that goes through, its unanswered decision letters to the user are settled ' +
     'as no longer needed (they leave the inbox with that reason); one that must still reach the user goes back with ' +
     'human_inbox_mark archived:false.',

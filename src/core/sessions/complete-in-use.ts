@@ -33,11 +33,11 @@ export async function unfinishedWork(task: Task, fields?: StructuredReply | null
     out.push({ code: 'unfinished_result', text: `its last result left ${task.result_report!.not_done!.length} item(s) not done (${task.result_report!.not_done!.join('; ').slice(0, 200)}): take them up or settle them with task_not_done_settle, or pass not_done yourself` });
   }
   try {
-    const { pendingRequestsForTarget } = await import('../session-requests.js');
-    // The closer's own asks are its to drop: only someone else's wait keeps the task open.
-    const asked = (await pendingRequestsForTarget({ taskId: task.id, ...(task.session_id ? { sessionId: task.session_id } : {}) }))
-      .filter((r) => r.fromSessionId !== callerSid);
-    if (asked.length) out.push({ code: 'unanswered_requests', text: `${asked.length} request(s) to it are still unanswered (${asked.slice(0, 3).map((r) => r.id).join(', ')})` });
+    // The closer's own asks are its to drop: only someone else's wait keeps the task open (the one
+    // rule of what a task holds, requests-held.ts).
+    const { requestsHeld } = await import('./requests-held.js');
+    const asked = await requestsHeld({ taskId: task.id, reach: { kind: 'task', sessionIds: task.session_id ? [task.session_id] : [] }, ...(callerSid ? { exceptFromSessionId: callerSid } : {}), limit: 10 });
+    if (asked.length) out.push({ code: 'unanswered_requests', text: `${asked.length} request(s) to it are still unanswered (${asked.slice(0, 3).map((h) => h.request.id).join(', ')})` });
   } catch { /* unknown: not a reason */ }
   try {
     if (task.session_id) {

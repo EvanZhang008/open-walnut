@@ -136,9 +136,11 @@ async function applyTaskFields(ctx: V2Context, record: V2Record): Promise<void> 
     const { admitSessionClose } = await import('../sessions/owed-to-user.js');
     // A session's close is checked; a person's (their device) settles a hold; a trigger's does neither.
     if (record.actor?.kind === 'session' || record.actor?.kind === 'device') {
-      const admit = await admitSessionClose(taskId, record.actor.kind === 'session' ? record.actor.sid : undefined);
+      const admit = await admitSessionClose(taskId, record.actor.kind === 'session' ? record.actor.sid : undefined, { replayed: true });
       // A stale note is a reminder for the session while it works, never a refused write the person reads
-      // later: a replayed close goes through it (owed-to-user.ts admitOwnNote).
+      // later: a replayed close goes through it (owed-to-user.ts admitOwnNote). So does a request that
+      // reached the task after its host closed it offline (`replayed`): the close came first, and the
+      // request stays open for its asker (its deadline notice) like any request to a closed task.
       if (!admit.ok && admit.code !== 'stale_note') throw new RefusedWrite(`${admit.message} Nothing of this write was applied.`);
       if (admit.ok) settle = admit.settle;
     }
