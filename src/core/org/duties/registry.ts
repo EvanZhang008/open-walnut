@@ -32,6 +32,8 @@ let stops: Array<() => void> | null = null;
 export function startOrgDuties(opts: { ephemeral?: boolean } = {}): void {
   if (stops) return;
   if (opts.ephemeral && process.env.WALNUT_DUTIES_ON_EPHEMERAL !== '1') return;
+  // Tests set it to '0' (tests/setup/runtime-dir-isolation.ts): a test server never runs a duty's clock.
+  if (process.env.WALNUT_ORG_DUTIES === '0') return;
   stops = [];
   for (const cap of ORG_DUTIES) {
     try {

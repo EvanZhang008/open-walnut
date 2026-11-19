@@ -28,6 +28,7 @@ import { hookStatementVoid } from '../sessions/hook-statement.js';
 import { withAskSent } from '../sessions/ask-unanswered.js';
 import type { AwayState } from '../org/user-away.js';
 import type { BriefHintState } from '../sessions/brief-hint.js';
+import type { TeamGuidanceState } from '../org/reflection/team-guidance-hint.js';
 import type { ThreadCapture, ThreadHintState, ThreadsTidyState } from '../org/thread-capture.js';
 import type { UserAskCapture } from '../sessions/user-asks.js';
 import { keepsThreads } from '../org/keeps-threads.js';
@@ -121,6 +122,8 @@ export function planHints(input: {
   thread?: ThreadHintState | null;
   /** Main's or a lead's Threads that need its decision (org/thread-capture.ts threadsTidyOf). */
   threadsTidy?: ThreadsTidyState | null;
+  /** The guidance of the node that manages this task (org/reflection/team-guidance-hint.ts). */
+  teamGuidance?: TeamGuidanceState | null;
 }): HintPlan {
   const state = seededState(input.record);
   const send = state.sends + 1;
@@ -138,6 +141,7 @@ export function planHints(input: {
       ...(away ? { away } : {}), ...(input.brief ? { brief: input.brief } : {}),
       ...(input.thread ? { thread: input.thread } : {}),
       ...(input.threadsTidy ? { threadsTidy: input.threadsTidy } : {}),
+      ...(input.teamGuidance ? { teamGuidance: input.teamGuidance } : {}),
       ...(input.target.role ? { role: input.target.role } : {}),
     };
     const identity = hint.identity(content);
@@ -224,7 +228,7 @@ export async function writeHintState(
   }
 }
 
-async function targetFor(sessionId: string, record: HintRecord | null | undefined, hints: readonly EffectiveHint[]): Promise<{ target: HintTarget; away: AwayState | null; brief?: BriefHintState | null; threadsTidy?: ThreadsTidyState | null; task?: Task }> {
+async function targetFor(sessionId: string, record: HintRecord | null | undefined, hints: readonly EffectiveHint[]): Promise<{ target: HintTarget; away: AwayState | null; brief?: BriefHintState | null; threadsTidy?: ThreadsTidyState | null; teamGuidance?: TeamGuidanceState | null; task?: Task }> {
   if (!record?.taskId || !needsTaskForAudience(hints)) return { target: { sessionId }, away: null };
   try {
     const { listTasksByIds } = await import('../task-manager.js');
@@ -241,7 +245,8 @@ async function targetFor(sessionId: string, record: HintRecord | null | undefine
     const away = wantsAway ? await import('../org/user-away.js').then((m) => m.userAwayFrom(task)).catch(() => null) : null;
     const brief = await briefFor(task, target, hints);
     const threadsTidy = await threadsTidyFor(task, target, hints);
-    return { target, away, brief, threadsTidy, ...(task ? { task } : {}) };
+    const teamGuidance = await teamGuidanceOf(task, hints);
+    return { target, away, brief, threadsTidy, teamGuidance, ...(task ? { task } : {}) };
   } catch {
     return { target: { sessionId }, away: null };
   }
@@ -304,6 +309,12 @@ async function briefFor(task: Task | undefined | null, target: HintTarget, hints
 }
 
 /** The Threads that need the node's decision (Main's, a lead's, a task with Threads on), for the `threads-tidy` hint; null elsewhere. */
+/** The team guidance its manager wrote, for the `team-guidance` hint; null when off or none. Never throws. */
+async function teamGuidanceOf(task: Task | undefined | null, hints: readonly EffectiveHint[]): Promise<TeamGuidanceState | null> {
+  if (!task || !hints.some((h) => h.kind === 'team-guidance' && h.enabled)) return null;
+  return import('../org/reflection/team-guidance-hint.js').then((m) => m.teamGuidanceFor(task)).catch(() => null);
+}
+
 async function threadsTidyFor(task: Task | undefined | null, target: HintTarget, hints: readonly EffectiveHint[]): Promise<ThreadsTidyState | null> {
   if (!task || !keepsThreads(task) || !hints.some((h) => h.kind === 'threads-tidy' && h.enabled)) return null;
   try {
@@ -391,7 +402,7 @@ export async function prepareHintedSend(
   try {
     const config = opts.config !== undefined ? opts.config : await import('../config-manager.js').then((m) => m.getConfig()).catch(() => null);
     const hints = effectiveHints(config);
-    const { target, away, brief, threadsTidy, task } = await targetFor(sessionId, record, hints);
+    const { target, away, brief, threadsTidy, teamGuidance, task } = await targetFor(sessionId, record, hints);
     // A message composed upstream (the companion's voice hint) keeps those blocks.
     const upstream = opts.upstreamBlocks?.length ? splitHinted(message, opts.upstreamBlocks) : null;
     const words = upstream ? upstream.text : message;
@@ -403,7 +414,7 @@ export async function prepareHintedSend(
     // A task with Threads on keeps them too (filesUserAsks): its close and compaction read them there.
     const userAsk = usersWords ? await captureUserAsk(record, task, words, opts) : null;
     const plan = planHints({
-      hints, target, record, config, away, brief, threadsTidy, inChat: opts.inChat ?? opts.sentBy === 'person', message: words,
+      hints, target, record, config, away, brief, threadsTidy, teamGuidance, inChat: opts.inChat ?? opts.sentBy === 'person', message: words,
       ...(opts.requested ? { requested: opts.requested } : {}),
       ...(upstream ? { skip: new Set(upstream.kinds) } : {}),
       ...(opts.sentBy ? { sentBy: opts.sentBy } : {}),
@@ -501,9 +512,9 @@ export async function prepareStartHints<T extends StartHintData>(data: T, opts: 
     // A new conversation was told nothing, whatever a pre-seeded record holds.
     const record: HintRecord = { ...(data.taskId ? { taskId: data.taskId } : {}) } as HintRecord;
     const sid = data.preassignedSessionId ?? '';
-    const { target, away, brief, threadsTidy } = await targetFor(sid, record, hints);
+    const { target, away, brief, threadsTidy, teamGuidance } = await targetFor(sid, record, hints);
     const plan = planHints({
-      hints, target, record, config, away, brief, threadsTidy, skip: carried,
+      hints, target, record, config, away, brief, threadsTidy, teamGuidance, skip: carried,
       ...(personStart ? { sentBy: 'person' as const, inChat: true } : { sentBy: 'agent' as const }),
       message: parseHinted(data.message).text,
     });
@@ -595,8 +606,9 @@ export async function stateHintsAfterCompaction(
       : null;
     const brief = owner ? await briefFor(owner, target, hints) : null;
     const threadsTidy = owner ? await threadsTidyFor(owner, target, hints) : null;
+    const teamGuidance = await teamGuidanceOf(owner, hints);
     const plan = planHints({
-      hints, target, record, config: cfg, afterCompaction: true, away, brief, threadsTidy,
+      hints, target, record, config: cfg, afterCompaction: true, away, brief, threadsTidy, teamGuidance,
     });
     if (!plan.carried.length) return '';
     await writeHintState(record.claudeSessionId, (cur) => ({

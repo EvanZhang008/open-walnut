@@ -19,9 +19,13 @@ export interface ReflectionState {
   written: string[];
   /** Guidance lines someone removed: never written again (normalized text). */
   removed: string[];
+  /** Skills written today: at most SKILLS_PER_DAY_MAX. */
+  skills: { date: string; count: number };
 }
 
-export const SEEN_KEEP_MS = 30 * 24 * 3600_000;
+/** Longer than the user's messages are kept (user-asks: open 7 days, then closed 30), so one is never judged twice. */
+export const SEEN_KEEP_MS = 45 * 24 * 3600_000;
+export const SKILLS_PER_DAY_MAX = 1;
 /** Judge calls one node may spend in a day; past it the rest wait for tomorrow. */
 export const DAILY_CALLS_MAX = 40;
 
@@ -46,6 +50,7 @@ function normalize(raw: unknown, nowMs: number): ReflectionState {
     day: r.day?.date === today && Number.isFinite(r.day.calls) ? r.day : { date: today, calls: 0 },
     written: Array.isArray(r.written) ? r.written.filter((s): s is string => typeof s === 'string') : [],
     removed: Array.isArray(r.removed) ? r.removed.filter((s): s is string => typeof s === 'string') : [],
+    skills: r.skills?.date === today && Number.isFinite(r.skills.count) ? r.skills : { date: today, count: 0 },
   };
 }
 
@@ -65,11 +70,34 @@ export async function updateReflectionState<T>(nodeId: string, fn: (s: Reflectio
   return out;
 }
 
-/** Take one judge call from today's budget; false when it is spent. */
-export async function takeJudgeCall(nodeId: string, nowMs = Date.now(), max = DAILY_CALLS_MAX): Promise<boolean> {
+/**
+ * Claim one candidate before judging it, in one write: one call from today's budget, and the key
+ * marked seen (`pending`), so a pass that fails or a restart after the send never judges or sends it
+ * again. 'seen' when another pass claimed it, 'budget' when today's calls are spent.
+ */
+export async function claimCandidate(nodeId: string, key: string, nowMs = Date.now(), max = DAILY_CALLS_MAX): Promise<'ok' | 'seen' | 'budget'> {
   return updateReflectionState(nodeId, (s) => {
-    if (s.day.calls >= max) return false;
+    if (s.seen[key]) return 'seen';
+    if (s.day.calls >= max) return 'budget';
     s.day.calls++;
+    s.seen[key] = { at: new Date(nowMs).toISOString(), verdict: 'pending' };
+    return 'ok';
+  }, nowMs);
+}
+
+/** Mark keys seen with no judge call (a candidate the second look dropped). */
+export async function markSeen(nodeId: string, keys: readonly string[], verdict: string, nowMs = Date.now()): Promise<void> {
+  if (!keys.length) return;
+  await updateReflectionState(nodeId, (s) => {
+    for (const k of keys) s.seen[k] ??= { at: new Date(nowMs).toISOString(), verdict };
+  }, nowMs);
+}
+
+/** Take one of today's skill writes; false when spent. */
+export async function takeSkillWrite(nodeId: string, nowMs = Date.now()): Promise<boolean> {
+  return updateReflectionState(nodeId, (s) => {
+    if (s.skills.count >= SKILLS_PER_DAY_MAX) return false;
+    s.skills.count++;
     return true;
   }, nowMs);
 }

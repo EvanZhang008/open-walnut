@@ -7268,6 +7268,8 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   // never hands it the lead. Bounded: never holds the shutdown up.
   leaderLoopHandle?.stop()
   leaderLoopHandle = null
+  // The duty clocks (reflection's pass) stop with the server, so a restart in one process starts them again.
+  void import('../core/org/duties/registry.js').then((m) => m.stopOrgDuties()).catch(() => {})
   // Before the first await: every awaited step below runs through shutdownStep (shutdown-steps.ts),
   // named for the bail and bounded to fit inside the caller's bail when it has one.
   beginShutdownSteps({ bailMs: opts.bailMs })

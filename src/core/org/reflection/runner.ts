@@ -17,9 +17,11 @@ export async function reflectionPass(): Promise<number> {
   if (running) return 0;
   running = true;
   try {
-    const [{ nodesWithDuty }, { orgTasks }, { reflectForNode, defaultDeps }] = await Promise.all([
-      import('../duties/node-duties.js'), import('../org-store.js'), import('./pipeline.js'),
+    const [{ nodesWithDuty }, { orgTasks }, { reflectForNode, defaultDeps }, { isOrgEnabled }] = await Promise.all([
+      import('../duties/node-duties.js'), import('../org-store.js'), import('./pipeline.js'), import('../org-enabled.js'),
     ]);
+    // With the org off (Settings › Org) no duty runs: no model call, no correction.
+    if (!(await isOrgEnabled())) return 0;
     const nodes = await nodesWithDuty('reflection');
     if (!nodes.length) return 0;
     const all = await orgTasks();

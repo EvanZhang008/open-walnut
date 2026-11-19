@@ -7,7 +7,7 @@
  * Every duty is one manifest file `<id>.duty.ts` in this folder, listed in
  * registry.ts: the switch, the route, the op and the settings panel all read the registry, so a
  * new duty needs no code of its own outside its manifest and what it runs
- * (tests/core/org/lead-duties-registry.test.ts fails for a manifest the registry misses).
+ * (tests/core/org/org-duties-registry.test.ts fails for a manifest the registry misses).
  */
 import type { Task } from '../../types.js';
 

@@ -4,7 +4,7 @@
  * it generic"). One switch per registry entry the server lists, so a new duty needs no UI
  * of its own. Each switch saves at once; a refused save flips back and says why.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { fetchOrgDuties, setOrgDuty, type OrgDuty } from '@/api/org';
 import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch';
@@ -29,7 +29,10 @@ export function NodeDuties({ task }: { task: Pick<Task, 'id' | 'org_role' | 'org
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<{ id: string; text: string } | null>(null);
 
-  useEffect(() => { setCaps(task.org_duties ?? {}); }, [task.id, task.org_duties]);
+  // What the server last said, kept current: a refused save goes back to it, not to a copy taken at the click
+  // (a second switch, or an agent's change that arrived meanwhile, stays as it is).
+  const latest = useRef<Caps>(task.org_duties ?? {});
+  useEffect(() => { latest.current = task.org_duties ?? {}; setCaps(latest.current); }, [task.id, task.org_duties]);
   useEffect(() => {
     let live = true;
     fetchOrgDuties()
@@ -39,16 +42,21 @@ export function NodeDuties({ task }: { task: Pick<Task, 'id' | 'org_role' | 'org
   }, [role]);
 
   const flip = async (id: string, on: boolean) => {
-    const before = caps;
-    setCaps({ ...caps, [id]: { on, at: new Date().toISOString() } });
+    setCaps((now) => ({ ...now, [id]: { on, at: new Date().toISOString() } }));
     setBusy(id);
     setError(null);
     try {
       const node = await setOrgDuty(task.id, id, on);
-      setCaps(node.org_duties ?? {});
+      latest.current = node.org_duties ?? {};
+      setCaps((now) => ({ ...now, [id]: latest.current[id] ?? { on, at: new Date().toISOString() } }));
       log.info('org-duties', 'duty switched', { taskId: task.id, duty: id, on });
     } catch (err) {
-      setCaps(before);
+      setCaps((now) => {
+        const back = { ...now };
+        if (latest.current[id]) back[id] = latest.current[id];
+        else delete back[id];
+        return back;
+      });
       setError({ id, text: errText(err) });
       log.warn('org-duties', 'duty not switched', { taskId: task.id, duty: id, on, error: errText(err) });
     } finally {

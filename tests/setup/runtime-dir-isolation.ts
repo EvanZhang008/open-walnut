@@ -160,6 +160,11 @@ if (process.env.WALNUT_ORG_AUTOSTART === undefined) {
   process.env.WALNUT_ORG_AUTOSTART = '0'
 }
 
+// The org's duty clocks (src/core/org/duties/registry.ts) never run in a test server; a test calls a pass itself.
+if (process.env.WALNUT_ORG_DUTIES === undefined) {
+  process.env.WALNUT_ORG_DUTIES = '0'
+}
+
 // The mail plugin binds each mailbox to a mail router it makes when there is none; a test turns it on itself.
 if (process.env.WALNUT_MAIL_AUTO_ROUTER === undefined) {
   process.env.WALNUT_MAIL_AUTO_ROUTER = '0'

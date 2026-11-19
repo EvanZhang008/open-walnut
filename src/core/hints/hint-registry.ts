@@ -34,6 +34,7 @@ import { briefHintText, type BriefHintState } from '../sessions/brief-hint.js';
 import { threadHintText, threadsTidyText, type ThreadHintState, type ThreadsTidyState } from '../org/thread-capture.js';
 import { HINT_USER_SETTINGS, REPLY_LANGUAGE_DRIFT_TAIL, WALNUT_ONLY_KINDS } from './hint-origin.js';
 import { orgHandOnHint } from '../org/core-instructions.js';
+import { teamGuidanceText, type TeamGuidanceState } from '../org/reflection/team-guidance-hint.js';
 import { offLineOf } from './reply-language-quote.js';
 
 export const HINT_TRIGGERS: readonly MessageHintTrigger[] = [
@@ -68,6 +69,8 @@ export interface HintContentInput {
   threadsTidy?: ThreadsTidyState | null;
   /** The role of the session's task, as the audience rules see it (hint-send.ts hintTargetOf). */
   role?: MessageHintRole;
+  /** The guidance of the node that manages the session's task (org/reflection/team-guidance-hint.ts). */
+  teamGuidance?: TeamGuidanceState | null;
 }
 
 export interface HintRender { text: string; arg?: string }
@@ -241,6 +244,16 @@ const BUILT_IN: readonly HintSpec[] = [
     identity: (i) => (i.role === 'main' || i.role === 'lead' ? orgHandOnHint(i.role) : null),
     render: (i) => (i.role === 'main' || i.role === 'lead' ? { text: orgHandOnHint(i.role) } : null),
   },
+  {
+    kind: 'team-guidance',
+    label: 'Team guidance',
+    description: 'The lessons the reflection of the VP (or the CEO) that manages this task wrote for its team, one rule a line. At session start, after a compaction, and when the lines change; nothing when there are none.',
+    allowed: SCHEDULED,
+    // 2026-11-19, the user's lead for the user: the sessions under a VP read it when they start and after every compaction.
+    defaults: { enabled: true, triggers: ['session_start', 'after_compaction', 'on_change'], placement: 'after' },
+    identity: (i) => (i.teamGuidance ? i.teamGuidance.lines.join('\n') : null),
+    render: (i) => (i.teamGuidance ? { text: teamGuidanceText(i.teamGuidance) } : null),
+  },
 ];
 
 /** What a node hears while the user is away from its chat (org/user-away.ts); the rules are in its prompt (AWAY_INBOX_LINE). */
@@ -369,7 +382,7 @@ export function hintApplies(hint: EffectiveHint, target: HintTarget): boolean {
 /** Does any enabled hint restrict by role or agent (so the send must read the task)? */
 export function needsTaskForAudience(hints: readonly EffectiveHint[]): boolean {
   // user-away reads the task to know it is Main or a lead (org/user-away.ts).
-  return hints.some((h) => h.enabled && (h.audience.roles.length > 0 || h.audience.agents.length > 0 || h.kind === 'user-away' || h.kind === 'brief' || h.kind === 'threads' || h.kind === 'threads-tidy' || h.kind === 'hand-on'));
+  return hints.some((h) => h.enabled && (h.audience.roles.length > 0 || h.audience.agents.length > 0 || h.kind === 'user-away' || h.kind === 'brief' || h.kind === 'threads' || h.kind === 'threads-tidy' || h.kind === 'hand-on' || h.kind === 'team-guidance'));
 }
 
 export class HintSettingsError extends Error {

@@ -179,6 +179,7 @@ describe('no path sends a hint around the registry', () => {
       'core/human-inbox/walnut-letters/languages.ts': 'the language of Walnut\'s own letters to the user, not a hint',
       'core/hints/hint-registry.ts': 'the reply-language correction, due only on a drift (on_drift)',
       'core/hints/reply-language-drift.ts': 'judges a person\'s turn and a session\'s letters against it',
+      'core/org/reflection/pipeline.ts': 'the language a reflection writes its correction in, not a hint',
     };
     const users = all.filter((f) => /\breplyLanguageText\s*\(/.test(f.text)).map((f) => f.rel);
     expect(users.filter((f) => !READERS[f])).toEqual([]);

@@ -41,6 +41,18 @@ describe('reflection judge: quotes are checked', () => {
     expect(verifyFinding('I think it was fine', input).verdict).toBe('unverified')
     const failed = await judge({ ...input, taskTitle: 't', turnsText: '', momentAt: '2026-11-19T00:00:00Z', replyLanguage: null }, async () => { throw new Error('throttled') })
     expect(failed.verdict).toBe('unverified')
+    // An empty reply is asked once more, never more.
+    const replies = ['', answer({})]
+    const again = await judge({ ...input, taskTitle: 't', turnsText: '', momentAt: '2026-11-19T00:00:00Z', replyLanguage: null }, async () => replies.shift() ?? '')
+    expect(again.verdict).toBe('bad_decision')
+    let n = 0
+    await judge({ ...input, taskTitle: 't', turnsText: '', momentAt: '2026-11-19T00:00:00Z', replyLanguage: null }, async () => { n++; return '' })
+    expect(n).toBe(2)
+  })
+
+  it('drops a quote cut into crumbs', () => {
+    expect(quoteHolds('I kept ... package ... major ... 1.4', SESSION)).toBe(false)
+    expect(quoteHolds('I kept the package ... a much bigger change', SESSION)).toBe(true)
   })
 
   it('keeps same_as only when it names a listed line, and a skill only with a valid name', () => {

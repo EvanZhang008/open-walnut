@@ -54,7 +54,8 @@ export interface JudgeInput {
   replyLanguage: string | null;
 }
 
-export type CallModel = (system: string, user: string) => Promise<string>;
+/** One model call; `nodeId` is the node whose reflection pays for it (Usage). */
+export type CallModel = (system: string, user: string, nodeId?: string) => Promise<string>;
 
 const SIGNAL_LINE: Record<ReflectionSignal, string> = {
   frustration: 'The user\'s message reads frustrated or angry. Find out whether the session did something that earned it.',
@@ -109,7 +110,8 @@ export function normalizeForQuote(s: string): string {
 export function quoteHolds(quote: string, source: string): boolean {
   const src = normalizeForQuote(source);
   const pieces = quote.split(/\.{3}|\u2026/).map(normalizeForQuote).filter(Boolean);
-  if (pieces.reduce((n, p) => n + p.length, 0) < 8) return false;
+  // A quote cut into crumbs proves nothing: at most three pieces, each long enough to be the session's own words.
+  if (pieces.length > 3 || pieces.some((p) => p.length < 6) || pieces.reduce((n, p) => n + p.length, 0) < 8) return false;
   let from = 0;
   for (const p of pieces) {
     const at = src.indexOf(p, from);
@@ -156,18 +158,21 @@ export function verifyFinding(raw: string, input: Pick<JudgeInput, 'signal' | 's
 }
 
 /** The whole step: prompt, one call, the checked verdict. A call that fails is unverified, never a finding. */
-export async function judge(input: JudgeInput, callModel: CallModel): Promise<Verdict> {
-  let raw: string;
-  try {
-    raw = await callModel(JUDGE_SYSTEM, judgePrompt(input));
-  } catch (err) {
-    return { verdict: 'unverified', why: `the judge call failed: ${err instanceof Error ? err.message : String(err)}` };
+export async function judge(input: JudgeInput, callModel: CallModel, nodeId?: string): Promise<Verdict> {
+  // A reply with no JSON at all (2026-11-19 replay: an empty thinking block and no text) is asked once more.
+  for (let attempt = 0; ; attempt++) {
+    let raw: string;
+    try {
+      raw = await callModel(JUDGE_SYSTEM, judgePrompt(input), nodeId);
+    } catch (err) {
+      return { verdict: 'unverified', why: `the judge call failed: ${err instanceof Error ? err.message : String(err)}` };
+    }
+    if (raw.includes('{') || attempt >= 1) return verifyFinding(raw, input);
   }
-  return verifyFinding(raw, input);
 }
 
 /** The default model call: the configured main model, recorded in Usage under `reflection`. */
-export const callModelDefault = (taskId?: string): CallModel => async (system, user) => {
+export const callModelDefault = (): CallModel => async (system, user, taskId) => {
   const { sendMessage } = await import('../../../model/model.js');
   const result = await sendMessage({
     system, messages: [{ role: 'user', content: user }], config: { maxTokens: 3000 }, purpose: 'background',

@@ -42,13 +42,13 @@ const FRUSTRATION_RE = new RegExp([
 
 /** An opening that turns down what came before. */
 const OVERRULE_OPEN_RE = new RegExp('^\\s*(?:' + [
-  'no\\b', 'nope', 'wrong', 'not this', 'actually,? no', 'instead', 'rather', 'don\'t', 'do not',
+  'no\\b(?![ -]?(?:problem|worries|rush))', 'nope', 'wrong', 'not this', 'actually,? no', 'instead', 'rather', 'don\'t', 'do not',
   '\\u4e0d\\u662f', // bu shi
   '\\u4e0d\\u5bf9', // bu dui
   '\\u4e0d\\u8981', // bu yao
   '\\u4e0d\\u884c', // bu xing
   '\\u9519\\u4e86', // cuo le
-  '\\u522b', // bie
+  '\\u522b\\u8fd9\\u6837', // bie zhe yang (not like this); a bare bie opens many plain asks
   '\\u7b97\\u4e86', // suan le
 ].join('|') + ')', 'i');
 
@@ -57,13 +57,15 @@ const RECOMMENDS_RE = new RegExp([
   'i recommend', 'my recommendation', 'i suggest', 'i\'d suggest', 'my pick', 'option [a-d1-4]\\b', 'should i', 'do you want',
   'which (?:one|do you)', 'or would you', 'your call',
   '\\u6211\\u7684\\u5efa\\u8bae', // wo de jian yi
-  '\\u5efa\\u8bae', // jian yi
+  '\\u6211\\u5efa\\u8bae', // wo jian yi
+  '\\u5efa\\u8bae\\u4f60', // jian yi ni
+  '\\u5efa\\u8bae\\u662f', // jian yi shi
   '\\u63a8\\u8350', // tui jian
   '\\u8981\\u4e0d\\u8981', // yao bu yao
   '\\u4f60\\u5b9a', // ni ding
   '\\u7531\\u4f60\\u5b9a', // you ni ding
   '\\u9009\\u54ea', // xuan na
-  '\\u65b9\\u6848', // fang an
+  '\\u65b9\\u6848[a-d1-4\\u4e00\\u4e8c\\u4e09]', // fang an A / yi / er / san (a numbered option, not any plan)
 ].join('|'), 'i');
 
 /** A follow-up that asks again what the last answer should have said. */

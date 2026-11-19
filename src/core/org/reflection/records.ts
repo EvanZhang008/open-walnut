@@ -20,6 +20,8 @@ import type { ReflectionSignal } from './signals.js';
 
 export const GUIDANCE_LINES_MAX = 40;
 export const GUIDANCE_NEW_PER_DAY_MAX = 3;
+/** Places of the org skill registry the reflection leaves to the nodes themselves. */
+const SKILL_ROOM_KEPT = 5;
 const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 export function nodeKnowledgeDir(nodeId: string): string {
@@ -59,9 +61,19 @@ export async function readGuidance(nodeId: string): Promise<GuidanceLine[]> {
   return parseGuidance(await fsp.readFile(guidanceFileOf(nodeId), 'utf-8').catch(() => ''));
 }
 
+/** The lines as the file holds them now, or null when it cannot be read (gone, a lock, a sync mid-write). */
+export async function readGuidanceStrict(nodeId: string): Promise<GuidanceLine[] | null> {
+  try {
+    return parseGuidance(await fsp.readFile(guidanceFileOf(nodeId), 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Add one lesson unless an existing line or a removed one says it already (same text once
- * normalized), the day's new lines are spent, or the file is full. Returns whether it was added.
+ * normalized), the day's new lines are spent, or the file is full. The line is appended: what the
+ * user wrote in the file (a heading, notes, other lists) stays as it is.
  */
 export async function addGuidance(
   nodeId: string, nodeName: string, line: GuidanceLine, opts: { removed: readonly string[]; addedToday: number },
@@ -71,12 +83,15 @@ export async function addGuidance(
   if (opts.removed.includes(key)) return 'removed';
   const file = guidanceFileOf(nodeId);
   return withFileLock(file, async () => {
-    const lines = parseGuidance(await fsp.readFile(file, 'utf-8').catch(() => ''));
+    const had = await fsp.readFile(file, 'utf-8').catch(() => null);
+    const lines = parseGuidance(had ?? '');
     if (lines.some((l) => normalizeForQuote(l.text) === key)) return 'known';
     if (opts.addedToday >= GUIDANCE_NEW_PER_DAY_MAX) return 'day_full';
     if (lines.length >= GUIDANCE_LINES_MAX) return 'file_full';
     await fsp.mkdir(path.dirname(file), { recursive: true });
-    await fsp.writeFile(file, renderGuidance(nodeName, [...lines, line]), 'utf-8');
+    const row = renderGuidance(nodeName, [line]).split('\n').filter((l) => l.startsWith('- ')).join('\n');
+    if (had === null) await fsp.writeFile(file, renderGuidance(nodeName, [line]), 'utf-8');
+    else await fsp.appendFile(file, `${had.endsWith('\n') || !had ? '' : '\n'}${row}\n`, 'utf-8');
     return 'added';
   });
 }
@@ -131,11 +146,14 @@ export async function appendDayEntry(nodeId: string, nodeName: string, date: str
   return file;
 }
 
-/** A finding's skill, written to the org registry unless one of that name exists already. */
-export async function writeFindingSkill(nodeId: string, nodeName: string, skill: NonNullable<Finding['skill']>): Promise<'written' | 'exists' | 'refused'> {
-  const { listAgentSkills, writeAgentSkill } = await import('../../sessions/agent-skills.js');
-  if ((await listAgentSkills('org', nodeId)).some((s) => s.name === skill.name)) return 'exists';
+/** A finding's skill, written to the org registry unless one of that name exists already. Never throws. */
+export async function writeFindingSkill(nodeId: string, nodeName: string, skill: NonNullable<Finding['skill']>): Promise<'written' | 'exists' | 'no_room' | 'refused'> {
   try {
+    const { listAgentSkills, writeAgentSkill, AGENT_SKILLS_MAX } = await import('../../sessions/agent-skills.js');
+    const org = await listAgentSkills('org', nodeId);
+    if (org.some((s) => s.name === skill.name)) return 'exists';
+    // The registry is the org's: the reflection never takes its last places from the nodes' own writes.
+    if (org.length >= AGENT_SKILLS_MAX - SKILL_ROOM_KEPT) return 'no_room';
     await writeAgentSkill('org', nodeId, { name: skill.name, description: skill.description || `When: ${skill.name}`, content: skill.text },
       { by: `task:${nodeId}`, by_name: `${nodeName}'s reflection` });
     return 'written';
