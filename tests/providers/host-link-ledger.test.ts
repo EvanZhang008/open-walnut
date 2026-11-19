@@ -79,7 +79,8 @@ describe('host link ledger', () => {
     await loadHostLinkLedger(file, T)
     noteHostLinkDown('h', T)
     noteHostLinkUp('h', T + 1_000)
-    await flushHostLinkLedger()
+    // Written at the test's own time: at the wall clock a fixed T ages out of the ledger's 7 days.
+    await flushHostLinkLedger(T + 2_000)
     const data = JSON.parse(fs.readFileSync(file, 'utf8'))
     expect(data.hosts.h).toEqual({ closed: [{ start: T, end: T + 1_000 }] })
   })
