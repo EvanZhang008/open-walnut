@@ -272,8 +272,13 @@ permission prompts still name Walnut.
   machine's memory allows.
 - **The leader's side.** A plugin job is an actor of the journal; a task's session started on the host is
   adopted by the `task-start` drain; a task made away lands where the same caller's create lands online.
+- **A call handed over after a wait is never answered "may have run".** The daemon sends how long it will
+  wait; when that is too short for the op (a start needs ten seconds), the follower refuses before anything
+  runs and the caller retries.
 - **Not yet.** A task made on the leader cannot be started alone. A message that expects a reply needs the
-  leader. Every host does not yet get a follower by default (the file is large for a slow link).
+  leader. A task made away by a plugin that keeps its tasks off the board shows on the follower's own board
+  until the leader has taken it. Every host does not yet get a follower by default (the file is large for a
+  slow link).
 
 ## Compatibility
 
