@@ -29,9 +29,9 @@ type AuditEntry = Record<string, unknown> & {
 
 export type ListedJob = {
   id?: string; name?: string; description?: string; enabled?: boolean; ownWork?: boolean
-  schedule?: { everyMs?: number }
+  schedule?: { everyMs?: number; kind?: string; expr?: string; tz?: string }
   check?: { run?: string; host?: string; cwd?: string; timeoutSeconds?: number }
-  executor?: { type?: string; config?: { target?: unknown } }
+  executor?: { type?: string; config?: { target?: unknown; prompt?: unknown } }
   state?: {
     lastCheck?: AuditEntry; nextRunAtMs?: number; lastRunAtMs?: number; fireCount?: number; pausedAtMs?: number
     consecutiveErrors?: number; checkLog?: AuditEntry[]; fireLog?: AuditEntry[]
@@ -160,13 +160,20 @@ export function byActivity(jobs: ListedJob[]): ListedJob[] {
 }
 
 /** The fields every row carries, compact or full. */
+/** A scheduled routine that starts a session turn (no check script): trigger_list finds it by name, trigger_update changes its words. */
+export function isSessionRoutine(job: ListedJob): boolean {
+  return !job.check && job.executor?.type === 'session'
+}
+
 function headOf(job: ListedJob, extra: Record<string, unknown>, description: string | undefined) {
+  const cron = job.schedule?.kind === 'cron' && job.schedule.expr
   return {
     id: job.id,
     name: job.name,
+    ...(isSessionRoutine(job) && !('kind' in extra) ? { kind: 'routine' } : {}),
     ...extra,
     ...(description ? { description } : {}),
-    every: everyLabel(job.schedule?.everyMs),
+    ...(cron ? { at: `${job.schedule!.expr}${job.schedule!.tz ? ` (${job.schedule!.tz})` : ''}` } : { every: everyLabel(job.schedule?.everyMs) }),
     host: job.check?.host ?? '__local__',
     enabled: job.enabled === true,
     state: triggerRunState(job),
@@ -204,6 +211,8 @@ export function fullRow(job: ListedJob, extra: Record<string, unknown> = {}): Re
     ...(target && !('target' in extra) ? { task: target } : {}),
     run: job.check?.run,
     ...(job.check?.cwd ? { cwd: job.check.cwd } : {}),
+    // What the session is told when it runs: the words trigger_update's prompt changes.
+    ...(typeof job.executor?.config?.prompt === 'string' ? { prompt: job.executor.config.prompt } : {}),
     ...timeFields(job),
     fires: job.state?.fireCount ?? 0,
     ...(job.state?.lastCheck ? { lastCheck: job.state.lastCheck } : {}),

@@ -147,6 +147,25 @@ describe('trigger_list output', () => {
   })
 })
 
+describe('trigger_list finds a scheduled routine by name', () => {
+  it('lists a routine that starts a session turn when named, with its time and, in full, its prompt', async () => {
+    const op = getOp('trigger_list')!
+    const jobs = [
+      { id: 'r', name: 'Marina VP daily reflection', enabled: true, state: {},
+        schedule: { kind: 'cron', expr: '0 20 * * *', tz: 'America/Los_Angeles' },
+        executor: { type: 'session', config: { target: 'vp-1', prompt: 'Reflect on the day.' } } },
+      { id: 'a', name: 'PR comments', enabled: true, schedule: { kind: 'every', everyMs: 300_000 }, check: { run: 'bash a.sh' }, state: {} },
+    ]
+    const call = async () => ({ jobs })
+    // Unnamed: triggers only, as before.
+    expect(((await op.handler!({}, call)) as { count: number }).count).toBe(1)
+    const named = await op.handler!({ name: 'reflection' }, call) as { triggers: Array<Record<string, unknown>> }
+    expect(named.triggers).toEqual([expect.objectContaining({ id: 'r', kind: 'routine', at: '0 20 * * * (America/Los_Angeles)' })])
+    const full = await op.handler!({ name: 'reflection', full: true }, call) as { triggers: Array<Record<string, unknown>> }
+    expect(full.triggers[0]).toMatchObject({ id: 'r', prompt: 'Reflect on the day.' })
+  })
+})
+
 describe('trigger_list state', () => {
   it('says armed, paused (with when) or stopped for each trigger', async () => {
     const op = getOp('trigger_list')!

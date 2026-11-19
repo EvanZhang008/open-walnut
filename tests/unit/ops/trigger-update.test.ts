@@ -86,10 +86,25 @@ describe('trigger_update', () => {
     expect(String(out.outcome)).toContain('It is still stopped: trigger_resume \'{"id":"t1"}\' starts it again.')
   })
 
+  it('changes the words of a scheduled routine that starts a session turn, never its schedule (a VP\'s nightly reflection)', async () => {
+    const routine = () => server({
+      id: 'r2', name: 'Marina VP daily reflection', enabled: true, state: {},
+      schedule: { kind: 'cron', expr: '0 20 * * *', tz: 'America/Los_Angeles' },
+      executor: { type: 'session', config: { target: 'vp-1', prompt: 'Reflect on the day.' } },
+    })
+    const s = routine()
+    const out = await update({ id: 'r2', prompt: 'Reflect on the day; read today\'s reflection record first.' }, s)
+    expect(s.calls[1]).toMatchObject({ method: 'PATCH', path: '/routines/r2', body: { executor: { type: 'session', config: { target: 'vp-1', prompt: 'Reflect on the day; read today\'s reflection record first.' } } } })
+    expect(out).toMatchObject({ id: 'r2', changed: ['prompt'] })
+    const t = routine()
+    await expect(update({ id: 'r2', every: '5m' }, t)).rejects.toThrow(/only prompt, description, name change here, not every/)
+    expect(t.calls.map((c) => c.method)).toEqual(['GET'])
+  })
+
   it('refuses nothing to change, a plain routine, an unknown id, a bad interval, a long description, a template command', async () => {
     await expect(update({ id: 't1' }, server(trigger()))).rejects.toThrow(/nothing to change/)
     const plain = server({ id: 'r1', name: 'Digest', enabled: true, state: {}, schedule: { kind: 'every', everyMs: 60_000 } })
-    await expect(update({ id: 'r1', every: '5m' }, plain)).rejects.toThrow(/not a trigger/)
+    await expect(update({ id: 'r1', every: '5m' }, plain)).rejects.toThrow(/starts no session turn/)
     expect(plain.calls.map((c) => c.method)).toEqual(['GET'])
     await expect(update({ id: 'nope', every: '5m' }, server(null))).rejects.toThrow(/not found/)
     await expect(update({ id: 't1', every: 'often' }, server(trigger()))).rejects.toThrow(/every must be/)

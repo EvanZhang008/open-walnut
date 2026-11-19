@@ -6,6 +6,7 @@
 import path from 'node:path';
 import { WALNUT_HOME } from '../../../constants.js';
 import { readJsonFile, updateJsonFile } from '../../../utils/fs.js';
+import { TASK_ID_RE } from '../../knowledge/paths.js';
 
 export interface ReflectionState {
   version: 1;
@@ -21,6 +22,8 @@ export interface ReflectionState {
   removed: string[];
   /** Skills written today: at most SKILLS_PER_DAY_MAX. */
   skills: { date: string; count: number };
+  /** The last local date whose record went to the node's own session (nightly.ts). */
+  nightly?: string;
 }
 
 /** Longer than the user's messages are kept (user-asks: open 7 days, then closed 30), so one is never judged twice. */
@@ -29,7 +32,6 @@ export const SKILLS_PER_DAY_MAX = 1;
 /** Judge calls one node may spend in a day; past it the rest wait for tomorrow. */
 export const DAILY_CALLS_MAX = 40;
 
-const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 export const stateFileOf = (nodeId: string): string => {
   if (!TASK_ID_RE.test(nodeId)) throw new Error(`Invalid node id: ${nodeId}`);
   return path.join(WALNUT_HOME, 'org-reflection', `${nodeId}.json`);
@@ -51,6 +53,7 @@ function normalize(raw: unknown, nowMs: number): ReflectionState {
     written: Array.isArray(r.written) ? r.written.filter((s): s is string => typeof s === 'string') : [],
     removed: Array.isArray(r.removed) ? r.removed.filter((s): s is string => typeof s === 'string') : [],
     skills: r.skills?.date === today && Number.isFinite(r.skills.count) ? r.skills : { date: today, count: 0 },
+    ...(typeof r.nightly === 'string' ? { nightly: r.nightly } : {}),
   };
 }
 

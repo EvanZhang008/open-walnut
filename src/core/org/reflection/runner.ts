@@ -2,7 +2,8 @@
  * The reflection's clock: every few minutes, one pass for each open node with the switch on
  * (duties/reflection.duty.ts), one node at a time, never two passes at once. The
  * switch is read at each pass, so turning it on or off needs no restart; a node seen on for the
- * first time starts from now (state.ts `since`), never from its history.
+ * first time starts from now (state.ts `since`), never from its history. After 19:45 local, each
+ * node's day record goes to its own session once (nightly.ts).
  */
 import { log } from '../../../logging/index.js';
 import { orgDisplayTitle } from '../org-tree.js';
@@ -32,6 +33,10 @@ export async function reflectionPass(): Promise<number> {
         const r = await reflectForNode(node, orgDisplayTitle(node), all, deps);
         findings += r.findings.filter((f) => f.verdict.verdict === 'bad_decision').length;
         if (r.candidates) log.task.info('reflection: pass', { nodeId: node.id, candidates: r.candidates, judged: r.judged, findings });
+        // Once a night, the day's record to the node's own session (nightly.ts).
+        const { nightlyNote } = await import('./nightly.js');
+        const night = await nightlyNote(node, orgDisplayTitle(node), Date.now(), deps.send);
+        if (night === 'sent' || night === 'failed') log.task.info('reflection: the day\'s record to the node', { nodeId: node.id, result: night });
       } catch (err) {
         log.task.warn('reflection: pass failed for a node', { nodeId: node.id, error: err instanceof Error ? err.message : String(err) });
       }

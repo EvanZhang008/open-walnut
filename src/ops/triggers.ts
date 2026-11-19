@@ -18,7 +18,7 @@ import { ownJobWatchWarning } from '../core/routines/own-job-watch.js'
 import { OWN_WAIT_TURN_END } from '../lib/turn-end-marker.js'
 import {
   byActivity, compactRow, everyLabel, filterWords, fullRow, matchesFilter, pageLimit, MAX_LIMIT,
-  type ListedJob, type ListFilter,
+  isSessionRoutine, type ListedJob, type ListFilter,
 } from './trigger-list-rows.js'
 
 const CHECK_CONTRACT =
@@ -281,7 +281,9 @@ defineOp({
     + '`task` (what would wake that task), `state:"armed"`; e.g. {"name":"reflection","task":"<the VP\'s task id>"}. '
     + `At most \`limit\` rows (default 25, up to ${MAX_LIMIT}); \`count\` is how many matched and \`more\` how many `
     + 'were left out. `full:true` adds the script, the last check object and the recent check history (default '
-    + 'limit 5 then): read it for one trigger you are debugging. Use it to answer "what are you watching?" and to '
+    + 'limit 5 then) and the prompt the session is told: read it for one trigger you are debugging. With `name`, '
+    + 'the scheduled routines that start a session turn match too (kind "routine", their time in `at`): find a '
+    + 'routine\'s prompt this way, change it with trigger_update. Use it to answer "what are you watching?" and to '
     + 'check whether a trigger you created is healthy; one that has never fired may be a script that never says '
     + 'fire. With task: only what would wake that task (and with team:true every open task under it): its '
     + 'triggers, its plain timed routines (cron, kind "routine"), and its wake clocks; team_stop with '
@@ -316,7 +318,8 @@ defineOp({
     const jobs = (Array.isArray(body?.jobs) ? body.jobs : []) as ListedJob[]
     const matched = byActivity(jobs
       // A task's view lists its plain routines too: they wake it just the same.
-      .filter((job) => aimed ? aimed.has(String(job.id)) : !!job.check && typeof job.check.run === 'string')
+      // Named, a scheduled routine that starts a session is found too: its prompt is what trigger_update changes.
+      .filter((job) => aimed ? aimed.has(String(job.id)) : (!!job.check && typeof job.check.run === 'string') || (!!filter.name && isSessionRoutine(job)))
       .filter((job) => matchesFilter(job, filter)))
     const triggers = matched.slice(0, limit).map((job) => {
       const extra = aimed ? { kind: aimed.get(String(job.id))?.kind, target: aimed.get(String(job.id))?.target } : {}
@@ -530,6 +533,9 @@ type TriggerJob = NonNullable<RoutineJobBody['job']> & {
   executor?: { type?: string; config?: Record<string, unknown> }
 }
 
+/** What trigger_update changes on a scheduled routine: its words, never a check or its schedule. */
+const ROUTINE_UPDATE_FIELDS = ['prompt', 'description', 'name'] as const
+
 const UPDATE_LABELS: Record<(typeof TRIGGER_UPDATE_FIELDS)[number], string> = {
   every: 'interval', timeoutSeconds: 'time limit', maxFiresPerDay: 'fire budget', prompt: 'prompt',
   description: 'description', name: 'name', run: 'command', cwd: 'directory', watches: 'what it watches',
@@ -546,7 +552,9 @@ defineOp({
     + '(raise timeoutSeconds), a source that needs a slower or faster poll, a fire budget that holds fires back, '
     + 'a prompt that asks the wrong thing. A new trigger in its place would start with nothing seen, so change '
     + 'this one. A new command or time limit is tried first with trigger_test. A paused or stopped '
-    + 'trigger stays off; trigger_resume starts it again.',
+    + 'trigger stays off; trigger_resume starts it again. A scheduled routine that starts a session turn (a '
+    + 'VP\'s nightly reflection, kind "routine" in trigger_list) takes prompt, description and name here; its '
+    + 'schedule stays as it is.',
   input: {
     id: z.string().min(1).describe('Trigger (routine) id, as returned by trigger_create / trigger_list'),
     every: z.union([z.number().int().positive(), z.string().min(1)]).optional()
@@ -568,12 +576,17 @@ defineOp({
     const path = `/routines/${encodeURIComponent(id)}`
     const current = (await call('GET', path) as { job?: TriggerJob } | undefined)?.job
     if (!current) throw new Error(`no trigger ${id}; trigger_list shows the ids`)
-    if (!current.check) throw new Error(`${id} ("${current.name ?? ''}") is a scheduled routine, not a trigger`)
     const given = TRIGGER_UPDATE_FIELDS.filter((f) => (args as Record<string, unknown>)[f] !== undefined)
+    if (!current.check) {
+      // A scheduled routine (no check script): only its words change here; its schedule is the routine's own.
+      const fixed = given.filter((f) => !ROUTINE_UPDATE_FIELDS.includes(f as never))
+      if (current.executor?.type !== 'session') throw new Error(`${id} ("${current.name ?? ''}") is a scheduled routine that starts no session turn; change it in Routines`)
+      if (fixed.length) throw new Error(`${id} ("${current.name ?? ''}") is a scheduled routine: only ${ROUTINE_UPDATE_FIELDS.join(', ')} change here, not ${fixed.join(', ')}`)
+    }
     if (given.length === 0) {
       throw new Error(`nothing to change: pass at least one of ${TRIGGER_UPDATE_FIELDS.join(', ')}`)
     }
-    if (current.check.template && (args.run !== undefined || args.cwd !== undefined)) {
+    if (current.check?.template && (args.run !== undefined || args.cwd !== undefined)) {
       throw new Error(`${id} is built from a plugin template, so Walnut writes its command; change its other fields here`)
     }
     const patch: Record<string, unknown> = {}
