@@ -35,9 +35,10 @@ export interface HostServerHost {
   keepStreamLane?(on: boolean): void
   /**
    * This link reaches the same daemon process as this server's own daemon (the hello's instance id,
-   * daemon-connection.ts sameDaemonHosts): the host row is this computer.
+   * daemon-connection.ts sameDaemonHosts): the host row is this computer. null: not known yet (this
+   * computer's own daemon is not linked).
    */
-  reachesThisComputer?(): Promise<boolean>
+  reachesThisComputer?(): Promise<boolean | null>
   /** The daemon process this link reached (its hello instanceId): what it was sent before, it still holds. */
   readonly daemonInstanceId?: string | null
 }
@@ -119,6 +120,8 @@ export interface HostServerView {
   program?: 'replica' | 'host-server' | 'fallback'
   /** While it runs: why it runs an older build than this Mac's (that one did not answer; Retry tries it again). */
   notice?: string
+  /** The host runs one only because of the default (the experiment), not by its person's switch or the tunnel. */
+  byDefault?: true
   /** Phase `not-eligible`: the condition the host did not meet, when it was looked at, and when it is looked at again (none: at its next connect or Retry). */
   gate?: { reason: FollowerGateReason; checkedAt: number; recheckAt?: number }
   /** Phase `error`: when Walnut tries again by itself (none: it waits for Retry or the next connect). */

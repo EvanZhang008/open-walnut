@@ -3862,7 +3862,12 @@ export class DaemonConnection {
       openStream: (to: 'follower', purpose?: string) => conn.openStream(to, purpose),
       keepStreamLane: (on: boolean) => conn.keepStreamLane(on),
       // The daemon's own word, never a name: this link and this computer's own reach one daemon process.
-      reachesThisComputer: async () => conn.hostKey !== '__local__' && (await conn.sameDaemonHosts()).includes('__local__'),
+      // Not known (null) while this computer's own daemon is not linked and no record says so.
+      reachesThisComputer: async (): Promise<boolean | null> => {
+        if (conn.hostKey === '__local__') return false
+        if ((await conn.sameDaemonHosts()).includes('__local__')) return true
+        return pooledFor('__local__')?.liveInstanceId ? false : null
+      },
     }
   }
 

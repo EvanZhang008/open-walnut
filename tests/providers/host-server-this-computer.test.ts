@@ -62,8 +62,14 @@ describe('a host row that is this computer', () => {
     expect(await local.hostServerHandle().reachesThisComputer()).toBe(false)
   })
 
-  it('says nothing while this computer\'s own daemon is not linked', async () => {
+  it('is unknown (null) while this computer\'s own daemon is not linked yet, as at a start', async () => {
     const self = await connect('selfbox', mine)
-    expect(await self.hostServerHandle().reachesThisComputer()).toBe(false)
+    const lab = await connect('lab', elsewhere)
+    expect(await self.hostServerHandle().reachesThisComputer()).toBeNull()
+    expect(await lab.hostServerHandle().reachesThisComputer()).toBeNull()
+    // Once it is linked, each is told.
+    await connect('__local__', mine)
+    expect(await self.hostServerHandle().reachesThisComputer()).toBe(true)
+    expect(await lab.hostServerHandle().reachesThisComputer()).toBe(false)
   })
 })

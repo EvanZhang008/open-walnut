@@ -130,7 +130,8 @@ class StoppingHere extends Error {}
  * system, or its proof boot failed there), not a passing problem.
  */
 class UntilRetry extends Error {
-  constructor(message: string, readonly noBuild: boolean) { super(message) }
+  /** `proofBoot`: the file's own check failed on the host (a full disk or an out of memory end may pass). */
+  constructor(message: string, readonly noBuild: boolean, readonly proofBoot = false) { super(message) }
 }
 
 export function createHostServerManager(deps: ManagerDeps) {
@@ -143,21 +144,21 @@ export function createHostServerManager(deps: ManagerDeps) {
   const hard = new Set<string>()
   /** The settings each host's last reconcile read, so a config change elsewhere does not redo a setup that waits. */
   const lastSettings = new Map<string, string>()
-  /** Whether the experiment was on for the host's last pass (ManagerDeps.everyHost). */
-  const everyHostOf = new Map<string, boolean>()
   /** The host's setup failed in this pass: why, and whether it tries again by itself (Walnut Health is told once per pass). */
   const failedNow = new Map<string, { message: string; triesAgain: boolean }>()
   /** A setup that runs again by itself, later and later (try-later.ts: a refused login, a failed start, a gate). */
   const tryLater = createTryLater({
     ...(deps.tryLaterMs ? { schedules: deps.tryLaterMs } : {}),
     now: deps.now,
-    run: (hostKey) => { if (hosts.get(hostKey)?.connected) void reconcile(hostKey) },
+    // A failed proof boot is tried again as Retry does: the install is sent again.
+    run: (hostKey, kind) => { if (hosts.get(hostKey)?.connected) void reconcile(hostKey, kind === 'proof' ? { retry: true } : {}) },
   })
-  /** The view's sentence for a setup that runs again later, and when. */
-  function retryingLater(hostKey: string, kind: TryLaterKind, message: string): { message: string; at: number } {
-    const { ms, at } = tryLater.later(hostKey, kind)
+  /** The view's sentence for a setup that runs again later, and when (none past the end of a ladder that stops). */
+  function retryingLater(hostKey: string, kind: TryLaterKind, message: string, o: { stopAtEnd?: boolean } = {}): { message: string; at: number | undefined } {
+    const next = tryLater.later(hostKey, kind, o)
     const end = /[.!?]$/.test(message) ? '' : '.'
-    return { message: `${message}${end} Walnut ${kind === 'gate' ? 'looks' : 'tries'} again in ${inWords(ms)}.`, at }
+    if (!next) return { message: `${message}${end} Walnut stopped trying by itself: a newer build, a reconnect or Retry tries again.`, at: undefined }
+    return { message: `${message}${end} Walnut ${kind === 'gate' || kind === 'proof' ? 'looks' : 'tries'} again in ${inWords(next.ms)}.`, at: next.at }
   }
   const polls = new Map<string, ReturnType<typeof setInterval>>()
   /** Per host set up: the copy target, the spec last sent (for a tunnel retry), the server pid the target last heard of. */
@@ -287,7 +288,7 @@ export function createHostServerManager(deps: ManagerDeps) {
    * that failed there is not sent again until `retry` (the person's Retry): the
    * same file would fail the same way, after the same upload.
    */
-  async function ensureInstalled(host: HostServerHost, retry: boolean, known?: HostTarget): Promise<{ id: string; root: string; rootSpec: string; program: HostProgram; dataDir: string; logFile: string; runDir: string }> {
+  async function ensureInstalled(host: HostServerHost, retry: boolean, known?: HostTarget, queued = false): Promise<{ id: string; root: string; rootSpec: string; program: HostProgram; dataDir: string; logFile: string; runDir: string }> {
     const rootSpec = checkHostRoot(deps.hostRoot ?? HOST_ROOT)
     const remoteHome = rootSpec.startsWith('$HOME') ? (await host.runRemoteScript('printf %s "$HOME"', 10_000)).trim() : ''
     if (rootSpec.startsWith('$HOME') && !remoteHome.startsWith('/')) throw new Error('the host did not say where its home is')
@@ -320,50 +321,74 @@ export function createHostServerManager(deps: ManagerDeps) {
     if (state.state === 'ready') { set(host.hostKey, { install: state }); return installed }
     if (state.state === 'failed' && !retry) {
       set(host.hostKey, { install: state })
-      throw new UntilRetry(`the install of Walnut ${id} on the host failed: ${state.message}. Press Retry to install it again.`, installCannotRun(state.message))
+      throw new UntilRetry(`the install of Walnut ${id} on the host failed: ${state.message}. Press Retry to install it again.`, installCannotRun(state.message), installCannotRun(state.message))
     }
-    if (state.state !== 'running') {
-      // A system no build of the file is made for: nothing to send, until Retry.
-      const probe = known ? null : await host.runRemoteScript(targetProbeScript(), 15_000)
-      let target: HostTarget
-      try { target = known ?? parseHostTarget(probe!) } catch (err) { throw new UntilRetry(err instanceof Error ? err.message : String(err), true) }
-      set(host.hostKey, { phase: 'installing', message: `Getting Walnut ${id} for ${target.target}.`, install: { state: 'running' } })
-      const file = await deps.hostFile.file(target.target, (message) => set(host.hostKey, { message }))
-        .catch(noFileYet)
-      const mb = (n: number) => Math.max(1, Math.round(n / 2 ** 20))
-      const sending = (pct?: number) => `Sending Walnut ${id} for ${target.target} to the host (${pct === undefined ? '' : `${pct}%, `}${mb(file.gz.length)} MB).`
-      set(host.hostKey, { message: sending() })
-      // The daemon deploy's path: one SSH stream, small chunks over their own connections when a
-      // proxy kills it; one already there (an earlier try) is not sent again. Those connections
-      // are not the daemon link's, so the upload goes on while the link drops and comes back.
-      const gzPath = `${root}/incoming/${id}.gz`
-      let shown = -1
-      const onProgress = (sent: number, total: number): void => {
-        const pct = total > 0 ? Math.floor((sent / total) * 100) : 0
-        if (pct === shown || (pct - shown < 2 && pct < 100)) return
-        shown = pct
-        set(host.hostKey, { message: sending(pct), upload: { sent, total } })
+    // An install made for the default waits its turn: one host at a time, so a flag turned on (or a
+    // restart with it) never sends the file to every host at once over links sessions share.
+    let release: (() => void) | null = null
+    try {
+      if (state.state !== 'running') {
+        if (queued) {
+          set(host.hostKey, { phase: 'installing', message: 'Waiting for its turn: Walnut installs on one host at a time for hosts on by default.' })
+          release = await installTurn()
+          if (!hosts.get(host.hostKey)?.connected) throw new Error('the host went away while its install waited for its turn')
+          host = hosts.get(host.hostKey) ?? host
+        }
+        // A system no build of the file is made for: nothing to send, until Retry.
+        const probe = known ? null : await host.runRemoteScript(targetProbeScript(), 15_000)
+        let target: HostTarget
+        try { target = known ?? parseHostTarget(probe!) } catch (err) { throw new UntilRetry(err instanceof Error ? err.message : String(err), true) }
+        set(host.hostKey, { phase: 'installing', message: `Getting Walnut ${id} for ${target.target}.`, install: { state: 'running' } })
+        const file = await deps.hostFile.file(target.target, (message) => set(host.hostKey, { message }))
+          .catch(noFileYet)
+        const mb = (n: number) => Math.max(1, Math.round(n / 2 ** 20))
+        const sending = (pct?: number) => `Sending Walnut ${id} for ${target.target} to the host (${pct === undefined ? '' : `${pct}%, `}${mb(file.gz.length)} MB).`
+        set(host.hostKey, { message: sending() })
+        // The daemon deploy's path: one SSH stream, small chunks over their own connections when a
+        // proxy kills it; one already there (an earlier try) is not sent again. Those connections
+        // are not the daemon link's, so the upload goes on while the link drops and comes back.
+        const gzPath = `${root}/incoming/${id}.gz`
+        let shown = -1
+        const onProgress = (sent: number, total: number): void => {
+          const pct = total > 0 ? Math.floor((sent / total) * 100) : 0
+          if (pct === shown || (pct - shown < 2 && pct < 100)) return
+          shown = pct
+          set(host.hostKey, { message: sending(pct), upload: { sent, total } })
+        }
+        if (!(await host.seedFromDaemon?.(file.sha256, gzPath).catch(() => false))) await host.uploadFile(gzPath, file.gz, { sha256: file.gzSha256, onProgress })
+        const script = fileInstallScript({ id, version: file.version, commit: file.commit, sha256: file.sha256, host: target.describe, dataDir: dirs.dataDir, ...(deps.hostRoot ? { root: rootSpec } : {}) })
+        await host.uploadFile(`${root}/incoming/${id}.install.sh`, Buffer.from(script))
+        await host.runRemoteScript(launchScript(id, rootSpec), 15_000)
+        set(host.hostKey, { message: `Installing Walnut ${id} on the host.` })
+      } else {
+        set(host.hostKey, { phase: 'installing', message: `Installing Walnut ${id} on the host.`, install: state })
       }
-      if (!(await host.seedFromDaemon?.(file.sha256, gzPath).catch(() => false))) await host.uploadFile(gzPath, file.gz, { sha256: file.gzSha256, onProgress })
-      const script = fileInstallScript({ id, version: file.version, commit: file.commit, sha256: file.sha256, host: target.describe, dataDir: dirs.dataDir, ...(deps.hostRoot ? { root: rootSpec } : {}) })
-      await host.uploadFile(`${root}/incoming/${id}.install.sh`, Buffer.from(script))
-      await host.runRemoteScript(launchScript(id, rootSpec), 15_000)
-      set(host.hostKey, { message: `Installing Walnut ${id} on the host.` })
-    } else {
-      set(host.hostKey, { phase: 'installing', message: `Installing Walnut ${id} on the host.`, install: state })
+      const until = deps.now() + INSTALL_TIMEOUT_MS
+      for (;;) {
+        await new Promise((r) => setTimeout(r, deps.installPollMs ?? 2_000))
+        // The install runs on the host by itself: a link that drops for a moment is waited for.
+        if (!(await linkBack(host.hostKey))) throw new Error('the host went away during the install')
+        host = hosts.get(host.hostKey) ?? host
+        state = parseInstallState(await host.runRemoteScript(stateScript(id, rootSpec), 15_000))
+        if (state.state === 'ready') { set(host.hostKey, { install: state }); return installed }
+        if (state.state === 'failed') { set(host.hostKey, { install: state }); throw new UntilRetry(`the install of Walnut ${id} on the host failed: ${state.message}`, installCannotRun(state.message), installCannotRun(state.message)) }
+        if (state.state === 'absent') throw new Error(`the install on the host stopped without a word (see ${root}/incoming on the host)`)
+        if (deps.now() > until) throw new Error('the install on the host took more than 5 minutes')
+      }
+    } finally {
+      release?.()
     }
-    const until = deps.now() + INSTALL_TIMEOUT_MS
-    for (;;) {
-      await new Promise((r) => setTimeout(r, deps.installPollMs ?? 2_000))
-      // The install runs on the host by itself: a link that drops for a moment is waited for.
-      if (!(await linkBack(host.hostKey))) throw new Error('the host went away during the install')
-      host = hosts.get(host.hostKey) ?? host
-      state = parseInstallState(await host.runRemoteScript(stateScript(id, rootSpec), 15_000))
-      if (state.state === 'ready') { set(host.hostKey, { install: state }); return installed }
-      if (state.state === 'failed') { set(host.hostKey, { install: state }); throw new UntilRetry(`the install of Walnut ${id} on the host failed: ${state.message}`, installCannotRun(state.message)) }
-      if (state.state === 'absent') throw new Error(`the install on the host stopped without a word (see ${root}/incoming on the host)`)
-      if (deps.now() > until) throw new Error('the install on the host took more than 5 minutes')
-    }
+  }
+
+  /** The turn of installs made for the default: resolves with the release once every earlier one ended. */
+  let installTail: Promise<void> = Promise.resolve()
+  async function installTurn(): Promise<() => void> {
+    let release!: () => void
+    const mine = new Promise<void>((r) => { release = r })
+    const before = installTail
+    installTail = before.then(() => mine)
+    await before
+    return release
   }
 
   async function exposeSettingsFor(settings: HostServerSettings): Promise<{ enabled: boolean; definition: ExposeProviderDefinition | null; options: Record<string, string> }> {
@@ -508,13 +533,24 @@ export function createHostServerManager(deps: ManagerDeps) {
     // Read while this server began to stop (its plugins going): what they say is not the person's.
     if (await deps.frozen?.()) return
     const everyHost = (await deps.everyHost?.()) === true
-    everyHostOf.set(hostKey, everyHost)
-    // A config change elsewhere (favorites, ordering) does not redo a setup that waits to try again
-    // (try-later.ts) while this host's own settings are the same: the wait keeps its pace.
-    const print = JSON.stringify(settings)
+    // Without the experiment only a refused login waits to run again by itself (as before it):
+    // a wait the experiment set is cancelled when it goes off.
     const waits = tryLater.pending(hostKey)
-    if (soft && (waits === 'failed' || waits === 'gate') && lastSettings.get(hostKey) === print) return
+    const lastWait = tryLater.lastKind(hostKey)
+    if (!everyHost && lastWait && lastWait !== 'login') tryLater.clear(hostKey)
+    // A reconnect or Retry after a ladder that stopped (no timer left) starts it from its first step.
+    else if (!soft && !waits && lastWait === 'failed') tryLater.clear(hostKey)
+    // A config change elsewhere (favorites, ordering) does not redo a setup that waits to try again
+    // (try-later.ts), nor one that stopped trying by itself or is not eligible, while this host's own
+    // settings and the experiment are the same: the wait keeps its pace, a stop waits for a connect or Retry.
+    const print = JSON.stringify({ settings, everyHost })
+    const resting = (waits && waits !== 'login') || lastWait === 'failed' || view(hostKey).phase === 'not-eligible'
+    if (soft && everyHost && resting && lastSettings.get(hostKey) === print) return
     lastSettings.set(hostKey, print)
+    // Whether the host follows the default only (fleet and replica lists read it: such a host waiting or not eligible is no problem).
+    const v0 = view(hostKey)
+    if (settings?.byDefault && !settings.carriesTunnel) v0.byDefault = true
+    else delete v0.byDefault
     if (settings?.keepAsConfigured) {
       log.session.info('host server: left as configured', { host: hostKey, why: settings.keepAsConfigured })
       return
@@ -538,10 +574,20 @@ export function createHostServerManager(deps: ManagerDeps) {
     }
     // A host row that is really this computer (its link reaches this computer's own daemon) runs
     // no second Walnut by default: this server is the one there. The person's switch still can.
-    if (settings!.byDefault && !settings!.carriesTunnel && await host.reachesThisComputer?.().catch(() => false)) {
-      if (!(await takeDown(hostKey, host))) return
-      notEligible(hostKey, 'this-computer', 'No Walnut server runs on this host by default: it is this computer, which runs Walnut already.')
-      return
+    // Not known yet (this computer's own daemon is not linked yet, as at a start): nothing is
+    // installed on an unknown; it is looked at again soon.
+    if (settings!.byDefault && !settings!.carriesTunnel) {
+      const self = host.reachesThisComputer ? await host.reachesThisComputer().catch(() => null) : false
+      if (self === true) {
+        if (!(await takeDown(hostKey, host))) return
+        notEligible(hostKey, 'this-computer', 'No Walnut server runs on this host by default: it is this computer, which runs Walnut already.')
+        return
+      }
+      if (self === null) {
+        const later = tryLater.later(hostKey, 'unsure')!
+        set(hostKey, { enabled: true, phase: 'checking', message: `Waiting to tell whether this host is this computer (its own daemon is not linked yet). Walnut looks again in ${inWords(later.ms)}.` })
+        return
+      }
     }
     set(hostKey, { enabled: true, phase: 'checking', message: 'Checking the host.' })
     try {
@@ -566,7 +612,7 @@ export function createHostServerManager(deps: ManagerDeps) {
       if (await firstOnByDefault(host, settings!)) {
         const judged = judgeFollowerRoom(await host.runRemoteScript(roomProbeScript(deps.hostRoot ?? HOST_ROOT), 15_000), deps.floors ?? FOLLOWER_FLOORS)
         if ('gate' in judged) {
-          notEligible(hostKey, judged.gate.reason, judged.gate.message, judged.gate.room)
+          notEligible(hostKey, judged.gate.reason, judged.gate.message, { again: judged.gate.again ? 'gate' : null, room: judged.gate.room })
           return
         }
         known = judged.target
@@ -583,7 +629,7 @@ export function createHostServerManager(deps: ManagerDeps) {
         startPoll(hostKey)
         return
       }
-      const install = await ensureInstalled(host, retry, known)
+      const install = await ensureInstalled(host, retry, known, settings!.byDefault === true && !settings!.carriesTunnel)
       // The link may have dropped and come back as a new connection during the install.
       host = hosts.get(hostKey) ?? host
       const rec = await portsFor(host, install.program)
@@ -671,7 +717,9 @@ export function createHostServerManager(deps: ManagerDeps) {
         // The same file would fail the same way: it waits for Retry (or a newer build). On a host
         // that is on only by default, a file that does not run there means no follower there.
         if (err.noBuild && settings!.byDefault) {
-          notEligible(hostKey, 'no-build', `No Walnut server runs on this host: ${message.replace(/\.? Press Retry to install it again\.$/, '').replace(/\.$/, '')}. Its sessions run as before; Retry tries again, and a newer build is tried by itself.`)
+          // A proof boot that failed may have met a passing problem (a full disk, a process ended
+          // for memory): tried again at a slow pace. No build for the system waits for a connect.
+          notEligible(hostKey, 'no-build', `No Walnut server runs on this host: ${message.replace(/\.? Press Retry to install it again\.$/, '').replace(/\.$/, '')}. Its sessions run as before; Retry tries again, and a newer build is tried by itself.`, { again: err.proofBoot ? 'proof' : null })
           return
         }
         tryLater.clear(hostKey)
@@ -686,7 +734,12 @@ export function createHostServerManager(deps: ManagerDeps) {
         set(hostKey, { phase: 'error', message })
         return
       }
-      const later = retryingLater(hostKey, refused ? 'login' : 'failed', message)
+      // A host on only by default does not keep a server restarting under its daemon between tries,
+      // and stops trying by itself at the end of the ladder.
+      const byDefault = !refused && settings!.byDefault === true && !settings!.carriesTunnel
+      if (byDefault) await takeDown(hostKey, hosts.get(hostKey), { keepWait: true })
+      const later = retryingLater(hostKey, refused ? 'login' : 'failed', message, { stopAtEnd: byDefault })
+      if (everyHost) failedNow.set(hostKey, { message, triesAgain: later.at !== undefined })
       set(hostKey, { phase: 'error', message: later.message, retryAt: later.at })
     }
   }
@@ -694,11 +747,12 @@ export function createHostServerManager(deps: ManagerDeps) {
   /**
    * No server of this Walnut on the host: the daemon stops one it set up before (also one from
    * before a restart here), and the link, the door hold and the copy target go. False: this server
-   * began to stop meanwhile, and the host stays as it was.
+   * began to stop meanwhile, and the host stays as it was. `keepWait`: a failed start keeps its place
+   * on the ladder (try-later.ts).
    */
-  async function takeDown(hostKey: string, host: HostServerHost | undefined): Promise<boolean> {
+  async function takeDown(hostKey: string, host: HostServerHost | undefined, o: { keepWait?: boolean } = {}): Promise<boolean> {
     stopPoll(hostKey)
-    tryLater.clear(hostKey)
+    if (!o.keepWait) tryLater.clear(hostKey)
     if (host?.connected && host.hasCapability('host-server-v1')) {
       const st = await host.send('server.status', { home: deps.home }, 10_000).catch(() => null)
       const state = (st?.status as HostServerStatus | undefined)?.state
@@ -726,17 +780,18 @@ export function createHostServerManager(deps: ManagerDeps) {
   }
 
   /** A host on by default that cannot run a follower well now: its view says why, and when it is looked at again. */
-  function notEligible(hostKey: string, reason: FollowerGateReason, message: string, room?: unknown): void {
-    log.session.info('host server: no follower on this host by default', { host: hostKey, reason, ...(room ? { room } : {}) })
+  function notEligible(hostKey: string, reason: FollowerGateReason, message: string, o: { again?: 'gate' | 'proof' | null; room?: unknown } = {}): void {
+    log.session.info('host server: no follower on this host by default', { host: hostKey, reason, ...(o.room ? { room: o.room } : {}) })
     const checkedAt = deps.now()
-    if (reason === 'no-build' || reason === 'this-computer') {
-      // Neither changes by waiting: the next connect or a Retry looks again.
+    if (!o.again) {
+      // Waiting does not change it (no build for the system, too little memory in all, this
+      // computer): the next connect or a Retry looks again.
       tryLater.clear(hostKey)
       set(hostKey, { enabled: true, phase: 'not-eligible', message, gate: { reason, checkedAt } })
       return
     }
-    const later = retryingLater(hostKey, 'gate', message)
-    set(hostKey, { enabled: true, phase: 'not-eligible', message: later.message, gate: { reason, checkedAt, recheckAt: later.at } })
+    const later = retryingLater(hostKey, o.again, message)
+    set(hostKey, { enabled: true, phase: 'not-eligible', message: later.message, gate: { reason, checkedAt, ...(later.at !== undefined ? { recheckAt: later.at } : {}) } })
   }
 
   function olderNotice(id: string, older: string, why: string): string {
@@ -840,14 +895,15 @@ export function createHostServerManager(deps: ManagerDeps) {
         failedNow.delete(hostKey)
         await reconcileOnce(hostKey, retry, soft)
         const { phase } = view(hostKey)
-        // Whatever path it took, a setup that did not end in an error or a gate waits no more.
-        if (phase !== 'error' && phase !== 'not-eligible') tryLater.clear(hostKey)
+        // A setup that runs, or is off, waits no more (an error, a gate or an open question keeps its wait).
+        if (phase === 'running' || phase === 'off') tryLater.clear(hostKey)
         // Walnut Health hears of a start that failed in this pass (never the person), and of one that
         // settled. A refused login is the person's sign-in, which the host's own problem line carries.
         const failed = failedNow.get(hostKey)
         failedNow.delete(hostKey)
         if (phase === 'error' && failed && tryLater.pending(hostKey) !== 'login') deps.health?.failed(hostKey, failed.message, failed.triesAgain)
-        else if (everyHostOf.get(hostKey) && (phase === 'running' || phase === 'off' || phase === 'not-eligible')) deps.health?.settled(hostKey)
+        // Also with the experiment off: an item raised while it was on clears once nothing fails.
+        else if (phase === 'running' || phase === 'off' || phase === 'not-eligible') deps.health?.settled(hostKey)
       } while (rerun.has(hostKey))
     })().finally(() => {
       running.delete(hostKey)

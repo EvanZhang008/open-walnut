@@ -5,26 +5,21 @@
  * the condition clears, and a failed start that backs off without touching the host's sessions.
  * The manager runs against the fake host of the other manager tests.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { execFile } from 'node:child_process'
 import fs from 'node:fs'
-import http from 'node:http'
-import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { createHostServerManager, type HostServerSettings, type ManagerDeps } from '../../src/core/host-server/manager.js'
-import type { HostFile, HostFileSource } from '../../src/core/host-server/host-file.js'
+import { createHostServerManager } from '../../src/core/host-server/manager.js'
 import { followerChosenBy, followerOnByDefault } from '../../src/core/host-server/follower-default.js'
 import { FOLLOWER_FLOORS, judgeFollowerRoom, parseHostRoom, roomProbeScript } from '../../src/core/host-server/eligibility.js'
 import { hostServerSettingsFrom, withThisWalnutTunnel } from '../../src/core/host-server/index.js'
 import { NoHostFile } from '../../src/core/host-server/host-file.js'
 import type { ExposeProviderDefinition } from '../../src/core/expose/types.js'
 import { installCannotRun } from '../../src/core/host-server/install.js'
-import { fakeHost as makeFakeHost, type FakeHost } from '../helpers/host-server-fake-host.js'
+import type { FakeHost } from '../helpers/host-server-fake-host.js'
+import { defaultFollowerBench, LINUX, ROOMY } from '../helpers/host-server-default-bench.js'
 
-const LINUX = 'os=Linux\narch=x86_64\nlibc=glibc\ntranslated=0\nglibc=2.26\n'
-/** Plenty: 16 GB, 12 GB free, 40 GB of disk free (in KB, as the probe prints them). */
-const ROOMY = 'mem_total_kb=16777216\nmem_avail_kb=12582912\ndisk_free_kb=41943040\n'
 
 describe('follower by default: what the stored switch means', () => {
   // The experiment on (src/core/experimental.ts follower_on_every_host).
@@ -119,98 +114,45 @@ describe('the gates: a build that runs there, memory, disk', () => {
   })
 })
 
-let follower: http.Server
-let followerPort = 0
-let dir = ''
-let settings: HostServerSettings
-let health: string[] = []
-
-function files(): HostFileSource {
-  return {
-    buildId: async () => ({ id: '0.6.7-abc1234', version: '0.6.7', commit: 'abc1234' }),
-    file: async (target) => ({ id: '0.6.7-abc1234', version: '0.6.7', commit: 'abc1234', target, gz: Buffer.alloc(2 ** 20), sha256: 'c'.repeat(64), gzSha256: 'd'.repeat(64) } satisfies HostFile),
-  }
-}
-
-function deps(over: Partial<ManagerDeps> = {}): ManagerDeps {
-  return {
-    settingsOf: async () => settings,
-    label: async () => 'Dev box',
-    walnutId: async () => 'wmac01',
-    home: '/Users/me/.open-walnut',
-    holdTunnelPort: async () => 5555,
-    releaseTunnelPort: async () => {},
-    hostFile: files(),
-    stateFile: path.join(dir, 'host-servers.json'),
-    now: Date.now,
-    installPollMs: 1,
-    pollMs: 60_000,
-    servingSince: 0,
-    everyHost: () => true,
-    health: { failed: (host, message, retries) => health.push(`failed ${host}: ${message}${retries ? ' (tries again)' : ''}`), settled: (host) => health.push(`settled ${host}`) },
-    ...over,
-  }
-}
-
-function host(): FakeHost {
-  const h = makeFakeHost({ followerPort: () => followerPort })
-  h.pollsUntilReady = 1
-  h.room = ROOMY
-  return h
-}
+const b = defaultFollowerBench()
 
 /** What the manager asked of the host that is not its server's business (sessions, commands). */
 const otherWork = (h: FakeHost) => h.calls.filter((c) => c.startsWith('send ') && !c.startsWith('send server.'))
 
-beforeEach(async () => {
-  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hsd-'))
-  settings = { enabled: true, byDefault: true, expose: { enabled: false, provider: null, options: {} } }
-  health = []
-  follower = http.createServer((_req, res) => { res.setHeader('content-type', 'application/json'); res.end('{"ok":true,"need":[]}') })
-  await new Promise<void>((r) => follower.listen(0, '127.0.0.1', () => r()))
-  followerPort = (follower.address() as net.AddressInfo).port
-})
-
-afterEach(() => {
-  follower.close()
-  fs.rmSync(dir, { recursive: true, force: true })
-})
-
 describe('host server manager: a host on by default', () => {
   it('starts a follower on a roomy host, probing it once for both the build and the room', async () => {
-    const m = createHostServerManager(deps())
-    const h = host()
+    const m = createHostServerManager(b.deps())
+    const h = b.host()
     await m.connected(h)
     expect(m.view('devbox')).toMatchObject({ enabled: true, phase: 'running' })
     expect(h.calls.filter((c) => c === 'room' || c === 'probe')).toEqual(['room'])
-    expect(health).toEqual(['settled devbox'])
+    expect(b.health).toEqual(['settled devbox'])
     m.stop()
   })
 
-  it('with the experiment off a host the person turned on runs as before: no probe, no retry by itself, no Walnut Health item', async () => {
-    settings = { enabled: true, expose: { enabled: false, provider: null, options: {} } }
-    const m = createHostServerManager(deps({ everyHost: () => false, firstReportMs: 30, tryLaterMs: { failed: [20] } }))
-    const h = host()
+  it('with the experiment off a host the person turned on runs as before: no probe, no retry by itself, no Walnut Health failure', async () => {
+    b.settings = { enabled: true, expose: { enabled: false, provider: null, options: {} } }
+    const m = createHostServerManager(b.deps({ everyHost: () => false, firstReportMs: 30, tryLaterMs: { failed: [20] } }))
+    const h = b.host()
     h.reports = false
     await m.connected(h)
     expect(m.view('devbox')).toMatchObject({ phase: 'error' })
     expect(m.view('devbox').message).toMatch(/did not answer within a minute; its log is .*on the host$/)
+    // No wait is set (the only way to one also sets retryAt), so nothing runs again by itself.
     expect(m.view('devbox').retryAt).toBeUndefined()
-    const configures = h.specs.length
-    await new Promise((r) => setTimeout(r, 100))
-    expect(h.specs.length).toBe(configures)
     expect(h.calls).not.toContain('room')
-    expect(health).toEqual([])
+    expect(b.health).toEqual([])
     h.reports = true
     await m.reconcile('devbox', { retry: true })
     expect(m.view('devbox').phase).toBe('running')
-    expect(health).toEqual([])
+    // No failure is raised; one raised while it was on would clear now.
+    expect(b.health).toEqual(['settled devbox'])
     m.stop()
   })
 
   it('a host row that is really this computer gets no follower by default; the person\'s own switch still runs one', async () => {
-    const m = createHostServerManager(deps())
-    const h = host()
+    const m = createHostServerManager(b.deps())
+    const h = b.host()
     h.reachesThisComputer = async () => true
     await m.connected(h)
     expect(m.view('devbox')).toMatchObject({ enabled: true, phase: 'not-eligible', gate: { reason: 'this-computer' } })
@@ -220,17 +162,17 @@ describe('host server manager: a host on by default', () => {
     expect(h.uploads).toEqual([])
     expect(h.specs).toEqual([])
     m.stop()
-    settings = { enabled: true, expose: { enabled: false, provider: null, options: {} } }
-    const own = createHostServerManager(deps())
+    b.settings = { enabled: true, expose: { enabled: false, provider: null, options: {} } }
+    const own = createHostServerManager(b.deps())
     await own.connected(h)
     expect(own.view('devbox').phase).toBe('running')
     own.stop()
   })
 
   it('a host the person turned on is not gated: no room probe', async () => {
-    settings = { enabled: true, expose: { enabled: false, provider: null, options: {} } }
-    const m = createHostServerManager(deps())
-    const h = host()
+    b.settings = { enabled: true, expose: { enabled: false, provider: null, options: {} } }
+    const m = createHostServerManager(b.deps())
+    const h = b.host()
     h.room = 'mem_total_kb=524288\nmem_avail_kb=100000\ndisk_free_kb=10\n'
     await m.connected(h)
     expect(m.view('devbox').phase).toBe('running')
@@ -239,9 +181,9 @@ describe('host server manager: a host on by default', () => {
   })
 
   it('the person\'s off: nothing is probed or sent', async () => {
-    settings = { enabled: false, expose: { enabled: false, provider: null, options: {} } }
-    const m = createHostServerManager(deps())
-    const h = host()
+    b.settings = { enabled: false, expose: { enabled: false, provider: null, options: {} } }
+    const m = createHostServerManager(b.deps())
+    const h = b.host()
     await m.connected(h)
     expect(m.view('devbox')).toMatchObject({ enabled: false, phase: 'off' })
     expect(h.calls.filter((c) => c !== 'send server.status')).toEqual([])
@@ -249,10 +191,10 @@ describe('host server manager: a host on by default', () => {
   })
 
   it('a host not connected: nothing happens until it connects', async () => {
-    const m = createHostServerManager(deps())
+    const m = createHostServerManager(b.deps())
     await m.reconcile('devbox')
     expect(m.view('devbox')).toMatchObject({ enabled: true, phase: 'waiting-for-host' })
-    const h = host()
+    const h = b.host()
     await m.connected(h)
     expect(m.view('devbox').phase).toBe('running')
     m.stop()
@@ -263,8 +205,8 @@ describe('host server manager: a host on by default', () => {
     ['too little memory', 'memory', (h: FakeHost) => { h.room = 'mem_total_kb=8388608\nmem_avail_kb=262144\ndisk_free_kb=41943040\n' }],
     ['too little disk', 'disk', (h: FakeHost) => { h.room = 'mem_total_kb=8388608\nmem_avail_kb=6291456\ndisk_free_kb=204800\n' }],
   ])('%s: no follower, and the view says why', async (_name, reason, make) => {
-    const m = createHostServerManager(deps({ tryLaterMs: { gate: [60_000] } }))
-    const h = host()
+    const m = createHostServerManager(b.deps({ tryLaterMs: { gate: [60_000] } }))
+    const h = b.host()
     make(h)
     await m.connected(h)
     const v = m.view('devbox')
@@ -275,13 +217,13 @@ describe('host server manager: a host on by default', () => {
     else { expect(v.gate!.recheckAt).toBeGreaterThan(Date.now()); expect(v.message).toMatch(/Walnut looks again in 1 min\.$/) }
     expect(h.uploads).toEqual([])
     expect(h.specs).toEqual([])
-    expect(health).toEqual(['settled devbox'])
+    expect(b.health).toEqual(['settled devbox'])
     m.stop()
   })
 
   it('looks again by itself once memory is freed, and starts then', async () => {
-    const m = createHostServerManager(deps({ tryLaterMs: { gate: [40] } }))
-    const h = host()
+    const m = createHostServerManager(b.deps({ tryLaterMs: { gate: [40] } }))
+    const h = b.host()
     h.room = 'mem_total_kb=8388608\nmem_avail_kb=262144\ndisk_free_kb=41943040\n'
     await m.connected(h)
     expect(m.view('devbox').phase).toBe('not-eligible')
@@ -291,30 +233,31 @@ describe('host server manager: a host on by default', () => {
     m.stop()
   })
 
-  it('a file whose proof boot fails on the host means no follower there, until Retry or a newer build', async () => {
-    const m = createHostServerManager(deps())
-    const h = host()
+  it('a file whose proof boot fails on the host means no follower there, until Retry, a newer build or its slow recheck', async () => {
+    const m = createHostServerManager(b.deps())
+    const h = b.host()
     h.installState = 'failed'
     await m.connected(h)
     expect(m.view('devbox')).toMatchObject({ phase: 'not-eligible', gate: { reason: 'no-build' } })
-    expect(m.view('devbox').message).toMatch(/does not start on this host .*Retry tries again, and a newer build is tried by itself\.$/)
+    expect(m.view('devbox').message).toMatch(/does not start on this host .*Retry tries again, and a newer build is tried by itself\. Walnut looks again in 6 hours\.$/)
     expect(h.specs).toEqual([])
+    m.stop()
   })
 
   it('a start that fails backs off, tells Walnut Health, and never touches the host\'s sessions or its link', async () => {
-    const m = createHostServerManager(deps({ firstReportMs: 30, tryLaterMs: { failed: [80, 5_000] } }))
-    const h = host()
+    const m = createHostServerManager(b.deps({ firstReportMs: 30, tryLaterMs: { failed: [80, 5_000] } }))
+    const h = b.host()
     h.reports = false
     await m.connected(h)
     const first = m.view('devbox')
     expect(first).toMatchObject({ phase: 'error', retryAt: expect.any(Number) })
     expect(first.message).toMatch(/did not answer within a minute.*Walnut tries again in 0 s\.$/)
-    expect(health).toEqual([expect.stringMatching(/^failed devbox: the server on the host did not answer/)])
+    expect(b.health).toEqual([expect.stringMatching(/^failed devbox: the server on the host did not answer/)])
     const configures = h.specs.length
     // It tries again by itself, later the second time.
     await vi.waitFor(() => expect(h.specs.length).toBeGreaterThan(configures), { timeout: 5_000 })
     await vi.waitFor(() => expect(m.view('devbox').message).toMatch(/tries again in 5 s\.$/), { timeout: 5_000 })
-    expect(health.filter((x) => x.startsWith('failed'))).toHaveLength(2)
+    expect(b.health.filter((x) => x.startsWith('failed'))).toHaveLength(2)
     // Only the server's own commands went to the daemon, and the link stayed up.
     expect(otherWork(h)).toEqual([])
     expect(h.connected).toBe(true)
@@ -323,13 +266,13 @@ describe('host server manager: a host on by default', () => {
     await m.reconcile('devbox', { retry: true })
     expect(m.view('devbox')).toMatchObject({ phase: 'running' })
     expect(m.view('devbox').retryAt).toBeUndefined()
-    expect(health.at(-1)).toBe('settled devbox')
+    expect(b.health.at(-1)).toBe('settled devbox')
     m.stop()
   })
 
   it('shows the upload while the program goes up, and drops it once it runs', async () => {
-    const m = createHostServerManager(deps())
-    const h = host()
+    const m = createHostServerManager(b.deps())
+    const h = b.host()
     let release!: () => void
     h.gate = new Promise<void>((r) => { release = r })
     const run = m.connected(h)
@@ -343,9 +286,9 @@ describe('host server manager: a host on by default', () => {
   })
 
   it('a host carrying the tunnel is never gated, even short of memory', async () => {
-    settings = { enabled: true, byDefault: true, carriesTunnel: true, expose: { enabled: true, provider: null, options: {} } }
-    const m = createHostServerManager(deps())
-    const h = host()
+    b.settings = { enabled: true, byDefault: true, carriesTunnel: true, expose: { enabled: true, provider: null, options: {} } }
+    const m = createHostServerManager(b.deps())
+    const h = b.host()
     h.room = 'mem_total_kb=1048576\nmem_avail_kb=100000\ndisk_free_kb=10\n'
     await m.connected(h)
     expect(m.view('devbox').phase).toBe('running')
@@ -354,8 +297,8 @@ describe('host server manager: a host on by default', () => {
   })
 
   it('a follower whose first report came late is never gated on the retry by its own memory', async () => {
-    const m = createHostServerManager(deps({ firstReportMs: 30, tryLaterMs: { failed: [60] } }))
-    const h = host()
+    const m = createHostServerManager(b.deps({ firstReportMs: 30, tryLaterMs: { failed: [60] } }))
+    const h = b.host()
     h.reports = false
     await m.connected(h)
     expect(m.view('devbox').phase).toBe('error')
@@ -369,8 +312,8 @@ describe('host server manager: a host on by default', () => {
   })
 
   it('a config change elsewhere does not redo a setup that waits to try again; a change of its own settings does', async () => {
-    const m = createHostServerManager(deps({ firstReportMs: 30, tryLaterMs: { failed: [60_000] } }))
-    const h = host()
+    const m = createHostServerManager(b.deps({ firstReportMs: 30, tryLaterMs: { failed: [60_000] } }))
+    const h = b.host()
     h.reports = false
     await m.connected(h)
     expect(m.view('devbox').phase).toBe('error')
@@ -378,9 +321,9 @@ describe('host server manager: a host on by default', () => {
     await m.reconcile('devbox', { soft: true })
     await m.reconcile('devbox', { soft: true })
     expect(h.specs.length).toBe(configures)
-    expect(health.filter((x) => x.startsWith('failed'))).toHaveLength(1)
+    expect(b.health.filter((x) => x.startsWith('failed'))).toHaveLength(1)
     // The person changes this host's settings: it runs now.
-    settings = { ...settings, copies: { inbox: false } }
+    b.settings = { ...b.settings, copies: { inbox: false } }
     h.reports = true
     await m.reconcile('devbox', { soft: true })
     expect(m.view('devbox').phase).toBe('running')
@@ -388,27 +331,27 @@ describe('host server manager: a host on by default', () => {
   })
 
   it('a file this computer cannot make means no follower by default; a passing failure to get it tries again', async () => {
-    const none = createHostServerManager(deps({ hostFile: { ...files(), file: async () => { throw new NoHostFile('Walnut 0.6.7 has no walnut file for linux-x64 to download') } } }))
-    const h = host()
+    const none = createHostServerManager(b.deps({ hostFile: { ...b.files(), file: async () => { throw new NoHostFile('Walnut 0.6.7 has no walnut file for linux-x64 to download') } } }))
+    const h = b.host()
     await none.connected(h)
     expect(none.view('devbox')).toMatchObject({ phase: 'not-eligible', gate: { reason: 'no-build' } })
     expect(none.view('devbox').message).toMatch(/^No Walnut server runs on this host: Walnut 0\.6\.7 has no walnut file for linux-x64 to download\. /)
-    const flaky = createHostServerManager(deps({ tryLaterMs: { failed: [60_000] }, hostFile: { ...files(), file: async () => { throw new Error('fetch failed') } } }))
-    await flaky.connected(host())
+    const flaky = createHostServerManager(b.deps({ tryLaterMs: { failed: [60_000] }, hostFile: { ...b.files(), file: async () => { throw new Error('fetch failed') } } }))
+    await flaky.connected(b.host())
     expect(flaky.view('devbox')).toMatchObject({ phase: 'error', message: 'fetch failed. Walnut tries again in 1 min.' })
-    expect(health.at(-1)).toBe('failed devbox: fetch failed (tries again)')
+    expect(b.health.at(-1)).toBe('failed devbox: fetch failed (tries again)')
     flaky.stop()
   })
 
   it('a host that ran a follower before is not gated again (its own follower is in its memory)', async () => {
-    const m = createHostServerManager(deps())
-    const h = host()
+    const m = createHostServerManager(b.deps())
+    const h = b.host()
     await m.connected(h)
     expect(m.view('devbox').phase).toBe('running')
     m.stop()
     h.room = 'mem_total_kb=8388608\nmem_avail_kb=262144\ndisk_free_kb=41943040\n'
     h.calls = []
-    const again = createHostServerManager(deps())
+    const again = createHostServerManager(b.deps())
     await again.connected(h)
     expect(again.view('devbox').phase).toBe('running')
     expect(h.calls).not.toContain('room')

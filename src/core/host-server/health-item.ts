@@ -24,7 +24,7 @@ export function hostServerHealthItem(hostKey: string, label: string, message: st
     kind: 'operation-error',
     severity: 'warning',
     title: `Walnut's server on ${label} did not start`,
-    body: `${message} The sessions on ${label} keep running; ${retries ? 'Walnut tries again by itself.' : 'it is tried again on Retry or with a newer build.'}`,
+    body: `${message} The sessions on ${label} keep running; ${retries ? 'Walnut tries again by itself.' : 'it is tried again on Retry, a reconnect or a newer build.'}`,
     detail: `host server setup on ${hostKey}: ${message}`,
     dedupKey: hostServerHealthKey(hostKey),
     recoveryKey: hostServerHealthKey(hostKey),
