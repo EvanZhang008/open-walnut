@@ -49,9 +49,14 @@ export function scrollParentOf(el: HTMLElement): HTMLElement {
  * `stopOn`: more input that ends the hold. A form the person works in passes pointer moves and
  * input: the hold corrects a frame after the layout moved, so a press aimed between the move and
  * the correction would land a row away (WebKit, 2026-11-05: a checkbox clicked in that frame).
+ * `follow`: the row to hold once the held one leaves the page (its task left the list, or a render
+ * drew it anew); null, or no `follow`, ends the hold. Without it the hold ended there, and a row
+ * landing above in the same commit pushed the rest down a row while the box's anchor still stood
+ * aside for the hold.
  */
-export function landOnRow(el: HTMLElement, opts: { focus?: boolean; settleMs?: number; topPx?: number; stopOn?: readonly string[] } = {}): () => void {
-  const { focus = true, settleMs = LAND_SETTLE_MS, topPx, stopOn = [] } = opts;
+export function landOnRow(target: HTMLElement, opts: { focus?: boolean; settleMs?: number; topPx?: number; stopOn?: readonly string[]; follow?: () => HTMLElement | null } = {}): () => void {
+  const { focus = true, settleMs = LAND_SETTLE_MS, topPx, stopOn = [], follow } = opts;
+  let el = target;
   const stops = ['wheel', 'touchstart', 'keydown', 'pointerdown', ...stopOn];
   let done = false;
   let raf = 0;
@@ -61,11 +66,23 @@ export function landOnRow(el: HTMLElement, opts: { focus?: boolean; settleMs?: n
   let lastH = 0;
   // The box this landing holds (marked only when no other keeper held it already).
   let held: HTMLElement | null = null;
+  const release = () => {
+    if (!held) return;
+    held.removeAttribute(SCROLL_HELD_ATTR);
+    held.dispatchEvent(new Event(SCROLL_RELEASED_EVENT));
+    held = null;
+  };
+  const focusRow = () => {
+    if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
+    el.focus({ preventScroll: true });
+  };
   const place = () => {
     // Cheap frame: the row has not moved and its pane has not grown (a clamped scroll may fit now).
     const at = el.getBoundingClientRect().top;
     if (at === lastTop && lastSc && lastSc.scrollHeight === lastH) return;
     const sc = scrollParentOf(el);
+    // A followed row in another box: that box is the one held now.
+    if (held && held !== sc) release();
     if (!held && !sc.hasAttribute(SCROLL_HELD_ATTR)) { held = sc; sc.setAttribute(SCROLL_HELD_ATTR, ''); }
     const isDoc = sc === document.scrollingElement || sc === document.documentElement;
     const top = isDoc ? 0 : sc.getBoundingClientRect().top;
@@ -83,24 +100,21 @@ export function landOnRow(el: HTMLElement, opts: { focus?: boolean; settleMs?: n
     done = true;
     cancelAnimationFrame(raf);
     for (const t of stops) window.removeEventListener(t, stop, true);
-    if (held) {
-      held.removeAttribute(SCROLL_HELD_ATTR);
-      held.dispatchEvent(new Event(SCROLL_RELEASED_EVENT));
-      held = null;
-    }
+    release();
   };
   for (const t of stops) window.addEventListener(t, stop, { capture: true, passive: true });
   const tick = () => {
+    if (!done && !el.isConnected) {
+      const next = follow?.();
+      if (next?.isConnected) { el = next; lastTop = Number.NaN; if (focus) focusRow(); }
+    }
     if (done || !el.isConnected) { stop(); return; }
     place();
     if (performance.now() - started >= settleMs) { stop(); return; }
     raf = requestAnimationFrame(tick);
   };
   place();
-  if (focus) {
-    if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
-    el.focus({ preventScroll: true });
-  }
+  if (focus) focusRow();
   raf = requestAnimationFrame(tick);
   return stop;
 }

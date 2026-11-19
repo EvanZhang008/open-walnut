@@ -148,6 +148,7 @@ test('a limited session: the banner, the Limited row, and its three buttons', as
   expect(w!.y).toBeGreaterThan(c!.y + c!.height - 2)
   await shot(page, summary, '2-limit-summary', 8)
   // Each count leads to its own rows.
+  await watchLanding(page)
   await summary.getByTestId('status-limit-summary-waiting').click()
   await expect(statusSectionToggle(page, 'waiting')).toHaveAttribute('aria-expanded', 'true')
   // It brings the limited rows into view and marks them a moment.
@@ -161,11 +162,8 @@ test('a limited session: the banner, the Limited row, and its three buttons', as
   // without the tag for a moment while another worker's session continues (its state is no longer
   // waiting), and the count scrolls to that row, leaving the first tagged one a few rows lower
   // (CI 2026-11-10: "at 150", "at 210", "at 270", a row's height apart).
-  const firstLedId = await page.getByTestId('status-section-waiting-rows').locator('.status-section-card.is-limit-flash').first().getAttribute('data-task-id')
-  expect(firstLedId, 'the count marks the rows it led to').toBeTruthy()
-  const firstLimited = page.getByTestId('status-section-waiting-rows').locator(`.status-section-card[data-task-id="${firstLedId}"]`)
-  await expect.poll(() => firstLimited.evaluate(topOfList), { timeout: 4_000 }).toBe('top')
   await expect(flashed).toHaveCount(0, { timeout: 5_000 })
+  expect(await landedAt(page), 'the topmost marked row, the last frame it was marked').toBe('top')
   await setStatusSectionOpen(page, 'waiting', false)
   await expect(page.getByTestId('status-section-waiting-limited')).toHaveText(/^· \d+ limited$/, { timeout: 30_000 })
   await page.getByTestId('status-section-waiting').scrollIntoViewIfNeeded()
@@ -237,15 +235,50 @@ test('a limited session: the banner, the Limited row, and its three buttons', as
   await shot(page, col, '4-continued', 0)
 })
 
-/** Where `el` sits under its scroll box's top (the box landOnRow's scrollParentOf picks), against its
- *  scroll margin (the stuck headings). */
-function topOfList(el: Element): string {
-  let sc = el.parentElement
-  while (sc && !(/(auto|scroll|overlay)/.test(getComputedStyle(sc).overflowY) && sc.scrollHeight > sc.clientHeight + 1)) sc = sc.parentElement
-  if (!sc) return 'no scroller'
-  const top = el.getBoundingClientRect().top - sc.getBoundingClientRect().top
-  const margin = parseFloat(getComputedStyle(el).scrollMarginTop) || 0
-  return top >= margin - 2 && top <= margin + 40 ? 'top' : `at ${Math.round(top)} (margin ${margin}, scrollTop ${Math.round(sc.scrollTop)} of ${sc.scrollHeight - sc.clientHeight})`
+/**
+ * Watch the next click's landing from the page itself, every frame while the Limited count marks its
+ * rows (the time it holds the first of them at the top): where the topmost marked row sits under its
+ * scroll box's top (the box landOnRow's scrollParentOf picks), against its scroll margin (the stuck
+ * headings). landedAt reads the last of those frames.
+ *
+ * Read from the page, not polled from the test: the fixture board is shared, and once the marks end
+ * another worker's test may move a row above the ones the count led to (turn its auto-continue off,
+ * end its wait, delete its task), which no hold keeps out. A poll that ran late read that move
+ * (clouddev 2026-11-19: "at 72", "at 103", the marked row's task had gone to Needs you; and a poll
+ * that waited on a row whose task was deleted). The listener bubbles, after the app's own, so each
+ * frame reads after the hold's correction of that frame.
+ */
+async function watchLanding(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as unknown as { landing?: { at: string | null; frames: number } }
+    const landing = { at: null as string | null, frames: 0 }
+    w.landing = landing
+    const topOf = (el: Element): string => {
+      let sc = el.parentElement
+      while (sc && !(/(auto|scroll|overlay)/.test(getComputedStyle(sc).overflowY) && sc.scrollHeight > sc.clientHeight + 1)) sc = sc.parentElement
+      if (!sc) return 'no scroller'
+      const top = el.getBoundingClientRect().top - sc.getBoundingClientRect().top
+      const margin = parseFloat(getComputedStyle(el).scrollMarginTop) || 0
+      return top >= margin - 2 && top <= margin + 40 ? 'top' : `at ${Math.round(top)} (margin ${margin}, scrollTop ${Math.round(sc.scrollTop)} of ${sc.scrollHeight - sc.clientHeight})`
+    }
+    window.addEventListener('click', () => {
+      const start = performance.now()
+      const frame = () => {
+        const marked = document.querySelector('[data-testid="status-section-waiting-rows"] .status-section-card.is-limit-flash')
+        if (marked) { landing.at = topOf(marked); landing.frames++ }
+        // Until the marks end (seen once), or 15 s.
+        if ((marked || !landing.frames) && performance.now() - start < 15_000) requestAnimationFrame(frame)
+      }
+      requestAnimationFrame(frame)
+    }, { once: true })
+  })
+}
+
+/** Where the topmost marked row sat the last frame the rows were marked (watchLanding). */
+async function landedAt(page: Page): Promise<string | null> {
+  const landing = await page.evaluate(() => (window as unknown as { landing?: { at: string | null; frames: number } }).landing)
+  expect(landing?.frames, 'frames watched while the rows were marked').toBeGreaterThan(0)
+  return landing!.at
 }
 
 // 2026-11-18, CI: on the busy shared server the count's jump stopped its rows 150 to 305px down the
@@ -262,12 +295,15 @@ test('the Limited count lands its rows at the top while the list grows above the
   const summary = page.getByTestId('status-limit-summary')
   await expect(summary).toBeVisible({ timeout: 30_000 })
   // Room above the sections, so the jump has to scroll; then it keeps growing while the jump runs.
-  await page.evaluate(() => {
-    let box = document.querySelector('[data-testid="status-limit-summary"]')?.parentElement ?? null
+  // Through the summary's locator, so the walk starts from the node on the page now: a
+  // document query run while the list re-renders found no summary (deep test 2026-11-19).
+  await summary.evaluate((el) => {
+    let box = el.parentElement
     while (box && !/(auto|scroll)/.test(getComputedStyle(box).overflowY)) box = box.parentElement
-    const first = box!.firstElementChild as HTMLElement
+    if (!box) throw new Error('the status list has no scroll box above its Limited summary')
+    const first = box.firstElementChild as HTMLElement
     first.style.paddingTop = '900px'
-    box!.scrollTop = 0
+    box.scrollTop = 0
     // Started by the click itself (capture, before the app's handler), so the jump always runs
     // into it, however busy the machine.
     const w = window as unknown as { grown?: boolean }
@@ -276,15 +312,15 @@ test('the Limited count lands its rows at the top while the list grows above the
       const t = setInterval(() => { first.style.paddingTop = `${900 + ++n * 31}px`; if (n >= 16) { clearInterval(t); w.grown = true } }, 40)
     }, { capture: true, once: true })
   })
+  await watchLanding(page)
   await summary.getByTestId('status-limit-summary-waiting').click()
-  const row = page.getByTestId('status-section-waiting-rows').locator('.status-section-card.is-limit-flash').first()
-  await expect(row).toHaveCount(1, { timeout: 5_000 })
-  const firstLedId = await row.getAttribute('data-task-id')
-  expect(firstLedId, 'the count marks the rows it led to').toBeTruthy()
-  const firstLimited = page.getByTestId('status-section-waiting-rows').locator(`.status-section-card[data-task-id="${firstLedId}"]`)
-  // Read once the list stopped growing: where the jump left the row, not a moment it passed the top.
+  const marked = page.getByTestId('status-section-waiting-rows').locator('.status-section-card.is-limit-flash')
+  await expect(marked.first()).toHaveCount(1, { timeout: 5_000 })
+  // The list grew through the jump, and the marks ended: where the hold left the rows, not a moment
+  // they passed the top.
   await expect.poll(() => page.evaluate(() => (window as unknown as { grown?: boolean }).grown === true), { timeout: 5_000 }).toBe(true)
-  await expect.poll(() => firstLimited.evaluate(topOfList), { timeout: 4_000 }).toBe('top')
+  await expect(marked).toHaveCount(0, { timeout: 10_000 })
+  expect(await landedAt(page), 'the topmost marked row, the last frame it was marked').toBe('top')
 })
 
 test('in a half-width column the banner stays compact; your own message ends the wait and the row follows, no reload', async ({ page, request }) => {
@@ -300,16 +336,22 @@ test('in a half-width column the banner stays compact; your own message ends the
   const banner = col.getByTestId('usage-limit-banner')
   await expect(banner).toHaveAttribute('data-state', 'waiting', { timeout: 30_000 })
 
-  // Two columns: the tag stays on the heading's line, and the banner does not tower over the chat.
-  const tag = await banner.locator('.usage-limit-tag').boundingBox()
-  const head = await banner.locator('.usage-limit-banner-head').boundingBox()
-  expect(Math.abs(tag!.y - head!.y), 'the tag sits on the heading\'s first line').toBeLessThan(6)
-  expect((await banner.boundingBox())!.height).toBeLessThan(150)
-  // The buttons sit under the words, lined up with them, at every width.
-  const words = await banner.locator('.usage-limit-banner-body').boundingBox()
-  const btns = await banner.locator('.usage-limit-btn').first().boundingBox()
-  expect(btns!.y).toBeGreaterThanOrEqual(words!.y + words!.height - 1)
-  expect(Math.abs(btns!.x - words!.x)).toBeLessThan(3)
+  // Two columns: the tag stays on the heading's line, the banner does not tower over the chat, and
+  // the buttons sit under the words, lined up with them. Read until the page settles: the banner
+  // draws while the page still lays out around it (the task panel still loading), and a single read
+  // caught the tag a line down while the failure's own screenshot showed it on the line (clouddev
+  // 2026-11-19: 30px).
+  await expect.poll(() => banner.evaluate((b) => {
+    const box = (sel: string) => b.querySelector(sel)!.getBoundingClientRect()
+    const [tag, head, words, btns] = ['.usage-limit-tag', '.usage-limit-banner-head', '.usage-limit-banner-body', '.usage-limit-btn'].map(box)
+    const height = b.getBoundingClientRect().height
+    return [
+      Math.abs(tag.y - head.y) < 6 ? '' : `the tag sits ${Math.round(tag.y - head.y)}px off the heading's first line`,
+      height < 150 ? '' : `the banner is ${Math.round(height)}px tall`,
+      btns.y >= words.y + words.height - 1 ? '' : 'the buttons overlap the words',
+      Math.abs(btns.x - words.x) < 3 ? '' : `the buttons start ${Math.round(btns.x - words.x)}px off the words`,
+    ].filter(Boolean)
+  }), { timeout: 10_000 }).toEqual([])
   await shot(page, banner, '5-banner-half-width')
 
   await setStatusSectionOpen(page, 'waiting', true)

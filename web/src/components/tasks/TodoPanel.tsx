@@ -4988,18 +4988,22 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // One landing at a time: two clicks within these frames would otherwise leave the first holding.
       limitLanding.current?.();
       limitLanding.current = null;
-      // The topmost of the rows on screen, whatever order the ids came in: scrolling to a lower one
-      // would push the rows above it out of view.
-      const first = taskIds.map((id) => document.querySelector<HTMLElement>(`.status-section-card[data-task-id="${window.CSS.escape(id)}"]`))
+      // The topmost of the rows on screen in the section it opened, whatever order the ids came in:
+      // scrolling to a lower one would push the rows above it out of view. Only that section's rows:
+      // a row of the same task elsewhere (Watching, or the section it moved to) is not one it led to.
+      const firstLed = () => taskIds
+        .map((id) => document.querySelector<HTMLElement>(`[data-testid="status-section-${key}-rows"] .status-section-card[data-task-id="${window.CSS.escape(id)}"]`))
         .filter((el): el is HTMLElement => !!el)
-        .sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1))[0];
+        .sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1))[0] ?? null;
+      const first = firstLed();
       if (!first) { document.querySelector(`[data-testid="status-section-${key}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
       // To the top, just under the stuck headings (the card's scroll margin), held there while the
       // rows are marked: the rows it led to come first in what the user sees, never mid-list under
       // unrelated ones. Not a smooth scroll: on a busy Home a row landing above ends one partway (the
       // list's scroll anchor corrects for it), and the jump stopped rows short (CI 2026-11-18). Any
-      // input of the user's ends the hold at once.
-      limitLanding.current = landOnRow(first, { focus: false, settleMs: LIMIT_FLASH_MS, topPx: parseFloat(getComputedStyle(first).scrollMarginTop) || 0 });
+      // input of the user's ends the hold at once. When the held row leaves (another session's task
+      // continued or went), the hold moves to the next of the rows it led to, which takes its place.
+      limitLanding.current = landOnRow(first, { focus: false, settleMs: LIMIT_FLASH_MS, topPx: parseFloat(getComputedStyle(first).scrollMarginTop) || 0, follow: firstLed });
     }));
   }, [openStatusSection]);
   useEffect(() => () => { window.clearTimeout(limitFlashTimer.current); limitLanding.current?.(); }, []);
