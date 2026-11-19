@@ -127,6 +127,43 @@ export interface MarkerTurnMessage {
   injected?: boolean;
   systemVariant?: 'compact' | 'error' | 'info';
   tools?: { name: string; isError?: boolean; result?: unknown }[];
+  /** The CLI started a turn here on a line the chat does not show (a background agent's
+   *  `<task-notification>`, history-parse.ts): the turn opens on this row. */
+  opensTurn?: boolean;
+}
+
+/**
+ * Where turns start, the ONE rule every turn splitter reads (turn-shape.ts, noActionRows,
+ * the phone's TimelineTurnShape.swift): a row sent into the session (`sent`, the row itself
+ * opens the turn and is not one of its steps), or a row the CLI began a turn on from a line
+ * the chat hides (`sent: false`, the row is the turn's first step). Without the second kind, a
+ * session woken by its background agents read as one turn an hour long: every new progress
+ * line reshaped all the lines before it, folded while it settled and flat while the reader
+ * watched it stream (2026-11-19).
+ */
+export type TurnStart = {
+  at: number;
+  sent: boolean;
+  /** The exclusive lower bound of the turn's rows: a sent row is not one of them (`at`), a
+   *  hidden start's row is (`at - 1`). */
+  from: number;
+};
+
+/** `openerAt` replaces the `opensTurn` rule for rows filed apart from their neighbours (a
+ *  question's page, turn-shape.ts), which the whole transcript already read. */
+export function turnStartsOf<M extends MarkerTurnMessage>(
+  messages: readonly M[],
+  isSent: (m: M, i: number) => boolean,
+  openerAt?: (i: number) => boolean,
+): TurnStart[] {
+  const out: TurnStart[] = [];
+  messages.forEach((m, i) => {
+    const prev = out[out.length - 1];
+    if (m.role === 'user' && isSent(m, i)) out.push({ at: i, sent: true, from: i });
+    // Right after a sent row, the turn that row opened is the one the CLI began.
+    else if (openerAt ? openerAt(i) : !!m.opensTurn && !(prev?.sent && prev.at === i - 1)) out.push({ at: i, sent: false, from: i - 1 });
+  });
+  return out;
 }
 
 /** Tools that put something in front of the person: their turn never folds away. */
@@ -139,8 +176,9 @@ const PERSON_FACING_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
  * to the person, no plan and no error line. A turn a person started, or a line
  * with words before it, is never one: the words are an answer.
  *
- * Rows split at every message sent into the session (`isSent`: a person's, a
- * peer's, a Walnut notice; a CLI-injected line is not one), so a notice the
+ * Rows split where turns start (turnStartsOf: every message sent into the session,
+ * `isSent`: a person's, a peer's, a Walnut notice, a CLI-injected line not being one;
+ * and every row a hidden notification began a turn on), so a notice the
  * session answered with the marker alone is its own turn and leaves the answer
  * before it folded. A delivery that came in while the session was still working
  * (the rows before it end in a tool call, not an answer) belongs to that turn:
@@ -159,8 +197,9 @@ export function noActionRows(
   isPerson: (m: MarkerTurnMessage) => boolean = () => false,
 ): Set<number> {
   const out = new Set<number>();
-  const starts: number[] = [];
-  messages.forEach((m, i) => { if (m.role === 'user' && isSent(m)) starts.push(i); });
+  const bounds = turnStartsOf(messages, (m) => isSent(m));
+  const starts = bounds.map((b) => b.at);
+  const fromOf = (k: number) => bounds[k].from;
   /** The last row of [from, to) that counts as the turn's word (an info line does not). */
   const lastRowOf = (from: number, to: number): number => {
     for (let i = to - 1; i > from; i--) {
@@ -175,11 +214,11 @@ export function noActionRows(
     const i = lastRowOf(from, to);
     return i >= 0 && messages[i].role === 'assistant' && (messages[i].tools?.length ?? 0) === 0;
   };
-  starts.forEach((start, k) => {
+  starts.forEach((_start, k) => {
     const end = k + 1 < starts.length ? starts[k + 1] : messages.length;
     const finished = k + 1 < starts.length || !streaming;
     if (!finished) return;
-    const last = lastRowOf(start, end);
+    const last = lastRowOf(fromOf(k), end);
     if (last < 0) return;
     const final = messages[last];
     if (final.role !== 'assistant' || (final.tools?.length ?? 0) > 0) return;
@@ -187,11 +226,12 @@ export function noActionRows(
     if (!read.noAction || read.text.trim()) return;
     // Back over deliveries that arrived mid-work, to where this turn began.
     let j = k;
-    while (j > 0 && !endsInAnswer(starts[j - 1], starts[j])) j--;
-    if (j === 0 && starts[0] > 0 && !endsInAnswer(-1, starts[0])) return;
+    // A hidden start is where the CLI began a turn: the one before it was over.
+    while (j > 0 && bounds[j].sent && !endsInAnswer(fromOf(j - 1), starts[j])) j--;
+    if (j === 0 && bounds[0].sent && starts[0] > 0 && !endsInAnswer(-1, starts[0])) return;
     // A person's message anywhere in it makes it their turn (turn-shape.ts splits there too).
-    for (let q = j; q <= k; q++) if (isPerson(messages[starts[q]])) return;
-    for (let i = starts[j] + 1; i < end; i++) {
+    for (let q = j; q <= k; q++) if (bounds[q].sent && isPerson(messages[starts[q]])) return;
+    for (let i = fromOf(j) + 1; i < end; i++) {
       const m = messages[i];
       if (m.role === 'system' && m.systemVariant === 'error') return;
       for (const t of m.tools ?? []) {

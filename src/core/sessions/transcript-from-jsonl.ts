@@ -10,7 +10,7 @@ import { toolDetail, toolResultPreview, toolResultText } from '../tool-summary.j
 import { clipTranscriptText } from './transcript-clip.js'
 import { projectUserText } from './reference-cards.js'
 import { transcriptSentBy, personTextOf, type TranscriptSentBy } from './transcript-sent-by.js'
-import { nonHumanOrigin } from '../../lib/history-session-envelope.js'
+import { nonHumanOrigin, opensTurnLine } from '../../lib/history-session-envelope.js'
 import { InjectedLines, type InjectedCarrier } from './transcript-injected.js'
 import { hookContextText, walnutAddedOf, type WalnutAddedItem } from '../../lib/walnut-added.js'
 import { settingChangeNotice, walnutCommandNotice } from './walnut-commands.js'
@@ -29,6 +29,8 @@ type TranscriptRow = InjectedCarrier & {
   cliError?: true
   /** The queue row id (`qm-…`) a walnut-injected line delivered (the primary's projection says the same). */
   walnutMessageId?: string
+  /** The first row of a turn the CLI began on a hidden line (the primary's projection says the same). */
+  opensTurn?: true
 }
 
 export function transcriptFromJsonl(sessionId: string, main: string): Record<string, unknown> {
@@ -66,7 +68,16 @@ export function transcriptFromJsonl(sessionId: string, main: string): Record<str
   const messages: TranscriptRow[] = []
   // The lines the CLI put in itself ride the row before them (transcript-injected.ts).
   const injected = new InjectedLines('live')
+  // A background agent's notification the CLI began a turn on: hidden, so the next row the
+  // turn writes says the turn opens there (history-parse.ts `opensTurn`).
+  let hiddenTurnStart = -1
+  const stampTurnStart = () => {
+    if (hiddenTurnStart < 0 || messages.length <= hiddenTurnStart) return
+    messages[hiddenTurnStart].opensTurn = true
+    hiddenTurnStart = -1
+  }
   for (const [i, parsed] of lines.entries()) {
+    stampTurnStart()
     if (parsed.parent_tool_use_id) continue // subagent lane
     if (typeof parsed.walnutMessageId === 'string' && parsed.subtype === 'walnut-injected'
         && lastMarker.get(parsed.walnutMessageId) !== i) continue
@@ -129,7 +140,10 @@ export function transcriptFromJsonl(sessionId: string, main: string): Record<str
         // The CLI's own plumbing (a local command's caveat and output, a task notification) is
         // nobody's message, as the primary's parser hides it; a command line reads as typed.
         const injected = transformInjectedUserText(text)
-        if (injected === null) continue
+        if (injected === null) {
+          if (opensTurnLine(parsed)) hiddenTurnStart = messages.length
+          continue
+        }
         const shown = injected !== undefined && text.startsWith('<command-') ? injected : text
         if (shown && !isInterruptMarker(shown)) messages.push(withMessageId(userRow(shown, timestamp, nonHumanOrigin(parsed.origin)), parsed))
       } else if (Array.isArray(content)) {
@@ -168,6 +182,7 @@ export function transcriptFromJsonl(sessionId: string, main: string): Record<str
     }
   }
 
+  stampTurnStart()
   injected.finish(messages)
   const truncated = messages.length > TRANSCRIPT_TAIL_ROWS
   return {

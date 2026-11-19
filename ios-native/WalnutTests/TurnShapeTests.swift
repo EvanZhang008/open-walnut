@@ -239,4 +239,60 @@ final class TurnShapeTests: XCTestCase {
                                                  streaming: true, settled: &settled)
         XCTAssertEqual(streaming.map(\.kind), [.answered, .open])
     }
+
+    // MARK: - A turn a hidden notification began (tests/web/hidden-turn-start-shape.test.ts)
+
+    /// The first row of a turn the CLI began on a background agent's notification (`opensTurn`).
+    private func woke(_ m: ChatMessage) -> ChatMessage { var m = m; m.opensTurn = true; return m }
+
+    /// The reported session's shape (2026-11-19): an ask and its answer, a wake-up that ran
+    /// tools, then one progress line per wake-up, one of them only the no-action line.
+    private func wakeups() -> [ChatMessage] {
+        [person("Is the design right?"), said("Yes, the rules stay the same."),
+         woke(tool("Bash")), tool("Agent"), said("Step one is done."),
+         woke(said("PROGRESS 1")), woke(said("PROGRESS 2")), woke(line), woke(said("PROGRESS 3")),
+         woke(tool("Read")), said("PROGRESS 4")]
+    }
+
+    func testEachWakeUpIsItsOwnTurnItsLineItsAnswer() {
+        XCTAssertEqual(shapes(wakeups()), [
+            ["answered", "0", "1"], ["answered", "2", "4"], ["answered", "5", "5"], ["answered", "6", "6"],
+            ["hidden", "7", "-1"], ["answered", "8", "8"], ["answered", "9", "10"],
+        ])
+    }
+
+    func testRightAfterASentRowTheWakeUpIsTheTurnThatRowOpened() {
+        XCTAssertEqual(shapes([person(), woke(said("Answer."))]), [["answered", "0", "1"]])
+    }
+
+    func testAWakeUpStartsATurnEvenAfterOneThatEndedOnACall() {
+        XCTAssertEqual(shapes([person(), tool("Bash"), woke(tool("Read")), said("Done.")]),
+                       [["open", "0", "-1"], ["answered", "2", "3"]])
+    }
+
+    func testAWakeUpThatWroteOnlyAnErrorLeavesTheTurnBeforeItAnswered() {
+        // Claude Code's own error reply was all the wake-up wrote: its notice keeps the start.
+        var error = ChatMessage.cliErrorNotice(text: "Claude Code: Prompt is too long", createdAt: at())
+        error.opensTurn = true
+        XCTAssertEqual(shapes([person(), tool("Bash"), said("Done."), error]).first, ["answered", "0", "2"])
+    }
+
+    func testAWakeUpOpeningTheListIsItsOwnTurnStart() {
+        XCTAssertEqual(shapes([woke(said("PROGRESS 1")), woke(said("PROGRESS 2"))]),
+                       [["answered", "0", "0"], ["answered", "1", "1"]])
+    }
+
+    func testAFinishedTurnReadsTheSameQuietStreamingOrWithLaterTurns() {
+        let rows = wakeups()
+        let whole = Dictionary(TimelineTurnShape.shape(rows, streaming: false).map { ("\($0.start):\($0.end)", $0.kind) },
+                               uniquingKeysWith: { a, _ in a })
+        for n in 1...rows.count {
+            for streaming in [false, true] {
+                let part = TimelineTurnShape.shape(Array(rows[0..<n]), streaming: streaming)
+                for t in part.dropLast() {
+                    XCTAssertEqual(whole["\(t.start):\(t.end)"], t.kind, "prefix \(n), streaming \(streaming)")
+                }
+            }
+        }
+    }
 }

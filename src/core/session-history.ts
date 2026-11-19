@@ -1008,6 +1008,8 @@ function seedIncrementalState(
       const seg = i < prefixMessages.length ? prefixMessages[i] : tailMessages[i - prefixMessages.length];
       const full = fullMessages[i];
       if (seg.msgId !== full.msgId || seg.role !== full.role || seg.text !== full.text) return { reason: 'row-mismatch' };
+      // A boundary right after a hidden turn start would leave the tail's first row unmarked.
+      if (seg.opensTurn !== full.opensTurn) return { reason: 'row-mismatch' };
       // Tools must match too — a tool_use in the prefix whose tool_result line
       // sits in the tail would silently lose its result in the segmented parse
       // (same text, different tool state). Compare name/result/error pairwise.

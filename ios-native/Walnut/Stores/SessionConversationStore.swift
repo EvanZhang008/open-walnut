@@ -1122,6 +1122,7 @@ final class SessionConversationStore {
             row.sentTo = m.sentTo
             row.about = m.about
             row.aboutTagged = m.aboutTagged
+            row.opensTurn = m.opensTurn
             return row
         }
     }
@@ -1222,15 +1223,20 @@ final class SessionConversationStore {
             // The CLI writes this line into the conversation when a turn is stopped
             // (the phone's Stop, an interrupting send, or the person at the terminal).
             // It is plumbing, not words the person typed: a card, like the web console's.
-            return ChatMessage(
+            var stop = ChatMessage(
                 id: "", role: "user", text: "Turn stopped before it finished.",
                 createdAt: m.timestamp, kind: .notification, source: "interrupt"
             )
+            stop.opensTurn = m.opensTurn
+            return stop
         }
         if m.cliError == true, m.role != "user" {
             // Claude Code's own error reply ("Claude Code: Prompt is too long"): the model never
-            // answered. Its error notice, as the live `cli-error` frame draws it.
-            return ChatMessage.cliErrorNotice(text: text ?? m.text, createdAt: m.timestamp)
+            // answered. Its error notice, as the live `cli-error` frame draws it. It may be all a
+            // wake-up wrote: it keeps the turn start, or the error would end the turn before it.
+            var notice = ChatMessage.cliErrorNotice(text: text ?? m.text, createdAt: m.timestamp)
+            notice.opensTurn = m.opensTurn
+            return notice
         }
         var row = ChatMessage(
             id: "",
@@ -1255,6 +1261,7 @@ final class SessionConversationStore {
         row.sentTo = m.sentTo
         row.about = m.about
         row.aboutTagged = m.aboutTagged
+        row.opensTurn = m.opensTurn
         return row
     }
 

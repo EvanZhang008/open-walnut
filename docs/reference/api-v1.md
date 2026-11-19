@@ -2590,7 +2590,7 @@ directory on that host.
 - `GET /api/v1/sessions/:id/transcript?fresh=1&rich=1` →
   `{ "sessionId", "exportedAt", "truncated", "rich"?, "messages": [ { role, text,
   timestamp, kind?, detail?, resultPreview?, agent?, isError?, inputPreview?,
-  thinkingText?, detailRef?, sentBy?, cliError? } ] }`: a slim transcript tail (last ~100 entries; text
+  thinkingText?, detailRef?, sentBy?, cliError?, opensTurn? } ] }`: a slim transcript tail (last ~100 entries; text
   capped at 4 KB/row, or 12 KB for a row that
   carries HTML, 16 KB / 48 KB on any read built live (`fresh=1`, `rich=1`, a page;
   see `rich=1` below), and the cut is made where it cannot leave half a tag behind so a
@@ -2658,7 +2658,11 @@ directory on that host.
   reads `"Claude Code: Prompt is too long"` (or `"Claude Code: API Error: ..."`). The row stays
   `role: "assistant"` (it is how the turn ended), and a client draws it as an error notice on
   its own row, never a reply bubble; an older client ignores the field and draws a reply. The
-  cloud companion's own tail (`fresh=1` over the bridge) carries it too. Rows of one message come as thinking,
+  cloud companion's own tail (`fresh=1` over the bridge) carries it too. `opensTurn: true`
+  (additive, 2026-11-19) rides the first row of a turn the CLI began on a line no row shows (a
+  background agent's notification): a client starts a turn there, as at a sent user row, so a
+  session its background agents wake reads as one short turn per wake-up; an older client
+  ignores it. The history route's rows carry it too. Rows of one message come as thinking,
   then the text, then the tool calls (see the `/conversations/:id/messages`
   notes on row order). The primary
   box exports tails for every session it can reach — local from disk, remote

@@ -238,6 +238,10 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     /// itself with its `<walnut-about>` line (taken off `text`), not the turn's fallback.
     var about: [String]? = nil
     var aboutTagged: Bool? = nil
+    /// Any row (additive 2026-11-19, server `history-parse.ts`): the CLI began a new turn
+    /// on this row from a line no row shows (a background agent's notification). The turn
+    /// shape starts a turn here as at a sent user row (`TimelineTurnShape.shape`).
+    var opensTurn: Bool? = nil
 
     /// The bubble's long-press item that shows or hides what Walnut added to this
     /// message (set by `TimelineTurnFold` on the copy it draws; never on the wire).
@@ -280,7 +284,7 @@ struct ChatMessage: Codable, Identifiable, Equatable {
         case id, role, text, createdAt, kind, source, detail, resultPreview, agent
         case thinkingText, inputPreview, detailRef, inFlight, answeredBy, isError
         case messageId, sentBy, added, textWithoutContext, injectedAfter, injectedBefore, sentTo
-        case about, aboutTagged, walnutMessageId
+        case about, aboutTagged, walnutMessageId, opensTurn
     }
 
     init(id: String, role: String, text: String, createdAt: String, kind: Kind?, source: String? = nil,
@@ -1232,6 +1236,9 @@ struct SessionTranscript: Codable {
         /// The timeline draws it as its error notice (`ChatMessage.cliErrorNotice`), never
         /// a reply bubble. nil on every other row and on an older server.
         var cliError: Bool? = nil
+        /// Any row: the CLI began a turn here on a hidden line (additive 2026-11-19). See
+        /// `ChatMessage.opensTurn`.
+        var opensTurn: Bool? = nil
 
         init(role: String, text: String, timestamp: String, kind: String?,
              detail: String? = nil, resultPreview: String? = nil, agent: String? = nil,
@@ -1240,7 +1247,7 @@ struct SessionTranscript: Codable {
              injectedAfter: [CliInjectedItem]? = nil, injectedBefore: [CliInjectedItem]? = nil,
              sentTo: [SentTarget]? = nil, detailRef: String? = nil,
              about: [String]? = nil, aboutTagged: Bool? = nil, cliError: Bool? = nil,
-             walnutMessageId: String? = nil) {
+             walnutMessageId: String? = nil, opensTurn: Bool? = nil) {
             self.role = role
             self.text = text
             self.timestamp = timestamp
@@ -1262,6 +1269,7 @@ struct SessionTranscript: Codable {
             self.aboutTagged = aboutTagged
             self.cliError = cliError
             self.walnutMessageId = walnutMessageId
+            self.opensTurn = opensTurn
         }
     }
 

@@ -542,6 +542,11 @@ export interface ProjectedTranscriptMessage {
    *  the model's answer. It stays role `assistant`, the turn's last words, for every reader of
    *  the turn; a client draws it as an error line, never a reply bubble. Absent otherwise. */
   cliError?: true
+  /** Any row (additive, 2026-11-19): the CLI began a new turn on this row from a line no
+   *  row shows (a background agent's notification). A client starts a turn here as it does
+   *  at a sent user row, so a session its background agents wake reads as one short turn
+   *  per wake-up, never one long turn. Absent otherwise. */
+  opensTurn?: true
   /** Any row (additive, 2026-10-30): the lines the CLI put in right after it, a
    *  loaded skill's text or a hook's added context (transcript-injected.ts). */
   injectedAfter?: CliAddedItem[]
@@ -794,7 +799,11 @@ export async function buildSessionTranscript(
   const wantRich = opts?.rich === true || opts?.full === true
   const messages: ProjectedTranscriptMessage[] = []
   const injected = new InjectedLines(opts?.full ? null : (opts?.live || wantRich ? 'live' : 'tail'))
+  // A turn the CLI began on a hidden line (history-parse.ts `opensTurn`) opens on the first row
+  // drawn from there on: a row left out here (a notice, a line riding the row before) passes it on.
+  let opensTurn = false
   for (const row of tail) {
+    if (row.opensTurn) opensTurn = true
     // Claude Code's own error reply ("Prompt is too long") is how its turn ended: it stays the
     // turn's last words here, as the CLI wrote it (a notice says it answered nothing: noticeText).
     const m = row.role === 'system' && row.cliError ? { ...row, role: 'assistant' as const } : row
@@ -804,6 +813,7 @@ export async function buildSessionTranscript(
     // before them as one closed row (transcript-injected.ts), clipped like text.
     // One that is only a Walnut message is drawn as that message.
     if (m.role === 'user' && m.injected && injected.take(m.text || '', messages) !== 'message') continue
+    const firstRow = messages.length
     // Thinking FIRST, then text, then tools: `kind?: 'thinking'` has been part of
     // this shape (and of the api-v1 doc) all along with nobody producing it, so
     // the phone had no reasoning to show at all and rendered a bare blinking
@@ -918,6 +928,10 @@ export async function buildSessionTranscript(
         ...(t.isError ? { isError: true as const } : {}),
         ...sendTargetsOf(t),
       })
+    }
+    if (opensTurn && messages.length > firstRow) {
+      messages[firstRow].opensTurn = true
+      opensTurn = false
     }
   }
   injected.finish(messages)

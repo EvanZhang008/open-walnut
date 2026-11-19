@@ -365,4 +365,7 @@ export interface SessionHistoryMessage {
   about?: string[];
   /** `about` came from the message's own `<walnut-about>` line. */
   aboutTagged?: boolean;
+  /** The CLI began a turn on this row from a line the chat does not show (a background
+   *  agent's notification): a turn starts here (turnStartsOf, src/lib/turn-end-marker.ts). */
+  opensTurn?: true;
 }

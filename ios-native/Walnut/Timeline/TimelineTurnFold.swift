@@ -604,6 +604,7 @@ extension ChatMessage {
         copy.sentTo = sentTo
         copy.about = about
         copy.aboutTagged = aboutTagged
+        copy.opensTurn = opensTurn
         copy.walnutAddedToggle = walnutAddedToggle
         return copy
     }

@@ -848,3 +848,16 @@ export function nonHumanOrigin(origin: unknown): boolean {
   const kind = (origin as { kind?: unknown }).kind;
   return typeof kind !== 'string' || kind !== 'human';
 }
+
+/**
+ * Whether a JSONL line is the user line the CLI began a turn on for a background run's
+ * notification: a main-lane `user` line whose `origin` says `task-notification`. No row shows
+ * it, so the row after it carries `opensTurn` (history-parse.ts, the v1 transcripts). A
+ * notification taken mid-turn is never such a line (the CLI writes only its queue-operation and
+ * an attachment for it), nor is a nested agent's (`parent_tool_use_id`): neither opens a turn.
+ */
+export function opensTurnLine(line: { type?: unknown; origin?: unknown; parent_tool_use_id?: unknown }): boolean {
+  if (line.type !== 'user' || line.parent_tool_use_id) return false;
+  const origin = line.origin as { kind?: unknown } | null | undefined;
+  return !!origin && typeof origin === 'object' && origin.kind === 'task-notification';
+}

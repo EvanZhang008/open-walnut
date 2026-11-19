@@ -178,15 +178,36 @@ enum TimelineTurnShape {
         TimelineFoldFailures.isFailedCall(m) || TimelineFoldFailures.isErrorRow(m)
     }
 
+    /// Where turns start, the web's one rule (src/lib/turn-end-marker.ts `turnStartsOf`): a
+    /// sent row (`sent`: the turn's opening row, not one of its steps), or a row the CLI began
+    /// a turn on from a line no row shows (`opensTurn`, a background agent's notification: the
+    /// row is the turn's first step). Without the second kind, a session its background agents
+    /// woke read as one turn an hour long, and every new progress line reshaped all the lines
+    /// before it (2026-11-19).
+    static func turnStarts(_ messages: [ChatMessage]) -> [(at: Int, sent: Bool)] {
+        var out: [(at: Int, sent: Bool)] = []
+        for (i, m) in messages.enumerated() {
+            if isSent(m) {
+                out.append((i, true))
+            } else if m.opensTurn == true, !(out.last.map { $0.sent && $0.at == i - 1 } ?? false) {
+                // Right after a sent row, the turn that row opened is the one the CLI began.
+                out.append((i, false))
+            }
+        }
+        return out
+    }
+
     static func shape(_ messages: [ChatMessage], streaming: Bool) -> [Turn] {
-        var bounds: [Int] = []
-        for (i, m) in messages.enumerated() where isSent(m) { bounds.append(i) }
-        var segs: [(from: Int, to: Int)] = []
-        if !messages.isEmpty, bounds.first.map({ $0 > 0 }) ?? true {
-            segs.append((-1, bounds.first ?? messages.count))
+        // `start` is the turn's first row (-1: before the list), `from` the exclusive lower
+        // bound of its steps (a sent row is not one of them), `sent` whether `start` was sent.
+        typealias Seg = (start: Int, from: Int, to: Int, sent: Bool)
+        let bounds = turnStarts(messages)
+        var segs: [Seg] = []
+        if !messages.isEmpty, bounds.first.map({ $0.at > 0 }) ?? true {
+            segs.append((-1, -1, bounds.first?.at ?? messages.count, false))
         }
         for (k, b) in bounds.enumerated() {
-            segs.append((b, k + 1 < bounds.count ? bounds[k + 1] : messages.count))
+            segs.append((b.at, b.sent ? b.at : b.at - 1, k + 1 < bounds.count ? bounds[k + 1].at : messages.count, b.sent))
         }
         /// The turn's last word: an info card after it does not count, an error does,
         /// and neither does a line the CLI put in after it (a Stop hook's context).
@@ -204,30 +225,32 @@ enum TimelineTurnShape {
             let i = lastRow(from, to)
             return i >= 0 && !messages[i].isUser && messages[i].kind == nil
         }
-        // Chains of segments: a delivery mid-work joins the turn it interrupted.
-        var chains: [(from: Int, to: Int)] = []
+        func byPerson(_ seg: Seg) -> Bool { seg.sent && isPerson(messages[seg.start]) }
+        // Chains of segments: a delivery mid-work joins the turn it interrupted. A hidden start
+        // (not sent, a real row) is where the CLI began a turn: the one before it was over.
+        var chains: [Seg] = []
         for (k, seg) in segs.enumerated() {
-            let person = seg.from >= 0 && isPerson(messages[seg.from])
-            if let prev = chains.last, !person, !endsInAnswer(segs[k - 1].from, segs[k - 1].to) {
-                chains[chains.count - 1] = (prev.from, seg.to)
+            let opener = !seg.sent && seg.start >= 0
+            if let prev = chains.last, !byPerson(seg), !opener, !endsInAnswer(segs[k - 1].from, segs[k - 1].to) {
+                chains[chains.count - 1] = (prev.start, prev.from, seg.to, prev.sent)
             } else {
                 chains.append(seg)
             }
         }
         return chains.enumerated().map { k, c in
-            let byPerson = c.from >= 0 && isPerson(messages[c.from])
-            let open = Turn(start: c.from, end: c.to, byPerson: byPerson, kind: .open, answer: -1)
+            let person = byPerson(c)
+            let open = Turn(start: c.start, end: c.to, byPerson: person, kind: .open, answer: -1)
             if k == chains.count - 1 && streaming { return open }
             let last = lastRow(c.from, c.to)
             guard last >= 0, !messages[last].isUser, messages[last].kind == nil else { return open }
             let reading = TimelineTurnMarker.read(messages[last].text)
-            let answered = Turn(start: c.from, end: c.to, byPerson: byPerson, kind: .answered, answer: last)
+            let answered = Turn(start: c.start, end: c.to, byPerson: person, kind: .answered, answer: last)
             if reading.ack, reading.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 // The line alone hides the turn, except a turn a person started, one
                 // whose start is outside the list, or one holding a failure, a
                 // question or a plan: those stay open, the line drawing nothing.
-                guard !byPerson, c.from >= 0, isClean(messages, c.from, c.to) else { return open }
-                return Turn(start: c.from, end: c.to, byPerson: false, kind: .hidden, answer: -1)
+                guard !person, c.start >= 0, isClean(messages, c.from, c.to) else { return open }
+                return Turn(start: c.start, end: c.to, byPerson: false, kind: .hidden, answer: -1)
             }
             guard !reading.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return open }
             return answered

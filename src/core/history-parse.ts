@@ -17,7 +17,7 @@
 
 import { redactAiOnly } from '../lib/ai-only-envelope.js';
 import { hookContextText } from '../lib/walnut-added.js';
-import { NATIVE_PEER_TAGS, nonHumanOrigin } from '../lib/history-session-envelope.js';
+import { NATIVE_PEER_TAGS, nonHumanOrigin, opensTurnLine } from '../lib/history-session-envelope.js';
 import type { InPlaceRewindCut } from './types.js';
 import { VALID_SESSION_EFFORT_IDS } from './session-effort.js';
 import { projectUserText } from './sessions/user-text-projection.js';
@@ -268,6 +268,10 @@ export interface SessionHistoryMessage {
   about?: string[];
   /** `about` came from the message's own line, not the turn's fallback. */
   aboutTagged?: boolean;
+  /** The CLI began a new turn on this row from a line the chat does not show (a background
+   *  agent's `<task-notification>`): every turn splitter starts a turn here
+   *  (lib/turn-end-marker.ts turnStartsOf). */
+  opensTurn?: true;
 }
 
 export interface PaginationMeta {
@@ -669,6 +673,8 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
     queued?: boolean;
     injected?: boolean;
     agentOrigin?: boolean;
+    /** The CLI began a turn on this line (opensTurnLine): the next shown row opens it. */
+    startsTurn?: true;
     systemVariant?: 'compact' | 'error' | 'info';
     systemDetail?: string;
     cliError?: true;
@@ -1309,6 +1315,7 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
         mergedUuids: raw.message.role === 'user' ? mergedSendUuidsOf(raw) : undefined,
         injected: isInjectedLine(raw) || undefined,
         agentOrigin: nonHumanOrigin(raw.origin) || undefined,
+        ...(opensTurnLine(raw) ? { startsTurn: true as const } : {}),
         contentBlocks: raw.message.content
           ? (typeof raw.message.content === 'string'
             ? [{ type: 'text' as const, text: raw.message.content }]
@@ -1385,6 +1392,9 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
   // A side-thread cache warm-up is plumbing: its tagged user line is dropped
   // below, and so is the one assistant reply that answers it.
   let dropWarmupReply = false;
+  // A background agent's notification the CLI began a turn on: hidden, so the next main-lane
+  // row says the turn opens there (`opensTurn`, lib/turn-end-marker.ts turnStartsOf).
+  let hiddenTurnStart = false;
 
   // Parallel array tracking which parentToolUseId each result entry belongs to
   const resultParentIds: (string | undefined)[] = [];
@@ -1516,7 +1526,10 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
     if (msg.role === 'user' && text.startsWith('<')) {
       if (isCacheWarmupText(text)) { dropWarmupReply = true; continue; }
       const transformed = transformInjectedUserText(text);
-      if (transformed === null) continue;
+      if (transformed === null) {
+        if (msg.startsTurn) hiddenTurnStart = true;
+        continue;
+      }
       if (transformed !== undefined) { text = transformed; peerMail = /^<teammate-message/.test(receivedText); }
     }
     // A command Walnut sent itself (an idle compaction, the recovery of a full context): its own
@@ -1558,6 +1571,8 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
     // produced a response before the call was retried with a new message ID.
     if (msg.role === 'assistant' && !text && tools.length === 0) continue;
 
+    const opensTurn = hiddenTurnStart && !msg.parentToolUseId;
+    if (opensTurn) hiddenTurnStart = false;
     result.push({
       role: msg.role as 'user' | 'assistant' | 'system',
       text,
@@ -1578,6 +1593,7 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
       ...(msg.systemVariant ? { systemVariant: msg.systemVariant } : {}),
       ...(msg.systemDetail ? { systemDetail: msg.systemDetail } : {}),
       ...(msg.cliError ? { cliError: true as const } : {}),
+      ...(opensTurn ? { opensTurn: true as const } : {}),
       ...(hints.length ? { hints } : {}),
       // The raw view is a person's view too: an AI-only brief shows its fold (lib/ai-only-envelope.ts).
       ...(receivedText && receivedText !== text ? { rawText: redactAiOnly(receivedText) } : {}),
