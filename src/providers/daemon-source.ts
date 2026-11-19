@@ -14316,9 +14316,10 @@ async function cmdTranscriptArchive(ws, id, cmd) {
 const HISTORY_FETCH_MS = 180000;
 if (taskDirCore && typeof taskDirCore.setArchiveLog === 'function') taskDirCore.setArchiveLog((msg) => logMsg('warn', 'transcript archive', { msg }));
 // The server that fetches a session's history: its own Walnut's, else (no record names the
-// session) any server as before (twin of daemon-standalone.ts).
+// session) the Walnut a call outside any session goes to (gatewayOwnerHome), else an older server's unnamed
+// link (twin of daemon-standalone.ts: a named link alone was never picked, 2026-11-19).
 function historyFetchTarget(sid) {
-  var home = offlineHost.ownerOf(sid) || sessionHomeOf(sid) || undefined;
+  var home = offlineHost.ownerOf(sid) || sessionHomeOf(sid) || gatewayOwnerHome(EXTERNAL_CALLER_SID) || undefined;
   return { target: home ? gatewayTargetFor(home) : pickTrustedClient('').client, home: home };
 }
 function fetchRemoteHistory(dir, sid) {

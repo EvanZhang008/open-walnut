@@ -6633,10 +6633,15 @@ const HISTORY_FETCH_MS = 180_000
 setArchiveLog((msg) => logMsg('warn', 'transcript archive', { msg }))
 /**
  * The server that fetches a session's history: its own Walnut's (only that Walnut's storage
- * holds it, gateway-identity-core.ts), else, for a session no record names, any server as before.
+ * holds it, gateway-identity-core.ts). A session no record names (one started before homes were
+ * recorded, or outside Walnut) goes to the Walnut a call outside any session goes to
+ * (gatewayOwnerHome: the one this host holds a fresh copy of, or every server speaks for), else
+ * to an older server's unnamed link: pickTrustedClient('') alone skips every named link, so such a
+ * session could never be fetched (2026-11-19). A wrong server can do no harm: each download is
+ * checked against the manifest's hashes here. Keep in sync with daemon-source.ts.
  */
 function historyFetchTarget(sid: string): { target: ServerWebSocket<WsData> | null; home: string | undefined } {
-  const home = offlineHost.ownerOf(sid) || sessionHomeOf(sid) || undefined
+  const home = offlineHost.ownerOf(sid) || sessionHomeOf(sid) || gatewayOwnerHome(EXTERNAL_CALLER_SID) || undefined
   return { target: home ? gatewayTargetFor(home) : pickTrustedClient('').client, home }
 }
 function fetchRemoteHistory(dir: string, sid: string): Promise<void> {

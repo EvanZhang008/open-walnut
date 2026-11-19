@@ -12,6 +12,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -248,6 +249,61 @@ describe.each(TWINS)('session history archive: $name', ({ name, command }) => {
       expect(JSON.stringify(st)).toMatch(/s-alone is kept in remote storage and could not be brought back/)
       expect(fs.existsSync(ran)).toBe(false)
       expect(fs.existsSync(path.join(proj, 's-alone.walnut-archive.json'))).toBe(true)
+    } finally {
+      await s3.close()
+      if (keys.id === undefined) delete process.env.AWS_ACCESS_KEY_ID; else process.env.AWS_ACCESS_KEY_ID = keys.id
+      if (keys.secret === undefined) delete process.env.AWS_SECRET_ACCESS_KEY; else process.env.AWS_SECRET_ACCESS_KEY = keys.secret
+    }
+  }, 120_000)
+
+  // 2026-11-19: a session no record names (started before homes were recorded, or outside Walnut)
+  // was never fetched once its server named its link: the daemon looked only for unnamed links.
+  it('a session no record names comes back through a server that named its Walnut', async () => {
+    const home = path.join(root, slug + '-named', 'home')
+    const proj = path.join(home, '.claude', 'projects', '-work-marina')
+    const body = writeSession(proj, 's-old-import')
+    const { archiveTranscripts, setRemoteFetcher } = await import('../../src/providers/transcript-archive.js')
+    const { offloadArchived, fetchRemoteArchive, OFFLOAD_KEEP_MS } = await import('../../src/providers/transcript-offload.js')
+    const { remoteStore, resolveRemote } = await import('../../src/core/history-remote/store.js')
+    const projects = [path.join(home, '.claude', 'projects')]
+    const later = Date.now() + 400 * 86_400_000
+    await archiveTranscripts(projects, { olderThanMs: 86_400_000, now: later })
+    await archiveTranscripts(projects, { olderThanMs: 86_400_000, now: later })
+    const keys = { id: process.env.AWS_ACCESS_KEY_ID, secret: process.env.AWS_SECRET_ACCESS_KEY }
+    process.env.AWS_ACCESS_KEY_ID = 'AKIAFAKEFAKEFAKE'
+    process.env.AWS_SECRET_ACCESS_KEY = 'fake-secret'
+    const s3: FakeS3 = await startFakeS3('twins-history-named')
+    try {
+      const store = await remoteStore(resolveRemote({ enabled: true, bucket: s3.bucket, endpoint: s3.url, region: 'us-east-1' }))
+      const tier = { olderThanMs: 180 * 86_400_000, keyPrefix: 'walnut-history/twin' }
+      await offloadArchived(projects, { ...tier, now: later, store })
+      expect((await offloadArchived(projects, { ...tier, now: later + OFFLOAD_KEEP_MS, store })).offloaded).toBe(1)
+      setRemoteFetcher(null)
+
+      const d = await boot(command, slug + '-named', home)
+      // A server of today: names its run, binds, and names its Walnut.
+      expect((await rpc(d, { cmd: 'hello', run: 'named-run-' + slug, binds: true })).ok).toBe(true)
+      const walnutHome = path.join(root, slug + '-named', 'walnut-home')
+      const walnutId = `w${crypto.createHash('sha1').update(walnutHome).digest('hex').slice(0, 12)}`
+      const conf = await rpc(d, { cmd: 'leader.configure', home: walnutHome, walnutId, backup: false })
+      expect(conf.ok, JSON.stringify(conf)).toBe(true)
+      // Its Walnut keeps a bridge link here (a companion), so its sockets are a named Walnut's.
+      expect((await rpc(d, { cmd: 'bridge.configure', home: walnutHome, enabled: false })).ok).toBe(true)
+      const asked: unknown[] = []
+      d.ws.on('message', (data: Buffer) => {
+        let msg: { ev?: string; relayId?: number; capability?: string; payload?: { dir?: string; sessionId?: string } }
+        try { msg = JSON.parse(data.toString()) } catch { return }
+        if (msg.ev !== 'gateway-request' || msg.capability !== 'history.fetch') return
+        asked.push(msg.payload)
+        void fetchRemoteArchive(msg.payload!.dir!, msg.payload!.sessionId!, store).then(
+          (files) => d.ws.send(JSON.stringify({ id: rpcId++, cmd: 'gateway-result', relayId: msg.relayId, result: { files } })),
+          (e: Error) => d.ws.send(JSON.stringify({ id: rpcId++, cmd: 'gateway-result', relayId: msg.relayId, error: e.message, errorCode: 'internal' })),
+        )
+      })
+      const rd = await rpc(d, { cmd: 'fs.read', path: path.join(proj, 's-old-import.jsonl'), encoding: 'utf-8' })
+      expect(asked).toEqual([{ dir: proj, sessionId: 's-old-import' }])
+      expect(rd.ok).toBe(true)
+      expect(rd.data).toBe(body.main)
     } finally {
       await s3.close()
       if (keys.id === undefined) delete process.env.AWS_ACCESS_KEY_ID; else process.env.AWS_ACCESS_KEY_ID = keys.id
