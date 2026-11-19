@@ -85,9 +85,20 @@ async function readProcessFootprint(): Promise<Record<string, number> | null> {
   return null;
 }
 
-/** Take a new paging baseline (called at each profile rotation). */
-export function refreshVmBaseline(): void {
-  void readVmCounters().then((v) => { if (v) vmBaseline = v; });
+/**
+ * A new paging baseline at most this often. Each one starts vm_stat, and on a
+ * busy Mac that start alone held the loop 150 to 340 ms (2026-11-19 ledger:
+ * 1.5 s in 11 h, the recorder's own cost); a stall's paging is then counted
+ * over up to 5 min instead of 1 (the flight record says how long: overS).
+ */
+export const VM_BASELINE_MIN_GAP_MS = 5 * 60_000;
+let vmBaselineAsked = 0;
+
+/** Take a new paging baseline (asked at each profile rotation; taken every VM_BASELINE_MIN_GAP_MS). */
+export function refreshVmBaseline(now = Date.now(), read: () => Promise<VmCounters | null> = readVmCounters): void {
+  if (vmBaselineAsked !== 0 && now - vmBaselineAsked < VM_BASELINE_MIN_GAP_MS) return;
+  vmBaselineAsked = now;
+  void read().then((v) => { if (v) vmBaseline = v; }).catch(() => { /* next rotation asks again */ });
 }
 
 /** Paging since the baseline, free + compressor size, and (rate-limited) this process's compressed bytes. */
@@ -118,5 +129,6 @@ export async function sampleMemContext(): Promise<Record<string, unknown> | null
 
 export function resetSystemContext(): void {
   vmBaseline = null;
+  vmBaselineAsked = 0;
   lastFootprintAt = 0;
 }

@@ -1204,7 +1204,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // The deploy's QoS clamp request describes how this process was launched:
   // read it once and take it out of process.env before anything copies that
   // env into a child (the in-app terminal, model turns, plugins).
-  takeQosClampRequest()
+  const raisedByDeploy = takeQosClampRequest()
 
   // FIRST, before any await: install exit diagnostics + always-fatal SIGTERM/
   // SIGHUP handlers. A `kill -15` during the multi-second boot below must kill
@@ -1492,6 +1492,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Event-loop lag monitor — makes starvation visible (logs a warn whenever a
   // single tick is blocked > threshold, naming the suspect periodic task).
   // Cheap libuv histogram + self-timer; safe to run in production.
+  // The loop thread answers every request: on macOS it moves to QoS
+  // user-initiated where the deploy raised the process (src/lib/loop-thread-qos.ts).
+  try {
+    const { raiseLoopThreadQos } = await import('../lib/loop-thread-qos.js')
+    const qos = await raiseLoopThreadQos({ raisedByDeploy })
+    if (qos.applied) log.web.info('loop thread QoS raised to user-initiated', { before: qos.before, after: qos.after })
+    else if (qos.reason !== 'not-darwin' && qos.reason !== 'not-requested') log.web.warn('loop thread QoS left as launched', { ...qos })
+  } catch (err) {
+    log.web.warn('loop thread QoS left as launched', { error: err instanceof Error ? err.message : String(err) })
+  }
   const { startEventLoopMonitor } = await import('../core/event-loop-monitor.js')
   // Its probe-late lines name the SQLite statements and child process starts
   // that ran in the hold (src/core/blocking-calls.ts; WALNUT_BLOCKING_CALLS=0 turns it off).

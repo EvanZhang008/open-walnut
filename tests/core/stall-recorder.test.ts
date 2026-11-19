@@ -296,3 +296,18 @@ describe('probe wiring', () => {
     expect(warnSpy.mock.calls.some((c) => c[0] === 'event-loop blocked (probe late)')).toBe(true)
   })
 })
+
+describe('paging baseline', () => {
+  it('starts vm_stat at most once in 5 minutes however often the profile rotates', async () => {
+    const { refreshVmBaseline, resetSystemContext, VM_BASELINE_MIN_GAP_MS } = await import('../../src/core/stall-recorder-system.js')
+    resetSystemContext()
+    let reads = 0
+    const read = async () => { reads += 1; return null }
+    const t0 = 1_000_000
+    for (let i = 0; i < 5; i++) refreshVmBaseline(t0 + i * 60_000, read) // five 60 s rotations
+    expect(reads).toBe(1)
+    refreshVmBaseline(t0 + VM_BASELINE_MIN_GAP_MS, read)
+    expect(reads).toBe(2)
+    resetSystemContext()
+  })
+})
