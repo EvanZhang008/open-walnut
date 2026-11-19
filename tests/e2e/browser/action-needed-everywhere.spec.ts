@@ -10,6 +10,8 @@
  *     answered on the row, it leaves the strip and the Threads
  *   - three asks: the strip shows the first two and "1 more"; a snooze in one place reads in the
  *     others, and an unsnooze elsewhere is not held back by a place's own earlier snooze
+ *   - a reply typed on the row (the thread card's own words box) answers a letter: its task gets
+ *     the words, and the item leaves the strip and the Threads
  *   - the switch off: no strip and no "From your team"
  * Real: the fixture server, the mock CLI's prompt, the approvals and inbox routes, the status sync.
  */
@@ -238,6 +240,31 @@ test('three asks: the strip shows the first two and "1 more"; a snooze in the st
   await expect(strip.locator(`[data-testid="action-item"][data-item-id="${firstId}"]`).getByTestId('action-snooze')).toBeVisible({ timeout: 30_000 })
   await expect(strip.locator(`[data-testid="action-item"][data-item-id="${firstId}"]`).getByTestId('action-snoozed-until')).toHaveCount(0)
   expect(renew).toBeTruthy()
+})
+
+test('a reply typed on the row answers the letter: its task gets the words, and it leaves the strip and the Threads', async ({ page, request }) => {
+  await openHome(page, ids.letterSid)
+  const card = await showSectionCard(page, 'needs', ids.letter)
+  const item = card.locator('[data-testid="action-item"][data-kind="letter"]', { hasText: `Paint the hall ${STAMP}?` })
+  const itemId = (await item.getAttribute('data-item-id'))!
+  const strip = stripOf(page, ids.letterSid)
+  await strip.getByTestId('action-needed-more').click().catch(() => {})
+  await expect(strip.locator(`[data-item-id="${itemId}"]`)).toBeVisible()
+  // The same "Reply…" box a thread card answers with.
+  await item.getByTestId('org-answer-other').click()
+  const words = `Neither: keep it the colour it is now ${STAMP}`
+  await item.getByTestId('org-answer-input').fill(words)
+  await item.getByTestId('org-answer-send').click()
+  await expect(card.locator(`[data-item-id="${itemId}"]`)).toHaveCount(0, { timeout: 30_000 })
+  await expect(strip.locator(`[data-item-id="${itemId}"]`)).toHaveCount(0, { timeout: 30_000 })
+  // The task's session gets his words, and the letter no longer waits on him.
+  await expect.poll(async () => {
+    const res = await request.get(`/api/v1/sessions/${ids.letterSid}/history?tail=80`)
+    return ((await res.json()) as { messages?: Array<{ text?: string }> }).messages?.map((m) => m.text ?? '').join('\n') ?? ''
+  }, { timeout: 60_000 }).toContain(words)
+  await expect.poll(async () => ((await statusOf(request, ids.letter)).actions ?? []).some((a) => a.id === itemId), { timeout: 30_000 }).toBe(false)
+  await toThreads(page)
+  await expect(page.locator(`[data-testid="team-actions-task"][data-task-id="${ids.letter}"] [data-item-id="${itemId}"]`)).toHaveCount(0)
 })
 
 test('the switch off: no strip and no "From your team"', async ({ page, request }) => {

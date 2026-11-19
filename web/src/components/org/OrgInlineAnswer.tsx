@@ -5,7 +5,10 @@
  * live prompt shows its own controls (Allow / Deny, a question's options), a decision letter its
  * actions, a Board choice its options, a task's ask form its Yes / No, its choices (multi: check,
  * then Send) or a line; an ask with no shape a line that goes to that task's session. A choice can
- * still be answered in words ("Other"), but the words box is never the first thing shown.
+ * still be answered in words ("Reply…", the same box a thread card answers with), but the words box is
+ * never the first thing shown. Every kind takes words (2026-11-19, the user: "这个能不能搞得像 thread
+ * 一样……我想 reply 之类的"): a letter's reply answers it, a tool prompt's declines the step with
+ * them, and an approval's goes to its session while the approval still waits for Approve or Deny.
  *
  * The row answers the click, not the server: the row goes the moment the answer is sent, and a
  * failure brings it back with the reason and the words the user typed (a busy server on the Mac
@@ -14,8 +17,8 @@
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type { Task } from '@open-walnut/core';
 import { apiGet, apiPut } from '@/api/client';
-import { answerLetter } from '@/api/human-inbox';
-import { retrySession } from '@/api/sessions';
+import { answerLetter, humanReplyToLetter } from '@/api/human-inbox';
+import { respondToPermission, retrySession } from '@/api/sessions';
 import { KanbanCardPrompt } from '@/components/board/kanban/KanbanCardPrompt';
 import { AnswerBox } from '@/components/common/AnswerBox';
 import { useImageAttachments, type ImageAttachments } from '@/components/common/image-attachments';
@@ -118,7 +121,7 @@ function takePictures(pictures: ImageAttachments): ImageAttachment[] | undefined
 /** "Other": a choice answered in words, opened on a click so the choices stay the first thing. */
 function OtherWords({ open, onOpen, children }: { open: boolean; onOpen: () => void; children: ReactNode }) {
   if (open) return <>{children}</>;
-  return <button type="button" className="org-answer-other" data-testid="org-answer-other" onClick={onOpen}>Other…</button>;
+  return <button type="button" className="org-answer-other" data-testid="org-answer-other" onClick={onOpen}>Reply…</button>;
 }
 
 const Failed = ({ failure }: { failure: AnswerFailure | undefined }) =>
@@ -146,6 +149,19 @@ function LetterAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords
   const letter = useMemo(() => openLetterFor(snap.letters, alert.taskId, Date.now(), alert.itemId), [snap.letters, alert.taskId, alert.itemId]);
   useEffect(() => { if (fresh && !letter) onWords(); }, [fresh, letter, onWords]);
   if (!letter) return <div className="org-answer-note" role="status">{fresh ? '' : 'Loading the letter…'}</div>;
+  // Words written back answer the letter as a pick does (the server's one rule, awaitsUserDecision).
+  const replyWords = (text: string, images?: ImageAttachment[]) => {
+    if (!text.trim()) return;
+    const settle = onSend();
+    humanReplyToLetter(letter.id, text, images).then((result) => {
+      if (result.letter) patchLetter(letter.id, { answered: result.letter.answered, read: true });
+      log.info('org-page', 'org alert answered', { taskId: alert.taskId, shape: 'letter-reply', letterId: letter.id, images: images?.length ?? 0 });
+      settle();
+    }, (err: unknown) => {
+      log.warn('org-page', 'org alert reply failed', { taskId: alert.taskId, letterId: letter.id, error: String(err) });
+      settle({ message: 'Not sent. Try again.', draft: text, ...(images?.length ? { images } : {}) });
+    });
+  };
   const pick = (actionId: string) => {
     const settle = onSend();
     answerLetter(letter.id, actionId).then((result) => {
@@ -167,6 +183,50 @@ function LetterAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords
         options={letter.actions!.map((a) => ({ value: a.id, label: a.label, ...(a.description ? { title: a.description } : {}) }))}
         onPick={pick}
       />
+      <ReplyField placeholder="Reply in your words" failure={failure} onSend={replyWords} />
+      <Failed failure={failure} />
+    </>
+  );
+}
+
+/** "Reply…": the words box under an ask's own buttons, opened on a click (open at once when a failed
+ *  send put words back). One component wherever an ask is answered. */
+export function ReplyField({ placeholder, failure, onSend, draftKey = null }: {
+  placeholder: string;
+  failure: AnswerFailure | undefined;
+  onSend: (text: string, images?: ImageAttachment[]) => void;
+  draftKey?: string | null;
+}) {
+  const [open, setOpen] = useState(!!failure?.draft || !!failure?.images?.length);
+  const pictures = useFormPictures(failure);
+  return (
+    <OtherWords open={open} onOpen={() => setOpen(true)}>
+      <WordsField placeholder={placeholder} initial={failure?.draft ?? ''} pictures={pictures} draftKey={draftKey} onSend={onSend} autoFocus />
+    </OtherWords>
+  );
+}
+
+/** An approval answered in words: they go to its session as the user's message; only Approve or
+ *  Deny answers the approval itself (a tap or a signature, never words). */
+export function ApprovalReply({ sessionId, summary, onSent }: { sessionId: string | null; summary: string; onSent?: () => void }) {
+  const { send } = useSessionSend(sessionId);
+  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const [failure, setFailure] = useState<AnswerFailure | undefined>(undefined);
+  if (!sessionId) return null;
+  const reply = (text: string, images?: ImageAttachment[]) => {
+    if (!text.trim()) return;
+    setNote(null);
+    setFailure(undefined);
+    void send(sessionId, `About the approval "${summary}": ${text}`, images).catch(() => false).then((ok) => {
+      log.info('action-needed', 'approval reply sent', { sessionId, ok, images: images?.length ?? 0 });
+      if (ok) { setNote({ ok: true, text: 'Sent to its session. The approval still waits for Approve or Deny.' }); onSent?.(); }
+      else setFailure({ message: 'Not sent. Try again.', draft: text, ...(images?.length ? { images } : {}) });
+    });
+  };
+  return (
+    <>
+      <ReplyField key={note ? 'sent' : 'open'} placeholder="Tell its session something" failure={failure} onSend={reply} />
+      {note && <div className="org-answer-note" role="status" data-testid="approval-reply-sent">{note.text}</div>}
       <Failed failure={failure} />
     </>
   );
@@ -325,12 +385,23 @@ export function OrgInlineAnswer({ alert, task, summary, onAnswer, failure, sessi
   const promptDone = () => { onAnswer(alert.taskId)(); };
   return (
     <div className="org-answer-inline" data-testid="org-answer-inline" data-shape={shape} data-answer-task={alert.taskId}>
-      {shape === 'prompt' && sessionId ? (
+      {shape === 'prompt' && sessionId ? (<>
         <KanbanCardPrompt
           request={{ sessionId, toolName: alert.kind === 'question' ? 'AskUserQuestion' : alert.tool ?? '', ...(alert.itemId ? { requestId: alert.itemId } : {}) }}
           onAnswered={promptDone}
         />
-      ) : shape === 'letter' ? (
+        {/* A tool step answered in words declines it with them (a question's card has its own Other). */}
+        {alert.kind !== 'question' && alert.itemId && (
+          <ReplyField placeholder="Tell it what to do instead (declines this step)" failure={failure} onSend={(text) => {
+            if (!text.trim()) return;
+            const settle = onAnswer(alert.taskId);
+            respondToPermission(sessionId, alert.itemId!, false, text).then(() => settle(), (err: unknown) => {
+              log.warn('org-page', 'prompt reply failed', { taskId: alert.taskId, sessionId, error: String(err) });
+              settle({ message: 'Not sent. Try again.', draft: text });
+            });
+          }} />
+        )}
+      </>) : shape === 'letter' ? (
         <LetterAnswer alert={alert} failure={failure} onSend={send} onWords={toWords} />
       ) : shape === 'choice' ? (
         <ChoiceAnswer alert={alert} failure={failure} onSend={send} onWords={toWords} />

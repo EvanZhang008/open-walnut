@@ -1485,6 +1485,9 @@ export async function humanReplyTurn(
     return { record: { ...letter }, turn: letter.thread.length - 1, duplicate: false };
   }));
   if (!out.duplicate && !input.by) void mirrorLetterReadState(out.record.id, out.record.read);
+  // Words written back can answer a decision (userAnsweredInThread): whoever derives "needs you"
+  // from the letters reads them again now, as after a pick (human-inbox:answered) or a read mark.
+  if (!out.duplicate) bus.emit('human-inbox:state', { letterId: out.record.id, field: 'read', value: !!out.record.read }, [], { source: 'human-inbox' });
   return out;
 }
 

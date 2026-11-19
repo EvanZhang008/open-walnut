@@ -100,6 +100,14 @@ test.afterAll(async ({ request }) => {
   }
 })
 
+/** How many approvals Needs you's one line counts (0 when it has none): approvals no row shows. */
+async function approvalsLineCount(page: Page): Promise<number> {
+  const summary = page.locator('.status-section-block-needs [data-testid="approval-summary"] .approval-row-what')
+  if (!(await summary.count())) return 0
+  const m = /^(\d+) approvals? waiting$/.exec((await summary.first().textContent())?.trim() ?? '')
+  return m ? Number(m[1]) : -1
+}
+
 test('an approval asked while the task works: Needs you, still Working, approved from the row', async ({ page, request }) => {
   await openHome(page)
   const asked = await post<{ approval: { id: string }; waitToken: string }>(request, '/api/v1/approvals',
@@ -113,9 +121,13 @@ test('an approval asked while the task works: Needs you, still Working, approved
   const item = line(card, 'approval')
   await expect(item.getByTestId('action-kind')).toHaveText('Approval')
   await expect(item.getByTestId('action-summary')).toHaveText(`Push commit d0f4f51 to origin main ${STAMP}`)
-  // The one approvals line counts only approvals no row shows.
-  const summary = page.locator('.status-section-block-needs [data-testid="approval-summary"]')
-  await expect(summary).toHaveCount(0)
+  // The one approvals line counts only approvals no row shows: those of no task (another spec's
+  // may be pending too), never this one.
+  const noTask = async () => {
+    const list = ((await (await request.get('/api/v1/approvals')).json()) as { approvals?: Array<{ id: string; requester?: { taskId?: string } }> }).approvals ?? []
+    return list.filter((a) => a.id !== asked.approval.id && !a.requester?.taskId).length
+  }
+  await expect.poll(async () => (await approvalsLineCount(page)) === (await noTask()), { timeout: 15_000 }).toBe(true)
   // The row lists it with its buttons: the corner's card keeps its short form, so it never covers the row at full size.
   await expect(page.locator(`[data-testid="corner-stack"] [data-testid="approval-card"][data-approval-id="${asked.approval.id}"]`)).toHaveClass(/approval-card-line/, { timeout: 15_000 })
   await page.screenshot({ path: `test-results/action-needed-approval-${test.info().project.name}.png`, clip: (await card.boundingBox())! })

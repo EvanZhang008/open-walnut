@@ -78,6 +78,8 @@ const SURFACES: Record<string, 'hook' | 'fallback' | 'renderer'> = {
   'components/board/TaskBoardPane.tsx': 'renderer',
   'components/board/BoardStatusView.tsx': 'renderer',
   'components/org/OrgTaskRail.tsx': 'renderer',
+  // Action needed lines (a task row, a session's strip, a VP's Threads): each place that mounts it is listed.
+  'components/actions/ActionNeeded.tsx': 'renderer',
   'components/tasks/AnsweredForLine.tsx': 'renderer',
   'components/board/kanban/KanbanCard.tsx': 'renderer',
   'components/board/kanban/KanbanCardDetail.tsx': 'renderer',

@@ -20,8 +20,8 @@ export function TeamActions({ tasks }: { tasks: readonly Task[] }) {
       <div className="team-actions-title">From your team · {tasks.length}</div>
       {tasks.map((t) => (
         <div key={t.id} className="team-actions-task" data-testid="team-actions-task" data-task-id={t.id}>
-          <div className="team-actions-head">
-            <button type="button" className="team-actions-name" data-testid="team-actions-open" title={t.title} onClick={() => openTask(t.id)}>{t.title}</button>
+          <div className="team-actions-head" data-peek-row="">
+            <button type="button" className="team-actions-name" data-testid="team-actions-open" onClick={() => openTask(t.id)}>{t.title}</button>
             {t.user_status?.working ? <span className="team-actions-state">Working</span>
               : <span className="team-actions-state">{USER_STATE_LABELS[userStateOf(t)]}</span>}
           </div>

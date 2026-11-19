@@ -534,6 +534,37 @@ describe('human inbox store — bus events', () => {
   });
 });
 
+describe('human inbox store — words written back reach the status readers', () => {
+  const seen: BusEvent[] = [];
+  beforeEach(() => {
+    seen.length = 0;
+    bus.subscribe('test-human-inbox-reply', (event) => { seen.push(event); }, { global: true });
+  });
+  afterEach(() => { bus.unsubscribe('test-human-inbox-reply'); });
+
+  // 2026-11-19: a reply typed on a task row's Action needed answered the letter, yet the task kept
+  // asking for it (the status sync heard nothing until its letters cache ran out).
+  it('a human reply emits human-inbox:state, which user-status-sync re-reads the letters on', async () => {
+    const record = await sendLetter(letterInput({ type: 'action_required', actions: [{ id: 'a', label: 'Go' }], text: 'Pick one' }));
+    seen.length = 0;
+    await humanReply(record.id, { text: 'Neither, wait a week' });
+    const state = seen.filter((e) => e.name === 'human-inbox:state')
+    expect(state).toHaveLength(1);
+    expect(eventData<'human-inbox:state'>(state[0])).toEqual({ letterId: record.id, field: 'read', value: true });
+    const sync = fs.readFileSync(path.resolve(__dirname, '../../src/core/user-status-sync.ts'), 'utf8');
+    expect(sync).toMatch(/const LETTER_STATE = 'human-inbox:state'/);
+    expect(sync).toMatch(/case LETTER_STATE:[\s\S]{0,200}dropSlow\('letters'\)/);
+  });
+
+  it('a resend of the same reply (its clientId on record) emits nothing new', async () => {
+    const record = await sendLetter(letterInput({ type: 'action_required', actions: [{ id: 'a', label: 'Go' }], text: 'Pick one' }));
+    await humanReply(record.id, { text: 'Go ahead', clientId: 'c-1' });
+    seen.length = 0;
+    await humanReply(record.id, { text: 'Go ahead', clientId: 'c-1' });
+    expect(seen.filter((e) => e.name === 'human-inbox:state')).toHaveLength(0);
+  });
+});
+
 describe('human inbox store — error type', () => {
   it('exports LetterError so routes can map code → status', async () => {
     const err = await sendLetter(letterInput({ subject: '' })).catch(e => e);

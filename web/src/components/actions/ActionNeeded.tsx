@@ -25,7 +25,10 @@ import { ACTION_KIND_LABELS, type ActionItem, type ActionKind } from '@open-waln
 import { apiPut } from '@/api/client';
 import { ApprovalButtons } from '@/components/approvals/ApprovalPrompts';
 import { openApproval, useApprovals } from '@/components/approvals/approvals-store';
-import { OrgInlineAnswer, type AnswerFailure, type AnswerSettle } from '@/components/org/OrgInlineAnswer';
+import { ApprovalReply, OrgInlineAnswer, type AnswerFailure, type AnswerSettle } from '@/components/org/OrgInlineAnswer';
+import { resolveTaskSessionId } from '@/utils/session-status';
+import { AgentText } from '@/components/common/AgentText';
+import { taskTextSource } from '@/utils/agent-text-source';
 import type { OrgAlertView } from '@/components/org/org-channels-model';
 import { SnoozeDateFlyout, SnoozeFlyout } from '@/components/tasks/SnoozeChoices';
 import { snoozeUntilText } from '@/components/tasks/quick-sort-model';
@@ -77,17 +80,22 @@ function SnoozeButton({ label, onPick }: { label: string; onPick: (until: string
   );
 }
 
-function ApprovalAnswer({ item }: { item: ActionItem }) {
+function ApprovalAnswer({ item, task }: { item: ActionItem; task: Task }) {
   const s = useApprovals();
   const a = s.items.get(item.id);
+  const words = <ApprovalReply sessionId={item.sessionId ?? resolveTaskSessionId(task)} summary={item.summary} />;
   // The store has not read it yet (or it just ended): its dialog has it.
   if (!a || a.status !== 'pending') {
-    return <button type="button" className="btn btn-sm" data-testid="action-approval-open" onClick={() => openApproval(item.id)}>Open</button>;
+    return (<>
+      <button type="button" className="btn btn-sm" data-testid="action-approval-open" onClick={() => openApproval(item.id)}>Open</button>
+      {words}
+    </>);
   }
   return (
     <div className="action-needed-approval" data-testid="action-approval">
       <ApprovalButtons a={a} s={s} />
       <button type="button" className="btn btn-sm action-needed-details" data-testid="action-approval-details" onClick={() => openApproval(item.id)}>Details</button>
+      {words}
     </div>
   );
 }
@@ -137,12 +145,12 @@ const Line = memo(function Line({ task, item, onAnswer, failure, below }: {
         onClick={(e) => { if (!showPromptBelow(e.currentTarget)) setAnswerHere(true); }}>Answer below <span aria-hidden="true">↓</span></button>
     );
   } else if (!until) {
-    answer = ANSWERS[item.kind] === 'approval' ? <ApprovalAnswer item={item} /> : (
+    answer = ANSWERS[item.kind] === 'approval' ? <ApprovalAnswer item={item} task={task} /> : (
       <OrgInlineAnswer alert={alertOfItem(task, item)} task={task} summary={item.summary} onAnswer={() => onAnswer(item.id)} failure={failure} {...(item.sessionId ? { sessionId: item.sessionId } : {})} />
     );
   }
   return (
-    <div className={`action-needed-item${until ? ' is-snoozed' : ''}`} data-testid="action-item" data-kind={item.kind} data-item-id={item.id}>
+    <div className={`action-needed-item${until ? ' is-snoozed' : ''}`} data-testid="action-item" data-kind={item.kind} data-item-id={item.id} data-peek-row="">
       {/* Its kind and age, its Snooze at the end; what it asks on the lines below (a narrow panel
           keeps the words: they never share a line with the buttons). */}
       <div className="action-needed-head">
@@ -151,11 +159,11 @@ const Line = memo(function Line({ task, item, onAnswer, failure, below }: {
         <span className="action-needed-fill" />
         {until
           ? <button type="button" className="btn btn-sm" data-testid="action-unsnooze" onClick={() => write(null)}>Unsnooze</button>
-          : <SnoozeButton label={`${label}: ${item.summary}`} onPick={write} />}
+          : <SnoozeButton label={label} onPick={write} />}
       </div>
       {/* A live prompt's own card says its question: the line would say it twice. */}
       {until || (below && !answerHere) || ANSWERS[item.kind] !== 'prompt'
-        ? <div className="action-needed-summary" data-testid="action-summary" title={item.summary}>{item.summary}</div> : null}
+        ? <div className="action-needed-summary"><AgentText compact inline {...taskTextSource(task, 'needs')} text={item.summary} testId="action-summary" /></div> : null}
       {until ? (
         <div className="action-needed-until" data-testid="action-snoozed-until">
           Snoozed until {snoozeUntilText(until)}{item.blocking ? ' · its session waits on it' : ''}
