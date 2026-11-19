@@ -1,3 +1,4 @@
+import { errorText } from '@/utils/error-text';
 import { Component, createRef, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { maybeSelfHeal, resetUiStateAndReload } from '@/utils/crash-recovery';
 import { buildCrashReport, fetchServerEnrichment } from '@/utils/crash-report';
@@ -41,7 +42,7 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, State> 
   componentDidCatch(error: Error, info: { componentStack?: string | null }) {
     // console.error routes through the browser-logger monkey-patch → server log.
     console.error('[error-boundary] render crash — tree recovered by boundary', {
-      error: String(error?.stack ?? error),
+      error: errorText(error),
       componentStack: (info?.componentStack ?? '').slice(0, 2000),
     });
     // Keep the stack for the crash report (it's not on the error object).

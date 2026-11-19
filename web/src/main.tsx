@@ -10,6 +10,7 @@ import { StrictMode, startTransition, useLayoutEffect, type ComponentType } from
 import { createRoot, type Root } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import { AppErrorBoundary } from './components/common/AppErrorBoundary';
+import { errorText } from './utils/error-text';
 import { ConfirmProvider } from './hooks/useConfirm';
 import { initAppInfo } from './utils/app-info';
 import { initBrowserLogger } from './utils/browser-logger';
@@ -274,7 +275,7 @@ function bootApp(): void {
     // crashes never reached the server log. Route them through console.error.
     const logReactError = (label: string) => (error: unknown, errorInfo: { componentStack?: string | null }) => {
       console.error(`[react] ${label}`, {
-        error: String((error as Error)?.stack ?? error),
+        error: errorText(error),
         componentStack: (errorInfo?.componentStack ?? '').slice(0, 2000),
       });
     };

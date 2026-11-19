@@ -1,3 +1,4 @@
+import { errorText } from '@/utils/error-text'
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 import { log } from '@/utils/log'
 
@@ -24,7 +25,7 @@ export class PluginBoundary extends Component<PluginBoundaryProps, PluginBoundar
   componentDidCatch(error: Error, info: ErrorInfo): void {
     log.error('plugins', 'native Web Plugin render failed', {
       pluginId: this.props.pluginId,
-      error: error.stack ?? error.message,
+      error: errorText(error),
       componentStack: info.componentStack ?? undefined,
     })
   }

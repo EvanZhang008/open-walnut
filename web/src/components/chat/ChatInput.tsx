@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useMemo, type KeyboardEvent, type DragEvent, type ClipboardEvent, type RefObject, useLayoutEffect } from 'react';
+import { RegionErrorBoundary } from '@/components/common/RegionErrorBoundary';
 import { ICON_READ_SPLIT } from '@/components/common/Icons';
 import { returnInsertsNewline } from './touch-return';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
@@ -445,7 +446,17 @@ interface ChatInputProps {
   promptRecallKey?: string;
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendInSplit, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, light, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, noteSlot, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp, fileTarget, drawingTarget, promptRecallKey }: ChatInputProps) {
+/** The message box keeps its own crash: the conversation above it and the rest of
+ *  the page stay, and Retry mounts it again (its draft is kept under draftKey). */
+export function ChatInput(props: ChatInputProps) {
+  return (
+    <RegionErrorBoundary region="composer" compact ids={{ draftKey: props.draftKey }}>
+      <ChatInputBody {...props} />
+    </RegionErrorBoundary>
+  );
+}
+
+function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSplit, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, light, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, noteSlot, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp, fileTarget, drawingTarget, promptRecallKey }: ChatInputProps) {
   // ONE read of the persisted draft, split once for both pieces of state below.
   const [initialDraft] = useState(() => readDraftSplit(draftKey));
   const [value, setValue] = useState(initialDraft.body);

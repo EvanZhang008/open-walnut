@@ -32,6 +32,7 @@
 import { ArrowUpRightIcon } from '@/components/common/PhoneIcons';
 import { AgentText } from '@/components/common/AgentText';
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { RegionErrorBoundary } from '@/components/common/RegionErrorBoundary';
 import { SESSION_MODE_LABELS } from '@open-walnut/core';
 import type { SessionEffort, SessionOutputMode } from '@open-walnut/core';
 import { ChatInput } from '@/components/chat/ChatInput';
@@ -166,7 +167,17 @@ function ThreadStatusDot({ threadSessionId }: { threadSessionId: string }) {
   );
 }
 
-export function SideQuestionDrawer({
+/** The drawer keeps its own crash (its render, its hooks, the thread it shows): a small
+ *  error with Retry where btw sits, and the main composer and conversation stay. */
+export function SideQuestionDrawer(props: SideQuestionDrawerProps) {
+  return (
+    <RegionErrorBoundary region="side-threads" compact ids={{ sessionId: props.sessionId }}>
+      <SideQuestionDrawerBody {...props} />
+    </RegionErrorBoundary>
+  );
+}
+
+function SideQuestionDrawerBody({
   sessionId, engine, cwd, host, parentMode,
   parentModel, parentEffort, parentOutputMode, onInjectToComposer, sheetAt,
 }: SideQuestionDrawerProps) {

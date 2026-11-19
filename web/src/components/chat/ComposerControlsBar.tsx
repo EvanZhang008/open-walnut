@@ -5,6 +5,7 @@ import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { detailFits, foldDirectButtons, pickVisibleControls, rowExcess, type ControlFitInput, type RowShape } from './composer-controls-fit';
+import { log } from '@/utils/log';
 import '@/styles/composer-controls.css';
 
 /** What the row tells the controls on it about the room it has. */
@@ -70,6 +71,34 @@ const ROW_GAP = 4;
 const RECALL_HINT_MIN_PX = 96;
 /** The composer's direct buttons beside this row (ComposerDirectControl). */
 const DIRECT_BUTTON = '.composer-direct-control';
+/** This bar's own controls: its direct children. A control's node can hold a whole
+ *  composer of its own (the side-thread drawer opens INSIDE this bar), and a
+ *  descendant query would measure that composer's controls as this row's. */
+const OWN_CONTROL = ':scope > [data-control-id]';
+const ownControl = (id: string) => `:scope > [data-control-id="${id}"]`;
+
+/**
+ * The items of the composer row this bar sits in that match `selector`: the row's
+ * direct children only, never a descendant. The side-thread drawer's popover lives
+ * inside this bar with its own composer (its own spacer, recall line and buttons),
+ * which comes first in document order; measuring ITS spacer as this row's made the
+ * room depend on this bar's own fold and condense, so the row flipped between the
+ * two on every render until React stopped it ("Maximum update depth exceeded",
+ * 2026-11-18: clicking btw took the whole session panel down).
+ */
+function rowItems(row: Element | null | undefined, selector: string): HTMLElement[] {
+  if (!row) return [];
+  return Array.from(row.children).filter((el): el is HTMLElement => el instanceof HTMLElement && el.matches(selector));
+}
+
+/** A row that measured more than this many times within BURST_WINDOW_MS is not
+ *  settling but flipping: from then on it measures at most once a frame, until a
+ *  measure finds the shape it already has. Flipping on every measure would
+ *  otherwise loop inside one commit until React throws (it stops at 50 nested
+ *  updates); a real settle takes under ten steps (a jump from a wide column to a
+ *  very tight one: fold, condense, drop the detail, move a pill). */
+const MAX_MEASURES_PER_BURST = 24;
+const BURST_WINDOW_MS = 100;
 
 /**
  * The room a flex row of the composer leaves this bar with its direct buttons
@@ -129,6 +158,8 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
   const directWidths = useRef(new Map<string, number>());
   const [folded, setFolded] = useState(false);
   const [overflow, setOverflow] = useState<string[]>([]);
+  const overflowRef = useRef(overflow);
+  overflowRef.current = overflow;
   const [condensed, setCondensed] = useState(false);
   const [showDetail, setShowDetail] = useState(true);
   const [pinned, setPinned] = useState<string | null>(null);
@@ -138,10 +169,34 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
     onAnchorLost: () => setOpen(false),
   });
 
+  /** Measures in the current burst; while `throttled`, only the one a frame runs (`inFrame`). */
+  const burst = useRef({ start: 0, count: 0, deferred: 0, throttled: false, inFrame: false, warned: false });
+  const measureRef = useRef<() => void>(() => {});
+
   const measure = useCallback(() => {
     const bar = barRef.current;
     if (!bar || !shownRef.current) return;
-    for (const el of bar.querySelectorAll<HTMLElement>('[data-control-id]')) {
+    const b = burst.current;
+    const now = performance.now();
+    if (now - b.start > BURST_WINDOW_MS) { b.start = now; b.count = 0; }
+    if (!b.throttled && ++b.count > MAX_MEASURES_PER_BURST) {
+      b.throttled = true;
+      if (!b.warned) {
+        b.warned = true;
+        log.warn('composer', 'controls row kept changing its shape; measuring once a frame', { folded, condensed, showDetail });
+      }
+    }
+    if (b.throttled && !b.inFrame) {
+      if (!b.deferred) {
+        b.deferred = requestAnimationFrame(() => {
+          b.deferred = 0;
+          b.inFrame = true;
+          try { measureRef.current(); } finally { b.inFrame = false; }
+        });
+      }
+      return;
+    }
+    for (const el of bar.querySelectorAll<HTMLElement>(OWN_CONTROL)) {
       const id = el.dataset.controlId!;
       const w = el.getBoundingClientRect().width;
       if (w <= 0) continue;
@@ -158,10 +213,10 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
       else if (showDetail) detailWidths.current.delete(id);
       shortWidths.current.set(id, w - detailW);
     }
-    const spacer = bar.parentElement?.querySelector<HTMLElement>('.chat-input-controls-spacer');
+    const spacer = rowItems(bar.parentElement, '.chat-input-controls-spacer')[0];
     // The composer's recall line ("2 of 15 back") gives its room up
     // first: it cuts its own words short rather than fold these controls.
-    const hint = bar.parentElement?.querySelector<HTMLElement>('.chat-recall-hint');
+    const hint = rowItems(bar.parentElement, '.chat-recall-hint')[0];
     const yielded = hint ? Math.max(0, hint.getBoundingClientRect().width - RECALL_HINT_MIN_PX) : 0;
     const available = bar.getBoundingClientRect().width + (spacer?.getBoundingClientRect().width ?? 0) + yielded;
     // The direct buttons (Note, btw) give their room up before a control leaves
@@ -171,9 +226,9 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
     const controlsRow = bar.parentElement;
     const rowGap = controlsRow ? parseFloat(getComputedStyle(controlsRow).columnGap) || 0 : 0;
     let directRoom = 0;
-    for (const el of controlsRow?.querySelectorAll<HTMLElement>(DIRECT_BUTTON) ?? []) {
+    for (const el of rowItems(controlsRow, DIRECT_BUTTON)) {
       const id = el.dataset.addControl ?? '';
-      if (!bar.querySelector(`[data-control-id="${id}"] button`)) continue;
+      if (!bar.querySelector(`${ownControl(id)} button`)) continue;
       const w = el.getBoundingClientRect().width;
       if (w > 0) directWidths.current.set(id, w);
       const known = directWidths.current.get(id);
@@ -221,6 +276,12 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
     // nothing: its shape there means "show all", so the buttons keep where they are.
     const fold = roomFolded > 0 ? directRoom > 0 && foldDirectButtons(shown, foldedShape, { detailFirst: phone }) : folded;
     const next = fold ? foldedShape : shown;
+    // The shape held: measures run as they come again.
+    if (b.throttled && fold === folded && next.compact === condensed && next.withDetail === showDetail
+      && next.overflow.length === overflowRef.current.length && next.overflow.every((id, i) => id === overflowRef.current[i])) {
+      b.throttled = false;
+      b.count = 0;
+    }
     setFolded((prev) => prev === fold ? prev : fold);
     setCondensed((prev) => prev === next.compact ? prev : next.compact);
     setShowDetail((prev) => prev === next.withDetail ? prev : next.withDetail);
@@ -230,6 +291,11 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
     // the plain priority order instead of remembering one menu click forever.
     if (next.overflow.length === 0) setPinned((p) => (p === null ? p : null));
   }, [inline, pinned, condensed, showDetail, folded, phone]);
+  measureRef.current = measure;
+  useEffect(() => () => {
+    cancelAnimationFrame(burst.current.deferred);
+    burst.current.deferred = 0;
+  }, []);
 
   useLayoutEffect(() => {
     if (!routeShown) return;
@@ -244,10 +310,10 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
     // The row only shrinks when the space around it does, and its own box stops
     // changing once it has collapsed — watch the whole controls row too.
     if (bar.parentElement) ro.observe(bar.parentElement);
-    for (const el of bar.querySelectorAll<HTMLElement>('[data-control-id]')) ro.observe(el);
+    for (const el of bar.querySelectorAll<HTMLElement>(OWN_CONTROL)) ro.observe(el);
     // A direct button that appears (its control mounted late) takes room the row
     // has to hear about even when the row's own box does not change.
-    for (const el of bar.parentElement?.querySelectorAll<HTMLElement>(DIRECT_BUTTON) ?? []) ro.observe(el);
+    for (const el of rowItems(bar.parentElement, DIRECT_BUTTON)) ro.observe(el);
     return () => { ro.disconnect(); cancelAnimationFrame(frame); };
     // `ids` covers "a control appeared or disappeared"; `measure` covers the rest.
   }, [measure, ids, routeShown]);
@@ -271,14 +337,17 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
   // resize would leave the picker pointing at a zero rect; and a control you just
   // used is the one you are most likely to use again.
   const pinTouched = useCallback((e: React.PointerEvent) => {
-    const el = (e.target as HTMLElement | null)?.closest?.('[data-control-id]') as HTMLElement | null;
-    const id = el?.dataset.controlId;
+    const target = e.target as HTMLElement | null;
+    // A press inside a nested composer (the side-thread drawer's) is that composer's.
+    if (target?.closest?.('.chat-input-box') !== barRef.current?.closest('.chat-input-box')) return;
+    const el = target?.closest?.('[data-control-id]') as HTMLElement | null;
+    const id = el?.parentElement === barRef.current ? el?.dataset.controlId : undefined;
     if (id) setPinned((p) => (p === id ? p : id));
   }, []);
 
   const activate = useCallback((control: ComposerControl) => {
     const click = () => {
-      const el = barRef.current?.querySelector<HTMLElement>(`[data-control-id="${control.id}"]`);
+      const el = barRef.current?.querySelector<HTMLElement>(ownControl(control.id));
       (el?.querySelector<HTMLElement>('button, [role="button"]') ?? el)?.click();
     };
     if (control.inAddMenu) { click(); return; }
@@ -293,10 +362,10 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
       const control = present.find((c) => c.id === id);
       if (control) activate(control);
     },
-    button: (id) => barRef.current?.querySelector<HTMLButtonElement>(`[data-control-id="${id}"] button`) ?? null,
+    button: (id) => barRef.current?.querySelector<HTMLButtonElement>(`${ownControl(id)} button`) ?? null,
     folded: (id) => folded && present.some((c) => c.id === id),
     state: (id) => {
-      const button = barRef.current?.querySelector<HTMLElement>(`[data-control-id="${id}"] button`);
+      const button = barRef.current?.querySelector<HTMLElement>(`${ownControl(id)} button`);
       const ariaLabel = button?.getAttribute('aria-label');
       return id === 'output' ? ariaLabel?.replace(/^Output mode: /, '') ?? '' : ariaLabel ?? button?.textContent?.trim() ?? '';
     },
@@ -377,7 +446,7 @@ function OverflowRow({ control, barRef, onActivate }: {
 }) {
   const [label, setLabel] = useState('');
   useEffect(() => {
-    const el = barRef.current?.querySelector<HTMLElement>(`[data-control-id="${control.id}"]`);
+    const el = barRef.current?.querySelector<HTMLElement>(ownControl(control.id));
     if (!el) return;
     const read = () => setLabel((el.textContent ?? '').replace(/\s+/g, ' ').trim());
     read();

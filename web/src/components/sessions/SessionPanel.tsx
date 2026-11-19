@@ -3,7 +3,8 @@ import { useCoalescedRefresh } from '@/hooks/useCoalescedRefresh';
 import { useCommittedRef } from '@/hooks/useCommittedRef';
 import { useShownReadLane } from '@/hooks/useShownReadLane';
 import { sameJson } from '@/utils/same-json';
-import { useState, useContext, useEffect, useLayoutEffect, useCallback, useRef, useMemo, Component, lazy, Suspense, type ReactNode, type ErrorInfo, type MouseEvent as ReactMouseEvent, type MutableRefObject, type CSSProperties, memo } from 'react';
+import { useState, useContext, useEffect, useLayoutEffect, useCallback, useRef, useMemo, lazy, Suspense, type ReactNode, type MouseEvent as ReactMouseEvent, type MutableRefObject, type CSSProperties, memo } from 'react';
+import { RegionErrorBoundary } from '@/components/common/RegionErrorBoundary';
 import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { stableHtml } from '@/hooks/useStableHtml';
 import { PauseGlyphIcon, PlayGlyphIcon, WarningTriangleIcon } from '@/components/common/PhoneIcons';
@@ -266,53 +267,31 @@ interface SessionPanelErrorBoundaryProps {
   children: ReactNode;
 }
 
-interface SessionPanelErrorBoundaryState {
-  hasError: boolean;
-}
-
-class SessionPanelErrorBoundary extends Component<SessionPanelErrorBoundaryProps, SessionPanelErrorBoundaryState> {
-  constructor(props: SessionPanelErrorBoundaryProps) {
-    super(props);
-    this.state = { hasError: false };
-  }
-
-  static getDerivedStateFromError(): SessionPanelErrorBoundaryState {
-    return { hasError: true };
-  }
-
-  componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error('SessionPanel crashed:', error, info.componentStack);
-  }
-
-  componentDidUpdate(prevProps: SessionPanelErrorBoundaryProps) {
-    if (this.state.hasError && prevProps.sessionId !== this.props.sessionId) {
-      this.setState({ hasError: false });
-    }
-  }
-
-  render() {
-    if (this.state.hasError) {
-      const { onClose, clearsColumnLayout } = this.props;
-      return (
-        <div className="session-panel" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '12px', padding: '24px' }}>
-          <p style={{ color: 'var(--fg-muted)', margin: 0 }}>Something went wrong loading this session.</p>
-          {onClose && (
-            <button
-              className="btn btn-sm btn-primary"
-              onClick={() => {
-                // Only this column leaves the saved strip; the other columns and the pins stay.
-                if (clearsColumnLayout) { dropSavedColumn('homeColumns', this.props.sessionId); dropSavedColumn('phoneColumns', this.props.sessionId); }
-                onClose(this.props.sessionId);
-              }}
-            >
-              Close panel
-            </button>
-          )}
-        </div>
-      );
-    }
-    return this.props.children;
-  }
+/** The whole panel's crash stays in its column, with Retry (RegionErrorBoundary). */
+function SessionPanelErrorBoundary({ sessionId, onClose, clearsColumnLayout, children }: SessionPanelErrorBoundaryProps) {
+  return (
+    <RegionErrorBoundary
+      region="session-panel"
+      ids={{ sessionId }}
+      resetKey={sessionId}
+      className="session-panel"
+      message="Something went wrong loading this session."
+      actions={onClose && (
+        <button
+          className="btn btn-sm"
+          onClick={() => {
+            // Only this column leaves the saved strip; the other columns and the pins stay.
+            if (clearsColumnLayout) { dropSavedColumn('homeColumns', sessionId); dropSavedColumn('phoneColumns', sessionId); }
+            onClose(sessionId);
+          }}
+        >
+          Close panel
+        </button>
+      )}
+    >
+      {children}
+    </RegionErrorBoundary>
+  );
 }
 
 /** Plan markdown in the popover, rendered and opened as its writer's (the panel's own, or the from-plan source). */
