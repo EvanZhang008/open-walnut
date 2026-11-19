@@ -91,7 +91,9 @@ describe('hand-back settle hold', () => {
     } as never)
     stopUserStatusSync() // drops the kept facts, as the letter event does
     await syncUserStatuses(new Set([t.id]))
-    expect((await getTask(t.id)).user_status?.state).toBe('working')
+    // Its turn still runs, and the open letter already asks him (core/action-needed.ts): Needs you,
+    // still Working.
+    expect((await getTask(t.id)).user_status).toMatchObject({ state: 'needs', source: 'letter', working: true })
     await handBack(t.id, 'sess-settle-3')
     const moved = Date.parse((await getTask(t.id)).phase_changed_at!)
     await syncUserStatuses(new Set([t.id]), moved + 500)
