@@ -49,6 +49,25 @@ export function labDaemon(dirs: { work: string; state: string }, o: { refusals?:
   return file
 }
 
+/**
+ * Where `line` holds a `$((` that does not end in `))` (a command substitution whose first word
+ * is a subshell, which dash cannot parse), or -1.
+ */
+export function notArithmetic(line: string): number {
+  for (let at = line.indexOf('$(('); at >= 0; at = line.indexOf('$((', at + 3)) {
+    let depth = 2
+    for (let i = at + 3; i < line.length && depth > 0; i++) {
+      if (line[i] === '(') depth++
+      else if (line[i] === ')') {
+        depth--
+        // The inner `(` closed: arithmetic closes the outer one right after it.
+        if (depth === 1 && line[i + 1] !== ')') return at
+      }
+    }
+  }
+  return -1
+}
+
 export interface Host extends NetUpdateConn { lines: string[]; writes: string[]; jobGroups: number[] }
 
 /**
@@ -77,6 +96,10 @@ export function labHost(dirs: { work: string; home: string; made: Set<string> },
         const argv = params.argv as string[] | undefined
         const line = argv ? argv[2] : String(params.command)
         host.lines.push(line)
+        // dash (/bin/sh on Debian and Ubuntu) reads every `$((` as arithmetic; bash, a Mac's /bin/sh,
+        // forgives `$((cmd) | x)`. Caught here so a Mac run fails as CI's does (2026-11-19).
+        const at = notArithmetic(line)
+        if (at >= 0) throw new Error(`a line dash cannot parse: \`$((\` that is not arithmetic: ${line.slice(Math.max(0, at - 60), at + 60)}`)
         o.beforeRun?.(line)
         const child = argv ? spawn(argv[0], argv.slice(1), { env, cwd: '/', detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
           : spawn('/bin/sh', ['-c', line], { env, cwd: '/', detached: true, stdio: ['ignore', 'pipe', 'pipe'] })

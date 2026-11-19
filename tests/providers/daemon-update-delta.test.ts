@@ -24,7 +24,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createNetUpdateIo, type NetUpdateIoOptions } from '../../src/providers/daemon-net-update-io.js'
 import { updateRemoteDaemonService } from '../../src/providers/daemon-service-update.js'
 import { DELTA_BLOCK_BYTES } from '../../src/providers/walnut-file-delta.js'
-import { LAB_STAGING, labDaemon, labHost } from '../helpers/net-update-lab.js'
+import { LAB_STAGING, labDaemon, labHost, notArithmetic } from '../helpers/net-update-lab.js'
 
 // This file's own version: chunk dirs are named by it, so another file's cases never share them.
 const LAB_VERSION = 'walnut-daemon-de17a0000001'
@@ -178,4 +178,14 @@ describe('a daemon update sent as the blocks that differ from the installed file
     expect(chunkWrites(second).map((p) => p.slice(-4))[0]).toBe('0001')
     expect(fs.readFileSync(BUILT()).equals(fresh)).toBe(true)
   }, 90_000)
+
+  // 2026-11-19: `$((sha256sum f || shasum f) | awk ..)` passed on a Mac (bash) and failed on CI's dash.
+  it('the lab host refuses a `$((` that dash reads as arithmetic, and lets real arithmetic run', () => {
+    const cases: Array<[string, boolean]> = [
+      ['n=$((n+1))', false], ['x=$(( (a + 1) * 2 ))', false], ['W_I=$((W_I + 1))', false],
+      ['[ "$( (sha256sum f || shasum -a 256 f) | awk \'{print $1}\' )" = y ]', false],
+      ['[ "$((sha256sum f || shasum -a 256 f) 2>/dev/null | awk \'{print $1}\')" = y ]', true],
+    ]
+    for (const [line, bad] of cases) expect(notArithmetic(line) >= 0, line).toBe(bad)
+  })
 })

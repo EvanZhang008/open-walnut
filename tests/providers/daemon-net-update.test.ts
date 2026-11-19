@@ -217,7 +217,8 @@ describe('NetDaemonUpdater', () => {
     await vi.waitFor(() => expect(u.state.phase).toBe('updated'))
     expect(update).toHaveBeenCalledTimes(1)
     const [source, version, io, scope] = update.mock.calls[0] as unknown as [{ binary: string }, string, { serviceUpdate?: unknown }, string]
-    expect(source).toEqual({ binary: '/srv/daemon-darwin-arm64' })
+    // The file its service runs now is the base a delta is planned from (daemon-service-update.ts).
+    expect(source).toEqual({ binary: '/srv/daemon-darwin-arm64', base: conn.serviceExecutable })
     expect(version).toBe(NEW)
     expect(scope).toBe('user')
     expect(typeof io.serviceUpdate).toBe('function')
@@ -776,7 +777,7 @@ describe('NetDaemonUpdater', () => {
     await vi.waitFor(() => expect(u.state.phase).toBe('updated'))
     // An x86_64 shell under Rosetta on an Apple silicon Mac is that Mac's own arm64 target.
     expect(source).toHaveBeenCalledWith('darwin-arm64', NEW, expect.any(Function))
-    expect(update.mock.calls[0]![0]).toEqual({ binary: null, gz })
+    expect(update.mock.calls[0]![0]).toEqual({ binary: null, gz, base: base.serviceExecutable })
     // The status comes before the probe, and the probe is a line the macOS guard lets run.
     expect(base.lines.map((l) => (l.includes('uname -s') ? 'probe' : l.includes('daemon status') ? 'status' : l))).toEqual(['status', 'probe'])
     expect(permissionRisk(base.lines[1]!, '/', '/Users/u')).toBeNull()

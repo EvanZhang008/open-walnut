@@ -8,12 +8,11 @@ import { pipeline } from 'node:stream/promises'
 import type { DaemonServiceScope } from './daemon-service-manager.js'
 import { OVER_BUSY_FLAG } from './daemon-over-busy.js'
 import type { UpdateTail } from './daemon-update-tail.js'
-import { runDetachedUpdate, type NetUpdateIoOptions } from './daemon-net-update-io.js'
+import { runDetachedUpdate, shq, type NetUpdateIoOptions } from './daemon-net-update-io.js'
 import { judgeServiceUpdate, sshUpdateHost } from './daemon-update-readback.js'
 import { log } from '../logging/index.js'
 import { MKTEMP_STAGING, STAGING, STAGING_PREFIX } from './daemon-update-staging.js'
 import { DELTA_BLOCK_BYTES, deltaAssemblyLines, planDeltaAgainst } from './walnut-file-delta.js'
-import { shq } from './remote-sh.js'
 import { remoteSha256Command } from './upload-resume.js'
 
 // Judged and read in daemon-update-readback.ts, which tests do not replace with a double.
@@ -252,7 +251,8 @@ async function stageRemoteDaemonBinary(
  */
 async function planHostDelta(io: RemoteDaemonUpdateIo, base: string, gz: () => Buffer | Promise<Buffer>): Promise<StagePayload | null> {
   // A JS daemon's service runs node or bun: nothing of a walnut file to share.
-  if (!REMOTE_PATH.test(base) || /(^|\/)(node|bun)$/.test(base)) return null
+  // Quoted wherever it goes: a Mac's install root has spaces (Application Support/Open Walnut).
+  if (!base.startsWith('/') || base.length > 1024 || /[\u0000-\u001f]/.test(base) || /(^|\/)(node|bun)$/.test(base)) return null
   const planned = await planDeltaAgainst((command, timeoutMs) => io.run(command, timeoutMs), base, gz)
   if (!planned) return null
   const { plan, baseSize } = planned
@@ -272,7 +272,8 @@ async function planHostDelta(io: RemoteDaemonUpdateIo, base: string, gz: () => B
         // A write that fails (a full disk) keeps the chunks for the next try.
         ...deltaAssemblyLines({ base, raw, out: executable, blocks: plan.blocks, changed: plan.changed, blockBytes: DELTA_BLOCK_BYTES }, () => 'exit 1'),
         `rm -f ${raw}`,
-        `[ "$(${remoteSha256Command(executable)})" = '${plan.sha256}' ] || ${baseWrong}`,
+        // `$( (` with a space: dash reads `$((` as arithmetic (2026-11-19, CI's /bin/sh).
+        `[ "$( ${remoteSha256Command(executable)} )" = '${plan.sha256}' ] || ${baseWrong}`,
       ]
       return `{\n${lines.join('\n')}\n}`
     },
