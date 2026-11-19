@@ -79,7 +79,7 @@ describe('buildStatusBoard', () => {
     expect(b.groups.waiting[0].task.id).toBe('wait-due');
   });
 
-  it('To read is under Needs you, sorted and counted with it; no To read group, chip or count', () => {
+  it('To read is drawn under Needs you after the asks and counted apart (toLook); no To read group or chip', () => {
     const tasks = [
       ...team(),
       task('result', { us: { state: 'read', toRead: 'result', waitingOn: 'The result is ready', at: ago(20) } }),
@@ -89,21 +89,21 @@ describe('buildStatusBoard', () => {
       task('snoozed', { us: { state: 'waiting', toRead: 'result', waitingOn: 'Its result', snoozed: { until: ago(-600) }, at: ago(1) } }),
     ];
     const b = buildStatusBoard({ ownerId: 'lead', tasks, now: NOW, doneWindowDays: 7 });
-    expect(b.counts).toEqual({ needs: 4, working: 3, waiting: 4, done: 1 });
+    expect(b.counts).toEqual({ needs: 2, working: 3, waiting: 4, done: 1 });
+    expect(b.toLook).toBe(2);
     expect(Object.keys(b.groups).sort()).toEqual(['done', 'needs', 'waiting', 'working']);
-    // Newest first, by the same rule as the asks.
-    expect(b.groups.needs.map((r) => r.task.id)).toEqual(['legacy', 'result', 'vm', 'stt']);
+    // The asks first, then the ones to read, each newest first.
+    expect(b.groups.needs.map((r) => r.task.id)).toEqual(['vm', 'stt', 'legacy', 'result']);
     // The row keeps its own state (its line and its calm mark read it); only the group moved.
-    expect(b.groups.needs.map((r) => r.status.state)).toEqual(['read', 'read', 'needs', 'needs']);
+    expect(b.groups.needs.map((r) => r.status.state)).toEqual(['needs', 'needs', 'read', 'read']);
     expect(b.groups.waiting.map((r) => r.task.id)).toContain('snoozed');
-    expect(filteredRows(b, 'needs').map((r) => r.task.id)).toEqual(['legacy', 'result', 'vm', 'stt']);
-    expect(filteredRows(b, 'open').map((r) => r.status.state).slice(0, 5)).toEqual(['read', 'read', 'needs', 'needs', 'working']);
+    expect(filteredRows(b, 'needs').map((r) => r.task.id)).toEqual(['vm', 'stt', 'legacy', 'result']);
+    expect(filteredRows(b, 'open').map((r) => r.status.state).slice(0, 5)).toEqual(['needs', 'needs', 'read', 'read', 'working']);
     const brief = statusBrief(b);
-    expect(brief.needs.map((n) => n.id)).toEqual(['legacy', 'result', 'vm', 'stt']);
-    expect(brief.needs.map((n) => n.line)).toEqual([
-      'Take a look: It answered your question', 'Can close: The result is ready',
-      'Decide: Revoke the old token?', 'Decide: Approve a real iPhone test?',
-    ]);
+    // The headline names the asks only and counts the rest (toLookLine).
+    expect(brief.needs.map((n) => n.id)).toEqual(['vm', 'stt']);
+    expect(brief.needs.map((n) => n.line)).toEqual(['Decide: Revoke the old token?', 'Decide: Approve a real iPhone test?']);
+    expect(brief.toLook).toBe(2);
     expect(briefCountsLine(brief)).toBe('3 Working, 3 Waiting / snoozed (1 with nothing to wake it), 1 Not started, 1 Completed in the last 7 days.');
     expect(briefCountsLine(brief)).not.toContain('To read');
   });

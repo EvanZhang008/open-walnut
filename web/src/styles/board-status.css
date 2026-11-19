@@ -40,6 +40,7 @@
 }
 
 .board-status .bs-brief-needs { color: var(--bs-needs); }
+.board-status .bs-brief-to-look { color: var(--fg-muted); }
 .board-status .bs-brief-none { color: var(--bs-done); font-weight: 600; }
 
 .board-status .bs-link {

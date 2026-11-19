@@ -241,7 +241,7 @@ export function buildBoardVM(input: KanbanBoardInput): KanbanBoardVM {
     const sessionId = resolveTaskSessionId(o) ?? undefined;
     const red = redReasonOf(o, input.liveOf(o), null, signalsOf(o.id), input.isChoice);
     leader = {
-      taskId: o.id, title: o.title, needsYou: !!red, hasSession: !!sessionId, ...(sessionId ? { sessionId } : {}),
+      taskId: o.id, title: o.title, needsYou: !!red && red.kind !== 'to-read', hasSession: !!sessionId, ...(sessionId ? { sessionId } : {}),
       status: red ?? { text: '', tone: 'grey', kind: sessionId ? 'stopped' : 'no-session', tooltip: '' },
     };
   }

@@ -10,7 +10,7 @@ import type { Task } from '@open-walnut/core';
 import { templateLanes, type BoardCard } from '../../src/core/boards/board-lanes';
 import type { KanbanLive } from '../../web/src/components/board/kanban/kanban-card-model';
 import { buildBoardVM, orderLane, teamAttention } from '../../web/src/components/board/kanban/kanban-model';
-import { deriveUserStatus, shownState, storedUserState, type UserStatusInput } from '../../src/core/user-status';
+import { deriveUserStatus, storedUserState, type UserStatusInput } from '../../src/core/user-status';
 import { KANBAN_TIME_RE, absoluteText, agoText, clockText, durationText, waitText } from '../../web/src/components/board/kanban/kanban-time';
 import { DAY, HOUR, MIN, NOW, ago, mkTask, vm, withSession } from './kanban-card-fixtures';
 
@@ -72,11 +72,12 @@ describe('status line (C15, C57)', () => {
     expect(vm(mkTask({ phase: 'COMPLETE', completed_at: ago(5_000), user_status: { state: 'needs', ask: 'x' } })).status.tone).toBe('green');
   });
 
-  it('To read is a Needs you card, its line saying what to do with it; own work going on reads Working', () => {
+  it('To read wears Needs you, its line saying what to do with it, but asks nothing and counts in no Needs you number; own work going on reads Working', () => {
     const ended = { phase: 'NEED_ACTION' as const };
     const read = vm(mkTask({ ...ended, user_status: { state: 'read', toRead: 'result', waitingOn: 'The result is ready' } }));
     expect(read.status).toMatchObject({ text: 'Can close: The result is ready', tone: 'red', kind: 'to-read' });
-    expect(read.needsYou).toBe(true);
+    // Drawn red under Needs you, never counted as an ask (2026-11-18: counts of Needs you count asks only).
+    expect(read.needsYou).toBe(false);
     // An older server stored To read as Waiting with toRead.
     expect(vm(mkTask({ ...ended, user_status: { state: 'waiting', toRead: 'answer', waitingOn: 'It answered your question' } })).status)
       .toMatchObject({ text: 'Take a look: It answered your question', tone: 'red', kind: 'to-read' });
@@ -394,10 +395,10 @@ describe('round 4 fixes', () => {
  * ask reaches Needs you, src/core/user-status.ts). It passed locally only by reading the answered
  * prompt's stored status in the status sync's debounce. Guard for the class: every status the
  * server derives for the leader (the real deriveUserStatus) counts on the board exactly when it is
- * drawn under Needs you (shownState: a real ask, or since 2026-11-03 a turn, a result or an answer
- * to look at, To read), so the board and the core cannot disagree on what the user must do.
+ * a real ask (a turn, a result or an answer to look at, To read, is drawn under Needs you but
+ * counts nowhere since 2026-11-18), so the board and the core cannot disagree on what the user must do.
  */
-describe('the leader counts on the board exactly when it is under Needs you (C39)', () => {
+describe('the leader counts on the board exactly when it asks the user (C39)', () => {
   const OWNER = 'own00000-0000-4000-8000-000000000001';
   const SID = 'lead-session-full-id';
   const asked = (phaseChangedAt: string): UserStatusInput => ({
@@ -422,7 +423,7 @@ describe('the leader counts on the board exactly when it is under Needs you (C39
     user_status: deriveUserStatus(input, NOW) as Task['user_status'],
   });
 
-  it('the prompt counts once; the turn its answer ended counts only as a turn to look at', () => {
+  it('the prompt counts once; the turn its answer ended is only a turn to look at and counts nowhere', () => {
     // The prompt is live: the leader needs the user, one more than the cards.
     const prompting = board(leader({ ...asked(ago(MIN)), pendingPermissionTool: 'Bash' }), { process_status: 'idle', pendingPermissionTool: 'Bash', sessionId: SID });
     expect(prompting.leader?.needsYou).toBe(true);
@@ -438,19 +439,20 @@ describe('the leader counts on the board exactly when it is under Needs you (C39
     ] as UserStatusInput[]) {
       const status = deriveUserStatus(input, NOW);
       expect(status.state, JSON.stringify(status)).not.toBe('needs');
-      const shown = shownState(storedUserState(status)) === 'needs';
+      const toRead = storedUserState(status) === 'read';
       seen.push(storedUserState(status));
       const after = board(leader(input), idle);
-      expect(after.leader?.needsYou, JSON.stringify(status)).toBe(shown);
-      expect([after.chips.needs, after.attention], JSON.stringify(status)).toEqual(shown ? [2, 2] : [1, 1]);
-      if (shown) expect(after.leader?.status.text, JSON.stringify(status)).toMatch(/^Take a look/);
+      // Neither asks: the leader is in no Needs you count, a turn to look at only wears its line.
+      expect(after.leader?.needsYou, JSON.stringify(status)).toBe(false);
+      expect([after.chips.needs, after.attention], JSON.stringify(status)).toEqual([1, 1]);
+      if (toRead) expect(after.leader?.status.text, JSON.stringify(status)).toMatch(/^Take a look/);
     }
     // Both kinds were walked: one under Waiting, one under Needs you.
     expect(seen).toContain('read');
     expect(seen.some((s) => s !== 'read')).toBe(true);
   });
 
-  it('a status under Needs you counts (a real ask, or something to look at); one elsewhere never does', () => {
+  it('a real ask counts; something only to look at or a status elsewhere never does', () => {
     const at = ago(30_000);
     const noAsk: UserStatusInput[] = [
       { ...asked(ago(MIN)), report: { state: 'done', at } },
@@ -468,7 +470,7 @@ describe('the leader counts on the board exactly when it is under Needs you (C39
       const status = deriveUserStatus(input, NOW);
       // No ask of its own: the core never stores it as Needs you; it is drawn there only as To read.
       expect(status.state, JSON.stringify(status)).not.toBe('needs');
-      expect(board(leader(input), idle).leader?.needsYou, JSON.stringify(input)).toBe(shownState(storedUserState(status)) === 'needs');
+      expect(board(leader(input), idle).leader?.needsYou, JSON.stringify(input)).toBe(storedUserState(status) === 'needs');
     }
     for (const input of realAsk) {
       const live: KanbanLive = input.processStatus === 'error' ? { process_status: 'error', errorMessage: 'The CLI exited', sessionId: SID } : idle;

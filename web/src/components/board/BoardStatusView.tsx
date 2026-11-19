@@ -28,7 +28,7 @@ import { AgentText } from '@/components/common/AgentText';
 import { taskTextSource } from '@/utils/agent-text-source';
 import { useLiveActivity } from '@/stores/live-activity-store';
 import {
-  NOT_STARTED_LABEL, STATUS_CHIPS, briefCountsLine, buildStatusBoard, chipCount, chipLabel, filteredRows, isNotStartedStatus, isStatusFilter, needsRowLine,
+  NOT_STARTED_LABEL, STATUS_CHIPS, briefCountsLine, buildStatusBoard, toLookLine, chipCount, chipLabel, filteredRows, isNotStartedStatus, isStatusFilter, needsRowLine,
   rowTime, statusBrief, statusFilterShown, waitingLine, sameAskLine, waitingSentence, type KeptStatusFilter, type StatusChip, type StatusFilter, type StatusRow,
 } from './board-status-model';
 import '@/styles/board-overview.css';
@@ -251,7 +251,7 @@ export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenPag
   const brief = statusBrief(board);
   const owner = useMemo(() => tasks.find((t) => t.id === ownerId), [tasks, ownerId]);
   const rows = filteredRows(board, filter);
-  const open = board.counts.needs + board.counts.working + board.counts.waiting;
+  const open = board.groups.needs.length + board.counts.working + board.counts.waiting;
   // The owner alone, nothing below it open or recently done.
   const solo = open + board.counts.done <= 1;
   const pick = (f: StatusFilter) => {
@@ -282,6 +282,7 @@ export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenPag
               ))}.
             </>
           )}
+          {brief.toLook > 0 && <> <span className="bs-brief-to-look" data-testid="board-status-to-look">{toLookLine(brief.toLook)}</span></>}
           <br />
           {briefCountsLine(brief)}
         </p>

@@ -107,6 +107,8 @@ export interface KanbanCardVM {
   /** Valid only for the lane shown (rank_lane == lane). */
   rank?: number;
   status: KanbanStatus;
+  /** It asks the user: a red status, never one with only something to read ('to-read'), which
+   *  wears red but is no ask (2026-11-18: counts of Needs you count asks only). */
   needsYou: boolean;
   running: boolean;
   activity: string;
@@ -482,7 +484,7 @@ export function buildCardVM(i: KanbanCardInput): KanbanCardVM {
   return {
     ...base, title: task.title, ...(ticket ? { ticket } : {}), ...(sev ? { sev } : {}),
     ...(i.openSubtasks ? { leaderCount: i.openSubtasks } : {}),
-    status, needsYou: status.tone === 'red', running, activity: running ? capitalize(live?.activity ?? '') : '',
+    status, needsYou: status.tone === 'red' && status.kind !== 'to-read', running, activity: running ? capitalize(live?.activity ?? '') : '',
     hasSession, canStart: !hasSession && !isComplete,
     ...(sessionId ? { sessionId } : {}), ...(summary ? { summary } : {}), ...(waiting ? { waiting } : {}),
     ...(card && (card.summary || card.waiting_on) ? { cardWords: { ...(card.summary ? { summary: card.summary } : {}), ...(card.waiting_on ? { waiting_on: card.waiting_on } : {}) } } : {}),

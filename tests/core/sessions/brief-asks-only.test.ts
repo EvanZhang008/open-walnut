@@ -21,6 +21,7 @@ import {
 import { briefNeedsAsks, briefSectionLines } from '../../../src/core/sessions/brief.js'
 import { buildMorningReport } from '../../../src/core/org/morning-report.js'
 import { askCount, buildChannels, type AlertProbe } from '../../../web/src/components/org/org-channels-model.js'
+import { buildStatusBoard, chipCount, statusBrief, toLookLine } from '../../../web/src/components/board/board-status-model.js'
 
 const NOW = '2026-11-18T10:00:00.000Z'
 const lead = { id: 'lead-0001', title: 'Garden lead', phase: 'WAITING', status: 'in_progress', org_role: 'lead', project: 'Garden' } as Task
@@ -144,6 +145,24 @@ describe('the Org page', () => {
     const quiet = buildChannels(buildOrgTree(onlyReads), onlyReads, noAlerts).rows.find((r) => r.project === 'Garden')!
     expect(quiet.needs).toBe(0)
     expect(quiet.state).not.toBe('alert')
+  })
+})
+
+describe('the Board', () => {
+  it('its Needs you number, chip and headline count and name asks only; the rest is one line', () => {
+    const tasks = [lead, ...team(2, 5)]
+    const board = buildStatusBoard({ ownerId: lead.id, tasks, now: Date.parse(NOW), doneWindowDays: 7 })
+    // All seven are drawn under Needs you, the asks first; the number (the chip and the view toggle) is 2.
+    expect(board.groups.needs).toHaveLength(7)
+    expect(board.groups.needs.slice(0, 2).every((r) => r.status.state === 'needs')).toBe(true)
+    expect(board.counts.needs).toBe(2)
+    expect(chipCount(board, 'needs')).toBe(2)
+    expect(board.toLook).toBe(5)
+    const brief = statusBrief(board)
+    expect(brief.needs.map((x) => x.id).sort()).toEqual(tasks.filter(briefAsksUser).map((t) => t.id).sort())
+    expect(brief.toLook).toBe(5)
+    expect(toLookLine(brief.toLook)).toBe('And 5 only to look at, nothing to decide.')
+    expect(toLookLine(0)).toBe('')
   })
 })
 

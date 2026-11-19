@@ -54,8 +54,11 @@ export interface StatusRow {
 }
 
 export interface StatusBoard {
-  /** By group: Needs you counts the To read rows drawn in it. */
+  /** By group. Needs you counts its asks only: the To read rows drawn in it (after the asks) are
+   *  `toLook` (2026-11-18: a VP's Brief read "53 things need you" where about 12 asked him). */
   counts: ShownCounts;
+  /** Needs you rows with only something to read, nothing asked (UserState 'read'). */
+  toLook: number;
   groups: Record<ShownState, StatusRow[]>;
   /** Finished tasks older than the window are left out of Done (and its count). */
   doneWindowDays: number;
@@ -125,7 +128,9 @@ export function buildStatusBoard(input: {
     }
     return order(a, b);
   };
-  groups.needs.sort(byDue(newest));
+  // The asks first, then the tasks with only something to read.
+  const reads = (r: StatusRow) => (r.status.state === 'read' ? 1 : 0);
+  groups.needs.sort(byDue((a, b) => reads(a) - reads(b) || newest(a, b)));
   groups.working.sort(byDue(newest));
   groups.done.sort(newest);
   groups.waiting.sort(byDue((a, b) => {
@@ -133,8 +138,9 @@ export function buildStatusBoard(input: {
     const kb = WAIT_ORDER[b.status.kind ?? 'other'] ?? 6;
     return ka !== kb ? ka - kb : newest(a, b);
   }));
-  const counts = { needs: groups.needs.length, working: groups.working.length, waiting: groups.waiting.length, done: groups.done.length };
-  return { counts, groups, doneWindowDays: input.doneWindowDays };
+  const toLook = groups.needs.filter(reads).length;
+  const counts = { needs: groups.needs.length - toLook, working: groups.working.length, waiting: groups.waiting.length, done: groups.done.length };
+  return { counts, toLook, groups, doneWindowDays: input.doneWindowDays };
 }
 
 /** A Needs you row's one line: what to do with it, then what it asks or has to read
@@ -192,8 +198,10 @@ export function waitingLine(status: UserStatus, formatUntil: (iso: string) => st
 
 /** The brief above the table: what needs the user, then one line of counts. */
 export interface StatusBrief {
-  /** Every Needs you row, its `line` saying what to do with it (needsLineText). */
+  /** Every Needs you row that asks the user, its `line` saying what to do with it (needsLineText). */
   needs: { id: string; title: string; ask: string; line: string; category?: NeedsCategory; unverified?: boolean }[];
+  /** The Needs you rows with only something to read: counted in one line (toLookLine), never named. */
+  toLook: number;
   counts: ShownCounts;
   stuck: number;
   notStarted: number;
@@ -202,19 +210,23 @@ export interface StatusBrief {
 
 export function statusBrief(board: StatusBoard): StatusBrief {
   return {
-    needs: board.groups.needs.map((r) => {
+    needs: board.groups.needs.filter((r) => r.status.state !== 'read').map((r) => {
       const line = needsRowLine(r.status);
       return {
         id: r.task.id, title: r.task.title, ask: r.status.ask ?? '', line: line ? needsLineText(line) : r.status.ask ?? '',
         ...(line ? { category: line.category } : {}), ...(r.status.unverified ? { unverified: true } : {}),
       };
     }),
+    toLook: board.toLook,
     counts: board.counts,
     stuck: board.groups.waiting.filter((r) => r.status.kind === 'stuck').length,
     notStarted: board.groups.waiting.filter((r) => isNotStartedStatus(r.status)).length,
     doneWindowDays: board.doneWindowDays,
   };
 }
+
+/** "And 3 only to look at, nothing to decide." ('' for none): the Needs you rows that ask nothing. */
+export const toLookLine = (n: number): string => (n > 0 ? `And ${n} only to look at, nothing to decide.` : '');
 
 /** "10 Working, 11 Waiting / snoozed (1 with nothing to wake it), 5 Not started, 12 Completed in the last 7 days." */
 export function briefCountsLine(b: StatusBrief): string {

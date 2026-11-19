@@ -56,6 +56,10 @@ export type OverviewGroupId = 'needs' | 'running' | 'open' | 'done';
 export type NeedReason = 'permission' | 'error' | 'need-action' | 'unread' | 'board';
 export type BadgeTone = 'red' | 'green' | 'amber' | 'grey' | 'violet' | 'blue';
 
+/** A Needs you row that asks the user: a To read row is drawn there but counts in no attention
+ *  number (2026-11-18: counts of Needs you count asks only). */
+const asksUser = (r: Pick<OverviewRow, 'group' | 'task'>): boolean => r.group === 'needs' && taskUserState(r.task) !== 'read';
+
 /** Needs you, most urgent first. */
 export const REASON_RANK: Record<NeedReason, number> = {
   permission: 0, error: 1, 'need-action': 2, unread: 3, board: 4,
@@ -592,7 +596,7 @@ export function buildSections(
   const section = (kind: SectionKind, id: string, title: string, status: BoardProjectStatus | null, list: OverviewRow[]): OverviewSection => ({
     kind, id, title, status,
     rows: orderSection(list, titleOf),
-    attention: list.filter((r) => r.group === 'needs').length,
+    attention: list.filter(asksUser).length,
     done: list.filter((r) => r.group === 'done').length,
   });
   const out: OverviewSection[] = order.map((id, at) => {
@@ -658,7 +662,7 @@ export function buildTeamOverview(input: OverviewInput): TeamOverview {
     if (inGroup.length) groups.push({ id, label: GROUP_LABELS[id], rows: orderGroup(inGroup, titleOf) });
   }
   const done = rows.filter((r) => r.group === 'done').length;
-  const needs = rows.filter((r) => r.group === 'needs').length;
+  const needs = rows.filter(asksUser).length;
   return {
     ownerId,
     leader,
@@ -667,7 +671,7 @@ export function buildTeamOverview(input: OverviewInput): TeamOverview {
     members: rows.length,
     open: rows.length - done,
     done,
-    attention: needs + (leader?.group === 'needs' ? 1 : 0),
+    attention: needs + (leader && asksUser(leader) ? 1 : 0),
     signals,
   };
 }
