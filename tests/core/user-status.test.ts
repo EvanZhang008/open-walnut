@@ -30,13 +30,15 @@ describe('the state is the phase', () => {
       }
     }
   })
-  it('needs you when the phase is NEED_ACTION, whatever letters, choices or reports say', () => {
+  // 2026-11-19, the user: "如果这个东西需要人去 respond，他就不应该放在 wait": an open ask of the user is
+  // Needs you in every phase, whatever watches or workers it holds (user-status-ask-first.test.ts).
+  it('needs you in every open phase while it asks the user, whatever watches, letters or workers it holds', () => {
     const noisy: Partial<UserStatusInput> = {
       hasSession: true, processStatus: 'idle', openLetter: 'Pick a design', openChoice: 'Which host?',
       report: report({ state: 'needs', ask: 'Approve?' }), triggers: ['CI watch'], openWorkers: 2,
     }
     // A TODO with a session was started (2026-11-16, startedPhaseOf): it reads as a turn that ended.
-    const want = { TODO: 'needs', IN_PROGRESS: 'waiting', WAITING: 'waiting', NEED_ACTION: 'needs', COMPLETE: 'done' }
+    const want = { TODO: 'needs', IN_PROGRESS: 'needs', WAITING: 'needs', NEED_ACTION: 'needs', COMPLETE: 'done' }
     for (const phase of PHASES) expect(deriveUserStatus({ phase, ...noisy }, NOW).state, phase).toBe(want[phase])
   })
 
@@ -117,8 +119,10 @@ describe('the words say why', () => {
     const base = { phase: 'NEED_ACTION', hasSession: true, processStatus: 'stopped', hasLeader: true, phaseChangedAt: ago(60_000) }
     expect(deriveUserStatus(base, NOW)).toMatchObject({ state: 'waiting', kind: 'lead', waitingOn: expect.stringContaining('session stopped') })
     expect(deriveUserStatus({ ...base, reportPending: true }, NOW)).toMatchObject({ state: 'waiting', kind: 'lead' })
-    // An older turn's ask lends nothing: the stop came after it.
-    expect(deriveUserStatus({ ...base, report: report({ state: 'needs', ask: 'Pick A or B?', at: ago(30 * 60_000) }) }, NOW)).toMatchObject({ kind: 'lead' })
+    // An older turn's ask still stands after the stop (2026-11-19): a stop answers nothing. The
+    // person's own message since does: their answer is what its next turn speaks to.
+    expect(deriveUserStatus({ ...base, report: report({ state: 'needs', ask: 'Pick A or B?', at: ago(30 * 60_000) }) }, NOW)).toMatchObject({ state: 'needs', ask: 'Pick A or B?' })
+    expect(deriveUserStatus({ ...base, personSpokeAt: ago(10 * 60_000), report: report({ state: 'needs', ask: 'Pick A or B?', at: ago(30 * 60_000) }) }, NOW)).toMatchObject({ kind: 'lead' })
     // Its own current report, a letter, a failed session: still the user's.
     expect(deriveUserStatus({ ...base, report: report({ state: 'needs', ask: 'Pick A or B?' }) }, NOW)).toMatchObject({ state: 'needs', ask: 'Pick A or B?' })
     expect(deriveUserStatus({ ...base, openLetter: 'Approve the quota raise' }, NOW)).toMatchObject({ state: 'needs', source: 'letter' })
@@ -142,9 +146,11 @@ describe('the words say why', () => {
       .toMatchObject({ state: 'waiting', kind: 'you', waitingOn: expect.stringContaining('"Pick A or B?"') })
   })
 
-  it('a report from before the latest phase move lends its words, never its ask', () => {
+  it('a report from before the latest phase move keeps its ask until the person wrote since, then lends only its words', () => {
     const before = report({ state: 'needs', ask: 'Pick A or B?', now: 'Designs sent.', at: ago(30 * 60_000) })
-    const s = deriveUserStatus({ phase: 'NEED_ACTION', hasSession: true, processStatus: 'idle', phaseChangedAt: ago(60_000), report: before }, NOW)
+    const base = { phase: 'NEED_ACTION', hasSession: true, processStatus: 'idle', phaseChangedAt: ago(60_000), report: before } as const
+    expect(deriveUserStatus(base, NOW)).toMatchObject({ state: 'needs', ask: 'Pick A or B?' })
+    const s = deriveUserStatus({ ...base, personSpokeAt: ago(5 * 60_000) }, NOW)
     expect(s.ask).not.toBe('Pick A or B?')
     expect(s.now).toBe('Designs sent.')
   })

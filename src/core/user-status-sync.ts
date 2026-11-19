@@ -85,6 +85,8 @@ export interface StatusFacts {
     pendingTool?: string; taskId?: string; archived?: boolean; startedAt?: string;
     /** Its live prompt as an Action needed item (action-needed-facts.ts promptItem). */
     prompt?: ActionItem;
+    /** When a person last sent it a message (SessionRecord.humanInputAt). */
+    humanInputAt?: string;
     /** Its own work that runs on after its turn (sessions/outliving-work.ts), from the live runner. */
     outliving?: OutlivingSource[];
     /** Walnut retries its failed turn by itself at this time (session-auto-continue.ts, ISO). */
@@ -451,6 +453,7 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
         pendingTool: rec.pendingPermission ? (rec.pendingPermission.toolName ?? 'permission') : undefined,
         ...(rec.pendingPermission?.requestId ? { prompt: promptItem(rec.claudeSessionId, rec.pendingPermission) } : {}),
         taskId: rec.taskId, archived: rec.archived, startedAt: rec.startedAt,
+        ...(rec.humanInputAt ? { humanInputAt: rec.humanInputAt } : {}),
       });
     }
   }, undefined);
@@ -615,6 +618,7 @@ export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()
     report: task.status_report ?? null,
     lastWords: currentLastWords(task),
     markedByPerson: personMarkedNeeds(task),
+    personSpokeAt: own.map(([, s]) => s.humanInputAt).filter((at): at is string => !!at).sort().pop() ?? null,
     // The task's own session when it has one: an older session's pending report says nothing of this turn.
     reportPending: task.session_id ? isReportPending(task.session_id) : own.some(([sid]) => isReportPending(sid)),
     // The Router is an org node beside the VPs: its questions stay in its chat, as a lead's do.

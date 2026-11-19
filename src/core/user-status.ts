@@ -97,6 +97,19 @@ function hasAbove(input: Pick<UserStatusInput, 'hasLeader' | 'isMain' | 'isLead'
 
 /** A waiting report whose wait is the user's to end: on them, or on nothing it names outside. A
  *  wait on its lead by a task with none is the user's too (they are the one above it). */
+/**
+ * A waiting report that waits on the user in any phase: it names them as the kind ('you', or 'lead'
+ * with no lead above), or its words name them (strictly for an outside kind). The phase rule of a
+ * report (sessions/report-phase.ts onUser) reads it the same way. A wait on a clock, a check or
+ * anything else ("next check at 21:00") is no ask of theirs.
+ */
+function reportWaitsOnUser(report: StatusReport, hasLeader: boolean): boolean {
+  if (report.state !== 'waiting' || report.kindless_ask) return false;
+  const kind = report.waiting_kind;
+  if (kind === 'you' || (kind === 'lead' && !hasLeader)) return true;
+  return waitWordsNameUser(report.waiting_on, !!kind && OUTSIDE_WAIT_KINDS.has(kind));
+}
+
 function waitIsUsers(report: StatusReport | null | undefined, hasLeader: boolean): boolean {
   if (report?.state !== 'waiting') return false;
   // An ask that named no kind of the user's own is no ask of theirs (readStatusReport).
@@ -346,6 +359,8 @@ export interface UserStatusInput {
   lastWords?: string | null;
   /** A person set its current NEED_ACTION themself (sessions/person-needs.ts): their own ask. */
   markedByPerson?: boolean;
+  /** When a person last sent one of its sessions a message (ISO): an ask older than that was answered. */
+  personSpokeAt?: string | null;
   /** A lead (org_role 'lead'): like Main, never closed. */
   isLead?: boolean;
   /** A session's close left these for the user (result_report.owed, sessions/owed-to-user.ts):
@@ -1098,8 +1113,10 @@ function choiceOverruled(input: UserStatusInput, report: StatusReport | null): b
 
 /** When a session's ask was last confirmed, by whom, and whether that is too long ago to be fact. */
 function stampChecked(out: UserStatus, input: UserStatusInput, nowMs: number): void {
-  // Its last word on it: the newest of its report and its last phase move (a turn's end).
-  const at = Math.max(...[input.report?.at, input.phaseChangedAt].map((v) => Date.parse(v ?? '')).filter(Number.isFinite));
+  // Its last word on it: the newest of its report and its last phase move (a turn's end). An ask that
+  // stands from before that move (askStands) was last said in its report: a wake that ran no turn
+  // checked nothing.
+  const at = Math.max(...[input.report?.at, reportIsCurrent(input) ? input.phaseChangedAt : null].map((v) => Date.parse(v ?? '')).filter(Number.isFinite));
   if (!Number.isFinite(at)) return;
   // A trigger the session armed to watch this very ask (watches:"ask") checks it each run
   // (2026-11-04, Main's reflection: such asks read NOT VERIFIED for up to five days while their
@@ -1182,6 +1199,45 @@ function asOrgNode(s: UserStatus): UserStatus {
   };
 }
 
+/**
+ * The task's open ask of the user, or null: read before every branch that can say Waiting, in every
+ * phase (2026-11-19, the user, on a task parked on its watches while it waited for his yes: "如果这个
+ * 东西需要人去 respond，他就不应该放在 wait ... 你必须要只有那个在等 external 时候才放在 wait"). A
+ * watch, a trigger, a wait clock, its own work or a park only say what else wakes it.
+ *
+ * In order: its report's ask, a wait its report names that is the user's (2026-10-30: "other: the
+ * meeting notes"), its unanswered decision letter, an unanswered Board choice about it (the task's own
+ * words come first, 2026-10-31: a letter or a choice is a place he answers, never what overrides it).
+ *
+ * The latest report's ask stands after the phase moved (askStands): that day a trigger's wake took the
+ * task off NEED_ACTION, the CLI settled the line without a turn, no report came, and the ask read as
+ * an old turn's while the task showed "A watch". Only a newer report, the person's own message since,
+ * or an answer for them (user-status-sync.ts) replaces it.
+ */
+function openAskOf(input: UserStatusInput, report: StatusReport | null, anyReport: StatusReport | null, w: ReturnType<typeof words>): UserStatus | null {
+  const own = report ?? (askStands(input, anyReport) ? anyReport : null);
+  const src = own ? askSourceFields(own) : {};
+  if (reportAsksUser(own)) return strip<UserStatus>({ state: 'needs', source: 'session', ask: clean(own.ask), ...w, ...src });
+  // On NEED_ACTION the phase already says it is the user's turn, so any wait its report names is
+  // theirs (waitIsUsers); elsewhere only a wait that names the user is (reportWaitsOnUser).
+  if (own && !none(own.waiting_on) && (input.phase === 'NEED_ACTION' ? waitIsUsers(own, hasAbove(input)) : reportWaitsOnUser(own, hasAbove(input)))) {
+    return strip<UserStatus>({ state: 'needs', source: 'session', ask: clean(own.waiting_on), ...w, ...src });
+  }
+  if (!none(input.openLetter)) return strip<UserStatus>({ state: 'needs', source: 'letter', ask: clean(input.openLetter), ...w });
+  if (!none(input.openChoice) && !choiceOverruled(input, anyReport)) {
+    return strip<UserStatus>({ state: 'needs', source: 'choice', ask: clean(input.openChoice), ...(input.openChoiceRef ? { choice: { ...input.openChoiceRef } } : {}), ...w });
+  }
+  return null;
+}
+
+/** Whether an ask of the user in a report from before the phase's last move still stands: no person
+ *  wrote to the task since (their message answers it, and its turn speaks next). */
+function askStands(input: UserStatusInput, r: StatusReport | null): r is StatusReport {
+  if (!r || !(reportAsksUser(r) || reportWaitsOnUser(r, hasAbove(input)))) return false;
+  const spoke = Date.parse(input.personSpokeAt ?? '');
+  return !(Number.isFinite(spoke) && spoke >= Date.parse(r.at));
+}
+
 function derive(input: UserStatusInput, nowMs: number): UserStatus {
   const anyReport = input.report ?? null;
   if (input.phase === 'COMPLETE' || input.status === 'done') return { state: 'done' };
@@ -1216,6 +1272,10 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     // A held ask from an earlier close has no recorded writer: unknown, never the current report's.
     return strip({ state: 'needs', source: 'session', ask: heldAsk, ...w, ...(fromReport ? src : {}) });
   }
+  // An open ask of the user is Needs you in EVERY phase, before anything that says what else it waits
+  // on: a watch, a trigger, a clock, its own work, a park, a start waiting for a host (openAskOf).
+  const asked = openAskOf(input, report, anyReport, w);
+  if (asked) return asked;
   const own = ownWork(input, report, w, nowMs);
   // Its start waits for room on a host (sessions/start-queue.ts; a start clears it), whatever its
   // phase: a first start, a retry after a failed one, a parked task started again. A person's own
@@ -1236,13 +1296,7 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   // The task sets it (its turn's own report moves it, session-hooks/builtins.ts), its leader or the
   // user may set it, and nothing here overrides it: what follows only says why, in words.
   if (input.phase === 'NEED_ACTION') {
-    // The task's own words come first (2026-10-31, the user: what it needs is the task's to say; a
-    // letter or a Board choice is a place he can answer, never what overrides it).
-    if (reportAsksUser(report)) return strip({ state: 'needs', source: 'session', ask: clean(report.ask), ...w, ...src });
-    if (!none(input.openLetter)) return strip({ state: 'needs', source: 'letter', ask: clean(input.openLetter), ...w });
-    if (!none(input.openChoice) && !choiceOverruled(input, anyReport)) {
-      return strip({ state: 'needs', source: 'choice', ask: clean(input.openChoice), ...(input.openChoiceRef ? { choice: { ...input.openChoiceRef } } : {}), ...w });
-    }
+    // Its own ask, a letter and a Board choice were read above (openAskOf), in every phase.
     // A message that never reached the session: the cause is what the user fixes,
     // not a session that "failed" or a turn that ended (2026-10-28).
     if (!none(input.undeliveredMessage)) {
@@ -1274,11 +1328,6 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     const stoppedAt = Date.parse(input.teamStoppedAt ?? '');
     if (Number.isFinite(stoppedAt) && !running && !asksUser && !(anyReport && Date.parse(anyReport.at) > stoppedAt)) {
       return strip({ state: 'waiting', kind: input.hasLeader ? 'lead' : 'you', waitingOn: 'Its team was stopped: Resume the team, or a message to it, starts it again', ...w });
-    }
-    if (reportAsksUser(report)) return strip({ state: 'needs', source: 'session', ask: clean(report.ask), ...w, ...src });
-    // A wait that is the user's (2026-10-30: "other: the meeting notes") is their ask, in its words.
-    if (waitIsUsers(report, hasAbove(input)) && !none(report!.waiting_on)) {
-      return strip({ state: 'needs', source: 'session', ask: clean(report!.waiting_on), ...w, ...src });
     }
     // A person set it to need them: their own ask, whatever its turn said.
     if (input.markedByPerson) return strip({ state: 'needs', ask: MARKED_ASK, ...w });
@@ -1373,7 +1422,6 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   // Parked on the user (an older writer, a person's park): the user's ask, never a Waiting on them.
   // An ask with no kind of the user's own is no ask of theirs: with no lead above it, the task is a result to read and close.
   if (report?.kindless_ask && !hasAbove(input)) return toRead('result', RESULT_TO_READ, w);
-  if (reported && (reportedKind === 'you' || (reportedKind === 'lead' && !hasAbove(input)))) return strip({ state: 'needs', source: 'session', ask: reported, ...w, ...src });
   if (reported && reportedKind && reportedKind !== 'stuck') return strip({ state: 'waiting', kind: reportedKind, waitingOn: reported, ...(until ? { until } : {}), ...w, ...waitSrc });
   // A standing routine: between fires it waits on the next one.
   const wake = wakeSource(input, w, nowMs, true);
