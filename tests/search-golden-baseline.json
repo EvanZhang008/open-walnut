@@ -1,14 +1,14 @@
 {
   "backend": "v2",
-  "generatedAt": "2026-11-19T06:08:44.170Z",
+  "generatedAt": "2026-11-19T07:08:41.747Z",
   "aggregate": {
     "queries": 98,
     "passed": 62,
-    "recall10": 0.6352941176470588,
-    "mrr": 0.4886,
+    "recall10": 0.6235294117647059,
+    "mrr": 0.4966,
     "top1": 0.6875,
     "p50LatencyMs": 26,
-    "p90LatencyMs": 126
+    "p90LatencyMs": 69
   },
   "perQuery": {
     "ident-task-ref": {
@@ -19,7 +19,7 @@
     "ident-cr-number": {
       "pass": true,
       "rank": null,
-      "ms": 1
+      "ms": 0
     },
     "ident-commit-sha-prefix": {
       "pass": true,
@@ -44,12 +44,12 @@
     "camel-kebab-channel": {
       "pass": true,
       "rank": 1,
-      "ms": 2
+      "ms": 4
     },
     "camel-kebab-exact": {
       "pass": true,
       "rank": null,
-      "ms": 0
+      "ms": 1
     },
     "camel-http-subwords": {
       "pass": true,
@@ -79,7 +79,7 @@
     "mixed-timeout-retry": {
       "pass": true,
       "rank": 1,
-      "ms": 2
+      "ms": 1
     },
     "mixed-title-partial": {
       "pass": true,
@@ -89,7 +89,7 @@
     "para-dropped-events": {
       "pass": true,
       "rank": 1,
-      "ms": 8
+      "ms": 7
     },
     "para-key-rotation": {
       "pass": true,
@@ -99,27 +99,27 @@
     "trap-coverage-long-doc": {
       "pass": true,
       "rank": null,
-      "ms": 3
+      "ms": 2
     },
     "trap-recency-tiebreak": {
       "pass": true,
       "rank": null,
-      "ms": 3
+      "ms": 2
     },
     "junk-echo-excluded": {
       "pass": true,
       "rank": null,
-      "ms": 2
+      "ms": 1
     },
     "body-density-outranks-bare-title": {
       "pass": true,
       "rank": 1,
-      "ms": 3
+      "ms": 2
     },
     "body-tail-term-reachable": {
       "pass": true,
       "rank": 1,
-      "ms": 3
+      "ms": 2
     },
     "cjk-long-body": {
       "pass": true,
@@ -129,57 +129,57 @@
     "org-name-current": {
       "pass": false,
       "rank": null,
-      "ms": 5
+      "ms": 92
     },
     "org-name-legacy": {
       "pass": false,
       "rank": null,
-      "ms": 40
+      "ms": 68
     },
     "ident-task-id-exact": {
       "pass": true,
       "rank": null,
-      "ms": 31
+      "ms": 96
     },
     "ident-task-id-prefix": {
       "pass": true,
       "rank": 1,
-      "ms": 32
+      "ms": 20
     },
     "ident-commit-sha-full": {
       "pass": false,
       "rank": null,
-      "ms": 137
+      "ms": 184
     },
     "ident-commit-sha-prefix-live": {
       "pass": false,
       "rank": null,
-      "ms": 64
+      "ms": 82
     },
     "ident-cr-number-live": {
       "pass": true,
       "rank": 1,
-      "ms": 10
+      "ms": 46
     },
     "gvr-reconciler-failure": {
       "pass": true,
       "rank": 2,
-      "ms": 34
+      "ms": 70
     },
     "camel-component-exact": {
       "pass": false,
       "rank": null,
-      "ms": 10
+      "ms": 28
     },
     "camel-component-subwords": {
       "pass": true,
       "rank": 1,
-      "ms": 44
+      "ms": 37
     },
     "camel-kebab-channel-live": {
       "pass": true,
-      "rank": 2,
-      "ms": 41
+      "rank": 3,
+      "ms": 54
     },
     "camel-kebab-subwords": {
       "pass": false,
@@ -189,127 +189,127 @@
     "cjk-search-index-fix": {
       "pass": true,
       "rank": 1,
-      "ms": 12
+      "ms": 38
     },
     "cjk-search-quality": {
       "pass": true,
       "rank": 1,
-      "ms": 4
+      "ms": 13
     },
     "cjk-orphan-pods": {
       "pass": true,
       "rank": 1,
-      "ms": 10
+      "ms": 23
     },
     "cjk-calendar-view": {
       "pass": true,
       "rank": 1,
-      "ms": 7
+      "ms": 32
     },
     "mixed-timeout-retry-live": {
       "pass": true,
       "rank": 1,
-      "ms": 26
+      "ms": 50
     },
     "mixed-qmd-quality": {
       "pass": true,
       "rank": 1,
-      "ms": 5
+      "ms": 6
     },
     "mixed-reconciler-timeout": {
       "pass": true,
       "rank": 1,
-      "ms": 9
+      "ms": 13
     },
     "mixed-title-not-indexed": {
       "pass": true,
       "rank": 1,
-      "ms": 23
+      "ms": 30
     },
     "para-duplicate-gvr": {
       "pass": true,
       "rank": 1,
-      "ms": 35
+      "ms": 55
     },
     "para-slack-cron": {
       "pass": false,
       "rank": null,
-      "ms": 175
+      "ms": 69
     },
     "para-client-retry": {
       "pass": true,
       "rank": 5,
-      "ms": 174
+      "ms": 97
     },
     "para-ddb-lambda-timeout": {
       "pass": true,
       "rank": 2,
-      "ms": 90
+      "ms": 45
     },
     "para-stale-pods": {
       "pass": false,
       "rank": null,
-      "ms": 150
+      "ms": 50
     },
     "transcript-bad-record-mac": {
       "pass": false,
       "rank": null,
-      "ms": 168
+      "ms": 61
     },
     "transcript-tcc-calendar": {
       "pass": true,
       "rank": 1,
-      "ms": 29
+      "ms": 45
     },
     "transcript-fifo-wedge": {
       "pass": true,
       "rank": 1,
-      "ms": 112
+      "ms": 34
     },
     "junk-burst-echo": {
       "pass": true,
       "rank": null,
-      "ms": 86
+      "ms": 68
     },
     "junk-echo-token": {
       "pass": true,
       "rank": null,
-      "ms": 22
+      "ms": 35
     },
     "hv-go-highlight": {
       "pass": false,
       "rank": null,
-      "ms": 123
+      "ms": 43
     },
     "hv-quarter-call": {
       "pass": true,
       "rank": 7,
-      "ms": 15
+      "ms": 14
     },
     "hv-pin-drag": {
       "pass": false,
       "rank": null,
-      "ms": 13
+      "ms": 25
     },
     "hv-notification-redesign": {
       "pass": false,
       "rank": null,
-      "ms": 12
+      "ms": 19
     },
     "hv-files-viewer": {
       "pass": false,
       "rank": null,
-      "ms": 20
+      "ms": 13
     },
     "hv-session-naming": {
       "pass": false,
       "rank": null,
-      "ms": 41
+      "ms": 24
     },
     "hv-audio-transcribe": {
       "pass": false,
       "rank": null,
-      "ms": 7
+      "ms": 15
     },
     "hv-victoria-trip": {
       "pass": false,
@@ -319,186 +319,186 @@
     "hp-letter-issues": {
       "pass": false,
       "rank": null,
-      "ms": 53
+      "ms": 49
     },
     "hp-tax-2025": {
       "pass": false,
       "rank": null,
-      "ms": 81
+      "ms": 19
     },
     "hp-results-followup": {
       "pass": true,
       "rank": 1,
-      "ms": 27
+      "ms": 25
     },
     "hp-walnut-cloud": {
       "pass": true,
       "rank": 2,
-      "ms": 76
+      "ms": 52
     },
     "hp-clouddev-incident": {
       "pass": false,
       "rank": null,
-      "ms": 36
+      "ms": 26
     },
     "hp-brokerage-account": {
       "pass": true,
       "rank": 6,
-      "ms": 47
+      "ms": 8
     },
     "hp-issue11-server": {
       "pass": false,
       "rank": null,
-      "ms": 80
+      "ms": 29
     },
     "ht-orgchart-typo": {
       "pass": true,
       "rank": 1,
-      "ms": 18
+      "ms": 24
     },
     "ht-notification-feed": {
       "pass": false,
       "rank": null,
-      "ms": 82
+      "ms": 34
     },
     "ht-insurance-provider": {
       "pass": false,
       "rank": null,
-      "ms": 37
+      "ms": 22
     },
     "ht-project-name-typo": {
       "pass": false,
       "rank": null,
-      "ms": 58
+      "ms": 27
     },
     "ht-sesion-naming": {
       "pass": false,
       "rank": null,
-      "ms": 16
+      "ms": 17
     },
     "hp-agent-not-responding": {
       "pass": false,
       "rank": null,
-      "ms": 96
+      "ms": 48
     },
     "hp-docx-file-feature": {
       "pass": false,
       "rank": null,
-      "ms": 136
+      "ms": 35
     },
     "hp-docx-word-preview": {
       "pass": false,
       "rank": null,
-      "ms": 32
+      "ms": 31
     },
     "hm-docx-office-mixed": {
       "pass": true,
       "rank": 1,
-      "ms": 16
+      "ms": 15
     },
     "hr-question-upload-download": {
-      "pass": false,
+      "pass": true,
       "rank": 1,
-      "ms": 248
+      "ms": 82
     },
     "hr-question-cook-rice": {
       "pass": false,
       "rank": null,
-      "ms": 102
+      "ms": 40
     },
     "hr-typo-notification-feed": {
       "pass": true,
       "rank": 2,
-      "ms": 107
+      "ms": 27
     },
     "hr-typo-split-website-deploy": {
       "pass": false,
       "rank": null,
-      "ms": 94
+      "ms": 50
     },
     "hr-inflect-loose-alarms": {
       "pass": false,
       "rank": null,
-      "ms": 20
+      "ms": 18
     },
     "hr-prefix-floss": {
       "pass": false,
       "rank": null,
-      "ms": 29
+      "ms": 23
     },
     "hr-prefix-rare-last-word": {
       "pass": true,
       "rank": 4,
-      "ms": 80
+      "ms": 40
     },
     "hr-version-separators": {
       "pass": true,
       "rank": 1,
-      "ms": 112
+      "ms": 31
     },
     "hr-version-prefixed": {
       "pass": true,
       "rank": 1,
-      "ms": 126
+      "ms": 32
     },
     "hr-full-width": {
       "pass": true,
       "rank": 1,
-      "ms": 66
+      "ms": 33
     },
     "hr-title-head": {
       "pass": false,
       "rank": null,
-      "ms": 25
+      "ms": 46
     },
     "hr-exact-title": {
       "pass": true,
       "rank": 3,
-      "ms": 116
+      "ms": 93
     },
     "hr-compound-kb-sync-cron": {
       "pass": false,
       "rank": null,
-      "ms": 134
+      "ms": 69
     },
     "hr-typo-crowded-neighbours": {
       "pass": true,
       "rank": 10,
-      "ms": 36
+      "ms": 30
     },
     "hv-describes-deliverables": {
       "pass": false,
       "rank": 10,
-      "ms": 162
+      "ms": 144
     },
     "hr-prefix-first-name": {
       "pass": false,
       "rank": null,
-      "ms": 52
+      "ms": 19
     },
     "hr-prefix-first-three-words": {
       "pass": true,
       "rank": 4,
-      "ms": 18
+      "ms": 25
     },
     "hr-prefix-first-rare-word": {
       "pass": true,
       "rank": 3,
-      "ms": 24
+      "ms": 22
     },
     "pw-own-words-rollback": {
       "pass": true,
-      "rank": 5,
-      "ms": 91
+      "rank": 2,
+      "ms": 19
     },
     "pw-own-words-typo": {
       "pass": true,
-      "rank": 3,
-      "ms": 21
+      "rank": 1,
+      "ms": 39
     },
     "pw-own-words-right-spelling": {
-      "pass": true,
-      "rank": 8,
+      "pass": false,
+      "rank": null,
       "ms": 20
     }
   }

@@ -121,12 +121,12 @@ export async function readSessionBody(
 }
 
 /**
- * His words plus the common spellings of the ones he mistyped, so a search spelled right finds
- * what he typed wrong ("permission" for his "permisison"). He types fast; the query side fixes
- * only its own typos.
+ * The common spellings of the words he mistyped in `words`, so a search spelled right finds what
+ * he typed wrong ("permission" for his "permisison"). He types fast; the query side fixes only its
+ * own typos.
  */
-export async function withSpellingFixes(index: SearchIndex, words: string): Promise<string> {
-  if (!words) return words;
+export async function spellingFixesOf(index: SearchIndex, words: string): Promise<string[]> {
+  if (!words) return [];
   // A cold look at one text took up to 0.7 s on his index (2026-11-19): in slices, so the server
   // keeps answering between them.
   let found = index.spellingCorrections(words, { budgetMs: SPELLING_SLICE_MS });
@@ -134,7 +134,7 @@ export async function withSpellingFixes(index: SearchIndex, words: string): Prom
     await new Promise<void>((resolve) => setImmediate(resolve));
     found = index.spellingCorrections(words, { budgetMs: SPELLING_SLICE_MS });
   }
-  return found.fixes.length > 0 ? `${words}\n${found.fixes.join(' ')}` : words;
+  return found.fixes;
 }
 const SPELLING_SLICE_MS = 40;
 const SPELLING_MAX_SLICES = 60;
@@ -142,7 +142,8 @@ const SPELLING_MAX_SLICES = 60;
 /** The task's document as every writer indexes it: with his words and their right spellings. */
 export async function taskDocForIndex(index: SearchIndex, task: Task): Promise<Doc | null> {
   const { readPersonWords } = await import('../sessions/user-asks.js');
-  return taskToDoc(task, await withSpellingFixes(index, await readPersonWords(task.id)));
+  const words = await readPersonWords(task.id);
+  return taskToDoc(task, words, await spellingFixesOf(index, words));
 }
 
 /**

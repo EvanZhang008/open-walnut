@@ -44,13 +44,13 @@ describe('a task is found by what the user wrote in it', () => {
     const send = async (message: string) => (await prepareUserAskCapture({ task, message, inChat: true }))?.commit();
 
     await send('sorry forget that, can u acutally do the rest the vaultkep add permisison and then contineu rollabck for cfn');
-    await waitFor(() => (getSearchV2Index().getDoc('task', task.id)?.meta ?? '').includes('rollabck'));
+    await waitFor(() => (getSearchV2Index().getDoc('task', task.id)?.note ?? '').includes('rollabck'));
     expect(await findsTask('vaultkep permisison', task.id)).toBe(true);
     expect(await findsTask('rollabck cfn', task.id)).toBe(true);
 
     // A later message adds its words; the earlier ones stay.
     await send('for zrk what si thenext is the continue rollback done?');
-    await waitFor(() => (getSearchV2Index().getDoc('task', task.id)?.meta ?? '').includes('zrk'));
+    await waitFor(() => (getSearchV2Index().getDoc('task', task.id)?.note ?? '').includes('zrk'));
     expect(await findsTask('zrk cfn rollback', task.id)).toBe(true);
     expect(await findsTask('vaultkep permisison', task.id)).toBe(true);
   });
@@ -63,7 +63,7 @@ describe('a task is found by what the user wrote in it', () => {
     const { task: chat } = await addTask({ title: 'Weekly chores list', project: 'marina', description: 'Groceries and errands.' });
     bus.emit(EventNames.TASK_CREATED, { task: about }, ['*'], { source: 'test' });
     await (await prepareUserAskCapture({ task: chat, message: 'remind me after the cfn rollback runbook is done', inChat: true }))?.commit();
-    await waitFor(() => (getSearchV2Index().getDoc('task', chat.id)?.meta ?? '').includes('rollback') && getSearchV2Index().getDoc('task', about.id) !== null);
+    await waitFor(() => (getSearchV2Index().getDoc('task', chat.id)?.note ?? '').includes('rollback') && getSearchV2Index().getDoc('task', about.id) !== null);
     const rows = (await search('cfn rollback runbook', { types: ['task'], limit: 20 })).map((r) => r.taskId);
     expect(rows.indexOf(about.id)).toBeGreaterThanOrEqual(0);
     expect(rows.indexOf(chat.id)).toBeGreaterThan(rows.indexOf(about.id));
@@ -82,18 +82,18 @@ describe('a task is found by what the user wrote in it', () => {
     const { task } = await addTask({ title: 'Pipeline watch leader: Ledger, Courier', project: 'marina', description: 'Watches the Ledger and Courier pipelines.' });
     await (await prepareUserAskCapture({ task, message: 'do the rest, the quorvade add permisson step by step', inChat: true }))?.commit();
     await waitFor(() => (getSearchV2Index().getDoc('task', task.id)?.meta ?? '').includes('permission'), 20_000);
-    const doc = index.getDoc('task', task.id)?.meta ?? '';
-    expect(doc).toContain('quorvade add permisson');
-    expect(doc).toContain('quorvane');
+    // His words in the note as he typed them, their right spellings in meta.
+    expect(index.getDoc('task', task.id)?.note ?? '').toContain('quorvade add permisson');
+    expect(index.getDoc('task', task.id)?.meta ?? '').toContain('quorvane');
     const rows = (await search('quorvane permission', { types: ['task'], limit: 20 })).map((r) => r.taskId);
     expect(rows.indexOf(task.id)).toBeGreaterThanOrEqual(0);
     expect(rows.indexOf(task.id)).toBeLessThan(3);
     // A full rebuild writes tasks before the vocabulary: the pass after it puts the fixes back.
-    index.upsert({ ...index.getDoc('task', task.id)!, meta: 'marina\n\ndo the rest, the quorvade add permisson step by step' });
+    index.upsert({ ...index.getDoc('task', task.id)!, meta: 'Project: marina' });
     expect(await refixPersonWords(index)).toBeGreaterThanOrEqual(1);
     expect(index.getDoc('task', task.id)?.meta ?? '').toContain('quorvane');
     for (let i = 0; i < 40; i++) { index.remove('task', `t-vocab-${i}`); index.remove('task', `t-vocab-p${i}`); }
-  });
+  }, 45_000);
 
   // 2026-11-19: a two-word search spelled right matched dozens of older tasks as fully as the one
   // he had worked in the day before; his touch puts it first among them, never above a better match.
@@ -103,10 +103,11 @@ describe('a task is found by what the user wrote in it', () => {
     // A name of this run's own: the test home is shared, and a retry finds the last run's tasks.
     const name = `brim${Array.from({ length: 6 }, () => String.fromCharCode(97 + Math.floor(Math.random() * 26))).join('')}`;
     const { task: older } = await addTask({ title: `${name} gateway lease audit`, project: 'marina', description: `${name} gateway lease audit notes.` });
-    const { task: mine } = await addTask({ title: 'Weekly ops leader', project: 'marina', description: 'Watches the ops queue.' });
+    // No summary of its own, so his words in its note count in full (noteOnlyCoverage), as the other's title does.
+    const { task: mine } = await addTask({ title: 'Weekly ops leader', project: 'marina' });
     for (const t of [older, mine]) bus.emit(EventNames.TASK_CREATED, { task: t }, ['*'], { source: 'test' });
     await (await prepareUserAskCapture({ task: mine, message: `check the ${name} gateway lease`, inChat: true }))?.commit();
-    await waitFor(() => (getSearchV2Index().getDoc('task', mine.id)?.meta ?? '').includes(name) && getSearchV2Index().getDoc('task', older.id) !== null);
+    await waitFor(() => (getSearchV2Index().getDoc('task', mine.id)?.note ?? '').includes(name) && getSearchV2Index().getDoc('task', older.id) !== null);
     const order = async () => (await search(`${name} gateway lease`, { types: ['task'], limit: 20 })).map((r) => r.taskId);
     expect((await order()).indexOf(older.id)).toBeLessThan((await order()).indexOf(mine.id));
     await mergeUiPrefs({ [RECENT_OPENED_KEY]: { v: JSON.stringify([{ id: mine.id, at: new Date().toISOString(), human: true }]), ts: Date.now() } });

@@ -46,7 +46,7 @@ function joinParts(parts: Array<string | undefined | null>): string {
  *  junk family failed on both engines). "An exact hit must stay findable"
  *  still holds — the reference lane resolves task IDs from tasks.json, not
  *  from this index. */
-export function taskToDoc(task: Task, personWords?: string): Doc | null {
+export function taskToDoc(task: Task, personWords?: string, spellingFixes?: readonly string[]): Doc | null {
   if (isLedgerJunk(task)) return null;
   // A task that exists only because someone ran a search must never be indexed:
   // it is titled with the query, so it wins the 10x title field for that exact
@@ -67,17 +67,19 @@ export function taskToDoc(task: Task, personWords?: string): Doc | null {
     ref: task.id,
     title: task.title ?? '',
     summary: joinParts([task.description, task.summary]),
-    note: joinParts([task.note, task.conversation_log]),
+    // His own words in the task's chat (user-asks personWordsText) say what he worked on there in
+    // the words he searches with; the session transcript is indexed from its tail only. In the
+    // note, not the summary: a summary says what the task delivers, and a task with none keeps its
+    // full note-only credit. Last, so a new message changes only the last passages. Not in meta
+    // either: the body coverage of a descriptive query is blind to meta, and with his words there
+    // a task he had written in fell from 4th to 18th for a shortened name of it (2026-11-19).
+    note: joinParts([task.note, task.conversation_log, personWords]),
     meta: joinParts([
       `Project: ${task.project || 'Inbox'}`,
       task.tags?.length ? `Tags: ${task.tags.join(', ')}` : undefined,
-      // His own words in the task's chat (user-asks personWordsText, with the right spelling of
-      // what he mistyped) name what he worked on there in the words he searches with; the session
-      // transcript is indexed from its tail only. In meta, a short field that counts in full for
-      // coverage: in the summary a passing mention ("after the stack rollback runbook") outranked
-      // the task titled with it, and in the note a task with a summary of its own got half credit.
-      // Not in a passage either, so a new message re-embeds nothing.
-      personWords,
+      // The right spellings of the words he mistyped (index.spellingCorrections), so a search spelled
+      // right finds what he typed wrong. In meta, where they count in full for coverage like a tag.
+      spellingFixes?.length ? spellingFixes.join(' ') : undefined,
       DOC_FORMAT_VERSION,
     ]),
     updatedAt: toEpochMs(task.updated_at ?? task.created_at, 0),
