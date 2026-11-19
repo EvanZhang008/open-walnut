@@ -50,6 +50,7 @@ import {
 import { TOKENIZER_VERSION, tokenize, type TokenStreams } from './tokenizer.js';
 import {
   searchKeyword,
+  forgetSpellingCorrections, spellingCorrections,
   DEFAULT_DF_THRESHOLD,
   RECENCY_HALF_LIFE_DAYS,
   W_RECENCY,
@@ -333,6 +334,10 @@ export interface SearchIndex {
   backfillVectors(options?: BackfillVectorsOptions): Promise<BackfillVectorsResult>;
   /** Stored raw text of a doc (snippet extraction, rescoring). */
   getDoc(kind: string, ref: string): StoredDoc | null;
+  /** The common spellings of the misspelled words in `text` (query.ts spellingCorrections), for a
+   *  caller to store beside it. Past `budgetMs` it stops with complete:false; a call again goes on
+   *  where it stopped (the words it looked at are remembered). */
+  spellingCorrections(text: string, options?: { budgetMs?: number }): { fixes: string[]; complete: boolean };
   rebuildAll(docs: Iterable<Doc> | AsyncIterable<Doc>): Promise<{ inserted: number }>;
   /** Every number below, `vectors` included: a COUNT over doc_vec reads every
    *  vector page (115 MB on a real index, 2.8 s cold), so callers on a live
@@ -946,6 +951,7 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
       }
       return { embedded, drained, cursor, ...shape() };
     },
+    spellingCorrections: (text, options) => spellingCorrections(db, text, options),
     getDoc: (kind, ref) => {
       const row = db.prepare(
         `SELECT kind, ref, title, summary, note, meta, updated_at FROM doc
@@ -966,6 +972,7 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
     },
     rebuildAll: async (docs) => {
       const result = await writer.rebuildAll(docs);
+      forgetSpellingCorrections(db);
       optimizeIndex(db);
       return result;
     },

@@ -343,13 +343,13 @@ export function searchReplicaPut(body: Record<string, unknown>): Promise<Replica
 async function syncLocalTasks(ids: string[]): Promise<void> {
   const w = await wiring()
   if (!enabled || !w.searchV2IndexOpen() || !(await deps.macAway())) return
-  const [{ listTasks }, { taskToDoc }] = await Promise.all([import('../task-manager.js'), import('../search/serializers.js')])
+  const [{ listTasks }, { taskDocForIndex }] = await Promise.all([import('../task-manager.js'), import('../search/build.js')])
   const wanted = new Set(ids)
   const byId = new Map((await listTasks()).filter((t) => wanted.has(t.id)).map((t) => [t.id, t]))
   const index = w.getSearchV2Index()
   for (const id of ids) {
     const task = byId.get(id)
-    const doc = task ? taskToDoc(task) : null
+    const doc = task ? await taskDocForIndex(index, task) : null
     if (doc) index.upsert(doc)
     else index.remove('task', id)
   }

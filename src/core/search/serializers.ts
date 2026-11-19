@@ -67,14 +67,17 @@ export function taskToDoc(task: Task, personWords?: string): Doc | null {
     ref: task.id,
     title: task.title ?? '',
     summary: joinParts([task.description, task.summary]),
-    // His own words in the task's chat (user-asks personWordsText) say what he worked on there in
-    // the words he searches with; the session transcript is indexed from its tail only. In the
-    // note, not the summary: a summary says what the task delivers, and a task with none keeps its
-    // full note-only credit. Last, so a new message changes only the last passages.
-    note: joinParts([task.note, task.conversation_log, personWords]),
+    note: joinParts([task.note, task.conversation_log]),
     meta: joinParts([
       `Project: ${task.project || 'Inbox'}`,
       task.tags?.length ? `Tags: ${task.tags.join(', ')}` : undefined,
+      // His own words in the task's chat (user-asks personWordsText, with the right spelling of
+      // what he mistyped) name what he worked on there in the words he searches with; the session
+      // transcript is indexed from its tail only. In meta, a short field that counts in full for
+      // coverage: in the summary a passing mention ("after the stack rollback runbook") outranked
+      // the task titled with it, and in the note a task with a summary of its own got half credit.
+      // Not in a passage either, so a new message re-embeds nothing.
+      personWords,
       DOC_FORMAT_VERSION,
     ]),
     updatedAt: toEpochMs(task.updated_at ?? task.created_at, 0),

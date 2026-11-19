@@ -14,6 +14,7 @@ import {
   type Doc,
   type IndexStats,
   type LogFn,
+  type SearchIndex,
 } from '../../lib/hybrid-search/index.js';
 import { GLOBAL_SKILLS_DIR, MEMORY_DIR, NOTES_DIR } from '../../constants.js';
 import { disconnectAllDaemons } from '../../providers/daemon-connection.js';
@@ -120,6 +121,47 @@ export async function readSessionBody(
 }
 
 /**
+ * His words plus the common spellings of the ones he mistyped, so a search spelled right finds
+ * what he typed wrong ("permission" for his "permisison"). He types fast; the query side fixes
+ * only its own typos.
+ */
+export async function withSpellingFixes(index: SearchIndex, words: string): Promise<string> {
+  if (!words) return words;
+  // A cold look at one text took up to 0.7 s on his index (2026-11-19): in slices, so the server
+  // keeps answering between them.
+  let found = index.spellingCorrections(words, { budgetMs: SPELLING_SLICE_MS });
+  for (let round = 0; !found.complete && round < SPELLING_MAX_SLICES; round++) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    found = index.spellingCorrections(words, { budgetMs: SPELLING_SLICE_MS });
+  }
+  return found.fixes.length > 0 ? `${words}\n${found.fixes.join(' ')}` : words;
+}
+const SPELLING_SLICE_MS = 40;
+const SPELLING_MAX_SLICES = 60;
+
+/** The task's document as every writer indexes it: with his words and their right spellings. */
+export async function taskDocForIndex(index: SearchIndex, task: Task): Promise<Doc | null> {
+  const { readPersonWords } = await import('../sessions/user-asks.js');
+  return taskToDoc(task, await withSpellingFixes(index, await readPersonWords(task.id)));
+}
+
+/**
+ * A full build writes the tasks before the rest of the vocabulary is in, so his typos found no
+ * right spelling then: write the tasks he wrote in once more, now that everything is indexed.
+ */
+export async function refixPersonWords(index: SearchIndex, upsert: (doc: Doc) => void = (doc) => index.upsert(doc)): Promise<number> {
+  const { listPersonWordsTasks } = await import('../sessions/user-asks.js');
+  const wanted = new Set(await listPersonWordsTasks());
+  if (wanted.size === 0) return 0;
+  let written = 0;
+  for (const task of (await listTasks()).filter((t) => wanted.has(t.id))) {
+    const doc = await taskDocForIndex(index, task);
+    if (doc) { upsert(doc); written++; }
+  }
+  return written;
+}
+
+/**
  * Stream every indexable doc. Session content reads (the slow part) run in
  * bounded-parallel chunks, and docs are YIELDED rather than collected — the
  * first full-corpus build held 3.2 GB RSS when everything sat in one array.
@@ -183,6 +225,7 @@ export async function buildFullSearchIndex(options: BuildOptions): Promise<Build
   const index = createSearchIndex({ dbPath: options.dbPath, logger: options.logger });
   try {
     const { inserted } = await index.rebuildAll(iterateAllDocs(options));
+    await refixPersonWords(index);
     return {
       stats: index.stats(),
       inserted,

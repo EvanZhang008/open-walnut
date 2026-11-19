@@ -37,15 +37,15 @@ import { utilityQosForkExec } from '../../lib/background-qos.js';
 import { reopenIfWiped } from '../../lib/sqlite-wiped.js';
 import { createIncrementalQueue, type IncrementalQueue } from './incremental-queue.js';
 import { clearTaskSearchRequeue, setTaskSearchRequeue } from './task-requeue.js';
-import { listPersonWordsTasks, readPersonWords } from '../sessions/user-asks.js';
+import { listPersonWordsTasks } from '../sessions/user-asks.js';
 import { EventNames, type EventBus } from '../event-bus.js';
 import { memoryPressureShedding, onMemoryPressureChange } from '../memory-pressure.js';
 import { listTasks } from '../task-manager.js';
 import { listSessions } from '../session-tracker.js';
-import { markdownToDoc, sessionToDoc, taskToDoc } from './serializers.js';
+import { markdownToDoc, sessionToDoc } from './serializers.js';
 import { semanticLaneDecision, type SemanticLaneDecision } from './semantic-default.js';
 import { ensureComponent, resolveComponent } from '../components/index.js';
-import { iterateAllDocs, readSessionBody } from './build.js';
+import { iterateAllDocs, readSessionBody, refixPersonWords, taskDocForIndex } from './build.js';
 import { backfillBatchLogFields, crossedProgressMilestone } from './backfill-log.js';
 
 /**
@@ -598,7 +598,7 @@ async function syncTasks(taskIds: string[]): Promise<void> {
   );
   for (const taskId of taskIds) {
     const task = present.get(taskId);
-    const doc = task ? taskToDoc(task, await readPersonWords(taskId)) : null;
+    const doc = task ? await taskDocForIndex(index, task) : null;
     // Deleted AND junk-classified tasks both leave the index.
     if (doc) upsertDoc(index, doc);
     else index.remove('task', taskId);
@@ -701,6 +701,7 @@ export async function rebuildSearchIndex(): Promise<{ inserted: number }> {
   try {
     const index = getSearchV2Index();
     const result = await index.rebuildAll(iterateAllDocs({}));
+    await refixPersonWords(index, (doc) => upsertDoc(index, doc));
     log.memory.info('search index manual rebuild complete', { inserted: result.inserted });
     return { inserted: result.inserted };
   } catch (err) {
@@ -995,6 +996,7 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
           log.memory.info('search-v2 backfill starting (empty index)');
           const t0 = Date.now();
           const { inserted } = await index.rebuildAll(iterateAllDocs({}));
+          await refixPersonWords(index, (doc) => upsertDoc(index, doc));
           // Same reason as rebuildSearchIndex: docs came back with their own
           // timestamps and zero vectors, so the first pass must walk everything.
           vectorPass.requireFullPass();

@@ -55,6 +55,7 @@ vi.mock('../../src/core/session-content-indexer.js', () => ({
 
 vi.mock('../../src/core/sessions/user-asks.js', () => ({
   readAllPersonWords: vi.fn(async () => new Map()),
+  listPersonWordsTasks: vi.fn(async () => []),
 }));
 
 vi.mock('../../src/core/search/serializers.js', () => ({

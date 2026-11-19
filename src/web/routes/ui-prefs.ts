@@ -190,6 +190,26 @@ uiPrefsRouter.get('/', async (req: Request, res: Response, next: NextFunction) =
   }
 })
 
+/**
+ * The person's Recent list as GET answers it (verified touches only, a replica from its copy):
+ * task id -> epoch ms of his last touch. Empty when it cannot be read. Search uses it to put the
+ * task he was handling first among equally good matches (core/search.ts).
+ */
+export async function readRecentTouches(): Promise<Map<string, number>> {
+  try {
+    let prefs: Record<string, PrefEntry> | null = null
+    if (keepsCopies('prefs')) {
+      const asOf = await copyKindAsOf('prefs')
+      if (isHostReplicaProgram() || asOf !== null) prefs = await (await import('../../core/replication/kinds/prefs.js')).readUiPrefsCopy()
+    }
+    prefs ??= await loadPrefs()
+    const raw = withTestRunWrites(prefs)[RECENT_OPENED_KEY]?.v
+    return new Map(parseRecentOpened(typeof raw === 'string' ? raw : null).map((e) => [e.id, Date.parse(e.at)]))
+  } catch {
+    return new Map()
+  }
+}
+
 // The old list recorded render effects and cannot prove a human opened a task. Keep
 // verified opens and recover the person's actual messages, once, under the write queue.
 const HUMAN_SINCE_KEY = 'walnut-todo-recent-human-since'

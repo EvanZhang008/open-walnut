@@ -501,6 +501,102 @@ function editsOne(word: string): string[] {
   return [...out];
 }
 
+/** At or under this doc count a word in stored text is checked for a fix. Not the query side's 2:
+ *  agents quote a person's typo back in their own transcripts ("permisison" sat in 34 docs on
+ *  2026-11-19), while its fix must still be TYPO_MIN_GAIN times as common. */
+const STORED_TYPO_MAX_DF = 100;
+/** Rare words of one text looked at, newest first (each costs a vocabulary lookup of ~600 edits:
+ *  about 14 ms on a real index, 2026-11-19, so a caller passes a budget and calls again). */
+const STORED_TYPO_MAX_WORDS = 48;
+/** Each word's fix (or none), per index, for an hour: the next call for the same text costs only
+ *  its new words, and a word the index learns the right spelling of later is looked at again. */
+const storedFixCache = new WeakMap<SearchDb, Map<string, { fix: string | null; at: number; rare: boolean }>>();
+
+/** A rebuild changes the whole vocabulary: what spellingCorrections learned before means nothing. */
+export function forgetSpellingCorrections(db: SearchDb): void {
+  storedFixCache.delete(db);
+}
+const STORED_FIX_CACHE_MAX = 20_000;
+/** Words whose own counts are read in one lookup. */
+const STORED_COUNT_CHUNK = 16;
+const STORED_FIX_TTL_MS = 3_600_000;
+
+/**
+ * The common spellings of the misspelled words in `text`, for a caller to store beside it: the
+ * index-time twin of spellingFixes. A query fixes its own typos; it cannot fix a stored one, so a
+ * correctly spelled search missed the word as it was typed (2026-11-19: "permission" never found
+ * the task the person had written "permisison" in). Only a word the index barely holds is checked,
+ * newest first, and only a word one edit away (transpositions included) that is TYPO_MIN_GAIN
+ * times as common counts as its fix. The words already in `text` are left out.
+ */
+export function spellingCorrections(
+  db: SearchDb,
+  text: string,
+  options: { budgetMs?: number } = {},
+): { fixes: string[]; complete: boolean } {
+  const none = { fixes: [], complete: true };
+  if (!ensureVocab(db)) return none;
+  const seen = new Set<string>();
+  const words: string[] = [];
+  const all = text.toLowerCase().match(/[a-z]+/g) ?? [];
+  for (let i = all.length - 1; i >= 0; i--) {
+    const w = all[i];
+    if (w.length >= TYPO_MIN_WORD && !seen.has(w)) { seen.add(w); words.push(w); }
+  }
+  if (words.length === 0) return none;
+  let cache = storedFixCache.get(db);
+  if (!cache || cache.size > STORED_FIX_CACHE_MAX) { cache = new Map(); storedFixCache.set(db, cache); }
+  const now = Date.now();
+  const deadline = performance.now() + (options.budgetMs ?? Infinity);
+  try {
+    const stale = (w: string) => { const hit = cache.get(w); return !hit || now - hit.at > STORED_FIX_TTL_MS; };
+    const fresh = words.filter(stale);
+    // A word's own count costs its whole posting list ("which", "there" in most docs: a few hundred
+    // fresh words took a second on his index), so they are counted a few at a time as well.
+    const own = new Map<string, number>();
+    let counted = 0;
+    const ownCount = (word: string): number => {
+      if (!own.has(word)) {
+        const at = fresh.indexOf(word, counted);
+        const chunk = fresh.slice(at, at + STORED_COUNT_CHUNK);
+        const found = vocabCounts(db, chunk);
+        for (const w of chunk) own.set(w, found.get(w) ?? 0);
+        counted = at + chunk.length;
+      }
+      return own.get(word) ?? 0;
+    };
+    // The newest STORED_TYPO_MAX_WORDS rare words of the text, counted across calls: one that
+    // stopped at its budget leaves the rest of the same words to the next.
+    let rare = 0;
+    let looked = 0;
+    let complete = true;
+    for (const word of words) {
+      const hit = stale(word) ? undefined : cache.get(word);
+      if (hit) {
+        if (hit.rare && ++rare >= STORED_TYPO_MAX_WORDS) break;
+        continue;
+      }
+      // At least one look per call, so a call again always gets further.
+      if (looked > 0 && performance.now() > deadline) { complete = false; break; }
+      looked++;
+      const n = ownCount(word);
+      if (n > STORED_TYPO_MAX_DF) { cache.set(word, { fix: null, at: now, rare: false }); continue; }
+      const minFix = Math.max(TYPO_MIN_FIX_DF, TYPO_MIN_GAIN * (n + 1));
+      const best = [...vocabCounts(db, editsOne(word))].filter(([, c]) => c >= minFix).sort((a, b) => b[1] - a[1])[0];
+      cache.set(word, { fix: best ? best[0] : null, at: now, rare: true });
+      if (++rare >= STORED_TYPO_MAX_WORDS) break;
+    }
+    const fixes: string[] = [];
+    for (const word of words) {
+      const fix = cache.get(word)?.fix;
+      if (fix && !seen.has(fix) && !fixes.includes(fix)) fixes.push(fix);
+    }
+    return { fixes, complete };
+  } catch {
+    return none;
+  }
+}
+
 interface WordForms {
   /** Readings of a word the index barely holds: its inflections, typo fixes
    *  and completions, and the split phrases of the first two. They widen the

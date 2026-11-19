@@ -694,6 +694,8 @@ const CACHE_INVALIDATING_EVENTS: readonly string[] = [
   EventNames.SESSION_RESULT,
   EventNames.SESSION_ERROR,
   EventNames.SESSION_DELETED,
+  // His touch reorders equally covering matches (RECENT_TOUCH_BOOST_MS).
+  'recent:changed',
 ];
 
 let resultCacheInvalidationBound = false;
@@ -713,6 +715,11 @@ function bindResultCacheInvalidation(): void {
       (event) => { if (CACHE_INVALIDATING_EVENTS.includes(event.name)) resultCache.clear(); },
       { global: true, interest: [...CACHE_INVALIDATING_EVENTS] },
     );
+    // A task opened in a window lands in ui-prefs with no bus event, and it reorders ties
+    // (recentTouchesForSearch).
+    void import('../web/routes/ui-prefs.js')
+      .then(({ onUiPrefsWritten }) => { onUiPrefsWritten(() => resultCache.clear()); })
+      .catch(() => { /* same hygiene */ });
   } catch { /* invalidation is hygiene — never break search over it */ }
 }
 
@@ -851,6 +858,19 @@ function publishHybridSegments(seg: QuerySegments): void {
  * the default must include it.
  */
 export const DEFAULT_SEARCH_TYPES: ReadonlyArray<'task' | 'memory' | 'session'> = ['task', 'memory', 'session'];
+
+/** How long a touch of his lifts a task among equally covering matches (search merge). */
+export const RECENT_TOUCH_BOOST_MS = 3 * 24 * 3600_000;
+
+/** His Recent touches (task id -> ms); empty without the web layer or on a read failure. */
+async function recentTouchesForSearch(): Promise<Map<string, number>> {
+  try {
+    const { readRecentTouches } = await import('../web/routes/ui-prefs.js');
+    return await readRecentTouches();
+  } catch {
+    return new Map();
+  }
+}
 
 /** What searchInner learned beyond its rows. */
 interface SearchRun {
@@ -1305,9 +1325,23 @@ async function searchInner(
     return GRAB_BAG_SOURCES.has(r.matchField) ? Math.floor(c / 2) : c;
   };
 
+  // Among equally covering matches of a query of several words, the task he touched lately
+  // (created, opened or wrote in: his Recent list) comes first: "which task was I handling" is the
+  // search he makes, and a generic two-word query (2026-11-19) matched dozens of older tasks as
+  // fully. Never above a better-covering match, only task rows (not their sessions), and only for
+  // touches of the last RECENT_TOUCH_BOOST_MS. A one-word query has no coverage buckets, so there
+  // the touch would outrank every score: it stays out.
+  const tieBreakByTouch = coverage.size > 0 && results.some((r) => r.type === 'task');
+  const touched = tieBreakByTouch ? await recentTouchesForSearch() : new Map<string, number>();
+  const touchedLately = (r: SearchResult): number => {
+    const at = r.type === 'task' && r.taskId ? touched.get(r.taskId) : undefined;
+    return at !== undefined && Date.now() - at <= RECENT_TOUCH_BOOST_MS ? 1 : 0;
+  };
+
   results.sort((a, b) =>
     Number(isReference(b)) - Number(isReference(a))
     || effectiveCoverage(b) - effectiveCoverage(a)
+    || touchedLately(b) - touchedLately(a)
     || b.score - a.score);
 
   // Publish the coverage tier the sort ACTUALLY used, so the returned order is
