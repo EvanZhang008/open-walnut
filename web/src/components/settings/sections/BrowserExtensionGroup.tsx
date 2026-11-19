@@ -4,7 +4,8 @@
  *     the browser pairing code) with whether it is connected now, the version it runs against the
  *     one Walnut ships and how it updates (browser-extension-model.ts), and Remove, which ends its
  *     token at once;
- *   - Install: the steps for Chrome or Firefox, with Set up in Chrome on this machine;
+ *   - Install: Chrome's store first, then loading it from Walnut (Set up in Chrome on this
+ *     machine), or Firefox;
  *   - What it does: what the extension adds, each with where to turn it on.
  */
 import { useCallback, useEffect, useState } from 'react'
@@ -76,7 +77,7 @@ export function BrowserExtensionGroup({ status }: { status?: ExtensionStatus | n
       <SettingsGroup
         heading="Your browsers"
         data-testid="ext-browsers"
-        footer={shipped ? <>This Walnut ships version {shipped.version} (build {shipped.build.slice(0, 7)}). An extension set up from Walnut&apos;s folder updates itself with every Walnut update.</> : undefined}
+        footer={shipped ? <>This Walnut ships version {shipped.version} (build {shipped.build.slice(0, 7)}). One from the Chrome Web Store updates through the store; one set up from Walnut&apos;s folder updates itself with every Walnut update.</> : undefined}
       >
         {rows === null && <SettingsRow label={loadError ? 'Could not read the connected browsers' : 'Loading…'} help={loadError || undefined} control={null} />}
         {rows?.length === 0 && (
@@ -104,7 +105,7 @@ export function BrowserExtensionGroup({ status }: { status?: ExtensionStatus | n
         heading="Install"
         data-testid="ext-install"
         footer={browser === 'chrome'
-          ? <>Chrome lets only you add an extension that is not from its store, so two clicks are yours: Developer mode and Load unpacked. Walnut does the rest. Then click the Walnut icon in the toolbar and Connect: it shows up under Your browsers.</>
+          ? <>Add it from the Chrome Web Store in one click. After Connect in the extension&apos;s popup, it shows up under Your browsers.</>
           : <>After Connect in the extension&apos;s popup, it shows up under Your browsers.</>}
       >
         <SettingsRow

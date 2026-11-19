@@ -305,10 +305,15 @@ memory (`core/browser-control/extension-seen.ts`) and `GET /api/v1/browser/statu
 **The Chrome Web Store.** On macOS and Windows Chrome installs an extension in one click only
 from its store (its own documentation: the external update address "must point to the Chrome Web
 Store", and no install from a local CRX path since Chrome 33 on Windows and 44 on Mac). The
-submission is ready in `packages/browser-extension/store/` (listing text, permission reasons,
-privacy policy); `bun scripts/extension-store-package.mjs` builds the upload into
-`dist/extension-store`. Submitting publishes under the maintainer's developer account, so it is the
-maintainer's step.
+extension is published there since 2026-11-18, under the publisher Open Walnut
+(https://chromewebstore.google.com/detail/walnut/ngkloakmnoagffcjhgkjkkmdnomkphgn), so Settings,
+Browser extension and the connect page offer **Add from Chrome Web Store** first for Chrome, Edge,
+Brave and Arc (`CHROME_STORE_URL` in `web/src/components/passwords/ExtensionInstall.tsx`), and
+loading it from Walnut second. A store copy reports `install: store` and updates through the
+store, so it can trail the build Walnut ships until a new version is uploaded. The submission
+lives in `packages/browser-extension/store/` (listing text, permission reasons, privacy policy);
+`bun scripts/extension-store-package.mjs` builds the upload into `dist/extension-store`.
+Publishing goes out under the maintainer's developer account, so it is the maintainer's step.
 
 **Setting it up from Walnut, and keeping it current.** A browser loads an extension that is not
 from its store only on the person's own two clicks (Chrome: Developer mode, then Load unpacked),

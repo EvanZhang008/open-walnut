@@ -23,6 +23,31 @@ test.beforeAll(() => {
   expect(build).toMatch(/^[0-9a-f]{12}$/)
 })
 
+test('Chrome install offers the Chrome Web Store first, and loading it from Walnut after it', async ({ page }) => {
+  await page.goto('/settings#browser')
+  const install = page.getByTestId('ext-install')
+  const store = install.getByTestId('ext-store')
+  await expect(store).toBeVisible({ timeout: 30_000 })
+  await expect(store).toHaveText('Add from Chrome Web Store')
+  await expect(store).toHaveAttribute('href', 'https://chromewebstore.google.com/detail/walnut/ngkloakmnoagffcjhgkjkkmdnomkphgn')
+  await expect(store).toHaveAttribute('target', '_blank')
+  await expect(install.getByTestId('ext-store-step')).toContainText('Add to Chrome')
+  // The store comes first; the Developer mode way follows as the other way.
+  const order = await install.evaluate((root) => {
+    const a = root.querySelector('[data-testid="ext-store"]')!
+    const b = root.querySelector('[data-testid="ext-steps-chrome-setup"]')!
+    return a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? 'store-first' : 'folder-first'
+  })
+  expect(order).toBe('store-first')
+  await expect(install.getByTestId('ext-or-folder')).toContainText('Developer mode')
+  // Clicking it opens the store in a tab of its own, never in place of Walnut.
+  await page.context().route('https://chromewebstore.google.com/**', (route) => route.fulfill({ status: 200, contentType: 'text/html', body: '<title>store</title>' }))
+  const [tab] = await Promise.all([page.context().waitForEvent('page'), store.click()])
+  await expect(tab).toHaveURL(/chromewebstore\.google\.com\/detail\/walnut\//)
+  await tab.close()
+  await expect(page).toHaveURL(/\/settings/)
+})
+
 test('Set up in Chrome puts the extension in a folder Chrome loads, and shows the two steps left', async ({ page }) => {
   await page.goto('/settings#browser')
   const steps = page.getByTestId('ext-steps-chrome-setup')

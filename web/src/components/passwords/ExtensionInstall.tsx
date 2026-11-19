@@ -3,7 +3,9 @@
  * this Walnut serves (/downloads/walnut-extension-<browser>.zip, built with the web app). Shared
  * by the connect page (/connect-extension) and Settings → Browser extension.
  *
- * In Chrome on the machine Walnut runs on, Set up in Chrome does everything around the two clicks
+ * Chrome (and Edge, Brave, Arc) add it first from the Chrome Web Store in one click, and the store
+ * keeps it updated. Loading it from Walnut stays below as the other way (each new build first):
+ * in Chrome on the machine Walnut runs on, Set up in Chrome does everything around the two clicks
  * only the person may make (Developer mode, Load unpacked): Walnut puts the extension into a
  * folder of its own (kept up to date with every Walnut update), copies its path, and opens the
  * Extensions page (POST /api/v1/browser/extension/setup, core/browser-control/extension-install.ts).
@@ -17,6 +19,9 @@ export type ExtBrowser = 'chrome' | 'firefox';
 export function detectBrowser(): ExtBrowser {
   return /Firefox\//.test(navigator.userAgent) ? 'firefox' : 'chrome';
 }
+
+/** The Walnut extension's Chrome Web Store page (published under Open Walnut, 2026-11-18). */
+export const CHROME_STORE_URL = 'https://chromewebstore.google.com/detail/walnut/ngkloakmnoagffcjhgkjkkmdnomkphgn';
 
 export const EXTENSION_DOWNLOAD: Record<ExtBrowser, string> = {
   chrome: '/downloads/walnut-extension-chrome.zip',
@@ -91,8 +96,19 @@ function ChromeSetupSteps() {
   );
 }
 
+/** Chrome's one-click way: its store adds the extension and keeps it updated. */
+function ChromeStoreStep() {
+  return (
+    <div className="pw-ext-store" data-testid="ext-store-step">
+      <a className="settings-button" data-testid="ext-store" href={CHROME_STORE_URL} target="_blank" rel="noopener noreferrer">
+        Add from Chrome Web Store
+      </a>{' '}
+      Click <b>Add to Chrome</b>, pin Walnut from the puzzle-piece menu, click it, then <b>Connect</b>. The store keeps it updated.
+    </div>
+  );
+}
+
 export function ExtensionInstallSteps({ browser }: { browser: ExtBrowser }) {
-  if (browser === 'chrome' && onWalnutMachine()) return <ChromeSetupSteps />;
   if (browser === 'firefox') {
     return (
       <ol className="pw-ext-steps" data-testid="ext-steps-firefox">
@@ -105,12 +121,20 @@ export function ExtensionInstallSteps({ browser }: { browser: ExtBrowser }) {
     );
   }
   return (
-    <ol className="pw-ext-steps" data-testid="ext-steps-chrome">
-      <li><a href={EXTENSION_DOWNLOAD.chrome} download>Download the Chrome extension</a> and unzip it.</li>
-      <li>Open <CopyAddress text="chrome://extensions" /> in a new tab and turn on <b>Developer mode</b> (top right).</li>
-      <li>Click <b>Load unpacked</b> and pick the unzipped folder.</li>
-      <li>Pin Walnut from the puzzle-piece menu, click it, then <b>Connect</b>.</li>
-      <li className="pw-ext-note">Works the same in Edge, Brave and Arc.</li>
-    </ol>
+    <>
+      <ChromeStoreStep />
+      <p className="pw-ext-or" data-testid="ext-or-folder">
+        Or load it from this Walnut, which gets each new build first and needs Chrome&apos;s Developer mode:
+      </p>
+      {onWalnutMachine() ? <ChromeSetupSteps /> : (
+        <ol className="pw-ext-steps" data-testid="ext-steps-chrome">
+          <li><a href={EXTENSION_DOWNLOAD.chrome} download>Download the Chrome extension</a> and unzip it.</li>
+          <li>Open <CopyAddress text="chrome://extensions" /> in a new tab and turn on <b>Developer mode</b> (top right).</li>
+          <li>Click <b>Load unpacked</b> and pick the unzipped folder.</li>
+          <li>Pin Walnut from the puzzle-piece menu, click it, then <b>Connect</b>.</li>
+        </ol>
+      )}
+      <p className="pw-ext-note">Works the same in Edge, Brave and Arc (Edge asks once to allow extensions from other stores).</p>
+    </>
   );
 }

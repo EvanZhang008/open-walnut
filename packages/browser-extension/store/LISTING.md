@@ -8,8 +8,9 @@ Why the store at all: on macOS and Windows, Chrome installs an extension in one 
 store. Its own documentation: "On Windows and macOS, the update_URL must point to the Chrome Web
 Store", and "As of Chrome 44, no external installs are allowed from a path to a local CRX file on
 Mac OS" (https://developer.chrome.com/docs/extensions/how-to/distribute/install-extensions).
-Without the store, Settings, Browser extension, Set up in Chrome does every step but the two Chrome
-keeps for the person (Developer mode, Load unpacked).
+Published 2026-11-18: https://chromewebstore.google.com/detail/walnut/ngkloakmnoagffcjhgkjkkmdnomkphgn
+(publisher Open Walnut). Settings, Browser extension offers it first; loading it from Walnut
+(Developer mode, Load unpacked) stays as the other way.
 
 ## Store listing
 
