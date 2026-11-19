@@ -62,12 +62,19 @@ test.beforeAll(async ({ request }) => {
   const res = await request.get('/api/config')
   const body = await res.json() as { config?: Record<string, unknown> } & Record<string, unknown>
   saved = (body.config ?? body).hosts as Record<string, unknown> | undefined
-  const put = await request.put('/api/config', { data: { hosts: { [ALIAS]: { hostname: 'keepbox.example.com', enabled: false } } } })
+  // A write from outside a page merges the hosts map entry by entry and removes only what it sends
+  // as null (config-section-write.ts, 2026-11-18), so the fixture's own hosts are removed by name:
+  // the editor's fields are numbered by the host's place in the list, and keepbox is the only one.
+  const others = Object.fromEntries(Object.keys(saved ?? {}).filter((k) => k !== ALIAS).map((k) => [k, null]))
+  const put = await request.put('/api/config', { data: { hosts: { ...others, [ALIAS]: { hostname: 'keepbox.example.com', enabled: false } } } })
   expect(put.ok()).toBe(true)
+  const after = await (await request.get('/api/config')).json() as { config?: { hosts?: object }; hosts?: object }
+  expect(Object.keys((after.config ?? after).hosts ?? {}).filter((k) => k !== '__cloudbox__')).toEqual([ALIAS])
 })
 
 test.afterAll(async ({ request }) => {
-  await request.put('/api/config', { data: { hosts: saved ?? {} } })
+  // keepbox removed by name, the fixture's hosts written back as they were.
+  await request.put('/api/config', { data: { hosts: { [ALIAS]: null, ...(saved ?? {}) } } })
 })
 
 test('the host keeps its own work always, and the user picks the rest', async ({ page }) => {

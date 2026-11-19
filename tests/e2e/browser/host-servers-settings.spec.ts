@@ -71,9 +71,9 @@ test.describe('Walnut on this host, in the host\'s Details', () => {
   test.afterAll(async ({ browser }) => {
     const context = await browser.newContext({ baseURL: test.info().project.use.baseURL })
     const page = await context.newPage()
-    const hosts = await hostsNow(page)
-    delete hosts[KEY]
-    await putHosts(page, hosts).catch(() => {})
+    // A write from outside a page merges the hosts map and removes only what it sends as null
+    // (config-section-write.ts, 2026-11-18): the host is removed by name.
+    await putHosts(page, { [KEY]: null }).catch(() => {})
     await context.close()
   })
 
@@ -203,7 +203,8 @@ test.describe('Walnut on this host, in the host\'s Details', () => {
     await thisHost(page)
     await expect(page.getByTestId(`host-server-enabled-${KEY}`)).toBeVisible({ timeout: 30_000 })
     await expect(page.getByTestId(`host-server-copies-${KEY}`)).toHaveCount(0)
-    await putHosts(page, { ...now, [KEY]: { ...now[KEY] } })
+    // Keys merge one by one, so the program goes back by name (null when it had none).
+    await putHosts(page, { [KEY]: { ...now[KEY], server_program: now[KEY]?.server_program ?? null } })
   })
 
   test('turn it off', async ({ page }) => {

@@ -56,6 +56,12 @@ export async function openAllSections(scope: Page | Locator): Promise<void> {
   for (const tab of await sections.evaluateAll((els) => els.map((el) => el.getAttribute('data-tab') ?? ''))) {
     await openSection(scope, tab as OrgSectionTab)
   }
+  // The cards with only something to read fold into one row under Needs you (OrgTaskRail.tsx,
+  // 2026-11-19): open it too, so a task to read is reached like any other.
+  const looks = scope.getByTestId('org-to-look')
+  for (let i = 0; i < await looks.count(); i++) {
+    if ((await looks.nth(i).getAttribute('aria-expanded')) === 'false') await looks.nth(i).click()
+  }
 }
 
 /** A task's row in All tasks, in any section, or in the one named. */
