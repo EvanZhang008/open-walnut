@@ -77,6 +77,7 @@ describe('every first-message start names its source', () => {
   it('also enumerates firstMessage payload producers that bypass the session runner', () => {
     const expected: Record<string, number> = {
       'src/replica/ask-launch.ts': 1, // route source framed before follower.start
+      'src/replica/away-starts.ts': 1, // a job's automation source or a session's peer note, framed before follower.start
       'src/core/sessions/lane-turn.ts': 1, // source framed before lane resolution
       'src/core/ai/ai-run.ts': 1, // ai-agent bus start default framing
       'src/providers/clock-host-start-core.ts': 1, // clock-placement frames routine ID and name

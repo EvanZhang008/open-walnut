@@ -3463,13 +3463,10 @@ export class DaemonConnection {
       // the Walnut that owns this host. A daemon without 'client-role-v1' still hands it
       // the real one's `walnut` calls (first socket wins); answering them from a test
       // server's copy told a caller every trigger was off (2026-11-02), so it says no.
-      refuse: (c) => {
-        if (!this.isReadOnlyRemote) return null
-        log.session.warn('DaemonConnection: gateway relay refused, this is a test server attached read only', {
-          host: this.hostKey, relayId: c.relayId, capability: c.capability, callerSid: c.callerSid,
-        })
-        return { relayId: c.relayId, error: 'this relay reached a test server, not the Walnut that owns this host; run it again', errorCode: 'hub_unreachable' }
-      },
+      // The refusal's line is written by serveRelayedCall, behind the shared refusal log.
+      refuse: (c) => this.isReadOnlyRemote
+        ? { relayId: c.relayId, error: 'this relay reached a test server, not the Walnut that owns this host (attached read only); run it again', errorCode: 'hub_unreachable' }
+        : null,
       // The host delivers messages between its own sessions itself and journals
       // them; its nudge reaches us before this request (one socket, in order).
       // Take the journal first, so a request id it names is already ours.

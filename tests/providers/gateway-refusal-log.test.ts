@@ -65,21 +65,35 @@ describe('gateway refusal log', () => {
 })
 
 describe('ratchet: every gateway refusal line of the relay goes through the refusal log', () => {
-  it('daemon-connection.ts writes "gateway relay refused" only behind gatewayRefusalLog.admit', () => {
-    const src = readFileSync(join(__dirname, '../../src/providers/daemon-connection.ts'), 'utf8')
+  // The leader's link (daemon-connection.ts) and a host replica (replica/local-calls.ts) answer
+  // relays through one path (core/peers/gateway-answer.ts), which writes the refusal lines.
+  const read = (rel: string) => readFileSync(join(__dirname, '../../', rel), 'utf8')
+  const REFUSED = /log\.session\.(warn|error|info)\([`'"][^`'"]*gateway relay refused/
+
+  it('gateway-answer.ts writes "gateway relay refused" only behind refusalLog.admit, before the call runs and after', () => {
+    const src = read('src/core/peers/gateway-answer.ts')
     const lines = src.split('\n')
-    const sites = lines
-      .map((line, i) => ({ line, i }))
-      .filter(({ line }) => /log\.session\.(warn|error)\('DaemonConnection: gateway relay refused'/.test(line))
-    expect(sites.length).toBeGreaterThan(0)
+    const sites = lines.map((line, i) => ({ line, i })).filter(({ line }) => REFUSED.test(line))
+    // A refusal before anything runs (the `refuse` hook: a read-only test server, a replica that
+    // cannot answer) and one the router gave.
+    expect(sites.length).toBeGreaterThanOrEqual(2)
     // Every such line sits right under the limiter's yes.
     for (const { i } of sites) expect(lines[i - 1], `line ${i + 1}`).toMatch(/if \(seen\.write\b/)
     // And the op-answer line too, and both decisions come from one admit of this outcome.
-    const answered = lines.findIndex((l) => l.includes("'DaemonConnection: gateway relay handled, the op answered an error'"))
+    const answered = lines.findIndex((l) => l.includes('gateway relay handled, the op answered an error'))
     expect(answered).toBeGreaterThan(0)
     expect(lines[answered - 1]).toMatch(/if \(seen\.write\b/)
-    expect(src).toMatch(/const seen = gatewayRefusalLog\.admit\(/)
+    expect(src).toMatch(/const seen = refusalLog\.admit\(deps\.hostKey, callerSid, answered \?/)
+    expect(src).toMatch(/const seen = refusalLog\.admit\(deps\.hostKey, callerSid, `before:/)
     expect(src).toMatch(/isOpAnswerStatus\(outcome\.opStatus\)/)
-    expect(src).toMatch(/gatewayRefusalLog\.sweep\(\)/)
+    expect(src).toMatch(/refusalLog\.sweep\(\)/)
+  })
+
+  it('the links answering relays write no refusal line of their own, and answer through the shared path', () => {
+    for (const rel of ['src/providers/daemon-connection.ts', 'src/replica/local-calls.ts']) {
+      const src = read(rel)
+      expect(src.split('\n').filter((l) => REFUSED.test(l)), rel).toEqual([])
+      expect(src, rel).toContain('serveRelayedCall(')
+    }
   })
 })

@@ -186,6 +186,7 @@ export function awayStarts(deps: AwayStartsDeps): RequestHandler {
     const r = await w.call('follower.start', {
       run: 'task', sid, taskId, title: str(task.title) || taskId, cwd, mode, modeNamed: !!str(b.mode) || fresh.modeNamed,
       ...(model ? { model } : {}), ...(effort ? { effort } : {}),
+      // The first words framed with their source (deps.frame: a job's automation, a session's peer note).
       context: fresh.context, taskToken: START_TASK_TOKEN, firstMessage: await deps.frame(first, actor),
       host, actor,
     }, { timeoutMs: START_TIMEOUT_MS })
@@ -281,7 +282,11 @@ export function wireAwayStarts(o: {
     frame: async (text, actor) => {
       const { frameStartText } = await import('../core/sessions/send-frame.js')
       if (actor.kind === 'plugin-job') return frameStartText(text, { source: `automation:plugin job ${actor.plugin}/${actor.job}` })
-      if (actor.kind !== 'session') return text
+      // A device never starts here (needs_leader first); named all the same, as the console's start names it.
+      if (actor.kind !== 'session') {
+        const { startRouteSource } = await import('../core/sessions/send-sent-by.js')
+        return frameStartText(text, { source: startRouteSource('quick-start', {}) })
+      }
       const { getSessionByClaudeId } = await import('../core/session-tracker.js')
       const rec = await getSessionByClaudeId(actor.sid).catch(() => null)
       if (!rec) return frameStartText(text, { source: 'api-agent', callerSid: actor.sid })

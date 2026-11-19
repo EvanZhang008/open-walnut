@@ -151,6 +151,17 @@ export async function serveRelayedCall(call: RelayedCall, deps: RelayedCallDeps)
   const { relayId, capability, callerSid } = call;
   const refused = deps.refuse?.(call);
   if (refused) {
+    // One line per caller and reason every few minutes, as every refusal (a host refusing many calls never floods the log).
+    const code = typeof refused.errorCode === 'string' ? refused.errorCode : 'internal';
+    const seen = refusalLog.admit(deps.hostKey, callerSid, `before:${code}`);
+    sweepRefusalsLater(deps.label);
+    if (seen.write) {
+      log.session.warn(`${deps.label}: gateway relay refused`, {
+        host: deps.hostKey, relayId, capability, callerSid, errorCode: code, before: true,
+        ...(typeof refused.error === 'string' ? { reason: refused.error.slice(0, 200) } : {}),
+        ...(seen.suppressed > 0 ? { suppressed: seen.suppressed } : {}),
+      });
+    }
     try { await deps.send(refused, undefined); } catch { /* the daemon times the relay out */ }
     return;
   }
