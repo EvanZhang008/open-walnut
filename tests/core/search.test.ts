@@ -6,6 +6,7 @@ import {
   searchSessionReferences,
   searchSessionTaskReferences,
   searchTaskReferences,
+  HYBRID_CANDIDATE_FLOOR,
 } from '../../src/core/search.js';
 import type { SessionRecord, Task } from '../../src/core/types.js';
 
@@ -383,9 +384,10 @@ describe('index memory search integration', () => {
     // The whole file-backed universe rides ONE lane call.
     // onSemantic tells the result memo whether the semantic lane was complete.
     expect(lane).toHaveBeenCalledTimes(1);
+    // The lane hands the merge the same candidates whatever the caller's limit (20 by default).
     expect(lane).toHaveBeenCalledWith('TypeScript', {
       kinds: ['memory', 'note', 'skill'],
-      limit: 20,
+      limit: HYBRID_CANDIDATE_FLOOR,
       onSemantic: expect.any(Function),
     });
   });

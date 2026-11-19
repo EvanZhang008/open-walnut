@@ -160,6 +160,32 @@ describe('a task is found by what the user wrote in it', () => {
     expect(row!.coveredTermHits).toBe(4);
   });
 
+  // 2026-11-19: limit=3 cut the index lane before the merge, so the task he wrote in (first at the
+  // web's limit 80) was missing from a three-row answer.
+  it('a small limit returns the first rows of a large one', async () => {
+    const bus = new EventBus();
+    wiring = startSearchV2Wiring(bus);
+    const [w1, w2] = [runWord('mor'), runWord('tep')];
+    const others = [];
+    for (let i = 0; i < 6; i++) {
+      others.push((await addTask({ title: `${w1} ${w2} report ${i}`, project: 'marina' })).task);
+    }
+    const { task: mine } = await addTask({ title: 'Weekly ops leader', project: 'marina', description: 'Watches the ops queue and reports.' });
+    for (const t of [...others, mine]) bus.emit(EventNames.TASK_CREATED, { task: t }, ['*'], { source: 'test' });
+    await (await prepareUserAskCapture({ task: mine, message: `then add the ${w1} ${w2} step`, inChat: true }))?.commit();
+    await waitFor(() => (getSearchV2Index().getDoc('task', mine.id)?.note ?? '').includes(w1)
+      && others.every((t) => getSearchV2Index().getDoc('task', t.id) !== null));
+    await mergeUiPrefs({ [RECENT_OPENED_KEY]: { v: JSON.stringify([{ id: mine.id, at: new Date().toISOString(), human: true }]), ts: Date.now() } });
+    try {
+      const wide = (await search(`${w1} ${w2}`, { types: ['task'], limit: 80 })).map((r) => r.taskId);
+      expect(wide[0]).toBe(mine.id);
+      const narrow = (await search(`${w1} ${w2}`, { types: ['task'], limit: 3 })).map((r) => r.taskId);
+      expect(narrow).toEqual(wide.slice(0, 3));
+    } finally {
+      await mergeUiPrefs({ [RECENT_OPENED_KEY]: { v: null, ts: Date.now() + 1 } });
+    }
+  }, 45_000);
+
   it('a task he never wrote in is not found by words that are only in other tasks', async () => {
     wiring = startSearchV2Wiring(new EventBus());
     const { task } = await addTask({ title: 'Quiet unrelated pipeline task', project: 'marina' });

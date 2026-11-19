@@ -905,6 +905,9 @@ async function personTextForSearch(taskIds: readonly string[]): Promise<Map<stri
   return out;
 }
 
+/** Rows the index lane hands the merge at least: the web's and the phone's own limit. */
+export const HYBRID_CANDIDATE_FLOOR = 80;
+
 export const RECENT_TOUCH_BOOST_MS = 3 * 24 * 3600_000;
 
 /** His Recent touches (task id -> ms); empty without the web layer or on a read failure. */
@@ -946,7 +949,11 @@ async function searchInner(
     const searchV2Lane = await loadSearchV2Lane();
     return searchV2Lane(normalizedQuery, {
       kinds,
-      limit,
+      // The merge reorders the lane's rows (coverage tiers, his own words, his Recent touches),
+      // so it reads the same candidates whatever the caller's limit and cuts after: with the lane
+      // cut at limit 3, the task he wrote in never reached the merge that ranks it first, while
+      // the web's and the phone's limit 80 found it (2026-11-19).
+      limit: Math.max(limit, HYBRID_CANDIDATE_FLOOR),
       semanticDeadlineMs: options.semanticDeadlineMs,
       onSemantic: (state) => { if (INCOMPLETE_SEMANTIC.has(state)) run.semanticIncomplete = true; },
     });
