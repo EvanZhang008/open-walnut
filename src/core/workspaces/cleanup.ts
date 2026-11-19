@@ -4,10 +4,15 @@
  *
  * The rule (decisions.ts): remove only when nothing in it would be lost. Two more
  * guards live here:
- *  - a live session keeps its cwd in the folder, idle included, so a completed
- *    task's workspace waits until no session process of the task is alive. Nothing
- *    stops the CLI for it: completing a task already stops its sessions, and the
- *    session's stop (session:status-changed) runs the check again;
+ *  - the task's work must be over (still-working.ts): no session process of the
+ *    task alive on the host, idle included and whatever its record says, and no
+ *    request to it left unanswered. Asked before the teardown script and again
+ *    before the removal, on every path here (completion, a session's stop, the boot
+ *    pass, a script's end, a deletion). Nothing stops the CLI for it: completing a
+ *    task already stops its sessions, and the session's stop
+ *    (session:status-changed) runs the check again; a check that waits also looks
+ *    again later (RECHECK_MS), for what announces nothing (a request answered, a
+ *    host back, a stop the record missed);
  *  - a reopen wins: "still COMPLETE" is checked inside the same locked write that
  *    moves the workspace to `removing`.
  * Only the Walnut that made a workspace cleans it up (madeHere).
@@ -30,8 +35,48 @@ const SCRIPT_WAIT_MS = 61 * 60_000
 /** Grace after a completion: the turn that completed the task is still ending, its sessions are stopping. */
 const COMPLETE_GRACE_MS = 4_000
 
+/** A deleted task's workspace waits this long for its sessions to end (the deletion stops them). */
+const DELETE_SESSION_WAIT_MS = 60_000
+const DELETE_SESSION_POLL_MS = 5_000
+
+/** A check that found the work not over looks again after this long. */
+export const RECHECK_MS = 10 * 60_000
+
+/** Still not over this long after the completion: the workspace is kept, with why, and nothing looks again. */
+export const GIVE_UP_AFTER_MS = 24 * 60 * 60_000
+
 /** One check per task at a time; a request that arrives meanwhile runs once more after it. */
 const checking = new Map<string, { again: boolean }>()
+
+function recheckLater(taskId: string): void {
+  managerDeps().later(`workspace-recheck:${taskId}`, () => {
+    void onTaskCompleted(taskId, { grace: false })
+      .catch((err) => log.web.warn('workspace cleanup recheck failed', { taskId, error: errText(err) }))
+  }, RECHECK_MS)
+}
+
+/**
+ * The task's work is not over: say why, look again later, and stop this check. A
+ * day after the completion (a host that never comes back, a session left idle) the
+ * workspace is kept with the reason instead: kept is never removed by itself.
+ */
+async function workGoesOn(task: Task, ws: TaskWorkspace, before: 'teardown' | 'removal'): Promise<boolean> {
+  const deps = managerDeps()
+  const why = await deps.stillWorking(task, ws)
+  if (!why) return false
+  const since = Date.parse(task.completed_at ?? '')
+  if (Number.isFinite(since) && deps.now() - since >= GIVE_UP_AFTER_MS) {
+    const root = ws.root
+    await deps.write(task.id, (cur, row) => (cur && isLaunchReady(cur) && cur.root === root && row.phase === 'COMPLETE'
+      ? stamp(cur, { state: 'kept', kept_reason: `its work did not look over a day after the task completed: ${why}` })
+      : null))
+    log.web.info(`workspace kept: ${why}, a day after completion`, { taskId: task.id, root })
+    return true
+  }
+  log.web.info(`workspace cleanup waits: ${why}`, { taskId: task.id, root: ws.root, before })
+  recheckLater(task.id)
+  return true
+}
 
 /** A task moved into COMPLETE: remove its workspace when nothing in it would be lost; otherwise keep it and say why. */
 export async function onTaskCompleted(taskId: string, opts: { grace?: boolean } = {}): Promise<void> {
@@ -71,24 +116,23 @@ async function completionCheck(taskId: string, grace: boolean): Promise<void> {
   // Made again for a session's waiting message: that session starts in it first (remake.ts).
   const { remakeHoldsCleanup } = await import('./remake.js')
   if (remakeHoldsCleanup(taskId, first.workspace)) return
-  if (await deps.hasLiveSession(taskId)) {
-    log.web.info('workspace cleanup waits: a session of the task is still alive in it', { taskId, root: first.workspace.root })
-    return
-  }
   let task = await deps.getTask(taskId)
   let ws = task?.workspace
   if (!task || task.phase !== 'COMPLETE' || !ws || !isLaunchReady(ws) || ws.root !== first.workspace.root) return
+  if (await workGoesOn(task, ws, 'teardown')) return
   // A setup still running finishes first (its end runs this check again); then the
   // task's teardown script, once per completion (scripts.ts).
   if (scriptRunning(ws) === 'setup') {
     log.web.info('workspace cleanup waits: its setup script is still running', { taskId, root: ws.root })
     return
   }
-  if (!(await teardownBeforeCleanup(task, ws))) return
+  if (!(await teardownBeforeCleanup(task, ws))) {
+    recheckLater(taskId)
+    return
+  }
   task = await deps.getTask(taskId)
   ws = task?.workspace
   if (!task || task.phase !== 'COMPLETE' || !ws || !isLaunchReady(ws) || ws.root !== first.workspace.root) return
-  if (await deps.hasLiveSession(taskId)) return
   // A kept (or reopened) task is never flipped to kept by a check it outlived.
   const root = ws.root
   const keep = (reason: string) => deps.write(taskId, (cur, row) => (cur && isLaunchReady(cur) && cur.root === root && row.phase === 'COMPLETE'
@@ -102,7 +146,7 @@ async function completionCheck(taskId: string, grace: boolean): Promise<void> {
   }
   const decision = cleanupDecision(ws, probe, 'complete')
   if (decision.action !== 'remove') return void await keep(decision.reason ?? 'it could not be checked')
-  if (await deps.hasLiveSession(taskId)) return
+  if (await workGoesOn(task, ws, 'removal')) return
   const started = await beginRemoval(task, ws, 'complete', (row) => row.phase === 'COMPLETE')
   if (!started) log.web.info('workspace cleanup skipped: the task changed meanwhile', { taskId, root })
 }
@@ -133,6 +177,15 @@ export async function cleanupForDeletedTask(task: Pick<Task, 'id' | 'title'>, ws
   if (runningJob) {
     log.web.info('workspace of a deleted task waits for its script to end', { taskId: task.id, root: ws.root, script: running })
     await pollJob(ws.host, runningJob, SCRIPT_WAIT_MS, async () => {})
+  }
+  // A session still in it (the deletion stops them; a stop can take a moment) keeps it.
+  for (let waited = 0; ; waited += DELETE_SESSION_POLL_MS) {
+    const why = await deps.stillWorking(task, ws, { requests: false })
+    if (!why) break
+    if (waited >= DELETE_SESSION_WAIT_MS) {
+      return void await tell(`The task was deleted, but its workspace at ${ws.root} on ${hostLabel(ws.host)} was kept: ${why}. Nothing was removed.`)
+    }
+    await deps.sleep(DELETE_SESSION_POLL_MS)
   }
   let probe: WorkspaceProbeSummary
   try {

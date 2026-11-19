@@ -286,10 +286,10 @@ function tail(output: unknown): string | undefined {
 }
 
 /** Write one role's run record (only while the workspace is still the one it ran in). */
-async function writeRun(taskId: string, root: string | undefined, role: Role, fn: (cur: WorkspaceScriptRun | undefined) => WorkspaceScriptRun | null): Promise<Task | null> {
-  return managerDeps().write(taskId, (cur) => {
+async function writeRun(taskId: string, root: string | undefined, role: Role, fn: (cur: WorkspaceScriptRun | undefined, row: Readonly<Task>) => WorkspaceScriptRun | null): Promise<Task | null> {
+  return managerDeps().write(taskId, (cur, row) => {
     if (!cur || cur.root !== root || !isLaunchReady(cur)) return null
-    const next = fn(cur[role])
+    const next = fn(cur[role], row)
     return next ? stamp(cur, { [role]: next }) : null
   })
 }
@@ -304,7 +304,8 @@ async function beginRun(task: Task, ws: TaskWorkspace, role: Role, script: Resol
     ...(role === 'setup' ? { wait: opts.wait !== false } : {}),
     ...(opts.forCompletion !== undefined ? { for_completion: opts.forCompletion } : {}),
   }
-  const written = await writeRun(task.id, ws.root, role, (cur) => (cur?.state === 'running' ? null : run))
+  // A teardown is for a task still complete: a reopen meanwhile wins (checked in the same locked write).
+  const written = await writeRun(task.id, ws.root, role, (cur, row) => (cur?.state === 'running' || (role === 'teardown' && row.phase !== 'COMPLETE') ? null : run))
   if (!written) return null
   log.web.info(`workspace ${role} script started`, { taskId: task.id, root: ws.root, script: script.name, source: script.source, jobId })
   return jobId
@@ -544,6 +545,12 @@ export async function teardownBeforeCleanup(task: Task, ws: TaskWorkspace): Prom
   const script = scriptFor('teardown', view.scripts)
   if (!script) return true
   if (!mayRunUnasked(script, view)) return (await skipUntrusted(task, ws, 'teardown', script, view, { forCompletion: key })) !== null
+  // Reading the scripts asked the host and took a while: the work must still be over.
+  const why = await managerDeps().stillWorking(task, ws)
+  if (why) {
+    log.web.info(`workspace teardown waits: ${why}`, { taskId: task.id, root: ws.root })
+    return false
+  }
   const run = await runRole(task, ws, 'teardown', script, { forCompletion: key }).catch((err) => {
     log.web.warn('workspace teardown failed to run', { taskId: task.id, error: errText(err) })
     return null

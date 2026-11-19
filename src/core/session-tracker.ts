@@ -1336,6 +1336,23 @@ export async function getSessionsForTask(taskId: string): Promise<SessionRecord[
   return getSessionsForTaskSync(taskId);
 }
 
+/**
+ * Sessions whose working folder is `dir` or inside it, whatever task they belong to
+ * now (a deleted task's sessions are unlinked from it first). Matched on the folder's
+ * last two path parts, so a host's other spelling of the same path (/local/home vs
+ * /home) still matches.
+ */
+export async function getSessionsInFolder(dir: string): Promise<SessionRecord[]> {
+  await ensureSessionInit();
+  const db = getDb();
+  const tail = dir.replace(/\/+$/, '').split('/').filter(Boolean).slice(-2).join('/');
+  if (!db || !tail.includes('/')) return [];
+  const esc = (v: string) => v.replace(/[\\%_]/g, (c) => `\\${c}`);
+  const rows = db.prepare("SELECT * FROM sessions WHERE cwd LIKE ? ESCAPE '\\' OR cwd LIKE ? ESCAPE '\\'")
+    .all(`%/${esc(tail)}`, `%/${esc(tail)}/%`) as Record<string, any>[];
+  return rows.map(rowToSession);
+}
+
 export function getSessionsForTaskSync(taskId: string): SessionRecord[] {
   const db = getDb();
   if (!db) return [];

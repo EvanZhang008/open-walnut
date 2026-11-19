@@ -10,14 +10,15 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import type { Task } from '../../src/core/types.js'
+import type { SessionRecord, Task } from '../../src/core/types.js'
+import { stillWorking } from '../../src/core/workspaces/still-working.js'
 import type { ResolvedProjectScript, TaskWorkspace } from '../../src/core/workspaces/types.js'
 import { __setWorkspacePluginSourceForTesting } from '../../src/core/workspaces/registry.js'
 import { WorkspaceError } from '../../src/core/workspaces/daemon-client.js'
 import {
   __setWorkspaceManagerDepsForTesting, __settleWorkspaceDriver, deferStart, removeWorkspaceManually, requestWorkspace, launchPending, cancelPendingStart,
 } from '../../src/core/workspaces/manager.js'
-import { __settleCompletionCheck, onTaskCompleted, onTaskDeleted, resumeWorkspaces } from '../../src/core/workspaces/cleanup.js'
+import { __settleCompletionCheck, onTaskCompleted, onTaskDeleted, onTaskSessionStopped, GIVE_UP_AFTER_MS, RECHECK_MS, resumeWorkspaces } from '../../src/core/workspaces/cleanup.js'
 import {
   fileHash, parseScriptsFile, rerunSetup, startAnyway, trustKey, sanitizeProjectScripts, scriptFor, scriptsFor, setupPromptLine, storedProjectScripts,
 } from '../../src/core/workspaces/scripts.js'
@@ -155,6 +156,20 @@ interface Fake {
   /** The daemon is older than workspace-scripts-v1. */
   oldDaemon: boolean
   live: boolean
+  /** The task's session records (stillWorking reads them; `live` adds a running one). */
+  sessions: SessionRecord[]
+  /** What the host says about each session process: alive, dead, or null (cannot say). Unlisted: dead. */
+  hostSays: Map<string, boolean | null>
+  /** Pending requests to each task. */
+  requests: Array<{ id: string; toTaskId?: string; toSessionId?: string; fromSessionId: string; carriedBy?: unknown[] }>
+  /** The asker sessions' tasks. */
+  askers: Map<string, { id: string; phase: string }>
+  /** Timers the cleanup set (`later`), not yet fired. */
+  later: Array<{ key: string; fn: () => void; ms: number }>
+  /** Runs when the host is asked for the repository's scripts file. */
+  onScriptsFile?: () => void
+  /** Notification bodies. */
+  notes: string[]
   /** The walnut.json keys the user allowed. */
   trust: string[]
   /** The repository the host reports for the file (its common git dir). */
@@ -169,7 +184,8 @@ function allowFile(f: Fake): void {
 let current: Fake | null = null
 
 function fake(): Fake {
-  const f: Fake = { tasks: new Map(), calls: [], jobs: new Map(), launched: [], meta: {}, file: null, oldDaemon: false, live: false, trust: [], repo: '/r/repo/.git' }
+  const f: Fake = { tasks: new Map(), calls: [], jobs: new Map(), launched: [], meta: {}, file: null, oldDaemon: false, live: false, trust: [], repo: '/r/repo/.git',
+    sessions: [], hostSays: new Map(), requests: [], askers: new Map(), later: [], notes: [] }
   current = f
   let n = 0
   __setWorkspacePluginSourceForTesting(async () => [])
@@ -193,7 +209,7 @@ function fake(): Fake {
         f.jobs.set(String(params.jobId), { state: 'running', progress: 'Creating branch' })
         return { ok: true, jobId: params.jobId, state: 'running' }
       }
-      if (cmd === 'workspace.scriptsFile') return { ok: true, dir: params.dir, repo: f.repo, file: f.file }
+      if (cmd === 'workspace.scriptsFile') { f.onScriptsFile?.(); return { ok: true, dir: params.dir, repo: f.repo, file: f.file } }
       if (cmd === 'workspace.runScript') {
         if (f.runReply) return f.runReply
         f.jobs.set(String(params.jobId), { state: 'running', progress: 'Resolving packages' })
@@ -210,7 +226,20 @@ function fake(): Fake {
     launch: async (task) => { f.launched.push(task.id) },
     sessionBusy: async () => false,
     hasLiveSession: async () => f.live,
-    notify: async () => {},
+    // The real gate over a fake session store, host and request ledger.
+    stillWorking: (task, w, opts) => stillWorking(task, w, {
+      // Like the store: the task's sessions, and any whose folder is inside the workspace.
+      sessions: async (taskId, root) => [
+        ...f.sessions.filter((r) => r.taskId === taskId || (!!root && !!r.cwd && (r.cwd === root || r.cwd.startsWith(`${root}/`)))),
+        ...(f.live ? [{ claudeSessionId: 'live-session', process_status: 'running' } as SessionRecord] : []),
+      ],
+      probe: async (_host, sid) => { const a = f.hostSays.get(sid); return a === null ? null : { alive: a === true } },
+      probeable: () => true,
+      pendingRequests: async (taskId, sids) => f.requests.filter((r) => r.toTaskId === taskId || (!!r.toSessionId && sids.includes(r.toSessionId))),
+      askerTask: async (sid) => f.askers.get(sid) ?? null,
+    }, opts),
+    later: (key, fn, ms) => { if (!f.later.some((l) => l.key === key)) f.later.push({ key, fn, ms }) },
+    notify: async (n2) => { f.notes.push(n2.body) },
     listTasks: async () => [...f.tasks.values()],
     projectMeta: async (project) => f.meta[project] ?? null,
     scriptsTrust: async () => [...f.trust],
@@ -640,6 +669,134 @@ describe('teardown at completion', () => {
     await __settleCompletionCheck('c1')
     await __settleWorkspaceDriver('c1')
     expect(ws(f, 'c1')).toMatchObject({ state: 'removed', teardown: { state: 'done', for_completion: '2026-11-04T10:00:00Z' } })
+  })
+
+  it('a session whose record says stopped but which still runs on the host holds the teardown, on every path, until it really ends (2026-11-19)', async () => {
+    // The incident: the task completed itself mid-turn; a restart lost its "stop at turn end",
+    // the boot migration marked the session stopped (its stop never reached the host) and
+    // announced it, and the cleanup ran the teardown under the running session.
+    f.meta.Acme = { scripts: [{ name: 'Release', command: 'walnut-dev release', teardown: true }] }
+    completed('c9', '2026-11-18T23:46:37Z')
+    f.sessions = [{ claudeSessionId: 'e5989ff5-sess', taskId: 'c9', process_status: 'stopped', host: 'clouddev', lastActiveAt: '2026-11-19T00:06:26Z' } as SessionRecord]
+    f.hostSays.set('e5989ff5-sess', true)
+    await onTaskSessionStopped('c9') // the stop the migration announced
+    await onTaskCompleted('c9', { grace: false }) // the boot pass
+    await onTaskCompleted('c9') // a completion event
+    await resumeWorkspaces()
+    await __settleCompletionCheck('c9')
+    expect(runCall(f)).toEqual([])
+    expect(f.calls.some((c) => c.cmd === 'workspace.status' || c.cmd === 'workspace.remove')).toBe(false)
+    expect(ws(f, 'c9')).toMatchObject({ state: 'ready' })
+    expect(ws(f, 'c9').teardown).toBeUndefined()
+    // It looks again later, once (a stop the record missed announces nothing).
+    expect(f.later).toEqual([{ key: 'workspace-recheck:c9', fn: expect.any(Function), ms: RECHECK_MS }])
+    // A host that cannot say is not a "no".
+    f.hostSays.set('e5989ff5-sess', null)
+    f.later.shift()!.fn()
+    await __settleCompletionCheck('c9')
+    expect(runCall(f)).toEqual([])
+    expect(f.later).toHaveLength(1)
+    // The session really ended: the next look runs the teardown, then removes the workspace.
+    f.hostSays.set('e5989ff5-sess', false)
+    f.later.shift()!.fn()
+    await until(() => runCall(f).length === 1, 'teardown started')
+    f.jobs.set(String(runCall(f)[0].params.jobId), { state: 'done', result: { exitCode: 0, ms: 5 } })
+    await __settleCompletionCheck('c9')
+    await __settleWorkspaceDriver('c9')
+    expect(ws(f, 'c9')).toMatchObject({ state: 'removed', teardown: { state: 'done', for_completion: '2026-11-18T23:46:37Z' } })
+    expect(f.later).toEqual([])
+  })
+
+  it('a session that starts again after the teardown holds the removal', async () => {
+    f.meta.Acme = { scripts: [{ name: 'Down', command: 'x', teardown: true }] }
+    completed('c10', 'A')
+    const check = onTaskCompleted('c10', { grace: false })
+    await until(() => runCall(f).length === 1, 'teardown started')
+    f.live = true
+    f.jobs.set(String(runCall(f)[0].params.jobId), { state: 'done', result: { exitCode: 0, ms: 5 } })
+    await check
+    await __settleCompletionCheck('c10')
+    expect(f.calls.some((c) => c.cmd === 'workspace.remove')).toBe(false)
+    expect(ws(f, 'c10').state).toBe('ready')
+    expect(f.later.map((l) => l.key)).toEqual(['workspace-recheck:c10'])
+  })
+
+  it('a task reopened before the later look is left alone', async () => {
+    f.meta.Acme = { scripts: [{ name: 'Down', command: 'x', teardown: true }] }
+    completed('c11', 'A')
+    f.sessions = [{ claudeSessionId: 's11', taskId: 'c11', process_status: 'stopped' } as SessionRecord]
+    f.hostSays.set('s11', true)
+    await onTaskCompleted('c11', { grace: false })
+    f.tasks.set('c11', { ...f.tasks.get('c11')!, phase: 'IN_PROGRESS' })
+    f.hostSays.set('s11', false)
+    f.later.shift()!.fn()
+    await __settleCompletionCheck('c11')
+    expect(runCall(f)).toEqual([])
+    expect(ws(f, 'c11').state).toBe('ready')
+  })
+
+  it('a request to the task nobody answered holds it; one whose asker is done, or that was handed on, does not', async () => {
+    f.meta.Acme = { scripts: [{ name: 'Down', command: 'x', teardown: true }] }
+    completed('c12', 'A')
+    f.requests = [{ id: 'rq-aaaaaa111111', toTaskId: 'c12', fromSessionId: 'lead' }]
+    f.askers.set('lead', { id: 'lead-task', phase: 'IN_PROGRESS' })
+    await onTaskCompleted('c12', { grace: false })
+    expect(runCall(f)).toEqual([])
+    expect(f.later).toHaveLength(1)
+    // The lead finished (nobody waits), and the other request went to another task to answer.
+    f.askers.set('lead', { id: 'lead-task', phase: 'COMPLETE' })
+    f.requests.push({ id: 'rq-bbbbbb222222', toTaskId: 'c12', fromSessionId: 'vp', carriedBy: [{ id: 'rq-cccccc333333', taskId: 'other' }] })
+    f.askers.set('vp', { id: 'vp-task', phase: 'IN_PROGRESS' })
+    f.later.shift()!.fn()
+    await until(() => runCall(f).length === 1, 'teardown started')
+  })
+
+  it('a request addressed to one of its sessions only holds it too', async () => {
+    completed('c14', 'A')
+    f.sessions = [{ claudeSessionId: 's14', taskId: 'c14', process_status: 'stopped' } as SessionRecord]
+    f.requests = [{ id: 'rq-dddddd444444', toSessionId: 's14', fromSessionId: 'lead' }]
+    f.askers.set('lead', { id: 'lead-task', phase: 'IN_PROGRESS' })
+    await onTaskCompleted('c14', { grace: false })
+    expect(f.calls.some((c) => c.cmd === 'workspace.status' || c.cmd === 'workspace.remove')).toBe(false)
+    expect(f.later.map((l) => l.key)).toEqual(['workspace-recheck:c14'])
+  })
+
+  it('a day after the completion, a workspace whose work still does not look over is kept with why, and nothing looks again', async () => {
+    completed('c15', new Date(1_700_000_000_000 - GIVE_UP_AFTER_MS).toISOString())
+    f.sessions = [{ claudeSessionId: 's15', taskId: 'c15', process_status: 'stopped', host: 'gone-host' } as SessionRecord]
+    f.hostSays.set('s15', null)
+    await onTaskCompleted('c15', { grace: false })
+    expect(ws(f, 'c15')).toMatchObject({ state: 'kept', kept_reason: expect.stringMatching(/a day after the task completed: the host could not say whether session s15/) })
+    expect(f.later).toEqual([])
+    expect(f.calls.some((c) => c.cmd === 'workspace.remove')).toBe(false)
+  })
+
+  it('a reopen while the teardown is being prepared wins, in the same locked write that records the run', async () => {
+    f.meta.Acme = { scripts: [{ name: 'Down', command: 'x', teardown: true }] }
+    completed('c16', 'A')
+    const reopenOnScriptsRead = () => { f.tasks.set('c16', { ...f.tasks.get('c16')!, phase: 'IN_PROGRESS' }) }
+    f.onScriptsFile = reopenOnScriptsRead
+    await onTaskCompleted('c16', { grace: false })
+    await __settleCompletionCheck('c16')
+    expect(runCall(f)).toEqual([])
+    expect(ws(f, 'c16').teardown).toBeUndefined()
+  })
+
+  it("a deleted task's workspace with a session still running on the host is kept, and the user is told", async () => {
+    completed('c13', 'A')
+    // Deleting a task unlinks its sessions first: only its folder still ties this one to it.
+    f.sessions = [{ claudeSessionId: 's13', process_status: 'stopped', cwd: '/w/repo/x/web' } as SessionRecord]
+    f.hostSays.set('s13', true)
+    const task = f.tasks.get('c13')!
+    f.tasks.delete('c13')
+    await onTaskDeleted(task)
+    expect(f.calls.some((c) => c.cmd === 'workspace.remove')).toBe(false)
+    expect(f.notes.some((b) => /kept: session s13 still runs on the host/.test(b))).toBe(true)
+    // Its sessions ended within the wait: it goes.
+    f.notes = []
+    f.hostSays.set('s13', false)
+    await onTaskDeleted(task)
+    expect(f.calls.some((c) => c.cmd === 'workspace.remove')).toBe(true)
   })
 
   it('a failed teardown still lets cleanup decide; a second check for the same completion does not run it again', async () => {

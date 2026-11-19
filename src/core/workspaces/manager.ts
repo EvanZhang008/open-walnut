@@ -49,6 +49,14 @@ export interface WorkspaceManagerDeps {
   sessionBusy(taskId: string): Promise<boolean>
   /** A session of the task is alive (its start already happened). */
   hasLiveSession(taskId: string): Promise<boolean>
+  /**
+   * Why a completed (or deleted) task's work is not over, so its workspace must stay:
+   * a session the host says still runs (whatever its record says), a host that cannot
+   * say, or a request nobody answered (still-working.ts). Null when it is over.
+   */
+  stillWorking(task: Pick<Task, 'id'>, ws: TaskWorkspace, opts?: { requests?: boolean }): Promise<string | null>
+  /** Run `fn` once after `ms` (a timer that never holds the process open); one per `key` at a time. */
+  later(key: string, fn: () => void, ms: number): void
   notify(input: { title: string; body: string; dedupKey: string; taskId?: string; severity: 'info' | 'warning' }): Promise<void>
   listTasks(): Promise<Task[]>
   /** A project's metadata (its `scripts`, scripts.ts); null for none. */
@@ -65,6 +73,9 @@ export interface WorkspaceManagerDeps {
   sleep(ms: number): Promise<void>
   jobId(): string
 }
+
+/** Keys with a `later` timer set (realDeps.later). */
+const laterKeys = new Set<string>()
 
 const realDeps: WorkspaceManagerDeps = {
   async getTask(id) {
@@ -139,6 +150,15 @@ const realDeps: WorkspaceManagerDeps = {
   async hasLiveSession(taskId) {
     const { getSessionsForTask } = await import('../session-tracker.js')
     return (await getSessionsForTask(taskId)).some((s) => !s.archived && (s.process_status === 'running' || s.process_status === 'idle'))
+  },
+  async stillWorking(task, ws, opts) {
+    const { stillWorking, realStillWorkingIo } = await import('./still-working.js')
+    return stillWorking(task, ws, realStillWorkingIo, opts)
+  },
+  later(key, fn, ms) {
+    if (laterKeys.has(key)) return
+    laterKeys.add(key)
+    setTimeout(() => { laterKeys.delete(key); fn() }, ms).unref?.()
   },
   async notify(input) {
     const { addNotification } = await import('../notifications/store.js')
