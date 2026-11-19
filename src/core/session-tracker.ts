@@ -37,7 +37,7 @@ import {
 // live in a prose match.
 import { classifyStatusReasonKind } from './session-error-kind.js';
 import { SELF_COMPLETE_STOP_MAX_MS, stopWhenTurnEnds } from './sessions/self-complete-stop.js';
-import { noteStopUndelivered, recheckUndeliveredHosts, undeliveredHolds, unreachableOwnerHosts } from './sessions/task-complete-stop.js';
+import { liveAcpSessionIds, noteStopUndelivered, recheckUndeliveredHosts, undeliveredHolds, unreachableOwnerHosts } from './sessions/task-complete-stop.js';
 import { assertTaskSessionFree, otherTaskSessionId } from './sessions/one-session-per-task.js';
 import { isAcpEngine, resolveEngine } from './agents/engine-registry.js';
 import { CLOUD_BOX_DEFAULT_IDLE_LIMIT, CLOUD_BOX_DEFAULT_LIMIT, CLOUD_BOX_HOST_ALIAS } from './hosts/cloud-box-host.js';
@@ -3041,6 +3041,7 @@ export async function completeTaskSessions(
     // the stop it sent reached nothing). Such a row keeps its state, and its stop is
     // sent when the host connects (sessions/task-complete-stop.ts).
     const unreachable = await unreachableOwnerHosts(db, sessionIds);
+    const liveAcp = unreachable.size > 0 ? await liveAcpSessionIds(sessionIds) : new Set<string>();
     const undelivered: string[] = [];
     const rearm: { sid: string; since: number }[] = [];
     const nowMs = Date.parse(now);
@@ -3049,6 +3050,10 @@ export async function completeTaskSessions(
     const insertSql =
       'INSERT OR REPLACE INTO sessions (' + insertCols.join(', ') + ') VALUES (' +
       insertCols.map((c) => '@' + c).join(', ') + ')';
+
+    // A worker this server holds live is stopped here, whatever its host's link says.
+    const ownerUnreachable = (session: SessionRecord) => unreachable.has(session.host || '__local__')
+      && !(session.pid == null && liveAcp.has(session.claudeSessionId));
 
     sessionDbTx((handle) => {
       const sel = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?');
@@ -3098,12 +3103,12 @@ export async function completeTaskSessions(
         // It completed its own task and its stop could not be sent: now that the host is
         // back, it still waits for its turn's end, whoever completes the task again.
         if (!isActor && (hasCli || hasAcpWorker) && marker?.state === 'undelivered' && marker.actor
-            && !unreachable.has(session.host || '__local__')) {
+            && !ownerUnreachable(session)) {
           writeMarker(session, { at: marker.at, state: 'turn_end' });
           rearm.push({ sid, since: Date.parse(marker.at) });
           continue;
         }
-        if ((hasCli || hasAcpWorker) && unreachable.has(session.host || '__local__')
+        if ((hasCli || hasAcpWorker) && ownerUnreachable(session)
             && (marker?.state !== 'undelivered' || undeliveredHolds(marker, nowMs))) {
           if (marker?.state !== 'undelivered' || (isActor && !marker.actor)) {
             const actor = isActor || (marker?.state === 'undelivered' && marker.actor);

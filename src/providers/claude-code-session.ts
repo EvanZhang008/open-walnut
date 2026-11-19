@@ -16256,7 +16256,7 @@ export class SessionRunner {
     // A completed task's stop this host could not receive while it was away (task-complete-stop.ts).
     // Not awaited: each stop can take seconds, and the queued messages below must not wait on them.
     void import('../core/sessions/task-complete-stop.js').then((m) => m.flushTaskCompleteStops(hostKey)).catch((err: unknown) => {
-      log.session.warn('task complete stop: flush on connect failed', { host: hostKey, error: err instanceof Error ? err.message : String(err) })
+      log.session.warn('task complete stop: the flush for a host that came back threw', { host: hostKey, error: err instanceof Error ? err.message : String(err) })
     })
     const { getSessionByClaudeId: cancelledRecord } = await import('../core/session-tracker.js')
     for (const sid of await cancelledSessionIds()) {

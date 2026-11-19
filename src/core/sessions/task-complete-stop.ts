@@ -41,6 +41,19 @@ async function taskStillComplete(rec: SessionRecord): Promise<boolean> {
   return !!await stillComplete(rec.claudeSessionId);
 }
 
+/**
+ * The ACP sessions among `sessionIds` whose worker this server holds live: it stops them
+ * itself (stopAcpWorkers in session-tracker.ts), so their host's link does not matter.
+ */
+export async function liveAcpSessionIds(sessionIds: string[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  try {
+    const { sessionRunner } = await import('../../providers/claude-code-session.js');
+    for (const sid of sessionIds) if (sessionRunner.findAcpSession(sid)) out.add(sid);
+  } catch { /* runner unavailable: no live worker here */ }
+  return out;
+}
+
 /** The slice of the session database these reads use (session-db.ts's handle). */
 interface Db { prepare(sql: string): { all(...args: unknown[]): unknown[] } }
 
@@ -150,7 +163,7 @@ export async function flushTaskCompleteStops(hostKey: string): Promise<number> {
       const outcome = await resend(rec);
       if (outcome === 'stopped' || outcome === 'refused') await clearTaskCompleteStop(sid, 'undelivered');
     } catch (err) {
-      log.session.warn('task complete stop: sending it on connect failed; the next connect tries again', { sessionId: sid, host: hostKey, error: err instanceof Error ? err.message : String(err) });
+      log.session.warn('task complete stop: the stop was not sent when its host came back; its next connect tries again', { sessionId: sid, host: hostKey, error: err instanceof Error ? err.message : String(err) });
     }
   }
   if (sent > 0) log.session.info('task complete stop: undelivered stops sent on connect', { host: hostKey, count: sent });
