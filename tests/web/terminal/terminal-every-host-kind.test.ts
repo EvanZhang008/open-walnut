@@ -30,6 +30,10 @@ vi.mock('../../../src/web/terminal/dtach-provision.js', async (importOriginal) =
   remoteDtachPath: vi.fn(async () => '/home/u/.local/bin/walnut-dtach'),
 }))
 vi.mock('../../../src/web/terminal/link-pty.js', () => ({ openLinkPty: vi.fn(async () => ({ via: 'link' })) }))
+vi.mock('../../../src/providers/daemon-connection.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/providers/daemon-connection.js')>()),
+  getConnectedDaemonConnection: vi.fn(() => null),
+}))
 vi.mock('../../../src/core/config-manager.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../src/core/config-manager.js')>()),
   getConfig: vi.fn(),
@@ -42,6 +46,9 @@ import { CLOUD_BOX_HOST_ALIAS } from '../../../src/core/hosts/cloud-box-host.js'
 import { loadPty } from '../../../src/lib/pty.js'
 import { openLinkPty } from '../../../src/web/terminal/link-pty.js'
 import { getConfig } from '../../../src/core/config-manager.js'
+import { getConnectedDaemonConnection } from '../../../src/providers/daemon-connection.js'
+import { PTY_STREAM_CAPABILITY } from '../../../src/core/hosts/terminal-link.js'
+import { HOST_SCRIPT_CAPABILITY } from '../../../src/core/hosts/host-script.js'
 
 const ROOT = path.resolve(__dirname, '../../..')
 const read = (f: string) => fs.readFileSync(path.join(ROOT, f), 'utf8')
@@ -63,7 +70,7 @@ const TRANSPORTS = [...new Set([
 /** Every daemon link kind, and how a terminal reaches a host linked that way. */
 const LINK_KIND_TERMINAL: Record<string, string> = {
   local: 'this machine: a local pty under dtach (no route needed)',
-  ssh: 'ssh -tt over the terminal ControlMaster',
+  ssh: 'a terminal stream on its connected daemon (pty-stream-v1), else ssh -tt over the terminal ControlMaster',
   net: 'a terminal stream on the daemon link (pty-stream-v1)',
   'cloud-tunnel': 'a terminal stream on the daemon link (pty-stream-v1): the companion pipes every frame verbatim (web/ws/daemon-tunnel.ts)',
   'direct-url': 'a connection dialled straight to a daemon URL (tests, the replica check); its host\'s config row decides ssh or the link as for any host',
@@ -136,6 +143,33 @@ describe('every kind of host opens a terminal', () => {
       }
     })
   }
+
+  it('an SSH host whose daemon is connected with terminal streams rides that connection: a refused fresh ssh login never costs its Terminal', async () => {
+    // 2026-11-19: newdev's sessions and previews ran over its daemon's tunnel while every new `ssh newdev` was refused.
+    const ssh = { hostname: 'dev.example.test', user: 'alice' }
+    ;(getConfig as unknown as Mock).mockResolvedValue({ hosts: { devbox: ssh } })
+    const connected = (caps: string[]) => (getConnectedDaemonConnection as unknown as Mock).mockReturnValue({ hasCapability: (c: string) => caps.includes(c) })
+    try {
+      connected([PTY_STREAM_CAPABILITY, HOST_SCRIPT_CAPABILITY])
+      await expect(resolveTerminalRoute('devbox')).resolves.toEqual({ via: 'link', link: 'ssh-tunnel' })
+      for (const persistent of [true, false]) {
+        ptySpawn.mockClear()
+        ;(openLinkPty as unknown as Mock).mockClear()
+        await resolveSpawnForSession(record('devbox'), 100, 30, { persistent })
+        expect(ptySpawn).not.toHaveBeenCalled()
+        expect((openLinkPty as unknown as Mock).mock.calls[0]![1]).toBe(persistent ? buildRemoteDtachCommand(REMOTE_DTACH, SID, undefined, '/srv/proj') : buildRemotePlainShellCommand(undefined, '/srv/proj'))
+      }
+      // A daemon missing either capability, or none connected: the ssh route as before.
+      for (const caps of [[PTY_STREAM_CAPABILITY], [HOST_SCRIPT_CAPABILITY], []]) {
+        connected(caps)
+        await expect(resolveTerminalRoute('devbox')).resolves.toMatchObject({ via: 'ssh', target: { hostname: 'dev.example.test' } })
+      }
+      ;(getConnectedDaemonConnection as unknown as Mock).mockReturnValue(null)
+      await expect(resolveTerminalRoute('devbox')).resolves.toMatchObject({ via: 'ssh' })
+    } finally {
+      ;(getConnectedDaemonConnection as unknown as Mock).mockReturnValue(null)
+    }
+  })
 
   it('a host reached over its link, connected to a daemon without terminal streams, says the daemon needs an update, never "not SSH"', () => {
     const net = { hostname: 'x.walnut-net.invalid', transport: 'net' as const }

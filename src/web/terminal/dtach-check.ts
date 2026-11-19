@@ -21,6 +21,7 @@
 import type { SessionRecord } from '../../core/types.js'
 import { resolveLocalDtach, resolveRemoteDtach, type DtachResolution, type HostOs } from './dtach-provision.js'
 import { toHostOs } from './dtach-probe-script.js'
+import { resolveTerminalRoute } from './terminal-route.js'
 import { log } from '../../logging/index.js'
 import { compilerInstallCommands, XCODE_TOOLS } from '../../core/hosts/compiler-install.js'
 
@@ -109,7 +110,9 @@ async function terminalWay(host: string): Promise<{ via: 'ssh' | 'link'; refused
   let def: Parameters<typeof hostTerminalNow>[0] | undefined
   try { def = (await getConfig()).hosts?.[host] } catch { return { via: 'ssh', refused: null } }
   if (!def) return { via: 'ssh', refused: null }
-  const via = terminalRouteKind(def)
+  // The route this terminal takes now (an SSH host rides its connected daemon too).
+  let via: 'ssh' | 'link' = terminalRouteKind(def)
+  try { via = (await resolveTerminalRoute(host)).via } catch { /* the spawn reports its own refusal */ }
   const label = def.label ?? host
   const now = hostTerminalNow(def, getDaemonConnectState(host), label)
   if (now === true) return { via, refused: null }
