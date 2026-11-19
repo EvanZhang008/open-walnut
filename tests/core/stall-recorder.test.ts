@@ -310,4 +310,19 @@ describe('paging baseline', () => {
     expect(reads).toBe(2)
     resetSystemContext()
   })
+
+  it('asks again at the next rotation when a read failed', async () => {
+    const { refreshVmBaseline, resetSystemContext } = await import('../../src/core/stall-recorder-system.js')
+    resetSystemContext()
+    let reads = 0
+    let done: () => void = () => {}
+    const settled = new Promise<void>((r) => { done = r })
+    const failing = async () => { reads += 1; queueMicrotask(done); return null }
+    refreshVmBaseline(1_000, failing)
+    await settled
+    await Promise.resolve()
+    refreshVmBaseline(61_000, failing)
+    expect(reads).toBe(2)
+    resetSystemContext()
+  })
 })

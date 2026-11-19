@@ -487,6 +487,15 @@ class SqliteStatement implements Statement {
 const VACUUM_WORKER = String.raw`
 const { parentPort, workerData } = require('node:worker_threads')
 const { Database } = require('bun:sqlite')
+// A copy nobody waits on: on macOS it runs in the utility band, whatever band
+// the thread that started it runs in (src/lib/loop-thread-qos.ts raises the loop thread).
+if (process.platform === 'darwin') {
+  try {
+    const { dlopen } = require('bun:ffi')
+    dlopen('/usr/lib/libSystem.B.dylib', { pthread_set_qos_class_self_np: { args: ['u32', 'i32'], returns: 'i32' } })
+      .symbols.pthread_set_qos_class_self_np(0x11, 0)
+  } catch { /* stays in its creator's band */ }
+}
 try {
   const db = new Database(workerData.file, { readonly: true })
   try {

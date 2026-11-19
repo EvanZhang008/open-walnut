@@ -34,6 +34,12 @@ describe('raiseLoopThreadQos', () => {
     expect((await raiseLoopThreadQos({ raisedByDeploy: false, platform: 'darwin', env: { WALNUT_LOOP_QOS: '1' }, calls: f.calls })).applied).toBe(true)
   })
 
+  it('takes WALNUT_LOOP_QOS out of the env, so a child it starts does not raise itself', async () => {
+    const env: NodeJS.ProcessEnv = { WALNUT_LOOP_QOS: '1' }
+    await raiseLoopThreadQos({ raisedByDeploy: false, platform: 'darwin', env, calls: fakeCalls().calls })
+    expect(env.WALNUT_LOOP_QOS).toBeUndefined()
+  })
+
   it('does nothing off macOS or with WALNUT_LOOP_QOS=0', async () => {
     const f = fakeCalls()
     expect(await raiseLoopThreadQos({ raisedByDeploy: true, platform: 'linux', env: {}, calls: f.calls })).toMatchObject({ reason: 'not-darwin' })

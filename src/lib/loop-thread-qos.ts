@@ -12,9 +12,13 @@
  * User-initiated (base priority 37) is the band macOS gives work a person is
  * waiting on, which a request to the server is.
  *
- * Only the thread that calls this moves: the server's other threads and the
- * children it starts keep their own band (the daemon and every agent session
- * are clamped to utility, src/lib/background-qos.ts). Raised only where the
+ * The thread that calls this moves, and so do the threads it creates after it
+ * (a pthread without a QoS attribute starts in its creator's band): the Worker
+ * threads the server starts later. The heavy one, the VACUUM INTO backup,
+ * lowers itself to utility (src/lib/sqlite.ts). Child processes do not follow:
+ * macOS sets a spawned process's band from its own launch, so the children keep
+ * theirs (the daemon and every agent session are clamped to utility,
+ * src/lib/background-qos.ts; the rest stay in the default band). Raised only where the
  * deploy raised the process (the clamp request, which only the Interactive job
  * carries), or when WALNUT_LOOP_QOS=1; WALNUT_LOOP_QOS=0 keeps it as launched.
  * Never throws: a runtime without bun:ffi, another platform, or a refusal
@@ -67,9 +71,13 @@ export async function raiseLoopThreadQos(opts: {
 }): Promise<LoopQosResult> {
   const platform = opts.platform ?? process.platform;
   const env = opts.env ?? process.env;
+  // It describes how THIS process should run: taken out of the env before a
+  // child copies it (a server an agent starts would raise itself too).
+  const asked = env.WALNUT_LOOP_QOS;
+  delete env.WALNUT_LOOP_QOS;
   if (platform !== 'darwin') return { applied: false, reason: 'not-darwin' };
-  if (env.WALNUT_LOOP_QOS === '0') return { applied: false, reason: 'turned-off' };
-  if (!opts.raisedByDeploy && env.WALNUT_LOOP_QOS !== '1') return { applied: false, reason: 'not-requested' };
+  if (asked === '0') return { applied: false, reason: 'turned-off' };
+  if (!opts.raisedByDeploy && asked !== '1') return { applied: false, reason: 'not-requested' };
   let calls: QosCalls;
   try {
     calls = await (opts.calls ?? darwinQosCalls)();

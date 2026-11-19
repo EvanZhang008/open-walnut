@@ -1489,9 +1489,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     }
   }
 
-  // Event-loop lag monitor — makes starvation visible (logs a warn whenever a
-  // single tick is blocked > threshold, naming the suspect periodic task).
-  // Cheap libuv histogram + self-timer; safe to run in production.
   // The loop thread answers every request: on macOS it moves to QoS
   // user-initiated where the deploy raised the process (src/lib/loop-thread-qos.ts).
   try {
@@ -1502,6 +1499,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   } catch (err) {
     log.web.warn('loop thread QoS left as launched', { error: err instanceof Error ? err.message : String(err) })
   }
+  // Event-loop lag monitor — makes starvation visible (logs a warn whenever a
+  // single tick is blocked > threshold, naming the suspect periodic task).
+  // Cheap libuv histogram + self-timer; safe to run in production.
   const { startEventLoopMonitor } = await import('../core/event-loop-monitor.js')
   // Its probe-late lines name the SQLite statements and child process starts
   // that ran in the hold (src/core/blocking-calls.ts; WALNUT_BLOCKING_CALLS=0 turns it off).

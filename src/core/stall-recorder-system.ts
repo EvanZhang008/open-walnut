@@ -2,9 +2,9 @@
  * Machine memory context for the stall flight recorder (stall-recorder.ts).
  *
  * Per-process getrusage misses compressor swap-ins on macOS, so a stall record
- * also carries the machine's paging counters over the minute around it (vm_stat
- * is a single host_statistics call, sampled at each profile rotation as the
- * baseline) and, at most every 10 minutes, how much of THIS process sits in the
+ * also carries the machine's paging counters over the minutes before it (vm_stat
+ * is a single host_statistics call; the baseline is taken at most every 5 min,
+ * and `overS` says how long the counts cover) and, at most every 10 minutes, how much of THIS process sits in the
  * compressor. Every read is an async child process or file read; nothing here
  * runs on the loop for longer than parsing a few lines.
  */
@@ -95,10 +95,11 @@ export const VM_BASELINE_MIN_GAP_MS = 5 * 60_000;
 let vmBaselineAsked = 0;
 
 /** Take a new paging baseline (asked at each profile rotation; taken every VM_BASELINE_MIN_GAP_MS). */
-export function refreshVmBaseline(now = Date.now(), read: () => Promise<VmCounters | null> = readVmCounters): void {
+export function refreshVmBaseline(now = monoMs(), read: () => Promise<VmCounters | null> = readVmCounters): void {
   if (vmBaselineAsked !== 0 && now - vmBaselineAsked < VM_BASELINE_MIN_GAP_MS) return;
   vmBaselineAsked = now;
-  void read().then((v) => { if (v) vmBaseline = v; }).catch(() => { /* next rotation asks again */ });
+  // A read that failed (vm_stat timed out on a loaded Mac) is asked again at the next rotation.
+  void read().then((v) => { if (v) vmBaseline = v; else vmBaselineAsked = 0; }).catch(() => { vmBaselineAsked = 0; });
 }
 
 /** Paging since the baseline, free + compressor size, and (rate-limited) this process's compressed bytes. */
