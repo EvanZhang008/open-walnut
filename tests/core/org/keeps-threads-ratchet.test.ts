@@ -20,13 +20,9 @@ const RAW_NODE_CHECK = /org_role\s*[!=]==\s*'main'\s*(?:&&|\|\|)\s*[\w?.!]*org_r
 const ALLOWED: Record<string, string> = {
   // A thread moves with its work between Org nodes; a task with Threads on keeps its own.
   'core/org/thread-follow.ts': 'moves between Org nodes',
-  // The away inbox thread is the Org's (AWAY_INBOX_LINE rides only Main's and a lead's prompt).
-  'core/human-inbox/away-thread.ts': 'the Org\'s away inbox',
   // A task with Threads on keeps his words as its asks too (hint-send.ts): read back from there.
   'core/sessions/own-readback.ts': 'Org nodes read their work back from threads; a task from its asks',
   'core/sessions/user-spoke.ts': 'a task with Threads on keeps his words as its asks too',
-  // Thread counts stand in for an Org node's status (orgNodeNeverNeeds); a task asks him itself.
-  'core/user-status-sync.ts': 'thread counts are an Org node\'s status',
 }
 
 /** Every file that reads or writes a node's threads (it imports the store), and the routes and ops. */
@@ -40,7 +36,8 @@ function threadFiles(): string[] {
     }
   }
   walk(SRC)
-  return [...new Set([...out, 'web/routes/org-threads-v1.ts', 'ops/org-threads.ts'])].sort()
+  // The away state decides the away hint, the away inbox thread and the phone buzz of a needs thread.
+  return [...new Set([...out, 'web/routes/org-threads-v1.ts', 'ops/org-threads.ts', 'core/org/user-away.ts'])].sort()
 }
 
 describe('keepsThreads', () => {
@@ -61,6 +58,9 @@ describe('every thread path asks keepsThreads', () => {
     expect(files).toContain('core/org/thread-capture.ts')
     expect(files).toContain('core/org/thread-recheck.ts')
     expect(files).toContain('core/sessions/owed-waits.ts')
+    expect(files).toContain('core/human-inbox/away-thread.ts')
+    expect(files).toContain('core/user-status-sync.ts')
+    expect(files).toContain('core/push/thread-push.ts')
     expect(files.length).toBeGreaterThan(10)
     // An allowance for a file that no longer touches threads is stale.
     for (const f of Object.keys(ALLOWED)) expect(files, f).toContain(f)

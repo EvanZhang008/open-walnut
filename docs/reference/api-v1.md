@@ -1229,6 +1229,13 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   moves no phase, tier, pin or read marker. Setting it ends a watch (`watched_at`
   goes), and setting `watched_at` takes the task out of Background. The web route
   `PATCH /api/tasks/:id` takes the same field, and agents set it with `task_update`.
+- Threads (additive, 2026-11-18): `PATCH /api/v1/tasks/:id` also accepts `threads_on`
+  (boolean): `true` turns the task's Threads on, `false` off (the field is then absent).
+  Anything else is `400 bad_request`. A task row carries `threads_on: true` while they are
+  on (never on Main or a lead, which always keep Threads). While on, the task's
+  `GET /api/v1/tasks/:id/threads` and its thread routes answer as a lead's do; off, they
+  answer `409 not_org_node`. A thread push for such a task carries
+  `url: /tasks/<id>?view=threads` instead of `/org?node=...`.
 
 ### Private tasks (additive, 2026-11-01): local tasks in a project that syncs
 

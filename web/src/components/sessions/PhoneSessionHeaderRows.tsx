@@ -1,6 +1,6 @@
 /**
  * The session header's row-1 actions as kebab rows, for the phone (C64): the
- * panel's own header is hidden there, so Changed, Files, Board, Terminal,
+ * panel's own header is hidden there, so Changed, Files, Board, Threads, Terminal,
  * Scripts, Plan and Close are reached from the top bar's kebab (and Web preview while the session
  * serves a web page: its servers, to open or stop). Each row calls the same
  * handler as its header chip. Fork, Locate and Open in new tab are left out
@@ -8,6 +8,7 @@
  * and Fork drew a greyed row with no reason. A disabled row says why.
  */
 import type { SessionSplitView } from './sessionSplitView';
+import type { ThreadsMenu } from './session-threads-model';
 import { useBackgroundRunning } from '@/hooks/useBackgroundRunning';
 import { useSessionServers } from '@/hooks/useSessionServers';
 import { serversSummary } from './session-server-label';
@@ -19,6 +20,8 @@ export interface PhoneSessionHeaderRowsProps {
   activeView: SessionSplitView | null;
   onToggleView: (view: SessionSplitView) => void;
   board: 'live' | 'waiting' | 'none';
+  /** A leader's Threads (session-threads-model.ts), as the desktop menu's Open group has them. */
+  threads?: ThreadsMenu;
   terminal: boolean;
   /** Opens the session's Scripts menu (project scripts, run in the terminal). */
   onScripts?: () => void;
@@ -72,6 +75,11 @@ export function PhoneSessionHeaderRows(p: PhoneSessionHeaderRowsProps) {
         <Row label="Board" active={p.activeView === 'board'} disabled={p.board === 'waiting'} onClick={view('board')} testId="phone-row-board"
           why={p.board === 'waiting' ? 'Not written yet' : undefined} />
       )}
+      {p.threads && (
+        <Row label={p.threads.on ? 'Threads' : 'Turn on Threads'} active={p.activeView === 'threads'}
+          onClick={() => { p.close(); p.threads!.onOpen(); }} testId="phone-row-threads" />
+      )}
+      {p.threads?.on && <Row label="Turn off Threads" onClick={() => { p.close(); p.threads!.onTurnOff(); }} testId="phone-row-threads-off" />}
       {p.background !== false && background.length > 0 && (
         <Row label={running > 0 ? `Background tasks (${running} running)` : 'Background tasks'}
           onClick={() => { p.close(); openBackgroundPanel(p.sessionId); }} testId="phone-row-background" />

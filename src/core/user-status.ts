@@ -417,7 +417,7 @@ export interface UserStatus {
   /** needs: where the ask lives, so a surface can take the user there: a prompt in the
    *  session, a letter in the inbox, a choice on the Board, a failed session, or the
    *  session's own question at the end of its turn. */
-  /** 'thread': a node's Thread, as Walnut stored it from 2026-11-03 until the same day; no longer made. */
+  /** 'thread': a thread waiting on him, on a task with Threads on (taskThreadNeeds); Main's and a lead's never (they carry counts). */
   source?: 'prompt' | 'letter' | 'choice' | 'error' | 'session' | 'thread';
   /** Main or a lead: what its Threads hold for the user (shown, waiting on him, the newest's title).
    *  The Org page shows them as threads; the node itself is never Needs you (orgNodeNeverNeeds). */
@@ -855,7 +855,7 @@ export function startedPhaseOf(input: UserStatusInput): UserStatusInput {
 
 export function deriveUserStatus(raw: UserStatusInput, nowMs: number = Date.now()): UserStatus {
   const input = startedPhaseOf(raw);
-  const derived = orgNodeNeverNeeds(hostDownOver(derive(input, nowMs), input), input);
+  const derived = taskThreadNeeds(orgNodeNeverNeeds(hostDownOver(derive(input, nowMs), input), input), input);
   // A thread's ask is the thread; the node's own report words are no line of it.
   const line = derived.source === 'thread' ? null : lineOf(input, derived);
   if (line) derived.line = line;
@@ -1127,6 +1127,22 @@ function orgNodeNeverNeeds(s: UserStatus, input: UserStatusInput): UserStatus {
   const th = input.threads && input.threads.shown > 0 ? input.threads : undefined;
   const out = asOrgNode(s);
   return th && out.state !== 'done' ? { ...out, threads: th } : out;
+}
+
+/**
+ * A task the user turned Threads on for (org/keeps-threads.ts; its facts carry `threads` only then)
+ * reads Needs you while one of its threads waits on him, as a VP's thread would reach him
+ * (2026-11-18, Walnut VP for the user: "needs 线程要和 VP 的一样：任务显示 Needs you"). A turn
+ * running stays Working, a finished task Done, and its own ask (not Walnut's generic hand-back) speaks first. Main and the leads
+ * carry their threads as counts instead (orgNodeNeverNeeds).
+ */
+function taskThreadNeeds(s: UserStatus, input: UserStatusInput): UserStatus {
+  const th = input.threads;
+  if (input.isMain || input.isLead || !th || th.needs <= 0) return s;
+  // Its own ask speaks first; Walnut's generic "its turn ended" is no ask, the thread's is.
+  if (s.state === 'done' || s.state === 'working' || (s.state === 'needs' && clean(s.ask) !== HANDED_BACK_ASK)) return s;
+  const ask = clean(th.title ? `Answer the thread "${th.title}"` : 'Answer its thread waiting on you').slice(0, 300);
+  return strip<UserStatus>({ state: 'needs', source: 'thread', ask, threads: th, ...(s.at ? { at: s.at } : {}) });
 }
 
 function asOrgNode(s: UserStatus): UserStatus {

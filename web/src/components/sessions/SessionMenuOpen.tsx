@@ -17,6 +17,7 @@ import { useSessionServers } from '@/hooks/useSessionServers';
 import { openable, serversSummary } from './session-server-label';
 import { PanelCountRow, SessionViewItems, ViewsBadge, type SessionViewItemsProps } from './SessionKebabSection';
 import type { SessionSplitView } from './sessionSplitView';
+import type { ThreadsMenu } from './session-threads-model';
 import { PaneAppIcon, useSessionPaneApps } from './SessionPluginAppPane';
 
 const OPEN_ICON = (
@@ -79,7 +80,7 @@ export interface SessionMenuOpenProps {
    * The task's Threads (SessionThreadsPane): offered on a leader. `on` false: the row turns them on
    * and opens them; on: it opens them, and a second row turns them off. Absent: not offered.
    */
-  threads?: { on: boolean; onOpen: () => void; onTurnOff: () => void };
+  threads?: ThreadsMenu;
 }
 
 function Row({ icon, label, active, disabled, why, onClick, testId, trailing }: {

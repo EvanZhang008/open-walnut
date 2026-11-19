@@ -236,8 +236,8 @@ async function targetFor(sessionId: string, record: HintRecord | null | undefine
       const { isOrgEnabled } = await import('../org/org-enabled.js');
       if (!(await isOrgEnabled())) return { target, away: null, brief: null, threadsTidy: null, ...(task ? { task } : {}) };
     }
-    // Only Main and the leads hear whether the user is in their chat (hint user-away).
-    const wantsAway = (target.role === 'main' || target.role === 'lead') && hints.some((h) => h.kind === 'user-away' && h.enabled);
+    // Only a task that keeps Threads (Main, a lead, one with Threads on) hears whether the user is in its chat (hint user-away).
+    const wantsAway = keepsThreads(task) && hints.some((h) => h.kind === 'user-away' && h.enabled);
     const away = wantsAway ? await import('../org/user-away.js').then((m) => m.userAwayFrom(task)).catch(() => null) : null;
     const brief = await briefFor(task, target, hints);
     const threadsTidy = await threadsTidyFor(task, target, hints);
@@ -589,10 +589,10 @@ export async function stateHintsAfterCompaction(
     const hints = effectiveHints(cfg).filter((h) => h.triggers.includes('after_compaction'));
     const target = hintTargetOf(record.claudeSessionId, task);
     // An away note a compaction may have dropped is restated while he is still away.
-    const away = record.taskId && (target.role === 'main' || target.role === 'lead') && hints.some((h) => h.kind === 'user-away' && h.enabled)
-      ? await import('../org/user-away.js').then((m) => m.userAwayFrom({ id: record.taskId!, org_role: task?.org_role }, now)).catch(() => null)
-      : null;
     const owner = record.taskId ? await import('../task-manager.js').then((m) => m.getTask(record.taskId!)).catch(() => null) : null;
+    const away = owner && keepsThreads(owner) && hints.some((h) => h.kind === 'user-away' && h.enabled)
+      ? await import('../org/user-away.js').then((m) => m.userAwayFrom(owner, now)).catch(() => null)
+      : null;
     const brief = owner ? await briefFor(owner, target, hints) : null;
     const threadsTidy = owner ? await threadsTidyFor(owner, target, hints) : null;
     const plan = planHints({

@@ -183,8 +183,9 @@ function collectFlatAlerts(ids: readonly string[], byId: ReadonlyMap<string, Tas
     // live prompt only names how it needs the user. A task with only something to read is a card
     // too, under Needs you (shownState, 2026-11-03).
     if (shownState(userStateOf(task)) !== 'needs') continue;
-    // A node waiting on him through its Threads is counted and drawn as its threads, not a card.
-    if (status?.source === 'thread') continue;
+    // A node waiting on him through its Threads is counted and drawn as its threads, not a card;
+    // a task with Threads on (no Org node) has no threads on this page, so it stays a card.
+    if (status?.source === 'thread' && task.org_role) continue;
     const hit = probe(task);
     // A failed session its status reads as Waiting (its host gone a moment, a clock or a trigger
     // still armed to bring it back) does not need the user, here as on the Board.

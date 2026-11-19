@@ -41,6 +41,7 @@ import { workspaceHoldAsk } from './workspaces/decisions.js';
 import { orgEnabledCached } from './org/org-enabled.js';
 import { decisionAnswered } from './human-inbox/open-decision.js';
 import { triggerWatchesOwnWork } from './task-wait-wake.js';
+import { keepsThreads } from './org/keeps-threads.js';
 
 const SUBSCRIBER = 'user-status-sync';
 const OWN_SOURCE = 'user-status';
@@ -125,7 +126,7 @@ export interface StatusFacts {
   signIn?: SignInState;
   /** Session id -> its newest parked message (never delivered): why, and when it was parked. */
   undelivered?: Map<string, { reason: string; at: string }>;
-  /** Main or a lead -> what its Threads hold for the user (org/thread-view.ts threadCounts). */
+  /** Main, a lead or a task with Threads on -> what its Threads hold for the user (org/thread-view.ts threadCounts). */
   threads?: Map<string, ThreadCounts>;
 }
 
@@ -172,7 +173,7 @@ function threadsChanged(taskId?: string): void {
 
 async function readNodeThreads(tasks: readonly Task[]): Promise<Map<string, ThreadCounts>> {
   const out = new Map<string, ThreadCounts>();
-  const nodes = tasks.filter((t) => (t.org_role === 'main' || t.org_role === 'lead') && t.phase !== 'COMPLETE');
+  const nodes = tasks.filter((t) => keepsThreads(t) && t.phase !== 'COMPLETE');
   if (!nodes.length) return out;
   const { readThreads, withTaskAsks } = await import('./org/threads-store.js');
   const { threadCounts } = await import('./org/thread-view.js');

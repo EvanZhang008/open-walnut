@@ -3204,7 +3204,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
     if (id === 'reorder') { next(); return }
     const { status, phase, wait_until: waitUntilRaw, priority, due_date: dueDate, start_date: startDate, end_date: endDateRaw,
       project, title, description, tags,
-      unread, parent_task_id: parentTaskId, watched_at: watchedAt, background_at: backgroundAt } = (req.body ?? {}) as {
+      unread, parent_task_id: parentTaskId, watched_at: watchedAt, background_at: backgroundAt, threads_on: threadsOn } = (req.body ?? {}) as {
       status?: unknown
       phase?: unknown
       wait_until?: unknown
@@ -3220,6 +3220,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
       parent_task_id?: unknown
       watched_at?: unknown
       background_at?: unknown
+      threads_on?: unknown
     }
     // Reassignable: clearing start_date cascades an end_date clear (below).
     let endDate = endDateRaw
@@ -3317,6 +3318,11 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
       sendError(res, 400, 'bad_request', 'background_at must be an ISO-8601 datetime (when the task was put in Background), or "" / null to take it out')
       return
     }
+    // Threads (additive, 2026-11): the user's switch for a task's Threads (src/core/org/keeps-threads.ts).
+    if (threadsOn !== undefined && typeof threadsOn !== 'boolean') {
+      sendError(res, 400, 'bad_request', 'threads_on must be a boolean')
+      return
+    }
     // Adopt / release (additive, 2026-10): the leader's task id makes this task
     // its worker (subtask); "" releases it. Checked against the board below.
     if (parentTaskId !== undefined && typeof parentTaskId !== 'string') {
@@ -3341,8 +3347,8 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
     if (status === undefined && phase === undefined && waitUntil === undefined && priority === undefined && dueDate === undefined
         && startDate === undefined && endDate === undefined && project === undefined && title === undefined
         && description === undefined && tags === undefined && unread === undefined && parentTaskId === undefined
-        && watchedAt === undefined && backgroundAt === undefined && !pinPatch) {
-      sendError(res, 400, 'bad_request', 'at least one updatable field is required (status/phase/wait_until/priority/due_date/start_date/end_date/project/title/description/tags/unread/watched_at/background_at/parent_task_id/pinned/focus_tier)')
+        && watchedAt === undefined && backgroundAt === undefined && threadsOn === undefined && !pinPatch) {
+      sendError(res, 400, 'bad_request', 'at least one updatable field is required (status/phase/wait_until/priority/due_date/start_date/end_date/project/title/description/tags/unread/watched_at/background_at/threads_on/parent_task_id/pinned/focus_tier)')
       return
     }
     if (waitUntil !== undefined && normalizeDateField(waitUntil) && phase === undefined) {
@@ -3579,6 +3585,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         ...(unread !== undefined ? { unread: unread as boolean } : {}),
         ...(watchedAt !== undefined ? { watched_at: normalizeDateField(watchedAt) } : {}),
         ...(backgroundAt !== undefined ? { background_at: normalizeDateField(backgroundAt) } : {}),
+        ...(threadsOn !== undefined ? { threads_on: threadsOn as boolean } : {}),
         // '' = release (updateTask's clear); otherwise the resolved full id.
         ...(parentChanged ? { parent_task_id: parentLink?.leader?.id ?? '' } : {}),
       }

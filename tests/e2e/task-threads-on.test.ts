@@ -14,7 +14,9 @@
  *   5. off again: nothing more is filed, the routes refuse, the rules leave the prompt;
  *   6. a running session hears the rules the moment they are turned on, and that they are gone when
  *      turned off (a versioned block); a thread waiting on him holds its worker's close only while on;
- *   7. on or off, his words are also kept as the asks it owes (user-asks.ts): its close guard and
+ *   7. while on, a thread waiting on him makes the task read Needs you, the away state is kept for it
+ *      (away hint, away inbox thread, phone buzz) and the buzz opens the task's Threads; off, none;
+ *   8. on or off, his words are also kept as the asks it owes (user-asks.ts): its close guard and
  *      compaction readback read them there.
  * Only the Claude CLI is mocked (no CLI runs: the messages wait in the queue).
  */
@@ -42,6 +44,10 @@ import { patchThread } from '../../src/core/org/threads-store.js'
 import { threadWaitItems } from '../../src/core/sessions/owed-waits.js'
 import { instructionNoticeFor } from '../../src/core/sessions/instruction-notice.js'
 import { listTasks } from '../../src/core/task-manager.js'
+import { readStatusFacts, statusInputOf } from '../../src/core/user-status-sync.js'
+import { deriveUserStatus } from '../../src/core/user-status.js'
+import { userAwayFrom } from '../../src/core/org/user-away.js'
+import { threadPushContent } from '../../src/core/push/thread-push.js'
 
 const LEADER_SID = '77777777-6666-4777-8888-999999999991'
 let base = ''
@@ -146,6 +152,23 @@ describe('Threads on a leader task', () => {
     expect(notice).toContain("Threads, the user's setting for your task")
   })
 
+  async function statusNow() {
+    const all = await listTasks()
+    const leader = all.find((t) => t.id === leaderId)!
+    return deriveUserStatus(statusInputOf(leader, await readStatusFacts([leader], all.map((t) => t.id))))
+  }
+
+  it('while on, a thread waiting on him reads Needs you, and the away and buzz paths take the task', async () => {
+    const s = await statusNow()
+    expect(s.state).toBe('needs')
+    expect(s.source).toBe('thread')
+    expect(s.ask).toContain('Greenhouse humidity')
+    const leader = await getTask(leaderId)
+    expect(await userAwayFrom(leader)).not.toBeNull()
+    const push = threadPushContent({ id: filed.id, title: 'Greenhouse humidity' }, leader)
+    expect(push.data?.url).toBe(`/tasks/${leaderId}?view=threads`)
+  })
+
   it('off again: nothing more is filed, routes refuse, the rules leave the prompt', async () => {
     expect((await setThreads(false)).status).toBe(200)
     const leader = await getTask(leaderId)
@@ -153,7 +176,9 @@ describe('Threads on a leader task', () => {
     expect(hintOf(await typeIntoChat('and the compost bin order?'))).toBe('')
     expect((await threadsRes()).status).toBe(409)
     expect(defaultInstructions(leader)).not.toContain(TASK_THREADS_LINE.trim())
-    // Its thread is on no screen now: it holds the worker no more.
+    // Its thread is on no screen now: it holds the worker no more, asks him nothing, buzzes nothing.
+    expect((await statusNow()).source).not.toBe('thread')
+    expect(await userAwayFrom(leader)).toBeNull()
     expect(await threadWaitItems(await getTask(workerId), await listTasks(), false)).toEqual([])
     // A session spawned while on hears they are gone.
     const gone = instructionNoticeFor({ appliedAppendSystemPrompt: spawnedOn, engine: 'claude-code' } as never, leader, { ignoreTold: false })

@@ -111,8 +111,12 @@ describe('a Thread waiting on him is shown as threads, never as the node\'s Need
     }
   })
 
-  it('an individual task never reads threads, and a done node stays done', () => {
-    expect(deriveUserStatus({ ...base, threads }, NOW).threads).toBeUndefined()
+  it('an individual task reads threads only once it keeps them, and a done node stays done', () => {
+    // Its input carries threads only when it keeps them (keepsThreads in user-status-sync.ts: the
+    // user turned Threads on, 2026-11-18); with none waiting on him it reads none, and with one it
+    // reads that thread's Needs you, as asked for a leader with Threads on.
+    expect(deriveUserStatus({ ...base, threads: { ...threads, needs: 0 } }, NOW).threads).toBeUndefined()
+    expect(deriveUserStatus({ ...base, threads }, NOW)).toMatchObject({ state: 'needs', source: 'thread' })
     expect(deriveUserStatus({ ...base, isMain: true, phase: 'COMPLETE', threads }, NOW).state).toBe('done')
   })
 

@@ -38,6 +38,8 @@ const TITLE_MAX = 100
 /** The notification for a thread that waits on him. Pure. */
 export function threadPushContent(thread: Pick<OrgThread, 'id' | 'title' | 'ask' | 'reply'>, node: Pick<Task, 'id' | 'org_role' | 'project'>): PushContent {
   const nodeKey = node.org_role === 'main' ? 'main' : (node.project || node.id)
+  // A task with Threads on (keeps-threads.ts) is no Org node: its threads open beside its chat.
+  const url = node.org_role ? `/org?node=${encodeURIComponent(nodeKey)}` : `/tasks/${encodeURIComponent(node.id)}?view=threads`
   return {
     title: thread.title.slice(0, TITLE_MAX),
     body: truncatePreview(thread.ask?.trim() || thread.reply?.trim() || '') || 'Waiting on your answer',
@@ -45,7 +47,7 @@ export function threadPushContent(thread: Pick<OrgThread, 'id' | 'title' | 'ask'
       type: THREAD_PUSH_TYPE,
       taskId: node.id,
       threadId: thread.id,
-      url: `/org?node=${encodeURIComponent(nodeKey)}`,
+      url,
     },
     // A decision someone is blocked on, like an action_required letter.
     priority: 10,

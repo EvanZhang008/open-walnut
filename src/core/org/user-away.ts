@@ -17,6 +17,7 @@
 import { bus, eventData, EventNames, type BusEvent } from '../event-bus.js';
 import type { TimeBankedEvent } from '../event-types.js';
 import type { SessionRecord, Task } from '../types.js';
+import { keepsThreads } from './keeps-threads.js';
 
 /** How long without the user before a node counts him away. `WALNUT_AWAY_AFTER_MINUTES` overrides. */
 export const AWAY_AFTER_MS = 30 * 60_000;
@@ -81,13 +82,16 @@ export function awayStateOf(input: {
   return { away: lastSeenAt === null || input.now - lastSeenAt >= input.afterMs, lastSeenAt };
 }
 
-/** The node's state now; null for a task that is not Main or a lead, or on any failure. */
-export async function userAwayFrom(task: Pick<Task, 'id' | 'org_role'> | null | undefined, now = Date.now()): Promise<AwayState | null> {
-  if (!task || (task.org_role !== 'main' && task.org_role !== 'lead')) return null;
+/** The node's state now; null for a task that keeps no Threads (keeps-threads.ts), or on any failure. */
+export async function userAwayFrom(task: (Pick<Task, 'id' | 'org_role'> & { threads_on?: boolean }) | null | undefined, now = Date.now()): Promise<AwayState | null> {
+  if (!task || !keepsThreads(task)) return null;
   try {
-    // The org is off (org-enabled.ts): no away hint, no away thread, no away report.
-    const { isOrgEnabled } = await import('./org-enabled.js');
-    if (!(await isOrgEnabled())) return null;
+    // The org is off (org-enabled.ts): no away hint, no away thread, no away report for Main or a
+    // lead. A task the user turned Threads on for is no part of the org: its own switch rules it.
+    if (task.org_role) {
+      const { isOrgEnabled } = await import('./org-enabled.js');
+      if (!(await isOrgEnabled())) return null;
+    }
     const { getSessionsForTask } = await import('../session-tracker.js');
     const sessions = await getSessionsForTask(task.id);
     let streaming = false;

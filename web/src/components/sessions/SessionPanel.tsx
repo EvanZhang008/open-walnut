@@ -222,7 +222,7 @@ import { SessionScriptsChip } from '@/components/workspaces/SessionScriptsChip';
 import { workspaceOf } from '@/components/workspaces/workspace-text';
 import { noteScriptDropped, noteScriptTyped } from '@/components/workspaces/script-results';
 import { ShortcutHint } from '@/keyboard/ShortcutHint';
-import { setTaskThreads, threadsKeptBy, threadsOffered } from './session-threads-model';
+import { setTaskThreads, takeThreadsViewAsk, threadsKeptBy, threadsOffered, useThreadsViewAskTick } from './session-threads-model';
 import { useOrgThreads } from '@/components/org/useOrgThreads';
 import { threadCounts } from '@open-walnut/thread-view';
 import '@/styles/session-threads.css';
@@ -1852,7 +1852,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   }, [sessionId]);
   const terminalShownRef = useRef(false);
   // The menu's Threads row: turns them on first when they are off, then opens them.
-  const openThreads = useCallback(async () => {
+  const openThreads = useLeanCallback(async () => {
     const taskId = sessionTask?.id;
     if (!taskId) return;
     // On already: the row opens or closes the view, as every view row does.
@@ -1864,10 +1864,21 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     threadsOpening.current = true;
     if (activeView !== 'threads') toggleView('threads');
   }, [sessionTask?.id, sessionTask?.threads_on, taskStore, activeView, toggleView]);
-  const turnOffThreads = useCallback(async () => {
+  const turnOffThreads = useLeanCallback(async () => {
     const taskId = sessionTask?.id;
     if (taskId) await setTaskThreads(taskId, false, taskStore);
   }, [sessionTask?.id, taskStore]);
+  // The menu's Threads rows, the same on the desktop's Open group and the phone's rows.
+  const threadsMenuRows = threadsMenu ? { on: threadsOn, onOpen: () => void openThreads(), onTurnOff: () => void turnOffThreads() } : undefined;
+  // A link asked for this task's Threads (a thread push): open them once the task shows them on.
+  // The ask is taken first, so one already answered (the view is up) never reopens it later.
+  const threadsAskTick = useThreadsViewAskTick();
+  useEffect(() => {
+    if (!threadsKept || inset || !takeThreadsViewAsk(sessionTask?.id) || activeView === 'threads') return;
+    log.info('session-panel', 'threads view opened by a link', { sessionId, taskId: sessionTask?.id ?? '' });
+    toggleView('threads');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadsKept, inset, sessionTask?.id, toggleView, sessionId, threadsAskTick]);
   // Threads off (turned off here, on another surface or by an agent, or a view kept over a reload
   // after that) close their view back to the chat; not while the menu's turn-on is on its way.
   useEffect(() => {
@@ -3098,7 +3109,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
         },
       } : undefined}
       apps={inset ? undefined : { keptKey: panelApp?.key ?? null, onOpen: (key) => openAppView(key, { toggle: true }) }}
-      threads={threadsMenu ? { on: threadsOn, onOpen: () => void openThreads(), onTurnOff: () => void turnOffThreads() } : undefined}
+      threads={threadsMenuRows}
       onPopout={inset ? undefined : () => openPopout('session', { id: sessionId, host: session?.host, cwd: session?.cwd })}
       onFullscreen={inset || phoneWidth ? undefined : (shownFullscreen ? exitFullscreen : enterFullscreen)}
       fullscreenLabel={shownFullscreen ? 'Exit full screen' : 'Full screen'}
@@ -3681,6 +3692,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   activeView={activeView}
                   onToggleView={toggleView}
                   board={boardChipLive ? (boardWaitReason ? 'waiting' : 'live') : 'none'}
+                  threads={threadsMenuRows}
                   terminal={terminalOffered && !inset}
                   onScripts={terminalOffered && !inset ? () => {
                     const r = kebabSlot?.getBoundingClientRect();

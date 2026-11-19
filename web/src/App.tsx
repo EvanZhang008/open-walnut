@@ -45,6 +45,7 @@ import { useAgentLinkClickFallback, useOpenLetterRequests } from './utils/open-a
 import { AnywhereFileViewer } from './components/common/AnywhereFileViewer';
 import { PLUGIN_STORE_PATH, peekPendingInstall, subscribeOpenLinks, subscribeOpenTargets, takePendingTarget } from './utils/open-link';
 import { RouteShownContext } from './contexts/RouteShownContext';
+import { askThreadsView } from './components/sessions/session-threads-model';
 
 ensureCoreAppsRegistered();
 
@@ -77,6 +78,8 @@ function TaskRedirect() {
   const navigate = useNavigate();
   useEffect(() => {
     const go = (to: string) => navigate(to, { replace: true });
+    // `?view=threads`: the task's Threads open beside its chat (a thread push, session-threads-model.ts).
+    if (id && new URLSearchParams(window.location.search).get('view') === 'threads') askThreadsView(id);
     if (id) withRecentHumanInput(() => openTaskHere(id, go));
     else go('/');
     // eslint-disable-next-line react-hooks/exhaustive-deps

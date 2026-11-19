@@ -134,4 +134,20 @@ describe('threads come first', () => {
     expect(seenOf(withThread).key).toBe(seenOf(without).key)
     expect(briefMark(withThread)).toBe(briefMark(without))
   })
+
+  it('a task with Threads on reads Needs you for its thread and stays a card on the Org page', () => {
+    // 2026-11-18: a leader with Threads on (no Org node) is the same as a VP for a thread waiting on
+    // him, except that the Org page draws no threads of its: it is a Needs you card under its VP.
+    const status = deriveUserStatus({ phase: 'IN_PROGRESS', hasSession: true, processStatus: 'idle', threads: counts })
+    expect(status).toMatchObject({ state: 'needs', source: 'thread' })
+    expect(status.ask).toContain('th-a title')
+    const leader = t('w1', 'Walnut', { threads_on: true, user_status: status })
+    expect(seenOf(leader).thread).toBe(true)
+    const list = tasks.map((x) => (x.id === 'w1' ? leader : x))
+    const vp = buildChannels(buildOrgTree(list), list, noAlerts).rows.find((r) => r.contactId === 'vp')!
+    expect(vp.alerts.map((a) => a.taskId)).toEqual(['w1'])
+    // Its own ask still speaks first.
+    const own = deriveUserStatus({ phase: 'IN_PROGRESS', hasSession: true, processStatus: 'idle', threads: counts, pendingPermissionTool: 'Bash' })
+    expect(own.source).not.toBe('thread')
+  })
 })

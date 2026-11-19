@@ -178,7 +178,7 @@ const BUILT_IN: readonly HintSpec[] = [
   {
     kind: 'user-away',
     label: 'User away',
-    description: 'Main and the leads: one line when the user has been away from this chat for a while (what needs him and is on none of his threads goes to his inbox), and one when he is back.',
+    description: 'Main, the leads and a task with Threads on: one line when the user has been away from this chat for a while (what needs him and is on none of his threads goes to his inbox), and one when he is back.',
     allowed: SCHEDULED,
     defaults: { enabled: true, triggers: ['session_start', 'on_change', 'after_compaction'], placement: 'after' },
     // 2026-10-31, the user: when he is not in a node's chat, an important update goes to his inbox.
@@ -210,7 +210,7 @@ const BUILT_IN: readonly HintSpec[] = [
   {
     kind: 'threads',
     label: 'Threads',
-    description: 'Main and the leads: one line on each message the user sends there, naming the Thread it was filed under (for a new thread, his other open ones to merge it into).',
+    description: 'Main, the leads and a task with Threads on: one line on each message the user sends there, naming the Thread it was filed under (for a new thread, his other open ones to merge it into).',
     allowed: SCHEDULED,
     // 2026-11-01, the user: every request of his becomes a thread the node keeps; "if my multiple
     // ask is about the same thread, add it below that thread".
@@ -221,7 +221,7 @@ const BUILT_IN: readonly HintSpec[] = [
   {
     kind: 'threads-tidy',
     label: 'Threads cleanup',
-    description: 'Main and the leads: one line naming the user\'s Threads that need the node\'s decision (did he react to your answer? needs a title; answered, still new). At session start, after a compaction and every 3 messages, when there is one; on a message that also files a thread it joins that line.',
+    description: 'Main, the leads and a task with Threads on: one line naming the user\'s Threads that need the node\'s decision (did he react to your answer? needs a title; answered, still new). At session start, after a compaction and every 3 messages, when there is one; on a message that also files a thread it joins that line.',
     allowed: SCHEDULED,
     // 2026-11-01, the user: "you should proactively clean the thread ... make sure this is a Walnut
     // feature, not just your memory".

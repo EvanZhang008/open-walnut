@@ -252,6 +252,13 @@ const threadsLine = (where: string, last: string): string =>
 /** Main's and every lead's Threads. */
 export const THREADS_LINE = threadsLine('the Threads view beside your Brief on the Org page', THREADS_MOVE_RULE)
 
+/** What needs him while he is away goes to his inbox in one thread (org/user-away.ts, human-inbox/away-thread.ts). */
+const AWAY_LETTERS_RULE =
+  'When the user is away from your chat, Walnut says so on the message (a user-away note). What needs him then and is '
+  + 'on none of his threads (a decision only he can make, something to review) goes to his inbox with '
+  + 'human_inbox_send instead of waiting here, a decision as action_required with its options so one tap answers it. '
+  + 'Walnut adds your letters of that absence to one thread and his phone buzzes once; anything else stays in this '
+  + 'chat and is never a letter. '
 /**
  * A task the user turned Threads on for (Task.threads_on, org/keeps-threads.ts; 2026-11-18, the user:
  * "we should be able to enable the thread for a leader, default off"): the same rules, and only
@@ -259,7 +266,8 @@ export const THREADS_LINE = threadsLine('the Threads view beside your Brief on t
  */
 const TASK_THREADS_RULES = threadsLine('the Threads view beside your chat, opened from its ⋮ menu or its Threads chip',
   'When you hand one of his asks to a task, name the thread (task_create, task_send or task_start with thread): the thread '
-  + 'lists that task and stays yours. ' + THREAD_ONE_PLACE_RULE).trim()
+  + 'lists that task and stays yours. A thread in needs makes your task read Needs you, and his phone buzzes for it when he is away. '
+  + AWAY_LETTERS_RULE + THREAD_ONE_PLACE_RULE).trim()
 /** A versioned block (instruction-diff.ts `task-threads`): a running session hears it at once when turned on, and that it is gone when turned off. */
 const TASK_THREADS_VERSION = `v${createHash('sha1').update(TASK_THREADS_RULES).digest('hex').slice(0, 8)}`
 export const TASK_THREADS_LINE = `Threads, the user's setting for your task (${TASK_THREADS_VERSION}): he turned Threads on for it, so you keep them. `
@@ -333,11 +341,7 @@ export const MAIN_NEWS_ONCE_LINE =
  * not (THREAD_ONE_PLACE_RULE).
  */
 export const AWAY_INBOX_LINE =
-  'When the user is away from your chat, Walnut says so on the message (a user-away note). What needs him then and is '
-  + 'on none of his threads (a decision only he can make, something to review) goes to his inbox with '
-  + 'human_inbox_send instead of waiting here, a decision as action_required with its options so one tap answers it. '
-  + 'Walnut adds your letters of that absence to one thread and his phone buzzes once; anything else stays in this '
-  + 'chat and is never a letter. ' + THREAD_ONE_PLACE_RULE + ' When he asks for a report at a time ("a report tomorrow morning"), schedule it with '
+  AWAY_LETTERS_RULE + THREAD_ONE_PLACE_RULE + ' When he asks for a report at a time ("a report tomorrow morning"), schedule it with '
   + 'org_report at:<time>; Walnut sends it then: what needs him with the one-tap answers, what finished, what moved. '
   + 'A letter of that absence never takes the proof out of the chat: ' + PROOF_IN_PLACE_RULE + '\n\n'
 

@@ -119,8 +119,10 @@ function note(task: Task, now = Date.now()): void {
   if (!was || now < quietUntil) { baseline.set(task.id, next); return; }
   const open = pending.get(task.id);
   // A node's Needs you from its Threads is the user's own request to it, already in front of him:
-  // a move into or out of it is no news for the node above (2026-11-03).
-  if ((next.thread || was.thread) && !open) { baseline.set(task.id, next); return; }
+  // a move into it, or out of it back to work, is no news for the node above (2026-11-03). Its
+  // finish or an ask of its own still is (a task with Threads on, 2026-11-18).
+  const threadOnly = next.thread || (was.thread && next.state !== 'done' && next.state !== 'needs');
+  if (threadOnly && !open) { baseline.set(task.id, next); return; }
   if (next.key === was.key && !open) return;
   const recheckAt = Date.parse(task.needs_recheck?.at ?? '');
   const from = open?.from ?? was;

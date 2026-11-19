@@ -20,6 +20,7 @@
  * the user asked for stand alone, as before.
  */
 import type { AwayThreadMark, LetterRecord, LetterSender, NewLetter } from './types.js';
+import { keepsThreads } from '../org/keeps-threads.js';
 
 export const AWAY_THREAD_MAX_MS = 24 * 60 * 60_000;
 export const DECISION_QUIET_MS = 3 * 60 * 60_000;
@@ -104,7 +105,7 @@ export async function sendAway(
   if (!store.checkLetterShape(input as unknown as Record<string, unknown>).ok) return null;
   const { listTasksByIds } = await import('../task-manager.js');
   const [task] = await listTasksByIds([taskId]).catch(() => []);
-  if (!task || (task.org_role !== 'main' && task.org_role !== 'lead')) return null;
+  if (!task || !keepsThreads(task)) return null;
   return serial(taskId, async () => {
     const { userAwayFrom } = await import('../org/user-away.js');
     const state = await userAwayFrom(task, now);
