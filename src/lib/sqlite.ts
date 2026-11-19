@@ -367,27 +367,35 @@ function bindArgs(params: unknown[]): unknown[] {
 }
 
 /**
- * Called after every statement, exec, pragma and transaction on this thread with its
- * source and its performance.now() start: the blocking-call ledger
- * (src/core/blocking-calls.ts) times them. Unset (a worker, a test, a CLI) it
- * costs one null check. A function, not an import: a worker loads this file alone.
+ * Times every statement, exec, pragma and transaction on this thread: the
+ * blocking-call ledger (src/core/blocking-calls.ts). begin() runs before the
+ * call and returns what end() gets back; `writes` marks a call that may take
+ * the write lock (a write statement, exec, pragma, transaction), `file` is the
+ * database it ran on. Unset (a worker, a test, a CLI) it costs one null check.
+ * An interface, not an import: a worker loads this file alone.
  */
-export type SqliteCallObserver = (source: string, start: number) => void
+export interface SqliteCallObserver {
+  begin(writes: boolean): unknown
+  end(source: string, token: unknown, writes: boolean, file: string): void
+}
 let callObserver: SqliteCallObserver | null = null
 export function setSqliteCallObserver(next: SqliteCallObserver | null): void {
   callObserver = next
 }
 
-function timed<T>(source: string, call: () => T): T {
+function timed<T>(source: string, writes: boolean, file: string, call: () => T): T {
   const observer = callObserver
   if (!observer) return call()
-  const start = performance.now()
+  let token: unknown
+  try { token = observer.begin(writes) } catch { return call() }
   try {
     return call()
   } finally {
-    try { observer(source, start) } catch { /* timing never changes the call's result */ }
+    try { observer.end(source, token, writes, file) } catch { /* timing never changes the call's result */ }
   }
 }
+
+const WRITE_STATEMENT = /^\s*(?:INSERT|UPDATE|DELETE|REPLACE)\b/i
 
 /** better-sqlite3's error for any use of a closed database or of a statement prepared on one. */
 function notOpen(): TypeError {
@@ -396,7 +404,11 @@ function notOpen(): TypeError {
 
 class SqliteStatement implements Statement {
   private mode: 'object' | 'pluck' | 'raw' = 'object'
-  constructor(private readonly stmt: BunStatement, readonly source: string, private readonly owner: SqliteDatabase) {}
+  /** A write statement: it takes the write lock (the ledger samples its CPU and context switches). */
+  private readonly writes: boolean
+  constructor(private readonly stmt: BunStatement, readonly source: string, private readonly owner: SqliteDatabase) {
+    this.writes = WRITE_STATEMENT.test(source)
+  }
 
   get reader(): boolean {
     return this.stmt.columnNames.length > 0
@@ -413,11 +425,11 @@ class SqliteStatement implements Statement {
   }
 
   run(...params: unknown[]): RunResult {
-    return timed(this.source, () => this.live().run(...bindArgs(params)))
+    return timed(this.source, this.writes, this.owner.name, () => this.live().run(...bindArgs(params)))
   }
 
   get(...params: unknown[]): unknown {
-    return timed(this.source, () => this.getNow(params))
+    return timed(this.source, this.writes, this.owner.name, () => this.getNow(params))
   }
 
   private getNow(params: unknown[]): unknown {
@@ -429,7 +441,7 @@ class SqliteStatement implements Statement {
   }
 
   all(...params: unknown[]): unknown[] {
-    return timed(this.source, () => this.allNow(params))
+    return timed(this.source, this.writes, this.owner.name, () => this.allNow(params))
   }
 
   private allNow(params: unknown[]): unknown[] {
@@ -588,13 +600,13 @@ class SqliteDatabase {
   }
 
   exec(source: string): this {
-    timed(source, () => this.handle().exec(source))
+    timed(source, true, this.name, () => this.handle().exec(source))
     return this
   }
 
   pragma(source: string, options: PragmaOptions = {}): unknown {
     // A pragma can be long work (wal_checkpoint, integrity_check): timed like a statement.
-    return timed(`PRAGMA ${source}`, () => this.pragmaNow(source, options))
+    return timed(`PRAGMA ${source}`, true, this.name, () => this.pragmaNow(source, options))
   }
 
   private pragmaNow(source: string, options: PragmaOptions): unknown {
@@ -626,7 +638,7 @@ class SqliteDatabase {
     const tx = this.handle().transaction(refusePromise(fn)) as unknown as Transaction<F>
     // The whole transaction, BEGIN to COMMIT (a commit can run a WAL checkpoint), as one call.
     const each = (run: (...args: Parameters<F>) => ReturnType<F>) =>
-      (...args: Parameters<F>): ReturnType<F> => timed('transaction', () => run(...args))
+      (...args: Parameters<F>): ReturnType<F> => timed('transaction', true, this.name, () => run(...args))
     return Object.assign(each(tx), {
       deferred: each(tx.deferred),
       immediate: each(tx.immediate),

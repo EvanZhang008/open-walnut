@@ -5,7 +5,10 @@
  * (2026-11-18 19:14: four holds of 279 to 632 ms in 15 s named nothing).
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { performance } from 'node:perf_hooks'
 import Database from '../../src/lib/sqlite.js'
 import {
@@ -100,6 +103,65 @@ describe('blocking-call ledger', () => {
   it('reads a caller site from a stack', () => {
     const stack = 'Error\n    at noteTimed (/x/src/core/blocking-calls.ts:1:1)\n    at <anonymous> (/$bunfs/root/walnut:9:9)\n    at run (/x/src/lib/sqlite.ts:2:2)\n    at writeSessionRowSqlite (/x/src/core/session-tracker.ts:1850:7)\n    at /x/src/core/session-tracker.ts:1724:9\n    at upsert (/x/a.ts:3:3)\n    at more (/x/b.ts:4:4)'
     expect(callerSite(stack)).toBe('writeSessionRowSqlite session-tracker.ts:1850 < session-tracker.ts:1724 < upsert a.ts:3')
+  })
+})
+
+describe('a write that waits', () => {
+  // On the Mac a one-row session INSERT that takes 0.03 ms on its own took up to
+  // 504 ms in the server: the line must say whether the thread ran or waited, and on what.
+  it('says the thread was off the CPU, and names the process that held the write lock', async () => {
+    const warn = vi.spyOn(log.web, 'warn').mockImplementation(() => {})
+    installBlockingCallTiming()
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blocking-lock-'))
+    const file = path.join(dir, 'held.sqlite')
+    const db = Database(file)
+    db.pragma('journal_mode = WAL')
+    db.exec('CREATE TABLE t (a INTEGER PRIMARY KEY, b TEXT)')
+    // Another process takes the write lock and keeps it 600 ms.
+    const holder = spawn(process.execPath, ['-e', `
+      const { Database } = require('bun:sqlite')
+      const db = new Database(${JSON.stringify(file)})
+      db.exec('BEGIN IMMEDIATE'); db.exec("INSERT INTO t (b) VALUES ('held')")
+      console.log('locked')
+      setTimeout(() => { db.exec('COMMIT'); db.close(); process.exit(0) }, 600)
+    `], { stdio: ['ignore', 'pipe', 'inherit'] })
+    await new Promise<void>((resolve) => holder.stdout!.on('data', (d) => { if (String(d).includes('locked')) resolve() }))
+    const from = performance.now()
+    function writesTheSessionRow(): void { db.prepare('INSERT INTO t (b) VALUES (?)').run('mine') }
+    writesTheSessionRow()
+    const got = blockingCallsWithin(from, performance.now())
+    await new Promise<void>((resolve) => holder.on('exit', () => resolve()))
+    try {
+      const insert = got?.calls.find((c) => c.what.startsWith('INSERT INTO t'))
+      expect(insert?.maxMs).toBeGreaterThanOrEqual(300)
+      expect(insert?.wait).toBeDefined()
+      expect(insert!.wait!.cpuMs).toBeLessThan(insert!.maxMs / 4)
+      await vi.waitFor(() => {
+        const line = warn.mock.calls.find((c) => c[0] === 'sqlite: slow write, the processes that had the database open')
+        expect(line).toBeDefined()
+      }, { timeout: 5_000 })
+      const line = warn.mock.calls.find((c) => c[0] === 'sqlite: slow write, the processes that had the database open')![1] as { file: string; others: string[] }
+      expect(line.file).toBe('held.sqlite')
+      // lsof answers after the holder exited on a fast machine: the line is there either way, naming whoever had it open then.
+      expect(Array.isArray(line.others)).toBe(true)
+    } finally {
+      db.close()
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  }, 15_000)
+
+  it('samples CPU only for writes, never for reads', () => {
+    installBlockingCallTiming()
+    _setBlockingThresholdsForTesting({ minMs: 0, siteMs: 1_000 })
+    const db = Database(':memory:')
+    db.exec('CREATE TABLE t (a INTEGER)')
+    const from = performance.now()
+    db.prepare('INSERT INTO t VALUES (1)').run()
+    db.prepare('SELECT * FROM t').all()
+    const got = blockingCallsWithin(from, performance.now(), 10)
+    db.close()
+    expect(got!.calls.find((c) => c.what.startsWith('INSERT'))?.wait).toBeDefined()
+    expect(got!.calls.find((c) => c.what.startsWith('SELECT'))?.wait).toBeUndefined()
   })
 })
 
