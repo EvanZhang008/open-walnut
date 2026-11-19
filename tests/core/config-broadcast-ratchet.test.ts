@@ -129,6 +129,8 @@ describe('the source: config:changed carries a config only through the helper', 
       // The Demo's real-SSH switch (hosts appear once the person's ~/.ssh is read).
       'src/commands/demo-routes.ts',
       'src/core/approvals/ask-me.ts',
+      // The backup kind read at the destination, kept in config once (Settings shows the switch as it is).
+      'src/core/backup/backup-scheduler.ts',
       'src/core/config-broadcast.ts',
       // An AI's plugin_settings_set: the one plugin section it wrote.
       'src/core/plugins/plugin-settings.ts',

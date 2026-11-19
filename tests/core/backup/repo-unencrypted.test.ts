@@ -192,8 +192,9 @@ describe('both kinds at one destination', () => {
 
     // Back on: the encrypted repository takes up where it was; the unencrypted one is untouched.
     const plainObjects = await store.list(PLAIN_ROOT);
-    // Snapshot ids sort by the second they were made: the next one is a second later.
-    await new Promise((r) => setTimeout(r, 1100));
+    // Snapshot ids sort by the second they were made: the next one is made in a later second.
+    const madeIn = Math.floor(Date.now() / 1000);
+    await vi.waitFor(() => expect(Math.floor(Date.now() / 1000)).toBeGreaterThan(madeIn), { timeout: 3000, interval: 50 });
     const enc2 = await runEncryptedBackup(encCfg(), { dataDir: home, store });
     expect(enc2.snapshotCount).toBe(2);
     expect((await store.list(PLAIN_ROOT)).map((o) => o.key)).toEqual(plainObjects.map((o) => o.key));
