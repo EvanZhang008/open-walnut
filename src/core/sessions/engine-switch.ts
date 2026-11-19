@@ -260,6 +260,19 @@ async function noteRefusedAfterWait(req: EngineSwitchRequest, err: unknown): Pro
   } catch { /* the refusal still reaches the caller */ }
 }
 
+/** A model the target engine's menu does not offer is refused at the switch, not at the first message. */
+async function refuseUnofferedModel(engine: SessionEngine, model: string | undefined, host: string, cwd: string | undefined): Promise<void> {
+  // Only a local ACP engine's menu is read here; nothing else waits on the check.
+  if (!model || host !== LOCAL_HOST || !isAcpEngine(engine)) return;
+  const { checkSwitchModelOffered, ModelNotOfferedError } = await import('./engine-switch-model.js');
+  try {
+    await checkSwitchModelOffered(engine, model, { cwd, local: host === LOCAL_HOST });
+  } catch (err) {
+    if (err instanceof ModelNotOfferedError) throw new EngineSwitchError(err.message, 409, 'model_not_offered');
+    throw err;
+  }
+}
+
 async function switchFrom(req: EngineSwitchRequest, task: Task): Promise<EngineSwitchResult> {
   const engine = resolveEngine(req.engine);
   const tm = await import('../task-manager.js');
@@ -271,6 +284,7 @@ async function switchFrom(req: EngineSwitchRequest, task: Task): Promise<EngineS
   const old = await taskConversation(task.id);
   const switchId = `es-${randomUUID()}`;
   if (!old) {
+    await refuseUnofferedModel(engine, req.model, normalizeHost(req.host), task.cwd ?? undefined);
     const { startSessionForTask } = await import('./task-start.js');
     const started = await startSessionForTask({
       taskIdPrefix: task.id, message, engine, model: req.model, effort: req.effort, mode: req.permissionMode,
@@ -316,6 +330,7 @@ async function switchFrom(req: EngineSwitchRequest, task: Task): Promise<EngineS
   if (blocker) {
     throw new EngineSwitchError(move ? `${blocker}.` : `${blocker}. A switch keeps the task on its host; to move the work, use task_move.`, 409, 'engine_not_on_host');
   }
+  await refuseUnofferedModel(engine, req.model, host, old.cwd ?? task.cwd ?? undefined);
   const waiting = task.engine_switch?.state === 'pending' ? task.engine_switch : undefined;
   const busy = lost ? false : await sessionBusy(old);
   const now = !move && req.callerSid !== old.claudeSessionId && (req.when ?? (req.callerSid ? 'turn_end' : 'now')) === 'now';

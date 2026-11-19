@@ -36,6 +36,7 @@ import {
 import { log } from '../logging/index.js'
 import { getLocalDaemonConnection } from './local-daemon-dial.js'
 import { mapCodexCatalog, resolveCodexEngine } from './codex-engine-config.js'
+import { endpointServedModels, keepServedModels, providerFromCodexConfig } from './codex-endpoint-models.js'
 
 export interface EngineModelCatalog {
   engine: SessionEngine
@@ -261,9 +262,14 @@ async function probeEngine(engine: SessionEngine, cwd?: string): Promise<EngineM
   const managed = engine === 'codex'
     ? buildAcpAdapterEnv(codexPath, { sessionId: `model-probe-${engine}`, baseConfig: codex!.baseConfig, codexModelPrefix: codex!.prefix })
     : buildAcpAdapterEnv(undefined, { sessionId: `model-probe-${engine}` })
-  // With a provider model_prefix, the menu offers the ids that endpoint answers to.
-  const shown = <T extends { models: AcpModelInfo[]; currentModelId?: string }>(catalog: T): T =>
-    codex ? mapCodexCatalog(catalog, codex.settings) : catalog
+  // With a provider model_prefix, the menu offers the ids that endpoint answers to, and only
+  // the models it serves (codex-endpoint-models.ts).
+  const served = codex ? await endpointServedModels(providerFromCodexConfig(codex.baseConfig), configuredEnv) : null
+  const shown = <T extends { models: AcpModelInfo[]; currentModelId?: string }>(catalog: T): T => {
+    if (!codex) return catalog
+    const mapped = mapCodexCatalog(catalog, codex.settings)
+    return { ...mapped, models: keepServedModels(mapped.models, served, (m) => m.modelId) }
+  }
   const provider = engine === 'pi'
     ? { PI_ACP_PI_COMMAND: resolveEngineExecutable({ engine: 'pi', cwd: probeCwd, env: configuredEnv }) }
     : undefined

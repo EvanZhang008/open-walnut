@@ -18,7 +18,7 @@
  * - a steer Codex took but did not answer before its turn ended is answered in a
  *   follow-up Codex turn of the same Walnut turn (turn.ts);
  * - plan mode, its "Implement this plan?" question, and the adapter's slash commands
- *   (commands.ts) work as they did there;
+ *   (commands.ts) work as they did there, /goal included (goal.ts);
  * - a command the turn left running is reported at the turn's end and when it ends
  *   (background.ts), so Walnut reads the task as working and wakes it then.
  */
@@ -33,7 +33,9 @@ import { LiveTurn, type TurnResult } from './turn.js'
 import { CodexBackgroundWork, backgroundPollMs, listedTerminals, type BackgroundTerminal, type BackgroundWorkState } from './background.js'
 import { buildThreadConfig, turnUsage, withTimeout } from './thread-config.js'
 import { commandAnswer, parseSlashCommand, planCommand, type CommandStart } from './commands.js'
+import { CodexGoalState, GOAL_CONTINUATION_TEXT, NEXT_TURN_GRACE_MS, REPEAT_PAUSED_TEXT } from './goal.js'
 import type { CodexModelRow } from '../codex-model-probe.js'
+import { endpointServedModels, keepServedModels, providerFromCodexConfig } from '../codex-endpoint-models.js'
 import type { AcpMcpServer } from '../acp-worker/protocol.js'
 
 const INIT_TIMEOUT_MS = 30_000
@@ -118,6 +120,7 @@ export class CodexDirectConnection {
   /** The last token use Codex reported, for /status. */
   private lastUsage: { usage?: Record<string, number>; window?: number } = {}
   private commandSeq = 0
+  private readonly goal = new CodexGoalState()
 
   constructor(
     private readonly launch: CodexLaunch,
@@ -238,7 +241,7 @@ export class CodexDirectConnection {
     }
     const start: CommandStart | InputStart = plan?.kind === 'turn' ? plan.start : { kind: 'input', text, clientId: newClientId() }
     // A compaction reports no input of its own; a turn and a review report theirs.
-    const turn = new LiveTurn(start.kind === 'compact' ? [] : start.kind === 'review' ? [null] : [{ text: start.text, clientId: start.clientId }])
+    const turn = new LiveTurn(start.kind === 'compact' || start.kind === 'goal' ? [] : start.kind === 'review' ? [null] : [{ text: start.text, clientId: start.clientId }])
     this.turn = turn
     this.events.beginTurn()
     await this.startCodexTurn(turn, start)
@@ -252,6 +255,18 @@ export class CodexDirectConnection {
     const current = () => !turn.settled && turn.continuations === generation
     try {
       const threadId = this.requireThread()
+      if (start.kind === 'goal') {
+        this.goal.restart()
+        // A new objective replaces the thread's goal outright, so nothing of a finished one carries over.
+        if (start.objective) await this.rpc.request('thread/goal/clear', { threadId }, TURN_START_TIMEOUT_MS).catch(() => {})
+        this.goal.adopt(await this.rpc.request('thread/goal/set', {
+          threadId, ...(start.objective ? { objective: start.objective } : {}), status: 'active',
+        }, TURN_START_TIMEOUT_MS))
+        // Codex starts the goal's turn itself (its turn/started names this turn); else we do.
+        if (await withTimeout(turn.started, NEXT_TURN_GRACE_MS) || !current()) return
+        this.continueTurn(turn, GOAL_CONTINUATION_TEXT)
+        return
+      }
       const resp: Record<string, unknown> = start.kind === 'compact'
         ? await this.rpc.request('thread/compact/start', { threadId }, TURN_START_TIMEOUT_MS)
         : start.kind === 'review'
@@ -357,7 +372,13 @@ export class CodexDirectConnection {
       return { turnClosed: true }
     }
     const deadline = Date.now() + INTERRUPT_TIMEOUT_MS
-    const turnId = turn.id ?? await withTimeout(turn.started, INTERRUPT_TIMEOUT_MS)
+    // An active goal is paused first: Codex would start its next turn behind the stop.
+    if (this.goal.active && this.threadId) {
+      await this.rpc.request('thread/goal/set', { threadId: this.threadId, status: 'paused' }, INTERRUPT_TIMEOUT_MS)
+        .then((resp) => this.goal.adopt(resp), () => {})
+    }
+    // Between a goal's turns no Codex turn runs: the turn ends at the grace (followGoal).
+    const turnId = turn.id ?? await Promise.race([withTimeout(turn.started, INTERRUPT_TIMEOUT_MS), turn.ended.then(() => undefined)])
     if (turn.settled) return { turnClosed: true }
     if (!turnId) return { turnClosed: false }
     try {
@@ -471,7 +492,9 @@ export class CodexDirectConnection {
         if (!cursor) break
       }
     } catch { /* the menu is empty; the session itself still runs */ }
-    this.controls.rows = rows
+    // Codex lists the models it knows; the menu keeps the ones this thread's endpoint serves.
+    const served = await endpointServedModels(providerFromCodexConfig(this.launch.threadConfig), this.env)
+    this.controls.rows = keepServedModels(rows, served, (r) => r.id)
   }
 
   private emit(update: AcpUpdate): void {
@@ -487,10 +510,14 @@ export class CodexDirectConnection {
     if (!isRecord(params)) return
     // Another thread's events (a subagent's) are not this session's transcript.
     if (typeof params.threadId === 'string' && this.threadId && params.threadId !== this.threadId) return
+    if (this.goal.note(method, params)) { this.touch(); return }
     const turn = this.turn
     const turnId = typeof params.turnId === 'string' ? params.turnId
       : isRecord(params.turn) && typeof params.turn.id === 'string' ? params.turn.id : undefined
     const stale = turnId !== undefined && this.endedTurnIds.has(turnId)
+    // Only a goal makes Codex start a turn of its own (a resumed thread goes on with its active
+    // goal at once): with no Walnut turn to show it, it would run unseen, so it is paused.
+    if (method === 'turn/started' && turnId && !stale && !turn) this.stopUnseenGoalTurn(turnId)
     if (turn && method === 'turn/started' && turnId && !stale && isRecord(params.turn)) {
       const root = typeof params.turn.rootTurnId === 'string' ? params.turn.rootTurnId : undefined
       if (!turn.id) { turn.id = turnId; turn.markStarted(turnId) } else if (root === turn.id && turnId !== turn.id) turn.aliases.add(turnId)
@@ -553,8 +580,55 @@ export class CodexDirectConnection {
         void this.askToImplement(turn, turn.plan)
         return
       }
+      if (this.goal.active) {
+        if (!this.goal.repeated(t)) { void this.followGoal(turn); return }
+        void this.pauseRepeatingGoal(turn)
+        return
+      }
     }
     this.endTurn(turn, { stopReason: status === 'interrupted' ? 'cancelled' : 'end_turn' })
+  }
+
+  /** A goal that keeps answering the same way is paused, and the turn ends saying so (goal.ts). */
+  private async pauseRepeatingGoal(turn: LiveTurn): Promise<void> {
+    const threadId = this.threadId
+    // Codex may start the next goal turn before the pause lands: it is this turn's, and is interrupted.
+    for (const id of turn.continueAs([])) this.retireTurnId(id)
+    turn.stopping = true
+    if (threadId) {
+      await this.rpc.request('thread/goal/set', { threadId, status: 'paused' }, INTERRUPT_TIMEOUT_MS)
+        .then((resp) => this.goal.adopt(resp), () => {})
+    }
+    if (turn.settled || this.turn !== turn) return
+    this.emit({ sessionUpdate: 'agent_message_chunk', messageId: `codex-goal-paused:${turn.continuations}`, content: { type: 'text', text: `\n\n${REPEAT_PAUSED_TEXT}\n\n` } })
+    const next = turn.id ?? await withTimeout(turn.started, NEXT_TURN_GRACE_MS)
+    if (turn.settled || this.turn !== turn) return
+    if (next && threadId) {
+      // Its end (completeTurn, stopping) ends the Walnut turn.
+      await this.rpc.request('turn/interrupt', { threadId, turnId: next }, INTERRUPT_TIMEOUT_MS).catch(() => this.endTurn(turn, { stopReason: 'end_turn' }))
+      return
+    }
+    this.endTurn(turn, { stopReason: 'end_turn' })
+  }
+
+  /** A goal turn Codex started with no Walnut turn open: the goal is paused and the turn interrupted. */
+  private stopUnseenGoalTurn(turnId: string): void {
+    const threadId = this.threadId
+    if (!threadId) return
+    this.retireTurnId(turnId)
+    void this.rpc.request('thread/goal/set', { threadId, status: 'paused' }, INTERRUPT_TIMEOUT_MS)
+      .then((resp) => this.goal.adopt(resp), () => {})
+      .finally(() => this.rpc.request('turn/interrupt', { threadId, turnId }, INTERRUPT_TIMEOUT_MS).catch(() => {}))
+  }
+
+  /** An active goal: the Codex turn Codex starts next is this Walnut turn's too (goal.ts). */
+  private async followGoal(turn: LiveTurn): Promise<void> {
+    for (const id of turn.continueAs([])) this.retireTurnId(id)
+    this.events.endTurn()
+    this.events.beginTurn()
+    const next = await withTimeout(turn.started, NEXT_TURN_GRACE_MS)
+    if (next || turn.settled || this.turn !== turn) return
+    this.endTurn(turn, { stopReason: turn.stopping ? 'cancelled' : 'end_turn' }, turn.stopping)
   }
 
   /** Names in the chat the words Codex took into this turn and never answered. */

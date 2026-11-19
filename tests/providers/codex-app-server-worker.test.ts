@@ -750,7 +750,7 @@ describe('direct Codex: plan mode and commands', () => {
     expect(requests('review/start')[1].params!.target).toEqual({ type: 'baseBranch', branch: 'main' })
   })
 
-  it('/plan, /mcp, /skills, /status and /goal answer in the chat without a Codex turn', async () => {
+  it('/plan, /mcp, /skills, /status and a bare /goal answer in the chat without a Codex turn', async () => {
     const { w } = await startSession()
     const run = async (n: number, text: string) => { await op(w, 'prompt', { commandId: `c${n}`, walnutMessageId: `m${n}`, text }); await waitTurn(`c${n}`) }
     await run(1, '/plan')
@@ -763,13 +763,110 @@ describe('direct Codex: plan mode and commands', () => {
     expect(agentText()).toContain('- mock-skill: A mock skill')
     await run(4, '/status')
     expect(agentText()).toContain('Collaboration mode: plan')
-    await run(5, '/goal ship it')
-    expect(agentText()).toContain('engines.codex.transport: acp')
+    await run(5, '/goal')
+    expect(agentText()).toContain('No goal is set')
+    expect(agentText()).not.toContain('engines.codex.transport')
     expect(requests('turn/start')).toHaveLength(0)
     // A $skill or an unknown /word is the model's.
     await run(6, '/unknownthing please')
     expect((requests('turn/start')[0].params!.input as Array<{ text: string }>)[0].text).toBe('/unknownthing please')
     expect(errorRows()).toHaveLength(0)
+  })
+
+  it('/goal runs every turn Codex starts for the goal as one turn, until the goal is complete', async () => {
+    const { w, threadId } = await startSession()
+    await op(w, 'prompt', { commandId: 'c1', walnutMessageId: 'm1', text: '/goal COUNT 3 then stop' })
+    await waitTurn('c1')
+    expect(requests('thread/goal/set')[0].params).toEqual({ threadId, objective: 'COUNT 3 then stop', status: 'active' })
+    // A new objective replaces the thread's goal outright (a finished one left the model
+    // believing the new goal done, on real Codex 0.170).
+    expect(requests('thread/goal/clear')).toHaveLength(1)
+    // Codex started all three turns itself; Walnut started none and saw every one.
+    expect(requests('turn/start')).toHaveLength(0)
+    expect(agentText()).toContain('goal step 1. goal step 2. goal step 3.')
+    expect(metas().filter((e) => e.type === 'turn-ended' && e.commandId === 'c1')).toHaveLength(1)
+    expect(errorRows()).toHaveLength(0)
+    await op(w, 'prompt', { commandId: 'c2', walnutMessageId: 'm2', text: '/goal' })
+    await waitTurn('c2')
+    expect(agentText()).toContain('Goal (complete')
+  })
+
+  it('/goal starts the goal\'s turn itself when Codex does not', async () => {
+    const { w } = await startSession({ MOCK_GOAL_NO_START: '1' })
+    await op(w, 'prompt', { commandId: 'c1', walnutMessageId: 'm1', text: '/goal COUNT 2' })
+    await waitTurn('c1')
+    expect((requests('turn/start')[0].params!.input as Array<{ text: string }>)[0].text).toBe('Continue working toward the active goal.')
+    expect(agentText()).toContain('goal step 2.')
+    expect(errorRows()).toHaveLength(0)
+  })
+
+  it('a stop pauses the goal, so Codex starts no turn behind it; /goal resume goes on, clear ends it', async () => {
+    const { w } = await startSession({ MOCK_GOAL_TURN_MS: '300' })
+    await op(w, 'prompt', { commandId: 'c1', walnutMessageId: 'm1', text: '/goal COUNT 50' })
+    await waitFor(records, (r) => agentText(r).includes('goal step 2.'), 'second goal turn')
+    const stop = await op(w, 'cancel', { commandId: 'x1' })
+    expect(stop.ok, JSON.stringify(stop)).toBe(true)
+    await waitTurn('c1')
+    expect(requests('thread/goal/set')[1].params).toMatchObject({ status: 'paused' })
+    const steps = (agentText().match(/goal step/g) ?? []).length
+    await new Promise((r) => setTimeout(r, 800))
+    expect((agentText().match(/goal step/g) ?? []).length).toBe(steps)
+    await op(w, 'prompt', { commandId: 'c2', walnutMessageId: 'm2', text: '/goal pause' })
+    await waitTurn('c2')
+    expect(agentText()).toContain('Goal paused')
+    await op(w, 'prompt', { commandId: 'c3', walnutMessageId: 'm3', text: '/goal resume' })
+    await waitFor(records, (r) => (agentText(r).match(/goal step/g) ?? []).length > steps, 'a resumed goal turn')
+    await op(w, 'cancel', { commandId: 'x2' })
+    await waitTurn('c3')
+    expect(requests('thread/goal/clear')).toHaveLength(1)
+    await op(w, 'prompt', { commandId: 'c4', walnutMessageId: 'm4', text: '/goal clear' })
+    await waitTurn('c4')
+    expect(requests('thread/goal/clear')).toHaveLength(2)
+    expect(errorRows()).toHaveLength(0)
+  })
+
+  it('a goal that answers the same way three turns in a row is paused and says so', async () => {
+    const { w } = await startSession({ MOCK_GOAL_STUCK: '1' })
+    await op(w, 'prompt', { commandId: 'c1', walnutMessageId: 'm1', text: '/goal COUNT 5' })
+    await waitTurn('c1')
+    expect(requests('thread/goal/set').at(-1)!.params).toMatchObject({ status: 'paused' })
+    expect(agentText()).toContain('answered the same way 3 turns in a row')
+    const said = (agentText().match(/The goal is complete\./g) ?? []).length
+    expect(said).toBeGreaterThanOrEqual(3)
+    expect(said).toBeLessThanOrEqual(4)
+    await new Promise((r) => setTimeout(r, 400))
+    expect((agentText().match(/The goal is complete\./g) ?? []).length).toBe(said)
+    expect(errorRows()).toHaveLength(0)
+  })
+
+  it('a goal turn Codex starts with no Walnut turn open is paused and interrupted, never run unseen', async () => {
+    await startSession({ MOCK_UNSEEN_GOAL: '1', MOCK_GOAL_TURN_MS: '300' })
+    await waitFor(() => requests('turn/interrupt'), (r) => r.length > 0, 'the unseen turn interrupted')
+    expect(requests('thread/goal/set')[0].params).toMatchObject({ status: 'paused' })
+    await new Promise((r) => setTimeout(r, 600))
+    expect(agentText()).not.toContain('goal step')
+    expect(codexLog().filter((e) => e.kind === 'request' && e.method === 'turn/interrupt')).toHaveLength(1)
+  })
+
+  it('the model menu keeps only the models the thread\'s endpoint serves', async () => {
+    const http = await import('node:http')
+    const server = http.createServer((req, res) => {
+      res.setHeader('content-type', 'application/json')
+      res.end(req.url === '/v1/models' ? JSON.stringify({ object: 'list', data: [{ id: 'gpt-mock', object: 'model' }] }) : '{}')
+    })
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+    const port = (server.address() as { port: number }).port
+    try {
+      const config = { model_provider: 'lp', model_providers: { lp: { name: 'lp', base_url: `http://127.0.0.1:${port}/v1`, wire_api: 'responses' } } }
+      const { w } = await startSession({ CODEX_CONFIG: JSON.stringify(config) })
+      const state = (await op(w, 'getState')).result as WorkerStateSnapshot
+      const ids = state.models?.availableModels.map((m) => m.modelId) ?? []
+      // Codex lists gpt-mock-mini too; the endpoint does not serve it.
+      expect(ids).toContain('gpt-mock[medium]')
+      expect(ids.some((id) => id.startsWith('gpt-mock-mini'))).toBe(false)
+    } finally {
+      server.close()
+    }
   })
 
   it('the host\'s [sandbox_workspace_write] (writable roots, network) stays under the Agent mode', async () => {

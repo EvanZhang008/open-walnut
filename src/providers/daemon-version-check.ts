@@ -107,6 +107,9 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/codex-app-server/turn.ts',
   'src/providers/codex-app-server/background.ts',
   'src/providers/codex-app-server/commands.ts',
+  'src/providers/codex-app-server/goal.ts',
+  // Its model menu keeps only what the endpoint serves.
+  'src/providers/codex-endpoint-models.ts',
   'src/core/agents/codex-slash-commands.ts',
   'src/providers/codex-app-server/thread-config.ts',
   // Its launch reads the same -c args the server builds, and their request tag.

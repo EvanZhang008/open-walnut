@@ -18,6 +18,6 @@ export const CODEX_COMMANDS: ReadonlyArray<EngineSlashCommand> = [
   { name: 'status', description: 'Show the model, modes and token use' },
   { name: 'mcp', description: 'List the MCP servers Codex has' },
   { name: 'skills', description: 'List the skills Codex finds here' },
-  { name: 'goal', description: 'Set a goal Codex works toward (codex-acp transport only)' },
+  { name: 'goal', description: 'Set a goal Codex keeps working on until it is done (/goal pause, resume, clear)' },
   { name: 'logout', description: 'How to sign Codex out on this host' },
 ]

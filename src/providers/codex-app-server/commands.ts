@@ -7,7 +7,11 @@
  * - /compact runs Codex's own compaction (thread/compact/start)
  * - /review [instructions], /review-branch <branch>, /review-commit <sha> run a review turn
  * - /status, /mcp, /skills answer with a short text
- * - /goal and /logout say how to reach them (the adapter has them; this client does not)
+ * - /goal <objective> sets Codex's thread goal and runs it: Codex itself starts one turn after
+ *   another until the goal is complete, paused or cleared, and they are all this one turn here
+ *   (connection.ts). /goal resume goes on with it; /goal pause and /goal clear answer here, and
+ *   a bare /goal shows it
+ * - /logout says how to sign out
  */
 
 import { CODEX_COMMANDS } from '../../core/agents/codex-slash-commands.js'
@@ -22,11 +26,14 @@ export interface SlashCommand { name: string; rest: string }
 export type CommandStart =
   | { kind: 'compact' }
   | { kind: 'review'; target: Record<string, unknown> }
+  /** No objective: resume the goal the thread has. */
+  | { kind: 'goal'; objective?: string }
 
 export type CommandPlan =
   | { kind: 'turn'; start: CommandStart }
   | { kind: 'plan' }
   | { kind: 'status' | 'mcp' | 'skills' }
+  | { kind: 'goal-control'; action: 'show' | 'pause' | 'clear' }
   | { kind: 'say'; text: string }
 
 export { CODEX_COMMANDS }
@@ -46,6 +53,17 @@ export function parseSlashCommand(text: string): SlashCommand | null {
 const usage = (name: string, needs: string) => `Command "/${name}" requires ${needs}.`
 const viaAdapter = (name: string) =>
   `\`/${name}\` is not offered by Walnut's direct Codex client. To use it, run Codex through the codex-acp adapter: set \`engines.codex.transport: acp\` in Walnut's config.yaml.`
+/** Codex refuses a longer objective (the adapter checks the same). */
+export const MAX_GOAL_CHARS = 4000
+
+function planGoal(rest: string): CommandPlan {
+  const word = rest.toLowerCase()
+  if (!rest) return { kind: 'goal-control', action: 'show' }
+  if (word === 'pause' || word === 'clear') return { kind: 'goal-control', action: word }
+  if (word === 'resume') return { kind: 'turn', start: { kind: 'goal' } }
+  if (rest.length > MAX_GOAL_CHARS) return { kind: 'say', text: usage('goal', `goal text of at most ${MAX_GOAL_CHARS} characters`) }
+  return { kind: 'turn', start: { kind: 'goal', objective: rest } }
+}
 
 /** What a command does. */
 export function planCommand(command: SlashCommand): CommandPlan {
@@ -59,6 +77,7 @@ export function planCommand(command: SlashCommand): CommandPlan {
     case 'review-commit':
       return command.rest ? { kind: 'turn', start: { kind: 'review', target: { type: 'commit', sha: command.rest, title: null } } } : { kind: 'say', text: usage('review-commit', 'commit sha') }
     case 'status': case 'mcp': case 'skills': return { kind: command.name }
+    case 'goal': return planGoal(command.rest)
     case 'logout': return { kind: 'say', text: 'Walnut does not sign Codex out. To sign out, run `codex logout` in a terminal on this host.' }
     default: return { kind: 'say', text: viaAdapter(command.name) }
   }
@@ -125,9 +144,33 @@ export interface CommandContext {
   emit: (update: AcpUpdate) => void
 }
 
+/** `/goal` with no objective: the thread's goal, as thread/goal/get gives it. */
+export function goalText(resp: Record<string, unknown>): string {
+  const goal = isRecord(resp.goal) ? resp.goal : null
+  if (!goal || typeof goal.objective !== 'string') return 'No goal is set. Set one with `/goal <objective>`.'
+  const used = typeof goal.tokensUsed === 'number' ? `, ${goal.tokensUsed} tokens used` : ''
+  return `Goal (${String(goal.status)}${used}): ${goal.objective}`
+}
+
+async function goalControl(action: 'show' | 'pause' | 'clear', ctx: CommandContext): Promise<string> {
+  if (!ctx.threadId) return 'No Codex thread yet: send a message first.'
+  try {
+    if (action === 'show') return goalText(await ctx.rpc.request<Record<string, unknown>>('thread/goal/get', { threadId: ctx.threadId }, LIST_TIMEOUT_MS))
+    if (action === 'pause') {
+      await ctx.rpc.request('thread/goal/set', { threadId: ctx.threadId, status: 'paused' }, LIST_TIMEOUT_MS)
+      return 'Goal paused. `/goal resume` goes on with it.'
+    }
+    await ctx.rpc.request('thread/goal/clear', { threadId: ctx.threadId }, LIST_TIMEOUT_MS)
+    return 'Goal cleared.'
+  } catch (error) {
+    return `Codex could not ${action === 'show' ? 'read' : action} the goal: ${error instanceof Error ? error.message : String(error)}`
+  }
+}
+
 /** The words a command answered here (no Codex turn) puts in the chat; /plan also flips plan mode. */
 export async function commandAnswer(plan: Exclude<CommandPlan, { kind: 'turn' }>, ctx: CommandContext): Promise<string> {
   if (plan.kind === 'say') return plan.text
+  if (plan.kind === 'goal-control') return goalControl(plan.action, ctx)
   if (plan.kind === 'plan') {
     ctx.controls.set('collaboration_mode', ctx.controls.collaboration === 'plan' ? 'default' : 'plan')
     ctx.emit({ sessionUpdate: 'config_option_update', configOptions: ctx.controls.sessionState().configOptions })

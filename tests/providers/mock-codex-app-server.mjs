@@ -135,6 +135,39 @@ function usage(turnId) {
   } })
 }
 
+// A thread goal, as Codex 0.170 runs one: on thread/goal/set (active) Codex starts the goal's
+// turn itself and another as each ends, until the model marks it complete. Objective
+// "COUNT <n>" completes after n turns. MOCK_GOAL_NO_START: Codex starts none on set.
+/** @type {null | { objective: string, status: string, n: number, step: number, createdAt: number }} */
+let goal = null
+const goalView = () => goal && { threadId, objective: goal.objective, status: goal.status, tokenBudget: null, tokensUsed: goal.step * 100, timeUsedSeconds: 0, createdAt: goal.createdAt, updatedAt: goal.createdAt }
+function goalTurn() {
+  if (!goal || goal.status !== 'active' || turn) return
+  const t = { id: `turn_${randomUUID().slice(0, 8)}`, kind: 'GOAL', steers: [], end: () => {}, done: false }
+  turn = t
+  const step = ++goal.step
+  const close = (status) => {
+    if (t.done) return
+    t.done = true
+    if (status === 'completed') usage(t.id)
+    const items = status === 'completed' ? [{ type: 'agentMessage', id: `msg_${t.id}`, text: t.text ?? '' }] : []
+    notify('turn/completed', { threadId, turn: { id: t.id, items, status, error: null } })
+    if (turn === t) turn = null
+    setImmediate(goalTurn)
+  }
+  t.end = close
+  void (async () => {
+    await sleep(5)
+    notify('turn/started', { threadId, turn: { id: t.id, items: [], status: 'inProgress', error: null } })
+    await sleep(Number(process.env.MOCK_GOAL_TURN_MS || 10))
+    if (t.done) return
+    t.text = process.env.MOCK_GOAL_STUCK ? 'The goal is complete.' : `goal step ${step}. `
+    message(t.id, t.text)
+    if (!process.env.MOCK_GOAL_STUCK && step >= goal.n) { goal.status = 'complete'; notify('thread/goal/updated', { threadId, turnId: t.id, goal: goalView() }) }
+    close('completed')
+  })()
+}
+
 const FAILURES = {
   USAGE_LIMIT: { message: "You've hit your usage limit. Try again in 3 hours.", codexErrorInfo: 'usageLimitExceeded' },
   RATE_LIMIT: { message: 'Rate limit reached for requests', codexErrorInfo: 'rateLimitExceeded' },
@@ -150,6 +183,7 @@ async function runTurn(t, text) {
     if (status === 'completed') usage(t.id)
     notify('turn/completed', { threadId, turn: { id: t.id, items: [], status, error: error ?? null } })
     if (turn === t) turn = null
+    setImmediate(goalTurn)
     const saved = readThreads()[threadId]
     if (saved) saveThread(threadId, { ...saved, turns: [...(saved.turns || []), { id: t.id, items: [{ type: 'userMessage', id: `u_${t.id}`, content: [{ type: 'text', text }] }], status }] })
   }
@@ -352,6 +386,8 @@ async function handle(msg) {
     case 'thread/start': {
       threadId = randomUUID()
       saveThread(threadId, { cwd: params.cwd, turns: [] })
+      // MOCK_UNSEEN_GOAL: the thread has an active goal Codex goes on with by itself (as after a resume).
+      if (process.env.MOCK_UNSEEN_GOAL) setTimeout(() => { goal = { objective: 'COUNT 50', status: 'active', n: 50, step: 0, createdAt: 1795073268 }; goalTurn() }, 50)
       return send({ id, result: { thread: { id: threadId, turns: [] }, model: 'gpt-mock', modelProvider: 'mock', reasoningEffort: 'medium', cwd: params.cwd, approvalPolicy: 'on-request', sandbox: { type: 'workspaceWrite' } } })
     }
     case 'thread/resume': {
@@ -434,6 +470,24 @@ async function handle(msg) {
       send({ id, result: {} })
       if (t && t.id === params.turnId && t.kind === 'STOP_RACE_FINAL') setTimeout(() => t.end('completed'), 20)
       else if (t && t.id === params.turnId && t.kind !== 'DEAF' && t.kind !== 'HANG_DEAF') setTimeout(() => t.end('interrupted'), 20)
+      return
+    }
+    case 'thread/goal/set': {
+      if (params.objective !== undefined) {
+        const n = Number(/^COUNT (\d+)/.exec(String(params.objective))?.[1] ?? 1)
+        goal = { objective: String(params.objective), status: params.status ?? 'active', n, step: 0, createdAt: 1795073268 }
+      } else if (goal) goal.status = params.status
+      else return fail(id, 'no goal to update')
+      send({ id, result: { goal: goalView() } })
+      notify('thread/goal/updated', { threadId, turnId: null, goal: goalView() })
+      if (!process.env.MOCK_GOAL_NO_START) setImmediate(goalTurn)
+      return
+    }
+    case 'thread/goal/get': return send({ id, result: { goal: goalView() } })
+    case 'thread/goal/clear': {
+      goal = null
+      send({ id, result: { cleared: true } })
+      notify('thread/goal/cleared', { threadId })
       return
     }
     case 'thread/backgroundTerminals/list':

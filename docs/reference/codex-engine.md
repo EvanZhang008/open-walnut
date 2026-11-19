@@ -70,6 +70,16 @@ one in `engines.codex.env` or, for a session on this machine, the one in the ser
 environment), and the model menu, the start, an engine switch and a resumed session all follow
 that one answer.
 
+**The model menu lists only what the endpoint serves.** Codex lists the models it knows, and a
+newer Codex knows models your endpoint may not serve yet (2026-11-18: a Codex update listed
+`gpt-6.2-sol`, and the endpoint answered every turn 404). With a provider that has a `base_url`,
+Walnut reads the endpoint's own `GET <base_url>/models` (a short deadline, cached a minute) and
+keeps only the models on it, in the launcher's menu and in a running session's
+(src/providers/codex-endpoint-models.ts). An endpoint that does not answer the list, or names
+none of Codex's models, leaves the menu as Codex listed it. An engine switch that names a model
+the menu does not offer is refused at the switch with the models it does offer (409
+`model_not_offered`), instead of starting a session whose first message fails.
+
 With `model_prefix` set, a session always starts on a named, prefixed model, never on whatever
 plain id the host's Codex would pick by itself. The model is, in this order: the one the start
 names, `engines.codex.model`, the `model` in the host's `~/.codex/config.toml` (prefixed when it
@@ -205,8 +215,15 @@ codex-acp adapter's sessions write, so the web and phone apps read both alike. W
   session's stored pick (`config_option_update`, read by `AcpSession`). These
   messages are commands, as they were under the adapter: `/plan` (plan mode on or off),
   `/compact` (Codex's own compaction), `/review [instructions]`, `/review-branch <branch>`,
-  `/review-commit <sha>`, `/status`, `/mcp` and `/skills`. `/goal` and `/logout` answer how to
-  reach them; any other message, `$skill` names included, goes to Codex as written. The
+  `/review-commit <sha>`, `/status`, `/mcp`, `/skills` and `/goal`. `/goal <objective>` replaces
+  the thread's goal with that one and runs it: Codex starts one turn after another until the
+  model marks it complete, and here they are one turn, so the chat shows them and Stop pauses
+  the goal before it interrupts (Codex would start the next turn behind the stop). `/goal
+  resume` goes on, `/goal pause` and `/goal clear` answer at once, a bare `/goal` shows it. A
+  goal turn Codex starts with no turn open here (a resumed thread goes on with an active goal
+  by itself) is paused and interrupted rather than run unseen, and three goal turns in a row
+  with the same answer pause it (src/providers/codex-app-server/goal.ts). `/logout` answers how
+  to sign out; any other message, `$skill` names included, goes to Codex as written. The
   composer's `/` menu in a Codex session lists these commands (`CODEX_COMMANDS`), never the
   Claude Code skills of its folder. A warning Codex repeats on every turn (a model it has no
   metadata for) is shown once while the session's app-server runs; after a restart it can show
