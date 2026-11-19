@@ -164,14 +164,7 @@ test('a limited session: the banner, the Limited row, and its three buttons', as
   const firstLedId = await page.getByTestId('status-section-waiting-rows').locator('.status-section-card.is-limit-flash').first().getAttribute('data-task-id')
   expect(firstLedId, 'the count marks the rows it led to').toBeTruthy()
   const firstLimited = page.getByTestId('status-section-waiting-rows').locator(`.status-section-card[data-task-id="${firstLedId}"]`)
-  await expect.poll(() => firstLimited.evaluate((el) => {
-    let sc = el.parentElement
-    while (sc && !(/(auto|scroll)/.test(getComputedStyle(sc).overflowY) && sc.scrollHeight > sc.clientHeight)) sc = sc.parentElement
-    if (!sc) return 'no scroller'
-    const top = el.getBoundingClientRect().top - sc.getBoundingClientRect().top
-    const margin = parseFloat(getComputedStyle(el).scrollMarginTop) || 0
-    return top >= margin - 2 && top <= margin + 40 ? 'top' : `at ${Math.round(top)} (margin ${margin})`
-  }), { timeout: 4_000 }).toBe('top')
+  await expect.poll(() => firstLimited.evaluate(topOfList), { timeout: 4_000 }).toBe('top')
   await expect(flashed).toHaveCount(0, { timeout: 5_000 })
   await setStatusSectionOpen(page, 'waiting', false)
   await expect(page.getByTestId('status-section-waiting-limited')).toHaveText(/^· \d+ limited$/, { timeout: 30_000 })
@@ -242,6 +235,56 @@ test('a limited session: the banner, the Limited row, and its three buttons', as
   await expect(col.getByTestId('usage-limit-continued')).toContainText(/^You continued this session at .+\.$/, { timeout: 30_000 })
   await expect(col.locator('.session-error-banner:not(.usage-limit-note)')).toHaveCount(0)
   await shot(page, col, '4-continued', 0)
+})
+
+/** Where `el` sits under its scroll box's top (the box landOnRow's scrollParentOf picks), against its
+ *  scroll margin (the stuck headings). */
+function topOfList(el: Element): string {
+  let sc = el.parentElement
+  while (sc && !(/(auto|scroll|overlay)/.test(getComputedStyle(sc).overflowY) && sc.scrollHeight > sc.clientHeight + 1)) sc = sc.parentElement
+  if (!sc) return 'no scroller'
+  const top = el.getBoundingClientRect().top - sc.getBoundingClientRect().top
+  const margin = parseFloat(getComputedStyle(el).scrollMarginTop) || 0
+  return top >= margin - 2 && top <= margin + 40 ? 'top' : `at ${Math.round(top)} (margin ${margin}, scrollTop ${Math.round(sc.scrollTop)} of ${sc.scrollHeight - sc.clientHeight})`
+}
+
+// 2026-11-18, CI: on the busy shared server the count's jump stopped its rows 150 to 305px down the
+// list. A row landing above while a smooth scroll ran made the list's scroll anchor correct for it,
+// and that scrollTop write ended the scroll partway. Here the list grows above the rows, a row's
+// height at a time, all through the jump.
+test('the Limited count lands its rows at the top while the list grows above them', async ({ page, request }) => {
+  const { sid } = await limitedSession(request, 'Usage limit busy list', 3 * 3600)
+  await presetPanelDesign(page, 'status')
+  await seedColumns(page, [sid])
+  await page.goto('/')
+  await expect(columnFor(page, sid)).toHaveCount(1, { timeout: 30_000 })
+  await setStatusSectionOpen(page, 'waiting', false)
+  const summary = page.getByTestId('status-limit-summary')
+  await expect(summary).toBeVisible({ timeout: 30_000 })
+  // Room above the sections, so the jump has to scroll; then it keeps growing while the jump runs.
+  await page.evaluate(() => {
+    let box = document.querySelector('[data-testid="status-limit-summary"]')?.parentElement ?? null
+    while (box && !/(auto|scroll)/.test(getComputedStyle(box).overflowY)) box = box.parentElement
+    const first = box!.firstElementChild as HTMLElement
+    first.style.paddingTop = '900px'
+    box!.scrollTop = 0
+    // Started by the click itself (capture, before the app's handler), so the jump always runs
+    // into it, however busy the machine.
+    const w = window as unknown as { grown?: boolean }
+    window.addEventListener('click', () => {
+      let n = 0
+      const t = setInterval(() => { first.style.paddingTop = `${900 + ++n * 31}px`; if (n >= 16) { clearInterval(t); w.grown = true } }, 40)
+    }, { capture: true, once: true })
+  })
+  await summary.getByTestId('status-limit-summary-waiting').click()
+  const row = page.getByTestId('status-section-waiting-rows').locator('.status-section-card.is-limit-flash').first()
+  await expect(row).toHaveCount(1, { timeout: 5_000 })
+  const firstLedId = await row.getAttribute('data-task-id')
+  expect(firstLedId, 'the count marks the rows it led to').toBeTruthy()
+  const firstLimited = page.getByTestId('status-section-waiting-rows').locator(`.status-section-card[data-task-id="${firstLedId}"]`)
+  // Read once the list stopped growing: where the jump left the row, not a moment it passed the top.
+  await expect.poll(() => page.evaluate(() => (window as unknown as { grown?: boolean }).grown === true), { timeout: 5_000 }).toBe(true)
+  await expect.poll(() => firstLimited.evaluate(topOfList), { timeout: 4_000 }).toBe('top')
 })
 
 test('in a half-width column the banner stays compact; your own message ends the wait and the row follows, no reload', async ({ page, request }) => {

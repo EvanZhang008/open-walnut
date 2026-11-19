@@ -8,7 +8,13 @@
  * The hold is a fixed window, not "until the page looks still": on a busy
  * machine a section above can arrive seconds after an apparently quiet pane,
  * and a quiet-detector stopped before it (the row ended below the fold).
+ *
+ * While it holds, the box carries SCROLL_HELD_ATTR, so a box's own scroll
+ * anchor (useScrollAnchor) stands down: two keepers correcting one move would
+ * each add it, and the frame between drew the row a move too far.
  */
+import { SCROLL_HELD_ATTR, SCROLL_RELEASED_EVENT } from '@/hooks/scroll-anchor';
+
 
 /** Where the row's top lands, as a fraction of the container's height. */
 export const LAND_FRACTION = 0.2;
@@ -53,11 +59,14 @@ export function landOnRow(el: HTMLElement, opts: { focus?: boolean; settleMs?: n
   let lastTop = Number.NaN;
   let lastSc: HTMLElement | null = null;
   let lastH = 0;
+  // The box this landing holds (marked only when no other keeper held it already).
+  let held: HTMLElement | null = null;
   const place = () => {
     // Cheap frame: the row has not moved and its pane has not grown (a clamped scroll may fit now).
     const at = el.getBoundingClientRect().top;
     if (at === lastTop && lastSc && lastSc.scrollHeight === lastH) return;
     const sc = scrollParentOf(el);
+    if (!held && !sc.hasAttribute(SCROLL_HELD_ATTR)) { held = sc; sc.setAttribute(SCROLL_HELD_ATTR, ''); }
     const isDoc = sc === document.scrollingElement || sc === document.documentElement;
     const top = isDoc ? 0 : sc.getBoundingClientRect().top;
     const viewH = isDoc ? window.innerHeight : sc.clientHeight;
@@ -74,6 +83,11 @@ export function landOnRow(el: HTMLElement, opts: { focus?: boolean; settleMs?: n
     done = true;
     cancelAnimationFrame(raf);
     for (const t of stops) window.removeEventListener(t, stop, true);
+    if (held) {
+      held.removeAttribute(SCROLL_HELD_ATTR);
+      held.dispatchEvent(new Event(SCROLL_RELEASED_EVENT));
+      held = null;
+    }
   };
   for (const t of stops) window.addEventListener(t, stop, { capture: true, passive: true });
   const tick = () => {

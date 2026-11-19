@@ -26,6 +26,7 @@ import { useTaskUndo } from '@/undo/TaskUndoContext';
 import { useWatchReorder } from './WatchToggle';
 import { timeAgo } from '@/utils/time';
 import { scrollLog } from '@/utils/scroll-debug';
+import { landOnRow } from '@/utils/scroll-land';
 import { resolveTaskSessionId, phasePickerChoices, taskNeedsAction, taskUserState } from '@/utils/session-status';
 import { isPhoneLayout, phoneOpenKeepsList, phonePhaseAttrs, phoneRowFocusOpts, phoneTitleTapOpens, usePhoneHomeList } from './phone-row-behavior';
 import { PhoneNeedsYouStrip } from './PhoneNeedsYouStrip';
@@ -372,6 +373,8 @@ function anchorTop(el: Element): number {
 /** The top band of a folder chip that still reads "insert above the folder" rather
  *  than "into it" (the rest of the row, and anything below its text, is "into"). */
 const FOLDER_CHIP_ABOVE_BAND = 0.3;
+/** How long a Limited summary count marks the rows it led to, and holds the first at the top. */
+const LIMIT_FLASH_MS = 1800;
 
 /** A tier's slot rules (slotFits) by its SortableContext id, which is the tier id;
  *  null for any other list (Recent). */
@@ -4975,23 +4978,31 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // rows a moment (state, so a re-render keeps the mark).
   const [limitFlash, setLimitFlash] = useState<ReadonlySet<string>>(() => new Set());
   const limitFlashTimer = useRef<number | undefined>(undefined);
+  const limitLanding = useRef<(() => void) | null>(null);
   const showLimitedSection = useLeanCallback((key: StatusSectionKey, taskIds: string[]) => {
     openStatusSection(key);
     setLimitFlash(new Set(taskIds));
     window.clearTimeout(limitFlashTimer.current);
-    limitFlashTimer.current = window.setTimeout(() => setLimitFlash(new Set()), 1800);
+    limitFlashTimer.current = window.setTimeout(() => setLimitFlash(new Set()), LIMIT_FLASH_MS);
     requestAnimationFrame(() => requestAnimationFrame(() => {
+      // One landing at a time: two clicks within these frames would otherwise leave the first holding.
+      limitLanding.current?.();
+      limitLanding.current = null;
       // The topmost of the rows on screen, whatever order the ids came in: scrolling to a lower one
       // would push the rows above it out of view.
       const first = taskIds.map((id) => document.querySelector<HTMLElement>(`.status-section-card[data-task-id="${window.CSS.escape(id)}"]`))
         .filter((el): el is HTMLElement => !!el)
         .sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1))[0];
-      // To the top, just under the stuck headings (the card's scroll margin): the rows it led to
-      // come first in what the user sees, never mid-list under unrelated ones.
-      (first ?? document.querySelector(`[data-testid="status-section-${key}"]`))?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      if (!first) { document.querySelector(`[data-testid="status-section-${key}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
+      // To the top, just under the stuck headings (the card's scroll margin), held there while the
+      // rows are marked: the rows it led to come first in what the user sees, never mid-list under
+      // unrelated ones. Not a smooth scroll: on a busy Home a row landing above ends one partway (the
+      // list's scroll anchor corrects for it), and the jump stopped rows short (CI 2026-11-18). Any
+      // input of the user's ends the hold at once.
+      limitLanding.current = landOnRow(first, { focus: false, settleMs: LIMIT_FLASH_MS, topPx: parseFloat(getComputedStyle(first).scrollMarginTop) || 0 });
     }));
   }, [openStatusSection]);
-  useEffect(() => () => window.clearTimeout(limitFlashTimer.current), []);
+  useEffect(() => () => { window.clearTimeout(limitFlashTimer.current); limitLanding.current?.(); }, []);
   // Each task's usage-limit wait as last announced (one subscription for the whole list): a row
   // turns to Continuing the moment its continue goes in, before its stored status is derived again.
   const [limitLive, setLimitLive] = useState<ReadonlyMap<string, string>>(() => new Map());
