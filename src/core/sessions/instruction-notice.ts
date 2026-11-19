@@ -30,7 +30,7 @@ import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import { isAcpEngine, resolveEngine } from '../agents/engine-registry.js';
 import { WALNUT_PROMPT_MARK, defaultInstructions, type InstructionTask } from './session-context.js';
 import { currentUserProfile, refreshUserProfile } from './user-profile-context.js';
-import { dueChanges, hash, parseInstructions, renderDue, viewsAfter, type BlockView, type Due, type Parsed } from './instruction-diff.js';
+import { LEGACY_TAGS_NOTE, dueChanges, hash, parseInstructions, renderDue, viewsAfter, type BlockView, type Due, type Parsed } from './instruction-diff.js';
 import {
   NOTICE_OPENING, bumpNoticeTold, clearNoticeDelivering, leadsWithNotice, noticeDelivering, noticeInFlight,
   noticeToldGeneration,
@@ -90,7 +90,8 @@ function heldBeyondPrompt(record: NoticeRecord, current: Parsed, prompt: Parsed,
   // lines. The current version, when all of it was told; else, when it was told lines of some
   // version in between (neither current nor in the prompt), what it holds is unknown and the
   // block is told whole once, so no rule of that version is left standing unsaid.
-  const known = new Set([...current.all, ...prompt.all].map(hash));
+  // A told line was tagged then: the current blocks' lines count as known in that form too.
+  const known = new Set([...current.all, ...prompt.all, ...[...current.blocks.values()].flatMap((b) => b.tagged)].map(hash));
   const between = [...told].some((h) => !known.has(h));
   for (const block of current.blocks.values()) {
     if (block.tagged.length && block.tagged.every((l) => told.has(hash(l)))) {
@@ -124,7 +125,9 @@ function dueFor(record: NoticeRecord, task: InstructionTask, ignoreTold?: boolea
   // Walnut's own wording waits out the gap; a change to the user's profile or a role's
   // instructions (the user's or an agent's words for this session) goes at once, with the rest.
   const lastAt = heldNoted(record)?.toldAt;
-  if (!ignoreTold && lastAt && now - Date.parse(lastAt) < NOTICE_GAP_MS && !due.blocks.length && !due.gone.length) return null;
+  // What the old version tags were is told at once too: a session that copies them shows them to the user.
+  const urgent = due.blocks.length || due.gone.length || due.plain.some((c) => c.line === LEGACY_TAGS_NOTE);
+  if (!ignoreTold && lastAt && now - Date.parse(lastAt) < NOTICE_GAP_MS && !urgent) return null;
   return { due, views };
 }
 

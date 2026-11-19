@@ -19,58 +19,46 @@
  * hold and the next message carries it whole.
  */
 
-import { hash, opensAuthor } from './instruction-diff.js';
+import { CHANGE_LABELS, hash, opensAuthor } from './instruction-diff.js';
 
 /** How many compaction hooks carry the instructions: about 37 KB, past the longest seen (31 KB). */
 export const INSTRUCTION_HOOK_PARTS = 4;
 /** The most a hook may name (the op's and the route's bound). */
 export const INSTRUCTION_HOOK_PARTS_MAX = 8;
 
-/** A tagged line's text without its `[v…] ` version tag. */
-const untagged = (line: string) => line.replace(/^\[v[0-9a-z]+\] /, '');
-/** A line that scopes the lines below it: a heading, or a label such as "Removed, no longer in force:". */
-const isHeading = (line: string) => untagged(line).startsWith('#');
-const isLabel = (line: string) => !untagged(line).startsWith('- ') && untagged(line).trimEnd().endsWith(':');
-
 /**
  * The lines that scope what follows `before` (the text already given), repeated at the top of the next
  * part so none of its lines reads out of scope (review, 2026-11-18: a "Removed, no longer in force:"
  * list cut in two left its second half reading as rules in force). These are the last top-level
- * heading, and, when the cut falls inside an item (renderDue puts blank lines only between items), the
- * item's first line with the last sub-heading and label inside it.
+ * heading, and, when the cut falls inside an item (renderDue keeps items apart by one blank line and
+ * puts none inside one), the item's first line with the last label, author part and sub-heading inside it.
  */
 function scopeAt(before: string, next: string): string[] {
   const lines = before.replace(/\n$/, '').split('\n');
   let heading: string | undefined;
   let item: string[] = [];
-  let prev = '';
   for (const line of lines) {
-    if (!line.trim()) { item = []; prev = ''; continue; }
-    if (line.startsWith('#')) { heading = line; item = []; prev = ''; continue; }
-    // renderDue puts no blank line after a plain rule, so a block or a gone item right after one starts
-    // at its head line (review, 2026-11-18): inside an item the only untagged "- " lines are the last
-    // list's (Removed), so an untagged head after one is always a new item.
-    if (prev.startsWith('- ') && !line.startsWith('- ') && line === untagged(line)) item = [];
+    if (!line.trim()) { item = []; continue; }
+    // A heading opens an item of its own; one inside an item is a sub-heading of a block.
+    if (!item.length && line.startsWith('#')) { heading = line; continue; }
     item.push(line);
-    prev = line;
   }
   const out: string[] = [];
-  if (heading && !next.startsWith('#')) out.push(heading, '');
+  if (heading && (item.length || !next.startsWith('#'))) out.push(heading, '');
   // A run of plain rules ("- …" lines) has no head of its own: its heading is its scope.
   // A head cut mid-line (one line longer than the room) is never repeated as a head.
   const cutMidLine = item.length === 1 && !/\n$/.test(before);
-  if (item.length && !untagged(item[0]).startsWith('- ') && !cutMidLine) {
+  if (item.length && !item[0].startsWith('- ') && !cutMidLine) {
     const [head, ...inside] = item;
-    // A list label ("New:", "Removed, no longer in force:"), the author part inside it ("[v…] Added by X:")
+    // A list label ("New:", "Removed, no longer in force:"), the author part inside it ("Added by X:")
     // and the sub-heading inside that, as renderDue and withParts nest them.
     let label: string | undefined;
     let author: string | undefined;
     let sub: string | undefined;
     for (const line of inside) {
-      const tagged = line !== untagged(line);
-      if (isHeading(line)) sub = line;
-      else if (tagged && opensAuthor(untagged(line))) { author = line; sub = undefined; }
-      else if (!tagged && isLabel(line)) { label = line; author = undefined; sub = undefined; }
+      if ((CHANGE_LABELS as readonly string[]).includes(line)) { label = line; author = undefined; sub = undefined; }
+      else if (opensAuthor(line)) { author = line; sub = undefined; }
+      else if (line.startsWith('#')) sub = line;
     }
     out.push(`(Continued from the part before) ${head}`, ...[label, author, sub].filter((l): l is string => !!l));
   }

@@ -24,6 +24,8 @@ import { buildLaneMemoryContext, buildLaneProfile } from '../../../src/core/sess
 import { getConfig } from '../../../src/core/config-manager.js'
 import { enqueueMessage, markProcessing, removeProcessed, resetCache } from '../../../src/core/session-message-queue.js'
 import { USER_CHAR_BUDGET } from '../../../src/core/bounded-memory.js'
+import { parseInstructions } from '../../../src/core/sessions/instruction-diff.js'
+import { LEGACY_TAG, versionedBlocks } from '../../helpers/versioned-block.js'
 
 // The file as the memory store writes it: frontmatter, the title, then "## " sections.
 const PREAMBLE = '---\nname: User Profile\ndescription: >\n  Who the user is.\n---\n\n# USER.md \u2014 User Profile\n'
@@ -103,16 +105,24 @@ describe('the words a session reads', () => {
     expect(userProfileText(`---\nWritten between rules.\n---\n\n${IDENTITY}\n`)).toContain('Written between rules.')
   })
 
-  it('carry a version on every line, new with every save, under their own heading', () => {
+  it('name their version once, new with every save, then every line up to a blank line, under their own heading', () => {
     const at = '2026-10-28T08:00:00.000Z'
     const block = userProfileLine({ text: `${IDENTITY}\n\n${RULES}`, savedAt: at, exists: true })
-    const version = /\((v[0-9a-f]{8}), saved 2026-10-28 08:00 UTC\)/.exec(block)![1]
+    const version = /\((v[0-9a-f]{8}), saved 2026-10-28 08:00 UTC\)/.exec(block)![1]!
+    expect(block.endsWith('\n\n')).toBe(true)
     const [heading, , intro, ...rest] = block.trim().split('\n')
     expect(heading).toBe('## Your user')
     expect(intro).toContain('They replace every earlier version')
-    expect(rest.every((l) => l.startsWith(`[${version}] `))).toBe(true)
-    // A section heading is tagged too, so it never reads as a prompt heading.
-    expect(rest).toContain(`[${version}] ## Standing rules`)
+    expect(intro.endsWith(`This version (${version}) is the lines below, up to the next blank line:`)).toBe(true)
+    // Every line of the file in order, untagged (2026-11-19: models copied the tag into their replies),
+    // and no blank line inside, since one ends the block.
+    const words = `${IDENTITY}\n${RULES}`.split('\n').filter((l) => l.trim())
+    expect(rest).toEqual(words)
+    expect(rest.filter((l) => LEGACY_TAG.test(l))).toEqual([])
+    // A section heading is one of the block's lines, never a prompt heading: what follows stays under "## Your user".
+    const parsed = parseInstructions(`${block}A line after the profile.\n`)
+    expect(parsed.blocks.get('user-profile')!.words).toEqual(words)
+    expect(parsed.plain).toEqual([{ line: 'A line after the profile.', heading: '## Your user' }])
     // The same words saved again are a new version: going back to an earlier text is a change.
     expect(userProfileLine({ text: `${IDENTITY}\n\n${RULES}`, savedAt: '2026-10-28T09:00:00.000Z', exists: true })).not.toContain(version)
     // A file with no rules says so, versioned; no file says nothing.
@@ -130,7 +140,7 @@ describe('the words a session reads', () => {
     await writeUser(doc(body))
     const prompt = (await buildSessionContext(task.id)).systemPrompt
     const block = prompt.slice(prompt.indexOf('## Your user'))
-    // Tags and the intro come on top of the words, the words themselves stay within the budget.
+    // The intro comes on top of the words, the words themselves stay within the budget.
     expect(block.length).toBeLessThan(USER_CHAR_BUDGET + 120 * 16 + 600)
     expect(block).toContain(line(0))
   })
@@ -155,7 +165,8 @@ describe('every task session', () => {
     for (const r of roles) {
       const { task } = await addTask(r)
       const prompt = (await buildSessionContext(task.id)).systemPrompt
-      expect(prompt, r.title).toMatch(/\[v[0-9a-f]{8}\] - Private repo keys are not a leak\./)
+      // The whole prompt read as the diff reads it: the rule is a line of the profile's block.
+      expect(parseInstructions(prompt).blocks.get('user-profile')?.words, r.title).toContain('- Private repo keys are not a leak.')
       expect(prompt, r.title).toContain('from memory/USER.md')
       expect(defaultInstructions(task), r.title).toContain('Private repo keys are not a leak.')
     }
@@ -181,8 +192,8 @@ describe('every task session', () => {
     await writeUser(doc(IDENTITY, RULES, KEPT))
     const added = (await instructionNoticeForSession(sid))!.text
     expect(added).toContain('Walnut changed your default instructions')
-    expect(added).toMatch(/\[v[0-9a-f]{8}\] - Private repo keys are not a leak\./)
-    expect(added).toMatch(/Only what changed since the version you hold \(v[0-9a-f]{8}\) is below/)
+    expect(added).toMatch(/\nNew:\n(?:[^\n]+\n)*- Private repo keys are not a leak\./)
+    expect(added).toMatch(/Only what changed since the version you hold \(v[0-9a-f]{8}\) is below, up to the next blank line, as version v[0-9a-f]{8};/)
     // 2026-10-30: a one-line save re-sent the whole 4.9 KB profile. A kept line is not told again.
     expect(added).not.toContain('Avery')
     expect(added).not.toContain('They replace every earlier version')
@@ -207,9 +218,8 @@ describe('every task session', () => {
     await writeUser(doc(IDENTITY, RULES))
     const whole = (await instructionNoticeForSession(sid))!.text
     expect(whole).toContain('They replace every earlier version')
-    for (const line of ['Avery, a software engineer.', '- Private repo keys are not a leak.', '- Reply in short sentences.']) {
-      expect(whole).toMatch(new RegExp(`\\[v[0-9a-f]{8}\\] ${line.replace(/[.]/g, '\\.')}`))
-    }
+    const [block] = versionedBlocks(whole)
+    expect(block?.lines).toEqual(['## Identity', 'Avery, a software engineer.', '## Standing rules', '- Private repo keys are not a leak.', '- Reply in short sentences.'])
   })
 
   it('hears an undo and an emptied file too, each told once', async () => {

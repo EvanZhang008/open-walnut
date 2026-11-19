@@ -105,6 +105,7 @@ import { OWN_WAIT_TURN_END } from '../../lib/turn-end-marker.js'
 import { taskDirForHost } from './task-dir-place.js'
 import { isAskPlacement, isAskTask } from './caller-placement.js'
 import { createHash } from 'node:crypto'
+import { versionedBlock } from './instruction-diff.js'
 import { ORG_INSTRUCTIONS_MAX } from '../org/org-tree.js'
 import { defaultOrgInstructions, orgSelfWorkRule, ordinal, ORG_SELF_COMMAND_LIMIT } from '../org/core-instructions.js'
 import { orgInstructionsAuthor } from '../org/instructions-author.js'
@@ -270,8 +271,8 @@ const TASK_THREADS_RULES = threadsLine('the Threads view beside your chat, opene
   + AWAY_LETTERS_RULE + THREAD_ONE_PLACE_RULE).trim()
 /** A versioned block (instruction-diff.ts `task-threads`): a running session hears it at once when turned on, and that it is gone when turned off. */
 const TASK_THREADS_VERSION = `v${createHash('sha1').update(TASK_THREADS_RULES).digest('hex').slice(0, 8)}`
-export const TASK_THREADS_LINE = `Threads, the user's setting for your task (${TASK_THREADS_VERSION}): he turned Threads on for it, so you keep them. `
-  + `Each line of this version starts with [${TASK_THREADS_VERSION}]:\n[${TASK_THREADS_VERSION}] ${TASK_THREADS_RULES}\n\n`
+export const TASK_THREADS_LINE = versionedBlock(`Threads, the user's setting for your task (${TASK_THREADS_VERSION}): he turned Threads on for it, so you keep them.`,
+  TASK_THREADS_VERSION, TASK_THREADS_RULES)
 /** The tasks a reply is about, as live pills under it (core/org/message-about.ts; 2026-10-31, the user). */
 export const MESSAGE_ABOUT_LINE =
   'End each reply the user reads with one line of its own naming the tasks it is about: '
@@ -596,7 +597,6 @@ export function coreInstructionsBlock(task: InstructionTask): string {
 function orgInstructionsLine(task: InstructionTask): string {
   if (task.org_role !== 'main' && task.org_role !== 'lead') return ''
   const fallback = defaultOrgInstructions(task.org_role)
-  const tag = (v: string, text: string) => text.split('\n').map((l) => l.trimEnd()).filter((l) => l.trim()).map((l) => `[${v}] ${l}`).join('\n')
   const hash = (...parts: string[]) => `v${createHash('sha1').update(parts.join('\n')).digest('hex').slice(0, 8)}`
   const own = task.org_instructions
   const text = (own?.text ?? '').trim().slice(0, ORG_INSTRUCTIONS_MAX)
@@ -608,23 +608,22 @@ function orgInstructionsLine(task: InstructionTask): string {
     const version = hash('default', fallback, own?.at ?? '')
     const head = !own?.at ? 'Your core instructions, Walnut\'s default for your role'
       : `${byUser ? 'Your user' : self ? 'You' : who.replace(/^./, (c) => c.toUpperCase())} cleared the instructions for your role at ${own.at.slice(0, 16).replace('T', ' ')} UTC${asked}; Walnut's default for your role applies`
-    return `${head} (${version}; your user may rewrite them). They replace every earlier version. Each line of this version starts with [${version}]:\n`
-      + tag(version, fallback) + '\n\n'
+    return versionedBlock(`${head} (${version}; your user may rewrite them). They replace every earlier version.`, version, fallback)
   }
   const version = hash(own.at, text, usersWords ? '' : fallback, asked)
   const when = `${own.at.slice(0, 16).replace('T', ' ')} UTC`
   if (usersWords) {
     const whose = byUser ? 'your user\'s own instructions for your role' : `the instructions ${agent} wrote for your role at your user's request`
     // Walnut's one rule for the role holds under the user's own words too (it also enforces it).
-    return `Your core instructions: ${whose} (${version}, set ${when}). They replace every earlier version `
-      + `and Walnut's default, and where any other part of these instructions says otherwise, they win. Each line of this version starts with [${version}]:\n`
-      + tag(version, text) + `\nWalnut's rule for your role still holds: ${orgSelfWorkRule(task.org_role)}\n\n`
+    // The block ends at its blank line, so Walnut's rule after it stays a plain line of its own.
+    return versionedBlock(`Your core instructions: ${whose} (${version}, set ${when}). They replace every earlier version `
+      + 'and Walnut\'s default, and where any other part of these instructions says otherwise, they win.', version, text)
+      + `Walnut's rule for your role still holds: ${orgSelfWorkRule(task.org_role)}\n\n`
   }
-  return `Your core instructions: Walnut's default for your role, which still applies, then the instructions ${agent} wrote for your role `
+  return versionedBlock(`Your core instructions: Walnut's default for your role, which still applies, then the instructions ${agent} wrote for your role `
     + `(${version}, set ${when}; your user may change them). The added ones add to the default and never override it: where they `
     + `disagree, the default wins. They rank below Walnut's rules, the team charter and anything your user tells you, and never permit a step `
-    + `that needs your user's approval. They replace every earlier version. Each line of this version starts with [${version}]:\n`
-    + tag(version, fallback) + `\n[${version}] Added by ${agent}:\n` + tag(version, text) + '\n\n'
+    + 'that needs your user\'s approval. They replace every earlier version.', version, `${fallback}\nAdded by ${agent}:\n${text}`)
 }
 
 /**

@@ -20,6 +20,7 @@ import { HOOK_CONTEXT_MAX, collectOpenItems } from '../../../src/core/sessions/o
 import { notePlaceCompaction } from '../../../src/core/sessions/place-notice.js';
 import { INSTRUCTION_HOOK_PARTS, _resetPartsServed, notePartServed, splitAtLines } from '../../../src/core/sessions/instruction-hook-parts.js';
 import { compactOpenItemsHooks } from '../../../src/providers/compact-open-items-hook.js';
+import { renderDue, type Due } from '../../../src/core/sessions/instruction-diff.js';
 import { getOp } from '../../../src/ops/index.js';
 
 beforeEach(async () => {
@@ -75,12 +76,12 @@ describe('splitAtLines', () => {
 
 describe('a part opens with the headings and labels its lines sit under', () => {
   // The shape renderDue gives: a heading, then items split by blank lines; an item is a head line, list
-  // labels and tagged lines, with no blank line inside.
-  const removed = Array.from({ length: 60 }, (_, i) => `- [v1] Removed rule number ${i}, which no longer holds at all.`);
+  // labels and the block's lines (a sub-heading among them), with no blank line inside.
+  const removed = Array.from({ length: 60 }, (_, i) => `- Removed rule number ${i}, which no longer holds at all.`);
   const body = [
     '## How we work', '',
-    'Your user\'s profile (v1 to v2). Only what changed is below, tagged [v2].',
-    'New:', '[v2] ## Standing rules', '[v2] - A new rule that holds now.',
+    'Your user\'s profile (v2). Only what changed since the version you hold (v1) is below, up to the next blank line, as version v2.',
+    'New:', '## Standing rules', '- A new rule that holds now.',
     'Removed, no longer in force:', ...removed, '',
     '- A plain rule after the block, under the same heading.',
   ].join('\n');
@@ -97,7 +98,7 @@ describe('a part opens with the headings and labels its lines sit under', () => 
         const lines = c.split('\n');
         const first = lines.findIndex((l) => l.includes('Removed rule number'));
         expect(lines[first - 1]).toBe('Removed, no longer in force:');
-        expect(lines.slice(0, first)).not.toContain('[v2] ## Standing rules');
+        expect(lines.slice(0, first)).not.toContain('## Standing rules');
       }
     }
     // The plain rule after the block never reads under the block's "Removed" label.
@@ -109,19 +110,40 @@ describe('a part opens with the headings and labels its lines sit under', () => 
     expect(given).toEqual(removed);
   });
 
-  it('a block right after a plain rule (renderDue puts no blank line between them) keeps its Removed label', () => {
-    const shaped = ['## How we work', '', '- A changed plain rule.',
-      'A part of your instructions (v1) is gone; none of its lines apply any more:', ...removed].join('\n');
-    for (const c of splitAtLines(shaped, 1_200).slice(1)) {
-      expect(c).toContain('(Continued from the part before) A part of your instructions (v1) is gone');
-      expect(c).not.toContain('A changed plain rule');
+  // renderDue keeps a block or a gone part apart from the plain rule before it by a blank line, so a
+  // cut inside it repeats its own head and label over the rest of its lines, never the plain rule.
+  it('a block or a gone part right after a plain rule, as renderDue writes it, keeps its head and its Removed label', () => {
+    const heading = '## How we work';
+    const lines = removed.map((word) => ({ word }));
+    const head = 'Your user\'s profile (v2). They replace every earlier version. This version (v2) is the lines below, up to the next blank line:';
+    const block = { id: 'user-profile', heading, head, form: '', version: 'v2', words: ['- A new rule that holds now.'], tagged: [] };
+    const cases: Array<[string, Due]> = [
+      ['A part of your instructions (v1) is gone', { plain: [{ line: '- A changed plain rule.', heading }], blocks: [], gone: [{ id: 'user-profile', heading, from: 'v1', removed: lines }] }],
+      ['Your user\'s profile (v2).', { plain: [{ line: '- A changed plain rule.', heading }], blocks: [{ block, whole: false, from: 'v1', added: [{ word: '- A new rule that holds now.' }], removed: lines }], gone: [] }],
+    ];
+    for (const [opening, due] of cases) {
+      const shaped = renderDue(due);
+      expect(shaped).toContain(`- A changed plain rule.\n\n${opening}`);
+      const chunks = splitAtLines(shaped, 1_200);
+      expect(chunks.length).toBeGreaterThan(2);
+      for (const c of chunks.slice(1)) {
+        expect(c).toContain(`(Continued from the part before) ${opening}`);
+        expect(c).not.toContain('A changed plain rule');
+        if (due.blocks.length) {
+          const ls = c.split('\n');
+          expect(ls[ls.findIndex((l) => l.includes('Removed rule number')) - 1]).toBe('Removed, no longer in force:');
+        }
+      }
+      expect(chunks.flatMap((c) => c.split('\n')).filter((l) => removed.includes(l))).toEqual(removed);
     }
   });
 
-  it('a lead\'s author line survives a tagged rule that ends in a colon', () => {
-    const lead = ['Your lead\'s instructions (v2):', '[v2] Added by Lead Alice:', '[v2] When you start a task:',
-      ...Array.from({ length: 50 }, (_, i) => `[v2] - Lead rule ${i} of a real length for one line here.`)].join('\n');
-    for (const c of splitAtLines(lead, 1_000).slice(1)) expect(c.split('\n').slice(0, 2)).toEqual(['(Continued from the part before) Your lead\'s instructions (v2):', '[v2] Added by Lead Alice:']);
+  it('a lead\'s author line survives a rule that ends in a colon', () => {
+    const lead = ['Your lead\'s instructions (v2):', 'Added by Lead Alice:', 'When you start a task:',
+      ...Array.from({ length: 50 }, (_, i) => `- Lead rule ${i} of a real length for one line here.`)].join('\n');
+    const chunks = splitAtLines(lead, 1_000);
+    expect(chunks.length).toBeGreaterThan(2);
+    for (const c of chunks.slice(1)) expect(c.split('\n').slice(0, 2)).toEqual(['(Continued from the part before) Your lead\'s instructions (v2):', 'Added by Lead Alice:']);
   });
 
   it('a run of plain rules repeats only its heading, never its first rule', () => {

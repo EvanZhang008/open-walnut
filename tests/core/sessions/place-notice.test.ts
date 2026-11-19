@@ -387,7 +387,7 @@ describe('sendMessageToSession carries the note (real store and queue)', () => {
       expect(text).not.toContain('Walnut (reply-language)')
       expect(text).toContain('outcome="task-routing-policy"')
       expect(text).toContain("Reply language, the user's setting (v")
-      expect(text).toMatch(/\[v[0-9a-f]{8}\] Answer in French; code stays English\./)
+      expect(text).toMatch(/This version \(v[0-9a-f]{8}\) is the lines below, up to the next blank line:\nAnswer in French; code stays English\./)
       expect((await collectOpenItems(md.sid)).text).toBe('')
     })
   })

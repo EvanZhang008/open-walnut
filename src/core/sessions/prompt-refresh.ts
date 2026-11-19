@@ -24,7 +24,7 @@
 import type { SessionRecord, Task } from '../types.js';
 import { isAcpEngine, resolveEngine } from '../agents/engine-registry.js';
 import { WALNUT_PROMPT_MARK, defaultInstructions } from './session-context.js';
-import { dueChanges, parseInstructions, renderDue } from './instruction-diff.js';
+import { LEGACY_TAGS_AFTER_REFRESH, dueChanges, parseInstructions, renderDue } from './instruction-diff.js';
 import { currentUserProfile } from './user-profile-context.js';
 import { isFollower } from '../server-role.js';
 import { isOrgNode } from '../org/org-enabled.js';
@@ -157,7 +157,10 @@ export async function freshResumePrompt(
   const { buildSessionContext } = await import('./session-context.js');
   const ctx = await buildSessionContext(record.taskId, record.cwd ?? undefined, record.host ?? undefined);
   if (!ctx.systemPrompt) return null;
-  const fresh = callerPrompt !== null ? `${callerPrompt}${TASK_CONTEXT_JOIN}${ctx.systemPrompt}` : ctx.systemPrompt;
+  // A session that held the old tagged form keeps being told, in its new prompt, what the tags were.
+  const walnut = parseInstructions(stored).legacyTags || stored.includes(LEGACY_TAGS_AFTER_REFRESH)
+    ? `${ctx.systemPrompt.trimEnd()}\n\n${LEGACY_TAGS_AFTER_REFRESH}` : ctx.systemPrompt;
+  const fresh = callerPrompt !== null ? `${callerPrompt}${TASK_CONTEXT_JOIN}${walnut}` : walnut;
   return Buffer.byteLength(fresh, 'utf8') <= PROMPT_MAX_BYTES && fresh !== stored ? fresh : null;
 }
 

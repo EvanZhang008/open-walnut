@@ -16,12 +16,14 @@ vi.mock('../../src/core/server-role.js', async (importOriginal) => ({
 import { USER_FILE, WALNUT_HOME } from '../../src/constants.js'
 import { defaultInstructions, type InstructionTask } from '../../src/core/sessions/session-context.js'
 import { refreshUserProfile } from '../../src/core/sessions/user-profile-context.js'
-import { dueChanges, hash, parseInstructions, renderDue, viewsAfter } from '../../src/core/sessions/instruction-diff.js'
+import { BLOCK_KIND_IDS, LEGACY_TAGS_NOTE, dueChanges, hash, parseInstructions, renderDue, versionedBlock, viewsAfter } from '../../src/core/sessions/instruction-diff.js'
 import { _resetReplyLanguageForTesting } from '../../src/core/sessions/reply-language-context.js'
 import { WALNUT_PROMPT_MARK } from '../../src/core/sessions/session-context.js'
 import { instructionNoticeFor, toldOnto } from '../../src/core/sessions/instruction-notice.js'
+import { LEGACY_TAG, versionedBlocks, legacyForm } from '../helpers/versioned-block.js'
 
-const TAG = /^\[v[0-9a-f]{8}\] /
+/** Walnut tags no line with its version any more (2026-11-19: models began their replies with the tag). */
+const noTags = (text: string) => expect(text.split('\n').filter((l) => LEGACY_TAG.test(l))).toEqual([])
 const USER = (rules: string[]) => `---\nname: User Profile\n---\n\n# USER.md\n\n## Standing rules\n\n${rules.map((r) => `- ${r}`).join('\n')}\n`
 const RULES = Array.from({ length: 30 }, (_, i) => `Rule number ${i + 1}: keep this standing preference in every task.`)
 /** Enough lines that a one-line change is shorter told as a change than whole. */
@@ -51,19 +53,24 @@ beforeEach(async () => {
 })
 
 describe('every versioned line belongs to a block the diff reads', () => {
-  // The guard for the class: a new versioned block whose head the parser does not know would
-  // make each of its tagged lines a plain line again, and every save would re-send it whole.
-  it.each(ROLES)('%s: no tagged line is read as a plain line', (_label, task) => {
-    const parsed = parseInstructions(defaultInstructions(task))
-    expect(parsed.plain.filter((c) => TAG.test(c.line))).toEqual([])
-    expect(parsed.blocks.size).toBeGreaterThan(0)
+  // The guard for the class: a versioned block the parser does not read whole would make its lines
+  // plain lines again, and every save would re-send it whole. Every block the prompt carries is read
+  // as one, each of its lines up to its blank line, and none of them, nor a head, as a plain line.
+  it.each(ROLES)('%s: every line of every versioned block is read as that block\'s, never as a plain line', (_label, task) => {
+    const text = defaultInstructions(task)
+    const parsed = parseInstructions(text)
+    const written = versionedBlocks(text)
+    expect(written.length).toBeGreaterThan(0)
+    expect([...parsed.blocks.values()].map((b) => [b.version, b.words])).toEqual(written.map((b) => [b.version, b.lines]))
+    expect(parsed.plain.filter((c) => LEGACY_TAG.test(c.line) || /This version \(v[0-9a-f]{8}\)/.test(c.line))).toEqual([])
+    noTags(text)
   })
 
   // A block named only by where it sits changes name when a heading is added above it, and a
   // session would then be told it whole and told it is gone in one notice.
   it.each(ROLES)('%s: every block has a name of its own', (_label, task) => {
     const ids = [...parseInstructions(defaultInstructions(task)).blocks.keys()]
-    expect(ids.filter((id) => !['user-profile', 'core-instructions', 'reply-language'].includes(id))).toEqual([])
+    expect(ids.filter((id) => !BLOCK_KIND_IDS.includes(id))).toEqual([])
   })
 
   it('a block keeps its name under a heading added above it', () => {
@@ -132,7 +139,8 @@ describe('a change keeps the context it needs', () => {
     expect(due.blocks[0].added).toEqual([{ word: '- use npm', section: '## Home' }])
     expect(due.blocks[0].removed).toEqual([{ word: '- use pnpm', section: '## Home' }])
     const text = renderDue(due)
-    expect(text).toMatch(/New:\n\[v[0-9a-f]{8}\] ## Home\n\[v[0-9a-f]{8}\] - use npm/)
+    expect(text).toMatch(/New:\n## Home\n- use npm\n/)
+    noTags(text)
     expect(text).toContain('- use pnpm (under "## Home")')
     expect(text).not.toContain('Water the plants')
   })
@@ -143,7 +151,9 @@ describe('a change keeps the context it needs', () => {
     const due = dueChanges(parseInstructions(defaultInstructions(lead('Check CI first.\nPost the Board daily.'))), parseInstructions(before), new Set(), {})!
     const block = due.blocks.find((b) => b.block.id === 'core-instructions')!
     expect(block.whole).toBe(false)
-    expect(renderDue(due)).toMatch(/\[v[0-9a-f]{8}\] Added by [^\n]+:\n\[v[0-9a-f]{8}\] Post the Board daily\./)
+    const text = renderDue(due)
+    expect(text).toMatch(/\nAdded by [^\n]+:\nPost the Board daily\.(?:\n\n|$)/)
+    noTags(text)
   })
 
   it('a change of form (Walnut\'s default became the user\'s own words) comes whole, with its head', () => {
@@ -185,7 +195,7 @@ describe('review cases (2026-10-30)', () => {
     const base = `Check CI first.\n${FILLER.join('\n')}\n# Rules\nOne.`
     const before = defaultInstructions(agentLead(base))
     const text = renderDue(dueChanges(parseInstructions(defaultInstructions(agentLead(`${base}\nTwo.`))), parseInstructions(before), new Set(), {})!)
-    expect(text).toMatch(/New:\n\[v[0-9a-f]{8}\] Added by an agent:\n\[v[0-9a-f]{8}\] # Rules\n\[v[0-9a-f]{8}\] Two\./)
+    expect(text).toMatch(/New:\nAdded by an agent:\n# Rules\nTwo\.(?:\n\n|$)/)
   })
 
   it('a long rule reworded at its end is told once, as its new wording, never also as removed (2026-11-11)', async () => {
@@ -195,7 +205,7 @@ describe('review cases (2026-10-30)', () => {
     const before = defaultInstructions(task)
     await writeUser(USER([long.replace('Friday', 'Monday'), 'Another rule.', ...FILLER]))
     const text = renderDue(dueChanges(parseInstructions(defaultInstructions(task)), parseInstructions(before), new Set(), {})!)
-    expect(text).toMatch(/Reworded:\n\[v[0-9a-f]{8}\] ## Standing rules\n\[v[0-9a-f]{8}\] - Always keep[^\n]+Monday\./)
+    expect(text).toMatch(/Reworded:\n## Standing rules\n- Always keep[^\n]+Monday\./)
     expect(text).toContain('A reworded line takes the place of your line in the same part')
     expect(text).not.toContain('Removed, no longer in force')
     expect(text).not.toContain('Friday')
@@ -236,7 +246,7 @@ describe('review cases (2026-10-30)', () => {
     const told = [...v1.blocks.get('user-profile')!.tagged].map(hash)
     const record = { appliedAppendSystemPrompt: v0, taskRoutingNoted: { version: 'x', promptHash: hash(v0), lines: told } }
     const notice = instructionNoticeFor(record, task)!
-    expect(notice).toMatch(/Each line of this version starts with \[v[0-9a-f]{8}\]:/)
+    expect(notice).toMatch(/This version \(v[0-9a-f]{8}\) is the lines below, up to the next blank line:/)
     expect(notice).toContain('Rule thirty, reworded.')
     expect(notice).toContain(RULES[0])
   })
@@ -509,5 +519,52 @@ describe('the reply language is a block: a change, a restore and a clear all rea
       Object.assign(role, { companion: false, follower: false })
       expect(instructionNoticeFor({ appliedAppendSystemPrompt: before }, task)).toContain('none of its lines apply any more')
     } finally { Object.assign(role, { companion: false, follower: false }) }
+  })
+})
+
+describe('a prompt from before 2026-11-19, every block line tagged with its version, still reads the same', () => {
+  // A session spawned before then still holds its prompt in that form (prompt-refresh.ts replays it).
+  // Its blocks are the same blocks: nothing of them is told again, only once what the tags are.
+  const same = (b: { version: string; form: string; words: string[]; tagged: string[] }) => [b.version, b.form, b.words, b.tagged]
+
+  it('a block written by hand in the old form is the same block as in the new one', () => {
+    const v = 'v0a1b2c3d'
+    const head = `Reply language, the user's setting (${v}): it covers every line the user reads.`
+    const old = parseInstructions(`## Rules\n\n${head} Each line of this version starts with [${v}]:\n[${v}] Answer in French.\n[${v}] Code stays English.\n- A plain rule after it.\n`)
+    const now = parseInstructions(`## Rules\n\n${versionedBlock(head, v, 'Answer in French.\n\nCode stays English.')}- A plain rule after it.\n`)
+    expect(same(old.blocks.get('reply-language')!)).toEqual(same(now.blocks.get('reply-language')!))
+    expect(now.blocks.get('reply-language')!.words).toEqual(['Answer in French.', 'Code stays English.'])
+    expect(old.plain).toEqual([{ line: '- A plain rule after it.', heading: '## Rules' }])
+    expect(now.plain).toEqual(old.plain)
+    expect([old.legacyTags, now.legacyTags]).toEqual([true, undefined])
+    const due = dueChanges(now, old, new Set(), {})!
+    expect(due).toEqual({ plain: [{ line: LEGACY_TAGS_NOTE }], blocks: [], gone: [] })
+    expect(dueChanges(now, old, new Set([hash(LEGACY_TAGS_NOTE)]), {})).toBeNull()
+  })
+
+  it.each(ROLES)('%s: no block is told again, only the one line on what the tags are, and that once', (_label, task) => {
+    const text = defaultInstructions(task)
+    const legacy = legacyForm(text)
+    expect(legacy).not.toContain('is the lines below, up to the next blank line')
+    expect(legacy.split('\n').filter((l) => LEGACY_TAG.test(l)).length).toBeGreaterThan(0)
+    const [current, prompt] = [parseInstructions(text), parseInstructions(legacy)]
+    expect(prompt.legacyTags).toBe(true)
+    expect(current.legacyTags).toBeUndefined()
+    expect([...prompt.blocks.keys()]).toEqual([...current.blocks.keys()])
+    for (const [id, b] of current.blocks) expect(same(prompt.blocks.get(id)!), id).toEqual(same(b))
+    expect(prompt.plain).toEqual(current.plain)
+    const due = dueChanges(current, prompt, new Set(), {})!
+    expect(due).toEqual({ plain: [{ line: LEGACY_TAGS_NOTE }], blocks: [], gone: [] })
+    expect(renderDue(due)).toBe(LEGACY_TAGS_NOTE)
+    expect(dueChanges(current, prompt, new Set([hash(LEGACY_TAGS_NOTE)]), {})).toBeNull()
+    // Through the notice: that line, once, and no block.
+    const notice = instructionNoticeFor({ appliedAppendSystemPrompt: legacy }, task)!
+    expect(notice.split(LEGACY_TAGS_NOTE)).toHaveLength(2)
+    expect(notice).not.toContain('This version (')
+  })
+
+  it('a prompt in the new form is never told the line on tags', () => {
+    const current = parseInstructions(defaultInstructions(ROLES[3]![1]))
+    expect(dueChanges(current, current, new Set(), {})).toBeNull()
   })
 })

@@ -55,6 +55,7 @@ import {
 import { composeHinted, parseHinted, renderHintBlock } from '../../../src/core/hints/hint-format.js'
 import { buildSessionContext, defaultInstructions } from '../../../src/core/sessions/session-context.js'
 import { _resetReplyLanguageForTesting, replyLanguageLine } from '../../../src/core/sessions/reply-language-context.js'
+import { parseInstructions } from '../../../src/core/sessions/instruction-diff.js'
 import { parseSessionMessages } from '../../../src/core/session-history.js'
 import { notePlaceCompaction } from '../../../src/core/sessions/place-notice.js'
 import { getSessionByClaudeId } from '../../../src/core/session-tracker.js'
@@ -142,9 +143,11 @@ describe('replyLanguageText', () => {
 })
 
 describe('the system prompt carries it', () => {
-  it('the block is the setting in its words, with what it covers, tagged with its version', () => {
+  it('the block is the setting in its words, with what it covers, its version named once in its head', () => {
     const v = /\((v[0-9a-f]{8})\)/.exec(PROMPT_LINE)![1]
-    expect(PROMPT_LINE).toBe(`${PROMPT_HEAD}${v}): it covers every line the user reads, the short progress lines between tool calls and what you send to other tasks (task_send, org_send, a reply) included: the user reads those chats too. Each line of this version starts with [${v}]:\n[${v}] ${RULE}`)
+    // The words untagged (2026-11-19: models began replies with the tag), and a blank line ends the block.
+    expect(PROMPT_LINE).toBe(`${PROMPT_HEAD}${v}): it covers every line the user reads, the short progress lines between tool calls and what you send to other tasks (task_send, org_send, a reply) included: the user reads those chats too. This version (${v}) is the lines below, up to the next blank line:\n${RULE}`)
+    expect(replyLanguageLine(RULE).endsWith(`\n${RULE}\n\n`)).toBe(true)
     expect(replyLanguageLine('Answer in French.')).not.toContain(v)
     expect(replyLanguageLine(null)).toBe('')
     expect(replyLanguageLine('')).toBe('')
@@ -166,7 +169,9 @@ describe('the system prompt carries it', () => {
 
   it('the setting is said in its new words after a change, whitespace collapsed', async () => {
     await setSession({ reply_language: '  Answer in French.\n\nCode stays English. ' })
-    expect((await buildSessionContext('')).systemPrompt).toContain('] Answer in French. Code stays English.\n')
+    const prompt = (await buildSessionContext('')).systemPrompt
+    expect(parseInstructions(prompt).blocks.get('reply-language')?.words).toEqual(['Answer in French. Code stays English.'])
+    expect(prompt).toContain('is the lines below, up to the next blank line:\nAnswer in French. Code stays English.\n\n')
   })
 })
 

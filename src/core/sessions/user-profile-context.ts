@@ -27,6 +27,7 @@
 
 import fsp from 'node:fs/promises'
 import { createHash } from 'node:crypto'
+import { versionedBlock } from './instruction-diff.js'
 import { USER_FILE } from '../../constants.js'
 import { parseMemoryContent, preambleProse, USER_CHAR_BUDGET } from '../bounded-memory.js'
 import { screenEntriesForPrompt } from '../memory-safety.js'
@@ -84,7 +85,7 @@ export function userProfileFit(raw: string): { text: string; cut: string[]; size
 
 /**
  * The block for the prompt, under its own heading (so the instruction notice shows its lines
- * there): an intro naming the version, then every line tagged with it. '' when there is no file.
+ * there): an intro naming the version once, then its lines (instruction-diff.ts versionedBlock). '' when there is no file.
  */
 export function userProfileLine(p: UserProfile): string {
   if (!p.exists) return ''
@@ -95,10 +96,9 @@ export function userProfileLine(p: UserProfile): string {
     return `${head}Your user's profile and standing rules, from memory/USER.md (${version}${saved}): none are recorded `
       + 'now, so no earlier version of them applies.\n\n'
   }
-  const tagged = p.text.split('\n').map((l) => l.trimEnd()).filter((l) => l.trim()).map((l) => `[${version}] ${l}`).join('\n')
-  return `${head}Your user's profile and standing rules, from memory/USER.md (${version}${saved}): who they are and `
+  return head + versionedBlock(`Your user's profile and standing rules, from memory/USER.md (${version}${saved}): who they are and `
     + 'how they want the work done. Follow them in every task; a newer word from the user wins. They replace every '
-    + `earlier version. Each line of this version starts with [${version}]:\n${tagged}\n\n`
+    + 'earlier version.', version, p.text)
 }
 
 function profileOf(raw: string, savedAt: string): UserProfile {

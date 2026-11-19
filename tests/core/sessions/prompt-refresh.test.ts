@@ -5,6 +5,7 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { vi } from 'vitest'
 import { createMockConstants } from '../../helpers/mock-constants.js'
@@ -19,7 +20,7 @@ vi.mock('../../../src/core/server-role.js', async (importOriginal) => ({
   isCompanion: () => role.companion,
   isFollower: () => role.companion, // the companion is a replica
 }))
-import { WALNUT_HOME } from '../../../src/constants.js'
+import { USER_FILE, WALNUT_HOME } from '../../../src/constants.js'
 import { addTask } from '../../../src/core/task-manager.js'
 import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../../src/core/session-tracker.js'
 import { buildSessionContext } from '../../../src/core/sessions/session-context.js'
@@ -28,6 +29,12 @@ import {
   promptDebtBytes, refreshHorizon, refreshOnResume, refreshPays, replayBuysNothing,
 } from '../../../src/core/sessions/prompt-refresh.js'
 import { instructionNoticeFor } from '../../../src/core/sessions/instruction-notice.js'
+import { LEGACY_TAGS_AFTER_REFRESH } from '../../../src/core/sessions/instruction-diff.js'
+import { legacyForm } from '../../helpers/versioned-block.js'
+
+import { refreshUserProfile } from '../../../src/core/sessions/user-profile-context.js'
+
+const LEGACY_TAG_LINE = /^\[v[0-9a-f]{8}\] /m
 
 const NOW = Date.parse('2026-11-06T12:00:00Z')
 const at = (ms: number) => new Date(NOW + ms).toISOString()
@@ -91,6 +98,25 @@ describe('freshResumePrompt', () => {
     expect(await freshResumePrompt(withCaller)).toBe(`Persona words.${TASK_CONTEXT_JOIN}${current}`)
     // A prompt Walnut did not build is never rebuilt.
     expect(await freshResumePrompt({ ...rec, appliedAppendSystemPrompt: 'Some other prompt.' })).toBeNull()
+  })
+
+  it('a prompt in the old tagged form is rebuilt with a line on what the tags were, kept at later rebuilds; a new-form one gets none (2026-11-19)', async () => {
+    await fs.mkdir(path.dirname(USER_FILE), { recursive: true })
+    await fs.writeFile(USER_FILE, '---\nname: User Profile\n---\n\n## Standing rules\n- Keep replies short.\n- Name the file you changed.\n')
+    await refreshUserProfile()
+    const { sid, current } = await seed(1)
+    const cache = { ...expired, expiresAt: new Date(Date.now() - 1000).toISOString() }
+    const rec = { ...(await getSessionByClaudeId(sid))!, promptCache: cache, appliedAppendSystemPrompt: legacyForm(current) }
+    expect(rec.appliedAppendSystemPrompt).not.toBe(current)
+    const fresh = await freshResumePrompt(rec)
+    expect(fresh).toBe(`${current.trimEnd()}\n\n${LEGACY_TAGS_AFTER_REFRESH}`)
+    expect(fresh).not.toMatch(LEGACY_TAG_LINE)
+    // A later rebuild keeps it: the conversation, and its summary, still hold the tags.
+    const later = { ...rec, appliedAppendSystemPrompt: `${current.split('\n').slice(0, 5).join('\n')}\n\n${LEGACY_TAGS_AFTER_REFRESH}` }
+    expect(await freshResumePrompt(later)).toBe(fresh)
+    // Never spawned on the old form: nothing about tags.
+    const { sid: other, current: now } = await seed()
+    expect(await freshResumePrompt({ ...(await getSessionByClaudeId(other))!, promptCache: cache })).toBe(now)
   })
 
   it('a warm large cache replays the stored prompt', async () => {

@@ -20,6 +20,7 @@ import { ORG_INSTRUCTIONS_MAX, buildOrgTree, orgDisplayTitle } from '../../src/c
 import { DEFAULT_ORG_INSTRUCTIONS, orgInstructionsShown } from '../../src/core/org/core-instructions.js';
 import { resetCache } from '../../src/core/session-message-queue.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
+import { blockLines } from '../helpers/versioned-block.js';
 
 beforeEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
@@ -185,11 +186,11 @@ describe('the user\'s own instructions for the CEO or a VP', () => {
     const prompt = defaultInstructions(now);
     const version = /instructions for your role \((v[0-9a-f]{8}),/.exec(prompt)?.[1];
     expect(version).toBeTruthy();
-    expect(prompt).toContain(`[${version}] Water before nine.\n[${version}] Ask me before you buy seeds.`);
+    // The block of that version holds the user's words, each line as written, and only them.
+    expect(blockLines(prompt, version!)).toEqual(['Water before nine.', 'Ask me before you buy seeds.', ...KEEP.split('\n')]);
     expect(prompt.indexOf('Your task is the lead of')).toBeLessThan(prompt.indexOf('Water before nine.'));
     const notice = (await instructionNoticeForSession(sid))?.text ?? '';
-    expect(notice).toContain(`[${version}] Water before nine.`);
-    expect(notice).toContain(`[${version}] Ask me before you buy seeds.`);
+    expect(blockLines(notice, version!).slice(0, 2)).toEqual(['Water before nine.', 'Ask me before you buy seeds.']);
 
     // The session respawned on that set (one session per task), then an edit that keeps one line:
     // it hears only the new line and the removed one (2026-10-30: re-sending the whole set on every
@@ -204,7 +205,8 @@ describe('the user\'s own instructions for the CEO or a VP', () => {
     const next = /instructions for your role \((v[0-9a-f]{8}),/.exec(defaultInstructions(edited))?.[1];
     expect(next).not.toBe(version);
     const retold = (await instructionNoticeForSession(told))?.text ?? '';
-    expect(retold).toContain(`[${next}] Ship on Fridays only.`);
+    expect(retold).toContain(`is below, up to the next blank line, as version ${next};`);
+    expect(retold).toMatch(/\nNew:\nShip on Fridays only\.\n/);
     expect(retold).not.toContain('Water before nine.');
     expect(retold).toContain(`Only what changed since the version you hold (${version})`);
     expect(retold).toContain('stays in force unless listed as removed');
@@ -307,7 +309,7 @@ describe('Walnut\'s default core instructions for the CEO and a VP', () => {
     const mainPrompt = defaultInstructions(await getTask(main.id));
     const v = /Walnut's default for your role \((v[0-9a-f]{8}); your user may rewrite them\)/.exec(mainPrompt)?.[1];
     expect(v).toBeTruthy();
-    for (const line of DEFAULT_ORG_INSTRUCTIONS.main.split('\n')) expect(mainPrompt).toContain(`[${v}] ${line}`);
+    expect(blockLines(mainPrompt, v!)).toEqual(DEFAULT_ORG_INSTRUCTIONS.main.split('\n').map((l) => l.trimEnd()).filter((l) => l.trim()));
     // 2026-11-03: the 3-command rule leads both defaults (core-instructions.ts orgSelfWorkRule).
     expect(DEFAULT_ORG_INSTRUCTIONS.main.split('\n')[0]).toMatch(/^Never do the work yourself: run at most 3 commands of your own in a turn/);
     expect(first('main')).toMatch(/^Do not do task work yourself\. Hand each piece of work on, as above: every investigation/);
@@ -343,7 +345,12 @@ describe('Walnut\'s default core instructions for the CEO and a VP', () => {
     const back = await editOrgNode(lead.id, { instructions: `  ${DEFAULT_ORG_INSTRUCTIONS.lead.replace(/\n/g, '\n\n')}  ` });
     expect(back.org_instructions?.text).toBe('');
     expect(defaultInstructions(back)).toContain('Your user cleared the instructions for your role');
-    expect(defaultInstructions(back)).toMatch(/\[(v[0-9a-f]{8})\] Your teams do the work;[^\n]*\n\[\1\] /);
+    // Those words are the cleared block's own lines, one of them followed by more of the same block.
+    const cleared = defaultInstructions(back);
+    const lines = blockLines(cleared, /applies \((v[0-9a-f]{8}); your user may rewrite them\)/.exec(cleared)![1]!);
+    const teams = lines.findIndex((l) => l.startsWith('Your teams do the work;'));
+    expect(teams).toBeGreaterThanOrEqual(0);
+    expect(teams).toBeLessThan(lines.length - 1);
     expect(defaultInstructions(back)).not.toContain('Ship on Fridays only.');
     // That session is told the default applies, every line of it.
     const told = (await instructionNoticeForSession(sid))?.text ?? '';
@@ -363,7 +370,10 @@ describe('Walnut\'s default core instructions for the CEO and a VP', () => {
     const prompt = defaultInstructions(wrote);
     expect(prompt).toContain('Walnut\'s default for your role, which still applies, then the instructions you wrote');
     expect(prompt).toContain(first('main'));
-    expect(prompt).toMatch(/\[(v[0-9a-f]{8})\] Added by you:\n\[\1\] Quick device checks are fine to run yourself\./);
+    // The default and then Main's own words, one block of one version, the words under whose they are.
+    const v = /wrote for your role \((v[0-9a-f]{8}),/.exec(prompt)![1]!;
+    expect(blockLines(prompt, v).slice(-2)).toEqual(['Added by you:', 'Quick device checks are fine to run yourself.']);
+    expect(blockLines(prompt, v)).toContain(first('main'));
     expect(prompt).toContain('never permit a step that needs your user\'s approval');
     expect(prompt).toContain('add to the default and never override it: where they disagree, the default wins');
     // Main clears its own words: the prompt says it did.

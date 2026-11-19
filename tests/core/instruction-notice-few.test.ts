@@ -28,6 +28,8 @@ import { HOOK_CONTEXT_MAX, collectOpenItems, fitHookContext } from '../../src/co
 import { notePlaceCompaction, pendingPlaceNotice } from '../../src/core/sessions/place-notice.js';
 import { editOrgNode } from '../../src/core/org/org-node-edit.js';
 import { buildWalnutMessage } from '../../src/core/peers/walnut-message-tag.js';
+import { LEGACY_TAGS_NOTE } from '../../src/core/sessions/instruction-diff.js';
+import { legacyForm } from '../helpers/versioned-block.js';
 
 beforeEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
@@ -86,6 +88,19 @@ describe('changes close together are one notice', () => {
     expect(merged.split(NOTICE).length - 1).toBe(1);
     expect(merged).toContain(RELAY);
     expect(merged).toContain(CHARTER_LINE);
+    expect(await line(sid, 'Next')).toBe('Next');
+  });
+
+  it('what the old version tags were never waits: a session that copies them shows them to the user (2026-11-19)', async () => {
+    const { sid } = await seed();
+    expect(await line(sid, 'First')).toContain(RELAY);
+    // The session's prompt turns out to be in the old tagged form, inside the gap.
+    const rec = (await getSessionByClaudeId(sid))!;
+    await updateSessionRecord(sid, { appliedAppendSystemPrompt: legacyForm(rec.appliedAppendSystemPrompt!) });
+    await updateSessionRecord(sid, { taskRoutingNoted: { ...(await getSessionByClaudeId(sid))!.taskRoutingNoted!, promptHash: createHash('sha256').update(legacyForm(rec.appliedAppendSystemPrompt!)).digest('hex').slice(0, 16) } });
+    const out = await line(sid, 'Inside the gap');
+    expect(out).toContain(LEGACY_TAGS_NOTE);
+    expect(out).not.toContain(RELAY);
     expect(await line(sid, 'Next')).toBe('Next');
   });
 

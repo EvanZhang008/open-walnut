@@ -5,9 +5,9 @@
  * Two kinds of lines. A plain rule line is told when the session's prompt lacks
  * it. A versioned block (the user's profile from USER.md, a Main's or lead's core
  * instructions: user-profile-context.ts userProfileLine, session-context.ts
- * orgInstructionsLine) is a head line ending "Each line of this version starts
- * with [vXXXXXXXX]:" and the lines tagged with that version. Every save makes
- * every tagged line new, so comparing them as plain lines re-sent the whole block
+ * orgInstructionsLine) is a head line ending with BLOCK_LEAD's words, which name
+ * its version once, then its lines up to the next blank line (`versionedBlock`).
+ * Every save makes a new version, so comparing them as plain lines re-sent the whole block
  * for a one-line change (2026-10-30: a one-line USER.md save sent its 4.9 KB to
  * about 25 live sessions). A block is compared by its untagged words against the
  * version the session holds: only the new or reworded lines are told, with the
@@ -25,7 +25,42 @@ import { createHash } from 'node:crypto';
 
 export const hash = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16);
 
-const HEAD_RE = /Each line of this version starts with \[(v[0-9a-f]{8})\]:$/;
+/**
+ * How a block's head ends: the version, named once. Its lines carry no tag of their own
+ * (2026-11-19: with "Each line of this version starts with [v16908844]:" and the tag in front of
+ * every line, a model began its own replies with "[v16908844]", and the user read it in the chat).
+ */
+const blockLead = (version: string) => `This version (${version}) is the lines below, up to the next blank line:`;
+const HEAD_RE = /This version \((v[0-9a-f]{8})\) is the lines below, up to the next blank line:$/;
+/**
+ * The head of a block as Walnut wrote it until 2026-11-19, every line after it tagged "[vXXXXXXXX] ".
+ * A session spawned before then still holds its prompt that way (prompt-refresh.ts replays it), so
+ * it is still read, and such a session is told once that the tags are not part of a reply (LEGACY_TAGS_NOTE).
+ */
+const LEGACY_HEAD_RE = /Each line of this version starts with \[(v[0-9a-f]{8})\]:$/;
+/** Told once to a session whose prompt still tags block lines (`Parsed.legacyTags`); restated after a compaction. */
+export const LEGACY_TAGS_NOTE = 'Some parts of your system prompt mark each of their lines with a version tag in square brackets '
+  + '(an open bracket, v and eight hex digits). The tag only names which version of that part you hold; it is not part of '
+  + 'the rule and never part of what you write: start no reply, progress line or message with one, whatever an earlier '
+  + 'summary of this conversation says.';
+
+/**
+ * The same, for a session whose prompt Walnut rebuilt on the new form (prompt-refresh.ts): the old
+ * tags are gone from its prompt but not from its conversation, whose summary may still say to
+ * write them (2026-11-19: "lines start with `[v16908844]`"). Kept at the end of its new prompt.
+ */
+export const LEGACY_TAGS_AFTER_REFRESH = 'Earlier in this conversation, some parts of your system prompt marked each of their lines with '
+  + 'a version tag in square brackets (an open bracket, v and eight hex digits). The tag only named a version; it was never part of '
+  + 'what you write: start no reply, progress line or message with one, whatever an earlier summary of this conversation says.';
+
+/**
+ * A versioned block as the prompt carries it: its head, the version named once at its end, then
+ * its lines (blank ones left out, since a blank line ends the block), then the blank line.
+ */
+export function versionedBlock(head: string, version: string, text: string): string {
+  const lines = text.split('\n').map((l) => l.trimEnd()).filter((l) => l.trim());
+  return `${head} ${blockLead(version)}\n${lines.join('\n')}\n\n`;
+}
 /** A removed line is named, not repeated in full. */
 const REMOVED_MAX_CHARS = 80;
 
@@ -44,8 +79,16 @@ const BLOCK_KINDS: Array<[string, RegExp]> = [
   ['task-threads', /^Threads, the user's setting for your task \(v[0-9a-f]{8}\): /],
 ];
 
-/** The head without what changes at every save (its version, its time), so a change of form reads as one. */
-const formOf = (head: string) => hash(head.replace(/v[0-9a-f]{8}/g, 'v').replace(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}( UTC)?/g, 't'));
+/** Every kind of versioned block Walnut writes (tests/core/sessions/version-tag-guard.test.ts covers each). */
+export const BLOCK_KIND_IDS = BLOCK_KINDS.map(([id]) => id);
+
+/**
+ * The head without what changes at every save (its version, its time), so a change of form reads as
+ * one. Without how it names its version either: the same head in the old tagged way is the same form,
+ * so the change of 2026-11-19 re-sent no block to a running session.
+ */
+const formOf = (head: string) => hash(head.replace(HEAD_RE, '').replace(LEGACY_HEAD_RE, '').trim()
+  .replace(/v[0-9a-f]{8}/g, 'v').replace(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}( UTC)?/g, 't'));
 
 /** The "Added by X:" line of a Main's or lead's instructions: whose words the lines after it are. */
 export const opensAuthor = (word: string) => /^Added by .+:$/.test(word);
@@ -57,7 +100,11 @@ const opensSection = (word: string) => word.startsWith('#');
 /** A plain rule line and the heading it sits under (the charter's "## How we work"), shown with it. */
 export interface Changed { line: string; heading?: string }
 
-/** A versioned block: its head, its version, its lines without the tag (`words`) and as written (`tagged`). */
+/**
+ * A versioned block: its head, its version and its lines (`words`). `tagged`: each line as Walnut
+ * tagged it until 2026-11-19, the way an instruction record of that time named the lines it told
+ * (instruction-notice.ts heldBeyondPrompt).
+ */
 export interface Block { id: string; heading?: string; head: string; form: string; version: string; words: string[]; tagged: string[] }
 
 /** The version of a block a session holds: told to it, or in its prompt (`form`: formOf its head; none from before it was kept). */
@@ -69,6 +116,8 @@ export interface Parsed {
   /** Plain rule lines in order (headings, blank lines and block lines left out). */
   plain: Changed[];
   blocks: Map<string, Block>;
+  /** A block in the old form, every line tagged with its version (LEGACY_HEAD_RE). */
+  legacyTags?: true;
 }
 
 const parseCache = new Map<string, Parsed>();
@@ -90,17 +139,24 @@ export function parseInstructions(text: string): Parsed {
   const perHeading = new Map<string, number>();
   let heading: string | undefined;
   let block: Block | null = null;
+  let legacy = false;
+  let legacyTags = false;
   for (const raw of text.split('\n')) {
     const line = raw.trim();
     all.add(line);
     if (block) {
       const tag = `[${block.version}] `;
-      if (line.startsWith(tag)) { block.tagged.push(line); block.words.push(line.slice(tag.length)); continue; }
+      if (legacy && line.startsWith(tag)) { block.tagged.push(line); block.words.push(line.slice(tag.length)); continue; }
+      // A line keeps its indent (a nested list item), as the old form kept it after the tag.
+      if (!legacy && line) { const word = raw.trimEnd(); block.tagged.push(tag + word); block.words.push(word); continue; }
       block = null;
     }
     if (!line) continue;
-    const head = HEAD_RE.exec(line);
+    const legacyHead = LEGACY_HEAD_RE.exec(line);
+    const head = HEAD_RE.exec(line) ?? legacyHead;
     if (head) {
+      legacy = !!legacyHead;
+      if (legacy) legacyTags = true;
       const kind = BLOCK_KINDS.find(([, re]) => re.test(line))?.[0];
       const n = perHeading.get(kind ?? heading ?? '') ?? 0;
       perHeading.set(kind ?? heading ?? '', n + 1);
@@ -112,7 +168,7 @@ export function parseInstructions(text: string): Parsed {
     if (line.startsWith('#')) { heading = line; continue; }
     plain.push({ line, heading });
   }
-  const parsed = { all, plain, blocks };
+  const parsed: Parsed = { all, plain, blocks, ...(legacyTags ? { legacyTags: true as const } : {}) };
   if (parseCache.size >= PARSE_CACHE_MAX) parseCache.delete(parseCache.keys().next().value as string);
   parseCache.set(key, parsed);
   return parsed;
@@ -144,6 +200,8 @@ export function dueChanges(
   beyond: Record<string, Set<string>> = {},
 ): Due | null {
   const plain = current.plain.filter((c) => !prompt.all.has(c.line) && !toldPlain.has(hash(c.line)));
+  // A prompt that still tags block lines: what the tags are, once (they are not the rules' words).
+  if (prompt.legacyTags && !current.legacyTags && !toldPlain.has(hash(LEGACY_TAGS_NOTE))) plain.unshift({ line: LEGACY_TAGS_NOTE });
   const held = (id: string): BlockView | undefined => {
     if (views[id]) return views[id];
     const b = prompt.blocks.get(id);
@@ -370,69 +428,85 @@ const item = (kept: string[], added: string[] = []) => ({ word, author, section 
  * the session holds plus these.
  */
 function deltaHead(c: BlockChange): string {
-  const head = c.block.head.replace(HEAD_RE, '').trim()
+  const head = c.block.head.replace(HEAD_RE, '').replace(LEGACY_HEAD_RE, '').trim()
     .replace(/They replace every earlier version and/, 'They replace')
     .replace(/\s*They replace every earlier version\.?/, '');
   const cut = c.block.words.find((w) => TRUNCATED_RE.test(w));
   const reworded = c.added.some((l) => l.reworded);
-  return `${head} Only what changed since the version you hold (${c.from}) is below, tagged [${c.block.version}]; every other line you hold `
+  return `${head} Only what changed since the version you hold (${c.from}) is below, up to the next blank line, as version ${c.block.version}; every other line you hold `
     + `for this part stays in force${c.removed.length ? ' unless listed as removed' : ''}.`
     + (reworded ? ' A reworded line takes the place of your line in the same part that says the same thing in older words.' : '')
     + (cut ? ` Not every line of it fits here: ${cut.slice(1, -1).replace(/\.$/, '')}.` : '');
 }
 
 /** Lines of a block, each under the parts it belongs to, so its scope and, for a lead, whose words it is stay. */
-function withParts(tag: string, added: Line[]): string {
+function withParts(added: Line[]): string {
   const lines: string[] = [];
   let author: string | undefined;
   let section: string | undefined;
   for (const l of added) {
-    if (l.author && l.author !== author) { lines.push(tag + l.author); section = undefined; }
-    if (l.section && l.section !== section) lines.push(tag + l.section);
+    if (l.author && l.author !== author) { lines.push(l.author); section = undefined; }
+    if (l.section && l.section !== section) lines.push(l.section);
     author = opensAuthor(l.word) ? l.word : l.author;
     section = opensAuthor(l.word) ? undefined : opensSection(l.word) ? l.word : l.section;
-    lines.push(tag + l.word);
+    lines.push(l.word);
   }
   return lines.join('\n');
 }
 
-/** One block as told: whole (its head and every line), or its head as changes, the new and reworded lines and the removed ones. */
+/** The labels a block told as changes puts above its lists (instruction-hook-parts.ts repeats them across a cut). */
+export const CHANGE_LABELS = ['New:', 'Reworded:', 'Removed, no longer in force:'] as const;
+
+/**
+ * One block as told: whole (its head and every line), or its head as changes, the new and reworded
+ * lines and the removed ones. No blank line inside: one ends the block.
+ */
 function blockText(c: BlockChange): string {
-  if (c.whole) return `${c.block.head}\n${c.block.tagged.join('\n')}\n`;
-  const tag = `[${c.block.version}] `;
+  if (c.whole) return `${c.block.head}\n${c.block.words.join('\n')}`;
+  const [NEW, REWORDED, REMOVED] = CHANGE_LABELS;
   const out = [deltaHead(c)];
   const fresh = c.added.filter((l) => !l.reworded);
   const reworded = c.added.filter((l) => l.reworded);
-  if (fresh.length) out.push(`New:\n${withParts(tag, fresh)}`);
-  if (reworded.length) out.push(`Reworded:\n${withParts(tag, reworded)}`);
+  if (fresh.length) out.push(`${NEW}\n${withParts(fresh)}`);
+  if (reworded.length) out.push(`${REWORDED}\n${withParts(reworded)}`);
   if (c.removed.length) {
     const added = new Set(c.added.map((l) => l.word));
-    out.push(`Removed, no longer in force:\n${c.removed.map(item(c.block.words.filter((w) => !added.has(w)), [...added])).join('\n')}`);
+    out.push(`${REMOVED}\n${c.removed.map(item(c.block.words.filter((w) => !added.has(w)), [...added])).join('\n')}`);
   }
-  out.push('');
   return out.join('\n');
 }
 
-/** The notice body below its opening sentence: lines in prompt order, each under its heading. */
+/**
+ * The notice body below its opening sentence: lines in prompt order, each under its heading. Items
+ * (a heading, a run of list rules, a paragraph rule, a block, a gone part) are kept apart by one
+ * blank line and hold none inside, so a block reads to its end and a cut (instruction-hook-parts.ts)
+ * knows where an item starts.
+ */
 export function renderDue(due: Due): string {
-  const out: string[] = [];
+  const items: string[] = [];
   let heading: string | undefined;
+  let list = false;
   const under = (h: string | undefined) => {
-    if (h && h !== heading) out.push(`${h}\n`);
+    if (h && h !== heading) { items.push(h); list = false; }
     heading = h;
   };
   for (const c of due.plain) {
     under(c.heading);
-    out.push(c.line.startsWith('- ') ? c.line : `${c.line}\n`);
+    const isItem = c.line.startsWith('- ');
+    if (isItem && list) items[items.length - 1] += `\n${c.line}`;
+    else items.push(c.line);
+    list = isItem;
   }
   for (const c of due.blocks) {
     under(c.block.heading);
-    out.push(blockText(c));
+    items.push(blockText(c));
+    list = false;
   }
   for (const g of due.gone) {
     under(g.heading);
-    out.push(`A part of your instructions (${g.from}) is gone; none of its lines apply any more:\n`
-      + `${g.removed.map(item([])).join('\n')}\n`);
+    items.push(`A part of your instructions (${g.from}) is gone; none of its lines apply any more:\n`
+      + g.removed.map(item([])).join('\n'));
+    list = false;
   }
-  return out.join('\n').trim();
+  return items.join('\n\n').trim();
 }
