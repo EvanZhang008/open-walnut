@@ -1,7 +1,10 @@
 # One service on every host
 
-Status: decided (2026-11-18). Phase 1 is built: a host's own calls answered by its follower, and a follower
-on every host by default behind the experiment `follower_on_every_host`. Builds on
+Status: decided (2026-11-18), revised after phase 1 (2026-11-19). Phase 1 is built and was proven on two real
+machines: a host's own calls answered by its follower, and a follower on every host by default behind the
+experiment `follower_on_every_host`. Phases 2 to 4 were cut down to what closes a real gap (see
+[Phases](#phases)): rule 1 holds today; rules 2, 3 and 5 and a process manager inside the service were the
+first direction and are not built, by decision. Builds on
 [servers everywhere](./walnut-servers-everywhere.md), [replica servers](./walnut-replica-servers.md),
 [daemon-first hosts](./daemon-first-hosts.md), [the single file](./walnut-single-binary.md) and
 [daemon boot start](../reference/daemon-boot-start.md).
@@ -360,17 +363,35 @@ permission prompts still name Walnut.
 
 ## Phases
 
-Each phase lands alone and leaves production working.
+Each phase lands alone and leaves production working. Phases 2 to 4 were looked at again once phase 1 ran
+(2026-11-19), against the code as it is, and cut down: a phase is built only where it closes a gap a person
+or a caller can meet.
 
-| # | Phase | Done when |
-|---|---|---|
-| 1 | **A host's own calls are answered by its service.** The follower answers a session's and a plugin job's calls while the leader is away, with the real task logic and the journal; the daemon only passes the call on. Then every host gets a follower by default. | with the Mac's service stopped, a plugin job on a host creates a task, starts a session and tags it; after the Mac returns the board shows them once, and a second drain changes nothing |
-| 2 | **Between machines, service to service.** The leader asks a host's service to start, stop and message its sessions; a session is run and judged by its host's service; local callers use the API on a local door, whatever the leader's state. | the leader sends no command to another machine's process manager; the Mac's main thread parses no line of a session on another host |
-| 3 | **The boot start keeps the service**, on hosts and on the Mac; one version per host. | a service ended by hand is back within seconds with its agents; a build that cannot stay up is rolled back without a person; the Mac's Walnut is back after a reboot |
-| 4 | **Clean up inside.** Delete the source twin, the daemon's own offline answers and its small copy, and the checks for a daemon older than its server; move process manager modules into the service where it pays. | no task logic outside the service; one copy of the daemon's code |
+| # | Phase | Done when | Where it stands |
+|---|---|---|---|
+| 1 | **A host's own calls are answered by its service.** The follower answers a session's and a plugin job's calls while the leader is away, with the real task logic and the journal; the daemon only passes the call on. Then every host gets a follower by default. | with the Mac's service stopped, a plugin job on a host creates a task, starts a session and tags it; after the Mac returns the board shows them once, and a second drain changes nothing | Built. Proven on two real machines (an isolated leader on a Mac, a daemon and follower on a Linux host): a plugin job made a task, started a real agent session that answered, tagged it and sent it a message; the drain replayed 3 records with no failure and no conflict, and the leader holds the task and the session once. A second drain of the same records is proven by the cluster test only. The follower on every host waits behind its experiment. |
+| 2 | **Between machines, service to service.** | the leader sends no command to another machine's process manager; the Mac's main thread parses no line of a session on another host | Not built, by decision. See below. |
+| 3 | **The boot start keeps the service**, on hosts and on the Mac; one version per host. | a service ended by hand is back within seconds with its agents; a build that cannot stay up is rolled back without a person; the Mac's Walnut is back after a reboot | Nothing new built. Hosts already have it (the daemon's boot start, proof boot, probation and rollback keep the daemon, which keeps the follower). On the Mac the Walnut app is a login item that starts the service and restarts it when it ends; not yet checked by a real reboot. "One version per host" is turned down, below. |
+| 4 | **Clean up inside.** | no task logic outside the service | Open, one item: delete the daemon's own offline answers and its small copy once the follower covers every op they have. The rest is turned down, below. |
 
-Beside the phases, the main thread is cleared one measured item at a time (its own task): spawns through a
-pool, heavy statements and large parses to workers, the remaining synchronous file reads to async.
+What was decided for phases 2 to 4, and why:
+
+- **No move of session start and output judging into the host's service.** Who answers a call on a host is
+  already one thing after phase 1 (the leader's service or the host's own, the daemon only passes it on), and
+  a session's status is already judged on its host: the daemon computes it once per output line and the
+  leader takes that result. What is left of the move is a rewrite of the one function every session runs
+  through (about 2,700 lines, 58 writes of the session record, about 30 subscribers) for tidier structure and
+  nothing a person sees. Sending the leader's commands through the host's service to the daemon would add a
+  hop and a second thing that can fail.
+- **The source twin of the daemon stays.** A host with an old C library can run only it.
+- **The daemon and the service keep their own versions.** A daemon restart interrupts running commands, so
+  it waits for a quiet moment, for hours when needed; one version for both would hold every service update
+  behind that wait.
+- **No watchdog that ends a daemon that looks hung.** Judging "hung" from a missed heartbeat is a guess, and
+  one wrong guess interrupts every session on that host. A host that cannot be reached already goes to
+  Walnut Health.
+- **A leader-made task is not started alone, and a message that asks for a reply is not sent alone** (both
+  under Phase 1 as built).
 
 ## Budgets
 
@@ -383,15 +404,15 @@ pool, heavy statements and large parses to workers, the remaining synchronous fi
 | an agent ended by a deploy | 0 | 0 |
 | deploy gap, stop to listening | 3.5 to 15.8 s | 5 s or less in 9 of 10 deploys |
 | parses of one output line | 3 | 1 |
-| lines removed at the end | | the source twin (17k), most of the daemon client (16k), the daemon's offline host (3k) |
+| lines removed at the end | | the daemon's offline host (3k), once the follower covers every op it has; the source twin and the daemon client stay (Phases) |
 
 ## Risks
 
-- **A host's calls depend on its service being up.** It is restarted within seconds, and callers retry. Until
-  phase 4 a session's call still has the daemon's old answers to fall back on.
-- **Two answerers remain until phase 4** for a session while the leader is away (the follower first, the
-  daemon's old code as the fallback). They share one journal, so their writes cannot diverge; the fallback is
-  deleted once the follower covers every op it has.
-- **Moving the process manager's code takes care**, because it may block today. It is last, and optional.
+- **A host's calls depend on its service being up.** It is restarted within seconds, and callers retry. A
+  session's call still has the daemon's old answers to fall back on.
+- **Two answerers remain** for a session while the leader is away (the follower first, the daemon's old code
+  as the fallback). They share one journal, so their writes cannot diverge; the fallback is deleted once the
+  follower covers every op it has.
 - **A follower's memory** on a small host: measured (above), and a host below the floors gets none by default.
-- **Hosts the file cannot run on**: count them before phase 4 deletes the source twin.
+- **Hosts the file cannot run on** keep the source daemon and get no follower: agents run there, less works
+  with the leader away.
