@@ -107,6 +107,7 @@ import { createTurnGuard } from './turn-guard-core.js'
 import { createClaudeCheck } from './claude-check-core.js'
 import { createBridgeUplink, createLoopDriftProbe } from './bridge-uplink-core.js'
 import { createWorkspaceCore } from './workspace-core.js'
+import { networkCausedAuthError } from './network-cause-core.js'
 import { lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut, lineWrittenPart, transcriptLineScan, transcriptLineVerdict } from './line-fate-core.js'
 import { createBudgetPersistence } from './usage-budget-persistence.js'
 
@@ -373,6 +374,7 @@ export function getDaemonSource(): string {
     ['__CREATE_NOTICE_ONCE__', createNoticeOnce.toString()],
     ['__KEEP_RUNTIME_FILES__', keepRuntimeFiles.toString()],
     ['__USER_LINE_CONTENT__', userLineContent.toString()],
+    ['__NETWORK_CAUSED_AUTH_ERROR__', networkCausedAuthError.toString()],
   ]
   // The tracker is constructed before the cron sidecar loads, so its prompt
   // limit is stamped as a literal (like the version), not read from the sidecar.
@@ -10784,7 +10786,6 @@ var TERMINAL_TURN_ERROR_PATTERNS = [
   /invalid[_\\s-]?request/i,
   /\\b400\\b/,
   /\\b401\\b|\\b403\\b/,
-  /unauthorized|forbidden|authentication|credential|expired token|invalid api key/i,
   /quota exceeded|insufficient (?:quota|funds|credit)|bil{2}ing/i,
   /you(?:'|\\u2019)?ve hit your\\b(?![^.\\u00b7\\n]{0,40}\\brate[ _-]?limit)[^.\\u00b7\\n]{0,40}\\blimit\\b/i,
   /\\busage limit reached\\b/i,
@@ -10795,10 +10796,19 @@ var TERMINAL_TURN_ERROR_PATTERNS = [
   /aborted by user|user (?:aborted|cancell?ed|interrupted)|request cancell?ed/i,
   /\\bECANCELED\\b/,
 ];
+// Credential words: terminal unless a network failure lies under them (network-cause-core.ts).
+var AUTH_TURN_ERROR_PATTERNS = [
+  /unauthorized|forbidden|authentication|credential|expired token|invalid api key/i,
+];
+var networkCausedAuthError = (__NETWORK_CAUSED_AUTH_ERROR__);
 function classifyTurnError(text) {
   if (!text) return 'terminal';
   for (var i = 0; i < TERMINAL_TURN_ERROR_PATTERNS.length; i++) {
     if (TERMINAL_TURN_ERROR_PATTERNS[i].test(text)) return 'terminal';
+  }
+  if (networkCausedAuthError(text)) return 'retryable';
+  for (var k = 0; k < AUTH_TURN_ERROR_PATTERNS.length; k++) {
+    if (AUTH_TURN_ERROR_PATTERNS[k].test(text)) return 'terminal';
   }
   for (var j = 0; j < RETRYABLE_TURN_ERROR_PATTERNS.length; j++) {
     if (RETRYABLE_TURN_ERROR_PATTERNS[j].test(text)) return 'retryable';

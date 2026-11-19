@@ -18,6 +18,7 @@
 import { execFileSync, execSync } from 'node:child_process'
 import { dirname, join as pathJoin } from 'node:path'
 import { userLineContent } from './user-line-images-core.js'
+import { networkCausedAuthError } from './network-cause-core.js'
 import { lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut, lineWrittenPart, transcriptLineScan, transcriptLineVerdict, type LineFate, type LineFateKind, type LineFateScan, type LineWritten, type TranscriptLineScan } from './line-fate-core.js'
 
 // ── Shared types ──
@@ -2460,7 +2461,6 @@ const TERMINAL_TURN_ERROR_PATTERNS: RegExp[] = [
   /invalid[_\s-]?request/i,
   /\b400\b/,
   /\b401\b|\b403\b/,
-  /unauthorized|forbidden|authentication|credential|expired token|invalid api key/i,
   /quota exceeded|insufficient (?:quota|funds|credit)|bil{2}ing/i,
   // A subscription usage limit ("You've hit your session limit · resets 3pm"): retrying before the
   // reset is refused the same way. The server's usage-limit wait continues it at the reset
@@ -2475,6 +2475,16 @@ const TERMINAL_TURN_ERROR_PATTERNS: RegExp[] = [
   /\bECANCELED\b/,
 ]
 
+/**
+ * The words of a credential or sign-in failure: terminal (a 12h hammer on a bad credential is an
+ * abuse pattern), except when the text names a network failure under it and no rejection
+ * (network-cause-core.ts, 2026-11-19: a DNS outage read as credentials only the user could fix).
+ * A 401 or 403 is in the terminal list above and wins either way.
+ */
+const AUTH_TURN_ERROR_PATTERNS: RegExp[] = [
+  /unauthorized|forbidden|authentication|credential|expired token|invalid api key/i,
+]
+
 export type TurnErrorClass = 'retryable' | 'terminal'
 
 /**
@@ -2485,6 +2495,9 @@ export type TurnErrorClass = 'retryable' | 'terminal'
 export function classifyTurnError(text: string | null | undefined): TurnErrorClass {
   if (!text) return 'terminal'
   for (const re of TERMINAL_TURN_ERROR_PATTERNS) if (re.test(text)) return 'terminal'
+  // A failure the network caused (a credential fetch that could not reach its service among them) goes through once the network is back.
+  if (networkCausedAuthError(text)) return 'retryable'
+  for (const re of AUTH_TURN_ERROR_PATTERNS) if (re.test(text)) return 'terminal'
   for (const re of RETRYABLE_TURN_ERROR_PATTERNS) if (re.test(text)) return 'retryable'
   return 'terminal'
 }

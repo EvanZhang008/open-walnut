@@ -104,6 +104,11 @@ const CORPUS: Array<[string, Handling]> = [
   ['API Error: ECANCELED', 'terminal'],
   // An auth failure that also mentions a dead connection is still an auth failure: never waited on.
   ['API Error: 401 Unauthorized (fetch failed)', 'terminal'],
+  // A credential fetch the network broke (2026-11-19, the Mac offline): retried, never the user's.
+  ['API Error: 502 could not fetch AWS credentials for managed-profile: CredentialRetrievalError: dispatch failure: io error: error trying to connect: dns error: failed to lookup address information: nodename nor servname provided, or not known', 'retry'],
+  ['API Error: 502 could not fetch AWS credentials for managed-profile: CredentialRetrievalError: Get "https://sign-in.example.test/token": dial tcp: lookup sign-in.example.test: no such host', 'retry'],
+  // The same fetch refused by the service stays terminal.
+  ['API Error: 502 could not fetch AWS credentials for managed-profile: CredentialRetrievalError: token expired, sign in again', 'terminal'],
   ['API Error: something nobody has ever seen before', 'terminal'],
 ]
 
@@ -135,7 +140,7 @@ function patternList(src: string, name: string, template: boolean): RegExp[] {
 
 const core = read('src/providers/daemon-core.ts')
 const twin = read('src/providers/daemon-source.ts')
-const LISTS = ['RETRYABLE_TURN_ERROR_PATTERNS', 'TERMINAL_TURN_ERROR_PATTERNS'] as const
+const LISTS = ['RETRYABLE_TURN_ERROR_PATTERNS', 'TERMINAL_TURN_ERROR_PATTERNS', 'AUTH_TURN_ERROR_PATTERNS'] as const
 
 describe('every known turn error text is handled as listed', () => {
   it.each(CORPUS)('%s → %s', (text, handling) => {

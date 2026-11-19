@@ -10,6 +10,7 @@
  * Pure and browser-safe: user-status.ts derives with it. The subtask notice (peers/envelope-kit.ts)
  * carries the retry line itself, since that factory may reference nothing outside it.
  */
+import { networkCausedAuthError } from '../../providers/network-cause-core.js';
 
 /** A failure only the user can fix. */
 export type UserErrorKind = 'credentials' | 'sign-in' | 'permissions' | 'spending';
@@ -26,6 +27,8 @@ const USER_ERROR_PATTERNS: ReadonlyArray<readonly [UserErrorKind, RegExp]> = [
 /** The kind of a failure only the user can fix, or null when it is the team's to retry. */
 export function usersErrorKind(text: string | null | undefined): UserErrorKind | null {
   if (!text) return null;
+  // A credential or sign-in fetch the network broke is transient, the team's (2026-11-19).
+  if (networkCausedAuthError(text)) return null;
   for (const [kind, re] of USER_ERROR_PATTERNS) if (re.test(text)) return kind;
   return null;
 }

@@ -125,6 +125,9 @@ describe('the words say why', () => {
     // A failed session is its lead's to retry (2026-11-09), unless only the user can fix the error.
     expect(deriveUserStatus({ ...base, processStatus: 'error' }, NOW)).toMatchObject({ state: 'waiting', kind: 'lead', waitingOn: expect.stringContaining('Its lead, to retry it') })
     expect(deriveUserStatus({ ...base, processStatus: 'error', errorMessage: 'API Error: 401 invalid api key' }, NOW)).toMatchObject({ state: 'needs', source: 'error' })
+    // A credential fetch the network broke is its lead's too, never the user's (2026-11-19: DNS down).
+    expect(deriveUserStatus({ ...base, processStatus: 'error', errorMessage: 'API Error: 502 could not fetch AWS credentials for managed-profile: CredentialRetrievalError: dns error: failed to lookup address information: nodename nor servname provided, or not known' }, NOW))
+      .toMatchObject({ state: 'waiting', kind: 'lead', waitingOn: expect.stringContaining('Its lead, to retry it') })
     // No lead: its turn is there for the user to read, with nothing asked.
     expect(deriveUserStatus({ ...base, hasLeader: false }, NOW)).toMatchObject({ state: 'read', toRead: 'turn' })
     // A lead (or Main) with no ask of its own is never a bare Needs you (2026-10-31, the user: "u can
