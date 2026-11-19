@@ -1,0 +1,37 @@
+/* Action needed under a task's row (ActionNeeded.tsx): one line per thing it asks of the user. */
+.action-needed {
+  display: flex; flex-direction: column; gap: 6px; margin: 6px 0 2px; padding: 6px 8px;
+  border-left: 3px solid var(--warning, #bf8700); border-radius: 6px;
+  background: color-mix(in srgb, var(--warning, #bf8700) 9%, var(--bg));
+  color: var(--fg); font-size: 12px; cursor: default; flex-basis: 100%; min-width: 0;
+}
+.action-needed-title { font-size: 11px; font-weight: 600; color: var(--warning-text, var(--warning, #9a6700)); letter-spacing: 0.02em; }
+.action-needed-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.action-needed-item + .action-needed-item { border-top: 1px solid color-mix(in srgb, var(--warning, #bf8700) 22%, transparent); padding-top: 6px; }
+.action-needed-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.action-needed-kind {
+  flex: none; font-weight: 700; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.03em;
+  color: var(--warning-text, var(--warning, #9a6700));
+}
+.action-needed-fill { flex: 1; }
+.action-needed-summary {
+  min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow-wrap: anywhere; line-height: 1.35;
+}
+.action-needed-ago, .action-needed-until { flex: none; color: var(--fg-muted); font-size: 11px; }
+.action-needed-snooze { flex: none; }
+.action-needed-answer { min-width: 0; }
+.action-needed-approval { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.action-needed-approval .approval-actions { display: flex; gap: 6px; }
+.action-needed-item.is-snoozed .action-needed-kind,
+.action-needed-item.is-snoozed .action-needed-summary { color: var(--fg-muted); }
+.action-needed:not(:has(.action-needed-item:not(.is-snoozed))) {
+  border-left-color: var(--border); background: color-mix(in srgb, var(--fg-muted) 6%, var(--bg));
+}
+.action-needed:not(:has(.action-needed-item:not(.is-snoozed))) .action-needed-title { color: var(--fg-muted); }
+/* A row's own state beside its ask: "Working" while its turn still runs. */
+.status-card-also-working {
+  flex: none; font-size: 10.5px; padding: 0 6px; border-radius: 8px; line-height: 16px;
+  color: var(--accent, #0a84ff); border: 1px solid color-mix(in srgb, var(--accent, #0a84ff) 45%, transparent);
+}
+.status-card-actions-below { padding: 0 8px 4px 34px; }

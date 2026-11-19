@@ -27,6 +27,7 @@ const SETTLED: Record<string, { where: string } | { notAQuestion: string }> = {
   letter: { where: 'letter' },
   error: { notAQuestion: 'a failure only the user can clear (a sign-in, a host): words cannot fix it; it leaves when the fact clears or the task is restarted' },
   thread: { notAQuestion: 'no longer made: a thread rides status.threads and is settled with thread_update' },
+  approval: { notAQuestion: "an approval is the person's own yes (approvals-v1.ts personOnly): no lead answers it in his place" },
 };
 
 function code(file: string): string {

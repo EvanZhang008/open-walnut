@@ -130,6 +130,7 @@ describe('every source of a "needs you" is live or re-checked', () => {
     session: 'needs-recheck.ts asks its session again (stampChecked)',
     choice: 'needs-recheck.ts asks its Board owner again (stampChoiceChecked)',
     thread: "live: the node's thread store now (user-status-sync re-reads it on every threads change)",
+    approval: 'live: a pending approval in the approvals store now (approval:changed re-derives its task, and it expires on its own)',
   }
   it('names a rule for each', () => {
     const src = readFileSync(join(process.cwd(), 'src/core/user-status.ts'), 'utf8')

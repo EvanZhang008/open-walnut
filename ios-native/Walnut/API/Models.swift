@@ -731,6 +731,61 @@ struct WalnutUserStatus: Codable, Equatable {
     /// Its question a lead, VP or Main answered in the user's place: `by` is the answering task's
     /// id or `human`, `sessionId` the session that answered (additive, 2026-11-07).
     var answeredFor: WalnutAnsweredFor? = nil
+    /// Every open thing the task asks of the user, each answered and snoozed on its own
+    /// (server core/action-needed.ts): an approval, a session's prompt, a decision letter, a Board
+    /// choice, its own ask. nil from an older server (additive, 2026-11-19).
+    var actions: [WalnutActionItem]? = nil
+    /// Needs you through an action while its turn still runs: its row says Working too (additive, 2026-11-19).
+    var working: Bool? = nil
+}
+
+/// One `user_status.actions` item. Decoded leniently: an odd item reads as an unknown kind with
+/// no words, never a failed task list.
+struct WalnutActionItem: Codable, Equatable, Identifiable {
+    /// question | permission | approval | letter | choice | ask (an unknown one is shown, opened in its task).
+    var kind: String = ""
+    var id: String = ""
+    var summary: String = ""
+    var at: String? = nil
+    var sessionId: String? = nil
+    var blocking: Bool? = nil
+    var options: [WalnutAskOption]? = nil
+    var multi: Bool? = nil
+    /// A one-question prompt's question word for word: the key its answer goes under.
+    var question: String? = nil
+    var board: String? = nil
+    var proof: Bool? = nil
+    var snoozedUntil: String? = nil
+
+    init(kind: String, id: String, summary: String, at: String? = nil, sessionId: String? = nil, blocking: Bool? = nil,
+         options: [WalnutAskOption]? = nil, multi: Bool? = nil, board: String? = nil, proof: Bool? = nil, snoozedUntil: String? = nil) {
+        self.kind = kind; self.id = id; self.summary = summary; self.at = at; self.sessionId = sessionId
+        self.blocking = blocking; self.options = options; self.multi = multi; self.board = board; self.proof = proof
+        self.snoozedUntil = snoozedUntil
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try? decoder.container(keyedBy: CodingKeys.self)
+        kind = (try? c?.decodeIfPresent(String.self, forKey: .kind)) ?? ""
+        id = (try? c?.decodeIfPresent(String.self, forKey: .id)) ?? ""
+        summary = (try? c?.decodeIfPresent(String.self, forKey: .summary)) ?? ""
+        at = (try? c?.decodeIfPresent(String.self, forKey: .at)) ?? nil
+        sessionId = (try? c?.decodeIfPresent(String.self, forKey: .sessionId)) ?? nil
+        blocking = (try? c?.decodeIfPresent(Bool.self, forKey: .blocking)) ?? nil
+        options = (try? c?.decodeIfPresent([WalnutAskOption].self, forKey: .options)) ?? nil
+        multi = (try? c?.decodeIfPresent(Bool.self, forKey: .multi)) ?? nil
+        question = (try? c?.decodeIfPresent(String.self, forKey: .question)) ?? nil
+        board = (try? c?.decodeIfPresent(String.self, forKey: .board)) ?? nil
+        proof = (try? c?.decodeIfPresent(Bool.self, forKey: .proof)) ?? nil
+        snoozedUntil = (try? c?.decodeIfPresent(String.self, forKey: .snoozedUntil)) ?? nil
+    }
+}
+
+/// One answer an item offers in one tap (server AskOption).
+struct WalnutAskOption: Codable, Equatable, Identifiable {
+    var id: String
+    var label: String
+    var recommended: Bool? = nil
 }
 
 /// `user_status.line` (server `StatusLine`). Decoded leniently: an odd shape reads as no writer

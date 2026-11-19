@@ -63,6 +63,8 @@ import { TaskFallbackTag } from './fallback-row';
 import { FoldBackButton, FoldSummaryLine, FoldTree, type WorkerFoldCtl } from './WorkerFoldTree';
 import { stateSectionKey } from './worker-fold';
 import '@/styles/status-sections.css';
+import { ActionNeeded } from '@/components/actions/ActionNeeded';
+import { ownLineIsItem } from '@open-walnut/user-status';
 
 export const SECTION_ICONS: Record<StatusSectionKey, ReactNode> = {
   watching: ICONS.ICON_EYE,
@@ -290,7 +292,13 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
       until {twoLine ? formatWaitUntil(task.wait_until) : formatWaitUntil(task.wait_until).replace(/^Today /, '')}
     </span>
   ) : null;
-  const inlineReason = twoLine || (wake && !need && reasonText !== 'Snoozed') ? null : reason;
+  // What it asks, line by line with its answers (ActionNeeded): its Needs you line would say the same.
+  const asks = !isDone && !!task.user_status?.actions?.length;
+  // Its Needs you line is one of those items: the block says it. A failure or a person's own mark
+  // is no item, so its line stays.
+  const shownReason = asks && need && ownLineIsItem(task.user_status) ? null : reason;
+  const alsoWorking = !isDone && task.user_status?.working ? <span className="status-card-also-working" data-testid="status-card-also-working">Working</span> : null;
+  const inlineReason = twoLine || (wake && !need && reasonText !== 'Snoozed') ? null : shownReason;
   const agoEl = ago ? (
     <span className="todo-recent-ago" title={isDone && task.completed_at ? `Completed ${new Date(task.completed_at).toLocaleString()}` : recentActivityTitle(activity)}>{ago}</span>
   ) : null;
@@ -355,14 +363,16 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
           <span className={`status-card-meta${watchablePrUrls(task.tags).length ? ' status-card-meta-pr' : ''}`}>
             <RowProjectName project={task.project || ''} className="status-card-project" onFilter={handlers.onFilterProject} />
             {pills}
-            {reasonBelow ? null : reason}
+            {alsoWorking}
+            {reasonBelow ? null : shownReason}
             {wake}
             <span className="status-card-meta-fill" />
             {/* A Waiting row's time is when it wakes, as in the one-line rows. */}
             {wake ? null : agoEl}
           </span>
           {title}
-          {reasonBelow ? reason : null}
+          {reasonBelow ? shownReason : null}
+          {asks ? <ActionNeeded task={task} /> : null}
           {team && fold ? <FoldSummaryLine host={task} entries={team} ctl={fold} /> : null}
         </span>
       ) : (
@@ -371,6 +381,7 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
         <>
           {title}
           {pills}
+          {alsoWorking}
           {team && fold ? <FoldSummaryLine host={task} entries={team} ctl={fold} /> : null}
           {inlineReason}
           {wake ?? agoEl}
@@ -401,10 +412,13 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
       />
     </div>
   );
-  if (!team || !fold || !fold.isOpen(task.id)) return card;
+  // One line (a project's folds) has no room in the row: the asks go right under it.
+  const below = asks && !twoLine ? <div className="status-card-actions-below"><ActionNeeded task={task} /></div> : null;
+  if (!team || !fold || !fold.isOpen(task.id)) return below ? <>{card}{below}</> : card;
   return (
     <>
       {card}
+      {below}
       <FoldTree host={task} entries={team} ctl={fold} focusedTaskId={handlers.focusedTaskId} onOpen={(t) => handlers.onClick(t)} twoLine={twoLine} />
     </>
   );
@@ -593,7 +607,13 @@ export function StatusSectionGroup({ keys, model, open, onToggle, handlers, appr
   approvals?: NeedsApprovals;
 }) {
   const pending = usePendingApprovals();
-  const waiting = approvals ? pending : [];
+  // An approval its task's row shows with its buttons (Action needed) is not counted again in the
+  // one line; a folded Needs you still counts every one.
+  const onRows = useMemo(() => {
+    if (!open.needs) return new Set<string>();
+    return new Set(sectionRowsOf(model, 'needs').tasks.flatMap((t) => (t.user_status?.actions ?? []).filter((i) => i.kind === 'approval').map((i) => i.id)));
+  }, [model, open.needs]);
+  const waiting = approvals ? pending.filter((p) => !onRows.has(p.id)) : [];
   const alone = approvals === 'alone' && !keys.includes('needs');
   const shownKeys: readonly StatusSectionKey[] = alone && waiting.length > 0
     ? (keys[0] === 'watching' ? ['watching', 'needs', ...keys.slice(1)] : ['needs', ...keys])

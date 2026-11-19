@@ -44,6 +44,8 @@ import { orgEnabledCached } from './org/org-enabled.js';
 import { decisionAnswered } from './human-inbox/open-decision.js';
 import { triggerWatchesOwnWork } from './task-wait-wake.js';
 import { keepsThreads } from './org/keeps-threads.js';
+import { applyActions, type ActionItem } from './action-needed.js';
+import { approvalItemsByTask, letterItem, promptItem } from './action-needed-facts.js';
 
 const SUBSCRIBER = 'user-status-sync';
 const OWN_SOURCE = 'user-status';
@@ -56,6 +58,8 @@ let missedReportsTimer: ReturnType<typeof setTimeout> | null = null;
 const LETTER_ANSWERED = 'human-inbox:answered';
 /** Emitted by human-inbox/store.ts setLetterState: a letter read, archived or pinned. */
 const LETTER_STATE = 'human-inbox:state';
+/** An approval asked, answered, expired or withdrawn (approvals/store.ts APPROVAL_CHANGED). */
+const APPROVAL_CHANGED = 'approval:changed';
 
 let dirty = new Set<string>();
 let all = false;
@@ -79,6 +83,8 @@ export interface StatusFacts {
     /** Its process runs (or ran) on this host, and nothing reaches the host now. */
     hostDown?: string;
     pendingTool?: string; taskId?: string; archived?: boolean; startedAt?: string;
+    /** Its live prompt as an Action needed item (action-needed-facts.ts promptItem). */
+    prompt?: ActionItem;
     /** Its own work that runs on after its turn (sessions/outliving-work.ts), from the live runner. */
     outliving?: OutlivingSource[];
     /** Walnut retries its failed turn by itself at this time (session-auto-continue.ts, ISO). */
@@ -86,6 +92,11 @@ export interface StatusFacts {
   }>;
   /** Task id -> subject of its newest unanswered action_required letter. */
   letters: Map<string, string>;
+  /** Task id -> every open decision letter it sent, as Action needed items (read with `letters`).
+   *  Optional: an older caller's facts carry none. */
+  letterItems?: Map<string, ActionItem[]>;
+  /** Task id -> the approvals its sessions asked for that wait on the user (action-needed-facts.ts). */
+  approvals?: Map<string, ActionItem[]>;
   /** Task id -> subject of its newest open review letter (read with `letters`). Optional: an older
    *  caller's facts carry none. */
   reviews?: Map<string, string>;
@@ -144,7 +155,7 @@ async function safely<T>(what: string, fn: () => Promise<T>, fallback: T): Promi
   }
 }
 
-type SlowSource = 'letters' | 'choices' | 'triggers' | 'schedules' | 'checks';
+type SlowSource = 'letters' | 'choices' | 'triggers' | 'schedules' | 'checks' | 'approvals';
 
 /**
  * The sources that cost a lock or a parse of every Board (the inbox index, the Boards, the
@@ -154,7 +165,7 @@ type SlowSource = 'letters' | 'choices' | 'triggers' | 'schedules' | 'checks';
 const slow: Partial<Record<SlowSource, Map<string, any>>> = {};
 
 function dropSlow(...kinds: SlowSource[]): void {
-  for (const k of kinds.length ? kinds : (['letters', 'choices', 'triggers', 'schedules', 'checks'] as const)) delete slow[k];
+  for (const k of kinds.length ? kinds : (['letters', 'choices', 'triggers', 'schedules', 'checks', 'approvals'] as const)) delete slow[k];
   // A snooze of a thread runs out on its own clock: every sweep counts the Threads again.
   if (!kinds.length) { boardChoices.clear(); threadsChanged(); }
 }
@@ -212,6 +223,7 @@ async function cachedSlow<K extends SlowSource>(kind: K, allIds: readonly string
   const hit = slow[kind];
   if (hit) return hit as NonNullable<StatusFacts[K]>;
   const built = kind === 'letters' ? await readLetters()
+    : kind === 'approvals' ? await readApprovalItems()
     : kind === 'choices' ? await readChoices(allIds)
     : await readRoutines(kind as 'triggers' | 'schedules' | 'checks');
   slow[kind] = built;
@@ -220,12 +232,24 @@ async function cachedSlow<K extends SlowSource>(kind: K, allIds: readonly string
 
 /** The open review letters, read in the same pass as the decision letters (readLetters). */
 let reviewLetters: Map<string, string> = new Map();
+/** Every open decision letter per task as Action needed items, read in the same pass (readLetters). */
+let letterItemsNow: Map<string, ActionItem[]> = new Map();
+
+/** The approvals waiting on the user, per asking task (Action needed). Leader only: a replica keeps none. */
+async function readApprovalItems(): Promise<Map<string, ActionItem[]>> {
+  return safely('approvals', async () => {
+    const { listApprovals } = await import('./approvals/store.js');
+    return approvalItemsByTask(await listApprovals({ status: 'pending' }));
+  }, new Map<string, ActionItem[]>());
+}
 
 async function readLetters(): Promise<StatusFacts['letters']> {
   const out: StatusFacts['letters'] = new Map();
   // Replaced at once, so an unreadable inbox leaves no older review behind.
   const reviews = new Map<string, string>();
   reviewLetters = reviews;
+  const items = new Map<string, ActionItem[]>();
+  letterItemsNow = items;
   await safely('inbox', async () => {
     const { listLetters } = await import('./human-inbox/store.js');
     const { letters: list } = await listLetters({ archived: false });
@@ -241,6 +265,7 @@ async function readLetters(): Promise<StatusFacts['letters']> {
       if (l.type === 'review') reviews.set(tid, l.subject);
       if (l.type !== 'action_required') continue;
       out.set(tid, l.subject);
+      items.set(tid, [...(items.get(tid) ?? []), letterItem(l)]);
     }
   }, undefined);
   return out;
@@ -424,6 +449,7 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
         errorKind: rec.errorKind,
         ...turn,
         pendingTool: rec.pendingPermission ? (rec.pendingPermission.toolName ?? 'permission') : undefined,
+        ...(rec.pendingPermission?.requestId ? { prompt: promptItem(rec.claudeSessionId, rec.pendingPermission) } : {}),
         taskId: rec.taskId, archived: rec.archived, startedAt: rec.startedAt,
       });
     }
@@ -445,6 +471,8 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
 
   const letters = await cachedSlow('letters', allIds);
   const reviews = reviewLetters;
+  const letterItems = letterItemsNow;
+  const approvals = await cachedSlow('approvals', allIds);
   const choices = await cachedSlow('choices', allIds);
 
   const requestsFrom: StatusFacts['requestsFrom'] = new Map();
@@ -477,7 +505,7 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
   const threads = await readNodeThreads(tasks);
   const { getConfig } = await import('./config-manager.js');
   const followWorkers = followWorkersChoice ?? experimentalEnabled((await getConfig()).experimental, 'leader_status_follows_workers');
-  return { followWorkers, sessions, letters, reviews, choices, requestsFrom, triggers, schedules, checks, titles, sessionsOf, undelivered, threads };
+  return { followWorkers, sessions, letters, letterItems, approvals, reviews, choices, requestsFrom, triggers, schedules, checks, titles, sessionsOf, undelivered, threads };
 }
 
 /**
@@ -826,10 +854,26 @@ export function statusOf(
   const own = signInHeld(answeredAbove(canonical, answersOf(task), nowMs, facts.personInputAt?.get(task.id)), facts);
   // The experiment: a leader's status follows its workers (worker-status.ts). Main and a VP keep
   // their own rule (orgNodeNeverNeeds, their Threads); a worker not derived yet reads its phase.
-  if (!facts.followWorkers || task.org_role || !children.length) return { input, status: own };
+  if (!facts.followWorkers || task.org_role || !children.length) return { input, status: withActions(task, facts, own, nowMs) };
   const workers = children.map((c): UserStatus => c.phase === 'COMPLETE' || c.status === 'done'
     ? { state: 'done' } : c.user_status ?? { state: fallbackUserState(c.phase, c.status) });
-  return { input, status: workerStatus(own, workers, { hasLeader: !!task.parent_task_id }), own };
+  return { input, status: withActions(task, facts, workerStatus(own, workers, { hasLeader: !!task.parent_task_id }), nowMs), own };
+}
+
+/** The live Action needed items of a task (action-needed.ts): its pending approvals, its sessions'
+ *  live prompts and its open decision letters. Its own ask and Board choice come from its status. */
+export function actionItemsOf(task: Task, facts: StatusFacts): ActionItem[] {
+  const prompts = (facts.sessionsOf.get(task.id) ?? [])
+    .map((sid) => facts.sessions.get(sid))
+    .flatMap((s) => (s && !s.archived && s.prompt ? [s.prompt] : []));
+  return [...prompts, ...(facts.approvals?.get(task.id) ?? []), ...(facts.letterItems?.get(task.id) ?? [])];
+}
+
+function withActions(task: Task, facts: StatusFacts, status: UserStatus, nowMs: number): UserStatus {
+  // A team the user stopped, or a task he snoozed by its start date (a working one carries no
+  // `snoozed` mark): its items ride along and raise nothing until it is resumed or wakes.
+  const held = facts.teamStopped?.has(task.id) || !!snoozedUntil(task, facts.tasksById, nowMs);
+  return applyActions(status, actionItemsOf(task, facts), task.action_snoozes, { orgNode: !!task.org_role, held, sessionId: task.session_id, nowMs });
 }
 
 function explicitDecisionOwner(task: Task, facts: StatusFacts): RelativeAsk | undefined {
@@ -1079,6 +1123,13 @@ function onEvent(event: { name: string; data: unknown; source?: string }): void 
     case EventNames.SESSION_USAGE_LIMIT:
       if (d.taskId) mark(d.taskId); else markSession(d.sessionId);
       return;
+    case APPROVAL_CHANGED: {
+      // Its asking task gains or loses an Action needed item.
+      dropSlow('approvals');
+      const tid = d.approval?.requester?.taskId;
+      if (typeof tid === 'string') mark(tid); else markAll();
+      return;
+    }
     case EventNames.HUMAN_INBOX_LETTER:
     case LETTER_ANSWERED:
     case LETTER_STATE:
@@ -1119,7 +1170,7 @@ export function startUserStatusSync(): void {
       EventNames.TASK_CREATED, EventNames.TASK_UPDATED, EventNames.TASK_COMPLETED,
       EventNames.SESSION_STATUS_CHANGED, EventNames.SESSION_PERMISSION_REQUEST, EventNames.SESSION_PERMISSION_RESOLVED,
       EventNames.SESSION_ENDED, EventNames.SESSION_STARTED, EventNames.SESSION_USAGE_LIMIT,
-      EventNames.HUMAN_INBOX_LETTER, LETTER_ANSWERED, LETTER_STATE, EventNames.BOARD_CHANGED,
+      EventNames.HUMAN_INBOX_LETTER, LETTER_ANSWERED, LETTER_STATE, APPROVAL_CHANGED, EventNames.BOARD_CHANGED,
       EventNames.CRON_JOB_ADDED, EventNames.CRON_JOB_UPDATED, EventNames.CRON_JOB_REMOVED,
       EventNames.ORG_THREADS_CHANGED, EventNames.HOST_STATUS, EventNames.CONFIG_CHANGED,
     ],

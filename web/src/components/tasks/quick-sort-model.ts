@@ -237,6 +237,16 @@ function morning(y: number, m: number, d: number, clampToMonth = false): Date {
   return new Date(y, m, day, 9, 0, 0, 0);
 }
 
+/** "Check again later" for one ask (core/action-needed.ts): an hour or three from now, before the day presets. */
+export function soonSnoozePresets(nowMs = Date.now()): SnoozePreset[] {
+  const at = (h: number) => new Date(nowMs + h * 3_600_000);
+  const hm = (x: Date) => `${x.getHours()}:${String(x.getMinutes()).padStart(2, '0')}`;
+  return [
+    { id: 'one-hour', label: 'In 1 hour', hint: hm(at(1)), date: at(1).toISOString() },
+    { id: 'three-hours', label: 'In 3 hours', hint: hm(at(3)), date: at(3).toISOString() },
+  ];
+}
+
 export function snoozePresets(nowMs = Date.now()): SnoozePreset[] {
   const now = new Date(nowMs);
   const y = now.getFullYear(); const m = now.getMonth(); const d = now.getDate();

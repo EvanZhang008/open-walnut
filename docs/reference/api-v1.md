@@ -184,6 +184,7 @@ path on the companion".
 | PUT | `/api/v1/tasks/:id/description` | Set the description |
 | PUT | `/api/v1/tasks/:id/summary` | Set the summary |
 | PUT | `/api/v1/tasks/:id/depends-on` | Replace dependencies |
+| PUT | `/api/v1/tasks/:id/actions/:item/snooze` | Snooze one thing the task asks of the user (additive, 2026-11): `{ until: ISO }` until then, `{ until: null }` back now; `item` is a `user_status.actions[].id`. Answers `{ task_id, item, snoozed_until, user_status }`; 404 `action_not_found` for an item it does not ask now, 400 for a time past or more than a year ahead, 501 on a replica. Additive `user_status.actions[]` (`kind`: `question`/`permission`/`approval`/`letter`/`choice`/`ask`, `id`, `summary`, optional `at`, `sessionId`, `blocking`, `options`, `multi`, `question`, `board`, `proof`, `snoozedUntil`), `user_status.working` (its turn still runs) and `user_status.source: 'approval'`; an older client ignores them |
 | PATCH | `/api/v1/tasks/reorder` | Reorder tasks within one project group |
 | POST | `/api/v1/tasks/batch/phase` | Set the phase of many tasks (partial success) |
 | POST | `/api/v1/tasks/batch/delete` | Delete many tasks (partial success) |

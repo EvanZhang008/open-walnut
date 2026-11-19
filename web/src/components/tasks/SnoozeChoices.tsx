@@ -9,19 +9,21 @@ import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { DatePicker } from '@/components/common/DatePicker';
 import type { CursorPoint } from './CursorFlyout';
-import { snoozePresets, todayIso } from './quick-sort-model';
+import { snoozePresets, soonSnoozePresets, todayIso } from './quick-sort-model';
 import '@/styles/quick-sort.css';
 
-export function SnoozeRows({ onSnooze, onPickDate, onClear }: {
+export function SnoozeRows({ onSnooze, onPickDate, onClear, soon }: {
   onSnooze: (date: string) => void;
   onPickDate: () => void;
   /** Shown when the task is snoozed now. */
   onClear?: () => void;
+  /** Offer "In 1 hour" and "In 3 hours" first (one ask's "check again later"). */
+  soon?: boolean;
 }) {
   return (
     <div className="snooze-rows" role="group" aria-label="Snooze until">
       <div className="snooze-rows-head">Snooze until</div>
-      {snoozePresets().map(p => (
+      {[...(soon ? soonSnoozePresets() : []), ...snoozePresets()].map(p => (
         <button key={p.id} type="button" className="task-kebab-project-opt snooze-row" data-snooze={p.id}
           onClick={e => { e.stopPropagation(); onSnooze(p.date); }}>
           <span className="task-kebab-project-opt-name">{p.label}</span>
@@ -64,12 +66,13 @@ function PointFlyout({ point, anchorRef, label, className, onClose, children }: 
   );
 }
 
-export function SnoozeFlyout({ point, anchorRef, onSnooze, onPickDate, onClear, onClose }: {
+export function SnoozeFlyout({ point, anchorRef, onSnooze, onPickDate, onClear, onClose, soon }: {
   point: CursorPoint; anchorRef: RefObject<HTMLElement | null>;
   onSnooze: (date: string) => void; onPickDate: () => void; onClear?: () => void; onClose: () => void;
+  soon?: boolean;
 }) {
   return <PointFlyout point={point} anchorRef={anchorRef} label="Snooze until" onClose={onClose}>
-    <SnoozeRows onSnooze={d => { onSnooze(d); onClose(); }} onPickDate={onPickDate} onClear={onClear ? () => { onClear(); onClose(); } : undefined} />
+    <SnoozeRows soon={soon} onSnooze={d => { onSnooze(d); onClose(); }} onPickDate={onPickDate} onClear={onClear ? () => { onClear(); onClose(); } : undefined} />
   </PointFlyout>;
 }
 

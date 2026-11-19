@@ -1134,6 +1134,9 @@ export interface Task {
    *  `status_report`, and kept current by user-status-sync.ts. Every surface (Board, Org, task
    *  list, iOS) reads this instead of the phase. Local-only, payload blob. */
   user_status?: UserStatus;
+  /** The user's snoozes of single items it asks (action-needed.ts): an approval, a prompt, a letter,
+   *  a choice or its ask, each until a time, without snoozing the task. Local-only, payload blob. */
+  action_snoozes?: import('./action-needed.js').ActionSnooze[];
   /** Main's or a lead's Brief: the short letter to the user its session edits itself
    *  (brief_write, sessions/brief-write.ts), shown above its chat on the Org page. Local-only, payload blob. */
   brief?: TaskBrief;

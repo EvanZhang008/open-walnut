@@ -102,6 +102,12 @@ final class ApprovalCenter {
         await refresh()
     }
 
+    /// Snoozed on its task's row (ActionNeededView): its sheet is not opened by itself (a push tap still opens it).
+    func snoozed(id: String) {
+        dismissed.insert(id)
+        if presented?.id == id { presented = nil }
+    }
+
     func close(_ approval: Approval) {
         dismissed.insert(approval.id)
         if presented?.id == approval.id { presented = nil }

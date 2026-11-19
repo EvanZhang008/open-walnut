@@ -40,6 +40,7 @@ import { askNoticePermission, nativeNoticeStatus, noticeAccess, openNoticeSettin
 import { ApprovalContextRows, AskerLink, hostWords, summaryOf, technicalDetail, wordsOf } from './approval-context';
 import { useYieldsToTaskOpen } from '@/hooks/useOpenTask';
 import './approvals.css';
+import { useSnoozedApprovalIds } from './snoozed-approvals';
 
 export function useNow(ms: number): number {
   const [now, setNow] = useState(() => Date.now());
@@ -409,7 +410,9 @@ export function ApprovalPrompts() {
   const phone = usePhoneLayout();
   // The corner holds one card, the request that came first (the dialog shows the one it opened):
   // it stays until it is answered, a newer one only adds to its "N waiting".
-  const waiting = pendingAt(s, now).filter((a) => a.id !== s.openId);
+  // One the person snoozed on its task's row (Action needed) waits out its snooze off the corner.
+  const snoozed = useSnoozedApprovalIds();
+  const waiting = pendingAt(s, now).filter((a) => a.id !== s.openId && !snoozed.has(a.id));
   const first = waiting[0];
   const card = first;
   // The answer of the card the corner was showing stays a moment over its place ("Approved …"),

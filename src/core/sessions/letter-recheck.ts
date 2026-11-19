@@ -24,6 +24,7 @@ import type { Task } from '../types.js';
 import { agoWords, NEEDS_RECHECK_MS } from '../user-status.js';
 import { MAX_RECHECKS } from './needs-recheck.js';
 import { snoozeEndedMs, snoozedUntil } from '../snooze.js';
+import { itemSnoozeEndedMs, snoozeOfItem } from '../action-needed.js';
 
 export interface LetterRecheck {
   /** When the last note went in (ISO). */
@@ -111,7 +112,10 @@ export async function runLetterRecheck(
       if (owner && watchedBy(owner, l.id, watching)) continue;
       // Snoozed: not raised until its date; from then the letter counts as looked at (snooze.ts).
       if (owner && snoozedUntil(owner, allById, nowMs)) continue;
-      const ended = owner ? snoozeEndedMs(owner, allById, nowMs) : NaN;
+      // The user snoozed this letter alone on its task's row (action-needed.ts): the same.
+      if (owner && snoozeOfItem(owner.action_snoozes, l.id, nowMs)) continue;
+      // The later of the task's own snooze and this letter's own (action-needed.ts) is its last look.
+      const ended = owner ? Math.max(snoozeEndedMs(owner, allById, nowMs) || -Infinity, itemSnoozeEndedMs(owner.action_snoozes, l.id, nowMs) || -Infinity) : NaN;
       const at = Math.max(letterActivityAt(l), Number.isFinite(ended) ? ended : -Infinity);
       if (nowMs - at < NEEDS_RECHECK_MS || (opts.notBefore !== undefined && at < opts.notBefore)) continue;
       const tid = l.sender.taskId!;

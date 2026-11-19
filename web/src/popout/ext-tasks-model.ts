@@ -100,7 +100,8 @@ export function extTaskLists(tasks: readonly Task[], kept: ReadonlySet<string> =
   // Focus is the board's Focus tier, as Home counts it: every open task in it, whatever it needs
   // (its row says so). Needs you is the rest that needs the person, so each task shows once.
   const focus = open.filter(inFocus).sort(newest);
-  const needs = open.filter((t) => !inFocus(t) && ((shownState(taskUserState(t)) === 'needs' && !readHere(t)) || kept.has(t.id))).sort(newest);
+  // A task that needs the person for an approval only is counted with the approvals (their own rows).
+  const needs = open.filter((t) => !inFocus(t) && ((shownState(taskUserState(t)) === 'needs' && !readHere(t) && t.user_status?.source !== 'approval') || kept.has(t.id))).sort(newest);
   const row = (t: Task) => rowOf(t, wordsOf);
   return { needs: needs.slice(0, EXT_TASKS_MAX).map(row), focus: focus.slice(0, EXT_TASKS_MAX).map(row) };
 }

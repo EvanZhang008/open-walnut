@@ -72,6 +72,8 @@ export function openAskOf(t: Pick<Task, 'user_status' | 'status_report'>): OpenA
     if (us.source === 'prompt') return { ask: us.ask, where: 'prompt' };
     if (us.source === 'letter') return { ask: us.ask, where: 'letter' };
     if (us.source === 'error') return { none: `its Needs you is a failure only the user can clear ("${us.ask.slice(0, 160)}"), not a question: once it is fixed, retry it (task_restart)` };
+    // Only a person answers an approval (approvals-v1.ts personOnly): no lead says yes in his place.
+    if (us.source === 'approval') return { none: `its Needs you is an approval ("${us.ask.slice(0, 160)}"): only the user approves it, on its row or its card` };
   }
   // An org node's own question, folded into its chat: settled where it lives (its report, a choice, a prompt, a letter).
   if (us?.state === 'waiting' && us.kind === 'you' && us.chatAsk) {

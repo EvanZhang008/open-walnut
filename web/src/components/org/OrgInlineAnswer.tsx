@@ -32,6 +32,7 @@ import { log } from '@/utils/log';
 import { openLetterFor } from './org-answer-shape';
 import { answerMessage, formOptions, inlineShape, type AskOption } from './org-ask-form';
 import type { OrgAlertView } from './org-channels-model';
+import '@/styles/inline-answer.css';
 
 /** Where an answer failed: the reason, and the words the user had typed, to put back. */
 export interface AnswerFailure { message: string; draft?: string; /** The pictures to put back with the words. */ images?: ImageAttachment[]; /** What failed: an answer (default), or the row's snooze, which the row says itself. */ of?: 'answer' | 'snooze' }
@@ -142,7 +143,7 @@ function LetterAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords
     void loadLetters().finally(() => { if (alive) setFresh(true); });
     return () => { alive = false; };
   }, []);
-  const letter = useMemo(() => openLetterFor(snap.letters, alert.taskId), [snap.letters, alert.taskId]);
+  const letter = useMemo(() => openLetterFor(snap.letters, alert.taskId, Date.now(), alert.itemId), [snap.letters, alert.taskId, alert.itemId]);
   useEffect(() => { if (fresh && !letter) onWords(); }, [fresh, letter, onWords]);
   if (!letter) return <div className="org-answer-note" role="status">{fresh ? '' : 'Loading the letter…'}</div>;
   const pick = (actionId: string) => {
@@ -305,26 +306,28 @@ function SessionAnswer({ alert, failure, onSend, sessionId, summary, shape }: Fo
 
 /** The ask's answer, in its row. `onAnswer` hides the row the moment an answer goes and returns how
  *  to settle it; `failure` (the last try failed) shows the reason with the form. */
-export function OrgInlineAnswer({ alert, task, summary, onAnswer, failure }: {
+export function OrgInlineAnswer({ alert, task, summary, onAnswer, failure, sessionId: askingSession }: {
   alert: OrgAlertView;
   task: Task | undefined;
   summary: string;
   onAnswer: (taskId: string) => AnswerSettle;
   failure?: AnswerFailure;
+  /** The session that asks (an Action needed item's own), else the task's. */
+  sessionId?: string;
 }) {
   // A letter or a choice this browser cannot find takes the words form instead.
   const [wordsOnly, setWordsOnly] = useState(false);
   const toWords = useMemo(() => () => setWordsOnly(true), []);
-  const sessionId = task ? resolveTaskSessionId(task) : null;
+  const sessionId = askingSession ?? (task ? resolveTaskSessionId(task) : null);
   const shape = wordsOnly ? 'text' : inlineShape(alert);
   const send = (): AnswerSettle => onAnswer(alert.taskId);
   // A live prompt answers through its own card, which says when it was taken.
   const promptDone = () => { onAnswer(alert.taskId)(); };
   return (
-    <div className="org-answer-inline" data-testid="org-answer-inline" data-shape={shape} data-task-id={alert.taskId}>
+    <div className="org-answer-inline" data-testid="org-answer-inline" data-shape={shape} data-answer-task={alert.taskId}>
       {shape === 'prompt' && sessionId ? (
         <KanbanCardPrompt
-          request={{ sessionId, toolName: alert.kind === 'question' ? 'AskUserQuestion' : alert.tool ?? '' }}
+          request={{ sessionId, toolName: alert.kind === 'question' ? 'AskUserQuestion' : alert.tool ?? '', ...(alert.itemId ? { requestId: alert.itemId } : {}) }}
           onAnswered={promptDone}
         />
       ) : shape === 'letter' ? (

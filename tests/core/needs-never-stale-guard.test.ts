@@ -72,7 +72,7 @@ describe('an ask is never left unverified past a day', () => {
     const KNOWN: Record<string, string> = {
       cleared: 'it asks the user nothing now (waiting, read, done): its count is cleared, the next ask starts fresh',
       "task.plugin_only || task.user_status?.state !== 'needs' || (source !== 'session' && source !== 'choice')": 'not a session\'s own ask or a Board choice: Walnut\'s live records (a prompt, a letter, an error) need no check',
-      "!recheckDue(task, { nowMs, snoozeEndedMs: snoozeEndedMs(task, byId, nowMs), unknownSince: startedAt || nowMs, ...(ephemeral ? { notBefore: startedAt } : {}) })": 'checked recently (by the session or the trigger watching the ask), snoozed, or noted within the gap (at most a day, pinned above)',
+      "!recheckDue(task, { nowMs, snoozeEndedMs: Number.isFinite(ended) ? ended : NaN, unknownSince: startedAt || nowMs, ...(ephemeral ? { notBefore: startedAt } : {}) })": 'checked recently (by the session or the trigger watching the ask), snoozed (the task, or this ask alone on its row), or noted within the gap (at most a day, pinned above)',
       'quieted.has(task.id)': 'the user stopped or quieted its team: resumed, it is due at once',
       "source === 'choice' && !choice": 'a choice status with no Board named: nobody to ask',
       "!owner || owner.phase === 'COMPLETE' || owner.status === 'done'": 'the Board owner is finished: its choice goes with it',

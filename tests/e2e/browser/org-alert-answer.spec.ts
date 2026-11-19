@@ -115,7 +115,7 @@ async function openAnswer(page: Page, id: string, shape: string) {
   await expect(row.getByTestId('org-alert-quote')).toBeVisible()
   if (shape === 'prompt') await expect(row.getByTestId('org-alert-snooze')).toHaveCount(0)
   else await expect(row.getByTestId('org-alert-snooze')).toBeVisible()
-  const inline = page.locator(`[data-testid="org-answer-inline"][data-task-id="${id}"]`)
+  const inline = page.locator(`[data-testid="org-answer-inline"][data-answer-task="${id}"]`)
   await expect(inline).toHaveAttribute('data-shape', shape)
   // Inside the rail.
   const box = (await inline.boundingBox())!

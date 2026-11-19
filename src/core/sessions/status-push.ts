@@ -74,7 +74,10 @@ function clip(s: string | undefined): string {
 export function seenOf(task: Pick<Task, 'phase' | 'status' | 'user_status'>): Seen {
   const done = task.phase === 'COMPLETE' || task.status === 'done';
   const s: UserStatus | undefined = done ? undefined : task.user_status ?? undefined;
-  const state: UserState = done ? 'done' : s?.state ?? fallbackUserState(task.phase, task.status);
+  // An approval asked while its turn runs (action-needed.ts) is the person's yes, shown with its
+  // buttons on his own screens: for the task's leader it still works, no news up the org.
+  const approvalAtWork = s?.state === 'needs' && s.source === 'approval' && s.working === true;
+  const state: UserState = done ? 'done' : approvalAtWork ? 'working' : s?.state ?? fallbackUserState(task.phase, task.status);
   const words = state === 'needs' ? clip(s?.ask) : state === 'waiting' || state === 'read' ? clip(s?.waitingOn) : '';
   const label = stateWord(state, !!s?.snoozed) + (state === 'waiting' && s?.kind && s.kind !== 'other' ? ` (${s.kind === 'you' ? 'on you' : s.kind === 'task' ? 'on another task' : s.kind === 'lead' ? 'on its lead' : s.kind})` : '');
   const decision = state === 'needs' ? statusDecision(s) : null;

@@ -65,6 +65,7 @@ export const OWED_STATUS_SOURCES: Record<NonNullable<UserStatus['source']>, { ow
   prompt: { owed: true, why: 'a live prompt waits on the user' },
   error: { owed: false, why: 'a failed session is the machine\'s, and a close ends it' },
   thread: { owed: false, why: 'a Thread waiting on the user is his own request to Main or a VP, which are never closed as work' },
+  approval: { owed: false, why: 'an approval is the asking step\'s own wait: it expires or is withdrawn on its own, and the corner card keeps it while it waits' },
 };
 
 /** The Progress labels of work not finished (task-progress.ts). */

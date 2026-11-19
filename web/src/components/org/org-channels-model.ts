@@ -54,6 +54,9 @@ export interface OrgAlertView {
   /** A subtask's ask: the top-level task it rolls up to (topLevelOf), shown first on the card,
    *  so a VP's or Main's Task view reads by top-level task. Answering it answers the subtask. */
   via?: { id: string; title: string };
+  /** The one Action needed item it answers (user_status.actions[].id): a letter's or a prompt's own
+   *  id, so a task with two letters answers the one shown (core/action-needed.ts). */
+  itemId?: string;
 }
 
 /** The top-level task above a subtask (its root below Main or a VP), or undefined for a top-level one. */
@@ -186,6 +189,8 @@ function collectFlatAlerts(ids: readonly string[], byId: ReadonlyMap<string, Tas
     // A node waiting on him through its Threads is counted and drawn as its threads, not a card;
     // a task with Threads on (no Org node) has no threads on this page, so it stays a card.
     if (status?.source === 'thread' && task.org_role) continue;
+    // Its approval is listed with its own buttons beside the cards (approvalsForNode): no card too.
+    if (status?.source === 'approval') continue;
     const hit = probe(task);
     // A failed session its status reads as Waiting (its host gone a moment, a clock or a trigger
     // still armed to bring it back) does not need the user, here as on the Board.

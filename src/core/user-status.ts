@@ -42,6 +42,9 @@ import type { ThreadCounts } from './org/thread-view.js';
 import { outlivingLine, type OutlivingSource } from './sessions/outliving-work.js';
 import type { SameAskFold } from './same-ask.js';
 import { reportDecision, type AskMemory, type StatusDecision } from './ask-decision.js';
+import type { ActionItem } from './action-needed.js';
+// The web reads Action needed through this module's alias (@open-walnut/user-status).
+export { ACTION_KINDS, ACTION_KIND_LABELS, openActions, ownLineIsItem, promptKind, type ActionItem, type ActionKind } from './action-needed.js';
 import { ERROR_OWNER_WORDS, USER_ERROR_WORDS, errorOwnerOf, usersErrorKind } from './sessions/session-error-owner.js';
 
 export type UserState = 'needs' | 'read' | 'working' | 'waiting' | 'done';
@@ -418,7 +421,8 @@ export interface UserStatus {
    *  session, a letter in the inbox, a choice on the Board, a failed session, or the
    *  session's own question at the end of its turn. */
   /** 'thread': a thread waiting on him, on a task with Threads on (taskThreadNeeds); Main's and a lead's never (they carry counts). */
-  source?: 'prompt' | 'letter' | 'choice' | 'error' | 'session' | 'thread';
+  /** 'approval': an approval its session asked for (action-needed.ts). */
+  source?: 'prompt' | 'letter' | 'choice' | 'error' | 'session' | 'thread' | 'approval';
   /** Main or a lead: what its Threads hold for the user (shown, waiting on him, the newest's title).
    *  The Org page shows them as threads; the node itself is never Needs you (orgNodeNeverNeeds). */
   threads?: ThreadCounts;
@@ -503,6 +507,11 @@ export interface UserStatus {
   /** needs from its own report: the decision it asks (ask-decision.ts). Every surface tells a change
    *  of the ask by its `key`, never by its words. */
   decision?: StatusDecision;
+  /** Every open thing it asks of the user, each answered and snoozed on its own (action-needed.ts):
+   *  an approval, a session's prompt, a decision letter, a Board choice, its own ask. Absent when none. */
+  actions?: ActionItem[];
+  /** needs through an action while its turn still runs (action-needed.ts applyActions): its row says Working too. */
+  working?: true;
 }
 
 /** The report source fields of a status, for a rebuilt status that keeps its `now`/`next`. Pure. */
@@ -545,7 +554,8 @@ export function rollUpAsks(
   for (const c of children) {
     const s = c.user_status;
     if (c.phase === 'COMPLETE' || c.status === 'done' || !s || s.snoozed) continue;
-    if (s.state === 'needs' && s.ask) {
+    // An approval is the person's own yes (action-needed.ts): no leader carries it as a decision.
+    if (s.state === 'needs' && s.ask && s.source !== 'approval') {
       push({
         id: c.id, title: c.title, ask: s.ask, ...(s.askForm ? { form: s.askForm } : {}),
         ...(s.checkedAt ? { checkedAt: s.checkedAt } : {}), ...(s.decision ? { decision: s.decision } : {}),

@@ -23,6 +23,7 @@ import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
 import { NEEDS_RECHECK_MS, agoWords } from '../user-status.js';
 import { snoozeEndedMs } from '../snooze.js';
+import { itemSnoozeEndedMs } from '../action-needed.js';
 import { statusDecision } from '../ask-decision.js';
 
 /** A "needs you" checked longer ago than this is checked again (user-status.ts reads it as not
@@ -149,7 +150,10 @@ export async function runNeedsRecheck(nowMs = Date.now()): Promise<string[]> {
       if (task.plugin_only || task.user_status?.state !== 'needs' || (source !== 'session' && source !== 'choice')) continue;
       // A trigger of the task does not exempt it (it watches the task, maybe not this ask); one the
       // session armed to watch this ask stamps its check (recheck-watch.ts, stampChecked).
-      if (!recheckDue(task, { nowMs, snoozeEndedMs: snoozeEndedMs(task, byId, nowMs), unknownSince: startedAt || nowMs, ...(ephemeral ? { notBefore: startedAt } : {}) })) continue;
+      // The later of the task's own snooze and a snooze of this ask alone on its row (action-needed.ts) is its last look.
+      const askItem = (task.user_status?.actions ?? []).find((i) => i.kind === (source === 'choice' ? 'choice' : 'ask'))?.id;
+      const ended = Math.max(snoozeEndedMs(task, byId, nowMs) || -Infinity, askItem ? itemSnoozeEndedMs(task.action_snoozes, askItem, nowMs) || -Infinity : -Infinity);
+      if (!recheckDue(task, { nowMs, snoozeEndedMs: Number.isFinite(ended) ? ended : NaN, unknownSince: startedAt || nowMs, ...(ephemeral ? { notBefore: startedAt } : {}) })) continue;
       if (quieted.has(task.id)) continue;
       // A trigger watching the ask needs no skip here: each run it makes is the ask's last check
       // (checkedAt), so it is due only once that trigger stopped checking (2026-11-04: a skip on

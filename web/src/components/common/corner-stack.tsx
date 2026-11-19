@@ -142,8 +142,10 @@ function sync(): void {
   const compact = !phone && crowded;
   stack.classList.toggle('is-compact', compact);
   // A page's own list of the approvals in sight (Home's Needs you line, the Org page's): the card
-  // there keeps its short form, so one request does not show twice at full size.
-  const summaryInSight = !approvalsListed && [...document.querySelectorAll(`${PAGE_AREA.split(', ').map((a) => `${a} [data-testid="approval-summary"]`).join(', ')}`)].some(inSight);
+  // there keeps its short form, so one request does not show twice at full size. A task row's
+  // Action needed line of an approval (ActionNeeded.tsx) is such a list too, with its buttons.
+  const listed = ['[data-testid="approval-summary"]', '[data-testid="action-item"][data-kind="approval"]'];
+  const summaryInSight = !approvalsListed && [...document.querySelectorAll(PAGE_AREA.split(', ').flatMap((a) => listed.map((l) => `${a} ${l}`)).join(', '))].some(inSight);
   setCornerState({ compact, approvalsListed, summaryInSight });
   // The phone's drawer is a layer over the page: the stack waits under it until it closes.
   stack.classList.toggle('under-drawer', phone && !!document.querySelector('.main-content[inert]'));

@@ -13,6 +13,7 @@ import * as ICONS from '@/components/common/Icons';
 import { openApproval, pendingAt, useApprovals, type ApprovalsState } from './approvals-store';
 import { useNow } from './ApprovalPrompts';
 import './approvals.css';
+import { useSnoozedApprovalIds } from './snoozed-approvals';
 
 /**
  * The approvals waiting, oldest first. No clock: the server's own expiry event takes one off, so a
@@ -20,8 +21,10 @@ import './approvals.css';
  */
 export function usePendingApprovals(): Approval[] {
   const items = useApprovals().items;
+  // One the person snoozed on its task's row (Action needed) is not counted until it comes back.
+  const snoozed = useSnoozedApprovalIds();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- one list per change of the items
-  return useMemo(() => pendingAt({ items } as ApprovalsState, Date.now()), [items]);
+  return useMemo(() => pendingAt({ items } as ApprovalsState, Date.now()).filter((a) => !snoozed.has(a.id)), [items, snoozed]);
 }
 
 /**

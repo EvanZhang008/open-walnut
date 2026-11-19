@@ -144,6 +144,7 @@ import { buildFilterEvalContext, dimPasses, hiddenByReasons, passesChips, type F
 import { useHomeFilters, useArchiveFetch, useCreatedOutsideToast } from './useHomeFilters';
 import { archiveNarrowed, footerScope } from './TodoFilterFooter';
 import { LimitedSummary, StatusSectionGroup, sectionRowsOf, type SectionRowHandlers } from './StatusSections';
+import { ActionNeeded } from '@/components/actions/ActionNeeded';
 import { ProjectStatusFolds, useProjectFolds } from './PanelDesignParts';
 import { bottomStatusSections, foldTasksByProject, leftoverFoldProjects, projectFoldKey, usePanelDesign, type ProjectFoldTasks } from './panel-design';
 import { FOLD_PANEL_ATTR, statusSectionFoldKind, statusSectionsOpen } from './section-fold-rule';
@@ -1401,6 +1402,8 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
         )}
         {/* Why the task is outside the current filters (focus override, spec 5.12). */}
         {filterOverrideReason}
+        {/* What it asks of the user, each with its answer and its own Snooze (ActionNeeded). */}
+        {!isDone && task.user_status?.actions?.length ? <ActionNeeded task={task} /> : null}
       </div>
     </div>
     </>

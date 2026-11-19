@@ -58,6 +58,8 @@ export function briefMark(task: MarkTask): string {
   const state = stateOf(task);
   // A node's Thread waiting on the user is his own request, no move of the letter (2026-11-03).
   if (state === 'needs' && task.user_status?.source === 'thread') return 'open';
+  // An approval asked while its turn runs is no move of the Brief either (action-needed.ts).
+  if (state === 'needs' && task.user_status?.source === 'approval' && task.user_status.working) return 'open';
   if (state !== 'needs') return state === 'done' ? 'done' : 'open';
   const decision = statusDecision(task.user_status);
   return decision ? `needs|#${decision.key}` : `needs|${clip(task.user_status?.ask)}`;

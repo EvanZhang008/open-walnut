@@ -17,11 +17,12 @@ export function answerShape(a: OrgAlertView): AnswerShape {
   return 'words';
 }
 
-/** The newest decision letter from this task still waiting on the user. */
-export function openLetterFor(letters: readonly LetterEnvelope[], taskId: string, now = Date.now()): LetterEnvelope | null {
+/** The newest decision letter from this task still waiting on the user, or the one `letterId` names. */
+export function openLetterFor(letters: readonly LetterEnvelope[], taskId: string, now = Date.now(), letterId?: string): LetterEnvelope | null {
   let best: LetterEnvelope | null = null;
   for (const l of letters) {
     if (l.sender.taskId !== taskId || !isOpenDecision(l, now) || !l.actions?.length) continue;
+    if (letterId && l.id !== letterId) continue;
     if (!best || l.createdAt > best.createdAt) best = l;
   }
   return best;

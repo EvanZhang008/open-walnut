@@ -306,7 +306,21 @@ struct TaskBoardRow: View {
     /// the ring's hit area was exactly that kind of change.
     static var separatorLeadingInset: CGFloat { ringLayoutWidth + rowSpacing }
 
+    /// What the task asks of the user, each answered and snoozed on its own (ActionNeededView).
+    private var actionItems: [WalnutActionItem] { row.isDone ? [] : (row.task?.userStatus?.actions ?? []) }
+
     var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            mainRow
+            // A sibling of the row's tap target, as the ring is: its buttons answer, they never open the session.
+            if let task = row.task, !actionItems.isEmpty {
+                ActionNeededView(task: task, items: actionItems, onOpenSession: onOpenSession)
+                    .padding(.leading, Self.separatorLeadingInset)
+            }
+        }
+    }
+
+    private var mainRow: some View {
         HStack(alignment: .top, spacing: Self.rowSpacing) {
             ring
             VStack(alignment: .leading, spacing: 2) {
@@ -321,7 +335,7 @@ struct TaskBoardRow: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if showsProject { projectLine }
-                if let need {
+                if let need, !ActionNeededModel.ownLineIsItem(row.task?.userStatus) {
                     NeedLineView(need: need, toRead: isToRead, font: .caption, id: "board.row.need.\(row.id)", task: row.task)
                 }
             }

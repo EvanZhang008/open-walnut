@@ -2724,6 +2724,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/v1', (await import('./routes/agent-skills-v1.js')).agentSkillsV1Router)
   // A watch on a task: who hears where it stands, and how often at least (sessions/task-watch.ts).
   app.use('/api/v1', (await import('./routes/task-watch-v1.js')).taskWatchV1Router)
+  // Snooze one thing a task asks of the user, not the task (core/action-needed.ts).
+  app.use('/api/v1', (await import('./routes/task-actions-v1.js')).taskActionsV1Router)
   app.use('/api/v1', (await import('./routes/brief-v1.js')).briefV1Router)
   app.use('/api/v1', (await import('./routes/org-threads-v1.js')).orgThreadsV1Router)
   // Private tasks: make a synced task local, send a local one to its project's service (core/private-tasks/).
