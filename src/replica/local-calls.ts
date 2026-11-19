@@ -12,11 +12,16 @@
  *   the Mac answers again   `needs_leader` before anything runs: the daemon relays it there
  *   a route that needs the Mac   its 503 `needs_leader` goes back with that code, so a
  *                                session's call gets the daemon's own away answer instead
+ *   a full journal, the brake    `queue_full` / `throttled` with the route's wait: retryable
+ *   no host key yet             every call refused: an empty key would take the Mac's own origin
  */
 import { log } from '../logging/index.js'
-import { relayedCallOf, serveRelayedCall, type KeptRelay } from '../core/peers/gateway-answer.js'
+import { packRelayResult, relayedCallOf, serveRelayedCall, type KeptRelay } from '../core/peers/gateway-answer.js'
 import { gatewayHubTimeoutMs } from '../providers/gateway-core.js'
 import { DaemonFrameTooLargeError, tooLargeGatewayReply } from '../providers/daemon-frame-cap.js'
+
+/** The route refusals that go back with their own code: the daemon's away answer, and the two a caller retries. */
+const LIFTED = ['needs_leader', 'queue_full', 'throttled'] as const
 
 /** How long the daemon may take to ack a result on the loopback link. */
 const RESULT_ACK_MS = 10_000
@@ -34,10 +39,14 @@ export interface LocalCallsDeps {
 
 /** The handler for the daemon's `gateway-request` events. */
 export function createLocalCalls(deps: LocalCallsDeps): (event: Record<string, unknown>) => void {
-  const hostKey = deps.hostKey || '__local__'
+  // Never a stand-in name: '__local__' is the Mac's own origin, so a call would act as the Mac's.
+  const hostKey = deps.hostKey ?? ''
+  /** What the daemon advertised (its own capabilities, not this server's). */
+  const daemonHas = (c: string) => deps.capabilities()?.includes(c) === true
   const send = async (reply: Record<string, unknown>, kept?: KeptRelay): Promise<boolean> => {
     try {
-      return (await deps.request('gateway-result', reply, RESULT_ACK_MS)).ok === true
+      const packed = await packRelayResult(reply, daemonHas('gateway-result-gz-v1'))
+      return (await deps.request('gateway-result', packed, RESULT_ACK_MS)).ok === true
     } catch (err) {
       // Too large for one frame, or the link went: the caller hears why, never a bare timeout.
       log.web.warn('replica: a local call\'s answer could not be sent', { relayId: reply.relayId, error: err instanceof Error ? err.message : String(err) })
@@ -55,14 +64,16 @@ export function createLocalCalls(deps: LocalCallsDeps): (event: Record<string, u
     if (!call) return
     void serveRelayedCall(call, {
       hostKey,
-      hasCapability: (c) => deps.capabilities()?.includes(c) === true,
+      hasCapability: daemonHas,
       label: 'replica',
       receivedAt,
       deadlineMs: gatewayHubTimeoutMs(),
-      liftCodes: ['needs_leader'],
-      refuse: (c) => deps.leaderAnswers()
-        ? { relayId: c.relayId, error: 'your Mac answers again; the call goes to it', errorCode: 'needs_leader' }
-        : null,
+      liftCodes: LIFTED,
+      refuse: (c) => !hostKey
+        ? { relayId: c.relayId, error: 'this host\'s Walnut server does not know its host name yet, so it cannot answer for it', errorCode: 'needs_leader' }
+        : deps.leaderAnswers()
+          ? { relayId: c.relayId, error: 'your Mac answers again; the call goes to it', errorCode: 'needs_leader' }
+          : null,
       send: (reply, kept) => send(reply, kept),
     })
   }

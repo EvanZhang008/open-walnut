@@ -11,7 +11,7 @@
  *                               (its project's default host), from the Mac's plain-session
  *                               template, journaled as the task's own session (`run: 'task'`)
  *     task_update tags          journaled
- *     task_send to that task    delivered to its session on the host at once
+ *     task_send to that task    sent right after the create: delivered to its new session
  *   the Mac wakes: it holds that task and that session exactly once, with the tags; a second
  *   drain (the Mac asleep and awake again) changes nothing.
  *
@@ -104,20 +104,22 @@ describe.each(TWINS)('a host\'s own walnut calls while the Mac is away (%s twin)
     expect(created.ok, JSON.stringify(created)).toBe(true)
     taskId = String(created.result.id ?? created.result.task?.id ?? '')
     expect(taskId).not.toBe('')
+    // At once, with no wait for the copy: the replica shows the session it started (noteStarted),
+    // so the message finds it on this host instead of answering that it needs the Mac.
+    const sent = await walnut(c, callerSid, 'task_send', { to: taskId, text: 'sent right after the start', expect_reply: false })
+    expect(sent.ok, JSON.stringify(sent)).toBe(true)
     const start = await waitFor(() => journal(c).find((r) => r.kind === 'session' && r.taskId === taskId), 60_000, 'the task\'s session record')
     expect(start).toMatchObject({ run: 'task', host: 'devbox', cwd: hostCwd })
     startedSid = String(start.sid)
     expect(journal(c).filter((r) => r.kind === 'task-create' && r.taskId === taskId)).toHaveLength(1)
     expect(journal(c).find((r) => r.kind === 'task-create' && r.taskId === taskId)?.actor).toEqual({ kind: 'session', sid: callerSid })
-    await waitFor(() => hostStream(c, startedSid).some((l) => l.type === 'result'), 120_000, 'the started session to answer')
+    // Only one session for the task: the message went to the one the start made.
+    expect(journal(c).filter((r) => r.kind === 'session' && r.taskId === taskId)).toHaveLength(1)
 
     const tagged = await walnut(c, callerSid, 'task_update', { id: taskId, tags: ['team:acme'] })
     expect(tagged.ok, JSON.stringify(tagged)).toBe(true)
     expect(journal(c).some((r) => r.kind === 'task-fields' && r.taskId === taskId && JSON.stringify(r.fields ?? {}).includes('team:acme'))).toBe(true)
-
-    const sent = await walnut(c, callerSid, 'task_send', { to: taskId, text: 'the tags are set', expect_reply: false })
-    expect(sent.ok, JSON.stringify(sent)).toBe(true)
-    await waitFor(() => hostStream(c, startedSid).some((l) => l.type === 'result' && String(l.result).includes('the tags are set')), 120_000, 'the message to reach the started session')
+    await waitFor(() => hostStream(c, startedSid).some((l) => l.type === 'result' && String(l.result).includes('sent right after the start')), 120_000, 'the message to reach the started session')
   }, 420_000)
 
   it('the Mac wakes: it holds that task and its session exactly once; a second drain changes nothing', async () => {

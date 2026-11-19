@@ -111,6 +111,11 @@ export interface AskLaunch {
   rows(): SessionRecord[]
   /** Watch a session of this host whose turn a person started here (a message to it). */
   watch(sid: string): void
+  /**
+   * A task's session this replica started (away-starts.ts): its row shows at once, as an ask's
+   * does, so a message right after the start finds it here, and a second start continues it.
+   */
+  noteStarted(o: { sid: string; taskId: string; cwd: string; mode: string; title: string; project: string }): void
   stop(): void
 }
 
@@ -316,10 +321,8 @@ export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
     const mode0 = typeof r.reply.mode === 'string' ? r.reply.mode : mode ?? 'default'
     // The folder the daemon ran it in (the template's): where its transcript is read on this host.
     const cwd = typeof r.reply.cwd === 'string' && r.reply.cwd.startsWith('/') ? r.reply.cwd : undefined
-    started.set(startedSid, rowOf({ sid: startedSid, taskId, ...(cwd ? { cwd } : {}), mode: mode0, title, project, at: now(), status: 'running' }))
-    watch(startedSid)
+    noteStarted({ sid: startedSid, taskId, cwd: cwd ?? '', mode: mode0, title, project })
     deps.log('info', 'replica: a new ask started on this host while the Mac is away', { taskId, sessionId: startedSid, agentId: persona.agentId, opId: w.opId })
-    deps.broadcast('session:status-changed', { sessionId: startedSid, status: 'running', process_status: 'running', taskId })
     const shown = { ...task, walnut_agent: true, ...(persona.agentId !== 'general' ? { agent_id: persona.agentId } : {}) }
     return v1
       ? { answered: false, status: 201, body: { sessionId: startedSid, taskId, title } }
@@ -338,8 +341,14 @@ export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
     })
   }
 
+  function noteStarted(o: { sid: string; taskId: string; cwd: string; mode: string; title: string; project: string }): void {
+    started.set(o.sid, rowOf({ ...o, at: now(), status: 'running' }))
+    watch(o.sid)
+    deps.broadcast('session:status-changed', { sessionId: o.sid, status: 'running', process_status: 'running', taskId: o.taskId })
+  }
+
   return {
-    handler, rows, watch,
+    handler, rows, watch, noteStarted,
     stop() { if (timer) clearInterval(timer); timer = null; watched.clear() },
   }
 }

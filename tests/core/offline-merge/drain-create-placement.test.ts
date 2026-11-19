@@ -7,7 +7,10 @@
  *     folder (a subfolder when that folder holds other work), on its caller's tier, with
  *     the folder its caller works in;
  *   - a plugin job's create: an outside caller's (no parent, pinned by default), and for a
- *     plugin that keeps its tasks to its own view, kept there (`plugin_only`) as online.
+ *     plugin that keeps its tasks to its own view, kept there (`plugin_only`) as online;
+ *   - the session a lead's away start ran on the host (`run: 'task'`): adopted as its task's
+ *     own for a task that host's journal made, refused for a task the Mac made (why the
+ *     replica starts only the first kind alone: away-starts.ts `task_made_on_mac`).
  */
 import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from 'vitest'
 import fs from 'node:fs/promises'
@@ -24,7 +27,7 @@ import { WALNUT_HOME } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
 import { runOfflineHandover, _resetOfflineHandoverForTesting, _setHandoverBackoffForTesting } from '../../../src/core/offline-handover.js'
 import { addTask, createFolder, getTask, type Task } from '../../../src/core/task-manager.js'
-import { createSessionRecord } from '../../../src/core/session-tracker.js'
+import { createSessionRecord, getSessionByClaudeId } from '../../../src/core/session-tracker.js'
 import { _resetHostClocksForTesting } from '../../../src/core/offline-merge/host-clock.js'
 import { registerPluginKeepsTasks } from '../../../src/core/plugins/plugin-task-visibility.js'
 
@@ -134,5 +137,35 @@ describe('a task made away lands where the same caller\'s create lands online', 
     } finally {
       release()
     }
+  })
+
+  it('a lead\'s away start: adopted for a task that host\'s journal made, refused for one the Mac made', async () => {
+    const lead = (await addTask({ title: 'Stage lead', project: 'Acme' })).task
+    const leadSid = '44444444-5555-4666-8777-000000000002'
+    await createSessionRecord(leadSid, lead.id, 'Acme', '/repo/acme', { title: 'Stage lead' })
+    const actor = { kind: 'session', sid: leadSid }
+    const sessionRec = (sid: string, taskId: string) => ({
+      v: 2, seq: ++seqN, at: Date.now() - 50_000, kind: 'session', opId: `op-place-${seqN}`, rev: 1, actor,
+      sid, taskId, host: HOST, cwd: '/repo/acme', mode: 'default', title: 'Rig the stage', startedAt: Date.now() - 50_000,
+      firstMessage: 'Rig the stage', run: 'task',
+    })
+    // Made by this host's journal, then started there: the Mac takes both, the session as the task's own.
+    const id = minted()
+    const create = createRec(id, actor, { title: 'Rig the stage' })
+    const made = '66666666-7777-4888-9999-000000000001'
+    const j = journal([create, sessionRec(made, id)])
+    await runOfflineHandover(j.conn as never)
+    expect(j.pending).toHaveLength(0)
+    const task = await getTask(id)
+    expect(task.parent_task_id).toBe(lead.id)
+    expect(task.session_ids ?? []).toContain(made)
+    expect(await getSessionByClaudeId(made)).toMatchObject({ taskId: id, host: HOST })
+    // Made on the Mac (a record_only subtask), started on the host alone: never adopted.
+    const macMade = (await addTask({ title: 'Light the stage', project: 'Acme', parent_task_id: lead.id } as never)).task
+    const orphan = '66666666-7777-4888-9999-000000000002'
+    const k = journal([sessionRec(orphan, macMade.id)])
+    await runOfflineHandover(k.conn as never)
+    expect(await getSessionByClaudeId(orphan)).toBeNull()
+    expect((await getTask(macMade.id)).session_ids ?? []).not.toContain(orphan)
   })
 })

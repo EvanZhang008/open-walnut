@@ -1936,7 +1936,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // A task's start and a message to a task from this host's own calls (away-starts.ts).
       if (hasCapability('host-local-calls')) {
         app.use('/api', (await import('../replica/away-starts.js')).wireAwayStarts({
-          away, hostKey, watch: (sid) => asks.watch(sid),
+          away, hostKey, started: (row) => asks.noteStarted(row),
           capabilities: () => front.link.capabilities(),
           request: (cmd, params, timeoutMs) => front.link.request(cmd, params, timeoutMs),
         }))

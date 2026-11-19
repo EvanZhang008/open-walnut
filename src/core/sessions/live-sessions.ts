@@ -75,14 +75,19 @@ export function localIdleExitMs(cfg: LiveSessionConfig | undefined, isolated = i
   return m === 0 ? null : m * 60_000;
 }
 
+/** The live process limit this machine's memory allows: never 0, never more than MAX_LIVE_LIMIT. */
+export function memoryLiveLimit(memTotalBytes = os.totalmem()): number {
+  const byMem = memTotalBytes > 0 ? Math.floor(memTotalBytes / GB / LIVE_GB_PER_SESSION) : MIN_LIVE_LIMIT;
+  return Math.min(MAX_LIVE_LIMIT, Math.max(MIN_LIVE_LIMIT, byMem));
+}
+
 /** The live process limit on this machine; 0 = none (also with no setting on an isolated server). */
 export function localLiveLimit(cfg: LiveSessionConfig | undefined, memTotalBytes = os.totalmem(), isolated = isolatedServer()): number {
   const set = setting(cfg?.local_live_limit);
   if (set !== null) return Math.floor(set);
   if (isolated) return 0;
   if (cfg?.idle_timeout_minutes === 0) return 0;
-  const byMem = memTotalBytes > 0 ? Math.floor(memTotalBytes / GB / LIVE_GB_PER_SESSION) : MIN_LIVE_LIMIT;
-  return Math.min(MAX_LIVE_LIMIT, Math.max(MIN_LIVE_LIMIT, byMem));
+  return memoryLiveLimit(memTotalBytes);
 }
 
 /** A record of this machine whose CLI process is alive (as the record says; the health monitor

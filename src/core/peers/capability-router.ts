@@ -353,6 +353,7 @@ async function handleToolsCall(
     const api = typeof r.status === 'number' ? { status: r.status, ...(r.code ? { code: r.code } : {}) } : undefined;
     const out = err(r.invalidArgs ? 'bad_request' : 'internal', r.message, {
       ...(r.result === undefined ? {} : { detail: r.result }), ...(api ? { api } : {}),
+      ...(r.retryAfterMs ? { retryAfterMs: r.retryAfterMs } : {}),
     });
     return typeof r.status === 'number' && !out.ok ? { ...out, opStatus: r.status } : out;
   }

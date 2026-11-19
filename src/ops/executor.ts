@@ -66,7 +66,9 @@ export type OpOutcome =
       /** The HTTP status Walnut's API answered this failure with, when it answered one. */
       status?: number
       /** The error code it answered with beside the status (`disk_full`, `host_reconnecting`), when it named one. */
-      code?: string }
+      code?: string
+      /** How long it said to wait before trying again (its `retryAfter`, seconds), in ms. */
+      retryAfterMs?: number }
 
 /** Header every op request carries when the caller's session id is known. */
 export const CALLER_SID_HEADER = 'x-walnut-caller-sid'
@@ -120,7 +122,7 @@ const OP_ID_HEADER = 'x-walnut-op-id'
 
 /** An error a handler op's self-call throws, carrying whether its answer was lost. */
 class SelfCallError extends Error {
-  constructor(message: string, readonly lost: boolean, readonly status?: number, readonly code?: string) { super(message) }
+  constructor(message: string, readonly lost: boolean, readonly status?: number, readonly code?: string, readonly retryAfterMs?: number) { super(message) }
 }
 
 /**
@@ -239,8 +241,10 @@ async function rawRequest(
     // The answer's own code at any status, kept apart from the words (a 5xx's message names its number).
     const named = typeof e === 'object' && typeof e?.code === 'string' ? e.code : typeof body?.code === 'string' ? body.code : undefined
     const apiCode = named && /^[a-z][a-z0-9_]{0,63}$/.test(named) ? named : undefined
+    const wait = typeof e === 'object' ? (e as { retryAfter?: unknown }).retryAfter : undefined
+    const retryAfterMs = typeof wait === 'number' && Number.isFinite(wait) && wait > 0 ? Math.min(wait, 3600) * 1000 : undefined
     return {
-      ok: false, status: res.status, ...(apiCode ? { code: apiCode } : {}),
+      ok: false, status: res.status, ...(apiCode ? { code: apiCode } : {}), ...(retryAfterMs ? { retryAfterMs } : {}),
       message: `Walnut API error (${code}): ${msg}${res.status === 507 ? DISK_FULL_HINT : ''}`,
     }
   }
@@ -535,6 +539,7 @@ async function withEarlierWrites(outcome: Extract<OpOutcome, { ok: false }>, bas
     result: { ...(isPlainObject(outcome.result) ? outcome.result : {}), call_id: prov.callId, earlier_writes: earlier },
     ...(outcome.status !== undefined ? { status: outcome.status } : {}),
     ...(outcome.code !== undefined ? { code: outcome.code } : {}),
+    ...(outcome.retryAfterMs !== undefined ? { retryAfterMs: outcome.retryAfterMs } : {}),
   }
 }
 
@@ -551,7 +556,7 @@ async function runOp(
         const refused = selfCallRefusal(op.name, method, path, prov.origin)
         if (refused) throw new Error(refused)
         const r = await rawRequest(base, method, path, body, timeoutMs, prov)
-        if (!r.ok) throw new SelfCallError(r.message, r.lost === true, r.status, r.code)
+        if (!r.ok) throw new SelfCallError(r.message, r.lost === true, r.status, r.code, r.retryAfterMs)
         return r.result
       }
       // A handler that runs another op in-process (a plugin's walnut.ops.call)
@@ -564,9 +569,10 @@ async function runOp(
       const lost = err instanceof SelfCallError && err.lost
       const status = err instanceof SelfCallError ? err.status : undefined
       const code = err instanceof SelfCallError ? err.code : undefined
+      const retryAfterMs = err instanceof SelfCallError ? err.retryAfterMs : undefined
       return {
         ok: false, message: err instanceof Error ? err.message : String(err), ...(lost ? { lost: true as const } : {}),
-        ...(status !== undefined ? { status } : {}), ...(code !== undefined ? { code } : {}),
+        ...(status !== undefined ? { status } : {}), ...(code !== undefined ? { code } : {}), ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
       }
     }
   }

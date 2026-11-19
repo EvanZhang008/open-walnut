@@ -245,9 +245,13 @@ describe('a machine fault loses nothing', () => {
 })
 
 describe('every server that answers a host relays the API\'s answer', () => {
-  it('the Mac\'s relay and the companion\'s build their error reply with gatewayErrorReplyFields', () => {
+  it('the Mac\'s relay, a host replica\'s and the companion\'s build their error reply with gatewayErrorReplyFields', () => {
     const root = path.resolve(__dirname, '../..')
-    for (const file of ['src/providers/daemon-connection.ts', 'src/core/leader/backup-gateway.ts']) {
+    // The Mac's link and a host replica answer through one path (core/peers/gateway-answer.ts).
+    for (const file of ['src/providers/daemon-connection.ts', 'src/replica/local-calls.ts']) {
+      expect(fs.readFileSync(path.join(root, file), 'utf8'), file).toContain("from '../core/peers/gateway-answer.js'")
+    }
+    for (const file of ['src/core/peers/gateway-answer.ts', 'src/core/leader/backup-gateway.ts']) {
       const src = fs.readFileSync(path.join(root, file), 'utf8')
       expect(src, file).toContain('gatewayErrorReplyFields(')
       // A hand-built reply would drop `api` again.

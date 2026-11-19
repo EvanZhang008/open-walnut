@@ -4,24 +4,35 @@
  * default host is this host, or it has a session here), the live session brake, a daemon
  * that cannot start it, and a message only to a task whose session runs here. A device never
  * gets these answers: its row answers needs_leader before the handler (route-table.ts).
+ * Only a task this host's journal made starts here alone (the Mac adopts no other's session),
+ * a start's session id comes from its op id (a retry is the same start), and concurrent starts
+ * each take a slot of the brake before they start.
  */
 import { describe, expect, it, vi } from 'vitest'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
 import type { Request, Response } from 'express'
-import { awayStarts, type AwayStartsDeps } from '../../src/replica/away-starts.js'
+import { awayStarts, startSessionId, type AwayStartsDeps } from '../../src/replica/away-starts.js'
 import type { ReplicaWrite, ReplicaWriteResult } from '../../src/replica/dispatch.js'
 import type { PortAnswer, WriteActor, WritePort } from '../../src/replica/write-port.js'
 
 const HOST = 'devbox'
 const JOB: WriteActor = { kind: 'plugin-job', plugin: 'acme', job: 'sync' }
 
-function harness(over: Partial<AwayStartsDeps> = {}, o: { start?: ReplicaWriteResult; live?: number } = {}) {
+const SID_1 = startSessionId('op-1', 't1')
+
+function harness(over: Partial<AwayStartsDeps> = {}, o: { start?: ReplicaWriteResult; live?: number; gate?: Promise<void> } = {}) {
   const calls: Array<{ cmd: string; params: Record<string, unknown> }> = []
   const sends: Array<{ sid: string; text: string; framed?: boolean }> = []
-  const w: ReplicaWrite = {
-    opId: 'op-1', away: 'host-write', raw: Buffer.from(''),
+  const writeOf = (opId: string): ReplicaWrite => ({
+    opId, away: 'host-write', raw: Buffer.from(''),
     submit: vi.fn(),
-    call: async (cmd, params) => { calls.push({ cmd, params }); return o.start ?? { kind: 'applied', reply: { sid: params.sid } } },
-  }
+    call: async (cmd, params) => {
+      calls.push({ cmd, params })
+      if (o.gate) await o.gate
+      return o.start ?? { kind: 'applied', reply: { sid: params.sid } }
+    },
+  })
   const port = {
     send: async (_w: ReplicaWrite, sid: string, text: string, _m?: string, opts?: { framed?: boolean }): Promise<PortAnswer> => {
       sends.push({ sid, text, framed: opts?.framed })
@@ -32,6 +43,8 @@ function harness(over: Partial<AwayStartsDeps> = {}, o: { start?: ReplicaWriteRe
     t1: { id: 't1', title: 'Sync the board', project: 'Acme' },
     t2: { id: 't2', title: 'Elsewhere', project: 'Marina' },
     t3: { id: 't3', title: 'Has a session here', project: 'Marina' },
+    t4: { id: 't4', title: 'Made on the Mac', project: 'Acme' },
+    t5: { id: 't5', title: 'Also made here', project: 'Acme' },
   }
   const deps: AwayStartsDeps = {
     port, actorOf: () => JOB, hostKey: HOST,
@@ -40,18 +53,18 @@ function harness(over: Partial<AwayStartsDeps> = {}, o: { start?: ReplicaWriteRe
     request: async () => ({ ok: true, sessions: Array.from({ length: o.live ?? 0 }, (_, i) => ({ sid: `s${i}`, state: 'idle' })) }),
     sessionsOfTask: async (id) => (id === 't3' ? [{ sid: 'sid-3', host: HOST, startedAt: '2026-11-18T00:00:00Z' }] : []),
     projectMeta: async (p) => (p === 'Acme' ? { default_host: HOST, default_cwd: '/work/acme' } : { default_host: 'other-box' }),
-    liveLimit: async () => 4,
+    madeHere: (id) => id !== 't4',
+    liveLimit: () => 4,
     freshStart: async () => ({ mode: 'default', modeNamed: false, context: 'ctx for __WALNUT_ROUTINE_TASK_ID__' }),
     frame: async (text) => `[framed] ${text}`,
-    watch: vi.fn(),
-    randomUUID: () => '11111111-2222-4333-8444-555555555555',
+    started: vi.fn(),
     log: () => {},
     ...over,
   }
   const handler = awayStarts(deps)
-  async function post(path: string, body: Record<string, unknown>): Promise<{ status: number; body: any }> {
+  async function post(path: string, body: Record<string, unknown>, opId = 'op-1'): Promise<{ status: number; body: any }> {
     return new Promise((resolve, reject) => {
-      const req = { method: 'POST', path, body, replicaWrite: w, headers: {} } as unknown as Request
+      const req = { method: 'POST', path, body, replicaWrite: writeOf(opId), headers: {} } as unknown as Request
       let status = 0
       const res = {
         headersSent: false,
@@ -69,12 +82,72 @@ describe('away starts', () => {
   it('a task of a project whose default host is this host starts here from the plain-session template', async () => {
     const h = harness()
     const r = await h.post('/v1/tasks/t1/start', { message: 'go' })
-    expect(r).toEqual({ status: 200, body: { taskId: 't1', sessionId: '11111111-2222-4333-8444-555555555555', started: true, offline: true } })
+    expect(r).toEqual({ status: 200, body: { taskId: 't1', sessionId: SID_1, started: true, offline: true } })
     expect(h.calls).toEqual([{ cmd: 'follower.start', params: expect.objectContaining({
-      run: 'task', taskId: 't1', title: 'Sync the board', cwd: '/work/acme', mode: 'default', modeNamed: false,
+      run: 'task', sid: SID_1, taskId: 't1', title: 'Sync the board', cwd: '/work/acme', mode: 'default', modeNamed: false,
       context: 'ctx for __WALNUT_ROUTINE_TASK_ID__', taskToken: '__WALNUT_ROUTINE_TASK_ID__', firstMessage: '[framed] go', host: HOST, actor: JOB,
     }) }])
-    expect(h.deps.watch).toHaveBeenCalledWith('11111111-2222-4333-8444-555555555555', 't1')
+    // Shown here at once: a message right after the start finds the session on this host.
+    expect(h.deps.started).toHaveBeenCalledWith({ sid: SID_1, taskId: 't1', cwd: '/work/acme', mode: 'default', title: 'Sync the board', project: 'Acme' })
+  })
+
+  it('a task this host did not make (made on the Mac) never starts here alone: the Mac would not adopt its session', async () => {
+    const h = harness()
+    const r = await h.post('/v1/tasks/t4/start', { message: 'go' })
+    expect(r.status).toBe(503)
+    expect(r.body.error).toMatchObject({ code: 'needs_leader', why: 'task_made_on_mac' })
+    expect(h.calls).toEqual([])
+    // One that already has its session here still continues it, wherever it was made.
+    const has = harness({ madeHere: () => false })
+    expect((await has.post('/v1/tasks/t3/start', { message: 'more' })).body).toMatchObject({ sessionId: 'sid-3', continued: true })
+  })
+
+  it('a start\'s session id comes from its op id: the same call asked again is the same start', async () => {
+    expect(startSessionId('op-1', 't1')).toBe(SID_1)
+    expect(SID_1).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(startSessionId('op-2', 't1')).not.toBe(SID_1)
+    expect(startSessionId('op-1', 't5')).not.toBe(SID_1)
+    // This replica restarted, or the caller resent after a lost answer: the session it started is
+    // listed for the task, so nothing is sent or started again.
+    const h = harness({ sessionsOfTask: async (id) => (id === 't1' ? [{ sid: SID_1, host: HOST, startedAt: '2026-11-18T00:00:00Z' }] : []) })
+    const r = await h.post('/v1/tasks/t1/start', { message: 'go' })
+    expect(r.body).toEqual({ taskId: 't1', sessionId: SID_1, started: true, offline: true, duplicate: true })
+    expect(h.calls).toEqual([])
+    expect(h.sends).toEqual([])
+    // Not listed yet (the copy lags): the daemon gets the same id again, and starts one session per id.
+    const lag = harness()
+    await lag.post('/v1/tasks/t1/start', { message: 'go' })
+    await lag.post('/v1/tasks/t1/start', { message: 'go' })
+    expect(lag.calls.map((c) => c.params.sid)).toEqual([SID_1, SID_1])
+  })
+
+  it('concurrent starts at the limit: each takes its slot before it starts, so only the ones that fit start', async () => {
+    let open!: () => void
+    const gate = new Promise<void>((r) => { open = r })
+    const h = harness({}, { live: 3, gate })
+    const a = h.post('/v1/tasks/t1/start', { message: 'go' }, 'op-a')
+    const b = h.post('/v1/tasks/t5/start', { message: 'go' }, 'op-b')
+    const second = await b
+    expect(second.status).toBe(429)
+    expect(second.body.error).toMatchObject({ code: 'throttled', why: 'live_limit' })
+    open()
+    expect((await a).status).toBe(200)
+    expect(h.calls.map((c) => c.params.taskId)).toEqual(['t1'])
+    // A start that ended gives its slot back.
+    expect((await h.post('/v1/tasks/t5/start', { message: 'go' }, 'op-c')).status).toBe(200)
+  })
+
+  it('the brake reads this machine\'s memory only, never the Mac\'s copied setting (its local_live_limit, a 0 idle timeout)', () => {
+    const src = fs.readFileSync(path.resolve(__dirname, '../../src/replica/away-starts.ts'), 'utf8')
+    expect(src).toContain('liveLimit: () => memoryLiveLimit()')
+    expect(src).not.toContain('localLiveLimit')
+  })
+
+  it('a start that fails gives its slot back', async () => {
+    const h = harness({}, { live: 3, start: { kind: 'refused', code: 'internal', message: 'spawn failed' } })
+    expect((await h.post('/v1/tasks/t1/start', { message: 'go' }, 'op-a')).status).toBe(503)
+    expect((await h.post('/v1/tasks/t5/start', { message: 'go' }, 'op-b')).status).toBe(503)
+    expect(h.calls).toHaveLength(2)
   })
 
   it('a task that runs elsewhere needs the Mac, with why', async () => {

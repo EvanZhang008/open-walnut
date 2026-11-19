@@ -48,7 +48,7 @@ import { foldLine, initialFoldState, assembleSnapshot, snapshotDiffers } from '.
 import { createFoldCheckpoint } from './fold-checkpoint-core.js'
 import { createDaemonCommandDrain } from './daemon-command-drain.js'
 import { createDemoDaemonQuiesce } from './demo-daemon-quiesce-core.js'
-import { demoGatewaySocketPath } from './gateway-core.js'
+import { demoGatewaySocketPath, gatewayApiAnswerOf } from './gateway-core.js'
 import { createCronMetadataTracker, CRON_PROMPT_LIMIT } from './daemon-cron-metadata.js'
 import { createEnvelopeKit } from '../core/peers/envelope-kit.js'
 import { createOfflineHostCore, OFFLINE_MAX_RECORDS } from './offline-host-core.js'
@@ -333,6 +333,7 @@ export function getDaemonSource(): string {
     ['__CREATE_COMMAND_DRAIN__', createDaemonCommandDrain.toString()],
     ['__CREATE_DEMO_QUIESCE__', createDemoDaemonQuiesce.toString()],
     ['__DEMO_GATEWAY_SOCKET_PATH__', demoGatewaySocketPath.toString()],
+    ['__GATEWAY_API_ANSWER_OF__', gatewayApiAnswerOf.toString()],
     ['__VALID_LINE_FATE_QUERY__', validLineFateQuery.toString()],
     ['__CREATE_CRON_METADATA__', createCronMetadataTracker.toString()],
     ['__CREATE_HOST_RUNTIME__', createHostRuntime.toString()],
@@ -7226,8 +7227,12 @@ function relayAttemptEnded(relayId) {
 // A relay is answered by whom it went to: the trusted walnut client, or, for a
 // relay handed to the companion while it leads (via: 'bridge'), the bridge
 // (twin of daemon-standalone.ts).
+// How Walnut's API answered a relayed op, read the one way (gateway-core.ts; twin of daemon-standalone.ts).
+var gatewayApiAnswerOf = (__GATEWAY_API_ANSWER_OF__);
 function cmdGatewayResult(ws, id, cmd) {
   var relayId = cmd.relayId, result = cmd.result, error = cmd.error, errorCode = cmd.errorCode, detail = cmd.detail;
+  // How Walnut's API answered the op (a server that sends it), for a check run's machine faults.
+  var api = gatewayApiAnswerOf(cmd.api);
   // gateway-result-gz-v1: a big answer's result comes gzipped. Twin of daemon-standalone.ts.
   if (typeof cmd.resultGz === 'string') {
     try {
@@ -7239,7 +7244,7 @@ function cmdGatewayResult(ws, id, cmd) {
   }
   // A call handed to this host's own Walnut server (follower-gateway-core.ts): only its socket answers it.
   if (ws.origin === 'follower') {
-    var taken = typeof relayId === 'number' ? followerGateway.settle(ws, relayId, followerGateway.responseOf({ result: result, error: error, errorCode: errorCode, detail: detail, api: cmd.api })) : 'stale';
+    var taken = typeof relayId === 'number' ? followerGateway.settle(ws, relayId, followerGateway.responseOf({ result: result, error: error, errorCode: errorCode, detail: detail, api: api })) : 'stale';
     if (taken === 'wrong_socket' || (taken === 'stale' && gatewayRelayPending.has(relayId))) return sendError(ws, id, 'gateway-result: not sent to this socket');
     return sendOk(ws, id, taken === 'stale' ? { stale: true } : {});
   }
@@ -7271,13 +7276,7 @@ function cmdGatewayResult(ws, id, cmd) {
   } else {
     if (pending.call) heldCatalogs.failed(pending.call.home, pending.call.capability, pending.call.payload);
     var errObj = gatewayError(errorCode || 'internal', error || 'gateway request failed');
-    // How Walnut's API answered the op (gateway-core.ts gatewayApiAnswerOf), for a check run's machine faults.
-    var apiAnswer = cmd.api;
-    if (apiAnswer && typeof apiAnswer === 'object' && typeof apiAnswer.status === 'number' && Number.isInteger(apiAnswer.status)
-      && apiAnswer.status >= 100 && apiAnswer.status <= 599) {
-      errObj.error.api = { status: apiAnswer.status };
-      if (typeof apiAnswer.code === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(apiAnswer.code)) errObj.error.api.code = apiAnswer.code;
-    }
+    if (api) errObj.error.api = api;
     if (detail !== undefined) {
       errObj.error.detail = detail;
       if (detail && typeof detail.retryAfterMs === 'number') errObj.error.retryAfterMs = detail.retryAfterMs;

@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_IDLE_EXIT_MINUTES, EVICT_MIN_QUIET_MS, evictionOrder, exitsLast, isLocalLiveProcess,
-  localIdleExitMs, localLiveLimit, isolatedServer, mustStay, type LiveRunnerView,
+  localIdleExitMs, localLiveLimit, isolatedServer, memoryLiveLimit, mustStay, type LiveRunnerView,
 } from '../../../src/core/sessions/live-sessions.js';
 import { judgeHost } from '../../../src/core/hosts/placement.js';
 import type { HostLoad } from '../../../src/providers/host-facts-core.js';
@@ -29,6 +29,20 @@ describe('settings', () => {
     expect(localLiveLimit(undefined, 512 * GB, false)).toBe(64);
     expect(localLiveLimit({ local_live_limit: 12 }, 48 * GB, false)).toBe(12);
     expect(localLiveLimit({ local_live_limit: 0 }, 48 * GB, false)).toBe(0);
+  });
+
+  // A host replica's brake (replica/away-starts.ts): the machine's own memory, never a setting it
+  // copied from the Mac, and never 0 (no brake) on any machine.
+  it('the memory limit alone: 4 to 64, never 0 or unlimited, whatever the memory reads', () => {
+    expect(memoryLiveLimit(48 * GB)).toBe(20);
+    expect(memoryLiveLimit(1 * GB)).toBe(4);
+    expect(memoryLiveLimit(1000 * GB)).toBe(64);
+    for (const junk of [0, -1, Number.NaN]) {
+      const n = memoryLiveLimit(junk);
+      expect(n).toBeGreaterThanOrEqual(4);
+      expect(n).toBeLessThanOrEqual(64);
+    }
+    expect(memoryLiveLimit()).toBeGreaterThanOrEqual(4);
   });
 
   // Class guard: no test run's result may depend on the size of the machine it runs on. Under the

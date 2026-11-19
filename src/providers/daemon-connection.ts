@@ -76,7 +76,7 @@ import {
 } from './daemon-file-fetch.js'
 import { singleFile } from '../lib/single-file.js'
 import { buildTurnRetryEnv } from './daemon-core.js'
-import { relayedCallOf, resetRelayedCallsForTest, serveRelayedCall } from '../core/peers/gateway-answer.js'
+import { packRelayResult, RELAY_RESULT_GZ_BYTES, relayedCallOf, resetRelayedCallsForTest, serveRelayedCall } from '../core/peers/gateway-answer.js'
 import type { LineFate } from './line-fate-core.js'
 import type { SshTarget } from './session-io.js'
 import {
@@ -3528,18 +3528,11 @@ export class DaemonConnection {
    * event loop; a small answer goes as it is.
    */
   private async packGatewayResult(reply: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const result = reply.result
-    if (!result || typeof result !== 'object' || !this.hasCapability('gateway-result-gz-v1')) return reply
-    const json = JSON.stringify(result)
-    // Over the frame cap plain, it still gets the small "too large" answer (send throws), never
-    // a few MB of gzip on the link, nor tens of MB to unpack on the host's daemon.
-    if (json.length < DaemonConnection.GATEWAY_RESULT_GZ_BYTES || json.length > DAEMON_FRAME_MAX_BYTES) return reply
-    const { result: _plain, ...rest } = reply
-    return { ...rest, resultGz: (await gzipAsync(Buffer.from(json))).toString('base64') }
+    return packRelayResult(reply, this.hasCapability('gateway-result-gz-v1'), DaemonConnection.GATEWAY_RESULT_GZ_BYTES)
   }
 
   /** A gateway answer's result this big or bigger goes gzipped. */
-  static GATEWAY_RESULT_GZ_BYTES = 16 * 1024
+  static GATEWAY_RESULT_GZ_BYTES = RELAY_RESULT_GZ_BYTES
 
   /** An answer unacked this long starts checkUpstream. */
   static UPSTREAM_CHECK_MS = 8_000

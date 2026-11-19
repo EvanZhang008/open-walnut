@@ -9,12 +9,36 @@
  *   run      the capability router (capability-router.ts), inside the relay's deadline
  *   reply    the `gateway-result` fields, a refusal with its typed code
  *
- * How the answer travels (the leader's gzip and its upstream check) stays with each link.
+ *   pack     a big answer's result gzipped for a daemon that reads it (packRelayResult)
+ *
+ * How the answer travels (the leader's upstream check, a link's frame cap) stays with each link.
  */
+import { promisify } from 'node:util';
+import { gzip } from 'node:zlib';
 import { log } from '../../logging/index.js';
+import { DAEMON_FRAME_MAX_BYTES } from '../../providers/daemon-frame-cap.js';
 import { gatewayErrorReplyFields, vouchedGatewayPayload } from '../../providers/gateway-core.js';
 import { createRefusalLog, isOpAnswerStatus } from '../../providers/gateway-refusal-log.js';
 import type { GatewayRelayMeta } from './capability-router.js';
+
+const gzipAsync = promisify(gzip);
+/** A relay answer's result this big or bigger goes gzipped. */
+export const RELAY_RESULT_GZ_BYTES = 16 * 1024;
+
+/**
+ * A big answer's result gzipped where the daemon reads it (gateway-result-gz-v1): answers to a
+ * host's sessions were the top upload on its link (2026-11-12: 9 MB in 14 minutes). Compressed
+ * off the event loop; a small answer goes as it is, and so does one over the frame cap plain
+ * (its send fails and the caller gets the small "too large" answer, never MBs of gzip).
+ */
+export async function packRelayResult(reply: Record<string, unknown>, gz: boolean, minBytes = RELAY_RESULT_GZ_BYTES): Promise<Record<string, unknown>> {
+  const result = reply.result;
+  if (!gz || !result || typeof result !== 'object') return reply;
+  const json = JSON.stringify(result);
+  if (json.length < minBytes || json.length > DAEMON_FRAME_MAX_BYTES) return reply;
+  const { result: _plain, ...rest } = reply;
+  return { ...rest, resultGz: (await gzipAsync(Buffer.from(json))).toString('base64') };
+}
 
 /** One relayed call as the daemon sends it. */
 export interface RelayedCall {

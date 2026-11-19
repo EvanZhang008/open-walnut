@@ -236,7 +236,7 @@ export function formatErrorLines(error: GatewayError): string[] {
       }
     }
   }
-  if (error.code === 'throttled' && typeof error.retryAfterMs === 'number') {
+  if ((error.code === 'throttled' || error.code === 'queue_full') && typeof error.retryAfterMs === 'number') {
     lines.push(`retry after ${Math.ceil(error.retryAfterMs / 1000)}s — do not retry in a loop`)
   }
   return lines

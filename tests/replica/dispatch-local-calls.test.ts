@@ -13,6 +13,13 @@ import { createDispatcher, type DispatchDeps } from '../../src/replica/dispatch.
 const servers: http.Server[] = []
 let connects = 0
 let opAnswer: Record<string, unknown> = { ok: true, seq: 1 }
+/** Answers taken first, one per try: an Error is a lost answer (the try reached the daemon). */
+const firstAnswers: Array<Record<string, unknown> | Error> = []
+const nextAnswer = async (): Promise<Record<string, unknown>> => {
+  const a = firstAnswers.shift()
+  if (a instanceof Error) throw a
+  return a ?? opAnswer
+}
 
 async function serve(route: DispatchDeps['route']): Promise<number> {
   const deps: DispatchDeps = {
@@ -22,8 +29,8 @@ async function serve(route: DispatchDeps['route']): Promise<number> {
     suspect: () => {},
     ownUpgrade: (_req, socket) => { socket.end() },
     log: () => {},
-    followerOp: async () => opAnswer,
-    followerCall: async () => opAnswer,
+    followerOp: nextAnswer,
+    followerCall: nextAnswer,
     followerOpCap: () => true,
     authorized: (req) => req.headers.authorization === 'Bearer device' || req.headers.authorization === 'Bearer self',
     selfCall: (req) => req.headers.authorization === 'Bearer self',
@@ -91,5 +98,24 @@ describe('this host\'s own calls in the dispatcher', () => {
     } finally {
       opAnswer = { ok: true, seq: 1 }
     }
+  })
+
+  // The Mac came back in the middle of a local call: its first try was journaled but its answer
+  // was lost. A needs_leader now would send the whole call to the Mac (gateway-answer.ts lifts
+  // it) while the journaled copy drains too: two tasks, or two sessions.
+  it('the Mac returns after a lost answer: unsure, never handed to the Mac', async () => {
+    for (const p of ['/api/v1/tasks/t1', '/api/v1/tasks/t1/start']) {
+      firstAnswers.push(new Error('follower.op timed out'), { ok: false, errorKind: 'leader_answers', error: 'the Mac answers' })
+      connects = 0
+      const r = await call(away, p.endsWith('/start') ? 'POST' : 'PATCH', p, 'self')
+      expect(r.status).toBe(503)
+      expect(r.json.error).toMatchObject({ code: 'leader_unsure', why: 'lost_answer' })
+      expect(connects).toBe(0)
+      expect(firstAnswers).toEqual([])
+    }
+    // The daemon says the lost try never ran (opPending false): then the Mac takes it.
+    firstAnswers.push(new Error('follower.op timed out'), { ok: false, errorKind: 'leader_answers', opPending: false, error: 'the Mac answers' })
+    const r = await call(away, 'PATCH', '/api/v1/tasks/t1', 'self')
+    expect(r.json.error).toMatchObject({ code: 'needs_leader', why: 'leader_answers' })
   })
 })

@@ -267,6 +267,18 @@ describe('a new ask while the Mac is away', () => {
     launch.stop()
   })
 
+  it('a task\'s session started here by a local call shows at once, on this host, and its status reaches the console', () => {
+    const h = harness()
+    const launch = createAskLaunch(h.deps)
+    const sid = 'dddddddd-4444-4444-8444-000000000002'
+    launch.noteStarted({ sid, taskId: 'mtask-job-1', cwd: '/work/acme', mode: 'default', title: 'Sync the board', project: 'Acme' })
+    expect(launch.rows()).toEqual([expect.objectContaining({
+      claudeSessionId: sid, taskId: 'mtask-job-1', host: 'devbox', cwd: '/work/acme', project: 'Acme', process_status: 'running', title: 'Sync the board',
+    })])
+    expect(h.events).toContainEqual({ name: 'session:status-changed', data: expect.objectContaining({ sessionId: sid, status: 'running', taskId: 'mtask-job-1' }) })
+    launch.stop()
+  })
+
   it('another route is not this module\'s, and a request the dispatcher did not mark is passed on', async () => {
     const h = harness()
     const launch = createAskLaunch(h.deps)

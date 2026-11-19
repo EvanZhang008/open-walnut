@@ -490,16 +490,18 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             continue
           }
           if (r.ok === true) return { kind: 'applied', reply: r }
+          if (r.errorKind === 'leader_answers' && lost && r.opPending !== false) {
+            // The daemon checks who leads before its journal: an earlier try whose answer was
+            // lost may be journaled, so forwarding now could apply it twice. Judged first, for
+            // this host's own call too: its `needs_leader` would send the whole call to the Mac
+            // (gateway-answer.ts lifts it), and the journaled copy would drain as well.
+            deps.log('warn', 'replica: the Mac answers after a lost answer, the write may be journaled; not forwarded', { opId, op })
+            sendJson(res, 503, { error: { code: 'leader_unsure', why: 'lost_answer', retryAfter: 5, message: MESSAGES.lost_answer } }, { 'retry-after': '5' })
+            return { kind: 'answered' }
+          }
           if (r.errorKind === 'leader_answers' && deps.selfCall?.(req)) {
             // Never forwarded (its credential stays in this process): the daemon relays the call itself.
             needsLeader(req, res, 'leader_answers')
-            return { kind: 'answered' }
-          }
-          if (r.errorKind === 'leader_answers' && lost && r.opPending !== false) {
-            // The daemon checks who leads before its journal: an earlier try whose answer was
-            // lost may be journaled, so forwarding now could apply it twice.
-            deps.log('warn', 'replica: the Mac answers after a lost answer, the write may be journaled; not forwarded', { opId, op })
-            sendJson(res, 503, { error: { code: 'leader_unsure', why: 'lost_answer', retryAfter: 5, message: MESSAGES.lost_answer } }, { 'retry-after': '5' })
             return { kind: 'answered' }
           }
           if (r.errorKind === 'leader_answers') {

@@ -13,6 +13,7 @@ import * as path from 'node:path'
 import { createFollowerGateway } from '../../src/providers/follower-gateway-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { gatewayApiAnswerOf } from '../../src/providers/gateway-core.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
@@ -60,6 +61,27 @@ describe('follower gateway twin wiring', () => {
       expect(src).toMatch(/taskRun \? hostStart\.planTask\(home, cmd/)
       expect(src).toContain("cmd.run === 'task' ? offlineHost.checkTaskStart(home, p.sid, cmd.actor) : offlineHost.checkSession(home, p.sid, cmd.actor)")
     }
+  })
+
+  it('both twins read a gateway result\'s api one way, before either branch: the follower\'s answer too', () => {
+    const body = (src: string) => src.slice(src.indexOf('function cmdGatewayResult('), src.indexOf('\n}\n', src.indexOf('function cmdGatewayResult(')))
+    for (const src of [standalone, source]) {
+      const fn = body(src)
+      const read = fn.indexOf('gatewayApiAnswerOf(cmd.api)')
+      expect(read, 'the api is read through gatewayApiAnswerOf').toBeGreaterThan(0)
+      expect(read, 'before the follower branch').toBeLessThan(fn.indexOf("origin === 'follower'"))
+      expect(fn).not.toContain('api: cmd.api')
+      expect(fn).not.toMatch(/apiAnswer\.status/)
+    }
+    // The source twin runs the very function the bun twin imports.
+    const generated = getDaemonSource()
+    expect(generated).not.toContain('__GATEWAY_API_ANSWER_OF__')
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    const inlined = new Function(`"use strict"; return (${gatewayApiAnswerOf.toString()})`)() as typeof gatewayApiAnswerOf
+    for (const raw of [{ status: 503, code: 'needs_leader' }, { status: 503, code: 'Not A Code!' }, { status: 99 }, { status: '507' }, null, 'x', { status: 507, code: 'disk_full', extra: 1 }]) {
+      expect(inlined(raw)).toEqual(gatewayApiAnswerOf(raw))
+    }
+    expect(generated).toContain(`var gatewayApiAnswerOf = (${gatewayApiAnswerOf.toString()})`)
   })
 
   it('the capability is advertised by both, and the core is in the version hash list and the binary build list', () => {
