@@ -14,14 +14,31 @@
  *                                session's call gets the daemon's own away answer instead
  *   a full journal, the brake    `queue_full` / `throttled` with the route's wait: retryable
  *   no host key yet             every call refused: an empty key would take the Mac's own origin
+ *   too little time left        a call the daemon held while the Mac went quiet comes with what
+ *                                is left of its time (`answerInMs`): it runs within that, and when
+ *                                that is too short for the op (a start needs its start budget) it
+ *                                is refused before anything runs, retryable, never "may have run"
  */
 import { log } from '../logging/index.js'
-import { packRelayResult, relayedCallOf, serveRelayedCall, type KeptRelay } from '../core/peers/gateway-answer.js'
+import { packRelayResult, relayedCallOf, serveRelayedCall, type KeptRelay, type RelayedCall } from '../core/peers/gateway-answer.js'
 import { gatewayHubTimeoutMs } from '../providers/gateway-core.js'
 import { DaemonFrameTooLargeError, tooLargeGatewayReply } from '../providers/daemon-frame-cap.js'
 
 /** The route refusals that go back with their own code: the daemon's away answer, and the two a caller retries. */
 const LIFTED = ['needs_leader', 'queue_full', 'throttled'] as const
+
+/** Answered this much before the daemon's own timer ends the relay. */
+const ANSWER_MARGIN_MS = 500
+/** What a call needs left to be done here: a start (a CLI spawned and its first turn sent), and any other. */
+export const START_LEFT_MS = 10_000
+export const CALL_LEFT_MS = 2_000
+
+/** The time `call` needs here: a start's budget for one that may start a session. */
+export function neededMs(call: RelayedCall): number {
+  const p = call.payload as { name?: unknown; args?: { record_only?: unknown } } | null
+  const name = call.capability === 'tools.call' && p && typeof p.name === 'string' ? p.name : ''
+  return name === 'task_start' || (name === 'task_create' && p?.args?.record_only !== true) ? START_LEFT_MS : CALL_LEFT_MS
+}
 
 /** How long the daemon may take to ack a result on the loopback link. */
 const RESULT_ACK_MS = 10_000
@@ -62,18 +79,27 @@ export function createLocalCalls(deps: LocalCallsDeps): (event: Record<string, u
     const receivedAt = Date.now()
     const call = relayedCallOf(event)
     if (!call) return
+    // Within what the daemon still waits for (an older daemon names none: the hub timeout).
+    const left = call.answerInMs === undefined ? gatewayHubTimeoutMs() : Math.min(gatewayHubTimeoutMs(), call.answerInMs - ANSWER_MARGIN_MS)
     void serveRelayedCall(call, {
       hostKey,
       hasCapability: daemonHas,
       label: 'replica',
       receivedAt,
-      deadlineMs: gatewayHubTimeoutMs(),
+      deadlineMs: Math.max(0, left),
       liftCodes: LIFTED,
       refuse: (c) => !hostKey
         ? { relayId: c.relayId, error: 'this host\'s Walnut server does not know its host name yet, so it cannot answer for it', errorCode: 'needs_leader' }
         : deps.leaderAnswers()
           ? { relayId: c.relayId, error: 'your Mac answers again; the call goes to it', errorCode: 'needs_leader' }
-          : null,
+          // Never below a call handed over with its whole time (a short hub timeout set on purpose).
+          : left < Math.min(neededMs(c), gatewayHubTimeoutMs() - ANSWER_MARGIN_MS)
+            ? {
+                relayId: c.relayId, errorCode: 'hub_unreachable',
+                error: `this call reached this host's Walnut server with ${Math.max(0, Math.round(left / 1000))}s of its time left, too little to do it; nothing was done, try again`,
+                detail: { why: 'too_little_time', retryAfterMs: 1_000 },
+              }
+            : null,
       send: (reply, kept) => send(reply, kept),
     })
   }

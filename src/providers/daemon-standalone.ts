@@ -6070,12 +6070,20 @@ function sendPluginJobGatewayRequest(home: string, capability: string, payload: 
   if (!target) {
     // This host's own Walnut server answers it while its leader is away (its answer is final);
     // while the leader's quiet window is not over yet, the call waits for one of the two.
-    if (caller) {
-      const again = () => sendPluginJobGatewayRequest(home, capability, payload, respond, caller, deadline, true)
+    // A backup leading: neither the leader nor this host's server will take it, so no wait.
+    if (caller && !leaderBook.backupLead(home)) {
+      const again = () => {
+        // The job's process left, or this daemon stops: nobody to answer, and a write relayed now would run for no one.
+        if (daemonCommands.closed) return respond(gatewayError('hub_unreachable', 'daemon is shutting down; retry after reconnecting', { stopping: true }))
+        if (gatewayCallerLeft.get(respond)?.()) return logMsg('info', 'gateway: a plugin job\'s waiting call ends, its caller left', { home, op: payload.name })
+        sendPluginJobGatewayRequest(home, capability, payload, respond, caller, deadline, true)
+      }
       if (followerGateway.routeJob({ home, capability, callerSid: EXTERNAL_CALLER_SID, payload, caller, deadline }, (r) => respond(r as GatewayResponse), again, waited) !== 'none') return
     }
-    logMsg('info', 'gateway: plugin job call, its Walnut is not connected', { home, op: payload.name })
-    return respond(gatewayError('hub_unreachable', 'the Walnut that runs this job is not connected now; try again later'))
+    logMsg('info', 'gateway: plugin job call, its Walnut is not connected', { home, op: payload.name, waited })
+    return respond(gatewayError('hub_unreachable', waited
+      ? 'the Walnut that runs this job went quiet; this call waited for it to answer again, or for this host\'s own Walnut server to take over, and neither happened in time. Nothing was done; try again later'
+      : 'the Walnut that runs this job is not connected now; try again later'))
   }
   relayToPrimary(target, home, capability, EXTERNAL_CALLER_SID, payload, respond, false, deadline)
 }

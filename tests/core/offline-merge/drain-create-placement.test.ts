@@ -8,6 +8,8 @@
  *     the folder its caller works in;
  *   - a plugin job's create: an outside caller's (no parent, pinned by default), and for a
  *     plugin that keeps its tasks to its own view, kept there (`plugin_only`) as online;
+ *   - a parent the record names: honoured for a paired device as before; for a session's and a
+ *     plugin job's create ignored, as the online create routes read none from the body;
  *   - the session a lead's away start ran on the host (`run: 'task'`): adopted as its task's
  *     own for a task that host's journal made, refused for a task the Mac made (why the
  *     replica starts only the first kind alone: away-starts.ts `task_made_on_mac`).
@@ -137,6 +139,24 @@ describe('a task made away lands where the same caller\'s create lands online', 
     } finally {
       release()
     }
+  })
+
+  it('a named parent: a paired device\'s is honoured; a session\'s and a plugin job\'s is not, as online', async () => {
+    const lead = (await addTask({ title: 'Catering lead', project: 'Acme' })).task
+    const elsewhere = (await addTask({ title: 'Unrelated work', project: 'Acme' })).task
+    const leadSid = '44444444-5555-4666-8777-000000000003'
+    await createSessionRecord(leadSid, lead.id, 'Acme', '/repo/acme', { title: 'Catering lead' })
+    const online = await direct({ title: 'Order the coffee', parent_task_id: elsewhere.id }, { 'x-walnut-caller-sid': leadSid })
+    expect(online.parent_task_id).toBe(lead.id)
+    const away = await drained({ kind: 'session', sid: leadSid }, { title: 'Order the tea' }, { parentTaskId: elsewhere.id })
+    expect(away.parent_task_id).toBe(lead.id)
+    const job = await drained({ kind: 'plugin-job', plugin: 'acme-sync', job: 'poll' }, { title: 'Imported row three' }, { project: 'Acme', parentTaskId: elsewhere.id })
+    expect(job.parent_task_id ?? '').toBe('')
+    const { createDevice, listDeviceRecords } = await import('../../../src/core/device-auth.js')
+    await createDevice('acme-phone')
+    const deviceId = (await listDeviceRecords()).find((d) => d.name === 'acme-phone')!.id
+    const phone = await drained({ kind: 'device', deviceId, name: 'acme-phone' }, { title: 'Phone child' }, { project: 'Acme', parentTaskId: elsewhere.id })
+    expect(phone.parent_task_id).toBe(elsewhere.id)
   })
 
   it('a lead\'s away start: adopted for a task that host\'s journal made, refused for one the Mac made', async () => {

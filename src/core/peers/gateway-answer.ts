@@ -51,11 +51,13 @@ export interface RelayedCall {
   busyAgain?: number;
   /** The plugin job that made the call (a host's daemon names it to its own replica only). */
   pluginJob?: { plugin: string; job: string };
+  /** How long the daemon waits for this answer from now (a host's daemon to its own replica; after a wait, maybe little). */
+  answerInMs?: number;
 }
 
 /** The relayed call an event names, or null when it is not one. */
 export function relayedCallOf(event: Record<string, unknown>): RelayedCall | null {
-  const { relayId, capability, callerSid, instanceId, busyAgain, caller } = event as Record<string, unknown>;
+  const { relayId, capability, callerSid, instanceId, busyAgain, caller, answerInMs } = event as Record<string, unknown>;
   if (typeof relayId !== 'number' || typeof capability !== 'string' || typeof callerSid !== 'string') return null;
   const c = caller as { kind?: unknown; plugin?: unknown; job?: unknown } | undefined;
   const pluginJob = c && c.kind === 'plugin-job' && typeof c.plugin === 'string' && c.plugin && typeof c.job === 'string' && c.job
@@ -65,6 +67,7 @@ export function relayedCallOf(event: Record<string, unknown>): RelayedCall | nul
     ...(typeof instanceId === 'string' && instanceId ? { instanceId } : {}),
     ...(typeof busyAgain === 'number' && Number.isFinite(busyAgain) && busyAgain > 0 ? { busyAgain } : {}),
     ...(pluginJob ? { pluginJob } : {}),
+    ...(typeof answerInMs === 'number' && Number.isFinite(answerInMs) && answerInMs >= 0 ? { answerInMs: Math.min(answerInMs, 600_000) } : {}),
   };
 }
 

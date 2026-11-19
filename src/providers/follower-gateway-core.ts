@@ -88,15 +88,18 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
     const relayId = deps.nextRelayId()
     const entry: Pending = { ws, call, respond, timer: null }
     pending.set(relayId, entry)
+    // What is left of the call's time (after a wait, maybe little): the server answers within it,
+    // and refuses before anything runs when it is too short for the op (replica/local-calls.ts).
+    const answerInMs = deps.attemptMs(call.deadline)
     const sent = deps.send(ws, 'gateway-request', {
       relayId, instanceId: deps.instanceId, capability: call.capability, callerSid: call.callerSid, payload: call.payload,
-      ...(call.caller ? { caller: call.caller } : {}),
+      ...(call.caller ? { caller: call.caller } : {}), answerInMs,
     })
     if (!sent) {
       pending.delete(relayId)
       return false
     }
-    entry.timer = deps.setTimer(() => ended(relayId, 'timeout'), deps.attemptMs(call.deadline))
+    entry.timer = deps.setTimer(() => ended(relayId, 'timeout'), answerInMs)
     deps.log('info', 'gateway: handed to this host\'s Walnut server', {
       relayId, capability: call.capability, callerSid: call.callerSid, op: typeof call.payload.name === 'string' ? call.payload.name : undefined,
       ...(call.caller ? { plugin: call.caller.plugin, job: call.caller.job } : {}),

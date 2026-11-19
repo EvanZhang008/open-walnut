@@ -328,8 +328,11 @@ export function createWritePort(deps: WritePortDeps): WritePort {
       const at = now()
       const id = mintTaskId(at, hex)
       const str = (v: unknown) => (typeof v === 'string' ? v : undefined)
+      // A session's and a plugin job's parent comes from the caller rule alone, as online
+      // (offline-merge/apply-v2.ts createTask): a named one is a paired device's only.
+      const namedParent = actor.kind === 'device' ? str(all.parent_task_id) : undefined
       const placement = {
-        ...(str(all.parent_task_id) ? { parentTaskId: str(all.parent_task_id) } : {}),
+        ...(namedParent ? { parentTaskId: namedParent } : {}),
         ...(typeof all.project === 'string' ? { project: all.project } : {}),
         ...(str(all.group_id) ? { groupId: str(all.group_id) } : {}),
         ...(str(all.focus_tier) ? { tier: str(all.focus_tier) } : {}),
@@ -338,7 +341,7 @@ export function createWritePort(deps: WritePortDeps): WritePort {
       const refused = macRefusalOf(createdRow(id, {}, placement, at, madeByHuman(actor)), fields)
       if (refused) return refusalAnswer('bad_request', refused)
       const args: Record<string, unknown> = { id, ...fields }
-      for (const k of ['parent_task_id', 'project', 'group_id', 'focus_tier', 'order']) if (all[k] !== undefined) args[k] = all[k]
+      for (const k of ['parent_task_id', 'project', 'group_id', 'focus_tier', 'order']) if (all[k] !== undefined && (k !== 'parent_task_id' || namedParent)) args[k] = all[k]
       const r = await w.submit('task_create', args, undefined, actor)
       return settle(r, actor, { kind: 'task-create', taskId: id, fields, placement, ...(all.order !== undefined ? { order: all.order } : {}) }, (reply) => ({
         answered: false, status: 201,

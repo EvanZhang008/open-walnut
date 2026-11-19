@@ -102,6 +102,19 @@ describe('write port: what follower.op journals', () => {
     expect(r.records().at(-1)!.fields.due_date).toEqual({ base: 'unknown', value: '2026-10-20' })
   })
 
+  it('a named parent is a paired device\'s only: a session\'s and a plugin job\'s comes from the caller rule, as online', async () => {
+    const r = rig()
+    for (const actor of [{ kind: 'session', sid: 'sess-caller-1' }, { kind: 'plugin-job', plugin: 'acme-sync', job: 'poll' }] as WriteActor[]) {
+      await r.port.taskCreate(r.write(), actor, { title: `Child of ${actor.kind}`, project: 'Acme', parent_task_id: COPY_ONLY.id })
+    }
+    await r.port.taskCreate(r.write(), PHONE, { title: 'Child of the phone', project: 'Acme', parent_task_id: COPY_ONLY.id })
+    const recs = r.records()
+    expect(recs.map((x) => x.placement.parentTaskId)).toEqual([undefined, undefined, COPY_ONLY.id])
+    // What the replica shows until the copy comes back says the same.
+    expect(r.overlay.task(recs[0].taskId, null)).not.toHaveProperty('parent_task_id')
+    expect(r.overlay.task(recs[2].taskId, null)).toMatchObject({ parent_task_id: COPY_ONLY.id })
+  })
+
   it('mints a new task\'s id (time, then 8 random bytes) and a Board post\'s id', async () => {
     const r = rig()
     const made = await r.port.taskCreate(r.write(), PHONE, { title: 'Call the venue', project: 'Acme', focus_tier: 'today' })

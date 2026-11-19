@@ -236,8 +236,11 @@ async function createTask(
   };
   const { caller, pluginOnly } = await createCaller(record.actor);
   const decision = decidePlacement(req, caller);
-  // A parent the record names wins over the caller's own task.
-  if (placement.parentTaskId) decision.parentTaskId = resolveTaskId(ctx.hostKey, placement.parentTaskId, ctx.remap);
+  // A parent the record names wins over the caller's own task, for a paired device as before. A
+  // session's or a plugin job's create online takes its parent from the caller rule alone (the
+  // create routes read none from the body), so a named one is not honoured for them here either.
+  const kind = (record.actor as { kind?: unknown } | undefined)?.kind;
+  if (placement.parentTaskId && kind !== 'session' && kind !== 'plugin-job') decision.parentTaskId = resolveTaskId(ctx.hostKey, placement.parentTaskId, ctx.remap);
   // On disk before the task exists (its created_by_op makes a redrain skip the create),
   // and taken back when addTask fails: each retry would list it again.
   let parentEntry: ConflictEntry | undefined;

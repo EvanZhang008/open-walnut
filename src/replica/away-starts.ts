@@ -7,7 +7,7 @@
  *   POST /v1/tasks/:id/start   (task_start, and task_create's start)
  *     only where the task would run: a task that has a session on this host continues it
  *     (a message to it while it runs); a task with none starts here only when this host's
- *     journal made it (the Mac adopts such a task's session alone: apply-session.ts) and its
+ *     journal still holds its create (the Mac adopts such a task's session alone: apply-session.ts) and its
  *     project's default host is this host, in the project's default folder (or the folder named), from
  *     the Mac's plain-session template (host-start-core.ts planTask), built as the Mac
  *     builds a fresh Claude Code start (fresh-claude-start.ts). The daemon journals its
@@ -58,7 +58,7 @@ export interface AwayStartsDeps {
   sessionsOfTask(taskId: string): Promise<TaskSession[]>
   /** A project's registry row (default_host, default_cwd, its session defaults), or null. */
   projectMeta(project: string): Promise<Record<string, unknown> | null>
-  /** Whether this host's journal made the task (its create pending here, or taken by the Mac and not yet in the copy). */
+  /** Whether this host's journal holds the task's create still (its first start here is the Mac's to adopt). */
   madeHere(taskId: string): boolean
   /** This host's live session limit, from its own memory (never 0, never unlimited). */
   liveLimit(): number
@@ -93,11 +93,16 @@ export function awayStarts(deps: AwayStartsDeps): RequestHandler {
   const here = (s: TaskSession) => !!deps.hostKey && str(s.host) === deps.hostKey
   const latest = (list: TaskSession[]) => [...list].sort((a, b) => str(b.startedAt).localeCompare(str(a.startedAt)))[0]
 
-  /** The live sessions on this host now, by the daemon's own list. */
-  async function liveHere(): Promise<number> {
-    const r = await deps.request('follower.sessions', {}, SESSIONS_TIMEOUT_MS)
-    const list = Array.isArray(r.sessions) ? r.sessions as Array<{ state?: unknown }> : []
-    return list.filter((s) => s.state === 'working' || s.state === 'idle').length
+  /** The live sessions on this host now, by the daemon's own list (null: it could not be read). */
+  async function liveHere(): Promise<Array<{ sid?: unknown; state?: unknown }> | null> {
+    try {
+      const r = await deps.request('follower.sessions', {}, SESSIONS_TIMEOUT_MS)
+      const list = Array.isArray(r.sessions) ? r.sessions as Array<{ sid?: unknown; state?: unknown }> : []
+      return list.filter((s) => s.state === 'working' || s.state === 'idle')
+    } catch (err) {
+      deps.log('warn', 'replica: this host\'s live sessions could not be read for a start', { error: err instanceof Error ? err.message : String(err) })
+      return null
+    }
   }
 
   async function sendTo(w: ReplicaWrite, actor: WriteActor, sid: string, taskId: string, text: string): Promise<PortAnswer> {
@@ -125,8 +130,8 @@ export function awayStarts(deps: AwayStartsDeps): RequestHandler {
       return a.answered || a.status >= 300 ? a : { answered: false, status: 200, body: { taskId, sessionId: s.sid, continued: true, started: true, offline: true } }
     }
     if (sessions.length) return needsLeaderAnswer('task_runs_elsewhere', 'This task\'s session runs on another machine; starting it needs your Mac.')
-    // Only a task this host's journal made: the Mac adopts a session started here for no other.
-    if (!deps.madeHere(taskId)) return needsLeaderAnswer('task_made_on_mac', 'This task was made on your Mac; its first start needs your Mac.')
+    // Only a task whose create this host's journal still holds: the Mac adopts a session started here for no other.
+    if (!deps.madeHere(taskId)) return needsLeaderAnswer('task_made_on_mac', 'This task was made on your Mac, or your Mac has its create already; its first start needs your Mac.')
     const extra = Object.keys(b).filter((k) => !START_KEYS.has(k) && b[k] !== undefined)
     if (extra.length) return needsLeaderAnswer('start_needs_mac', `${extra.join(', ')} can only be used while your Mac answers; nothing was started.`, { fields: extra })
     if (str(b.host) && str(b.host) !== deps.hostKey) return needsLeaderAnswer('task_runs_elsewhere', 'Starting on another machine needs your Mac.')
@@ -143,7 +148,13 @@ export function awayStarts(deps: AwayStartsDeps): RequestHandler {
     // The brake: no more live sessions here, counting the starts under way, than this host's
     // memory allows. Counted and taken with no await between, so two starts never share a slot.
     const limit = deps.liveLimit()
-    const live = await liveHere()
+    const list = await liveHere()
+    if (!list) return refusalAnswer('throttled', 'This host could not count its live sessions just now; nothing was started. Try again in a moment.', { why: 'live_count_unread' }, 5_000)
+    // This very start already runs (a retry right after this replica restarted, before it lists
+    // the session again): done, never held by the brake it already passed.
+    const sid = startSessionId(w.opId, taskId)
+    if (list.some((x) => x.sid === sid)) return { answered: false, status: 200, body: { taskId, sessionId: sid, started: true, offline: true, duplicate: true } }
+    const live = list.length
     if (live + starting >= limit) {
       deps.log('warn', 'replica: a task start was held, this host runs its live session limit', { taskId, live, starting, limit })
       return refusalAnswer('throttled', `This host already runs ${live + starting} live sessions, its limit (${limit}); nothing was started. Try again once one ends.`, { why: 'live_limit' }, 60_000)
@@ -233,7 +244,7 @@ export function awayStarts(deps: AwayStartsDeps): RequestHandler {
 
 /** The real dependencies on a host replica (server.ts mounts the handler before away.writes). */
 export function wireAwayStarts(o: {
-  away: { port: WritePort; actorOf(req: Request): WriteActor | null; task(id: string): Promise<TaskRow | null>; overlay: { createdTaskIds(): string[] } }
+  away: { port: WritePort; actorOf(req: Request): WriteActor | null; task(id: string): Promise<TaskRow | null>; overlay: { createPending(id: string): boolean } }
   hostKey: string | null
   started: AwayStartsDeps['started']
   capabilities(): readonly string[] | null
@@ -252,7 +263,9 @@ export function wireAwayStarts(o: {
     },
     projectMeta: async (project) => (await import('../core/task-manager.js')).getProjectMetadata(project),
     // The overlay's creates: pending in this host's journal, or taken by the Mac and not in the copy yet.
-    madeHere: (taskId) => o.away.overlay.createdTaskIds().includes(taskId),
+    // Still in this host's journal: a create the Mac already took may have been refused there,
+    // and a session started for it now would be refused too (it answers needs_leader instead).
+    madeHere: (taskId) => o.away.overlay.createPending(taskId),
     // This machine's memory only: the copied config is the Mac's (its own local_live_limit).
     liveLimit: () => memoryLiveLimit(),
     freshStart: async ({ host, cwd, task, meta }) => {

@@ -143,6 +143,30 @@ describe('away starts', () => {
     expect(src).not.toContain('localLiveLimit')
   })
 
+  it('a retry right after a replica restart: the daemon already runs its session, so it is done, never held by the brake', async () => {
+    // The overlay does not list the session yet; the daemon's own list names it, at the limit.
+    const sessions = [SID_1, 's1', 's2', 's3'].map((sid) => ({ sid, state: 'working' }))
+    const h = harness({ request: async () => ({ ok: true, sessions }) })
+    const r = await h.post('/v1/tasks/t1/start', { message: 'go' })
+    expect(r).toEqual({ status: 200, body: { taskId: 't1', sessionId: SID_1, started: true, offline: true, duplicate: true } })
+    expect(h.calls).toEqual([])
+  })
+
+  it('the live count cannot be read: a retryable refusal that says nothing was started', async () => {
+    const h = harness({ request: async () => { throw new Error('follower.sessions: timed out') } })
+    const r = await h.post('/v1/tasks/t1/start', { message: 'go' })
+    expect(r.status).toBe(429)
+    expect(r.body.error).toMatchObject({ code: 'throttled', why: 'live_count_unread', retryAfter: 5 })
+    expect(r.body.error.message).toContain('nothing was started')
+    expect(h.calls).toEqual([])
+  })
+
+  it('a first start alone only while this host\'s journal still holds the create (one the Mac took may have been refused there)', () => {
+    const src = fs.readFileSync(path.resolve(__dirname, '../../src/replica/away-starts.ts'), 'utf8')
+    expect(src).toContain('madeHere: (taskId) => o.away.overlay.createPending(taskId)')
+    expect(src).not.toContain('createdTaskIds')
+  })
+
   it('a start that fails gives its slot back', async () => {
     const h = harness({}, { live: 3, start: { kind: 'refused', code: 'internal', message: 'spawn failed' } })
     expect((await h.post('/v1/tasks/t1/start', { message: 'go' }, 'op-a')).status).toBe(503)

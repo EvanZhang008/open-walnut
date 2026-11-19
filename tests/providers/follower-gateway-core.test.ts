@@ -23,7 +23,7 @@ function setup(o: { linked?: Sock | null } = {}) {
     send: (ws, ev, data) => { if (ws.broken) return false; ws.sent.push({ ev, data }); return true },
     nextRelayId: () => ++id,
     instanceId: 'inst-1',
-    attemptMs: (deadline) => deadline - 1_000,
+    attemptMs: (deadline) => deadline - state.now,
     setTimer: (fn, ms) => { const t = { fn, ms, cleared: false }; timers.push(t); return t },
     clearTimer: (t) => { (t as { cleared: boolean }).cleared = true },
     log: () => {},
@@ -58,7 +58,7 @@ describe('follower gateway', () => {
     expect(s.g.handOff(call({ callerSid: 'external', caller: { kind: 'plugin-job', plugin: 'acme', job: 'sync' } }), respond)).toBe(true)
     expect(s.sock.sent).toEqual([{ ev: 'gateway-request', data: {
       relayId: 101, instanceId: 'inst-1', capability: 'tools.call', callerSid: 'external',
-      payload: { name: 'task_update', args: { id: 't1' } }, caller: { kind: 'plugin-job', plugin: 'acme', job: 'sync' },
+      payload: { name: 'task_update', args: { id: 't1' } }, caller: { kind: 'plugin-job', plugin: 'acme', job: 'sync' }, answerInMs: 30_000,
     } }])
     expect(s.timers[0]!.ms).toBe(30_000)
     expect(s.g.holds(101)).toBe(true)
@@ -153,8 +153,11 @@ describe('follower gateway', () => {
     expect(again).toBe(1)
     expect(s.sock.sent).toEqual([])
     s.state.mayWrite = true
+    s.state.now = 25_000
     s.fire()
     expect(s.sock.sent.map((x) => x.ev)).toEqual(['gateway-request'])
+    // Handed over after its wait with what is left of its time, so the server never runs past it.
+    expect(s.sock.sent[0]!.data.answerInMs).toBe(job.deadline - 25_000)
     expect(respond).not.toHaveBeenCalled()
   })
 

@@ -12,6 +12,8 @@
  * window waits, within its deadline, and then goes the right way:
  *   - the window ends: to the follower (`gateway-request` naming the job), never an error
  *   - the Mac pings again first: to the Mac, the follower asked nothing
+ *   - the job's call leaves (its socket closes) while it waits: asked of no one, even once the
+ *     Mac answers again (its next run would retry it: applied twice)
  *
  * Hygiene: every dir is a temp dir (short: socket paths); each daemon is stopped by the pid
  * it wrote into its own dir, the fake host server and the job run by the pids they logged.
@@ -248,6 +250,27 @@ for (const twin of ['source', 'standalone'] as const) {
         r.awake(true)
         const { reply } = await pending
         expect(reply, JSON.stringify(reply)).toMatchObject({ ok: true, result: { who: 'mac', op: 'task_update' } })
+        expect(r.followerAsked).toEqual([])
+      } finally {
+        r.awake(false)
+        r.mac.close(); r.follower.close()
+      }
+    }, 120_000)
+
+    it('the job\'s call leaves while it waits: never relayed, even once the Mac answers again', async () => {
+      const r = await rig(twin, `${twin.slice(0, 2)}c`)
+      try {
+        r.awake(false)
+        await sleep(BEAT_MS * 3 + 500)
+        const c = net.connect(r.d.sock)
+        await new Promise<void>((resolve, reject) => { c.on('connect', () => resolve()); c.on('error', reject) })
+        c.write(JSON.stringify({ v: 1, op: 'tools.call', sid: r.jobSid, args: { name: 'task_create', args: {} } }) + '\n')
+        await sleep(400)
+        c.destroy()
+        r.awake(true)
+        // Well past the quiet window: had the wait gone on, the call would have gone to one of them.
+        await sleep(QUIET_MS + 1_000)
+        expect(r.macAsked.map((m) => m.payload?.name)).toEqual([])
         expect(r.followerAsked).toEqual([])
       } finally {
         r.awake(false)

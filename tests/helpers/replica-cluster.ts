@@ -449,8 +449,34 @@ function macConfig(plugin?: ClusterPlugin): string {
   ].join('\n')
 }
 
+/**
+ * Only for a cluster with a plugin: a plugin job's code (core/plugin-jobs/) goes to devbox as a
+ * file in its daemon's dir, this machine, so the test transport writes it there itself, checked
+ * by its sha256, and nowhere else. Every other cluster keeps the real upload path.
+ */
+function uploadOverride(hostDaemon: string): string {
+  return `
+const originalUpload = dcm.DaemonConnection.prototype.uploadFile
+const hostDaemonDirs = [${JSON.stringify(hostDaemon)}, (await import('node:fs')).realpathSync(${JSON.stringify(hostDaemon)})]
+dcm.DaemonConnection.prototype.uploadFile = async function (remotePath, data, opts = {}) {
+  if (this.hostKey !== ${JSON.stringify(HOST_KEY)}) return originalUpload.call(this, remotePath, data, opts)
+  const np = await import('node:path')
+  const nf = await import('node:fs')
+  const target = np.resolve(String(remotePath))
+  if (!hostDaemonDirs.some((dir) => target.startsWith(dir + '/'))) throw new Error('the test transport writes only into the host daemon dir')
+  const sha = (await import('node:crypto')).createHash('sha256').update(data).digest('hex')
+  if (opts.sha256 && opts.sha256.toLowerCase() !== sha) throw new Error('uploadFile: sha256 does not match the data')
+  nf.mkdirSync(np.dirname(target), { recursive: true, mode: 0o700 })
+  const tmp = target + '.' + process.pid + '.tmp'
+  nf.writeFileSync(tmp, data, { mode: 0o600 })
+  nf.renameSync(tmp, target)
+  return { skipped: false }
+}
+`
+}
+
 /** The Mac's boot script: its own data or nothing (REFUSING), the seed, the test transport to the host daemon. */
-function macBoot(o: { macData: string; daemonPort: number; macCwd: string; hostCwd: string; dev: boolean; hostDaemon: string }): string {
+export function macBoot(o: { macData: string; daemonPort: number; macCwd: string; hostCwd: string; dev: boolean; hostDaemon: string; plugin: boolean }): string {
   const src = (f: string) => JSON.stringify(path.join(ROOT, f))
   return `
 const c = await import(${src('src/constants.ts')})
@@ -467,25 +493,7 @@ dcm.DaemonConnection.prototype.runRemoteScript = function (script, timeoutMs = 3
   return new Promise((resolve, reject) => execFile('/bin/sh', ['-c', script], { timeout: timeoutMs, env: { PATH: process.env.PATH, HOME: process.env.HOME } },
     (err, stdout) => (err ? reject(err) : resolve(String(stdout).trim()))))
 }
-// A plugin job's code (core/plugin-jobs/) goes to devbox as a file in its daemon's dir: this
-// machine, so the test transport writes it there itself, checked by its sha256, and nowhere else.
-const originalUpload = dcm.DaemonConnection.prototype.uploadFile
-const hostDaemonDirs = [${JSON.stringify(o.hostDaemon)}, (await import('node:fs')).realpathSync(${JSON.stringify(o.hostDaemon)})]
-dcm.DaemonConnection.prototype.uploadFile = async function (remotePath, data, opts = {}) {
-  if (this.hostKey !== ${JSON.stringify(HOST_KEY)}) return originalUpload.call(this, remotePath, data, opts)
-  const np = await import('node:path')
-  const nf = await import('node:fs')
-  const target = np.resolve(String(remotePath))
-  if (!hostDaemonDirs.some((dir) => target.startsWith(dir + '/'))) throw new Error('the test transport writes only into the host daemon dir')
-  const sha = (await import('node:crypto')).createHash('sha256').update(data).digest('hex')
-  if (opts.sha256 && opts.sha256.toLowerCase() !== sha) throw new Error('uploadFile: sha256 does not match the data')
-  nf.mkdirSync(np.dirname(target), { recursive: true, mode: 0o700 })
-  const tmp = target + '.' + process.pid + '.tmp'
-  nf.writeFileSync(tmp, data, { mode: 0o600 })
-  nf.renameSync(tmp, target)
-  return { skipped: false }
-}
-const { startServer, stopServer, armGracefulSignalExit } = await import(${src('src/web/server.ts')})
+${o.plugin ? uploadOverride(o.hostDaemon) : ''}const { startServer, stopServer, armGracefulSignalExit } = await import(${src('src/web/server.ts')})
 const server = await startServer({ port: 0, dev: ${o.dev ? 'true' : 'false'} })
 const tm = await import(${src('src/core/task-manager.ts')})
 const board = (await tm.addTask({ title: 'Release plan', project: 'Acme', description: 'Ship on Friday after the rollback drill.' })).task
@@ -705,7 +713,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
       ...(opts.plugin ? { WALNUT_PLUGIN_JOBS_IN_TEST: '1' } : {}),
     }
     if (opts.seedMac) await opts.seedMac({ base, macData: d.macData, env: macEnv })
-    mac = await bootMac(macBoot({ macData: d.macData, daemonPort: hostDaemon.port, macCwd: d.macCwd, hostCwd: d.hostCwd, dev: app !== 'built', hostDaemon: d.hostDaemon }), macBootFile, macEnv, macLog)
+    mac = await bootMac(macBoot({ macData: d.macData, daemonPort: hostDaemon.port, macCwd: d.macCwd, hostCwd: d.hostCwd, dev: app !== 'built', hostDaemon: d.hostDaemon, plugin: !!opts.plugin }), macBootFile, macEnv, macLog)
     // The server mac-boot runs: the child itself, its command line this runtime and that file.
     macPin = pin('mac', mac.pid, (c) => c.startsWith(`${HOST_RUNTIME} `) && c.includes(` ${macBootFile}`))
     if (!macPin) throw new Error(`the Mac reported pid ${mac.pid}, which does not run ${macBootFile}`)

@@ -9,12 +9,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { gunzipSync } from 'node:zlib'
 
-const router = vi.hoisted(() => ({ calls: [] as unknown[][], outcome: { ok: true, result: { done: 1 } } as Record<string, unknown> }))
-vi.mock('../../src/core/peers/capability-router.js', () => ({
-  handleGatewayCapability: async (...args: unknown[]) => { router.calls.push(args); return router.outcome },
-}))
+const router = vi.hoisted(() => ({ calls: [] as unknown[][], answerBy: [] as Array<number | undefined>, outcome: { ok: true, result: { done: 1 } } as Record<string, unknown> }))
+vi.mock('../../src/core/peers/capability-router.js', async () => {
+  const { ambientAnswerBy } = await import('../../src/lib/answer-by.js')
+  return {
+    handleGatewayCapability: async (...args: unknown[]) => { router.calls.push(args); router.answerBy.push(ambientAnswerBy()); return router.outcome },
+  }
+})
 
-import { createLocalCalls } from '../../src/replica/local-calls.js'
+import { CALL_LEFT_MS, START_LEFT_MS, createLocalCalls } from '../../src/replica/local-calls.js'
 import { resetRelayedCallsForTest } from '../../src/core/peers/gateway-answer.js'
 
 function setup(o: { leader?: boolean; hostKey?: string | null; caps?: string[] } = {}) {
@@ -112,6 +115,52 @@ describe('local calls', () => {
       expect(router.calls).toEqual([])
       expect(s.sent[0]).toMatchObject({ relayId: 7, errorCode: 'needs_leader' })
     }
+  })
+
+  // A plugin job's call the daemon held while the Mac went quiet comes with little of its time
+  // left: a start then would outlive the daemon's wait, and the job would hear "may have run".
+  it('a call handed over with too little time left for its op is refused before anything runs, retryable', async () => {
+    for (const [name, args] of [['task_start', { id: 't1' }], ['task_create', { title: 'x' }]] as const) {
+      resetRelayedCallsForTest()
+      router.calls = []
+      const s = setup()
+      s.handle(event({ payload: { name, args }, answerInMs: START_LEFT_MS - 1_000 }))
+      await s.settled()
+      expect(router.calls, name).toEqual([])
+      expect(s.sent[0]).toMatchObject({ relayId: 7, errorCode: 'hub_unreachable', detail: { why: 'too_little_time', retryAfterMs: 1_000 } })
+      expect(String(s.sent[0]!.error)).toContain('nothing was done')
+    }
+    // The same time is enough for a plain write, and a placeholder create starts nothing.
+    for (const payload of [{ name: 'task_update', args: { id: 't1' } }, { name: 'task_create', args: { title: 'x', record_only: true } }]) {
+      resetRelayedCallsForTest()
+      router.calls = []
+      const s = setup()
+      s.handle(event({ payload, answerInMs: START_LEFT_MS - 1_000 }))
+      await s.settled()
+      expect(router.calls, payload.name).toHaveLength(1)
+    }
+    // Under the plain call's own need: refused too.
+    const s = setup()
+    s.handle(event({ relayId: 8, answerInMs: CALL_LEFT_MS }))
+    await s.settled()
+    expect(s.sent[0]).toMatchObject({ relayId: 8, errorCode: 'hub_unreachable' })
+  })
+
+  it('runs within what the daemon still waits for; an older daemon that names none gets the hub timeout', async () => {
+    router.answerBy = []
+    const at = Date.now()
+    const s = setup()
+    s.handle(event({ payload: { name: 'task_start', args: { id: 't1' } }, answerInMs: 15_000 }))
+    await s.settled()
+    resetRelayedCallsForTest()
+    const old = setup()
+    old.handle(event({ relayId: 9, payload: { name: 'task_start', args: { id: 't1' } } }))
+    await old.settled()
+    expect(router.calls).toHaveLength(2)
+    // Answered before the daemon's own timer: what is left, less a margin; the hub timeout (20 s) otherwise.
+    expect(router.answerBy[0]! - at).toBeGreaterThan(13_000)
+    expect(router.answerBy[0]! - at).toBeLessThan(15_000)
+    expect(router.answerBy[1]! - at).toBeGreaterThan(19_000)
   })
 
   it('an event that is no relay is ignored', async () => {
