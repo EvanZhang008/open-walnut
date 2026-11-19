@@ -13,7 +13,10 @@
  *   - plugin routes are class leader by prefix;
  *   - every /api/v1 route the phone app calls exists and has an exact row;
  *   - every RPC method the server registers is named in the RPC table, and
- *     every name in the table is registered (no stale row).
+ *     every name in the table is registered (no stale row);
+ *   - every read of one task or one session (and the task lists) has a decision in
+ *     tests/replica/away-task-reads-table.ts: what this host answers for a task made here or
+ *     a session that runs here while the Mac is away (no stale row either).
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createMockConstants } from '../helpers/mock-constants.js'
@@ -21,6 +24,7 @@ import { useHostReplicaEnv, type HostReplicaEnv } from '../helpers/replica-host-
 import { installMountRecorder, walkRoutes, type WalkedRoute } from '../helpers/express-route-walk.js'
 import { classify, journals, patternMatches, ROUTE_TABLE } from '../../src/replica/route-table.js'
 import { WS_RPC_TABLE } from '../../src/replica/ws-rpc-table.js'
+import { AWAY_TASK_READS } from './away-task-reads-table.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-replica-routes'))
 
@@ -109,6 +113,29 @@ describe('the route table against the real app', () => {
     const d = classify(method, p)
     expect(d.row, `${method} ${p}`).not.toBeNull()
     expect(d.row!.pattern.includes('*'), `${method} ${p} row ${d.row!.pattern}`).toBe(false)
+  })
+})
+
+/** A read of one task or one session (an id in its path), or a task list a caller follows its work with. */
+function taskOrSessionRead(r: WalkedRoute): boolean {
+  if (r.method !== 'GET') return false
+  if (['/api/tasks', '/api/tasks/bulk', '/api/v1/tasks'].includes(r.path)) return true
+  return /^\/api\/(v1\/)?(tasks|sessions)\/.*:/.test(r.path)
+}
+
+describe('the reads of a task and its sessions while the Mac is away', () => {
+  it('every one has a decision: answered on this host, needs the Mac, or unchanged, and why', () => {
+    const walked = [...new Set(routes.filter(taskOrSessionRead).map((r) => `${r.method} ${r.path}`))].sort()
+    expect(walked.length).toBeGreaterThan(50)
+    expect(walked.filter((k) => !(k in AWAY_TASK_READS)), 'a new read of a task or a session: decide it in tests/replica/away-task-reads-table.ts').toEqual([])
+    expect(Object.keys(AWAY_TASK_READS).filter((k) => !walked.includes(k)).sort(), 'a row for a route the app no longer serves').toEqual([])
+    for (const [k, d] of Object.entries(AWAY_TASK_READS)) expect(d.why.length, k).toBeGreaterThan(20)
+  })
+
+  it('the reads a caller follows a task it started with are answered on its host', () => {
+    for (const k of ['GET /api/tasks/:id', 'GET /api/tasks', 'GET /api/tasks/bulk', 'GET /api/v1/tasks/:id', 'GET /api/v1/tasks/:id/sessions', 'GET /api/v1/sessions/:id/transcript', 'GET /api/sessions/task/:taskId']) {
+      expect(AWAY_TASK_READS[k]?.answer, k).toBe('host')
+    }
   })
 })
 
