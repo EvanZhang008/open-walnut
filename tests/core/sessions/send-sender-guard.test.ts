@@ -136,6 +136,8 @@ const CALL_SITES: Record<string, number> = {
   // A Walnut tool the CLI refused: one Walnut notice (walnut-notify) naming what to use instead.
   'src/core/sessions/missing-walnut-tool.ts': 1,
   'src/core/sessions/needs-recheck.ts': 1,
+  // Another team's news on the matter of an open ask: one Walnut note, source wait-until like needs-recheck.
+  'src/core/sessions/matter-news.ts': 1,
   'src/core/sessions/promise-alarm.ts': 1,
   'src/core/sessions/session-request-notify.ts': 4, // and the 10-minute silent-target notice (remindSilent)
   'src/core/sessions/session-send-core.ts': 5,

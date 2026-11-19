@@ -13,6 +13,7 @@
 import { log } from '../../logging/index.js';
 import { statusDecision } from '../ask-decision.js';
 import { matterWords } from '../ask-matter.js';
+import { snoozedUntil } from '../snooze.js';
 
 export interface MatterNews {
   /** The ask the notes were about: a status ask's decision id, or a letter id. */
@@ -55,6 +56,8 @@ export async function runMatterNews(nowMs = Date.now()): Promise<string[]> {
     };
     for (const task of all) {
       if (task.phase === 'COMPLETE' || task.status === 'done' || task.plugin_only || quieted.has(task.id)) continue;
+      // A snoozed task is not reminded before its date (snooze.ts), like the re-checks on this clock.
+      if (snoozedUntil(task, byId, nowMs)) continue;
       const asks: Array<{ key: string; ask: string; where: string; text: string; since: number }> = [];
       const s = task.user_status;
       // Main and a lead ask in letters and Threads, never in a Needs you of their own.
