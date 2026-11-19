@@ -289,22 +289,28 @@ permission prompts still name Walnut.
   of this Walnut on a host that is on only by default (not one the person turned on, nor the one carrying
   this Walnut's tunnel), one probe over its link reads its platform, its memory and its disk. No build that
   runs there (no file for its system, or the file's proof boot failed), less than 2 GiB of memory in all or
-  1 GiB free, or less than 2.5 GiB free on its disk keeps the host without a follower: its view says why
-  (`not-eligible`), and memory and disk are looked at again every 30 minutes. The floors come from a dev host
+  1 GiB free (the machine's or its container's limit, whichever is smaller), or less than 2.5 GiB free on its
+  disk keeps the host without a follower: its view says why (`not-eligible`). Free memory and disk are
+  looked at again every 30 minutes and a failed proof boot every 6 hours; too little memory in all and no
+  file for its system wait for a connect, Retry or a newer build. The floors come from a dev host
   with 19 agents (2026-11-18): the follower used 311 MB right after a start and 194 MB after 16 minutes, the
   daemon beside it 246 MB; one version of the program takes about 160 MB unpacked, and that follower's data
   copy was 1.9 GB. A host row that is really the leader's own machine (its link reaches the leader's own
-  daemon process, by the hello's instance id) gets none by default either (`this-computer`).
+  daemon process, by the hello's instance id) gets none by default either (`this-computer`); while the
+  leader's own daemon is not linked yet that is unknown, so nothing is installed and it is looked at again.
 - **A slow link or a failed start harms nothing else.** The program goes up in the background with the
   resumable upload, on connections of its own and with no deadline; the view shows the bytes sent. With the
   experiment on, a start that fails runs again by itself after 1, 5, 15, 30, then 60 minutes, never touching
   the daemon link or the host's sessions, and goes to Walnut Health as one item per host (never a popup),
-  recovered once it runs.
+  recovered once it runs. On a host on only by default the follower is stopped after the failure, and the
+  tries end after the 60 minute one until a newer build, a reconnect or Retry. Hosts on by default install
+  one at a time; a host the person turned on never waits behind them. Switching the experiment off stops the
+  followers that ran only by default and leaves their files on the host.
 - **Not yet.** A task made on the leader cannot be started alone. A message that expects a reply needs the
   leader. A task made away by a plugin that keeps its tasks off the board shows on the follower's own board
   until the leader has taken it. Every host gets a follower by default only once the experiment
-  `follower_on_every_host` is switched on. The Settings page still shows the switch as before: it reads on for
-  a host on by default, and does not yet say which hosts follow the default or why one has no follower.
+  `follower_on_every_host` is switched on. The host's Settings switch reads on for a host on by default and
+  does not yet say that it follows the default (the fleet view carries `byDefault` for it).
 
 ## Compatibility
 

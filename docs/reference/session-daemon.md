@@ -164,25 +164,37 @@ The leader runs a follower Walnut server (`walnut web --replica`) on a host thro
 `follower_on_every_host` on (`src/core/experimental.ts`, Settings, Experimental; off by default), it is on by
 default on each host the leader manages, and the switch is the opt-out (`follower-default.ts`). With the
 experiment off, nothing below the first rule applies: the switch is opt-in, nothing is probed, a failed start
-waits for Retry, and nothing goes to Walnut Health.
+waits for Retry, and nothing goes to Walnut Health (a Health item raised before is still cleared). Turning
+the experiment off stops the followers that ran only by default, cancels their waits, and leaves their files
+on the host.
 
 - **A stored value is the person's.** Only PUT `/api/host-servers/:hostKey` writes the switch, so a stored
   `false` stays off across upgrades and a stored `true` stays on. A host with nothing stored follows the
-  experiment; nothing is written for it, so an older release reads an unset switch as off, as it always did. The cloud box, a host turned off and a found host waiting for a yes
-  never get one by default. GET `/api/host-servers` says whose each value is (`settings.chosenBy`).
+  experiment; nothing is written for it, so an older release reads an unset switch as off, as it always did.
+  The cloud box, a host turned off and a found host waiting for a yes never get one by default. GET
+  `/api/host-servers` says whose each value is (`settings.chosenBy`, and `byDefault` on the view).
 - **Conditions decide, never a host name** (`eligibility.ts`). A host on only by default, where this Walnut
   never set a follower up (no port kept, its daemon runs none), gets one only where a build of the file runs
-  (its platform, the install's proof boot) and it has 2 GiB of memory, 1 GiB free and 2.5 GiB of disk free.
-  The person's own switch and this Walnut's tunnel placed on the host skip the gates. Otherwise its view
-  reads `not-eligible` with `gate.reason` (`no-build`, `memory`, `disk`); memory and disk are looked at again
-  every 30 minutes. A host row whose link reaches this computer's own daemon process (the hello's instance
-  id, `sameDaemonHosts`) is this computer: it gets none by default (`this-computer`).
+  (its platform, the install's proof boot) and it has 2 GiB of memory, 1 GiB free and 2.5 GiB of disk free,
+  judged by the smaller of the machine and its container's memory limit (cgroup v2 `memory.max`, v1
+  `memory.limit_in_bytes`). The person's own switch and this Walnut's tunnel placed on the host skip the
+  gates. Otherwise its view reads `not-eligible` with `gate.reason` (`no-build`, `memory`, `disk`,
+  `this-computer`). Free memory and disk are looked at again every 30 minutes; too little memory in total
+  and no build for its system wait for a connect, Retry or a newer build; a proof boot that failed is tried
+  again every 6 hours. A host row whose link reaches this computer's own daemon process (the hello's
+  instance id, `sameDaemonHosts`) is this computer and gets none by default; while this computer's own
+  daemon is not linked yet, that is not known, so the host reads `checking`, nothing is installed, and it is
+  looked at again soon.
 - **Nothing happens on a host that is not connected**: its follower starts on the connect the host gets
   anyway (a follower on by default dials nothing; `hostRunsServer` counts only the person's switch and the
-  tunnel). The upload is the resumable one on connections of its own, with no deadline. A start that fails
+  tunnel). The upload is the resumable one on connections of its own, with no deadline, and hosts on by
+  default install one at a time (a host the person turned on never waits in that line). A start that fails
   runs again by itself, later and later (`try-later.ts`; a config change elsewhere does not hurry it), never
   touches the daemon link or the host's sessions, and raises one Walnut Health item per host
-  (`health-item.ts`).
+  (`health-item.ts`). On a host on only by default, the follower is stopped after the failure, and after the
+  last step of the ladder (60 minutes) Walnut stops trying by itself until a newer build, a reconnect or
+  Retry. A host on by default that waits for its host or a newer daemon, or is not eligible, is not listed
+  as a problem in Settings nor as a replica.
 
 ## Topology, files, CLI lifecycle and delivery paths
 
