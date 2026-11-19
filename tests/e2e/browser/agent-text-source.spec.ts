@@ -1058,11 +1058,12 @@ test('a Board page path opens on its writer\'s machine and a post\'s path on the
     await page.setViewportSize({ width: 1280, height: 900 })
     await expect(unsent).toHaveValue('Keep these words while the Board changes the column width.')
 
-    // ── The pane closes while the machines are read: the late answer opens nothing ──
+    // ── The Board changes while the machines are read: the late answer opens nothing ──
     // A fresh page holds no session record, so the press must read the post's session. While that read is
-    // held, the fixture completes the leader's only worker, the panel closes the Board view (its task no
-    // longer leads), and the pane unmounts with the pending dialog still up: nobody dismissed it and
-    // nothing was pressed again.
+    // held, the leader's only worker finishes: the open Board stays, as the reader opened it while the task
+    // led (an open Board stays until the reader leaves it, 2026-11-19; session-board-tab-lead-only.spec.ts D).
+    // Then the page is written again: the new version outdates the open in flight and closes its chooser
+    // (TaskBoardPane's layout cleanup, the one an unmount runs), with nobody dismissing it.
     await leaveFullscreen(page)
     await page.reload()
     pane = page.getByTestId('task-board-pane')
@@ -1077,15 +1078,20 @@ test('a Board page path opens on its writer\'s machine and a post\'s path on the
     await expect(closing.getByRole('status')).toContainText('Finding the machine each one is on')
     await expect.poll(() => net.gate.held, { timeout: 20_000 }).toBe(1)
     await ok(await request.patch(`/api/tasks/${worker.id}`, { data: { phase: 'COMPLETE' } }), 'last worker completed while its path source is read')
-    await expect(page.getByTestId('task-board-pane')).toHaveCount(0, { timeout: 20_000 })
-    await expect(closing).toHaveCount(0)
+    // The page hears the change over its socket within a beat; give it two, then judge.
+    await page.waitForTimeout(2000)
+    await expect(page.getByTestId('task-board-pane'), 'the Board the reader opened stays when the team finishes').toBeVisible()
+    await expect(closing.getByRole('status')).toContainText('Finding the machine each one is on')
+    await ok(await request.put(`/api/v1/tasks/${leader}/board`, { data: { html: boardHtml('Written again while a source is read') } }), 'board written again while its path source is read')
+    await expect(closing).toHaveCount(0, { timeout: 20_000 })
+    await expect(frame.locator('#page-heading')).toHaveText('Written again while a source is read', { timeout: 20_000 })
     const lateAfterClose = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/sessions/${REMOTE_SID}`)
     net.gate.release()
     expect((await lateAfterClose).ok()).toBe(true)
     await settle(page)
     await expect(page.locator('.file-viewer-overlay')).toHaveCount(0)
     await expect(closing).toHaveCount(0)
-    expect(net.remote(), 'the late answer after the pane closed opened nothing').toEqual([])
+    expect(net.remote(), 'the late answer after the Board changed opened nothing').toEqual([])
     expect(net.primary(), 'nor anything on this machine').toEqual([])
     expect(net.lookups()).toBe(1)
   } finally {
