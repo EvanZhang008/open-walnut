@@ -6,12 +6,19 @@
  * a phase implies). The daemon's own offline answers still fold with their older copy
  * (offline-host-core.ts tasksWithOverlay) until the host's Walnut server answers those calls.
  *
+ * A session the host started alone for the task (away-starts.ts, ask-launch.ts) is folded in
+ * too, at its place in time among the records (foldAwayStart, foldAwayTurn): the link the Mac
+ * writes when it adopts the session, and the phase the Mac's session rules give its turns.
+ *
  * Also the id a writer away from the Mac mints for a new task (`mintTaskId`): the
  * replica's write port uses it, and so does the Mac's drain when an id it receives is
  * taken (apply-v2.ts).
  */
 
 import { pluginOnlyForCaller } from '../plugins/plugin-task-visibility.js'
+import { pointTaskAtSession, slotOfMode } from '../sessions/task-session-link.js'
+import { sessionAwaitingHumanPhase, sessionErrorPhase, sessionResultPhase, sessionTurnStartPhase } from '../phase.js'
+import type { TaskPhase } from '../types.js'
 
 /** A task row as a reader shows it. */
 export type FoldRow = Record<string, unknown> & { id: string }
@@ -105,4 +112,56 @@ export function foldTaskRecord(row: Record<string, unknown> | null, id: string, 
     return withValues(row, values, new Date(at).toISOString())
   }
   return row
+}
+
+/**
+ * A session this host started alone for a task, as the reader fold takes it (a host replica's
+ * session row: session-tracker.ts awaySessionsOfTask). Times are on this host's clock, as the
+ * journal's record times are.
+ */
+export interface AwayStart {
+  sid: string
+  /** When it started (ms). */
+  at: number
+  mode?: string
+  /** Its process status as this host's daemon last reported it (ask-launch.ts hostSessionStatus). */
+  status?: string
+  /** Its transcript's last write (ms), when known. */
+  activeAt?: number
+  /** A permission prompt waits for a person. */
+  prompt?: boolean
+}
+
+/**
+ * A start folded over the task's row: the link the Mac writes when its drain adopts the session
+ * (apply-session.ts linkAdopted: the slot by its mode, then the list; task-session-link.ts), and
+ * the phase the Mac's start gives it. The Mac moves that phase through the session's own events,
+ * never a journal record its drain replays: the first message is a turn start (phase.ts
+ * sessionTurnStartPhase, IN_PROGRESS unless done).
+ */
+export function foldAwayStart(row: Record<string, unknown>, s: AwayStart, withValues: WithValues): Record<string, unknown> {
+  const out = { ...row }
+  pointTaskAtSession(out as Parameters<typeof pointTaskAtSession>[0], s.sid, slotOfMode(s.mode))
+  const iso = new Date(s.at).toISOString()
+  out.last_session_update = iso
+  const next = sessionTurnStartPhase(String(out.phase ?? 'TODO') as TaskPhase)
+  return next ? withValues(out, { phase: next }, iso) : out
+}
+
+/**
+ * The session's live state folded over the row, by the Mac's session rules (phase.ts), when its
+ * transcript moved after the row's last phase change (`phaseAt`): a prompt for a person hands the
+ * task back, a running turn pulls it to IN_PROGRESS, a turn that ended (idle) hands it back, a
+ * process that ended mid-turn (stopped) is an error's hand-back. A later phase write (a
+ * task_update of its own, a completion) is newer than the turn, and stays.
+ */
+export function foldAwayTurn(row: Record<string, unknown>, s: AwayStart, phaseAt: number, withValues: WithValues): Record<string, unknown> {
+  if (s.activeAt === undefined || !(s.activeAt > phaseAt)) return row
+  const cur = String(row.phase ?? 'TODO') as TaskPhase
+  const next = s.prompt ? sessionAwaitingHumanPhase(cur)
+    : s.status === 'running' ? sessionTurnStartPhase(cur)
+    : s.status === 'idle' ? sessionResultPhase(cur)
+    : s.status === 'stopped' || s.status === 'error' ? sessionErrorPhase(cur)
+    : null
+  return next ? withValues(row, { phase: next }, new Date(s.activeAt).toISOString()) : row
 }

@@ -206,12 +206,17 @@ describe('away starts', () => {
     expect(h.calls).toEqual([])
   })
 
-  it('a task with its session here continues it: the message goes to that session', async () => {
-    const h = harness()
+  it('a task with its session here continues it: the message goes to that session, which is watched again', async () => {
+    const continued = vi.fn()
+    const h = harness({ continued })
     const r = await h.post('/v1/tasks/t3/start', { message: 'more' })
     expect(r.body).toMatchObject({ taskId: 't3', sessionId: 'sid-3', continued: true })
     expect(h.sends).toEqual([{ sid: 'sid-3', text: '[framed] more', framed: true }])
     expect(h.calls).toEqual([])
+    // Its turn reaches the console and its task's readers, however long it sat idle.
+    expect(continued).toHaveBeenCalledWith('sid-3')
+    await h.post('/v1/messages', { to: 't3', text: 'and these' }, 'op-2')
+    expect(continued).toHaveBeenCalledTimes(2)
   })
 
   it('the brake: this host runs its live session limit, so the start is refused for now and says why', async () => {

@@ -347,6 +347,8 @@ export const NEEDS_LEADER_REASONS: Readonly<Record<string, string>> = {
   message_needs_mac: 'Sending with these options needs your Mac.',
   reply_needs_mac: 'Asking for a reply needs your Mac.',
   target_needs_mac: 'This host does not know that task.',
+  // A read of a task made on this host while the Mac is away that only the Mac's store answers (away-reads.ts).
+  task_made_here_needs_mac: 'This task was made here while your Mac is away; this part of it shows once your Mac has it.',
 }
 
 const GENERIC_REASON = 'Your Mac is not answering right now.'

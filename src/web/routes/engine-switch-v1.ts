@@ -15,7 +15,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { isKnownEngine } from '../../core/agents/engine-registry.js'
 import { isFollower } from '../../core/server-role.js'
-import type { SessionEffort, SessionEngine, SessionMode, SessionRecord } from '../../core/types.js'
+import type { SessionEffort, SessionEngine, SessionMode, SessionRecord, Task } from '../../core/types.js'
 import { missingIsNull } from '../../lib/id-ref.js'
 import { startRouteSource } from '../../core/sessions/send-sent-by.js'
 
@@ -67,25 +67,33 @@ export function sessionHistoryRow(r: SessionRecord, activeId: string | undefined
   }
 }
 
+/**
+ * The answer of GET /tasks/:id/sessions for a task row: the route's, and a host replica's for a
+ * task its journal made while the Mac is away (replica/away-reads.ts), whose sessions run there.
+ */
+export async function taskSessionsAnswer(task: Pick<Task, 'id' | 'session_id' | 'legacy_session_ids' | 'engine_switch'>): Promise<Record<string, unknown>> {
+  const { getSessionsForTask } = await import('../../core/session-tracker.js')
+  const { taskConversation } = await import('../../core/sessions/task-session-claim.js')
+  const active = (await taskConversation(task.id))?.claudeSessionId ?? task.session_id
+  const rows = (await getSessionsForTask(task.id))
+    .filter((r) => !r.archive_reason?.startsWith('acp_identity_replaced:'))
+    .sort((a, b) => (a.startedAt ?? '').localeCompare(b.startedAt ?? ''))
+  return {
+    taskId: task.id,
+    activeSessionId: active ?? null,
+    sessions: rows.map((r) => sessionHistoryRow(r, active)),
+    // Sessions an older Walnut split off the task (history only, not linked).
+    legacySessionIds: task.legacy_session_ids ?? [],
+    ...(task.engine_switch ? { engineSwitch: { ...task.engine_switch, message: undefined, held_rows: undefined } } : {}),
+  }
+}
+
 engineSwitchV1Router.get('/tasks/:id/sessions', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { getTask } = await import('../../core/task-manager.js')
     const task = await getTask(String(req.params.id)).catch(missingIsNull)
     if (!task) { res.status(404).json({ error: 'Task not found', code: 'not_found' }); return }
-    const { getSessionsForTask } = await import('../../core/session-tracker.js')
-    const { taskConversation } = await import('../../core/sessions/task-session-claim.js')
-    const active = (await taskConversation(task.id))?.claudeSessionId ?? task.session_id
-    const rows = (await getSessionsForTask(task.id))
-      .filter((r) => !r.archive_reason?.startsWith('acp_identity_replaced:'))
-      .sort((a, b) => (a.startedAt ?? '').localeCompare(b.startedAt ?? ''))
-    res.json({
-      taskId: task.id,
-      activeSessionId: active ?? null,
-      sessions: rows.map((r) => sessionHistoryRow(r, active)),
-      // Sessions an older Walnut split off the task (history only, not linked).
-      legacySessionIds: task.legacy_session_ids ?? [],
-      ...(task.engine_switch ? { engineSwitch: { ...task.engine_switch, message: undefined, held_rows: undefined } } : {}),
-    })
+    res.json(await taskSessionsAnswer(task))
   } catch (err) { next(err) }
 })
 

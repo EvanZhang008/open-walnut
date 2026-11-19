@@ -8,8 +8,13 @@
  *   the Mac sleeps (SIGSTOP); the JOB, told by a file in its own state dir, calls:
  *     task_create with a start   journaled with the job as its actor, its session started on
  *                                the host (the project's default host) as the task's own
+ *     task_get, task_history,    the task it started, read on its own host while the Mac is
+ *     api sessions/task/<id>     away: its session linked as the Mac links it, execution
+ *                                running while the turn runs (the mock CLI holds it until a
+ *                                file exists), then idle and handed back; the conversation;
+ *                                the session record with its task, host, folder and status
  *     task_update tags           journaled, the job as actor
- *     task_send to that task     delivered to its session on the host
+ *     task_send to that task     delivered to its session on the host, and in its history
  *   the plugin keeps its tasks to its own view (`taskVisibility: "plugin"`): the replica, which
  *   loads no manifest, has the Mac's word for it (its spec's settings), so the task is absent
  *   from the replica's board list and there for the job's own task_get
@@ -80,6 +85,13 @@ function jobDir(c: ReplicaCluster): string | null {
   return walk(path.join(c.base, 'hd'), 6)
 }
 
+/** The session fields of a task row (the link a start writes: task-session-link.ts). */
+function pickLink(task: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const k of ['session_id', 'session_ids', 'exec_session_id', 'plan_session_id']) if (task[k] !== undefined && task[k] !== null) out[k] = task[k]
+  return out
+}
+
 let callN = 0
 /** One op the job runs, and its answer. */
 async function jobCall(dir: string, name: string, args: Record<string, unknown>): Promise<Record<string, any>> {
@@ -99,6 +111,8 @@ describe.each(TWINS)('a plugin job\'s walnut calls on its host while the Mac is 
   let taskId = ''
   let startedSid = ''
   let createOp = ''
+  /** The session fields of the task as the job read them on its host while the Mac was away. */
+  let awayLink: Record<string, unknown> = {}
 
   const keepLogs = () => onTestFailed(() => {
     if (c) process.stdout.write(`replica-cluster-plugin-job-e2e: logs at ${writeClusterLogs(c, `plugin-job-${twin}`)}\n`)
@@ -134,7 +148,9 @@ describe.each(TWINS)('a plugin job\'s walnut calls on its host while the Mac is 
     const quietAt = slept.after + WINDOWS.quietMs + 1_000
     if (Date.now() < quietAt) await new Promise((r) => setTimeout(r, quietAt - Date.now()))
 
-    const created = await jobCall(dir, 'task_create', { title: TITLE, project: 'Acme', message: 'import the rows' })
+    // The first turn runs until the test releases it (the mock CLI's "please hold until").
+    const release = path.join(c.base, `release-first-turn-${twin}`)
+    const created = await jobCall(dir, 'task_create', { title: TITLE, project: 'Acme', message: `import the rows, please hold until ${release}` })
     expect(created.ok, JSON.stringify(created)).toBe(true)
     taskId = String(created.result.id ?? created.result.task?.id ?? '')
     expect(taskId).not.toBe('')
@@ -145,7 +161,37 @@ describe.each(TWINS)('a plugin job\'s walnut calls on its host while the Mac is 
     const start = await waitFor(() => hostJournal(c).find((r) => r.kind === 'session' && r.taskId === taskId), 60_000, 'the task\'s session record')
     expect(start).toMatchObject({ run: 'task', host: 'devbox', cwd: hostCwd, actor: JOB })
     startedSid = String(start.sid)
+    expect(created.result.sessionId).toBe(startedSid)
+
+    // While its turn runs: the job's own reads of the task it started, answered on its host.
+    let got: Record<string, any> = {}
+    await waitFor(async () => {
+      got = await jobCall(dir, 'task_get', { id: taskId })
+      return got.ok && got.result.task?.execution?.state === 'running' ? true : null
+    }, 60_000, 'task_get to say the turn runs').catch((e: Error) => { e.message += ` (task_get: ${JSON.stringify(got).slice(0, 1500)})`; throw e })
+    expect(got.result.task).toMatchObject({ id: taskId, phase: 'IN_PROGRESS', plugin_only: 'acme-sync' })
+    const raw = await jobCall(dir, 'api', { method: 'GET', path: `/api/tasks/${taskId}` })
+    expect(raw.ok, JSON.stringify(raw)).toBe(true)
+    // Linked as the Mac links a start (linkSessionSlot, then linkSession): one session, the exec slot.
+    expect(raw.result.task).toMatchObject({ session_id: startedSid, session_ids: [startedSid], exec_session_id: startedSid, session_status: { process_status: 'running' } })
+    const bySession = await jobCall(dir, 'api', { method: 'GET', path: `/api/sessions/task/${taskId}` })
+    expect(bySession.ok, JSON.stringify(bySession)).toBe(true)
+    expect(bySession.result.sessions).toEqual([expect.objectContaining({ claudeSessionId: startedSid, taskId, host: 'devbox', cwd: hostCwd, process_status: 'running' })])
+
+    // The turn ends: idle, handed back, as the Mac's session rules give it.
+    fs.writeFileSync(release, 'go')
     await waitFor(() => hostStream(c, startedSid).some((l) => l.type === 'result'), 120_000, 'the started session to answer')
+    await waitFor(async () => {
+      got = await jobCall(dir, 'task_get', { id: taskId })
+      return got.ok && got.result.task?.execution?.state === 'idle' ? true : null
+    }, 60_000, 'task_get to say the turn ended').catch((e: Error) => { e.message += ` (task_get: ${JSON.stringify(got).slice(0, 1500)})`; throw e })
+    expect(got.result.task).toMatchObject({ phase: 'NEED_ACTION' })
+    const ended = await jobCall(dir, 'api', { method: 'GET', path: `/api/sessions/task/${taskId}` })
+    expect(ended.result.sessions).toEqual([expect.objectContaining({ claudeSessionId: startedSid, process_status: 'idle' })])
+    const first = await jobCall(dir, 'task_history', { id: taskId })
+    expect(first.ok, JSON.stringify(first)).toBe(true)
+    expect(JSON.stringify(first.result)).toContain('import the rows')
+    expect(JSON.stringify(first.result)).toContain(`echo: released ${release}`)
 
     const tagged = await jobCall(dir, 'task_update', { id: taskId, tags: ['source:acme'] })
     expect(tagged.ok, JSON.stringify(tagged)).toBe(true)
@@ -155,6 +201,19 @@ describe.each(TWINS)('a plugin job\'s walnut calls on its host while the Mac is 
     const sent = await jobCall(dir, 'task_send', { to: taskId, text: 'rows are in', expect_reply: false })
     expect(sent.ok, JSON.stringify(sent)).toBe(true)
     await waitFor(() => hostStream(c, startedSid).some((l) => l.type === 'result' && String(l.result).includes('rows are in')), 120_000, 'the message to reach the started session')
+    // The message and its reply are in the task's history, read on its host.
+    let history: Record<string, any> = {}
+    await waitFor(async () => {
+      history = await jobCall(dir, 'task_history', { id: taskId })
+      // The mock CLI echoes the framed words (the job's note envelope around them).
+      const said = (role: string) => (history.result?.messages ?? []).some((m: { role?: string; text?: string }) => m.role === role && String(m.text).includes('rows are in'))
+      return history.ok && said('user') && said('assistant') ? true : null
+    }, 60_000, 'task_history to hold the second turn').catch((e: Error) => { e.message += ` (task_history: ${JSON.stringify(history).slice(0, 1500)})`; throw e })
+    expect(JSON.stringify(history.result)).toContain('import the rows')
+    const after = await jobCall(dir, 'api', { method: 'GET', path: `/api/tasks/${taskId}` })
+    expect(after.ok, JSON.stringify(after)).toBe(true)
+    awayLink = pickLink(after.result.task)
+    expect(awayLink).toEqual({ session_id: startedSid, session_ids: [startedSid], exec_session_id: startedSid })
 
     // Kept to the plugin's view: not on the replica's board, there for the job's own read.
     const board = await c.replica('GET', '/api/tasks', { token })
@@ -183,6 +242,13 @@ describe.each(TWINS)('a plugin job\'s walnut calls on its host while the Mac is 
     // An outside caller's create, as the same job's call online: no caller parent.
     expect(first.tasks[0]!.parent_task_id ?? '').toBe('')
     expect(first.sessions[0]).toMatchObject({ claude_session_id: startedSid, task_id: taskId, host: 'devbox' })
+    // The Mac's own row names the session as the host showed it while the Mac was away.
+    let leaderLink: Record<string, unknown> = {}
+    await waitFor(async () => {
+      const r = await c.mac('GET', `/api/tasks/${taskId}`)
+      leaderLink = r.status === 200 ? pickLink((r.json as { task?: Record<string, unknown> }).task ?? {}) : {}
+      return JSON.stringify(leaderLink) === JSON.stringify(awayLink) ? true : null
+    }, 60_000, 'the Mac\'s row to link the session as the host showed it').catch((e: Error) => { e.message += ` (the Mac: ${JSON.stringify(leaderLink)}, the host: ${JSON.stringify(awayLink)})`; throw e })
     // Made by the journal's create, the job's (its op id), never by a second create; kept to the plugin.
     expect(createOp).not.toBe('')
     expect(String(first.tasks[0]!.payload ?? '')).toContain(createOp)

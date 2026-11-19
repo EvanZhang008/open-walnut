@@ -20,6 +20,8 @@
  * matching control_response arrives on stdin. "please ask <question>" asks the
  * person with AskUserQuestion (which the daemon never answers by itself, in any
  * mode): "echo: answered <their answer>" once the answer comes, else "echo: not answered".
+ * "please hold until <absolute path>" keeps the turn running until that file exists (a
+ * test reads the running turn, then releases it): "echo: released <path>".
  *
  * Copied into the cluster's own bin dir, so its command line names that dir.
  */
@@ -123,6 +125,15 @@ function runNext() {
       const answers = r.behavior === 'allow' && r.updatedInput && r.updatedInput.answers
       finish(answers && typeof answers[q] === 'string' ? `echo: answered ${answers[q]}` : 'echo: not answered')
     })
+    return
+  }
+  const hold = /please hold until (\/\S+)/i.exec(words)
+  if (hold) {
+    const gate = setInterval(() => {
+      if (!fs.existsSync(hold[1])) return
+      clearInterval(gate)
+      finish(`echo: released ${hold[1]}`)
+    }, 50)
     return
   }
   setTimeout(() => finish(`echo: ${words}`), THINK_MS)

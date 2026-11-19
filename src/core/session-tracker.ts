@@ -621,6 +621,20 @@ function withAway(rows: SessionRecord[], keep: (s: SessionRecord) => boolean = (
   return rows.concat(extra.filter((r) => !have.has(r.claudeSessionId) && keep(r)).map((r) => ({ ...r })));
 }
 
+/**
+ * The sessions a host replica started alone for `taskId` that its sessions copy does not hold
+ * yet (copies, never the installed rows): what its reader fold links to the task
+ * (offline-merge/task-row-fold.ts foldAwayStart). Empty on the Mac and the companion.
+ */
+export function awaySessionsOfTask(taskId: string): SessionRecord[] {
+  if (!awaySessionRows || !taskId) return [];
+  const mine = awayRows().filter((r) => r.taskId === taskId);
+  if (!mine.length) return [];
+  const db = getDb();
+  const held = db ? db.prepare('SELECT 1 FROM sessions WHERE claude_session_id = ?') : null;
+  return mine.filter((r) => !held?.get(r.claudeSessionId)).map((r) => ({ ...r }));
+}
+
 export async function listSessions(): Promise<SessionRecord[]> {
   const store = await readStore();
   return awaySessionRows ? withAway(store.sessions) : store.sessions;

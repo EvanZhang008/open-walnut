@@ -1942,11 +1942,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         log: (level, msg, data) => log.web[level](msg, data),
       })
       installAwaySessions(() => asks.rows())
+      // A read of a task or a session started here sees its live state (away-reads.ts).
+      away.setSessionsFresh(() => asks.fresh())
       app.use('/api', asks.handler)
       // A task's start and a message to a task from this host's own calls (away-starts.ts).
       if (hasCapability('host-local-calls')) {
         app.use('/api', (await import('../replica/away-starts.js')).wireAwayStarts({
-          away, hostKey, started: (row) => asks.noteStarted(row),
+          away, hostKey, started: (row) => asks.noteStarted(row), continued: (sid) => asks.watch(sid),
           capabilities: () => front.link.capabilities(),
           request: (cmd, params, timeoutMs) => front.link.request(cmd, params, timeoutMs),
         }))

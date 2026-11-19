@@ -32,6 +32,8 @@ import { awayNotes } from './away-notes.js'
 import { awayReads, overlayBoard, overlayTiers, SYNC_FIELD } from './away-reads.js'
 import { wsWrites } from './ws-writes.js'
 import { writeActorOf } from './write-actor.js'
+import type { SessionRecord } from '../core/types.js'
+import type { AwayStart } from '../core/offline-merge/task-row-fold.js'
 
 /** The daemon capability note writes away ride on (WP11). */
 const NOTE_JOURNAL_CAP = 'note-journal-v1'
@@ -58,6 +60,8 @@ export interface AwayWiring {
   task(id: string): Promise<TaskRow | null>
   /** Whether a session runs on this host. */
   sessionHere(sid: string): Promise<boolean>
+  /** How a reader gets the live state of the sessions this host started alone (ask-launch.ts fresh), once they exist. */
+  setSessionsFresh(fn: (() => Promise<void>) | null): void
   stop(): void
 }
 
@@ -72,6 +76,16 @@ export interface AwayWiringOptions {
   macAnswers?(): boolean
   /** Whether this replica answers its host's own `walnut` calls (the `host-local-calls` capability). */
   localCalls?(): boolean
+}
+
+/** A session row this host started alone, as the reader fold takes it (task-row-fold.ts AwayStart). */
+export function awayStartOf(r: SessionRecord): AwayStart {
+  const ms = (v: unknown) => { const n = typeof v === 'string' ? Date.parse(v) : NaN; return Number.isFinite(n) ? n : undefined }
+  const activeAt = ms(r.lastActiveAt)
+  return {
+    sid: r.claudeSessionId, at: ms(r.startedAt) ?? 0, mode: r.mode, status: r.process_status,
+    ...(activeAt !== undefined ? { activeAt } : {}), ...(r.pendingPermission ? { prompt: true } : {}),
+  }
 }
 
 async function copyTask(id: string): Promise<TaskRow | null> {
@@ -99,7 +113,11 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
   /** Tasks made here whose task:created has not gone out yet: id to the page's client_request_id. */
   const created = new Map<string, string>()
 
+  // The sessions this host started alone, as the overlay folds them into their tasks' rows.
+  const { awaySessionsOfTask } = await import('../core/session-tracker.js')
+  let sessionsFresh: (() => Promise<void>) | null = null
   const overlay: Overlay = createOverlay({
+    awayStarts: (taskId) => awaySessionsOfTask(taskId).map(awayStartOf),
     fetchPending: async () => {
       if (!link.capabilities()?.includes(JOURNAL_V2_CAP)) return { records: [] }
       const r = await link.request('follower.pending', { sinceSeq: 0 }, PENDING_TIMEOUT_MS)
@@ -195,7 +213,15 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
     actorOf, log: (level, msg, data) => log.web[level](msg, data),
     capable: () => { const caps = link.capabilities(); return caps === null ? null : caps.includes(NOTE_JOURNAL_CAP) },
   })
-  const reads = awayReads({ overlay, answeredAway: (res: Response) => res.getHeader(ANSWERED_VIA_HEADER) === 'replica' })
+  const reads = awayReads({
+    overlay, answeredAway: (res: Response) => res.getHeader(ANSWERED_VIA_HEADER) === 'replica',
+    fresh: () => sessionsFresh?.() ?? Promise.resolve(),
+    enrich: async (rows) => {
+      const { enrichTasksWithSessionStatus } = await import('../web/routes/tasks.js')
+      return await enrichTasksWithSessionStatus(rows as never) as unknown as typeof rows
+    },
+    taskSessions: async (task) => (await import('../web/routes/engine-switch-v1.js')).taskSessionsAnswer(task as never),
+  })
   opts.setRpcAnswer(wsWrites({
     port, sessionHere, linked,
     request: (cmd, params, timeoutMs) => link.request(cmd, params, timeoutMs),
@@ -219,6 +245,7 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
   log.web.info('replica: away writes wired', { hostKey: opts.hostKey, home: WALNUT_HOME })
   return {
     overlay, port, reads, writes, notes, actorOf, task: shownTask, sessionHere,
+    setSessionsFresh(fn) { sessionsFresh = fn },
     stop() {
       clearInterval(watch)
       setCopyWatcher(null)

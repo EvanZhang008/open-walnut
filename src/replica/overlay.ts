@@ -32,7 +32,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { withValues } from './write-port.js'
-import { foldTaskRecord } from '../core/offline-merge/task-row-fold.js'
+import { foldAwayStart, foldAwayTurn, foldTaskRecord, type AwayStart } from '../core/offline-merge/task-row-fold.js'
 
 /** How long an acked write keeps its overlay and mark when no copy round stored it. */
 export const AWAIT_COPY_MS = 10 * 60_000
@@ -80,6 +80,11 @@ export interface OverlayDeps {
   /** The keys whose overlay or mark changed (browsers are told). */
   changed?(keys: Array<{ kind: OverlayKind; id: string }>): void
   log?(level: 'info' | 'warn', msg: string, data?: Record<string, unknown>): void
+  /**
+   * The sessions this host started alone for a task that the sessions copy does not hold yet
+   * (ask-launch.ts rows: session-tracker.ts awaySessionsOfTask). Absent: none (tests).
+   */
+  awayStarts?(taskId: string): AwayStart[]
 }
 
 /** The kind and key a record overlays, or null (a record no reader shows: settle, delivery, ...). */
@@ -356,20 +361,43 @@ export function createOverlay(deps: OverlayDeps): Overlay {
     },
     task(id, copyRow) {
       const list = [...byOp].filter(([, e]) => { const k = keyed(e); return k?.kind === 'tasks' && k.id === id }).sort((a, b) => a[1].seq - b[1].seq)
-      if (!list.length) return copyRow
+      let starts: AwayStart[] = []
+      try { starts = (deps.awayStarts?.(id) ?? []).slice().sort((a, b) => a.at - b.at) } catch { /* none known */ }
+      if (!list.length && !starts.length) return copyRow
       let row: Record<string, unknown> | null = copyRow ? { ...copyRow } : null
+      // When the row's phase last moved: a session's live turn folds over it only when newer.
+      let phaseAt = copyRow ? Date.parse(String(copyRow.phase_changed_at ?? '')) || 0 : 0
+      const step = (at: number, fold: (r: Record<string, unknown> | null) => Record<string, unknown> | null) => {
+        const before = row?.phase
+        row = fold(row)
+        if (row && row.phase !== before) phaseAt = at
+      }
+      // A start folds where it happened among the records, never before the row exists (its create).
+      let next = 0
+      const startsUntil = (t: number) => {
+        while (row && next < starts.length && starts[next]!.at <= t) {
+          const s = starts[next++]!
+          step(s.at, (r) => (r ? foldAwayStart(r, s, withValues) : r))
+        }
+      }
       const released: Array<{ kind: OverlayKind; id: string }> = []
       for (const [mapKey, e] of list) {
+        startsUntil(e.at - 1)
         if (e.state === 'awaiting' && copyRow && shows(copyRow, e)) {
           const r = release(mapKey, 'values')
           if (r) released.push(r)
           continue
         }
         // The journal fold (offline-merge/task-row-fold.ts).
-        row = foldTaskRecord(row, id, { ...e.record, kind: e.kind }, e.at, withValues)
+        step(e.at, (r) => foldTaskRecord(r, id, { ...e.record, kind: e.kind }, e.at, withValues))
       }
+      startsUntil(Number.MAX_SAFE_INTEGER)
       if (released.length) tell(released)
       if (!row) return null
+      // The task's one session (its latest start): its live turn, by the Mac's session rules.
+      const live = starts.at(-1)
+      if (live) row = foldAwayTurn(row, live, phaseAt, withValues)
+      if (!list.length) return row
       const mark = markOf('tasks', id)
       return mark ? { ...row, replica_sync: mark } : row
     },

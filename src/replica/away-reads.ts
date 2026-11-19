@@ -17,6 +17,20 @@
  *                                                   owner's) with its records
  *   GET /focus/tasks, /v1/focus/tasks               the Focus bar with pins, tier
  *                                                   changes and moves folded in
+ *   GET /tasks/bulk                                 each projected row folded; a task
+ *                                                   made here projected, not "not found"
+ *   GET /v1/tasks/:id/sessions                      a task made here: its sessions here
+ *   GET /sessions/:id, /v1/sessions/:id,            the live state of the sessions started
+ *       /sessions/task/:taskId                      here is read first; the route answers
+ *   GET /tasks/:id/<any other>, /v1/...             a task made here that the route cannot
+ *                                                   find: 503 needs_leader, never "not found"
+ *
+ * A task whose session this host started alone (away-starts.ts, ask-launch.ts) carries that
+ * session as the Mac will link it (overlay.ts folds it: task-row-fold.ts foldAwayStart), with
+ * its live state read first (`fresh`). A row only the overlay holds (a task made here) gets the
+ * Mac's session enrichment on the reads where the Mac's route gives it (`enrich`: GET /tasks/:id
+ * and the GET /tasks list, tasks.ts enrichTasksWithSessionStatus), so task_get says what its
+ * session does in the Mac's words (execution running, idle, waiting).
  *
  * A row or Board with a write still on its way carries `replica_sync`:
  * `pending` (in the journal) or `awaiting` (the Mac took it, its copy round has
@@ -28,6 +42,7 @@ import type { Request, Response, NextFunction, RequestHandler } from 'express'
 import { createBoardOffline, type OfflineSliceBoard } from '../providers/offline-board-core.js'
 import type { Overlay } from './overlay.js'
 import { createdRow } from './write-port.js'
+import { NEEDS_LEADER_HEADERS, needsLeaderBody } from '../core/replication/needs-leader.js'
 
 export const SYNC_FIELD = 'replica_sync'
 
@@ -37,6 +52,12 @@ export interface AwayReadsDeps {
   answeredAway(res: Response): boolean
   /** How long a read waits for the daemon's pending records at most. */
   refreshWaitMs?: number
+  /** The live state of the sessions this host started alone (ask-launch.ts fresh); absent: as last known. */
+  fresh?(): Promise<void>
+  /** The Mac's session enrichment of task rows (tasks.ts enrichTasksWithSessionStatus); absent: rows as folded. */
+  enrich?(rows: Row[]): Promise<Row[]>
+  /** The sessions a task held, as the Mac's route answers them (engine-switch-v1.ts taskSessionsAnswer). */
+  taskSessions?(task: Row): Promise<Record<string, unknown>>
 }
 
 type Row = Record<string, unknown> & { id: string }
@@ -206,30 +227,109 @@ export function overlayTiers(body: Record<string, unknown>, overlay: Overlay): T
   }
 }
 
+/**
+ * A bulk answer (tasks.ts GET /tasks/bulk, task-bulk-get.ts) with the overlay folded in: a row
+ * keeps the fields it projects, with the folded values; an id that matched nothing in the copy
+ * and names a task made here is projected from its folded row by the Mac's own projection.
+ */
+export function overlayBulk(body: Record<string, unknown>, overlay: Overlay, project: (row: Row, fields: string[]) => Record<string, unknown>): Record<string, unknown> {
+  if (!Array.isArray(body.tasks)) return body
+  const fields = Array.isArray(body.fields) ? body.fields.filter((f): f is string => typeof f === 'string') : []
+  let errors = 0
+  const tasks = (body.tasks as Array<Record<string, unknown>>).map((item) => {
+    const id = typeof item?.id === 'string' ? item.id : ''
+    if (!id) return item
+    if (typeof item.error === 'string') {
+      const made = item.error === 'not found' ? overlay.task(id, null) as Row | null : null
+      if (!made) { errors++; return item }
+      const mark = made[SYNC_FIELD]
+      return { ...project(made, fields), ...(mark ? { [SYNC_FIELD]: mark } : {}) }
+    }
+    const folded = overlay.task(id, item as Row)
+    if (!folded || folded === item) return item
+    const out: Record<string, unknown> = {}
+    for (const k of Object.keys(item)) out[k] = folded[k]
+    if (folded[SYNC_FIELD]) out[SYNC_FIELD] = folded[SYNC_FIELD]
+    return out
+  })
+  return { ...body, tasks, ...(typeof body.errors === 'number' ? { errors } : {}) }
+}
+
 const FOCUS_PATHS = new Set(['/focus/tasks', '/v1/focus/tasks'])
 const LIST_PATHS = new Set(['/tasks', '/tasks/enriched', '/v1/tasks'])
 const ONE_RE = /^\/(?:v1\/)?tasks\/([^/]+)$/
 const BOARD_RE = /^\/v1\/tasks\/([^/]+)\/board$/
+const BULK_PATH = '/tasks/bulk'
+/** The sessions a task held (engine-switch-v1.ts, task_history's `sessions`). */
+const SESSIONS_RE = /^\/v1\/tasks\/([^/]+)\/sessions$/
+/** Any other read of one task: a task made here that its route cannot find needs the Mac (a 404 would say it does not exist). */
+const SUB_RE = /^\/(?:v1\/)?tasks\/([^/]+)\/(?!board(?:\/|$)).+$/
+/** A session's record and a task's session list, by id (not a session's own data: away-session-reads.ts). */
+const SESSION_RECORD_RE = /^\/(?:v1\/)?sessions\/(?:task\/)?[^/]+$/
+/** Collection paths the one-task patterns would take for an id. */
+const NOT_IDS = new Set(['enriched', 'bulk', 'groups', 'board-counts', 'meta', 'suggest-accuracy', 'reorder'])
+/** The reads whose Mac route enriches its rows with their sessions' status (tasks.ts). */
+const ENRICHED_PATHS = new Set(['/tasks'])
+const ENRICHED_ONE_RE = /^\/tasks\/([^/]+)$/
+export const TASK_MADE_HERE_NEEDS_MAC = 'task_made_here_needs_mac'
+
+/** The Mac's bulk projection (task-bulk-get.ts), loaded once a bulk read is folded. */
+let bulkProject: ((row: Row, fields: string[]) => Record<string, unknown>) | null = null
+async function loadBulkProject(): Promise<(row: Row, fields: string[]) => Record<string, unknown>> {
+  if (!bulkProject) {
+    const { bulkGetFromTasks } = await import('../core/task-bulk-get.js')
+    bulkProject = (row, fields) => bulkGetFromTasks([row.id], [row as never], fields.length ? fields : undefined).items[0] as Record<string, unknown>
+  }
+  return bulkProject
+}
 
 export function awayReads(deps: AwayReadsDeps): RequestHandler {
   const waitMs = deps.refreshWaitMs ?? 1_500
   return (req: Request, res: Response, next: NextFunction): void => {
     if (req.method !== 'GET' || !deps.answeredAway(res)) { next(); return }
     const path = req.path
-    const one = LIST_PATHS.has(path) ? null : ONE_RE.exec(path)
+    // A session's record or a task's sessions (sessions.ts, session-lifecycle-v1.ts): the rows of
+    // the sessions started here take their live state first; the route answers as it does.
+    if (SESSION_RECORD_RE.test(path)) {
+      const t = new Promise<void>((r) => { const h = setTimeout(r, waitMs); h.unref?.() })
+      void Promise.race([deps.fresh?.().catch(() => {}), t]).then(() => next(), () => next())
+      return
+    }
+    const bulk = path === BULK_PATH
+    const one = LIST_PATHS.has(path) || bulk ? null : ONE_RE.exec(path)
     const boardHit = BOARD_RE.exec(path)
     const focus = FOCUS_PATHS.has(path)
-    if (!LIST_PATHS.has(path) && !one && !boardHit && !focus) { next(); return }
-    if (one && ['enriched', 'bulk', 'groups', 'board-counts', 'meta', 'suggest-accuracy', 'reorder'].includes(one[1]!)) { next(); return }
+    const sessionsHit = SESSIONS_RE.exec(path)
+    const sub = !boardHit && !sessionsHit ? SUB_RE.exec(path) : null
+    if (!LIST_PATHS.has(path) && !one && !boardHit && !focus && !bulk && !sessionsHit && !sub) { next(); return }
+    const idOf = one ?? sessionsHit ?? sub
+    if (idOf && NOT_IDS.has(idOf[1]!)) { next(); return }
     const decode = (s: string) => { try { return decodeURIComponent(s) } catch { return s } }
+    const enrichHere = !!deps.enrich && (ENRICHED_PATHS.has(path) || ENRICHED_ONE_RE.test(path))
     // Never longer than `waitMs`: a slow daemon leaves the answer as the copy has it.
-    const fresh = Promise.race([deps.overlay.refresh(1_000), new Promise<void>((r) => { const t = setTimeout(r, waitMs); t.unref?.() })])
+    const ready = Promise.all([
+      deps.overlay.refresh(1_000),
+      deps.fresh?.().catch(() => {}),
+      bulk ? loadBulkProject() : undefined,
+    ])
+    const fresh = Promise.race([ready, new Promise<void>((r) => { const t = setTimeout(r, waitMs); t.unref?.() })])
     fresh.then(() => {
       const json = res.json.bind(res)
+      /** An answer made after the route's (its words as given when that fails). */
+      const later = (make: () => Promise<unknown>, fallback: unknown): Response => {
+        make().then((b) => { if (!res.headersSent) json(b) }, () => { if (!res.headersSent) json(fallback) })
+        return res
+      }
+      /** Rows only the overlay holds, with the Mac's session enrichment, then the answer (its rows as folded when that fails). */
+      const sendEnriched = (rows: Row[], answer: (enriched: Row[]) => unknown, fallback: unknown): Response => {
+        if (!enrichHere || !rows.length) return json(fallback)
+        return later(async () => answer(await deps.enrich!(rows)), fallback)
+      }
       res.json = ((b: unknown) => {
         try {
           if (!b || typeof b !== 'object' || Array.isArray(b)) return json(b)
           const out = { ...(b as Record<string, unknown>) }
+          if (bulk) return json(res.statusCode < 300 && bulkProject ? overlayBulk(out, deps.overlay, bulkProject) : out)
           if (boardHit) {
             // `?team=1` answers the team owner's Board (board-v1.ts board_task_id), and the
             // console writes to that id, so the overlay is keyed by it, not by the URL's task.
@@ -237,17 +337,39 @@ export function awayReads(deps: AwayReadsDeps): RequestHandler {
             return json(res.statusCode < 300 ? overlayBoard(owner, out, deps.overlay) : out)
           }
           if (focus) return json(res.statusCode < 300 ? overlayTiers(out, deps.overlay) : out)
+          // A task made here is not in the copy its route reads: answered from the overlay, or the Mac's.
+          const made = idOf && res.statusCode === 404 ? deps.overlay.task(decode(idOf[1]!), null) as Row | null : null
+          if (sessionsHit) {
+            if (!made || !deps.taskSessions) return json(out)
+            res.status(200)
+            return later(() => deps.taskSessions!(made), out)
+          }
+          if (sub) {
+            if (!made) return json(out)
+            res.status(503)
+            for (const [k, v] of Object.entries(NEEDS_LEADER_HEADERS)) res.setHeader(k, v)
+            return json(needsLeaderBody(TASK_MADE_HERE_NEEDS_MAC, 'This task was made here while your Mac is away; this part of it needs your Mac.'))
+          }
           if (one) {
             const id = decode(one[1]!)
             if (res.statusCode === 404) {
-              const made = deps.overlay.task(id, null)
-              if (made) { res.status(200); return json({ task: made }) }
-              return json(out)
+              if (!made) return json(out)
+              res.status(200)
+              return sendEnriched([made], (e) => ({ task: e[0] ?? made }), { task: made })
             }
             if (out.task && typeof out.task === 'object') out.task = deps.overlay.task(id, out.task as Row) ?? out.task
             return json(out)
           }
-          if (Array.isArray(out.tasks)) out.tasks = overlayList(req, out.tasks as Row[], deps.overlay)
+          if (Array.isArray(out.tasks)) {
+            const fromCopy = new Set((out.tasks as Row[]).map((r) => r?.id))
+            const tasks = overlayList(req, out.tasks as Row[], deps.overlay)
+            out.tasks = tasks
+            const added = tasks.filter((r) => r && !fromCopy.has(r.id))
+            return sendEnriched(added, (e) => {
+              const byId = new Map(e.map((r) => [r.id, r]))
+              return { ...out, tasks: tasks.map((r) => (r && byId.get(r.id)) || r) }
+            }, out)
+          }
           return json(out)
         } catch {
           return json(b)

@@ -116,7 +116,22 @@ export interface AskLaunch {
    * does, so a message right after the start finds it here, and a second start continues it.
    */
   noteStarted(o: { sid: string; taskId: string; cwd: string; mode: string; title: string; project: string }): void
+  /**
+   * The rows' live state no older than `maxAgeMs` (one `follower.sessions` read, shared with
+   * the poll), for a reader of a task or a session started here. Never throws: a failed read
+   * keeps the last known state.
+   */
+  fresh(maxAgeMs?: number): Promise<void>
   stop(): void
+}
+
+/**
+ * A session's process status from the state this host's daemon reports for it
+ * (`follower.sessions`: working, idle, stopped), in the words the Mac's session record uses.
+ * The one mapping: every row this replica shows for a session it started is set by it.
+ */
+export function hostSessionStatus(state: unknown): SessionRecord['process_status'] {
+  return state === 'working' ? 'running' : state === 'idle' ? 'idle' : 'stopped'
 }
 
 function bodyOf(req: Request): Record<string, unknown> {
@@ -176,7 +191,9 @@ export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
   /** Sessions watched for turns: last write time seen and when it was last active. */
   const watched = new Map<string, { lastActiveAt?: string; state?: string; until: number }>()
   let timer: ReturnType<typeof setInterval> | null = null
-  let polling = false
+  /** The look under way (one at a time), and when the last one was answered. */
+  let looking: Promise<void> | null = null
+  let lookedAt = 0
 
   function startPoll(): void {
     if (timer) return
@@ -191,26 +208,47 @@ export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
     startPoll()
   }
 
-  /** One look at this host's sessions: a new write or a turn end tells browsers. */
+  /** The timer's look: the watched sessions' turns reach the console; none watched, the timer stops. */
   async function poll(): Promise<void> {
-    if (polling) return
     for (const [sid, w] of watched) if (w.until < now()) watched.delete(sid)
     if (!watched.size) { if (timer) clearInterval(timer); timer = null; return }
-    polling = true
+    await look()
+  }
+
+  function look(): Promise<void> {
+    if (!looking) looking = lookOnce().finally(() => { looking = null })
+    return looking
+  }
+
+  /**
+   * One look at this host's sessions: every row this replica shows for a session it started
+   * takes its live state (a reader of its task sees it), and a watched session's new write or
+   * turn end tells browsers.
+   */
+  async function lookOnce(): Promise<void> {
+    rows()
     try {
       const r = await deps.request('follower.sessions', {}, POLL_TIMEOUT_MS)
-      const list = Array.isArray(r.sessions) ? r.sessions as Array<{ sid?: unknown; state?: unknown; lastActiveAt?: unknown }> : []
+      lookedAt = now()
+      const list = Array.isArray(r.sessions) ? r.sessions as Array<{ sid?: unknown; state?: unknown; lastActiveAt?: unknown; prompt?: unknown }> : []
       for (const s of list) {
         const sid = typeof s.sid === 'string' ? s.sid : ''
+        const row = sid ? started.get(sid) : undefined
         const w = sid ? watched.get(sid) : undefined
-        if (!w) continue
+        if (!row && !w) continue
         const state = typeof s.state === 'string' ? s.state : 'stopped'
         const at = typeof s.lastActiveAt === 'string' ? s.lastActiveAt : undefined
-        const row = started.get(sid)
         if (row) {
-          row.process_status = state === 'working' ? 'running' : state === 'idle' ? 'idle' : 'stopped'
+          row.process_status = hostSessionStatus(state)
           if (at) row.lastActiveAt = at
+          // A permission prompt waiting for a person: the Mac's record shape (its enrichment reads the tool).
+          const p = s.prompt as { requestId?: unknown; toolName?: unknown } | null | undefined
+          if (p && typeof p === 'object' && typeof p.requestId === 'string') {
+            const known = row.pendingPermission?.requestId === p.requestId ? row.pendingPermission.receivedAt : undefined
+            row.pendingPermission = { requestId: p.requestId, receivedAt: known ?? new Date(now()).toISOString(), ...(typeof p.toolName === 'string' ? { toolName: p.toolName } : {}) }
+          } else delete row.pendingPermission
         }
+        if (!w) continue
         if (at && at !== w.lastActiveAt) {
           w.until = now() + WATCH_IDLE_MS
           deps.broadcast('session:batch-completed', { sessionId: sid })
@@ -224,9 +262,12 @@ export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
       }
     } catch (err) {
       deps.log('warn', 'replica: the host sessions could not be read for the console', { error: err instanceof Error ? err.message : String(err) })
-    } finally {
-      polling = false
     }
+  }
+
+  async function fresh(maxAgeMs = POLL_MS): Promise<void> {
+    if (!rows().length || now() - lookedAt < maxAgeMs) return
+    await look()
   }
 
   function rows(): SessionRecord[] {
@@ -237,7 +278,8 @@ export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
       started.set(sid, rowOf({
         sid, taskId: String(r.taskId ?? ''), cwd: typeof r.cwd === 'string' ? r.cwd : undefined,
         mode: typeof r.mode === 'string' ? r.mode : 'default', title: typeof r.title === 'string' ? r.title : '',
-        project: typeof r.project === 'string' ? r.project : '', at: typeof r.startedAt === 'number' ? r.startedAt : now(), status: 'idle',
+        // The record's own time (its start's place among the task's records: task-row-fold.ts foldAwayStart).
+        project: typeof r.project === 'string' ? r.project : '', at: typeof r.startedAt === 'number' ? r.startedAt : typeof r.at === 'number' ? r.at : now(), status: 'idle',
       }))
     }
     return [...started.values()]
@@ -348,7 +390,7 @@ export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
   }
 
   return {
-    handler, rows, watch, noteStarted,
+    handler, rows, watch, noteStarted, fresh,
     stop() { if (timer) clearInterval(timer); timer = null; watched.clear() },
   }
 }

@@ -74,6 +74,8 @@ export interface AwayStartsDeps {
   frame(text: string, actor: WriteActor): Promise<string>
   /** A session started here: its row shows at once and its turns reach the console (ask-launch.ts noteStarted). */
   started(row: { sid: string; taskId: string; cwd: string; mode: string; title: string; project: string }): void
+  /** A message delivered to a session here started a turn: it is watched again (ask-launch.ts watch). */
+  continued?(sid: string): void
   log(level: 'info' | 'warn', msg: string, data?: Record<string, unknown>): void
 }
 
@@ -114,6 +116,7 @@ export function awayStarts(deps: AwayStartsDeps): RequestHandler {
   async function sendTo(w: ReplicaWrite, actor: WriteActor, sid: string, taskId: string, text: string): Promise<PortAnswer> {
     const a = await deps.port.send(w, sid, await deps.frame(text, actor), undefined, { framed: true })
     if (a.answered || a.status >= 300) return a
+    deps.continued?.(sid)
     deps.log('info', 'replica: a message to a task on this host was delivered while the Mac is away', { taskId, sessionId: sid, opId: w.opId })
     return { answered: false, status: 200, body: { ...a.body, taskId, targetTaskId: taskId, targetSessionId: sid } }
   }
@@ -275,6 +278,7 @@ export function wireAwayStarts(o: {
   away: { port: WritePort; actorOf(req: Request): WriteActor | null; task(id: string): Promise<TaskRow | null>; overlay: { createPending(id: string): boolean } }
   hostKey: string | null
   started: AwayStartsDeps['started']
+  continued?: AwayStartsDeps['continued']
   capabilities(): readonly string[] | null
   request(cmd: string, params: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>>
 }): RequestHandler {
@@ -322,6 +326,7 @@ export function wireAwayStarts(o: {
       return frameStartText(text, { source: 'api-agent', caller: { title, claudeSessionId: actor.sid, ...(rec.taskId ? { taskId: rec.taskId } : {}), ...(rec.host ? { host: rec.host } : {}) } })
     },
     started: (row) => o.started(row),
+    continued: (sid) => o.continued?.(sid),
     log: (level, msg, data) => log.web[level](msg, data),
   })
 }
