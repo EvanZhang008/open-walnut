@@ -95,8 +95,9 @@ export function normalizeUsageModel(value: unknown): string {
     return name.startsWith('claude-') ? name : `claude-${name}`;
   }
   const compact = name.replace(/[\s._-]/g, '');
-  const gpt = /^gpt(61|6|56)(sol|luna|astra)$/.exec(compact);
-  if (gpt) return `gpt-${gpt[1] === '61' ? '6-1' : gpt[1] === '56' ? '5-6' : '6'}-${gpt[2]}`;
+  // Any GPT major.minor of a known family (6.2 arrived 2026-11-17; a fixed version list left it unknown).
+  const gpt = /^gpt(\d)(\d?)(sol|luna|astra|terra)$/.exec(compact);
+  if (gpt) return `gpt-${gpt[1]}${gpt[2] ? `-${gpt[2]}` : ''}-${gpt[3]}`;
   return raw || 'unknown';
 }
 
@@ -356,7 +357,8 @@ function toRecord(group: ResponseGroup, diag: UsageScanDiagnostics): CanonicalUs
   const hasTtl = TTL_FIELDS.every(key => c[key] !== undefined);
   const ttlConsistent = hasTtl && c.ephemeral_5m_input_tokens! + c.ephemeral_1h_input_tokens! === c.cache_creation_input_tokens;
   const ttlAbsent = TTL_FIELDS.every(key => c[key] === undefined);
-  const solCacheTotal = owner.model === 'gpt-6-1-sol' && hasTtl && TTL_FIELDS.every(key => c[key] === 0);
+  // GPT replies through Claude Code's adapter: zero TTL placeholders beside a real cache total (any GPT model).
+  const solCacheTotal = owner.model.startsWith('gpt-') && hasTtl && TTL_FIELDS.every(key => c[key] === 0);
   const complete = !owner.ownershipUnverified && owner.sourceRank === 0 && owner.model !== 'unknown' &&
     !['synthetic', '<synthetic>'].includes(owner.model) && chosen.final && chosen.finalUsage &&
     BASE_FIELDS.every(key => c[key] !== undefined) && group.maxOutput === c.output_tokens &&

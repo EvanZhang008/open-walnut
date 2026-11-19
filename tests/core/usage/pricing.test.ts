@@ -274,6 +274,18 @@ describe('pricing', () => {
       expect(priceReconciledUsage({ ...base, model: 'claude-opus-4-8', forwardedModel: 'global.anthropic.claude-opus-4-8' }).costUsd).toBeNull();
     });
 
+    it('reads zero adapter TTL placeholders as a cache total for every GPT row', () => {
+      const gpt = DEFAULT_PRICING.filter((entry) => entry.pattern.startsWith('gpt-'));
+      expect(gpt.map((entry) => entry.pattern)).toEqual(expect.arrayContaining(['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-6.1-sol']));
+      for (const entry of gpt) {
+        const usage = { model: entry.pattern, input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 1_000, cache_read_input_tokens: 0 };
+        expect(priceUsage({ ...usage, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 } }), entry.pattern)
+          .toEqual(priceUsage(usage));
+      }
+      expect(findPricing('converse/global.openai.gpt-6.2-sol')!.pattern).toBe('gpt-6.2-sol');
+      expect(findPricing('global.openai.gpt-6.2-astra')!.pattern).toBe('gpt-6.2-astra');
+    });
+
     it('prices Sol cache totals without using zero Claude TTL placeholders', () => {
       const usage = { model: 'gpt-6-1-sol', input_tokens: 436, output_tokens: 350,
         cache_creation_input_tokens: 5_814, cache_read_input_tokens: 349_530 };
@@ -312,6 +324,8 @@ describe('pricing', () => {
       ['claude-fable-5-2', ['claude-fable-5.2', 'global.anthropic.claude-fable-5-2[1m]']],
       ['claude-fable-5-1', ['claude-fable-5.1', 'anthropic/claude-fable-5-1[1m]']],
       ['gpt-6.1-sol', ['gpt-6-1-sol', 'openai.gpt-6.1-sol', 'bedrock/global.openai.gpt-6-1-sol[1m]']],
+      ['gpt-6.2-sol', ['gpt-6-2-sol', 'openai.gpt-6.2-sol', 'converse/global.openai.gpt-6.2-sol']],
+      ['gpt-6.2-astra', ['gpt-6-2-astra', 'openai.gpt-6.2-astra', 'converse/global.openai.gpt-6.2-astra']],
       ['claude-haiku-5-5', ['claude-haiku-5.5', 'anthropic.claude-haiku-5-5[1m]']],
     ])('normalizes %s without changing its price', (model, aliases) => {
       const expected = priceUsage({ model, ...response });
@@ -322,6 +336,8 @@ describe('pricing', () => {
 
     it.each([
       ['gpt-6.1-sol', 272_000, 2, 10, 0.1, 4, 15, 0.2],
+      ['gpt-6.2-sol', 272_000, 2, 10, 0.1, 4, 15, 0.2],
+      ['gpt-6.2-astra', 272_000, 8, 40, 0.4, 16, 60, 0.8],
       ['gpt-6-astra', 272_000, 10, 50, 1, 20, 75, 2],
       ['gpt-6-luna', 272_000, 0.1, 0.5, 0.01, 0.2, 0.75, 0.02],
       ['claude-haiku-5-5', 100_000, 0.1, 0.5, 0.01, 0.5, 2.5, 0.05],

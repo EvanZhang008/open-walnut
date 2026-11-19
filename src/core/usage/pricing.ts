@@ -84,6 +84,18 @@ export const DEFAULT_PRICING: PricingEntry[] = [
   { pattern: 'claude-3-5-haiku',    input: 0.80,  output: 4.00,  cacheWrite: 1.00,   cacheWrite1h: 1.60, cacheRead: 0.08 },
   { pattern: 'claude-3-haiku',      input: 0.25,  output: 1.25,  cacheWrite: 0.30,   cacheWrite1h: 0.50, cacheRead: 0.03 },
 
+  // GPT-6.2 Standard/Global rates: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-2-sol.html
+  // and .../model-card-openai-gpt-6-2-astra.html (30-minute cache write column).
+  {
+    pattern: 'gpt-6.2-sol', input: 2.00, output: 10.00, cacheRead: 0.10, cacheWrite: 2.50,
+    separateCacheCreation: true, contextThreshold: 272_000,
+    longContext: { input: 4.00, output: 15.00, cacheRead: 0.20, cacheWrite: 5.00 },
+  },
+  {
+    pattern: 'gpt-6.2-astra', input: 8.00, output: 40.00, cacheRead: 0.40, cacheWrite: 10.00,
+    separateCacheCreation: true, contextThreshold: 272_000,
+    longContext: { input: 16.00, output: 60.00, cacheRead: 0.80, cacheWrite: 20.00 },
+  },
   // Sol Standard/Global rates: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-sol.html
   {
     pattern: 'gpt-6.1-sol', input: 2.00, output: 10.00, cacheRead: 0.10, cacheWrite: 2.50,
@@ -143,6 +155,11 @@ function normalizeModel(model: string): string {
     .replace(/claude-haiku-3-5(?=-|$)/, 'claude-3-5-haiku');
 }
 
+/** GPT models report one cache-write total; Claude's 5m/1h TTL split does not apply to them. */
+export function isGptCacheTotalModel(model: string): boolean {
+  return /^gpt-/.test(model);
+}
+
 export function findPricing(modelId: string, customPricing?: PricingEntry[]): PricingEntry | undefined {
   const normalized = normalizeModel(modelId);
   const custom = customPricing?.find((entry) => normalized.includes(normalizeModel(entry.pattern)));
@@ -197,7 +214,9 @@ export function priceWithEntry(entry: PricingEntry, params: PriceUsageParams, op
   const read = params.cache_read_input_tokens ?? 0;
   const write5m = params.cache_creation?.ephemeral_5m_input_tokens ?? 0;
   const write1h = params.cache_creation?.ephemeral_1h_input_tokens ?? 0;
-  const solCacheTotal = entry.pattern === 'gpt-6.1-sol' && params.cache_creation?.ephemeral_5m_input_tokens === 0
+  // A GPT reply through Claude Code's adapter carries zero TTL placeholders beside a real cache total
+  // (seen on 6.1 Sol, 6.2 Sol and 6.2 Astra): the total is the write, not a Claude TTL split.
+  const solCacheTotal = isGptCacheTotalModel(entry.pattern) && params.cache_creation?.ephemeral_5m_input_tokens === 0
     && params.cache_creation.ephemeral_1h_input_tokens === 0;
   const hasDetails = !solCacheTotal && (params.cache_creation?.ephemeral_5m_input_tokens !== undefined
     || params.cache_creation?.ephemeral_1h_input_tokens !== undefined);

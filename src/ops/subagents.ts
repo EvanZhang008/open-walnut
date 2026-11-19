@@ -36,7 +36,7 @@ defineOp({
     host: z.string().min(1).max(120).optional().describe('Run on this other host, in a copy of your work there: an alias (host_list) or a selector like "@ios"; omit for your own host'),
     cwd: z.string().min(1).max(4096).optional().describe('The folder it runs in, an absolute path on your host (with `host`: the folder whose work is copied there); omit for your session\'s working directory. Name it when your work is in another folder than the one your session started in (a clone in your task directory)'),
     prompt: z.string().min(1).describe('The whole task for the subagent: it sees nothing else of your conversation'),
-    model: z.string().min(1).optional().describe('The model id on that engine (e.g. "gpt-6.1-sol" for codex); omit for the engine\'s default'),
+    model: z.string().min(1).optional().describe('The model id on that engine (e.g. "gpt-6.2-sol" for codex); omit for the engine\'s default'),
     effort: z.string().min(1).optional().describe('Reasoning effort (e.g. low, medium, high, xhigh) where the engine has one; omit for its default'),
     description: z.string().max(120).optional().describe('A few words for the Background tasks panel (default: the prompt\'s first line)'),
     background: z.boolean().optional().describe('Return at once; its answer comes into this session by itself when it ends (do not poll)'),

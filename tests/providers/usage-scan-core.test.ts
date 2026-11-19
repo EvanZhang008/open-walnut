@@ -225,10 +225,9 @@ describe('scanCanonicalUsage', () => {
       assistant('claude-zero-details', TODAY, usage),
       assistant('sol-missing-counter', TODAY, { ...usage, cache_read_input_tokens: undefined }, { model: 'gpt-6.1-sol' }),
       assistant('sol-positive-mismatch', TODAY, { ...usage, cache_creation: { ephemeral_5m_input_tokens: 1, ephemeral_1h_input_tokens: 0 } }, { model: 'gpt-6.1-sol' }),
-      assistant('other-zero-details', TODAY, usage, { model: 'gpt-6-astra' }),
     ]);
     const result = await scanCanonicalUsage({ projectsDir: root });
-    expect(result.records).toHaveLength(5);
+    expect(result.records).toHaveLength(4);
     const sol = result.records.find(record => record.responseId === 'sol-final')!;
     expect(sol).toMatchObject({ model: 'gpt-6-1-sol', complete: true, cache_creation_input_tokens: 5_814,
       cache_read_input_tokens: 349_530, pricing_context_complete: true });
@@ -236,6 +235,19 @@ describe('scanCanonicalUsage', () => {
     expect(canonicalRecordFromAssistant(row, { sessionId: 'main' })).toEqual(sol);
     expect(result.records.filter(record => record.responseId !== 'sol-final').every(record => !record.complete)).toBe(true);
   });
+
+  // The placeholders come from Claude Code's adapter, not from one model: 2026-11-19 replies of
+  // GPT-6.2 Sol and GPT-6.2 Astra carried the same zero 5m/1h split beside a real cache total.
+  it.each(['converse/global.openai.gpt-6.2-sol', 'converse/global.openai.gpt-6.2-astra', 'gpt-6-astra', 'gpt-6.1-sol'])(
+    'keeps the %s cache total complete beside zero adapter placeholders', async (model) => {
+      const usage = { ...TOKENS, input_tokens: 0, output_tokens: 5, cache_creation_input_tokens: 28_134,
+        cache_read_input_tokens: 0, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 } };
+      await log('project/main.jsonl', [assistant('gpt-final', TODAY, usage, { model })]);
+      const [record] = (await scanCanonicalUsage({ projectsDir: root })).records;
+      expect(record).toMatchObject({ complete: true, cache_creation_input_tokens: 28_134 });
+      expect(record!.model.startsWith('gpt-')).toBe(true);
+      expect(record).not.toHaveProperty('cache_creation');
+    });
 
   it('preserves final standard, fast and regional pricing fields without changing token completeness', async () => {
     await log('project/main.jsonl', [
@@ -584,7 +596,8 @@ describe('normalizeUsageModel', () => {
     [' CLAUDE-SONNET-4-5-20250929 ', 'claude-sonnet-4-5'],
     ['claude-3-5-haiku', 'claude-haiku-3-5'], ['opus-4.8', 'claude-opus-4-8'],
     ['global.anthropic.claude-opus-5-5-fast-v1:0', 'claude-opus-5-5-fast'],
-    ['GPT-6.1-Sol', 'gpt-6-1-sol'], ['gpt6astra', 'gpt-6-astra'],
+    ['GPT-6.1-Sol', 'gpt-6-1-sol'], ['gpt6astra', 'gpt-6-astra'], ['converse/global.openai.gpt-6.2-sol', 'gpt-6-2-sol'],
+    ['converse/global.openai.gpt-6.2-astra', 'gpt-6-2-astra'], ['openai.gpt-5.6-sol', 'gpt-5-6-sol'], ['gpt-6.1-terra', 'gpt-6-1-terra'],
     ['openai.gpt-6-luna-v1:0', 'gpt-6-luna'],
     ['acme-model-v9', 'acme-model-v9'], ['', 'unknown'], [null, 'unknown'],
   ])('normalizes %s without guessing prices', (input, expected) => {
