@@ -160,6 +160,7 @@ const SITES: Record<string, { closes: number; gates: number; why?: string }> = {
   'src/core/sessions/session-send-core.ts': { closes: 1, gates: 0, why: 'an error detail naming a COMPLETE target, no write' },
   'src/providers/offline-host-core.ts': { closes: 5, gates: 0, why: 'the offline host reads whether a task is COMPLETE; a queued close replays through apply-v2.ts, which is gated' },
   'src/replica/write-port.ts': { closes: 1, gates: 0, why: 'queues the close for the leader, which replays it through apply-v2.ts (gated)' },
+  'src/core/offline-merge/task-row-fold.ts': { closes: 1, gates: 0, why: 'shows a queued close on a reader\'s row while it waits in the journal, writes no task; the close itself replays through apply-v2.ts (gated)' },
   'src/commands/direct-commands.ts': { closes: 1, gates: 0, why: 'the CLI\'s own `done`, typed by a person at a terminal' },
   'src/web/routes/sessions.ts': { closes: 1, gates: 0, why: 'executing a plan, a person\'s click: the plan task\'s work moves to the task carrying it out' },
   'src/core/sessions/session-rewind.ts': { closes: 1, gates: 0, why: 'a person\'s rewind: the work continues in the rewound task' },

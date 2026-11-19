@@ -348,7 +348,8 @@ describe('drain order and bounds (WP9 re-review round 2)', () => {
   it('a create whose addTask hit a race lists its gone parent once in the letters, not once per try', async () => {
     addFail.n = 1
     const minted = 'mintrace00000000aaaa01'
-    const rec = { v: 2, seq: ++seqN, at: Date.now(), kind: 'task-create', opId: op(), rev: 1, actor: { kind: 'session', sid: SID }, op: 'task_create', taskId: minted, fields: { title: 'Born after a race' }, placement: { parentTaskId: 'gone-parent-race-1' } }
+    // A trigger's create: the parent its record names is honoured (a session's is not, as online).
+    const rec = { v: 2, seq: ++seqN, at: Date.now(), kind: 'task-create', opId: op(), rev: 1, actor: { kind: 'trigger', id: 'trigger-race-1' }, op: 'task_create', taskId: minted, fields: { title: 'Born after a race' }, placement: { parentTaskId: 'gone-parent-race-1' } }
     const j = journal('marina', [rec])
     await runOfflineHandover(j.conn as never)
     await settle(20)
