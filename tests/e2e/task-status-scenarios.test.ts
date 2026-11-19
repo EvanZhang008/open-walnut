@@ -67,9 +67,9 @@ async function surfaces(taskId: string, leadId: string): Promise<Record<string, 
   const lead = all.find((t) => t.id === leadId)!
   const { tasks: phoneRows } = await v1<{ tasks: { id: string; user_status?: { state: State } }[] }>('/tasks?include_done=1')
   const reports = await v1<{ rows: { project?: string; needs_you: number; to_read?: number }[] }>('/org/reports')
-  // The Org page shows To read under Needs you (needs_you + to_read, 2026-11-03).
+  // Needs you counts only what asks the user; To read is its own count (2026-11-19).
   const orgRow = reports.rows.find((r) => (r.project ?? '').toLowerCase() === (task.project ?? '').toLowerCase())
-  const orgNeeds = (orgRow?.needs_you ?? 0) + (orgRow?.to_read ?? 0)
+  const brief = briefSectionLines(lead, all)
   const board = buildStatusBoard({ ownerId: leadId, tasks: all as never, now: Date.now(), doneWindowDays: 30 })
   const boardState = (Object.keys(board.groups) as State[]).find((s) => board.groups[s].some((r) => r.task.id === taskId))
   const mismatches = (await checkStatuses(Date.now(), { settleMs: 0 })).filter((m) => m.taskId === taskId)
@@ -79,21 +79,25 @@ async function surfaces(taskId: string, leadId: string): Promise<Record<string, 
     phone: task.phase === 'COMPLETE' ? 'done' : phoneRows.find((r) => r.id === taskId)?.user_status?.state ?? 'missing' as never,
     web: taskUserState(task as never),
     board: boardState ?? ('missing' as never),
-    orgNeedsYou: orgNeeds > 0,
+    orgNeedsYou: (orgRow?.needs_you ?? 0) > 0,
+    orgToRead: (orgRow?.to_read ?? 0) > 0,
     webNeedsYou: taskNeedsAction(task as never),
-    briefNeedsYou: briefSectionLines(lead, all).needs.some((l) => l.includes(`id="${taskId}"`)),
+    briefNeedsYou: brief.needs.some((l) => l.includes(`id="${taskId}"`)),
+    briefToRead: brief.needs.some((l) => l.includes('only something to read')),
     checkClean: mismatches.length === 0,
   }
 }
 
 /** All surfaces agree on `state`: the stored one, and where it is drawn (To read under Needs you,
- *  shownState); only a real ask wears the red Needs you mark (webNeedsYou). */
+ *  shownState); only a real ask is listed or counted as Needs you (webNeedsYou, orgNeedsYou,
+ *  briefNeedsYou), and a task with only something to read is counted as To read instead. */
 async function expectEverywhere(taskId: string, leadId: string, state: State, step: string): Promise<void> {
   const s = await surfaces(taskId, leadId)
   const shown = shownState(state)
   expect(s, `${step}${lastMismatches.length ? ` (check: ${lastMismatches.join('; ')})` : ''}`).toEqual({
     stored: state, phone: state, web: state, board: shown,
-    orgNeedsYou: shown === 'needs', webNeedsYou: state === 'needs', briefNeedsYou: shown === 'needs', checkClean: true,
+    orgNeedsYou: state === 'needs', orgToRead: state === 'read', webNeedsYou: state === 'needs',
+    briefNeedsYou: state === 'needs', briefToRead: state === 'read', checkClean: true,
   })
 }
 

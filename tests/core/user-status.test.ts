@@ -7,6 +7,7 @@
 import { describe, it, expect } from 'vitest'
 import { deriveUserStatus, countUserStates, userStatusLine, STALE_REPORT_MS, RESULT_TO_READ, TURN_TO_READ, type StatusReport, type UserStatusInput } from '../../src/core/user-status.js'
 import { phaseForReport, reportMayMovePhase } from '../../src/core/sessions/report-phase.js'
+import { PHASE_ORDER, TERMINAL_PHASES } from '../../src/core/phase.js'
 
 const NOW = Date.parse('2026-10-26T05:35:00Z')
 const ago = (ms: number) => new Date(NOW - ms).toISOString()
@@ -14,6 +15,21 @@ const report = (r: Partial<StatusReport>): StatusReport => ({ at: ago(60_000), .
 const PHASES = ['TODO', 'IN_PROGRESS', 'WAITING', 'NEED_ACTION', 'COMPLETE'] as const
 
 describe('the state is the phase', () => {
+  // 2026-11-19: a done report stopped moving a worker to WAITING (report-phase.ts), and one left
+  // IN_PROGRESS read "It stopped, and nothing will wake it". A done report reads the same in every
+  // open phase, the phases enumerated from the source so a new one is covered too.
+  it('a done report reads finished in every open phase: its lead checks it, else the user reads it', () => {
+    const open = PHASE_ORDER.filter((p) => !TERMINAL_PHASES.has(p))
+    expect(open.length).toBeGreaterThan(2)
+    for (const phase of open) {
+      const base = { phase, hasSession: true, processStatus: 'stopped', phaseChangedAt: ago(5 * 60_000), report: report({ state: 'done' }) } as const
+      expect(deriveUserStatus({ ...base, hasLeader: true }, NOW), phase).toMatchObject({ state: 'waiting', kind: 'lead' })
+      expect(deriveUserStatus(base, NOW), phase).toMatchObject({ state: 'read', toRead: 'result', waitingOn: RESULT_TO_READ })
+      for (const who of [{ isMain: true }, { isLead: true }]) {
+        expect(deriveUserStatus({ ...base, ...who }, NOW), phase).toMatchObject({ state: 'waiting', kind: 'you' })
+      }
+    }
+  })
   it('needs you when the phase is NEED_ACTION, whatever letters, choices or reports say', () => {
     const noisy: Partial<UserStatusInput> = {
       hasSession: true, processStatus: 'idle', openLetter: 'Pick a design', openChoice: 'Which host?',

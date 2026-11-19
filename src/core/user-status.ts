@@ -764,6 +764,15 @@ function waitingSourceFields(report: StatusReport): Pick<UserStatus, 'waitingBy'
   return { waitingBy: reportBy, ...(reportSessionId ? { waitingSessionId: reportSessionId } : {}) };
 }
 
+/** Its own current report says done, whatever its phase: Main and a lead are never closed and wait
+ *  on the user's next message; a worker waits on its lead to check and close it; a task with neither
+ *  is the user's result to read and close (a wait on the user is Needs you, never Waiting). */
+function doneStatus(input: Pick<UserStatusInput, 'hasLeader' | 'isMain' | 'isLead'>, w: Partial<UserStatus>): UserStatus {
+  if (input.isMain || input.isLead) return strip({ state: 'waiting', kind: 'you', waitingOn: 'Your next message, or news from its teams', ...w });
+  if (input.hasLeader) return strip({ state: 'waiting', kind: 'lead', waitingOn: LEAD_CLOSE_WAIT, ...w });
+  return toRead('result', RESULT_TO_READ, w);
+}
+
 /** A status with nothing asked of the user, only something to read (ToRead). */
 function toRead(what: ToRead, waitingOn: string, w: Partial<UserStatus>): UserStatus {
   return strip<UserStatus>({ state: 'read', waitingOn, toRead: what, ...w });
@@ -1273,16 +1282,11 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     }
     // An ask with no kind of the user's own and no lead above it: its result is there to read.
     if (report?.kindless_ask && !hasAbove(input)) return toRead('result', RESULT_TO_READ, w);
-    // Its own report says done. A task with a leader moves to WAITING on that report
-    // (report-phase.ts) for its lead to check. One with none is the user's to read and close, and a
-    // wait on the user is Needs you, never Waiting (2026-11-01 org review, by the user's rule of
-    // 2026-10-30: "You, to read the result and close it" sat parked for three days).
-    if (report?.state === 'done') {
-      // Main and a lead are never closed: they wait on the user's next message.
-      if (input.isMain || input.isLead) return strip({ state: 'waiting', kind: 'you', waitingOn: 'Your next message, or news from its teams', ...w });
-      if (input.hasLeader) return strip({ state: 'waiting', kind: 'lead', waitingOn: LEAD_CLOSE_WAIT, ...w });
-      return toRead('result', RESULT_TO_READ, w);
-    }
+    // Its own report says done (doneStatus): a task with a leader waits on its lead to check it, never
+    // parked for it (report-phase.ts). One with none is the user's to read and close, and a wait on
+    // the user is Needs you, never Waiting (2026-11-01 org review, by the user's rule of 2026-10-30:
+    // "You, to read the result and close it" sat parked for three days).
+    if (report?.state === 'done') return doneStatus(input, w);
     // It said its own work goes on (a build it started, a test run) and something wakes it: Working.
     if (own) return own;
     // Its own armed trigger wakes it (a fire resumes a stopped session): with no ask of its own and no
@@ -1324,6 +1328,10 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     if (machine) return machine;
     // It said its own work carries on (a background job, a build it watches) and something wakes it.
     if (own) return own;
+    // It said it is done and its turn left the phase as it was (report-phase.ts: a done report never
+    // moves it): finished, never "stuck" (2026-11-19, a worker done read "It stopped, and nothing
+    // will wake it" instead of its lead's check).
+    if (report?.state === 'done') return doneStatus(input, w);
     // In progress with nothing running: on whom it waits, so no one reads "working" on an idle session.
     if (input.isMain) return strip({ state: 'waiting', kind: 'you', waitingOn: 'Your next message, or news from its teams', ...w });
     if ((input.openWorkers ?? 0) > 0) {
@@ -1360,11 +1368,7 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   // A standing routine: between fires it waits on the next one.
   const wake = wakeSource(input, w, nowMs, true);
   if (wake) return wake;
-  if (report?.state === 'done') {
-    if (input.isMain || input.isLead) return strip({ state: 'waiting', kind: 'you', waitingOn: 'Your next message, or news from its teams', ...w });
-    if (input.hasLeader) return strip({ state: 'waiting', kind: 'lead', waitingOn: LEAD_CLOSE_WAIT, ...w });
-    return toRead('result', RESULT_TO_READ, w);
-  }
+  if (report?.state === 'done') return doneStatus(input, w);
   if (until) return strip({ state: 'waiting', kind: 'time', waitingOn: 'Its next check', until, ...w });
   if (input.phase === 'WAITING') return strip({ state: 'waiting', kind: 'other', waitingOn: 'A message (parked with no clock or watch)', ...w });
   return strip({ state: fallbackUserState(input.phase), ...w });
