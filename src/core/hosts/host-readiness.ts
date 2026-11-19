@@ -422,7 +422,8 @@ export function refreshHostReadiness(
 }
 
 /**
- * Server wiring: probe every configured host right after its handshake, re-push its status
+ * Server wiring: probe every configured host right after its handshake (and each one whose link
+ * was up already when this was wired, which no handshake will announce), re-push its status
  * when the answer lands, and keep `usedForSessions` current (host-session-use.ts), re-pushing
  * a host whose answer flips. (A card whose cause was fixed by hand goes at the next re-ask:
  * the page re-asks every blocked host when its window comes back, useHostStatus.ts.)
@@ -434,20 +435,41 @@ export function wireHostReadiness(opts: {
   emit: (host: string) => void
   /** Test seam; defaults to refreshHostReadiness against the live pool. */
   refresh?: (host: string) => Promise<unknown>
+  /**
+   * The hosts whose link is up already when this is wired: their handshake came before the
+   * listener, so no edge will ever ask for them. The live pool by default (with no `refresh`
+   * seam); none with one, unless given.
+   */
+  connectedNow?: () => Iterable<string> | Promise<Iterable<string>>
   /** Test seams for host-session-use; false leaves it unwired. */
   sessionUse?: false | { everyMs?: number; read?: () => Promise<Set<string>> }
 }): () => void {
   const refresh = opts.refresh ?? ((host: string) => refreshHostReadiness(host))
-  const offConnected = opts.onConnected((host) => {
-    if (host === '__local__' || !opts.isKnownHost(host)) return
+  let wired = true
+  const probe = (host: string) => {
+    if (!wired || host === '__local__' || !opts.isKnownHost(host)) return
     void refresh(host)
-  })
+  }
+  const offConnected = opts.onConnected(probe)
+  // A host that connected before this listener existed (another caller dialled it first) is
+  // probed now; one probe at a time per host, so an edge at the same moment shares it.
+  const connectedNow = opts.connectedNow ?? (opts.refresh ? null : connectedPoolHosts)
+  if (connectedNow) {
+    void Promise.resolve().then(connectedNow).then((hosts) => { for (const host of hosts) probe(host) })
+      .catch((err: unknown) => log.session.warn('host readiness: could not list the hosts connected already', { error: err instanceof Error ? err.message : String(err) }))
+  }
   const offChange = onHostReadinessChange((host) => opts.emit(host))
   const offUse = opts.sessionUse === false ? () => {} : wireHostSessionUse(
     (host) => { if (store.has(host)) notify(host) },
     { hosts: () => store.keys(), ...(opts.sessionUse ?? {}) },
   )
-  return () => { offConnected(); offChange(); offUse() }
+  return () => { wired = false; offConnected(); offChange(); offUse() }
+}
+
+/** Every pooled host whose link is up now. */
+async function connectedPoolHosts(): Promise<string[]> {
+  const { getDaemonPoolStatus, isDaemonConnected } = await import('../../providers/daemon-connection.js')
+  return getDaemonPoolStatus().map((s) => s.host).filter((host) => isDaemonConnected(host))
 }
 
 // ── The spawn gate's sentence (C5) ──
