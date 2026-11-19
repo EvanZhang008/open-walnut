@@ -1214,14 +1214,14 @@ function asOrgNode(s: UserStatus): UserStatus {
  * an old turn's while the task showed "A watch". Only a newer report, the person's own message since,
  * or an answer for them (user-status-sync.ts) replaces it.
  */
-function openAskOf(input: UserStatusInput, report: StatusReport | null, anyReport: StatusReport | null, w: ReturnType<typeof words>): UserStatus | null {
-  const own = report ?? (askStands(input, anyReport) ? anyReport : null);
-  const src = own ? askSourceFields(own) : {};
-  if (reportAsksUser(own)) return strip<UserStatus>({ state: 'needs', source: 'session', ask: clean(own.ask), ...w, ...src });
+function openAskOf(input: UserStatusInput, current: StatusReport | null, anyReport: StatusReport | null, w: ReturnType<typeof words>): UserStatus | null {
+  const report = current ?? (askStands(input, anyReport) ? anyReport : null);
+  const src = report ? askSourceFields(report) : {};
+  if (reportAsksUser(report)) return strip<UserStatus>({ state: 'needs', source: 'session', ask: clean(report.ask), ...w, ...src });
   // On NEED_ACTION the phase already says it is the user's turn, so any wait its report names is
   // theirs (waitIsUsers); elsewhere only a wait that names the user is (reportWaitsOnUser).
-  if (own && !none(own.waiting_on) && (input.phase === 'NEED_ACTION' ? waitIsUsers(own, hasAbove(input)) : reportWaitsOnUser(own, hasAbove(input)))) {
-    return strip<UserStatus>({ state: 'needs', source: 'session', ask: clean(own.waiting_on), ...w, ...src });
+  if (report && !none(report.waiting_on) && (input.phase === 'NEED_ACTION' ? waitIsUsers(report, hasAbove(input)) : reportWaitsOnUser(report, hasAbove(input)))) {
+    return strip<UserStatus>({ state: 'needs', source: 'session', ask: clean(report!.waiting_on), ...w, ...src });
   }
   if (!none(input.openLetter)) return strip<UserStatus>({ state: 'needs', source: 'letter', ask: clean(input.openLetter), ...w });
   if (!none(input.openChoice) && !choiceOverruled(input, anyReport)) {
@@ -1279,8 +1279,10 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   // Its own current report says it needs the user but asks nothing (FOR_USER_STATE needs-you with no
   // FOR_USER_ASK): its words are theirs to read, in every phase, never a wait on a watch (2026-11-19:
   // the deploy task's trigger turn wrote exactly that and read "A watch" again). Main and a lead keep
-  // their own wait on the user's next message below.
-  if (report?.state === 'needs' && none(report.ask) && !report.kindless_ask && !input.isMain && !input.isLead) {
+  // their own wait on the user's next message below. A turn that answered a person in their chat
+  // and then parked on its own trigger keeps the park: they read the answer as it came (the
+  // answered_person rule below; tests/core/own-park-survives-turn-end.test.ts).
+  if (report?.state === 'needs' && none(report.ask) && !report.kindless_ask && !report.answered_person && !input.isMain && !input.isLead) {
     return toRead('answer', ANSWER_TO_READ, w);
   }
   const own = ownWork(input, report, w, nowMs);

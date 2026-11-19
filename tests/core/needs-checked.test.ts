@@ -27,12 +27,14 @@ describe('the stamp', () => {
     expect(old.unverified).toBe(true)
   })
 
-  it('the newest of the report and the phase move is the last word; a report older than the move asks nothing', () => {
+  it('the newest of the report and the phase move is the last word; a report older than the move is stamped when it was said', () => {
     const s = deriveUserStatus({ phase: 'NEED_ACTION', hasSession: true, processStatus: 'idle', report: asks(ago(1 * H)), phaseChangedAt: ago(1 * H + 3_000) }, NOW)
     expect(s.checkedAt).toBe(ago(1 * H))
-    // Written before the latest turn: it lends words only, so its ask is not stamped as checked.
+    // Written before the latest move: its ask still stands (2026-11-19, user-status.ts openAskOf
+    // askStands: a wake that ran no turn took a task off NEED_ACTION and the ask read as a watch),
+    // so it says when it was last said, never the move, which would read as a fresh check.
     const old = deriveUserStatus({ phase: 'NEED_ACTION', hasSession: true, processStatus: 'idle', report: asks(ago(9 * H)), phaseChangedAt: ago(1 * H) }, NOW)
-    expect(old.checkedAt).toBeUndefined()
+    expect(old).toMatchObject({ state: 'needs', ask: 'Sign in on the Mac', checkedAt: ago(9 * H) })
   })
 
   it("a trigger's run is shown beside the ask, never counted as its check (it watches the task, maybe not this ask)", () => {
