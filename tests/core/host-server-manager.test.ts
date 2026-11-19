@@ -16,6 +16,7 @@ import { createHostServerManager, type HostServerSettings, type ManagerDeps } fr
 import { NoHostFile, type HostFile, type HostFileSource } from '../../src/core/host-server/host-file.js'
 import { registerExposeProvider, _resetExposeProvidersForTesting } from '../../src/core/expose/registry.js'
 import { fakeHost as makeFakeHost, type FakeHost } from '../helpers/host-server-fake-host.js'
+import { registerPluginKeepsTasks, resetPluginTaskVisibilityForTesting } from '../../src/core/plugins/plugin-task-visibility.js'
 
 const HOME = '/Users/me/.open-walnut'
 
@@ -194,6 +195,19 @@ describe('host server manager: a link that drops while the build goes over', () 
 })
 
 describe('host server manager', () => {
+  it('the spec\'s settings name the plugins that keep their tasks, so a follower with no manifests stamps its away creates the same', async () => {
+    const undo = registerPluginKeepsTasks('acme-sync')
+    try {
+      const m = createHostServerManager(deps())
+      const host = fakeHost()
+      await m.connected(host)
+      expect(host.specs[0]!.settings.pluginsKeepTasks).toEqual(['acme-sync'])
+    } finally {
+      undo()
+      resetPluginTaskVisibilityForTesting()
+    }
+  })
+
   it('a host without the setting gets nothing but a look at what its daemon runs', async () => {
     settings = { ...settings, enabled: false }
     const m = createHostServerManager(deps())

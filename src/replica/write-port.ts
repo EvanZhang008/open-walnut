@@ -47,7 +47,7 @@ import type { ReplicaWrite, ReplicaWriteResult } from './dispatch.js'
 import { deriveStatusFromPhase, phaseDerivedFields, phaseFromStatus } from '../core/phase.js'
 import { PIN_TIER_POLICY, type Task, type TaskPhase, type TaskStatus } from '../core/types.js'
 import { RefusedWrite, checkResolvedPatch } from '../core/offline-merge/patch-check.js'
-import { createdRow, madeByHuman, mintTaskId } from '../core/offline-merge/task-row-fold.js'
+import { createdRow, mintTaskId } from '../core/offline-merge/task-row-fold.js'
 
 /**
  * The fields a task write may queue (the task-outbox whitelist plus phase, parent,
@@ -186,7 +186,7 @@ export function fieldBases(row: Record<string, unknown> | null, values: Record<s
 
 // A new task's id (its time, then 8 random bytes: two writers never collide; today's generateId has
 // 16 random bits), the created row and its pin default: the journal fold (task-row-fold.ts).
-export { mintTaskId, createdRow, madeByHuman } from '../core/offline-merge/task-row-fold.js'
+export { mintTaskId, createdRow } from '../core/offline-merge/task-row-fold.js'
 
 /** A Board post's id, minted by the writer: the one shown here until the Mac's copy of the post comes back. */
 export function mintPostId(randomHex: (bytes: number) => string): string {
@@ -338,14 +338,14 @@ export function createWritePort(deps: WritePortDeps): WritePort {
         ...(str(all.focus_tier) ? { tier: str(all.focus_tier) } : {}),
       }
       // The new task's fields by the same rules, on the row the Mac's create starts from.
-      const refused = macRefusalOf(createdRow(id, {}, placement, at, madeByHuman(actor)), fields)
+      const refused = macRefusalOf(createdRow(id, {}, placement, at, actor), fields)
       if (refused) return refusalAnswer('bad_request', refused)
       const args: Record<string, unknown> = { id, ...fields }
       for (const k of ['parent_task_id', 'project', 'group_id', 'focus_tier', 'order']) if (all[k] !== undefined && (k !== 'parent_task_id' || namedParent)) args[k] = all[k]
       const r = await w.submit('task_create', args, undefined, actor)
       return settle(r, actor, { kind: 'task-create', taskId: id, fields, placement, ...(all.order !== undefined ? { order: all.order } : {}) }, (reply) => ({
         answered: false, status: 201,
-        body: { task: { ...createdRow(typeof reply.taskId === 'string' ? reply.taskId : id, fields, placement, at, madeByHuman(actor)), replica_sync: 'pending' }, queued: true, offline: true, opId: reply.opId },
+        body: { task: { ...createdRow(typeof reply.taskId === 'string' ? reply.taskId : id, fields, placement, at, actor), replica_sync: 'pending' }, queued: true, offline: true, opId: reply.opId },
       }), typeof crid === 'string' && crid ? crid : undefined)
     },
     async taskMove(w, actor, taskId, anchor, tier) {

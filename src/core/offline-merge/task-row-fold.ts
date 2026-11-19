@@ -11,6 +11,8 @@
  * taken (apply-v2.ts).
  */
 
+import { pluginOnlyForCaller } from '../plugins/plugin-task-visibility.js'
+
 /** A task row as a reader shows it. */
 export type FoldRow = Record<string, unknown> & { id: string }
 
@@ -42,22 +44,34 @@ export function madeByHuman(actor: unknown): boolean {
 }
 
 /**
- * A task made away from the Mac as readers show it until the Mac's row comes back in a
- * copy. `human`: a maker that is not a session, so the Mac's create rules give it the
- * human default (pinned, on the board in Satellite, unless it said otherwise:
- * task-manager.ts newTaskPinDefault, offline-merge/apply-v2.ts createTask); a tier
- * always means pinned.
+ * The plugin that keeps a task a plugin job made (Task.plugin_only): the function the Mac's
+ * create stamps it by (journal-actor.ts createCaller), so a follower's board leaves it out too.
  */
-export function createdRow(id: string, fields: Record<string, unknown>, placement: FoldPlacement, at: number, human = false): FoldRow {
+export function keptByMaker(actor: unknown): string | undefined {
+  const a = actor as { kind?: unknown; plugin?: unknown } | null | undefined
+  return a && a.kind === 'plugin-job' && typeof a.plugin === 'string' ? pluginOnlyForCaller(undefined, a.plugin) : undefined
+}
+
+/**
+ * A task made away from the Mac as readers show it until the Mac's row comes back in a
+ * copy, by its maker (the record's actor). A maker that is not a session gets the Mac's
+ * human default (pinned, on the board in Satellite, unless it said otherwise:
+ * task-manager.ts newTaskPinDefault, offline-merge/apply-v2.ts createTask); a tier always
+ * means pinned. A plugin job whose plugin keeps its tasks makes one kept to that plugin's
+ * view (`plugin_only`), never pinned, in no tier, as the Mac's create makes it.
+ */
+export function createdRow(id: string, fields: Record<string, unknown>, placement: FoldPlacement, at: number, maker?: unknown): FoldRow {
   const iso = new Date(at).toISOString()
-  const pinned = placement.tier ? true : typeof fields.pinned === 'boolean' ? fields.pinned : human ? true : undefined
+  const keptBy = keptByMaker(maker)
+  const pinned = keptBy ? false : placement.tier ? true : typeof fields.pinned === 'boolean' ? fields.pinned : madeByHuman(maker) ? true : undefined
   return {
     id, phase: 'TODO', status: 'todo', priority: 'none', project: placement.project ?? '', created_at: iso, updated_at: iso,
     ...(placement.groupId ? { group_id: placement.groupId } : {}),
     ...(placement.parentTaskId ? { parent_task_id: placement.parentTaskId } : {}),
-    ...(placement.tier ? { focus_tier: placement.tier } : {}),
+    ...(placement.tier && !keptBy ? { focus_tier: placement.tier } : {}),
     ...fields,
     ...(pinned !== undefined ? { pinned } : {}),
+    ...(keptBy ? { plugin_only: keptBy } : {}),
   }
 }
 
@@ -73,7 +87,7 @@ export function foldTaskRecord(row: Record<string, unknown> | null, id: string, 
     if (row) return row
     const placement = (rec.placement && typeof rec.placement === 'object' ? rec.placement : {}) as FoldPlacement
     const fields = (rec.fields && typeof rec.fields === 'object' ? rec.fields : {}) as Record<string, unknown>
-    return createdRow(id, fields, placement, at, madeByHuman(rec.actor))
+    return createdRow(id, fields, placement, at, rec.actor)
   }
   if (!row) return null
   if (rec.kind === 'task-fields') {

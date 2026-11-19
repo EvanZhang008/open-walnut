@@ -27,7 +27,7 @@
 import type { Request, Response, NextFunction, RequestHandler } from 'express'
 import { createBoardOffline, type OfflineSliceBoard } from '../providers/offline-board-core.js'
 import type { Overlay } from './overlay.js'
-import { createdRow, madeByHuman } from './write-port.js'
+import { createdRow } from './write-port.js'
 
 export const SYNC_FIELD = 'replica_sync'
 
@@ -82,9 +82,13 @@ export function overlayList(req: Request, rows: Row[], overlay: Overlay): Row[] 
     const folded = overlay.task(r.id, r) as Row | null
     out.push(folded ?? r)
   }
+  // A plugin's own task (Task.plugin_only) is in no general list, as on the Mac (tasks.ts
+  // hidePluginOnly, api-v1.ts phoneListedTasks): only a console list naming its ids gets it.
+  const keptShown = req.path !== '/v1/tasks' && q(req, 'ids') !== undefined
   for (const id of overlay.createdTaskIds()) {
     if (seen.has(id)) continue
     const row = overlay.task(id, null) as Row | null
+    if (row && row.plugin_only && !keptShown) continue
     if (row && createdMatches(req, row)) { out.unshift(row); seen.add(id) }
   }
   // No moves here: a move's anchor is a place in the pinned order (the Focus bar,
@@ -166,7 +170,7 @@ export function overlayTiers(body: Record<string, unknown>, overlay: Overlay): T
       // A task made away lands where the Mac's create puts it: pinned (a person's default,
       // or a tier) at the bottom of the board, in its tier.
       const placement = (r.placement ?? {}) as { tier?: string }
-      const row = createdRow(id, (r.fields ?? {}) as Record<string, unknown>, placement, e.at, madeByHuman(r.actor))
+      const row = createdRow(id, (r.fields ?? {}) as Record<string, unknown>, placement, e.at, r.actor)
       if (row.pinned === true && !pinned.includes(id)) {
         pinned = [...pinned, id]
         tierOf.set(id, typeof placement.tier === 'string' && placement.tier ? placement.tier : undefined)

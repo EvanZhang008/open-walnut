@@ -63,6 +63,7 @@ import { clearSelfHost, installSelfHost, isLocalHere } from './self-host.js'
 import type { HostServerEnv } from '../host-server/env.js'
 import type { Route } from '../host-server/route.js'
 import { createHostExpose, followExposeSettings, type HostExpose } from '../host-server/expose.js'
+import { setPluginsKeepingTasksFromLeader } from '../core/plugins/plugin-task-visibility.js'
 import { answerTunnelProbe } from '../core/expose/probe.js'
 import type { DeviceCopy } from '../host-server/device-copy.js'
 import { chooseReplicaRoute, leaderDropRecent, presenceOf, quietWindow, SuspectMarks, wireLeaderPresence, type Presence, type PresenceInput, type ToldPresence } from './presence.js'
@@ -188,7 +189,11 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
   installSelfHost({ aliases: env.hostKey ? [env.hostKey] : [], link })
   log.web.info('replica: self host', { host: env.label, hostKey: env.hostKey ?? null, home: env.leaderHome })
   link.on('view', (view) => {
-    followSettings((view as { settings: Record<string, unknown> }).settings)
+    const settings = (view as { settings: Record<string, unknown> }).settings
+    followSettings(settings)
+    // This host's own calls (host-local-calls): a plugin job's away create is stamped as the
+    // Mac stamps it, by the Mac's word on which plugins keep their tasks (plugin-task-visibility.ts).
+    if (opts.localCalls) setPluginsKeepingTasksFromLeader(settings?.pluginsKeepTasks)
     look()
     // The first report goes out with the first view (once hello made the link
     // `following`, right after this listener), not REPORT_MS later.

@@ -17,6 +17,7 @@ import { getExposeProvider, onExposeProvidersChanged, type CommandProviderConfig
 import { exposePlacement, tunnelKey, type PlacementHost } from '../expose/placement.js'
 import { COMMAND_PROVIDER_ID, type ExposeProviderDefinition } from '../expose/types.js'
 import { followerOnByDefault, followerOnEveryHost } from './follower-default.js'
+import { onPluginsKeepingTasksChanged } from '../plugins/plugin-task-visibility.js'
 
 let manager: HostServerManager | null = null
 let unsubscribe: (() => void) | null = null
@@ -24,6 +25,30 @@ let fileSource: HostFileSource | null = null
 
 /** How long a burst of view changes waits before the tunnel handover looks again. */
 const TUNNEL_RECHECK_MS = 500
+/** A burst of plugin loads changes the set of plugins that keep their tasks once per this wait. */
+export const KEEPING_RECONCILE_MS = 2_000
+/** And never later than this after the first change, however long the burst goes on. */
+export const KEEPING_RECONCILE_MAX_MS = 10_000
+
+/**
+ * `fn` once a burst of kicks settles (`waitMs` with no new kick), and at the latest `maxWaitMs`
+ * after the burst's first kick, so kicks that never stop cannot hold it back forever.
+ */
+export function settledCall(fn: () => void, waitMs: number, maxWaitMs: number): { kick(): void; cancel(): void } {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let firstAt = 0
+  const cancel = () => { if (timer) clearTimeout(timer); timer = null; firstAt = 0 }
+  return {
+    kick() {
+      const now = Date.now()
+      if (!timer) firstAt = now
+      else clearTimeout(timer)
+      timer = setTimeout(() => { cancel(); fn() }, Math.max(0, Math.min(waitMs, firstAt + maxWaitMs - now)))
+      timer.unref?.()
+    },
+    cancel,
+  }
+}
 /** Per host, the tunnel its server last reported, as the handover reads it. */
 const tunnelSeen = new Map<string, string>()
 let tunnelRecheck: ReturnType<typeof setTimeout> | null = null
@@ -277,6 +302,10 @@ export function getHostServerManager(): HostServerManager | null {
   })
   // A provider that arrives (a plugin loading after the hosts connected) may place the tunnel on a host.
   const offProviders = onExposeProvidersChanged(() => { void quietly(reconcileAllHostServers(), 'reconciling the hosts') })
+  // The plugins that keep their tasks ride each follower's spec (manager.ts pluginsKeepTasks): a
+  // change sends the new word, once for a burst of plugin loads.
+  const keeping = settledCall(() => { void quietly(reconcileAllHostServers(), 'reconciling the hosts') }, KEEPING_RECONCILE_MS, KEEPING_RECONCILE_MAX_MS)
+  const offKeeping = onPluginsKeepingTasksChanged(() => keeping.kick())
   const name = 'host-server-settings'
   let offBus: (() => void) | null = null
   let stopped = false
@@ -285,7 +314,7 @@ export function getHostServerManager(): HostServerManager | null {
     bus.subscribe(name, () => { void quietly(reconcileAllHostServers(), 'reconciling the hosts') }, { global: true, interest: [EventNames.CONFIG_CHANGED] })
     offBus = () => bus.unsubscribe(name)
   }), 'watching the config')
-  unsubscribe = () => { stopped = true; offProviders(); offBus?.() }
+  unsubscribe = () => { stopped = true; offProviders(); offKeeping(); keeping.cancel(); offBus?.() }
   return manager
 }
 

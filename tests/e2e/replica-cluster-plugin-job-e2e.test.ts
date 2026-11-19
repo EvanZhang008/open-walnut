@@ -10,8 +10,11 @@
  *                                the host (the project's default host) as the task's own
  *     task_update tags           journaled, the job as actor
  *     task_send to that task     delivered to its session on the host
- *   the Mac wakes: it holds that task (an outside caller's create: no parent) and its session
- *   exactly once, with the tags; asleep and awake again, nothing changes.
+ *   the plugin keeps its tasks to its own view (`taskVisibility: "plugin"`): the replica, which
+ *   loads no manifest, has the Mac's word for it (its spec's settings), so the task is absent
+ *   from the replica's board list and there for the job's own task_get
+ *   the Mac wakes: it holds that task (an outside caller's create: no parent, kept to the
+ *   plugin) and its session exactly once, with the tags; asleep and awake again, nothing changes.
  *
  * Twins: as tests/e2e/replica-cluster-e2e.test.ts (REPLICA_CLUSTER_TWINS picks).
  */
@@ -54,7 +57,7 @@ const PLUGIN = {
   id: 'acme-sync',
   runOn: 'devbox',
   files: {
-    'manifest.json': JSON.stringify({ id: 'acme-sync', name: 'Acme sync', version: '1.0.0', apiVersion: 1, engines: { walnut: '>=0.0.0' }, server: 'dist/server.mjs', jobs: { worker: { kind: 'long-running' } } }),
+    'manifest.json': JSON.stringify({ id: 'acme-sync', name: 'Acme sync', version: '1.0.0', apiVersion: 1, engines: { walnut: '>=0.0.0' }, server: 'dist/server.mjs', taskVisibility: 'plugin', jobs: { worker: { kind: 'long-running' } } }),
     'dist/server.mjs': SERVER,
   },
 }
@@ -152,6 +155,16 @@ describe.each(TWINS)('a plugin job\'s walnut calls on its host while the Mac is 
     const sent = await jobCall(dir, 'task_send', { to: taskId, text: 'rows are in', expect_reply: false })
     expect(sent.ok, JSON.stringify(sent)).toBe(true)
     await waitFor(() => hostStream(c, startedSid).some((l) => l.type === 'result' && String(l.result).includes('rows are in')), 120_000, 'the message to reach the started session')
+
+    // Kept to the plugin's view: not on the replica's board, there for the job's own read.
+    const board = await c.replica('GET', '/api/tasks', { token })
+    expect(board.status, board.text.slice(0, 500)).toBe(200)
+    const listed = ((board.json.tasks ?? board.json) as Array<{ id: string }>).map((t) => t.id)
+    expect(listed).not.toContain(taskId)
+    const own = await jobCall(dir, 'task_get', { id: taskId })
+    expect(own.ok, JSON.stringify(own)).toBe(true)
+    expect(JSON.stringify(own.result)).toContain(taskId)
+    expect(JSON.stringify(own.result)).toContain('"plugin_only":"acme-sync"')
   }, 420_000)
 
   it('the Mac wakes: it holds that task and its session exactly once; a second drain changes nothing', async () => {
@@ -170,9 +183,10 @@ describe.each(TWINS)('a plugin job\'s walnut calls on its host while the Mac is 
     // An outside caller's create, as the same job's call online: no caller parent.
     expect(first.tasks[0]!.parent_task_id ?? '').toBe('')
     expect(first.sessions[0]).toMatchObject({ claude_session_id: startedSid, task_id: taskId, host: 'devbox' })
-    // Made by the journal's create, the job's (its op id), never by a second create.
+    // Made by the journal's create, the job's (its op id), never by a second create; kept to the plugin.
     expect(createOp).not.toBe('')
     expect(String(first.tasks[0]!.payload ?? '')).toContain(createOp)
+    expect(String(first.tasks[0]!.payload ?? '')).toContain('"plugin_only":"acme-sync"')
     c.sleepMac()
     await c.waitAway(token)
     c.wakeMac()

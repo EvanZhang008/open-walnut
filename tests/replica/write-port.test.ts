@@ -14,7 +14,7 @@
  */
 import { describe, it, expect, afterEach } from 'vitest'
 import { JHOME, TASK_A, journalTmpDir, cleanupJournalDirs, journalHost, jslice, journalLines } from '../helpers/offline-journal-harness.js'
-import { createWritePort, createdRow, madeByHuman, mintTaskId, refusalAnswer, type TaskRow, type WriteActor } from '../../src/replica/write-port.js'
+import { createWritePort, createdRow, mintTaskId, refusalAnswer, type TaskRow, type WriteActor } from '../../src/replica/write-port.js'
 import { createOverlay } from '../../src/replica/overlay.js'
 import { linkWrite } from '../../src/replica/ws-writes.js'
 
@@ -141,7 +141,7 @@ describe('write port: what follower.op journals', () => {
     // The overlay's row reads the same.
     expect(r.overlay.task(String(task(plain).id), null)).toMatchObject({ pinned: true, replica_sync: 'pending' })
     // A session's create (the gateway) keeps what it said: no human default.
-    expect(createdRow('mtask-s-1', { title: 'From a session' }, {}, T0, madeByHuman({ kind: 'session', sid: 's' }))).not.toHaveProperty('pinned')
+    expect(createdRow('mtask-s-1', { title: 'From a session' }, {}, T0, { kind: 'session', sid: 's' })).not.toHaveProperty('pinned')
   })
 
   it('a create\'s client_request_id is the page\'s correlation id: checked as the Mac checks it, never a field, handed on for task:created', async () => {

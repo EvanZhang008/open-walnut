@@ -8,7 +8,7 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {
-  parseTaskVisibility, pluginKeepsTasks, pluginOnlyForCaller, registerPluginKeepsTasks, resetPluginTaskVisibilityForTesting,
+  onPluginsKeepingTasksChanged, parseTaskVisibility, pluginKeepsTasks, pluginOnlyForCaller, registerPluginKeepsTasks, resetPluginTaskVisibilityForTesting,
 } from '../../src/core/plugins/plugin-task-visibility.js'
 import { validatePlugin } from '../../packages/plugin-cli/src/manifest.js'
 
@@ -50,6 +50,20 @@ describe('plugin task visibility', () => {
     expect(pluginKeepsTasks('practice')).toBe(true)
     undoNew()
     expect(pluginKeepsTasks('practice')).toBe(false)
+  })
+  it('tells its listeners when the set of plugins that keep their tasks changes, never for a reload of one', () => {
+    let n = 0
+    const off = onPluginsKeepingTasksChanged(() => { n++ })
+    const undoOld = registerPluginKeepsTasks('practice')
+    expect(n).toBe(1)
+    const undoNew = registerPluginKeepsTasks('practice')
+    undoOld()
+    expect(n).toBe(1)
+    undoNew()
+    expect(n).toBe(2)
+    off()
+    registerPluginKeepsTasks('other')
+    expect(n).toBe(2)
   })
 })
 

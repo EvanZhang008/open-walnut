@@ -70,6 +70,7 @@ import { DEFAULT_UPDATE_MAX_BEHIND_MS, DEFAULT_UPDATE_QUIET_MS, heldNotice, upda
 import { FOLLOWER_FLOORS, judgeFollowerRoom, roomProbeScript, type FollowerGateReason } from './eligibility.js'
 import { createTryLater, inWords, type TryLaterKind } from './try-later.js'
 import { FOLLOWER_GATEWAY_CAPABILITY } from '../../providers/follower-gateway-core.js'
+import { pluginsKeepingTasks } from '../plugins/plugin-task-visibility.js'
 
 export type {
   HostServerHost, HostServerSettings, HostServerPhase, HostServerView, HostCopyTarget, ManagerDeps,
@@ -599,8 +600,10 @@ export function createHostServerManager(deps: ManagerDeps) {
         command: p.command, args: p.args, cwd: p.cwd, env: p.env,
         ...(p.fallback ? { fallback: p.fallback } : {}),
         log: p.log, port,
-        // Read by the server while it runs: a change here restarts nothing.
-        settings: { expose: exposeSettings, exposeRetry: retryCount(hostKey) },
+        // Read by the server while it runs: a change here restarts nothing. `pluginsKeepTasks`: the
+        // plugins that keep their tasks to their own view, which a follower that loads no plugin
+        // manifest stamps its away creates by (plugin-task-visibility.ts).
+        settings: { expose: exposeSettings, exposeRetry: retryCount(hostKey), pluginsKeepTasks: pluginsKeepingTasks() },
       })
       // A newer build of this Mac waits while the program that works there reports (update-hold.ts):
       // the host keeps it, with the settings of now, and nothing is sent.
