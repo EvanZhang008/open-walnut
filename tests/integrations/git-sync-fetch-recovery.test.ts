@@ -33,6 +33,8 @@ import {
   sync,
   gitPullWalnut,
   noteNetworkFailure,
+  noteNetworkSuccess,
+  streakNews,
   resetSyncGuardForTest,
   getSyncGuardState,
   FETCH_TIMEOUT,
@@ -43,6 +45,7 @@ import {
 import { WALNUT_HOME } from '../../src/constants.js';
 import { execSync } from 'node:child_process';
 import { log } from '../../src/logging/index.js';
+import { setLogLevelTap } from '../../src/logging/subsystem.js';
 
 describe('fetchTimeoutForStreak', () => {
   it('keeps the fail-fast timeout below the streak threshold', () => {
@@ -229,6 +232,46 @@ describe('sync() over a real origin: corpse sweep and streak pull', () => {
       debug.mockRestore();
     }
   }, 30_000);
+
+  /**
+   * The class guard for 2026-11-19: the Mac could not resolve the hub for six hours and
+   * every sync tick wrote the same four warns again (fetch failed, timeout widened, pull
+   * before commit, bundle push failed), ~110 an hour each, and the log-spike alarm rang.
+   * What the health monitor counts (the level tap) must hear each kind of warn once per
+   * outage, whatever line a later change adds to the tick's failure path.
+   */
+  // A walnut hub (a token in the URL: the bundle fallback joins in, as on the Mac) and a plain git remote.
+  it.each([
+    ['a walnut hub', 'https://walnut:not-a-real-token@hub.walnut-test.invalid/git/data'],
+    ['a plain git remote', 'https://hub.walnut-test.invalid/git/data/'],
+  ])('an origin whose name will not resolve (%s): many ticks, each kind of warn heard once', async (_kind, url) => {
+    const heard: string[] = [];
+    setLogLevelTap((level, subsystem, message) => {
+      if ((level === 'warn' || level === 'error') && subsystem === 'git') heard.push(message);
+    });
+    try {
+      // `.invalid` never resolves (RFC 6761): git says "Could not resolve host: <name>".
+      run(`git remote set-url origin ${url}`, WALNUT_HOME);
+      for (let tick = 0; tick < 8; tick++) {
+        await fsp.writeFile(path.join(WALNUT_HOME, `edit-${tick}.md`), `edit ${tick}\n`);
+        await sync();
+      }
+      expect(getSyncGuardState().consecutiveNetworkFailures).toBeGreaterThanOrEqual(8);
+      const repeated = [...new Set(heard)].filter((m) => heard.filter((h) => h === m).length > 1);
+      expect(repeated).toEqual([]);
+      expect(heard).toContain('git-sync fetch failed — skipping merge this cycle');
+    } finally {
+      setLogLevelTap(null);
+    }
+  }, 120_000);
+
+  it('a streak line is news once per streak, and again in the next streak', () => {
+    expect(streakNews('widen-timeout')).toBe(true);
+    expect(streakNews('widen-timeout')).toBe(false);
+    expect(streakNews('pull-first')).toBe(true);
+    noteNetworkSuccess();
+    expect(streakNews('widen-timeout')).toBe(true);
+  });
 
   it('gitPullWalnut stands aside during a fetch-failure streak: the tick owns recovery', async () => {
     const debug = vi.spyOn(log.git, 'debug');

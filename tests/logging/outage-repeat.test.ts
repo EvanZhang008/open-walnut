@@ -209,6 +209,63 @@ describe('every dial-failure warn names its failure for the fold', () => {
   });
 });
 
+/**
+ * 2026-11-19: the Mac lost its DNS for six hours. Each retrier warned on every try, the
+ * name it could not look up in its text, and six log-spike alarms rang for one cause.
+ * The incident's line shapes, names neutral: a warn naming a failed lookup of a name is
+ * heard once per window per kind, whoever writes it (a new retrier is covered by construction).
+ */
+describe('a name this machine cannot look up', () => {
+  const SHAPES: Array<[string, string, Record<string, unknown> | undefined]> = [
+    ['git', 'git-sync fetch failed — skipping merge this cycle', { error: "git exited 128: fatal: unable to access 'https://hub.example.dev/git/data/': Could not resolve host: hub.example.dev", consecutiveNetworkFailures: 7 }],
+    ['git', 'bundle push fallback failed', { error: 'getaddrinfo ENOTFOUND hub.example.dev' }],
+    ['tracker/http', 'An unexpected request error occurred: DNSException: getaddrinfo ENOTFOUND api.tracker.example.com', undefined],
+    ['session', 'DaemonConnection: daemon status probe failed via SSH — will retry reconnect', { host: 'devbox', error: 'Command failed: ssh dev@devbox sh -s\nError: proxy client: getaddrinfo ENOTFOUND proxy.example.com' }],
+    ['memory', 'search replica push failed', { error: 'ssh: Could not resolve hostname replica.example.dev: nodename nor servname provided, or not known' }],
+  ];
+
+  it('each kind of warn is heard once over many retries, the repeats written at info saying why', () => {
+    for (let round = 0; round < 30; round++) {
+      for (const [sub, msg, meta] of SHAPES) createSubsystemLogger(sub).warn(msg, meta);
+    }
+    expect(tapped.map((t) => t.message)).toEqual(SHAPES.map((x) => x[1]));
+    expect(written).toHaveBeenCalledTimes(30 * SHAPES.length);
+    const repeats = written.mock.calls.slice(SHAPES.length).map((c) => c[0]);
+    expect(repeats.every((e) => e.level === 'info' && String(e.outageRepeat).startsWith('dns:'))).toBe(true);
+    expect(repeats[0].outageRepeat).toBe('dns:hub.example.dev');
+  });
+
+  it('a different name is a different outage, told at once', () => {
+    createSubsystemLogger('git').warn('bundle push fallback failed', { error: 'getaddrinfo ENOTFOUND hub.example.dev' });
+    createSubsystemLogger('git').warn('bundle push fallback failed', { error: 'getaddrinfo EAI_AGAIN other.example.dev' });
+    expect(tapped).toHaveLength(2);
+  });
+
+  it('is told again once the window has passed', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-19T12:00:00Z'));
+    const warn = () => createSubsystemLogger('git').warn('bundle push fallback failed', { error: 'getaddrinfo ENOTFOUND hub.example.dev' });
+    warn(); warn();
+    vi.setSystemTime(new Date(Date.now() + OUTAGE_REPEAT_WINDOW_MS + 1));
+    warn();
+    expect(tapped).toHaveLength(2);
+  });
+
+  it('an error naming a failed lookup keeps its level (it raises a card of its own)', () => {
+    for (let i = 0; i < 3; i++) createSubsystemLogger('plugin/sync').error('push failed', { pluginId: 'sync', error: 'getaddrinfo ENOTFOUND api.example.com' });
+    expect(tapped).toHaveLength(3);
+    expect(sunk).toHaveLength(3);
+  });
+
+  it('a warn about something else, or a lookup of localhost, keeps its level', () => {
+    for (let i = 0; i < 3; i++) {
+      createSubsystemLogger('git').warn('git-sync fetch failed — skipping merge this cycle', { error: 'fatal: Authentication failed' });
+      createSubsystemLogger('web').warn('probe failed', { error: 'getaddrinfo ENOTFOUND localhost' });
+    }
+    expect(tapped).toHaveLength(6);
+  });
+});
+
 describe('lines that are not a host outage keep their level', () => {
   it('a repeated error that names no link failure', () => {
     for (let i = 0; i < 3; i++) createSubsystemLogger('session').error('transport start failed', { taskId: `t${i}`, host: 'devbox', error: 'folder is gone' });

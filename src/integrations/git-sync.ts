@@ -1738,9 +1738,27 @@ export function noteNetworkFailure(): number {
   return ++guard.consecutiveNetworkFailures;
 }
 
+/**
+ * Lines about the failure STREAK itself (its fetch timeout widened, the pull now
+ * runs before the commit) are news once per streak, then debug. Each tick of an
+ * outage used to repeat them at warn: 2026-11-19 the Mac could not resolve the
+ * hub for six hours and each of them wrote ~110 warns an hour, raising the
+ * health monitor's log-spike alarm. The failed attempt's own line keeps saying
+ * why and the streak length; the logger folds its repeats (outage-repeat.ts).
+ */
+const streakTold = new Set<string>();
+
+/** Whether `kind` is news in the current failure streak (true once, until the streak ends). */
+export function streakNews(kind: string): boolean {
+  if (streakTold.has(kind)) return false;
+  streakTold.add(kind);
+  return true;
+}
+
 /** Record a successful fetch/pull — resets the failure streak. */
 export function noteNetworkSuccess(): void {
   guard.consecutiveNetworkFailures = 0;
+  streakTold.clear();
 }
 
 // ── Bundle-push fallback (T65) ───────────────────────────────────────────────
@@ -1784,7 +1802,7 @@ async function tryBundlePushFallback(branch: string): Promise<boolean> {
   }
   const remoteTip = await gitSafeAsync(`rev-parse origin/${branch}`);
   try {
-    const { pushViaBundle } = await import('./git-bundle-client.js');
+    const { pushViaBundle, NOT_A_BUNDLE_HUB } = await import('./git-bundle-client.js');
     const result = await pushViaBundle({
       branch,
       remoteUrl,
@@ -1801,7 +1819,10 @@ async function tryBundlePushFallback(branch: string): Promise<boolean> {
       await gitSafeAsync(`fetch origin ${branch}`, { timeout: FETCH_TIMEOUT });
       return true;
     }
-    log.git.warn('bundle push fallback failed', { branch, error: result.error });
+    // An origin the channel cannot serve (a plain git or ssh remote) is not a failure
+    // of the fallback: it never applies there, and warning it on every failed push
+    // turned one outage into a warn per tick.
+    log.git[result.error === NOT_A_BUNDLE_HUB ? 'debug' : 'warn']('bundle push fallback failed', { branch, error: result.error });
     return false;
   } catch (err) {
     log.git.warn('bundle push fallback threw', { error: err instanceof Error ? err.message : String(err) });
@@ -1816,6 +1837,7 @@ export function resetSyncGuardForTest(): void {
   guard.safeModeReason = null;
   guard.safeModeSince = null;
   guard.consecutiveNetworkFailures = 0;
+  streakTold.clear();
   pushFailureStreak = 0;
   lastSafeModeRefusalLog = 0;
   lastSurgeryWarnLog = 0;
@@ -2349,7 +2371,7 @@ async function syncInner(): Promise<{ pulled: number; pushed: number; conflicts:
     && guard.consecutiveNetworkFailures >= FAILURE_STREAK_FOR_PULL_FIRST
     && trackedDirty.length === 0;
   if (pullFirst) {
-    log.git.warn(
+    log.git[streakNews('pull-first') ? 'warn' : 'debug'](
       'git-sync recovering from a fetch/pull failure streak — pulling BEFORE commit this cycle so a stale worktree cannot be snapshotted',
       { consecutiveNetworkFailures: guard.consecutiveNetworkFailures, branch },
     );
@@ -2596,7 +2618,7 @@ async function lwwMerge(branch: string, remoteBefore: string | null = null): Pro
   // stacking behind it.
   const fetchTimeout = fetchTimeoutForStreak(guard.consecutiveNetworkFailures);
   if (fetchTimeout !== NETWORK_TIMEOUT) {
-    log.git.warn('git-sync fetch failure streak — widening this fetch\'s timeout', {
+    log.git[streakNews('widen-timeout') ? 'warn' : 'debug']('git-sync fetch failure streak — widening this fetch\'s timeout', {
       branch, streak: guard.consecutiveNetworkFailures, timeoutMs: fetchTimeout,
     });
   }

@@ -28,6 +28,14 @@
  * repeats are folded the same way, keyed by the summary too, so a NEW cause (the
  * login renewed, now the network is down) is told at once.
  *
+ * A name this machine cannot look up is one outage too, whoever asks for it. When
+ * the Mac lost its DNS for six hours (2026-11-19), git-sync's fetch, its bundle
+ * push, a task plugin's HTTP client and the host probes each warned on every
+ * retry ("Could not resolve host: <name>", "getaddrinfo ENOTFOUND <name>"), ~110
+ * an hour per kind, and six log-spike alarms rang for one cause. A warn whose
+ * text names a failed lookup of a name is folded the same way, keyed `dns:<name>`
+ * (errors keep their level: they raise cards of their own).
+ *
  * The memory lives on globalThis, as the logger's sink and tap do (subsystem.ts):
  * a plugin bundle has its own copy of this module and must share one outage.
  * The error-cause helpers it reads are pure.
@@ -61,6 +69,25 @@ function outageText(message: string, meta?: Record<string, unknown>): string {
 }
 
 /**
+ * A failed name lookup and the name it was for: node's resolver (getaddrinfo, also
+ * inside a DNSException), curl's (git over https: "Could not resolve host: <name>")
+ * and ssh's ("Could not resolve hostname <name>: ...").
+ */
+const DNS_FAILURE_RES: RegExp[] = [
+  /getaddrinfo E(?:NOTFOUND|AI_AGAIN) ([\w.-]+)/i,
+  /could not resolve host(?:name)?:? ([\w.-]+)/i,
+];
+
+/** The name a failed lookup in `text` was for, or null when the text names none. */
+export function failedLookupName(text: string): string | null {
+  for (const re of DNS_FAILURE_RES) {
+    const name = re.exec(text)?.[1]?.replace(/\.+$/, '').toLowerCase();
+    if (name && name !== 'localhost') return name;
+  }
+  return null;
+}
+
+/**
  * An error line the bridge folds into the host's one outage card: a session-family
  * condition (its recoveryKeyOf: no explicit key or plugin of its own, a `session`/`obs`
  * line naming its session or task). Any other error keeps a card of its own, so it is
@@ -77,8 +104,8 @@ function inHostCard(subsystem: string, meta?: Record<string, unknown>): boolean 
 }
 
 /**
- * The host cause this warn/error line only repeats (`host:<alias>`), or null when it
- * is news: not about a host's link, the first of its kind in the window, or the
+ * The cause this warn/error line only repeats (`host:<alias>`, or `dns:<name>` for a
+ * warn about a name that will not resolve), or null when it is news: about neither, the first of its kind in the window, or the
  * window ran out. Records the line as told when it is news about a link.
  */
 export function outageRepeatOf(
@@ -100,11 +127,14 @@ export function outageRepeatOf(
   const text = outageText(message, meta);
   // The bridge's own test for a host card (log-error-bridge.ts): the text says the link is
   // down, not just an errno one command can hit on a connected host (that stays its session's).
-  if (!namesLinkDown(text)) return null;
-  const cause = causeKeyForError({ text, ...(hostHint ? { host: hostHint } : {}) });
-  if (!cause) return null;
-  // By level too: a quiet warn told first must not quiet the error that raises the card.
-  return toldRepeat(`${cause}\u0000${level}\u0000${subsystem}\u0000${message}`, cause, now);
+  if (namesLinkDown(text)) {
+    const cause = causeKeyForError({ text, ...(hostHint ? { host: hostHint } : {}) });
+    // By level too: a quiet warn told first must not quiet the error that raises the card.
+    if (cause) return toldRepeat(`${cause}\u0000${level}\u0000${subsystem}\u0000${message}`, cause, now);
+  }
+  // A name that will not resolve: one outage for every warn that retries it.
+  const name = level === 'warn' ? failedLookupName(text) : null;
+  return name ? toldRepeat(`dns:${name}\u0000${level}\u0000${subsystem}\u0000${message}`, `dns:${name}`, now) : null;
 }
 
 /** `cause` when `key` (which starts with it) was told inside the window; else records it as told now. */

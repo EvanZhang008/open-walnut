@@ -184,6 +184,9 @@ async function clearLeaseState(gitDir: string): Promise<void> {
  * an http(s) walnut hub — the fallback simply doesn't apply then (ssh, local
  * path, no remote).
  */
+/** pushViaBundle's answer for an origin the bundle channel cannot serve (no http(s) hub, no token). */
+export const NOT_A_BUNDLE_HUB = 'origin is not an http(s) walnut hub'
+
 export function bundleEndpointFromRemote(remoteUrl: string): { base: string; auth: string } | null {
   let url: URL
   try {
@@ -342,7 +345,7 @@ export async function pushViaBundle(opts: {
   const chunkBytes = opts.chunkBytes && opts.chunkBytes > 0 ? opts.chunkBytes : BUNDLE_CHUNK_BYTES
   const endpoint = bundleEndpointFromRemote(opts.remoteUrl)
   if (!endpoint) {
-    return { ok: false, bytes: 0, chunks: 0, error: 'origin is not an http(s) walnut hub' }
+    return { ok: false, bytes: 0, chunks: 0, error: NOT_A_BUNDLE_HUB }
   }
   // Lease state lives in the repo's own git dir, beside compaction-state.json:
   // it belongs to THIS repo's push, survives restarts, and is never committed.
