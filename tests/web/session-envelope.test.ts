@@ -147,7 +147,7 @@ describe('v2 peer-note', () => {
     const env = onlyEnvelope(`${peerNote('rebase before continuing', { request: RQ })}\n${line}`);
     expect(env.replyRequest?.requestId).toBe(RQ);
     expect(env.replyRequest?.command)
-      .toBe(`walnut tools call task_send '{"in_reply_to":"${RQ}","title":"<one-line TL;DR>","text":"<your result summary>"}'`);
+      .toBe(`walnut tools call task_send '{"in_reply_to":"${RQ}","title":"<one-line TL;DR>","text":"<your result: what you checked, the commit a test ran on, what you did not check>"}'`);
   });
 
   it('leaves a Reply-when-done line alone when the envelope carries no request', () => {

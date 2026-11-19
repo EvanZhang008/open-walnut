@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { defineOp } from './registry.js'
 import { withOutcome } from './outcome.js'
 import type { OpCall } from './core.js'
-import { PROOF_IN_PLACE_RULE, THREAD_ONE_PLACE_RULE, THREADS_MOVE_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from '../core/org/thread-rules.js'
+import { PROOF_IN_PLACE_RULE, WORD_TO_USER_RULE, THREAD_ONE_PLACE_RULE, THREADS_MOVE_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from '../core/org/thread-rules.js'
 import { THREAD_STATES } from '../core/org/threads-model.js'
 import { USER_KINDS, USER_KIND_PARAM, USER_KIND_WHY_PARAM } from '../core/org/user-kind.js'
 
@@ -60,7 +60,7 @@ defineOp({
     + 'pin (true keeps it at the top of his view whatever its state, until he unpins or acknowledges it; false unpins it; one HE pinned '
     + 'you cannot unpin, snooze or close: 409 pinned_by_user), '
     + 'or merge_into another open thread (alone in its call: its messages move there and it is gone). '
-    + 'A wrong merge is undone with thread_split. task defaults to your own task.',
+    + `A wrong merge is undone with thread_split. ${WORD_TO_USER_RULE} task defaults to your own task.`,
   input: {
     id: z.string().regex(/^th-[a-f0-9]{6,32}$/).describe('The thread (th-...)'),
     title: z.string().min(1).max(120).optional().describe('A few words, in the language you write to the user'),
@@ -102,7 +102,7 @@ defineOp({
   description: `${THREADS_SCOPE} Opens a thread of your own for something that reached you the user must act on or asked to follow `
     + '(a mail he must answer, a team\'s question only he can settle, news he asked to hear about): its first post is yours, shown as '
     + 'opened by you and where from, and his reply is filed under it. Never a progress feed, and never beside a letter about the same '
-    + 'thing: what is on a thread stays there, a decision as its needs state. task defaults to your own task.',
+    + `thing: what is on a thread stays there, a decision as its needs state. ${WORD_TO_USER_RULE} task defaults to your own task.`,
   input: {
     title: z.string().min(1).max(120).describe('A few words, in the language you write to the user'),
     text: z.string().min(1).max(16000).describe('The first post: what reached you and what he needs to know or decide, Markdown'),

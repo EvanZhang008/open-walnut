@@ -16,6 +16,7 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-org-self-work-rule'))
 
 import { DEFAULT_ORG_INSTRUCTIONS, ORG_SELF_COMMAND_LIMIT, SOURCE_CHECK_RULE, orgSelfWorkRule } from '../../../src/core/org/core-instructions.js'
+import { WORD_TO_USER_RULE } from '../../../src/core/org/thread-rules.js'
 import { coreInstructionsBlock, defaultInstructions } from '../../../src/core/sessions/session-context.js'
 import { orgRoleOfPrompt } from '../../../src/core/org/org-prompt-role.js'
 import { orgWorkReminder } from '../../../src/providers/org-work-guard-hook.js'
@@ -60,8 +61,20 @@ describe('Main and a VP never do the work themselves', () => {
     for (const role of ['main', 'lead'] as const) {
       expect(DEFAULT_ORG_INSTRUCTIONS[role].split('\n')).toContain(SOURCE_CHECK_RULE)
     }
-    expect(SOURCE_CHECK_RULE).toMatch(/checked at its source yourself, or say whose word it is and that you have not checked it/)
-    expect(SOURCE_CHECK_RULE).toMatch(/A risk says who it hits and how much/)
+    expect(SOURCE_CHECK_RULE).toMatch(/only what you checked at its source yourself/)
+    expect(SOURCE_CHECK_RULE).toMatch(/Say whose word it is and that you have not checked it/)
+    expect(SOURCE_CHECK_RULE).toMatch(/a risk says who it hits and how much/)
+    // 2026-11-19: the kinds of claim the 11-18 misses were made of, and every surface the user reads.
+    for (const kind of ['a status label Walnut shows', 'a test result', 'your own memory of how something works', 'never merge two sources',
+      '"ask them to confirm"', 'names the commit', 'a Brief, a thread summary or a letter']) expect(SOURCE_CHECK_RULE).toContain(kind)
+  })
+
+  it('every tool that writes what the user reads says the source-check rule at the moment of writing', async () => {
+    const { listOps } = await import('../../../src/ops/index.js')
+    const ops = new Map(listOps().map((op) => [op.name, op]))
+    for (const name of ['brief_write', 'thread_update', 'thread_create', 'human_inbox_send']) {
+      expect(ops.get(name)?.description, name).toContain(WORD_TO_USER_RULE)
+    }
   })
 
   it('an org node reads no line telling it to do the work itself, in every role variant', () => {
@@ -94,7 +107,7 @@ describe('Main and a VP never do the work themselves', () => {
       }
       expect(orgWorkReminder(role)).toMatch(/task_create/)
       // The hint is one short line; the ops it names are in the prompt (orgSelfWorkRule).
-      expect(orgHandOnHint(role)).toBe('at most 3 commands of your own a turn, only to look; hand the rest to your team.')
+      expect(orgHandOnHint(role)).toBe('at most 3 commands of your own a turn, only to look; hand the rest to your team. Tell the user as fact only what you checked; else say whose word it is.')
       // Short: they ride a tool result or a message.
       expect(orgWorkReminder(role).length).toBeLessThan(300)
       expect(orgHandOnHint(role).length).toBeLessThan(300)

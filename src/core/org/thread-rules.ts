@@ -100,3 +100,12 @@ export const THREADS_MOVE_RULE =
   'A thread goes with its work: when one of his asks belongs to another node, hand it on with the work (task_send, org_send, '
   + 'task_start or task_create naming thread) or move it (thread_move); Walnut also moves a thread whose tasks are all in another '
   + 'lead\'s team now. It closes on yours as moved and you stop following it.';
+
+/**
+ * The source-check rule (core-instructions.ts SOURCE_CHECK_RULE) at the moment of writing, in every tool that writes what the
+ * user reads: a Brief, a thread, a letter (2026-11-19: one VP marked an unchecked claim in 34 of 127 chat replies, in 0 of 50
+ * Brief writes and 5 of 77 thread updates). Any task can send a letter, so it names no team.
+ */
+export const WORD_TO_USER_RULE =
+  'The user reads this without your session, as your word: write anything you did not check yourself (another task\'s claim, '
+  + 'a status label, your own memory) as that source\'s word, not checked, and name the commit a test result ran on.'

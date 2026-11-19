@@ -232,7 +232,7 @@ const BUILT_IN: readonly HintSpec[] = [
   {
     kind: 'hand-on',
     label: 'Hand the work on',
-    description: 'Main and the leads: never do the work yourself, at most 3 commands of your own in a turn, then hand the rest to the team. At session start, after a compaction and every 3 messages; inside a turn, the 3rd command of its own brings the same reminder with its result.',
+    description: 'Main and the leads: never do the work yourself, at most 3 commands of your own in a turn, then hand the rest to the team; tell the user as fact only what they checked. At session start, after a compaction and every 3 messages; inside a turn, the 3rd command of its own brings the same reminder with its result.',
     allowed: SCHEDULED,
     // 2026-11-03, the user: "walnut probally shoudo't stoop it, it shudo use prompt and in correct time
     // to avoid forget, some instruction eaach compation or at start some ever xround". The reminder at

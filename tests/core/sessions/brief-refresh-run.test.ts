@@ -147,7 +147,7 @@ describe('a refresh restates only the Needs you items that changed', () => {
     stale()
     tasks.set('w1', worker())
     expect((await look(4)).sent).toBe(true)
-    expect(sends[4]!.text).toContain('(w1): no longer needs him')
+    expect(sends[4]!.text).toContain('(w1): not asking him right now (task_get before you tell him it is settled')
     expect(tasks.get('L')!.brief_refresh?.told).toEqual({})
   })
 

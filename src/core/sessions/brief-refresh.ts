@@ -69,7 +69,7 @@ export function refreshBody(owner: Task, fresh: BriefFreshness, tasks: readonly 
   const name = (id: string) => `"${(byId.get(id)?.title ?? id).replace(/\s+/g, ' ').replace(/"/g, "'").slice(0, 80)}" (${id})`;
   const at = Date.parse(fresh.writtenAt);
   const lines = [
-    `The user is looking at you now (the Org page or the phone). Your Brief was written ${Number.isFinite(at) ? agoWords(now - at) : 'a while ago'}, and since then (Walnut's live record):`,
+    `The user is looking at you now (the Org page or the phone). Your Brief was written ${Number.isFinite(at) ? agoWords(now - at) : 'a while ago'}, and since then (Walnut's live record; a task's words after its state are its own, not checked by you):`,
     ...fresh.moved.slice(0, 12).map((m) => `- ${name(m.id)}: now ${m.state === 'done' ? 'Completed' : m.state === 'needs' || m.state === 'read' ? 'Needs you' : m.state === 'working' ? 'Working' : 'Waiting'}: ${m.words}`),
     ...(fresh.moved.length > 12 ? [`- and ${fresh.moved.length - 12} more lines moved`] : []),
     ...fresh.finished.slice(0, 8).map((id) => `- ${name(id)}: completed`),
@@ -83,7 +83,7 @@ export function refreshBody(owner: Task, fresh: BriefFreshness, tasks: readonly 
     ...(fresh.newAsks.length > 8 ? [`- and ${fresh.newAsks.length - 8} more new asks`] : []),
     ...needsLines(changes, name, (id) => byId.get(id)?.user_status?.decision?.new),
     changes.length
-      ? 'Bring what the user reads up to date: check what you must (task_get on a task above), then update your Brief with brief_write, tell him in your chat in a few short lines only the Needs you changes above (new, now asking another decision, the same ask with a new fact: only that fact, no longer needed), never again an ask he was already told and that did not change, and end the turn. This is a refresh: act on something only when it is yours to act on now.'
+      ? 'Bring what the user reads up to date: check what you must (task_get on a task above), then update your Brief with brief_write, tell him in your chat in a few short lines only the Needs you changes above (new, now asking another decision, the same ask with a new fact: only that fact, no longer needed once task_get shows it answered, withdrawn or its task complete, else not asking him right now), never again an ask he was already told and that did not change, and end the turn. This is a refresh: act on something only when it is yours to act on now.'
       : 'Nothing that needs the user changed since you last told him: do not repeat his Needs you list. Check what you must (task_get on a task above), update your Brief with brief_write, and end the turn with only the agent-ack line, <walnut-turn status="agent-ack"/>, so nothing new shows in his chat. This is a refresh: act on something only when it is yours to act on now.',
     // 2026-11-04: three VPs each told the user "nothing changed, only reworded" at a refresh.
     'When your Brief has no real change for the user (an ask in other words is no change), the agent-ack line is your whole answer: never tell him "no change" or "only reworded".',
@@ -141,7 +141,7 @@ export function needsChanges(
 
 function needsLines(changes: readonly NeedsChange[], name: (id: string) => string, factOf: (id: string) => string | undefined = () => undefined): string[] {
   if (!changes.length) return [];
-  const word = { new: 'new', changed: 'now asks another decision', fact: 'the same ask, with a new fact', gone: 'no longer needs him' } as const;
+  const word = { new: 'new', changed: 'now asks another decision', fact: 'the same ask, with a new fact', gone: 'not asking him right now (task_get before you tell him it is settled: an ask that left while its task works can come back)' } as const;
   const line = (c: NeedsChange): string => {
     if (c.kind === 'gone') return `- ${name(c.id)}: ${word.gone}`;
     if (c.kind !== 'fact') return `- ${name(c.id)}: ${word[c.kind]}: "${c.ask}"`;

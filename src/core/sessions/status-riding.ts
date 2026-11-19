@@ -197,7 +197,7 @@ export function pushBody(lines: readonly string[]): string {
   return [
     lines.length === 1 ? 'A task you follow changed its status (Walnut\'s record, not a report):' : `${lines.length} tasks you follow changed their status (Walnut's record, not a report):`,
     ...lines,
-    'Read it as the live state: what the user was asked and has since done is no longer theirs to do. Nothing here asks you to act; task_get shows more.',
+    'Read it as the live state: what the user was asked and has since done is no longer theirs to do. A label is what Walnut shows, which can lag the task, and the words after it are the task\'s own: task_get before you tell the user a task moved on or settled. Nothing here asks you to act.',
   ].join('\n');
 }
 

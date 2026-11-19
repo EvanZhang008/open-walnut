@@ -48,7 +48,9 @@ export function orgHandOn(role: CoreInstructionRole): string {
  * eaach compation or at start some ever xround"). Short: it rides a message.
  */
 export function orgHandOnHint(role: CoreInstructionRole): string {
-  return `at most ${ORG_SELF_COMMAND_LIMIT} commands of your own a turn, only to look; hand the rest to your team.`;
+  // 2026-11-19: the source-check rule rides here too, so it is in front of the node when it writes to the user.
+  return `at most ${ORG_SELF_COMMAND_LIMIT} commands of your own a turn, only to look; hand the rest to your team. `
+    + 'Tell the user as fact only what you checked; else say whose word it is.';
 }
 
 export function orgSelfWorkRule(role: CoreInstructionRole): string {
@@ -82,13 +84,22 @@ export const DELIVERABLE_CHECK_RULE =
 /**
  * A team's conclusion is its claim, never a fact the node may pass on as its own (2026-11-17, Main's decision after four VPs did
  * it on one day: one relayed a worker's plan that was wrong three times, one wrote an adviser's suggestion as a provider's rule, one
- * passed on a cause nobody had checked, one called a risk "bigger than you think" and took it back). The user's profile already said
- * it; the node's own default says it now. Words only, no check in code (the user: "Mostly prompt instruction, not ... hard code some
- * rule by code").
+ * passed on a cause nobody had checked, one called a risk "bigger than you think" and took it back). Words only, no check in code
+ * (the user: "Mostly prompt instruction, not ... hard code some rule by code").
+ *
+ * 2026-11-19, seven more misses on 11-18 with the rule in every VP's context, read from their own sessions: the caveat was written
+ * in chat (34 of 127 replies of one VP) and almost never in a Brief (0 of 50), a thread summary (5 of 77) or a letter, which the user
+ * reads without the chat; the claims were a Walnut status line ("no longer needs him" for a task that only went back to Working,
+ * "Waiting" for a stale display string), a test result with no commit, two sources merged into one, an "ask them to confirm" turned
+ * into a fact, and the VP's own memory of how a ticket state behaves. Each is named below, and WORD_TO_USER_RULE (thread-rules.ts) says it
+ * again in the tools that write to the user.
  */
 export const SOURCE_CHECK_RULE =
-  'A team\'s conclusion (a cause, number, rule, plan or risk) is its claim, not a fact: tell the user only what you checked at its '
-  + 'source yourself, or say whose word it is and that you have not checked it. A risk says who it hits and how much.';
+  'Tell the user as fact only what you checked at its source yourself. Until then these are claims: a team\'s conclusion (a cause, '
+  + 'number, rule, plan, risk or "done"), a status label Walnut shows read as more than it says (it can lag the task), a test result, and your own memory of how something works. '
+  + 'Say whose word it is and that you have not checked it, in your chat and just as much in a Brief, a thread summary or a letter. '
+  + 'Keep each source\'s own words: never merge two sources into one, or make "ask them to confirm" a fact. A test result names the '
+  + 'commit it ran on; a risk says who it hits and how much.';
 
 /** Which decisions are the user's, as both defaults say it. */
 const USER_KINDS_RULE =

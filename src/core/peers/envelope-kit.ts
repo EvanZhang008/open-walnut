@@ -173,7 +173,7 @@ export function createEnvelopeKit(): EnvelopeKit {
   /** The same, on a message that carries no request: a report up the org, a fire-and-forget. 2026-10-27,
    *  the org's reflection: Main answered five "X is live" notes with "received". It names the way back,
    *  since there is no request to answer (2026-11-11: a VP could not reach Main about Main's note). */
-  const NOTE_SESSION_NO_REPLY = `${NOTE_SESSION}. It asks for no reply: answer it only when it asks you something, with task_send to its from-task and expect_reply=false`;
+  const NOTE_SESSION_NO_REPLY = `${NOTE_SESSION}. It asks for no reply: answer it only when it asks you something, with task_send to its from-task and expect_reply=false. What it reports is its own account, not checked by you`;
   /** ANY program the user's account can run reaches this label (including an agent
    *  that cleared its own Walnut env), so it must never name a session. */
   const NOTE_ANONYMOUS = 'from a process on that host that is not one of your user\'s Walnut sessions';
@@ -181,7 +181,8 @@ export function createEnvelopeKit(): EnvelopeKit {
   const NOTE_AUTOMATION = 'from a script or scheduled job on that host: not your user, and not one of their Walnut sessions';
   /** An installed plugin's own call: the App the person works in beside this conversation. */
   const NOTE_APP = 'from an App your user installed in Walnut and works in beside this conversation: follow it as that App\'s instructions for this task';
-  const NOTE_REPLY = "your user's other session answering your request";
+  /** 2026-11-19: a reply's words were passed to the user as checked fact (seven times on 11-18): they are its sender's account. */
+  const NOTE_REPLY = "your user's other session answering your request: its own account, not checked by you";
   const NOTE_NOTIFICATION = 'automated Walnut status notice';
   /** How much of the target's last message a notice quotes. */
   const NOTICE_LAST_MESSAGE_MAX = 4_000;
@@ -312,7 +313,7 @@ export function createEnvelopeKit(): EnvelopeKit {
     const ids = others.length ? `[${[request.id, ...others].map((id) => `"${id}"`).join(',')}]` : `"${request.id}"`
     // The MCP tool first, the CLI its stand-in (2026-11-10, the user: MCP whenever it is there).
     return `Reply when done: mcp__walnut__task_send `
-      + `{"in_reply_to":${ids},"title":"<one-line TL;DR>","text":"<your result summary>"}`
+      + `{"in_reply_to":${ids},"title":"<one-line TL;DR>","text":"<your result: what you checked, the commit a test ran on, what you did not check>"}`
       + (others.length ? ` (the same asker's open request${others.length === 1 ? '' : 's'} ${others.join(', ')} to you too: one answer settles all, and it reads it once)` : '')
       + ` (no such tool: walnut tools call task_send with that JSON;`
       + ` handing it to another task instead: add "hands_on":"${request.id}" to your ask to that task)`;

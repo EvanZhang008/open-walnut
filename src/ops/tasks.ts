@@ -14,6 +14,7 @@ import { startTask, TASK_START_INPUT, taskView } from './task-execution.js'
 import { PHASE_ORDER } from '../core/phase.js'
 import { agentStatusView, summaryAt, SUMMARY_IS_HISTORY } from '../core/user-status.js'
 import { USER_KINDS, USER_KIND_PARAM, USER_KIND_WHY_PARAM } from '../core/org/user-kind.js'
+import { WORD_TO_USER_RULE } from '../core/org/thread-rules.js'
 import { laneById, normalizeLanes, placeCard } from '../core/boards/board-lanes.js'
 import { agentMemoryWriterNote, type AgentMemory } from '../core/sessions/agent-memory.js'
 import { USER_SPOKE_TEXT, USER_WORDS_BACK, userSaidLine, type UserSaid } from '../core/sessions/user-spoke.js'
@@ -1228,7 +1229,7 @@ defineOp({
     + 'The answer carries the stored letter and the lines that break its rules (issues): fix those with another write. '
     + 'One thing per line: a line holding three or more of "；", ";" or "、" outside its task pills reads as a list and comes back '
     + 'in issues as "holds several things"; write each thing as its own line with its own task instead of joining them. '
-    + 'task defaults to your own task.',
+    + `${WORD_TO_USER_RULE} task defaults to your own task.`,
   input: {
     content: z.string().max(16000).optional().describe('The whole letter (Markdown, the three sections). Only your own lines are held to the length limit (`limit` in the reply); the lines Walnut adds, the headings and "None" lines are not counted'),
     edits: z.array(z.object({ old: z.string().min(1), new: z.string() })).max(40).optional().describe('Exact-string edits on the stored letter'),

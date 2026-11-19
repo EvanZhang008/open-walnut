@@ -371,7 +371,7 @@ describe('buildReplyTrailer', () => {
     const trailer = buildReplyTrailer(request({ id: 'rq-aaaabbbbcccc' }));
 
     expect(trailer).toBe(
-      `Reply when done: mcp__walnut__task_send {"in_reply_to":"rq-aaaabbbbcccc","title":"<one-line TL;DR>","text":"<your result summary>"}`
+      `Reply when done: mcp__walnut__task_send {"in_reply_to":"rq-aaaabbbbcccc","title":"<one-line TL;DR>","text":"<your result: what you checked, the commit a test ran on, what you did not check>"}`
         + ' (no such tool: walnut tools call task_send with that JSON;'
         + ' handing it to another task instead: add "hands_on":"rq-aaaabbbbcccc" to your ask to that task)',
     );
@@ -397,7 +397,7 @@ describe('buildReplyDeliveryText', () => {
       '<walnut-message kind="reply" from="Migration worker [abcd1234]" '
       + `from-session="${SENDER.sessionId}" from-task="task-88" host="devbox" `
       + 'request="rq-ddddeeeeffff" asked="run the migration" '
-      + 'note="your user\'s other session answering your request">\n'
+      + 'note="your user\'s other session answering your request: its own account, not checked by you">\n'
       + 'Done: 412 rows moved.\n'
       + '</walnut-message>',
     );

@@ -96,7 +96,7 @@ describe('task start confirmation and reply contract', () => {
     expect(mocks.startSession.mock.calls[0][0].message).toBe(buildPeerWrapper('Fix the flake.', {
       title: '', shortId: 'asker-1', sessionId: 'asker-1', host: 'local', requestId: result.requestId!,
     }) + '\n'
-      + `Reply when done: mcp__walnut__task_send {"in_reply_to":"${result.requestId}","title":"<one-line TL;DR>","text":"<your result summary>"}`
+      + `Reply when done: mcp__walnut__task_send {"in_reply_to":"${result.requestId}","title":"<one-line TL;DR>","text":"<your result: what you checked, the commit a test ran on, what you did not check>"}`
       + ` (no such tool: walnut tools call task_send with that JSON;`
       + ` handing it to another task instead: add "hands_on":"${result.requestId}" to your ask to that task)`);
   });

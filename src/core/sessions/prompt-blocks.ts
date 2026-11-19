@@ -107,7 +107,7 @@ export const PROMPT_BLOCKS: readonly PromptBlockDef[] = [
     why: 'Measured 2.6 K with the deliverable check (2026-11-16: same file is not same deliverable, task_get before handing, search across languages); once per prompt (the persona no longer carries a second copy).' },
   { id: 'core-instructions', title: 'Your core instructions', part: 'context', kind: 'user', cap: 8_400,
     holds: '',
-    why: 'Versioned. The user\'s words up to ORG_INSTRUCTIONS_MAX (4,000 characters) with their tags and Walnut\'s default after an agent\'s; today 2.8 to 2.9 K (2026-11-17: with the rule that a team\'s conclusion is no fact until checked at its source, and that an ask of the user\'s own kinds needs his words); 8.2 to 8.3 K at the builder\'s limit, Main the longer.' },
+    why: 'Versioned. The user\'s words up to ORG_INSTRUCTIONS_MAX (4,000 characters) with their tags and Walnut\'s default after an agent\'s; today 3.1 to 3.2 K (2026-11-19: the source-check rule names the claims the 11-18 misses were made of); 7.6 K at the builder\'s limit since the version tag is said once, Main the longer.' },
   { id: 'tools', title: 'How Walnut and its tools reach you', part: 'context', kind: 'rules', cap: 900,
     holds: '',
     why: 'The ops paragraph measured 737.' },
