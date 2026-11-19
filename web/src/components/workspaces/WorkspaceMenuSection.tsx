@@ -83,6 +83,11 @@ function WorkspaceFlyout({ open, anchorRef, anchorPoint, taskId, taskTitle, ws, 
         title: `Remove the workspace of "${taskTitle}"?`,
         message: (
           <div className="workspace-confirm-body" data-testid="workspace-remove-plan">
+            {preview.sessionWarning && (
+              <p className="workspace-confirm-warning" data-testid="workspace-remove-session-warning">
+                A session may still be working in this workspace ({preview.sessionWarning}). Removing it deletes the folder under that session.
+              </p>
+            )}
             {preview.decision.plan.map((line) => <p key={line}>{line}</p>)}
           </div>
         ),

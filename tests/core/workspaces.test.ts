@@ -450,6 +450,16 @@ describe('manager', () => {
     expect(f.tasks.get('m1')!.workspace).toMatchObject({ state: 'removed', branch_kept: true })
   })
 
+  it("the remove dialog's preview warns when a session may still be working in the workspace; removing stays the person's choice", async () => {
+    addTask(f, { id: 'm3', workspace: { ...gitWs } })
+    expect((await removalPreview('m3')).sessionWarning).toBeUndefined()
+    f.live = true
+    expect((await removalPreview('m3')).sessionWarning).toBe('a session of the task still runs')
+    await removeWorkspaceManually('m3')
+    await __settleWorkspaceDriver('m3')
+    expect(f.tasks.get('m3')!.workspace).toMatchObject({ state: 'removed' })
+  })
+
   it('a plugin workspace removed by hand still requires pushed work', async () => {
     addTask(f, { id: 'm2', workspace: { ...pluginWs } })
     f.probe = probe({ merged: false, problems: ['a: 1 commit on local branches is not pushed'] })

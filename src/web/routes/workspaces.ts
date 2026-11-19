@@ -102,8 +102,8 @@ workspacesRouter.post('/task/:taskId/retry', async (req: Request, res: Response,
 
 workspacesRouter.get('/task/:taskId/removal', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { probe, decision } = await within(PREVIEW_DEADLINE_MS, removalPreview(String(req.params.taskId)))
-    res.json({ probe, decision })
+    const { probe, decision, sessionWarning } = await within(PREVIEW_DEADLINE_MS, removalPreview(String(req.params.taskId)))
+    res.json({ probe, decision, ...(sessionWarning ? { sessionWarning } : {}) })
   } catch (err) {
     // A host that answers too slowly is a "could not check, try again", never a hang or a bare 504.
     if (err instanceof RouteDeadline || (err instanceof WorkspaceError && err.code === 'host-timeout')) {

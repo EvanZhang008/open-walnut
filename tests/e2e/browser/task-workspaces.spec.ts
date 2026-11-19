@@ -369,12 +369,30 @@ test('a plugin provider: a multi-repo workspace shows its progress, fails with R
     await expect(flyout).toContainText('Fake multi-repo')
     await expect(flyout.locator('.workspace-repo')).toHaveText([alpha, beta])
     await shot(page, 'flyout-plugin', flyout)
+    // A session that may still be working in it (the server's check, still-working.ts) is named
+    // first; the person can still cancel or go on. The server's real answer, with that warning added.
+    const WARNING = 'session 1234abcd still runs on the host (its record says stopped)'
+    await page.route('**/api/workspaces/task/*/removal', async (route) => {
+      const res = await route.fetch()
+      await route.fulfill({ response: res, json: { ...(await res.json()), sessionWarning: WARNING } })
+    })
     await flyout.getByTestId('workspace-remove').click()
     const dialog = page.getByRole('dialog', { name: /Remove the workspace of/ })
+    await expect(dialog).toBeVisible({ timeout: 30_000 })
+    await expect(dialog.getByTestId('workspace-remove-session-warning')).toHaveText(`A session may still be working in this workspace (${WARNING}). Removing it deletes the folder under that session.`)
+    await shot(page, 'remove-confirm-session', dialog.locator('.app-modal'))
+    await dialog.getByRole('button', { name: 'Cancel' }).click()
+    await expect(dialog).toHaveCount(0)
+    expect(fs.existsSync(ws.root!)).toBe(true)
+    await page.unroute('**/api/workspaces/task/*/removal')
+
+    await (await openPanelWorkspaceFlyout(page, panel)).getByTestId('workspace-remove').click()
     await expect(dialog).toBeVisible({ timeout: 30_000 })
     await expect(dialog.getByTestId('workspace-remove-plan')).toContainText(ws.root!)
     await expect(dialog.getByTestId('workspace-remove-plan')).toContainText('2 repositories')
     await expect(dialog.getByTestId('workspace-remove-plan')).toContainText(`Also deletes 1 entry git ignores, which no commit holds: ${alpha}/build/.`)
+    // The mock CLI's session ended after its turn, and its host says so: no warning.
+    await expect(dialog.getByTestId('workspace-remove-session-warning')).toHaveCount(0)
     await shot(page, 'remove-confirm', dialog.locator('.app-modal'))
     await dialog.getByRole('button', { name: 'Remove workspace' }).click()
     await waitWorkspace(page, taskId, 'removed')

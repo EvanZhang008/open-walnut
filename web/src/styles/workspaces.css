@@ -236,6 +236,7 @@
 }
 .workspace-flyout .task-kebab-item { margin-top: 2px; }
 .workspace-confirm-body p { margin: 0 0 6px; overflow-wrap: anywhere; }
+.workspace-confirm-body .workspace-confirm-warning { color: var(--priority-important-text); font-weight: 600; }
 
 /* ── Preparing column ── */
 /* Prose, not a path: the panel's .pending-session-path (globals.css, loaded later)

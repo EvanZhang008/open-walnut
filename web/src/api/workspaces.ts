@@ -28,7 +28,11 @@ export function retryTaskWorkspace(taskId: string): Promise<{ task: Task }> {
 }
 
 export type WorkspaceRemovalPreview =
-  | { degraded?: undefined; probe: WorkspaceProbeSummary; decision: { action: 'remove' | 'keep' | 'confirm'; requireMerged: boolean; reason?: string; plan: string[] } }
+  | {
+    degraded?: undefined; probe: WorkspaceProbeSummary; decision: { action: 'remove' | 'keep' | 'confirm'; requireMerged: boolean; reason?: string; plan: string[] };
+    /** A session may still be working in it (why, in a sentence): the dialog says so before Remove. */
+    sessionWarning?: string;
+  }
   /** The host did not answer in time: nothing was checked, the user tries again. */
   | { degraded: 'timeout'; error: string };
 

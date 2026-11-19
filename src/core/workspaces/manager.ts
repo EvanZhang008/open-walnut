@@ -639,15 +639,27 @@ export async function probeWorkspace(ws: TaskWorkspace, timeoutMs = STATUS_RPC_M
   return summarize(res.probe as Record<string, unknown>)
 }
 
-/** What removing this task's workspace would do, for the confirm dialog. */
-export async function removalPreview(taskId: string): Promise<{ task: Task; probe: WorkspaceProbeSummary; decision: ReturnType<typeof cleanupDecision> }> {
+/** The confirm dialog's look at the task's sessions waits this long (the host is asked about each). */
+const PREVIEW_SESSIONS_MS = 6_000
+
+/**
+ * What removing this task's workspace would do, for the confirm dialog. `sessionWarning`:
+ * a session of the task (or one working in the folder) may still run in it, whatever its
+ * record says (still-working.ts). The person may still remove it; the dialog says so first.
+ */
+export async function removalPreview(taskId: string): Promise<{ task: Task; probe: WorkspaceProbeSummary; decision: ReturnType<typeof cleanupDecision>; sessionWarning?: string }> {
   refuseInCloud()
   const task = await taskOrThrow(taskId)
   const ws = task.workspace
   if (!ws || !isLaunchReady(ws)) throw new WorkspaceError('This task has no workspace to remove.', 409, 'none')
   await assertMadeHere(ws)
-  const probe = await probeWorkspace(ws, PREVIEW_RPC_MS)
-  return { task, probe, decision: cleanupDecision(ws, probe, 'manual') }
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const sessions = Promise.race([
+    deps.stillWorking(task, ws, { requests: false }).then((s) => s?.why ?? null, () => 'Walnut could not check whether a session still runs in it'),
+    new Promise<string>((resolve) => { timer = setTimeout(() => resolve('Walnut could not check in time whether a session still runs in it'), PREVIEW_SESSIONS_MS) }),
+  ]).finally(() => clearTimeout(timer))
+  const [probe, sessionWarning] = await Promise.all([probeWorkspace(ws, PREVIEW_RPC_MS), sessions])
+  return { task, probe, decision: cleanupDecision(ws, probe, 'manual'), ...(sessionWarning ? { sessionWarning } : {}) }
 }
 
 /**
