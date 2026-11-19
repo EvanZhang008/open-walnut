@@ -120,6 +120,27 @@ describe('resolveServiceTarget', () => {
     expect(resolveServiceTarget(url('http://example.com:8080/'), { sessionHost: 'studio', hosts, localNames: [] })).toBeNull()
   })
 
+  it("a link host's own session wins its machine's name over an SSH row naming the same machine", () => {
+    // One machine, two rows: an SSH row by its name and a host-network row whose daemon reports that name.
+    const twin = {
+      'twin-ssh': { hostname: 'box.example.test' },
+      'twin-net': { hostname: 'twin-net.walnut-net.invalid', transport: 'net' as const },
+    }
+    const names = { 'twin-net': ['box.example.test'] }
+    const at = (sessionHost?: string) => ({ sessionHost, hosts: twin as never, localNames: ['my-mac.local'], machineNames: names })
+    expect(resolveServiceTarget(url('http://box.example.test:5173/'), at('twin-net')))
+      .toEqual({ host: 'twin-net', targets: ['localhost'], reason: 'configured-host' })
+    // A short form can be two machines: the configured row keeps it.
+    expect(resolveServiceTarget(url('http://box:5173/'), at('twin-net'))?.host).toBe('twin-ssh')
+    // From anywhere else the SSH row still answers, by the name only.
+    expect(resolveServiceTarget(url('http://box.example.test:5173/'), at(undefined)))
+      .toEqual({ host: 'twin-ssh', targets: ['box.example.test'], reason: 'configured-host' })
+    expect(resolveServiceTarget(url('http://box.example.test:5173/'), at('twin-ssh'))?.host).toBe('twin-ssh')
+    // A name this machine has is never taken by a daemon's word.
+    const mine = { 'twin-net': ['my-mac.local'] }
+    expect(resolveServiceTarget(url('http://my-mac.local:5173/'), { ...at('twin-net'), machineNames: mine })?.host).toBe('__local__')
+  })
+
   describe('a link host (no SSH): its loopback for its own session, or a URL naming the machine exactly', () => {
     // A host network row's hostname is a placeholder that never resolves; the cloud box's is the companion's domain.
     const links = {
@@ -160,7 +181,11 @@ describe('resolveServiceTarget', () => {
       // The joined box's daemon says the studio's name, a short form of it, or this Mac's name.
       for (const claim of ['dev-box.corp.example.com', 'dev-box', 'my-mac.local', 'my-mac']) {
         const names = { 'joined-box': [claim] }
-        expect(resolveServiceTarget(url('http://dev-box.corp.example.com:8080/'), ctx('joined-box', names))?.host, claim).toBe('studio')
+        // Exactly its own full name, from its own session, is its own machine (pass 0); every looser claim is not.
+        const fullOwn = claim === 'dev-box.corp.example.com'
+        expect(resolveServiceTarget(url('http://dev-box.corp.example.com:8080/'), ctx('joined-box', names))?.host, claim).toBe(fullOwn ? 'joined-box' : 'studio')
+        expect(resolveServiceTarget(url('http://dev-box.corp.example.com:8080/'), ctx('studio', names))?.host, claim).toBe('studio')
+        expect(resolveServiceTarget(url('http://dev-box.corp.example.com:8080/'), ctx(undefined, names))?.host, claim).toBe('studio')
         expect(resolveServiceTarget(url('http://dev-box:8080/'), ctx('joined-box', names))?.host, claim).toBe('studio')
         expect(resolveServiceTarget(url('http://my-mac.local:8080/'), ctx('joined-box', names))?.host, claim).toBe('__local__')
       }

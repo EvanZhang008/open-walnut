@@ -135,6 +135,20 @@ export function resolveServiceTarget(
   const via = (def: HostDef) => hostRouteFields(def).via
   const linkLoopback = (alias: string, exact: boolean): ServiceTarget | null =>
     alias === ctx.sessionHost || exact ? { host: alias, targets: ['localhost'], reason: 'configured-host' } : null
+  // Pass 0: the session's own host, when it is a link host and the URL is exactly the fully
+  // qualified name its own daemon says its machine has: the session runs on that machine, and a
+  // full name is one machine, so the URL is its service there, even when another row names the
+  // same machine (2026-11-18: an SSH row and a host-network row for one dev box; a clouddev
+  // session's own URL went to the SSH row's external address, where nothing listened). A short or
+  // dotless name (`ubuntu`, `dev-box`) can be two machines, so it keeps the passes below, as does
+  // every other session.
+  const own = ctx.sessionHost ? ctx.hosts[ctx.sessionHost] : undefined
+  if (ctx.sessionHost && own && own.enabled !== false && via(own) && h.includes('.')) {
+    const ownNames = Object.hasOwn(ctx.machineNames ?? {}, ctx.sessionHost) ? ctx.machineNames![ctx.sessionHost] : []
+    if (ownNames.some((n) => typeof n === 'string' && bareHost(n) === h && !ctx.localNames.some((l) => hostnamesMatch(n, l) || hostnamesMatch(l, n)))) {
+      return { host: ctx.sessionHost, targets: ['localhost'], reason: 'configured-host' }
+    }
+  }
   // Pass 1: the configured names (each row's hostname and alias), every entry before any
   // machine name. The cloud box's row hostname is the companion's public domain, not the box:
   // a URL naming it is a normal link (refused here, opened as before).
