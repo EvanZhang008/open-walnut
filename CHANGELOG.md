@@ -6,6 +6,24 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.36] - 2026-11-19
+
+### Fixed
+
+- A box moved off its end and back is not sent there on its next resize
+- Plugins load from the stage's own copy of the dependencies, never the checkout's node_modules
+- A merged change says why it shows no deploy, and the card reads the watcher's real read time
+- Hand phones the MagicDNS name, and let the iOS app open *.ts.net over http
+- The gutter probe joins the scrollbar probes, and the highlight guard lists it
+- The kept scrollbar gutter comes out of the pane's own padding, and the mail Tab order follows the moved head
+- A link silent since the latest wake or network change is logged at info
+- A host problem no retry heals reaches the person, cloud companion kinds included
+- An unreachable companion is one outage line, not a warn per push
+- A record read never joins one already sent; one shared-read helper
+- One shared record read per session, shown panels first
+- A shown chat's record read takes the kept connection with its first screen
+- What the notice stack covers stays reachable and still, on every page
+
 ## [0.6.35] - 2026-11-18
 
 ### Added
