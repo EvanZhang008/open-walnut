@@ -46,7 +46,7 @@ function joinParts(parts: Array<string | undefined | null>): string {
  *  junk family failed on both engines). "An exact hit must stay findable"
  *  still holds — the reference lane resolves task IDs from tasks.json, not
  *  from this index. */
-export function taskToDoc(task: Task): Doc | null {
+export function taskToDoc(task: Task, personWords?: string): Doc | null {
   if (isLedgerJunk(task)) return null;
   // A task that exists only because someone ran a search must never be indexed:
   // it is titled with the query, so it wins the 10x title field for that exact
@@ -67,7 +67,11 @@ export function taskToDoc(task: Task): Doc | null {
     ref: task.id,
     title: task.title ?? '',
     summary: joinParts([task.description, task.summary]),
-    note: joinParts([task.note, task.conversation_log]),
+    // His own words in the task's chat (user-asks personWordsText) say what he worked on there in
+    // the words he searches with; the session transcript is indexed from its tail only. In the
+    // note, not the summary: a summary says what the task delivers, and a task with none keeps its
+    // full note-only credit. Last, so a new message changes only the last passages.
+    note: joinParts([task.note, task.conversation_log, personWords]),
     meta: joinParts([
       `Project: ${task.project || 'Inbox'}`,
       task.tags?.length ? `Tags: ${task.tags.join(', ')}` : undefined,

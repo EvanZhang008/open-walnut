@@ -16,7 +16,8 @@
  *              what he needs to decide (a plan, a question back to him) is not, even while work
  *              it started goes on
  *   closed     reported answered, the task completed, or a week old; kept CLOSED_KEEP_MS more,
- *              because the readback after a compaction quotes his recent words, answered ones too
+ *              because the readback after a compaction quotes his recent words, answered ones too,
+ *              and search finds a task by what he wrote in it (personWordsText)
  *
  * Read back first after a compaction (open-items.ts), named at a turn's end when owed across a
  * compaction or for hours (the Stop hook), told to the lead in its team note, and a session that sits on one an hour
@@ -70,8 +71,13 @@ export const ASK_TEXT_MAX = 2000;
 export const OPEN_MAX = 15;
 /** An open ask this old is closed as expired: the work moved on long ago. */
 export const OPEN_TTL_MS = 7 * 24 * 3600_000;
-/** A closed ask is kept this long, then dropped. */
-const CLOSED_KEEP_MS = 3 * 24 * 3600_000;
+/**
+ * A closed ask is kept this long, then dropped. A month, not the readback's two days: search finds a
+ * task by his own words in it (personWordsText), and the transcript cannot. 2026-11-18 the user could
+ * not find the task he had worked a stack rollback in the day before: its 484 MB transcript was
+ * indexed from its last 4 MB (five hours of trigger traffic), and its title never named the work.
+ */
+export const CLOSED_KEEP_MS = 30 * 24 * 3600_000;
 /** Enough for a night's conversation (2026-11-03: 48 messages in 12 hours) to be read back after a compaction. */
 export const CLOSED_MAX = 80;
 /** The same words again this soon is one message (a retry). */
@@ -296,6 +302,28 @@ export function owedWakeBody(asks: readonly UserAsk[], nowMs: number): string {
     ...asks.map((a) => `- ${ago(a.at, nowMs)}: "${preview(a)}"`),
     'Answer him now in your chat, or tell him in one line where it stands and when he gets the result. Walnut wakes you for this once.',
   ].join('\n');
+}
+
+/** The most of his words a task's search document holds (about 25 messages). */
+export const PERSON_WORDS_SEARCH_MAX = 8_000;
+
+/**
+ * Everything he typed into this task's chat that Walnut still keeps, for the task's search document:
+ * a task he wrote in is found by his own words, however long ago its transcript's indexed tail moved
+ * past them. The newest are kept when they do not all fit, listed oldest first, so a new message
+ * only changes the document's last passages (the earlier passages keep their vectors). '' when none.
+ */
+export function personWordsText(file: UserAsksFile, max = PERSON_WORDS_SEARCH_MAX): string {
+  const kept: string[] = [];
+  let used = 0;
+  for (const a of [...file.asks].sort((x, y) => y.at.localeCompare(x.at))) {
+    const text = a.text.trim();
+    if (!text) continue;
+    if (used + text.length + 1 > max) break;
+    kept.push(text);
+    used += text.length + 1;
+  }
+  return kept.reverse().join('\n');
 }
 
 /** How far back the readback after a compaction quotes his words, answered ones too. */

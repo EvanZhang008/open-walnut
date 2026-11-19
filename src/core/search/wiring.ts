@@ -36,6 +36,8 @@ import { log } from '../../logging/index.js';
 import { utilityQosForkExec } from '../../lib/background-qos.js';
 import { reopenIfWiped } from '../../lib/sqlite-wiped.js';
 import { createIncrementalQueue, type IncrementalQueue } from './incremental-queue.js';
+import { clearTaskSearchRequeue, setTaskSearchRequeue } from './task-requeue.js';
+import { listPersonWordsTasks, readPersonWords } from '../sessions/user-asks.js';
 import { EventNames, type EventBus } from '../event-bus.js';
 import { memoryPressureShedding, onMemoryPressureChange } from '../memory-pressure.js';
 import { listTasks } from '../task-manager.js';
@@ -596,7 +598,7 @@ async function syncTasks(taskIds: string[]): Promise<void> {
   );
   for (const taskId of taskIds) {
     const task = present.get(taskId);
-    const doc = task ? taskToDoc(task) : null;
+    const doc = task ? taskToDoc(task, await readPersonWords(taskId)) : null;
     // Deleted AND junk-classified tasks both leave the index.
     if (doc) upsertDoc(index, doc);
     else index.remove('task', taskId);
@@ -749,6 +751,11 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
       error: err instanceof Error ? err.message : String(err), retryInMs,
     }),
   });
+  // His words filed in a task's chat are in its document (serializers.ts taskToDoc).
+  const requeue = (taskId: string) => taskQueue.enqueue(taskId, 'sync');
+  setTaskSearchRequeue(requeue);
+  // A document indexed before it held his words takes them now (a hundred files, unchanged docs are no-ops).
+  void listPersonWordsTasks().then((ids) => { for (const id of ids) requeue(id); });
   // Cooldown: an active session fires session:result every turn and each
   // flush re-reads its transcript tail.
   const sessionQueue: IncrementalQueue = createIncrementalQueue({
@@ -1027,6 +1034,7 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
       clearTimeout(backfillTimer);
       if (vecTimer) clearTimeout(vecTimer);
       if (sweepTimer) clearInterval(sweepTimer);
+      clearTaskSearchRequeue(requeue);
       bus.unsubscribe('search-v2-task-sync');
       bus.unsubscribe('search-v2-session-sync');
       await Promise.all([taskQueue.stop(), sessionQueue.stop()]);

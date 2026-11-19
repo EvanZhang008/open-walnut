@@ -134,9 +134,10 @@ export async function* iterateAllDocs(options: {
 
   const tasks = await listTasks();
   const taskById = new Map<string, Task>(tasks.map((t) => [t.id, t]));
+  const personWords = await (await import('../sessions/user-asks.js')).readAllPersonWords();
   let taskCount = 0;
   for (const task of tasks) {
-    const doc = taskToDoc(task);
+    const doc = taskToDoc(task, personWords.get(task.id));
     if (doc) { taskCount++; yield doc; }
   }
   onProgress(taskCount, taskCount, 'tasks');

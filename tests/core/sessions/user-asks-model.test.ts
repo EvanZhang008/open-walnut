@@ -5,8 +5,8 @@
  */
 import { describe, it, expect } from 'vitest'
 import {
-  addAsk, applyOwed, asksToJudge, emptyUserAsks, JUDGE_MAX, OPEN_MAX, openAsks, OWED_STALE_MS, owedQuestionBlock,
-  owedReadback, prune, readOwedLine, recentWordsReadback, RECENT_WORDS_MAX, RECENT_WORDS_MS, staleOwed, type UserAsksFile,
+  addAsk, applyOwed, asksToJudge, CLOSED_KEEP_MS, emptyUserAsks, JUDGE_MAX, OPEN_MAX, openAsks, OWED_STALE_MS, owedQuestionBlock,
+  owedReadback, personWordsText, PERSON_WORDS_SEARCH_MAX, prune, readOwedLine, recentWordsReadback, RECENT_WORDS_MAX, RECENT_WORDS_MS, staleOwed, type UserAsksFile,
 } from '../../../src/core/sessions/user-asks-model.js'
 
 const T0 = Date.parse('2026-11-03T01:20:00Z')
@@ -92,13 +92,33 @@ describe('the user asks a task owes', () => {
     expect(staleOwed(f, null, T0 + OWED_STALE_MS + 1).map((a) => a.id)).toEqual([f.asks[0].id])
   })
 
-  it('a week-old ask expires, the open cap expires the oldest, and closed asks are kept a few days only', () => {
+  it('a week-old ask expires, the open cap expires the oldest, and closed asks are kept a month, then dropped', () => {
     const f = withAsks(OPEN_MAX + 2)
     expect(openAsks(f)).toHaveLength(OPEN_MAX)
     expect(f.asks.filter((a) => a.closedBy === 'expired')).toHaveLength(2)
     const week = prune(f, T0 + 8 * 24 * 3_600_000)
     expect(openAsks(week)).toHaveLength(0)
-    expect(prune(week, T0 + 12 * 24 * 3_600_000).asks).toHaveLength(0)
+    // Kept for search well past the readback's two days (a task found by his own words).
+    expect(prune(week, T0 + 12 * 24 * 3_600_000).asks).toHaveLength(OPEN_MAX + 2)
+    expect(prune(week, T0 + 8 * 24 * 3_600_000 + CLOSED_KEEP_MS + 1).asks).toHaveLength(0)
+  })
+
+  // 2026-11-18: the user could not find the task he had worked a stack rollback in the day before;
+  // its transcript was indexed from its last 4 MB (five hours of trigger traffic).
+  it("his words for the task's search document: every kept one, answered ones too, oldest first, the newest kept", () => {
+    let f = emptyUserAsks('t1')
+    f = addAsk(f, { id: 'ua-1', at: iso(T0), text: 'can u do the vaultkep add permisison and continue rollabck for cfn', via: 'chat' }).file
+    f = addAsk(f, { id: 'ua-2', at: iso(T0 + 3_600_000), text: 'for zrk what is next', via: 'chat' }).file
+    f = applyOwed(f, ['ua-1', 'ua-2'], new Set(), iso(T0 + 4_000_000)).file
+    expect(openAsks(f)).toHaveLength(0)
+    expect(personWordsText(f)).toBe('can u do the vaultkep add permisison and continue rollabck for cfn\nfor zrk what is next')
+    expect(personWordsText(emptyUserAsks('t1'))).toBe('')
+    const many = withAsks(OPEN_MAX, T0, 60_000)
+    const long = { ...many, asks: many.asks.map((a) => ({ ...a, text: 'x'.repeat(1_000) + a.id })) }
+    const text = personWordsText(long)
+    expect(text.length).toBeLessThanOrEqual(PERSON_WORDS_SEARCH_MAX)
+    expect(text.endsWith('x'.repeat(1_000) + long.asks[OPEN_MAX - 1].id)).toBe(true)
+    expect(text).not.toContain(long.asks[0].id)
   })
 
   // 2026-11-03: twelve hours of the user's messages in one task, every one answered, were gone from

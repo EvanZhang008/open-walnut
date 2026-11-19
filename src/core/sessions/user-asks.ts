@@ -14,8 +14,9 @@ import { log } from '../../logging/index.js';
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
 import type { Task } from '../types.js';
 import { keepsThreads } from '../org/keeps-threads.js';
+import { requeueTaskSearch } from '../search/task-requeue.js';
 import {
-  addAsk, applyOwed, asksToJudge, closeAll, dueToWake, MAX_ASK_STOP_NUDGES, normalizeUserAsks, openAsks, owedQuestionBlock,
+  addAsk, applyOwed, asksToJudge, closeAll, dueToWake, MAX_ASK_STOP_NUDGES, normalizeUserAsks, openAsks, owedQuestionBlock, personWordsText,
   owedReadback, owedStopReason, owedWakeBody, prune, readOwedLine, recentWordsReadback, staleOwed, type UserAsk, type UserAsksFile,
 } from './user-asks-model.js';
 
@@ -35,6 +36,35 @@ export async function readUserAsks(taskId: string): Promise<UserAsksFile> {
   const file = fileOf(taskId);
   if (!file || await companion()) return normalizeUserAsks(null, taskId);
   return normalizeUserAsks(await readJsonFile<unknown>(file, null), taskId);
+}
+
+/** His words in `taskId`'s chat for its search document (personWordsText); '' when none. Never throws. */
+export async function readPersonWords(taskId: string): Promise<string> {
+  try {
+    return personWordsText(await readUserAsks(taskId));
+  } catch {
+    return '';
+  }
+}
+
+/** The tasks with a file of his words. Never throws. */
+export async function listPersonWordsTasks(): Promise<string[]> {
+  if (await companion()) return [];
+  try {
+    return (await fs.readdir(dir())).filter((n) => n.endsWith('.json')).map((n) => n.slice(0, -'.json'.length)).filter((id) => fileOf(id));
+  } catch {
+    return [];
+  }
+}
+
+/** Every task with words of his on file, for a full index build. Never throws. */
+export async function readAllPersonWords(): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  for (const taskId of await listPersonWordsTasks()) {
+    const words = await readPersonWords(taskId);
+    if (words) out.set(taskId, words);
+  }
+  return out;
 }
 
 async function mutate(taskId: string, fn: (cur: UserAsksFile) => UserAsksFile): Promise<UserAsksFile | null> {
@@ -83,6 +113,8 @@ export async function prepareUserAskCapture(input: {
           ...(input.sid ? { sid: input.sid } : {}),
           ...(input.key ? { key: input.key } : {}),
         }).file);
+        // His words are in the task's search document: refresh it (no-op without the index).
+        requeueTaskSearch(task.id);
       } catch (err) {
         log.session.warn('user asks: message not filed', { taskId: task.id, error: err instanceof Error ? err.message : String(err) });
       }
