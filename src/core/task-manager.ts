@@ -6067,10 +6067,9 @@ async function mergeTaskIntoNow(
     const keep = survivorSid ?? follows;
     detachedVictimSessions = victimSids.filter((sid) => sid !== follows);
     const survivorOldSlots = [survivor.session_id, survivor.plan_session_id, survivor.exec_session_id, ...(survivor.session_ids ?? [])];
-    survivor.session_id = keep;
-    survivor.session_ids = keep ? [keep] : [];
-    if (survivor.plan_session_id && survivor.plan_session_id !== keep) survivor.plan_session_id = undefined;
-    if (survivor.exec_session_id && survivor.exec_session_id !== keep) survivor.exec_session_id = undefined;
+    // The one link rule (sessions/task-session-link.ts); with no session left, every field is cleared.
+    if (keep) pointTaskAtSession(survivor, keep);
+    else { survivor.session_id = undefined; survivor.session_ids = []; survivor.plan_session_id = undefined; survivor.exec_session_id = undefined; }
     const legacy = new Set([
       ...(survivor.legacy_session_ids ?? []), ...(victim.legacy_session_ids ?? []), ...detachedVictimSessions,
       ...[victim.session_id, victim.plan_session_id, victim.exec_session_id, ...(victim.session_ids ?? []),

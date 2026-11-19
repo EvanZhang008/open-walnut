@@ -32,7 +32,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { withValues } from './write-port.js'
-import { foldAwayStart, foldAwayTurn, foldTaskRecord, type AwayStart } from '../core/offline-merge/task-row-fold.js'
+import { foldAwayStart, foldTaskRecord, type AwayStart } from '../core/offline-merge/task-row-fold.js'
 
 /** How long an acked write keeps its overlay and mark when no copy round stored it. */
 export const AWAIT_COPY_MS = 10 * 60_000
@@ -142,8 +142,16 @@ export interface Overlay {
   /** The copy watcher (kind-follower.ts setCopyWatcher). */
   watching(kind: string): string[]
   stored(kind: string, keys: string[], asOf: number): void
-  /** A task row with every entry folded over it (null row: a task made here, or null). */
+  /**
+   * A task row with every entry folded over it (null row: a task made here, or null). The row a
+   * write reads for its bases (write-port.ts): the journal's values only.
+   */
   task(id: string, copyRow: Record<string, unknown> | null): Record<string, unknown> | null
+  /**
+   * The row a reader shows: `task`, plus the session this host started alone for a task whose
+   * create is still in its journal (task-row-fold.ts foldAwayStart). Never a write's base.
+   */
+  taskForReaders(id: string, copyRow: Record<string, unknown> | null): Record<string, unknown> | null
   /** The tasks made here that the copy does not hold yet. */
   createdTaskIds(): string[]
   /** Whether a create of this task is still in this host's journal (pending: the Mac has not taken it). */
@@ -309,6 +317,40 @@ export function createOverlay(deps: OverlayDeps): Overlay {
     return mark
   }
 
+  function createPendingOf(id: string): boolean {
+    for (const e of byOp.values()) if (e.kind === 'task-create' && e.state === 'pending' && e.record.taskId === id) return true
+    return false
+  }
+
+  /** A task row with every entry folded over it, and the given starts at their place in time. */
+  function foldTask(id: string, copyRow: Record<string, unknown> | null, starts: AwayStart[]): Record<string, unknown> | null {
+    const list = [...byOp].filter(([, e]) => { const k = keyed(e); return k?.kind === 'tasks' && k.id === id }).sort((a, b) => a[1].seq - b[1].seq)
+    if (!list.length && !starts.length) return copyRow
+    let row: Record<string, unknown> | null = copyRow ? { ...copyRow } : null
+    // A start folds where it happened among the records (a completion after it clears its slots,
+    // as the Mac's drain applies them in order), never before the row exists (its create).
+    let next = 0
+    const startsUntil = (t: number) => {
+      while (row && next < starts.length && starts[next]!.at <= t) row = foldAwayStart(row, starts[next++]!)
+    }
+    const released: Array<{ kind: OverlayKind; id: string }> = []
+    for (const [mapKey, e] of list) {
+      startsUntil(e.at - 1)
+      if (e.state === 'awaiting' && copyRow && shows(copyRow, e)) {
+        const r = release(mapKey, 'values')
+        if (r) released.push(r)
+        continue
+      }
+      // The journal fold (offline-merge/task-row-fold.ts).
+      row = foldTaskRecord(row, id, { ...e.record, kind: e.kind }, e.at, withValues)
+    }
+    startsUntil(Number.MAX_SAFE_INTEGER)
+    if (released.length) tell(released)
+    if (!row) return null
+    const mark = markOf('tasks', id)
+    return mark ? { ...row, replica_sync: mark } : row
+  }
+
   load()
 
   return {
@@ -359,52 +401,16 @@ export function createOverlay(deps: OverlayDeps): Overlay {
       }
       tell(changed)
     },
-    task(id, copyRow) {
-      const list = [...byOp].filter(([, e]) => { const k = keyed(e); return k?.kind === 'tasks' && k.id === id }).sort((a, b) => a[1].seq - b[1].seq)
+    task: (id, copyRow) => foldTask(id, copyRow, []),
+    taskForReaders(id, copyRow) {
+      // Only a task this host's journal still makes (the only kind a start alone is allowed for:
+      // away-starts.ts madeHere): once the Mac took its create, its row is the Mac's word.
+      if (!createPendingOf(id)) return foldTask(id, copyRow, [])
       let starts: AwayStart[] = []
       try { starts = (deps.awayStarts?.(id) ?? []).slice().sort((a, b) => a.at - b.at) } catch { /* none known */ }
-      if (!list.length && !starts.length) return copyRow
-      let row: Record<string, unknown> | null = copyRow ? { ...copyRow } : null
-      // When the row's phase last moved: a session's live turn folds over it only when newer.
-      let phaseAt = copyRow ? Date.parse(String(copyRow.phase_changed_at ?? '')) || 0 : 0
-      const step = (at: number, fold: (r: Record<string, unknown> | null) => Record<string, unknown> | null) => {
-        const before = row?.phase
-        row = fold(row)
-        if (row && row.phase !== before) phaseAt = at
-      }
-      // A start folds where it happened among the records, never before the row exists (its create).
-      let next = 0
-      const startsUntil = (t: number) => {
-        while (row && next < starts.length && starts[next]!.at <= t) {
-          const s = starts[next++]!
-          step(s.at, (r) => (r ? foldAwayStart(r, s, withValues) : r))
-        }
-      }
-      const released: Array<{ kind: OverlayKind; id: string }> = []
-      for (const [mapKey, e] of list) {
-        startsUntil(e.at - 1)
-        if (e.state === 'awaiting' && copyRow && shows(copyRow, e)) {
-          const r = release(mapKey, 'values')
-          if (r) released.push(r)
-          continue
-        }
-        // The journal fold (offline-merge/task-row-fold.ts).
-        step(e.at, (r) => foldTaskRecord(r, id, { ...e.record, kind: e.kind }, e.at, withValues))
-      }
-      startsUntil(Number.MAX_SAFE_INTEGER)
-      if (released.length) tell(released)
-      if (!row) return null
-      // The task's one session (its latest start): its live turn, by the Mac's session rules.
-      const live = starts.at(-1)
-      if (live) row = foldAwayTurn(row, live, phaseAt, withValues)
-      if (!list.length) return row
-      const mark = markOf('tasks', id)
-      return mark ? { ...row, replica_sync: mark } : row
+      return foldTask(id, copyRow, starts)
     },
-    createPending(id) {
-      for (const e of byOp.values()) if (e.kind === 'task-create' && e.state === 'pending' && e.record.taskId === id) return true
-      return false
-    },
+    createPending: (id) => createPendingOf(id),
     createdTaskIds() {
       const out: string[] = []
       for (const e of [...byOp.values()].sort((a, b) => a.seq - b.seq)) {

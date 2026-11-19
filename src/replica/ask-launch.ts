@@ -194,6 +194,8 @@ export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
   /** The look under way (one at a time), and when the last one was answered. */
   let looking: Promise<void> | null = null
   let lookedAt = 0
+  /** The last look failed (its warn is said once per outage). */
+  let lookFailing = false
 
   function startPoll(): void {
     if (timer) return
@@ -227,9 +229,12 @@ export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
    */
   async function lookOnce(): Promise<void> {
     rows()
+    // Stamped when asked, answered or not: a daemon that does not answer is asked at most once a
+    // second by readers, never once per read.
+    lookedAt = now()
     try {
       const r = await deps.request('follower.sessions', {}, POLL_TIMEOUT_MS)
-      lookedAt = now()
+      lookFailing = false
       const list = Array.isArray(r.sessions) ? r.sessions as Array<{ sid?: unknown; state?: unknown; lastActiveAt?: unknown; prompt?: unknown }> : []
       for (const s of list) {
         const sid = typeof s.sid === 'string' ? s.sid : ''
@@ -261,7 +266,9 @@ export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
         w.state = state
       }
     } catch (err) {
-      deps.log('warn', 'replica: the host sessions could not be read for the console', { error: err instanceof Error ? err.message : String(err) })
+      // Once per outage: the next answer resets it.
+      if (!lookFailing) deps.log('warn', 'replica: the host sessions could not be read for the console', { error: err instanceof Error ? err.message : String(err) })
+      lookFailing = true
     }
   }
 

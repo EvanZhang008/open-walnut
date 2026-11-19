@@ -80,12 +80,8 @@ export interface AwayWiringOptions {
 
 /** A session row this host started alone, as the reader fold takes it (task-row-fold.ts AwayStart). */
 export function awayStartOf(r: SessionRecord): AwayStart {
-  const ms = (v: unknown) => { const n = typeof v === 'string' ? Date.parse(v) : NaN; return Number.isFinite(n) ? n : undefined }
-  const activeAt = ms(r.lastActiveAt)
-  return {
-    sid: r.claudeSessionId, at: ms(r.startedAt) ?? 0, mode: r.mode, status: r.process_status,
-    ...(activeAt !== undefined ? { activeAt } : {}), ...(r.pendingPermission ? { prompt: true } : {}),
-  }
+  const at = typeof r.startedAt === 'string' ? Date.parse(r.startedAt) : NaN
+  return { sid: r.claudeSessionId, at: Number.isFinite(at) ? at : 0, mode: r.mode, status: r.process_status }
 }
 
 async function copyTask(id: string): Promise<TaskRow | null> {
@@ -114,7 +110,7 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
   const created = new Map<string, string>()
 
   // The sessions this host started alone, as the overlay folds them into their tasks' rows.
-  const { awaySessionsOfTask } = await import('../core/session-tracker.js')
+  const { awaySessionsOfTask, isAwaySession } = await import('../core/session-tracker.js')
   let sessionsFresh: (() => Promise<void>) | null = null
   const overlay: Overlay = createOverlay({
     awayStarts: (taskId) => awaySessionsOfTask(taskId).map(awayStartOf),
@@ -135,7 +131,7 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
       if (k.kind === 'tasks') {
         const crid = created.get(k.id)
         created.delete(k.id)
-        const row = overlay.task(k.id, await copyTask(k.id))
+        const row = overlay.taskForReaders(k.id, await copyTask(k.id))
         if (row && crid) opts.broadcast('task:created', { task: row, clientRequestId: crid })
         else if (row) opts.broadcast('task:updated', { task: { ...row, [SYNC_FIELD]: (row as Record<string, unknown>)[SYNC_FIELD] ?? null } })
       } else if (k.kind === 'boards') {
@@ -149,6 +145,8 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
   const { installJournalOverlay } = await import('./journal-overlay.js')
   installJournalOverlay(overlay)
 
+  // The row every write reads (the write port's bases, the away routes' checks): the journal's
+  // values only, never the session a reader is shown (overlay.ts taskForReaders).
   const shownTask = async (id: string): Promise<TaskRow | null> => {
     await overlay.refresh(500)
     return overlay.task(id, await copyTask(id)) as TaskRow | null
@@ -216,6 +214,7 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
   const reads = awayReads({
     overlay, answeredAway: (res: Response) => res.getHeader(ANSWERED_VIA_HEADER) === 'replica',
     fresh: () => sessionsFresh?.() ?? Promise.resolve(),
+    awayHere: (kind, id) => (kind === 'session' ? isAwaySession(id) : awaySessionsOfTask(id).length > 0),
     enrich: async (rows) => {
       const { enrichTasksWithSessionStatus } = await import('../web/routes/tasks.js')
       return await enrichTasksWithSessionStatus(rows as never) as unknown as typeof rows

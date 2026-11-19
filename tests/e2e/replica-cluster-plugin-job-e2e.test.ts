@@ -11,9 +11,11 @@
  *     task_get, task_history,    the task it started, read on its own host while the Mac is
  *     api sessions/task/<id>     away: its session linked as the Mac links it, execution
  *                                running while the turn runs (the mock CLI holds it until a
- *                                file exists), then idle and handed back; the conversation;
+ *                                file exists), then idle; the phase stays the journal's (TODO);
+ *                                the conversation;
  *                                the session record with its task, host, folder and status
- *     task_update tags           journaled, the job as actor
+ *     task_update tags, phase    journaled, the job as actor, with the journal's own phase as
+ *                                its base (never a reader's view of the session)
  *     task_send to that task     delivered to its session on the host, and in its history
  *   the plugin keeps its tasks to its own view (`taskVisibility: "plugin"`): the replica, which
  *   loads no manifest, has the Mac's word for it (its spec's settings), so the task is absent
@@ -83,6 +85,20 @@ function jobDir(c: ReplicaCluster): string | null {
     return null
   }
   return walk(path.join(c.base, 'hd'), 6)
+}
+
+/** Every entry of the Mac's drain conflict logs (core/offline-merge/conflict-log.ts). */
+function macConflicts(c: ReplicaCluster): Array<Record<string, any>> {
+  const dir = path.join(c.macData, 'offline-conflicts')
+  const out: Array<Record<string, any>> = []
+  let names: string[] = []
+  try { names = fs.readdirSync(dir) } catch { return out }
+  for (const n of names) {
+    const text = fs.readFileSync(path.join(dir, n), 'utf8')
+    if (n.endsWith('.json')) { try { out.push(...((JSON.parse(text) as { entries?: Array<Record<string, any>> }).entries ?? [])) } catch { /* partial */ } }
+    else for (const line of text.split('\n')) { try { const o = JSON.parse(line) as Record<string, any>; if (o && typeof o === 'object') out.push(o) } catch { /* partial */ } }
+  }
+  return out
 }
 
 /** The session fields of a task row (the link a start writes: task-session-link.ts). */
@@ -169,7 +185,8 @@ describe.each(TWINS)('a plugin job\'s walnut calls on its host while the Mac is 
       got = await jobCall(dir, 'task_get', { id: taskId })
       return got.ok && got.result.task?.execution?.state === 'running' ? true : null
     }, 60_000, 'task_get to say the turn runs').catch((e: Error) => { e.message += ` (task_get: ${JSON.stringify(got).slice(0, 1500)})`; throw e })
-    expect(got.result.task).toMatchObject({ id: taskId, phase: 'IN_PROGRESS', plugin_only: 'acme-sync' })
+    // The phase is the journal's until the Mac returns (its drain does not replay a start's phase).
+    expect(got.result.task).toMatchObject({ id: taskId, phase: 'TODO', plugin_only: 'acme-sync' })
     const raw = await jobCall(dir, 'api', { method: 'GET', path: `/api/tasks/${taskId}` })
     expect(raw.ok, JSON.stringify(raw)).toBe(true)
     // Linked as the Mac links a start (linkSessionSlot, then linkSession): one session, the exec slot.
@@ -178,14 +195,14 @@ describe.each(TWINS)('a plugin job\'s walnut calls on its host while the Mac is 
     expect(bySession.ok, JSON.stringify(bySession)).toBe(true)
     expect(bySession.result.sessions).toEqual([expect.objectContaining({ claudeSessionId: startedSid, taskId, host: 'devbox', cwd: hostCwd, process_status: 'running' })])
 
-    // The turn ends: idle, handed back, as the Mac's session rules give it.
+    // The turn ends: idle; the phase still the journal's.
     fs.writeFileSync(release, 'go')
     await waitFor(() => hostStream(c, startedSid).some((l) => l.type === 'result'), 120_000, 'the started session to answer')
     await waitFor(async () => {
       got = await jobCall(dir, 'task_get', { id: taskId })
       return got.ok && got.result.task?.execution?.state === 'idle' ? true : null
     }, 60_000, 'task_get to say the turn ended').catch((e: Error) => { e.message += ` (task_get: ${JSON.stringify(got).slice(0, 1500)})`; throw e })
-    expect(got.result.task).toMatchObject({ phase: 'NEED_ACTION' })
+    expect(got.result.task).toMatchObject({ phase: 'TODO' })
     const ended = await jobCall(dir, 'api', { method: 'GET', path: `/api/sessions/task/${taskId}` })
     expect(ended.result.sessions).toEqual([expect.objectContaining({ claudeSessionId: startedSid, process_status: 'idle' })])
     const first = await jobCall(dir, 'task_history', { id: taskId })
@@ -195,6 +212,12 @@ describe.each(TWINS)('a plugin job\'s walnut calls on its host while the Mac is 
 
     const tagged = await jobCall(dir, 'task_update', { id: taskId, tags: ['source:acme'] })
     expect(tagged.ok, JSON.stringify(tagged)).toBe(true)
+    // A phase set on the host after the start: its base is the journal's phase, so the Mac takes it.
+    const handed = await jobCall(dir, 'task_update', { id: taskId, phase: 'NEED_ACTION' })
+    expect(handed.ok, JSON.stringify(handed)).toBe(true)
+    const phaseWrite = hostJournal(c).find((r) => r.kind === 'task-fields' && r.taskId === taskId && r.fields?.phase)
+    expect(phaseWrite?.fields?.phase).toMatchObject({ base: 'TODO', value: 'NEED_ACTION' })
+    expect(Object.keys(phaseWrite?.fields ?? {}).filter((k) => k.includes('session'))).toEqual([])
     const fields = hostJournal(c).find((r) => r.kind === 'task-fields' && r.taskId === taskId)
     expect(fields?.actor).toEqual(JOB)
 
@@ -249,6 +272,10 @@ describe.each(TWINS)('a plugin job\'s walnut calls on its host while the Mac is 
       leaderLink = r.status === 200 ? pickLink((r.json as { task?: Record<string, unknown> }).task ?? {}) : {}
       return JSON.stringify(leaderLink) === JSON.stringify(awayLink) ? true : null
     }, 60_000, 'the Mac\'s row to link the session as the host showed it').catch((e: Error) => { e.message += ` (the Mac: ${JSON.stringify(leaderLink)}, the host: ${JSON.stringify(awayLink)})`; throw e })
+    // The phase the job set on the host is the Mac's too, with no conflict about it.
+    const row = await c.mac('GET', `/api/tasks/${taskId}`)
+    expect((row.json as { task?: { phase?: string } }).task?.phase).toBe('NEED_ACTION')
+    expect(macConflicts(c).filter((e) => e.taskId === taskId)).toEqual([])
     // Made by the journal's create, the job's (its op id), never by a second create; kept to the plugin.
     expect(createOp).not.toBe('')
     expect(String(first.tasks[0]!.payload ?? '')).toContain(createOp)

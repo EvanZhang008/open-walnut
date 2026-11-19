@@ -27,9 +27,11 @@ function overlayOf(): Overlay {
     'mtask-open-1': { actor: OTHER_JOB, fields: { title: 'Feed the pier list' }, placement: { project: 'Acme' } },
   }
   const withValues = (row: Record<string, unknown>, values: Record<string, unknown>) => ({ ...row, ...values })
+  const task = (id: string, row: Record<string, unknown> | null) => (recs[id] ? foldTaskRecord(row, id, { kind: 'task-create', ...recs[id]! }, T0, withValues) : row)
   return {
     createdTaskIds: () => Object.keys(recs),
-    task: (id: string, row: Record<string, unknown> | null) => (recs[id] ? foldTaskRecord(row, id, { kind: 'task-create', ...recs[id]! }, T0, withValues) : row),
+    task,
+    taskForReaders: task,
     entries: () => Object.entries(recs).map(([taskId, r], i) => ({ opId: `op-${i}`, seq: i + 1, rev: 1, kind: 'task-create', at: T0, state: 'pending', record: { kind: 'task-create', taskId, ...r } })),
   } as unknown as Overlay
 }

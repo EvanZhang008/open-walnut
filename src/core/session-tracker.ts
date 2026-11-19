@@ -635,6 +635,13 @@ export function awaySessionsOfTask(taskId: string): SessionRecord[] {
   return mine.filter((r) => !held?.get(r.claudeSessionId)).map((r) => ({ ...r }));
 }
 
+/** Whether `sid` is a session a host replica started alone that its sessions copy does not hold yet. */
+export function isAwaySession(sid: string): boolean {
+  if (!awaySessionRows || !sid) return false;
+  if (!awayRows().some((r) => r.claudeSessionId === sid)) return false;
+  return !getDb()?.prepare('SELECT 1 FROM sessions WHERE claude_session_id = ?').get(sid);
+}
+
 export async function listSessions(): Promise<SessionRecord[]> {
   const store = await readStore();
   return awaySessionRows ? withAway(store.sessions) : store.sessions;

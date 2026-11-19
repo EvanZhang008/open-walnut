@@ -3,8 +3,10 @@
  * it while the Mac is away when the task was made on this host or its session runs here
  * (docs/plan/one-service-every-host.md, "Phase 1 as built"). The ratchet in
  * tests/replica/route-table-coverage.test.ts walks the real app: a new GET route under
- * /api/tasks, /api/v1/tasks, /api/sessions or /api/v1/sessions with an id in its path (and the
- * task lists) fails it until a row here decides it.
+ * /api/tasks, /api/v1/tasks, /api/sessions or /api/v1/sessions fails it until a row here decides
+ * it. A `leader` row answers with its route table row's why, or (MADE_HERE) with
+ * task_made_here_needs_mac, which tests/replica/away-task-made-here-reads.test.ts calls on the
+ * real routes.
  *
  *   host       answered on this host, in the shape the leader gives
  *   leader     a clean 503 needs_leader with its why (never a wrong "not found" or "unknown")
@@ -14,7 +16,7 @@
 export type AwayTaskReadDecision = { answer: 'host' | 'leader' | 'unchanged'; why: string }
 
 const ROW = 'the copy row with the journal and the session started here folded in (overlay.ts, task-row-fold.ts)'
-const MADE_HERE = 'a task made here that its route cannot find: 503 task_made_here_needs_mac (away-reads.ts); a task of the copy: its route as before'
+export const MADE_HERE = 'a task made here that its route cannot find: 503 task_made_here_needs_mac (away-reads.ts); a task of the copy: its route as before'
 const RECORD = 'the session record: the copy, or this replica\'s row of a session it started (session-tracker.ts installAwaySessions), its live state read first (away-reads.ts, ask-launch.ts fresh)'
 const SELF_HOST = 'a session of this host: its daemon through the follower link (self-host.ts, WP6), or its stream file for an older daemon (away-session-reads.ts); a session elsewhere: needs_leader session_on_mac'
 const HOST_DAEMON = 'a session of this host: a local route row (route-table.ts, local: session) read through its daemon on the follower link (self-host.ts, WP6); with an older daemon, needs_leader session_files_need_mac (away-session-reads.ts)'
@@ -28,6 +30,7 @@ export const AWAY_TASK_READS: Readonly<Record<string, AwayTaskReadDecision>> = {
   'GET /api/tasks/:id': { answer: 'host', why: `task_get: ${ROW}, with the Mac's session enrichment (execution running, idle, waiting)` },
   'GET /api/tasks/:id/pull-requests': { answer: 'leader', why: MADE_HERE },
   'GET /api/tasks/:id/changes': { answer: 'leader', why: MADE_HERE },
+  // With the change-status experiment off it answers 409 disabled for every task, before any lookup.
   'GET /api/tasks/:id/changes/stage': { answer: 'leader', why: MADE_HERE },
   'GET /api/v1/tasks': { answer: 'host', why: `the phone's list: ${ROW}` },
   'GET /api/v1/tasks/:id': { answer: 'host', why: `task_history's task read and the phone's detail: ${ROW} (no enrichment, as the Mac's v1 route)` },
@@ -46,6 +49,35 @@ export const AWAY_TASK_READS: Readonly<Record<string, AwayTaskReadDecision>> = {
   'GET /api/v1/tasks/:id/threads': { answer: 'leader', why: MADE_HERE },
   'GET /api/v1/tasks/:id/threads/:thread': { answer: 'leader', why: MADE_HERE },
   'GET /api/v1/tasks/:id/transfer-options': { answer: 'leader', why: MADE_HERE },
+  // ── Task lists and aggregates ──
+  'GET /api/tasks/enriched': { answer: 'host', why: `the console's enriched list: ${ROW}; the Mac's route adds no session enrichment here either` },
+  'GET /api/v1/tasks/enriched': { answer: 'unchanged', why: 'the copy\'s tasks only: a task made here is not in it until the Mac has it' },
+  'GET /api/tasks/groups': { answer: 'unchanged', why: 'folders from the copy' },
+  'GET /api/v1/tasks/groups': { answer: 'unchanged', why: 'folders from the copy' },
+  'GET /api/tasks/meta/tags': { answer: 'unchanged', why: 'tag counts from the copy\'s tasks' },
+  'GET /api/v1/tasks/meta/tags': { answer: 'unchanged', why: 'tag counts from the copy\'s tasks' },
+  'GET /api/v1/tasks/meta/tag-display': { answer: 'unchanged', why: 'tag display settings from the config copy' },
+  'GET /api/tasks/meta/sprints': { answer: 'unchanged', why: 'sprint counts from the copy\'s tasks' },
+  'GET /api/v1/tasks/meta/sprints': { answer: 'unchanged', why: 'sprint counts from the copy\'s tasks' },
+  'GET /api/tasks/suggest-accuracy': { answer: 'unchanged', why: 'the suggestion record of this replica\'s own store' },
+  'GET /api/tasks/board-counts': { answer: 'unchanged', why: 'tier counts from the copy\'s tasks' },
+  // ── Session lists ──
+  'GET /api/sessions': { answer: 'unchanged', why: 'the sessions list from the copy and this replica\'s rows (session-tracker.ts withAway), as before' },
+  'GET /api/v1/sessions': { answer: 'unchanged', why: 'the phone\'s sessions list from the copy, as before' },
+  'GET /api/sessions/recent': { answer: 'unchanged', why: 'recent sessions from the copy, as before' },
+  'GET /api/v1/sessions/recent': { answer: 'unchanged', why: 'recent sessions from the copy, as before' },
+  'GET /api/sessions/summaries': { answer: 'unchanged', why: 'session summaries from the copy, as before' },
+  'GET /api/v1/sessions/summaries': { answer: 'unchanged', why: 'session summaries from the copy, as before' },
+  'GET /api/sessions/status': { answer: 'unchanged', why: 'session statuses from the copy and this replica\'s rows, as before' },
+  'GET /api/sessions/mention-index': { answer: 'unchanged', why: 'the mention index from the copy, as before' },
+  'GET /api/sessions/live-activity': { answer: 'unchanged', why: 'this replica\'s own live activity registry, as before' },
+  'GET /api/sessions/working-dirs': { answer: 'unchanged', why: 'working folders from the copy\'s sessions, as before' },
+  'GET /api/sessions/git-status': { answer: 'unchanged', why: 'git glances through each session\'s host, as before' },
+  'GET /api/sessions/host-model-catalogs': { answer: 'unchanged', why: 'model catalogs from the config copy, as before' },
+  'GET /api/sessions/ask-walnut-launch': { answer: 'unchanged', why: 'the Ask Walnut launch picks from the copies, as before' },
+  'GET /api/v1/sessions/launch-options': { answer: 'unchanged', why: 'launch options from the config copy, as before' },
+  'GET /api/sessions/list-dirs': { answer: 'leader', why: 'route-table.ts needs_leader files_need_mac' },
+  'GET /api/v1/sessions/list-dirs': { answer: 'leader', why: 'route-table.ts needs_leader files_need_mac' },
   // ── Sessions: the record, the conversation ──
   'GET /api/sessions/task/:taskId': { answer: 'host', why: `the sessions of a task: ${RECORD}` },
   'GET /api/sessions/:sessionId': { answer: 'host', why: RECORD },

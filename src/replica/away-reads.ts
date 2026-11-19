@@ -54,6 +54,8 @@ export interface AwayReadsDeps {
   refreshWaitMs?: number
   /** The live state of the sessions this host started alone (ask-launch.ts fresh); absent: as last known. */
   fresh?(): Promise<void>
+  /** Whether a session (by id), or a task (by id) through one of its sessions, is one this replica started alone and the copy does not hold. */
+  awayHere?(kind: 'session' | 'task', id: string): boolean
   /** The Mac's session enrichment of task rows (tasks.ts enrichTasksWithSessionStatus); absent: rows as folded. */
   enrich?(rows: Row[]): Promise<Row[]>
   /** The sessions a task held, as the Mac's route answers them (engine-switch-v1.ts taskSessionsAnswer). */
@@ -100,7 +102,7 @@ export function overlayList(req: Request, rows: Row[], overlay: Overlay): Row[] 
   for (const r of rows) {
     if (!r || typeof r.id !== 'string') { out.push(r); continue }
     seen.add(r.id)
-    const folded = overlay.task(r.id, r) as Row | null
+    const folded = overlay.taskForReaders(r.id, r) as Row | null
     out.push(folded ?? r)
   }
   // A plugin's own task (Task.plugin_only) is in no general list, as on the Mac (tasks.ts
@@ -108,7 +110,7 @@ export function overlayList(req: Request, rows: Row[], overlay: Overlay): Row[] 
   const keptShown = req.path !== '/v1/tasks' && q(req, 'ids') !== undefined
   for (const id of overlay.createdTaskIds()) {
     if (seen.has(id)) continue
-    const row = overlay.task(id, null) as Row | null
+    const row = overlay.taskForReaders(id, null) as Row | null
     if (row && row.plugin_only && !keptShown) continue
     if (row && createdMatches(req, row)) { out.unshift(row); seen.add(id) }
   }
@@ -240,12 +242,12 @@ export function overlayBulk(body: Record<string, unknown>, overlay: Overlay, pro
     const id = typeof item?.id === 'string' ? item.id : ''
     if (!id) return item
     if (typeof item.error === 'string') {
-      const made = item.error === 'not found' ? overlay.task(id, null) as Row | null : null
+      const made = item.error === 'not found' ? overlay.taskForReaders(id, null) as Row | null : null
       if (!made) { errors++; return item }
       const mark = made[SYNC_FIELD]
       return { ...project(made, fields), ...(mark ? { [SYNC_FIELD]: mark } : {}) }
     }
-    const folded = overlay.task(id, item as Row)
+    const folded = overlay.taskForReaders(id, item as Row)
     if (!folded || folded === item) return item
     const out: Record<string, unknown> = {}
     for (const k of Object.keys(item)) out[k] = folded[k]
@@ -264,8 +266,10 @@ const BULK_PATH = '/tasks/bulk'
 const SESSIONS_RE = /^\/v1\/tasks\/([^/]+)\/sessions$/
 /** Any other read of one task: a task made here that its route cannot find needs the Mac (a 404 would say it does not exist). */
 const SUB_RE = /^\/(?:v1\/)?tasks\/([^/]+)\/(?!board(?:\/|$)).+$/
-/** A session's record and a task's session list, by id (not a session's own data: away-session-reads.ts). */
-const SESSION_RECORD_RE = /^\/(?:v1\/)?sessions\/(?:task\/)?[^/]+$/
+/** A session's record, by id (not a session's own data: away-session-reads.ts), and a task's session list. */
+const SESSION_RECORD_RE = /^\/(?:v1\/)?sessions\/([^/]+)$/
+const TASK_SESSIONS_RE = /^\/sessions\/task\/([^/]+)$/
+const decodeOr = (s: string) => { try { return decodeURIComponent(s) } catch { return s } }
 /** Collection paths the one-task patterns would take for an id. */
 const NOT_IDS = new Set(['enriched', 'bulk', 'groups', 'board-counts', 'meta', 'suggest-accuracy', 'reorder'])
 /** The reads whose Mac route enriches its rows with their sessions' status (tasks.ts). */
@@ -288,11 +292,17 @@ export function awayReads(deps: AwayReadsDeps): RequestHandler {
   return (req: Request, res: Response, next: NextFunction): void => {
     if (req.method !== 'GET' || !deps.answeredAway(res)) { next(); return }
     const path = req.path
-    // A session's record or a task's sessions (sessions.ts, session-lifecycle-v1.ts): the rows of
-    // the sessions started here take their live state first; the route answers as it does.
-    if (SESSION_RECORD_RE.test(path)) {
+    // The record of a session this replica started alone, or the sessions of a task with one
+    // (sessions.ts, session-lifecycle-v1.ts): its live state first, then the route answers as it
+    // does. Any other session read answers at once.
+    const taskSessions = TASK_SESSIONS_RE.exec(path)
+    const record = taskSessions ? null : SESSION_RECORD_RE.exec(path)
+    if (taskSessions || record) {
+      const id = (taskSessions ?? record)![1]!
+      const ours = taskSessions ? deps.awayHere?.('task', decodeOr(id)) : deps.awayHere?.('session', decodeOr(id))
+      if (!ours || !deps.fresh) { next(); return }
       const t = new Promise<void>((r) => { const h = setTimeout(r, waitMs); h.unref?.() })
-      void Promise.race([deps.fresh?.().catch(() => {}), t]).then(() => next(), () => next())
+      void Promise.race([deps.fresh().catch(() => {}), t]).then(() => next(), () => next())
       return
     }
     const bulk = path === BULK_PATH
@@ -338,7 +348,7 @@ export function awayReads(deps: AwayReadsDeps): RequestHandler {
           }
           if (focus) return json(res.statusCode < 300 ? overlayTiers(out, deps.overlay) : out)
           // A task made here is not in the copy its route reads: answered from the overlay, or the Mac's.
-          const made = idOf && res.statusCode === 404 ? deps.overlay.task(decode(idOf[1]!), null) as Row | null : null
+          const made = idOf && res.statusCode === 404 ? deps.overlay.taskForReaders(decode(idOf[1]!), null) as Row | null : null
           if (sessionsHit) {
             if (!made || !deps.taskSessions) return json(out)
             res.status(200)
@@ -357,7 +367,7 @@ export function awayReads(deps: AwayReadsDeps): RequestHandler {
               res.status(200)
               return sendEnriched([made], (e) => ({ task: e[0] ?? made }), { task: made })
             }
-            if (out.task && typeof out.task === 'object') out.task = deps.overlay.task(id, out.task as Row) ?? out.task
+            if (out.task && typeof out.task === 'object') out.task = deps.overlay.taskForReaders(id, out.task as Row) ?? out.task
             return json(out)
           }
           if (Array.isArray(out.tasks)) {

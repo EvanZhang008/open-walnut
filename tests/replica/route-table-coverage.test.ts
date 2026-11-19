@@ -24,7 +24,7 @@ import { useHostReplicaEnv, type HostReplicaEnv } from '../helpers/replica-host-
 import { installMountRecorder, walkRoutes, type WalkedRoute } from '../helpers/express-route-walk.js'
 import { classify, journals, patternMatches, ROUTE_TABLE } from '../../src/replica/route-table.js'
 import { WS_RPC_TABLE } from '../../src/replica/ws-rpc-table.js'
-import { AWAY_TASK_READS } from './away-task-reads-table.js'
+import { AWAY_TASK_READS, MADE_HERE } from './away-task-reads-table.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-replica-routes'))
 
@@ -116,11 +116,9 @@ describe('the route table against the real app', () => {
   })
 })
 
-/** A read of one task or one session (an id in its path), or a task list a caller follows its work with. */
+/** A read of tasks or sessions: one by id, a list, or an aggregate of them. */
 function taskOrSessionRead(r: WalkedRoute): boolean {
-  if (r.method !== 'GET') return false
-  if (['/api/tasks', '/api/tasks/bulk', '/api/v1/tasks'].includes(r.path)) return true
-  return /^\/api\/(v1\/)?(tasks|sessions)\/.*:/.test(r.path)
+  return r.method === 'GET' && /^\/api\/(v1\/)?(tasks|sessions)(\/|$)/.test(r.path)
 }
 
 describe('the reads of a task and its sessions while the Mac is away', () => {
@@ -130,6 +128,16 @@ describe('the reads of a task and its sessions while the Mac is away', () => {
     expect(walked.filter((k) => !(k in AWAY_TASK_READS)), 'a new read of a task or a session: decide it in tests/replica/away-task-reads-table.ts').toEqual([])
     expect(Object.keys(AWAY_TASK_READS).filter((k) => !walked.includes(k)).sort(), 'a row for a route the app no longer serves').toEqual([])
     for (const [k, d] of Object.entries(AWAY_TASK_READS)) expect(d.why.length, k).toBeGreaterThan(20)
+  })
+
+  it('a leader row that is not a task made here is a needs-leader row of the route table, with the why it says', () => {
+    for (const [k, d] of Object.entries(AWAY_TASK_READS)) {
+      if (d.answer !== 'leader' || d.why === MADE_HERE) continue
+      const [method, p] = k.split(' ') as [string, string]
+      const c = classify(method, p.replace(/:[A-Za-z]+/g, 'x1'))
+      expect(c.away, k).toBe('needs-leader')
+      expect(d.why, k).toContain(String(c.why))
+    }
   })
 
   it('the reads a caller follows a task it started with are answered on its host', () => {

@@ -272,19 +272,20 @@ permission prompts still name Walnut.
   session id derived from the op id so a retry starts nothing twice, one start of a task at a time (a second
   hears the leader's 409 `session_exists`), and at most as many live sessions as this machine's memory allows.
 - **A caller follows what it started.** While the leader is away, a session's or a plugin job's reads of a
-  task its host started alone answer from that host, in the leader's shape: `task_get`, `task_list` and
+  task its host started alone answer from that host, in the leader's shape. `task_get`, `task_list` and
   `task_get_bulk` show the task's session linked as the leader links it (`session_id`, `session_ids`, the
-  slot by mode: `core/sessions/task-session-link.ts`, one rule for the leader's link and the host's fold),
-  `execution` from the session's live state (one `follower.sessions` read, shared and at most a second
-  old: `ask-launch.ts` `fresh`, then the leader's own session enrichment), and the phase the leader's
-  session rules give its turns (`phase.ts`; the leader moves it through the session's events, never a
-  journal record, so the host folds the same rules at the session's place in time among the records:
-  `task-row-fold.ts` `foldAwayStart`, `foldAwayTurn`). `task_history` reads the conversation on the host,
-  messages a `task_send` delivered there included, and `GET /api/sessions/task/:id` lists the session with
-  its host, folder and live status. Any other read of such a task that its route cannot find answers
-  `needs_leader` (`task_made_here_needs_mac`), never "not found". Nothing new is journaled and the drain is
-  unchanged: after it, the leader's row names the same session in the same slot. Every read of a task or a
-  session has a decision in `tests/replica/away-task-reads-table.ts`, which the route ratchet holds.
+  slot by mode, no slot once the session stopped: `core/sessions/task-session-link.ts`, one rule for the
+  leader's link and the host's fold), and `execution` from the session's live state (one
+  `follower.sessions` read at most a second old, shared and backed off when the daemon does not answer:
+  `ask-launch.ts` `fresh`; then the leader's own session enrichment). `task_history` reads the conversation
+  on the host, messages a `task_send` delivered there included, and `GET /api/sessions/task/:id` lists the
+  session with its host, folder and live status. The session is folded for readers only and only while the
+  task's create is still in the host's journal and its row names no session (`overlay.ts`
+  `taskForReaders`); a write's base is the journal's row without it. The phase is the journal's (TODO, or a
+  phase a caller on the host set) until the leader returns, and the leader shows the same after the drain,
+  which adopts the session without replaying a start's phase. Any other read of such a task that its route
+  cannot find answers `needs_leader` (`task_made_here_needs_mac`), never "not found". Every read of tasks or
+  sessions has a decision in `tests/replica/away-task-reads-table.ts`, which the route ratchet holds.
 - **The leader's side.** A plugin job is an actor of the journal; a task's session started on the host is
   adopted by the `task-start` drain; a task made away lands where the same caller's create lands online. A
   session record the leader does not take is a refusal into the letter, never a retry that holds the host's
@@ -333,6 +334,8 @@ permission prompts still name Walnut.
   followers that ran only by default and leaves their files on the host.
 - **Not yet.** The host's Settings switch reads on for a host on by default and does not yet say that it
   follows the default (the fleet view carries `byDefault` for it).
+- **Not yet.** A task started alone whose turn ended still reads TODO on the leader after the drain until
+  its next turn (the drain adopts the session, it does not replay the start's phase).
 - **Turned down: starting a task made on the leader alone.** Where such a task starts needs the leader's whole
   placement rule: the caller, the task's ancestors, its workspaces and the folders on the leader's disks. A
   second copy of that rule on the follower was wrong twice in review, so such a start keeps answering

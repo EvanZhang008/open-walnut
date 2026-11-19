@@ -1,12 +1,12 @@
 /**
  * A task whose session this host started alone while the Mac is away, as every reader of the
- * task sees it on the host (the overlay's fold: task-row-fold.ts foldAwayStart / foldAwayTurn,
+ * task sees it on the host (the overlay's fold: task-row-fold.ts foldAwayStart,
  * overlay.ts; the reads: away-reads.ts; the live state: ask-launch.ts fresh):
  *   - the task names its session the way the Mac links it (task-session-link.ts, the one rule
  *     linkSessionSlot and the drain's linkAdopted use): session_id, session_ids, the slot by mode;
- *   - its phase follows the Mac's session rules (phase.ts) at the session's place in time among
- *     the journal's records: a start or a running turn IN_PROGRESS, a turn that ended or a
- *     prompt NEED_ACTION, and a later phase write of its own (a task_update, a completion) stays;
+ *     only while its create is still in this host's journal and the row names no session, and
+ *     only for readers: a write's base is the journal's row (its phase TODO, no session field);
+ *   - the phase stays the journal's (the Mac's drain does not replay a start's phase);
  *   - a row only the overlay holds gets the Mac's session enrichment where the Mac's route gives
  *     it (GET /tasks/:id, GET /tasks), so task_get's execution reads running / idle;
  *   - task_get_bulk projects a task made here instead of "not found".
@@ -21,95 +21,133 @@ import { pointTaskAtSession } from '../../src/core/sessions/task-session-link.js
 import { taskExecution } from '../../src/ops/task-execution.js'
 import { createAskLaunch, hostSessionStatus, type AskLaunchDeps } from '../../src/replica/ask-launch.js'
 import { bulkGetFromTasks } from '../../src/core/task-bulk-get.js'
+import { createWritePort } from '../../src/replica/write-port.js'
+import type { ReplicaWrite } from '../../src/replica/dispatch.js'
 
 const T0 = Date.parse('2026-11-19T09:00:00Z')
 const TASK = 'mwo1jjmq-0011aa22bb33cc44'
 const SID = 'eeeeeeee-5555-4555-8555-000000000005'
 const JOB = { kind: 'plugin-job', plugin: 'acme-sync', job: 'worker' }
 
-/** An overlay over the journal records given, with this host's started sessions. */
+/** An overlay over the journal records given (a mutable list: the Mac may take some), with this host's started sessions. */
 function overlayWith(records: Array<Record<string, unknown>>, starts: () => AwayStart[]): Overlay {
-  const o = createOverlay({
-    fetchPending: async () => ({ records, nextSeq: records.length + 1 }),
+  return createOverlay({
+    fetchPending: async () => ({ records: [...records], nextSeq: 100 }),
     now: () => T0 + 60_000,
     awayStarts: (id) => (id === TASK ? starts() : []),
   })
-  return o
 }
 
 const create = { seq: 1, opId: 'op-create', kind: 'task-create', taskId: TASK, at: T0, actor: JOB, fields: { title: 'Import the venue rows' }, placement: { project: 'Acme' } }
-const fields = (seq: number, at: number, values: Record<string, unknown>) => ({
-  seq, opId: `op-fields-${seq}`, kind: 'task-fields', taskId: TASK, at, actor: JOB,
-  fields: Object.fromEntries(Object.entries(values).map(([k, v]) => [k, { value: v }])),
-})
 const complete = (seq: number, at: number) => ({ seq, opId: `op-complete-${seq}`, kind: 'op', op: 'task_complete', args: { id: TASK }, at, actor: JOB })
+const SESSION_KEYS = ['session_id', 'session_ids', 'exec_session_id', 'plan_session_id', 'session_status', 'exec_session_status']
 
-describe('the overlay folds a session this host started alone into its task', () => {
-  it('links it as the Mac links it, and its phase follows the turn', async () => {
-    let live: AwayStart = { sid: SID, at: T0 + 1_000, mode: 'default', status: 'running', activeAt: T0 + 1_000 }
-    const o = overlayWith([create], () => [live])
+describe('the overlay folds a session this host started alone into its task, for readers only', () => {
+  it('links it as the Mac links it; the phase and the row\'s times stay the journal\'s', async () => {
+    const o = overlayWith([create], () => [{ sid: SID, at: T0 + 1_000, mode: 'default', status: 'running' }])
     await o.refresh()
-    const started = o.task(TASK, null)!
+    const shown = o.taskForReaders(TASK, null)!
     // The Mac's link (linkSessionSlot then linkSession): one session, the exec slot.
     const mac: Record<string, unknown> = {}
     pointTaskAtSession(mac, SID, 'exec')
-    expect(started).toMatchObject({ ...mac, phase: 'IN_PROGRESS', status: 'in_progress', replica_sync: 'pending', last_session_update: new Date(T0 + 1_000).toISOString() })
-    expect(started).toMatchObject({ session_id: SID, session_ids: [SID], exec_session_id: SID })
-    expect(started).not.toHaveProperty('plan_session_id')
-    // The turn ended: handed back, as the Mac's session:result.
-    live = { ...live, status: 'idle', activeAt: T0 + 8_000 }
-    expect(o.task(TASK, null)).toMatchObject({ phase: 'NEED_ACTION', unread: true, session_id: SID })
-    // A prompt waiting for a person hands it back even while the turn runs.
-    live = { ...live, status: 'running', prompt: true, activeAt: T0 + 9_000 }
-    expect(o.task(TASK, null)).toMatchObject({ phase: 'NEED_ACTION' })
+    expect(shown).toMatchObject({ ...mac, phase: 'TODO', status: 'todo', replica_sync: 'pending' })
+    expect(shown).not.toHaveProperty('plan_session_id')
+    expect(shown).not.toHaveProperty('last_session_update')
+    expect(shown.updated_at).toBe(new Date(T0).toISOString())
+    // The row a write reads has none of it.
+    const base = o.task(TASK, null)!
+    for (const k of SESSION_KEYS) expect(base, k).not.toHaveProperty(k)
     o.close()
   })
 
-  it('a phase write after the turn stays; a new turn after it pulls the task back to work', async () => {
-    let live: AwayStart = { sid: SID, at: T0 + 1_000, status: 'idle', activeAt: T0 + 5_000 }
-    const o = overlayWith([create, fields(2, T0 + 10_000, { phase: 'TODO', tags: ['source:acme'] })], () => [live])
-    await o.refresh()
-    expect(o.task(TASK, null)).toMatchObject({ phase: 'TODO', tags: ['source:acme'], session_id: SID })
-    live = { ...live, status: 'running', activeAt: T0 + 20_000 }
-    expect(o.task(TASK, null)).toMatchObject({ phase: 'IN_PROGRESS' })
-    o.close()
+  it('a stopped or errored session keeps session_id and session_ids, and no slot, as the Mac\'s clearSessionSlot', async () => {
+    for (const status of ['stopped', 'error']) {
+      const o = overlayWith([create], () => [{ sid: SID, at: T0 + 1_000, mode: 'default', status }])
+      await o.refresh()
+      const row = o.taskForReaders(TASK, null)!
+      expect(row, status).toMatchObject({ session_id: SID, session_ids: [SID] })
+      expect(row, status).not.toHaveProperty('exec_session_id')
+      expect(row, status).not.toHaveProperty('plan_session_id')
+      o.close()
+    }
+    const idle = overlayWith([create], () => [{ sid: SID, at: T0 + 1_000, mode: 'plan', status: 'idle' }])
+    await idle.refresh()
+    expect(idle.taskForReaders(TASK, null)).toMatchObject({ session_id: SID, plan_session_id: SID })
+    idle.close()
   })
 
-  it('a completion after the start clears the slots as the Mac\'s does, keeps the list, and a later idle never reopens it', async () => {
-    const o = overlayWith([create, complete(2, T0 + 3_000)], () => [{ sid: SID, at: T0 + 1_000, status: 'idle', activeAt: T0 + 6_000 }])
+  it('a completion after the start clears the slots as the Mac\'s drain does, in order, and keeps the list', async () => {
+    const o = overlayWith([create, complete(2, T0 + 3_000)], () => [{ sid: SID, at: T0 + 1_000, status: 'idle' }])
     await o.refresh()
-    const row = o.task(TASK, null)!
+    const row = o.taskForReaders(TASK, null)!
     expect(row).toMatchObject({ phase: 'COMPLETE', session_ids: [SID] })
     expect(row.session_id).toBeUndefined()
     expect(row.exec_session_id).toBeUndefined()
     o.close()
   })
 
-  it('a plan-mode session takes the plan slot; a task with no session of this host is left as it was', async () => {
-    const o = overlayWith([create], () => [{ sid: SID, at: T0 + 1_000, mode: 'plan', status: 'running' }])
+  it('once the Mac took the create, its row is its word: never folded over', async () => {
+    const records: Array<Record<string, unknown>> = [create]
+    const o = overlayWith(records, () => [{ sid: SID, at: T0 + 1_000, status: 'idle' }])
     await o.refresh()
-    expect(o.task(TASK, null)).toMatchObject({ session_id: SID, plan_session_id: SID })
-    expect(o.task(TASK, null)).not.toHaveProperty('exec_session_id')
-    const copy = { id: 'mtask-other', title: 'On the Mac', phase: 'TODO' }
-    expect(o.task('mtask-other', copy)).toBe(copy)
+    expect(o.taskForReaders(TASK, null)).toMatchObject({ session_id: SID })
+    records.length = 0
+    await o.refresh()
+    // A task in the copy with another session (the Mac replaced it): that one stays.
+    const other = { id: TASK, title: 'Import the venue rows', phase: 'TODO', session_id: 'other-sid', session_ids: ['other-sid'], exec_session_id: 'other-sid' }
+    expect(o.taskForReaders(TASK, other)).toMatchObject({ session_id: 'other-sid', session_ids: ['other-sid'], exec_session_id: 'other-sid' })
+    // The Mac refused the start: its row has no session, and none is put back.
+    const refused = { id: TASK, title: 'Import the venue rows', phase: 'TODO', session_ids: [] }
+    const shown = o.taskForReaders(TASK, refused)!
+    for (const k of SESSION_KEYS.filter((k) => k !== 'session_ids')) expect(shown, k).not.toHaveProperty(k)
+    expect(shown.session_ids).toEqual([])
+    // A session row still in `started` after the drain, its row not in the sessions copy yet: no fold either.
+    const drained = { id: TASK, title: 'Import the venue rows', phase: 'TODO' }
+    expect(o.taskForReaders(TASK, drained)).toBe(drained)
     o.close()
   })
 
-  it('a copy row (the Mac took the create) still shows the session until the sessions copy holds it', async () => {
-    const o = overlayWith([], () => [{ sid: SID, at: T0 + 1_000, status: 'running', activeAt: T0 + 2_000 }])
+  it('a row that already names a session keeps it', async () => {
+    const o = overlayWith([create, { seq: 2, opId: 'op-f', kind: 'task-fields', taskId: TASK, at: T0 + 500, actor: JOB, fields: { session_id: { value: 'named-sid' } } }], () => [{ sid: SID, at: T0 + 1_000, status: 'running' }])
     await o.refresh()
-    const copy = { id: TASK, title: 'Import the venue rows', phase: 'TODO', phase_changed_at: new Date(T0).toISOString() }
-    expect(o.task(TASK, copy)).toMatchObject({ session_id: SID, session_ids: [SID], phase: 'IN_PROGRESS' })
-    expect(o.task(TASK, copy)).not.toHaveProperty('replica_sync')
+    expect(o.taskForReaders(TASK, null)).toMatchObject({ session_id: 'named-sid' })
+    expect(o.taskForReaders(TASK, null)).not.toHaveProperty('exec_session_id')
     o.close()
   })
 
-  it('a session row becomes the fold\'s start: its times, mode, live status and prompt', () => {
+  it('a session row becomes the fold\'s start: its time, mode and live status', () => {
     expect(awayStartOf({
       claudeSessionId: SID, taskId: TASK, project: 'Acme', process_status: 'idle', mode: 'default',
       startedAt: new Date(T0).toISOString(), lastActiveAt: new Date(T0 + 4_000).toISOString(), messageCount: 1,
-      pendingPermission: { requestId: 'rq-1', toolName: 'Bash' },
-    } as never)).toEqual({ sid: SID, at: T0, mode: 'default', status: 'idle', activeAt: T0 + 4_000, prompt: true })
+    } as never)).toEqual({ sid: SID, at: T0, mode: 'default', status: 'idle' })
+  })
+})
+
+describe('a write made on the host after a start alone', () => {
+  it('journals the journal\'s own phase as its base, and no session field', async () => {
+    const o = overlayWith([create], () => [{ sid: SID, at: T0 + 1_000, mode: 'default', status: 'idle' }])
+    await o.refresh()
+    expect(o.taskForReaders(TASK, null)).toMatchObject({ session_id: SID })
+    const submitted: Array<{ op: string; base: Record<string, unknown> }> = []
+    const port = createWritePort({
+      task: async (id) => o.task(id, null) as never,
+      createdHere: (id) => o.createPending(id),
+      board: async () => null,
+      noteWritten: () => {},
+    })
+    const w = {
+      opId: 'op-w', away: 'host-write', raw: Buffer.from(''),
+      submit: async (op: string, _args: unknown, base: Record<string, unknown>) => { submitted.push({ op, base }); return { kind: 'applied', reply: { seq: 5, kind: 'task-fields', opId: 'op-w' } } },
+      call: async () => ({ kind: 'applied', reply: {} }),
+    } as unknown as ReplicaWrite
+    await port.taskUpdate(w, JOB as never, TASK, { phase: 'NEED_ACTION' })
+    await port.taskComplete(w, JOB as never, TASK)
+    expect(submitted.map((x) => x.op)).toEqual(['task_update', 'task_complete'])
+    for (const x of submitted) {
+      expect(x.base.phase, x.op).toBe('TODO')
+      for (const k of SESSION_KEYS) expect(x.base, `${x.op} ${k}`).not.toHaveProperty(k)
+    }
+    o.close()
   })
 })
 
@@ -144,6 +182,35 @@ describe('the live state of a session started here', () => {
     expect(launch.rows()[0]).not.toHaveProperty('pendingPermission')
   })
 
+  it('a daemon that does not answer is asked at most once a second by readers, and warned about once per outage', async () => {
+    let clock = T0
+    const warns: string[] = []
+    let fail = true
+    const request = vi.fn(async () => { if (fail) throw new Error('follower link down'); return { sessions: [] } })
+    const launch = createAskLaunch({
+      port: {} as never, actorOf: () => null, hostKey: 'devbox', persona: async () => null, capabilities: () => [],
+      request, broadcast: () => {}, sessionContext: async () => '', now: () => clock,
+      log: (level, msg) => { if (level === 'warn') warns.push(msg) },
+    })
+    launch.noteStarted({ sid: SID, taskId: TASK, cwd: '/work/acme', mode: 'default', title: 'Import', project: 'Acme' })
+    launch.stop()
+    for (let i = 0; i < 10; i++) await launch.fresh()
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(warns).toHaveLength(1)
+    // A second later it asks again; the outage goes on, and is not warned about again.
+    clock += 1_500
+    for (let i = 0; i < 10; i++) await launch.fresh()
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(warns).toHaveLength(1)
+    // An answer ends the outage: the next failure is warned about again.
+    clock += 1_500; fail = false
+    await launch.fresh()
+    clock += 1_500; fail = true
+    await launch.fresh()
+    expect(request).toHaveBeenCalledTimes(4)
+    expect(warns).toHaveLength(2)
+  })
+
   it('nothing started here: a reader asks the daemon nothing', async () => {
     const { launch, request } = asks([])
     await launch.fresh(0)
@@ -159,9 +226,11 @@ describe('the live state of a session started here', () => {
 
 describe('the reads of a task made here', () => {
   const made = { id: TASK, title: 'Import the venue rows', phase: 'IN_PROGRESS', session_id: SID, session_ids: [SID], exec_session_id: SID, replica_sync: 'pending' }
+  const readerRow = (id: string, row: Record<string, unknown> | null) => (id === TASK ? { ...(row ?? {}), ...made } : row)
   const overlay = {
     refresh: async () => {},
-    task: (id: string, row: Record<string, unknown> | null) => (id === TASK ? { ...(row ?? {}), ...made } : row),
+    task: readerRow,
+    taskForReaders: readerRow,
     createdTaskIds: () => [TASK],
   } as unknown as Overlay
 
@@ -231,19 +300,31 @@ describe('the reads of a task made here', () => {
     expect(other).toEqual({ status: 404, body: { error: 'Task not found' } })
   })
 
-  it('a session\'s record and a task\'s sessions read the live state first, then the route answers as it does', async () => {
-    for (const path of [`/sessions/task/${TASK}`, `/sessions/${SID}`, `/v1/sessions/${SID}`]) {
+  it('only a session this replica started alone (or a task with one) waits for its live state; every other session read answers at once', async () => {
+    const ours = (kind: 'session' | 'task', id: string) => (kind === 'session' ? id === SID : id === TASK)
+    const run = async (path: string) => {
       const order: string[] = []
-      const handler = awayReads({ overlay, answeredAway: () => true, fresh: async () => { order.push('fresh') } })
+      const handler = awayReads({ overlay, answeredAway: () => true, awayHere: ours, fresh: async () => { order.push('fresh') } })
       await new Promise<void>((resolve) => handler({ method: 'GET', path, query: {} } as unknown as Request, {} as Response, () => { order.push('route'); resolve() }))
-      expect(order, path).toEqual(['fresh', 'route'])
+      return order
     }
+    for (const path of [`/sessions/task/${TASK}`, `/sessions/${SID}`, `/v1/sessions/${SID}`]) expect(await run(path), path).toEqual(['fresh', 'route'])
+    for (const path of ['/sessions/task/mtask-other', '/sessions/ffffffff-0000-4000-8000-000000000000', '/v1/sessions/recent', '/sessions/recent']) expect(await run(path), path).toEqual(['route'])
+  })
+
+  it('a live state that never answers lets a read answer within its deadline', async () => {
+    const handler = awayReads({ overlay, answeredAway: () => true, refreshWaitMs: 100, awayHere: () => true, fresh: () => new Promise<void>(() => {}) })
+    const t0 = Date.now()
+    await new Promise<void>((resolve) => handler({ method: 'GET', path: `/sessions/${SID}`, query: {} } as unknown as Request, {} as Response, () => resolve()))
+    expect(Date.now() - t0).toBeLessThan(2_000)
+    const r = await read(`/tasks/${TASK}`, 404, { error: 'No task found matching' }, { refreshWaitMs: 100, fresh: () => new Promise<void>(() => {}) })
+    expect(r).toMatchObject({ status: 200, body: { task: { id: TASK } } })
   })
 
   it('task_get_bulk projects a task made here with the Mac\'s projection, and folds a copy row\'s own fields', async () => {
     const project = (row: Record<string, unknown> & { id: string }, f: string[]) => bulkGetFromTasks([row.id], [row as never], f).items[0] as Record<string, unknown>
     const body = { count: 2, errors: 1, fields: ['title', 'phase'], tasks: [{ id: TASK, error: 'not found' }, { id: 'mtask-copy', title: 'From the Mac', phase: 'TODO' }] }
-    const folding = { ...overlay, task: (id: string, row: Record<string, unknown> | null) => (id === TASK ? made : row ? { ...row, phase: 'NEED_ACTION', status: 'in_progress', replica_sync: 'pending' } : null) } as unknown as Overlay
+    const folding = { ...overlay, taskForReaders: (id: string, row: Record<string, unknown> | null) => (id === TASK ? made : row ? { ...row, phase: 'NEED_ACTION', status: 'in_progress', replica_sync: 'pending' } : null) } as unknown as Overlay
     expect(overlayBulk(body, folding, project)).toEqual({
       count: 2, errors: 0, fields: ['title', 'phase'],
       tasks: [
