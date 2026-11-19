@@ -54,6 +54,7 @@ every reason; a new one fails there):
 | Data disk critically full; the disk-space health alarm | Person (`disk-full`) |
 | Data disk filling up (warning) | Walnut Health |
 | Any other health alarm Walnut could not fix itself | Walnut Health (its alarm row too) |
+| A host's follower server that did not start (one item per host, recovered once it runs) | Walnut Health |
 | A plugin that needs a sign-in or setup (sync and connection notices) | Person (`sign-in`) |
 | A plugin sync or full reconcile that keeps failing | Walnut Health |
 | A plugin's `notifications.error()` | Walnut Health, or the person with `needsYou: true` (a plugin written before this option existed: Walnut Health) |
