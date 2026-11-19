@@ -5,8 +5,9 @@
  * that cannot start it, and a message only to a task whose session runs here. A device never
  * gets these answers: its row answers needs_leader before the handler (route-table.ts).
  * Only a task this host's journal made starts here alone (the Mac adopts no other's session),
- * a start's session id comes from its op id (a retry is the same start), and concurrent starts
- * each take a slot of the brake before they start.
+ * a start's session id comes from its op id (a retry is the same start), concurrent starts
+ * each take a slot of the brake before they start, and one start of a task runs at a time
+ * (held before the task's sessions are read).
  */
 import { describe, expect, it, vi } from 'vitest'
 import * as fs from 'node:fs'
@@ -54,6 +55,7 @@ function harness(over: Partial<AwayStartsDeps> = {}, o: { start?: ReplicaWriteRe
     sessionsOfTask: async (id) => (id === 't3' ? [{ sid: 'sid-3', host: HOST, startedAt: '2026-11-18T00:00:00Z' }] : []),
     projectMeta: async (p) => (p === 'Acme' ? { default_host: HOST, default_cwd: '/work/acme' } : { default_host: 'other-box' }),
     madeHere: (id) => id !== 't4',
+    sessionExists: (task) => `Task "${task.title ?? ''}" is already started or starting.`,
     liveLimit: () => 4,
     freshStart: async () => ({ mode: 'default', modeNamed: false, context: 'ctx for __WALNUT_ROUTINE_TASK_ID__' }),
     frame: async (text) => `[framed] ${text}`,
@@ -135,6 +137,28 @@ describe('away starts', () => {
     expect(h.calls.map((c) => c.params.taskId)).toEqual(['t1'])
     // A start that ended gives its slot back.
     expect((await h.post('/v1/tasks/t5/start', { message: 'go' }, 'op-c')).status).toBe(200)
+  })
+
+  it('one start of a task at a time: held before its sessions are read, a second under another op id hears 409 and starts nothing', async () => {
+    // The first start waits in its read of the task's sessions; the second comes in meanwhile.
+    let open!: () => void
+    const gate = new Promise<void>((r) => { open = r })
+    let reads = 0
+    const h = harness({ sessionsOfTask: async () => { if (reads++ === 0) await gate; return [] } })
+    const first = h.post('/v1/tasks/t1/start', { message: 'go' }, 'op-a')
+    const second = await h.post('/v1/tasks/t1/start', { message: 'go' }, 'op-b')
+    expect(second).toEqual({ status: 409, body: { error: { code: 'session_exists', message: 'Task "Sync the board" is already started or starting.' }, existing_session_id: startSessionId('op-a', 't1') } })
+    // The same op asked again is the same start: it goes on, and the daemon starts one session per id.
+    const same = h.post('/v1/tasks/t1/start', { message: 'go' }, 'op-a')
+    open()
+    expect((await first).status).toBe(200)
+    expect((await same).status).toBe(200)
+    expect(h.calls.map((c) => c.params.sid)).toEqual([startSessionId('op-a', 't1'), startSessionId('op-a', 't1')])
+    // Released with the start, also when it fails; another task is never held by it.
+    const failing = harness({}, { start: { kind: 'refused', code: 'internal', message: 'spawn failed' } })
+    expect((await failing.post('/v1/tasks/t1/start', { message: 'go' }, 'op-a')).status).toBe(503)
+    expect((await failing.post('/v1/tasks/t1/start', { message: 'go' }, 'op-b')).status).toBe(503)
+    expect(failing.calls).toHaveLength(2)
   })
 
   it('the brake reads this machine\'s memory only, never the Mac\'s copied setting (its local_live_limit, a 0 idle timeout)', () => {

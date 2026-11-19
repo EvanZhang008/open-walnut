@@ -64,6 +64,16 @@ export class TaskSessionTakenError extends Error {
   }
 }
 
+/**
+ * A start of a task that already has its live session: the refusal's first sentence and the
+ * whole answer (task-start.ts alreadyStarted, and a host's own start while the leader is away,
+ * replica/away-starts.ts, which answers it the same way).
+ */
+export function sessionExistsWords(task: { id: string; title?: string }): { head: string; message: string } {
+  const head = `Task "${task.title ?? ''}" is already started or starting.`;
+  return { head, message: `${head} Continue with task_send {"to":"${task.id}","text":"..."}.` };
+}
+
 /** The session id that already belongs to `taskId`, other than `sessionId`. */
 export function otherTaskSessionId(handle: DatabaseType, taskId: string, sessionId: string): string | null {
   if (!taskId) return null;

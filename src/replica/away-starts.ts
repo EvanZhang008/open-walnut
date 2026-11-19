@@ -18,6 +18,8 @@
  *     retry later, nothing started. A start's session id comes from its op id, so a retry
  *     of the same call (a lost answer, this replica restarted) is the same start: the daemon
  *     starts one session per id. The session shows here at once (ask-launch.ts noteStarted).
+ *     One start of a task at a time, as the Mac's pending starts: a second under another op id
+ *     while one runs hears the Mac's 409 session_exists, and starts nothing.
  *   POST /v1/messages          (task_send)
  *     to a task whose session runs on this host: delivered by the daemon (follower.send),
  *     framed as the caller's, as the Mac frames it; anything else (a reply, a hand-on, a
@@ -32,6 +34,7 @@ import type { FreshClaudeStart } from '../core/sessions/fresh-claude-start.js'
 import { log } from '../logging/index.js'
 import { memoryLiveLimit } from '../core/sessions/live-sessions.js'
 import { defaultCwdOnHost } from '../core/sessions/launch-place.js'
+import { sessionExistsWords } from '../core/sessions/one-session-per-task.js'
 
 /** The daemon capability a task start here needs (follower.start `run: 'task'`). */
 export const TASK_START_CAP = 'follower-gateway-v1'
@@ -61,6 +64,8 @@ export interface AwayStartsDeps {
   projectMeta(project: string): Promise<Record<string, unknown> | null>
   /** Whether this host's journal holds the task's create still (its first start here is the Mac's to adopt). */
   madeHere(taskId: string): boolean
+  /** The Mac's words for a start of a task already started or starting (one-session-per-task.ts sessionExistsWords). */
+  sessionExists(task: { id: string; title?: string }): string
   /** This host's live session limit, from its own memory (never 0, never unlimited). */
   liveLimit(): number
   /** The fresh start the Mac would make (null: not on Claude Code). Throws when its context cannot be built. */
@@ -113,7 +118,28 @@ export function awayStarts(deps: AwayStartsDeps): RequestHandler {
     return { answered: false, status: 200, body: { ...a.body, taskId, targetTaskId: taskId, targetSessionId: sid } }
   }
 
+  /** The start of a task under way here, by task: its session id (the Mac's pending starts). */
+  const holding = new Map<string, string>()
+
   async function start(req: Request, w: ReplicaWrite, actor: WriteActor, taskId: string): Promise<PortAnswer> {
+    // Held before anything is read, so a second start under another op id never reads the task
+    // as free while this one is under way. The same op asked again goes on: the daemon starts
+    // one session per id.
+    const sid = startSessionId(w.opId, taskId)
+    const held = holding.get(taskId)
+    if (held !== undefined && held !== sid) {
+      const task = await deps.task(taskId)
+      return { answered: false, status: 409, body: { error: { code: 'session_exists', message: deps.sessionExists({ id: taskId, title: str(task?.title) }) }, existing_session_id: held } }
+    }
+    if (held === undefined) holding.set(taskId, sid)
+    try {
+      return await startFree(req, w, actor, taskId)
+    } finally {
+      if (held === undefined) holding.delete(taskId)
+    }
+  }
+
+  async function startFree(req: Request, w: ReplicaWrite, actor: WriteActor, taskId: string): Promise<PortAnswer> {
     const b = bodyOf(req)
     const task = await deps.task(taskId)
     if (!task) return refusalAnswer('not_found', `Task ${taskId} not found`)
@@ -264,6 +290,7 @@ export function wireAwayStarts(o: {
       return (await getSessionsForTask(taskId)).map((r) => ({ sid: r.claudeSessionId, host: r.host ?? null, startedAt: r.startedAt }))
     },
     projectMeta: async (project) => (await import('../core/task-manager.js')).getProjectMetadata(project),
+    sessionExists: (task) => sessionExistsWords(task).message,
     // The overlay's creates: pending in this host's journal, or taken by the Mac and not in the copy yet.
     // Still in this host's journal: a create the Mac already took may have been refused there,
     // and a session started for it now would be refused too (it answers needs_leader instead).

@@ -5,6 +5,7 @@ import { getTask, linkSession, updateTaskRaw } from '../task-manager.js';
 import { createSessionRecord, getSessionsForTask, updateSessionRecord } from '../session-tracker.js';
 import { QuickStartError } from './quick-start.js';
 import { continueTaskConversation, detachTaskSession, taskConversation } from './task-session-claim.js';
+import { sessionExistsWords } from './one-session-per-task.js';
 import { stableJson } from '../task-create-idempotency.js';
 import type { Task, EngineFallbackNote, SessionEffort, SessionEngine, SessionMode, SessionProfile, SessionRecord } from '../types.js';
 import type { FallbackDecision } from '../agents/fallback-engine.js';
@@ -155,8 +156,8 @@ export function isTaskStarting(taskId: string): boolean {
 const SLOT_HOLD_MS = 60_000;
 
 function alreadyStarted(task: Task, sid: string): SessionExistsError {
-  const head = `Task "${task.title}" is already started or starting.`;
-  return new SessionExistsError(`${head} Continue with task_send {"to":"${task.id}","text":"..."}.`, sid, task.id, head);
+  const { head, message } = sessionExistsWords(task);
+  return new SessionExistsError(message, sid, task.id, head);
 }
 
 /**
