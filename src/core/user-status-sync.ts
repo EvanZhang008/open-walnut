@@ -50,6 +50,19 @@ import { approvalItemsByTask, letterItem, promptItem } from './action-needed-fac
 const SUBSCRIBER = 'user-status-sync';
 const OWN_SOURCE = 'user-status';
 const DEBOUNCE_MS = 1_500;
+/**
+ * The wait of the fast lane: a change someone made by hand (a task written through the API, a
+ * thread acted on) is derived after this, not after DEBOUNCE_MS, and never queued behind a pass
+ * of every task. The debounce exists for the events sessions emit on every turn; a click has no
+ * burst to fold, and the dot or pill it moves is read on every surface (2026-11-19: a thread
+ * acted on in the Org page kept its node's red dot for 20 to 35 s, 1.5 s of debounce queued
+ * behind passes of every task that took 2 to 11 s).
+ */
+const FAST_MS = 25;
+/** A pass slower than this is logged with where its time went (walnut-logs.sh, `user-status: slow pass`). */
+const SLOW_PASS_MS = 1_000;
+/** Event sources whose task writes are a hand's, not a session's turn (the fast lane). */
+const FAST_SOURCES: ReadonlySet<string> = new Set(['api', 'org-threads']);
 const SWEEP_MS = 60_000;
 /** After start, when the lost turn-end reports are asked for again (sessions attach first). */
 const MISSED_REPORTS_DELAY_MS = 45_000;
@@ -63,6 +76,17 @@ const APPROVAL_CHANGED = 'approval:changed';
 
 let dirty = new Set<string>();
 let all = false;
+let fast = new Set<string>();
+let fastTimer: ReturnType<typeof setTimeout> | null = null;
+let fastRunning: Promise<void> | null = null;
+/**
+ * Marks are numbered, and a pass remembers the number it began at: a task marked again while a
+ * pass was reading is not written by that pass (its facts may predate the change) and is derived
+ * by the pass its mark queued. That is what lets the fast lane run beside a pass of every task
+ * without the slower one writing an older answer over the newer.
+ */
+let passSeq = 0;
+const derivedBy = new Map<string, number>();
 let timer: ReturnType<typeof setTimeout> | null = null;
 let sweep: ReturnType<typeof setInterval> | null = null;
 let running: Promise<void> | null = null;
@@ -157,7 +181,8 @@ async function safely<T>(what: string, fn: () => Promise<T>, fallback: T): Promi
   }
 }
 
-type SlowSource = 'letters' | 'choices' | 'triggers' | 'schedules' | 'checks' | 'approvals';
+const SLOW_SOURCES = ['letters', 'choices', 'triggers', 'schedules', 'checks', 'approvals'] as const;
+type SlowSource = typeof SLOW_SOURCES[number];
 
 /**
  * The sources that cost a lock or a parse of every Board (the inbox index, the Boards, the
@@ -167,7 +192,8 @@ type SlowSource = 'letters' | 'choices' | 'triggers' | 'schedules' | 'checks' | 
 const slow: Partial<Record<SlowSource, Map<string, any>>> = {};
 
 function dropSlow(...kinds: SlowSource[]): void {
-  for (const k of kinds.length ? kinds : (['letters', 'choices', 'triggers', 'schedules', 'checks', 'approvals'] as const)) delete slow[k];
+  if (!kinds.length || kinds.includes('letters')) signInKept = null;
+  for (const k of kinds.length ? kinds : SLOW_SOURCES) { delete slow[k]; delete slowReading[k]; slowGen[k] += 1; }
   // A snooze of a thread runs out on its own clock: every sweep counts the Threads again.
   if (!kinds.length) { boardChoices.clear(); threadsChanged(); }
 }
@@ -180,8 +206,8 @@ const threadOwners = new Map<string, Set<string>>();
 let threadsGenAll = 0;
 
 /** A derived owner status changes its linked nodes too, including this sync's own accepted writes. */
-function ownerThreadsChanged(taskId: string): void {
-  for (const [node, owners] of threadOwners) if (owners.has(taskId)) { threadsChanged(node); mark(node); }
+function ownerThreadsChanged(taskId: string, lane: (id: string) => void = mark): void {
+  for (const [node, owners] of threadOwners) if (owners.has(taskId)) { threadsChanged(node); lane(node); }
 }
 
 function threadsChanged(taskId?: string): void {
@@ -221,15 +247,27 @@ export interface ChoiceFact { title: string; board: string; id: string; at?: str
 /** Per Board owner: its unanswered choices, so one Board's write re-reads that Board alone. */
 const boardChoices = new Map<string, { ref?: string; title: string; id: string; at?: string }[]>();
 
+/** One read of a slow source at a time, and a read that a drop overtook is not kept. */
+const slowReading: Partial<Record<SlowSource, Promise<Map<string, any>>>> = {};
+const slowGen = Object.fromEntries(SLOW_SOURCES.map((k) => [k, 0])) as Record<SlowSource, number>;
+
 async function cachedSlow<K extends SlowSource>(kind: K, allIds: readonly string[]): Promise<NonNullable<StatusFacts[K]>> {
   const hit = slow[kind];
   if (hit) return hit as NonNullable<StatusFacts[K]>;
-  const built = kind === 'letters' ? await readLetters()
-    : kind === 'approvals' ? await readApprovalItems()
-    : kind === 'choices' ? await readChoices(allIds)
-    : await readRoutines(kind as 'triggers' | 'schedules' | 'checks');
-  slow[kind] = built;
-  return built as NonNullable<StatusFacts[K]>;
+  // The ordinary and the fast lane can both miss: they share the one read.
+  const reading = slowReading[kind];
+  if (reading) return reading as Promise<NonNullable<StatusFacts[K]>>;
+  const gen = slowGen[kind];
+  const read = (async () => {
+    const built = kind === 'letters' ? await readLetters()
+      : kind === 'approvals' ? await readApprovalItems()
+      : kind === 'choices' ? await readChoices(allIds)
+      : await readRoutines(kind as 'triggers' | 'schedules' | 'checks');
+    if (slowGen[kind] === gen) slow[kind] = built;
+    return built as Map<string, any>;
+  })().finally(() => { if (slowReading[kind] === read) delete slowReading[kind]; });
+  slowReading[kind] = read;
+  return read as Promise<NonNullable<StatusFacts[K]>>;
 }
 
 /** The open review letters, read in the same pass as the decision letters (readLetters). */
@@ -247,11 +285,8 @@ async function readApprovalItems(): Promise<Map<string, ActionItem[]>> {
 
 async function readLetters(): Promise<StatusFacts['letters']> {
   const out: StatusFacts['letters'] = new Map();
-  // Replaced at once, so an unreadable inbox leaves no older review behind.
   const reviews = new Map<string, string>();
-  reviewLetters = reviews;
   const items = new Map<string, ActionItem[]>();
-  letterItemsNow = items;
   await safely('inbox', async () => {
     const { listLetters } = await import('./human-inbox/store.js');
     const { letters: list } = await listLetters({ archived: false });
@@ -270,6 +305,10 @@ async function readLetters(): Promise<StatusFacts['letters']> {
       items.set(tid, [...(items.get(tid) ?? []), letterItem(l)]);
     }
   }, undefined);
+  // Swapped in whole once read (an unreadable inbox leaves none): a pass beside this read never
+  // sees a half-filled list.
+  reviewLetters = reviews;
+  letterItemsNow = items;
   return out;
 }
 
@@ -711,6 +750,20 @@ export function completeStatusFacts(facts: StatusFacts, everything: readonly Tas
 }
 
 /**
+ * The sign-in state, kept SIGN_IN_KEEP_MS: reading it opens the inbox index and three files, the
+ * dearest step of a pass of one task (0.2 to 1.3 s measured), and every pass asked again. Its
+ * writers are a checker that runs every few minutes and the sign-in letters, whose events drop it.
+ */
+const SIGN_IN_KEEP_MS = 30_000;
+let signInKept: { at: number; state: NonNullable<StatusFacts['signIn']> } | null = null;
+async function readSignInCached(): Promise<NonNullable<StatusFacts['signIn']>> {
+  if (signInKept && Date.now() - signInKept.at < SIGN_IN_KEEP_MS) return signInKept.state;
+  const state = await (await import('./sign-in-ask.js')).readSignInState();
+  signInKept = { at: Date.now(), state };
+  return state;
+}
+
+/**
  * When a person last wrote to each task a stored same-ask fold names (same-ask.ts): the evidence
  * that the user answered the deeper task, so its ancestor's fold may stay once that task asks no more.
  * And to each task holding an ask the user withdrew: writing there after it lifts the withdrawal.
@@ -726,7 +779,7 @@ export async function readFoldEvidence(facts: StatusFacts, targets: readonly Tas
     .filter((t) => t.phase !== 'COMPLETE' && t.status !== 'done' && t.user_status?.state === 'needs' && t.user_status.source === 'session'
       && isSignInAsk(t.user_status.ask, facts.loginWords ?? []))
     .map((t) => ({ id: t.id, title: t.title, ask: t.user_status!.ask!, createdAt: t.created_at }));
-  facts.signIn = await safely('sign-in-state', async () => (await import('./sign-in-ask.js')).readSignInState(), {});
+  facts.signIn = await safely('sign-in-state', readSignInCached, {});
   const ids = new Set(targets.map((t) => t.user_status?.sameAsk?.id).filter((id): id is string => !!id));
   // A task holding a withdrawal too: a person writing in it after it lifts it (same-ask.ts answerHolds).
   for (const t of targets) if (answersOf(t).some((a) => a.withdrawn)) ids.add(t.id);
@@ -969,8 +1022,15 @@ function childrenFirst(tasks: readonly Task[], children: ReadonlyMap<string, rea
  * as Done first, and a write to a COMPLETE row would announce it as completed again
  * (updateTaskRaw names the event by the phase), waking every completion listener.
  */
-export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = Date.now()): Promise<number> {
+export async function syncUserStatuses(
+  ids: ReadonlySet<string> | null, nowMs = Date.now(),
+  /** How the tasks a change reaches next (its leader, a node linked to it, a same ask) are queued:
+   *  the lane this pass ran in, so a hand's change stays fast for every hop. */
+  follow: (id: string) => void = mark,
+): Promise<number> {
   const { listTasks, updateTaskRaw } = await import('./task-manager.js');
+  const pass = ++passSeq;
+  const t0 = Date.now();
   const everything = await listTasks();
   const { getConfig } = await import('./config-manager.js');
   const followWorkers = experimentalEnabled((await getConfig()).experimental, 'leader_status_follows_workers');
@@ -979,9 +1039,13 @@ export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = 
   const wanted = ids && followWorkers ? withAncestors(ids, everything) : ids;
   const targets = everything.filter((t) => (wanted ? wanted.has(t.id) : true) && openLeader(t));
   if (!targets.length) return 0;
+  const t1 = Date.now();
   const facts = await readStatusFacts(targets, everything.map((t) => t.id), followWorkers);
+  const t2 = Date.now();
   completeStatusFacts(facts, everything);
+  const t2b = Date.now();
   await readFoldEvidence(facts, targets);
+  const t3 = Date.now();
   let changed = 0;
   const toClose: { task: Task; status: UserStatus }[] = [];
   const childrenOf = childrenByParent(everything);
@@ -993,6 +1057,10 @@ export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = 
     // A candidate here (a triage run's `turn` too); closeRoutineRun decides with the triage check.
     // Judged on the task's own status: the worker rule only changes what is shown.
     if (settlesAt === null && routineRunToClose(task, own ?? next, true)) toClose.push({ task, status: own ?? next });
+    // A pass that began later has derived it from newer facts (the fast lane beside a whole
+    // pass): this one's answer is the older, and writing it would put a stale status back.
+    if ((derivedBy.get(task.id) ?? 0) > pass) continue;
+    derivedBy.set(task.id, pass);
     if (sameStatus(task.user_status, next)) continue;
     if (settlesAt !== null) {
       if (!settleTimers.has(task.id)) log.task.info('user-status: hand-back held', { taskId: task.id, untilMs: settlesAt });
@@ -1002,7 +1070,7 @@ export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = 
     const res = await updateTaskRaw(task.id, { user_status: next }, {
       emitEvent: true, source: OWN_SOURCE,
       // Completed while its facts were read: it reads Done, and the write would announce it again.
-      shouldUpdate: (cur) => cur.phase !== 'COMPLETE' && cur.status !== 'done',
+      shouldUpdate: (cur) => cur.phase !== 'COMPLETE' && cur.status !== 'done' && (derivedBy.get(task.id) ?? 0) <= pass,
     }).catch((err) => {
       log.task.debug('user-status: write skipped', { taskId: task.id, error: errText(err) });
       return { changed: false };
@@ -1012,11 +1080,11 @@ export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = 
       // With the experiment on, a parent later in this pass reads the accepted child status.
       if (facts.followWorkers) task.user_status = next;
       changed += 1;
-      ownerThreadsChanged(task.id);
+      ownerThreadsChanged(task.id, follow);
       // Its leader carries its questions (rollUpAsks): re-derived in the next pass, one level each.
-      if (task.parent_task_id) mark(task.parent_task_id);
+      if (task.parent_task_id) follow(task.parent_task_id);
       // The tasks whose same ask waits on it (same-ask.ts) read its new status in the next pass.
-      for (const t of everything) if (t.user_status?.sameAsk?.id === task.id) mark(t.id);
+      for (const t of everything) if (t.user_status?.sameAsk?.id === task.id) follow(t.id);
       // A teammate folded under another whose ask was just answered there is told once.
       if (next.sameAsk?.answered && next.sameAsk.team && !prior?.sameAsk?.answered) {
         void import('./sessions/ask-answer.js').then((m) => m.tellFoldAnswered(task, next.sameAsk!)).catch(() => {});
@@ -1031,6 +1099,13 @@ export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = 
   if (toClose.length) {
     const { closeRoutineRun } = await import('./routines/run-close.js');
     for (const c of toClose) await closeRoutineRun(c.task, c.status);
+  }
+  const totalMs = Date.now() - t0;
+  if (totalMs >= SLOW_PASS_MS) {
+    log.task.info('user-status: slow pass', {
+      scope: ids ? ids.size : 'all', targets: targets.length, changed,
+      listMs: t1 - t0, factsMs: t2 - t1, completeMs: t2b - t2, evidenceMs: t3 - t2b, deriveWriteMs: Date.now() - t3, totalMs,
+    });
   }
   return changed;
 }
@@ -1061,6 +1136,51 @@ function mark(taskId: unknown): void {
   if (typeof taskId !== 'string' || !taskId) return;
   dirty.add(taskId);
   schedule();
+}
+
+let fastRestUntil = 0;
+/** The longest the fast lane rests after a pass, however long that pass ran. */
+const FAST_REST_MAX_MS = 1_000;
+
+/** The fast lane (FAST_MS): a hand's change, derived at once and beside any pass that is running. */
+function markNow(taskId: unknown): void {
+  if (typeof taskId !== 'string' || !taskId) return;
+  fast.add(taskId);
+  scheduleFast();
+}
+
+function scheduleFast(): void {
+  if (!live || fastTimer) return;
+  // It rests as long as its last pass ran, so a stream of API writes (agents' ops are the API
+  // too) never keeps it running back to back beside the ordinary lane.
+  fastTimer = setTimeout(() => {
+    fastTimer = null;
+    void runFastPass();
+  }, Math.max(FAST_MS, fastRestUntil - Date.now()));
+  fastTimer.unref?.();
+}
+
+async function runFastPass(): Promise<void> {
+  // One fast pass at a time: marks made meanwhile wait for it and run right after.
+  if (fastRunning) { await fastRunning; if (fast.size) scheduleFast(); return; }
+  const ids = fast;
+  fast = new Set();
+  if (!ids.size) return;
+  const began = Date.now();
+  fastRunning = syncUserStatuses(ids, began, markNow)
+    .then((n) => { if (n) log.task.debug('user-status: statuses updated', { changed: n, scope: ids.size, lane: 'fast' }); })
+    .catch((err) => {
+      // Never lost: the ordinary lane derives them at its next pass.
+      for (const id of ids) mark(id);
+      log.task.warn('user-status: fast pass failed', { error: errText(err) });
+    })
+    .finally(() => {
+      fastRunning = null;
+      const now = Date.now();
+      fastRestUntil = now + Math.min(now - began, FAST_REST_MAX_MS);
+      if (fast.size) scheduleFast();
+    });
+  await fastRunning;
 }
 
 /** A session event names its session, not its task (the status snapshot has no taskId): look it up. */
@@ -1098,14 +1218,17 @@ function onEvent(event: { name: string; data: unknown; source?: string }): void 
   switch (event.name) {
     case EventNames.TASK_CREATED:
     case EventNames.TASK_UPDATED:
-    case EventNames.TASK_COMPLETED:
-      mark(d.task?.id);
+    case EventNames.TASK_COMPLETED: {
+      // A write through the API is a hand's (a person's click, an agent's op): the fast lane.
+      const lane = event.source && FAST_SOURCES.has(event.source) ? markNow : mark;
+      lane(d.task?.id);
       // A finished or moved subtask's question leaves its leader's list (rollUpAsks); the event
       // names only the new parent, so a former one drops it at the minute sweep.
-      mark(d.task?.parent_task_id);
+      lane(d.task?.parent_task_id);
       // Thread ask pointers depend on linked task decisions, not only thread-file writes.
-      if (typeof d.task?.id === 'string') ownerThreadsChanged(d.task.id);
+      if (typeof d.task?.id === 'string') ownerThreadsChanged(d.task.id, lane);
       return;
+    }
     case EventNames.CONFIG_CHANGED:
       // Every status is derived again only when the experiment was switched (worker-status.ts).
       void experimentSwitched().then((moved) => { if (moved) markAll(); }).catch(() => {});
@@ -1137,9 +1260,12 @@ function onEvent(event: { name: string; data: unknown; source?: string }): void 
     case EventNames.HUMAN_INBOX_LETTER:
     case LETTER_ANSWERED:
     case LETTER_STATE:
-      // The event names the sender's session, not its task: a whole pass.
+      // A pin moves no status.
+      if (event.name === LETTER_STATE && d.field === 'pinned') return;
       dropSlow('letters');
-      markAll();
+      // Answered, read or archived by hand: its sender's task alone, now. An event that names
+      // no task (an older emitter, a plugin's letter) is a whole pass.
+      if (typeof d.taskId === 'string' && d.taskId) markNow(d.taskId); else markAll();
       return;
     // A Board or a trigger can name any task of a team: a whole pass, still one read per store.
     case EventNames.BOARD_CHANGED:
@@ -1157,7 +1283,8 @@ function onEvent(event: { name: string; data: unknown; source?: string }): void 
       return;
     // A node's Threads moved: its own status (a thread waiting on the user is its Needs you).
     case EventNames.ORG_THREADS_CHANGED:
-      if (typeof d.taskId === 'string') { threadsChanged(d.taskId); mark(d.taskId); } else { threadsChanged(); markAll(); }
+      // Acted on by hand (the Org page, the phone, a node's own op): the fast lane, its dot moves now.
+      if (typeof d.taskId === 'string') { threadsChanged(d.taskId); markNow(d.taskId); } else { threadsChanged(); markAll(); }
       return;
   }
 }
@@ -1207,10 +1334,12 @@ export function startUserStatusSync(): void {
  * the debounce window (2026-10-26: an SSE "no replay" check read a late status write as one).
  */
 export async function settleUserStatusSync(): Promise<void> {
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 8; i++) {
+    if (fastTimer) { clearTimeout(fastTimer); fastTimer = null; void runFastPass(); }
+    if (fastRunning) { await fastRunning; continue; }
     if (timer) { clearTimeout(timer); timer = null; void runPass(); }
     if (running) { await running; continue; }
-    if (!timer) return;
+    if (!timer && !fastTimer) return;
   }
 }
 
@@ -1223,10 +1352,14 @@ export function stopUserStatusSync(): void {
   missedReportsTimer = null;
   live = false;
   if (timer) clearTimeout(timer);
+  if (fastTimer) clearTimeout(fastTimer);
   if (sweep) clearInterval(sweep);
   timer = null;
+  fastTimer = null;
   sweep = null;
   dirty = new Set();
+  fast = new Set();
+  derivedBy.clear();
   all = false;
   for (const t of settleTimers.values()) clearTimeout(t);
   settleTimers.clear();

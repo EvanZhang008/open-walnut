@@ -14,6 +14,7 @@
  * Overlay rules (web/src/AGENTS.md): the card is portalled to <body>, placed by useMenuPlacement,
  * stops pointerdown (rows are dnd-kit draggables), and closes on an outside pointerdown or Escape.
  */
+import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import type { Task } from '@open-walnut/core';
@@ -352,6 +353,7 @@ function Switch({ label, hint, checked, onChange, testId }: {
 }
 
 export function PrPill({ task: given, className, compact = false }: { task: Task; className?: string; compact?: boolean }) {
+  const store = useTasksContextSafe();
   const live = useStoreTask(given.id);
   const task = live ?? given;
   const urls = watchablePrUrls(task.tags);
@@ -477,7 +479,11 @@ export function PrPill({ task: given, className, compact = false }: { task: Task
     setBusy('complete');
     setFailure(null);
     try {
-      await completeTask(given.id);
+      // Through the store when it holds the row: the board, Home and every count see it closed
+      // on the click; the plain call is for a row the store does not hold (a pop-out).
+      if (store?.tasks.some((t) => t.id === given.id)) {
+        if (!(await store.complete(given.id))) throw new Error('the server refused');
+      } else await completeTask(given.id);
     } catch (err) {
       setFailure('Could not complete the task just now. Try again in a moment.');
       log.warn('tasks', 'pull request card complete failed', { taskId: given.id, error: String(err) });

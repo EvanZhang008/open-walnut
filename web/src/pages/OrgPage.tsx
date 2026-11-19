@@ -27,7 +27,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
 import { useKeptLockToggle } from '@/components/org/useKeptLockToggle';
 import { keptByRow, lockedTaskIds, slotTask, slotTaskIds, taskRowKey } from '@/components/org/org-task-tabs';
-import { buildOrgTree } from '@open-walnut/org-tree';
+import { buildOrgTree, userStateOf } from '@open-walnut/org-tree';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { useSessionStatusEpoch } from '@/hooks/useSessionStatus';
 import { homeColumnsField, usePhoneLayout } from '@/hooks/usePhoneLayout';
@@ -121,7 +121,7 @@ function useMinuteNow(): number {
 const FIRST_LOAD_RETRY_MS = 5_000;
 
 export function OrgPage() {
-  const { tasks, loading: tasksLoading, error: tasksError, refetch: refetchTasks, showOperationError, update: updateTaskInStore, refetch } = useTasksContext();
+  const { tasks, loading: tasksLoading, error: tasksError, refetch: refetchTasks, showOperationError, update: updateTaskInStore, refetch, predictStatus } = useTasksContext();
   const navigate = useNavigate();
   const phone = usePhoneLayout();
   const now = useMinuteNow();
@@ -150,15 +150,24 @@ export function OrgPage() {
       };
       setAnswered((prev) => new Map(prev).set(taskId, hold));
       setFailedAnswers((prev) => without(prev, taskId));
+      // The same reading for every other surface (Home's Needs you, the board, a count): the
+      // hold above is this page's; the store's prediction is the page-wide one, and it gives
+      // way the moment the server derives the task again.
+      const unpredict = predictStatus(taskId, (row) => {
+        if (userStateOf(row) !== 'needs') return row.user_status;
+        const { ask: _ask, source: _source, ...rest } = row.user_status ?? { state: 'working' as const };
+        return { ...rest, state: 'working' as const };
+      });
       return (failure) => {
         if (!failure) return;
+        unpredict();
         setAnswered((prev) => (prev.get(taskId) === hold ? without(prev, taskId) : prev));
         setFailedAnswers((prev) => new Map(prev).set(taskId, failure));
       };
     },
     failed: failedAnswers,
     seen: (taskId) => setFailedAnswers((prev) => without(prev, taskId)),
-  }), [failedAnswers]);
+  }), [failedAnswers, predictStatus]);
   // Stopping a watch from the Org list: Home's eye, the same write (WatchToggle), shown on the click.
   const unwatch = useCallback((taskId: string) => { void updateTaskInStore(taskId, { watched_at: '' }); }, [updateTaskInStore]);
   // A hold ends when the task asks again or its session's prompt moves (a new ask shows at once).

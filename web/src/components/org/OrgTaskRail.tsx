@@ -32,6 +32,7 @@
 import '@/styles/org-rail.css';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Task } from '@open-walnut/core';
+import { useTasksContext } from '@/contexts/TasksContext';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { timeAgo } from '@/utils/time';
 import { useFullscreen, useSheetPlace } from '@/hooks/useFullscreen';
@@ -55,7 +56,6 @@ import { taskPath } from '@/utils/task-path';
 import type { Approval } from '@/api/approvals';
 import { ApprovalRows } from '@/components/approvals/ApprovalRow';
 import type { ImageAttachment } from '@/api/chat';
-import { completeTask } from '@/api/tasks';
 import { AgentText } from '@/components/common/AgentText';
 import { taskTextSource } from '@/utils/agent-text-source';
 import { useOpenTask } from '@/hooks/useOpenTask';
@@ -181,6 +181,7 @@ function AskRow({ a, task, vp, own, onOpen, onQuote, canQuote, answers }: {
   canQuote: boolean;
   answers: OrgAnswers;
 }) {
+  const { complete } = useTasksContext();
   const { summary, more } = askSummary(a);
   // The ask's words: their recorded writer (a letter's or a choice's is not on the task: unknown).
   const askSource = taskTextSource(task, 'needs');
@@ -251,7 +252,8 @@ function AskRow({ a, task, vp, own, onOpen, onQuote, canQuote, answers }: {
               data-testid="org-ask-close"
               onClick={() => {
                 const settle = answers.start(a.taskId);
-                completeTask(a.taskId).then(() => settle(), (err: unknown) => settle({ of: 'answer', message: `Could not close it: ${err instanceof Error ? err.message : String(err)}` }));
+                // Through the store: Home, the board and every count see it closed on the click.
+                void complete(a.taskId).then((ok) => settle(ok ? undefined : { of: 'answer', message: 'Could not close it: the server refused. Try again.' }));
               }}
             >Close</button>
           )}

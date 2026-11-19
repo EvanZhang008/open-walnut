@@ -1134,6 +1134,8 @@ export interface HumanInboxStateEvent {
   letterId: string;
   field: 'read' | 'pinned' | 'archived';
   value: boolean;
+  /** The task of the session that sent the letter, when one did: its status is derived at once. */
+  taskId?: string;
 }
 
 export interface HumanInboxAnsweredEvent {
@@ -1146,6 +1148,8 @@ export interface HumanInboxAnsweredEvent {
   source: 'web' | 'phone' | 'relay' | 'plugin';
   /** The plugin that sent the letter, when one did. Absent for a session's letter. */
   pluginId?: string;
+  /** The task of the session that sent the letter, when one did: its status is derived at once. */
+  taskId?: string;
 }
 
 // ── Plugin lifecycle ──

@@ -15,7 +15,7 @@ vi.mock('@/hooks/useMenuPlacement', () => ({
 }));
 vi.mock('@/hooks/useKeyboardOpenFocus', () => ({ useKeyboardOpenFocus: () => () => {} }));
 vi.mock('@/hooks/usePhoneLayout', () => ({ usePhoneLayout: () => false }));
-vi.mock('@/contexts/TasksContext', () => ({ useStoreTask: () => null }));
+vi.mock('@/contexts/TasksContext', () => ({ useStoreTask: () => null, useTasksContextSafe: () => null }));
 vi.mock('@/api/tasks', () => ({ completeTask: vi.fn().mockResolvedValue({}) }));
 
 const PR = 'https://github.com/acme/app/pull/77';

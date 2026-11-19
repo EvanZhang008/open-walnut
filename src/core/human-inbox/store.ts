@@ -1095,7 +1095,7 @@ export async function setLetterState(
   // and setArchived.
   void mirrorLetterReadState(record.id, field === 'read' ? record.read : record.archived ? true : record.read);
   // A read or archived decision stops asking the user (src/core/user-status-sync.ts listens).
-  bus.emit('human-inbox:state', { letterId: record.id, field, value: want }, [], { source: 'human-inbox' });
+  bus.emit('human-inbox:state', { letterId: record.id, field, value: want, ...(record.sender?.taskId ? { taskId: record.sender.taskId } : {}) }, [], { source: 'human-inbox' });
   return { letter: record, storeUpdatedAt: stamp };
 }
 

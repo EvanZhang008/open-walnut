@@ -12,7 +12,7 @@
  */
 import { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { updateTask } from '@/api/tasks';
+import { useTasksContext } from '@/contexts/TasksContext';
 import { DatePicker } from '@/components/common/DatePicker';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
@@ -34,6 +34,7 @@ export function OrgAlertSnooze({ alert, current, onStart }: {
   current: string | undefined;
   onStart: () => AnswerSettle;
 }) {
+  const { update } = useTasksContext();
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -55,11 +56,12 @@ export function OrgAlertSnooze({ alert, current, onStart }: {
     if (until && !(at > Date.now())) { setNote('That time has already begun: pick a later one.'); return; }
     // Only a snooze takes the row off; None (unsnooze) leaves it where it is.
     const settle = until ? onStart() : null;
-    updateTask(alert.taskId, { start_date: until }).then(() => settle?.(), (err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
-      log.warn('org', 'snooze from a Needs you row failed', { taskId: alert.taskId, until, error: message });
-      if (settle) settle({ message: `Snooze failed: ${message}`, of: 'snooze' });
-      else setNote(`Unsnooze failed: ${message}`);
+    // Through the store: the row's start date changes on Home and the board on the click too.
+    void update(alert.taskId, { start_date: until }).then((ok) => {
+      if (ok) { settle?.(); return; }
+      log.warn('org', 'snooze from a Needs you row failed', { taskId: alert.taskId, until });
+      if (settle) settle({ message: 'Snooze failed: the server refused. Try again.', of: 'snooze' });
+      else setNote('Unsnooze failed: the server refused. Try again.');
     });
   };
   return (

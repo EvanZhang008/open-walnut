@@ -25,6 +25,7 @@ export interface TasksContextValue {
   /** Each resolves whether the server took the write (it is optimistic either way). */
   update: (id: string, updates: UpdateTaskInput) => Promise<boolean>;
   toggleComplete: (id: string) => Promise<boolean>;
+  complete: (id: string) => Promise<boolean>;
   /** Resolves true once the server took the write, false when it refused (already reported). */
   /** `row`: the caller's copy of a row the list does not hold yet; its first answer keeps the new phase. */
   setPhase: (id: string, phase: string, opts?: { undoOf?: string; unread?: boolean; row?: Task }) => Promise<boolean>;
@@ -56,6 +57,9 @@ export interface TasksContextValue {
   /** Local-only batch patch (no API call) — for optimistic flows (Focus Bar pin/tier).
    *  `pending` holds it over list reads until the returned settle runs (a write still out). */
   patchTasksLocal: (patches: Record<string, Partial<Task>>, opts?: { pending?: boolean }) => () => void;
+  /** Show the status a change will derive to on every surface now, until the server's own
+   *  arrives (hooks/status-prediction.ts). Returns the undo for a write the server refused. */
+  predictStatus: (id: string, make: (row: Task) => import('@open-walnut/user-status').UserStatus | undefined, opts?: { live?: () => boolean }) => () => void;
   /** Suppress the next WS echo for a key (e.g. `update:<id>`) — pair with own API call. */
   guardEcho: (key: string) => void;
   taskGroups: Record<string, string>;

@@ -520,6 +520,7 @@ function emitLetterAnswered(record: LetterRecord, source: LetterAnswerSource): v
     answeredAt: answered.at,
     source,
     ...(record.sender.pluginId ? { pluginId: record.sender.pluginId } : {}),
+    ...(record.sender.taskId ? { taskId: record.sender.taskId } : {}),
   }, ['web-ui'], { source: 'human-inbox' });
 }
 

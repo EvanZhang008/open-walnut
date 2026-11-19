@@ -2,9 +2,11 @@
  * An Org node's Threads (GET /api/v1/tasks/:id/threads), kept current by `org-threads:changed`
  * and re-read on reconnect. Writes made here show at once and are undone when the server refuses.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { fetchOrgThreads, patchOrgThread, splitOrgThread, type OrgThread, type OrgThreadPatch } from '@/api/org-threads';
 import { useEvent } from '@/hooks/useWebSocket';
+import { useTasksContextSafe } from '@/contexts/TasksContext';
+import { statusWithThreads } from '@/hooks/status-prediction';
 import { log } from '@/utils/log';
 
 export interface OrgThreadsState {
@@ -46,48 +48,74 @@ function nextSnoozeEnd(list: readonly OrgThread[] | null, now: number): number |
 }
 
 /**
- * Each node's threads as this page last read them: a node opened again draws them in its first frame
- * while the read behind it brings them current (2026-11-04: every node switch showed "Loading…").
+ * One list per node for the whole page, not one per surface that shows it: the Org page's node
+ * and the session column of the same task both read it, so a thread acted on in one is already
+ * changed in the other (each used to keep its own copy and hear of the other's write from the
+ * server). `drawn` is what every surface shows: the last read with the writes still on their
+ * way laid over it. A node opened again draws it in its first frame while the read behind it
+ * brings it current (2026-11-04: every node switch showed "Loading…").
  */
-const lastRead = new Map<string, OrgThread[]>();
+interface NodeThreads {
+  read: OrgThread[] | null; pending: Map<string, OrgThreadPatch>; drawn: OrgThread[] | null; seq: number;
+  /** performance.now() of the last write answered: the server's statuses for it may still be on the way. */
+  settledAt: number;
+  /** The server counts this node's threads into its status (seen once on a row). */
+  counted: boolean;
+}
+/** How long after a write's answer the server's derived status for an EARLIER write may still land. */
+const SETTLE_MS = 3_000;
+const nodes = new Map<string, NodeThreads>();
+const listeners = new Set<() => void>();
+const subscribe = (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn); }; };
+function nodeOf(taskId: string): NodeThreads {
+  let n = nodes.get(taskId);
+  if (!n) { n = { read: null, pending: new Map(), drawn: null, seq: 0, settledAt: 0, counted: false }; nodes.set(taskId, n); }
+  return n;
+}
+/** Recompute what a node's surfaces draw, and tell them. */
+function redraw(taskId: string): OrgThread[] | null {
+  const n = nodeOf(taskId);
+  n.drawn = n.read && n.pending.size
+    ? n.read.map((t) => { const p = n.pending.get(t.id); return p ? optimistic(t, p) : t; })
+    : n.read;
+  for (const fn of [...listeners]) fn();
+  return n.drawn;
+}
+
+/** Test seam: forget every node (a module store outlives a test's page). */
+export function resetOrgThreadsForTest(): void { nodes.clear(); listeners.clear(); }
 
 export function useOrgThreads(taskId: string | undefined, enabled: boolean): OrgThreadsState {
-  const [threads, setThreads] = useState<OrgThread[] | null>(() => (taskId && enabled ? lastRead.get(taskId) ?? null : null));
+  const tasks = useTasksContextSafe();
+  const threads = useSyncExternalStore(subscribe, () => (taskId && enabled ? nodes.get(taskId)?.drawn ?? null : null));
   const [error, setError] = useState<string | null>(null);
   /** A write the server refused: kept until the next write saves (a re-read does not clear it). */
   const [writeError, setWriteError] = useState<string | null>(null);
-  const seq = useRef(0);
   const ownerReadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
     if (ownerReadTimer.current) clearTimeout(ownerReadTimer.current);
     ownerReadTimer.current = null;
-    seq.current++;
   }, [taskId, enabled]);
-  /** Writes on their way, by thread: a read that lands meanwhile keeps showing them. */
-  const pending = useRef(new Map<string, OrgThreadPatch>());
-  const withPending = (list: OrgThread[]): OrgThread[] =>
-    pending.current.size ? list.map((t) => { const p = pending.current.get(t.id); return p ? optimistic(t, p) : t; }) : list;
   /** Read the threads; false when the read failed (a later read that wins counts as done). */
   const load = useCallback(async (why: string): Promise<boolean> => {
     if (!taskId) return true;
-    const mine = ++seq.current;
+    const node = nodeOf(taskId);
+    const mine = ++node.seq;
     try {
       const next = await fetchOrgThreads(taskId);
-      // A later read (or a node change) wins: an answer that comes back late is dropped.
-      if (mine === seq.current) { lastRead.set(taskId, next); setThreads(withPending(next)); setError(null); }
+      // A later read of this node wins: an answer that comes back late is dropped.
+      if (mine === node.seq) { node.read = next; redraw(taskId); setError(null); }
       return true;
     } catch (err) {
-      if (mine !== seq.current) return true;
+      if (mine !== node.seq) return true;
       log.warn('org-threads', 'threads read failed', { taskId, why, error: err instanceof Error ? err.message : String(err) });
       setError('Threads could not be read. They come back when the server answers.');
       return false;
     }
   }, [taskId]);
   useEffect(() => {
-    setThreads(taskId && enabled ? lastRead.get(taskId) ?? null : null);
     setError(null);
     setWriteError(null);
-    pending.current.clear();
     if (enabled) void load('open');
   }, [taskId, enabled, load]);
   useEvent('org-threads:changed', (data) => {
@@ -125,24 +153,42 @@ export function useOrgThreads(taskId: string | undefined, enabled: boolean): Org
   const update = useCallback(async (threadId: string, patch: OrgThreadPatch): Promise<boolean> => {
     if (!taskId) return false;
     // Only this thread changes, so a refused write undoes only itself (never another card's).
-    const before = threads?.find((t) => t.id === threadId);
-    pending.current.set(threadId, patch);
-    setThreads((cur) => cur?.map((t) => (t.id === threadId ? optimistic(t, patch) : t)) ?? cur);
+    const node = nodeOf(taskId);
+    node.pending.set(threadId, patch);
+    const drawn = redraw(taskId);
+    // The node's row reads its counts off the task's status: predicted from the same list, now.
+    // Made from the list as drawn NOW each time the server speaks, while writes are out or just
+    // answered: the status the server derived for the first of two acts is not the last word.
+    const predict = () => (node.drawn ? tasks?.predictStatus(taskId, (row) => {
+      // Once its status carried counts, the server counts this node: a prediction of none left
+      // (no `threads` at all) must still be counted up again.
+      node.counted ||= !!row.user_status?.threads;
+      return statusWithThreads(row.user_status, node.drawn ?? [], node.counted);
+    }, { live: () => node.pending.size > 0 || performance.now() - node.settledAt < SETTLE_MS }) : undefined);
+    const unpredict = drawn ? predict() : undefined;
+    const done = () => { node.settledAt = performance.now(); if (node.pending.get(threadId) === patch) node.pending.delete(threadId); };
     try {
       await patchOrgThread(taskId, threadId, patch);
-      if (pending.current.get(threadId) === patch) pending.current.delete(threadId);
+      // Saved: the change is part of the list now, so nothing draws back while the read is out.
+      if (node.pending.get(threadId) === patch && node.read) node.read = node.read.map((t) => (t.id === threadId ? optimistic(t, patch) : t));
+      done();
+      redraw(taskId);
       setWriteError(null);
       void load('write');
       return true;
     } catch (err) {
       log.warn('org-threads', 'thread write failed', { taskId, threadId, error: err instanceof Error ? err.message : String(err) });
-      if (pending.current.get(threadId) === patch) pending.current.delete(threadId);
-      if (before) setThreads((cur) => cur?.map((t) => (t.id === threadId ? before : t)) ?? cur);
+      done();
+      redraw(taskId);
+      unpredict?.();
+      // Another write of this node is still out (or its prediction replaced this one): counted
+      // again from the list as it is drawn now, without the refused change.
+      predict();
       void load('failed');
       setWriteError(`That did not save: ${err instanceof Error ? err.message : String(err)}`);
       return false;
     }
-  }, [taskId, threads, load]);
+  }, [taskId, tasks, load]);
 
   const split = useCallback(async (threadId: string, messageId: string): Promise<boolean> => {
     if (!taskId) return false;

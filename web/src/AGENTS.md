@@ -285,6 +285,21 @@ show inline after the open ones, other completed hits that show the query fold i
   network layer and requires both directions to propagate before the server answers;
   `task-store-detail-popup-instant.spec.ts` (Home's task details popup) and
   `task-store-toast-undo-instant.spec.ts` (toast Undo through `deleteTask`) do the same.
+- **A field the server derives is predicted, never waited for.** `task.user_status` (the dot,
+  the status pill, every Needs you count, an Org node's thread number) is written only by the
+  server (`src/core/user-status-sync.ts`), so an optimistic write of a phase or a thread left
+  every badge on the old value until the server's pass (2026-11-19: a thread acted on in the Org
+  page kept its node's red dot 20 to 35 s). A hand's change now lays a prediction over the row
+  (`hooks/status-prediction.ts`, `predictStatus` / `predictPhase` in `useTasks.ts`): the server's
+  first different status replaces it, a refused write undoes it, and no answer in 10 s reads the
+  row again. A node's threads are one module store per node (`components/org/useOrgThreads.ts`)
+  read by the Org page and the session panel. The server derives a hand's change on its fast
+  lane (25 ms, not the 1.5 s debounce), so other windows and the phone follow inside a second.
+  Ratchets: `tests/e2e/browser/org-thread-dot-same-browser-instant.spec.ts`,
+  `tests/web/status-prediction.test.ts`, `tests/core/user-status-fast-lane.test.ts`, and
+  `tests/web/shared-entity-write-guard.test.ts` (a new file that calls a task, thread or letter
+  write API directly, past the stores, fails it until it goes through the store or is listed
+  with its reason).
 - **The same rule holds for every shared entity, not just tasks.** The general shape: ONE
   module store per entity kind (a React context or `useSyncExternalStore` module), optimistic
   mutators that write the store BEFORE the request and roll back on rejection, and WS events
