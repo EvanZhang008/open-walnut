@@ -70,6 +70,8 @@ interface TaskQuickActionsProps {
   slot?: 'all' | 'phase' | 'kebab';
   /** The phone's short menu (N12): leading rows, Task detail and Status only. */
   phoneMenu?: boolean;
+  /** The surface shows Watch itself (the session header's WatchPill): the menu leaves its row out. */
+  watchOutside?: boolean;
   /**
    * Extra content appended to the bottom of the kebab dropdown, below a divider
    * (e.g. session-panel's "Session" actions). Receives `close` so items can
@@ -103,7 +105,7 @@ interface TaskQuickActionsProps {
   onCompleted?: (info: { taskId: string; from: TaskPhase; title?: string }) => void;
 }
 
-export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedTier, onPinTask, onUnpinTask, onSetTier, compact, slot = 'all', phoneMenu = false, extraSection, leadingSection, onOpenTaskDetail, contextMenuScope, onCompleted }: TaskQuickActionsProps) {
+export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedTier, onPinTask, onUnpinTask, onSetTier, compact, slot = 'all', phoneMenu = false, watchOutside = false, extraSection, leadingSection, onOpenTaskDetail, contextMenuScope, onCompleted }: TaskQuickActionsProps) {
   // The board's copy first: a caller that passes no task (a bound draft's header) draws its kebab
   // from the store in the first frame instead of after a GET (2026-11-04, "the data is cache").
   const storeTask = useStoreTask(externalTask === undefined ? taskId : undefined);
@@ -473,6 +475,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
               isDone={isDone}
               close={closeKebab}
               phoneMenu={phoneMenu}
+              watchOutside={watchOutside}
               onSetStartDate={handleSetStartDate}
               onSetDate={handleSetDate}
               onSetPhase={(_id, phase) => handlePhaseChange(phase)}

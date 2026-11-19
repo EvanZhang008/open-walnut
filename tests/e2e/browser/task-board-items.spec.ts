@@ -203,6 +203,8 @@ test('a thread reads like the chat, and Reply docks Walnut\'s composer', async (
   page.on('pageerror', (e) => pageErrors.push(e.message))
   const project = `${engine}-items-chat ${stamp}`
   const { id: leader, sid } = await taskWithSession(`${engine}-items-chat-leader ${stamp}`, { project }, 'Chat leader ready')
+  // The Board tab is a lead's: one open worker (a Board of its own no longer brings it, 2026-11-19).
+  await createTask(`${engine}-items-chat-worker ${stamp}`, { project, pinned: false, parent_task_id: leader })
   await api('PUT', `/api/v1/tasks/${leader}/board`, {
     html: `<!doctype html><html><head><meta charset="utf-8">${STYLE}</head><body><main>
 <h1 style="font-size:17px">${engine} chat board ${stamp}</h1>
@@ -872,15 +874,16 @@ test('a worker has no Board tab; its board posts land on its leader\'s board, wh
   if (!(await chevron.evaluate((el) => el.classList.contains('expanded')))) await chevron.click()
 
   // ── The worker's panel: no Board tab (2026-10-26, "for non leader, please don't show board") ──
-  // Whether it leads is the panel's owner read: wait for that answer, so "no chip" is the decision, not a chip on its way.
-  const ownerRead = page.waitForResponse((r) => r.url().includes(`/api/v1/tasks/${worker}/board/owner?tab=1`), { timeout: 60_000 })
+  // Whether it leads is the page's task list (its open subtasks): the row came from that list, so the
+  // panel knows on its first frame. The server says the same of it.
   const workerRow = page.locator(`.todo-panel-item[data-task-id="${worker}"]`)
   await expect(workerRow).toBeVisible({ timeout: 30_000 })
   await workerRow.locator('.todo-item-title').click()
   const workerPanel = page.locator(`${REAL_PANEL}[data-session-id="${sid}"]`)
   await expect(workerPanel).toBeVisible({ timeout: 30_000 })
   await expect(workerPanel.locator('[data-header-id="files"]')).toBeVisible({ timeout: 30_000 })
-  expect(await (await ownerRead).json()).toMatchObject({ task_id: leader, self: false, own_board: false, open_subtasks: 0 })
+  expect(await api('GET', `/api/v1/tasks/${worker}/board/owner?tab=1`)).toMatchObject({ task_id: leader, self: false, own_board: false, open_subtasks: 0 })
+  await page.waitForTimeout(300)
   await expect(workerPanel.getByTestId('session-board-chip')).toHaveCount(0)
   await expect(workerPanel.locator('[data-header-id="board"]')).toHaveCount(0)
 

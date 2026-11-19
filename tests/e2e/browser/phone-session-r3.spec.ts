@@ -9,6 +9,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Page, type Route } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { leadForPage } from './board-view-helpers'
 import { PHONE, findSmallTargets, findSmallText } from './phone-helpers'
 
 const SHOTS = '/tmp/mobile-web/phone-session-r3'
@@ -272,6 +273,8 @@ test('C19: a Board\'s card chips and its Status view read 12 px and take a finge
   expect(put.ok(), await put.text()).toBe(true)
   try {
     const errors = await stubSession(page, { sid, taskId })
+    // The Board row is a lead's: the fixture task gets an open subtask in this page's task list only.
+    await leadForPage(page, taskId)
     await page.goto(`/?s1=${sid}`)
     await expect(overlayOf(page, sid).locator('[data-message-id="a-1"]')).toBeAttached({ timeout: 30_000 })
     await page.locator('.phone-topbar').getByRole('button', { name: 'More actions' }).click()

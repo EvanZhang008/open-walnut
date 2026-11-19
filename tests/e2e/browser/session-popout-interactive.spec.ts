@@ -4,6 +4,7 @@ import { loadApp } from './host-problems-fixture-helpers'
 import { isolatePrefs } from './host-problems-helpers'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { openKebabGroup } from './kebab-group-helpers'
+import { popoutFromKebab } from './session-kebab-helpers'
 
 const PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const SHOTS = '/tmp/mac-popout-full'
@@ -14,9 +15,9 @@ async function openPopout(page: Page, sessionId: string): Promise<{ child: Page;
   await page.evaluate(id => window.dispatchEvent(new CustomEvent('main:open-session', { detail: { sessionId: id } })), sessionId)
   const parent = page.locator(`.main-page-session-column .session-panel[data-session-id="${sessionId}"]`)
   await expect(parent).toBeVisible()
-  const opened = page.context().waitForEvent('page')
-  await parent.locator('.session-panel-popout').click()
-  const child = await opened
+  // Open in new tab is the ⋮ menu's Window row (2026-11-19): the header has no button for it.
+  await expect(parent.locator('.session-panel-popout')).toHaveCount(0)
+  const child = await popoutFromKebab(parent)
   await expect(child.locator('.popout-session .session-panel-input textarea')).toBeVisible({ timeout: 30_000 })
   return { child, parent }
 }
@@ -135,9 +136,7 @@ test('dense history, view tools, fork recovery and reopen retain a usable compos
   await child.screenshot({ path: `${SHOTS}/narrow-${test.info().project.name}.png` })
   await child.getByRole('button', { name: 'Close session panel', exact: true }).click()
   await expect.poll(() => child.isClosed()).toBe(true)
-  const opened = page.context().waitForEvent('page')
-  await page.locator('.main-page-session-column .session-panel-popout').click()
-  const reopened = await opened
+  const reopened = await popoutFromKebab(page.locator('.main-page-session-column .session-panel').first())
   // The reopened window is a cold load of the whole app, as the first one was: it gets the same
   // 30 s (a slow CI runner took longer than the default 5 s; 8x CPU throttling here took 13 s).
   await expect(reopened.locator('.session-panel-input textarea')).toHaveValue('Keep this draft across views', { timeout: 30_000 })

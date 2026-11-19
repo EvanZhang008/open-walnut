@@ -71,3 +71,51 @@ export async function backToBoard(page: Page, leader: Locator): Promise<Locator>
   }).toPass({ timeout: 60_000 })
   return pane
 }
+
+/**
+ * A synthetic open subtask of `parentId`, shaped as a row of the task list (GET /api/tasks), built
+ * from the parent's own row when there is one (its session, team and status fields left out).
+ */
+export const openSubtaskId = (parentId: string) => `pw-open-subtask-of-${parentId}`
+
+export function openSubtaskRow(parentId: string, parentRow?: Record<string, unknown>): Record<string, unknown> {
+  const base = parentRow
+    ? Object.fromEntries(Object.entries(parentRow).filter(([k]) => !/session|parent|children|subtask|user_status|org_|board|pinned|focus/i.test(k)))
+    : { source: 'local', project: '', created_at: new Date().toISOString() }
+  return {
+    ...base,
+    id: openSubtaskId(parentId),
+    title: 'Open subtask (page-local)',
+    parent_task_id: parentId,
+    phase: 'IN_PROGRESS',
+    status: 'in_progress',
+    updated_at: new Date().toISOString(),
+  }
+}
+
+/**
+ * Make `taskId` a lead for this page only. The Board tab is a lead's, and a lead is a task with an
+ * open subtask in the page's task store (web/src/components/sessions/board-tab-model.ts; a Board of
+ * its own no longer counts, 2026-11-19), so every task list answer the store loads (GET /api/tasks
+ * without `ids`) gains one open subtask of it. Nothing is written to the server.
+ *
+ * It acts from the next list fetch on: install it before the page loads (or reload after it).
+ * Returns the subtask's id and how many list answers it changed.
+ */
+export async function leadForPage(page: Page, taskId: string): Promise<{ childId: string; lists: () => number }> {
+  let lists = 0
+  await page.route((url) => url.pathname === '/api/tasks' && !url.searchParams.has('ids'), async (route) => {
+    if (route.request().method() !== 'GET') { await route.fallback(); return }
+    try {
+      const res = await route.fetch()
+      if (!res.ok()) { await route.fulfill({ response: res }); return }
+      const body = await res.json() as { tasks?: Array<Record<string, unknown>> }
+      if (Array.isArray(body.tasks)) {
+        body.tasks.push(openSubtaskRow(taskId, body.tasks.find((t) => t.id === taskId)))
+        lists++
+      }
+      await route.fulfill({ response: res, json: body })
+    } catch { /* the page is gone */ }
+  })
+  return { childId: openSubtaskId(taskId), lists: () => lists }
+}

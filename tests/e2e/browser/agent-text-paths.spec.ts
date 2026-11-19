@@ -4,6 +4,7 @@ import { discoverBrowserFixture } from './codex-test-audit';
 import { TINY_SILENT_MP4_BASE64 } from './fixtures/tiny-video';
 import { press as click } from './real-press';
 import { closeLinkedLetter, dragSelect, openSessionBoard, showPointer, tabTo } from './agent-text-entry-helpers';
+import { leadForPage } from './board-view-helpers';
 
 const stamp = Date.now().toString(36);
 const project = `Agent links ${stamp}`;
@@ -341,6 +342,8 @@ test('Board page and stored posts use the same file and letter links after typin
       await click(page, page.getByTestId('org-top-task'));
       await click(page, page.getByTestId('org-task-mode-board'));
     } else {
+      // The Board tab is a lead's: the fixture task gets an open subtask in this page's task list only.
+      await leadForPage(page, task);
       await enter(page);
       const search = page.locator('.todo-search-input');
       await click(page, search);

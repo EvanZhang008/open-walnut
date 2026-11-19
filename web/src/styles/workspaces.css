@@ -342,10 +342,6 @@
   margin: -20px -22px 0; padding: 20px 22px 8px;
   background: inherit; border-radius: 12px 12px 0 0;
 }
-.script-output-dialog .script-run-card { margin-top: 10px; }
-.script-output-dialog .script-run-command { white-space: pre-wrap; overflow-wrap: anywhere; text-overflow: clip; }
-.script-output-dialog .script-run-output pre { max-height: min(60vh, 520px); }
-.session-scripts-setup-more { display: block; margin-top: 2px; font-size: 11.5px; color: var(--accent, var(--fg-secondary)); }
 .project-scripts-lede { margin-top: 6px; font-size: 12.5px; color: var(--fg-secondary); line-height: 1.5; }
 .project-scripts-list { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
 .project-scripts-row {
@@ -436,7 +432,7 @@
 .project-scripts-field-hint.is-warn { color: var(--color-warning, #b26a00); font-size: 12px; overflow-wrap: anywhere; }
 .project-scripts-note { font-size: 12px; color: var(--fg-muted); line-height: 1.5; overflow-wrap: anywhere; }
 .project-scripts-note.is-warn { color: var(--color-warning, #b26a00); }
-.project-scripts-note code, .project-scripts-file-head code, .session-scripts-empty code {
+.project-scripts-note code, .project-scripts-file-head code {
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 0.92em;
 }
@@ -447,32 +443,6 @@
 .project-scripts-mini-row .project-scripts-command { font-size: 11px; }
 .project-scripts-edit { font-size: 11px; }
 
-/* ── Project scripts: the session's Scripts menu ── */
-.session-scripts-menu { min-width: 260px; max-width: 380px; }
-.session-scripts-item { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.session-scripts-item-top { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
-.session-scripts-item-name { font-weight: 500; }
-.session-scripts-result { order: 1; margin-left: auto; font-size: 11px; white-space: nowrap; color: var(--fg-muted); }
-.session-scripts-result.is-passed { color: var(--color-success, #1a7f37); }
-.session-scripts-result.is-failed { color: var(--color-error, #d1242f); }
-.session-scripts-result.is-stopped,
-.session-scripts-result.is-notrun { color: var(--color-warning, #b26a00); }
-/* A long command wraps to three rows before it is cut (the row's tooltip has all of it). */
-.session-scripts-item-command {
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 10.5px;
-  color: var(--fg-muted);
-  overflow: hidden;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
-  max-width: 320px;
-}
-.session-scripts-empty { display: block; font-size: 12px; color: var(--fg-muted); white-space: normal; line-height: 1.45; max-width: 320px; }
-.session-scripts-error { display: block; font-size: 12px; color: var(--color-error, #ff3b30); white-space: normal; max-width: 320px; overflow-wrap: anywhere; }
 .draft-workspace-setup { display: flex; flex-basis: 100%; align-items: baseline; gap: 6px; min-width: 0; max-width: 100%; }
 .draft-workspace-setup-lead { white-space: nowrap; flex-shrink: 0; }
 .draft-workspace-setup strong { font-weight: 600; color: var(--fg-secondary); }
@@ -521,18 +491,6 @@
 .project-scripts-allow-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 
 .project-scripts-role.is-replaced { color: var(--fg-secondary, var(--fg-muted)); background: var(--bg-secondary, transparent); }
-.session-scripts-dot { display: inline-block; width: 6px; height: 6px; margin-left: 5px; border-radius: 50%; vertical-align: 1px; }
-.session-scripts-dot.tone-busy { background: var(--accent); }
-.session-scripts-dot.tone-error { background: var(--color-error, #ff3b30); }
-.session-scripts-dot.tone-warn { background: var(--color-warning, #b26a00); }
-.session-scripts-setup { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--fg-secondary); max-width: 320px; }
-.session-scripts-setup strong { color: var(--fg); font-weight: 600; }
-.session-scripts-setup-line { font-weight: 400; }
-.session-scripts-setup-at { color: var(--fg-muted); }
-.session-scripts-note { display: block; font-size: 11.5px; font-weight: 400; color: var(--fg-secondary); white-space: normal; line-height: 1.45; max-width: 320px; }
-.session-scripts-setup.tone-error { color: var(--color-error, #ff3b30); }
-.session-scripts-setup.tone-warn { color: var(--color-warning, #b26a00); }
-.session-scripts-setup-tail { font-family: var(--font-mono, ui-monospace, monospace); font-size: 10.5px; color: var(--fg-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-scripts-form .app-modal-input[aria-invalid] { border-color: var(--color-error, #ff3b30); box-shadow: 0 0 0 1px var(--color-error, #ff3b30); }
 .workspace-preparing-fix .project-scripts-link { color: var(--accent); }
 .workspace-preparing-fix { margin-top: 10px; font-size: 12px; color: var(--fg-muted); text-align: center; max-width: 420px; }
@@ -542,4 +500,3 @@
 .script-command-toggle.is-open { cursor: zoom-out; white-space: pre-wrap; overflow-wrap: anywhere; text-overflow: clip; overflow: visible; }
 .script-command-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .project-scripts-save-hint { font-size: 12px; color: var(--fg-muted); margin-top: 2px; }
-.session-scripts-loading { display: block; font-size: 12px; color: var(--fg-muted); }

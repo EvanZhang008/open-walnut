@@ -3,6 +3,7 @@ import { test, expect, type Page } from '@playwright/test'
 import { isolatePrefs } from './host-problems-helpers'
 import { loadApp } from './host-problems-fixture-helpers'
 import { healthyGitSync } from './host-attention-helpers'
+import { popoutFromKebab } from './session-kebab-helpers'
 import { openDraft } from './draft-helpers'
 
 const pill = (page: Page) => page.locator('.stale-build-pill')
@@ -197,9 +198,8 @@ test('home and popout share the update notice; a popout draft, which a restart d
   const parent = page.locator('.main-page-session-column [data-session-id="pw-vscode-session"]')
   await expect(parent).toBeVisible()
   await parent.locator('.session-panel-input textarea').fill('Keep the parent message')
-  const opened = page.context().waitForEvent('page')
-  await parent.locator('.session-panel-popout').click()
-  const child = await opened
+  // Open in new tab is the ⋮ menu's Window row (2026-11-19).
+  const child = await popoutFromKebab(parent)
   const errors: string[] = []
   child.on('pageerror', e => errors.push(e.message))
   // A popout is a cold load of the whole app in a new window: it gets the 20 s a first load does.

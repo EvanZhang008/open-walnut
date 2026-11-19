@@ -85,10 +85,12 @@ struct TeamStatusBoard: Equatable {
     /// Waiting / snoozed without the not started ones.
     var waitingRows: [TeamStatusRow] { waiting.filter { !TeamStatusModel.isNotStarted($0.status) } }
     var open: [TeamStatusRow] { needs + working + waiting }
-    /// The lead has a team to show (one subtask at least, open or recently done).
     /// Whether the owner's own row is among the rows (`build`'s `includeOwner`).
     var ownerIncluded = true
-    var hasTeam: Bool { open.count + done.count > (ownerIncluded ? 1 : 0) }
+    /// The task leads now: one open direct subtask at least (the web's openSubtasksOf). A team whose work all finished
+    /// is not a lead's any more, so the section goes, like the web's Board tab
+    /// (web/src/components/sessions/board-tab-model.ts; 2026-11-19, the user: "only show if it is leader").
+    var isLeading: Bool { open.contains { $0.depth == 1 } }
 
     func rows(_ s: UserState) -> [TeamStatusRow] {
         switch s {

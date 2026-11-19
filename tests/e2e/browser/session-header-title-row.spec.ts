@@ -192,9 +192,11 @@ test('the session title owns the second header row and reveals its full text on 
   const titleBox = (await titleRow.boundingBox())!
   expect(titleBox.y).toBeGreaterThan(toolsBox.y)
   const controls = toolsRow.locator('.session-panel-window-controls')
-  for (const cls of ['lock', 'popout', 'expand', 'close']) {
+  for (const cls of ['lock', 'expand', 'close']) {
     await expect(controls.locator(`.session-panel-${cls}`)).toHaveCount(1)
   }
+  // Open in new tab is the ⋮ menu's Window row only (2026-11-19): no header button.
+  await expect(panel.locator('.session-panel-popout')).toHaveCount(0)
   await expect(toolsRow.getByRole('button', { name: 'Changed' })).toHaveCount(1)
 
   // 2. The title row holds only the state pills, the folded tags control and the kebab:

@@ -75,6 +75,8 @@ export interface TaskMenuRowsProps {
   onDelete?: () => void;
   /** The phone's short menu: snooze, watch, details, status and pin choices. */
   phoneMenu?: boolean;
+  /** Watch is on the surface itself (the session header's WatchPill): no row for it here. */
+  watchOutside?: boolean;
 }
 
 function Item({ icon, children, onClick, className, testId }: {
@@ -105,7 +107,7 @@ export function TaskMenuRows(p: TaskMenuRowsProps) {
   return (
     <>
       {p.onSetStartDate && <TaskSnoozeRow task={task} onSetStartDate={p.onSetStartDate} afterAction={close} />}
-      <WatchMenuItem task={task} afterAction={close} />
+      {!p.watchOutside && <WatchMenuItem task={task} afterAction={close} />}
       {/* Background: long-running work held at the foot of the list whatever its state. */}
       <BackgroundMenuItem task={task} afterAction={close} />
       {/* A session menu's task already has its session: the row would launch a second one. */}

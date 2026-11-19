@@ -14,3 +14,17 @@
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   html .app-shell-navigation .task-watch-btn { width: 44px; height: 44px; }
 }
+
+/* Watch on the session header's label row (WatchPill): the mode pill's shape
+   (.thread-mode-pill), the eye in the accent while the task is watched. */
+.session-watch-pill {
+  display: inline-flex; align-items: center; gap: 5px; flex: none;
+  height: 22px; padding: 0 9px 0 7px; border: 0; border-radius: 999px;
+  background: var(--bg-secondary); color: var(--fg-secondary);
+  font: inherit; font-size: 11.5px; font-weight: 500; white-space: nowrap; cursor: pointer;
+}
+.session-watch-pill:hover { background: var(--bg-hover); color: var(--fg); }
+.session-watch-pill[data-narrow="true"] { padding: 0 6px; }
+.session-watch-pill.is-watched { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--bg-secondary)); }
+.session-watch-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.session-watch-pill:focus:not(:focus-visible) { outline: none; }

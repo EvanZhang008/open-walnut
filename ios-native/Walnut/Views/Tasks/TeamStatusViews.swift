@@ -149,7 +149,7 @@ struct UserStatePill: View {
 /// A lead's team in its detail sheet, the web Board's Status view on the phone: a brief
 /// that names what needs the user, the four state chips that filter (To read rows are under
 /// Needs you), and one row per task.
-/// Shown only for a task with a team (a subtask at least).
+/// Shown only while the task leads (an open subtask at least: `TeamStatusBoard.isLeading`).
 struct TeamStatusSection: View {
     let ownerId: String
     /// Open a team task's conversation. The task sheet presents it from its root: a sheet raised
@@ -168,7 +168,7 @@ struct TeamStatusSection: View {
 
     var body: some View {
         let board = TeamStatusModel.build(ownerId: ownerId, tasks: tasks.tasks, includeOwner: false)
-        if board.hasTeam {
+        if board.isLeading {
             let stopped = tasks.tasks.first(where: { $0.id == ownerId })?.teamStop
             VStack(alignment: .leading, spacing: 10) {
                 HStack {

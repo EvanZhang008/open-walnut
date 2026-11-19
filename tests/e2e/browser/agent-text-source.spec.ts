@@ -567,6 +567,12 @@ test('a Board page path opens on its writer\'s machine and a post\'s path on the
     await page.keyboard.press('Enter')
     const { taskId: leader, sessionId: leaderSid } = await ok(await started, 'quick start') as { taskId: string; sessionId: string }
     litter.push(leader)
+    // The Board tab is a lead's: one open worker (a Board of its own no longer brings it, 2026-11-19).
+    const { task: leaderTask } = await ok(await request.get(`/api/tasks/${leader}`), 'leader') as { task: { project?: string } }
+    const { task: worker } = await ok(await request.post('/api/tasks', {
+      data: { title: `Board source worker ${Date.now()}`, source: 'local', pinned: false, project: leaderTask.project ?? '', parent_task_id: leader },
+    }), 'worker') as { task: { id: string } }
+    litter.unshift(worker.id)
     const panel = page.locator(`${REAL_PANEL}[data-session-id="${leaderSid}"]`)
     await expect(panel.getByText('Board source ready', { exact: true }).first()).toBeVisible({ timeout: 60_000 })
     const unsent = panel.locator('.chat-input-textarea')
@@ -1054,8 +1060,9 @@ test('a Board page path opens on its writer\'s machine and a post\'s path on the
 
     // ── The pane closes while the machines are read: the late answer opens nothing ──
     // A fresh page holds no session record, so the press must read the post's session. While that read is
-    // held, the fixture deletes the Board, the panel closes the Board view (its task no longer leads), and
-    // the pane unmounts with the pending dialog still up: nobody dismissed it and nothing was pressed again.
+    // held, the fixture completes the leader's only worker, the panel closes the Board view (its task no
+    // longer leads), and the pane unmounts with the pending dialog still up: nobody dismissed it and
+    // nothing was pressed again.
     await leaveFullscreen(page)
     await page.reload()
     pane = page.getByTestId('task-board-pane')
@@ -1069,7 +1076,7 @@ test('a Board page path opens on its writer\'s machine and a post\'s path on the
     const closing = page.getByRole('dialog', { name: "Choose the path's source", exact: true })
     await expect(closing.getByRole('status')).toContainText('Finding the machine each one is on')
     await expect.poll(() => net.gate.held, { timeout: 20_000 }).toBe(1)
-    await ok(await request.delete(`/api/v1/tasks/${leader}/board`), 'board deleted while its path source is read')
+    await ok(await request.patch(`/api/tasks/${worker.id}`, { data: { phase: 'COMPLETE' } }), 'last worker completed while its path source is read')
     await expect(page.getByTestId('task-board-pane')).toHaveCount(0, { timeout: 20_000 })
     await expect(closing).toHaveCount(0)
     const lateAfterClose = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/sessions/${REMOTE_SID}`)

@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
-import { ICON_MINIMIZE, ICON_NEW_TAB } from '../common/Icons';
+import { ICON_MINIMIZE } from '../common/Icons';
 import { SLOT_ID_PREFIX, TOOL_ITEMS, toolItemSpec, useToolRowFit } from './useSessionHeaderFit';
 import { TASK_SLOT_SPACER } from './header-record-gate';
 
@@ -235,4 +235,4 @@ function WindowRow({ id, rowRef, onChoose }: { id: string; rowRef: RefObject<HTM
   );
 }
 
-const WINDOW_ICONS: Record<string, ReactNode> = { popout: ICON_NEW_TAB, minimize: ICON_MINIMIZE };
+const WINDOW_ICONS: Record<string, ReactNode> = { minimize: ICON_MINIMIZE };

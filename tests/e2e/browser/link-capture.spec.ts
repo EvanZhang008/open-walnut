@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import net from 'node:net'
 import { expect, test, type BrowserContext, type Locator, type Page } from '@playwright/test'
 import { bunRuntime } from '../../helpers/bun-runtime.js'
-import { showCustomBoard } from './board-view-helpers'
+import { leadForPage, showCustomBoard } from './board-view-helpers'
 import { leaveFullscreen } from './draft-helpers'
 import { goToSessionFolder } from './todo-panel-helpers'
 
@@ -345,6 +345,8 @@ test('a right-click on a handled link offers the plugin, the browser and Copy li
 })
 
 test('the Board frame forwards its link clicks and right-clicks to the same handlers', async ({ page }) => {
+  // The Board tab is a lead's: the fixture task gets an open subtask in this page's task list only.
+  await leadForPage(page, fixture.taskId)
   const { errors, tabs } = await prepare(page)
   const { links } = fixture
   const html = `<h2>Links</h2><p><a class="perm" href="${links.permalink}">board permalink</a></p>`

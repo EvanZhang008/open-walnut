@@ -28,7 +28,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { openKebabGroup } from './kebab-group-helpers'
-import { kebabRow } from './session-kebab-helpers'
+import { openSessionKebab } from './session-kebab-helpers'
 import { openAllSections, openSection, taskSection, type OrgSectionTab } from './org-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -145,8 +145,8 @@ test('one header: the name once, the chat\'s labels and kebab on its right, no C
   expect(kinds.filter((k) => k.startsWith('UNKNOWN')), `header tools: ${kinds}`).toEqual([])
   // The app's taskbar is global (2026-11-08): the node's chat minimizes too, from its header.
   expect(kinds, `header tools: ${kinds}`).toContain('minimize')
-  // Its Watch is no header button since 2026-11-09 (the user: "this 2 put iot in the drop down"):
-  // it is the kebab's task row (the Watch test below).
+  // Locate is no header button since 2026-11-09 (the user: "this 2 put iot in the drop down");
+  // Watch is the header's pill since 2026-11-19, icon only here (the Watch test below).
   await expect(tools.locator('[data-header-id="watch"], [data-testid="session-panel-watch"], [data-header-id="locate"], [data-testid="session-panel-locate"]')).toHaveCount(0)
   // The pills come before the tags control, and the kebab is last.
   const order = kinds.filter((k) => k !== 'thread-mode')
@@ -190,24 +190,32 @@ test('Minimize in the node\'s header puts its chat on the taskbar; the chip brin
   await beat(page)
 })
 
-test('Watch in the node\'s header kebab reads Stop watching while the node\'s task is watched, and a second click ends it', async ({ page }) => {
+test('Watch in the node\'s header is a pill, pressed while the node\'s task is watched; a second click ends it, and the kebab has no Watch row', async ({ page }) => {
   await isolateUiPrefs(page)
   await page.setViewportSize({ width: 1440, height: 900 })
   await loadHome(page)
   await openNode(page, LED)
   const tools = page.getByTestId('org-detail-chat-tools')
   const menu = page.locator('.task-kebab-menu')
-  let watch = await kebabRow(tools, 'task-kebab-watch')
-  await expect(watch).toHaveText('Watch')
+  // The node's header is narrow by design: the eye alone, its name in the accessible label.
+  const watch = tools.getByTestId('session-watch-pill')
+  await expect(watch).toBeVisible({ timeout: 30_000 })
+  await expect(watch).toHaveAttribute('data-narrow', 'true')
+  await expect(watch).toHaveAttribute('aria-pressed', 'false')
+  await expect(watch).toHaveAccessibleName('Watch')
   await beat(page)
   await watch.click()
-  await expect(menu).toHaveCount(0)
-  watch = await kebabRow(tools, 'task-kebab-watch')
-  await expect(watch).toHaveText('Stop watching')
+  await expect(watch).toHaveAttribute('aria-pressed', 'true')
+  await expect(watch).toHaveAttribute('aria-pressed', 'true')
   await beat(page)
   await watch.click()
+  await expect(watch).toHaveAttribute('aria-pressed', 'false')
   await expect(menu).toHaveCount(0)
-  await expect(await kebabRow(tools, 'task-kebab-watch')).toHaveText('Watch')
+  // Its menu leaves Watch to the pill: the task's rows are there (Background, Watch's old
+  // neighbour), no Watch among them.
+  await openSessionKebab(tools)
+  await expect(menu.getByTestId('task-kebab-background')).toBeVisible({ timeout: 30_000 })
+  await expect(menu.getByTestId('task-kebab-watch')).toHaveCount(0)
   await tools.locator('.task-kebab-btn').click()
   await expect(menu).toHaveCount(0)
 })

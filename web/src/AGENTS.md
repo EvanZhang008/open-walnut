@@ -59,7 +59,7 @@ show inline after the open ones, other completed hits that show the query fold i
   home columns (`SessionsRedirect` in `App.tsx` + `utils/open-session.ts`). The chat spot is
   `AskWalnutSlot`, which hosts an embedded `SessionPanel` for the selected ask, and a
   `DraftSessionPanel` in its New state. The embedded panel keeps every window control a column
-  has (×, popout, fullscreen, locate; its × hides the slot), minus lock. The slot's only
+  has (×, fullscreen; the kebab's Open in new tab and Locate; its × hides the slot), minus lock. The slot's only
   addition is the ≡ button leading the header's TITLE row (both panels take it as
   `headerLeading`; the title row because it ellipsizes, whereas the chips row wraps and pushed
   the time-ago to a second line in a narrow slot); it opens `AskWalnutDrawer`, an in-slot

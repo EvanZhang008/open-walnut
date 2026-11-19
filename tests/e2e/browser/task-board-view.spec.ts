@@ -63,6 +63,7 @@ const historyText = async (sid: string) => {
   return (body.messages ?? []).map((m) => m.text ?? '').join('\n')
 }
 
+/** A leader with a live mock-CLI session and one open worker. */
 async function leaderWithSession(title: string, project: string, ready: string): Promise<{ id: string; sid: string }> {
   const { task } = await api<{ task: { id: string } }>('POST', '/api/tasks', { title, project, source: 'local', pinned: false })
   litter.push(task.id)
@@ -70,6 +71,10 @@ async function leaderWithSession(title: string, project: string, ready: string):
     cwd: `${fixtureRoot}/projects/walnut`, message: `snapshot-clean-turn:${ready}`, taskId: task.id,
   })
   await expect.poll(() => historyText(sessionId), { timeout: 60_000 }).toContain(ready)
+  // The Board tab is a lead's: one open worker (a Board of its own no longer brings it, 2026-11-19).
+  // Pushed after its leader, so the reverse-order cleanup deletes it first.
+  const { task: worker } = await api<{ task: { id: string } }>('POST', '/api/tasks', { title: `${title} worker`, project, source: 'local', pinned: false, parent_task_id: task.id })
+  litter.push(worker.id)
   return { id: task.id, sid: sessionId }
 }
 

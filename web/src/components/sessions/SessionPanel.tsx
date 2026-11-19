@@ -16,6 +16,7 @@ import { SessionChatHistory } from './SessionChatHistory';
 import { SessionSupervisionBar, useSessionSupervision } from './SessionSupervisionBar';
 import { CronPill } from './CronPill';
 import { TriggerPill } from '@/components/routines/TriggerPill';
+import { WatchPill } from '@/components/tasks/WatchToggle';
 import { SubtaskPill } from '@/components/tasks/SubtaskPill';
 import { TaskTagPills } from '@/components/tasks/TaskTagPills';
 import { LeaderPill } from '@/components/tasks/LeaderPill';
@@ -79,7 +80,7 @@ import { TerminalDock } from './TerminalDock';
 import { TerminalUnavailableView } from './HostFeatureUnavailable';
 import type { TerminalPathLink } from './terminal-links';
 import type { SessionSplitView } from './sessionSplitView';
-import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_MINIMIZE, ICON_LOCK, ICON_UNLOCK, ICON_NEW_TAB, ICON_PANEL_RIGHT, ICON_PANEL_RIGHT_FILLED, ICON_TERMINAL } from '../common/Icons';
+import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_MINIMIZE, ICON_LOCK, ICON_UNLOCK, ICON_PANEL_RIGHT, ICON_PANEL_RIGHT_FILLED, ICON_TERMINAL } from '../common/Icons';
 import { openPopout } from '@/popout/openPopout';
 import { locateTaskOnHome, navigateToTarget } from '@/utils/open-session';
 import { UserMessagesSummary } from './UserMessagesSummary';
@@ -220,9 +221,7 @@ import { placeKeyOf } from './reading-place';
 import { TreeHalfContext, type TreeHalf } from './tree-half-context';
 import { pathBarHeading, pathBarLevelItems, pathBarSegments } from './tree-path-model';
 import { createTimelineShare } from './timeline-share';
-import { SessionScriptsChip } from '@/components/workspaces/SessionScriptsChip';
 import { workspaceOf } from '@/components/workspaces/workspace-text';
-import { noteScriptDropped, noteScriptTyped } from '@/components/workspaces/script-results';
 import { ShortcutHint } from '@/keyboard/ShortcutHint';
 import { setTaskThreads, takeThreadsViewAsk, threadsKeptBy, threadsOffered, useThreadsViewAskTick } from './session-threads-model';
 import { useOrgThreads } from '@/components/org/useOrgThreads';
@@ -665,8 +664,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // menu). Hidden items stay mounted under data-hidden="true"; the menu proxies to
   // them. The title row has nothing to fold: its labels are one control already.
   const toolRowRef = useRef<HTMLDivElement>(null);
-  // A narrow title row puts its labels on a line under the title (useTitleRowTight.ts).
-  const [titleRowRef, titleRowTight] = useTitleRowTight();
+  // A narrow title row puts its labels on a line under the title (useTitleRowTight.ts), and
+  // its Watch pill draws the eye alone.
+  const [titleRowRef, titleRowTight, titleRowNarrow] = useTitleRowTight();
   // Fork and Board (and the kebab's Locate) need the session's task. Whether they exist is decided
   // on the first frame from what this page already knows (the status store, which
   // every list naming the session seeds); a session known to have no task gets
@@ -679,10 +679,18 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // adopting the full id) starts from what this one drew (handOverTaskSlots).
   const { slot: taskSlot, handOver: handOverTaskSlots } = useTaskControlSlot(sessionId, taskPresence);
   const boardWaitReason = recordGateReason('The Board', session, loading);
-  // Board is a lead's tab: only a task with open subtasks or a Board of its own
-  // gets it (board-tab-model.ts). The status store names the task before the record.
+  // Board is a lead's tab: only a task with open subtasks gets it, a Board kept
+  // from a finished team does not count (board-tab-model.ts). The status store names the task before the record.
   // An inset column draws no split views, so it never asks.
-  const boardTab = useBoardTab(inset ? undefined : (session?.taskId ?? liveStatus?.taskId));
+  const leadTab = useBoardTab(inset ? undefined : (session?.taskId ?? liveStatus?.taskId));
+  // A Board opened while the task led stays, tab and view, until the user leaves it: the
+  // last subtask finishing (or one finishing just before the next is made) never takes the
+  // team's last state from under the reader. A Board view restored for a task that does not
+  // lead is not held, and closes below.
+  const boardHeld = useRef<{ sessionId: string; held: boolean }>({ sessionId, held: false });
+  if (boardHeld.current.sessionId !== sessionId || activeView !== 'board') boardHeld.current = { sessionId, held: false };
+  else if (leadTab === 'shown') boardHeld.current.held = true;
+  const boardTab = boardHeld.current.held ? 'shown' : leadTab;
   // Whether this panel drew the live chip for this session: only then does a later
   // "no task" leave its place as a spacer (taskControlSlot).
   const boardDrawn = useRef<{ sessionId: string; drawn: boolean }>({ sessionId, drawn: false });
@@ -1419,7 +1427,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const splitOpen = activeView !== null;
   // Every host offers the Terminal tab, whatever the connection (the user, 2026-11-18:
   // "it should always have ... no matter what connection"). A host whose daemon cannot open
-  // one yet (its status frame's terminal: false) keeps the tab and Scripts: the tab then says
+  // one yet (its status frame's terminal: false) keeps the tab: the tab then says
   // why and how to fix it (TerminalUnavailableView), and opens no pty.
   const sessionHostStatus = useHostStatus(session?.host);
   const terminalBlockedWhy = sessionHostStatus?.terminal === false
@@ -1795,52 +1803,6 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     return () => window.removeEventListener(SESSION_APP_OPEN_EVENT, onOpen);
   }, [inset, sessionId]);
 
-  // A project script from the Scripts chip: open the terminal (once) and type it there.
-  // The run's id lets its result say whether it was typed (running) or never was (not run).
-  type TerminalInput = { id: number; text: string; raw?: boolean; runId?: string };
-  const [terminalInput, setTerminalInputState] = useState<TerminalInput | null>(null);
-  const terminalInputRef = useRef<TerminalInput | null>(null);
-  const setTerminalInput = useCallback((next: TerminalInput | null) => {
-    const cur = terminalInputRef.current;
-    if (cur?.runId && cur !== next) noteScriptDropped(sessionId, cur.runId);
-    terminalInputRef.current = next;
-    setTerminalInputState(next);
-  }, [sessionId]);
-  // The panel goes (another column took its place): a line it never typed did not run.
-  useEffect(() => () => {
-    const cur = terminalInputRef.current;
-    if (cur?.runId) noteScriptDropped(sessionId, cur.runId);
-    terminalInputRef.current = null;
-  }, [sessionId]);
-  const terminalInputSeq = useRef(0);
-  // The phone's top-bar kebab opens the Scripts menu through this (the header is not drawn there).
-  const scriptsOpenRef = useRef<((at?: { x: number; y: number }) => void) | null>(null);
-  const runInTerminal = useCallback((line: string, _script?: unknown, runId?: string) => {
-    // No terminal there yet: the script does not run (its result says so), and the tab says why.
-    if (terminalBlockedWhy) {
-      if (runId) noteScriptDropped(sessionId, runId);
-      if (!terminalShownRef.current) toggleView('terminal');
-      return;
-    }
-    setTerminalInput({ id: ++terminalInputSeq.current, text: line, ...(runId ? { runId } : {}) });
-    // A terminal docked under another view already shows: it takes the script there.
-    if (!terminalShownRef.current) toggleView('terminal');
-  }, [toggleView, setTerminalInput, terminalBlockedWhy, sessionId]);
-  // Ctrl-C into the terminal: the Scripts menu stops a script still running before it runs another.
-  const interruptTerminal = useCallback(() => {
-    const id = ++terminalInputSeq.current;
-    setTerminalInput({ id, text: '\x03', raw: true });
-    if (!terminalShownRef.current) toggleView('terminal');
-    return () => { if (terminalInputRef.current?.id === id) setTerminalInput(null); };
-  }, [toggleView, setTerminalInput]);
-  const terminalInputSent = useCallback((id: number) => {
-    const cur = terminalInputRef.current;
-    if (cur?.id !== id) return;
-    if (cur.runId) noteScriptTyped(sessionId, cur.runId);
-    terminalInputRef.current = null;
-    setTerminalInputState(null);
-  }, [sessionId]);
-  const terminalShownRef = useRef(false);
   // The menu's Threads row: turns them on first when they are off, then opens them.
   const openThreads = useLeanCallback(async () => {
     const taskId = sessionTask?.id;
@@ -1877,9 +1839,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     log.info('session-panel', 'threads view closed: threads are off', { sessionId, taskId: sessionTask.id });
     toggleView('threads');
   }, [activeView, threadsKept, sessionTask, toggleView, sessionId]);
-  // An open Board whose task stops leading (its last open subtask finished and it
-  // keeps no Board of its own, or the Board was deleted) closes back to the chat
-  // instead of leaving an empty pane behind a tab that is gone.
+  // A Board view open for a task that does not lead (one restored from an earlier visit)
+  // closes back to the chat instead of leaving a pane behind a tab that is gone. One the
+  // user opened while the task led is held above (boardHeld) until they leave it.
   useEffect(() => {
     if (activeView !== 'board' || boardTab !== 'hidden' || !session?.taskId) return;
     log.info('session-panel', 'board view closed: the task no longer leads', { sessionId, taskId: session?.taskId ?? '' });
@@ -1998,21 +1960,6 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const resizeTerminalDock = useCallback((px: number) => setTerminalDock((d) => ({ ...d, px })), [setTerminalDock]);
   const terminalDocked = !terminalBlockedWhy && terminalDockAllowed && terminalDock.on && !!activeView && TERMINAL_DOCK_VIEWS.includes(activeView);
   const terminalShown = activeView === 'terminal' || terminalDocked;
-  terminalShownRef.current = terminalShown;
-  // A script that could not be typed (the terminal closed, or never connected
-  // within a minute) is dropped: it must not run by surprise when it opens later.
-  // Its result says it did not run; so does one whose page closed first (script-results.ts).
-  const terminalWasOpen = useRef(false);
-  useEffect(() => {
-    const open = terminalShown;
-    const closed = terminalWasOpen.current && !open;
-    terminalWasOpen.current = open;
-    if (!terminalInput) return;
-    if (closed) { setTerminalInput(null); return; }
-    const id = terminalInput.id;
-    const timer = setTimeout(() => { if (terminalInputRef.current?.id === id) setTerminalInput(null); }, 60_000);
-    return () => clearTimeout(timer);
-  }, [terminalInput, terminalShown, setTerminalInput]);
 
   // A host:port service the session started (a dev server, a report page) opens
   // in the Web split view instead of a browser tab: remote ports come through an
@@ -2889,6 +2836,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           session header is the one place an ask that split work off shows it. */}
       {sessionTask && <SubtaskPill task={sessionTask} />}
       {sessionTask && <LeaderPill task={sessionTask} />}
+      {/* Watch, last so it keeps its place beside the tags and the kebab (2026-11-19, the user of
+          the kebab's Watch row: "put this outside, kind of often used"); the kebab drops its row. */}
+      {sessionTask && <WatchPill task={sessionTask} narrow={hostHeader || titleRowNarrow} />}
     </>
   );
 
@@ -3118,6 +3068,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       onOpenTaskDetail={onOpenTaskDetail}
       onCompleted={completedInColumn}
       slot="kebab"
+      // The header shows Watch (WatchPill in headerPills); a phone draws no header, so its menu keeps the row.
+      watchOutside={!phoneRows && !!sessionTask}
       // Right-clicking the panel header opens this same menu at the
       // cursor: the header is the session's object, so its actions
       // belong to the gesture people already try there.
@@ -3316,15 +3268,6 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                 >
                   Terminal
                 </button>
-                <SessionScriptsChip
-                  sessionId={sessionId}
-                  taskId={session?.taskId}
-                  hidden={hid('scripts')}
-                  rowRef={toolRowRef}
-                  onRun={runInTerminal}
-                  onInterrupt={interruptTerminal}
-                  openRef={scriptsOpenRef}
-                />
                 {/* Board needs the task, like Fork, and only a lead's task has one
                     worth opening (useBoardTab): absent otherwise. It comes AFTER the
                     chips every session has, like Plan below: whether a task leads may
@@ -3494,24 +3437,13 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             )}
             </div>{/* .session-meta-row-2-chips */}
             <div className="session-panel-window-controls">
-              {/* Watch and Locate are rows of the kebab, by their names (2026-11-09, the user of
-                  the eye and the crosshair here: "this 2 put iot in the drop down"). */}
+              {/* Locate is a row of the kebab (2026-11-09, the user: "this 2 put iot in the drop
+                  down"); Watch came back out, as a pill of the label row (2026-11-19). Open in new
+                  tab is the kebab's Window row only (2026-11-19, the user: "open in new tab can be
+                  added into drop down"). */}
               {/* The three that matter most sit together at the right end, always in this
-                  order: Lock, Expand, Close. Minimize and Open in new tab come before them,
-                  so a narrow column drops those two first and the three never move. */}
-              {/* Inset (a task opened from a Board): no popout or fullscreen of its own. */}
-              {!inset && (
-                <button
-                  className="task-action-btn session-panel-popout"
-                  data-header-id="popout"
-                  data-hidden={hid('popout')}
-                  onClick={() => openPopout('session', { id: sessionId, host: session?.host, cwd: session?.cwd })}
-                  title="Open in new tab"
-                  aria-label="Open session in new tab"
-                >
-                  {ICON_NEW_TAB}
-                </button>
-              )}
+                  order: Lock, Expand, Close. Minimize comes before them, so a narrow column
+                  drops it first and the three never move. */}
               {minimize && !shownFullscreen && (
                 <button
                   className="task-action-btn session-panel-minimize"
@@ -3682,10 +3614,6 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   board={boardChipLive ? (boardWaitReason ? 'waiting' : 'live') : 'none'}
                   threads={threadsMenuRows}
                   terminal={!inset}
-                  onScripts={!inset ? () => {
-                    const r = kebabSlot?.getBoundingClientRect();
-                    scriptsOpenRef.current?.(r ? { x: Math.max(8, r.right - 300), y: r.bottom + 4 } : { x: 8, y: 56 });
-                  } : undefined}
                   plan={!!(hasPlanContent || showExecuteButtons)}
                   onPlan={() => setPlanPopoverOpen(true)}
                   onCloseSession={onClose ? phoneClose : undefined}
@@ -4041,8 +3969,6 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                           pathNotice={terminalPathMissing}
                           onDismissPathNotice={() => setTerminalPathMissing(null)}
                           onDockWant={setTerminalWantPx}
-                          pendingInput={terminalInput}
-                          onPendingInputSent={terminalInputSent}
                           folderGone={terminalFolderGone}
                         />
                       </TerminalDock>

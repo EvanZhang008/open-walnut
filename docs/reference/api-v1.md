@@ -1378,8 +1378,10 @@ itself). The `board_*` ops default to the caller's team board.
   itself keeps a board with something a person or an agent wrote in it (a page,
   a thread, a mark, a project, a check, a choice, a reminder, edited lanes, a card
   someone placed); the server's own kanban stamps and "seen" markers do not count.
-  `open_subtasks` counts the task's direct subtasks that are not done. Clients
-  show a task's Board tab only when `open_subtasks > 0` or `own_board` is true.
+  `open_subtasks` counts the task's direct subtasks that are not done. The web
+  shows a task's Board tab only when it has open subtasks (`open_subtasks > 0`;
+  a page with a task store counts them there and makes no read); `own_board` no
+  longer decides it and is still answered for older pages.
 - `PUT /api/v1/tasks/:id/board { "html", "version"? }` → `200 { "board" }`;
   a stale `version` → `409 board_version_conflict { version }`; html over 1 MiB
   → `413 board_too_large`.

@@ -83,8 +83,7 @@ struct PopoutWindowTests {
         }
         let sid = ProcessInfo.processInfo.environment["WALNUT_TEST_SESSION"]!
         _ = try await js(parent, "window.dispatchEvent(new CustomEvent('main:open-session',{detail:{sessionId:'\(sid)'}})); true")
-        try await wait { (try? await js(parent, "!!document.querySelector('.main-page-session-column [data-session-id=\"\(sid)\"] .session-panel-popout')")) as? Bool == true }
-        _ = try await js(parent, "document.querySelector('.main-page-session-column [data-session-id=\"\(sid)\"] .session-panel-popout').click(); true")
+        try await popoutFromKebab(parent, sid)
         try await wait { delegate.popoutWindows.count == 1 }
         let firstWindow = delegate.popoutWindows.values.first!
         let first = firstWindow.contentView as! WKWebView
@@ -101,7 +100,7 @@ struct PopoutWindowTests {
         print("Native composer sent and received the CLI reply")
         precondition(first.url?.path == "/popout")
         precondition(first.configuration.userContentController !== parent.configuration.userContentController)
-        _ = try await js(parent, "document.querySelector('.main-page-session-column [data-session-id=\"\(sid)\"] .session-panel-popout').click(); true")
+        try await popoutFromKebab(parent, sid)
         _ = try await js(parent, "window.open('/popout?view=session&id=\(sid)&cwd=%2Fworkspace','metadata-enriched'); true")
         precondition(delegate.popoutWindows.count == 1)
         let parentBefore = parent.url
@@ -162,7 +161,7 @@ struct PopoutWindowTests {
         try pressCloseKey(firstWindow)
         try await wait { delegate.popoutWindows.count == 1 && !firstWindow.isVisible }
         print("Command-W closed clean session after cancellation")
-        _ = try await js(parent, "document.querySelector('.main-page-session-column [data-session-id=\"\(sid)\"] .session-panel-popout').click(); true")
+        try await popoutFromKebab(parent, sid)
         try await wait { delegate.popoutWindows.count == 2 }
         let reopened = delegate.popoutWindows.values.first { ($0.contentView as? WKWebView)?.url?.absoluteString.contains("view=session") == true }
         try await wait { delegate.popoutWindows.values.contains { ($0.contentView as? WKWebView)?.url?.absoluteString.contains("view=session") == true } }
@@ -460,6 +459,21 @@ struct PopoutWindowTests {
         // unsaved work (windowShouldClose in desktop/main.swift), so each caller waits for what
         // the key should do. 2026-11-11, nightly-extra-tests run 43021612722: a window the
         // discard sheet had shown was still visible right after a clean Command-W.
+    }
+
+    /// Open the session's window in a new tab the way a person does since 2026-11-19 (the header's
+    /// button went into the kebab: "open in new tab can be added into drop down"): the session's
+    /// kebab, its Window group, then Open in new tab.
+    @MainActor
+    static func popoutFromKebab(_ parent: WKWebView, _ sid: String) async throws {
+        let panel = "document.querySelector('.main-page-session-column [data-session-id=\"\(sid)\"]')"
+        try await wait { (try? await js(parent, "!!\(panel)?.querySelector('.task-kebab-btn')")) as? Bool == true }
+        _ = try await js(parent, "(() => { if (!document.querySelector('.task-kebab-menu')) \(panel).querySelector('.task-kebab-btn').click(); return true })()")
+        let toggle = "document.querySelector('.task-kebab-menu [data-testid=\"session-kebab-window\"] > .task-kebab-group-toggle')"
+        try await wait { (try? await js(parent, "!!\(toggle)")) as? Bool == true }
+        _ = try await js(parent, "(() => { const t = \(toggle); if (t.getAttribute('aria-expanded') !== 'true') t.click(); return true })()")
+        try await wait { (try? await js(parent, "!!document.querySelector('.task-kebab-menu [data-testid=\"session-menu-popout\"]')")) as? Bool == true }
+        _ = try await js(parent, "document.querySelector('.task-kebab-menu [data-testid=\"session-menu-popout\"]').click(); true")
     }
 
     @MainActor

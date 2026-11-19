@@ -115,9 +115,8 @@ export interface TaskWorkspace {
 
 /**
  * A named command of a project or a repository (scripts.ts). It runs in a
- * shell on the folder's host: by hand from a session's Scripts menu (in its
- * terminal), as `setup` right after an isolated workspace is made, or as
- * `teardown` when its task completes.
+ * shell on the folder's host: as `setup` right after an isolated workspace is
+ * made, or as `teardown` when its task completes.
  */
 export interface ProjectScript {
   id: string

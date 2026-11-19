@@ -192,3 +192,31 @@ export function WatchButton({ task, className = '' }: { task: Task; className?: 
     </button>
   );
 }
+
+/**
+ * Watch on the session header's label row (2026-11-19, the user of the kebab's Watch row:
+ * "put this outside, kind of often used"): the eye and the word, lit while the task is
+ * watched; a click toggles it. Styled like the row's mode pill (ThreadModePill); a narrow
+ * column keeps the eye and hands the word to the tooltip. The session kebab drops its row
+ * while this pill is on screen (TaskMenuRows `watchOutside`).
+ */
+export function WatchPill({ task, narrow }: { task: Task; narrow?: boolean }) {
+  const { watched, toggle } = useWatchToggle(task);
+  const title = watched ? 'Watching: kept at the top of the task panel. Click to stop.' : 'Watch: keep it at the top of the task panel, whatever its state';
+  return (
+    <button
+      type="button"
+      className={`session-watch-pill${watched ? ' is-watched' : ''}`}
+      data-testid="session-watch-pill"
+      data-header-pill="watch"
+      data-narrow={narrow ? 'true' : undefined}
+      aria-pressed={watched}
+      aria-label="Watch"
+      title={title}
+      onClick={(e) => { e.stopPropagation(); toggle(); }}
+    >
+      {ICONS.ICON_EYE}
+      {!narrow && <span className="session-watch-pill-label">{watched ? 'Watching' : 'Watch'}</span>}
+    </button>
+  );
+}

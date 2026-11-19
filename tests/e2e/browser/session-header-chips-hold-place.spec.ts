@@ -38,24 +38,28 @@
  * new tab off the row (2026-10-31). A view's chip clicked again closes the view
  * and keeps full screen (695dfcc14), so the tests leave full screen themselves.
  *
- * Board is a lead's chip only since 2026-10-26 (useBoardTab: a task with open
- * subtasks or a Board of its own with content). Whether a task leads may be
- * known only once the task list or the owner read lands, so Board, like Plan,
- * sits after Terminal and arrives without moving anything; drawn, it waits for
- * the record like Fork, and keeps its place as a spacer if the task
- * goes. A plain task, or a session whose task nothing has named yet, has no
- * Board and no place kept for it. The tests about Board make the fixture task a
- * lead page-locally (its owner read says it keeps a Board of its own).
+ * Board is a lead's chip only since 2026-10-26 (useBoardTab: since 2026-11-19
+ * only a task with open subtasks, a Board of its own no longer counts). A task
+ * may start to lead while its session is open (its first subtask arrives), so
+ * Board, like Plan, sits after Terminal and arrives without moving anything;
+ * drawn, it waits for the record like Fork, and keeps its place as a spacer if
+ * the task goes. A plain task, or a session whose task nothing has named yet,
+ * has no Board and no place kept for it. The tests about Board make the shared
+ * fixture task a lead page-locally (an open subtask added to this page's task
+ * list, or pushed over the page's socket), and a task they seed a lead with a
+ * real open subtask they delete afterwards.
  *
  * Every test holds `GET /api/sessions/<id>` the way a slow box would and opens
  * the column through the UI (the task row, the session finder, a chat
  * reference); the only page loads past the first are the routes under test (a
- * reload, a deep link) and one reload that puts the socket behind a test route.
+ * reload, a deep link), the reloads that put the socket behind a test route, and
+ * one that loads the task list with the fixture task's page-local subtask.
  * Chromium, and with PW_WEBKIT=1 --project webkit, WebKit (the Mac app).
  */
 import fs from 'node:fs/promises'
 import { test, expect, type Locator, type Page, type Route, type WebSocketRoute } from '@playwright/test'
 import { closeSessionKebab, kebabRow } from './session-kebab-helpers'
+import { leadForPage, openSubtaskRow } from './board-view-helpers'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -104,34 +108,46 @@ async function holdRecord(page: Page, sessionId: string, opts: { fail?: boolean 
   }
 }
 
-interface Leads {
-  /** Owner reads that arrived (held or not). */
-  reads: () => number
-  release: () => void
+/**
+ * Make a task this spec seeded a lead (Board is a lead's chip, board-tab-model.ts): one real open
+ * subtask of it, made through the API, which the page hears over its socket like any new task.
+ * Returns the cleanup that deletes it.
+ */
+async function realSubtask(page: Page, parentId: string): Promise<() => Promise<void>> {
+  const res = await page.request.post('/api/tasks', {
+    data: { title: `Open subtask of ${parentId}`, source: 'local', pinned: false, project: 'Header Fixture', parent_task_id: parentId },
+  })
+  expect(res.ok(), await res.text()).toBe(true)
+  const { task } = await res.json() as { task: { id: string } }
+  return async () => { await page.request.delete(`/api/tasks/${task.id}?force=true`).catch(() => undefined) }
 }
 
-/**
- * Make `taskId` a lead for this page: its owner read (GET /tasks/:id/board/owner?tab=1, which
- * decides the Board chip) answers as the server does for a task that keeps a Board of its own.
- * Page-local, so the shared fixture board is never written. `hold` keeps every answer back
- * until `release()`, what a slow box does to that read.
- */
-async function leadsForPage(page: Page, taskId: string, opts: { hold?: boolean } = {}): Promise<Leads> {
-  let open!: () => void
-  const gate = opts.hold ? new Promise<void>((resolve) => { open = resolve }) : Promise.resolve()
-  if (!opts.hold) open = () => undefined
-  let reads = 0
-  await page.route((url) => url.pathname === `/api/v1/tasks/${taskId}/board/owner` && url.searchParams.get('tab') === '1', async (route) => {
-    reads++
-    await gate
-    try {
-      const res = await route.fetch()
-      // A task that is gone answers as it does (404); only a real answer is turned into a lead's.
-      if (!res.ok()) await route.fulfill({ response: res })
-      else await route.fulfill({ response: res, json: { ...(await res.json()), has_board: true, own_board: true } })
-    } catch { /* the page is gone */ }
+interface TestSocket {
+  /** Every socket the page opened, newest last. */
+  sockets: WebSocketRoute[]
+  /** While true, what the server sends never reaches the page. */
+  outage: boolean
+  /** Deliver an event to the page as the server would. */
+  push: (name: string, data: unknown) => void
+}
+
+/** Put the page's socket behind the test (one reload), which can push events and drop the server's. */
+async function socketThroughTest(page: Page): Promise<TestSocket> {
+  const sock: TestSocket = {
+    sockets: [],
+    outage: false,
+    push: (name, data) => { for (const ws of sock.sockets) ws.send(JSON.stringify({ type: 'event', name, data, seq: Date.now() })) },
+  }
+  await page.routeWebSocket(/\/ws(\?.*)?$/, (ws) => {
+    const server = ws.connectToServer()
+    server.onMessage((message) => { if (!sock.outage) ws.send(message) })
+    ws.onMessage((message) => server.send(message))
+    sock.sockets.push(ws)
   })
-  return { reads: () => reads, release: () => open() }
+  await page.reload()
+  await page.waitForLoadState('networkidle')
+  expect(sock.sockets.length, 'the page socket runs through the test').toBeGreaterThan(0)
+  return sock
 }
 
 /** Open the fixture session's column from its task row, as a person does. */
@@ -608,8 +624,9 @@ test('a click aimed at Files while the session record loads opens Files', async 
 })
 
 test('Fork and Board wait disabled in their places, then work once the record lands; Locate joins the menu then', async ({ page }) => {
-  // The task leads (Board is a lead's chip), and the answer that says so is late as well.
-  const leads = await leadsForPage(page, TASK_ID, { hold: true })
+  // The task starts to lead late as well: its first subtask arrives over the socket while the
+  // record is still held (Board is a lead's chip).
+  const sock = await socketThroughTest(page)
   const hold = await holdRecord(page, SESSION_ID)
   try {
     const panel = await openFromTaskRow(page)
@@ -617,15 +634,17 @@ test('Fork and Board wait disabled in their places, then work once the record la
     const fork = panel.getByRole('button', { name: 'Fork session into a child task' })
     const board = panel.getByTestId('session-board-chip')
 
-    // Until the owner read says the task leads, there is no Board; when it does, Board joins after
-    // Terminal and nothing already on the row moves.
-    await expect.poll(() => leads.reads(), { message: 'the owner read is on its way' }).toBeGreaterThan(0)
+    // Until the task has an open subtask there is no Board; when its first one arrives, Board joins
+    // after Terminal and nothing already on the row moves.
+    await expect.poll(() => hold.held(), { message: 'the record is on its way' }).toBeGreaterThan(0)
     await expect(fork).toBeDisabled()
-    await expect(panel.locator('[data-header-id="board"]'), 'not known to lead yet: no Board').toHaveCount(0)
+    await expect(panel.locator('[data-header-id="board"]'), 'not a lead yet: no Board').toHaveCount(0)
     await settle(page)
     await page.mouse.move(0, 0)
     const beforeBoard = await rowBoxes(panel)
-    leads.release()
+    // The subtask is built from the task's own list row, as the server's event carries a whole task.
+    const parentRow = ((await (await page.request.get(`/api/tasks?fields=list&ids=${TASK_ID}`)).json()) as { tasks: Array<Record<string, unknown>> }).tasks[0]
+    sock.push('task:created', { task: openSubtaskRow(TASK_ID, parentRow) })
     await expect(board).toBeVisible({ timeout: 15_000 })
     await settle(page)
     const withBoard = await rowBoxes(panel)
@@ -700,7 +719,6 @@ test('Fork and Board wait disabled in their places, then work once the record la
     await expect(board).toHaveClass(/session-action-chip-active/)
     await expect(page.getByTestId('task-board-pane')).toBeVisible({ timeout: 15_000 })
   } finally {
-    leads.release()
     await hold.dispose()
   }
 })
@@ -805,7 +823,7 @@ test('a plan session in a narrow column: the late Plan chip joins the "..." menu
       reading = `${width}px: shown ${Object.keys(after).join(',')} | moved ${JSON.stringify(diff)} | appeared ${JSON.stringify(appeared)}`
       expect(diff, `${width}px: nothing on the row moves when Plan arrives`).toEqual([])
       expect(appeared, `${width}px: nothing but the time and Plan joins the row late`).toEqual([])
-      if (planShown) expect(after.plan!.x, `${width}px: Plan sits after the host chips`).toBeGreaterThan(Math.max(...Object.entries(after).filter(([id]) => !['plan', 'more', 'time', 'popout', 'minimize', 'lock', 'expand', 'close'].includes(id)).map(([, b]) => b.x)))
+      if (planShown) expect(after.plan!.x, `${width}px: Plan sits after the host chips`).toBeGreaterThan(Math.max(...Object.entries(after).filter(([id]) => !['plan', 'more', 'time', 'minimize', 'lock', 'expand', 'close'].includes(id)).map(([, b]) => b.x)))
       else {
         // Folded: the "..." menu lists it, and it opens the plan from there.
         await panel.getByTestId('session-header-more-btn').click()
@@ -825,8 +843,11 @@ test('a plan session in a narrow column: the late Plan chip joins the "..." menu
 
 test('a record that fails to load leaves the chips in place, saying why they cannot act', async ({ page }) => {
   test.setTimeout(60_000)
-  // A lead's task, so Board is one of the chips (its owner read answers; only the record fails).
-  await leadsForPage(page, TASK_ID)
+  // A lead's task, so Board is one of the chips (the task list gives it an open subtask, page-local;
+  // only the record fails).
+  await leadForPage(page, TASK_ID)
+  await page.reload()
+  await page.waitForLoadState('networkidle')
   const hold = await holdRecord(page, SESSION_ID, { fail: true })
   try {
     const panel = await openFromTaskRow(page)
@@ -883,7 +904,8 @@ test('a session known to have no task shows no Fork or Board, before or after it
 test('after a reload nothing names the session yet: its column waits with the task controls, and keeps their places if the record says it has no task', async ({ page }) => {
   test.setTimeout(120_000)
   // With a task, a lead's (so Board is one of the two): nothing moves, the two just start to act.
-  await leadsForPage(page, TASK_ID)
+  // The open subtask rides the task list the reload below loads (page-local).
+  await leadForPage(page, TASK_ID)
   await clampColumns(page, 340)
   await openViaFinder(page, SESSION_TITLE, SESSION_ID)
   let hold = await holdRecord(page, SESSION_ID)
@@ -1077,52 +1099,56 @@ test('a task deleted while its session is open: Fork and Board stop acting and k
   for (const px of [340, 760]) {
     const seeded = await seedTaskSession(page, `open ${px}`)
     // A lead's task, so Board is one of the two.
-    await leadsForPage(page, seeded.taskId)
-    await clampColumns(page, px)
-    const panel = await openSeededFromTaskRow(page, seeded)
-    await expect(panel.locator('[data-header-id="fork"] button:enabled')).toBeVisible({ timeout: 20_000 })
-    await expect(panel.getByTestId('session-board-chip')).toBeEnabled()
-    await settle(page)
-    await page.mouse.move(0, 0)
-    const before = await rowBoxes(panel)
-    const box = (await panel.locator('button[data-header-id="files"]').boundingBox())!
-    const revision = ((await (await page.request.get(`/api/sessions/${seeded.sid}`)).json()) as { session: { statusRevision: number } }).session.statusRevision
-    const stop = await traceFiles(page, `.main-page-session-column .session-panel[data-session-id="${seeded.sid}"]`)
+    const dropSubtask = await realSubtask(page, seeded.taskId)
+    try {
+      await clampColumns(page, px)
+      const panel = await openSeededFromTaskRow(page, seeded)
+      await expect(panel.locator('[data-header-id="fork"] button:enabled')).toBeVisible({ timeout: 20_000 })
+      await expect(panel.getByTestId('session-board-chip')).toBeEnabled()
+      await settle(page)
+      await page.mouse.move(0, 0)
+      const before = await rowBoxes(panel)
+      const box = (await panel.locator('button[data-header-id="files"]').boundingBox())!
+      const revision = ((await (await page.request.get(`/api/sessions/${seeded.sid}`)).json()) as { session: { statusRevision: number } }).session.statusRevision
+      const stop = await traceFiles(page, `.main-page-session-column .session-panel[data-session-id="${seeded.sid}"]`)
 
-    // Anything the page writes to the deleted task (it answers 500 and raises an error card).
-    const writes: string[] = []
-    const onRequest = (req: import('@playwright/test').Request) => {
-      if (req.method() !== 'GET' && new URL(req.url()).pathname.startsWith(`/api/tasks/${seeded.taskId}`)) writes.push(`${req.method()} ${req.postData() ?? ''}`)
+      // Anything the page writes to the deleted task (it answers 500 and raises an error card).
+      const writes: string[] = []
+      const onRequest = (req: import('@playwright/test').Request) => {
+        if (req.method() !== 'GET' && new URL(req.url()).pathname.startsWith(`/api/tasks/${seeded.taskId}`)) writes.push(`${req.method()} ${req.postData() ?? ''}`)
+      }
+      page.on('request', onRequest)
+
+      // Deleted elsewhere (another window, an agent): the page hears it only from the server.
+      const del = await page.request.delete(`/api/tasks/${seeded.taskId}?force=true`)
+      expect(del.status(), await del.text()).toBe(204)
+      await expect(panel.locator(TASK_CONTROLS), 'the session has no task now, and the open panel hears it').toHaveCount(0, { timeout: 15_000 })
+      await settle(page)
+      const after = await rowBoxes(panel)
+      const seen = await stop()
+      console.log(`DELETED ${test.info().project.name} ${px}px: ${shown(before)} -> ${shown(after)} moved ${JSON.stringify(moved(before, after))} files-frames ${JSON.stringify(seen)}`)
+      expect(moved(before, after), `${px}px: nothing on the row moves`).toEqual([])
+      expect(seen).toEqual([`${before.files!.x},${before.files!.y} w${before.files!.w} h${before.files!.h}`])
+      // At 760 px both were on the row: each spacer has its control's box (moved() compares them).
+      if (px === 760) expect(Object.keys(before), 'Fork and Board on the row').toEqual(expect.arrayContaining(['fork', 'board']))
+      await expectSpacers(page, panel, `task deleted, ${px}px`)
+      await shootHeader(page, panel, px === 340 ? '10-task-deleted' : '10-task-deleted-760')
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+      await expect(panel.locator('.session-action-chip-active')).toHaveText(['Files'])
+      // A click in the panel marks its task read: never the deleted one (until 2026-10-11 the panel kept
+      // its fetched copy of the task and sent it a write on every click).
+      await page.waitForTimeout(500)
+      page.off('request', onRequest)
+      expect(writes, `${px}px: nothing is written to the deleted task`).toEqual([])
+
+      // The server's record says the same, under a newer status revision.
+      const record = ((await (await page.request.get(`/api/sessions/${seeded.sid}`)).json()) as { session: { taskId?: string | null; statusRevision: number } }).session
+      expect(record.taskId ?? null).toBeNull()
+      expect(record.statusRevision).toBeGreaterThan(revision)
+      await closeAllColumns(page)
+    } finally {
+      await dropSubtask()
     }
-    page.on('request', onRequest)
-
-    // Deleted elsewhere (another window, an agent): the page hears it only from the server.
-    const del = await page.request.delete(`/api/tasks/${seeded.taskId}?force=true`)
-    expect(del.status(), await del.text()).toBe(204)
-    await expect(panel.locator(TASK_CONTROLS), 'the session has no task now, and the open panel hears it').toHaveCount(0, { timeout: 15_000 })
-    await settle(page)
-    const after = await rowBoxes(panel)
-    const seen = await stop()
-    console.log(`DELETED ${test.info().project.name} ${px}px: ${shown(before)} -> ${shown(after)} moved ${JSON.stringify(moved(before, after))} files-frames ${JSON.stringify(seen)}`)
-    expect(moved(before, after), `${px}px: nothing on the row moves`).toEqual([])
-    expect(seen).toEqual([`${before.files!.x},${before.files!.y} w${before.files!.w} h${before.files!.h}`])
-    // At 760 px both were on the row: each spacer has its control's box (moved() compares them).
-    if (px === 760) expect(Object.keys(before), 'Fork and Board on the row').toEqual(expect.arrayContaining(['fork', 'board']))
-    await expectSpacers(page, panel, `task deleted, ${px}px`)
-    await shootHeader(page, panel, px === 340 ? '10-task-deleted' : '10-task-deleted-760')
-    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
-    await expect(panel.locator('.session-action-chip-active')).toHaveText(['Files'])
-    // A click in the panel marks its task read: never the deleted one (until 2026-10-11 the panel kept
-    // its fetched copy of the task and sent it a write on every click).
-    await page.waitForTimeout(500)
-    page.off('request', onRequest)
-    expect(writes, `${px}px: nothing is written to the deleted task`).toEqual([])
-
-    // The server's record says the same, under a newer status revision.
-    const record = ((await (await page.request.get(`/api/sessions/${seeded.sid}`)).json()) as { session: { taskId?: string | null; statusRevision: number } }).session
-    expect(record.taskId ?? null).toBeNull()
-    expect(record.statusRevision).toBeGreaterThan(revision)
-    await closeAllColumns(page)
   }
 })
 
@@ -1130,7 +1156,7 @@ test('a record that left the server before the task was deleted cannot bring its
   test.setTimeout(90_000)
   const seeded = await seedTaskSession(page, 'stale')
   // A lead's task, so Board is one of the two.
-  await leadsForPage(page, seeded.taskId)
+  const dropSubtask = await realSubtask(page, seeded.taskId)
   // The record as the server sent it before the delete: an older status revision, naming the task.
   const stale = await (await page.request.get(`/api/sessions/${seeded.sid}`)).json() as { session: { taskId: string; statusRevision: number } }
   expect(stale.session.taskId).toBe(seeded.taskId)
@@ -1171,6 +1197,7 @@ test('a record that left the server before the task was deleted cannot bring its
   } finally {
     answer()
     await page.unroute(url).catch(() => undefined)
+    await dropSubtask()
   }
 })
 
@@ -1178,44 +1205,39 @@ test('a task deleted while the socket was down is caught up when it comes back, 
   test.setTimeout(90_000)
   const seeded = await seedTaskSession(page, 'outage')
   // A lead's task, so Board is one of the two.
-  await leadsForPage(page, seeded.taskId)
-  // The page's socket goes through the test, which can drop what the server sends and cut the line.
-  const sockets: WebSocketRoute[] = []
-  let outage = false
-  await page.routeWebSocket(/\/ws(\?.*)?$/, (ws) => {
-    const server = ws.connectToServer()
-    server.onMessage((message) => { if (!outage) ws.send(message) })
-    ws.onMessage((message) => server.send(message))
-    sockets.push(ws)
-  })
-  await page.reload()
-  await page.waitForLoadState('networkidle')
-  expect(sockets.length, 'the page socket runs through the test').toBeGreaterThan(0)
-  const panel = await openSeededFromTaskRow(page, seeded)
-  await expect(panel.locator('[data-header-id="fork"] button:enabled')).toBeVisible({ timeout: 20_000 })
-  await expect(panel.getByTestId('session-board-chip')).toBeEnabled()
-  await settle(page)
-  await page.mouse.move(0, 0)
-  const before = await rowBoxes(panel)
+  const dropSubtask = await realSubtask(page, seeded.taskId)
+  try {
+    // The page's socket goes through the test, which can drop what the server sends and cut the line.
+    const sock = await socketThroughTest(page)
+    const { sockets } = sock
+    const panel = await openSeededFromTaskRow(page, seeded)
+    await expect(panel.locator('[data-header-id="fork"] button:enabled')).toBeVisible({ timeout: 20_000 })
+    await expect(panel.getByTestId('session-board-chip')).toBeEnabled()
+    await settle(page)
+    await page.mouse.move(0, 0)
+    const before = await rowBoxes(panel)
 
-  // The outage: the server's events stop reaching the page, and the task is deleted meanwhile.
-  outage = true
-  const del = await page.request.delete(`/api/tasks/${seeded.taskId}?force=true`)
-  expect(del.status(), await del.text()).toBe(204)
-  await page.waitForTimeout(1_500)
-  await expect(panel.locator(TASK_CONTROLS), 'the page has not heard of the delete').toHaveCount(2)
+    // The outage: the server's events stop reaching the page, and the task is deleted meanwhile.
+    sock.outage = true
+    const del = await page.request.delete(`/api/tasks/${seeded.taskId}?force=true`)
+    expect(del.status(), await del.text()).toBe(204)
+    await page.waitForTimeout(1_500)
+    await expect(panel.locator(TASK_CONTROLS), 'the page has not heard of the delete').toHaveCount(2)
 
-  // The line drops and the socket reconnects: the panel asks for its record again.
-  const reread = page.waitForResponse((res) => new URL(res.url()).pathname === `/api/sessions/${seeded.sid}` && res.request().method() === 'GET', { timeout: 20_000 })
-  outage = false
-  await sockets.at(-1)!.close()
-  await reread
-  await expect(panel.locator(TASK_CONTROLS), 'caught up after the reconnect').toHaveCount(0, { timeout: 15_000 })
-  await settle(page)
-  const after = await rowBoxes(panel)
-  console.log(`OUTAGE ${test.info().project.name}: sockets ${sockets.length} | ${shown(before)} -> ${shown(after)} moved ${JSON.stringify(moved(before, after))}`)
-  expect(sockets.length, 'the page opened a new socket').toBeGreaterThan(1)
-  expect(moved(before, after), 'nothing on the row moves').toEqual([])
-  await expectSpacers(page, panel, 'caught up after an outage')
-  await closeAllColumns(page)
+    // The line drops and the socket reconnects: the panel asks for its record again.
+    const reread = page.waitForResponse((res) => new URL(res.url()).pathname === `/api/sessions/${seeded.sid}` && res.request().method() === 'GET', { timeout: 20_000 })
+    sock.outage = false
+    await sockets.at(-1)!.close()
+    await reread
+    await expect(panel.locator(TASK_CONTROLS), 'caught up after the reconnect').toHaveCount(0, { timeout: 15_000 })
+    await settle(page)
+    const after = await rowBoxes(panel)
+    console.log(`OUTAGE ${test.info().project.name}: sockets ${sockets.length} | ${shown(before)} -> ${shown(after)} moved ${JSON.stringify(moved(before, after))}`)
+    expect(sockets.length, 'the page opened a new socket').toBeGreaterThan(1)
+    expect(moved(before, after), 'nothing on the row moves').toEqual([])
+    await expectSpacers(page, panel, 'caught up after an outage')
+    await closeAllColumns(page)
+  } finally {
+    await dropSubtask()
+  }
 })

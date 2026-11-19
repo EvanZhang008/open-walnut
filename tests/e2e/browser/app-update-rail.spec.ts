@@ -3,6 +3,8 @@ import { test, expect, type Page } from '@playwright/test'
 import { isolatePrefs } from './host-problems-helpers'
 import { loadApp } from './host-problems-fixture-helpers'
 import { healthyGitSync } from './host-attention-helpers'
+import { popoutFromKebab } from './session-kebab-helpers'
+import { openSessionFromFinder } from './session-finder-helpers'
 
 const SHOTS = '/tmp/mac-update-unified/shots'
 test.use({ viewport: { width: 1280, height: 840 }, deviceScaleFactor: 1 })
@@ -119,31 +121,10 @@ async function expectAtBottom(page: Page): Promise<void> {
 }
 
 async function openSessionPopout(page: Page): Promise<Page> {
-  await page.keyboard.press('ControlOrMeta+Shift+O')
-  const finder = page.locator('.session-search-panel')
-  await expect(finder).toBeVisible()
-  const input = finder.locator('.session-search-input')
-  await expect(input).toBeFocused()
-  await expect(input).toHaveValue('')
-  const query = 'Editor fixture session'
-  const answered = page.waitForResponse((res) => {
-    const url = new URL(res.url())
-    return url.pathname === '/api/sessions/recent' && url.searchParams.get('q') === query
-  })
-  await input.fill(query)
-  await answered
-  await expect(finder.locator('.todo-search-spinner')).toHaveCount(0)
-  await finder.getByRole('option').filter({ hasText: query }).click()
-  const panel = page.locator('.main-page-session-column .session-panel[data-session-id="pw-vscode-session"]')
-  await expect(panel).toBeVisible()
-  const opened = page.context().waitForEvent('page')
-  const button = panel.locator('.session-panel-popout')
-  if (await button.isVisible()) await button.click()
-  else {
-    await panel.getByTestId('session-header-more-btn').click()
-    await page.getByTestId('session-header-more-item-popout').click()
-  }
-  const child = await opened
+  const panel = await openSessionFromFinder(page, 'Editor fixture session', 'pw-vscode-session')
+  // Open in new tab is the ⋮ menu's Window row (2026-11-19): the header has no button for it.
+  await expect(panel.locator('.session-panel-popout')).toHaveCount(0)
+  const child = await popoutFromKebab(panel)
   await child.setViewportSize({ width: 1280, height: 840 })
   await expect(child.locator('.popout-session')).toBeVisible({ timeout: 30_000 })
   return child

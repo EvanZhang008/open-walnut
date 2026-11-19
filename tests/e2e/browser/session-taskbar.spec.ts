@@ -5,11 +5,11 @@
  * session keeps running); the chips survive a reload. A chip's card shows the
  * session's last reply and a composer.
  */
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, type Locator, type Page } from '@playwright/test'
 import { iconInkOffsets, ICON_CENTER_TOLERANCE_PX } from './icon-ink'
 import { setPanelMode } from './draft-helpers'
 import { holdPanelCountLock } from './panel-count-lock'
-import { closeSessionKebab, kebabRow, openSessionKebab } from './session-kebab-helpers'
+import { closeSessionKebab, openSessionKebab } from './session-kebab-helpers'
 import { pinTaskbarConfig } from './taskbar-settings-helpers'
 
 // One test sets the fixture's panel count (a full strip pushes a column out).
@@ -55,6 +55,18 @@ async function pointSessionAt(page: Page, sessionId: string, taskId: string) {
 const beat = (page: Page) => (process.env.PW_VIDEO ? page.waitForTimeout(1200) : Promise.resolve())
 
 const chip = (page: Page) => page.locator(`.session-taskbar-chip[data-session-id="${SESSION_ID}"]`)
+
+/**
+ * Watch is the header's pill (2026-11-19, the user of the kebab's Watch row: "put this outside,
+ * kind of often used"): it stays drawn across clicks, "Watch" or "Watching", pressed while on.
+ */
+const watchPill = (panel: Locator) => panel.getByTestId('session-watch-pill')
+
+async function expectWatched(panel: Locator, on: boolean, timeout?: number) {
+  const pill = watchPill(panel)
+  await expect(pill).toHaveText(on ? 'Watching' : 'Watch', timeout ? { timeout } : undefined)
+  await expect(pill).toHaveAttribute('aria-pressed', on ? 'true' : 'false')
+}
 
 test('every icon of the header\'s window buttons draws on the row\'s middle, Minimize included', async ({ page }) => {
   const panel = await openSessionPanel(page)
@@ -193,24 +205,20 @@ test('Watch on a task the board does not hold (an archived one) brings it onto t
   await expect(panel).toBeVisible({ timeout: 30_000 })
   const watching = page.getByRole('region', { name: 'Watching' })
   await expect(watching.getByText('Archived migration plan')).toHaveCount(0)
-  // Watch is the ⋮ menu's task row: a click closes the menu, the next open reads the new state.
-  let watch = await kebabRow(panel, 'task-kebab-watch')
-  await expect(watch).toHaveText('Watch')
-  await watch.click()
-  await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
+  await expectWatched(panel, false, 30_000)
+  await watchPill(panel).click()
+  await expectWatched(panel, true)
   await expect(watching.getByText('Archived migration plan', { exact: true }).first()).toBeVisible({ timeout: 15_000 })
-  watch = await kebabRow(panel, 'task-kebab-watch')
-  await expect(watch).toHaveText('Stop watching')
-  await watch.click()
-  await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
+  await watchPill(panel).click()
+  await expectWatched(panel, false)
   await expect(watching.getByText('Archived migration plan')).toHaveCount(0)
 })
 
-test('Watch clicked while its write is still on its way reads Stop watching when the menu opens again', async ({ page }) => {
+test('Watch clicked while its write is still on its way reads Watching at once, and the latest click wins', async ({ page }) => {
   const ARCHIVED = 'mpwold01-aa11'
   await pointSessionAt(page, SESSION_ID, ARCHIVED)
   // A slow network: the first write takes 2 s, the second 6 s, so the first one's echo comes back
-  // while the second click's write is still out. The menu row unmounts long before either.
+  // while the second click's write is still out.
   const writes: string[] = []
   await page.route(`**/api/tasks/${ARCHIVED}`, async (route) => {
     if (route.request().method() !== 'PATCH') return route.fallback()
@@ -225,23 +233,20 @@ test('Watch clicked while its write is still on its way reads Stop watching when
   await page.waitForLoadState('networkidle')
   const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${SESSION_ID}"]`)
   await expect(panel).toBeVisible({ timeout: 30_000 })
-  await (await kebabRow(panel, 'task-kebab-watch')).click()
-  await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
-  // Opened again at once: the click, not the stale task.
-  const watch = await kebabRow(panel, 'task-kebab-watch')
-  await expect(watch).toHaveText('Stop watching')
-  await watch.click()
+  await expectWatched(panel, false, 30_000)
+  await watchPill(panel).click()
+  // At once: the click, not the stale task.
+  await expectWatched(panel, true)
+  await watchPill(panel).click()
   await expect.poll(() => writes.length).toBe(2)
   expect(writes[0]).not.toBe('')
   expect(writes[1]).toBe('')
-  // The first write's echo lands (the task reads watched) while the second is still out: the menu
+  // The first write's echo lands (the task reads watched) while the second is still out: the pill
   // keeps the latest click.
   await page.waitForTimeout(3000)
-  await expect((await kebabRow(panel, 'task-kebab-watch'))).toHaveText('Watch')
-  await closeSessionKebab(panel)
+  await expectWatched(panel, false)
   await page.waitForTimeout(5000)
-  await expect((await kebabRow(panel, 'task-kebab-watch'))).toHaveText('Watch', { timeout: 15_000 })
-  await closeSessionKebab(panel)
+  await expectWatched(panel, false, 15_000)
 })
 
 test('two Watch clicks while the first write is out reach the server in order: the last click is what is stored', async ({ page }) => {
@@ -265,16 +270,15 @@ test('two Watch clicks while the first write is out reach the server in order: t
   const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${SESSION_ID}"]`)
   await expect(panel).toBeVisible({ timeout: 30_000 })
   try {
-    await (await kebabRow(panel, 'task-kebab-watch')).click()
+    await expectWatched(panel, false, 30_000)
+    await watchPill(panel).click()
     await expect.poll(() => writes.length).toBe(1)
-    const watch = await kebabRow(panel, 'task-kebab-watch')
-    await expect(watch).toHaveText('Stop watching')
-    await watch.click()
+    await expectWatched(panel, true)
+    await watchPill(panel).click()
     // The second click waits for the first write: one request out at a time.
     await page.waitForTimeout(500)
     expect(writes).toHaveLength(1)
-    await expect((await kebabRow(panel, 'task-kebab-watch'))).toHaveText('Watch')
-    await closeSessionKebab(panel)
+    await expectWatched(panel, false)
     releases[0]!()
     await expect.poll(() => writes.length).toBe(2)
     expect(writes[1]).toBe('')
@@ -283,8 +287,7 @@ test('two Watch clicks while the first write is out reach the server in order: t
       const stored = await (await page.request.get(`/api/tasks/${ARCHIVED}`)).json() as { task?: { watched_at?: string | null } }
       return stored.task?.watched_at ?? ''
     }, { timeout: 15_000 }).toBe('')
-    await expect((await kebabRow(panel, 'task-kebab-watch'))).toHaveText('Watch')
-    await closeSessionKebab(panel)
+    await expectWatched(panel, false)
     await expect(page.getByRole('region', { name: 'Watching' }).getByText('Archived migration plan')).toHaveCount(0)
   } finally {
     releases.forEach((release) => release())
@@ -316,30 +319,25 @@ test('Esc on the session menu closes the menu only: full screen stays, and the n
   await expect(page.locator('.open-walnut-fullscreen')).toHaveCount(0)
 })
 
-test('Watch in the session menu keeps the task on the Watching list, and reads Stop watching while on', async ({ page }) => {
+test('Watch on the header keeps the task on the Watching list, and reads Watching while on', async ({ page }) => {
   const panel = await openSessionPanel(page)
   // The search that found the task hides the Watching section: clear it.
   await page.locator('.todo-search-input').fill('')
   const watching = page.getByRole('region', { name: 'Watching' })
-  let watch = await kebabRow(panel, 'task-kebab-watch')
-  await expect(watch).toHaveText('Watch')
+  await expectWatched(panel, false, 30_000)
   await beat(page)
-  await watch.click()
-  await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
+  await watchPill(panel).click()
+  await expectWatched(panel, true)
   // By id: another spec may rename the shared fixture task.
   const watchedRow = watching.locator(`[data-task-id="${TASK_ID}"]`)
   await expect(watchedRow.first()).toBeVisible({ timeout: 15_000 })
-  watch = await kebabRow(panel, 'task-kebab-watch')
-  await expect(watch).toHaveText('Stop watching')
   await beat(page)
-  await watch.click()
-  await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
+  await watchPill(panel).click()
+  await expectWatched(panel, false)
   await expect(watchedRow).toHaveCount(0)
-  await expect((await kebabRow(panel, 'task-kebab-watch'))).toHaveText('Watch')
-  await closeSessionKebab(panel)
 })
 
-test('Locate and Watch are rows of the session menu, not buttons of the header row', async ({ page }) => {
+test('Locate is a row of the session menu; Watch is the header\'s pill, not a menu row', async ({ page }) => {
   const panel = await openSessionPanel(page)
   // The header is drawn once the record is here (its kebab with it).
   const menu = await openSessionKebab(panel)
@@ -347,7 +345,10 @@ test('Locate and Watch are rows of the session menu, not buttons of the header r
   await expect(panel.getByTestId('session-panel-watch')).toHaveCount(0)
   await expect(panel.getByTestId('session-panel-locate')).toHaveCount(0)
   await expect(menu.getByTestId('session-menu-locate')).toHaveText('Locate task', { timeout: 30_000 })
-  await expect(menu.getByTestId('task-kebab-watch')).toHaveText(/^(Watch|Stop watching)$/, { timeout: 30_000 })
+  // The task's half of the menu is drawn (Background, Watch's old neighbour), and it has no Watch row.
+  await expect(menu.getByTestId('task-kebab-background')).toBeVisible({ timeout: 30_000 })
+  await expect(menu.getByTestId('task-kebab-watch')).toHaveCount(0)
+  await expect(watchPill(panel)).toHaveText(/^(Watch|Watching)$/)
   await closeSessionKebab(panel)
 })
 

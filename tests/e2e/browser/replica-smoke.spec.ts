@@ -20,6 +20,7 @@ import { test, expect, type Page } from '@playwright/test'
 import { startReplicaCluster, WINDOWS, type ReplicaCluster } from '../../helpers/replica-cluster.js'
 import { startFakeTunnel, type FakeTunnel } from './replica-tunnel.js'
 import { openListProject } from './todo-panel-helpers'
+import { leadForPage } from './board-view-helpers'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -59,6 +60,9 @@ test('a host replica: sign in through it, read away, an away complete kept on th
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
   const tunnelUrl = `http://127.0.0.1:${tunnel!.port}`
+  // The Board tab is a lead's: "Release plan" gets an open subtask in this page's task list only
+  // (the cluster's seed gives it none, and a Board of its own no longer brings the tab).
+  await leadForPage(page, c.ids.board)
 
   await page.goto(`${tunnelUrl}/`)
   const notice = page.getByTestId('unpaired-notice')

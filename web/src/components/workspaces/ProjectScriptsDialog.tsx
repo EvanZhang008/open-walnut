@@ -220,7 +220,7 @@ export function ProjectScriptsDialog({ project, cwd, host, onClose, onSaved }: {
                 This project already has a script named "{projectClash.name}": give this one another name.
               </small>}
               {fileTwin && <small className="project-scripts-field-hint is-warn" data-testid="project-script-name-twin">
-                {answer?.file?.name ?? 'walnut.json'} in the repository has a "{fileTwin.name}" too ({fileTwin.command}). Saving this one replaces it in every session's Scripts menu.
+                {answer?.file?.name ?? 'walnut.json'} in the repository has a "{fileTwin.name}" too ({fileTwin.command}). Saving this one replaces it.
               </small>}
             </label>
             <label className="project-scripts-field">
@@ -276,8 +276,8 @@ export function ProjectScriptsDialog({ project, cwd, host, onClose, onSaved }: {
           <button className="session-panel-close" onClick={onClose} title="Close (Esc)" aria-label="Close">&times;</button>
         </div>
         <div className="project-scripts-lede">
-          Commands for this project's sessions: run one from the Scripts menu in a session, into its terminal.
-          A setup script also runs by itself in every new isolated workspace.
+          Commands for this project's workspaces: a setup script runs by itself in every new isolated
+          workspace, and a teardown script when its task completes.
         </div>
 
         {loadError && <div className="project-scripts-error">{loadError}</div>}

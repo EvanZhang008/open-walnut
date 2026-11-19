@@ -1,7 +1,7 @@
 /**
  * The session header's row-1 actions as kebab rows, for the phone (C64): the
  * panel's own header is hidden there, so Changed, Files, Board, Threads, Terminal,
- * Scripts, Plan and Close are reached from the top bar's kebab (and Web preview while the session
+ * Plan and Close are reached from the top bar's kebab (and Web preview while the session
  * serves a web page: its servers, to open or stop). Each row calls the same
  * handler as its header chip. Fork, Locate and Open in new tab are left out
  * on a phone (N12): a new tab is meaningless there, Locate is what Back does,
@@ -23,8 +23,6 @@ export interface PhoneSessionHeaderRowsProps {
   /** A leader's Threads (session-threads-model.ts), as the desktop menu's Open group has them. */
   threads?: ThreadsMenu;
   terminal: boolean;
-  /** Opens the session's Scripts menu (project scripts, run in the terminal). */
-  onScripts?: () => void;
   plan: boolean;
   onPlan: () => void;
   onCloseSession?: () => void;
@@ -71,7 +69,6 @@ export function PhoneSessionHeaderRows(p: PhoneSessionHeaderRowsProps) {
       {summary && (
         <Row label={`Web preview \u00B7 ${summary}`} active={p.activeView === 'web'} onClick={view('web')} testId="phone-row-web" />
       )}
-      {p.onScripts && <Row label="Scripts" onClick={() => { p.close(); p.onScripts?.(); }} testId="phone-row-scripts" />}
       {/* A lead's row only (useBoardTab), after the rows every session has, as on the header. */}
       {p.board !== 'none' && (
         <Row label="Board" active={p.activeView === 'board'} disabled={p.board === 'waiting'} onClick={view('board')} testId="phone-row-board"

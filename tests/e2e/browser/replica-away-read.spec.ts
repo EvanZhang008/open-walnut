@@ -39,6 +39,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { test, expect, type Page, type Response } from '@playwright/test'
 import { openListProject } from './todo-panel-helpers'
+import { leadForPage } from './board-view-helpers'
 
 test.setTimeout(300_000)
 
@@ -294,6 +295,9 @@ test('the console reads its copies while the Mac sleeps, and comes back with no 
   page.on('pageerror', (e) => pageErrors.push(e.message))
   const answers = watchAnswers(page)
   const wsCloses = watchWsCloses(page)
+  // The Board tab is a lead's: "Release plan" gets an open subtask in this page's task list only
+  // (the cluster's seed gives it none, and a Board of its own no longer brings the tab).
+  await leadForPage(page, ids.board)
 
   await test.step('1. sign in through the tunnel; the Mac answers', async () => {
     await signIn(page)

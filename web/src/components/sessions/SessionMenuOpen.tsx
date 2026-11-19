@@ -136,8 +136,9 @@ export function SessionMenuOpen(p: SessionMenuOpenProps) {
   ].filter(Boolean);
   return (
     <>
-      {/* Locate is a row of its own, by its name, as Watch is among the task's rows below
-          (2026-11-09, the user of the header's crosshair and eye: "this 2 put iot in the drop down"). */}
+      {/* Locate is a row of its own, by its name (2026-11-09, the user of the header's crosshair
+          and eye: "this 2 put iot in the drop down"); Watch went back out to the header as a pill
+          (2026-11-19), and Open in new tab lives only in the Window group below. */}
       {p.locate && <Row icon={ICON_LOCATE} label={p.locate.label} disabled={!!p.locate.waiting} why={p.locate.waiting ?? undefined} onClick={() => { close(); p.locate!.onClick(); }} testId="session-menu-locate" />}
       <KebabGroup
         label="Open"

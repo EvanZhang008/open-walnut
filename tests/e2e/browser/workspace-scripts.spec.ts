@@ -2,10 +2,11 @@
  * Project scripts in the browser (src/core/workspaces/scripts.ts): a repository
  * with a walnut.json, a new task in an isolated workspace whose setup script
  * runs before the first session starts (the draft says so, the waiting column
- * shows it, the workspace flyout keeps its output), the session's Scripts chip
- * running a script in its terminal, and the project's own scripts edited in
- * the dialog. Real UI, real server, the MockDaemon running the REAL workspace
- * core (real git worktree, real shell); only the Claude CLI is mocked.
+ * shows it, the workspace flyout keeps its output), the project's own scripts
+ * edited in the dialog, and the teardown at completion. A session has no Scripts
+ * chip (2026-11-19, the user: "it si fine, remove it no need"). Real UI, real
+ * server, the MockDaemon running the REAL workspace core (real git worktree,
+ * real shell); only the Claude CLI is mocked.
  *
  * Needs the workspace fixture: PW_WORKSPACE_FIXTURE=1 (it adds <home>/ws-fixture/web).
  *
@@ -17,8 +18,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, draftMoreButton, draftPanel, draftTaskMenu, openDraft, openDraftSettings, pickDraftFolder } from './draft-helpers'
 import { openKebabGroup } from './kebab-group-helpers'
-import { selectSection } from './todo-panel-helpers'
-import { PHONE } from './phone-helpers'
+import { isolateUiPrefs, openProjectDetails, selectSection } from './todo-panel-helpers'
 
 const PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const SHOTS = process.env.PW_SCREENSHOT_DIR ?? '/tmp/workspace-scripts'
@@ -29,7 +29,7 @@ test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 })
 test.describe.configure({ mode: 'serial' })
 
 let home = ''
-/** The session test 1 started in its workspace (the phone test opens it). */
+/** The session the second test started in its workspace (the reload test opens it beside). */
 let firstSessionId = ''
 
 test.beforeAll(async () => {
@@ -88,9 +88,21 @@ async function openTerminalView(panel: Locator): Promise<void> {
   await expect(panel.locator('.session-terminal-panel')).toBeVisible({ timeout: 30_000 })
 }
 
-/** The terminal's visible text (xterm's DOM rows). */
-async function terminalText(panel: Locator): Promise<string> {
-  return (await panel.locator('.xterm-rows').textContent().catch(() => '')) ?? ''
+/** A session's header holds no Scripts chip, on the row or in its "..." menu (2026-11-19). */
+async function expectNoScriptsChip(panel: Locator): Promise<void> {
+  await expect(panel.locator('.session-panel-header')).toBeVisible()
+  await expect(panel.locator('[data-header-id="scripts"], [data-testid="session-scripts-chip"]')).toHaveCount(0)
+  await expect(panel.getByTestId('session-header-more-item-scripts')).toHaveCount(0)
+}
+
+/** The Workspace row's flyout of the session's task (its ⋮ menu, Move & transfer). */
+async function openWorkspaceFlyout(page: Page, panel: Locator): Promise<Locator> {
+  await panel.locator('.session-panel-header .task-kebab-btn').first().click()
+  await openKebabGroup(page.locator('.task-kebab-menu'), 'kebab-group-move')
+  await page.locator('.task-kebab-menu').getByTestId('workspace-menu-row').click()
+  const flyout = page.getByTestId('workspace-flyout')
+  await expect(flyout).toBeVisible()
+  return flyout
 }
 
 // First: it leaves the repository's walnut.json not allowed, as the next test expects to find it.
@@ -139,10 +151,12 @@ test("a repository setup nobody allowed holds a person's start until they choose
   expect(audit.failed).toEqual([])
 })
 
-test('setup runs in a new workspace before its first session; a script runs in the terminal in one click; the project list is edited', async ({ page }) => {
+test('setup runs in a new workspace before its first session; the session has no Scripts chip; the project list is edited', async ({ page }) => {
   test.setTimeout(240_000)
   const audit = watchErrors(page)
   const repo = path.join(home, 'ws-fixture', 'web')
+  // It opens the project's details later: its panel prefs stay its own (browser-spec-ratchets.test.ts).
+  await isolateUiPrefs(page)
   await openHome(page)
 
   // ── The draft says which setup the new workspace will run ──
@@ -204,10 +218,7 @@ test('setup runs in a new workspace before its first session; a script runs in t
   await expect(panel).toBeVisible({ timeout: 30_000 })
 
   // ── The workspace flyout keeps the setup run and its output ──
-  await panel.locator('.session-panel-header .task-kebab-btn').first().click()
-  await openKebabGroup(page.locator('.task-kebab-menu'), 'kebab-group-move')
-  await page.locator('.task-kebab-menu').getByTestId('workspace-menu-row').click()
-  const flyout = page.getByTestId('workspace-flyout')
+  const flyout = await openWorkspaceFlyout(page, panel)
   await expect(flyout.getByTestId('script-run-setup-status')).toContainText('Done in')
   await flyout.getByTestId('script-run-setup').locator('summary').click()
   await expect(flyout.getByTestId('script-run-setup-output')).toContainText('Installed 3 packages')
@@ -217,66 +228,15 @@ test('setup runs in a new workspace before its first session; a script runs in t
   await page.keyboard.press('Escape')
   await expect(flyout).toHaveCount(0)
 
-  // ── Scripts chip: the file's scripts; Test runs in the terminal ──
-  const chip = panel.getByTestId('session-scripts-chip')
-  await expect(chip).toBeVisible()
-  await chip.click()
-  const scriptsMenu = page.getByTestId('session-scripts-menu')
-  await expect(scriptsMenu).toBeVisible()
-  await expect(scriptsMenu).toContainText('From walnut.json')
-  await expect(scriptsMenu.locator('[data-testid="session-script-item"]')).toHaveCount(3)
-  await expect(scriptsMenu.locator('[data-testid="session-script-item"][data-name="Install"]')).toContainText('Setup')
-  await shot(page, 'scripts-menu', scriptsMenu, 8)
-  await scriptsMenu.locator('[data-testid="session-script-item"][data-name="Test"]').click()
-  await expect(scriptsMenu).toHaveCount(0)
-  await expect(panel.locator('.session-terminal-panel')).toBeVisible({ timeout: 30_000 })
-  await expect.poll(() => terminalText(panel), { timeout: 30_000 }).toContain('3 passed')
-  expect(await terminalText(panel)).toContain(`Running tests in ${path.basename(ws.root!)}`)
-  // The terminal shows the script's own command, not the line Walnut typed around it.
-  expect(await terminalText(panel)).not.toContain("trap 'exit 130'")
-  expect(await terminalText(panel)).not.toContain('walnut-run')
-  expect(await terminalText(panel)).toContain('[Test exited with 0]')
-  await shot(page, 'terminal-ran-test', panel.locator('.session-terminal-panel'), 4)
+  // ── No Scripts chip: scripts are no one-click runs of a session any more ──
+  await expectNoScriptsChip(panel)
 
-  // A second run from the menu while the terminal is open types into the same shell.
-  await chip.click()
-  await page.getByTestId('session-scripts-menu').locator('[data-testid="session-script-item"][data-name="Lint"]').click()
-  await expect.poll(() => terminalText(panel), { timeout: 30_000 }).toContain('No problems')
-  await expect(panel.locator('.session-terminal-panel')).toBeVisible()
-
-  // The menu keeps how each run ended, and how the setup went.
-  await chip.click()
-  const results = page.getByTestId('session-scripts-menu')
-  await expect(results.locator('[data-testid="session-script-item"][data-name="Test"]').getByTestId('session-script-result')).toHaveText('Passed', { timeout: 15_000 })
-  await expect(results.locator('[data-testid="session-script-item"][data-name="Lint"]').getByTestId('session-script-result')).toHaveText('Passed')
-  await expect(results.getByTestId('session-scripts-setup')).toContainText('Setup Install: Done in')
-  await shot(page, 'scripts-menu-results', results, 8)
-  // The setup ran beside the session, not in its terminal: its line opens its output.
-  await results.getByTestId('session-scripts-setup').click()
-  const output = page.getByTestId('script-output-dialog')
-  await expect(output.getByTestId('script-run-setup-output')).toContainText('Installed 3 packages')
-  await shot(page, 'setup-output-dialog', output, 4)
-  await page.keyboard.press('Escape')
-  await expect(output).toHaveCount(0)
-
-  // ── A reload: the replayed scrollback shows commands, not the typed lines; results stay ──
-  await page.reload()
-  const reloaded = page.locator(`${REAL_PANEL}[data-session-id="${sessions[0].claudeSessionId}"]`)
-  await expect(reloaded).toBeVisible({ timeout: 30_000 })
-  await openTerminalView(reloaded)
-  await expect.poll(() => terminalText(reloaded), { timeout: 30_000 }).toContain('[Test exited with 0]')
-  const replayed = await terminalText(reloaded)
-  expect(replayed).toContain('3 passed')
-  expect(replayed).not.toContain("trap 'exit 130'")
-  expect(replayed).not.toContain('walnut-run')
-  await shot(page, 'terminal-after-reload', reloaded.locator('.session-terminal-panel'), 4)
-  await reloaded.getByTestId('session-scripts-chip').click()
-  await expect(page.getByTestId('session-scripts-menu').locator('[data-testid="session-script-item"][data-name="Test"]').getByTestId('session-script-result')).toHaveText('Passed')
-  await page.keyboard.press('Escape')
-
-  // ── Edit scripts: add a project script; it leads the menu next time ──
-  await chip.click()
-  await page.getByTestId('session-scripts-menu').getByText('Edit scripts…').click()
+  // ── Edit scripts, from the project's details: add a project script ──
+  // The project's folder is the repository, so its editor shows the repository's walnut.json.
+  const project = (await readTask(page, taskId)).project!
+  expect((await page.request.put(`/api/projects/${encodeURIComponent(project)}/metadata`, { data: { default_cwd: repo } })).ok()).toBe(true)
+  const pane = await openProjectDetails(page, project)
+  await pane.getByTestId('project-scripts-edit').click()
   const dialog = page.getByTestId('project-scripts-dialog')
   await expect(dialog).toBeVisible()
   await expect(dialog.getByTestId('project-scripts-file')).toContainText('walnut.json')
@@ -318,61 +278,8 @@ test('setup runs in a new workspace before its first session; a script runs in t
   await page.keyboard.press('Escape')
   await expect(dialog).toHaveCount(0)
 
-  const project = (await readTask(page, taskId)).project!
   const meta = await (await page.request.get(`/api/projects/${encodeURIComponent(project)}/metadata`)).json() as { metadata: { scripts?: Array<{ name: string; command: string }> } }
   expect(meta.metadata.scripts).toEqual([{ id: 'dev-server', name: 'Dev server', command: 'echo "dev server on :5173"' }])
-
-  await chip.click()
-  const again = page.getByTestId('session-scripts-menu')
-  await expect(again.locator('[data-testid="session-script-item"]').first()).toHaveAttribute('data-name', 'Dev server')
-  await again.locator('[data-testid="session-script-item"][data-name="Dev server"]').click()
-  await expect.poll(() => terminalText(panel), { timeout: 30_000 }).toContain('dev server on :5173')
-
-  // ── A script asked for while another still runs: stop that one first, never type behind it ──
-  const withServe = await page.request.put(`/api/workspaces/scripts/project/${encodeURIComponent(project)}`, {
-    data: { scripts: [...(meta.metadata.scripts ?? []),
-      { name: 'Serve', command: 'echo "ser""ving on :8080"; sleep 120' },
-      { name: 'Brief', command: 'echo "brief ""start"; sleep 4; echo "brief ""end"' },
-    ] },
-  })
-  expect(withServe.ok()).toBe(true)
-  // The question is asked, but the running one ends by itself first: the question goes and the next one runs.
-  await chip.click()
-  await page.getByTestId('session-scripts-menu').locator('[data-testid="session-script-item"][data-name="Brief"]').click()
-  await expect.poll(() => terminalText(panel), { timeout: 30_000 }).toContain('brief start')
-  await chip.click()
-  await page.getByTestId('session-scripts-menu').locator('[data-testid="session-script-item"][data-name="Lint"]').click()
-  const ask = page.getByTestId('script-stop-first')
-  await expect(ask).toContainText('Brief is still running')
-  await expect(ask).toHaveCount(0, { timeout: 15_000 })
-  await expect.poll(async () => (await terminalText(panel)).split('[Lint exited with 0]').length, { timeout: 30_000 }).toBe(3)
-  expect(await terminalText(panel)).toContain('[Brief exited with 0]')
-  expect(await terminalText(panel)).not.toContain('^C')
-  await chip.click()
-  await page.getByTestId('session-scripts-menu').locator('[data-testid="session-script-item"][data-name="Serve"]').click()
-  await expect.poll(() => terminalText(panel), { timeout: 30_000 }).toContain('serving on :8080')
-  // The chip says a script of its menu still runs in the terminal.
-  await expect(chip.getByTestId('session-scripts-dot')).toHaveAttribute('data-run', 'Serve')
-  // The menu offers to stop it.
-  await chip.click()
-  await expect(page.getByTestId('session-scripts-menu').getByTestId('session-script-stop')).toHaveText('Stop Serve')
-  await page.keyboard.press('Escape')
-  await chip.click()
-  await page.getByTestId('session-scripts-menu').locator('[data-testid="session-script-item"][data-name="Lint"]').click()
-  const stop = page.getByRole('button', { name: 'Stop and run Lint' })
-  await expect(stop).toBeVisible()
-  await expect(page.getByText('Serve is still running')).toBeVisible()
-  await shot(page, 'stop-to-run', page.getByTestId('script-stop-first'), 4)
-  await stop.click()
-  await expect.poll(() => terminalText(panel), { timeout: 30_000 }).toContain('[Serve exited with 130]')
-  await expect.poll(async () => (await terminalText(panel)).split('[Lint exited with 0]').length, { timeout: 30_000 }).toBe(4)
-  expect(await terminalText(panel)).not.toContain('walnut-run')
-  await chip.click()
-  const after = page.getByTestId('session-scripts-menu')
-  await expect(after.locator('[data-testid="session-script-item"][data-name="Serve"]').getByTestId('session-script-result')).toHaveText('Stopped', { timeout: 15_000 })
-  await expect(after.locator('[data-testid="session-script-item"][data-name="Lint"]').getByTestId('session-script-result')).toHaveText('Passed', { timeout: 15_000 })
-  await page.keyboard.press('Escape')
-  await expect(chip.getByTestId('session-scripts-dot')).toHaveCount(0)
 
   firstSessionId = sessions[0].claudeSessionId
 
@@ -380,7 +287,7 @@ test('setup runs in a new workspace before its first session; a script runs in t
   expect(audit.failed).toEqual([])
 })
 
-test("a failed setup holds the person's session until they choose; the Scripts chip and the Workspace row say it failed", async ({ page, request }) => {
+test("a failed setup holds the person's session until they choose; the Workspace row says it failed", async ({ page, request }) => {
   test.setTimeout(180_000)
   const audit = watchErrors(page)
   const repo = path.join(home, 'ws-fixture', 'web')
@@ -466,18 +373,15 @@ test("a failed setup holds the person's session until they choose; the Scripts c
   const panel = page.locator(`${REAL_PANEL}[data-session-id="${sid}"]`)
   await expect(panel).toBeVisible({ timeout: 30_000 })
 
-  // The session never hides it: a red dot on Scripts, the result at the top of its menu.
-  await expect(panel.getByTestId('session-scripts-dot')).toHaveAttribute('data-tone', 'error')
-  await panel.getByTestId('session-scripts-chip').click()
-  const scriptsMenu = page.getByTestId('session-scripts-menu')
-  await expect(scriptsMenu.getByTestId('session-scripts-setup')).toContainText('Setup Broken setup: Failed: exited with code 2')
-  await shot(page, 'scripts-menu-failed', scriptsMenu, 8)
-  await page.keyboard.press('Escape')
-  // The Workspace row reads it too.
-  await panel.locator('.session-panel-header .task-kebab-btn').first().click()
-  await openKebabGroup(page.locator('.task-kebab-menu'), 'kebab-group-move')
+  // The session's task never hides it: its Workspace row reads it, and its flyout keeps the output.
+  await expectNoScriptsChip(panel)
+  const failedFlyout = await openWorkspaceFlyout(page, panel)
   await expect(page.locator('.task-kebab-menu').getByTestId('workspace-menu-row')).toContainText('Setup failed')
+  await expect(failedFlyout.getByTestId('script-run-setup-status')).toContainText('Failed: exited with code 2')
+  await shot(page, 'flyout-setup-failed', failedFlyout)
   await page.keyboard.press('Escape')
+  await page.keyboard.press('Escape')
+  await expect(failedFlyout).toHaveCount(0)
 
   // ── Complete it: the cleanup script runs, and the session says so while it does ──
   expect((await page.request.post(`/api/tasks/${taskId}/complete`, { data: {} })).ok()).toBe(true)
@@ -486,39 +390,22 @@ test("a failed setup holds the person's session until they choose; the Scripts c
   await expect.poll(async () => (await readTask(page, taskId)).workspace?.teardown?.state, { timeout: 30_000 }).toBe('running')
   // Said outside the session too, beside "Task completed".
   await expect(page.getByText('Running cleanup Stop services', { exact: true }).first()).toBeVisible({ timeout: 15_000 })
-  await expect(panel.getByTestId('session-scripts-dot')).toHaveAttribute('data-tone', 'busy', { timeout: 15_000 })
-  await panel.getByTestId('session-scripts-chip').click()
-  await expect(scriptsMenu.getByTestId('session-scripts-setup')).toContainText('Cleanup Stop services: Running…')
-  // A completed task's workspace is being cleaned up: no setup to run again.
-  await expect(scriptsMenu.getByText('Run setup again', { exact: true })).toHaveCount(0)
-  await shot(page, 'scripts-menu-cleanup', scriptsMenu, 8)
-  await page.keyboard.press('Escape')
   await expect.poll(async () => (await readTask(page, taskId)).workspace?.teardown?.state, { timeout: 60_000 }).toBe('done')
-  await expect(panel.getByTestId('session-scripts-dot')).toHaveCount(0, { timeout: 15_000 })
   // Then how it ended: removed, or kept and why.
   await expect.poll(async () => (await readTask(page, taskId)).workspace?.state, { timeout: 60_000 }).toMatch(/^(removed|kept)$/)
   const ended = (await readTask(page, taskId)).workspace!
   const endToast = page.getByText(ended.state === 'removed' ? 'Workspace removed' : 'Workspace kept', { exact: true }).first()
   await expect(endToast).toBeVisible({ timeout: 30_000 })
-  // The menu keeps how the cleanup ended.
-  await panel.getByTestId('session-scripts-chip').click()
-  await expect(scriptsMenu.getByTestId('session-scripts-setup')).toHaveAttribute('data-role', 'cleanup')
-  await expect(scriptsMenu.getByTestId('session-scripts-setup')).toContainText('Cleanup Stop services: Done in')
-  // A removed workspace has no folder for its scripts: the menu says so and runs none,
-  // and the editor reads walnut.json from the folder the workspace was made from.
-  if (ended.state === 'removed') {
-    await expect(scriptsMenu.getByTestId('session-scripts-gone')).toContainText('Its workspace was removed')
-    await expect(scriptsMenu.locator('[data-testid="session-script-item"]').first().locator('xpath=ancestor::*[@role="menuitem"][1]')).toBeDisabled()
-    await shot(page, 'scripts-menu-removed', scriptsMenu, 8)
-    await scriptsMenu.getByText('Edit scripts…').click()
-    const after = page.getByTestId('project-scripts-dialog')
-    await expect(after.locator('[data-testid="project-file-script-row"]')).toHaveCount(3)
-    await expect(after.getByText(/Could not read the repository/)).toHaveCount(0)
-  }
+  // The Workspace row keeps how the cleanup ended (the notices point there for its output).
+  const endFlyout = await openWorkspaceFlyout(page, panel)
+  await expect(endFlyout.getByTestId('script-run-teardown')).toContainText('Stop services')
+  await expect(endFlyout.getByTestId('script-run-teardown-status')).toContainText('Done in')
+  await shot(page, 'flyout-cleanup', endFlyout)
   await page.keyboard.press('Escape')
+  await page.keyboard.press('Escape')
+  await expect(endFlyout).toHaveCount(0)
   // Its terminal says the folder it runs in is gone.
   if (ended.state === 'removed') {
-    await expect(page.getByTestId('project-scripts-dialog')).toHaveCount(0)
     await openTerminalView(panel)
     await expect(panel.getByTestId('terminal-folder-gone')).toBeVisible({ timeout: 30_000 })
     // It still opens (in home, the folder being gone): a shell prompt, no spawn error.
@@ -579,25 +466,6 @@ test('a reload while setup holds the first session keeps its column, beside a se
   await expect(page.locator(`${REAL_PANEL}[data-session-id="${other}"]`)).toBeVisible()
   expect(audit.errors).toEqual([])
   expect(audit.failed).toEqual([])
-})
-
-// Last: a phone page of the same browser changes what the next desktop page restores.
-test("a phone draws no session header: its top bar's menu has a Scripts row", async ({ browser }) => {
-  test.skip(!firstSessionId, 'needs the session the first test started')
-  const phoneCtx = await browser.newContext({ ...PHONE, baseURL: `http://localhost:${PORT}` })
-  try {
-    const phone = await phoneCtx.newPage()
-    await phone.goto(`/?s1=${firstSessionId}`)
-    const phoneMore = phone.locator('.phone-topbar').getByRole('button', { name: 'More actions' })
-    await expect(phoneMore).toBeVisible({ timeout: 60_000 })
-    await phoneMore.click()
-    await phone.getByTestId('phone-row-scripts').click()
-    const phoneMenu = phone.getByTestId('session-scripts-menu')
-    await expect(phoneMenu.locator('[data-testid="session-script-item"][data-name="Test"]')).toBeVisible({ timeout: 15_000 })
-    await shot(phone, 'phone-scripts-menu', phoneMenu, 8)
-  } finally {
-    await phoneCtx.close()
-  }
 })
 
 test("a host that cannot read the repository's walnut.json: the draft says no setup will run, and why", async ({ page }) => {

@@ -3,12 +3,11 @@
  * rule). One small read per task (GET /tasks/:id/board/owner?tab=1), kept for
  * the page's life so going back to a session never flashes its tab.
  *
+ * A page with a task store needs no read: the store's open subtasks decide.
  * The cache is watched by ONE module-level subscription, mounted panel or not:
- * a `board:changed` for a cached task, a task event naming one as its parent,
- * or a reconnect marks the answer stale. A stale answer counts as not known
- * (the panel keeps what it showed) and is read again as soon as a panel needs
- * it, so a Board written while a lead still had open subtasks is known by the
- * time its last subtask finishes (review, 2026-10-26).
+ * a task event naming a cached task as its parent, or a reconnect, marks the
+ * answer stale. A stale answer counts as not known (the panel keeps what it
+ * showed) and is read again as soon as a panel needs it.
  */
 import { refNamesId } from '../../../../src/lib/id-ref';
 import { useEffect, useRef, useState } from 'react';
@@ -40,10 +39,6 @@ let subscribed = false;
 function subscribeOnce(): void {
   if (subscribed) return;
   subscribed = true;
-  wsClient.onEvent('board:changed', (data) => {
-    const id = (data as { taskId?: string } | null)?.taskId;
-    if (id) markStale(id);
-  });
   const onTask = (data: unknown) => {
     const parent = (data as { task?: { parent_task_id?: string | null } } | null)?.task?.parent_task_id;
     if (!parent) return;
@@ -66,12 +61,12 @@ function readOwner(taskId: string): Promise<void> {
         const res = await apiGet<BoardOwnerFacts>(
           `/api/v1/tasks/${encodeURIComponent(taskId)}/board/owner?tab=1`, undefined, { quietStatuses: [404] },
         );
-        known.set(taskId, { own_board: !!res.own_board, open_subtasks: res.open_subtasks ?? 0 });
+        known.set(taskId, { open_subtasks: res.open_subtasks ?? 0 });
       } catch (err) {
         log.warn('session-panel', 'board tab owner read failed', { taskId, error: err instanceof Error ? err.message : String(err) });
         // Keep an earlier answer; with none, hide the tab (the safe side for a plain task)
         // and leave it stale, so the next panel that needs it asks again.
-        if (!known.has(taskId)) { known.set(taskId, { own_board: false, open_subtasks: 0 }); staleGen.set(taskId, 1); }
+        if (!known.has(taskId)) { known.set(taskId, { open_subtasks: 0 }); staleGen.set(taskId, 1); }
         return;
       }
       if ((staleGen.get(taskId) ?? 0) === gen) { staleGen.delete(taskId); return; }
@@ -107,8 +102,8 @@ export function useBoardTab(taskId: string | null | undefined): BoardTabState {
     listeners.add(l);
     return () => { listeners.delete(l); };
   }, []);
-  // Leading now needs no read; ask only when the store cannot already say "shown".
-  const needRead = !!taskId && !(storeOpenOrNull != null && storeOpenOrNull > 0);
+  // The store answers by itself; ask the server only on a page that has none.
+  const needRead = !!taskId && storeOpenOrNull == null;
   const stale = !!taskId && isStale(taskId);
   useEffect(() => {
     if (needRead && taskId && (!known.has(taskId) || isStale(taskId))) void readOwner(taskId);

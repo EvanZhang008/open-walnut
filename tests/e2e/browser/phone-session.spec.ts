@@ -11,6 +11,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { expect, test, type Page, type Route } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { leadForPage } from './board-view-helpers'
 import { serveProductionBundle } from './production-bundle'
 import {
   PHONE, backButton, injectSafeArea, menuButton, setKeyboardInset, findSmallTargets, findSmallText,
@@ -138,24 +139,11 @@ const historyInfo = (page: Page) => page.evaluate(() => ({
   path: location.pathname,
 }))
 
-/**
- * The Board row is a lead's only (useBoardTab): make the fixture task one for this page, page-locally,
- * by its owner read saying it keeps a Board of its own. The shared fixture board is not written.
- */
-async function stubLeads(page: Page): Promise<void> {
-  await page.route((url) => url.pathname === `/api/v1/tasks/${TASK_ID}/board/owner` && url.searchParams.get('tab') === '1', async (route: Route) => {
-    try {
-      const res = await route.fetch()
-      if (!res.ok()) await route.fulfill({ response: res })
-      else await route.fulfill({ response: res, json: { ...(await res.json()), has_board: true, own_board: true } })
-    } catch { /* the page is gone */ }
-  })
-}
-
 test('one bar: the session title, its status and its kebab are the top bar (C64)', async ({ page }) => {
   await stubSession(page, { history: longTurnHistory(3) })
-  // A lead's kebab, so the list below is the longest one a session shows (Board included).
-  await stubLeads(page)
+  // A lead's kebab, so the list below is the longest one a session shows (Board included): the
+  // fixture task gets an open subtask in this page's task list only (board-view-helpers.ts).
+  await leadForPage(page, TASK_ID)
   const errors = await openByDeepLink(page)
   await expect(topbar(page).locator('.phone-topbar-title-text')).toHaveText(TASK_TITLE)
   await expect(topbar(page).locator('.phone-topbar-subtitle')).toHaveText(/^(Running|Idle|Stopped|Not available|Needs you|Needs your answer|Needs you: .+)$/)
@@ -177,8 +165,12 @@ test('one bar: the session title, its status and its kebab are the top bar (C64)
   for (const id of ['changed', 'files', 'board', 'close']) {
     await expect(menu.getByTestId(`phone-row-${id}`)).toBeVisible()
   }
-  // N12: the short phone list. No desktop-only rows, and it fits the screen.
-  for (const id of ['locate', 'popout']) await expect(menu.getByTestId(`phone-row-${id}`)).toHaveCount(0)
+  // N12: the short phone list. No desktop-only rows, and it fits the screen. No Scripts row
+  // (2026-11-19: the session's one-click scripts are gone).
+  for (const id of ['locate', 'popout', 'scripts']) await expect(menu.getByTestId(`phone-row-${id}`)).toHaveCount(0)
+  // A phone draws no header, so no Watch pill: its menu keeps the task's Watch row (2026-11-19).
+  await expect(menu.getByTestId('task-kebab-watch')).toBeVisible()
+  await expect(overlay(page).getByTestId('session-watch-pill')).toBeHidden()
   await expect(menu.getByText('Details', { exact: true })).toBeVisible()
   const menuText = await menu.innerText()
   for (const desktopOnly of ['Open in new tab', 'Open in VS Code', 'Copy dir', 'Columns', 'Web preview', 'Fork']) {
@@ -677,9 +669,10 @@ const BOARD_HTML = `<h1>Garden board</h1>
 <walnut-thread id="garden-talk" title="Garden talk"></walnut-thread>`
 
 /**
- * Both write the fixture task's Board and delete it when done, and the phone's Board row is there
- * only while the task keeps one (the row is a lead's, 2026-10-26): run in parallel, one's delete
- * took the other's row away. One after the other.
+ * Both write the fixture task's Board (the Page view's content) and delete it when done: run in
+ * parallel, one's delete emptied the other's Board. One after the other. The Board row is a lead's
+ * (a task with an open subtask, board-tab-model.ts), so each makes the fixture task one for its
+ * page only (leadForPage); a Board of its own no longer brings the row.
  */
 test.describe('the fixture task\'s Board', () => {
   test.describe.configure({ mode: 'serial' })
@@ -689,6 +682,7 @@ test.describe('the fixture task\'s Board', () => {
     expect(put.ok(), await put.text()).toBe(true)
     try {
       await stubSession(page, { history: longTurnHistory(2) })
+      await leadForPage(page, TASK_ID)
       await openByDeepLink(page)
       await topbar(page).getByRole('button', { name: 'More actions' }).click()
       await page.getByTestId('phone-row-board').click()
@@ -915,6 +909,7 @@ for (const vp of [{ width: 390, height: 844 }, { width: 375, height: 667 }, { wi
 
 async function boardCardsCheck(page: Page): Promise<void> {
   await stubSession(page, { history: longTurnHistory(2) })
+  await leadForPage(page, TASK_ID)
   await openByDeepLink(page)
   await topbar(page).getByRole('button', { name: 'More actions' }).click()
   await page.getByTestId('phone-row-board').click()

@@ -5,7 +5,8 @@
  * Move & transfer), three session groups (Views, with the Inbox tab first; Copy & open;
  * Debug: Raw input & output and the debug snapshot), Restart and Terminate, then
  * Session info (Created, Updated, Host). 2026-11-02: the task half is TaskMenuRows, the
- * same rows as the task list's menu (Snooze until and Watch first, Move & transfer, Team). Each group opens its rows in place, like Status.
+ * same rows as the task list's menu (Snooze until first, Move & transfer, Team; Watch is the header's pill
+ * since 2026-11-19, so a session menu has no Watch row). Each group opens its rows in place, like Status.
  * 2026-10-30, the user: "why it is missing so many things": the panel count row, the task's
  * source row (now in Move & transfer) and the Created / Updated / Host rows (the Session
  * info group) came back.
@@ -97,14 +98,14 @@ test('the first level holds the frequent rows and the groups; nothing else', asy
   let menu = await openMenu(page, panel)
   const rows = await firstLevel(menu)
   const at = (re: RegExp) => rows.findIndex((r) => re.test(r))
-  const order = [/^Locate task$/, /^Open/, /^Window/, /^Columns/, /^Snooze until/, /^Watch$/, /^Details$/, /^Status: /, /^Pin to/, /^Dates/, /^Move & transfer/, /^Team/, /^Delete$/, /^Session/]
+  const order = [/^Locate task$/, /^Open/, /^Window/, /^Columns/, /^Snooze until/, /^Details$/, /^Status: /, /^Pin to/, /^Dates/, /^Move & transfer/, /^Team/, /^Delete$/, /^Session/]
   const seen = order.map(at)
   expect(seen.every((i) => i >= 0), `first level: ${rows.join(' | ')}`).toBe(true)
   expect([...seen].sort((a, b) => a - b), `order: ${rows.join(' | ')}`).toEqual(seen)
   // Locate leads the menu as a row of its own (2026-11-09: the header's crosshair moved here).
   // Inside a group, not on the first level: the views, the window moves, the pin tiers, the
   // "Local" source row, the copy rows, Restart / Terminate and the read-only times.
-  for (const gone of [/^Changed/, /^Files$/, /^Inbox/, /^Code$/, /^Notes$/, /^Msgs/, /^Usage/, /^Find on Home/, /^Open in new tab/, /^Full screen/,
+  for (const gone of [/^Watch$/, /^Stop watching$/, /^Changed/, /^Files$/, /^Inbox/, /^Code$/, /^Notes$/, /^Msgs/, /^Usage/, /^Find on Home/, /^Open in new tab/, /^Full screen/,
     /^Focus$/, /^Local$/, /^Copy session ID/, /^Copy resume/, /^Copy folder/, /^Open in VS Code/, /^Created/, /^Capture debug/, /^Raw input/, /^Restart/, /^Terminate/, /^Session info/]) {
     expect(rows.some((r) => gone.test(r)), `${gone} is not on the first level: ${rows.join(' | ')}`).toBe(false)
   }

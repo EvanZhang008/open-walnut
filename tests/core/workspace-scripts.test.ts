@@ -5,10 +5,6 @@
  * guards, and the session prompt line. The daemon, the store and the clock are
  * fakes; workspace-core.test.ts runs the host side for real.
  */
-import { execFileSync } from 'node:child_process'
-import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { SessionRecord, Task } from '../../src/core/types.js'
 import { stillWorking } from '../../src/core/workspaces/still-working.js'
@@ -23,7 +19,6 @@ import {
   fileHash, parseScriptsFile, rerunSetup, startAnyway, trustKey, sanitizeProjectScripts, scriptFor, scriptsFor, setupPromptLine, storedProjectScripts,
 } from '../../src/core/workspaces/scripts.js'
 import { cleanTrust, withTrust } from '../../src/core/workspaces/scripts-trust.js'
-import { scriptTerminalLine, scriptTerminalRun, shellQuote } from '../../src/core/workspaces/script-line.js'
 import { workspaceHoldAsk } from '../../src/core/workspaces/decisions.js'
 import { deriveUserStatus } from '../../src/core/user-status.js'
 
@@ -91,44 +86,6 @@ describe('script lists', () => {
     expect(scriptFor('setup', list)?.id).toBe('p')
     expect(scriptFor('teardown', list)?.id).toBe('f')
     expect(scriptFor('setup', [list[0]])).toBeNull()
-  })
-
-  it('the terminal line runs in a subshell at the folder, any text quoted', () => {
-    expect(scriptTerminalLine('bun run test', '/w/app')).toBe("(trap 'exit 130' INT; cd '/w/app' || exit 1; bun run test)")
-    expect(scriptTerminalLine('echo hi', undefined)).toBe("(trap 'exit 130' INT; echo hi)")
-    expect(scriptTerminalRun("it's", 'true', '/w')).toBe(`(trap 'exit 130' INT; cd '/w' || exit 1; true); printf '\\n\\033[1m[%s exited with %s]\\033[0m\\n' 'it'\\''s' "$?"`)
-    expect(scriptTerminalRun('T', 'true', undefined, 'r1')).toBe(`printf '\\033]1337;walnut-run-start=%s\\007' 'r1'; (trap 'exit 130' INT; true); printf '\\n\\033]1337;walnut-run=%s\\007\\033[1m[%s exited with %s]\\033[0m\\n' 'r1' 'T' "$?"`)
-    expect(scriptTerminalLine('a\r\nb', "/w/it's")).toBe("(trap 'exit 130' INT; cd '/w/it'\\''s' || exit 1; \"${SHELL:-sh}\" -c 'a\nb')")
-    // A comment goes to a non-interactive shell (an interactive zsh would pass it as arguments).
-    expect(scriptTerminalLine("npm test # it's unit", '/w/app')).toBe("(trap 'exit 130' INT; cd '/w/app' || exit 1; \"${SHELL:-sh}\" -c 'npm test # it'\\''s unit')")
-    expect(shellQuote("x'y")).toBe("'x'\\''y'")
-  })
-
-  it('the terminal line in a real shell: a comment, a list, a folder that is gone', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'script-line-'))
-    try {
-      const sh = (line: string) => execFileSync('sh', ['-c', `${line}\necho after`], { encoding: 'utf8', env: { ...process.env, SHELL: '/bin/sh' } })
-      expect(sh(scriptTerminalLine('echo here # a comment )', dir))).toBe('here\nafter\n')
-      expect(sh(scriptTerminalLine('echo one; echo two', dir))).toBe('one\ntwo\nafter\n')
-      expect(sh(scriptTerminalRun('Fail', 'exit 3', dir))).toBe('\n\x1b[1m[Fail exited with 3]\x1b[0m\nafter\n')
-      expect(sh(scriptTerminalRun('Fail', 'exit 3', dir, 'r9'))).toBe('\x1b]1337;walnut-run-start=r9\x07\n\x1b]1337;walnut-run=r9\x07\x1b[1m[Fail exited with 3]\x1b[0m\nafter\n')
-      // Ctrl-C (SIGINT to the subshell) still ends with its line, and 130.
-      expect(sh(scriptTerminalRun('Dev', "sh -c 'kill -INT $PPID'; sleep 5", dir))).toBe('\n\x1b[1m[Dev exited with 130]\x1b[0m\nafter\n')
-      expect(sh(scriptTerminalLine("echo 'a b'\necho \"$PWD\" # here", dir))).toBe(`a b\n${dir}\nafter\n`)
-      // Interactive zsh, where `#` is no comment by default (when it is installed).
-      let zsh = ''
-      try { zsh = execFileSync('sh', ['-c', 'command -v zsh'], { encoding: 'utf8' }).trim() } catch { /* none */ }
-      if (zsh) {
-        const out = execFileSync(zsh, ['-f', '-i', '-c', scriptTerminalLine('echo kept # dropped', dir)], { encoding: 'utf8', env: { ...process.env, SHELL: '/bin/sh' } })
-        expect(out.trim().split('\n').pop()).toBe('kept')
-      }
-      // cd fails: neither half of `a; b` or `a || b` runs, and the terminal goes on.
-      const gone = path.join(dir, 'gone')
-      expect(sh(`${scriptTerminalLine('echo one; echo two', gone)} 2>/dev/null`)).toBe('after\n')
-      expect(sh(`${scriptTerminalLine('false || echo fallback', gone)} 2>/dev/null`)).toBe('after\n')
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true })
-    }
   })
 
   it('the allowed files list: valid hashes only, newest kept, one entry per hash', () => {

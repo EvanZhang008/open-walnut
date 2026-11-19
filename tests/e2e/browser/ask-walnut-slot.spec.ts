@@ -374,9 +374,10 @@ test('a launch from the slot streams its reply in the slot, and files an amber t
 
   // The composer is gone: the slot IS the session now, a real SessionPanel with
   // the regular header (tool chips row + title row), the ≡ leading the TITLE
-  // row, and the same window controls a column has — ×, popout, fullscreen, and
+  // row, and the same window controls a column has — ×, fullscreen, and
   // Minimize to the app's taskbar (2026-11-08: one global bar). Only lock is absent
-  // (there is no column rotation to pin within).
+  // (there is no column rotation to pin within); Open in new tab is the ⋮ menu's
+  // Window row, not a header button (2026-11-19).
   await expect(slotDraft(page)).toHaveCount(0)
   const panel = slotSession(page).locator('.session-panel')
   await expect(panel).toBeVisible()
@@ -385,7 +386,7 @@ test('a launch from the slot streams its reply in the slot, and files an amber t
   await expect(panel.locator('.session-meta-row-2 .session-panel-header-leading')).toHaveCount(0)
   await expect(panel.locator('.session-meta-row-2').getByRole('button', { name: 'Files', exact: true })).toBeVisible()
   await expect(panel.locator('.session-panel-close')).toBeVisible()
-  await expect(panel.locator('.session-panel-popout')).toBeVisible()
+  await expect(panel.locator('.session-panel-popout')).toHaveCount(0)
   await expect(panel.locator('.session-panel-expand')).toBeVisible()
   await expect(panel.getByRole('button', { name: 'Minimize session to the taskbar' })).toBeVisible()
   await expect(panel.getByRole('button', { name: /Lock session panel|Unlock session panel/ })).toHaveCount(0)

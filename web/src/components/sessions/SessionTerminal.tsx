@@ -82,12 +82,6 @@ interface SessionTerminalProps {
    * readable rows (the dock grows to it, as far as the column allows).
    */
   onDockWant?: (px: number) => void;
-  /**
-   * A line to type into a shell once it is ready (a project script run from the
-   * Scripts menu): it goes to the terminal in focus. Each new `id` is typed once.
-   */
-  pendingInput?: { id: number; text: string; raw?: boolean } | null;
-  onPendingInputSent?: (id: number) => void;
   /** The folder the shells run in was removed (the task's workspace, at its completion). */
   folderGone?: boolean;
 }
@@ -119,7 +113,7 @@ function tabLabel(tab: TerminalTab, states: Record<number, TerminalPaneState>): 
   return t ? `${slot}: ${t}` : terminalName(slot);
 }
 
-export function SessionTerminal({ sessionId, label, host, onClose, embedded = false, barRightSlot, dock, compact = false, onAddToChat, onOpenPath, pathNotice, onDismissPathNotice, onDockWant, pendingInput, onPendingInputSent, folderGone }: SessionTerminalProps) {
+export function SessionTerminal({ sessionId, label, host, onClose, embedded = false, barRightSlot, dock, compact = false, onAddToChat, onOpenPath, pathNotice, onDismissPathNotice, onDockWant, folderGone }: SessionTerminalProps) {
   const confirm = useConfirm();
   const remote = host && host !== '__local__' ? host : null;
   const hostName = useHostDisplayLabel(remote);
@@ -228,16 +222,6 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
   }, [sessionId]);
 
   const focused = focusedSlot(layout);
-  // The terminal project scripts run in: the one in focus when a script came,
-  // kept while it is open (its run is read from its output), else the focused one.
-  const [scriptTarget, setScriptTarget] = useState<{ id: number; slot: number } | null>(null);
-  useEffect(() => {
-    if (!pendingInput || focused === null) return;
-    setScriptTarget((p) => (p?.id === pendingInput.id ? p : { id: pendingInput.id, slot: focused }));
-    // The slot is read when a new script comes, not followed afterwards.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingInput, focused === null]);
-  const scriptSlot = scriptTarget && allSlots(layout).includes(scriptTarget.slot) ? scriptTarget.slot : focused;
   const focusedState = (focused !== null ? states[focused] : undefined) ?? EMPTY_STATE;
   const shown = activeTab(layout);
 
@@ -556,9 +540,6 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
                 onAddToChat={onAddToChat ? addToChat : undefined}
                 onOpenPath={onOpenPath}
                 stopEscape={embedded}
-                scripts={slot === scriptSlot}
-                pendingInput={slot === scriptSlot ? pendingInput : null}
-                onPendingInputSent={onPendingInputSent}
               />
             ))}
           </div>

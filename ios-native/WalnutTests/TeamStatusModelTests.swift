@@ -41,13 +41,20 @@ final class TeamStatusModelTests: XCTestCase {
         XCTAssertEqual(TeamStatusChip.waiting.rows(b).map(\.id), ["c", "a"])
         XCTAssertEqual(TeamStatusChip.notStarted.rows(b).map(\.id), ["d"])
         XCTAssertEqual(TeamStatusChip.allCases.map { $0.count(b) }, [1, 1, 2, 1, 1])
-        XCTAssertTrue(b.hasTeam)
+        XCTAssertTrue(b.isLeading)
         // On the leader's own page its own row is left out, and its team still shows.
         let mine = TeamStatusModel.build(ownerId: "lead", tasks: tasks, includeOwner: false, now: Self.now)
         XCTAssertFalse(mine.open.contains { $0.id == "lead" })
         XCTAssertEqual(mine.open.count + 1, b.open.count)
-        XCTAssertTrue(mine.hasTeam)
-        XCTAssertFalse(TeamStatusModel.build(ownerId: "lead", tasks: [tasks[0]], includeOwner: false, now: Self.now).hasTeam)
+        XCTAssertTrue(mine.isLeading)
+        XCTAssertFalse(TeamStatusModel.build(ownerId: "lead", tasks: [tasks[0]], includeOwner: false, now: Self.now).isLeading)
+        // A lead whose subtasks all finished leads no more: no Team section (2026-11-19).
+        let finished = [tasks[0], tasks[5]]
+        XCTAssertFalse(TeamStatusModel.build(ownerId: "lead", tasks: finished, includeOwner: false, now: Self.now).isLeading)
+        XCTAssertFalse(TeamStatusModel.build(ownerId: "lead", tasks: finished, now: Self.now).isLeading)
+        // Only direct subtasks count, as on the web (openSubtasksOf): an open grandchild alone does not.
+        let grandchild = task("g", parent: "e")
+        XCTAssertFalse(TeamStatusModel.build(ownerId: "lead", tasks: finished + [grandchild], includeOwner: false, now: Self.now).isLeading)
     }
 
     func testFallbackWithoutStoredStatusReadsThePhaseAsAnOlderServerMeantIt() {

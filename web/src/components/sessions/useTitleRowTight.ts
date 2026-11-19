@@ -2,6 +2,8 @@ import { useLayoutEffect, useState } from 'react';
 
 /** Below this width the session title row puts its labels on a line under the title. */
 export const TITLE_ROW_TIGHT_PX = 440;
+/** Below this width the row's word pills (Watch) draw their icon alone, the word in the tooltip. */
+export const TITLE_ROW_NARROW_PX = 560;
 
 /**
  * Whether the session header's title row is narrow (a third column, a slim window), so
@@ -11,17 +13,21 @@ export const TITLE_ROW_TIGHT_PX = 440;
  * query: a container query needs layout containment on the row, which would make it the
  * containing block of any fixed-position child drawn inside it.
  *
- * Returns a callback ref for the row (it mounts after the record loads) and the answer.
+ * Returns a callback ref for the row (it mounts after the record loads), whether it is
+ * tight, and whether it is narrow (TITLE_ROW_NARROW_PX: wider than tight). Each is a
+ * boolean, so a resize re-renders the panel only when one of them flips.
  */
-export function useTitleRowTight(): [(el: HTMLElement | null) => void, boolean] {
+export function useTitleRowTight(): [(el: HTMLElement | null) => void, boolean, boolean] {
   const [el, setEl] = useState<HTMLElement | null>(null);
   const [tight, setTight] = useState(false);
+  const [narrow, setNarrow] = useState(false);
   // Before paint at mount, so a narrow column never shows the words for one frame.
   useLayoutEffect(() => {
     if (!el) return;
     const read = () => {
       const w = el.getBoundingClientRect().width;
       setTight(w > 0 && w < TITLE_ROW_TIGHT_PX);
+      setNarrow(w > 0 && w < TITLE_ROW_NARROW_PX);
     };
     read();
     if (typeof ResizeObserver === 'undefined') return;
@@ -37,5 +43,5 @@ export function useTitleRowTight(): [(el: HTMLElement | null) => void, boolean] 
     ro.observe(el);
     return () => { ro.disconnect(); if (raf) cancelAnimationFrame(raf); };
   }, [el]);
-  return [setEl, tight];
+  return [setEl, tight, narrow];
 }

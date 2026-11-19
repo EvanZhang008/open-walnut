@@ -20,7 +20,6 @@ const plainAllowed: Record<string, string> = {
   'components/routines/RoutineRow.tsx': "error.next is Walnut's own next-step sentence (routine-groups.ts routineError), not agent words",
   'components/tasks/StartQueueLine.tsx': "why a start did not happen is Walnut's own sentence from the server's status (core/user-status.ts), not agent words",
   'components/sessions/MessageCard.tsx': "a message card's summary (sent or received) is a clipped two-line preview inside the card's own Details button (no link may sit in a button); the whole text opens below it through AgentText",
-  'components/workspaces/StopFirstDialog.tsx': "the script asked for is a script name from the project's walnut.json, not agent words",
 };
 
 /** Whether `file` hands agent words to the shared renderer the way `pred` says (other props free). */

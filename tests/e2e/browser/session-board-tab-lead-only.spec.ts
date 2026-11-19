@@ -1,23 +1,33 @@
 /**
  * The session header's Board tab is a lead's (2026-10-26, the user: "for non
- * leader, please don't show board, confused people"). Only a task with open
- * subtasks, or one that keeps a Board of its own with something in it, gets the
- * tab; every other task, a worker included, gets none.
+ * leader, please don't show board, confused people"; 2026-11-19: "why show
+ * board when its only one guy, only show if it is leader"). Only a task with
+ * open subtasks gets the tab. A Board the task keeps of its own does not count,
+ * and every other task, a worker included, gets none
+ * (web/src/components/sessions/board-tab-model.ts).
  *
  * Scenario matrix (real fixture server, mock CLI sessions, real WS events):
  *  A. a plain task: no tab, and none on the phone kebab either;
  *  B. a lead with an open subtask: the tab, and it opens the Board;
  *  C. a plain task whose FIRST subtask arrives while its session is open: the
  *     tab appears without a reload;
- *  D. a lead whose Board is open when its last open subtask completes and it
- *     keeps no Board of its own: the tab goes and the view closes to the chat;
- *  E. a lead whose subtasks are all done but who keeps a Board: the tab stays;
+ *  D. a lead whose Board is open when its last open subtask completes: the
+ *     Board and its tab stay while the user reads it (the team's last state),
+ *     and the tab goes once they go back to the chat;
+ *  E. the reported case: a task that keeps a Board of its own with content and
+ *     whose subtasks are all done (the server answers own_board true,
+ *     open_subtasks 0): no tab;
  *  F. a worker under a lead with a Board: no tab;
- *  G. a plain task whose Board is created while its session is open: the tab
- *     appears without a reload;
+ *  G. a plain task whose Board is created while its session is open: still no
+ *     tab;
  *  H. a plain task whose board file holds only a "seen" marker: no tab;
- *  I. a lead that writes its Board while it still has an open subtask keeps
- *     the tab, and its open Board, when that last subtask finishes.
+ *  I. a lead that writes its Board while it still has an open subtask loses the
+ *     tab when that last subtask finishes, once the user leaves the open Board,
+ *     as in D.
+ *
+ * Each page here has a task store (Home), whose open subtasks decide the tab on
+ * the panel's first frame: the page makes no owner read. The owner route's own
+ * answers are still checked through the API, since older pages read them.
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
@@ -32,7 +42,7 @@ let api: KanbanApi
 let project = ''
 
 test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 })
-// Each test opens Home through a real link and waits for the owner read: give it room on a loaded box.
+// Each test opens Home through a real link and waits for the task list: give it room on a loaded box.
 test.describe.configure({ mode: 'serial', timeout: 180_000 })
 
 interface Made { id: string; sid: string }
@@ -75,7 +85,7 @@ test.beforeAll(async ({}, info) => {
   growing = await withSession('Plain task that becomes a lead')
   closing = await withSession('Lead whose last worker finishes')
   closingWorker = await makeTask('Last open worker', closing.id)
-  keeper = await withSession('Lead that keeps a Board')
+  keeper = await withSession('Task that keeps a Board, its team all done')
   const done = await makeTask('Finished worker', keeper.id)
   await complete(done)
   await putBoard(keeper.id, '<h1>Keeper plan</h1>')
@@ -98,18 +108,14 @@ test.afterAll(async () => {
   }
 })
 
-/** The panel's owner read for a task, as the page makes it (useBoardTab). */
-let ownerRead: Promise<unknown> = Promise.resolve()
-const watchOwnerRead = (page: Page, id: string) => {
-  // A lead may never make the read (its open subtasks decide): never an unhandled rejection.
-  const read = page.waitForResponse((r) => r.url().includes(`/api/v1/tasks/${id}/board/owner?tab=1`), { timeout: 60_000 })
-  read.catch(() => undefined)
-  ownerRead = read
-}
+/** The task list the page's store loads (GET /api/tasks without `ids`), which decides the tab. */
+const taskListLoad = (page: Page) => page.waitForResponse((r) => {
+  const u = new URL(r.url())
+  return u.pathname === '/api/tasks' && !u.searchParams.has('ids') && r.request().method() === 'GET'
+}, { timeout: 90_000 })
 
 /** Real navigation (a link click, never page.goto), then the task's row opens its session. */
 async function openSession(page: Page, t: Made): Promise<Locator> {
-  watchOwnerRead(page, t.id)
   await isolateUiPrefs(page)
   await presetPanelView(page, { section: 'all', project })
   await page.setContent(`<a href="${api.base}/">Open Walnut</a>`)
@@ -127,9 +133,11 @@ async function openSession(page: Page, t: Made): Promise<Locator> {
 
 const chip = (panel: Locator) => panel.getByTestId('session-board-chip')
 
-/** Absent, and still absent once the owner read has answered and rendered. */
+/**
+ * Absent, and still absent a beat later. The panel was opened from a row of the loaded task list,
+ * so the store already knew the task's open subtasks on its first frame: the beat is for the render.
+ */
 async function expectNoTab(panel: Locator): Promise<void> {
-  await ownerRead
   await panel.page().waitForTimeout(300)
   await expect(chip(panel)).toHaveCount(0)
   await expect(panel.locator('[data-header-id="board"]')).toHaveCount(0)
@@ -168,24 +176,36 @@ test('C. the first subtask arriving while the session is open brings the tab, no
   await shoot(page, panel, 'c-first-subtask')
 })
 
-test('D. an open Board closes to the chat when the last open subtask finishes and there is no Board of its own', async ({ page }) => {
+/** The last subtask finished under an open Board: it stays while read, the tab goes once the user leaves it. */
+async function boardHeldUntilLeft(page: Page, panel: Locator, shot: string): Promise<void> {
+  // The page hears the task's change over its socket within a beat; give it two, then judge.
+  await page.waitForTimeout(2000)
+  await expect(page.getByTestId('task-board-pane')).toBeVisible()
+  await expect(chip(panel)).toBeVisible()
+  await shoot(page, panel, `${shot}-held`)
+  // Back to the chat (the active chip toggles its view off): the task leads no more, so the tab goes.
+  await chip(panel).click()
+  await expect(page.getByTestId('task-board-pane')).toHaveCount(0, { timeout: 15_000 })
+  await expect(panel.locator('.session-history')).toBeVisible()
+  await expect(chip(panel)).toHaveCount(0, { timeout: 15_000 })
+  await shoot(page, panel, `${shot}-left`)
+}
+
+test('D. an open Board stays while read when the last open subtask finishes; its tab goes once left', async ({ page }) => {
   const panel = await openSession(page, closing)
   await expect(chip(panel)).toBeEnabled({ timeout: 15_000 })
   await chip(panel).click()
   await expect(page.getByTestId('task-board-pane')).toBeVisible({ timeout: 30_000 })
   await complete(closingWorker)
-  await pollUntil('owner says no lead', () => owner(closing.id), (o) => !o.own_board && o.open_subtasks === 0)
-  await expect(chip(panel)).toHaveCount(0, { timeout: 15_000 })
-  await expect(page.getByTestId('task-board-pane')).toHaveCount(0)
-  await expect(panel.locator('.session-history')).toBeVisible()
-  await shoot(page, panel, 'd-closed-to-chat')
+  await pollUntil('owner says no open subtask', () => owner(closing.id), (o) => !o.own_board && o.open_subtasks === 0)
+  await boardHeldUntilLeft(page, panel, 'd')
 })
 
-test('E. a lead whose subtasks are all done but that keeps a Board keeps the tab', async ({ page }) => {
+test('E. a Board of its own with content and only completed subtasks brings no tab (the reported case)', async ({ page }) => {
+  // The server still says it keeps a Board (beforeAll checked own_board true, open_subtasks 0).
   const panel = await openSession(page, keeper)
-  await expect(chip(panel)).toBeVisible({ timeout: 15_000 })
-  await chip(panel).click()
-  await expect(page.getByTestId('task-board-pane')).toBeVisible({ timeout: 30_000 })
+  await expectNoTab(panel)
+  await shoot(page, panel, 'e-kept-board-no-team')
 })
 
 test('F. a worker under a lead with a Board has no tab', async ({ page }) => {
@@ -195,11 +215,14 @@ test('F. a worker under a lead with a Board has no tab', async ({ page }) => {
   expect(teamLead).toBeTruthy()
 })
 
-test('G. a Board created while the session is open brings the tab, no reload', async ({ page }) => {
+test('G. a Board created while the session is open brings no tab', async ({ page }) => {
   const panel = await openSession(page, boarded)
   await expectNoTab(panel)
   await putBoard(boarded.id, '<h1>A page for this task</h1>')
-  await expect(chip(panel)).toBeVisible({ timeout: 15_000 })
+  await pollUntil('owner says it keeps a Board', () => owner(boarded.id), (o) => o.own_board && o.open_subtasks === 0)
+  // The page hears the Board's change over its socket within a beat; give it two, then judge.
+  await page.waitForTimeout(2000)
+  await expectNoTab(panel)
 })
 
 test('H. a board file holding only a seen marker brings no tab', async ({ page }) => {
@@ -207,30 +230,32 @@ test('H. a board file holding only a seen marker brings no tab', async ({ page }
   await expectNoTab(panel)
 })
 
-test('I. a Board written while leading keeps the tab and the open Board when the last subtask finishes', async ({ page }) => {
+test('I. a Board written while leading does not keep the tab once its last subtask finished and the user left it', async ({ page }) => {
   const panel = await openSession(page, writer)
   await expect(chip(panel)).toBeEnabled({ timeout: 15_000 })
   await chip(panel).click()
   await expect(page.getByTestId('task-board-pane')).toBeVisible({ timeout: 30_000 })
   await putBoard(writer.id, '<h1>Written while leading</h1>')
-  await complete(writerWorker)
-  await pollUntil('owner says it keeps a Board', () => owner(writer.id), (o) => o.own_board && o.open_subtasks === 0)
-  await page.waitForTimeout(2000)
+  // Still a lead while its worker is open: the tab and the Board stay.
+  await page.waitForTimeout(1000)
   await expect(chip(panel)).toBeVisible()
   await expect(page.getByTestId('task-board-pane')).toBeVisible()
+  await complete(writerWorker)
+  await pollUntil('owner says it keeps a Board, no open subtask', () => owner(writer.id), (o) => o.own_board && o.open_subtasks === 0)
+  await boardHeldUntilLeft(page, panel, 'i')
 })
 
 test('phone: no Board row in the kebab for a plain task, one for a lead', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   for (const [t, rows] of [[plain, 0], [lead, 1]] as const) {
-    if (!rows) watchOwnerRead(page, t.id)
     await isolateUiPrefs(page)
     await page.setContent(`<a href="${api.base}/?s1=${t.sid}">Open session</a>`)
+    const list = taskListLoad(page)
     await page.getByRole('link', { name: 'Open session', exact: true }).click()
     const bar = page.locator('.phone-topbar')
     await expect(bar.getByRole('button', { name: 'More actions' })).toBeVisible({ timeout: 60_000 })
-    // Let the record and the owner read land before the menu is judged.
-    if (!rows) await ownerRead
+    // Let the record and the task list (whose open subtasks decide the row) land before the menu is judged.
+    await list
     await page.waitForTimeout(500)
     await bar.getByRole('button', { name: 'More actions' }).click()
     await expect(page.getByTestId('phone-row-files')).toBeVisible({ timeout: 15_000 })

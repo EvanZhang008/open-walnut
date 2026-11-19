@@ -29,7 +29,8 @@ test.use({ viewport: { width: 1280, height: 800 } })
 
 /** The order chips come back as the row widens; the movable window buttons fill whatever room the chips leave. */
 const CHIP_ORDER = ['plan', 'fork', 'changed', 'files', 'terminal', 'board']
-const WINDOW_BUTTONS = ['popout']
+// Minimize is the one movable window button since Open in new tab left the header (2026-11-19).
+const WINDOW_BUTTONS = ['minimize']
 const ALWAYS_ON_THE_ROW = ['lock', 'expand', 'close']
 
 /** A fresh page per call: the panel is drawn at `width` from its first frame. */

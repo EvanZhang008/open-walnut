@@ -6,9 +6,7 @@
  *  - the repository's file, `walnut.json` at the git top of the folder, read
  *    live on its host.
  *
- * A script runs three ways:
- *  - by hand from a session's Scripts menu: the browser types it into the
- *    session's terminal (nothing here runs it);
+ * A script runs two ways:
  *  - `setup`: right after an isolated workspace is made (manager.ts runCreate).
  *    With `wait` (the default) the task's first session starts only after it
  *    ends; it starts either way, and its prompt says how setup went;
@@ -474,7 +472,7 @@ export async function rerunSetup(taskId: string, opts: { allow?: boolean; expect
   // The card the click came from showed the file as it was: an edit since (a pull,
   // another branch) is not what the user agreed to run.
   if (opts.expectHash && script.source !== 'project' && view.file?.hash !== opts.expectHash) {
-    throw new WorkspaceError(`The workspace's ${view.file?.name ?? 'walnut.json'} changed since; nothing ran. Open the Scripts menu to see it as it is now.`, 409, 'file-changed')
+    throw new WorkspaceError(`The workspace's ${view.file?.name ?? 'walnut.json'} changed since; nothing ran. Open Workspace in the task's menu to see it as it is now.`, 409, 'file-changed')
   }
   if (opts.allow && script.source !== 'project' && view.file?.key && !view.file_trusted) {
     await deps.allowScriptsFile(view.file.key)

@@ -182,7 +182,7 @@ export function buildProjectMenuItems(
     {
       key: 'scripts',
       label: 'Scripts…',
-      title: "This project's commands: setup for new workspaces, one-click runs in a session",
+      title: "This project's commands: setup for new workspaces, teardown when a task completes",
       when: !!editScripts && named,
       onSelect: () => editScripts?.(target.project),
     },

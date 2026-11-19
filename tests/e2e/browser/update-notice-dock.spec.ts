@@ -9,6 +9,7 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 import { isolatePrefs } from './host-problems-helpers'
 import { loadApp } from './host-problems-fixture-helpers'
 import { healthyGitSync } from './host-attention-helpers'
+import { popoutFromKebab } from './session-kebab-helpers'
 
 const SHOTS = 'test-results/update-notice-dock'
 const STATUS = /\/api\/system\/desktop-update(\?|$)/
@@ -156,9 +157,8 @@ test('a popout has no rail: the notice is a bar under the composer, covering not
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('main:open-session', { detail: { sessionId: 'pw-vscode-session' } })))
   const parent = page.locator('.main-page-session-column [data-session-id="pw-vscode-session"]')
   await expect(parent).toBeVisible()
-  const opened = page.context().waitForEvent('page')
-  await parent.locator('.session-panel-popout').click()
-  const child = await opened
+  // Open in new tab is the ⋮ menu's Window row (2026-11-19).
+  const child = await popoutFromKebab(parent)
   await child.setViewportSize({ width: 900, height: 700 })
   await expect(child.locator('.session-panel-input textarea')).toBeVisible({ timeout: 30_000 })
   await expect(child.locator('.popout-update-dock > .stale-build-pill.is-docked')).toHaveCount(1)

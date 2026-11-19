@@ -287,8 +287,8 @@ boardV1Router.get('/tasks/:id/board/owner', route(async (req, res) => {
   const task = await resolveTask(param(req.params.id))
   const owner = await resolveTeamBoardTask(task.id)
   const base = { task_id: owner.taskId, title: owner.title, self: owner.self, has_board: owner.hasBoard }
-  // ?tab=1 (the session header's Board tab) also asks whether the task leads: a
-  // Board of its own with something in it, and its open subtasks. Only on request:
+  // ?tab=1 (the session header's Board tab) also asks whether the task leads: its
+  // open subtasks decide (own_board stays for older pages). Only on request:
   // every board_* op resolves its default board through this route.
   if (!wantsTeam(req.query.tab)) { res.json(base); return }
   const ownBoard = owner.self && owner.hasBoard && boardHasContent(await getBoard(owner.taskId))

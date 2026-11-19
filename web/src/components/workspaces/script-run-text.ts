@@ -29,15 +29,6 @@ export function scriptRunStatus(run: WorkspaceScriptRun): string {
   }
 }
 
-/** When a run ended, so a run again reads apart from the first: "at 14:02", "on Nov 3 at 14:02". */
-export function ranAtText(run: WorkspaceScriptRun, now = new Date()): string {
-  if (run.state === 'running' || !run.ended_at) return '';
-  const at = new Date(run.ended_at);
-  if (Number.isNaN(at.getTime())) return '';
-  const time = at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  return at.toDateString() === now.toDateString() ? `at ${time}` : `on ${at.toLocaleDateString([], { month: 'short', day: 'numeric' })} at ${time}`;
-}
-
 /** Where the script came from, for a small label. */
 export function scriptSourceText(source: WorkspaceScriptRun['source']): string {
   return source === 'project' ? "project's scripts" : source;

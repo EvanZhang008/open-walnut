@@ -23,6 +23,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { test, expect, type Page } from '@playwright/test'
 import { openListProject } from './todo-panel-helpers'
+import { leadForPage } from './board-view-helpers'
 
 test.setTimeout(300_000)
 
@@ -154,6 +155,9 @@ test('the console writes while the Mac sleeps: each write is kept on the host wi
   const edit = await control<{ id: string }>('POST', '/control/mac-task', { title: editTitle, project: 'Acme' })
   const done = await control<{ id: string }>('POST', '/control/mac-task', { title: doneTitle, project: 'Acme' })
   await control('POST', '/control/mac-board', { taskId: ids.board, html: BOARD_HTML })
+  // The Board tab is a lead's: "Release plan" gets an open subtask in this page's task list only
+  // (the cluster's seed gives it none, and a Board of its own no longer brings the tab).
+  await leadForPage(page, ids.board)
 
   await test.step('1. sign in through the tunnel; the Mac answers', async () => {
     await signIn(page)

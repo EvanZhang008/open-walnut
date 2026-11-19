@@ -3,7 +3,7 @@
  * a user meets it on Home: the kanban replaces the old flat list, the lanes of
  * each template, where every card is placed with nobody having placed it, the
  * status words, the card content, the done lane's preview, unread dots,
- * loading and empty, the parked card, the neutral sev:2 chip (C1 C2 C3 C15
+ * loading, an empty team (no tab), the parked card, the neutral sev:2 chip (C1 C2 C3 C15
  * C21 C22 C30 C46 C47 C57 C66 C77 C84 C94). Chromium and WebKit, real clicks.
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
@@ -54,8 +54,8 @@ test.afterAll(async () => {
   }
 })
 
-/** Real navigation by link click (never page.goto), then the leader's Board tab. */
-async function openBoard(page: Page, leader = team.leader, sid = team.leaderSid, project = team.project, beforeBoard?: () => Promise<void>): Promise<Locator> {
+/** Real navigation by link click (never page.goto), then the leader's session column from its row. */
+async function openLeaderPanel(page: Page, leader: string, sid: string, project: string): Promise<Locator> {
   await isolateUiPrefs(page)
   await presetPanelView(page, { section: 'all', project })
   await page.route('https://tickets.example.test/**', (r) => r.fulfill({ status: 200, contentType: 'text/html', body: '<p>ticket</p>' }))
@@ -73,6 +73,12 @@ async function openBoard(page: Page, leader = team.leader, sid = team.leaderSid,
   await row.locator('.todo-item-title').click()
   const panel = page.locator(`${REAL_PANEL}[data-session-id="${sid}"]`)
   await expect(panel).toBeVisible({ timeout: 30_000 })
+  return panel
+}
+
+/** The leader's session column, then its Board tab, on Cards. */
+async function openBoard(page: Page, leader = team.leader, sid = team.leaderSid, project = team.project, beforeBoard?: () => Promise<void>): Promise<Locator> {
+  const panel = await openLeaderPanel(page, leader, sid, project)
   if (beforeBoard) await beforeBoard()
   await panel.getByTestId('session-board-chip').click()
   const pane = page.getByTestId('task-board-pane')
@@ -247,7 +253,7 @@ test('C30: unread output is a dot; opening the card clears it', async ({ page })
   await expect.poll(async () => (await call<{ task: { unread?: boolean } }>(api, 'GET', `/api/tasks/${id}`)).task.unread === true, { timeout: 15_000 }).toBe(false)
 })
 
-test('C47 C66: no Empty flash while loading; a task the store lacks is a loading card in its lane; an empty team', async ({ page }) => {
+test('C47 C66: no Empty flash while loading; a task the store lacks is a loading card in its lane; an empty team has no tab', async ({ page }) => {
   test.setTimeout(180_000)
   // Record every Empty card and every loading card the board ever drew.
   await page.addInitScript(() => {
@@ -281,23 +287,26 @@ test('C47 C66: no Empty flash while loading; a task the store lacks is a loading
   for (const id of team.oldDone) await expect(card(pane, id)).toBeVisible({ timeout: 30_000 })
   expect(await page.evaluate(() => (window as unknown as { __kanbanSeen: { empty: number } }).__kanbanSeen.empty)).toBe(0)
 
-  // An empty team: the empty card, the first todo lane's Add task focused, the ask for a page.
+  // An empty team: no Board tab at all. The tab is a lead's, and since 2026-11-19 only an open
+  // subtask makes a lead: lanes set up before any worker (a Board of its own, as the server tells
+  // it) no longer bring it. So a session's Board never shows the kanban's Empty card any more (any
+  // open subtask is a card); the org page's Board, which has no such gate, is where it can appear.
   const { task: lead } = await call<{ task: { id: string } }>(api, 'POST', '/api/tasks', { title: `Empty leader ${team.stamp}`, source: 'local', pinned: false, project: `${team.project} empty` })
   litter.push(lead.id)
   const { sessionId } = await call<{ sessionId: string }>(api, 'POST', '/api/sessions/quick-start', {
     cwd: `${api.fixtureRoot}/projects/walnut`, message: 'snapshot-clean-turn:Empty leader ready', taskId: lead.id,
   })
-  // The Board tab is a lead's (2026-10-26): this leader has set up its Board's lanes (its session's
-  // write) before any worker, so it keeps a Board of its own and gets the tab with an empty team.
   const empty = await call<{ lanes_effective: unknown[] }>(api, 'GET', `/api/v1/tasks/${lead.id}/board?team=1`)
   await call(api, 'PUT', `/api/v1/tasks/${lead.id}/board/lanes`, { lanes: empty.lanes_effective }, { 'x-walnut-caller-sid': sessionId })
+  await pollUntil('the empty leader keeps a Board of its own', () => call<{ own_board: boolean; open_subtasks: number }>(api, 'GET', `/api/v1/tasks/${lead.id}/board/owner?tab=1`),
+    (o) => o.own_board && o.open_subtasks === 0)
   const page2 = await page.context().newPage()
-  const pane2 = await openBoard(page2, lead.id, sessionId, `${team.project} empty`)
-  // openBoard picked Cards: the empty team's first todo lane opens its Add task once Cards is shown, not while hidden under Status.
-  await expect(pane2.getByTestId('kanban-empty')).toContainText('No tasks on this board yet.', { timeout: 20_000 })
-  await expect(pane2.getByTestId('kanban-empty')).toContainText('Add a task to a lane, or ask the leader to split the work.')
-  await expect(pane2.locator('[data-testid="kanban-lane-body"][data-lane-id="todo"] [data-testid="kanban-add-task-input"]')).toBeFocused()
-  await expect(pane2.getByTestId('board-kanban').getByTestId('board-ask-button')).toHaveText('Ask the leader for a page')
+  const panel2 = await openLeaderPanel(page2, lead.id, sessionId, `${team.project} empty`)
+  // The row came from the task list, so the panel already knows the task has no open subtask.
+  await expect(panel2.locator('[data-header-id="files"]')).toBeVisible({ timeout: 30_000 })
+  await page2.waitForTimeout(1_000)
+  await expect(panel2.getByTestId('session-board-chip')).toHaveCount(0)
+  await expect(page2.getByTestId('task-board-pane')).toHaveCount(0)
   await page2.close()
 })
 

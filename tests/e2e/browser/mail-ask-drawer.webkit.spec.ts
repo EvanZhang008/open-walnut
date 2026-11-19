@@ -213,7 +213,7 @@ test('S4-W5: Escape with the composer menu open closes the menu, and only then t
   await expect(session).toHaveAttribute('data-session-id', /.+/, { timeout: 60_000 })
   // WebKit does not focus a button on click, so the Escape arrives at <body>: the open menu is what
   // the drawer has to notice, not the focused element.
-  // The composer's own + button: the session header has menu buttons of its own (Scripts).
+  // The composer's own + button: the session header has menu buttons of its own (its ⋮).
   await session.locator('.chat-plus-btn').click()
   await expect(session.locator('.chat-plus-menu')).toBeVisible()
   await page.keyboard.press('Escape')

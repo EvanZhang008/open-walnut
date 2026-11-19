@@ -421,7 +421,7 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     await openWriterInbox(page)
     await ask(page, WRITER, LUNCH, SUMMARIZE)
     await expect(sessionBody(page)).toHaveAttribute('data-session-id', /.+/, { timeout: 60_000 })
-    // The composer's own + button: the session header has menu buttons of its own (Scripts).
+    // The composer's own + button: the session header has menu buttons of its own (its ⋮).
     const plus = sessionBody(page).locator('.chat-plus-btn')
     await plus.click()
     await expect(sessionBody(page).locator('.chat-plus-menu')).toBeVisible()

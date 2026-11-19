@@ -16,6 +16,7 @@
  */
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
+import { leadForPage } from './board-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -101,6 +102,8 @@ test('task ids in the Board text and its messages become live chips', async ({ p
     text: `Done by ${OPEN_ID}, keys in \`${DONE_ID}\`, the order fix is <task-ref id="9c1d4e2a" label="old words"/>; hash 2ac8891 and \`git log ${OPEN_ID}\` stay text.`,
   }, { 'x-walnut-caller-sid': host!.session })
 
+  // The Board tab is a lead's: the fixture task gets an open subtask in this page's task list only.
+  await leadForPage(page, host!.task)
   const frame = await openBoard(page, host!)
 
   // The page text: the bare id and the first segment are chips with the names.

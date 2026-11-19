@@ -5,10 +5,13 @@
  * Locate and Watch were the header's crosshair and eye until 2026-11-09 (the user: "this 2 put iot
  * in the drop down"): Locate is now a first-level row of the menu (`session-menu-locate`, "Locate
  * task" when the page gave a handler, else "Find on Home"), present once the session record names
- * a task, and Watch is the task's row (`task-kebab-watch`, "Watch" / "Stop watching"), which comes
- * with the task. A click on either row closes the menu.
+ * a task. A click on it closes the menu. Watch came back out on 2026-11-19 as the header's pill
+ * (`session-watch-pill`), so a desktop session menu has no `task-kebab-watch` row (a phone's
+ * menu, with no header, keeps it). Open in new tab is only the Window group's row
+ * (`session-menu-popout`): the header has no button for it.
  */
-import { expect, type Locator } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
+import { openKebabGroup } from './kebab-group-helpers'
 
 /** The ⋮ button of the session panel (or Org node header) `scope` holds: the first one in it. */
 export function sessionKebabButton(scope: Locator): Locator {
@@ -49,4 +52,17 @@ export async function locateFromKebab(scope: Locator): Promise<void> {
   const row = await kebabRow(scope, 'session-menu-locate')
   await row.click()
   await expect(scope.page().locator('.task-kebab-menu')).toHaveCount(0)
+}
+
+/**
+ * Open `scope`'s session in a new tab from its ⋮ menu (Window > Open in new tab) and return the
+ * new page once it opened.
+ */
+export async function popoutFromKebab(scope: Locator): Promise<Page> {
+  const page = scope.page()
+  const menu = await openSessionKebab(scope)
+  const windowRows = await openKebabGroup(menu, 'session-kebab-window')
+  const opened = page.context().waitForEvent('page')
+  await windowRows.getByTestId('session-menu-popout').click()
+  return opened
 }

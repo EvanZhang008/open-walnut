@@ -135,7 +135,8 @@ async function headerState(panel: Locator): Promise<HeaderState> {
         }),
         items: metaKids.map((el) => el === labels ? 'labels'
           : el.matches('.task-kebab-btn') || el.querySelector('.task-kebab-btn') ? 'kebab'
-            : el.matches('.task-row-pill, .task-waiting-chip') ? 'pill' : `other:${el.className}`),
+            : el.matches('.task-row-pill, .task-waiting-chip') ? 'pill'
+              : el.matches('[data-testid="session-watch-pill"]') ? 'watch' : `other:${el.className}`),
         // The first thing after the title on its own line: the first pill in a wide row, the
         // kebab in a narrow one (the pills went to the line under it).
         slackWhenCut: (() => {
@@ -201,8 +202,8 @@ function expectInsidePanel(state: HeaderState, label: string) {
   expect(state.titleRow.overflowBy, `${label}: the title row runs past the panel`).toBeLessThanOrEqual(0)
   expect(state.titleRow.pillsClearOfTitle, `${label}: a pill or the kebab overlaps the title`).toBe(true)
   // The task has no link tag, so no tags control: its three state pills (Trigger, Worker,
-  // Leader) and the kebab sit beside the title.
-  expect(state.titleRow.items, `${label}: the state pills and the kebab sit beside the title`).toEqual(['pill', 'pill', 'pill', 'kebab'])
+  // Leader), Watch (2026-11-19) and the kebab sit beside the title.
+  expect(state.titleRow.items, `${label}: the state pills, Watch and the kebab sit beside the title`).toEqual(['pill', 'pill', 'pill', 'watch', 'kebab'])
   // The title takes the whole row but those: when it is cut, it is cut at the first pill.
   expect(state.titleRow.slackWhenCut, `${label}: the cut title leaves room unused`).toBeLessThanOrEqual(12)
   expect(state.toolRow.visible, `${label}: close must stay`).toContain('close')
@@ -224,7 +225,8 @@ async function shootHeader(panel: Locator, name: string, below = 0): Promise<voi
 
 /** The order the chips leave the tool row, first to go first. Lock, Expand and Close never leave. */
 const CHIP_LEAVE_ORDER = ['board', 'terminal', 'files', 'changed', 'fork']
-const WINDOW_BUTTONS = ['popout']
+// Open in new tab is no header button since 2026-11-19 (the ⋮ menu's Window row): Minimize is the one that folds.
+const WINDOW_BUTTONS = ['minimize']
 /** The chips a "..." row stands in for. */
 const VIEW_CHIPS = ['changed', 'files', 'board', 'terminal']
 /** Everything the "..." menu lists: the time is the one hidden item it does not. */
@@ -306,11 +308,14 @@ export function headerNarrowTests(): void {
       previous = state
       await shootHeader(panel, String(width))
     }
-    // The movable window buttons are the first to go (400px has room for the chips, not for five
-    // buttons too); Lock, Expand and Close stay at every width. Since the Scripts chip joined the
-    // row (it leaves just before Terminal), 400px holds every chip but Board, the first to leave.
-    expect(states[400].toolRow.hidden).toContain('popout')
-    expect(['changed', 'files', 'terminal', 'scripts'].every((id) => states[400].toolRow.visible.includes(id)), `400px: ${states[400].toolRow.visible}`).toBe(true)
+    // Minimize, the one movable window button, is the first to go; Lock, Expand and Close stay at
+    // every width. 400px holds every chip but Board, the first to leave. No Scripts chip and no
+    // Open in new tab button any more (2026-11-19).
+    expect(['changed', 'files', 'terminal'].every((id) => states[400].toolRow.visible.includes(id)), `400px: ${states[400].toolRow.visible}`).toBe(true)
+    for (const state of [wide, ...Object.values(states)]) {
+      expect(state.toolRow.visible, 'no Scripts chip').not.toContain('scripts')
+      expect([...state.toolRow.visible, ...state.toolRow.hidden], 'no Open in new tab button').not.toContain('popout')
+    }
     expect(states[400].toolRow.hidden.filter((id) => VIEW_CHIPS.includes(id) && id !== 'board'), `400px hidden: ${states[400].toolRow.hidden}`).toEqual([])
     // 240px cannot hold five chips (Board, the first to leave, is gone); 180px holds Fork and little else.
     expect(states[240].toolRow.hidden).toEqual(expect.arrayContaining(['board']))
@@ -336,12 +341,13 @@ export function headerNarrowTests(): void {
     // Locate is a row of the kebab, never of "..." (2026-11-09).
     await expect(more.getByTestId('session-header-more-item-locate')).toHaveCount(0)
     await expect(more.getByTestId('session-header-more-item-lock')).toHaveCount(0)
-    await expect(more.getByTestId('session-header-more-item-popout')).toHaveText(/Open in new tab/)
-    // Home's columns also carry Minimize (the taskbar), the third movable window button.
+    // Open in new tab is the ⋮ menu's Window row, never a "..." row (2026-11-19).
+    await expect(more.getByTestId('session-header-more-item-popout')).toHaveCount(0)
+    // Home's columns carry Minimize (the taskbar), the one movable window button.
     await expect(more.getByTestId('session-header-more-item-minimize')).toHaveText(/Minimize/)
     await expect(more.getByTestId('session-header-more-item-expand')).toHaveCount(0)
     const moreRows = await more.locator('[role="menuitem"]').evaluateAll((els) => els.map((el) => el.getAttribute('data-testid')!.replace('session-header-more-item-', '')))
-    expect(moreRows.slice(-2), 'window buttons come after the views').toEqual(['popout', 'minimize'])
+    expect(moreRows.slice(-1), 'the window button comes after the views').toEqual(['minimize'])
     // Each window button's icon draws on its menu row's middle, as on the header row.
     for (const ink of await iconInkOffsets(more.locator('[role="menuitem"]'))) {
       expect(Math.abs(ink.dy), `${ink.id} icon is ${ink.dy.toFixed(2)}px off its row's middle`).toBeLessThan(ICON_CENTER_TOLERANCE_PX)

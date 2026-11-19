@@ -79,7 +79,6 @@ const ALERT_SITES: Record<string, string> = {
   'components/sessions/useFileTreeMutations.ts': 'a file the person duplicated or deleted',
   'components/notes/NotesTreePanel.tsx': 'a note the person moved, deleted or copied',
   'components/notes/AttachmentPreview.tsx': 'an attachment the person asked to open',
-  'components/workspaces/SessionScriptsChip.tsx': 'a script the person ran',
   'components/workspaces/WorkspaceMenuSection.tsx': 'a workspace action the person picked',
   'components/calendar/calendar-event-actions.ts': 'a calendar change the person confirmed',
   'pages/CommandsPage.tsx': 'a command the person deleted',

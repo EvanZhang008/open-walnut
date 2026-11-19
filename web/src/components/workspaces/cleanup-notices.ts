@@ -44,7 +44,7 @@ export function cleanupNotice(taskId: string, title: string | undefined, prev: T
       : script.state === 'failed' ? `Cleanup ${script.name} failed${typeof script.exit_code === 'number' ? ` (exit ${script.exit_code})` : ''}${lastLine ? `: “${lastLine.length > 120 ? `${lastLine.slice(0, 119)}…` : lastLine}”` : script.error ? `: ${script.error}` : ''}. `
         : `Cleanup ${script.name} did not run: ${script.error ?? 'it was skipped'}. `;
   const failed = script?.state === 'failed';
-  const outputWhere = failed ? ' Its output is in the session\'s Scripts menu.' : '';
+  const outputWhere = failed ? ' Its output is under Workspace in the task\'s menu.' : '';
   if (next.state === 'removed') {
     return {
       severity: failed ? 'warning' : 'success', key: `cleanup-removed:${taskId}`,
@@ -108,7 +108,7 @@ export function setupNotice(taskId: string, title: string | undefined, prev: Tas
     return {
       severity: 'info', key: `setup-started:${taskId}:${now.started_at}`,
       title: `${setupLabel(now.name)} runs in the background`,
-      body: `The session of ${quoted(title)} started without waiting for it: what it installs may not be there yet. The Scripts chip shows a dot until it ends, a pop-up like this one says how it went, and the Scripts menu keeps its output.`,
+      body: `The session of ${quoted(title)} started without waiting for it: what it installs may not be there yet. A pop-up like this one says how it went, and Workspace in the task's menu keeps its output.`,
     };
   }
   // It ended now: it was running, or a whole new run came and went between two rows.
@@ -120,7 +120,7 @@ export function setupNotice(taskId: string, title: string | undefined, prev: Tas
   return {
     severity: 'warning', key: `setup-ended:${taskId}:${now.started_at}`,
     title: `${setupLabel(now.name)} ${now.state === 'failed' ? 'failed' : 'did not run'}`,
-    body: `${now.error ?? scriptRunStatus(now)}. Its output is in the session's Scripts menu.`,
+    body: `${now.error ?? scriptRunStatus(now)}. Its output is under Workspace in the task's menu.`,
   };
 }
 

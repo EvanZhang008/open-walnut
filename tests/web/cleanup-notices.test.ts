@@ -29,13 +29,13 @@ describe('cleanup notices', () => {
     const kept = { ...failed, state: 'kept' as const, kept_reason: 'web: 1 uncommitted change', setup: { ...ran, name: 'Install' } }
     expect(cleanupNotice('t', 'Fix login', { ...ready, teardown: down }, kept)).toMatchObject({
       severity: 'warning', title: 'Cleanup Stop services failed; workspace kept',
-      body: 'Cleanup Stop services failed: exited with code 2. The workspace of “Fix login” was kept: web has 1 uncommitted change. Files a setup script makes count too, unless .gitignore lists them. Its output is in the session\'s Scripts menu.',
+      body: 'Cleanup Stop services failed: exited with code 2. The workspace of “Fix login” was kept: web has 1 uncommitted change. Files a setup script makes count too, unless .gitignore lists them. Its output is under Workspace in the task\'s menu.',
     })
     // Removed anyway: the code and its last line, and that nothing was lost.
     const gone = { ...ready, state: 'removed' as const, teardown: { ...ran, state: 'failed' as const, exit_code: 3, error: 'exited with code 3', output: 'stopping\nservice web not found\n' } }
     expect(cleanupNotice('t', 'Fix login', { ...ready, teardown: down }, gone)).toMatchObject({
       severity: 'warning', title: 'Cleanup Stop services failed; workspace removed',
-      body: 'Cleanup Stop services failed (exit 3): “service web not found”. The workspace of “Fix login” was removed anyway, since nothing in it would be lost. Its output is in the session\'s Scripts menu.',
+      body: 'Cleanup Stop services failed (exit 3): “service web not found”. The workspace of “Fix login” was removed anyway, since nothing in it would be lost. Its output is under Workspace in the task\'s menu.',
     })
   })
 

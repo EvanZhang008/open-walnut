@@ -87,9 +87,7 @@ html:root {
   }
 
   /* The workspace flyout opens over its own kebab menu and holds output to read
-     (a setup's log), and the Scripts menu lists commands to read: opaque, or the
-     rows behind show through their text. */
-  html .wn-context-menu.session-scripts-menu,
+     (a setup's log): opaque, or the rows behind show through their text. */
   html .workspace-flyout.workspace-flyout {
     background: var(--bg-elevated, var(--card-bg));
     -webkit-backdrop-filter: none;

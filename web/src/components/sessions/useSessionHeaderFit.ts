@@ -41,18 +41,16 @@ export const TOOL_ITEMS: Record<string, { kind: ToolItemKind; priority: number; 
   changed: { kind: 'chip', priority: 3, name: 'Changed' },
   files: { kind: 'chip', priority: 4, name: 'Files' },
   terminal: { kind: 'chip', priority: 6, name: 'Terminal' },
-  // Scripts rides with Terminal (it types into it) and leaves just before it.
-  scripts: { kind: 'chip', priority: 6.05, name: 'Scripts' },
   // Board is a lead's chip only, and like Plan it may join after first paint (when the
   // task list or the owner read lands): it leaves just before Terminal, so arriving it
   // never pushes Terminal into "..." (2026-10-26).
   board: { kind: 'chip', priority: 6.1, name: 'Board' },
   time: { kind: 'info', priority: 7, name: 'Last activity' },
-  // Locate and Watch are no header buttons: they are rows of the kebab, by their names
-  // (2026-11-09, the user of the crosshair and the eye: "this 2 put iot in the drop down").
-  popout: { kind: 'window', priority: 11, name: 'Open in new tab' },
-  // Minimize puts the panel on the taskbar: the last window button to fold, after
-  // Open in new tab.
+  // Locate is no header button: it is a row of the kebab (2026-11-09, the user: "this 2 put
+  // iot in the drop down"). Watch is a pill of the label row, not of this row; Open in new
+  // tab is the kebab's Window row only (2026-11-19, the user: "open in new tab can be added
+  // into drop down").
+  // Minimize puts the panel on the taskbar: the one window button that folds.
   minimize: { kind: 'window', priority: 8, name: 'Minimize to taskbar' },
   // Lock, Expand and Close stay at every width: a cramped column is the moment to
   // go full screen (the user: "at the very least keep close and expand",
