@@ -269,10 +269,21 @@ permission prompts still name Walnut.
   or says the leader is needed, a session's call falls back to the daemon's old offline answers. A plugin
   job's answer is final.
 - **Starts made alone** (`src/replica/away-starts.ts`): only for a task this host's journal made, with a
-  session id derived from the op id so a retry starts nothing twice, and at most as many live sessions as this
-  machine's memory allows.
+  session id derived from the op id so a retry starts nothing twice, one start of a task at a time (a second
+  hears the leader's 409 `session_exists`), and at most as many live sessions as this machine's memory allows.
 - **The leader's side.** A plugin job is an actor of the journal; a task's session started on the host is
-  adopted by the `task-start` drain; a task made away lands where the same caller's create lands online.
+  adopted by the `task-start` drain; a task made away lands where the same caller's create lands online. A
+  session record the leader does not take is a refusal into the letter, never a retry that holds the host's
+  later records (an error that may pass, such as a busy database, is still retried). A session the host
+  started alone that is refused, or given up after its retries, has its CLI ended through the daemon that owns
+  it, and the letter names the session and the host.
+- **A plugin's own tasks stay off the follower's board.** A follower loads no plugin manifest, so the leader's
+  host server manager names the plugins that keep their tasks to their own view in the settings of the
+  follower's spec (`pluginsKeepTasks`, read while it runs: a change restarts nothing). When that set changes,
+  the leader reconciles its hosts once the burst settles, and within ten seconds at most. The follower stamps
+  a plugin job's away create with `plugin_only` through the function the leader's create uses
+  (`plugin-task-visibility.ts` `pluginOnlyForCaller`, in `task-row-fold.ts` `createdRow`): never pinned,
+  absent from the board's lists, there for the plugin's own reads.
 - **A call handed over after a wait is never answered "may have run".** The daemon sends how long it will
   wait; when that is too short for the op (a start needs ten seconds), the follower refuses before anything
   runs and the caller retries.
@@ -306,11 +317,16 @@ permission prompts still name Walnut.
   tries end after the 60 minute one until a newer build, a reconnect or Retry. Hosts on by default install
   one at a time; a host the person turned on never waits behind them. Switching the experiment off stops the
   followers that ran only by default and leaves their files on the host.
-- **Not yet.** A task made on the leader cannot be started alone. A message that expects a reply needs the
-  leader. A task made away by a plugin that keeps its tasks off the board shows on the follower's own board
-  until the leader has taken it. Every host gets a follower by default only once the experiment
-  `follower_on_every_host` is switched on. The host's Settings switch reads on for a host on by default and
-  does not yet say that it follows the default (the fleet view carries `byDefault` for it).
+- **Not yet.** The host's Settings switch reads on for a host on by default and does not yet say that it
+  follows the default (the fleet view carries `byDefault` for it).
+- **Turned down: starting a task made on the leader alone.** Where such a task starts needs the leader's whole
+  placement rule: the caller, the task's ancestors, its workspaces and the folders on the leader's disks. A
+  second copy of that rule on the follower was wrong twice in review, so such a start keeps answering
+  `needs_leader` (`task_made_on_mac`).
+- **Turned down: a message that asks for a reply, sent alone.** The request and its reply are the leader's
+  records; a second set on the host would have to be merged without a duplicate or a lost answer. A send that
+  asks for a reply is answered `needs_leader` (`reply_needs_mac`, nothing sent), and one that asks for none
+  is delivered on the host as before.
 
 ## Compatibility
 
