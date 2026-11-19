@@ -473,7 +473,7 @@ export class NetDaemonUpdater {
     })
     this.set('running', `uploading ${expected} and updating its ${scope.scope} service`)
     try {
-      await (this.d.update ?? updateRemoteDaemonService)('file' in src ? { binary: src.file } : { binary: null, gz: src.gz }, expected, io, scope.scope, {
+      await (this.d.update ?? updateRemoteDaemonService)('file' in src ? { binary: src.file, base: facts.serviceExecutable } : { binary: null, gz: src.gz, base: facts.serviceExecutable }, expected, io, scope.scope, {
         overBusy: goesOver,
         // The build's hold before its record (the staging dir) is removed on the host.
         onBuildFailed: (error) => this.buildDidNotStay(expected, error.message.slice(0, 300)),

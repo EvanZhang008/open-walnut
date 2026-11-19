@@ -67,7 +67,7 @@ import { daemonUpdateOverdue, OVERDUE_GATE_WAIT_MS } from './daemon-update-behin
 import { setDaemonFileFence } from './daemon-file-fence.js'
 import { ensureDaemonGz } from './daemon-gz-cache.js'
 import { parseSlotAnswer, parseSlotDetail, parseSeedAnswer, seedFromSlotScript, slotCheckScript, slotDeltaInstallScript, slotDeltaPath, slotInstallScript, slotNeedKb, type SlotFit } from './daemon-file-slot.js'
-import { DELTA_BLOCK_BYTES, blockHashScript, parseBlockHashes, planWalnutFileDelta } from './walnut-file-delta.js'
+import { DELTA_BLOCK_BYTES, planDeltaAgainst } from './walnut-file-delta.js'
 import { createTransferMeter, type ConnectTransfer } from './connect-transfer.js'
 import type { HostFileTarget } from '../core/host-server/host-target.js'
 import {
@@ -6882,7 +6882,7 @@ export class DaemonConnection {
    */
   private async serviceDaemonSource(): Promise<ServiceDaemonSource> {
     const binary = await this.getLocalBinaryPath()
-    if (binary) return { binary, ...(this._runtime === 'binary' ? { existing: await this.getRemoteDaemonPath() } : {}) }
+    if (binary) return { binary, base: this._serviceExecutable, ...(this._runtime === 'binary' ? { existing: await this.getRemoteDaemonPath() } : {}) }
     if (!singleFile()) throw new Error('this Walnut build has no daemon file for the host')
     await this.deployWalnutFile()
     return { binary: null, existing: await this.getRemoteDaemonPath() }
@@ -7073,16 +7073,14 @@ export class DaemonConnection {
    * blocks changed) or fails on the way: the whole file goes up then.
    */
   private async deployWalnutFileDelta(slot: string, file: { gz: Buffer; sha256: string }, fit: SlotFit): Promise<boolean> {
-    if (process.env.WALNUT_DAEMON_DELTA === '0') return false
     const t0 = Date.now()
     try {
-      const base = parseBlockHashes(await this.sshExec(blockHashScript(slot), 120_000))
-      if (!base) return false
-      const delta = await planWalnutFileDelta(file.gz, base.hashes)
-      if (!delta) {
-        log.session.info('DaemonConnection: walnut file delta skipped, most blocks changed', { host: this.hostKey })
+      const planned = await planDeltaAgainst((command, timeout) => this.sshExec(command, timeout), slot, () => file.gz)
+      if (!planned) {
+        log.session.info('DaemonConnection: walnut file delta skipped (no file in the slot, or most blocks changed)', { host: this.hostKey })
         return false
       }
+      const delta = planned.plan
       const remote = slotDeltaPath(slot)
       await this.uploadFile(remote, delta.payload, { sha256: delta.payloadSha256, onProgress: (done, total) => this._transfer.report('upload', done, total) })
       const installed = await this.sshExec(slotDeltaInstallScript(slot, remote, file.sha256, {

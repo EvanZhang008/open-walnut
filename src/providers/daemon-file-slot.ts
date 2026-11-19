@@ -17,6 +17,7 @@
  */
 import { shq } from './remote-sh.js'
 import { remoteSha256Command } from './upload-resume.js'
+import { deltaAssemblyLines } from './walnut-file-delta.js'
 
 const SHA256 = /^[0-9a-f]{64}$/
 
@@ -128,26 +129,16 @@ export function slotDeltaInstallScript(
   const q = shq(slot)
   const part = shq(`${slot}.part`)
   const raw = shq(`${slot}.delta.raw`)
-  const { blocks, changed, blockBytes } = delta
-  if (!Number.isSafeInteger(blocks) || blocks <= 0 || !Number.isSafeInteger(blockBytes) || blockBytes <= 0) throw new Error('bad delta shape')
-  if (changed.some((i) => !Number.isSafeInteger(i) || i < 0 || i >= blocks)) throw new Error('bad delta block index')
   // A failed build removes its delta too: the next attempt plans its own.
   const fail = (why: string) => `{ rm -f ${part} ${raw} ${shq(deltaGz)}; echo ${shq(why)} >&2; exit 1; }`
+  // Checked here, before the first line: a bad shape throws, as it did.
+  const build = deltaAssemblyLines({ base: slot, raw: `${slot}.delta.raw`, out: `${slot}.part`, ...delta }, fail)
   return [
     'command -v gzip >/dev/null 2>&1 || { echo "the host has no gzip, which unpacks the walnut file" >&2; exit 1; }',
     `[ -f ${q} ] || { echo "the daemon slot has no file to build the new one from" >&2; exit 1; }`,
     `rm -f ${part} ${raw}`,
     `gzip -dc ${shq(deltaGz)} > ${raw} || ${fail('cannot unpack the walnut file delta (is the disk full?)')}`,
-    `: > ${part} || ${fail('cannot write beside the daemon slot')}`,
-    `W_D=' ${changed.join(' ')} '`,
-    'W_I=0; W_K=0',
-    `while [ "$W_I" -lt ${blocks} ]; do`,
-    '  case "$W_D" in',
-    `    *" $W_I "*) dd if=${raw} bs=${blockBytes} skip=$W_K count=1 2>/dev/null >> ${part} || ${fail('cannot build the walnut file from its delta')}; W_K=$((W_K + 1)) ;;`,
-    `    *) dd if=${q} bs=${blockBytes} skip=$W_I count=1 2>/dev/null >> ${part} || ${fail('cannot build the walnut file from its delta')} ;;`,
-    '  esac',
-    '  W_I=$((W_I + 1))',
-    'done',
+    ...build,
     `rm -f ${raw}`,
     `SUM=$( ${remoteSha256Command(`${slot}.part`)} )`,
     `if [ "$SUM" != ${want} ]; then rm -f ${part} ${shq(deltaGz)}; echo "the walnut file built from its delta is broken (sha256 $SUM)" >&2; exit 1; fi`,

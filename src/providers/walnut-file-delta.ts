@@ -22,6 +22,7 @@ import crypto from 'node:crypto'
 import zlib from 'node:zlib'
 import { shq } from './remote-sh.js'
 import { sha256Hex } from './upload-resume.js'
+import { log } from '../logging/index.js'
 
 /** One block, the unit compared and sent. */
 export const DELTA_BLOCK_BYTES = 262_144
@@ -80,6 +81,8 @@ export interface WalnutFileDelta {
   payloadSha256: string
   /** The new file's raw size. */
   size: number
+  /** The new file's sha256: what the host checks the file it builds against. */
+  sha256: string
 }
 
 /**
@@ -104,9 +107,11 @@ export async function planWalnutFileDelta(gz: Buffer, baseHashes: readonly strin
   let pending: Buffer[] = []
   let pendingBytes = 0
   let tooMany = false
+  const whole = crypto.createHash('sha256')
   const take = (block: Buffer): void => {
     const i = blocks++
     size += block.length
+    whole.update(block)
     const sum = crypto.createHash('sha256').update(block).digest('hex')
     if (baseHashes[i] === sum) return
     changed.push(i)
@@ -140,5 +145,63 @@ export async function planWalnutFileDelta(gz: Buffer, baseHashes: readonly strin
   if (tooMany || blocks === 0 || changed.length > blocks * DELTA_MAX_CHANGED_SHARE) return null
   const payload = Buffer.concat(out)
   const payloadSha256 = await sha256Hex(payload)
-  return { blocks, changed, payload, payloadSha256, size }
+  return { blocks, changed, payload, payloadSha256, size, sha256: whole.digest('hex') }
+}
+
+/**
+ * Hash `base` on the host (`run` runs a line there) and plan the delta of `gz`'s file from it;
+ * null when a delta does not fit or anything on the way fails: the whole file goes then.
+ * `gz` is asked for only once the host answered, so a host with no base costs no read.
+ * WALNUT_DAEMON_DELTA=0 turns deltas off.
+ */
+export async function planDeltaAgainst(
+  run: (command: string, timeoutMs: number) => Promise<string>, base: string, gz: () => Buffer | Promise<Buffer>,
+): Promise<{ plan: WalnutFileDelta; baseSize: number } | null> {
+  if (process.env.WALNUT_DAEMON_DELTA === '0') return null
+  try {
+    const hashed = parseBlockHashes(await run(blockHashScript(base), 120_000))
+    if (!hashed) return null
+    const plan = await planWalnutFileDelta(await gz(), hashed.hashes)
+    return plan ? { plan, baseSize: hashed.size } : null
+  } catch (error) {
+    log.session.warn('walnut file delta: could not plan; the whole file goes', { base, error: (error instanceof Error ? error.message : String(error)).split('\n')[0].slice(0, 200) })
+    return null
+  }
+}
+
+/** Where the new file is built from: the old one's blocks and the sent ones. */
+export interface DeltaAssembly {
+  /** The file the host holds (its blocks were hashed). */
+  base: string
+  /** The sent blocks, unpacked, one after another. */
+  raw: string
+  /** The new file, written here. */
+  out: string
+  blocks: number
+  changed: readonly number[]
+  blockBytes: number
+}
+
+/**
+ * The sh lines that write `out` from `base` and `raw`: block i is the next of
+ * `raw` when `changed` lists it, else block i of `base`. `fail(why)` is the
+ * line a failed write runs (it must exit). One dd per block; POSIX sh.
+ */
+export function deltaAssemblyLines(a: DeltaAssembly, fail: (why: string) => string): string[] {
+  const { blocks, changed, blockBytes } = a
+  if (!Number.isSafeInteger(blocks) || blocks <= 0 || !Number.isSafeInteger(blockBytes) || blockBytes <= 0) throw new Error('bad delta shape')
+  if (changed.some((i) => !Number.isSafeInteger(i) || i < 0 || i >= blocks)) throw new Error('bad delta block index')
+  const out = shq(a.out)
+  return [
+    `: > ${out} || ${fail('cannot write the file built from its delta')}`,
+    `W_D=' ${changed.join(' ')} '`,
+    'W_I=0; W_K=0',
+    `while [ "$W_I" -lt ${blocks} ]; do`,
+    '  case "$W_D" in',
+    `    *" $W_I "*) dd if=${shq(a.raw)} bs=${blockBytes} skip=$W_K count=1 2>/dev/null >> ${out} || ${fail('cannot build the walnut file from its delta')}; W_K=$((W_K + 1)) ;;`,
+    `    *) dd if=${shq(a.base)} bs=${blockBytes} skip=$W_I count=1 2>/dev/null >> ${out} || ${fail('cannot build the walnut file from its delta')} ;;`,
+    '  esac',
+    '  W_I=$((W_I + 1))',
+    'done',
+  ]
 }

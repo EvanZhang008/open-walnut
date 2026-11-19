@@ -37,6 +37,9 @@ type TailOutcome = keyof typeof TAILS
 /** Quick clocks for the detached runner (daemon-net-update-io.ts runDetachedUpdate). */
 const FAST = { pollMs: 1, settleSeconds: 0 }
 
+/** What an applied update removes: every chunk dir of its version, one per payload kind. */
+const versionRm = () => `rm -rf ${(['binary', 'gz', 'delta'] as const).map((kind) => `/tmp/open-walnut-update.r${createHash('sha256').update(`${version}\0${kind}`).digest('hex').slice(0, 24)}`).join(' ')}`
+
 /**
  * The remote side of the upload: the chunk dir named by the payload (with the chunks a
  * dropped try left there, `held`), confirmed chunks, the reassembly check, and the removals.
@@ -73,7 +76,7 @@ function uploads(fault?: UploadFault, held: Map<number, Buffer> = new Map()) {
       return fault === 'version' ? 'different-build' : version
     }
     if (command === RM) return ''
-    if (chunkDir && command === `rm -rf ${chunkDir}`) { chunks.clear(); return '' }
+    if (chunkDir && (command === `rm -rf ${chunkDir}` || command === versionRm())) { chunks.clear(); return '' }
     return null
   }
   return { chunk, slots, answer, chunks, chunkDir: () => chunkDir }
@@ -133,7 +136,7 @@ function lab(fault?: UploadFault | 'service' | 'stopped' | 'transport', scope: '
     if (answered === null) throw new Error(`unexpected command: ${command}`)
     return answered
   })
-  return { run, chunk: upload.chunk, calls, slots: upload.slots, host, held: upload.chunks, chunkRm: () => `rm -rf ${upload.chunkDir()}`, detached: { ...FAST, waitMs: 50 } }
+  return { run, chunk: upload.chunk, calls, slots: upload.slots, host, held: upload.chunks, chunkRm: () => `rm -rf ${upload.chunkDir()}`, versionRm, detached: { ...FAST, waitMs: 50 } }
 }
 
 describe('managed daemon upload and update', () => {
@@ -147,7 +150,7 @@ describe('managed daemon upload and update', () => {
     expect(l.calls.slice(0, 5).map((c, i) => [c.includes('echo "HAVE '), c.includes('mktemp -d /tmp'), c.includes('sha256sum'), isScriptWrite(c), isLaunch(c)][i])).toEqual([true, true, true, true, true])
     expect(l.calls.slice(5, -2).every(isRead)).toBe(true)
     // The update applied: its dir goes, then the chunks.
-    expect(l.calls.slice(-2)).toEqual([RM, l.chunkRm()])
+    expect(l.calls.slice(-2)).toEqual([RM, l.versionRm()])
     expect(l.host.updates).toEqual([`${staged} walnut daemon update --yes --scope user --executable ${staged}`])
     // The script on the host copies the config aside, tries once (a busy daemon is asked again from the server), and runs the tail.
     const script = l.host.files.get(`${remote}/update.sh`)!
@@ -168,7 +171,7 @@ describe('managed daemon upload and update', () => {
     await updateRemoteDaemonService({ binary }, version, l, 'cron')
     expect(l.host.updates).toEqual([`${staged} walnut daemon update --yes --scope cron --executable ${staged}`])
     expect(l.host.files.get(`${remote}/update.sh`)).toContain('tk=cron')
-    expect(l.calls.slice(-2)).toEqual([RM, l.chunkRm()])
+    expect(l.calls.slice(-2)).toEqual([RM, l.versionRm()])
   })
 
   // 2026-11-04: an update that answered and left no daemon serving. The tail runs on the
@@ -209,7 +212,7 @@ describe('managed daemon upload and update', () => {
     await expect(updateRemoteDaemonService({ binary }, version, second)).resolves.toBe('applied')
     const sent = [...new Set(second.slots)]
     expect(sent).toEqual([...all.keys()].slice(2))
-    expect(second.calls.slice(-2)).toEqual([RM, second.chunkRm()])
+    expect(second.calls.slice(-2)).toEqual([RM, second.versionRm()])
     // All of them held: nothing is sent at all.
     const third = lab(undefined, 'user', 'serving', '', new Map(all))
     await expect(updateRemoteDaemonService({ binary }, version, third)).resolves.toBe('applied')
@@ -221,6 +224,7 @@ describe('managed daemon upload and update', () => {
     await expect(updateRemoteDaemonService({ binary }, version, l)).rejects.toThrow('connection closed')
     expect(l.calls.at(-1)).toBe(RM)
     expect(l.calls).not.toContain(l.chunkRm())
+    expect(l.calls).not.toContain(l.versionRm())
     expect(l.held.size).toBeGreaterThan(3)
   })
 
@@ -229,6 +233,7 @@ describe('managed daemon upload and update', () => {
     await expect(updateRemoteDaemonService({ binary }, version, l, 'user', { onStaged: () => false })).resolves.toBe('held')
     expect(l.calls.at(-1)).toBe(RM)
     expect(l.calls).not.toContain(l.chunkRm())
+    expect(l.calls).not.toContain(l.versionRm())
   })
 
   it('a chunk on the host of another size is sent again', async () => {
