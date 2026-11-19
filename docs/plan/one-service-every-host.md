@@ -1,41 +1,59 @@
 # One service on every host
 
-Status: decided (2026-11-18). Builds on [servers everywhere](./walnut-servers-everywhere.md),
-[replica servers](./walnut-replica-servers.md), [daemon-first hosts](./daemon-first-hosts.md),
-[the single file](./walnut-single-binary.md) and [daemon boot start](../reference/daemon-boot-start.md).
+Status: decided (2026-11-18). The first part of phase 1 ships with this document. Builds on
+[servers everywhere](./walnut-servers-everywhere.md), [replica servers](./walnut-replica-servers.md),
+[daemon-first hosts](./daemon-first-hosts.md), [the single file](./walnut-single-binary.md) and
+[daemon boot start](../reference/daemon-boot-start.md).
 
 ## Summary
 
-Every machine Walnut uses runs the same thing: **one program, one process, one API.**
+Every machine Walnut uses has the same shape and the same way in: **one program, one service, one API.**
 
 - **One program**: the `walnut` file, the same version for everything on a host.
-- **One process**: the **service**. It answers every call, decides, stores, and starts and watches the
-  processes that do the work. There is no separate daemon.
+- **One service**: it answers every call made on its machine, decides, and stores. Starting and watching
+  processes is its own internal part (today's session daemon, which stops answering calls). Nothing outside a
+  service talks to that part.
 - **One API**: the UI, the phone, a session's or a job's `walnut` call, and another machine all speak the same
-  HTTP and WebSocket API. A call is answered where the thing lives, or forwarded to the host that owns it.
+  HTTP and WebSocket API.
 
 The Mac is not special. Its service plays the **leader** role (its data is the truth); every other machine's
 service plays **follower** (a copy of what it needs), and works **alone** while it cannot reach the leader,
-then hands the leader what it wrote.
+then hands the leader what it wrote. Machines differ only in their conditions: the role, whether the leader
+can be reached, and which capabilities are on.
 
-Today a host runs two programs with two versions, the server and the session daemon, with a protocol between
-them. The daemon exists so that a server deploy never ends a running agent. That reason is gone: agents are
-detached processes recorded on disk, and whoever starts next adopts them.
+Today a host runs two programs that both answer: the session daemon answers a session's calls with its own
+copy of task logic, the follower server answers a phone, and a plugin job gets no answer at all while the
+leader is away. And the leader reaches past a host's server to command its daemon. Both end.
 
 ## Rules
 
-1. **One program, one version per host.** Nothing on a host asks what version its neighbour runs.
-2. **The service answers, decides and stores.** Everything with state is ordinary code on its main thread,
-   calling each other directly.
-3. **One API.** No second protocol between two parts of Walnut, on one machine or between machines.
-4. **Work runs where it lives.** A session is started, fed, read and judged by the service of the host it runs
-   on. Another machine only shows it.
-5. **What must outlive a restart is a detached process recorded on disk**: agent CLIs, plugin jobs, terminals,
-   check scripts. After any restart the service adopts them from that record.
-6. **The main thread never blocks.** A worker takes only pure heavy work: data in, a result out.
-7. **Role decides behaviour, never a host name** (`role()`, `isFollower()`, `hasCapability()`). The leader role
-   can sit on any machine a person owns.
-8. **A host keeps working with the leader off.** A caller on a host talks only to that host's service.
+1. **A caller on a host talks only to that host's service**: a browser, a session, a plugin job, the command
+   line. The way in does not change with the leader's state.
+2. **Between machines, only service to service**, with the one API. No machine reaches into another machine's
+   process manager.
+3. **Processes on a host are run only by that host's service.** To run something on another host, ask that
+   host's service.
+4. **Each service writes only its own data.** The leader's is the truth; a follower keeps a copy, and a
+   journal of what it wrote alone.
+5. **One program, one version per host.**
+6. **What must outlive a restart is a detached process recorded on disk**: agent CLIs, plugin jobs,
+   terminals, check scripts. After any restart they are adopted from that record.
+7. **The main thread never blocks.** A worker takes only pure heavy work: data in, a result out.
+8. **Conditions decide behaviour, never a host name** (`role()`, `isFollower()`, `leaderAnswers()`,
+   `hasCapability()`). The leader role can sit on any machine a person owns.
+
+Every call goes through one decision, the same code on every host:
+
+```
+the thing is mine                               -> do it
+it is the leader's, and the leader answers      -> hand the call to the leader
+the leader does not answer, the rules allow it  -> do it here, journal it, hand it over later
+otherwise                                       -> refuse, and say why
+```
+
+What a host does by itself whenever it can: its sessions (process, output, messages), its plugin jobs, its
+terminals and files, and, while the leader is away, reading and writing the tasks it works on. While the
+leader answers, a change to a task goes to the leader, which keeps the one board.
 
 ## The shape
 
@@ -44,9 +62,10 @@ One host:
 ```
 systemd user unit / @reboot cron / LaunchAgent
   boot start           a small shell script: starts the service, restarts it, rolls a bad version back
-    service            walnut serve      one process, the same on every host
-      main thread        the API (UI port, local socket, host link), task and session logic,
-                         starting and watching processes, the only writer of data
+    service            walnut serve      the same on every host
+      the API            UI port, local door for sessions and jobs, link to other services
+      logic and data     tasks, sessions; the only writer of this host's data
+      process manager    internal: start, adopt, stop, stdin, output tail, check runs
       workers            pure heavy work only: large parses, merges, heavy queries
 
   kept processes (detached, listed in a registry on disk, adopted by pid and start time)
@@ -61,7 +80,7 @@ Several hosts:
    +-------------------v-----------+       the same API       +-------------------------------+
    | service, role leader (Mac)    | <----------------------> | service, role follower (host) |
    | the truth: tasks, board, org  |  copies down, journal up | a copy of what it needs,      |
-   |                               |  forwarded calls, streams| its own sessions and jobs     |
+   |                               |  handed calls, streams   | its own sessions and jobs     |
    +-------------------------------+                          +-------------------------------+
                      leader unreachable: the follower works alone and journals its writes
 ```
@@ -71,11 +90,11 @@ Several hosts:
 | Question | Decided | Turned down, and why |
 |---|---|---|
 | language | TypeScript on bun, one compiled file | a rewrite, or a second language for the backend: 750k lines, and no kept stall profile shows slow computation |
-| processes per host | one service | server and daemon: two versions, a protocol, and task logic written twice |
-| threads | the main thread for everything with state; workers for pure heavy work | the daemon as a worker thread: it shares no objects with the rest, so the protocol would stay |
+| who answers on a host | the service, on every host | the daemon answering sessions on a host while the server answers on the Mac: two answerers, task logic written twice |
+| the process manager | an internal part of the service; first today's daemon process started by the service, later its modules inside the service where that pays | a worker thread for it: it shares no objects with the rest, so the protocol would stay |
 | what keeps the service alive | the boot start script hosts already have | a new launcher program |
 | upgrade | stop, then start, with proof boot, probation and rollback | a new version taking over beside the old one: two processes on one data directory, to save a pause that agents do not feel and clients retry through |
-| data across machines | one leader; followers that work alone and hand over a journal | every machine writing everything and merging, or one owner per task: both spread the board's and the org's rules across machines |
+| data across machines | one leader; followers that work alone and hand over a journal, as today | every machine writing everything and merging, or one owner per task: both spread the board's and the org's rules across machines |
 | protocol between machines | the API | process-level commands with a capability list per command |
 | plugins | a plugin's host work runs in its own job process, beside the service of its host | plugin work inside the service |
 
@@ -109,12 +128,8 @@ Read from the source and from the maintainer's machines on 2026-11-18.
   keeping the daemon for four days, with a versions directory, a proof boot of a new build, a 15 minute
   probation and rollback (`daemon-service-*.ts`). The Mac has none: its Walnut does not start after a reboot.
 - **A host can already run a server.** With `hosts.<key>.server.enabled`, the Mac pushes the file, and the
-  host's daemon starts `walnut web --replica`, restarts it and adopts it. That replica talks only to its host's
-  daemon, which relays its bytes to the Mac. On a dev host with 19 agents it used 311 MB right after a start,
-  the daemon 246 MB.
-- **Two ways to make a `walnut` call.** A session on the Mac calls the server's API. A session on a host calls
-  a socket in its daemon, which relays to the Mac; with the Mac away the daemon answers a subset itself from a
-  pushed copy and a journal (`offline-host-core.ts`, 3.3k lines): task logic written a second time.
+  host's daemon starts `walnut web --replica`, restarts it and adopts it. It holds a full copy of the tasks.
+  On a dev host with 19 agents it used 311 MB right after a start, the daemon 246 MB.
 - **A deploy stops the old server before the new one listens.** Observed gaps: 3.5 s, 15.4 s, 15.8 s. Agents
   are not affected.
 - **Load is not CPU.** With 10 sessions the Mac's server used about 0.3 of a core and its daemon 0.07, on 14
@@ -128,13 +143,12 @@ Read from the source and from the maintainer's machines on 2026-11-18.
 
 | Piece | Today | After |
 |---|---|---|
-| start, adopt, stop agents; stdin; output tail | daemon process | the service of that host |
+| answering a session's or a job's `walnut` call on a host | the daemon relays it to the leader, and answers a subset itself while the leader is away (`offline-host-core.ts`) | the host's service: hands it to the leader, or answers alone |
+| the way in for those calls | a socket protocol in the daemon; on the Mac, the API | the API on a local door, on every host |
+| start, adopt, stop agents; stdin; output tail | daemon, commanded by the leader | the process manager of that host's service, asked only by that service |
 | judging a session's output (status, turn end, usage, hints) | the Mac's server, for every host | the service of the session's host |
-| plugin jobs, check scripts, terminals' attach | daemon process | the service |
-| a session's or a job's `walnut` call | a socket protocol in the daemon; on the Mac, the API | the API on a local socket, on every host |
-| answering with the leader away | daemon (`offline-host-core.ts`) | the follower's own task logic, role alone |
-| the copy of the leader's data, and the journal of writes made alone | pushed to and kept by the daemon | the follower's data layer |
 | starting a session on a host | the Mac builds the command line, the daemon runs it; a pushed template when the Mac is away | the host's service builds and runs it with the code the Mac uses |
+| the copy of the leader's data, and the journal of writes made alone | two copies: the daemon's small one and the follower's full one; the journal in the daemon | the follower's data layer |
 | clocks and trigger decisions | daemon | the host's service |
 | keeping things alive | hosts: boot start keeps the daemon, the daemon keeps the server. Mac: a launchd job from the deploy script | boot start keeps the service, everywhere |
 | the link to another machine | the Mac sends each daemon commands; a replica's bytes are relayed by its daemon | services call each other's API |
@@ -143,26 +157,26 @@ Read from the source and from the maintainer's machines on 2026-11-18.
 
 ## Scenarios
 
-**A. The Mac is off; a plugin job on a dev host receives work.** The job calls its host's service: create a
-task, start a session, add a tag. The follower is alone, so it writes the task to its journal, starts the
-agent itself, and answers the job from its copy plus the journal. When the Mac is back, the journal drains
-once (existing protocol: op ids, base values, idempotent), and the task and its session appear on the board.
+**A. The Mac is off; a plugin job on a dev host receives work.** The job calls through its host's door:
+create a task, start a session, add a tag. The follower writes the task to the journal, starts the agent
+through its process manager, and answers the job from its copy plus the journal. When the Mac is back, the
+journal drains once (op ids, base values, idempotent), and the task and its session appear on the board.
 Nothing in the job's code asks whether the Mac is there.
 
-**B. A deploy while ten agents run.** The service writes down what it holds and stops; the boot start runs the
-new version, which adopts the agents and listens. Agents never notice. A browser reconnects. A session's
-`walnut` call made in those seconds is retried by the CLI.
+**B. The same job while the Mac is on.** The call is handed to the Mac, which makes the task and answers; the
+session still starts on the dev host.
 
-**C. A bad version.** The new service does not stay up through probation. The boot start switches back to the
+**C. A deploy while ten agents run.** The service writes down what it holds and stops; the boot start runs the
+new version, which adopts the agents and listens. Agents never notice. A browser reconnects. A session's
+`walnut` call made in those seconds is retried.
+
+**D. A bad version.** The new service does not stay up through probation. The boot start switches back to the
 last good version and reports the bad one to Walnut Health. Agents kept running; their output waited in their
 files.
 
-**D. The service crashes or hangs.** A crash: the boot start runs it again. A hang: the service stops touching
-its heartbeat file, the boot start ends it and runs it again. Either way it reads the registry and adopts
-every live process, the same path as after an upgrade. Messages queued on disk are delivered.
-
-**E. A host reboots.** The boot start runs the service. Agents ended with the machine; the service resumes
-only what today's restart rules resume.
+**E. The service crashes or hangs.** A crash: the boot start runs it again. A hang: the service stops touching
+its heartbeat file, the boot start ends it and runs it again. Either way it adopts every live process from the
+registry, the same path as after an upgrade. Messages queued on disk are delivered.
 
 **F. From the Mac, the user opens a session that runs on a host.** The Mac's service calls that host's service
 and streams what the UI needs. The host's service is the one that tails and parses the output.
@@ -175,24 +189,22 @@ own registry there and ends its agents on exit, as a non-production daemon does 
 
 ## Inside the service
 
-| Runs on | What | Rule |
+| Part | What | Rule |
 |---|---|---|
-| main thread | the API, task and session logic, starting and watching processes, the only writer of data | never blocks: no synchronous process call, no large synchronous read or parse |
-| workers | pure heavy work: parse of a large payload, a merge, redaction, rebuilding a session's fold at adoption, a heavy query on a second SQLite connection | data in, a result out; a worker holds no state another part needs |
+| main thread | the API, task and session logic, the only writer of data | never blocks: no synchronous process call, no large synchronous read or parse |
+| process manager | start and adopt, FIFO writes, output tail and fold, check runs, job runs | answers no caller but its own service; imports no task logic |
+| workers | pure heavy work: parse of a large payload, a merge, redaction, a heavy query on a second SQLite connection | data in, a result out; a worker holds no state another part needs |
 | separate processes | agents, plugin jobs, terminals, check scripts | what must outlive a restart, and plugins |
 
-- The part that starts and watches processes has a small typed interface (start, adopt, stop, send, events)
-  and imports no task logic. A test holds that boundary, so the part that keeps agents alive stays small and
-  changes rarely.
+- The process manager begins as today's daemon process, started by the service from its own file and always
+  its version. That is enough for every rule above. Moving its modules onto the main thread is a later,
+  internal step, taken module by module where it pays: its code may block today (12 synchronous process calls
+  and about 490 synchronous file calls), so a module moves only once its process calls are async and the file
+  calls on its hot paths are async or bounded.
 - A worker is not a place for a subsystem. It has its own memory and cannot use the main thread's objects, so
   anything that talks to the rest often would need a message for every interaction.
-- The daemon's code may block today (12 synchronous process calls and about 490 synchronous file calls across
-  its files). A module moves into the service when its process calls are async and the file calls on its hot
-  paths (the output tail, the registry write) are async or bounded. Small, rare reads may stay.
 - A move of work to a worker follows a measurement: a stall profile that names it. Each move adds its guard to
   the existing ratchet (`tests/core/event-loop-blocking-ratchet.test.ts`).
-- Child processes the main thread starts on a timer (git status, `sysctl`) go through one small pool with a
-  cache and a deadline.
 
 ## Lifecycle
 
@@ -217,86 +229,99 @@ adoption, at every start:
 ```
 
 On macOS the service runs under the app's session host, as the server and the daemon each do today, so
-permission prompts still name Walnut: one chain instead of two.
+permission prompts still name Walnut.
 
 ## Roles and data
 
-- The leader's data directory is the truth. A follower holds copies scoped to what the host needs (every
-  project whose default host it is, every task with a session there, the tasks of plugins whose jobs run
-  there) and its journal. A read alone folds the journal over the copy, with one fold shared by every reader
-  (`core/offline-merge/task-row-fold.ts`).
+- The leader's data directory is the truth. A follower holds copies and its journal. A read alone folds the
+  journal over the copy, with one fold shared by every reader (`core/offline-merge/task-row-fold.ts`).
 - The existing table decides each call (`src/replica/route-table.ts`): answered here, a feature of this box,
   or the leader's.
 
-| A call on a follower | Leader reachable | Leader away |
+| A call on a follower | Leader answers | Leader away |
 |---|---|---|
-| read a task this host holds | the copy | the copy with the journal folded in |
-| create or change a task | forwarded; the leader writes | journaled; answered from the fold |
-| start a session on this host | started here; the record is synced | the same; journaled |
-| message a session on this host | its FIFO | its FIFO |
-| message a session elsewhere | through the leader | held; the caller hears "queued" |
-| what only the leader has (the org, search by meaning) | forwarded | refused, with `needs_leader` |
+| read a task | handed to the leader | the copy with the journal folded in |
+| create or change a task | handed to the leader | journaled; answered from the fold |
+| start a session for a task made on this host | handed to the leader, which asks this host to start it | started here; journaled |
+| start a session for a task made on the leader | handed to the leader | refused: `needs_leader` |
+| message a session on this host | handed to the leader | its FIFO |
+| message a session elsewhere | handed to the leader | refused or held; the caller hears which |
+| what only the leader has (the org, search by meaning) | handed to the leader | refused, with `needs_leader` |
 
-- The drain on reconnect is the existing protocol, served by the follower's service. The leader stays the only
-  writer of truth.
+- The drain on reconnect is the existing protocol. The leader stays the only writer of truth.
 - What may be copied to which host follows the existing replica rules (`replica-targets.ts`). A task marked
   local to one machine is never copied.
-- A follower turns heavy features off by capability, as a replica does today.
-- Because role is a setting and every host runs the same service, a person with an always-on machine of their
-  own can later put the leader there. Nothing in this design depends on the leader being a laptop.
+- A follower turns features on by capability. The cloud box names its own; a host's follower is given
+  `host-local-calls` (answer the host's own calls and start sessions alone).
+
+## Phase 1 as built
+
+- **The hand-off.** The daemon passes a session's or a plugin job's call to the host's follower only while the
+  follower may write (one rule for "the leader is away", the test `follower.op` applies). While the leader
+  answers, the call is relayed to it as before. In the seconds between the two, a session keeps the old path
+  and a job's call waits within its deadline (`src/providers/follower-gateway-core.ts`).
+- **The answer.** The follower runs the call with the code the leader uses for a relayed call
+  (`src/core/peers/gateway-answer.ts`), acting as the session or the plugin job through a credential that
+  exists only in its own process (`src/replica/write-actor.ts`, `local-calls.ts`). A request that carries it
+  is never forwarded.
+- **A session that the follower cannot serve keeps today's answer.** If the follower is not linked, is late,
+  or says the leader is needed, a session's call falls back to the daemon's old offline answers. A plugin
+  job's answer is final.
+- **Starts made alone** (`src/replica/away-starts.ts`): only for a task this host's journal made, with a
+  session id derived from the op id so a retry starts nothing twice, and at most as many live sessions as this
+  machine's memory allows.
+- **The leader's side.** A plugin job is an actor of the journal; a task's session started on the host is
+  adopted by the `task-start` drain; a task made away lands where the same caller's create lands online.
+- **Not yet.** A task made on the leader cannot be started alone. A message that expects a reply needs the
+  leader. Every host does not yet get a follower by default (the file is large for a slow link).
 
 ## Compatibility
 
-- A host still on a separate daemon keeps working with a new leader, through today's daemon protocol, until
-  the last phase. The leader tells the two kinds of host apart by capability.
+- A host still on a separate daemon keeps working with a new leader, through today's daemon protocol. The
+  leader tells the two kinds of host apart by capability.
 - A host the file cannot run on (an old C library, an unusual CPU) stays on the source daemon and is shown as
-  a limited host: agents run there, nothing works with the leader away.
-- At the switch on a host, the service adopts the agents the daemon was running, from the same registry
-  files. No agent ends.
-- Going back: the previous release starts the separate daemon again, which adopts the same registry.
-- `/api/v1` (the phone app) does not change. `walnut web` stays as a name for `walnut serve`.
+  a limited host: agents run there, less works with the leader away.
+- An older leader that cannot drain a plugin job's records or a task start is told apart by the kinds it
+  drains; the host then answers `needs_leader` instead of journaling what would be refused.
+- `/api/v1` (the phone app) does not change, and a phone or a browser hears the same answers while the leader
+  is away as before. `walnut web` stays as a name for `walnut serve`.
 - Between machines on different versions the API is the contract: changes are additive, and a route a host
   does not have yet answers "not supported" so the caller can fall back.
 
 ## Phases
 
-Each phase lands alone and leaves production working. The system is simpler after each one, and it is already
-the target shape for callers after phase 3.
+Each phase lands alone and leaves production working.
 
 | # | Phase | Done when |
 |---|---|---|
-| 1 | **A follower on every host, and it works alone.** Every host gets the follower server (today opt-in). A session's or a job's call on a host goes to that host's follower. Alone mode answers with the real task logic and its own journal, replacing the daemon's offline answers. A follower can start a session by itself. | with the Mac's service stopped, a plugin job on a host creates a task, starts a session and tags it; after the Mac returns the board shows them once, and a second drain changes nothing |
-| 2 | **The service is the root on every host.** The boot start runs `walnut serve`, on hosts and on the Mac. The service starts the daemon from its own file and adopts it, so a host has one version. | a service ended by hand is back within seconds with its agents; a build that cannot stay up is rolled back without a person; the Mac's Walnut is back after a reboot |
-| 3 | **One API; work runs where it lives.** Local callers use the API on a local socket. The leader reaches a host through its service's API. A session is run and judged by its host's service. The source twin and the checks for a daemon older than its server are deleted. | the Mac's main thread parses no line of a session on another host; the daemon protocol has one caller, the service beside it |
-| 4 | **The daemon's modules move into the service**, one at a time (calls from sessions and jobs, clocks, plugin jobs, then agents), each once its blocking calls are gone. | no daemon process and no protocol to it; the main thread's stall count has not risen |
+| 1 | **A host's own calls are answered by its service.** The follower answers a session's and a plugin job's calls while the leader is away, with the real task logic and the journal; the daemon only passes the call on. Then every host gets a follower by default. | with the Mac's service stopped, a plugin job on a host creates a task, starts a session and tags it; after the Mac returns the board shows them once, and a second drain changes nothing |
+| 2 | **Between machines, service to service.** The leader asks a host's service to start, stop and message its sessions; a session is run and judged by its host's service; local callers use the API on a local door, whatever the leader's state. | the leader sends no command to another machine's process manager; the Mac's main thread parses no line of a session on another host |
+| 3 | **The boot start keeps the service**, on hosts and on the Mac; one version per host. | a service ended by hand is back within seconds with its agents; a build that cannot stay up is rolled back without a person; the Mac's Walnut is back after a reboot |
+| 4 | **Clean up inside.** Delete the source twin, the daemon's own offline answers and its small copy, and the checks for a daemon older than its server; move process manager modules into the service where it pays. | no task logic outside the service; one copy of the daemon's code |
 
-Beside the phases, the main thread is cleared one measured item at a time: spawns through a pool, heavy
-statements and large parses to workers, the remaining synchronous file reads to async.
-
-A plugin whose logic runs in a job on a dev host ships on phase 1.
+Beside the phases, the main thread is cleared one measured item at a time (its own task): spawns through a
+pool, heavy statements and large parses to workers, the remaining synchronous file reads to async.
 
 ## Budgets
 
 | | Today | Target |
 |---|---|---|
-| Walnut processes to keep alive on a host | 2, with 2 versions | 1 |
+| who answers a call on a host | the daemon, the follower server, or nobody | the service |
+| versions to keep matched on a host | 2 | 1 |
 | protocols between parts of Walnut | the API, the daemon's commands, the session socket, the replica relay | the API |
 | copies of task logic | 2 | 1 |
 | an agent ended by a deploy | 0 | 0 |
 | deploy gap, stop to listening | 3.5 to 15.8 s | 5 s or less in 9 of 10 deploys |
-| holds of the main thread of a second or more, caused by our own code | present in every kept profile | none |
 | parses of one output line | 3 | 1 |
 | lines removed at the end | | the source twin (17k), most of the daemon client (16k), the daemon's offline host (3k) |
 
 ## Risks
 
-- **One process shares one fate.** A crash, a hang or an out-of-memory anywhere stops everything on that host
-  until the boot start runs the service again (seconds). Nothing is lost: agents are detached, their output is
-  in files, the registry and the message queue are on disk.
-- **Moving the daemon's code takes care**, because it may block today. Phase 4 moves one module at a time
-  behind the same tests, and the daemon process keeps working until the last one is in.
-- **The main thread is the ceiling.** It is far from full today. The stall recorder stays on. If a measurement
-  ever shows it full, the output tail is the piece to give a worker: bytes in, events out.
-- **A follower's memory** on a small host: measure in phase 1, and switch off by capability what it does not
-  need.
-- **Hosts the file cannot run on**: count them before phase 3 deletes the source twin.
+- **A host's calls depend on its service being up.** It is restarted within seconds, and callers retry. Until
+  phase 4 a session's call still has the daemon's old answers to fall back on.
+- **Two answerers remain until phase 4** for a session while the leader is away (the follower first, the
+  daemon's old code as the fallback). They share one journal, so their writes cannot diverge; the fallback is
+  deleted once the follower covers every op it has.
+- **Moving the process manager's code takes care**, because it may block today. It is last, and optional.
+- **A follower's memory** on a small host: measure before every host gets one by default.
+- **Hosts the file cannot run on**: count them before phase 4 deletes the source twin.
