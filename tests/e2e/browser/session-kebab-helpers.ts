@@ -1,14 +1,16 @@
 /**
  * Rows of a session panel's ⋮ menu (the `.task-kebab-btn` in its header; on an Org node page the
- * header is the node's, so the kebab sits in `[data-testid="org-detail-chat-tools"]`).
+ * header is the node's, so the kebab sits in `[data-testid="org-detail-chat-tools"]`), and the
+ * header's own Watch and Locate buttons.
  *
- * Locate and Watch were the header's crosshair and eye until 2026-11-09 (the user: "this 2 put iot
- * in the drop down"): Locate is now a first-level row of the menu (`session-menu-locate`, "Locate
- * task" when the page gave a handler, else "Find on Home"), present once the session record names
- * a task. A click on it closes the menu. Watch came back out on 2026-11-19 as the header's pill
- * (`session-watch-pill`), so a desktop session menu has no `task-kebab-watch` row (a phone's
- * menu, with no header, keeps it). Open in new tab is only the Window group's row
- * (`session-menu-popout`): the header has no button for it.
+ * Locate and Watch are window buttons of the header since 2026-11-19 (the user: "why locate task is
+ * not at top right?"), first in the row: Watch, Locate, Minimize, Lock, Expand, Close. Locate is
+ * `session-locate-btn` (aria-label "Locate task" when the page gave a handler, else "Find on
+ * Home"), disabled while the session record that names the task is on its way; Watch is
+ * `session-watch-btn` (aria-pressed, aria-label "Watch" / "Stop watching"). A desktop session menu
+ * has neither a Locate row nor a `task-kebab-watch` row; a phone, with no header, keeps the Watch
+ * row and has no Locate. Open in new tab is only the Window group's row (`session-menu-popout`):
+ * the header has no button for it.
  */
 import { expect, type Locator, type Page } from '@playwright/test'
 import { openKebabGroup } from './kebab-group-helpers'
@@ -47,11 +49,24 @@ export async function closeSessionKebab(scope: Locator): Promise<void> {
   await expect(menu).toHaveCount(0)
 }
 
-/** Locate the session's task from its ⋮ menu: open the menu and click its Locate row. */
-export async function locateFromKebab(scope: Locator): Promise<void> {
-  const row = await kebabRow(scope, 'session-menu-locate')
-  await row.click()
-  await expect(scope.page().locator('.task-kebab-menu')).toHaveCount(0)
+/**
+ * The header's Locate button of `scope`'s session. A column inside a host surface (a Board peek)
+ * draws its header in the host's and keeps its own hidden, so only the one on screen counts.
+ */
+export function sessionLocateButton(scope: Locator): Locator {
+  return scope.getByTestId('session-locate-btn').filter({ visible: true }).first()
+}
+
+/** The header's Watch eye of `scope`'s session (the one on screen, as Locate). */
+export function sessionWatchButton(scope: Locator): Locator {
+  return scope.getByTestId('session-watch-btn').filter({ visible: true }).first()
+}
+
+/** Locate the session's task from its header: click the crosshair once the record names the task. */
+export async function locateFromHeader(scope: Locator): Promise<void> {
+  const btn = sessionLocateButton(scope)
+  await expect(btn).toBeEnabled({ timeout: 30_000 })
+  await btn.click()
 }
 
 /**

@@ -70,7 +70,7 @@ interface TaskQuickActionsProps {
   slot?: 'all' | 'phase' | 'kebab';
   /** The phone's short menu (N12): leading rows, Task detail and Status only. */
   phoneMenu?: boolean;
-  /** The surface shows Watch itself (the session header's WatchPill): the menu leaves its row out. */
+  /** The surface shows Watch itself (the session header's eye among its window buttons): the menu leaves its row out. */
   watchOutside?: boolean;
   /**
    * Extra content appended to the bottom of the kebab dropdown, below a divider

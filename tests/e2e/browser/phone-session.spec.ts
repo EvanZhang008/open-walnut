@@ -168,9 +168,10 @@ test('one bar: the session title, its status and its kebab are the top bar (C64)
   // N12: the short phone list. No desktop-only rows, and it fits the screen. No Scripts row
   // (2026-11-19: the session's one-click scripts are gone).
   for (const id of ['locate', 'popout', 'scripts']) await expect(menu.getByTestId(`phone-row-${id}`)).toHaveCount(0)
-  // A phone draws no header, so no Watch pill: its menu keeps the task's Watch row (2026-11-19).
+  // A phone draws no header, so no Watch or Locate button: its menu keeps the task's Watch row (2026-11-19).
   await expect(menu.getByTestId('task-kebab-watch')).toBeVisible()
-  await expect(overlay(page).getByTestId('session-watch-pill')).toBeHidden()
+  await expect(overlay(page).getByTestId('session-watch-btn')).toBeHidden()
+  await expect(overlay(page).getByTestId('session-locate-btn')).toBeHidden()
   await expect(menu.getByText('Details', { exact: true })).toBeVisible()
   const menuText = await menu.innerText()
   for (const desktopOnly of ['Open in new tab', 'Open in VS Code', 'Copy dir', 'Columns', 'Web preview', 'Fork']) {

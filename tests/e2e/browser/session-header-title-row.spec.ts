@@ -18,7 +18,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { openAskWalnutDrawer, openChatOnLoad } from './draft-helpers'
 import { presetPanelView } from './todo-panel-helpers'
 import { expectBareTitleRow } from './session-header-labels-helpers'
-import { closeSessionKebab, kebabRow } from './session-kebab-helpers'
+import { sessionLocateButton } from './session-kebab-helpers'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -44,8 +44,7 @@ async function openHomepageSession(page: Page) {
   await task.locator('.todo-item-title').click()
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
   await expect(panel).toBeVisible()
-  // The kebab is the one header control every width keeps; in a narrow column the
-  // Locate button moves into it (session-header-narrow.spec.ts).
+  // The kebab is the title row's one control at every width (session-header-narrow.spec.ts).
   await expect(panel.locator('.session-panel-title-meta .task-kebab-btn')).toBeVisible()
   return panel
 }
@@ -158,9 +157,8 @@ test('the embedded Ask Walnut panel keeps compact activity time across task upda
   const drawer = await openAskWalnutDrawer(page)
   await drawer.locator(`[data-testid="ask-walnut-drawer-item"][data-task-id="${taskId}"]`).click()
   const panel = page.getByTestId('ask-walnut-session').locator(`.session-panel[data-session-id="${sessionId}"]`)
-  // Its kebab offers Locate task (the slot gives the panel a Locate handler).
-  await expect(await kebabRow(panel, 'session-menu-locate')).toHaveText('Locate task')
-  await closeSessionKebab(panel)
+  // Its header offers Locate task (the slot gives the panel a Locate handler).
+  await expect(sessionLocateButton(panel)).toHaveAttribute('aria-label', 'Locate task', { timeout: 30_000 })
   await expect(panel.locator('.session-panel-time')).toHaveCount(0)
   await panel.getByRole('button', { name: 'Expand session to full screen', exact: true }).click()
   await expect(panel.locator('.session-panel-time')).toHaveText('6h')
@@ -192,7 +190,8 @@ test('the session title owns the second header row and reveals its full text on 
   const titleBox = (await titleRow.boundingBox())!
   expect(titleBox.y).toBeGreaterThan(toolsBox.y)
   const controls = toolsRow.locator('.session-panel-window-controls')
-  for (const cls of ['lock', 'expand', 'close']) {
+  // Watch and Locate lead the window buttons (2026-11-19); Lock, Expand and Close end them.
+  for (const cls of ['watch', 'locate', 'lock', 'expand', 'close']) {
     await expect(controls.locator(`.session-panel-${cls}`)).toHaveCount(1)
   }
   // Open in new tab is the ⋮ menu's Window row only (2026-11-19): no header button.

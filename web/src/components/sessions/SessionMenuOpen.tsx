@@ -11,7 +11,7 @@
  * Each row calls the same handler as its header chip, so the header and the menu never drift.
  */
 import type { ReactNode } from 'react';
-import { ICON_EXPAND, ICON_FILE, ICON_FOLDER_OUTLINE, ICON_LOCATE, ICON_NEW_TAB, ICON_TERMINAL } from '../common/Icons';
+import { ICON_EXPAND, ICON_FILE, ICON_FOLDER_OUTLINE, ICON_NEW_TAB, ICON_TERMINAL } from '../common/Icons';
 import { KebabGroup } from './KebabGroup';
 import { useSessionServers } from '@/hooks/useSessionServers';
 import { openable, serversSummary } from './session-server-label';
@@ -62,9 +62,6 @@ export interface SessionMenuOpenProps {
   onPlan?: () => void;
   /** The Board row's own handler (a host that draws the board itself), else the split view. */
   onBoard?: () => void;
-  /** Locate the task on Home ("Find on Home" off it); absent when there is no task to find,
-   *  `waiting` (why) while the session record that names the task is still on its way. */
-  locate?: { label: string; onClick: () => void; waiting?: string | null };
   onPopout?: () => void;
   onFullscreen?: () => void;
   /** A column shown inside another surface (a task opened from a Board): its views open by locating the task, so it offers none of the header's. */
@@ -136,10 +133,8 @@ export function SessionMenuOpen(p: SessionMenuOpenProps) {
   ].filter(Boolean);
   return (
     <>
-      {/* Locate is a row of its own, by its name (2026-11-09, the user of the header's crosshair
-          and eye: "this 2 put iot in the drop down"); Watch went back out to the header as a pill
-          (2026-11-19), and Open in new tab lives only in the Window group below. */}
-      {p.locate && <Row icon={ICON_LOCATE} label={p.locate.label} disabled={!!p.locate.waiting} why={p.locate.waiting ?? undefined} onClick={() => { close(); p.locate!.onClick(); }} testId="session-menu-locate" />}
+      {/* Locate and Watch are on the header itself (2026-11-19: the crosshair among the window
+          buttons, the eye on the label row); Open in new tab lives only in the Window group below. */}
       <KebabGroup
         label="Open"
         hint={`changed · files${p.board !== 'none' ? ' · board' : ''}${p.threads ? ' · threads' : ''}${appsRow ? ' · apps' : ''} · inbox · code · web${hintCount ? ` (${hintCount})` : ''}`}

@@ -366,19 +366,25 @@ describe('a session fact the user pinned to the tool row', () => {
   });
 });
 
-describe('Watch and Locate are kebab rows, not header buttons (2026-11-09, the user: "this 2 put iot in the drop down")', () => {
-  it('no header item, no header button, and the kebab draws both by name', async () => {
+describe('Watch and Locate are window buttons of the header (2026-11-19, the user: "why locate task is not at top right?")', () => {
+  it('fixed header items that need the task, drawn by SessionPanel, and gone from the session kebab', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const src = (f: string) => fs.readFileSync(path.join(__dirname, '../../web/src/components', f), 'utf8');
-    expect(Object.keys(TOOL_ITEMS)).not.toContain('locate');
-    expect(Object.keys(TOOL_ITEMS)).not.toContain('watch');
+    // Fixed like Lock, Expand and Close: they stay at every column width.
+    expect(TOOL_ITEMS.watch).toMatchObject({ kind: 'fixed' });
+    expect(TOOL_ITEMS.locate).toMatchObject({ kind: 'fixed' });
+    // That both need the task (TASK_SLOT_IDS) is pinned in session-header-record-gate.test.ts.
     const panel = src('sessions/SessionPanel.tsx');
-    expect(panel).not.toMatch(/data-header-id="(locate|watch)"/);
-    expect(panel).not.toContain('session-panel-locate');
-    expect(panel).not.toContain('session-panel-watch');
-    // Locate: a top-level row of the session kebab; Watch: the task's row of every task menu.
-    expect(src('sessions/SessionMenuOpen.tsx')).toMatch(/\{p\.locate && <Row [^\n]*testId="session-menu-locate"/);
+    expect(panel).toMatch(/className="task-action-btn session-panel-locate"[^\n]*data-header-id="locate"/);
+    expect(panel).toContain('data-testid="session-locate-btn"');
+    expect(panel).toMatch(/<WatchButton [^\n]*className="task-action-btn session-panel-watch" headerId="watch" testId="session-watch-btn"/);
+    // The kebab lost its Locate row, and the label row's Watch pill is gone.
+    expect(src('sessions/SessionMenuOpen.tsx')).not.toContain('session-menu-locate');
+    const watch = src('tasks/WatchToggle.tsx');
+    expect(watch).not.toMatch(/export function WatchPill\b/);
+    expect(watch).not.toContain('session-watch-pill');
+    // The phone draws no header: its task menu keeps the Watch row.
     expect(src('tasks/TaskMenuRows.tsx')).toContain('<WatchMenuItem task={task}');
   });
 });

@@ -75,7 +75,7 @@ export interface TaskMenuRowsProps {
   onDelete?: () => void;
   /** The phone's short menu: snooze, watch, details, status and pin choices. */
   phoneMenu?: boolean;
-  /** Watch is on the surface itself (the session header's WatchPill): no row for it here. */
+  /** Watch is on the surface itself (the session header's eye among its window buttons): no row for it here. */
   watchOutside?: boolean;
 }
 

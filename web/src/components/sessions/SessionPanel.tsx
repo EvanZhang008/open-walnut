@@ -16,7 +16,7 @@ import { SessionChatHistory } from './SessionChatHistory';
 import { SessionSupervisionBar, useSessionSupervision } from './SessionSupervisionBar';
 import { CronPill } from './CronPill';
 import { TriggerPill } from '@/components/routines/TriggerPill';
-import { WatchPill } from '@/components/tasks/WatchToggle';
+import { WatchButton } from '@/components/tasks/WatchToggle';
 import { SubtaskPill } from '@/components/tasks/SubtaskPill';
 import { TaskTagPills } from '@/components/tasks/TaskTagPills';
 import { LeaderPill } from '@/components/tasks/LeaderPill';
@@ -80,7 +80,7 @@ import { TerminalDock } from './TerminalDock';
 import { TerminalUnavailableView } from './HostFeatureUnavailable';
 import type { TerminalPathLink } from './terminal-links';
 import type { SessionSplitView } from './sessionSplitView';
-import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_MINIMIZE, ICON_LOCK, ICON_UNLOCK, ICON_PANEL_RIGHT, ICON_PANEL_RIGHT_FILLED, ICON_TERMINAL } from '../common/Icons';
+import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_MINIMIZE, ICON_LOCATE, ICON_EYE, ICON_LOCK, ICON_UNLOCK, ICON_PANEL_RIGHT, ICON_PANEL_RIGHT_FILLED, ICON_TERMINAL } from '../common/Icons';
 import { openPopout } from '@/popout/openPopout';
 import { locateTaskOnHome, navigateToTarget } from '@/utils/open-session';
 import { UserMessagesSummary } from './UserMessagesSummary';
@@ -667,7 +667,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const toolRowRef = useRef<HTMLDivElement>(null);
   // A narrow title row puts its labels on a line under the title (useTitleRowTight.ts), and
   // its Watch pill draws the eye alone.
-  const [titleRowRef, titleRowTight, titleRowNarrow] = useTitleRowTight();
+  const [titleRowRef, titleRowTight] = useTitleRowTight();
   // Fork and Board (and the kebab's Locate) need the session's task. Whether they exist is decided
   // on the first frame from what this page already knows (the status store, which
   // every list naming the session seeds); a session known to have no task gets
@@ -2816,6 +2816,32 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // Every other label stays on the row, seen at a glance (2026-11-03, the user: "only tag
   // go there, other should still outside, like trigger ... leader ... worker"): the wait,
   // Embedded, Cron, Trigger, then the team pills. A narrow header draws each as its letter.
+  // Locate: the crosshair among the window buttons (2026-11-19, the user of the kebab's row:
+  // "why locate task is not at top right?"). It needs the task, like Fork: drawn disabled with
+  // the reason while the record that names it is on its way, a spacer once drawn if the task goes.
+  const locateLabel = onLocateTask ? 'Locate task' : 'Find on Home';
+  const locateWhy = locateWaitReason ?? (session?.taskId ? null : 'Locate becomes available once the session has loaded');
+  const locateButton = taskSlot === 'absent' ? null : taskSlot === 'spacer'
+    ? <button type="button" className="task-action-btn session-panel-locate" data-header-id="locate" {...TASK_SLOT_SPACER}>{ICON_LOCATE}</button>
+    : (
+      <button
+        type="button"
+        className="task-action-btn session-panel-locate"
+        data-header-id="locate"
+        data-testid="session-locate-btn"
+        disabled={!!locateWhy}
+        title={locateWhy ?? locateLabel}
+        aria-label={locateLabel}
+        onClick={() => { const taskId = session?.taskId; if (taskId) locateOwnTask(taskId); }}
+      >
+        {ICON_LOCATE}
+      </button>
+    );
+  // Watch: the eye beside Locate, lit while the task is watched (2026-11-19, the user of the
+  // label row's Watching pill: "watching ... 也应该去放到上面"). The kebab drops its row.
+  const watchButton = taskSlot === 'absent' ? null : taskSlot === 'live' && sessionTask
+    ? <WatchButton task={sessionTask} className="task-action-btn session-panel-watch" headerId="watch" testId="session-watch-btn" />
+    : <button type="button" className="task-watch-btn task-action-btn session-panel-watch" data-header-id="watch" {...TASK_SLOT_SPACER}>{ICON_EYE}</button>;
   const headerPills = (
     <>
       <WaitingChip task={sessionTask} />
@@ -2837,9 +2863,6 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           session header is the one place an ask that split work off shows it. */}
       {sessionTask && <SubtaskPill task={sessionTask} />}
       {sessionTask && <LeaderPill task={sessionTask} />}
-      {/* Watch, last so it keeps its place beside the tags and the kebab (2026-11-19, the user of
-          the kebab's Watch row: "put this outside, kind of often used"); the kebab drops its row. */}
-      {sessionTask && <WatchPill task={sessionTask} narrow={hostHeader || titleRowNarrow} />}
     </>
   );
 
@@ -3038,17 +3061,6 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       onBoard={onHostBoard}
       terminal={!inset}
       onPlan={hasPlanContent || showExecuteButtons ? () => setPlanPopoverOpen(true) : undefined}
-      // Drawn, disabled with the reason, while the record that names the task is on its way, so
-      // the row is there from the first opening of the menu (as the header button was).
-      locate={taskSlot === 'live' ? {
-        label: onLocateTask ? 'Locate task' : 'Find on Home',
-        waiting: locateWaitReason ?? (session?.taskId ? null : 'Locate becomes available once the session has loaded'),
-        onClick: () => {
-          const taskId = session?.taskId;
-          if (!taskId) return;
-          locateOwnTask(taskId);
-        },
-      } : undefined}
       apps={inset ? undefined : { keptKey: panelApp?.key ?? null, onOpen: (key) => openAppView(key, { toggle: true }) }}
       threads={threadsMenuRows}
       onPopout={inset ? undefined : () => openPopout('session', { id: sessionId, host: session?.host, cwd: session?.cwd })}
@@ -3069,7 +3081,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       onOpenTaskDetail={onOpenTaskDetail}
       onCompleted={completedInColumn}
       slot="kebab"
-      // The header shows Watch (WatchPill in headerPills); a phone draws no header, so its menu keeps the row.
+      // The header shows Watch (the eye among the window buttons); a phone draws no header, so its menu keeps the row.
       watchOutside={!phoneRows && !!sessionTask}
       // Right-clicking the panel header opens this same menu at the
       // cursor: the header is the session's object, so its actions
@@ -3438,13 +3450,13 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             )}
             </div>{/* .session-meta-row-2-chips */}
             <div className="session-panel-window-controls">
-              {/* Locate is a row of the kebab (2026-11-09, the user: "this 2 put iot in the drop
-                  down"); Watch came back out, as a pill of the label row (2026-11-19). Open in new
-                  tab is the kebab's Window row only (2026-11-19, the user: "open in new tab can be
-                  added into drop down"). */}
-              {/* The three that matter most sit together at the right end, always in this
-                  order: Lock, Expand, Close. Minimize comes before them, so a narrow column
-                  drops it first and the three never move. */}
+              {/* Open in new tab is the kebab's Window row only (2026-11-19, the user: "open in
+                  new tab can be added into drop down"). */}
+              {/* Watch and Locate lead the row (2026-11-19, the user: "why locate task is not at
+                  top right?", and of Watching: "放到上面"); like Lock, Expand and Close they stay at
+                  every width. Minimize sits between them and folds first in a narrow column. */}
+              {watchButton}
+              {locateButton}
               {minimize && !shownFullscreen && (
                 <button
                   className="task-action-btn session-panel-minimize"
@@ -3578,6 +3590,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   {headerPills}
                   <SessionHeaderLabels>{headerTags}</SessionHeaderLabels>
                   {/* This panel's own header, and its Minimize, are hidden under the host's. */}
+                  {watchButton}
+                  {locateButton}
                   {minimize && (
                     <button
                       type="button"

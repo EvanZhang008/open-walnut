@@ -112,7 +112,6 @@ async function titleRowParts(panel: Locator): Promise<string[]> {
       if (c.matches('.session-cron-pill')) return 'cron'
       if (c.matches('.task-waiting-chip')) return 'wait'
       if (c.matches('[data-header-pill="embedded"]')) return 'embedded'
-      if (c.matches('[data-testid="session-watch-pill"]')) return 'watch'
       return `UNKNOWN:${c.className || c.tagName}`
     }
     for (const el of Array.from(row.children) as HTMLElement[]) {
@@ -202,7 +201,9 @@ for (const width of [1440, 900]) {
     await expect(panel.locator('.session-panel-title-meta [data-testid="leader-pill"]')).toHaveText(/^Leader · 2$/, { timeout: 20_000 })
     await expect(tags).toBeVisible({ timeout: 20_000 })
     // pw-task-links' tags include a pull request, whose status pill is a state pill: on the row.
-    expect(await titleRowParts(panel)).toEqual(['trigger', 'pr', 'leader', 'watch', 'tags', 'kebab'])
+    expect(await titleRowParts(panel)).toEqual(['trigger', 'pr', 'leader', 'tags', 'kebab'])
+    // Watch is the eye among the window buttons of the row above (2026-11-19), not a title-row label.
+    await expect(panel.locator('.session-panel-window-controls [data-testid="session-watch-btn"]')).toHaveCount(1)
     await expectNoStatus(panel)
     // No tag is drawn on the row itself: they all live in the control.
     await expect(panel.locator('.session-panel-header-top .task-tag-pills')).toHaveCount(0)
@@ -299,7 +300,7 @@ test('only a Worker: no tags control, and the Worker pill opens its team', async
   restoreParent.push(self)
   const worker = panel.locator('.session-panel-title-meta [data-testid="subtask-pill"]')
   await expect(worker).toContainText('Worker', { timeout: 20_000 })
-  expect(await titleRowParts(panel)).toEqual(['worker', 'watch', 'kebab'])
+  expect(await titleRowParts(panel)).toEqual(['worker', 'kebab'])
   await expectNoStatus(panel)
   await expectTitleRoom(panel, 0.6)
   // The whole board again, so the leader's row is there to be located at the end.
@@ -337,10 +338,10 @@ test('only a Worker: no tags control, and the Worker pill opens its team', async
   await expect(team).toHaveCount(0)
   await expect(page.locator(`.todo-panel-item[data-task-id="${leader}"]`)).toHaveClass(/task-focused/, { timeout: 10_000 })
 
-  // Released from the team, nothing is left beside the title but Watch (every task's, 2026-11-19) and the kebab.
+  // Released from the team, nothing is left beside the title but the kebab (Watch is a window button since 2026-11-19).
   await api('PATCH', `/api/tasks/${self}`, { parent_task_id: '' })
   await expect(worker).toHaveCount(0, { timeout: 20_000 })
-  expect(await titleRowParts(panel)).toEqual(['watch', 'kebab'])
+  expect(await titleRowParts(panel)).toEqual(['kebab'])
 })
 
 test('a narrow row puts the labels on a line under the title, each in full', async ({ page, browserName }) => {

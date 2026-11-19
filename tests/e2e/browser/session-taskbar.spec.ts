@@ -9,7 +9,7 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 import { iconInkOffsets, ICON_CENTER_TOLERANCE_PX } from './icon-ink'
 import { setPanelMode } from './draft-helpers'
 import { holdPanelCountLock } from './panel-count-lock'
-import { closeSessionKebab, openSessionKebab } from './session-kebab-helpers'
+import { closeSessionKebab, openSessionKebab, sessionLocateButton, sessionWatchButton } from './session-kebab-helpers'
 import { pinTaskbarConfig } from './taskbar-settings-helpers'
 
 // One test sets the fixture's panel count (a full strip pushes a column out).
@@ -57,23 +57,26 @@ const beat = (page: Page) => (process.env.PW_VIDEO ? page.waitForTimeout(1200) :
 const chip = (page: Page) => page.locator(`.session-taskbar-chip[data-session-id="${SESSION_ID}"]`)
 
 /**
- * Watch is the header's pill (2026-11-19, the user of the kebab's Watch row: "put this outside,
- * kind of often used"): it stays drawn across clicks, "Watch" or "Watching", pressed while on.
+ * Watch is the header's eye among its window buttons (2026-11-19, the user of the label row's
+ * Watching pill: move it up to the top): it stays drawn across clicks, pressed and lit while on.
  */
-const watchPill = (panel: Locator) => panel.getByTestId('session-watch-pill')
+const watchButton = (panel: Locator) => sessionWatchButton(panel)
 
 async function expectWatched(panel: Locator, on: boolean, timeout?: number) {
-  const pill = watchPill(panel)
-  await expect(pill).toHaveText(on ? 'Watching' : 'Watch', timeout ? { timeout } : undefined)
-  await expect(pill).toHaveAttribute('aria-pressed', on ? 'true' : 'false')
+  const btn = watchButton(panel)
+  const opts = timeout ? { timeout } : undefined
+  await expect(btn).toHaveAttribute('aria-pressed', on ? 'true' : 'false', opts)
+  await expect(btn).toHaveAttribute('aria-label', on ? 'Stop watching' : 'Watch')
+  if (on) await expect(btn).toHaveClass(/\bis-watched\b/)
+  else await expect(btn).not.toHaveClass(/\bis-watched\b/)
 }
 
-test('every icon of the header\'s window buttons draws on the row\'s middle, Minimize included', async ({ page }) => {
+test('every icon of the header\'s window buttons draws on the row\'s middle, Watch, Locate and Minimize included', async ({ page }) => {
   const panel = await openSessionPanel(page)
   const controls = panel.locator('.session-panel-window-controls')
   await expect(controls.locator('[data-header-id="minimize"]')).toBeVisible()
   const inks = await iconInkOffsets(controls.locator('button'))
-  expect(inks.map((i) => i.id)).toEqual(expect.arrayContaining(['minimize']))
+  expect(inks.map((i) => i.id)).toEqual(expect.arrayContaining(['watch', 'locate', 'minimize']))
   for (const ink of inks) {
     expect(Math.abs(ink.dy), `${ink.id} icon is ${ink.dy.toFixed(2)}px off its button's middle`).toBeLessThan(ICON_CENTER_TOLERANCE_PX)
   }
@@ -206,15 +209,15 @@ test('Watch on a task the board does not hold (an archived one) brings it onto t
   const watching = page.getByRole('region', { name: 'Watching' })
   await expect(watching.getByText('Archived migration plan')).toHaveCount(0)
   await expectWatched(panel, false, 30_000)
-  await watchPill(panel).click()
+  await watchButton(panel).click()
   await expectWatched(panel, true)
   await expect(watching.getByText('Archived migration plan', { exact: true }).first()).toBeVisible({ timeout: 15_000 })
-  await watchPill(panel).click()
+  await watchButton(panel).click()
   await expectWatched(panel, false)
   await expect(watching.getByText('Archived migration plan')).toHaveCount(0)
 })
 
-test('Watch clicked while its write is still on its way reads Watching at once, and the latest click wins', async ({ page }) => {
+test('Watch clicked while its write is still on its way is pressed at once, and the latest click wins', async ({ page }) => {
   const ARCHIVED = 'mpwold01-aa11'
   await pointSessionAt(page, SESSION_ID, ARCHIVED)
   // A slow network: the first write takes 2 s, the second 6 s, so the first one's echo comes back
@@ -234,10 +237,10 @@ test('Watch clicked while its write is still on its way reads Watching at once, 
   const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${SESSION_ID}"]`)
   await expect(panel).toBeVisible({ timeout: 30_000 })
   await expectWatched(panel, false, 30_000)
-  await watchPill(panel).click()
+  await watchButton(panel).click()
   // At once: the click, not the stale task.
   await expectWatched(panel, true)
-  await watchPill(panel).click()
+  await watchButton(panel).click()
   await expect.poll(() => writes.length).toBe(2)
   expect(writes[0]).not.toBe('')
   expect(writes[1]).toBe('')
@@ -271,10 +274,10 @@ test('two Watch clicks while the first write is out reach the server in order: t
   await expect(panel).toBeVisible({ timeout: 30_000 })
   try {
     await expectWatched(panel, false, 30_000)
-    await watchPill(panel).click()
+    await watchButton(panel).click()
     await expect.poll(() => writes.length).toBe(1)
     await expectWatched(panel, true)
-    await watchPill(panel).click()
+    await watchButton(panel).click()
     // The second click waits for the first write: one request out at a time.
     await page.waitForTimeout(500)
     expect(writes).toHaveLength(1)
@@ -319,36 +322,40 @@ test('Esc on the session menu closes the menu only: full screen stays, and the n
   await expect(page.locator('.open-walnut-fullscreen')).toHaveCount(0)
 })
 
-test('Watch on the header keeps the task on the Watching list, and reads Watching while on', async ({ page }) => {
+test('Watch on the header keeps the task on the Watching list, and is pressed while on', async ({ page }) => {
   const panel = await openSessionPanel(page)
   // The search that found the task hides the Watching section: clear it.
   await page.locator('.todo-search-input').fill('')
   const watching = page.getByRole('region', { name: 'Watching' })
   await expectWatched(panel, false, 30_000)
   await beat(page)
-  await watchPill(panel).click()
+  await watchButton(panel).click()
   await expectWatched(panel, true)
   // By id: another spec may rename the shared fixture task.
   const watchedRow = watching.locator(`[data-task-id="${TASK_ID}"]`)
   await expect(watchedRow.first()).toBeVisible({ timeout: 15_000 })
   await beat(page)
-  await watchPill(panel).click()
+  await watchButton(panel).click()
   await expectWatched(panel, false)
   await expect(watchedRow).toHaveCount(0)
 })
 
-test('Locate is a row of the session menu; Watch is the header\'s pill, not a menu row', async ({ page }) => {
+test('Watch and Locate are the header\'s window buttons, first in the row; the session menu has neither row', async ({ page }) => {
   const panel = await openSessionPanel(page)
-  // The header is drawn once the record is here (its kebab with it).
+  const controls = panel.locator('.session-panel-window-controls')
+  // Watch, Locate, then Minimize, Lock, Expand, Close (2026-11-19, the user: "why locate task is
+  // not at top right?").
+  await expect(sessionLocateButton(panel)).toBeEnabled({ timeout: 30_000 })
+  await expect(sessionLocateButton(panel)).toHaveAttribute('aria-label', 'Locate task')
+  await expect(watchButton(panel)).toHaveAttribute('aria-pressed', /^(true|false)$/)
+  const ids = await controls.locator('[data-header-id]').evaluateAll((els) => els.map((el) => el.getAttribute('data-header-id')))
+  expect(ids.slice(0, 3)).toEqual(['watch', 'locate', 'minimize'])
+  expect(ids.slice(-3)).toEqual(['lock', 'expand', 'close'])
   const menu = await openSessionKebab(panel)
-  await expect(panel.locator('.session-panel-header [data-header-id="watch"], .session-panel-header [data-header-id="locate"]')).toHaveCount(0)
-  await expect(panel.getByTestId('session-panel-watch')).toHaveCount(0)
-  await expect(panel.getByTestId('session-panel-locate')).toHaveCount(0)
-  await expect(menu.getByTestId('session-menu-locate')).toHaveText('Locate task', { timeout: 30_000 })
   // The task's half of the menu is drawn (Background, Watch's old neighbour), and it has no Watch row.
   await expect(menu.getByTestId('task-kebab-background')).toBeVisible({ timeout: 30_000 })
   await expect(menu.getByTestId('task-kebab-watch')).toHaveCount(0)
-  await expect(watchPill(panel)).toHaveText(/^(Watch|Watching)$/)
+  await expect(menu.getByTestId('session-menu-locate')).toHaveCount(0)
   await closeSessionKebab(panel)
 })
 

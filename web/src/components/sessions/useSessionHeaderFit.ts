@@ -46,15 +46,17 @@ export const TOOL_ITEMS: Record<string, { kind: ToolItemKind; priority: number; 
   // never pushes Terminal into "..." (2026-10-26).
   board: { kind: 'chip', priority: 6.1, name: 'Board' },
   time: { kind: 'info', priority: 7, name: 'Last activity' },
-  // Locate is no header button: it is a row of the kebab (2026-11-09, the user: "this 2 put
-  // iot in the drop down"). Watch is a pill of the label row, not of this row; Open in new
-  // tab is the kebab's Window row only (2026-11-19, the user: "open in new tab can be added
-  // into drop down").
+  // Open in new tab is the kebab's Window row only (2026-11-19, the user: "open in new tab can
+  // be added into drop down").
   // Minimize puts the panel on the taskbar: the one window button that folds.
   minimize: { kind: 'window', priority: 8, name: 'Minimize to taskbar' },
   // Lock, Expand and Close stay at every width: a cramped column is the moment to
   // go full screen (the user: "at the very least keep close and expand",
   // 2026-10-03), and Lock is the one that keeps the panel there (2026-10-04).
+  // Watch and Locate stay at every width too (2026-11-19, the user: "why locate task is not at
+  // top right?"; of the label row's Watching pill: "放到上面").
+  watch: { kind: 'fixed', priority: 0, name: 'Watch' },
+  locate: { kind: 'fixed', priority: 0, name: 'Locate task' },
   lock: { kind: 'fixed', priority: 0, name: 'Lock panel' },
   expand: { kind: 'fixed', priority: 0, name: 'Expand' },
   close: { kind: 'fixed', priority: 0, name: 'Close' },

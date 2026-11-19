@@ -86,8 +86,8 @@ describe('taskControlSlot: drawn, kept as a spacer, or never drawn', () => {
     expect(taskControlSlot('none', false)).toBe('absent')
   })
 
-  it('names them by their row ids (Locate and Watch are kebab rows, not header buttons), and a spacer is out of reach', () => {
-    expect([...TASK_SLOT_IDS].sort()).toEqual(['board', 'fork'])
+  it('names them by their row ids (Watch and Locate are window buttons since 2026-11-19), and a spacer is out of reach', () => {
+    expect([...TASK_SLOT_IDS].sort()).toEqual(['board', 'fork', 'locate', 'watch'])
     expect(TASK_SLOT_SPACER).toEqual({ 'aria-hidden': true, tabIndex: -1, disabled: true, 'data-header-spacer': 'true' })
   })
 })

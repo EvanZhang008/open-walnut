@@ -135,8 +135,7 @@ async function headerState(panel: Locator): Promise<HeaderState> {
         }),
         items: metaKids.map((el) => el === labels ? 'labels'
           : el.matches('.task-kebab-btn') || el.querySelector('.task-kebab-btn') ? 'kebab'
-            : el.matches('.task-row-pill, .task-waiting-chip') ? 'pill'
-              : el.matches('[data-testid="session-watch-pill"]') ? 'watch' : `other:${el.className}`),
+            : el.matches('.task-row-pill, .task-waiting-chip') ? 'pill' : `other:${el.className}`),
         // The first thing after the title on its own line: the first pill in a wide row, the
         // kebab in a narrow one (the pills went to the line under it).
         slackWhenCut: (() => {
@@ -202,14 +201,19 @@ function expectInsidePanel(state: HeaderState, label: string) {
   expect(state.titleRow.overflowBy, `${label}: the title row runs past the panel`).toBeLessThanOrEqual(0)
   expect(state.titleRow.pillsClearOfTitle, `${label}: a pill or the kebab overlaps the title`).toBe(true)
   // The task has no link tag, so no tags control: its three state pills (Trigger, Worker,
-  // Leader), Watch (2026-11-19) and the kebab sit beside the title.
-  expect(state.titleRow.items, `${label}: the state pills, Watch and the kebab sit beside the title`).toEqual(['pill', 'pill', 'pill', 'watch', 'kebab'])
+  // Leader) and the kebab sit beside the title. Watch is a window button of the tool row (2026-11-19).
+  expect(state.titleRow.items, `${label}: the state pills and the kebab sit beside the title`).toEqual(['pill', 'pill', 'pill', 'kebab'])
   // The title takes the whole row but those: when it is cut, it is cut at the first pill.
   expect(state.titleRow.slackWhenCut, `${label}: the cut title leaves room unused`).toBeLessThanOrEqual(12)
   expect(state.toolRow.visible, `${label}: close must stay`).toContain('close')
   expect(state.toolRow.visible, `${label}: expand must stay`).toContain('expand')
   expect(state.toolRow.visible, `${label}: lock must stay`).toContain('lock')
+  expect(state.toolRow.visible, `${label}: watch must stay`).toContain('watch')
+  expect(state.toolRow.visible, `${label}: locate must stay`).toContain('locate')
   expect(state.toolRow.visible.slice(-3), `${label}: Lock, Expand and Close end the row, in that order`).toEqual(['lock', 'expand', 'close'])
+  // The window buttons, in order: Watch, Locate, (Minimize, the one that folds), Lock, Expand, Close.
+  const fixedWindow = state.toolRow.visible.filter((id) => ['watch', 'locate', 'lock', 'expand', 'close'].includes(id))
+  expect(fixedWindow, `${label}: Watch and Locate lead the window buttons`).toEqual(['watch', 'locate', 'lock', 'expand', 'close'])
 }
 
 /** The header alone, or the header plus `below` px of the page under it (an open menu). */
@@ -223,7 +227,7 @@ async function shootHeader(panel: Locator, name: string, below = 0): Promise<voi
   })
 }
 
-/** The order the chips leave the tool row, first to go first. Lock, Expand and Close never leave. */
+/** The order the chips leave the tool row, first to go first. Watch, Locate, Lock, Expand and Close never leave. */
 const CHIP_LEAVE_ORDER = ['board', 'terminal', 'files', 'changed', 'fork']
 // Open in new tab is no header button since 2026-11-19 (the ⋮ menu's Window row): Minimize is the one that folds.
 const WINDOW_BUTTONS = ['minimize']
@@ -308,7 +312,7 @@ export function headerNarrowTests(): void {
       previous = state
       await shootHeader(panel, String(width))
     }
-    // Minimize, the one movable window button, is the first to go; Lock, Expand and Close stay at
+    // Minimize, the one movable window button, is the first to go; Watch, Locate, Lock, Expand and Close stay at
     // every width. 400px holds every chip but Board, the first to leave. No Scripts chip and no
     // Open in new tab button any more (2026-11-19).
     expect(['changed', 'files', 'terminal'].every((id) => states[400].toolRow.visible.includes(id)), `400px: ${states[400].toolRow.visible}`).toBe(true)
@@ -338,8 +342,9 @@ export function headerNarrowTests(): void {
     for (const id of states[180].toolRow.hidden.filter((h) => VIEW_CHIPS.includes(h))) {
       await expect(more.getByTestId(`session-header-more-item-${id}`)).toHaveText(id[0]!.toUpperCase() + id.slice(1))
     }
-    // Locate is a row of the kebab, never of "..." (2026-11-09).
+    // Watch and Locate are fixed window buttons (2026-11-19): never "..." rows.
     await expect(more.getByTestId('session-header-more-item-locate')).toHaveCount(0)
+    await expect(more.getByTestId('session-header-more-item-watch')).toHaveCount(0)
     await expect(more.getByTestId('session-header-more-item-lock')).toHaveCount(0)
     // Open in new tab is the ⋮ menu's Window row, never a "..." row (2026-11-19).
     await expect(more.getByTestId('session-header-more-item-popout')).toHaveCount(0)
@@ -363,13 +368,17 @@ export function headerNarrowTests(): void {
     expect(back180.toolRow.hidden).toEqual(states[180].toolRow.hidden)
 
     // The kebab is the task's menu: no pill rows (the labels control holds them) and no window
-    // button from the row above. Locate is its own first-level row (2026-11-09), not a copy of one.
+    // button from the row above, Watch and Locate included (header buttons since 2026-11-19).
     await meta.locator('.task-kebab-btn').click()
     const kebab = page.locator('.task-kebab-menu').last()
     await expect(kebab).toBeVisible()
     await expect(kebab.locator('[data-testid^="session-header-kebab-pill-"]')).toHaveCount(0)
     await expect(kebab.getByText(/Lock panel|Open in new tab/)).toHaveCount(0)
-    await expect(kebab.getByTestId('session-menu-locate')).toHaveText('Locate task')
+    await expect(kebab.getByTestId('task-kebab-background')).toBeVisible({ timeout: 30_000 })
+    await expect(kebab.getByTestId('session-menu-locate')).toHaveCount(0)
+    await expect(kebab.getByTestId('task-kebab-watch')).toHaveCount(0)
+    await expect(panel.getByTestId('session-locate-btn')).toBeVisible()
+    await expect(panel.getByTestId('session-watch-btn')).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(kebab).toHaveCount(0, { timeout: 10_000 })
 

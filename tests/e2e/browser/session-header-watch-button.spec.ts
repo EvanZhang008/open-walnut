@@ -1,21 +1,25 @@
 /**
- * The session header after the user's three asks of 2026-11-19:
- *  - Watch moved out of the ⋮ menu to the header ("put this outside, kind of often
- *    used"): a pill on the title row, "Watch" / "Watching", pressed while watched
- *    (WatchPill, web/src/components/tasks/WatchToggle.tsx). The session menu has no
- *    Watch row (a phone keeps it: phone-session.spec.ts).
+ * The session header's window buttons after the user's asks of 2026-11-19:
+ *  - Watch is the eye among the window buttons (the user, of the label row's Watching pill:
+ *    move it up to the top), first in the row: Watch, Locate, Minimize, Lock, Expand, Close. It is
+ *    `WatchButton` (web/src/components/tasks/WatchToggle.tsx): aria-pressed and lit
+ *    (`is-watched`) while watched, named "Watch" / "Stop watching". The session menu has no
+ *    Watch row (a phone, with no header, keeps it: phone-session.spec.ts).
+ *  - Locate sits beside it ("why locate task is not at top right?"); the menu's Locate row is gone.
  *  - Open in new tab is the ⋮ menu's Window row only ("open in new tab can be added
  *    into drop down"): no header button.
  *  - No Scripts chip ("it si fine, remove it no need").
  *
  * Scenario matrix (real fixture server, mock CLI sessions, real clicks):
- *  A. a task with a session: Watch not pressed; the menu has no Watch row and holds
+ *  A. a task with a session: the eye not pressed, first of the window buttons, Locate after it;
+ *     no Watch pill on the title row; the menu has no Watch or Locate row and holds
  *     Window > Open in new tab; no Scripts and no new-tab button in the header;
- *  B. Watch: it reads Watching, pressed, the task's row is in the task panel's Watching
+ *  B. Watch: pressed, lit, named Stop watching; the task's row is in the task panel's Watching
  *     section (the first section), and the server task has watched_at;
- *  C. Watch again: back to Watch, the row leaves Watching, watched_at cleared;
- *  D. a narrow column: the pill is the eye alone (its name in the label) and toggles;
- *  E. a session with no task: no Watch pill.
+ *  C. Watch again: not pressed, the row leaves Watching, watched_at cleared;
+ *  D. a narrow column: the eye is still on the row (a fixed window button, never in "..."),
+ *     a comfortable target, and toggles;
+ *  E. a session with no task: no Watch or Locate button.
  * A task whose subtasks are all done and that keeps a Board of its own gets no Board
  * chip: session-board-tab-lead-only.spec.ts case E proves it, so it is not repeated here.
  *
@@ -27,7 +31,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
 import { openKebabGroup } from './kebab-group-helpers'
-import { closeSessionKebab, openSessionKebab } from './session-kebab-helpers'
+import { closeSessionKebab, openSessionKebab, sessionLocateButton, sessionWatchButton } from './session-kebab-helpers'
 import { openSessionFromFinder } from './session-finder-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { call, kanbanApi, startSession, type KanbanApi } from './board-kanban-fixture'
@@ -60,9 +64,9 @@ test.beforeAll(async ({}, info) => {
   test.setTimeout(300_000)
   const { fixtureRoot } = await discoverBrowserFixture(TEST_PORT)
   api = kanbanApi(TEST_PORT, fixtureRoot)
-  project = `${info.project.name}-watch-pill ${Date.now().toString(36)}`
-  watched = await withSession('Header watch pill task')
-  narrow = await withSession('Narrow column watch pill task')
+  project = `${info.project.name}-watch-button ${Date.now().toString(36)}`
+  watched = await withSession('Header watch button task')
+  narrow = await withSession('Narrow column watch button task')
   await fs.mkdir(SHOTS, { recursive: true })
 })
 
@@ -92,7 +96,17 @@ async function openTaskSession(page: Page, t: Made): Promise<Locator> {
   return panel
 }
 
-const pill = (panel: Locator) => panel.getByTestId('session-watch-pill')
+/** The window buttons' ids in their order on the row. */
+const windowIds = (panel: Locator) => panel.locator('.session-panel-window-controls [data-header-id]')
+  .evaluateAll((els) => els.map((el) => el.getAttribute('data-header-id')))
+
+/** The eye's three marks of its state: pressed, lit, and named for what a click does. */
+async function expectWatchState(watch: Locator, on: boolean): Promise<void> {
+  await expect(watch).toHaveAttribute('aria-pressed', on ? 'true' : 'false')
+  await expect(watch).toHaveAccessibleName(on ? 'Stop watching' : 'Watch')
+  if (on) await expect(watch).toHaveClass(/\bis-watched\b/)
+  else await expect(watch).not.toHaveClass(/\bis-watched\b/)
+}
 const watchingSection = (page: Page) => page.locator('#home-task-navigation').getByRole('region', { name: 'Watching' })
 
 async function shootHeader(page: Page, panel: Locator, name: string): Promise<void> {
@@ -117,20 +131,25 @@ async function clampColumns(page: Page, px: number): Promise<void> {
   }, px)
 }
 
-test('A-C: Watch is a header pill; a click watches the task (Watching, at the top of the task panel), a second one stops', async ({ page }) => {
+test('A-C: Watch is the header\'s eye; a click watches the task (at the top of the task panel), a second one stops', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
   await openHome(page)
   const panel = await openTaskSession(page, watched)
   const header = panel.locator('.session-panel-header')
 
-  // ── A. The header: Watch, not pressed, on the title row; no Scripts, no new-tab button ──
-  const watch = pill(panel)
+  // ── A. The header: the eye, not pressed, first of the window buttons, Locate after it ──
+  const watch = sessionWatchButton(panel)
   await expect(watch).toBeVisible({ timeout: 30_000 })
-  await expect(watch).toHaveText('Watch')
-  await expect(watch).toHaveAttribute('aria-pressed', 'false')
-  await expect(watch).not.toHaveAttribute('data-narrow', 'true')
-  await expect(panel.locator('.session-panel-header-top .session-panel-title-meta [data-testid="session-watch-pill"]')).toHaveCount(1)
+  await expectWatchState(watch, false)
+  await expect(watch.locator('svg')).toHaveCount(1)
+  await expect(watch).toHaveText('')
+  await expect(sessionLocateButton(panel)).toBeEnabled({ timeout: 30_000 })
+  const ids = await windowIds(panel)
+  expect(ids.slice(0, 2), 'Watch and Locate lead the window buttons').toEqual(['watch', 'locate'])
+  expect(ids.slice(-3), 'Lock, Expand and Close still end the row').toEqual(['lock', 'expand', 'close'])
+  // The title row has no Watch pill any more.
+  await expect(panel.locator('.session-panel-header-top [data-header-pill="watch"], [data-testid="session-watch-pill"]')).toHaveCount(0)
   await expect(panel.locator('.session-panel-popout')).toHaveCount(0)
   await expect(header.locator('[data-header-id="popout"], [data-header-id="scripts"], [data-testid="session-scripts-chip"]')).toHaveCount(0)
   await expect(header.getByRole('button', { name: /^Scripts/ })).toHaveCount(0)
@@ -138,23 +157,22 @@ test('A-C: Watch is a header pill; a click watches the task (Watching, at the to
   expect(await watchedAt(watched.id)).toBe('')
   await shootHeader(page, panel, 'a-header-watch')
 
-  // The ⋮ menu: the task's rows are drawn (Background, Watch's old neighbour), no Watch among them;
-  // Window holds Open in new tab.
+  // The ⋮ menu: the task's rows are drawn (Background, Watch's old neighbour), no Watch and no
+  // Locate among them; Window holds Open in new tab.
   const menu = await openSessionKebab(panel)
   await expect(menu.getByTestId('task-kebab-background')).toBeVisible({ timeout: 30_000 })
   await expect(menu.getByTestId('task-kebab-watch')).toHaveCount(0)
-  await expect(menu.locator('.task-kebab-item').filter({ hasText: /^(Watch|Stop watching)$/ })).toHaveCount(0)
+  await expect(menu.getByTestId('session-menu-locate')).toHaveCount(0)
+  await expect(menu.locator('.task-kebab-item').filter({ hasText: /^(Watch|Stop watching|Locate task|Find on Home)$/ })).toHaveCount(0)
   const windowRows = await openKebabGroup(menu, 'session-kebab-window')
   await expect(windowRows.getByTestId('session-menu-popout')).toHaveText('Open in new tab')
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-a-kebab-window.png`, animations: 'disabled' })
   await closeSessionKebab(panel)
   await expect(watchingSection(page).locator(`[data-task-id="${watched.id}"]`)).toHaveCount(0)
 
-  // ── B. Watch: Watching, pressed; the row joins Watching, the first section; the server has it ──
+  // ── B. Watch: pressed and lit; the row joins Watching, the first section; the server has it ──
   await watch.click()
-  await expect(watch).toHaveText('Watching')
-  await expect(watch).toHaveAttribute('aria-pressed', 'true')
-  await expect(watch).toHaveAccessibleName('Watch')
+  await expectWatchState(watch, true)
   const watchedRow = watchingSection(page).locator(`[data-task-id="${watched.id}"]`)
   await expect(watchedRow.first()).toBeVisible({ timeout: 15_000 })
   await expect(page.locator('#home-task-navigation section.status-section').first()).toHaveAttribute('aria-label', 'Watching')
@@ -162,62 +180,67 @@ test('A-C: Watch is a header pill; a click watches the task (Watching, at the to
   await shootHeader(page, panel, 'b-header-watching')
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-b-watching-section.png`, animations: 'disabled' })
 
-  // ── C. Again: Watch, not pressed; the row leaves Watching; the server clears it ──
+  // ── C. Again: not pressed; the row leaves Watching; the server clears it ──
   await watch.click()
-  await expect(watch).toHaveText('Watch')
-  await expect(watch).toHaveAttribute('aria-pressed', 'false')
-  await expect(watch).toHaveAccessibleName('Watch')
+  await expectWatchState(watch, false)
   await expect(watchedRow).toHaveCount(0, { timeout: 15_000 })
   await expect.poll(() => watchedAt(watched.id), { timeout: 15_000 }).toBe('')
   await shootHeader(page, panel, 'c-header-watch-again')
   expect(errors).toEqual([])
 })
 
-test('D: in a narrow column Watch is the eye alone, named in its label, and still toggles', async ({ page }) => {
+test('D: in a narrow column the eye stays on the row, never in "...", and still toggles', async ({ page }) => {
   await openHome(page)
   const panel = await openTaskSession(page, narrow)
-  await clampColumns(page, 460)
-  const watch = pill(panel)
-  await expect(watch).toHaveAttribute('data-narrow', 'true', { timeout: 15_000 })
-  await expect(watch.locator('.session-watch-pill-label')).toHaveCount(0)
-  await expect(watch).toHaveText('')
-  await expect(watch.locator('svg')).toHaveCount(1)
-  await expect(watch).toHaveAccessibleName('Watch')
-  await expect(watch).toHaveAttribute('aria-pressed', 'false')
-  // The eye stays a comfortable target and clear of the title.
+  await clampColumns(page, 300)
+  const watch = sessionWatchButton(panel)
+  await expect(watch).toBeVisible({ timeout: 15_000 })
+  await expect(watch).not.toHaveAttribute('data-hidden', 'true')
+  await expect(sessionLocateButton(panel)).toBeVisible()
+  await expectWatchState(watch, false)
+  // The eye stays a comfortable target, inside the panel.
   const box = (await watch.boundingBox())!
+  const panelBox = (await panel.boundingBox())!
   expect(box.width).toBeGreaterThanOrEqual(20)
   expect(box.height).toBeGreaterThanOrEqual(20)
+  expect(box.x + box.width).toBeLessThanOrEqual(panelBox.x + panelBox.width)
+  // Whatever the row folded, "..." never lists Watch or Locate.
+  const more = panel.getByTestId('session-header-more-btn')
+  if (await more.isVisible()) {
+    await more.click()
+    const menu = page.getByTestId('session-header-more-menu')
+    await expect(menu).toBeVisible()
+    await expect(menu.getByTestId('session-header-more-item-watch')).toHaveCount(0)
+    await expect(menu.getByTestId('session-header-more-item-locate')).toHaveCount(0)
+    await page.keyboard.press('Escape')
+    await expect(menu).toHaveCount(0)
+  }
   await shootHeader(page, panel, 'd-narrow-watch')
 
   await watch.click()
-  await expect(watch).toHaveAttribute('aria-pressed', 'true')
-  await expect(watch).toHaveAccessibleName('Watch')
-  await expect(watch).toHaveAttribute('data-narrow', 'true')
+  await expectWatchState(watch, true)
   await expect.poll(() => watchedAt(narrow.id), { timeout: 15_000 }).not.toBe('')
   await expect(watchingSection(page).locator(`[data-task-id="${narrow.id}"]`).first()).toBeVisible({ timeout: 15_000 })
   await shootHeader(page, panel, 'd-narrow-watching')
 
   await watch.click()
-  await expect(watch).toHaveAttribute('aria-pressed', 'false')
+  await expectWatchState(watch, false)
   await expect.poll(() => watchedAt(narrow.id), { timeout: 15_000 }).toBe('')
-
-  // Wide again: the word comes back.
-  await page.evaluate(() => document.getElementById('pw-column-clamp')?.remove())
-  await expect(watch).not.toHaveAttribute('data-narrow', 'true', { timeout: 15_000 })
-  await expect(watch).toHaveText('Watch')
 })
 
-test('E: a session with no task has no Watch pill (and no new-tab button or Scripts chip either)', async ({ page }) => {
+test('E: a session with no task has no Watch or Locate button (and no new-tab button or Scripts chip either)', async ({ page }) => {
   await openHome(page)
   const panel = await openSessionFromFinder(page, TASKLESS.query, TASKLESS.id)
   const header = panel.locator('.session-panel-header')
   await expect(header.locator('[data-header-id="close"]')).toBeVisible({ timeout: 30_000 })
   await expect(header.locator('.session-panel-badge', { hasText: 'Loading...' })).toHaveCount(0, { timeout: 15_000 })
-  await expect(pill(panel)).toHaveCount(0)
+  // At most an inert spacer keeps a place the panel drew before it knew (header-record-gate.ts).
+  const live = header.locator('button[data-header-id="watch"]:not([data-header-spacer]), button[data-header-id="locate"]:not([data-header-spacer])')
+  await expect(live).toHaveCount(0)
   // Still none a beat later, once everything about the session has landed.
   await page.waitForTimeout(500)
-  await expect(pill(panel)).toHaveCount(0)
+  await expect(live).toHaveCount(0)
+  await expect(header.getByRole('button', { name: /^(Watch|Stop watching|Locate task|Find on Home)$/ })).toHaveCount(0)
   await expect(panel.locator('.session-panel-popout')).toHaveCount(0)
   await expect(header.locator('[data-header-id="scripts"], [data-testid="session-scripts-chip"]')).toHaveCount(0)
   await shootHeader(page, panel, 'e-taskless')

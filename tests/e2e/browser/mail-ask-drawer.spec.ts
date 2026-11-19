@@ -39,7 +39,7 @@ import path from 'node:path'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { draftCwdPill, draftTaskMenu, openDraftSettings, draftSend } from './draft-helpers'
 import { MailFixtureServer, folderRow, openMail, shoot, showAllMail } from './mail-review-helpers'
-import { kebabRow, sessionKebabButton } from './session-kebab-helpers'
+import { sessionLocateButton } from './session-kebab-helpers'
 
 // Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
 test.beforeEach(async ({ page }) => { await showAllMail(page) })
@@ -571,10 +571,10 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     await ask(page, WRITER, KEEPER, SUMMARIZE)
     await expect(sessionBody(page)).toHaveAttribute('data-session-id', /.+/, { timeout: 60_000 })
     const sessionId = await sessionBody(page).getAttribute('data-session-id')
-    // Locate is a row of the session's ⋮ menu; off Home it reads Find on Home.
-    await expect(sessionKebabButton(sessionBody(page))).toBeVisible({ timeout: 60_000 })
-    const locate = await kebabRow(sessionBody(page), 'session-menu-locate')
-    await expect(locate).toHaveText('Find on Home')
+    // Locate is the session header's crosshair; off Home it reads Find on Home.
+    const locate = sessionLocateButton(sessionBody(page))
+    await expect(locate).toBeEnabled({ timeout: 60_000 })
+    await expect(locate).toHaveAttribute('aria-label', 'Find on Home')
     await locate.click()
 
     // Home, with the ask's task selected in the task panel and its session in the chat slot, where
