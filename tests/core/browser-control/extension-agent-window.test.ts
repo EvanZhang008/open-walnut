@@ -164,6 +164,8 @@ describe('the agent window', () => {
         if (f === 'agent-window-own.ts' && line.trim() === "if (sharing && w.id !== undefined && w.state !== 'minimized') await api.windows.update?.(w.id, { state: 'minimized' }).catch(() => undefined)") return
         // A "Leave site?" Chrome showed brought the agent window out of the Dock: it goes back (agent-leave.ts).
         if (f === 'agent-leave.ts' && line.trim() === "if (docked !== undefined) await ext.windows.update?.(docked, { state: 'minimized' }).catch(() => undefined)") return
+        // A popup window an agent's own page opened (agent-popups.ts): to the Dock at once, never shown.
+        if (f === 'agent-popups.ts' && line.trim() === "return !!(await ext.windows.update?.(t.windowId, { state: 'minimized' }).catch(() => null))") return
         if (/state:\s*['"]minimized['"]|focused:\s*true|drawAttention/.test(line)) offenders.push(`${f}:${i + 1}: ${line.trim()}`)
         // A window is updated in one place only, with a size (agent-window.ts resizeAgentWindow).
         if (/windows\.update\??\.?\(/.test(line) && !(f === 'agent-window.ts' && /\{ \.\.\.plain, width, height \}/.test(line))) offenders.push(`${f}:${i + 1}: ${line.trim()}`)
@@ -186,6 +188,7 @@ describe('the agent window', () => {
       ['agent-window.ts: return !!(await api.windows.update?.(id, { state: \'minimized\' }).catch(() => null))', 'the agent window to the Dock when a screen share starts (noteScreenShare); never shown again'],
       ['agent-window.ts: await api.windows.update?.(agentWindow, { ...plain, width, height })', 'agent window size only'],
       ['agent-leave.ts: if (docked !== undefined) await ext.windows.update?.(docked, { state: \'minimized\' }).catch(() => undefined)', 'the agent window back to the Dock a "Leave site?" of Chrome\'s took it out of'],
+      ['agent-popups.ts: return !!(await ext.windows.update?.(t.windowId, { state: \'minimized\' }).catch(() => null))', 'a popup window an agent\'s own page opened: to the Dock at once (minimizeAgentPopup)'],
       ['agent-window.ts: const tab = await api.tabs.create({ url: \'about:blank\', windowId, active: false })', 'agent window, in the background (newAgentTab)'],
       ['agent-groups.ts: const t = await api.tabs.create({ url: api.runtime.getURL(AGENT_PAGE), windowId, active: false, index: 0 }).catch(() => null)', 'agent window page, not active'],
       ['agent-page.ts: const t = await more.tabs.create({ url: href, windowId: tab.windowId, active: false, openerTabId: tabId }).finally(() => linking.delete(tabId))', 'a link the page opened, in its own window, in the background'],

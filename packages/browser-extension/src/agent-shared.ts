@@ -143,6 +143,12 @@ export const forgetTampered = (tabId: number) => tamperedTabs.delete(tabId)
 
 /** Until when each tab counts as acted in (a new tab or a download then is the agent's). */
 export const acting = new Map<number, number>()
+/**
+ * Until when a window a page opens with no opener named is weighed as this agent tab's (any step,
+ * evaluate included: agent.ts beforeStep). Kept apart from `acting`, which also names whose a
+ * download is (download-owner.ts): a read step never makes a download the agent's.
+ */
+export const opening = new Map<number, number>()
 export const ACTING_MS = 15_000
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))

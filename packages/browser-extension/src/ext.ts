@@ -6,7 +6,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 export interface Tab { id?: number; url?: string; title?: string; windowId?: number; active?: boolean; status?: string; discarded?: boolean; width?: number; height?: number; mutedInfo?: { muted?: boolean } }
-export interface Win { id?: number; tabs?: Tab[]; state?: string; focused?: boolean; width?: number; height?: number }
+export interface Win { id?: number; tabs?: Tab[]; state?: string; focused?: boolean; width?: number; height?: number; type?: string }
 export interface Sender { tab?: Tab; frameId?: number; url?: string; origin?: string; id?: string }
 
 interface Event<F> { addListener(f: F): void; removeListener(f: F): void }

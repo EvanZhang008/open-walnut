@@ -56,7 +56,9 @@ const PAGES: Record<string, () => string> = {
   '/feedback': () => `<h1>News</h1>
     <form onsubmit="event.preventDefault(); document.getElementById('sent').textContent = 'Thanks: ' + this.fb.value"><label>Your feedback <textarea name="fb"></textarea></label><button>Send feedback</button></form><p id="sent"></p>
     <label>Chat <textarea id="chat" onkeydown="if (event.key === 'Enter') { event.preventDefault(); document.getElementById('said').textContent = 'Said: ' + this.value }"></textarea></label><p id="said"></p>`,
-  '/popup': () => `<h1>Help</h1><button id="help" onclick="window.open('/help-window', 'help', 'width=480,height=400')">Open the help window</button>`,
+  '/popup': () => `<h1>Help</h1><button id="help" onclick="window.open('/help-window', 'help', 'width=480,height=400')">Open the help window</button>`
+    // A site that kept its own copy of window.open before any step (Walnut's patch never reaches it): a real popup window.
+    + `<script>const early = window.open.bind(window)</script><button id="early" onclick="early('/help-window?early', 'early', 'width=480,height=400')">Open it the early way</button>`,
   '/help-window': () => `<h1>Help window</h1><p>Orders ship in 2 days.</p>`,
   '/frame': () => `<h1>Account</h1><iframe src="/frame-inner" title="Sign in" width="420" height="160"></iframe>`,
   '/frame-inner': () => `<button id="in" onclick="setTimeout(() => { document.getElementById('st').textContent = 'You are signed in.' }, 600)">Sign in here</button><p id="st"></p>`,
@@ -460,6 +462,7 @@ test('a window the page opens from the agent tab is the agent\'s, named in the c
   const s = (await act(page, { action: 'snapshot', tab })).body.snapshot as string
   const r = await act(page, { action: 'click', tab, ref: refOf(s, /button "Open the help window"/) })
   expect(r.status, JSON.stringify(r.body)).toBe(200)
+
   expect(r.body.opened).toMatchObject({ url: site('shop.example.test', '/help-window') })
   const child = r.body.opened.tab as number
   const mine = (await act(page, { action: 'tabs' })).body.tabs.map((t: { id: number }) => t.id)
@@ -475,6 +478,84 @@ test('a window the page opens from the agent tab is the agent\'s, named in the c
   const all = (await act(page, { action: 'tabs', all: true })).body.tabs as Array<{ id: number; owner: string }>
   expect(all.find((t) => t.id === child)?.owner).toBe('mine')
   expect((await act(page, { action: 'close', tab: child })).body).toMatchObject({ closed: true })
+})
+
+// 2026-11-19, the user's Chrome: an agent's evaluate clicked a site's "Sign in with GitHub"; its
+// window.open made a popup window in front of him, listed as his, which the agent could not close.
+// Every step (evaluate too) counts as acting, and in an agent's own tab a page's popup opens as a
+// tab of the agent window; a popup window that still comes is the agent's and is minimized.
+test('a popup a page opens from an evaluate is the agent\'s tab in the agent window, not a window over the person\'s', async () => {
+  const page = ctx.pages()[0]
+  expect((await act(page, { action: 'navigate', tab, url: site('shop.example.test', '/popup') })).status).toBe(200)
+  const before = await sw().evaluate(async (t: number) => {
+    const all = await chrome.windows.getAll({ populate: true })
+    return { windows: all.map((w) => w.id!), agentWindow: (await chrome.tabs.get(t)).windowId, focused: all.find((w) => w.focused)?.id ?? null }
+  }, tab)
+  const r = await act(page, { action: 'evaluate', tab, expression: "document.getElementById('help').click(); 'clicked'" })
+  expect(r.status, JSON.stringify(r.body)).toBe(200)
+  let child: { id: number; windowId: number; owner?: string } | undefined
+  await expect.poll(async () => {
+    const all = (await act(page, { action: 'tabs', all: true })).body.tabs as Array<{ id: number; owner: string; windowId: number }>
+    const ids = await sw().evaluate(async () => (await chrome.tabs.query({})).filter((t) => t.url?.includes('/help-window') || t.pendingUrl?.includes('/help-window')).map((t) => t.id!))
+    child = all.find((t) => ids.includes(t.id))
+    return child?.owner
+  }, { timeout: 15_000 }).toBe('mine')
+  // A tab of the agent window: no new window, nothing focused that was not.
+  expect(child!.windowId).toBe(before.agentWindow)
+  const after = await sw().evaluate(async () => { const all = await chrome.windows.getAll(); return { windows: all.map((w) => w.id!), focused: all.find((w) => w.focused)?.id ?? null } })
+  expect(after.windows.sort()).toEqual(before.windows.sort())
+  expect(after.focused).toBe(before.focused)
+  const opener = await sw().evaluate(async (id: number) => (await chrome.tabs.get(id)).openerTabId, child!.id)
+  expect(opener).toBe(tab)
+  expect((await act(page, { action: 'close', tab: child!.id })).body).toMatchObject({ closed: true })
+})
+
+test('a popup window a page still opens from an agent tab (its own early copy of window.open) is the agent\'s, minimized, and closes', async () => {
+  const page = ctx.pages()[0]
+  // A site the person has no page of (one they have is theirs to open windows from: next test).
+  expect((await act(page, { action: 'navigate', tab, url: site('docs.example.test', '/popup') })).status).toBe(200)
+  const r = await act(page, { action: 'evaluate', tab, expression: "document.getElementById('early').click(); 'clicked'" })
+  expect(r.status, JSON.stringify(r.body)).toBe(200)
+  let popup: { tab: number; window: number; type?: string; state?: string } | undefined
+  await expect.poll(async () => {
+    popup = await sw().evaluate(async () => {
+      const t = (await chrome.tabs.query({})).find((x) => x.url?.includes('/help-window?early') || x.pendingUrl?.includes('/help-window?early'))
+      if (!t) return undefined
+      const w = await chrome.windows.get(t.windowId)
+      return { tab: t.id!, window: w.id!, type: w.type, state: w.state }
+    })
+    const all = popup ? (await act(page, { action: 'tabs', all: true })).body.tabs as Array<{ id: number; owner: string }> : []
+    return popup ? `${popup.type} ${all.find((t) => t.id === popup!.tab)?.owner} ${popup.state}` : 'none'
+  }, { timeout: 20_000 }).toBe('popup mine minimized')
+  // The agent can close what its page opened; the popup window goes with it.
+  expect((await act(page, { action: 'close', tab: popup!.tab })).body).toMatchObject({ closed: true })
+  await expect.poll(() => sw().evaluate(async (id: number) => (await chrome.windows.getAll()).some((w) => w.id === id), popup!.window)).toBe(false)
+})
+
+// Review: the person's own popup on a site an agent is on at the same moment stays theirs, shown.
+test('a popup the person opens from their own page of the site an agent works on stays theirs, as it opened', async () => {
+  const page = ctx.pages()[0]
+  expect((await act(page, { action: 'navigate', tab, url: site('shop.example.test', '/popup') })).status).toBe(200)
+  const mine = ctx.pages().find((p) => p.url().includes('/mine'))!
+  await mine.goto(site('shop.example.test', '/popup?mine'))
+  // The agent is acting on the same site right now.
+  expect((await act(page, { action: 'snapshot', tab })).status).toBe(200)
+  const opened = ctx.waitForEvent('page')
+  await mine.locator('#help').click()
+  const child = await opened
+  await child.waitForLoadState()
+  const info = await sw().evaluate(async (u: string) => {
+    const t = (await chrome.tabs.query({})).find((x) => x.url === u)!
+    const w = await chrome.windows.get(t.windowId)
+    return { id: t.id!, type: w.type, state: w.state }
+  }, child.url())
+  expect(info.state).not.toBe('minimized')
+  await page.waitForTimeout(1500)
+  const all = (await act(page, { action: 'tabs', all: true })).body.tabs as Array<{ id: number; owner: string }>
+  expect(all.find((t) => t.id === info.id)?.owner).toBe('person')
+  expect((await sw().evaluate(async (id: number) => (await chrome.windows.get((await chrome.tabs.get(id)).windowId)).state, info.id))).not.toBe('minimized')
+  await child.close()
+  await mine.goto(site('shop.example.test', '/mine'))
 })
 
 test('a screenshot can be a PNG', async () => {

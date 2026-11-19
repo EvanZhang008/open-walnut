@@ -20,16 +20,17 @@ import { buildOf } from './self-update'
 import { siteKey } from '../../../src/core/vault/url-match'
 import { pageCheck, reachPage } from './page-reach'
 import {
-  AgentError, WALNUT_PAGE, agentTabs, agentsOffCount, allowFor, checkPage, forgetTampered, loaded, mark, newGrant, noteAgentsOff, noteFilled, ownTab, personsTab, reached, sleep, tabLoading, tamperedNow, walnutCheck, where,
+  ACTING_MS, AgentError, WALNUT_PAGE, agentTabs, agentWindowId, agentsOffCount, nearPerson, opening, allowFor, checkPage, forgetTampered, loaded, mark, newGrant, noteAgentsOff, noteFilled, ownTab, personsTab, reached, sleep, tabLoading, tamperedNow, walnutCheck, where,
   type AgentTab, type WireCommand,
 } from './agent-shared'
-import { PAGE_OPS, pageOp, watchOpened } from './agent-page'
+import { PAGE_OPS, openCallsBefore, pageOp, watchOpened } from './agent-page'
 import { CHANGE_ACTS, withChange } from './agent-change'
 import { screenshot } from './agent-shot'
 import { downloadsAction, watchDownloads } from './agent-downloads'
 import { DEBUGGER_OPS, TRUSTED_OPS, defaultTrustedAct, trustedAct, trustedByDefault, trustedReady } from './agent-trusted'
 import { fileAccessOn } from './agent-upload'
 import { QUIET_WHYS, wakeForStep } from './agent-awake'
+import { openCalls, popupsAsTabs } from './agent-popups'
 import { fillFrames } from './bg-fill'
 import { inHandedReach } from './agent-tab-kind'
 import { noteScreenShare, openInAgentWindow, resizeAgentWindow, windowOf } from './agent-window'
@@ -362,6 +363,23 @@ async function viewAct(c: WireCommand): Promise<unknown> {
   return { tab: tabId, stopped: true, ...(personsTab(rec) ? { givenBack: true } : {}) }
 }
 
+/** The longest a step runs (the server's own wait): a window its page opens meanwhile is weighed as the tab's. */
+const STEP_MS = 40_000
+/** Steps that open nothing and must not wait on the page (a dialog holds its script). */
+const NO_PATCH_ACTS = new Set(['close', 'dialog'])
+/**
+ * Every step in a tab: a window its page opens while it runs, and ACTING_MS after (agent.ts run's
+ * finally), is weighed as this tab's (agent-page.ts openerOf); an agent's own tab in the agent
+ * window opens its windows as tabs there (agent-popups.ts). Never in a tab of the person's window.
+ */
+async function beforeStep(action: string, tabId: number): Promise<void> {
+  opening.set(tabId, Date.now() + STEP_MS + ACTING_MS)
+  if (NO_PATCH_ACTS.has(action)) return
+  const rec = await agentTabs.get(tabId).catch(() => undefined)
+  const t = rec && !nearPerson(rec) ? await ext.tabs.get(tabId).catch(() => null) : null
+  if (t?.windowId !== undefined && t.windowId === await agentWindowId() && await popupsAsTabs(tabId)) openCallsBefore.set(tabId, (await openCalls(tabId)) ?? 0)
+}
+
 async function run(c: WireCommand): Promise<void> {
   let body: Record<string, unknown>
   try {
@@ -395,13 +413,17 @@ async function run(c: WireCommand): Promise<void> {
         if (screenTab !== undefined && c.action !== 'screenshot' && c.action !== 'zoom') await bringUpForCommand(screenTab)
         // A page Chrome counts as hidden (the agent window behind the person's) keeps running while the agent works there (agent-awake.ts).
         const wake = await wakeForStep(c).catch(() => ({ awake: false, why: 'refused' as const }))
+        // Whatever the step is (a click, a key, an evaluate, a dialog's answer), a tab or window the
+        // page opens now is this tab's (agent-page.ts watchOpened), and in an agent's own tab it
+        // opens as a tab of the agent window, never a popup over the person's (agent-popups.ts).
+        if (typeof c.args.tab === 'number') await beforeStep(c.action, c.args.tab)
         // An acting step says what it changed on the page (agent-change.ts).
         const out = await (CHANGE_ACTS.has(c.action) && typeof c.args.tab === 'number' ? withChange(c.args.tab, c.action, c.args, async () => (await act(c)) as Record<string, unknown>) : act(c))
         // A page Chrome counted as hidden: the answer says whether it runs now, and why not.
         return !QUIET_WHYS.has(wake.why) && out && typeof out === 'object' && !Array.isArray(out) ? { ...(out as Record<string, unknown>), awake: wake } : out
       }) }
     } finally {
-      if (typeof c.args.tab === 'number') noteWorked(c.args.tab)
+      if (typeof c.args.tab === 'number') { noteWorked(c.args.tab); opening.set(c.args.tab, Date.now() + ACTING_MS) }
       if (screenTab !== undefined) {
         const n = (onScreen.get(screenTab) ?? 1) - 1
         if (n > 0) onScreen.set(screenTab, n); else onScreen.delete(screenTab)
