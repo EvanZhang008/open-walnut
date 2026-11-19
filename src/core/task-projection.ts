@@ -138,8 +138,9 @@ export interface ProjectedTask {
   /** A Personal AI conversation (Task.walnut_agent; additive, 2026-10-29): the companion
    *  never places its work beside it, as the Mac does not. Omitted otherwise. */
   walnut_agent?: true
-  /** The user turned Threads on for this task (Task.threads_on; additive, 2026-11-18). Omitted otherwise. */
-  threads_on?: true
+  /** The user turned Threads on (true) or off (false) for this task (Task.threads_on; additive,
+   *  2026-11-18, false since 2026-11-19). Omitted when unset. */
+  threads_on?: boolean
 }
 
 /**
@@ -236,7 +237,7 @@ export function projectTask(t: Task): ProjectedTask {
     ...(t.self_router && !t.org_role ? { self_router: { links: [...(t.self_router.links ?? [])], ...(t.self_router.name ? { name: t.self_router.name } : {}) } } : {}),
     ...(t.org_role === 'lead' && t.org_leads?.length ? { org_leads: [...t.org_leads] } : {}),
     ...(t.walnut_agent ? { walnut_agent: true as const } : {}),
-    ...(t.threads_on && !t.org_role ? { threads_on: true as const } : {}),
+    ...(typeof t.threads_on === 'boolean' && !t.org_role ? { threads_on: t.threads_on } : {}),
     ...(isPartial(t.result_report) ? { result_report: {
       at: t.result_report!.at, not_done: t.result_report!.not_done!,
       ...(t.result_report!.result ? { result: t.result_report!.result } : {}),

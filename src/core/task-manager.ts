@@ -4774,7 +4774,8 @@ export async function updateTask(
     if (updates.pr_wake === null) delete task.pr_wake; else task.pr_wake = updates.pr_wake;
   }
   // Stored as presence-only (true or absent): an older Walnut reads an absent field as off.
-  if (updates.threads_on !== undefined) { if (updates.threads_on) task.threads_on = true; else delete task.threads_on; }
+  // Kept as said: true on, false off (the experiment task_threads keeps them on unless turned off), null unset.
+  if (updates.threads_on !== undefined) { if (updates.threads_on === null) delete task.threads_on; else task.threads_on = updates.threads_on; }
   // Track parent change for plugin notification (fired after writeStore)
   let parentChangeAction: (() => void) | undefined;
   if (updates.parent_task_id !== undefined) {

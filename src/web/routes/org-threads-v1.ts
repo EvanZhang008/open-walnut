@@ -30,6 +30,7 @@ import type { Task } from '../../core/types.js'
 import { log } from '../../logging/index.js'
 import { resolveThreadCaller, type ThreadCaller } from '../../core/org/thread-caller.js'
 import { ThreadError, THREAD_ID_RE, THREAD_MESSAGE_ID_RE, sortedThreads, type OrgThread, type ThreadPatch, type ThreadSource, type ThreadState, type ThreadWriter } from '../../core/org/threads-model.js'
+import { isLineThreadId, lineThreads } from '../../core/org/line-threads.js'
 import { fileThreadMessage, mergeThread, openNodeThread, patchThread, readThreads, splitThread, withTaskAsks } from '../../core/org/threads-store.js'
 import { resolveThreadAnswers } from '../../core/org/thread-answers.js'
 import { cardView, sharedAnswers, shownToHim, threadCounts } from '../../core/org/thread-view.js'
@@ -50,6 +51,11 @@ function route(fn: (req: Request, res: Response) => Promise<void>) {
       sendError(res, 500, 'internal', err instanceof Error ? err.message : String(err))
     })
   }
+}
+
+/** A task's lines as threads, only for a task that is no Org node (an Org node's lines stay its chat's). */
+function ownLineThreads(task: Task) {
+  return task.org_role ? [] : lineThreads(task.user_status, task.user_status?.checkedAt ?? task.updated_at ?? new Date().toISOString())
 }
 
 async function nodeTask(req: Request): Promise<Task> {
@@ -125,10 +131,15 @@ orgThreadsV1Router.get('/tasks/:id/threads', route(async (req, res) => {
   // phone's read fits what the companion carries back from the Mac; an answer his card shows (not
   // reacted to yet) stays whole, and `GET .../threads/:thread` gives one thread whole.
   const answerMax = positive(req.query.answer_max)
-  const out = threads.map((t) => ({
-    ...markShared(answerMax === undefined ? t : clipAnswers(t, shared, answerMax), shared),
-    shown: shownToHim(t, shared, now),
-  }))
+  const out = [
+    ...threads.map((t) => ({
+      ...markShared(answerMax === undefined ? t : clipAnswers(t, shared, answerMax), shared),
+      shown: shownToHim(t, shared, now),
+    })),
+    // A task's own lines, each a thread of its own (org/line-threads.ts): open, shown here, and
+    // counted where they already are (its status and Action needed), so never in shown_count.
+    ...(closedOnly ? [] : ownLineThreads(task)).map((t) => ({ ...t, shown: true })),
+  ]
   // Answers still missing are read from the node's chat meanwhile; a kept one says so (org-threads:changed).
   void resolveThreadAnswers(task.id)
   res.json({
@@ -177,6 +188,12 @@ orgThreadsV1Router.get('/tasks/:id/threads/:thread', route(async (req, res) => {
   const task = await nodeTask(req)
   if (isFollower()) throw primaryOnly('get the threads from')
   const id = threadIdOf(req)
+  if (isLineThreadId(id)) {
+    const line = ownLineThreads(task).find((t) => t.id === id)
+    if (!line) throw new RouteError(404, 'no_thread', `No line ${id} on this task now.`)
+    res.json({ task_id: task.id, thread: { ...line, shown: true } })
+    return
+  }
   const all = await withTaskAsks(task.id, (await readThreads(task.id)).threads)
   const thread = all.find((t) => t.id === id)
   if (!thread) throw new RouteError(404, 'no_thread', `No thread ${id} on this node.`)

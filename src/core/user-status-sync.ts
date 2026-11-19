@@ -45,6 +45,7 @@ import { decisionAnswered } from './human-inbox/open-decision.js';
 import { triggerWatchesOwnWork } from './task-wait-wake.js';
 import { keepsThreads } from './org/keeps-threads.js';
 import { applyActions, type ActionItem } from './action-needed.js';
+import { taskLines } from './task-lines.js';
 import { approvalItemsByTask, letterItem, promptItem } from './action-needed-facts.js';
 
 const SUBSCRIBER = 'user-status-sync';
@@ -911,10 +912,10 @@ export function statusOf(
   const own = signInHeld(answeredAbove(canonical, answersOf(task), nowMs, facts.personInputAt?.get(task.id)), facts);
   // The experiment: a leader's status follows its workers (worker-status.ts). Main and a VP keep
   // their own rule (orgNodeNeverNeeds, their Threads); a worker not derived yet reads its phase.
-  if (!facts.followWorkers || task.org_role || !children.length) return { input, status: withActions(task, facts, own, nowMs) };
+  if (!facts.followWorkers || task.org_role || !children.length) return { input, status: withActions(task, facts, own, nowMs, input) };
   const workers = children.map((c): UserStatus => c.phase === 'COMPLETE' || c.status === 'done'
     ? { state: 'done' } : c.user_status ?? { state: fallbackUserState(c.phase, c.status) });
-  return { input, status: withActions(task, facts, workerStatus(own, workers, { hasLeader: !!task.parent_task_id }), nowMs), own };
+  return { input, status: withActions(task, facts, workerStatus(own, workers, { hasLeader: !!task.parent_task_id }), nowMs, input), own };
 }
 
 /** The live Action needed items of a task (action-needed.ts): its pending approvals, its sessions'
@@ -926,11 +927,17 @@ export function actionItemsOf(task: Task, facts: StatusFacts): ActionItem[] {
   return [...prompts, ...(facts.approvals?.get(task.id) ?? []), ...(facts.letterItems?.get(task.id) ?? [])];
 }
 
-function withActions(task: Task, facts: StatusFacts, status: UserStatus, nowMs: number): UserStatus {
+function withActions(task: Task, facts: StatusFacts, status: UserStatus, nowMs: number, input: UserStatusInput): UserStatus {
   // A team the user stopped, or a task he snoozed by its start date (a working one carries no
   // `snoozed` mark): its items ride along and raise nothing until it is resumed or wakes.
   const held = facts.teamStopped?.has(task.id) || !!snoozedUntil(task, facts.tasksById, nowMs);
-  return applyActions(status, actionItemsOf(task, facts), task.action_snoozes, { orgNode: !!task.org_role, held, sessionId: task.session_id, nowMs });
+  const out = applyActions(status, actionItemsOf(task, facts), task.action_snoozes, { orgNode: !!task.org_role, held, sessionId: task.session_id, nowMs });
+  // Its lines (task-lines.ts), only with two or more: one line is what its row already says. Under
+  // the experiment task_threads every line is a thread of the task's own (org/line-threads.ts), so
+  // one is kept too.
+  if (task.org_role) return out;
+  const lines = taskLines(input, out, nowMs);
+  return lines.length > (keepsThreads(task) ? 0 : 1) ? { ...out, lines } : out;
 }
 
 function explicitDecisionOwner(task: Task, facts: StatusFacts): RelativeAsk | undefined {
@@ -1205,10 +1212,16 @@ let followWorkersSeen: boolean | undefined;
 
 async function experimentSwitched(): Promise<boolean> {
   const { getConfig } = await import('./config-manager.js');
-  const now = experimentalEnabled((await getConfig()).experimental, 'leader_status_follows_workers');
+  const flags = (await getConfig()).experimental;
+  const now = experimentalEnabled(flags, 'leader_status_follows_workers');
   const moved = followWorkersSeen !== undefined && followWorkersSeen !== now;
   followWorkersSeen = now;
-  return moved;
+  // Threads for every task (keeps-threads.ts): a switch moves which tasks read their threads here.
+  const { setThreadsForEveryTask, threadsForEveryTask } = await import('./org/keeps-threads.js');
+  const every = experimentalEnabled(flags, 'task_threads');
+  const threadsMoved = threadsForEveryTask() !== every;
+  setThreadsForEveryTask(every);
+  return moved || threadsMoved;
 }
 
 function onEvent(event: { name: string; data: unknown; source?: string }): void {

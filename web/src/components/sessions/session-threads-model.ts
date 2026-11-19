@@ -12,14 +12,16 @@ import { log } from '@/utils/log';
 /** A session menu's Threads rows (the desktop Open group, the phone's rows): off, the row turns them on and opens them; on, it opens or closes them, and a second row turns them off. */
 export interface ThreadsMenu { on: boolean; onOpen: () => void; onTurnOff: () => void }
 
-/** Does this task's session offer Threads in its menu? A leader (a task with a Board tab) or one already on; never Main or a lead, whose Threads are on the Org page. */
-export function threadsOffered(task: Pick<Task, 'org_role' | 'threads_on'> | null | undefined, leads: boolean): boolean {
-  return !!task && !task.org_role && (leads || task.threads_on === true);
+/** Does this task's session offer Threads in its menu? A leader (a task with a Board tab), one already on, or any task under the experiment task_threads; never Main or a lead, whose Threads are on the Org page. */
+export function threadsOffered(task: Pick<Task, 'org_role' | 'threads_on'> | null | undefined, leads: boolean, everyTask = false): boolean {
+  return !!task && !task.org_role && (leads || everyTask || task.threads_on === true);
 }
 
-/** Does the task keep Threads by the user's switch (Main and the leads keep theirs on the Org page)? */
-export function threadsKeptBy(task: Pick<Task, 'org_role' | 'threads_on'> | null | undefined): boolean {
-  return !!task && !task.org_role && task.threads_on === true;
+/** Does the task keep Threads by the user's switch (Main and the leads keep theirs on the Org page)?
+ *  The same rule as the server's keepsThreads (src/core/org/keeps-threads.ts): under the experiment
+ *  task_threads every task does unless the user turned them off for it. */
+export function threadsKeptBy(task: Pick<Task, 'org_role' | 'threads_on'> | null | undefined, everyTask = false): boolean {
+  return !!task && !task.org_role && (task.threads_on === true || (everyTask && task.threads_on !== false));
 }
 
 /** Turn a task's Threads on or off: through the task list when it holds the row (it shows at once), else PATCH /api/tasks/:id. True when it saved. */

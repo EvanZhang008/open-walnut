@@ -73,6 +73,12 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
+    id: 'task_threads',
+    name: 'Threads for every task',
+    description: 'Every task keeps Threads, not only the leads: what you ask a task is filed one thread per subject, and its session sees them. A task\'s rows also carry its lines: what it asks of you, does and waits on at once, each with its own state. Turn Threads off for one task in its menu.',
+    default: false,
+  },
+  {
     id: 'action_needed_everywhere',
     name: 'Action needed in sessions and Threads',
     description: 'What a task needs from you (an approval, a question, a letter, a choice) also shows in a strip under its session\'s title bar, and a team\'s asks show in its VP\'s Threads under "From your team". Each is the same item as on the task\'s row: answer or snooze it in any of them and it goes from all.',

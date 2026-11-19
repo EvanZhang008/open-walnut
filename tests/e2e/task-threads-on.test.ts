@@ -172,7 +172,8 @@ describe('Threads on a leader task', () => {
   it('off again: nothing more is filed, routes refuse, the rules leave the prompt', async () => {
     expect((await setThreads(false)).status).toBe(200)
     const leader = await getTask(leaderId)
-    expect(leader.threads_on).toBeUndefined()
+    // Kept as said (2026-11-19): off stays off when the experiment task_threads gives every task Threads.
+    expect(leader.threads_on).toBe(false)
     expect(hintOf(await typeIntoChat('and the compost bin order?'))).toBe('')
     expect((await threadsRes()).status).toBe(409)
     expect(defaultInstructions(leader)).not.toContain(TASK_THREADS_LINE.trim())

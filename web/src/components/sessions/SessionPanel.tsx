@@ -850,9 +850,10 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   useEffect(() => noteShownTask(sessionId, sessionTask), [sessionId, sessionTask]);
   // A leader's Threads (SessionThreadsPane): offered in the ⋮ menu, off until the user turns them
   // on there; once on, a Threads chip beside Board opens them (Task.threads_on).
-  const threadsMenu = !inset && taskSlot === 'live' && threadsOffered(sessionTask, boardTab === 'shown');
+  const threadsEveryTask = useExperimental('task_threads');
+  const threadsMenu = !inset && taskSlot === 'live' && threadsOffered(sessionTask, boardTab === 'shown', threadsEveryTask);
   // What the task says, whether or not the header can show it yet (the view kept over a reload).
-  const threadsKept = threadsKeptBy(sessionTask);
+  const threadsKept = threadsKeptBy(sessionTask, threadsEveryTask);
   // Read while they are on, for the pane and the chip's count of threads with something for him.
   // Not while the turn-on is on its way: the list shows it first, and a read then is refused.
   const [threadsSaving, setThreadsSaving] = useState(false);
@@ -1809,14 +1810,14 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     const taskId = sessionTask?.id;
     if (!taskId) return;
     // On already: the row opens or closes the view, as every view row does.
-    if (sessionTask?.threads_on) { toggleView('threads'); return; }
+    if (threadsKept) { toggleView('threads'); return; }
     setThreadsSaving(true);
     const saved = await setTaskThreads(taskId, true, taskStore);
     setThreadsSaving(false);
     if (!saved) return;
     threadsOpening.current = true;
     if (activeView !== 'threads') toggleView('threads');
-  }, [sessionTask?.id, sessionTask?.threads_on, taskStore, activeView, toggleView]);
+  }, [sessionTask?.id, threadsKept, taskStore, activeView, toggleView]);
   const turnOffThreads = useLeanCallback(async () => {
     const taskId = sessionTask?.id;
     if (taskId) await setTaskThreads(taskId, false, taskStore);

@@ -948,9 +948,9 @@ export interface Task {
   /** Wake this task's session when a check fails, someone comments or reviews, or the branch
    *  conflicts. Unset = the config default (on). */
   pr_wake?: boolean;
-  /** The user turned Threads on for this task (its ⋮ menu): his messages to it are filed one
-   *  thread per subject, as Main's and a lead's are (core/org/keeps-threads.ts). Unset = off;
-   *  Main and the leads always keep Threads. */
+  /** The user turned Threads on (true) or off (false) for this task (its ⋮ menu): his messages to
+   *  it are filed one thread per subject, as Main's and a lead's are (core/org/keeps-threads.ts).
+   *  Unset = off, or on under the experiment task_threads; Main and the leads always keep Threads. */
   threads_on?: boolean;
   source: TaskSource;
   external_url?: string;

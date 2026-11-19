@@ -91,7 +91,7 @@ export function waitWordsNameUser(words: string | null | undefined, strict = fal
 }
 
 /** Someone other than the user is above it: its leader, or for Main and a lead their teams' side. */
-function hasAbove(input: Pick<UserStatusInput, 'hasLeader' | 'isMain' | 'isLead'>): boolean {
+export function hasAbove(input: Pick<UserStatusInput, 'hasLeader' | 'isMain' | 'isLead'>): boolean {
   return !!(input.hasLeader || input.isMain || input.isLead);
 }
 
@@ -103,7 +103,7 @@ function hasAbove(input: Pick<UserStatusInput, 'hasLeader' | 'isMain' | 'isLead'
  * report (sessions/report-phase.ts onUser) reads it the same way. A wait on a clock, a check or
  * anything else ("next check at 21:00") is no ask of theirs.
  */
-function reportWaitsOnUser(report: StatusReport, hasLeader: boolean): boolean {
+export function reportWaitsOnUser(report: StatusReport, hasLeader: boolean): boolean {
   if (report.state !== 'waiting' || report.kindless_ask) return false;
   const kind = report.waiting_kind;
   if (kind === 'you' || (kind === 'lead' && !hasLeader)) return true;
@@ -527,6 +527,8 @@ export interface UserStatus {
   actions?: ActionItem[];
   /** needs through an action while its turn still runs (action-needed.ts applyActions): its row says Working too. */
   working?: true;
+  /** Its lines, each with its own state (task-lines.ts): what it asks, does and waits on at once. */
+  lines?: import('./task-lines.js').TaskLine[];
 }
 
 /** The report source fields of a status, for a rebuilt status that keeps its `now`/`next`. Pure. */

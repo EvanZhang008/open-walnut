@@ -11,8 +11,18 @@
 /** The two fields that decide it (a Task, or the prompt builder's slice of one). */
 export type ThreadKeeper = { org_role?: string; threads_on?: boolean };
 
-export function keepsThreads(task: ThreadKeeper | null | undefined): boolean {
+/**
+ * The experiment task_threads (2026-11-19, the user: "let's make all a thread, thread auto open for
+ * all task"): every task keeps Threads unless the user turned them off for it (threads_on false).
+ * Set by the status sync from the config on boot and on every config change (user-status-sync.ts).
+ */
+let everyTask = false;
+export function setThreadsForEveryTask(on: boolean): void { everyTask = on; }
+export function threadsForEveryTask(): boolean { return everyTask; }
+
+export function keepsThreads(task: ThreadKeeper | null | undefined, forEveryTask = everyTask): boolean {
   if (!task) return false;
   if (task.org_role === 'main' || task.org_role === 'lead') return true;
-  return !task.org_role && task.threads_on === true;
+  if (task.org_role) return false;
+  return task.threads_on === true || (forEveryTask && task.threads_on !== false);
 }

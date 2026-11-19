@@ -50,6 +50,15 @@ describe('keepsThreads', () => {
     expect(keepsThreads({ org_role: 'router', threads_on: true })).toBe(false)
     expect(keepsThreads(null)).toBe(false)
   })
+
+  // The experiment task_threads (2026-11-19, the user: "let's make all a thread, thread auto open for all task").
+  it('under task_threads every task keeps them unless the user turned them off; a router still never', () => {
+    expect(keepsThreads({}, true)).toBe(true)
+    expect(keepsThreads({ threads_on: false }, true)).toBe(false)
+    expect(keepsThreads({ threads_on: true }, true)).toBe(true)
+    expect(keepsThreads({ org_role: 'router' }, true)).toBe(false)
+    expect(keepsThreads({ org_role: 'lead', threads_on: false }, true)).toBe(true)
+  })
 })
 
 describe('every thread path asks keepsThreads', () => {
