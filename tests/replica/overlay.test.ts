@@ -228,6 +228,11 @@ describe('overlay: an op id journaled again after its ack (W11)', () => {
     expect(o.markOf('tasks', 'mtask-w11-first')).toBe('awaiting')
     await o.refresh()
     expect(o.createdTaskIds().sort()).toEqual(['mtask-w11-first', 'mtask-w11-second'])
+    // Only the create still in the journal is pending (write-port.ts: an edit of it has a known
+    // base); the one the Mac took and the copy does not show yet is not, and its base is unknown.
+    expect(o.createPending('mtask-w11-second')).toBe(true)
+    expect(o.createPending('mtask-w11-first')).toBe(false)
+    expect(o.createPending(TASK_A)).toBe(false)
     expect(o.markOf('tasks', 'mtask-w11-first')).toBe('awaiting')
     expect(o.markOf('tasks', 'mtask-w11-second')).toBe('pending')
     expect(o.task('mtask-w11-first', null)).toMatchObject({ title: 'Release notes', replica_sync: 'awaiting' })

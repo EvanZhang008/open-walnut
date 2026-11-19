@@ -141,6 +141,8 @@ export interface Overlay {
   task(id: string, copyRow: Record<string, unknown> | null): Record<string, unknown> | null
   /** The tasks made here that the copy does not hold yet. */
   createdTaskIds(): string[]
+  /** Whether a create of this task is still in this host's journal (pending: the Mac has not taken it). */
+  createPending(id: string): boolean
   /** The moves to apply to a list, in seq order. */
   moves(): Array<{ taskId: string; anchor: { after?: string; before?: string } | null; tier?: string }>
   /** Board records of a task, in seq order (applied by the caller with the board kit). */
@@ -370,6 +372,10 @@ export function createOverlay(deps: OverlayDeps): Overlay {
       if (!row) return null
       const mark = markOf('tasks', id)
       return mark ? { ...row, replica_sync: mark } : row
+    },
+    createPending(id) {
+      for (const e of byOp.values()) if (e.kind === 'task-create' && e.state === 'pending' && e.record.taskId === id) return true
+      return false
     },
     createdTaskIds() {
       const out: string[] = []

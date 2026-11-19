@@ -411,7 +411,23 @@ export async function startHostDaemon(twin: Twin, dir: string, home: string, bin
   return { proc, pid: proc.pid!, port: Number(fs.readFileSync(path.join(dir, 'daemon.port'), 'utf8')) }
 }
 
-function macConfig(): string {
+/**
+ * A plugin of the Mac whose jobs run on the host (`plugin_jobs.<id>.run_on`): its files go
+ * into the Mac's plugins dir before it boots, its settings into its config, and the Mac runs
+ * plugin jobs (WALNUT_PLUGIN_JOBS_IN_TEST=1). The host daemon runs each job as its own
+ * `walnut plugin-job` process, its walnut.ops calls through the daemon's gateway.
+ */
+export interface ClusterPlugin { id: string; files: Record<string, string>; settings?: Record<string, string>; runOn: string }
+
+function pluginConfig(p: ClusterPlugin | undefined): string[] {
+  if (!p) return []
+  return [
+    'plugins:', `  ${p.id}:`, '    enabled: true', ...Object.entries(p.settings ?? {}).map(([k, v]) => `    ${k}: ${JSON.stringify(v)}`),
+    'plugin_jobs:', `  ${p.id}:`, `    run_on: ${p.runOn}`,
+  ]
+}
+
+function macConfig(plugin?: ClusterPlugin): string {
   return [
     'version: 1',
     'user:', `  name: ${MAC_USER_NAME}`,
@@ -428,12 +444,13 @@ function macConfig(): string {
     'favorites:',
     '  projects:', ...MAC_FAVORITES.projects.map((x) => `    - ${JSON.stringify(x)}`),
     '  notes:', ...MAC_FAVORITES.notes.map((x) => `    - ${JSON.stringify(x)}`),
+    ...pluginConfig(plugin),
     '',
   ].join('\n')
 }
 
 /** The Mac's boot script: its own data or nothing (REFUSING), the seed, the test transport to the host daemon. */
-function macBoot(o: { macData: string; daemonPort: number; macCwd: string; hostCwd: string; dev: boolean }): string {
+function macBoot(o: { macData: string; daemonPort: number; macCwd: string; hostCwd: string; dev: boolean; hostDaemon: string }): string {
   const src = (f: string) => JSON.stringify(path.join(ROOT, f))
   return `
 const c = await import(${src('src/constants.ts')})
@@ -449,6 +466,24 @@ dcm.DaemonConnection.prototype.runRemoteScript = function (script, timeoutMs = 3
   if (typeof script !== 'string' || !script.startsWith(runtimeQ)) return Promise.reject(new Error('the test transport runs only the host server probes'))
   return new Promise((resolve, reject) => execFile('/bin/sh', ['-c', script], { timeout: timeoutMs, env: { PATH: process.env.PATH, HOME: process.env.HOME } },
     (err, stdout) => (err ? reject(err) : resolve(String(stdout).trim()))))
+}
+// A plugin job's code (core/plugin-jobs/) goes to devbox as a file in its daemon's dir: this
+// machine, so the test transport writes it there itself, checked by its sha256, and nowhere else.
+const originalUpload = dcm.DaemonConnection.prototype.uploadFile
+const hostDaemonDirs = [${JSON.stringify(o.hostDaemon)}, (await import('node:fs')).realpathSync(${JSON.stringify(o.hostDaemon)})]
+dcm.DaemonConnection.prototype.uploadFile = async function (remotePath, data, opts = {}) {
+  if (this.hostKey !== ${JSON.stringify(HOST_KEY)}) return originalUpload.call(this, remotePath, data, opts)
+  const np = await import('node:path')
+  const nf = await import('node:fs')
+  const target = np.resolve(String(remotePath))
+  if (!hostDaemonDirs.some((dir) => target.startsWith(dir + '/'))) throw new Error('the test transport writes only into the host daemon dir')
+  const sha = (await import('node:crypto')).createHash('sha256').update(data).digest('hex')
+  if (opts.sha256 && opts.sha256.toLowerCase() !== sha) throw new Error('uploadFile: sha256 does not match the data')
+  nf.mkdirSync(np.dirname(target), { recursive: true, mode: 0o700 })
+  const tmp = target + '.' + process.pid + '.tmp'
+  nf.writeFileSync(tmp, data, { mode: 0o600 })
+  nf.renameSync(tmp, target)
+  return { skipped: false }
 }
 const { startServer, stopServer, armGracefulSignalExit } = await import(${src('src/web/server.ts')})
 const server = await startServer({ port: 0, dev: ${o.dev ? 'true' : 'false'} })
@@ -539,7 +574,7 @@ async function bootMac(script: string, file: string, env: Record<string, string>
  */
 export type SeedMac = (o: { base: string; macData: string; env: Record<string, string> }) => void | Promise<void>
 
-export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; daemonBuilt?: boolean; seedMac?: SeedMac }): Promise<ReplicaCluster> {
+export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; daemonBuilt?: boolean; seedMac?: SeedMac; plugin?: ClusterPlugin }): Promise<ReplicaCluster> {
   assertWindows(WINDOWS)
   const app: ClusterApp = opts.app ?? 'source'
   if (app === 'built') {
@@ -562,7 +597,14 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
   const mockCli = path.join(d.bin, MOCK_CLI_NAME)
   writeStubBin(d.bin)
   writeAppDir(d.app, app)
-  fs.writeFileSync(path.join(d.macData, 'config.yaml'), macConfig())
+  fs.writeFileSync(path.join(d.macData, 'config.yaml'), macConfig(opts.plugin))
+  if (opts.plugin) {
+    for (const [rel, text] of Object.entries(opts.plugin.files)) {
+      const file = path.join(d.macData, 'plugins', opts.plugin.id, rel)
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      fs.writeFileSync(file, text)
+    }
+  }
   // A layout pref the Mac's console saved (its copy rides the prefs kind).
   fs.mkdirSync(path.join(d.macData, 'config', 'share'), { recursive: true, mode: 0o700 })
   fs.writeFileSync(path.join(d.macData, 'config', 'share', 'ui-prefs.json'), JSON.stringify({ [MAC_THEME.key]: { v: MAC_THEME.value, ts: Date.now() } }))
@@ -660,9 +702,10 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
       // `built`: the Mac serves the console's page from the same build the replica runs.
       ...(app === 'built' ? { WALNUT_WEB_STATIC_DIR: path.join(ROOT, 'dist', 'web', 'static') } : {}),
       ...windowEnv(), NODE_ENV: 'production',
+      ...(opts.plugin ? { WALNUT_PLUGIN_JOBS_IN_TEST: '1' } : {}),
     }
     if (opts.seedMac) await opts.seedMac({ base, macData: d.macData, env: macEnv })
-    mac = await bootMac(macBoot({ macData: d.macData, daemonPort: hostDaemon.port, macCwd: d.macCwd, hostCwd: d.hostCwd, dev: app !== 'built' }), macBootFile, macEnv, macLog)
+    mac = await bootMac(macBoot({ macData: d.macData, daemonPort: hostDaemon.port, macCwd: d.macCwd, hostCwd: d.hostCwd, dev: app !== 'built', hostDaemon: d.hostDaemon }), macBootFile, macEnv, macLog)
     // The server mac-boot runs: the child itself, its command line this runtime and that file.
     macPin = pin('mac', mac.pid, (c) => c.startsWith(`${HOST_RUNTIME} `) && c.includes(` ${macBootFile}`))
     if (!macPin) throw new Error(`the Mac reported pid ${mac.pid}, which does not run ${macBootFile}`)

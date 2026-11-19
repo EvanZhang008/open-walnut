@@ -14,8 +14,12 @@ function setup(o: { linked?: Sock | null } = {}) {
   const linked = o.linked === undefined ? sock : o.linked
   const timers: Array<{ fn: () => void; ms: number; cleared: boolean }> = []
   let id = 100
+  /** Whether the follower may write (the twin's followerMayWrite), and the clock. */
+  const state = { mayWrite: true, now: 1_000 }
   const g = createFollowerGateway<Sock>({
     follower: () => (linked && linked.answersLocal ? linked : null),
+    mayWrite: () => state.mayWrite,
+    now: () => state.now,
     send: (ws, ev, data) => { if (ws.broken) return false; ws.sent.push({ ev, data }); return true },
     nextRelayId: () => ++id,
     instanceId: 'inst-1',
@@ -24,8 +28,9 @@ function setup(o: { linked?: Sock | null } = {}) {
     clearTimer: (t) => { (t as { cleared: boolean }).cleared = true },
     log: () => {},
   })
-  const fire = () => { for (const t of timers) if (!t.cleared) { t.cleared = true; t.fn() } }
-  return { g, sock, timers, fire }
+  // The timers set so far only: one a fired timer sets fires on the next call.
+  const fire = () => { for (const t of [...timers]) if (!t.cleared) { t.cleared = true; t.fn() } }
+  return { g, sock, timers, fire, state }
 }
 
 const call = (over: Record<string, unknown> = {}) => ({ home: '/h', capability: 'tools.call', callerSid: 'sess-1', payload: { name: 'task_update', args: { id: 't1' } }, deadline: 31_000, ...over })
@@ -123,5 +128,48 @@ describe('follower gateway', () => {
     expect(g.responseOf({ error: 'x', errorCode: 'needs_leader', detail: { why: 'w', retryAfterMs: 5000 }, api: { status: 503 } }))
       .toEqual({ ok: false, error: { code: 'needs_leader', message: 'x', detail: { why: 'w', retryAfterMs: 5000 }, retryAfterMs: 5000, api: { status: 503 } } })
     expect(g.responseOf({})).toEqual({ ok: false, error: { code: 'internal', message: 'gateway request failed' } })
+  })
+
+  it('one rule for "away": a follower that may not write yet takes no call, and a session\'s goes its own way', () => {
+    const s = setup()
+    s.state.mayWrite = false
+    expect(s.g.answers('/h')).toBe(false)
+    expect(s.g.handOff(call(), vi.fn())).toBe(false)
+    expect(s.sock.sent).toEqual([])
+    s.state.mayWrite = true
+    expect(s.g.answers('/h')).toBe(true)
+  })
+
+  it('a plugin job\'s call in that window waits: handed over once the follower may write', () => {
+    const s = setup()
+    s.state.mayWrite = false
+    const respond = vi.fn()
+    const job = call({ callerSid: 'external', caller: { kind: 'plugin-job', plugin: 'acme-sync', job: 'poll' } })
+    let again = 0
+    const route = (waited: boolean): string => s.g.routeJob(job, respond, () => { again++; route(true) }, waited)
+    expect(route(false)).toBe('waiting')
+    expect(s.sock.sent).toEqual([])
+    s.fire()
+    expect(again).toBe(1)
+    expect(s.sock.sent).toEqual([])
+    s.state.mayWrite = true
+    s.fire()
+    expect(s.sock.sent.map((x) => x.ev)).toEqual(['gateway-request'])
+    expect(respond).not.toHaveBeenCalled()
+  })
+
+  it('a plugin job\'s waiting call routed afresh goes elsewhere when the leader answers again; no time left or no follower: none', () => {
+    const s = setup()
+    s.state.mayWrite = false
+    const job = call({ callerSid: 'external', caller: { kind: 'plugin-job', plugin: 'acme-sync', job: 'poll' } })
+    let routedAgain = 0
+    expect(s.g.routeJob(job, vi.fn(), () => { routedAgain++ })).toBe('waiting')
+    s.fire()
+    // The twin routes it afresh: its leader target found, it relays there and never asks the follower.
+    expect(routedAgain).toBe(1)
+    expect(s.sock.sent).toEqual([])
+    s.state.now = job.deadline - 1_000
+    expect(s.g.routeJob(job, vi.fn(), () => {})).toBe('none')
+    expect(setup({ linked: null }).g.routeJob(job, vi.fn(), () => {})).toBe('none')
   })
 })

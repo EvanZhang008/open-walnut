@@ -15,6 +15,13 @@
  *                      a write with none is `hub_timeout` (it may have run: never twice)
  *   a plugin job's     the follower's answer is final; no follower: `hub_unreachable`
  *
+ * ONE rule for "the leader is away": a call goes to the follower only while the follower
+ * may write (`mayWrite`, the test `follower.op` applies: the leader quiet for its whole
+ * window, or gone). In the seconds between the gateway passing over a quiet leader and
+ * that window ending, a session's call takes the daemon's own path as before, and a plugin
+ * job's call waits (`routeJob`), within its own deadline, for the leader to answer again
+ * or the follower to be allowed to write, then goes that way.
+ *
  * One attempt per call, timed as a relay to the leader is (relayAttemptMs). A follower
  * socket answers only the relays it was sent.
  */
@@ -33,6 +40,9 @@ export type FollowerCaller = { kind: 'plugin-job'; plugin: string; job: string }
 export interface FollowerGatewayDeps<S> {
   /** The follower of `home` linked now that answers local calls, or null. */
   follower(home: string): S | null
+  /** Whether that follower may write now (the twin's followerMayWrite: no leader answers it). */
+  mayWrite(home: string): boolean
+  now(): number
   /** Send an event on a socket; false when it could not be written. */
   send(ws: S, ev: string, data: Record<string, unknown>): boolean
   nextRelayId(): number
@@ -62,15 +72,19 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
   const FALLS_BACK = ['needs_leader', 'unsupported_replica', 'unsupported_version']
   interface Pending { ws: S; call: HandOff; respond: (r: FollowerGatewayResponse) => void; timer: unknown }
   const pending = new Map<number, Pending>()
+  /** How often a plugin job's waiting call looks again, and the time it keeps for its attempt after. */
+  const JOB_WAIT_STEP_MS = 250
+  const JOB_WAIT_SPARE_MS = 2_000
 
+  /** A follower of `home` answers its calls now: linked, and allowed to write. */
   function answers(home: string | undefined): boolean {
-    return !!home && deps.follower(home) !== null
+    return !!home && deps.follower(home) !== null && deps.mayWrite(home)
   }
 
-  /** Hand `call` to the follower. False: nothing was sent (none linked, or the write failed); the caller goes on. */
+  /** Hand `call` to the follower. False: nothing was sent (none answers now, or the write failed); the caller goes on. */
   function handOff(call: HandOff, respond: (r: FollowerGatewayResponse) => void): boolean {
     const ws = deps.follower(call.home)
-    if (!ws) return false
+    if (!ws || !deps.mayWrite(call.home)) return false
     const relayId = deps.nextRelayId()
     const entry: Pending = { ws, call, respond, timer: null }
     pending.set(relayId, entry)
@@ -103,6 +117,25 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
     }
     deps.log('warn', 'gateway: this host\'s Walnut server did not answer', { relayId, why, op })
     e.respond({ ok: false, error: { code: 'hub_timeout', message: 'this host\'s Walnut server did not answer in time; the call may have run, read before trying again' } })
+  }
+
+  /**
+   * A plugin job's call that no leader takes now. 'handed': the follower has it. 'waiting':
+   * a follower is linked but may not write yet (the leader went quiet within its window and
+   * may answer again): `again` runs in a moment, to route the call afresh. 'none': no
+   * follower, or no time left to wait; the caller answers `hub_unreachable`.
+   */
+  function routeJob(call: HandOff, respond: (r: FollowerGatewayResponse) => void, again: () => void, waited = false): 'handed' | 'waiting' | 'none' {
+    if (handOff(call, respond)) return 'handed'
+    if (deps.follower(call.home) === null) return 'none'
+    if (call.deadline - deps.now() <= JOB_WAIT_STEP_MS + JOB_WAIT_SPARE_MS) return 'none'
+    if (!waited) {
+      deps.log('info', 'gateway: a plugin job\'s call waits for its leader or this host\'s Walnut server', {
+        op: typeof call.payload.name === 'string' ? call.payload.name : undefined, ...(call.caller ? { plugin: call.caller.plugin, job: call.caller.job } : {}),
+      })
+    }
+    deps.setTimer(again, JOB_WAIT_STEP_MS)
+    return 'waiting'
   }
 
   function holds(relayId: unknown): boolean {
@@ -147,5 +180,5 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
     return { ok: false, error }
   }
 
-  return { answers, handOff, holds, settle, dropSocket, responseOf, pendingCount: () => pending.size }
+  return { answers, handOff, routeJob, holds, settle, dropSocket, responseOf, pendingCount: () => pending.size }
 }

@@ -228,13 +228,13 @@ async function createTask(
   ctx: V2Context, record: V2Record, id: string, fields: Record<string, unknown>,
   placement: { parentTaskId?: string; project?: string; groupId?: string; tier?: string },
 ): Promise<void> {
-  const { decidePlacement } = await import('../sessions/caller-placement.js');
+  const { decidePlacement, createTimeCwd } = await import('../sessions/caller-placement.js');
   const { applyCreateRules, placeBesideCaller, ProjectElsewhereError } = await import('../sessions/create-rules.js');
   const req = {
     ...(typeof placement.project === 'string' ? { project: placement.project } : {}),
     ...(placement.groupId ? { group_id: placement.groupId } : {}),
   };
-  const caller = await createCaller(record.actor);
+  const { caller, pluginOnly } = await createCaller(record.actor);
   const decision = decidePlacement(req, caller);
   // A parent the record names wins over the caller's own task.
   if (placement.parentTaskId) decision.parentTaskId = resolveTaskId(ctx.hostKey, placement.parentTaskId, ctx.remap);
@@ -266,6 +266,9 @@ async function createTask(
   }
   let groupId = decision.group_id;
   if (groupId && !(await pairValidator())(decision.project ?? '', groupId)) groupId = undefined;
+  // The folder a worker's create records as its task's (its caller's, as online; a host's
+  // queued create carries no launch hints, so only the caller's own folder can give one).
+  const stampedCwd = await createTimeCwd(req, caller, decision).catch(() => undefined);
   const { addTask, InvalidFocusTierError } = await import('../task-manager.js');
   // The born row has no field times to stamp (a new row is not a change of one); the
   // fields merged over it below are stamped at the record's time by applyFields.
@@ -281,6 +284,8 @@ async function createTask(
     ...(str(fields.end_date) ? { end_date: String(fields.end_date) } : {}),
     ...(Array.isArray(fields.tags) ? { tags: fields.tags.map(String) } : {}),
     ...(str(fields.sprint) ? { sprint: String(fields.sprint) } : {}),
+    ...(stampedCwd ? { cwd: stampedCwd } : {}),
+    ...(pluginOnly ? { plugin_only: pluginOnly } : {}),
     explicitId: id,
     ...(record.opId ? { createdByOp: record.opId } : {}),
     // The moment it was made where it was made (a phone's task keeps its time).

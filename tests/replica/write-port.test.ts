@@ -50,7 +50,7 @@ function rig(opts: { lose?: (n: number) => boolean } = {}) {
   const written: Array<Parameters<Parameters<typeof createWritePort>[0]['noteWritten']>[0]> = []
   const port = createWritePort({
     task: async (id) => { await overlay.refresh(); return overlay.task(id, copy.get(id) ?? null) as TaskRow | null },
-    createdHere: (id) => overlay.createdTaskIds().includes(id),
+    createdHere: (id) => overlay.createPending(id),
     board: async () => null,
     noteWritten: (e) => { written.push(e); overlay.noteWritten(e) },
     now: () => clock.now,
@@ -93,6 +93,13 @@ describe('write port: what follower.op journals', () => {
     const id = (made as { body: { task: { id: string } } }).body.task.id
     await r.port.taskUpdate(r.write(), { kind: 'session', sid: 'sess-caller-1' }, id, { tags: ['team:acme'] })
     expect(r.records()[1].fields.tags).toEqual({ base: null, value: ['team:acme'] })
+    // Once the Mac took the create (acked; the copy does not show the task yet), the Mac's
+    // row may have changed since: a field the overlay lacks is unknown again.
+    const seqs = r.records().map((x) => x.seq as number)
+    expect(r.host.drain(JHOME, ['task-fields', 'task-create']).error).toBeUndefined()
+    expect(r.host.ack(JHOME, { seqs }).error).toBeUndefined()
+    await r.port.taskUpdate(r.write(), { kind: 'session', sid: 'sess-caller-1' }, id, { due_date: '2026-10-20' })
+    expect(r.records().at(-1)!.fields.due_date).toEqual({ base: 'unknown', value: '2026-10-20' })
   })
 
   it('mints a new task\'s id (time, then 8 random bytes) and a Board post\'s id', async () => {

@@ -51,13 +51,23 @@ export function actorRules(actor: JournalActorLike | undefined): ActorRules {
   }
 }
 
-/** The caller an away create is placed as, the one the same create online has. */
-export async function createCaller(actor: JournalActorLike | undefined): Promise<CallerPlacement> {
+/**
+ * The caller an away create is placed as, the one the same create online has (api-v1.ts
+ * POST /tasks): a session's own placement; a plugin job an outside caller's, and when its
+ * plugin keeps its tasks to its own view (plugin-task-visibility.ts) no caller at all and
+ * the task stamped `plugin_only`, as `walnut.ops.call` naming the plugin gets online.
+ */
+export async function createCaller(actor: JournalActorLike | undefined): Promise<{ caller: CallerPlacement; pluginOnly?: string }> {
   if (actor?.kind === 'session') {
     const { resolveCallerPlacement } = await import('../sessions/caller-placement.js');
-    return resolveCallerPlacement(actor.sid).catch(() => ({ kind: 'unknown' as const }));
+    return { caller: await resolveCallerPlacement(actor.sid).catch(() => ({ kind: 'unknown' as const })) };
   }
-  return actor?.kind === 'plugin-job' ? { kind: 'external' } : { kind: 'human' };
+  if (actor?.kind === 'plugin-job') {
+    const { pluginOnlyForCaller } = await import('../plugins/plugin-task-visibility.js');
+    const pluginOnly = pluginOnlyForCaller(undefined, actor.plugin);
+    return pluginOnly ? { caller: { kind: 'unknown' }, pluginOnly } : { caller: { kind: 'external' } };
+  }
+  return { caller: { kind: 'human' } };
 }
 
 /** The op caller a record's actor replays as: a device with paired-device rights, a session as itself, the rest as a caller on its host. */

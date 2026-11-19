@@ -5847,6 +5847,9 @@ var followerGateway = (__CREATE_FOLLOWER_GATEWAY__)({
     var f = followerSockets.get(home);
     return f && f.answersLocal === true ? f : null;
   },
+  // One rule for "the leader is away": the test follower.op applies (followerMayWrite).
+  mayWrite: function (home) { return followerMayWrite(home); },
+  now: function () { return Date.now(); },
   send: function (ws, ev, data) { try { sendEvent(ws, ev, data); return true; } catch (e) { return false; } },
   nextRelayId: function () { return ++gatewayRelayCounter; },
   instanceId: DAEMON_INSTANCE_ID,
@@ -7337,7 +7340,8 @@ function busyAskAgain(relayId, call, respond, refusal, inMs) {
 
 // A plugin job's call: to the server of the Walnut that runs the job and no other,
 // as 'external' (twin of daemon-standalone.ts).
-function sendPluginJobGatewayRequest(home, capability, payload, respond, caller) {
+function sendPluginJobGatewayRequest(home, capability, payload, respond, caller, deadline, waited) {
+  if (typeof deadline !== 'number') deadline = Date.now() + GATEWAY_HUB_TIMEOUT_MS;
   var target = null;
   for (const client of wsClients) {
     if (!isServerClient(client) || isQuietTrustedClient(client)) continue;
@@ -7345,12 +7349,16 @@ function sendPluginJobGatewayRequest(home, capability, payload, respond, caller)
   }
   if (target && ((target.missedBeats || 0) >= GATEWAY_SILENT_BEATS || leaderBook.backupLead(home) || primaryQuietWithFollower(home))) target = null;
   if (!target) {
-    // This host's own Walnut server answers it while its leader is away: its answer is final.
-    if (caller && followerGateway.handOff({ home: home, capability: capability, callerSid: EXTERNAL_CALLER_SID, payload: payload, caller: caller, deadline: Date.now() + GATEWAY_HUB_TIMEOUT_MS }, respond)) return;
+    // This host's own Walnut server answers it while its leader is away (its answer is final);
+    // while the leader's quiet window is not over yet, the call waits for one of the two.
+    if (caller) {
+      var again = function () { sendPluginJobGatewayRequest(home, capability, payload, respond, caller, deadline, true); };
+      if (followerGateway.routeJob({ home: home, capability: capability, callerSid: EXTERNAL_CALLER_SID, payload: payload, caller: caller, deadline: deadline }, respond, again, waited === true) !== 'none') return;
+    }
     logMsg('info', 'gateway: plugin job call, its Walnut is not connected', { home: home, op: payload.name });
     return respond(gatewayError('hub_unreachable', 'the Walnut that runs this job is not connected now; try again later'));
   }
-  relayToPrimary(target, home, capability, EXTERNAL_CALLER_SID, payload, respond, false, Date.now() + GATEWAY_HUB_TIMEOUT_MS);
+  relayToPrimary(target, home, capability, EXTERNAL_CALLER_SID, payload, respond, false, deadline);
 }
 
 // One parsed NDJSON line from the agent socket → local reject or hub relay.

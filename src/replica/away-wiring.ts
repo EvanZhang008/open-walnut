@@ -153,7 +153,7 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
   }
   const port = createWritePort({
     task: shownTask,
-    createdHere: (id) => overlay.createdTaskIds().includes(id),
+    createdHere: (id) => overlay.createPending(id),
     board: shownBoard,
     noteWritten: (e) => {
       // A create's first word to browsers is task:created with the page's correlation

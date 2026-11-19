@@ -103,7 +103,7 @@ export interface BoardBase {
 export interface WritePortDeps {
   /** The task as this replica shows it now (the copy plus pending records), or null. */
   task(id: string): Promise<TaskRow | null>
-  /** Whether this host's journal made the task and its create is still pending (overlay.ts createdTaskIds). */
+  /** Whether this host's journal made the task and its create is still pending, never taken by the Mac yet (overlay.ts createPending). */
   createdHere?(id: string): boolean
   /** The Board of a task as this replica shows it now, or null when it has none. */
   board(taskId: string): Promise<BoardBase | null>

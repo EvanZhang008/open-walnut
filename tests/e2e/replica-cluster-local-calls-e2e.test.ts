@@ -25,8 +25,8 @@ import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
-import Database from '../../src/lib/sqlite.js'
 import { BUN, startReplicaCluster, waitFor, WINDOWS, type ReplicaCluster, type Twin } from '../helpers/replica-cluster.js'
+import { hostJournal as journal, hostStream, macSessions, macTasks, replicaKnowsDefaultHost, writeClusterLogs } from '../helpers/replica-cluster-reads.js'
 
 const TWINS = (process.env.REPLICA_CLUSTER_TWINS ?? (BUN ? 'source,standalone' : 'source')).split(',').map((t) => t.trim()).filter((t): t is Twin => t === 'source' || t === 'standalone')
 const TITLE = 'Sync the venue list on the host'
@@ -45,49 +45,11 @@ function walnut(c: ReplicaCluster, sid: string, name: string, args: Record<strin
   })
 }
 
-function hostStream(c: ReplicaCluster, sid: string): Array<Record<string, any>> {
-  try {
-    return fs.readFileSync(path.join(c.base, 'hd', 'streams', `${sid}.jsonl`), 'utf8').split('\n').filter(Boolean)
-      .map((l) => { try { return JSON.parse(l) as Record<string, any> } catch { return {} } })
-  } catch { return [] }
-}
-
-/** The host daemon's journal records (every line with a seq, latest by seq). */
-function journal(c: ReplicaCluster): Array<Record<string, any>> {
-  const dir = path.join(c.base, 'hd', 'offline-host')
-  const bySeq = new Map<number, Record<string, any>>()
-  let names: string[] = []
-  try { names = fs.readdirSync(dir).filter((n) => /^journal-.*\.ndjson$/.test(n)) } catch { /* none yet */ }
-  for (const n of names) {
-    for (const line of fs.readFileSync(path.join(dir, n), 'utf8').split('\n')) {
-      try { const o = JSON.parse(line) as Record<string, any>; if (typeof o.seq === 'number') bySeq.set(o.seq, o) } catch { /* partial */ }
-    }
-  }
-  return [...bySeq.values()].sort((a, b) => a.seq - b.seq)
-}
-
-function rowsOf(dir: string, sql: string, file: string): Array<Record<string, any>> {
-  const db = new Database(path.join(dir, file), { readonly: true, fileMustExist: true })
-  try { return db.prepare(sql).all() as Array<Record<string, any>> } finally { db.close() }
-}
-const macRows = (c: ReplicaCluster, sql: string, file: string) => rowsOf(c.macData, sql, file)
-const replicaRows = (c: ReplicaCluster, sql: string, file: string) => rowsOf(c.replicaData, sql, file)
-const macTasks = (c: ReplicaCluster) => macRows(c, 'SELECT id, title, project, tags FROM tasks', path.join('tasks', 'tasks.sqlite'))
-const macSessions = (c: ReplicaCluster) => macRows(c, 'SELECT claude_session_id, task_id, host FROM sessions', 'sessions.sqlite')
-
-/** On a failure: the cluster's logs (the Mac, the replica, the host daemon) in a file that outlives it. */
+/** On a failure: the cluster's logs in a file that outlives it. */
 function keepLogsOnFailure(c: () => ReplicaCluster | undefined, twin: string): void {
   onTestFailed(() => {
     const cl = c()
-    if (!cl) return
-    const out = path.join('/tmp', `rcl-local-calls-${twin}-${Date.now()}.log`)
-    let daemon = ''
-    try {
-      for (const n of fs.readdirSync(path.join(cl.base, 'hd')).filter((n) => /^daemon-.*\.log$/.test(n))) daemon += fs.readFileSync(path.join(cl.base, 'hd', n), 'utf8').slice(-40_000)
-    } catch { /* gone */ }
-    const l = cl.logs()
-    fs.writeFileSync(out, `--- mac ---\n${l.mac}\n--- replica ---\n${l.replica}\n--- host daemon ---\n${daemon}\n`)
-    process.stdout.write(`replica-cluster-local-calls-e2e: logs at ${out}\n`)
+    if (cl) process.stdout.write(`replica-cluster-local-calls-e2e: logs at ${writeClusterLogs(cl, `local-calls-${twin}`)}\n`)
   })
 }
 
@@ -128,10 +90,7 @@ describe.each(TWINS)('a host\'s own walnut calls while the Mac is away (%s twin)
     keepLogsOnFailure(() => c, twin)
     // The project's defaults are in the replica's copy (where the start is decided) before the Mac
     // sleeps: read on disk, since the replica forwards a read to the Mac while it answers.
-    await waitFor(() => {
-      const rows = replicaRows(c, "SELECT metadata FROM task_projects WHERE name = 'Acme'", path.join('tasks', 'tasks.sqlite'))
-      return String(rows[0]?.metadata ?? '').includes('devbox') ? true : null
-    }, 60_000, 'the replica\'s copy to hold the project\'s default host')
+    await waitFor(() => (replicaKnowsDefaultHost(c, 'Acme', 'devbox') ? true : null), 60_000, 'the replica\'s copy to hold the project\'s default host')
     const slept = c.sleepMac()
     await c.waitAway(token)
     // The replica calls the Mac away after one failed forward (4 s), the daemon's gateway after
