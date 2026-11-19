@@ -14,6 +14,7 @@
 import { mkdirSync } from 'node:fs'
 import { expect, test, type Page, type Route } from '@playwright/test'
 import { openWay } from './devices-ways-helpers'
+import { serveBrowserCodes } from './sign-in-state'
 
 test.setTimeout(120_000)
 
@@ -53,11 +54,9 @@ async function serve(page: Page, s: Server) {
     await route.fulfill({ json: { status: s.status } })
   })
   // The phone link Settings makes by itself once connected (this computer's address).
-  await page.route('**/api/devices/browser-code', (route) => route.fulfill({
-    json: {
-      code: 'ABCD-EFGH', expiresAt: Date.now() + 600_000, url: URL_HERE, link: `${URL_HERE}/#pair=ABCD-EFGH`,
-      addresses: [{ where: 'this-computer', label: 'This computer', url: URL_HERE, link: `${URL_HERE}/#pair=ABCD-EFGH`, alwaysOn: false }],
-    },
+  await serveBrowserCodes(page, () => ({
+    code: 'ABCD-EFGH', expiresAt: Date.now() + 600_000, url: URL_HERE, link: `${URL_HERE}/#pair=ABCD-EFGH`,
+    addresses: [{ where: 'this-computer', label: 'This computer', url: URL_HERE, link: `${URL_HERE}/#pair=ABCD-EFGH`, alwaysOn: false }],
   }))
 }
 

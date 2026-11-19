@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import { openWay } from './devices-ways-helpers'
 import { expectQrEncodes } from './phone-link-qr-check'
+import { serveBrowserCodes } from './sign-in-state'
 
 /**
  * "Open on your phone" with more than one address (BrowserAccessGroup.tsx): once the
@@ -17,7 +18,9 @@ import { expectQrEncodes } from './phone-link-qr-check'
  * The server half (which addresses exist) is pinned in
  * tests/web/routes/browser-code-addresses.test.ts; the shared fixture runs no
  * tunnel and no host server, so this spec answers /api/expose and the code request
- * itself.
+ * itself. Its page still hears every browser that signs in on the server and makes a new
+ * link then, so serveBrowserCodes runs it in the one-at-a-time sign-in group, where its
+ * counts see no other spec's sign-in.
  */
 
 const pause = (page: Page, ms = 1500) => (process.env.PW_VIDEO ? page.waitForTimeout(ms) : Promise.resolve())
@@ -49,16 +52,6 @@ async function serveConnected(page: Page, saved: Record<string, string> = {}) {
       settings: { enabled: true, provider: 'command', options: saved },
     },
   }))
-}
-
-/** Answers the code request with `body`, counting the requests. */
-async function serveCode(page: Page, body: () => Record<string, unknown>) {
-  const mints = { count: 0 }
-  await page.route('**/api/devices/browser-code', (route) => {
-    mints.count++
-    return route.fulfill({ json: body() })
-  })
-  return mints
 }
 
 /** What Copy put on the clipboard, read without a clipboard permission (any engine). */
@@ -110,7 +103,7 @@ test('the one link is made by itself, goes to the always-on host first, hides it
   page.on('pageerror', (e) => errors.push(e.message))
   await recordClipboard(page)
   await serveConnected(page)
-  const mints = await serveCode(page, () => ({
+  const mints = await serveBrowserCodes(page, () => ({
     code: 'ABCD-EFGH', expiresAt: Date.now() + 600_000,
     url: MAC, link: `${MAC}/#pair=ABCD-EFGH`,
     addresses: [
@@ -174,7 +167,7 @@ test('the one link is made by itself, goes to the always-on host first, hides it
 
 test("with no always-on host the link goes to this computer's address", async ({ page }) => {
   await serveConnected(page)
-  await serveCode(page, () => ({
+  await serveBrowserCodes(page, () => ({
     code: 'MNPQ-RSTU', expiresAt: Date.now() + 600_000,
     url: MAC, link: `${MAC}/#pair=MNPQ-RSTU`,
     addresses: [{ where: 'this-computer', label: 'This computer', url: MAC, link: `${MAC}/#pair=MNPQ-RSTU`, alwaysOn: false }],
@@ -189,7 +182,7 @@ test("with no always-on host the link goes to this computer's address", async ({
 
 test('an older server that sends one link still gets that link', async ({ page }) => {
   await serveConnected(page)
-  await serveCode(page, () => ({ code: 'WXYZ-2345', expiresAt: Date.now() + 600_000, url: MAC, link: `${MAC}/#pair=WXYZ-2345` }))
+  await serveBrowserCodes(page, () => ({ code: 'WXYZ-2345', expiresAt: Date.now() + 600_000, url: MAC, link: `${MAC}/#pair=WXYZ-2345` }))
   await openBrowserLink(page)
   await expect(page.getByTestId('browser-access-link')).toHaveAttribute('href', `${MAC}/#pair=WXYZ-2345`)
   await expect(page.getByTestId('browser-access-link')).toHaveText(`${MAC}/#pair=••••-••••`)
@@ -199,7 +192,7 @@ test('an older server that sends one link still gets that link', async ({ page }
 
 test('with no address in the answer, the code is shown to type', async ({ page }) => {
   await serveConnected(page)
-  const mints = await serveCode(page, () => ({ code: 'HJKM-NPQR', expiresAt: Date.now() + 600_000, addresses: [] }))
+  const mints = await serveBrowserCodes(page, () => ({ code: 'HJKM-NPQR', expiresAt: Date.now() + 600_000, addresses: [] }))
   await openBrowserLink(page)
   await expect(page.getByTestId('browser-access-code-value')).toHaveText('HJKM-NPQR')
   await expect(page.getByTestId('browser-access-code')).toContainText('No address reaches this computer from outside yet.')
@@ -223,7 +216,7 @@ test('when a link runs out, the new link comes with its own QR, never the old on
   let n = 0
   // The first link lasts eight seconds; the page drops it then and makes the next by itself.
   const codes = ['FIRS-TAAA', 'SECO-NDBB']
-  const mints = await serveCode(page, () => {
+  const mints = await serveBrowserCodes(page, () => {
     const code = codes[Math.min(n, codes.length - 1)]!
     const expiresAt = Date.now() + (n === 0 ? 8_000 : 600_000)
     n++
@@ -242,7 +235,7 @@ test('when a link runs out, the new link comes with its own QR, never the old on
 
 test('a hidden option shows its field only when the value saved for it does not fit', async ({ page }) => {
   await serveConnected(page, { token: 'Not A Token!' })
-  await serveCode(page, () => ({ code: 'ABCD-EFGH', expiresAt: Date.now() + 600_000, addresses: [] }))
+  await serveBrowserCodes(page, () => ({ code: 'ABCD-EFGH', expiresAt: Date.now() + 600_000, addresses: [] }))
   await openBrowserLink(page)
   const field = page.getByTestId('browser-access-option-token')
   await expect(field).toBeVisible()
@@ -251,7 +244,7 @@ test('a hidden option shows its field only when the value saved for it does not 
 
 test('a hidden option with a value that fits shows nothing', async ({ page }) => {
   await serveConnected(page, { token: 'abc-123' })
-  await serveCode(page, () => ({ code: 'ABCD-EFGH', expiresAt: Date.now() + 600_000, addresses: [] }))
+  await serveBrowserCodes(page, () => ({ code: 'ABCD-EFGH', expiresAt: Date.now() + 600_000, addresses: [] }))
   await openBrowserLink(page)
   await expect(page.getByTestId('browser-access-option-name')).toBeVisible()
   await expect(page.getByTestId('browser-access-option-token')).toHaveCount(0)

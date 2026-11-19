@@ -25,6 +25,11 @@
  *    browser" as its own phone. Every file that drives the tunnel or signs a browser in does
  *    it through sign-in-state.ts, whose calls put it in the one-at-a-time sign-in group
  *    (one-at-a-time-specs.ts), and names its phone by its own sign-in.
+ * 5. A page that shows a phone link hears every browser sign-in on the server (2026-11-19):
+ *    browser-access-addresses served its own links and counted them, and a phone that
+ *    browser-access-tunnel signed in beside it made its page ask for a third. Every file that
+ *    serves its page's links does it with sign-in-state.ts's serveBrowserCodes, which puts it
+ *    in the sign-in group too.
  */
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
@@ -77,7 +82,7 @@ describe('browser specs keep out of each other\'s data', () => {
     expect(missing, 'call isolateUiPrefs(page) before the page opens Home').toEqual([])
   })
 
-  it('a file that drives the tunnel or signs a browser in does it through sign-in-state', () => {
+  it('a file that drives the tunnel, signs a browser in or serves the phone links does it through sign-in-state', () => {
     // A direct write of the server's tunnel (config.yaml's expose, PUT /api/expose) or of its
     // browser sign-ins (a code, a code traded, a browser record made or removed).
     const WRITES = /\.(?:put|post)\(\s*[`'"]\/api\/(?:expose|devices\/browser-code|v1\/browser-pair)\b|\.delete\(\s*[`'"]\/api\/devices\/|\bready_pattern\b|putExactSection\([^)]*['"]expose['"]|name:\s*`browser-/
@@ -85,8 +90,14 @@ describe('browser specs keep out of each other\'s data', () => {
     // A spec that writes it must call the helpers, so playwright.config.ts puts it in the group.
     const writers = specs.filter((f) => WRITES.test(read(f)) && !SIGN_IN_CALL.test(read(f)))
     expect(writers, 'drive the tunnel and sign browsers in with tests/e2e/browser/sign-in-state.ts').toEqual([])
+    // A page answered with links of the spec's own still makes a new one when any browser signs
+    // in on the server, so the spec reads that state: it serves them with serveBrowserCodes.
+    const SERVES = /\.route\(\s*[`'"][^`'"]*\/api\/devices\/browser-code/
+    expect(SERVES.test(read('sign-in-state.ts')), 'the pattern still finds the helper\'s own route').toBe(true)
+    const readers = specs.filter((f) => SERVES.test(read(f)))
+    expect(readers, 'serve the page\'s phone links with serveBrowserCodes (tests/e2e/browser/sign-in-state.ts)').toEqual([])
     // The group is found in spec files only: a shared helper that writes it would take its callers out.
-    const helpers = sources.filter((f) => !f.endsWith('.spec.ts') && f !== 'sign-in-state.ts' && (WRITES.test(read(f)) || SIGN_IN_CALL.test(read(f))))
+    const helpers = sources.filter((f) => !f.endsWith('.spec.ts') && f !== 'sign-in-state.ts' && (WRITES.test(read(f)) || SERVES.test(read(f)) || SIGN_IN_CALL.test(read(f))))
     expect(helpers, 'call sign-in-state.ts from the spec itself').toEqual([])
   })
 })

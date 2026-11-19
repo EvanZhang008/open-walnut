@@ -14,6 +14,7 @@
 import { mkdirSync } from 'node:fs'
 import { expect, test, type Page, type Route } from '@playwright/test'
 import { openWay } from './devices-ways-helpers'
+import { serveBrowserCodes } from './sign-in-state'
 import { hostDetails, hostRow, openHostDetails } from './host-problems-fixture-helpers'
 
 test.setTimeout(120_000)
@@ -68,11 +69,9 @@ async function serve(page: Page, s: Server, host?: { key: string; label: string 
   })
   await page.route('**/api/host-servers', (route) => route.fulfill({ json: hostsBody(s, host?.key, host?.label) }))
   // The phone link Settings makes by itself once connected: the host's always-on address first.
-  await page.route('**/api/devices/browser-code', (route) => route.fulfill({
-    json: {
-      code: 'ABCD-EFGH', expiresAt: Date.now() + 600_000, url: URL_HOST, link: `${URL_HOST}/#pair=ABCD-EFGH`,
-      addresses: [{ where: 'devbox', label: 'Dev box', url: URL_HOST, link: `${URL_HOST}/#pair=ABCD-EFGH`, alwaysOn: true }],
-    },
+  await serveBrowserCodes(page, () => ({
+    code: 'ABCD-EFGH', expiresAt: Date.now() + 600_000, url: URL_HOST, link: `${URL_HOST}/#pair=ABCD-EFGH`,
+    addresses: [{ where: 'devbox', label: 'Dev box', url: URL_HOST, link: `${URL_HOST}/#pair=ABCD-EFGH`, alwaysOn: true }],
   }))
 }
 

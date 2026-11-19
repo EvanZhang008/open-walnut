@@ -8,7 +8,9 @@
  *
  * Both are one per server, so every spec that calls these helpers runs one at a time with
  * the others (one-at-a-time-specs.ts, SIGN_IN_CALL), and a spec that writes that state any
- * other way fails tests/web/browser-spec-isolation-guard.test.ts. A test still names its
+ * other way fails tests/web/browser-spec-isolation-guard.test.ts. So does a spec that serves
+ * its page's phone links itself without serveBrowserCodes: the page reads that state too,
+ * and makes a new link whenever any browser signs in on the server. A test still names its
  * own phone by what its sign-in answered (signInWithCode), never "the newest browser".
  */
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs'
@@ -100,6 +102,22 @@ export async function mintBrowserCode(request: APIRequestContext): Promise<{ cod
   const res = await request.post('/api/devices/browser-code')
   expect(res.ok(), await res.text()).toBe(true)
   return res.json()
+}
+
+/**
+ * Answer the page's own phone link requests (POST /api/devices/browser-code) with `body`,
+ * counting them. The page still hears every browser that signs in on the server
+ * (browser:signed-in) and makes a new link then, so another spec's sign-in would add a
+ * request here and swap the link on screen: a spec that serves its own links joins the
+ * sign-in group by calling this (SIGN_IN_CALL).
+ */
+export async function serveBrowserCodes(page: Page, body: () => Record<string, unknown>): Promise<{ count: number }> {
+  const mints = { count: 0 }
+  await page.route('**/api/devices/browser-code', (route) => {
+    mints.count++
+    return route.fulfill({ json: body() })
+  })
+  return mints
 }
 
 /**

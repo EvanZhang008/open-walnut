@@ -13,7 +13,10 @@
  *   moved it to a new address under another spec's open phones, and "Sign out all browsers"
  *   signs out every browser on the server (2026-11-18: browser-access-tunnel's removed-phone
  *   test and phone-settings C75 failed together in the browser gate, ERR_CONNECTION_REFUSED
- *   through a tunnel the other file had restarted).
+ *   through a tunnel the other file had restarted). A spec that serves its page's phone
+ *   links reads that state: the page makes a new link whenever any browser signs in on the
+ *   server (2026-11-19: browser-access-addresses counted a third link, made when
+ *   browser-access-tunnel signed a phone in beside it).
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -21,8 +24,8 @@ import path from 'node:path'
 /** A spec that swaps the server's one host fixture. */
 export const HOST_FIXTURE_CALL = /\b(?:loadFixture|hostFixture|resetServerHostFixture)\(/
 
-/** A spec that drives the server's tunnel or signs a browser in (sign-in-state.ts). */
-export const SIGN_IN_CALL = /\b(?:useServerTunnel|startServerTunnel|mintBrowserCode)\(/
+/** A spec that drives the server's tunnel, signs a browser in, or serves its page's phone links (sign-in-state.ts). */
+export const SIGN_IN_CALL = /\b(?:useServerTunnel|startServerTunnel|mintBrowserCode|serveBrowserCodes)\(/
 
 /** `**\/<spec>` globs of the specs in `dir` whose source matches `call`. */
 export function specsCalling(dir: string, call: RegExp): string[] {
