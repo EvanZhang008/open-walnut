@@ -253,6 +253,13 @@ async function watchLanding(page: Page): Promise<void> {
     const w = window as unknown as { landing?: { at: string | null; frames: number } }
     const landing = { at: null as string | null, frames: 0 }
     w.landing = landing
+    // Room below the rows, so the topmost marked row can reach the top whatever the shared board
+    // holds under it: with too few rows below, the list stopped at its end with the row short of
+    // the top, the best any jump could do (CI 2026-11-19: "at 262 (margin 26, scrollTop 2653 of 2653)").
+    let box = document.querySelector('[data-testid="status-limit-summary"]')?.parentElement ?? null
+    while (box && !/(auto|scroll)/.test(getComputedStyle(box).overflowY)) box = box.parentElement
+    if (!box) throw new Error('the status list has no scroll box above its Limited summary')
+    box.style.paddingBottom = `${box.clientHeight}px`
     const topOf = (el: Element): string => {
       let sc = el.parentElement
       while (sc && !(/(auto|scroll|overlay)/.test(getComputedStyle(sc).overflowY) && sc.scrollHeight > sc.clientHeight + 1)) sc = sc.parentElement
