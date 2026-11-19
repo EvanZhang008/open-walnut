@@ -51,7 +51,8 @@ function hasAreaProfile(record: Pick<SessionRecord, 'profile'> | undefined): boo
 const markOf = (t: Partial<Pick<Task, 'router_area_id' | 'org_role'>> | undefined) =>
   (t?.org_role === 'router' && typeof t.router_area_id === 'string' ? t.router_area_id.trim() : '');
 const roleOf = (_t: Pick<Task, 'org_role'>): RouterAreaRole => 'router';
-const areaMarked = (t: Pick<Task, 'org_role' | 'router_area_id'>) => t.org_role === 'router';
+/** A router area's task: only a router is area work since 2026-11-14 (task-manager.ts reads it too). */
+export const areaMarked = (t: Pick<Task, 'org_role' | 'router_area_id'>) => t.org_role === 'router';
 const areaFor = (id: string) => ({ id, host: LOCAL_HOST }) as RouterArea;
 
 function refuse(message: string): never {

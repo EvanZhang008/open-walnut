@@ -34,7 +34,7 @@ import { registry } from './integration-registry.js';
 import { dbGeneration, getDb, inCopyApply, rowToTask, taskToRow, TASK_COLUMNS, transaction as dbTransaction, TASK_DB_PATH } from './task-db.js';
 import { runMigrationIfNeeded } from './task-db-migration.js';
 import { runSessionMigrationIfNeeded } from './session-db-migration.js';
-import { assertTaskHistoryRowReadable, assertTaskHistoryWrite, sessionDbHandle, taskHistoryWriteNeedsCheck } from './router/history-write.js';
+import { areaMarked, assertTaskHistoryRowReadable, assertTaskHistoryWrite, sessionDbHandle, taskHistoryWriteNeedsCheck } from './router/history-write.js';
 import { OrgError } from './org/org-store.js';
 import { isFollower, isHostReplica, placement } from './server-role.js';
 import { stampedFieldTimes as stampFieldTimesPure, type FieldStamp } from './task-field-times.js';
@@ -5901,11 +5901,6 @@ async function refuseAreaMerge(survivorId: string, victimId: string): Promise<vo
     if (!taskRowExists(id)) throw new MergeTaskMissingError(role, id);
     throw new AreaMergeRefusedError(role, id);
   }
-}
-
-/** The same refusal on the rows read under the write lock: a router (only a router is area work since 2026-11-14). */
-function areaMarked(task: Task): boolean {
-  return task.org_role === 'router';
 }
 
 /**
