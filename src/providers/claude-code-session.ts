@@ -109,6 +109,7 @@ import { isSessionStopSuperseded } from '../core/sessions/session-stop.js'
 import { recordedSessionMode } from '../core/sessions/acp-recorded-mode.js'
 import { isWalnutOwnToolUse } from './acp-permission-posture.js'
 import { isWakeupArmed } from './daemon-fold.js'
+import { resumesEndedCall } from './bg-task-resume.js'
 import { outlivingOf, type OutlivingSource } from '../core/sessions/outliving-work.js'
 import { noteSuppressedErrorReason } from '../core/session-snapshot-gate.js'
 import { BudgetCheckingError, BudgetPausedError, ClaudeRuntimeMissingError, classifyDeliveryFailure, isDaemonCommandOutcomeUnknown, isHostLinkFailure, isPermanentDeliveryFailure, isSlowHostFailure, SendHeldError, SendOutcomeUnknownError, SessionHeldElsewhereError } from './delivery-failure.js'
@@ -1222,6 +1223,7 @@ export class ClaudeCodeSession {
         const label = typeof sys.subagent_type === 'string' && sys.subagent_type ? sys.subagent_type
           : (typeof sys.description === 'string' ? sys.description : undefined)
         changed = this._speed.laneStart(now, id, { label })
+          || (this._speed.hasLane(id) && resumesEndedCall(sys, id) && this._speed.laneResume(now, id))
       } else if (sys.subtype === 'task_notification' && this._speed.hasLane(id)) {
         const status = typeof sys.status === 'string' ? sys.status : 'completed'
         if (ClaudeCodeSession._BG_TERMINAL_STATUSES.has(status)) {
@@ -1721,7 +1723,7 @@ export class ClaudeCodeSession {
    *  set (see hasActiveBackgroundWork) — there is no parallel scalar counter to desync. */
   private _foregroundActive: boolean | undefined
   private _foregroundEvidenceV = 0
-  private _bgTasks = new Map<string, { description?: string; subagentType?: string; taskType?: string; status: string; tokens?: number; lastTool?: string; summary?: string; workflowName?: string; isBackgrounded?: boolean; endedPerLevel?: boolean; toolUseId?: string; toolUses?: number; durationMs?: number; startedAt?: number; endedAt?: number; ownedBySubagent?: boolean; spawnDepth?: number }>()
+  private _bgTasks = new Map<string, { description?: string; subagentType?: string; taskType?: string; status: string; tokens?: number; lastTool?: string; summary?: string; workflowName?: string; isBackgrounded?: boolean; endedPerLevel?: boolean; toolUseId?: string; toolUses?: number; durationMs?: number; startedAt?: number; endedAt?: number; ownedBySubagent?: boolean; spawnDepth?: number; resumed?: boolean; resumeFloorV?: number }>()
   /** Task ids that have EVER appeared in a `background_tasks_changed` payload — proof of
    *  membership in the CLI's level universe. Only a task the CLI itself once listed may be
    *  absent-marked by a later level (see the background_tasks_changed handler); a task the
@@ -2116,7 +2118,18 @@ export class ClaudeCodeSession {
       const remote = daemonState.tasks[taskId]
       if (!remote) continue
       if (local.toolUseId && remote.toolUseId && local.toolUseId !== remote.toolUseId) continue
-      if (ClaudeCodeSession._BG_TERMINAL_STATUSES.has(remote.status)) {
+      const remoteTerminal = ClaudeCodeSession._BG_TERMINAL_STATUSES.has(remote.status)
+      if (local.resumed) {
+        // A call the CLI started again (bg-task-resume.ts): the daemon's first answer after it may
+        // still hold the park's terminal (an older daemon keeps it for good, a newer one answered
+        // before it read the start). That answer sets the floor; only a terminal written after it
+        // (a larger v) is the call's real end.
+        if (local.resumeFloorV === undefined) {
+          this._bgTasks.set(taskId, { ...local, resumeFloorV: remote.v })
+          if (remoteTerminal) continue
+        } else if (remoteTerminal && remote.v <= local.resumeFloorV) continue
+      }
+      if (remoteTerminal) {
         // Daemon recorded a terminal status our live stream missed — adopt the source of truth.
         this._bgTasks.set(taskId, { ...local, status: remote.status })
         adopted++
@@ -7966,11 +7979,22 @@ export class ClaudeCodeSession {
               }
               const prevStarted = isNewInvocation ? undefined : existingStarted
               // Terminal is terminal: never let an out-of-order / replayed task_started
-              // revive a task that already reached a terminal status.
-              const startedStatus = prevStarted && ClaudeCodeSession._BG_TERMINAL_STATUSES.has(prevStarted.status)
+              // revive a task that already reached a terminal status, except the CLI
+              // starting the same call again (a parked background subagent goes on:
+              // bg-task-resume.ts).
+              const resumed = !!prevStarted && resumesEndedCall(sys, prevStarted.toolUseId)
+                && ClaudeCodeSession._BG_TERMINAL_STATUSES.has(prevStarted.status)
+              if (resumed) {
+                log.session.info('background task resumed under the same call', {
+                  sessionId: sid, taskId: this.taskId, bgTaskId: taskId, prevStatus: prevStarted?.status,
+                })
+              }
+              const startedStatus = !resumed && prevStarted && ClaudeCodeSession._BG_TERMINAL_STATUSES.has(prevStarted.status)
                 ? prevStarted.status : 'running'
               this._bgTasks.set(taskId, {
                 ...prevStarted,
+                // resumed: the daemon's L2 answer may still hold the park's terminal (reconcileFromDaemon).
+                ...(resumed ? { endedAt: undefined, endedPerLevel: undefined, durationMs: undefined, resumed: true, resumeFloorV: undefined } : {}),
                 description: sys.description as string | undefined,
                 subagentType: sys.subagent_type as string | undefined,
                 taskType: (sys.task_type as string | undefined) ?? prevStarted?.taskType,

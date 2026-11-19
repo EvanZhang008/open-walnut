@@ -294,7 +294,10 @@ describe('fold checkpoint', () => {
     // 2026-11-05, format 7: foldLine opens the turn at the walnut_process line of a
     // start that carries its first line (walnutTurn), not at the CLI's init. A
     // checkpoint folded before it read such a booting start as idle.
-    expect({ format: FOLD_CHECKPOINT_FORMAT, logicHash }).toEqual({ format: 7, logicHash: 'd639954615f663b6' })
+    // 2026-11-19, format 8: foldLine and applyTaskEvent take the CLI's start of an ended
+    // background call under its own id as the call running again (bg-task-resume.ts). A checkpoint
+    // folded before it may hold such a subagent ended while it works.
+    expect({ format: FOLD_CHECKPOINT_FORMAT, logicHash }).toEqual({ format: 8, logicHash: '7ec6f1b2facf6543' })
 
     // The factory's own FORMAT is the one written.
     fs.writeFileSync(jsonl, content(20))

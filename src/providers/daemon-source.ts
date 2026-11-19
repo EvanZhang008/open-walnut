@@ -2853,7 +2853,9 @@ function applyTaskEvent(ts, parsed, v, now) {
   let isBackgrounded = prev ? prev.isBackgrounded === true : false;
   if (subtype === 'task_started') {
     if (parsed.is_backgrounded === true) isBackgrounded = true;
-    nextStatus = prev && BG_TERMINAL_STATUSES.has(prev.status) ? prev.status : 'running';
+    // The CLI starting the same call again: a parked background subagent goes on (bg-task-resume.ts).
+    const resumed = parsed.is_backgrounded === true && !!toolUseId && !!prev && toolUseId === prev.toolUseId;
+    nextStatus = !resumed && prev && BG_TERMINAL_STATUSES.has(prev.status) ? prev.status : 'running';
   } else if (subtype === 'task_progress') {
     nextStatus = prev && BG_TERMINAL_STATUSES.has(prev.status) ? prev.status : 'running';
   } else if (subtype === 'task_updated') {

@@ -374,9 +374,13 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
     } else if (taskId && (subtype === 'task_started' || subtype === 'task_progress')) {
       const prev = next.bgTasks[taskId]
       const restarted = subtype === 'task_started' && differentInvocation
+      // The CLI starting an ended call again: a background subagent it parked while its own
+      // background command ran goes on (bg-task-resume.ts resumesEndedCall, inlined: no imports).
+      const resumed = subtype === 'task_started' && parsed.is_backgrounded === true
+        && !!toolUseId && toolUseId === prev?.toolUseId
       next.bgTasks = { ...next.bgTasks }
       next.bgTasks[taskId] = {
-        terminal: restarted ? false : prev ? prev.terminal : false,
+        terminal: restarted || resumed ? false : prev ? prev.terminal : false,
         toolUseId: toolUseId ?? prev?.toolUseId,
         // A run_in_background Bash task carries is_backgrounded:true TOP-LEVEL
         // on its task_started (verified live, local_bash 2026-08-28) — reading

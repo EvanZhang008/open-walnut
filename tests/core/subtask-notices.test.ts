@@ -66,6 +66,7 @@ import {
 import { _clearHeldNotices, pendingHeldNotices } from '../../src/core/sessions/held-notices.js';
 import { heldParents, resetHeld } from '../../src/core/sessions/subtask-batch.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
+import { noteTaskInput, resetTaskInputClockForTest } from '../../src/core/sessions/task-input-clock.js';
 import { REQUESTS_FILE, createSessionRequest, getSessionRequest } from '../../src/core/session-requests.js';
 import fs from 'node:fs';
 import { lastTurnOf, turnStarterOf } from '../../src/core/sessions/session-request-notify.js';
@@ -113,6 +114,7 @@ const storedChild = (id: string): Partial<Task> | null => (STORED_CHILDREN.has(i
 beforeEach(async () => {
   await resetHeld();
   _resetSubtaskNoticeMemory();
+  resetTaskInputClockForTest();
   _clearHeldNotices();
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   // Mid-turn by default: every kind reaches a parent whose turn is running.
@@ -307,6 +309,41 @@ describe('delivery to the parent', () => {
     expect(text).not.toContain('secret words');
   });
 
+  // 2026-11-19: a lead read "stopped without completing its task" three times in four minutes about
+  // a worker nobody wrote to. The identical state is not told twice; new words always are.
+  it('the same stop again, same words and nothing sent into the child since, is not sent', async () => {
+    const same = { text: 'Waiting on the subagent.' };
+    await queueSubtaskNotice(notice({ lastWords: same }));
+    await vi.advanceTimersByTimeAsync(COALESCE_MS + 10);
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+
+    await queueSubtaskNotice(notice({ lastWords: same }));
+    await vi.advanceTimersByTimeAsync(COALESCE_MS + 10);
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+
+    // New words are news even with no message in between (a restart, the terminal, its own wakeup).
+    await queueSubtaskNotice(notice({ lastWords: { text: 'The e2e fails at X; which way?' } }));
+    await vi.advanceTimersByTimeAsync(COALESCE_MS + 10);
+    expect(sendMessageToSession).toHaveBeenCalledTimes(2);
+    expect(delivered(1).text).toContain('The e2e fails at X; which way?');
+
+    // The same words after someone wrote to the child: told again.
+    noteTaskInput('child-a', Date.now() + 5);
+    await queueSubtaskNotice(notice({ lastWords: { text: 'The e2e fails at X; which way?' } }));
+    await vi.advanceTimersByTimeAsync(COALESCE_MS + 10);
+    expect(sendMessageToSession).toHaveBeenCalledTimes(3);
+
+    // Another kind in between clears it; other children are their own.
+    await queueSubtaskNotice(notice({ kind: 'blocked', blockedOn: 'Bash' }));
+    await vi.advanceTimersByTimeAsync(COALESCE_MS + 10);
+    await queueSubtaskNotice(notice({ lastWords: { text: 'The e2e fails at X; which way?' } }));
+    await queueSubtaskNotice(notice({ child: { id: 'child-b', title: 'B', sessionId: 'child-sid-b' }, lastWords: same }));
+    await vi.advanceTimersByTimeAsync(COALESCE_MS + 10);
+    expect(sendMessageToSession).toHaveBeenCalledTimes(5);
+    expect(delivered(4).text).toContain('(child-b)');
+    expect(delivered(4).text).toContain('which way?');
+  });
+
   it('a stop the child already undid with a new turn is not sent; a completion still is', async () => {
     await queueSubtaskNotice(notice({ child: { id: 'child-a', title: 'A', sessionId: 'child-sid-a' } }))
     // The CLI's follow-up turn after a background command started inside the coalesce window.
@@ -338,6 +375,8 @@ describe('delivery to the parent', () => {
     await vi.advanceTimersByTimeAsync(COALESCE_MS + 10);
     const firstId = delivered().opts.messageId;
     expect(firstId).toMatch(/^sn-child-a-stopped-[0-9a-f-]{36}$/);
+    // A message started the later turn (a stop with nothing new since is not sent again).
+    noteTaskInput('child-a', Date.now() + 5);
     await queueSubtaskNotice(notice({ lastWords: { text: 'A later turn ended.' } }));
     await vi.advanceTimersByTimeAsync(COALESCE_MS + 10);
     expect(delivered(1).opts.messageId).not.toBe(firstId);
@@ -382,6 +421,8 @@ describe('delivery to the parent', () => {
       { status: 'parked' },
     ]) {
       getQueue.mockResolvedValue([{ id: 'sn-child-a-stopped', message: 'old', ...row }]);
+      // Each stop follows a message into the child (the same stop with nothing new is not sent again).
+      noteTaskInput('child-a', Date.now() + 5);
       await queueSubtaskNotice(notice());
       await vi.advanceTimersByTimeAsync(COALESCE_MS + 10);
     }

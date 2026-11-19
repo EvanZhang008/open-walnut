@@ -258,6 +258,9 @@ async function endInterruptedWait(job: CronJob): Promise<void> {
   if (!taskId) return;
   const { dropInterruptedWait } = await import('../task-wait-resume.js');
   dropInterruptedWait(taskId, 'trigger-fired');
+  // A fire a host delivered straight into the CLI is input too (sessions/task-input-clock.ts).
+  const { noteTaskInput } = await import('../sessions/task-input-clock.js');
+  noteTaskInput(taskId);
 }
 
 /**

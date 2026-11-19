@@ -33,6 +33,8 @@ vi.mock('../../src/providers/claude-code-session.js', () => ({
 }))
 
 import type { SessionSnapshot } from '../../src/providers/daemon-fold.js'
+import { foldLines, assembleSnapshot } from '../../src/providers/daemon-fold.js'
+import { parkedSubagentStream } from '../helpers/parked-subagent-stream.js'
 import {
   projectProcessStatus,
   applySnapshot,
@@ -1759,6 +1761,33 @@ describe('applySnapshot settled task handback', () => {
       await applySnapshot(sid, snap({ v: 800, cliState: 'idle', turnActive: false, lastResult: { isError: false, endOffset: 780 }, streamEpoch: 'handback-epoch' }), 'daemon-push')
       expect((await getSessionByClaudeId(sid))?.process_status).toBe('idle')
       expect((await getTask(taskId)).phase).toBe('NEED_ACTION')
+    })
+
+    // 2026-11-19: the CLI parks a background subagent ("completed") while its own command runs and
+    // starts it again under the same call when the command ends; the subagent read as ended, so
+    // the command's end handed the task back three times while the subagent worked.
+    it('a parked background subagent started again keeps its task working through its own command\'s end', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const { taskId, sid } = await seed()
+      const { lines, working, done } = parkedSubagentStream()
+      const pushed = (n: number) => ({
+        ...assembleSnapshot({ foldState: foldLines(lines.slice(0, n).join('\n') + '\n'), pendingCtrl: null, dead: false, pid: 4242, exitCode: null }),
+        streamEpoch: 'handback-epoch',
+      })
+      // The daemon pushes after every line, the empty level line between the command's end and
+      // the subagent's new start included.
+      for (let n = 1; n <= working[working.length - 1]; n++) {
+        await applySnapshot(sid, pushed(n), 'daemon-push')
+        expect((await getTask(taskId)).phase, `after line ${n}`).toBe('IN_PROGRESS')
+      }
+      await vi.advanceTimersByTimeAsync(DRAIN_FOLLOWUP_GRACE_MS + 1_000)
+      expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+      expect((await getSessionByClaudeId(sid))?.process_status).toBe('running')
+      // Its real final report: the turn is over, as before.
+      await applySnapshot(sid, pushed(done), 'daemon-push')
+      await vi.advanceTimersByTimeAsync(DRAIN_FOLLOWUP_GRACE_MS + 1_000)
+      vi.useRealTimers()
+      await expect.poll(async () => (await getTask(taskId)).phase).toBe('NEED_ACTION')
     })
 
     it('settles once the grace passes with no follow-up turn', async () => {

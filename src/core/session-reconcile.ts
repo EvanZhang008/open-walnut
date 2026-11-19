@@ -58,6 +58,7 @@
  */
 
 import { foldLine, initialFoldState } from '../providers/daemon-fold.js'
+import { resumesEndedCall } from '../providers/bg-task-resume.js'
 import os from 'node:os'
 import path from 'node:path'
 import { log } from '../logging/index.js'
@@ -401,7 +402,7 @@ export function foldSessionTail(
         }
       } else if (taskId && (subtype === 'task_started' || subtype === 'task_progress')) {
         const prev = fold.bgTasks[taskId]
-        const restarted = subtype === 'task_started' && differentInvocation
+        const restarted = (subtype === 'task_started' && differentInvocation) || resumesEndedCall(parsed, prev?.toolUseId)
         fold.bgTasks[taskId] = {
           status: !restarted && prev && BG_TERMINAL.has(prev.status) ? prev.status : 'running',
           toolUseId: toolUseId ?? prev?.toolUseId,

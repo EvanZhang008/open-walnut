@@ -47,6 +47,7 @@ import { randomUUID } from 'node:crypto';
 import { isSupersededSession } from './engine-switch-marker.js';
 import { log } from '../../logging/index.js';
 import { refNamesId } from '../../lib/id-ref.js';
+import { lastTaskInputAt } from './task-input-clock.js';
 import type { SessionRecord, Task } from '../types.js';
 import type { NoticeLastMessage } from '../session-requests.js';
 import type { EnvelopeWordsUnread, SubtaskNoticeKind, TurnStarter } from '../peers/envelope-kit.js';
@@ -160,6 +161,37 @@ function completionTold(n: SubtaskNotice, now: number): boolean {
 }
 
 /**
+ * Parent/child → the last `stopped` about that child that reached the parent: when it was queued and
+ * the child's words in it. A second `stopped` with the SAME words and nothing sent into the child
+ * since it (sessions/task-input-clock.ts) is the same state told again (2026-11-19: a lead read
+ * "stopped without completing its task" three times in four minutes about a worker nobody wrote
+ * to). New words are news whoever started the turn (a restart, the terminal, its own wakeup), so
+ * only the identical state is held back. Any other notice about the child clears it.
+ */
+const stopsTold = new Map<string, { at: number; words: string }>();
+
+const stopWords = (n: SubtaskNotice): string =>
+  JSON.stringify([n.lastWords?.text ?? '', n.lastWords?.actions ?? [], n.wordsUnread ?? ''])
+
+function repeatedStop(n: SubtaskNotice): boolean {
+  if (n.kind !== 'stopped') return false;
+  const told = stopsTold.get(`${n.parentTaskId}/${n.child.id}`);
+  if (!told || told.words !== stopWords(n)) return false;
+  const input = lastTaskInputAt(n.child.id);
+  return input === undefined || input < told.at;
+}
+
+function noteStopsTold(notices: readonly SubtaskNotice[]): void {
+  if (stopsTold.size > 5000) stopsTold.clear();
+  for (const n of notices) {
+    const key = `${n.parentTaskId}/${n.child.id}`;
+    // Queued, not delivered: a message into the child between the two is what made the next stop news.
+    if (n.kind === 'stopped') stopsTold.set(key, { at: n.queuedAt ?? Date.now(), words: stopWords(n) });
+    else stopsTold.delete(key);
+  }
+}
+
+/**
  * The completions a flush is sending now, child key → its completed_at: the told mark comes only
  * after the send, so a second edge of the same completion queued meanwhile went out on its own
  * 3 s later (2026-11-13, the org reflection: b5a8a84b's close and its turn end, 4 s apart, sent
@@ -184,6 +216,7 @@ export function _resetSubtaskNoticeMemory(): void {
   completionsTold.clear();
   completionsSending.clear();
   siblingsTold.clear();
+  stopsTold.clear();
 }
 
 /**
@@ -436,6 +469,12 @@ export async function queueSubtaskNotice(n: SubtaskNotice): Promise<void> {
       log.session.info('subtask notice skipped: its turn was only an agent-ack', { parentTaskId: n.parentTaskId, childTaskId: n.child.id });
       return;
     }
+    if (repeatedStop(n)) {
+      log.session.info('subtask notice skipped: the same stop was told and nothing went into the child since', {
+        parentTaskId: n.parentTaskId, childTaskId: n.child.id,
+      });
+      return;
+    }
     const toldAlready = () => {
       if (n.kind !== 'completed' || !(completionTold(n, Date.now()) || completionSending(n))) return false;
       log.session.info('subtask notice skipped: this completion was already told', {
@@ -678,6 +717,7 @@ async function deliverNotices(target: SessionRecord, raw: SubtaskNotice[]): Prom
     ...(notices.some((n) => n.kind === 'completed' || n.kind === 'error') ? { endsWait: true } : {}),
   });
   noteCompletionsTold(notices);
+  noteStopsTold(notices);
   shown?.();
   log.session.info('subtask notice delivered', {
     parentSid, parentTaskId: target.taskId, delivery, messageId,

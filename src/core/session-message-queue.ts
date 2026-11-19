@@ -52,6 +52,7 @@ import { aiOnlyEnvelopes, hasAiOnly, keepAiOnly, withoutAiOnly } from '../lib/ai
 import { forgetBriefsTold } from './sessions/app-brief.js';
 import { keepLeadingFrame } from './sessions/queue-edit-frame.js';
 import { assertDemoAdmission, demoAdmissionClosed, DemoAdmissionClosedError } from './sessions/demo-admission.js';
+import { noteTaskInput } from './sessions/task-input-clock.js';
 
 // ── Types and store (session-queue-store.ts) ──
 
@@ -265,6 +266,8 @@ export async function sendMessageToSession(
   sessionId = await activeSessionFor(sessionId, opts?.messageId);
   const { getSessionByClaudeId } = await import('./session-tracker.js');
   const areaRecord = await getSessionByClaudeId(sessionId);
+  // Something went into the task's session: a stop after it is news to its lead (sessions/task-input-clock.ts).
+  noteTaskInput(areaRecord?.taskId ?? opts?.taskId);
   // The router's wake passes only inside router/wake.ts's own grant, into a router session.
   const { assertAreaDelivery } = await import('./router/delivery-scope.js');
   const scopedArea = assertAreaDelivery(areaRecord, sessionId, opts?.source, opts?.messageId);

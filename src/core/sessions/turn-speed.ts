@@ -383,6 +383,17 @@ export class TurnSpeedMeter {
     return this.lanes.has(id);
   }
 
+  /** The CLI started an ended background Agent call again (providers/bg-task-resume.ts): it runs on. */
+  laneResume(now: number, id: string): boolean {
+    const lane = this.lanes.get(id);
+    if (!lane || lane.status === 'running') return false;
+    lane.status = 'running';
+    lane.endedAt = undefined;
+    lane.callStartedAt = now;
+    this.syncFinalLanes();
+    return true;
+  }
+
   /** A frozen final keeps its lanes current (a backgrounded agent outlives the result). */
   private syncFinalLanes(): void {
     if (this.finalSnapshot) this.finalSnapshot = { ...this.finalSnapshot, ...this.lanesField() };

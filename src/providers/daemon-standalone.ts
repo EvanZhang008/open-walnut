@@ -1766,8 +1766,10 @@ function applyTaskEvent(ts: TaskState, parsed: Record<string, unknown>, v: numbe
   let isBackgrounded = prev ? prev.isBackgrounded === true : false
   if (subtype === 'task_started') {
     if (parsed.is_backgrounded === true) isBackgrounded = true
-    // Terminal is terminal: a late/duplicate start can't revive a finished task.
-    nextStatus = prev && BG_TERMINAL_STATUSES.has(prev.status) ? prev.status : 'running'
+    // Terminal is terminal: a late/duplicate start can't revive a finished task, except the CLI
+    // starting the same call again (a parked background subagent goes on: bg-task-resume.ts).
+    const resumed = parsed.is_backgrounded === true && !!toolUseId && toolUseId === prev?.toolUseId
+    nextStatus = !resumed && prev && BG_TERMINAL_STATUSES.has(prev.status) ? prev.status : 'running'
   } else if (subtype === 'task_progress') {
     nextStatus = prev && BG_TERMINAL_STATUSES.has(prev.status) ? prev.status : 'running'
   } else if (subtype === 'task_updated') {
