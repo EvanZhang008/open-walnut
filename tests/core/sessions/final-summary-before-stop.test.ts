@@ -18,6 +18,8 @@ const { ownerStops } = vi.hoisted(() => ({
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-final-summary-stop'))
 vi.mock('../../../src/core/sessions/owner-stop.js', () => ({
+  // Every host's daemon is connected (task-complete-stop.ts covers one that is not).
+  ownerConnection: async () => ({ connected: true }),
   stopThroughOwner: async (row: { claudeSessionId: string }) => {
     ownerStops.push({ sid: row.claudeSessionId, at: Date.now() })
     return 'stopped'

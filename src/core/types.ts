@@ -3999,6 +3999,12 @@ export interface SessionRecord {
    *  a hint block, rides the session's next message (sessions/engine-switch-io.ts). */
   switchContext?: { text: string; switchId: string; at: string };
   stopRequest?: { id: string; requestedAt: string; state: 'pending' | 'confirmed' | 'failed'; error?: string };
+  /** The stop its completed task decided that has not reached its CLI yet (sessions/task-complete-stop.ts):
+   *  'turn_end', it completed its own task mid-turn and is stopped when that turn ends (watched again
+   *  after a restart, deadline from `at`); 'undelivered', its host's daemon was not connected, so the
+   *  record keeps its state and the stop is sent when the host connects (`actor`: it was the session
+   *  that completed the task, so it still waits for its turn's end). */
+  taskCompleteStop?: { at: string; state: 'turn_end' | 'undelivered'; actor?: boolean };
   /** Its host could not be reached when it was stopped (sessions/host-lost.ts): stopped here at
    *  `at`, its stop request kept pending until the host reconnects and ends the process
    *  (`endedAt`). `by`: 'human' or 'task:<id>'; `why`: what the connect answered. */

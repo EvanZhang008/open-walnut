@@ -26,6 +26,8 @@ const { ownerStops, acpStops, liveAcp, marks, outcomes, undos } = vi.hoisted(() 
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-owner-stop-callers'))
 vi.mock('../../../src/core/sessions/owner-stop.js', () => ({
+  // Every host's daemon is connected (task-complete-stop.ts covers one that is not).
+  ownerConnection: async () => ({ connected: true }),
   stopThroughOwner: async (row: { claudeSessionId: string; host?: string }, reason: string, why: string) => {
     ownerStops.push({ sid: row.claudeSessionId, host: row.host, reason, why })
     return outcomes.get(row.claudeSessionId) ?? 'stopped'

@@ -49,7 +49,15 @@ export const LIFECYCLE_WAITS: readonly LifecycleWait[] = [
     waitsFor: 'a session that completed its own task: its turn to end before it is stopped',
     limits: ['SELF_COMPLETE_STOP_MAX_MS'],
     atEnd: 'the session is stopped',
-    restart: 'ends (the session is reaped by its idle timer)',
+    restart: 'resumes (taskCompleteStop "turn_end" on the record, deadline from its `at`; watched again before the boot\'s completed-task migration)',
+  },
+  {
+    id: 'task-complete-stop-undelivered',
+    file: 'src/core/sessions/task-complete-stop.ts',
+    waitsFor: 'a completed task\'s session on a host whose daemon is not connected: the record keeps its state and the stop waits for the host to connect',
+    limits: ['TASK_COMPLETE_STOP_UNDELIVERED_MAX_MS'],
+    atEnd: 'the next completion pass (a boot, a write to the task) records the session stopped without its host; the host\'s own idle reaper ends a CLI nobody stopped, and a later connect still sends the stop',
+    restart: 'resumes (taskCompleteStop "undelivered" on the record, sent when the host connects)',
   },
   {
     id: 'org-handover-close',

@@ -18,6 +18,10 @@
  *
  * The wait is turn-end-wait.ts: a status event or a poll looks, and nothing holds the stop
  * longer than SELF_COMPLETE_STOP_MAX_MS (lifecycle-waits.ts lists it).
+ *
+ * The wait is also on the record (`taskCompleteStop: 'turn_end'`, task-complete-stop.ts), so
+ * a restart watches it again with its own deadline instead of losing it (2026-11-18: a deploy
+ * dropped the in-memory wait, and the boot migration then wrote the live session stopped).
  */
 import { log } from '../../logging/index.js';
 import { TurnEndWait } from './turn-end-wait.js';
@@ -43,6 +47,10 @@ export function __setSelfCompleteSettleMs(ms?: number): void {
 /** The task is complete: a turn (or the background work it left) holds the stop at most this long. */
 export const SELF_COMPLETE_STOP_MAX_MS = 24 * 60 * 60_000;
 
+// One shared import (turn-end-wait.ts: two first imports at once can leave one pending under vitest).
+let taskCompleteStopMod: Promise<typeof import('./task-complete-stop.js')> | null = null;
+const taskCompleteStop = () => (taskCompleteStopMod ??= import('./task-complete-stop.js'));
+
 /** Sessions whose stop is running now (the wait is over, the stop is not yet). */
 const stopping = new Set<string>();
 
@@ -54,7 +62,11 @@ const waiter = new TurnEndWait<Wait>({
   queue: false,
   get settleMs() { return settleMs; },
   // Reopened during the rest of the turn (task_update, a message): it keeps running.
-  asked: async (sid, wait) => (await stillComplete(sid) ? { askedAt: wait.since } : null),
+  asked: async (sid, wait) => {
+    if (await stillComplete(sid)) return { askedAt: wait.since };
+    await (await taskCompleteStop()).clearTaskCompleteStop(sid, 'turn_end');
+    return null;
+  },
   act: async (sid, wait) => {
     stopping.add(sid);
     try {
@@ -69,9 +81,10 @@ const waiter = new TurnEndWait<Wait>({
   },
 });
 
-export function stopWhenTurnEnds(sessionId: string): void {
+/** `since`: when the stop was decided (a restart passes the time on the record, keeping the deadline). */
+export function stopWhenTurnEnds(sessionId: string, since: number = Date.now()): void {
   if (waiter.has(sessionId)) return;
-  waiter.watch(sessionId, { since: Date.now() });
+  waiter.watch(sessionId, { since });
 }
 
 /** A session that stops at this turn's end: the task's other writes leave it
@@ -80,7 +93,8 @@ export function isAwaitingTurnEnd(sessionId: string): boolean {
   return waiter.has(sessionId) || stopping.has(sessionId);
 }
 
-async function stillComplete(sessionId: string): Promise<string | undefined> {
+/** The session's task id when that task (as its record names it now) is complete. */
+export async function stillComplete(sessionId: string): Promise<string | undefined> {
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const { listTasksByIds } = await import('../task-manager.js');
   // The record names the session's task now (a merge moves sessions).
@@ -91,11 +105,17 @@ async function stillComplete(sessionId: string): Promise<string | undefined> {
 
 async function stopIfStillComplete(sessionId: string, wait: Wait): Promise<void> {
   try {
-    if (!await stillComplete(sessionId)) return;
+    if (!await stillComplete(sessionId)) {
+      await (await taskCompleteStop()).clearTaskCompleteStop(sessionId, 'turn_end');
+      return;
+    }
     const { awaitFinalSummary } = await import('../session-hooks/builtins.js');
     const summary = await awaitFinalSummary(sessionId, wait.since);
     const taskId = await stillComplete(sessionId);
-    if (!taskId) return;
+    if (!taskId) {
+      await (await taskCompleteStop()).clearTaskCompleteStop(sessionId, 'turn_end');
+      return;
+    }
     const { completeTaskSessions } = await import('../session-tracker.js');
     // Still the actor: when a new turn has started since, it waits for that one.
     const stopped = await completeTaskSessions([sessionId], { actorSid: sessionId });
@@ -104,6 +124,8 @@ async function stopIfStillComplete(sessionId: string, wait: Wait): Promise<void>
     log.session.warn('stop at turn end failed for a self-completed session', {
       sessionId, error: err instanceof Error ? err.message : String(err),
     });
+    // The wait is over: its marker must not keep the task's next completion pass away from it.
+    await (await taskCompleteStop()).clearTaskCompleteStop(sessionId, 'turn_end');
   }
 }
 

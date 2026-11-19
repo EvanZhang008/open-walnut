@@ -2827,6 +2827,15 @@ function autoCompleteTaskSessions(task: Task, actorSid?: string): void {
  * Returns the total number of sessions updated.
  */
 export async function migrateCompletedTaskSessions(): Promise<number> {
+  // First, a session that completed its own task and waited for its turn's end when the
+  // server went down waits again (its marker on the record): completeTaskSessions below
+  // leaves it to that wait (2026-11-18: without it, this pass wrote it stopped mid-turn).
+  try {
+    const { resumeTaskCompleteStops } = await import('./sessions/task-complete-stop.js');
+    await resumeTaskCompleteStops();
+  } catch (err) {
+    log.task.warn('task complete stop: turn-end waits not resumed', { error: err instanceof Error ? err.message : String(err) });
+  }
   const store = await readStore();
   const completeTasks = store.tasks.filter((t) => t.phase === 'COMPLETE' && t.session_ids?.length);
   if (completeTasks.length === 0) return 0;

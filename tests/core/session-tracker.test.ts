@@ -134,7 +134,9 @@ describe('live command failure PID', () => {
   });
   it('task completion stops a live CLI even after its command failed', async () => {
     const owner = await import('../../src/core/sessions/owner-stop.js');
-    const stop = vi.spyOn(owner, 'stopThroughOwner').mockResolvedValue({ stopped: true } as never);
+    const stop = vi.spyOn(owner, 'stopThroughOwner').mockResolvedValue('stopped');
+    // Its host's daemon is connected: a host that is not keeps the record (task-complete-stop.ts).
+    owner.__setOwnerConnectionForTesting(async () => ({ connected: true, hasCapability: () => true, send: async () => ({}) }));
     const { completeTaskSessions } = await import('../../src/core/session-tracker.js');
     await createSessionRecord('complete-live-error', '', 'demo', undefined, { pid: 4242 });
     await updateSessionRecord('complete-live-error', { process_status: 'error', pid: 4242 });
@@ -142,6 +144,21 @@ describe('live command failure PID', () => {
     expect(stop).toHaveBeenCalledWith(expect.objectContaining({ claudeSessionId: 'complete-live-error' }), 'maintenance', 'task_completed');
     expect((await getSessionByClaudeId('complete-live-error'))?.pid).toBeUndefined();
     stop.mockRestore();
+    owner.__setOwnerConnectionForTesting(null);
+  });
+
+  it('task completion keeps the record of a live CLI whose host is not connected, for the host to stop', async () => {
+    const owner = await import('../../src/core/sessions/owner-stop.js');
+    const stop = vi.spyOn(owner, 'stopThroughOwner').mockResolvedValue('stopped');
+    owner.__setOwnerConnectionForTesting(async () => null);
+    const { completeTaskSessions } = await import('../../src/core/session-tracker.js');
+    await createSessionRecord('complete-away', '', 'demo', undefined, { pid: 4243 });
+    await updateSessionRecord('complete-away', { process_status: 'idle', pid: 4243 });
+    expect(await completeTaskSessions(['complete-away'])).toBe(0);
+    expect(stop).not.toHaveBeenCalled();
+    expect(await getSessionByClaudeId('complete-away')).toMatchObject({ process_status: 'idle', pid: 4243, taskCompleteStop: { state: 'undelivered' } });
+    stop.mockRestore();
+    owner.__setOwnerConnectionForTesting(null);
   });
 
   it('keeps an explicitly supplied live pid across failure and metadata writes, but clears it on death', async () => {

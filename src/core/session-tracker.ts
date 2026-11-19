@@ -36,7 +36,8 @@ import {
 // Also a zero-import leaf — see the file header for why classification cannot
 // live in a prose match.
 import { classifyStatusReasonKind } from './session-error-kind.js';
-import { stopWhenTurnEnds } from './sessions/self-complete-stop.js';
+import { SELF_COMPLETE_STOP_MAX_MS, stopWhenTurnEnds } from './sessions/self-complete-stop.js';
+import { noteStopUndelivered, recheckUndeliveredHosts, undeliveredHolds, unreachableOwnerHosts } from './sessions/task-complete-stop.js';
 import { assertTaskSessionFree, otherTaskSessionId } from './sessions/one-session-per-task.js';
 import { isAcpEngine, resolveEngine } from './agents/engine-registry.js';
 import { CLOUD_BOX_DEFAULT_IDLE_LIMIT, CLOUD_BOX_DEFAULT_LIMIT, CLOUD_BOX_HOST_ALIAS } from './hosts/cloud-box-host.js';
@@ -652,6 +653,18 @@ export async function listPendingSessionStops(host?: string): Promise<SessionRec
     : db.prepare(`SELECT * FROM sessions
     WHERE json_extract(payload, '$.stopRequest.state') = 'pending'
     AND COALESCE(host, '__local__') = ?`).all(host)) as Record<string, any>[];
+  return rows.map(rowToSession);
+}
+
+/** The sessions whose completed task's stop has not reached them yet (sessions/task-complete-stop.ts). */
+export async function listTaskCompleteStops(filter: { state: 'turn_end' | 'undelivered'; host?: string }): Promise<SessionRecord[]> {
+  await ensureSessionInit();
+  const db = getDb();
+  if (!db) throw new Error('Session database is unavailable');
+  const where = `payload IS NOT NULL AND json_valid(payload) AND json_extract(payload, '$.taskCompleteStop.state') = ?`;
+  const rows = (filter.host === undefined
+    ? db.prepare(`SELECT * FROM sessions WHERE ${where}`).all(filter.state)
+    : db.prepare(`SELECT * FROM sessions WHERE ${where} AND COALESCE(NULLIF(host, ''), '__local__') = ?`).all(filter.state, filter.host)) as Record<string, any>[];
   return rows.map(rowToSession);
 }
 
@@ -3023,6 +3036,14 @@ export async function completeTaskSessions(
     // isolated workspace waited for its session's stop, which never came, and stayed).
     const stoppedRows: SessionRecord[] = [];
     let stopAtTurnEnd: string | undefined;
+    // A stop the owner cannot receive now is not written as done (2026-11-18: the boot
+    // migration wrote a live session stopped while its host was not connected yet, and
+    // the stop it sent reached nothing). Such a row keeps its state, and its stop is
+    // sent when the host connects (sessions/task-complete-stop.ts).
+    const unreachable = await unreachableOwnerHosts(db, sessionIds);
+    const undelivered: string[] = [];
+    const rearm: { sid: string; since: number }[] = [];
+    const nowMs = Date.parse(now);
 
     const insertCols = [...SESSION_COLUMNS, 'payload'];
     const insertSql =
@@ -3032,12 +3053,29 @@ export async function completeTaskSessions(
     sessionDbTx((handle) => {
       const sel = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?');
       const ins = handle.prepare(insertSql);
+      const writeRow = (session: SessionRecord) => {
+        const partial = sessionToRow(session);
+        const bound: Record<string, unknown> = {};
+        for (const col of insertCols) bound[col] = partial[col] === undefined ? null : partial[col];
+        ins.run(bound);
+        noteSessionRowTouched(session.claudeSessionId);
+      };
+      // A row whose only change is its taskCompleteStop marker: no status moved.
+      const writeMarker = (session: SessionRecord, marker: SessionRecord['taskCompleteStop']) => {
+        session.taskCompleteStop = marker;
+        writeRow(session);
+      };
       for (const sid of sessionIds) {
         const row = sel.get(sid) as Record<string, any> | undefined;
         if (!row) continue;
         const session = rowToSession(row);
         initializeStatusVersion(session);
         const beforeStatus = canonicalStatusProjection(session);
+        const marker = session.taskCompleteStop;
+        const converged = (isTerminalSession(session) || session.process_status === 'stopped') && session.pid == null;
+        // A stop that already happened another way needs no marker; one whose send
+        // failed on the way (recorded stopped, marker 'undelivered') keeps it for the host.
+        if (converged && marker?.state === 'turn_end') writeMarker(session, undefined);
         if (isTerminalSession(session) && session.pid == null) continue;
         // Already-converged record: stopped with no PID — rewriting it is pure
         // churn. 'stopped' is not terminal per isTerminalSession (only 'error'
@@ -3049,8 +3087,29 @@ export async function completeTaskSessions(
         const hasAcpWorker = session.pid == null && isAcpEngine(session.engine) && !!session.acpRuntimeId;
         // An ACP session calls the API under its worker's runtime id, not the record's id.
         const isActor = !!opts?.actorSid && (sid === opts.actorSid || session.acpRuntimeId === opts.actorSid);
+        // It completed its own task and waits for its turn's end: that wait stops it,
+        // after a restart too (its deadline bounds a stale marker).
+        if (!isActor && marker?.state === 'turn_end' && nowMs - Date.parse(marker.at) < SELF_COMPLETE_STOP_MAX_MS) continue;
         if ((hasCli || hasAcpWorker) && isActor && session.process_status === 'running') {
           stopAtTurnEnd = sid;
+          if (marker?.state !== 'turn_end') writeMarker(session, { at: now, state: 'turn_end' });
+          continue;
+        }
+        // It completed its own task and its stop could not be sent: now that the host is
+        // back, it still waits for its turn's end, whoever completes the task again.
+        if (!isActor && (hasCli || hasAcpWorker) && marker?.state === 'undelivered' && marker.actor
+            && !unreachable.has(session.host || '__local__')) {
+          writeMarker(session, { at: marker.at, state: 'turn_end' });
+          rearm.push({ sid, since: Date.parse(marker.at) });
+          continue;
+        }
+        if ((hasCli || hasAcpWorker) && unreachable.has(session.host || '__local__')
+            && (marker?.state !== 'undelivered' || undeliveredHolds(marker, nowMs))) {
+          if (marker?.state !== 'undelivered' || (isActor && !marker.actor)) {
+            const actor = isActor || (marker?.state === 'undelivered' && marker.actor);
+            writeMarker(session, { at: marker?.state === 'undelivered' ? marker.at : now, state: 'undelivered', ...(actor ? { actor: true } : {}) });
+          }
+          undelivered.push(sid);
           continue;
         }
         if (hasCli) {
@@ -3074,17 +3133,12 @@ export async function completeTaskSessions(
           log.session.info('clearing stale PID on task completion', { sessionId: sid, pid: session.pid });
         }
         session.pid = undefined;
+        session.taskCompleteStop = undefined;
         session.last_status_change = now;
         session.lastActiveAt = now;
         commitStatusVersion(session, beforeStatus, now);
         // history-write exempt: status, reason, pid and activity times only, read from this row.
-        const partial = sessionToRow(session);
-        const bound: Record<string, unknown> = {};
-        for (const col of insertCols) {
-          bound[col] = partial[col] === undefined ? null : partial[col];
-        }
-        ins.run(bound);
-        noteSessionRowTouched(session.claudeSessionId);
+        writeRow(session);
         stoppedRows.push(session);
         updated++;
       }
@@ -3095,6 +3149,13 @@ export async function completeTaskSessions(
     if (stopAtTurnEnd) {
       stopWhenTurnEnds(stopAtTurnEnd);
       log.session.info('self-completing session stops when its turn ends', { sessionId: stopAtTurnEnd });
+    }
+    for (const r of rearm) stopWhenTurnEnds(r.sid, Number.isFinite(r.since) ? r.since : Date.now());
+    if (undelivered.length > 0) {
+      log.session.info('completing task sessions: host not connected, record kept and stop sent when it connects', { sessionIds: undelivered.join(','), count: undelivered.length });
+      // A host that connected while this pass read: its connect's flush may have looked before
+      // these markers landed, so flush it once more after the lock is released.
+      void recheckUndeliveredHosts([...unreachable]);
     }
     if (updated > 0) {
       log.session.info('completing task sessions', { sessionIds: sessionIds.join(','), count: updated });
@@ -3120,7 +3181,9 @@ export async function completeTaskSessions(
       if (pidsToKill.length > 0) {
         const { stopThroughOwner } = await import('./sessions/owner-stop.js');
         for (const target of pidsToKill) {
-          void stopThroughOwner({ claudeSessionId: target.sid, host: target.host }, 'maintenance', 'task_completed');
+          void stopThroughOwner({ claudeSessionId: target.sid, host: target.host }, 'maintenance', 'task_completed')
+            .then((outcome) => outcome === 'unreachable' || outcome === 'unknown' ? noteStopUndelivered(target.sid, outcome) : undefined)
+            .catch(() => {});
         }
       }
       if (acpToStop.length > 0) void stopAcpWorkers(acpToStop);
@@ -3145,7 +3208,10 @@ async function stopAcpWorkers(rows: Pick<SessionRecord, 'claudeSessionId' | 'hos
     try {
       const live = sessionRunner.findAcpSession(row.claudeSessionId);
       if (live) await live.gracefulStop();
-      else await stopAcpThroughOwner(row, 'task_completed');
+      else {
+        const outcome = await stopAcpThroughOwner(row, 'task_completed');
+        if (outcome === 'unreachable' || outcome === 'unknown') await noteStopUndelivered(row.claudeSessionId, outcome);
+      }
     } catch (err) {
       log.session.warn('stopping an ACP worker on task completion failed', {
         sessionId: row.claudeSessionId, error: err instanceof Error ? err.message : String(err),
