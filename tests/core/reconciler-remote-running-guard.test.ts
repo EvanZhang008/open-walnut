@@ -23,10 +23,12 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants())
 
 const applySessionPhaseCalls: Array<{ taskId: string; newPhase?: string }> = []
+const own = vi.hoisted(() => ({ runs: false }))
 vi.mock('../../src/core/phase.js', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../../src/core/phase.js')>()
   return {
     ...mod,
+    ownWorkWakes: vi.fn(async () => own.runs),
     applySessionPhase: vi.fn(async (taskId: string, _t: string, _s: string, opts?: { newPhase?: string }) => {
       applySessionPhaseCalls.push({ taskId, newPhase: opts?.newPhase })
       return { changed: true }
@@ -64,7 +66,26 @@ async function runReconcile(session: SessionRecord, task: Task): Promise<void> {
   }).reconcileTaskPhases([session], taskMap, deadProbe)
 }
 
-beforeEach(() => { applySessionPhaseCalls.length = 0 })
+beforeEach(() => { applySessionPhaseCalls.length = 0; own.runs = false })
+
+// 2026-11-19: tasks moved off Waiting onto their own test-results watch (watches:"own") were
+// handed back as drift 10 minutes later. Their work runs outside and the watch wakes them.
+describe('a task whose own work runs outside is no drift', () => {
+  const stopped = () => makeRemoteSession('sid-own', 'task-own', { process_status: 'stopped' } as Partial<SessionRecord>)
+  it('a stopped session with its own-work watch armed: phase untouched', async () => {
+    own.runs = true
+    await runReconcile(stopped(), makeTask('task-own', 'sid-own'))
+    expect(applySessionPhaseCalls).toHaveLength(0)
+  })
+  it('without one, or when its session failed, it is handed back as before', async () => {
+    await runReconcile(stopped(), makeTask('task-own', 'sid-own'))
+    expect(applySessionPhaseCalls.map((c) => c.taskId)).toEqual(['task-own'])
+    applySessionPhaseCalls.length = 0
+    own.runs = true
+    await runReconcile(makeRemoteSession('sid-own', 'task-own', { process_status: 'error' } as Partial<SessionRecord>), makeTask('task-own', 'sid-own'))
+    expect(applySessionPhaseCalls.map((c) => c.taskId)).toEqual(['task-own'])
+  })
+})
 
 describe('reconciler remote-running guard (inc-1786691991988)', () => {
   it('INCIDENT SHAPE: remote record still running + dead probe → phase untouched', async () => {

@@ -2372,7 +2372,11 @@ export class SessionHealthMonitor {
         const allRemoteUnreachable = dead.length > 0 && dead.every(
           s => s.host && (s.status_reason === 'remote_unreachable' || s.process_status === 'running'),
         )
-        if (!allRemoteUnreachable) {
+        // Its own work runs outside and its watch wakes it (watches:"own"): no session needs to live
+        // for that, so a quiet In Progress is no drift (2026-11-19: two tasks moved off Waiting onto
+        // their own test-results watch were handed back 10 minutes later).
+        const ownRuns = !dead.some((s) => s.process_status === 'error') && await (await import('./phase.js')).ownWorkWakes(taskId)
+        if (!allRemoteUnreachable && !ownRuns) {
           // All primary sessions dead + stuck at IN_PROGRESS → the work was
           // handed back whether or not a result event survived. NEED_ACTION
           // (was WAIT until that phase's removal 2026-08-18): red+unread, the
