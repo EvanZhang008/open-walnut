@@ -28,6 +28,7 @@
 import { normalizeText } from './human-inbox/duplicate-letter.js';
 import { isLocalDraftAsk } from './org/user-kind.js';
 import type { RolledAsk, StatusReport, UserStatus } from './user-status.js';
+import { matterWords } from './ask-matter.js';
 
 /** A deliberate second ask says why in at least this many characters. */
 export const SAME_ASK_REASON_MIN = 10;
@@ -275,6 +276,8 @@ export interface SameAskFold {
   answered?: true;
   /** Both ask the user to sign in again (sign-in-ask.ts), whatever the words or the team. */
   signIn?: true;
+  /** Folded under another team's ask about the same matter (ask-matter.ts): the key both name. */
+  matter?: string;
 }
 
 /** What a fold reads of the tasks around it. */
@@ -320,6 +323,9 @@ export interface RelativeAsk extends RolledAsk {
   /** A lead, VP or Main already answered it there for the user (Task.ask_answered): a teammate
    *  asking the same reads it answered at once, never as a new Needs you. */
   answered?: true;
+  /** Another team's ask about the same matter (ask-matter.ts, the key both name): the same ask,
+   *  whatever its words, unless either says it is another decision (ask_distinct). */
+  matter?: string;
 }
 
 /** Of two teammates that both show the same ask, the one whose shows: the older task, then the lower id. */
@@ -337,10 +343,10 @@ function stampOf(status: UserStatus, report: FoldContext['report']): string {
 
 /** Its wait in words, as every surface prints it after "Waiting on": what it is first, since a row
  *  shows one line (2026-11-05 UI review: the title first left "same decision" cut off). */
-export function foldWords(f: Pick<SameAskFold, 'title' | 'ask' | 'answered' | 'team' | 'signIn'>): string {
+export function foldWords(f: Pick<SameAskFold, 'title' | 'ask' | 'answered' | 'team' | 'signIn' | 'matter'>): string {
   const title = f.title.replace(/\s+/g, ' ').slice(0, 80);
   if (f.signIn) return f.answered ? `the user's sign-in, answered in "${title}"` : `the user's sign-in, asked once in "${title}"`;
-  const where = f.team ? `"${title}", beside it in its team` : `its subtask "${title}"`;
+  const where = f.matter ? `"${title}", another team on ${matterWords(f.matter)}` : f.team ? `"${title}", beside it in its team` : `its subtask "${title}"`;
   return f.answered
     ? `the same decision, answered in ${where}`
     : `the same decision in ${where}: ${f.ask.replace(/\s+/g, ' ').slice(0, 160)}`;
@@ -374,6 +380,7 @@ export function foldSameAsk(selfId: string, derived: UserStatus, asks: readonly 
     if (bothSignIn(a) || (derived.decision?.id && derived.decision.id === a.decision?.id)
       || sameAskText(derived.ask, a.ask)) return true;
     if (theirs?.ask_distinct) return false;
+    if ((a as RelativeAsk).matter && !own?.ask_distinct) return true;
     return own?.same_as === a.id || theirs?.same_as === selfId || sameAskText(derived.ask, a.ask);
   };
   const pick = (): { hit: RolledAsk; team?: true } | undefined => {
@@ -401,6 +408,7 @@ export function foldSameAsk(selfId: string, derived: UserStatus, asks: readonly 
       id: hit.id, title: hit.title, ask: hit.ask, key, stamp, at,
       ...(picked.team ? { team: true as const } : {}), ...((hit as RelativeAsk).answered ? { answered: true as const } : {}),
       ...(bothSignIn(hit) ? { signIn: true as const } : {}),
+      ...((hit as RelativeAsk).matter ? { matter: (hit as RelativeAsk).matter } : {}),
     };
   } else if (!prev || draftStillLocal(prev.ask)) {
     // An answer given there for the user that was taken back since the fold (sessions/ask-withdraw.ts):
@@ -667,11 +675,14 @@ export interface TreeAsk {
   letterId?: string;
   /** Where that task stands to the writer's task. */
   relation: 'ancestor' | 'descendant' | 'team' | 'elsewhere';
+  /** Another team's ask about the same matter (ask-matter.ts): the ticket or issue both name. One
+   *  matter is one ask, whatever its words. */
+  matter?: string;
 }
 
-/** The first open ask in the tree that asks what `text` asks, or null. */
+/** The first open ask in the tree that asks what `text` asks (or one about the same matter), or null. */
 export function findSameAsk(text: string, asks: readonly TreeAsk[]): TreeAsk | null {
-  return asks.find((a) => sameAskText(text, a.ask)) ?? null;
+  return asks.find((a) => sameAskText(text, a.ask)) ?? asks.find((a) => !!a.matter) ?? null;
 }
 
 /** The reason given for asking again anyway (one line), or ''. */
@@ -686,19 +697,34 @@ const RELATION_WORDS: Record<TreeAsk['relation'], string> = {
 };
 
 /** The refusal's words for an ask a lead, VP or Main already answered for the user. */
-export function answeredAskMessage(answer: AskAnswer, what: 'letter' | 'report' | 'thread'): string {
-  const verb = what === 'letter' ? 'Not sent' : what === 'thread' ? 'Not handed to the user' : 'Not put on the user';
+export function answeredAskMessage(answer: AskAnswer, what: AskOutlet): string {
+  const verb = outletVerb(what);
   return `${verb}: ${answer.byTitle.replace(/\s+/g, ' ').slice(0, 80)} already answered this for the user (${answer.at.slice(0, 16).replace('T', ' ')} UTC), `
     + `when you asked "${answer.ask.replace(/\s+/g, ' ').slice(0, 160)}": "${answer.text.replace(/\s+/g, ' ').slice(0, 240)}". `
     + `Act on that answer. If it leaves a different decision open, ask that one in its own words, or pass same_ask_reason: one line (at least ${SAME_ASK_REASON_MIN} characters) saying why it is not answered.`;
 }
 
+/** Where a new ask of the user is being put: a decision letter, a status report, a thread, a Board choice. */
+export type AskOutlet = 'letter' | 'report' | 'thread' | 'choice';
+
+/** How a refusal of it starts. */
+export function outletVerb(what: AskOutlet): string {
+  return what === 'letter' ? 'Not sent' : what === 'thread' ? 'Not handed to the user' : what === 'choice' ? 'Choice not added' : 'Not put on the user';
+}
+
 /** The refusal's words: which ask, where, and what to do instead. */
-export function sameAskMessage(hit: TreeAsk, what: 'letter' | 'report' | 'thread'): string {
+export function sameAskMessage(hit: TreeAsk, what: AskOutlet): string {
   const where = hit.where === 'letter' ? `in its open decision letter ${hit.letterId}` : 'in its status (Needs you)';
-  const verb = what === 'letter' ? 'Not sent' : what === 'thread' ? 'Not handed to the user' : 'Not put on the user';
+  const verb = outletVerb(what);
+  if (hit.matter) {
+    return `${verb}: "${hit.title.replace(/\s+/g, ' ').slice(0, 100)}" (${hit.taskId}), in another team, already asks the user about ${matterWords(hit.matter)} ${where}: "${hit.ask.replace(/\s+/g, ' ').slice(0, 200)}". `
+      + 'One matter is asked of the user in one place. Do not ask it again: tell that task what you know or want (task_send), and its ask carries it; the user\'s answer reaches you through it. '
+      + `If yours is a separate decision the user must also make, pass same_ask_reason: one line (at least ${SAME_ASK_REASON_MIN} characters) saying why.`;
+  }
   const instead = what === 'thread'
     ? 'Keep this thread working or pending and name that task in it (tasks); its answer reaches you through that task.'
+    : what === 'choice'
+      ? 'Leave the choice off the Board and name that task there instead (<walnut-task>); its answer reaches you through that task.'
     : 'Do not ask it again: the user answers it there, and that task carries the answer (task_send it if you need the answer too).';
   return `${verb}: ${RELATION_WORDS[hit.relation]}, "${hit.title.replace(/\s+/g, ' ').slice(0, 100)}" (${hit.taskId}), already asks the user this ${where}: "${hit.ask.replace(/\s+/g, ' ').slice(0, 200)}". `
     + `The user sees one decision once. ${instead} If it really is a different decision, write it so, or pass same_ask_reason: one line (at least ${SAME_ASK_REASON_MIN} characters) saying why it is not the same.`;

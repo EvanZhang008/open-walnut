@@ -30,6 +30,8 @@ import { deriveUserStatus, fallbackUserState, reportIsCurrent, rollUpAsks, TURN_
 import { answeredAbove, answerContextOf, answerFor, answersOf, askKey, foldSameAsk, withdrawnAtOf, type RelativeAsk } from './same-ask.js';
 import { isSignInAsk, signInWaitWords, type SignInState } from './sign-in-ask.js';
 import { relativeAsksIndex, treeAround } from './same-ask-tree.js';
+import { sameTaskArea } from './router/same-area.js';
+import { askMatter, matterIndex, matterNamedIn, sharedMatter, type MatterIndex } from './ask-matter.js';
 import { resolveDecisionOwner } from './decision-owner.js';
 import { isReportPending, onReportPendingChange } from './sessions/report-pending.js';
 import type { Task } from './types.js';
@@ -121,6 +123,9 @@ export interface StatusFacts {
   personInputAt?: Map<string, string>;
   /** Every open sign-in ask shown as Needs you now, whatever team (sign-in-ask.ts; completeStatusFacts). */
   signInAsks?: RelativeAsk[];
+  /** Every task's matter (ask-matter.ts) and the asks shown now, for a fold across teams by matter. */
+  matter?: MatterIndex;
+  shownAsks?: Task[];
   /** The user's login command words (config ssh_login_hint), and the live sign-in state (readFoldEvidence). */
   loginWords?: string[];
   signIn?: SignInState;
@@ -643,6 +648,9 @@ export function completeStatusFacts(facts: StatusFacts, everything: readonly Tas
   for (const t of everything) if (!facts.titles.has(t.id)) facts.titles.set(t.id, t.title);
   facts.tasksById = new Map(everything.map((t) => [t.id, t] as const));
   facts.relativeAsks = relativeAsksIndex(everything);
+  facts.matter = matterIndex(everything);
+  facts.shownAsks = everything.filter((t) => t.phase !== 'COMPLETE' && t.status !== 'done' && !t.plugin_only && !t.org_role
+    && t.user_status?.state === 'needs' && !!t.user_status.ask && (t.user_status.source === 'session' || t.user_status.source === 'choice'));
   facts.openWorkers = new Map();
   facts.workersAtWork = new Map();
   for (const t of everything) {
@@ -834,7 +842,7 @@ function explicitDecisionOwner(task: Task, facts: StatusFacts): RelativeAsk | un
 /** Every task's sign-in asks beside its teammates', when its own ask is one (one sign-in is one ask). */
 function relativesWithSignIn(task: Task, facts: StatusFacts, derived: UserStatus): RelativeAsk[] {
   const team = facts.relativeAsks?.(task) ?? [];
-  if (derived.state !== 'needs' || derived.source !== 'session' || !isSignInAsk(derived.ask, facts.loginWords ?? [])) return team;
+  if (derived.state !== 'needs' || !derived.ask || (derived.source !== 'session' && derived.source !== 'choice')) return team;
   // Never one above or below it: those fold by depth (rollUpAsks), and a holder chosen across the
   // tree as well would let a parent and its subtask wait on each other.
   const byId = facts.tasksById;
@@ -846,7 +854,26 @@ function relativesWithSignIn(task: Task, facts: StatusFacts, derived: UserStatus
   };
   const above = chain(task.id);
   const seen = new Set([task.id, ...team.map((r) => r.id)]);
-  return [...team, ...(facts.signInAsks ?? []).filter((r) => !seen.has(r.id) && !above.has(r.id) && !chain(r.id).has(task.id))];
+  const apart = (id: string) => !seen.has(id) && !above.has(id) && !chain(id).has(task.id);
+  const out = [...team];
+  if (derived.source === 'session' && isSignInAsk(derived.ask, facts.loginWords ?? [])) {
+    for (const r of facts.signInAsks ?? []) if (apart(r.id)) { out.push(r); seen.add(r.id); }
+  }
+  // Another team's ask about the same matter (the ticket both name) is the same ask: the older shows it.
+  // Session asks only: a Board choice passed its own check when it was put up, and a task's id
+  // (a pointer) is for the write check, never a fold.
+  if (facts.matter && !task.org_role && derived.source === 'session') {
+    const index = facts.matter;
+    const keys = new Set([...askMatter(task.id, derived.ask, index)].filter((k) => !index.isTaskId(k)));
+    for (const t of keys.size ? facts.shownAsks ?? [] : []) {
+      if (t.user_status!.source !== 'session' || !apart(t.id) || !sameTaskArea(task, t)) continue;
+      const matter = sharedMatter(keys, index.own(t.id)) ?? matterNamedIn(keys, t.user_status!.ask);
+      if (!matter) continue;
+      out.push({ id: t.id, title: t.title, ask: t.user_status!.ask!, createdAt: t.created_at, matter, ...(t.user_status!.decision ? { decision: t.user_status!.decision } : {}) });
+      seen.add(t.id);
+    }
+  }
+  return out;
 }
 
 /**

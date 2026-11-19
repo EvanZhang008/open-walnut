@@ -61,6 +61,7 @@ import type { Task } from '../../core/types.js'
 import { storedUserState } from '../../core/user-status.js'
 import {
   BoardError,
+  applyBoardEdits,
   boardHasContent,
   removeBoard,
   deleteBoardMessage,
@@ -335,10 +336,21 @@ boardV1Router.get('/tasks/:id/board', route(async (req, res) => {
   })
 }))
 
+/** A new Board choice asks the user: one already asked (its tree, or another team about its matter) is a 409. */
+async function refuseSameAskChoicesOr409(taskId: string, before: string | undefined, after: string, b: Record<string, unknown>): Promise<void> {
+  const { refuseSameAskChoices } = await import('../../core/boards/choice-same-ask.js')
+  const { SameAskError } = await import('../../core/same-ask.js')
+  await refuseSameAskChoices(taskId, before, after, { same_ask_reason: b.same_ask_reason ?? b.sameAskReason }).catch((err) => {
+    if (err instanceof SameAskError) throw new RouteError(409, 'same_ask', err.message)
+    log.task.debug('board: same-ask check of new choices failed, write let through', { taskId, error: err instanceof Error ? err.message : String(err) })
+  })
+}
+
 boardV1Router.put('/tasks/:id/board', route(async (req, res) => {
   const { task, caller } = await prepareWrite(req)
   const b = body(req)
   if (typeof b.html !== 'string') throw new RouteError(400, 'bad_request', '`html` must be a string')
+  if (caller.kind !== 'human') await refuseSameAskChoicesOr409(task.id, (await getBoard(task.id).catch(() => null))?.html, b.html, b)
   const board = await setBoardHtml(task.id, b.html, { by: writer(caller), ...(caller.kind === 'task' || (caller.kind === 'agent' && caller.untracked) ? { sessionId: caller.sessionId } : {}), expectVersion: optionalVersion(b.version) })
   res.json({ board: publicBoard(board) })
 }))
@@ -356,6 +368,12 @@ boardV1Router.post('/tasks/:id/board/edits', route(async (req, res) => {
     }
     return { old: o.old, new: o.new }
   })
+  if (caller.kind !== 'human') {
+    const before = (await getBoard(task.id).catch(() => null))?.html
+    let after: string | undefined
+    try { after = before !== undefined ? applyBoardEdits(before, edits) : undefined } catch { after = undefined }
+    if (before !== undefined && after !== undefined) await refuseSameAskChoicesOr409(task.id, before, after, b)
+  }
   const board = await editBoardHtml(task.id, edits, { by: writer(caller), ...(caller.kind === 'task' || (caller.kind === 'agent' && caller.untracked) ? { sessionId: caller.sessionId } : {}), expectVersion: optionalVersion(b.version) })
   res.json({ board: publicBoard(board) })
 }))

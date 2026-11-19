@@ -18,8 +18,9 @@ import type { Task } from './types.js';
 import { briefTeam } from './user-status.js';
 import { sameTaskArea } from './router/same-area.js';
 import { askDecisionQuestion } from './ask-decision.js';
+import { askMatter, matterIndex, matterKeysInText, matterNamedIn, matterWords, sharedMatter } from './ask-matter.js';
 import {
-  FOLDABLE_SOURCES, answeredAskMessage, answerFor, answersOf, findSameAsk, SameAskError, sameAskMessage, sameAskReasonOf, type AnswerDecision, type RelativeAsk, type TreeAsk,
+  FOLDABLE_SOURCES, askKey, outletVerb, type AskOutlet, answeredAskMessage, answerFor, answersOf, findSameAsk, SameAskError, sameAskMessage, sameAskReasonOf, type AnswerDecision, type RelativeAsk, type TreeAsk,
 } from './same-ask.js';
 
 /** How far a leader chain is walked (subtask-limits.ts caps sessions at 3 levels below a top-level task). */
@@ -194,14 +195,125 @@ async function readOpenLetters(): Promise<OpenLetter[]> {
   return letters.filter(awaitsUserDecision).map((l) => ({ id: l.id, subject: l.subject, taskId: l.sender?.taskId }));
 }
 
-/** The tree's open asks, read from the store; the inbox only when the task has a tree at all. */
-async function readTree(taskId: string, forWrite: boolean): Promise<{ self?: Task; asks: TreeAsk[]; everything: Task[] }> {
+/** How long another team's report on a matter counts as its latest word (matterReportsOf). */
+export const MATTER_REPORT_MS = 24 * 60 * 60_000;
+
+/** An open decision letter with its words (subject and body), for the matter check. */
+export interface OpenLetterText extends OpenLetter { text: string }
+
+/**
+ * The asks of other teams about the matter `keys` (ask-matter.ts): a task outside the tree, in the
+ * same area, whose shown ask or open decision letter is about one of the keys: that task's own
+ * matter, or one its words name. The first made first. Pure.
+ */
+export function matterAsksOf(
+  taskId: string, keys: ReadonlySet<string>, everything: readonly Task[], letters: readonly OpenLetterText[],
+  own: (taskId: string) => readonly string[],
+): TreeAsk[] {
+  if (!keys.size) return [];
+  const self = everything.find((t) => t.id === taskId);
+  if (!self) return [];
+  const near = new Set([taskId, ...treeAround(taskId, everything).map((a) => a.task.id)]);
+  const others = new Map(everything.filter((t) => !near.has(t.id) && open(t) && !t.plugin_only && sameTaskArea(self, t)).map((t) => [t.id, t] as const));
+  const out: Array<TreeAsk & { at: string }> = [];
+  for (const t of others.values()) {
+    const s = t.user_status;
+    if (!s || s.state !== 'needs' || !s.ask || !s.source || !FOLDABLE_SOURCES.has(s.source)) continue;
+    const matter = sharedMatter(keys, own(t.id)) ?? matterNamedIn(keys, s.ask);
+    if (matter) out.push({ taskId: t.id, title: t.title, ask: s.ask, where: 'status', relation: 'elsewhere', matter, at: t.created_at ?? '' });
+  }
+  for (const l of letters) {
+    const t = l.taskId ? others.get(l.taskId) : undefined;
+    if (!t) continue;
+    const matter = sharedMatter(keys, own(t.id)) ?? matterNamedIn(keys, l.text);
+    if (matter) out.push({ taskId: t.id, title: t.title, ask: l.subject, where: 'letter', letterId: l.id, relation: 'elsewhere', matter, at: t.created_at ?? '' });
+  }
+  // A letter first (the user answers a decision where it was first written), then the older task.
+  return out.sort((a, b) => (a.where === b.where ? (a.at < b.at ? -1 : a.at > b.at ? 1 : 0) : a.where === 'letter' ? -1 : 1))
+    .map(({ at: _at, ...a }) => a);
+}
+
+/** Another team's latest word on a matter: what its task said it did or found. */
+export interface MatterReport { taskId: string; title: string; matter: string; said: string; at: string }
+
+/**
+ * Other teams' tasks about the matter `keys` (their own matter, never one their words only name)
+ * that said something on it within MATTER_REPORT_MS and do not ask the user about it: their status
+ * line now, or their result when they finished. A new ask must read these first: that task may
+ * have done what the ask wants of the user, or found it is not needed. 2026-11-18: a leader asked
+ * the user to switch traffic back by hand while the task imported for that alarm was watching the
+ * automatic switch back, which finished an hour later. The newest first. Pure.
+ */
+export function matterReportsOf(
+  taskId: string, keys: ReadonlySet<string>, everything: readonly Task[], own: (taskId: string) => readonly string[], nowMs = Date.now(),
+): MatterReport[] {
+  if (!keys.size) return [];
+  const self = everything.find((t) => t.id === taskId);
+  if (!self) return [];
+  const near = new Set([taskId, ...treeAround(taskId, everything).map((a) => a.task.id)]);
+  const out: MatterReport[] = [];
+  for (const t of everything) {
+    if (near.has(t.id) || t.plugin_only || !sameTaskArea(self, t)) continue;
+    const matter = sharedMatter(keys, own(t.id).filter((k) => k !== t.id.toLowerCase()));
+    if (!matter || t.user_status?.state === 'needs') continue;
+    // One that waits on this tree (folded under its ask, or waiting on it) has no news for it.
+    if (near.has(t.user_status?.sameAsk?.id ?? '') || [...near].some((id) => (t.user_status?.waitingOn ?? '').includes(id))) continue;
+    const result = t.result_report;
+    const said = open(t) ? t.user_status?.now : result?.result ?? t.user_status?.now;
+    const at = open(t) ? t.user_status?.at : result?.at ?? t.user_status?.at;
+    const ms = Date.parse(at ?? '');
+    if (!said?.trim() || !Number.isFinite(ms) || nowMs - ms > MATTER_REPORT_MS) continue;
+    out.push({ taskId: t.id, title: t.title, matter, said: said.trim(), at: at! });
+  }
+  return out.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
+}
+
+/** Per letter id: its subject and body, lower case, for the matter check (a letter's words do not change). */
+const letterWords = new Map<string, string>();
+
+/** The open decision letters from `senders`, with their words. */
+export async function readOpenLetterTexts(letters: readonly OpenLetter[], senders: ReadonlySet<string>): Promise<OpenLetterText[]> {
+  const { getLetter } = await import('./human-inbox/store.js');
+  const out: OpenLetterText[] = [];
+  for (const l of letters) {
+    if (!l.taskId || !senders.has(l.taskId)) continue;
+    let text = letterWords.get(l.id);
+    if (text === undefined) {
+      const detail = await getLetter(l.id, { inlineMaxBytes: 64_000 }).catch(() => null);
+      if (!detail) { out.push({ ...l, text: l.subject }); continue; }
+      text = `${l.subject}\n${typeof detail.body === 'string' ? detail.body : detail.textPreview ?? ''}`.slice(0, 64_000);
+      if (letterWords.size > 2000) letterWords.clear();
+      letterWords.set(l.id, text);
+    }
+    out.push({ ...l, text });
+  }
+  return out;
+}
+
+/**
+ * The tree's open asks, read from the store, and other teams' asks about the same matter as
+ * `matterText` (with the task's own matter). The inbox only when there is something to compare.
+ */
+async function readTree(taskId: string, forWrite: boolean, matterText?: string): Promise<{ self?: Task; asks: TreeAsk[]; everything: Task[]; reports: MatterReport[] }> {
   const { listTasks } = await import('./task-manager.js');
   const everything = await listTasks();
   const self = everything.find((t) => t.id === taskId);
-  if (!treeAround(taskId, everything).length) return { self, asks: [], everything };
+  const index = matterIndex(everything);
+  const keys = self ? askMatter(taskId, matterText, index) : new Set<string>();
+  // Its own id names it, never another matter.
+  keys.delete(taskId.toLowerCase());
+  const around = treeAround(taskId, everything);
+  if (!around.length && !keys.size) return { self, asks: [], everything, reports: [] };
   const letters = await readOpenLetters().catch(() => []);
-  return { self, asks: treeAsksOf(taskId, everything, letters, forWrite), everything };
+  const asks = around.length ? treeAsksOf(taskId, everything, letters, forWrite) : [];
+  if (!keys.size) return { self, asks, everything, reports: [] };
+  const near = new Set([taskId, ...around.map((a) => a.task.id)]);
+  const senders = new Set(letters.map((l) => l.taskId).filter((id): id is string => !!id && !near.has(id)));
+  const texts = await readOpenLetterTexts(letters, senders).catch(() => []);
+  const matter = matterAsksOf(taskId, keys, everything, texts, index.own);
+  const asking = new Set(matter.map((a) => a.taskId));
+  const reports = matterReportsOf(taskId, keys, everything, index.own).filter((r) => !asking.has(r.taskId));
+  return { self, asks: [...asks, ...matter], everything, reports };
 }
 
 /** When a person last wrote in the task, read from its sessions (SessionRecord.humanInputAt), or undefined. */
@@ -223,7 +335,7 @@ async function personInputAtOf(task: Task): Promise<string | undefined> {
  * Walnut cannot read lets the ask through.
  */
 export async function refuseSameAsk(
-  taskId: string | undefined, text: string | undefined, what: 'letter' | 'report' | 'thread',
+  taskId: string | undefined, text: string | undefined, what: AskOutlet,
   input?: { same_ask_reason?: unknown; sameAskReason?: unknown } | null,
   /** The parts of the ask beside `text` (a letter's numbered items), checked against what was answered. */
   parts: readonly string[] = [],
@@ -235,10 +347,14 @@ export async function refuseSameAsk(
   const reason = sameAskReasonOf(input);
   let hit: TreeAsk | null = null;
   let everything: Task[] = [];
+  let reports: MatterReport[] = [];
   try {
     const { listTasks } = await import('./task-manager.js');
     everything = await listTasks();
-    hit = findSameAsk(text, (await readTree(taskId, true)).asks);
+    const matterText = [text, ...parts, decision?.more ?? ''].join('\n');
+    const tree = await readTree(taskId, true, matterText);
+    hit = findSameAsk(text, tree.asks);
+    reports = tree.reports;
   } catch (err) {
     log.task.debug('same-ask: tree unreadable, ask let through', { taskId, error: err instanceof Error ? err.message : String(err) });
     return;
@@ -265,13 +381,30 @@ export async function refuseSameAsk(
     }
   }
   if (!decision?.credentialAsk || (decision.credentialAsk.host === '__local__' && decision.credentialAsk.kind !== 'login-cookie')) await refuseSignInAsk(taskId, text, what, everything);
+  // Another team works on this matter and said something on it lately: read that first. Only for a
+  // new ask: the one this task already shows, written again, was checked when it was new.
+  const standing = self?.status_report?.state === 'needs' ? self.status_report : null;
+  const same = !!standing && (decision?.id ? standing.ask_id === decision.id : askKey(standing.ask) === askKey(text));
+  const report = same ? undefined : reports[0];
+  if (report) {
+    log.task.info('same-ask: refused, another team reported on the matter', { taskId, reporter: report.taskId, matter: report.matter, what });
+    throw new SameAskError(matterReportMessage(report, what), { taskId: report.taskId, title: report.title, ask: report.said, where: 'status', relation: 'elsewhere', matter: report.matter });
+  }
+}
+
+/** The refusal's words when another team reported on the matter of a new ask. */
+export function matterReportMessage(r: MatterReport, what: AskOutlet): string {
+  const verb = outletVerb(what);
+  return `${verb} yet: "${r.title.replace(/\s+/g, ' ').slice(0, 100)}" (${r.taskId}), in another team, works on ${matterWords(r.matter)} too, and said at ${r.at.slice(0, 16).replace('T', ' ')} UTC: "${r.said.replace(/\s+/g, ' ').slice(0, 300)}". `
+    + 'Read what it found (task_get, task_history) or ask it (task_send) before you ask the user: it may have done what you want of the user already, found it is not needed, or own the decision. '
+    + 'If your ask still stands after that, send it again with same_ask_reason: one line saying what you checked there and why the user must still decide or act.';
 }
 
 /**
  * A sign-in ask (sign-in-ask.ts) is put on the user once: never while a sign-in letter is open or a
  * checker says sign-in works, and never beside another task's sign-in ask, whatever its team.
  */
-async function refuseSignInAsk(taskId: string, text: string, what: 'letter' | 'report' | 'thread', everything: readonly Task[]): Promise<void> {
+async function refuseSignInAsk(taskId: string, text: string, what: AskOutlet, everything: readonly Task[]): Promise<void> {
   const { isSignInAsk, loginCommandWords, readSignInState, signInRefusal } = await import('./sign-in-ask.js');
   const { getConfig } = await import('./config-manager.js');
   const words = loginCommandWords((await getConfig().catch(() => ({}) as { ssh_login_hint?: string })).ssh_login_hint);
@@ -339,8 +472,15 @@ export async function sameAskQuestionFor(taskId: string): Promise<string> {
   let asks: TreeAsk[];
   let self: Task | undefined;
   let everything: Task[] = [];
+  let reports: MatterReport[] = [];
   try {
-    ({ self, asks, everything } = await readTree(taskId, false));
+    // Its own matter, and the one its standing ask names (another team's ask about it is the same ask).
+    const { getTask } = await import('./task-manager.js');
+    const me = await getTask(taskId).catch(() => null);
+    const standing = me?.status_report?.state === 'needs' ? [me.status_report.ask, me.status_report.ask_more].filter(Boolean).join('\n') : '';
+    ({ self, asks, everything, reports } = await readTree(taskId, false, standing));
+    // Other teams' news matters to an ask: a task asking nothing is not told it.
+    if (!standing) reports = [];
   } catch {
     return '';
   }
@@ -352,8 +492,12 @@ export async function sameAskQuestionFor(taskId: string): Promise<string> {
   const foldTask = stored ? everything.find((t) => t.id === stored.id) : undefined;
   const fold = stored && self && foldTask && sameTaskArea(self, foldTask) ? stored : undefined;
   const above = self?.user_status?.answeredFor;
-  if (!asks.length && !fold && !above) return own;
-  const lines = asks.slice(0, QUESTION_ASKS_MAX).map((a) => `- [${a.taskId}] ${a.title.replace(/\s+/g, ' ').slice(0, 80)} (${WHO[a.relation]}${a.where === 'letter' ? ', a decision letter' : ''}): "${a.ask.replace(/\s+/g, ' ').slice(0, 200)}"`);
+  if (!asks.length && !fold && !above && !reports.length) return own;
+  const lines = asks.slice(0, QUESTION_ASKS_MAX).map((a) => `- [${a.taskId}] ${a.title.replace(/\s+/g, ' ').slice(0, 80)} (${WHO[a.relation]}${a.matter ? `, about ${matterWords(a.matter)}` : ''}${a.where === 'letter' ? `, a decision letter ${a.letterId}` : ''}): "${a.ask.replace(/\s+/g, ' ').slice(0, 200)}"`);
+  const said = reports.slice(0, 3).map((r) => `- [${r.taskId}] ${r.title.replace(/\s+/g, ' ').slice(0, 80)} (another team, works on ${matterWords(r.matter)}), at ${r.at.slice(5, 16).replace('T', ' ')} UTC: "${r.said.replace(/\s+/g, ' ').slice(0, 200)}"`);
+  const reported = said.length
+    ? '\nOther teams work on the same matter and said lately (read it before you ask the user anything about it: it may be done already or not needed, and the user is not told two different things):\n' + said.join('\n')
+    : '';
   const who = fold ? `[${fold.id}] ${fold.title.replace(/\s+/g, ' ').slice(0, 80)}` : '';
   const folded = !fold ? ''
     : fold.answered
@@ -362,7 +506,7 @@ export async function sameAskQuestionFor(taskId: string): Promise<string> {
   const answered = above
     ? `\n${above.byTitle.replace(/\s+/g, ' ').slice(0, 80)} answered your ask for the user ("${above.ask.replace(/\s+/g, ' ').slice(0, 160)}"), and Walnut took it off the user's Needs you: act on that answer and do not ask it again.`
     : '';
-  return `${own}\n\nThe user already has these asks open from this task's tree, and sees each decision once, from the task closest to the work:\n${lines.join('\n') || '- (none open now)'}${folded}${answered}\n`
+  return `${own}\n\nThe user already has these asks open from this task's tree or about its matter, and sees each decision once, from the task closest to the work:\n${lines.join('\n') || '- (none open now)'}${folded}${answered}${reported}\n`
     + 'Do not ask the user again what one of these asks: if it is the decision your FOR_USER_ASK is about, the task that asks it carries the answer (task_send it if you need the answer too).\n'
     + 'FOR_USER_ASK_SAME: needs-you only: the id of the listed task whose ask is the same decision as yours, or "different" when yours is another decision. Otherwise none.';
 }

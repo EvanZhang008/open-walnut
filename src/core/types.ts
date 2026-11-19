@@ -1161,6 +1161,9 @@ export interface Task {
   /** The last re-check Walnut asked of this task's open decision letters to the user
    *  (sessions/letter-recheck.ts); null clears it. */
   letter_recheck?: import('./sessions/letter-recheck.js').LetterRecheck | null;
+  /** Other teams' news on the matter of its open asks already brought in (sessions/matter-news.ts),
+   *  one entry per ask. */
+  matter_news?: import('./sessions/matter-news.js').MatterNews[] | null;
   /** Triggers its session armed to watch its ask of the user or one of its letters
    *  (trigger_create `watches`): the 4-hour re-checks skip what a live one watches
    *  (sessions/recheck-watch.ts). */

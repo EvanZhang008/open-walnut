@@ -212,6 +212,11 @@ export function startNeedsRecheck(opts: { ephemeral?: boolean } = {}): void {
     void import('./letter-recheck.js')
       .then((m) => m.runLetterRecheck(Date.now(), ephemeral ? { notBefore: startedAt } : {}))
       .catch((err) => log.task.warn('letter re-check not loaded', { error: err instanceof Error ? err.message : String(err) }));
+    // Another team's news on the matter of an open ask (matter-news.ts); never from a copy of Walnut.
+    if (!ephemeral) {
+      void import('./matter-news.js').then((m) => m.runMatterNews())
+        .catch((err) => log.task.warn('matter news not loaded', { error: err instanceof Error ? err.message : String(err) }));
+    }
   }, SCAN_MS);
   timer.unref?.();
 }

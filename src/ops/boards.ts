@@ -264,12 +264,14 @@ defineOp({
     task: TASK_ARG,
     html: z.string().min(1).describe('The complete html document'),
     version: z.number().int().optional().describe('The version you read; the write is refused if the board moved on'),
+    same_ask_reason: z.string().optional().describe('Only for a new <walnut-choice> Walnut refused as already asked (409 same_ask): one line saying why it is a different decision'),
   },
   handler: async (args, call) => {
     const target = await resolveBoardTask(args, call);
     const body = await call('PUT', boardPath(target.taskId), {
       html: args.html,
       ...(args.version !== undefined ? { version: args.version } : {}),
+      ...(args.same_ask_reason ? { same_ask_reason: args.same_ask_reason } : {}),
     }) as BoardBody;
     return withOutcome(
       { task_id: target.taskId, ...body },
@@ -295,6 +297,7 @@ defineOp({
       new: z.string().describe('Replacement text'),
     })).min(1).max(50).describe('Replacements, applied in order'),
     version: z.number().int().optional().describe('The version you read; the write is refused if the board moved on'),
+    same_ask_reason: z.string().optional().describe('Only for a new <walnut-choice> Walnut refused as already asked (409 same_ask): one line saying why it is a different decision'),
   },
   handler: async (args, call) => {
     const target = await resolveBoardTask(args, call);
@@ -302,6 +305,7 @@ defineOp({
     const body = await call('POST', boardPath(target.taskId, '/edits'), {
       edits,
       ...(args.version !== undefined ? { version: args.version } : {}),
+      ...(args.same_ask_reason ? { same_ask_reason: args.same_ask_reason } : {}),
     }) as BoardBody;
     return withOutcome(
       { task_id: target.taskId, ...body },

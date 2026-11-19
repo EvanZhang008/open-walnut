@@ -191,7 +191,7 @@ async function saveTaskReport(
   const decided: StatusReport = stampSaidDecision(needsSince ? { ...changed, needs_since: needsSince } : changed, task.status_report);
   // When that decision began to be asked: the user's words for it must follow (user-spoke.ts).
   const askSince = askSinceStamp(decided, task.status_report);
-  const report: StatusReport = askSince ? { ...decided, ask_since: askSince } : decided;
+  let report: StatusReport = askSince ? { ...decided, ask_since: askSince } : decided;
   // Another task taking the ask off the user's Needs you (any line but the same ask) reads his words
   // in the task first, and passes back any he wrote since it asked (user-spoke.ts).
   let userSaid: UserSaid | undefined;
@@ -218,6 +218,9 @@ async function saveTaskReport(
     await refuseSameAsk(task.id, report.ask, 'report', raw as Record<string, unknown>, [], { ...reportDecision(report, task.due_date), ...answerContextOf(report) }).catch((err) => {
       throw err instanceof SameAskError ? new ReportChangeError(err.message, err.code, err.status) : err;
     });
+    // A reason given for asking it anyway is the session saying it is another decision: the fold keeps it apart too.
+    const { sameAskReasonOf } = await import('../same-ask.js');
+    if (sameAskReasonOf(raw as Record<string, unknown>)) report = { ...report, ask_distinct: true };
   }
   await updateTaskRaw(task.id, { status_report: report }, { emitEvent: true, source: 'report-set' });
   // The phase follows as the task's own report would move it (report-phase.ts), written as the
