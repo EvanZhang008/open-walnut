@@ -61,6 +61,7 @@ import { privacyJudgeAvailable, startSyncGate } from './private-tasks/sync-gate.
 import { MERGE_EVENT_SOURCE } from './task-deleted-id.js';
 import { checkLaunchDefaultsPatch, checkLaunchDefaultsShape } from './sessions/project-launch-defaults.js';
 import { checkClaudePluginsOffPatch } from './sessions/claude-plugins-off.js';
+import { pointTaskAtSession } from './sessions/task-session-link.js';
 import type { TaskMergedInto } from './event-types.js';
 import {
   clearProjectTombstone,
@@ -7269,29 +7270,13 @@ export async function linkSessionSlot(
 
   const task = matches[0];
   assertSessionBelongsToTask(task.id, sessionId);
-  pointTaskAtSession(task, sessionId);
-  if (slot === 'plan') {
-    task.plan_session_id = sessionId;
-  } else {
-    task.exec_session_id = sessionId;
-  }
+  // The one link rule (sessions/task-session-link.ts), which a host's reader fold shows too.
+  pointTaskAtSession(task, sessionId, slot);
   task.updated_at = new Date().toISOString();
 
   await writeStore(store);
   return { task };
   });
-}
-
-/**
- * One session per task (sessions/one-session-per-task.ts): every task-side field
- * names the same session. The legacy plan/exec slots stay as mirrors of it for
- * readers that still look there (the frozen API, the phone).
- */
-function pointTaskAtSession(task: Task, sessionId: string): void {
-  task.session_id = sessionId;
-  task.session_ids = [sessionId];
-  if (task.plan_session_id && task.plan_session_id !== sessionId) task.plan_session_id = undefined;
-  if (task.exec_session_id && task.exec_session_id !== sessionId) task.exec_session_id = undefined;
 }
 
 /** The session rows that belong to `taskId` (one, once the legacy split ran). */
