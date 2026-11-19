@@ -23,12 +23,13 @@
  * Cheap enough to run in production permanently. Off only in tests.
  */
 
-import { monitorEventLoopDelay } from 'node:perf_hooks'
+import { monitorEventLoopDelay, performance } from 'node:perf_hooks'
 import { execFile } from 'node:child_process'
 import { log } from '../logging/index.js'
 import { observe } from './observability/metrics.js'
 import { noteSleepSinceLastLook } from '../lib/sleep-ledger.js'
 import { HISTOGRAM_STALL_MESSAGE, PROBE_LATE_MESSAGE, stallMetricOf } from './stall-cause.js'
+import { blockingCallsWithin } from './blocking-calls.js'
 
 /** Loop delay above this (ms) in a window is reported as a stall. */
 const STALL_THRESHOLD_MS = 250
@@ -318,11 +319,20 @@ export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
         // read now: the next tick replaces the sample it is measured against.
         let hold: Record<string, unknown> | undefined
         try { hold = probeObserver?.hold(lateBy, monoNow) } catch { hold = undefined }
+        // The synchronous calls (SQLite, child process starts) that ran between the two probes.
+        let blocking: ReturnType<typeof blockingCallsWithin> = null
+        if (clocks === defaultClocks) {
+          try {
+            const perfNow = performance.now()
+            blocking = blockingCallsWithin(perfNow - monoDelta, perfNow)
+          } catch { blocking = null }
+        }
         const payload = {
           lateByMs: Math.round(lateBy),
           suspectSection: section,
           openSections: detail,
           sectionAwaiting: awaiting,
+          ...(blocking ? { blocking } : {}),
           ...(hold ? { hold } : {}),
         }
         const report = (): void => {

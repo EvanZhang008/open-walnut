@@ -41,6 +41,7 @@
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
+import { performance } from 'node:perf_hooks'
 import { fileURLToPath } from 'node:url'
 import { Worker } from 'node:worker_threads'
 import { checkOneStatement, refusePromise } from './sqlite-guards.js'
@@ -366,6 +367,29 @@ function bindArgs(params: unknown[]): unknown[] {
 }
 
 /** better-sqlite3's error for any use of a closed database or of a statement prepared on one. */
+/**
+ * Called after every statement, exec and transaction on this thread with its
+ * source and its performance.now() start: the blocking-call ledger
+ * (src/core/blocking-calls.ts) times them. Unset (a worker, a test, a CLI) it
+ * costs one null check. A function, not an import: a worker loads this file alone.
+ */
+export type SqliteCallObserver = (source: string, start: number) => void
+let callObserver: SqliteCallObserver | null = null
+export function setSqliteCallObserver(next: SqliteCallObserver | null): void {
+  callObserver = next
+}
+
+function timed<T>(source: string, call: () => T): T {
+  const observer = callObserver
+  if (!observer) return call()
+  const start = performance.now()
+  try {
+    return call()
+  } finally {
+    observer(source, start)
+  }
+}
+
 function notOpen(): TypeError {
   return new TypeError('The database connection is not open')
 }
@@ -389,10 +413,14 @@ class SqliteStatement implements Statement {
   }
 
   run(...params: unknown[]): RunResult {
-    return this.live().run(...bindArgs(params))
+    return timed(this.source, () => this.live().run(...bindArgs(params)))
   }
 
   get(...params: unknown[]): unknown {
+    return timed(this.source, () => this.getNow(params))
+  }
+
+  private getNow(params: unknown[]): unknown {
     const stmt = this.live()
     if (this.mode === 'object') return fixRow(stmt.get(...bindArgs(params)))
     const first = stmt.values(...bindArgs(params))[0]
@@ -401,6 +429,10 @@ class SqliteStatement implements Statement {
   }
 
   all(...params: unknown[]): unknown[] {
+    return timed(this.source, () => this.allNow(params))
+  }
+
+  private allNow(params: unknown[]): unknown[] {
     const stmt = this.live()
     if (this.mode === 'object') {
       const rows = stmt.all(...bindArgs(params))
@@ -556,7 +588,7 @@ class SqliteDatabase {
   }
 
   exec(source: string): this {
-    this.handle().exec(source)
+    timed(source, () => this.handle().exec(source))
     return this
   }
 
@@ -586,7 +618,15 @@ class SqliteDatabase {
   }
 
   transaction<F extends (...args: never[]) => unknown>(fn: F): Transaction<F> {
-    return this.handle().transaction(refusePromise(fn))
+    const tx = this.handle().transaction(refusePromise(fn)) as unknown as Transaction<F>
+    // The whole transaction, BEGIN to COMMIT (a commit can run a WAL checkpoint), as one call.
+    const each = (run: (...args: Parameters<F>) => ReturnType<F>) =>
+      (...args: Parameters<F>): ReturnType<F> => timed('transaction', () => run(...args))
+    return Object.assign(each(tx), {
+      deferred: each(tx.deferred),
+      immediate: each(tx.immediate),
+      exclusive: each(tx.exclusive),
+    }) as Transaction<F>
   }
 
   async backup(destination: string, _options: BackupOptions = {}): Promise<{ totalPages: number; remainingPages: number }> {

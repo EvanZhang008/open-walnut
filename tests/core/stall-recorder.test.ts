@@ -163,6 +163,38 @@ describe('profile windows', () => {
     expect(fs.existsSync(dir) ? fs.readdirSync(dir) : []).toEqual([])
   })
 
+  // 2026-11-18 19:14: holds of 279, 576, 348 and 632 ms in 15 s held every
+  // request about 1.5 s, and none was long enough for a profile.
+  it('keeps one profile for shorter stalls that add up to the cluster threshold within 30 s', async () => {
+    for (const late of [279, 576, 348]) observerOf().reported(report(0, late))
+    expect(_stallRecorderStats().windowOpen).toBe(true)
+    await new Promise((r) => setTimeout(r, 30))
+    expect(profilesWithMeta()).toEqual([]) // 1203 ms: not yet
+    observerOf().reported(report(0, 632)) // 1835 ms
+    await _rotateNowForTest()
+    const files = await waitForFiles(1)
+    expect(files).toHaveLength(1)
+    const meta = JSON.parse(fs.readFileSync(path.join(dir, files[0].replace(/\.cpuprofile$/, '.json')), 'utf8'))
+    expect(meta.stalls.map((s: { lateByMs: number }) => s.lateByMs)).toEqual([279, 576, 348, 632])
+  })
+
+  it('keeps a profile for a 1.2 s stall by default (2 s left the 1 to 2 s holds unexplained)', async () => {
+    await stopStallRecorder()
+    fp = fakeProfiler()
+    await startStallRecorder({ force: true, dir, windowMs: 3_600_000, postStallMs: 3_600_000, profiler: fp.driver, systemContext: false })
+    observerOf().reported(report(0, 1_200))
+    await _rotateNowForTest()
+    expect(await waitForFiles(1)).toHaveLength(1)
+  })
+
+  it('does not add up shorter stalls more than 30 s apart', async () => {
+    observerOf().reported(report(-40_000, 900))
+    observerOf().reported(report(0, 700))
+    await _rotateNowForTest()
+    await new Promise((r) => setTimeout(r, 50))
+    expect(profilesWithMeta()).toEqual([])
+  })
+
   it('prunes to the newest files on each write', async () => {
     fs.mkdirSync(dir, { recursive: true })
     const old = Date.now() / 1000 - 60

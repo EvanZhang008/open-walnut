@@ -1482,6 +1482,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // single tick is blocked > threshold, naming the suspect periodic task).
   // Cheap libuv histogram + self-timer; safe to run in production.
   const { startEventLoopMonitor } = await import('../core/event-loop-monitor.js')
+  // Its probe-late lines name the SQLite statements and child process starts
+  // that ran in the hold (src/core/blocking-calls.ts; WALNUT_BLOCKING_CALLS=0 turns it off).
+  if (process.env.WALNUT_BLOCKING_CALLS !== '0') {
+    const { installBlockingCallTiming } = await import('../core/blocking-calls.js')
+    installBlockingCallTiming()
+  }
   startEventLoopMonitor()
   // Stall flight recorder: hold context on long probe-late lines plus a rolling
   // CPU profile kept only around a stall, so the next freeze names its culprit.

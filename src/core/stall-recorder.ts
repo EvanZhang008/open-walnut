@@ -91,6 +91,10 @@ const AFTER_PROFILE_MIN_MS = 250;
 export interface StallRecorderOptions {
   /** Keep a CPU profile for stalls >= this (ms). */
   profileMinMs?: number;
+  /** Also keep one when the shorter stalls of the last clusterSpanMs add up to this (ms). */
+  clusterMinMs?: number;
+  /** The span those shorter stalls are added over (ms). */
+  clusterSpanMs?: number;
   /** Sampling interval of the CPU profile (microseconds). */
   intervalUs?: number;
   /** Profile rotation window (ms). */
@@ -181,11 +185,31 @@ const observer: ProbeObserver = {
     }
   },
   reported(report: StallReport): void {
-    if (report.lateByMs < opts.profileMinMs) return;
+    const keepNow = report.lateByMs >= opts.profileMinMs ? [report] : clusterToKeep(report);
+    if (keepNow.length === 0) return;
     if (opts.systemContext) memContexts.set(report, sampleMemContext().catch(() => null));
-    onStall(report);
+    for (const r of keepNow) onStall(r);
   },
 };
+
+/**
+ * Shorter stalls close together hold every request as one long stall does
+ * (2026-11-18 19:14: holds of 279, 576, 348 and 632 ms in 15 s, every request
+ * about 1.5 s slow, none of them long enough for a profile). Each one under
+ * profileMinMs waits here; once those of the last clusterSpanMs add up to
+ * clusterMinMs, all of them are kept together (one profile window holds them).
+ */
+let clusterPending: StallReport[] = [];
+
+function clusterToKeep(report: StallReport): StallReport[] {
+  clusterPending = clusterPending.filter((r) => report.holdEndMono - r.holdEndMono <= opts.clusterSpanMs);
+  clusterPending.push(report);
+  const sum = clusterPending.reduce((n, r) => n + r.lateByMs, 0);
+  if (sum < opts.clusterMinMs) return [];
+  const keep = clusterPending;
+  clusterPending = [];
+  return keep;
+}
 
 const memContexts = new WeakMap<StallReport, Promise<Record<string, unknown> | null>>();
 
@@ -390,7 +414,11 @@ export async function startStallRecorder(options: StallRecorderOptions = {}): Pr
     profiler: undefined as unknown as ProfilerDriver,
     force: options.force ?? false,
     systemContext: options.systemContext ?? true,
-    profileMinMs: options.profileMinMs ?? envNum('WALNUT_STALL_PROFILE_MIN_MS', 2_000),
+    // 1 s: a hold of 1 to 2 s holds every request too, and left nothing that
+    // named code at 2 s (2026-11-18: 10 holds of 1 to 1.7 s on the Mac, none kept).
+    profileMinMs: options.profileMinMs ?? envNum('WALNUT_STALL_PROFILE_MIN_MS', 1_000),
+    clusterMinMs: options.clusterMinMs ?? envNum('WALNUT_STALL_PROFILE_CLUSTER_MS', 1_500),
+    clusterSpanMs: options.clusterSpanMs ?? 30_000,
     // 20 ms: a 2 s hold still gets ~100 samples, and the always-on cost of the
     // running profile drops by ~40% against 10 ms (measured 2026-10-02, process
     // CPU per idle 20 s: 1.9 ms off, 18.6 ms at 10 ms, 11.3 ms at 20 ms).
@@ -472,7 +500,7 @@ export async function stopStallRecorder(): Promise<void> {
     if (win) { try { await d.end(win.title); } catch { /* not started */ } }
     try { await d.close(); } catch { /* already gone */ }
   }
-  writesThisHour = []; windowSeq = 0;
+  writesThisHour = []; windowSeq = 0; clusterPending = [];
   resetSystemContext();
   Object.assign(stats, { rotations: 0, rotateMsMax: 0, rotateMsSum: 0, firstStartMs: 0, kept: 0, skippedRate: 0, errors: 0 });
 }
