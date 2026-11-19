@@ -185,8 +185,13 @@ export interface ManagerDeps {
   /** The floors a host on by default must meet (eligibility.ts FOLLOWER_FLOORS). */
   floors?: FollowerFloors
   /**
-   * Walnut Health (health-item.ts): a start that failed, and one that settled (it runs, or none
-   * is meant to run). Never awaited.
+   * The experiment `follower_on_every_host` (follower-default.ts): a failed start then tries again
+   * by itself and Walnut Health hears of it. Off (or unset): a failed start waits for Retry, as before.
+   */
+  everyHost?(): boolean | Promise<boolean>
+  /**
+   * Walnut Health (health-item.ts), with the experiment on: a start that failed, and one that
+   * settled (it runs, or none is meant to run). Never awaited.
    */
   health?: { failed(hostKey: string, message: string, retries: boolean): void; settled(hostKey: string): void }
   /** How long a started server has to send its first report. */

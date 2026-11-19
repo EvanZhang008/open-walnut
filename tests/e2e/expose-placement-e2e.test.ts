@@ -75,8 +75,6 @@ beforeAll(async () => {
   pidFile = path.join(WALNUT_HOME, 'fake-tunnel.pid')
   await fs.writeFile(fakeTunnel, FAKE_TUNNEL)
   await updateConfig({
-    // The default follower is off here: a host runs a server by its own switch or by the tunnel.
-    host_servers: { on_by_default: false },
     hosts: {
       // Its server already on.
       devbox: { label: 'Dev box', hostname: 'always-on-devbox.invalid', user: 'someone', server: { enabled: true } },

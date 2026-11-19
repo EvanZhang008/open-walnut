@@ -1,7 +1,7 @@
 # One service on every host
 
 Status: decided (2026-11-18). Phase 1 is built: a host's own calls answered by its follower, and a follower
-on every host by default. Builds on
+on every host by default behind the experiment `follower_on_every_host`. Builds on
 [servers everywhere](./walnut-servers-everywhere.md), [replica servers](./walnut-replica-servers.md),
 [daemon-first hosts](./daemon-first-hosts.md), [the single file](./walnut-single-binary.md) and
 [daemon boot start](../reference/daemon-boot-start.md).
@@ -276,29 +276,34 @@ permission prompts still name Walnut.
 - **A call handed over after a wait is never answered "may have run".** The daemon sends how long it will
   wait; when that is too short for the op (a start needs ten seconds), the follower refuses before anything
   runs and the caller retries.
-- **Every host gets a follower by default** (`src/core/host-server/follower-default.ts`). A host Walnut
-  manages (in config.yaml, not turned off as a host, not the cloud box, not a found host waiting for a yes)
-  runs one unless the person turned its switch off. The switch (`hosts.<key>.server.enabled`) is written only
-  when the person flips it, so a stored `false` is theirs and stays off across upgrades; a host with nothing
-  stored follows the default, and nothing is written for it. `host_servers.on_by_default: false` turns the
-  default off for every host in one place. After an upgrade a host gets its follower on its next connect;
-  an older release reads the same file and reads an unset switch as off.
+- **Every host gets a follower by default, once the experiment is switched on** (`follower_on_every_host` in
+  `src/core/experimental.ts`, off by default; `src/core/host-server/follower-default.ts`). With it on, a host
+  Walnut manages (in config.yaml, not turned off as a host, not the cloud box, not a found host waiting for
+  a yes) runs one unless the person turned its switch off. The switch (`hosts.<key>.server.enabled`) is
+  written only when the person flips it, so a stored `false` is theirs and stays off across upgrades; a host
+  with nothing stored follows the experiment, and nothing is written for it. With it off, the switch is
+  opt-in as before: nothing new is installed, probed or reported. After an upgrade with the experiment on, a
+  host gets its follower on its next connect; an older release reads the same file and reads an unset switch
+  as off.
 - **Conditions decide, never a host name** (`src/core/host-server/eligibility.ts`). Before the first follower
   of this Walnut on a host that is on only by default (not one the person turned on, nor the one carrying
-  this Walnut's tunnel), one probe over its link reads its platform, its memory and its disk. No build that runs there (no file for its system, or the file's proof boot failed),
-  less than 2 GiB of memory in all or 1 GiB free, or less than 2.5 GiB free on its disk keeps the host
-  without a follower: its view says why (`not-eligible`), and memory and disk are looked at again every 30
-  minutes. The floors come from a dev host with 19 agents (2026-11-18): the follower used 311 MB right after
-  a start and 194 MB after 16 minutes, the daemon beside it 246 MB; one version of the program takes about
-  160 MB unpacked, and that follower's data copy was 1.9 GB. A host the person turned on is not gated.
+  this Walnut's tunnel), one probe over its link reads its platform, its memory and its disk. No build that
+  runs there (no file for its system, or the file's proof boot failed), less than 2 GiB of memory in all or
+  1 GiB free, or less than 2.5 GiB free on its disk keeps the host without a follower: its view says why
+  (`not-eligible`), and memory and disk are looked at again every 30 minutes. The floors come from a dev host
+  with 19 agents (2026-11-18): the follower used 311 MB right after a start and 194 MB after 16 minutes, the
+  daemon beside it 246 MB; one version of the program takes about 160 MB unpacked, and that follower's data
+  copy was 1.9 GB.
 - **A slow link or a failed start harms nothing else.** The program goes up in the background with the
-  resumable upload, on connections of its own and with no deadline; the view shows the bytes sent. A start
-  that fails runs again by itself after 1, 5, 15, 30, then 60 minutes, never touching the daemon link or the
-  host's sessions, and goes to Walnut Health as one item per host (never a popup), recovered once it runs.
+  resumable upload, on connections of its own and with no deadline; the view shows the bytes sent. With the
+  experiment on, a start that fails runs again by itself after 1, 5, 15, 30, then 60 minutes, never touching
+  the daemon link or the host's sessions, and goes to Walnut Health as one item per host (never a popup),
+  recovered once it runs.
 - **Not yet.** A task made on the leader cannot be started alone. A message that expects a reply needs the
   leader. A task made away by a plugin that keeps its tasks off the board shows on the follower's own board
-  until the leader has taken it. The Settings page still shows the switch as before: it reads on for a host
-  on by default, and does not yet say which hosts follow the default or why one has no follower.
+  until the leader has taken it. Every host gets a follower by default only once the experiment
+  `follower_on_every_host` is switched on. The Settings page still shows the switch as before: it reads on for
+  a host on by default, and does not yet say which hosts follow the default or why one has no follower.
 
 ## Compatibility
 

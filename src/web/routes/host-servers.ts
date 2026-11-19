@@ -27,7 +27,7 @@ import { MaskedValueError, maskSecretShapes, restoreMaskedSecrets } from '../../
 import { listExposeProviders } from '../../core/expose/registry.js'
 import { EXPOSE_PROVIDER_ID } from '../../core/expose/types.js'
 import { getHostServerManager, hostServerSettingsFrom, withThisWalnutTunnel } from '../../core/host-server/index.js'
-import { followerChosenBy, followerOnByDefault } from '../../core/host-server/follower-default.js'
+import { followerChosenBy, followerOnByDefault, followerOnEveryHost } from '../../core/host-server/follower-default.js'
 import { emitConfigChanged } from '../../core/config-broadcast.js'
 import { log } from '../../logging/index.js'
 import { DEFAULT_COPY_CHOICE, copyChoiceChanged, copyChoiceFrom } from '../../core/replication/kinds/copy-kind.js'
@@ -128,8 +128,8 @@ hostServersRouter.get('/', async (_req: Request, res: Response, next: NextFuncti
     res.json({
       hosts,
       providers: listExposeProviders().filter((p) => p.id !== 'command'),
-      // What a host the person never set the switch on does (`host_servers.on_by_default`).
-      followerByDefault: config.host_servers?.on_by_default !== false,
+      // What a host the person never set the switch on does (the experiment follower_on_every_host).
+      followerByDefault: followerOnEveryHost(config),
     })
   } catch (err) {
     next(err)

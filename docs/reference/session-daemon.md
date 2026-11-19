@@ -157,22 +157,25 @@ The security rules every capability keeps:
   (`BRIDGE_ALLOWED_COMMANDS`), never its full command set; a capability that needs more adds the one
   command to that list on purpose, with a test.
 
-## Every host runs a follower server by default
+## Every host runs a follower server by default (experiment)
 
-The leader runs a follower Walnut server (`walnut web --replica`) on each host it manages, through that
-host's daemon (`src/core/host-server/`). It is on by default, and the host's switch
-(`hosts.<key>.server.enabled`) is the opt-out (`follower-default.ts`):
+The leader runs a follower Walnut server (`walnut web --replica`) on a host through that host's daemon
+(`src/core/host-server/`). The host's switch (`hosts.<key>.server.enabled`) turns it on. With the experiment
+`follower_on_every_host` on (`src/core/experimental.ts`, Settings, Experimental; off by default), it is on by
+default on each host the leader manages, and the switch is the opt-out (`follower-default.ts`). With the
+experiment off, nothing below the first rule applies: the switch is opt-in, nothing is probed, a failed start
+waits for Retry, and nothing goes to Walnut Health.
 
 - **A stored value is the person's.** Only PUT `/api/host-servers/:hostKey` writes the switch, so a stored
-  `false` stays off across upgrades and a stored `true` stays on. A host with nothing stored follows
-  `host_servers.on_by_default` (on unless `false`); nothing is written for it, so an older release reads an
-  unset switch as off, as it always did. The cloud box, a host turned off and a found host waiting for a yes
+  `false` stays off across upgrades and a stored `true` stays on. A host with nothing stored follows the
+  experiment; nothing is written for it, so an older release reads an unset switch as off, as it always did. The cloud box, a host turned off and a found host waiting for a yes
   never get one by default. GET `/api/host-servers` says whose each value is (`settings.chosenBy`).
 - **Conditions decide, never a host name** (`eligibility.ts`). A host on only by default, where this Walnut
   never set a follower up (no port kept, its daemon runs none), gets one only where a build of the file runs
   (its platform, the install's proof boot) and it has 2 GiB of memory, 1 GiB free and 2.5 GiB of disk free.
-  The person's own switch and this Walnut's tunnel placed on the host skip the gates. Otherwise its view reads `not-eligible`
-  with `gate.reason` (`no-build`, `memory`, `disk`); memory and disk are looked at again every 30 minutes.
+  The person's own switch and this Walnut's tunnel placed on the host skip the gates. Otherwise its view
+  reads `not-eligible` with `gate.reason` (`no-build`, `memory`, `disk`); memory and disk are looked at again
+  every 30 minutes.
 - **Nothing happens on a host that is not connected**: its follower starts on the connect the host gets
   anyway (a follower on by default dials nothing; `hostRunsServer` counts only the person's switch and the
   tunnel). The upload is the resumable one on connections of its own, with no deadline. A start that fails

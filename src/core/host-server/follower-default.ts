@@ -1,6 +1,8 @@
 /**
- * Every host Walnut manages runs a follower Walnut server, unless the person turned it off for
- * that host (docs/plan/one-service-every-host.md, "Phase 1 as built").
+ * With the experiment `follower_on_every_host` on (src/core/experimental.ts), every host Walnut
+ * manages runs a follower Walnut server, unless the person turned it off for that host
+ * (docs/plan/one-service-every-host.md, "Phase 1 as built"). With it off, the switch is opt-in, as
+ * it always was.
  *
  * The switch is `hosts.<key>.server.enabled`. Walnut writes it only when the person flips it
  * (PUT /api/host-servers/:hostKey; the config write keeps it as it is), so a stored value is the
@@ -9,21 +11,26 @@
  * Nothing new is written, so an older release reads the same file as before (it reads an absent
  * switch as off, and stops the follower it did not ask for).
  *
- * The default is on, for a host that is one Walnut manages: in config.yaml, not turned off as a
- * host, not the paired cloud box (a Walnut server itself), and not a found host still waiting
- * for the person's yes. `host_servers.on_by_default: false` turns the default off for every host
- * in one place: the switch is opt-in again.
+ * The default is on, with the experiment, for a host that is one Walnut manages: in config.yaml,
+ * not turned off as a host, not the paired cloud box (a Walnut server itself), and not a found host
+ * still waiting for the person's yes. The experiment is the one global switch.
  */
 
 import type { Config } from '../types.js'
+import { experimentalEnabled } from '../experimental.js'
 import { foundHostUnadopted } from '../hosts/found-hosts.js'
 
 type HostRow = NonNullable<Config['hosts']>[string]
 
+/** Whether the experiment is on: a host with no stored choice of its own runs a follower. */
+export function followerOnEveryHost(config: Pick<Config, 'experimental'>): boolean {
+  return experimentalEnabled(config.experimental, 'follower_on_every_host')
+}
+
 /** Whether a host with no stored choice of its own runs a follower. */
-export function followerOnByDefault(host: HostRow | null | undefined, config: Pick<Config, 'host_servers'>): boolean {
+export function followerOnByDefault(host: HostRow | null | undefined, config: Pick<Config, 'experimental'>): boolean {
   if (!host || host.cloud_box || host.enabled === false) return false
-  if (config.host_servers?.on_by_default === false) return false
+  if (!followerOnEveryHost(config)) return false
   return !foundHostUnadopted(host)
 }
 

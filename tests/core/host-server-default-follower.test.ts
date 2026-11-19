@@ -27,7 +27,8 @@ const LINUX = 'os=Linux\narch=x86_64\nlibc=glibc\ntranslated=0\nglibc=2.26\n'
 const ROOMY = 'mem_total_kb=16777216\nmem_avail_kb=12582912\ndisk_free_kb=41943040\n'
 
 describe('follower by default: what the stored switch means', () => {
-  const config = {}
+  // The experiment on (src/core/experimental.ts follower_on_every_host).
+  const config = { experimental: { follower_on_every_host: true } }
   it('a host Walnut manages, with no switch of its own, is on by default', () => {
     const host = { hostname: 'devbox.example.test' }
     expect(followerOnByDefault(host, config)).toBe(true)
@@ -47,9 +48,10 @@ describe('follower by default: what the stored switch means', () => {
     expect(followerChosenBy({ enabled: true })).toBe('user')
   })
 
-  it('the global default off makes the switch opt-in again, in one place', () => {
-    expect(followerOnByDefault({ hostname: 'devbox.example.test' }, { host_servers: { on_by_default: false } })).toBe(false)
-    expect(followerOnByDefault({ hostname: 'devbox.example.test' }, { host_servers: { on_by_default: true } })).toBe(true)
+  it('the experiment off (its default) keeps the switch opt-in, in one place', () => {
+    expect(followerOnByDefault({ hostname: 'devbox.example.test' }, {})).toBe(false)
+    expect(followerOnByDefault({ hostname: 'devbox.example.test' }, { experimental: { follower_on_every_host: false } })).toBe(false)
+    expect(followerOnByDefault({ hostname: 'devbox.example.test' }, { experimental: { other_flag: true } })).toBe(false)
     expect(hostServerSettingsFrom(undefined, undefined, false).enabled).toBe(false)
   })
 
@@ -144,6 +146,7 @@ function deps(over: Partial<ManagerDeps> = {}): ManagerDeps {
     installPollMs: 1,
     pollMs: 60_000,
     servingSince: 0,
+    everyHost: () => true,
     health: { failed: (host, message, retries) => health.push(`failed ${host}: ${message}${retries ? ' (tries again)' : ''}`), settled: (host) => health.push(`settled ${host}`) },
     ...over,
   }
@@ -181,6 +184,27 @@ describe('host server manager: a host on by default', () => {
     expect(m.view('devbox')).toMatchObject({ enabled: true, phase: 'running' })
     expect(h.calls.filter((c) => c === 'room' || c === 'probe')).toEqual(['room'])
     expect(health).toEqual(['settled devbox'])
+    m.stop()
+  })
+
+  it('with the experiment off a host the person turned on runs as before: no probe, no retry by itself, no Walnut Health item', async () => {
+    settings = { enabled: true, expose: { enabled: false, provider: null, options: {} } }
+    const m = createHostServerManager(deps({ everyHost: () => false, firstReportMs: 30, tryLaterMs: { failed: [20] } }))
+    const h = host()
+    h.reports = false
+    await m.connected(h)
+    expect(m.view('devbox')).toMatchObject({ phase: 'error' })
+    expect(m.view('devbox').message).toMatch(/did not answer within a minute; its log is .*on the host$/)
+    expect(m.view('devbox').retryAt).toBeUndefined()
+    const configures = h.specs.length
+    await new Promise((r) => setTimeout(r, 100))
+    expect(h.specs.length).toBe(configures)
+    expect(h.calls).not.toContain('room')
+    expect(health).toEqual([])
+    h.reports = true
+    await m.reconcile('devbox', { retry: true })
+    expect(m.view('devbox').phase).toBe('running')
+    expect(health).toEqual([])
     m.stop()
   })
 

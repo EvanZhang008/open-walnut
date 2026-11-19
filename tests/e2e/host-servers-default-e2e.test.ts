@@ -1,8 +1,8 @@
 /**
- * GET /api/host-servers once every host runs a follower by default
- * (src/core/host-server/follower-default.ts), on a real server: `settings.enabled` reads true
+ * GET /api/host-servers with the experiment follower_on_every_host on (src/core/experimental.ts,
+ * src/core/host-server/follower-default.ts), on a real server: `settings.enabled` reads true
  * for a host the person never set, `settings.chosenBy` says whose the value is, the person's
- * off is stored as theirs and stays off, the global default off turns every unset host off,
+ * off is stored as theirs and stays off, the experiment off turns every unset host off,
  * and the shape older clients read (`view.phase`, `knownAs`, `settings.carriesTunnel`) keeps
  * its meaning. No host here is reachable: none dials anything.
  */
@@ -41,7 +41,9 @@ beforeAll(async () => {
   await fs.mkdir(WALNUT_HOME, { recursive: true })
   server = await startServer({ port: 0, dev: true })
   port = (server.address() as net.AddressInfo).port
+  // The experiment on, in this test run's own config (its own WALNUT_HOME).
   await updateConfig({
+    experimental: { follower_on_every_host: true },
     hosts: {
       // Never set: on by default.
       devbox: { hostname: 'devbox.invalid', label: 'Dev box' },
@@ -96,8 +98,8 @@ describe('a host\'s follower, on by default', () => {
     expect(((await on.json()) as { host: Entry }).host.settings).toMatchObject({ enabled: true, chosenBy: 'user' })
   })
 
-  it('the global default off turns every host never set off, and keeps the person\'s own on', async () => {
-    await updateConfig({ host_servers: { on_by_default: false } })
+  it('the experiment off turns every host never set off, and keeps the person\'s own on', async () => {
+    await updateConfig({ experimental: { follower_on_every_host: false } })
     // A new host, never set.
     const hosts = { ...(await getConfig()).hosts, newbox: { hostname: 'newbox.invalid' } }
     await updateConfig({ hosts })
@@ -107,7 +109,7 @@ describe('a host\'s follower, on by default', () => {
     expect(byKey.newbox).toMatchObject({ enabled: false, chosenBy: 'default' })
     expect(byKey.devbox).toMatchObject({ enabled: true, chosenBy: 'user' })
     expect(byKey.oldbox).toMatchObject({ enabled: true, chosenBy: 'user' })
-    await updateConfig({ host_servers: { on_by_default: true } })
+    await updateConfig({ experimental: { follower_on_every_host: true } })
     expect(((await entry('newbox')).settings)).toMatchObject({ enabled: true, chosenBy: 'default' })
   })
 })

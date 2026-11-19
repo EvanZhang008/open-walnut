@@ -143,6 +143,8 @@ export function createHostServerManager(deps: ManagerDeps) {
   const hard = new Set<string>()
   /** The settings each host's last reconcile read, so a config change elsewhere does not redo a setup that waits. */
   const lastSettings = new Map<string, string>()
+  /** Whether the experiment was on for the host's last pass (ManagerDeps.everyHost). */
+  const everyHostOf = new Map<string, boolean>()
   /** The host's setup failed in this pass: why, and whether it tries again by itself (Walnut Health is told once per pass). */
   const failedNow = new Map<string, { message: string; triesAgain: boolean }>()
   /** A setup that runs again by itself, later and later (try-later.ts: a refused login, a failed start, a gate). */
@@ -505,6 +507,8 @@ export function createHostServerManager(deps: ManagerDeps) {
     const settings = await deps.settingsOf(hostKey)
     // Read while this server began to stop (its plugins going): what they say is not the person's.
     if (await deps.frozen?.()) return
+    const everyHost = (await deps.everyHost?.()) === true
+    everyHostOf.set(hostKey, everyHost)
     // A config change elsewhere (favorites, ordering) does not redo a setup that waits to try again
     // (try-later.ts) while this host's own settings are the same: the wait keeps its pace.
     const print = JSON.stringify(settings)
@@ -671,7 +675,8 @@ export function createHostServerManager(deps: ManagerDeps) {
       if (err instanceof StoppingHere) return
       const message = err instanceof Error ? err.message : String(err)
       log.session.warn('host server: setup failed', { host: hostKey, error: message })
-      failedNow.set(hostKey, { message, triesAgain: !(err instanceof UntilRetry) })
+      const refused = err instanceof Error && err.name === 'SshLoginRefusedError'
+      if (everyHost) failedNow.set(hostKey, { message, triesAgain: !(err instanceof UntilRetry) })
       if (err instanceof UntilRetry) {
         // The same file would fail the same way: it waits for Retry (or a newer build). On a host
         // that is on only by default, a file that does not run there means no follower there.
@@ -683,9 +688,14 @@ export function createHostServerManager(deps: ManagerDeps) {
         set(hostKey, { phase: 'error', message })
         return
       }
-      // Anything else runs again by itself, later and later; a refused login is no verdict on the
-      // host, so it comes back sooner. Nothing else on the host waits for it.
-      const refused = err instanceof Error && err.name === 'SshLoginRefusedError'
+      // A refused login is no verdict on the host: it runs again by itself, soon. With the experiment,
+      // anything else does too, later and later; without it, it waits for Retry as it always did.
+      // Nothing else on the host waits for either.
+      if (!refused && !everyHost) {
+        tryLater.clear(hostKey)
+        set(hostKey, { phase: 'error', message })
+        return
+      }
       const later = retryingLater(hostKey, refused ? 'login' : 'failed', message)
       set(hostKey, { phase: 'error', message: later.message, retryAt: later.at })
     }
@@ -821,7 +831,7 @@ export function createHostServerManager(deps: ManagerDeps) {
         const failed = failedNow.get(hostKey)
         failedNow.delete(hostKey)
         if (phase === 'error' && failed && tryLater.pending(hostKey) !== 'login') deps.health?.failed(hostKey, failed.message, failed.triesAgain)
-        else if (phase === 'running' || phase === 'off' || phase === 'not-eligible') deps.health?.settled(hostKey)
+        else if (everyHostOf.get(hostKey) && (phase === 'running' || phase === 'off' || phase === 'not-eligible')) deps.health?.settled(hostKey)
       } while (rerun.has(hostKey))
     })().finally(() => {
       running.delete(hostKey)

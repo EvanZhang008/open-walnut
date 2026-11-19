@@ -119,7 +119,7 @@ export interface HostServerEntry {
 export interface HostServersResponse {
   hosts: HostServerEntry[];
   providers: ExposeProviderInfo[];
-  /** A host whose switch was never set runs a Walnut (`host_servers.on_by_default`); an older server sends none. */
+  /** A host whose switch was never set runs a Walnut (the experiment follower_on_every_host); an older server sends none. */
   followerByDefault?: boolean;
 }
 

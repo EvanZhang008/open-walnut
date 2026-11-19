@@ -447,16 +447,16 @@ describe('host server manager', () => {
     m.stop()
   })
 
-  it('any other setup failure tries again at its own, slower pace, never the login\'s', async () => {
-    const m = createHostServerManager(deps({ tryLaterMs: { login: [10], failed: [60_000] } }))
+  it('any other setup failure still waits for Retry (with the experiment off)', async () => {
+    const m = createHostServerManager(deps({ tryLaterMs: { login: [10], failed: [10] } }))
     const host = fakeHost()
     let uploads = 0
     host.uploadFile = async () => { uploads += 1; throw new Error('disk full') }
     await m.connected(host)
     await new Promise((r) => setTimeout(r, 80))
     expect(uploads).toBe(1)
-    expect(m.view('devbox')).toMatchObject({ phase: 'error', message: 'disk full. Walnut tries again in 1 min.', retryAt: expect.any(Number) })
-    m.stop()
+    expect(m.view('devbox').message).toBe('disk full')
+    expect(m.view('devbox').retryAt).toBeUndefined()
   })
 
   it('a new build that does not answer gives the host back the one that did, until Retry', async () => {
