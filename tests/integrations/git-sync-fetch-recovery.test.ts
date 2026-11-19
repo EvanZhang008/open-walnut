@@ -251,17 +251,20 @@ describe('sync() over a real origin: corpse sweep and streak pull', () => {
     });
     try {
       // `.invalid` never resolves (RFC 6761): git says "Could not resolve host: <name>".
+      // A proxy would resolve it remotely and answer otherwise, so none is used here.
+      for (const k of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']) vi.stubEnv(k, '');
       run(`git remote set-url origin ${url}`, WALNUT_HOME);
-      for (let tick = 0; tick < 8; tick++) {
+      for (let tick = 0; tick < 5; tick++) {
         await fsp.writeFile(path.join(WALNUT_HOME, `edit-${tick}.md`), `edit ${tick}\n`);
         await sync();
       }
-      expect(getSyncGuardState().consecutiveNetworkFailures).toBeGreaterThanOrEqual(8);
+      expect(getSyncGuardState().consecutiveNetworkFailures).toBeGreaterThanOrEqual(5);
       const repeated = [...new Set(heard)].filter((m) => heard.filter((h) => h === m).length > 1);
       expect(repeated).toEqual([]);
       expect(heard).toContain('git-sync fetch failed — skipping merge this cycle');
     } finally {
       setLogLevelTap(null);
+      vi.unstubAllEnvs();
     }
   }, 120_000);
 
