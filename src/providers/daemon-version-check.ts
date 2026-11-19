@@ -404,6 +404,7 @@ export const DAEMON_SOURCE_FILES = [
   // Modules the bundles above import (daemon-version-hash-parity.test.ts walks the
   // imports of every bundle): a change to one changes what a host runs.
   'src/providers/user-line-images-core.ts',
+  'src/providers/network-cause-core.ts',
   'src/core/types.ts',
   'src/core/experimental.ts',
   'src/lib/git-env.ts',

@@ -281,6 +281,7 @@ SOURCES=(
   src/providers/stream-fold-core.ts
   src/providers/oneshot-core.ts
   src/providers/user-line-images-core.ts
+  src/providers/network-cause-core.ts
   src/core/types.ts
   src/core/experimental.ts
   src/lib/git-env.ts
