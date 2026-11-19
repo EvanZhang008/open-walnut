@@ -41,6 +41,13 @@
  * routine template: host-start-core.ts planTask). It is adopted the same way as a
  * routine's run (adoptRun), without the routine: never an ask, the task's folder set, the
  * session context this Mac appends. Any other `run` is refused, never taken for an ask.
+ *
+ * A session record no rule takes is a RefusedWrite, the stores' own refusals included (one
+ * session per task, a session of one task): never an error the drain retries, which would hold
+ * the host's later records. An error that may pass (a busy database, a config read) stays a
+ * retry. A `run: 'task'` record refused, or given up after its retries, has its CLI ended through
+ * the daemon that owns it (endRefusedRun, called by offline-handover.ts once the letter says so),
+ * since nothing here will ever look at it. An ask's stamp is written only once its record is.
  */
 
 import { log } from '../../logging/index.js';
@@ -57,24 +64,51 @@ const SID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export const adoptedSessions = new Map<string, Set<string>>();
 
 export async function applySession(ctx: V2Context, record: V2Record): Promise<void> {
+  try {
+    await applySessionRecord(ctx, record);
+  } catch (err) {
+    throw refusalOf(err) ?? err;
+  }
+}
+
+/** The stores' own refusals of a session record (see the header), as a RefusedWrite; null for any other error. */
+const STORE_REFUSALS = new Set(['TaskSessionTakenError', 'SessionOwnedByOtherTaskError']);
+function refusalOf(err: unknown): RefusedWrite | null {
+  if (err instanceof RefusedWrite) return err;
+  return err instanceof Error && STORE_REFUSALS.has(err.name) ? new RefusedWrite(err.message) : null;
+}
+
+/** A task by its exact id, null only when there is none: any other error (a busy database) is thrown, a retry. */
+async function taskOrNull(id: string): Promise<import('../types.js').Task | null> {
+  if (!id) return null;
+  const [{ getTask }, { missingIdMessage }] = await Promise.all([import('../task-manager.js'), import('../../lib/id-ref.js')]);
+  return getTask(id).catch((err: unknown) => {
+    if (err instanceof Error && err.message === missingIdMessage(id)) return null;
+    throw err;
+  });
+}
+
+async function applySessionRecord(ctx: V2Context, record: V2Record): Promise<void> {
   const sid = typeof record.sid === 'string' ? record.sid : '';
   if (!SID_RE.test(sid)) throw new RefusedWrite('a session record without a session id');
   const { getSessionByClaudeId, createSessionRecord } = await import('../session-tracker.js');
-  const { getTask, updateTaskRaw } = await import('../task-manager.js');
-  const existing = await getSessionByClaudeId(sid).catch(() => null);
+  const existing = await getSessionByClaudeId(sid);
   if (existing) {
-    // An earlier drain made the record (its ack was lost, or it stopped before the link): the
-    // task gets the link now if it does not list the session yet, never a second record.
-    const linkedTo = existing.taskId ? await getTask(existing.taskId).catch(() => null) : null;
-    if (linkedTo && !(linkedTo.session_ids ?? []).includes(sid)) {
-      await linkAdopted(linkedTo.id, sid, existing.mode === 'plan' ? 'plan' : 'exec');
-      rescueAfterBatch(ctx.hostKey, sid);
+    // An earlier drain made the record (its ack was lost, or it stopped before the link or the
+    // rescue): the task gets the link and an ask its stamp now if it lacks them, never a second
+    // record, and the connection looks at the CLI as after the first drain.
+    const linkedTo = existing.taskId ? await taskOrNull(existing.taskId) : null;
+    if (linkedTo) {
+      const ours = existing.host === ctx.hostKey;
+      if (ours && isAsk(record)) await stampAsk(linkedTo, record);
+      if (!(linkedTo.session_ids ?? []).includes(sid)) await linkAdopted(linkedTo.id, sid, existing.mode === 'plan' ? 'plan' : 'exec');
+      if (ours) rescueAfterBatch(ctx.hostKey, sid);
     }
     ctx.result.skipped++;
     return;
   }
   const taskId = resolveTaskId(ctx.hostKey, String(record.taskId ?? ''), ctx.remap);
-  const task = await getTask(taskId).catch(() => null);
+  const task = await taskOrNull(taskId);
   if (!task || task.id !== taskId) throw new RefusedWrite(`the task of that ask (${taskId}) is not on this Mac`);
   if (!task.created_by_op || lookupDrained(WALNUT_HOME, task.created_by_op, ctx.hostKey)?.outcome !== 'applied') {
     throw new RefusedWrite(`the task of that ask (${taskId}) was not created by ${ctx.hostKey} while this Mac was away`);
@@ -83,11 +117,7 @@ export async function applySession(ctx: V2Context, record: V2Record): Promise<vo
   if (record.routine !== undefined) return await adoptRun(ctx, record, sid, task, routineOf(record));
   if (record.run === 'task') return await adoptRun(ctx, record, sid, task, null);
   if (record.run !== undefined) throw new RefusedWrite(`a session record of a run this Mac does not know (${String(record.run)})`);
-  const agentId = typeof record.agentId === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(record.agentId) ? record.agentId : 'general';
-  if (!task.walnut_agent || (agentId !== 'general' && task.agent_id !== agentId)) {
-    // agent_id is create-time data for updateTask; the raw write takes it (lane-ask-link.ts stampAsAsk).
-    await updateTaskRaw(taskId, { walnut_agent: true, ...(agentId !== 'general' ? { agent_id: agentId } : {}) }, { source: 'offline-handover' });
-  }
+  const agentId = agentOf(record);
   const cwd = typeof record.cwd === 'string' && record.cwd.startsWith('/') ? record.cwd : undefined;
   const mode = await allowedMode(ctx.hostKey, record.mode, sid);
   const effort = typeof record.effort === 'string' && VALID_SESSION_EFFORT_IDS.has(record.effort) ? record.effort as SessionEffort : undefined;
@@ -122,13 +152,53 @@ export async function applySession(ctx: V2Context, record: V2Record): Promise<vo
     // The rescue after the batch looks at the CLI as a reconnect does (it may have stopped since).
     initialProcessStatus: 'stopped',
   }));
-  // The task's session, as this Mac's own start links it (claude-code-session.ts after init).
-  // The record is made already: a link that fails throws, and the retry takes the branch above.
+  // The ask's stamp and the task's session, as this Mac's own start links it (claude-code-session.ts
+  // after init), only now the record is made (a refused record leaves the task as it was). A
+  // write that fails throws, and the retry takes the branch above.
   rescueAfterBatch(ctx.hostKey, sid);
+  await stampAsk(task, record);
   await linkAdopted(taskId, sid, mode === 'plan' ? 'plan' : 'exec');
   ctx.result.replayed++;
   log.session.info('offline handover: adopted an ask the host started while this Mac was away', { host: ctx.hostKey, sessionId: sid, taskId, agentId, mode, model });
   scheduleFollowups(sid, taskId, cwd ?? '', typeof record.firstMessage === 'string' ? record.firstMessage : '', task.title ?? '', task.project ?? '');
+}
+
+const isAsk = (record: V2Record) => record.routine === undefined && record.run === undefined;
+const agentOf = (record: V2Record) => (typeof record.agentId === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(record.agentId) ? record.agentId : 'general');
+
+/** The task stamped as an ask of the record's agent (see the header), unless it is already. */
+async function stampAsk(task: import('../types.js').Task, record: V2Record): Promise<void> {
+  const agentId = agentOf(record);
+  if (task.walnut_agent && (agentId === 'general' || task.agent_id === agentId)) return;
+  const { updateTaskRaw } = await import('../task-manager.js');
+  // agent_id is create-time data for updateTask; the raw write takes it (lane-ask-link.ts stampAsAsk).
+  await updateTaskRaw(task.id, { walnut_agent: true, ...(agentId !== 'general' ? { agent_id: agentId } : {}) }, { source: 'offline-handover' });
+}
+
+/** The session of a `run: 'task'` record a host started alone (its id), or null for any other record. */
+export function taskRunSession(record: { kind?: unknown; run?: unknown; routine?: unknown; sid?: unknown }): string | null {
+  if (record.kind !== 'session' || record.run !== 'task' || record.routine !== undefined) return null;
+  return typeof record.sid === 'string' && SID_RE.test(record.sid) ? record.sid : null;
+}
+
+/** The letter's words for a refused or given-up run whose CLI is ended (endRefusedRun), or ''. */
+export function refusedRunWords(record: { kind?: unknown; run?: unknown; routine?: unknown; sid?: unknown }, hostKey: string): string {
+  const sid = taskRunSession(record);
+  return sid ? `; its session ${sid} on ${hostKey} is being ended` : '';
+}
+
+/**
+ * A refused or given-up run's CLI, ended through the daemon that owns it (owner-stop.ts: the
+ * server never signals a pid). Not awaited: the drain goes on whatever the daemon answers.
+ */
+export function endRefusedRun(record: { kind?: unknown; run?: unknown; routine?: unknown; sid?: unknown }, hostKey: string): void {
+  const sid = taskRunSession(record);
+  if (!sid) return;
+  void (async () => {
+    const { stopThroughOwner } = await import('../sessions/owner-stop.js');
+    const outcome = await stopThroughOwner({ claudeSessionId: sid, host: hostKey }, 'maintenance', 'its start while this Mac was away was not adopted');
+    log.session.info('offline handover: a session this Mac did not adopt was asked to end', { host: hostKey, sessionId: sid, outcome });
+  })().catch((err: unknown) => log.session.warn('offline handover: a session this Mac did not adopt could not be asked to end', { host: hostKey, sessionId: sid, error: err instanceof Error ? err.message : String(err) }));
 }
 
 /** The routine a routine run's record names (see the header); refused without one. */

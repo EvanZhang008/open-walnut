@@ -27,6 +27,7 @@ import type { SessionRequest } from './session-requests.js';
 import { VALID_SESSION_EFFORT_IDS, VALID_SESSION_MODE_IDS, type SessionEffort, type SessionMode } from './types.js';
 import { APPLIED_V2_KINDS, RefusedWrite, applyV2, devicePaired, v2TaskIdOf, type V2Record } from './offline-merge/apply-v2.js';
 import { recordRemap } from './offline-merge/ledger.js';
+import { endRefusedRun, refusedRunWords } from './offline-merge/apply-session.js';
 import { isCallId, journalCallId } from '../lib/op-call-id.js';
 import { mergeJournalFill, noteJournalFill, readJournalFill, type JournalFill } from './offline-merge/journal-fill.js';
 
@@ -455,6 +456,9 @@ function recordTask(batch: Batch, record: OfflineRecord): string | undefined {
  * 'stop' (it threw and waits for its backoff; later records wait behind it), or
  * 'leave' (a kind this Mac does not know: never acked, the next Mac takes it).
  */
+/** The letter kinds of a record this Mac does not take (refused, or given up). */
+const NOT_TAKEN = new Set<string>(['refused', 'given-up', 'actor-dropped', 'board']);
+
 async function takeRecord(batch: Batch, record: OfflineRecord): Promise<'ack' | 'stop' | 'leave'> {
   const host = batch.conn.hostKey;
   const known = V1_KINDS.has(record.kind) || (APPLIED_V2_KINDS as readonly string[]).includes(record.kind);
@@ -486,7 +490,9 @@ async function takeRecord(batch: Batch, record: OfflineRecord): Promise<'ack' | 
    * not be written, nothing is recorded, and the record waits for its backoff
    * (letterNotWritten; true once the steps are spent, the entry kept in memory). A note
    * record's entry carries its bodies in full (the host frees them at the ack); false
-   * when they cannot be read from the host.
+   * when they cannot be read from the host. A session a host started alone for a task
+   * (`run: 'task'`) that is not taken has its CLI ended once the letter says so (apply-session.ts
+   * endRefusedRun): nothing on this Mac would ever look at it.
    */
   const letter = async (kind: import('./offline-merge/conflict-log.js').ConflictKind, reason: string): Promise<boolean> => {
     let attached: NoteBodies | null = {};
@@ -495,15 +501,19 @@ async function takeRecord(batch: Batch, record: OfflineRecord): Promise<'ack' | 
       attached = await bodies;
       if (!attached) return false;
     }
-    const entry = { kind, seq: record.seq, ...(opId ? { opId } : {}), recordKind: record.kind, ...(taskId ? { taskId } : {}), reason, record, ...(actor ? { actor } : {}), ...attached };
+    const ending = NOT_TAKEN.has(kind) ? refusedRunWords(record, host) : '';
+    const entry = { kind, seq: record.seq, ...(opId ? { opId } : {}), recordKind: record.kind, ...(taskId ? { taskId } : {}), reason: reason + ending, record, ...(actor ? { actor } : {}), ...attached };
+    let written: boolean;
     try {
       batch.conflicts.addDurable([entry]);
       letterFailing.delete(retryKey);
       logDiskErrorHosts.delete(host);
-      return true;
+      written = true;
     } catch (err) {
-      return letterNotWritten(batch, record, entry, retryKey, err);
+      written = letterNotWritten(batch, record, entry, retryKey, err);
     }
+    if (written && ending) endRefusedRun(record, host);
+    return written;
   };
   // The ledger first: a write a forward (or an earlier drain) applied is never lettered as
   // not applied, whoever made it (a device unpaired since) and whatever became of the
