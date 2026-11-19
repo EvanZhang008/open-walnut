@@ -25,6 +25,16 @@ import { engineCaps } from '../agents/engine-registry.js'
 /** At most this many of the task's sessions are asked about, the most recently active first. */
 const MAX_PROBED = 12
 
+/** A record that turned stopped this recently while its process still runs: a stop on its way. */
+export const STOP_IN_FLIGHT_MS = 2 * 60_000
+
+/**
+ * Why the work is not over (a sentence for the log). `soon`: a stop is on its way (the
+ * record turned stopped just now, the process has not ended yet), so a look in a few
+ * seconds will likely find it over; nothing else announces that end.
+ */
+export interface WorkGoesOn { why: string; soon?: true }
+
 /** One host's answer may take this long; longer counts as "cannot say". */
 export const PROBE_DEADLINE_MS = 3_000
 
@@ -44,26 +54,31 @@ export interface StillWorkingIo {
 const hostOf = (h: string | null | undefined) => (h && h !== 'local' ? h : '__local__')
 
 /**
- * Why the task's work is not over (a sentence for the log), or null when it is.
+ * Why the task's work is not over, or null when it is.
  * `opts.requests: false` skips the request check (a deleted task owes nobody).
  */
 export async function stillWorking(
   task: Pick<Task, 'id'>,
   ws: Pick<TaskWorkspace, 'root'>,
   io: StillWorkingIo,
-  opts: { requests?: boolean } = {},
-): Promise<string | null> {
+  opts: { requests?: boolean; now?: number } = {},
+): Promise<WorkGoesOn | null> {
+  const now = opts.now ?? Date.now()
   const all = (await io.sessions(task.id, ws.root)).filter((s) => !s.archived)
   const recordLive = all.find((s) => s.process_status === 'running' || s.process_status === 'idle')
-  if (recordLive) return `session ${recordLive.claudeSessionId.slice(0, 8)} is ${recordLive.process_status}`
+  if (recordLive) return { why: `session ${recordLive.claudeSessionId.slice(0, 8)} is ${recordLive.process_status}` }
   const asked = all
     .filter((s) => s.provider !== 'embedded' && s.provider !== 'sdk' && io.probeable(s))
     .sort((a, b) => String(b.lastActiveAt ?? '').localeCompare(String(a.lastActiveAt ?? '')))
     .slice(0, MAX_PROBED)
   for (const s of asked) {
     const answer = await io.probe(hostOf(s.host), s.claudeSessionId).catch(() => null)
-    if (answer === null) return `the host could not say whether session ${s.claudeSessionId.slice(0, 8)} still runs`
-    if (answer.alive) return `session ${s.claudeSessionId.slice(0, 8)} still runs on the host (its record says ${s.process_status ?? 'nothing'})`
+    if (answer === null) return { why: `the host could not say whether session ${s.claudeSessionId.slice(0, 8)} still runs` }
+    if (answer.alive) {
+      const changed = Date.parse(s.last_status_change ?? '')
+      const inFlight = Number.isFinite(changed) && now - changed < STOP_IN_FLIGHT_MS
+      return { why: `session ${s.claudeSessionId.slice(0, 8)} still runs on the host (its record says ${s.process_status ?? 'nothing'})`, ...(inFlight ? { soon: true as const } : {}) }
+    }
   }
   if (opts.requests === false) return null
   const owed: string[] = []
@@ -73,7 +88,7 @@ export async function stillWorking(
     if (asker?.id === task.id || asker?.phase === 'COMPLETE') continue
     owed.push(r.id)
   }
-  return owed.length ? `it owes an answer to ${owed.join(', ')}` : null
+  return owed.length ? { why: `it owes an answer to ${owed.join(', ')}` } : null
 }
 
 export const realStillWorkingIo: StillWorkingIo = {

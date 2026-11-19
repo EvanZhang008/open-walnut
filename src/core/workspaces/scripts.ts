@@ -544,9 +544,9 @@ export async function teardownBeforeCleanup(task: Task, ws: TaskWorkspace): Prom
   if (!script) return true
   if (!mayRunUnasked(script, view)) return (await skipUntrusted(task, ws, 'teardown', script, view, { forCompletion: key })) !== null
   // Reading the scripts asked the host and took a while: the work must still be over.
-  const why = await managerDeps().stillWorking(task, ws)
-  if (why) {
-    log.web.info(`workspace teardown waits: ${why}`, { taskId: task.id, root: ws.root })
+  const still = await managerDeps().stillWorking(task, ws)
+  if (still) {
+    log.web.info(`workspace teardown waits: ${still.why}`, { taskId: task.id, root: ws.root })
     return false
   }
   const run = await runRole(task, ws, 'teardown', script, { forCompletion: key }).catch((err) => {

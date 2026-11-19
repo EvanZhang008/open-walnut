@@ -14,7 +14,7 @@ import { WorkspaceError } from '../../src/core/workspaces/daemon-client.js'
 import {
   __setWorkspaceManagerDepsForTesting, __settleWorkspaceDriver, deferStart, removeWorkspaceManually, requestWorkspace, launchPending, cancelPendingStart,
 } from '../../src/core/workspaces/manager.js'
-import { __settleCompletionCheck, onTaskCompleted, onTaskDeleted, onTaskSessionStopped, GIVE_UP_AFTER_MS, RECHECK_MS, resumeWorkspaces } from '../../src/core/workspaces/cleanup.js'
+import { __settleCompletionCheck, onTaskCompleted, onTaskDeleted, onTaskSessionStopped, GIVE_UP_AFTER_MS, RECHECK_MS, RECHECK_SOON_MS, resumeWorkspaces } from '../../src/core/workspaces/cleanup.js'
 import {
   fileHash, parseScriptsFile, rerunSetup, startAnyway, trustKey, sanitizeProjectScripts, scriptFor, scriptsFor, setupPromptLine, storedProjectScripts,
 } from '../../src/core/workspaces/scripts.js'
@@ -662,6 +662,19 @@ describe('teardown at completion', () => {
     await __settleWorkspaceDriver('c9')
     expect(ws(f, 'c9')).toMatchObject({ state: 'removed', teardown: { state: 'done', for_completion: '2026-11-18T23:46:37Z' } })
     expect(f.later).toEqual([])
+  })
+
+  it("a self-completing session's stop on its way (record stopped just now, process ending) is looked at again within seconds, not minutes", async () => {
+    f.meta.Acme = { scripts: [{ name: 'Down', command: 'x', teardown: true }] }
+    completed('c17', 'A')
+    f.sessions = [{ claudeSessionId: 's17', taskId: 'c17', process_status: 'stopped', last_status_change: new Date().toISOString() } as SessionRecord]
+    f.hostSays.set('s17', true)
+    await onTaskSessionStopped('c17')
+    expect(runCall(f)).toEqual([])
+    expect(f.later.map((l) => [l.key, l.ms])).toEqual([['workspace-recheck-soon:c17', RECHECK_SOON_MS], ['workspace-recheck:c17', RECHECK_MS]])
+    f.hostSays.set('s17', false)
+    f.later.shift()!.fn()
+    await until(() => runCall(f).length === 1, 'teardown started')
   })
 
   it('a session that starts again after the teardown holds the removal', async () => {

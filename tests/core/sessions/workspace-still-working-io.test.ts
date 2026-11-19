@@ -27,7 +27,10 @@ vi.mock('../../../src/providers/daemon-connection.js', () => ({
 import { createSessionRecord, getSessionsInFolder, unlinkSessionsFromTasks, updateSessionRecord, _resetSessionTrackerForTesting } from '../../../src/core/session-tracker.js'
 import { closeDb } from '../../../src/core/session-db.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
-import { PROBE_DEADLINE_MS, realStillWorkingIo, stillWorking } from '../../../src/core/workspaces/still-working.js'
+import { PROBE_DEADLINE_MS, realStillWorkingIo, stillWorking as gate } from '../../../src/core/workspaces/still-working.js'
+
+/** The gate's reason, or null (the `soon` flag is checked on its own). */
+const stillWorking = async (...a: Parameters<typeof gate>) => (await gate(...a))?.why ?? null
 
 const ROOT = '/home/u/.open-walnut-worktrees/open-walnut/threads-e7a5ea6a'
 

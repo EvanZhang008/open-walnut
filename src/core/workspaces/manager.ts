@@ -54,7 +54,7 @@ export interface WorkspaceManagerDeps {
    * a session the host says still runs (whatever its record says), a host that cannot
    * say, or a request nobody answered (still-working.ts). Null when it is over.
    */
-  stillWorking(task: Pick<Task, 'id'>, ws: TaskWorkspace, opts?: { requests?: boolean }): Promise<string | null>
+  stillWorking(task: Pick<Task, 'id'>, ws: TaskWorkspace, opts?: { requests?: boolean }): Promise<import('./still-working.js').WorkGoesOn | null>
   /** Run `fn` once after `ms` (a timer that never holds the process open); one per `key` at a time. */
   later(key: string, fn: () => void, ms: number): void
   notify(input: { title: string; body: string; dedupKey: string; taskId?: string; severity: 'info' | 'warning' }): Promise<void>

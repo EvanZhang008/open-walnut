@@ -5,7 +5,10 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { SessionRecord } from '../../src/core/types.js'
-import { stillWorking, type StillWorkingIo } from '../../src/core/workspaces/still-working.js'
+import { stillWorking as gate, type StillWorkingIo } from '../../src/core/workspaces/still-working.js'
+
+/** The gate's reason, or null (the `soon` flag is checked on its own). */
+const stillWorking = async (...a: Parameters<typeof gate>) => (await gate(...a))?.why ?? null
 
 const rec = (sid: string, r: Partial<SessionRecord> = {}): SessionRecord => ({ claudeSessionId: sid, process_status: 'stopped', ...r } as SessionRecord)
 
@@ -57,6 +60,15 @@ describe('stillWorking', () => {
     })
     expect(await stillWorking(task, local, x)).toBeNull()
     expect(x.probed.sort()).toEqual(['__local__:l', '__local__:mac', 'clouddev:here'])
+  })
+
+  it('a record that turned stopped moments ago while its process still runs is a stop on its way (look again soon)', async () => {
+    const now = Date.parse('2026-11-19T01:33:21Z')
+    const fresh = rec('a', { last_status_change: '2026-11-19T01:33:20Z' })
+    expect(await gate(task, local, io({ sessions: [fresh], host: { a: true } }), { now })).toMatchObject({ soon: true })
+    const old = rec('a', { last_status_change: '2026-11-18T23:46:37Z' })
+    expect((await gate(task, local, io({ sessions: [old], host: { a: true } }), { now }))?.soon).toBeUndefined()
+    expect((await gate(task, local, io({ sessions: [fresh], host: { a: null } }), { now }))?.soon).toBeUndefined()
   })
 
   it('a session that moved to another host and still runs there holds it', async () => {

@@ -226,7 +226,7 @@ function fake(): Fake {
     launchInFolder: async (task, ws, _pending, error) => { f.inFolder.push({ taskId: task.id, cwd: ws.anchor, error }) },
     sessionBusy: async () => f.busy,
     hasLiveSession: async () => f.live,
-    stillWorking: async () => (f.live ? 'a session of the task still runs' : null),
+    stillWorking: async () => (f.live ? { why: 'a session of the task still runs' } : null),
     later: () => {},
     notify: async (n2) => { f.notes.push({ title: n2.title, body: n2.body }) },
     listTasks: async () => [...f.tasks.values()],

@@ -42,17 +42,22 @@ const DELETE_SESSION_POLL_MS = 5_000
 /** A check that found the work not over looks again after this long. */
 export const RECHECK_MS = 10 * 60_000
 
+/** ...and this soon when a session's stop is on its way (it ends within a second or two; nothing announces it). */
+export const RECHECK_SOON_MS = 15_000
+
 /** Still not over this long after the completion: the workspace is kept, with why, and nothing looks again. */
 export const GIVE_UP_AFTER_MS = 24 * 60 * 60_000
 
 /** One check per task at a time; a request that arrives meanwhile runs once more after it. */
 const checking = new Map<string, { again: boolean }>()
 
-function recheckLater(taskId: string): void {
-  managerDeps().later(`workspace-recheck:${taskId}`, () => {
+function recheckLater(taskId: string, soon = false): void {
+  const look = () => {
     void onTaskCompleted(taskId, { grace: false })
       .catch((err) => log.web.warn('workspace cleanup recheck failed', { taskId, error: errText(err) }))
-  }, RECHECK_MS)
+  }
+  if (soon) managerDeps().later(`workspace-recheck-soon:${taskId}`, look, RECHECK_SOON_MS)
+  managerDeps().later(`workspace-recheck:${taskId}`, look, RECHECK_MS)
 }
 
 /**
@@ -62,8 +67,9 @@ function recheckLater(taskId: string): void {
  */
 async function workGoesOn(task: Task, ws: TaskWorkspace, before: 'teardown' | 'removal'): Promise<boolean> {
   const deps = managerDeps()
-  const why = await deps.stillWorking(task, ws)
-  if (!why) return false
+  const still = await deps.stillWorking(task, ws)
+  if (!still) return false
+  const { why } = still
   const since = Date.parse(task.completed_at ?? '')
   if (Number.isFinite(since) && deps.now() - since >= GIVE_UP_AFTER_MS) {
     const root = ws.root
@@ -74,7 +80,7 @@ async function workGoesOn(task: Task, ws: TaskWorkspace, before: 'teardown' | 'r
     return true
   }
   log.web.info(`workspace cleanup waits: ${why}`, { taskId: task.id, root: ws.root, before })
-  recheckLater(task.id)
+  recheckLater(task.id, still.soon === true)
   return true
 }
 
@@ -180,10 +186,10 @@ export async function cleanupForDeletedTask(task: Pick<Task, 'id' | 'title'>, ws
   }
   // A session still in it (the deletion stops them; a stop can take a moment) keeps it.
   for (let waited = 0; ; waited += DELETE_SESSION_POLL_MS) {
-    const why = await deps.stillWorking(task, ws, { requests: false })
-    if (!why) break
+    const still = await deps.stillWorking(task, ws, { requests: false })
+    if (!still) break
     if (waited >= DELETE_SESSION_WAIT_MS) {
-      return void await tell(`The task was deleted, but its workspace at ${ws.root} on ${hostLabel(ws.host)} was kept: ${why}. Nothing was removed.`)
+      return void await tell(`The task was deleted, but its workspace at ${ws.root} on ${hostLabel(ws.host)} was kept: ${still.why}. Nothing was removed.`)
     }
     await deps.sleep(DELETE_SESSION_POLL_MS)
   }
