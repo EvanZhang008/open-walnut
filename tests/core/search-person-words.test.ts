@@ -20,6 +20,11 @@ import { queryTerms, serverRowShowsQuery } from '../../web/src/components/tasks/
 beforeAll(() => { process.env.WALNUT_SEARCH_V2_SEMANTIC = '0'; });
 afterAll(() => { delete process.env.WALNUT_SEARCH_V2_SEMANTIC; resetSearchV2IndexForTests(); });
 
+/** A word no earlier run made: the test home is shared across runs. */
+function runWord(head: string): string {
+  return `${head}${Array.from({ length: 6 }, () => String.fromCharCode(97 + Math.floor(Math.random() * 26))).join('')}`;
+}
+
 /** Wait on the state the sync leaves, never a fixed sleep (tests/core/fixed-sleep-wait-guard.test.ts). */
 async function waitFor(check: () => boolean, timeout = 8_000): Promise<void> {
   await vi.waitFor(() => expect(check()).toBe(true), { timeout, interval: 100 });
@@ -38,33 +43,37 @@ describe('a task is found by what the user wrote in it', () => {
 
   it('his message, typos and all, finds the task whose title never says it', async () => {
     wiring = startSearchV2Wiring(new EventBus());
-    const index = getSearchV2Index();
+    // Names of this run's own: the shared test home keeps every earlier run's tasks, and a word in
+    // dozens of them crowds this one out.
+    const [vault, zone] = [runWord('vault'), runWord('zr')];
     // A summary of its own that never says the words: his words count from the note.
     const { task } = await addTask({ title: 'Pipeline watch leader: Ledger, Courier', project: 'marina', description: 'Watches the Ledger and Courier pipelines and reports each failed stage.' });
     const send = async (message: string) => (await prepareUserAskCapture({ task, message, inChat: true }))?.commit();
 
-    await send('sorry forget that, can u acutally do the rest the vaultkep add permisison and then contineu rollabck for cfn');
+    await send(`sorry forget that, can u acutally do the rest the ${vault} add permisison and then contineu rollabck for cfn`);
     await waitFor(() => (getSearchV2Index().getDoc('task', task.id)?.note ?? '').includes('rollabck'));
-    expect(await findsTask('vaultkep permisison', task.id)).toBe(true);
+    expect(await findsTask(`${vault} permisison`, task.id)).toBe(true);
     expect(await findsTask('rollabck cfn', task.id)).toBe(true);
 
     // A later message adds its words; the earlier ones stay.
-    await send('for zrk what si thenext is the continue rollback done?');
-    await waitFor(() => (getSearchV2Index().getDoc('task', task.id)?.note ?? '').includes('zrk'));
-    expect(await findsTask('zrk cfn rollback', task.id)).toBe(true);
-    expect(await findsTask('vaultkep permisison', task.id)).toBe(true);
+    await send(`for ${zone} what si thenext is the continue rollback done?`);
+    await waitFor(() => (getSearchV2Index().getDoc('task', task.id)?.note ?? '').includes(zone));
+    expect(await findsTask(`${zone} cfn rollback`, task.id)).toBe(true);
+    expect(await findsTask(`${vault} permisison`, task.id)).toBe(true);
   });
 
   it('his passing words never outrank the task that is about them', async () => {
     const bus = new EventBus();
     wiring = startSearchV2Wiring(bus);
-    const index = getSearchV2Index();
-    const { task: about } = await addTask({ title: 'Stack rollback runbook for the cfn widget stacks', project: 'marina' });
+    // Words of this run's own: the test home is shared, and the last run's tasks would change
+    // how rare they are.
+    const [w1, w2] = [runWord('vex'), runWord('lum')];
+    const { task: about } = await addTask({ title: `Stack ${w1} runbook for the ${w2} widget stacks`, project: 'marina' });
     const { task: chat } = await addTask({ title: 'Weekly chores list', project: 'marina', description: 'Groceries and errands.' });
     bus.emit(EventNames.TASK_CREATED, { task: about }, ['*'], { source: 'test' });
-    await (await prepareUserAskCapture({ task: chat, message: 'remind me after the cfn rollback runbook is done', inChat: true }))?.commit();
-    await waitFor(() => (getSearchV2Index().getDoc('task', chat.id)?.note ?? '').includes('rollback') && getSearchV2Index().getDoc('task', about.id) !== null);
-    const rows = (await search('cfn rollback runbook', { types: ['task'], limit: 20 })).map((r) => r.taskId);
+    await (await prepareUserAskCapture({ task: chat, message: `remind me after the ${w2} ${w1} runbook is done`, inChat: true }))?.commit();
+    await waitFor(() => (getSearchV2Index().getDoc('task', chat.id)?.note ?? '').includes(w1) && getSearchV2Index().getDoc('task', about.id) !== null);
+    const rows = (await search(`${w2} ${w1} runbook`, { types: ['task'], limit: 20 })).map((r) => r.taskId);
     expect(rows.indexOf(about.id)).toBeGreaterThanOrEqual(0);
     expect(rows.indexOf(chat.id)).toBeGreaterThan(rows.indexOf(about.id));
   });
@@ -74,25 +83,32 @@ describe('a task is found by what the user wrote in it', () => {
     const bus = new EventBus();
     wiring = startSearchV2Wiring(bus);
     const index = getSearchV2Index();
+    // Words of this run's own, each typed with two letters swapped: the shared test home keeps
+    // every earlier run's typo, and a typo in many docs is no longer rare enough to fix.
+    const [name, perm] = [runWord('quorv'), runWord('permi')];
+    const swap = (w: string) => `${w.slice(0, -2)}${w.slice(-1)}${w.slice(-2, -1)}`;
     // The index knows the right spellings from other docs (as the real one does from months of work).
     for (let i = 0; i < 40; i++) {
-      index.upsert({ kind: 'task', ref: `t-vocab-${i}`, title: `Quorvane audit ${i}`, summary: 'Reviewed the log.', note: '', meta: '', updatedAt: Date.now() });
-      index.upsert({ kind: 'task', ref: `t-vocab-p${i}`, title: `Access review ${i}`, summary: 'Granted the permission.', note: '', meta: '', updatedAt: Date.now() });
+      index.upsert({ kind: 'task', ref: `t-vocab-${i}`, title: `${name} audit ${i}`, summary: 'Reviewed the log.', note: '', meta: '', updatedAt: Date.now() });
+      index.upsert({ kind: 'task', ref: `t-vocab-p${i}`, title: `Access review ${i}`, summary: `Granted the ${perm}.`, note: '', meta: '', updatedAt: Date.now() });
     }
-    const { task } = await addTask({ title: 'Pipeline watch leader: Ledger, Courier', project: 'marina', description: 'Watches the Ledger and Courier pipelines.' });
-    await (await prepareUserAskCapture({ task, message: 'do the rest, the quorvade add permisson step by step', inChat: true }))?.commit();
-    await waitFor(() => (getSearchV2Index().getDoc('task', task.id)?.meta ?? '').includes('permission'), 20_000);
-    // His words in the note as he typed them, their right spellings in meta.
-    expect(index.getDoc('task', task.id)?.note ?? '').toContain('quorvade add permisson');
-    expect(index.getDoc('task', task.id)?.meta ?? '').toContain('quorvane');
-    const rows = (await search('quorvane permission', { types: ['task'], limit: 20 })).map((r) => r.taskId);
-    expect(rows.indexOf(task.id)).toBeGreaterThanOrEqual(0);
-    expect(rows.indexOf(task.id)).toBeLessThan(3);
-    // A full rebuild writes tasks before the vocabulary: the pass after it puts the fixes back.
-    index.upsert({ ...index.getDoc('task', task.id)!, meta: 'Project: marina' });
-    expect(await refixPersonWords(index)).toBeGreaterThanOrEqual(1);
-    expect(index.getDoc('task', task.id)?.meta ?? '').toContain('quorvane');
-    for (let i = 0; i < 40; i++) { index.remove('task', `t-vocab-${i}`); index.remove('task', `t-vocab-p${i}`); }
+    try {
+      const { task } = await addTask({ title: 'Pipeline watch leader: Ledger, Courier', project: 'marina', description: 'Watches the Ledger and Courier pipelines.' });
+      await (await prepareUserAskCapture({ task, message: `do the rest, the ${swap(name)} add ${swap(perm)} step by step`, inChat: true }))?.commit();
+      await waitFor(() => (getSearchV2Index().getDoc('task', task.id)?.meta ?? '').includes(perm), 20_000);
+      // His words in the note as he typed them, their right spellings in meta.
+      expect(index.getDoc('task', task.id)?.note ?? '').toContain(`${swap(name)} add ${swap(perm)}`);
+      expect(index.getDoc('task', task.id)?.meta ?? '').toContain(name);
+      const rows = (await search(`${name} ${perm}`, { types: ['task'], limit: 20 })).map((r) => r.taskId);
+      expect(rows.indexOf(task.id)).toBeGreaterThanOrEqual(0);
+      expect(rows.indexOf(task.id)).toBeLessThan(3);
+      // A full rebuild writes tasks before the vocabulary: the pass after it puts the fixes back.
+      index.upsert({ ...index.getDoc('task', task.id)!, meta: 'Project: marina' });
+      expect(await refixPersonWords(index)).toBeGreaterThanOrEqual(1);
+      expect(index.getDoc('task', task.id)?.meta ?? '').toContain(name);
+    } finally {
+      for (let i = 0; i < 40; i++) { index.remove('task', `t-vocab-${i}`); index.remove('task', `t-vocab-p${i}`); }
+    }
   }, 45_000);
 
   // 2026-11-19: a two-word search spelled right matched dozens of older tasks as fully as the one
@@ -101,7 +117,7 @@ describe('a task is found by what the user wrote in it', () => {
     const bus = new EventBus();
     wiring = startSearchV2Wiring(bus);
     // A name of this run's own: the test home is shared, and a retry finds the last run's tasks.
-    const name = `brim${Array.from({ length: 6 }, () => String.fromCharCode(97 + Math.floor(Math.random() * 26))).join('')}`;
+    const name = runWord('brim');
     const { task: older } = await addTask({ title: `${name} gateway lease audit`, project: 'marina', description: `${name} gateway lease audit notes.` });
     // No summary of its own, so his words in its note count in full (noteOnlyCoverage), as the other's title does.
     const { task: mine } = await addTask({ title: 'Weekly ops leader', project: 'marina' });
@@ -126,6 +142,22 @@ describe('a task is found by what the user wrote in it', () => {
     } finally {
       await mergeUiPrefs({ [RECENT_OPENED_KEY]: { v: null, ts: Date.now() + 1 } });
     }
+  });
+
+  // 2026-11-19: both words of a two-word search were only in his words, which the index keeps
+  // in the note, and a task with a summary gets half credit for a note-only term: it ranked 79th,
+  // below the full tier, so the web and the phone hid the row.
+  it('his words count in full for a task that has a summary of its own', async () => {
+    const bus = new EventBus();
+    wiring = startSearchV2Wiring(bus);
+    const [w1, w2] = [runWord('kel'), runWord('dor')];
+    const { task } = await addTask({ title: 'Weekly ops leader', project: 'marina', description: 'Watches the ops queue and reports.' });
+    bus.emit(EventNames.TASK_CREATED, { task }, ['*'], { source: 'test' });
+    await (await prepareUserAskCapture({ task, message: `then add the ${w1} ${w2} step`, inChat: true }))?.commit();
+    await waitFor(() => (getSearchV2Index().getDoc('task', task.id)?.note ?? '').includes(w1));
+    const row = (await search(`${w1} ${w2}`, { types: ['task'], limit: 20 })).find((r) => r.taskId === task.id);
+    expect(row).toBeDefined();
+    expect(row!.coveredTermHits).toBe(4);
   });
 
   it('a task he never wrote in is not found by words that are only in other tasks', async () => {

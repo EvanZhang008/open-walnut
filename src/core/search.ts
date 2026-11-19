@@ -860,6 +860,51 @@ function publishHybridSegments(seg: QuerySegments): void {
 export const DEFAULT_SEARCH_TYPES: ReadonlyArray<'task' | 'memory' | 'session'> = ['task', 'memory', 'session'];
 
 /** How long a touch of his lifts a task among equally covering matches (search merge). */
+/** His words per task (user-asks), kept until a message is filed anywhere (taskSearchGeneration)
+ *  or for PERSON_WORDS_TTL_MS. */
+const PERSON_WORDS_TTL_MS = 60_000;
+const PERSON_WORDS_MEMO_MAX = 2_000;
+const personWordsMemo = new Map<string, { at: number; generation: number; words: string }>();
+
+/**
+ * His own words in each of `taskIds` he wrote in, with what the index stores of the task's meta
+ * (the right spellings of what he mistyped, its project and tags): the text whose query terms count
+ * in full toward a task row's coverage. The index keeps his words in the note, where a task with a
+ * summary gets half credit for a term (noteOnlyCoverage, meant for long agent notes); his words
+ * name his task, and with half credit a search for them ranked it 79th and hid its row (a two-word
+ * search, 2026-11-19). Counted here and not by moving them in the index: in meta the body
+ * coverage of a descriptive query cannot see them, and in both places the extra weight moved other
+ * searches (scripts/search-robustness-eval.mjs). Only the rows of this search are read.
+ */
+async function personTextForSearch(taskIds: readonly string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  try {
+    const [{ taskSearchGeneration }, { readPersonWords }, { getSearchV2Index }] = await Promise.all([
+      import('./search/task-requeue.js'),
+      import('./sessions/user-asks.js'),
+      import('./search/wiring.js'),
+    ]);
+    const generation = taskSearchGeneration();
+    const now = Date.now();
+    if (personWordsMemo.size > PERSON_WORDS_MEMO_MAX) personWordsMemo.clear();
+    const index = getSearchV2Index();
+    for (const taskId of new Set(taskIds)) {
+      let hit = personWordsMemo.get(taskId);
+      if (!hit || hit.generation !== generation || now - hit.at > PERSON_WORDS_TTL_MS) {
+        hit = { at: now, generation, words: await readPersonWords(taskId) };
+        personWordsMemo.set(taskId, hit);
+      }
+      if (!hit.words) continue;
+      let meta = '';
+      try { meta = index.getDoc('task', taskId)?.meta ?? ''; } catch { /* closed or absent */ }
+      out.set(taskId, `${hit.words}\n${meta}`.toLowerCase());
+    }
+  } catch {
+    // No words or no index: coverage stays the index's.
+  }
+  return out;
+}
+
 export const RECENT_TOUCH_BOOST_MS = 3 * 24 * 3600_000;
 
 /** His Recent touches (task id -> ms); empty without the web layer or on a read failure. */
@@ -1290,6 +1335,9 @@ async function searchInner(
   {
     const terms = contentQueryTerms(normalizedQuery);
     if (terms.length > 1) {
+      const personText = await personTextForSearch(
+        results.flatMap((r) => (r.type === 'task' && r.taskId ? [r.taskId] : [])),
+      );
       for (const result of results) {
         // Whole-document hit count from the index lane when available; the
         // title+snippet scan is the fallback for lanes that never had the
@@ -1302,6 +1350,8 @@ async function searchInner(
           hits = countTermsInText(haystack, terms);
         }
         hits = Math.max(hits, indexCoverage.get(result) ?? 0);
+        const own = result.type === 'task' && result.taskId ? personText.get(result.taskId) : undefined;
+        if (own) hits = Math.max(hits, countTermsInText(own, terms));
         coverage.set(result, Math.round((Math.min(hits, terms.length) / terms.length) * 4));
       }
     }

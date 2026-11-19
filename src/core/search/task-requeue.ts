@@ -5,6 +5,12 @@
  * Its own module so a caller never loads the index library to ask.
  */
 let hook: ((taskId: string) => void) | null = null;
+/** Bumped by every requeue, so a reader that keeps his words in memory (search.ts) reads again. */
+let generation = 0;
+
+export function taskSearchGeneration(): number {
+  return generation;
+}
 
 export function setTaskSearchRequeue(fn: (taskId: string) => void): void {
   hook = fn;
@@ -16,5 +22,6 @@ export function clearTaskSearchRequeue(fn: (taskId: string) => void): void {
 }
 
 export function requeueTaskSearch(taskId: string): void {
+  generation++;
   hook?.(taskId);
 }
