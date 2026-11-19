@@ -208,6 +208,25 @@ describe('host server manager: a host on by default', () => {
     m.stop()
   })
 
+  it('a host row that is really this computer gets no follower by default; the person\'s own switch still runs one', async () => {
+    const m = createHostServerManager(deps())
+    const h = host()
+    h.reachesThisComputer = async () => true
+    await m.connected(h)
+    expect(m.view('devbox')).toMatchObject({ enabled: true, phase: 'not-eligible', gate: { reason: 'this-computer' } })
+    expect(m.view('devbox').gate!.recheckAt).toBeUndefined()
+    expect(m.view('devbox').message).toBe('No Walnut server runs on this host by default: it is this computer, which runs Walnut already.')
+    expect(h.calls).not.toContain('room')
+    expect(h.uploads).toEqual([])
+    expect(h.specs).toEqual([])
+    m.stop()
+    settings = { enabled: true, expose: { enabled: false, provider: null, options: {} } }
+    const own = createHostServerManager(deps())
+    await own.connected(h)
+    expect(own.view('devbox').phase).toBe('running')
+    own.stop()
+  })
+
   it('a host the person turned on is not gated: no room probe', async () => {
     settings = { enabled: true, expose: { enabled: false, provider: null, options: {} } }
     const m = createHostServerManager(deps())

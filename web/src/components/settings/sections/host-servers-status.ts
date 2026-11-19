@@ -27,7 +27,7 @@ export interface HostServerView {
   /** When that report came in, on this computer's clock. */
   lastReportAt?: number;
   /** Phase `not-eligible`: the condition the host did not meet, and when it is looked at again. */
-  gate?: { reason: 'no-build' | 'memory' | 'disk'; checkedAt: number; recheckAt?: number };
+  gate?: { reason: 'no-build' | 'memory' | 'disk' | 'this-computer'; checkedAt: number; recheckAt?: number };
   /** Phase `error`: when Walnut tries again by itself. */
   retryAt?: number;
   /** While the program goes up to the host: the bytes it holds so far. */

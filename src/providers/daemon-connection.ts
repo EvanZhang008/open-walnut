@@ -3861,6 +3861,8 @@ export class DaemonConnection {
       seedFromDaemon: (sha256: string, gz: string) => conn.seedHostFileFromDaemon(sha256, gz),
       openStream: (to: 'follower', purpose?: string) => conn.openStream(to, purpose),
       keepStreamLane: (on: boolean) => conn.keepStreamLane(on),
+      // The daemon's own word, never a name: this link and this computer's own reach one daemon process.
+      reachesThisComputer: async () => conn.hostKey !== '__local__' && (await conn.sameDaemonHosts()).includes('__local__'),
     }
   }
 

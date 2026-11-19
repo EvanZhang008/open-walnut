@@ -524,24 +524,7 @@ export function createHostServerManager(deps: ManagerDeps) {
     const exposeSettings = settings?.enabled === true ? await exposeSettingsFor(settings) : null
     const enabled = settings?.enabled === true
     if (!enabled) {
-      stopPoll(hostKey)
-      tryLater.clear(hostKey)
-      // Also after a restart of this server: the host may still run one it set up before.
-      if (host?.connected && host.hasCapability('host-server-v1')) {
-        const st = await host.send('server.status', { home: deps.home }, 10_000).catch(() => null)
-        const state = (st?.status as HostServerStatus | undefined)?.state
-        if (state && state !== 'off') {
-          if (await deps.frozen?.()) return
-          await host.send('server.configure', { home: deps.home, spec: null }, 15_000).catch(() => undefined)
-          log.session.info('host server: turned off, stopped on the host', { host: hostKey })
-        }
-      }
-      dropLink(hostKey)
-      configured.delete(hostKey)
-      notices.delete(hostKey)
-      heldUntil.delete(hostKey)
-      host?.keepStreamLane?.(false)
-      await deps.releaseTunnelPort(`host-server:${hostKey}`)
+      if (!(await takeDown(hostKey, host))) return
       set(hostKey, { enabled: false, phase: 'off', server: null, daemon: undefined, lastReport: undefined, lastReportAt: undefined })
       return
     }
@@ -551,6 +534,13 @@ export function createHostServerManager(deps: ManagerDeps) {
     }
     if (!host.hasCapability('host-server-v1') || !host.hasCapability('follower-v1') || !host.hasCapability('stream-relay-v1')) {
       set(hostKey, { enabled: true, phase: 'unsupported', message: 'This host\'s Walnut daemon is older than this feature; it updates on its next connect.' })
+      return
+    }
+    // A host row that is really this computer (its link reaches this computer's own daemon) runs
+    // no second Walnut by default: this server is the one there. The person's switch still can.
+    if (settings!.byDefault && !settings!.carriesTunnel && await host.reachesThisComputer?.().catch(() => false)) {
+      if (!(await takeDown(hostKey, host))) return
+      notEligible(hostKey, 'this-computer', 'No Walnut server runs on this host by default: it is this computer, which runs Walnut already.')
       return
     }
     set(hostKey, { enabled: true, phase: 'checking', message: 'Checking the host.' })
@@ -701,6 +691,32 @@ export function createHostServerManager(deps: ManagerDeps) {
     }
   }
 
+  /**
+   * No server of this Walnut on the host: the daemon stops one it set up before (also one from
+   * before a restart here), and the link, the door hold and the copy target go. False: this server
+   * began to stop meanwhile, and the host stays as it was.
+   */
+  async function takeDown(hostKey: string, host: HostServerHost | undefined): Promise<boolean> {
+    stopPoll(hostKey)
+    tryLater.clear(hostKey)
+    if (host?.connected && host.hasCapability('host-server-v1')) {
+      const st = await host.send('server.status', { home: deps.home }, 10_000).catch(() => null)
+      const state = (st?.status as HostServerStatus | undefined)?.state
+      if (state && state !== 'off') {
+        if (await deps.frozen?.()) return false
+        await host.send('server.configure', { home: deps.home, spec: null }, 15_000).catch(() => undefined)
+        log.session.info('host server: turned off, stopped on the host', { host: hostKey })
+      }
+    }
+    dropLink(hostKey)
+    configured.delete(hostKey)
+    notices.delete(hostKey)
+    heldUntil.delete(hostKey)
+    host?.keepStreamLane?.(false)
+    await deps.releaseTunnelPort(`host-server:${hostKey}`)
+    return true
+  }
+
   /** Whether this host is on only by default and nothing of this Walnut runs or ran there: the gates apply. */
   async function firstOnByDefault(host: HostServerHost, settings: HostServerSettings): Promise<boolean> {
     if (!settings.byDefault || settings.carriesTunnel || readState()[host.hostKey]) return false
@@ -713,8 +729,8 @@ export function createHostServerManager(deps: ManagerDeps) {
   function notEligible(hostKey: string, reason: FollowerGateReason, message: string, room?: unknown): void {
     log.session.info('host server: no follower on this host by default', { host: hostKey, reason, ...(room ? { room } : {}) })
     const checkedAt = deps.now()
-    if (reason === 'no-build') {
-      // A build that does not run there does not start to: the next connect or a Retry looks again.
+    if (reason === 'no-build' || reason === 'this-computer') {
+      // Neither changes by waiting: the next connect or a Retry looks again.
       tryLater.clear(hostKey)
       set(hostKey, { enabled: true, phase: 'not-eligible', message, gate: { reason, checkedAt } })
       return

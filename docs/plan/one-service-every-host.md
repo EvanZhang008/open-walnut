@@ -293,7 +293,8 @@ permission prompts still name Walnut.
   (`not-eligible`), and memory and disk are looked at again every 30 minutes. The floors come from a dev host
   with 19 agents (2026-11-18): the follower used 311 MB right after a start and 194 MB after 16 minutes, the
   daemon beside it 246 MB; one version of the program takes about 160 MB unpacked, and that follower's data
-  copy was 1.9 GB.
+  copy was 1.9 GB. A host row that is really the leader's own machine (its link reaches the leader's own
+  daemon process, by the hello's instance id) gets none by default either (`this-computer`).
 - **A slow link or a failed start harms nothing else.** The program goes up in the background with the
   resumable upload, on connections of its own and with no deadline; the view shows the bytes sent. With the
   experiment on, a start that fails runs again by itself after 1, 5, 15, 30, then 60 minutes, never touching

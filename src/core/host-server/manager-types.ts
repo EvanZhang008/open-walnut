@@ -33,6 +33,11 @@ export interface HostServerHost {
   openStream(to: 'follower', purpose?: string): Promise<Duplex>
   /** Carry those streams on a link of their own while the server runs (providers/stream-lane.ts). */
   keepStreamLane?(on: boolean): void
+  /**
+   * This link reaches the same daemon process as this server's own daemon (the hello's instance id,
+   * daemon-connection.ts sameDaemonHosts): the host row is this computer.
+   */
+  reachesThisComputer?(): Promise<boolean>
   /** The daemon process this link reached (its hello instanceId): what it was sent before, it still holds. */
   readonly daemonInstanceId?: string | null
 }
