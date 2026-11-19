@@ -68,10 +68,9 @@ export function mountPluginJobsRoutes(router: Router, opts: { cloudMode: boolean
       const raw = (req.body as { runOn?: unknown } | undefined)?.runOn
       const runOn = typeof raw === 'string' ? raw.trim() : ''
       const { getConfig, setPluginJobsRunOn } = await import('../../core/config-manager.js')
-      const { CLOUD_BOX_HOST_ALIAS } = await import('../../core/hosts/cloud-box-host.js')
       if (runOn && runOn !== '__local__') {
         const hosts = (await getConfig()).hosts ?? {}
-        if (runOn === CLOUD_BOX_HOST_ALIAS || !Object.prototype.hasOwnProperty.call(hosts, runOn)) {
+        if (!Object.prototype.hasOwnProperty.call(hosts, runOn)) {
           res.status(400).json({ error: `${runOn} is not a host in Settings, Hosts` })
           return
         }

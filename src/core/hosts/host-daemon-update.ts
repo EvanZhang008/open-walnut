@@ -17,13 +17,6 @@ const LOCAL = '__local__'
 /** A session on another host reaches this through its gateway, which gives up at 20 s: dial plus decision stay under it. */
 const DIAL_MS = 8_000
 
-/** Why a host of this kind is not updated this way, in the words the answer gives. */
-const OTHER_PATH: Record<string, string> = {
-  local: 'this Mac\'s daemon is updated by Walnut itself whenever it starts or reconnects',
-  ssh: 'Walnut updates the daemon on a host it reaches over SSH by itself when it connects there',
-  'cloud-tunnel': 'the cloud companion starts that daemon from its own build; deploying the companion updates it',
-  'direct-url': 'this host is a test daemon reached by its URL',
-}
 
 export async function requestHostDaemonUpdate(raw: string, callerSid: string | undefined): Promise<Record<string, unknown>> {
   let host: string
@@ -60,7 +53,9 @@ export async function requestHostDaemonUpdate(raw: string, callerSid: string | u
   }
   const run = conn.requestDaemonUpdate(gate)
   if (!run) {
-    throw new HostExecError(`Nothing to ask for ${name}: ${OTHER_PATH[conn.linkKind] ?? 'its daemon is updated another way'}.`, 409, 'updates_itself', { kind: conn.linkKind })
+    // Why a host of this kind is not updated this way: the one wording of its update path.
+    const { daemonUpdateHowSentence } = await import('../../providers/daemon-update-paths.js')
+    throw new HostExecError(`Nothing to ask for ${name}. ${daemonUpdateHowSentence(conn.linkKind, name)}.`, 409, 'updates_itself', { kind: conn.linkKind })
   }
   return { ...(await run), host }
 }

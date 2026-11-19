@@ -30,6 +30,7 @@
  * `request`). WALNUT_NET_DAEMON_UPDATE=0 turns the automatic update off.
  */
 import { daemonBusyRefusal, execRunsHold } from './exec-runs-hold.js'
+import { ACP_BUSY_FILE, acpTurnsHold, acpTurnsReason } from './acp-upgrade-hold.js'
 import { daemonUpdateOverdue, OVERDUE_GATE_WAIT_MS } from './daemon-update-behind.js'
 import { daemonUpdateGapWhy, daemonUpdateMinGapMs, daemonUpdateWaitMs } from './daemon-update-gap.js'
 import { log } from '../logging/index.js'
@@ -38,7 +39,8 @@ import type { HostFileTarget } from '../core/host-server/host-target.js'
 import { updateRemoteDaemonService } from './daemon-service-update.js'
 import { sharedDaemonVerdict, walnutKeyOf, type DaemonServes } from './daemon-shared.js'
 import { WALNUT_HOME } from '../constants.js'
-import { createNetUpdateIo, NetUpdateHeldError, NetUpdateUnansweredError, shq, type NetUpdateConn, type NetUpdateIoOptions } from './daemon-net-update-io.js'
+import { netDaemonUpdateTurnedOff } from './daemon-update-paths.js'
+import { createNetUpdateIo, netReadText, NetUpdateHeldError, NetUpdateUnansweredError, shq, type NetUpdateConn, type NetUpdateIoOptions } from './daemon-net-update-io.js'
 import { LaunchedNetUpdate, type DaemonUpdateView } from './daemon-net-update-record.js'
 import { afterUpdateFailure, stageCutByLink } from './daemon-update-readback.js'
 import { BUILD_BACKOFF_MS, buildBackedOff, readBuildBackoff, writeBuildBackoff, type BuildBackoffEntry } from './daemon-build-backoff.js'
@@ -170,7 +172,27 @@ export interface NetUpdateLink extends NetUpdateConn {
   readonly daemonServes?: DaemonServes | null
   /** hello `startedAt` (ms epoch on the host); absent on an older link. */
   readonly daemonStartedAt?: number | null
+  /** hello `dir`, where the daemon keeps its acp-busy.json; absent on an older link. */
+  readonly daemonDir?: string | null
   hasCapability(cap: string): boolean
+}
+
+/**
+ * Open ACP turns on a host network machine hold its update, as on every other path (an SSH host:
+ * DaemonConnection.acpTurnsOpen; this Mac: local-daemon.ts): the swap ends a running Codex turn.
+ * The daemon's acp-busy.json is read over the link (fs.read), judged by the one reader and the one
+ * clock (acp-upgrade-hold.ts: a turn open past ACP_UPGRADE_HOLD_MAX_MS no longer holds it). Null
+ * when none is open, or when the file cannot be read (an update is never held on a guess).
+ */
+export async function acpTurnsHoldOverLink(c: NetUpdateLink, now: number = Date.now()): Promise<string | null> {
+  if (!c.connected || !c.daemonDir) return null
+  const raw = await netReadText(c)(`${c.daemonDir.replace(/\/+$/, '')}/${ACP_BUSY_FILE}`)
+  const { busySids, holds, heldMs } = acpTurnsHold(c.host, raw, now)
+  if (busySids.length > 0 && !holds) {
+    log.session.warn('DaemonConnection: host network daemon update goes ahead over ACP turns open too long', { host: c.host, busySids, heldMs })
+    return null
+  }
+  return acpTurnsReason(busySids)
 }
 
 export interface NetUpdaterDeps {
@@ -182,7 +204,10 @@ export interface NetUpdaterDeps {
   expectedVersion: () => string | null
   /** Why the daemon must not stop now (session or file writes in flight), or null. */
   hold: () => string | null
-  /** Why the host's daemon must not stop now, asked of the host (host_exec runs there: exec-runs-hold.ts), or null. */
+  /**
+   * Why the host's daemon must not stop now, asked of the host, or null. Default: its host_exec
+   * runs (exec-runs-hold.ts), then its open ACP turns (acpTurnsHoldOverLink).
+   */
   busy?: () => Promise<string | null>
   cooldownMs: number
   /** Overdue: hold this server's file changes to the host while the swap runs (DaemonConnection); returns the release. */
@@ -359,7 +384,7 @@ export class NetDaemonUpdater {
       follower: await (this.d.follower ? Promise.resolve(this.d.follower()) : defaultFollower()), expected: this.d.expectedVersion(),
       running: c.daemonVersion, startup: c.daemonStartup, serviceExecutable: c.serviceExecutable,
       has: (cap) => c.hasCapability(cap), autofixOff: await (this.d.autofixOff ?? (() => defaultAutofixOff(c.host)))(),
-      turnedOff: ['0', 'false', 'off', 'no'].includes((env.WALNUT_NET_DAEMON_UPDATE ?? '').trim().toLowerCase()),
+      turnedOff: netDaemonUpdateTurnedOff(env),
       requested: trigger === 'request', lastAttempt: this.lastAttempt, now: (this.d.now ?? Date.now)(), cooldownMs: this.d.cooldownMs,
       shared: sharedWhy(c, this.d.expectedVersion(), (this.d.now ?? Date.now)()),
       contested: !!this.installed && this.installed === this.d.expectedVersion() && c.daemonVersion !== this.installed,
@@ -544,7 +569,8 @@ export class NetDaemonUpdater {
   }
 
   private hostBusy(): Promise<string | null> {
-    return (this.d.busy ?? (() => execRunsHold(this.d.conn, this.d.conn.host)))()
+    const c = this.d.conn
+    return (this.d.busy ?? (async () => await execRunsHold(c, c.host) ?? await acpTurnsHoldOverLink(c, (this.d.now ?? Date.now)())))()
   }
 
   private postpone(reason: string, delayMs = this.d.recheckMs ?? 60_000): NetUpdateState {

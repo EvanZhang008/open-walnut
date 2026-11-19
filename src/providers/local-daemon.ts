@@ -32,7 +32,7 @@ import { knownAccount } from '../lib/account.js'
 import { WebSocket } from '#ws'
 import { log } from '../logging/index.js'
 import { HoldNews, holdLog } from './daemon-hold-news.js'
-import { acpUpgradeHolds } from './acp-upgrade-hold.js'
+import { ACP_BUSY_FILE, acpUpgradeHolds, openAcpTurns } from './acp-upgrade-hold.js'
 import { execRunsReason, execRunsWait, holdingJobs } from './exec-runs-hold.js'
 import { daemonUpdateOverdue } from './daemon-update-behind.js'
 import { fenceDaemonFileChanges } from './daemon-file-fence.js'
@@ -1181,14 +1181,9 @@ export class LocalDaemon {
    * can never be wedged by leftovers.
    */
   private readAcpBusySids(): string[] {
-    try {
-      const raw = fs.readFileSync(path.join(this.daemonDir, 'acp-busy.json'), 'utf-8')
-      const parsed = JSON.parse(raw) as { busySids?: unknown; updatedAt?: unknown }
-      if (typeof parsed.updatedAt !== 'number' || Date.now() - parsed.updatedAt > 2 * 60_000) return []
-      return Array.isArray(parsed.busySids) ? parsed.busySids.filter((s): s is string => typeof s === 'string') : []
-    } catch {
-      return []
-    }
+    let raw: string | null = null
+    try { raw = fs.readFileSync(path.join(this.daemonDir, ACP_BUSY_FILE), 'utf-8') } catch { /* none: not busy */ }
+    return openAcpTurns(raw)
   }
 
   private readInstanceIdFile(): string | null {

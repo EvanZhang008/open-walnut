@@ -26,6 +26,8 @@ export interface SessionServersState {
   servers: SessionServer[];
   state: SessionServersResult['state'] | 'loading';
   host: string;
+  /** Why the list cannot be read now (`unsupported`, `offline`): the server's sentence, or this tab's when an older server sent none. */
+  why?: string;
   /** Keys of servers a Stop is in flight for. */
   stopping: ReadonlySet<string>;
   /** Why the last Stop of a server failed, by key. */
@@ -36,6 +38,13 @@ export interface SessionServersState {
 }
 
 const NO_SERVERS: SessionServer[] = [];
+
+/** An older server's answer names the state only. */
+function serversWhyFallback(state: 'unsupported' | 'offline'): string {
+  return state === 'unsupported'
+    ? 'The Walnut daemon on this session\'s host needs an update before it can list the servers this session started'
+    : 'This session\'s host is not connected right now, so the servers it started cannot be listed; they show again once it is back';
+}
 
 export function useSessionServers(sessionId: string | null | undefined, opts: { enabled: boolean; fast: boolean }): SessionServersState {
   // A view that mounts starts from the tab's last answer (the menu's count shows at once).
@@ -167,6 +176,7 @@ export function useSessionServers(sessionId: string | null | undefined, opts: { 
     servers: result?.servers ?? NO_SERVERS,
     state: result?.state ?? 'loading',
     host: result?.host ?? '__local__',
+    ...(result && (result.state === 'unsupported' || result.state === 'offline') ? { why: result.why ?? serversWhyFallback(result.state) } : {}),
     stopping,
     stopErrors,
     stop,

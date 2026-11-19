@@ -47,12 +47,12 @@ const SENDERS: Record<string, { calls: number; kind: Kind; why: string }> = {
   'src/core/hosts/host-script.ts': { calls: 1, kind: 'checks', why: 'a plugin script run goes through dial()' },
   'src/core/hosts/host-terminal.ts': { calls: 1, kind: 'checks', why: 'a terminal over the link opens through dial()' },
   'src/core/hosts/host-mcp.ts': { calls: 3, kind: 'checks', why: 'every MCP list and call goes through dial()' },
-  'src/core/session-service-preview.ts': { calls: 1, kind: 'checks', why: 'hostLinkAnswers asks the link before a port forward is opened on it' },
+  'src/core/session-service-preview.ts': { calls: 2, kind: 'checks', why: 'hostLinkAnswers asks the link before a port forward is opened on it; the machines\' own names come from the hellos of links that are up (a peek, nothing sent)' },
   'src/core/session-vscode-embed.ts': { calls: 1, kind: 'checks', why: 'hostLinkAnswers asks the link before code-server is set up on it' },
   'src/core/routines/run-placement.ts': { calls: 1, kind: 'checks', why: 'reads whether a host\'s link is up, its capabilities and home; the one send (the run\'s folder, through ensureCwd) follows hostLinkAnswers' },
 
   // Sends without asking; the wake recheck and the ping loop find a dead link.
-  'src/core/agents/host-engines.ts': { calls: 2, kind: 'wake-recheck', why: 'a read under its own 4 s deadline; a lost one answers from its cache' },
+  'src/core/agents/host-engines.ts': { calls: 3, kind: 'wake-recheck', why: 'a read under its own 4 s deadline; a lost one answers from its cache; and a synchronous look at an open link\'s capabilities that sends nothing' },
   'src/core/subagent-ready-view.ts': { calls: 2, kind: 'wake-recheck', why: 'read-only view of one subagent; each ask is bounded by its budget and the host-read deadline, and a lost read answers unavailable' },
   'src/core/history-ready-view.ts': { calls: 2, kind: 'wake-recheck', why: 'read-only view request; the first paint has a 900 ms deadline and a lost read falls back to the preview' },
   'src/core/history-ready-refresh.ts': { calls: 2, kind: 'wake-recheck', why: 'read-only background keys and views with command timeouts; a lost batch stops the pass until the next reconnect' },

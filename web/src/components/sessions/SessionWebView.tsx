@@ -4,9 +4,10 @@
  *
  * The server resolves the URL the session printed into one this browser can
  * load: the URL itself when the service runs on this machine, or the 127.0.0.1
- * end of an SSH forward to the session's host (the same transport the embedded
- * VS Code uses). Page traffic goes straight through ssh, so the service's
- * WebSockets and absolute asset paths work unmodified.
+ * end of a port forward to the session's host over Walnut's connection to it (an
+ * SSH tunnel, the host network, or the cloud companion; the same transport the
+ * embedded VS Code uses). Page traffic goes straight through that forward, so the
+ * service's WebSockets and absolute asset paths work unmodified.
  *
  * The address bar always shows the URL as the session wrote it, never the
  * tunnel's random local port: that is the address the user recognises.
@@ -21,8 +22,9 @@ import { resolveSessionServicePreview, type ServicePreviewInfo } from '@/api/ses
 import { ApiError } from '@/api/client';
 import { normalizeServiceInput } from '@/utils/service-link';
 import { log } from '@/utils/log';
-import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
-import { CLOUD_BOX_ALIAS, remoteHostTag } from '@/utils/host-display-label';
+import { useHostDisplayLabels, useHostRoutes } from '@/hooks/useHostDisplayLabel';
+import { hostRouteTunnelWords, remoteHostTag } from '@/utils/host-display-label';
+import { DaemonUpdateFix } from './HostFeatureUnavailable';
 import { serverKey, type SessionServersState } from '@/hooks/useSessionServers';
 import { SessionServerList, type SessionServerListProps } from './SessionServerList';
 import { openable, serverLabel } from './session-server-label';
@@ -93,6 +95,7 @@ export function SessionWebView({ sessionId, host, request, onNavigate, barRightS
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
   const hostName = useHostDisplayLabels();
+  const hostVia = useHostRoutes();
   const [info, setInfo] = useState<ServicePreviewInfo | null>(null);
   const [error, setError] = useState<ErrorState | null>(null);
   const [address, setAddress] = useState(request?.url ?? '');
@@ -264,8 +267,14 @@ export function SessionWebView({ sessionId, host, request, onNavigate, barRightS
   // Before an answer (or after none came: a stopped server), the session's host says where it is.
   const sessionRemote = !!host && host !== '__local__';
   const hostBadge = info
-    ? (remote ? remoteHostTag(info.host, tunnelHost) : 'Local')
-    : requestedUrl && activeLocalPort(requestedUrl) !== null ? (sessionRemote ? remoteHostTag(host!, hostName(host!)) : 'Local') : '';
+    ? (remote ? remoteHostTag(info.host, tunnelHost, hostVia(info.host)) : 'Local')
+    : requestedUrl && activeLocalPort(requestedUrl) !== null ? (sessionRemote ? remoteHostTag(host!, hostName(host!), hostVia(host)) : 'Local') : '';
+  // How a port of a remote host opens here, by that host's real connection.
+  const remotePortHint = sessionRemote
+    ? `A port on ${hostName(host)} opens ${hostRouteTunnelWords(hostVia(host))}.`
+    : 'A port on a remote host opens through Walnut\'s connection to that host.';
+  // The list cannot be read (the host is away, or its daemon is too old for it): said, never a silent gap.
+  const serversWhy = servers && (servers.state === 'unsupported' || servers.state === 'offline') ? servers.why ?? null : null;
   // "Open in tab" uses the address this machine can actually reach.
   const tabUrl = info?.url ?? requestedUrl;
   const busy = phase === 'resolving' || phase === 'loading';
@@ -324,7 +333,7 @@ export function SessionWebView({ sessionId, host, request, onNavigate, barRightS
             aria-invalid={addressError || undefined}
           />
           {hostBadge && (
-            <span className="session-code-host" title={remote ? `Tunnelled to ${tunnelHost}:${info!.remotePort}${info!.host === CLOUD_BOX_ALIAS ? '' : ' over SSH'}` : undefined}>
+            <span className="session-code-host" title={remote ? `Port ${info!.remotePort} on ${tunnelHost}, reached ${hostRouteTunnelWords(hostVia(info!.host))}` : undefined}>
               {hostBadge}
             </span>
           )}
@@ -359,6 +368,13 @@ export function SessionWebView({ sessionId, host, request, onNavigate, barRightS
       )}
       {/* A page of this machine open before the first scan answers (a reload): the strip's place
           is kept, so it does not vanish and push the page when it comes. */}
+      {phase !== 'empty' && listed.length === 0 && serversWhy && activeLocalPort(requestedUrl) !== null && (
+        <div className="session-servers-strip-wrap">
+          <div className="session-servers-strip session-servers-strip-pending" data-testid="session-servers-strip-unavailable" title={serversWhy}>
+            <span className="session-servers-strip-label">{serversWhy}</span>
+          </div>
+        </div>
+      )}
       {phase !== 'empty' && listed.length === 0 && servers?.state === 'loading' && activeLocalPort(requestedUrl) !== null && (
         <div className="session-servers-strip-wrap">
           <div className="session-servers-strip session-servers-strip-pending" aria-busy="true" data-testid="session-servers-strip-pending">
@@ -414,7 +430,7 @@ export function SessionWebView({ sessionId, host, request, onNavigate, barRightS
         <div className="session-web-empty session-web-empty-servers">
           {serverList('list')}
           <p className="session-code-error-hint">
-            Or type an address above, or click a localhost or host:port link in the chat. A port on a remote host opens through an SSH tunnel.
+            Or type an address above, or click a localhost or host:port link in the chat. {remotePortHint}
           </p>
         </div>
       ) : phase === 'empty' ? (
@@ -424,14 +440,23 @@ export function SessionWebView({ sessionId, host, request, onNavigate, barRightS
               <div className="session-code-error-title" data-testid="session-servers-none">No servers started by this session are running</div>
               <p className="session-code-error-body">Any server this session starts shows up here, to open or stop.</p>
               <p className="session-code-error-hint">
-                Or click a localhost or host:port link in the chat, or type an address above. A port on a remote host opens through an SSH tunnel.
+                Or click a localhost or host:port link in the chat, or type an address above. {remotePortHint}
+              </p>
+            </>
+          ) : serversWhy ? (
+            <>
+              <div className="session-code-error-title" data-testid="session-servers-unavailable">Can't list the servers this session started</div>
+              <p className="session-code-error-body" data-testid="session-servers-why">{serversWhy}.</p>
+              {servers?.state === 'unsupported' && <DaemonUpdateFix host={servers.host} />}
+              <p className="session-code-error-hint">
+                You can still open one: click a localhost or host:port link in the chat, or type an address above. {remotePortHint}
               </p>
             </>
           ) : (
             <>
               <div className="session-code-error-title">Open a service this session started</div>
               <p className="session-code-error-body">
-                Click a localhost or host:port link in the chat, or type an address above. A port on a remote host opens through an SSH tunnel.
+                Click a localhost or host:port link in the chat, or type an address above. {remotePortHint}
               </p>
             </>
           )}

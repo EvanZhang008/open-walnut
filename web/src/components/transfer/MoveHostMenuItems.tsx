@@ -26,6 +26,10 @@ export interface HostLoadRow {
   diskFreeBytes?: number | null;
   running: number;
   runningLimit: number;
+  /** What the host is, when the server says (the cloud box: small, costs money while it works). */
+  note?: string;
+  /** false: no automatic pick takes it; listed for a person or an agent who is asked to. */
+  autoPick?: false;
 }
 
 /** One line under a host's name: room, or why it is busy (pure, for tests). */
@@ -112,12 +116,13 @@ export function MoveHostMenuItems({ task, afterAction }: { task: Task; afterActi
               className="task-kebab-item task-kebab-move-host"
               data-testid={`kebab-move-host-${h.host}`}
               disabled={asking !== null}
-              title={h.reasons.length ? h.reasons.join('; ') : `Has room: load ${h.loadPerCpu ?? '?'} per CPU${h.ownLoadPerCpu != null ? ` (ours ${h.ownLoadPerCpu})` : ''} on ${h.cpus ?? '?'} CPUs, ${h.running} of ${h.runningLimit} sessions in a turn`}
+              title={`${h.note ? `${h.note} ` : ''}${h.reasons.length ? h.reasons.join('; ') : `Has room: load ${h.loadPerCpu ?? '?'} per CPU${h.ownLoadPerCpu != null ? ` (ours ${h.ownLoadPerCpu})` : ''} on ${h.cpus ?? '?'} CPUs, ${h.running} of ${h.runningLimit} sessions in a turn`}`}
               onClick={(e) => { e.stopPropagation(); move(h.host); }}
             >
               <span className="task-kebab-icon" aria-hidden="true">→</span>
               <span className="task-kebab-move-host-text">
                 <span>{asking === h.host ? `Moving to ${h.label}…` : `Move to ${h.label}`}</span>
+                {h.note && <span className="task-kebab-move-host-note" data-testid={`kebab-move-host-note-${h.host}`}>{h.note}</span>}
                 <span className={`task-kebab-move-host-load${h.busy ? ' busy' : ''}`}>{hostLoadLine(h)}</span>
               </span>
             </button>

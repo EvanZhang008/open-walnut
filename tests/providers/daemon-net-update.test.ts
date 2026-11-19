@@ -17,7 +17,7 @@ import {
   type NetUpdateFacts, type NetUpdaterDeps, type NetUpdateLink,
 } from '../../src/providers/daemon-net-update.js'
 import { NetUpdateHeldError } from '../../src/providers/daemon-net-update-io.js'
-import { setAcpUpgradeHoldFileForTest } from '../../src/providers/acp-upgrade-hold.js'
+import { ACP_UPGRADE_HOLD_MAX_MS, setAcpUpgradeHoldFileForTest } from '../../src/providers/acp-upgrade-hold.js'
 import { DAEMON_UPDATE_BEHIND_MAX_MS, daemonUpdateOverdue } from '../../src/providers/daemon-update-behind.js'
 import { buildBackoffSettled } from '../../src/providers/daemon-build-backoff.js'
 import { updateStoresSettled } from '../../src/providers/daemon-update-store.js'
@@ -350,6 +350,83 @@ describe('NetDaemonUpdater', () => {
     await vi.waitFor(() => expect(u.state.phase).toBe('updated'))
     expect(update).toHaveBeenCalledTimes(1)
     u.stop()
+  })
+
+  // The same hold as an SSH host's (DaemonConnection.acpTurnsOpen) and this Mac's (local-daemon.ts):
+  // the swap ends a running Codex turn. The daemon's acp-busy.json is read over the link.
+  describe('open ACP turns on the host (acp-busy.json, read over the link)', () => {
+    let dir = ''
+    beforeEach(async () => {
+      dir = await fs.mkdtemp(path.join(os.tmpdir(), 'net-acp-'))
+      setAcpUpgradeHoldFileForTest(path.join(dir, 'holds.json'))
+    })
+    afterEach(async () => {
+      setAcpUpgradeHoldFileForTest(null)
+      await fs.rm(dir, { recursive: true, force: true })
+    })
+
+    /** A link whose daemon runs from /srv/walnut-daemon and says `busy()` in its acp-busy.json. */
+    function acpLink(busy: () => string | null) {
+      const base = link()
+      const reads: string[] = []
+      const conn = link({
+        daemonDir: '/srv/walnut-daemon/',
+        async send(cmd, params) {
+          if (cmd === 'exec.list') { base.sends.push(cmd); return { ok: true, jobs: [] } }
+          if (cmd === 'fs.read') {
+            reads.push(String((params as { path: string }).path))
+            const data = busy()
+            return data === null ? { ok: false, error: 'ENOENT' } : { ok: true, data }
+          }
+          return base.send(cmd, params)
+        },
+      })
+      return { conn, base, reads }
+    }
+
+    it('postpone it before anything runs or is uploaded, also on request; it goes ahead once the turns end', async () => {
+      let busySids = ['codex-turn-1', 'codex-turn-2']
+      const { conn, base, reads } = acpLink(() => JSON.stringify({ busySids, updatedAt: Date.now() }))
+      const { u, update } = updater({}, conn)
+      u.schedule(0)
+      await vi.waitFor(() => expect(u.state.phase).toBe('postponed'))
+      expect(u.state.message).toBe('waiting: 2 ACP turns open on the host would end with the daemon')
+      expect(reads[0]).toBe('/srv/walnut-daemon/acp-busy.json')
+      expect(update).not.toHaveBeenCalled()
+      expect(base.lines).toEqual([])
+      expect(await u.request()).toMatchObject({ phase: 'postponed', message: 'waiting: 2 ACP turns open on the host would end with the daemon' })
+      expect(update).not.toHaveBeenCalled()
+      busySids = []
+      await vi.waitFor(() => expect(u.state.phase).toBe('updated'))
+      expect(update).toHaveBeenCalledTimes(1)
+      u.stop()
+    })
+
+    it('a stale busy file (its daemon died), no file, or a daemon that does not say its dir holds nothing', async () => {
+      for (const conn of [
+        acpLink(() => JSON.stringify({ busySids: ['codex-turn-1'], updatedAt: Date.now() - 3 * 60_000 })).conn,
+        acpLink(() => null).conn,
+        link({ daemonDir: null, async send(cmd, params) { return cmd === 'exec.list' ? { ok: true, jobs: [] } : link().send(cmd, params) } }),
+      ]) {
+        const { u, update } = updater({}, conn)
+        u.schedule(0)
+        await vi.waitFor(() => expect(u.state.phase).toBe('updated'))
+        expect(update).toHaveBeenCalledTimes(1)
+        u.stop()
+      }
+    })
+
+    it('turns open past the hold limit no longer hold it (the same per-host clock as an SSH host)', async () => {
+      const now = Date.now()
+      await fs.writeFile(path.join(dir, 'holds.json'), JSON.stringify({ 'studio-mac': { since: now - ACP_UPGRADE_HOLD_MAX_MS - 60_000, seen: now - 30_000 } }))
+      setAcpUpgradeHoldFileForTest(path.join(dir, 'holds.json'))
+      const { conn } = acpLink(() => JSON.stringify({ busySids: ['codex-turn-never-closed'], updatedAt: Date.now() }))
+      const { u, update } = updater({}, conn)
+      u.schedule(0)
+      await vi.waitFor(() => expect(u.state.phase).toBe('updated'))
+      expect(update).toHaveBeenCalledTimes(1)
+      u.stop()
+    })
   })
 
   it('overdue (behind past the bound), host_exec runs no longer hold it and a daemon that can is asked to go over its work', async () => {

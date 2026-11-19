@@ -36,8 +36,12 @@ export interface HostEnginesOpts {
 }
 
 /** null = no connection to ask (not configured, or not open and `dial` is false). */
+/** The connection module once an ask has loaded it, for the synchronous reader above (no import cycle at load). */
+let daemonConnections: typeof import('../../providers/daemon-connection.js') | null = null;
+
 async function askRemote(host: string, dial: boolean): Promise<HostAnswer | null> {
   const dc = await import('../../providers/daemon-connection.js');
+  daemonConnections = dc;
   let conn = dc.getConnectedDaemonConnection(host);
   if (!conn) {
     if (!dial) return null;
@@ -115,6 +119,52 @@ async function askedEngines(host: string, opts: HostEnginesOpts): Promise<HostAn
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<HostAnswer>((resolve) => { timer = setTimeout(() => resolve(hit?.value ?? {}), DEADLINE_MS); timer.unref?.(); });
   try { return await Promise.race([work, late]); } finally { if (timer) clearTimeout(timer); }
+}
+
+/** A probe still running, or a check that could not run, is no answer (engine-probe.ts, routes/engines.ts). */
+const PENDING_REASON = /^(still checking availability|availability check unavailable)$/;
+
+/** The row says the engine is missing there; a pending probe or no row says nothing. */
+export function saysNotInstalled(availability: EngineAvailability | null | undefined): boolean {
+  return !!availability && !availability.installed && !PENDING_REASON.test(availability.reason ?? '');
+}
+
+/**
+ * The host's last answer about one engine, from the cache alone (never asks, never waits):
+ * for a synchronous reader on the launch path (default-engine.ts). undefined = no answer
+ * yet, or the host did not name that engine. A stale answer is still returned, as the
+ * engine picker shows it until the next ask.
+ */
+export function cachedHostEngineAvailability(hostIn: string | undefined | null, engine: SessionEngine): EngineAvailability | undefined {
+  const host = normalizeHost(hostIn ?? undefined);
+  if (host === LOCAL_HOST) return undefined;
+  return cache.get(host)?.value[engine];
+}
+
+/**
+ * Whether `host` has positively said it runs `engine`, from what is known without a dial:
+ * its cached answer says installed, and an open link to it (when there is one) has a daemon
+ * that runs ACP engines ('acp-host-v1'). No answer is no: the reader that inherits an engine
+ * (default-engine.ts) must not start one a host may lack, and the cache is empty after every
+ * restart.
+ */
+export function hostSaysInstalled(hostIn: string | undefined | null, engine: SessionEngine): boolean {
+  const host = normalizeHost(hostIn ?? undefined);
+  if (host === LOCAL_HOST || cachedHostEngineAvailability(host, engine)?.installed !== true) return false;
+  if (!isAcpEngine(engine)) return true;
+  const open = daemonConnections?.getConnectedDaemonConnection(host);
+  return !open || open.hasCapability('acp-host-v1');
+}
+
+/** Whether `host` has an answer fresh enough that no new ask is due. */
+export function hostEnginesFresh(hostIn: string | undefined | null): boolean {
+  const hit = cache.get(normalizeHost(hostIn ?? undefined));
+  return !!hit && Date.now() - hit.at < (hit.failed ? FAILED_TTL_MS : TTL_MS);
+}
+
+/** Test seam: what `host` answered, as if it had just answered it. */
+export function _seedHostEngineCache(host: string, value: HostAnswer): void {
+  cache.set(normalizeHost(host), { at: Date.now(), value });
 }
 
 /** One engine on `host`, or null when the host did not say. */

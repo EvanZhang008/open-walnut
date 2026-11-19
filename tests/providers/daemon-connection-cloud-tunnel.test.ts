@@ -241,11 +241,21 @@ describe('DaemonConnection over the cloud tunnel', () => {
     }
   })
 
-  it('port forwarding is refused plainly on the cloud box', async () => {
+  // The working path (a real daemon behind the tunnel) is cloud-box-link-features-twins-e2e.test.ts.
+  it('a box daemon older than the link commands: forwarding, scripts and uploads each say it needs the companion updated', async () => {
     pair()
-    conn = new DaemonConnection(CLOUD_BOX_HOST_ALIAS, { hostname: `127.0.0.1:${port}` })
-    await expect(conn.ensurePortForward(8080)).rejects.toThrow(/not available on Cloud/)
-    expect(sshCalls).toEqual([])
+    daemon.omitCapabilities(['port-stream-v1', 'host-exec-v1'])
+    try {
+      conn = new DaemonConnection(CLOUD_BOX_HOST_ALIAS, { hostname: `127.0.0.1:${port}` })
+      await conn.connect()
+      const update = /on Cloud goes through the cloud companion and needs a newer Walnut daemon there\. Deploying the cloud companion updates the daemon there \(it starts that daemon from its own build\)$/
+      await expect(conn.ensurePortForward(8080)).rejects.toThrow(new RegExp(`^Port forwarding ${update.source}`))
+      await expect(conn.runRemoteScript('true')).rejects.toThrow(new RegExp(`^Running a script ${update.source}`))
+      await expect(conn.uploadFile('/tmp/never-written', Buffer.from('x'))).rejects.toThrow(new RegExp(`^Uploading a file ${update.source}`))
+      expect(sshCalls).toEqual([])
+    } finally {
+      daemon.omitCapabilities([])
+    }
   })
 })
 

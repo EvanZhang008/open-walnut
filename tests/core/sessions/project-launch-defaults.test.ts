@@ -111,8 +111,20 @@ describe('inheritedEnginePick', () => {
     expect(await inheritedEnginePick(NO_GLOBAL, { mode: 'plan' }, undefined)).toEqual({ engine: 'claude', from: 'global' });
   });
 
-  it('a project engine the host cannot run (an ACP engine on a remote host) is no project pick, and its model goes', async () => {
-    expect(await inheritedEnginePick(NO_GLOBAL, { engine: 'codex', model: 'gpt-5.5' }, 'clouddev'))
+  it('an ACP project engine runs on a remote host that said it has it; with no answer yet (a restart) it is Claude Code', async () => {
+    const { _resetHostEngineCache, _seedHostEngineCache } = await import('../../../src/core/agents/host-engines.js');
+    try {
+      _resetHostEngineCache();
+      expect(await inheritedEnginePick(NO_GLOBAL, { engine: 'codex', model: 'gpt-5.5' }, 'clouddev'))
+        .toEqual({ engine: 'claude', from: 'global' });
+      _seedHostEngineCache('clouddev', { codex: { installed: true, version: '1', reason: null } });
+      expect(await inheritedEnginePick(NO_GLOBAL, { engine: 'codex', model: 'gpt-5.5' }, 'clouddev'))
+        .toEqual({ engine: 'codex', model: 'gpt-5.5', from: 'project' });
+    } finally { _resetHostEngineCache(); }
+  });
+
+  it('a project engine the host cannot run (a local-only engine on a remote host) is no project pick, and its model goes', async () => {
+    expect(await inheritedEnginePick(NO_GLOBAL, { engine: 'custom', model: 'local-model' }, 'clouddev'))
       .toEqual({ engine: 'claude', from: 'global' });
   });
 });

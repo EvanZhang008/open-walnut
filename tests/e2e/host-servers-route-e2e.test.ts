@@ -16,6 +16,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { getConfig, updateConfig } from '../../src/core/config-manager.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
+import { CLOUD_BOX_HOST_ALIAS, setCloudBoxState } from '../../src/core/hosts/cloud-box-host.js'
 
 let server: HttpServer
 let port: number
@@ -159,6 +160,29 @@ describe('a host\'s Walnut, as a setting', () => {
     // Back on: stored as chosen, reported with the defaults filled in.
     expect((await put({ copies: { sessions: true, boards: true } })).status).toBe(200)
     expect(await stored()).toEqual({ ...before, sessions: true, boards: true })
+  })
+
+  // The one feature the cloud box leaves out, on purpose: the companion is a Walnut server itself.
+  it('the cloud box: left out of the list, and asked for by name, says why in a sentence instead of a 404', async () => {
+    setCloudBoxState({ domain: 'box.example.test', secure: true, capability: 'ready', checkedAt: null })
+    try {
+      expect(Object.keys((await getConfig()).hosts ?? {})).toContain(CLOUD_BOX_HOST_ALIAS)
+      const list = (await (await api('/api/host-servers')).json()) as { hosts: Array<{ hostKey: string }> }
+      expect(list.hosts.map((h) => h.hostKey)).toEqual(['devbox'])
+      const why = 'Cloud is a Walnut server itself (the cloud companion), so no host server of this Mac runs there.'
+      for (const [method, route, body] of [
+        ['PUT', `/api/host-servers/${CLOUD_BOX_HOST_ALIAS}`, JSON.stringify({ enabled: true })],
+        ['POST', `/api/host-servers/${CLOUD_BOX_HOST_ALIAS}/retry`, undefined],
+        ['POST', `/api/host-servers/${CLOUD_BOX_HOST_ALIAS}/expose/retry`, undefined],
+      ] as const) {
+        const res = await api(route, { method, headers: PERSON, ...(body ? { body } : {}) })
+        expect(res.status, route).toBe(409)
+        expect(await res.json(), route).toEqual({ error: why, code: 'cloud_box_is_a_walnut_server' })
+      }
+      expect((await api('/api/host-servers/no-such-box/retry', { method: 'POST', headers: PERSON })).status).toBe(404)
+    } finally {
+      setCloudBoxState(null)
+    }
   })
 
   it('turning it off writes it off', async () => {

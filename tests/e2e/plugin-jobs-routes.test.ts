@@ -9,8 +9,10 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { Server as HttpServer } from 'node:http';
 import fs from 'node:fs/promises';
 
+import path from 'node:path';
 import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
+import { CLOUD_BOX_HOST_ALIAS, setCloudBoxState } from '../../src/core/hosts/cloud-box-host.js';
 
 let server: HttpServer;
 let port: number;
@@ -48,6 +50,23 @@ describe('plugin jobs routes', () => {
     const logs = await api('GET', '/api/plugin-runtime/acme-none/jobs/worker/logs');
     expect(logs.status).toBe(503);
     expect(logs.data.error).toMatch(/test server/);
+  });
+
+  // A connection is an abstraction: the cloud box takes a job's code over its tunnel
+  // (DaemonConnection.uploadFile; cloud-box-link-features-twins-e2e.test.ts), so it is a
+  // place for jobs like any other host. A name that is no host is still refused.
+  it('jobs may be placed on the cloud box, and an unknown host is still refused', async () => {
+    await fs.writeFile(path.join(WALNUT_HOME, 'config.yaml'), 'version: 1\nuser:\n  name: Tester\n');
+    setCloudBoxState({ domain: 'box.example.test', secure: true, capability: 'ready', checkedAt: null });
+    try {
+      const put = await api('PUT', '/api/plugin-runtime/acme-none/jobs/run-on', { runOn: CLOUD_BOX_HOST_ALIAS });
+      expect(put).toEqual({ status: 200, data: { pluginId: 'acme-none', runOn: CLOUD_BOX_HOST_ALIAS } });
+      const unknown = await api('PUT', '/api/plugin-runtime/acme-none/jobs/run-on', { runOn: 'no-such-box' });
+      expect(unknown.status).toBe(400);
+      expect(unknown.data.error).toBe('no-such-box is not a host in Settings, Hosts');
+    } finally {
+      setCloudBoxState(null);
+    }
   });
 
   it('an id that is not a plugin id is refused', async () => {

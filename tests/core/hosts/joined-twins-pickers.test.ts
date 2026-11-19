@@ -73,6 +73,7 @@ describe('the class: every list of hosts to pick from goes through pickableHosts
     'src/web/terminal/dtach-lifecycle.ts': 'terminal upkeep on every row',
     'src/web/routes/host-servers.ts': 'every row a server may run on: a server on the found row must stay visible to stop it',
     'src/core/host-server/index.ts': 'reconciles every row a server may run on',
+    'src/core/session-service-preview.ts': 'matches a preview URL against every row and the names their machines give, not a host picker',
     'src/core/routines/executors/claude-code.ts': 'names the configured hosts in an error',
     'src/core/expose/placement.ts': 'only always-on hosts matched by hostname, which a joined row (*.walnut-net.invalid) never is',
     'src/core/hosts/host-connect-action.ts': 'reconnects the rows that failed',

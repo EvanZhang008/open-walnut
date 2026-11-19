@@ -76,6 +76,7 @@ import {
 } from '@/components/inbox/session-inbox-link';
 import { buildPassagePrefill, buildSelectionPrefill, buildTerminalPrefill, displayPathForPrefill } from './diffPrefill';
 import { TerminalDock } from './TerminalDock';
+import { TerminalUnavailableView } from './HostFeatureUnavailable';
 import type { TerminalPathLink } from './terminal-links';
 import type { SessionSplitView } from './sessionSplitView';
 import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_MINIMIZE, ICON_LOCK, ICON_UNLOCK, ICON_NEW_TAB, ICON_PANEL_RIGHT, ICON_PANEL_RIGHT_FILLED, ICON_TERMINAL } from '../common/Icons';
@@ -1416,10 +1417,14 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // null = none open. Opening any view promotes the panel to fullscreen. It is kept
   // for this place with the panel's view (usePanelView above).
   const splitOpen = activeView !== null;
-  // A host that cannot open a terminal (the cloud box has no SSH) offers no
-  // Terminal tab. The host's own capability says so (its status frame), never
-  // its alias; a host the server has not described yet keeps the tab.
-  const terminalOffered = useHostStatus(session?.host)?.terminal !== false;
+  // Every host offers the Terminal tab, whatever the connection (the user, 2026-11-18:
+  // "it should always have ... no matter what connection"). A host whose daemon cannot open
+  // one yet (its status frame's terminal: false) keeps the tab and Scripts: the tab then says
+  // why and how to fix it (TerminalUnavailableView), and opens no pty.
+  const sessionHostStatus = useHostStatus(session?.host);
+  const terminalBlockedWhy = sessionHostStatus?.terminal === false
+    ? (sessionHostStatus.terminalWhy ?? 'This host cannot open a terminal right now')
+    : null;
   // An open panel asks first: its repos are re-read ahead of the rows', so the Changed
   // chip's tooltip has the session's git state without the tab.
   useEffect(() => { if (sessionId) void sessionGitStore.refresh(sessionId); }, [sessionId]);
@@ -1811,10 +1816,16 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // The phone's top-bar kebab opens the Scripts menu through this (the header is not drawn there).
   const scriptsOpenRef = useRef<((at?: { x: number; y: number }) => void) | null>(null);
   const runInTerminal = useCallback((line: string, _script?: unknown, runId?: string) => {
+    // No terminal there yet: the script does not run (its result says so), and the tab says why.
+    if (terminalBlockedWhy) {
+      if (runId) noteScriptDropped(sessionId, runId);
+      if (!terminalShownRef.current) toggleView('terminal');
+      return;
+    }
     setTerminalInput({ id: ++terminalInputSeq.current, text: line, ...(runId ? { runId } : {}) });
     // A terminal docked under another view already shows: it takes the script there.
     if (!terminalShownRef.current) toggleView('terminal');
-  }, [toggleView, setTerminalInput]);
+  }, [toggleView, setTerminalInput, terminalBlockedWhy, sessionId]);
   // Ctrl-C into the terminal: the Scripts menu stops a script still running before it runs another.
   const interruptTerminal = useCallback(() => {
     const id = ++terminalInputSeq.current;
@@ -1985,7 +1996,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     applyOpenCollapse('terminal');
   }, [applyOpenCollapse, sessionId, setActiveView]);
   const resizeTerminalDock = useCallback((px: number) => setTerminalDock((d) => ({ ...d, px })), [setTerminalDock]);
-  const terminalDocked = terminalOffered && terminalDockAllowed && terminalDock.on && !!activeView && TERMINAL_DOCK_VIEWS.includes(activeView);
+  const terminalDocked = !terminalBlockedWhy && terminalDockAllowed && terminalDock.on && !!activeView && TERMINAL_DOCK_VIEWS.includes(activeView);
   const terminalShown = activeView === 'terminal' || terminalDocked;
   terminalShownRef.current = terminalShown;
   // A script that could not be typed (the terminal closed, or never connected
@@ -3074,7 +3085,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       inset={inset}
       board={onHostBoard ? 'live' : boardChipLive ? (boardWaitReason ? 'waiting' : 'live') : 'none'}
       onBoard={onHostBoard}
-      terminal={terminalOffered && !inset}
+      terminal={!inset}
       onPlan={hasPlanContent || showExecuteButtons ? () => setPlanPopoverOpen(true) : undefined}
       // Drawn, disabled with the reason, while the record that names the task is on its way, so
       // the row is there from the first opening of the menu (as the header button was).
@@ -3134,6 +3145,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           investigating={investigating}
           investigateResult={investigateResult}
           onOpenVscodeError={handleOpenVscodeError}
+          onOpenCodeView={() => { if (activeView !== 'code') toggleView('code'); }}
           onAfterAction={close}
         />
       )}
@@ -3294,28 +3306,25 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                 >
                   Files
                 </button>
-                {terminalOffered && (
-                  <button
-                    className={`session-action-chip${activeView === 'terminal' ? ' session-action-chip-active' : ''}`}
-                    onClick={() => toggleView('terminal')}
-                    title="Open a terminal in the session working directory, full-screen alongside the chat"
-                    data-header-id="terminal"
-                    data-hidden={hid('terminal')}
-                  >
-                    Terminal
-                  </button>
-                )}
-                {terminalOffered && (
-                  <SessionScriptsChip
-                    sessionId={sessionId}
-                    taskId={session?.taskId}
-                    hidden={hid('scripts')}
-                    rowRef={toolRowRef}
-                    onRun={runInTerminal}
-                    onInterrupt={interruptTerminal}
-                    openRef={scriptsOpenRef}
-                  />
-                )}
+                <button
+                  className={`session-action-chip${activeView === 'terminal' ? ' session-action-chip-active' : ''}${terminalBlockedWhy ? ' session-action-chip-unavailable' : ''}`}
+                  onClick={() => toggleView('terminal')}
+                  title={terminalBlockedWhy ? `${terminalBlockedWhy}. Open to see how to fix it.` : 'Open a terminal in the session working directory, full-screen alongside the chat'}
+                  data-header-id="terminal"
+                  data-hidden={hid('terminal')}
+                  data-unavailable={terminalBlockedWhy ? '' : undefined}
+                >
+                  Terminal
+                </button>
+                <SessionScriptsChip
+                  sessionId={sessionId}
+                  taskId={session?.taskId}
+                  hidden={hid('scripts')}
+                  rowRef={toolRowRef}
+                  onRun={runInTerminal}
+                  onInterrupt={interruptTerminal}
+                  openRef={scriptsOpenRef}
+                />
                 {/* Board needs the task, like Fork, and only a lead's task has one
                     worth opening (useBoardTab): absent otherwise. It comes AFTER the
                     chips every session has, like Plan below: whether a task leads may
@@ -3672,8 +3681,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   onToggleView={toggleView}
                   board={boardChipLive ? (boardWaitReason ? 'waiting' : 'live') : 'none'}
                   threads={threadsMenuRows}
-                  terminal={terminalOffered && !inset}
-                  onScripts={terminalOffered && !inset ? () => {
+                  terminal={!inset}
+                  onScripts={!inset ? () => {
                     const r = kebabSlot?.getBoundingClientRect();
                     scriptsOpenRef.current?.(r ? { x: Math.max(8, r.right - 300), y: r.bottom + 4 } : { x: 8, y: 56 });
                   } : undefined}
@@ -3878,7 +3887,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             ) : null;
             // Changed / Files / Web: a Terminal toggle beside the chat toggle
             // docks the terminal under the view (tests next to the diff).
-            const dockToggle = terminalOffered && terminalDockAllowed && activeView && TERMINAL_DOCK_VIEWS.includes(activeView) ? (
+            const dockToggle = !terminalBlockedWhy && terminalDockAllowed && activeView && TERMINAL_DOCK_VIEWS.includes(activeView) ? (
               <button
                 type="button"
                 className={`sfe-btn session-terminal-dock-toggle${terminalDocked ? ' is-on' : ''}`}
@@ -4003,7 +4012,10 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                         switch between them keeps every terminal mounted; in a Suspense
                         of its own, so a view above loading its code (a lazy Files)
                         never hides the terminals and drops their screens. */}
-                    {terminalShown && (
+                    {terminalShown && terminalBlockedWhy && (
+                      <TerminalUnavailableView host={session?.host} why={terminalBlockedWhy} barRightSlot={chatBarSlot} />
+                    )}
+                    {terminalShown && !terminalBlockedWhy && (
                       <Suspense fallback={null}>
                       <TerminalDock docked={terminalDocked} px={terminalDock.px} wantPx={terminalWantPx} onResized={resizeTerminalDock}>
                         <SessionTerminal

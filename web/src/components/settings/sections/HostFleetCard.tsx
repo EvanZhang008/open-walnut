@@ -121,6 +121,16 @@ export function HostFleetCard({ host, now, action, onBootStart, onDetails }: {
   );
 }
 
+/**
+ * Which offline rows offer Connect: every host Walnut dials, whatever the connection (an SSH
+ * tunnel, the host network, the cloud box through the companion: a person's Connect there is
+ * the Retry connectHostNow takes, core/hosts/host-connect-action.ts). Not this machine, and not
+ * a host that is not Linux (it never connects over SSH: its row offers the join link instead).
+ */
+export function offlineRowConnects(kind: FleetHost['connection']['kind'], notLinux: boolean): boolean {
+  return kind !== 'local' && !notLinux;
+}
+
 /** Connect is the list's own Retry (useHostActions): one attempt per host, whichever surface asked. */
 export function HostFleetOfflineRow({ host, now, onDetails }: { host: FleetHost; now: number; onDetails?: (host: string) => void }) {
   const [open, toggle] = useDetails(host.host, onDetails);
@@ -130,7 +140,7 @@ export function HostFleetOfflineRow({ host, now, onDetails }: { host: FleetHost;
   // A machine that is not Linux never connects over SSH: its row below offers the join link instead.
   const status = useHostStatus(host.host);
   const notLinux = (status?.kind ?? status?.lastKind) === 'not_linux';
-  const canConnect = (host.connection.kind === 'ssh-tunnel' || host.connection.kind === 'host-network') && !notLinux;
+  const canConnect = offlineRowConnects(host.connection.kind, notLinux);
   return (
     <div className="hf-off" data-testid="hf-dash-offline" data-host={host.host} id={`hf-card-${host.host}`} tabIndex={-1}>
       <div className="hf-off-line">

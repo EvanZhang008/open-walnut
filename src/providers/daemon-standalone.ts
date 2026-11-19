@@ -3093,6 +3093,9 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       startedAt: DAEMON_START_TS,
       uptimeSec: Math.floor((Date.now() - DAEMON_START_TS) / 1000),
       runtime: DAEMON_RUNTIME,
+      // What this machine calls itself: a URL that names it (a session's dev server) is a service
+      // here, reached on this loopback (session-service-preview.ts). Twin of daemon-source.ts.
+      hostname: os.hostname(),
       taskDirRoot: TASK_DIR_ROOT,
       // Which Walnut this daemon is: its dir, and a test server's key when it is that
       // server's isolated daemon (the server's remote-isolation.ts checks both).
@@ -4521,6 +4524,7 @@ const ptyStreams = createPtyStreams<ServerWebSocket<WsData>>({
   // bun's os.userInfo().shell is the env's SHELL: the core reads the passwd shell with this.
   readCommand: (file, args, cb) => { execFile(file, args, { timeout: 3_000 }, (err, stdout) => cb(err ? null : String(stdout))) },
   platform: process.platform,
+  uid: () => process.getuid?.() ?? null,
   executable: (p) => { try { fs.accessSync(p, fs.constants.X_OK); return fs.statSync(p).isFile() } catch { return false } },
   foregroundGroup: (pid, cb) => psGroupField(pid, 'tpgid', cb),
   ownGroup: (cb) => psGroupField(process.pid, 'pgid', cb),
@@ -4533,11 +4537,24 @@ function psGroupField(pid: number, field: 'tpgid' | 'pgid', cb: (n: number | nul
     cb(Number.isInteger(n) ? n : null)
   })
 }
+/** The cloud companion's tunnel daemons live here (cloud-tunnel-daemon.ts tunnelDaemonDir). */
+const TUNNEL_DAEMON_BASE: string = process.env.WALNUT_TUNNEL_DAEMON_DIR || path.join(process.env.HOME || HOME_DIR, '.local', 'state', 'open-walnut', 'primary-daemon')
+/** The port this daemon listens on, once it does. */
+let listeningPort: number | null = null
 const streamRelay = createStreamRelay<ServerWebSocket<WsData>>({
   send: (ws, ev, data) => sendEvent(ws, ev, data),
   log: (level, msg, data) => logMsg(level, msg, data),
   // Port streams ('port-stream-v1'): the relay picks the loopback address.
   connect: (port, host) => net.connect({ port, host, allowHalfOpen: true }),
+  // Never a daemon socket on this machine: ours, or a sibling's (the production dirs, the
+  // cloud companion's tunnel daemon). Keep in sync with daemon-source.ts.
+  daemonPorts: {
+    own: () => listeningPort,
+    dirs: [...new Set([DAEMON_DIR, PROD_DAEMON_DIR, FALLBACK_DAEMON_DIR, TUNNEL_DAEMON_BASE])],
+    deviceBases: [TUNNEL_DAEMON_BASE],
+    read: (file) => { try { return fs.readFileSync(file, 'utf8').slice(0, 16) } catch { return null } },
+    list: (dir) => { try { return fs.readdirSync(dir) } catch { return [] } },
+  },
   ptys: ptyStreams,
 })
 
@@ -14665,6 +14682,7 @@ if (action === '--start' || SERVICE_MODE) {
   }, TRUSTED_CLIENT_BEAT_MS).unref?.()
 
   const port = server.port
+  listeningPort = typeof port === 'number' ? port : null
   daemonInstanceLock?.publish(port)
   // daemon.pid before daemon.port: a starter that sees the port file reads the pid next
   // (2026-11-04: a test read daemon.pid in that gap, ENOENT; tests/providers/daemon-pid-before-port.test.ts).

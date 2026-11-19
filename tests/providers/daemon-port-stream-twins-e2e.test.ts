@@ -193,6 +193,8 @@ for (const twin of TWINS) {
       const port = await boot(twin)
       const { ep, hello } = await link(port)
       expect((hello.capabilities ?? (hello.result as { capabilities?: string[] } | undefined)?.capabilities) as string[]).toContain('port-stream-v1')
+      // What the machine calls itself: a preview URL naming it is a service on this loopback (session-service-preview.ts).
+      expect(hello.hostname ?? (hello.result as { hostname?: string } | undefined)?.hostname).toBe(os.hostname())
       // The service answers once the request is in (its FIN), on a half-open socket.
       const svc = await listen((c) => {
         const parts: Buffer[] = []
@@ -235,6 +237,38 @@ for (const twin of TWINS) {
       // Wait for the listener itself to close, not a clock.
       await new Promise<void>((r) => servers.pop()!.close(() => r()))
       await expect(ep.openPort(gone, '127.0.0.1')).rejects.toThrow(/nothing is listening on port/)
+      expect(dialled).toBe(0)
+    }, 90_000)
+
+    it('never reaches a daemon socket on this machine: its own port, or a sibling daemon\'s from its port file', async () => {
+      const port = await boot(twin)
+      const { ep } = await link(port)
+      // Its own WebSocket port, which takes no token: refused with a sentence, never dialled.
+      await expect(ep.openPort(port, '127.0.0.1')).rejects.toThrow(new RegExp(`port ${port} is a Walnut session daemon's own socket on this host`))
+      await expect(ep.openPort(port, 'localhost')).rejects.toThrow(/session daemon's own socket/)
+      // Siblings: the cloud companion's tunnel daemon (unkeyed and keyed per device) and the
+      // home fallback dir, under this test's HOME. Each "daemon" is a server this test owns.
+      let dialled = 0
+      const home = path.join(root, 'home')
+      const tunnel = path.join(home, '.local', 'state', 'open-walnut', 'primary-daemon')
+      const siblings = [tunnel, path.join(`${tunnel}.by-device`, 'device-1', 'daemon'), path.join(home, '.cache', 'open-walnut')]
+      const ports: number[] = []
+      for (const dir of siblings) {
+        const sib = await listen(() => { dialled++ })
+        fs.mkdirSync(dir, { recursive: true })
+        fs.writeFileSync(path.join(dir, 'daemon.port'), String(sib))
+        ports.push(sib)
+      }
+      // The relay believes the files it read for 2 s (stream-relay-core.ts DAEMON_PORTS_TTL_MS):
+      // the read above, at the own-port refusal, saw none of these yet.
+      await new Promise((r) => setTimeout(r, 2_300))
+      for (const sib of ports) {
+        await expect(ep.openPort(sib, '127.0.0.1')).rejects.toThrow(new RegExp(`port ${sib} is a Walnut session daemon's own socket`))
+      }
+      // Any other port on the loopback still opens.
+      const svc = await listen((c) => { c.end() })
+      const s = await ep.openPort(svc, '127.0.0.1')
+      s.destroy()
       expect(dialled).toBe(0)
     }, 90_000)
 

@@ -24,9 +24,41 @@ export function hostDisplayLabel(
 }
 
 /**
- * The small host tag beside a remote file, terminal or editor: "SSH: Dev box"
- * for a host reached over SSH, just "Cloud" for the cloud box (no SSH there).
+ * How this machine reaches a host: itself, over SSH, through the host network, or (the
+ * cloud box) through the cloud companion. From the host's status frame (`ssh: false` +
+ * `via`, src/core/hosts/host-status.ts); a frame from an older server names no route, and
+ * then a host-network machine is still known by its placeholder hostname.
  */
-export function remoteHostTag(alias: string, label: string): string {
-  return alias === CLOUD_BOX_ALIAS ? label : `SSH: ${label}`;
+export type HostRoute = 'local' | 'ssh' | 'host-network' | 'cloud';
+
+/** The placeholder hostname a host-network machine carries (core/net/net-mac.ts). */
+const NET_HOSTNAME_SUFFIX = '.walnut-net.invalid';
+
+export function hostRoute(
+  alias: string | null | undefined,
+  status?: { ssh?: false; via?: 'host-network' | 'cloud'; hostname?: string } | null,
+): HostRoute {
+  if (!alias || alias === '__local__') return 'local';
+  if (alias === CLOUD_BOX_ALIAS) return 'cloud';
+  if (status?.ssh === false) return status.via ?? 'host-network';
+  if (status?.hostname?.endsWith(NET_HOSTNAME_SUFFIX)) return 'host-network';
+  return 'ssh';
+}
+
+/**
+ * The small host tag beside a remote file, terminal or editor, by the real connection:
+ * "SSH: Dev box" over SSH, "Host network: Studio" on the host network, just "Cloud" for
+ * the cloud box.
+ */
+export function remoteHostTag(alias: string, label: string, route: HostRoute = hostRoute(alias)): string {
+  if (route === 'cloud' || route === 'local') return label;
+  return route === 'host-network' ? `Host network: ${label}` : `SSH: ${label}`;
+}
+
+/** How a port of the host reaches this machine, in words ("over an SSH tunnel"). */
+export function hostRouteTunnelWords(route: HostRoute): string {
+  if (route === 'host-network') return 'through the host network';
+  if (route === 'cloud') return 'through the cloud companion';
+  if (route === 'local') return 'directly';
+  return 'over an SSH tunnel';
 }

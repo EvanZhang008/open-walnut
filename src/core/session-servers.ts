@@ -14,6 +14,7 @@
  */
 import type { SessionRecord } from './types.js'
 import { log } from '../logging/index.js'
+import { hostDisplayNameFor } from './hosts/host-display-name.js'
 
 const LIST_TIMEOUT_MS = 15_000
 const STOP_TIMEOUT_MS = 20_000
@@ -43,6 +44,8 @@ export interface SessionServersResult {
   host: string
   servers: SessionServer[]
   error?: string
+  /** For `unsupported` and `offline`: the sentence a surface shows instead of the list (never hidden). */
+  why?: string
 }
 
 export class SessionServerStopError extends Error {
@@ -67,6 +70,20 @@ async function connectedDaemon(host: string): Promise<PortsConnection | null> {
   const { ownerConnection } = await import('./sessions/owner-stop.js')
   const conn = await ownerConnection(host)
   return conn && conn.connected ? conn as unknown as PortsConnection : null
+}
+
+/** Why the list cannot be read now, in the words every surface shows. */
+export function serversUnavailableWhy(state: 'unsupported' | 'offline', host: string, name: string): string {
+  const where = host === LOCAL ? 'this machine' : name
+  if (state === 'unsupported') return `The Walnut daemon on ${where} needs an update before it can list the servers this session started`
+  return host === LOCAL
+    ? 'The session daemon on this machine is not connected right now, so the servers this session started cannot be listed; they show again once it is back'
+    : `${name} is not connected right now, so the servers this session started cannot be listed; they show again once it is back`
+}
+
+async function unavailable(state: 'unsupported' | 'offline', host: string): Promise<SessionServersResult> {
+  const name = host === LOCAL ? 'this machine' : await hostDisplayNameFor(host)
+  return { state, host, servers: [], why: serversUnavailableWhy(state, host, name) }
 }
 
 function hostOf(session: SessionRecord): string {
@@ -128,8 +145,8 @@ export async function listSessionServers(session: SessionRecord, deps: SessionSe
   const host = hostOf(session)
   const ids = sessionProcessIds(session)
   const conn = await (deps.connection ?? connectedDaemon)(host).catch(() => null)
-  if (!conn) return { state: 'offline', host, servers: [] }
-  if (!conn.hasCapability('ports-v1')) return { state: 'unsupported', host, servers: [] }
+  if (!conn) return unavailable('offline', host)
+  if (!conn.hasCapability('ports-v1')) return unavailable('unsupported', host)
   try {
     const res = await conn.send('ports.list', { sids: ids, guardPids: guardPids(host, deps) }, LIST_TIMEOUT_MS)
     if (!res.ok) return { state: 'error', host, servers: [], error: res.error ?? 'the host did not answer' }

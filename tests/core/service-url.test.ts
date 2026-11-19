@@ -119,4 +119,67 @@ describe('resolveServiceTarget', () => {
   it('an unrelated host is refused', () => {
     expect(resolveServiceTarget(url('http://example.com:8080/'), { sessionHost: 'studio', hosts, localNames: [] })).toBeNull()
   })
+
+  describe('a link host (no SSH): its loopback for its own session, or a URL naming the machine exactly', () => {
+    // A host network row's hostname is a placeholder that never resolves; the cloud box's is the companion's domain.
+    const links = {
+      ...hosts,
+      'joined-box': { hostname: 'joined-box.walnut-net.invalid', transport: 'net' as const },
+      __cloudbox__: { hostname: 'box.example.test', cloud_box: true },
+    }
+    const machineNames = { 'joined-box': ['joined-box-7.lan.example.test'], __cloudbox__: ['ip-10-0-0-5'], studio: ['dev-box-real.corp.example.com'] }
+    const ctx = (sessionHost?: string, names: Record<string, string[]> = machineNames, h: Record<string, object> = links) =>
+      ({ sessionHost, hosts: h as never, localNames: ['my-mac.local'], machineNames: names })
+    const loopback = (host: string) => ({ host, targets: ['localhost'], reason: 'configured-host' })
+
+    it('from its own session: the name its daemon says, its short form, the alias and the row hostname all reach its loopback', () => {
+      for (const u of ['http://joined-box-7.lan.example.test:5173/', 'http://joined-box-7:5173/', 'http://joined-box:5173/', 'http://joined-box.walnut-net.invalid:5173/']) {
+        expect(resolveServiceTarget(url(u), ctx('joined-box')), u).toEqual(loopback('joined-box'))
+      }
+    })
+
+    it('from a session elsewhere: only the alias or the exact machine name; a looser match is refused', () => {
+      expect(resolveServiceTarget(url('http://joined-box-7.lan.example.test:5173/'), ctx('studio'))).toEqual(loopback('joined-box'))
+      expect(resolveServiceTarget(url('http://joined-box:5173/'), ctx('studio'))).toEqual(loopback('joined-box'))
+      // A short form of the machine name, and the row's placeholder hostname, are not exact.
+      expect(resolveServiceTarget(url('http://joined-box-7:5173/'), ctx('studio'))).toBeNull()
+      expect(resolveServiceTarget(url('http://joined-box.walnut-net.invalid:5173/'), ctx('studio'))).toBeNull()
+      expect(resolveServiceTarget(url('http://joined-box-7.lan.example.test:5173/'), ctx(undefined))).toEqual(loopback('joined-box'))
+    })
+
+    it('the cloud box by its own name reaches its loopback; the companion\'s public domain never does', () => {
+      expect(resolveServiceTarget(url('http://ip-10-0-0-5:3000/'), ctx('__cloudbox__'))).toEqual(loopback('__cloudbox__'))
+      for (const session of ['__cloudbox__', 'studio', undefined]) {
+        expect(resolveServiceTarget(url('https://box.example.test:8443/'), ctx(session)), String(session)).toBeNull()
+      }
+      // Not even when its daemon reports that domain as its own name.
+      expect(resolveServiceTarget(url('https://box.example.test:8443/'), ctx('studio', { __cloudbox__: ['box.example.test'] }))).toBeNull()
+    })
+
+    it('configured names win over every machine name: a daemon naming another host or this machine captures nothing', () => {
+      // The joined box's daemon says the studio's name, a short form of it, or this Mac's name.
+      for (const claim of ['dev-box.corp.example.com', 'dev-box', 'my-mac.local', 'my-mac']) {
+        const names = { 'joined-box': [claim] }
+        expect(resolveServiceTarget(url('http://dev-box.corp.example.com:8080/'), ctx('joined-box', names))?.host, claim).toBe('studio')
+        expect(resolveServiceTarget(url('http://dev-box:8080/'), ctx('joined-box', names))?.host, claim).toBe('studio')
+        expect(resolveServiceTarget(url('http://my-mac.local:8080/'), ctx('joined-box', names))?.host, claim).toBe('__local__')
+      }
+      // A name the daemon claims that another link entry is configured with is that entry's.
+      const two = { ...links, 'joined-two': { hostname: 'joined-two.walnut-net.invalid', transport: 'net' as const } }
+      expect(resolveServiceTarget(url('http://joined-two:5173/'), ctx('studio', { 'joined-box': ['joined-two'] }, two))).toEqual(loopback('joined-two'))
+    })
+
+    it('an SSH host never matches by its daemon\'s word: machine names count only for link hosts', () => {
+      expect(resolveServiceTarget(url('http://dev-box-real.corp.example.com:8080/'), ctx('studio'))).toBeNull()
+      // Its configured name keeps the SSH rule (loopback first on its own host).
+      expect(resolveServiceTarget(url('http://dev-box.corp.example.com:8080/'), ctx('studio')))
+        .toEqual({ host: 'studio', targets: ['localhost', 'dev-box.corp.example.com'], reason: 'configured-host' })
+    })
+
+    it('a full name that only starts with the machine\'s short name is not that machine', () => {
+      expect(resolveServiceTarget(url('http://ip-10-0-0-5.attacker.test:3000/'), ctx('__cloudbox__'))).toBeNull()
+      // Without its daemon's word (a link that is down), the real name is unknown: refused, as before.
+      expect(resolveServiceTarget(url('http://joined-box-7.lan.example.test:5173/'), ctx('joined-box', {}))).toBeNull()
+    })
+  })
 })

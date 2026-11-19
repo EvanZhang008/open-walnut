@@ -81,3 +81,32 @@ export const DAEMON_UPDATE_PATHS: Record<DaemonLinkKind, DaemonUpdatePath> = {
     exempt: 'only tests dial a remote daemon straight by its URL (a MockDaemon or a twin they started); nothing deploys it, and the test owns its build',
   },
 }
+
+/** WALNUT_NET_DAEMON_UPDATE=0 (or false/off/no): the automatic update of host network daemons is off. */
+export function netDaemonUpdateTurnedOff(env: Record<string, string | undefined> = process.env): boolean {
+  return ['0', 'false', 'off', 'no'].includes((env.WALNUT_NET_DAEMON_UPDATE ?? '').trim().toLowerCase())
+}
+
+/**
+ * How the daemon on `name` (reached as `kind`) gets a newer build, in one sentence the user
+ * can act on (no final period). The ONE wording every surface says after "needs an update":
+ * DaemonConnection's refusals, the host status frame (`daemonUpdateHow`, shown by the web
+ * console's fix line) and host_daemon_update's answer. A host network machine whose config
+ * says `autofix: false` is updated only on request (daemon-net-update.ts), hence "unless".
+ */
+export function daemonUpdateHowSentence(
+  kind: DaemonLinkKind, name: string,
+  opts: { env?: Record<string, string | undefined> } = {},
+): string {
+  switch (kind) {
+    case 'local': return 'Walnut updates this machine\'s daemon itself when it starts: restart Walnut to update it'
+    case 'cloud-tunnel': return 'Deploying the cloud companion updates the daemon there (it starts that daemon from its own build)'
+    case 'net': {
+      const ask = `use "Update the daemon" in Settings › Hosts`
+      if (netDaemonUpdateTurnedOff(opts.env)) return `The automatic daemon update for host network machines is turned off on this Mac (WALNUT_NET_DAEMON_UPDATE=0): ${ask}`
+      return `Walnut updates the daemon on ${name} by itself after a deploy (unless its automatic fixes are off), or ${ask} to do it now`
+    }
+    case 'direct-url': return 'This is a test daemon reached by its URL: the test that started it owns its build'
+    case 'ssh': return `Walnut updates the daemon on ${name} by itself the next time it connects there over SSH`
+  }
+}

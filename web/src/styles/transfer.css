@@ -97,6 +97,8 @@
   max-width: 260px;
 }
 .task-kebab-move-host-load.busy { color: var(--warning, #b7791f); }
+/* What the host is, when the server says (the cloud box): wraps, never widens the menu. */
+.task-kebab-move-host-note { font-size: 11px; color: var(--fg-muted); white-space: normal; max-width: 260px; }
 .task-kebab-item.task-kebab-info.task-kebab-move-host-refused {
   color: var(--error);
   white-space: normal;

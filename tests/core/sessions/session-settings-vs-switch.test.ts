@@ -19,7 +19,10 @@ import { createMockConstants } from '../../helpers/mock-constants.js';
 
 vi.mock('../../../src/constants.js', () => createMockConstants('session-settings-vs-switch'));
 vi.mock('../../../src/utils/process.js', () => ({ isProcessAlive: () => true, isProcessAliveAsync: async () => true }));
-vi.mock('../../../src/core/agents/host-engines.js', () => ({ hostEngineAvailability: async () => null }));
+vi.mock('../../../src/core/agents/host-engines.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/core/agents/host-engines.js')>()),
+  hostEngineAvailability: async () => null,
+}));
 vi.mock('../../../src/core/config-manager.js', async (orig) => {
   const real = await orig<typeof import('../../../src/core/config-manager.js')>();
   return { ...real, getConfig: async () => ({ ...(await real.getConfig()), hosts: { cloud: { hostname: 'cloud', enabled: true } } }) };

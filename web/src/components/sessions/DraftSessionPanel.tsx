@@ -586,10 +586,12 @@ export function DraftSessionPanel({
   // repair files under Walnut, so Walnut's apply.
   const projectDefaults = useProjectLaunchDefaults(isWalnut || isFork ? '' : isRepair ? 'Walnut' : draft.project);
   const globalEngine = useGlobalDefaultEngine();
+  // Whether the project's engine runs on the draft's host is that host's answer too.
+  const draftHostEngines = useHostEngineAvailability(draft.host);
   const choice = useMemo(() => (isWalnut || isFork ? null
     : draftLaunchChoice({ meta: draft.meta, metaTouched: draft.metaTouched }, projectDefaults, globalEngine,
-      (e) => defaultEngineRuns(e, draft.host, engineCatalog))),
-    [isWalnut, isFork, draft.meta, draft.metaTouched, draft.host, projectDefaults, globalEngine, engineCatalog]);
+      (e) => defaultEngineRuns(e, draft.host, engineCatalog, draftHostEngines))),
+    [isWalnut, isFork, draft.meta, draft.metaTouched, draft.host, projectDefaults, globalEngine, engineCatalog, draftHostEngines]);
   // What the pills show: the choice's engine and model over the row's own meta.
   const shownMeta = useMemo(() => (choice ? { ...draft.meta, engine: choice.engine, model: choice.model } : draft.meta), [choice, draft.meta]);
   // What the launch sends (MainPage: draftLaunchPayload): the project's values are left to the server.

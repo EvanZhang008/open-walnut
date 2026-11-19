@@ -10,7 +10,7 @@ import { act, createElement } from '../../web/node_modules/react/index.js';
 import { createRoot, type Root } from '../../web/node_modules/react-dom/client.js';
 
 const h = vi.hoisted(() => ({ locate: vi.fn(), explorer: vi.fn(), hosts: [] as Array<{ host: string; label: string }> }));
-vi.mock('@/hooks/useHostDisplayLabel', () => ({ useHostDisplayLabel: () => '' }));
+vi.mock('@/hooks/useHostDisplayLabel', () => ({ useHostDisplayLabel: () => '', useHostRoute: () => 'ssh' }));
 vi.mock('@/hooks/useHostStatus', () => ({ useAllHostStatus: () => h.hosts }));
 vi.mock('@/utils/host-display-label', () => ({
   remoteHostTag: (host: string) => host,

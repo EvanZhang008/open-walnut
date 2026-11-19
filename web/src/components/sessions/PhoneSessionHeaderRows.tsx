@@ -11,7 +11,7 @@ import type { SessionSplitView } from './sessionSplitView';
 import type { ThreadsMenu } from './session-threads-model';
 import { useBackgroundRunning } from '@/hooks/useBackgroundRunning';
 import { useSessionServers } from '@/hooks/useSessionServers';
-import { serversSummary } from './session-server-label';
+import { serversSummary, serversUnavailableNote } from './session-server-label';
 import { openBackgroundPanel } from '@/stores/background-panel-store';
 
 export interface PhoneSessionHeaderRowsProps {
@@ -58,7 +58,9 @@ export function PhoneSessionHeaderRows(p: PhoneSessionHeaderRowsProps) {
   // The desktop session menu's "Background tasks" row: the phone's menu does not draw that
   // section, and a background command has no chat chip to reach its list from.
   const { tasks: background, running: { total: running } } = useBackgroundRunning(p.sessionId);
-  const summary = serversSummary(useSessionServers(p.sessionId, { enabled: true, fast: true }).servers);
+  const servers = useSessionServers(p.sessionId, { enabled: true, fast: true });
+  // The list cannot be read (the host is away, its daemon too old): the row says so instead.
+  const summary = serversSummary(servers.servers) ?? serversUnavailableNote(servers.state);
   return (
     <div className="phone-session-rows" data-testid="phone-session-rows">
       <Row label="Changed" active={p.activeView === 'changed'} onClick={view('changed')} testId="phone-row-changed" />

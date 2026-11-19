@@ -15,12 +15,13 @@ import request from 'supertest'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
-const daemonMock = vi.hoisted(() => ({ getDaemonConnection: vi.fn() }))
+const daemonMock = vi.hoisted(() => ({ getDaemonConnection: vi.fn(), peekDaemonConnection: vi.fn((_host: string): unknown => null) }))
 
 vi.mock('../../../src/constants.js', () => createMockConstants())
 vi.mock('../../../src/core/ssh-config-scanner.js', () => ({ scanSshConfig: async () => new Map() }))
 vi.mock('../../../src/providers/daemon-connection.js', () => ({
   getDaemonConnection: daemonMock.getDaemonConnection,
+  peekDaemonConnection: daemonMock.peekDaemonConnection,
 }))
 
 import { CONFIG_FILE, WALNUT_HOME } from '../../../src/constants.js'
@@ -86,6 +87,10 @@ async function writeHostsConfig(): Promise<void> {
     '    user: developer',
     '  builder:',
     '    hostname: build-box.corp.example.test',
+    '  joined-box:',
+    '    hostname: joined-box.walnut-net.invalid',
+    '    transport: net',
+    '    endpoint: ' + 'ab'.repeat(32),
     '',
   ].join('\n'))
 }
@@ -95,12 +100,14 @@ const post = (sid: string, url: unknown) =>
 
 beforeEach(async () => {
   daemonMock.getDaemonConnection.mockReset()
+  daemonMock.peekDaemonConnection.mockReset().mockReturnValue(null)
   closeDb()
   _resetSessionTrackerForTesting()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   await writeHostsConfig()
   await importSessionRecord({ claudeSessionId: 'local-1', taskId: '', project: 'Fixture', cwd: '/tmp' })
   await importSessionRecord({ claudeSessionId: 'remote-1', taskId: '', project: 'Fixture', cwd: '~/work', host: 'studio' })
+  await importSessionRecord({ claudeSessionId: 'net-1', taskId: '', project: 'Fixture', cwd: '~/work', host: 'joined-box' })
 })
 
 afterEach(async () => {
@@ -268,6 +275,31 @@ describe('a URL naming a configured host goes to THAT host', () => {
     const res = await post('remote-1', 'http://studio.attacker.test:8080/')
     expect(res.status).toBe(422)
     expect(daemonMock.getDaemonConnection).not.toHaveBeenCalled()
+  })
+})
+
+describe('a host network machine named by its real host name', () => {
+  it('reaches the service on that machine\'s loopback through its link, by the name its daemon said', async () => {
+    const ensurePortForward = vi.fn().mockResolvedValue(livePort)
+    daemonMock.getDaemonConnection.mockResolvedValue({ ensurePortForward, closePortForward: vi.fn() })
+    // Its daemon's hello said what the machine calls itself (DaemonConnection.daemonHostname).
+    daemonMock.peekDaemonConnection.mockImplementation((host: string) => (host === 'joined-box' ? { daemonHostname: 'joined-box-7.lan.example.test' } : null))
+    const res = await post('net-1', 'http://joined-box-7.lan.example.test:5173/app')
+    expect(res.status, JSON.stringify(res.body)).toBe(200)
+    expect(daemonMock.getDaemonConnection).toHaveBeenCalledWith('joined-box', expect.objectContaining({ via: 'net' }))
+    // Only its loopback: a link never forwards to another address.
+    expect(ensurePortForward.mock.calls).toEqual([[5173, 'localhost', { evictable: true }]])
+    expect(res.body).toMatchObject({ host: 'joined-box', via: 'tunnel', url: `http://127.0.0.1:${livePort}/app` })
+  })
+
+  it('its placeholder name works too, and with its link down the real name is not known (422, as for any unknown name)', async () => {
+    const ensurePortForward = vi.fn().mockResolvedValue(livePort)
+    daemonMock.getDaemonConnection.mockResolvedValue({ ensurePortForward, closePortForward: vi.fn() })
+    expect((await post('net-1', 'http://joined-box.walnut-net.invalid:5173/')).status).toBe(200)
+    expect(ensurePortForward.mock.calls).toEqual([[5173, 'localhost', { evictable: true }]])
+    const res = await post('net-1', 'http://joined-box-7.lan.example.test:5173/')
+    expect(res.status).toBe(422)
+    expect(res.body.code).toBe('unknown_host')
   })
 })
 

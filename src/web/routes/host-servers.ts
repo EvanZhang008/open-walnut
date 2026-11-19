@@ -28,6 +28,7 @@ import { log } from '../../logging/index.js'
 import { DEFAULT_COPY_CHOICE, copyChoiceChanged, copyChoiceFrom } from '../../core/replication/kinds/copy-kind.js'
 import { isOnThisMachine, isPersonAtThisMachine } from './expose.js'
 import { knownHost } from '../../core/hosts/known-host.js'
+import { CLOUD_BOX_HOST_LABEL, CLOUD_BOX_HOST_SERVER_NOTE } from '../../core/hosts/cloud-box-host.js'
 import { inHostTerms } from '../../core/hosts/host-display-name.js'
 import type { Config } from '../../core/types.js'
 
@@ -38,6 +39,20 @@ const MAX_OPTION_LENGTH = 200
 
 function refuse(res: Response): void {
   res.status(403).json({ error: 'Only you, at this computer, can change which hosts run a Walnut server (Settings, Hosts).', code: 'person_at_this_machine' })
+}
+
+/**
+ * Answers a request for one host that runs no host server of this Mac (true): 404 for no such
+ * host, and for the cloud box the sentence why (it is a Walnut server itself), never a 404.
+ */
+async function refusedHost(res: Response, hostKey: string): Promise<boolean> {
+  if (HOST_KEY.test(hostKey) && (await getConfig()).hosts?.[hostKey]?.cloud_box) {
+    res.status(409).json({ error: `${CLOUD_BOX_HOST_LABEL} is ${CLOUD_BOX_HOST_SERVER_NOTE}.`, code: 'cloud_box_is_a_walnut_server' })
+    return true
+  }
+  if (HOST_KEY.test(hostKey) && await hostEntry(hostKey)) return false
+  res.status(404).json({ error: `No host named ${hostKey}` })
+  return true
 }
 
 async function hostEntry(hostKey: string) {
@@ -112,10 +127,7 @@ hostServersRouter.put('/:hostKey', async (req: Request, res: Response, next: Nex
   try {
     if (!isPersonAtThisMachine(req)) return refuse(res)
     const hostKey = String(req.params.hostKey)
-    if (!HOST_KEY.test(hostKey) || !(await hostEntry(hostKey))) {
-      res.status(404).json({ error: `No host named ${hostKey}` })
-      return
-    }
+    if (await refusedHost(res, hostKey)) return
     const body = (req.body ?? {}) as { enabled?: unknown; expose?: { enabled?: unknown; provider?: unknown; options?: unknown }; copies?: unknown }
     if (body.enabled !== undefined && typeof body.enabled !== 'boolean') {
       res.status(400).json({ error: 'enabled is true or false' })
@@ -190,7 +202,7 @@ hostServersRouter.post('/:hostKey/retry', async (req: Request, res: Response, ne
   try {
     if (!isOnThisMachine(req)) return refuse(res)
     const hostKey = String(req.params.hostKey)
-    if (!HOST_KEY.test(hostKey) || !(await hostEntry(hostKey))) { res.status(404).json({ error: `No host named ${hostKey}` }); return }
+    if (await refusedHost(res, hostKey)) return
     noteSessionRetry(req, 'retry', hostKey)
     // The Retry (the person's, or a session's on this machine): a failed install and a build that did not answer are tried again.
     void getHostServerManager()?.reconcile(hostKey, { retry: true })
@@ -204,7 +216,7 @@ hostServersRouter.post('/:hostKey/expose/retry', async (req: Request, res: Respo
   try {
     if (!isOnThisMachine(req)) return refuse(res)
     const hostKey = String(req.params.hostKey)
-    if (!HOST_KEY.test(hostKey) || !(await hostEntry(hostKey))) { res.status(404).json({ error: `No host named ${hostKey}` }); return }
+    if (await refusedHost(res, hostKey)) return
     noteSessionRetry(req, 'tunnel retry', hostKey)
     await getHostServerManager()?.retryExpose(hostKey).catch((err: Error) => { throw Object.assign(err, { status: 502 }) })
     res.json({ host: await hostEntry(hostKey) })

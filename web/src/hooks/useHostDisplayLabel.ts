@@ -11,7 +11,7 @@
  */
 import { useCallback, useSyncExternalStore } from 'react';
 import { getAllHostStatus, getHostStatus, subscribeHostStatus } from '@/hooks/useHostStatus';
-import { hostDisplayLabel } from '@/utils/host-display-label';
+import { hostDisplayLabel, hostRoute, type HostRoute } from '@/utils/host-display-label';
 
 /** One host's name. No host, or `__local__`, is "Local". */
 export function useHostDisplayLabel(alias: string | null | undefined): string {
@@ -28,4 +28,27 @@ export function useHostDisplayLabels(): (alias: string | null | undefined) => st
     (alias: string | null | undefined) => hostDisplayLabel(alias, alias ? all.find((s) => s.host === alias)?.label : undefined),
     [all],
   );
+}
+
+/** How this machine reaches one host (utils/host-display-label.ts hostRoute), live. */
+export function useHostRoute(alias: string | null | undefined): HostRoute {
+  const remote = alias && alias !== '__local__' ? alias : null;
+  const read = () => hostRoute(remote, remote ? getHostStatus(remote) : undefined);
+  return useSyncExternalStore(subscribeHostStatus, read, read);
+}
+
+/** One reader per status snapshot, built outside any render (it keeps no render alive). */
+const routeReaders = new WeakMap<object, (alias: string | null | undefined) => HostRoute>();
+function routeReaderOf(all: ReturnType<typeof getAllHostStatus>): (alias: string | null | undefined) => HostRoute {
+  let reader = routeReaders.get(all);
+  if (!reader) {
+    reader = (alias) => hostRoute(alias, alias ? all.find((s) => s.host === alias) : undefined);
+    routeReaders.set(all, reader);
+  }
+  return reader;
+}
+
+/** hostRoute for any alias, from one subscription (a list of rows on different hosts); the same function while the statuses are. */
+export function useHostRoutes(): (alias: string | null | undefined) => HostRoute {
+  return routeReaderOf(useSyncExternalStore(subscribeHostStatus, getAllHostStatus, getAllHostStatus));
 }

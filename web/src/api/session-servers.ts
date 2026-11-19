@@ -34,6 +34,8 @@ export interface SessionServersResult {
   host: string;
   servers: SessionServer[];
   error?: string;
+  /** For `unsupported` (the daemon needs an update) and `offline` (the host is not connected): the sentence to show. Absent from an older server. */
+  why?: string;
 }
 
 /** A list answer this fresh serves every caller (the panel, the menu's count, the Open row). */

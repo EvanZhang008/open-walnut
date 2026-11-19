@@ -69,6 +69,19 @@ describe('listSessionServers', () => {
     expect(res).toMatchObject({ state: 'error', error: 'socket closed', servers: [] })
   })
 
+  it('an offline host and a daemon too old for the list each carry the sentence a surface shows instead', async () => {
+    const away = await listSessionServers(session({ host: 'devbox' }), { connection: async () => null })
+    expect(away).toMatchObject({ state: 'offline', host: 'devbox', servers: [] })
+    expect(away.why).toMatch(/^devbox is not connected right now, so the servers this session started cannot be listed/)
+    const old = fakeConn(() => ({}), [])
+    const stale = await listSessionServers(session({ host: 'devbox' }), { connection: async () => old.conn })
+    expect(stale.why).toBe('The Walnut daemon on devbox needs an update before it can list the servers this session started')
+    // This machine is never named by its internal alias.
+    const here = await listSessionServers(session(), { connection: async () => old.conn })
+    expect(here.why).toContain('on this machine')
+    expect(here.why).not.toContain('__local__')
+  })
+
   it('a host that cannot read its sockets is an error, never "nothing listens"', async () => {
     const { conn } = fakeConn(() => ({ servers: [], source: 'none' }))
     const res = await listSessionServers(session(), { connection: async () => conn })

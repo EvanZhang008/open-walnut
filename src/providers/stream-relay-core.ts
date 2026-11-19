@@ -20,7 +20,8 @@
  * A port stream ('port-stream-v1') has a TCP connection as its other end: the
  * primary asks for `stream.open {sid, to: 'port', port, host}` and the daemon
  * connects to that port on its OWN loopback (127.0.0.0/8, ::1; `localhost`
- * tries 127.0.0.1 then ::1), never another address. It is what an `ssh -L` gives
+ * tries 127.0.0.1 then ::1), never another address, and never a Walnut daemon's
+ * own socket there (its own port or a sibling's, `daemonPorts`). It is what an `ssh -L` gives
  * a host reached over SSH, for a host reached over the host network (a service
  * preview, the embedded VS Code). The daemon then keeps the same window the
  * other end keeps: it stops reading the socket while WINDOW bytes it sent are
@@ -59,6 +60,21 @@ export interface StreamRelayDeps<L> {
   connect?: (port: number, host: string) => PortSocket
   /** How long a port stream waits for its connection (default 8s, under the opener's 10s). */
   connectTimeoutMs?: number
+  /**
+   * The daemon sockets on this machine a port stream must never reach: they take no token
+   * (a local link is trusted by being on loopback), so a stream into one would hand the
+   * opener a daemon link. `own` is this daemon's listening port; `dirs` hold a daemon.port
+   * each (this daemon's, the production ones, the cloud companion's tunnel daemon), and each
+   * of `deviceBases` has keyed ones at `<base>.by-device/<key>/daemon`. Read at open, cached
+   * for a moment. Without it, only the loopback rule applies.
+   */
+  daemonPorts?: {
+    own: () => number | null
+    dirs: string[]
+    deviceBases: string[]
+    read: (file: string) => string | null
+    list: (dir: string) => string[]
+  }
   /** Terminal streams (pty-stream-core.ts createPtyStreams). Without them, terminal streams are refused. */
   ptys?: {
     open(from: L, sid: string, msg: Record<string, unknown>): void
@@ -104,6 +120,37 @@ export function createStreamRelay<L>(deps: StreamRelayDeps<L>) {
     if (host === '::1' || host === '[::1]') return ['::1']
     if (typeof host === 'string' && /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) && host.split('.').every((o) => Number(o) <= 255)) return [host]
     return null
+  }
+
+  /** How long the sibling daemons' ports read from their files stay believed. */
+  const DAEMON_PORTS_TTL_MS = 2_000
+  let daemonPortsAt = -Infinity
+  let daemonPortsSeen = new Set<number>()
+
+  /** Whether `port` is a Walnut daemon's own socket on this machine (deps.daemonPorts). */
+  function daemonSocketPort(port: number): boolean {
+    const d = deps.daemonPorts
+    if (!d) return false
+    if (d.own() === port) return true
+    const now = Date.now()
+    if (now - daemonPortsAt >= DAEMON_PORTS_TTL_MS) {
+      const files = d.dirs.map((dir) => `${dir}/daemon.port`)
+      for (const base of d.deviceBases) {
+        let keys: string[] = []
+        try { keys = d.list(`${base}.by-device`) } catch { /* none */ }
+        for (const key of keys.slice(0, 64)) files.push(`${base}.by-device/${key}/daemon/daemon.port`)
+      }
+      const next = new Set<number>()
+      for (const file of files) {
+        let text: string | null = null
+        try { text = d.read(file) } catch { /* no daemon there */ }
+        const n = Number.parseInt(String(text ?? '').trim(), 10)
+        if (Number.isInteger(n) && n >= 1 && n <= 65535) next.add(n)
+      }
+      daemonPortsSeen = next
+      daemonPortsAt = now
+    }
+    return daemonPortsSeen.has(port)
   }
 
   /** One id space per link: a pair's, a port stream's and a terminal's ids never meet. */
@@ -212,6 +259,7 @@ export function createStreamRelay<L>(deps: StreamRelayDeps<L>) {
     }
     const hosts = loopbackHosts(host)
     if (!hosts) return refuse('a port stream reaches only this host\'s own loopback (127.0.0.1, localhost or ::1)')
+    if (daemonSocketPort(port)) return refuse(`port ${port} is a Walnut session daemon's own socket on this host, which a port stream never reaches`)
     if ((portsByLink.get(from)?.size ?? 0) >= MAX_PORTS_PER_LINK) return refuse('too many port streams on this link')
     const end: PortEnd = { link: from, sid, port, sock: null, connected: false, unacked: 0, paused: false, linkEnded: false, sockEnded: false, refused: false, timer: null }
     let m = portsByLink.get(from)

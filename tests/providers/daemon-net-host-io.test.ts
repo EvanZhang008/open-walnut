@@ -87,7 +87,7 @@ describe('joined host install IO with SSH certificates expired', () => {
 
   it.each(['host-exec-v1', 'fs-write-part-v1'])('an older daemon without %s fails clearly and never falls back to SSH', async (noCap) => {
     const { c, ssh, send } = setup({ noCap })
-    await expect(c.uploadFile('/home/user/build.gz', Buffer.from('x'))).rejects.toThrow('needs a daemon update')
+    await expect(c.uploadFile('/home/user/build.gz', Buffer.from('x'))).rejects.toThrow(/^Uploading a file on (\S+) goes over the host network and needs a newer Walnut daemon there\. Walnut updates the daemon on \1 by itself after a deploy \(unless its automatic fixes are off\), or use "Update the daemon" in Settings › Hosts to do it now$/)
     expect(send).not.toHaveBeenCalled()
     expect(ssh).not.toHaveBeenCalled()
   })

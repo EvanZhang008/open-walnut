@@ -9,7 +9,8 @@
  * the configured host list, which the renderer does not know.
  *
  * A service link is an http(s) URL on loopback, or on a host name Walnut knows
- * (the session's host or any configured host). The console's own origin is
+ * (the session's host, any configured host, or the name a host's daemon says its
+ * machine has). The console's own origin is
  * never one (those are in-app links).
  */
 import { hostnamesMatch, isLoopbackHostname, parseServiceUrl } from '@open-walnut/service-url';
@@ -26,8 +27,9 @@ export function primeKnownServiceHosts(): void {
   void hydrateHostStatus().catch(() => { /* the store records the failure */ });
 }
 
+/** Each host's alias, its row's hostname and the name its machine calls itself (an older server sends no machineName). */
 function knownHostNames(): string[] {
-  return getAllHostStatus().flatMap((h) => [h.host, h.hostname].filter((x): x is string => !!x));
+  return getAllHostStatus().flatMap((h) => [h.host, h.hostname, h.machineName].filter((x): x is string => !!x));
 }
 
 /**

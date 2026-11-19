@@ -14,9 +14,17 @@
  * Which host serves the URL:
  *   loopback (localhost, 127.x, 0.0.0.0, ::1)  -> the SESSION's host
  *   a configured host's name or alias          -> that host
+ *   the name a link host's daemon says its     -> that host (checked after every
+ *     machine has                                 configured name)
  *   this machine's own name                    -> local
  *   anything else                              -> refused (the client opens it
  *                                                 as a plain external link)
+ *
+ * A host with no SSH (the host network, the cloud box) is reached through its
+ * daemon link, whose port streams reach only that machine's loopback. Its
+ * loopback serves the session's own host, or a URL naming the machine exactly
+ * (its alias or its daemon's name); a looser match from elsewhere is refused.
+ * The cloud box's row hostname is the companion's public domain, never the box.
  *
  * The route touches SSH, so the whole call is deadline-bounded.
  */
@@ -31,6 +39,7 @@ import { hostDisplayName, inHostTerms } from './hosts/host-display-name.js'
 import type { SessionRecord } from './types.js'
 import { log } from '../logging/index.js'
 import { bareHost, hostnamesMatch, isLoopbackHostname, parseServiceUrl } from './service-url.js'
+import { hostRouteFields } from './hosts/host-status.js'
 
 export { hostnamesMatch, isLoopbackHostname, parseServiceUrl }
 
@@ -80,7 +89,7 @@ export interface ServicePreviewResult {
   reachability: 'ok' | 'slow'
 }
 
-interface HostDef { hostname: string; user?: string; port?: number; enabled?: boolean; label?: string }
+interface HostDef { hostname: string; user?: string; port?: number; enabled?: boolean; label?: string; cloud_box?: boolean; transport?: 'ssh' | 'net' }
 
 export interface ServiceTarget {
   /** Host alias, or `__local__`. */
@@ -96,7 +105,11 @@ const LOCAL = '__local__'
 /** Pure host decision: which host serves `url`, and at which address there. */
 export function resolveServiceTarget(
   url: URL,
-  ctx: { sessionHost?: string; hosts: Record<string, HostDef>; localNames: string[] },
+  ctx: {
+    sessionHost?: string; hosts: Record<string, HostDef>; localNames: string[]
+    /** Per host alias, the names its machine calls itself (its daemon's hello `hostname`). */
+    machineNames?: Record<string, string[]>
+  },
 ): ServiceTarget | null {
   const h = bareHost(url.hostname)
   if (isLoopbackHostname(h)) {
@@ -114,16 +127,48 @@ export function resolveServiceTarget(
   const entries = Object.entries(ctx.hosts)
     .filter(([, d]) => d && d.enabled !== false && typeof d.hostname === 'string')
     .sort(([a], [b]) => (a === ctx.sessionHost ? -1 : b === ctx.sessionHost ? 1 : 0))
+  // A link host's daemon reaches only that machine's loopback (DaemonConnection.ensurePortForward).
+  // Loopback there is only for its own session's URLs, or a URL that names the machine exactly
+  // (its alias, or the name its daemon reports): anything looser could hand a URL meant for
+  // another machine to services that host keeps on loopback on purpose.
+  // The route each row has (hostRouteFields, the one decision): undefined = SSH, else the link.
+  const via = (def: HostDef) => hostRouteFields(def).via
+  const linkLoopback = (alias: string, exact: boolean): ServiceTarget | null =>
+    alias === ctx.sessionHost || exact ? { host: alias, targets: ['localhost'], reason: 'configured-host' } : null
+  // Pass 1: the configured names (each row's hostname and alias), every entry before any
+  // machine name. The cloud box's row hostname is the companion's public domain, not the box:
+  // a URL naming it is a normal link (refused here, opened as before).
   for (const [alias, def] of entries) {
-    if (hostnamesMatch(h, def.hostname) || hostnamesMatch(h, alias)) {
-      // The session's OWN host: loopback first (a service bound to 127.0.0.1
-      // or to every interface; the session started it), then the machine's
-      // name (bound to one external interface only). ANOTHER host: its name
-      // only, i.e. exactly what that URL reaches from anywhere. Loopback there
-      // would expose services that host keeps private on purpose.
-      const own = alias === ctx.sessionHost
-      return { host: alias, targets: own ? ['localhost', def.hostname] : [def.hostname], reason: 'configured-host' }
+    const byRow = via(def) !== 'cloud' && hostnamesMatch(h, def.hostname)
+    if (!byRow && !hostnamesMatch(h, alias)) continue
+    if (via(def)) {
+      const hit = linkLoopback(alias, h === bareHost(alias))
+      if (hit) return hit
+      continue
     }
+    // The session's OWN host: loopback first (a service bound to 127.0.0.1
+    // or to every interface; the session started it), then the machine's
+    // name (bound to one external interface only). ANOTHER host: its name
+    // only, i.e. exactly what that URL reaches from anywhere. Loopback there
+    // would expose services that host keeps private on purpose.
+    const own = alias === ctx.sessionHost
+    return { host: alias, targets: own ? ['localhost', def.hostname] : [def.hostname], reason: 'configured-host' }
+  }
+  // Pass 2: the name a link host's machine calls itself (its daemon's hello), by the same
+  // rule as a row's hostname. A daemon's word never claims a name another configured entry or
+  // this machine already has (a generic or another host's name would capture its URLs).
+  const sameMachineName = (a: string, b: string): boolean => hostnamesMatch(a, b) || hostnamesMatch(b, a)
+  const claimed = (name: string, self: string): boolean => ctx.localNames.some((n) => sameMachineName(name, n))
+    || Object.entries(ctx.hosts).some(([alias, def]) => alias !== self && !!def
+      && [alias, ...(typeof def.hostname !== 'string' || via(def) === 'cloud' ? [] : [def.hostname])].some((known) => sameMachineName(name, known)))
+  for (const [alias, def] of entries) {
+    if (!via(def)) continue
+    const names = (Object.hasOwn(ctx.machineNames ?? {}, alias) ? ctx.machineNames![alias] : [])
+      .filter((n) => n && !claimed(n, alias) && !(via(def) === 'cloud' && sameMachineName(n, def.hostname)))
+    const named = names.filter((n) => hostnamesMatch(h, n))
+    if (named.length === 0) continue
+    const hit = linkLoopback(alias, named.some((n) => h === bareHost(n)))
+    if (hit) return hit
   }
   return null
 }
@@ -241,6 +286,8 @@ async function withDeadline<T>(work: Promise<T>, ms: number, what: string): Prom
 export interface ServicePreviewDeps {
   probe?: typeof probeService
   localNames?: string[]
+  /** Per host alias, the names its machine calls itself; default: its live daemon link's hello. */
+  machineNames?: Record<string, string[]>
   /** Test seam; the route always uses DEADLINE_MS. */
   deadlineMs?: number
 }
@@ -261,7 +308,8 @@ async function resolvePreview(session: SessionRecord, url: URL, deps: ServicePre
   const config = await getConfig()
   const hosts = (config.hosts ?? {}) as Record<string, HostDef>
   const localNames = deps.localNames ?? [os.hostname()]
-  const target = resolveServiceTarget(url, { sessionHost: session.host, hosts, localNames })
+  const machineNames = deps.machineNames ?? await liveMachineNames(Object.keys(hosts))
+  const target = resolveServiceTarget(url, { sessionHost: session.host, hosts, localNames, machineNames })
   if (!target) {
     throw new ServicePreviewError(
       `${url.hostname} is not this machine or a configured host`, 422, 'unknown_host',
@@ -342,6 +390,17 @@ async function resolvePreview(session: SessionRecord, url: URL, deps: ServicePre
     `Nothing is answering on ${name} at port ${remotePort}`, 502, 'unreachable',
     'Check that the server is still running on that host, then Retry.',
   )
+}
+
+/** The host names the hosts' daemons said in their hello, from the links that are up (no dial). */
+async function liveMachineNames(aliases: string[]): Promise<Record<string, string[]>> {
+  const pool = await import('../providers/daemon-connection.js')
+  const out: Record<string, string[]> = {}
+  for (const alias of aliases) {
+    const name = pool.peekDaemonConnection(alias)?.daemonHostname
+    if (name) out[alias] = [name]
+  }
+  return out
 }
 
 function finish(

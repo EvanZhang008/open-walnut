@@ -92,19 +92,29 @@ describe('routineStartOf: the run the Mac would start, or none', () => {
     expect(await routineStartOf(job({ host: 'ghost' }), 'ghost')).toBeNull()
   })
 
-  it('keeps the configured remote engine restriction', async () => {
+  it('starts a routine inheriting an ACP default the same way whatever the host answered about it', async () => {
     await updateConfig({ defaults: { engine: 'codex' } } as never)
-    // An ACP default is dropped for a remote launch, so Claude Code still runs it.
-    const codex = await routineStartOf(job({}), HOST)
-    // Whatever the engine registry says of codex on a remote host, the start says the same.
-    const { normalizeEngine } = await import('../../../src/core/agents/engine-registry.js')
-    const { resolveDefaultEngine } = await import('../../../src/core/agents/default-engine.js')
-    const remote = normalizeEngine(resolveDefaultEngine({ defaults: { engine: 'codex' } } as never, { host: HOST }))
-    expect(codex === null).toBe(remote !== undefined)
+    const { _resetHostEngineCache, _seedHostEngineCache } = await import('../../../src/core/agents/host-engines.js')
+    // The rule before ACP engines ran on other hosts: the host's detached Claude Code start
+    // takes it. Never the host-engine cache, which is empty after a restart and fills later.
+    const answers = [
+      undefined,
+      { codex: { installed: true, version: '1', reason: null } },
+      { codex: { installed: false, version: null, reason: 'codex is not on PATH' } },
+    ]
+    try {
+      for (const answer of answers) {
+        _resetHostEngineCache()
+        if (answer) _seedHostEngineCache(HOST, answer)
+        const spec = await routineStartOf(job({}), HOST)
+        expect(spec, JSON.stringify(answer)).toMatchObject({ host: HOST, cwd: '/srv/repo', project: 'Routines' })
+      }
+    } finally { _resetHostEngineCache() }
   })
 
   it.each([false, true])('builds a detached CLI start with primary session_server.enabled=%s', async enabled => {
-    await updateConfig({ defaults: {}, session_server: { enabled } } as never)
+    // The engine named, not left to merge: the test above leaves codex in the config.
+    await updateConfig({ defaults: { engine: 'claude' }, session_server: { enabled } } as never)
     const spec = await routineStartOf(job({}), HOST)
     expect(spec).toMatchObject({ host: HOST, cwd: '/srv/repo', project: 'Routines', mode: 'auto' })
     expect(spec!.message).toContain('Write the nightly report')

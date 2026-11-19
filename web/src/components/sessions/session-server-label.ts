@@ -84,3 +84,13 @@ export function serversSummary(servers: readonly { kind: string }[]): string | n
   if (other > 0) return `${other} other server${other === 1 ? '' : 's'}`;
   return null;
 }
+
+/**
+ * The short words a count shows in place of one when the list cannot be read (the full
+ * sentence rides its title, useSessionServers' `why`): never a silent gap.
+ */
+export function serversUnavailableNote(state: string): string | null {
+  if (state === 'unsupported') return 'daemon needs an update';
+  if (state === 'offline') return 'host not connected';
+  return null;
+}

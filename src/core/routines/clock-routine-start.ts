@@ -43,12 +43,12 @@ export async function routineStartOf(job: CronJob, host: string, home: string = 
     import('../../constants.js'), import('../../utils/entity-refs.js'), import('./executors/claude-code.js'),
   ]);
   if (message.length > QUICK_START_MESSAGE_SPILL_LIMIT || listEntityRefs(message).length > 0 || readTriageCountHint(message) !== undefined) return null;
-  const [{ getConfig, isFallbackConfig }, { resolveDefaultEngine }, { normalizeEngine }, { VALID_SESSION_EFFORT_IDS }] = await Promise.all([
+  const [{ getConfig, isFallbackConfig }, { hostStartDefaultEngine }, { normalizeEngine }, { VALID_SESSION_EFFORT_IDS }] = await Promise.all([
     import('../config-manager.js'), import('../agents/default-engine.js'), import('../agents/engine-registry.js'), import('../types.js'),
   ]);
   const config = await getConfig();
   if (isFallbackConfig(config) || !config.hosts?.[host]) return null;
-  if (normalizeEngine(resolveDefaultEngine(config, { host })) !== undefined) return null;
+  if (normalizeEngine(hostStartDefaultEngine(config, host)) !== undefined) return null;
   const title = (typeof c.taskTitle === 'string' && c.taskTitle.trim()) || `Routine: ${job.name}`;
   const project = (typeof c.project === 'string' && c.project.trim()) || 'Routines';
   const model = typeof c.model === 'string' && c.model.trim() ? c.model.trim() : undefined;

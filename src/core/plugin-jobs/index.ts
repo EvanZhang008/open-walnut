@@ -97,13 +97,14 @@ export function getPluginJobsManager(): PluginJobsManager | null {
     },
     localSecretsFile: (pluginId) => path.join(WALNUT_HOME, 'secrets', 'plugins', `${pluginId}.json`),
     isSecretKey,
+    // Every host, whatever its link: the cloud box takes a job's code over its tunnel as a
+    // host network machine does over its link (DaemonConnection.uploadFile).
     hosts: async () => {
       const { getConfig } = await import('../config-manager.js')
-      const { CLOUD_BOX_HOST_ALIAS } = await import('../hosts/cloud-box-host.js')
-      const all = (await getConfig()).hosts ?? {}
-      // The cloud box is reached through the companion, which takes no uploads: not a place for jobs.
-      return Object.entries(all)
-        .filter(([key]) => key !== CLOUD_BOX_HOST_ALIAS)
+      const config = await getConfig()
+      // Each machine once (a host joined twice is one choice): hosts/joined-twins.ts.
+      const { pickableHosts } = await import('../hosts/joined-twins.js')
+      return pickableHosts(config.hosts ?? {}, config.net)
         .map(([key, h]) => ({ key, label: (h as { label?: string }).label?.trim() || key }))
     },
     log: (level, msg, data) => log.session[level](msg, data),

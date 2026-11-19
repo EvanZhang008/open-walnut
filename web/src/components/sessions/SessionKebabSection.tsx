@@ -18,7 +18,8 @@ import type { SessionSplitView } from './sessionSplitView';
 import { sessionKebabMetaRows, shellWord } from './session-kebab-meta';
 import { useBackgroundRunning } from '@/hooks/useBackgroundRunning';
 import { useSessionServers } from '@/hooks/useSessionServers';
-import { serversSummary } from './session-server-label';
+import { useHostDisplayLabel, useHostRoute } from '@/hooks/useHostDisplayLabel';
+import { serversSummary, serversUnavailableNote } from './session-server-label';
 import '@/styles/session-servers.css';
 import { openBackgroundPanel } from '@/stores/background-panel-store';
 import { openSessionRawView } from './SessionRawView';
@@ -174,6 +175,8 @@ interface SessionKebabSectionProps {
   investigating: boolean;
   investigateResult: { kind: 'ok'; id: string } | { kind: 'error' } | null;
   onOpenVscodeError: (error: unknown) => void;
+  /** Open Walnut's own Code view (the 'code' panel view): VS Code desktop's stand-in on a host with no SSH route. */
+  onOpenCodeView?: () => void;
   /** Called after any item runs so the parent can close the dropdown. */
   onAfterAction?: () => void;
 }
@@ -320,12 +323,20 @@ export function SessionViewItems({
   );
 }
 
-/** The Web preview row's count, as the Open row and the phone rows say it (serversSummary): "· 3 web servers", "· 1 other server" when only those run, or "· none running" once it knows there are none. */
+/** The Web preview row's count, as the Open row and the phone rows say it (serversSummary): "· 3 web servers", "· 1 other server" when only those run, or "· none running" once it knows there are none; "· host not connected" or "· daemon needs an update" when it cannot know (the sentence on hover). */
 function WebServersCount({ sessionId }: { sessionId: string }) {
-  const { servers, state } = useSessionServers(sessionId, { enabled: true, fast: true });
+  const { servers, state, why } = useSessionServers(sessionId, { enabled: true, fast: true });
   // What Web preview can open, else what else runs (a database is listed there too): never
   // "none running" while one of the session's servers holds a port.
   const summary = serversSummary(servers);
+  const unavailable = !summary ? serversUnavailableNote(state) : null;
+  if (unavailable) {
+    return (
+      <span className="session-menu-servers-count" data-testid="session-menu-servers-count" data-unavailable={state} title={why}>
+        <span className="session-menu-servers-none">{` · ${unavailable}`}</span>
+      </span>
+    );
+  }
   if (!summary && state !== 'ok') return null;
   return (
     <span className="session-menu-servers-count" data-testid="session-menu-servers-count"
@@ -357,8 +368,14 @@ export function SessionKebabSection({
   onRestart, restartBusy,
   onTerminate, terminateBusy,
   onInvestigate, investigating, investigateResult,
-  onOpenVscodeError, onAfterAction, taskId,
+  onOpenVscodeError, onOpenCodeView, onAfterAction, taskId,
 }: SessionKebabSectionProps) {
+  // VS Code desktop opens a remote folder over SSH (Remote-SSH), inherently: a host reached
+  // another way (the host network, the cloud box) keeps the row, which says so and opens
+  // Walnut's own Code view there instead (the host's status frame names its route).
+  const route = useHostRoute(host);
+  const hostName = useHostDisplayLabel(host);
+  const noSshRoute = route === 'host-network' || route === 'cloud';
   // Computed per render: the menu mounts when opened, so "2m ago" is fresh each time.
   const metaRows = sessionKebabMetaRows({ startedAt, lastActiveAt, host, hostname });
   const cdPrefix = cwd ? `cd ${shellWord(cwd)} && ` : '';
@@ -373,17 +390,36 @@ export function SessionKebabSection({
       {/* Copy & open: take the session somewhere else (an editor, a terminal, the
           clipboard), and the facts that go with it. */}
       <KebabGroup label="Copy & open" hint="VS Code · folder · ID" icon={ICON_COPY} testId="session-kebab-copy-open">
-        <button
-          className="task-kebab-item"
-          onClick={(e) => {
-            e.stopPropagation();
-            void openSessionInVscode(sessionId).then(onAfterAction).catch(onOpenVscodeError);
-          }}
-          title="Open in VS Code"
-        >
-          <span className="task-kebab-icon">{ICON_VSCODE}</span>
-          <span>Open in VS Code</span>
-        </button>
+        {noSshRoute ? (
+          <button
+            className="task-kebab-item task-kebab-item-unavailable"
+            data-testid="session-kebab-vscode-desktop"
+            data-unavailable="no-ssh"
+            onClick={(e) => { e.stopPropagation(); onAfterAction?.(); onOpenCodeView?.(); }}
+            title="Open Walnut's Code view (VS Code in this window) instead"
+          >
+            <span className="task-kebab-icon">{ICON_VSCODE}</span>
+            <span className="task-kebab-item-lines">
+              <span>Open in VS Code</span>
+              <span className="task-kebab-item-note">
+                VS Code desktop opens remote folders over SSH, and {hostName} has no SSH. This opens the Code view here instead.
+              </span>
+            </span>
+          </button>
+        ) : (
+          <button
+            className="task-kebab-item"
+            data-testid="session-kebab-vscode-desktop"
+            onClick={(e) => {
+              e.stopPropagation();
+              void openSessionInVscode(sessionId).then(onAfterAction).catch(onOpenVscodeError);
+            }}
+            title="Open in VS Code"
+          >
+            <span className="task-kebab-icon">{ICON_VSCODE}</span>
+            <span>Open in VS Code</span>
+          </button>
+        )}
         {cwdLabel && <CopyItem label={`Copy folder path (${cwdLabel})`} value={cwd!} onAfter={onAfterAction} />}
         <CopyItem label="Copy session ID" value={sessionId} onAfter={onAfterAction} />
         <CopyItem label="Copy resume command" value={`${cdPrefix}claude -r ${sessionId}`} onAfter={onAfterAction} />

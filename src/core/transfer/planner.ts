@@ -86,8 +86,9 @@ export function normalizeHost(host: string | undefined | null): string {
 }
 
 /**
- * Why `engine` cannot run on `host`, or null when it can. ACP engines run
- * through the local worker only (web/routes/engines.ts localOnly).
+ * Why `engine` cannot run on `host`, or null when it can: the ONE host rule for an
+ * engine, a named pick's and an inherited default's alike (agents/default-engine.ts).
+ * Only a local-only engine (web/routes/engines.ts localOnly) is refused on another host.
  */
 export function engineHostBlocker(engine: SessionEngine, host: string): string | null {
   // Every ACP engine runs on another host through that host's daemon, which finds the

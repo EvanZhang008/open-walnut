@@ -15,7 +15,7 @@ vi.mock('../../../src/core/config-manager.js', async (orig) => {
 });
 
 import { WALNUT_HOME } from '../../../src/constants.js';
-import { __setHostLoadProberForTesting, choosePlacement, hostLoads, hostSlots, judgeHost, localLoadPerCpu, macOnlyReason, needsMacTools, placementCaps, placementWeight } from '../../../src/core/hosts/placement.js';
+import { __setHostLoadProberForTesting, choosePlacement, hostLoads, hostSlots, judgeHost, localLoadPerCpu, macOnlyReason, needsMacTools, placementCaps, placementWeight, CLOUD_BOX_MOVE_NOTE } from '../../../src/core/hosts/placement.js';
 import os from 'node:os';
 import { HostsFullError, __resetHostAdmissionForTesting, __setWaitStepForTesting, admitHostStart, holdSlotFor, isAutomaticStart, slotHoldersOn } from '../../../src/core/sessions/host-admission.js';
 import type { HostLoad } from '../../../src/providers/host-facts-core.js';
@@ -91,6 +91,29 @@ describe('judgeHost', () => {
   });
   it('the caps follow the env', () => {
     expect(placementCaps({ WALNUT_PLACE_MAX_LOAD_PER_CPU: '10', WALNUT_PLACE_MIN_DISK_GB: '5' })).toMatchObject({ loadPerCpu: 10, diskFreeBytes: 5 * GB });
+  });
+});
+
+describe('hostLoads: the hosts the Move to host menu offers', () => {
+  it('the menu (cloudBox: true) lists the cloud box beside every host; the automatic picks leave it out', async () => {
+    cfg.hosts = { ...cfg.hosts, __cloudbox__: { hostname: 'companion.example.test', cloud_box: true }, joined: { hostname: 'joined.walnut-net.invalid', transport: 'net' } };
+    const menu = (await hostLoads({ cloudBox: true })).map((h) => h.host);
+    expect(menu).toEqual(expect.arrayContaining(['__local__', 'cloud', 'spare', 'joined', '__cloudbox__']));
+    const auto = (await hostLoads()).map((h) => h.host);
+    expect(auto).toContain('joined');
+    expect(auto).not.toContain('__cloudbox__');
+  });
+
+  it('marks the cloud box row (what it is, and no automatic pick); every other row carries neither', async () => {
+    cfg.hosts = { ...cfg.hosts, __cloudbox__: { hostname: 'companion.example.test', cloud_box: true } };
+    const rows = await hostLoads({ cloudBox: true });
+    const box = rows.find((h) => h.host === '__cloudbox__')!;
+    expect(box).toMatchObject({ note: CLOUD_BOX_MOVE_NOTE, autoPick: false });
+    expect(box.note).toMatch(/costs money while it works; pick it when asked/);
+    for (const row of rows.filter((h) => h.host !== '__cloudbox__')) {
+      expect(row.note, row.host).toBeUndefined();
+      expect(row.autoPick, row.host).toBeUndefined();
+    }
   });
 });
 

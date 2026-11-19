@@ -58,12 +58,29 @@ describe('defaultEngineRuns', () => {
     ({ id, displayName: id, runtimeKind, isDefault: false, localOnly: false, availability: { installed } }) as never;
   const catalog = [entry('claude', 'native'), entry('codex', 'acp'), entry('gemini', 'acp', false)];
 
-  it("follows the server's rule for an engine nobody named: no ACP engine on a remote host", () => {
+  const has = (id: string) => ({ [id]: { installed: true, version: '1', reason: null } });
+
+  it("follows the server's rule for an engine nobody named, on every host kind", () => {
     expect(defaultEngineRuns('codex', '', catalog)).toBe(true);
     expect(defaultEngineRuns('codex', '__local__', catalog)).toBe(true);
-    expect(defaultEngineRuns('codex', 'clouddev', catalog), 'catalog says not local-only, the server still gives way').toBe(false);
+    // On another host an ACP engine runs only when that host said it has it, whatever the connection.
+    for (const host of ['clouddev', 'net-mac', '__cloudbox__']) {
+      expect(defaultEngineRuns('codex', host, catalog, has('codex')), host).toBe(true);
+      expect(defaultEngineRuns('codex', host, catalog), `${host}: no answer yet`).toBe(false);
+    }
     expect(defaultEngineRuns('gemini', '', catalog), 'not installed').toBe(false);
+    expect(defaultEngineRuns('gemini', 'clouddev', catalog, has('gemini')), "this machine's install says nothing of the host's").toBe(true);
     expect(defaultEngineRuns('claude', 'clouddev', catalog)).toBe(true);
+  });
+
+  it("gives way on a host for a local-only engine, one that host says it lacks, and one it has not answered for", () => {
+    const local = [...catalog, { ...(entry('custom', 'acp') as object), localOnly: true } as never];
+    expect(defaultEngineRuns('custom', 'clouddev', local, has('custom'))).toBe(false);
+    expect(defaultEngineRuns('custom', '', local)).toBe(true);
+    const missing = { codex: { installed: false, version: null, reason: 'codex is not on PATH' } };
+    expect(defaultEngineRuns('codex', 'clouddev', catalog, missing)).toBe(false);
+    const pending = { codex: { installed: false, version: null, reason: 'still checking availability' } };
+    expect(defaultEngineRuns('codex', 'clouddev', catalog, pending), 'a pending probe is no answer: Claude Code').toBe(false);
   });
 });
 

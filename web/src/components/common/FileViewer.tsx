@@ -12,7 +12,7 @@
 import { useState, useEffect, useLayoutEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { SessionFileExplorer } from '../sessions/SessionFileExplorer';
-import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
+import { useHostDisplayLabel, useHostRoute } from '@/hooks/useHostDisplayLabel';
 import { useAllHostStatus } from '@/hooks/useHostStatus';
 import { hostDisplayLabel, remoteHostTag } from '@/utils/host-display-label';
 import { locateClickedPath, missingPathLine, type ClickedPathTarget } from '@/hooks/useClickedPathOpener';
@@ -108,6 +108,7 @@ export function FileViewer({ path: filePath, line, endLine, host: askedHost, sou
   const host = target ? target.host : askedHost;
   const remote = host && host !== LOCAL ? host : null;
   const hostName = useHostDisplayLabel(remote);
+  const hostVia = useHostRoute(remote);
 
   // Escape key closes
   useEffect(() => {
@@ -192,7 +193,7 @@ export function FileViewer({ path: filePath, line, endLine, host: askedHost, sou
         </div>
         <div className="file-viewer-footer">
           <span className="file-viewer-full-path">{filePath}</span>
-          {remote && <span className="file-viewer-host">{remoteHostTag(remote, hostName)}</span>}
+          {remote && <span className="file-viewer-host">{remoteHostTag(remote, hostName, hostVia)}</span>}
         </div>
       </div>
     </div>

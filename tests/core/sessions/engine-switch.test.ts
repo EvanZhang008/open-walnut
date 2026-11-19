@@ -40,7 +40,8 @@ vi.mock('../../../src/providers/claude-code-session.js', async (orig) => {
   });
   return { ...real, sessionRunner };
 });
-vi.mock('../../../src/core/agents/host-engines.js', () => ({
+vi.mock('../../../src/core/agents/host-engines.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/core/agents/host-engines.js')>()),
   hostEngineAvailability: async (host: string, engine: string) => edges.hostEngines[host]?.[engine] ?? null,
 }));
 

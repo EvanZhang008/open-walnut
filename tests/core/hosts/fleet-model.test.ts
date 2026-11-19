@@ -140,6 +140,15 @@ describe('the card', () => {
     expect(h.line).toBe('Dev box (devbox); connected over SSH tunnel; Debian 12; can: always on; 25% CPU of 32, 96 of 128 GB free; up 99% over 7 days; 19 sessions open; $1234 in 30 days (list price); Walnut server running')
   })
 
+  it('the cloud box says why no host server runs there (it is a Walnut server itself), and that never counts against it', () => {
+    const h = withPlacement(buildFleetHost(inputs({ host: '__cloudbox__', label: 'Cloud', kind: 'bridge', server: null })))
+    expect(h.server).toBeNull()
+    expect(h.line).toContain('; a Walnut server itself (the cloud companion), so no host server of this Mac runs there')
+    expect(h.placement.longRunning.reasons.join(' ')).not.toMatch(/Walnut server/)
+    // Any other host with no server row: no such note.
+    expect(withPlacement(buildFleetHost(inputs({ server: null }))).line).not.toContain('the cloud companion')
+  })
+
   it('a host with no probe, no vitals and no spend yet', () => {
     const h = withPlacement(buildFleetHost(inputs({ profile: null, vitals: null, spendUsd: null, daemon: null })))
     expect(h).toMatchObject({ system: null, now: null, history: null, spend: null, daemon: null, sessions: { running: null } })

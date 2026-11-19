@@ -15624,6 +15624,12 @@ body.walnut-dragging {
   color: var(--accent);
 }
 
+/* A row whose action cannot work on this host (VS Code desktop with no SSH route): muted,
+   with one line saying why and what it does instead. */
+.task-kebab-item-unavailable { color: var(--fg-muted); align-items: flex-start; }
+.task-kebab-item-lines { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.task-kebab-item-note { font-size: 11px; line-height: 1.35; color: var(--fg-muted); white-space: normal; max-width: 260px; }
+
 .task-kebab-item-danger {
   color: var(--error);
 }
@@ -20686,6 +20692,12 @@ td.usage-share-col {
 .session-action-chip-active {
   background: var(--accent-subtle, color-mix(in srgb, var(--accent) 12%, transparent));
   color: var(--accent);
+}
+/* A chip whose feature the host cannot give yet: still there and clickable, its view says why. */
+.session-action-chip-unavailable:not(.session-action-chip-active) {
+  color: var(--fg-muted);
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
 }
 
 .session-action-chip-count {

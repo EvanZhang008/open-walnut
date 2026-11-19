@@ -22,7 +22,7 @@ import { type VscodeEmbedInfo } from '@/api/sessions';
 import { consumeVscodeEmbed } from './vscodeEmbedPrefetch';
 import { ApiError } from '@/api/client';
 import { log } from '@/utils/log';
-import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
+import { useHostDisplayLabel, useHostRoute } from '@/hooks/useHostDisplayLabel';
 import { remoteHostTag } from '@/utils/host-display-label';
 
 /** iframe must emit onload within this after the URL is set. */
@@ -42,6 +42,7 @@ export function SessionCodeView({ sessionId, host, barRightSlot }: SessionCodeVi
   const [phase, setPhase] = useState<Phase>('ensuring');
   const remote = host && host !== '__local__' ? host : null;
   const hostName = useHostDisplayLabel(remote);
+  const hostVia = useHostRoute(remote);
   const [info, setInfo] = useState<VscodeEmbedInfo | null>(null);
   const [error, setError] = useState<{ message: string; hint?: string } | null>(null);
   const loadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -105,7 +106,7 @@ export function SessionCodeView({ sessionId, host, barRightSlot }: SessionCodeVi
         <div className="session-code-title">
           <span className="session-code-label">VS Code</span>
           {openLabel && <span className="session-code-target" title={info?.open.path}>{openLabel}</span>}
-          {remote && <span className="session-code-host">{remoteHostTag(remote, hostName)}</span>}
+          {remote && <span className="session-code-host">{remoteHostTag(remote, hostName, hostVia)}</span>}
         </div>
         <div className="session-code-actions">
           {info && phase === 'ready' && (

@@ -385,3 +385,52 @@ describe('buildHostStatus: a host away during its own daemon update', () => {
     expect(plain.warnings).toBeUndefined();
   });
 });
+
+describe('buildHostStatus: which route the host has, so a surface knows what only SSH can do', () => {
+  const net: HostDef = { hostname: 'studio.walnut-net.invalid', transport: 'net', label: 'Studio' };
+  const cloud: HostDef = { hostname: 'cloud', cloud_box: true };
+
+  it('an SSH host carries no route fields (older clients and SSH hosts read the same frame)', () => {
+    const s = buildHostStatus('devbox', devbox, state('connected'), undefined, AT);
+    expect(s).not.toHaveProperty('ssh');
+    expect(s).not.toHaveProperty('via');
+  });
+
+  it('a host-network machine and the cloud box say they have no SSH route, and which one they have', () => {
+    expect(buildHostStatus('studio', net, state('connected'), undefined, AT)).toMatchObject({ ssh: false, via: 'host-network' });
+    expect(buildHostStatus('__cloudbox__', cloud, state('idle'), undefined, AT)).toMatchObject({ ssh: false, via: 'cloud' });
+  });
+
+  it('says so in every phase, the ephemeral "off" frame included', () => {
+    for (const phase of ['idle', 'tunnel', 'failed', 'reconnecting'] as const) {
+      expect(buildHostStatus('studio', net, state(phase), undefined, AT), phase).toMatchObject({ ssh: false, via: 'host-network' });
+    }
+    expect(buildHostStatus('studio', net, state('idle'), undefined, AT, undefined, { off: true })).toMatchObject({ ssh: false, via: 'host-network' });
+  });
+});
+
+describe('buildHostStatus: the name the machine calls itself', () => {
+  it('carries the daemon\'s own host name when the link said one, and nothing otherwise', () => {
+    const named = buildHostStatus('devbox', devbox, state('connected', { machineName: 'devbox-7.lan.example.test' }), undefined, AT);
+    expect(named.machineName).toBe('devbox-7.lan.example.test');
+    expect('machineName' in buildHostStatus('devbox', devbox, state('connected'), undefined, AT)).toBe(false);
+  });
+});
+
+describe('buildHostStatus: how the host\'s daemon gets a newer build, in the one wording', () => {
+  it('says it per connection kind, as DaemonConnection\'s refusals do', async () => {
+    const { daemonUpdateHowSentence } = await import('../../../src/providers/daemon-update-paths.js');
+    const { hostDaemonLinkKind } = await import('../../../src/core/hosts/host-status.js');
+    const net: HostDef = { hostname: 'studio.walnut-net.invalid', label: 'Studio', transport: 'net' };
+    const cloud: HostDef = { hostname: 'box.example.test', label: 'Cloud', cloud_box: true };
+    const how = (key: string, def: HostDef) => buildHostStatus(key, def, state('connected'), undefined, AT).daemonUpdateHow;
+    expect(how('devbox', devbox)).toBe('Walnut updates the daemon on Big dev box by itself the next time it connects there over SSH');
+    expect(how('studio', net)).toMatch(/^Walnut updates the daemon on Studio by itself after a deploy .*"Update the daemon" in Settings › Hosts/);
+    expect(how('__cloudbox__', cloud)).toMatch(/^Deploying the cloud companion updates the daemon there/);
+    expect(how('studio', net)).toBe(daemonUpdateHowSentence(hostDaemonLinkKind('studio', net), 'Studio'));
+    // Its automatic update turned off on this Mac: the request is the way, and the sentence says so.
+    expect(daemonUpdateHowSentence('net', 'Studio', { env: { WALNUT_NET_DAEMON_UPDATE: '0' } })).toMatch(/turned off on this Mac \(WALNUT_NET_DAEMON_UPDATE=0\): use "Update the daemon"/);
+    // Never the old claim that it updates when this Mac reconnects.
+    for (const kind of ['local', 'ssh', 'net', 'cloud-tunnel', 'direct-url'] as const) expect(daemonUpdateHowSentence(kind, 'X')).not.toMatch(/reconnects to it/);
+  });
+});

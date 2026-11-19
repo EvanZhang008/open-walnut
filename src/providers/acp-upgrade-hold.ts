@@ -17,6 +17,42 @@ import { WALNUT_HOME } from '../constants.js'
 
 export const ACP_UPGRADE_HOLD_MAX_MS = 6 * 60 * 60_000
 
+/** The file in the daemon's dir that names its open ACP turns (acp-daemon.ts writeBusyFile). */
+export const ACP_BUSY_FILE = 'acp-busy.json'
+/** A busy file not refreshed for this long is a daemon that died: not busy, so it never wedges an update. */
+export const ACP_BUSY_STALE_MS = 2 * 60_000
+
+/**
+ * The open ACP turns an acp-busy.json text names (fresh and non-empty), else []. The one reader
+ * of that file for every update path: this Mac's (local-daemon.ts), an SSH host's and a host
+ * network machine's over its link (daemon-connection.ts, daemon-net-update.ts).
+ */
+export function openAcpTurns(raw: string | null | undefined, now: number = Date.now()): string[] {
+  if (!raw || !raw.trim()) return []
+  try {
+    const busy = JSON.parse(raw) as { busySids?: unknown; updatedAt?: unknown }
+    if (typeof busy.updatedAt !== 'number' || now - busy.updatedAt >= ACP_BUSY_STALE_MS) return []
+    return Array.isArray(busy.busySids) ? busy.busySids.filter((s): s is string => typeof s === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Do the open ACP turns of `host` (its acp-busy.json text, `raw`) hold its update now: `busySids`
+ * open there, `holds` while their wait is under ACP_UPGRADE_HOLD_MAX_MS (the per-host clock below).
+ */
+export function acpTurnsHold(host: string, raw: string | null | undefined, now: number = Date.now()): { busySids: string[]; holds: boolean; heldMs: number } {
+  const busySids = openAcpTurns(raw, now)
+  return { busySids, ...acpUpgradeHolds(host, busySids.length > 0, now) }
+}
+
+/** Why open ACP turns hold an update, in words, or null for none. */
+export function acpTurnsReason(busySids: readonly string[]): string | null {
+  const n = busySids.length
+  return n > 0 ? `${n} ACP turn${n === 1 ? '' : 's'} open on the host would end with the daemon` : null
+}
+
 /** When a host's deferral began, and when it was last seen deferring. */
 type Store = Record<string, { since: number; seen: number }>
 

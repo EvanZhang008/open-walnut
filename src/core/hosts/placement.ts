@@ -41,6 +41,7 @@ import { log } from '../../logging/index.js';
 import type { HostLoad } from '../../providers/host-facts-core.js';
 import { isWorkFile, pathsOnHost, type PathsOnHost } from './named-paths.js';
 import { ownLoadPerCpu } from './own-load.js';
+import { CLOUD_BOX_HOST_ALIAS } from './cloud-box-host.js';
 
 export const LOCAL = '__local__';
 /** A host's numbers are asked again after this (a sample older than 15 s is dropped). */
@@ -112,7 +113,17 @@ export interface HostLoadView {
   score: number;
   at?: string;
   error?: string;
+  /**
+   * Only on the cloud box (hostLoads with `cloudBox: true`): what it is, for whoever picks a
+   * host from this list (the Move to host menu, an agent before task_move), and `autoPick:
+   * false`, as no automatic pick ever takes it (it is small and costs money while it works).
+   */
+  note?: string;
+  autoPick?: false;
 }
+
+/** What the cloud box row of the Move to host list says beside its name. */
+export const CLOUD_BOX_MOVE_NOTE = 'The cloud box: a small machine that costs money while it works; pick it when asked.';
 
 /** A host's live session processes (sessions/live-sessions.ts): all of them, the ones that must stay
  *  (in a turn, own work running, at a prompt, the user in it; plus the starts holding a slot), and its limit. */
@@ -309,13 +320,18 @@ export function hostSlots(
   return Math.min(MAX_HOST_SLOTS, Math.max(2, Math.min(byCpu, byMem)));
 }
 
-/** Every host work may run on (this Mac and each enabled host), with its load judged. */
-export async function hostLoads(opts: { hosts?: string[] } = {}): Promise<HostLoadView[]> {
+/**
+ * Every host work may run on (this Mac and each enabled host), with its load judged.
+ * `cloudBox`: the cloud box too. The Move to host menu asks for it (a task moves there
+ * like to any host: its link carries the session and the files); the automatic picks and
+ * the slot counts leave it out, as the box is small and costs money while it works.
+ */
+export async function hostLoads(opts: { hosts?: string[]; cloudBox?: boolean } = {}): Promise<HostLoadView[]> {
   const { getConfig } = await import('../config-manager.js');
   const config = await getConfig();
   // Each machine once (hosts/joined-twins.ts): the Move to host menu reads this list.
   const { pickableHosts } = await import('./joined-twins.js');
-  const entries = pickableHosts(config.hosts ?? {}, config.net).filter(([, h]) => !h.cloud_box);
+  const entries = pickableHosts(config.hosts ?? {}, config.net).filter(([, h]) => opts.cloudBox === true || !h.cloud_box);
   const names = opts.hosts ?? [LOCAL, ...entries.map(([k]) => k)];
   const { getActiveSessionsByHost, activeSessionLimitFor } = await import('../session-tracker.js');
   // The starts holding slots, read before the sessions: one whose record turns running in between
@@ -345,6 +361,7 @@ export async function hostLoads(opts: { hosts?: string[] } = {}): Promise<HostLo
     // The weight: the room score scaled by how much the user prefers this host.
     view.weight = placementWeight(host, config);
     view.score = Math.round(view.score * (view.weight / DEFAULT_WEIGHT) * 1000) / 1000;
+    if (host === CLOUD_BOX_HOST_ALIAS) { view.note = CLOUD_BOX_MOVE_NOTE; view.autoPick = false; }
     return view;
   }));
 }

@@ -13,7 +13,7 @@
  *
  * The daemon runs `<shell> -c <command>` on a pty, what sshd runs for `ssh host CMD`:
  * the passwd shell, as sshd takes it (a daemon started from cron has SHELL=/bin/sh),
- * read with `getent passwd` (Linux) or `dscl` (macOS) once and kept, since bun's
+ * read by uid with `getent passwd` (Linux) or `id -P` (macOS) once and kept, since bun's
  * os.userInfo() gives the env's SHELL instead (2026-11-18: clouddev's terminal came up
  * in sh, not the user's zsh); an open waits for that first read. The server reads the
  * same entry with src/lib/account.ts, synchronously; a daemon may not block its loop on a
@@ -79,12 +79,14 @@ export interface PtyStreamDeps<L> {
   env: Record<string, string | undefined>
   /**
    * Run a program and give its stdout, or null on any failure (execFile with a timeout).
-   * The passwd shell is read with it: `getent passwd <user>` on Linux, `dscl . -read
-   * /Users/<user> UserShell` on macOS. Without it, user().shell is all there is.
+   * The passwd shell is read with it, by uid: `getent passwd <uid>` on Linux, `id -P` on
+   * macOS. Without it, user().shell is all there is.
    */
   readCommand?: (file: string, args: string[], cb: (stdout: string | null) => void) => void
   /** process.platform: which of the two reads above. */
   platform?: string
+  /** This process's uid (process.getuid), whose passwd entry names the shell. */
+  uid?: () => number | null
   /** Whether `path` is an executable file (fs.accessSync X_OK and a file). Without it, any path counts. */
   executable?: (path: string) => boolean
   /** The pty's foreground process group (`ps -o tpgid= -p <pid>`), or null; `cb` once. Without it, the pty's own process is stopped. */
@@ -126,22 +128,35 @@ export function createPtyStreams<L>(deps: PtyStreamDeps<L>) {
     passwdShell = sh
     for (const w of shellWaiters.splice(0)) w()
   }
+  /**
+   * The entry is found by the process's uid, never by $USER (under bun, the user name os.userInfo() gives
+   * is $USER too, which a service or a test may set to anyone): `id -P` on macOS (Directory
+   * Services), `getent passwd <uid>` elsewhere (NSS: LDAP users too), by path first, as
+   * src/lib/account.ts reads it for the server. The shell is a line's last field in both forms.
+   */
   function readPasswdShell(): void {
     if (passwdShell !== null || !deps.readCommand) return
-    let name: string | undefined
-    try { name = deps.user()?.name || deps.env.USER } catch { name = deps.env.USER }
-    if (!name || !/^[A-Za-z0-9._-]{1,64}$/.test(name)) return shellRead('')
-    const mac = deps.platform === 'darwin'
+    let uid: number | null = null
+    try { uid = deps.uid?.() ?? null } catch { uid = null }
+    if (uid === null || !Number.isInteger(uid) || uid < 0) return shellRead('')
     const t = setTimeout(() => shellRead(''), 3_000)
     ;(t as { unref?: () => void }).unref?.()
-    try {
-      deps.readCommand(mac ? 'dscl' : 'getent', mac ? ['.', '-read', `/Users/${name}`, 'UserShell'] : ['passwd', name], (out) => {
-        clearTimeout(t)
-        const text = String(out ?? '')
-        const sh = mac ? (/UserShell:\s*(\S+)/.exec(text)?.[1] ?? '') : (text.split('\n')[0]?.split(':')[6]?.trim() ?? '')
-        shellRead(sh.startsWith('/') ? sh : '')
-      })
-    } catch { clearTimeout(t); shellRead('') }
+    const runs: Array<[string, string[]]> = deps.platform === 'darwin'
+      ? [['/usr/bin/id', ['-P']]]
+      : [['/usr/bin/getent', ['passwd', String(uid)]], ['/bin/getent', ['passwd', String(uid)]], ['getent', ['passwd', String(uid)]]]
+    const next = (i: number): void => {
+      if (i >= runs.length) { clearTimeout(t); return shellRead('') }
+      try {
+        deps.readCommand!(runs[i]![0], runs[i]![1], (out) => {
+          if (out === null) return next(i + 1)
+          clearTimeout(t)
+          const line = String(out).split('\n').map((l) => l.trim().split(':')).find((f) => f.length >= 7 && f[2] === String(uid))
+          const sh = line ? line[line.length - 1]!.trim() : ''
+          shellRead(sh.startsWith('/') ? sh : '')
+        })
+      } catch { next(i + 1) }
+    }
+    next(0)
   }
   readPasswdShell()
   function whenShellKnown(go: () => void): void {

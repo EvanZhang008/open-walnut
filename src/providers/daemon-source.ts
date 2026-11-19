@@ -4783,6 +4783,8 @@ function dispatchCommand(ws, id, cmd) {
       startedAt: DAEMON_START_TS,
       uptimeSec: Math.floor((Date.now() - DAEMON_START_TS) / 1000),
       runtime: DAEMON_RUNTIME,
+      // What this machine calls itself (session-service-preview.ts). Twin of daemon-standalone.ts.
+      hostname: os.hostname(),
       ...(TASK_DIR_ROOT ? { taskDirRoot: TASK_DIR_ROOT } : {}),
       // Which Walnut this daemon is: its dir, and a test server's key when it is that
       // server's isolated daemon (the server's remote-isolation.ts checks both).
@@ -5891,6 +5893,7 @@ var ptyStreams = (__CREATE_PTY_STREAMS__)({
   // bun's os.userInfo().shell is the env's SHELL: the core reads the passwd shell with this.
   readCommand: function (file, args, cb) { execFile(file, args, { timeout: 3000 }, function (err, stdout) { cb(err ? null : String(stdout)); }); },
   platform: process.platform,
+  uid: function () { return typeof process.getuid === 'function' ? process.getuid() : null; },
   executable: function (p) { try { fs.accessSync(p, fs.constants.X_OK); return fs.statSync(p).isFile(); } catch (e) { return false; } },
   foregroundGroup: function (pid, cb) { psGroupField(pid, 'tpgid', cb); },
   ownGroup: function (cb) { psGroupField(process.pid, 'pgid', cb); },
@@ -5903,11 +5906,24 @@ function psGroupField(pid, field, cb) {
     cb(Number.isInteger(n) ? n : null);
   });
 }
+// The cloud companion's tunnel daemons live here (cloud-tunnel-daemon.ts tunnelDaemonDir).
+var TUNNEL_DAEMON_BASE = process.env.WALNUT_TUNNEL_DAEMON_DIR || path.join(process.env.HOME || HOME_DIR, '.local', 'state', 'open-walnut', 'primary-daemon');
+// The port this daemon listens on, once it does.
+var listeningPort = null;
 var streamRelay = (__CREATE_STREAM_RELAY__)({
   send: function (ws, ev, data) { sendEvent(ws, ev, data); },
   log: function (level, msg, data) { logMsg(level, msg, data); },
   // Port streams (port-stream-v1): the relay picks the loopback address.
   connect: function (port, host) { return net.connect({ port: port, host: host, allowHalfOpen: true }); },
+  // Never a daemon socket on this machine: ours, or a sibling's (the production dirs, the
+  // cloud companion's tunnel daemon). Twin of daemon-standalone.ts.
+  daemonPorts: {
+    own: function () { return listeningPort; },
+    dirs: Array.from(new Set([DAEMON_DIR, PROD_DAEMON_DIR, FALLBACK_DAEMON_DIR, TUNNEL_DAEMON_BASE])),
+    deviceBases: [TUNNEL_DAEMON_BASE],
+    read: function (file) { try { return fs.readFileSync(file, 'utf8').slice(0, 16); } catch (e) { return null; } },
+    list: function (dir) { try { return fs.readdirSync(dir); } catch (e) { return []; } },
+  },
   ptys: ptyStreams,
 });
 
@@ -17144,6 +17160,7 @@ async function startDaemon() {
   // Listen on random port (localhost only)
   httpServer.listen(0, '127.0.0.1', () => {
     const port = httpServer.address().port;
+    listeningPort = port;
     // The lock banner is what a second starter reads, so it must carry the live
     // ws port before any client can be told about it.
     if (daemonInstanceLock) daemonInstanceLock.publish(port);

@@ -12,6 +12,7 @@ import type { HostServerPhase } from '../host-server/manager.js'
 import { capabilityWords, hostCapabilities, type HostCapabilities } from './capabilities.js'
 import { bootStartWords } from '../../providers/remote-boot-start.js'
 import { hostFlapOf } from './host-problem.js'
+import { CLOUD_BOX_HOST_SERVER_NOTE } from './cloud-box-host.js'
 
 export type FleetConnectionKind = 'local' | 'ssh-tunnel' | 'host-network' | 'bridge'
 
@@ -71,7 +72,10 @@ export interface FleetHost {
   sessions: { running: number | null; source?: 'host' | 'records' | null; why?: string | null; at?: number | null }
   /** Model spend of the sessions that ran there, last 30 days, at public list prices (not a bill). */
   spend: { last30dUsd: number; from: string; basis: 'list-price' } | null
-  /** The Walnut server the host runs for this Mac (replica or plain host server); null for the Mac and the cloud box. */
+  /**
+   * The Walnut server the host runs for this Mac (replica or plain host server); null for the
+   * Mac and the cloud box, whose line says why (CLOUD_BOX_HOST_SERVER_NOTE).
+   */
   server: { enabled: boolean; program: string | null; phase: HostServerPhase; phaseLabel: string; build: string | null; phone: string | null; message: string | null } | null
   /**
    * `startup` is what the daemon reports ('service' or 'on-demand'). `bootStart` is the
@@ -319,6 +323,7 @@ export function fleetHostLine(h: FleetHost): string {
   if (h.sessions.running !== null) parts.push(`${h.sessions.running} sessions open${h.sessions.source === 'host' && h.now?.stale ? ' (last reading)' : h.sessions.source === 'records' ? " (Walnut's records)" : ''}`)
   if (h.spend) parts.push(`$${Math.round(h.spend.last30dUsd)} in 30 days (list price)`)
   if (h.server) parts.push(h.server.enabled ? `Walnut server ${h.server.phaseLabel}` : 'no Walnut server')
+  else if (h.connection.kind === 'bridge') parts.push(CLOUD_BOX_HOST_SERVER_NOTE)
   if (h.placement.weight === 0) parts.push('placement never picks it (weight 0)')
   else if (h.placement.busy) parts.push('too busy for new sessions: ' + h.placement.reasons.join(', '))
   if (!h.placement.longRunning.ok && h.placement.longRunning.reasons.length) parts.push('not for a job that must keep running: ' + h.placement.longRunning.reasons.join(' '))

@@ -285,6 +285,7 @@ export function fleetEntries(config: Config, opts: { withTwins?: boolean } = {})
 }
 
 async function serverOf(host: string, def: HostDef | null): Promise<FleetInputs['server']> {
+  // The cloud box is a Walnut server itself: none of this Mac's runs there (its line says so).
   if (!def || def.cloud_box) return null
   const { getHostServerManager } = await import('../host-server/index.js')
   const view = getHostServerManager()?.view(host)

@@ -5,9 +5,9 @@
  * engine picked in Settings"), both of which can only be wrong silently:
  *   - resolveDefaultEngine decides what a launch that named no engine runs on.
  *     A typo in config.yaml must degrade to the shipped default, never throw on
- *     the launch path, and an ACP engine must not be inherited by a launch aimed
- *     at a remote host (the ACP worker is local-only — handleAcpStart THROWS for
- *     a non-local host, so inheriting one there would fail the whole launch).
+ *     the launch path, and on a remote host an inherited ACP engine runs there only
+ *     when that host said it has it (no answer yet, as after a restart, is
+ *     Claude Code); a local-only one always gives way.
  *     An engine that is not INSTALLED degrades the same way: the client's
  *     cold-start catalog presets `installed: true`, so a user can pick an engine
  *     this machine does not have, and every Walnut-initiated session afterwards
@@ -20,6 +20,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import type { Config } from '../../src/core/types.js';
 import {
   _resetDefaultEngineAvailabilityForTesting,
+  hostStartDefaultEngine,
   refreshDefaultEngineAvailability,
   resolveDefaultEngine,
 } from '../../src/core/agents/default-engine.js';
@@ -27,6 +28,7 @@ import {
   _resetEngineProbeCache,
   _seedEngineProbeCache,
 } from '../../src/core/agents/engine-probe.js';
+import { _resetHostEngineCache, _seedHostEngineCache } from '../../src/core/agents/host-engines.js';
 import {
   ASK_PROFILE_BANNER_CLOSE,
   ASK_PROFILE_BANNER_OPEN,
@@ -44,6 +46,7 @@ function config(engine?: unknown): Config {
 }
 
 beforeEach(() => {
+  _resetHostEngineCache();
   _resetEngineProbeCache();
   _resetDefaultEngineAvailabilityForTesting();
 });
@@ -80,9 +83,18 @@ describe('resolveDefaultEngine', () => {
     expect(resolveDefaultEngine(config(['codex']))).toBe('claude');
   });
 
-  it('does not inherit an ACP engine onto a remote host, and leaves a local launch alone', () => {
-    expect(resolveDefaultEngine(config('codex'), { host: 'devbox' })).toBe('claude');
-    expect(resolveDefaultEngine(config('gemini'), { host: 'devbox' })).toBe('claude');
+  it('inherits an ACP engine onto a remote host only when that host said it runs it, and leaves a local launch alone', () => {
+    // A host that said so keeps the engine, whatever the connection: an SSH host, a
+    // host-network machine or the cloud box (each runs ACP engines through its daemon).
+    for (const host of ['devbox', 'net-mac', '__cloudbox__']) {
+      _seedHostEngineCache(host, { codex: { installed: true, version: '1', reason: null }, gemini: { installed: true, version: '1', reason: null } });
+      expect(resolveDefaultEngine(config('codex'), { host }), host).toBe('codex');
+      expect(resolveDefaultEngine(config('gemini'), { host }), host).toBe('gemini');
+    }
+    // Only an engine whose adapter command is this machine's own config stays here
+    // (engineHostBlocker, the same rule a named pick meets), even with a positive answer.
+    _seedHostEngineCache('devbox', { custom: { installed: true, version: '1', reason: null } });
+    expect(resolveDefaultEngine(config('custom'), { host: 'devbox' })).toBe('claude');
     // The absence of a host, in each of the shapes callers actually pass —
     // including '__local__', the launcher's alias for this machine, which is NOT
     // a remote host and must not cost the user their engine.
@@ -91,9 +103,49 @@ describe('resolveDefaultEngine', () => {
     expect(resolveDefaultEngine(config('codex'), { host: '' })).toBe('codex');
     expect(resolveDefaultEngine(config('codex'), { host: '__local__' })).toBe('codex');
     expect(resolveDefaultEngine(config('codex'), {})).toBe('codex');
-    // The rule is about the ACP runtime, not about "not claude": a remote host
-    // keeps the default engine, which is itself remote-capable.
     expect(resolveDefaultEngine(config('claude'), { host: 'devbox' })).toBe('claude');
+  });
+
+  it('after a restart (no host has answered yet) an inherited ACP engine on a remote host is Claude Code', () => {
+    // The host-engine cache is empty after every restart: an automated start (a routine,
+    // subagent_run, a trigger, an org start) must not start an engine the host may lack.
+    for (const host of ['devbox', 'net-mac', '__cloudbox__']) {
+      expect(resolveDefaultEngine(config('codex'), { host }), host).toBe('claude');
+    }
+    // This machine's own positive verdict says nothing about another host's.
+    _seedEngineProbeCache('codex', { installed: true, version: 'codex 0.9.0', reason: null });
+    expect(resolveDefaultEngine(config('codex'), { host: 'devbox' })).toBe('claude');
+  });
+
+  it('on a remote host, reads that host\'s own answer: only a positive one keeps the engine', () => {
+    // This machine's verdict says nothing about the host's.
+    _seedEngineProbeCache('codex', { installed: false, version: null, reason: 'Codex CLI not found' });
+    _seedHostEngineCache('devbox', { codex: { installed: false, version: null, reason: 'codex is not on PATH' } });
+    _seedHostEngineCache('net-mac', { codex: { installed: true, version: '1', reason: null } });
+    _seedHostEngineCache('slow-box', { codex: { installed: false, version: null, reason: 'still checking availability' } });
+    // A host that answered without naming the engine said nothing about it either.
+    _seedHostEngineCache('quiet-box', { claude: { installed: true, version: null, reason: null } });
+    expect(resolveDefaultEngine(config('codex'), { host: 'devbox' })).toBe('claude');
+    expect(resolveDefaultEngine(config('codex'), { host: 'net-mac' })).toBe('codex');
+    expect(resolveDefaultEngine(config('codex'), { host: 'slow-box' })).toBe('claude');
+    expect(resolveDefaultEngine(config('codex'), { host: 'quiet-box' })).toBe('claude');
+  });
+
+  it('the start a host makes itself (hostStartDefaultEngine) is the same whatever the host answered', () => {
+    const answers = [
+      undefined,
+      { codex: { installed: true, version: '1', reason: null } },
+      { codex: { installed: false, version: null, reason: 'codex is not on PATH' } },
+    ];
+    for (const answer of answers) {
+      _resetHostEngineCache();
+      if (answer) _seedHostEngineCache('devbox', answer);
+      expect(hostStartDefaultEngine(config('codex'), 'devbox'), JSON.stringify(answer)).toBe('claude');
+      expect(hostStartDefaultEngine(config('claude'), 'devbox')).toBe('claude');
+      expect(hostStartDefaultEngine(config(), 'devbox')).toBe('claude');
+    }
+    // A local start keeps the local rule.
+    expect(hostStartDefaultEngine(config('codex'), '__local__')).toBe('codex');
   });
 
   // ── Availability: a known engine id is not a usable engine ──

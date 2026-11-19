@@ -129,10 +129,21 @@ export interface HostStatus {
   /** Informational lines for Settings (never a banner row). */
   warnings?: string[];
   daemonDir?: { path: string; display: string; fallback: boolean; reason?: string; freeMb?: number };
-  /** false: the host cannot open a terminal now (its daemon has no terminal streams yet), so its sessions show no Terminal tab. */
+  /** false: the host cannot open a terminal now (its daemon has no terminal streams yet); its sessions' Terminal tab says why. */
   terminal?: false;
   /** Why `terminal` is false, in a sentence. */
   terminalWhy?: string;
+  /** How this host's daemon gets a newer build, in the server's one sentence; absent on an older server. */
+  daemonUpdateHow?: string;
+  /**
+   * false: this machine has no SSH route to the host (a host-network machine, the cloud box),
+   * so what only SSH can do (VS Code desktop's Remote-SSH) is not offered there; `via` names
+   * the route it has. Absent = an SSH host, and on an older server.
+   */
+  ssh?: false;
+  via?: 'host-network' | 'cloud';
+  /** The name the host's machine calls itself (its daemon's hello); absent on an older server. */
+  machineName?: string;
   /** Tombstone on the host:status event: the host left the config (or was disabled). */
   removed?: true;
   /** Server clock (ms epoch) when this snapshot was built: the ordering key. */
@@ -205,4 +216,20 @@ export async function checkHostReadiness(host: string, opts?: { background?: boo
     { quietStatuses: [404, 409], ...(opts?.background ? { background: true } : {}) },
   );
   return res.status;
+}
+
+/** The answer of a daemon update ask (src/core/hosts/host-daemon-update.ts). */
+export interface HostDaemonUpdateAnswer { host: string; phase?: string; message?: string }
+
+/**
+ * Update the host's Walnut daemon to this server's build now (POST
+ * /api/v1/hosts/:host/daemon-update). Only a host-network machine is updated this way; for
+ * any other kind the server answers 409 with the way it is updated instead. It answers once
+ * the update is decided or started (the upload and handover take minutes); the host's
+ * status frame says how it went.
+ */
+export function requestHostDaemonUpdate(host: string): Promise<HostDaemonUpdateAnswer> {
+  return apiPost<HostDaemonUpdateAnswer>(`/api/v1/hosts/${encodeURIComponent(host)}/daemon-update`, undefined, {
+    timeoutMs: 30_000, quietStatuses: [403, 404, 409, 503],
+  });
 }

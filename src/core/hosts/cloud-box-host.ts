@@ -30,6 +30,14 @@ export const CLOUD_BOX_HOST_ALIAS = '__cloudbox__'
 export const CLOUD_BOX_HOST_LABEL = 'Cloud'
 
 /**
+ * Why the cloud box runs no host server of this Mac (core/host-server/), on purpose: the
+ * companion on it is itself a Walnut server, a replica of this Mac's. Every other feature
+ * works there as on any host (a connection is an abstraction); this is the one exception,
+ * said where it is refused (routes/host-servers.ts) and in the fleet's line for it.
+ */
+export const CLOUD_BOX_HOST_SERVER_NOTE = 'a Walnut server itself (the cloud companion), so no host server of this Mac runs there'
+
+/**
  * Default caps for the box (session_limits.__cloudbox__ overrides): a small
  * instance that also runs the companion, so the cloud-exec numbers
  * (CLOUD_EXEC_DEFAULT_MAX_SESSIONS), not a dev box's.

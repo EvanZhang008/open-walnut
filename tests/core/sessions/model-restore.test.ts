@@ -10,7 +10,10 @@ import { createMockConstants } from '../../helpers/mock-constants.js';
 
 vi.mock('../../../src/constants.js', () => createMockConstants('model-restore'));
 vi.mock('../../../src/utils/process.js', () => ({ isProcessAlive: () => false, isProcessAliveAsync: async () => false }));
-vi.mock('../../../src/core/agents/host-engines.js', () => ({ hostEngineAvailability: async () => null }));
+vi.mock('../../../src/core/agents/host-engines.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/core/agents/host-engines.js')>()),
+  hostEngineAvailability: async () => null,
+}));
 vi.mock('../../../src/core/sessions/task-start.js', () => ({
   startSessionForTask: async () => { throw new Error('a model change must never start a session'); },
 }));

@@ -16,7 +16,7 @@ import { DEFAULT_SESSION_MODE, SESSION_MODE_LABELS, type SessionEngine, type Ses
 import { fetchConfig } from '@/api/config';
 import { useEvent } from '@/hooks/useWebSocket';
 import type { ProjectLaunchDefaults } from '@/hooks/useProjectRegistry';
-import { engineEntry, isRemoteHost, normalizeEngine, resolveEngine, resolveEngineForHost, type EngineCatalog, type LaunchEngine } from './engines';
+import { DEFAULT_ENGINE, engineEntry, hostEngineLockReason, isRemoteHost, normalizeEngine, resolveEngine, type EngineCatalog, type HostEngineAvailability, type LaunchEngine } from './engines';
 
 /** The server's sources plus the draft's folder memory, and 'engine': a model nobody set (there
  *  is no global model setting, so the engine's own default). */
@@ -106,13 +106,18 @@ export interface DraftLaunchChoice {
 
 /**
  * A default engine runs where the launch goes: the server's rule for an engine nobody named
- * (agents/default-engine.ts resolveDefaultEngine) gives one that is not installed, or any ACP
- * engine on a remote host (stricter than a named pick's local-only rule), way to Claude Code.
+ * (agents/default-engine.ts resolveDefaultEngine): on this machine, an engine that is not
+ * installed gives way to Claude Code (the rule a named pick meets, hostEngineLockReason); on
+ * another host an inherited ACP engine runs only when that host's answer says it is installed
+ * there (agents/host-engines.ts hostSaysInstalled). No answer yet is Claude Code, as before.
  */
-export function defaultEngineRuns(engine: SessionEngine, host: string | null | undefined, catalog: EngineCatalog): boolean {
+export function defaultEngineRuns(
+  engine: SessionEngine, host: string | null | undefined, catalog: EngineCatalog, hostAvailability?: HostEngineAvailability | null,
+): boolean {
+  if (resolveEngine(engine) === DEFAULT_ENGINE) return true;
   const entry = engineEntry(catalog, engine);
-  if (isRemoteHost(host) && entry.runtimeKind === 'acp') return false;
-  return resolveEngineForHost(engine, host, catalog) === engine && entry.availability.installed !== false;
+  if (hostEngineLockReason(entry, host, hostAvailability) !== null) return false;
+  return !isRemoteHost(host) || entry.runtimeKind !== 'acp' || hostAvailability?.[entry.id]?.installed === true;
 }
 
 /**

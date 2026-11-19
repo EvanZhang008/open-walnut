@@ -2494,7 +2494,10 @@ directory on that host.
   not_supported_cloud` on the companion.
 - `GET /api/v1/hosts/load` → `200 { hosts: [{ host, label, known, cpus, load1,
   loadPerCpu, cpuBusy, memAvailShare, diskFreeBytes, running, runningLimit,
-  busy, reasons, score, weight }], caps }`. `weight` is config `placement_weights`
+  busy, reasons, score, weight, note?, autoPick? }], caps }`. The list has every host,
+  the cloud box too; only its row carries `note` (what it is: a small machine that costs
+  money while it works) and `autoPick: false` (no automatic pick takes it; move a task
+  there when asked; additive, 2026-11). `weight` is config `placement_weights`
   (keys `local` or a host alias; 100 prefer, 50 normal, 25 less often, 0 never, as
   `hosts[x].place: false`): it scales `score`, so a preferred host takes overflow first. A first `POST /tasks/:id/start` that names no
   host and no cwd keeps the host it would use unless that host is over a cap and

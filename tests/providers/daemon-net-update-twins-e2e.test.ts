@@ -24,6 +24,8 @@ import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { createNetUpdateIo } from '../../src/providers/daemon-net-update-io.js'
 import { updateRemoteDaemonService } from '../../src/providers/daemon-service-update.js'
+import { acpTurnsHoldOverLink } from '../../src/providers/daemon-net-update.js'
+import { setAcpUpgradeHoldFileForTest } from '../../src/providers/acp-upgrade-hold.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { testBun } from '../helpers/bun-runtime.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
@@ -161,4 +163,29 @@ describe.skipIf(TWINS.length === 0)('host network update over the daemon link', 
     expect(fs.readFileSync(latestMarker, 'utf8').trim()).toMatch(STAGING)
     for (const d of made) expect(fs.existsSync(d)).toBe(false)
   }, 120_000)
+
+  // The updater's ACP-turn hold (acpTurnsHoldOverLink): the dir the daemon's hello names is where
+  // its ACP workers keep acp-busy.json, and fs.read over the link reads it there.
+  it.each(TWINS)('$name: open ACP turns in its hello dir hold the update over the link, a stale file does not', async (twin) => {
+    const dir = path.join(root, `acp-${twin.name.replace(/\W+/g, '-')}`)
+    await boot(twin, dir)
+    const hello = await rpc({ cmd: 'hello' })
+    expect(hello.dir).toBe(path.join(dir, 'daemon'))
+    const holds = path.join(dir, 'holds.json')
+    setAcpUpgradeHoldFileForTest(holds)
+    try {
+      const link = {
+        host: 'joined-box', connected: true, daemonVersion: null, daemonStartup: 'service', serviceExecutable: null,
+        daemonDir: String(hello.dir), hasCapability: () => true,
+        send: (cmd: string, params: Record<string, unknown> = {}, timeoutMs?: number) => rpc({ cmd, ...params }, timeoutMs),
+      }
+      const busy = path.join(dir, 'daemon', 'acp-busy.json')
+      fs.writeFileSync(busy, JSON.stringify({ busySids: ['codex-turn-1'], updatedAt: Date.now() }))
+      expect(await acpTurnsHoldOverLink(link)).toBe('1 ACP turn open on the host would end with the daemon')
+      fs.writeFileSync(busy, JSON.stringify({ busySids: ['codex-turn-1'], updatedAt: Date.now() - 5 * 60_000 }))
+      expect(await acpTurnsHoldOverLink(link)).toBeNull()
+    } finally {
+      setAcpUpgradeHoldFileForTest(null)
+    }
+  }, 60_000)
 })

@@ -5,7 +5,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 const hostStore = vi.hoisted(() => ({
-  hosts: [] as Array<{ host: string; hostname: string }>,
+  hosts: [] as Array<{ host: string; hostname: string; machineName?: string }>,
   hydrateHostStatus: vi.fn(async () => {}),
 }))
 vi.mock('@/hooks/useHostStatus', () => ({
@@ -52,6 +52,16 @@ describe('classifyServiceHref', () => {
   it('any configured host from the shared host store counts', () => {
     hostStore.hosts = [{ host: 'builder', hostname: 'build-box.corp.example.test' }]
     expect(classifyServiceHref('http://build-box.corp.example.test:9000/', { consoleOrigin: CONSOLE })).toBe('http://build-box.corp.example.test:9000/')
+    hostStore.hosts = []
+  })
+
+  it('the name a host\'s daemon says its machine has counts too; an older server that sends none changes nothing', () => {
+    // A host network row's hostname is a placeholder: the session prints the machine's real name.
+    hostStore.hosts = [{ host: 'joined-box', hostname: 'joined-box.walnut-net.invalid', machineName: 'joined-box-7.lan.example.test' }]
+    expect(classifyServiceHref('http://joined-box-7.lan.example.test:5173/', { consoleOrigin: CONSOLE })).toBe('http://joined-box-7.lan.example.test:5173/')
+    expect(classifyServiceHref('http://joined-box-7:5173/', { consoleOrigin: CONSOLE })).toBe('http://joined-box-7:5173/')
+    hostStore.hosts = [{ host: 'joined-box', hostname: 'joined-box.walnut-net.invalid' }]
+    expect(classifyServiceHref('http://joined-box-7.lan.example.test:5173/', { consoleOrigin: CONSOLE })).toBeNull()
     hostStore.hosts = []
   })
 

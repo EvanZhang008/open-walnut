@@ -37,6 +37,16 @@ function subscribe(l: () => void): () => void {
   return () => { listeners.delete(l); };
 }
 
+/**
+ * The host's answer now, without a hook (a launch reads it as it goes): null for this
+ * machine and while none has come; a stale one asks again in the background.
+ */
+export function getHostEngineAvailability(host: string | null | undefined): HostEngineAvailability | null {
+  if (!isRemoteHost(host)) return null;
+  pull(host!);
+  return answers.get(host!)?.engines ?? null;
+}
+
 /** The host's answer, or null for this machine and while none has come. */
 export function useHostEngineAvailability(host: string | null | undefined): HostEngineAvailability | null {
   const remote = isRemoteHost(host) ? host! : null;

@@ -8,6 +8,7 @@
 
 import type { DaemonConnectPhase, DaemonConnectState } from '../../providers/daemon-connection.js'
 import { ptyStreamMissingSentence } from './terminal-link.js'
+import { daemonUpdateHowSentence, type DaemonLinkKind } from '../../providers/daemon-update-paths.js'
 import type { RemoteRuntime } from '../../providers/remote-runtime.js'
 import { MIN_DAEMON_FREE_MB, daemonDirWarning, displayDaemonDir } from '../../providers/remote-daemon-dir.js'
 import type { Config } from '../types.js'
@@ -39,6 +40,22 @@ export type { HostWarmupState }
  * 'idle' ("Not connected") for the whole time the host before it is installing.
  */
 export type HostStatusPhase = DaemonConnectPhase | 'queued' | 'off'
+
+/** How this machine reaches a host with no SSH route: a host-network machine, or the cloud box through the companion. */
+export type HostRouteVia = 'host-network' | 'cloud'
+
+/** The `ssh` and `via` fields of a host's frame: none for an SSH host. */
+export function hostRouteFields(def: Pick<HostDef, 'cloud_box' | 'transport'>): { ssh?: false; via?: HostRouteVia } {
+  if (hostHasSshRoute(def)) return {}
+  return { ssh: false, via: def.cloud_box === true ? 'cloud' : 'host-network' }
+}
+
+/** The daemon link kind of a configured host, from its route alone (no connection needed). */
+export function hostDaemonLinkKind(hostKey: string, def: Pick<HostDef, 'cloud_box' | 'transport'>): DaemonLinkKind {
+  if (hostKey === '__local__') return 'local'
+  const via = hostRouteFields(def).via
+  return via === 'cloud' ? 'cloud-tunnel' : via === 'host-network' ? 'net' : 'ssh'
+}
 
 /** The subset of a config.hosts entry this module needs. */
 export interface HostDef {
@@ -125,6 +142,25 @@ export interface HostStatus {
    */
   terminal?: false
   terminalWhy?: string
+  /**
+   * How this host's daemon gets a newer build, in one sentence (daemon-update-paths.ts
+   * daemonUpdateHowSentence): the fix line under every "the daemon there needs an update"
+   * (terminalWhy, a servers answer's why). Absent on an older server (the client has a fallback).
+   */
+  daemonUpdateHow?: string
+  /**
+   * false: this machine has no SSH route to the host (hostHasSshRoute), so what only SSH
+   * can do (VS Code desktop's Remote-SSH) is not offered there; `via` names the route it
+   * has. Absent = an SSH host (and on an older server).
+   */
+  ssh?: false
+  via?: HostRouteVia
+  /**
+   * The name the host's machine calls itself (its daemon's hello), once a link has been up:
+   * a chat link naming it opens in the Web view (web/src/utils/service-link.ts). Absent on an
+   * older server, or before the host's daemon has said it.
+   */
+  machineName?: string
   /** When this snapshot was taken (ms epoch) — the client orders pushes by it. */
   at: number
 }
@@ -185,6 +221,7 @@ export function buildHostStatus(
     connectElapsedMs: state.connectElapsedMs,
     at: now,
     serverNow: now,
+    ...hostRouteFields(hostDef),
   }
   if (hostDef.user) status.user = hostDef.user
   // Waiting in the warmup's line, and the connection itself has nothing newer
@@ -231,6 +268,7 @@ export function buildHostStatus(
   if (state.connectedAt && state.connected) status.connectedAt = state.connectedAt
   if (state.drops?.length) status.drops = state.drops
   if (state.runtime) status.runtime = state.runtime
+  if (state.machineName) status.machineName = state.machineName
   if (state.daemonDir) {
     const d = state.daemonDir
     status.daemonDir = {
@@ -263,6 +301,7 @@ export function buildHostStatus(
   foldDaemonUpdate(status, state, label)
   const terminal = hostTerminalNow(hostDef, state, label)
   if (terminal !== true) { status.terminal = false; status.terminalWhy = terminal }
+  status.daemonUpdateHow = daemonUpdateHowSentence(hostDaemonLinkKind(hostKey, hostDef), label)
   // A readiness answer describes the daemon we are talking to now; while the
   // host is down the connect error is the thing to show.
   if (readiness && state.connected) {
@@ -334,7 +373,7 @@ function offHostStatus(hostKey: string, def: HostDef, now: number): HostStatus {
   return {
     host: hostKey, label: def.label ?? hostKey, hostname: def.hostname, ...(def.user ? { user: def.user } : {}),
     connected: false, phase: 'off', phaseLabel: OFF_PHASE_LABEL, steps: describeConnectSteps('idle'),
-    phaseElapsedMs: 0, connectElapsedMs: 0, at: now, serverNow: now,
+    phaseElapsedMs: 0, connectElapsedMs: 0, at: now, serverNow: now, ...hostRouteFields(def),
   }
 }
 

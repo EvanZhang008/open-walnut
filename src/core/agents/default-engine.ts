@@ -18,6 +18,8 @@ import { log } from '../../logging/index.js';
 import type { SessionEngine } from '../types.js';
 import { DEFAULT_ENGINE, isAcpEngine, isKnownEngine } from './engine-registry.js';
 import { ENGINE_PROBE_TTL_MS, probeEnginePresence } from './engine-probe.js';
+import { cachedHostEngineAvailability, hostEnginesAvailability, hostEnginesFresh, hostSaysInstalled, saysNotInstalled } from './host-engines.js';
+import { engineHostBlocker } from '../transfer/planner.js';
 
 /** Just the slice of config this reader needs (a whole `Config` satisfies it). */
 export interface DefaultEngineConfig {
@@ -138,16 +140,21 @@ export function _resetDefaultEngineAvailabilityForTesting(): void {
  * rather than throwing: this is read on the launch path, and a config typo must
  * not be able to fail every session start.
  *
- * `opts.host` applies the one rule that is not about config: the ACP worker is
- * only deployed locally (`localOnly` in GET /api/engines, the client's
- * `resolveEngineForHost`), so an ACP default is dropped for a launch aimed at a
- * remote host instead of spawning something that host cannot run. An engine the
- * CALLER named explicitly is not touched by this — only the inherited one.
+ * `opts.host` applies the same rule a named pick meets (transfer/planner.ts
+ * engineHostBlocker, the client's hostEngineLockReason): every ACP engine runs on
+ * another host through that host's daemon ('acp-host-v1'), whatever the connection
+ * kind; only an engine whose adapter command is this machine's own config (`localOnly`
+ * in GET /api/engines) gives way to the default there. An engine the CALLER named
+ * explicitly is not touched by this — only the inherited one.
  *
  * An engine that is not INSTALLED degrades the same way (see the availability
  * block above): a default nothing can start would otherwise break every
  * Walnut-initiated session, and it degrades loudly (a warn naming the configured
- * engine, what ran instead, and the probe's reason).
+ * engine, what ran instead, and the probe's reason). On another host "installed" is
+ * that host's own answer (agents/host-engines.ts hostSaysInstalled), read from its cache,
+ * and only a positive one keeps the user's ACP engine: the cache is empty after every
+ * restart, and an automated start (a routine, subagent_run, a trigger, an org start) must
+ * not start an engine the host may not have. No answer yet runs Claude Code, as before.
  */
 export function resolveDefaultEngine(
   config: DefaultEngineConfig | null | undefined,
@@ -165,16 +172,11 @@ export function resolveDefaultEngine(
   // cloud-exec's reserved list) — reading it as remote would drop the user's
   // engine on a launch that runs right here.
   const remoteHost = opts?.host && opts.host !== LOCAL_HOST_ALIAS ? opts.host : null;
-  if (remoteHost && isAcpEngine(configured)) {
-    log.session.debug('default engine: the configured engine runs locally only — a remote launch uses the default', {
-      configured, host: remoteHost, engine: DEFAULT_ENGINE,
-    });
-    return DEFAULT_ENGINE;
-  }
   // The default engine is walnut's own substrate and is always installed (it is
   // also the fallback), so it is never probed — the check would only ever be
   // able to demote it to itself.
   if (configured === DEFAULT_ENGINE) return configured;
+  if (remoteHost) return remoteDefaultEngine(configured, remoteHost);
   const availability = availabilityOf(configured);
   if (availability && !availability.installed) {
     // warn, not debug: a configured engine this machine cannot run is a broken
@@ -185,4 +187,43 @@ export function resolveDefaultEngine(
     return DEFAULT_ENGINE;
   }
   return configured;
+}
+
+/** The inherited engine on another host: the named pick's host rule, then that host's own answer. */
+function remoteDefaultEngine(configured: SessionEngine, host: string): SessionEngine {
+  const blocker = engineHostBlocker(configured, host);
+  if (blocker) {
+    log.session.debug('default engine: the configured engine cannot run on that host — the launch uses the default', {
+      configured, host, engine: DEFAULT_ENGINE, reason: blocker,
+    });
+    return DEFAULT_ENGINE;
+  }
+  if (!isAcpEngine(configured)) return configured;
+  // Asked in the background without dialing: the picker's ask fills the same cache.
+  if (!inTestRunner() && !hostEnginesFresh(host)) void hostEnginesAvailability(host, { dial: false }).catch(() => {});
+  if (hostSaysInstalled(host, configured)) return configured;
+  const there = cachedHostEngineAvailability(host, configured);
+  if (saysNotInstalled(there)) {
+    log.session.warn('default engine: the configured engine is not available on that host — using the default', {
+      configured, host, engine: DEFAULT_ENGINE, reason: there?.reason,
+    });
+  } else {
+    log.session.debug('default engine: that host has not said it runs the configured engine — using the default', {
+      configured, host, engine: DEFAULT_ENGINE,
+    });
+  }
+  return DEFAULT_ENGINE;
+}
+
+/**
+ * The engine a host's own detached start of an inherited run takes (a routine's clock start,
+ * clock-routine-start.ts; an offline run, offline-run.ts). Deterministic, never the host's
+ * cached answer, so whether a run can start there does not change with what this process has
+ * heard since it started: another host's inherited ACP default is Claude Code there (the rule
+ * before ACP engines ran on other hosts), anything else is resolveDefaultEngine's answer.
+ */
+export function hostStartDefaultEngine(config: DefaultEngineConfig | null | undefined, host: string): SessionEngine {
+  const configured = config?.defaults?.engine;
+  if (host && host !== LOCAL_HOST_ALIAS && isKnownEngine(configured) && isAcpEngine(configured)) return DEFAULT_ENGINE;
+  return resolveDefaultEngine(config, { host });
 }

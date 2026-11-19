@@ -24,6 +24,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { openKebabGroup } from './kebab-group-helpers'
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { openBell } from './host-problems-fixture-helpers'
 import { pickRail, problemHosts, problemRow } from './host-attention-helpers'
@@ -122,6 +123,21 @@ test('the picker offers Cloud, lists the box folders, and a session starts there
   const status = await (await page.request.get('/api/hosts/status')).json() as { hosts: Array<{ host: string; terminal?: boolean }> }
   expect(status.hosts.find((h) => h.host === CLOUD)?.terminal).toBeUndefined()
   await column.screenshot({ path: path.join(SHOTS, `session-on-cloud-${browserName}.png`) })
+
+  // 5c. Every action stays, whatever the connection. VS Code desktop opens remote folders
+  // only over SSH: on Cloud its row stays, says so, and opens Walnut's own Code view.
+  await column.locator('.session-panel-header .task-kebab-btn').first().click()
+  const menu = page.locator('.task-kebab-menu:visible')
+  await openKebabGroup(menu, 'session-kebab-copy-open')
+  const vscodeRow = menu.getByTestId('session-kebab-vscode-desktop')
+  await expect(vscodeRow).toHaveAttribute('data-unavailable', 'no-ssh')
+  await expect(vscodeRow).toContainText('VS Code desktop opens remote folders over SSH, and Cloud has no SSH')
+  await menu.screenshot({ path: path.join(SHOTS, `menu-vscode-on-cloud-${browserName}.png`) })
+  await vscodeRow.click()
+  await expect(column.locator('.session-code-panel')).toBeVisible({ timeout: 30_000 })
+  // Its tag names the real connection, never "SSH".
+  await expect(column.locator('.session-code-panel')).not.toContainText('SSH:')
+  await column.screenshot({ path: path.join(SHOTS, `code-view-on-cloud-${browserName}.png`) })
 
   // Opening it is not tried here: a test server reaches its cloud box read only
   // (remote-isolation.ts 'attach'), so the box's daemon opens it no terminal. The

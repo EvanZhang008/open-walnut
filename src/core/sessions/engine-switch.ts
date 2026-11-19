@@ -166,10 +166,10 @@ export async function switchHold(rec: Pick<SessionRecord, 'claudeSessionId' | 'p
 export async function switchHostBlocker(host: string, engine: SessionEngine): Promise<string | null> {
   const rule = engineHostBlocker(engine, host);
   if (rule) return rule;
-  const { hostEngineAvailability } = await import('../agents/host-engines.js');
+  const { hostEngineAvailability, saysNotInstalled } = await import('../agents/host-engines.js');
   const availability = await hostEngineAvailability(host, engine).catch(() => null);
   // A probe still running is no answer: the start itself says why it cannot run.
-  if (availability && !availability.installed && !/^(still checking availability|availability check unavailable)$/.test(availability.reason ?? '')) {
+  if (availability && saysNotInstalled(availability)) {
     return `${engineCaps(engine).displayName} is not available on ${host === LOCAL_HOST ? 'this Mac' : host}${availability.reason ? `: ${availability.reason}` : ''}`;
   }
   return null;

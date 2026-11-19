@@ -134,6 +134,7 @@ taskMoveV1Router.post('/tasks/:id/move', async (req: Request, res: Response, nex
 taskMoveV1Router.get('/hosts/load', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const { hostLoads, placementCaps } = await import('../../core/hosts/placement.js')
-    res.json({ hosts: await hostLoads(), caps: placementCaps() })
+    // The menu offers every host, the cloud box too: a connection kind never takes a host off it.
+    res.json({ hosts: await hostLoads({ cloudBox: true }), caps: placementCaps() })
   } catch (err) { next(err) }
 })

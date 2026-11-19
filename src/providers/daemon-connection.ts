@@ -44,7 +44,7 @@ import { registerForwardSocket } from '../lib/forward-lane-ports.js'
 import { bulkForwardHook, laneForwardForTesting, sshLaneForward, StreamLane, type LaneForward } from './stream-lane.js'
 import { getDaemonSource, resolveDaemonSourceVersion } from './daemon-source.js'
 import { REQUIRED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
-import { acpUpgradeHolds } from './acp-upgrade-hold.js'
+import { ACP_BUSY_FILE, acpTurnsHold } from './acp-upgrade-hold.js'
 import { assertDaemonDialsOpen, daemonDialsClosed } from './daemon-dial-gate.js'
 import { DAEMON_BINARIES_DIR, IS_DEMO, IS_EPHEMERAL, WALNUT_HOME } from '../constants.js'
 import { BUILD_BACKOFF_MS, backoffLeftMs, buildBackedOff, readBuildBackoff, writeBuildBackoff, type BuildBackoffEntry } from './daemon-build-backoff.js'
@@ -59,7 +59,7 @@ import { parseProbing, probingCheckScript } from './daemon-update-probation.js'
 import { updateRemoteDaemonService, type ServiceDaemonSource } from './daemon-service-update.js'
 import { readBackUpdate, sshUpdateHost, unreadUpdates, type ReadBack, type UnreadUpdate } from './daemon-update-readback.js'
 import { reviveServes, reviveServiceOn } from './local-daemon-service.js'
-import { daemonLinkKind, type DaemonLinkKind } from './daemon-update-paths.js'
+import { daemonLinkKind, daemonUpdateHowSentence, type DaemonLinkKind } from './daemon-update-paths.js'
 import { NetDaemonUpdater, type NetUpdateState } from './daemon-net-update.js'
 import type { DaemonUpdateView } from './daemon-net-update-record.js'
 import { daemonBusyRefusal, execRunsHold } from './exec-runs-hold.js'
@@ -133,7 +133,7 @@ import { clearLinkDrops, noteLinkDrop, recentLinkDrops } from './daemon-link-dro
 import { noteHostLinkDialing, noteHostLinkDown, noteHostLinkUp } from './host-link-ledger.js'
 import { FLAP_WINDOW_MS } from '../core/hosts/host-problem.js'
 // Leaf (no runtime imports): the cloud box alias and the companion's last answer.
-import { CLOUD_BOX_HOST_ALIAS, CLOUD_BOX_OTHER_MAC_SENTENCE, TUNNEL_REFUSAL_HEADER, getCloudBoxState } from '../core/hosts/cloud-box-host.js'
+import { CLOUD_BOX_HOST_ALIAS, CLOUD_BOX_HOST_LABEL, CLOUD_BOX_OTHER_MAC_SENTENCE, TUNNEL_REFUSAL_HEADER, getCloudBoxState } from '../core/hosts/cloud-box-host.js'
 import { creditCurrentRead } from '../core/hosts/read-progress.js'
 import { linkFailureKind, markLinkFailure } from './link-failure.js'
 import { DRAIN_SWAP_WINDOW_MS, daemonSwapExpected, resendThroughSwap, waitHostLink, wakeHostLink } from './daemon-drain-resend.js'
@@ -1247,6 +1247,10 @@ export class DaemonConnection {
   private _runtime: RemoteRuntime | 'unknown' | null = null
   /** Where this host keeps task directories (hello `taskDirRoot`, task-dir-v1); null before. */
   private _taskDirRoot: string | null = null
+  /** What the machine calls itself (hello `hostname`); null before, or from an older daemon. */
+  private _daemonHostname: string | null = null
+  /** The dir the daemon runs from (hello `dir`); null before, or from an older daemon. */
+  private _daemonDir: string | null = null
   /** Why a bun install failed on this connect, carried into the final error. */
   private _bunInstallNote: string | null = null
   /**
@@ -1666,6 +1670,10 @@ export class DaemonConnection {
   get supportsSnapshots(): boolean { return this.hasCapability('snapshot-v1') }
   get daemonInstanceId(): string | null { return this._daemonInstanceId }
   get taskDirRoot(): string | null { return this._taskDirRoot }
+  /** The machine's own host name as its daemon says it (a URL naming it is that machine). */
+  get daemonHostname(): string | null { return this._daemonHostname }
+  /** The dir the connected daemon runs from, as its hello says it (its acp-busy.json is there). */
+  get daemonDir(): string | null { return this._daemonDir }
   /** Bumps on every connect and disconnect edge: a run bound to the old value lost its socket. */
   get connectionEpoch(): number { return this._connectionEpoch }
   get daemonStartedAt(): number | null { return this._daemonStartedAt }
@@ -3739,9 +3747,9 @@ export class DaemonConnection {
   // ensurePortForward rather than by the reconnect loop.
   // Keyed by `<target>:<remotePort>` — the host-side address ssh connects to.
   // `evictable` = a service-preview forward (bounded, oldest first), never the
-  // embedded VS Code one. An SSH host's forward is an `ssh -L`; a host network
-  // machine's is a 127.0.0.1 listener whose connections are port streams on the
-  // daemon link ('port-stream-v1'). `stop` ends it with its connections, `alive`
+  // embedded VS Code one. An SSH host's forward is an `ssh -L`; a link host's (the
+  // host network, the cloud box) is a 127.0.0.1 listener whose connections are port
+  // streams on the daemon link ('port-stream-v1'). `stop` ends it with its connections, `alive`
   // says whether it still forwards.
   private portForwards = new Map<string, { localPort: number; evictable: boolean; stop: () => void; alive: () => Promise<boolean> }>()
   // Concurrent calls for one key share a single dial (a double click or a Retry
@@ -3763,27 +3771,24 @@ export class DaemonConnection {
    * service-preview path passes the host's own name when the model wrote the
    * URL with it, so a service bound to one external interface still answers.
    *
-   * A host network machine (no SSH) forwards through its daemon link instead:
-   * the daemon connects to the port on its own loopback, and only there, so a
-   * `target` that is not loopback is refused (the service preview then tries
-   * its next address), and so is a daemon without 'port-stream-v1'.
+   * A link host (no SSH: a host network machine, the cloud box through the
+   * companion's tunnel, which passes stream frames on verbatim) forwards through
+   * its daemon link instead: the daemon connects to the port on its own loopback,
+   * and only there, so a `target` that is not loopback is refused (the service
+   * preview then tries its next address), and so is a daemon without 'port-stream-v1'.
    */
   ensurePortForward(remotePort: number, target = '127.0.0.1', opts: { evictable?: boolean } = {}): Promise<number> {
-    // The cloud box is reached through the cloud companion only: nothing to forward through.
-    if (this.noSsh && !this.isNetHost) {
-      return Promise.reject(new Error('Port forwarding is not available on Cloud: this Mac reaches it through the cloud companion, not SSH'))
-    }
-    let netHost: string | null = null
-    if (this.isNetHost) {
-      const host = this.netForwardHost(remotePort, target)
+    let linkHost: string | null = null
+    if (this.noSsh) {
+      const host = this.linkForwardHost(remotePort, target)
       if (host instanceof Error) return Promise.reject(host)
-      netHost = host
+      linkHost = host
     }
     const key = `${target}:${remotePort}`
     const dialing = this.portForwardDials.get(key)
     if (dialing) return dialing
     const evictable = opts.evictable === true
-    const dial = (netHost !== null ? this.dialNetPortForward(key, remotePort, netHost, evictable) : this.dialPortForward(key, remotePort, target, evictable))
+    const dial = (linkHost !== null ? this.dialLinkPortForward(key, remotePort, linkHost, evictable) : this.dialPortForward(key, remotePort, target, evictable))
       .finally(() => { if (this.portForwardDials.get(key) === dial) this.portForwardDials.delete(key) })
     this.portForwardDials.set(key, dial)
     return dial
@@ -3791,13 +3796,16 @@ export class DaemonConnection {
 
   // ── For a server this Mac keeps on the host (core/host-server/) ──
 
-  /** Run a POSIX sh script on the host (see sshExec): the host server's install and port checks. */
+  /**
+   * Run a POSIX sh script on the host: over SSH (see sshExec), or on a link host (the
+   * host network, the cloud box) as exec.run of its daemon (daemon-net-update-io.ts).
+   * The host server's install and port checks, a plugin job's upload checks.
+   */
   runRemoteScript(script: string, timeoutMs = 30_000): Promise<string> {
-    if (this.isNetHost) {
-      if (!this.hasCapability('host-exec-v1')) return Promise.reject(new Error(`${this.hostKey} needs a daemon update to run host scripts over the host network`))
+    if (this.noSsh) {
+      if (!this.hasCapability('host-exec-v1')) return Promise.reject(new Error(this.linkDaemonNeedsUpdate('Running a script')))
       return import('./daemon-net-update-io.js').then(({ createNetUpdateIo }) => createNetUpdateIo(this).run(script, timeoutMs))
     }
-    if (this.noSsh) return Promise.reject(new Error(this.noSshSentence))
     return this.sshExec(script, timeoutMs)
   }
 
@@ -3813,11 +3821,11 @@ export class DaemonConnection {
     remotePath: string, data: Buffer,
     opts: { sha256?: string; onProgress?: (sent: number, total: number) => void } = {},
   ): Promise<{ skipped: boolean }> {
-    if (this.noSsh && !this.isNetHost) throw new Error(this.noSshSentence)
     const sha = (opts.sha256 ?? await sha256Hex(data)).toLowerCase()
     if (!/^[0-9a-f]{64}$/.test(sha)) throw new Error('uploadFile: sha256 must be 64 hex characters')
-    if (this.isNetHost) {
-      if (!this.hasCapability('fs-write-part-v1') || !this.hasCapability('host-exec-v1')) throw new Error(`${this.hostKey} needs a daemon update to upload files over the host network`)
+    // A link host (the host network, the cloud box): checked parts over the daemon link.
+    if (this.noSsh) {
+      if (!this.hasCapability('fs-write-part-v1') || !this.hasCapability('host-exec-v1')) throw new Error(this.linkDaemonNeedsUpdate('Uploading a file'))
       if (opts.sha256 && await sha256Hex(data) !== sha) throw new Error('uploadFile: sha256 does not match the data')
       const there = parseUploadPrecheck(await this.runRemoteScript(uploadPrecheckScript(remotePath, sha), 60_000))
       if (there?.sha === sha && there.size === data.length) {
@@ -3874,7 +3882,7 @@ export class DaemonConnection {
    * On the session link (a lane is never the server's own socket there).
    */
   openPtyStream(command: string, opts: PtyOpenOptions): Promise<PtyStream> {
-    if (!this.hasCapability(PTY_STREAM_CAPABILITY)) return Promise.reject(new Error(ptyStreamMissingSentence(this.hostKey)))
+    if (!this.hasCapability(PTY_STREAM_CAPABILITY)) return Promise.reject(new Error(`${ptyStreamMissingSentence(this.hostKey)}. ${daemonUpdateHowSentence(this.linkKind, this.hostKey)}`))
     return this.streamEndpoint().openPty(command, opts)
   }
 
@@ -4032,31 +4040,29 @@ export class DaemonConnection {
   }
 
   /**
-   * The loopback host a host network machine's daemon connects to for `target`,
-   * or why this forward cannot be: a bad port, an address that is not the
-   * machine's own loopback, or a daemon older than 'port-stream-v1'.
+   * The loopback host a link host's daemon connects to for `target`, or why this
+   * forward cannot be: a bad port, an address that is not the machine's own
+   * loopback, or a daemon older than 'port-stream-v1'.
    */
-  private netForwardHost(remotePort: number, target: string): string | Error {
+  private linkForwardHost(remotePort: number, target: string): string | Error {
     if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535) {
       return new Error(`Port forwarding needs a TCP port from 1 to 65535, not ${String(remotePort).slice(0, 24)}`)
     }
     if (!isLoopbackHostname(target)) {
-      return new Error(`Port forwarding on ${this.hostKey} goes over the host network and reaches only its own loopback (127.0.0.1, localhost, ::1), not ${target.slice(0, 120)}`)
+      return new Error(`Port forwarding on ${this.linkName} goes ${this.linkWords} and reaches only its own loopback (127.0.0.1, localhost, ::1), not ${target.slice(0, 120)}`)
     }
-    if (!this.hasCapability('port-stream-v1')) {
-      return new Error(`Port forwarding on ${this.hostKey} goes over the host network and needs a newer Walnut daemon there; it updates when this Mac reconnects to it`)
-    }
+    if (!this.hasCapability('port-stream-v1')) return new Error(this.linkDaemonNeedsUpdate('Port forwarding'))
     const h = bareHost(target)
     return /^127(?:\.\d{1,3}){3}$/.test(h) || h === '::1' ? h : 'localhost'
   }
 
   /**
-   * A host network machine's forward: a 127.0.0.1 listener here whose every
-   * connection is a port stream to `host:remotePort` on that machine, through
-   * this connection's daemon link. It outlives a link drop (its connections end
-   * with the link), so the same local port answers again once the link is back.
+   * A link host's forward: a 127.0.0.1 listener here whose every connection is a
+   * port stream to `host:remotePort` on that machine, through this connection's
+   * daemon link. It outlives a link drop (its connections end with the link), so
+   * the same local port answers again once the link is back.
    */
-  private async dialNetPortForward(key: string, remotePort: number, host: string, evictable: boolean): Promise<number> {
+  private async dialLinkPortForward(key: string, remotePort: number, host: string, evictable: boolean): Promise<number> {
     const gen = this.portForwardGen(key)
     const reused = await this.reusePortForward(key)
     if (reused !== null) return reused
@@ -4066,7 +4072,7 @@ export class DaemonConnection {
       if (refusals++ % 50 === 0) log.session.warn('DaemonConnection: port stream refused', { host: this.hostKey, remotePort, target: host, error: err.message, refusals })
     })
     this.keepPortForward(key, gen, { localPort: fwd.port, evictable, stop: () => fwd.close(), alive: async () => fwd.listening })
-    log.session.info('DaemonConnection: port forward created over the host network', { host: this.hostKey, localPort: fwd.port, remotePort, target: host })
+    log.session.info('DaemonConnection: port forward created over the daemon link', { host: this.hostKey, link: this.linkKind, localPort: fwd.port, remotePort, target: host })
     return fwd.port
   }
 
@@ -5151,25 +5157,20 @@ export class DaemonConnection {
   /** Open ACP turns on the host (acp-busy.json fresh and non-empty): the update is asked again in a minute. */
   private async acpTurnsOpen(expected: string, remoteVersion: string): Promise<boolean> {
     try {
-      const busyRaw = (await this.sshExec(
-        `cat ${shq(this._remoteDir + '/acp-busy.json')} 2>/dev/null || true`, 5_000,
-      )).trim()
-      const busy = (busyRaw ? JSON.parse(busyRaw) : {}) as { busySids?: string[]; updatedAt?: number }
-      const open = typeof busy.updatedAt === 'number'
-        && Date.now() - busy.updatedAt < 2 * 60_000
-        && Array.isArray(busy.busySids) && busy.busySids.length > 0
+      const busyRaw = await this.sshExec(`cat ${shq(`${this._remoteDir}/${ACP_BUSY_FILE}`)} 2>/dev/null || true`, 5_000)
       // The wait has an end: turns open this long get the upgrade anyway (acp-upgrade-hold.ts).
-      const { holds, heldMs } = acpUpgradeHolds(this.hostKey, open)
+      const { busySids, holds, heldMs } = acpTurnsHold(this.hostKey, busyRaw)
+      const open = busySids.length > 0
       if (open && (!holds || this._overdueMs)) {
         log.session.warn('DaemonConnection: daemon upgrade goes ahead over ACP turns open too long', {
-          host: this.hostKey, expected, busySids: busy.busySids, heldMs,
+          host: this.hostKey, expected, busySids, heldMs,
         })
         return false
       }
       if (open) {
         holdLog(this._holdNews, expected, 'ACP turns open', 'DaemonConnection: daemon upgrade DEFERRED (ACP turns open)', {
           host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)',
-          busySids: busy.busySids,
+          busySids,
         })
         this.postponeUpgrade('ACP turns are open', expected, remoteVersion, { steady: true })
         return true
@@ -5970,6 +5971,8 @@ export class DaemonConnection {
       // files cannot tell a bun-run daemon from the binary, the daemon can.
       if (res.runtime === 'bun' || res.runtime === 'binary' || res.runtime === 'node') this._runtime = res.runtime
       this._taskDirRoot = typeof res.taskDirRoot === 'string' && res.taskDirRoot.startsWith('/') ? res.taskDirRoot : null
+      this._daemonHostname = typeof res.hostname === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$/.test(res.hostname) ? res.hostname : null
+      this._daemonDir = typeof res.dir === 'string' && res.dir.startsWith('/') && res.dir.length <= 1024 ? res.dir : null
       this._daemonVersion = typeof res.version === 'string' && res.version.length <= 64 ? res.version : null
       // A daemon answers: a failed update's "no daemon runs there" is over (2026-11-04 review: it
       // read 'down' again at the next ordinary disconnect, days after a revive), and the build it
@@ -7792,7 +7795,29 @@ export class DaemonConnection {
   }
 
   private get noSshSentence(): string {
-    return this.isCloudTunnel ? 'Cloud is reached through the cloud companion, not SSH' : `${this.hostKey} is reached over the host network, not SSH`
+    return `${this.linkName} is reached ${this.linkWords}, not SSH`
+  }
+
+  /** A link host's name in a sentence: the cloud box by its label. */
+  private get linkName(): string {
+    return this.isCloudTunnel ? CLOUD_BOX_HOST_LABEL : this.hostKey
+  }
+
+  /** How this Mac reaches a link host, in words. */
+  private get linkWords(): string {
+    return this.isCloudTunnel ? 'through the cloud companion' : 'over the host network'
+  }
+
+  /**
+   * `what` (a feature, e.g. "Port forwarding") on a link host whose daemon lacks the
+   * command it rides: says so, and how that daemon gets the update. The cloud box's
+   * daemon is the companion's own build (daemon-update-paths.ts), so it comes with
+   * the companion's update; a host network machine's comes over the link at connect.
+   */
+  private linkDaemonNeedsUpdate(what: string): string {
+    // The one wording of how this kind of daemon updates (daemon-update-paths.ts), as the host frame says it.
+    const how = daemonUpdateHowSentence(this.linkKind, this.linkName)
+    return `${what} on ${this.linkName} goes ${this.linkWords} and needs a newer Walnut daemon there. ${how}`
   }
 
   /**
@@ -10684,6 +10709,8 @@ export interface DaemonConnectState {
   firstConnect?: true
   /** Connected to a daemon without 'pty-stream-v1' (DaemonConnection.lacksPtyStream). */
   noPtyStream?: true
+  /** The name the host's machine calls itself, from its daemon's hello (DaemonConnection.daemonHostname). */
+  machineName?: string
 }
 
 export function getDaemonConnectState(hostKey: string): DaemonConnectState {
@@ -10701,6 +10728,7 @@ export function getDaemonConnectState(hostKey: string): DaemonConnectState {
   if (transfer && state.phase === 'upload') state.transfer = { ...transfer }
   if (conn?.firstConnectRunning) state.firstConnect = true
   if (conn?.lacksPtyStream) state.noPtyStream = true
+  if (conn?.daemonHostname) state.machineName = conn.daemonHostname
   const dir = conn?.remoteDirChoice
   if (dir) state.daemonDir = { ...dir, ...(conn?.remoteHome ? { home: conn.remoteHome } : {}) }
   const failure = failureCache.get(hostKey)

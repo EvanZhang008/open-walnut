@@ -63,8 +63,26 @@ describe('task_start with no engine', () => {
     expect(mocks.startSession.mock.calls[0][0].engine).toBeUndefined();
   });
 
-  it('a remote host keeps Claude (ACP engines run on this machine only)', async () => {
+  it('a remote host runs the default ACP engine (through its daemon) once it said it has it', async () => {
+    const { _resetHostEngineCache, _seedHostEngineCache } = await import('../../src/core/agents/host-engines.js');
     mocks.getConfig.mockResolvedValue({ defaults: { engine: 'opencode' }, hosts: { devbox: { hostname: 'devbox' } } });
+    try {
+      _seedHostEngineCache('devbox', { opencode: { installed: true, version: '1', reason: null } });
+      await startSessionForTask({ ...params, host: 'devbox', cwd: '/work' });
+      expect(mocks.startSession.mock.calls[0][0].engine).toBe('opencode');
+    } finally { _resetHostEngineCache(); }
+  });
+
+  it('a remote host keeps Claude for a default ACP engine it has not answered for (as after a restart)', async () => {
+    const { _resetHostEngineCache } = await import('../../src/core/agents/host-engines.js');
+    _resetHostEngineCache();
+    mocks.getConfig.mockResolvedValue({ defaults: { engine: 'opencode' }, hosts: { devbox: { hostname: 'devbox' } } });
+    await startSessionForTask({ ...params, host: 'devbox', cwd: '/work' });
+    expect(mocks.startSession.mock.calls[0][0].engine).toBeUndefined();
+  });
+
+  it('a remote host keeps Claude for a local-only default engine (its adapter is this machine\'s config)', async () => {
+    mocks.getConfig.mockResolvedValue({ defaults: { engine: 'custom' }, hosts: { devbox: { hostname: 'devbox' } } });
     await startSessionForTask({ ...params, host: 'devbox', cwd: '/work' });
     expect(mocks.startSession.mock.calls[0][0].engine).toBeUndefined();
   });

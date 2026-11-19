@@ -23,7 +23,7 @@ interface Fake {
 
 type Deps = Parameters<typeof createPtyStreams<string>>[0]
 
-function harness(over: { env?: Record<string, string | undefined> } & Partial<Pick<Deps, 'user' | 'executable' | 'foregroundGroup' | 'ownGroup' | 'killGroup' | 'readCommand' | 'platform'>> = {}) {
+function harness(over: { env?: Record<string, string | undefined> } & Partial<Pick<Deps, 'user' | 'executable' | 'foregroundGroup' | 'ownGroup' | 'killGroup' | 'readCommand' | 'platform' | 'uid'>> = {}) {
   const sent: Array<{ link: string; ev: string; data: Record<string, unknown> }> = []
   const fakes: Fake[] = []
   const ptys = createPtyStreams<string>({
@@ -35,6 +35,7 @@ function harness(over: { env?: Record<string, string | undefined> } & Partial<Pi
     executable: over.executable,
     readCommand: over.readCommand,
     platform: over.platform,
+    uid: over.uid ?? (() => 1000),
     foregroundGroup: over.foregroundGroup,
     ownGroup: over.ownGroup,
     killGroup: over.killGroup,
@@ -114,7 +115,8 @@ describe('terminal streams in the daemon', () => {
     const asked: string[][] = []
     let answer: ((out: string | null) => void) | null = null
     const h = harness({ user: bunUser, env: { SHELL: '/bin/sh' }, executable: (p) => exe.has(p), platform: 'linux', readCommand: (file, args, cb) => { asked.push([file, ...args]); answer = cb } })
-    expect(asked).toEqual([['getent', 'passwd', 'w']])
+    // By uid, never by $USER or the name bun gives (both are the env's).
+    expect(asked).toEqual([['/usr/bin/getent', 'passwd', '1000']])
     open(h.relay, 'o1')
     open(h.relay, 'o2')
     h.relay.frame('a', 'close', { sid: 'o2' })
@@ -129,18 +131,18 @@ describe('terminal streams in the daemon', () => {
     expect(asked).toHaveLength(1)
     expect(h.fakes[1]!.argv[0]).toBe('/bin/zsh')
 
-    // macOS: dscl names it.
+    // macOS: id -P (Directory Services) names it.
     const mac: string[][] = []
-    const hm = harness({ user: bunUser, env: { SHELL: '/bin/sh' }, executable: (p) => exe.has(p), platform: 'darwin', readCommand: (file, args, cb) => { mac.push([file, ...args]); cb('UserShell: /usr/local/bin/fish\n') } })
+    const hm = harness({ user: bunUser, env: { SHELL: '/bin/sh' }, executable: (p) => exe.has(p), platform: 'darwin', readCommand: (file, args, cb) => { mac.push([file, ...args]); cb('w:********:1000:20::0:0:W:/Users/w:/usr/local/bin/fish\n') } })
     open(hm.relay, 'o1')
-    expect(mac).toEqual([['dscl', '.', '-read', '/Users/w', 'UserShell']])
+    expect(mac).toEqual([['/usr/bin/id', '-P']])
     expect(hm.fakes[0]!.argv[0]).toBe('/usr/local/bin/fish')
 
     // A failed read, or one naming nologin, leaves the order as before.
     const hf = harness({ user: bunUser, env: { SHELL: '/bin/sh' }, executable: (p) => exe.has(p), platform: 'linux', readCommand: (_f, _a, cb) => cb(null) })
     open(hf.relay, 'o1')
     expect(hf.fakes[0]!.argv[0]).toBe('/bin/sh')
-    const hn = harness({ user: () => ({ shell: '/bin/zsh', home: '/srv', name: 'svc' }), env: {}, executable: (p) => exe.has(p), platform: 'linux', readCommand: (_f, _a, cb) => cb('svc:x:1:1::/srv:/usr/sbin/nologin\n') })
+    const hn = harness({ user: () => ({ shell: '/bin/zsh', home: '/srv', name: 'svc' }), env: {}, executable: (p) => exe.has(p), platform: 'linux', readCommand: (_f, _a, cb) => cb('svc:x:1000:1::/srv:/usr/sbin/nologin\n') })
     open(hn.relay, 'o1')
     expect(hn.fakes[0]!.argv[0]).toBe('/bin/zsh')
   })

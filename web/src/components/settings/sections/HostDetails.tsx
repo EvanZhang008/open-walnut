@@ -43,8 +43,6 @@ interface Props {
   now: number;
   /** A saved host Walnut dials (its status and readiness are read live); not one switched off. */
   linked: boolean;
-  /** Show "What Walnut knows" and probe it (a saved SSH host). */
-  profile?: boolean;
   kind: HostKind;
   /** The reading's problem the row names in its warning line (problemsOf's key), else null: Status leaves it out. */
   rowProblem: string | null;
@@ -76,12 +74,14 @@ function Part({ id, title, summary, defaultOpen, titleTestId, children }: { id: 
   );
 }
 
+/**
+ * Every kind of host has "What Walnut knows" (its learned profile; GET/PATCH
+ * /api/v1/hosts/:host/profile takes any host): an SSH host, a host-network machine, This Mac
+ * and the cloud companion's box alike (the user, 2026-11-18: "make sure all feature is
+ * availble. no matter the connection type").
+ */
 export function HostDetails(props: Props) {
-  return props.profile ? <WithProfile {...props} /> : <DetailsBody {...props} />;
-}
-
-function WithProfile(props: Props) {
-  const hp = useHostProfile(props.alias);
+  const hp = useHostProfile(props.kind === 'local' ? '__local__' : props.alias);
   const system = profileSystemLine(hp, props.card ? systemLine(props.card) : 'Not probed yet.');
   const kind = hp.profile ? `Kind: ${hostKindLabel(hp.profile.kind)}${hp.profile.kindSetByUser ? '' : ' (automatic)'}` : undefined;
   return <DetailsBody {...props} system={system} profileSummary={kind} profileBlock={() => <HostProfileDisclosure hp={hp} alias={props.alias} name={props.name} />} />;

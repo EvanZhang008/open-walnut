@@ -7,7 +7,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { ACP_UPGRADE_HOLD_MAX_MS, ACP_UPGRADE_HOLD_STALE_MS, acpUpgradeHoldFlushedForTest, acpUpgradeHolds, setAcpUpgradeHoldFileForTest } from '../../src/providers/acp-upgrade-hold.js'
+import {
+  ACP_BUSY_STALE_MS, ACP_UPGRADE_HOLD_MAX_MS, ACP_UPGRADE_HOLD_STALE_MS, acpTurnsHold, acpTurnsReason, acpUpgradeHoldFlushedForTest, acpUpgradeHolds, openAcpTurns, setAcpUpgradeHoldFileForTest,
+} from '../../src/providers/acp-upgrade-hold.js'
 
 let dir: string
 beforeEach(() => {
@@ -57,5 +59,30 @@ describe('acpUpgradeHolds', () => {
     expect(acpUpgradeHolds('devbox', true, t0 + 3 * 86_400_000 + 60_000)).toEqual({ holds: true, heldMs: 60_000 })
     // A gap longer than the re-checks ever leave starts it over too.
     expect(acpUpgradeHolds('devbox', true, t0 + 3 * 86_400_000 + 60_000 + ACP_UPGRADE_HOLD_STALE_MS)).toEqual({ holds: true, heldMs: 0 })
+  })
+})
+
+// The one reader of acp-busy.json every update path uses (this Mac, an SSH host, a host network machine).
+describe('openAcpTurns, acpTurnsHold', () => {
+  const now = 1_800_000_000_000
+  const file = (busySids: unknown, updatedAt: unknown) => JSON.stringify({ busySids, updatedAt })
+
+  it('names the open turns of a fresh file, and nothing for a stale, empty, missing or unreadable one', () => {
+    expect(openAcpTurns(file(['a', 'b'], now - 1_000), now)).toEqual(['a', 'b'])
+    expect(openAcpTurns(file(['a', 7, null], now), now)).toEqual(['a'])
+    expect(openAcpTurns(file(['a'], now - ACP_BUSY_STALE_MS), now)).toEqual([])
+    expect(openAcpTurns(file(['a'], 'yesterday'), now)).toEqual([])
+    expect(openAcpTurns(file('a', now), now)).toEqual([])
+    for (const raw of [null, undefined, '', '  \n', '{not json']) expect(openAcpTurns(raw, now)).toEqual([])
+  })
+
+  it('holds on the per-host clock, ends that clock once nothing is open, and says why in words', () => {
+    expect(acpTurnsHold('devbox', file(['a'], now), now)).toEqual({ busySids: ['a'], holds: true, heldMs: 0 })
+    expect(acpTurnsHold('devbox', file(['a'], now + 60_000), now + 60_000)).toEqual({ busySids: ['a'], holds: true, heldMs: 60_000 })
+    expect(acpTurnsHold('devbox', file([], now + 120_000), now + 120_000)).toEqual({ busySids: [], holds: false, heldMs: 0 })
+    expect(acpTurnsHold('devbox', file(['a'], now + 180_000), now + 180_000)).toEqual({ busySids: ['a'], holds: true, heldMs: 0 })
+    expect(acpTurnsReason(['a'])).toBe('1 ACP turn open on the host would end with the daemon')
+    expect(acpTurnsReason(['a', 'b'])).toBe('2 ACP turns open on the host would end with the daemon')
+    expect(acpTurnsReason([])).toBeNull()
   })
 })

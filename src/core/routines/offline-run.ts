@@ -422,7 +422,7 @@ function realDeps(): OfflineRunDeps {
       return await getSessionsForTask(taskId).catch(() => []);
     },
     async hostReady(host) {
-      const [{ getConfig, isFallbackConfig }, { resolveDefaultEngine }, { normalizeEngine }, { VALID_SESSION_EFFORT_IDS }] = await Promise.all([
+      const [{ getConfig, isFallbackConfig }, { hostStartDefaultEngine }, { normalizeEngine }, { VALID_SESSION_EFFORT_IDS }] = await Promise.all([
         import('../config-manager.js'), import('../agents/default-engine.js'), import('../agents/engine-registry.js'), import('../types.js'),
       ]);
       const config = await getConfig();
@@ -430,7 +430,7 @@ function realDeps(): OfflineRunDeps {
       if (!config.hosts?.[host]) return 'the host is not configured';
       // This is a new daemon-owned worker, not the owner's SDK conversation.
       // The primary's session-server setting does not disable the trusted CLI template.
-      if (normalizeEngine(resolveDefaultEngine(config, { host })) !== undefined) return 'its engine is not Claude Code';
+      if (normalizeEngine(hostStartDefaultEngine(config, host)) !== undefined) return 'its engine is not Claude Code';
       const effort = config.agent?.session_effort;
       return effort && VALID_SESSION_EFFORT_IDS.has(effort) ? { effort } : {};
     },

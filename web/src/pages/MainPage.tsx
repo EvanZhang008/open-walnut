@@ -19,6 +19,7 @@ import { useFavorites } from '@/hooks/useFavorites';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import { useOrdering } from '@/hooks/useOrdering';
 import { projectLaunchDefaultsNow, useProjectRegistry } from '@/hooks/useProjectRegistry';
+import { getHostEngineAvailability } from '@/hooks/useHostEngineAvailability';
 import { defaultEngineRuns, draftLaunchChoice, draftLaunchPayload, unnamedLaunchIsNotClaude, useGlobalDefaultEngine } from '@/utils/launch-source';
 import { projectService } from '@/components/tasks/private-task-model';
 import { homeColumnsField, isPhoneLayout, usePhoneLayout } from '@/hooks/usePhoneLayout';
@@ -3331,7 +3332,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // (utils/launch-source.ts, the chain the draft's pills showed).
     const launchDefaults = draft.walnut ? {} : projectLaunchDefaultsNow(draft.intent === 'fix-walnut' ? 'Walnut' : draft.project);
     const launchChoice = (() => {
-      const choice = draftLaunchChoice(draft, launchDefaults, globalEngineRef.current, (e) => defaultEngineRuns(e, draft.host, getEngineCatalog()));
+      const choice = draftLaunchChoice(draft, launchDefaults, globalEngineRef.current, (e) => defaultEngineRuns(e, draft.host, getEngineCatalog(), getHostEngineAvailability(draft.host)));
       return { choice, sent: draftLaunchPayload(choice, draft.meta, unnamedLaunchIsNotClaude(launchDefaults, globalEngineRef.current)) };
     })();
     forgetDraft(draftId, 'launch');
