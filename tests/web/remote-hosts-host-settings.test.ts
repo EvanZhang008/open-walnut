@@ -43,6 +43,8 @@ describe('hostServerLook: Walnut on a host counts in the one count', () => {
     expect(hostServerLook(entry('running'), false)).toBe(false)
     expect(hostServerLook(entry('starting'), false)).toBe(false)
     expect(hostServerLook(entry('error', { enabled: false }), true)).toBe(false)
+    // A host on by default that cannot run one well (memory, disk, no build) is nothing to fix.
+    expect(hostServerLook(entry('not-eligible', { chosenBy: 'default' }), false)).toBe(false)
   })
   // 2026-11-05 review: the row said only "Walnut on this host needs a look: see Details", never what.
   it('the row says what needs a look, and where its fix is', () => {

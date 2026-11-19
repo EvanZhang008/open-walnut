@@ -105,6 +105,7 @@ export const CONFIG_COPY_DROPPED: Readonly<Record<string, string>> = Object.free
   favorites: 'copied by the prefs kind',
   session_server: 'the Mac server process settings',
   hosts_warmup: 'ssh warmup on the Mac',
+  host_servers: 'the default of the followers the Mac runs on its hosts; only the Mac starts them',
   hosts_found: 'when the Mac started asking about found hosts; only the Mac dials them',
   first_run: 'the Mac\'s own first-run questions and answers; the companion asks none',
   net: 'the Mac\'s own host network switch; the companion keeps the member list itself',

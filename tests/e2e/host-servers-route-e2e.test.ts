@@ -52,7 +52,8 @@ describe('a host\'s Walnut, as a setting', () => {
     const body = await res.json() as { hosts: Array<Record<string, any>>; providers: unknown[] }
     expect(body.hosts).toEqual([expect.objectContaining({
       hostKey: 'devbox', label: 'Dev box',
-      settings: { enabled: false, expose: { enabled: false, provider: null, options: {} }, copies: DEFAULT_COPIES },
+      // Off as a host, so off by default too (follower-default.ts); never set by the person.
+      settings: { enabled: false, chosenBy: 'default', expose: { enabled: false, provider: null, options: {} }, copies: DEFAULT_COPIES },
     })])
     expect(Array.isArray(body.providers)).toBe(true)
   })
@@ -82,7 +83,7 @@ describe('a host\'s Walnut, as a setting', () => {
     })
     expect(res.status).toBe(200)
     const { host } = await res.json() as { host: Record<string, any> }
-    expect(host.settings).toEqual({ enabled: true, expose: { enabled: true, provider: 'mytunnel', options: { name: 'devbox' } }, copies: DEFAULT_COPIES })
+    expect(host.settings).toEqual({ enabled: true, chosenBy: 'user', expose: { enabled: true, provider: 'mytunnel', options: { name: 'devbox' } }, copies: DEFAULT_COPIES })
     expect((await getConfig()).hosts?.devbox?.server).toEqual({ enabled: true, expose: { enabled: true, provider: 'mytunnel', options: { name: 'devbox' } } })
     // Settings (and the Remote Hosts card) re-read the config on this.
     bus.unsubscribe('test-host-servers-config')

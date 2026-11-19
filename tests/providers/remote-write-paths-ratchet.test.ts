@@ -78,7 +78,8 @@ const CONNECTION: Record<string, Entry> = {
 /** Every other file in src/ with a site, with how many. */
 const FILES: Record<string, Entry> = {
   'src/providers/remote-sh.ts': { count: 4, kind: 'transport', why: 'runSshBounded and runRemoteSh themselves: ssh with the caller\'s args, `sh -s` with the caller\'s script' },
-  'src/core/host-server/manager.ts': { count: 13, kind: 'not-for-test-server', why: 'acts only on a host handle hostServerConnected gave it (shared host or the replica check\'s own root)' },
+  'src/core/host-server/manager.ts': { count: 12, kind: 'not-for-test-server', why: 'acts only on a host handle hostServerConnected gave it (shared host or the replica check\'s own root)' },
+  'src/core/host-server/manager-types.ts': { count: 2, kind: 'not-for-test-server', why: 'the host handle\'s type (HostServerHost): no call, the manager\'s calls are counted above' },
   'src/core/plugin-jobs/manager.ts': { count: 2, kind: 'not-for-test-server', why: 'plugin jobs do not run on a test server (pluginJobsOffReason); bundles go to the daemon\'s own dir' },
   'src/core/hosts/ssh-cert-expiry-alert.ts': { count: 1, kind: 'read', why: '`ssh host true`: does the sign-in work' },
   'src/providers/ssh-credential-evidence.ts': { count: 2, kind: 'local', why: '`ssh -G`, reads this machine\'s ssh config' },

@@ -270,6 +270,14 @@ export function fileInstallScript(plan: FileInstallPlan): string {
 }
 
 /**
+ * Whether an install's failure note (fileInstallScript's `fail`) says the file cannot run on the
+ * host: its proof boot (`--version`, `__selftest`) failed there, not a passing problem.
+ */
+export function installCannotRun(message: string): boolean {
+  return /^the walnut file (does not start on this host|failed its self-check on this host)/.test(message.trim())
+}
+
+/**
  * Remove the builds on the host that nothing needs: every app dir but the kept
  * ones (the server that now runs, the one that ran before it) and the newest
  * other (another Walnut sharing this root may run it); app dirs half-made an

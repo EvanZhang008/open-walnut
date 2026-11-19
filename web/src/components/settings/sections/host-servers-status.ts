@@ -7,7 +7,9 @@
 import type { ExposeProviderInfo, ExposeStatus, StatusDot } from './cloud/browser-access-status';
 import { timeAgo } from '@/utils/time';
 
-export type HostServerPhase = 'off' | 'waiting-for-host' | 'unsupported' | 'checking' | 'installing' | 'starting' | 'running' | 'error';
+export type HostServerPhase = 'off' | 'waiting-for-host' | 'unsupported' | 'checking' | 'installing' | 'starting' | 'running' | 'error'
+  /** On by default, but the host cannot run one well now (`gate` says why). */
+  | 'not-eligible';
 
 export interface HostServerView {
   hostKey: string;
@@ -24,6 +26,12 @@ export interface HostServerView {
   lastReport?: HostServerReport;
   /** When that report came in, on this computer's clock. */
   lastReportAt?: number;
+  /** Phase `not-eligible`: the condition the host did not meet, and when it is looked at again. */
+  gate?: { reason: 'no-build' | 'memory' | 'disk'; checkedAt: number; recheckAt?: number };
+  /** Phase `error`: when Walnut tries again by itself. */
+  retryAt?: number;
+  /** While the program goes up to the host: the bytes it holds so far. */
+  upload?: { sent: number; total: number };
 }
 
 export interface HostServerReport {
@@ -91,7 +99,10 @@ export interface HostServerEntry {
   hostKey: string;
   label: string;
   settings: {
+    /** What runs: the person's switch, or the default where they never set it (`chosenBy`). */
     enabled: boolean;
+    /** Whose `enabled` is: the person's, or the default's (an older server sends none). */
+    chosenBy?: 'user' | 'default';
     /** Why the host's own tunnel does not run although it is on (it would take this computer's address). */
     expose: { enabled: boolean; provider: string | null; options: Record<string, string>; blocked?: string };
     /** This computer's tunnel (Open from a browser) runs on this host, so its server runs whatever its switch said. */
@@ -108,6 +119,8 @@ export interface HostServerEntry {
 export interface HostServersResponse {
   hosts: HostServerEntry[];
   providers: ExposeProviderInfo[];
+  /** A host whose switch was never set runs a Walnut (`host_servers.on_by_default`); an older server sends none. */
+  followerByDefault?: boolean;
 }
 
 export interface HostServerLine {
@@ -165,6 +178,11 @@ function describeHostServerNow(entry: HostServerEntry): HostServerLine {
       return { dot: 'done', text: routeText(v.server?.route), retry: false };
     case 'error':
       return { dot: 'error', text: v.message ?? 'It stopped on an error.', retry: true };
+    case 'not-eligible':
+      return { dot: 'pending', text: v.message ?? 'This host cannot run Walnut well right now.', retry: true };
+    default:
+      // A phase a newer server knows: its own sentence.
+      return { dot: 'pending', text: v.message ?? 'Setting it up...', retry: false };
   }
 }
 

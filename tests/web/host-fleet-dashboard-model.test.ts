@@ -58,6 +58,11 @@ describe('problem line', () => {
   it('a healthy host has none', () => {
     expect(problemsOf(host(), NOW)).toEqual([])
   })
+  it('a host on by default that cannot run a Walnut server well has no server problem; one stopped on an error has', () => {
+    const server = (phase: string) => ({ enabled: true, program: 'replica', phase, phaseLabel: phase, build: null, phone: null, message: null })
+    expect(problemsOf(host({ server: server('not-eligible') as never }), NOW).map((p) => p.key)).not.toContain('server')
+    expect(problemsOf(host({ server: server('error') as never }), NOW).map((p) => p.key)).toContain('server')
+  })
   it('offers Set up when the host says a setup is due', () => {
     const [p] = problemsOf(noBoot({ mode: 'none', backend: null, reason: 'nothing on it starts the daemon at boot', checkedAt: NOW, setupRunning: false, setupError: null, next: 'install' }), NOW)
     // Plain words, naming the host (2026-11-04 review: "Daemon does not come back after a reboot").

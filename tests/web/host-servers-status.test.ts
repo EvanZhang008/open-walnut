@@ -37,6 +37,14 @@ describe('describeHostServer', () => {
     expect(describeHostServer(entry({ phase: 'error', message: 'npm failed' }))).toEqual({ dot: 'error', text: 'npm failed', retry: true })
   })
 
+  it('a host on by default that cannot run one says the server\'s reason and offers Try again; a phase from a newer server never breaks the row', () => {
+    const message = 'No Walnut server runs on this host yet: it has 512 MB of memory free, and one needs 1 GB free. Walnut looks again in 30 min.'
+    const gate = { reason: 'memory' as const, checkedAt: 1, recheckAt: 2 }
+    expect(describeHostServer(entry({ phase: 'not-eligible', message, gate }, { chosenBy: 'default' }))).toEqual({ dot: 'pending', text: message, retry: true })
+    const later = entry({ phase: 'some-later-phase' as HostServerView['phase'], message: 'Doing a new thing.' })
+    expect(describeHostServer(later)).toEqual({ dot: 'pending', text: 'Doing a new thing.', retry: false })
+  })
+
   it('running says where a browser there reaches', () => {
     const running = (route?: { kind: string; why?: string }) => describeHostServer(entry({ phase: 'running', server: route ? { route } : {} }))
     expect(running()).toEqual({ dot: 'done', text: 'Running.', retry: false })

@@ -16,6 +16,7 @@ import { DEFAULT_UPDATE_MAX_BEHIND_MS, DEFAULT_UPDATE_QUIET_MS, minutesFromEnv }
 import { getExposeProvider, onExposeProvidersChanged, type CommandProviderConfig } from '../expose/registry.js'
 import { exposePlacement, tunnelKey, type PlacementHost } from '../expose/placement.js'
 import { COMMAND_PROVIDER_ID, type ExposeProviderDefinition } from '../expose/types.js'
+import { followerOnByDefault } from './follower-default.js'
 
 let manager: HostServerManager | null = null
 let unsubscribe: (() => void) | null = null
@@ -47,8 +48,11 @@ export function noteHostViewForTunnel(view: Pick<HostServerView, 'hostKey' | 'ph
   tunnelRecheck.unref?.()
 }
 
-/** The settings of one host's server, defaults filled in. */
-export function hostServerSettingsFrom(raw: unknown, program?: unknown): HostServerSettings {
+/**
+ * The settings of one host's server, defaults filled in. `onByDefault` (follower-default.ts
+ * followerOnByDefault): what a switch the person never set reads as.
+ */
+export function hostServerSettingsFrom(raw: unknown, program?: unknown, onByDefault = false): HostServerSettings {
   // `node` and `build_env` of older configs are not read: the host runs the compiled walnut file.
   const s = (raw && typeof raw === 'object' ? raw : {}) as {
     enabled?: unknown
@@ -64,8 +68,11 @@ export function hostServerSettingsFrom(raw: unknown, program?: unknown): HostSer
   for (const [k, v] of Object.entries(s.expose?.options && typeof s.expose.options === 'object' ? s.expose.options : {})) {
     if (typeof v === 'string') options[k] = v
   }
+  // Only a switch the person never set follows the default; a stored false stays off.
+  const byDefault = typeof s.enabled !== 'boolean' && onByDefault
   return {
-    enabled: s.enabled === true,
+    enabled: s.enabled === true || byDefault,
+    ...(byDefault ? { byDefault: true } : {}),
     expose: {
       enabled: s.expose?.enabled === true,
       provider: typeof s.expose?.provider === 'string' && s.expose.provider ? s.expose.provider : null,
@@ -124,7 +131,9 @@ export function withThisWalnutTunnel(
   }
   const placed = exposePlacement(e.run_on, def, config.hosts)
   if (placed.where === 'host' && placed.hostKey === hostKey) {
-    return { ...settings, enabled: true, carriesTunnel: true, expose: { enabled: true, provider: e.provider, options: { ...(e.options ?? {}) } } }
+    // The tunnel puts it there, not the default: no gate keeps it off (manager.ts firstOnByDefault).
+    const { byDefault: _byDefault, ...own } = settings
+    return { ...own, enabled: true, carriesTunnel: true, expose: { enabled: true, provider: e.provider, options: { ...(e.options ?? {}) } } }
   }
   // Wherever this Walnut's tunnel runs (here, or on another host), this host's own must not take its address.
   const own = settings.expose
@@ -135,9 +144,11 @@ export function withThisWalnutTunnel(
 }
 
 /**
- * Whether Walnut runs a server on this host now: its own switch, or this computer's tunnel
- * placed there. The server starts only on a connect to the host, so such a host is dialled
- * at startup even when it is known only from ~/.ssh/config (hosts/host-warmup.ts `standing`).
+ * Whether this host is dialled for its server: the person's own switch turned on, or this
+ * computer's tunnel placed there. The server starts only on a connect to the host, so such a
+ * host is dialled at startup even when it is known only from ~/.ssh/config (hosts/host-warmup.ts
+ * `standing`). A follower that is on only by default (follower-default.ts) dials nothing: it
+ * starts on the connect the host gets anyway.
  */
 export function hostRunsServer(
   hostKey: string,
@@ -182,7 +193,7 @@ export function getHostServerManager(): HostServerManager | null {
       const { getConfig } = await import('../config-manager.js')
       const config = await getConfig()
       const host = config.hosts?.[hostKey]
-      return host ? withThisWalnutTunnel(hostKey, hostServerSettingsFrom(host.server, host.server_program), config) : null
+      return host ? withThisWalnutTunnel(hostKey, hostServerSettingsFrom(host.server, host.server_program, followerOnByDefault(host, config)), config) : null
     },
     label: async (hostKey) => {
       const { getConfig } = await import('../config-manager.js')
@@ -215,6 +226,13 @@ export function getHostServerManager(): HostServerManager | null {
     updateQuietMs: minutesFromEnv(process.env.WALNUT_HOST_SERVER_UPDATE_QUIET_MIN, DEFAULT_UPDATE_QUIET_MS),
     updateMaxBehindMs: minutesFromEnv(process.env.WALNUT_HOST_SERVER_UPDATE_MAX_BEHIND_MIN, DEFAULT_UPDATE_MAX_BEHIND_MS),
     copiesNeedNewer: async (hostKey) => (await import('../replication/replica-status.js')).restedAsOlder(`host:${hostKey}`),
+    // A start that failed goes to Walnut Health, never to the person (health-item.ts).
+    health: {
+      failed: (hostKey, message, retries) => {
+        void quietly(import('./health-item.js').then((m) => m.noteHostServerFailed(hostKey, message, retries)), 'raising the Walnut Health item', hostKey)
+      },
+      settled: (hostKey) => { void quietly(import('./health-item.js').then((m) => m.noteHostServerSettled(hostKey)), 'recovering the Walnut Health item', hostKey) },
+    },
     // Test and safety knobs (docs/plan/walnut-replica-servers-impl.md, WP2): another root
     // on the host, and (tests only) a local tree run in place of an installed build.
     ...(hostServerRootSpec() ? { hostRoot: hostServerRootSpec() } : {}),
@@ -285,7 +303,8 @@ export async function reconcileAllHostServers(): Promise<void> {
   if (!m) return
   const { getConfig } = await import('../config-manager.js')
   const hosts = new Set([...Object.keys((await getConfig()).hosts ?? {}), ...m.views().map((v) => v.hostKey)])
-  await Promise.all([...hosts].map((key) => m.reconcile(key).catch((err) => {
+  // Soft: a setup that waits to try again keeps its pace unless this host's own settings changed.
+  await Promise.all([...hosts].map((key) => m.reconcile(key, { soft: true }).catch((err) => {
     log.session.warn('host server: reconcile failed', { host: key, error: err instanceof Error ? err.message : String(err) })
   })))
 }

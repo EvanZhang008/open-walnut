@@ -60,6 +60,7 @@ export function fullConfigFixture(): Record<string, unknown> {
       'lab-mac': { hostname: '10.0.0.9', enabled: false, discovered: true, connect: 'ask' },
     },
     hosts_warmup: { enabled: true },
+    host_servers: { on_by_default: true },
     hosts_found: { asking_since: '2026-11-02T09:00:00.000Z' },
     first_run: { at: '2026-11-02T09:00:00.000Z', steps: ['hosts'], answered: { hosts: '2026-11-02T09:05:00.000Z' } },
     net: { enabled: true },

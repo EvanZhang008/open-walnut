@@ -140,6 +140,7 @@ export const SERVER_PHASE_WORDS: Record<HostServerPhase, string> = {
   starting: 'starting',
   running: 'running',
   error: 'stopped on an error',
+  'not-eligible': 'not run here: the host lacks what it needs',
 }
 
 /** Words for how a host connects. */

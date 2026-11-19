@@ -51,6 +51,14 @@ import { readRunningBuild, runningDist } from './package.js'
 
 export { defaultNpmRegistry, defaultReleaseBase, sumsFor, type Published, type PublishedAsset } from './host-file-download.js'
 
+/**
+ * There is no walnut file of this server's build for a host, and asking again will not make one:
+ * it runs from source, its build names no commit or carries uncommitted changes, no bun can
+ * build it, or no release publishes it for that target. A newer build (a deploy) changes that;
+ * a passing failure (a download, a build that timed out) is a plain Error.
+ */
+export class NoHostFile extends Error {}
+
 export interface HostFile {
   id: string
   version: string
@@ -349,9 +357,9 @@ export function createHostFileSource(opts: HostFileSourceOptions): HostFileSourc
 
   /** A build in a checkout must be of a commit, so that the host runs exactly what this server runs. */
   function checkCommitted(o: Extract<BuildOrigin, { kind: 'checkout' }>, target?: HostFileTarget): string {
-    if (!o.info.commit) throw new Error(`This server's build (${formatBuildVersion(o.info)}) names no commit, so the walnut file${target ? ` for ${target}` : ''} cannot be built from its checkout.`)
+    if (!o.info.commit) throw new NoHostFile(`This server's build (${formatBuildVersion(o.info)}) names no commit, so the walnut file${target ? ` for ${target}` : ''} cannot be built from its checkout.`)
     if (o.info.dirty) {
-      throw new Error(`This server was built from a tree with uncommitted changes (${formatBuildVersion(o.info)}). A host gets only a build of a commit, so that it runs exactly what this server runs: deploy a commit (scripts/deploy-committed.sh), then press Retry.`)
+      throw new NoHostFile(`This server was built from a tree with uncommitted changes (${formatBuildVersion(o.info)}). A host gets only a build of a commit, so that it runs exactly what this server runs: deploy a commit (scripts/deploy-committed.sh), then press Retry.`)
     }
     return o.info.commit
   }
@@ -402,7 +410,7 @@ export function createHostFileSource(opts: HostFileSourceOptions): HostFileSourc
     const sayAll = (m: string) => { for (const t of targets) tell(t, m) }
     const min = pinnedBun(await readPackageJsonAt(o.checkout, commit).catch(() => ''))
     const pick = await bun(min)
-    if ('why' in pick) throw new Error(pick.why)
+    if ('why' in pick) throw new NoHostFile(pick.why)
     sayAll(`Building Walnut ${o.id} for ${targets.join(', ')} on this computer (about a minute, once per build).`)
     await fs.promises.mkdir(opts.cacheDir, { recursive: true })
     const work = await fs.promises.mkdtemp(path.join(workDir, WORK_PREFIX))
@@ -466,11 +474,11 @@ export function createHostFileSource(opts: HostFileSourceOptions): HostFileSourc
     const { version, commit } = o.info
     const noCheckout = `${o.what} has no checkout to build the walnut file for ${target} from`
     if (o.info.dirty) {
-      throw new Error(`This Walnut (${formatBuildVersion(o.info)}) was built from a tree with uncommitted changes, and ${noCheckout}. Install a released Walnut, or run Walnut from a checkout.`)
+      throw new NoHostFile(`This Walnut (${formatBuildVersion(o.info)}) was built from a tree with uncommitted changes, and ${noCheckout}. Install a released Walnut, or run Walnut from a checkout.`)
     }
-    if (!RELEASE_VERSION.test(version)) throw new Error(`This Walnut's version (${version}) is not a release version, and ${noCheckout}.`)
+    if (!RELEASE_VERSION.test(version)) throw new NoHostFile(`This Walnut's version (${version}) is not a release version, and ${noCheckout}.`)
     // The host checks the file names this commit: without one, nothing could tell a release of another commit.
-    if (!commit) throw new Error(`This Walnut's build (${formatBuildVersion(o.info)}) names no commit, and ${noCheckout}.`)
+    if (!commit) throw new NoHostFile(`This Walnut's build (${formatBuildVersion(o.info)}) names no commit, and ${noCheckout}.`)
     const releaseBase = opts.releaseBase ?? defaultReleaseBase()
     const registry = opts.npmRegistry ?? defaultNpmRegistry()
     await fs.promises.mkdir(opts.cacheDir, { recursive: true })
@@ -491,7 +499,7 @@ export function createHostFileSource(opts: HostFileSourceOptions): HostFileSourc
         }
         return got.gz ? await store(o.id, version, commit, target, got.gz, got.sha256) : await storeFile(o.id, o.info, target, got.file, work)
       }
-      throw new Error(`Walnut ${version} has no walnut file for ${target} to download: ${missing.join(', and ')}. And ${noCheckout}: install a released Walnut, or run Walnut from a checkout.`)
+      throw new NoHostFile(`Walnut ${version} has no walnut file for ${target} to download: ${missing.join(', and ')}. And ${noCheckout}: install a released Walnut, or run Walnut from a checkout.`)
     } finally {
       await fs.promises.rm(work, { recursive: true, force: true })
     }
@@ -501,7 +509,7 @@ export function createHostFileSource(opts: HostFileSourceOptions): HostFileSourc
     // Build dirs a server left when it stopped mid-build (each a clone plus its files).
     await (swept ??= pruneAbandonedWork(workDir, WORK_PREFIX).catch(() => undefined))
     const o = await getOrigin()
-    if (o.kind === 'none') throw new Error(o.why)
+    if (o.kind === 'none') throw new NoHostFile(o.why)
     if (o.kind === 'release') {
       const hit = await cached(o.id, o.info.version, o.info.commit, target)
       if (hit) return hit
@@ -523,7 +531,7 @@ export function createHostFileSource(opts: HostFileSourceOptions): HostFileSourc
   return {
     async buildId() {
       const o = await getOrigin()
-      if (o.kind === 'none') throw new Error(o.why)
+      if (o.kind === 'none') throw new NoHostFile(o.why)
       if (o.kind === 'checkout') checkCommitted(o)
       return { id: o.id, version: o.info.version, commit: o.info.commit }
     },

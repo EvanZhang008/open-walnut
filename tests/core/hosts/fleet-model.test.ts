@@ -161,7 +161,7 @@ const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
 
 describe('words, never codes', () => {
   // Every phase the host server manager can be in, read from its type, so a new phase fails here.
-  const union = /export type HostServerPhase =([^;]+)/.exec(read('src/core/host-server/manager.ts'))![1]
+  const union = /export type HostServerPhase =([^;]+)/.exec(read('src/core/host-server/manager-types.ts'))![1]
   const phases = [...union.matchAll(/'([a-z-]+)'/g)].map((m) => m[1])
 
   it('every Walnut server phase has words, and neither the reasons nor the line print a code', () => {

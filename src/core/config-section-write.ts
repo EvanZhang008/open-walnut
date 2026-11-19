@@ -95,6 +95,7 @@ export const CONFIG_SECTION_WRITE: { readonly [K in keyof Required<Config>]: Con
   session_server: 'merge',
   net: 'merge',
   hosts_warmup: 'merge',
+  host_servers: 'merge',
   hosts_found: 'merge',
   first_run: 'merge',
   health_monitor: 'merge',

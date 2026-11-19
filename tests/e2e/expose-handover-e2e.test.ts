@@ -311,8 +311,10 @@ beforeAll(async () => {
   await new Promise<void>((r) => hostPublic.listen(0, '127.0.0.1', () => r()))
   hostPublicPort = (hostPublic.address() as net.AddressInfo).port
   process.env.WALNUT_HOST_SERVER_APP_DIR = '/work/walnut-tree'
-  // No server set up there yet: following the provider turns one on.
-  await updateConfig({ hosts: { devbox: { label: 'Dev box', hostname: 'always-on-devbox.invalid', user: 'someone' } } as never })
+  // No server set up there yet: following the provider turns one on. The default follower is
+  // off here (host_servers.on_by_default): the host's server runs for the tunnel alone, so moving
+  // the tunnel back lets it go. A carrier on by default is never gated (host-server-default-follower.test.ts).
+  await updateConfig({ host_servers: { on_by_default: false }, hosts: { devbox: { label: 'Dev box', hostname: 'always-on-devbox.invalid', user: 'someone' } } } as never)
   await boot()
 }, 60_000)
 

@@ -328,5 +328,7 @@ export function hostServerLookWords(entry: HostServerEntry, error?: string | nul
 /** Walnut on a host offers a retry (it stopped, or runs an older build), or its tunnel does. */
 export function hostServerLook(entry: HostServerEntry, hasError: boolean): boolean {
   if (!entry.settings.enabled) return false;
+  // A host on by default that cannot run one well (its memory, its disk, no build for it) is no problem to fix.
+  if (entry.view?.phase === 'not-eligible') return hasError;
   return describeHostServer(entry).retry || (entry.settings.expose.enabled && describeExpose(entry.view?.server?.expose ?? null, '').retry) || hasError;
 }

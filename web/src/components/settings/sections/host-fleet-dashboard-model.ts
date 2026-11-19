@@ -71,7 +71,8 @@ function rebootProblem(h: FleetHost): Problem | null {
 export function problemsOf(h: FleetHost, now: number): Problem[] {
   const out: Problem[] = [];
   const sv = h.server;
-  if (sv?.enabled && sv.phase !== 'running') {
+  // A host on by default that cannot run one well now has no Walnut server problem: its Details say why.
+  if (sv?.enabled && sv.phase !== 'running' && sv.phase !== 'not-eligible') {
     out.push({ key: 'server', text: `Walnut server ${sv.phaseLabel}`, detail: sv.message ? `Its Walnut server is ${sv.phaseLabel}: ${sv.message}` : `Its Walnut server is ${sv.phaseLabel}`, tone: sv.phase === 'failed' ? 'bad' : 'warn' });
   }
   // A link that keeps dropping reads as such, connected or not (fleet-model.ts connection.unstable).

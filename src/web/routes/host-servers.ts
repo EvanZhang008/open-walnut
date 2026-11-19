@@ -2,8 +2,12 @@
  * /api/host-servers: the servers this Mac keeps on its hosts
  * (docs/plan/walnut-servers-everywhere.md, "A server on a host").
  *
- *   GET  /                    → { hosts: [{ hostKey, label, settings, view, knownAs? }], providers }
+ *   GET  /                    → { hosts: [{ hostKey, label, settings, view, knownAs? }], providers, followerByDefault }
  *   PUT  /:hostKey            { enabled?, expose?: { enabled?, provider?, options? } } → { host }
+ *
+ * `settings.enabled` is what runs: the person's switch, or the default for a host they never set
+ * it on (core/host-server/follower-default.ts); `settings.chosenBy` says which. A PUT of
+ * `enabled` is the person's choice and is kept as theirs across upgrades.
  *   POST /:hostKey/retry      set it up again now (after a failed install, say)
  *   POST /:hostKey/expose/retry  start the host's tunnel again now
  *
@@ -23,6 +27,7 @@ import { MaskedValueError, maskSecretShapes, restoreMaskedSecrets } from '../../
 import { listExposeProviders } from '../../core/expose/registry.js'
 import { EXPOSE_PROVIDER_ID } from '../../core/expose/types.js'
 import { getHostServerManager, hostServerSettingsFrom, withThisWalnutTunnel } from '../../core/host-server/index.js'
+import { followerChosenBy, followerOnByDefault } from '../../core/host-server/follower-default.js'
 import { emitConfigChanged } from '../../core/config-broadcast.js'
 import { log } from '../../logging/index.js'
 import { DEFAULT_COPY_CHOICE, copyChoiceChanged, copyChoiceFrom } from '../../core/replication/kinds/copy-kind.js'
@@ -59,7 +64,7 @@ async function hostEntry(hostKey: string) {
   const config = await getConfig()
   const host = config.hosts?.[hostKey]
   if (!host || host.cloud_box) return null
-  const own = hostServerSettingsFrom(host.server)
+  const own = hostServerSettingsFrom(host.server, undefined, followerOnByDefault(host, config))
   // This Walnut's tunnel placed (Open from a browser): the host that carries it runs a server.
   const settings = withThisWalnutTunnel(hostKey, own, config)
   // The host's own tunnel as set (the carried one is this computer's, set in Open from a browser),
@@ -77,6 +82,8 @@ async function hostEntry(hostKey: string) {
     // as in GET /api/config. PUT puts a mask back.
     settings: {
       enabled: settings.enabled,
+      // Whose the switch is: the person's (stored), or the default's (never set).
+      chosenBy: followerChosenBy(host.server),
       ...(settings.carriesTunnel ? { carriesTunnel: true } : {}),
       expose: { ...expose, options: maskSecretShapes(expose.options) },
       // Which kinds the Mac copies to this host's replica (WP4), defaults filled in.
@@ -115,9 +122,15 @@ hostServersRouter.use((req, res, next) => {
 
 hostServersRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const keys = Object.entries((await getConfig()).hosts ?? {}).filter(([, h]) => !h.cloud_box).map(([k]) => k)
+    const config = await getConfig()
+    const keys = Object.entries(config.hosts ?? {}).filter(([, h]) => !h.cloud_box).map(([k]) => k)
     const hosts = (await Promise.all(keys.map(hostEntry))).filter((h) => h !== null)
-    res.json({ hosts, providers: listExposeProviders().filter((p) => p.id !== 'command') })
+    res.json({
+      hosts,
+      providers: listExposeProviders().filter((p) => p.id !== 'command'),
+      // What a host the person never set the switch on does (`host_servers.on_by_default`).
+      followerByDefault: config.host_servers?.on_by_default !== false,
+    })
   } catch (err) {
     next(err)
   }

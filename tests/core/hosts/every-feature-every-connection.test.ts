@@ -179,6 +179,7 @@ const BRANCHING_FILES: Record<string, { max: number; why: string }> = {
   'src/commands/demo-ssh-masters.ts': { max: 1, why: 'the demo\'s ssh masters: demo only' },
   'src/core/expose/placement.ts': { max: 2, why: 'where a host server\'s page is exposed: the cloud box is itself public, so it is not a candidate' },
   'src/core/host-replica.ts': { max: 1, why: 'which keep settings a host\'s replica takes: the cloud box keeps the companion\'s, every other host its own' },
+  'src/core/host-server/follower-default.ts': { max: 1, why: 'the cloud box is a Walnut server itself: it gets no follower by default, as no host server of this Mac runs there (index.ts, the route\'s 409)' },
   'src/core/host-server/index.ts': { max: 1, why: 'the cloud box is a Walnut server itself (CLOUD_BOX_HOST_SERVER_NOTE): no host server of this Mac runs there, and the UI says so' },
   'src/core/hosts/cloud-box-host.ts': { max: 3, why: 'which row is the cloud box: the connection machinery' },
   'src/core/hosts/fleet.ts': { max: 2, why: 'the fleet rows: display, and the cloud box\'s host-server note' },

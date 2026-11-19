@@ -2,9 +2,14 @@
  * The Mac's side of the host servers (docs/plan/walnut-servers-everywhere.md,
  * "A server on a host"). Primary only.
  *
- * For each host whose settings turn it on (`hosts.<key>.server.enabled`), on
- * every connect to that host's daemon (after `leader.configure`, so the daemon
- * knows which Walnut speaks) and after a settings change:
+ * For each host whose settings turn it on (`hosts.<key>.server.enabled`, or the default:
+ * follower-default.ts), on every connect to that host's daemon (after `leader.configure`, so
+ * the daemon knows which Walnut speaks) and after a settings change:
+ *
+ *   0. a host on only by default, with no follower of this Walnut yet, is looked at first
+ *      (eligibility.ts): a build that runs there, enough memory, room on its disk. One that
+ *      lacks one stays without a follower, its view says why (`not-eligible`), and memory or
+ *      disk is looked at again later (try-later.ts)
  *
  *   1. this Mac's build installed there as the compiled walnut file for the
  *      host's system (host-target.ts probes it, host-file.ts builds or
@@ -53,203 +58,25 @@ import { log } from '../../logging/index.js'
 import { execNeedsBunBeBun } from '../../lib/runtime.js'
 import type { HostServerStatus } from '../../providers/host-server-core.js'
 import { getExposeProvider } from '../expose/registry.js'
-import type { ExposeProviderDefinition, ExposeStatus } from '../expose/types.js'
-import type { HostFileSource } from './host-file.js'
-import { parseHostTarget, targetProbeScript } from './host-target.js'
+import type { ExposeProviderDefinition } from '../expose/types.js'
+import { parseHostTarget, targetProbeScript, type HostTarget } from './host-target.js'
+import { NoHostFile } from './host-file.js'
 import { validBuildId } from '../companion-build/wire.js'
 import {
-  checkHostRoot, fileInstallScript, freePortsScript, HOST_ROOT, launchScript, legacyDataOwnerScript, parseFreePorts, parseInstallState, pruneScript, stateScript,
-  walnutDirs, walnutDirsScript, type InstallState,
+  checkHostRoot, fileInstallScript, freePortsScript, HOST_ROOT, installCannotRun, launchScript, legacyDataOwnerScript, parseFreePorts, parseInstallState, pruneScript, stateScript,
+  walnutDirs, walnutDirsScript,
 } from './install.js'
 import { DEFAULT_UPDATE_MAX_BEHIND_MS, DEFAULT_UPDATE_QUIET_MS, heldNotice, updateHold } from './update-hold.js'
+import { FOLLOWER_FLOORS, judgeFollowerRoom, roomProbeScript, type FollowerGateReason } from './eligibility.js'
+import { createTryLater, inWords, type TryLaterKind } from './try-later.js'
 import { FOLLOWER_GATEWAY_CAPABILITY } from '../../providers/follower-gateway-core.js'
 
-/** What the manager needs of a host's daemon connection (DaemonConnection has it). */
-export interface HostServerHost {
-  hostKey: string
-  connected: boolean
-  hasCapability(cap: string): boolean
-  send(cmd: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>
-  runRemoteScript(script: string, timeoutMs?: number): Promise<string>
-  /**
-   * `sha256` of `data`: a file already there with it is not sent again (DaemonConnection.uploadFile).
-   * `onProgress`: the bytes the host holds so far, as the upload goes.
-   */
-  uploadFile(remotePath: string, data: Buffer, opts?: { sha256?: string; onProgress?: (sent: number, total: number) => void }): Promise<unknown>
-  /**
-   * Put the walnut file with `sha256` at `gz` from the host's daemon slot, when a
-   * compiled Mac made the same file the host's daemon (DaemonConnection
-   * seedHostFileFromDaemon): one upload serves both. False: send it.
-   */
-  seedFromDaemon?(sha256: string, gz: string): Promise<boolean>
-  /** A byte stream to the server on that host that follows this Walnut, through its daemon. */
-  openStream(to: 'follower', purpose?: string): Promise<Duplex>
-  /** Carry those streams on a link of their own while the server runs (providers/stream-lane.ts). */
-  keepStreamLane?(on: boolean): void
-  /** The daemon process this link reached (its hello instanceId): what it was sent before, it still holds. */
-  readonly daemonInstanceId?: string | null
-}
-
-export interface HostServerSettings {
-  enabled: boolean
-  expose: {
-    enabled: boolean; provider: string | null; options: Record<string, string>
-    /** Why the host's own tunnel does not run although it is on (it would take this computer's address). */
-    blocked?: string
-  }
-  /** This Walnut's tunnel (Open from a browser) runs here, instead of on this computer (expose/placement.ts). */
-  carriesTunnel?: boolean
-  /**
-   * Whether this host carries this Walnut's tunnel is not known now (its provider is not
-   * registered: a plugin still loading, or one that failed): the host is left as it was
-   * last configured, so the tunnel it may carry keeps running.
-   */
-  keepAsConfigured?: string
-  /** The host's choice (`hosts.<key>.server_program`): 'host-server' keeps the plain host server; else `web --replica` where the daemon can (D13). */
-  program?: 'replica' | 'host-server'
-  /**
-   * Which kinds the Mac copies to this host's replica (`hosts.<key>.server.copies`,
-   * the host's Settings row): sessions, requests, boards, inbox, inbox bodies.
-   * Unset: replication/kinds/copy-kind.ts DEFAULT_COPY_CHOICE (every kind on).
-   */
-  copies?: Record<string, boolean>
-  /** `hosts.<key>.server.ask_bypass`: a new ask on the host while the Mac is away may start in bypass (WP12). */
-  askBypass?: boolean
-}
-
-export type HostServerPhase =
-  | 'off' | 'waiting-for-host' | 'unsupported' | 'checking' | 'installing' | 'starting' | 'running' | 'error'
-
-export interface HostServerView {
-  hostKey: string
-  enabled: boolean
-  phase: HostServerPhase
-  /** One sentence for the person: what is happening, or what went wrong. */
-  message?: string
-  since: number
-  build?: string
-  install?: InstallState
-  /** The daemon's supervision of it. */
-  daemon?: HostServerStatus
-  /** What the server last reported through its daemon (its route, its daemon link, its tunnel). */
-  server?: {
-    route?: { kind: string; why?: string }
-    expose?: ExposeStatus
-    version?: string
-    commit?: string | null
-    daemon?: { state?: string; lastError?: string | null }
-    /** The host's journal (its daemon's follower.status line), a replica's report only (WP14). */
-    journal?: Record<string, unknown> | null
-  } | null
-  /**
-   * The reported tunnel's `since` on this computer's clock (the host's clock may differ): its
-   * age by the host's clock, counted back from before this computer asked, so never later than
-   * it was. A tunnel handover reads it (expose/placement.ts hostHolds).
-   */
-  exposeSince?: number
-  /**
-   * The server's last report that came in, kept while it does not answer now (`server` is
-   * null then): its version, commit and tunnel stay readable, with `lastReportAt` (this
-   * computer's clock) saying how old they are. Nothing decides from it: `server` alone says it runs.
-   */
-  lastReport?: NonNullable<HostServerView['server']>
-  lastReportAt?: number
-  port?: number
-  /**
-   * Which program runs: what the daemon was told (the replica only where the host
-   * opted in and its daemon can), or 'fallback' while the daemon runs the plain
-   * host server after the replica crash-looped (`daemon.fallback` says since, until, why).
-   */
-  program?: 'replica' | 'host-server' | 'fallback'
-  /** While it runs: why it runs an older build than this Mac's (that one did not answer; Retry tries it again). */
-  notice?: string
-}
-
-/** A program the host ran that reported, as configured (the settings are always the current ones). */
-interface WorkingProgram {
-  id: string
-  command: string
-  args: string[]
-  env: Record<string, string>
-  fallback?: { args: string[]; env: Record<string, string> }
-  cwd: string
-  log: string
-}
-
-/** Per host, in the state file: its port, the program that last worked, a build that did not. */
-interface HostRecord {
-  publicPort: number
-  working?: WorkingProgram
-  refused?: { id: string; message: string }
-  /** When a newer build of this Mac was first held back from this host (update-hold.ts); gone once one goes out. */
-  behindSince?: number
-}
-
-/** A host's copy target: `ready` when its server answers, `restarted` when another process answers than last time. */
-export interface HostCopyTarget { unregister(): void; ready(restarted: boolean): void }
-
-export interface ManagerDeps {
-  settingsOf(hostKey: string): Promise<HostServerSettings | null>
-  label(hostKey: string): Promise<string>
-  walnutId(): Promise<string>
-  home: string
-  /** This Mac's tunnel port, held open: host servers' streams come in by it. */
-  holdTunnelPort(holder: string): Promise<number>
-  releaseTunnelPort(holder: string): Promise<void>
-  /** This Mac's build as the walnut file for a host's target (host-file.ts). */
-  hostFile: HostFileSource
-  stateFile: string
-  /**
-   * Machine-local (never synced): the tunnel retry count each host was last given. The server
-   * there restarts its tunnel when the count changes, so a count that started over at 0 after
-   * a restart here would restart it. Unset: kept in memory only.
-   */
-  retryFile?: string
-  now(): number
-  /** Copies for the follower (core/replication/replica-targets.ts); `ready` once its server answers. */
-  registerTarget?(
-    hostKey: string,
-    post: (body: Record<string, unknown>, opts?: { timeoutMs?: number }) => Promise<Response>,
-    /** The host's choice of copied kinds, read at each round (its Settings row). */
-    copies?: () => Promise<Record<string, boolean> | undefined>,
-  ): HostCopyTarget
-  /** A view changed (the settings page listens). */
-  changed?(view: HostServerView): void
-  /**
-   * True while this server is stopping: a reconcile then changes nothing on a host. Its plugins
-   * go first, and a tunnel provider gone with them must not take the tunnel off the host that
-   * carries it; the host's daemon keeps that server running, and the next server sets it again.
-   */
-  frozen?(): boolean | Promise<boolean>
-  pollMs?: number
-  installPollMs?: number
-  /** Waits before a setup an SSH login refused runs again (tests shorten them). */
-  loginRetryMs?: readonly number[]
-  /** How long a started server has to send its first report. */
-  firstReportMs?: number
-  /** When this server began serving its build (default: when the manager was made). */
-  servingSince?: number
-  /** How long this build serves with no newer deploy before it goes to a host that works (WALNUT_HOST_SERVER_UPDATE_QUIET_MIN; 0: at once). */
-  updateQuietMs?: number
-  /** The longest a host that works runs an older build than this Mac's (WALNUT_HOST_SERVER_UPDATE_MAX_BEHIND_MIN). */
-  updateMaxBehindMs?: number
-  /** Why the host's program cannot take this Mac's copies (a kind rested as newer than it knows), or null. */
-  copiesNeedNewer?(hostKey: string): Promise<string | null>
-  /** The root on the host (WALNUT_HOST_SERVER_ROOT; default HOST_ROOT). */
-  hostRoot?: string
-  /**
-   * Tests only (WALNUT_HOST_SERVER_APP_DIR): run `<appCommand> <appDir>/dist/cli.js`
-   * on the host instead of installing the file. Meant for a "host" that is this
-   * machine, so appCommand defaults to this process's own bun. A walnut file is
-   * no default: it would run the dist build only told to be bun (BUN_BE_BUN=1),
-   * which every child of that server (its daemon, each `claude`) would inherit.
-   */
-  appDir?: string
-  appCommand?: string
-}
-
-/** How the host runs Walnut: `<command> ...prefix <subcommand>`; `asBun` when the command is the walnut file. */
-interface HostProgram { command: string; prefix: string[]; asBun: boolean }
+export type {
+  HostServerHost, HostServerSettings, HostServerPhase, HostServerView, HostCopyTarget, ManagerDeps,
+} from './manager-types.js'
+import type {
+  HostServerHost, HostServerSettings, HostServerPhase, HostServerView, HostCopyTarget, ManagerDeps, WorkingProgram, HostRecord, HostProgram,
+} from './manager-types.js'
 
 /** Unpack, check and try the file once: seconds, minutes on a slow disk. */
 const INSTALL_TIMEOUT_MS = 5 * 60_000
@@ -287,8 +114,24 @@ function requestOver(stream: Duplex, method: string, route: string, body: Buffer
   })
 }
 
+/** A file this server cannot make for the host waits for Retry or a newer build; any other failure of getting it is tried again later. */
+function noFileYet(err: unknown): never {
+  if (err instanceof NoHostFile) throw new UntilRetry(err.message, true)
+  throw err
+}
+
 /** This server began to stop during a reconcile (ManagerDeps.frozen): it ends without a word. */
 class StoppingHere extends Error {}
+
+/**
+ * A setup step that would fail the same way again, so it waits for Retry (or a newer build):
+ * an install that failed on the host, a system no build is made for, a build this computer has
+ * no file for. `noBuild`: there is no file that runs on that host (this server has none for its
+ * system, or its proof boot failed there), not a passing problem.
+ */
+class UntilRetry extends Error {
+  constructor(message: string, readonly noBuild: boolean) { super(message) }
+}
 
 export function createHostServerManager(deps: ManagerDeps) {
   const views = new Map<string, HostServerView>()
@@ -296,31 +139,23 @@ export function createHostServerManager(deps: ManagerDeps) {
   const running = new Map<string, Promise<void>>()
   const rerun = new Set<string>()
   const retries = new Set<string>()
-  /**
-   * A setup whose own SSH login was refused (a sign-in that expired or was being renewed, the
-   * proxy's login): it runs again by itself, later and later, until a login works. Before, it
-   * waited for the next connect or Retry, so a renewal at the wrong second left the tunnel on
-   * this Mac for good (2026-11-03).
-   */
-  const loginWaits = new Map<string, { n: number; timer: ReturnType<typeof setTimeout> | null }>()
-  const LOGIN_RETRY_MS = deps.loginRetryMs ?? [30_000, 60_000, 120_000, 300_000, 600_000]
-  function loginRefused(hostKey: string, message: string): string {
-    const wait = loginWaits.get(hostKey) ?? { n: 0, timer: null }
-    if (wait.timer) clearTimeout(wait.timer)
-    const ms = LOGIN_RETRY_MS[Math.min(wait.n, LOGIN_RETRY_MS.length - 1)]!
-    wait.n += 1
-    wait.timer = setTimeout(() => {
-      wait.timer = null
-      if (hosts.get(hostKey)?.connected) void reconcile(hostKey)
-    }, ms)
-    wait.timer.unref?.()
-    loginWaits.set(hostKey, wait)
-    return `${message}. Walnut tries again in ${ms >= 60_000 ? `${Math.round(ms / 60_000)} min` : `${Math.round(ms / 1000)} s`}.`
-  }
-  function loginWorked(hostKey: string): void {
-    const wait = loginWaits.get(hostKey)
-    if (wait?.timer) clearTimeout(wait.timer)
-    loginWaits.delete(hostKey)
+  /** Reconciles that are more than a config change somewhere (a connect, a timer, a settings write, Retry). */
+  const hard = new Set<string>()
+  /** The settings each host's last reconcile read, so a config change elsewhere does not redo a setup that waits. */
+  const lastSettings = new Map<string, string>()
+  /** The host's setup failed in this pass: why, and whether it tries again by itself (Walnut Health is told once per pass). */
+  const failedNow = new Map<string, { message: string; triesAgain: boolean }>()
+  /** A setup that runs again by itself, later and later (try-later.ts: a refused login, a failed start, a gate). */
+  const tryLater = createTryLater({
+    ...(deps.tryLaterMs ? { schedules: deps.tryLaterMs } : {}),
+    now: deps.now,
+    run: (hostKey) => { if (hosts.get(hostKey)?.connected) void reconcile(hostKey) },
+  })
+  /** The view's sentence for a setup that runs again later, and when. */
+  function retryingLater(hostKey: string, kind: TryLaterKind, message: string): { message: string; at: number } {
+    const { ms, at } = tryLater.later(hostKey, kind)
+    const end = /[.!?]$/.test(message) ? '' : '.'
+    return { message: `${message}${end} Walnut ${kind === 'gate' ? 'looks' : 'tries'} again in ${inWords(ms)}.`, at }
   }
   const polls = new Map<string, ReturnType<typeof setInterval>>()
   /** Per host set up: the copy target, the spec last sent (for a tunnel retry), the server pid the target last heard of. */
@@ -374,6 +209,10 @@ export function createHostServerManager(deps: ManagerDeps) {
     Object.assign(v, patch)
     if (phaseChanged) v.since = deps.now()
     if (patch.phase !== undefined && patch.message === undefined && phaseChanged) v.message = undefined
+    // Each says something of one phase only.
+    if (v.phase !== 'not-eligible') delete v.gate
+    if (v.phase !== 'error') delete v.retryAt
+    if (v.phase !== 'installing' && v.phase !== 'waiting-for-host') delete v.upload
     deps.changed?.({ ...v })
     // The copy target is registered while the server still starts; its first
     // round (and the one after a restart) waits for this, not for a task event;
@@ -446,7 +285,7 @@ export function createHostServerManager(deps: ManagerDeps) {
    * that failed there is not sent again until `retry` (the person's Retry): the
    * same file would fail the same way, after the same upload.
    */
-  async function ensureInstalled(host: HostServerHost, retry: boolean): Promise<{ id: string; root: string; rootSpec: string; program: HostProgram; dataDir: string; logFile: string; runDir: string }> {
+  async function ensureInstalled(host: HostServerHost, retry: boolean, known?: HostTarget): Promise<{ id: string; root: string; rootSpec: string; program: HostProgram; dataDir: string; logFile: string; runDir: string }> {
     const rootSpec = checkHostRoot(deps.hostRoot ?? HOST_ROOT)
     const remoteHome = rootSpec.startsWith('$HOME') ? (await host.runRemoteScript('printf %s "$HOME"', 10_000)).trim() : ''
     if (rootSpec.startsWith('$HOME') && !remoteHome.startsWith('/')) throw new Error('the host did not say where its home is')
@@ -472,19 +311,23 @@ export function createHostServerManager(deps: ManagerDeps) {
       set(host.hostKey, { build: 'local-app', install: { state: 'ready' } })
       return { id: 'local-app', program: { command: deps.appCommand ?? process.execPath, prefix: [`${deps.appDir}/dist/cli.js`], asBun: false }, ...dirs }
     }
-    const { id } = await deps.hostFile.buildId()
+    const { id } = await deps.hostFile.buildId().catch(noFileYet)
     const installed = { id, program: { command: `${root}/app/${id}/walnut`, prefix: [], asBun: true }, ...dirs }
     set(host.hostKey, { build: id })
     let state = parseInstallState(await host.runRemoteScript(stateScript(id, rootSpec), 15_000))
     if (state.state === 'ready') { set(host.hostKey, { install: state }); return installed }
     if (state.state === 'failed' && !retry) {
       set(host.hostKey, { install: state })
-      throw new Error(`the install of Walnut ${id} on the host failed: ${state.message}. Press Retry to install it again.`)
+      throw new UntilRetry(`the install of Walnut ${id} on the host failed: ${state.message}. Press Retry to install it again.`, installCannotRun(state.message))
     }
     if (state.state !== 'running') {
-      const target = parseHostTarget(await host.runRemoteScript(targetProbeScript(), 15_000))
+      // A system no build of the file is made for: nothing to send, until Retry.
+      const probe = known ? null : await host.runRemoteScript(targetProbeScript(), 15_000)
+      let target: HostTarget
+      try { target = known ?? parseHostTarget(probe!) } catch (err) { throw new UntilRetry(err instanceof Error ? err.message : String(err), true) }
       set(host.hostKey, { phase: 'installing', message: `Getting Walnut ${id} for ${target.target}.`, install: { state: 'running' } })
       const file = await deps.hostFile.file(target.target, (message) => set(host.hostKey, { message }))
+        .catch(noFileYet)
       const mb = (n: number) => Math.max(1, Math.round(n / 2 ** 20))
       const sending = (pct?: number) => `Sending Walnut ${id} for ${target.target} to the host (${pct === undefined ? '' : `${pct}%, `}${mb(file.gz.length)} MB).`
       set(host.hostKey, { message: sending() })
@@ -497,7 +340,7 @@ export function createHostServerManager(deps: ManagerDeps) {
         const pct = total > 0 ? Math.floor((sent / total) * 100) : 0
         if (pct === shown || (pct - shown < 2 && pct < 100)) return
         shown = pct
-        showProgress(host.hostKey, sending(pct))
+        set(host.hostKey, { message: sending(pct), upload: { sent, total } })
       }
       if (!(await host.seedFromDaemon?.(file.sha256, gzPath).catch(() => false))) await host.uploadFile(gzPath, file.gz, { sha256: file.gzSha256, onProgress })
       const script = fileInstallScript({ id, version: file.version, commit: file.commit, sha256: file.sha256, host: target.describe, dataDir: dirs.dataDir, ...(deps.hostRoot ? { root: rootSpec } : {}) })
@@ -515,7 +358,7 @@ export function createHostServerManager(deps: ManagerDeps) {
       host = hosts.get(host.hostKey) ?? host
       state = parseInstallState(await host.runRemoteScript(stateScript(id, rootSpec), 15_000))
       if (state.state === 'ready') { set(host.hostKey, { install: state }); return installed }
-      if (state.state === 'failed') { set(host.hostKey, { install: state }); throw new Error(`the install of Walnut ${id} on the host failed: ${state.message}`) }
+      if (state.state === 'failed') { set(host.hostKey, { install: state }); throw new UntilRetry(`the install of Walnut ${id} on the host failed: ${state.message}`, installCannotRun(state.message)) }
       if (state.state === 'absent') throw new Error(`the install on the host stopped without a word (see ${root}/incoming on the host)`)
       if (deps.now() > until) throw new Error('the install on the host took more than 5 minutes')
     }
@@ -656,12 +499,18 @@ export function createHostServerManager(deps: ManagerDeps) {
     return { rec, working }
   }
 
-  async function reconcileOnce(hostKey: string, retry = false): Promise<void> {
+  async function reconcileOnce(hostKey: string, retry = false, soft = false): Promise<void> {
     let host = hosts.get(hostKey)
     if (await deps.frozen?.()) return
     const settings = await deps.settingsOf(hostKey)
     // Read while this server began to stop (its plugins going): what they say is not the person's.
     if (await deps.frozen?.()) return
+    // A config change elsewhere (favorites, ordering) does not redo a setup that waits to try again
+    // (try-later.ts) while this host's own settings are the same: the wait keeps its pace.
+    const print = JSON.stringify(settings)
+    const waits = tryLater.pending(hostKey)
+    if (soft && (waits === 'failed' || waits === 'gate') && lastSettings.get(hostKey) === print) return
+    lastSettings.set(hostKey, print)
     if (settings?.keepAsConfigured) {
       log.session.info('host server: left as configured', { host: hostKey, why: settings.keepAsConfigured })
       return
@@ -672,7 +521,7 @@ export function createHostServerManager(deps: ManagerDeps) {
     const enabled = settings?.enabled === true
     if (!enabled) {
       stopPoll(hostKey)
-      loginWorked(hostKey)
+      tryLater.clear(hostKey)
       // Also after a restart of this server: the host may still run one it set up before.
       if (host?.connected && host.hasCapability('host-server-v1')) {
         const st = await host.send('server.status', { home: deps.home }, 10_000).catch(() => null)
@@ -715,6 +564,19 @@ export function createHostServerManager(deps: ManagerDeps) {
       })
       // A newer build of this Mac waits while the program that works there reports (update-hold.ts):
       // the host keeps it, with the settings of now, and nothing is sent.
+      // A host on only by default, with nothing of this Walnut yet: one starts only where it runs
+      // well (eligibility.ts). The person's own switch, the tunnel placed there, and a host where a
+      // follower was ever set up (its port is kept, or its daemon runs one) skip it: a running
+      // follower's own memory must never read as the host's lack of it.
+      let known: HostTarget | undefined
+      if (await firstOnByDefault(host, settings!)) {
+        const judged = judgeFollowerRoom(await host.runRemoteScript(roomProbeScript(deps.hostRoot ?? HOST_ROOT), 15_000), deps.floors ?? FOLLOWER_FLOORS)
+        if ('gate' in judged) {
+          notEligible(hostKey, judged.gate.reason, judged.gate.message, judged.gate.room)
+          return
+        }
+        known = judged.target
+      }
       const held = await heldBuild(host, replica, retry)
       if (held) {
         set(hostKey, { phase: 'starting', message: 'Starting the server on the host.', port: held.rec.publicPort })
@@ -727,7 +589,7 @@ export function createHostServerManager(deps: ManagerDeps) {
         startPoll(hostKey)
         return
       }
-      const install = await ensureInstalled(host, retry)
+      const install = await ensureInstalled(host, retry, known)
       // The link may have dropped and come back as a new connection during the install.
       host = hosts.get(hostKey) ?? host
       const rec = await portsFor(host, install.program)
@@ -809,10 +671,46 @@ export function createHostServerManager(deps: ManagerDeps) {
       if (err instanceof StoppingHere) return
       const message = err instanceof Error ? err.message : String(err)
       log.session.warn('host server: setup failed', { host: hostKey, error: message })
-      // A refused login is no verdict on the host: try again by itself (loginWaits).
+      failedNow.set(hostKey, { message, triesAgain: !(err instanceof UntilRetry) })
+      if (err instanceof UntilRetry) {
+        // The same file would fail the same way: it waits for Retry (or a newer build). On a host
+        // that is on only by default, a file that does not run there means no follower there.
+        if (err.noBuild && settings!.byDefault) {
+          notEligible(hostKey, 'no-build', `No Walnut server runs on this host: ${message.replace(/\.? Press Retry to install it again\.$/, '').replace(/\.$/, '')}. Its sessions run as before; Retry tries again, and a newer build is tried by itself.`)
+          return
+        }
+        tryLater.clear(hostKey)
+        set(hostKey, { phase: 'error', message })
+        return
+      }
+      // Anything else runs again by itself, later and later; a refused login is no verdict on the
+      // host, so it comes back sooner. Nothing else on the host waits for it.
       const refused = err instanceof Error && err.name === 'SshLoginRefusedError'
-      set(hostKey, { phase: 'error', message: refused ? loginRefused(hostKey, message) : message })
+      const later = retryingLater(hostKey, refused ? 'login' : 'failed', message)
+      set(hostKey, { phase: 'error', message: later.message, retryAt: later.at })
     }
+  }
+
+  /** Whether this host is on only by default and nothing of this Walnut runs or ran there: the gates apply. */
+  async function firstOnByDefault(host: HostServerHost, settings: HostServerSettings): Promise<boolean> {
+    if (!settings.byDefault || settings.carriesTunnel || readState()[host.hostKey]) return false
+    const st = await host.send('server.status', { home: deps.home }, 10_000).catch(() => null)
+    const state = (st?.status as HostServerStatus | undefined)?.state
+    return !state || state === 'off'
+  }
+
+  /** A host on by default that cannot run a follower well now: its view says why, and when it is looked at again. */
+  function notEligible(hostKey: string, reason: FollowerGateReason, message: string, room?: unknown): void {
+    log.session.info('host server: no follower on this host by default', { host: hostKey, reason, ...(room ? { room } : {}) })
+    const checkedAt = deps.now()
+    if (reason === 'no-build') {
+      // A build that does not run there does not start to: the next connect or a Retry looks again.
+      tryLater.clear(hostKey)
+      set(hostKey, { enabled: true, phase: 'not-eligible', message, gate: { reason, checkedAt } })
+      return
+    }
+    const later = retryingLater(hostKey, 'gate', message)
+    set(hostKey, { enabled: true, phase: 'not-eligible', message: later.message, gate: { reason, checkedAt, recheckAt: later.at } })
   }
 
   function olderNotice(id: string, older: string, why: string): string {
@@ -893,11 +791,6 @@ export function createHostServerManager(deps: ManagerDeps) {
    */
   const resumeView = new Map<string, { phase: HostServerPhase; message?: string }>()
 
-  /** A progress line: on the view, or kept for its return while the link is down (set). */
-  function showProgress(hostKey: string, message: string): void {
-    set(hostKey, { message })
-  }
-
   /** True once the host's link is up again, within LINK_BACK_MS. */
   async function linkBack(hostKey: string): Promise<boolean> {
     const until = deps.now() + LINK_BACK_MS
@@ -908,17 +801,27 @@ export function createHostServerManager(deps: ManagerDeps) {
     return true
   }
 
-  function reconcile(hostKey: string, opts: { retry?: boolean } = {}): Promise<void> {
+  function reconcile(hostKey: string, opts: { retry?: boolean; soft?: boolean } = {}): Promise<void> {
     if (opts.retry) retries.add(hostKey)
+    if (!opts.soft) hard.add(hostKey)
     const current = running.get(hostKey)
     if (current) { rerun.add(hostKey); return current }
     const run = (async () => {
       do {
         rerun.delete(hostKey)
         const retry = retries.delete(hostKey)
-        await reconcileOnce(hostKey, retry)
-        // Whatever path it took, a setup that did not end in an error got its login: wait no more.
-        if (view(hostKey).phase !== 'error') loginWorked(hostKey)
+        const soft = !hard.delete(hostKey)
+        failedNow.delete(hostKey)
+        await reconcileOnce(hostKey, retry, soft)
+        const { phase } = view(hostKey)
+        // Whatever path it took, a setup that did not end in an error or a gate waits no more.
+        if (phase !== 'error' && phase !== 'not-eligible') tryLater.clear(hostKey)
+        // Walnut Health hears of a start that failed in this pass (never the person), and of one that
+        // settled. A refused login is the person's sign-in, which the host's own problem line carries.
+        const failed = failedNow.get(hostKey)
+        failedNow.delete(hostKey)
+        if (phase === 'error' && failed && tryLater.pending(hostKey) !== 'login') deps.health?.failed(hostKey, failed.message, failed.triesAgain)
+        else if (phase === 'running' || phase === 'off' || phase === 'not-eligible') deps.health?.settled(hostKey)
       } while (rerun.has(hostKey))
     })().finally(() => {
       running.delete(hostKey)
@@ -987,7 +890,7 @@ export function createHostServerManager(deps: ManagerDeps) {
     },
     stop(): void {
       for (const key of [...polls.keys()]) stopPoll(key)
-      for (const key of [...loginWaits.keys()]) loginWorked(key)
+      tryLater.clearAll()
     },
   }
 }

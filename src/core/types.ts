@@ -1718,8 +1718,10 @@ export interface Config {
      *  tasks, triggers, the team Board, replies) is always kept. */
     keep?: ReplicaKeepConfig;
     /** A Walnut server this Mac keeps running on the host, following it
-     *  (core/host-server/, docs/plan/walnut-servers-everywhere.md). Off unless enabled. */
+     *  (core/host-server/, docs/plan/walnut-servers-everywhere.md). */
     server?: {
+      /** The person's own switch: written only when they flip it. Unset follows
+       *  `host_servers.on_by_default` (on): core/host-server/follower-default.ts. */
       enabled?: boolean;
       // `build_env` is retired (a host server is the compiled walnut file, nothing is
       // built on the host). Older configs carry it; its secrets stay masked (config-redact.ts).
@@ -1748,6 +1750,12 @@ export interface Config {
    *  Set `enabled: false` to keep connects strictly on demand. */
   hosts_warmup?: {
     enabled?: boolean;
+  };
+  /** The followers this Mac runs on its hosts (core/host-server/follower-default.ts). */
+  host_servers?: {
+    /** A host whose own switch (`hosts.<key>.server.enabled`) was never set runs a follower.
+     *  On unless `false`; `false` makes the switch opt-in again for every host. */
+    on_by_default?: boolean;
   };
   /** Found hosts (core/hosts/found-hosts.ts): set once the server decided the found
    *  hosts an older Walnut left; from then on a newly found host waits for the

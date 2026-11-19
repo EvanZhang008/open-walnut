@@ -79,6 +79,7 @@ const STORE_WRITERS: Record<string, { calls: number; what: string }> = {
   'core/hosts/found-host-alert.ts': { calls: 1, what: 'a found host the person said Connect to that cannot be added (user, own-action)' },
   'core/notifications/apply-companion-cards.ts': { calls: 1, what: 'the cloud companion\'s own cards, as it wrote them (their reason comes along)' },
   'core/offline-merge/journal-fill.ts': { calls: 1, what: 'a host journal that came near full or refused writes while the Mac was away (health)' },
+  'core/host-server/health-item.ts': { calls: 1, what: 'a host\'s follower server that did not start (health)' },
 }
 
 // Namespaced calls count too (`store.upsertNotification(`); chat-history's own addNotification is the
