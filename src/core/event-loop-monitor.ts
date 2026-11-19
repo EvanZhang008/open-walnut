@@ -319,12 +319,14 @@ export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
         // read now: the next tick replaces the sample it is measured against.
         let hold: Record<string, unknown> | undefined
         try { hold = probeObserver?.hold(lateBy, monoNow) } catch { hold = undefined }
-        // The synchronous calls (SQLite, child process starts) that ran between the two probes.
+        // The synchronous calls (SQLite, child process starts) that held the loop
+        // past the probe's deadline: from that deadline to now, so a call that ran
+        // in the normal second before it is not counted (blocking.ms <= lateByMs).
         let blocking: ReturnType<typeof blockingCallsWithin> = null
         if (clocks === defaultClocks) {
           try {
             const perfNow = performance.now()
-            blocking = blockingCallsWithin(perfNow - monoDelta, perfNow)
+            blocking = blockingCallsWithin(perfNow - lateBy, perfNow)
           } catch { blocking = null }
         }
         const payload = {

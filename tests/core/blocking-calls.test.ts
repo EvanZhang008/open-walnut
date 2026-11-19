@@ -49,9 +49,7 @@ describe('blocking-call ledger', () => {
     expect(top.kind).toBe('sqlite')
     expect(top.what).toBe(sqlLabel(SLOW_SQL))
     expect(got!.ms).toBeGreaterThanOrEqual(100)
-    // Every call here is under 100 ms on a fast machine, so only the long ones carry a site; the group with one names the caller.
-    const withSite = got!.calls.find((c) => c.site)
-    if (withSite) expect(withSite.site).toMatch(/readsTheWholeTable|holdWithSqlite/)
+    // A site needs a call of SITE_MIN_MS: the next test covers it with the threshold at 1 ms.
   })
 
   it('names the caller of a call of SITE_MIN_MS or more', () => {
@@ -124,6 +122,8 @@ describe('probe-late line', () => {
       { lateByMs: number; blocking?: { ms: number; calls: Array<{ kind: string; what: string }> } } | undefined
     expect(line).toBeDefined()
     expect(line!.blocking?.calls[0]).toMatchObject({ kind: 'sqlite', what: sqlLabel(SLOW_SQL) })
+    // From the probe's deadline to its late tick: the calls that held it past the deadline, no more.
     expect(line!.blocking!.ms).toBeGreaterThanOrEqual(line!.lateByMs * 0.8)
+    expect(line!.blocking!.ms).toBeLessThanOrEqual(line!.lateByMs + 1)
   }, 15_000)
 })

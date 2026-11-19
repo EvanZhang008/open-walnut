@@ -12,8 +12,10 @@
  * Two kinds of call are timed at their one choke point each:
  *  - `sqlite`: every statement and transaction through src/lib/sqlite.ts
  *    (the observer installed by installBlockingCallTiming);
- *  - `spawn`: the synchronous part of every child process start
- *    (ChildProcess.prototype.spawn, which spawn, execFile, exec and fork all go through).
+ *  - `spawn`: the synchronous part of every asynchronous child process start
+ *    (ChildProcess.prototype.spawn, which spawn, execFile, exec and fork all go
+ *    through). Not timed: spawnSync, execSync, execFileSync and Bun.spawn,
+ *    which do not pass there; a hold in one of those shows in the CPU profile.
  * A call of BLOCKING_MIN_MS or more goes into a ring; one of SITE_MIN_MS or
  * more also keeps its caller (the stack at its end is still the caller's).
  * Cost per call: two performance.now() reads (about 25 ns each).
@@ -166,7 +168,7 @@ export function installBlockingCallTiming(): void {
       try {
         return orig.apply(this, args);
       } finally {
-        noteTimed('spawn', () => spawnLabel(args[0]), start);
+        try { noteTimed('spawn', () => spawnLabel(args[0]), start); } catch { /* timing never changes the start */ }
       }
     };
   }

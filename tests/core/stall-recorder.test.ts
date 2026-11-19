@@ -187,6 +187,23 @@ describe('profile windows', () => {
     expect(await waitForFiles(1)).toHaveLength(1)
   })
 
+  it('files a cluster split by a rotation into both windows, losing none of its stalls', async () => {
+    const early = [report(-200, 500), report(-100, 400)] // due before the rotation below: window1
+    await _rotateNowForTest() // window1 ends with no stall filed: held as previous
+    for (const r of early) observerOf().reported(r)
+    observerOf().reported(report(0, 300))
+    observerOf().reported(report(0, 450)) // 1650 ms: the cluster is kept
+    await _rotateNowForTest()
+    const files = await waitForFiles(2)
+    expect(files).toHaveLength(2)
+    const byWindow = Object.fromEntries(files.map((f) => {
+      const prof = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'))
+      const meta = JSON.parse(fs.readFileSync(path.join(dir, f.replace(/\.cpuprofile$/, '.json')), 'utf8'))
+      return [prof.nodes[0].callFrame.functionName, meta.stalls.map((s: { lateByMs: number }) => s.lateByMs)]
+    }))
+    expect(byWindow).toEqual({ window1: [500, 400], window2: [300, 450] })
+  })
+
   it('does not add up shorter stalls more than 30 s apart', async () => {
     observerOf().reported(report(-40_000, 900))
     observerOf().reported(report(0, 700))

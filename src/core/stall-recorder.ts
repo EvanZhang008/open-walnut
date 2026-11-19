@@ -188,7 +188,7 @@ const observer: ProbeObserver = {
     const keepNow = report.lateByMs >= opts.profileMinMs ? [report] : clusterToKeep(report);
     if (keepNow.length === 0) return;
     if (opts.systemContext) memContexts.set(report, sampleMemContext().catch(() => null));
-    for (const r of keepNow) onStall(r);
+    onStalls(keepNow);
   },
 };
 
@@ -269,26 +269,41 @@ async function rotate(): Promise<void> {
   }
 }
 
-function onStall(report: StallReport): void {
+/**
+ * File stalls (one long one, or a cluster of shorter ones, oldest first) into
+ * the profile windows that hold them. A stall whose window has already gone
+ * (rotated and dropped) still gets its flight record line, with no profile.
+ */
+function onStalls(reports: StallReport[]): void {
   if (!driver) {
     // Profiling off: still leave one flight record line with the final GC numbers.
-    setTimeout(() => { void emitRecord([report], null); }, 100).unref?.();
+    setTimeout(() => { void emitRecord(reports, null); }, 100).unref?.();
     return;
   }
   // The hold covered the probe's due time and a rotation cannot run inside a
   // hold, so a window that ended after the due time ended after the hold too:
   // the hold is wholly in that (previous) window. Otherwise it is in the current one.
-  if (previous && previous.endMono > report.dueMono) {
+  // Every stall is filed before the previous window is kept: keep() writes its
+  // stall list at once, so a cluster split over two windows keeps both whole.
+  const toPrevious: StallReport[] = [];
+  const toCurrent: StallReport[] = [];
+  const unfiled: StallReport[] = [];
+  for (const r of reports) {
+    if (previous && previous.endMono > r.dueMono) toPrevious.push(r);
+    else if (current && current.startMono <= r.dueMono) toCurrent.push(r);
+    else unfiled.push(r);
+  }
+  if (toPrevious.length > 0 && previous) {
     const held = previous;
     previous = null;
-    held.win.stalls.push(report);
+    held.win.stalls.push(...toPrevious);
     void keep(held);
-    return;
   }
-  if (current && current.startMono <= report.dueMono) {
-    current.stalls.push(report);
+  if (toCurrent.length > 0 && current) {
+    current.stalls.push(...toCurrent);
     scheduleRotate(opts.postStallMs);
   }
+  if (unfiled.length > 0) setTimeout(() => { void emitRecord(unfiled, null, 'window-gone'); }, 100).unref?.();
 }
 
 function stamp(d: Date): string {

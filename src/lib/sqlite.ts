@@ -366,9 +366,8 @@ function bindArgs(params: unknown[]): unknown[] {
   return params
 }
 
-/** better-sqlite3's error for any use of a closed database or of a statement prepared on one. */
 /**
- * Called after every statement, exec and transaction on this thread with its
+ * Called after every statement, exec, pragma and transaction on this thread with its
  * source and its performance.now() start: the blocking-call ledger
  * (src/core/blocking-calls.ts) times them. Unset (a worker, a test, a CLI) it
  * costs one null check. A function, not an import: a worker loads this file alone.
@@ -386,10 +385,11 @@ function timed<T>(source: string, call: () => T): T {
   try {
     return call()
   } finally {
-    observer(source, start)
+    try { observer(source, start) } catch { /* timing never changes the call's result */ }
   }
 }
 
+/** better-sqlite3's error for any use of a closed database or of a statement prepared on one. */
 function notOpen(): TypeError {
   return new TypeError('The database connection is not open')
 }
@@ -593,6 +593,11 @@ class SqliteDatabase {
   }
 
   pragma(source: string, options: PragmaOptions = {}): unknown {
+    // A pragma can be long work (wal_checkpoint, integrity_check): timed like a statement.
+    return timed(`PRAGMA ${source}`, () => this.pragmaNow(source, options))
+  }
+
+  private pragmaNow(source: string, options: PragmaOptions): unknown {
     const handle = this.handle()
     checkOneStatement(`PRAGMA ${source}`)
     const stmt = handle.prepare(`PRAGMA ${source}`)
