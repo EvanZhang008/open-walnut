@@ -1155,6 +1155,16 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // advertised there. Optional: without it a session has the `walnut` CLI alone.
   'walnut-mcp-v1',
   'implicit-mode-v1',
+  // 'follower-gateway-v1' (follower-gateway-core.ts): while no leader takes a `walnut` call of a
+  // session or a plugin job on this host, a follower that said `answersLocal: true` at
+  // follower.hello gets it as a `gateway-request` event and answers with `gateway-result` (on its
+  // allowlist, for a relay sent to that socket only); a session's call it hands back
+  // (`needs_leader`) gets this daemon's own away answer as before. `follower.op` takes a
+  // `plugin-job` actor for a Mac that drains `plugin-job-actor`, and `follower.start` takes
+  // `run: 'task'` (host-start-core.ts planTask, the routine template) for a Mac that drains
+  // `task-start`. Both twins. Optional: the Mac pushes the routine template to it, and the host
+  // server manager turns on the replica's `host-local-calls` capability only with it.
+  'follower-gateway-v1',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

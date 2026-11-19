@@ -24,6 +24,10 @@ export interface FollowerLinkOptions {
   pollMs?: number
   now?: () => number
   log: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
+  /** This server answers the host's `walnut` calls while its leader is away (daemon-link.ts). */
+  answersLocal?: boolean
+  /** A daemon event on the link (a `gateway-request`). */
+  onEvent?: (event: Record<string, unknown>) => void
   /** Tests: a daemon link of their own. */
   daemonLink?: DaemonLink
 }
@@ -49,6 +53,8 @@ export function createFollowerLink(opts: FollowerLinkOptions): FollowerLink {
   const inner: DaemonLink = opts.daemonLink ?? createDaemonLink({
     daemonDir: opts.daemonDir, walnutId: opts.walnutId, home: opts.home, token: opts.token,
     accept: opts.accept,
+    ...(opts.answersLocal ? { answersLocal: true } : {}),
+    ...(opts.onEvent ? { onEvent: opts.onEvent } : {}),
     openTimeoutMs: opts.openTimeoutMs,
     pollMs: opts.pollMs,
     now,

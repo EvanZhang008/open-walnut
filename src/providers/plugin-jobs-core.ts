@@ -1083,6 +1083,18 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
     return null
   }
 
+  /** The job a live run id belongs to (`plugin`, `job`), or null: who a call made by that run acts as. */
+  function jobOfRun(sid: unknown): { plugin: string; job: string } | null {
+    if (typeof sid !== 'string' || !sid.startsWith(RUN_SID_PREFIX)) return null
+    for (const m of homes.values()) {
+      for (const e of m.values()) if (e.proc && e.proc.sid === sid) return { plugin: e.spec.plugin, job: e.spec.job }
+    }
+    for (const list of draining.values()) {
+      for (const d of list) if (d.proc.sid === sid) { const i = d.key.indexOf('/'); return i > 0 ? { plugin: d.key.slice(0, i), job: d.key.slice(i + 1) } : null }
+    }
+    return null
+  }
+
   return {
     configure,
     boot,
@@ -1091,6 +1103,7 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
     http,
     prune,
     homeOfRun,
+    jobOfRun,
     quiesce,
     pending,
     /** Whether a gateway caller id is a plugin job's (live or not). */

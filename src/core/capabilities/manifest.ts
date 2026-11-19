@@ -42,6 +42,12 @@ export interface CapabilityManifest<N extends string = string> {
    * the box names it, so an update never opens a new door on its own.
    */
   companionDefault: boolean
+  /**
+   * A capability of a host replica (the full program on a host the user picked), never of the
+   * companion: only a host replica applies it when its env names it (the host server manager
+   * sets that when it starts the replica), and a companion naming it stops its boot.
+   */
+  hostReplica?: true
   /** The boot policy rows it turns on for a replica, in the table's order. */
   jobs: readonly BootJob[]
   /** The socket (WebSocket upgrade) doors it opens on this server. */

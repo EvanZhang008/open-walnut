@@ -32,6 +32,11 @@ export type CapabilityOutcome =
 export interface GatewayRelayMeta {
   /** The daemon asks a busy call again (gateway-core.ts busyRelayAgainMs): the how-manyth time. */
   busyAgain?: number;
+  /**
+   * The plugin job that made the call: a host's daemon names it only to its own replica
+   * (a follower that answers local calls), whose write port records the job as the maker.
+   */
+  pluginJob?: { plugin: string; job: string };
 }
 
 export interface CapabilityRouterDeps {
@@ -332,6 +337,7 @@ async function handleToolsCall(
   const callId = isCallId(payload.callId) ? payload.callId : undefined;
   const r = await withTestRun(testRun, () => executeOp(name, (args ?? {}) as Record<string, unknown>, {
   callerSid, callerHost: host, origin: hostOrigin(host), ...(proofToken ? { callerProof: proofToken } : {}), ...(triggerToken ? { callerTrigger: triggerToken } : {}), ...(callId ? { callId } : {}),
+  ...(meta.pluginJob ? { callerPluginId: meta.pluginJob.plugin, callerPluginJob: meta.pluginJob.job } : {}),
 }));
   // The server's own call to its API went out and got no answer: the caller hears the answer
   // was lost (hub_timeout), so its client names the call id and the read, never a bare error.

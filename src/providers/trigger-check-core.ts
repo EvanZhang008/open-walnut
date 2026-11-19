@@ -1175,6 +1175,7 @@ export const GATEWAY_CODE_FAULT: Readonly<Record<GatewayErrorCode, MachineFaultK
   bad_request: null,
   unsupported_version: null,
   unsupported_replica: null,
+  needs_leader: 'server_away',
   internal: null,
 };
 

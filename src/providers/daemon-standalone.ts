@@ -103,6 +103,7 @@ import { createBoardOffline } from './offline-board-core.js'
 import { createHostReplica } from './host-replica-core.js'
 import { createAttachmentCopy } from './attachment-copy-core.js'
 import { createFollowerReads } from './follower-reads-core.js'
+import { createFollowerGateway, type FollowerCaller, type FollowerGatewayResponse } from './follower-gateway-core.js'
 import { createHostServerSupervisor } from './host-server-core.js'
 import { createPluginJobSupervisor } from './plugin-jobs-core.js'
 import { createPluginJobDoor } from './plugin-job-door.js'
@@ -111,7 +112,7 @@ import { createPtyStreams, type PtyChild, type PtySpawnOptions } from './pty-str
 import { createHostResume } from './host-resume-core.js'
 import { createCliOwner } from './cli-owner-core.js'
 import { createCliArgvFiles } from './cli-argv-files-core.js'
-import { createHostStart, type HostStartAnswer, type HostStartPlan } from './host-start-core.js'
+import { createHostStart, type HostStartAnswer, type HostStartPlan, type TaskStartFields } from './host-start-core.js'
 import { createClockHostStart } from './clock-host-start-core.js'
 import { createReplicaLogs } from './replica-logs-core.js'
 import { createOpenItemsText } from '../core/sessions/open-items-text.js'
@@ -981,6 +982,8 @@ interface WsData {
   origin?: 'bridge' | 'follower' | 'lane' | 'probe'
   /** A follower's Walnut (the leader's data dir), set by follower.hello. */
   followerHome?: string
+  /** That follower answers this host's `walnut` calls while its leader is away ('follower-gateway-v1'). */
+  answersLocal?: boolean
   /** A lane's Walnut, set by stream.lane. */
   laneHome?: string
   /** The Walnut this socket configured triggers for ('' = a push that named none); its fires go here. */
@@ -1113,6 +1116,9 @@ const FOLLOWER_ALLOWED_COMMANDS = new Set([
   // A new ask while the Mac is away ('replica-start-v1'): the Mac's template, filled
   // from the follower's validated fields only (host-start-core.ts).
   'follower.start',
+  // The answer to a `walnut` call handed to it while its leader is away
+  // ('follower-gateway-v1'): taken only for a relay sent to that socket.
+  'gateway-result',
   // Streams to the leader or the companion ('stream-relay-v1'): the frames of a
   // stream on this socket only; where an open may go is checked in streamTarget.
   'stream.open', 'stream.accept', 'stream.data', 'stream.ack', 'stream.end', 'stream.close',
@@ -4464,6 +4470,22 @@ function cmdLogsTail(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string
 /** The socket that speaks as the follower of each Walnut (the server this daemon started). */
 const followerSockets = new Map<string, ServerWebSocket<WsData>>()
 
+// `walnut` calls this host's own Walnut server answers while its leader is away
+// ('follower-gateway-v1', follower-gateway-core.ts). Keep in sync with daemon-source.ts.
+const followerGateway = createFollowerGateway<ServerWebSocket<WsData>>({
+  follower: (home) => {
+    const ws = followerSockets.get(home)
+    return ws && ws.data?.answersLocal === true ? ws : null
+  },
+  send: (ws, ev, data) => { try { sendEvent(ws, ev, data); return true } catch { return false } },
+  nextRelayId: () => ++gatewayRelayCounter,
+  instanceId: DAEMON_INSTANCE_ID,
+  attemptMs: (deadline) => relayAttemptMs(deadline, Date.now(), gatewayHubTimeoutMs()),
+  setTimer: (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t },
+  clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
+  log: (level, msg, data) => logMsg(level, msg, data),
+})
+
 /** What a follower of `home` is told about its leader (the leader book's view, plus its settings). */
 function followerView(home: string): Record<string, unknown> | null {
   const rec = leaderBook.recordOf(home)
@@ -4510,9 +4532,9 @@ function cmdFollowerHello(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
   if (!hostServers.tokenMatches(home, cmd.token)) {
     return safeSend(ws, JSON.stringify({ id, ok: false, error: 'this daemon did not start that server', errorKind: 'not_started_here' }))
   }
-  if (ws.data) { ws.data.origin = 'follower'; ws.data.followerHome = home }
+  if (ws.data) { ws.data.origin = 'follower'; ws.data.followerHome = home; ws.data.answersLocal = cmd.answersLocal === true }
   followerSockets.set(home, ws)
-  logMsg('info', 'follower: a server on this host follows its leader', { wsId: wsId(ws), home })
+  logMsg('info', 'follower: a server on this host follows its leader', { wsId: wsId(ws), home, answersLocal: cmd.answersLocal === true })
   sendOk(ws, id, view)
 }
 
@@ -5289,6 +5311,13 @@ async function cmdFollowerStart(ws: ServerWebSocket<WsData>, id: number, cmd: Re
     return sendOk(ws, id, check ? { sid, checked: true, duplicate: true } : { sid, duplicate: true })
   }
   if (sid && (sessions.has(sid) || journaledIds().has(sid))) return sendError(ws, id, 'follower.start: that session id is taken on this host', { errorKind: 'bad_request' })
+  // A plain session of a task made here (`run: 'task'`, a host replica's own gateway call):
+  // the Mac adopts it as the task's own session, so only a Mac that drains `task-start`.
+  const taskRun = cmd.run === 'task'
+  if (taskRun) {
+    const room = offlineHost.checkTaskStart(home, sid, cmd.actor)
+    if (!room.ok || check) return room.ok ? sendOk(ws, id, { sid, checked: true }) : sendStartAnswer(ws, id, startRefusal(room.error))
+  }
   if (check) {
     const no = hostStart.precheck(home, cmd)
     if (no) return sendStartAnswer(ws, id, startRefusal(no))
@@ -5296,7 +5325,8 @@ async function cmdFollowerStart(ws: ServerWebSocket<WsData>, id: number, cmd: Re
     if (!room.ok) return sendStartAnswer(ws, id, startRefusal(room.error))
     return sendOk(ws, id, { sid, checked: true })
   }
-  const planned = hostStart.plan(home, cmd, typeof cmd.host === 'string' ? cmd.host : '')
+  const hostKey = typeof cmd.host === 'string' ? cmd.host : ''
+  const planned = taskRun ? hostStart.planTask(home, cmd as unknown as TaskStartFields, hostKey) : hostStart.plan(home, cmd, hostKey)
   if (!planned.ok) return sendStartAnswer(ws, id, startRefusal(planned))
   const p = planned.plan
   const answer = hostStart.once(home, p.sid, () => startHostAsk(home, p, cmd))
@@ -5308,7 +5338,7 @@ async function cmdFollowerStart(ws: ServerWebSocket<WsData>, id: number, cmd: Re
 async function startHostAsk(home: string, p: HostStartPlan, cmd: Record<string, unknown>): Promise<HostStartAnswer> {
   const release = hostStart.begin(home)
   try {
-    const room = offlineHost.checkSession(home, p.sid, cmd.actor)
+    const room = cmd.run === 'task' ? offlineHost.checkTaskStart(home, p.sid, cmd.actor) : offlineHost.checkSession(home, p.sid, cmd.actor)
     if (!room.ok) return startRefusal(room.error)
     // The request's op id names its task-create too (the same request): the session record takes its own.
     const opId = typeof cmd.opId === 'string' && /^[A-Za-z0-9_-]{1,72}$/.test(cmd.opId) ? cmd.opId + '-session' : 'session-' + p.sid
@@ -5619,11 +5649,18 @@ function sendGatewayRequest(
   callerSid: string,
   payload: Record<string, unknown>,
   respond: (resp: GatewayResponse) => void,
-  plan: { deadline: number; waits: boolean } = gatewayCallPlan(undefined, gatewayHubTimeoutMs(), Date.now()),
+  plan: { deadline: number; waits: boolean; ownServerAsked?: boolean } = gatewayCallPlan(undefined, gatewayHubTimeoutMs(), Date.now()),
 ) {
   const home = gatewayOwnerHome(callerSid)
   const target = gatewayTargetFor(home, { callerSid, op: payload.name })
   const deadline = plan.deadline
+  // No leader to relay to: a session's call goes to this host's own Walnut server first
+  // (follower-gateway-core.ts), and comes back to the rules below when it hands it back.
+  if (home && !target && callerSid !== EXTERNAL_CALLER_SID && !plan.ownServerAsked && followerGateway.answers(home)) {
+    const readable = capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home)
+    const fallback = () => sendGatewayRequest(capability, callerSid, payload, respond, { ...plan, ownServerAsked: true })
+    if (followerGateway.handOff({ home, capability, callerSid, payload, deadline, readable, fallback }, (r) => respond(r as GatewayResponse))) return
+  }
   // No server now and nothing sent: a call that may wait does, while it has time
   // (a deploy's restart, a link dialing again), then goes as if it had just come.
   const waitHere = () => plan.waits && waitForPrimary(deadline, () => sendGatewayRequest(capability, callerSid, payload, respond, plan), respond)
@@ -5906,6 +5943,12 @@ function cmdGatewayResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
       return sendError(ws, id, 'gateway-result: resultGz is not gzipped JSON: ' + (err as Error).message)
     }
   }
+  // A call handed to this host's own Walnut server (follower-gateway-core.ts): only its socket answers it.
+  if (ws.data?.origin === 'follower') {
+    const taken = typeof relayId === 'number' ? followerGateway.settle(ws, relayId, followerGateway.responseOf({ result, error, errorCode, detail, api })) : 'stale'
+    if (taken === 'wrong_socket' || (taken === 'stale' && gatewayRelayPending.has(relayId as number))) return sendError(ws, id, 'gateway-result: not sent to this socket')
+    return sendOk(ws, id, taken === 'stale' ? { stale: true } : {})
+  }
   const pending = typeof relayId === 'number' ? gatewayRelayPending.get(relayId) : undefined
   if (pending && ((ws.data?.origin === 'bridge') !== (pending.via === 'bridge') || (pending.bridge && pending.bridge !== ws))) {
     logMsg('warn', 'gateway: result from a socket the relay was not sent to', { relayId, fromBridge: ws.data?.origin === 'bridge' })
@@ -6014,7 +6057,7 @@ function busyAskAgain(relayId: number, call: GatewayRelayCall, respond: (resp: G
  * job and no other, as `external` (no session: what the user's own terminal may do).
  * While that server is away the job is told so at once and tries again later.
  */
-function sendPluginJobGatewayRequest(home: string, capability: string, payload: Record<string, unknown>, respond: (resp: GatewayResponse) => void) {
+function sendPluginJobGatewayRequest(home: string, capability: string, payload: Record<string, unknown>, respond: (resp: GatewayResponse) => void, caller?: FollowerCaller) {
   let target: ServerWebSocket<WsData> | null = null
   for (const client of wsClients) {
     if (!isServerClient(client) || isQuietTrustedClient(client)) continue
@@ -6022,6 +6065,8 @@ function sendPluginJobGatewayRequest(home: string, capability: string, payload: 
   }
   if (target && ((target.data?.missedBeats ?? 0) >= GATEWAY_SILENT_BEATS || leaderBook.backupLead(home) || primaryQuietWithFollower(home))) target = null
   if (!target) {
+    // This host's own Walnut server answers it while its leader is away: its answer is final.
+    if (caller && followerGateway.handOff({ home, capability, callerSid: EXTERNAL_CALLER_SID, payload, caller, deadline: Date.now() + gatewayHubTimeoutMs() }, (r) => respond(r as GatewayResponse))) return
     logMsg('info', 'gateway: plugin job call, its Walnut is not connected', { home, op: payload.name })
     return respond(gatewayError('hub_unreachable', 'the Walnut that runs this job is not connected now; try again later'))
   }
@@ -6055,7 +6100,8 @@ function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => voi
   if (pluginJobs.isRunSid(req.sid)) {
     const home = pluginJobs.homeOfRun(req.sid)
     if (!home) return respond(gatewayError('unknown_caller', 'no plugin job of this daemon runs under this id'))
-    return sendPluginJobGatewayRequest(home, req.op, req.args, respond)
+    const job = pluginJobs.jobOfRun(req.sid)
+    return sendPluginJobGatewayRequest(home, req.op, req.args, respond, job ? { kind: 'plugin-job', plugin: job.plugin, job: job.job } : undefined)
   }
   // ACP sessions (engine=codex) live in the acp worker map, not `sessions` —
   // their WALNUT_SESSION_ID is the runtimeId, stable for the worker's life.
@@ -13617,6 +13663,7 @@ function handleDisconnect(ws: ServerWebSocket<WsData>) {
   if (ws.data?.origin === 'lane' && ws.data.laneHome) laneClosedAt.set(ws.data.laneHome, Date.now())
   const followed = ws.data?.followerHome
   if (followed && followerSockets.get(followed) === ws) followerSockets.delete(followed)
+  if (ws.data?.origin === 'follower') followerGateway.dropSocket(ws)
   // Phone sends handed to it and not answered move to the next client now.
   rerouteMessageRelays(ws)
   // So do `walnut` calls relayed on it, where they may go (gatewayRelaysSocketGone).

@@ -17,6 +17,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-gateway-rese
 
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
 import * as router from '../../src/core/peers/capability-router.js'
+import { relaysKeptForTest } from '../../src/core/peers/gateway-answer.js'
 
 type Internals = {
   handleGatewayRequest: (e: unknown) => Promise<void>
@@ -30,7 +31,7 @@ type Internals = {
 }
 
 const UPSTREAM = { check: DaemonConnection.UPSTREAM_CHECK_MS, dead: DaemonConnection.UPSTREAM_DEAD_MS, gap: DaemonConnection.UPSTREAM_DROP_GAP_MS, round: DaemonConnection.UPSTREAM_MIN_ROUND_MS }
-const relaysKept = () => (DaemonConnection as unknown as { gatewayRelays: Map<string, { reply: Promise<Record<string, unknown>> }> }).gatewayRelays
+const relaysKept = relaysKeptForTest
 afterEach(() => {
   vi.restoreAllMocks()
   DaemonConnection.resetGatewayRelaysForTest()

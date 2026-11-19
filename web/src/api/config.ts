@@ -161,7 +161,7 @@ export function peekMacAccess(): boolean | null {
 }
 
 /** A capability a server may offer (src/core/capabilities.ts). */
-export type ServerCapability = 'public-door' | 'bridge-door' | 'cloud-exec' | 'backup-leader';
+export type ServerCapability = 'public-door' | 'bridge-door' | 'cloud-exec' | 'backup-leader' | 'host-local-calls';
 
 /** What an older companion offered before it named its capabilities: all of them. */
 const COMPANION_CAPABILITIES: readonly ServerCapability[] = ['public-door', 'bridge-door', 'cloud-exec', 'backup-leader'];

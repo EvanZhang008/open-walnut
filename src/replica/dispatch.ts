@@ -188,6 +188,14 @@ export interface DispatchDeps {
    * route. Absent: every local row runs here.
    */
   localHere?(req: IncomingMessage, decision: RouteDecision): boolean | Promise<boolean>
+  /**
+   * This host's own `walnut` call, run by this replica itself (local-calls.ts, the
+   * `host-local-calls` capability): it carries the replica's in-process credential, so it is
+   * answered here under the row's `localAway` (else its `away`), never forwarded, and a daemon
+   * that says the Mac answers gets `needs_leader` back (the daemon then relays the call to the
+   * Mac itself). Absent: no request is one.
+   */
+  selfCall?(req: IncomingMessage): boolean
 }
 
 export interface Dispatcher {
@@ -482,6 +490,11 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             continue
           }
           if (r.ok === true) return { kind: 'applied', reply: r }
+          if (r.errorKind === 'leader_answers' && deps.selfCall?.(req)) {
+            // Never forwarded (its credential stays in this process): the daemon relays the call itself.
+            needsLeader(req, res, 'leader_answers')
+            return { kind: 'answered' }
+          }
           if (r.errorKind === 'leader_answers' && lost && r.opPending !== false) {
             // The daemon checks who leads before its journal: an earlier try whose answer was
             // lost may be journaled, so forwarding now could apply it twice.
@@ -718,6 +731,12 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       stampPresence(res)
       const decision = decide(req.method ?? 'GET', pathOf(req))
       if (decision.cls === 'feature') return next()
+      if (deps.selfCall?.(req)) {
+        // This host's own call: here, whoever leads (see selfCall).
+        if (decision.cls === 'local') return next()
+        const away = decision.row?.localAway ?? decision.away
+        return answerAway(req, res, next, { ...decision, away }, 'local-call')
+      }
       if (decision.cls === 'local') {
         if (!decision.row?.local) return next()
         // A row with a condition and nobody to judge it is the leader's, as before WP6.

@@ -78,6 +78,11 @@ export const CALLER_HOST_HEADER = 'x-walnut-caller-host'
 /** The plugin a call was made through (callPluginOp). Provenance only, like the sid header:
  *  it grants no read and never makes a caller a person (task_create keeps such a plugin's tasks). */
 export const CALLER_PLUGIN_HEADER = 'x-walnut-plugin-id'
+/**
+ * The job of that plugin a call was made by (a host replica's own gateway calls only): a host
+ * replica takes it, with its in-process credential, as the maker of an away write.
+ */
+export const CALLER_PLUGIN_JOB_HEADER = 'x-walnut-plugin-job'
 
 /**
  * Who is calling. `sid` and `host` are labels, never gated on. `origin` is the
@@ -85,7 +90,7 @@ export const CALLER_PLUGIN_HEADER = 'x-walnut-plugin-id'
  * route may LOWER trust on it, never raise it.
  */
 interface CallerProvenance {
-  host?: string; proof?: string; trigger?: string; sid?: string; explicitSid?: string; callerKind: 'person' | 'agent'; pluginId?: string; origin: string; beforeMutation?: () => Promise<void>; sender?: string
+  host?: string; proof?: string; trigger?: string; sid?: string; explicitSid?: string; callerKind: 'person' | 'agent'; pluginId?: string; pluginJob?: string; origin: string; beforeMutation?: () => Promise<void>; sender?: string
   /** The op call's id (src/lib/op-call-id.ts): each write it makes carries an op id derived from it. */
   callId?: string
   /** Writes made so far per route, for those op ids. */
@@ -168,6 +173,7 @@ async function rawRequest(
         ...(prov.sid ? { [CALLER_SID_HEADER]: prov.sid } : {}),
         ...(prov.host ? { [CALLER_HOST_HEADER]: prov.host } : {}),
         ...(prov.pluginId ? { [CALLER_PLUGIN_HEADER]: prov.pluginId } : {}),
+        ...(prov.pluginId && prov.pluginJob ? { [CALLER_PLUGIN_JOB_HEADER]: prov.pluginJob } : {}),
         // A host daemon's word on the asking process, by a token only this process holds (relay-proof.ts).
         ...(prov.proof ? { 'x-walnut-caller-proof': prov.proof } : {}),
         // A trigger check's call, by a token only this process holds (core/hosts/trigger-caller.ts).
@@ -298,6 +304,8 @@ export interface ExecuteOpOptions {
   callerSid?: string
   /** The plugin the call is made through (callPluginOp): provenance, whoever the caller is. */
   callerPluginId?: string
+  /** The job of that plugin (a relayed plugin job call on a host replica): provenance only. */
+  callerPluginJob?: string
   /** Human clicks never inherit a session id from headers or the process environment. */
   callerMode?: 'session' | 'human'
   /**
@@ -458,6 +466,7 @@ export async function executeOp(
       explicitSid,
       callerKind,
       ...(pluginId ? { pluginId } : {}),
+      ...(pluginId && options.callerPluginJob?.trim() ? { pluginJob: options.callerPluginJob.trim() } : {}),
       host: options.callerHost?.trim() || undefined,
       beforeMutation: options.beforeMutation,
       origin,

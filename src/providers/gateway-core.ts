@@ -307,6 +307,8 @@ export type GatewayErrorCode =
   | 'bad_request'
   | 'unsupported_version'
   | 'unsupported_replica'
+  /** A host's own Walnut server answered while its leader is away: this call needs the leader. */
+  | 'needs_leader'
   | 'internal';
 
 export interface GatewayError {

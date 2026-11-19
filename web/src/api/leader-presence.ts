@@ -305,6 +305,7 @@ export const NEEDS_LEADER_REASONS: Readonly<Record<string, string>> = {
   other_hosts_need_mac: 'Reaching another host goes through your Mac.',
   // Where the replica's route stands (presence.ts, dispatch.ts): the why of a write with no row of its own.
   'mac-away': 'Your Mac is away right now.',
+  'local-call': 'This host\'s own call needs your Mac for now.',
   'no-daemon': 'This host\'s Walnut daemon is not answering.',
   'nobody-answers': 'Neither your Mac nor the cloud companion answers right now.',
   draining: 'This host is still handing its changes to your Mac; try again in a few seconds.',
@@ -334,6 +335,17 @@ export const NEEDS_LEADER_REASONS: Readonly<Record<string, string>> = {
   notification_changes_need_mac: 'Notifications are kept on your Mac, so they are marked read or dismissed there.',
   chat_changes_need_mac: 'Clearing or compacting a chat needs your Mac.',
   chat_history_needs_mac: 'This chat\'s messages are on your Mac.',
+  // A host's own walnut calls while the Mac is away (host-local-calls: dispatch.ts, away-starts.ts).
+  leader_answers: 'Your Mac answers again; this goes through it.',
+  task_runs_elsewhere: 'This task runs its sessions on another machine, so it starts through your Mac.',
+  session_resume_needs_mac: 'This task already has its session here; starting it again needs your Mac.',
+  start_needs_mac: 'Starting with these options needs your Mac.',
+  engine_needs_mac: 'Only a Claude Code session starts on this host while your Mac is away.',
+  no_folder: 'This task\'s project names no folder on this host.',
+  context_needs_mac: 'This host could not prepare the task\'s session; starting it needs your Mac.',
+  message_needs_mac: 'Sending with these options needs your Mac.',
+  reply_needs_mac: 'Asking for a reply needs your Mac.',
+  target_needs_mac: 'This host does not know that task.',
 }
 
 const GENERIC_REASON = 'Your Mac is not answering right now.'

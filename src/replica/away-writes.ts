@@ -177,6 +177,7 @@ export function awayWrites(deps: AwayWritesDeps): RequestHandler {
   }
   const revoke: Handler = async (req, w, actor, p) => {
     const name = p.name!
+    if (actor.kind !== 'device') return needsLeaderAnswer('device_changes_need_mac', 'Removing a pairing needs your Mac.')
     // `?target=cloud` removes a pairing on the cloud companion (devices.ts), never this one.
     if (req.query && (req.query as Record<string, unknown>).target !== undefined) {
       return needsLeaderAnswer('device_changes_need_mac', 'Removing a pairing on another server needs your Mac.')
@@ -190,12 +191,19 @@ export function awayWrites(deps: AwayWritesDeps): RequestHandler {
     }
     return a
   }
+  // A create: task_create from this host's own call also names where its first start runs
+  // (launch_cwd, launch_host: hints the Mac never stores), which the start that follows takes itself.
+  const create: Handler = (req, w, actor) => {
+    const input = { ...body(req) }
+    if (actor.kind !== 'device') for (const k of ['launch_cwd', 'launch_host', 'launch_host_asked']) delete input[k]
+    return port.taskCreate(w, actor, input)
+  }
   const board = (op: string, argsOf: (b: Record<string, unknown>, p: Record<string, string>) => Record<string, unknown>): Handler =>
     (req, w, actor, p) => port.board(w, actor, op, p.id!, argsOf(body(req), p))
 
   const rows: Row[] = [
     // The console's task writes.
-    { method: 'POST', pattern: '/tasks', handle: (req, w, actor) => port.taskCreate(w, actor, body(req)) },
+    { method: 'POST', pattern: '/tasks', handle: create },
     { method: 'PATCH', pattern: '/tasks/:id', handle: (req, w, actor, p) => port.taskUpdate(w, actor, p.id!, body(req)) },
     { method: 'POST', pattern: '/tasks/:id/complete', handle: (_req, w, actor, p) => port.taskComplete(w, actor, p.id!) },
     { method: 'POST', pattern: '/tasks/:id/toggle-complete', handle: toggle },
@@ -203,7 +211,7 @@ export function awayWrites(deps: AwayWritesDeps): RequestHandler {
     { method: 'PUT', pattern: '/tasks/:id/description', handle: textField('description') },
     { method: 'PUT', pattern: '/tasks/:id/summary', handle: textField('summary') },
     // The phone's (and the console's v1) twins.
-    { method: 'POST', pattern: '/v1/tasks', handle: (req, w, actor) => port.taskCreate(w, actor, body(req)) },
+    { method: 'POST', pattern: '/v1/tasks', handle: create },
     { method: 'PATCH', pattern: '/v1/tasks/:id', handle: (req, w, actor, p) => port.taskUpdate(w, actor, p.id!, body(req)) },
     { method: 'POST', pattern: '/v1/tasks/:id/complete', handle: (_req, w, actor, p) => port.taskComplete(w, actor, p.id!) },
     { method: 'PUT', pattern: '/v1/tasks/:id/note', handle: textField('note') },

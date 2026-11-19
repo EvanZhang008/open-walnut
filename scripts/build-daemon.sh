@@ -245,6 +245,7 @@ SOURCES=(
   src/providers/host-replica-core.ts
   src/providers/attachment-copy-core.ts
   src/providers/follower-reads-core.ts
+  src/providers/follower-gateway-core.ts
   src/providers/host-server-core.ts
   src/providers/plugin-jobs-core.ts
   src/providers/plugin-job-harness.ts

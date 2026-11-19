@@ -50,6 +50,7 @@ function rig(opts: { lose?: (n: number) => boolean } = {}) {
   const written: Array<Parameters<Parameters<typeof createWritePort>[0]['noteWritten']>[0]> = []
   const port = createWritePort({
     task: async (id) => { await overlay.refresh(); return overlay.task(id, copy.get(id) ?? null) as TaskRow | null },
+    createdHere: (id) => overlay.createdTaskIds().includes(id),
     board: async () => null,
     noteWritten: (e) => { written.push(e); overlay.noteWritten(e) },
     now: () => clock.now,
@@ -82,6 +83,16 @@ describe('write port: what follower.op journals', () => {
     const recs = r.records()
     expect(recs[0].fields.due_date).toEqual({ base: 'unknown', value: '2026-10-20' })
     expect(recs[1].fields.due_date).toEqual({ base: '2026-10-20', value: '2026-10-21' })
+  })
+
+  it('a task made here and edited here: a field its create left out has the base null (unset), never \'unknown\'', async () => {
+    // The Mac makes the same row from the create, so the edit is taken over whatever the drain
+    // touched first (a start's session); with 'unknown' the Mac's newer row time kept its value.
+    const r = rig()
+    const made = await r.port.taskCreate(r.write(), { kind: 'session', sid: 'sess-caller-1' }, { title: 'Sync the venue list', project: 'Acme' })
+    const id = (made as { body: { task: { id: string } } }).body.task.id
+    await r.port.taskUpdate(r.write(), { kind: 'session', sid: 'sess-caller-1' }, id, { tags: ['team:acme'] })
+    expect(r.records()[1].fields.tags).toEqual({ base: null, value: ['team:acme'] })
   })
 
   it('mints a new task\'s id (time, then 8 random bytes) and a Board post\'s id', async () => {

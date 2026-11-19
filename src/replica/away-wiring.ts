@@ -31,6 +31,7 @@ import { awayWrites } from './away-writes.js'
 import { awayNotes } from './away-notes.js'
 import { awayReads, overlayBoard, overlayTiers, SYNC_FIELD } from './away-reads.js'
 import { wsWrites } from './ws-writes.js'
+import { writeActorOf } from './write-actor.js'
 
 /** The daemon capability note writes away ride on (WP11). */
 const NOTE_JOURNAL_CAP = 'note-journal-v1'
@@ -51,6 +52,12 @@ export interface AwayWiring {
   writes: RequestHandler
   /** WP11: the note writes while away (away-notes.ts), mounted before `writes`. */
   notes: RequestHandler
+  /** Who an away write acts for (write-actor.ts), for every away route. */
+  actorOf(req: Request): WriteActor | null
+  /** A task as this replica shows it (copy plus overlay). */
+  task(id: string): Promise<TaskRow | null>
+  /** Whether a session runs on this host. */
+  sessionHere(sid: string): Promise<boolean>
   stop(): void
 }
 
@@ -63,6 +70,8 @@ export interface AwayWiringOptions {
   setRpcAnswer(fn: ((method: string, payload: unknown, opId: string | undefined) => Promise<unknown> | null) | null): void
   /** Whether the Mac answers now (the front's presence): the watch asks each second only then, or while a write awaits its copy. */
   macAnswers?(): boolean
+  /** Whether this replica answers its host's own `walnut` calls (the `host-local-calls` capability). */
+  localCalls?(): boolean
 }
 
 async function copyTask(id: string): Promise<TaskRow | null> {
@@ -144,6 +153,7 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
   }
   const port = createWritePort({
     task: shownTask,
+    createdHere: (id) => overlay.createdTaskIds().includes(id),
     board: shownBoard,
     noteWritten: (e) => {
       // A create's first word to browsers is task:created with the page's correlation
@@ -165,11 +175,10 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
     const r = await getSessionByClaudeId(sid).catch(() => null)
     return !!r && (r.host ?? null) === opts.hostKey
   }
-  const actorOf = (req: Request): WriteActor | null => {
-    const h = req.headers.authorization
-    const d = typeof h === 'string' && h.startsWith('Bearer ') ? opts.devices.verifyDevice(h.slice(7)) : null
-    return d && d.id ? { kind: 'device', deviceId: d.id, name: d.name } : null
-  }
+  const actorOf: (req: Request) => WriteActor | null = writeActorOf({
+    verifyDevice: (token) => opts.devices.verifyDevice(token),
+    localCalls: () => opts.localCalls?.() === true,
+  })
   const writes = awayWrites({
     port, actorOf, task: shownTask, sessionHere,
     tiers: async () => {
@@ -209,7 +218,7 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
   watch.unref?.()
   log.web.info('replica: away writes wired', { hostKey: opts.hostKey, home: WALNUT_HOME })
   return {
-    overlay, port, reads, writes, notes,
+    overlay, port, reads, writes, notes, actorOf, task: shownTask, sessionHere,
     stop() {
       clearInterval(watch)
       setCopyWatcher(null)

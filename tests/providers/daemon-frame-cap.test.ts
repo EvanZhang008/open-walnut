@@ -239,7 +239,7 @@ describe('ratchet: frames to a daemon', () => {
     const senders = srcFiles(path.join(ROOT, 'src'))
       .filter((f) => /\(\s*(?:host,\s*)?'gateway-result'/.test(readFileSync(f, 'utf8')))
       .map((f) => path.relative(ROOT, f))
-    expect(senders.sort()).toEqual(['src/core/leader/backup-gateway.ts', 'src/providers/daemon-connection.ts'])
+    expect(senders.sort()).toEqual(['src/core/leader/backup-gateway.ts', 'src/providers/daemon-connection.ts', 'src/replica/local-calls.ts'])
     for (const f of senders) expect(readFileSync(path.join(ROOT, f), 'utf8')).toContain('tooLargeGatewayReply(')
   })
 })

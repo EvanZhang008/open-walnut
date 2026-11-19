@@ -64,6 +64,7 @@ import { createBoardOffline } from './offline-board-core.js'
 import { createHostReplica } from './host-replica-core.js'
 import { createAttachmentCopy } from './attachment-copy-core.js'
 import { createFollowerReads } from './follower-reads-core.js'
+import { createFollowerGateway } from './follower-gateway-core.js'
 import { createHostServerSupervisor } from './host-server-core.js'
 import { createPluginJobSupervisor } from './plugin-jobs-core.js'
 import { createPluginJobHarness } from './plugin-job-harness.js'
@@ -304,6 +305,7 @@ export function getDaemonSource(): string {
     ['__CREATE_HOST_REPLICA__', createHostReplica.toString()],
     ['__CREATE_ATTACHMENT_COPY__', createAttachmentCopy.toString()],
     ['__CREATE_FOLLOWER_READS__', createFollowerReads.toString()],
+    ['__CREATE_FOLLOWER_GATEWAY__', createFollowerGateway.toString()],
     ['__CREATE_HOST_SERVER__', createHostServerSupervisor.toString()],
     ['__CREATE_PLUGIN_JOBS__', createPluginJobSupervisor.toString()],
     ['__CREATE_PLUGIN_JOB_HARNESS__', createPluginJobHarness.toString()],
@@ -4211,6 +4213,9 @@ var FOLLOWER_ALLOWED_COMMANDS = new Set([
   // A new ask while the Mac is away ('replica-start-v1'): the Mac's template, filled
   // from the follower's validated fields only (host-start-core.ts).
   'follower.start',
+  // The answer to a walnut call handed to it while its leader is away
+  // ('follower-gateway-v1'): taken only for a relay sent to that socket.
+  'gateway-result',
   // Streams to the leader or the companion (stream-relay-v1); where an open may go is streamTarget's call.
   'stream.open', 'stream.accept', 'stream.data', 'stream.ack', 'stream.end', 'stream.close',
 ]);
@@ -5835,6 +5840,22 @@ function cmdLogsTail(ws, id, cmd) {
 // The socket that speaks as the follower of each Walnut. Twin of daemon-standalone.ts.
 var followerSockets = new Map();
 
+// walnut calls this host's own Walnut server answers while its leader is away
+// ('follower-gateway-v1', follower-gateway-core.ts). Twin of daemon-standalone.ts.
+var followerGateway = (__CREATE_FOLLOWER_GATEWAY__)({
+  follower: function (home) {
+    var f = followerSockets.get(home);
+    return f && f.answersLocal === true ? f : null;
+  },
+  send: function (ws, ev, data) { try { sendEvent(ws, ev, data); return true; } catch (e) { return false; } },
+  nextRelayId: function () { return ++gatewayRelayCounter; },
+  instanceId: DAEMON_INSTANCE_ID,
+  attemptMs: function (deadline) { return relayAttemptMs(deadline, Date.now(), GATEWAY_HUB_TIMEOUT_MS); },
+  setTimer: function (fn, ms) { var t = setTimeout(fn, ms); if (t.unref) t.unref(); return t; },
+  clearTimer: function (t) { clearTimeout(t); },
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+});
+
 // What a follower of home is told about its leader. Twin of daemon-standalone.ts.
 function followerView(home) {
   var rec = leaderBook.recordOf(home);
@@ -5883,8 +5904,9 @@ function cmdFollowerHello(ws, id, cmd) {
   }
   ws.origin = 'follower';
   ws.followerHome = home;
+  ws.answersLocal = cmd.answersLocal === true;
   followerSockets.set(home, ws);
-  logMsg('info', 'follower: a server on this host follows its leader', { home: home });
+  logMsg('info', 'follower: a server on this host follows its leader', { home: home, answersLocal: cmd.answersLocal === true });
   sendOk(ws, id, view);
 }
 
@@ -6596,6 +6618,12 @@ async function cmdFollowerStart(ws, id, cmd) {
     return sendOk(ws, id, check ? { sid: sid, checked: true, duplicate: true } : { sid: sid, duplicate: true });
   }
   if (sid && (sessions.has(sid) || journaledIds().has(sid))) return sendError(ws, id, 'follower.start: that session id is taken on this host', { errorKind: 'bad_request' });
+  // A plain session of a task made here (run: 'task'): only a Mac that drains task-start. Twin of daemon-standalone.ts.
+  var taskRun = cmd.run === 'task';
+  if (taskRun) {
+    var taskRoom = offlineHost.checkTaskStart(home, sid, cmd.actor);
+    if (!taskRoom.ok || check) return taskRoom.ok ? sendOk(ws, id, { sid: sid, checked: true }) : sendStartAnswer(ws, id, startRefusal(taskRoom.error));
+  }
   if (check) {
     var no = hostStart.precheck(home, cmd);
     if (no) return sendStartAnswer(ws, id, startRefusal(no));
@@ -6603,7 +6631,8 @@ async function cmdFollowerStart(ws, id, cmd) {
     if (!room.ok) return sendStartAnswer(ws, id, startRefusal(room.error));
     return sendOk(ws, id, { sid: sid, checked: true });
   }
-  var planned = hostStart.plan(home, cmd, typeof cmd.host === 'string' ? cmd.host : '');
+  var startHost = typeof cmd.host === 'string' ? cmd.host : '';
+  var planned = taskRun ? hostStart.planTask(home, cmd, startHost) : hostStart.plan(home, cmd, startHost);
   if (!planned.ok) return sendStartAnswer(ws, id, startRefusal(planned));
   var p = planned.plan;
   var answer = hostStart.once(home, p.sid, function () { return startHostAsk(home, p, cmd); });
@@ -6683,7 +6712,7 @@ function recoverPendingAsks() {
 async function startHostAsk(home, p, cmd) {
   var release = hostStart.begin(home);
   try {
-    var room = offlineHost.checkSession(home, p.sid, cmd.actor);
+    var room = cmd.run === 'task' ? offlineHost.checkTaskStart(home, p.sid, cmd.actor) : offlineHost.checkSession(home, p.sid, cmd.actor);
     if (!room.ok) return startRefusal(room.error);
     // The request's op id names its task-create too (the same request): the session record takes its own.
     var opId = typeof cmd.opId === 'string' && /^[A-Za-z0-9_-]{1,72}$/.test(cmd.opId) ? cmd.opId + '-session' : 'session-' + p.sid;
@@ -6970,6 +6999,13 @@ function sendGatewayRequest(capability, callerSid, payload, respond, plan) {
   var deadline = plan.deadline;
   var home = gatewayOwnerHome(callerSid);
   var target = gatewayTargetFor(home, { callerSid: callerSid, op: payload.name });
+  // No leader to relay to: a session's call goes to this host's own Walnut server first
+  // (follower-gateway-core.ts), and comes back to the rules below when it hands it back.
+  if (home && !target && callerSid !== EXTERNAL_CALLER_SID && !plan.ownServerAsked && followerGateway.answers(home)) {
+    var ownReadable = capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home);
+    var fallback = function () { sendGatewayRequest(capability, callerSid, payload, respond, Object.assign({}, plan, { ownServerAsked: true })); };
+    if (followerGateway.handOff({ home: home, capability: capability, callerSid: callerSid, payload: payload, deadline: deadline, readable: ownReadable, fallback: fallback }, respond)) return;
+  }
   // No server now and nothing sent: a call that may wait does, while it has time.
   var waitHere = function () { return plan.waits && waitForPrimary(deadline, function () { sendGatewayRequest(capability, callerSid, payload, respond, plan); }, respond); };
   var readable = !!home && capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home);
@@ -7198,6 +7234,12 @@ function cmdGatewayResult(ws, id, cmd) {
       return sendError(ws, id, 'gateway-result: resultGz is not gzipped JSON: ' + err.message);
     }
   }
+  // A call handed to this host's own Walnut server (follower-gateway-core.ts): only its socket answers it.
+  if (ws.origin === 'follower') {
+    var taken = typeof relayId === 'number' ? followerGateway.settle(ws, relayId, followerGateway.responseOf({ result: result, error: error, errorCode: errorCode, detail: detail, api: cmd.api })) : 'stale';
+    if (taken === 'wrong_socket' || (taken === 'stale' && gatewayRelayPending.has(relayId))) return sendError(ws, id, 'gateway-result: not sent to this socket');
+    return sendOk(ws, id, taken === 'stale' ? { stale: true } : {});
+  }
   var pending = typeof relayId === 'number' ? gatewayRelayPending.get(relayId) : undefined;
   if (pending && ((ws.origin === 'bridge') !== (pending.via === 'bridge') || (pending.bridge && pending.bridge !== ws))) {
     logMsg('warn', 'gateway: result from a socket the relay was not sent to', { relayId: relayId, fromBridge: ws.origin === 'bridge' });
@@ -7295,7 +7337,7 @@ function busyAskAgain(relayId, call, respond, refusal, inMs) {
 
 // A plugin job's call: to the server of the Walnut that runs the job and no other,
 // as 'external' (twin of daemon-standalone.ts).
-function sendPluginJobGatewayRequest(home, capability, payload, respond) {
+function sendPluginJobGatewayRequest(home, capability, payload, respond, caller) {
   var target = null;
   for (const client of wsClients) {
     if (!isServerClient(client) || isQuietTrustedClient(client)) continue;
@@ -7303,6 +7345,8 @@ function sendPluginJobGatewayRequest(home, capability, payload, respond) {
   }
   if (target && ((target.missedBeats || 0) >= GATEWAY_SILENT_BEATS || leaderBook.backupLead(home) || primaryQuietWithFollower(home))) target = null;
   if (!target) {
+    // This host's own Walnut server answers it while its leader is away: its answer is final.
+    if (caller && followerGateway.handOff({ home: home, capability: capability, callerSid: EXTERNAL_CALLER_SID, payload: payload, caller: caller, deadline: Date.now() + GATEWAY_HUB_TIMEOUT_MS }, respond)) return;
     logMsg('info', 'gateway: plugin job call, its Walnut is not connected', { home: home, op: payload.name });
     return respond(gatewayError('hub_unreachable', 'the Walnut that runs this job is not connected now; try again later'));
   }
@@ -7346,7 +7390,8 @@ function handleGatewayLine(line, respond) {
   if (pluginJobs.isRunSid(req.sid)) {
     var jobHome = pluginJobs.homeOfRun(req.sid);
     if (!jobHome) return respond(gatewayError('unknown_caller', 'no plugin job of this daemon runs under this id'));
-    return sendPluginJobGatewayRequest(jobHome, req.op, req.args, respond);
+    var job = pluginJobs.jobOfRun(req.sid);
+    return sendPluginJobGatewayRequest(jobHome, req.op, req.args, respond, job ? { kind: 'plugin-job', plugin: job.plugin, job: job.job } : undefined);
   }
   // ACP sessions live in the acp worker map, not in sessions; their sid is the
   // runtimeId, stable for the worker's life (twin of daemon-standalone.ts).
@@ -17151,6 +17196,7 @@ async function startDaemon() {
       if (droppedOneShots > 0) logMsg('info', 'oneshot runs ended with their socket', { runs: droppedOneShots });
       if (ws.origin === 'lane' && ws.laneHome) laneClosedAt.set(ws.laneHome, Date.now());
       if (ws.followerHome && followerSockets.get(ws.followerHome) === ws) followerSockets.delete(ws.followerHome);
+      if (ws.origin === 'follower') followerGateway.dropSocket(ws);
 
       // Remove this ws from every session's subscribers. The watcher (file
       // tailer) stays alive — it's session-bound, not ws-bound. The next ws

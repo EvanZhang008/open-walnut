@@ -62,6 +62,7 @@ import {
   walnutDirs, walnutDirsScript, type InstallState,
 } from './install.js'
 import { DEFAULT_UPDATE_MAX_BEHIND_MS, DEFAULT_UPDATE_QUIET_MS, heldNotice, updateHold } from './update-hold.js'
+import { FOLLOWER_GATEWAY_CAPABILITY } from '../../providers/follower-gateway-core.js'
 
 /** What the manager needs of a host's daemon connection (DaemonConnection has it). */
 export interface HostServerHost {
@@ -754,7 +755,12 @@ export function createHostServerManager(deps: ManagerDeps) {
             // WALNUT_HOST_KEY: this Mac's name for the host, the `host` of the sessions that run there:
             // the replica reads them and their files itself (replica/self-host.ts, WP6), and the
             // console tells a session here from one on the Mac (WP7).
-            env: { ...hostServerEnv, WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host', WALNUT_HOST_KEY: hostKey },
+            // WALNUT_CAPABILITIES: the replica answers this host's own `walnut` calls while the Mac
+            // is away (capabilities/host-local-calls.ts), when the daemon can hand them over.
+            env: {
+              ...hostServerEnv, WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host', WALNUT_HOST_KEY: hostKey,
+              ...(host.hasCapability(FOLLOWER_GATEWAY_CAPABILITY) ? { WALNUT_CAPABILITIES: 'host-local-calls' } : {}),
+            },
             // The daemon runs this by itself after a crash loop (it works while the Mac sleeps).
             fallback: { args: hostServerArgs, env: hostServerEnv },
           }

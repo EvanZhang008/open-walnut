@@ -50,6 +50,13 @@ export interface DaemonLinkOptions {
   accept?: (info: IncomingStreamInfo) => ((stream: Duplex) => void) | null
   /** Each fresh answer of follower.status. */
   onView?: (view: FollowerView) => void
+  /**
+   * Said at follower.hello: this server answers the host's `walnut` calls while its leader is
+   * away ('follower-gateway-v1'). The daemon then sends their `gateway-request` events here.
+   */
+  answersLocal?: boolean
+  /** A daemon event on the link (`{ev, ...}`, never an answer): a `gateway-request`, say. */
+  onEvent?: (event: Record<string, unknown>) => void
   /** How long an open waits for the other server to accept. */
   openTimeoutMs?: number
   log: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
@@ -214,7 +221,10 @@ export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
       try { m = JSON.parse(String(data)) } catch { return }
       if (endpoint.handle(m)) return
       const resolve = typeof m.id === 'number' ? pending.get(m.id) : undefined
-      if (resolve) { pending.delete(m.id as number); resolve(m) }
+      if (resolve) { pending.delete(m.id as number); resolve(m); return }
+      if (typeof m.ev === 'string' && opts.onEvent) {
+        try { opts.onEvent(m) } catch { /* a listener never breaks the link */ }
+      }
     })
     socket.on('error', () => { /* close follows */ })
     socket.on('close', () => {
@@ -227,7 +237,7 @@ export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
     })
     socket.on('open', () => {
       void (async () => {
-        const hello: Record<string, unknown> = await call(socket, 'follower.hello', { walnutId: opts.walnutId, home: opts.home, token: opts.token })
+        const hello: Record<string, unknown> = await call(socket, 'follower.hello', { walnutId: opts.walnutId, home: opts.home, token: opts.token, ...(opts.answersLocal ? { answersLocal: true } : {}) })
           .catch((err: Error) => ({ ok: false, error: err.message }))
         if (ws !== socket) return
         if (hello.ok !== true) {

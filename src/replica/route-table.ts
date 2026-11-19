@@ -53,6 +53,12 @@ export interface RouteRow {
    * its cwd (the follower scope refuses them), so the Mac answers, as before WP6.
    */
   cap?: string
+  /**
+   * The away rule for this host's own `walnut` calls (the `host-local-calls` capability,
+   * local-calls.ts: a request with the replica's in-process credential), in place of `away`.
+   * Everyone else, a phone or a browser, keeps `away` and its answers.
+   */
+  localAway?: AwayRule
 }
 
 export interface RouteDecision {
@@ -216,6 +222,10 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   { method: 'POST', pattern: '/api/sessions/:id/permission', away: 'host-write' },
   { method: 'POST', pattern: '/api/v1/sessions/:id/permission', away: 'host-write' },
   { method: 'DELETE', pattern: '/api/devices/:name', away: 'host-write' },
+  // This host's own `walnut` calls while the Mac is away (host-local-calls, away-starts.ts): a
+  // task's start and a message to a task. A phone or a browser hears needs_leader, as before.
+  { method: 'POST', pattern: '/api/v1/tasks/:id/start', away: 'needs-leader', localAway: 'host-write' },
+  { method: 'POST', pattern: '/api/v1/messages', away: 'needs-leader', localAway: 'host-write' },
   { method: W, pattern: '/api/tasks/*', away: 'needs-leader', why: 'task_writes_need_mac' },
   { method: W, pattern: '/api/sessions/*', away: 'needs-leader', why: 'session_writes_need_mac' },
   // WP5 copies: the conversation lists, routines, prefs, favorites and the config

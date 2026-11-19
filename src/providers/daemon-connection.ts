@@ -76,8 +76,7 @@ import {
 } from './daemon-file-fetch.js'
 import { singleFile } from '../lib/single-file.js'
 import { buildTurnRetryEnv } from './daemon-core.js'
-import { vouchedGatewayPayload } from './gateway-core.js'
-import { createRefusalLog, isOpAnswerStatus } from './gateway-refusal-log.js'
+import { relayedCallOf, resetRelayedCallsForTest, serveRelayedCall } from '../core/peers/gateway-answer.js'
 import type { LineFate } from './line-fate-core.js'
 import type { SshTarget } from './session-io.js'
 import {
@@ -695,24 +694,6 @@ const bulkOwnEverUpHosts = new Set<string>()
  */
 const BULK_FORWARD_FORBIDDEN = /administratively prohibited|forwarding (?:is )?disabled|refused local port forward/i
 
-/** Folds a looping caller's refusals to one line every few minutes; shared by every host's link. */
-const gatewayRefusalLog = createRefusalLog()
-let gatewayRefusalSweep: ReturnType<typeof setInterval> | null = null
-
-/** Write how many refusals a window left out once it ends, so a caller that stopped still has its count. */
-function sweepGatewayRefusalsLater(): void {
-  if (gatewayRefusalSweep) return
-  gatewayRefusalSweep = setInterval(() => {
-    for (const s of gatewayRefusalLog.sweep()) {
-      log.session.info('DaemonConnection: gateway relay refusals left out of the log', {
-        host: s.host, callerSid: s.callerSid, errorCode: s.code, suppressed: s.suppressed,
-      })
-    }
-    if (gatewayRefusalLog.size() === 0 && gatewayRefusalSweep) { clearInterval(gatewayRefusalSweep); gatewayRefusalSweep = null }
-  }, 60_000)
-  gatewayRefusalSweep.unref?.()
-}
-
 export class DaemonConnection {
   private ws: WebSocket | null = null
   /** Byte streams to the host's server (core/host-server/), through the daemon. */
@@ -780,20 +761,9 @@ export class DaemonConnection {
   private _lastReplyAt = 0
   /** The check of a link whose answers stopped (checkUpstream), shared. */
   private _upstreamCheck: Promise<void> | null = null
-  /**
-   * Relays from the host's `walnut` CLIs this run answers or answered lately, by
-   * daemon instance and relay id: a relay the daemon sends again (its socket
-   * closed, its answer did not come in time) gets the same answer, and its op runs once.
-   */
-  /**
-   * Relays answered lately, by (daemon instance, relayId). One map for every connection:
-   * a resend that comes in on another connection to the same daemon (a second host key
-   * for one machine, no shared local pool) still runs once.
-   */
-  private static gatewayRelays = new Map<string, { reply: Promise<Record<string, unknown>>; at: number }>()
-  /** Tests: forget the relays answered so far. */
+  /** Tests: forget the relays answered so far (core/peers/gateway-answer.ts keeps them). */
   static resetGatewayRelaysForTest(): void {
-    DaemonConnection.gatewayRelays.clear()
+    resetRelayedCallsForTest()
   }
   /**
    * The progress clock: bytes heard from the daemon so far, on every socket this
@@ -2473,6 +2443,9 @@ export class DaemonConnection {
       // A routine run may start on this host now (clock-host-start-v1): the set
       // goes again with its `start` fields (a no-op push when no routine has one).
       if (this.hostKey !== '__local__' && this.hasCapability('clock-host-start-v1')) this.pushTriggers()
+      // A task's session may start on this host while this Mac is away (follower-gateway-v1,
+      // replica/away-starts.ts): it starts from the same routine template, pushed now.
+      if (this.hostKey !== '__local__' && this.hasCapability('follower-gateway-v1')) void this.routineHostStart()
       // The daemon now knows which Walnut speaks: the server this Mac keeps
       // on the host may be set up (core/host-server/; off unless enabled).
       // A test server runs one only for the replica check's host, in its own root.
@@ -3475,66 +3448,37 @@ export class DaemonConnection {
     // The host's gateway gives up on this relay at its hub timeout, counted from about now
     // (src/lib/answer-by.ts): the op's work measures its holds against that, not its own start.
     const receivedAt = Date.now()
-    const relayId = (event as unknown as { relayId?: unknown }).relayId
-    const capability = (event as unknown as { capability?: unknown }).capability
-    const callerSid = (event as unknown as { callerSid?: unknown }).callerSid
-    const payload = (event as unknown as { payload?: unknown }).payload
-    if (typeof relayId !== 'number' || typeof capability !== 'string' || typeof callerSid !== 'string') return
-    // A test server attached read only to a host it shares with the real Walnut is not
-    // the Walnut that owns this host. A daemon without 'client-role-v1' still hands it
-    // the real one's `walnut` calls (first socket wins); answering them from a test
-    // server's copy told a caller every trigger was off (2026-11-02), so it says no.
-    if (this.isReadOnlyRemote) {
-      log.session.warn('DaemonConnection: gateway relay refused, this is a test server attached read only', {
-        host: this.hostKey, relayId, capability, callerSid,
-      })
-      try {
-        await this.send('gateway-result', {
-          relayId,
-          error: 'this relay reached a test server, not the Walnut that owns this host; run it again',
-          errorCode: 'hub_unreachable',
+    const call = relayedCallOf(event as unknown as Record<string, unknown>)
+    if (!call) return
+    // A plugin job's identity is told to its host's own replica only (core/peers/gateway-answer.ts).
+    delete call.pluginJob
+    const { gatewayHubTimeoutMs } = await import('./gateway-core.js')
+    await serveRelayedCall(call, {
+      hostKey: this.hostKey,
+      hasCapability: (c) => this.hasCapability(c),
+      label: 'DaemonConnection',
+      receivedAt,
+      deadlineMs: gatewayHubTimeoutMs(),
+      // A test server attached read only to a host it shares with the real Walnut is not
+      // the Walnut that owns this host. A daemon without 'client-role-v1' still hands it
+      // the real one's `walnut` calls (first socket wins); answering them from a test
+      // server's copy told a caller every trigger was off (2026-11-02), so it says no.
+      refuse: (c) => {
+        if (!this.isReadOnlyRemote) return null
+        log.session.warn('DaemonConnection: gateway relay refused, this is a test server attached read only', {
+          host: this.hostKey, relayId: c.relayId, capability: c.capability, callerSid: c.callerSid,
         })
-      } catch { /* the daemon times the relay out */ }
-      return
-    }
-    // A relay sent again (its socket closed, or its answer was late): the same answer, run once.
-    // Relay ids count from 1 in each daemon process, so the key is the instance the relay
-    // itself names (read off the request, never this link's last hello, which can be a
-    // restarted daemon's or not in yet). An older daemon names none and never sends one twice.
-    const instanceId = (event as unknown as { instanceId?: unknown }).instanceId
-    const key = typeof instanceId === 'string' && instanceId ? `${instanceId.slice(0, 80)}:${relayId}` : null
-    const seen = key ? DaemonConnection.gatewayRelays.get(key) : undefined
-    if (seen) {
-      log.session.info('DaemonConnection: gateway relay asked again, answered once', { host: this.hostKey, relayId, capability, callerSid })
-      await this.sendGatewayResult(await seen.reply, relayId, seen, { capability, callerSid })
-      return
-    }
-    // The daemon's own word beside the caller's payload: it asks a busy call again.
-    const busyAgain = (event as unknown as { busyAgain?: unknown }).busyAgain
-    const meta = typeof busyAgain === 'number' && Number.isFinite(busyAgain) && busyAgain > 0 ? { busyAgain } : {}
-    const reply = this.answerGatewayRequest(receivedAt, relayId, capability, callerSid, payload, meta)
-      .catch((err: unknown): Record<string, unknown> => ({ relayId, error: err instanceof Error ? err.message : String(err), errorCode: 'internal' }))
-    if (key) this.rememberGatewayRelay(key, reply)
-    const acked = await this.sendGatewayResult(await reply, relayId, key ? DaemonConnection.gatewayRelays.get(key) : undefined, { capability, callerSid })
-    // Taken: the daemon holds the relay no more, so a resend still on its way only needs a
-    // word it drops (stale), not the whole answer kept five minutes.
-    const kept = key ? DaemonConnection.gatewayRelays.get(key) : undefined
-    if (acked && kept) kept.reply = Promise.resolve({ relayId, error: 'this relay was answered already', errorCode: 'internal' })
+        return { relayId: c.relayId, error: 'this relay reached a test server, not the Walnut that owns this host; run it again', errorCode: 'hub_unreachable' }
+      },
+      // The host delivers messages between its own sessions itself and journals
+      // them; its nudge reaches us before this request (one socket, in order).
+      // Take the journal first, so a request id it names is already ours.
+      before: async () => {
+        if (this.offlineDrainDue || (await import('../core/offline-handover.js')).runningHandover(this.hostKey)) await this.drainBeforeAnswering()
+      },
+      send: (reply, kept) => this.sendGatewayResult(reply, call.relayId, kept, { capability: call.capability, callerSid: call.callerSid }),
+    })
   }
-
-  /** Keep a relay's answer a while for a resend; at most GATEWAY_RELAYS_KEPT, none older than GATEWAY_RELAY_KEEP_MS. */
-  private rememberGatewayRelay(key: string, reply: Promise<Record<string, unknown>>): void {
-    const now = Date.now()
-    const kept = DaemonConnection.gatewayRelays
-    for (const [k, v] of kept) {
-      if (now - v.at < DaemonConnection.GATEWAY_RELAY_KEEP_MS && kept.size < DaemonConnection.GATEWAY_RELAYS_KEPT) break
-      kept.delete(k)
-    }
-    kept.set(key, { reply, at: now })
-  }
-
-  private static readonly GATEWAY_RELAY_KEEP_MS = 5 * 60_000
-  private static readonly GATEWAY_RELAYS_KEPT = 2_000
 
   /**
    * Send a relay's answer. The daemon acks one at once, so an ack this late, with
@@ -3670,66 +3614,6 @@ export class DaemonConnection {
     return check
   }
 
-  /** Run one relayed call (the journal first) and build its gateway-result. Never throws. */
-  private async answerGatewayRequest(
-    receivedAt: number, relayId: number, capability: string, callerSid: string, payload: unknown, meta: { busyAgain?: number } = {},
-  ): Promise<Record<string, unknown>> {
-    // The host delivers messages between its own sessions itself and journals
-    // them; its nudge reaches us before this request (one socket, in order).
-    // Take the journal first, so a request id it names is already ours.
-    if (this.offlineDrainDue || (await import('../core/offline-handover.js')).runningHandover(this.hostKey)) await this.drainBeforeAnswering()
-    let reply: Record<string, unknown>
-    try {
-      const { handleGatewayCapability } = await import('../core/peers/capability-router.js')
-      const [{ withAnswerBy }, { gatewayHubTimeoutMs }] = await Promise.all([import('../lib/answer-by.js'), import('./gateway-core.js')])
-      // What only a daemon writes (callerProof, triggerCaller), kept only from one that says it drops a forged one.
-      const body = vouchedGatewayPayload(payload, (c) => this.hasCapability(c))
-      const outcome = await withAnswerBy(receivedAt + gatewayHubTimeoutMs(), () => handleGatewayCapability(
-        capability,
-        callerSid,
-        body,
-        this.hostKey,
-        undefined,
-        meta,
-      // Fresh: this relay's own deadline, never one of a call still running in whose context the link was made.
-      ), { fresh: true })
-      // Which op, so a burst of refusals names what keeps asking (2026-11-14: only "tools.call").
-      const op = capability === 'tools.call' && typeof body?.name === 'string' ? { op: body.name.slice(0, 80) } : {}
-      if (outcome.ok) {
-        log.session.info('DaemonConnection: gateway relay handled', { host: this.hostKey, relayId, capability, callerSid })
-        reply = { relayId, result: outcome.result }
-      } else {
-        // One line per caller and reason every few minutes, with the count left out (gateway-refusal-log.ts).
-        const answered = isOpAnswerStatus(outcome.opStatus)
-        const seen = gatewayRefusalLog.admit(this.hostKey, callerSid, answered ? `status:${outcome.opStatus}` : outcome.error.code)
-        sweepGatewayRefusalsLater()
-        // The relay worked and the API answered (a 404 for a missing id): the op's answer, not a refusal (2026-11-15).
-        if (seen.write && answered) {
-          log.session.info('DaemonConnection: gateway relay handled, the op answered an error', {
-            host: this.hostKey, relayId, capability, callerSid, status: outcome.opStatus, ...op,
-            ...(seen.suppressed > 0 ? { suppressed: seen.suppressed } : {}),
-          })
-        } else if (seen.write) {
-          log.session.warn('DaemonConnection: gateway relay refused', {
-            host: this.hostKey, relayId, capability, callerSid, errorCode: outcome.error.code, ...op,
-            ...(seen.suppressed > 0 ? { suppressed: seen.suppressed } : {}),
-          })
-        }
-        const { gatewayErrorReplyFields } = await import('./gateway-core.js')
-        reply = { relayId, ...gatewayErrorReplyFields(outcome.error) }
-        const detail: Record<string, unknown> = {
-          ...(typeof outcome.error.detail === 'object' && outcome.error.detail !== null ? outcome.error.detail as Record<string, unknown> : {}),
-          ...(outcome.error.retryAfterMs !== undefined ? { retryAfterMs: outcome.error.retryAfterMs } : {}),
-        }
-        if (Object.keys(detail).length > 0) reply.detail = detail
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      log.session.warn('DaemonConnection: gateway relay failed', { host: this.hostKey, relayId, message })
-      reply = { relayId, error: message, errorCode: 'internal' }
-    }
-    return reply
-  }
 
   /**
    * Disconnect from the daemon and clean up SSH tunnel.

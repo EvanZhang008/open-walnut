@@ -69,6 +69,7 @@ import { chooseReplicaRoute, leaderDropRecent, presenceOf, quietWindow, SuspectM
 import { createDispatcher, PRESENCE_BOOT_HEADER, PRESENCE_SEQ_HEADER, type Dispatcher, type OfflineWhy } from './dispatch.js'
 import { rpcAway } from './ws-rpc-table.js'
 import { replicaRefusal, verifyReplicaToken } from './auth.js'
+import { localCallerOf } from './write-actor.js'
 import { copiesAsOf } from '../core/replication/kind-follower.js'
 
 /** The /_alone/ path the alone page of the plain host server polls (host-server/alone-api.ts). */
@@ -109,6 +110,12 @@ export interface ReplicaFrontOptions {
   writeBudgetMs?: number
   /** Tests: a follower link of their own (the daemon's view and the streams are the test's). */
   link?: FollowerLink
+  /**
+   * This replica answers its host's own `walnut` calls while the Mac is away (the
+   * `host-local-calls` capability): it says so at follower.hello, takes the daemon's
+   * `gateway-request` events (answerLocalCalls) and answers its in-process calls here.
+   */
+  localCalls?: boolean
 }
 
 export interface ReplicaFront {
@@ -132,6 +139,8 @@ export interface ReplicaFront {
   status(): Record<string, unknown>
   link: FollowerLink
   dispatcher: Dispatcher
+  /** Where the daemon's `gateway-request` events go (local-calls.ts); only with `localCalls`. */
+  answerLocalCalls(handler: ((event: Record<string, unknown>) => void) | null): void
   stop(): Promise<void>
 }
 
@@ -155,6 +164,7 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
   let ownUpgrade: ((req: IncomingMessage, socket: Duplex, head: Buffer) => void) | null = null
   let reported = false
   const boot = crypto.randomBytes(8).toString('hex')
+  let localCallHandler: ((event: Record<string, unknown>) => void) | null = null
 
   const expose: HostExpose = createHostExpose({
     port: env.publicPort,
@@ -168,6 +178,10 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
     openTimeoutMs: OPEN_TIMEOUT_MS,
     ...(opts.pollMs ? { pollMs: opts.pollMs } : {}),
     accept: (info) => (info.from === 'primary' ? (stream: Duplex) => opts.acceptFromLeader(stream) : null),
+    ...(opts.localCalls ? {
+      answersLocal: true,
+      onEvent: (event: Record<string, unknown>) => { if (event.ev === 'gateway-request') localCallHandler?.(event) },
+    } : {}),
     log: (level, msg, data) => log.web[level](msg, data),
   })
   // The Mac's name for this host resolves to this link (self-host.ts, WP6).
@@ -266,11 +280,14 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
       socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
     },
     log: (level, msg, data) => log.web[level](msg, { host: env.label, ...data }),
-    // The front runs before the auth middleware: an away write's body is read only for a known device.
+    // The front runs before the auth middleware: an away write's body is read only for a known
+    // device, or for this host's own call (its in-process credential, write-actor.ts).
     authorized: (req) => {
+      if (opts.localCalls && localCallerOf(req)) return true
       const h = req.headers.authorization
       return typeof h === 'string' && h.startsWith('Bearer ') && verifyReplicaToken(h.slice(7)) !== null
     },
+    ...(opts.localCalls ? { selfCall: (req: IncomingMessage) => localCallerOf(req) !== null } : {}),
     // The same answer as the /api auth: a wrong token counts toward the shared limit.
     refuse: (req) => replicaRefusal(req.headers.authorization),
     ...(opts.writeBudgetMs ? { writeBudgetMs: opts.writeBudgetMs } : {}),
@@ -351,6 +368,7 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
     status,
     link,
     dispatcher,
+    answerLocalCalls(handler) { localCallHandler = opts.localCalls ? handler : null },
     async stop() {
       clearInterval(reportTimer)
       clearInterval(tick)

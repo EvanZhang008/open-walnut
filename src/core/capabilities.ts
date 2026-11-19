@@ -29,9 +29,10 @@ import { publicDoor } from './capabilities/public-door.js'
 import { bridgeDoor } from './capabilities/bridge-door.js'
 import { cloudExec } from './capabilities/cloud-exec.js'
 import { backupLeader } from './capabilities/backup-leader.js'
+import { hostLocalCalls } from './capabilities/host-local-calls.js'
 
 /** Every capability, in the order the boot policy line and serverCapabilities list them. */
-export const MANIFESTS = [publicDoor, bridgeDoor, cloudExec, backupLeader] as const
+export const MANIFESTS = [publicDoor, bridgeDoor, cloudExec, backupLeader, hostLocalCalls] as const
 export type Capability = (typeof MANIFESTS)[number]['name']
 export const CAPABILITIES: readonly Capability[] = MANIFESTS.map((m) => m.name)
 
@@ -63,6 +64,8 @@ export interface CapabilityFacts {
 
 /** What a companion that sets nothing has: the manifests marked companionDefault (the four it always ran). */
 const COMPANION_DEFAULT: ReadonlySet<Capability> = new Set(MANIFESTS.filter((m) => m.companionDefault).map((m) => m.name))
+/** The capabilities a host replica applies when its env names them (manifest `hostReplica`). */
+const HOST_REPLICA_CAPS: ReadonlySet<Capability> = new Set(MANIFESTS.filter((m) => 'hostReplica' in m && m.hostReplica === true).map((m) => m.name))
 const NONE: ReadonlySet<Capability> = new Set()
 
 export function isCapability(name: string): name is Capability {
@@ -74,31 +77,52 @@ export function defaultCapabilities(where: Placement): ReadonlySet<Capability> {
   return where === 'cloud' ? COMPANION_DEFAULT : NONE
 }
 
-/** The capabilities `raw` (WALNUT_CAPABILITIES) gives a server; `companion` is whether it is the companion. */
-export function resolveCapabilities(raw: string | undefined, companion: boolean): CapabilityFacts {
+/**
+ * The capabilities `raw` (WALNUT_CAPABILITIES) gives a server; `companion` is whether it is the
+ * companion, `hostReplica` whether it is the replica program on a host. A host replica applies
+ * only the host replica's own capabilities (manifest `hostReplica`) and reports the rest as ignored.
+ */
+export function resolveCapabilities(raw: string | undefined, companion: boolean, hostReplica = false): CapabilityFacts {
   const text = (raw ?? '').trim()
+  if (!companion && hostReplica && text) {
+    const names = text.split(/[\s,]+/).filter(Boolean)
+    const own = names.filter((n): n is Capability => HOST_REPLICA_CAPS.has(n as Capability))
+    const rest = names.filter((n) => !HOST_REPLICA_CAPS.has(n as Capability))
+    return { capabilities: own.length ? new Set(own) : NONE, ignored: rest.length ? rest.join(',') : null }
+  }
   if (!companion) return { capabilities: NONE, ignored: text || null }
   if (!text) return { capabilities: COMPANION_DEFAULT, ignored: null }
   const names = text.split(/[\s,]+/).filter(Boolean)
   if (names.length === 1 && names[0] === 'none') return { capabilities: NONE, ignored: null }
   const out = new Set<Capability>()
   for (const name of names) {
-    if (!isCapability(name)) {
-      throw new Error(`${CAPABILITIES_ENV}: "${name}" is not a capability (${CAPABILITIES.join(', ')}, or none alone)`)
+    if (!isCapability(name) || HOST_REPLICA_CAPS.has(name)) {
+      throw new Error(`${CAPABILITIES_ENV}: "${name}" is not a capability of the companion (${CAPABILITIES.filter((c) => !HOST_REPLICA_CAPS.has(c)).join(', ')}, or none alone)`)
     }
     out.add(name)
   }
   return { capabilities: out, ignored: null }
 }
 
-let memo: { raw: string | undefined; companion: boolean; facts: CapabilityFacts } | null = null
+let memo: { raw: string | undefined; companion: boolean; host: boolean; facts: CapabilityFacts } | null = null
 
-/** This server's capabilities, from its env and whether it is the companion. */
+/**
+ * The replica program on a host (`walnut web --replica`: WALNUT_ROLE=replica, placement host),
+ * read from env as server-role.ts isHostReplicaProgram reads it (that module asks this one).
+ */
+function hostReplicaProgram(): boolean {
+  if (CLOUD_MODE || (process.env.WALNUT_ROLE ?? '').trim() !== 'replica') return false
+  const p = (process.env.WALNUT_PLACEMENT ?? '').trim()
+  return p === '' || p === 'host'
+}
+
+/** This server's capabilities, from its env and whether it is the companion or a host replica. */
 export function capabilityFacts(): CapabilityFacts {
   const raw = process.env[CAPABILITIES_ENV]
   const companion = CLOUD_MODE
-  if (!memo || memo.raw !== raw || memo.companion !== companion) {
-    memo = { raw, companion, facts: resolveCapabilities(raw, companion) }
+  const host = hostReplicaProgram()
+  if (!memo || memo.raw !== raw || memo.companion !== companion || memo.host !== host) {
+    memo = { raw, companion, host, facts: resolveCapabilities(raw, companion, host) }
   }
   return memo.facts
 }

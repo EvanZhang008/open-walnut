@@ -8,8 +8,9 @@
  * journals it for the Mac:
  *
  *   follower.op {op, args, opId, base, actor}
- *     actor   the paired device that made the write (its stable record id from the
- *             device copy, host-server/device-copy.ts), never a session
+ *     actor   who made the write: the paired device (its stable record id from the
+ *             device copy, host-server/device-copy.ts), or, for this host's own
+ *             `walnut` calls (local-calls.ts), the session or the plugin job that called
  *     opId    the request's x-walnut-op-id, minted by the dispatcher when the client
  *             sent none (the iOS app); a lost answer is asked again under the SAME id
  *             (dispatch.ts run), and the daemon answers a pending id with its first
@@ -62,8 +63,21 @@ export const CREATE_PLACEMENT_KEYS: readonly string[] = ['parent_task_id', 'proj
 /** Inputs a route accepts and drops (an older client's), never a reason to refuse. */
 const DROPPED_INPUTS = new Set(['id', 'messageId', 'clientRequestId', 'wait_report'])
 
-/** Who made an away write: the paired device, by its stable id. */
-export interface WriteActor { kind: 'device'; deviceId: string; name?: string }
+/**
+ * Who made an away write: a paired device by its stable id, or one of this host's own callers
+ * (a session, a plugin job) through the replica's in-process credential (write-actor.ts).
+ */
+export type WriteActor =
+  | { kind: 'device'; deviceId: string; name?: string }
+  | { kind: 'session'; sid: string }
+  | { kind: 'plugin-job'; plugin: string; job: string }
+
+/** The actor as log fields. */
+export function actorFields(actor: WriteActor): Record<string, string> {
+  if (actor.kind === 'device') return { deviceId: actor.deviceId }
+  if (actor.kind === 'session') return { sessionId: actor.sid }
+  return { plugin: actor.plugin, job: actor.job }
+}
 
 /** What a route answers. */
 export type PortAnswer =
@@ -89,6 +103,8 @@ export interface BoardBase {
 export interface WritePortDeps {
   /** The task as this replica shows it now (the copy plus pending records), or null. */
   task(id: string): Promise<TaskRow | null>
+  /** Whether this host's journal made the task and its create is still pending (overlay.ts createdTaskIds). */
+  createdHere?(id: string): boolean
   /** The Board of a task as this replica shows it now, or null when it has none. */
   board(taskId: string): Promise<BoardBase | null>
   /** A write the daemon took: the overlay holds it from now on (and asks the daemon again soon). */
@@ -152,12 +168,18 @@ export function unqueueableFields(values: Record<string, unknown>): string[] {
   return Object.keys(values).filter((k) => !QUEUEABLE_TASK_FIELDS.includes(k))
 }
 
-/** A field write's base: what this replica shows for it now, `'unknown'` when the row has no such field. */
-export function fieldBases(row: Record<string, unknown> | null, values: Record<string, unknown>): Record<string, unknown> {
+/**
+ * A field write's base: what this replica shows for it now, `'unknown'` when the row has no
+ * such field. `whole`: the row is one this host's journal made (its create still pending),
+ * so a field it lacks is unset (null), never unknown: the Mac makes the same row, and an edit
+ * of it is taken whatever else the drain touched first (a base 'unknown' loses to the Mac's
+ * newer row time, and the edit of a task made and edited away was dropped).
+ */
+export function fieldBases(row: Record<string, unknown> | null, values: Record<string, unknown>, whole = false): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const k of Object.keys(values)) {
     const v = row && Object.prototype.hasOwnProperty.call(row, k) ? row[k] : undefined
-    out[k] = v === undefined ? 'unknown' : v
+    out[k] = v === undefined ? (whole ? null : 'unknown') : v
   }
   return out
 }
@@ -211,8 +233,12 @@ export interface WritePort {
   taskMove(w: ReplicaWrite, actor: WriteActor, taskId: string, anchor: { after?: string; before?: string } | null, tier?: string): Promise<PortAnswer>
   /** A Board write (`board_set`, `board_edit`, `board_post`, `board_project_set`), checked against the Board shown here. */
   board(w: ReplicaWrite, actor: WriteActor, op: string, taskId: string, args: Record<string, unknown>): Promise<PortAnswer>
-  /** A person's message to a session that runs on this host: `follower.send`. */
-  send(w: ReplicaWrite, sid: string, text: string, messageId?: string): Promise<PortAnswer>
+  /**
+   * A message to a session that runs on this host: `follower.send`. A person's text is
+   * escaped as the Mac's queue escapes it; `framed`: text already in its sender's envelope
+   * (a local call's, away-starts.ts) goes as it is.
+   */
+  send(w: ReplicaWrite, sid: string, text: string, messageId?: string, opts?: { framed?: boolean }): Promise<PortAnswer>
   /** A person's answer to that session's prompt: `follower.permission`. */
   permission(w: ReplicaWrite, sid: string, answer: Record<string, unknown>): Promise<PortAnswer>
   /** A paired device revoked while away: `device_revoke` (applied to this replica's device copy by the caller). */
@@ -238,7 +264,7 @@ export function createWritePort(deps: WritePortDeps): WritePort {
     // The daemon holds this op id for another kind of change (a client that reused it):
     // the Mac's op-id middleware refuses the same, and nothing of this write was kept.
     if (duplicate && typeof reply.kind === 'string' && typeof record.kind === 'string' && reply.kind !== record.kind) {
-      log('warn', 'replica: an away write reused the op id of another change', { opId, kind: record.kind, heldKind: reply.kind, deviceId: actor.deviceId })
+      log('warn', 'replica: an away write reused the op id of another change', { opId, kind: record.kind, heldKind: reply.kind, ...actorFields(actor) })
       return refusalAnswer('op_id_reused', 'This op id was already used for another change; nothing of this one was saved.')
     }
     // A retry's answer names the first attempt's record (a create, the task it made). The
@@ -249,7 +275,7 @@ export function createWritePort(deps: WritePortDeps): WritePort {
       const noted = reply.kind === 'task-create' && firstTask ? { ...record, taskId: firstTask } : record
       deps.noteWritten({ opId, seq, rev: typeof reply.rev === 'number' ? reply.rev : 1, kind: reply.kind, at: now(), actor, record: { ...noted, kind: reply.kind }, ...(clientRequestId ? { clientRequestId } : {}) })
     }
-    log('info', 'replica: an away write was journaled', { opId, seq, kind: reply.kind, duplicate, deviceId: actor.deviceId })
+    log('info', 'replica: an away write was journaled', { opId, seq, kind: reply.kind, duplicate, ...actorFields(actor) })
     return ok(reply)
   }
 
@@ -258,7 +284,7 @@ export function createWritePort(deps: WritePortDeps): WritePort {
     if (!row) return refusalAnswer('not_found', `Task ${taskId} not found`)
     const refused = macRefusalOf(row, values)
     if (refused) return refusalAnswer('bad_request', refused)
-    const base = fieldBases(row, values)
+    const base = fieldBases(row, values, deps.createdHere?.(taskId) === true)
     const args = op === 'task_complete' ? { id: taskId } : { id: taskId, ...values }
     const r = await w.submit(op, args, base, actor)
     const fields: Record<string, { base: unknown; value: unknown }> = {}
@@ -340,12 +366,12 @@ export function createWritePort(deps: WritePortDeps): WritePort {
         body: { queued: true, offline: true, opId: reply.opId, ...(postId ? { message: { id: postId, author: 'user', text: args.text, ts: new Date(now()).toISOString() } } : {}) },
       }))
     },
-    async send(w, sid, text, messageId) {
+    async send(w, sid, text, messageId, opts) {
       const typed = text.trim()
       if (!typed) return refusalAnswer('bad_request', 'text must be a non-empty string')
       // The host delivers it as it is, so it is escaped here as the Mac's queue would
       // (core/hints/hint-format.ts); only the voice block a voice send composed stays.
-      const body = typed.startsWith('/') || splitHinted(typed, [voiceReplyBlock()]) ? typed : escapeHintTags(typed)
+      const body = opts?.framed || typed.startsWith('/') || splitHinted(typed, [voiceReplyBlock()]) ? typed : escapeHintTags(typed)
       const r = await w.call('follower.send', { sid, text: body, messageId: sendMessageId(messageId, w.opId) })
       if (r.kind === 'answered') return { answered: true }
       if (r.kind === 'refused') return refusalAnswer(r.code, r.message, r.detail, r.retryAfterMs)

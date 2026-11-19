@@ -344,6 +344,7 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/attachment-copy-core.ts',
   // Owner-scoped follower reads (replica-reads-v1): same import-or-inline rule.
   'src/providers/follower-reads-core.ts',
+  'src/providers/follower-gateway-core.ts',
   // The host server the daemon keeps running (host-server-v1): same rule.
   'src/providers/host-server-core.ts',
   // The plugin jobs the daemon keeps running (plugin-jobs-v1) and the harness each job

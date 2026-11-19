@@ -88,7 +88,7 @@ import os from 'node:os'
 import { CRON_FILE, IS_DEMO, IS_EPHEMERAL, LOG_DIR, PLUGIN_STORES_DIR, WALNUT_HOME } from '../constants.js'
 import { exitTraceFileFor, localDaemonDirChoice, localProductionDaemonDir } from '../lib/daemon-dir.js'
 import { isCompanion, isFollower, isHostReplica, placement, role } from '../core/server-role.js'
-import { capabilityFacts, capabilityList } from '../core/capabilities.js'
+import { capabilityFacts, capabilityList, hasCapability } from '../core/capabilities.js'
 import { bootPolicy } from '../core/boot-policy.js'
 import { sessionRunner } from '../providers/claude-code-session.js'
 import { SessionHealthMonitor } from '../core/session-health-monitor.js'
@@ -1274,8 +1274,19 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       broadcast: (name, data) => ws.broadcastEvent(name, data),
       closeOwnSockets: (code, reason) => { ws.closeAllClients(code, reason) },
       ...((env.WALNUT_HOST_KEY ?? '').trim() ? { hostKey: (env.WALNUT_HOST_KEY ?? '').trim() } : {}),
+      // This host's own `walnut` calls while the Mac is away (capabilities/host-local-calls.ts).
+      localCalls: hasCapability('host-local-calls'),
     })
     const front = hostReplicaFront
+    if (hasCapability('host-local-calls')) {
+      const [{ createLocalCalls }, { leaderAnswers }] = await Promise.all([import('../replica/local-calls.js'), import('../core/server-role.js')])
+      front.answerLocalCalls(createLocalCalls({
+        request: (cmd, params, timeoutMs) => front.link.request(cmd, params, timeoutMs),
+        hostKey: (env.WALNUT_HOST_KEY ?? '').trim() || null,
+        capabilities: () => front.link.capabilities(),
+        leaderAnswers: () => leaderAnswers(),
+      }))
+    }
     // Its notes: the copy the daemon keeps, read through the follower link (WP6).
     const notes = await import('../replica/notes-source.js')
     notes.installReplicaNotesSource(notes.createCopyNotesSource(notes.notesCopyReaderOver((cmd, params, timeoutMs) => {
@@ -1895,6 +1906,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       hostKey,
       setRpcAnswer: (fn) => wsHandlerForReplica.setRpcAnswer(fn),
       macAnswers: () => front.presence().answers,
+      localCalls: () => hasCapability('host-local-calls'),
     })
     hostReplicaAway = away
     app.use('/api', away.reads)
@@ -1909,11 +1921,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       ])
       const asks = createAskLaunch({
         port: away.port,
-        actorOf: (req) => {
-          const h = req.headers.authorization
-          const d = typeof h === 'string' && h.startsWith('Bearer ') ? replicaDevices.verifyDevice(h.slice(7)) : null
-          return d && d.id ? { kind: 'device', deviceId: d.id, name: d.name } : null
-        },
+        actorOf: (req) => away.actorOf(req),
         hostKey,
         persona: (agentId) => readPersonaCopy(agentId),
         capabilities: () => front.link.capabilities(),
@@ -1925,6 +1933,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       })
       installAwaySessions(() => asks.rows())
       app.use('/api', asks.handler)
+      // A task's start and a message to a task from this host's own calls (away-starts.ts).
+      if (hasCapability('host-local-calls')) {
+        app.use('/api', (await import('../replica/away-starts.js')).wireAwayStarts({
+          away, hostKey, watch: (sid) => asks.watch(sid),
+          capabilities: () => front.link.capabilities(),
+          request: (cmd, params, timeoutMs) => front.link.request(cmd, params, timeoutMs),
+        }))
+      }
     }
     app.use('/api', away.writes)
     // The copies' age as the last process left it (kind-follower.ts copiesAsOf), before

@@ -863,7 +863,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (!slices.get(home)) return { ok: false, refused: fail('not_found', 'this host holds no copy for that Walnut') }
     // Who asked: the paired device the replica names (the Mac drops a record of a device
     // no longer paired); absent, the session itself.
-    const actor = by === undefined ? { kind: 'session' as const, sid } : actorOf(by)
+    const actor = by === undefined ? { kind: 'session' as const, sid } : actorOf(by, home)
+    if (actor === 'older') return { ok: false, refused: fail('needs_leader', 'your Mac runs an older Walnut that cannot take a session a plugin job started later; it needs your Mac', { detail: { why: 'mac_too_old' } }) }
     if (!actor) return { ok: false, refused: fail('bad_request', 'follower.start: bad actor') }
     if (actor.kind === 'device' && !drainsKind(home, 'device-actor')) return { ok: false, refused: fail('needs_leader', 'your Mac runs an older Walnut that cannot take a new ask later; it needs your Mac', { detail: { why: 'mac_too_old' } }) }
     if (!drainsKind(home, 'session')) return { ok: false, refused: fail('needs_leader', 'your Mac runs an older Walnut that cannot take a new ask later; it needs your Mac', { detail: { why: 'mac_too_old' } }) }
@@ -876,6 +877,18 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   function checkSession(home: string, sid: string, by?: unknown): GatewayResult {
     const a = sessionActor(home, sid, by)
     return a.ok ? ok({ checked: true, sid }) : a.refused
+  }
+
+  /**
+   * Whether a plain session of a task made here may start (`run: 'task'`): its `session`
+   * record would be kept, for a Mac that adopts it as the task's own (`task-start` in its
+   * drains; an older Mac would take it for an ask). Journals nothing.
+   */
+  function checkTaskStart(home: string, sid: string, by?: unknown): GatewayResult {
+    if (slices.get(home) && !drainsKind(home, 'task-start')) {
+      return fail('needs_leader', 'your Mac runs an older Walnut that cannot take a session started here later; it needs your Mac', { detail: { why: 'mac_too_old' } })
+    }
+    return checkSession(home, sid, by)
   }
 
   /**
@@ -2088,9 +2101,16 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   const FOLLOWER_OP_KINDS: Record<string, string> = { task_update: 'task-fields', task_complete: 'task-fields', task_create: 'task-create', task_move: 'task-move', device_revoke: 'device-revoke' }
   const OP_ID_RE = /^[A-Za-z0-9_-]{1,80}$/
 
-  function actorOf(given: unknown): import('./offline-journal-core.js').JournalActor | null {
-    const a = given as { kind?: unknown; deviceId?: unknown; name?: unknown; sid?: unknown } | null
+  /**
+   * Who a follower's write or start acts for. A plugin job (a host replica's own gateway
+   * call) only for a Mac that drains it (`plugin-job-actor`); else `older`: an older Mac.
+   */
+  function actorOf(given: unknown, home: string): import('./offline-journal-core.js').JournalActor | 'older' | null {
+    const a = given as { kind?: unknown; deviceId?: unknown; name?: unknown; sid?: unknown; plugin?: unknown; job?: unknown } | null
     if (!a || typeof a !== 'object') return null
+    if (a.kind === 'plugin-job' && typeof a.plugin === 'string' && /^[A-Za-z0-9._-]{1,120}$/.test(a.plugin) && typeof a.job === 'string' && /^[A-Za-z0-9._-]{1,120}$/.test(a.job)) {
+      return drainsKind(home, 'plugin-job-actor') ? { kind: 'plugin-job', plugin: a.plugin, job: a.job } : 'older'
+    }
     if (a.kind === 'device' && typeof a.deviceId === 'string' && OP_ID_RE.test(a.deviceId)) {
       return { kind: 'device', deviceId: a.deviceId, ...(typeof a.name === 'string' && a.name ? { name: a.name.slice(0, 80) } : {}) }
     }
@@ -2107,8 +2127,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     try {
       const name = typeof req.op === 'string' ? req.op : ''
       const args = (req.args && typeof req.args === 'object' && !Array.isArray(req.args) ? req.args : {}) as Record<string, unknown>
-      const actor = actorOf(req.actor)
-      if (!actor) return fail('bad_request', 'follower.op needs an actor (the paired device, or a session)')
+      const actor = actorOf(req.actor, home)
+      if (actor === 'older') return fail('needs_leader', 'your Mac runs an older Walnut that cannot take a plugin job\'s change later; it needs your Mac', { detail: { why: 'mac_too_old' } })
+      if (!actor) return fail('bad_request', 'follower.op needs an actor (the paired device, a session or a plugin job)')
       if (req.opId !== undefined && (typeof req.opId !== 'string' || !OP_ID_RE.test(req.opId))) return fail('bad_request', 'follower.op: bad opId')
       // A retry of a saved write (its answer was lost) answers the saved record before any
       // gate or base: the overlay already holds the first attempt, so a Board edit's
@@ -3363,7 +3384,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     /** noteRoutineTask, waiting out another process's journal lock: a routine run's task (clock-host-start-v1). */
     noteRoutineTaskWaiting: (home: string, rec: Parameters<typeof noteRoutineTask>[1], opId: string, jobId: string) => whenUnlocked(home, 'task-create', () => noteRoutineTask(home, rec, opId, jobId)),
     noteRoutineTask, checkRoutineRun, knowsSession,
-    pendingFor, journalStats, onResult, sweep, deliverTrigger, deliverFromLeader, deliverHuman, callerOf, answersRead, sessionsOf, noteSession, checkSession,
+    pendingFor, journalStats, onResult, sweep, deliverTrigger, deliverFromLeader, deliverHuman, callerOf, answersRead, sessionsOf, noteSession, checkSession, checkTaskStart,
     triggerHolds, triggerHoldsByHome, homes: () => [...slices.keys()], freshHomes, journal, QUEUEABLE, RETIRED_TASK_INPUTS,
   }
 }
