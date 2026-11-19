@@ -84,6 +84,7 @@ import { createReplicaLogs } from './replica-logs-core.js'
 import { createOpenItemsText } from '../core/sessions/open-items-text.js'
 import { createLetterCheck } from '../core/human-inbox/letter-check.js'
 import { createTriggerLabel } from '../core/routines/trigger-label.js'
+import { createTriggerWatches } from '../core/routines/trigger-watches.js'
 import { createHostRuntime } from './host-runtime-core.js'
 import { createHostFix } from './host-fix-core.js'
 import { createClaudeInstall } from './claude-install-core.js'
@@ -322,6 +323,7 @@ export function getDaemonSource(): string {
     ['__CREATE_OPEN_ITEMS_TEXT__', createOpenItemsText.toString()],
     ['__CREATE_LETTER_CHECK__', createLetterCheck.toString()],
     ['__CREATE_TRIGGER_LABEL__', createTriggerLabel.toString()],
+    ['__CREATE_TRIGGER_WATCHES__', createTriggerWatches.toString()],
     ['__INITIAL_FOLD_STATE__', initialFoldState.toString()],
     ['__ASSEMBLE_SNAPSHOT__', assembleSnapshot.toString()],
     ['__SNAPSHOT_DIFFERS__', snapshotDiffers.toString()],
@@ -5639,6 +5641,8 @@ var offlineHost = (__CREATE_OFFLINE_HOST__)({
   letters: (__CREATE_LETTER_CHECK__)(),
   // A trigger created here gets the label the server would give it. Twin of daemon-standalone.ts.
   labels: (__CREATE_TRIGGER_LABEL__)(),
+  // How a trigger's watches reads, the server's own rule (trigger-watches.ts). Twin of daemon-standalone.ts.
+  watches: (__CREATE_TRIGGER_WATCHES__)(),
   // The checks run here: their ops answer here while the Walnut is away (walnut-trigger).
   triggers: {
     armed: function () {

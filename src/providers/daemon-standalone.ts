@@ -117,6 +117,7 @@ import { createReplicaLogs } from './replica-logs-core.js'
 import { createOpenItemsText } from '../core/sessions/open-items-text.js'
 import { createLetterCheck } from '../core/human-inbox/letter-check.js'
 import { createTriggerLabel } from '../core/routines/trigger-label.js'
+import { createTriggerWatches } from '../core/routines/trigger-watches.js'
 import { createEnvelopeKit } from '../core/peers/envelope-kit.js'
 import {
   foldLine,
@@ -4254,6 +4255,8 @@ const offlineHost = createOfflineHostCore({
   letters: createLetterCheck(),
   // A trigger created here gets the label the server would give it.
   labels: createTriggerLabel(),
+  // How a trigger's `watches` reads, the server's own rule. Twin of daemon-source.ts.
+  watches: createTriggerWatches(),
   // The checks run here: their ops answer here while the Walnut is away (walnut-trigger).
   triggers: {
     // Clock routines are not triggers a session lists, pauses or tests here.

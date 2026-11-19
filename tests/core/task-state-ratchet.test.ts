@@ -132,7 +132,8 @@ const PHASE_READERS: Record<string, number> = {
   'src/core/task-manager.ts': 7,
   'src/core/task-outbox.ts': 1,
   'src/core/task-projection.ts': 1,
-  'src/core/task-wait-resume.ts': 1,
+  // + one: a park Walnut restored is known by its WAITING phase and stamp (isRestoredPark)
+  'src/core/task-wait-resume.ts': 2,
   // + two: the clock that woke a task is forgotten once it leaves WAITING, and kept while it stays parked.
   'src/core/task-wait-until.ts': 6,
   // + two: a parked task's own work reads Working while its wait clock brings it back (ownWork).

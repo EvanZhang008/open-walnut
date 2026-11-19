@@ -366,6 +366,8 @@ export const DAEMON_SOURCE_FILES = [
   // A letter from a session, checked on the host while the Mac is away: same rule.
   'src/core/human-inbox/letter-check.ts',
   'src/core/routines/trigger-label.ts',
+  // How a trigger watches field reads, shared with the server (offline-host-core.ts imports it).
+  'src/core/routines/trigger-watches.ts',
   // git.diff, run host-side: imported by the standalone twin.
   'src/providers/git-diff-core.ts',
   'src/providers/caller-proof-core.ts',

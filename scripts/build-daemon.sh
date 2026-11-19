@@ -258,6 +258,7 @@ SOURCES=(
   src/core/sessions/open-items-text.ts
   src/core/human-inbox/letter-check.ts
   src/core/routines/trigger-label.ts
+  src/core/routines/trigger-watches.ts
   src/providers/git-diff-core.ts
   src/providers/caller-proof-core.ts
   src/providers/socket-peer-pid.ts
