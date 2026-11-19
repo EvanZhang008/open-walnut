@@ -17,6 +17,7 @@ import { soundGuardHooks } from './sound-guard-hook.js'
 import { typecheckGuardHooks } from './typecheck-guard-hook.js'
 import { orgWorkGuardHooks } from './org-work-guard-hook.js'
 import { ownReadbackHooks } from './own-readback-hook.js'
+import { subagentWaitHooks } from './subagent-wait-hook.js'
 import type { OrgRole } from '../core/types.js'
 
 /**
@@ -34,7 +35,7 @@ export function sessionSettingsHooks(env: NodeJS.ProcessEnv = process.env, opts:
   // guards (git, /tmp, sound, approvals, ...) are the same as every session's.
   const own = !opts.subagent
   // Concatenate per event, so two sources on the same event never drop one.
-  for (const part of [own ? compactOpenItemsHooks(env) : null, gitTmpGuardHooks(env), approvalsGuardHooks(env), tmpWriteNoteHooks(env), cloneIdentityHooks(env), shellDollarGuardHooks(env), patternSignalGuardHooks(env), soundGuardHooks(env), typecheckGuardHooks(env), codexProviderGuardHooks(env), own ? stopUnansweredHooks(env) : null, orgWorkGuardHooks(opts.orgRole === 'router' ? undefined : opts.orgRole, env), ownReadbackHooks(opts.orgRole, opts.prompt ?? '', env)]) {
+  for (const part of [own ? compactOpenItemsHooks(env) : null, gitTmpGuardHooks(env), approvalsGuardHooks(env), tmpWriteNoteHooks(env), cloneIdentityHooks(env), shellDollarGuardHooks(env), patternSignalGuardHooks(env), soundGuardHooks(env), typecheckGuardHooks(env), codexProviderGuardHooks(env), own ? stopUnansweredHooks(env) : null, subagentWaitHooks(env), orgWorkGuardHooks(opts.orgRole === 'router' ? undefined : opts.orgRole, env), ownReadbackHooks(opts.orgRole, opts.prompt ?? '', env)]) {
     for (const [event, groups] of Object.entries(part ?? {})) hooks[event] = [...(hooks[event] ?? []), ...(groups as unknown[])]
   }
   return Object.keys(hooks).length > 0 ? hooks : null

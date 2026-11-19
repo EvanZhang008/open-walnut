@@ -9,6 +9,25 @@
  * may have no node). Callers set HOME, TMPD (the session's TMPDIR) and TD (its
  * WALNUT_TASK_DIR, trailing slashes stripped) before calling volatile().
  */
+/** Escaping a JSON string: what every hook that answers with a reason needs. */
+export const JESC_AWK = String.raw`
+# JSON string escape by hand: awks disagree on backslashes in a gsub replacement.
+# Every control character becomes a space: JSON forbids them raw, and a reason
+# with one is invalid JSON the engine ignores, which allows the command (a ps
+# row or a path can carry an escape sequence).
+function jesc(s,   i, c, out) {
+  if (JESC_CTRL == "") for (i = 1; i < 32; i++) JESC_CTRL = JESC_CTRL sprintf("%c", i)
+  out = ""
+  for (i = 1; i <= length(s); i++) {
+    c = substr(s, i, 1)
+    if (c == "\\" || c == "\"") out = out "\\" c
+    else if (index(JESC_CTRL, c) || c == "\177") out = out " "
+    else out = out c
+  }
+  return out
+}
+`
+
 /** Reading one string field of a hook's JSON stdin, and escaping a JSON string: what every Bash hook needs. */
 export const JSON_AWK = String.raw`
 # The string field key of the JSON s, unescaped, in linear time: a per-character
@@ -35,22 +54,7 @@ function jstr(s, key,   raw, parts, n, i, p, c, out) {
   while ((i = index(out, "\001")) > 0) { p = p substr(out, 1, i - 1) "\\"; out = substr(out, i + 1) }
   return p out
 }
-# JSON string escape by hand: awks disagree on backslashes in a gsub replacement.
-# Every control character becomes a space: JSON forbids them raw, and a reason
-# with one is invalid JSON the engine ignores, which allows the command (a ps
-# row or a path can carry an escape sequence).
-function jesc(s,   i, c, out) {
-  if (JESC_CTRL == "") for (i = 1; i < 32; i++) JESC_CTRL = JESC_CTRL sprintf("%c", i)
-  out = ""
-  for (i = 1; i <= length(s); i++) {
-    c = substr(s, i, 1)
-    if (c == "\\" || c == "\"") out = out "\\" c
-    else if (index(JESC_CTRL, c) || c == "\177") out = out " "
-    else out = out c
-  }
-  return out
-}
-`
+` + JESC_AWK
 
 export const TMP_PATH_AWK = JSON_AWK + String.raw`
 function strip(p) { while (length(p) > 1 && substr(p, length(p)) == "/") p = substr(p, 1, length(p) - 1); return p }
