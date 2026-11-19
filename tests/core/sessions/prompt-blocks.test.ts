@@ -80,7 +80,10 @@ describe('capBlock', () => {
 })
 
 describe('memory folder', () => {
-  beforeEach(async () => { await fs.rm(path.join(WALNUT_HOME, 'agent-memory'), { recursive: true, force: true }) })
+  beforeEach(async () => {
+    // The memory folder lives in the knowledge folder; the folder it moved from is still read (memory-folder.ts).
+    for (const d of ['agent-memory', 'knowledge']) await fs.rm(path.join(WALNUT_HOME, d), { recursive: true, force: true })
+  })
 
   const overflow = (id: string, text: string) => ({ id, file: `${id}.md`, title: promptBlock(id).title, part: promptBlock(id).part, text, chars: charLength(text) })
   const age = async (taskId: string | null, name: string, ms: number) => {

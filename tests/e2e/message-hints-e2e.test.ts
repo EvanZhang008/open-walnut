@@ -57,7 +57,7 @@ describe('message hints through a real server', () => {
     const kinds = r.body.hints.map((h: { kind: string }) => h.kind)
     // reply-language is back since 4f6ac14c2 (2026-11-14) with the one trigger on_drift: the rule
     // itself stays a line of the system prompt; the hint only corrects a turn that drifted off it.
-    expect(kinds).toEqual(['question', 'rich-output', 'reply-language', 'voice-reply', 'object-context', 'user-away', 'brief', 'threads', 'threads-tidy', 'hand-on'])
+    expect(kinds).toEqual(['question', 'rich-output', 'reply-language', 'voice-reply', 'object-context', 'user-away', 'brief', 'threads', 'threads-tidy', 'hand-on', 'team-guidance'])
     // Whose words: every built-in reads as Walnut's, and only reply-language sends a setting of the
     // user's (his reply-language rule, named as his: tests/core/hints/hint-origin.test.ts).
     expect(r.body.hints.every((h: { built_in: boolean }) => h.built_in)).toBe(true)

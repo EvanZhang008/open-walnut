@@ -13,7 +13,7 @@
  */
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { WALNUT_HOME } from '../../../constants.js';
+import { nodeKnowledgeDir } from '../../knowledge/paths.js';
 import { withFileLock } from '../../../utils/file-lock.js';
 import { normalizeForQuote, type Finding } from './judge.js';
 import type { ReflectionSignal } from './signals.js';
@@ -22,12 +22,6 @@ export const GUIDANCE_LINES_MAX = 40;
 export const GUIDANCE_NEW_PER_DAY_MAX = 3;
 /** Places of the org skill registry the reflection leaves to the nodes themselves. */
 const SKILL_ROOM_KEPT = 5;
-const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-
-export function nodeKnowledgeDir(nodeId: string): string {
-  if (!TASK_ID_RE.test(nodeId)) throw new Error(`Invalid node id: ${nodeId}`);
-  return path.join(WALNUT_HOME, 'knowledge', 'nodes', nodeId);
-}
 export const guidanceFileOf = (nodeId: string): string => path.join(nodeKnowledgeDir(nodeId), 'guidance.md');
 export const reflectionDayFileOf = (nodeId: string, date: string): string => path.join(nodeKnowledgeDir(nodeId), 'reflections', `${date}.md`);
 

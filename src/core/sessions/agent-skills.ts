@@ -11,17 +11,24 @@
  * (the steps of a kind of work, the exact op keys). Walnut VP's memory had grown a "How I work"
  * section that was exactly that, read back whole after every compaction.
  *
- * Storage: one JSON file per scope, `WALNUT_HOME/agent-skills/<taskId>.json` for a task's own and
- * `agent-skills/_org.json` for the org's, written under the file lock. Only the primary keeps them
+ * Storage: one SKILL.md a skill in Walnut's knowledge folder (knowledge/paths.ts:
+ * `knowledge/nodes/<taskId>/skills/<name>/SKILL.md` for a task's own, `knowledge/org/skills/...` for
+ * the org's; 2026-11-19, one place and one format for what agents read). The JSON file per scope it
+ * moved from (`agent-skills/<taskId>.json`, `agent-skills/_org.json`) is still written whole after
+ * every change, so the release before this one reads the same skills; a scope with no folder yet is
+ * read from it and moved at its first write (or by the boot move, knowledge/migrate.ts). Every change
+ * runs under the JSON file's lock, the same lock the release before takes. Only the primary keeps them
  * (the companion reads none and refuses writes, as with Threads). Every write is screened for
  * injection (memory-safety.ts screenSkillWrite) and refused whole when it matches; the read back is
  * screened again (screenDocumentForPrompt), and the index says these never override Walnut's
  * rules or the user. Not copied from OpenMausBot: writing skill files with file tools (it bypassed
  * its own checks), and loading the user's whole ~/.claude/skills.
  */
-import path from 'node:path';
-import { WALNUT_HOME } from '../../constants.js';
-import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
+import fsp from 'node:fs/promises';
+import { fileMtimeMs, readJsonFile, writeJsonFile } from '../../utils/fs.js';
+import { withFileLock } from '../../utils/file-lock.js';
+import { knowledgeDir, legacySkillsFileOf, skillsDirOf, TASK_ID_RE } from '../knowledge/paths.js';
+import { markSkillDirMoved, readSkillDir, removeSkillFile, writeSkillFile } from '../knowledge/skill-files.js';
 import { screenDocumentForPrompt, screenSkillWrite } from '../memory-safety.js';
 import { isFollower } from '../server-role.js';
 import type { AgentMemoryWriter } from './agent-memory.js';
@@ -50,8 +57,6 @@ export const AGENT_SKILL_DESCRIPTION_MAX = 200;
 /** The index read back at a new conversation and after a compaction. */
 export const AGENT_SKILLS_INDEX_MAX_CHARS = 1_500;
 
-const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-const ORG_FILE = '_org';
 
 export class AgentSkillError extends Error {
   constructor(readonly code: string, readonly status: number, message: string) {
@@ -59,10 +64,8 @@ export class AgentSkillError extends Error {
   }
 }
 
-function fileOf(scope: AgentSkillScope, taskId: string): string {
-  if (scope === 'org') return path.join(WALNUT_HOME, 'agent-skills', `${ORG_FILE}.json`);
-  if (!TASK_ID_RE.test(taskId)) throw new AgentSkillError('bad_request', 400, `Invalid task id: ${taskId}`);
-  return path.join(WALNUT_HOME, 'agent-skills', `${taskId}.json`);
+function checkScope(scope: AgentSkillScope, taskId: string): void {
+  if (scope === 'own' && !TASK_ID_RE.test(taskId)) throw new AgentSkillError('bad_request', 400, `Invalid task id: ${taskId}`);
 }
 
 function normalize(raw: unknown): AgentSkillsFile {
@@ -74,9 +77,76 @@ function normalize(raw: unknown): AgentSkillsFile {
   };
 }
 
+/** A scope's skills: its folder when it has one, else the JSON file it moves from. */
+async function readScope(scope: AgentSkillScope, taskId: string): Promise<{ skills: AgentSkill[]; moved: boolean }> {
+  checkScope(scope, taskId);
+  const files = await readSkillDir(skillsDirOf(scope, taskId), AGENT_SKILL_NAME_RE);
+  if (files) return { skills: files as AgentSkill[], moved: true };
+  return { skills: normalize(await readJsonFile<unknown>(legacySkillsFileOf(scope, taskId), null)).skills, moved: false };
+}
+
+/**
+ * One change to a scope under its lock. `change` gets the current skills and answers the new list and
+ * the one skill it wrote or the name it removed, or undefined for no change. A scope not moved yet is
+ * moved whole; the JSON copy is written after every change.
+ */
+async function changeScope(
+  scope: AgentSkillScope, taskId: string,
+  change: (skills: AgentSkill[]) => { skills: AgentSkill[]; wrote?: AgentSkill; removed?: string } | undefined,
+): Promise<void> {
+  checkScope(scope, taskId);
+  const json = legacySkillsFileOf(scope, taskId);
+  const dir = skillsDirOf(scope, taskId);
+  await withFileLock(json, async () => {
+    const cur = await readScope(scope, taskId);
+    const next = change(cur.skills);
+    if (!next) return;
+    if (!cur.moved) {
+      for (const s of next.skills) await writeSkillFile(dir, s, scope);
+      await markSkillDirMoved(dir);
+    } else if (next.wrote) await writeSkillFile(dir, next.wrote, scope);
+    if (cur.moved && next.removed) await removeSkillFile(dir, next.removed);
+    await writeJsonFile(json, { version: 1, skills: next.skills } satisfies AgentSkillsFile);
+  });
+}
+
+const sameSkills = (a: readonly AgentSkill[], b: readonly AgentSkill[]): boolean => {
+  const key = (x: readonly AgentSkill[]) => JSON.stringify([...x].map((s) => [s.name, s.description, s.text.trim()]).sort());
+  return key(a) === key(b);
+};
+
+/**
+ * Bring a scope's folder in line with its JSON file (knowledge/migrate.ts, at every boot): a scope
+ * never moved is moved whole; a moved one whose JSON holds other skills than its folder and was
+ * written after the folder last changed (its newest SKILL.md, or the folder itself, whose time moves
+ * when a skill is added or removed by hand) takes the JSON's: the release before changed it after a
+ * roll back. A folder a person edited since is newer and stays. What it replaces is copied to
+ * `knowledge/.backup/` first. Answers how many skills it wrote.
+ */
+export async function moveAgentSkillScope(scope: AgentSkillScope, taskId: string): Promise<number> {
+  checkScope(scope, taskId);
+  const json = legacySkillsFileOf(scope, taskId);
+  const dir = skillsDirOf(scope, taskId);
+  return withFileLock(json, async () => {
+    const cur = await readScope(scope, taskId);
+    const legacy = normalize(await readJsonFile<unknown>(json, null)).skills;
+    if (cur.moved) {
+      if (sameSkills(cur.skills, legacy)) return 0;
+      const newest = Math.max(await fileMtimeMs(dir), ...await Promise.all(cur.skills.map((s) => fileMtimeMs(`${dir}/${s.name}/SKILL.md`))));
+      if (await fileMtimeMs(json) <= newest) return 0;
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      await fsp.cp(dir, `${knowledgeDir()}/.backup/reconcile-${stamp}/${scope === 'org' ? '_org' : taskId}`, { recursive: true });
+    }
+    for (const s of legacy) await writeSkillFile(dir, s, scope);
+    if (cur.moved) for (const s of cur.skills) if (!legacy.some((l) => l.name === s.name)) await removeSkillFile(dir, s.name);
+    await markSkillDirMoved(dir);
+    return legacy.length;
+  });
+}
+
 export async function listAgentSkills(scope: AgentSkillScope, taskId: string): Promise<AgentSkill[]> {
   if (isFollower()) return [];
-  return normalize(await readJsonFile<unknown>(fileOf(scope, taskId), null)).skills;
+  return (await readScope(scope, taskId)).skills;
 }
 
 /** A task's own skill by name, else the org's; null when neither has it. */
@@ -142,8 +212,8 @@ export async function writeAgentSkill(
   };
   screen([description ?? '', content ?? ''].join('\n\n'));
   let out: { skill: AgentSkill; created: boolean; count: number } | undefined;
-  await updateJsonFile<unknown>(fileOf(scope, taskId), null, (raw) => {
-    const file = normalize(raw);
+  await changeScope(scope, taskId, (skills) => {
+    const file = { skills: [...skills] };
     const i = file.skills.findIndex((s) => s.name === name);
     const cur = i >= 0 ? file.skills[i] : undefined;
     if (!cur && input.edits) throw new AgentSkillError('no_skill', 404, `No skill "${name}" to edit: create it with description and content.`);
@@ -174,7 +244,7 @@ export async function writeAgentSkill(
     if (cur) file.skills[i] = skill;
     else file.skills.push(skill);
     out = { skill, created: !cur, count: file.skills.length };
-    return file;
+    return { skills: file.skills, wrote: skill };
   });
   return out!;
 }
@@ -182,11 +252,10 @@ export async function writeAgentSkill(
 export async function deleteAgentSkill(scope: AgentSkillScope, taskId: string, name: string): Promise<boolean> {
   if (isFollower()) throw new AgentSkillError('not_supported_cloud', 501, 'Skills are kept on the primary; this server holds no copy.');
   let removed = false;
-  await updateJsonFile<unknown>(fileOf(scope, taskId), null, (raw) => {
-    const file = normalize(raw);
-    const next = file.skills.filter((s) => s.name !== name);
-    removed = next.length !== file.skills.length;
-    return removed ? { ...file, skills: next } : undefined;
+  await changeScope(scope, taskId, (skills) => {
+    const next = skills.filter((s) => s.name !== name);
+    removed = next.length !== skills.length;
+    return removed ? { skills: next, removed: name } : undefined;
   });
   return removed;
 }

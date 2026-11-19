@@ -34,7 +34,7 @@ import { briefHintText, type BriefHintState } from '../sessions/brief-hint.js';
 import { threadHintText, threadsTidyText, type ThreadHintState, type ThreadsTidyState } from '../org/thread-capture.js';
 import { HINT_USER_SETTINGS, REPLY_LANGUAGE_DRIFT_TAIL, WALNUT_ONLY_KINDS } from './hint-origin.js';
 import { orgHandOnHint } from '../org/core-instructions.js';
-import { teamGuidanceText, type TeamGuidanceState } from '../org/reflection/team-guidance-hint.js';
+import { teamGuidanceIdentity, teamGuidanceText, type TeamGuidanceState } from '../org/reflection/team-guidance-hint.js';
 import { offLineOf } from './reply-language-quote.js';
 
 export const HINT_TRIGGERS: readonly MessageHintTrigger[] = [
@@ -247,11 +247,11 @@ const BUILT_IN: readonly HintSpec[] = [
   {
     kind: 'team-guidance',
     label: 'Team guidance',
-    description: 'The lessons the reflection of the VP (or the CEO) that manages this task wrote for its team, one rule a line. At session start, after a compaction, and when the lines change; nothing when there are none.',
+    description: 'The lessons the reflection of the VP (or the CEO) that manages this task wrote for its team, one rule a line, and for a session that is no org node the index of the org\'s skills. At session start, after a compaction, and when they change; nothing when there are none.',
     allowed: SCHEDULED,
     // 2026-11-19, the user's lead for the user: the sessions under a VP read it when they start and after every compaction.
     defaults: { enabled: true, triggers: ['session_start', 'after_compaction', 'on_change'], placement: 'after' },
-    identity: (i) => (i.teamGuidance ? i.teamGuidance.lines.join('\n') : null),
+    identity: (i) => (i.teamGuidance ? teamGuidanceIdentity(i.teamGuidance) : null),
     render: (i) => (i.teamGuidance ? { text: teamGuidanceText(i.teamGuidance) } : null),
   },
 ];

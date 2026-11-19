@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest'
 import type { SessionHintState, Task } from '../../../src/core/types.js'
 import { effectiveHints, findHint } from '../../../src/core/hints/hint-registry.js'
 import { advanceHintState, hintTargetOf, planHints } from '../../../src/core/hints/hint-send.js'
-import { teamGuidanceText, type TeamGuidanceState } from '../../../src/core/org/reflection/team-guidance-hint.js'
+import { teamGuidanceIdentity, teamGuidanceText, type TeamGuidanceState } from '../../../src/core/org/reflection/team-guidance-hint.js'
 import { managerOf } from '../../../src/core/org/reflection/team.js'
 
 type Rec = { claudeSessionId: string; output_mode: 'markdown'; hintState?: SessionHintState; lastCompactUuid?: string }
@@ -59,6 +59,23 @@ describe('the team-guidance hint', () => {
     const text = teamGuidanceText(guidance(lines))
     expect(text.length).toBeLessThanOrEqual(1900)
     expect(text).toMatch(/- \.\.\. \d+ more in \/tmp\/knowledge\/nodes\/vp\/guidance\.md$/)
+  })
+
+  it('names the org\'s skills to a worker, beside the guidance or alone, and is told again when one is added', () => {
+    const skills = [{ name: 'try-once-on-real-accounts', description: 'Before automating a real account of the user' }]
+    const both = teamGuidanceText({ ...guidance(['Keep names true to what they hold.']), skills })
+    expect(both).toContain('Team guidance from Marina VP')
+    expect(both).toContain('Org skills:')
+    expect(both).toContain('- try-once-on-real-accounts: Before automating a real account of the user')
+    const alone = teamGuidanceText({ lines: [], skills })
+    expect(alone).not.toContain('Team guidance')
+    expect(alone.startsWith('Org skills:')).toBe(true)
+    const many = Array.from({ length: 40 }, (_, i) => ({ name: `skill-${i}`, description: 'a way of working the org wrote down '.repeat(2) }))
+    const full = teamGuidanceText({ ...guidance(Array.from({ length: 30 }, (_, i) => `Rule ${i}: ${'a careful sentence '.repeat(4)}`)), skills: many })
+    expect(full.length).toBeLessThanOrEqual(1900)
+    expect(full).toMatch(/more in \/tmp\/knowledge\/nodes\/vp\/guidance\.md/)
+    expect(full).toMatch(/- \.\.\. \d+ more: agent_skill_read with no name lists them\.$/)
+    expect(teamGuidanceIdentity({ lines: [], skills })).not.toBe(teamGuidanceIdentity({ lines: [], skills: [...skills, { name: 'b', description: 'c' }] }))
   })
 
   it('reads the guidance of the node that manages the task', () => {

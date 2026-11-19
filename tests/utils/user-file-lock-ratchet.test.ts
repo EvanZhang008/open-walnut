@@ -48,10 +48,11 @@ const STORE_LOCKS = new Set<string>([
   'src/core/project-memory.ts: memFile',                        // project memory under WALNUT_HOME
   'src/core/routines/trigger-state.ts: file',                   // trigger state
   'src/core/send-queue.ts: target',                             // send-queue fences
+  'src/core/sessions/agent-skills.ts: json',                    // WALNUT_HOME/agent-skills/<task>.json: the lock both releases take for a skills scope
   'src/core/org/reflection/records.ts: file',                   // WALNUT_HOME/knowledge/nodes/<node>/guidance.md and reflections/<date>.md
   'src/core/send-relay-index.ts: file',                         // cache/send-queue/relays/<session>.json
   'src/core/session-queue-store.ts: SESSION_QUEUE_FILE',        // the session message queue (its one lock, persist)
-  'src/core/sessions/memory-folder.ts: `${dir}.notes`',          // WALNUT_HOME/agent-memory/<task>.notes: a node's own notes folder
+  'src/core/sessions/memory-folder.ts: `${dir}.notes`',          // WALNUT_HOME/knowledge/nodes/<task>/notes.notes: a node's own notes folder
   'src/core/sessions/cloud-chat-lane.ts: MARKS_FILE',           // chat lane marks
   'src/core/sessions/report-set.ts: `${WALNUT_HOME}/cache/decision-owner.json`', // shared decision-owner writer fence
   'src/core/sessions/status-question.ts: `${WALNUT_HOME}/cache/decision-owner.json`', // same fence for turn-end reports

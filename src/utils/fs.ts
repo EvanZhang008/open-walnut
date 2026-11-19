@@ -18,6 +18,19 @@ export async function writeJsonFile(
   data: unknown,
   options: { mode?: number; durable?: boolean } = {},
 ): Promise<void> {
+  await writeTextFile(filePath, JSON.stringify(data, null, 2) + '\n', options);
+}
+
+/**
+ * Atomically write text to a file (write to tmp, then rename), with the same options as
+ * writeJsonFile. The tmp name is `.open-walnut-<hex>.tmp`, which the data hub's .gitignore leaves
+ * out, so a crash mid-write never syncs a half file.
+ */
+export async function writeTextFile(
+  filePath: string,
+  text: string,
+  options: { mode?: number; durable?: boolean } = {},
+): Promise<void> {
   const dir = path.dirname(filePath);
   await fs.mkdir(dir, { recursive: true });
 
@@ -28,7 +41,6 @@ export async function writeJsonFile(
     `.open-walnut-${crypto.randomBytes(8).toString('hex')}.tmp`,
   );
   try {
-    const text = JSON.stringify(data, null, 2) + '\n';
     if (options.durable) {
       const file = await fs.open(tmpFile, 'w', options.mode);
       try {
@@ -51,6 +63,11 @@ export async function writeJsonFile(
     await fs.rm(tmpFile, { force: true }).catch(() => {});
     throw err;
   }
+}
+
+/** A file's mtime in ms, 0 when it is missing or unreadable. */
+export async function fileMtimeMs(filePath: string): Promise<number> {
+  return (await fs.stat(filePath).catch(() => null))?.mtimeMs ?? 0;
 }
 
 let fallbackCloneWarned = false
