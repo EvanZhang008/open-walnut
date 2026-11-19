@@ -27,6 +27,12 @@ const views: HostServerView[] = [
     server: { route: { kind: 'leader' } },
   },
   { hostKey: 'offbox', enabled: false, phase: 'off', since: 0 },
+  // On by default but no replica should run there: not eligible, waiting for its host, a daemon too old.
+  { hostKey: 'smallbox', enabled: true, byDefault: true, phase: 'not-eligible', since: 0, gate: { reason: 'memory', checkedAt: NOW } },
+  { hostKey: 'awaybox', enabled: true, byDefault: true, phase: 'waiting-for-host', since: 0 },
+  { hostKey: 'oldbox', enabled: true, byDefault: true, phase: 'unsupported', since: 0 },
+  // The person's own switch: a host that waits is a replica that is not running.
+  { hostKey: 'minebox', enabled: true, phase: 'waiting-for-host', since: 0 },
 ]
 vi.mock('../../../src/core/host-server/index.js', () => ({ peekHostServerViews: () => views }))
 
@@ -66,7 +72,7 @@ describe('the section 13 status fields', () => {
 
   it('a host row: the program, the fallback, the journal with its parked count and oldest record', () => {
     const rows = hostReplicaStatuses(views, NOW)
-    expect(rows.map((r) => r.hostKey)).toEqual(['devbox', 'buildbox'])
+    expect(rows.map((r) => r.hostKey)).toEqual(['devbox', 'buildbox', 'minebox'])
     expect(rows[0]).toMatchObject({
       program: 'replica', running: true, daemonState: 'running', restarts: 1, fallback: null, reportAgeMs: 4_000,
       journal: { records: 5, drainable: 3, parked: 2, bytes: 2048, oldestAt: NOW - 90_000, oldestAgeMs: 90_000, lastDrainAt: null },
@@ -81,7 +87,7 @@ describe('the section 13 status fields', () => {
     const body = await r.json() as { ok: boolean; targets: Array<{ id: string; kinds: Array<{ kind: string; ageMs?: number }> }>; hosts: Array<Record<string, unknown>> }
     expect(r.status).toBe(200)
     expect(body.ok).toBe(true)
-    expect(body.hosts.map((h) => h.hostKey)).toEqual(['devbox', 'buildbox'])
+    expect(body.hosts.map((h) => h.hostKey)).toEqual(['devbox', 'buildbox', 'minebox'])
     expect(body.hosts[0]!.journal).toMatchObject({ records: 5, drainable: 3, parked: 2 })
     const tasks = body.targets.find((t) => t.id === 'host:devbox')!.kinds.find((k) => k.kind === 'tasks')!
     expect(typeof tasks.ageMs).toBe('number')

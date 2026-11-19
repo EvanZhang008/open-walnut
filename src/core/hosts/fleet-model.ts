@@ -76,7 +76,7 @@ export interface FleetHost {
    * The Walnut server the host runs for this Mac (replica or plain host server); null for the
    * Mac and the cloud box, whose line says why (CLOUD_BOX_HOST_SERVER_NOTE).
    */
-  server: { enabled: boolean; program: string | null; phase: HostServerPhase; phaseLabel: string; build: string | null; phone: string | null; message: string | null } | null
+  server: { enabled: boolean; program: string | null; phase: HostServerPhase; phaseLabel: string; build: string | null; phone: string | null; message: string | null; byDefault?: boolean } | null
   /**
    * `startup` is what the daemon reports ('service' or 'on-demand'). `bootStart` is the
    * host's own answer (src/providers/remote-boot-start.ts: which service, linger, the

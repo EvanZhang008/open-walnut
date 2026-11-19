@@ -297,6 +297,8 @@ async function serverOf(host: string, def: HostDef | null): Promise<FleetInputs[
     build: view.build ?? null,
     phone: view.server?.expose?.state ?? null,
     message: view.message ?? null,
+    // Only the default runs it (the experiment): waiting, unsupported or not eligible is no problem there.
+    ...(view.byDefault ? { byDefault: true } : {}),
   }
 }
 

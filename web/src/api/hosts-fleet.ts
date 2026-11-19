@@ -28,7 +28,7 @@ export interface FleetHost {
   sessions: { running: number | null; source?: 'host' | 'records' | null; why?: string | null; at?: number | null };
   spend: { last30dUsd: number; from: string; basis: 'list-price' } | null;
   /** `phaseLabel` is the phase in words; show it, never `phase`. */
-  server: { enabled: boolean; program: string | null; phase: string; phaseLabel: string; build: string | null; phone: string | null; message: string | null } | null;
+  server: { enabled: boolean; program: string | null; phase: string; phaseLabel: string; build: string | null; phone: string | null; message: string | null; byDefault?: boolean } | null;
   daemon: {
     version: string | null; startedAt: number | null; startup: string; startsAfterReboot: boolean; runtime: string | null; vitals: boolean;
     /** The host's own answer about a reboot (null until asked; absent from an older server). */

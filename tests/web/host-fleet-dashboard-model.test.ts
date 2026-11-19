@@ -63,6 +63,14 @@ describe('problem line', () => {
     expect(problemsOf(host({ server: server('not-eligible') as never }), NOW).map((p) => p.key)).not.toContain('server')
     expect(problemsOf(host({ server: server('error') as never }), NOW).map((p) => p.key)).toContain('server')
   })
+  it('a host that only follows the default and waits for its host or a newer daemon has no server problem; one the person turned on has', () => {
+    const server = (phase: string, byDefault?: true) => ({ enabled: true, program: 'replica', phase, phaseLabel: phase, build: null, phone: null, message: null, ...(byDefault ? { byDefault } : {}) })
+    for (const phase of ['waiting-for-host', 'unsupported']) {
+      expect(problemsOf(host({ server: server(phase, true) as never }), NOW).map((p) => p.key)).not.toContain('server')
+      expect(problemsOf(host({ server: server(phase) as never }), NOW).map((p) => p.key)).toContain('server')
+    }
+    expect(problemsOf(host({ server: server('error', true) as never }), NOW).map((p) => p.key)).toContain('server')
+  })
   it('offers Set up when the host says a setup is due', () => {
     const [p] = problemsOf(noBoot({ mode: 'none', backend: null, reason: 'nothing on it starts the daemon at boot', checkedAt: NOW, setupRunning: false, setupError: null, next: 'install' }), NOW)
     // Plain words, naming the host (2026-11-04 review: "Daemon does not come back after a reboot").

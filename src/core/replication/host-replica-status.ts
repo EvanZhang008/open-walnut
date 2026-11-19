@@ -70,6 +70,9 @@ export function hostReplicaStatusOf(view: HostServerView, now = Date.now()): Hos
   }
 }
 
+/** A host that only follows the default (the experiment) and waits, needs a newer daemon or cannot run one: no replica should run there. */
+const QUIET_DEFAULT_PHASES: ReadonlySet<HostServerView['phase']> = new Set(['waiting-for-host', 'unsupported', 'not-eligible'])
+
 export function hostReplicaStatuses(views: readonly HostServerView[], now = Date.now()): HostReplicaStatus[] {
-  return views.filter((v) => v.enabled).map((v) => hostReplicaStatusOf(v, now))
+  return views.filter((v) => v.enabled && v.phase !== 'not-eligible' && !(v.byDefault && QUIET_DEFAULT_PHASES.has(v.phase))).map((v) => hostReplicaStatusOf(v, now))
 }
