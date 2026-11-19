@@ -1,5 +1,7 @@
 import type { SharpFn } from '../core/components/sharp-type.js';
+import { createRequire } from 'node:module';
 import { log } from '../logging/index.js';
+import { warmModuleOffThread } from './warm-module.js';
 import { componentStatus, ensureComponent, loadComponent, markBundledBroken, markInstalledBroken, whenComponentReady } from '../core/components/index.js';
 
 /**
@@ -14,6 +16,7 @@ import { componentStatus, ensureComponent, loadComponent, markBundledBroken, mar
  * image is clamped again on replay, so a conversation heals once the component
  * lands.
  */
+const selfRequire = createRequire(import.meta.url);
 let sharpFn: SharpFn | null = null;
 let sharpLoading: Promise<SharpFn | null> | null = null;
 let sharpForTests: SharpFn | null | undefined;
@@ -31,9 +34,21 @@ function warnOnce(reason: string, extra: Record<string, unknown> = {}): void {
 
 const errText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
+/**
+ * Load sharp in a worker first (src/utils/warm-module.ts): its first load on
+ * the loop thread read libvips from disk there and held every request 4.1 s.
+ * `resolveEntry` throws when sharp does not resolve; the load below reports that.
+ */
+let warmSharp = async (resolveEntry: () => string): Promise<void> => {
+  let entry: string;
+  try { entry = resolveEntry(); } catch { return; }
+  await warmModuleOffThread(entry);
+};
+
 async function tryLoadSharp(): Promise<SharpFn | null> {
   let comp = await loadComponent('images');
   if (comp?.source === 'bundled') {
+    await warmSharp(() => selfRequire.resolve('sharp'));
     try {
       return moduleFn(await import('sharp'));
     } catch (err) {
@@ -52,8 +67,10 @@ async function tryLoadSharp(): Promise<SharpFn | null> {
     comp = await loadComponent('images');
   }
   if (comp?.source !== 'installed') return null;
+  const installed = comp;
+  await warmSharp(() => installed.require.resolve('sharp'));
   try {
-    return moduleFn(comp.require('sharp'));
+    return moduleFn(installed.require('sharp'));
   } catch (err) {
     warnOnce('load-failed', { error: errText(err) });
     markInstalledBroken('images', err);
@@ -71,6 +88,12 @@ export async function loadSharp(): Promise<SharpFn | null> {
     .finally(() => { sharpLoading = null; });
   return sharpLoading;
 }
+
+/** Test seam: watch (or replace) the warm-up that runs before each load of sharp. */
+export function __setSharpWarmForTests(warm: ((resolveEntry: () => string) => Promise<void>) | null): void {
+  warmSharp = warm ?? defaultWarmSharp;
+}
+const defaultWarmSharp = warmSharp;
 
 /** Test seam: force the next load to resolve to this module (or to "missing" with null). */
 export function __setSharpForTests(sharp: SharpFn | null | undefined): void {
