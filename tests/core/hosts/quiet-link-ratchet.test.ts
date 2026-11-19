@@ -129,6 +129,7 @@ const SENDERS: Record<string, { calls: number; kind: Kind; why: string }> = {
   'src/core/sessions/engine-switch.ts': { calls: 3, kind: 'no-send', why: 'asks the pool whether the old host\'s link is up (a move from a host that is gone)' },
   'src/core/sessions/host-lost.ts': { calls: 3, kind: 'no-send', why: 'asks the pool whether a link is up, and dials one under its own deadline to see whether the host answers; no work rides it' },
   'src/core/plugin-jobs/index.ts': { calls: 2, kind: 'no-send', why: 'only dials: the job set rides the connect' },
+  'src/web/terminal/terminal-route.ts': { calls: 2, kind: 'no-send', why: 'the route decision peeks whether an SSH host\'s daemon is connected with terminal streams (daemonRunsTerminals); the terminal and its scripts then go through dial() (host-terminal.ts, runScriptOnHost)' },
   'src/web/terminal/host-shell.ts': { calls: 2, kind: 'no-send', why: 'the orphan sweep asks the pool whether a link host is connected (hostLinkRunsScripts); its scripts then go through runScriptOnHost (dial())' },
   'src/core/routines/clock-placement.ts': { calls: 2, kind: 'no-send', why: 'asks the pool whether a link is up' },
   'src/core/session-snapshot-apply.ts': { calls: 2, kind: 'no-send', why: 'reads when a pooled link\'s daemon started' },
