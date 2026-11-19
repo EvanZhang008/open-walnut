@@ -302,18 +302,32 @@ export const MAX_HOST_SLOTS = 32;
 const GB = 1024 ** 3;
 
 /**
+ * This machine's slots when no setting names them, pinned by a test run (tests/setup/host-slots-pin.ts):
+ * a test's starts never depend on the size of the machine it runs on (a 4-CPU CI runner gets 2, and
+ * a suite's third start was refused "all 2 slots taken": twice on 2026-11-10, again 11-18). A setting
+ * still wins, and a test that fakes the machine's numbers (__setHostLoadProberForTesting) gets the
+ * count its numbers give. Read through a globalThis key, so the setup imports nothing of the app.
+ */
+function localSizedSlotsPin(): number | undefined {
+  const pin = (globalThis as { [k: symbol]: unknown })[Symbol.for('open-walnut.localSizedSlots')];
+  return typeof pin === 'number' && pin >= 1 ? Math.floor(pin) : undefined;
+}
+
+/**
  * How many sessions a host runs in a turn at once. The host's own setting
  * (config `session_limits`, keyed 'local' for this Mac or by alias) wins; else one
  * per two CPUs and one per 3 GB of memory, whichever is fewer, 2 to MAX_HOST_SLOTS
  * (this Mac's 14 CPUs: 7, clouddev's 48 CPUs and 184 GB: 24). A host whose numbers
- * are unknown keeps the old default (7 here, 20 on another host).
+ * are unknown keeps the old default (7 here, 20 on another host). `sizedPin`, when given, stands
+ * in for both (a test run's pin for this machine: localSizedSlotsPin).
  */
 export function hostSlots(
   key: string, load: Pick<HostLoad, 'cpus' | 'memTotalBytes'> | undefined, sessionLimits: Record<string, number> | undefined,
-  fallback: (key: string) => number,
+  fallback: (key: string) => number, sizedPin?: number,
 ): number {
   const set = Number(sessionLimits?.[key]);
   if (sessionLimits?.[key] !== undefined && Number.isFinite(set)) return Math.max(1, Math.floor(set));
+  if (sizedPin !== undefined) return sizedPin;
   if (!load || !(load.cpus > 0)) return fallback(key);
   const byCpu = Math.floor(load.cpus / 2);
   const byMem = load.memTotalBytes > 0 ? Math.floor(load.memTotalBytes / (3 * GB)) : byCpu;
@@ -355,7 +369,7 @@ export async function hostLoads(opts: { hosts?: string[]; cloudBox?: boolean } =
     const running = taken.size;
     const got = await loadOf(host);
     const label = host === LOCAL ? 'this Mac' : hostDisplayName(host, config.hosts?.[host]?.label);
-    const slots = hostSlots(key, got.load, config.session_limits, (k) => activeSessionLimitFor(k, undefined));
+    const slots = hostSlots(key, got.load, config.session_limits, (k) => activeSessionLimitFor(k, undefined), host === LOCAL && !prober ? localSizedSlotsPin() : undefined);
     const live = host === LOCAL ? await localLiveCount(config, runner, holders.get(host) ?? []) : undefined;
     const view = judgeHost(host, label, got.load, running, slots, caps, got.error, live);
     // The weight: the room score scaled by how much the user prefers this host.

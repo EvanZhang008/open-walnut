@@ -57,11 +57,6 @@ beforeAll(async () => {
   const config = await getConfig()
   await updateConfig({
     defaults: { ...config.defaults, engine_split: [{ engine: 'claude' }, { engine: 'claude', model: 'sonnet' }] },
-    // The automatic starts below share this machine's slots with the earlier cases' mock
-    // sessions, which a slow runner may still have in a turn: by its size a small CI runner gets
-    // 2 (src/core/hosts/placement.ts hostSlots), and "a start that waited" was refused with "no
-    // room" (2026-11-10, CI). The slot rule is not under test here.
-    session_limits: { local: 32 },
   })
 }, 120_000)
 

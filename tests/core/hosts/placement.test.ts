@@ -15,7 +15,7 @@ vi.mock('../../../src/core/config-manager.js', async (orig) => {
 });
 
 import { WALNUT_HOME } from '../../../src/constants.js';
-import { __setHostLoadProberForTesting, choosePlacement, hostLoads, hostSlots, judgeHost, localLoadPerCpu, macOnlyReason, needsMacTools, placementCaps, placementWeight, CLOUD_BOX_MOVE_NOTE } from '../../../src/core/hosts/placement.js';
+import { MAX_HOST_SLOTS, __setHostLoadProberForTesting, choosePlacement, hostLoads, hostSlots, judgeHost, localLoadPerCpu, macOnlyReason, needsMacTools, placementCaps, placementWeight, CLOUD_BOX_MOVE_NOTE } from '../../../src/core/hosts/placement.js';
 import os from 'node:os';
 import { HostsFullError, __resetHostAdmissionForTesting, __setWaitStepForTesting, admitHostStart, holdSlotFor, isAutomaticStart, slotHoldersOn } from '../../../src/core/sessions/host-admission.js';
 import type { HostLoad } from '../../../src/providers/host-facts-core.js';
@@ -621,5 +621,42 @@ describe('each host\'s slots', () => {
     expect(d).toMatchObject({ host: 'cloud', moved: true });
     expect(d!.reason).toMatch(/^this Mac is overloaded \(1 sessions in a turn \(limit 1\)\); cloud has room/);
     held();
+  });
+
+  // 2026-11-18, CI: a 4-CPU runner gave this machine 2 slots, so a suite's third start was refused
+  // "all 2 slots taken" while a Mac passed it. A test run pins what the measured size gives
+  // (tests/setup/host-slots-pin.ts); a setting and a test's faked numbers still decide.
+  it('in a test run this machine\'s measured size never decides its slots; a setting and faked numbers still do', async () => {
+    const PIN = Symbol.for('open-walnut.localSizedSlots');
+    expect((globalThis as { [k: symbol]: unknown })[PIN], 'this run loads tests/setup/host-slots-pin.ts').toBe(MAX_HOST_SLOTS);
+    // Every config with its own setup list loads it too (the rest extend vitest.config.ts), so a
+    // new tier cannot leave it out; only the ones that run no in-process server, or run the real
+    // programs on real machines on purpose, are exempt.
+    const exempt: Record<string, string> = {
+      'vitest.live.config.ts': 'real programs on real machines, on purpose',
+      'vitest.fleet.config.ts': 'real programs on real machines, on purpose',
+      'vitest.markdown.config.ts': 'DOM only, no server',
+      'vitest.diff-view.config.ts': 'DOM only, no server',
+      'vitest.workflow-graph.config.ts': 'DOM only, no server',
+      'vitest.notes-roundtrip.config.ts': 'DOM only, no server',
+    };
+    const repo = new URL('../../../', import.meta.url);
+    const configs = (await fsp.readdir(repo)).filter((f) => /^vitest(\..+)?\.config\.ts$/.test(f));
+    for (const file of configs) {
+      const text = await fsp.readFile(new URL(file, repo), 'utf8');
+      if (!/\bsetupFiles\s*:/.test(text) || exempt[file]) continue;
+      expect(text, file).toContain("'tests/setup/host-slots-pin.ts'");
+    }
+    expect(configs).toEqual(expect.arrayContaining(['vitest.config.ts', 'vitest.e2e.config.ts', ...Object.keys(exempt)]));
+    expect(hostSlots('local', { cpus: 4, memTotalBytes: 16 * GB }, undefined, () => 7, MAX_HOST_SLOTS)).toBe(MAX_HOST_SLOTS);
+    expect(hostSlots('local', { cpus: 4, memTotalBytes: 16 * GB }, { local: 2 }, () => 7, MAX_HOST_SLOTS)).toBe(2);
+    __setHostLoadProberForTesting(null);
+    const [real] = await hostLoads({ hosts: ['__local__'] });
+    expect(real.runningLimit, `the real machine (${os.cpus().length} CPUs)`).toBe(MAX_HOST_SLOTS);
+    cfg.session_limits = { local: 2 };
+    expect((await hostLoads({ hosts: ['__local__'] }))[0].runningLimit).toBe(2);
+    cfg.session_limits = undefined;
+    __setHostLoadProberForTesting(async () => load({ cpus: 4, memTotalBytes: 16 * GB }));
+    expect((await hostLoads({ hosts: ['__local__'] }))[0].runningLimit, 'faked numbers give their own count').toBe(2);
   });
 });
