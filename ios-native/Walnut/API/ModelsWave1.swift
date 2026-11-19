@@ -528,6 +528,8 @@ struct TaskDetail: Codable {
     var parentTaskId: String? = nil
     /// "main" (the CEO) or "lead" (a VP); absent on other tasks (additive, 2026-10).
     var orgRole: String? = nil
+    /// Threads on for this task (additive, 2026-11-18; see `WalnutTask.threadsOn`).
+    var threadsOn: Bool? = nil
     /// The user's own standing instructions for the CEO or a VP (additive, 2026-10).
     var orgInstructions: OrgInstructions? = nil
     /// The task's current sessions by slot, when it has one (the web's `resolveTaskSessionId`
@@ -559,6 +561,7 @@ struct TaskDetail: Codable {
         case userStatus = "user_status"
         case parentTaskId = "parent_task_id"
         case orgRole = "org_role"
+        case threadsOn = "threads_on"
         case orgInstructions = "org_instructions"
         case createdAt = "created_at"
         case updatedAt = "updated_at"

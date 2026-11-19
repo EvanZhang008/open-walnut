@@ -888,6 +888,7 @@ final class TasksStore {
             parentTaskId: task.parentTaskId,
             userStatus: task.userStatus,
             orgRole: task.orgRole,
+            threadsOn: task.threadsOn,
             liveActivity: task.liveActivity,
             resultReport: task.resultReport,
             teamStop: task.teamStop,
@@ -967,6 +968,14 @@ final class TasksStore {
         }
     }
 
+    /// The server's row after a write made elsewhere (the Threads switch, `WalnutAPI.setTaskThreads`):
+    /// it replaces the list's copy, as an edit's answer does.
+    func adoptRow(_ updated: WalnutTask) {
+        guard let idx = tasks.firstIndex(where: { $0.id == updated.id }) else { return }
+        tasks[idx] = updated
+        DiskCache.save(tasks, key: "tasks-list")
+    }
+
     private func patchTask(id: String, edit: TaskEdit) async throws -> WalnutTask {
         try await transport.updateTask(
             id: id, status: edit.status, priority: edit.priority,
@@ -991,6 +1000,7 @@ final class TasksStore {
             parentTaskId: t.parentTaskId,
             userStatus: t.userStatus,
             orgRole: t.orgRole,
+            threadsOn: t.threadsOn,
             liveActivity: t.liveActivity,
             resultReport: t.resultReport,
             teamStop: t.teamStop,

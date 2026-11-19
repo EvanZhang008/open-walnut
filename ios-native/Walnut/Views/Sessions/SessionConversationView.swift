@@ -58,6 +58,9 @@ struct SessionConversationView: View {
     @State private var fetchedTask: WalnutTask?
     /// The CEO's or a VP's memory and instructions (the row after Task Details).
     @State private var showMemory = false
+    /// A leader's Threads (additive, 2026-11-18): the sheet, and a switch that did not save.
+    @State private var showThreads = false
+    @State private var threadsFailed = false
     // Wave-2 extras — presented from the session menu.
     @State private var showQueue = false
     @State private var showPlan = false
@@ -229,8 +232,34 @@ struct SessionConversationView: View {
             }
     }
 
+    /// A leader's Threads over its chat (additive, 2026-11-18): the sheet, the switch's failure, and a
+    /// thread push for it. Its own helper, as `orgNodeHooks`: in `body`'s chain the compiler could
+    /// not type-check it in time.
+    private func threadsHooks<V: View>(_ content: V) -> some View {
+        content
+            .sheet(isPresented: $showThreads) {
+                if let taskId = session.taskId {
+                    TaskThreadsSheet(taskId: taskId, name: (linkedTask ?? fetchedTask)?.title ?? session.taskTitle ?? "Task",
+                                     sessionId: session.id, turnOff: { await turnThreads(on: false, alertOnFailure: false) })
+                        .presentationDetents([.large])
+                        .presentationDragIndicator(.visible)
+                }
+            }
+            .alert("Threads did not save", isPresented: $threadsFailed) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Try again in a moment.")
+            }
+            // A thread push for this leader (ChatView opened its chat and posted the request): its
+            // Threads come up over the chat, as a VP's page does over a VP's.
+            .onChange(of: OrgNodePageLink.shared.pending, initial: true) { _, _ in takeThreadsLink() }
+            // A cold launch: the push came before the task's row, or the phone's copy of it is older
+            // than his turning Threads on elsewhere; it is taken once the row says they are on.
+            .onChange(of: threadsTask?.threadsOn) { _, _ in takeThreadsLink() }
+    }
+
     var body: some View {
-        orgNodeHooks(pageStack)
+        threadsHooks(orgNodeHooks(pageStack))
         // Same keyboard-safety rule as ChatView: any sibling that overflows the
         // keyboard-shrunk proposal pushes the inset composer down by half that
         // overflow, straight under the predictive bar. See
@@ -504,7 +533,7 @@ struct SessionConversationView: View {
     }
 
     private var anySheetShown: Bool {
-        showInfo || showControls || showTask || showMemory || showQueue || managingQueueRow != nil
+        showInfo || showControls || showTask || showMemory || showThreads || showQueue || managingQueueRow != nil
             || showPlan || showSideQuestions || showFiles || showNote || showFork || showLatestUpdate || showRename
     }
 
@@ -641,6 +670,22 @@ struct SessionConversationView: View {
                     }
                     .accessibilityIdentifier("session.memoryInstructions")
                 }
+                if let task = threadsTask {
+                    Button {
+                        if task.threadsOn == true { showThreads = true } else { Task { await turnThreads(on: true) } }
+                    } label: {
+                        Label(task.threadsOn == true ? "Threads" : "Turn On Threads", systemImage: "bubble.left.and.text.bubble.right")
+                    }
+                    .accessibilityIdentifier("session.threads")
+                    if task.threadsOn == true {
+                        Button {
+                            Task { await turnThreads(on: false) }
+                        } label: {
+                            Label("Turn Off Threads", systemImage: "bubble.left.and.bubble.right")
+                        }
+                        .accessibilityIdentifier("session.threadsOff")
+                    }
+                }
             }
             Button {
                 showControls = true
@@ -751,6 +796,44 @@ struct SessionConversationView: View {
     private var linkedTask: WalnutTask? {
         guard let taskId = session.taskId else { return nil }
         return tasksStore?.tasks.first { $0.id == taskId }
+    }
+
+    /// The linked task when its menu offers Threads (additive, 2026-11-18; server
+    /// `src/core/org/keeps-threads.ts`): a leader (a task with an open subtask) or one already on.
+    /// Never the CEO or a VP: their Threads are on their Org page.
+    private var threadsTask: WalnutTask? {
+        guard let task = linkedTask ?? fetchedTask, task.orgRole == nil else { return nil }
+        if task.threadsOn == true { return task }
+        let leads = tasksStore?.tasks.contains { $0.parentTaskId == task.id && $0.status != "done" && $0.phase != "COMPLETE" } ?? false
+        return leads ? task : nil
+    }
+
+    /// Turn the task's Threads on (then open them) or off. True when the server took it. From the
+    /// sheet, which says a failure itself, no alert (one under a sheet never shows).
+    @discardableResult
+    private func turnThreads(on: Bool, alertOnFailure: Bool = true) async -> Bool {
+        guard let taskId = session.taskId else { return false }
+        do {
+            let updated = try await WalnutAPI().setTaskThreads(id: taskId, on: on)
+            tasksStore?.adoptRow(updated)
+            if fetchedTask?.id == taskId { fetchedTask = updated }
+            AppLog.info("threads", on ? "task threads turned on" : "task threads turned off", ["taskId": taskId])
+            if on { showThreads = true }
+            return true
+        } catch {
+            AppLog.info("threads", "task threads switch failed", ["taskId": taskId, "on": on ? "yes" : "no"])
+            if alertOnFailure { threadsFailed = true }
+            return false
+        }
+    }
+
+    /// A thread push for this task while its Threads are on (an Org node's page host takes its
+    /// own): take the request and show them. Only the Chat tab's copy of the chat follows links,
+    /// as `OrgNodePageHost` does.
+    private func takeThreadsLink() {
+        guard followsOrgLinks, let taskId = session.taskId, threadsTask?.threadsOn == true,
+              OrgNodePageLink.shared.take(nodeId: taskId, sessionId: session.id) != nil else { return }
+        showThreads = true
     }
 
     /// The linked task when it is an Org node (the CEO or a VP), else nil. The live row first; a

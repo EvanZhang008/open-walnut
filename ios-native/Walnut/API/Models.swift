@@ -509,6 +509,10 @@ struct WalnutTask: Codable, Identifiable, Equatable {
     /// "main" (the CEO) or "lead" (a VP): the session menu offers its memory and
     /// instructions. Absent on other tasks and from an older server (additive, 2026-10).
     var orgRole: String? = nil
+    /// The user turned Threads on for this task (additive, 2026-11-18; server
+    /// `src/core/org/keeps-threads.ts`): its session menu opens them. nil when off, on Main and
+    /// the leads (they always keep Threads), and from an older server.
+    var threadsOn: Bool? = nil
     /// What its running session does now (additive, 2026-10; server `src/core/live-activity.ts`):
     /// the tool, since when, the turn's length and cost. Running rows only; nil from an older
     /// server. The feed's `task-activity` frame keeps it current (TasksStore).
@@ -560,6 +564,7 @@ struct WalnutTask: Codable, Identifiable, Equatable {
         case parentTaskId = "parent_task_id"
         case userStatus = "user_status"
         case orgRole = "org_role"
+        case threadsOn = "threads_on"
         case liveActivity = "live_activity"
         case resultReport = "result_report"
         case teamStop = "team_stop"

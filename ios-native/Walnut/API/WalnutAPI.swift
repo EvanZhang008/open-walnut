@@ -226,6 +226,14 @@ struct WalnutAPI {
         return updated.task
     }
 
+    /// Turn a task's Threads on or off (additive, 2026-11-18): PATCH `/tasks/:id` with `threads_on`.
+    /// Answers the updated row. An older server answers 400 (the field is unknown there).
+    func setTaskThreads(id: String, on: Bool) async throws -> WalnutTask {
+        struct Body: Encodable { let threads_on: Bool }
+        let updated: TaskCreated = try await send("PATCH", "/tasks/\(escape(id))", body: Body(threads_on: on))
+        return updated.task
+    }
+
     // MARK: - Session control (model / effort / fork — additive, 2026-08)
 
     /// Picker data for the model sheet: selectable models + current model/effort.
