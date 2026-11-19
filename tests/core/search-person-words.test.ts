@@ -22,7 +22,7 @@ afterAll(() => { delete process.env.WALNUT_SEARCH_V2_SEMANTIC; resetSearchV2Inde
 
 /** Wait on the state the sync leaves, never a fixed sleep (tests/core/fixed-sleep-wait-guard.test.ts). */
 async function waitFor(check: () => boolean, timeout = 8_000): Promise<void> {
-  await vi.waitFor(() => expect(check()).toBe(true), { timeout: timeoutMs, interval: 100, timeout });
+  await vi.waitFor(() => expect(check()).toBe(true), { timeout, interval: 100 });
 }
 
 /** The web task list's reading of the server's answer: the task shows up, as a hit that shows the query. */
