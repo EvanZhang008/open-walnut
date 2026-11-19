@@ -242,12 +242,10 @@ for (const twin of TWINS) {
 
     it('never reaches a daemon socket on this machine: its own port, or a sibling daemon\'s from its port file', async () => {
       const port = await boot(twin)
-      const { ep } = await link(port)
-      // Its own WebSocket port, which takes no token: refused with a sentence, never dialled.
-      await expect(ep.openPort(port, '127.0.0.1')).rejects.toThrow(new RegExp(`port ${port} is a Walnut session daemon's own socket on this host`))
-      await expect(ep.openPort(port, 'localhost')).rejects.toThrow(/session daemon's own socket/)
       // Siblings: the cloud companion's tunnel daemon (unkeyed and keyed per device) and the
       // home fallback dir, under this test's HOME. Each "daemon" is a server this test owns.
+      // Their port files are written before the first port stream: the relay believes the files
+      // it read for 2 s (stream-relay-core.ts DAEMON_PORTS_TTL_MS), so its first read sees them.
       let dialled = 0
       const home = path.join(root, 'home')
       const tunnel = path.join(home, '.local', 'state', 'open-walnut', 'primary-daemon')
@@ -259,9 +257,10 @@ for (const twin of TWINS) {
         fs.writeFileSync(path.join(dir, 'daemon.port'), String(sib))
         ports.push(sib)
       }
-      // The relay believes the files it read for 2 s (stream-relay-core.ts DAEMON_PORTS_TTL_MS):
-      // the read above, at the own-port refusal, saw none of these yet.
-      await new Promise((r) => setTimeout(r, 2_300))
+      const { ep } = await link(port)
+      // Its own WebSocket port, which takes no token: refused with a sentence, never dialled.
+      await expect(ep.openPort(port, '127.0.0.1')).rejects.toThrow(new RegExp(`port ${port} is a Walnut session daemon's own socket on this host`))
+      await expect(ep.openPort(port, 'localhost')).rejects.toThrow(/session daemon's own socket/)
       for (const sib of ports) {
         await expect(ep.openPort(sib, '127.0.0.1')).rejects.toThrow(new RegExp(`port ${sib} is a Walnut session daemon's own socket`))
       }
