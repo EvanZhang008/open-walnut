@@ -308,6 +308,10 @@ async function holdOpen(task: Task, items: OwedItem[], closer: Closer, callerSid
       ? items[0].text
       : `Left for you when this task was closed: ${itemsText(items)}`);
   const at = new Date().toISOString();
+  // Every hold carries its kind, so an answer in the user's place to one only he decides needs his words.
+  const { keptHoldKind, newHoldKind } = await import('./owed-kind.js');
+  const k = newHoldKind(texts, { ask: task.status_report?.ask, kind: task.status_report?.ask_own?.kind });
+  const kindOf: Pick<TaskOwed, 'kind' | 'kind_why'> = { kind: k.kind, kind_why: k.why };
   const { updateTask, updateTaskRaw } = await import('../task-manager.js');
   let phaseRead: Task['phase'] | undefined;
   const { task: held, changed } = await updateTaskRaw(task.id, (cur) => {
@@ -331,7 +335,7 @@ async function holdOpen(task: Task, items: OwedItem[], closer: Closer, callerSid
         via: 'complete', at, ...head,
         not_done: [...new Set([...own, ...texts])],
         ...(mixed ? { not_done_by: 'unknown' as const } : {}),
-        owed: ownedBy(withSaid(same ? { ...open!, told, ...(renew ? { at } : {}) } : { items: texts, ask, at, by, told }, said),
+        owed: ownedBy(withSaid(same ? { ...open!, told, ...(renew ? { at } : {}), ...keptHoldKind(open!, k) } : { items: texts, ask, at, by, told, ...kindOf }, said),
           byLead && (!same || open!.toCloser === true)),
       },
     };

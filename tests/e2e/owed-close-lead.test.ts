@@ -22,6 +22,7 @@ import { startServer, stopServer } from '../../src/web/server.js'
 import { addTask, getTask, updateTask, updateTaskRaw } from '../../src/core/task-manager.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { syncUserStatuses } from '../../src/core/user-status-sync.js'
+import { prepareUserAskCapture } from '../../src/core/sessions/user-asks.js'
 import type { Task } from '../../src/core/types.js'
 
 let server: HttpServer
@@ -69,6 +70,17 @@ async function heldForUser(task: Task, project: string): Promise<Task> {
   expect(held.user_status?.state).toBe('needs')
   return held
 }
+
+/** The user's own words in the task's chat, after the hold (what user_words must quote). */
+async function said(task: Task, text: string): Promise<void> {
+  await new Promise((r) => setTimeout(r, 5))
+  const capture = await prepareUserAskCapture({ task: await getTask(task.id), message: text, inChat: true })
+  expect(capture, 'his words are filed').not.toBeNull()
+  await capture!.commit()
+}
+
+const answerAsk = (task: Task, sid: string, text: string, extra: Record<string, unknown> = {}) =>
+  json('POST', '/api/v1/messages', { to: task.id, title: 'Answered for the user', text, answers_ask: true, expect_reply: false, ...extra }, sid)
 
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
@@ -124,17 +136,17 @@ describe('an answer given in the user\'s place to the held ask ends the hold', (
     const project = 'Imports answered'
     const vp = await vpOf(project)
     const { task, sid } = await withSession('Imported finding', project)
-    await updateTaskRaw(task.id, { note: NOTE('[WAIT] You: who deletes the record, you or the team?') }, { emitEvent: true })
+    await updateTaskRaw(task.id, { note: NOTE('[WAIT] You: which of the two zone lists is final?') }, { emitEvent: true })
     const held = await heldForUser(task, project)
     const ask = held.user_status!.ask!
-    const sent = await json('POST', '/api/v1/messages', { to: task.id, title: 'Not needed', text: 'The user deleted the record himself, so nobody else deletes it.', answers_ask: true, expect_reply: false }, vp.sid)
+    const sent = await answerAsk(task, vp.sid, 'The second list is final; the first was a draft.')
     expect(sent.status, await sent.clone().text()).toBeLessThan(300)
     const answered = await getTask(task.id)
     expect(answered.result_report?.owed?.settled).toMatchObject({ how: 'taken', by: `task:${vp.task.id}` })
     await syncUserStatuses(null)
     expect((await getTask(task.id)).user_status?.state, ask).not.toBe('needs')
     // It acts on the answer: its note no longer waits on him, and it closes itself, no force.
-    await updateTaskRaw(task.id, { note: NOTE('[DONE] Deletion question: the user deleted it himself') }, { emitEvent: true })
+    await updateTaskRaw(task.id, { note: NOTE('[DONE] Zone list: the second one is final') }, { emitEvent: true })
     const res = await json('POST', `/api/v1/tasks/${task.id}/complete`, { result: 'The record is deleted; the finding resolved.' }, sid)
     expect(res.status, await res.clone().text()).toBe(200)
     expect((await getTask(task.id)).phase).toBe('COMPLETE')
@@ -144,9 +156,9 @@ describe('an answer given in the user\'s place to the held ask ends the hold', (
     const project = 'Imports withdrawn'
     const vp = await vpOf(project)
     const { task, sid } = await withSession('Imported finding', project)
-    await updateTaskRaw(task.id, { note: NOTE('[WAIT] You: keep the second zone or delete it?') }, { emitEvent: true })
+    await updateTaskRaw(task.id, { note: NOTE('[WAIT] You: keep the second zone name or rename it?') }, { emitEvent: true })
     await heldForUser(task, project)
-    expect((await json('POST', '/api/v1/messages', { to: task.id, title: 'Keep it', text: 'Keep the second zone as it is.', answers_ask: true, expect_reply: false }, vp.sid)).status).toBeLessThan(300)
+    expect((await answerAsk(task, vp.sid, 'Keep the second zone name as it is.')).status).toBeLessThan(300)
     expect((await getTask(task.id)).result_report?.owed?.settled).toBeTruthy()
     const back = await json('POST', `/api/v1/tasks/${task.id}/ask-answer/withdraw`, { reason: 'The user said he wants to decide this himself.' }, vp.sid)
     expect(back.status, await back.clone().text()).toBe(200)
@@ -197,5 +209,46 @@ describe('an ask of the user nobody answered still holds', () => {
     const still = await getTask(task.id)
     expect(still.phase).toBe('NEED_ACTION')
     expect(still.result_report?.owed?.settled).toBeUndefined()
+  }, 60_000)
+})
+
+describe('a hold of a kind only the user decides is answered in his place only on his words', () => {
+  it('every hold is written with its kind', async () => {
+    const project = 'Kinds written'
+    const { task } = await withSession('Imported finding', project)
+    await updateTaskRaw(task.id, { note: NOTE('[WAIT] You: pay the $45 renewal invoice?') }, { emitEvent: true })
+    const held = await heldForUser(task, project)
+    expect(held.result_report?.owed).toMatchObject({ kind: 'spending' })
+    expect(held.result_report?.owed?.kind_why).toBeTruthy()
+  }, 60_000)
+
+  it('a spending hold: answers_ask without his words is refused and the hold stays; with them it settles', async () => {
+    const project = 'Kinds spending'
+    const vp = await vpOf(project)
+    const { task } = await withSession('Imported finding', project)
+    await updateTaskRaw(task.id, { note: NOTE('[WAIT] You: pay the $45 renewal invoice?') }, { emitEvent: true })
+    await heldForUser(task, project)
+    const refused = await answerAsk(task, vp.sid, 'Yes, pay it.')
+    expect(refused.status).toBe(409)
+    expect(await refused.text()).toContain('user_words')
+    expect((await getTask(task.id)).result_report?.owed?.settled).toBeUndefined()
+    await said(task, 'ok pay the renewal')
+    const ok = await answerAsk(task, vp.sid, 'Yes, pay it.', { user_words: 'ok pay the renewal' })
+    expect(ok.status, await ok.clone().text()).toBeLessThan(300)
+    expect((await getTask(task.id)).result_report?.owed?.settled).toMatchObject({ how: 'taken' })
+  }, 60_000)
+
+  it('a hold written before kinds were kept whose words name none needs his words; one naming none now does not', async () => {
+    const project = 'Kinds old'
+    const vp = await vpOf(project)
+    const { task } = await withSession('Imported finding', project)
+    await updateTaskRaw(task.id, { note: NOTE('[WAIT] You: which of the two zone lists is final?') }, { emitEvent: true })
+    const held = await heldForUser(task, project)
+    expect(held.result_report?.owed?.kind).toBe('none')
+    // The same hold as an older Walnut wrote it: no kind.
+    const { kind: _k, kind_why: _w, ...old } = held.result_report!.owed!
+    await updateTaskRaw(task.id, { result_report: { ...held.result_report!, owed: old } } as never, { emitEvent: true })
+    expect((await answerAsk(task, vp.sid, 'The second list is final.')).status).toBe(409)
+    expect((await getTask(task.id)).result_report?.owed?.settled).toBeUndefined()
   }, 60_000)
 })

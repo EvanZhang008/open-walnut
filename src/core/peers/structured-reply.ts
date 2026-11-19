@@ -127,6 +127,13 @@ export interface TaskOwed {
    * no longer does. Every other item holds until it is settled.
    */
   said?: string[];
+  /**
+   * Which of the user's kinds it is (org/user-kind.ts USER_KINDS, or "none"), and why: every hold
+   * Walnut writes has one (sessions/owed-kind.ts). An answer in his place to a hold of a kind only he
+   * approves needs his own words. Absent on a hold written before kinds were kept: read from its words.
+   */
+  kind?: string;
+  kind_why?: string;
   settled?: { at: string; by?: string; how: 'taken' | 'dropped'; note?: string };
 }
 

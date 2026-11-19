@@ -160,6 +160,8 @@ describe('a session never closes a task the user still has something of', () => 
         const after = await getTask(task.id)
         expect(after.phase).toBe('NEED_ACTION')
         expect(isPartial(after.result_report)).toBe(true)
+        // Every hold is written with its kind (owed-kind.ts), whichever source made it.
+        expect(after.result_report?.owed?.kind, source).toBeTruthy()
         await syncUserStatuses(null)
         const s = (await getTask(task.id)).user_status
         expect(s?.state, JSON.stringify(s)).toBe('needs')

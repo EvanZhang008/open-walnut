@@ -35,6 +35,7 @@ import { reportDecision } from '../ask-decision.js';
 import { answerHolds, askAnswerLine, askKey, keptAnswers, type AskAnswer, type SameAskFold } from '../same-ask.js';
 import { awaitsUserDecision } from '../human-inbox/open-decision.js';
 import { openOwed } from '../peers/structured-reply.js';
+import { holdKind, holdNeedsUsersWords, OWED_KIND_UNKNOWN } from './owed-kind.js';
 
 export class AskAnswerError extends Error {
   constructor(readonly code: 'not_above' | 'no_open_ask' | 'user_words' | 'user_spoke_since' | 'bad_request' | 'human_approval' | 'not_confirmed', message: string, readonly status = 409) {
@@ -256,9 +257,19 @@ export async function prepareAskAnswer(
   // his "cahneg" in the VP's thread was refused as under 10 characters, and the ask stayed on his
   // Needs you). Found, they go to the task with the answer; not found, the refusal says what to do.
   let usersWords: Extract<UsersWordsCheck, { ok: true }> | undefined;
-  const putAt = caller && ((kind && !localWork && needsUsersWords(kind, askMe)) || opts.withdraw) ? await askPutAt(target, where) : null;
-  if (caller && kind && !localWork && needsUsersWords(kind, askMe)) {
-    const verdict = await verifyUsersWords(target, caller.id, userWords, everything, `${kind} ask`, putAt);
+  // A close hold this answer settles (answeredHold) is judged by its own kind (owed-kind.ts): one only
+  // the user decides, or one written before kinds were kept that names none, needs his words since it
+  // was put to him (2026-11-19, the Walnut VP).
+  const hold = openOwed(target.result_report);
+  const heldKind = hold && answerHolds({ key: askKey(ask), ask, text: '', by: '', byTitle: '', at: new Date().toISOString() }, hold.ask)
+    && holdNeedsUsersWords(hold, askMe) ? holdKind(hold) : undefined;
+  const reportNeeds = !!kind && !localWork && needsUsersWords(kind, askMe);
+  // His words count only after the later of the ask and the hold (a hold newer than the ask included).
+  const askAt = caller && (reportNeeds || opts.withdraw) ? await askPutAt(target, where) : null;
+  const putAt = heldKind && hold && !(askAt && askAt > hold.at) ? hold.at : askAt;
+  if (caller && (reportNeeds || heldKind)) {
+    const what = reportNeeds ? `${kind} ask` : heldKind === OWED_KIND_UNKNOWN ? 'held ask of no known kind' : `held ${heldKind} ask`;
+    const verdict = await verifyUsersWords(target, caller.id, userWords, everything, what, putAt);
     if (!verdict.ok) throw new AskAnswerError('user_words', verdict.refusal);
     usersWords = verdict;
   }
@@ -305,7 +316,8 @@ export async function prepareAskAnswer(
       await updateTaskRaw(target.id, (cur) => ({
         ask_answered: answer,
         asks_answered: keptAnswers(cur.asks_answered ?? (cur.ask_answered ? [cur.ask_answered] : []), answer),
-        ...answeredHold(cur.result_report, answer),
+        // Only the hold checked above: one written since (another kind, maybe) is not settled unchecked.
+        ...(hold && cur.result_report?.owed?.at === hold.at ? answeredHold(cur.result_report, answer) : {}),
       }) as Partial<Task>, { emitEvent: true, source: 'ask-answer' })
         .catch((err) => log.task.warn('ask-answer: not recorded', { taskId: target.id, error: err instanceof Error ? err.message : String(err) }));
       log.task.info('ask-answer: answered for the user', { taskId: target.id, by: answer.by });
