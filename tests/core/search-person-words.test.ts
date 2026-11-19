@@ -6,7 +6,7 @@
  * the day before. Its title named only the pipelines it watched, and its 484 MB transcript was
  * indexed from its last 4 MB: five hours of trigger traffic, none of his words.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { EventBus, EventNames } from '../../src/core/event-bus.js';
 import { addTask } from '../../src/core/task-manager.js';
 import { prepareUserAskCapture } from '../../src/core/sessions/user-asks.js';
@@ -18,12 +18,7 @@ beforeAll(() => { process.env.WALNUT_SEARCH_V2_SEMANTIC = '0'; });
 afterAll(() => { delete process.env.WALNUT_SEARCH_V2_SEMANTIC; resetSearchV2IndexForTests(); });
 
 async function waitFor(check: () => boolean, timeoutMs = 8_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (check()) return;
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  expect(check()).toBe(true);
+  await vi.waitFor(() => expect(check()).toBe(true), { timeout: timeoutMs, interval: 100 });
 }
 
 /** The web task list's reading of the server's answer: the task shows up, as a hit that shows the query. */
