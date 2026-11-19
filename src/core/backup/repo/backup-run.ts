@@ -20,14 +20,19 @@ import type { ManifestEntry } from '../types.js';
 import type { BackupStore } from '../stores/types.js';
 import type { WriterIdentity } from '../local-state.js';
 import { chunkStream, SMALL_FILE_BYTES } from './chunker.js';
-import { packIdFromKey, type Snapshot, type TreeEntry } from './format.js';
+import { packIdFromKey, type PackInfo, type Snapshot, type TreeEntry } from './format.js';
 import { PackCache, PackWriter, RepoError, Repository, shouldCompress, treeChunks, type LoadedIndex } from './repository.js';
+
+/** Uploaded data written to an index while a run goes on (about 16 packs). */
+export const CHECKPOINT_BYTES = 256 * 1024 * 1024;
 
 export interface RepoBackupOptions {
   dataDir: string;
   writer: WriterIdentity;
   /** Bytes read so far of the bytes this run has to read (unchanged files count as read). */
   onProgress?: (doneBytes: number, totalBytes: number) => void;
+  /** Tests: a smaller checkpoint than CHECKPOINT_BYTES. */
+  checkpointBytes?: number;
 }
 
 export interface RepoBackupResult {
@@ -104,7 +109,19 @@ export async function runRepoBackup(
     let changedFiles = 0;
     const skipped: string[] = [];
     const entries: TreeEntry[] = [];
-    const data = new PackWriter(repo, 'data');
+    // Uploaded data packs no index lists yet. Every CHECKPOINT_BYTES of them get an
+    // index of their own while the run goes on, so a run cut short (a restart, a
+    // lost connection) leaves what it uploaded findable: the next run reads the
+    // files again but uploads only what is still missing.
+    const unindexed: PackInfo[] = [];
+    let unindexedBytes = 0;
+    const data = new PackWriter(repo, 'data', (info) => { unindexed.push(info); unindexedBytes += info.size; });
+    const checkpoint = async (): Promise<void> => {
+      if (unindexedBytes < (opts.checkpointBytes ?? CHECKPOINT_BYTES)) return;
+      const packs = unindexed.splice(0);
+      unindexedBytes = 0;
+      await repo.writeIndex(packs);
+    };
 
     let sinceYield = 0;
     for (const file of all) {
@@ -139,6 +156,7 @@ export async function runRepoBackup(
             known.add(id);
             newBlobs++;
             await data.add(id, await repo.sealBlob(id, chunk, compress), chunk.length);
+            await checkpoint();
           }
         };
         if (st.size <= SMALL_FILE_BYTES) {
@@ -168,7 +186,7 @@ export async function runRepoBackup(
     }
     entries.sort((a, b) => a.p.localeCompare(b.p));
 
-    const dataPacks = await data.finish();
+    await data.finish();
     const tree = new PackWriter(repo, 'tree');
     const treeIds: string[] = [];
     for (const chunk of treeChunks(entries)) {
@@ -180,7 +198,7 @@ export async function runRepoBackup(
       }
     }
     const treePacks = await tree.finish();
-    const newPacks = [...dataPacks, ...treePacks];
+    const newPacks = [...unindexed, ...treePacks];
     if (newPacks.length > 0) await repo.writeIndex(newPacks);
 
     // The writer may have moved to another machine while this ran: then this
@@ -202,7 +220,7 @@ export async function runRepoBackup(
       tree: treeIds,
     };
     await repo.writeSnapshot(snap);
-    const uploadedBytes = newPacks.reduce((n, p) => n + p.size, 0);
+    const uploadedBytes = data.uploadedBytes + tree.uploadedBytes;
     log.session.info('backup: encrypted snapshot written', {
       snapshot: snap.id, files: snap.fileCount, changedFiles, newBlobs, uploadedBytes, skipped: skipped.length,
     });
