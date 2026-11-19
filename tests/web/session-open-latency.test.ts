@@ -365,4 +365,15 @@ describe('chat open: click to current', () => {
       lost: [{ at: 0, role: 'user', msgId: 'a', timestamp: 't0' }] });
     expect(rowsChange([{ msgId: 'a' }], [{ msgId: 'a' }], 'current')).not.toHaveProperty('lost');
   });
+
+  it('a send renamed across a seam (take time vs enqueue time, 1 ms apart) is kept, not lost', () => {
+    // 2026-11-19 (the Mac app): queue-…320Z from a window that held only the take, then queue-…321Z
+    // once the enqueue was in the read: the same message on screen, reported as lost.
+    const sent = (ts: string) => ({ msgId: `queue-${ts}`, role: 'user', timestamp: ts, text: 'a trigger message' });
+    const change = rowsChange([sent('2026-11-18T19:47:26.320Z')], [sent('2026-11-18T19:47:26.321Z')], 'current');
+    expect(change.keptRows).toBe(1);
+    expect(change).not.toHaveProperty('lost');
+    const far = rowsChange([sent('2026-11-18T19:47:26.320Z')], [sent('2026-11-18T19:47:36.320Z')], 'current');
+    expect(far.lost).toHaveLength(1);
+  });
 });

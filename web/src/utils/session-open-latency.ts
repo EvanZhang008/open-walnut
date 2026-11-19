@@ -3,6 +3,7 @@ import { detectInputClient } from './input-latency-monitor';
 import { isHistoryUserTurn } from '@open-walnut/history-turn-window';
 import { readTurnMarker } from './turn-end-marker';
 import type { SessionHistoryMessage } from '@/types/session';
+import { isSameSend } from '../../../src/core/history-same-send';
 
 export type OpenHistorySource = 'memory' | 'idb' | 'snapshot' | 'ready' | 'preview' | 'network' | 'stream' | 'unknown';
 export type OpenHistoryStage = 'historyEffect' | 'idbStart' | 'idbReady' | 'historyReady' | 'historyAdopted' | 'contentDetected' | 'historyCurrent';
@@ -85,7 +86,7 @@ export function sessionOpenCurrentRecorder(sessionId: string): (change: OpenCurr
   };
 }
 
-type ShownRow = { msgId?: string; role?: string; timestamp?: string };
+type ShownRow = { msgId?: string; role?: string; timestamp?: string; text?: string };
 
 /** What a full read did to the shown rows: counts, rows `after` still holds by id (a row without
  *  an id never counts as kept), and the first rows it lost. */
@@ -95,6 +96,9 @@ export function rowsChange(before: readonly ShownRow[], after: readonly ShownRow
   const lost: NonNullable<OpenCurrentChange['lost']> = [];
   before.forEach((m, at) => {
     if (m.msgId && ids.has(m.msgId)) { keptRows++; return; }
+    // One send named by its take's time on one side of a seam and its enqueue's on the other
+    // (history-same-send.ts) is still on screen.
+    if (m.msgId?.startsWith('queue-') && after.some((a) => isSameSend(m, a))) { keptRows++; return; }
     // A row with no id (optimistic, streamed) only takes its real id: not named as lost.
     if (m.msgId && lost.length < 3) lost.push({ at, role: m.role, msgId: m.msgId, timestamp: m.timestamp });
   });
