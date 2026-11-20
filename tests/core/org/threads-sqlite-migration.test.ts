@@ -186,7 +186,7 @@ describe('the JSON files kept current', () => {
     await patchThread(NODES[0], id, { title: 'Seed trays' }, 'human')
     await vi.waitFor(() => expect(parseThreadsText(text(NODES[0]), NODES[0]).threads[0].title).toBe('Seed trays'))
     await patchThread(NODES[0], id, { title: 'Seed trays and soil' }, 'human')
-    await new Promise((r) => setTimeout(r, 50))
+    // The next export waits on its one-minute timer, so the file still holds the first change now.
     expect(parseThreadsText(text(NODES[0]), NODES[0]).threads[0].title).toBe('Seed trays')
     await flushThreadsExports()
     const exported = text(NODES[0])
