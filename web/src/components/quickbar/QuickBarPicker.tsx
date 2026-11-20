@@ -15,10 +15,15 @@ import { MicInput } from '@/components/common/BoxMic';
 import type { ModeSpec, QuickMode } from './quickbar-modes';
 import { ModeGlyph } from './quickbar-glyphs';
 
-/** A mode's row stays while each word starts one of its names ("no" keeps Search notes), never its line. */
+/**
+ * A mode's row stays while the words start one of its own names, its keywords or its chip ("no"
+ * keeps Notes, "?" keeps Ask), from two letters on: a name typed to find a person ("quick", "s")
+ * never puts a mode ahead of that person.
+ */
 function modeMatches(m: ModeSpec, q: string): boolean {
-  const words = [m.action, m.chip, ...m.keywords].join(' ').toLowerCase().split(/[^\p{L}\p{N}?]+/u);
-  return q.toLowerCase().split(/\s+/).filter(Boolean).every((w) => words.some((x) => x.startsWith(w)));
+  const w = q.toLowerCase();
+  if (w.length < 2 && w !== '?') return false;
+  return [m.chip, ...m.keywords].some((k) => k.toLowerCase().startsWith(w));
 }
 
 /** The rows in the order they are numbered (Cmd-1 is the first). */
@@ -31,17 +36,23 @@ interface PickerProps {
   current: QuickPerson | null;
   onPick: (p: QuickPerson) => void;
   onClose: () => void;
-  /** What else the bar does, listed first (none while a take runs: its words are a message). */
+  /** What else the bar does, listed first. */
   modes: readonly ModeSpec[];
   onMode: (id: Exclude<QuickMode, 'send'>) => void;
+  /** Opened during a take: the highlight starts on the first person, so Enter keeps the words a message. */
+  startOnPeople: boolean;
 }
 
 type Row = { kind: 'mode'; mode: ModeSpec } | { kind: 'person'; person: QuickPerson };
 
-export function QuickBarPicker({ sections, current, onPick, onClose, modes, onMode }: PickerProps) {
+export function QuickBarPicker({ sections, current, onPick, onClose, modes: modesNow, onMode, startOnPeople: onPeopleNow }: PickerProps) {
+  // Fixed while the list is open: a take that ends under it never moves the rows or the highlight.
+  const [modes] = useState(modesNow);
+  const [startOnPeople] = useState(onPeopleNow);
+  const start = startOnPeople ? modes.length : 0;
   const [query, setQuery] = useState('');
   const [found, setFound] = useState<QuickPerson[]>([]);
-  const [index, setIndex] = useState(0);
+  const [index, setIndex] = useState(start);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
 
@@ -80,7 +91,11 @@ export function QuickBarPicker({ sections, current, onPick, onClose, modes, onMo
     else onPick(r.person);
   }, [onMode, onPick]);
 
-  useEffect(() => { setIndex(0); }, [query]);
+  const firstRun = useRef(true);
+  useEffect(() => {
+    if (firstRun.current) { firstRun.current = false; return; }
+    setIndex(query.trim() ? 0 : start);
+  }, [query, start]);
   useEffect(() => {
     listRef.current?.querySelector<HTMLElement>(`[data-row="${index}"]`)?.scrollIntoView({ block: 'nearest' });
   }, [index]);

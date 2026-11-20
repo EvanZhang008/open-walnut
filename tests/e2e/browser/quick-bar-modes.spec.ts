@@ -151,6 +151,8 @@ test('Tab lists what the bar does: the arrows pick Search notes, its words searc
     'Find a task by its words and open its chat', 'Find a note by its title or text and open it', 'An answer right here, with no task made',
   ])
   await expect(rows.first()).toHaveAttribute('aria-selected', 'true')
+  // The modes are listed once: the footer's own mode pills step aside while the list is open.
+  await expect(page.locator('.qb-mode-pill')).toHaveCount(0)
   await shot(page, 'm5-tab-list')
   await page.keyboard.press('ArrowDown')
   await expect(rows.nth(1)).toHaveAttribute('aria-selected', 'true')

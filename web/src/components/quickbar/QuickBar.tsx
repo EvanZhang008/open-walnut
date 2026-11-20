@@ -508,8 +508,9 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
           current={shown}
           onPick={pick}
           onClose={() => { setPicking(false); boxRef.current?.focus(); }}
-          // During a take the words are a message: Tab then only picks who gets them.
-          modes={recording || stt.isTranscribing ? [] : MODES}
+          modes={MODES}
+          // During a take the words are a message: Enter still picks who gets them.
+          startOnPeople={recording || stt.isTranscribing}
           // The words in the box become the search or the question; Esc brings them back.
           onMode={(next) => { const words = text.trim(); enterMode(next, words, words.length > 0); }}
         />
@@ -527,7 +528,8 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
         peopleFailed={peopleFailed}
         onRetryPeople={loadPeople}
         typedMode={typedMode}
-        empty={!text.trim()}
+        // The Tab list shows the modes itself: no second row of them under it.
+        empty={!text.trim() && !picking}
         onMode={(next) => enterMode(next)}
         canCapture={!!onCapture}
       />

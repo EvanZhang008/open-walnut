@@ -192,8 +192,12 @@ test('Tab during a take that starts like a keyword picks who gets it, never a mo
   await openApp(page)
   await page.keyboard.press(KEY)
   await expect(box(page)).toHaveValue('ask the VP to ship it', { timeout: 15_000 })
+  await expect(page.locator('.qb-keys')).toContainText('more')
   await box(page).press('Tab')
   await expect(page.locator('.qb-picker')).toBeVisible()
+  // The list shows what else the bar does, but the highlight starts on a person: Enter keeps the words a message.
+  await expect(page.locator('.qb-mode-row')).toHaveCount(3)
+  await expect(page.locator('.qb-person').first()).toHaveAttribute('aria-selected', 'true')
   await expect(bar(page)).toHaveAttribute('data-mode', 'send')
   await expect(bar(page)).toHaveAttribute('data-recording', 'true')
   await page.keyboard.press('Escape')
@@ -251,6 +255,8 @@ test('Tab lists who to talk to: Cmd-number and typed words pick', async ({ page 
   await box(page).press('Tab')
   await page.locator('.qb-picker-search').fill('tile')
   await expect(page.locator('.qb-person-name')).toHaveText(['Pick the tile color'])
+  // A name's words never bring a mode ahead of the person ("tile" names no mode).
+  await expect(page.locator('.qb-mode-row')).toHaveCount(0)
   await page.keyboard.press('Enter')
   await expect(chip(page)).toHaveText('Pick the tile color')
   await box(page).fill('Sand, please')
