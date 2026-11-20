@@ -35,7 +35,9 @@ class NoticeCardView: NSVisualEffectView {
     /// .withinWindow for one laid over a window's content.
     init(blending: NSVisualEffectView.BlendingMode, accessory: NSView? = nil) {
         super.init(frame: .zero)
-        material = .popover
+        // .menu, the frosted material of a macOS menu: clearer than .popover (2026-11-20, the
+        // user asked for a stronger frosted glass; the web's frost tint went from 62% to 38%).
+        material = .menu
         blendingMode = blending
         state = .active
         wantsLayer = true

@@ -40,8 +40,9 @@ const GLASS_OVERLAYS: Record<string, string> = {
 };
 /** The tint floor: the raised surface's share of the glass. */
 const GLASS_TINT_MIN = 84;
-/** The frosted glass's floor: see-through by the user's ask (2026-11-20), over a 36 px blur or more. */
-const FROST_TINT_MIN = 55;
+/** The frosted glass's floor: see-through by the user's ask (2026-11-20), and one step more by his
+ *  second ask that day ("a little stronger"), over a 44 px blur or more so words behind never read. */
+const FROST_TINT_MIN = 36;
 
 function files(dir: string, ext: string): string[] {
   const out: string[] = [];
@@ -260,7 +261,7 @@ describe('the legible glass stays legible, and only where it is listed', () => {
     }
     for (const m of allCss.matchAll(/--glass-frost-blur\s*:\s*([^;]+);/g)) {
       const px = Number(m[1].match(/blur\((\d+)px\)/)?.[1] ?? 0);
-      expect(px, m[1]).toBeGreaterThanOrEqual(36);
+      expect(px, m[1]).toBeGreaterThanOrEqual(44);
     }
     const blocks = [...glassCss.matchAll(/@supports[^{]*backdrop-filter[^{]*\{((?:[^{}]*\{[^{}]*\})+)\s*\}/g)].map((m) => m[1]);
     const outside = blocks.reduce((css, b) => css.replace(b, ''), allCss);

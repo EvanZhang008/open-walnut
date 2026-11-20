@@ -153,8 +153,10 @@ html .wn-glass {
    <body> only, listed in GLASS_OVERLAYS, solid without blur support, with Reduce transparency
    and on a low-end device. One set of values for every surface that takes it (`wn-glass-frost`). */
 html:root {
-  --glass-frost-bg: color-mix(in srgb, var(--bg-elevated, var(--card-bg)) 62%, transparent);
-  --glass-frost-blur: blur(40px) saturate(1.9);
+  /* One step stronger (2026-11-20, the user asked for a slightly stronger frosted glass): more of the page
+     shows through as colour and shapes under a heavier blur, so its words still never read. */
+  --glass-frost-bg: color-mix(in srgb, var(--bg-elevated, var(--card-bg)) 42%, transparent);
+  --glass-frost-blur: blur(48px) saturate(2);
   /* Light: a dark hairline, as a macOS panel's edge; a white one vanished on a white page
      (2026-11-20). The white top highlight stays. Dark keeps its own below. */
   --glass-frost-border: rgba(0, 0, 0, 0.1);
@@ -163,7 +165,7 @@ html:root {
 }
 
 html:root[data-theme="dark"] {
-  --glass-frost-bg: color-mix(in srgb, var(--bg-elevated, var(--card-bg)) 58%, transparent);
+  --glass-frost-bg: color-mix(in srgb, var(--bg-elevated, var(--card-bg)) 38%, transparent);
   --glass-frost-border: rgba(255, 255, 255, 0.16);
   --glass-frost-highlight: rgba(255, 255, 255, 0.14);
   --glass-frost-shadow: 0 22px 60px rgba(0, 0, 0, 0.55), 0 2px 10px rgba(0, 0, 0, 0.4);
@@ -171,7 +173,7 @@ html:root[data-theme="dark"] {
 
 @media (prefers-color-scheme: dark) {
   html:root:not([data-theme]) {
-    --glass-frost-bg: color-mix(in srgb, var(--bg-elevated, var(--card-bg)) 58%, transparent);
+    --glass-frost-bg: color-mix(in srgb, var(--bg-elevated, var(--card-bg)) 38%, transparent);
     --glass-frost-border: rgba(255, 255, 255, 0.16);
     --glass-frost-highlight: rgba(255, 255, 255, 0.14);
     --glass-frost-shadow: 0 22px 60px rgba(0, 0, 0, 0.55), 0 2px 10px rgba(0, 0, 0, 0.4);
