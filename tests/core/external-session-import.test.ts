@@ -1311,11 +1311,13 @@ describe('importExternalSessions — sessions claimed by id', () => {
     _resetImportAuditForTesting();
     expect((await importExternalSessions()).removed).toBe(0);
     expect((await getTask(task.id)).tags).toContain(TAG);
-    // The plugin stopped: nobody claims it, so it goes like any program's run.
+    // The plugin stopped: nobody claims it now, but it was filed as a program's run
+    // (walnut:program-run), and that tag is the fact: it stays
+    // (tests/core/program-run-imports.test.ts covers an untagged one, which goes).
     releaseSessionImportClaims('plugin:vt:1');
     _resetImportAuditForTesting();
-    expect((await importExternalSessions()).removed).toBe(1);
-    await expect(getTask(task.id)).rejects.toThrow();
+    expect((await importExternalSessions()).removed).toBe(0);
+    expect((await getTask(task.id)).id).toBe(task.id);
   });
 
   it('a later claim replaces the earlier list for that host; another claimant keeps its own', async () => {

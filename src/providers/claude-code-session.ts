@@ -14958,11 +14958,6 @@ export class SessionRunner {
           stampHuman(sessionId, { humanInputAt: at, ...(isChatSendSource(source) ? { chatInputAt: at } : {}) }).catch(err =>
             log.session.warn('humanInputAt stamp failed', { sessionId, error: String(err) }))
         }
-        // A message into an imported session adopts its task: the import tag
-        // comes off, so it leaves the imported type (no pill, never auto-completed).
-        const { adoptImportedTask } = await import('../core/sessions/external-session-import.js')
-        adoptImportedTask(record.taskId, 'handleSendSdk').catch(err =>
-          log.session.warn('adoptImportedTask failed', { taskId: record.taskId, error: String(err) }))
         // Touch last_session_update on resume for "Recent" sidebar sort
         const { touchLastSessionUpdate } = await import('../core/task-manager.js')
         touchLastSessionUpdate(record.taskId).catch(err =>
@@ -15137,11 +15132,6 @@ export class SessionRunner {
           stampHuman(sessionId, { humanInputAt: at, ...(isChatSendSource(source) ? { chatInputAt: at } : {}) }).catch(err =>
             log.session.warn('humanInputAt stamp failed', { sessionId, error: String(err) }))
         }
-        // A message into an imported session adopts its task: the import tag
-        // comes off, so it leaves the imported type (no pill, never auto-completed).
-        const { adoptImportedTask } = await import('../core/sessions/external-session-import.js')
-        adoptImportedTask(record.taskId, 'handleSend').catch(err =>
-          log.session.warn('adoptImportedTask failed', { taskId: record.taskId, error: String(err) }))
         // Touch last_session_update on resume for "Recent" sidebar sort
         const { touchLastSessionUpdate } = await import('../core/task-manager.js')
         touchLastSessionUpdate(record.taskId).catch(err =>

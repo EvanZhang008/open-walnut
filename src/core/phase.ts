@@ -97,7 +97,7 @@
  */
 
 import { log } from '../logging/index.js'
-import type { TaskPhase, TaskStatus, Task, TurnRetryReason } from './types.js';
+import { isExternalImportTask, type TaskPhase, type TaskStatus, type Task, type TurnRetryReason } from './types.js';
 import { isQuietTurn } from './sessions/quiet-turn.js'
 import { queueSentBy } from './sessions/send-sent-by.js'
 import { isMainAgentTask } from './org/main-stays-active.js'
@@ -573,6 +573,33 @@ export async function applySessionPhase(
   source: string,
   opts?: ApplySessionPhaseOpts,
 ): Promise<{ changed: boolean; oldPhase?: TaskPhase; newPhase?: TaskPhase }> {
+  let imported = false
+  const result = await movePhase(taskId, trigger, source, opts, (task) => { imported = isExternalImportTask(task) })
+  // A message into a session adopts its imported task, whoever sent it (a person, a peer, a
+  // trigger, the router, a drained message): the importer's tags come off and it is a regular
+  // task (sessions/external-session-import.ts adoptImportedTask). The one place that adopts, so
+  // no send path can miss it (2026-11-19: three of five did). After the phase write, outside its
+  // task lock, whatever the phase did; a failure never fails the send. Only a task the importer
+  // owns pays for it: every other send goes on at once.
+  if (trigger === 'session:input' && imported) {
+    try {
+      const { adoptImportedTask } = await import('./sessions/external-session-import.js')
+      await adoptImportedTask(taskId, source)
+    } catch (err) {
+      log.session.warn('adoptImportedTask failed', { taskId, source, error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+  return result
+}
+
+async function movePhase(
+  taskId: string,
+  trigger: PhaseTransitionTrigger,
+  source: string,
+  opts: ApplySessionPhaseOpts | undefined,
+  /** The task as read, before any write. */
+  onRead: (task: Task) => void,
+): Promise<{ changed: boolean; oldPhase?: TaskPhase; newPhase?: TaskPhase }> {
   // A quiet turn (sessions/quiet-turn.ts: Walnut's idle compaction) is no work of the task's: its
   // edges move no phase. A prompt for the human still does.
   if (QUIET_TURN_TRIGGERS.has(trigger) && isQuietTurn(opts?.sessionId, trigger === 'session:result' ? opts?.turnGen : undefined)) {
@@ -588,6 +615,7 @@ export async function applySessionPhase(
     log.session.warn('applySessionPhase: task not found', { taskId, trigger, source })
     return { changed: false }
   }
+  onRead(task)
 
   // Compute new phase based on trigger
   let newPhase: TaskPhase | null = null

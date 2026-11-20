@@ -79,13 +79,17 @@ export function isExternalImportTask(task: { tags?: string[] | undefined }): boo
  * you (user-status.ts), and no VP or Main hears its edges (sessions/org-follow.ts). The tag is the
  * fact, so a claim that ends or a restart changes nothing; the first message anyone sends to the
  * session removes it with EXTERNAL_SESSION_IMPORT_TAG (adoptImportedTask), and from then on it is
- * a regular task. A `walnut:*` machine tag: no pill on any client (tag-display-rules.ts).
+ * a regular task. It counts only beside EXTERNAL_SESSION_IMPORT_TAG (isProgramRunTask): a task whose
+ * importer tag went another way (a tag list replaced by hand) is a regular task, and a leftover
+ * PROGRAM_RUN_TAG alone is inert. A `walnut:*` machine tag: no pill on any client (tag-display-rules.ts).
  */
 export const PROGRAM_RUN_TAG = 'walnut:program-run';
 
-/** True for an imported program's run nobody has written to (see PROGRAM_RUN_TAG). */
+/** True for an imported program's run nobody has written to (see PROGRAM_RUN_TAG): it carries both
+ *  PROGRAM_RUN_TAG and EXTERNAL_SESSION_IMPORT_TAG. Every reader asks this one helper. */
 export function isProgramRunTask(task: { tags?: string[] | undefined }): boolean {
-  return (task.tags ?? []).includes(PROGRAM_RUN_TAG);
+  const tags = task.tags ?? [];
+  return tags.includes(PROGRAM_RUN_TAG) && tags.includes(EXTERNAL_SESSION_IMPORT_TAG);
 }
 export type TaskSource = string;
 

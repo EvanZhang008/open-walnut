@@ -57,11 +57,12 @@ import {
 } from '../../src/core/sessions/external-session-import.js';
 import { deriveUserStatus, PROGRAM_RUN_WAIT, type UserStatusInput } from '../../src/core/user-status.js';
 import { statusInputOf, type StatusFacts } from '../../src/core/user-status-sync.js';
-import { EXTERNAL_SESSION_IMPORT_TAG, PROGRAM_RUN_TAG, type Task } from '../../src/core/types.js';
+import { EXTERNAL_SESSION_IMPORT_TAG, PROGRAM_RUN_TAG, isProgramRunTask, type Task } from '../../src/core/types.js';
 import { BUILTIN_TAG_DISPLAY_RULES, DEFAULT_TAG_DISPLAY_RULES, compileTagDisplay, shownTags } from '../../src/core/tag-display-rules.js';
 import { getSessionByClaudeId, importSessionRecord, createSessionRecord, updateSessionRecord, _resetSessionTrackerForTesting } from '../../src/core/session-tracker.js';
 import { addTask, getTask, linkSession, updateTaskRaw, _resetForTesting as _resetTaskManager } from '../../src/core/task-manager.js';
 import { ensureProjectLead } from '../../src/core/org/org-store.js';
+import { applySessionPhase } from '../../src/core/phase.js';
 import { noteOrgEdge, reportsToOrgNode } from '../../src/core/sessions/org-follow.js';
 import { clearRiding, ridingKeys } from '../../src/core/sessions/status-riding.js';
 import { closeDb as closeSessionDb } from '../../src/core/session-db.js';
@@ -252,6 +253,60 @@ describe('scenario 4: adoption makes it a regular task', () => {
     // Not stamped again: nobody's import any more.
     expect((await importExternalSessions()).programRuns).toBe(0);
     expect((await getTask(run.id)).tags ?? []).not.toContain(PROGRAM_RUN_TAG);
+  });
+});
+
+describe('adoption happens in applySessionPhase, whoever sent the input', () => {
+  for (const source of ['trigger-host-delivery', 'offline-handover', 'router-delivery']) {
+    it(`an input from ${source} removes both tags`, async () => {
+      hosts.set(LOCAL, { candidates: [], described: { 'run-a': programRun('run-a') } });
+      claimSessionImports('plugin:acme-sync:1', LOCAL, ['run-a']);
+      await importExternalSessions();
+      const run = await taskForSession('run-a');
+      expect(isProgramRunTask(run)).toBe(true);
+      await applySessionPhase(run.id, 'session:input', source, { sessionId: 'run-a' });
+      const after = await getTask(run.id);
+      expect(after.tags ?? []).not.toContain(EXTERNAL_SESSION_IMPORT_TAG);
+      expect(after.tags ?? []).not.toContain(PROGRAM_RUN_TAG);
+      expect(reportsToOrgNode(after)).toBe(true);
+    });
+  }
+});
+
+describe('a leftover program-run tag alone is inert', () => {
+  it('a task with only walnut:program-run (its importer tag replaced by hand) reads and reports like a regular task', async () => {
+    await vpThatHears();
+    const sid = 'left-1';
+    const { task } = await addTask({ title: 'Kept by hand', project: PROJECT, source: 'local', tags: [PROGRAM_RUN_TAG], _skipPluginOps: true });
+    await importSessionRecord({ claudeSessionId: sid, taskId: task.id, project: PROJECT, title: task.title, lastActiveAt: recent(), messageCount: 3, provider: 'cli' });
+    await linkSession(task.id, sid);
+    await updateTaskRaw(task.id, { phase: 'NEED_ACTION', unread: true }, { leaveHeld: true });
+    const stored = await getTask(task.id);
+    expect(isProgramRunTask(stored)).toBe(false);
+    expect(await statusOfStored(stored, sid)).toMatchObject({ state: 'read', toRead: 'turn' });
+    expect(reportsToOrgNode(stored)).toBe(true);
+    expect(await stopEdgeRides(stored, sid)).toBe(true);
+    expect(ridingKeys(VP_SID)).toContain(task.id);
+  });
+});
+
+describe('the audit never removes a tagged program run', () => {
+  it('after a restart with no claim yet it keeps the tagged run, and still removes an untagged program\'s import', async () => {
+    hosts.set(LOCAL, { candidates: [], described: { 'run-t': programRun('run-t'), 'plain-p': programRun('plain-p') } });
+    claimSessionImports('plugin:acme-sync:1', LOCAL, ['run-t']);
+    await importExternalSessions();
+    const tagged = await taskForSession('run-t');
+    // An import an older scanner let through: a program's run nobody claimed, the importer's tag only.
+    const { task: plain } = await addTask({ title: 'Script run', project: PROJECT, source: 'local', tags: [EXTERNAL_SESSION_IMPORT_TAG], _skipPluginOps: true });
+    await importSessionRecord({ claudeSessionId: 'plain-p', taskId: plain.id, project: PROJECT, title: plain.title, lastActiveAt: recent(), messageCount: 3, provider: 'cli' });
+    await linkSession(plain.id, 'plain-p');
+    // A restart: no claim yet (the plugin has not loaded), nothing audited in this process.
+    _resetImportClaimsForTesting();
+    _resetImportAuditForTesting();
+    expect((await importExternalSessions()).removed).toBe(1);
+    expect((await getTask(tagged.id)).tags).toContain(PROGRAM_RUN_TAG);
+    expect(await getSessionByClaudeId('run-t')).toBeTruthy();
+    await expect(getTask(plain.id)).rejects.toThrow();
   });
 });
 

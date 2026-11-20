@@ -860,7 +860,7 @@ export function _resetImportAuditForTesting(): void {
  * got a reply, and every run of a program driving the CLI (a script's
  * `claude -p` fan-out filed hundreds of tasks a day); the scan now skips all of
  * them, and this pass cleans up what they left. A program's run a plugin claims
- * (sessionImports.include) stays. Each import is re-read through describe once
+ * (sessionImports.include), or one tagged as such (PROGRAM_RUN_TAG), stays. Each import is re-read through describe once
  * per process and host rule level (a daemon that learns a rule is asked again),
  * open tasks first (one imported by this process was classified by its host's
  * rules already); a host with no answer is asked again next tick. Only tasks
@@ -920,7 +920,10 @@ async function auditImports(imports: Task[], limit: number): Promise<number> {
       if (c && c.notExternal === undefined) continue;
       auditedSessions.set(p.sessionId, p.level);
       auditedTasks.set(p.task.id, { host: p.host, level: p.level });
-      if (c?.notExternal === 'programmatic' && isClaimedImport(p.host, p.sessionId)) continue;
+      // A program's run a plugin put on the board stays: claimed now, or tagged as one (the tag is
+      // the fact, so a restart before the plugin claims again, or a run before its first claim,
+      // never removes it and imports it again under a new task).
+      if (c?.notExternal === 'programmatic' && (isClaimedImport(p.host, p.sessionId) || isProgramRunTask(p.task))) continue;
       if (c?.notExternal) verdicts.set(p.sessionId, { reason: c.notExternal, spawnedBy: c.spawnedBy });
     }
   }
@@ -934,6 +937,7 @@ async function auditImports(imports: Task[], limit: number): Promise<number> {
       // Re-read: a message sent meanwhile adopted it, and then it stays.
       const current = await getTask(task.id).catch(() => null);
       if (!current || !isExternalImportTask(current) || (current.project ?? '') !== (task.project ?? '')) continue;
+      if (reason === 'programmatic' && isProgramRunTask(current)) continue;
       await deleteSessionRecords(new Set([sessionId]), 'external-import: not an outside session (' + reason + ')');
       const res = await deleteTasksByIds([task.id], { force: true });
       if (res.deleted.length) removed++;
@@ -955,8 +959,9 @@ async function auditImports(imports: Task[], limit: number): Promise<number> {
  * Someone sent the session a message: the task is adopted and leaves the
  * imported type, and a program's run stops being one (PROGRAM_RUN_TAG): from
  * then on it reads and reports like any task. Idempotent; a no-op for anything
- * the importer never owned. Called from the session send handlers next to the
- * session:input phase hook.
+ * the importer never owned. Called from one place only, applySessionPhase's
+ * session:input (phase.ts), which every path that puts a message into a session
+ * passes (ratchet: tests/core/import-adoption-one-place.test.ts).
  */
 export async function adoptImportedTask(taskId: string, via: string): Promise<boolean> {
   const { getTask, updateTask } = await import('../task-manager.js');
