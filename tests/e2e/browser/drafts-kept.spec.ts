@@ -232,7 +232,7 @@ test.describe('Every input box keeps its unsent draft', () => {
     let reader = await openReader()
     const reply = `a reply I will finish later ${NONCE} ${UNI}`
     const note = `only after the smoke run ${NONCE}`
-    await reader.locator('.hib-composer-input').fill(reply)
+    await reader.getByTestId('letter-reply-input').fill(reply)
     await reader.locator('.hib-freetext').fill(note)
     await expectServerDraft(request, (k) => k === `draft:letter-reply:${letterId}`, reply)
     await expectServerDraft(request, (k) => k === `draft:letter-note:${letterId}`, note)
@@ -240,12 +240,12 @@ test.describe('Every input box keeps its unsent draft', () => {
     await page.reload()
     await page.waitForLoadState('networkidle')
     reader = await openReader()
-    await expect(reader.locator('.hib-composer-input')).toHaveValue(reply)
+    await expect(reader.getByTestId('letter-reply-input')).toHaveValue(reply)
     await expect(reader.locator('.hib-freetext')).toHaveValue(note)
     await shot(page, '04-letter-after-reload', reader)
 
-    await reader.locator('.hib-send-btn').click()
-    await expect(reader.locator('.hib-composer-input')).toHaveValue('', { timeout: 20_000 })
+    await reader.getByTestId('letter-reply-send').click()
+    await expect(reader.getByTestId('letter-reply-input')).toHaveValue('', { timeout: 20_000 })
     await expect.poll(async () => (await serverDrafts(request))[`draft:letter-reply:${letterId}`]?.v ?? null, { timeout: 15_000 }).toBeNull()
     // The note is kept: it goes with a choice, and none was picked.
     await expect(reader.locator('.hib-freetext')).toHaveValue(note)

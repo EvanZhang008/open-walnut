@@ -517,7 +517,8 @@
   border-top: 1px solid var(--border);
 }
 
-.hib-composer .hib-composer-box { flex: 1; min-width: 200px; }
+/* The reply box is the chat's own composer (ReplyComposer). */
+.hib-composer .reply-composer { flex: 1; min-width: 200px; }
 
 .hib-delivery {
   flex: 1 0 100%;

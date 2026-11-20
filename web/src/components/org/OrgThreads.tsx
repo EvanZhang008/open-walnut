@@ -52,11 +52,10 @@ import { cardView, exchangesOf, overdueLine, threadDeadline, pinnedFirst, pinned
 import { ThreadPinIcon } from '@/components/sessions/ThreadIcons';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
-import { AnswerBox } from '@/components/common/AnswerBox';
-import { useImageAttachments } from '@/components/common/image-attachments';
+import { ReplyComposer } from '@/components/chat/ReplyComposer';
 import type { ImageAttachment } from '@/api/chat';
-import type { BoxMicHandle } from '@/components/common/BoxMic';
-import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
+import { draftKey } from '@/utils/drafts';
+import { resolveTaskSessionId } from '@/utils/session-status';
 import { RichMarkdown } from '@/components/chat/RichBlocks';
 import { AgentText } from '@/components/common/AgentText';
 import { MessageAbout, rowAbout } from '@/components/sessions/message-about';
@@ -109,7 +108,8 @@ interface Props {
   name: string;
   /**
    * The node's own task. Not where its threads' paths open: each block opens on the machine of the
-   * session that wrote it (./thread-text-source.ts), never on the node's current one.
+   * session that wrote it (./thread-text-source.ts), never on the node's current one. A Follow up
+   * goes to its session, so the box lists that session's / commands and sends files to its host.
    */
   owner?: Task;
   state: OrgThreadsState;
@@ -170,52 +170,40 @@ function TaskChips({ ids, tasks }: { ids: readonly string[]; tasks: readonly Tas
   );
 }
 
-function FollowUp({ title, onSend, onDone }: { title: string; onSend: (text: string, images?: ImageAttachment[]) => Promise<boolean>; onDone: () => void }) {
-  const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
+function FollowUp({ threadId, title, owner, onSend, onDone }: {
+  threadId: string; title: string;
+  /** The node's own task: its session's commands on /, where a file goes, and left out of @. */
+  owner: Task | undefined;
+  onSend: (text: string, images?: ImageAttachment[]) => Promise<boolean>; onDone: () => void;
+}) {
   const [failed, setFailed] = useState(false);
-  const mic = useRef<BoxMicHandle | null>(null);
-  const pictures = useImageAttachments();
-  const goNow = async () => {
-    const words = text.trim();
-    const images = pictures.images;
-    if ((!words && images.length === 0) || busy) return;
-    setBusy(true);
-    setFailed(false);
-    const ok = await onSend(words, images.length > 0 ? images : undefined);
-    setBusy(false);
-    if (ok) { setText(''); pictures.clear(); onDone(); } else setFailed(true);
-  };
-  // Cmd+Enter and Send wait for a live dictation's words, then send.
-  const gate = useSendAfterDictation([mic], () => { void goNow(); });
-  const empty = !text.trim() && pictures.images.length === 0;
+  const sessionId = owner ? resolveTaskSessionId(owner) : null;
   return (
     <div className="org-thread-follow" data-testid="org-thread-follow">
       {/* The box names its thread, so a Follow up opened on the wrong card shows before Send
           (2026-11-10, the user: "I ask follow up of another thread ... not this blue title"). */}
       <span className="org-thread-follow-to" data-testid="org-thread-follow-to">Follow up on {'\u201c'}{title}{'\u201d'}</span>
-      {/* Walnut's answer box (common/AnswerBox.tsx): grows with the words, no grip, the mic inside, pictures as in the chat. */}
-      <AnswerBox
-        autoFocus
-        value={text}
-        minRows={2}
+      {/* The chat's own composer (chat/ReplyComposer.tsx): @, /, pictures and the mic as in the chat,
+          its words kept per thread until sent. A click opened it, so it takes the caret; Esc closes it. */}
+      <ReplyComposer
         placeholder="Follow up on this request"
+        draftKey={draftKey('thread-follow', threadId)}
+        sessionId={sessionId}
+        {...(owner ? { taskId: owner.id } : {})}
         testId="org-thread-follow-input"
-        micRef={mic}
-        pictures={pictures}
-        onChange={setText}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); gate.send(); }
-          // One Esc closes one layer: the follow-up, not a full-screen side bar around it.
-          if (e.key === 'Escape') { e.preventDefault(); onDone(); }
+        sendTestId="org-thread-follow-send"
+        focusOnOpen
+        onEscape={onDone}
+        onSend={async (text, images) => {
+          setFailed(false);
+          const ok = await onSend(text, images).catch(() => false);
+          if (ok) onDone(); else setFailed(true);
+          return ok;
         }}
       />
       <div className="org-thread-follow-row">
         {failed && <span className="org-thread-error" data-testid="org-thread-follow-failed">Not sent. Your words and pictures are still here.</span>}
-        <button type="button" className="btn btn-sm" onClick={onDone}>Cancel</button>
-        <button type="button" className="btn btn-sm btn-primary" data-testid="org-thread-follow-send" disabled={(empty && !gate.micBusy && !gate.waiting) || busy} onClick={gate.send} {...dictationWaitProps(gate)}>
-          {busy ? 'Sending…' : 'Send'}
-        </button>
+        <button type="button" className="btn btn-sm" data-testid="org-thread-follow-cancel" onClick={onDone}>Cancel</button>
       </div>
     </div>
   );
@@ -366,8 +354,9 @@ function AskedIn({ a }: { a: NonNullable<OrgThread['askedIn']> }) {
   );
 }
 
-function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed }: {
+function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed, owner }: {
   t: OrgThread; all: readonly OrgThread[]; shared: ReadonlySet<string>; tasks: readonly Task[];
+  owner: Task | undefined;
   state: OrgThreadsState; onFollowUp: Props['onFollowUp']; name: string; now: number;
   /** It is put aside now (the Snoozed section): it says when it comes back. */
   snoozed: boolean;
@@ -473,7 +462,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
         </ol>
       )}
       {following && onFollowUp ? (
-        <FollowUp title={t.title} onSend={(text, images) => onFollowUp(t.id, text, images)} onDone={() => setFollowing(false)} />
+        <FollowUp threadId={t.id} title={t.title} owner={owner} onSend={(text, images) => onFollowUp(t.id, text, images)} onDone={() => setFollowing(false)} />
       ) : (
         <div className="org-thread-actions">
           {closed ? (<>
@@ -503,7 +492,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   );
 }
 
-export function OrgThreads({ name, state, tasks, onFollowUp, now }: Props) {
+export function OrgThreads({ name, owner, state, tasks, onFollowUp, now }: Props) {
   // Whether the week's closed threads are open stays as it was left (utils/view-memory.ts).
   const [showClosed, setShowClosed] = usePageView('org', 'threads.showClosed', false, isBoolean);
   const [showHidden, setShowHidden] = usePageView('org', 'threads.showInProgress', false, isBoolean);
@@ -530,7 +519,7 @@ export function OrgThreads({ name, state, tasks, onFollowUp, now }: Props) {
   const listFile = useAgentFileOpener(THREAD_LIST_SOURCE);
   const onEntityClick = useEntityClickHandler(undefined, listFile.onFileOpen, listFile.fileHost, listFile.fileSessionId, listFile.refusesAll);
   const snoozedIds = useMemo(() => new Set(snoozed.map((t) => t.id)), [snoozed]);
-  const card = (t: OrgThread) => <ThreadCard key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={clock} snoozed={snoozedIds.has(t.id)} />;
+  const card = (t: OrgThread) => <ThreadCard key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={clock} snoozed={snoozedIds.has(t.id)} owner={owner} />;
   return (
     <div className="org-threads" data-testid="org-threads" onClick={onEntityClick}>
       {state.error && <p className="org-thread-error" data-testid="org-threads-error">{state.error}</p>}

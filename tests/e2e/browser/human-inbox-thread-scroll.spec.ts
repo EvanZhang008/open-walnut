@@ -101,7 +101,7 @@ async function expectNewestInView(view: Locator, text: string | RegExp): Promise
   expect(pane && turn && composer).toBeTruthy()
   expect(turn!.y + turn!.height).toBeLessThanOrEqual(pane!.y + pane!.height + 1)
   expect(pane!.y + pane!.height).toBeLessThanOrEqual(composer!.y + 1)
-  await expect(view.locator('.hib-composer-input')).toBeInViewport()
+  await expect(view.getByTestId('letter-reply-input')).toBeInViewport()
 }
 
 /** The document pane's share of what the two panes hold. */
@@ -196,8 +196,8 @@ test('a long thread opens at its newest turn and never moves a reader who scroll
   await wheelOverThread(page, view, -1200)
   expect(await fromEnd(view)).toBeGreaterThan(400)
   const mine = `My own reply ${NONCE}`
-  await view.locator('.hib-composer-input').fill(mine)
-  await view.getByRole('button', { name: 'Send', exact: true }).click()
+  await view.getByTestId('letter-reply-input').fill(mine)
+  await view.getByTestId('letter-reply-send').click()
   await expectNewestInView(view, mine)
 
   // Dragging the divider down gives the document more room and keeps the end in view.
@@ -242,8 +242,8 @@ test('a letter with no thread keeps its single scroll', async ({ page, request }
 
   // The first reply opens the conversation pane at that reply.
   const first = `First reply ${NONCE}`
-  await view.locator('.hib-composer-input').fill(first)
-  await view.getByRole('button', { name: 'Send', exact: true }).click()
+  await view.getByTestId('letter-reply-input').fill(first)
+  await view.getByTestId('letter-reply-send').click()
   await expectNewestInView(view, first)
   // A one-turn thread is shown whole: its top is not cut off under the bar.
   const pane = (await view.locator('.hib-thread-scroll').boundingBox())!
@@ -275,7 +275,7 @@ test('the reader keeps its size: no drift, and it comes back after the window sh
   const first = await sizes(view)
 
   // Re-renders with no layout input: typing in the reply box, then clearing it.
-  const input = view.locator('.hib-composer-input')
+  const input = view.getByTestId('letter-reply-input')
   await input.pressSequentially('abc')
   await input.fill('')
   for (let i = 0; i < 6; i++) {

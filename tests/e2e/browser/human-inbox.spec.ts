@@ -299,11 +299,11 @@ test('an action_required letter arrives, reads in the reader, and one click answ
 
   // ── The human's free-text reply threads under the letter ──
   const followUp = `PW LTR follow-up ${NONCE}: does this cover the Tuesday incident?`
-  await reader.locator('.hib-composer-input').fill(followUp)
-  await reader.locator('.hib-send-btn').click()
+  await reader.getByTestId('letter-reply-input').fill(followUp)
+  await reader.getByTestId('letter-reply-send').click()
   await expect(reader.locator('.hib-thread')).toContainText(followUp, { timeout: 20_000 })
   await expect(reader.locator('.hib-turn--human')).toHaveCount(2)
-  await expect(reader.locator('.hib-composer-input')).toHaveValue('')
+  await expect(reader.getByTestId('letter-reply-input')).toHaveValue('')
   await expect(frameBody).toContainText(HTML_BODY_MARKER)
   await reader.locator('.hib-turn--human').last().scrollIntoViewIfNeeded()
   await shot(page, 'e2e-04-thread-and-composer')

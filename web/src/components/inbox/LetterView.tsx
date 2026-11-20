@@ -41,6 +41,8 @@ import { LetterOriginBadge } from './LetterOriginBadge';
 import { useLetterEvents } from '@/hooks/useHumanInbox';
 import { type BoxMicHandle } from '@/components/common/BoxMic';
 import { AnswerBox } from '@/components/common/AnswerBox';
+import { ReplyComposer } from '@/components/chat/ReplyComposer';
+import type { ImageAttachment } from '@/api/chat';
 import { useImageAttachments } from '@/components/common/image-attachments';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { useLetterEnvelope } from './letter-store';
@@ -114,22 +116,18 @@ export function LetterView({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [delivery, setDelivery] = useState<string | null>(null);
-  // Both boxes keep their words per letter until they are sent (utils/drafts.ts).
-  const replyDraft = useDraft(draftKey('letter-reply', letterId));
-  const { text: replyText, setText: setReplyText } = replyDraft;
+  // Both boxes keep their words per letter until they are sent (utils/drafts.ts). The reply box is
+  // the chat's own composer (ReplyComposer), which keeps its words and pictures under this key.
+  const replyKey = draftKey('letter-reply', letterId);
   const noteDraft = useDraft(draftKey('letter-note', letterId));
   const { text: freeText, setText: setFreeText } = noteDraft;
-  const replyBox = useRef<HTMLTextAreaElement | null>(null);
-  const replyMic = useRef<BoxMicHandle | null>(null);
   const noteBox = useRef<HTMLTextAreaElement | null>(null);
   const noteMic = useRef<BoxMicHandle | null>(null);
-  // Pictures go with the words, as in the chat (common/image-attachments.ts).
-  const replyPictures = useImageAttachments();
+  // The note's pictures go with the choice, as in the chat (common/image-attachments.ts).
   const notePictures = useImageAttachments();
-  const { clear: clearReplyPictures } = replyPictures;
   const { clear: clearNotePictures } = notePictures;
   // Another letter in the same view: a late transcription must not land in it, nor a picture.
-  useEffect(() => () => { replyMic.current?.clear(); noteMic.current?.clear(); clearReplyPictures(); clearNotePictures(); }, [letterId, clearReplyPictures, clearNotePictures]);
+  useEffect(() => () => { noteMic.current?.clear(); clearNotePictures(); }, [letterId, clearNotePictures]);
 
   // Envelope state (read / pinned / archived / answered) comes from the ONE shared
   // store, layered OVER this reader's own GET: the rail and a session tab can pin
@@ -262,36 +260,34 @@ export function LetterView({
   const thread = useThreadPane({ letterId, turns, enabled: turns > 0 });
   const followThread = thread.follow;
 
-  const onReply = useCallback(async () => {
-    const text = replyText.trim();
-    const images = replyPictures.images;
-    if ((!text && images.length === 0) || busy) return;
+  // Resolves true once the reply is recorded; false keeps its words and pictures in the box
+  // (the composer waits for a live dictation's words and the uploads before it calls this).
+  const onReply = useCallback(async (text: string, images?: ImageAttachment[]): Promise<boolean> => {
+    // A decision on its way: the reply waits in the box for it.
+    if (busy) return false;
     setBusy(true);
     // The human's own reply always comes into view, wherever they were reading.
     followThread();
-    const sentKey = replyDraft.key;
     try {
-      const result = await humanReplyToLetter(letterId, text, images);
+      const result = await humanReplyToLetter(letterId, text.trim(), images);
       applyResult(result.letter, deliveryText(result.delivery, result.reason));
-      replyDraft.clear(sentKey);
-      replyMic.current?.clear();
-      replyPictures.clear();
-      log.info('inbox', 'letter human reply sent', { letterId, delivery: result.delivery });
+      log.info('inbox', 'letter human reply sent', { letterId, delivery: result.delivery, images: images?.length ?? 0 });
+      return true;
     } catch (err) {
       setDelivery('Could not send that reply — try again');
       log.warn('inbox', 'letter human reply failed', { letterId, error: String(err) });
+      return false;
     } finally {
       setBusy(false);
     }
-  }, [replyText, busy, letterId, applyResult, followThread, replyDraft, replyPictures]);
+  }, [busy, letterId, applyResult, followThread]);
 
-  // A decision's note and the reply each wait for a live dictation's words, then go.
+  // A decision's note waits for a live dictation's words, then goes.
   const pendingAction = useRef<string | null>(null);
   const answerGate = useSendAfterDictation([noteMic], () => {
     const actionId = pendingAction.current;
     if (actionId) void onAnswer(actionId);
   });
-  const replyGate = useSendAfterDictation([replyMic], () => { void onReply(); });
 
   const answered = shown?.answered;
   const actions = shown?.actions ?? [];
@@ -517,32 +513,17 @@ export function LetterView({
 
       <div className="hib-composer">
         {delivery && <div className="hib-delivery">{delivery}</div>}
-        <AnswerBox
-          className="hib-composer-box"
-          inputClassName="hib-composer-input"
-          boxRef={replyBox}
-          micRef={replyMic}
-          draftKey={replyDraft.key}
+        {/* The chat's own composer (chat/ReplyComposer.tsx): @, the sender session's / commands,
+            pictures, files and the mic as in the chat; Enter (or Cmd+Enter) sends. */}
+        <ReplyComposer
           placeholder="Reply to this letter…"
-          value={replyText}
-          onChange={setReplyText}
-          pictures={replyPictures}
+          draftKey={replyKey}
+          onSend={onReply}
+          sessionId={senderSid ?? null}
+          {...(shown?.sender?.taskId ? { taskId: shown.sender.taskId } : {})}
           testId="letter-reply-input"
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); replyGate.send(); }
-          }}
-          sending={busy}
-          minRows={2}
-        >
-          <button
-            className="hib-send-btn"
-            disabled={busy || (!replyText.trim() && replyPictures.images.length === 0 && !replyGate.micBusy && !replyGate.waiting)}
-            onClick={replyGate.send}
-            {...dictationWaitProps(replyGate)}
-          >
-            Send
-          </button>
-        </AnswerBox>
+          sendTestId="letter-reply-send"
+        />
       </div>
     </div>
   );

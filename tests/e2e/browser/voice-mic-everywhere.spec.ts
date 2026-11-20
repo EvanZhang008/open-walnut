@@ -114,7 +114,8 @@ async function crop(page: Page, name: string, around: Rect): Promise<void> {
 
 /** A BoxMic beside its box: drawn, inside the box's row, never on top of the box. */
 async function expectBoxMic(page: Page, name: string, box: Locator, row: Locator): Promise<void> {
-  const mic = row.locator('.box-mic .mic-btn')
+  // An AnswerBox's BoxMic or the chat composer's MicButton (ReplyComposer): one mic in the row.
+  const mic = row.locator('.mic-btn')
   await expect(box, `${name}: the box`).toBeVisible()
   await expect(mic, `${name}: the mic`).toHaveCount(1)
   await expect(mic, `${name}: the mic`).toBeVisible()
@@ -304,7 +305,7 @@ test.describe('Inbox letter', () => {
     await sendLetter(request, { subject, type: 'info', markdown: 'A short status note.', text: 'A short status note.' })
     await home(page)
     const reader = await openLetter(page, subject)
-    await expectBoxMic(page, 'inbox-reply', reader.locator('.hib-composer-input'), reader.locator('.hib-composer'))
+    await expectBoxMic(page, 'inbox-reply', reader.getByTestId('letter-reply-input'), reader.locator('.hib-composer'))
   })
 
   test('the optional note beside a choice has the mic inside it', async ({ page, request }) => {
@@ -334,15 +335,16 @@ test.describe('Inbox letter', () => {
     await sendLetter(request, { subject, type: 'info', markdown: 'Dictate a reply.', text: 'Dictate a reply.' })
     await home(page)
     const reader = await openLetter(page, subject)
-    const box = reader.locator('.hib-composer-input')
-    const mic = reader.locator('.hib-composer .box-mic .mic-btn')
-    await dictateInto(page, box, mic, 'answer-box-input hib-composer-input', seen)
+    const box = reader.getByTestId('letter-reply-input')
+    // The reply box is the chat's own composer (ReplyComposer): its MicButton, its textarea.
+    const mic = reader.locator('.hib-composer .mic-btn')
+    await dictateInto(page, box, mic, 'chat-input-textarea', seen)
     await crop(page, 'dictation-inbox-landed', union(await rectOf(box, 'reply box'), await rectOf(mic, 'reply mic')))
     const words = await box.inputValue()
-    await reader.locator('.hib-send-btn').click()
+    await reader.getByTestId('letter-reply-send').click()
     await expect(box).toHaveValue('', { timeout: 20_000 })
     await expect(reader.locator('.hib-thread')).toContainText(words, { timeout: 20_000 })
-    await sendCutsRecording(page, box, mic, () => reader.locator('.hib-send-btn').click(), seen)
+    await sendCutsRecording(page, box, mic, () => reader.getByTestId('letter-reply-send').click(), seen)
     await crop(page, 'dictation-inbox-after-send', await rectOf(reader.locator('.hib-composer'), 'reply row'))
   })
 })
@@ -502,10 +504,11 @@ test.describe('Org page', () => {
     await showTasks(page)
     const card = page.locator(`[data-testid="org-alert"][data-task-id="${asker}"]`)
     await expect(card).toBeVisible({ timeout: 60_000 })
-    const bar = card.getByTestId('org-answer-input-box')
+    // The answer box is the chat's own composer (ReplyComposer).
+    const bar = card.getByTestId('reply-composer')
     const box = card.getByTestId('org-answer-input')
     await expect(box).toBeVisible({ timeout: 30_000 })
-    const mic = bar.locator('.box-mic .mic-btn')
+    const mic = bar.locator('.mic-btn')
     await expectBoxMic(page, 'org-rail-answer', box, bar)
     // The composer's bar: no native resize grip, and it grows with the words.
     expect(await box.evaluate((el) => getComputedStyle(el).resize)).toBe('none')
@@ -515,7 +518,7 @@ test.describe('Org page', () => {
     await box.fill('')
     await crop(page, `org-rail-answer-bar`, await rectOf(bar, 'answer bar'))
     if (browserName !== 'chromium') return
-    await dictateInto(page, box, mic, 'answer-box-input', seen)
+    await dictateInto(page, box, mic, 'chat-input-textarea', seen)
     await crop(page, 'dictation-org-rail-landed', await rectOf(bar, 'answer bar'))
   })
 })

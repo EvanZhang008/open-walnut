@@ -113,12 +113,13 @@ test('a letter reply takes a pasted screenshot, and the letter\'s session receiv
   const reader = page.locator('.hib-reader')
   await expect(reader).toBeVisible({ timeout: 15_000 })
 
+  // The reply box is the chat's own composer (ReplyComposer): its picture strip is the chat's.
   const box = reader.getByTestId('letter-reply-input')
-  const strip = reader.getByTestId('letter-reply-input-pictures')
+  const strip = reader.locator('.hib-composer .chat-image-previews')
   await pasteScreenshot(box, 'first paste')
   await expect(strip.locator('img')).toHaveCount(1)
   // × takes it off; a second paste puts one back (the box is not done after one).
-  await strip.getByRole('button', { name: 'Remove image' }).click()
+  await strip.getByRole('button', { name: /^Remove / }).click()
   await expect(strip).toHaveCount(0)
   await pasteScreenshot(box, `Header is cut off ${NONCE}`)
   await expect(strip.locator('img')).toHaveCount(1)
@@ -126,7 +127,7 @@ test('a letter reply takes a pasted screenshot, and the letter\'s session receiv
   await box.fill(`The header is cut off, see the picture (${NONCE})`)
   await shot(reader.locator('.hib-composer'), 'letter-before-send')
   await beat(page)
-  await reader.locator('.hib-send-btn').click()
+  await reader.getByTestId('letter-reply-send').click()
 
   await expect(reader.getByTestId('letter-turn-images').locator('img')).toHaveCount(1, { timeout: 20_000 })
   await expect(strip).toHaveCount(0)
@@ -181,10 +182,10 @@ test('an Org thread\'s Follow up takes a pasted and an attached screenshot, and 
 
   const box = card.getByTestId('org-thread-follow-input')
   await pasteScreenshot(box, `Org header ${NONCE}`)
-  // The attach button's picker takes a file too.
+  // The box's file picker takes a file too (the chat composer's own input).
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
-  await card.getByTestId('org-thread-follow-input-attach-file').setInputFiles({ name: 'second.png', mimeType: 'image/png', buffer: png })
-  const strip = card.getByTestId('org-thread-follow-input-pictures')
+  await card.locator('[data-testid="org-thread-follow"] input[type="file"]').setInputFiles({ name: 'second.png', mimeType: 'image/png', buffer: png })
+  const strip = card.locator('[data-testid="org-thread-follow"] .chat-image-previews')
   await expect(strip.locator('img')).toHaveCount(2)
   await beat(page, 1500)
   await box.fill(`Here is how it looks now (${NONCE})`)

@@ -111,7 +111,7 @@ async function openLetter(page: Page, subject: string): Promise<Locator> {
   await center.locator('.nfc-rail-btn').filter({ hasText: 'Inbox' }).click()
   await center.locator('.hib-row').filter({ hasText: subject }).first().locator('.hib-subject').click()
   const reader = page.locator('.hib-reader')
-  await expect(reader.locator('.hib-composer-input')).toBeVisible({ timeout: 30_000 })
+  await expect(reader.getByTestId('letter-reply-input')).toBeVisible({ timeout: 30_000 })
   await expect(reader.locator('.hib-freetext')).toBeVisible()
   return reader
 }
@@ -158,7 +158,7 @@ test.describe('multi-line inputs under page zoom', () => {
 
     // The letter reader: the reply box and the note beside the choices.
     const reader = await openLetter(page, subject)
-    const reply = reader.locator('.hib-composer-input')
+    const reply = reader.getByTestId('letter-reply-input')
     const note = reader.locator('.hib-freetext')
     for (const z of ZOOMS) {
       await setZoom(page, z)
@@ -184,7 +184,7 @@ test.describe('multi-line inputs under page zoom', () => {
         const page = await context.newPage()
         await home(page)
         const reader = await openLetter(page, subject)
-        await expectNotSquashed(reader.locator('.hib-composer-input'), `letter reply dsf @${z}`)
+        await expectNotSquashed(reader.getByTestId('letter-reply-input'), `letter reply dsf @${z}`)
         await expectNotSquashed(reader.locator('.hib-freetext'), `letter note dsf @${z}`)
         await reader.locator('.hib-composer').screenshot({ path: `${dir}/dsf-letter-reply-${z}.png`, scale: 'css' })
       } finally {

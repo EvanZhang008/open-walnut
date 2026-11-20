@@ -137,10 +137,10 @@ test('a decision letter with no options explains itself and offers the reply box
   // …the document itself still renders…
   await expect(reader.locator('.hib-md-body')).toContainText(BODY_MARKER)
   // …and the control the notice points at is really there and usable.
-  const composer = reader.locator('.hib-composer-input')
+  const composer = reader.getByTestId('letter-reply-input')
   await expect(composer).toBeVisible()
   await composer.fill('Neither — keep the current cache for now.')
-  await expect(reader.locator('.hib-send-btn')).toBeEnabled()
+  await expect(reader.getByTestId('letter-reply-send')).toBeEnabled()
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/hib-no-options.png` })
 })

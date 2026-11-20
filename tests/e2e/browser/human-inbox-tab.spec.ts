@@ -283,11 +283,11 @@ test('a letter opens in the session Inbox tab beside the live chat, and answerin
 
   // ── The human's own reply threads from the tab's composer ──
   const followUp = `PW TAB follow-up ${NONCE}: keep the old index for a day?`
-  await pane.locator('.hib-composer-input').fill(followUp)
-  await pane.locator('.hib-send-btn').click()
+  await pane.getByTestId('letter-reply-input').fill(followUp)
+  await pane.getByTestId('letter-reply-send').click()
   await expect(pane.locator('.hib-thread')).toContainText(followUp, { timeout: 30_000 })
   await expect(pane.locator('.hib-turn--human')).toHaveCount(2)
-  await expect(pane.locator('.hib-composer-input')).toHaveValue('')
+  await expect(pane.getByTestId('letter-reply-input')).toHaveValue('')
 
   // ── The agent answers back: the thread grows LIVE, with no reload ──
   const agentMarker = `TAB-AGENT-REPLY-${NONCE}`

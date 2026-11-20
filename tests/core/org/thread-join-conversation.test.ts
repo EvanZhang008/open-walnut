@@ -102,7 +102,7 @@ describe('every Follow up box names its thread', () => {
   it.each(Object.entries(SURFACES))('%s', (file, re) => { expect(read(file)).toMatch(re) })
 
   it('the web box is given the card\'s own thread', () => {
-    expect(read('web/src/components/org/OrgThreads.tsx')).toMatch(/<FollowUp title=\{t\.title\} onSend=\{\(text, images\) => onFollowUp\(t\.id, text, images\)\}/)
+    expect(read('web/src/components/org/OrgThreads.tsx')).toMatch(/<FollowUp threadId=\{t\.id\} title=\{t\.title\} owner=\{owner\} onSend=\{\(text, images\) => onFollowUp\(t\.id, text, images\)\}/)
   })
 
   it('no other Follow up composer exists unlisted', () => {
