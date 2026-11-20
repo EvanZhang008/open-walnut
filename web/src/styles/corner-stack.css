@@ -133,7 +133,27 @@
 .corner-stack.is-compact .wn-notice-body { padding-bottom: 7px; }
 @media (min-width: 641px) {
   .corner-stack:is(.is-compact, .has-approval) .notification-toast:not(.nfc-perm-toast):not(.is-open) .wn-notice-line { -webkit-line-clamp: 1; }
-  .corner-stack:is(.is-compact, .has-approval) .notification-toast:not(.nfc-perm-toast):not(.is-open) .notification-toast-body { -webkit-line-clamp: 1; margin-bottom: 4px; }
+  /* Its own words: one row, why it is there, then its buttons beside it (in a narrow corner the
+     buttons take the next row rather than cover the words). */
+  .corner-stack:is(.is-compact, .has-approval) .notification-toast:not(.nfc-perm-toast) .wn-notice-body {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: 10px;
+    row-gap: 4px;
+  }
+  .corner-stack:is(.is-compact, .has-approval) .notification-toast:not(.nfc-perm-toast) .wn-notice-body > * { flex: none; margin: 0 0 0 auto; }
+  .corner-stack:is(.is-compact, .has-approval) .notification-toast:not(.nfc-perm-toast):not(.is-open) .wn-notice-body > .notification-toast-body {
+    flex: 1 1 0;
+    min-width: min(100%, 12ch);
+    margin: 0;
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* Opened: the whole text and the log on rows of their own, the buttons after them. */
+  .corner-stack:is(.is-compact, .has-approval) .notification-toast.is-open:not(.nfc-perm-toast) .wn-notice-body > :is(.notification-toast-body, .notification-toast-log) { flex: 0 0 100%; margin: 0; }
 }
 
 /* A notice's command reads as code, with its own Copy (NoticeText.tsx). */
@@ -261,9 +281,16 @@
      over the page at the top; a tap opens what it is about. A permission prompt keeps its words
      and buttons: it is answered from them. */
   .corner-stack .notification-toast:not(.nfc-perm-toast):not(.is-open) .wn-notice-body > :not(.notice-tools) { display: none; }
+  /* With nothing of it left to show, the body takes no room either: two short rows. */
+  .corner-stack .notification-toast:not(.nfc-perm-toast):not(.is-open) .wn-notice-body:not(:has(> .notice-tools)) { display: none; }
+  .corner-stack .notification-toast:not(.nfc-perm-toast):not(.is-open) .wn-notice-head { padding-bottom: 7px; }
   .corner-stack .notification-toast:not(.nfc-perm-toast):not(.is-open) .wn-notice-line { -webkit-line-clamp: 1; }
   .corner-stack .notification-toast:not(.nfc-perm-toast) .notice-tools > button { min-height: 32px; }
   .corner-stack .wn-notice-end > .notice-details-toggle { flex: none; margin: -6px 0; min-height: 32px; padding: 0 4px; }
   .corner-stack .notification-toast.is-open:not(.nfc-perm-toast) .notification-toast-detail { max-height: min(25vh, 160px); }
+  /* Opened on a phone, the words and their Copy come first; the log is under them. */
+  .corner-stack .notification-toast.is-open:not(.nfc-perm-toast) .wn-notice-body { display: flex; flex-direction: column; }
+  .corner-stack .notification-toast.is-open:not(.nfc-perm-toast) .wn-notice-body > .notification-toast-log { order: 1; }
+  .corner-stack .notification-toast.is-open:not(.nfc-perm-toast) .wn-notice-body > .notice-tools { margin: 0 0 6px; }
 }
 

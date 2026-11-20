@@ -107,7 +107,8 @@ test('a long error toast wraps, keeps its x inside, copies its command and opens
   const title = toast.locator('.notification-toast-title')
   const h = (await title.boundingBox())!.height
   expect(h).toBeGreaterThan(20)
-  expect(h).toBeLessThanOrEqual(34)
+  // Two lines of the card's 18px preview, never three.
+  expect(h).toBeLessThanOrEqual(40)
   // The command reads as code with its own Copy, which neither opens nor closes the toast.
   await expect(toast.locator('.notice-cmd-code').first()).toContainText('walnut daemon install')
   // Cut or not, the command it names is one click from the clipboard.
@@ -200,12 +201,15 @@ test.describe('on a phone', () => {
     await expect(toast).toBeVisible()
     await expectInside(toast)
     await expect(toast.locator('.notification-toast-body')).toBeHidden()
-    // One row: the title, Details and the x share a center line.
+    // Two short rows: who it is from with Details and the x on one center line, then the title's
+    // first line under them.
     const mid = async (l: Locator) => { const b = (await l.boundingBox())!; return b.y + b.height / 2 }
-    const row = await mid(toast.locator('.notification-toast-title'))
+    const row = await mid(toast.locator('.wn-notice-who'))
     const words = await toast.getByTestId('notice-details').evaluate((el) => { const r = document.createRange(); r.selectNodeContents(el); const b = r.getClientRects()[0]; return b.y + b.height / 2 })
-    expect(Math.abs(words - row)).toBeLessThanOrEqual(3)
-    expect(Math.abs(await mid(toast.locator('.notification-toast-close')) - row)).toBeLessThanOrEqual(3)
+    expect(Math.abs(words - row)).toBeLessThanOrEqual(4)
+    expect(Math.abs(await mid(toast.locator('.notification-toast-close')) - row)).toBeLessThanOrEqual(4)
+    expect((await toast.locator('.notification-toast-title').boundingBox())!.height).toBeLessThanOrEqual(20)
+    expect(await mid(toast.locator('.notification-toast-title'))).toBeGreaterThan(row)
     await page.screenshot({ path: `${SHOTS}/${info.project.name}-phone-closed.png` })
     await toast.getByTestId('notice-details').click()
     await expect(toast.locator('.notification-toast-body')).toBeVisible()

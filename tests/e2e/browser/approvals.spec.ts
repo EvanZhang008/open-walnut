@@ -541,13 +541,14 @@ test('the stack: a toast and an approval card share the bottom left corner, one 
     const line = (await card3.boundingBox())!
     return line.y >= 0 && line.y <= 24 && Math.round(line.x) === 8 && Math.round(line.width) === 390 - 16
   }).toBe(true)
-  // A toast on the phone is one row under it for its few seconds (a tap opens the center), and the
+  // A toast on the phone is two short rows under it for its few seconds (a tap opens the center), and the
   // page under the bar does not move.
   const areaTop = (await page.locator('.main-content-row > .app-content-area').boundingBox())!.y
   sock()!.send(agentErrorEvent('agent-phone', '401 unauthorized (phone notice)'))
   const phoneToast = stack.locator('.notification-toast').first()
   await expect(phoneToast).toBeVisible()
-  await expect.poll(async () => Math.round((await phoneToast.boundingBox())!.height)).toBeLessThanOrEqual(48)
+  // Two short rows (the card's who and status, then its first line), never its whole text.
+  await expect.poll(async () => Math.round((await phoneToast.boundingBox())!.height)).toBeLessThanOrEqual(56)
   expect((await phoneToast.boundingBox())!.y).toBeLessThan(844 / 2)
   expect((await page.locator('.main-content-row > .app-content-area').boundingBox())!.y).toBe(areaTop)
   await card3.locator('.approval-line-open').click()

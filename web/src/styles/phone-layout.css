@@ -583,7 +583,8 @@
     justify-content: center;
     min-width: 44px;
     min-height: 44px;
-    margin: -10px -10px -10px auto;
+    /* Into the card's 10px head padding (its end row already takes 2px of it), never past its edge. */
+    margin: -10px -8px -10px auto;
   }
 
   html body .notification-toast-swipe {

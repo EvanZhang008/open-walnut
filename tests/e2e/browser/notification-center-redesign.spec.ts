@@ -698,7 +698,8 @@ test('permissions and hard errors toast; cron, skills and warnings go to the fee
   const permToast = page.locator('.nfc-perm-toast').filter({ hasText: SEED_TAG })
   await expect(permToast).toHaveCount(1)
   await expect(permToast.locator('.notification-toast-title')).toHaveText('Bash')
-  await expect(permToast.locator('.nfc-perm-context')).toContainText('PW NFC fixture session')
+  // The session that asks is the card's bold title (NoticeCard who); the context line keeps the host.
+  await expect(permToast.locator('.wn-notice-who')).toHaveText('PW NFC fixture session')
   await expect(permToast.locator('.nfc-perm-context')).toContainText('nfc-host')
   await expect(permToast.locator('.nfc-perm-cmd')).toHaveText(BASH_COMMAND)
   await expect(permToast.getByRole('button', { name: 'Allow', exact: true })).toBeVisible()
