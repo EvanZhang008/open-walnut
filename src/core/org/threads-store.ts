@@ -283,7 +283,7 @@ export async function patchThread(taskId: string, id: string, patch: ThreadPatch
   const held: { waits?: import('./thread-ack.js').AckWaits | null } = {};
   const thread = await mutateThreads(taskId, (cur) => {
     const before = cur.threads.find((t) => t.id === id);
-    // Its work still runs: he knows, it stays pending (thread-ack.ts); nothing open closes it as before.
+    // Work on its subject still runs or waits (thread-ack-outcome.ts): he knows, it stays pending; nothing holding it closes it.
     const waits = held.waits = ack && ackOpen && before && !before.closed ? ack.ackWaitsOf(before, ackOpen) : null;
     const r = waits ? ack!.ackKnown(cur, id, at)
       : Object.keys(rest).length || !before ? updateThread(cur, id, rest, by, at, source) : { file: cur, thread: before };

@@ -8,7 +8,6 @@ import XCTest
 ///     it by id again first (`OrgThreadRevealModel.outcome` with `byIdOnly`).
 ///  2. A new page starts from the phone's last copy of the node's threads (`OrgThreadsCache`),
 ///     which round-trips through its disk form, and a failed read over that copy says so.
-///  3. The Closed fold says "this week" only of threads closed this week.
 @MainActor
 final class OrgThreadsStoreRulesTests: XCTestCase {
     private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
@@ -243,15 +242,5 @@ final class OrgThreadsStoreRulesTests: XCTestCase {
         let empty = APIError.server(status: 503, code: "primary_only", message: "  ", serverHash: nil, serverContent: nil)
         XCTAssertTrue(OrgThreadsStore.readError(hasThreads: false, fromCache: false, cause: empty).hasPrefix("Walnut couldn't reach your Mac"))
         XCTAssertEqual(OrgThreadsStore.readError(hasThreads: true, fromCache: false, cause: .unauthorized), "Couldn't refresh the threads.")
-    }
-
-    // MARK: - 3. The Closed fold
-
-    func testTheClosedFoldSaysThisWeekOnlyOfThisWeek() throws {
-        let recent = try thread("th-000001", closedAt: "2026-11-07T10:00:00Z")
-        let old = try thread("th-0000c0", closedAt: "2026-10-01T10:00:00Z")
-        XCTAssertEqual(OrgThreadModel.closedFoldLabel(count: 1, closed: [recent], now: Self.now), "1 closed this week")
-        XCTAssertEqual(OrgThreadModel.closedFoldLabel(count: 2, closed: [recent, old], now: Self.now), "2 closed",
-                       "a thread closed a month ago is not this week's")
     }
 }

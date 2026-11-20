@@ -1,6 +1,6 @@
 /**
  * What each team task's own threads say (experiment brief_off): a Board card's status chip reads
- * its task's thread state (needs > read > working > waiting > done, core/org/thread-view.ts
+ * its task's thread state (needs > read > working > waiting, core/org/thread-groups.ts
  * threadStateOf) instead of its separate status. One read of `GET /api/v1/thread-states` for the
  * whole team, again a beat after any thread of one of them changes (`org-threads:changed`). Off,
  * nothing is read and the map stays empty, so every card keeps today's status.

@@ -81,11 +81,13 @@ export interface OrgThread {
   letter?: { id: string; task: string; options: Array<{ id: string; label: string; description?: string; recommended?: true }>; off?: true; done?: true };
   /** The Board choice it holds (experiment brief_off, core/org/choice-thread-model.ts): its card answers the choice. */
   choice?: { board: string; id: string; task?: string; options: Array<{ value: string; label: string }>; recommended?: string; off?: true; done?: true };
-  /** He acknowledged it while its work still ran, so it went pending instead of closing: Known (experiment ack_means_known, core/org/thread-known.ts). */
+  /** He acknowledged it while work on it was not over, so it went pending instead of closing (experiment ack_means_known, core/org/thread-known.ts). */
   ackedAt?: string;
-  /** When nothing on that Known thread was open any more: it settles a few minutes later. */
+  /** When nothing held that thread any more: it settles a few minutes later. */
   ackDone?: string;
-  /** Projected on a Known thread's read: what it still waits on (core/org/thread-ack.ts withAwaits); empty lists once its work ended. */
+  /** Projected on its read (core/org/thread-ack.ts withAwaits): where it stands now (core/org/thread-ack-outcome.ts), the group it is drawn in. */
+  ackGroup?: 'working' | 'waiting' | 'closed';
+  /** Projected on its read: what holds it; empty lists once nothing does. */
   awaits?: AckWaits;
   /** Walnut put the task's own ask on this thread (core/org/thread-report-ask.ts): stored as the place only. */
   reportAsk?: { id: string; at: string; ask?: string };

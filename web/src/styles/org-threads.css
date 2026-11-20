@@ -136,16 +136,16 @@
 }
 .org-threads-closed-toggle:hover { color: var(--fg-secondary, var(--fg)); }
 
-/* Threads grouped by state (experiment brief_off, components/org/OrgThreadsByState.tsx): a heading per group. */
+/* Threads in their three groups (experiment brief_off, components/org/OrgThreadsByState.tsx): a heading per group. */
 .org-thread-groups { display: flex; flex-direction: column; gap: 6px; }
 .org-thread-group { display: flex; flex-direction: column; gap: 8px; }
-.org-thread-group-head { display: inline-flex; align-items: baseline; gap: 6px; font-weight: 600; color: var(--fg-secondary, var(--fg)); }
+.org-thread-group-head { display: inline-flex; align-items: baseline; gap: 6px; margin: 4px 0 0; font-size: 12px; font-weight: 600; color: var(--fg-secondary, var(--fg)); }
 .org-thread-group-count { font-weight: 400; color: var(--fg-muted, #86868b); font-variant-numeric: tabular-nums; }
 
 /* The card a chat message's thread line opened (sessions/reply-thread-line.tsx), marked a moment. */
 .org-thread.is-focused { box-shadow: 0 0 0 2px var(--accent); transition: box-shadow 0.3s ease; }
 
-/* The chips over the groups (ThreadsFilterBar): a click jumps to that group. */
+/* The chips over the groups (ThreadsFilterBar): a filter, a click shows only that group. */
 .org-threads-filter { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
 .org-threads-chip {
   display: inline-flex; align-items: baseline; gap: 5px; padding: 3px 10px; border-radius: 999px;
@@ -156,7 +156,7 @@
 .org-threads-chip[aria-pressed="true"] { border-color: var(--accent, #0a84ff); color: var(--accent, #0a84ff); }
 .org-threads-chip-count { color: var(--fg-muted, #86868b); font-variant-numeric: tabular-nums; }
 
-/* A Known card (ThreadKnown.tsx): he knows it, what it waits on, how it ends. */
+/* A card he acknowledged at work (ThreadKnown.tsx): what it waits on, how it ends. */
 .org-thread-state i.is-known { background: transparent; border: 1.5px solid var(--accent, #0a84ff); box-sizing: border-box; }
 .org-thread-known { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
 .org-thread-known p { margin: 0; }

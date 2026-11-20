@@ -1736,11 +1736,12 @@ a newer node never changes an older one's. A chosen one is stored on the task as
   reads part of the list still draws the number its header shows. A client reads the open ones
   and a page of the closed ones with `answer_max`: the whole list (over 1 MB for a busy VP) is
   past what the companion carries back from the Mac (256 KB).
-  A thread the user acknowledged while its work still ran (experiment `ack_means_known`) is
-  Known: open, `state: "pending"`, with `ackedAt`, and `ackDone` once nothing on it is open any
-  more. Each Known thread carries `awaits` (additive, 2026-11-20): `{ tasks: [{ id, title, what? }],
-  replies, letter }`, what it still waits on (`what`: what that task is to finish), empty lists
-  once its work ended. An older client reads it as a pending thread.
+  A thread the user acknowledged while work on it was not over (experiment `ack_means_known`) is
+  open, `state: "pending"`, with `ackedAt`, and `ackDone` once nothing holds it any more. Each such
+  thread carries `ackGroup` (additive, 2026-11-20): `working`, `waiting`, or `closed` (its work is
+  over and Walnut closes it shortly), the group the clients draw it in, and `awaits`: `{ tasks:
+  [{ id, title, what?, waitingOn?, until? }], replies, letter }`, what holds it (`what`: what that
+  task is to finish), empty lists once nothing does. An older client reads it as a pending thread.
 - `GET /api/v1/tasks/:id/threads/:thread` → `200 { task_id, thread }`: one thread whole (a
   Conversation opened after a cut read); `404 no_thread`.
 - `PUT /api/v1/tasks/:id/threads/:thread/follow-ups/:messageId` → `200 { task_id, thread_id,

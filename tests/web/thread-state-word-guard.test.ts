@@ -1,26 +1,25 @@
 /**
- * Guard: a Thread the user reads (the Org page's and a task's Threads, the phone app's) never
- * says "Answered", and an open thread never says "Done". Its state value stays `answered` inside
- * Walnut; the word he reads is "To read" (USER_STATE_LABELS.read). "Done" is only a thread he closed.
+ * Guard: the words a Thread shows (the Org page's and a task's Threads, the phone app's) are the
+ * user's own groups and nothing else: Needs you, Done, Working, Waiting / Snoozed, Closed, Archived
+ * (src/core/org/thread-groups.ts THREAD_GROUP_LABELS). Its state value stays `answered` inside
+ * Walnut; he never reads "Answered", "To read", "Known" or "Acknowledged" as a state, and "Done"
+ * only names a result waiting on its card, never a thread he closed.
  *
- * 2026-11-20, the user, on the Threads state word: "what does answered mean? ... completed? ...
- * for you to review": the word became "Done". The same day, a task's one thread read "Done" while
- * the task's ask waited for his answer above the chat ("there are werid thing happened ... one says
- * Done and the other waits for him"): an answered thread waits for his look and has not ended, so
- * its word became "To read", and a thread holding the task's ask reads Needs you
- * (src/core/org/thread-report-ask.ts). "To read" is the one-card experiment's (threads_one_card,
- * src/core/experimental.ts): with it off, the answered state reads "Done" as before, and only
- * through the one switch that names the setting (web stateLabel, iOS `one_card`).
+ * 2026-11-20, the user, on chips that read All / Needs you / To read / Waiting / Done: "why there
+ * is to read, why ... known", "why the done here means close", then "No Need you, Done, waiting /
+ * snoozed, Acknowlegde, closed, archived", and of Acknowledge: "if I ack and ai should determine if
+ * it should go to closed or wait or wip" (an action, no group of its own).
  *
  * The class: every web and iOS source file that renders an org thread (it names the thread type
  * or its API), found from the source, so a new card, list or header joins by itself. A string
- * literal with the word "Answered" in any of them fails, and so does a label of an open state
- * (new, working, needs, answered, pending) that reads "Done" or "Answered"; comments and the
- * `answered` state value (lowercase) are free.
+ * literal with one of the retired words in any of them fails, and so does any "Done" literal but
+ * the Done group's own label (and the phone sheet's standard dismiss button); comments, the
+ * `answered` and `known` values (lowercase) and the Acknowledge button are free.
  */
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import { THREAD_GROUPS, THREAD_GROUP_LABELS } from '../../src/core/org/thread-groups';
 
 const ROOT = join(__dirname, '..', '..');
 
@@ -38,71 +37,76 @@ function stripComments(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
 }
 
-/** Quoted literals ('…', "…", `…`) holding the word Answered. */
-function answeredLiterals(src: string): string[] {
-  const lits = stripComments(src).match(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g) ?? [];
-  return lits.filter((l) => /\bAnswered\b/.test(l));
+/** Quoted literals ('…', "…", `…`). */
+function literals(src: string): string[] {
+  return stripComments(src).match(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g) ?? [];
 }
 
-const OPEN_STATES = 'new|working|needs|answered|pending'
-/** The labels an open thread state reads, by state: `answered: 'X'` (a TS map) or `case "answered": return "X"` (Swift). */
-function openStateLabels(src: string): string[] {
-  const code = stripComments(src)
-  const ts = [...code.matchAll(new RegExp(`\\b(${OPEN_STATES})\\s*:\\s*(['"\`])([^'"\`\\n]*)\\2`, 'g'))].map((m) => `${m[1]}: ${m[3]}`)
-  const swift = [...code.matchAll(new RegExp(`case\\s+"(${OPEN_STATES})"\\s*:\\s*return\\s+"([^"\\n]*)"`, 'g'))].map((m) => `${m[1]}: ${m[2]}`)
-  return [...ts, ...swift]
-}
-const ENDED = /:\s*(Done|Answered)\b/
+/** The words a thread never shows as a state any more. */
+const RETIRED = /\b(Answered|To read|Known|Acknowledged)\b/;
+/** A "Done" a thread file may hold: the Done group's own label on the phone, the phone sheet's dismiss. */
+const DONE_ALLOWED = [/case \.read: return "Done"/g, /Button\("Done"\) \{ dismiss\(\) \}/g];
 
-const WEB_MARK = /api\/org-threads|useOrgThreads|\bOrgThread\b/;
+/** A word right after an opening quote, so a literal inside a Swift interpolation ("\\(x ? "Known" : y)") is seen too. */
+const quoted = (code: string, word: RegExp): string[] => [...code.matchAll(new RegExp(`['"\`](?:${word.source})\\b`, 'g'))].map((m) => m[0]);
+
+function retiredLiterals(src: string): string[] {
+  const code = stripComments(src);
+  const whole = literals(src).filter((l) => RETIRED.test(l));
+  const inner = quoted(code, /Answered|To read|Known|Acknowledged/).filter((q) => !whole.some((l) => l.startsWith(q)));
+  return [...whole, ...inner];
+}
+function doneLiterals(src: string): string[] {
+  let code = stripComments(src);
+  for (const ok of DONE_ALLOWED) code = code.replace(ok, '');
+  const whole = literals(code).filter((l) => /\bDone\b/.test(l));
+  const inner = quoted(code, /Done/).filter((q) => !whole.some((l) => l.startsWith(q)));
+  return [...whole, ...inner];
+}
+
+const WEB_MARK = /api\/org-threads|useOrgThreads|\bOrgThread\b|thread-groups/;
 const IOS_MARK = /\bOrgThread\b/;
 
 const webFiles = walk(join(ROOT, 'web', 'src'), ['.ts', '.tsx']).filter((f) => WEB_MARK.test(readFileSync(f, 'utf8')));
 const iosFiles = walk(join(ROOT, 'ios-native', 'Walnut'), ['.swift']).filter((f) => IOS_MARK.test(readFileSync(f, 'utf8')));
 
-describe('Threads never show "Answered", and an open thread never "Done"', () => {
+describe('Threads show only his own group words', () => {
   it('finds the files that render a thread (the class is not empty)', () => {
     const rel = [...webFiles, ...iosFiles].map((f) => relative(ROOT, f));
-    expect(rel).toContain('web/src/components/org/OrgThreads.tsx');
-    expect(rel).toContain('ios-native/Walnut/Views/Org/OrgThreadModel.swift');
+    for (const f of [
+      'web/src/components/org/OrgThreads.tsx', 'web/src/components/org/OrgThreadsByState.tsx', 'web/src/components/org/ThreadKnown.tsx',
+      'web/src/components/board/kanban/kanban-thread-status.ts',
+      'ios-native/Walnut/Views/Org/OrgThreadModel.swift', 'ios-native/Walnut/Views/Org/OrgThreadsView.swift', 'ios-native/Walnut/Views/Org/OrgThreadKnownBlock.swift',
+    ]) expect(rel).toContain(f);
   });
 
-  it('no file that renders a thread has "Answered" in a string', () => {
-    const hits = [...webFiles, ...iosFiles].flatMap((f) =>
-      answeredLiterals(readFileSync(f, 'utf8')).map((l) => `${relative(ROOT, f)}: ${l}`));
-    expect(hits, 'a thread state reads "Done" to the user, never "Answered"').toEqual([]);
+  it('the groups are exactly Needs you, Done, Working, Waiting / Snoozed, Closed and Archived', () => {
+    expect(THREAD_GROUPS.map((g) => THREAD_GROUP_LABELS[g])).toEqual(['Needs you', 'Done', 'Working', 'Waiting / Snoozed', 'Closed', 'Archived']);
   });
 
-  it('no open thread state reads Done or Answered in any file that renders a thread', () => {
-    const hits = [...webFiles, ...iosFiles].flatMap((f) =>
-      openStateLabels(readFileSync(f, 'utf8')).filter((l) => ENDED.test(l)).map((l) => `${relative(ROOT, f)}: ${l}`));
-    expect(hits, 'an open thread has not ended: Done is only a thread he closed').toEqual([]);
+  it('no file that renders a thread has Answered, To read, Known or Acknowledged in a string', () => {
+    const hits = [...webFiles, ...iosFiles].flatMap((f) => retiredLiterals(readFileSync(f, 'utf8')).map((l) => `${relative(ROOT, f)}: ${l}`));
+    expect(hits, 'a thread reads its group word (THREAD_GROUP_LABELS)').toEqual([]);
   });
 
-  it('the answered state reads To read on the web and on the phone', () => {
-    expect(readFileSync(join(ROOT, 'web/src/components/org/OrgThreads.tsx'), 'utf8')).toMatch(/answered: USER_STATE_LABELS\.read/);
-    expect(readFileSync(join(ROOT, 'src/core/user-status.ts'), 'utf8')).toMatch(/read: 'To read'/);
-    expect(readFileSync(join(ROOT, 'ios-native/Walnut/Views/Org/OrgThreadModel.swift'), 'utf8')).toMatch(/case "answered": return t\.one_card == true \? "To read" : "Done"/);
-  });
-
-  it('with the one-card setting off, the answered state reads Done only through the switch that names it', () => {
-    const web = readFileSync(join(ROOT, 'web/src/components/org/OrgThreads.tsx'), 'utf8');
-    expect(web).toMatch(/const stateLabel = \(state: OrgThreadState, oneCard: boolean\): string => \(state === 'answered' && !oneCard \? 'Done' : STATE_LABEL\[state\]\)/);
-    expect(web).toMatch(/useExperimental\('threads_one_card'\)/);
-    // The header reads its state only through it: no bare STATE_LABEL[t.state] left.
-    expect(stripComments(web)).not.toMatch(/STATE_LABEL\[t\.state\]/);
-    // Every other "answered" label in a thread file is a ternary on one_card or none at all.
+  it('"Done" is only the Done group\'s label: a closed thread reads Closed', () => {
+    const hits = [...webFiles, ...iosFiles].flatMap((f) => doneLiterals(readFileSync(f, 'utf8')).map((l) => `${relative(ROOT, f)}: ${l}`));
+    expect(hits, 'Done names a result waiting on its card; a closed card reads Closed').toEqual([]);
+    // The web's card word for an answered, held or closed thread is its group's.
+    const web = stripComments(readFileSync(join(ROOT, 'web/src/components/org/OrgThreads.tsx'), 'utf8'));
+    expect(web).toMatch(/if \(t\.closed\) return t\.movedTo \? 'Moved' : THREAD_GROUP_LABELS\[group\];/);
+    expect(web).toMatch(/return t\.state === 'answered' \|\| known \? THREAD_GROUP_LABELS\[group\] : STATE_LABEL\[t\.state\];/);
     const swift = stripComments(readFileSync(join(ROOT, 'ios-native/Walnut/Views/Org/OrgThreadModel.swift'), 'utf8'));
-    expect([...swift.matchAll(/case "answered": return ([^\n]*)/g)].map((m) => m[1])).toEqual(['t.one_card == true ? "To read" : "Done"']);
+    expect(swift).toMatch(/if t\.closed != nil \|\| t\.state == "answered" \|\| isKnown\(t\) \{ return group\(t, inView: inView, now: now\)\.label \}/);
   });
 
   it('the scans catch the old words (self-check)', () => {
-    expect(answeredLiterals(`const L = { answered: 'Answered' }; // Answered in a comment`)).toEqual([`'Answered'`]);
-    expect(answeredLiterals(`/* 'Answered' */ const ok = 'answered'`)).toEqual([]);
-    expect(openStateLabels(`const L = { new: 'New', answered: 'Done' }`).filter((l) => ENDED.test(l))).toEqual(['answered: Done']);
-    expect(openStateLabels(`switch s {\ncase "answered": return "Done"\n}`).filter((l) => ENDED.test(l))).toEqual(['answered: Done']);
-    expect(openStateLabels(`case "pending": return "Answered"`).filter((l) => ENDED.test(l))).toEqual(['pending: Answered']);
-    // A closed thread reads Done: no open state's label, so free.
-    expect(openStateLabels(`if let c = t.closed { return c.how == "acked" ? "Done" : "Dropped" }`)).toEqual([]);
+    expect(retiredLiterals(`const L = { answered: 'To read', known: 'Known' }; // To read in a comment`)).toEqual([`'To read'`, `'Known'`]);
+    expect(retiredLiterals(`/* 'Answered' */ const ok = 'answered'; const b = 'Acknowledge'`)).toEqual([]);
+    expect(retiredLiterals(`closedWords = \`Acknowledged \${who}\``)).toEqual(['`Acknowledged ${who}`']);
+    expect(doneLiterals(`if let c = t.closed { return c.how == "acked" ? "Done" : "Dropped" }`)).toEqual(['"Done"']);
+    expect(doneLiterals(`case .read: return "Done"\nButton("Done") { dismiss() }`)).toEqual([]);
+    // Inside a Swift interpolation too.
+    expect(retiredLiterals(`Text("\\(c.how == "acked" ? "Acknowledged" : "Dropped")")`).length).toBeGreaterThan(0);
   });
 });

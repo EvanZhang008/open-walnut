@@ -218,7 +218,9 @@ test('Follow up files under the thread; Acknowledge closes it, Reopen preserves 
   await expect.poll(async () => (await threads(request)).find((t) => t.id === t1.id)?.closed?.by, { timeout: 15_000 }).toBe('human')
   await expect(page.getByTestId('org-threads-closed')).toHaveText(/^\d+ closed this week/)
   await page.getByTestId('org-threads-closed').click()
-  await expect(c1.getByTestId('org-thread-closed')).toHaveText(/^Acknowledged /)
+  // Closed, never Done: Done is a result waiting on its card (core/org/thread-groups.ts).
+  await expect(c1.getByTestId('org-thread-closed')).toHaveText(/^Closed /)
+  await expect(c1.getByTestId('org-thread-state')).toHaveText('Closed')
   await shot(page, 'closed')
   await c1.getByTestId('org-thread-reopen').click()
   await expect(c1).toBeVisible()
@@ -612,8 +614,8 @@ test('his view shows only threads with something for him; his reply sends one ou
   await expect(card(page, 'th-0000000000a9').getByTestId('org-thread-summary-stale')).toHaveCount(0)
   await patch('th-0000000000a1', { reply: 'Built; it is live' })
   await expect(open.locator('[data-thread-id="th-0000000000a1"]')).toBeVisible()
-  // An open answered thread waits for his look: To read, never Done (Done is a thread he closed).
-  await expect(card(page, 'th-0000000000a1').getByTestId('org-thread-state')).toHaveText('To read')
+  // An open answered thread waits for his look: Done, its result on the card (a closed one reads Closed).
+  await expect(card(page, 'th-0000000000a1').getByTestId('org-thread-state')).toHaveText('Done')
   await patch('th-0000000000a6', { state: 'needs', reply: 'Mail page: keep the old list or the new one?' })
   await expect(open.locator('[data-thread-id="th-0000000000a6"]')).toBeVisible()
   // A quiet update (a state named) keeps one out of sight.

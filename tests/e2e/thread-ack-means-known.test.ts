@@ -7,15 +7,17 @@
  *   Bakery lead (a session) ─ "Fix the oven timer" (open) ─ "Order the flour" (done)
  *
  *   1. off: his Acknowledge closes a thread whose task still runs, as before;
- *   2. A, on: a card that holds the result (answered) closes, its task still open;
- *   3. B, on, its task still open: Known (pending, every exchange known by him, out of his view,
- *      the ack recorded), the read says what it waits on; the node hears it once;
+ *   2. A, on: a card that holds the result (answered) closes, its task at work on another subject;
+ *      one whose task still works on its subject is held, Working (thread-ack-outcome.ts);
+ *   3. B, on, its task still open on its subject: held (pending, every exchange known by him, out
+ *      of his view, the ack recorded), the read says where it stands and what holds it; the node
+ *      hears it once;
  *   4. on, nothing open: it closes as before;
  *   5. the node may close the thread he acknowledged without a new reaction of his;
- *   6. B's task done and the node writes the outcome: back to To read;
+ *   6. B's task done and the node writes the outcome: back to Done;
  *   7. B's task done and nothing new: the node hears it once, and 10 minutes later Walnut closes it;
  *   8. he writes in a Known thread: it is working, not Known;
- *   9. the node wrote something new and left it pending: Walnut brings it back to To read;
+ *   9. the node wrote something new and left it pending: Walnut brings it back to Done;
  *  10. his second Acknowledge (Close) on a Known thread closes it at once;
  *  11. a thread that changed after the pass read it is settled only as it is now;
  *  12. the flag turned off: a Known thread left from before is still settled.
@@ -90,7 +92,7 @@ async function leadThread(text: string, tasks: string[], state: 'answered' | 'wo
 const answeredThread = (text: string, tasks: string[]) => leadThread(text, tasks, 'answered')
 const runningThread = (text: string, tasks: string[]) => leadThread(text, tasks, 'working')
 
-type ReadThread = OrgThread & { shown: boolean; awaits?: AckWaits }
+type ReadThread = OrgThread & { shown: boolean; awaits?: AckWaits; ackGroup?: string }
 async function readOne(id: string): Promise<ReadThread> {
   const r = await api<{ threads: ReadThread[] }>('GET', `/tasks/${lead}/threads`)
   expect(r.status).toBe(200)
@@ -155,9 +157,10 @@ describe('his Acknowledge means he knows', () => {
     expect(ridingLine(sid, `thread-ack:${id}`)).toBeUndefined()
   })
 
-  it('A, on: a card that holds the result closes for good, its task still open', async () => {
+  it('A, on: a card that holds the result closes for good, its task at work on another subject', async () => {
     await flag(true)
-    const id = await answeredThread('Tell me how the oven timer went', [oven])
+    const sign = await newTask('Paint the shop sign')
+    const id = await answeredThread('Tell me how the oven timer went', [sign])
     const r = await ack(id)
     expect(r.status).toBe(200)
     expect(r.json.thread.closed).toMatchObject({ how: 'acked', by: 'human' })
@@ -170,7 +173,18 @@ describe('his Acknowledge means he knows', () => {
     expect((await threadOf(id)).closed).toMatchObject({ how: 'acked', by: 'human' })
   })
 
-  it('B, on, its task still open: Known, out of his view, the read says what it waits on, the node hears it once', async () => {
+  it('A, on: a card that holds the result, its task still at work on its subject: held, Working', async () => {
+    const id = await answeredThread('Tell me how the oven timer went', [oven])
+    const r = await ack(id)
+    expect(r.status).toBe(200)
+    expect(r.json.thread.closed).toBeUndefined()
+    expect(isKnown(await threadOf(id))).toBe(true)
+    const read = await readOne(id)
+    expect(read.ackGroup).toBe('working')
+    expect(read.awaits?.tasks.map((x) => x.id)).toEqual([oven])
+  })
+
+  it('B, on, its task still open: held, out of his view, the read says where it stands and what holds it, the node hears it once', async () => {
     const proof = await newTask('Prove the oven holds 180', 'Run the oven for an hour and log the temperature every minute.')
     const id = await runningThread('Keep the oven at 180 degrees', [proof])
     const before = await shownCount()
@@ -188,6 +202,7 @@ describe('his Acknowledge means he knows', () => {
     expect(await shownCount()).toBe(before)
     const read = await readOne(id)
     expect(read.shown).toBe(false)
+    expect(read.ackGroup).toBe('working')
     expect(read.awaits).toEqual({
       tasks: [{ id: proof, title: 'Prove the oven holds 180', what: 'Run the oven for an hour and log the temperature every minute.' }],
       replies: false, letter: false,
@@ -318,7 +333,7 @@ describe('his Acknowledge means he knows', () => {
   })
 
   it('his second Acknowledge on a Known thread closes it at once', async () => {
-    const id = await runningThread('Sharpen the bread knives', [oven])
+    const id = await runningThread('Set the oven timer for the bread', [oven])
     await ack(id)
     expect(isKnown(await threadOf(id))).toBe(true)
     pendingRiding(sid)?.markTold()

@@ -41,9 +41,8 @@
  *   Snoozed    the ones he put aside (Snooze on a card, OrgThreadSnooze), each saying when it comes
  *              back; collapsed by default. A thread leaves the list and the tab's dot while snoozed
  *              and comes back on its date, or earlier on news (core/org/thread-view.ts snoozedNow)
- *   Known      the ones he acknowledged while their work ran (core/org/thread-known.ts): each says
- *              what it waits on; open by default, so he finds them
- *   In progress  open but nothing for him (new, working, pending): one quiet line at the bottom opens them;
+ *   In progress  open but nothing for him (new, working, pending, or held since his Acknowledge,
+ *              core/org/thread-ack-outcome.ts, its card saying what holds it): one quiet line at the bottom opens them;
  *              a thread whose decision a task already asks him reads pending with that task (askedIn,
  *              core/org/thread-task-ask.ts) and waits here too, its card naming the task: one decision, asked once
  *   Closed     the ones closed this week (kept a week, then deleted) open from one quiet line at
@@ -66,7 +65,7 @@ import { useOpenTask } from '@/hooks/useOpenTask';
 import { useAgentFileOpener } from '@/hooks/useAgentFileOpener';
 import { THREAD_LIST_SOURCE, threadAnswerSource, threadOpenerSource, threadStandInSource, threadSummarySource } from './thread-text-source';
 import { timeAgo } from '@/utils/time';
-import { isBoolean, usePageView } from '@/utils/view-memory';
+import { isBoolean, usePageView, usePageViewOf } from '@/utils/view-memory';
 import { useExperimental } from '@/hooks/useExperimental';
 import type { OrgThread, OrgThreadMessage, OrgThreadState } from '@/api/org-threads';
 import type { OrgThreadsState } from './useOrgThreads';
@@ -81,23 +80,28 @@ import { AskCard } from '@/components/actions/ActionNeeded';
 import { AskCardFrame } from '@/components/actions/AskCard';
 import { ThreadOptions } from './OrgInlineAnswer';
 import { Answer, Words } from './thread-card-text';
-import { THREAD_GROUPS, backFromKnown, groupThreads, isKnown, type ThreadGroup } from '@open-walnut/thread-groups';
+import { ALL_SHOWS, THREAD_GROUPS, THREAD_GROUP_LABELS, backFromKnown, groupThreads, isKnown, threadGroupOf, type ThreadGroup } from '@open-walnut/thread-groups';
 import { TaskChips } from './ThreadTaskChips';
 import { KnownBlock } from './ThreadKnown';
-import { OrgThreadsByState, groupOpen, isThreadGroups } from './OrgThreadsByState';
+import { OrgThreadsByState, isThreadFilter } from './OrgThreadsByState';
+import type { ThreadFilter } from './ThreadsFilterBar';
 import '@/styles/org-threads.css';
 import '@/styles/notice-card.css';
 
 /**
  * A thread's state in words: the task-state names where they mean the same (USER_STATE_LABELS). An
- * open thread the node answered waits for his look: "To read", never "Done" (2026-11-20, the user, on
- * a thread that read Done while the task still waited for his answer). Done is only a thread he closed.
+ * answered one, one held since his Acknowledge and a closed one read their group's word (Done or
+ * Waiting / Snoozed, Working or Waiting / Snoozed, Closed or Archived: core/org/thread-groups.ts),
+ * so a closed card never reads Done (2026-11-20, the user: "why the done here means close").
  */
-const STATE_LABEL: Record<OrgThreadState, string> = {
-  new: 'New', working: USER_STATE_LABELS.working, needs: USER_STATE_LABELS.needs, answered: USER_STATE_LABELS.read, pending: 'Pending',
+const STATE_LABEL: Record<Exclude<OrgThreadState, 'answered'>, string> = {
+  new: 'New', working: USER_STATE_LABELS.working, needs: USER_STATE_LABELS.needs, pending: 'Pending',
 };
-/** The word of a state: with threads_one_card off an open answered thread reads as before (core/org/one-card.ts). */
-const stateLabel = (state: OrgThreadState, oneCard: boolean): string => (state === 'answered' && !oneCard ? 'Done' : STATE_LABEL[state]);
+function stateLabel(t: OrgThread, group: ThreadGroup, known: boolean): string {
+  if (t.closed) return t.movedTo ? 'Moved' : THREAD_GROUP_LABELS[group];
+  if (t.askedIn) return t.askedIn.answered ? 'Decided in a task' : 'Asked in a task';
+  return t.state === 'answered' || known ? THREAD_GROUP_LABELS[group] : STATE_LABEL[t.state];
+}
 const STATE_DOT: Record<OrgThreadState, string> = {
   new: 'var(--accent, #0A84FF)', working: 'var(--success, #34C759)', needs: 'var(--error, #FF3B30)', answered: 'var(--fg-muted, #86868B)',
   pending: 'var(--fg-muted, #86868B)',
@@ -138,7 +142,7 @@ interface Props {
   byState?: boolean;
 }
 
-/** Drawn as Known: he acknowledged it while its work ran, and it is no ask of a task (askedIn) or a task's thread below. */
+/** Held since his Acknowledge (its card says what holds it): no ask of a task (askedIn) or a task's thread below. */
 const knownHere = (t: OrgThread): boolean => !t.askedIn && !t.owner && isKnown(t);
 
 function closedWords(t: OrgThread, now: number): string {
@@ -146,7 +150,7 @@ function closedWords(t: OrgThread, now: number): string {
   // It went to another node with its work (core/org/thread-follow.ts): open there.
   if (t.movedTo) return `Moved to ${t.movedTo.title} ${timeAgo(c.at, { now })}`;
   const who = c.by === 'human' ? '' : ' by the agent';
-  return `${c.how === 'acked' ? 'Acknowledged' : 'Dropped'}${who} ${timeAgo(c.at, { now })}`;
+  return `${c.how === 'acked' ? THREAD_GROUP_LABELS.done : 'Dropped'}${who} ${timeAgo(c.at, { now })}`;
 }
 
 /** When a snoozed thread comes back, as a person says it: "Tomorrow, 9:00 AM", "Nov 9, 12:00 AM". */
@@ -243,7 +247,7 @@ function AskedIn({ a }: { a: NonNullable<OrgThread['askedIn']> }) {
   const openTask = useOpenTask();
   return (
     <p className="org-thread-follows org-thread-asked-in" data-testid="org-thread-asked-in" data-task-id={a.task} data-answered={a.answered ? 'true' : undefined} title={a.ask}>
-      {a.answered ? 'Done in' : 'Asked in'}{' '}
+      {a.answered ? 'Decided in' : 'Asked in'}{' '}
       <button type="button" className="org-thread-link" data-testid="org-thread-asked-in-task" onClick={() => openTask(a.task)}>{a.title}</button>
       {a.answered ? ': nothing more to decide here.' : ': answer it there. This thread comes back if that task stops asking it.'}
     </p>
@@ -311,7 +315,7 @@ function NeedsAnswer({ t, owner, onFollowUp, snoozed, state, pinned }: {
   );
 }
 
-function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed, owner, focused }: {
+function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed, owner, focused, listed }: {
   t: OrgThread; all: readonly OrgThread[]; shared: ReadonlySet<string>; tasks: readonly Task[];
   owner: Task | undefined;
   state: OrgThreadsState; onFollowUp: Props['onFollowUp']; name: string; now: number;
@@ -319,6 +323,8 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   snoozed: boolean;
   /** A chat message's thread line just opened it (thread-focus.ts): marked a moment. */
   focused: boolean;
+  /** His view lists it now (thread-view.ts listedForHim): its group, and so its word. */
+  listed: boolean;
 }) {
   /** The whole conversation shown, in place of what the card keeps. */
   const [open, setOpen] = useState(false);
@@ -328,9 +334,6 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   const pinned = pinnedNow(t);
   // The one card (experiment threads_one_card, core/org/one-card.ts); off, the card as before it.
   const oneCard = useExperimental('threads_one_card');
-  // Its state's word matches the group it is drawn in once the Brief is off (OrgThreadsByState): an open answered one reads To read.
-  const briefOff = useExperimental('brief_off');
-  const toRead = oneCard || briefOff;
   // Its decision is asked in a task (core/org/thread-task-ask.ts): the card says where, not Needs you.
   const asked = !closed && !!t.askedIn;
   const letter = answersLetter(t);
@@ -347,6 +350,8 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   // He acknowledged it while its work ran (core/org/thread-known.ts): the card says what it waits on, not its summary.
   const known = knownHere(t);
   const back = backFromKnown(t);
+  // Its word is its group's (core/org/thread-groups.ts), the one it is drawn in.
+  const label = stateLabel(t, threadGroupOf(t, listed, now), known);
   const card = useMemo(() => cardView(t, shared), [t, shared]);
   // It sat too long with nothing from the node: the card says so (core/org/thread-view.ts threadOverdue).
   const overdue = closed || snoozed ? null : overdueLine(t, name, now, (iso) => timeAgo(iso, { now }), threadDeadline(t, tasks, now));
@@ -366,11 +371,11 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   const quote = (x: ThreadExchange<OrgThreadMessage>) => `\u201c${oneLine(x.messages.map((m) => m.text || 'A picture').join(' / '), QUOTE_WORDS)}\u201d`;
   const from = (o: { from: string; ref?: string }) => `${FROM_LABEL[o.from] ?? FROM_LABEL.node}${o.ref ? `: ${o.ref}` : ''}`;
   return (
-    <li className={`org-thread${closed ? ' is-closed' : ''}${open ? ' is-open' : ''}${snoozed ? ' is-snoozed' : ''}${pinned ? ' is-pinned' : ''}${focused ? ' is-focused' : ''}${known ? ' is-known' : ''}`} data-testid="org-thread" data-thread-id={t.id} data-focused={focused ? 'true' : undefined} data-state={closed ? 'closed' : known ? 'known' : t.state} data-back-from-known={back ? 'true' : undefined} data-snoozed={snoozed ? 'true' : undefined} data-pinned={pinned ? 'true' : undefined} data-asked-in={asked ? t.askedIn!.task : undefined} data-held-ask={held ? held.id : undefined}>
+    <li className={`org-thread${closed ? ' is-closed' : ''}${open ? ' is-open' : ''}${snoozed ? ' is-snoozed' : ''}${pinned ? ' is-pinned' : ''}${focused ? ' is-focused' : ''}${known ? ' is-known' : ''}`} data-testid="org-thread" data-thread-id={t.id} data-focused={focused ? 'true' : undefined} data-state={closed ? 'closed' : t.state} data-acked-at-work={known ? 'true' : undefined} data-back-from-known={back ? 'true' : undefined} data-snoozed={snoozed ? 'true' : undefined} data-pinned={pinned ? 'true' : undefined} data-asked-in={asked ? t.askedIn!.task : undefined} data-held-ask={held ? held.id : undefined}>
       <button type="button" className="org-thread-head" data-peek-row="" aria-expanded={open} aria-controls={`${t.id}-conversation`} data-testid="org-thread-head" onClick={() => setOpen(!open)}>
         <span className="org-thread-state" data-testid="org-thread-state">
           <i className={known ? 'is-known' : undefined} style={known ? undefined : { background: closed || asked ? 'var(--fg-muted, #86868B)' : STATE_DOT[t.state] }} />
-          {closed ? (t.movedTo ? 'Moved' : t.closed!.how === 'acked' ? 'Done' : 'Dropped') : asked ? (t.askedIn!.answered ? 'Done in a task' : 'Asked in a task') : known ? 'Known' : stateLabel(t.state, toRead)}
+          {label}
         </span>
         <span className="org-thread-meta">
           {pinned && (<>
@@ -380,7 +385,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
           </>)}
           {t.opener && <span className="org-thread-from" data-testid="org-thread-from" title={`Opened by ${name}`}>Opened by {name}</span>}
           {t.opener && ' \u00b7 '}
-          {back && <span className="org-thread-back" data-testid="org-thread-back-from-known" title="You acknowledged it while its work ran; it came back with something new">Back from Known{' \u00b7 '}</span>}
+          {back && <span className="org-thread-back" data-testid="org-thread-back-from-known" title="You acknowledged it while its work ran; it came back with something new">New since you acknowledged{' \u00b7 '}</span>}
           {known
             ? <span className="org-thread-time" data-testid="org-thread-time">You acknowledged {'\u00b7'} {timeAgo(t.ackedAt!, { now })}</span>
             : <span className="org-thread-time" data-testid="org-thread-time">{timeAgo(last?.at ?? t.updatedAt, { now })}</span>}
@@ -470,10 +475,8 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
             <span className="org-thread-closed" data-testid="org-thread-closed">{closedWords(t, now)}</span>
             <button type="button" className="btn btn-sm" data-testid="org-thread-reopen" onClick={() => void state.update(t.id, { reopen: true })}>Reopen</button>
           </>) : (<>
-            {/* Known: he already acknowledged it; Close ends it now, without hearing how its work ends. */}
-            {!letter && (known
-              ? <button type="button" className="btn btn-sm" data-testid="org-thread-close-known" title="Close it now: you will not hear when its work ends" onClick={() => void state.update(t.id, { close: 'acked' })}>Close</button>
-              : <button type="button" className="btn btn-sm btn-primary" data-testid="org-thread-ack" onClick={() => void state.update(t.id, { close: 'acked' })}>Acknowledge</button>)}
+            {/* Acknowledged already: it goes where its work stands (core/org/thread-ack-outcome.ts), no second button. */}
+            {!letter && !known && <button type="button" className="btn btn-sm btn-primary" data-testid="org-thread-ack" onClick={() => void state.update(t.id, { close: 'acked' })}>Acknowledge</button>}
             <ThreadTools t={t} snoozed={snoozed} state={state} pinned={pinned} />
           </>)}
         </div>
@@ -485,15 +488,17 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
 /** One thread of his list as every surface draws it: a thread of a task below is the ask card
  *  (PoppedThreadCard), the node's own the thread card. The Threads view and the top of the chat
  *  (TopThread) both draw through this, so one thread reads the same in both. */
-export function ThreadItem({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed, owner, focused = false }: {
+export function ThreadItem({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed, owner, focused = false, listed = true }: {
   t: OrgThread; all: readonly OrgThread[]; shared: ReadonlySet<string>; tasks: readonly Task[];
   owner: Task | undefined; state: OrgThreadsState; onFollowUp: Props['onFollowUp']; name: string; now: number; snoozed: boolean;
   /** A chat message's thread line just opened it (thread-focus.ts). */
   focused?: boolean;
+  /** His view lists it now (listedForHim); the top of the chat shows only listed ones. */
+  listed?: boolean;
 }) {
   return t.owner && owner
     ? <PoppedThreadCard node={owner.id} t={t} state={state} />
-    : <ThreadCard t={t} all={all} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={now} snoozed={snoozed} owner={owner} focused={focused} />;
+    : <ThreadCard t={t} all={all} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={now} snoozed={snoozed} owner={owner} focused={focused} listed={listed} />;
 }
 
 export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState = false }: Props) {
@@ -501,14 +506,12 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
   const [showClosed, setShowClosed] = usePageView('org', 'threads.showClosed', false, isBoolean);
   const [showHidden, setShowHidden] = usePageView('org', 'threads.showInProgress', false, isBoolean);
   const [showSnoozed, setShowSnoozed] = usePageView('org', 'threads.showSnoozed', false, isBoolean);
-  // Known is open by default: he acknowledged them and must be able to find them.
-  const [showKnown, setShowKnown] = usePageView('org', 'threads.showKnown', true, isBoolean);
-  const [groupFlips, setGroupFlips] = usePageView<ThreadGroup[]>('org', 'threads.groupFlips', [], isThreadGroups);
-  const flipGroup = (g: ThreadGroup) => setGroupFlips((f) => (f.includes(g) ? f.filter((x) => x !== g) : [...f, g]));
+  // The group chip he picked (OrgThreadsByState), kept per node.
+  const [filter, setFilter] = usePageViewOf<ThreadFilter>('org', 'threads.filter', owner?.id ?? name, 'all', isThreadFilter);
   const all = state.threads;
   const needsFirst = useExperimental('top_thread');
   const shared = useMemo(() => sharedAnswers(all ?? []), [all]);
-  const { open, known, hidden, snoozed, clock } = useMemo(() => {
+  const { open, listedIds, hidden, snoozed, clock } = useMemo(() => {
     // The page's clock ticks once a minute; the re-read at a snooze's end (useOrgThreads) must not wait for it.
     const at = Math.max(now, Date.now());
     const list = all ?? [];
@@ -521,8 +524,8 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
       // them), so one just unpinned goes back to its place before the server answers. Under
       // top_thread the ones that need him lead the rest, the order the top of the chat steps in.
       open: orderedForHim(listed, { needsFirst }),
-      known: list.filter((t) => !snoozedNow(t, at) && !shownSet.has(t) && knownHere(t)),
-      hidden: list.filter((t) => !t.closed && !snoozedNow(t, at) && !shownSet.has(t) && !knownHere(t)),
+      listedIds: new Set(listed.map((t) => t.id)),
+      hidden: list.filter((t) => !t.closed && !snoozedNow(t, at) && !shownSet.has(t)),
       snoozed: list.filter((t) => snoozedNow(t, at)).sort((a, b) => a.snoozed!.until.localeCompare(b.snoozed!.until)),
     };
   }, [all, now, needsFirst]);
@@ -539,37 +542,32 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
   const groups = useMemo(() => (byState ? groupThreads(all ?? [], clock) : null), [byState, all, clock]);
   const focused = useFocusedThread(owner?.id, all, rootRef, (t) => {
     if (groups) {
+      // Out of the group he picked: All shows it, an archived one only its own chip.
       const g = THREAD_GROUPS.find((x) => groups[x].some((y) => y.id === t.id));
-      if (g && !groupOpen(g, groupFlips)) flipGroup(g);
+      const shows = !g || filter === g || (filter === 'all' && ALL_SHOWS.includes(g));
+      if (g && !shows) setFilter(ALL_SHOWS.includes(g) ? 'all' : g);
       return;
     }
     if (t.closed) setShowClosed(true);
     else if (snoozedIds.has(t.id)) setShowSnoozed(true);
-    else if (known.some((x) => x.id === t.id)) setShowKnown(true);
     else if (hidden.some((x) => x.id === t.id)) setShowHidden(true);
   });
-  const card = (t: OrgThread) => <ThreadItem key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={clock} snoozed={snoozedIds.has(t.id)} owner={owner} focused={focused === t.id} />;
+  const card = (t: OrgThread) => <ThreadItem key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={clock} snoozed={snoozedIds.has(t.id)} owner={owner} focused={focused === t.id} listed={listedIds.has(t.id)} />;
   return (
     <div ref={rootRef} className="org-threads" data-testid="org-threads" onClick={onEntityClick}>
       <ThreadsTopicBar owner={owner} />
       {state.error && <p className="org-thread-error" data-testid="org-threads-error">{state.error}</p>}
       {all === null && !state.error && <p className="org-threads-empty" aria-busy="true">Loading…</p>}
-      {groups && all !== null && <OrgThreadsByState groups={groups} flipped={groupFlips} onFlip={flipGroup} card={card} name={name} />}
+      {groups && all !== null && <OrgThreadsByState groups={groups} filter={filter} onFilter={setFilter} card={card} name={name} />}
       {!groups && (<>
       {all !== null && !open.length && (
         <p className="org-threads-empty" data-testid="org-threads-empty">
-          {hidden.length || snoozed.length || known.length
-            ? `Nothing for you now. ${hidden.length ? `${name} is on the ones below; each` : known.length ? 'Each one you know below' : 'Each snoozed one below'} comes back here when there is news.`
+          {hidden.length || snoozed.length
+            ? `Nothing for you now. ${hidden.length ? `${name} is on the ones below; each` : 'Each snoozed one below'} comes back here when there is news.`
             : `Nothing open. Each request you send ${name} becomes a thread here; asks about the same thing stay in one thread.`}
         </p>
       )}
       {!!open.length && <ul className="org-thread-list" data-testid="org-thread-list" data-show="open">{open.map(card)}</ul>}
-      {known.length > 0 && (
-        <button type="button" className="org-threads-closed-toggle" data-testid="org-threads-known" aria-expanded={showKnown} onClick={() => setShowKnown(!showKnown)}>
-          {known.length} known{showKnown ? ' ▾' : ' ▸'}
-        </button>
-      )}
-      {showKnown && known.length > 0 && <ul className="org-thread-list" data-testid="org-thread-list-known" data-show="known">{known.map(card)}</ul>}
       {snoozed.length > 0 && (
         <button type="button" className="org-threads-closed-toggle" data-testid="org-threads-snoozed" aria-expanded={showSnoozed} onClick={() => setShowSnoozed(!showSnoozed)}>
           {snoozed.length} snoozed{showSnoozed ? ' ▾' : ' ▸'}

@@ -100,8 +100,8 @@ final class OrgThreadFocusTests: XCTestCase {
             OrgThreadRevealModel.outcome(.init(threadId: id, at: t0), threads: threads, sections: sections, lastRead: read)
         }
         XCTAssertEqual(outcome("th-000001"), .show(nil))
-        XCTAssertEqual(outcome("th-000002"), .show(.inProgress))
-        XCTAssertEqual(outcome("th-000003"), .show(.snoozed))
+        XCTAssertEqual(outcome("th-000002"), .show(.working))
+        XCTAssertEqual(outcome("th-000003"), .show(.waiting))
         XCTAssertEqual(outcome("th-000004"), .show(.closed))
         XCTAssertEqual(outcome("th-999999"), .probe, "a thread the list does not hold is read by its id first")
         XCTAssertEqual(OrgThreadRevealModel.outcome(
@@ -169,7 +169,7 @@ final class OrgThreadFocusTests: XCTestCase {
             OrgThreadRevealModel.outcome(.init(threadId: id, at: t0), threads: threads, sections: sections, lastRead: read)
         }
         XCTAssertEqual(outcome("th-000001"), .show(nil), "the server shows it: a card")
-        XCTAssertEqual(outcome("th-000002"), .show(.inProgress), "the server does not: the fold it is listed in")
+        XCTAssertEqual(outcome("th-000002"), .show(.waiting), "the server does not: the fold it is listed in")
     }
 
     /// A read that answered with none of the threads the counts say are his (a copy that holds

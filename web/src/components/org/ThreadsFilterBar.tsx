@@ -1,30 +1,30 @@
 /**
- * The row of chips over a node's Threads by state (experiment brief_off, OrgThreadsByState): All and
- * each group that holds a thread, with its count. A click opens that group when it is folded and
- * brings it to the top (the phone's jump bar does the same). All goes back to the top.
+ * The row of chips over a node's Threads (experiment brief_off, OrgThreadsByState): All and every
+ * group (core/org/thread-groups.ts), always all of them, each with its count. A chip is a filter: a
+ * group's shows only that group's cards, All the groups it shows (ALL_SHOWS), counted as many.
  */
 import { THREAD_GROUP_LABELS, type ThreadGroup } from '@open-walnut/thread-groups';
 
-/** A chip's word: the group's own name, Waiting / snoozed shortened to fit the row. */
-const CHIP_LABEL: Record<ThreadGroup, string> = { ...THREAD_GROUP_LABELS, waiting: 'Waiting' };
+/** What the Threads show: one group, or all of them. */
+export type ThreadFilter = 'all' | ThreadGroup;
 
-export function ThreadsFilterBar({ counts, at, onJump }: {
+export function ThreadsFilterBar({ counts, all, at, onPick }: {
   /** Each group in the order drawn, with how many threads it holds. */
   counts: ReadonlyArray<{ group: ThreadGroup; n: number }>;
-  /** The chip last clicked (null: All). */
-  at: ThreadGroup | null;
-  onJump: (g: ThreadGroup | null) => void;
+  /** How many cards All shows. */
+  all: number;
+  /** The chip picked. */
+  at: ThreadFilter;
+  onPick: (f: ThreadFilter) => void;
 }) {
-  const shown = counts.filter((c) => c.n > 0);
-  const all = shown.reduce((sum, c) => sum + c.n, 0);
   return (
     <div className="org-threads-filter" data-testid="org-threads-filter" role="toolbar" aria-label="Thread groups">
-      <button type="button" className="org-threads-chip" data-testid="org-threads-chip" data-group="all" aria-pressed={at === null} onClick={() => onJump(null)}>
+      <button type="button" className="org-threads-chip" data-testid="org-threads-chip" data-group="all" aria-pressed={at === 'all'} onClick={() => onPick('all')}>
         All <span className="org-threads-chip-count">{all}</span>
       </button>
-      {shown.map(({ group, n }) => (
-        <button key={group} type="button" className="org-threads-chip" data-testid="org-threads-chip" data-group={group} aria-pressed={at === group} onClick={() => onJump(group)}>
-          {CHIP_LABEL[group]} <span className="org-threads-chip-count">{n}</span>
+      {counts.map(({ group, n }) => (
+        <button key={group} type="button" className="org-threads-chip" data-testid="org-threads-chip" data-group={group} aria-pressed={at === group} onClick={() => onPick(group)}>
+          {THREAD_GROUP_LABELS[group]} <span className="org-threads-chip-count">{n}</span>
         </button>
       ))}
     </div>

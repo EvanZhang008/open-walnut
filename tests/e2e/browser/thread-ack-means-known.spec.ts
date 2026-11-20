@@ -1,16 +1,15 @@
 /**
- * His Acknowledge means he knows (experiment ack_means_known, src/core/org/thread-ack.ts,
- * src/core/org/thread-known.ts, web/src/components/org/ThreadKnown.tsx, ThreadsFilterBar.tsx;
- * 2026-11-20, the user: "I ack, she sees it herself, nothing else, so it closes, right?").
+ * His Acknowledge sends a card where its work stands (experiment ack_means_known,
+ * src/core/org/thread-ack-outcome.ts, src/core/org/thread-ack.ts, web/src/components/org/ThreadKnown.tsx;
+ * 2026-11-20, the user: "if I ack and ai should determine if it should go to closed or wait or wip").
  *
- * With the Brief off (his Threads by state, experiment brief_off):
- *  1. The chips over the groups count each group; a click on Working opens it.
- *  2. Acknowledge on a lead's thread still at work (its task runs): the card moves to the Known
- *     group, open, reading Known, saying what it waits on (the task chip, what it is to finish) and
- *     how it ends; a Known chip counts it; it has no Acknowledge any more.
- *  3. Acknowledge on an answered card (the result is in), its task still open: it closes (Done).
- * With the Brief on (the list as before): the Known thread is in its own "1 known" section, open,
- * and its Close ends it.
+ * With the Brief off (his Threads in their groups, experiment brief_off):
+ *  1. The chips are All and the six groups, each counted; a click on Working shows only Working.
+ *  2. Acknowledge on a lead's thread whose task still works on its subject: the card goes to
+ *     Working at once, reading Working and what is still in work (the task chip, what it is to
+ *     finish); no Acknowledge or Close on it any more, and no group of its own.
+ *  3. Acknowledge on a result card whose task works on another subject: it closes (Closed).
+ * With the Brief on (the list as before): the held thread is in the quiet "in progress" list.
  * The fixture is shared: this file makes its own project and tasks, and puts the flags back.
  */
 import fs from 'node:fs'
@@ -32,7 +31,7 @@ test.use({ video: 'on', viewport: { width: 1280, height: 800 } })
 
 const rowKey = (project: string) => `project:${project.trim().toLowerCase()}`
 
-interface Thread { id: string; state: string; ackedAt?: string; closed?: { how: string; by: string } }
+interface Thread { id: string; state: string; ackedAt?: string; ackGroup?: string; closed?: { how: string; by: string } }
 
 async function post<T>(request: APIRequestContext, url: string, data: unknown, sid?: string): Promise<T> {
   const res = await request.post(url, { data, ...(sid ? { headers: { 'x-walnut-caller-sid': sid } } : {}) })
@@ -103,7 +102,8 @@ test.beforeAll(async ({ request }) => {
   test.setTimeout(150_000)
   const { fixtureRoot } = await discoverBrowserFixture(TEST_PORT)
   ids.running = await createTask(request, `Fix the oven timer ${STAMP}`, 'Swap the timer board and check it counts down to the second.')
-  ids.other = await createTask(request, `Order the rye flour ${STAMP}`)
+  // Another subject (no stamp in its title, so it shares no word with the result's card).
+  ids.other = await createTask(request, 'Paint the shop sign')
   // A project with two or more open teams gets a lead (org_contact).
   ids.lead = (await post<{ task: { id: string } }>(request, '/api/v1/org/contact', { to: PROJECT })).task.id
   made.push(ids.lead)
@@ -111,7 +111,7 @@ test.beforeAll(async ({ request }) => {
   await expect.poll(async () => (ids.leadSid = (await (await request.get(`/api/tasks/${ids.lead}`)).json()).task?.session_id ?? ''), { timeout: 90_000 }).not.toBe('')
   await flags(request, { ack_means_known: true, brief_off: true })
   ids.work = await leadThread(request, `Oven timer ${STAMP}`, ids.running, 'working')
-  ids.result = await leadThread(request, `Oven test results ${STAMP}`, ids.running, 'answered')
+  ids.result = await leadThread(request, `Oven test results ${STAMP}`, ids.other, 'answered')
 })
 
 test.afterAll(async ({ request }) => {
@@ -119,79 +119,74 @@ test.afterAll(async ({ request }) => {
   for (const id of made) await removeTask(request, id)
 })
 
-test('Acknowledge: a thread still at work is Known and says what it waits on; a result closes', async ({ page, request }) => {
+test('Acknowledge: a thread still at work on its subject goes to Working; a result closes', async ({ page, request }) => {
   const pageErrors: string[] = []
   page.on('pageerror', (err) => pageErrors.push(err.message))
   await openLead(page)
   await expect(page.getByTestId('org-thread-groups')).toBeVisible({ timeout: 20_000 })
   await expect(card(page, 'read', ids.result)).toBeVisible({ timeout: 20_000 })
 
-  // 1. The chips count the groups; Working is folded until its chip is clicked.
-  await expect(chip(page, 'all')).toBeVisible()
-  await expect(chip(page, 'read')).toContainText('To read')
-  await expect(chip(page, 'known')).toHaveCount(0)
-  await expect(group(page, 'working')).toHaveAttribute('data-open', 'false')
+  // 1. All and the six groups; a click on Working shows only Working.
+  await expect(page.getByTestId('org-threads-chip')).toHaveText([/^All \d+$/, /^Needs you \d+$/, /^Done \d+$/, /^Working \d+$/, /^Waiting \/ Snoozed \d+$/, /^Closed \d+$/, /^Archived \d+$/])
+  await expect(chip(page, 'read')).toContainText('Done 1')
   await chip(page, 'working').click()
-  await expect(group(page, 'working')).toHaveAttribute('data-open', 'true')
   await expect(chip(page, 'working')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('section[data-testid="org-thread-group"]')).toHaveCount(1)
   await expect(card(page, 'working', ids.work)).toBeVisible()
-  await shot(page, '1-working-open')
+  await expect(page.locator(`[data-testid="org-thread"][data-thread-id="${ids.result}"]`)).toHaveCount(0)
+  await shot(page, '1-working')
 
-  // 2. Its task still runs: Acknowledge moves it to Known, open, saying what it waits on.
+  // 2. Its task is still open on its subject: Acknowledge sends it where that task stands, Working
+  // (the task works) or Waiting / Snoozed (a task nobody started waits), saying what holds it.
   await card(page, 'working', ids.work).getByTestId('org-thread-ack').click()
-  const known = card(page, 'known', ids.work)
-  await expect(known).toBeVisible({ timeout: 15_000 })
-  await expect(group(page, 'known')).toHaveAttribute('data-open', 'true')
-  await expect(group(page, 'known').getByTestId('org-thread-group-head')).toContainText('Known')
-  await expect(chip(page, 'known')).toContainText('Known 1')
-  await expect(known).toHaveAttribute('data-state', 'known')
-  await expect(known.getByTestId('org-thread-state')).toHaveText('Known')
-  await expect(known.getByTestId('org-thread-time')).toContainText('You acknowledged')
-  const wait = known.getByTestId('org-thread-known-wait')
+  await expect.poll(async () => (await threadOf(request, ids.work))?.ackGroup ?? '', { timeout: 15_000 }).toMatch(/^(working|waiting)$/)
+  const where = (await threadOf(request, ids.work))!.ackGroup as 'working' | 'waiting'
+  await chip(page, 'all').click()
+  const held = card(page, where, ids.work)
+  await expect(held.getByTestId('org-thread-known')).toBeVisible({ timeout: 15_000 })
+  await expect(held).toHaveAttribute('data-acked-at-work', 'true')
+  await expect(held.getByTestId('org-thread-state')).toHaveText(where === 'working' ? 'Working' : 'Waiting / Snoozed')
+  await expect(held.getByTestId('org-thread-time')).toContainText('You acknowledged')
+  const wait = held.getByTestId('org-thread-known-wait')
   await expect(wait).toHaveAttribute('data-task-id', ids.running)
-  await expect(wait).toContainText(`Waiting on Fix the oven timer ${STAMP} to finish:`)
-  await expect(known.getByTestId('org-thread-known-what')).toHaveText('Swap the timer board and check it counts down to the second.')
-  await expect(known.getByTestId('org-thread-known-ends')).toHaveText('When it ends: it comes back to To read only if there is something new for you; otherwise it closes. Your phone does not buzz.')
-  // Acknowledged already: Close in its place.
-  await expect(known.getByTestId('org-thread-ack')).toHaveCount(0)
-  await expect(known.getByTestId('org-thread-close-known')).toBeVisible()
-  await expect(group(page, 'working').locator(`[data-thread-id="${ids.work}"]`)).toHaveCount(0)
+  await expect(wait).toContainText(`${where === 'working' ? 'Still in work: ' : 'Waiting on '}Fix the oven timer ${STAMP}`)
+  await expect(held.getByTestId('org-thread-known-what')).toHaveText('Swap the timer board and check it counts down to the second.')
+  await expect(held).not.toContainText('You know it')
+  // Acknowledged already: no second button.
+  await expect(held.getByTestId('org-thread-ack')).toHaveCount(0)
+  await expect(held.getByTestId('org-thread-close-known')).toHaveCount(0)
   const kept = await threadOf(request, ids.work)
   expect(kept?.state).toBe('pending')
   expect(kept?.closed).toBeUndefined()
   expect(kept?.ackedAt).toBeTruthy()
-  await chip(page, 'known').click()
-  await expect(chip(page, 'known')).toHaveAttribute('aria-pressed', 'true')
-  await shot(page, '2-known')
+  await shot(page, '2-held-working')
 
-  // 3. The result is on the card, its task still open: Acknowledge closes it.
+  // 3. The result is on the card and its task works on another subject: Acknowledge closes it.
+  await chip(page, 'read').click()
   await card(page, 'read', ids.result).getByTestId('org-thread-ack').click()
-  await expect(page.locator(`[data-testid="org-thread"][data-thread-id="${ids.result}"]:not([data-state="closed"])`)).toHaveCount(0, { timeout: 15_000 })
+  await expect(page.locator(`[data-testid="org-thread"][data-thread-id="${ids.result}"]`)).toHaveCount(0, { timeout: 15_000 })
   await expect.poll(async () => (await threadOf(request, ids.result))?.closed).toMatchObject({ how: 'acked', by: 'human' })
   expect((await threadOf(request, ids.result))?.ackedAt).toBeUndefined()
-  await expect(group(page, 'done').getByTestId('org-thread-group-count')).not.toHaveText('0')
-  // The Known one is still there.
-  await expect(card(page, 'known', ids.work)).toBeVisible()
+  await chip(page, 'done').click()
+  await expect(card(page, 'done', ids.result).getByTestId('org-thread-state')).toHaveText('Closed')
+  await expect(card(page, 'done', ids.result).getByTestId('org-thread-closed')).toContainText('Closed')
   await shot(page, '3-result-closed')
+  await chip(page, 'all').click()
   expect(pageErrors).toEqual([])
 })
 
-test('with the Brief on, the Known thread has its own section, open', async ({ page, request }) => {
+test('with the Brief on, the held thread is in the quiet in-progress list, saying what is in work', async ({ page, request }) => {
   await flags(request, { brief_off: false })
   const pageErrors: string[] = []
   page.on('pageerror', (err) => pageErrors.push(err.message))
   await openLead(page)
-  const toggle = page.getByTestId('org-threads-known')
-  await expect(toggle).toHaveText(/1 known/, { timeout: 20_000 })
-  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
-  const known = page.locator(`ul[data-show="known"] [data-testid="org-thread"][data-thread-id="${ids.work}"]`)
-  await expect(known).toBeVisible()
-  await expect(known.getByTestId('org-thread-known-wait')).toContainText(`Fix the oven timer ${STAMP}`)
-  await expect(page.locator(`ul[data-show="hidden"] [data-thread-id="${ids.work}"]`)).toHaveCount(0)
-  await shot(page, '4-brief-on-known')
-  // Close: it ends now, closed by him.
-  await known.getByTestId('org-thread-close-known').click()
-  await expect(page.locator(`ul[data-show="known"] [data-thread-id="${ids.work}"]`)).toHaveCount(0, { timeout: 15_000 })
-  await expect.poll(async () => (await threadOf(request, ids.work))?.closed).toMatchObject({ how: 'acked', by: 'human' })
+  const toggle = page.getByTestId('org-threads-hidden')
+  await expect(toggle).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByTestId('org-threads-known')).toHaveCount(0)
+  await toggle.click()
+  const held = page.locator(`ul[data-show="hidden"] [data-testid="org-thread"][data-thread-id="${ids.work}"]`)
+  await expect(held).toBeVisible()
+  await expect(held.getByTestId('org-thread-known-wait')).toContainText(`Fix the oven timer ${STAMP}`)
+  await shot(page, '4-brief-on-held')
   expect(pageErrors).toEqual([])
 })

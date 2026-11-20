@@ -21,7 +21,7 @@ final class OrgThreadsStore {
     private(set) var loading = false
     /// When a Follow up of his went out, per thread: the card says so at once, whatever the reload shows.
     private(set) var followUpSentAt: [String: Date] = [:]
-    /// Where the last action moved its thread ("Moved to In progress"), shown for a moment.
+    /// Where the last action moved its thread ("Moved to Working"), shown for a moment.
     struct Notice: Equatable { let text: String; let id = UUID() }
     var notice: Notice?
     /// The last read that finished (its start, and whether it failed): a thread asked for after

@@ -23,7 +23,7 @@ struct OrgThreadsView: View {
 
     private var focusThreadId: String? { focus?.threadId }
 
-    // Snoozed and In progress stay as he left them, per node (the web keeps a view per node);
+    // Working, Waiting / Snoozed and Archived stay as he left them, per node (the web keeps a view per node);
     // Closed is history, so every visit starts with it folded.
     @AppStorage("org.threads.openFolds", store: AppPrefs.defaults) private var openFolds = ""
     @State private var showClosed = false
@@ -66,14 +66,9 @@ struct OrgThreadsView: View {
         )
     }
 
-    private var showSnoozed: Bool { isOpen("snoozed") }
-    /// Known is open by default (he must be able to find what he acknowledged): what is kept is his fold.
-    private var showKnown: Bool { !isOpen("knownFolded") }
-    private var knownBinding: Binding<Bool> {
-        let folded = foldBinding("knownFolded")
-        return Binding(get: { !folded.wrappedValue }, set: { folded.wrappedValue = !$0 })
-    }
-    private var showInProgress: Bool { isOpen("inProgress") }
+    private var showWorking: Bool { isOpen("working") }
+    private var showWaiting: Bool { isOpen("waiting") }
+    private var showArchived: Bool { isOpen("archived") }
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { ctx in
@@ -136,26 +131,29 @@ struct OrgThreadsView: View {
                     ForEach(sections.open) { t in
                         card(t, shared: shared, now: now, snoozed: false).id(t.id)
                     }
-                    fold("\(sections.known.count) known", count: sections.known.count, open: knownBinding, id: "known")
-                    if showKnown {
-                        ForEach(sections.known) { t in card(t, shared: shared, now: now, snoozed: false).id(t.id) }
+                    fold("\(sections.working.count) working", count: sections.working.count, open: foldBinding("working"), id: "working")
+                    if showWorking {
+                        ForEach(sections.working) { t in card(t, shared: shared, now: now, snoozed: false, compact: true).id(t.id) }
                     }
-                    fold("\(sections.snoozed.count) snoozed", count: sections.snoozed.count, open: foldBinding("snoozed"), id: "snoozed")
-                    if showSnoozed {
+                    // Waiting / Snoozed: one group, the waiting ones first, then the snoozed ones.
+                    let waitingCount = sections.waiting.count + sections.snoozed.count
+                    fold("\(waitingCount) waiting / snoozed", count: waitingCount, open: foldBinding("waiting"), id: "waiting")
+                    if showWaiting {
+                        ForEach(sections.waiting) { t in card(t, shared: shared, now: now, snoozed: false, compact: true).id(t.id) }
                         ForEach(sections.snoozed) { t in card(t, shared: shared, now: now, snoozed: true, compact: true).id(t.id) }
                     }
-                    fold("\(sections.inProgress.count) in progress, nothing for you", count: sections.inProgress.count, open: foldBinding("inProgress"), id: "inProgress")
-                    if showInProgress {
-                        ForEach(sections.inProgress) { t in card(t, shared: shared, now: now, snoozed: false, compact: true).id(t.id) }
-                    }
-                    // The count of them all; the fold lists the newest the read brought.
-                    let closedCount = max(store.closedCount ?? 0, sections.closed.count)
-                    fold(OrgThreadModel.closedFoldLabel(count: closedCount, closed: sections.closed, now: now),
-                         count: sections.closed.count, open: foldBinding("closed"), id: "closed")
+                    fold("\(sections.closed.count) closed", count: sections.closed.count, open: foldBinding("closed"), id: "closed")
                     if showClosed {
                         ForEach(sections.closed) { t in card(t, shared: shared, now: now, snoozed: false, compact: true).id(t.id) }
-                        if closedCount > sections.closed.count {
-                            Text("The newest \(sections.closed.count) are here; all \(closedCount) are on the web.")
+                    }
+                    // Archived: the server's count of every closed one but Closed's; the fold lists the newest the read brought.
+                    let archivedCount = archivedTotal(sections)
+                    // Counted as the jump bar counts it, so a jump to Archived always lands on this row.
+                    fold("\(archivedCount) archived", count: archivedCount, open: foldBinding("archived"), id: "archived")
+                    if showArchived {
+                        ForEach(sections.archived) { t in card(t, shared: shared, now: now, snoozed: false, compact: true).id(t.id) }
+                        if archivedCount > sections.archived.count {
+                            Text("The newest \(sections.archived.count) are here; all \(archivedCount) are on the web.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -408,10 +406,10 @@ struct OrgThreadsView: View {
             missingShown = false
             uncheckedShown = false
             switch fold {
-            case .known: knownBinding.wrappedValue = true
-            case .snoozed: foldBinding("snoozed").wrappedValue = true
-            case .inProgress: foldBinding("inProgress").wrappedValue = true
+            case .working: foldBinding("working").wrappedValue = true
+            case .waiting: foldBinding("waiting").wrappedValue = true
             case .closed: showClosed = true
+            case .archived: foldBinding("archived").wrappedValue = true
             case nil: break
             }
             // Cards not in sight yet: the jump is instant and they show once it has landed.
@@ -476,17 +474,25 @@ struct OrgThreadsView: View {
         if scrolling { scrolling = false }
     }
 
-    /// The count of cards for him, and one tap to each fold below them (2026-11-04 review: a
-    /// dozen screens of cards before them).
+    /// Every closed thread the server counts but the ones under Closed: the Archived fold's number.
+    private func archivedTotal(_ s: OrgThreadModel.Sections) -> Int {
+        max((store.closedCount ?? 0) - s.closed.count, s.archived.count)
+    }
+
+    /// The count of cards for him (Needs you and Done), and one tap to each fold below them, in the
+    /// groups' own words (2026-11-04 review: a dozen screens of cards before them).
     private func jumps(_ s: OrgThreadModel.Sections, proxy: ScrollViewProxy) -> some View {
+        typealias G = OrgThreadModel.Group
         let items: [(id: String, label: String, count: Int, open: Binding<Bool>)] = [
-            ("known", "Known", s.known.count, knownBinding),
-            ("snoozed", "Snoozed", s.snoozed.count, foldBinding("snoozed")),
-            ("inProgress", "In progress", s.inProgress.count, foldBinding("inProgress")),
-            ("closed", "Closed", max(store.closedCount ?? 0, s.closed.count), foldBinding("closed")),
+            ("working", G.working.label, s.working.count, foldBinding("working")),
+            ("waiting", G.waiting.label, s.waiting.count + s.snoozed.count, foldBinding("waiting")),
+            ("closed", G.done.label, s.closed.count, foldBinding("closed")),
+            ("archived", G.archived.label, archivedTotal(s), foldBinding("archived")),
         ].filter { $0.count > 0 }
+        let needs = s.open.filter { $0.state == "needs" }.count
+        let done = s.open.filter { $0.state == "answered" }.count
         return HStack(spacing: 8) {
-            Text("\(s.open.count) for you")
+            Text("\(G.needs.label) \(needs) · \(G.read.label) \(done)")
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(.secondary)
             Spacer(minLength: 0)
@@ -563,7 +569,7 @@ struct OrgThreadsView: View {
     }
 
     private func emptyText(_ s: OrgThreadModel.Sections) -> some View {
-        let quiet = !s.inProgress.isEmpty || !s.snoozed.isEmpty || !s.known.isEmpty
+        let quiet = !s.working.isEmpty || !s.waiting.isEmpty || !s.snoozed.isEmpty
         return VStack(alignment: .leading, spacing: 6) {
             Text(quiet ? "Nothing for you now" : "No open threads")
                 .font(.headline)
@@ -623,6 +629,8 @@ struct OrgThreadCard: View {
     private var closed: Bool { t.closed != nil }
     private var pinned: Bool { OrgThreadModel.pinnedNow(t) }
     private var known: Bool { OrgThreadModel.isKnown(t) }
+    /// His view lists it (the server's `shown`): an answered one reads Done, else Waiting / Snoozed.
+    private var inView: Bool { OrgThreadModel.inView(t, shared: shared, now: now) }
 
     var body: some View {
         if compact && !expanded && !startsOpen {
@@ -635,7 +643,7 @@ struct OrgThreadCard: View {
     /// A folded row's second line: when a snoozed thread comes back, else its state and age.
     private var rowLine: String {
         if snoozed, let sn = t.snoozed { return "Snoozed until \(OrgThreadModel.backAt(sn.until, now: now))" }
-        return "\(OrgThreadModel.stateLabel(t)) · \(timeAgo)"
+        return "\(OrgThreadModel.stateLabel(t, inView: inView, now: now)) · \(timeAgo)"
     }
 
     private var compactRow: some View {
@@ -829,7 +837,7 @@ struct OrgThreadCard: View {
     }
 
     private var stateText: some View {
-        Text(OrgThreadModel.stateLabel(t))
+        Text(OrgThreadModel.stateLabel(t, inView: inView, now: now))
             .font(.caption.weight(.semibold))
             .foregroundStyle(t.state == "needs" && !closed ? Theme.needsText : .secondary)
     }
@@ -980,7 +988,7 @@ struct OrgThreadCard: View {
         optionButtons
         if let c = t.closed {
             HStack {
-                Text("\(c.how == "acked" ? "Acknowledged" : "Dropped")\(c.by == "human" ? "" : " by \(name)") \(WalnutTask.parseISO(c.at).map { RelativeTime.short(date: $0, relativeTo: now) } ?? "")")
+                Text("\(c.how == "acked" ? OrgThreadModel.Group.done.label : "Dropped")\(c.by == "human" ? "" : " by \(name)") \(WalnutTask.parseISO(c.at).map { RelativeTime.short(date: $0, relativeTo: now) } ?? "")")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -1028,14 +1036,8 @@ struct OrgThreadCard: View {
 
     @ViewBuilder
     private func actionButtons(fullWidth: Bool) -> some View {
-        if known {
-            // He already acknowledged it: Close ends it now, without hearing how its work ends
-            // (the server reads his second Acknowledge as that close).
-            Button { onEdit(.acknowledge) } label: { actionLabel("Close", fullWidth: fullWidth) }
-                .buttonStyle(.bordered)
-                .accessibilityHint("You will not hear when its work ends")
-                .accessibilityIdentifier("org.thread.closeKnown")
-        } else if !waitsOnHim {
+        // Acknowledged already: it went where its work stands (server thread-ack-outcome.ts), no second button.
+        if !known && !waitsOnHim {
             Button { onEdit(.acknowledge) } label: { actionLabel("Acknowledge", fullWidth: fullWidth) }
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.tint)

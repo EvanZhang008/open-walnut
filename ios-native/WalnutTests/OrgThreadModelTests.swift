@@ -51,7 +51,7 @@ final class OrgThreadModelTests: XCTestCase {
             XCTAssertFalse(OrgThreadModel.inView(after, shared: [], now: Self.now), state)
             let s = OrgThreadModel.sections([after], now: Self.now)
             XCTAssertTrue(s.open.isEmpty, state)
-            XCTAssertEqual(s.inProgress.map(\.id), ["f"], state)
+            XCTAssertEqual(s.working.map(\.id), ["f"], state)
         }
         // Pinned: he keeps it in sight whatever its state.
         var pinned = try t("p", extra: #","pinned":{"at":"2026-11-04T08:00:00Z"}"#)
@@ -134,7 +134,7 @@ final class OrgThreadModelTests: XCTestCase {
         let s = OrgThreadModel.sections(threads, now: Self.now)
         XCTAssertEqual(s.open.map(\.id), ["pin", "new", "old"])
         XCTAssertEqual(s.snoozed.map(\.id), ["zz"])
-        XCTAssertEqual(s.inProgress.map(\.id), ["busy"])
+        XCTAssertEqual(s.working.map(\.id), ["busy"])
         XCTAssertEqual(s.closed.map(\.id), ["done", "done2"])
         XCTAssertEqual(OrgThreadModel.shownAt(threads[6]), "2026-11-04T10:00:00Z")
         XCTAssertEqual(OrgThreadModel.shownAt(threads[1]), "2026-11-04T11:00:00Z")
@@ -217,12 +217,12 @@ final class OrgThreadModelTests: XCTestCase {
             try t("done", state: "answered", extra: #","closed":{"how":"acked","at":"2026-11-04T11:00:00Z","by":"human"}"#),
         ]
         XCTAssertNil(OrgThreadModel.movedNotice("open", threads: threads, now: Self.now))
-        XCTAssertEqual(OrgThreadModel.movedNotice("busy", threads: threads, now: Self.now), "Moved to In progress")
+        XCTAssertEqual(OrgThreadModel.movedNotice("busy", threads: threads, now: Self.now), "Moved to Working")
         XCTAssertEqual(OrgThreadModel.movedNotice("zz", threads: threads, now: Self.now)?.hasPrefix("Snoozed until "), true)
         // The toast and the snoozed row say the time the same way.
         let snoozedRow = threads.first { $0.id == "zz" }!.snoozed!
         XCTAssertEqual(OrgThreadModel.movedNotice("zz", threads: threads, now: Self.now), "Snoozed until \(OrgThreadModel.backAt(snoozedRow.until, now: Self.now))")
-        XCTAssertEqual(OrgThreadModel.movedNotice("done", threads: threads, now: Self.now), "Closed. It is under Closed this week")
+        XCTAssertEqual(OrgThreadModel.movedNotice("done", threads: threads, now: Self.now), "Closed. It is under Closed")
     }
 
     func testAPreviewCutAtAListMarkerEndsOnTheItemBefore() {
@@ -236,17 +236,22 @@ final class OrgThreadModelTests: XCTestCase {
         XCTAssertFalse(OrgThreadModel.isBareListMarker("- words"))
     }
 
-    /// Known (server core/org/thread-known.ts): he acknowledged it while its work ran. It has its
-    /// own section with what it waits on, reads "Known", and leaves it once he writes again.
-    func testAThreadHeAcknowledgedWhileItsWorkRanIsKnown() throws {
-        let known = try t("k", state: "pending", messages: answeredOnce, extra: #","shown":false,"ackedAt":"2026-11-04T09:30:00Z","awaits":{"tasks":[{"id":"t-oven","title":"Fix the oven timer","what":"Swap the timer board"}],"replies":false,"letter":false}"#)
+    /// Acknowledge is an action (server core/org/thread-ack-outcome.ts): a thread he acknowledged
+    /// while work on it was not over is drawn where the server says it stands (`ackGroup`), Working
+    /// or Waiting / Snoozed, never a group of its own, and it leaves that once he writes again.
+    func testAThreadHeAcknowledgedAtWorkGoesWhereItsWorkStands() throws {
+        let known = try t("k", state: "pending", messages: answeredOnce, extra: #","shown":false,"ackedAt":"2026-11-04T09:30:00Z","ackGroup":"working","awaits":{"tasks":[{"id":"t-oven","title":"Fix the oven timer","what":"Swap the timer board"}],"replies":false,"letter":false}"#)
+        let held = try t("h", state: "pending", messages: answeredOnce, extra: #","shown":false,"ackedAt":"2026-11-04T09:30:00Z","ackGroup":"waiting","awaits":{"tasks":[{"id":"t-mac","title":"Phone build","waitingOn":"a Mac simulator","until":"2026-11-05T09:00:00Z"}],"replies":false,"letter":false}"#)
         let busy = try t("busy", state: "pending", extra: #","shown":false"#)
-        let s = OrgThreadModel.sections([known, busy], now: Self.now)
-        XCTAssertEqual(s.known.map(\.id), ["k"])
-        XCTAssertEqual(s.inProgress.map(\.id), ["busy"])
-        XCTAssertEqual(OrgThreadModel.stateLabel(known), "Known")
+        let s = OrgThreadModel.sections([known, held, busy], now: Self.now)
+        XCTAssertEqual(s.working.map(\.id), ["k"])
+        XCTAssertEqual(Set(s.waiting.map(\.id)), ["h", "busy"])
+        XCTAssertEqual(OrgThreadModel.stateLabel(known, inView: false, now: Self.now), "Working")
+        XCTAssertEqual(OrgThreadModel.stateLabel(held, inView: false, now: Self.now), "Waiting / Snoozed")
         XCTAssertEqual(known.awaits?.tasks?.first?.what, "Swap the timer board")
-        XCTAssertEqual(OrgThreadModel.movedNotice("k", threads: [known], now: Self.now), "Moved to Known")
+        XCTAssertEqual(held.awaits?.tasks?.first?.waitingOn, "a Mac simulator")
+        XCTAssertEqual(OrgThreadModel.movedNotice("k", threads: [known], now: Self.now), "Moved to Working")
+        XCTAssertEqual(OrgThreadModel.movedNotice("h", threads: [held], now: Self.now), "Moved to Waiting / Snoozed")
         // He wrote after his ack: working again, not Known.
         let wrote = try t("w", state: "pending", messages: #"[{"id":"m2","at":"2026-11-04T10:00:00Z","text":"and the grill?","via":"follow-up"}]"#, extra: #","shown":false,"ackedAt":"2026-11-04T09:30:00Z""#)
         XCTAssertFalse(OrgThreadModel.isKnown(wrote))
@@ -262,7 +267,7 @@ final class OrgThreadModelTests: XCTestCase {
         let older = try t("th-000003", state: "needs")
         let s = OrgThreadModel.sections([answered, working, older], now: Self.now)
         XCTAssertEqual(Set(s.open.map(\.id)), ["th-000002", "th-000003"])
-        XCTAssertEqual(s.inProgress.map(\.id), ["th-000001"])
+        XCTAssertEqual(s.waiting.map(\.id), ["th-000001"])
         XCTAssertTrue(s.snoozed.isEmpty)
     }
 
@@ -326,5 +331,45 @@ final class OrgThreadModelTests: XCTestCase {
         XCTAssertFalse(OrgThreadModel.Sections().showsJumps(unreadable: false))
         let open = OrgThreadModel.sections([try t("th-000023", state: "needs")], now: Self.now)
         XCTAssertTrue(open.showsJumps(unreadable: true))
+    }
+
+    // MARK: - The groups (server core/org/thread-groups.ts), in the user's own words
+
+    /// The six groups the server draws by, with the words the web shows: never To read, Known,
+    /// Acknowledged or a Done that means closed.
+    func testTheGroupsAreTheServersSixInHisWords() {
+        XCTAssertEqual(OrgThreadModel.Group.allCases.map(\.rawValue), ["needs", "read", "working", "waiting", "done", "archived"])
+        XCTAssertEqual(OrgThreadModel.Group.allCases.map(\.label), ["Needs you", "Done", "Working", "Waiting / Snoozed", "Closed", "Archived"])
+    }
+
+    /// Every shape of thread is in exactly one group, and its card reads that group's word where the
+    /// group is its whole state (a result, a close, one held since his Acknowledge).
+    func testEveryThreadShapeIsInOneGroup() throws {
+        let closedNow = #","closed":{"how":"acked","at":"2026-11-04T11:00:00Z","by":"human"}"#
+        let closedOld = #","closed":{"how":"dropped","at":"2026-11-02T11:00:00Z","by":"human"}"#
+        let snooze = #","snoozed":{"until":"2026-11-06T09:00:00Z","at":"2026-11-04T11:00:00Z"}"#
+        let cases: [(OrgThread, Bool, OrgThreadModel.Group)] = [
+            (try t("a", state: "needs"), true, .needs),
+            (try t("b", state: "answered"), true, .read),
+            (try t("c", state: "answered"), false, .waiting),
+            (try t("d", state: "new"), false, .working),
+            (try t("e", state: "working"), false, .working),
+            (try t("f", state: "pending"), false, .waiting),
+            (try t("g", state: "needs", extra: snooze), false, .waiting),
+            (try t("h", state: "answered", extra: closedNow), false, .done),
+            (try t("i", state: "answered", extra: closedOld), false, .archived),
+            (try t("j", state: "pending", extra: #","ackedAt":"2026-11-04T09:30:00Z","ackGroup":"working""#), false, .working),
+            (try t("k", state: "pending", extra: #","ackedAt":"2026-11-04T09:30:00Z","ackGroup":"waiting""#), false, .waiting),
+            (try t("l", state: "pending", extra: #","ackedAt":"2026-11-04T09:30:00Z""#), false, .waiting),
+        ]
+        for (th, inView, want) in cases {
+            XCTAssertEqual(OrgThreadModel.group(th, inView: inView, now: Self.now), want, th.id)
+        }
+        XCTAssertEqual(OrgThreadModel.stateLabel(cases[1].0, inView: true, now: Self.now), "Done")
+        XCTAssertEqual(OrgThreadModel.stateLabel(cases[7].0, inView: false, now: Self.now), "Closed")
+        XCTAssertEqual(OrgThreadModel.stateLabel(cases[8].0, inView: false, now: Self.now), "Archived")
+        let s = OrgThreadModel.sections(cases.map(\.0), now: Self.now)
+        XCTAssertEqual(s.closed.map(\.id), ["h"])
+        XCTAssertEqual(s.archived.map(\.id), ["i"])
     }
 }

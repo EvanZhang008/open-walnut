@@ -12,17 +12,17 @@ import { mkTask, vm, withSession } from './kanban-card-fixtures';
 
 const idle: KanbanStatus = { text: 'Idle 3h', tone: 'amber', kind: 'idle', tooltip: '' };
 const turnEnded: KanbanStatus = { text: 'Turn ended', tone: 'green', kind: 'turn-ended', tooltip: '' };
-const thread = (state: 'needs' | 'read' | 'working' | 'waiting' | 'done') => ({ state, id: 'th-1', title: 'Pick the seed tray size' });
+const thread = (state: 'needs' | 'read' | 'working' | 'waiting') => ({ state, id: 'th-1', title: 'Pick the seed tray size' });
 
 describe('the chip from the task\'s threads', () => {
-  it('names the thread state and the thread, in the words his Threads use', () => {
+  it('names the thread state and the thread, in the words his Threads use (a result for him reads Done)', () => {
     expect(threadCardStatus(idle, thread('needs'))).toMatchObject({ text: 'Needs you: Pick the seed tray size', tone: 'red', kind: 'thread' });
-    expect(threadCardStatus(idle, thread('read'))).toMatchObject({ text: 'To read: Pick the seed tray size', tone: 'red', kind: 'to-read' });
+    expect(threadCardStatus(idle, thread('read'))).toMatchObject({ text: 'Done: Pick the seed tray size', tone: 'red', kind: 'to-read' });
     expect(threadCardStatus(idle, thread('working'))).toMatchObject({ text: 'Working: Pick the seed tray size', tone: 'green', kind: 'thread' });
-    expect(threadCardStatus(idle, thread('waiting'))).toMatchObject({ text: 'Waiting / snoozed: Pick the seed tray size', tone: 'grey' });
+    expect(threadCardStatus(idle, thread('waiting'))).toMatchObject({ text: 'Waiting / Snoozed: Pick the seed tray size', tone: 'grey' });
   });
 
-  it('the card\'s own facts stay, a thread never outranks its status, and a closed thread is no status', () => {
+  it('the card\'s own facts stay, and a thread never outranks its status', () => {
     for (const kind of ['question', 'plan', 'permission', 'error', 'handed-back', 'stuck', 'needs', 'running', 'worker-below', 'done', 'board-signal', 'waiting', 'waiting-until', 'stopped', 'still-open'] as const) {
       const own: KanbanStatus = { text: 'Own', tone: kind === 'running' ? 'green' : 'red', kind, tooltip: '' };
       expect(threadCardStatus(own, thread('needs')), kind).toBe(own);
@@ -30,7 +30,6 @@ describe('the chip from the task\'s threads', () => {
     // A waiting thread does not hide a card that moves (green), a working one replaces it.
     expect(threadCardStatus(turnEnded, thread('waiting'))).toBe(turnEnded);
     expect(threadCardStatus(turnEnded, thread('working')).kind).toBe('thread');
-    expect(threadCardStatus(idle, thread('done'))).toBe(idle);
     expect(threadCardStatus(idle, undefined)).toBe(idle);
   });
 

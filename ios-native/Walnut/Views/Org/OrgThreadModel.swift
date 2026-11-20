@@ -23,21 +23,23 @@ enum OrgThreadModel {
     struct Sections: Equatable {
         /// For him now: pinned first (newest pin on top), then newest change first.
         var open: [OrgThread] = []
-        /// Put aside, soonest back first.
+        /// Put aside, soonest back first (under Waiting / Snoozed).
         var snoozed: [OrgThread] = []
-        /// He acknowledged them while their work ran (`isKnown`): each says what it waits on.
-        var known: [OrgThread] = []
-        /// Open, but the node's move: nothing for him.
-        var inProgress: [OrgThread] = []
-        /// Closed this week.
+        /// Working: open, the node's move (new, working), or work on it still runs since his Acknowledge.
+        var working: [OrgThread] = []
+        /// Waiting / Snoozed, not snoozed: on someone or something or a time (pending, a result he read, held since his Acknowledge).
+        var waiting: [OrgThread] = []
+        /// Closed less than a day ago (`archiveAfter`).
         var closed: [OrgThread] = []
+        /// Closed a day ago or more: put away until he opens them.
+        var archived: [OrgThread] = []
 
         /// The jump bar stays while the page lists any thread, the last card for him gone included
         /// (r11 review: acknowledging the last one took the bar away with 159 closed below); not on
         /// a read that could not bring the threads its counts name (`unreadable`).
         func showsJumps(unreadable: Bool) -> Bool {
             if open.isEmpty && unreadable { return false }
-            return !open.isEmpty || !known.isEmpty || !snoozed.isEmpty || !inProgress.isEmpty || !closed.isEmpty
+            return !open.isEmpty || !working.isEmpty || !waiting.isEmpty || !snoozed.isEmpty || !closed.isEmpty || !archived.isEmpty
         }
     }
 
@@ -221,24 +223,56 @@ enum OrgThreadModel {
         s.open = pinned + shown.filter { !pinnedNow($0) }
         s.snoozed = threads.filter { !inView($0, shared: shared, now: now) && snoozedNow($0, now: now) }
             .sorted { ($0.snoozed?.until ?? "") < ($1.snoozed?.until ?? "") }
-        let waiting = threads.filter { $0.closed == nil && !snoozedNow($0, now: now) && !inView($0, shared: shared, now: now) }
-        s.known = waiting.filter(isKnown)
-        s.inProgress = waiting.filter { !isKnown($0) }
+        let rest = threads.filter { $0.closed == nil && !snoozedNow($0, now: now) && !inView($0, shared: shared, now: now) }
+        s.working = rest.filter { group($0, inView: false, now: now) == .working }
+        s.waiting = rest.filter { group($0, inView: false, now: now) != .working }
         // Newest close first, and a closed row's time is its close (`shownAt`), so the list reads in order.
-        s.closed = threads.filter { $0.closed != nil }.sorted { shownAt($0) > shownAt($1) }
+        let closed = threads.filter { $0.closed != nil }.sorted { shownAt($0) > shownAt($1) }
+        s.closed = closed.filter { !archivedNow($0, now: now) }
+        s.archived = closed.filter { archivedNow($0, now: now) }
         return s
     }
 
-    /// The Closed fold's label. The server keeps a closed thread a week, so the fold is "this
-    /// week"; a thread read by its id that closed earlier (a push for an old one) makes it just
-    /// "closed", so the fold never says this week of a thread closed a month ago.
-    static func closedFoldLabel(count: Int, closed: [OrgThread], now: Date) -> String {
-        let weekAgo = now.addingTimeInterval(-7 * 24 * 3600)
-        let older = closed.contains { t in
-            guard let at = t.closed.flatMap({ WalnutTask.parseISO($0.at) }) else { return false }
-            return at < weekAgo
+    // MARK: - Groups
+
+    /// The groups a thread is drawn in, in the user's own words (server `src/core/org/thread-groups.ts`
+    /// THREAD_GROUP_LABELS; 2026-11-20, the user: "No Need you, Done, waiting / snoozed, Acknowlegde,
+    /// closed, archived"; Acknowledge is an action that sends a card to one of them, not a group).
+    /// The raw values are the server's group ids.
+    enum Group: String, CaseIterable {
+        case needs, read, working, waiting, done, archived
+
+        var label: String {
+            switch self {
+            case .needs: return "Needs you"
+            case .read: return "Done"
+            case .working: return "Working"
+            case .waiting: return "Waiting / Snoozed"
+            case .done: return "Closed"
+            case .archived: return "Archived"
+            }
         }
-        return older ? "\(count) closed" : "\(count) closed this week"
+    }
+
+    /// A closed thread is Archived a day after it closed (server thread-groups.ts ARCHIVE_AFTER_MS).
+    static let archiveAfter: TimeInterval = 24 * 3600
+
+    static func archivedNow(_ t: OrgThread, now: Date) -> Bool {
+        guard let at = t.closed.flatMap({ WalnutTask.parseISO($0.at) }) else { return false }
+        return now.timeIntervalSince(at) >= archiveAfter
+    }
+
+    /// The group of one thread (server thread-groups.ts threadGroupOf); `inView`: his view lists it.
+    static func group(_ t: OrgThread, inView: Bool, now: Date) -> Group {
+        if archivedNow(t, now: now) { return .archived }
+        if t.closed != nil { return .done }
+        if snoozedNow(t, now: now) { return .waiting }
+        if t.state == "needs" { return .needs }
+        if t.state == "answered" { return inView ? .read : .waiting }
+        // Held since his Acknowledge: where the server says its work stands.
+        if isKnown(t) { return t.ackGroup == "working" ? .working : .waiting }
+        if t.state == "pending" { return .waiting }
+        return .working
     }
 
     /// Where a thread went after an action took it off the cards, said once at the top of the
@@ -251,9 +285,10 @@ enum OrgThreadModel {
             // The words the snoozed row and the card use, so one moment reads one way.
             return "Snoozed until \(backAt(sn.until, now: now))"
         }
-        if s.known.contains(where: { $0.id == id }) { return "Moved to Known" }
-        if s.inProgress.contains(where: { $0.id == id }) { return "Moved to In progress" }
-        if s.closed.contains(where: { $0.id == id }) { return "Closed. It is under Closed this week" }
+        if s.working.contains(where: { $0.id == id }) { return "Moved to \(Group.working.label)" }
+        if s.waiting.contains(where: { $0.id == id }) { return "Moved to \(Group.waiting.label)" }
+        if s.closed.contains(where: { $0.id == id }) { return "Closed. It is under \(Group.done.label)" }
+        if s.archived.contains(where: { $0.id == id }) { return "Closed. It is under \(Group.archived.label)" }
         return nil
     }
 
@@ -272,16 +307,14 @@ enum OrgThreadModel {
         return !t.messages.contains { $0.at > acked }
     }
 
-    static func stateLabel(_ t: OrgThread) -> String {
-        if let c = t.closed { return c.how == "acked" ? "Done" : "Dropped" }
-        if isKnown(t) { return "Known" }
+    /// An answered one, one he acknowledged at work and a closed one read their group's word, so a
+    /// closed card reads Closed, never Done (2026-11-20, the user: "why the done here means close").
+    static func stateLabel(_ t: OrgThread, inView: Bool = true, now: Date = Date()) -> String {
+        if t.closed != nil || t.state == "answered" || isKnown(t) { return group(t, inView: inView, now: now).label }
         switch t.state {
         case "new": return "New"
         case "working": return "Working"
         case "needs": return "Needs you"
-        // Answered and open waits for his look: "To read", never "Done" (Done is a thread he closed),
-        // with the one-card switch on; off, as before.
-        case "answered": return t.one_card == true ? "To read" : "Done"
         case "pending": return "Pending"
         default: return t.state.capitalized
         }

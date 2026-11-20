@@ -2,12 +2,12 @@
  * His Acknowledge means he knows (experiment ack_means_known, src/core/org/thread-ack.ts; 2026-11-20,
  * the user: "a human acknowledge means I now know the situation; the thread is truly closed only
  * when the problem is really solved"). The pure steps: what is still open on a thread, the ack that
- * keeps it pending and known, the node's close it allows, the lines the node hears, and each step
+ * keeps it pending and known (where it goes: thread-ack-outcome.ts), the node's close it allows, the lines the node hears, and each step
  * Walnut takes on a Known thread (thread-known.ts knownStep).
  */
 import { describe, it, expect } from 'vitest'
 import { emptyThreads, fileMessage, normalizeThreads, setAnswers, ThreadError, updateThread, type ThreadsFile } from '../../../src/core/org/threads-model.js'
-import { ackDoneLine, ackKnown, ackLine, ackWaitsOf } from '../../../src/core/org/thread-ack.js'
+import { ackDoneLine, ackKnown, ackLine, ackWaitsOf, type AckTask } from '../../../src/core/org/thread-ack.js'
 import { backFromKnown, isKnown, KNOWN_CLOSE_MS, knownStep } from '../../../src/core/org/thread-known.js'
 import { hasThreadNews, shownToHim, threadCounts } from '../../../src/core/org/thread-view.js'
 import { THREADS_PENDING_RULE } from '../../../src/core/org/thread-rules.js'
@@ -24,19 +24,24 @@ function running(state: 'working' | 'pending' | 'answered' = 'working'): { f: Th
   return { f, id }
 }
 
-describe('what is still open on a thread', () => {
-  it('a card that holds the result (answered) holds nothing, whatever is open on it', () => {
+/** The oven task as the store holds it, still at work unless told otherwise. */
+const oven = (over: Partial<AckTask> = {}): Map<string, AckTask> => new Map([['t-oven', { id: 't-oven', title: 'Oven timer', phase: 'IN_PROGRESS', ...over }]])
+
+describe('what still holds a thread at his Acknowledge', () => {
+  it('a card that holds the result (answered) closes unless a task it lists still works on its subject', () => {
     const t = running('answered').f.threads[0]
-    expect(ackWaitsOf(t, new Map([['t-oven', 'Oven timer']]))).toBeNull()
+    expect(ackWaitsOf(t, oven())).toEqual({ tasks: [{ id: 't-oven', title: 'Oven timer' }], replies: false, letter: false })
+    expect(ackWaitsOf(t, oven({ phase: 'NEED_ACTION' }))).toBeNull()
+    expect(ackWaitsOf(t, oven({ title: 'Paint the garden shed' }))).toBeNull()
   })
 
-  it('an open task it lists, by title; none open and nothing else is null', () => {
+  it('a task it lists on its subject, by title; none and nothing else is null', () => {
     const { f } = running()
     const t = f.threads[0]
-    expect(ackWaitsOf(t, new Map([['t-oven', 'Oven timer']]))).toEqual({ tasks: [{ id: 't-oven', title: 'Oven timer' }], replies: false, letter: false })
+    expect(ackWaitsOf(t, oven())).toEqual({ tasks: [{ id: 't-oven', title: 'Oven timer' }], replies: false, letter: false })
     expect(ackWaitsOf(t, new Map())).toBeNull()
     // A task open elsewhere that the thread does not list is not its work.
-    expect(ackWaitsOf(t, new Map([['t-other', 'Other']]))).toBeNull()
+    expect(ackWaitsOf(t, new Map([['t-other', { id: 't-other', title: 'Oven timer too', phase: 'IN_PROGRESS' }]]))).toBeNull()
   })
 
   it('his reply still on its way, or a live letter on it, is open work', () => {

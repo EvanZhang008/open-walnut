@@ -101,13 +101,14 @@ describe('the state groups of his Threads (brief_off)', () => {
     thread({ id: 'th-done', state: 'answered', closed: { how: 'acked', at: at(4), by: 'human' } as never }),
   ]
 
-  it('puts each thread in one group: needs, read, working, waiting, done', () => {
+  it('puts each thread in one group: Needs you, Done (read), Working, Waiting / Snoozed, Closed (done), Archived', () => {
     const g = groupThreads(all, NOW)
     expect(g.needs.map((t) => t.id)).toEqual([choiceThreadId('task-lead', 'plant-when')])
     expect(g.read.map((t) => t.id)).toEqual(['th-read'])
     expect(g.working.map((t) => t.id)).toEqual(['th-work'])
     expect(g.waiting.map((t) => t.id).sort()).toEqual(['th-pend', 'th-seen', 'th-snooze'])
     expect(g.done.map((t) => t.id)).toEqual(['th-done'])
+    expect(g.archived).toEqual([])
     expect(Object.values(g).flat()).toHaveLength(all.length)
   })
 

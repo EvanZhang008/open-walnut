@@ -5,11 +5,11 @@
  * OrgThreadsByState.tsx, ThreadChoiceAnswer.tsx).
  *
  *  1. The lead's side bar has Threads and Tasks, no Brief tab.
- *  2. Threads read grouped by state: Needs you (open) holds the Board choice's card with its two
- *     options, the recommended one marked; To read (open) holds the lead's answered thread; Working
- *     (folded) holds the one it took on and opens on a click.
+ *  2. Threads read in their groups under All: Needs you holds the Board choice's card with its two
+ *     options, the recommended one marked; Done holds the lead's answered thread (its result); Working
+ *     holds the one it took on.
  *  3. He clicks an option: the card leaves Needs you, the Board reads the choice answered, and
- *     the thread is under Done.
+ *     the thread is under Closed.
  * The fixture is shared: this file makes its own project and tasks, and puts the flag back.
  */
 import fs from 'node:fs'
@@ -115,10 +115,10 @@ test('a lead\'s Org page: no Brief tab, its Threads by state, and the Board\'s c
   await expect(page.getByTestId('org-top-task')).toBeVisible()
   await expect(page.getByTestId('org-top-brief')).toHaveCount(0)
 
-  // 2. Grouped by state: Needs you open with the choice's card, Working folded.
+  // 2. In their groups under All: Needs you with the choice's card, Done, Working.
   await expect(page.getByTestId('org-thread-groups')).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByTestId('org-thread-groups')).toHaveAttribute('data-filter', 'all')
   const needs = group(page, 'needs')
-  await expect(needs).toHaveAttribute('data-open', 'true')
   await expect(needs.getByTestId('org-thread-group-head')).toContainText('Needs you')
   const card = needs.locator(`[data-testid="org-thread"][data-thread-id="${ids.choiceThread}"]`)
   await expect(card).toBeVisible({ timeout: 20_000 })
@@ -131,25 +131,25 @@ test('a lead\'s Org page: no Brief tab, its Threads by state, and the Board\'s c
   await expect(answer.locator('[data-testid="org-answer-option"][data-value="later"]')).toHaveClass(/btn-primary/)
   await expect(answer.locator('[data-testid="org-answer-option"][data-value="now"]')).toHaveText('This week')
   await expect(card.getByTestId('org-thread-ack')).toHaveCount(0)
-  // To read, open: the lead's answered thread.
+  // Done: the lead's answered thread, its result waiting on the card.
   const read = group(page, 'read')
-  await expect(read).toHaveAttribute('data-open', 'true')
+  await expect(read.getByTestId('org-thread-group-head')).toContainText('Done')
   await expect(read.getByTestId('org-thread-title')).toHaveText(READ_TITLE)
+  await expect(read.getByTestId('org-thread-state')).toHaveText('Done')
   const working = group(page, 'working')
-  await expect(working).toHaveAttribute('data-open', 'false')
   await expect(working.getByTestId('org-thread-group-count')).toHaveText('1')
-  await working.getByTestId('org-thread-group-head').click()
   await expect(working.getByTestId('org-thread-title')).toHaveText(WORKING_TITLE)
   await shot(page, '1-groups')
 
-  // 3. He picks one: the Board's choice is answered and the thread is Done.
+  // 3. He picks one: the Board's choice is answered and the thread is Closed.
   await answer.locator('[data-testid="org-answer-option"][data-value="later"]').click()
   await expect(needs.locator(`[data-thread-id="${ids.choiceThread}"]`)).toHaveCount(0, { timeout: 20_000 })
   await expect.poll(async () => ((await (await request.get(`/api/v1/tasks/${ids.lead}/board`)).json()) as { choices?: Record<string, { option: string }> }).choices?.['plant-when']?.option ?? '', { timeout: 15_000 }).toBe('later')
   const done = group(page, 'done')
   await expect(done.getByTestId('org-thread-group-count')).toHaveText('1', { timeout: 15_000 })
-  await done.getByTestId('org-thread-group-head').click()
+  await expect(done.getByTestId('org-thread-group-head')).toContainText('Closed')
   await expect(done.locator(`[data-thread-id="${ids.choiceThread}"]`)).toBeVisible()
+  await expect(done.locator(`[data-thread-id="${ids.choiceThread}"]`).getByTestId('org-thread-state')).toHaveText('Closed')
   await shot(page, '2-answered')
   expect(pageErrors).toEqual([])
 })

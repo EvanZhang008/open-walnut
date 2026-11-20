@@ -54,11 +54,14 @@ struct OrgThread: Codable, Equatable, Identifiable {
     /// A choice he taps while it waits on him (additive, 2026-11-20): the one shape of a choice
     /// (the server's core/ask-options.ts). A tap is his answer in words, the label.
     struct Option: Codable, Equatable, Identifiable { let id: String; let label: String; var detail: String? = nil; var recommended: Bool? = nil }
-    /// What a Known thread still waits on (additive, 2026-11-20; server core/org/thread-ack.ts
-    /// withAwaits): its open tasks (`what`: what each is to finish), his reply still on its way,
-    /// a decision letter still open. Empty once its work ended.
+    /// What holds a thread he acknowledged (additive, 2026-11-20; server core/org/thread-ack.ts
+    /// withAwaits): the tasks still working or waiting on its subject (`what`: what each is to
+    /// finish; a waiting one's `waitingOn` and `until`), his reply still on its way, a decision
+    /// letter still open. Empty once nothing holds it.
     struct Awaits: Codable, Equatable {
-        struct Waiting: Codable, Equatable, Identifiable { let id: String; let title: String; var what: String? = nil }
+        struct Waiting: Codable, Equatable, Identifiable {
+            let id: String; let title: String; var what: String? = nil; var waitingOn: String? = nil; var until: String? = nil
+        }
         var tasks: [Waiting]? = nil
         var replies: Bool? = nil
         var letter: Bool? = nil
@@ -94,12 +97,15 @@ struct OrgThread: Codable, Equatable, Identifiable {
     /// While it is in needs: the choices he taps, 2 to 5. Absent from an older server.
     var options: [Option]? = nil
     /// The server's one-card switch (threads_one_card) is on: its choices are buttons, it has no
-    /// Acknowledge while it waits on him, and open and answered it reads To read. Absent: off.
+    /// Acknowledge while it waits on him, and open and answered it reads Done. Absent: off.
     var one_card: Bool? = nil
-    /// He acknowledged it while its work still ran: Known while it stays pending (additive,
-    /// experiment ack_means_known; server core/org/thread-known.ts). `ackDone`: when its work ended.
+    /// He acknowledged it while work on it was not over: held while it stays pending (additive,
+    /// experiment ack_means_known; server core/org/thread-known.ts). `ackDone`: when nothing held it.
     var ackedAt: String? = nil
     var ackDone: String? = nil
+    /// Where such a thread stands now (server core/org/thread-ack-outcome.ts): "working", "waiting",
+    /// or "closed" (over; the server closes it shortly). Absent: an older server, read as waiting.
+    var ackGroup: String? = nil
     var awaits: Awaits? = nil
 }
 
