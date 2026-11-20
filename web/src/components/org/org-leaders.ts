@@ -14,6 +14,7 @@
 import type { Task } from '@open-walnut/core';
 import { directorsOf, orgDisplayTitle, projectKey, type OrgDirector, type OrgTaskNode } from '@open-walnut/org-tree';
 import { resolveTaskSessionId } from '@/utils/session-status';
+import { stateWord, type UserState } from '@open-walnut/user-status';
 import { stateTab, type OrgStateTab } from './org-task-tabs';
 import type { VpCard, VpProject } from './org-chart-model';
 import type { ChannelRow } from './org-channels-model';
@@ -22,6 +23,8 @@ export interface LeaderNode {
   id: string;
   title: string;
   state: OrgStateTab;
+  /** Its state in one word for a row that names it ("Not started", "Waiting", "Working"...). */
+  stateText: string;
   /** How many open tasks report to it directly. */
   leads: number;
   /** On the user's Watching list (Task.watched_at): it wears the eye, wherever else it shows. */
@@ -47,6 +50,14 @@ export const sourcesOf = (projects: readonly VpProject[]): LeaderSource[] =>
   projects.map((p) => ({ key: p.key, project: p.project, name: p.name, teams: p.row.node?.teams ?? [] }));
 
 /** A Director as the Org page draws it: its title as the UI shows it, its state and its eye. */
+/** One word for a Director's state where its row names it: "Not started" for a task never started,
+ *  else the state's own word ("Waiting" or "Snoozed", never the tab's "Waiting / snoozed"). */
+function stateTextOf(task: Task | undefined): string {
+  if (!task) return stateWord('waiting');
+  if (task.phase === 'TODO' && !resolveTaskSessionId(task)) return 'Not started';
+  return stateWord(stateTab(task) as UserState, !!task.user_status?.snoozed);
+}
+
 function leaderOf(d: OrgDirector, byId: ReadonlyMap<string, Task>): LeaderNode {
   const task = byId.get(d.id);
   return {
@@ -54,6 +65,7 @@ function leaderOf(d: OrgDirector, byId: ReadonlyMap<string, Task>): LeaderNode {
     title: task ? orgDisplayTitle(task) : d.title,
     // The tree is built from these same tasks; one missing reads as waiting.
     state: task ? stateTab(task) : 'waiting',
+    stateText: stateTextOf(task),
     leads: d.leads,
     watched: !!task?.watched_at,
     ...(task && resolveTaskSessionId(task) ? { sessionId: resolveTaskSessionId(task)! } : {}),

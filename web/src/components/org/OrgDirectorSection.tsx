@@ -11,7 +11,6 @@
  * key handler (OrgChannelList), as they walk a fold's.
  */
 import { useEffect, useState, type MouseEvent } from 'react';
-import { USER_STATE_LABELS } from '@open-walnut/user-status';
 import { ContextMenu, useContextMenu } from '@/components/common/ContextMenu';
 import { initials, rowAvatarColor, type ChannelRow } from './org-channels-model';
 import { TAB_DOT } from './org-task-tabs';
@@ -49,7 +48,7 @@ export function OrgDirectorSection({ vps, groupsOf, projectsOf, query, openTaskI
       <div className="org-list-section" role="presentation" data-testid="org-directors-head">{DIRECTORS_SECTION_LABEL} · {rows.length}</div>
       {rows.map(({ director: d, vp }) => {
         const vpName = vp.vpName ?? vp.name;
-        const state = USER_STATE_LABELS[d.state];
+        const state = d.stateText;
         const open = openTaskIds?.has(d.id);
         return (
           <div key={d.id} className="org-channel-wrap" role="presentation">
