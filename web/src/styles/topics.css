@@ -115,7 +115,7 @@
 }
 .topic-mention:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
 .topic-mention:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.topic-mention .topic-avatar { flex: none; }
+.topic-mention .topic-avatar, .topic-mention-mail { flex: none; user-select: none; -webkit-user-select: none; }
 .topic-mention-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topic-mention.is-left { opacity: 0.6; }
 /* A person reached by email: a small envelope after the name. */
