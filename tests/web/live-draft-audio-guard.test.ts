@@ -92,6 +92,8 @@ describe('ratchet: Web Audio taps of the mic', () => {
     // comes 2 s in), and a tick that was decoding when the stop came uploads nothing.
     const tick = hook.slice(hook.indexOf('const draftTick = async'), hook.indexOf('draftTimerRef.current = setInterval(draftTick'));
     expect(tick).toMatch(/recorder\.requestData\(\)/);
+    // Until the first words show, each new chunk drafts at once.
+    expect(hook).toMatch(/addEventListener\('dataavailable', \(\) => \{\s*if \(!draftOnChunk && lastDraftRef\.current\) return;/);
     expect(tick).toMatch(/await liveDraftSource\(\);\s*(\/\/[^\n]*\n\s*)*if \(recorderStopped\(\)\) return;/);
     // Every WAV convertToWav hands out passes the repair...
     const convert = readFileSync(join(ROOT, 'src/core/stt/audio-convert.ts'), 'utf8');

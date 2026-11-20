@@ -934,9 +934,12 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
       // WebKit hands the recorder's first chunk over only 2 s in, then one a
       // second (2026-11-20, measured: 2002 ms): a tick that finds no audio yet
       // asks the recorder for what it has and drafts the moment it arrives.
+      // Until the first words show, every new chunk drafts at once too: a take
+      // that starts with a pause (or whose repeat is still being read) would
+      // otherwise wait a whole interval for its next try.
       let draftOnChunk = false;
       recorder.addEventListener('dataavailable', () => {
-        if (!draftOnChunk) return;
+        if (!draftOnChunk && lastDraftRef.current) return;
         draftOnChunk = false;
         void draftTick();
       });
