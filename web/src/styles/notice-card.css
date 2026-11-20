@@ -121,6 +121,7 @@ button.wn-notice-open:focus-visible { outline: 2px solid var(--accent); outline-
 .wn-notice-status[data-tone='ask'] { color: var(--accent-text, var(--accent)); }
 
 .wn-notice-line {
+  min-width: 0;
   font-size: 13px;
   line-height: 18px;
   color: var(--fg-secondary);
@@ -152,7 +153,9 @@ button.wn-notice-open:focus-visible { outline: 2px solid var(--accent); outline-
 }
 .wn-notice-x:hover { background: var(--bg-hover); color: var(--fg); }
 
-/* A notice's own content: under the words, past the 22px avatar and its 10px gap. */
+/* A notice's own content: under the words, past the 22px avatar and its 10px gap, close under
+   the preview (the head keeps a little of its padding over it). */
+.wn-notice-head:has(+ .wn-notice-body) { padding-bottom: 4px; }
 .wn-notice-body { padding: 0 12px 10px 44px; min-width: 0; }
 .wn-notice-body.is-flush { padding-left: 12px; }
 

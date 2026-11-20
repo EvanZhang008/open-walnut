@@ -7,7 +7,8 @@
  * raised the way the server raises them (a `notification:new` frame on the socket) and checked:
  *   - each is a NoticeCard in the stack at the bottom left beside the rail, frosted glass, the same
  *     hairline on all four sides, a 14px radius, an avatar, a bold title and a status dot;
- *   - several stack upward, newest nearest the corner;
+ *   - several stack upward, newest nearest the corner, and an error keeps its place in sight
+ *     while plain news folds onto the "N more" card;
  *   - an error stays at least 15 s, never the 6 s it had;
  *   - a click on an ask's words opens the session it came from.
  * NOTICE_SHOTS=<dir> saves a screenshot per step; PROOF_VIDEO_DIR=<dir> records the proof video.
@@ -37,10 +38,10 @@ async function shot(page: Page, name: string): Promise<void> {
 
 /** The records as his Walnut wrote them (feed of 2026-11-20), each with its own key for this run. */
 const DISK = {
-  kind: 'operation-error', severity: 'error', audience: 'user',
-  title: 'Disk space low',
-  body: 'Free space on the disk that holds Walnut\'s data. Walnut frees what it can rebuild by itself; the rest needs you.',
-  dedupKey: `err:disk-${NONCE}`, timestamp: Date.now(),
+  kind: 'operation-error', severity: 'error', audience: 'user', needsYou: 'disk-full', category: 'Data & Sync',
+  recoveryKey: 'health:disk.free', title: 'Disk space low',
+  body: 'Free space on the disk that holds Walnut\'s data. Walnut frees what it can rebuild first. 3 of 3 periods crossed < 30 GB Walnut tried: ran the task-directory sweep: 0 directories removed, 0.0 GB freed',
+  dedupKey: `error:health:disk.free-${NONCE}`, timestamp: Date.now(),
 }
 const ASK = {
   kind: 'permission', severity: 'warning', title: 'mcp__walnut__mail_read', body: 'Needs permission approval',
@@ -70,6 +71,8 @@ async function stubQuick(page: Page): Promise<void> {
     const lines = [
       { type: 'sent', taskId: 'pw-vp-walnut', sessionId: 's-1', started: false, messageId: 'm-1' },
       { type: 'delivered' },
+      { type: 'text', delta: 'On it. ' },
+      { type: 'result', text: 'On it: every notice is one card now, at the bottom left.' },
     ]
     // Delivered, then the reply a moment later, as a real turn comes back.
     await r.fulfill({ status: 200, contentType: 'application/x-ndjson', body: lines.map((l) => JSON.stringify(l)).join('\n') + '\n' })
@@ -121,9 +124,11 @@ test('the notices he sees every day are one card at the bottom left; a click on 
   await video.hold(1_500)
   await shot(page, '2-ask')
 
-  await video.caption('A reminder: they stack upward, the newest nearest the corner')
+  await video.caption('A reminder: the error keeps its place, the reminder waits on the "1 more" card')
   await injectEvent(page, 'notification:new', REMINDER)
-  await expect(stack(page).locator('.notification-toast', { hasText: 'Break over' })).toBeVisible({ timeout: 10_000 })
+  // Two toasts fit beside an ask: the error stays in sight, the newer plain notice folds.
+  if (!BEFORE) await expect(stack(page).getByTestId('notification-toaster-more')).toBeVisible({ timeout: 10_000 })
+  else await page.waitForTimeout(1_000)
   await video.hold(1_500)
   await shot(page, '3-three')
 
@@ -148,10 +153,11 @@ test('the notices he sees every day are one card at the bottom left; a click on 
     })
     expect(place.fromRail).toBe(16)
     expect(place.bottomGap).toBeGreaterThanOrEqual(16)
-    // Newest nearest the corner: the reminder sits under the older error.
+    // Newest nearest the corner: the ask sits under the older error.
+    await expect(disk).toBeVisible()
     const order = await stack(page).locator('.notification-toast').evaluateAll((els) => els.map((e) => [e.textContent ?? '', e.getBoundingClientRect().top] as const))
     const top = (t: string) => order.find(([text]) => text.includes(t))?.[1] ?? -1
-    expect(top('Break over')).toBeGreaterThan(top('Disk space low'))
+    expect(top('mail_read')).toBeGreaterThan(top('Disk space low'))
 
     // The error stays 15 s at least (its kind's own 6 s is too short to read it).
     // About 12 s after it came: past the old 6 s, before its 15 s.

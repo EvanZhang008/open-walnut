@@ -36,7 +36,7 @@ const GLASS_OVERLAYS: Record<string, string> = {
   'cal-cal-list': 'the new-event form\'s calendar picker',
   'cal-day-flyout': 'the new-event form\'s mini month (date picker)',
   'qb-center': 'the quick bar over the page (Control-Option-Command-Space): one line of words, read as you speak',
-  'qb-receipt': 'the quick bar\'s receipt cards in the top right corner after a send',
+  'wn-notice': 'every notice card (common/NoticeCard.tsx): drawn into the corner stack, a child of <body>; a card inside a panel is `solid` and carries no glass',
 };
 /** The tint floor: the raised surface's share of the glass. */
 const GLASS_TINT_MIN = 84;
@@ -208,8 +208,9 @@ describe('the legible glass stays legible, and only where it is listed', () => {
     const out: { file: string; classes: string[] }[] = [];
     for (const file of files(WEB, '.tsx')) {
       const text = fs.readFileSync(file, 'utf8');
-      for (const m of text.matchAll(/className=(?:"([^"]+)"|\{`([^`]+)`\})/g)) {
-        const tokens = (m[1] ?? m[2]).replace(/\$\{[^}]*\}/g, ' ').split(/\s+/).filter(Boolean);
+      // A className attribute, a cx('...') list's first words (NoticeCard) or a DOM element's className.
+      for (const m of text.matchAll(/className=(?:"([^"]+)"|\{`([^`]+)`\})|\bcx\([^'`]*'([^']+)'|\.className = '([^']+)'/g)) {
+        const tokens = (m[1] ?? m[2] ?? m[3] ?? m[4]).replace(/\$\{[^}]*\}/g, ' ').split(/\s+/).filter(Boolean);
         if (tokens.some((t) => GLASS_CLASSES.includes(t))) out.push({ file: path.relative(WEB, file), classes: tokens });
       }
     }
@@ -223,7 +224,9 @@ describe('the legible glass stays legible, and only where it is listed', () => {
       const named = c.classes.filter((t) => GLASS_OVERLAYS[t]);
       if (!named.length) bad.push(`${c.file}: ${c.classes.join(' ')} (not in GLASS_OVERLAYS)`);
       const text = fs.readFileSync(path.join(WEB, c.file), 'utf8');
-      if (!/createPortal\([\s\S]*document\.body/.test(text)) bad.push(`${c.file}: ${c.classes.join(' ')} is not portalled to <body>`);
+      // The notice card is portalled by the corner stack it is drawn into (CornerSlot, appendToCornerStack).
+      const inStack = c.classes.includes('wn-notice') && c.file === path.join('components', 'common', 'NoticeCard.tsx');
+      if (!inStack && !/createPortal\([\s\S]*document\.body/.test(text)) bad.push(`${c.file}: ${c.classes.join(' ')} is not portalled to <body>`);
     }
     expect(bad).toEqual([]);
     const carried = new Set(found.flatMap((c) => c.classes));

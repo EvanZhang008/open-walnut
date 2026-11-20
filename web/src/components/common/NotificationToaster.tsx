@@ -51,7 +51,7 @@ import { isPhoneOverlayOpen, usePhoneOverlayDepth } from '@/hooks/usePhoneOverla
 import type { ImageAttachment } from '@/api/chat';
 import { CORNER_ORDER, CornerSlot, useCornerState } from './corner-stack';
 import { NoticeCard } from './NoticeCard';
-import { noticeSource, noticeStatus, noticeTarget } from '@/contexts/notifications/notice-face';
+import { keepInSight, noticeSource, noticeStatus, noticeTarget } from '@/contexts/notifications/notice-face';
 import { CopyCommandButton, NoticeDetailsToggle, NoticeWords, noticeCommands, prettyDetail, useCutOff, wholeTitle } from './NoticeText';
 import { pendingAt, useApprovals } from '@/components/approvals/approvals-store';
 import { sessionsWithPromptCard, usePromptCardsChanged } from '@/components/sessions/prompt-keys';
@@ -172,7 +172,7 @@ export function NotificationToaster() {
   const asking = (t: (typeof allToasts)[number]) => t.kind === 'permission' && !t.resolved;
   // Asks take at most MAX_ASK_TOASTS places (the rest fold into one line).
   const room = shownCount - Math.min(MAX_ASK_TOASTS, allToasts.filter(asking).length);
-  const kept = new Set(room > 0 ? allToasts.filter((t) => !asking(t)).slice(-room) : []);
+  const kept = keepInSight(allToasts.filter((t) => !asking(t)), room);
   // "N more ›" opens the notification center, which lists only what it keeps. A toast it does not
   // keep (an Undo after a column closed) is shown in place instead: the count unfolds the stack.
   const [unfolded, setUnfolded] = useState(false);

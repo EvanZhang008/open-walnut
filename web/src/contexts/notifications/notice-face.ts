@@ -61,3 +61,16 @@ export function noticeTarget(n: Pick<Notification, 'taskId' | 'sessionId'>): str
   if (n.sessionId) return `/sessions?id=${encodeURIComponent(n.sessionId)}`;
   return null;
 }
+
+/**
+ * Which toasts stay in sight when only `room` fit: an error first (it is never the one folded
+ * away while plain news stays up: 2026-11-20, an error must not be hidden), then the newest of
+ * the rest. Tested in tests/web/notice-face.test.ts.
+ */
+export function keepInSight<T extends { severity?: string }>(list: readonly T[], room: number): Set<T> {
+  if (room <= 0) return new Set();
+  const errors = list.filter((t) => t.severity === 'error').slice(-room);
+  const left = room - errors.length;
+  const rest = left > 0 ? list.filter((t) => t.severity !== 'error').slice(-left) : [];
+  return new Set([...errors, ...rest]);
+}

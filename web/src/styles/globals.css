@@ -32779,14 +32779,10 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 /* A question's "Other" box is the shared AnswerBox (styles/answer-box.css). */
 .answer-box .nfc-answer-input { font-size: 12px; }
 
-/* ── Answerable permission toast (top-right) ── */
-
-.nfc-perm-toast { max-width: 380px; }
-/* An ask toast is one width whatever it holds, so the stack stays one column and opening
-   the note box never widens it. */
-@media (min-width: 769px) {
-  .notification-toaster .nfc-perm-toast { width: 380px; box-sizing: border-box; }
-}
+/* ── Answerable permission toast (in the corner stack) ──
+   The stack's own width, like every card in it (corner-stack.css fixes that width, so opening
+   the note box never widens it). */
+.nfc-perm-toast { max-width: 100%; box-sizing: border-box; }
 
 .nfc-perm-context {
   font-size: 11px;
