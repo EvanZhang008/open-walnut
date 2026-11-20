@@ -108,7 +108,7 @@ function urlCarries(f: Found, idx: ReturnType<typeof indexUrls>): boolean {
 export function findMissingLinks(input: string): MissingLink[] {
   if (!input || !/\d/.test(input)) return []
   const raw = input.length > MAX_SCAN ? input.slice(0, MAX_SCAN) : input
-  const unfenced = raw.replace(FENCE_RE, spaces)
+  const unfenced = raw.replace(FENCE_RE, (m) => spaces(m))
   const urls: string[] = []
   const linked: Array<[number, number]> = []
   // Link texts first: an id inside one is linked whatever its URL says.
@@ -125,7 +125,7 @@ export function findMissingLinks(input: string): MissingLink[] {
   const urlSpans: Array<[number, number]> = []
   const text = unfenced
     .replace(URL_RE, (m, at: number) => { urls.push(m); urlSpans.push([at, at + m.length]); return spaces(m) })
-    .replace(TAG_RE, spaces)
+    .replace(TAG_RE, (m) => spaces(m))
   const refs = refsIn(text)
   if (!refs.length) return []
   const idx = indexUrls(urls)

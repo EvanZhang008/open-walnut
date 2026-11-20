@@ -29,6 +29,7 @@ import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { setSelfApiRoot } from '../../src/lib/self-api-root.js'
 import { GIT_TMP_GUARD_COMMAND } from '../../src/providers/git-tmp-guard-hook.js'
 import { SUBAGENT_WAIT_HOOK_COMMAND } from '../../src/providers/subagent-wait-hook.js'
+import { ASK_LINKS_HOOK_COMMAND } from '../../src/providers/ask-links-hook.js'
 import { APPROVALS_GUARD_COMMAND } from '../../src/providers/approvals-guard-hook.js'
 import { TMP_WRITE_NOTE_COMMAND } from '../../src/providers/tmp-write-note-hook.js'
 import { CLONE_IDENTITY_COMMAND } from '../../src/providers/clone-identity-hook.js'
@@ -101,7 +102,9 @@ const CODEX_GUARD = { matcher: 'Bash', hooks: [{ type: 'command', command: CODEX
 const STOP = { Stop: [{ hooks: [{ type: 'command', command: STOP_UNANSWERED_HOOK_COMMAND, timeout: 5 }] }] }
 // And the SubagentStop hook that keeps a background subagent waiting for its own commands (subagent-wait-hook.ts).
 const SUBAGENT_WAIT = { SubagentStop: [{ hooks: [{ type: 'command', command: SUBAGENT_WAIT_HOOK_COMMAND, timeout: 10 }] }] }
-const TOOL_HOOKS = { PreToolUse: [GUARD, APPROVALS_GUARD, CLONE_IDENTITY, DOLLAR_GUARD, KILL_GUARD, SOUND_GUARD, TYPECHECK_GUARD, CODEX_GUARD], PostToolUse: [WRITE_NOTE, CLONE_IDENTITY], ...STOP, ...SUBAGENT_WAIT }
+// And the note on a question to the user that names an id with no link (ask-links-hook.ts).
+const ASK_LINKS = { matcher: 'AskUserQuestion', hooks: [{ type: 'command', command: ASK_LINKS_HOOK_COMMAND, timeout: 5 }] }
+const TOOL_HOOKS = { PreToolUse: [GUARD, APPROVALS_GUARD, CLONE_IDENTITY, DOLLAR_GUARD, KILL_GUARD, SOUND_GUARD, TYPECHECK_GUARD, CODEX_GUARD, ASK_LINKS], PostToolUse: [WRITE_NOTE, CLONE_IDENTITY], ...STOP, ...SUBAGENT_WAIT }
 
 const SESSION_HOOKS = { ...COMPACT_HOOK, ...TOOL_HOOKS }
 
@@ -166,6 +169,7 @@ describe('local session spawn → launching server URL', () => {
     process.env.WALNUT_TYPECHECK_GUARD = '0'
     process.env.WALNUT_STOP_UNANSWERED = '0'
     process.env.WALNUT_SUBAGENT_WAIT = '0'
+    process.env.WALNUT_LINK_NOTE = '0'
     process.env.WALNUT_AUTO_ALLOW_OPS = '0'
     try {
       const args = await spawnArgs('t-hooks-off')
@@ -184,6 +188,7 @@ describe('local session spawn → launching server URL', () => {
       delete process.env.WALNUT_TYPECHECK_GUARD
       delete process.env.WALNUT_STOP_UNANSWERED
       delete process.env.WALNUT_SUBAGENT_WAIT
+      delete process.env.WALNUT_LINK_NOTE
     }
   })
 })

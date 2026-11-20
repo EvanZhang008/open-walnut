@@ -61,6 +61,7 @@ afterEach(() => {
   delete process.env.WALNUT_CLONE_IDENTITY
   delete process.env.WALNUT_STOP_UNANSWERED
   delete process.env.WALNUT_SUBAGENT_WAIT
+  delete process.env.WALNUT_LINK_NOTE
   delete process.env.WALNUT_SHELL_DOLLAR_GUARD
   delete process.env.WALNUT_PATTERN_KILL_GUARD
   delete process.env.WALNUT_SOUND_GUARD
@@ -75,7 +76,7 @@ interface Case {
   mode?: string
   model?: string
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
-  env: { WALNUT_CLAUDE_DEBUG?: string; WALNUT_COMPACT_OPEN_ITEMS?: string; WALNUT_TMP_GIT_GUARD?: string; WALNUT_APPROVALS_GUARD?: string; WALNUT_TMP_WRITE_NOTE?: string; WALNUT_CLONE_IDENTITY?: string; WALNUT_SHELL_DOLLAR_GUARD?: string; WALNUT_PATTERN_KILL_GUARD?: string; WALNUT_SOUND_GUARD?: string; WALNUT_CODEX_PROVIDER_GUARD?: string; WALNUT_TYPECHECK_GUARD?: string; WALNUT_STOP_UNANSWERED?: string; WALNUT_SUBAGENT_WAIT?: string }
+  env: { WALNUT_CLAUDE_DEBUG?: string; WALNUT_COMPACT_OPEN_ITEMS?: string; WALNUT_TMP_GIT_GUARD?: string; WALNUT_APPROVALS_GUARD?: string; WALNUT_TMP_WRITE_NOTE?: string; WALNUT_CLONE_IDENTITY?: string; WALNUT_SHELL_DOLLAR_GUARD?: string; WALNUT_PATTERN_KILL_GUARD?: string; WALNUT_SOUND_GUARD?: string; WALNUT_CODEX_PROVIDER_GUARD?: string; WALNUT_TYPECHECK_GUARD?: string; WALNUT_STOP_UNANSWERED?: string; WALNUT_SUBAGENT_WAIT?: string; WALNUT_LINK_NOTE?: string }
   streamPartial?: boolean
   permissionPrompt?: boolean
   bypassAllowed?: boolean
@@ -87,7 +88,7 @@ const CASES: Case[] = [
   { name: 'defaults: Auto model, the host default mode, debug and the compact hook on', sid: '11111111-2222-4333-8444-555555555551', env: {} },
   { name: 'plan, opus, low effort', sid: '11111111-2222-4333-8444-555555555552', mode: 'plan', model: 'opus', effort: 'low', env: {} },
   { name: 'haiku with an effort', sid: '11111111-2222-4333-8444-555555555553', model: 'haiku', effort: 'high', env: {} },
-  { name: 'debug off, compact hook, /tmp git guard, /tmp write note, clone identity, shell dollar guard, pattern kill guard, sound guard, codex provider guard, type check guard, stop reminder and subagent wait off (no --settings at all)', sid: '11111111-2222-4333-8444-555555555554', model: 'sonnet-1m', env: { WALNUT_CLAUDE_DEBUG: '0', WALNUT_COMPACT_OPEN_ITEMS: '0', WALNUT_TMP_GIT_GUARD: '0', WALNUT_APPROVALS_GUARD: '0', WALNUT_TMP_WRITE_NOTE: '0', WALNUT_CLONE_IDENTITY: '0', WALNUT_SHELL_DOLLAR_GUARD: '0', WALNUT_PATTERN_KILL_GUARD: '0', WALNUT_SOUND_GUARD: '0', WALNUT_CODEX_PROVIDER_GUARD: '0', WALNUT_TYPECHECK_GUARD: '0', WALNUT_STOP_UNANSWERED: '0', WALNUT_SUBAGENT_WAIT: '0' } },
+  { name: 'debug off, compact hook, /tmp git guard, /tmp write note, clone identity, shell dollar guard, pattern kill guard, sound guard, codex provider guard, type check guard, stop reminder, subagent wait and link note off (no --settings at all)', sid: '11111111-2222-4333-8444-555555555554', model: 'sonnet-1m', env: { WALNUT_CLAUDE_DEBUG: '0', WALNUT_COMPACT_OPEN_ITEMS: '0', WALNUT_TMP_GIT_GUARD: '0', WALNUT_APPROVALS_GUARD: '0', WALNUT_TMP_WRITE_NOTE: '0', WALNUT_CLONE_IDENTITY: '0', WALNUT_SHELL_DOLLAR_GUARD: '0', WALNUT_PATTERN_KILL_GUARD: '0', WALNUT_SOUND_GUARD: '0', WALNUT_CODEX_PROVIDER_GUARD: '0', WALNUT_TYPECHECK_GUARD: '0', WALNUT_STOP_UNANSWERED: '0', WALNUT_SUBAGENT_WAIT: '0', WALNUT_LINK_NOTE: '0' } },
   { name: 'the /tmp write note alone (compact hook and git guard off)', sid: '11111111-2222-4333-8444-55555555555b', env: { WALNUT_COMPACT_OPEN_ITEMS: '0', WALNUT_TMP_GIT_GUARD: '0' } },
   { name: 'the /tmp git guard alone (compact hook off)', sid: '11111111-2222-4333-8444-55555555555a', env: { WALNUT_COMPACT_OPEN_ITEMS: '0' } },
   { name: 'no partial messages, no permission prompt tool', sid: '11111111-2222-4333-8444-555555555555', env: {}, streamPartial: false, permissionPrompt: false },
@@ -132,6 +133,7 @@ describe('a filled template equals what claude-code-session.ts builds', () => {
       if (!('WALNUT_TYPECHECK_GUARD' in c.env)) delete process.env.WALNUT_TYPECHECK_GUARD
       if (!('WALNUT_STOP_UNANSWERED' in c.env)) delete process.env.WALNUT_STOP_UNANSWERED
       if (!('WALNUT_SUBAGENT_WAIT' in c.env)) delete process.env.WALNUT_SUBAGENT_WAIT
+      if (!('WALNUT_LINK_NOTE' in c.env)) delete process.env.WALNUT_LINK_NOTE
       const hs = createHostStart({ fs, path, dir, keyOf: () => 'k', now: () => 1, log: () => {}, busy: () => 0 })
       hs.setTemplate(HOME, pushed(buildHostSpawnTemplate({
         home: HOME, hostKey: 'marina', cwd: dir, env: { ...process.env },
@@ -165,7 +167,7 @@ describe('a filled template equals what claude-code-session.ts builds', () => {
       expect(payload.mode).toBe(filled.plan.mode)
 
       const settingsAt = built.indexOf('--settings')
-      if (c.env.WALNUT_COMPACT_OPEN_ITEMS === '0' && c.env.WALNUT_TMP_GIT_GUARD === '0' && c.env.WALNUT_APPROVALS_GUARD === '0' && c.env.WALNUT_TMP_WRITE_NOTE === '0' && c.env.WALNUT_CLONE_IDENTITY === '0' && c.env.WALNUT_SHELL_DOLLAR_GUARD === '0' && c.env.WALNUT_PATTERN_KILL_GUARD === '0' && c.env.WALNUT_SOUND_GUARD === '0' && c.env.WALNUT_TYPECHECK_GUARD === '0' && c.env.WALNUT_CODEX_PROVIDER_GUARD === '0' && c.env.WALNUT_STOP_UNANSWERED === '0' && c.env.WALNUT_SUBAGENT_WAIT === '0') {
+      if (c.env.WALNUT_COMPACT_OPEN_ITEMS === '0' && c.env.WALNUT_TMP_GIT_GUARD === '0' && c.env.WALNUT_APPROVALS_GUARD === '0' && c.env.WALNUT_TMP_WRITE_NOTE === '0' && c.env.WALNUT_CLONE_IDENTITY === '0' && c.env.WALNUT_SHELL_DOLLAR_GUARD === '0' && c.env.WALNUT_PATTERN_KILL_GUARD === '0' && c.env.WALNUT_SOUND_GUARD === '0' && c.env.WALNUT_TYPECHECK_GUARD === '0' && c.env.WALNUT_CODEX_PROVIDER_GUARD === '0' && c.env.WALNUT_STOP_UNANSWERED === '0' && c.env.WALNUT_SUBAGENT_WAIT === '0' && c.env.WALNUT_LINK_NOTE === '0') {
         expect(JSON.parse(built[settingsAt + 1]).permissions.allow).toContain('mcp__walnut__task_create')
       } else {
         const settings = JSON.parse(built[settingsAt + 1]) as { env?: unknown; hooks?: { SessionStart?: Array<{ matcher: string }>; PreToolUse?: Array<{ matcher: string }>; PostToolUse?: Array<{ matcher: string }> } }
@@ -174,6 +176,7 @@ describe('a filled template equals what claude-code-session.ts builds', () => {
           ...(c.env.WALNUT_TMP_GIT_GUARD === '0' ? [] : ['Bash']), ...(c.env.WALNUT_APPROVALS_GUARD === '0' ? [] : ['Bash|Write|Edit|MultiEdit|NotebookEdit']), ...(c.env.WALNUT_CLONE_IDENTITY === '0' ? [] : ['Bash']),
           ...(c.env.WALNUT_SHELL_DOLLAR_GUARD === '0' ? [] : ['Bash']), ...(c.env.WALNUT_PATTERN_KILL_GUARD === '0' ? [] : ['Bash']), ...(c.env.WALNUT_SOUND_GUARD === '0' ? [] : ['Bash']),
           ...(c.env.WALNUT_TYPECHECK_GUARD === '0' ? [] : ['Bash']), ...(c.env.WALNUT_CODEX_PROVIDER_GUARD === '0' ? [] : ['Bash']),
+          ...(c.env.WALNUT_LINK_NOTE === '0' ? [] : ['AskUserQuestion']),
         ])
         expect(settings.hooks?.PostToolUse?.map((g) => g.matcher)).toEqual([
           ...(c.env.WALNUT_TMP_WRITE_NOTE === '0' ? [] : ['Write|Bash']), ...(c.env.WALNUT_CLONE_IDENTITY === '0' ? [] : ['Bash']),
