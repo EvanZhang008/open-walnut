@@ -47,6 +47,9 @@ export async function answerLetterOnThread(input: {
 }): Promise<LetterFollowUp | null> {
   if (!input.text.trim() && !input.images?.length && !input.confirmOnly) return null;
   try {
+    // Only with threads_one_card on (one-card.ts): off, his words on the thread are a follow-up, as before.
+    const { oneCardOn } = await import('./one-card.js');
+    if (!(await oneCardOn())) return null;
     const { ambientAutomatedClient } = await import('../sessions/automated-client.js');
     if (ambientAutomatedClient()) return null;
     const { threadHolder } = await import('./threads-store.js');

@@ -9,11 +9,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const h = vi.hoisted(() => ({
   thread: null as null | Record<string, unknown>,
   follower: false,
+  oneCard: true,
   local: vi.fn(),
   leader: vi.fn(),
 }))
 
 vi.mock('../../../src/core/org/threads-store.js', () => ({ threadHolder: async () => (h.thread ? { node: 'task-1', thread: h.thread } : null) }))
+vi.mock('../../../src/core/org/one-card.js', () => ({ oneCardOn: async () => h.oneCard, oneCardNow: () => h.oneCard }))
 vi.mock('../../../src/core/server-role.js', () => ({ isFollower: () => h.follower }))
 vi.mock('../../../src/core/human-inbox/letter-ops.js', () => ({ humanReplyAndDeliver: h.local }))
 vi.mock('../../../src/web/routes/v1-control-relay.js', () => ({ callPrimaryControl: h.leader }))
@@ -27,6 +29,7 @@ const input = { taskId: 'task-1', threadId: 'th-aaaaaaaaaaaa', text: 'K', client
 beforeEach(() => {
   h.thread = waiting()
   h.follower = false
+  h.oneCard = true
   h.local.mockReset().mockResolvedValue({ delivery: { status: 'queued' } })
   h.leader.mockReset().mockResolvedValue({ ok: true, result: { delivery: { status: 'queued' } } })
 })
@@ -35,6 +38,13 @@ describe('his words on a letter thread', () => {
   it('answer the letter on the leader while it waits, checked again under its lock', async () => {
     expect(await answerLetterOnThread(input)).toMatchObject({ letterId: 'lt-1', delivery: { status: 'queued' } })
     expect(h.local).toHaveBeenCalledWith('lt-1', expect.objectContaining({ text: 'K', clientId: 'qm-one', whileWaiting: true }), expect.objectContaining({ answerBy: expect.any(Number) }))
+  })
+
+  it('with the one-card setting off (threads_one_card), never: his words stay a follow-up, as before', async () => {
+    h.oneCard = false
+    expect(await answerLetterOnThread(input)).toBeNull()
+    expect(h.local).not.toHaveBeenCalled()
+    expect(h.leader).not.toHaveBeenCalled()
   })
 
   it('never from a browser under automation', async () => {

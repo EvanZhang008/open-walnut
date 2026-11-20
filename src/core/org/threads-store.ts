@@ -9,6 +9,7 @@
  * Only the leader keeps them: the companion has no copy, so its reads are empty and its writes
  * refused, the way Board writes are.
  */
+import { oneCardOn } from './one-card.js';
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
 import { bus, EventNames } from '../event-bus.js';
 import type { OrgThreadsChangedEvent } from '../event-types.js';
@@ -232,6 +233,8 @@ async function refuseSameAskThread(taskId: string, text: string | undefined, by:
  * session record, never from the body); absent = an unknown writer (or the user, by 'human').
  */
 export async function openNodeThread(taskId: string, input: OpenThreadInput, by: ThreadWriter, source?: ThreadTextSource): Promise<OrgThread> {
+  // The needs_options check below reads the switch as it is now (one-card.ts).
+  await oneCardOn();
   if (!input.quiet_summary?.trim() && (input.state ?? 'needs') === 'needs') await refuseSameAskThread(taskId, input.title, by, input);
   const at = new Date().toISOString();
   const thread = await mutateThreads(taskId, (cur) => {
@@ -250,6 +253,7 @@ export async function openNodeThread(taskId: string, input: OpenThreadInput, by:
  * unless it still asks that decision (thread-task-ask.ts askOwnerKept).
  */
 export async function patchThread(taskId: string, id: string, patch: ThreadPatch, by: ThreadWriter, source?: ThreadTextSource): Promise<OrgThread> {
+  await oneCardOn();
   const { ask_owner: ownerId, ...rest } = patch;
   const at = new Date().toISOString();
   let owner: ThreadAskOwner | null | undefined;

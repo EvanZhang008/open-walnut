@@ -29,6 +29,7 @@ import { buildImageRefsPayload } from '@/api/image-upload';
 import type { ImageAttachment } from '@/api/chat';
 import { getLetterSnapshot, loadLetters, patchLetter, subscribeLetters } from '@/components/inbox/letter-store';
 import { useSessionSend } from '@/hooks/useSessionSend';
+import { useExperimental } from '@/hooks/useExperimental';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { log } from '@/utils/log';
 import { openLetterFor } from './org-answer-shape';
@@ -46,7 +47,8 @@ export type AnswerSettle = (failure?: AnswerFailure) => void;
  * to be unified ... it can always give an option"): an ask's options, a letter's actions, a Board
  * choice, a thread's options. The recommended one first, marked "Recommended" (a CSS mark on
  * data-recommended, so the label stays the button's text); a line of detail on hover. Its click is
- * the answer.
+ * the answer. With threads_one_card off (core/org/one-card.ts) the buttons read as before it: in
+ * their own order, the recommended one only highlighted.
  */
 export function AskOptions({ options, recommended, onPick, testId, disabled }: {
   options: ReadonlyArray<{ value: string; label: string; title?: string }>;
@@ -56,7 +58,8 @@ export function AskOptions({ options, recommended, onPick, testId, disabled }: {
   /** Its answer is on its way, or went: no second one. */
   disabled?: boolean;
 }) {
-  const ordered = recommended ? [...options.filter((o) => o.value === recommended), ...options.filter((o) => o.value !== recommended)] : options;
+  const oneCard = useExperimental('threads_one_card');
+  const ordered = oneCard && recommended ? [...options.filter((o) => o.value === recommended), ...options.filter((o) => o.value !== recommended)] : options;
   return (
     <div className="org-answer-options" data-testid={testId}>
       {ordered.map((o) => (
@@ -66,9 +69,9 @@ export function AskOptions({ options, recommended, onPick, testId, disabled }: {
           className={`btn btn-sm${o.value === recommended ? ' btn-primary' : ''}`}
           data-testid="org-answer-option"
           data-value={o.value}
-          {...(o.value === recommended ? { 'data-recommended': 'true' } : {})}
+          {...(oneCard && o.value === recommended ? { 'data-recommended': 'true' } : {})}
           {...(o.title || o.value === recommended ? { 'aria-description': o.title ?? 'Recommended' } : {})}
-          {...(o.title ? { title: o.title } : {})}
+          {...(oneCard && o.title ? { title: o.title } : {})}
           {...(disabled ? { disabled: true } : {})}
           onClick={() => onPick(o.value)}
         >{o.label}</button>
@@ -91,7 +94,9 @@ export function ThreadOptions({ thread, onAnswer }: {
   thread: { id: string; state: string; options?: ReadonlyArray<AskOption> };
   onAnswer: (label: string) => Promise<boolean>;
 }) {
-  const options = thread.state === 'needs' ? thread.options ?? [] : [];
+  // Buttons only with threads_one_card on (core/org/one-card.ts): off, a card as before it.
+  const oneCard = useExperimental('threads_one_card');
+  const options = oneCard && thread.state === 'needs' ? thread.options ?? [] : [];
   const sig = `${thread.id}:${options.map((o) => `${o.id}=${o.label}`).join('|')}`;
   const [busy, setBusy] = useState<string | null>(null);
   if (!options.length) return null;
@@ -143,6 +148,8 @@ interface FormProps {
 
 function LetterAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords: () => void }) {
   const snap = useSyncExternalStore(subscribeLetters, getLetterSnapshot, getLetterSnapshot);
+  // The letter's recommended option is marked only with threads_one_card on (core/org/one-card.ts).
+  const oneCard = useExperimental('threads_one_card');
   // The store follows new letters only while an inbox is on screen: read it now, and take the
   // line instead only when this read has no letter either (a held copy shows at once).
   const [fresh, setFresh] = useState(false);
@@ -185,7 +192,7 @@ function LetterAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords
       <AskOptions
         testId="org-answer-letter"
         options={letter.actions!.map((a) => ({ value: a.id, label: a.label, ...(a.description ? { title: a.description } : {}) }))}
-        {...(letter.actions!.find((a) => a.recommended) ? { recommended: letter.actions!.find((a) => a.recommended)!.id } : {})}
+        {...(oneCard && letter.actions!.find((a) => a.recommended) ? { recommended: letter.actions!.find((a) => a.recommended)!.id } : {})}
         onPick={pick}
       />
       <ReplyField placeholder="Reply…" onSend={replyWords} taskId={alert.taskId} draftKey={`draft:letter-reply:${letter.id}`} />

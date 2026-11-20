@@ -97,6 +97,8 @@ const TASK_DOT: Record<string, string> = {
 const STATE_LABEL: Record<OrgThreadState, string> = {
   new: 'New', working: USER_STATE_LABELS.working, needs: USER_STATE_LABELS.needs, answered: USER_STATE_LABELS.read, pending: 'Pending',
 };
+/** The word of a state: with threads_one_card off an open answered thread reads as before (core/org/one-card.ts). */
+const stateLabel = (state: OrgThreadState, oneCard: boolean): string => (state === 'answered' && !oneCard ? 'Done' : STATE_LABEL[state]);
 const STATE_DOT: Record<OrgThreadState, string> = {
   new: 'var(--accent, #0A84FF)', working: 'var(--success, #34C759)', needs: 'var(--error, #FF3B30)', answered: 'var(--fg-muted, #86868B)',
   pending: 'var(--fg-muted, #86868B)',
@@ -441,17 +443,19 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   const [unfolded, setUnfolded] = useState(false);
   const closed = !!t.closed;
   const pinned = pinnedNow(t);
+  // The one card (experiment threads_one_card, core/org/one-card.ts); off, the card as before it.
+  const oneCard = useExperimental('threads_one_card');
   // Its decision is asked in a task (core/org/thread-task-ask.ts): the card says where, not Needs you.
   const asked = !closed && !!t.askedIn;
   const letter = answersLetter(t);
   // It holds the task's own ask (core/org/thread-report-ask.ts): the card IS that ask, with its box.
-  const held = !closed && !asked ? t.heldAsk : undefined;
+  const held = oneCard && !closed && !asked ? t.heldAsk : undefined;
   // Any kind of item: the task's ask, a question or a prompt its session waits on (taskAskNow).
   const heldItem = held ? owner?.user_status?.actions?.find((i) => i.id === held.id && !i.snoozedUntil) : undefined;
   // It waits on him: the one ask card's answer row (its choices, the box, Snooze), never Acknowledge,
   // which is for a card that asks no choice (2026-11-20, the user: "Acknowledge is for when I do not
   // need to make any choice").
-  const needs = !closed && !asked && t.state === 'needs';
+  const needs = oneCard && !closed && !asked && t.state === 'needs';
   const card = useMemo(() => cardView(t, shared), [t, shared]);
   // It sat too long with nothing from the node: the card says so (core/org/thread-view.ts threadOverdue).
   const overdue = closed || snoozed ? null : overdueLine(t, name, now, (iso) => timeAgo(iso, { now }), threadDeadline(t, tasks, now));
@@ -475,7 +479,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
       <button type="button" className="org-thread-head" aria-expanded={open} aria-controls={`${t.id}-conversation`} data-testid="org-thread-head" onClick={() => setOpen(!open)}>
         <span className="org-thread-state" data-testid="org-thread-state">
           <i style={{ background: closed || asked ? 'var(--fg-muted, #86868B)' : STATE_DOT[t.state] }} />
-          {closed ? (t.movedTo ? 'Moved' : t.closed!.how === 'acked' ? 'Done' : 'Dropped') : asked ? (t.askedIn!.answered ? 'Done in a task' : 'Asked in a task') : STATE_LABEL[t.state]}
+          {closed ? (t.movedTo ? 'Moved' : t.closed!.how === 'acked' ? 'Done' : 'Dropped') : asked ? (t.askedIn!.answered ? 'Done in a task' : 'Asked in a task') : stateLabel(t.state, oneCard)}
         </span>
         <span className="org-thread-meta">
           {pinned && (<>
@@ -524,7 +528,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
         ))}
       {/* It holds a decision letter: the letter's buttons and box answer it, here and in the inbox at
           once, in the one ask card's row. */}
-      {letter && !heldItem && <AskCardFrame testId="org-thread-letter-card" className="org-thread-ask" answer={<ThreadLetterAnswer t={t} />} tools={<ThreadTools t={t} snoozed={snoozed} state={state} pinned={pinned} />} />}
+      {oneCard && letter && !heldItem && <AskCardFrame testId="org-thread-letter-card" className="org-thread-ask" answer={<ThreadLetterAnswer t={t} />} tools={<ThreadTools t={t} snoozed={snoozed} state={state} pinned={pinned} />} />}
       {needs && !heldItem && !letter && <NeedsAnswer t={t} owner={owner} onFollowUp={onFollowUp} snoozed={snoozed} state={state} pinned={pinned} />}
       {chips.length > 0 && <TaskChips ids={chips} tasks={tasks} />}
       {/* The card is its title and summary: the new answers fold behind one line until a click
@@ -557,10 +561,12 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
           {exchanges.map((x) => <Exchange key={x.messages[0]?.id ?? 'opener'} x={x} t={t} name={name} state={state} now={now} shared={x.messages.some((m) => shared.has(m.id))} />)}
         </ol>
       )}
+      {/* Off (threads_one_card): the letter's buttons and box below the conversation, as before. */}
+      {!oneCard && letter && <ThreadLetterAnswer t={t} />}
       {/* A card waiting on him answers in the ask card's row above (its own box and Snooze, or the
           held ask's): none of them twice, and no Acknowledge. */}
       {needs ? null : (<>
-        {onFollowUp && !closed ? (
+        {onFollowUp && !closed && !letter ? (
           <FollowUp threadId={t.id} title={t.title} owner={owner} onSend={(text, images) => onFollowUp(t.id, text, images)} />
         ) : null}
         <div className="org-thread-actions">
@@ -568,7 +574,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
             <span className="org-thread-closed" data-testid="org-thread-closed">{closedWords(t, now)}</span>
             <button type="button" className="btn btn-sm" data-testid="org-thread-reopen" onClick={() => void state.update(t.id, { reopen: true })}>Reopen</button>
           </>) : (<>
-            <button type="button" className="btn btn-sm btn-primary" data-testid="org-thread-ack" onClick={() => void state.update(t.id, { close: 'acked' })}>Acknowledge</button>
+            {!letter && <button type="button" className="btn btn-sm btn-primary" data-testid="org-thread-ack" onClick={() => void state.update(t.id, { close: 'acked' })}>Acknowledge</button>}
             <ThreadTools t={t} snoozed={snoozed} state={state} pinned={pinned} />
           </>)}
         </div>

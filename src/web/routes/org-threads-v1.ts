@@ -164,8 +164,12 @@ orgThreadsV1Router.get('/tasks/:id/threads', route(async (req, res) => {
   ]
   // Answers still missing are read from the node's chat meanwhile; a kept one says so (org-threads:changed).
   void resolveThreadAnswers(task.id)
+  // The phone reads the one-card switch off each thread (org/one-card.ts): its buttons, no
+  // Acknowledge while it waits on him, and To read. Additive; absent means off.
+  const { oneCardOn } = await import('../../core/org/one-card.js')
+  const oneCard = await oneCardOn()
   res.json({
-    task_id: task.id, title: task.title, threads: out,
+    task_id: task.id, title: task.title, threads: oneCard ? out.map((t) => ({ ...t, one_card: true })) : out,
     closed_count: file.threads.filter((t) => !!t.closed).length,
     shown_count: threadCounts([...all, ...below], now).shown,
   })

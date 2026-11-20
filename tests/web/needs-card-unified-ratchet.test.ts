@@ -43,7 +43,8 @@ const read = (rel: string): string => strip(readFileSync(join(ROOT, rel), 'utf8'
 /** The parts that answer something waiting on him: drawing one draws a needs-you item. */
 const ANSWER_PARTS = /<(OrgInlineAnswer|KanbanCardPrompt|AskOptions|ThreadOptions|ThreadLetterAnswer|ApprovalReply|PermissionRequestCard|PermissionAnswerButtons|PermissionAnswerForm)\b/;
 /** The one card. */
-const THE_CARD = /<(AskCardFrame|AskCard)\b/;
+/** The one card (OneCardFrame: the same card behind threads_one_card, core/org/one-card.ts). */
+const THE_CARD = /<(AskCardFrame|AskCard|OneCardFrame)\b/;
 
 /** Not a card of the Needs you set, each with why. Only shrinks. */
 const NOT_A_CARD: Record<string, string> = {

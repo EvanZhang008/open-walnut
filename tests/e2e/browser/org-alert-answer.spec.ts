@@ -19,11 +19,14 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome, seedColumns } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { openSection, showTasks, taskRow } from './org-view-helpers'
+import { restoreOneCard, setOneCard } from './one-card-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
 const PROJECT = `Org answers ${STAMP}`
 const made: string[] = []
+// Its cards are the one-card experiment's (threads_one_card): on for this spec, put back after it.
+let oneCardWas: boolean | null = null
 const ids = { lead: '', leadSid: '', q: '', qSid: '', letter: '', choice: '', open: '', words: '', wordsSid: '' }
 let cwd = ''
 
@@ -128,6 +131,7 @@ async function openAnswer(page: Page, id: string, shape: string) {
 test.describe.configure({ mode: 'serial' })
 
 test.beforeAll(async ({ request }) => {
+  oneCardWas = await setOneCard(request, true)
   const { fixtureRoot } = await discoverBrowserFixture(TEST_PORT)
   cwd = `${fixtureRoot}/projects/walnut`
   ids.q = await createTask(request, `Pick a stage ${STAMP}`)
@@ -171,6 +175,7 @@ test.beforeAll(async ({ request }) => {
 })
 
 test.afterAll(async ({ request }) => {
+  await restoreOneCard(request, oneCardWas)
   for (const id of made) {
     const task = (await (await request.get(`/api/tasks/${id}`)).json()).task as { session_id?: string } | undefined
     if (task?.session_id) await request.post(`/api/v1/sessions/${task.session_id}/terminate`, { data: { force: true } })

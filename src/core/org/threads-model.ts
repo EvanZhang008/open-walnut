@@ -54,6 +54,7 @@
 import { userKindVerdict } from './user-kind.js';
 import type { AskOption } from '../user-status.js';
 import { AskOptionsError, checkNeedsOptions, threadOptionsOf } from './thread-options.js';
+import { oneCardNow } from './one-card.js';
 import { storedOptions } from '../ask-options.js';
 import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
 import { PICTURE_TITLE_WORDS } from '../human-inbox/walnut-letters/receipt-words.js';
@@ -1279,9 +1280,9 @@ function optionsOf(raw: unknown): AskOption[] {
   }
 }
 
-/** An agent's needs write whose words list choices with no options is refused (thread-options.ts). */
+/** An agent's needs write whose words list choices with no options is refused (thread-options.ts), with threads_one_card on (one-card.ts). */
 function checkChoicesAsOptions(by: ThreadWriter, words: readonly (string | undefined)[], options: readonly AskOption[] | undefined): void {
-  if (by === 'human') return;
+  if (by === 'human' || !oneCardNow()) return;
   try { checkNeedsOptions(words, options); } catch (err) {
     if (err instanceof AskOptionsError) throw new ThreadError('needs_options', 409, err.message);
     throw err;

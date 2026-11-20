@@ -26,6 +26,7 @@ import { keepsThreads } from '../org/keeps-threads.js';
 import { sortedThreads, THREAD_TITLE_MAX, type OrgThread, type ThreadPatch, type ThreadsFile } from '../org/threads-model.js';
 import type { OwnThreadOpen, OwnThreadWrite } from '../org/threads-store.js';
 import { hasThreadNews, openNotWaiting } from '../org/thread-view.js';
+import { oneCardNow } from '../org/one-card.js';
 
 export type ThreadLineState = 'working' | 'waiting' | 'answered' | 'done';
 /** One FOR_USER_THREAD line, its ref resolved to the thread it names. */
@@ -59,9 +60,10 @@ export function threadQuestionBlock(open: readonly Pick<OrgThread, 'id' | 'title
   const words = langName ? ` (titles and progress in ${langName})` : '';
   const newLine = `A subject you now follow that no thread covers: FOR_USER_THREAD_NEW: <working | waiting> | <title> | <one line on where it stands> (at most ${THREAD_NEW_MAX}).`;
   const rule = 'What needs the user\'s decision stays on FOR_USER_ASK, never a thread line.';
-  const askLine = 'With a FOR_USER_ASK, the thread it is about: FOR_USER_ASK_THREAD: <ref>.';
+  // Its ask lives on a thread only with threads_one_card on (org/one-card.ts, thread-report-ask.ts).
+  const askLine = oneCardNow() ? ' With a FOR_USER_ASK, the thread it is about: FOR_USER_ASK_THREAD: <ref>.' : '';
   const block = listed.length
-    ? `\nThis task's open threads (one per subject the user follows here): ${listed.join('; ')}.\nOne line per thread: FOR_USER_THREAD: <ref> | <working | waiting | answered | done> | <one line on where it stands>${words}. ${newLine} ${rule} ${askLine}`
+    ? `\nThis task's open threads (one per subject the user follows here): ${listed.join('; ')}.\nOne line per thread: FOR_USER_THREAD: <ref> | <working | waiting | answered | done> | <one line on where it stands>${words}. ${newLine} ${rule}${askLine}`
     : `\n${newLine.replace(/\.$/, '')}${words}. ${rule}`;
   return { block, refs };
 }

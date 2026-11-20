@@ -9,7 +9,7 @@ import { ICON_NEW_TAB } from '@/components/common/Icons';
 import type { KanbanLeaderRowProps } from './kanban-contract';
 import { KanbanCardPrompt } from './KanbanCardPrompt';
 // The one ask card's frame (actions/AskCard.tsx): a prompt here reads as it does everywhere.
-import { AskCardFrame } from '@/components/actions/AskCard';
+import { OneCardFrame } from '@/components/actions/AskCard';
 import { leaderReason } from './KanbanRollup';
 import { useOpenTask } from '@/hooks/useOpenTask';
 
@@ -51,7 +51,7 @@ export function KanbanLeaderRow({ leader }: KanbanLeaderRowProps) {
       </div>
       {open && prompt && (
         <div className="kanban-card-prompt" onPointerDown={(e) => e.stopPropagation()}>
-          <AskCardFrame testId="kanban-card-ask" answer={<KanbanCardPrompt request={prompt} onAnswered={() => undefined} />} />
+          <OneCardFrame testId="kanban-card-ask"><KanbanCardPrompt request={prompt} onAnswered={() => undefined} /></OneCardFrame>
         </div>
       )}
     </div>

@@ -52,7 +52,10 @@ async function patch(request: APIRequestContext, url: string, data: unknown, sid
 async function setFlags(request: APIRequestContext, flags: Record<string, boolean>): Promise<void> {
   const cfg = await (await request.get('/api/config')).json() as { config?: { experimental?: Record<string, boolean> } }
   const now = { ...(cfg.config?.experimental ?? {}) }
-  if (flagsBefore === null) flagsBefore = { ...now }
+  // Each flag it sets, as it was (unset reads false): config writes merge, so putting back the
+  // whole map read before would leave a flag it turned on still on for the next spec.
+  flagsBefore ??= {}
+  for (const k of Object.keys(flags)) if (!(k in flagsBefore)) flagsBefore[k] = now[k] === true
   const res = await request.put('/api/config', { data: { experimental: { ...now, ...flags } } })
   expect(res.ok(), await res.text()).toBe(true)
 }

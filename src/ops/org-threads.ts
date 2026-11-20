@@ -34,7 +34,7 @@ const OPTION_ARG = z.object({
   detail: z.string().max(200).optional().describe('One line of what it leads to'),
   recommended: z.boolean().optional().describe('The one you recommend: put it first'),
 })
-const OPTIONS_WHY = `With state needs: the choices he picks from, 2 to ${ASK_OPTIONS_MAX}, the recommended one first; his click is his answer, filed in the thread. [] takes them off. Required when the summary lists choices (A:, B:, 1., 2.): Walnut refuses that write without them (409 needs_options)`
+const OPTIONS_WHY = `With state needs: the choices he picks from, 2 to ${ASK_OPTIONS_MAX}, the recommended one first; his click is his answer, filed in the thread. [] takes them off. With his one-card setting on (threads_one_card) they are his buttons, and required when the summary lists choices (A:, B:, 1., 2.): Walnut refuses that write without them (409 needs_options)`
 
 const TASK_ARG = z.string().min(1).optional().describe('Task id or unique prefix of Main, a lead or a task with Threads on; default: your own task')
 

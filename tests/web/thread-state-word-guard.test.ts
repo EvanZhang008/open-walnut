@@ -8,7 +8,9 @@
  * the task's ask waited for his answer above the chat ("there are werid thing happened ... one says
  * Done and the other waits for him"): an answered thread waits for his look and has not ended, so
  * its word became "To read", and a thread holding the task's ask reads Needs you
- * (src/core/org/thread-report-ask.ts).
+ * (src/core/org/thread-report-ask.ts). "To read" is the one-card experiment's (threads_one_card,
+ * src/core/experimental.ts): with it off, the answered state reads "Done" as before, and only
+ * through the one switch that names the setting (web stateLabel, iOS `one_card`).
  *
  * The class: every web and iOS source file that renders an org thread (it names the thread type
  * or its API), found from the source, so a new card, list or header joins by itself. A string
@@ -80,7 +82,18 @@ describe('Threads never show "Answered", and an open thread never "Done"', () =>
   it('the answered state reads To read on the web and on the phone', () => {
     expect(readFileSync(join(ROOT, 'web/src/components/org/OrgThreads.tsx'), 'utf8')).toMatch(/answered: USER_STATE_LABELS\.read/);
     expect(readFileSync(join(ROOT, 'src/core/user-status.ts'), 'utf8')).toMatch(/read: 'To read'/);
-    expect(readFileSync(join(ROOT, 'ios-native/Walnut/Views/Org/OrgThreadModel.swift'), 'utf8')).toMatch(/case "answered": return "To read"/);
+    expect(readFileSync(join(ROOT, 'ios-native/Walnut/Views/Org/OrgThreadModel.swift'), 'utf8')).toMatch(/case "answered": return t\.one_card == true \? "To read" : "Done"/);
+  });
+
+  it('with the one-card setting off, the answered state reads Done only through the switch that names it', () => {
+    const web = readFileSync(join(ROOT, 'web/src/components/org/OrgThreads.tsx'), 'utf8');
+    expect(web).toMatch(/const stateLabel = \(state: OrgThreadState, oneCard: boolean\): string => \(state === 'answered' && !oneCard \? 'Done' : STATE_LABEL\[state\]\)/);
+    expect(web).toMatch(/useExperimental\('threads_one_card'\)/);
+    // The header reads its state only through it: no bare STATE_LABEL[t.state] left.
+    expect(stripComments(web)).not.toMatch(/STATE_LABEL\[t\.state\]/);
+    // Every other "answered" label in a thread file is a ternary on one_card or none at all.
+    const swift = stripComments(readFileSync(join(ROOT, 'ios-native/Walnut/Views/Org/OrgThreadModel.swift'), 'utf8'));
+    expect([...swift.matchAll(/case "answered": return ([^\n]*)/g)].map((m) => m[1])).toEqual(['t.one_card == true ? "To read" : "Done"']);
   });
 
   it('the scans catch the old words (self-check)', () => {

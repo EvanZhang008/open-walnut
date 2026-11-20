@@ -25,10 +25,13 @@ import { loadHome, seedColumns } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { startProofVideo } from './proof-video'
 import { PHONE, setKeyboardInset } from './phone-helpers'
+import { restoreOneCard, setOneCard } from './one-card-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
 const made: string[] = []
+// Its cards are the one-card experiment's (threads_one_card): on for this spec, put back after it.
+let oneCardWas: boolean | null = null
 const ids = { task: '', sid: '', thread: '' }
 const SHOTS = `${process.env.WALNUT_TASK_DIR ?? 'test-results'}/shots/top-thread-room`
 let flagsBefore: Record<string, boolean> | null = null
@@ -47,7 +50,10 @@ async function call<T>(request: APIRequestContext, method: 'post' | 'patch', url
 async function setFlags(request: APIRequestContext, flags: Record<string, boolean>): Promise<void> {
   const cfg = await (await request.get('/api/config')).json() as { config?: { experimental?: Record<string, boolean> } }
   const now = { ...(cfg.config?.experimental ?? {}) }
-  if (flagsBefore === null) flagsBefore = { ...now }
+  // Each flag it sets, as it was (unset reads false): config writes merge, so putting back the
+  // whole map read before would leave a flag it turned on still on for the next spec.
+  flagsBefore ??= {}
+  for (const k of Object.keys(flags)) if (!(k in flagsBefore)) flagsBefore[k] = now[k] === true
   const res = await request.put('/api/config', { data: { experimental: { ...now, ...flags } } })
   expect(res.ok(), await res.text()).toBe(true)
 }
@@ -82,6 +88,7 @@ async function measure(page: Page, panel: Locator): Promise<void> {
 test.beforeAll(async ({ request }) => {
   test.setTimeout(240_000)
   if (TEST_PORT === 3456) throw new Error('These checks write tasks, threads and settings: run them on a test server, never production')
+  oneCardWas = await setOneCard(request, true)
   const { fixtureRoot } = await discoverBrowserFixture(TEST_PORT)
   await setFlags(request, { top_thread: true, action_needed_everywhere: true, letters_as_threads: false })
   ids.task = (await call<{ task: { id: string } }>(request, 'post', '/api/tasks', { title: `Release room ${STAMP}`, project: `Room ${STAMP}`, source: 'local' })).task.id
@@ -113,6 +120,7 @@ test.beforeAll(async ({ request }) => {
 
 test.afterAll(async ({ request }) => {
   if (flagsBefore) await request.put('/api/config', { data: { experimental: flagsBefore } })
+  await restoreOneCard(request, oneCardWas)
   for (const id of made) {
     const task = (await (await request.get(`/api/tasks/${id}`)).json()).task as { session_id?: string } | undefined
     if (task?.session_id) await request.post(`/api/v1/sessions/${task.session_id}/terminate`, { data: { force: true } })

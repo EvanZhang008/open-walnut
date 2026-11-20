@@ -1341,6 +1341,7 @@ function markAll(): void {
 let followWorkersSeen: boolean | undefined;
 let popUpSeen: boolean | undefined;
 let lettersAsThreadsSeen: boolean | undefined;
+let oneCardSeen: boolean | undefined;
 
 async function experimentSwitched(): Promise<boolean> {
   const { getConfig } = await import('./config-manager.js');
@@ -1361,13 +1362,20 @@ async function experimentSwitched(): Promise<boolean> {
   popUpSeen = popUp;
   setThreadsPopUp(popUp);
   if (popMoved) threadsChanged();
+  // One card (org/one-card.ts): a task's own ask on its thread moves what its threads count.
+  const { setOneCard } = await import('./org/one-card.js');
+  const oneCard = experimentalEnabled(flags, 'threads_one_card');
+  const oneCardMoved = oneCardSeen !== undefined && oneCardSeen !== oneCard;
+  oneCardSeen = oneCard;
+  setOneCard(oneCard);
+  if (oneCardMoved) threadsChanged();
   // Decision letters as threads (human-inbox/letter-threads.ts): a switch moves which letters count.
   const asThreads = experimentalEnabled(flags, 'letters_as_threads');
   const lettersMoved = lettersAsThreadsSeen !== undefined && lettersAsThreadsSeen !== asThreads;
   lettersAsThreadsSeen = asThreads;
   // Which tasks keep Threads moved too: a letter their thread held counts again, or no more.
   if (lettersMoved || (threadsMoved && asThreads)) dropSlow('letters');
-  return moved || threadsMoved || popMoved || lettersMoved;
+  return moved || threadsMoved || popMoved || lettersMoved || oneCardMoved;
 }
 
 function onEvent(event: { name: string; data: unknown; source?: string }): void {

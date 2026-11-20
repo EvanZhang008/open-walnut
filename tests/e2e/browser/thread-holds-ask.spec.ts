@@ -16,6 +16,11 @@
  * (2026-11-20, the user: "if you recommend this, why can I not just click it?", "Acknowledge is for
  * when I do not need to make any choice". The strip above the chat is redesigned on its own: this
  * spec does not judge it.)
+ *   4. With the one-card setting off (threads_one_card): the cards are today's as before it: a needs
+ *      thread has no ask card frame and no option buttons but its Follow up and Acknowledge, a needs
+ *      write listing choices goes without options, an open answered thread reads Done, and a new
+ *      ask stays the task's own card, not its thread's.
+ * The setting is turned on for the spec and put back as it was after it.
  * Real: the fixture server, a mock CLI session, the threads routes, the report route, the status sync.
  */
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
@@ -23,6 +28,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome, seedColumns } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { presetPanelDesign } from './status-section-helpers'
+import { restoreOneCard, setOneCard } from './one-card-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
@@ -32,6 +38,7 @@ const made: string[] = []
 let taskId = ''
 let sid = ''
 let threadId = ''
+let oneCardWas: boolean | null = null
 
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(240_000)
@@ -59,6 +66,7 @@ test.beforeAll(async ({ request }) => {
   test.setTimeout(420_000)
   if (TEST_PORT === 3456) throw new Error('These checks write tasks and threads: run them on a test server, never production')
   const { fixtureRoot } = await discoverBrowserFixture(TEST_PORT)
+  oneCardWas = await setOneCard(request, true)
   const { task } = await call<{ task: { id: string } }>(request, 'post', '/api/tasks', { title: `Interview practice ${STAMP}`, project: `Study ${STAMP}`, source: 'local' })
   taskId = task.id
   made.push(taskId)
@@ -84,6 +92,7 @@ test.beforeAll(async ({ request }) => {
 })
 
 test.afterAll(async ({ request }) => {
+  await restoreOneCard(request, oneCardWas)
   for (const id of made) {
     const task = (await (await request.get(`/api/tasks/${id}`)).json()).task as { session_id?: string } | undefined
     if (task?.session_id) await request.post(`/api/v1/sessions/${task.session_id}/terminate`, { data: { force: true } })
@@ -193,5 +202,62 @@ test('the task\'s own thread waiting on him with options: the one card\'s row, n
   }, { timeout: 30_000 }).toMatchObject({ filed: true, options: null })
   await expect(card.getByTestId('org-thread-ask')).toHaveCount(0, { timeout: 30_000 })
   await page.screenshot({ path: `${SHOT_DIR}/4-own-thread-answered.png` })
+  expect(errors).toEqual([])
+})
+
+test('with the one-card setting off, the cards are today\'s: no frame, no option buttons, Acknowledge shown, answered reads Done', async ({ page, request }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(e.message))
+  await setOneCard(request, false)
+  const kind = { user_kind: 'user_own', user_kind_why: 'It is his own reading and how he keeps it' }
+  // A needs write listing choices goes without options, as before the setting.
+  const needs = (await call<{ thread: { id: string } }>(request, 'post', `/api/v1/tasks/${taskId}/threads`, { text: `Which reading app ${STAMP}?` })).thread.id
+  await call(request, 'patch', `/api/v1/tasks/${taskId}/threads/${needs}`, {
+    title: `Reading app ${STAMP}`, reply: 'Pick one.\nA: the tablet app.\nB: paper.', state: 'needs', ...kind,
+  }, { 'x-walnut-caller-sid': sid })
+  // One with options stored (they are written either way): no buttons while it is off.
+  const stored = (await call<{ thread: { id: string } }>(request, 'post', `/api/v1/tasks/${taskId}/threads`, { text: `Which shelf ${STAMP}?` })).thread.id
+  await call(request, 'patch', `/api/v1/tasks/${taskId}/threads/${stored}`, {
+    title: `Shelf ${STAMP}`, reply: 'Top shelf or the desk?', state: 'needs', ...kind,
+    options: [{ id: 'top', label: `Top shelf ${STAMP}`, recommended: true }, { id: 'desk', label: `The desk ${STAMP}` }],
+  }, { 'x-walnut-caller-sid': sid })
+  const read = (await call<{ thread: { id: string } }>(request, 'post', `/api/v1/tasks/${taskId}/threads`, { text: `Summarise the chapter ${STAMP}` })).thread.id
+  await call(request, 'patch', `/api/v1/tasks/${taskId}/threads/${read}`, { title: `Chapter ${STAMP}`, reply: 'The chapter is summarised.', state: 'answered' }, { 'x-walnut-caller-sid': sid })
+  // A new ask from the task stays its own card: no thread holds it.
+  expect((await request.patch(`/api/tasks/${taskId}`, { data: { phase: 'NEED_ACTION' } })).ok()).toBe(true)
+  await call(request, 'put', `/api/v1/tasks/${taskId}/report`, {
+    state: 'needs', ask: `Start the next chapter ${STAMP}?`, ask_kind: 'single',
+    ask_options: [{ id: 'later', label: `Later ${STAMP}` }, { id: 'now', label: `Now ${STAMP}`, recommended: true }],
+  })
+  await expect.poll(() => askIdOf(request), { timeout: 60_000 }).toMatch(/^ask-/)
+  const offAsk = await askIdOf(request)
+  expect((await threadsOf(request)).filter((t) => t.heldAsk)).toEqual([])
+
+  await isolateUiPrefs(page)
+  await presetPanelDesign(page, 'status')
+  await seedColumns(page, [sid])
+  await loadHome(page)
+  const panel = panelOf(page)
+  await expect(panel).toBeVisible({ timeout: 30_000 })
+  await panel.getByTestId('session-threads-chip').click()
+  const pane = page.getByTestId('session-threads-pane')
+  await expect(pane).toBeVisible({ timeout: 15_000 })
+  for (const id of [needs, stored]) {
+    const card = pane.locator(`[data-testid="org-thread"][data-thread-id="${id}"]`)
+    await expect(card).toHaveAttribute('data-state', 'needs', { timeout: 15_000 })
+    await expect(card.getByTestId('org-thread-state')).toHaveText('Needs you')
+    await expect(card.getByTestId('org-thread-ask')).toHaveCount(0)
+    await expect(card.getByTestId('org-thread-options')).toHaveCount(0)
+    await expect(card.getByTestId('org-thread-ack')).toBeVisible()
+  }
+  await expect(pane.locator('[data-held-ask]')).toHaveCount(0)
+  // The task's own ask card: its options in the order it gave them, none marked first (today's buttons).
+  const own = page.locator(`[data-testid="action-item"][data-kind="ask"][data-item-id="${offAsk}"]`).first()
+  await expect(own.getByTestId('org-answer-form').getByTestId('org-answer-option')).toHaveText([`Later ${STAMP}`, `Now ${STAMP}`], { timeout: 30_000 })
+  await expect(own.locator('[data-recommended]')).toHaveCount(0)
+  await expect(pane.locator(`[data-testid="org-thread"][data-thread-id="${read}"]`).getByTestId('org-thread-state')).toHaveText('Done', { timeout: 15_000 })
+  await expect(pane.getByTestId('org-thread-state').filter({ hasText: /^To read$/ })).toHaveCount(0)
+  await pane.locator(`[data-testid="org-thread"][data-thread-id="${stored}"]`).scrollIntoViewIfNeeded()
+  await page.screenshot({ path: `${SHOT_DIR}/5-one-card-off.png`, clip: { x: 0, y: 0, width: 1280, height: 900 } })
   expect(errors).toEqual([])
 })

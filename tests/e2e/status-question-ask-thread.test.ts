@@ -29,6 +29,7 @@ import { askStatus, settleStatusQuestion } from '../../src/core/sessions/status-
 import { syncUserStatuses, settleUserStatusSync } from '../../src/core/user-status-sync.js'
 import { threadsForEveryTask } from '../../src/core/org/keeps-threads.js'
 import { readThreads } from '../../src/core/org/threads-store.js'
+import { oneCardNow } from '../../src/core/org/one-card.js'
 import type { OrgThread } from '../../src/core/org/threads-model.js'
 
 const SID = 'ask-thread-session'
@@ -80,9 +81,10 @@ beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   const server = await startServer({ port: 0, dev: true })
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
-  const put = await fetch(`${base}/api/config`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ experimental: { task_threads: true } }) })
+  const put = await fetch(`${base}/api/config`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ experimental: { task_threads: true, threads_one_card: true } }) })
   expect(put.status).toBe(200)
-  await vi.waitFor(() => expect(threadsForEveryTask()).toBe(true), { timeout: 5000 })
+  // The held ask is the one-card experiment's (threads_one_card); its off case is the last test.
+  await vi.waitFor(() => expect(threadsForEveryTask() && oneCardNow()).toBe(true), { timeout: 5000 })
   taskId = (await addTask({ title: 'Interview practice', project: 'Study' })).task.id
   await updateTaskRaw(taskId, { phase: 'IN_PROGRESS', session_id: SID }, { source: 'test' })
   const dir = path.join(WALNUT_HOME, 'org', 'threads')
@@ -175,5 +177,21 @@ describe('the task\'s ask lives on its thread', () => {
     expect(await fs.readFile(file, 'utf8')).toBe(before)
     const held = (await threadsRead()).find((t) => t.id === PRACTICE)!
     expect(held).toMatchObject({ state: 'needs', askId: 'ask-older1', heldAsk: { id: 'ask-older1' } })
+  })
+
+  it('with the one-card setting off: the place is kept, every thread reads as stored, and the question asks for no thread', async () => {
+    const put = await fetch(`${base}/api/config`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ experimental: { task_threads: true, threads_one_card: false } }) })
+    expect(put.status).toBe(200)
+    await vi.waitFor(() => expect(oneCardNow()).toBe(false), { timeout: 5000 })
+    // The stored place stays (an upgrade reads it again), unread.
+    expect((await readThreads(taskId)).threads.find((t) => t.id === PRACTICE)?.reportAsk?.id).toBe('ask-older1')
+    const threads = await threadsRead()
+    expect(threads.find((t) => t.id === PRACTICE)).toMatchObject({ state: 'answered' })
+    expect(threads.every((t) => !t.heldAsk && !('one_card' in t))).toBe(true)
+    await updateTaskRaw(taskId, { phase: 'IN_PROGRESS' }, { source: 'test' })
+    const fake = fakeSession(() => 'FOR_USER_STATE: working\nFOR_USER_NOW: Reading.')
+    await settleStatusQuestion(SID, 10_000)
+    expect(await askStatus(taskId, SID, Date.now())).toBe(true)
+    expect(fake.askSideQuestion.mock.calls[0][0] as string).not.toContain('FOR_USER_ASK_THREAD')
   })
 })

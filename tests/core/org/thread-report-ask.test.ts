@@ -10,11 +10,12 @@
  * asks no more or asks another decision); and the guard built from that case's shape, in invented
  * words: an answered thread holding his newest message, then a report ask written after it.
  */
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-thread-report-ask'))
 
+import { setOneCard } from '../../../src/core/org/one-card.js'
 import { askThreadFor, placeAsk, reportAskOf, taskAskNow, withHeldAsk } from '../../../src/core/org/thread-report-ask.js'
 import { readThreadLines, threadQuestionBlock, settleStateFromThreads, planThreadWrites } from '../../../src/core/sessions/status-threads.js'
 import { readStatusReport } from '../../../src/core/session-hooks/builtins.js'
@@ -41,6 +42,24 @@ function asking(id: string | null, ask = 'Pick the seed tray size', over: Partia
     : { state: 'working', ...over }
   return { id: 'task-a', phase: 'NEED_ACTION' as const, status: 'todo' as const, threads_on: true, user_status }
 }
+
+// The held ask is the one-card experiment's (threads_one_card): on for this file, off in its own case.
+beforeEach(() => setOneCard(true))
+afterEach(() => setOneCard(false))
+
+describe('with the one-card setting off (threads_one_card)', () => {
+  it('a placed ask is kept but never read: the thread reads as stored, and the question asks for no thread', () => {
+    setOneCard(false)
+    const placed = placeAsk(file(thread('th-aaaaaa01', { reply: 'The plan is written.' })), { id: 'ask-aaaa01', ask: 'Pick the seed tray size' }, T(10)).threads
+    const [t] = withHeldAsk(asking('ask-aaaa01'), placed)
+    expect(t).toMatchObject({ state: 'answered', reply: 'The plan is written.' })
+    expect(t.heldAsk).toBeUndefined()
+    expect((t as OrgThread).askId).toBeUndefined()
+    const { block } = threadQuestionBlock([{ id: 'th-aaaaaa01', title: 'Seed trays', state: 'answered' }])
+    expect(block).not.toContain('FOR_USER_ASK_THREAD')
+    expect(block).toContain('What needs the user\'s decision stays on FOR_USER_ASK')
+  })
+})
 
 describe('which thread an ask goes on', () => {
   it('the thread the status answer names', () => {

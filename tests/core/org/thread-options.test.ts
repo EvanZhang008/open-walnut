@@ -8,12 +8,13 @@
  * (2 to 5, only in needs, gone when it leaves needs), and the guard: an agent's needs write whose
  * words list lettered or numbered choices with no options is refused 409 needs_options.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { AskOptionsError, readAskOptions, recommendedFirst } from '../../../src/core/ask-options.js'
 import { listsChoices, threadOptionsOf } from '../../../src/core/org/thread-options.js'
 import { THREADS_OPTIONS_RULE } from '../../../src/core/org/thread-rules.js'
 import { THREADS_LINE, TASK_THREADS_LINE } from '../../../src/core/sessions/session-context.js'
 import { getOp } from '../../../src/ops/index.js'
+import { setOneCard } from '../../../src/core/org/one-card.js'
 import { emptyThreads, fileMessage, normalizeThreads, openThread, ThreadError, updateThread, type ThreadsFile } from '../../../src/core/org/threads-model.js'
 
 const at = (min: number) => new Date(Date.UTC(2026, 10, 20, 6, min)).toISOString()
@@ -94,6 +95,21 @@ describe('which words list choices', () => {
 })
 
 describe('a thread\'s options', () => {
+  // The 409 guard is the one-card experiment's (threads_one_card): on here, off in its own case below.
+  beforeEach(() => setOneCard(true))
+  afterEach(() => setOneCard(false))
+
+  it('with the one-card setting off, a needs write listing choices without options goes as before', () => {
+    setOneCard(false)
+    const { file, id } = base()
+    const reply = 'Notes and artifacts: pick A or B.\nA (recommended): the vault.\nB: beside the code.'
+    expect(updateThread(file, id, { state: 'needs', reply, ...KIND }, 'task:lead-1', at(1)).thread.state).toBe('needs')
+    const input = { title: 'Notes and artifacts', text: 'Pick one.\nA: the vault\nB: the repo', from: 'node' as const, ...KIND }
+    expect(openThread(emptyThreads('lead-1'), input, 'task:lead-1', at(0)).thread.state).toBe('needs')
+    // Options a node passes are still stored (additive), whatever the setting.
+    expect(updateThread(file, id, { state: 'needs', reply, options: AB, ...KIND }, 'task:lead-1', at(1)).thread.options).toHaveLength(2)
+  })
+
   it('an agent\'s needs write listing choices with no options is refused 409; with options it goes', () => {
     const { file, id } = base()
     const reply = 'Notes and artifacts: pick A or B.\nA (recommended): the vault.\nB: beside the code.'

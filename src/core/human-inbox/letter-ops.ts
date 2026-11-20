@@ -349,7 +349,11 @@ export function wordsAnswerLine(actions: readonly { recommended?: boolean }[] | 
 
 export function buildLetterDeliveryText(
   letter: Pick<LetterRecord, 'id' | 'subject'> & { actions?: readonly { recommended?: boolean }[] },
-  human: { choice?: string; text?: string; by?: LetterAnsweredBy; replaces?: LetterAnsweredBy },
+  human: {
+    choice?: string; text?: string; by?: LetterAnsweredBy; replaces?: LetterAnsweredBy;
+    /** How to read words with no button (wordsAnswerLine), with threads_one_card on (org/one-card.ts). */
+    wordsLine?: boolean;
+  },
   /** The images header naming the pictures sent with the answer (core/answer-pictures.ts picturesHeader), or ''. */
   pictures = '',
 ): string {
@@ -388,7 +392,7 @@ export function buildLetterDeliveryText(
     ...(pictures ? ['The pictures named above, under the images header, came with this answer: they are part of it.', ''] : []),
     // His words with no button (2026-11-20: "K" on a card recommending a release): read them as the
     // option they name, a clear yes as the one you recommended; ask only when they are unclear.
-    ...(!human.choice && human.text && !by ? [wordsAnswerLine(letter.actions), ''] : []),
+    ...(human.wordsLine && !human.choice && human.text && !by ? [wordsAnswerLine(letter.actions), ''] : []),
     'Continue the work accordingly, then reply in the letter thread (not just in this '
     + 'session) so the answer reaches them wherever they are:',
     `walnut tools call human_inbox_reply '{"letter":"${letter.id}","text":"..."}'`,
@@ -448,7 +452,8 @@ export async function deliverLetterToOrigin(
     if (human.by?.sessionId === sid) return { status: 'skipped', reason: 'answered_by_origin', sessionId: sid };
 
     const { picturesHeader } = await import('../answer-pictures.js');
-    const text = buildLetterDeliveryText(letter, human, await picturesHeader(human.images));
+    const { oneCardOn } = await import('../org/one-card.js');
+    const text = buildLetterDeliveryText(letter, { ...human, wordsLine: await oneCardOn() }, await picturesHeader(human.images));
     if (record.pendingPermission) {
       // The raw enqueue below skips sendMessageToSession, so the area check runs here on the
       // record as it is now (router/delivery-scope.ts). A refusal lands in the catch: failed.
@@ -600,7 +605,8 @@ async function refuseApprovalByTask(
     ...(action ? { action, ...(answer.note ? { text: answer.note } : {}) } : { text: answer.text ?? '' }),
     userWords: by.userWords,
     letter: { subject: letter.subject, preview: letter.textPreview },
-    verified: await verifiedUserWords(letter, by.userWords),
+    // His short words read loosely only with threads_one_card on (org/one-card.ts); off: the strict rule.
+    verified: (await (await import('../org/one-card.js')).oneCardOn()) && await verifiedUserWords(letter, by.userWords),
   });
   if (!verdict.ok) {
     log.notif.info('human-inbox: a task\'s answer for the user refused', { letterId: id, taskId: by.taskId, code: verdict.code, ...(verdict.code === 'human_approval' ? { steps: verdict.steps } : {}) });

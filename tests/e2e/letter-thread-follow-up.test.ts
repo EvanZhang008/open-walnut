@@ -50,6 +50,7 @@ import { ensureMainTask, ensureProjectLead } from '../../src/core/org/org-store.
 import { readThreads } from '../../src/core/org/threads-store.js'
 import { getLetter } from '../../src/core/human-inbox/store.js'
 import { lettersAsThreadsNow } from '../../src/core/human-inbox/letter-threads.js'
+import { oneCardNow } from '../../src/core/org/one-card.js'
 import { letterThreadId } from '../../src/core/org/letter-thread-model.js'
 import { WORDS_ANSWER_ASK_LINE, WORDS_ANSWER_LINE, humanReplyAndDeliver } from '../../src/core/human-inbox/letter-ops.js'
 import { executeOp } from '../../src/ops/index.js'
@@ -114,8 +115,9 @@ beforeAll(async () => {
   server = await startServer({ port: 0, dev: true })
   port = (server.address() as { port: number }).port
   await ensureMainTask()
-  expect((await api('PUT', '/api/config', { experimental: { letters_as_threads: true } })).status).toBe(200)
-  await vi.waitFor(() => expect(lettersAsThreadsNow()).toBe(true), { timeout: 5000 })
+  // Typed words answering a letter on its thread are the one-card experiment's (threads_one_card).
+  expect((await api('PUT', '/api/config', { experimental: { letters_as_threads: true, threads_one_card: true } })).status).toBe(200)
+  await vi.waitFor(() => expect(lettersAsThreadsNow() && oneCardNow()).toBe(true), { timeout: 5000 })
   const lead = await ensureProjectLead('Orchard')
   const sid = (await sessionRunner.startSession({ taskId: lead.id, cwd: WALNUT_HOME, message: 'Ready', project: 'Orchard', preassignedSessionId: randomUUID() })).claudeSessionId
   await vi.waitFor(async () => expect((await getSessionByClaudeId(sid))?.process_status).toMatch(/idle|stopped/), { timeout: 20_000 })
@@ -278,5 +280,48 @@ describe('his words on a thread holding a letter answer the letter', () => {
     const r = await rpc('session:send', { sessionId: vp.sid, message: 'K', threadId: letterThreadId(letter), userUuid: randomUUID() })
     expect(r.result?.answeredLetter).toMatchObject({ id: letter })
     await expectAnsweredByWords(letter, 'K', before, WORDS_ANSWER_ASK_LINE)
+  })
+})
+
+describe('with the one-card setting off (threads_one_card), his words on it stay as before', () => {
+  beforeAll(async () => {
+    expect((await api('PUT', '/api/config', { experimental: { letters_as_threads: true, threads_one_card: false } })).status).toBe(200)
+    await vi.waitFor(() => expect(oneCardNow()).toBe(false), { timeout: 5000 })
+  })
+  afterAll(async () => {
+    await api('PUT', '/api/config', { experimental: { letters_as_threads: true, threads_one_card: true } })
+  })
+
+  it('a send naming the letter\'s thread is a follow-up in the chat, and the letter still waits', async () => {
+    const letter = await decide('Move the garden shed to the north corner?')
+    const before = queued.get(vp.sid)?.length ?? 0
+    const r = await rpc('session:send', { sessionId: vp.sid, message: 'Sounds right to me', threadId: letterThreadId(letter), userUuid: randomUUID() })
+    expect(r.ok, r.error).toBe(true)
+    expect(r.result?.answeredLetter).toBeUndefined()
+    await vi.waitFor(() => expect(rowsSince(before).some((m) => m.includes('Sounds right to me') && !m.includes('[Letter reply]'))).toBe(true), { timeout: 10_000, interval: 200 })
+    expect(await humanTurns(letter)).toHaveLength(0)
+    expect((await getLetter(letter))?.answered).toBeFalsy()
+  })
+
+  it('his "K" on the card is the strict old rule: no words line, and no agent picks for him with it', async () => {
+    const letter = await decide('Paint the fence green this weekend?')
+    const before = queued.get(vp.sid)?.length ?? 0
+    await humanReplyAndDeliver(letter, { text: 'K', clientId: 'test-his-k-off' })
+    await vi.waitFor(() => expect(letterRows(before, letter)).toHaveLength(1), { timeout: 15_000, interval: 200 })
+    expect(letterRows(before, letter)[0]).not.toContain(WORDS_ANSWER_LINE)
+    expect(letterRows(before, letter)[0]).not.toContain(WORDS_ANSWER_ASK_LINE)
+    await expect(op('human_inbox_answer', { id: letter, action_id: 'release', user_words: 'K' }, vp.sid)).rejects.toThrow()
+    expect((await getLetter(letter))?.answered).toBeFalsy()
+  })
+
+  it('the phone\'s thread list carries one_card only while the setting is on', async () => {
+    const off = await api<{ threads: Array<Record<string, unknown>> }>('GET', `/tasks/${vp.taskId}/threads`)
+    expect(off.status).toBe(200)
+    expect(off.json.threads.length).toBeGreaterThan(0)
+    expect(off.json.threads.every((t) => !('one_card' in t))).toBe(true)
+    await api('PUT', '/api/config', { experimental: { letters_as_threads: true, threads_one_card: true } })
+    await vi.waitFor(() => expect(oneCardNow()).toBe(true), { timeout: 5000 })
+    const on = await api<{ threads: Array<Record<string, unknown>> }>('GET', `/tasks/${vp.taskId}/threads`)
+    expect(on.json.threads.every((t) => t.one_card === true)).toBe(true)
   })
 })

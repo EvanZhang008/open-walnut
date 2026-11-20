@@ -157,6 +157,12 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
+    id: 'threads_one_card',
+    name: 'One card for what waits on you',
+    description: 'A thread that waits on you is one card everywhere it shows: its choices are buttons you click (the recommended one first), your typed reply goes in its box, and it has no Acknowledge, which is for a thread that asks no choice. A task\'s own question lives on its thread instead of a second card, an open thread with an answer reads To read (Done is one you closed), and words you type on a decision letter\'s thread answer that letter, a short yes picking the option it recommends.',
+    default: false,
+  },
+  {
     id: 'ack_means_known',
     name: 'Acknowledge means you know',
     description: 'Acknowledging a thread whose work is still open (a task it went to not done, your reply still on its way, its letter still waiting) no longer closes it: it leaves your sight under "in progress, nothing for you" and stays tracked until it is really over. Its agent hears that you know and tells you the outcome once, or closes it. A thread with nothing open closes as before.',

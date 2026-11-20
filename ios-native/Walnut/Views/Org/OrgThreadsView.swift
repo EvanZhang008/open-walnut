@@ -926,7 +926,7 @@ struct OrgThreadCard: View {
     /// It waits on him: its choices, the recommended one first, and no Acknowledge, which is for a
     /// card that asks no choice (2026-11-20, the user: "Acknowledge is for when I do not need to
     /// make any choice").
-    private var waitsOnHim: Bool { t.state == "needs" && !closed }
+    private var waitsOnHim: Bool { t.one_card == true && t.state == "needs" && !closed }
     private var choices: [OrgThread.Option] {
         let all = t.options ?? []
         return all.filter { $0.recommended == true } + all.filter { $0.recommended != true }

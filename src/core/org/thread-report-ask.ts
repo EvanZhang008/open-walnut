@@ -28,6 +28,7 @@ import type { OrgThread, ThreadsFile } from './threads-model.js';
 import { reportDecision } from '../ask-decision.js';
 import { ownItemOf } from '../action-needed.js';
 import { asksThreads } from '../sessions/status-threads.js';
+import { oneCardNow } from './one-card.js';
 
 /** The question kept on the place, for the record. */
 const ASK_KEPT_MAX = 400;
@@ -109,10 +110,11 @@ function withoutPlace(t: OrgThread): OrgThread {
 
 /**
  * The threads as he reads them: the one holding the task's ask now reads needs, with that ask's id,
- * its summary leading with the question, and `heldAsk`; every other thread as stored. Pure.
+ * its summary leading with the question, and `heldAsk`; every other thread as stored. With
+ * threads_one_card off (one-card.ts) every thread reads as stored: the places are kept, unread.
  */
 export function withHeldAsk<T extends OrgThread>(task: AskingTask | null | undefined, threads: readonly T[]): Array<T & { heldAsk?: ThreadHeldAsk }> {
-  const ask = asksThreads(task) ? taskAskNow(task) : null;
+  const ask = oneCardNow() && asksThreads(task) ? taskAskNow(task) : null;
   if (!ask) return [...threads];
   return threads.map((t) => {
     // Put aside by him (its Snoozed section), it reads as stored: the task's own ask still shows where it lives.

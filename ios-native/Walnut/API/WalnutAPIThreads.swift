@@ -84,6 +84,9 @@ struct OrgThread: Codable, Equatable, Identifiable {
     var reply_host: String? = nil
     /// While it is in needs: the choices he taps, 2 to 5. Absent from an older server.
     var options: [Option]? = nil
+    /// The server's one-card switch (threads_one_card) is on: its choices are buttons, it has no
+    /// Acknowledge while it waits on him, and open and answered it reads To read. Absent: off.
+    var one_card: Bool? = nil
 }
 
 /// What one read of a node's threads brought: the threads, and how many his view shows by the

@@ -9,7 +9,16 @@
  * allows, under it when not). No state word, no kind, no age.
  */
 import type { ReactNode } from 'react';
+import { useExperimental } from '@/hooks/useExperimental';
 import './ask-card.css';
+
+/**
+ * A part that answers (a Board card's live prompt) in the one card, with threads_one_card on
+ * (core/org/one-card.ts); off, the part alone, as before it.
+ */
+export function OneCardFrame({ testId, children }: { testId: string; children: ReactNode }) {
+  return useExperimental('threads_one_card') ? <AskCardFrame testId={testId} answer={children} /> : <>{children}</>;
+}
 
 export function AskCardFrame({ title, question, detail, status, answer, tools, className = '', testId, data }: {
   /** The task it is from, where the list holds several tasks' asks (a link to open it). */
