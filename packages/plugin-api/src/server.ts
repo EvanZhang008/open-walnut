@@ -687,6 +687,24 @@ export interface LetterSendInput {
   items?: InboxLetterItem[]
   taskRefs?: string[]
   pin?: boolean
+  /**
+   * A document (no `actions`) reaches the inbox only when it is a report the person set up or asked
+   * for: a digest they turned on, a "send it now". Say so with `true`. Without it the letter
+   * becomes a notice of your plugin in the notification center (same subject and preview; a tap
+   * opens the first of `taskRefs`), and `send` answers `outcome: 'notice'`. A new-message count
+   * or an FYI is a notice. Ignored on a letter with actions.
+   */
+  userAsked?: boolean
+}
+
+/** Where a sent letter went. Absent fields on an older host: it was a letter. */
+export interface LetterSendResult {
+  /** The letter's id; empty when it became a notice. */
+  letterId: string
+  /** `letter`: in the inbox. `notice`: a document nobody asked for, in the notification center instead. */
+  outcome?: 'letter' | 'notice'
+  /** The notice's id, when it became one. */
+  noticeId?: string
 }
 
 export interface LetterAnswerRecord {
@@ -725,6 +743,8 @@ export interface LetterAnsweredEvent {
  *
  * At most 30 letters per plugin per minute; over that, `send` rejects with a plain-words
  * error. A letter badges the bell and pushes to the phone, so roll a batch into one letter.
+ * The inbox holds only what needs the person: a decision (actions) or a report they asked for
+ * (`userAsked`); any other document becomes a notice (`LetterSendInput.userAsked`).
  */
 export interface LettersService {
   /**
@@ -745,7 +765,7 @@ export interface LettersService {
    * at the top of the letter. Null: nothing found. Absent on an older host: skip it.
    */
   sensitiveHold?(text: string): Promise<{ reason: string } | null>
-  send(input: LetterSendInput): Promise<{ letterId: string }>
+  send(input: LetterSendInput): Promise<LetterSendResult>
   /** Add a turn to the letter's thread, so the human sees what happened after they answered. */
   reply(letterId: string, input: { markdown?: string; html?: string; text?: string; items?: InboxLetterItem[] }): Promise<void>
   /**

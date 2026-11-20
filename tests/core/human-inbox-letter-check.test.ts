@@ -389,16 +389,16 @@ describe('sendLetterOnce: a letter a host saved while the server was away', () =
   it('sendLetterAsCallerOnce answers an op it already sent before the sender and its budget are asked', async () => {
     triage.calls = 0;
     triage.refuse = false;
-    const first = await sendLetterAsCallerOnce({ subject: 'S', type: 'info', markdown: 'm' }, undefined, { opKey: 'op-caller000000001' });
+    const first = await sendLetterAsCallerOnce({ subject: 'S', type: 'info', markdown: 'm', userAsked: true }, undefined, { opKey: 'op-caller000000001' });
     expect(first.duplicate).toBe(false);
     expect(triage.calls).toBe(1);
     // The budget is spent now: the redrain of the letter already sent is still answered.
     triage.refuse = true;
     try {
-      const again = await sendLetterAsCallerOnce({ subject: 'S', type: 'info', markdown: 'm' }, undefined, { opKey: 'op-caller000000001' });
+      const again = await sendLetterAsCallerOnce({ subject: 'S', type: 'info', markdown: 'm', userAsked: true }, undefined, { opKey: 'op-caller000000001' });
       expect(again).toMatchObject({ duplicate: true, letter: { id: first.letter.id } });
       expect(triage.calls).toBe(1);
-      await expect(sendLetterAsCallerOnce({ subject: 'S', type: 'info', markdown: 'm' }, undefined, { opKey: 'op-caller000000002' })).rejects.toThrow(/budget is spent/);
+      await expect(sendLetterAsCallerOnce({ subject: 'S', type: 'info', markdown: 'm', userAsked: true }, undefined, { opKey: 'op-caller000000002' })).rejects.toThrow(/budget is spent/);
     } finally {
       triage.refuse = false;
     }

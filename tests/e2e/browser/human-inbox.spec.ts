@@ -397,7 +397,7 @@ test('pin, mark unread and archive each move the envelope', async ({ page, reque
   const marker = `LETTER-MD-BODY-${NONCE}`
   await sendLetter(request, {
     subject: INFO_SUBJECT,
-    type: 'info',
+    type: 'info', user_asked: true,
     markdown: `## Disk watch\n\n${marker}\n\nThe backup volume is at 70%.`,
     text: `Disk watch: backup volume at 70% (${NONCE}).`,
   })
@@ -561,7 +561,7 @@ test('the Inbox Unread filter narrows the list and keeps the letter just opened'
   test.setTimeout(120_000)
   const readId = await sendLetter(request, {
     subject: FILTER_READ_SUBJECT,
-    type: 'info',
+    type: 'info', user_asked: true,
     markdown: `Already read (${NONCE}).`,
     text: `Already read (${NONCE}).`,
   })
@@ -570,7 +570,7 @@ test('the Inbox Unread filter narrows the list and keeps the letter just opened'
   expect(readRes.status(), await readRes.text()).toBe(200)
   await sendLetter(request, {
     subject: FILTER_UNREAD_SUBJECT,
-    type: 'info',
+    type: 'info', user_asked: true,
     markdown: `Not read yet (${NONCE}).`,
     text: `Not read yet (${NONCE}).`,
   })
@@ -659,7 +659,7 @@ test('a multi-MB letter with embedded base64 audio arrives whole and plays', asy
 
   await sendLetter(request, {
     subject: AUDIO_SUBJECT,
-    type: 'info',
+    type: 'info', user_asked: true,
     html,
     text: `Audio digest with an embedded player (${NONCE}).`,
   })
@@ -749,7 +749,7 @@ test('a >10MB letter with embedded base64 video arrives whole and plays', async 
 
   await sendLetter(request, {
     subject: VIDEO_SUBJECT,
-    type: 'info',
+    type: 'info', user_asked: true,
     html,
     text: `Video digest with an embedded clip (${NONCE}).`,
   })
@@ -843,7 +843,7 @@ test('a 30MB letter (past every inline limit) is staged, read, and plays', async
   // Negative control FIRST: inline really is refused at this size, and the 413
   // names the way through rather than reading as a product limit.
   const refused = await request.post('/api/v1/human-inbox', {
-    data: { subject: `${subject} (inline attempt)`, type: 'info', html },
+    data: { subject: `${subject} (inline attempt)`, type: 'info', user_asked: true, html },
   })
   expect(refused.status()).toBe(413)
   const refusedBody = await refused.json() as { error: { code: string; message: string } }
@@ -860,7 +860,7 @@ test('a 30MB letter (past every inline limit) is staged, read, and plays', async
   expect(stagedBytes).toBe(bytes)
 
   const sent = await request.post('/api/v1/human-inbox', {
-    data: { subject, type: 'info', html_ref: ref, text: `Unabridged digest (${NONCE}).` },
+    data: { subject, type: 'info', user_asked: true, html_ref: ref, text: `Unabridged digest (${NONCE}).` },
   })
   expect(sent.status(), await sent.text()).toBe(201)
 

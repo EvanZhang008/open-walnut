@@ -101,6 +101,9 @@ interface LetterEnvelope {
 }
 
 async function sendLetter(body: Record<string, unknown>, sid?: string): Promise<string> {
+  // These tests send letters, so an info one is a report the user asked for: the inbox takes no
+  // other (info-letter-rule.ts; its own tests are tests/e2e/info-letter-inbox.test.ts).
+  if (body.type === 'info' && body.user_asked === undefined) body = { ...body, user_asked: true }
   const res = await post('/api/v1/human-inbox', body, sid)
   expect(res.status, await res.clone().text()).toBe(201)
   const { id } = await res.json() as { id: string }
@@ -695,7 +698,7 @@ describe('ops registry parity — executeOp reaches the real routes', () => {
     process.env.WALNUT_SESSION_ID = SENDER_SID
     try {
       const sent = await executeOp('human_inbox_send', {
-        subject: 'From the in-session CLI', type: 'info', markdown: 'hello',
+        subject: 'From the in-session CLI', type: 'info', markdown: 'hello', user_asked: true,
       }, { apiBase: apiBase(), ...cliOpCaller() })
       expect(sent.ok, sent.ok ? '' : sent.message).toBe(true)
       const letterId = (sent as { result: { letterId: string } }).result.letterId
@@ -924,7 +927,7 @@ describe('big letter bodies: staged in, streamed out', () => {
 
   it('an unknown ref is a clean 404, not a broken letter', async () => {
     const res = await post('/api/v1/human-inbox',
-      { subject: 'Missing', type: 'info', html_ref: 'sb-abcdef-0123456789ab' }, SENDER_SID)
+      { subject: 'Missing', type: 'info', html_ref: 'sb-abcdef-0123456789ab', user_asked: true }, SENDER_SID)
     expect(res.status).toBe(404)
     const { error } = await res.json() as { error: { code: string; message: string } }
     expect(error.code).toBe('not_found')
@@ -933,7 +936,7 @@ describe('big letter bodies: staged in, streamed out', () => {
 
   it('a ref shaped like a path is refused before any file is touched', async () => {
     const res = await post('/api/v1/human-inbox',
-      { subject: 'Traversal', type: 'info', html_ref: '../../../etc/passwd' }, SENDER_SID)
+      { subject: 'Traversal', type: 'info', html_ref: '../../../etc/passwd', user_asked: true }, SENDER_SID)
     expect(res.status).toBe(400)
     const { error } = await res.json() as { error: { code: string; message: string } }
     expect(error.message).toMatch(/not a staged body ref/)

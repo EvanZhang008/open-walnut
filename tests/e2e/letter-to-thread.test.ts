@@ -149,18 +149,21 @@ describe('a letter that only informs, from a task that keeps Threads', () => {
 })
 
 describe('a task that keeps no Threads', () => {
-  it('experiment off and no threads_on: an info letter stays a letter', async () => {
+  it('experiment off and no threads_on: a completion letter stays a letter; an info one nobody asked for is refused', async () => {
     await flag(false)
     const before = (await lettersFrom(trays)).length
-    const out = await send({ subject: 'Seed trays arrived', type: 'info', markdown: 'All there.' }, TRAYS_SID)
+    const out = await send({ subject: 'Seed trays arrived', type: 'completion', markdown: 'All there.' }, TRAYS_SID)
     expect(out.letterId).toMatch(/^lt-/)
     expect(out.threadId).toBeUndefined()
     expect((await lettersFrom(trays)).length).toBe(before + 1)
+    // With no thread to take it, an FYI is not a letter either (human-inbox/info-letter-rule.ts).
+    await expect(send({ subject: 'Seed trays unpacked', type: 'info', markdown: 'All there.' }, TRAYS_SID)).rejects.toThrow(/user_asked:true/)
+    expect((await lettersFrom(trays)).length).toBe(before + 1)
   })
 
-  it('experiment on but turned off for the task: an info letter stays a letter', async () => {
+  it('experiment on but turned off for the task: a completion letter stays a letter', async () => {
     await flag(true)
-    const out = await send({ subject: 'Fence mended', type: 'info', markdown: 'North side.' }, OFF_SID)
+    const out = await send({ subject: 'Fence mended', type: 'completion', markdown: 'North side.' }, OFF_SID)
     expect(out.letterId).toMatch(/^lt-/)
   })
 })

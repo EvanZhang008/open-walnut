@@ -307,7 +307,7 @@ test('Move & team: the project picker opens over the menu and the menu stays ope
 
 async function sendLetter(request: APIRequestContext, sid: string, subject: string): Promise<string> {
   const res = await request.post('/api/v1/human-inbox', {
-    data: { subject, type: 'info', markdown: `${subject} body`, text: `${subject} body` },
+    data: { subject, type: 'info', user_asked: true, markdown: `${subject} body`, text: `${subject} body` },
     headers: { 'x-walnut-caller-sid': sid },
   })
   expect(res.status(), await res.text()).toBe(201)

@@ -148,4 +148,8 @@ export const ORG_REPORT = letterKind<OrgReportParams>({
     { owner: null, since: '2026-11-01 06:00 UTC', listMax: 20, needsPreview: [], needs: [], decisions: [], done: [], moved: [] },
   ],
   stillNeeded: { none: 'a report: it asks nothing itself (each decision it lists has its own letter)' },
+  info: {
+    asked: 'org_report send or at: the report the user asked Main or a lead for ("give me a report tomorrow morning")',
+    otherwise: 'none: Walnut never sends one unasked',
+  },
 });

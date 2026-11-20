@@ -262,6 +262,7 @@ describe('letter store → envelope (the bridge installs itself)', () => {
     const letter = await sendLetter({
       subject: 'Your Thursday digest',
       type: 'info',
+      userAsked: true,
       html: `<h1>Digest</h1><audio controls src="data:audio/mpeg;base64,${audio}"></audio>`,
       text: 'Four minutes of audio: three decisions, one blocker.',
       sender: SENDER,

@@ -72,6 +72,7 @@ const STORE_WRITERS: Record<string, { calls: number; what: string }> = {
   'core/notifications/log-error-bridge.ts': { calls: 1, what: 'every log.error line (health: a log line never names a reason)' },
   'core/notifications/client-incidents.ts': { calls: 1, what: 'a phone\'s freeze or crash report (health)' },
   'core/notifications/letter-bridge.ts': { calls: 1, what: 'a letter to the person (user, kind letter)' },
+  'core/human-inbox/info-letter-rule.ts': { calls: 1, what: 'an info letter nobody asked for, from a plugin or a script, as a notice (user, kind skill)' },
   'core/plugins/plugin-notifications.ts': { calls: 3, what: 'a plugin\'s notify and reminder (user), its error() (health unless needsYou: true)' },
   'core/plugins/server-api.ts': { calls: 1, what: 'a plugin handler that threw (health)' },
   'core/workspaces/manager.ts': { calls: 1, what: 'a workspace cleanup receipt (user, kind cron, feed only)' },

@@ -121,7 +121,7 @@ describe('duplicate letters from one sender', () => {
     const rewordedBody = await reworded.json() as { id: string; openAsk?: { letterId?: string } };
     expect(rewordedBody.openAsk?.letterId).toBe(access.id);
     // The closest open ask is named: now the reworded letter itself.
-    const relayed = await handleHumanInboxRelayAction('send', { subject: `${ACCESS_REWORDED} (2)`, type: 'info', markdown: 'x', callerSid: sid });
+    const relayed = await handleHumanInboxRelayAction('send', { subject: `${ACCESS_REWORDED} (2)`, type: 'review', markdown: 'x', callerSid: sid });
     expect((relayed as { openAsk?: { letterId?: string } }).openAsk?.letterId).toBe(rewordedBody.id);
     // Once the user answered it, nothing is named.
     const done = await sessionTask('Answered ask');

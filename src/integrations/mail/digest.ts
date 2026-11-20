@@ -1,10 +1,10 @@
 /**
- * The daily digest: one letter, once a day, that says what is sitting unread.
+ * The daily digest: once a day, what is sitting unread. The daily run is a notice in the
+ * notification center (nobody asked for that count, human-inbox/info-letter-rule.ts); "Send it now"
+ * from the console is a letter, because the human asked for it.
  *
- * A letter rather than a notification because a letter is the one thing that reaches the human
- * wherever they are (console, phone push, relay) and stays readable afterwards. It carries NO
- * whole-letter decisions. Optional email items let the human act on each exact source without
- * turning the digest into an AI decision or changing its unread count snapshot.
+ * The letter carries NO whole-letter decisions. Optional email items let the human act on each
+ * exact source without turning the digest into an AI decision or changing its unread count snapshot.
  *
  * Four rules this file exists to hold, each of them a way a digest goes wrong:
  *
@@ -145,7 +145,8 @@ export interface DigestLetters {
     text?: string
     pin?: boolean
     items?: InboxLetterItem[]
-  }): Promise<{ letterId: string }>
+    userAsked?: boolean
+  }): Promise<{ letterId: string; outcome?: 'letter' | 'notice' }>
 }
 
 export interface DigestResult {
@@ -223,7 +224,8 @@ export class MailDigest {
     // Sent before the day is marked, so a letter the quota refused is retried on the next tick
     // rather than silently skipped for the day. An INCOMPLETE collection still marks it: a letter
     // has landed, and a second one an hour later would be the surprising outcome.
-    const sent = await this.deliver(rendered)
+    // Nobody asked for today's count: the host makes it a notice, not a letter (info-letter-rule.ts).
+    const sent = await this.deliver(rendered, false)
     await this.deps.store.tasks.setMeta(DIGEST_DAY_KEY, today)
     this.deps.log.info('mail digest sent', { day: today, unread: rendered.unread, complete })
     return complete ? sent : { ...sent, incomplete: true }
@@ -252,12 +254,13 @@ export class MailDigest {
       }
       return { letterId: null, unread: 0, accounts: rendered.accounts }
     }
-    const sent = await this.deliver(rendered)
+    // The human pressed "Send it now": a report they asked for, so it is a letter.
+    const sent = await this.deliver(rendered, true)
     return complete ? sent : { ...sent, incomplete: true }
   }
 
-  private async deliver(rendered: RenderedDigest): Promise<DigestResult> {
-    const { letterId } = await this.deps.letters.send({
+  private async deliver(rendered: RenderedDigest, userAsked: boolean): Promise<DigestResult> {
+    const sent = await this.deps.letters.send({
       subject: rendered.subject,
       markdown: rendered.markdown,
       text: rendered.text,
@@ -265,8 +268,11 @@ export class MailDigest {
       // Never pinned: a digest is today's news, and a pin is for something that has to be dealt
       // with. Tomorrow's would sit under it.
       pin: false,
+      ...(userAsked ? { userAsked: true } : {}),
     })
-    this.deps.events.digestSent(letterId, rendered.unread)
+    // A notice has no letter id (an older host answers no outcome: a letter).
+    const letterId = sent.outcome === 'notice' || !sent.letterId ? null : sent.letterId
+    if (letterId) this.deps.events.digestSent(letterId, rendered.unread)
     return { letterId, unread: rendered.unread, accounts: rendered.accounts }
   }
 

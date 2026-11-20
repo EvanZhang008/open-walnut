@@ -22,7 +22,7 @@ export function mailItem(id: string, mode = ''): InboxLetterItem {
 }
 export async function sendItems(request: APIRequestContext, items: InboxLetterItem[], extra: Record<string, unknown> = {}, callerSid?: string) {
   const subject = `Inbox items ${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-  const res = await request.post('/api/v1/human-inbox', { data: { subject, type: 'info', markdown: 'Mailbox snapshot. No operations run from this body.', items, ...extra },
+  const res = await request.post('/api/v1/human-inbox', { data: { subject, type: 'info', user_asked: true, markdown: 'Mailbox snapshot. No operations run from this body.', items, ...extra },
     ...(callerSid ? { headers: { 'x-walnut-caller-sid': callerSid } } : {}) });
   expect(res.status(), await res.text()).toBe(201);
   return { subject, id: (await res.json()).id as string };

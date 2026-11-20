@@ -2848,7 +2848,7 @@ if (process.env.PW_AGENT_TEXT_ENTRIES === '1') {
   await fs.copyFile(process.env.AGENT_TEXT_PATH || path.resolve(import.meta.dirname, '..', '..', '..', 'web', 'public', 'icon-192.png'), picture)
   await fs.writeFile(notes, 'Triage notes\nLine two\nLine three\n')
   const { sendLetter, setArchived } = await import('../../../src/core/human-inbox/store.js')
-  const letter = await sendLetter({ subject: 'Triage fixture letter', type: 'info', markdown: `Design: ${picture}`, text: 'Triage fixture letter' }, { quiet: true })
+  const letter = await sendLetter({ subject: 'Triage fixture letter', type: 'info', user_asked: true, markdown: `Design: ${picture}`, text: 'Triage fixture letter' }, { quiet: true })
   await setArchived(letter.id, true)
   let analysis = '**Triage Analysis:**\n\nThe last run finished the review notes and left one design file to look at, '
   while (analysis.length < 190) analysis += 'still '

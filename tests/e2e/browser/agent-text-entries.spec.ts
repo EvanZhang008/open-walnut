@@ -33,7 +33,7 @@ test.beforeAll(async ({ request }) => {
   worker = (await w.json()).task.id
   made.push(worker)
   taskRef = `<task-ref id="${worker}" label="Entry worker"/>`
-  const l = await request.post('/api/v1/human-inbox', { data: { subject: project, type: 'info', text: `Design: ${files.picture}`, markdown: `Design: ${files.picture}` } })
+  const l = await request.post('/api/v1/human-inbox', { data: { subject: project, type: 'info', user_asked: true, text: `Design: ${files.picture}`, markdown: `Design: ${files.picture}` } })
   expect(l.ok(), await l.text()).toBe(true)
   letter = (await l.json()).id
   letters.push(letter)

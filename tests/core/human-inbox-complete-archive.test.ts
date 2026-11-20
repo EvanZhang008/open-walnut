@@ -114,7 +114,7 @@ describe('completing a task', () => {
     const review = await letterFrom(t.id, 'review')
     const completion = await letterFrom(t.id, 'completion', { markdown: '# Shipped\n\u89c6\u9891\u5df2\u4e0a\u7ebf\uff0c\u8bf7\u770b\u3002' /* Chinese body: Unicode survives */ })
     const decision = await letterFrom(t.id, 'action_required')
-    const report = await letterFrom(t.id, 'info')
+    const report = await letterFrom(t.id, 'info', { userAsked: true })
     const pinned = await letterFrom(t.id, 'review')
     await setPinned(pinned, true)
     const otherTask = await letterFrom(other.id, 'review')

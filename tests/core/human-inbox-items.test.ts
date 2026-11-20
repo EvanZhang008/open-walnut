@@ -27,7 +27,7 @@ describe('Inbox item persistence and strict contract', () => {
   });
   it('appends new items only to their agent turn and preserves original receipt', async () => {
     const one = item('first');
-    const letter = await sendLetter({ subject: 'Summary', type: 'info', markdown: 'Mail', items: [one], sender: { sessionId: 'external', host: 'local' } });
+    const letter = await sendLetter({ subject: 'Summary', type: 'info', userAsked: true, markdown: 'Mail', items: [one], sender: { sessionId: 'external', host: 'local' } });
     await writeItemReceipt(letter.id, one.id, receipt(one));
     await agentReply(letter.id, { text: 'Another mail', items: [item('second')] });
     const saved = (await getLetter(letter.id))!;

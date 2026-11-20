@@ -343,20 +343,20 @@ test('the tab lists only this session letters and the menu badge counts them whi
   }, sid)
   await sendLetter(request, {
     subject: alsoMine,
-    type: 'info',
+    type: 'info', user_asked: true,
     markdown: `## Disk\n\nBackup volume at 70% (${NONCE}).`,
     text: `Backup volume at 70% (${NONCE}).`,
   }, sid)
   // …and two that must NOT appear in it: no caller (external) and another session.
   await sendLetter(request, {
     subject: externalSubject,
-    type: 'info',
+    type: 'info', user_asked: true,
     markdown: `Hand-started agent, no session env (${NONCE}).`,
     text: `Hand-started agent (${NONCE}).`,
   })
   await sendLetter(request, {
     subject: otherSubject,
-    type: 'info',
+    type: 'info', user_asked: true,
     markdown: `A different session wrote this (${NONCE}).`,
     text: `A different session (${NONCE}).`,
   }, OTHER_FIXTURE_SID)
@@ -434,7 +434,7 @@ test('the tab lists only this session letters and the menu badge counts them whi
   // (the menu stays open across the send, so nothing re-opens it into place).
   await sendLetter(request, {
     subject: `PW TAB late ${NONCE}`,
-    type: 'info',
+    type: 'info', user_asked: true,
     markdown: `Arrived while the tab was closed (${NONCE}).`,
     text: `Arrived while the tab was closed (${NONCE}).`,
   }, sid)
@@ -501,7 +501,7 @@ test('a pasted /sessions?tab=inbox&letter= URL lands on the letter in the sessio
   const sid = await startSession(request)
   const letterId = await sendLetter(request, {
     subject,
-    type: 'info',
+    type: 'info', user_asked: true,
     markdown: `## Nightly report\n\nPASTED-BODY-${NONCE}`,
     text: `Nightly report (${NONCE}).`,
   }, sid)
@@ -567,7 +567,7 @@ test('leaving the session from inside a deep-linked letter leaves no fullscreen 
   const { task } = await taskRes.json() as { task: { id: string } }
   await sendLetter(request, {
     subject,
-    type: 'info',
+    type: 'info', user_asked: true,
     markdown: `## Leaving\n\nLEAVE-BODY-${NONCE}`,
     text: `Leaving (${NONCE}).`,
     task_refs: [task.id],
@@ -616,7 +616,7 @@ test('a task link in a letter opens the task and its session on Home, from anoth
   const detail = await (await request.get(`/api/sessions/${sid}`)).json() as { taskId?: string; session?: { taskId?: string } }
   const taskId = detail.taskId ?? detail.session?.taskId
   expect(taskId, 'the quick-started session has a task').toBeTruthy()
-  await sendLetter(request, { subject, type: 'info', markdown: `## Home\n\nHOME-BODY-${NONCE}`, text: `Home (${NONCE}).`, task_refs: [taskId] })
+  await sendLetter(request, { subject, type: 'info', user_asked: true, markdown: `## Home\n\nHOME-BODY-${NONCE}`, text: `Home (${NONCE}).`, task_refs: [taskId] })
 
   await loadHome(page)
   await page.locator('.sidebar-nav a[href="/tasks"]').first().click()

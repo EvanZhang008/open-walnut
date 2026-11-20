@@ -33,6 +33,7 @@ import {
   resolveLetterSender,
   savePicturesOnce,
   sendLetterAsCallerOnce,
+  sentAnswer,
 } from './letter-ops.js';
 import type { AgentReplyInput, NewLetter } from './types.js';
 
@@ -139,12 +140,9 @@ export async function handleHumanInboxRelayAction(
       const { fileLetterAsThreadUpdate, filedAnswer } = await import('./letter-to-thread.js');
       const filed = await fileLetterAsThreadUpdate(input as unknown as Omit<NewLetter, 'sender'>, sid);
       if (filed) return filedAnswer(filed) as unknown as Record<string, unknown>;
-      const { letter, addedToThread, openAsk } = await sendLetterAsCallerOnce(
-        input as unknown as Omit<NewLetter, 'sender'>,
-        sid,
-      );
-      // The away thread (away-thread.ts) answers the same through a replica as on the primary.
-      return { id: letter.id, ...(addedToThread ? { addedToThread: true } : {}), ...(openAsk ? { openAsk } : {}) };
+      // The away thread (away-thread.ts) and the info rule (info-letter-rule.ts) answer the same
+      // through a replica as on the primary.
+      return sentAnswer(await sendLetterAsCallerOnce(input as unknown as Omit<NewLetter, 'sender'>, sid));
     }
     case 'reply': {
       // The replica stamps callerSid from its request header (human-inbox-v1.ts), never from the body,

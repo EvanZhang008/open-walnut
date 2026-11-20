@@ -4,7 +4,9 @@
  * open one its kind's `stillNeeded` rule says nobody needs any more.
  *
  * The ratchet (tests/core/walnut-letters-ratchet.test.ts) reads every send site in src/ and fails
- * on one that is neither a kind's caller nor listed in EXEMPT_LETTER_SENDS with a reason.
+ * on one that is neither a kind's caller nor listed in EXEMPT_LETTER_SENDS with a reason. A kind of
+ * type info says when it is a report the user asked for and where it goes otherwise (kind.ts
+ * `info`; tests/core/info-letter-inbox-ratchet.test.ts): the inbox takes no other info letter.
  */
 import type { LetterRecord } from '../types.js';
 import type { WalnutLetterKind } from './kind.js';
@@ -43,7 +45,7 @@ export const EXEMPT_LETTER_SENDS: Readonly<Record<string, string>> = {
   'src/core/human-inbox/relay.ts': 'a session\'s letter relayed from a replica: the session wrote every word',
   'src/web/routes/human-inbox-v1.ts': 'POST /api/v1/human-inbox: a session\'s own letter',
   'src/core/offline-merge/apply-letter.ts': 'journal replay of a session\'s letter written while the server was away',
-  'src/core/plugins/server-api.ts': 'walnut.letters.send: a plugin supplies the text (the built-in mail plugin\'s are kinds here)',
+  'src/core/plugins/plugin-letters.ts': 'walnut.letters.send: a plugin supplies the text (the built-in mail plugin\'s are kinds here)',
 };
 
 /** The kind of a letter Walnut wrote itself, or undefined. */

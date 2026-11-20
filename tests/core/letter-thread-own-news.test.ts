@@ -20,7 +20,7 @@ const ROOT = path.resolve(__dirname, '../..');
 const THREAD_WRITERS: Record<string, string> = {
   'src/web/routes/human-inbox-v1.ts': 'a session replying in its own letter (POST /human-inbox/:id/reply)',
   'src/core/human-inbox/relay.ts': 'the same reply through the cloud bridge',
-  'src/core/plugins/server-api.ts': 'a plugin replying in its own letter',
+  'src/core/plugins/plugin-letters.ts': 'a plugin replying in its own letter',
   'src/core/human-inbox/away-thread.ts': 'an away update with no letter of its own, folded as the turn itself',
   'src/core/hosts/ssh-cert-expiry-alert.ts': 'the certificate it warned about has expired: that letter\'s own news',
 };

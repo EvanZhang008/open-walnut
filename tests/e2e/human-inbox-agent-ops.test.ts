@@ -48,8 +48,8 @@ describe('the inbox, read by an agent', () => {
       actions: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
       sender: { sessionId: 's-main', taskId: 't-main', taskTitle: 'Main agent', host: 'local' },
     });
-    const other = await sendLetter({ subject: 'Weekly digest', type: 'info', markdown: 'x'.repeat(30_000), sender: { sessionId: 's-other', taskId: 't-other', host: 'local' }, taskRefs: ['t-main'] });
-    await sendLetter({ subject: 'Unrelated', type: 'info', markdown: 'Hi', sender: { sessionId: 's-3', taskId: 't-3', host: 'local' } });
+    const other = await sendLetter({ subject: 'Weekly digest', type: 'info', userAsked: true, markdown: 'x'.repeat(30_000), sender: { sessionId: 's-other', taskId: 't-other', host: 'local' }, taskRefs: ['t-main'] });
+    await sendLetter({ subject: 'Unrelated', type: 'review', markdown: 'Hi', sender: { sessionId: 's-3', taskId: 't-3', host: 'local' } });
 
     // By task: the letters it sent and the ones that name it.
     const mine = await run('human_inbox_list', { task_id: 't-main' });
@@ -82,7 +82,7 @@ describe('the inbox, read by an agent', () => {
 
   it('mail html reads as text: entities, comments, unclosed scripts, quoted ">" and html in a turn\'s text', async () => {
     const mail = await sendLetter({
-      subject: 'Digest', type: 'info',
+      subject: 'Digest', type: 'info', userAsked: true,
       html: '<!-- tracking --><p title="a > b">It&rsquo;s here&#8217;s &#x2019;ok&#x2019; &mdash; done&hellip;</p><p>Zero&zwnj;width</p><script>var leak = 1',
       sender: { sessionId: 's-mail', taskId: 't-mail', host: 'local' },
     });
@@ -237,12 +237,12 @@ describe('the inbox, read by an agent', () => {
     // A task nobody asked sends as before.
     const solo = await addTask({ title: 'Daily digest' });
     await createSessionRecord('s-solo', solo.task.id, '', WALNUT_HOME);
-    expect((await run('human_inbox_send', { subject: 'Digest', type: 'info', markdown: 'x' }, 's-solo')).letterId).toBeTruthy();
+    expect((await run('human_inbox_send', { subject: 'Digest', type: 'completion', markdown: 'x' }, 's-solo')).letterId).toBeTruthy();
     // A worker's question to its lead never silences the lead; a pinned standing report always goes.
     await createSessionRequest({ fromSessionId: 's-worker', toTaskId: lead.task.id, toSessionId: 's-lead', text: 'Which port?' });
     expect((await run('human_inbox_send', { subject: 'Team report', type: 'review', markdown: 'x' }, 's-lead')).letterId).toBeTruthy();
     await createSessionRequest({ fromSessionId: 's-lead', toTaskId: worker.task.id, toSessionId: 's-worker', text: 'Status? Reply when done' });
-    expect((await send({ pin: true, subject: 'Timeout fix: standing report' })).letterId).toBeTruthy();
+    expect((await send({ pin: true, type: 'completion', subject: 'Timeout fix: standing report' })).letterId).toBeTruthy();
     // Another project's lead asking does not speak for this task's work; its own project's lead does.
     const sender = (await addTask({ title: 'Inbox polish', project: 'Walnut' })).task;
     const otherLead = (await addTask({ title: 'Marina lead', project: 'Marina' })).task;
@@ -253,8 +253,8 @@ describe('the inbox, read by an agent', () => {
     await createSessionRecord('s-marina', otherLead.id, 'Marina', WALNUT_HOME);
     await createSessionRecord('s-vp', ownLead.id, 'Walnut', WALNUT_HOME);
     await createSessionRequest({ fromSessionId: 's-marina', toTaskId: sender.id, toSessionId: 's-sender', text: 'Which port do you use?' });
-    expect((await run('human_inbox_send', { subject: 'Polish shipped', type: 'info', markdown: 'x' }, 's-sender')).letterId).toBeTruthy();
+    expect((await run('human_inbox_send', { subject: 'Polish shipped', type: 'completion', markdown: 'x' }, 's-sender')).letterId).toBeTruthy();
     await createSessionRequest({ fromSessionId: 's-vp', toTaskId: sender.id, toSessionId: 's-sender', text: 'Ship it. Reply when done' });
-    await expect(run('human_inbox_send', { subject: 'Polish shipped', type: 'info', markdown: 'x' }, 's-sender')).rejects.toThrow(/Walnut VP/);
+    await expect(run('human_inbox_send', { subject: 'Polish shipped', type: 'completion', markdown: 'x' }, 's-sender')).rejects.toThrow(/Walnut VP/);
   });
 });

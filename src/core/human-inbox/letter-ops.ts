@@ -25,7 +25,11 @@ import {
 } from './duplicate-letter.js';
 import { truncatePreview } from './preview.js';
 import {
+  INFO_NOT_INBOX, INFO_NOT_INBOX_MESSAGE, noticeSubjectKey, passesInfoRule, sendInfoNotice, type InfoNotice,
+} from './info-letter-rule.js';
+import {
   answerLetter,
+  checkLetterShape,
   findLetterByOp,
   getLetter,
   humanReplyTurn,
@@ -150,28 +154,6 @@ export async function resolveLetterSender(callerSid: string | undefined): Promis
 }
 
 /**
- * Send a letter on behalf of a caller, with the envelope stamped server-side.
- *
- * THE one place the server mints a letter from a caller's session id — the HTTP
- * route and the cloud replica's relay both come through here — so it is also where
- * a per-sender letter budget belongs. Today exactly one sender has one: an Inbox
- * Triage run (one summary + three decisions per run, triage-quota.ts). The guard
- * answers `undefined` for every other caller, so nothing else changes shape.
- *
- * The slot is TAKEN before the write and RELEASED if the write fails: two parallel
- * sends must not both read the same remaining budget, and a letter the store
- * rejects (an oversize field, a duplicate action id) must not burn a slot the run
- * can never get back.
- */
-export async function sendLetterAsCaller(
-  input: Omit<NewLetter, 'sender'>,
-  callerSid: string | undefined,
-  opts: SendLetterOptions = {},
-): Promise<LetterRecord> {
-  return (await sendLetterAsCallerOnce(input, callerSid, opts)).letter;
-}
-
-/**
  * A report the asking task gives the user already (reply-instead.ts): refused with the request
  * named, unless the user themself asked for the letter. Also run before a letter is filed as a
  * thread update (letter-to-thread.ts), so that refusal reads the same either way.
@@ -185,16 +167,30 @@ export async function refuseReplyInstead(input: Omit<NewLetter, 'sender'>, sende
   throw new LetterError(replyInsteadMessage(hit), 'reply_instead', 409);
 }
 
+/** A caller's letter that went in (or was already in) the inbox. */
+export interface CallerLetterSent { letter: LetterRecord; duplicate: boolean; addedToThread?: boolean; openAsk?: OpenAskHint; notice?: undefined }
+/** A caller with no session sent an info letter nobody asked for: it became a notice (info-letter-rule.ts). */
+export interface CallerNoticeSent { notice: InfoNotice; letter?: undefined; duplicate: false }
+
 /**
- * sendLetterAsCaller, also saying whether the letter was already sent: `opts.opKey`
- * (a host's journal record, offline-merge/apply-letter.ts) names one in the store, so
- * nothing is written, charged against a budget or announced again.
+ * Send a letter on behalf of a caller, with the envelope stamped server-side.
+ *
+ * THE one place the server mints a letter from a caller's session id: the HTTP route, the cloud
+ * replica's relay and a host's journal replay all come through here, so it is also where a
+ * per-sender letter budget belongs. Today exactly one sender has one: an Inbox Triage run (one
+ * summary + three decisions per run, triage-quota.ts). The slot is TAKEN before the write and
+ * RELEASED if the write fails: two parallel sends must not both read the same remaining budget,
+ * and a letter the store rejects must not burn a slot the run can never get back.
+ *
+ * It also says whether the letter was already sent: `opts.opKey` (a host's journal record,
+ * offline-merge/apply-letter.ts) names one in the store, so nothing is written, charged against
+ * a budget or announced again.
  */
 export async function sendLetterAsCallerOnce(
   input: Omit<NewLetter, 'sender'>,
   callerSid: string | undefined,
   opts: SendLetterOptions = {},
-): Promise<{ letter: LetterRecord; duplicate: boolean; addedToThread?: boolean; openAsk?: OpenAskHint }> {
+): Promise<CallerLetterSent | CallerNoticeSent> {
   if (opts.opKey) {
     const first = await findLetterByOp(opts.opKey);
     if (first) return { letter: first, duplicate: true };
@@ -202,6 +198,22 @@ export async function sendLetterAsCallerOnce(
   // The thread an update names (letter-to-thread.ts) rides no letter.
   { const { thread: _t, ...rest } = input; input = rest; }
   const sender = await resolveLetterSender(callerSid);
+  // An info letter the user did not ask for is not a letter (info-letter-rule.ts): a script's
+  // becomes a notice, a session's is refused with what to do instead. The store checks it again,
+  // and answers a malformed letter's own error first.
+  if (!passesInfoRule(input) && checkLetterShape(input as unknown as Record<string, unknown>).ok) {
+    if (sender.via === 'api') {
+      const notice = await sendInfoNotice(
+        { subject: String(input.subject ?? ''), text: input.text, markdown: input.markdown, html: input.html, taskRefs: input.taskRefs ?? input.task_refs },
+        { dedupKey: `letter-notice:api:${noticeSubjectKey(String(input.subject ?? ''))}`, emitSource: 'human-inbox/api', why: 'an info letter from a caller with no session' },
+      );
+      return { notice, duplicate: false };
+    }
+    // A task answering another task's request hears the more useful refusal: answer that task.
+    if (!opts.opKey) await refuseReplyInstead(input, sender);
+    log.notif.info('human-inbox: info letter refused, the user did not ask for it', { taskId: sender.taskId, senderSessionId: sender.sessionId });
+    throw new LetterError(INFO_NOT_INBOX_MESSAGE, INFO_NOT_INBOX, 409);
+  }
   const { resolveCredentialAsk } = await import('./credential-ask.js');
   const credentialAsk = await resolveCredentialAsk(input);
   if (credentialAsk) {
@@ -292,6 +304,24 @@ export async function sendLetterAsCallerOnce(
   if (out.duplicate) charge?.release();
   else charge?.commit(out.letter.id);
   return hinted(out);
+}
+
+/** What a caller with no session reads when its info letter became a notice. */
+export const INFO_NOTICE_ANSWER = 'Not a letter: an info letter is only for a report the user asked for, so this went to the '
+  + 'notification center as a notice. Send it with user_asked:true only when he asked for this report.';
+
+/**
+ * The send route's answer, the same on the primary and through the replica's relay. `outcome`
+ * says where it went (additive: older clients read `id` as before); a notice names no letter.
+ */
+export function sentAnswer(out: CallerLetterSent | CallerNoticeSent): Record<string, unknown> {
+  // No `id`, as for a thread update (letter-to-thread.ts filedAnswer): a notice id read as a letter's
+  // would only meet a 404. A retry of the same notice is answered as already there (info-letter-rule.ts).
+  if (out.notice) return { outcome: 'notice', notice: out.notice, message: INFO_NOTICE_ANSWER };
+  return {
+    id: out.letter.id, outcome: 'letter',
+    ...(out.addedToThread ? { addedToThread: true } : {}), ...(out.openAsk ? { openAsk: out.openAsk } : {}),
+  };
 }
 
 /** Agent-authored spans in the wrapper (subject, button label): one short line. */

@@ -1,6 +1,7 @@
 /**
- * "Mail digest: N unread across N accounts": the mail plugin's daily report of what sits unread
- * (integrations/mail/digest.ts), in plain or grouped mode. The layout, byte budgets and escaping
+ * "Mail digest: N unread across N accounts": the mail plugin's report of what sits unread
+ * (integrations/mail/digest.ts), in plain or grouped mode: a letter when the user asks for it from
+ * the Mail console, a notice on the daily run. The layout, byte budgets and escaping
  * live in integrations/mail/digest-render.ts; every fixed word lives here. Account labels, senders,
  * subjects and group labels are inserted as the mail gave them, escaped.
  */
@@ -110,7 +111,7 @@ export const MAIL_DIGEST_WORDS: ByLang<MailDigestWords> = {
 
 export const MAIL_DIGEST = letterKind<MailDigestParams>({
   id: 'mail-digest',
-  // walnut.letters.send gives a letter with no actions its informational type.
+  // walnut.letters.send gives a letter with no actions its informational type; only "Send it now" is one.
   type: 'info',
   callers: ['src/integrations/mail/digest.ts'],
   marked: false,
@@ -137,5 +138,9 @@ export const MAIL_DIGEST = letterKind<MailDigestParams>({
       now: Date.UTC(2026, 0, 1, 12),
     },
   ],
-  stillNeeded: { none: 'a daily report the user set up (or asked for from the Mail console): nothing in it to settle' },
+  stillNeeded: { none: 'a report the user asked for from the Mail console: nothing in it to settle' },
+  info: {
+    asked: '"Send it now" from the Mail console: the user asked for it there (digest.ts sendNow)',
+    otherwise: 'the daily run is a count nobody asked for: the plugin host makes it a notice of the mail plugin',
+  },
 });

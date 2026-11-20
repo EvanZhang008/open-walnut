@@ -196,6 +196,6 @@ export async function fileLetterAsThreadUpdate(input: SendInput, callerSid: stri
  * The send route's answer for a filed update. No `id`: there is no letter, and a thread id read as
  * a letter's would only meet a 404 (human_inbox_reply, a mark); the op names the thread instead.
  */
-export function filedAnswer(f: FiledUpdate): { threadId: string; filedToThread: FiledUpdate } {
-  return { threadId: f.threadId, filedToThread: f };
+export function filedAnswer(f: FiledUpdate): { threadId: string; filedToThread: FiledUpdate; outcome: 'thread' } {
+  return { threadId: f.threadId, filedToThread: f, outcome: 'thread' };
 }

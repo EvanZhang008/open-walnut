@@ -52,7 +52,8 @@ const ASK = {
 }
 
 const DIGEST_BODY = '## Mail digest\n\nThirty messages, each with its own available actions.\n'
-const DIGEST = { subject: 'Marina mail digest', type: 'info' as const, markdown: DIGEST_BODY }
+// A digest the user set up: an info letter only lands as a report he asked for (info-letter-rule.ts).
+const DIGEST = { subject: 'Marina mail digest', type: 'info' as const, markdown: DIGEST_BODY, user_asked: true }
 const mailItem = (id: string): InboxLetterItem => ({
   id, subject: `Marina update ${id}`, summary: 'Details: \u{e9} \u{4e2d}\u{6587} \u{1f680}.\nKeep each mail action separate.',
   source: { kind: 'mail', account: `account-${id}`, message: `message-${id}` },
@@ -192,7 +193,7 @@ describe('a letter saved on the host reaches the inbox as if sent online', () =>
   it('several letters of one drain arrive in order, each once', async () => {
     const h = hostWithLetters()
     const ids: string[] = []
-    for (let i = 0; i < 5; i++) { h.clock.now = Date.now() - (10 - i) * 60_000; ids.push((await h.write({ subject: `Digest ${i}`, type: 'info', markdown: `day ${i}` })).letterId) }
+    for (let i = 0; i < 5; i++) { h.clock.now = Date.now() - (10 - i) * 60_000; ids.push((await h.write({ subject: `Digest ${i}`, type: 'info', markdown: `day ${i}`, user_asked: true })).letterId) }
     await drain(h.conn)
     const letters = await sessionLetters()
     expect(letters.map((l) => l.id).sort()).toEqual([...ids].sort())

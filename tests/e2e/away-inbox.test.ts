@@ -95,7 +95,7 @@ describe('a lead the user is away from', () => {
     expect((await getLetter(first.letterId)).thread.length).toBe(threadBefore);
 
     // A pinned standing report is its own letter, as before.
-    const pinned = await run('human_inbox_send', { subject: 'Weekly digest', type: 'info', markdown: 'x', pin: true }, LEAD_SID);
+    const pinned = await run('human_inbox_send', { subject: 'Weekly digest', type: 'completion', markdown: 'x', pin: true }, LEAD_SID);
     expect(pinned.letterId).not.toBe(first.letterId);
 
     // A worker's letter is never threaded: only Main and the leads have an away thread.

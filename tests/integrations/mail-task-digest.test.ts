@@ -533,16 +533,39 @@ const DIGEST_CONFIG = {
   digest_max_items: 2,
 };
 
-describe('the daily digest letter', () => {
+/** The mail plugin's digest notices (the daily run nobody asked for: human-inbox/info-letter-rule.ts). */
+async function digestNotices(): Promise<Array<{ id: string; title: string; body?: string }>> {
+  const { listNotifications } = await import('../../src/core/notifications/store.js');
+  return (await listNotifications()).feed.filter((n) => n.dedupKey.startsWith('plugin:mail:letter:'));
+}
 
-  it('sends one letter, listing the newest unread and counting the rest', async () => {
+describe('the daily digest', () => {
+
+  it('the daily run is a notice, not a letter: nobody asked for that count', async () => {
     await reboot(DIGEST_CONFIG);
-    // The plain letter, from All mail. Grouped, it lists Important and one line per group instead
+    // The plain digest, from All mail. Grouped, it lists Important and one line per group instead
     // (mail-sort-summary.test.ts), and this fixture's mail is all sorted into groups. The switch is
     // stored in the mail database, so it holds for the rest of this file.
     expect((await api('PUT', '/groups/pref', { on: false })).status).toBe(200);
     events.length = 0;
     await mailSyncForTesting()!.runTick({ force: true });
+
+    // 2026-11-20: the inbox holds only what needs the user; a daily unread count goes to the
+    // notification center instead, under the same subject.
+    expect(await mailLetters()).toHaveLength(0);
+    const notices = await digestNotices();
+    expect(notices.map((n) => n.title)).toEqual(['Mail digest: 6 unread across 1 account']);
+    expect(eventsOf('digest-sent')).toEqual([]);
+    expect(await digestDay()).toBe(localDay(Date.now()));
+  }, 120_000);
+
+  it('send-now sends one letter, listing the newest unread and counting the rest, and does NOT spend the day', async () => {
+    await runSql('UPDATE meta SET value = ? WHERE key = ?', ['2020-01-01', DIGEST_DAY_KEY]);
+    events.length = 0;
+    const answered = await api<{ letterId: string | null; unread: number }>('POST', '/digest/send-now');
+    expect(answered.status).toBe(200);
+    expect(answered.body.letterId).toBeTruthy();
+    expect(answered.body.unread).toBe(6);
 
     const letters = await mailLetters();
     expect(letters).toHaveLength(1);
@@ -580,9 +603,10 @@ describe('the daily digest letter', () => {
     expect(body).toContain('and 4 more');
     // A markdown link, so the one thing this letter asks for is one tap on a phone.
     expect(body).toContain(`[Open Mail](/mail?account=${encodeURIComponent(ACCOUNT_ID)})`);
-
     expect(eventsOf('digest-sent')).toEqual([{ letterId: letter.id, unread: 6 }]);
-    expect(await digestDay()).toBe(localDay(Date.now()));
+
+    // The day key untouched: somebody looking at lunchtime must not swallow tomorrow morning's.
+    expect(await digestDay()).toBe('2020-01-01');
   }, 120_000);
 
   it('prepares a digest item from the real cache and executes only its exact email flag', async () => {
@@ -612,34 +636,25 @@ describe('the daily digest letter', () => {
     await runSql('UPDATE mailboxes SET unread = 6 WHERE account_id = ? AND role = ?', [ACCOUNT_ID, 'inbox']);
   });
 
-  it('sends nothing on the next tick of the same day', async () => {
+  it('the scheduled run still comes once a day, as a notice that replaces yesterday\'s', async () => {
+    // The day key is still the one send-now left: the next tick sends today's notice.
+    await mailSyncForTesting()!.runTick({ force: true });
+    const first = await digestNotices();
+    expect(first).toHaveLength(1);
+    expect(await digestDay()).toBe(localDay(Date.now()));
+    // Nothing more on the next ticks of the same day.
     await mailSyncForTesting()!.runTick({ force: true });
     await mailSyncForTesting()!.runTick({ force: true });
-    expect(await mailLetters()).toHaveLength(1);
-  }, 120_000);
-
-  it('sends again once the day key is yesterday', async () => {
+    expect((await digestNotices()).map((n) => n.id)).toEqual(first.map((n) => n.id));
+    // A new day: today's notice in yesterday's place, never a pile, and still no letter.
     await runSql('UPDATE meta SET value = ? WHERE key = ?', ['2020-01-01', DIGEST_DAY_KEY]);
     await mailSyncForTesting()!.runTick({ force: true });
-    expect(await mailLetters()).toHaveLength(2);
+    expect(await digestNotices()).toHaveLength(1);
+    expect(await mailLetters()).toHaveLength(1);
     expect(await digestDay()).toBe(localDay(Date.now()));
   }, 120_000);
 
-  it('send-now sends immediately and does NOT spend the day', async () => {
-    const answered = await api<{ letterId: string | null; unread: number }>('POST', '/digest/send-now');
-    expect(answered.status).toBe(200);
-    expect(answered.body.letterId).toBeTruthy();
-    expect(answered.body.unread).toBe(6);
-    expect(await mailLetters()).toHaveLength(3);
-    // Still today's key, untouched: somebody looking at lunchtime must not swallow tomorrow morning's.
-    expect(await digestDay()).toBe(localDay(Date.now()));
-
-    // And the scheduled one is still suppressed, which is what "did not spend the day" means.
-    await mailSyncForTesting()!.runTick({ force: true });
-    expect(await mailLetters()).toHaveLength(3);
-  }, 120_000);
-
-  it('marks the day without a letter when nothing is unread', async () => {
+  it('marks the day without a notice or a letter when nothing is unread', async () => {
     // Read on the SERVER, which is what the next mailbox listing reports and what the flags on the
     // cached rows then agree with. Both halves, because the count comes from the mailbox and the
     // items from the cache, and a test that moved only one of them would prove nothing.
@@ -648,15 +663,17 @@ describe('the daily digest letter', () => {
     // goes around the store: a row whose two columns disagree is a bug this test would otherwise plant.
     await runSql("UPDATE messages SET flags_json = '[\"\\\\Seen\"]', seen = 1");
     await runSql('UPDATE meta SET value = ? WHERE key = ?', ['2020-01-01', DIGEST_DAY_KEY]);
+    const before = (await digestNotices()).map((n) => n.id);
 
     await mailSyncForTesting()!.runTick({ force: true });
-    // No letter that says there is no news, and no second attempt later today either.
-    expect(await mailLetters()).toHaveLength(3);
+    // No word that says there is no news, and no second attempt later today either.
+    expect(await mailLetters()).toHaveLength(1);
+    expect((await digestNotices()).map((n) => n.id)).toEqual(before);
     expect(await digestDay()).toBe(localDay(Date.now()));
 
     const nothing = await api<{ letterId: string | null; unread: number }>('POST', '/digest/send-now');
     expect(nothing.body).toMatchObject({ letterId: null, unread: 0 });
-    expect(await mailLetters()).toHaveLength(3);
+    expect(await mailLetters()).toHaveLength(1);
   }, 120_000);
 });
 

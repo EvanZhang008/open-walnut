@@ -19,6 +19,7 @@ test.beforeAll(async ({ request }) => {
     const res = await request.post('/api/v1/human-inbox', { data: {
       subject: i === 328 ? subject : i === 327 ? `Parking change ${nonce}` : `Letter ${nonce} ${i}`,
       type: i === 328 ? 'review' : 'info',
+      user_asked: true,
       ...(i === 327 ? { html: '<h2>Parking change</h2><p>Use the north entrance.</p><script>window.cardScriptRan=true</script>' }
         : { markdown: i === 328 ? body : '# Notice\n\nPlease check the schedule.\n\nFurther details go here.' }),
     } });
@@ -128,7 +129,7 @@ test('phone width, reduced motion and sandboxed HTML remain usable', async ({ pa
   const target = await request.post('/api/v1/tasks', { data: { title: `Card navigation ${nonce}`, source: 'local' } });
   expect(target.ok()).toBeTruthy();
   const taskId = (await target.json()).task.id;
-  const sent = await request.post('/api/v1/human-inbox', { data: { subject: `Linked task ${nonce}`, type: 'info', markdown: `Read [the task](/tasks/${taskId}).` } });
+  const sent = await request.post('/api/v1/human-inbox', { data: { subject: `Linked task ${nonce}`, type: 'info', user_asked: true, markdown: `Read [the task](/tasks/${taskId}).` } });
   expect(sent.status()).toBe(201);
   const linkedId = (await sent.json()).id;
   await page.reload();
@@ -156,7 +157,7 @@ test('missing bodies show one notice and deferred HTML streams in the card', asy
     await expect(row.locator('.hib-md-body')).toHaveCount(0);
   } finally { await page.unroute(`**/api/v1/human-inbox/${id}`); }
   const sent = await request.post('/api/v1/human-inbox', { data: {
-    subject: `Deferred letter ${nonce}`, type: 'info', text: 'Large formatted letter.',
+    subject: `Deferred letter ${nonce}`, type: 'info', user_asked: true, text: 'Large formatted letter.',
     html: '<h2>Streamed document</h2><p>' + 'content '.repeat(140_000) + '</p>',
   } });
   expect(sent.status()).toBe(201);

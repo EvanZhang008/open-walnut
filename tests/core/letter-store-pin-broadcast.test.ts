@@ -42,7 +42,7 @@ const SENDER: LetterSender = {
 
 async function seedLetter(subject = 'Pin me'): Promise<LetterRecord> {
   return sendLetter({
-    subject, type: 'info', markdown: 'A letter worth keeping at the top.',
+    subject, type: 'info', userAsked: true, markdown: 'A letter worth keeping at the top.',
     text: 'A letter worth keeping at the top.', sender: SENDER,
   });
 }

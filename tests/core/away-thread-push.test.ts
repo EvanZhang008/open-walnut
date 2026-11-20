@@ -34,7 +34,7 @@ beforeEach(() => {
 
 describe('quiet letters and turns never buzz', () => {
   it('the first letter buzzes, a quiet turn does not, a loud turn does', async () => {
-    const l = await sendLetter({ subject: 'Deploy is live', type: 'info', markdown: 'x', sender }, { awayThread: { taskId: 't-lead', since: 1 } });
+    const l = await sendLetter({ subject: 'Deploy is live', type: 'completion', markdown: 'x', sender }, { awayThread: { taskId: 't-lead', since: 1 } });
     await vi.waitFor(() => expect(sendApns).toHaveBeenCalledTimes(1), { timeout: 5_000, interval: 25 });
     await agentReply(l.id, { text: 'Review the plan' }, { quiet: true });
     await sendLetter({ subject: 'Start?', type: 'action_required', markdown: 'y', actions: [{ id: 'go', label: 'Go' }], sender }, { quiet: true });

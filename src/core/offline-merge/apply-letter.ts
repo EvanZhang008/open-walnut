@@ -4,7 +4,7 @@
  * (providers/offline-host-core.ts opLetter).
  *
  * Sent the way the online op sends one: the op's own argument parse and size caps, then
- * sendLetterAsCaller (the sender stamped from the session, the per-run letter budget, the
+ * sendLetterAsCallerOnce (the sender stamped from the session, the per-run letter budget, the
  * store's checks, the inbox envelope, the phone push and the events). It keeps the id the
  * host gave the session (a taken id gets a new one) and the time the session sent it, on
  * this Mac's clock. Once: the letter keeps the record's op id (`createdByOp`), so a redrain
@@ -61,6 +61,12 @@ export async function applyLetter(ctx: V2Context, record: V2Record): Promise<voi
   } catch (err) {
     if (err instanceof LetterError && err.status < 500) throw new RefusedWrite(`${what}: ${err.message}`);
     throw err;
+  }
+  if (out.notice) {
+    // A record with no session behind it (info-letter-rule.ts): its info letter is a notice now.
+    log.notif.info('offline handover: an info letter written while away became a notice', { host: ctx.hostKey, seq: record.seq, opId: record.opId, noticeId: out.notice.id });
+    ctx.result.replayed++;
+    return;
   }
   log.notif.info('offline handover: a letter written while away is in the inbox', {
     host: ctx.hostKey, seq: record.seq, opId: record.opId, letterId: out.letter.id, givenId: letterId,

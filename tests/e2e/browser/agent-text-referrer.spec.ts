@@ -50,7 +50,7 @@ for (const [name, prefix, suffix] of PARSER_BOUNDARIES) for (const deferred of [
       + `<img src="${OUTSIDE}/pixel-${name}">` + file
       + suffix + (name === 'foreign-meta' ? link('boundary-after-style') + file : '')
       + (deferred ? `<p>${'Long report. '.repeat(100_000)}</p>` : '')
-    const sent = await request.post('/api/v1/human-inbox', { data: { subject, type: 'info', html: document } })
+    const sent = await request.post('/api/v1/human-inbox', { data: { subject, type: 'info', user_asked: true, html: document } })
     expect(sent.ok(), await sent.text()).toBeTruthy()
     const id = (await sent.json()).id
     letters.push(id)
@@ -102,7 +102,7 @@ for (const deferred of [false, true]) test(`an HTML letter sends no Referer and 
     + `<p>File: ${files.document}:2-3</p>`
     + (deferred ? `<p>${'Long report. '.repeat(100_000)}</p>` : '')
     + '</body></html>'
-  const sent = await request.post('/api/v1/human-inbox', { data: { subject, type: 'info', text: 'Referrer acceptance', html } })
+  const sent = await request.post('/api/v1/human-inbox', { data: { subject, type: 'info', user_asked: true, text: 'Referrer acceptance', html } })
   expect(sent.ok(), await sent.text()).toBeTruthy()
   letters.push((await sent.json()).id)
 

@@ -51,7 +51,7 @@ async function humanReply(request: APIRequestContext, id: string, text: string):
 async function seedLongLetter(request: APIRequestContext, subject: string): Promise<string> {
   const sections = Array.from({ length: 120 }, (_, i) =>
     `<h3>Section ${i + 1}</h3><p>${'Long digest paragraph. '.repeat(30)}</p>`).join('')
-  const id = await send(request, { subject, type: 'info', html: `<h1>Digest ${NONCE}</h1>${sections}` })
+  const id = await send(request, { subject, type: 'info', user_asked: true, html: `<h1>Digest ${NONCE}</h1>${sections}` })
   for (let i = 1; i <= 30; i++) {
     if (i % 2 === 1) {
       await humanReply(request, id, `Human turn ${i}: ${'please look at this part again. '.repeat(i % 5 + 1)}`)
@@ -225,7 +225,7 @@ test('a long thread opens at its newest turn and never moves a reader who scroll
 
 test('a letter with no thread keeps its single scroll', async ({ page, request }) => {
   const subject = `PW thread scroll none ${NONCE}`
-  await send(request, { subject, type: 'info', markdown: `# Plain ${NONCE}\n\n${'A line.\n\n'.repeat(80)}` })
+  await send(request, { subject, type: 'info', user_asked: true, markdown: `# Plain ${NONCE}\n\n${'A line.\n\n'.repeat(80)}` })
   await home(page)
   await page.getByRole('button', { name: /^Notifications/ }).click()
   const center = page.locator('.notification-panel')
@@ -265,7 +265,7 @@ test('the reader keeps its size: no drift, and it comes back after the window sh
   const subject = `PW thread scroll steady ${NONCE}`
   const wide = 'A wide line in a code block that runs past the reader. '.repeat(6)
   const id = await send(request, {
-    subject, type: 'info',
+    subject, type: 'info', user_asked: true,
     markdown: `**Status**: ${'a line of context. '.repeat(20)}\n\n\`\`\`\n${`${wide}\n`.repeat(14)}\`\`\`\n\n${'More of the letter. '.repeat(30)}`,
   })
   await agentReply(request, id, { text: `One agent turn: ${'the update in a few lines. '.repeat(12)}` })

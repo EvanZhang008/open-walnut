@@ -12,7 +12,7 @@ test('split inbox keeps both panels, density, selection and per-letter reply dra
   page.on('pageerror', e => errors.push(e.message))
   try {
     for (let i = 0; i < 30; i++) {
-      const r = await request.post('/api/v1/human-inbox', { data: { subject: `Split letter ${i}: ${'The complete garden plan with every tool and every next step. '.repeat(3)}`, type: 'info', markdown: `Letter ${i} body\n\n${'Review the garden schedule and confirm the full list. '.repeat(40)}` } })
+      const r = await request.post('/api/v1/human-inbox', { data: { subject: `Split letter ${i}: ${'The complete garden plan with every tool and every next step. '.repeat(3)}`, type: 'info', user_asked: true, markdown: `Letter ${i} body\n\n${'Review the garden schedule and confirm the full list. '.repeat(40)}` } })
       expect(r.status()).toBe(201)
       ids.push((await r.json()).id)
     }
@@ -115,7 +115,7 @@ test('split inbox keeps both panels, density, selection and per-letter reply dra
 })
 
 test('split reader stays usable through empty unread filters and a failed letter load', async ({ page, request }) => {
-  const r = await request.post('/api/v1/human-inbox', { data: { subject: `Split recovery ${Date.now()}`, type: 'info', markdown: 'Recovery body' } })
+  const r = await request.post('/api/v1/human-inbox', { data: { subject: `Split recovery ${Date.now()}`, type: 'info', user_asked: true, markdown: 'Recovery body' } })
   expect(r.status()).toBe(201)
   const id = (await r.json()).id as string
   try {

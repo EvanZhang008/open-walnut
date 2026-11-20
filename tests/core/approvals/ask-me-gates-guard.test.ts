@@ -42,7 +42,7 @@ const GATES: Record<string, Gate> = {
   'src/integrations/mail/approvals.ts': { asks: 1, reads: 'self' },
   'src/integrations/mail/unsubscribe.ts': { asks: 1, reads: 'self' },
   'src/core/approvals/ask-me.ts': { asks: 2, kept: 'the off path itself (records an approved approval nobody was asked), and turning approvals off, which a device signs' },
-  'src/core/plugins/server-api.ts': { asks: 1, kept: 'a plugin\'s letters.send; the plugin reads letters.asksPerson() itself' },
+  'src/core/plugins/plugin-letters.ts': { asks: 1, kept: 'a plugin\'s letters.send; the plugin reads letters.asksPerson() itself' },
   'src/integrations/mail/digest.ts': { asks: 1, kept: 'the mail digest the person set up: a report, not an ask' },
   'src/core/offline-merge/letter.ts': { asks: 1, kept: 'a review of what two Walnuts wrote while apart: a report, not an ask' },
   'src/web/routes/human-inbox-v1.ts': { asks: 1, kept: 'answering a plugin\'s letter is the person\'s own act' },

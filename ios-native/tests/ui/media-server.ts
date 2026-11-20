@@ -78,15 +78,15 @@ const subjects = {
 }
 // Sent first, so it is the oldest row and moves no other letter. Its reply carries no sender, as a
 // turn from before the server recorded one: the phone must load no image and read no file for it.
-const oldTurn = await sendLetter({ subject: subjects.oldTurn, type: 'info', sender, markdown: 'A letter with an old turn.' }, { quiet: true })
+const oldTurn = await sendLetter({ subject: subjects.oldTurn, type: 'info', userAsked: true, sender, markdown: 'A letter with an old turn.' }, { quiet: true })
 await agentReply(oldTurn.id, { text: `Old turn image:\n\n![Old chart](${image})\n\nOld turn file: ${readme}:1` }, { quiet: true })
 const target = await sendLetter({
-  subject: subjects.target, type: 'info', sender,
+  subject: subjects.target, type: 'info', userAsked: true, sender,
   markdown: `# Target letter body marker\n\nThe letter the other two link to.\n\n${fence(1)}`,
 }, { quiet: true })
 const taskRef = `<task-ref id="${seeded.taskId}" label="Phone media fixture"/>`
 const source = await sendLetter({
-  subject: subjects.source, type: 'info', sender,
+  subject: subjects.source, type: 'info', userAsked: true, sender,
   text: `${readme}:2 then ${target.id}`,
   markdown: [
     '# Source markdown marker',
@@ -103,7 +103,7 @@ const source = await sendLetter({
 // Each agent turn names its writer, as the server stamps it from the caller's session.
 await agentReply(source.id, { text: `Plain turn: ${readme}:1, letter ${target.id}, task ${seeded.taskId}` }, { quiet: true, sender })
 const html = await sendLetter({
-  subject: subjects.html, type: 'info', sender,
+  subject: subjects.html, type: 'info', userAsked: true, sender,
   text: 'HTML document with linked references.',
   html: [
     '<base href="https://outside.example/redirected/">',

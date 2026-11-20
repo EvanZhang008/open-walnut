@@ -229,7 +229,9 @@ export function buildDailyLetter(a, { days, bullets, storeDir, tz, reportDay, ou
   if (markdown.length > MAX_MARKDOWN) markdown = `${markdown.slice(0, MAX_MARKDOWN)}\n\n(truncated)`
   const lead = report && !state ? `${report.drops} drop${report.drops === 1 ? '' : 's'}, ${upText(report)}. ` : ''
   const text = `${lead}${a.hypothesis.text}`.slice(0, 280)
-  return homeSafeLetter({ subject, type: 'info', markdown, text })
+  // The daily summary is the report the monitor's user set up (its 08:00 LaunchAgent), so it is a
+  // letter he asked for; an alert is not, and Walnut makes it a notice (human-inbox/info-letter-rule.ts).
+  return homeSafeLetter({ subject, type: 'info', markdown, text, user_asked: true })
 }
 
 function tildePath(p) {
@@ -332,6 +334,8 @@ export async function postLetter(api, letter, { timeoutMs = 15_000, fetchImpl = 
     })
     let body = null
     try { body = await res.json() } catch { /* non-JSON error page */ }
+    // An alert nobody asked for went to the notification center as a notice: delivered, no letter id.
+    if (res.status === 201 && body?.outcome === 'notice') return { ok: true, status: res.status, notice: true }
     if (res.status === 201 && body?.id) return { ok: true, status: res.status, id: body.id }
     const error = typeof body?.error === 'string' ? body.error : body?.error?.message ?? `HTTP ${res.status}`
     return { ok: false, status: res.status, error }

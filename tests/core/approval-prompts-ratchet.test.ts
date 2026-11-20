@@ -22,7 +22,7 @@ const LETTER_ASKS: Record<string, string> = {
   'src/core/hosts/host-exec-grant.ts': 'own machines: asks only for an unregistered caller host or a revoked grant',
   'src/integrations/mail/approvals.ts': 'outward send: an email leaves the user\'s machines',
   'src/integrations/mail/unsubscribe.ts': 'outward send: contacts an outside sender',
-  'src/core/plugins/server-api.ts': 'plugin pass-through: the plugin owns its own asks',
+  'src/core/plugins/plugin-letters.ts': 'plugin pass-through: the plugin owns its own asks',
 }
 // Not a Walnut ask: a task's own letter (human_inbox_send, any actions it names) is the
 // task's words, held to the inbox rule (only the user's decisions) in its prompt and op help.

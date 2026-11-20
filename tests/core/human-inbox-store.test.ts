@@ -120,6 +120,7 @@ describe('human inbox store — send, list, get', () => {
       markdown: undefined,
       html: '<style>p{color:red}</style><p>Disk is at 70%.</p><p>No action needed.</p>',
       type: 'info',
+      userAsked: true,
     }));
     expect(record.textPreview).toBe('Disk is at 70%.');
   });

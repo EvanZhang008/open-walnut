@@ -152,7 +152,7 @@ test('a session\'s trigger parks its task off the list, and no letter reaches th
   const control = `Asked-for note ${NONCE} ${browserName}`
   const sent = await request.post('/api/v1/human-inbox', {
     headers: { 'x-walnut-caller-sid': sid },
-    data: { subject: control, type: 'info', markdown: 'You asked to hear when the review lands.', task_refs: [taskId] },
+    data: { subject: control, type: 'info', user_asked: true, markdown: 'You asked to hear when the review lands.', task_refs: [taskId] },
   })
   expect(sent.status(), await sent.text()).toBeLessThan(300)
   await page.getByRole('button', { name: 'Notifications' }).click()

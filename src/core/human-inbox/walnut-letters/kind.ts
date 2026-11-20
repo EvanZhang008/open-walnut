@@ -48,6 +48,12 @@ export interface WalnutLetterKind<P = never> {
   /** Params the ratchet renders every language with. */
   samples: readonly P[];
   stillNeeded: StillNeededRule;
+  /**
+   * Required on a kind of type `info` (the ratchet holds it): when its letter is a report the user
+   * asked for, so it is sent with `userAsked` (`asked`), and where it goes otherwise (`otherwise`: a
+   * notice, or nothing). The inbox takes no other info letter (human-inbox/info-letter-rule.ts).
+   */
+  info?: { asked: string; otherwise: string };
 }
 
 /** Declare a kind (keeps its params type while the registry holds them all). */

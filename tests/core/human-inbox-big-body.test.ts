@@ -58,7 +58,7 @@ describe('a letter body past the inline threshold', () => {
     expect(stagedBytes).toBe(bytes)
 
     const letter = await store.sendLetter({
-      subject: 'Big digest', type: 'info', htmlRef: ref, sender: SENDER,
+      subject: 'Big digest', type: 'info', userAsked: true, htmlRef: ref, sender: SENDER,
     })
     // The staged file MOVED: a ref is single-use, so a retry can't double-write.
     await expect(staged.statStagedBody(ref)).rejects.toThrow(/is gone/)
@@ -75,7 +75,7 @@ describe('a letter body past the inline threshold', () => {
       Readable.from([Buffer.from(html, 'utf-8')]), 100 * 1024 * 1024,
     )
     const sent = await store.sendLetter({
-      subject: 'Big digest', type: 'info', htmlRef: ref, sender: SENDER,
+      subject: 'Big digest', type: 'info', userAsked: true, htmlRef: ref, sender: SENDER,
     })
 
     const detail = await store.getLetter(sent.id)
@@ -96,7 +96,7 @@ describe('a letter body past the inline threshold', () => {
       Readable.from([Buffer.from(html, 'utf-8')]), 100 * 1024 * 1024,
     )
     const sent = await store.sendLetter({
-      subject: 'Big digest', type: 'info', htmlRef: ref, sender: SENDER,
+      subject: 'Big digest', type: 'info', userAsked: true, htmlRef: ref, sender: SENDER,
     })
     const detail = await store.getLetter(sent.id, { inlineMaxBytes: Infinity })
     expect(detail?.bodyDeferred).toBeUndefined()
@@ -109,7 +109,7 @@ describe('a letter body past the inline threshold', () => {
       Readable.from([Buffer.from(html, 'utf-8')]), 100 * 1024 * 1024,
     )
     const sent = await store.sendLetter({
-      subject: 'Big digest', type: 'info', htmlRef: ref, sender: SENDER,
+      subject: 'Big digest', type: 'info', userAsked: true, htmlRef: ref, sender: SENDER,
     })
 
     // A deliberately awkward slice size: not a power of two, so boundaries land
@@ -133,7 +133,7 @@ describe('a letter body past the inline threshold', () => {
 
   it('a small body is still inlined exactly as before', async () => {
     const sent = await store.sendLetter({
-      subject: 'Small', type: 'info', html: '<p>hello</p>', sender: SENDER,
+      subject: 'Small', type: 'info', userAsked: true, html: '<p>hello</p>', sender: SENDER,
     })
     const detail = await store.getLetter(sent.id)
     expect(detail?.body).toBe('<p>hello</p>')
@@ -176,14 +176,14 @@ describe('a letter body past the inline threshold', () => {
   it('rejects two body lanes at once rather than silently picking one', async () => {
     const { ref } = await staged.stageBodyFromBuffer(Buffer.from('<p>a</p>'))
     await expect(store.sendLetter({
-      subject: 'Both', type: 'info', html: '<p>b</p>', htmlRef: ref, sender: SENDER,
+      subject: 'Both', type: 'info', userAsked: true, html: '<p>b</p>', htmlRef: ref, sender: SENDER,
     })).rejects.toThrow(/exactly one of html \| html_ref \| markdown/)
   })
 
   it('accepts the snake_case spelling the route and op use', async () => {
     const { ref } = await staged.stageBodyFromBuffer(Buffer.from('<p>snake</p>'))
     const sent = await store.sendLetter({
-      subject: 'Snake', type: 'info', html_ref: ref, sender: SENDER,
+      subject: 'Snake', type: 'info', userAsked: true, html_ref: ref, sender: SENDER,
     })
     const detail = await store.getLetter(sent.id)
     expect(detail?.body).toBe('<p>snake</p>')
@@ -191,7 +191,7 @@ describe('a letter body past the inline threshold', () => {
 
   it('defers a big THREAD turn body too, per turn', async () => {
     const sent = await store.sendLetter({
-      subject: 'Threaded', type: 'info', html: '<p>opening</p>', sender: SENDER,
+      subject: 'Threaded', type: 'info', userAsked: true, html: '<p>opening</p>', sender: SENDER,
     })
     const html = bigHtml()
     const { ref } = await staged.stageBodyFromStream(

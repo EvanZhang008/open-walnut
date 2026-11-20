@@ -302,7 +302,7 @@ test.describe('Inbox letter', () => {
   test('the reply box has the mic in its row', async ({ page, request }) => {
     test.setTimeout(120_000)
     const subject = `Voice mic reply ${STAMP}`
-    await sendLetter(request, { subject, type: 'info', markdown: 'A short status note.', text: 'A short status note.' })
+    await sendLetter(request, { subject, type: 'info', user_asked: true, markdown: 'A short status note.', text: 'A short status note.' })
     await home(page)
     const reader = await openLetter(page, subject)
     await expectBoxMic(page, 'inbox-reply', reader.getByTestId('letter-reply-input'), reader.locator('.hib-composer'))
@@ -332,7 +332,7 @@ test.describe('Inbox letter', () => {
     await page.context().grantPermissions(['microphone'])
     const seen = await stubDictation(page)
     const subject = `Voice mic dictation ${STAMP}`
-    await sendLetter(request, { subject, type: 'info', markdown: 'Dictate a reply.', text: 'Dictate a reply.' })
+    await sendLetter(request, { subject, type: 'info', user_asked: true, markdown: 'Dictate a reply.', text: 'Dictate a reply.' })
     await home(page)
     const reader = await openLetter(page, subject)
     const box = reader.getByTestId('letter-reply-input')

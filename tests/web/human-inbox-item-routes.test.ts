@@ -36,7 +36,7 @@ beforeAll(async () => {
   app.use((error: Error, _req: unknown, res: express.Response, _next: unknown) => res.status(500).json({ error: error.message }));
   server = await new Promise<Server>(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
   root = `http://127.0.0.1:${(server.address() as { port: number }).port}`; setSelfApiRoot(root);
-  id = (await sendLetter({ subject: 'Route summary', type: 'info', markdown: 'Untrusted mail data', sender: { sessionId: 'sender-session', host: 'local' }, items: [{ id: 'mail-one', subject: 'One mail', summary: 'Summary', source: { kind: 'mail', account: 'account-a', message: 'same-id' }, actions: [{ id: 'read-one', kind: 'op', intent: 'mark_read' }, { id: 'find-one', kind: 'op', intent: 'find_task' }, { id: 'ask-one', kind: 'reply_ai', label: 'Explain this email', question: 'Explain this fixture update' }] }] })).id;
+  id = (await sendLetter({ subject: 'Route summary', type: 'info', userAsked: true, markdown: 'Untrusted mail data', sender: { sessionId: 'sender-session', host: 'local' }, items: [{ id: 'mail-one', subject: 'One mail', summary: 'Summary', source: { kind: 'mail', account: 'account-a', message: 'same-id' }, actions: [{ id: 'read-one', kind: 'op', intent: 'mark_read' }, { id: 'find-one', kind: 'op', intent: 'find_task' }, { id: 'ask-one', kind: 'reply_ai', label: 'Explain this email', question: 'Explain this fixture update' }] }] })).id;
 });
 afterAll(async () => { cleanupSource(); op.dispose(); setSelfApiRoot(null); await new Promise<void>(resolve => server.close(() => resolve())); });
 describe('Item API confirmation and source safety', () => {

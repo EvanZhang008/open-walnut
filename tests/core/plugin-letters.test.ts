@@ -138,14 +138,31 @@ describe('walnut.letters.send', () => {
     expect(stored!.body).toContain('the draft body');
   });
 
-  it('makes a letter with no actions a document, not a dead-end decision', async () => {
+  it('makes a report the person asked for a document, not a dead-end decision', async () => {
     const walnut = pluginApi('mail');
 
-    const { letterId } = await walnut.letters.send({ subject: 'Nothing to decide', markdown: 'FYI' });
+    const { letterId, outcome } = await walnut.letters.send({ subject: 'Nothing to decide', markdown: 'FYI', userAsked: true });
 
     // The store REFUSES `action_required` with no buttons, so the type has to follow the
     // actions rather than being assumed: a decision badge with nothing to tap is a bug.
+    expect(outcome).toBe('letter');
     expect((await getLetter(letterId))!.type).toBe('info');
+  });
+
+  it('makes a letter with no actions nobody asked for a notice of the plugin, not a letter', async () => {
+    const walnut = pluginApi('chat-app');
+
+    const sent = await walnut.letters.send({ subject: 'Chat app: 1 new (0 mentions, 1 DM)', markdown: 'One new message.' });
+
+    // 2026-11-20 (the user, on such a letter: "why send me this"): the call still resolves, so an
+    // older plugin keeps working, but the inbox never holds it (human-inbox/info-letter-rule.ts).
+    expect(sent).toMatchObject({ letterId: '', outcome: 'notice', noticeId: expect.stringMatching(/^notif-/) });
+    const { listLetters } = await import('../../src/core/human-inbox/store.js');
+    expect((await listLetters()).letters).toEqual([]);
+    const { listNotifications } = await import('../../src/core/notifications/store.js');
+    const notice = (await listNotifications()).feed.find((n) => n.id === sent.noticeId);
+    expect(notice).toMatchObject({ kind: 'skill', title: 'Chat app: 1 new (0 mentions, 1 DM)', body: 'One new message.' });
+    expect(notice!.dedupKey).toMatch(/^plugin:chat-app:letter:/);
   });
 
   it('refuses past 30 letters a minute, with a message the author can act on', async () => {
@@ -158,7 +175,7 @@ describe('walnut.letters.send', () => {
     await expect(walnut.letters.send({ subject: 'Item 31', markdown: 'one too many' }))
       .rejects.toThrow(/30 letters in the last minute/);
     // The refusal is per plugin, not global: another plugin's approval must not be collateral.
-    await expect(pluginApi('quiet').letters.send({ subject: 'Unrelated', markdown: 'fine' }))
+    await expect(pluginApi('quiet').letters.send({ subject: 'Unrelated', markdown: 'fine', userAsked: true }))
       .resolves.toMatchObject({ letterId: expect.stringMatching(/^lt-/) });
   }, 30_000);
 });

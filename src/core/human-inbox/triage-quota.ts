@@ -19,7 +19,7 @@
  * executor turns its `bind` into an HTTP call from the CALLER's own process
  * (src/ops/executor.ts), so a check there would run inside the session's CLI and
  * be advisory. The refusal belongs at the one place the server creates a letter
- * from a caller's session id — `sendLetterAsCaller` — which is shared by the HTTP
+ * from a caller's session id, `sendLetterAsCallerOnce`, which is shared by the HTTP
  * route and the cloud replica's relay, so both edges get it from one hook.
  *
  * WHAT IT MUST NOT DO. Touch any other agent's letters. A sender with no task, or

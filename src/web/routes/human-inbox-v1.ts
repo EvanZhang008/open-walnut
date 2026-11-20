@@ -109,6 +109,8 @@ const ERROR_CODES: Record<string, string> = {
   same_ask: 'same_ask',
   // A letter or reply holding a credential (letter-credentials.ts): the sync would hold it back.
   credential: 'credential',
+  // An info letter the user did not ask for, from a session (info-letter-rule.ts).
+  info_not_inbox: 'info_not_inbox',
 }
 
 interface LetterErrorLike { code: string; status: number; message: string }
@@ -220,7 +222,8 @@ function readBool(res: Response, value: unknown, field: string): boolean | null 
 // ─── Send ────────────────────────────────────────────────────────────────────
 
 // POST /api/v1/human-inbox { subject, type, html?|markdown?, text?, actions?, task_refs?, pin?, thread? }
-// -> { id } a letter, or { id, threadId, filedToThread } an update filed to a thread (letter-to-thread.ts)
+// -> { id, outcome: 'letter' } a letter, { threadId, filedToThread, outcome: 'thread' } an update filed to a thread
+//    (letter-to-thread.ts), or { outcome: 'notice', notice } a caller's info letter nobody asked for (info-letter-rule.ts)
 humanInboxV1Router.post('/human-inbox', async (req: Request, res: Response, next: NextFunction) => {
   await guard(res, next, 'POST /human-inbox', async () => {
     const b = body(req)
@@ -242,13 +245,13 @@ humanInboxV1Router.post('/human-inbox', async (req: Request, res: Response, next
       res.status(201).json(filedAnswer(filed))
       return
     }
-    const { sendLetterAsCallerOnce } = await import('../../core/human-inbox/letter-ops.js')
+    const { sendLetterAsCallerOnce, sentAnswer } = await import('../../core/human-inbox/letter-ops.js')
     // The store is the validator (one implementation for every surface), so the
     // body rides through as-is rather than being re-checked field by field here.
-    const { letter, addedToThread, openAsk } = await sendLetterAsCallerOnce(b as unknown as Omit<NewLetter, 'sender'>, callerSid(req))
     // addedToThread: the user is away from the sender's chat, and the update joined that absence's letter.
     // openAsk: the sender's open decision letter asking the same thing (duplicate-letter.ts).
-    res.status(201).json({ id: letter.id, ...(addedToThread ? { addedToThread: true } : {}), ...(openAsk ? { openAsk } : {}) })
+    // outcome 'notice': a script's info letter nobody asked for went to the notification center.
+    res.status(201).json(sentAnswer(await sendLetterAsCallerOnce(b as unknown as Omit<NewLetter, 'sender'>, callerSid(req))))
   })
 })
 

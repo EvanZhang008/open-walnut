@@ -175,7 +175,8 @@ export async function sendReport(task: Task, since: number, now = Date.now()): P
   const { userAwayFrom } = await import('./user-away.js');
   const away = await userAwayFrom(task, now);
   const { letter } = await sendLetterOnce(
-    { subject: report.subject, type: 'info', markdown: report.markdown, text: report.text, task_refs: report.taskRefs, sender },
+    // A report the user asked for (org_report send or at): the info rule lets it in (info-letter-rule.ts).
+    { subject: report.subject, type: 'info', markdown: report.markdown, text: report.text, task_refs: report.taskRefs, sender, userAsked: true },
     // The report opens the absence's thread: the node's later updates join it.
     away?.away ? { awayThread: { taskId: task.id, since: away.lastSeenAt } } : {},
   );

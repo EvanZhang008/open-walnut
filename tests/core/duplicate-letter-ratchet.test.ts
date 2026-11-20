@@ -28,7 +28,7 @@ const DIRECT_SENDS: Record<string, string> = {
   'src/core/router/account-intake.ts': 'Walnut\'s own mail-no-router letter: once per mailbox episode under its op key (mail-no-router:<account>:<since>)',
   'src/core/human-inbox/letter-ops.ts': 'the guarded entry point (passes refuseDuplicate)',
   'src/core/org/morning-report.ts': 'Walnut\'s scheduled report in a node\'s name, sent by its clock, not the session',
-  'src/core/plugins/server-api.ts': 'a plugin\'s letter (pluginId), the plugin owns its asks',
+  'src/core/plugins/plugin-letters.ts': 'a plugin\'s letter (pluginId), the plugin owns its asks',
   'src/core/offline-merge/letter.ts': 'Walnut\'s drain conflict letter, external sender, once per drain',
   'src/core/usage/session-budget.ts': 'Walnut\'s budget notice, once by opKey',
   'src/core/hosts/host-exec-grant.ts': 'Walnut\'s host grant ask, external sender',
@@ -43,7 +43,7 @@ const REPLIES: Record<string, 'guarded' | string> = {
   'src/web/routes/human-inbox-v1.ts': 'guarded',
   'src/core/human-inbox/relay.ts': 'guarded',
   'src/core/human-inbox/away-thread.ts': 'a fold of a session\'s send: guarded when the send is (refuseDuplicate from the caller)',
-  'src/core/plugins/server-api.ts': 'a plugin\'s reply in its own letter',
+  'src/core/plugins/plugin-letters.ts': 'a plugin\'s reply in its own letter',
   'src/core/hosts/ssh-cert-expiry-alert.ts': 'Walnut\'s one expired turn in its own certificate letter, once (expiredTold)',
 };
 
@@ -74,7 +74,7 @@ describe('duplicate letters: every writer is decided', () => {
     const found = calling(/(?<![\w.])sendLetter(Once)?\s*\(|\bstore\.sendLetter(Once)?\s*\(/);
     expect(unlisted(found, DIRECT_SENDS),
       'A new direct letter write: send a session\'s letter through sendLetterAsCallerOnce, or add it to DIRECT_SENDS with why').toEqual([]);
-    expect(found).toContain('src/core/plugins/server-api.ts');
+    expect(found).toContain('src/core/plugins/plugin-letters.ts');
   });
 
   it('every agent reply is listed, and the session paths refuse a repeat', () => {

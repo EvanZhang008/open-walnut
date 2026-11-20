@@ -170,7 +170,7 @@ test('a pin taken in the reader reaches the rail list before the server answers'
   const sid = await startSession(request)
   const letterId = await sendLetter(request, {
     subject,
-    type: 'info',
+    type: 'info', user_asked: true,
     markdown: `## Nightly index rebuild\n\nFinished clean (${NONCE}).`,
     text: `Nightly index rebuild finished clean (${NONCE}).`,
   }, sid)
@@ -230,7 +230,7 @@ test('a pin taken in the rail is already on the session Inbox tab, with no list 
   const sid = await startSession(request)
   const letterId = await sendLetter(request, {
     subject,
-    type: 'info',
+    type: 'info', user_asked: true,
     markdown: `## Backup volume\n\nAt 70% (${NONCE}).`,
     text: `Backup volume at 70% (${NONCE}).`,
   }, sid)

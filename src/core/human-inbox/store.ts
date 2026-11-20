@@ -42,6 +42,7 @@ import { cleanPictureNames } from '../answer-pictures.js';
 import type { AwayThreadMark, InboxItemReceipt } from './types.js';
 import { letterOriginOf } from './letter-origin.js';
 import { awaitsUserDecision } from './open-decision.js';
+import { INFO_NOT_INBOX_MESSAGE, passesInfoRule } from './info-letter-rule.js';
 import { kindOfLetter } from './walnut-letters/registry.js';
 import { resolveCredentialAsk, findCredentialLetter, storedCredentialAskOf, credentialAskContext } from './credential-ask.js';
 import { isSignInAsk, loginCommandWords } from '../sign-in-ask.js';
@@ -70,7 +71,7 @@ export class LetterError extends Error {
   constructor(
     message: string,
     readonly code: 'invalid' | 'not_found' | 'already_answered' | 'human_approval' | 'reply_instead' | 'user_words' | 'task_snoozed' | 'user_kind'
-      | 'duplicate_letter' | 'duplicate_reply' | 'same_ask' | 'credential',
+      | 'duplicate_letter' | 'duplicate_reply' | 'same_ask' | 'credential' | 'info_not_inbox',
     readonly status: number,
   ) {
     super(message);
@@ -607,6 +608,9 @@ export async function sendLetterOnce(
     const first = await findLetterByOp(opKey);
     if (first) return { letter: first, duplicate: true };
   }
+  // The inbox takes an info letter only when the user asked for it (info-letter-rule.ts): the one
+  // check every sender meets, whatever path it came by.
+  if (!passesInfoRule(input)) throw new LetterError(INFO_NOT_INBOX_MESSAGE, 'info_not_inbox', 409);
 
   let items: NewLetter['items'];
   try { items = validateNewItems(input.items, { items: [], thread: [], actions }); }

@@ -517,7 +517,7 @@ const inbox = await import(${src('src/core/human-inbox/store.ts')})
 // A routine (WP5: its copy is what the Routines page reads away). Once a day: it never fires in a run.
 const rc = await import(${src('src/core/routines/routines-core.ts')})
 await rc.createRoutine({ name: ${JSON.stringify(MAC_ROUTINE.name)}, enabled: true, schedule: { kind: 'every', everyMs: 86400000 }, sessionTarget: 'main', payload: { kind: 'systemEvent', text: ${JSON.stringify(MAC_ROUTINE.text)} } })
-await inbox.sendLetter({ subject: ${JSON.stringify(MAC_LETTER.subject)}, type: 'info', markdown: ${JSON.stringify(MAC_LETTER.text)}, sender: { sessionId: ${JSON.stringify(MAC_SID)}, sessionTitle: 'Release checklist', host: '__local__' } })
+await inbox.sendLetter({ subject: ${JSON.stringify(MAC_LETTER.subject)}, type: 'info', userAsked: true, markdown: ${JSON.stringify(MAC_LETTER.text)}, sender: { sessionId: ${JSON.stringify(MAC_SID)}, sessionTitle: 'Release checklist', host: '__local__' } })
 // The direct link IS the host's link: every lookup of devbox (the host status, a
 // session's host, the server manager) gets it, as an ssh link would be pooled.
 // Otherwise the host status read devbox as unreachable over ssh and the console

@@ -101,7 +101,7 @@ export async function raiseActionToast(page: Page, tag: string, to: string): Pro
 /** `POST /api/v1/human-inbox` — exactly what `wn tools call human_inbox_send` hits. */
 export async function sendLetter(request: APIRequestContext, subject: string, callerSid: string): Promise<string> {
   const res = await request.post('/api/v1/human-inbox', {
-    data: { subject, type: 'info', markdown: `## Note\n\nSeeded by the fullscreen-yield spec (${NONCE}).`, text: subject },
+    data: { subject, type: 'info', user_asked: true, markdown: `## Note\n\nSeeded by the fullscreen-yield spec (${NONCE}).`, text: subject },
     headers: { [CALLER_SID_HEADER]: callerSid },
   })
   expect(res.status(), await res.text()).toBe(201)

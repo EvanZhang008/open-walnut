@@ -986,9 +986,17 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
       async asksPerson() { return approvals.asksPerson },
       async recordUnasked(input: { what: string; detail?: string }) { approvals.recorded.push({ ...input }) },
       async send(input: LetterSendInput) {
+        // As the host: a document nobody asked for is a notice, not a letter.
+        if (!input.actions?.length && input.userAsked !== true) {
+          const dedupKey = `letter:${input.subject.trim().toLowerCase().replace(/\d+/g, '#')}`
+          const at = notices.findIndex((one) => one.dedupKey === dedupKey)
+          if (at >= 0) notices.splice(at, 1)
+          notices.push({ title: input.subject, ...(input.text ? { body: input.text } : {}), dedupKey })
+          return { letterId: '', outcome: 'notice' as const, noticeId: `notice-${notices.length}` }
+        }
         const letterId = `letter-${letters.length + 1}`
         letters.push({ letterId, subject: input.subject, actions: structuredClone(input.actions ?? []) })
-        return { letterId }
+        return { letterId, outcome: 'letter' as const }
       },
       async reply() { return undefined },
       async withdraw(letterId, input) {

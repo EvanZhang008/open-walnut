@@ -16,8 +16,8 @@
  * WHERE THE REFUSALS LIVE. Nothing here validates: this module only DECLARES the
  * op, and `bind` is executed by src/ops/executor.ts as an HTTP call from the
  * CALLER's own process, so a check in this file would run inside the session's CLI
- * and be advisory. Every rule is enforced where the op is SERVED —
- * `sendLetterAsCaller` (core/human-inbox/letter-ops.ts) and the store behind it —
+ * and be advisory. Every rule is enforced where the op is SERVED:
+ * `sendLetterAsCallerOnce` (core/human-inbox/letter-ops.ts) and the store behind it,
  * which is the one path both the HTTP route and the cloud replica's relay share.
  * That is also where the per-run letter budget lives
  * (core/human-inbox/triage-quota.ts); the refusal's text tells the model what to
@@ -72,6 +72,8 @@ defineOp({
     + 'decision, when something must have their review, or when they asked for it (a digest or report they '
     + 'set up, "tell me when X"). Never for a notification they did not ask for: progress, a finished step, '
     + 'a parked task, an FYI. Your task and its session already show those. When unsure, do not send. '
+    + 'An info letter is only for a report the user asked for, and says so with user_asked:true: without it it is refused '
+    + '(409 info_not_inbox; put progress or an FYI in your task\'s thread or note instead). '
     + 'A task answering another task\'s request (Main, a lead) sends its result in its reply to that task, '
     + 'which tells the user; a report letter (info, completion, review) about that work is refused (409, '
     + 'the request named) unless the user themself asked this task for a letter or report (user_asked:true). '
@@ -93,14 +95,14 @@ defineOp({
     + 'Body is markdown (usual choice) or self-contained html with inline styles, exactly one of the two. '
     + 'type=action_required means you need a decision and REQUIRES `actions`, at least one: the human '
     + 'taps one option and that choice is delivered back into this session. Without them the letter is '
-    + 'a dead end, so it is rejected — if the human only needs to read this, send review or info '
-    + 'instead. A few agents have a per-run letter budget (Inbox Triage: one summary plus three '
+    + 'a dead end, so it is rejected: if the human only needs to read this, send review instead '
+    + '(info only for a report he asked for). A few agents have a per-run letter budget (Inbox Triage: one summary plus three '
     + 'action_required); going over it is refused with the next move spelled out. Never write who you are; the '
     + 'sender (session, task, host) is stamped for you. Returns the letter id, which you need to reply.',
   input: {
     subject: z.string().min(1).describe('One line the human reads first, like an email subject'),
     type: LETTER_TYPE.describe(
-      'completion | action_required | review | info. action_required also requires `actions`'),
+      'completion | action_required | review | info. action_required also requires `actions`; info requires user_asked:true'),
     markdown: z.string().optional().describe(`Letter body as markdown (exactly one of markdown | html). ${MESSAGE_TEXT_HINT}`),
     html: z.string().optional().describe(
       'Letter body as self-contained HTML, no scripts (inline styles only). The one body that may '
@@ -124,7 +126,7 @@ defineOp({
       expiresAt: z.number().finite().positive().optional().describe('Credential expiry as epoch milliseconds, when known'),
     }).optional().describe('For a credential renewal letter: identify its machine and kind, and state where to run the exact renewal command in the body. Same credential requests from any task reuse the existing letter.'),
     user_asked: z.boolean().optional().describe(
-      'The user themself asked this task for this letter or report. Only then does a report letter go out '
+      'The user themself asked this task for this letter or report. Required on every info letter. Only then does a report letter go out '
       + 'while this task answers another task\'s request, or a letter of Main or a lead about one of its open threads '
       + '(only when he asked in his own words for it as a letter, not just for the result). It also keeps an info or completion letter '
       + 'of a task that keeps Threads out of that task\'s Threads (a digest he set up, "tell me when X")'),
@@ -144,6 +146,9 @@ defineOp({
   },
   bind: { method: 'POST', path: '/human-inbox' },
   mapResult: ({ body }) => {
+    const notice = (body as { outcome?: unknown; notice?: unknown; message?: unknown } | undefined)
+    // A caller with no session sent an info letter nobody asked for (core/human-inbox/info-letter-rule.ts).
+    if (notice?.outcome === 'notice') return { outcome: 'notice', notice: notice.notice, instruction: String(notice.message ?? '') }
     const filed = filedOf(body)
     if (filed) {
       return {

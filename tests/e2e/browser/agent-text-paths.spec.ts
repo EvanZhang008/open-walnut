@@ -138,7 +138,7 @@ test.beforeAll(async ({ request }) => {
     made.push(owner);
   }
   expect((await (await request.get(`/api/tasks/${owner}`)).json()).task.org_role).toBe('lead');
-  const envelope = await request.post('/api/v1/human-inbox', { data: { subject: project, type: 'info', text: `Design: ${picture}`, markdown: `Design: ${picture}` } });
+  const envelope = await request.post('/api/v1/human-inbox', { data: { subject: project, type: 'info', user_asked: true, text: `Design: ${picture}`, markdown: `Design: ${picture}` } });
   expect(envelope.ok(), await envelope.text()).toBeTruthy();
   letter = (await envelope.json()).id;
   letters.push(letter);
@@ -277,7 +277,7 @@ test('long agent output keeps links after scrolling, window resizing and text se
 for (const deferred of [false, true]) test(`HTML letter references open in the original window, deferred=${deferred}`, async ({ page, request, context }) => {
   const subject = `HTML agent links ${deferred} ${stamp}`;
   const html = `<html lang="en"><head><title>Agent output</title></head><body data-layout="report"><p>Literal * stars and # words.</p><p>Picture: ${picture}</p><p>File: ${document}:2-3</p><p>Letter: ${letter}</p><p><task-ref id="${workerId}" label="Output worker"/></p><img src="https://example.com/tracker.png"><button class="wn-del">Plain button</button>${deferred ? '<p>' + 'Long report. '.repeat(100000) + '</p>' : ''}</body></html>`;
-  const sent = await request.post('/api/v1/human-inbox', { data: { subject, type: 'info', text: 'HTML reference acceptance', html } });
+  const sent = await request.post('/api/v1/human-inbox', { data: { subject, type: 'info', user_asked: true, text: 'HTML reference acceptance', html } });
   expect(sent.ok(), await sent.text()).toBeTruthy();
   const id = (await sent.json()).id;
   letters.push(id);

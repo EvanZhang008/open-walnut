@@ -89,6 +89,8 @@ describe('daily letter', () => {
     const bullets = evidenceBullets(a, { windowStartMs: DAY.startMs, nowMs: DAY.endMs, netRecords: a.ctx.net, pubip: records.filter((r) => r.kind === 'pubip') })
     const letter = buildDailyLetter(a, { days: a.days, bullets, storeDir: '/tmp/store', tz: 'UTC', reportDay: DAY.day })
     expect(letter.type).toBe('info')
+    // The report its user set up (the 08:00 LaunchAgent): the inbox takes an info letter only so marked.
+    expect(letter.user_asked).toBe(true)
     expect(letter.subject).toMatch(/^Bridge monitor 2026-03-10: 4 drops, up \d+(\.\d)?%/)
     expect(letter.markdown.indexOf('## Per day')).toBeLessThan(letter.markdown.indexOf('## Causes'))
     expect(letter.markdown).toContain('"Out": outages longer than 60s')
@@ -314,6 +316,11 @@ describe('delivery', () => {
     const res = await postLetter(api, letter)
     expect(res).toEqual({ ok: true, status: 201, id: 'lt-abc' })
     expect(seen[0]).toMatchObject({ method: 'POST', url: '/api/v1/human-inbox', contentType: 'application/json', json: letter })
+  })
+
+  it('an alert the server made a notice (an info letter nobody asked for) is delivered, never parked for a retry', async () => {
+    const { api } = await inbox((_b, res) => { res.writeHead(201, { 'Content-Type': 'application/json' }); res.end('{"id":"notif-1","outcome":"notice","notice":{"id":"notif-1","dedupKey":"letter-notice:api:abc"}}') })
+    expect(await postLetter(api, letter)).toEqual({ ok: true, status: 201, notice: true })
   })
 
   it('posting is the last gate: a letter or reply with the home directory in it goes out with ~', async () => {

@@ -45,7 +45,7 @@ const SENDER: LetterSender = { sessionId: 'sess-clock', host: 'workstation' };
 function letterInput(overrides: Partial<NewLetter> = {}): NewLetter {
   return {
     subject: 'Index rebuild finished',
-    type: 'info',
+    type: 'info', userAsked: true,
     markdown: 'Done in 4 minutes.',
     sender: SENDER,
     ...overrides,

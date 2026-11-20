@@ -535,7 +535,7 @@ describe('task PATCH into WAITING sends no letter', () => {
     // A letter the session decides to send (the user asked to be told) still lands,
     // so the zeros above are about the park, not a broken inbox read.
     const sent = await req('POST', '/api/v1/human-inbox', {
-      subject: 'The vendor replied', type: 'info', markdown: 'You asked to hear when they did.', task_refs: [taskId],
+      subject: 'The vendor replied', type: 'info', markdown: 'You asked to hear when they did.', task_refs: [taskId], user_asked: true,
     }, h)
     expect(sent.status, JSON.stringify(sent.json)).toBeLessThan(300)
     expect(await lettersFor(taskId)).toHaveLength(1)
