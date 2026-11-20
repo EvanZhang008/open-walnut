@@ -143,5 +143,45 @@ export function registerLiveDraftRecorderScenarios(): void {
     expect(firstDraftMs, 'first live draft request after the recorder starts (ms)').toBeLessThan(1800)
     expect(stopToUploadMs, 'stop to the whole-clip upload (ms)').toBeLessThan(1500)
   })
+
+  test('a take that starts with a pause shows its first words soon after the speech starts', async ({ page }) => {
+    // 2026-11-20, the user's own take began with a pause. Measured here at
+    // about 0.9 s from the first sound to the first words; 2 s is the limit.
+    test.setTimeout(120_000)
+    await useSyntheticMic(page)
+    // The mic is silent from its first sample until the test speaks.
+    await page.addInitScript(() => {
+      let held: GainNode | undefined
+      Object.defineProperty(window, '__syntheticMicGain', {
+        configurable: true,
+        get: () => held,
+        set: (g: GainNode) => { g.gain.value = 0; held = g },
+      })
+    })
+    await stubSttStatus(page)
+    await page.route('**/api/stt/warmup', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }))
+    await page.route('**/api/stt/draft', async (route) => {
+      const body = route.request().postDataJSON() as { audio: string; format: string }
+      // Words only for audio that holds the tone.
+      const text = body.format === 'wav' && wavRms(body.audio) > 0.02 ? DRAFT_TEXT : ''
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text, durationMs: 30 }) })
+    })
+    await page.route('**/api/stt/transcribe', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: DRAFT_TEXT, durationMs: 60 }) }))
+    await page.route('**/api/stt/save', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"recordingId":"rec-live-3"}' }))
+    const d = await openComposer(page)
+    await d.mic.click()
+    await expect(d.mic).toHaveClass(/mic-recording/, { timeout: 15_000 })
+    // 2.5 s of silence first.
+    await page.waitForTimeout(2500)
+    await page.evaluate(() => { (window as unknown as { __syntheticMicGain: GainNode }).__syntheticMicGain.gain.value = 0.3 })
+    const spokeAt = Date.now()
+    await expect(d.textarea).toHaveValue(DRAFT_TEXT, { timeout: 15_000 })
+    const wordsMs = Date.now() - spokeAt
+    console.log(`[stt-latency] first words ${wordsMs} ms after the speech started`)
+    await d.mic.click()
+    await expect(d.mic).not.toHaveClass(/mic-recording/, { timeout: 15_000 })
+    expect(wordsMs, 'first words after the speech starts (ms)').toBeLessThan(2000)
+  })
 }
 
