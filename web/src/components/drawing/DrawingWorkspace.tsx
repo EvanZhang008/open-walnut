@@ -360,6 +360,14 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     }).catch((err) => { if (mounted.current) setListError(drawingErrorMessage(err)); });
   }, [api, scope, scoped]);
   useEffect(() => { refreshList(); }, [refreshList]);
+  // A tab beside a session that kept no drawing opens its own newest one (the list puts the task's
+  // own first), so its drawing is there at once; with none, New drawing is offered as before.
+  const openedOwn = useRef(false);
+  useEffect(() => {
+    if (openedOwn.current || view.place !== 'beside' || !scoped || source || !list) return;
+    openedOwn.current = true;
+    if (list[0]) setSource({ kind: 'file', path: list[0].path });
+  }, [list, source, view.place, scoped]);
   const savedRevision = snap?.state === 'saved' ? snap.revision : null;
   useEffect(() => { if (savedRevision) refreshList(); }, [savedRevision, refreshList]);
 

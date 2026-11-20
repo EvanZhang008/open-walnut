@@ -630,6 +630,17 @@ test.describe('Draw in the composer (drawing_app)', () => {
     await expect(again.getByTestId('session-menu-apps')).toHaveAttribute('aria-pressed', 'true');
     await page.keyboard.press('Escape');
     await shot(page, 'tab-back');
+    // The drawing's own Full screen covers the window and comes back to the same tab.
+    const back = page.getByTestId('session-app-pane');
+    await back.getByRole('button', { name: 'Full screen', exact: true }).click();
+    const exitDrawing = ws(page.getByTestId('session-app-pane')).getByRole('button', { name: 'Exit full screen', exact: true });
+    await expect(exitDrawing).toBeVisible();
+    await expect(ws(page.getByTestId('session-app-pane'))).toHaveAttribute('data-drawing-path', drawn.path);
+    await shot(page, 'tab-drawing-full-screen');
+    await exitDrawing.click();
+    await expect(page.getByTestId('session-app-pane')).toHaveCount(1);
+    await expect(ws(page.getByTestId('session-app-pane'))).toHaveAttribute('data-drawing-path', drawn.path);
+    await expect(panel.locator('.session-panel-chat-col')).toBeVisible();
 
     // The + menu's Draw still opens its dialog; Beside the chat moves that drawing into the tab.
     await chip.click();
@@ -665,6 +676,27 @@ test.describe('Draw in the composer (drawing_app)', () => {
     expect(path.dirname(moved.path)).toBe(path.dirname(drawn.path));
     expect(moved.scene.elements.map((e) => e.type)).toEqual(['ellipse']);
     expect(errors).toEqual([]);
+  });
+
+  test("a session whose task has a drawing opens it in its tab at once", async ({ page }) => {
+    const res = await page.request.post('/api/sessions/quick-start', {
+      data: { cwd: path.join(fixture.home(), 'projects'), message: 'Map the payment retries', project: 'Drawing Fixture', engine: 'claude' },
+    });
+    expect(res.ok(), await res.text()).toBe(true);
+    const { sessionId, taskId } = await res.json() as { sessionId: string; taskId: string };
+    const made = await page.request.post('/api/drawings', { data: { title: 'Retry map', taskId } });
+    expect(made.ok(), await made.text()).toBe(true);
+    const own = await made.json() as Doc;
+    await seedColumns(page, [sessionId]);
+    await page.evaluate((url) => { location.href = url; }, `${fixture.base()}/`);
+    const panel = panelFor(page, sessionId);
+    await expect(panel.locator('.task-kebab-btn')).toBeVisible({ timeout: 60_000 });
+    await panel.locator('.task-kebab-btn').click();
+    const open = await openKebabGroup(page.locator('.task-kebab-menu:visible'), 'session-kebab-open');
+    await open.getByTestId('session-menu-apps').click();
+    const pane = page.getByTestId('session-app-pane');
+    await expect(ws(pane)).toHaveAttribute('data-drawing-path', own.path, { timeout: 60_000 });
+    await expect(pane.locator('canvas.excalidraw__canvas.interactive')).toBeVisible({ timeout: 60_000 });
   });
 
   /**
