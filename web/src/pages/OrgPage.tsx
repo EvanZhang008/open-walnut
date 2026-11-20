@@ -49,6 +49,7 @@ import { vpCards } from '@/components/org/org-chart-model';
 import { OptionPickerFlyout, useCursorFlyout, type CursorPoint } from '@/components/tasks/CursorFlyout';
 import { orgRowMenu, type OrgRowPick } from '@/components/org/org-row-menu';
 import { askNewDirector } from '@/components/org/director-actions';
+import { useAvatarEditor } from '@/components/org/useAvatarEditor';
 import { OrgNodeDetail, type OrgAnswers, type OrgTab } from '@/components/org/OrgNodeDetail';
 import type { AnswerFailure } from '@/components/org/OrgInlineAnswer';
 import { OrgSidePanel, parseSideTarget, sideTargetParam, type OrgSideTarget } from '@/components/org/OrgSidePanel';
@@ -590,10 +591,12 @@ export function OrgPage() {
   // short (2026-10-26, the user: "too messy"): a list of VPs or projects is one row that opens a
   // picker at the cursor, the way a folder menu's Project row does.
   const picker = useCursorFlyout<OrgRowPick>();
+  // "Edit name and avatar…" (the "Org avatars" experiment; off, the menu has no such row).
+  const avatarEditor = useAvatarEditor(channels.rows);
   const rowMenu = useCallback((target: ChannelMenuTarget, point: CursorPoint, origin: HTMLElement | null): ContextMenuItem[] =>
-    orgRowMenu({ target, cards, select, openChart, pick: (p) => picker.open(p, point, origin), newDirector: leaders.directors ? (key) => askNewDirector(key, 'list') : undefined }),
+    orgRowMenu({ target, cards, select, openChart, pick: (p) => picker.open(p, point, origin), newDirector: leaders.directors ? (key) => askNewDirector(key, 'list') : undefined, editAvatar: avatarEditor.edit }),
   // eslint-disable-next-line react-hooks/exhaustive-deps -- picker.open only sets its state
-  [cards, select, openChart, leaders.directors]);
+  [cards, select, openChart, leaders.directors, avatarEditor.edit]);
 
   // The two dividers of the page itself (2026-11-02, the user, pointing at the line before an opened
   // task: "this line need ot move the bar"): the list's right edge and the opened tasks' left edge,
@@ -640,6 +643,7 @@ export function OrgPage() {
           routers={filterChannels(channels.routers, query)}
           moved={moved}
           rowMenu={rowMenu}
+          routerMenu={!!avatarEditor.edit}
           total={channels.rows.length}
           vps={vpCount(channels.rows)}
           selectedKey={phone ? null : selected.key}
@@ -670,6 +674,7 @@ export function OrgPage() {
           elRef={(el) => { listWidth.panelRef.current = el; }}
         />
       )}
+      {avatarEditor.dialog}
       {picker.state && (
         <OptionPickerFlyout
           anchorPoint={picker.state.point}

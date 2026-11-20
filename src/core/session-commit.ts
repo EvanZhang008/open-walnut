@@ -19,6 +19,7 @@
  */
 
 import { log } from '../logging/index.js'
+import { replyText } from '../model/reply-text.js'
 
 export const GIT_COMMIT_CAPABILITY = 'git-commit-v1'
 const PLAN_RPC_MS = 90_000
@@ -156,10 +157,7 @@ const realDeps: SessionCommitDeps = {
         usage: { source: 'commit-message', ...ids },
       })
       if (result.aborted) return null
-      return (result.content ?? [])
-        .map((b) => (b.type === 'text' && 'text' in b ? (b as { text: string }).text : ''))
-        .join('')
-        .trim() || null
+      return replyText(result) || null
     } finally {
       clearTimeout(timer)
     }

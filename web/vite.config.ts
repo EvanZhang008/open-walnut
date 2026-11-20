@@ -56,6 +56,7 @@ export default defineConfig({
       '@open-walnut/ask-list': path.resolve(__dirname, '../src/core/sessions/ask-list.ts'),
       // The org (who reports to whom): the same function GET /api/v1/org builds from.
       '@open-walnut/org-tree': path.resolve(__dirname, '../src/core/org/org-tree.ts'),
+      '@open-walnut/org-avatars': path.resolve(__dirname, '../src/core/org/avatars/index.ts'),
       '@open-walnut/user-status': path.resolve(__dirname, '../src/core/user-status.ts'),
       '@open-walnut/board-summary-text': path.resolve(__dirname, '../src/core/boards/board-summary-text.ts'),
       '@open-walnut/message-about': path.resolve(__dirname, '../src/core/org/message-about.ts'),

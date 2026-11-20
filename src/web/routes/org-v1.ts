@@ -51,7 +51,7 @@ function header(req: Request, name: string): string | undefined {
   return value?.trim() || undefined
 }
 
-function sendError(res: Response, next: NextFunction, err: unknown): void {
+export function sendError(res: Response, next: NextFunction, err: unknown): void {
   if (err instanceof OrgError) {
     res.status(err.status).json({ error: err.message, code: err.code })
     return
@@ -73,7 +73,7 @@ async function isTestRunRequest(req: Request): Promise<boolean> {
 }
 
 /** Org nodes are tasks only the leader makes: a replica making its own would split the org. */
-function primaryOnly(what: string): void {
+export function primaryOnly(what: string): void {
   if (role() !== 'leader') throw new OrgError('not_supported_cloud', 501, `${what} on the primary box`)
 }
 
@@ -226,7 +226,7 @@ orgV1Router.post('/org/vp', async (req: Request, res: Response, next: NextFuncti
 // The user or any agent may (2026-10-27, the user: "all human action can be done by agent also"):
 // a create names what it makes, so it brings a deleted project back for either; the instructions
 // record who wrote them, which the Org page shows.
-async function nodeCaller(req: Request): Promise<{ human: boolean; writer: OrgWriter }> {
+export async function nodeCaller(req: Request): Promise<{ human: boolean; writer: OrgWriter }> {
   const sid = header(req, 'x-walnut-caller-sid')
   if (!sid) return { human: true, writer: { by: 'human' } }
   const { resolveCaller } = await import('../../core/sessions/session-send-core.js')

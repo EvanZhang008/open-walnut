@@ -90,6 +90,8 @@ export function tasksShallowEqual(a: Task, b: Task): boolean {
   if (a.org_role !== b.org_role || a.org_name !== b.org_name || a.org_vp_only !== b.org_vp_only
     || a.org_instructions?.at !== b.org_instructions?.at || a.org_instructions?.text !== b.org_instructions?.text
     || (a.org_leads ?? []).join('\n') !== (b.org_leads ?? []).join('\n')) return false;
+  // A node's chosen avatar (src/core/org/avatars/), written raw: the Org page draws it.
+  if ((a.org_avatar?.at ?? null) !== (b.org_avatar?.at ?? null)) return false;
   // A node's duty switches (src/core/org/duties/), written raw.
   if (JSON.stringify(a.org_duties ?? null) !== JSON.stringify(b.org_duties ?? null)) return false;
   // Main's or a VP's background start (org-autostart.ts): the Org page says starting, or why it failed.

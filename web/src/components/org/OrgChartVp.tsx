@@ -11,7 +11,7 @@
  */
 import type { DragEvent, KeyboardEvent, ReactNode } from 'react';
 import { isBoolean, usePageViewOf } from '@/utils/view-memory';
-import { OrgAvatar } from './OrgChannelList';
+import { OrgAvatar } from './OrgAvatar';
 import { theVp, type NowLine, type VpCard } from './org-chart-model';
 import type { ChannelRow } from './org-channels-model';
 

@@ -34,7 +34,8 @@ export type UsageSource =
   | 'outbound-check' // whether a post or mail about to leave reads as a personal matter (core/outbound)
   | 'reply-language' // retired: older rows only (a progress line rewritten in the user's language)
   | 'drawing'      // a drawing turned into a clean diagram, or a description drawn as one
-  | 'reflection';  // an org node's reflection judging one moment of a session it manages (core/org/reflection)
+  | 'reflection'   // an org node's reflection judging one moment of a session it manages (core/org/reflection)
+  | 'avatar';      // an Org avatar drawn from a description (core/org/avatars)
 
 export interface UsageRecord {
   id: string;

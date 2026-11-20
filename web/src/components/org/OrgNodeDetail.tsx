@@ -43,7 +43,7 @@ import { OrgRouterSettings, routerLinkRows } from './OrgRouterSettings';
 import { OrgRouterOverview, routerEmptyChatLine, selfRouterLine } from './OrgRouterOverview';
 import { useRouterAreaNames } from './router-area-names';
 import { OrgRouterFromMail } from './OrgRouterFromMail';
-import { OrgAvatar } from './OrgChannelList';
+import { OrgAvatar } from './OrgAvatar';
 import { useHasBoard } from './useBoardOwner';
 import { flashProbeEnabled } from '@/utils/flash-probe';
 import { log } from '@/utils/log';

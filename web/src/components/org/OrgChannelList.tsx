@@ -27,10 +27,11 @@ import '@/styles/org-rail.css';
 import { readOrgPlace, writeOrgPlace } from './org-place';
 import { timeAgo } from '@/utils/time';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
-import { askCount, avatarColor, initials, rowAvatarColor, type ChannelRow, type ChannelState, type MovedRow } from './org-channels-model';
+import { askCount, avatarColor, type ChannelRow, type ChannelState, type MovedRow } from './org-channels-model';
 import { usePointerHold } from './hold-order';
 import { useOpenTask } from '@/hooks/useOpenTask';
 import { OrgEditableName } from './OrgEditableName';
+import { NodeAvatar, OrgAvatar } from './OrgAvatar';
 import { OrgRouterSection } from './OrgRouterSection';
 import { OrgReorgReminder } from './OrgReorgReminder';
 import { OrgSettingsMenu } from './OrgSettingsMenu';
@@ -47,20 +48,6 @@ import type { OrgDirectorsView } from './useOrgLeaders';
 const STATE_LABEL: Record<ChannelState, string> = {
   alert: 'Needs you', working: 'Working', quiet: 'Waiting', parked: 'Waiting',
 };
-
-export function OrgAvatar({ row, size = 34 }: { row: ChannelRow; size?: number }) {
-  const main = row.kind === 'main';
-  return (
-    <span
-      className={`org-avatar${main ? ' is-main' : ''}`}
-      style={{ width: size, height: size, fontSize: Math.round(size * 0.37), ...(main ? {} : { background: rowAvatarColor(row) }) }}
-      aria-hidden="true"
-    >
-      {main ? 'C' : initials(row.name)}
-      <span className={`org-state-dot org-state-${row.state}`} />
-    </span>
-  );
-}
 
 /** "5m", "3h", "2d": the list's short clock. */
 export function shortAgo(ms: number, now: number): string {
@@ -197,7 +184,7 @@ function MovedSection({ moved, query, onSelect, onMenu }: { moved: readonly Move
           onClick={() => onSelect(m.vpKey)}
           onContextMenu={onMenu ? (e) => onMenu(e, { moved: m }) : undefined}
         >
-          <span className="org-avatar is-moved" style={{ width: 26, height: 26, fontSize: 10, background: avatarColor(m.project) }} aria-hidden="true">{initials(m.project)}</span>
+          <NodeAvatar taskId={undefined} name={m.project} size={26} color={avatarColor(m.project)} className="is-moved" />
           <span className="org-channel-mid">
             <span className="org-channel-name">{m.project}</span>
             <span className="org-channel-latest" data-testid="org-moved-line">
@@ -239,10 +226,12 @@ interface Props {
   onToggleLock?: (taskId: string) => void;
   /** The Directors under a VP's row (org-leaders.ts) and its projects; absent while the experiment is off. */
   directors?: OrgDirectorsView;
+  /** The routers' rows open the row menu too (its only item for them is the avatar editor). */
+  routerMenu?: boolean;
   now: number;
 }
 
-export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, total, vps, selectedKey, query, onQuery, onSelect, onOpenChart, onNewRouter, keptOf, openTaskIds, onUnwatch, onToggleLock, directors, now }: Props) {
+export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, total, vps, selectedKey, query, onQuery, onSelect, onOpenChart, onNewRouter, keptOf, openTaskIds, onUnwatch, onToggleLock, directors, routerMenu, now }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
   const orgName = useOrgSettings();
   const sections = orgName.settings.directorsLayout === 'sections';
@@ -343,7 +332,7 @@ export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, 
         ))}
         {directors && sections && <OrgDirectorSection vps={shown} groupsOf={directors.groupsOf} projectsOf={directors.projectsOf} query={query} openTaskIds={openTaskIds} />}
         {/* Routers sit below every VP (2026-11-10, the person), above the folded Archived. */}
-        <OrgRouterSection rows={routers} selectedKey={selectedKey} now={now} onSelect={onSelect} />
+        <OrgRouterSection rows={routers} selectedKey={selectedKey} now={now} onSelect={onSelect} onMenu={routerMenu ? onMenu : undefined} />
         <MovedSection moved={moved} query={query} onSelect={onSelect} onMenu={onMenu} />
       </div>
       {total === 0 && <p className="org-empty-note" data-testid="org-empty">No open work yet. Ask the CEO to start something.</p>}

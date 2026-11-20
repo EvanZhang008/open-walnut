@@ -15,6 +15,7 @@ import type { ChartStart } from './OrgChartSheet';
 import type { ChannelMenuTarget } from './OrgChannelList';
 import type { OrgTab } from './OrgNodeDetail';
 import { dropPlan, type VpCard } from './org-chart-model';
+import { rowTaskId, type ChannelRow } from './org-channels-model';
 
 /** A picker one row opens: what it is for, its rows, and what a pick does. */
 export interface OrgRowPick {
@@ -23,7 +24,7 @@ export interface OrgRowPick {
   onPick: (value: string) => void;
 }
 
-export function orgRowMenu({ target, cards, select, openChart, pick, newDirector }: {
+export function orgRowMenu({ target, cards, select, openChart, pick, newDirector, editAvatar }: {
   target: ChannelMenuTarget;
   cards: readonly VpCard[];
   select: (key: string, tab?: OrgTab) => void;
@@ -31,6 +32,8 @@ export function orgRowMenu({ target, cards, select, openChart, pick, newDirector
   pick: (p: OrgRowPick) => void;
   /** Absent while the Directors are off. */
   newDirector?: ((vpKey: string) => void) | undefined;
+  /** The "Org avatars" experiment is on: the row's name and avatar are edited here. */
+  editAvatar?: (row: ChannelRow) => void;
 }): ContextMenuItem[] {
   const projectOf = (key: string) => cards.flatMap((c) => c.projects).find((p) => p.key === key);
   const canGetVp = (key: string) => { const p = projectOf(key); return !!p && !!dropPlan(cards, p, null); };
@@ -53,6 +56,7 @@ export function orgRowMenu({ target, cards, select, openChart, pick, newDirector
     { key: 'head', section: true, label: r.name },
     ...(canTalk ? [{ key: 'chat', label: 'Open chat', onSelect: () => select(r.key, 'chat') }] : []),
     { key: 'team', label: 'Open tasks', onSelect: () => select(r.key, 'team') },
+    ...(editAvatar && rowTaskId(r) ? [{ key: 'avatar', label: 'Edit name and avatar…', onSelect: () => editAvatar(r) }] : []),
   ];
   if (r.kind === 'main') return [...items, { key: 'sep', divider: true }, { key: 'chart', label: 'Open the org chart', onSelect: () => openChart() }];
 

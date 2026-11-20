@@ -169,6 +169,23 @@ describe('mergeFetchedTasks', () => {
     expect(listRowEqual(told, { ...told, org_instructions: { text: '', at: '2026-10-27T10:05:00Z' } } as Task)).toBe(false);
   });
 
+  it('detects a change of every org_ field of Task, each written raw (a new org_ field fails here until compared)', () => {
+    // One changed value per org_ field; the list is checked against the Task type itself.
+    const probes: Record<string, unknown> = {
+      org_role: 'router', org_name: 'Seed crew', org_vp_only: true, org_leads: ['Seeds'],
+      org_instructions: { text: 'Water.', at: '2026-10-27T10:00:00Z' },
+      org_duties: { reflection: { on: true } }, org_start: { state: 'starting', at: '2026-10-27T10:00:00Z' },
+      org_pins: [{ node: 'n1', at: '2026-10-27T10:00:00Z' }],
+      org_avatar: { preset: 'owl:8', at: '2026-10-27T10:00:00Z' },
+    };
+    const src = fs.readFileSync(path.resolve(import.meta.dirname, '../../src/core/types.ts'), 'utf8');
+    const body = src.slice(src.indexOf('export interface Task {'));
+    const fields = [...new Set([...body.slice(0, body.indexOf('\n}\n')).matchAll(/^ {2}(org_[a-z_]+)\??:/gm)].map((m) => m[1]))].sort();
+    expect(fields).toEqual(Object.keys(probes).sort());
+    const base = task({ id: 'n', project: 'Garden' } as Partial<Task>);
+    for (const [k, v] of Object.entries(probes)) expect(listRowEqual(base, { ...base, [k]: v } as Task), k).toBe(false);
+  });
+
   it('detects every router setting even when updated_at is unchanged', () => {
     const a = task({ id: 'r', org_role: 'router', router_area_id: 'personal', router_links: ['vp-a', 'vp-b'], router_paused: true });
     expect(listRowEqual(a, { ...a, router_links: [...a.router_links!] })).toBe(true);

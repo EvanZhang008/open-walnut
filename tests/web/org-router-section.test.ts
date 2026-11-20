@@ -18,6 +18,7 @@ const renderToStaticMarkup = (node: ReactNode) => renderStatic(createElement(Mem
 import type { Task } from '../../src/core/types.js'
 import { buildOrgTree } from '../../src/core/org/org-tree.js'
 import { buildChannels, type AlertProbe, type ChannelRow } from '../../web/src/components/org/org-channels-model.js'
+import { OrgAvatar } from '../../web/src/components/org/OrgAvatar'
 
 const { OrgRouterSection, routersHeading } = await import('../../web/src/components/org/OrgRouterSection')
 
@@ -41,7 +42,8 @@ function routerRow(id: string, name: string, extra: Partial<ChannelRow> = {}): C
 const render = (rows: readonly ChannelRow[], selectedKey: string | null = null) =>
   renderToStaticMarkup(createElement(OrgRouterSection, { rows, selectedKey, now: NOW, onSelect: () => {} }))
 
-/** Every element in a tree of function components, each called with its props (none uses hooks). */
+/** Every element in a tree of function components, each called with its props (none uses hooks;
+ *  the avatar, which reads the task store, stays a leaf). */
 function elements(node: ReactNode): ReactElement[] {
   const out: ReactElement[] = []
   const walk = (n: ReactNode) => {
@@ -49,6 +51,7 @@ function elements(node: ReactNode): ReactElement[] {
     if (!isValidElement(n)) return
     out.push(n)
     const props = n.props as { children?: ReactNode }
+    if (n.type === OrgAvatar) return
     if (typeof n.type === 'function') walk((n.type as (p: unknown) => ReactNode)(n.props))
     else walk(props.children)
   }
@@ -122,7 +125,7 @@ describe('the Routers section in the Org list', () => {
   })
 
   it('selects a router like a node: onSelect, never onOpenTask', () => {
-    expect(listCode).toMatch(/<OrgRouterSection rows=\{routers\} selectedKey=\{selectedKey\} now=\{now\} onSelect=\{onSelect\} \/>/)
+    expect(listCode).toMatch(/<OrgRouterSection rows=\{routers\} selectedKey=\{selectedKey\} now=\{now\} onSelect=\{onSelect\} onMenu=\{routerMenu \? onMenu : undefined\} \/>/)
     expect(section).not.toMatch(/onOpenTask/)
   })
 

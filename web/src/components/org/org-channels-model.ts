@@ -656,6 +656,12 @@ export function rowAvatarColor(row: Pick<ChannelRow, 'kind' | 'name'>): string {
   return row.kind === 'router' ? ROUTER_AVATAR_COLOR : avatarColor(row.name);
 }
 
+/** The task an Org row stands for (its avatar's owner): Main, the VP (or the project's one task), the router. */
+export function rowTaskId(row: Pick<ChannelRow, 'kind' | 'key' | 'contactId'>): string | undefined {
+  if (row.kind === 'router') return row.key.startsWith('router:') ? row.key.slice('router:'.length) : undefined;
+  return row.contactId;
+}
+
 export function avatarColor(name: string): string {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;

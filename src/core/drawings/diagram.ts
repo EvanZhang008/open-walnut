@@ -306,10 +306,6 @@ export function parseDiagramReply(text: string): DiagramResult {
 
 // ── The call ────────────────────────────────────────────────────────────────
 
-function replyText(result: { content?: ReadonlyArray<{ type: string }> }): string {
-  return (result.content ?? []).map((b) => (b.type === 'text' && 'text' in b ? String((b as { text: unknown }).text) : '')).join('').trim()
-}
-
 /**
  * One diagram: the model answers within diagramTuning.deadlineMs (else 504), with a usable reply
  * (one retry, then 502). `signal` is the caller going away.
@@ -322,6 +318,7 @@ export async function makeDiagram(input: DiagramInput, opts: { signal?: AbortSig
   const timedOut = () => new DrawingServiceError(`The model did not answer within ${Math.round(deadlineMs / 1000)} s`, 504)
   const png = checked.mode === 'tidy' ? await selectionPng(checked.elements, checked.files) : null
   const { sendMessage } = await import('../../model/model.js')
+  const { replyText } = await import('../../model/reply-text.js')
   const messages: Array<{ role: 'user' | 'assistant'; content: unknown }> = [{ role: 'user', content: userContent(checked, png) }]
   const usage = {
     source: 'drawing' as const,

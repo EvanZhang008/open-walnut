@@ -200,6 +200,33 @@ defineOp({
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 
+defineOp({
+  name: 'org_avatar_set',
+  title: 'Set the Org avatar of the CEO, a VP, a router, a leader or a task',
+  description:
+    'Sets the small picture a node wears on the Org page and the phone, as the user does with "Edit name and avatar…". '
+    + 'Give ONE of: `preset` ("<character>:<colour>", characters ceo, walnut, sailor, robot, house, mailbox, party, pigeon, '
+    + 'clock, owl, headset, detective, scholar, painter, guard, chef; colours 0 to 13), `svg` (your own drawing: one '
+    + '<svg viewBox="0 0 100 100">…</svg> of plain shapes, no script, images or links, at most 24000 characters; '
+    + 'the Org style is one fat round blob with a two-dot face and one or two small features of its role), or `reset: true` '
+    + 'for the default the org hands out. When the user asks you to change your own avatar, draw it and set it on your own task.',
+  input: {
+    task_id: z.string().describe('The task whose avatar it is (the CEO\'s, a VP\'s, a router\'s, a leader\'s or any task\'s id)'),
+    preset: z.string().optional().describe('A preset: "<character>:<colour 0-13>", e.g. "owl:8"'),
+    svg: z.string().optional().describe('Your own SVG drawing (square viewBox, shapes only)'),
+    reset: z.boolean().optional().describe('true: back to the default avatar'),
+  },
+  handler: async ({ task_id, preset, svg, reset }, call) => {
+    const body = await call('PUT', `/org/avatars/${encodeURIComponent(String(task_id))}`, {
+      ...(preset !== undefined ? { preset } : {}), ...(svg !== undefined ? { svg } : {}), ...(reset ? { reset: true } : {}),
+    }) as { task?: { id?: string; title?: string; org_avatar?: unknown } };
+    const what = reset ? 'Back to the default avatar' : 'Avatar set';
+    return withOutcome(body ?? {}, `${what} for ${body?.task?.title ?? task_id}.`, 'The Org page shows it at once while "Org avatars" is on (Settings › Experimental).');
+  },
+  routes: [{ method: 'PUT', path: '/org/avatars/:taskId' }],
+  tags: { readonly: false, remote: 'allow', primaryOnly: true },
+});
+
 // A node's duty switches (src/core/org/duties/): one per registry entry, off by default.
 defineOp({
   name: 'org_duty_set',

@@ -11,9 +11,11 @@
  * Inside the list's listbox it is a group of options (all a listbox may hold); Up and Down reach its
  * rows through the list's own key handler, which counts them after the VPs.
  */
+import type React from 'react';
 import { timeAgo } from '@/utils/time';
 import { stateCountLabel } from '@open-walnut/user-status';
-import { ROUTER_AVATAR_COLOR, askCount, initials, type ChannelRow, type ChannelState } from './org-channels-model';
+import { askCount, type ChannelRow, type ChannelState } from './org-channels-model';
+import { OrgAvatar } from './OrgAvatar';
 
 const STATE_LABEL: Record<ChannelState, string> = {
   alert: 'Needs you', working: 'Working', quiet: 'Waiting', parked: 'Paused',
@@ -37,7 +39,10 @@ function shortAgo(ms: number, now: number): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
-function RouterRow({ row, selected, now, onSelect }: { row: ChannelRow; selected: boolean; now: number; onSelect: (key: string) => void }) {
+/** A right-click on a router row: the list's row menu (org-row-menu.ts). */
+type RouterMenu = (e: React.MouseEvent, target: { row: ChannelRow }) => void;
+
+function RouterRow({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; selected: boolean; now: number; onSelect: (key: string) => void; onMenu?: RouterMenu }) {
   const own = askCount(row.alerts);
   return (
     <button
@@ -51,15 +56,9 @@ function RouterRow({ row, selected, now, onSelect }: { row: ChannelRow; selected
       data-state={row.state}
       title={`${row.name}: ${STATE_LABEL[row.state]}${row.lastAt ? `, moved ${timeAgo(new Date(row.lastAt).toISOString(), { now })}` : ''}`}
       onClick={() => onSelect(row.key)}
+      onContextMenu={onMenu ? (e) => onMenu(e, { row }) : undefined}
     >
-      <span
-        className="org-avatar"
-        style={{ width: 34, height: 34, fontSize: 13, background: ROUTER_AVATAR_COLOR }}
-        aria-hidden="true"
-      >
-        {initials(row.name)}
-        <span className={`org-state-dot org-state-${row.state}`} />
-      </span>
+      <OrgAvatar row={row} />
       <span className="org-channel-mid">
         <span className="org-channel-top">
           <span className="org-channel-name">{row.name}</span>
@@ -75,18 +74,19 @@ function RouterRow({ row, selected, now, onSelect }: { row: ChannelRow; selected
   );
 }
 
-export function OrgRouterSection({ rows, selectedKey, now, onSelect }: {
+export function OrgRouterSection({ rows, selectedKey, now, onSelect, onMenu }: {
   rows: readonly ChannelRow[];
   selectedKey: string | null;
   now: number;
   onSelect: (key: string) => void;
+  onMenu?: RouterMenu;
 }) {
   return (
     <div className="org-routers" role="group" aria-label={ROUTERS_SECTION_LABEL} data-testid="org-routers" data-count={rows.length}>
       <div className="org-list-section" role="presentation" data-testid="org-routers-head">{routersHeading(rows.length)}</div>
       {rows.map((r) => (
         <div key={r.key} className="org-channel-wrap" role="presentation">
-          <RouterRow row={r} selected={selectedKey === r.key} now={now} onSelect={onSelect} />
+          <RouterRow row={r} selected={selectedKey === r.key} now={now} onSelect={onSelect} onMenu={onMenu} />
         </div>
       ))}
     </div>

@@ -132,6 +132,12 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'Press Control-Option-Command-Space to open a small bar: it listens at once, shows your words as you speak, and sends them to the CEO, a VP or any task you pick (Tab, or start with "to Walnut VP, ..."). Two seconds after you stop it sends; Esc cancels and any key lets you edit. A small note in the corner shows when the message arrived and the first line of the reply. In the Mac app the key works from any app once your Mac app has this version; in a browser, while Walnut is open.',
     default: false,
   },
+  {
+    id: 'org_avatars',
+    name: 'Org avatars',
+    description: 'Every node on the Org page (the CEO, each VP, router and leader, and their tasks) wears a small round character instead of two letters, each its own. Right-click a VP or a router for "Edit name and avatar…": pick a preset, upload a picture, or let the AI draw three to choose from. The phone shows the same avatars.',
+    default: false,
+  },
 ] as const;
 
 export type ExperimentalFeatureId = typeof EXPERIMENTAL_FEATURES[number]['id'];

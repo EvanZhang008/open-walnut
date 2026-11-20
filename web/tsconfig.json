@@ -33,6 +33,7 @@
       "@open-walnut/found-host-offer": ["../src/core/hosts/found-host-offer"],
       "@open-walnut/ask-list": ["../src/core/sessions/ask-list"],
       "@open-walnut/org-tree": ["../src/core/org/org-tree"],
+      "@open-walnut/org-avatars": ["../src/core/org/avatars/index"],
       "@open-walnut/user-status": ["../src/core/user-status"],
       "@open-walnut/board-summary-text": ["../src/core/boards/board-summary-text"],
       "@open-walnut/message-about": ["../src/core/org/message-about"],

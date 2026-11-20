@@ -29,6 +29,7 @@ import { directorsLabel, foldGroups, leaderTotal, leadersMatch, subsMatch, type 
 import { directorMenuItems, endNewDirector, useDirectorActions, useNewDirectorAsk, type DirectorProject } from './director-actions';
 import { OrgNewDirector } from './OrgNewDirector';
 import '@/styles/org-leaders.css';
+import { NodeAvatar } from './OrgAvatar';
 
 type Surface = 'list' | 'chart';
 
@@ -114,6 +115,7 @@ function LeaderRow({ leader: l, depth, surface, query, openTaskIds, onOpen, onMe
           onKeyDown={hasSubs ? foldKeys(open, setOpen) : undefined}
         >
           <i style={{ background: TAB_DOT[l.state] }} aria-hidden="true" />
+          <NodeAvatar taskId={l.id} name={l.title} size={20} onlyPicture className="org-leader-avatar" />
           <span className="org-leader-title">{l.title}</span>
           {l.watched && <span className="org-leader-eye" data-testid="org-leader-eye" title="Watched" aria-hidden="true">{ICON_EYE}</span>}
           <span className="org-leader-leads" data-testid="org-leader-leads">leads {l.leads}</span>

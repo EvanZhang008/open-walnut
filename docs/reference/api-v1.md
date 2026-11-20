@@ -1701,6 +1701,27 @@ team is talked to through that task; the Inbox never gets a lead.
   in every answer carries `org_instructions` (additive).
 - Every POST and PUT answers `501` on a replica.
 
+### Org avatars (additive, 2026-11-20): `/org/avatars`
+
+Behind the `org_avatars` experiment (off by default). Every task has a default avatar, worked out
+from the task list (`src/core/org/avatars/`): the CEO, VPs, routers and leaders never share one, and
+a newer node never changes an older one's. A chosen one is stored on the task as `org_avatar
+{ preset? | svg? | image?, at, by? }` (local-only; an older Walnut ignores it).
+
+- `PUT /api/v1/org/avatars/:taskId { preset } | { svg } | { image } | { reset: true }` →
+  `200 { task: { id, title, org_avatar } }`: `preset` is `<character>:<colour>` (`owl:8`), `svg` a
+  self-contained SVG (at most 24,000 characters, a viewBox, nothing that runs or loads: no
+  script, event handler, foreignObject, image, use, or outside link), `image` a PNG, JPEG or WebP
+  data URL (at most 160,000 characters); `reset` brings the default back. `400 bad_avatar`,
+  `413 bad_avatar` (too big), `404 not_found`. The user or any agent may (op `org_avatar_set`).
+- `POST /api/v1/org/avatars/draw { prompt, name?, taskId? }` → `200 { svgs }`: up to three SVGs
+  the user's main model drew in the house style; nothing is saved. `400 bad_prompt`,
+  `502 draw_failed`, `504 draw_timeout` (two minutes).
+- `GET /api/v1/org/avatars/:taskId.png[?size=16..512]` → `200 image/png` (default 96): the
+  avatar the Org page shows for that task, for a client that draws pictures (the phone).
+  `404` while the experiment is off, or for an unknown task.
+- Every PUT and POST answers `501` on a replica.
+
 ### An Org node's Threads (additive, 2026-11): `/tasks/:id/threads`
 
 - `GET /api/v1/tasks/:id/threads[?open=1|closed=1][&limit=N][&answer_max=N]` →

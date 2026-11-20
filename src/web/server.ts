@@ -2772,6 +2772,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/v1', quickInputV1Router)
   app.use('/api/v1', contentV1Router)
   app.use('/api/v1', orgV1Router)
+  app.use('/api/v1', (await import('./routes/org-avatars-v1.js')).orgAvatarsV1Router)
   app.use('/api/v1', (await import('./routes/health-monitor-v1.js')).healthMonitorV1Router)
   // Every plugin's settings for an AI: the plugin_settings ops.
   app.use('/api/v1', (await import('./routes/plugin-settings-v1.js')).pluginSettingsV1Router)

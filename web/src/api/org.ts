@@ -115,3 +115,18 @@ export async function editProjectVp(project: string, edit: { name?: string; inst
   const res = await apiPut<{ task: OrgNodeBrief }>(`/api/v1/org/projects/${encodeURIComponent(project)}/vp`, edit);
   return res.task;
 }
+
+/** What a task's Org avatar is set to: one preset, SVG or image data URL, or `reset` for the default. */
+export type OrgAvatarSet = { preset: string } | { svg: string } | { image: string } | { reset: true };
+
+/** Set (or reset) a task's Org avatar (PUT /api/v1/org/avatars/:taskId). */
+export async function setOrgAvatar(taskId: string, value: OrgAvatarSet): Promise<{ id: string; org_avatar: Task['org_avatar'] }> {
+  const res = await apiPut<{ task: { id: string; org_avatar: Task['org_avatar'] } }>(`/api/v1/org/avatars/${encodeURIComponent(taskId)}`, value);
+  return res.task;
+}
+
+/** Three avatars the user's own model draws for a description (nothing is saved). */
+export async function drawOrgAvatars(input: { prompt?: string; name?: string; taskId?: string }, signal?: AbortSignal): Promise<string[]> {
+  const res = await apiPost<{ svgs: string[] }>('/api/v1/org/avatars/draw', input, { signal, timeoutMs: 130_000 });
+  return res.svgs;
+}

@@ -3,6 +3,7 @@ import { CLAUDE_CLI_PROVIDER, LEGACY_DEFAULT_PROVIDER, resolveMainProviderName }
 import { isLocalModelProvider } from '../model/providers/local-provider.js';
 import type { ProviderConfig } from '../model/providers/types.js';
 import type { Config } from './types.js';
+import { replyText } from '../model/reply-text.js';
 
 /**
  * Resolve the model used for cheap background work. Providers without a Haiku
@@ -85,10 +86,7 @@ export function fastCallText(
   result: { content?: ReadonlyArray<{ type: string }>; aborted?: boolean }, budgetMs?: number,
 ): string {
   if (result.aborted) throw new FastCallTimeoutError(budgetMs);
-  return (result.content ?? [])
-    .map((b) => (b.type === 'text' && 'text' in b ? (b as { text: string }).text : ''))
-    .join('')
-    .trim();
+  return replyText(result);
 }
 
 /**

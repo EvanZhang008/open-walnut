@@ -1067,6 +1067,11 @@ export interface Task {
    *  title stays the session's own (its turn-end topic may grow it), so the chart and the Org list
    *  read this instead (orgDisplayTitle). Payload blob, local-only; an older Walnut ignores it. */
   org_name?: string;
+  /** The avatar the user or an agent chose for this task on the Org page (src/core/org/avatars/):
+   *  a preset ("<character>:<colour>"), or a picture of its own (SVG text, or a PNG/JPEG/WebP data
+   *  URL), with who set it and when. No row: the default the org hands out. Payload blob,
+   *  local-only; an older Walnut ignores it. */
+  org_avatar?: { preset?: string; svg?: string; image?: string; at: string; by?: string } | null;
   /** Main or a lead only: Walnut's own background start of its first session
    *  (src/core/org/org-autostart.ts), so the Org page can say it is starting, or why it could not
    *  start and offer Retry. Cleared once the node has a session. Payload blob, local-only; an

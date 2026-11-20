@@ -29,6 +29,7 @@ export default defineConfig({
       '@open-walnut/found-host-offer': path.resolve(import.meta.dirname, 'src/core/hosts/found-host-offer.ts'),
       '@open-walnut/ask-list': path.resolve(import.meta.dirname, 'src/core/sessions/ask-list.ts'),
       '@open-walnut/org-tree': path.resolve(import.meta.dirname, 'src/core/org/org-tree.ts'),
+      '@open-walnut/org-avatars': path.resolve(import.meta.dirname, 'src/core/org/avatars/index.ts'),
       '@open-walnut/user-status': path.resolve(import.meta.dirname, 'src/core/user-status.ts'),
       '@open-walnut/board-summary-text': path.resolve(import.meta.dirname, 'src/core/boards/board-summary-text.ts'),
       '@open-walnut/message-about': path.resolve(import.meta.dirname, 'src/core/org/message-about.ts'),
