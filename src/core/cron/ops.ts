@@ -140,6 +140,25 @@ export async function list(state: CronServiceState, opts?: { includeDisabled?: b
   });
 }
 
+/** How long the jobs as this process last read or wrote them stand in for the store (listKept). */
+export const KEPT_LIST_MAX_AGE_MS = 60_000;
+
+/**
+ * The jobs as this process last read or wrote them, without waiting for the store's lock: a
+ * reader that only shows them (the user-status pass). Every op reloads the store under the lock,
+ * and each recorded trigger check is one, so on the Mac (2026-11-20: a check recorded every second
+ * or so, a 1.9 MB store) a list waited behind them for up to 11.7 s, and a brief_write for that list.
+ * Older than `maxAgeMs`, or never loaded: the locked list, as stored (no recompute).
+ */
+export async function listKept(state: CronServiceState, opts?: { includeDisabled?: boolean; maxAgeMs?: number }) {
+  const maxAgeMs = opts?.maxAgeMs ?? KEPT_LIST_MAX_AGE_MS;
+  if (!state.store || state.keptAt === undefined || Date.now() - state.keptAt > maxAgeMs) {
+    return await list(state, { includeDisabled: opts?.includeDisabled, recompute: false });
+  }
+  const jobs = state.store.jobs.filter((j) => opts?.includeDisabled === true || j.enabled);
+  return [...jobs].sort((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
+}
+
 export async function add(state: CronServiceState, input: CronJobCreate, opts?: { id?: string }) {
   return await locked(state, async () => {
     warnIfDisabled(state, 'add');

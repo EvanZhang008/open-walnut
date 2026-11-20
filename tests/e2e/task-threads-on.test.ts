@@ -44,7 +44,7 @@ import { patchThread } from '../../src/core/org/threads-store.js'
 import { threadWaitItems } from '../../src/core/sessions/owed-waits.js'
 import { instructionNoticeFor } from '../../src/core/sessions/instruction-notice.js'
 import { listTasks } from '../../src/core/task-manager.js'
-import { readStatusFacts, statusInputOf } from '../../src/core/user-status-sync.js'
+import { readStatusFacts, settleUserStatusSync, statusInputOf, _dropNodeThreadsForTesting, _sweepFactSourcesForTesting, _threadFileReadsForTesting } from '../../src/core/user-status-sync.js'
 import { deriveUserStatus } from '../../src/core/user-status.js'
 import { userAwayFrom } from '../../src/core/org/user-away.js'
 import { threadPushContent } from '../../src/core/push/thread-push.js'
@@ -166,6 +166,25 @@ describe('Threads on a leader task', () => {
     for (const source of ['sessions', 'undelivered', 'letters', 'approvals', 'choices', 'requests', 'triggers', 'schedules', 'checks', 'threads']) {
       expect(facts.readMs?.[source]).toBeGreaterThanOrEqual(0)
     }
+  })
+
+  // Every node's Threads file was read again after each minute sweep (about 240 nodes, up to 3.7 s
+  // a pass, 2026-11-20); the sweep now counts the kept rows again on the clock and reads no file.
+  it('a sweep counts the kept Threads again without reading their files', async () => {
+    const all = await listTasks()
+    const leader = all.find((t) => t.id === leaderId)!
+    // A pass the earlier steps started may drop a node's Threads in between: let them end first.
+    await settleUserStatusSync()
+    // The positive control: dropped, its Threads file is read again.
+    _dropNodeThreadsForTesting()
+    const readsBefore = _threadFileReadsForTesting()
+    const before = await readStatusFacts([leader], all.map((t) => t.id))
+    expect(_threadFileReadsForTesting()).toBeGreaterThan(readsBefore)
+    const readsKept = _threadFileReadsForTesting()
+    _sweepFactSourcesForTesting()
+    const after = await readStatusFacts([leader], all.map((t) => t.id))
+    expect(_threadFileReadsForTesting()).toBe(readsKept)
+    expect(after.threads.get(leaderId)).toEqual(before.threads.get(leaderId))
   })
 
   it('while on, a thread waiting on him reads Needs you, and the away and buzz paths take the task', async () => {

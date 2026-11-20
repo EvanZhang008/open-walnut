@@ -261,14 +261,17 @@ async function owned<T extends { jobs: unknown[] } | { job: unknown }>(answer: T
   return answer;
 }
 
-export async function listRoutines(includeDisabled: boolean): Promise<{ jobs: unknown[] }> {
+/** `opts.kept`: a reader that only shows them takes them without waiting for the store's lock
+ *  (cron ops.listKept); a host replica and the companion read their copy as always. */
+export async function listRoutines(includeDisabled: boolean, opts?: { kept?: boolean }): Promise<{ jobs: unknown[] }> {
   if (isHostReplicaProgram()) return owned({ jobs: (await copiedRoutines(includeDisabled)).map((j) => withMissed(j)) });
   if (isCompanion()) {
     const out = await (await companion()).companionListRoutines(includeDisabled);
     return owned({ ...out, jobs: out.jobs.map((j) => withMissed(j)) });
   }
   const service = await requireCronService();
-  return owned({ jobs: (await service.list({ includeDisabled })).map((j) => withMissed(j)) });
+  const jobs = opts?.kept ? await service.listKept({ includeDisabled }) : await service.list({ includeDisabled });
+  return owned({ jobs: jobs.map((j) => withMissed(j)) });
 }
 
 export async function getRoutine(id: string): Promise<{ job: unknown }> {

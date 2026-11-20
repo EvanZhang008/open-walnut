@@ -64,6 +64,11 @@ export class CronService {
     return await ops.list(this.state, opts);
   }
 
+  /** The jobs as last read or written, without the store's lock (ops.listKept). */
+  async listKept(opts?: { includeDisabled?: boolean; maxAgeMs?: number }): Promise<CronJob[]> {
+    return await ops.listKept(this.state, opts);
+  }
+
   /** `opts.id`: a trigger a host created while this server was away keeps the id it gave it. */
   async add(input: CronJobCreate, opts?: { id?: string }): Promise<CronJob> {
     return await ops.add(this.state, input, opts);

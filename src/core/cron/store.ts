@@ -140,6 +140,7 @@ export async function ensureLoaded(
   }
   if (loaded.version !== 2) dirty = true;
   state.store = { version: 2, jobs: loaded.jobs ?? [] };
+  state.keptAt = Date.now();
   if (dirty) {
     await persist(state);
   }
@@ -216,6 +217,7 @@ export async function persist(state: CronServiceState): Promise<void> {
   await writeJsonFile(state.deps.storePath, { ...state.store, jobs: jobsWithoutState });
   const stateFile: CronStateFile = { version: 1, states };
   await writeJsonFile(cronStatePath(state.deps.storePath), stateFile);
+  state.keptAt = Date.now();
   // The routines copy kind's watch (replication/store-writes.ts): this is the one write point.
   noteStoreWrite('routines');
 }

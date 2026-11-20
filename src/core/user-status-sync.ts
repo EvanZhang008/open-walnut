@@ -203,13 +203,33 @@ const slow: Partial<Record<SlowSource, Map<string, any>>> = {};
 function dropSlow(...kinds: SlowSource[]): void {
   if (!kinds.length || kinds.includes('letters')) signInKept = null;
   for (const k of kinds.length ? kinds : SLOW_SOURCES) { delete slow[k]; delete slowReading[k]; slowGen[k] += 1; }
-  // A snooze of a thread runs out on its own clock: every sweep counts the Threads again.
-  if (!kinds.length) { boardChoices.clear(); threadsChanged(); }
+  // A snooze of a thread runs out on its own clock: every pass counts the kept rows again with the
+  // time now (readNodeThreads), so the sweep re-reads the files themselves only every
+  // THREADS_REREAD_MS, a safety net for a change no event named.
+  if (!kinds.length) {
+    boardChoices.clear();
+    if (Date.now() - threadsReadAllAt >= THREADS_REREAD_MS) { threadsChanged(); threadsReadAllAt = Date.now(); }
+  }
 }
 
-/** Per org node: its Threads' counts, read once and dropped when its Threads change. A change
- *  bumps the node's generation, so a read begun before it is never cached over it. */
-const nodeThreads = new Map<string, ThreadCounts>();
+/** Every node's Threads file is read again at most this often. Reading all of them each minute
+ *  (about 240 nodes) was the heaviest fact source of a pass: up to 3.7 s, 12.5 s in 14 slow passes
+ *  (2026-11-20), and a brief_write waits for a pass of its own. */
+const THREADS_REREAD_MS = 10 * 60_000;
+let threadsReadAllAt = Date.now();
+
+let threadFileReads = 0;
+/** Tests: what the minute sweep drops; every node's Threads dropped (a change no event named); the files read so far. */
+export function _sweepFactSourcesForTesting(): void { dropSlow(); }
+export function _dropNodeThreadsForTesting(): void { threadsChanged(); }
+export function _threadFileReadsForTesting(): number { return threadFileReads; }
+
+/** Per org node: its Threads file as read, kept until its Threads change; each pass joins them
+ *  with the task asks they point at (withTaskAsks: the tasks as they are now, and his word to them)
+ *  and counts them with the time now. A change bumps the node's generation, so a read begun before
+ *  it is never cached over it. */
+type NodeThreadRows = Awaited<ReturnType<typeof import('./org/threads-store.js').readThreads>>['threads'];
+const nodeThreads = new Map<string, NodeThreadRows>();
 const threadsGen = new Map<string, number>();
 const threadOwners = new Map<string, Set<string>>();
 let threadsGenAll = 0;
@@ -232,21 +252,29 @@ async function readNodeThreads(tasks: readonly Task[]): Promise<Map<string, Thre
   const { threadCounts } = await import('./org/thread-view.js');
   // A targeted status pass may contain only the lead. Its linked owners still belong in the read.
   let all: readonly Task[] | undefined;
+  const now = Date.now();
   for (const t of nodes) {
-    let hit = nodeThreads.get(t.id);
-    if (!hit) {
+    let rows = nodeThreads.get(t.id);
+    if (!rows) {
       const gen = `${threadsGenAll}:${threadsGen.get(t.id) ?? 0}`;
       const read = await safely('threads', async () => {
-        all ??= await (await import('./task-manager.js')).listTasks();
+        threadFileReads += 1;
         const threads = (await readThreads(t.id)).threads;
         threadOwners.set(t.id, new Set(threads.flatMap((row) => [...(row.tasks ?? []), ...(row.askOwner ? [row.askOwner.task] : [])])));
-        return threadCounts(await withTaskAsks(t.id, threads, all));
+        return threads;
       }, null);
       // An unreadable file is not cached (the next pass tries again), nor a read a change overtook.
       if (read && gen === `${threadsGenAll}:${threadsGen.get(t.id) ?? 0}`) nodeThreads.set(t.id, read);
-      hit = read ?? undefined;
+      rows = read ?? undefined;
     }
-    if (hit && hit.shown > 0) out.set(t.id, hit);
+    if (!rows) continue;
+    const threads = rows;
+    const counts = await safely('threads', async () => {
+      // The tasks as they are now: one read a pass, shared by every node.
+      all ??= await (await import('./task-manager.js')).listTasks();
+      return threadCounts(await withTaskAsks(t.id, threads, all), now);
+    }, null);
+    if (counts && counts.shown > 0) out.set(t.id, counts);
   }
   return out;
 }
@@ -399,7 +427,8 @@ async function readRoutines(kind: 'triggers' | 'schedules' | 'checks'): Promise<
   await safely('triggers', async () => {
     const { listRoutines } = await import('./routines/routines-core.js');
     const { triggerRunState } = await import('./cron/trigger-run-state.js');
-    const { jobs } = await listRoutines(true);
+    // Never behind the store's lock: every recorded trigger check holds it (ops.listKept).
+    const { jobs } = await listRoutines(true, { kept: true });
     for (const job of jobs as import('./cron/types.js').CronJob[]) {
       const target = (job.executor?.config as { target?: unknown } | undefined)?.target;
       // Every executor kind that wakes the task its config names (routine-wake-target.ts).
@@ -1039,6 +1068,10 @@ function childrenFirst(tasks: readonly Task[], children: ReadonlyMap<string, rea
  * as Done first, and a write to a COMPLETE row would announce it as completed again
  * (updateTaskRaw names the event by the phase), waking every completion listener.
  */
+/** How long a write that answers a caller (brief_write, an action snooze) waits for the status pass
+ *  it starts; the pass runs on past it. A pass on a busy Mac took 2 to 18 s (2026-11-20). */
+export const STATUS_ANSWER_WAIT_MS = 2_000;
+
 export async function syncUserStatuses(
   ids: ReadonlySet<string> | null, nowMs = Date.now(),
   /** How the tasks a change reaches next (its leader, a node linked to it, a same ask) are queued:
@@ -1407,4 +1440,6 @@ export function stopUserStatusSync(): void {
   settleTimers.clear();
   threadOwners.clear();
   dropSlow();
+  threadsChanged();
+  threadsReadAllAt = Date.now();
 }

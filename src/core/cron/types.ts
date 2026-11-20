@@ -581,6 +581,8 @@ export type CronServiceDepsInternal = Omit<CronServiceDeps, 'nowMs'> & {
 export type CronServiceState = {
   deps: CronServiceDepsInternal;
   store: CronStoreFile | null;
+  /** When `store` last matched the file (it was read or written then, under the lock); ops.listKept. */
+  keptAt?: number;
   timer: ReturnType<typeof setTimeout> | null;
   running: boolean;
   op: Promise<unknown>;
