@@ -5,8 +5,10 @@
  *   backup list [--key <k>]            the backups there are
  *   backup restore [--at <id>] [--to <dir>] [--force] [--key <k>] [--profile <p>]
  *
- * With `backup.destination` in config.yaml (and no --bucket flag) these work on
- * encrypted backups; otherwise on the older S3 copy (`backup.bucket`).
+ * With `backup.destination` in config.yaml or `--type` (and no --bucket flag) these work
+ * on the repository backups, encrypted or not (`--encrypt` / `--no-encrypt`); otherwise on
+ * the older S3 copy (`backup.bucket`). `--type gdrive` on a computer that never connected
+ * Drive signs in from the terminal first (core/backup/drive-connect.ts).
  *
  * Restore downloads into a FRESH directory by default and never overwrites a
  * live data dir — disaster recovery must not be able to make things worse.
@@ -53,6 +55,29 @@ async function encryptedConfig(options: Record<string, unknown>): Promise<Backup
   return cfg?.destination?.type ? cfg : null;
 }
 
+/** Google Drive never connected on this computer: sign in here (a link to open), not in the app first. */
+async function connectDriveIfNeeded(cfg: BackupConfig): Promise<void> {
+  const dest = cfg.destination;
+  if (dest?.type !== 'gdrive') return;
+  const { isDestinationReady, DEFAULT_DRIVE_FOLDER } = await import('../core/backup/destination.js');
+  if (await isDestinationReady(dest, WALNUT_HOME)) return;
+  const { resolveOAuthClient } = await import('../core/backup/gdrive-oauth.js');
+  const client = resolveOAuthClient({ client_id: dest.client_id, client_secret: dest.client_secret }, WALNUT_HOME);
+  if (!client) {
+    throw new Error('This build has no Google client for Drive. Pass the client the backups were made with: '
+      + 'set backup.destination.client_id and client_secret in config.yaml, or WALNUT_GDRIVE_CLIENT_ID and WALNUT_GDRIVE_CLIENT_SECRET.');
+  }
+  const { signInToDriveInTerminal } = await import('../core/backup/drive-connect.js');
+  await signInToDriveInTerminal(WALNUT_HOME, client, dest.folder_name?.trim() || DEFAULT_DRIVE_FOLDER);
+}
+
+/** The encrypted-backup config a command works on, with Drive signed in when it is the service. */
+async function readyConfig(options: Record<string, unknown>): Promise<BackupConfig | null> {
+  const cfg = await encryptedConfig(options);
+  if (cfg) await connectDriveIfNeeded(cfg);
+  return cfg;
+}
+
 /** `--encrypt` / `--no-encrypt` over what is set (commander sets `encrypt` only when given). */
 const withKindFlag = (cfg: BackupConfig, options: Record<string, unknown>): BackupConfig =>
   typeof options.encrypt === 'boolean' ? { ...cfg, encrypt: options.encrypt } : cfg;
@@ -81,7 +106,7 @@ async function resolveCliConfig(options: Record<string, unknown>): Promise<Backu
 }
 
 export async function runBackupRun(options: Record<string, unknown>): Promise<void> {
-  const found = await encryptedConfig(options);
+  const found = await readyConfig(options);
   if (found) {
     const enc = withKindFlag(found, options);
     const { runEncryptedBackup } = await import('../core/backup/encrypted-backup.js');
@@ -144,7 +169,7 @@ export function plainFailure(what: string): (err: unknown) => void {
 }
 
 export async function runBackupList(options: Record<string, unknown>): Promise<void> {
-  const found = await encryptedConfig(options);
+  const found = await readyConfig(options);
   if (found) {
     const enc = withKindFlag(found, options);
     const { listEncryptedBackups } = await import('../core/backup/encrypted-backup.js');
@@ -183,7 +208,7 @@ export async function runBackupRestore(options: Record<string, unknown>): Promis
   const target = typeof options.to === 'string'
     ? path.resolve(options.to)
     : path.join(os.homedir(), `open-walnut-restored-${ts}`);
-  const enc = await encryptedConfig(options);
+  const enc = await readyConfig(options);
   if (enc) {
     const { restoreEncryptedBackup } = await import('../core/backup/encrypted-backup.js');
     console.log(`Restoring to ${target} ...`);

@@ -25,9 +25,9 @@ import {
 } from '../../core/backup/encrypted-backup.js';
 import {
   completeDriveConnectFromUrl, machineClientPath, readDriveTokens, readMachineClient, resolveOAuthClient, revokeDriveTokens,
-  startDriveConnect, writeDriveTokens, makeAccessTokenGetter, type OAuthClient,
+  startDriveConnect, type OAuthClient,
 } from '../../core/backup/gdrive-oauth.js';
-import { driveAbout, findOrCreateFolder } from '../../core/backup/stores/drive-store.js';
+import { saveDriveConnection } from '../../core/backup/drive-connect.js';
 import { BackupBusyError, runBackupJob } from '../../core/backup/jobs.js';
 import { ensureRecoveryKey, readRecoveryKey, writeRecoveryKey } from '../../core/backup/recovery-key.js';
 import { listRestorePoints, restoreFromBackup } from '../../core/backup/restore.js';
@@ -484,16 +484,10 @@ encryptedBackupRouter.post('/gdrive/connect', async (req: Request, res: Response
           void (async () => {
             try {
               if (!outcome.ok) throw new Error(outcome.error);
-              let tokens = outcome.tokens;
-              await writeDriveTokens(WALNUT_HOME, tokens);
-              const getToken = makeAccessTokenGetter(WALNUT_HOME, client);
-              const about = await driveAbout(getToken).catch(() => ({} as { email?: string }));
-              const folder = await findOrCreateFolder(folderName, getToken);
-              tokens = { ...(await readDriveTokens(WALNUT_HOME))!, email: about.email, folder_id: folder.id, folder_name: folderName };
-              await writeDriveTokens(WALNUT_HOME, tokens);
+              const saved = await saveDriveConnection(WALNUT_HOME, client, outcome.tokens, folderName);
               getBackupScheduler()?.resetAnchor();
-              log.web.info('backup: google drive connected', { folderCreated: folder.created });
-              settle({ ok: true, email: about.email });
+              log.web.info('backup: google drive connected', { folderCreated: saved.folderCreated });
+              settle({ ok: true, email: saved.email });
               getBackupScheduler()?.emitStatus();
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);

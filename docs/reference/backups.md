@@ -2,9 +2,10 @@
 
 Walnut backs up its data folder (`~/.open-walnut`: notes, tasks, passwords, sign-ins,
 settings) to a place the user already has: Cloudflare R2, Google Drive, or an Amazon S3
-bucket (or any S3-compatible service). Everything is encrypted on the computer before it
-is uploaded, and Settings, Backup can list the backups and restore any of them into a new
-folder.
+bucket (or any S3-compatible service). Encryption is a switch, off by default: off, the
+files go up as they are and there is no key to keep; on, everything is encrypted on the
+computer before it is uploaded, and only the recovery key opens it. Settings, Backup can
+list the backups and restore any of them into a new folder.
 
 Code: `src/core/backup/` (engine), `src/web/routes/backup*.ts` (routes),
 `web/src/components/settings/sections/BackupSection.tsx` and `sections/backup/` (the pane),
@@ -19,9 +20,12 @@ Code: `src/core/backup/` (engine), `src/web/routes/backup*.ts` (routes),
    - **Google Drive**: "Connect Google Drive" opens Google's sign-in. Walnut asks only for
      `drive.file`, so it sees only the files it makes, all in one "Walnut Backup" folder.
    - **Amazon S3**: bucket, an optional region (empty: the SDK follows the bucket's own region), and the AWS credential chain, a profile, or keys.
-2. The recovery key appears (Show, Copy, Download). Keep it outside this computer.
-3. "Back up automatically" turns on once there is a destination and a key. The first backup
-   uploads everything; after that only changes upload.
+2. That is all when "Encrypt backups" is off (the default): the first backup starts within a
+   minute. With it on, the recovery key appears first (Show, Copy, Download); keep it outside
+   this computer, and backups start once you say it is saved.
+3. The first backup uploads everything; after that only changes upload. A first backup cut
+   short (Walnut restarted, the connection dropped) keeps what it uploaded: the next run
+   uploads only what is still missing.
 
 Looking at another service in the pane never changes where backups go: a bucket is saved
 by a passing "Test and save", Google Drive by a finished sign-in (or, when another service
@@ -29,6 +33,30 @@ is in use, by "Use Google Drive"). The service left behind is kept in
 `backup.other_destinations`, so switching back needs no retyping. "Back up automatically"
 saves the moment it is switched. Only the person at this computer can change where backups
 go: a config write from an agent session that moves them (or the kept services) is refused.
+
+## Encrypted or not
+
+"Encrypt backups" in Settings, Backup (`backup.encrypt` in config.yaml) chooses the kind.
+
+| | Off (the default) | On |
+|---|---|---|
+| What goes up | the files as they are, each object with a SHA-256 checksum bound to its name, so a changed or moved object is refused on restore | every object sealed with AES-256-GCM under a key made from the recovery key |
+| What you keep | nothing | the recovery key: nobody can open the backups without it, Walnut included |
+| Who can read them | anyone who can open the bucket or the Google account | only someone with the recovery key |
+| Where at the destination | under `plain/` (on Google Drive, file names starting `plain/` in the "Walnut Backup" folder) | at the top (`walnut-backup.json`, `packs/`, `index/`, `snapshots/`) |
+
+Both kinds can live at one destination, and switching never touches the other kind: backups
+made before stay where they are, are listed beside the new ones (an "Encrypted" tag marks
+those), and restore whichever is set now. "Latest" is the newest of both. Each kind keeps
+its own history and prunes only its own objects. Without its recovery key on this computer,
+the encrypted ones are listed only as "Encrypted backups are here too", with how to open them.
+
+Not set (`backup.encrypt` absent, as on an install from before the switch existed), the kind
+follows the setup: a recovery key saved before, or encrypted backups already at the
+destination, keep it encrypted; otherwise it is unencrypted. The scheduler writes what it
+found to config.yaml once, so later runs and the pane agree. The data folder includes
+`auth.json` (the sign-ins Walnut holds), so with encryption off, use a bucket or a Google
+account only you can open.
 
 ## What it costs and the limits
 
@@ -41,23 +69,28 @@ go: a config write from an agent session that moves them (or the kept services) 
 ## The format, and why
 
 A real data home measured about 7.3 GB in 22,600 files (notes with videos, a 1 GB usage
-database, plugin data). A zip of all of it every day would upload 7.3 GB a day and keep
-tens of GB of history, past every free tier. So the backup is incremental and deduplicated:
+database, plugin data); another, 10 GB in 33,500 files. A zip of all of it every day would
+upload the whole home every day and keep tens of GB of history, past every free tier, and a
+zip cut short by a restart is lost whole. So the backup is incremental and deduplicated,
+in either kind:
 
 - Files are cut into content-defined chunks (about 512 KB on average; files up to 1 MB are
   one chunk). A chunk is stored once, whatever file or backup it is in, so an unchanged file
   costs nothing and a changed one costs only its changed chunks.
 - Chunks are compressed (except formats that already are: video, images, archives), sealed
-  with AES-256-GCM, and packed about 16 MB to an object, so a destination holds a few
-  hundred objects, not tens of thousands.
-- Each backup (a snapshot) lists its files and their chunks, also encrypted. A snapshot is
-  written last: one that exists names only chunks already uploaded.
+  (encrypted with AES-256-GCM, or with a SHA-256 checksum when encryption is off), and
+  packed about 16 MB to an object, so a destination holds a few hundred objects, not tens
+  of thousands.
+- An index says which chunk is in which pack. A run writes one for every ~256 MB it
+  uploads, so a run cut short leaves its packs findable for the next.
+- Each backup (a snapshot) lists its files and their chunks, sealed the same way. A
+  snapshot is written last: one that exists names only chunks already uploaded.
 - SQLite databases are copied with SQLite's own backup API first, so a database being
   written is never backed up torn.
 
-Layout at the destination: `walnut-backup.json` (the format version, a random repository
-id, a key check, and the writer machine's random id; no names, no paths), `packs/`,
-`index/`, `snapshots/`.
+Layout at the destination, for each kind: `walnut-backup.json` (the format version, a random
+repository id, a key check or `"encryption": "none"`, and the writer machine's random id; no
+names, no paths), `packs/`, `index/`, `snapshots/`. The unencrypted kind's are under `plain/`.
 
 ## History kept
 
@@ -70,6 +103,8 @@ writer; and it never deletes a pack written in the last 6 hours.
 
 ## The recovery key
 
+Only for encrypted backups ("Encrypt backups" on).
+
 - Made on this computer the first time a destination with no backups is set up: 32 random
   bytes, shown as `WB1-` and then 53 letters and digits in groups of 5, the last one a check
   character.
@@ -79,9 +114,7 @@ writer; and it never deletes a pack written in the last 6 hours.
   a backup can keep backing up.
 - Nobody can open the backups without it, Walnut included. Keep it in a password manager or
   print the downloaded kit.
-- On a new computer: install Walnut, open Settings, Backup, choose the same destination
-  (for Google Drive, the same Google account and client). Walnut finds backups there and
-  asks for the key; it checks the key against the backups before keeping it.
+- On a new computer, see "Restore on a new computer" below.
 
 ## One computer writes
 
@@ -125,15 +158,42 @@ beside the data folder, be named `<data folder>-before-restore-<time>` and not b
 A service set up before and kept (`other_destinations`) can be restored from too: "From"
 appears above the list.
 
-From a terminal, also on a new computer with no Walnut data yet:
+## Restore on a new computer
+
+In the app:
+
+1. Install Walnut and open it (a new, empty data folder is fine).
+2. Settings, Backup, "Where backups go": choose the same service. For R2 or S3, the same
+   bucket and keys. For Google Drive, "Connect Google Drive" with the same Google account;
+   the build's own Google client sees the "Walnut Backup" folder it made before (a client of
+   your own sees only what that same client made, so use that one again).
+3. Backups made by an encrypted setup: turn on "Encrypt backups" and enter the recovery key
+   you saved; Walnut checks it against the backups before keeping it. Unencrypted backups
+   need nothing more.
+4. "Choose a backup", pick one (the newest is first), Restore, then "Use this data" (above).
+   Walnut then says another computer writes these backups: "Back up this computer" moves the
+   role here.
+
+From a terminal, also with no Walnut data yet:
 
 ```bash
-open-walnut backup list --type r2 --account-id <id> --bucket <bucket> --access-key-id <key> --key <recovery key>
-open-walnut backup restore --type r2 --account-id <id> --bucket <bucket> --access-key-id <key> --key <recovery key>
+# Cloudflare R2 (S3 the same with --type s3 --bucket <bucket> [--profile <p>])
+open-walnut backup list --type r2 --account-id <id> --bucket <bucket> --access-key-id <key>
+open-walnut backup restore --type r2 --account-id <id> --bucket <bucket> --access-key-id <key>
+# Google Drive: prints Google's sign-in link the first time, then lists or restores
+open-walnut backup list --type gdrive
+open-walnut backup restore --type gdrive
 ```
 
-The restore lands in `~/open-walnut-restored-<date>` (or `--to <folder>`, `--at <backup id>`
-from the list), and the command prints the one line that makes it the live data.
+On Google Drive, a computer that never connected it signs in from the terminal: the command
+prints a link, the browser goes back to the command when access is allowed, and the
+connection is kept for the app too. With the browser on another computer (over SSH), paste
+the address the browser ends on into the terminal instead.
+
+Add `--key <recovery key>` for encrypted backups. The restore lands in
+`~/open-walnut-restored-<date>` (or `--to <folder>`, `--at <backup id>` from the list), and
+the command prints the one line that makes it the live data. `--encrypt` / `--no-encrypt`
+choose the kind for `run`.
 
 `WALNUT_BACKUP_SECRET_ACCESS_KEY` and `WALNUT_BACKUP_RECOVERY_KEY` keep the secrets out of
 the shell history. The `restore-backup` skill walks a Claude Code session through it.
