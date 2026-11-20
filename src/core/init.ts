@@ -7,7 +7,6 @@ import {
   MEMORY_DIR,
   SYNC_DIR,
   REPOS_MEMORY_DIR,
-  NOTES_DIR,
   REPOSITORIES_DIR,
   RECORDINGS_DIR,
   TMP_DIR,
@@ -23,6 +22,7 @@ import {
 import fsp from 'node:fs/promises';
 import fs from 'node:fs';
 import { ensureMemoryFile } from './memory-file.js';
+import { notesRoot } from './notes/note-paths.js';
 import { seedConfigDefaults } from './config-manager.js';
 import { sweepOrphanAtomicTmpFiles } from './tmp-sweep.js';
 import { sweepPluginTmpOrphans } from './plugins/plugin-file-area.js';
@@ -64,7 +64,7 @@ export async function initDirectories(): Promise<void> {
   // (memory/projects), so recreating it here resurrected the legacy tree on every
   // boot after the full migration deleted it. TOPICS_DIR is retired for the same reason.
   await ensureDir(REPOS_MEMORY_DIR);
-  await ensureDir(NOTES_DIR);
+  await ensureDir(notesRoot());
   // PARA scaffolding (Areas/Projects/Resources/Archive) retired 2026-08 — the
   // vault is topic-first now (see notes/CLAUDE.md routing table). Recreating
   // them here resurrected empty PARA dirs on every boot after the migration.

@@ -1,14 +1,16 @@
 /**
  * The one way a note path becomes a vault file (src/core/notes/note-paths.ts): traversal,
  * root handling per option, dot segments, symlinks, each caller's own rules, and that every
- * way in follows a moved note (movedNotePath is replaced here by a map). The ratchet at the
- * end walks src/ and fails on a NEW raw join of the vault root outside note-paths.ts.
+ * way in follows a moved note (movedNotePath is replaced here by a map). The ratchets at the
+ * end walk src/ and fail on a NEW raw join of the vault root outside note-paths.ts, and on
+ * any NEW use of the NOTES_DIR constant outside the files that may name it.
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import ts from 'typescript'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('note-paths'))
@@ -252,6 +254,57 @@ describe('ratchet: every vault join goes through note-paths.ts', () => {
     }
     // Use noteAbs / noteRelOf / resolveNotePath from src/core/notes/note-paths.ts instead,
     // so a moved note (movedNotePath) is followed by every way in.
+    expect(offenders).toEqual([])
+  })
+})
+
+// ── ratchet: nothing but the resolver names NOTES_DIR ──
+// The vault root can move at boot, so code asks notesRoot() (or noteAbs, vault-files.ts)
+// at call time; NOTES_DIR stays only as the old folder's name for its migration.
+
+/** May name NOTES_DIR: where it is defined, the resolver, and the artifacts tree (the move). */
+function mayNameNotesDir(rel: string): boolean {
+  return rel === 'constants.ts' || rel === 'core/notes/note-paths.ts' || rel.startsWith('core/artifacts/')
+}
+
+/** Lines (1-based) where code names NOTES_DIR: an identifier, a property, or a string key. Comments do not count. */
+function notesDirUses(text: string, fileName = 'x.ts'): number[] {
+  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true)
+  const lines: number[] = []
+  const visit = (node: ts.Node): void => {
+    if ((ts.isIdentifier(node) && node.text === 'NOTES_DIR') || (ts.isStringLiteralLike(node) && node.text === 'NOTES_DIR')) {
+      lines.push(sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1)
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sf)
+  return lines
+}
+
+describe('ratchet: only note-paths.ts names NOTES_DIR', () => {
+  it('finds the uses it guards and skips comments (self-check)', () => {
+    expect(notesDirUses("import { NOTES_DIR } from '../constants.js'")).toEqual([1])
+    expect(notesDirUses('const root = constants.NOTES_DIR')).toEqual([1])
+    expect(notesDirUses("const root = (await import('../constants.js'))['NOTES_DIR']")).toEqual([1])
+    expect(notesDirUses('function f(root = NOTES_DIR) { return root }')).toEqual([1])
+    expect(notesDirUses('// the vault root was NOTES_DIR\n/* NOTES_DIR */\nconst a = 1')).toEqual([])
+    expect(notesDirUses('const NOTES_DIR_LIKE = notesRoot()')).toEqual([])
+    expect(mayNameNotesDir('core/artifacts/unify/layout.ts')).toBe(true)
+    expect(mayNameNotesDir('core/notes/vault-files.ts')).toBe(false)
+  })
+
+  it('no file outside constants.ts, note-paths.ts and core/artifacts/ uses NOTES_DIR', () => {
+    const offenders: string[] = []
+    for (const file of sourceFiles(SRC)) {
+      const rel = path.relative(SRC, file).split(path.sep).join('/')
+      if (mayNameNotesDir(rel)) continue
+      const text = fs.readFileSync(file, 'utf8')
+      if (!text.includes('NOTES_DIR')) continue
+      const lines = text.split('\n')
+      for (const n of notesDirUses(text, file)) offenders.push(`src/${rel}:${n}: ${lines[n - 1].trim()}`)
+    }
+    // Ask notesRoot() at call time (src/core/notes/note-paths.ts), or noteAbs('<rel>') /
+    // src/core/notes/vault-files.ts for a file in the vault; never capture it at load.
     expect(offenders).toEqual([])
   })
 })

@@ -14,7 +14,8 @@ vi.mock('../../../src/constants.js', () => createMockConstants('notes-routes-tes
 
 import express from 'express';
 import request from 'supertest';
-import { WALNUT_HOME, GLOBAL_NOTES_FILE, NOTES_DIR } from '../../../src/constants.js';
+import { WALNUT_HOME, NOTES_DIR } from '../../../src/constants.js';
+import { globalNotesFile } from '../../../src/core/notes/vault-files.js';
 import { notesRouter } from '../../../src/web/routes/notes.js';
 import { notesV2Router, settleIndexBootstrap } from '../../../src/web/routes/notes-v2.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
@@ -152,7 +153,7 @@ describe('B4: GET /api/notes-v2 tree includes root global-notes.md', () => {
 
   it('lists global-notes.md as a note alongside regular notes', async () => {
     await fs.mkdir(NOTES_DIR, { recursive: true });
-    await fs.writeFile(GLOBAL_NOTES_FILE, '# Global Notes', 'utf-8');
+    await fs.writeFile(globalNotesFile(), '# Global Notes', 'utf-8');
     await writeNote('regular.md', '# Regular Note');
 
     const app = createNotesV2App();
@@ -172,7 +173,7 @@ describe('B4: GET /api/notes-v2 tree includes root global-notes.md', () => {
 
   it('includes other .md files in the root', async () => {
     await fs.mkdir(NOTES_DIR, { recursive: true });
-    await fs.writeFile(GLOBAL_NOTES_FILE, '# Global', 'utf-8');
+    await fs.writeFile(globalNotesFile(), '# Global', 'utf-8');
     await writeNote('notes-a.md', '# A');
     await writeNote('notes-b.md', '# B');
 
@@ -205,7 +206,7 @@ describe('B4: GET /api/notes-v2 tree includes root global-notes.md', () => {
 
   it('returns just global-notes.md when it is the only file', async () => {
     await fs.mkdir(NOTES_DIR, { recursive: true });
-    await fs.writeFile(GLOBAL_NOTES_FILE, '# Global only', 'utf-8');
+    await fs.writeFile(globalNotesFile(), '# Global only', 'utf-8');
 
     const app = createNotesV2App();
     const res = await request(app).get('/api/notes-v2');

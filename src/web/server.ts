@@ -39,7 +39,6 @@ import { searchRouter } from './routes/search.js'
 import { replicasStatusRouter } from './routes/replicas-status.js'
 import { searchAgentRouter } from './routes/search-agent.js'
 import { memoryRouter } from './routes/memory.js'
-import { artifactsRouter } from './routes/artifacts.js'
 import { configRouter, setStaticRootReporter } from './routes/config.js'
 import { backupRouter, setBackupScheduler } from './routes/backup.js'
 import { encryptedBackupRouter, setDriveEventEmitter } from './routes/backup-encrypted.js'
@@ -1393,6 +1392,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     }
   }
 
+  // Where the notes live: the one tree once they moved into it (src/core/artifacts/unify/boot.ts),
+  // set before anything makes or reads a notes folder. The move itself runs below, before the notes are read.
+  await import('../core/artifacts/unify/boot.js').then((m) => m.applyRecordedLayout()).catch((err) => log.memory.warn('one tree: layout not read', { error: String(err) }))
+
   // Ensure ~/.open-walnut/ directory structure exists and seed config defaults
   const { initDirectories } = await import('../core/init.js')
   await initDirectories()
@@ -1570,6 +1573,19 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       log.web.warn('machine heavily overloaded at server start', { load1: Math.round(load1), cores })
     }
   } catch { /* diagnostics only */ }
+
+  // The notes and the artifacts in one tree by project, or back (experimental notes_unified):
+  // before the global notes file, the watcher, the index and search read a note.
+  try {
+    const [{ startUnifiedTree }, { experimentalEnabled }, tm, { getConfig }] = await Promise.all([
+      import('../core/artifacts/unify/boot.js'), import('../core/experimental.js'), import('../core/task-manager.js'), import('../core/config-manager.js'),
+    ])
+    const tasks = await tm.listTasks()
+    const projects = [...new Set([...Object.keys(await tm.getStoreProjects()), ...tasks.map((t) => t.project).filter((p): p is string => !!p)])]
+    await startUnifiedTree({ on: experimentalEnabled((await getConfig()).experimental, 'notes_unified'), leader: role() === 'leader', tasks, projects })
+  } catch (err) {
+    log.memory.error('one tree: boot step failed, the notes stay where they are', { error: err instanceof Error ? err.message : String(err) })
+  }
 
   // Migrate global-notes.md → notes/global.md (one-time, idempotent)
   await migrateGlobalNotes()
@@ -2429,7 +2445,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/search/agent', searchAgentRouter)
   app.use('/api/search', searchRouter)
   app.use('/api/memory', memoryRouter)
-  app.use('/api/artifacts', artifactsRouter)
   app.use('/api/config', configRouter)
   // Primary box only: these endpoints sign real AWS requests with the box's
   // credential (incl. an EC2 instance role in the cloud). A replica reachable

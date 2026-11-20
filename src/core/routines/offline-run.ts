@@ -38,7 +38,8 @@
  */
 
 import os from 'node:os';
-import { NOTES_DIR, WALNUT_HOME } from '../../constants.js';
+import { WALNUT_HOME } from '../../constants.js';
+import { notesRoot } from '../notes/note-paths.js';
 import { log } from '../../logging/index.js';
 import { START_CONTEXT_MAX, START_MESSAGE_MAX, START_TASK_TOKEN, validateClockStartSpec, type ClockStartSpec } from '../../providers/trigger-clock-core.js';
 import { listEntityRefs } from '../../utils/entity-refs.js';
@@ -112,7 +113,7 @@ function wholePaths(text: string): string[] {
 export function offlinePortability(
   job: CronJob,
   owner?: OfflineOwner | null,
-  env: { notesDir: string; userHome: string } = { notesDir: NOTES_DIR, userHome: os.homedir() },
+  env: { notesDir: string; userHome: string } = { notesDir: notesRoot(), userHome: os.homedir() },
 ): OfflinePortability {
   if (!job.enabled) return { ok: false, why: 'it is disabled' };
   if (job.check) return { ok: false, why: 'it is a trigger (a check decides its fires on its host)' };
@@ -415,7 +416,7 @@ function realDeps(): OfflineRunDeps {
   const env = async () => (await import('./clock-portable.js')).defaultPortableClockEnv().run;
   return {
     home: WALNUT_HOME,
-    notesDir: NOTES_DIR,
+    notesDir: notesRoot(),
     userHome: os.homedir(),
     async getTask(id) {
       const { getTask } = await import('../task-manager.js');

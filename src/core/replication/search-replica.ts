@@ -27,7 +27,8 @@
  * first copy (about 126 MB gzipped) is never sent to two at once.
  */
 
-import { NOTES_DIR, WALNUT_HOME } from '../../constants.js'
+import { WALNUT_HOME } from '../../constants.js'
+import { notesRoot } from '../notes/note-paths.js'
 import { log } from '../../logging/index.js'
 import type { SearchIndex } from '../../lib/hybrid-search/index.js'
 import { isFollower, type FollowerKind } from '../server-role.js'
@@ -425,7 +426,7 @@ async function defaultDeps(): Promise<SearchReplicaDeps> {
       const k = hr.hostKeepFor(await getConfig(), hostKey, { companion: target.kind === 'companion' })
       return { notes: k.notes, memory: k.memory, skills: k.skills, notesExclude: k.notesExclude }
     },
-    notePrefix: searchNoteKeyPrefix(WALNUT_HOME, NOTES_DIR),
+    notePrefix: searchNoteKeyPrefix(WALNUT_HOME, notesRoot()),
     restMs: searchReplicaRestFor,
   }
 }

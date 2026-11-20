@@ -32,7 +32,8 @@
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { NOTES_DIR, WALNUT_HOME } from '../constants.js'
+import { WALNUT_HOME } from '../constants.js'
+import { notesRoot } from './notes/note-paths.js'
 import { log } from '../logging/index.js'
 import type { Config } from './types.js'
 import { _resetAttachmentReplicaForTesting, forgetAttachments, syncAttachments } from './attachment-replica.js'
@@ -102,7 +103,7 @@ const noteCache = new Map<string, NoteCacheRow>()
 const tooBigByRoot = new Map<string, string[]>()
 
 /** The notes too large to copy, as the last walk of `root` found them (capped). */
-export function notesTooBig(root = NOTES_DIR): string[] {
+export function notesTooBig(root = notesRoot()): string[] {
   return tooBigByRoot.get(root) ?? []
 }
 
@@ -124,7 +125,7 @@ async function noteMeta(rel: string, content: string, mtimeMs: number): Promise<
 const walking = new Map<string, Promise<ReplicaEntry[]>>()
 
 /** Every note this host may keep: `.md` files, no dot folders, no attachment folder, none left out. */
-export function noteEntries(exclude: string[], root = NOTES_DIR): Promise<ReplicaEntry[]> {
+export function noteEntries(exclude: string[], root = notesRoot()): Promise<ReplicaEntry[]> {
   const key = JSON.stringify([root, exclude])
   const running = walking.get(key)
   if (running) return running
@@ -171,7 +172,7 @@ async function walkNotes(exclude: string[], root: string): Promise<ReplicaEntry[
   return out
 }
 
-async function noteBody(key: string, root = NOTES_DIR): Promise<string | null> {
+async function noteBody(key: string, root = notesRoot()): Promise<string | null> {
   const abs = path.resolve(root, key)
   if (!abs.startsWith(root + path.sep)) return null
   try { return await fsp.readFile(abs, 'utf8') } catch { return null }

@@ -16,7 +16,8 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('notes-concurrency-e2e'));
 
-import { WALNUT_HOME, GLOBAL_NOTES_FILE, NOTES_DIR } from '../../src/constants.js';
+import { WALNUT_HOME, NOTES_DIR } from '../../src/constants.js';
+import { globalNotesFile } from '../../src/core/notes/vault-files.js';
 import { startServer, stopServer } from '../../src/web/server.js';
 import { computeContentHash } from '../../src/utils/file-ops.js';
 
@@ -44,7 +45,7 @@ async function apiPut(p: string, data: unknown) {
 beforeAll(async () => {
   await fs.mkdir(WALNUT_HOME, { recursive: true });
   await fs.mkdir(NOTES_DIR, { recursive: true });
-  await fs.mkdir(path.dirname(GLOBAL_NOTES_FILE), { recursive: true });
+  await fs.mkdir(path.dirname(globalNotesFile()), { recursive: true });
   server = await startServer({ port: 0, dev: true });
   port = (server.address() as any).port;
 }, 15_000);
@@ -57,7 +58,7 @@ afterAll(async () => {
 
 describe('Global Notes — content_hash', () => {
   it('GET returns contentHash', async () => {
-    await fs.writeFile(GLOBAL_NOTES_FILE, '# Hello\n', 'utf-8');
+    await fs.writeFile(globalNotesFile(), '# Hello\n', 'utf-8');
 
     const { status, body } = await apiGet('/api/notes/global');
     expect(status).toBe(200);
@@ -67,7 +68,7 @@ describe('Global Notes — content_hash', () => {
 
   it('GET returns contentHash for empty content', async () => {
     // Delete the file to test empty content path
-    try { await fs.unlink(GLOBAL_NOTES_FILE); } catch {}
+    try { await fs.unlink(globalNotesFile()); } catch {}
 
     const { status, body } = await apiGet('/api/notes/global');
     expect(status).toBe(200);
@@ -76,7 +77,7 @@ describe('Global Notes — content_hash', () => {
   });
 
   it('PUT returns new contentHash on success', async () => {
-    await fs.writeFile(GLOBAL_NOTES_FILE, 'old', 'utf-8');
+    await fs.writeFile(globalNotesFile(), 'old', 'utf-8');
 
     const { status, body } = await apiPut('/api/notes/global', {
       content: 'new content',
@@ -88,7 +89,7 @@ describe('Global Notes — content_hash', () => {
 
   it('PUT with matching expectedHash succeeds', async () => {
     const content = '# Version 1';
-    await fs.writeFile(GLOBAL_NOTES_FILE, content, 'utf-8');
+    await fs.writeFile(globalNotesFile(), content, 'utf-8');
     const hash = computeContentHash(content);
 
     const { status, body } = await apiPut('/api/notes/global', {
@@ -99,12 +100,12 @@ describe('Global Notes — content_hash', () => {
     expect(body.ok).toBe(true);
     expect(body.contentHash).toBe(computeContentHash('# Version 2'));
 
-    const disk = await fs.readFile(GLOBAL_NOTES_FILE, 'utf-8');
+    const disk = await fs.readFile(globalNotesFile(), 'utf-8');
     expect(disk).toBe('# Version 2');
   });
 
   it('PUT with stale expectedHash returns 409', async () => {
-    await fs.writeFile(GLOBAL_NOTES_FILE, 'version-A', 'utf-8');
+    await fs.writeFile(globalNotesFile(), 'version-A', 'utf-8');
     const staleHash = computeContentHash('something-else');
 
     const { status, body } = await apiPut('/api/notes/global', {
@@ -116,12 +117,12 @@ describe('Global Notes — content_hash', () => {
     expect(body.currentHash).toBe(computeContentHash('version-A'));
 
     // File should NOT be overwritten
-    const disk = await fs.readFile(GLOBAL_NOTES_FILE, 'utf-8');
+    const disk = await fs.readFile(globalNotesFile(), 'utf-8');
     expect(disk).toBe('version-A');
   });
 
   it('PUT without expectedHash still works (backward compat)', async () => {
-    await fs.writeFile(GLOBAL_NOTES_FILE, 'old stuff', 'utf-8');
+    await fs.writeFile(globalNotesFile(), 'old stuff', 'utf-8');
 
     const { status, body } = await apiPut('/api/notes/global', {
       content: 'new stuff',
@@ -242,13 +243,13 @@ describe('notes:updated event', () => {
 describe('Race condition simulation', () => {
   it('prevents UI from overwriting agent write via hash check', async () => {
     // 1. UI reads global notes
-    await fs.writeFile(GLOBAL_NOTES_FILE, '# Step 1: UI reads this', 'utf-8');
+    await fs.writeFile(globalNotesFile(), '# Step 1: UI reads this', 'utf-8');
     const uiRead = await apiGet('/api/notes/global');
     expect(uiRead.status).toBe(200);
     const uiHash = uiRead.body.contentHash;
 
     // 2. Agent writes via direct file write (simulating files_edit completion)
-    await fs.writeFile(GLOBAL_NOTES_FILE, '# Step 2: Agent wrote this', 'utf-8');
+    await fs.writeFile(globalNotesFile(), '# Step 2: Agent wrote this', 'utf-8');
 
     // 3. UI tries to auto-save its stale content with the old hash
     const uiSave = await apiPut('/api/notes/global', {
@@ -260,7 +261,7 @@ describe('Race condition simulation', () => {
     expect(uiSave.status).toBe(409);
 
     // 4. Agent's content should be preserved
-    const disk = await fs.readFile(GLOBAL_NOTES_FILE, 'utf-8');
+    const disk = await fs.readFile(globalNotesFile(), 'utf-8');
     expect(disk).toBe('# Step 2: Agent wrote this');
 
     // 5. UI reloads — gets fresh content with new hash
@@ -294,14 +295,14 @@ describe('Race condition simulation', () => {
 
   it('allows UI save after reload with fresh hash', async () => {
     // Full flow: read → external modify → 409 → reload → save with new hash
-    await fs.writeFile(GLOBAL_NOTES_FILE, '# V1', 'utf-8');
+    await fs.writeFile(globalNotesFile(), '# V1', 'utf-8');
 
     // Step 1: UI reads
     const read1 = await apiGet('/api/notes/global');
     const hash1 = read1.body.contentHash;
 
     // Step 2: External modification
-    await fs.writeFile(GLOBAL_NOTES_FILE, '# V2 by agent', 'utf-8');
+    await fs.writeFile(globalNotesFile(), '# V2 by agent', 'utf-8');
 
     // Step 3: UI save with stale hash → 409
     const save1 = await apiPut('/api/notes/global', {

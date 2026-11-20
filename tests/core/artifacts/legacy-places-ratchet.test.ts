@@ -19,6 +19,8 @@ const ALLOWED = new Set([
   'src/core/artifacts/rollback.ts',
   // Its replicaRows puts the memory on the followers' copies of a row, never on the primary's row.
   'src/core/artifacts/node-memory.ts',
+  // Makes knowledge/ a folder of links into the one tree, so paths named in old messages still open.
+  'src/core/artifacts/unify/boot.ts',
 ])
 
 /** Each rule: what it catches, on a code line (comments are not code). */

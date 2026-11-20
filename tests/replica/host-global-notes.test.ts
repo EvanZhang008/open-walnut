@@ -15,7 +15,8 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-host-global-notes', { CLOUD_MODE: false }))
 
-import { GLOBAL_NOTES_FILE, WALNUT_HOME } from '../../src/constants.js'
+import { WALNUT_HOME } from '../../src/constants.js'
+import { globalNotesFile } from '../../src/core/notes/vault-files.js'
 import { _resetServerRoleForTesting } from '../../src/core/server-role.js'
 import { createHostReplica } from '../../src/providers/host-replica-core.js'
 import { createCopyNotesSource, installReplicaNotesSource, notesCopyReaderOver } from '../../src/replica/notes-source.js'
@@ -48,8 +49,8 @@ beforeAll(() => {
   Object.assign(process.env, { WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host', WALNUT_HOST_SERVER: '1' })
   _resetServerRoleForTesting()
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whgn-'))
-  fs.mkdirSync(path.dirname(GLOBAL_NOTES_FILE), { recursive: true })
-  fs.writeFileSync(GLOBAL_NOTES_FILE, '# DISK notes\n')
+  fs.mkdirSync(path.dirname(globalNotesFile()), { recursive: true })
+  fs.writeFileSync(globalNotesFile(), '# DISK notes\n')
 })
 afterAll(() => {
   installReplicaNotesSource(null)

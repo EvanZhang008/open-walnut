@@ -50,6 +50,7 @@ import { computeContentHash } from '../utils/file-ops.js'
 import { bus, EventNames } from './event-bus.js'
 import { log } from '../logging/index.js'
 import { sortedByName } from '../lib/dir-order.js'
+import { pathNoteId, walnutOwnedNote } from './notes/vault-files.js'
 
 // Wiki-link: [[target]] or [[target|label]]. We resolve on `target` (the part
 // before a real `|alias`), matching the on-disk Obsidian-native form (§2.2).
@@ -264,6 +265,8 @@ async function reconcileNoteInternal(
   // FALLBACK id assignment for id-less files (git pull / external/AI write).
   // Guarded back-write: only when the file's current hash still equals what we
   // read under lock — never clobber an in-flight edit (§8.3).
+  // A file Walnut writes itself (a memory folder, a skill): an id from its path, nothing written.
+  if (!id && walnutOwnedNote(relPath)) id = pathNoteId(relPath)
   if (!id) {
     const assignedId = generateNoteId()
     const stamped = stampId(bytes, assignedId)

@@ -28,6 +28,7 @@
 
 import { log } from '../logging/index.js'
 import { noteKey } from './notes/note-paths.js'
+import { GLOBAL_NOTES_KEY } from './notes/vault-files.js'
 import { COMPANION_REPLICA_HOME, companionCopyHolds, companionHostReplica, setCompanionCopyJournalView } from './companion-host-replica.js'
 import { companionJournalBlobBody, companionJournalRecords, journalNote, macDrains } from './companion-journal.js'
 import type { JournalRecord } from '../providers/offline-journal-core.js'
@@ -323,9 +324,6 @@ export function companionGlobalNotes(): { content: string } | { needs: 'kind_not
   if (!companionNoteKept(GLOBAL_NOTES_KEY)) return { needs: 'not_kept_here' }
   return { content: companionNoteAt(GLOBAL_NOTES_KEY)?.body ?? '' }
 }
-
-/** The global notes file's key in the copy (constants.ts GLOBAL_NOTES_FILE, vault-relative). */
-export const GLOBAL_NOTES_KEY = 'global-notes.md'
 
 /**
  * The string leg of the box's notes search (notes-v2.ts performNotesSearch): a keyword

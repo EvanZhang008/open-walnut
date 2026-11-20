@@ -2,7 +2,7 @@
  * Filesystem watcher for the two markdown roots the search index and the
  * notes reconciler care about.
  *
- * NOTES_DIR: git-synced notes never pass through a write route, so without fs
+ * The notes vault (notesRoot()): git-synced notes never pass through a write route, so without fs
  * events the FTS index only refreshes on the once-per-boot drift scan — every
  * note synced after that stayed unsearchable until the next restart (dogfood
  * R14). This watcher is the only inotify registration on the vault; it also
@@ -14,7 +14,8 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { MEMORY_DIR, NOTES_DIR } from '../constants.js';
+import { MEMORY_DIR } from '../constants.js';
+import { notesRoot } from './notes/note-paths.js';
 import {
   resetNotesIndexer,
   scheduleNotesIndexUpdate,
@@ -74,7 +75,7 @@ export function hearWatchErrors(watcher: fs.FSWatcher, root: string): fs.FSWatch
 
 export function startNotesWatcher(opts?: { semantic?: boolean }): { stop: () => void } {
   // semantic:false = structural-only mode (cloud replica / WALNUT_DISABLE_SEARCH):
-  // the NOTES_DIR leg must still run there (see R14 above), but nothing feeds
+  // the vault leg must still run there (see R14 above), but nothing feeds
   // the search index.
   const semantic = opts?.semantic !== false;
   const watchers: fs.FSWatcher[] = [];
@@ -110,11 +111,13 @@ export function startNotesWatcher(opts?: { semantic?: boolean }): { stop: () => 
         }
       }), MEMORY_DIR));
     }
-    if (fs.existsSync(NOTES_DIR)) {
+    // The vault root as it is when the watch starts (it can move at boot, never after).
+    const notesDir = notesRoot();
+    if (fs.existsSync(notesDir)) {
       // ONE inotify registration → the structural sidecar reconciler, which
       // ALSO drives the search index per changed file. The reconciler has its
       // own per-path coalescing queue + debounce, so we hand it the changed path.
-      watchers.push(hearWatchErrors(fs.watch(NOTES_DIR, { recursive: true }, (_eventType, filename) => {
+      watchers.push(hearWatchErrors(fs.watch(notesDir, { recursive: true }, (_eventType, filename) => {
         if (!filename) return;
         // Every event may be a shape change (macOS reports a plain write as
         // 'rename'); the tree decides from the disk, once per burst. Reads in
@@ -129,7 +132,7 @@ export function startNotesWatcher(opts?: { semantic?: boolean }): { stop: () => 
             .then(({ scheduleAttachmentExtract }) => { void scheduleAttachmentExtract(filename); })
             .catch(() => {});
         }
-      }), NOTES_DIR));
+      }), notesDir));
     }
   } catch { /* graceful */ }
 

@@ -25,7 +25,8 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import { createFileReader } from '../../core/session-file-reader.js'
 import type { DaemonFileReader } from '../../core/daemon-file-reader.js'
-import { WALNUT_HOME, NOTES_DIR, MEMORY_DIR } from '../../constants.js'
+import { WALNUT_HOME, MEMORY_DIR } from '../../constants.js'
+import { notesRoot } from '../../core/notes/note-paths.js'
 import { confinesLocalFiles } from '../../core/server-role.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { computeContentHash } from '../../utils/file-ops.js'
@@ -1021,7 +1022,7 @@ export function announceSavedDoc(
 ): void {
   try {
     if (host && host !== LOCAL_HOST_ALIAS) return
-    const noteRel = relativeInside(NOTES_DIR, filePath)
+    const noteRel = relativeInside(notesRoot(), filePath)
     if (noteRel !== null) {
       if (!noteRel.endsWith('.md')) return // attachments aren't notes
       // Canonical `notes/{vault-path-without-.md}` — the ONE name every emitter

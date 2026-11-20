@@ -46,6 +46,7 @@ import {
 import { reconcileNote, collectIndexableNotePaths } from './notes-indexer.js'
 import { log } from '../logging/index.js'
 import { bootPolicy } from './boot-policy.js'
+import { walnutOwnedNote } from './notes/vault-files.js'
 
 export interface StampAllResult {
   /** Total indexable notes scanned. */
@@ -83,8 +84,8 @@ export async function stampAllIds(): Promise<StampAllResult> {
       continue // gone since the walk — deletion reconcile handles it
     }
     const { data } = parseFrontmatter(bytes)
-    if (readId(data)) {
-      // Already identified — ensure it is in the index, then move on.
+    if (readId(data) || walnutOwnedNote(relPath)) {
+      // Already identified (or Walnut's own file, identified by its path) — ensure it is in the index, then move on.
       await reconcileNote(relPath).catch(() => {})
       continue
     }

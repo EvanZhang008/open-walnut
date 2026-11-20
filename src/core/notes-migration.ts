@@ -6,15 +6,16 @@
  *   2. Old root + stale notes/global.md (previous partial migration)
  *   3. Only notes/global.md (previous migration ran but root was already gone)
  *
- * Target: GLOBAL_NOTES_FILE = ~/.open-walnut/notes/global-notes.md
+ * Target: globalNotesFile() (global-notes.md at the vault root)
  * After successful migration, old source files are deleted.
  * Runs at server startup. Idempotent — skips if target already exists.
  */
 
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { GLOBAL_NOTES_FILE, WALNUT_HOME } from '../constants.js'
+import { WALNUT_HOME } from '../constants.js'
 import { noteAbs, notesRoot } from './notes/note-paths.js'
+import { globalNotesFile } from './notes/vault-files.js'
 import { log } from '../logging/index.js'
 
 /** Hard-coded legacy paths (no longer referenced by constants) */
@@ -25,8 +26,9 @@ async function fileExists(p: string): Promise<boolean> {
 }
 
 export async function migrateGlobalNotes(): Promise<void> {
-  // Already at target — nothing to do
-  if (await fileExists(GLOBAL_NOTES_FILE)) return
+  const target = globalNotesFile()
+  // Already at target: nothing to do
+  if (await fileExists(target)) return
 
   await fsp.mkdir(notesRoot(), { recursive: true })
   const oldNotesGlobal = noteAbs('global.md')
@@ -44,7 +46,7 @@ export async function migrateGlobalNotes(): Promise<void> {
 
   try {
     const content = await fsp.readFile(source, 'utf-8')
-    await fsp.writeFile(GLOBAL_NOTES_FILE, content, 'utf-8')
+    await fsp.writeFile(target, content, 'utf-8')
     log.memory.info(`Migrated ${path.basename(source)} → notes/global-notes.md`)
   } catch (err) {
     log.memory.error('Failed to migrate global notes', { error: String(err) })

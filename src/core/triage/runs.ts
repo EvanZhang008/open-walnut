@@ -54,6 +54,7 @@ import { TRIAGE_AGENT_ID } from './types.js';
 import { isQuietTurn } from '../sessions/quiet-turn.js';
 import { addContextRecoveryFailListener } from '../sessions/context-full-recovery.js';
 import { loadTurnRetriers, turnEndAnsweredNothing, turnMidWorkNow } from '../sessions/turn-run.js';
+import { noteAbsIn } from '../notes/note-paths.js';
 
 /** The ONE subscriber name. Re-subscribing overwrites it. */
 export const TRIAGE_RUNS_SUBSCRIBER = 'triage-runs';
@@ -186,7 +187,7 @@ export function triageJournalLine(outcome: JournalOutcome): string {
  */
 async function appendToRunsNote(line: string, nowMs: number, home: string): Promise<string> {
   const notePath = triageRunsNotePath(nowMs);
-  const file = path.join(home, 'notes', `${notePath}`);
+  const file = noteAbsIn(home, notePath);
   await mkdir(path.dirname(file), { recursive: true });
   await withFileLock(file, async () => {
     let current = '';
@@ -213,7 +214,7 @@ async function appendToRunsNote(line: string, nowMs: number, home: string): Prom
 
 /** `updated` from State.md's frontmatter, in ms, or undefined when unreadable. */
 export async function readStateUpdatedMs(home: string): Promise<number | undefined> {
-  const file = path.join(home, 'notes', TRIAGE_STATE_NOTE);
+  const file = noteAbsIn(home, TRIAGE_STATE_NOTE);
   let bytes: string;
   try {
     bytes = await readFile(file, 'utf-8');

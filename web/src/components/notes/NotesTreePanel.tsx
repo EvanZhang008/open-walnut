@@ -5,8 +5,6 @@ import { noteHitLabel } from '../../../../src/core/note-hit-label';
 import { isImeKey } from '@/hooks/usePanelKeyRouter';
 import { NotesBookmarksGroup } from './NotesBookmarksGroup';
 import { NotesRecentGroup, RECENT_GROUP_KEY } from './NotesRecentGroup';
-import { NotesArtifactsGroup } from './NotesArtifactsGroup';
-import { useExperimental } from '@/hooks/useExperimental';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { HighlightedText, HighlightedTitle } from './HighlightedText';
 import { jumpNeedles, findQueries } from './jump-target';
@@ -268,9 +266,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
   }, [favoriteNotes, existingNotePaths, tree.length]);
   // Recent group is COLLAPSED iff the sentinel is in the expanded-folders set.
   const recentExpanded = !expandedFolders.has(RECENT_GROUP_KEY);
-  // A sentinel key flipped in the expanded-folders set: Recent (collapsed iff present), the Walnut
-  // artifacts section and its groups (experimental: notes_artifacts; open iff present).
-  const artifactsOn = useExperimental('notes_artifacts');
+  // A sentinel key flipped in the expanded-folders set: Recent (collapsed iff present).
   const toggleKey = useLeanCallback((key: string) => {
     setExpandedFolders((prev) => {
       const next = new Set(prev);
@@ -1126,10 +1122,6 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           </>
         )}
       </div>
-
-      {/* Walnut artifacts: the agents' skills, memory and guidance, under the user's own notes.
-          Collapsed by default; hidden while searching (search owns the panel). */}
-      {!searchResults && artifactsOn && <NotesArtifactsGroup expandedKeys={expandedFolders} onToggleKey={toggleKey} />}
 
       {/* Context menu */}
       {contextMenu && (

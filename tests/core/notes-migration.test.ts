@@ -1,7 +1,7 @@
 /**
  * Tests for the global notes migration (notes-migration.ts).
  *
- * B1: old root file only → migrated to GLOBAL_NOTES_FILE, old file deleted
+ * B1: old root file only → migrated to globalNotesFile(), old file deleted
  * B2: both root and notes/global.md exist → root wins, both old files deleted; idempotent
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -12,7 +12,8 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 // Mock constants BEFORE any source module imports
 vi.mock('../../src/constants.js', () => createMockConstants('notes-migration-test'));
 
-import { WALNUT_HOME, NOTES_DIR, GLOBAL_NOTES_FILE } from '../../src/constants.js';
+import { WALNUT_HOME, NOTES_DIR } from '../../src/constants.js';
+import { globalNotesFile } from '../../src/core/notes/vault-files.js';
 import { migrateGlobalNotes } from '../../src/core/notes-migration.js';
 
 // Old paths that the migration code constructs from WALNUT_HOME / NOTES_DIR
@@ -44,13 +45,13 @@ afterEach(async () => {
 // ── B1: old root file only ────────────────────────────────────────────────
 
 describe('B1: migration — old root file → new path + cleanup', () => {
-  it('migrates content from root file to GLOBAL_NOTES_FILE', async () => {
+  it('migrates content from root file to globalNotesFile()', async () => {
     const content = '# My Global Notes\n\nSome important content here.';
     await fs.writeFile(OLD_ROOT_FILE, content, 'utf-8');
 
     await migrateGlobalNotes();
 
-    const migratedContent = await fs.readFile(GLOBAL_NOTES_FILE, 'utf-8');
+    const migratedContent = await fs.readFile(globalNotesFile(), 'utf-8');
     expect(migratedContent).toBe(content);
   });
 
@@ -70,14 +71,14 @@ describe('B1: migration — old root file → new path + cleanup', () => {
     await migrateGlobalNotes();
 
     expect(await fileExists(NOTES_DIR)).toBe(true);
-    expect(await fileExists(GLOBAL_NOTES_FILE)).toBe(true);
+    expect(await fileExists(globalNotesFile())).toBe(true);
   });
 
   it('does nothing when no legacy files exist', async () => {
     // No old root file, no old notes/global.md
     await migrateGlobalNotes();
 
-    expect(await fileExists(GLOBAL_NOTES_FILE)).toBe(false);
+    expect(await fileExists(globalNotesFile())).toBe(false);
   });
 });
 
@@ -94,7 +95,7 @@ describe('B2: migration — both old files exist → root wins, both deleted', (
 
     await migrateGlobalNotes();
 
-    const migratedContent = await fs.readFile(GLOBAL_NOTES_FILE, 'utf-8');
+    const migratedContent = await fs.readFile(globalNotesFile(), 'utf-8');
     expect(migratedContent).toBe(rootContent);
   });
 
@@ -117,12 +118,12 @@ describe('B2: migration — both old files exist → root wins, both deleted', (
 
     await migrateGlobalNotes();
 
-    const migratedContent = await fs.readFile(GLOBAL_NOTES_FILE, 'utf-8');
+    const migratedContent = await fs.readFile(globalNotesFile(), 'utf-8');
     expect(migratedContent).toBe(notesContent);
     expect(await fileExists(OLD_NOTES_GLOBAL)).toBe(false);
   });
 
-  it('is idempotent — second run is a no-op when GLOBAL_NOTES_FILE already exists', async () => {
+  it('is idempotent — second run is a no-op when globalNotesFile() already exists', async () => {
     const originalContent = '# Original content';
     await fs.mkdir(NOTES_DIR, { recursive: true });
     await fs.writeFile(OLD_ROOT_FILE, originalContent, 'utf-8');
@@ -130,17 +131,17 @@ describe('B2: migration — both old files exist → root wins, both deleted', (
     // First run
     await migrateGlobalNotes();
 
-    const afterFirst = await fs.readFile(GLOBAL_NOTES_FILE, 'utf-8');
+    const afterFirst = await fs.readFile(globalNotesFile(), 'utf-8');
     expect(afterFirst).toBe(originalContent);
 
-    // Overwrite GLOBAL_NOTES_FILE with different content to detect any re-migration
+    // Overwrite globalNotesFile() with different content to detect any re-migration
     const changedContent = '# Changed after first migration';
-    await fs.writeFile(GLOBAL_NOTES_FILE, changedContent, 'utf-8');
+    await fs.writeFile(globalNotesFile(), changedContent, 'utf-8');
 
     // Second run — target already exists, so must be a no-op
     await migrateGlobalNotes();
 
-    const afterSecond = await fs.readFile(GLOBAL_NOTES_FILE, 'utf-8');
+    const afterSecond = await fs.readFile(globalNotesFile(), 'utf-8');
     expect(afterSecond).toBe(changedContent); // unchanged
   });
 });

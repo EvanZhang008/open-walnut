@@ -786,7 +786,7 @@ export function NotesPage() {
   }, []);
 
   // Context-menu "Start Claude Code session": quick-start in the notes vault
-  // (cwd = NOTES_DIR so the CLI's native CLAUDE.md discovery picks up the vault
+  // (cwd = the vault root so the CLI's native CLAUDE.md discovery picks up the vault
   // instructions). Message is EMPTY on purpose: spawn + init only (SessionStart
   // hook, MCP/skills load) — no auto first turn; the CLI idles until the user
   // actually types. PERCEIVED-INSTANT: pane state is set synchronously; the

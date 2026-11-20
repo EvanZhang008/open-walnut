@@ -16,7 +16,9 @@ import {
   type LogFn,
   type SearchIndex,
 } from '../../lib/hybrid-search/index.js';
-import { GLOBAL_SKILLS_DIR, MEMORY_DIR, NOTES_DIR } from '../../constants.js';
+import { GLOBAL_SKILLS_DIR, MEMORY_DIR } from '../../constants.js';
+import { notesRoot } from '../notes/note-paths.js';
+import { searchableNote } from '../notes/vault-files.js';
 import { disconnectAllDaemons } from '../../providers/daemon-connection.js';
 import { closeDb as closeSessionDb } from '../session-db.js';
 import { listTasks } from '../task-manager.js';
@@ -85,9 +87,6 @@ async function fileDoc(
 }
 
 /** Notes vault excludes global-notes.md (matches the old QMD collection). */
-function isIndexableNote(absPath: string): boolean {
-  return path.basename(absPath) !== 'global-notes.md';
-}
 
 export async function readSessionBody(
   session: SessionRecord,
@@ -208,7 +207,7 @@ export async function* iterateAllDocs(options: {
 
   for (const [kind, root, filter] of [
     ['memory', MEMORY_DIR, () => true],
-    ['note', NOTES_DIR, isIndexableNote],
+    ['note', notesRoot(), searchableNote],
     ['skill', GLOBAL_SKILLS_DIR, () => true],
   ] as Array<['memory' | 'note' | 'skill', string, (p: string) => boolean]>) {
     let count = 0;

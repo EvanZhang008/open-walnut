@@ -39,7 +39,6 @@ export const ROOM_BOXES = [
   '.memory-tree-sections',
   '.notes-split-view:not(.notes-has-active) > .notes-editor-pane',
   '.notes-tree-body',
-  '.notes-artifacts-list',
   '.org-detail-body-team',
   '.org-list-scroll',
   '.pw-app',

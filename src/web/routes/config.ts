@@ -7,7 +7,8 @@ import { validExperimentalFlags } from '../../core/experimental.js'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import path from 'node:path'
 import { getConfig, updateConfig } from '../../core/config-manager.js'
-import { WALNUT_INSTALL_DIR, NOTES_DIR } from '../../constants.js'
+import { WALNUT_INSTALL_DIR } from '../../constants.js'
+import { notesRoot } from '../../core/notes/note-paths.js'
 import { isCompanion, isFollower, isHostReplicaProgram, placement, role } from '../../core/server-role.js'
 import { serverFacts } from '../server-facts.js'
 import { NeedsLeaderError } from '../../core/replication/needs-leader.js'
@@ -155,7 +156,7 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
     // that run here, so the console tells a session here from one on the Mac. Absent
     // everywhere else (the Mac, the companion): their answer is unchanged.
     const replicaHostKey = role() === 'replica' && placement() === 'host' ? (process.env.WALNUT_HOST_KEY ?? '').trim() : ''
-    res.json({ config: configForClients(experimentalConfigView(shown)), ...(configCopied === undefined ? {} : { configCopied }), envTokenHint, installDir: isFollower() ? null : WALNUT_INSTALL_DIR, notesDir: isFollower() ? null : NOTES_DIR, processNice, memory, loginSession: (await import('../../core/login-session.js')).loginSessionState(), canRevealLocalFiles, macAccess, remoteIdUniquenessGaps, cloud: isCompanion(), ...serverFacts(), configWrites: 'merge', webAssets, selfRepair, build: getBuildInfo(), ...(replicaHostKey ? { replica: { hostKey: replicaHostKey } } : {}) })
+    res.json({ config: configForClients(experimentalConfigView(shown)), ...(configCopied === undefined ? {} : { configCopied }), envTokenHint, installDir: isFollower() ? null : WALNUT_INSTALL_DIR, notesDir: isFollower() ? null : notesRoot(), processNice, memory, loginSession: (await import('../../core/login-session.js')).loginSessionState(), canRevealLocalFiles, macAccess, remoteIdUniquenessGaps, cloud: isCompanion(), ...serverFacts(), configWrites: 'merge', webAssets, selfRepair, build: getBuildInfo(), ...(replicaHostKey ? { replica: { hostKey: replicaHostKey } } : {}) })
   } catch (err) {
     next(err)
   }

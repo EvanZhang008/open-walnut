@@ -384,13 +384,13 @@ export const ASK_WALNUT_LAUNCH_FILE = path.join(WALNUT_HOME, 'ask-walnut-launch.
  *  by ad-hoc "@" browsing. "@?" searches the union of both; /session reads only the
  *  frequent-directories store. */
 export const MENTION_DIRS_FILE = path.join(WALNUT_HOME, 'mention-directories.json');
+/**
+ * The vault's place before the artifacts tree (the old folder's name, read by its
+ * migration). Ask notesRoot() (src/core/notes/note-paths.ts) for the vault root, and
+ * noteAbs() or src/core/notes/vault-files.ts for a file in it: the root can move at boot.
+ * tests/core/notes/note-paths.test.ts refuses any other use.
+ */
 export const NOTES_DIR = path.join(WALNUT_HOME, 'notes');
-/** Reserved filename inside NOTES_DIR — consumers listing NOTES_DIR must exclude it */
-export const GLOBAL_NOTES_FILE = path.join(NOTES_DIR, 'global-notes.md');
-/** Primary vault instructions file, read on demand through notes/instructions. */
-export const NOTES_AGENTS_FILE = path.join(NOTES_DIR, 'AGENTS.md');
-/** Mirror of AGENTS.md — Claude Code discovers this natively when CWD is NOTES_DIR */
-export const NOTES_CLAUDE_FILE = path.join(NOTES_DIR, 'CLAUDE.md');
 export const REPOSITORIES_DIR = path.join(WALNUT_HOME, 'repositories');
 /** Repo environment knowledge — now lives in the skill system as the `repos`
  *  category (skills/repos/<slug>/SKILL.md). memory/repos was merged into skills

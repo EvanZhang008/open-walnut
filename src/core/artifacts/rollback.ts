@@ -32,6 +32,10 @@ const keepsOnRollback = (rel: string): boolean =>
   !rel.startsWith('.backup') && !rel.endsWith('.lock') && !/(^|\/)MEMORY\.md$/.test(rel) && !/(^|\/)drawings(\/|$)/.test(rel);
 
 export async function rollbackArtifacts(): Promise<RollbackReport> {
+  // The one tree by project (unify/) goes back first: this writes the layout by task id only.
+  if (await fsp.stat(path.join(artifactsDir(), '.unified.json')).catch(() => null)) {
+    throw new Error('The notes and artifacts are in one tree: turn "Notes and artifacts in one tree" off and restart Walnut first, then run this.');
+  }
   const report: RollbackReport = { skillScopes: 0, notes: 0, memories: 0, skipped: [] };
   const nodes = (await fsp.readdir(path.join(artifactsDir(), 'nodes')).catch(() => [] as string[])).filter((n) => TASK_ID_RE.test(n));
 

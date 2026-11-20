@@ -25,7 +25,8 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { NOTES_DIR, WALNUT_HOME } from '../constants.js'
+import { WALNUT_HOME } from '../constants.js'
+import { notesRoot } from './notes/note-paths.js'
 import { log } from '../logging/index.js'
 import { MAX_UPLOAD_FRAME_BYTES } from '../providers/ssh-upload-budget.js'
 import { leftOut } from './replication/keep-rule.js'
@@ -66,7 +67,7 @@ function inFolder(rel: string, entries: string[]): boolean {
 const walking = new Map<string, Promise<AttachmentEntry[]>>()
 
 /** Every file the attachment route serves, within the budget, in path order. */
-export function attachmentEntries(exclude: string[], root = NOTES_DIR): Promise<AttachmentEntry[]> {
+export function attachmentEntries(exclude: string[], root = notesRoot()): Promise<AttachmentEntry[]> {
   const key = JSON.stringify([root, exclude])
   const running = walking.get(key)
   if (running) return running
@@ -172,7 +173,7 @@ export interface AttachmentRoundResult { action: 'synced' | 'unchanged' | 'dropp
  * (config hosts.<key>.keep: on while notes and attachments are kept). Never throws;
  * one round per target at a time.
  */
-export async function syncAttachments(target: AttachmentTarget, keep: AttachmentKeep, root = NOTES_DIR): Promise<AttachmentRoundResult> {
+export async function syncAttachments(target: AttachmentTarget, keep: AttachmentKeep, root = notesRoot()): Promise<AttachmentRoundResult> {
   const s = stateOf(target.hostKey)
   if (s.running) return { action: 'skipped' }
   if (Date.now() < s.unsupportedUntil) return { action: 'skipped' }

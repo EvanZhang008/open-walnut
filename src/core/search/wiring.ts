@@ -30,7 +30,9 @@ import {
   type ScoredHit,
   type SearchIndex,
 } from '../../lib/hybrid-search/index.js';
-import { GLOBAL_SKILLS_DIR, IS_EPHEMERAL, MEMORY_DIR, NOTES_DIR, WALNUT_HOME } from '../../constants.js';
+import { GLOBAL_SKILLS_DIR, IS_EPHEMERAL, MEMORY_DIR, WALNUT_HOME } from '../../constants.js';
+import { notesRoot } from '../notes/note-paths.js';
+import { searchableNote } from '../notes/vault-files.js';
 import { isFollower } from '../server-role.js';
 import { log } from '../../logging/index.js';
 import { utilityQosForkExec } from '../../lib/background-qos.js';
@@ -360,7 +362,7 @@ export async function upsertSearchV2File(
   if (!isSearchV2Enabled()) return;
   // Mirror the sweep's exclusion — otherwise an event-driven upsert re-adds
   // the doc and the next sweep evicts it, forever.
-  if (kind === 'note' && path.basename(absPath) === 'global-notes.md') return;
+  if (kind === 'note' && !searchableNote(absPath)) return;
   const index = getSearchV2Index();
   try {
     const [raw, stat] = await Promise.all([fsp.readFile(absPath, 'utf8'), fsp.stat(absPath)]);
@@ -637,7 +639,7 @@ export async function sweepSearchV2Files(): Promise<{ changed: number; removed: 
   let removed = 0;
   for (const [kind, root] of [
     ['memory', MEMORY_DIR],
-    ['note', NOTES_DIR],
+    ['note', notesRoot()],
     ['skill', GLOBAL_SKILLS_DIR],
   ] as Array<['memory' | 'note' | 'skill', string]>) {
     const stored = new Map(
@@ -646,7 +648,7 @@ export async function sweepSearchV2Files(): Promise<{ changed: number; removed: 
         .map((r) => [r.ref, r.updated_at]),
     );
     for await (const file of walkMd(root)) {
-      if (kind === 'note' && path.basename(file.absPath) === 'global-notes.md') continue;
+      if (kind === 'note' && !searchableNote(file.absPath)) continue;
       const prev = stored.get(file.absPath);
       stored.delete(file.absPath);
       if (prev !== undefined && Math.abs(prev - file.mtimeMs) < 1) continue;

@@ -22,14 +22,21 @@
 
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { NOTES_DIR } from '../../constants.js'
+import { NOTES_DIR, WALNUT_HOME } from '../../constants.js'
 import { movedNotePath } from './note-path-moves.js'
 
 export { movedNotePath }
 
-/** The vault root. Today the fixed notes folder; a later change lets notes live elsewhere. */
+let root: string | null = null
+
+/** The vault root: the notes folder, or the one tree once the notes moved into it (set at boot, src/core/artifacts/unify/boot.ts). */
 export function notesRoot(): string {
-  return NOTES_DIR
+  return root ?? NOTES_DIR
+}
+
+/** Where the vault is from now on (null: the notes folder). */
+export function setNotesRoot(next: string | null): void {
+  root = next
 }
 
 /** What a caller refuses or tidies beyond the common steps (slashes, leading "/"). */
@@ -101,6 +108,8 @@ export function noteKey(raw: string, rules: NotePathRules = {}): string | null {
 export interface ResolveNotePathOptions extends NotePathRules {
   /** The vault root itself is an answer too (otherwise only paths strictly inside it). */
   allowRoot?: boolean
+  /** A real file name from the vault's own listing: no cleaning (a "\\" in it is a character, not a folder). */
+  verbatim?: boolean
 }
 
 /**
@@ -110,8 +119,8 @@ export interface ResolveNotePathOptions extends NotePathRules {
  * the containment check even when no rule refuses "..".
  */
 export function resolveNotePath(raw: string, opts: ResolveNotePathOptions = {}): string | null {
-  const rel = normalizeNotePath(raw, opts)
-  if (rel === null) return null
+  const rel = opts.verbatim ? raw : normalizeNotePath(raw, opts)
+  if (rel === null || rel === '') return null
   const root = notesRoot()
   const abs = path.resolve(root, movedNotePath(rel))
   if (abs.startsWith(root + path.sep) || (opts.allowRoot && abs === root)) return abs
@@ -125,6 +134,14 @@ export function resolveNotePath(raw: string, opts: ResolveNotePathOptions = {}):
  */
 export function noteAbs(rel: string): string {
   return path.join(notesRoot(), movedNotePath(rel))
+}
+
+/**
+ * noteAbs for code that takes a Walnut home as an argument (a test passes its own): this
+ * process's home answers through the vault root and the map, any other home its notes/ folder.
+ */
+export function noteAbsIn(home: string, rel: string): string {
+  return path.resolve(home) === path.resolve(WALNUT_HOME) ? noteAbs(rel) : path.join(home, 'notes', rel)
 }
 
 /** The vault-relative path (forward slashes) of an absolute path. "../x" when outside. */

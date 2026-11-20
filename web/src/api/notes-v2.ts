@@ -1,6 +1,8 @@
 import { apiGet, apiPut, apiPost, apiDelete } from './client';
 import { SEND_TIME_UPLOAD_BUDGET_MS, withUploadRetry } from './upload-retry';
 import { noteDocKey, publishDocSaved, rememberDocSave } from '@/stores/file-save-signal';
+import { setWikiLinkMoves } from '@/components/notes/wiki-link/resolve-wiki-link';
+import type { MoveMap } from '../../../src/core/artifacts/unify/map';
 
 export interface NoteTreeNode {
   name: string;
@@ -300,7 +302,8 @@ export async function fetchForwardLinks(notePath: string): Promise<ForwardLink[]
 }
 
 export async function fetchNotesList(opts?: CorpusFetchOptions): Promise<NoteListItem[]> {
-  const res = await apiGet<{ notes: NoteListItem[] }>('/api/notes-v2/list', undefined, opts);
+  const res = await apiGet<{ notes: NoteListItem[]; moves?: MoveMap | null }>('/api/notes-v2/list', undefined, opts);
+  setWikiLinkMoves(res.moves);
   return res.notes;
 }
 

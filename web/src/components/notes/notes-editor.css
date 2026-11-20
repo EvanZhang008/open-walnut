@@ -941,27 +941,6 @@ mark.notes-search-mark {
 .notes-bookmark-btn:hover { background: var(--bg-hover, #2d3038); color: var(--fg, #e8eaed); }
 .notes-bookmark-btn.active { color: var(--accent, #6366f1); }
 
-/* Walnut artifacts: the section under the tree (NotesArtifactsGroup.tsx). Its list scrolls on its own. */
-.notes-artifacts-group {
-  border-top: 1px solid var(--border, #2a2d35);
-  border-bottom: none;
-  padding-bottom: 0;
-  flex: 0 0 auto;
-}
-.notes-artifacts-list {
-  max-height: 45vh;
-  overflow-y: auto;
-  /* Its end clears the notice stack while one shows (--corner-stack-room, corner-stack.css). */
-  padding-bottom: max(4px, var(--corner-stack-room, 0px));
-  scrollbar-gutter: stable;
-}
-.notes-artifacts-sub-header { display: flex; align-items: center; gap: 4px; padding-left: 20px !important; }
-.notes-artifacts-sub-header .notes-tree-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.notes-artifacts-sub-header .notes-tree-arrow { display: inline-flex; transition: transform 0.12s ease; }
-.notes-artifacts-sub-header .notes-tree-arrow.expanded { transform: rotate(90deg); }
-.notes-artifacts-row { padding-left: 40px !important; }
-.notes-artifacts-retry { margin-left: 6px; background: none; border: 1px solid var(--border, #2a2d35); border-radius: var(--radius-sm, 4px); color: inherit; cursor: pointer; }
-
 /* Bookmarks group at the top of the tree. */
 .notes-bookmarks-group {
   border-bottom: 1px solid var(--border, #2a2d35);

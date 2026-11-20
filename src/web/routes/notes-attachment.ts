@@ -1,6 +1,6 @@
 /**
  * Notes attachment path resolution — turns an Obsidian `![[...]]` inner path
- * into an absolute file under NOTES_DIR for the `/api/notes-v2/attachment`
+ * into an absolute file under the vault root for the `/api/notes-v2/attachment`
  * route (defined in notes-v2.ts) to stream.
  *
  * Why a notes-owned endpoint (not /api/local-image): local-image.ts is owned by
@@ -33,7 +33,7 @@
  * happened to reach first — 67 embeds resolved to a picture from an unrelated
  * note. Keeping the segments means the folder in the embed actually counts.
  *
- * Security: a resolved file MUST stay strictly inside NOTES_DIR (no `..`
+ * Security: a resolved file MUST stay strictly inside the vault root (no `..`
  * escape); only an existing regular file is returned. The route applies the
  * extension allowlist + size cap on top.
  */
@@ -41,6 +41,7 @@
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { normalizeNotePath, resolveNotePath } from '../../core/notes/note-paths.js'
+import { notePathBefore } from '../../core/notes/note-path-moves.js'
 
 // The attachment-type allowlist lives in notes-v2.ts (ATTACHMENT_MIME) —
 // single source of truth; this module only resolves paths.
@@ -126,7 +127,8 @@ function cleanRawPath(raw: string, { legacyRoot = true, size = true } = {}): str
 async function statFile(relative: string): Promise<string | null> {
   // Containment guard: `path.resolve` collapses any traversal, so this catches
   // an escape even if the segment check above were bypassed.
-  const resolved = resolveNotePath(relative, { allowRoot: true })
+  // Verbatim: the candidates are the tree's real names, and the raw ones were cleaned already.
+  const resolved = resolveNotePath(relative, { allowRoot: true, verbatim: true })
   if (!resolved) return null
   try {
     const stat = await fsp.stat(resolved)
@@ -140,7 +142,9 @@ async function statFile(relative: string): Promise<string | null> {
  * Rank ambiguous candidates: nearest the note first, then `_attachment/` hits,
  * then shallowest, then lexicographic. Higher tuple sorts first.
  */
-function candidateRank(candidate: string, noteDirSegments: string[]): [number, number, number, string] {
+function candidateRank(candidate: string, noteDirSegments: string[], before: boolean): [number, number, number, string] {
+  // A note from before the one tree ranks in the folders before, as its own folder is: the same picture wins as before.
+  if (before) candidate = notePathBefore(candidate)
   const dir = path.posix.dirname(candidate)
   const dirSegments = dir === '.' ? [] : dir.split('/')
   let shared = 0
@@ -153,13 +157,13 @@ function candidateRank(candidate: string, noteDirSegments: string[]): [number, n
   return [shared, inAttachmentDir, -dirSegments.length, candidate]
 }
 
-function pickBest(candidates: string[], noteDir: string | undefined): string {
+function pickBest(candidates: string[], noteDir: string | undefined, before = false): string {
   if (candidates.length === 1) return candidates[0]
   const noteDirSegments = noteDir ? noteDir.split('/').filter(Boolean) : []
   let best = candidates[0]
-  let bestRank = candidateRank(best, noteDirSegments)
+  let bestRank = candidateRank(best, noteDirSegments, before)
   for (const candidate of candidates.slice(1)) {
-    const rank = candidateRank(candidate, noteDirSegments)
+    const rank = candidateRank(candidate, noteDirSegments, before)
     for (let i = 0; i < 4; i++) {
       const a = rank[i]
       const b = bestRank[i]
@@ -290,18 +294,20 @@ export function resolveAttachmentInIndex(
     if (!cleaned) continue
     if (index.includes(cleaned)) return cleaned
     if (opts.exact) continue
-    const noteDir = notePath ? path.posix.dirname(cleanRawPath(notePath) || '') : undefined
+    // A note the move made ranks in the folders before; one made since, in the tree's.
+    const before = !!notePath && notePathBefore(notePath) !== notePath
+    const noteDir = notePath ? path.posix.dirname(cleanRawPath(before ? notePathBefore(notePath) : notePath) || '') : undefined
     const segments = cleaned.split('/')
     for (let start = 0; start < segments.length; start++) {
       const hits = matchSuffix(index as string[], segments.slice(start).join('/'))
-      if (hits.length) return pickBest(hits, noteDir === '.' ? undefined : noteDir)
+      if (hits.length) return pickBest(hits, noteDir === '.' ? undefined : noteDir, before)
     }
   }
   return null
 }
 
 /**
- * Resolve a raw `![[...]]` inner path to an absolute file under NOTES_DIR, or
+ * Resolve a raw `![[...]]` inner path to an absolute file in the vault, or
  * null if it can't be resolved safely to an existing regular file.
  *
  * `notePath` is the vault-relative path of the note doing the embedding, when
@@ -357,7 +363,9 @@ async function resolveVaultPath(raw: string, notePath?: string): Promise<string 
   const direct = await statFile(cleaned)
   if (direct) return direct
 
-  const noteDir = notePath ? path.posix.dirname(cleanRawPath(notePath) || '') : undefined
+  // A note the move made ranks in the folders before; one made since, in the tree's.
+    const before = !!notePath && notePathBefore(notePath) !== notePath
+    const noteDir = notePath ? path.posix.dirname(cleanRawPath(before ? notePathBefore(notePath) : notePath) || '') : undefined
   const segments = cleaned.split('/')
 
   // 2) Longest matching path suffix. A miss retries ONCE against a force-rebuilt
@@ -371,7 +379,7 @@ async function resolveVaultPath(raw: string, notePath?: string): Promise<string 
     for (let start = 0; start < segments.length; start++) {
       const hits = matchSuffix(index, segments.slice(start).join('/'))
       if (!hits.length) continue
-      const chosen = pickBest(hits, noteDir === '.' ? undefined : noteDir)
+      const chosen = pickBest(hits, noteDir === '.' ? undefined : noteDir, before)
       const resolved = await statFile(chosen)
       if (resolved) return resolved
     }

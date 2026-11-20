@@ -214,7 +214,7 @@ function unlockedNoteTextSites(file: string, text: string): string[] {
     for (const statement of sf.statements) {
       const body = statement.getText(sf);
       if (ts.isFunctionDeclaration(statement) && statement.name?.text === 'writeNote') visit(statement, true, 'writeNote');
-      else if (/['"]\/notes(?:\/|['"])/.test(body) || /NOTES_DIR|GLOBAL_NOTES_FILE|writeNote\(/.test(body)) visit(statement, false, '');
+      else if (/['"]\/notes(?:\/|['"])/.test(body) || /NOTES_DIR|notesRoot\(|globalNotesFile\(|writeNote\(/.test(body)) visit(statement, false, '');
     }
   } else visit(sf, false, '');
   return out;

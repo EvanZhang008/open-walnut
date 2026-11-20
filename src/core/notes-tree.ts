@@ -1,7 +1,7 @@
 /**
  * The notes vault tree (`GET /api/notes-v2`), built once and kept warm.
  *
- * The tree is a pure function of every directory's LISTING under NOTES_DIR, so
+ * The tree is a pure function of every directory's LISTING under the vault root (notesRoot()), so
  * two facts drive this module:
  *
  * 1. A directory's mtime changes exactly when an entry is added, removed or
@@ -25,12 +25,12 @@
 
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { NOTES_DIR } from '../constants.js'
+import { notesRoot } from './notes/note-paths.js'
 import { log } from '../logging/index.js'
 
 export interface TreeNode {
   name: string
-  path: string       // relative to NOTES_DIR, forward slashes
+  path: string       // relative to the vault root, forward slashes
   type: 'file' | 'folder'
   // 'note' = markdown (default; open in editor). 'attachment' = image/pdf
   // (preview via /attachment, never markdown-load). Absent on folders.
@@ -132,6 +132,7 @@ async function walk(dirPath: string, relBase: string, dirs: Map<string, number>)
   const nodes = await Promise.all(entries.map(async (entry): Promise<TreeNode | null> => {
     if (entry.name.startsWith('.')) return null // skip hidden files
     if (entry.name.startsWith('~$')) return null // Office owner/lock temp files
+    if (entry.name.endsWith('.lock')) return null // a writer's lock (withFileLock), in the one tree's memory folders
     const relPath = relBase ? `${relBase}/${entry.name}` : entry.name
     if (entry.isDirectory()) {
       const children = await walk(path.join(dirPath, entry.name), relPath, dirs)
@@ -188,7 +189,7 @@ function build(reason: string): Promise<NotesTreeSnapshot> {
   const startedAt = Date.now()
   buildInFlight = (async () => {
     const dirs = new Map<string, number>()
-    const tree = await walk(NOTES_DIR, '', dirs)
+    const tree = await walk(notesRoot(), '', dirs)
     const snap: NotesTreeSnapshot = {
       tree,
       json: JSON.stringify({ tree }),

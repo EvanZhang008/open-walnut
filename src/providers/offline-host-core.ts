@@ -3172,6 +3172,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   /** home -> the read overlay of its pending note records, keyed by the records it was built from. */
   const noteViews = new Map<string, { sig: string; view: Map<string, { body: string; h: string; n: number; m?: Record<string, unknown> } | null> }>()
 
+  // The key as the caller named it. When the primary keeps one tree by project, an older path
+  // queued here still lands right: the primary's resolver follows the move (note-path-moves.ts).
   function noteKeyOf(raw: unknown): string | null {
     let s = typeof raw === 'string' ? raw.trim().split('\\').join('/').replace(/^\.\/+/, '').replace(/^\/+/, '') : ''
     if (!s || /[\u0000-\u001f\u007f]/.test(s)) return null

@@ -18,7 +18,8 @@ import request from 'supertest'
 import { notesExtrasV1Router } from '../../../src/web/routes/notes-extras-v1.js'
 import { apiV1Router } from '../../../src/web/routes/api-v1.js'
 import { errorHandler } from '../../../src/web/middleware/error-handler.js'
-import { WALNUT_HOME, NOTES_DIR, GLOBAL_NOTES_FILE } from '../../../src/constants.js'
+import { WALNUT_HOME, NOTES_DIR } from '../../../src/constants.js'
+import { globalNotesFile } from '../../../src/core/notes/vault-files.js'
 
 function createApp() {
   const app = express()
@@ -50,7 +51,7 @@ describe('global notes', () => {
     expect(put.status).toBe(200)
     expect(put.body.ok).toBe(true)
     expect(typeof put.body.contentHash).toBe('string')
-    expect(await fs.readFile(GLOBAL_NOTES_FILE, 'utf-8')).toContain('from the phone')
+    expect(await fs.readFile(globalNotesFile(), 'utf-8')).toContain('from the phone')
   })
 
   it('optimistic locking: stale expectedHash → 409 conflict with currentHash', async () => {

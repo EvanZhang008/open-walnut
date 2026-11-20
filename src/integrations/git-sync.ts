@@ -715,6 +715,11 @@ time-tracking/outside/
 # threads-sync.ts): local rollback points, never history.
 org/threads-backup/
 
+# The artifacts folder's backups and the one tree's half-built shadow (src/core/artifacts/):
+# whole copies of the notes taken before a move, local rollback points, never history.
+/artifacts/.backup/
+/artifacts/.unify-stage/
+
 # SQLite (binary, self-managed)
 *.sqlite
 *.sqlite-shm
@@ -1054,6 +1059,8 @@ const EXTRA_IGNORE_PATTERNS = [
   '.open-walnut-*.tmp', '/cache/',
   // quiet.json: machine-local runtime state (see GITIGNORE_CONTENT), new in 2026-09.
   'quiet.json',
+  // The artifacts folder's backups and the one tree's shadow (2026-11): whole copies of the notes.
+  '/artifacts/.backup/', '/artifacts/.unify-stage/',
   // (/local/, new in 2026-09, is a CRITICAL_IGNORE_DIRS entry since 2026-10: untracked too.)
 ];
 

@@ -20,6 +20,7 @@ import { WALNUT_HOME } from '../constants.js'
 import { reopenIfWiped } from '../lib/sqlite-wiped.js'
 import { log } from '../logging/index.js'
 import { bootPolicy } from './boot-policy.js'
+import { movedNotePath } from './notes/note-path-moves.js'
 
 export const NOTES_INDEX_PATH = path.join(WALNUT_HOME, 'notes-index.sqlite')
 
@@ -371,9 +372,10 @@ export function reresolveAllEdges(): void {
       let status: LinkStatus = 'unresolved'
       let candidates: string | null = null
       if (name.includes('/')) {
-        const withMd = name.endsWith('.md') ? name : name + '.md'
-        const hit = byPath.get(name, withMd) as { id: string } | undefined
-        if (hit && hit.id !== r.src_id) { dstId = hit.id; status = 'resolved' }
+        for (const p of pathFormCandidates(name)) {
+          const hit = byPath.get(p, p.endsWith('.md') ? p : p + '.md') as { id: string } | undefined
+          if (hit) { if (hit.id !== r.src_id) { dstId = hit.id; status = 'resolved' } break }
+        }
       } else {
         const base = name.replace(/\.md$/, '')
         const likeBase = '%/' + base.replace(/[\\%_]/g, (m) => '\\' + m) + '.md'
@@ -473,6 +475,35 @@ export function updateNotePath(fromRel: string, toRel: string): boolean {
   if (!d) return false
   const res = d.prepare(`UPDATE notes SET path=?, content_hash='' WHERE path=?`).run(toRel, fromRel)
   return res.changes > 0
+}
+
+/**
+ * Many notes and attachments moved at once (the move into one tree, src/core/artifacts/unify/):
+ * each row re-pointed in one transaction, its content hash KEPT, because the search index's
+ * docs are re-pointed by the same move (unify/refs.ts), so nothing needs re-reading.
+ */
+export function renameIndexedPaths(pairs: ReadonlyArray<readonly [string, string]>): { notes: number; attachments: number } {
+  const d = getNotesIndexDb()
+  if (!d) return { notes: 0, attachments: 0 }
+  // Two steps, so a pair whose new path is another pair's old one (A to B while B moves on) never
+  // meets a row still there: each row first takes a marked path, then its new one. A new path a
+  // row outside the move holds already is left to the next reconcile (the marked row goes).
+  const MARK = '\u0001'
+  const n = d.prepare(`UPDATE notes SET path=? WHERE path=?`)
+  const a = d.prepare(`UPDATE attachment_text SET path=? WHERE path=?`)
+  let notes = 0
+  let attachments = 0
+  d.transaction(() => {
+    for (const [from, to] of pairs) {
+      notes += n.run(MARK + to, from).changes
+      attachments += a.run(MARK + to, from).changes
+    }
+    for (const table of ['notes', 'attachment_text']) {
+      d.prepare(`UPDATE OR IGNORE ${table} SET path=substr(path, 2) WHERE substr(path, 1, 1)=?`).run(MARK)
+      d.prepare(`DELETE FROM ${table} WHERE substr(path, 1, 1)=?`).run(MARK)
+    }
+  })()
+  return { notes, attachments }
 }
 
 export function getNoteByPath(relPath: string): NoteRow | undefined {
@@ -658,11 +689,18 @@ export function findNoteIdsByName(name: string): Array<{ id: string; path: strin
 export function findNoteIdByPathForm(relPath: string): string | undefined {
   const d = getNotesIndexDb()
   if (!d) return undefined
-  const withMd = relPath.endsWith('.md') ? relPath : relPath + '.md'
-  const row = d
-    .prepare(`SELECT id FROM notes WHERE path=? COLLATE NOCASE OR path=? COLLATE NOCASE`)
-    .get(relPath, withMd) as { id: string } | undefined
-  return row?.id
+  const q = d.prepare(`SELECT id FROM notes WHERE path=? COLLATE NOCASE OR path=? COLLATE NOCASE`)
+  for (const p of pathFormCandidates(relPath)) {
+    const row = q.get(p, p.endsWith('.md') ? p : p + '.md') as { id: string } | undefined
+    if (row) return row.id
+  }
+  return undefined
+}
+
+/** A path-form link's places: where it points now (the one tree's map), then as written. */
+function pathFormCandidates(target: string): string[] {
+  const moved = movedNotePath(target)
+  return moved === target ? [target] : [moved, target]
 }
 
 // ── Reads (used by routes) ──────────────────────────────────────────────────

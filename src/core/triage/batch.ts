@@ -47,7 +47,7 @@ export { ITEMS_JSON_CAP };
  */
 export const STATE_DOC_CAP = 8 * 1024;
 
-/** Where the working state lives, vault-relative (NOTES_DIR is the vault root). */
+/** Where the working state lives, vault-relative (the vault root is notesRoot()). */
 export const TRIAGE_STATE_NOTE = 'Walnut/Triage/State.md';
 
 /** Where the run journal lives; `<YYYY-MM>` is filled per month. */

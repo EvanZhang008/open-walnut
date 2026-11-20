@@ -22,6 +22,7 @@
  * Going back: rollback.ts writes the artifacts folder back to the old places
  * (`bun scripts/artifacts-rollback.ts`, Walnut stopped; docs/reference/artifacts-folder.md).
  */
+import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { WALNUT_HOME } from '../../constants.js';
@@ -106,7 +107,8 @@ async function backupOnce(tasks: readonly LegacyTaskRow[]): Promise<string | nul
   // The artifacts folder as it is, its backups aside (a copy into itself is refused).
   for (const name of await fsp.readdir(artifactsDir()).catch(() => [] as string[])) {
     if (name === '.backup' || name.endsWith('.lock')) continue;
-    await fsp.cp(path.join(artifactsDir(), name), path.join(dest, 'artifacts', name), { recursive: true, filter: (src) => !src.endsWith('.lock') });
+    // A clone where the disk can: once the notes are in the folder too (unify/), this is all of them.
+    await fsp.cp(path.join(artifactsDir(), name), path.join(dest, 'artifacts', name), { recursive: true, mode: fs.constants.COPYFILE_FICLONE, filter: (src) => !src.endsWith('.lock') });
   }
   const memories = Object.fromEntries(tasks.filter((t) => t.agent_memory).map((t) => [t.id, t.agent_memory]));
   await writeTextFile(path.join(dest, 'memories.json'), `${JSON.stringify(memories, null, 2)}\n`);
@@ -321,8 +323,10 @@ async function filesUnder(dir: string): Promise<string[]> {
  */
 async function takeLegacyFolder(): Promise<boolean> {
   const from = legacyArtifactsDir();
-  // A real folder only: the link linkFirstName leaves there is the folder itself.
+  // A real folder only: the link linkFirstName leaves there is the folder itself, and the one
+  // tree's folder of links there (unify/boot.ts) points into the tree.
   if (!(await fsp.lstat(from).catch(() => null))?.isDirectory()) return false;
+  if (await exists(path.join(from, '.walnut-links'))) return false;
   if (!(await exists(artifactsDir()))) {
     await fsp.rename(from, artifactsDir());
     return true;

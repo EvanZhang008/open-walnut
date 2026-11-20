@@ -16,6 +16,8 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { PARTIAL_SEARCH, replicaNotesReads } from '../../replica/notes-routes.js'
 import { companionNoteWrites } from '../../replica/companion-note-writes.js'
 import { noteRelOf, notesRoot, resolveNotePath } from '../../core/notes/note-paths.js'
+import { noteMoves } from '../../core/notes/note-path-moves.js'
+import type { MoveMap } from '../../core/artifacts/unify/map.js'
 import { companionSearchReady } from '../../core/search/companion-ready.js'
 import { isFollower } from '../../core/server-role.js'
 import { computeContentHash } from '../../utils/file-ops.js'
@@ -226,7 +228,7 @@ notesV2Router.get('/', async (_req: Request, res: Response, next: NextFunction) 
 // Single notes-owned endpoint that serves vault attachments (images + PDF) for
 // the tree preview AND ![[embed]] rendering. Deliberately does NOT touch
 // local-image.ts (owned elsewhere, no PDF). Local-only — the notes vault lives
-// under NOTES_DIR; no remote/daemon fan-out needed. SVG only under a sandbox CSP.
+// under notesRoot(); no remote/daemon fan-out needed. SVG only under a sandbox CSP.
 const ATTACHMENT_MIME: Record<string, string> = {
   png: 'image/png',
   jpg: 'image/jpeg',
@@ -311,7 +313,7 @@ const MAX_ATTACHMENT_SIZE = MAX_SERVED_ATTACHMENT_BYTES // 50 MB (mirror local-i
  * even when the same filename exists elsewhere in the vault. `notePath` (the
  * embedding note) only breaks remaining ties by proximity.
  *
- * resolveAttachmentPath enforces the same traversal/escape guard + NOTES_DIR
+ * resolveAttachmentPath enforces the same traversal/escape guard + vault
  * containment as resolveNotePath, and only returns an existing regular file.
  */
 export async function readNoteAttachment(raw: unknown, notePath?: unknown, exactParam?: unknown, decodeParam?: unknown): Promise<{
@@ -387,7 +389,7 @@ export async function readNoteAttachment(raw: unknown, notePath?: unknown, exact
   return { buffer, mime, contentDisposition }
 }
 
-// GET /api/notes-v2/attachment?path=<vault-relative path under NOTES_DIR>
+// GET /api/notes-v2/attachment?path=<vault-relative path in the vault>
 //   &note=<vault path of the embedding note>  (optional; breaks duplicate-name ties)
 //   &exact=1  (a markdown image: only beside the note or that exact vault path;
 //              `note` / `vault`: only that one, so the editor knows which it drew)
@@ -1734,12 +1736,15 @@ notesV2Router.post('/folder', async (req: Request, res: Response, next: NextFunc
  * Flat note list with ids (feeds [[ authoring / autocomplete). Shared by
  * GET /api/notes-v2/list and GET /api/v1/notes/list.
  */
-export async function listNotesFlat(): Promise<{ notes: Array<{ id: string; title: string; path: string; name: string }> }> {
+export async function listNotesFlat(): Promise<{ notes: Array<{ id: string; title: string; path: string; name: string }>; moves: MoveMap | null }> {
   ensureIndexBootstrap()
   await ensureNotesDir()
   const rows = listNotes()
+  // The one tree's map: a client that resolves path-form links itself follows an old path with it.
+  const moves = noteMoves()
   if (rows.length > 0) {
     return {
+      moves,
       notes: rows.map((r) => ({
         id: r.id,
         title: r.title,
@@ -1752,6 +1757,7 @@ export async function listNotesFlat(): Promise<{ notes: Array<{ id: string; titl
   // [[ autocomplete works immediately; ids fill in once the index settles.
   const allFiles = await getAllMdFilesFallback(notesRoot())
   return {
+    moves,
     notes: allFiles.map((f) => {
       const relPath = noteRelOf(f)
       const name = path.basename(relPath, '.md')

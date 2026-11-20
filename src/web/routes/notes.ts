@@ -5,7 +5,7 @@
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { GLOBAL_NOTES_FILE } from '../../constants.js'
+import { GLOBAL_NOTES_KEY, globalNotesFile } from '../../core/notes/vault-files.js'
 import { computeContentHash } from '../../utils/file-ops.js'
 import { withUserFileLock } from '../../utils/user-file-lock.js'
 import { bus, EventNames } from '../../core/event-bus.js'
@@ -30,10 +30,11 @@ export async function readGlobalNotes(): Promise<{ content: string; contentHash:
   // A host replica reads the daemon's copy (it keeps no vault of its own): never its disk.
   const fromCopy = await hostReplicaGlobalNotes()
   if (fromCopy) return fromCopy
-  return withUserFileLock(GLOBAL_NOTES_FILE, async () => {
+  const file = globalNotesFile()
+  return withUserFileLock(file, async () => {
     let content = ''
     try {
-      content = await fsp.readFile(GLOBAL_NOTES_FILE, 'utf-8')
+      content = await fsp.readFile(file, 'utf-8')
     } catch (err: any) {
       if (err.code !== 'ENOENT') throw err
       // File doesn't exist yet — return empty string
@@ -49,7 +50,7 @@ async function hostReplicaGlobalNotes(): Promise<{ content: string; contentHash:
   const { replicaNotesSource } = await import('../../replica/notes-source.js')
   const src = replicaNotesSource()
   if (!src) return null
-  const key = 'global-notes.md'
+  const key = GLOBAL_NOTES_KEY
   // The daemon could not be read (one too old for the copy reads, or not reachable): the
   // answer every other notes read gives then (replica/notes-routes.ts), never a 500.
   const unreadable = (): never => { throw new NeedsLeaderError('copy_unreadable', 'The notes copy on this host could not be read; your Mac answers this when it is back.') }
@@ -97,7 +98,7 @@ async function companionGlobalNotesSave(content: string, expectedHash: unknown):
   if (!notes.companionGlobalNotes()) return null
   const blocked = notes.companionNotesBlocked()
   if (blocked) throw new NeedsLeaderError(blocked.why)
-  const r = notes.companionNoteSave({ path: notes.GLOBAL_NOTES_KEY, content, expectedHash })
+  const r = notes.companionNoteSave({ path: GLOBAL_NOTES_KEY, content, expectedHash })
   if (r.ok) {
     log.memory.info('companion: global notes change kept for the Mac', { size: content.length, seq: r.seq })
     return { ok: true, contentHash: computeContentHash(content) }
@@ -125,19 +126,20 @@ export async function writeGlobalNotes(
   // expectedHash accept last-write-wins semantics.
   // check+write under the file lock — the agent's writeFileChecked path
   // locks too, so an agent write can't slip between our check and write.
-  await fsp.mkdir(path.dirname(GLOBAL_NOTES_FILE), { recursive: true })
-  const conflict = await withUserFileLock(GLOBAL_NOTES_FILE, async () => {
+  const file = globalNotesFile()
+  await fsp.mkdir(path.dirname(file), { recursive: true })
+  const conflict = await withUserFileLock(file, async () => {
     if (expectedHash && typeof expectedHash === 'string') {
       let currentContent = ''
       try {
-        currentContent = await fsp.readFile(GLOBAL_NOTES_FILE, 'utf-8')
+        currentContent = await fsp.readFile(file, 'utf-8')
       } catch (err: any) {
         if (err.code !== 'ENOENT') throw err
       }
       const currentHash = computeContentHash(currentContent)
       if (currentHash !== expectedHash) return currentHash
     }
-    await fsp.writeFile(GLOBAL_NOTES_FILE, content, 'utf-8')
+    await fsp.writeFile(file, content, 'utf-8')
     return null
   })
   if (conflict) throw new GlobalNotesConflictError(conflict)

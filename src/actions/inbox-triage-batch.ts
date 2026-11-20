@@ -31,7 +31,6 @@
  * everything this action touches is derived from it.
  */
 
-import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import type { ActionDescriptor, ActionContext, ActionResult } from './types.js';
 import { readTriageConfig, isTriageWithinActiveHours } from '../core/triage/config.js';
@@ -39,6 +38,7 @@ import { ackTriageClaimForTask, claimTriageBatch, loadTriageState, releaseTriage
 import { buildTriageBatch, TRIAGE_STATE_NOTE } from '../core/triage/batch.js';
 import { TRIAGE_ACTION_ID } from '../core/triage/types.js';
 import { readRoutingRules, type TriageRoutingRule } from '../core/triage/routing-rules.js';
+import { noteAbsIn } from '../core/notes/note-paths.js';
 
 export function describe(): ActionDescriptor {
   return {
@@ -52,7 +52,7 @@ export function describe(): ActionDescriptor {
 
 /** State.md's bytes, or undefined when the note is not there yet. */
 async function readStateNote(home: string): Promise<string | undefined> {
-  const file = path.join(home, 'notes', TRIAGE_STATE_NOTE);
+  const file = noteAbsIn(home, TRIAGE_STATE_NOTE);
   try {
     return await readFile(file, 'utf-8');
   } catch {

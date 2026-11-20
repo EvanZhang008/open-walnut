@@ -1,7 +1,7 @@
 /**
  * Where drawings live in the Notes vault, and the checks every vault path a caller sends passes.
  *
- * Placement (vault-relative, the vault root is NOTES_DIR):
+ * Placement (vault-relative, the vault root is notesRoot()):
  *   no task                      inbox/<title>.excalidraw
  *   a task in a project          Projects/<project folder>/<task title> (<task id>)/<title>.excalidraw
  *   a task in Inbox              inbox/<task title> (<task id>)/<title>.excalidraw

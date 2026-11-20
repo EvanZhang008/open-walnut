@@ -25,33 +25,57 @@
  */
 import path from 'node:path';
 import { WALNUT_HOME } from '../../constants.js';
+import { homeOfTask, memoryHomeOf } from './unify/task-homes.js';
 
 export const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 export const SHARED_KEY = '_shared';
 
 export const artifactsDir = (): string => path.join(WALNUT_HOME, 'artifacts');
 
-/** One node's folder. Throws on an id that is no task id (a path, a placeholder). */
-export function nodeArtifactsDir(taskId: string): string {
+/**
+ * Which layout the folder is in: by task id (nodes/, org/, shared/), or the one tree by project
+ * (unify/layout.ts: projects/<project>/{skills,memory/<taskId>,drawings}, the root's own for no
+ * project), set at boot once the move ran.
+ */
+let byProject = false;
+export const setArtifactsByProject = (on: boolean): void => { byProject = on; };
+export const artifactsByProject = (): boolean => byProject;
+
+const checkedId = (taskId: string): string => {
   if (!TASK_ID_RE.test(taskId)) throw new Error(`Invalid task id: ${taskId}`);
-  return path.join(artifactsDir(), 'nodes', taskId);
+  return taskId;
+};
+
+/** One node's folder (its MEMORY.md, notes, guidance, reflections). Throws on an id that is no task id (a path, a placeholder). */
+export function nodeArtifactsDir(taskId: string): string {
+  const id = checkedId(taskId);
+  return byProject ? path.join(artifactsDir(), memoryHomeOf(id)) : path.join(artifactsDir(), 'nodes', id);
 }
 
-/** A skills folder: the org's, or one task's own. */
-export const skillsDirOf = (scope: 'own' | 'org', taskId: string): string =>
-  scope === 'org' ? path.join(artifactsDir(), 'org', 'skills') : path.join(nodeArtifactsDir(taskId), 'skills');
+/** A skills folder: the org's, or one task's own (by project: its project's, which its tasks share). */
+export const skillsDirOf = (scope: 'own' | 'org', taskId: string): string => {
+  if (scope === 'org') return byProject ? path.join(artifactsDir(), 'skills') : path.join(artifactsDir(), 'org', 'skills');
+  if (!byProject) return path.join(nodeArtifactsDir(taskId), 'skills');
+  const home = homeOfTask(checkedId(taskId));
+  return home ? path.join(artifactsDir(), home, 'skills') : path.join(nodeArtifactsDir(taskId), 'skills');
+};
 
 /** A memory folder: a task's, or the shared one (no task, or SHARED_KEY). */
 export const notesDirOf = (taskId: string | null | undefined): string => {
   const key = taskId && taskId.trim() ? taskId.trim() : SHARED_KEY;
-  return key === SHARED_KEY ? path.join(artifactsDir(), 'shared', 'notes') : path.join(nodeArtifactsDir(key), 'notes');
+  if (key !== SHARED_KEY) return path.join(nodeArtifactsDir(key), 'notes');
+  return byProject ? path.join(artifactsDir(), 'memory', SHARED_KEY, 'notes') : path.join(artifactsDir(), 'shared', 'notes');
 };
 
 export const memoryCopyOf = (taskId: string): string => path.join(nodeArtifactsDir(taskId), 'MEMORY.md');
 
-/** A task's drawings folder, or the shared one (no task). */
-export const drawingsDirOf = (taskId: string | null | undefined): string =>
-  taskId && taskId.trim() && taskId.trim() !== SHARED_KEY ? path.join(nodeArtifactsDir(taskId.trim()), 'drawings') : path.join(artifactsDir(), 'shared', 'drawings');
+/** A task's drawings folder, or the shared one (no task). By project: its project's (or the root's) drawings. */
+export const drawingsDirOf = (taskId: string | null | undefined): string => {
+  const id = taskId && taskId.trim() && taskId.trim() !== SHARED_KEY ? taskId.trim() : null;
+  if (!byProject) return id ? path.join(nodeArtifactsDir(id), 'drawings') : path.join(artifactsDir(), 'shared', 'drawings');
+  const home = id ? homeOfTask(checkedId(id)) : null;
+  return home ? path.join(artifactsDir(), home, 'drawings') : path.join(artifactsDir(), 'drawings');
+};
 
 /** A memory-folder note's file name, and a skill's name (its folder's). */
 export const NOTE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,62}\.md$/;

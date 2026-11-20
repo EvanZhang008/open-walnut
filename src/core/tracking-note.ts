@@ -110,9 +110,14 @@ export function trackingNotePathFor(project: string): string | null {
  * cannot be a folder, by the same rule as the tracking note.
  */
 export function projectNotesFolderFor(project: string): string | null {
+  const folded = projectFolderName(project);
+  return folded ? `${TRACKING_NOTE_DIR}/${folded}` : null;
+}
+
+/** A project's name as ONE folder name, by the rule above; `null` for Inbox and a name that cannot be one. */
+export function projectFolderName(project: string): string | null {
   const folded = projectSafeName(project ?? '');
-  if (!isUsableSegment(folded)) return null;
-  return `${TRACKING_NOTE_DIR}/${folded}`;
+  return isUsableSegment(folded) ? folded : null;
 }
 
 /**

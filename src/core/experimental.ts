@@ -133,9 +133,9 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
-    id: 'notes_artifacts',
-    name: 'Walnut artifacts in Notes',
-    description: 'A "Walnut artifacts" section under the notes tree lists what Walnut\'s agents keep as standing knowledge: the org\'s skills, the shared notes, and each VP\'s and lead\'s MEMORY.md, team guidance, skills, notes and reflections. Click one to read it.',
+    id: 'notes_unified',
+    name: 'Notes and artifacts in one tree',
+    description: 'Your notes and what Walnut\'s agents keep live in one folder, by project: each project gets its notes, skills, task memory and drawings in artifacts/projects/<project>/, and what belongs to no project sits at the top (notes, skills, memory, drawings). Turning it on moves your notes there at the next restart (a byte-for-byte checked copy first, the old folders kept whole as a backup); turning it off moves everything back. Old note paths keep opening.',
     default: false,
   },
   {
