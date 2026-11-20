@@ -1,11 +1,16 @@
 /**
- * A topic member's avatar and a topic's stacked avatars. The tile is the Org list's own
- * (`.org-avatar`, its colour from the name: org-channels-model avatarColor), so a VP looks the same
- * in its row and in a topic; the CEO keeps its gradient, a person outside Walnut is round, a bot
- * wears a small mark.
+ * A topic member's avatar and a topic's stacked avatars. A task or an Org node is drawn by the Org
+ * page's own NodeAvatar (its character with "Org avatars" on, else its letters), from the task the
+ * member is now (an Org node's VP may change), so a VP looks the same in its row and in a topic.
+ * Off, the tile is the Org list's (`.org-avatar`, its colour from the name); the CEO keeps its
+ * gradient; a person outside Walnut is always a round tile, and a bot wears a small mark.
  */
 import type { MemberRef, TopicMember } from '@/api/topics';
+import type { Task } from '@open-walnut/core';
+import { pickLead, pickMain } from '@open-walnut/org-tree';
 import { avatarColor, initials } from '@/components/org/org-channels-model';
+import { NodeAvatar } from '@/components/org/OrgAvatar';
+import { useTaskListSelect } from '@/contexts/TasksContext';
 import { stackedAvatars } from './topic-model';
 import '@/styles/topics.css';
 
@@ -15,7 +20,24 @@ export function nameColor(name: string): string {
   return avatarColor(name);
 }
 
+/** Pure: the task a task or Org member is now (undefined for a person, or a node with no task). */
+export function memberTaskId(ref: MemberRef | undefined, tasks: readonly Task[]): string | undefined {
+  if (!ref) return undefined;
+  if (ref.kind === 'task') return ref.taskId;
+  if (ref.kind !== 'org') return undefined;
+  if (ref.node === 'main') return pickMain(tasks)?.id;
+  const key = ref.node.replace(/^project:/, '');
+  return key ? pickLead(tasks, key)?.id : undefined;
+}
+
 export function MemberAvatar({ who, size = 30 }: { who: Who; size?: number }) {
+  const ref = typeof who === 'string' ? undefined : who.ref;
+  // A string from the selector: one row's write elsewhere never draws this avatar again.
+  const taskId = useTaskListSelect(({ tasks }) => memberTaskId(ref, tasks)) ?? (ref?.kind === 'task' ? ref.taskId : undefined);
+  if (typeof who !== 'string' && (ref?.kind === 'task' || ref?.kind === 'org')) {
+    const main = ref.kind === 'org' && ref.node === 'main';
+    return <NodeAvatar taskId={taskId} name={who.name} size={size} main={main} color={avatarColor(who.name)} className="topic-avatar" />;
+  }
   const style = { width: size, height: size, fontSize: Math.round(size * 0.37) };
   if (who === 'human') return <span className="org-avatar topic-avatar is-human" style={style} aria-hidden="true">You</span>;
   if (who === 'walnut') return <span className="org-avatar topic-avatar is-walnut" style={style} aria-hidden="true">W</span>;

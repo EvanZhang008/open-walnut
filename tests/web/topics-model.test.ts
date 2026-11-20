@@ -235,3 +235,19 @@ describe('the keys of the open @ list', () => {
     expect(mentionKeyAction({ key: 'Escape', keyCode: 229 })).toBeNull();
   });
 });
+
+describe('a topic member\'s avatar task', () => {
+  it('is the task itself, the CEO\'s or the VP\'s task now, and none for a person', async () => {
+    const { memberTaskId } = await import('../../web/src/components/topics/TopicAvatars.js')
+    const tasks = [
+      { id: 't-ceo', title: 'Main', org_role: 'main', project: '', phase: 'IN_PROGRESS' },
+      { id: 't-vp', title: 'Lead', org_role: 'lead', org_name: 'Acme', project: 'Acme', phase: 'IN_PROGRESS' },
+      { id: 't-work', title: 'Pricing copy', project: 'Acme', phase: 'IN_PROGRESS' },
+    ] as never[]
+    expect(memberTaskId({ kind: 'task', taskId: 't-work' }, tasks)).toBe('t-work')
+    expect(memberTaskId({ kind: 'org', node: 'main' }, tasks)).toBe('t-ceo')
+    expect(memberTaskId({ kind: 'org', node: 'project:Acme' }, tasks)).toBe('t-vp')
+    expect(memberTaskId({ kind: 'org', node: 'project:Nowhere' }, tasks)).toBeUndefined()
+    expect(memberTaskId({ kind: 'person', name: 'Robin', email: 'robin@example.org' }, tasks)).toBeUndefined()
+  })
+})
