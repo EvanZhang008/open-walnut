@@ -335,7 +335,6 @@ final class WebContentWatchdog {
     /// rail; this card is drawn over the page, so it takes the stack's place and the stack stands
     /// on it (a margin under the stack) until it goes, leaving every card of the page in reach.
     private func makeRoomInPage(for view: MemoryNoticeView?) {
-        guard let webView else { return }
         let lift = view.map { Int(ceil($0.fittingSize.height)) + 8 } ?? 0
         let js = """
         (() => {
@@ -345,7 +344,8 @@ final class WebContentWatchdog {
           return rail ? Math.round(rail.getBoundingClientRect().right) : 0;
         })()
         """
-        webView.evaluateJavaScript(js) { [weak view] result, _ in
+        // Through askPage, whose deadline answers even when the page is stuck.
+        askPage(js, what: "makeRoom") { [weak view] result in
             guard let right = (result as? NSNumber)?.doubleValue, right > 0 else { return }
             view?.setLeading(CGFloat(right) + 16)
         }
