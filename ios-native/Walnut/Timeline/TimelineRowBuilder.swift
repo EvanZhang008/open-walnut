@@ -307,17 +307,57 @@ final class TimelineRowBuilder {
     }
 
     /// The thread a message went to, one line of the bubble's small gray type under it
-    /// (experiment reply_thread_line; web `reply-thread-line.tsx`): "↳ <title>", right
-    /// under his bubble, left under the answer. Not a link here yet: the web opens it.
+    /// (experiment reply_thread_line; web `reply-thread-line.tsx`): a curved arrow and the
+    /// title, right under his bubble, left under the answer. Not a link here yet: the web opens it.
     func threadRow(id: String, thread: ReplyThread, mine: Bool, width: CGFloat) -> TimelineRow {
-        let line = "\u{21B3} " + (thread.title ?? "A thread")
+        let title = thread.title ?? "A thread"
+        let font = TimelineTextStyler.caption2Font
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = mine ? .right : .left
-        let text = NSAttributedString(string: line, attributes: [
-            .font: TimelineTextStyler.caption2Font, .foregroundColor: ReadableText.secondaryUIColor,
-            .paragraphStyle: paragraph,
-        ])
-        return textRow(id: id, revision: line.hashValue, attributed: text, width: width)
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font, .foregroundColor: ReadableText.secondaryUIColor, .paragraphStyle: paragraph,
+        ]
+        let text = NSMutableAttributedString(attributedString: Self.replyArc(font: font))
+        text.append(NSAttributedString(string: " " + title, attributes: attributes))
+        text.addAttributes([.paragraphStyle: paragraph], range: NSRange(location: 0, length: text.length))
+        return textRow(id: id, revision: title.hashValue, attributed: text, width: width)
+    }
+
+    /// The mark in front of a thread line: one smooth quarter curve ending in a small arrowhead,
+    /// in the line's own gray, drawn for light and dark (web `ReplyArc`, the same 12-unit path:
+    /// 2026-11-20, the user: "not this stiff 90 degrees: a perfect curve with an arrow").
+    static func replyArc(font: UIFont) -> NSAttributedString {
+        let side = (font.capHeight * 1.35).rounded(.up)
+        let size = CGSize(width: side, height: side)
+        let asset = UIImageAsset()
+        for style in [UIUserInterfaceStyle.light, .dark] {
+            let traits = UITraitCollection(userInterfaceStyle: style)
+            let color = ReadableText.secondaryUIColor.resolvedColor(with: traits)
+            let image = UIGraphicsImageRenderer(size: size).image { _ in
+                let u = side / 12
+                color.setStroke()
+                let curve = UIBezierPath()
+                curve.move(to: CGPoint(x: 2.5 * u, y: 1.5 * u))
+                curve.addArc(withCenter: CGPoint(x: 9.5 * u, y: 1.5 * u), radius: 7 * u,
+                             startAngle: .pi, endAngle: .pi / 2, clockwise: false)
+                let head = UIBezierPath()
+                head.move(to: CGPoint(x: 7.2 * u, y: 6.2 * u))
+                head.addLine(to: CGPoint(x: 9.7 * u, y: 8.5 * u))
+                head.addLine(to: CGPoint(x: 7.2 * u, y: 10.8 * u))
+                for path in [curve, head] {
+                    path.lineWidth = max(1, 1.3 * u)
+                    path.lineCapStyle = .round
+                    path.lineJoinStyle = .round
+                    path.stroke()
+                }
+            }
+            asset.register(image, with: traits)
+        }
+        let attachment = NSTextAttachment()
+        attachment.image = asset.image(with: UITraitCollection.current)
+        // Sits on the baseline like the web mark (vertical-align a little under it).
+        attachment.bounds = CGRect(x: 0, y: font.descender * 0.6, width: side, height: side)
+        return NSAttributedString(attachment: attachment)
     }
 
     /// The word in front of a reply's task pills (the web's "About").

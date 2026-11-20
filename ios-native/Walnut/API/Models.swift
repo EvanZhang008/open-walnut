@@ -240,7 +240,7 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     var aboutTagged: Bool? = nil
     /// User and assistant text rows (additive 2026-11-20, experiment `reply_thread_line`,
     /// server `src/core/org/reply-thread.ts`): the thread his message was filed under, or
-    /// the one the answer answers, as it is now. Drawn as "↳ <title>" under the row.
+    /// the one the answer answers, as it is now. Drawn as a curved arrow and the title under the row.
     /// nil with the experiment off and on an older server.
     var thread: ReplyThread? = nil
     /// Any row (additive 2026-11-19, server `history-parse.ts`): the CLI began a new turn
