@@ -13,6 +13,7 @@ import '@/styles/settings-mic.css';
 import { useSerialSave, type OnSave } from './GeneralSection';
 import { EngineSplitRow } from './EngineSplitRow';
 import { DefaultEngineRow } from './DefaultEngineRow';
+import { PickerEnginesGroup } from './PickerEnginesGroup';
 import { FallbackEngineRow } from './FallbackEngineRow';
 import { ClaudeCodeImportGroups } from './ClaudeCodeImportGroup';
 import { MessageHintsGroup } from './MessageHintsGroup';
@@ -150,6 +151,7 @@ export function SessionsSection({ config, onSave }: Props) {
       <SettingsGroup className="settings-checklist engine-split-list">
         <EngineSplitRow config={config} save={save} />
       </SettingsGroup>
+      <PickerEnginesGroup config={config} save={save} />
       <ClaudeCodeImportGroups />
       <SettingsGroup>
         <SettingsRow

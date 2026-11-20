@@ -90,6 +90,7 @@ const EXACT: Record<string, Exact> = {
   'components/settings/sections/SttModelRows.tsx|input id="stt-sherpa-manual-dir"': PATH,
   'components/transfer/TransferDialog.tsx|input data-testid="xfer-dir-input"': PATH,
   'components/common/FileSourceEditor.tsx|new EditorView': CODE,
+  'components/settings/sections/PickerEnginesGroup.tsx|input data-testid="custom-acp-engine-command"': CODE,
   'components/notes/RawMarkdownView.tsx|new EditorView': CODE,
   'components/repositories/RepoForm.tsx|textarea id="repo-cmds"': CODE,
   'components/routines/RoutineForm.tsx|input id="routine-check-run"': CODE,

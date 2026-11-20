@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import express from 'express'
 import request from 'supertest'
 
-import { enginesRouter } from '../../../src/web/routes/engines.js'
+import { enginesRouter, pickerEngineSet } from '../../../src/web/routes/engines.js'
 import { errorHandler } from '../../../src/web/middleware/error-handler.js'
 import { SESSION_ENGINE_IDS } from '../../../src/core/types.js'
 import { _resetEngineProbeCache, _seedEngineProbeCache } from '../../../src/core/agents/engine-probe.js'
@@ -69,6 +69,16 @@ afterEach(() => {
 })
 
 describe('GET /api/engines', () => {
+  it('marks the engines the model picker shows: the default four, or session.picker_engines', async () => {
+    seedAll()
+    const res = await request(createApp()).get('/api/engines')
+    const shown = (res.body.engines as Array<EngineEntry & { inPicker: boolean }>).filter((e) => e.inPicker).map((e) => e.id)
+    expect(shown).toEqual(['claude', 'codex', 'opencode', 'pi'])
+    expect([...pickerEngineSet({ session: { picker_engines: ['claude', 'gemini'] } })]).toEqual(['claude', 'gemini'])
+    expect([...pickerEngineSet({ session: { picker_engines: [] } })]).toEqual([])
+    expect([...pickerEngineSet(null)]).toEqual(['claude', 'codex', 'opencode', 'pi'])
+  })
+
   it('lists every registered engine in presentation order with capability answers', async () => {
     seedAll()
     const res = await request(createApp()).get('/api/engines')

@@ -17,7 +17,7 @@
  *     about before hydration (claude + codex), so a cold page paints the same
  *     toggle it always did instead of flashing a longer row.
  */
-import { SESSION_ENGINE_IDS, type SessionEngine } from '@/types/session';
+import { DEFAULT_PICKER_ENGINES, SESSION_ENGINE_IDS, type SessionEngine } from '@/types/session';
 
 /** The engine a record/launch with no explicit `engine` runs on. */
 export const DEFAULT_ENGINE: SessionEngine = 'claude';
@@ -68,6 +68,9 @@ export interface EngineCatalogEntry {
    *  its adapter command is this machine's config). Every other engine runs on
    *  a host that has its CLI; GET /api/engines/availability?host= says which. */
   localOnly: boolean;
+  /** Shown on the model picker's engine rail (`session.picker_engines`). Absent on an older
+   *  server: the default ones (DEFAULT_PICKER_ENGINES) are. */
+  inPicker?: boolean;
   capabilities: EngineCatalogCapabilities;
   availability: EngineAvailability;
 }
@@ -160,6 +163,17 @@ export function engineEntry(catalog: EngineCatalog, engine: unknown): EngineCata
       capabilities: ACP_CAPABILITIES,
       availability: { installed: false, version: null, reason: `${id} is not available on this server` },
     };
+}
+
+/** Whether the model picker's engine rail shows this engine (the one in use always shows: pickerRailEngines). */
+export function shownInPicker(entry: Pick<EngineCatalogEntry, 'id' | 'inPicker'>): boolean {
+  return entry.inPicker ?? DEFAULT_PICKER_ENGINES.includes(entry.id);
+}
+
+/** The rail's engines, in catalog order: the ones shown in the picker, and the active one
+ *  wherever it is (an engine turned off in Settings keeps working for the session on it). */
+export function pickerRailEngines(catalog: EngineCatalog, active: SessionEngine): EngineCatalogEntry[] {
+  return catalog.filter((entry) => entry.id === active || shownInPicker(entry));
 }
 
 export function engineDisplayName(catalog: EngineCatalog, engine: unknown): string {

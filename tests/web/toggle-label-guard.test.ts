@@ -52,6 +52,7 @@ const OWN_WORDS: Record<string, string> = {
   'apps/mail/MailUnsubscribePlanRow.tsx#item.label': 'a picker of senders to unsubscribe from: taken only by the plan\'s button',
   'apps/mail/MailUnsubscribePlanRow.tsx#methodText(item)': 'a picker of senders: how the unsubscribe goes',
   'apps/mail/MailUnsubscribePlanRow.tsx#formatCount(item.mails)': 'a picker of senders: how many mails',
+  'components/settings/sections/PickerEnginesGroup.tsx#engineLabel(e)': 'a checklist of engines the model picker offers: the engine\'s name is the option, and offering it is all the tick does',
   'components/settings/sections/EngineSplitRow.tsx#engineName(e.displayName)': 'a checklist of engines to share new tasks with: the engine\'s name is the option, and sharing with it is all the tick does',
   'components/settings/sections/EngineSplitRow.tsx#modelLineLabel(nameOf(engine), engine, model)': 'a checklist of engines on a model: the entry\'s name is the option',
   'components/settings/sections/EngineSplitRow.tsx#engine': 'that entry\'s engine, in its note on where its model is set',

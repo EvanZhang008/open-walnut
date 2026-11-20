@@ -212,7 +212,8 @@ await fs.writeFile(
   path.join(tmpBase, 'config.yaml'),
   JSON.stringify({
     version: 1,
-    session: { history_remote: remoteHistorySetting(fixtureS3) },
+    // Every engine on the model picker's rail (the default shows four): the engine specs pick each one there.
+    session: { history_remote: remoteHistorySetting(fixtureS3), picker_engines: ['claude', 'codex', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom'] },
     defaults: { priority: 'none', platform: 'local' },
     hosts: {
       'fixture-remote': {

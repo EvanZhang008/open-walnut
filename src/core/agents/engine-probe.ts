@@ -78,6 +78,12 @@ export interface EngineProbeOptions {
 interface CacheEntry {
   at: number;
   value: EngineAvailability;
+  /** An engine whose adapter comes from config: the command the verdict was made on (argvKey). */
+  configArgv?: string;
+}
+
+function argvKey(argv: string[] | null): string {
+  return JSON.stringify(argv ?? []);
 }
 
 const cache = new Map<SessionEngine, CacheEntry>();
@@ -350,6 +356,8 @@ function overrideReason(overrideVar: string, override: string, rejection?: Execu
 interface ProbeResult {
   availability: EngineAvailability;
   fillVersion?: () => Promise<string | null>;
+  /** The config command the verdict was made on (an adapter from config). */
+  configArgv?: string;
 }
 
 async function runProbe(caps: EngineCapabilities, options: EngineProbeOptions): Promise<ProbeResult> {
@@ -371,8 +379,8 @@ async function runProbe(caps: EngineCapabilities, options: EngineProbeOptions): 
   if (adapter.source === 'config') {
     const config = await loadWalnutConfig(options).catch(() => null);
     const argv = readCustomAdapterCmd(config);
-    if (!argv) return { availability: unavailable(`configure ${CUSTOM_ADAPTER_CMD_KEY} (the ACP adapter argv) to use ${caps.displayName}`) };
-    return { availability: { installed: true, version: null, reason: null } };
+    if (!argv) return { availability: unavailable(`configure ${CUSTOM_ADAPTER_CMD_KEY} (the ACP adapter argv) to use ${caps.displayName}`), configArgv: argvKey(null) };
+    return { availability: { installed: true, version: null, reason: null }, configArgv: argvKey(argv) };
   }
 
   const binaryName = adapter.binary;
@@ -425,6 +433,15 @@ export function probeEngine(engineId: SessionEngine, options: EngineProbeOptions
   if (probeAllOverride(env)) return Promise.resolve({ installed: true, version: null, reason: null });
 
   const cached = cache.get(engineId);
+  // An adapter from config (the custom engine): a verdict holds only for the command it read, so
+  // a command saved in Settings is judged at once. A seeded entry (no command) is kept as pinned.
+  if (cached && cached.configArgv !== undefined && now() - cached.at < ENGINE_PROBE_TTL_MS) {
+    return loadWalnutConfig(options).catch(() => null).then((config) => {
+      if (argvKey(readCustomAdapterCmd(config)) === cached.configArgv) return cached.value;
+      if (cache.get(engineId) === cached) cache.delete(engineId);
+      return probeEngine(engineId, options);
+    });
+  }
   if (cached && now() - cached.at < ENGINE_PROBE_TTL_MS) return Promise.resolve(cached.value);
 
   const existing = inFlight.get(engineId);
@@ -436,14 +453,14 @@ export function probeEngine(engineId: SessionEngine, options: EngineProbeOptions
   const started = runProbe(caps, options)
     .catch((err: unknown): ProbeResult => ({ availability: unavailable(err instanceof Error ? err.message : String(err)) }))
     .then(async (result) => {
-      const { availability, fillVersion } = result;
+      const { availability, fillVersion, configArgv } = result;
       // Cache the presence verdict NOW, before the version spawn — a batch
       // probeEngines() waits on THIS moment (probeEnginePresence), never on the
       // `--version` child. Coupling them made GET /api/engines sit out its whole
       // 2.5s deadline on every cache miss: on a loaded host five `--version`
       // spawns (one per engine) routinely outlive the batch budget, and the
       // route held one of the browser's six connections the entire time.
-      cache.set(engineId, { at: now(), value: availability });
+      cache.set(engineId, { at: now(), value: availability, ...(configArgv !== undefined ? { configArgv } : {}) });
       settlePresence(availability);
       presenceInFlight.delete(engineId);
       if (!fillVersion || !availability.installed) return availability;

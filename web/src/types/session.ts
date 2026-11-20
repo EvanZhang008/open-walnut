@@ -12,7 +12,7 @@ export type SessionProvider = 'cli' | 'sdk' | 'embedded';
  *  `export ... from` because SessionRecord below refers to it. */
 import type { SessionEngine, SessionTurnSpeed, SessionUsageLimit, SessionUsageLimitContinued } from '@open-walnut/core';
 export type { SessionEngine, SessionTurnSpeed };
-export { SESSION_ENGINE_IDS } from '@open-walnut/core';
+export { SESSION_ENGINE_IDS, DEFAULT_PICKER_ENGINES } from '@open-walnut/core';
 
 /** A pinned passage inside a message (W3C TextQuoteSelector over the message's
  *  rendered plain text). Mirrors SessionPinnedQuote in src/core/types.ts. */

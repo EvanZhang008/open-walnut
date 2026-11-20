@@ -471,6 +471,8 @@ test('an engine the server cannot run renders disabled with its reason', async (
           },
           {
             id: 'gemini',
+            // Turned on for the picker (Settings, Sessions): off by default.
+            inPicker: true,
             displayName: 'Gemini',
             runtimeKind: 'acp',
             isDefault: false,
@@ -480,6 +482,8 @@ test('an engine the server cannot run renders disabled with its reason', async (
           },
           {
             id: 'custom',
+            // Turned on for the picker (Settings, Sessions): off by default.
+            inPicker: true,
             displayName: 'Custom (ACP)',
             runtimeKind: 'acp',
             isDefault: false,

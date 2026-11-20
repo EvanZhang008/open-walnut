@@ -1825,6 +1825,10 @@ export interface Config {
      *  the user's other ones. Default off (src/core/sessions/request-tag.ts). */
     tag_requests?: boolean;
 
+    /** Engines the model picker's engine rail shows, in registry order (Settings, Sessions).
+     *  Unset: DEFAULT_PICKER_ENGINES. The engine a session runs on always shows. */
+    picker_engines?: SessionEngine[];
+
     /** Characters of each skill's description a Claude Code session's skill listing keeps
      *  (an integer 40..1536, sent as the CLI's `skillListingMaxDescChars` setting). Unset:
      *  nothing is sent and Claude Code keeps its own default (providers/claude-scope-settings.ts). */
@@ -2646,6 +2650,9 @@ export interface EngineProviderEntry {
 export const SESSION_ENGINE_IDS = ['claude', 'codex', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom'] as const;
 /** Which coding-agent CLI binary backs a 'cli' session (claude-code vs codex vs future engines). */
 export type SessionEngine = (typeof SESSION_ENGINE_IDS)[number];
+/** The engines the model picker's engine rail shows when `session.picker_engines` names none.
+ *  The rest are turned on in Settings, Sessions; the engine a session runs on always shows. */
+export const DEFAULT_PICKER_ENGINES: readonly SessionEngine[] = ['claude', 'codex', 'opencode', 'pi'];
 export type SessionType = 'interactive' | 'triage' | 'hook' | 'cron' | 'subagent';
 
 /**

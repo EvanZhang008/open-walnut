@@ -14,7 +14,7 @@
 
 import { Router, type Request, type Response } from 'express'
 import { ENGINE_REGISTRY, DEFAULT_ENGINE, engineCaps, type EngineCapabilities } from '../../core/agents/engine-registry.js'
-import type { SessionEngine } from '../../core/types.js'
+import { DEFAULT_PICKER_ENGINES, type SessionEngine } from '../../core/types.js'
 import { probeEngines, type EngineAvailability } from '../../core/agents/engine-probe.js'
 import {
   EngineSettingsError,
@@ -34,12 +34,21 @@ export const enginesRouter = Router()
 /** Availability used when the probe itself failed: honest, and never a hard error. */
 const PROBE_UNKNOWN: EngineAvailability = { installed: false, version: null, reason: 'availability check unavailable' }
 
-function toCatalogEntry(caps: EngineCapabilities, availability: EngineAvailability) {
+/** The engines the picker's rail shows: `session.picker_engines`, else the default four. */
+export function pickerEngineSet(config: unknown): ReadonlySet<string> {
+  const named = (config as { session?: { picker_engines?: unknown } } | null | undefined)?.session?.picker_engines
+  const list = Array.isArray(named) ? named.filter((id): id is string => typeof id === 'string') : DEFAULT_PICKER_ENGINES
+  return new Set(list)
+}
+
+function toCatalogEntry(caps: EngineCapabilities, availability: EngineAvailability, picker: ReadonlySet<string>) {
   return {
     id: caps.id,
     displayName: caps.displayName,
     runtimeKind: caps.runtimeKind,
     isDefault: caps.id === DEFAULT_ENGINE,
+    // Shown on the model picker's engine rail (Settings, Sessions turns the others on).
+    inPicker: picker.has(caps.id),
     // Every ACP engine runs on another host through that host's daemon
     // (providers/acp-host-artifacts.ts), except one whose adapter command is this
     // machine's config. Whether a host has the CLI: GET /availability?host=.
@@ -69,7 +78,8 @@ enginesRouter.get('/', async (_req: Request, res: Response) => {
     // engine toggle entirely.
     log.web.warn('engine availability probe failed', { error: err instanceof Error ? err.message : String(err) })
   }
-  const engines = [...ENGINE_REGISTRY.values()].map((caps) => toCatalogEntry(caps, availability.get(caps.id) ?? PROBE_UNKNOWN))
+  const picker = pickerEngineSet(await getConfig().catch(() => null))
+  const engines = [...ENGINE_REGISTRY.values()].map((caps) => toCatalogEntry(caps, availability.get(caps.id) ?? PROBE_UNKNOWN, picker))
   res.json({ engines })
 })
 

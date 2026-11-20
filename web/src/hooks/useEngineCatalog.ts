@@ -126,6 +126,8 @@ function parseEntry(value: unknown): EngineCatalogEntry | null {
     runtimeKind: row.runtimeKind === 'acp' ? 'acp' : 'native',
     isDefault: row.isDefault === true,
     localOnly: row.localOnly === true,
+    // Absent on an older server (and an older persisted catalog): shownInPicker falls back to the default ones.
+    ...(typeof row.inPicker === 'boolean' ? { inPicker: row.inPicker } : {}),
     capabilities: {
       rewind: caps.rewind === true,
       fork: caps.fork === true,
@@ -291,6 +293,11 @@ export function refreshEngineCatalog(): void {
 // reconnect: the socket's own reconnect backoff (1s doubling to 30s) is what
 // bounds this, the same way useHostStatus re-hydrates on the event.
 wsClient.onEvent('_ws:reconnected', () => { refreshEngineCatalog(); });
+// A config write (the picker's engines, the custom engine's command) changes the catalog's answer:
+// every tab reads it again. The narrow UI-state emits carry no config and are skipped.
+wsClient.onEvent('config:changed', (data: unknown) => {
+  if ((data as { config?: unknown } | undefined)?.config) refreshEngineCatalog();
+});
 
 /** Test hook: the store's subscribe, exactly what useSyncExternalStore calls
  *  (a subscribe is the TTL-respecting hydrate trigger; refreshEngineCatalog is not). */

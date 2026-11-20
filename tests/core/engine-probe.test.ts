@@ -255,6 +255,16 @@ describe('probeEngine — config-sourced engine (custom)', () => {
     }
   })
 
+  it('a command saved later is judged at once, not after the cache runs out', async () => {
+    let adapter_cmd: string[] | undefined
+    const options = baseOptions({ loadConfig: async () => ({ engines: { custom: adapter_cmd ? { adapter_cmd } : {} } }) })
+    expect((await probeEngine('custom', options)).installed).toBe(false)
+    adapter_cmd = ['/opt/acp/adapter', 'serve']
+    expect((await probeEngine('custom', options)).installed).toBe(true)
+    adapter_cmd = undefined
+    expect((await probeEngine('custom', options)).installed).toBe(false)
+  })
+
   it('a config read that throws degrades to "not configured", never to a rejection', async () => {
     const result = await probeEngine('custom', baseOptions({
       loadConfig: async () => { throw new Error('config.yaml is gone') },

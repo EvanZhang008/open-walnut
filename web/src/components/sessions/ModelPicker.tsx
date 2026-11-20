@@ -1,5 +1,6 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
+import { useInRouterContext, useNavigate } from 'react-router-dom';
 import {
   SESSION_EFFORTS,
   DEFAULT_SESSION_EFFORT,
@@ -15,7 +16,7 @@ import { fetchCodexModelCatalog, fetchEngineModelCatalog, getCachedEngineModelCa
 import type { CodexModelInfo, SessionLiveSettings, SessionModelCatalog } from '@/api/sessions';
 import type { SessionEngine } from '@/types/session';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
-import { engineLockReason } from '@/utils/engines';
+import { engineLockReason, pickerRailEngines } from '@/utils/engines';
 import { engineCaps, engineLabel } from '@/utils/engine-capabilities';
 import { useHostModelCatalog, seedHostCatalog } from '@/hooks/useModelCatalog';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
@@ -163,8 +164,11 @@ const PROVIDER_ICONS: Partial<Record<string, React.FC>> = {
   custom: CustomEngineMark,
 };
 
-export function ProviderRail({ active, onSwitch, lockReason }: {
+export function ProviderRail({ active, onSwitch, lockReason, onClose }: {
   active: ProviderId;
+  /** Closes the picker before "More engines" opens Settings (a Home column stays mounted): the
+   *  cancel path, so an engine picked but not yet switched to is dropped, never started. */
+  onClose?: () => void;
   /** Called when the user picks ANOTHER provider. Omitted = the other
    *  providers are locked (live session: the engine can't change in place). */
   onSwitch?: (provider: ProviderId) => void;
@@ -175,7 +179,8 @@ export function ProviderRail({ active, onSwitch, lockReason }: {
 }) {
   const catalog = useEngineCatalog();
   const rows = React.useMemo(() => {
-    const list = catalog.map((entry) => ({
+    // The engines shown in the picker (Settings, Sessions turns the others on), and the one in use.
+    const list = pickerRailEngines(catalog, active).map((entry) => ({
       id: entry.id,
       label: engineLabel(entry),
       // Host-less: only the availability half of the lock applies here, the
@@ -192,8 +197,13 @@ export function ProviderRail({ active, onSwitch, lockReason }: {
   }, [catalog, active]);
   const activeLabel = rows.find((row) => row.id === active)?.label ?? active;
 
+  // The slot keeps the rail's narrow width in the layout; the rail itself widens over the
+  // models on hover or keyboard focus to show each engine's name (globals.css).
   return (
-    <div className="model-picker-rail" role="tablist" aria-label="Provider">
+    // The rail is laid over the slot, so the slot keeps the height the rail's rows need
+    // (40px rows, 6px apart, 12px padding), "More engines" included.
+    <div className="model-picker-rail-slot" style={{ minHeight: 24 + (rows.length + 1) * 46 - 6 }}>
+    <div className="model-picker-rail" role="tablist" aria-label="Engine" data-testid="provider-rail">
       {rows.map(({ id, label, unavailable }) => {
         const isActive = id === active;
         const reason = isActive ? null
@@ -212,24 +222,58 @@ export function ProviderRail({ active, onSwitch, lockReason }: {
             role="tab"
             aria-selected={isActive}
             aria-disabled={locked || undefined}
+            aria-label={label}
             className={`provider-rail-item${isActive ? ' provider-rail-item-active' : ''}${locked ? ' provider-rail-item-locked' : ''}${activeUnavailable ? ' provider-rail-item-unavailable' : ''}`}
-            title={locked ? reason! : activeUnavailable ?? label}
+            // The name shows in the widened rail; the tooltip only says why an engine is locked.
+            title={locked ? reason! : activeUnavailable ?? undefined}
             data-provider={id}
             onClick={() => { if (!isActive && !locked) onSwitch?.(id); }}
           >
-            <Icon />
-            {(locked || activeUnavailable) && (
-              <span className="provider-rail-lock" aria-hidden>
-                <svg viewBox="0 0 24 24" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="2.4">
-                  <rect x="5" y="11" width="14" height="9" rx="2" />
-                  <path d="M8 11V7a4 4 0 018 0v4" />
-                </svg>
-              </span>
-            )}
+            <span className="provider-rail-icon">
+              <Icon />
+              {(locked || activeUnavailable) && (
+                <span className="provider-rail-lock" aria-hidden>
+                  <svg viewBox="0 0 24 24" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="2.4">
+                    <rect x="5" y="11" width="14" height="9" rx="2" />
+                    <path d="M8 11V7a4 4 0 018 0v4" />
+                  </svg>
+                </span>
+              )}
+            </span>
+            <span className="provider-rail-label" aria-hidden>{label}</span>
           </button>
         );
       })}
+      <RailMoreEngines onClose={onClose} />
     </div>
+    </div>
+  );
+}
+
+/** The rail's last row: the other engines are turned on in Settings, Sessions. Drawn only
+ *  inside the app's router (the browser extension's popout has no Settings page). */
+function RailMoreEngines({ onClose }: { onClose?: () => void }) {
+  if (!useInRouterContext()) return null;
+  return <RailMoreEnginesLink onClose={onClose} />;
+}
+
+function RailMoreEnginesLink({ onClose }: { onClose?: () => void }) {
+  const navigate = useNavigate();
+  return (
+    <button
+      type="button"
+      className="provider-rail-item provider-rail-more"
+      aria-label="More engines in Settings"
+      data-testid="provider-rail-more"
+      onClick={() => { onClose?.(); navigate('/settings#sessions'); }}
+    >
+      <span className="provider-rail-icon">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden>
+          <path d="M12 5v14M5 12h14" />
+        </svg>
+      </span>
+      <span className="provider-rail-label" aria-hidden>More engines</span>
+    </button>
   );
 }
 
@@ -1009,7 +1053,7 @@ export function ModelPicker({
       // sensors — stop pointerdown at the boundary (menu hard rule).
       onPointerDown={popped ? (e) => e.stopPropagation() : undefined}
     >
-      <ProviderRail active={engine} onSwitch={onProviderSwitch} lockReason={providerLockReason} />
+      <ProviderRail active={engine} onSwitch={onProviderSwitch} lockReason={providerLockReason} onClose={onAnchorLost ?? onClose} />
       <div className="model-picker-pane">
       {switchNote && <div className="model-picker-switch-note" role="status" data-testid="model-picker-switch-note">{switchNote}</div>}
       {activeEngineUnavailable && <div className="model-picker-switch-note" role="status" data-testid="model-picker-engine-unavailable">{activeEngineUnavailable}</div>}
