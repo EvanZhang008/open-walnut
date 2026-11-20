@@ -349,7 +349,8 @@ describe('the MCP server on a host (walnut-mcp-stdio.ts)', () => {
 
   it('sends its own job id and names it when no answer comes', async () => {
     const seen: Array<Record<string, unknown>> = []
-    const handle = createWalnutMcpHandler({ formatError, request: async (_op, a) => { seen.push((a as { args: Record<string, unknown> }).args); return HUB_TIMEOUT as never } })
+    // op_result is asked once more (it times out too here): only the call's own requests are kept.
+    const handle = createWalnutMcpHandler({ formatError, lostFollowMs: 0, request: async (_op, a) => { if ((a as { name?: string }).name !== 'op_result') seen.push((a as { args: Record<string, unknown> }).args); return HUB_TIMEOUT as never } })
     const reply = await handle(call)
     const text = (reply?.result as { content: Array<{ text: string }> }).content[0].text
     const sent = seen[0].job_id as string

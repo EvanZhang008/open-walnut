@@ -28,7 +28,7 @@ import { GATEWAY_INLINE_ARGS_MAX_BYTES } from './tool-args-source.js'
 import { walnutMcpInstructions } from '../mcp/instructions.js'
 import { fitToolAnswer } from '../lib/tool-answer-fit.js'
 import { awayLines, callerRunId, dropRunId, lostRunLines, neverSent, refusedRunId } from './host-exec-run-id.js'
-import { callIdFor, lostCallLines, newCallId } from '../lib/op-call-id.js'
+import { CALL_ID_ARG, callIdFor, lostCallLines, newCallId } from '../lib/op-call-id.js'
 import { withToolUseId } from '../lib/tool-use-id.js'
 
 /** MCP protocol versions this server speaks; the first is offered when the client's is unknown. */
@@ -55,7 +55,20 @@ export interface WalnutMcpDeps {
   listRetryMs?: number
   /** Where an answer too big for one tool result is written (tests); default tool-answer-fit's. */
   answerDir?: string
+  /** Overrides MCP_LOST_FOLLOW_MS (tests). */
+  lostFollowMs?: number
 }
+
+/**
+ * How long a call whose answer did not come back (`hub_timeout`) is followed through op_result
+ * before it reads as lost. 2026-11-20: brief_write took 9 to 18 s on a busy Mac, past the gateway's
+ * 10 s, and came back as a failure although the write went through; read on, it answers what the
+ * call really did.
+ */
+export const MCP_LOST_FOLLOW_MS = 30_000
+const MCP_LOST_POLL_MS = 1_000
+
+type LostFollow = { ok: true; result: unknown } | { ok: false; message: string } | null
 
 interface JsonRpcRequest { jsonrpc?: string; id?: string | number | null; method?: unknown; params?: unknown }
 type JsonRpcReply = Record<string, unknown>
@@ -143,6 +156,27 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
     retry.unref?.()
   }
 
+  /** What a call whose answer was lost did, read with op_result until it ended (within
+   *  MCP_LOST_FOLLOW_MS); null while still running, lost, unknown, or no answer to the read. */
+  const followLost = async (callId: string): Promise<LostFollow> => {
+    const until = Date.now() + (deps.lostFollowMs ?? MCP_LOST_FOLLOW_MS)
+    for (;;) {
+      let read: GatewayResponse | null = null
+      try { read = await deps.request('tools.call', { name: 'op_result', args: { call_id: callId }, callId: newCallId() }) } catch { /* the daemon away: read as lost */ }
+      if (!read) return null
+      if (read.ok) {
+        const b = (read.result ?? {}) as { state?: unknown; ok?: unknown; result?: unknown; message?: unknown; answer_withheld?: unknown }
+        // Its answer is not ours to read: only where it stands.
+        if (b.answer_withheld) return null
+        if (b.state === 'done' && b.ok === true) return { ok: true, result: b.result !== undefined ? b.result : read.result }
+        if (b.state === 'done' && b.ok === false) return { ok: false, message: typeof b.message === 'string' && b.message ? b.message : 'the call ran and failed' }
+        if (b.state !== 'running') return null
+      } else if (read.error.code !== 'hub_timeout') return null
+      if (Date.now() + MCP_LOST_POLL_MS > until) return null
+      await new Promise((r) => setTimeout(r, MCP_LOST_POLL_MS))
+    }
+  }
+
   const callTool = async (params: Record<string, unknown>) => {
     const name = typeof params.name === 'string' ? params.name : ''
     if (!name) return toolError('tools/call needs a tool name')
@@ -153,6 +187,9 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
     const args = withToolUseId(name, { ...given } as Record<string, unknown>, params._meta)
     // Every call's id (src/lib/op-call-id.ts): a resend runs it at most once, and op_result reads
     // what it did when its answer is lost. A model re-running a lost call passes "_call_id".
+    // A re-run under an earlier call's id is never followed: op_result may still hold that earlier
+    // run's answer while this one waits to start.
+    const rerun = Object.prototype.hasOwnProperty.call(args, CALL_ID_ARG)
     const chosen = callIdFor(args)
     if (chosen.bad) return toolError(chosen.bad)
     let callId = chosen.callId
@@ -179,7 +216,13 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
       // Never more than an agent's tool result takes, whatever the op (tool-answer-fit.ts).
       if (resp.ok) return { content: [{ type: 'text', text: fitToolAnswer(resp.result, { op: name, dir: deps.answerDir }) }] }
       const message = deps.formatError(resp.error).join('\n')
-      if (resp.error.code === 'hub_timeout') return toolError(lost(message), resp.error.detail)
+      if (resp.error.code === 'hub_timeout') {
+        // The call may have run: what it did is the answer, a success included.
+        const followed = rerun ? null : await followLost(callId)
+        if (followed?.ok) return { content: [{ type: 'text', text: fitToolAnswer(followed.result, { op: name, dir: deps.answerDir }) }] }
+        if (followed) return toolError(followed.message)
+        return toolError(lost(message), resp.error.detail)
+      }
       const away = resp.error.code === 'hub_unreachable' ? awayLines(name, args) : []
       return toolError([message, ...away].join('\n'), resp.error.detail)
     } catch (err) {
