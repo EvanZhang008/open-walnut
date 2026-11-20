@@ -27,8 +27,14 @@ final class ComposerDrafts {
     /// Attached files (a session's videos and documents). Memory-only like the
     /// images; the bytes are the app's copies in `ComposerFileStore`.
     private var files: [String: [ComposerFile]] = [:]
+    /// Each draft's picked references, `@[label]` -> its `<task-ref/>` tag
+    /// (`ComposerSuggestController`): the draft keeps the token, this keeps what it stands for,
+    /// so a box built again (a row scrolled back, a letter opened again, a relaunch) still sends
+    /// the tag. Kept on disk beside the words; written only on a pick or a send, never per keystroke.
+    private var refs: [String: [String: String]] = [:]
 
     private static let storageKey = "walnut.composerDrafts"
+    private static let refsStorageKey = "walnut.composerDraftRefs"
     /// Cap the persisted set so a long-lived install can't grow it without
     /// bound (one entry per conversation the user ever typed in).
     private static let maxPersistedDrafts = 40
@@ -40,6 +46,9 @@ final class ComposerDrafts {
         if let saved = AppPrefs.defaults.dictionary(forKey: Self.storageKey) as? [String: String] {
             text = saved
         }
+        if let saved = AppPrefs.defaults.dictionary(forKey: Self.refsStorageKey) as? [String: [String: String]] {
+            refs = saved
+        }
         #if DEBUG
         // UI tests reuse one simulator and the same thread ids: each launch starts with no
         // unsent Follow up, so one run's words never land in the next run's composer.
@@ -48,6 +57,11 @@ final class ComposerDrafts {
             if kept.count != text.count {
                 text = kept
                 AppPrefs.defaults.set(text, forKey: Self.storageKey)
+            }
+            let keptRefs = refs.filter { !$0.key.hasPrefix(OrgThreadFollowUpDraft.prefix) }
+            if keptRefs.count != refs.count {
+                refs = keptRefs
+                AppPrefs.defaults.set(refs, forKey: Self.refsStorageKey)
             }
         }
         #endif
@@ -76,12 +90,26 @@ final class ComposerDrafts {
         let others = keys.filter { $0.hasPrefix(prefix) && $0 != keeping }.sorted()
         guard others.count > max else { return }
         // A dropped draft takes its pictures and files with it.
+        var droppedRefs = false
         for key in others.prefix(others.count - max) {
             text[key] = nil
             images[key] = nil
             files[key] = nil
+            if refs.removeValue(forKey: key) != nil { droppedRefs = true }
         }
+        if droppedRefs { persistRefs() }
         schedulePersist()
+    }
+
+    /// The references picked into `key`'s draft (label -> tag).
+    func refs(_ key: String) -> [String: String] { refs[key] ?? [:] }
+
+    /// Picks and sends are rare, so this writes at once: a reference picked a moment before a
+    /// background kill still sends as its tag after the relaunch.
+    func setRefs(_ value: [String: String], key: String) {
+        guard refs[key] ?? [:] != value else { return }
+        if value.isEmpty { refs[key] = nil } else { refs[key] = value }
+        persistRefs()
     }
 
     func images(_ key: String) -> [SelectedImage] { images[key] ?? [] }
@@ -102,7 +130,9 @@ final class ComposerDrafts {
     /// Called after a send hands the content to a store — the store owns
     /// no-loss preservation from that point (failed bubbles keep text + images).
     /// Clears persist IMMEDIATELY (they're rare and must not be resurrected
-    /// by a crash inside the debounce window).
+    /// by a crash inside the debounce window). The references stay: a refused send puts its
+    /// words back (`ComposerBar.restoreRefusedDraft`), and its tokens still need their tags;
+    /// the box's own controller lets them go once its words were taken.
     func clear(_ key: String) {
         text[key] = nil
         images[key] = nil
@@ -155,6 +185,14 @@ final class ComposerDrafts {
         #endif
         AppPrefs.defaults.set(snapshot, forKey: Self.storageKey)
     }
+
+    private func persistRefs() {
+        if refs.count > Self.maxPersistedDrafts {
+            // The same deterministic trim as the words.
+            for key in refs.keys.sorted().prefix(refs.count - Self.maxPersistedDrafts) { refs[key] = nil }
+        }
+        AppPrefs.defaults.set(refs, forKey: Self.refsStorageKey)
+    }
 }
 
 extension ComposerDrafts: LifecycleSuspendable {
@@ -172,7 +210,9 @@ extension ComposerDrafts {
         text = [:]
         images = [:]
         files = [:]
+        refs = [:]
         ComposerFileStore.removeAll()
         AppPrefs.defaults.removeObject(forKey: Self.storageKey)
+        AppPrefs.defaults.removeObject(forKey: Self.refsStorageKey)
     }
 }

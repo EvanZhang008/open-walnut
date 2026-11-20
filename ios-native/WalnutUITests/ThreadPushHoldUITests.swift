@@ -132,7 +132,7 @@ final class ThreadPushHoldUITests: ThreadPushUITestCase {
         touch(input)
         clear(input)
         input.typeText("First words")
-        card(thread).descendants(matching: .any).matching(identifier: "org.thread.followUp.send").firstMatch.tap()
+        followUp(thread, "send").tap()
         // On its way (the receipt takes `sendSeconds`): he leaves the page.
         back()
         XCTAssertTrue(el("org.bar.threads").waitForExistence(timeout: 15))

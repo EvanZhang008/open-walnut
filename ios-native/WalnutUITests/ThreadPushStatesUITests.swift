@@ -252,7 +252,7 @@ final class ThreadPushStatesUITests: XCTestCase {
         // whatever an earlier run left in it goes first, and this run leaves none.
         let thread = ids[1]
         // The box is on the card with no tap: no Follow up button, no sheet.
-        let input = card(thread).descendants(matching: .any).matching(identifier: "org.thread.followUp.input").firstMatch
+        let input = card(thread).descendants(matching: .any).matching(identifier: ThreadFollowUpID.of(thread, "input")).firstMatch
         XCTAssertTrue(input.waitForExistence(timeout: 10), "M: the card has no Follow up box")
         XCTAssertFalse(card(thread).buttons["org.thread.followUp"].exists, "M: a Follow up button is still on the card")
         bringIntoView(input)

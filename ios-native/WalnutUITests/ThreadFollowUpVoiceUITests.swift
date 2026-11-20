@@ -46,7 +46,7 @@ final class ThreadFollowUpVoiceUITests: ThreadPushUITestCase {
     private func openFollowUp(_ index: Int = 0) {
         current = index
         XCTAssertFalse(card(ids[index]).buttons["org.thread.followUp"].exists, "no Follow up button: the box is on the card")
-        let follow = box("org.thread.followUp.input")
+        let follow = box(ThreadFollowUpID.of(ids[current], "input"))
         XCTAssertTrue(follow.waitForExistence(timeout: 15), "the card has no Follow up box")
         // At accessibility text sizes the view switch is a menu, not the
         // segmented control the older shared viewport helper looks for.
@@ -101,7 +101,7 @@ final class ThreadFollowUpVoiceUITests: ThreadPushUITestCase {
 
     func testFollowUpDictationAppendsAndSendsOnce() throws {
         try start()
-        let input = box("org.thread.followUp.input")
+        let input = box(ThreadFollowUpID.of(ids[current], "input"))
         input.tap()
         input.typeText("Typed first.")
         shot("before-mic")
@@ -111,7 +111,7 @@ final class ThreadFollowUpVoiceUITests: ThreadPushUITestCase {
         XCTAssertTrue(poll(20) { (input.value as? String) == "Typed first. " + self.spoken })
         XCTAssertEqual(sent.count, 0, "Stop only inserts words, never sends")
         shot("words-in-follow-up")
-        box("org.thread.followUp.send").tap()
+        box(ThreadFollowUpID.of(ids[current], "send")).tap()
         XCTAssertTrue(poll(20) { self.sent.count == 1 })
         XCTAssertTrue(poll(15) { ((input.value as? String) ?? "").isEmpty }, "the box empties once its words were taken")
         XCTAssertTrue((sent[0]["text"] as? String ?? "").contains("Typed first. " + spoken))
@@ -119,30 +119,30 @@ final class ThreadFollowUpVoiceUITests: ThreadPushUITestCase {
         XCTAssertEqual(sent.count, 1)
         shot("sent")
         openFollowUp()
-        XCTAssertEqual(box("org.thread.followUp.input").value as? String, "", "accepted words are not offered for a second Send")
+        XCTAssertEqual(box(ThreadFollowUpID.of(ids[current], "input")).value as? String, "", "accepted words are not offered for a second Send")
     }
 
     func testSendStopsRecordingAndWaitsForItsWords() throws {
         try start()
         record()
-        let send = box("org.thread.followUp.send")
+        let send = box(ThreadFollowUpID.of(ids[current], "send"))
         XCTAssertTrue(send.isEnabled, "Send must be pressable with an empty box while recording")
         send.tap()
         XCTAssertTrue(poll(5) { send.label == "Waiting for your words, tap to cancel" })
         shot("send-waits")
         XCTAssertTrue(poll(20) { self.sent.count == 1 })
         XCTAssertTrue((sent[0]["text"] as? String ?? "").contains(spoken))
-        XCTAssertTrue(poll(15) { ((self.box("org.thread.followUp.input").value as? String) ?? "").isEmpty })
+        XCTAssertTrue(poll(15) { ((self.box(ThreadFollowUpID.of(ids[current], "input")).value as? String) ?? "").isEmpty })
     }
 
     func testCancelWaitKeepsSpokenWordsUnsent() throws {
         try start(["-walnut.debug.dictationDelay", "8"])
         record()
-        let send = box("org.thread.followUp.send")
+        let send = box(ThreadFollowUpID.of(ids[current], "send"))
         send.tap()
         XCTAssertTrue(poll(5) { send.label == "Waiting for your words, tap to cancel" })
         send.tap()
-        let input = box("org.thread.followUp.input")
+        let input = box(ThreadFollowUpID.of(ids[current], "input"))
         XCTAssertTrue(poll(20) { input.value as? String == self.spoken })
         XCTAssertEqual(sent.count, 0)
         // The words stay in the card's box until he sends them.
@@ -153,11 +153,11 @@ final class ThreadFollowUpVoiceUITests: ThreadPushUITestCase {
 
     func testFailedTranscriptionKeepsTypedDraftAndRetryRecovers() throws {
         try start(["-walnut.debug.dictationFailOnce", "YES"])
-        let input = box("org.thread.followUp.input")
+        let input = box(ThreadFollowUpID.of(ids[current], "input"))
         input.tap()
         input.typeText("Keep this")
         record()
-        box("org.thread.followUp.send").tap()
+        box(ThreadFollowUpID.of(ids[current], "send")).tap()
         let retry = box("voice.thread-follow-up.voiceRetry")
         XCTAssertTrue(retry.waitForExistence(timeout: 20), "failed take must offer Retry")
         XCTAssertEqual(input.value as? String, "Keep this")
@@ -169,13 +169,13 @@ final class ThreadFollowUpVoiceUITests: ThreadPushUITestCase {
 
     func testLateWordsStayWithTheThreadTheyWereSpokenInto() throws {
         try start(["-walnut.debug.dictationDelay", "8"])
-        let input = box("org.thread.followUp.input")
+        let input = box(ThreadFollowUpID.of(ids[current], "input"))
         input.tap()
         input.typeText("First thread")
         record()
         box("voice.thread-follow-up.voiceStop").tap()
         openFollowUp(1)
-        let other = box("org.thread.followUp.input")
+        let other = box(ThreadFollowUpID.of(ids[current], "input"))
         touch(other)
         other.typeText("Other thread")
         // The first recorder is its own card's; its words go to the first thread's box, never
@@ -191,7 +191,7 @@ final class ThreadFollowUpVoiceUITests: ThreadPushUITestCase {
 
     func testTypingDuringTranscriptionKeepsTheLatestDraft() throws {
         try start(["-walnut.debug.dictationDelay", "8"])
-        let input = box("org.thread.followUp.input")
+        let input = box(ThreadFollowUpID.of(ids[current], "input"))
         input.tap()
         input.typeText("Original")
         record()
@@ -204,7 +204,7 @@ final class ThreadFollowUpVoiceUITests: ThreadPushUITestCase {
 
     func testLargestTextKeepsMicAndStopAboveTheKeyboard() throws {
         try start(["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"])
-        let input = box("org.thread.followUp.input")
+        let input = box(ThreadFollowUpID.of(ids[current], "input"))
         input.tap()
         input.typeText("A long existing follow up that stays editable while voice input is running.")
         let mic = box("voice-mic.thread-follow-up")
@@ -287,7 +287,7 @@ final class ThreadFollowUpVoiceUITests: ThreadPushUITestCase {
         try start(["-walnut.debug.dictationDenied", "YES"])
         box("voice-mic.thread-follow-up").tap()
         XCTAssertTrue(box("voice.thread-follow-up.voiceError").waitForExistence(timeout: 10))
-        let input = box("org.thread.followUp.input")
+        let input = box(ThreadFollowUpID.of(ids[current], "input"))
         input.tap()
         input.typeText("Typed without voice")
         XCTAssertTrue(waitForValue(input, "Typed without voice"), "the field does not read what was typed: \(input.value ?? "nil")")

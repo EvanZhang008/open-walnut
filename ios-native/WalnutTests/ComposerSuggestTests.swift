@@ -47,7 +47,8 @@ final class ComposerSuggestTests: XCTestCase {
 
     func testCommandRules() {
         XCTAssertEqual(ComposerTrigger.detect(in: "/rev", caret: 4), .command(start: 0, query: "rev"))
-        XCTAssertEqual(ComposerTrigger.detect(in: "then /", caret: 6), .command(start: 5, query: ""))
+        XCTAssertNil(ComposerTrigger.detect(in: "then /", caret: 6), "a command runs only at the start of a message")
+        XCTAssertNil(ComposerTrigger.detect(in: "Answer: /rev", caret: 12), "a / after words opens no list")
         XCTAssertNil(ComposerTrigger.detect(in: "src/foo", caret: 7), "a path inside a word is no command")
         XCTAssertNil(ComposerTrigger.detect(in: "/Users/me", caret: 9), "a second slash is a path")
         XCTAssertNil(ComposerTrigger.detect(in: "/review it", caret: 10), "the command name ended")
@@ -204,8 +205,9 @@ final class ComposerSuggestTests: XCTestCase {
         c.searchDelay = .milliseconds(1)
         c.loadCommands = { _, _ in
             if fail { throw APIError.badResponse }
-            return commands
+            return SlashCommandList(items: commands)
         }
+        // No draft attached: the table stays in memory (the cases that keep it attach their own).
         return (c, store)
     }
 
@@ -216,7 +218,7 @@ final class ComposerSuggestTests: XCTestCase {
         c.update(text: "hello @fi", caret: 9)
         XCTAssertEqual(c.trigger, .mention(start: 6, query: "fi"))
         XCTAssertEqual(c.suggestions.map(\.id), ["mtask001-0a0a"])
-        let picked = c.pick(c.suggestions[0])
+        let picked = c.pick(c.suggestions[0], currentText: "hello @fi", caret: 9)
         XCTAssertEqual(picked?.text, "hello @[Fix the login] ")
         XCTAssertFalse(c.isOpen)
         c.update(text: picked!.text, caret: picked!.caret)
@@ -278,7 +280,7 @@ final class ComposerSuggestTests: XCTestCase {
         let (c, _) = controller()
         c.loadCommands = { _, _ in
             try await Task.sleep(for: .milliseconds(150))
-            return [SlashCommand(name: "review")]
+            return SlashCommandList(items: [SlashCommand(name: "review")])
         }
         c.prefetchCommands()
         c.update(text: "/", caret: 1)
@@ -294,6 +296,84 @@ final class ComposerSuggestTests: XCTestCase {
         for _ in 0..<50 where c.status == .loading { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertEqual(c.status, .failed)
         XCTAssertTrue(c.suggestions.isEmpty)
+    }
+
+    func testADegradedAnswerIsShownButNeverCached() async throws {
+        let (c, _) = controller()
+        var reads = 0
+        c.loadCommands = { _, _ in
+            reads += 1
+            return SlashCommandList(items: [], degraded: true)
+        }
+        c.update(text: "/", caret: 1)
+        for _ in 0..<50 where c.status == .loading { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(c.status, .failed, "an empty degraded list says the commands did not load")
+        c.update(text: "", caret: 0)
+        c.update(text: "/", caret: 1)
+        XCTAssertEqual(c.status, .loading, "the next / asks again: nothing was cached")
+        for _ in 0..<50 where c.status == .loading { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(reads, 2)
+    }
+
+    // MARK: - References survive a rebuilt box
+
+    func testAReferenceSurvivesTheBoxBeingBuiltAgain() {
+        let key = "composer-suggest-test:\(UUID().uuidString)"
+        defer { ComposerDrafts.shared.setRefs([:], key: key) }
+        let (first, store) = controller(tasks: [task("mtask001-0a0a", "Fix the login")])
+        first.attach(draftKey: key)
+        first.update(text: "see @fi", caret: 7)
+        let picked = first.pick(first.suggestions[0], currentText: "see @fi", caret: 7)
+        XCTAssertEqual(picked?.text, "see @[Fix the login] ")
+        // The draft keeps the words; the box is built again (a row scrolled back, a relaunch).
+        let draft = picked!.text + "today"
+        let again = ComposerSuggestController()
+        again.store = store
+        again.attach(draftKey: key)
+        XCTAssertEqual(again.outgoing(draft), #"see <task-ref id="mtask001-0a0a" label="Fix the login"/> today"#)
+        // Sent and emptied: the next box of this draft sends a token as typed.
+        again.reset()
+        let third = ComposerSuggestController()
+        third.attach(draftKey: key)
+        XCTAssertEqual(third.outgoing(draft), draft)
+    }
+
+    func testTakenWordsLetOnlyTheirOwnReferencesGo() {
+        let key = "composer-suggest-test:\(UUID().uuidString)"
+        defer { ComposerDrafts.shared.setRefs([:], key: key) }
+        let (c, _) = controller(tasks: [task("t1", "One"), task("t2", "Two")])
+        c.attach(draftKey: key)
+        c.update(text: "@on", caret: 3)
+        let a = c.pick(c.suggestions.first(where: { $0.id == "t1" })!, currentText: "@on", caret: 3)!
+        let words = a.text + "@tw"
+        c.update(text: words, caret: (words as NSString).length)
+        let b = c.pick(c.suggestions.first(where: { $0.id == "t2" })!, currentText: words, caret: (words as NSString).length)!
+        XCTAssertEqual(b.text, "@[One] @[Two] ")
+        c.forgetRefs(notIn: "@[Two] still here")
+        XCTAssertEqual(ComposerDrafts.shared.refs(key).keys.sorted(), ["Two"], "the reference the box still shows stays")
+    }
+
+    // MARK: - A pick reads the words as they are now
+
+    func testAPickNeverSwallowsWordsThatCameAfterTheListOpened() {
+        let (c, _) = controller(tasks: [task("mtask001-0a0a", "Fix the login")])
+        c.update(text: "hi @fi", caret: 6)
+        let row = c.suggestions[0]
+        // Dictation (or another box of the same draft) added words the caret never reported.
+        let now = "hi @fi and the words he just said"
+        XCTAssertNil(c.pick(row, currentText: now, caret: (now as NSString).length), "the list no longer stands for the words")
+        XCTAssertNil(c.pick(row, currentText: "Note: hi @fi", caret: nil), "the @ moved: nothing is replaced")
+        // Still the same words: the pick goes through.
+        c.update(text: "hi @fi", caret: 6)
+        XCTAssertEqual(c.pick(c.suggestions[0], currentText: "hi @fi", caret: 6)?.text, "hi @[Fix the login] ")
+    }
+
+    func testAPickWithNoCaretReadsTheEndOfTheWords() {
+        let (c, _) = controller(tasks: [task("mtask001-0a0a", "Fix the login")])
+        c.updateAtEnd("hi @fi")
+        XCTAssertNil(c.pick(c.suggestions[0], currentText: "hi @fi more", caret: nil), "words came after the @: no pick")
+        c.updateAtEnd("hi @fi")
+        XCTAssertEqual(c.pick(c.suggestions[0], currentText: "hi @fi", caret: nil)?.text, "hi @[Fix the login] ")
     }
 
     func testABoxWithNoSessionHasNoCommandList() {
@@ -346,5 +426,15 @@ final class ComposerSuggestTests: XCTestCase {
         XCTAssertEqual(ActionNeededModel.words(item("ask"), hasSession: true), .sessionAnswer)
         XCTAssertEqual(ActionNeededModel.words(item("choice"), hasSession: true), .sessionAnswer)
         XCTAssertEqual(ActionNeededModel.answerMessage(summary: "Ship it?", words: "yes, today"), #"Answer to "Ship it?": yes, today"#)
+        // A command goes to the session as typed: wrapped, it would never run.
+        XCTAssertEqual(ActionNeededModel.sessionMessage(.sessionAnswer, summary: "Ship it?", text: "/review now"), "/review now")
+        XCTAssertEqual(ActionNeededModel.sessionMessage(.approvalNote, summary: "Ship it?", text: "/compact"), "/compact")
+        XCTAssertEqual(ActionNeededModel.sessionMessage(.sessionAnswer, summary: "Ship it?", text: "yes"), #"Answer to "Ship it?": yes"#)
+        XCTAssertEqual(ActionNeededModel.sessionMessage(.approvalNote, summary: "Ship it?", text: "wait"), #"About the approval "Ship it?": wait"#)
+        // A tool answer's box lists no commands: none would run there.
+        XCTAssertFalse(ActionNeededModel.takesCommands(.declineStep))
+        XCTAssertFalse(ActionNeededModel.takesCommands(.questionAnswer))
+        XCTAssertTrue(ActionNeededModel.takesCommands(.sessionAnswer))
+        XCTAssertTrue(ActionNeededModel.takesCommands(.approvalNote))
     }
 }

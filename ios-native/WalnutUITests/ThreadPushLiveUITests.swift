@@ -270,7 +270,7 @@ final class ThreadPushLiveUITests: XCTestCase {
     /// keyboard goes and the pushed thread shows.
     func testEAPushWhileAFollowUpIsWritten() throws {
         try openThreadsPageFromTheBar("E")
-        let input = card(ids[0]).descendants(matching: .any).matching(identifier: "org.thread.followUp.input").firstMatch
+        let input = card(ids[0]).descendants(matching: .any).matching(identifier: ThreadFollowUpID.of(ids[0], "input")).firstMatch
         XCTAssertTrue(input.waitForExistence(timeout: 10), "the first thread's card has no Follow up box")
         XCTAssertFalse(card(ids[0]).buttons["org.thread.followUp"].exists, "no Follow up button: the box is on the card")
         // A touch where the first card's box shows, by coordinate: the bar's page takes it.

@@ -46,8 +46,11 @@ class ThreadPushUITestCase: XCTestCase {
     func card(_ threadId: String) -> XCUIElement { el("org.thread.\(threadId)") }
 
     /// The Follow up box on a thread's card: there on every open card, with no tap.
-    func followUpInput(_ threadId: String) -> XCUIElement {
-        card(threadId).descendants(matching: .any).matching(identifier: "org.thread.followUp.input").firstMatch
+    func followUpInput(_ threadId: String) -> XCUIElement { followUp(threadId, "input") }
+
+    /// A part of a thread card's Follow up box (`input`, `send`, ...).
+    func followUp(_ threadId: String, _ part: String) -> XCUIElement {
+        card(threadId).descendants(matching: .any).matching(identifier: ThreadFollowUpID.of(threadId, part)).firstMatch
     }
 
     func cardTitle(_ threadId: String) -> XCUIElement {
@@ -262,4 +265,10 @@ class ThreadPushUITestCase: XCTestCase {
                        "\(step): a thread was revealed under the sheet", file: file, line: line)
         shot("\(step)-held")
     }
+}
+
+/// The identifiers of a thread card's Follow up box: one set per thread (the app's
+/// `OrgThreadFollowUpDraft.idPrefix`), so each card's field and Send are told apart.
+enum ThreadFollowUpID {
+    static func of(_ threadId: String, _ part: String) -> String { "org.thread.followUp.\(threadId).\(part)" }
 }

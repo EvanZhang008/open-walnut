@@ -5,7 +5,7 @@ import Observation
 /// writes to an agent in owns one: the chat and session composers (`ComposerBar`), a letter's
 /// reply (`LetterReaderView`) and an ask card's words (`ReplyBox`). The box reports its words
 /// and caret on each change; the controller says which list is open and what it holds, and a
-/// pick hands back the new words. `outgoing` turns the box's `@[label]` tokens into the
+/// pick (`pick(_:currentText:caret:)`, the one every box calls) hands back the new words. `outgoing` turns the box's `@[label]` tokens into the
 /// `<task-ref/>` markup the message carries.
 ///
 /// Cheap when nothing is open: a keystroke with no `@` or `/` before the caret writes nothing
@@ -40,14 +40,26 @@ final class ComposerSuggestController {
     @ObservationIgnored var search: (String) async throws -> [GlobalSearchResult] = { query in
         try await WalnutAPI().globalSearch(query: query, limit: 20, semanticWaitMs: 600).results
     }
-    @ObservationIgnored var loadCommands: (String?, String?) async throws -> [SlashCommand] = { cwd, host in
-        try await WalnutAPI().slashCommands(cwd: cwd, host: host).items
+    @ObservationIgnored var loadCommands: (String?, String?) async throws -> SlashCommandList = { cwd, host in
+        try await WalnutAPI().slashCommands(cwd: cwd, host: host)
     }
     /// The wait after a keystroke before the server is asked (local rows show at once).
     @ObservationIgnored var searchDelay: Duration = .milliseconds(250)
 
-    /// label -> tag for every reference picked into this box.
-    @ObservationIgnored private(set) var table: [String: String] = [:]
+    /// label -> tag for every reference picked into this box. Kept with the box's draft
+    /// (`ComposerDrafts.refs`, under `draftKey`) and read from there each time, so a box built
+    /// again, or a second box of the same draft (a thread's card on the node page and in a
+    /// task's Threads), sends the same tags.
+    private(set) var table: [String: String] {
+        get { draftKey.map { ComposerDrafts.shared.refs($0) } ?? memoryTable }
+        set {
+            if let draftKey { ComposerDrafts.shared.setRefs(newValue, key: draftKey) } else { memoryTable = newValue }
+        }
+    }
+    /// The table of a box with no draft attached.
+    @ObservationIgnored private var memoryTable: [String: String] = [:]
+    /// The draft the box writes (`attach(draftKey:)`); nil keeps the table in memory only.
+    @ObservationIgnored private(set) var draftKey: String?
     @ObservationIgnored private var text = ""
     @ObservationIgnored private var caret = 0
     /// The `@` or `/` the user closed the list of: it stays closed until the trigger moves.
@@ -63,6 +75,13 @@ final class ComposerSuggestController {
     private static let commandCacheTTL: TimeInterval = 120
 
     init() {}
+
+    /// The box writes the draft under `key`: the references picked into it before (by this box,
+    /// or by one that showed the same draft and was rebuilt since) come back with it. Cheap, so
+    /// a box may call it from every place it uses the table.
+    func attach(draftKey key: String) {
+        if draftKey != key { draftKey = key }
+    }
 
     /// The box's words or caret changed.
     func update(text: String, caret: Int) {
@@ -103,16 +122,27 @@ final class ComposerSuggestController {
         update(text: text, caret: text.utf16.count)
     }
 
-    /// The user picked `suggestion`: the box's new words and caret.
-    func pick(_ suggestion: ComposerSuggestion) -> (text: String, caret: Int)? {
-        guard let trigger else { return nil }
-        let result = ComposerRefs.apply(suggestion, to: text, trigger: trigger, table: table)
+    /// The user picked `suggestion`: the box's new words and caret, or nil when the list no
+    /// longer stands for the words. The box's words can change without a keystroke reaching
+    /// here (a dictation, a draft another box of the same thread wrote, a refused send put
+    /// back), so the trigger is read again from `currentText` first: when it moved, or the row
+    /// is no longer listed, nothing is replaced and the list shows what the words hold now.
+    /// `caret`: where the field's caret is (UTF-16), nil for a field that reports none (the
+    /// list then opens only at the end of the words).
+    func pick(_ suggestion: ComposerSuggestion, currentText: String, caret: Int?) -> (text: String, caret: Int)? {
+        let before = trigger
+        if let caret { update(text: currentText, caret: caret) } else { updateAtEnd(currentText) }
+        guard let trigger, trigger == before, suggestions.contains(suggestion) else {
+            AppLog.info("composer", "suggestion pick skipped: the words moved", ["kind": suggestion.kind.rawValue])
+            return nil
+        }
+        let result = ComposerRefs.apply(suggestion, to: currentText, trigger: trigger, table: table)
         if let entry = result.entry { table[entry.label] = entry.tag }
         AppLog.info("composer", "suggestion picked", ["kind": suggestion.kind.rawValue, "id": suggestion.id])
         self.trigger = nil
         close()
         text = result.text
-        caret = result.caret
+        self.caret = result.caret
         return (result.text, result.caret)
     }
 
@@ -140,16 +170,24 @@ final class ComposerSuggestController {
     /// tokens again and send as the same tags.
     func adopt(_ words: String) -> String {
         let split = ComposerRefs.inline(words, table: table)
-        table.merge(split.table) { _, new in new }
+        if !split.table.isEmpty { table.merge(split.table) { _, new in new } }
         return split.body
     }
 
     /// The box was sent and emptied: nothing it picked carries over.
     func reset() {
-        table = [:]
+        if !table.isEmpty { table = [:] }
         dismissedAt = nil
         trigger = nil
         close()
+    }
+
+    /// Words of the box were taken: the references only those words held go, the ones the
+    /// box still shows (`remaining`, words typed or picked while it sent) stay.
+    func forgetRefs(notIn remaining: String) {
+        let held = table
+        let kept = ComposerRefs.keep(held, shownIn: remaining)
+        if kept.count != held.count { table = kept }
     }
 
     // MARK: - Lists
@@ -222,19 +260,26 @@ final class ComposerSuggestController {
         let host = scope.commandsHost
         commandsTask = Task { [weak self] in
             guard let self else { return }
-            let result: Result<[SlashCommand], Error>
+            let result: Result<SlashCommandList, Error>
             do { result = .success(try await self.loadCommands(cwd, host)) } catch { result = .failure(error) }
             guard !Task.isCancelled else { return }
             self.commandsTask = nil
             self.commandsTaskKey = nil
             let showing = self.trigger.map { !$0.isMention } == true && self.scope.commandsKey == key
             switch result {
-            case .success(let items):
-                Self.commandCache[key] = (Date(), items)
-                AppLog.info("composer", "slash commands loaded", ["count": String(items.count), "host": host ?? ""])
+            case .success(let list):
+                let items = list.items
+                // A degraded answer (the host out of reach) is shown but never cached: the next
+                // `/` asks again instead of showing a short or empty list for two minutes.
+                let degraded = list.degraded == true
+                if !degraded { Self.commandCache[key] = (Date(), items) }
+                AppLog.info("composer", "slash commands loaded", [
+                    "count": String(items.count), "host": host ?? "", "degraded": String(degraded),
+                ])
                 guard showing, let trigger = self.trigger else { return }
                 self.setSuggestions(SlashRanking.rank(trigger.query, items))
-                if self.status != .ready { self.status = .ready }
+                let next: Status = degraded && items.isEmpty ? .failed : .ready
+                if self.status != next { self.status = next }
             case .failure(let error):
                 AppLog.warn("composer", "slash commands failed", ["error": String(describing: error), "host": host ?? ""])
                 if showing, Self.commandCache[key] == nil { self.status = .failed }

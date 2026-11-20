@@ -33,6 +33,15 @@ struct ReplyBox: View {
     var busy = false
     /// The line under the box once a send failed (its words and pictures stay in it).
     var failureNote: String? = nil
+    /// Words are the answer (an ask card): pictures go with them, never alone. A thread's
+    /// Follow up takes a picture with no words, as the web's card does.
+    var requiresWords = true
+    /// Where the open `@` or `/` list shows. Above the field, floating over what is above it
+    /// with no height of its own (a SwiftUI scroll, a thread card). A box in a `List` row (the
+    /// board's ask card) opens it under the field in the row instead: a `List` row's cell takes
+    /// no touch outside its own bounds, so a list floating above the row would pass its taps to
+    /// the row above. Under the field the field and its caret still never move.
+    var listOpensBelow = false
     let onSend: (String, [SelectedImage]) async -> Bool
 
     @Environment(TasksStore.self) private var store: TasksStore?
@@ -62,17 +71,20 @@ struct ReplyBox: View {
 
     private var blocked: Bool { sending || busy }
 
-    /// Words are the answer: pictures go with them, never alone (the web's ask card). While
-    /// Walnut's mic records, Send waits for its words (`DictationSendGate`).
+    /// What a Send takes: words, or (`requiresWords` off) pictures alone.
+    private func sendable(words: String, pictures: [SelectedImage]) -> Bool {
+        !words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!requiresWords && !pictures.isEmpty)
+    }
+
+    /// While Walnut's mic records, Send waits for its words (`DictationSendGate`).
     private var canSend: Bool {
         guard !blocked else { return false }
         return gate.isDictating || gate.isWaiting
-            || !drafts.draft(draftKey).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || sendable(words: drafts.draft(draftKey), pictures: acceptsPictures ? drafts.images(draftKey) : [])
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ComposerSuggestList(controller: suggest, onPick: pick, maxHeight: 200)
             if acceptsPictures {
                 ReplyPictureStrip(images: pictures, notice: $pictureNotice, idPrefix: idPrefix, size: 44)
             }
@@ -88,6 +100,18 @@ struct ReplyBox: View {
                     enabled: canSend || sending, waiting: sending || gate.isWaiting,
                     identifier: "\(idPrefix).send", action: { gate.send { waited in send(waited: waited) } }
                 )
+            }
+            // The open list floats over what is above the field (drawn after it, so on top) and
+            // takes no height: the field and its caret stay put, and the rows around never jump.
+            .overlay(alignment: .top) {
+                if !listOpensBelow, suggest.isOpen {
+                    ComposerSuggestList(controller: suggest, onPick: pick, maxHeight: 200)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .alignmentGuide(.top) { d in d[.bottom] + 6 }
+                }
+            }
+            if listOpensBelow {
+                ComposerSuggestList(controller: suggest, onPick: pick, maxHeight: 200)
             }
             if failed, let failureNote {
                 Text(failureNote)
@@ -107,8 +131,10 @@ struct ReplyBox: View {
         .onAppear {
             suggest.store = store
             suggest.scope = scope
+            suggest.attach(draftKey: draftKey)
         }
         .onChange(of: scope) { _, next in suggest.scope = next }
+        .onChange(of: draftKey) { _, next in suggest.attach(draftKey: next) }
         // The `/` list is read once the box is used, never for every card on a board.
         .onChange(of: focused) { _, isFocused in if isFocused { suggest.prefetchCommands() } }
         .accessibilityElement(children: .contain)
@@ -148,7 +174,8 @@ struct ReplyBox: View {
     }
 
     private func pick(_ suggestion: ComposerSuggestion) {
-        guard let result = suggest.pick(suggestion) else { return }
+        let current = drafts.draft(draftKey)
+        guard let result = suggest.pick(suggestion, currentText: current, caret: field.caret(in: current)) else { return }
         field.replace(with: result.text, caret: result.caret)
         if !focused { focused = true }
     }
@@ -177,7 +204,8 @@ struct ReplyBox: View {
             let shown = waited ? drafts.draft(draftKey) : await field.commitAndRead(fallback: drafts.draft(draftKey))
             let words = shown.trimmingCharacters(in: .whitespacesAndNewlines)
             let images = acceptsPictures ? drafts.images(draftKey) : []
-            guard !words.isEmpty else { return }
+            guard sendable(words: words, pictures: images) else { return }
+            suggest.attach(draftKey: draftKey)
             let taken = await onSend(suggest.outgoing(words), images)
             AppLog.info("composer", "reply box sent", ["box": idPrefix, "taken": String(taken), "images": String(images.count)])
             guard taken else {
@@ -196,6 +224,8 @@ struct ReplyBox: View {
             if after.words != drafts.draft(draftKey) {
                 field.replace(with: after.words, caret: (after.words as NSString).length)
             }
+            // The references only the sent words held go; the ones still in the box stay.
+            suggest.forgetRefs(notIn: after.words)
             drafts.setImages(drafts.images(draftKey).filter { after.pictures.contains($0.id) }, key: draftKey)
             if after.remainder { sentNote = "Sent: \u{201C}\(Self.clip(words))\u{201D}. What you wrote after it is still here." }
         }

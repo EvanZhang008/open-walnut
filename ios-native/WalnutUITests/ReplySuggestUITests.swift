@@ -3,8 +3,10 @@ import XCTest
 /// The `@` and `/` lists in the two reply boxes outside the chat, driven by a finger
 /// (2026-11-20, the user: "all the inbox like this should like input box ... the at works like
 /// the slash works"): a letter's reply and an ask card's words box under a task's row. Each
-/// test types `@`, sees its tasks (never the box's own task), picks one, types `/`, sees the asking session's commands,
-/// picks one and sends; the stub's record says the message carried the `<task-ref/>` tag.
+/// test types `/` at the start of the box (a session runs a command only there), sees the asking
+/// session's commands, picks one, types `@`, sees its tasks (never the box's own task), picks one
+/// and sends; the stub's record says the session got a message that starts with the command and
+/// carries the `<task-ref/>` tag.
 ///
 /// The box is `tests/ui/mid-turn-stub-server.mjs` (run through `run-ui-tests.sh`):
 /// `/__stub/letter-reply` seeds letter A from the lane session, `/__stub/work-session?on=1`
@@ -45,7 +47,7 @@ final class ReplySuggestUITests: XCTestCase {
         element(app, "inbox.letter.send").tap()
         let sent = try await waitForPost(stub, path: "/api/v1/human-inbox/lt-stub-reply-b/human-reply")
         XCTAssertTrue(sent.contains(#"<task-ref id="task-stub-other" label="Stub release notes"/>"#), "sent: \(sent)")
-        XCTAssertTrue(sent.contains("/review"), "sent: \(sent)")
+        XCTAssertTrue(sent.hasPrefix("/review "), "the command does not start the message: \(sent)")
         XCTAssertFalse(sent.contains("@["), "a token went out instead of its tag: \(sent)")
     }
 
@@ -71,25 +73,40 @@ final class ReplySuggestUITests: XCTestCase {
 
         element(app, "action.reply.ask-stub-ship.send").tap()
         let sent = try await waitForPost(stub, path: "/api/v1/sessions/sess-stub-lane/messages")
-        XCTAssertTrue(sent.hasPrefix(#"Answer to "Ship the build today?": "#), "sent: \(sent)")
+        // A command goes as typed, never inside `Answer to "..."`, so the session runs it.
+        XCTAssertTrue(sent.hasPrefix("/review "), "the session would not run the command: \(sent)")
+        XCTAssertFalse(sent.contains("Answer to"), "the command was wrapped: \(sent)")
         XCTAssertTrue(sent.contains(#"<task-ref id="task-stub-other" label="Stub release notes"/>"#), "sent: \(sent)")
-        XCTAssertTrue(sent.contains("/review"), "sent: \(sent)")
         // Taken: the item leaves the row.
         XCTAssertTrue(waitUntil(timeout: 10) { !field.exists }, "the answered item stayed")
     }
 
     // MARK: - Shared steps
 
-    /// `@` opens the task list (the box's own task left out), a pick puts its token in the
-    /// box; `/` opens the session's commands, a pick puts `/review` in.
+    /// `/` at the start of the box opens the session's commands, a pick puts `/review` in;
+    /// then `@` opens the task list (the box's own task left out), a pick puts its token in.
     @MainActor
     private func pickBothLists(_ app: XCUIApplication, _ stub: Stub, field: XCUIElement, shots: String,
                                excludes: String? = nil, pick: String = "task:task-stub-other",
                                pickedToken: String = "@[Stub release notes]") async throws {
         focus(field, app)
         clear(field)
-        field.typeText("Please check @")
+        field.typeText("/")
         let list = element(app, "composer.suggest.list")
+        XCTAssertTrue(list.waitForExistence(timeout: 10), "no / list")
+        XCTAssertEqual(element(app, "composer.suggest.header").label, "Commands")
+        let review = element(app, "composer.suggest.row.command:review")
+        XCTAssertTrue(review.waitForExistence(timeout: 15), "the session's commands never came")
+        XCTAssertTrue(element(app, "composer.suggest.row.command:deploy-check").exists)
+        try await stub.screenshot(app, "\(shots)-slash-list")
+        field.typeText("re")
+        XCTAssertTrue(waitUntil(timeout: 5) { !self.element(app, "composer.suggest.row.command:deploy-check").exists },
+                      "typing did not narrow the commands")
+        review.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { self.text(field) == "/review " }, "field: \(text(field))")
+        XCTAssertTrue(waitUntil(timeout: 5) { !list.exists }, "the list stayed open after the pick")
+
+        field.typeText("please check @")
         XCTAssertTrue(list.waitForExistence(timeout: 10), "no @ list")
         XCTAssertEqual(element(app, "composer.suggest.header").label, "Tasks and sessions")
         let row = element(app, "composer.suggest.row.\(pick)")
@@ -101,19 +118,7 @@ final class ReplySuggestUITests: XCTestCase {
         row.tap()
         XCTAssertTrue(waitUntil(timeout: 5) { self.text(field).contains(pickedToken) }, "field: \(text(field))")
         XCTAssertTrue(waitUntil(timeout: 5) { !list.exists }, "the list stayed open after the pick")
-
-        field.typeText("then /")
-        XCTAssertTrue(list.waitForExistence(timeout: 10), "no / list")
-        XCTAssertEqual(element(app, "composer.suggest.header").label, "Commands")
-        let review = element(app, "composer.suggest.row.command:review")
-        XCTAssertTrue(review.waitForExistence(timeout: 15), "the session's commands never came")
-        XCTAssertTrue(element(app, "composer.suggest.row.command:deploy-check").exists)
-        try await stub.screenshot(app, "\(shots)-slash-list")
-        field.typeText("re")
-        XCTAssertTrue(waitUntil(timeout: 5) { !self.element(app, "composer.suggest.row.command:deploy-check").exists },
-                      "typing did not narrow the commands")
-        review.tap()
-        XCTAssertTrue(waitUntil(timeout: 5) { self.text(field).hasSuffix("/review ") }, "field: \(text(field))")
+        XCTAssertTrue(text(field).hasPrefix("/review "), "field: \(text(field))")
         try await stub.screenshot(app, "\(shots)-picked")
     }
 

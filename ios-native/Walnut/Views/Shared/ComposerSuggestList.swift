@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// The open `@` or `/` list of a box (`ComposerSuggestController`), drawn the same in every
 /// box: the chat and session composers, a letter's reply and an ask card. A tap picks a row;
@@ -22,6 +23,8 @@ struct ComposerSuggestList: View {
             .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("composer.suggest.list")
+            // VoiceOver hears that rows came up beside the field it is in.
+            .onAppear { UIAccessibility.post(notification: .layoutChanged, argument: nil) }
         }
     }
 
@@ -87,6 +90,7 @@ struct ComposerSuggestList: View {
                 .font(.subheadline)
                 .foregroundStyle(row.live ? Theme.success : .secondary)
                 .frame(width: 18)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text(row.title).font(.subheadline).foregroundStyle(.primary).lineLimit(1)
                 if let detail = row.detail {

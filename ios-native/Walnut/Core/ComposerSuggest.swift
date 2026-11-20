@@ -34,9 +34,11 @@ enum ComposerTrigger: Equatable {
 
     /// The trigger the caret sits in, or nil.
     ///
-    /// `@` and `/` fire only at the start of the text or right after whitespace, so an address
-    /// (`a@b`), a path (`src/foo`) or a URL never opens a list. A `/` query stops at whitespace
-    /// or a second `/` (a path like `/Users/me`). An `@` query may grow across single spaces
+    /// `@` fires only at the start of the text or right after whitespace, so an address (`a@b`)
+    /// never opens a list. `/` fires only at the very start of the box: a session runs a
+    /// command only when its message starts with it, so a `/name` later in the words would go
+    /// out as plain text (and a path or a URL never opens a list). A `/` query stops at
+    /// whitespace or a second `/` (a path like `/Users/me`). An `@` query may grow across single spaces
     /// only while its list is already open for that very `@` (`openMentionAt`), so a stray `@`
     /// in prose never captures the rest of the sentence. `@[label]` is a reference already in
     /// the box, not a lookup. `commands: false` (a box with no session) never opens `/`.
@@ -97,7 +99,7 @@ enum ComposerTrigger: Equatable {
     }
 
     private static func detectCommand(_ ns: NSString, caret: Int) -> ComposerTrigger? {
-        guard let slash = lastIndex(of: 0x2F, in: ns, before: caret), followsSpaceOrStart(ns, slash) else { return nil }
+        guard let slash = lastIndex(of: 0x2F, in: ns, before: caret), slash == 0 else { return nil }
         let query = ns.substring(with: NSRange(location: slash + 1, length: caret - slash - 1))
         if query.contains(where: { $0.isWhitespace || $0 == "/" }) { return nil }
         return .command(start: slash, query: query)
@@ -163,6 +165,17 @@ enum ComposerRefs {
         }
         out += ns.substring(from: last)
         return out
+    }
+
+    /// The part of `table` whose tokens `text` still shows.
+    static func keep(_ table: [String: String], shownIn text: String) -> [String: String] {
+        guard !table.isEmpty else { return table }
+        guard let regex = tokenRegex else { return table }
+        let ns = text as NSString
+        let shown = Set(regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).map {
+            ns.substring(with: $0.range(at: 1))
+        })
+        return table.filter { shown.contains($0.key) }
     }
 
     private static let tagRegex = try? NSRegularExpression(

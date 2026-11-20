@@ -970,6 +970,7 @@ struct LetterReaderView: View {
         .joinsSendGate(sendGate, voice: voice, key: letterId) { text in insertTranscript(text, focus: false) }
         .onAppear { scopeSuggest() }
         .onChange(of: letter?.sender) { _, _ in scopeSuggest() }
+        .onChange(of: letterId) { _, _ in scopeSuggest() }
         // The sender's session can reach the phone after the letter: its folder names the `/` list.
         .onChange(of: senderSessionCwd) { _, _ in scopeSuggest() }
         // The `/` list is read once the box is used.
@@ -986,8 +987,13 @@ struct LetterReaderView: View {
         return tasks.sessions.first { $0.id == sid }?.cwd
     }
 
+    /// The draft key the reply's references are kept under (`ComposerDrafts.refs`), beside the
+    /// words `LetterReplyStore` keeps.
+    static func replyRefsKey(_ letterId: String) -> String { "letter-reply:\(letterId)" }
+
     private func scopeSuggest() {
         suggest.store = tasks
+        suggest.attach(draftKey: Self.replyRefsKey(letterId))
         let sender = letter?.sender
         let session = sender?.sessionId.flatMap { id in tasks.sessions.first { $0.id == id } }
         suggest.scope = .init(
@@ -997,7 +1003,8 @@ struct LetterReaderView: View {
     }
 
     private func pickSuggestion(_ suggestion: ComposerSuggestion) {
-        guard let result = suggest.pick(suggestion) else { return }
+        let current = replies.draft(for: letterId)
+        guard let result = suggest.pick(suggestion, currentText: current, caret: replyField.caret(in: current)) else { return }
         replyField.replace(with: result.text, caret: result.caret)
         if !replyFocused { replyFocused = true }
     }

@@ -1035,13 +1035,15 @@ struct OrgThreadCard: View {
     private var followUpBox: some View {
         let key = followUpKey
         return ReplyBox(
-            placeholder: "Follow up on this request", draftKey: key, idPrefix: "org.thread.followUp",
+            placeholder: "Follow up on this request", draftKey: key, idPrefix: OrgThreadFollowUpDraft.idPrefix(threadId: t.id),
             scope: followUpScope,
             fieldLabel: "Follow up on \u{201C}\(t.title)\u{201D}",
             voiceBox: "thread-follow-up",
             draftFamily: (OrgThreadFollowUpDraft.prefix, OrgThreadFollowUpDraft.kept),
             busy: OrgThreadFollowUpSends.shared.inFlight.contains(key),
-            failureNote: "Not sent. Your words and pictures are still here."
+            failureNote: "Not sent. Your words and pictures are still here.",
+            // A picture alone is a Follow up too.
+            requiresWords: false
         ) { text, images in
             guard OrgThreadFollowUpSends.shared.begin(key) else { return false }
             defer { OrgThreadFollowUpSends.shared.end(key) }
@@ -1198,6 +1200,10 @@ enum OrgThreadFollowUpDraft {
     nonisolated static let kept = 10
 
     nonisolated static func key(nodeId: String, threadId: String) -> String { "\(prefix)\(nodeId)/\(threadId)" }
+
+    /// The box's identifiers on a thread's card (`<this>.input`, `<this>.send`, ...): one per
+    /// thread, so each card's field and Send are told apart.
+    nonisolated static func idPrefix(threadId: String) -> String { "org.thread.followUp.\(threadId)" }
 }
 
 /// The Follow ups on their way, by draft key: one at a time per thread, across boxes (a card

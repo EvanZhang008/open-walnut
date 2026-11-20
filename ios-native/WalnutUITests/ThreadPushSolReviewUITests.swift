@@ -72,7 +72,7 @@ final class ThreadPushSolReviewUITests: XCTestCase {
 
     /// The Follow up box on a thread's card, there with no tap.
     private func followUp(_ thread: String) -> XCUIElement {
-        el("org.thread.\(thread)").descendants(matching: .any).matching(identifier: "org.thread.followUp.input").firstMatch
+        el("org.thread.\(thread)").descendants(matching: .any).matching(identifier: ThreadFollowUpID.of(thread, "input")).firstMatch
     }
 
     func testPushKeepsTheUnsentFollowUpDraftInItsCard() throws {

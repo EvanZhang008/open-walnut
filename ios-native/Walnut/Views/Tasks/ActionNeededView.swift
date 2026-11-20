@@ -95,6 +95,26 @@ enum ActionNeededModel {
         "About the approval \"\(summary)\": \(words)"
     }
 
+    /// Whether the box lists the session's `/` commands: only where its words reach the
+    /// session as a message of their own (`sessionMessage`). A declined step's words and a
+    /// question's answer are tool answers, where a command never runs.
+    static func takesCommands(_ words: Words) -> Bool {
+        switch words {
+        case .approvalNote, .sessionAnswer, .letterReply: return true
+        case .declineStep, .questionAnswer, .none: return false
+        }
+    }
+
+    /// The message a session gets for an approval note or an answer. Words that start with a
+    /// `/` command go as they are: the session runs a command only at the start of a message,
+    /// so the `Answer to "..."` wrapper would turn it into plain text.
+    static func sessionMessage(_ words: Words, summary: String, text: String) -> String {
+        if text.hasPrefix("/") { return text }
+        return words == .approvalNote
+            ? approvalMessage(summary: summary, words: text)
+            : answerMessage(summary: summary, words: text)
+    }
+
     /// The snooze presets, the web's "In 1 hour" first.
     static func presets(now: Date = Date(), calendar: Calendar = .current) -> [(id: String, label: String, until: Date)] {
         let nine = { (d: Date) in calendar.date(bySettingHour: 9, minute: 0, second: 0, of: d) ?? d }
@@ -255,10 +275,15 @@ struct ActionNeededView: View {
                 placeholder: ActionNeededModel.placeholder(words),
                 draftKey: "ask-reply:\(task.id):\(item.id)",
                 idPrefix: "action.reply.\(item.id)",
-                scope: .init(selfTaskId: task.id, commands: sid != nil, commandsCwd: session?.cwd, commandsHost: session?.host),
+                scope: .init(selfTaskId: task.id, commands: sid != nil && ActionNeededModel.takesCommands(words),
+                             commandsCwd: session?.cwd, commandsHost: session?.host),
                 acceptsPictures: true,
                 // Walnut's mic beside the words, as on every box he answers in.
-                voiceBox: "ask-reply"
+                voiceBox: "ask-reply",
+                // A failed send says so in its own box, which keeps the words and pictures.
+                failureNote: "Not sent. Your words are still here. Try again.",
+                // A board row is a `List` cell: the list opens in the row, under the field.
+                listOpensBelow: true
             ) { text, images in
                 await sendWords(item, words: words, sessionID: sid, text: text, images: images)
             }
@@ -288,7 +313,7 @@ struct ActionNeededView: View {
                 sent.insert(item.id)
             case .approvalNote:
                 guard let sid else { return false }
-                _ = try await api.sendSessionMessage(id: sid, text: ActionNeededModel.approvalMessage(summary: item.summary, words: text), images: payloads)
+                _ = try await api.sendSessionMessage(id: sid, text: ActionNeededModel.sessionMessage(words, summary: item.summary, text: text), images: payloads)
                 notes[item.id] = "Sent to its session. The approval still waits for Approve or Deny."
             case .declineStep:
                 guard let sid else { return false }
@@ -300,7 +325,7 @@ struct ActionNeededView: View {
                 sent.insert(item.id)
             case .sessionAnswer:
                 guard let sid else { return false }
-                _ = try await api.sendSessionMessage(id: sid, text: ActionNeededModel.answerMessage(summary: item.summary, words: text), images: payloads)
+                _ = try await api.sendSessionMessage(id: sid, text: ActionNeededModel.sessionMessage(words, summary: item.summary, text: text), images: payloads)
                 sent.insert(item.id)
             }
             AppLog.info("action-needed", "answered in words", [
@@ -308,8 +333,8 @@ struct ActionNeededView: View {
             ])
             return true
         } catch {
+            // The box says it under its words (`failureNote`); the block's line is for the rest.
             AppLog.warn("action-needed", "words not sent", ["taskId": task.id, "itemId": item.id, "error": String(describing: error)])
-            self.error = "Not sent. Try again."
             return false
         }
     }

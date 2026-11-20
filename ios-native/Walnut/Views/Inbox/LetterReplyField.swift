@@ -294,6 +294,15 @@ final class LetterReplyFieldController {
         if let coordinator, !coordinator.parent.text.isEmpty { coordinator.parent.text = "" }
     }
 
+    /// Where the caret is (UTF-16) when the field on screen shows `text`, for a pick from the
+    /// `@` or `/` list (`ComposerSuggestController.pick`). A selection reads as -1 (no list);
+    /// nil when the field is gone or shows other words, so the pick reads the words' end.
+    func caret(in text: String) -> Int? {
+        guard let view = textView, view.markedTextRange == nil, (view.text ?? "") == text else { return nil }
+        let selection = view.selectedRange
+        return selection.length == 0 ? selection.location : -1
+    }
+
     /// Put a pick from the `@` or `/` list into the field (the view itself, then the binding,
     /// so `updateUIView` finds them equal and leaves the caret where it is put).
     func replace(with text: String, caret: Int) {

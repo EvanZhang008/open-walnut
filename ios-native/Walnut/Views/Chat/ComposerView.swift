@@ -1860,12 +1860,17 @@ struct ComposerBar: View {
             // names the real ceiling); this covers every other refusal, where the
             // text reappearing with no explanation reads as a bug.
             if disposition == .returnedToDraft { refusedNotice = Self.refusedNotice }
+            // Taken: the references only the sent words held go; any picked meanwhile stay.
+            if disposition == .kept, suggestScope != nil, suggest.draftKey == draftKey {
+                suggest.forgetRefs(notIn: drafts.draft(draftKey))
+            }
         }
     }
 
     /// Words -> message: each `@[label]` this composer picked becomes its tag.
     private func composeRefs() -> (String) -> String {
         guard suggestScope != nil else { return { $0 } }
+        suggest.attach(draftKey: draftKey)
         let table = suggest.table
         return { ComposerRefs.compose($0, table: table) }
     }
@@ -1874,14 +1879,14 @@ struct ComposerBar: View {
     private func feedSuggest(_ text: String) {
         if suggest.store == nil { suggest.store = suggestStore }
         if let scope = suggestScope, suggest.scope != scope { suggest.scope = scope }
+        suggest.attach(draftKey: draftKey)
         suggest.updateAtEnd(text)
     }
 
     private func pickSuggestion(_ suggestion: ComposerSuggestion) {
-        // The draft can change without the field (a refused send put back, a transcript):
-        // pick against the words the box holds now, and only while the list still stands.
-        suggest.updateAtEnd(drafts.draft(draftKey))
-        guard suggest.suggestions.contains(suggestion), let result = suggest.pick(suggestion) else { return }
+        // The field reports no caret: the pick reads the words the draft holds now, at their end.
+        suggest.attach(draftKey: draftKey)
+        guard let result = suggest.pick(suggestion, currentText: drafts.draft(draftKey), caret: nil) else { return }
         drafts.setDraft(result.text, key: draftKey)
         if useLongDraftEditor { longDraftFocused = true } else { focused = true }
     }
