@@ -40,7 +40,8 @@
 .org-thread-summary.is-stand-in p { margin: 0; }
 .org-thread-stand-in-note { display: block; margin-top: 2px; font-size: 11px; color: var(--fg-muted, #86868b); }
 /* His reply a card below sent: his words, then whether its task read them (PoppedThreadCard). */
-.org-thread-sent { margin: 0; padding: 4px 8px; border-left: 2px solid var(--accent, #0a84ff); }
+/* A tint, never a bar down one side (no-side-bars.test.ts). */
+.org-thread-sent { margin: 0; padding: 4px 8px; border-radius: 6px; background: color-mix(in srgb, var(--accent, #0a84ff) 8%, transparent); }
 .org-thread-sent-words { margin: 0; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .org-thread-overdue { margin: 0; font-size: 12px; color: color-mix(in srgb, var(--warning, #ff9f0a) 75%, var(--fg, #1d1d1f)); }
 /* The node's summary: what the card is about now, latest first. */
