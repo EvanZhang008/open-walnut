@@ -7,10 +7,11 @@
  *
  *   {cmd:'replica.sync', params:{home, kind, entries, asOf, opts?, confirm?, confirmFor?, manifestId?}} -> {ok, need, entries, held, removed}
  *     or, the changes since the manifest this copy took last: {..., base, changed, removed, manifestId} with no
- *     `entries` (providers/host-replica-core.ts ReplicaManifestRef); an unknown base -> errorKind manifest_base_unknown
+ *     `entries` (providers/host-replica-core.ts ReplicaManifestRef); an unknown base -> errorKind manifest_base_unknown;
+ *     either may carry `renamed: [[old, new], ...]` (host-replica-moves-v1, core/replication/manifest-moves.ts)
  *   {cmd:'replica.put',  params:{home, kind, files}}  -> {ok, stored, rejected, remaining}
  *   {cmd:'replica.drop', params:{home, kind}}         -> {ok, dropped}
- *   {cmd:'replica.status'}                            -> {ok, kinds}
+ *   {cmd:'replica.status'}                            -> {ok, kinds, features}
  *
  * And the pictures and files of the notes (stage 4d, core/companion-attachment-copy.ts),
  * the copy a host daemon keeps too: `attachments.sync` {entries:[{k,h,n}], asOf} -> {ok, need, ...},
@@ -28,7 +29,11 @@ import { companionAttachmentCommand } from '../../core/companion-attachment-copy
 import { authenticate, parseErrors } from './bridge-ingest.js'
 
 export const BRIDGE_HOST_REPLICA_PATH = '/bridge/host-replica'
-/** A put batch is 512 KB of bodies (a note is at most 1 MB), a picture chunk 2 MB (base64); a manifest of 20,000 notes stays under it. */
+/**
+ * A put batch is 512 KB of bodies (a note is at most 1 MB), a picture chunk 2 MB (base64). A whole
+ * manifest of 20,000 notes is about 4 MB; the round a move reaches a copy that still holds the old
+ * keys adds its `renamed` pairs (about 130 bytes each, under 3 MB), so even that round stays under it.
+ */
 const BODY_LIMIT = '8mb'
 
 async function hostReplica(req: Request, res: Response): Promise<void> {

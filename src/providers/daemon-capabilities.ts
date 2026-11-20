@@ -502,6 +502,15 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // this host no pictures and a replica here shows them only while the Mac answers.
   // The Mac's own daemon is never sent them: it shares the vault's disk.
   'attachment-copy-v1',
+  // 'host-replica-moves-v1' (core/replication/manifest-moves.ts): `replica.sync` and
+  // `attachments.sync` take `renamed: [[oldKey, newKey], ...]` beside the manifest. Before
+  // the half rule counts, the copy moves each row it holds at oldKey to newKey (only when
+  // newKey is not held yet, the manifest names it and no away write holds either key),
+  // keeping its body, so a move of most notes (the one tree, notes_unified) is no removal
+  // of most of the copy. The rule itself is unchanged. Both twins (the cores are
+  // text-injected); the companion says it in its `replica.status` features. Optional:
+  // without it the leader sends no `renamed` and a move goes as removals and additions.
+  'host-replica-moves-v1',
   // 'replica-host-v1' (docs/plan/walnut-replica-servers-impl.md, WP2): this daemon
   // may run the full server program as its host's replica (`web --replica`).
   // It calls the Mac away by ONE window, LEADER_QUIET_MS (env

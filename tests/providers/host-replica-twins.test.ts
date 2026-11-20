@@ -120,6 +120,22 @@ describe('the source twin template', () => {
     expect(rendered).toContain(text)
   })
 
+  it('advertises host-replica-moves-v1 like the bun twin, and its inlined cores take renamed', () => {
+    expect(ADVERTISED_DAEMON_CAPABILITIES).toContain('host-replica-moves-v1')
+    expect(REQUIRED_DAEMON_CAPABILITIES as readonly string[]).not.toContain('host-replica-moves-v1')
+    const rendered = getDaemonSource()
+    expect(rendered).toContain('"host-replica-moves-v1"')
+    // The cores' text as the source twin runs it: the moves are in it, the command handlers hand them on whole.
+    for (const core of [createHostReplica, createAttachmentCopy]) {
+      expect(core.toString()).toContain('renamed')
+      expect(rendered).toContain(core.toString())
+    }
+    for (const src of Object.values(twins)) {
+      expect(fnBody(src, 'cmdReplica')).toMatch(/\{ confirm: cmd\.confirm, confirmFor: cmd\.confirmFor \}, cmd\)/)
+      expect(fnBody(src, 'cmdAttachments')).toMatch(/attachmentCopy\.command\(cmd\.home( as string)?, cmd\.cmd, cmd\)/)
+    }
+  })
+
   it('inlines the attachments copy core the companion runs too', () => {
     const rendered = getDaemonSource()
     expect(rendered).not.toContain('__CREATE_ATTACHMENT_COPY__')

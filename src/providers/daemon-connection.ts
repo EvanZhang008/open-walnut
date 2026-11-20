@@ -2511,8 +2511,10 @@ export class DaemonConnection {
   pushHostReplica(): void {
     if (this.isReadOnlyRemote || !this._connected || !this.hasCapability('host-replica-v1')) return
     const attachments = this.hostKey !== '__local__' && this.hasCapability('attachment-copy-v1')
+    // 'host-replica-moves-v1': the copy takes the files that moved as moves (core/replication/manifest-moves.ts).
+    const moves = this.hasCapability('host-replica-moves-v1')
     void import('../core/host-replica.js')
-      .then((m) => m.syncHostReplica({ hostKey: this.hostKey, attachments, send: (cmd, params, timeoutMs) => this.send(cmd, params, timeoutMs) }))
+      .then((m) => m.syncHostReplica({ hostKey: this.hostKey, attachments, moves, send: (cmd, params, timeoutMs) => this.send(cmd, params, timeoutMs) }))
       .catch((err) => log.session.warn('DaemonConnection: host replica round failed', { host: this.hostKey, error: err instanceof Error ? err.message : String(err) }))
   }
 

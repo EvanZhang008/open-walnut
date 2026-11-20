@@ -412,5 +412,26 @@ for (const twin of twinsToRun) {
       // Memory and skills are still kept.
       expect(await gatewayCall(d, 'memory_read', { doc: 'global' })).toMatchObject({ ok: true })
     }, 60_000)
+
+    it('takes the leader\'s moves (host-replica-moves-v1): a move of most of the copy with renamed, refused without it', async () => {
+      proxy.close()
+      proxy = freezableProxy(d.port)
+      primary = new Primary(await proxy.listen(), twin)
+      await primary.connect()
+      const hello = await primary.send('hello', {})
+      expect(hello.capabilities as string[]).toContain('host-replica-moves-v1')
+      expect((await primary.send('host.slice', { slice: slice(d) })).ok).toBe(true)
+      const body = (i: number) => `# Day ${i}\nShipped build ${i}.`
+      const list = (prefix: string) => Array.from({ length: 250 }, (_, i) => ({ k: `${prefix}day-${i}.md`, h: sha12(body(i)), n: Buffer.byteLength(body(i)), m: { title: `Day ${i}` } }))
+      const first = await primary.send('replica.sync', { home: WALNUT_HOME, kind: 'notes', entries: list('acme/'), asOf: Date.now() })
+      expect(first, JSON.stringify(first)).toMatchObject({ ok: true })
+      expect(await primary.send('replica.put', { home: WALNUT_HOME, kind: 'notes', files: (first.need as string[]).map((k) => ({ k, body: body(Number(/day-(\d+)/.exec(k)![1])) })) })).toMatchObject({ ok: true, stored: 250 })
+      const moved = list('projects/Acme/notes/')
+      expect(await primary.send('replica.sync', { home: WALNUT_HOME, kind: 'notes', entries: moved, asOf: Date.now() })).toMatchObject({ ok: false, errorKind: 'manifest_removes_most_rows' })
+      const renamed = moved.map((e, i) => [`acme/day-${i}.md`, e.k])
+      expect(await primary.send('replica.sync', { home: WALNUT_HOME, kind: 'notes', entries: moved, asOf: Date.now(), renamed })).toMatchObject({ ok: true, need: [], removed: 0, moved: 250 })
+      expect(await primary.send('replica.status', { home: WALNUT_HOME })).toMatchObject({ ok: true, kinds: { notes: { entries: 250, pending: 0 } } })
+      primary.close()
+    }, 60_000)
   })
 }

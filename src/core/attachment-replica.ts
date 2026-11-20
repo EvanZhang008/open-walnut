@@ -30,6 +30,7 @@ import { notesRoot } from './notes/note-paths.js'
 import { log } from '../logging/index.js'
 import { MAX_UPLOAD_FRAME_BYTES } from '../providers/ssh-upload-budget.js'
 import { leftOut } from './replication/keep-rule.js'
+import { recordMoves } from './replication/manifest-moves.js'
 
 const MAX_FILES = 20_000
 const MAX_FILE_BYTES = 50 * 1024 * 1024
@@ -47,7 +48,8 @@ export interface AttachmentEntry { k: string; h: string; n: number; mtimeMs: num
 
 type Send = (cmd: string, params: Record<string, unknown>, timeoutMs?: number) => Promise<Record<string, unknown>>
 /** Where a round goes: a host's daemon link or the companion's door (core/host-replica.ts ReplicaTarget). */
-export interface AttachmentTarget { hostKey: string; send: Send }
+/** `moves`: the target takes `renamed` beside the manifest (core/replication/manifest-moves.ts). */
+export interface AttachmentTarget { hostKey: string; send: Send; moves?: boolean }
 export interface AttachmentKeep { on: boolean; exclude: string[] }
 
 const statCache = new Map<string, { mtimeMs: number; size: number; h: string }>()
@@ -158,11 +160,13 @@ interface TargetState {
   running: boolean
   again: ReturnType<typeof setTimeout> | null
   unsupportedUntil: number
+  /** The one tree's moves went with a manifest the target took (on this connection). */
+  movesTaken: boolean
 }
 const states = new Map<string, TargetState>()
 function stateOf(hostKey: string): TargetState {
   let s = states.get(hostKey)
-  if (!s) { s = { memo: null, dropped: false, running: false, again: null, unsupportedUntil: 0 }; states.set(hostKey, s) }
+  if (!s) { s = { memo: null, dropped: false, running: false, again: null, unsupportedUntil: 0, movesTaken: false }; states.set(hostKey, s) }
   return s
 }
 
@@ -200,9 +204,14 @@ export async function syncAttachments(target: AttachmentTarget, keep: Attachment
     const manifest = entries.map(({ k, h, n }) => ({ k, h, n }))
     const hash = crypto.createHash('sha256').update(JSON.stringify(manifest)).digest('hex')
     if (s.memo?.hash === hash) return { action: 'unchanged', entries: entries.length }
+    // The one tree's moves (notes_unified): a file the move put elsewhere moves in the copy too,
+    // so the half rule counts only files really gone. The leader keeps no manifest per target
+    // here, so the record names them; once taken they go no more on this connection.
+    const renamed = target.moves && !s.movesTaken ? recordMoves(manifest) : []
     // `exclude`: the folders the user left out, so the copy drops them however many files they hold.
-    const reply = await target.send('attachments.sync', { home, entries: manifest, asOf: Date.now(), exclude: keep.exclude })
+    const reply = await target.send('attachments.sync', { home, entries: manifest, asOf: Date.now(), exclude: keep.exclude, ...(renamed.length ? { renamed } : {}) })
     if (reply.ok !== true) return { action: 'failed', error: String(reply.error ?? 'refused') }
+    if (renamed.length) s.movesTaken = true
     const need = Array.isArray(reply.need) ? (reply.need as unknown[]).filter((k): k is string => typeof k === 'string') : []
     const have = (reply.have && typeof reply.have === 'object' ? reply.have : {}) as Record<string, unknown>
     const byKey = new Map(entries.map((e) => [e.k, e]))
@@ -248,6 +257,7 @@ export function forgetAttachments(hostKey: string): void {
   s.memo = null
   s.dropped = false
   s.unsupportedUntil = 0
+  s.movesTaken = false
 }
 
 /** Tests: no state, no round armed. */

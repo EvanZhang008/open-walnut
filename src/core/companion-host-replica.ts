@@ -19,6 +19,7 @@ import { WALNUT_HOME } from '../constants.js'
 import { log } from '../logging/index.js'
 import { createHostReplica, type HostReplica, type ReplicaJournalView, type ReplicaKind } from '../providers/host-replica-core.js'
 import { followerKind } from './server-role.js'
+import { HOST_REPLICA_MOVES } from './replication/manifest-moves.js'
 
 /** The one home this copy keeps (its files are named by it). */
 export const COMPANION_REPLICA_HOME = 'mac'
@@ -93,7 +94,8 @@ export function companionHostReplicaCommand(cmd: unknown, params: Record<string,
       case 'replica.drop':
         return changed({ ok: true, ...r.drop(home, params.kind) })
       case 'replica.status':
-        return { ok: true, kinds: r.status(home) }
+        // `features`: what this build's copy takes beyond a daemon's 'host-replica-v1' (the Mac reads it per round).
+        return { ok: true, kinds: r.status(home), features: [HOST_REPLICA_MOVES] }
       default:
         return { ok: false, error: 'unknown command', errorKind: 'bad_request' }
     }

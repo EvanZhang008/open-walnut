@@ -17,7 +17,9 @@
  *            pictures, keepOwn): kept as this side's own row until a manifest from
  *            after the ack names the path, or 10 minutes.
  *   bounds   at most 20,000 files of at most 50 MB. A manifest that removes most of a
- *            copy of 200 or more files is refused, as the notes copy refuses one.
+ *            copy of 200 or more files is refused, as the notes copy refuses one. Files
+ *            the leader says moved (`renamed`, host-replica-moves-v1) move first and
+ *            are not counted as removed.
  *
  * Layout per home (dirOf): index.json, b/<sha256> (the bytes), p/<sha256>.part.
  *
@@ -153,7 +155,11 @@ export function createAttachmentCopy(deps: AttachmentCopyDeps) {
     // Every blob is named by a row (collect removes the rest), so a first fill of
     // 20,000 files never stats each one.
     const stored = new Set(Object.values(st.rows).map((r) => r.h).filter(Boolean))
-    const removing = Object.keys(st.rows).filter((k) => !seen.has(k) && !ownHeld(st.rows[k]!, at, t))
+    // 'host-replica-moves-v1': files the leader says moved (`renamed`) are no removal; their rows
+    // move before the half rule counts, keeping their bytes (stored once per hash anyway).
+    const moves = movesOf(st, params.renamed, seen, at, t)
+    const movedFrom = new Set(moves.map((m) => m[0]))
+    const removing = Object.keys(st.rows).filter((k) => !seen.has(k) && !ownHeld(st.rows[k]!, at, t) && !movedFrom.has(k))
     const local = Object.keys(st.rows).length
     // The folders the user left out (`exclude`, sent by a newer leader) go however many files they hold.
     const exclude = Array.isArray(params.exclude)
@@ -166,6 +172,8 @@ export function createAttachmentCopy(deps: AttachmentCopyDeps) {
       deps.log('warn', 'attachments copy: a manifest that removes most of the copy was refused', { local, removing: removing.length, entries: seen.size })
       return refused('manifest_removes_most_rows', 'the manifest would remove ' + removing.length + ' of ' + local + ' files kept here', { local, removing: removing.length, entries: seen.size })
     }
+    for (const [o, n] of moves) { st.rows[n] = st.rows[o]!; delete st.rows[o] }
+    if (moves.length) deps.log('info', 'attachments copy: files the leader moved were kept under their new paths', { moved: moves.length })
     const freed: string[] = []
     for (const k of removing) { const r = st.rows[k]!; freed.push(r.h, r.want || ''); delete st.rows[k] }
     const need: string[] = []
@@ -197,7 +205,32 @@ export function createAttachmentCopy(deps: AttachmentCopyDeps) {
     for (const k of need.slice(0, 2_000)) {
       try { const size = (await fsp.stat(partFile(home, st.rows[k]!.want!))).size; if (size > 0) have[k] = size } catch { /* none yet */ }
     }
-    return { ok: true, need, have, entries: seen.size, removed: removing.length, held }
+    return { ok: true, need, have, entries: seen.size, removed: removing.length, held, ...(moves.length ? { moved: moves.length } : {}) }
+  }
+
+  /**
+   * The moves of `raw` this copy takes: a row held at the old path (one the manifest does not
+   * name, and not this side's own row still awaited), a new path the manifest names and no row
+   * holds, each path once. The new path passed the manifest's own checks (it is in `seen`).
+   */
+  function movesOf(st: State, raw: unknown, seen: Map<string, { h: string; n: number }>, at: number, t: number): Array<[string, string]> {
+    const list = Array.isArray(raw) ? (raw as unknown[]) : []
+    if (list.length === 0 || list.length > MAX_FILES) return []
+    const own = (k: string): boolean => Object.prototype.hasOwnProperty.call(st.rows, k)
+    const olds = new Set<string>()
+    const news = new Set<string>()
+    const out: Array<[string, string]> = []
+    for (const pair of list) {
+      if (!Array.isArray(pair) || pair.length !== 2) continue
+      const o = keyOf(pair[0])
+      const n = keyOf(pair[1])
+      if (!o || !n || o === n || olds.has(o) || news.has(n)) continue
+      if (!own(o) || own(n) || seen.has(o) || !seen.has(n) || ownHeld(st.rows[o]!, at, t)) continue
+      olds.add(o)
+      news.add(n)
+      out.push([o, n])
+    }
+    return out
   }
 
   /** sha256 of a file, read in slices (a 50 MB file never blocks the loop in one call). */

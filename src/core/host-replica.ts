@@ -42,6 +42,9 @@ import { cleanKeepEntries, leftOut } from './replication/keep-rule.js'
 import { companionKeepOf } from './replication/companion-keep.js'
 import { noteRoundFailure, noteRoundReached } from './replication/round-outage.js'
 import { CLOUD_BOX_HOST_ALIAS } from './hosts/cloud-box-host.js'
+import { HOST_REPLICA_MOVES, mergeMoves, pairMoves, recordMoves, vaultMoveLookups, type MovePair } from './replication/manifest-moves.js'
+import { noteMoves } from './notes/note-path-moves.js'
+import { walnutOwnedNote } from './notes/vault-files.js'
 
 export type ReplicaKind = 'notes' | 'memory' | 'skills'
 export const REPLICA_KINDS: readonly ReplicaKind[] = ['notes', 'memory', 'skills']
@@ -124,17 +127,22 @@ async function noteMeta(rel: string, content: string, mtimeMs: number): Promise<
 /** Walks in progress: the hosts' rounds a note edit starts together share one walk of the vault. */
 const walking = new Map<string, Promise<ReplicaEntry[]>>()
 
-/** Every note this host may keep: `.md` files, no dot folders, no attachment folder, none left out. */
+/**
+ * Every note this host may keep: `.md` files, no dot folders, no attachment folder, none left out.
+ * In the one tree (notes_unified) the vault is the whole artifacts folder: Walnut's own memory and
+ * skills there (memory/, skills/, projects/<p>/memory|skills/) are their own kinds, never notes.
+ */
 export function noteEntries(exclude: string[], root = notesRoot()): Promise<ReplicaEntry[]> {
-  const key = JSON.stringify([root, exclude])
+  const tree = noteMoves() !== null
+  const key = JSON.stringify([root, exclude, tree])
   const running = walking.get(key)
   if (running) return running
-  const p = walkNotes(exclude, root).finally(() => walking.delete(key))
+  const p = walkNotes(exclude, root, tree).finally(() => walking.delete(key))
   walking.set(key, p)
   return p
 }
 
-async function walkNotes(exclude: string[], root: string): Promise<ReplicaEntry[]> {
+async function walkNotes(exclude: string[], root: string, tree: boolean): Promise<ReplicaEntry[]> {
   const out: ReplicaEntry[] = []
   const seen = new Set<string>()
   const tooBig: string[] = []
@@ -145,7 +153,7 @@ async function walkNotes(exclude: string[], root: string): Promise<ReplicaEntry[
       if (d.name.startsWith('.')) continue
       const rel = relDir ? `${relDir}/${d.name}` : d.name
       if (d.isDirectory()) {
-        if (d.name === '_attachment' || leftOut(rel, exclude)) continue
+        if (d.name === '_attachment' || leftOut(rel, exclude) || (tree && walnutOwnedNote(`${rel}/`))) continue
         await walk(path.join(dir, d.name), rel)
         continue
       }
@@ -203,12 +211,20 @@ export interface ReplicaTarget {
   attachments?: boolean
   /** The cloud companion's own copy: its keep is `cloud_bridge.keep`, never a host's. */
   companion?: true
+  /**
+   * The target takes `renamed` beside a manifest (HOST_REPLICA_MOVES: the daemon's capability,
+   * the companion's `replica.status` feature). Without it a move goes as removals and additions,
+   * as before: the half rule refuses most of a copy moving, and the user confirms it.
+   */
+  moves?: boolean
 }
 
 export interface ReplicaRoundResult {
   kind: ReplicaKind; action: 'synced' | 'unchanged' | 'dropped' | 'failed'; entries?: number; sent?: number; held?: number; error?: string
   /** Manifest lines the round sent: its changes, or every entry when it went whole. */
   listed?: number
+  /** Rows the host moved to their new keys (renamed) instead of removing and fetching them. */
+  moved?: number
 }
 
 /**
@@ -482,7 +498,11 @@ async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep
   const guard = await removalGuard(target.hostKey, kind, entries)
   const asOf = Date.now()
   const base = { home, kind, asOf, manifestId: manifestHash, ...(opts ? { opts } : {}), ...guard.params }
-  const last = wholeOnly.has(memoKey) ? undefined : await lastTaken(memoKey)
+  const taken = await lastTaken(memoKey)
+  const last = wholeOnly.has(memoKey) ? undefined : taken
+  // The moves are worked out only for a manifest that goes with them (the changes remove keys, or the list goes whole).
+  let pairs: MovePair[] | undefined
+  const changeMoves = (): MovePair[] => (pairs ??= taken ? pairMoves(taken.entries, entries, kind === 'notes' ? vaultMoveLookups() : {}) : [])
   let reply: Record<string, unknown> | null = null
   let listed = entries.length
   if (last) {
@@ -490,7 +510,7 @@ async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep
     // whole list it gets exactly as before (the half rule, held keys, what it lacks).
     const { changed, removed } = manifestChanges(last.entries, entries)
     listed = changed.length + removed.length
-    reply = await target.send('replica.sync', { ...base, base: last.id, changed, removed })
+    reply = await target.send('replica.sync', { ...base, base: last.id, changed, removed, ...(target.moves && removed.length && changeMoves().length ? { renamed: changeMoves() } : {}) })
     if (reply.ok !== true && reply.errorKind !== 'manifest_removes_most_rows') {
       // A host without that base (restarted), a failed request, or one from before
       // changes-only manifests ("bad entries": it found no `entries`, so it changed
@@ -501,7 +521,8 @@ async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep
       listed = entries.length
     }
   }
-  reply ??= await target.send('replica.sync', { ...base, entries })
+  const whole = reply ? [] : target.moves ? wholeMoves(kind, taken, entries, changeMoves) : []
+  reply ??= await target.send('replica.sync', { ...base, entries, ...(whole.length ? { renamed: whole } : {}) })
   if (reply.ok !== true) {
     if (reply.errorKind === 'manifest_removes_most_rows') await guard.refused(reply)
     throw new Error(typeof reply.error === 'string' ? reply.error : 'replica.sync refused')
@@ -540,7 +561,22 @@ async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep
   if (skipped === 0 && held === 0) lastManifest.set(memoKey, manifestHash)
   else lastManifest.delete(memoKey)
   if (held > 0) scheduleHeldRerun(target, kind, held)
-  return { kind, action: 'synced', entries: entries.length, listed, sent, ...(held ? { held } : {}) }
+  return { kind, action: 'synced', entries: entries.length, listed, sent, ...(held ? { held } : {}), ...(typeof reply.moved === 'number' && reply.moved > 0 ? { moved: reply.moved } : {}) }
+}
+
+/**
+ * The moves a whole list of `kind` goes with (manifest-moves.ts): those against the manifest the
+ * host took last (`changeMoves`) and, for notes, the one tree's record pairs whose old key the host
+ * may still hold: every pair while this server knows no manifest the host took, else only the old
+ * keys that manifest still names. A host that took a manifest from after the move gets none, so a
+ * whole list in the tree is not twice its size.
+ */
+function wholeMoves(kind: ReplicaKind, taken: { entries: Map<string, ReplicaEntry> } | undefined, entries: readonly ReplicaEntry[], changeMoves: () => MovePair[]): MovePair[] {
+  const changes = changeMoves()
+  const look = kind === 'notes' ? vaultMoveLookups() : {}
+  if (!look.before) return changes
+  const record = recordMoves(entries, look)
+  return mergeMoves(changes, taken ? record.filter(([o]) => taken.entries.has(o)) : record)
 }
 
 const inFlight = new Map<string, { rerun: boolean }>()
@@ -572,6 +608,8 @@ export async function syncCompanionHostReplica(): Promise<ReplicaRoundResult[]> 
   const st = await ingest.postToCloudHostReplica('replica.status', {})
   if (st.ok !== true) return []
   const kinds = (st.kinds ?? {}) as Record<string, { asOf?: unknown; off?: unknown }>
+  // A box whose build takes moves says so here; an older one gets removals and additions, as before.
+  companionTarget.moves = Array.isArray(st.features) && st.features.includes(HOST_REPLICA_MOVES)
   // A kind the user turned off for the box has no asOf by design: that is not a new box.
   if (Date.now() - companionMemoAt > COMPANION_MEMO_MS || REPLICA_KINDS.some((k) => kinds[k]?.asOf == null && kinds[k]?.off !== true)) {
     forgetHostReplica(COMPANION_REPLICA_HOST)
@@ -615,7 +653,7 @@ export async function syncHostReplica(target: ReplicaTarget): Promise<ReplicaRou
           // A memo's `unchanged` asked nothing of the host: only a reply proves it is back.
           if (r.action !== 'unchanged') noteRoundReached(log.session, 'host replica', target.hostKey)
           if (r.action !== 'unchanged') {
-            log.session.info('host replica: round', { host: target.hostKey, kind, action: r.action, entries: r.entries, listed: r.listed, sent: r.sent, ms: Date.now() - startedAt })
+            log.session.info('host replica: round', { host: target.hostKey, kind, action: r.action, entries: r.entries, listed: r.listed, sent: r.sent, ...(r.moved ? { moved: r.moved } : {}), ms: Date.now() - startedAt })
           }
         } catch (err) {
           const error = err instanceof Error ? err.message : String(err)

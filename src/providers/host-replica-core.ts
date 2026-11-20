@@ -64,6 +64,12 @@ export interface ReplicaManifestRef {
   base?: unknown
   changed?: unknown
   removed?: unknown
+  /**
+   * 'host-replica-moves-v1': `[[oldKey, newKey], ...]`, keys the leader says moved. With a whole
+   * list or changes alike, each row held at oldKey moves to newKey before the half rule counts
+   * (moveRows), so a move of most of the copy is no removal of most of it.
+   */
+  renamed?: unknown
 }
 
 /**
@@ -173,11 +179,24 @@ export function createHostReplica(deps: HostReplicaDeps) {
     return st
   }
 
-  function persist(home: string, kind: ReplicaKind, st: KindState): void {
+  /** Write the index; false when it could not be written (the one on disk is the last good one). */
+  function persist(home: string, kind: ReplicaKind, st: KindState): boolean {
     try {
       writeAtomic(path.join(kindDir(home, kind), 'index.json'), JSON.stringify({ index: st.index, asOf: st.asOf, opts: st.opts, ...(st.off ? { off: st.off } : {}) }))
+      return true
     } catch (err) {
       deps.log('warn', 'host replica: persist failed', { kind, error: (err as Error).message })
+      return false
+    }
+  }
+
+  /** Remove body files the index no longer names (only once the index naming the new ones is written). */
+  function dropFiles(home: string, kind: ReplicaKind, st: KindState, files: string[]): void {
+    if (files.length === 0) return
+    const named = new Set(Object.keys(st.index).map((k) => st.index[k].f))
+    for (const f of files) {
+      if (named.has(f)) continue
+      try { fs.rmSync(bodyFile(home, kind, f), { force: true }) } catch { /* gone already */ }
     }
   }
 
@@ -216,6 +235,67 @@ export function createHostReplica(deps: HostReplicaDeps) {
     return Object.assign(new Error(`${code}: ${message}`), { code, detail })
   }
 
+  /**
+   * The moves of `ref.renamed` this copy takes: a row held at the old key (not named by the
+   * manifest), a new key the manifest names and no row holds yet, neither key held by an away
+   * write, each key once. The new key passed the manifest's own key checks (it is in `seen`).
+   */
+  function movesOf(st: KindState, ref: ReplicaManifestRef | undefined, seen: Set<string>, holds: Set<string>): Array<[string, string]> {
+    const raw = ref && Array.isArray(ref.renamed) ? (ref.renamed as unknown[]) : []
+    if (raw.length === 0 || raw.length > MAX_ENTRIES) return []
+    const own = (k: string): boolean => Object.prototype.hasOwnProperty.call(st.index, k)
+    const olds = new Set<string>()
+    const news = new Set<string>()
+    const out: Array<[string, string]> = []
+    for (const pair of raw) {
+      if (!Array.isArray(pair) || pair.length !== 2) continue
+      const o = pair[0]
+      const n = pair[1]
+      if (typeof o !== 'string' || typeof n !== 'string' || o === n || olds.has(o) || news.has(n)) continue
+      if (!own(o) || own(n) || seen.has(o) || !seen.has(n) || holds.has(o) || holds.has(n)) continue
+      olds.add(o)
+      news.add(n)
+      out.push([o, n])
+    }
+    return out
+  }
+
+  /**
+   * Move each row to its new key: the index first, so every planned move happens and the half rule
+   * judged exactly what is done. Then, as a best effort, the body file takes its new key's name
+   * (keyOf(kind:new)), as every row's file had before moves existed, so an older daemon that writes
+   * or removes keyOf(kind:k) after a downgrade never touches a moved row's body. The new name is a
+   * hard link: the old name stays until the index naming the new one is on disk (the caller drops
+   * the returned names then), so a crash at any point leaves every row of the index on disk readable.
+   * A link that cannot be made (no hard links, a name another row holds) keeps the old file.
+   */
+  function moveRows(home: string, kind: ReplicaKind, st: KindState, moves: Array<[string, string]>): { moved: number; stale: string[] } {
+    const stale: string[] = []
+    const owned = new Set<string>()
+    for (const k of Object.keys(st.index)) owned.add(st.index[k].f)
+    for (const [o, n] of moves) {
+      const row = st.index[o]
+      st.index[n] = row
+      delete st.index[o]
+      forget(home, kind, o)
+      forget(home, kind, n)
+      const f = deps.keyOf(`${kind}:${n}`)
+      if (row.f === f || owned.has(f)) continue
+      try {
+        // A file of that name no row holds is left over (a round cut short): it goes first.
+        fs.rmSync(bodyFile(home, kind, f), { force: true })
+        fs.linkSync(bodyFile(home, kind, row.f), bodyFile(home, kind, f))
+      } catch {
+        continue
+      }
+      // The old name stays taken until it is dropped: no later pair links onto it.
+      stale.push(row.f)
+      owned.add(f)
+      st.index[n] = { ...row, f }
+    }
+    return { moved: moves.length, stale }
+  }
+
   /** The whole list a changes-only manifest stands for: the base this copy took, with the changes applied. */
   function fromBase(home: string, kind: ReplicaKind, ref: ReplicaManifestRef): ReplicaEntry[] {
     const last = manifests.get(stateKey(home, kind))
@@ -233,7 +313,7 @@ export function createHostReplica(deps: HostReplicaDeps) {
     return [...rows.values()]
   }
 
-  function sync(home: string, kind: unknown, entries: unknown, asOf: unknown, opts?: ReplicaSyncOptions, guard?: ReplicaSyncGuard, ref?: ReplicaManifestRef): { need: string[]; entries: number; held: number; heldKeys?: string[]; removed: number } {
+  function sync(home: string, kind: unknown, entries: unknown, asOf: unknown, opts?: ReplicaSyncOptions, guard?: ReplicaSyncGuard, ref?: ReplicaManifestRef): { need: string[]; entries: number; held: number; heldKeys?: string[]; removed: number; moved?: number } {
     if (typeof home !== 'string' || !home) throw new Error('replica.sync: missing home')
     if (!isKind(kind)) throw new Error(`replica.sync: unknown kind ${String(kind)}`)
     if (entries === undefined && ref && ref.base !== undefined) entries = fromBase(home, kind, ref)
@@ -252,7 +332,10 @@ export function createHostReplica(deps: HostReplicaDeps) {
       seen.add(raw.k)
       rows.push(raw)
     }
-    const removing = Object.keys(st.index).filter((k) => !seen.has(k) && !holds.has(k))
+    // Keys the leader says moved are no removal: the guard below counts only what is really gone.
+    const moves = movesOf(st, ref, seen, holds)
+    const movedFrom = new Set(moves.map((m) => m[0]))
+    const removing = Object.keys(st.index).filter((k) => !seen.has(k) && !holds.has(k) && !movedFrom.has(k))
     const local = Object.keys(st.index).length
     // What the user's choice leaves out goes however much it is; only the rest counts.
     const chosen = kind === 'notes' && opts && typeof opts === 'object'
@@ -270,6 +353,8 @@ export function createHostReplica(deps: HostReplicaDeps) {
       }
       deps.log('warn', 'host replica: the leader confirmed a removal of most of the copy', { kind, local, removing: removing.length, entries: seen.size })
     }
+    const { moved, stale } = moves.length ? moveRows(home, kind, st, moves) : { moved: 0, stale: [] as string[] }
+    if (moved) deps.log('info', 'host replica: rows the leader moved were kept under their new keys', { kind, moved })
     const need: string[] = []
     const heldKeys: string[] = []
     st.pending = {}
@@ -302,13 +387,13 @@ export function createHostReplica(deps: HostReplicaDeps) {
     } : {}
     if (need.length === 0) { st.asOf = at; st.pendingAsOf = 0 } else st.pendingAsOf = at
     st.off = 0
-    persist(home, kind, st)
+    if (persist(home, kind, st)) dropFiles(home, kind, st, stale)
     // The next manifest may name this one as its base: keep what it said, as it said it.
     if (ref && typeof ref.manifestId === 'string' && ref.manifestId) {
       manifests.set(stateKey(home, kind), { id: ref.manifestId, rows: new Map(rows.map((r) => [r.k, r])) })
     } else manifests.delete(stateKey(home, kind))
     if (heldKeys.length) deps.log('info', 'host replica: keys an away write holds were kept', { kind, held: heldKeys.length })
-    return { need, entries: seen.size, held: heldKeys.length, ...(heldKeys.length ? { heldKeys: heldKeys.slice(0, 100) } : {}), removed: removing.length }
+    return { need, entries: seen.size, held: heldKeys.length, ...(heldKeys.length ? { heldKeys: heldKeys.slice(0, 100) } : {}), removed: removing.length, ...(moved ? { moved } : {}) }
   }
 
   function put(home: string, kind: unknown, files: unknown): { stored: number; rejected: number; remaining: number } {
@@ -318,12 +403,24 @@ export function createHostReplica(deps: HostReplicaDeps) {
     const st = load(home, kind)
     let stored = 0
     let rejected = 0
+    // Body file -> the key holding it, made at the first body: a moved row keeps the file named
+    // after its old key, so a body arriving for that old key must take another name.
+    let owners = null as Map<string, string> | null
+    /** Body files of rows that took another file: removed once the index naming the new ones is written. */
+    const replaced: string[] = []
+    const fileFor = (k: string): string => {
+      owners ??= new Map(Object.keys(st.index).map((x) => [st.index[x].f, x]))
+      let f = deps.keyOf(`${kind}:${k}`)
+      for (let i = 1; owners.has(f) && owners.get(f) !== k; i++) f = deps.keyOf(`${kind}:${k}\u0000${i}`)
+      return f
+    }
     for (const file of files as ReplicaFile[]) {
       const k = file && typeof file.k === 'string' ? file.k : ''
       const expected = k ? st.pending[k] : undefined
       // Only a body the last manifest asked for, and only the exact one it named.
       if (!expected || typeof file.body !== 'string' || file.body.length > MAX_BODY || deps.hash(file.body) !== expected) { rejected++; continue }
-      const f = deps.keyOf(`${kind}:${k}`)
+      const f = fileFor(k)
+      const prev = Object.prototype.hasOwnProperty.call(st.index, k) ? st.index[k] : undefined
       try {
         writeAtomic(bodyFile(home, kind, f), file.body)
       } catch (err) {
@@ -331,6 +428,9 @@ export function createHostReplica(deps: HostReplicaDeps) {
         rejected++
         continue
       }
+      // The old body of a moved row was under another name: it goes now that the new one is here.
+      if (prev && prev.f !== f) replaced.push(prev.f)
+      owners?.set(f, k)
       const meta = st.pendingMeta[k] ?? {}
       st.index[k] = { h: expected, n: meta.n, m: meta.m, f }
       delete st.pending[k]
@@ -340,7 +440,7 @@ export function createHostReplica(deps: HostReplicaDeps) {
     }
     const remaining = Object.keys(st.pending).length
     if (remaining === 0 && st.pendingAsOf) { st.asOf = st.pendingAsOf; st.pendingAsOf = 0 }
-    persist(home, kind, st)
+    if (persist(home, kind, st)) dropFiles(home, kind, st, replaced)
     return { stored, rejected, remaining }
   }
 
