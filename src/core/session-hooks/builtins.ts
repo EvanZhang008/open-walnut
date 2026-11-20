@@ -227,14 +227,8 @@ export function forgetFinalSummary(sessionId: string): void {
   finalSummaries.delete(sessionId);
 }
 
-/** Past this NOTE length the fire becomes a MANDATORY REORGANIZE pass: the session
- *  must merge the oldest Work Log entries and bring the note back under the cap
- *  (preserving every ID and decision). MANDATORY, not advisory: a day of prod data
- *  (2026-07-18) showed the earlier "you may consolidate" wording NEVER produced a net
- *  shrink — notes grew monotonically to 12.5k+. Do not soften the prompt wording back.
- *  6000 ≈ a screenful of dense context; it also bounds the per-fire prompt cost since
- *  the full note is re-fed on every fire. */
-export const NOTE_REORG_CAP = 6000; // chars
+export { NOTE_REORG_CAP, noteShrinkRejected } from '../note-budget.js';
+import { NOTE_REORG_CAP, noteShrinkRejected, noteSectionSizes, recordReorgOutcome } from '../note-budget.js';
 
 export { NOTE_SECTIONS, parseNoteSections, type NoteSection } from '../note-sections.js';
 import { NOTE_SECTIONS, parseNoteSections, type NoteSection } from '../note-sections.js';
@@ -351,7 +345,7 @@ export function buildSelfReportPrompt(
     noteBlock = `<existing_note>\n${existing}\n</existing_note>
 For EACH of the labels answer \`unchanged\` OR the new content. If the note above is NOT yet in this sectioned structure, this is a MIGRATION: answer every section with content (REFERENCES only if the note carries references), preserving EVERY fact from the note above (facts may move between sections; none may be dropped).
 NOTE BUDGET: ${existing.length}/${NOTE_REORG_CAP} chars used.${reorg ? `
-The note is ${existing.length} chars — OVER the ${NOTE_REORG_CAP}-char budget. This fire is a MANDATORY REORGANIZE: answer WORK_LOG with \`rewrite: <full section>\` that merges the OLDEST entries into consolidated ones (several old entries → one), and rewrite any other section that carries superseded or duplicated detail. Target: bring the FULL note back under ${NOTE_REORG_CAP} chars — the note must come back SHORTER than it went in. HARD RULE: keep every external ID (tickets, request/approval ids, hosts, URLs) and every decision+reason; commit hashes may be dropped; only drop process narration, dead-end play-by-play, and detail already superseded.` : ''}`;
+The note is ${existing.length} chars — OVER the ${NOTE_REORG_CAP}-char budget. This fire is a MANDATORY REORGANIZE. Section sizes now, largest first: ${noteSectionSizes(existing)}. Cut the LARGEST sections first, wherever they are: answer each with new content that folds superseded, duplicated or narrated detail into fewer lines (References: one line per artifact, duplicates merged), and answer WORK_LOG with \`rewrite: <full section>\` that merges the OLDEST entries into consolidated ones (several old entries → one). This turn's own additions count too: cut more than you add. Target: bring the FULL note back under ${NOTE_REORG_CAP} chars — the note must come back SHORTER than it went in. HARD RULE: keep every external ID (tickets, request/approval ids, hosts, URLs), every decision+reason and every acceptance criterion of USER_REQUEST; commit hashes may be dropped; only drop process narration, dead-end play-by-play, and detail already superseded.` : ''}`;
   }
 
   return `You just finished a turn. Answer, in this reply and as plain text with the labels below, how this task's NOTE changes: the single living document that lets a human (or a fresh AI with zero context) pick the task up. Walnut stores the note from your answer; never write it to a file and never use a tool for it. You have the full context: be the authoritative source. ${noteBlock}${opts?.mainAgent ? MAIN_NOTE_CONTRACT : ''}${opts?.complete ? `
@@ -671,45 +665,6 @@ export function assembleNote(existingNote: string, report: string): { note: stri
     if (next[s]) parts.push(`## ${s}\n${next[s]}`);
   }
   return { note: parts.join('\n\n'), changed };
-}
-
-/** Shrink guard: a new note dramatically shorter than the old one means the session
- *  dropped facts (the assembler never shrinks on its own — only rewrites can).
- *
- *  COUPLING INVARIANT (do not "tighten" the ratio without re-deriving this): a
- *  MANDATORY REORGANIZE (old > NOTE_REORG_CAP) is INSTRUCTED to land under
- *  NOTE_REORG_CAP, so for old ≥ cap/0.4 (=15000) a proportional floor rejects every
- *  compliant reorganize — deadlock: the note can never shrink, every fire re-runs a
- *  doomed reorganize. Reorganize fires therefore use an ABSOLUTE floor (cap × 0.4)
- *  instead of the proportional one. Exported for tests. */
-export function noteShrinkRejected(oldNote: string, newNote: string): boolean {
-  const oldSections = parseNoteSections(oldNote).sections;
-  const newSections = parseNoteSections(newNote).sections;
-  // References joins the protected set once present: it is the external-ID index,
-  // exactly the content the reorganize prompt orders preserved. (Absent from old
-  // notes → empty oldBody → no checks; the section stays optional.)
-  // Deletion is judged on BODY, not header presence: a section whose body was
-  // already empty loses nothing when its header disappears — and the assembler
-  // renders no header for an empty body, so a presence check would reject every
-  // subsequent fire on such a note (permanent freeze).
-  for (const section of ['Executive Summary', 'User Request', 'Context', 'Progress', 'References'] as const) {
-    const oldBody = oldSections[section]?.trim() ?? '';
-    const newBody = newSections[section]?.trim() ?? '';
-    if (oldBody && !newBody) return true;
-    if (oldBody.length >= 100 && newBody.length < oldBody.length * 0.4) {
-      // References is a curated index the MANDATORY REORGANIZE prompt explicitly
-      // orders consolidated ("rewrite freely, dedupe") — on an over-cap fire the
-      // proportional floor would reject exactly the compliant consolidation it
-      // demanded (same deadlock shape as the COUPLING INVARIANT below). A wipe
-      // on a normal (under-cap) fire is still caught.
-      if (section === 'References' && oldNote.length > NOTE_REORG_CAP) continue;
-      return true;
-    }
-  }
-
-  if (oldNote.length < 1500) return false; // small unstructured notes rewrite freely
-  if (oldNote.length > NOTE_REORG_CAP) return newNote.length < NOTE_REORG_CAP * 0.4;
-  return newNote.length < oldNote.length * 0.4;
 }
 
 // NOTE: the legacy three-way TASK_SUMMARY directive (parseSummaryDirective /
@@ -1041,21 +996,18 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
       sessionId: p.sessionId, taskId: p.taskId,
       changed: assembled?.changed ?? [], noteLen: assembled?.note.length ?? existingNote.length,
     });
-    // Reorganize accountability: the over-budget prompt DEMANDS a net shrink —
-    // a reorg fire that comes back same-or-longer means the session ignored it.
+    // Reorganize accountability: the over-budget prompt DEMANDS a net shrink. One
+    // miss is ordinary, so it is info; a task stuck growing across several reorganize
+    // fires in a row is the warn (note-budget.ts recordReorgOutcome). A note the shrink
+    // guard will reject below is kept as it was, so it is a miss.
     if (existingNote.length > NOTE_REORG_CAP) {
       const newLen = assembled?.note.length ?? existingNote.length;
-      if (newLen >= existingNote.length) {
-        log.session.warn('turn-complete-summary: REORGANIZE fire did not shrink the note', {
-          sessionId: p.sessionId, taskId: p.taskId,
-          oldLen: existingNote.length, newLen, cap: NOTE_REORG_CAP,
-        });
-      } else {
-        log.session.info('turn-complete-summary: reorganize shrank the note', {
-          sessionId: p.sessionId, taskId: p.taskId,
-          oldLen: existingNote.length, newLen, cap: NOTE_REORG_CAP,
-        });
-      }
+      const kept = assembled && !noteShrinkRejected(existingNote, assembled.note) ? newLen : existingNote.length;
+      const r = recordReorgOutcome(taskId, existingNote.length, kept);
+      const fields = { sessionId: p.sessionId, taskId: p.taskId, oldLen: existingNote.length, newLen, cap: NOTE_REORG_CAP };
+      if (r.verdict === 'shrank') log.session.info('turn-complete-summary: reorganize shrank the note', fields);
+      else if (r.verdict === 'stuck') log.session.warn('turn-complete-summary: REORGANIZE left the note longer after several fires in a row', { ...fields, misses: r.misses, startLen: r.startLen });
+      else log.session.info('turn-complete-summary: reorganize fire did not shrink the note', { ...fields, misses: r.misses });
     }
     if (!anyLabelPresent) {
       // warn: the task note is simply left as it was. A card with "Ask AI to

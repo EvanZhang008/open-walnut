@@ -127,9 +127,13 @@ facts rather than relying on conversational memory.
 
 Each section normally answers `unchanged` or supplies replacement content.
 Work Log normally answers `append: <entry>`. After `NOTE_REORG_CAP` (6,000
-characters), the prompt permits a reorganization pass. It may merge old Work
-Log entries but must retain every ID and decision and may drop only process
-narration.
+characters, `src/core/note-budget.ts`), every fire is a mandatory
+reorganization pass. The prompt lists each section's size, largest first, and
+asks the session to cut the largest sections first (on 2026-11-19 the bulk of
+an over-cap note was usually outside the Work Log) and to merge old Work Log
+entries, keeping every ID, decision and acceptance criterion. One reorganize
+that comes back longer is logged as info (about half of them do); the warn is
+a task whose note is longer after three misses in a row than before them.
 
 ### Fact-Loss Guards
 
@@ -139,7 +143,11 @@ narration.
   response covering every mandatory section supersedes it (References is
   optional).
 - `noteShrinkRejected` blocks a rewrite that drops more than 60 percent of a
-  large note and emits an error log.
+  large note or of a durable section, and logs a warn. On a reorganize fire it
+  judges against the cap instead: 40 percent of the cap for the whole note, and
+  for a section 40 percent of its share of the cap (between 600 and 1,200
+  characters), since a floor proportional to a big note rejects exactly the
+  reorganize the prompt demands and freezes the note.
 - The prompt forbids deleting facts. Changed facts are superseded with
   `(was: ...)`.
 
