@@ -275,10 +275,11 @@ permission prompts still name Walnut.
   session id derived from the op id so a retry starts nothing twice, one start of a task at a time (a second
   hears the leader's 409 `session_exists`), and at most as many live sessions as this machine's memory allows.
 - **A caller follows what it started.** While the leader is away, a session's or a plugin job's reads of a
-  task its host started alone answer from that host, in the leader's shape. `task_get`, `task_list` and
-  `task_get_bulk` show the task's session linked as the leader links it (`session_id`, `session_ids`, the
-  slot by mode, no slot once the session stopped: `core/sessions/task-session-link.ts`, one rule for the
-  leader's link and the host's fold), and `execution` from the session's live state (one
+  task its host started alone answer from that host, in the leader's shape. The routes behind `task_get`,
+  `task_list` and `task_get_bulk` answer the task's session linked as the leader links it (`session_id`,
+  `session_ids`, the slot by mode, no slot once the session stopped: `core/sessions/task-session-link.ts`,
+  one rule for the leader's link and the host's fold); the ops show what they show with the leader there,
+  which is `execution` from the session's live state and no session field (one
   `follower.sessions` read at most a second old, shared and backed off when the daemon does not answer:
   `ask-launch.ts` `fresh`; then the leader's own session enrichment). `task_history` reads the conversation
   on the host, messages a `task_send` delivered there included, and `GET /api/sessions/task/:id` lists the
@@ -339,6 +340,10 @@ permission prompts still name Walnut.
   follows the default (the fleet view carries `byDefault` for it).
 - **Not yet.** A task started alone whose turn ended still reads TODO on the leader after the drain until
   its next turn (the drain adopts the session, it does not replay the start's phase).
+- **Not yet, small.** Seen in the real run of 2026-11-20: the answer of a write made alone (`task_update`)
+  carries the journal's row, so its `execution` reads `unknown` until the next read; a console list read by
+  ids counts its `total` before the host's own rows are added; and a session started alone keeps the message
+  count of its start.
 - **Turned down: starting a task made on the leader alone.** Where such a task starts needs the leader's whole
   placement rule: the caller, the task's ancestors, its workspaces and the folders on the leader's disks. A
   second copy of that rule on the follower was wrong twice in review, so such a start keeps answering
@@ -369,7 +374,7 @@ or a caller can meet.
 
 | # | Phase | Done when | Where it stands |
 |---|---|---|---|
-| 1 | **A host's own calls are answered by its service.** The follower answers a session's and a plugin job's calls while the leader is away, with the real task logic and the journal; the daemon only passes the call on. Then every host gets a follower by default. | with the Mac's service stopped, a plugin job on a host creates a task, starts a session and tags it; after the Mac returns the board shows them once, and a second drain changes nothing | Built. Proven on two real machines (an isolated leader on a Mac, a daemon and follower on a Linux host): a plugin job made a task, started a real agent session that answered, tagged it and sent it a message; the drain replayed 3 records with no failure and no conflict, and the leader holds the task and the session once. A second drain of the same records is proven by the cluster test only. The follower on every host waits behind its experiment. |
+| 1 | **A host's own calls are answered by its service.** The follower answers a session's and a plugin job's calls while the leader is away, with the real task logic and the journal; the daemon only passes the call on. Then every host gets a follower by default. | with the Mac's service stopped, a plugin job on a host creates a task, starts a session and tags it; after the Mac returns the board shows them once, and a second drain changes nothing | Built. Proven on two real machines (an isolated leader on a Mac, a daemon and follower on a Linux host): a plugin job made a task, started a real agent session that answered, tagged it and sent it a message; the drain replayed 3 records with no failure and no conflict, and the leader holds the task and the session once. A second drain of the same records is proven by the cluster test only. The reads of a task started alone were checked the same way on the build that holds them (2026-11-20): `execution` read running, then idle, the route carried the session link, a phase written on the host was the leader's after the drain, with no conflict. The follower on every host waits behind its experiment. |
 | 2 | **Between machines, service to service.** | the leader sends no command to another machine's process manager; the Mac's main thread parses no line of a session on another host | Not built, by decision. See below. |
 | 3 | **The boot start keeps the service**, on hosts and on the Mac; one version per host. | a service ended by hand is back within seconds with its agents; a build that cannot stay up is rolled back without a person; the Mac's Walnut is back after a reboot | Nothing new built. Hosts already have it (the daemon's boot start, proof boot, probation and rollback keep the daemon, which keeps the follower). On the Mac the Walnut app is a login item that starts the service and restarts it when it ends; not yet checked by a real reboot. "One version per host" is turned down, below. |
 | 4 | **Clean up inside.** | no task logic outside the service | Open, one item: delete the daemon's own offline answers and its small copy once the follower covers every op they have. The rest is turned down, below. |
