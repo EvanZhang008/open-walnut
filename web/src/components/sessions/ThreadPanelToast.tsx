@@ -18,6 +18,7 @@ import { THREAD_OVERLAY_ATTR } from '@/components/sessions/ThreadConfirm';
 import { log } from '@/utils/log';
 import { placeToast, type PlaceBox, type ToastPlace } from '@/utils/thread-toast-place';
 import { visibleTopOf } from '@/hooks/useThreadLanding';
+import { NoticeCard } from '@/components/common/NoticeCard';
 import '@/styles/thread-stack.css';
 
 const NOOP_API: ThreadToastApi = {
@@ -197,18 +198,22 @@ function ThreadToastView({ toast, panelRef, composerRef, onDone }: {
   if (!host) return null;
   const action = toast.action;
   return createPortal(
-    <div
+    // The same card as every notice; solid, as it is drawn inside the panel (NoticeCard `solid`).
+    <NoticeCard
+      solid
       className="thread-toast"
       role="status"
-      aria-live="polite"
-      {...{ [THREAD_OVERLAY_ATTR]: 'toast' }}
-      ref={toastRef}
+      ariaLive="polite"
+      cardRef={toastRef}
       style={place ? { top: place.top, left: place.centerX, bottom: 'auto', ...(place.maxWidth ? { maxWidth: place.maxWidth } : {}) } : { bottom }}
-      onPointerEnter={pause}
-      onPointerLeave={start}
-      onPointerDown={(e) => e.stopPropagation()}
-      // Never take focus from the composer or the tree.
-      onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+      data={{ [THREAD_OVERLAY_ATTR.replace(/^data-/, '')]: 'toast' }}
+      handlers={{
+        onPointerEnter: pause,
+        onPointerLeave: start,
+        onPointerDown: (e) => e.stopPropagation(),
+        // Never take focus from the composer or the tree.
+        onMouseDown: (e) => { e.preventDefault(); e.stopPropagation(); },
+      }}
     >
       <span className="thread-toast-text">{toast.text}</span>
       {action && (
@@ -220,7 +225,7 @@ function ThreadToastView({ toast, panelRef, composerRef, onDone }: {
           {action.label}
         </button>
       )}
-    </div>,
+    </NoticeCard>,
     host,
   );
 }

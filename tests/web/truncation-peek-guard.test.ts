@@ -61,7 +61,6 @@ const NOT_A_ROW: Record<string, string> = {
   'components/tasks/ReleaseWorkerFlyout.tsx adopt-worker-title': 'the heading of the Release dialog, not a row; it peeks when hovered itself',
   'components/tasks/LeaderPill.tsx leader-subtasks-title': 'the heading of the Leader flyout, not a row; its subtask rows are marked',
   'components/tasks/SubtaskPill.tsx task-worker-parent': 'a pill drawn inside a task row, which is marked where the row is built',
-  'components/common/NotificationToaster.tsx notification-toast-title': 'a toast that comes and goes, not a list row; it peeks when hovered itself',
 };
 
 describe('a task row whose text is cut off expands as a whole', () => {

@@ -20,6 +20,7 @@ import { hasRecentHumanInput } from '@/utils/recent-opened';
 import { inMacApp } from '@/utils/mac-app';
 import { taskPath } from '@/utils/task-path';
 import { CORNER_ORDER, appendToCornerStack } from '@/components/common/corner-stack';
+import { noticeCardElement } from '@/components/common/NoticeCard';
 
 /** `task` is no view of its own any more: an old `/popout?view=task` link opens the task on Home. */
 export type PopoutView = 'app' | 'file' | 'global-notes' | 'note' | 'session' | 'task';
@@ -179,11 +180,9 @@ export function openTaskInApp(taskId: string): void {
 
 /** A short line in the pop-out's notice corner (it has no toaster of its own). */
 function flashNotice(text: string): void {
-  const el = document.createElement('div');
-  el.setAttribute('role', 'status');
-  el.className = 'popout-flash-notice';
-  el.textContent = text;
-  el.style.cssText = 'align-self:flex-start;pointer-events:auto;padding:8px 14px;border-radius:8px;font-size:13px;color:var(--fg);background:var(--bg-secondary);border:1px solid var(--border);box-shadow:0 4px 16px rgba(0,0,0,.18)';
+  // The same card as every notice (NoticeCard), built for code outside React.
+  const el = noticeCardElement({ who: 'Walnut', status: 'Opened', tone: 'ok', line: text });
+  el.classList.add('popout-flash-notice');
   appendToCornerStack(el, CORNER_ORDER.flash);
   setTimeout(() => el.remove(), 2_500);
 }

@@ -15,6 +15,7 @@ import { draftKey } from '@/utils/drafts';
 import type { CalendarItem } from './calendar-items';
 import { calendarEventNeedsApproval, type CalendarEvent } from '@/api/calendar';
 import './visibility.css';
+import '@/styles/notice-card.css';
 import { openTaskHere } from '@/utils/open-session';
 import { projectDisplayName } from '@/utils/project-display';
 import { useNavigate } from 'react-router-dom';
@@ -252,7 +253,6 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
             autoFocus={!readonly}
             setText={setTitle}
             micRef={titleMic}
-            style={{ borderLeft: `3px solid ${item.event.color ?? 'var(--accent)'}` }}
           />
         ) : (
           <div className="cal-item-title cal-item-title-static">
@@ -260,6 +260,8 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
           </div>
         )}
         <div className="cal-item-sub">
+          {/* The calendar's own colour: a dot before its name, never a bar down the title. */}
+          {isEvent && <span className="wn-dot cal-item-sub-dot" aria-hidden="true" style={{ background: item.event.color ?? 'var(--accent)' }} />}
           {isEvent
             ? `${item.event.calendarName} · ${item.event.accountName}${readonly ? ' · read-only' : ''}`
             : `${projectDisplayName(item.task.project)}${item.kind === 'task-due' ? ' · due date' : ' · start date'}`}

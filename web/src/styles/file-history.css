@@ -108,7 +108,6 @@
   width: 100%;
   padding: 4px 8px;
   border: none;
-  border-left: 2px solid transparent;
   background: none;
   font-size: 12px;
   text-align: left;
@@ -121,7 +120,6 @@
 }
 
 .fh-row.is-selected {
-  border-left-color: var(--accent);
   background: var(--accent-subtle);
 }
 

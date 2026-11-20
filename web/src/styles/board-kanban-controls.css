@@ -252,20 +252,14 @@
    one toast to the next never leaves the stack, so the clocks stay paused. */
 .kanban-toasts > * { position: relative; }
 .kanban-toasts > * + *::before { content: ''; position: absolute; left: 0; right: 0; bottom: 100%; height: 6px; }
-.kanban-toast {
-  pointer-events: auto; display: flex; align-items: flex-start; flex-wrap: nowrap; gap: 4px 8px; padding: 10px 10px 10px 14px; border-radius: var(--radius-md);
-  background: var(--card-bg); color: var(--fg); border: 1px solid var(--border-strong); box-shadow: var(--corner-card-shadow, 0 8px 24px rgba(0, 0, 0, 0.12));
-  font-size: 12px; max-width: 100%;
-}
-.kanban-toast.is-error { border-color: var(--kc-red); }
+/* A board toast is a NoticeCard (notice-card.css): its frame and its status dot are the card's. */
+.kanban-toast { font-size: 12px; max-width: 100%; }
 .kanban-toast-main { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
 .kanban-toast-text { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
 .kanban-toast-btn {
   border: 0; background: none; padding: 2px 4px; font: inherit; font-weight: 600; color: var(--accent-text, var(--accent)); cursor: pointer; border-radius: 4px;
 }
 .kanban-toast-btn:hover { background: var(--bg-hover); }
-.kanban-toast-close { flex: 0 0 auto; align-self: flex-start; display: inline-flex; border: 0; background: none; color: var(--fg-muted); cursor: pointer; padding: 2px; border-radius: 4px; }
-.kanban-toast-close:hover { color: var(--fg); background: var(--bg-hover); }
 /* .kanban-toasts-more takes the corner's "N more" look (.corner-more, corner-stack.css). */
 
 /* ── Card widgets: prompt, editor, composer, start, leader row ── */

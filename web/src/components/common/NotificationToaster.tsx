@@ -50,6 +50,8 @@ import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { isPhoneOverlayOpen, usePhoneOverlayDepth } from '@/hooks/usePhoneOverlayHistory';
 import type { ImageAttachment } from '@/api/chat';
 import { CORNER_ORDER, CornerSlot, useCornerState } from './corner-stack';
+import { NoticeCard } from './NoticeCard';
+import { noticeSource, noticeStatus, noticeTarget } from '@/contexts/notifications/notice-face';
 import { CopyCommandButton, NoticeDetailsToggle, NoticeWords, noticeCommands, prettyDetail, useCutOff, wholeTitle } from './NoticeText';
 import { pendingAt, useApprovals } from '@/components/approvals/approvals-store';
 import { sessionsWithPromptCard, usePromptCardsChanged } from '@/components/sessions/prompt-keys';
@@ -262,14 +264,12 @@ export function NotificationToaster() {
     <CornerSlot order={CORNER_ORDER.toasts} className="corner-slot-toasts">
     <div ref={shiftGuard.ref} onClickCapture={shiftGuard.onClickCapture} className="notification-toaster" aria-live="polite">
       {older > 0 && !moreHost && (
-        <button
-          type="button"
+        <NoticeCard
           className="corner-more"
-          data-testid="notification-toaster-more"
-          onClick={openCenter}
-        >
-          {older === 1 ? '1 more notification ›' : `${older} more notifications ›`}
-        </button>
+          testId="notification-toaster-more"
+          line={older === 1 ? '1 more notification ›' : `${older} more notifications ›`}
+          onOpen={openCenter}
+        />
       )}
       {toasts.map((toast) => {
         // A pending permission is answerable in place — its own card. One answered in
@@ -308,21 +308,25 @@ export function NotificationToaster() {
         );
       })}
       {foldedAsks.length > 0 && !lineHiddenFor && (
-        <div className="nfc-more-asks-row">
-          <button
-            type="button"
-            className="notification-toast nfc-more-asks"
-            data-testid="toast-more-asks"
-            onClick={() => window.dispatchEvent(new CustomEvent('notification:open-center'))}
-          >
-            {up.size > 0
-              ? `+${moreCount} more ${moreCount === 1 ? 'ask waits' : 'asks wait'} for an answer \u00b7 Open the panel`
-              // Nothing above it: the count is every ask waiting, as the badge and the panel have it.
-              : `${waitingTotal} ${waitingTotal === 1 ? 'ask waits' : 'asks wait'} for an answer \u00b7 Open the panel`}
-          </button>
-          {/* Off the page's corner; the asks stay in the panel and on their session cards. */}
-          <button type="button" className="nfc-more-asks-close" aria-label="Hide the waiting asks line" title="Hide (the asks stay in the panel)" onClick={hideLine}>&times;</button>
-        </div>
+        <NoticeCard
+          className="nfc-more-asks-row"
+          avatar={{ glyph: SEVERITY_ICON.warning, tone: 'ask' }}
+          who="Asks waiting"
+          status={{ tone: 'ask', text: 'Needs you' }}
+          line={(
+            <span className="nfc-more-asks" data-testid="toast-more-asks">
+              {up.size > 0
+                ? `+${moreCount} more ${moreCount === 1 ? 'ask waits' : 'asks wait'} for an answer \u00b7 Open the panel`
+                // Nothing above it: the count is every ask waiting, as the badge and the panel have it.
+                : `${waitingTotal} ${waitingTotal === 1 ? 'ask waits' : 'asks wait'} for an answer \u00b7 Open the panel`}
+            </span>
+          )}
+          onOpen={() => window.dispatchEvent(new CustomEvent('notification:open-center'))}
+          end={(
+            // Off the page's corner; the asks stay in the panel and on their session cards.
+            <button type="button" className="nfc-more-asks-close wn-notice-x" aria-label="Hide the waiting asks line" title="Hide (the asks stay in the panel)" onClick={hideLine}>&times;</button>
+          )}
+        />
       )}
     </div>
     </CornerSlot>
@@ -371,46 +375,61 @@ function MessageToast({ toast, phone, more, onDismiss, onPin, onRead, navigate, 
   // so its body opens it too: on a phone, where a closed toast shows only its title,
   // that tap is how Retry is reached. Other ephemeral ones (sort/audio) aren't: inert body.
   const opensCenter = toast.persistent || toast.kind === 'host';
+  // A click goes to the session or task the notice is about; one about nothing of its own opens
+  // the notification center when it is listed there (see opensCenter).
+  const target = noticeTarget(toast);
+  const clickable = !!target || opensCenter;
+  const status = noticeStatus(toast);
   return (
-    <div
-      className={`notification-toast notification-toast--${toast.severity}${opensCenter ? ' notification-toast--clickable' : ''}${open ? ' is-open' : ''}`}
+    <NoticeCard
+      className={`notification-toast notification-toast--${toast.severity}${clickable ? ' notification-toast--clickable' : ''}${open ? ' is-open' : ''}`}
       role={toast.severity === 'error' || toast.severity === 'warning' ? 'alert' : 'status'}
-      data-testid="notification-toast"
-      onClick={opensCenter ? (e) => {
-        // Selecting words to copy them is not a click on the toast.
+      testId="notification-toast"
+      onClick={clickable ? (e) => {
+        // Selecting words to copy them is not a click on the toast, nor is a click on its controls.
         if (window.getSelection()?.toString()) return;
-        if ((e.target as Element).closest('.notice-cmd')) return;
-        window.dispatchEvent(new CustomEvent('notification:open-center'));
+        if ((e.target as Element).closest('.notice-cmd, button, a')) return;
+        if (target) navigateToTarget(target, navigate);
+        else window.dispatchEvent(new CustomEvent('notification:open-center'));
         onDismiss();
       } : undefined}
-      title={opensCenter && !open ? 'Open notification center' : undefined}
-    >
-      <div className="notification-toast-header">
-        <span className="notification-toast-icon">{SEVERITY_ICON[toast.severity]}</span>
-        <span ref={titleRef} className="notification-toast-title"><NoticeWords text={whole.title} copy={!oneCopy} /></span>
-        {more && (
+      title={clickable && !open ? (target ? 'Open it' : 'Open notification center') : undefined}
+      avatar={toast.sessionTitle && (toast.sessionId || toast.taskId)
+        ? { person: { id: toast.taskId ?? toast.sessionId!, title: toast.sessionTitle, kind: 'task' } }
+        : { glyph: SEVERITY_ICON[toast.severity], tone: status.tone }}
+      who={noticeSource(toast)}
+      status={status.text ? status : undefined}
+      lineRef={titleRef}
+      line={<NoticeWords text={whole.title} copy={!oneCopy} />}
+      parts={{ line: 'notification-toast-title', open: 'notification-toast-header' }}
+      end={(
+        <>
+          {more && (
+            <button
+              type="button"
+              className="notification-toast-more"
+              data-testid="notification-toaster-more"
+              title={more.inPlace
+                ? (more.older === 1 ? 'Show 1 more notification here' : `Show ${more.older} more notifications here`)
+                : (more.older === 1 ? '1 more notification in the notification center' : `${more.older} more notifications in the notification center`)}
+              onClick={(e) => { e.stopPropagation(); more.open(); }}
+            >
+              {more.words}
+            </button>
+          )}
+          {/* The phone keeps a closed toast to one row: its Details sits in the title row. */}
+          {toolsInHeader && toggle}
           <button
             type="button"
-            className="notification-toast-more"
-            data-testid="notification-toaster-more"
-            title={more.inPlace
-              ? (more.older === 1 ? 'Show 1 more notification here' : `Show ${more.older} more notifications here`)
-              : (more.older === 1 ? '1 more notification in the notification center' : `${more.older} more notifications in the notification center`)}
-            onClick={(e) => { e.stopPropagation(); more.open(); }}
+            className="notification-toast-close wn-notice-x"
+            onClick={(e) => { e.stopPropagation(); onDismiss(); }}
+            aria-label="Dismiss"
           >
-            {more.words}
+            &times;
           </button>
-        )}
-        {/* The phone keeps a closed toast to one row: its Details sits in the title row. */}
-        {toolsInHeader && toggle}
-        <button
-          className="notification-toast-close"
-          onClick={(e) => { e.stopPropagation(); onDismiss(); }}
-          aria-label="Dismiss"
-        >
-          &times;
-        </button>
-      </div>
+        </>
+      )}
+    >
       {toast.body && <div ref={bodyRef} className="notification-toast-body"><NoticeWords text={toast.body} copy={!oneCopy} /></div>}
       {open && detail && (
         <div className="notification-toast-log" onClick={(e) => e.stopPropagation()}>
@@ -464,7 +483,7 @@ function MessageToast({ toast, phone, more, onDismiss, onPin, onRead, navigate, 
       )}
       {/* A toast with its own clock (an Undo) shows how long it has left. */}
       {toast.durationMs && <ToastTimer total={toast.durationMs} timeLeft={toast.timeLeftMs} />}
-    </div>
+    </NoticeCard>
   );
 }
 
@@ -573,7 +592,8 @@ function PermissionToast({ n, onDismiss, onPin, onRead, onLeave, navigate, phone
   }, [onPin]);
 
   const swipe = useSwipeUpDismiss(phone, onDismiss);
-  const context = [sessionLabelOf(n), n.host].filter(Boolean).join(' · ');
+  // The session is the card's title; the line under it says where it runs.
+  const context = n.host ?? '';
   // A record with no session/requestId can't be answered from here (legacy or a
   // dropped field) — offer the deep link instead of dead buttons. An
   // AskUserQuestion we can't render is the same story for a different reason: a
@@ -582,52 +602,64 @@ function PermissionToast({ n, onDismiss, onPin, onRead, onLeave, navigate, phone
   /** The whole ask is answered here now, however many questions it carries. */
   const questionForm = answerable && detail.type === 'question' ? detail.questions : null;
 
+  const face = noticeStatus({ kind: 'permission', severity: n.severity, resolved: (settled || undefined) as Notification['resolved'] });
+  const who = sessionLabelOf(n) || noticeSource(n);
   return (
-    <div
-      // Answered: the warning stripe gives way to the outcome's tone while it says which choice went.
+    <NoticeCard
+      // Answered: the status says which way it went while it shows (permissionOutcomeLabel below).
       className={`notification-toast nfc-perm-toast ${settled ? `nfc-perm-toast--settled nfc-perm-toast--${settled}` : 'notification-toast--warning'}`}
       role="alert"
-      // Capture-phase listeners on the wrapper: one place to notice interaction
-      // anywhere inside (pills, the free-text input, the option list), instead of
-      // wiring a handler onto every control the form owns.
-      onPointerDown={pinOnce}
-      // A pointer moved onto the ask is someone reading it: it stays up until the pointer
-      // leaves. One resting there unmoved (a toast that slid under it) keeps nothing up.
-      onPointerMove={onRead}
-      onPointerLeave={onLeave}
-      onFocusCapture={pinOnce}
-      onKeyDownCapture={pinOnce}
-      {...swipe}
-      // Phone: a tap on the toast's body (not on one of its controls) opens
-      // the session it came from, as an overlay.
-      onClick={phone && target ? (e) => {
-        if ((e.target as Element).closest('button, a, input, textarea, select, label, [role="button"]')) return;
+      handlers={{
+        // Capture-phase listeners on the wrapper: one place to notice interaction
+        // anywhere inside (pills, the free-text input, the option list), instead of
+        // wiring a handler onto every control the form owns.
+        onPointerDown: pinOnce,
+        // A pointer moved onto the ask is someone reading it: it stays up until the pointer
+        // leaves. One resting there unmoved (a toast that slid under it) keeps nothing up.
+        onPointerMove: onRead,
+        onPointerLeave: onLeave,
+        onFocusCapture: pinOnce,
+        onKeyDownCapture: pinOnce,
+        ...swipe,
+      }}
+      // A tap on the toast's head or words (not on one of its controls) opens the session it came from.
+      onClick={target ? (e) => {
+        if ((e.target as Element).closest('button, a, input, textarea, select, label, [role="button"], pre, .nfc-perm-actions')) return;
+        if (window.getSelection()?.toString()) return;
         openSession();
       } : undefined}
-    >
-      <div className="notification-toast-header">
-        <span className="notification-toast-icon">{settled === 'allowed' ? '\u2713' : settled === 'denied' ? '\u2298' : SEVERITY_ICON.warning}</span>
-        {/* A question reads as the session card titles it, not by its tool's name. */}
-        <span className="notification-toast-title">{toolNameOf(n) === 'AskUserQuestion' ? 'Agent has a question' : toolNameOf(n) ?? n.title}</span>
-        {/* Click-through to the session, on every permission toast with one. */}
-        {target && (
+      avatar={(n.sessionId || n.taskId)
+        ? { person: { id: n.taskId ?? n.sessionId!, title: who, kind: 'task' } }
+        : { glyph: SEVERITY_ICON.warning, tone: 'ask' }}
+      who={who}
+      status={face}
+      // A question reads as the session card titles it, not by its tool's name.
+      line={toolNameOf(n) === 'AskUserQuestion' ? 'Agent has a question' : toolNameOf(n) ?? n.title}
+      parts={{ line: 'notification-toast-title', open: 'notification-toast-header' }}
+      end={(
+        <>
+          {/* Click-through to the session, on every permission toast with one. */}
+          {target && (
+            <button
+              type="button"
+              className="nfc-open-session"
+              title="Open the session this came from"
+              onClick={(e) => { e.stopPropagation(); openSession(); }}
+            >
+              Open session ↗
+            </button>
+          )}
           <button
-            className="nfc-open-session"
-            title="Open the session this came from"
-            onClick={(e) => { e.stopPropagation(); openSession(); }}
+            type="button"
+            className="notification-toast-close wn-notice-x"
+            onClick={(e) => { e.stopPropagation(); onDismiss(); }}
+            aria-label="Dismiss"
           >
-            Open session ↗
+            &times;
           </button>
-        )}
-        <button
-          className="notification-toast-close"
-          onClick={onDismiss}
-          aria-label="Dismiss"
-        >
-          &times;
-        </button>
-      </div>
-
+        </>
+      )}
+    >
       {context && <div className="nfc-perm-context">{context}</div>}
 
       {/* What is actually being asked. */}
@@ -759,7 +791,7 @@ function PermissionToast({ n, onDismiss, onPin, onRead, onLeave, navigate, phone
       {!settled && failed && !held && (
         <div className="nfc-perm-error nfc-perm-error--block" role="alert">{stored?.failReason ?? 'Failed. Open the session to respond.'}</div>
       )}
-    </div>
+    </NoticeCard>
   );
 }
 

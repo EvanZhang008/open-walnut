@@ -3,7 +3,7 @@
  * floating panel over whatever app is in front, without bringing Walnut forward. The panel holds
  * Walnut's own /quickbar page (web/src/components/quickbar/QuickBarPanelPage.tsx): it listens,
  * shows the words as they are said, picks who gets them and sends them; after a send it shrinks
- * to the receipts in the top right corner, which never take the keyboard, so the person keeps
+ * to the receipts in the bottom left corner, which never take the keyboard, so the person keeps
  * typing where they were.
  *
  * The main window's page tells the app whether the experiment is on ({type:'flag'}), and only
@@ -13,7 +13,7 @@
  * sound on open, send or capture (`screencapture -x`).
  *
  * The page sizes the panel ({type:'layout', mode, height}); the app only places it: `bar` in the
- * upper part of the screen with the pointer, `receipts` in its top right corner, `hidden` off
+ * upper part of the screen with the pointer, `receipts` in its bottom left corner, `hidden` off
  * screen. A panel unused for ten minutes lets its page go, and the next press loads it again.
  */
 
@@ -216,6 +216,7 @@ final class QuickBarPanel: NSObject {
             let top = was == "bar" ? p.frame.maxY : area.maxY - area.height * 0.18
             let x = was == "bar" ? p.frame.minX : area.midX - Self.barWidth / 2
             effect?.layer?.cornerRadius = 18
+            effect?.layer?.borderWidth = 0
             p.takesKeys = true
             p.setFrame(NSRect(x: x, y: top - h, width: Self.barWidth, height: h), display: true)
             if !p.isKeyWindow {
@@ -229,8 +230,13 @@ final class QuickBarPanel: NSObject {
                 p.orderOut(nil)
             }
             p.takesKeys = false
+            // The notice card's frame (web/src/styles/notice-card.css): a 14 pt radius and one
+            // hairline all round. And its place: the bottom left, where every Walnut notice shows
+            // (2026-11-20, the user: "所有的 notification 都应该在左下角").
             effect?.layer?.cornerRadius = 14
-            p.setFrame(NSRect(x: area.maxX - Self.receiptsWidth - 12, y: area.maxY - 12 - h, width: Self.receiptsWidth, height: h), display: true)
+            effect?.layer?.borderWidth = 1
+            effect?.layer?.borderColor = NSColor.separatorColor.cgColor
+            p.setFrame(NSRect(x: area.minX + 16, y: area.minY + 16, width: Self.receiptsWidth, height: h), display: true)
             p.orderFrontRegardless()
         default:
             p.orderOut(nil)

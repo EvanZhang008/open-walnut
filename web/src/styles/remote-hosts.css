@@ -67,7 +67,7 @@ html body .wn-context-menu.rh-add-menu {
 /* A new row's More column keeps its width with nothing in it. */
 .rh-row-more-space { visibility: hidden; cursor: default; }
 /* The row whose menu is open is the one marked (2026-11-04 review: a row the map landed on kept its ring). */
-.settings-row.rh-host-row[data-menu-open='true'] { box-shadow: inset 2px 0 0 var(--accent); }
+.settings-row.rh-host-row[data-menu-open='true'] { background: var(--accent-subtle); }
 /* A row the header's count counts. */
 .rh-look-tag {
   flex: none;

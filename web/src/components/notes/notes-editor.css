@@ -236,8 +236,9 @@
 }
 
 /* ── Callouts ──────────────────────────────────────────────────────────── */
+/* Its kind is the coloured label on top; the box keeps the same hairline all round. */
 .notes-callout {
-  border-left: 3px solid var(--border-strong, #3a3d44);
+  border: 1px solid var(--border, #2a2d34);
   border-radius: var(--radius-sm, 6px);
   background: var(--bg-secondary, #1a1c20);
   padding: 10px 14px;
@@ -254,15 +255,10 @@
   margin-bottom: 4px;
   opacity: 0.85;
 }
-.notes-callout-note { border-left-color: var(--accent, #6366f1); }
 .notes-callout-note::before { content: 'Note'; color: var(--accent, #6366f1); }
-.notes-callout-tip { border-left-color: var(--success, #22c55e); }
 .notes-callout-tip::before { content: 'Tip'; color: var(--success, #22c55e); }
-.notes-callout-info { border-left-color: var(--accent, #3b82f6); }
 .notes-callout-info::before { content: 'Info'; color: var(--accent, #3b82f6); }
-.notes-callout-warning { border-left-color: var(--warning, #f59e0b); }
 .notes-callout-warning::before { content: 'Warning'; color: var(--warning, #f59e0b); }
-.notes-callout-danger { border-left-color: var(--error, #ef4444); }
 .notes-callout-danger::before { content: 'Danger'; color: var(--error, #ef4444); }
 
 /* Foldable callout (`> [!kind]- Title` / `> [!kind]+ Title`): the kind label
@@ -784,7 +780,6 @@ mark.notes-search-mark {
 }
 
 /* ── Backlinks: ambiguous edge badge (§4.3 — shown, not hidden) ─────────── */
-.notes-backlink-item.ambiguous { border-left: 2px solid var(--warning, #f59e0b); }
 .notes-backlink-ambiguous {
   display: inline-block;
   margin-left: 6px;

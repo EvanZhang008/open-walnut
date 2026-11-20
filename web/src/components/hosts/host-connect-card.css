@@ -1,18 +1,8 @@
-/* HostConnectCard: a host's first connect, running in the background. The approval card's look
-   (approvals.css: its head, kicker, "–" and the put-aside pill), in the same corner stack
+/* HostConnectCard: a host's first connect, running in the background. A NoticeCard, and put
+   aside the same one-line pill as an approval card's (approvals.css), in the same corner stack
    (corner-stack.css places it, just above the approval card). */
-.hcc-card {
-  pointer-events: auto;
-  background: var(--card-bg);
-  color: var(--fg);
-  border: 1px solid var(--border-strong);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--radius-md);
-  box-shadow: var(--corner-card-shadow);
-  padding: 12px 14px;
-  font-size: 13px;
-}
-.hcc-card .hcc-head { align-items: center; }
+/* The card is a NoticeCard (notice-card.css): its frame, its avatar and its status dot. */
+.hcc-card { font-size: 13px; }
 
 .hcc-rows {
   list-style: none;

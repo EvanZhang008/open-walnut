@@ -21,10 +21,11 @@
  * (approvals-store.ts startTouchId; keys.ts: the app's own key signs at once, nothing is asked).
  * Live through the `approval:changed` event; a reconnect re-reads the list.
  */
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { CORNER_ORDER, CornerSlot, useCornerState } from '@/components/common/corner-stack';
+import { NoticeCard, NoticeStatus } from '@/components/common/NoticeCard';
 import { useEvent } from '@/hooks/useWebSocket';
 import { QUIET_CATCHUP_ID } from '@/contexts/notifications/system-notice';
 import { OPEN_CENTER_EVENT } from '@/utils/open-anywhere';
@@ -173,7 +174,7 @@ function ApprovalBody({ a, s, now, onOpen, onMinimize, total = 0 }: { a: Approva
     <>
       <div className="approval-head">
         {/* The card names itself in the corner; the dialog has no title of its own: its sentence is the request. */}
-        {onOpen ? <span className="approval-kicker">{kicker(biometric, approveKind(s, a))}</span> : <span />}
+        {onOpen ? <NoticeStatus tone="ask" className="approval-kicker">{kicker(biometric, approveKind(s, a))}</NoticeStatus> : <span />}
         {onOpen && total > 1 && (
           <button type="button" className="approval-count" data-testid="approval-count" title={`See all ${total} approvals waiting`} onClick={onOpen}>
             {total} waiting
@@ -235,8 +236,9 @@ function StoppedAsking({ s, now, inDialog = false }: { s: ApprovalsState; now: n
   const what = s.done[st.id]?.what;
   // Asked while it was on: they still wait for the person (the switch never answers them), and the note says so.
   const still = pendingAt(s, now);
+  const Frame = inDialog ? StoppedInline : NoticeCard;
   return (
-    <div className={`approval-card approval-card-settled approval-stopped${inDialog ? ' approval-stopped-inline' : ''}`} role="status" data-testid="approval-stopped-asking">
+    <Frame className={`approval-card approval-card-settled approval-stopped${inDialog ? ' approval-stopped-inline' : ''}`} role="status" testId="approval-stopped-asking">
       <div className="approval-stopped-line">
         {st.undone ? 'Agents ask you first again.' : 'Approved. From now on agents go ahead without asking you.'}
       </div>
@@ -254,8 +256,13 @@ function StoppedAsking({ s, now, inDialog = false }: { s: ApprovalsState; now: n
         <button type="button" className="approval-link" data-testid="approval-stopped-settings" onClick={() => { dismissStoppedAsking(); closeApproval(); navigate('/settings#general'); }}>Settings › General</button>
         {!inDialog && <button type="button" className="approval-stopped-close" aria-label="Close" onClick={dismissStoppedAsking}>×</button>}
       </div>
-    </div>
+    </Frame>
   );
+}
+
+/** Inside the dialog the note is a block of the dialog, not a card of the corner. */
+function StoppedInline({ className, role, testId, children }: { className: string; role: string; testId: string; children: ReactNode }) {
+  return <div className={className} role={role} data-testid={testId}>{children}</div>;
 }
 
 /** A line offering the system notification where this window cannot raise one yet. */
@@ -472,20 +479,22 @@ export function ApprovalPrompts() {
         <div className="approval-stack" role="region" aria-label="Approvals">
           {s.stoppedAsking && s.stoppedAsking.id !== s.openId && <StoppedAsking s={s} now={now} />}
           {lastSettled && !card && (
-            <div key={lastSettled.id} className={`approval-card approval-card-settled approval-${lastSettled.status}`} data-approval-id={lastSettled.id} data-testid="approval-settled" role="status">
+            <NoticeCard key={lastSettled.id} className={`approval-card approval-card-settled approval-${lastSettled.status}`} data={{ 'approval-id': lastSettled.id }} testId="approval-settled" role="status">
               <div className="approval-settled-line">
                 {settledWord(lastSettled)}
                 <span className="approval-settled-what">{lastSettled.what}</span>
               </div>
-            </div>
+            </NoticeCard>
           )}
           {card && aside && !holding && (
-            <button type="button" className="approval-aside" data-approval-id={card.id} data-testid="approval-aside"
-              title={`${card.what}: open the request`} onClick={() => openApproval(card.id)}>
-              <span className="approval-kicker">Approve?</span>
-              <span>{waitingWords(waiting.length)}</span>
-              <span className="approval-aside-open" aria-hidden="true">Open ›</span>
-            </button>
+            <NoticeCard className="wn-notice-pill">
+              <button type="button" className="approval-aside" data-approval-id={card.id} data-testid="approval-aside"
+                title={`${card.what}: open the request`} onClick={() => openApproval(card.id)}>
+                <NoticeStatus tone="ask" className="approval-kicker">Approve?</NoticeStatus>
+                <span>{waitingWords(waiting.length)}</span>
+                <span className="approval-aside-open" aria-hidden="true">Open ›</span>
+              </button>
+            </NoticeCard>
           )}
           {card && (!aside || holding) && (
             <div className="approval-card-place">
@@ -493,11 +502,11 @@ export function ApprovalPrompts() {
                 // Two short lines: what waits, then how many, the time and the buttons (a phone opens
                 // the request instead, whose buttons take a finger).
                 // On a phone the whole line is one tap target (it has no buttons of its own).
-                <div key={card.id} className={`approval-card approval-card-line${phone ? ' approval-card-tap' : ''}${armedId === card.id ? '' : ' approval-card-arming'}`} data-approval-id={card.id} data-testid="approval-card"
+                <NoticeCard key={card.id} className={`approval-card approval-card-line${phone ? ' approval-card-tap' : ''}${armedId === card.id ? '' : ' approval-card-arming'}`} data={{ 'approval-id': card.id }} testId="approval-card"
                   onClick={phone ? () => openApproval(card.id) : undefined}>
                   <button type="button" className="approval-line-open" data-testid="approval-what" onClick={() => openApproval(card.id)}
                     title={`${card.what}${waiting.length > 1 ? ` (${waitingWords(waiting.length)})` : ''}: open the request`}>
-                    <span className="approval-kicker">Approve?</span>
+                    <NoticeStatus tone="ask" className="approval-kicker">Approve?</NoticeStatus>
                     <span className="approval-line-what">{card.what}</span>
                     {phone && <span className="approval-row-open" aria-hidden="true">Open ›</span>}
                   </button>
@@ -526,23 +535,23 @@ export function ApprovalPrompts() {
                   </span>
                   {!phone && <ApprovalButtons a={card} s={s} />}
                   {s.errors[card.id] ? <div className="approval-error" role="alert">{s.errors[card.id]}</div> : null}
-                </div>
+                </NoticeCard>
               ) : (
-                <div key={card.id} className={`approval-card${card.mode === 'biometric' ? ' approval-card-biometric' : ''}${armedId === card.id ? '' : ' approval-card-arming'}`} data-approval-id={card.id} data-testid="approval-card">
+                <NoticeCard key={card.id} className={`approval-card${card.mode === 'biometric' ? ' approval-card-biometric' : ''}${armedId === card.id ? '' : ' approval-card-arming'}`} data={{ 'approval-id': card.id }} testId="approval-card">
                   <ApprovalBody a={card} s={s} now={now} onOpen={() => openApproval(card.id)} onMinimize={() => setLineFor({ id: card.id, n: waiting.length })} total={waiting.length} />
                   <NoticeOffer />
-                </div>
+                </NoticeCard>
               )}
               {/* Over the next request while it shows: it also keeps a click meant for the one
                   just answered off the next one's buttons. */}
               {holding && (
-                <div key={holding.id} className={`approval-card approval-card-settled approval-settled-over approval-${holding.status}`} data-approval-id={holding.id} data-testid="approval-settled" role="status">
+                <NoticeCard key={holding.id} className={`approval-card approval-card-settled approval-settled-over approval-${holding.status}`} data={{ 'approval-id': holding.id }} testId="approval-settled" role="status">
                   <div className="approval-settled-line">
                     {settledWord(holding)}
                     <span className="approval-settled-what">{holding.what}</span>
                   </div>
                   <div className="approval-settled-next">Next: {card.what}</div>
-                </div>
+                </NoticeCard>
               )}
             </div>
           )}

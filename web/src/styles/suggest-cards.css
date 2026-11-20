@@ -10,7 +10,6 @@
   margin: 10px 0;
   padding: 10px 12px;
   border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
   border-radius: var(--radius-sm);
   background: var(--card-bg);
 }

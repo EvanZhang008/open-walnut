@@ -231,10 +231,13 @@ test('N1 N6: the sentence fits WebKit metrics, and one row looks clicked', async
       child: getComputedStyle(row).backgroundColor,
       chosen: getComputedStyle(chosen).backgroundColor,
       rail: getComputedStyle(row).boxShadow,
+      weight: getComputedStyle(row).fontWeight,
     }
   })
   expect(marks.child, 'the child is not filled like the chosen row').not.toBe(marks.chosen)
-  expect(marks.rail, 'it carries a rail instead').not.toBe('none')
+  // Its quiet mark is the accent text in bold, never a bar down its edge (2026-11-20).
+  expect(marks.rail, 'no coloured bar down its edge').toBe('none')
+  expect(Number(marks.weight), 'it is drawn bold instead').toBeGreaterThanOrEqual(600)
   // N13: an indent a person can see without measuring, in this engine too.
   const edges = await page.evaluate(() => {
     const left = (selector: string) => {

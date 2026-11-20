@@ -35,7 +35,6 @@
 
 .hib-row:hover { background: var(--bg-hover); }
 
-.hib-row.hib-unread { border-left: 3px solid var(--accent); }
 .hib-row.hib-pinned { background: var(--accent-subtle); }
 
 .hib-row-head {

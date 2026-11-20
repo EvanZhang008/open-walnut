@@ -582,52 +582,32 @@ final class WebContentWatchdog {
 
 // MARK: - The memory notice
 
-/// A small native bar over the top of the page: "This page is using 2.4 GB of
-/// memory and may stop drawing", Reload Page, Later. AppKit draws it, so it is
-/// on screen even when the page process behind it has stopped painting.
-final class MemoryNoticeView: NSVisualEffectView {
-    private let label = NSTextField(labelWithString: "")
+/// A notice card over the bottom left of the page (NoticeCardView: the same card as every
+/// Walnut notice, where every notice shows): "This page is using 2.4 GB of memory and may stop
+/// drawing", Reload Page, Later. AppKit draws it, so it is on screen even when the page process
+/// behind it has stopped painting.
+final class MemoryNoticeView: NoticeCardView {
     private let onReload: () -> Void
     private let onDismiss: () -> Void
 
     init(footprintMB: Int, onReload: @escaping () -> Void, onDismiss: @escaping () -> Void) {
         self.onReload = onReload
         self.onDismiss = onDismiss
-        super.init(frame: .zero)
-        identifier = NSUserInterfaceItemIdentifier("walnut-memory-notice")
-        material = .popover
-        blendingMode = .withinWindow
-        state = .active
-        wantsLayer = true
-        layer?.cornerRadius = 10
-        layer?.masksToBounds = true
-        layer?.borderWidth = 1
-        layer?.borderColor = NSColor.separatorColor.cgColor
-        translatesAutoresizingMaskIntoConstraints = false
-
-        let icon = NSImageView()
-        icon.image = NSImage(systemSymbolName: "memorychip", accessibilityDescription: "Memory")
-        icon.contentTintColor = .systemOrange
-        label.font = .systemFont(ofSize: 13)
-        label.lineBreakMode = .byTruncatingTail
-        let reload = NSButton(title: "Reload Page", target: self, action: #selector(reloadPressed))
+        let reload = NSButton(title: "Reload Page", target: nil, action: nil)
         reload.bezelStyle = .rounded
         reload.keyEquivalent = ""
         reload.setAccessibilityIdentifier("walnut-memory-notice-reload")
-        let later = NSButton(title: "Later", target: self, action: #selector(laterPressed))
+        let later = NSButton(title: "Later", target: nil, action: nil)
         later.bezelStyle = .rounded
-        let stack = NSStackView(views: [icon, label, reload, later])
-        stack.orientation = .horizontal
-        stack.spacing = 10
-        stack.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 10)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
+        let buttons = NSStackView(views: [reload, later])
+        buttons.orientation = .horizontal
+        buttons.spacing = 8
+        super.init(blending: .withinWindow, accessory: buttons)
+        reload.target = self
+        reload.action = #selector(reloadPressed)
+        later.target = self
+        later.action = #selector(laterPressed)
+        identifier = NSUserInterfaceItemIdentifier("walnut-memory-notice")
         setFootprint(footprintMB)
     }
 
@@ -635,15 +615,19 @@ final class MemoryNoticeView: NSVisualEffectView {
 
     func setFootprint(_ mb: Int) {
         let size = mb >= 1_024 ? String(format: "%.1f GB", Double(mb) / 1_024) : "\(mb) MB"
-        label.stringValue = "This page is using \(size) of memory and may stop drawing. Reloading keeps your place and saved drafts."
+        set(title: "Walnut", status: "Using \(size) of memory", tone: .warn,
+            line: "This page may stop drawing. Reloading keeps your place and saved drafts.", symbol: "memorychip")
     }
 
-    /// Top centre of the page, under the transparent title bar, never wider than the window.
+    /// The bottom left of the page, where every notice shows, never wider than the window.
     func place(in host: NSView) {
         host.addSubview(self)
+        let width = widthAnchor.constraint(equalToConstant: 440)
+        width.priority = .defaultHigh
         NSLayoutConstraint.activate([
-            centerXAnchor.constraint(equalTo: host.centerXAnchor),
-            topAnchor.constraint(equalTo: host.topAnchor, constant: 40),
+            leadingAnchor.constraint(equalTo: host.leadingAnchor, constant: 16),
+            bottomAnchor.constraint(equalTo: host.bottomAnchor, constant: -16),
+            width,
             widthAnchor.constraint(lessThanOrEqualTo: host.widthAnchor, constant: -32),
         ])
     }

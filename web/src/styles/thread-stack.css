@@ -143,17 +143,14 @@
   gap: 12px;
   width: max-content;
   max-width: calc(100% - 24px);
-  padding: 8px 10px 8px 14px;
-  background: var(--card-bg);
-  color: var(--fg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.08);
   font-size: 13px;
   line-height: 18px;
   pointer-events: auto;
-  animation: thread-toast-in 160ms ease-out;
 }
+/* A NoticeCard (notice-card.css) owns the frame; this one keeps its own width, place and entrance. */
+.thread-toast.wn-notice { width: max-content; animation: thread-toast-in 160ms ease-out; }
+html .thread-toast.wn-notice.wn-notice.is-bare { padding: 8px 10px 8px 14px; }
 .thread-toast-text {
   min-width: 0;
   overflow: hidden;
@@ -243,7 +240,7 @@
 /* ── Reduced motion: no breathing, no slides ── */
 @media (prefers-reduced-motion: reduce) {
   .thread-status-dot[data-status="answering"] { animation: none; }
-  .thread-toast { animation: thread-toast-fade 120ms linear; }
+  .thread-toast.wn-notice { animation: thread-toast-fade 120ms linear; }
 }
 @keyframes thread-toast-fade {
   from { opacity: 0; }

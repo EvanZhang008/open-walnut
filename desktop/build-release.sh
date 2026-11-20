@@ -52,7 +52,7 @@ mkdir -p "$MACOS" "$RESOURCES"
 
 # Compile for both architectures and create a universal binary
 SOURCES=(
-    "$SCRIPT_DIR/main.swift" "$SCRIPT_DIR/DesktopDiagnostics.swift" "$SCRIPT_DIR/GlobalDictation.swift" "$SCRIPT_DIR/QuickBarPanel.swift" \
+    "$SCRIPT_DIR/main.swift" "$SCRIPT_DIR/DesktopDiagnostics.swift" "$SCRIPT_DIR/GlobalDictation.swift" "$SCRIPT_DIR/QuickBarPanel.swift" "$SCRIPT_DIR/NoticeCardView.swift" \
     "$SCRIPT_DIR/WebContentPolicy.swift" "$SCRIPT_DIR/WebContentWatchdog.swift" "$SCRIPT_DIR/WebContentProcess.swift" "$SCRIPT_DIR/QuietKeyWindow.swift" "$SCRIPT_DIR/LinkPolicy.swift" \
     "$SCRIPT_DIR/SessionHost.swift" "$SCRIPT_DIR/CalendarBridge.swift" "$SCRIPT_DIR/ReaderBridge.swift" "$SCRIPT_DIR/ClaudeSignInBridge.swift" \
     "$SCRIPT_DIR/BundledRuntime.swift" "$SCRIPT_DIR/AppBuiltCheckout.swift" "$SCRIPT_DIR/AppUpdateMachine.swift" "$SCRIPT_DIR/AppUpdater.swift" \

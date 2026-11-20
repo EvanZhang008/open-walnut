@@ -43,7 +43,6 @@ const CORNER_ALLOWED: Record<string, string> = {
   '.task-board-dock': 'the phone board dock inside a session layer',
   '[data-peek-expanded][popover]': 'a hovered row widened in the top layer at its own measured place in the list, not a notice',
   '.qb-center': 'the quick bar: a panel the person opens with a key or the rail magnifier, centred near the top, not a notice',
-  '.qb-receipts': 'the quick bar receipts of the person own sends, top right while the bar is beside them; moving into the corner stack (the notice-card work of the receipts owner), drop this line then',
   '.stale-build-pill': 'the update notice: docked in the sidebar bottom row (or the pop-out dock) on desktop, floats only on the phone, which has no dock',
 };
 

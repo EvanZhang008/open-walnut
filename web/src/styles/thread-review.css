@@ -124,7 +124,6 @@ html.walnut-col-resizing * { cursor: col-resize !important; user-select: none !i
      before a click); the open question is its full card, over this row. */
   padding: 0;
   border: 1px solid var(--border-strong);
-  border-left: 3px solid var(--review-edge, var(--border-strong));
   border-radius: 8px;
   background: var(--bg-elevated);
   color: var(--fg);
@@ -185,15 +184,17 @@ html.walnut-col-resizing * { cursor: col-resize !important; user-select: none !i
   line-height: 15px;
   text-align: center;
 }
-.thread-review-state { flex: none; font-size: 11px; font-weight: 600; color: var(--review-word, var(--fg-muted)); }
+.thread-review-state { flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; color: var(--review-word, var(--fg-muted)); }
+/* The state's colour is a dot before its word, never a bar down the card's edge (2026-11-20). */
+.thread-review-state:not(:empty)::before { content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--review-edge, var(--fg-muted)); }
 /* Open: its question's full card lies over it (same top, same right edge). */
 .thread-review-card[data-enlarged="true"] { visibility: hidden; }
 
 /* State colors follow the passage marks (thread-stack-page.css). */
-.thread-review-card[data-state="waiting"] { --review-edge: hsl(42 95% 52%); --review-word: hsl(38 90% 38%); border-left-style: dashed; }
+.thread-review-card[data-state="waiting"] { --review-edge: hsl(42 95% 52%); --review-word: hsl(38 90% 38%); }
 .thread-review-card[data-state="answering"] { --review-edge: hsl(140 60% 42%); --review-word: hsl(140 60% 32%); }
 .thread-review-card[data-state="unread"] { --review-edge: hsl(0 80% 55%); --review-word: hsl(0 75% 45%); background: color-mix(in srgb, hsl(0 90% 60%) 6%, var(--bg-elevated)); }
-.thread-review-card[data-state="failed"] { --review-edge: hsl(345 65% 55%); --review-word: hsl(345 60% 45%); border-left-style: dotted; }
+.thread-review-card[data-state="failed"] { --review-edge: hsl(345 65% 55%); --review-word: hsl(345 60% 45%); }
 .thread-review-card[data-state="read"] { --review-edge: hsl(140 45% 50%); --review-word: hsl(140 45% 34%); }
 /* Quieter words, never opacity: a faded card shows what lies under it. */
 .thread-review-card[data-state="resolved"] { color: var(--fg-muted); }
@@ -204,28 +205,13 @@ html.walnut-col-resizing * { cursor: col-resize !important; user-select: none !i
 [data-theme="dark"] .thread-review-card[data-state="failed"] { --review-word: hsl(345 80% 72%); }
 [data-theme="dark"] .thread-review-card[data-state="read"] { --review-word: hsl(140 50% 62%); }
 
-/* Moving while it waits or answers: the edge breathes, or a band runs down it. */
-.thread-review-card[data-state="waiting"]::before,
-.thread-review-card[data-state="answering"]::before {
-  content: '';
-  position: absolute;
-  left: -3px;
-  top: -1px;
-  bottom: -1px;
-  width: 3px;
-  border-radius: 8px 0 0 8px;
-  pointer-events: none;
-}
-.thread-review-card[data-state="waiting"]::before { background: hsl(42 95% 52%); animation: thread-review-breathe 2s ease-in-out infinite; }
-.thread-review-card[data-state="answering"]::before {
-  background: linear-gradient(180deg, transparent 0%, hsl(140 80% 62%) 45%, transparent 90%) 0 0 / 100% 200%;
-  animation: thread-review-scan 1.4s linear infinite;
-}
+/* Moving while it waits or answers: its dot breathes. */
+.thread-review-card[data-state="waiting"] .thread-review-state::before { animation: thread-review-breathe 2s ease-in-out infinite; }
+.thread-review-card[data-state="answering"] .thread-review-state::before { animation: thread-review-breathe 1.4s ease-in-out infinite; }
 @keyframes thread-review-breathe { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
-@keyframes thread-review-scan { from { background-position: 0 100%; } to { background-position: 0 -100%; } }
 @media (prefers-reduced-motion: reduce) {
-  .thread-review-card[data-state="waiting"]::before,
-  .thread-review-card[data-state="answering"]::before { animation: none; }
+  .thread-review-card[data-state="waiting"] .thread-review-state::before,
+  .thread-review-card[data-state="answering"] .thread-review-state::before { animation: none; }
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) .thread-review-card { --review-word: var(--fg-muted); }

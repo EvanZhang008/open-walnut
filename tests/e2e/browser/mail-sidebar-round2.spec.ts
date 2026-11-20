@@ -350,7 +350,9 @@ test('F9: one mailbox, one current row', async ({ page }) => {
       rail: style.boxShadow }
   })
   expect(marks.child, 'the child is not filled like the row that was chosen').not.toBe(marks.chosen)
-  expect(marks.rail, 'it carries a rail instead').not.toBe('none')
+  // Its quiet mark is the accent text in bold, never a bar down its edge (2026-11-20).
+  expect(marks.rail, 'no coloured bar down its edge').toBe('none')
+  expect(Number(marks.weight), 'it is drawn bold instead').toBeGreaterThanOrEqual(600)
   await expect(page.locator(`${PANE} .mail-mailbox[aria-current="true"]`)).toHaveCount(1)
   await expect(folderRow(page, MARINA, 'inbox')).toHaveAttribute('aria-current', 'true')
   await expect(child).not.toHaveAttribute('aria-current', /.+/)

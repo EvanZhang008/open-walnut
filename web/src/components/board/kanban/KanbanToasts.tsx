@@ -10,7 +10,8 @@
  */
 import '@/styles/board-kanban-controls.css';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ICON_CLOSE } from '@/components/common/Icons';
+import { ICON_CHECK, ICON_CLOSE } from '@/components/common/Icons';
+import { NoticeCard } from '@/components/common/NoticeCard';
 import { NoticeDetailsToggle, NoticeWords, useCutOff } from '@/components/common/NoticeText';
 import { log } from '@/utils/log';
 import { CORNER_ORDER, CornerSlot, useCornerState } from '@/components/common/corner-stack';
@@ -120,8 +121,26 @@ export function KanbanToasts({ toasts: fromProps, onDismiss: dismissProp }: Kanb
       onPointerDown={(e) => e.stopPropagation()}
     >
       {shown.map((t) => (
-        <div key={t.id} className={`kanban-toast${t.tone === 'error' ? ' is-error' : ''}`} data-testid="kanban-toast" data-toast-id={t.id}>
-          {/* R3-18: text and actions wrap among themselves; the close button keeps the top right. */}
+        <NoticeCard
+          key={t.id}
+          className={`kanban-toast${t.tone === 'error' ? ' is-error' : ''}`}
+          testId="kanban-toast"
+          data={{ 'toast-id': t.id }}
+          avatar={{ glyph: t.tone === 'error' ? ICON_CLOSE : ICON_CHECK, tone: t.tone === 'error' ? 'error' : 'ok' }}
+          who="Board"
+          status={t.tone === 'error' ? { tone: 'error', text: 'Not saved' } : { tone: 'ok', text: 'Saved' }}
+          end={(
+            <button
+              type="button"
+              className="kanban-toast-close wn-notice-x"
+              data-testid="kanban-toast-dismiss"
+              aria-label="Dismiss"
+              title="Dismiss"
+              onClick={() => onDismiss(t.id)}
+            >{ICON_CLOSE}</button>
+          )}
+        >
+          {/* R3-18: text and actions wrap among themselves. */}
           <div className="kanban-toast-main">
           <KanbanToastText text={t.text} onRead={(open) => read(t.id, open)} />
           {(t.actions ?? []).map((a) => (
@@ -134,20 +153,10 @@ export function KanbanToasts({ toasts: fromProps, onDismiss: dismissProp }: Kanb
             >{a.label}</button>
           ))}
           </div>
-          <button
-            type="button"
-            className="kanban-toast-close"
-            data-testid="kanban-toast-dismiss"
-            aria-label="Dismiss"
-            title="Dismiss"
-            onClick={() => onDismiss(t.id)}
-          >{ICON_CLOSE}</button>
-        </div>
+        </NoticeCard>
       ))}
       {folded > 0 && (
-        <button type="button" className="kanban-toasts-more corner-more" data-testid="kanban-toasts-more" onClick={() => setExpanded(true)}>
-          {foldText}
-        </button>
+        <NoticeCard className="kanban-toasts-more corner-more" testId="kanban-toasts-more" line={foldText} onOpen={() => setExpanded(true)} />
       )}
     </div>
     </CornerSlot>

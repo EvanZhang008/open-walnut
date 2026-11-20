@@ -31,6 +31,7 @@
  * the click. No title tooltips: they drew over the row's own menus.
  */
 import '@/styles/org-rail.css';
+import '@/styles/notice-card.css';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Task } from '@open-walnut/core';
 import { useTasksContext } from '@/contexts/TasksContext';
@@ -212,7 +213,7 @@ function AskRow({ a, task, vp, own, onOpen, onQuote, canQuote, answers }: {
       testId="org-alert"
       className={`org-alert org-ask${own ? ' is-own' : ''}`}
       data={{ 'data-task-id': a.taskId, 'data-kind': a.kind, 'data-own': own ? '1' : undefined, 'data-source': a.source, 'data-category': a.category, 'data-vp': vp }}
-      title={a.via ? (<>
+      title={<><span className="org-ask-mark" data-tone="error" aria-hidden="true"><span className="wn-dot" /></span>{a.via ? (<>
         {/* The top-level task itself, opened as a task: the subtask's letter or Board choice is not its. */}
         <a
           className="org-ask-via"
@@ -221,7 +222,7 @@ function AskRow({ a, task, vp, own, onOpen, onQuote, canQuote, answers }: {
           aria-label={`Part of ${a.via.title}`}
           onClick={(e) => { e.preventDefault(); onOpen({ ...a, taskId: a.via!.id, title: a.via!.title, source: undefined }); }}
         >{a.via.title} ›</a>{' '}{link}
-      </>) : own ? <>{link} <span className="org-ask-own" data-testid="org-ask-own">asks you</span></> : link}
+      </>) : own ? <>{link} <span className="org-ask-own" data-testid="org-ask-own">asks you</span></> : link}</>}
       question={<AgentText compact inline {...askSource} text={summary} testId="org-ask-summary" />}
       detail={more ? <AgentText compact inline {...askSource} text={more} testId="org-ask-more" /> : undefined}
       status={failure?.of === 'snooze' ? <div className="org-answer-error" role="alert" data-testid="org-answer-error">{failure.message}</div> : null}

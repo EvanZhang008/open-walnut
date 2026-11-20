@@ -41,6 +41,8 @@ export const CORNER_ORDER = {
   fileAsk: 15,
   /** A board's move toasts (KanbanToasts), with their Undo and Complete buttons. */
   board: 20,
+  /** The quick bar's receipts (QuickBarReceipts): where the words just sent stand, then the reply. */
+  receipts: 22,
   /** A one-off line from a pop-out window (openPopout.ts). */
   flash: 25,
   /** A host's first connect running in the background (hosts/HostConnectCard.tsx): it stays
@@ -136,7 +138,7 @@ function sync(): void {
   // stand over a third of the page. Counted by the kinds shown, never by the stack's own height,
   // so the short forms do not undo the very reason for them. The phone has its own rules.
   const phone = window.matchMedia(PHONE_LAYOUT_QUERY).matches;
-  const kinds = ['.corner-slot-toasts', '.corner-slot-board', '.corner-slot-host-connect', '.corner-slot-approvals']
+  const kinds = ['.corner-slot-toasts', '.corner-slot-board', '.corner-slot-receipts', '.corner-slot-host-connect', '.corner-slot-approvals']
     .filter((sel) => { const el = stack!.querySelector(sel); return !!el && el.childElementCount > 0 && shown(el); }).length;
   const crowded = kinds >= 3 || (kinds >= 2 && window.innerHeight < SHORT_WINDOW_PX);
   const compact = !phone && crowded;

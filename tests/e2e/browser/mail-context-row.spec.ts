@@ -554,8 +554,8 @@ test('C67, C68: the right-clicked row is marked, and not the way a selected row 
   })
   expect(marks.selected).not.toBeNull()
   expect(marks.ctx).not.toBeNull()
-  // Not the same kind of mark: the selected row's accent bar is an inset on its LEFT edge, and a
-  // second bar in the same place and colour reads as "it selected this row", which is the one thing a
+  // Not the same kind of mark: the selected row is marked by its fill (no shadow), the right-clicked
+  // one by a ring; the same mark would read as "it selected this row", which is the one thing a
   // right-click promises never to do.
   expect(marks.ctx!.shadow).not.toBe(marks.selected!.shadow)
   console.log(`shot: ${await shoot(page.locator('.mail-rows'), SHOT_DIR, 'ctx-vs-selected')}`)

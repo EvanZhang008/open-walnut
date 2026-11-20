@@ -99,7 +99,7 @@
 .usage-account-name { font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .usage-account-cost { font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; }
 .usage-account-meta { grid-column: 1 / -1; color: var(--fg-muted); font-size: 12px; }
-.usage-account[data-direct] { background: color-mix(in srgb, var(--usage-s2) 12%, var(--bg-secondary)); box-shadow: inset 3px 0 0 var(--usage-s2); }
+.usage-account[data-direct] { background: color-mix(in srgb, var(--usage-s2) 12%, var(--bg-secondary)); }
 .usage-account-flag { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--usage-s2); color: #fff; }
 /* The headline sits outside .usage-bd, so the stat carries its own copy of the orange slot. */
 .settings-addons-stat[data-direct] { --usage-s2: #c2410c; }

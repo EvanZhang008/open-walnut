@@ -147,28 +147,30 @@ export function highlightBox(page: Page): Promise<{
   })
 }
 
-/** The two marks on one row: the selection bar and the right-clicked ring, as they really compute. */
+/** The two marks on one row: the selection fill and the right-clicked ring, as they really compute. */
 export function markShape(page: Page, accountId: string, messageId: string): Promise<{
-  shadow: string, background: string, accent: string, ringsWithAccent: boolean, keepsBar: boolean,
+  shadow: string, background: string, accent: string, ringsWithAccent: boolean, keepsSelection: boolean, sideBar: boolean,
 }> {
   return page.evaluate(([account, message]) => {
     const one = document.querySelector(
       `.mail-row[data-account-id="${account}"][data-message-id="${message}"]`,
     ) as HTMLElement | null
-    if (!one) return { shadow: '', background: '', accent: '', ringsWithAccent: false, keepsBar: false }
+    if (!one) return { shadow: '', background: '', accent: '', ringsWithAccent: false, keepsSelection: false, sideBar: false }
     const style = getComputedStyle(one)
     const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()
     const shadow = style.boxShadow
-    // The ring is the `0 0 0 2px inset` shadow; the selection bar is the `2px 0 0` one.
+    // The ring is the `0 0 0 2px inset` shadow; a side bar would be an `Npx 0 0` one (none since
+    // 2026-11-20: the selection is the row's fill).
     const parts = shadow.split(/,(?![^(]*\))/).map((part) => part.trim())
     const ring = parts.find((part) => /0px 0px 0px 2px/.test(part)) ?? ''
-    const bar = parts.find((part) => /2px 0px 0px( 0px)? inset/.test(part)) ?? ''
+    const bar = parts.find((part) => /[1-9]\d*px 0px 0px( 0px)? inset/.test(part)) ?? ''
     return {
       shadow,
       background: style.backgroundColor,
       accent,
       ringsWithAccent: ring.includes('0, 122, 255'),
-      keepsBar: bar.length > 0,
+      keepsSelection: style.backgroundColor !== 'rgba(0, 0, 0, 0)' && style.backgroundColor !== 'transparent',
+      sideBar: bar.length > 0,
     }
   }, [accountId, messageId])
 }

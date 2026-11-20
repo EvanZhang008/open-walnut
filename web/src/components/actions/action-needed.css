@@ -1,16 +1,16 @@
 /* Action needed under a task's row (ActionNeeded.tsx): one line per thing it asks of the user. */
 .action-needed {
   display: flex; flex-direction: column; gap: 6px; margin: 6px 0 2px; padding: 6px 8px;
-  border-left: 3px solid var(--warning, #bf8700); border-radius: 6px;
+  border-radius: 6px;
   background: color-mix(in srgb, var(--warning, #bf8700) 9%, var(--bg));
   color: var(--fg); font-size: 12px; cursor: default; flex-basis: 100%; min-width: 0;
 }
-/* The block's heading is for a screen reader only: its edge says what it is (2026-11-20, the user:
+/* The block's heading is for a screen reader only: its tint says what it is (2026-11-20, the user:
    "why so much garbage Action needed, Ask just now"). */
 .action-needed-title { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .action-needed-item + .action-needed-item { border-top: 1px solid color-mix(in srgb, var(--warning, #bf8700) 22%, transparent); padding-top: 8px; margin-top: 2px; }
 .action-needed:not(:has(.action-needed-item:not(.is-snoozed))) {
-  border-left-color: var(--border); background: color-mix(in srgb, var(--fg-muted) 6%, var(--bg));
+  background: color-mix(in srgb, var(--fg-muted) 6%, var(--bg));
 }
 /* A row's own state beside its ask: "Working" while its turn still runs. */
 .status-card-also-working {

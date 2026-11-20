@@ -504,6 +504,8 @@ final class DictationHUD {
     private var bars: [CALayer] = []
     private var levels: [CGFloat]
     private var hideWork: DispatchWorkItem?
+    /// The card a message shows in (NoticeCardView); the waveform pill is `container`.
+    private var noticeCard: NoticeCardView?
 
     private let barCount = 26
     private let barWidth: CGFloat = 3
@@ -526,6 +528,7 @@ final class DictationHUD {
         let dotSpan: CGFloat = 24
         let barsSpan = CGFloat(barCount) * (barWidth + barGap) - barGap
         let width = dotSpan + barsSpan + 18
+        if let c = container, panel?.contentView !== c { panel?.contentView = c }
         setPanelSize(NSSize(width: width, height: waveHeight))
         // Dark pill reads as "live" and matches the system dictation indicator.
         container?.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.82).cgColor
@@ -578,23 +581,48 @@ final class DictationHUD {
 
     func show(_ message: String, style: Style, autoHide: TimeInterval?) {
         buildIfNeeded()
-        setPanelSize(messageSize)
-        container?.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.97).cgColor
-        container?.layer?.borderColor = NSColor.separatorColor.cgColor
-        waveContainer?.isHidden = true
-        label?.isHidden = false
-        label?.stringValue = message
-        label?.frame = NSRect(x: 31, y: 12, width: messageSize.width - 45, height: 20)
-        dot?.isHidden = false
-        dot?.layer?.backgroundColor = style.accent.cgColor
-        dot?.frame = NSRect(x: 14, y: 18, width: 9, height: 9)
-        layout()
-        panel?.orderFrontRegardless()
+        guard let p = panel else { return }
+        // A message is a notice: the same card as every Walnut notice (NoticeCardView), at the
+        // bottom left where every notice shows. Only the live waveform stays a pill of its own.
+        let card: NoticeCardView
+        if let made = noticeCard {
+            card = made
+        } else {
+            card = NoticeCardView(blending: .behindWindow)
+            // Its width is the HUD's; its height follows its words (one or two lines).
+            card.widthAnchor.constraint(equalToConstant: messageSize.width).isActive = true
+            noticeCard = card
+        }
+        let face = Self.face(of: message, style: style)
+        card.set(title: "Dictation", status: face.status, tone: face.tone, line: face.line, symbol: face.symbol)
+        let width = messageSize.width
+        card.layoutSubtreeIfNeeded()
+        let fit = card.fittingSize
+        if p.contentView !== card { p.contentView = card }
+        let height = max(44, ceil(fit.height))
+        p.setFrame(NSRect(x: p.frame.minX, y: p.frame.minY, width: width, height: height), display: false)
+        layout(bottomLeft: true)
+        p.orderFrontRegardless()
         hideWork?.cancel()
         guard let seconds = autoHide else { return }
         let work = DispatchWorkItem { [weak self] in self?.panel?.orderOut(nil) }
         hideWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
+    }
+
+    /// How a dictation message reads on the card: "Inserted: words" is the status "Inserted" and the
+    /// words; a step on its way is its own status; a failure says so and why.
+    static func face(of message: String, style: Style) -> (status: String, line: String, tone: NoticeCardView.Tone, symbol: String) {
+        switch style {
+        case .recording: return ("Listening", "", .live, "mic.fill")
+        case .working: return (message, "", .live, "waveform")
+        case .done:
+            if let r = message.range(of: ": ") {
+                return (String(message[..<r.lowerBound]), String(message[r.upperBound...]), .ok, "checkmark")
+            }
+            return ("Done", message, .ok, "checkmark")
+        case .error: return ("Not done", message, .warn, "exclamationmark.triangle.fill")
+        }
     }
 
     // MARK: Plumbing
@@ -653,14 +681,17 @@ final class DictationHUD {
         container?.layer?.cornerRadius = size.height == waveHeight ? waveHeight / 2 : 11
     }
 
-    /// Bottom-centre of whichever screen currently has the mouse, with a gap —
-    /// the HUD shows up where the user is working on a multi-display setup.
-    private func layout() {
+    /// On whichever screen has the mouse, so it shows where the user is working on a
+    /// multi-display setup: the live waveform bottom-centre (as the system's own dictation pill),
+    /// a message card at the bottom left, where every Walnut notice shows.
+    private func layout(bottomLeft: Bool = false) {
         guard let p = panel else { return }
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
         guard let frame = screen?.visibleFrame else { return }
         let size = p.frame.size
-        p.setFrameOrigin(NSPoint(x: frame.midX - size.width / 2, y: frame.minY + bottomGap))
+        p.setFrameOrigin(bottomLeft
+            ? NoticeCardView.bottomLeftOrigin(in: frame)
+            : NSPoint(x: frame.midX - size.width / 2, y: frame.minY + bottomGap))
     }
 }

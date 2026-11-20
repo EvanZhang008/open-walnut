@@ -88,9 +88,9 @@
   margin-left: 24px; padding: 4px 0 4px 12px; border-left: 2px solid var(--border); min-width: 0;
   display: flex; flex-direction: column; gap: 4px;
 }
-.org-thread-answer.is-news { border-left-color: var(--accent, #0a84ff); }
 .org-thread-answer.is-waiting { font-size: 12px; color: var(--fg-muted, #86868b); }
 .org-thread-answer-by { font-size: 11px; color: var(--fg-muted, #86868b); font-variant-numeric: tabular-nums; }
+.org-thread-answer-by > .wn-dot { margin-right: 6px; vertical-align: 1px; }
 .org-thread-fold { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
 /* Structured replies scroll instead of cutting a block or fading its words. */
 .org-thread .org-thread-fold:has(:where(.markdown-body > :not(p, h1, h2, h3, h4, h5, h6), img, a[data-file-path], .rich-blocks)) { display: block; -webkit-line-clamp: unset; max-height: 240px; overflow: auto; }

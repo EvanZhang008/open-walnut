@@ -37,12 +37,7 @@
 }
 
 /* In the corner it is the one card a script waits on, so it carries the strongest mark there. */
-.corner-stack .approval-card { border-left: 3px solid var(--accent); }
 /* The answer keeps the card's shape, its mark in the answer's colour. */
-.corner-stack .approval-card-settled.approval-approved { border-left-color: var(--success); }
-.corner-stack .approval-card-settled.approval-denied { border-left-color: var(--fg-muted); }
-.corner-stack .approval-card-settled.approval-expired,
-.corner-stack .approval-card-settled.approval-canceled { border-left-color: var(--border-strong); }
 
 /* A card that just took another's place: its buttons wait a moment (ApprovalPrompts ARM_MS). */
 .approval-card-arming .approval-actions { pointer-events: none; opacity: 0.55; transition: opacity 0.2s ease; }
@@ -376,7 +371,6 @@
   row-gap: 0;
   font-size: 13px;
 }
-.corner-stack .approval-card-line { padding: var(--corner-card-pad-compact); }
 /* First line: what waits; a click opens the whole request. */
 .approval-line-open {
   flex: 1 1 0;
@@ -425,16 +419,16 @@
   align-items: center;
   gap: 6px;
   text-align: left;
-  border: 1px solid var(--border-strong);
-  border-left: 3px solid var(--accent);
-  background: var(--card-bg);
+  border: none;
+  background: transparent;
   color: var(--fg);
   font: inherit;
   font-size: 12px;
   font-weight: 600;
+  width: 100%;
   padding: 8px 14px 8px 12px;
-  border-radius: var(--radius-md);
-  box-shadow: var(--corner-card-shadow);
+  /* Inside its NoticeCard (wn-notice-pill): the card is the frame, the button its whole face. */
+  border-radius: 13px;
   cursor: pointer;
 }
 .approval-aside:hover { background: var(--bg-hover); }
@@ -594,7 +588,7 @@ button.approval-line-more { border: 0; cursor: pointer; font: inherit; font-size
 .corner-stack .approval-stop-asking { flex: 1 0 100%; text-align: center; margin-top: 4px; }
 
 /* After "stop asking me": what changed, with Undo and the way to the switch. */
-.approval-stopped { display: flex; flex-direction: column; gap: 6px; border-left-color: var(--success); }
+.approval-stopped { display: flex; flex-direction: column; gap: 6px; }
 .approval-stopped-line { font-weight: 600; }
 .approval-stopped-what { font-size: 13px; color: var(--fg-muted); overflow-wrap: anywhere; }
 .approval-stopped-sub { font-size: 13px; color: var(--fg); }

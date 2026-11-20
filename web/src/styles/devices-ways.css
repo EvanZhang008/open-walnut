@@ -120,12 +120,10 @@ a.pc-server:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
   padding: 14px var(--settings-row-pad-x, 16px);
   background: var(--settings-group-bg);
   border: 1px solid var(--settings-group-border);
-  border-left: 3px solid var(--fg-muted);
   border-radius: 10px;
 }
-.devices-now[data-tone='ok'] { border-left-color: var(--success); }
-.devices-now[data-tone='warn'] { border-left-color: var(--warning); }
-.devices-now-title { font-size: 15px; font-weight: 600; line-height: 21px; color: var(--fg); }
+/* Its tone is the dot before the title (wn-dot, notice-card.css), never a bar down one edge. */
+.devices-now-title { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; line-height: 21px; color: var(--fg); }
 .devices-now-hops { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 6px; }
 .devices-now-hop-wrap { display: inline-flex; align-items: center; gap: 4px; }
 .devices-now-hop {

@@ -2760,7 +2760,6 @@ select {
   max-height: 130px;
   overflow-y: auto;
   padding: 0 12px 8px;
-  border-left: 3px solid var(--accent, #007AFF);
   margin: 0 12px 0 16px;
 }
 
@@ -2988,31 +2987,24 @@ select {
   background: var(--bg-secondary);
   color: var(--fg);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--session-ref);
   border-radius: var(--radius-md);
   padding: 10px 12px;
   font-size: 13px;
   line-height: 1.55;
 }
 
-.provenance-card[data-envelope-kind="notification"] {
-  border-left-color: var(--warning);
+/* The glyph before the sender says the kind in its colour (the same hairline all round: no
+   coloured side bar, 2026-11-20). */
+.provenance-card[data-envelope-kind="notification"] .provenance-glyph {
+  color: var(--warning);
 }
 
 /* A trigger fire: a script on a host said so, not a session or Walnut itself. */
-.provenance-card[data-envelope-kind="trigger"] {
-  border-left-color: var(--accent);
-}
-
 .provenance-card[data-envelope-kind="trigger"] .provenance-glyph {
   color: var(--accent);
 }
 
 /* An unidentified sender is not "a session" — don't paint it in session indigo. */
-.provenance-card[data-anonymous="true"] {
-  border-left-color: var(--fg-muted);
-}
-
 .provenance-card[data-anonymous="true"] .provenance-glyph {
   color: var(--fg-muted);
 }
@@ -3435,7 +3427,6 @@ select {
 
 /* ── Permission Request Card (inline Allow/Deny for sensitive operations) ── */
 .permission-request-card {
-  border-left: 3px solid var(--warning);
   background: color-mix(in srgb, var(--warning) 6%, var(--bg-secondary));
   border-radius: var(--radius-sm);
   padding: 10px 14px;
@@ -3443,11 +3434,9 @@ select {
   font-size: 13px;
 }
 .permission-request-card--allowed {
-  border-left-color: var(--success);
   background: color-mix(in srgb, var(--success) 6%, var(--bg-secondary));
 }
 .permission-request-card--denied {
-  border-left-color: var(--error);
   background: color-mix(in srgb, var(--error) 6%, var(--bg-secondary));
 }
 .permission-request-header {
@@ -3550,7 +3539,7 @@ select {
 }
 
 /* AskUserQuestion card — permission-card frame, QuestionPopover (qp-*) pills inside. */
-.ask-user-question-card { border-left-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, var(--bg-secondary)); }
+.ask-user-question-card { background: color-mix(in srgb, var(--accent) 6%, var(--bg-secondary)); }
 .ask-user-question { margin-top: 10px; }
 .ask-user-question .qp-question { font-size: 13px; margin-bottom: 8px; }
 .ask-user-answer-line { font-weight: 400; line-height: 1.5; }
@@ -3779,15 +3768,12 @@ select {
 /* An answered ask in the panel reads in the card's tones (allowed is green below). */
 .notification-feed-item-resolved--denied { color: var(--error); }
 /* An answered toast: its outcome's tone, not the warning that asked. */
-.notification-toast.nfc-perm-toast--settled { border-left-color: var(--fg-muted); }
-.notification-toast.nfc-perm-toast--allowed { border-left-color: var(--success); }
 .nfc-perm-toast--settled .notification-toast-title { color: var(--fg); }
 .nfc-perm-toast--allowed .notification-toast-icon,
 .nfc-perm-toast--allowed .nfc-perm-settled,
 .notification-feed-item-resolved--allowed { color: var(--success); }
 .nfc-perm-toast--denied .notification-toast-icon,
 .nfc-perm-toast--denied .nfc-perm-settled { color: var(--error); }
-.notification-toast.nfc-perm-toast--denied { border-left-color: var(--error); }
 .nfc-perm-actions > .permission-note,
 .notification-feed-item-actions > .permission-note { flex: 1 0 100%; margin-top: 2px; }
 
@@ -4790,7 +4776,6 @@ select {
 .bg-task-row--compact.bg-task-row--selected,
 .bg-task-row--compact.bg-task-row--selected:hover {
   background: var(--accent-subtle, rgba(0, 122, 255, 0.06));
-  box-shadow: inset 2px 0 0 var(--accent);
 }
 .bg-task-row--compact .bg-task-row-name { flex: 1; }
 .bg-task-row-time {
@@ -5291,7 +5276,6 @@ select {
 
 .memory-tree-item-selected {
   background: var(--accent-subtle);
-  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .memory-tree-item-label {
@@ -5799,7 +5783,6 @@ select {
 /* Heartbeat substantive response — accented like cron but with heartbeat color */
 .chat-message-heartbeat {
   background: var(--bg-secondary);
-  border-left: 3px solid var(--heartbeat);
   padding: 8px 12px;
   border-radius: 8px;
   margin-bottom: 8px;
@@ -5817,7 +5800,6 @@ select {
 /* Notification messages (session results, errors) */
 .chat-message-notification {
   background: var(--bg-secondary);
-  border-left: 3px solid var(--accent);
   padding: 8px 12px;
   border-radius: 8px;
   margin-bottom: 8px;
@@ -5829,10 +5811,6 @@ select {
   font-size: 0.85em;
   text-transform: uppercase;
   letter-spacing: 0.03em;
-}
-
-.chat-message-notification-error {
-  border-left-color: var(--error);
 }
 
 .chat-message-notification-error .chat-message-role {
@@ -6404,7 +6382,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
   margin-bottom: 6px;
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
-  border-left: 2px solid var(--accent);
   overflow: hidden;
 }
 
@@ -6802,38 +6779,8 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
 .tool-run-waiting { color: var(--warning); }
 .tool-run-queued { color: var(--fg-muted); }
 /* The fold line and its hide, side by side; the row itself lets clicks through. */
-.nfc-more-asks-row { position: relative; display: block; animation: notification-toast-in 0.25s ease-out; }
-/* The row and its hide come in together: the line's own entrance left the x showing first. */
-.nfc-more-asks-row > .notification-toast.nfc-more-asks { animation: none; }
-.nfc-more-asks-row > .notification-toast.nfc-more-asks { padding-right: 38px; }
-.nfc-more-asks-close {
-  position: absolute;
-  top: 50%;
-  right: 6px;
-  transform: translateY(-50%);
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--fg-secondary, var(--fg-muted));
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-  pointer-events: auto;
-}
-.nfc-more-asks-close:hover { background: var(--bg-tertiary); color: var(--fg); }
-.notification-toast.nfc-more-asks {
-  display: block;
-  width: 100%;
-  padding: 8px 12px;
-  text-align: left;
-  font: inherit;
-  font-size: 12.5px;
-  color: var(--fg);
-  cursor: pointer;
-}
+.nfc-more-asks-row { cursor: pointer; }
+.nfc-more-asks { white-space: normal; }
 .composer-prompt-warning {
   padding: 2px 14px 4px;
   font-size: 11.5px;
@@ -7567,7 +7514,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
 
 .plan-preview-body {
   padding: 0 12px 8px;
-  border-left: 3px solid var(--accent, #007AFF);
   margin: 0 12px 8px;
 }
 
@@ -10085,10 +10031,6 @@ body.walnut-dragging {
   background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
-/* Locked panel accent — subtle right-edge tint so users can spot the "locked region" at a glance */
-.main-page-session-column.is-locked .session-panel-header {
-  box-shadow: inset -2px 0 0 color-mix(in srgb, var(--accent) 40%, transparent);
-}
 
 /* Session panel reorder animation is handled by @formkit/auto-animate attached
    to .main-page-sessions-area — no CSS needed for that. */
@@ -10848,12 +10790,12 @@ body.walnut-dragging {
 .vd-rail-btn {
   display: flex; align-items: center; gap: 8px; width: 100%;
   padding: 7px 12px 7px 10px; text-align: left; cursor: pointer;
-  background: none; border: none; border-left: 2px solid transparent;
+  background: none; border: none;
   font-size: 12.5px; color: var(--fg-secondary); transition: background 0.1s;
 }
 .vd-rail-btn:hover { background: var(--bg-secondary); color: var(--fg-primary); }
 .vd-rail-btn.vd-active {
-  background: var(--bg-secondary); border-left-color: var(--accent);
+  background: var(--accent-subtle);
   color: var(--fg-primary); font-weight: 600;
 }
 .vd-rail-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -12079,7 +12021,6 @@ body.walnut-dragging {
   right: 0;
   border-radius: 7px;
   background: var(--row-pill-bg, transparent);
-  border-left: 0 solid var(--accent); /* .task-focused widens to 3px; .task-filter-override dashes it */
   pointer-events: none;
   z-index: -1;
   transition: background 0.15s;
@@ -13334,7 +13275,7 @@ body.walnut-dragging {
 .todo-detail-note.markdown-body blockquote {
   margin: 4px 0;
   padding: 4px 10px;
-  border-left: 3px solid var(--accent);
+  border-left: 3px solid var(--border-strong);
   background: var(--bg-tertiary);
   color: var(--fg-secondary);
 }
@@ -15367,12 +15308,6 @@ body.walnut-dragging {
 .task-focused {
   --row-pill-bg: var(--accent-subtle);
 }
-/* Accent bar rides the pill's left edge (the highlight start), so it never
-   shifts row content and never tints the unread-dot gutter. */
-.task-focused .todo-row-pill {
-  border-left-width: 3px;
-}
-
 .task-focused:hover {
   --row-pill-bg: var(--accent-subtle);
 }
@@ -15407,19 +15342,15 @@ body.walnut-dragging {
  * Pinned-tier cards never light: their gap shows where they land, and the folder
  * row it is in lights instead (.task-group-chip-drop). */
 .todo-panel-item-group-target .todo-row-pill {
-  box-shadow: inset 3px 0 0 0 var(--accent), inset 0 0 0 1.5px var(--group-outline, rgba(0,122,255,0.32));
+  box-shadow: inset 0 0 0 1.5px var(--accent);
   animation: todo-group-pulse 1.1s ease-in-out infinite;
 }
 @keyframes todo-group-pulse {
-  0%, 100% { box-shadow: inset 3px 0 0 0 var(--accent), inset 0 0 0 1.5px var(--group-outline, rgba(0,122,255,0.32)); }
-  50%      { box-shadow: inset 3px 0 0 0 var(--accent), inset 0 0 0 1.5px var(--group-outline, rgba(0,122,255,0.32)), 0 0 0 2px var(--accent-subtle); }
+  0%, 100% { box-shadow: inset 0 0 0 1.5px var(--accent); }
+  50%      { box-shadow: inset 0 0 0 1.5px var(--accent), 0 0 0 2px var(--accent-subtle); }
 }
 
 /* ===== Focus override: task temporarily shown outside current filters ===== */
-
-.task-filter-override .todo-row-pill {
-  border-left-style: dashed;
-}
 
 .task-filter-override-row {
   padding-left: 26px; /* align with title text (phase icon 18px + gap 4px + 4px) */
@@ -16762,29 +16693,12 @@ a.task-kebab-info:hover {
   pointer-events: none;
 }
 
-.notification-toast {
-  pointer-events: auto;
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-left: 3px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.08);
-  padding: 12px 14px;
-  animation: notification-toast-in 0.25s ease-out;
-}
-
-/* Severity accents — left border + icon color. */
-.notification-toast--info { border-left-color: var(--accent); }
-.notification-toast--success { border-left-color: var(--success, #3aa757); }
-.notification-toast--warning { border-left-color: var(--warning); }
-.notification-toast--error { border-left-color: var(--danger, #d94a38); }
+/* A toast is a NoticeCard (notice-card.css): the frame, the avatar and the status dot that
+   carries its severity are the card's; never a coloured bar down one side. */
 
 /* Persistent toasts open the notification center on body click. */
 .notification-toast--clickable { cursor: pointer; transition: box-shadow 0.15s ease, transform 0.15s ease; }
-.notification-toast--clickable:hover {
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16), 0 4px 12px rgba(0, 0, 0, 0.10);
-  transform: translateY(-1px);
-}
+.notification-toast--clickable:hover { transform: translateY(-1px); }
 
 /* Up from the bottom edge, where the stack sits (corner-stack.css); the phone's stack is at the
    top and has its own (wn-phone-toast-in, phone-layout.css). */
@@ -16793,58 +16707,12 @@ a.task-kebab-info:hover {
   to { opacity: 1; transform: none; }
 }
 
-.notification-toast-header {
-  display: flex;
-  /* A title of two lines keeps its icon and its x on its first line. */
-  align-items: flex-start;
-  gap: 6px;
-  min-width: 0;
-  margin-bottom: 4px;
-}
-
-.notification-toast-icon {
-  display: inline-flex;
-  align-items: center;
-  flex-shrink: 0;
-  color: var(--accent);
-}
-.notification-toast--success .notification-toast-icon { color: var(--success, #3aa757); }
-.notification-toast--warning .notification-toast-icon { color: var(--warning); }
-.notification-toast--error .notification-toast-icon { color: var(--danger, #d94a38); }
 
 /* A few lines, then Details (NoticeText.tsx): never one ellipsized line that hides the rest
    (2026-11-05: a daemon error's command was cut off and its x pushed out of the toast). */
-.notification-toast-title {
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 16px;
-  color: var(--fg);
-  flex: 1 1 auto;
-  min-width: 0;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  overflow-wrap: anywhere;
-}
-.notification-toast-icon { height: 16px; }
+/* The toast's title is the card's preview: its words in the card's own colour, two lines. */
+.notification-toast-title { color: var(--fg); }
 
-.notification-toast--warning .notification-toast-title { color: var(--warning); }
-.notification-toast--error .notification-toast-title { color: var(--danger, #d94a38); }
-.notification-toast--info .notification-toast-title { color: var(--accent); }
-
-.notification-toast-close {
-  background: none;
-  border: none;
-  color: var(--fg-muted);
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0 2px;
-  flex-shrink: 0;
-}
-
-.notification-toast-close:hover { color: var(--fg); }
 
 .notification-toast-body {
   font-size: 13px;
@@ -16853,7 +16721,7 @@ a.task-kebab-info:hover {
   overflow-wrap: anywhere;
   margin-bottom: 8px;
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -18949,16 +18817,6 @@ a.task-kebab-info:hover {
   font-weight: 600;
 }
 
-.provider-rail-item-active::after {
-  content: "";
-  position: absolute;
-  right: -8px;
-  top: 8px;
-  bottom: 8px;
-  width: 3px;
-  border-radius: 2px;
-  background: var(--accent);
-}
 
 .provider-rail-item-locked,
 .provider-rail-item-locked:hover {
@@ -20246,7 +20104,6 @@ a.task-kebab-info:hover {
 
 .usage-table tbody tr.active {
   background: var(--accent-subtle);
-  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .usage-table tbody tr.active:hover {
@@ -20288,12 +20145,9 @@ td.usage-share-col {
 
 /* ===== Session Queued Messages ===== */
 
-/* Received: server accepted, waiting for CLI — normal opacity, accent border */
+/* Received: server accepted, waiting for CLI — normal opacity; its "Queued" badge says so. */
 .session-msg-received {
   position: relative;
-  border-right: 2px solid var(--accent);
-  padding-right: 8px;
-  margin-right: 8px;
 }
 
 .session-msg-received-badge {
@@ -20321,9 +20175,6 @@ td.usage-share-col {
 .session-msg-queued {
   opacity: 0.7;
   position: relative;
-  border-right: 2px solid var(--fg-muted);
-  padding-right: 8px;
-  margin-right: 8px;
 }
 
 .session-msg-agent-wait-sign-in {
@@ -20360,12 +20211,9 @@ td.usage-share-col {
   color: var(--fg);
 }
 
-/* Failed: send error — red border, full opacity so message is clearly visible */
+/* Failed: send error — full opacity so the message is clearly visible; its red badge says so. */
 .session-msg-failed {
   position: relative;
-  border-right: 2px solid var(--danger, #ff3b30);
-  padding-right: 8px;
-  margin-right: 8px;
 }
 .session-msg-failed-badge {
   font-size: 10px;
@@ -20602,7 +20450,6 @@ td.usage-share-col {
 
 .execute-plan-body {
   padding: 0 12px 8px;
-  border-left: 3px solid #0d9488;
   margin: 0 12px 8px;
 }
 
@@ -22221,7 +22068,6 @@ a.tag-chip:focus-visible,
 
 .provider-card-active {
   background: var(--card-bg);
-  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .provider-card-header {
@@ -24426,7 +24272,6 @@ a.tag-chip:focus-visible,
 
 /* The hit the arrow keys are on: Enter opens it and closes the search. */
 .notes-search-result.notes-search-result-active {
-  box-shadow: inset 2px 0 0 var(--accent);
   background: var(--bg-hover, rgba(127,127,127,0.12));
 }
 
@@ -24481,12 +24326,11 @@ a.tag-chip:focus-visible,
   100% { background-color: transparent; }
 }
 
-/* Folder headers: a tinted chip row — accent left-edge + soft fill separates
-   "this is a place" from "this is a note". Count sits inline on the right. */
+/* Folder headers: a tinted chip row — the soft fill separates "this is a place"
+   from "this is a note". Count sits inline on the right. */
 .notes-search-folder {
-  border-left: 2px solid var(--accent);
   background: color-mix(in srgb, var(--accent) 7%, transparent);
-  border-radius: 0 7px 7px 0;
+  border-radius: 7px;
   padding: 5px 10px;
   gap: 7px;
 }
@@ -28903,10 +28747,10 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .session-diff-hybrid .session-diff-segment {
   margin: 0; /* segments must read as ONE continuous diff */
 }
-/* A split region announces itself: a thin accent edge marks "this block is a
+/* A split region announces itself: a grey gutter line marks "this block is a
    side-by-side replacement", so the layout change never reads as a glitch. */
 .session-diff-hybrid .session-diff-segment.is-split {
-  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 45%, transparent);
+  box-shadow: inset 2px 0 0 var(--border-strong);
 }
 /* Unfold bars live OUTSIDE any table here — same visuals as the in-table
    Decoration (the .session-diff-expander inside carries them). */
@@ -29082,7 +28926,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   margin: 6px 10px;
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
   border-radius: 6px;
   background: var(--card-bg);
   font-family: var(--font-sans, system-ui, sans-serif);
@@ -29520,7 +29363,8 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .routine-check-remove { color: var(--fg-secondary); }
 
 .routine-check-test {
-  border-left: 3px solid var(--border);
+  border: 1px solid var(--border);
+  border-radius: 6px;
   padding: 6px 10px;
   font-size: 12px;
   display: flex;
@@ -29528,8 +29372,8 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   gap: 6px;
 }
 
-.routine-check-test.fired { border-left-color: var(--accent); }
-.routine-check-test.error { border-left-color: var(--error); color: var(--error); }
+.routine-check-test.fired .routine-check-test-verdict { color: var(--accent); }
+.routine-check-test.error { color: var(--error); }
 
 .routine-check-test-output {
   margin: 0;
@@ -30797,10 +30641,9 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 }
 
 /* --- chips ----------------------------------------------------------------
-   A desktop-calendar block: a soft wash of the calendar's colour, a solid bar
-   on its leading edge, the title in a deep shade of the same colour and the
-   time under it. The bar is an inset shadow, not a border, so a block's text
-   column is the same width whether or not it has one. */
+   A desktop-calendar block: a soft wash of the calendar's colour, the title in
+   a deep shade of the same colour and the time under it. No bar down one edge
+   (2026-11-20): the wash already says which calendar it is. */
 .cal-chip {
   --cal-chip-tint: var(--accent);
   position: relative;
@@ -30808,9 +30651,8 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   flex-direction: column;
   gap: 0;
   border-radius: 5px;
-  padding: 2px 6px 2px 8px;
+  padding: 2px 6px;
   background: color-mix(in srgb, var(--cal-chip-tint) 17%, var(--bg));
-  box-shadow: inset 3px 0 0 var(--cal-chip-tint);
   color: color-mix(in srgb, var(--cal-chip-tint) 45%, var(--fg));
   font-size: 11.5px;
   line-height: 15px;
@@ -32020,7 +31862,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 .cal-move-ghost-solid {
   --cal-chip-tint: var(--accent);
   border: none;
-  border-left: 3px solid var(--cal-chip-tint);
   border-radius: 6px;
   background: color-mix(in srgb, var(--cal-chip-tint) 32%, var(--card-bg));
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
@@ -32047,7 +31888,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   pointer-events: none;
   max-width: 220px;
   padding: 3px 8px;
-  border-left: 3px solid var(--cal-chip-tint);
   border-radius: 6px;
   background: color-mix(in srgb, var(--cal-chip-tint) 28%, var(--card-bg));
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
@@ -32106,6 +31946,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   font-size: 11.5px;
   color: var(--fg-muted);
 }
+.cal-item-sub-dot { margin-right: 6px; vertical-align: 1px; }
 
 .cal-item-location {
   font-size: 12px;
@@ -32455,7 +32296,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   cursor: pointer;
   background: none;
   border: none;
-  border-left: 2px solid transparent;
   font-size: 12.5px;
   color: var(--fg-secondary);
 }
@@ -32463,8 +32303,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 .nfc-rail-btn:hover { background: var(--bg-secondary); color: var(--fg); }
 
 .nfc-rail-btn.nfc-active {
-  background: var(--bg-secondary);
-  border-left-color: var(--accent);
+  background: var(--accent-subtle);
   color: var(--fg);
   font-weight: 600;
 }
@@ -34801,16 +34640,9 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 
 /* ── Outbound session send (SessionOutboundCard) ──────────────────────────────
    The mirror of the inbound provenance card: same shell, same chips, same
-   disclosure. Only the direction differs, so only the direction is restyled —
-   a dashed left edge reads as "leaving" next to the solid inbound one, which is
-   what tells a send and a receipt apart when both sit in one timeline. */
-.provenance-card[data-envelope-kind="outbound"] {
-  border-left-style: dashed;
-}
-
-.provenance-card[data-envelope-kind="outbound"][data-outbound-error="true"] {
-  border-left-color: var(--error, var(--warning));
-}
+   disclosure. The direction words ("Sent to ...") tell a send and a receipt
+   apart when both sit in one timeline; a failed send reads in its status's
+   colour, never a coloured side bar. */
 
 .provenance-card[data-envelope-kind="outbound"][data-outbound-error="true"] .provenance-status {
   color: var(--error, var(--warning));

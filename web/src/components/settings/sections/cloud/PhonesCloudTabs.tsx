@@ -18,6 +18,7 @@ import { useDevicesData, useExposeStatus, type DeviceEntry } from './useDevicesD
 import { WalnutServersStrip } from './WalnutServersStrip';
 import { DEVICES_INTRO, deriveWays, landingWay, type NowLine, type Way, type WayDot } from './ways-model';
 import '@/styles/devices-ways.css';
+import '@/styles/notice-card.css';
 
 export const PANE_TITLE = 'Phones & Cloud';
 
@@ -162,7 +163,7 @@ export function TabBar({ tabs, current }: { tabs: readonly TabView[]; current: P
 function NowLineView({ now }: { now: NowLine }) {
   return (
     <div className="devices-now" data-tone={now.tone} data-testid="devices-now">
-      <div className="devices-now-title">{now.title}</div>
+      <div className="devices-now-title" data-tone={now.tone}><span className="wn-dot" aria-hidden="true" />{now.title}</div>
       {now.hops && (
         <div className="devices-now-hops" aria-label={now.hops.join(' to ')}>
           {now.hops.map((h, i) => (

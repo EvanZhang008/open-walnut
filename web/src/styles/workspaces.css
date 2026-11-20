@@ -453,7 +453,6 @@
   row-gap: 4px;
   padding: 6px 8px;
   border: 1px solid color-mix(in srgb, var(--warning, #ff9500) 45%, transparent);
-  border-left-width: 3px;
   border-radius: 6px;
   background: color-mix(in srgb, var(--warning, #ff9500) 9%, var(--bg));
   color: var(--fg);

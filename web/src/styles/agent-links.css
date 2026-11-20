@@ -29,7 +29,6 @@ a.letter-link:hover {
   padding: 16px;
   color: var(--fg);
   background: var(--bg-secondary);
-  border-left: 3px solid var(--accent);
 }
 .file-viewer-source-failure { display: flex; flex-direction: column; gap: 12px; padding: 12px; overflow: auto; }
 .file-viewer-source-choices { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--fg); }

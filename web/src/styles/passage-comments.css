@@ -49,7 +49,7 @@
 .passage-comment-card-quote {
   color: var(--fg-muted);
   font-size: 12px;
-  border-left: 2px solid rgba(240, 90, 20, 0.7);
+  border-left: 2px solid var(--border-strong);
   padding-left: 8px;
 }
 .passage-comment-card-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow-y: auto; }

@@ -84,6 +84,7 @@ import { AskCard } from '@/components/actions/ActionNeeded';
 import { AskCardFrame } from '@/components/actions/AskCard';
 import { ThreadOptions } from './OrgInlineAnswer';
 import '@/styles/org-threads.css';
+import '@/styles/notice-card.css';
 
 /** A task's live status dot, the colours of the Task view's tabs (OrgTaskRail TAB_DOT). */
 const TASK_DOT: Record<string, string> = {
@@ -290,7 +291,8 @@ function Answer({ text, about, at, by, known, now, testId = 'org-thread-answer',
   }, [onEntityClick]);
   return (
     <div className={`org-thread-answer${known ? '' : ' is-news'}`} data-testid={testId} data-known={known ? 'true' : 'false'} data-text-source={sourceAttr(source)}>
-      <div className="org-thread-answer-by">{by} · {clock(at, now)}</div>
+      {/* New to him: a dot before who wrote it, never a coloured guide line (2026-11-20). */}
+      <div className="org-thread-answer-by" data-tone={known ? undefined : 'live'}>{!known && <span className="wn-dot" aria-hidden="true" />}{by} · {clock(at, now)}</div>
       {re && <div className="org-thread-re" data-testid="org-thread-re">{re}</div>}
       <Fold className="org-thread-answer-body" testId="org-thread-answer-body">
         <RichMarkdown text={body} cwd={file.render.cwd} host={file.render.host} inlineImages={file.render.images} onClick={onClick} />

@@ -8,17 +8,8 @@
 }
 /* Why an Ask here opened no card (FILE_ASK_FAILURE_TEXT): a press never does nothing.
    Shown in the notice corner (<CornerSlot>), like every notice Walnut raises itself. */
-.fv-ask-notice {
-  padding: 6px 12px;
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  background: var(--bg-elevated);
-  color: var(--fg);
-  font-size: 13px;
-  line-height: 1.4;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
-  pointer-events: none;
-}
+.fv-ask-notice { pointer-events: none; }
+.fv-ask-notice-text { font-size: 13px; line-height: 1.4; color: var(--fg-secondary); }
 
 .fv-thread-layer {
   position: absolute;

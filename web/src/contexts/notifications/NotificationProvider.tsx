@@ -33,7 +33,7 @@ import { log } from '@/utils/log';
 import { stripEntityRefsToText, extractFirstRefIds } from '@/utils/markdown';
 import {
   type Notification, type NotificationInput,
-  TOAST_DURATION_MS, IS_PERSISTENT, MAX_FEED_BODY_CHARS, SHOULD_TOAST,
+  TOAST_DURATION_MS, toastLifetimeMs, IS_PERSISTENT, MAX_FEED_BODY_CHARS, SHOULD_TOAST,
 } from './types';
 import { attentionBadgeCount, actionOf, mergeLoadedFeed } from './notification-model';
 import { wireActionsOf } from './notification-actions';
@@ -346,7 +346,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     // Auto-dismiss the toast after the per-kind lifetime. dismissToast drops the
     // dedupKey too, so the same key (e.g. a new sort change) can toast again later.
     if (shouldToast && !input.ownClock && Number.isFinite(TOAST_DURATION_MS[input.kind])) {
-      const duration = input.durationMs ?? TOAST_DURATION_MS[input.kind];
+      const duration = toastLifetimeMs(input);
       const timer = setTimeout(() => dismissToast(id), duration);
       timers.current.set(id, timer);
     }

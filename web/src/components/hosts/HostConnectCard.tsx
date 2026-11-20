@@ -19,6 +19,8 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from 'react';
 import { CORNER_ORDER, CornerSlot, useCornerState } from '@/components/common/corner-stack';
+import { NoticeCard, NoticeStatus } from '@/components/common/NoticeCard';
+import { ICON_CHECK, ICON_TERMINAL } from '@/components/common/Icons';
 import { SetupProgress } from '@/components/common/SetupProgress';
 import { useAllHostStatus } from '@/hooks/useHostStatus';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
@@ -94,44 +96,50 @@ export function HostConnectCard() {
   return (
     <CornerSlot order={CORNER_ORDER.hostConnect} className="corner-slot-host-connect">
       {asPill ? (
-        <button
-          type="button"
-          ref={pillRef}
-          className="approval-aside hcc-pill"
-          data-testid="host-connect-pill"
-          aria-label={line}
-          title={`${line}: show the details`}
-          onMouseDown={keepFocus}
-          onClick={(e) => choose(e, 'card')}
-        >
-          {connecting ? <span className="hcc-pill-spinner" aria-hidden="true" /> : <span className="hcc-ok" aria-hidden="true">✓</span>}
-          <span>{words}</span>
-          {percent !== undefined && <span className="hcc-pill-percent">{`· ${percent}%`}</span>}
-        </button>
+        <NoticeCard className="wn-notice-pill">
+          <button
+            type="button"
+            ref={pillRef}
+            className="approval-aside hcc-pill"
+            data-testid="host-connect-pill"
+            aria-label={line}
+            title={`${line}: show the details`}
+            onMouseDown={keepFocus}
+            onClick={(e) => choose(e, 'card')}
+          >
+            <NoticeStatus tone={connecting ? 'live' : 'ok'}>{words}</NoticeStatus>
+            {percent !== undefined && <span className="hcc-pill-percent">{`· ${percent}%`}</span>}
+          </button>
+        </NoticeCard>
       ) : (
-        <section className="hcc-card" role="region" aria-label="Connecting in the background" data-testid="host-connect-card">
-          <div className="approval-head hcc-head">
-            <span className="approval-kicker">{connecting ? 'Setting up in the background' : 'Done'}</span>
-            <span className="approval-head-end">
-              <button
-                type="button"
-                ref={minimizeRef}
-                className="approval-minimize"
-                aria-label="Make it smaller"
-                title="Make it smaller: one line until it is done"
-                data-testid="host-connect-minimize"
-                onMouseDown={keepFocus}
-                onClick={(e) => choose(e, 'pill')}
-              >
-                <span aria-hidden="true">–</span>
-              </button>
-            </span>
-          </div>
+        <NoticeCard
+          className="hcc-card"
+          role="region"
+          testId="host-connect-card"
+          ariaLabel="Connecting in the background"
+          avatar={{ glyph: connecting ? ICON_TERMINAL : ICON_CHECK, tone: connecting ? 'live' : 'ok' }}
+          who="Computers"
+          status={{ tone: connecting ? 'live' : 'ok', text: connecting ? 'Setting up in the background' : 'Done' }}
+          end={(
+            <button
+              type="button"
+              ref={minimizeRef}
+              className="approval-minimize wn-notice-x"
+              aria-label="Make it smaller"
+              title="Make it smaller: one line until it is done"
+              data-testid="host-connect-minimize"
+              onMouseDown={keepFocus}
+              onClick={(e) => choose(e, 'pill')}
+            >
+              <span aria-hidden="true">–</span>
+            </button>
+          )}
+        >
           <ul className="hcc-rows">
             {rows.map((row) => <Row key={row.host} row={row} />)}
           </ul>
           {connecting && <div className="hcc-note" data-testid="host-connect-note">{BACKGROUND_NOTE}</div>}
-        </section>
+        </NoticeCard>
       )}
     </CornerSlot>
   );

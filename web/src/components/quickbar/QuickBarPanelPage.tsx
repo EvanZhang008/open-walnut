@@ -2,7 +2,7 @@
  * /quickbar: the page inside the Mac app's floating panel (desktop/QuickBarPanel.swift), which
  * opens from any app on Control-Option-Command-Space. The app keeps the page loaded and calls
  * `window.__walnutQuickBar` (quickbar-native.ts); the page tells the app its size and mode:
- * `bar` (centered, takes the keyboard), `receipts` (the cards in the top right corner, which
+ * `bar` (centered, takes the keyboard), `receipts` (the cards in the bottom left corner, which
  * never take the keyboard, so the person keeps typing where they were), `hidden`.
  * The panel draws the macOS glass behind the page, so the page itself paints no background.
  */

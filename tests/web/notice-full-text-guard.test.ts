@@ -20,7 +20,7 @@ const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 const sources = () =>
   execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', 'web/src/**/*.tsx', 'web/src/**/*.ts'], { cwd: ROOT, encoding: 'utf8' })
     .split('\n').filter(Boolean).filter((f) => fs.existsSync(path.join(ROOT, f)));
-const CSS = () => `${read('web/src/styles/globals.css')}\n${read('web/src/styles/corner-stack.css')}`;
+const CSS = () => `${read('web/src/styles/globals.css')}\n${read('web/src/styles/corner-stack.css')}\n${read('web/src/styles/notice-card.css')}`;
 /** The declarations of one exact selector's rules (every rule written for it). */
 const rulesOf = (css: string, selector: string) => {
   const out: string[] = [];
@@ -36,7 +36,10 @@ const KINDS: Record<string, { file: string; how: string; check: (src: string, cs
     file: 'web/src/components/common/NotificationToaster.tsx',
     how: 'title two lines, body three, Details opens the rest and the record\'s detail; commands copyable',
     check: (src, css) => {
-      expect(src).toMatch(/className="notification-toast-title"><NoticeWords text=\{whole\.title\} copy=\{!oneCopy\} \/>/);
+      // The title is the card's two-line preview (NoticeCard `line`), measured for Details.
+      expect(src).toMatch(/line=\{<NoticeWords text=\{whole\.title\} copy=\{!oneCopy\} \/>\}/);
+      expect(src).toContain("parts={{ line: 'notification-toast-title'");
+      expect(src).toContain('lineRef={titleRef}');
       expect(src).toMatch(/className="notification-toast-body"><NoticeWords text=\{toast\.body\} copy=\{!oneCopy\} \/>/);
       // One command: one "Copy command" that stays whether the words are cut or open.
       expect(src).toContain('{oneCopy && <CopyCommandButton command={commands[0]} label />}');
@@ -45,20 +48,28 @@ const KINDS: Record<string, { file: string; how: string; check: (src: string, cs
       // A permission prompt's command: two lines, Details, Copy.
       expect(src).toContain('<PermCommand command={detail.command}');
       expect(src).not.toMatch(/<code className="nfc-perm-cmd">\{detail\./);
-      const title = rulesOf(css, '.notification-toast-title');
+      const title = rulesOf(css, '.wn-notice-line');
       expect(title).not.toMatch(/white-space:\s*nowrap/);
       expect(title).toMatch(/-webkit-line-clamp:\s*2/);
       expect(title).toMatch(/min-width:\s*0/);
-      expect(rulesOf(css, '.notification-toast-header')).toMatch(/min-width:\s*0/);
+      expect(rulesOf(css, '.wn-notice-head')).toMatch(/min-width:\s*0/);
+      expect(rulesOf(css, '.wn-notice-text')).toMatch(/min-width:\s*0/);
       expect(rulesOf(css, '.nfc-perm-context')).not.toMatch(/white-space:\s*nowrap/);
       expect(css).toMatch(/\.notification-toast\.is-open :is\(\.notification-toast-title, \.notification-toast-body\) \{[^}]*display: block/);
-      // The compact and beside-an-approval form: its header never grows past the toast.
-      expect(css).toMatch(/\.notification-toast:not\(\.nfc-perm-toast\) \.notification-toast-header \{ flex: 0 0 100%; min-width: 0; \}/);
       // A folded toast the notification center does not keep (an Undo) is unfolded in place.
       expect(src).toContain('const foldsEphemeral = folded.some((t) => !t.persistent);');
       expect(src).toMatch(/const openCenter = foldsEphemeral\s*\? \(\) => setUnfolded\(true\)/);
       // The phone hides the body until Details opens it.
-      expect(css).toContain('.notification-toast:not(.nfc-perm-toast):not(.is-open) :is(.notification-toast-body');
+      expect(css).toContain('.notification-toast:not(.nfc-perm-toast):not(.is-open) .wn-notice-body > :not(.notice-tools) { display: none; }');
+    },
+  },
+  receipts: {
+    file: 'web/src/components/quickbar/QuickBarReceipts.tsx',
+    how: 'the reply\'s first line two lines long; a click opens the whole reply, which scrolls',
+    check: (src) => {
+      expect(src).toContain('onOpen={() => onToggle(r.id)}');
+      expect(src).toContain('className="qb-receipt-reply" text={r.reply}');
+      expect(read('web/src/styles/quickbar.css')).toMatch(/\.qb-receipt-reply \{[^}]*overflow-y: auto/);
     },
   },
   board: {
