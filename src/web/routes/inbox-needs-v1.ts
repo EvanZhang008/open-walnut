@@ -15,10 +15,11 @@ import { Router, type Request, type Response } from 'express'
 import { followerName, isFollower } from '../../core/server-role.js'
 import { inboxNeeds } from '../../core/human-inbox/needs-threads.js'
 import { sendV1Error } from './v1-control-relay.js'
+import { sendLinkFailure } from '../middleware/link-failure-answer.js'
 
 export const inboxNeedsV1Router = Router()
 
-inboxNeedsV1Router.get('/inbox/needs', (_req: Request, res: Response) => {
+inboxNeedsV1Router.get('/inbox/needs', (req: Request, res: Response) => {
   if (isFollower()) {
     sendV1Error(res, 503, 'primary_only', `${followerName()} could not get the threads from your Mac just now.`)
     return
@@ -30,5 +31,8 @@ inboxNeedsV1Router.get('/inbox/needs', (_req: Request, res: Response) => {
       held_letter_ids: out.heldLetterIds,
       counts: out.counts,
     })
-  }).catch((err: unknown) => sendV1Error(res, 500, 'internal', err instanceof Error ? err.message : String(err)))
+  }).catch((err: unknown) => {
+    if (sendLinkFailure(req, res, err)) return
+    sendV1Error(res, 500, 'internal', err instanceof Error ? err.message : String(err))
+  })
 })
