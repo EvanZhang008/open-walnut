@@ -31,7 +31,7 @@ import { log } from '../logging/index.js'
 import { MAX_UPLOAD_FRAME_BYTES } from '../providers/ssh-upload-budget.js'
 import { leftOut } from './replication/keep-rule.js'
 import { recordMoves } from './replication/manifest-moves.js'
-import { CONFIRM_AFTER_REFUSALS, manifestKeysHashOf } from './replication/kind.js'
+import { CONFIRM_AFTER_REFUSALS, manifestKeysHashOf, refusalWarnsNow } from './replication/kind.js'
 
 const MAX_FILES = 20_000
 const MAX_FILE_BYTES = 50 * 1024 * 1024
@@ -228,7 +228,12 @@ export async function syncAttachments(target: AttachmentTarget, keep: Attachment
     if (reply.ok !== true) {
       if (reply.errorKind === 'manifest_removes_most_rows' || String(reply.error ?? '').startsWith('manifest_removes_most_rows')) {
         const count = s.refused?.manifest === holdHash ? s.refused.count + 1 : 1
+        const hadRefusal = !!s.refused
         s.refused = { manifest: holdHash, count, until: Date.now() + REFUSED_RECHECK_MS }
+        // The pictures have no Settings row of their own: this is where a refusal is seen.
+        if (refusalWarnsNow(hadRefusal, count)) {
+          log.session.warn('host replica: the host refused a picture list that removes most of its copy', { host: target.hostKey, entries: manifest.length, refusals: count })
+        }
       }
       return { action: 'failed', error: String(reply.error ?? 'refused') }
     }

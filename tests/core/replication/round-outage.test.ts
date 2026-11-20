@@ -13,7 +13,7 @@ import { log as walnutLog } from '../../../src/logging/index.js'
 import { copyKindHeldBy, syncCopyKinds, type CopyKind } from '../../../src/core/replication/kinds/copy-kind.js'
 import { _resetReplicaStatusForTesting } from '../../../src/core/replication/replica-status.js'
 import {
-  _resetRoundOutagesForTesting, answered, answeredBy, noteRoundFailure, OUTAGE_RENOTE_MS, noteRoundReached, targetUnreachable, UNREACHABLE_SIGNATURES,
+  _resetRoundOutagesForTesting, answered, answeredBy, noteRefusalEnded, noteRoundFailure, OUTAGE_RENOTE_MS, noteRoundReached, targetRefused, targetUnreachable, UNREACHABLE_SIGNATURES,
 } from '../../../src/core/replication/round-outage.js'
 
 const ROOT = path.resolve(__dirname, '../../..')
@@ -156,6 +156,64 @@ describe('noteRoundFailure / noteRoundReached', () => {
     await target.post({ op: 'status' })
     expect(lines.at(-1)?.message).toBe('copies: a target is reachable again')
     expect(target.label).toBe('a')
+  })
+  // 2026-11-20: the one tree moved every note, the companion's build could not take moves, and
+  // every round to it wrote "host replica: round failed" (178 in one hour across the hosts).
+  const REFUSAL = 'manifest_removes_most_rows: the manifest would remove 6673 of 6673 notes kept here'
+
+  it('a refusal by the half rule is one info line per kind however many rounds, and the target counts as reached', () => {
+    const { lines, log } = recorder()
+    for (let i = 0; i < 200; i++) {
+      expect(noteRoundFailure(log, 'host replica', 'companion', REFUSAL, { kind: 'notes' }, { now: 1_000 + i })).toBe(false)
+    }
+    expect(lines).toEqual([{
+      level: 'info', message: 'host replica: a target refused a manifest that removes most of its copy, its rounds keep it until that changes',
+      data: { target: 'companion', kind: 'notes', error: REFUSAL },
+    }])
+    // The host answering, or taking another kind, does not end it.
+    noteRefusalEnded(log, 'host replica', 'companion', 'memory', { now: 2_000 })
+    noteRoundReached(log, 'host replica', 'companion', { now: 2_000 })
+    noteRoundFailure(log, 'host replica', 'companion', REFUSAL, { kind: 'notes' }, { now: 2_000 })
+    expect(lines).toHaveLength(1)
+    // Another kind on the same host is its own refusal.
+    noteRoundFailure(log, 'host replica', 'companion', REFUSAL, { kind: 'skills' }, { now: 2_000 })
+    expect(lines).toHaveLength(2)
+    // The kind's round is taken: the refusal ends, and a later one is a new line.
+    noteRefusalEnded(log, 'host replica', 'companion', 'notes', { now: 61_000 })
+    expect(lines[2]).toEqual({ level: 'info', message: 'host replica: a target took a manifest it had refused', data: { target: 'companion', kind: 'notes', waitedS: 60, rounds: 201 } })
+    noteRoundFailure(log, 'host replica', 'companion', REFUSAL, { kind: 'notes' }, { now: 62_000 })
+    expect(lines).toHaveLength(4)
+    expect(lines.every((l) => l.level === 'info')).toBe(true)
+  })
+
+  it('a refusal that stands says so again once an hour, and never hides a fault on the same host', () => {
+    const { lines, log } = recorder()
+    noteRoundFailure(log, 'task replica', 'companion', 'manifest_removes_most_rows', { kind: 'tasks' }, { now: 0 })
+    noteRoundFailure(log, 'task replica', 'companion', 'manifest_removes_most_rows', { kind: 'tasks' }, { now: OUTAGE_RENOTE_MS - 1 })
+    noteRoundFailure(log, 'task replica', 'companion', 'manifest_removes_most_rows', { kind: 'tasks' }, { now: OUTAGE_RENOTE_MS })
+    noteRoundFailure(log, 'task replica', 'companion', 'HTTP 500', { kind: 'tasks' })
+    expect(lines.map((l) => [l.level, l.message])).toEqual([
+      ['info', 'task replica: a target refused a manifest that removes most of its copy, its rounds keep it until that changes'],
+      ['info', 'task replica: a target still refuses a manifest that removes most of its copy'],
+      ['warn', 'task replica: round failed'],
+    ])
+  })
+
+  it('each producer of the refusal words it as targetRefused reads it', () => {
+    // The host daemon's cores prefix the code to their sentence; the generic follower answers the bare code.
+    expect(targetRefused('manifest_removes_most_rows: the manifest would remove 3545 of 3545 files kept here')).toBe(true)
+    expect(targetRefused('manifest_removes_most_rows')).toBe(true)
+    expect(targetRefused('replica.sync: manifest_removes_most_rows: the manifest would remove 9 of 10 notes kept here')).toBe(true)
+    // Only the refusal itself: a reply that merely mentions it later, or a confirm refused, is not.
+    expect(targetRefused('HTTP 500')).toBe(false)
+    expect(targetRefused('upstream said: manifest_removes_most_rows')).toBe(false)
+    const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
+    for (const rel of ['src/providers/host-replica-core.ts', 'src/providers/attachment-copy-core.ts']) {
+      expect(read(rel), `${rel}: a refusal is \`refused('manifest_removes_most_rows', ...)\``).toContain("refused('manifest_removes_most_rows'")
+      expect(read(rel), `${rel}: refused() prefixes the code to the message`).toMatch(/`\$\{code\}: \$\{message\}`|code \+ ': ' \+ message/)
+    }
+    expect(read('src/core/replication/kind-follower.ts')).toContain('error: REFUSAL_ERROR')
+    expect(read('src/core/replication/kind.ts')).toContain("export const REFUSAL_ERROR = 'manifest_removes_most_rows'")
   })
 })
 
@@ -320,6 +378,25 @@ describe('every replication round reports its failures through round-outage', ()
       for (const m of literals) if (!ALLOWED.has(m)) extra.push(`${rel}: ${m}`)
     }
     expect(extra, 'a failed step is reported with noteRoundFailure (round-outage.ts); any other new warn is listed here').toEqual([])
+  })
+
+  it('every round that reports a failure by kind ends that kind\'s refusal when its round is taken', () => {
+    // A refusal is kept per scope, target and kind until noteRefusalEnded names the kind; a
+    // driver that reports refusals by kind but never says when a kind is taken would keep a
+    // refusal for the life of the process and hide the next one (2026-11-20).
+    const missing: string[] = []
+    let failures = 0
+    for (const f of files) {
+      if (f.rel === 'src/core/replication/round-outage.ts') continue
+      for (const m of f.src.matchAll(/noteRoundFailure\(\s*[\w.]+,\s*'([^']+)',[^\n]*\{\s*kind\b/g)) {
+        failures++
+        const scope = m[1]!
+        const ends = new RegExp(`noteRefusalEnded\\(\\s*[\\w.]+,\\s*'${scope}',`)
+        if (!ends.test(f.src)) missing.push(`${f.rel}: '${scope}'`)
+      }
+    }
+    expect(failures).toBeGreaterThanOrEqual(4)
+    expect(missing, 'call noteRefusalEnded(log, scope, target, kind) when the target holds that kind\'s manifest').toEqual([])
   })
 
   it('every round driver imports round-outage', () => {

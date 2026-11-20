@@ -15,6 +15,14 @@
  *
  * The same holds for a background push lane to the companion (cloud-ingest.ts):
  * 2026-11-17 the Mac's DNS was down and each push wrote "cloud ingest: push failed".
+ *
+ * A refusal by the half rule (`manifest_removes_most_rows`) is not a fault either: the
+ * target was reached and keeps its copy on purpose until the leader's list changes enough,
+ * the target's build takes moves, or the user confirms on the Settings row. Its producer
+ * (the host replica's removal guard, kind-leader.ts) writes the warn when the refusal
+ * starts; here it is one info line per refusal, kind and target, until that kind's round
+ * is taken again (2026-11-20: the one tree moved every note, the companion's build could
+ * not take moves, and each round wrote "host replica: round failed", up to 178 an hour).
  */
 
 /**
@@ -47,6 +55,14 @@ export const UNREACHABLE_SIGNATURES: ReadonlyArray<{ re: RegExp; producer: strin
   { re: /^E(?:CONNREFUSED|HOSTUNREACH|NETUNREACH): Unable to connect\. Is the computer able to access the url\?$/, producer: 'bun:fetch', literal: '' },
 ]
 
+/** The half rule's refusal (replication/kind.ts REFUSAL_ERROR), as an error message words it. */
+const REFUSAL_RE = /^(?:[\w.]+: )?manifest_removes_most_rows\b/
+
+/** True when a round's error is the target's half-rule refusal: it answered and keeps its copy. */
+export function targetRefused(error: string): boolean {
+  return REFUSAL_RE.test(error)
+}
+
 /** True when a round's error says the target is not reachable now (UNREACHABLE_SIGNATURES). */
 export function targetUnreachable(error: string): boolean {
   return UNREACHABLE_SIGNATURES.some((s) => s.re.test(error))
@@ -63,35 +79,53 @@ export const OUTAGE_RENOTE_MS = 60 * 60_000
 /** `<scope>\0<target>` → the outage that scope's rounds have seen on that target since its last answer. */
 const outages = new Map<string, Outage>()
 const keyOf = (scope: string, target: string): string => `${scope}\0${target}`
+/** `<scope>\0<target>\0<kind>` → the refusal that kind's rounds have met there since it was last taken. */
+const refusals = new Map<string, Outage>()
+const refusalKeyOf = (scope: string, target: string, kind: unknown): string => `${keyOf(scope, target)}\0${typeof kind === 'string' ? kind : ''}`
 
 /**
  * A round of `scope` (the line's prefix: 'copies', 'task replica') failed on
  * `target`. Unreachable: an info line at the start of the outage, nothing after.
- * Anything else: `<scope>: round failed`, a warn every time. Returns whether the
- * target was unreachable, so a round can skip its other kinds for that target.
+ * A half-rule refusal: an info line when it starts (per `fields.kind`), nothing after
+ * until noteRefusalEnded names that kind. Anything else: `<scope>: round failed`, a
+ * warn every time. Returns whether the target was unreachable, so a round can skip its
+ * other kinds for that target (a refusal is the target answering: false).
  */
 export function noteRoundFailure(
   log: RoundLog, scope: string, target: string, error: string,
   fields: Record<string, unknown> = {}, opts: { now?: number; message?: string } = {},
 ): boolean {
+  if (targetRefused(error)) {
+    noteStanding(refusals, refusalKeyOf(scope, target, fields.kind), opts.now ?? Date.now(), error, (known, at) => {
+      if (!known) log.info(`${scope}: a target refused a manifest that removes most of its copy, its rounds keep it until that changes`, { target, ...fields, error })
+      else log.info(`${scope}: a target still refuses a manifest that removes most of its copy`, { target, ...fields, error, waitedS: Math.round((at - known.since) / 1000), rounds: known.rounds })
+    })
+    return false
+  }
   if (!targetUnreachable(error)) {
     log.warn(opts.message ?? `${scope}: round failed`, { target, ...fields, error })
     return false
   }
-  const key = keyOf(scope, target)
-  const at = opts.now ?? Date.now()
-  const known = outages.get(key)
-  if (known) {
-    known.rounds++
-    if (at - known.noted >= OUTAGE_RENOTE_MS) {
-      known.noted = at
-      log.info(`${scope}: a target is still not reachable, its rounds wait for it`, { target, ...fields, error, waitedS: Math.round((at - known.since) / 1000), rounds: known.rounds })
-    }
-    return true
-  }
-  outages.set(key, { since: at, error, rounds: 1, noted: at })
-  log.info(`${scope}: a target is not reachable, its rounds wait for it`, { target, ...fields, error })
+  noteStanding(outages, keyOf(scope, target), opts.now ?? Date.now(), error, (known, at) => {
+    if (!known) log.info(`${scope}: a target is not reachable, its rounds wait for it`, { target, ...fields, error })
+    else log.info(`${scope}: a target is still not reachable, its rounds wait for it`, { target, ...fields, error, waitedS: Math.round((at - known.since) / 1000), rounds: known.rounds })
+  })
   return true
+}
+
+/** A standing state (an outage, a refusal) met again: `say` runs when it starts and once an hour after. */
+function noteStanding(map: Map<string, Outage>, key: string, at: number, error: string, say: (known: Outage | null, at: number) => void): void {
+  const known = map.get(key)
+  if (!known) {
+    map.set(key, { since: at, error, rounds: 1, noted: at })
+    say(null, at)
+    return
+  }
+  known.rounds++
+  if (at - known.noted >= OUTAGE_RENOTE_MS) {
+    known.noted = at
+    say(known, at)
+  }
 }
 
 /** A round of `scope` reached `target` (it answered): an outage noted before ends, with one info line. */
@@ -102,6 +136,21 @@ export function noteRoundReached(log: RoundLog, scope: string, target: string, o
   outages.delete(key)
   log.info(`${scope}: a target is reachable again`, {
     target, waitedS: Math.round(((opts.now ?? Date.now()) - known.since) / 1000), rounds: known.rounds, error: known.error,
+  })
+}
+
+/**
+ * `target` holds `kind`'s current manifest (its round was taken, or it already held it:
+ * a memo or digest `unchanged`, never a refusal the leader holds back): a refusal noted
+ * for that kind ends, with one info line.
+ */
+export function noteRefusalEnded(log: RoundLog, scope: string, target: string, kind: string, opts: { now?: number } = {}): void {
+  const key = refusalKeyOf(scope, target, kind)
+  const refused = refusals.get(key)
+  if (!refused) return
+  refusals.delete(key)
+  log.info(`${scope}: a target took a manifest it had refused`, {
+    target, kind, waitedS: Math.round(((opts.now ?? Date.now()) - refused.since) / 1000), rounds: refused.rounds,
   })
 }
 
@@ -131,4 +180,5 @@ export function answeredBy<T extends { id: string; post(payload: Record<string, 
 /** Tests only. */
 export function _resetRoundOutagesForTesting(): void {
   outages.clear()
+  refusals.clear()
 }

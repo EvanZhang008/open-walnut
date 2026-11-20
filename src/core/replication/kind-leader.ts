@@ -13,7 +13,7 @@
 import type { CloudReplicaReply } from '../cloud-ingest.js'
 import type { ReplicaTarget } from './replica-targets.js'
 import {
-  CONFIRM_AFTER_REFUSALS, CONFIRM_TTL_MS, HASH_SLICE, PUT_BATCH_BYTES, PUT_TIMEOUT_MS, REFUSAL_ERROR, REST_ERRORS,
+  CONFIRM_AFTER_REFUSALS, CONFIRM_TTL_MS, HASH_SLICE, PUT_BATCH_BYTES, PUT_TIMEOUT_MS, REFUSAL_ERROR, REST_ERRORS, refusalWarnsNow,
   UNSUPPORTED_REST_MS, manifestHashOf, manifestKeysHashOf, type ConfirmFor, type ManifestEntry,
 } from './kind.js'
 import { kindState, type KindState } from './replica-status.js'
@@ -302,9 +302,12 @@ function noteFailure<Row>(st: KindState, kind: string, targetId: string, manifes
     // A refusal counts toward the confirm only while the leader's manifest holds
     // still: the same count AND the same key set (another set of rows at the same
     // count is a new streak, never one the user already looked at).
+    const hadRefusal = !!st.lastRefusal
     st.refusals = st.lastRefusal && st.lastRefusal.entries === entries && st.lastRefusal.keys === keys ? st.refusals + 1 : 1
     st.lastRefusal = { error: REFUSAL_ERROR, at, entries, keys, ...removalSize(err.body) }
-    if (st.refusals === 1 || st.refusals === CONFIRM_AFTER_REFUSALS) {
+    // A warn when the refusal starts and when the confirm opens; a new streak of a refusal that
+    // stands (the manifest changed by a row or two) is not news.
+    if (refusalWarnsNow(hadRefusal, st.refusals)) {
       opts.log?.warn('replica: a follower refused a manifest that removes most of its rows', { target: targetId, kind, entries, refusals: st.refusals })
     }
   }

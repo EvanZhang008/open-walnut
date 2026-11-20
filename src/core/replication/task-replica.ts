@@ -36,7 +36,7 @@ import { buildKindManifest, confirmKindRemoval, runKindRound, StepFailed, type K
 import { noteManifestTaken, runDeltaRound, type DeltaKind } from './kind-delta.js'
 import { _resetReplicaStatusForTesting, confirmWaiting, dropTargetsNotIn, forgetKindManifests, kindState, peekKindState } from './replica-status.js'
 import type { ReplicaTarget } from './replica-targets.js'
-import { answeredBy, noteRoundFailure } from './round-outage.js'
+import { answeredBy, noteRefusalEnded, noteRoundFailure } from './round-outage.js'
 
 const DEBOUNCE_MS = 3_000
 const SWEEP_MS = 5 * 60_000
@@ -175,6 +175,8 @@ async function serveTarget(
         ? await tasksRound(manifests.tasks, target, asOf)
         : await runKindRound(REGISTRY_KIND, manifests.registry, target, { asOf, log: log.task })
       results.push(named(s, r as Omit<TaskReplicaRoundResult, 'target'>))
+      // `unchanged` here is always a manifest the target holds (the memo, or equal digests).
+      if (r.action === 'synced' || r.action === 'unchanged') noteRefusalEnded(log.task, 'task replica', s.target.id, kind)
       if (r.action === 'synced') log.task.info('task replica: round', { target: s.target.id, ...r, ms: Date.now() - startedAt })
     } catch (err) {
       const outcome = err instanceof StepFailed ? err.outcome : 'failed'

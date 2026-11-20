@@ -41,7 +41,7 @@ import { replicaExtras, type Extras } from './host-replica-extras.js'
 import { peekKindState } from './replication/replica-status.js'
 import { cleanKeepEntries, leftOut } from './replication/keep-rule.js'
 import { companionKeepOf } from './replication/companion-keep.js'
-import { noteRoundFailure, noteRoundReached } from './replication/round-outage.js'
+import { noteRefusalEnded, noteRoundFailure, noteRoundReached } from './replication/round-outage.js'
 import { CLOUD_BOX_HOST_ALIAS } from './hosts/cloud-box-host.js'
 import { HOST_REPLICA_MOVES, mergeMoves, pairMoves, recordMoves, vaultMoveLookups, type MovePair } from './replication/manifest-moves.js'
 import { noteMoves } from './notes/note-path-moves.js'
@@ -226,6 +226,8 @@ export interface ReplicaRoundResult {
   listed?: number
   /** Rows the host moved to their new keys (renamed) instead of removing and fetching them. */
   moved?: number
+  /** `unchanged` because the leader holds back a manifest the host refused, not because the host holds it. */
+  refusedHeld?: true
 }
 
 /** A manifest a host refused and holds back is tried again this often, so a host that changed on its own is seen. */
@@ -240,7 +242,7 @@ async function removalGuard(hostKey: string, kind: ReplicaKind, entries: Replica
   params: Record<string, unknown>; held: boolean; refused: (reply: Record<string, unknown>) => Promise<void>; accepted: () => void
 }> {
   const status = await import('./replication/replica-status.js')
-  const { CONFIRM_AFTER_REFUSALS, manifestKeysHashOf } = await import('./replication/kind.js')
+  const { CONFIRM_AFTER_REFUSALS, manifestKeysHashOf, refusalWarnsNow } = await import('./replication/kind.js')
   const kindName = `host-${kind}`
   const st = status.peekKindState(`host:${hostKey}`, kindName)
   const keys = manifestKeysHashOf(entries)
@@ -258,6 +260,7 @@ async function removalGuard(hostKey: string, kind: ReplicaKind, entries: Replica
     refused: async (reply) => {
       const s = status.kindState(statusTarget(hostKey), kindName)
       if (confirm) { s.confirmNext = false; s.confirmFor = undefined }
+      const hadRefusal = !!s.lastRefusal
       s.refusals = s.lastRefusal && s.lastRefusal.entries === entries.length && s.lastRefusal.keys === keys ? s.refusals + 1 : 1
       const d = (reply.detail && typeof reply.detail === 'object' ? reply.detail : {}) as { local?: unknown; removing?: unknown }
       s.lastRefusal = {
@@ -267,10 +270,14 @@ async function removalGuard(hostKey: string, kind: ReplicaKind, entries: Replica
       s.action = 'failed'
       const hold = s.refusals >= CONFIRM_AFTER_REFUSALS
       s.holdFor = hold ? { manifest: holdHash, until: now + REFUSED_RECHECK_MS } : undefined
-      log.session.warn('host replica: the host refused a manifest that removes most of its copy', {
+      const data = {
         host: hostKey, kind, entries: entries.length, refusals: s.refusals,
         ...(hold ? { held: 'not sent again until it changes, the host takes moves or is replaced, the user confirms, or 6 h pass' } : {}),
-      })
+      }
+      // A warn when the refusal starts and when it is held; a refusal that stands (the list
+      // changed by a note or two, the host still without moves) is info until a round is taken.
+      if (refusalWarnsNow(hadRefusal, s.refusals)) log.session.warn('host replica: the host refused a manifest that removes most of its copy', data)
+      else log.session.info('host replica: the host still refuses a manifest that removes most of its copy', data)
     },
     accepted: () => {
       if (!st) return
@@ -281,6 +288,15 @@ async function removalGuard(hostKey: string, kind: ReplicaKind, entries: Replica
       st.action = 'synced'
     },
   }
+}
+
+/** The host holds `kind`'s current manifest: a refusal the Settings row shows for it is over. */
+async function endRefusal(hostKey: string, kind: ReplicaKind): Promise<void> {
+  const st = (await import('./replication/replica-status.js')).peekKindState(`host:${hostKey}`, `host-${kind}`)
+  if (!st?.lastRefusal) return
+  st.refusals = 0
+  st.lastRefusal = undefined
+  st.holdFor = undefined
 }
 
 /** The manifest last sent per host and kind on its current connection. */
@@ -516,9 +532,13 @@ async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep
     ? { searchExclude: await searchExclude(config), keepExclude: keep.notesExclude, tooBig: notesTooBig() }
     : undefined
   const manifestHash = sha12(JSON.stringify([entries, opts ?? null]))
-  if (lastManifest.get(memoKey) === manifestHash) return { kind, action: 'unchanged', entries: entries.length }
+  if (lastManifest.get(memoKey) === manifestHash) {
+    // The host took this very manifest: a refusal of a later one (since undone) no longer stands.
+    await endRefusal(target.hostKey, kind)
+    return { kind, action: 'unchanged', entries: entries.length }
+  }
   const guard = await removalGuard(target.hostKey, kind, entries, [target.moves === true, opts ?? null])
-  if (guard.held) return { kind, action: 'unchanged', entries: entries.length }
+  if (guard.held) return { kind, action: 'unchanged', entries: entries.length, refusedHeld: true }
   const asOf = Date.now()
   const base = { home, kind, asOf, manifestId: manifestHash, ...(opts ? { opts } : {}), ...guard.params }
   const taken = await lastTaken(memoKey)
@@ -673,8 +693,10 @@ export async function syncHostReplica(target: ReplicaTarget): Promise<ReplicaRou
         try {
           const r = await syncKind(target, kind, keep, config)
           results.push(r)
-          // A memo's `unchanged` asked nothing of the host: only a reply proves it is back.
+          // A memo's `unchanged` asked nothing of the host: only a reply proves it is back. Any
+          // round but a held refusal leaves the host holding the kind's manifest.
           if (r.action !== 'unchanged') noteRoundReached(log.session, 'host replica', target.hostKey)
+          if (!r.refusedHeld) noteRefusalEnded(log.session, 'host replica', target.hostKey, kind)
           if (r.action !== 'unchanged') {
             log.session.info('host replica: round', { host: target.hostKey, kind, action: r.action, entries: r.entries, listed: r.listed, sent: r.sent, ...(r.moved ? { moved: r.moved } : {}), ms: Date.now() - startedAt })
           }
@@ -695,8 +717,10 @@ export async function syncHostReplica(target: ReplicaTarget): Promise<ReplicaRou
 
 async function attachmentsRound(target: ReplicaTarget, keep: HostKeep): Promise<void> {
   const r = await syncAttachments(target, { on: keep.attachments, exclude: keep.notesExclude })
-  if (r.action === 'failed') noteRoundFailure(log.session, 'host replica attachments', target.hostKey, r.error ?? 'failed', {}, { message: 'host replica: attachments round failed' })
-  else if (r.action !== 'unchanged' && r.action !== 'skipped') {
+  if (r.action === 'failed') noteRoundFailure(log.session, 'host replica attachments', target.hostKey, r.error ?? 'failed', { kind: 'attachments' }, { message: 'host replica: attachments round failed' })
+  // `skipped` sent nothing (a refusal held back, an older host); anything else leaves the host holding the pictures' list.
+  else if (r.action !== 'skipped') noteRefusalEnded(log.session, 'host replica attachments', target.hostKey, 'attachments')
+  if (r.action !== 'failed' && r.action !== 'unchanged' && r.action !== 'skipped') {
     noteRoundReached(log.session, 'host replica attachments', target.hostKey)
     log.session.info('host replica: attachments round', { host: target.hostKey, ...r })
   }

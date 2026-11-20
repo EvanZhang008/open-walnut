@@ -31,7 +31,7 @@ import { forgetTaken, noteManifestTaken, runDeltaRound } from '../kind-delta.js'
 import { confirmWaiting, forgetKindManifests, kindState, peekKindState, type KindState } from '../replica-status.js'
 import type { ReplicaTarget } from '../replica-targets.js'
 import { COMPANION_COPY_KINDS } from './gate.js'
-import { answeredBy, noteRoundFailure } from '../round-outage.js'
+import { answeredBy, noteRefusalEnded, noteRoundFailure } from '../round-outage.js'
 
 export const COPY_DEBOUNCE_MS = 3_000
 export const COPY_SWEEP_MS = 5 * 60_000
@@ -215,6 +215,8 @@ export async function syncCopyKinds(kinds: readonly CopyKind<any>[], deps: CopyK
       try {
         const r = await runCopyRound(kind, manifest, target, { asOf, now })
         results.push({ target: target.id, ...r })
+        // `unchanged` here is always a manifest the target holds (the memo, or equal digests).
+        if (r.action === 'synced' || r.action === 'unchanged') noteRefusalEnded(log.session, 'copies', target.id, kind.kind)
         if (r.action === 'synced') log.session.info('copies: round', { target: target.id, ...r, ms: now() - startedAt })
       } catch (err) {
         const outcome = err instanceof StepFailed ? err.outcome : 'failed'

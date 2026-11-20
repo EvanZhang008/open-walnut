@@ -26,6 +26,8 @@ import { createAttachmentCopy } from '../../src/providers/attachment-copy-core.j
 import { _resetReplicaStatusForTesting, needsConfirm, peekKindState } from '../../src/core/replication/replica-status.js'
 import { setNoteMoves } from '../../src/core/notes/note-path-moves.js'
 import type { MoveMap } from '../../src/core/artifacts/unify/map.js'
+import { log } from '../../src/logging/index.js'
+import { _resetRoundOutagesForTesting } from '../../src/core/replication/round-outage.js'
 
 const COUNT = 300
 const MAP: MoveMap = { exact: {}, rules: [{ from: 'acme/', to: 'projects/Acme/notes/' }, { from: '', to: 'notes/' }] }
@@ -106,6 +108,7 @@ beforeEach(async () => {
   setNoteMoves(null)
   _resetHostReplicaForTesting()
   _resetAttachmentReplicaForTesting()
+  _resetRoundOutagesForTesting()
   fs.rmSync(path.join(WALNUT_HOME, 'cache', 'host-replica'), { recursive: true, force: true })
 })
 afterEach(() => {
@@ -236,6 +239,71 @@ describe('a host without the capability', () => {
     expect(picSyncs()).toHaveLength(1)
     expect(picSyncs()[0]!.params.renamed).toBeDefined()
     expect(h.replica.answer(WALNUT_HOME, 'note_read', { path: 'projects/Acme/notes/day-042' }, '')).toMatchObject({ ok: true })
+  })
+
+  it('a refusal that stands while notes keep changing warns once, not every round (2026-11-20 spike)', async () => {
+    // The companion's build could not take moves: each note written after the move made a new
+    // manifest, the refusal streak restarted, and every round wrote two warns.
+    const h = host('oldbox', { moves: false, attachments: true })
+    await syncHostReplica(h.target)
+    moveIntoTree()
+    const warns: string[] = []
+    const infos: string[] = []
+    const w = vi.spyOn(log.session, 'warn').mockImplementation((m: string) => { warns.push(m) })
+    const i = vi.spyOn(log.session, 'info').mockImplementation((m: string) => { infos.push(m) })
+    try {
+      for (let n = 0; n < 8; n++) {
+        write(`notes/new-${n}.md`, `# New ${n}`)
+        expect((await syncHostReplica(h.target))[0]).toMatchObject({ kind: 'notes', action: 'failed' })
+      }
+    } finally {
+      w.mockRestore()
+      i.mockRestore()
+    }
+    // The notes refusal starts once; the pictures' manifest holds still, so it is held after three.
+    expect(warns.filter((m) => m === 'host replica: the host refused a manifest that removes most of its copy')).toHaveLength(1)
+    expect(warns.filter((m) => /round failed/.test(m))).toEqual([])
+    // The pictures' refusal: a warn when it starts and when it is held, nothing between or after.
+    expect(warns.filter((m) => m === 'host replica: the host refused a picture list that removes most of its copy')).toHaveLength(2)
+    expect(infos.filter((m) => m === 'host replica: a target refused a manifest that removes most of its copy, its rounds keep it until that changes')).toHaveLength(1)
+    expect(infos.filter((m) => m === 'host replica attachments: a target refused a manifest that removes most of its copy, its rounds keep it until that changes')).toHaveLength(1)
+    // Settings still shows the refusal; the copy is as it was.
+    expect(peekKindState('host:oldbox', 'host-notes')?.lastRefusal).toMatchObject({ error: 'manifest_removes_most_rows' })
+    expect(h.replica.answer(WALNUT_HOME, 'note_read', { path: 'acme/day-042' }, '')).toMatchObject({ ok: true })
+    // The host updates and takes the move: the refusal ends with one line.
+    const ended: string[] = []
+    const i2 = vi.spyOn(log.session, 'info').mockImplementation((m: string) => { ended.push(m) })
+    try {
+      expect((await syncHostReplica({ ...h.target, moves: true }))[0]).toMatchObject({ kind: 'notes', action: 'synced' })
+    } finally {
+      i2.mockRestore()
+    }
+    expect(ended).toContain('host replica: a target took a manifest it had refused')
+  })
+
+  it('a refusal undone before the host updates is over: the next one warns again', async () => {
+    const h = host('oldbox', { moves: false })
+    await syncHostReplica(h.target)
+    moveIntoTree()
+    expect((await syncHostReplica(h.target))[0]).toMatchObject({ kind: 'notes', action: 'failed' })
+    expect(peekKindState('host:oldbox', 'host-notes')?.lastRefusal).toBeDefined()
+    // The move is undone: the list is again the one the host took, so nothing goes and nothing stands.
+    fs.renameSync(path.join(NOTES_DIR, 'projects/Acme/notes'), path.join(NOTES_DIR, 'acme'))
+    fs.renameSync(path.join(NOTES_DIR, 'notes/family'), path.join(NOTES_DIR, 'family'))
+    for (const d of ['projects', 'notes', 'memory', 'skills']) fs.rmSync(path.join(NOTES_DIR, d), { recursive: true, force: true })
+    setNoteMoves(null)
+    expect((await syncHostReplica(h.target))[0]).toMatchObject({ kind: 'notes', action: 'unchanged' })
+    expect(peekKindState('host:oldbox', 'host-notes')?.lastRefusal).toBeUndefined()
+    // The move again: a new refusal, and news again.
+    moveIntoTree()
+    const warns: string[] = []
+    const w = vi.spyOn(log.session, 'warn').mockImplementation((m: string) => { warns.push(m) })
+    try {
+      expect((await syncHostReplica(h.target))[0]).toMatchObject({ kind: 'notes', action: 'failed' })
+    } finally {
+      w.mockRestore()
+    }
+    expect(warns).toContain('host replica: the host refused a manifest that removes most of its copy')
   })
 
   it('a refused manifest goes again when the user leaves the old folder out, the keys unchanged', async () => {

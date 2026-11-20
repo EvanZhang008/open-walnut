@@ -61,6 +61,15 @@ export const HELD_RETRY_MS = 35_000
 export const UNSUPPORTED_REST_MS = 10 * 60_000
 /** Refused rounds in a row (with a stable leader count) before `confirm:true` may be sent. */
 export const CONFIRM_AFTER_REFUSALS = 3
+
+/**
+ * Whether a refusal is news (a warn): when it starts (none stood before) and when it reaches
+ * CONFIRM_AFTER_REFUSALS (the confirm opens, the leader holds it). A refusal that stands while
+ * the leader's list changes by a row or two starts a new streak, and that is not news.
+ */
+export function refusalWarnsNow(hadRefusal: boolean, refusals: number): boolean {
+  return !hadRefusal || refusals === CONFIRM_AFTER_REFUSALS
+}
 /**
  * A confirm the user gave and no round has sent yet expires after this: two
  * sweeps, so a confirm whose step was lost on the way still has its retries
