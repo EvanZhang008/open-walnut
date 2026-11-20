@@ -242,9 +242,15 @@ describe('updateTask() centralized TASK_UPDATED emission', () => {
   });
 
   /**
-   * Test 4: Exactly ONE task:updated WS event is emitted per PATCH.
+   * Test 4: ONE task:updated WS event is emitted for the PATCH itself.
    *         This guards against double-emission regressions where callers
    *         both relied on the centralized emission AND emitted again manually.
+   *         The server's own derived-status write (user-status-sync.ts) follows a hand's
+   *         PATCH on its fast lane, 25 ms later, as its own task:updated: the same row
+   *         with `user_status` derived. That is a second write, not a second emission
+   *         of this one, so it is told apart by what it changed: a double emission is
+   *         two frames with the same payload, or a second frame that differs in more
+   *         than the derived status.
    */
   it('exactly one task:updated WS event is emitted per PATCH (no double-emission)', async () => {
     const task = await createTask('No-double-emission test');
@@ -263,10 +269,22 @@ describe('updateTask() centralized TASK_UPDATED emission', () => {
         (f) => (f.data as { task?: { id: string } })?.task?.id === task.id,
       );
 
+      // Keys in a fixed order: the two writes serialize the row from different code paths.
+      const canon = (v: unknown): string => JSON.stringify(v, (_k, x) => (x && typeof x === 'object' && !Array.isArray(x)
+        ? Object.fromEntries(Object.entries(x as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)))
+        : x));
+      const payloads = forThisTask.map((f) => canon(f.data));
+      expect(new Set(payloads).size, `the same task:updated was emitted twice for task ${task.id}: ${payloads.join('\n')}`).toBe(forThisTask.length);
+      // Every frame beyond the PATCH's own is the derived status laid on the same row.
+      const withoutStatus = (f: WsFrame) => {
+        const { user_status: _derived, ...rest } = (f.data as { task: Record<string, unknown> }).task;
+        return canon(rest);
+      };
       expect(
-        forThisTask.length,
-        `Expected exactly 1 task:updated event for task ${task.id}, got ${forThisTask.length}`,
+        new Set(forThisTask.map(withoutStatus)).size,
+        `Expected exactly 1 task:updated event for the PATCH of task ${task.id}, got ${forThisTask.length} that differ beyond user_status`,
       ).toBe(1);
+      expect(forThisTask.length, `no task:updated for task ${task.id}`).toBeGreaterThanOrEqual(1);
     } finally {
       ws.close();
       await delay(50);

@@ -30,6 +30,7 @@ import { deleteMessage, getQueue } from '../../src/core/session-message-queue.js
 import { __pendingHandovers, __setHandoverSettleMs, cancelHandovers, closeAfterHandover } from '../../src/core/org/handover-close.js'
 import { pendingRetiredLeadNote } from '../../src/core/org/retired-lead.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
+import { startUserStatusSync, stopUserStatusSync, syncUserStatuses } from '../../src/core/user-status-sync.js'
 import { taskDepth } from '../../src/core/sessions/subtask-limits.js'
 import { buildSessionContext } from '../../src/core/sessions/session-context.js'
 import { sendLetter } from '../../src/core/human-inbox/store.js'
@@ -415,7 +416,11 @@ describe('/api/v1/org', () => {
       // Told once: the same prompt is not news, and the count move still waits.
       expect(await pendingOrgDigest(sid, told + 200)).toBeNull()
 
-      // A worker whose session failed is news too, also inside the window.
+      // A worker whose session failed is news too, also inside the window. The statuses below are
+      // written by hand, as the session runtime writes them, so the derive is off from here: on
+      // its fast lane it would lay its own reading (a failed worker waits on its lead to retry it)
+      // over them 25 ms after each phase write (user-status-sync.ts).
+      stopUserStatusSync()
       const broken = (await addTask({ title: 'fails', project: 'Walnut' })).task
       const brokenSid = '44444444-5555-4666-8777-888888888888'
       await createSessionRecord(brokenSid, broken.id, 'Walnut', WALNUT_HOME)
@@ -497,7 +502,9 @@ describe('/api/v1/org', () => {
       await updateSessionRecord(leadOwnSid, { process_status: 'stopped', status_reason: 'user_stopped' })
 
       // The window passes: the folded counts come, without the alerts already told. The counts
-      // are the stored user status, so wait for the server's sync to have derived the prompt and the failure.
+      // are the stored user status, so the server's sync is back on and derives the prompt and the failure.
+      startUserStatusSync()
+      await syncUserStatuses(new Set([asking.id, broken.id]))
       await waitUserState(asking.id, 'needs')
       // A failed session is its VP's to retry, never the user's (2026-11-09, session-error-owner.ts).
       await waitUserState(broken.id, 'waiting')
@@ -513,6 +520,7 @@ describe('/api/v1/org', () => {
       await again!.markTold()
     } finally {
       _setDigestFoldMsForTesting(null)
+      startUserStatusSync()
     }
   })
 
