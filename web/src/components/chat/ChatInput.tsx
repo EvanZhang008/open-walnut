@@ -46,7 +46,7 @@ import { isOfficeClipboardHtml } from '@/utils/html-to-markdown';
 import { useFocusRequest } from '@/utils/focus-when-shown';
 import { caretBackOnMount } from '@/utils/composer-caret-keep';
 import { caretOnEdgeLine, noteSentPrompt, recallPrompts, stepRecall, type RecallPos } from './prompt-recall';
-import { drawingPlace, type DrawingPlace } from './drawing-place';
+import { composerDrawing, type DrawingPlace } from './drawing-place';
 
 // Picture types, limit, read and paste rule are shared with every answer box (image-attachments.ts).
 
@@ -2046,7 +2046,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <DrawingPad draftId={draftKey ?? sessionMentionSelfId ?? 'drawing'} {...drawingPlace({ drawingTarget, mentionSelfTaskId, sessionMentionSelfId, fileTarget })} open={drawingOpen} onClose={() => { setDrawingOpen(false); textareaRef.current?.focus(); }} onAttach={(file) => attachments.add([file])} canAttach={!disabled && !atAttachLimit} />
+      <DrawingPad {...composerDrawing(draftKey, { drawingTarget, mentionSelfTaskId, sessionMentionSelfId, fileTarget })} open={drawingOpen} onClose={() => { setDrawingOpen(false); textareaRef.current?.focus(); }} onAttach={(file) => attachments.add([file])} canAttach={!disabled && !atAttachLimit} />
       {paletteOpen && (
         <CommandPalette
           commands={paletteResults}

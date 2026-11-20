@@ -54,6 +54,12 @@ export interface DrawingListItem {
   taskId?: string;
 }
 
+/** Every drawing not in `own` (this place's), in the order the server gave (newest first). */
+export function otherDrawings(own: DrawingListItem[], all: DrawingListItem[]): DrawingListItem[] {
+  const mine = new Set(own.map((item) => item.path));
+  return all.filter((item) => !mine.has(item.path));
+}
+
 /**
  * The view settings a file keeps. Scroll and zoom are left out on purpose: panning
  * must never count as an edit, or every pan would save a new revision.

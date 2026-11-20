@@ -75,3 +75,22 @@ export function parseSketchDraft(v: Record<string, unknown>): SketchDraft | null
     ...(createId ? { createId } : {}),
   };
 }
+
+/**
+ * A sketch draft whose drawing is already in Notes lets go of its place (New drawing, another
+ * file opening there): its unsaved edits move to that file's own draft, which shows them again
+ * when the file opens (and asks, if the file changed since). Returns false, and moves nothing,
+ * when it cannot be let go without losing words: no file yet, edits of an unknown revision, or
+ * the file already keeping other unsaved edits.
+ */
+export function releaseSketchToFile(store: DraftStore, draft: SketchDraft): boolean {
+  if (!draft.path) return false;
+  if (!draft.scene) return true;
+  if (!draft.baseRevision) return false;
+  const key = fileDraftKey(draft.path);
+  store.adopt?.(key);
+  if (store.read(key)) return false;
+  const text = JSON.stringify({ v: 1, baseRevision: draft.baseRevision, scene: draft.scene });
+  store.write(key, text);
+  return store.read(key) === text;
+}

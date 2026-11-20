@@ -407,6 +407,86 @@ test.describe('Draw in the composer (drawing_app)', () => {
     await expect(ws(again)).toHaveAttribute('data-drawing-path', doc.path);
   });
 
+  // 2026-11-20, the user: "each session has its own drawing open by default please not always open
+  // this one", then "I click this new but doesn't work" (over a "Changed elsewhere" bar).
+  test("each task's session opens its own drawing; New drawing works over a conflict, which comes back with its edits", async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    const start = async (message: string) => {
+      const res = await page.request.post('/api/sessions/quick-start', {
+        data: { cwd: path.join(fixture.home(), 'projects'), message, project: 'Drawing Fixture', engine: 'claude' },
+      });
+      expect(res.ok(), await res.text()).toBe(true);
+      return await res.json() as { sessionId: string; taskId: string };
+    };
+    const a = await start('Sketch the order service');
+    const b = await start('Sketch the review service');
+    expect(a.taskId).not.toBe(b.taskId);
+    await seedColumns(page, [a.sessionId, b.sessionId]);
+    await page.evaluate((url) => { location.href = url; }, `${fixture.base()}/`);
+    const panelA = panelFor(page, a.sessionId);
+    const panelB = panelFor(page, b.sessionId);
+    await expect(panelA.locator('.chat-plus-btn')).toBeVisible({ timeout: 60_000 });
+    await expect(panelB.locator('.chat-plus-btn')).toBeVisible({ timeout: 60_000 });
+
+    // A draws: its drawing is A's.
+    const inA = await openDraw(page, panelA);
+    await focusCanvas(inA);
+    await drag(page, inA, 'r', [120, 120], [320, 240]);
+    await saved(inA);
+    const fileA = (await ws(inA).getAttribute('data-drawing-path'))!;
+    expect(fileA).toContain(a.taskId);
+    await inA.getByRole('button', { name: 'Close drawing' }).click();
+    await expect(inA).toHaveCount(0);
+
+    // B's Draw is B's own: a new one, with A's under "Other drawings" a click away.
+    const inB = await openDraw(page, panelB);
+    await expect(status(inB)).toHaveText('Saved to Notes when you draw');
+    await expect(ws(inB)).not.toHaveAttribute('data-drawing-path', /./);
+    await inB.getByRole('button', { name: 'Show drawings list' }).click();
+    await expect(inB.locator('.drawing-workspace-files')).toContainText('No drawings in this task yet');
+    await expect(inB.getByRole('list', { name: 'Other drawings' })).toBeVisible();
+    await shot(page, 'own-drawing-b');
+    await inB.getByRole('button', { name: 'Close drawing' }).click();
+    await expect(inB).toHaveCount(0);
+
+    // A again: its own drawing. Then a save meets a change made elsewhere to the same shape.
+    const againA = await openDraw(page, panelA);
+    await expect(ws(againA)).toHaveAttribute('data-drawing-path', fileA);
+    await saved(againA);
+    const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
+    let raced = false;
+    await page.route('**/api/drawings/file', async (route) => {
+      if (!raced && route.request().method() === 'PUT') {
+        raced = true;
+        const latest = await (await page.request.get(`/api/drawings/file?path=${encodeURIComponent(fileA)}`)).json() as Doc;
+        const other = await page.request.post('/api/drawings/update', {
+          data: { path: fileA, revision: latest.revision, update: latest.scene.elements.map((e) => ({ id: e.id, x: 900 })) },
+        });
+        expect(other.ok(), await other.text()).toBe(true);
+      }
+      await route.continue();
+    });
+    await focusCanvas(againA);
+    await page.keyboard.press(`${mod}+a`);
+    await page.keyboard.press('Shift+ArrowRight');
+    await expect(againA.locator('.drawing-workspace-conflict')).toBeVisible({ timeout: 20_000 });
+    await page.unroute('**/api/drawings/file');
+    await shot(page, 'conflict-before-new');
+
+    // New drawing over the conflict opens a blank one at once.
+    await againA.getByRole('button', { name: 'Show drawings list' }).click();
+    await againA.locator('.drawing-workspace-files').getByRole('button', { name: 'New drawing' }).click();
+    await expect(status(againA)).toHaveText('Saved to Notes when you draw', { timeout: 20_000 });
+    await expect(againA.locator('.drawing-workspace-conflict')).toHaveCount(0);
+    await shot(page, 'new-over-conflict');
+    // The drawing left behind kept my edits: opening it asks again.
+    await againA.locator('.drawing-workspace-file-list').first().locator('.drawing-workspace-file').first().click();
+    await expect(ws(againA)).toHaveAttribute('data-drawing-path', fileA, { timeout: 20_000 });
+    await expect(againA.locator('.drawing-workspace-conflict')).toBeVisible({ timeout: 20_000 });
+    expect(errors).toEqual([]);
+  });
+
   test('Draw in a task session saves in Notes under Projects/<project>/<task>/, named from its first text; rename from the title', async ({ page }) => {
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(e.message));

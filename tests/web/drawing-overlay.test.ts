@@ -8,7 +8,7 @@ import { parseHTML } from 'linkedom';
 import { OutsidePress, FULLSCREEN_Z, isFullscreenShortcut, liftFixedAncestors } from '../../web/src/components/drawing/drawing-overlay';
 import { DIAGRAM_GAP, applyDiagram, boundsOf, diagramOrigin, diagramSource, type DiagramEditor } from '../../web/src/components/drawing/drawing-diagram';
 import { autoRenameTitle, firstTextLine, parseScene } from '../../web/src/components/drawing/drawing-scene';
-import { drawingPlace } from '../../web/src/components/chat/drawing-place';
+import { composerDrawing, drawingPlace } from '../../web/src/components/chat/drawing-place';
 
 describe('a press outside the composer dialog', () => {
   it('closes only when it began and ended outside', () => {
@@ -156,5 +156,18 @@ describe("where a composer's Draw saves", () => {
     expect(drawingPlace({ fileTarget: { sessionId: 's2' } })).toEqual({ sessionId: 's2' });
     expect(drawingPlace({ drawingTarget: { taskId: 't9', sessionId: 's9' }, sessionMentionSelfId: 's1' })).toEqual({ taskId: 't9', sessionId: 's9' });
     expect(drawingPlace({ fileTarget: {} })).toEqual({});
+  });
+
+  // 2026-11-20, the user: "each session has its own drawing open by default".
+  it("each session's Draw is its own: two sessions never share a drawing draft", () => {
+    const a = composerDrawing(undefined, { mentionSelfTaskId: 't1', sessionMentionSelfId: 's1' });
+    const b = composerDrawing(undefined, { mentionSelfTaskId: 't2', sessionMentionSelfId: 's2' });
+    expect(a).toEqual({ taskId: 't1', sessionId: 's1', draftId: 's1' });
+    expect(b.draftId).not.toBe(a.draftId);
+    // The composer's own draft wins (one per session and thread); a task alone is its own too.
+    expect(composerDrawing('draft:session:s1', { sessionMentionSelfId: 's1' }).draftId).toBe('draft:session:s1');
+    expect(composerDrawing(undefined, { mentionSelfTaskId: 't3' }).draftId).toBe('task:t3');
+    expect(composerDrawing(undefined, { mentionSelfTaskId: 't4' }).draftId).not.toBe(composerDrawing(undefined, { mentionSelfTaskId: 't3' }).draftId);
+    expect(composerDrawing(undefined, { fileTarget: { sessionId: 's9' } }).draftId).toBe('s9');
   });
 });

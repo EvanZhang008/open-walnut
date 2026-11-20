@@ -25,7 +25,7 @@ import { DRAFT_FLUSH_EVENT } from '@/utils/unsaved-work';
 import { timeAgo } from '@/utils/time';
 import { isBoolean, usePageView, usePageViewOf } from '@/utils/view-memory';
 import { DrawingConflictError, drawingApi, drawingErrorMessage, requestDiagram, type DrawingApi } from './drawing-api';
-import { exportFileName, sceneElementCount, sceneHasContent, sceneText, type DrawingListItem, type DrawingScene } from './drawing-scene';
+import { exportFileName, otherDrawings, sceneElementCount, sceneHasContent, sceneText, type DrawingListItem, type DrawingScene } from './drawing-scene';
 import { DrawingSync, NOT_SAVED_YET, hasUnsavedSketch, newSketchKey, sketchDraftKey, type DrawingSnapshot, type DrawingSource } from './drawing-sync';
 import { tabDrawingStore } from './drawing-store';
 import { addCatalogLibrary, tabLibrary } from './drawing-library';
@@ -233,6 +233,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const [Canvas, setCanvas] = useState<CanvasModule | null>(null);
   const [canvasError, setCanvasError] = useState<string | null>(null);
   const [list, setList] = useState<DrawingListItem[] | null>(null);
+  const [others, setOthers] = useState<DrawingListItem[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [busy, setBusy] = useState<null | 'new' | 'attach' | 'png' | 'svg' | 'copy'>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -333,14 +334,17 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   }, []);
   useEffect(() => { loadEditor(); }, [loadEditor]);
 
-  // The list of this place's drawings.
+  // The list of this place's drawings, and (in a task's or session's place) every other drawing
+  // under them, so another one is a click away while its own come first.
+  const scoped = Boolean(scope.taskId || scope.sessionId);
   const refreshList = useLeanCallback(() => {
-    api.list(scope).then((rows) => {
+    Promise.all([api.list(scope), scoped ? api.list({}).catch(() => null) : Promise.resolve(null)]).then(([rows, all]) => {
       if (!mounted.current) return;
       setList(rows);
+      setOthers(all ? otherDrawings(rows, all) : null);
       setListError(null);
     }).catch((err) => { if (mounted.current) setListError(drawingErrorMessage(err)); });
-  }, [api, scope]);
+  }, [api, scope, scoped]);
   useEffect(() => { refreshList(); }, [refreshList]);
   const savedRevision = snap?.state === 'saved' ? snap.revision : null;
   useEffect(() => { if (savedRevision) refreshList(); }, [savedRevision, refreshList]);
@@ -419,6 +423,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const canLeave = async (): Promise<boolean> => {
     const controller = sync.current;
     if (!controller || controller.source.kind !== 'sketch' || !controller.snapshot().unsaved) return true;
+    // Already in Notes (a conflict waiting for a choice included): its unsaved edits stay with that
+    // file and come back when it opens, so New drawing or another file may take its place.
+    if (controller.snapshot().path) { controller.flushDraft(); return true; }
     await controller.save();
     if (!mounted.current || sync.current !== controller) return false;
     if (!controller.snapshot().unsaved) return true;
@@ -651,7 +658,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             </button>
           </div>
           {listError && <p className="drawing-workspace-files-note" role="alert">{listError}</p>}
-          {list && list.length === 0 && !listError && <p className="drawing-workspace-files-note">No drawings here yet</p>}
+          {list && list.length === 0 && !listError && <p className="drawing-workspace-files-note">{scoped ? 'No drawings in this task yet' : 'No drawings here yet'}</p>}
           {list === null && !listError && <p className="drawing-workspace-files-note">Loading…</p>}
           {list && list.length > 0 && (
             <ul className="drawing-workspace-file-list">
@@ -660,6 +667,17 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                   onOpen={() => void openFile(item.path)} onRename={(name) => renameDrawing(item.path, name)} />
               ))}
             </ul>
+          )}
+          {others && others.length > 0 && (
+            <>
+              <h3 className="drawing-workspace-files-heading">Other drawings</h3>
+              <ul className="drawing-workspace-file-list" aria-label="Other drawings">
+                {others.map((item) => (
+                  <FileRow key={item.path} item={item} current={item.path === currentPath}
+                    onOpen={() => void openFile(item.path)} onRename={(name) => renameDrawing(item.path, name)} />
+                ))}
+              </ul>
+            </>
           )}
         </aside>
       )}
@@ -706,7 +724,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             <button type="button" className="drawing-quiet-button" onClick={() => void saveCopy()} disabled={!!busy}>{busy === 'copy' ? 'Saving copy…' : 'Save mine as a copy'}</button>
           </div>
         )}
-        {(notice || snap?.error) && !conflict && !((state === 'missing' || state === 'error') && snap?.unsaved && !notice) && <p className="drawing-workspace-notice" role="alert">{notice ?? snap?.error}</p>}
+        {/* A notice answers what the person just did, so it shows over a conflict too (a refusal
+            hidden behind it read as a button that does nothing, 2026-11-20). */}
+        {(notice || (snap?.error && !conflict && !((state === 'missing' || state === 'error') && snap?.unsaved))) && <p className="drawing-workspace-notice" role="alert">{notice ?? snap?.error}</p>}
         {snap?.warning && (
           <div className="drawing-workspace-warning" role="status">
             <span>{snap.warning}</span>

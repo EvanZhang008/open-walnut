@@ -896,6 +896,54 @@ describe('"New drawing" is a sketch until its first content', () => {
     expect(server.puts()[0].scene!.appState.walnutTitle).toBe('auto');
   });
 
+  // 2026-11-20, the user: "I click this new but doesn't work". The composer's drawing waited on a
+  // conflict, which counted as "not in Notes yet", and the refusal hid behind the conflict bar.
+  it('a New over a drawing in Notes that waits on a conflict starts blank; the file keeps my edits and asks again', async () => {
+    const path = 'Tasks/t1/plan.excalidraw';
+    server.add(path, sceneOf(rect('shared')));
+    const first = open({ kind: 'sketch', key, open: path }, { taskId: 't1' });
+    await first.start();
+    first.edit(last().scene!, last().sceneKey);
+    server.writeElsewhere(path, sceneOf(rect('shared', 3)));
+    first.edit(sceneOf(rect('shared', 2), rect('mine')), last().sceneKey);
+    await tick(1_000);
+    expect(last().state).toBe('conflict');
+    first.flushDraft();
+    first.dispose();
+    await settle();
+    const fresh = open({ kind: 'sketch', key, fresh: 2 }, { taskId: 't1' });
+    await fresh.start();
+    expect(last()).toMatchObject({ state: 'sketch', path: null, error: null });
+    expect(last().scene!.elements).toHaveLength(0);
+    fresh.dispose();
+    await settle();
+    // Back to that drawing: my edits are there, and the choice is asked again.
+    const again = open({ kind: 'sketch', key, open: path }, { taskId: 't1' });
+    await again.start();
+    await tick(1_000);
+    expect(last().scene!.elements.map((e) => e.id)).toContain('mine');
+    expect(last().state).toBe('conflict');
+    expect(server.files.get(path)!.scene.elements.map((e) => `${e.id}@${e.version}`)).toEqual(['shared@3']);
+  });
+
+  it('a New over a drawing just made in Notes, its first save still out, hands those edits to the file', async () => {
+    const first = open({ kind: 'sketch', key, fresh: 1 }, { taskId: 't1' });
+    await first.start();
+    server.fail.put = Array.from({ length: 5 }, () => new TypeError('Failed to fetch'));
+    first.edit(sceneOf(rect('a')), last().sceneKey);
+    await tick(1_000);
+    const made = last().path!;
+    expect(made).toMatch(/^Tasks\/t1\//);
+    first.flushDraft();
+    first.dispose();
+    await settle();
+    server.fail.put = [];
+    const fresh = open({ kind: 'sketch', key, fresh: 2 }, { taskId: 't1' });
+    await fresh.start();
+    expect(last()).toMatchObject({ state: 'sketch', path: null, error: null });
+    expect(JSON.parse(store.read(fileDraftKey(made))).scene.elements.map((e: { id: string }) => e.id)).toEqual(['a']);
+  });
+
   it('a fresh New starts blank over a sketch already in Notes, and keeps one that is not', async () => {
     const first = open({ kind: 'sketch', key, fresh: 1 }, { taskId: 't1' });
     await first.start();

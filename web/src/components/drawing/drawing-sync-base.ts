@@ -6,7 +6,7 @@
 import { ApiError } from '@/api/client';
 import { randomId } from '@/utils/random-id';
 import { DrawingConflictError, DrawingUnreadableError, isMissingDrawing, drawingErrorMessage } from './drawing-api';
-import { fileDraftKey, parseFileDraft, parseSketchDraft, readDraftOf, type FileDraft } from './drawing-drafts';
+import { fileDraftKey, parseFileDraft, parseSketchDraft, readDraftOf, releaseSketchToFile, type FileDraft } from './drawing-drafts';
 import { KEPT_APP_STATE, emptyScene, firstText, isEditorFormOf, sceneFingerprint, sceneForStorage, sceneHasContent, withLoadedKeys, type DrawingDocument, type DrawingScene } from './drawing-scene';
 import { SAVE_DELAY_MS, SAVE_MAX_WAIT_MS, DRAFT_DELAY_MS, type DrawingSaveState, type DrawingSnapshot, type DrawingSource, type DrawingSyncOptions } from './drawing-sync-types';
 
@@ -117,13 +117,14 @@ export abstract class DrawingSyncBase {
     if (this.source.kind === 'sketch' && this.source.fresh) {
       // Read only now, like `open`: the controller left behind has written its last draft.
       const left = readDraftOf(store, this.sketchKey, parseSketchDraft).draft;
-      if (left?.scene && sceneHasContent(left.scene)) refused = 'The last new drawing is not in Notes yet, so it stays open here. Start another once it is saved.';
+      // A drawing already in Notes hands its unsaved edits to its file; only one not there yet stays.
+      if (left?.scene && sceneHasContent(left.scene) && !releaseSketchToFile(store, left)) refused = 'The last new drawing is not in Notes yet, so it stays open here. Start another once it is saved.';
       else store.write(this.sketchKey, '');
     } else if (this.source.kind === 'sketch' && this.source.open) {
       // Written only now: a sketch left behind has finished writing its own draft. One that is
       // still not in Notes stays: nothing opens over it.
       const left = readDraftOf(store, this.sketchKey, parseSketchDraft).draft;
-      if (left?.scene) refused = 'This drawing is not in Notes yet, so it stays open here. Open the other one once it is saved.';
+      if (left?.scene && !releaseSketchToFile(store, left)) refused = 'This drawing is not in Notes yet, so it stays open here. Open the other one once it is saved.';
       else store.write(this.sketchKey, JSON.stringify({ v: 1, path: this.source.open }));
     }
     const { draft, unreadable } = readDraftOf(store, this.sketchKey, parseSketchDraft);
