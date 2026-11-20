@@ -5,4 +5,4 @@
  * (history-ready-view.ts), so a daemon on an older parser never paints this server's history.
  * Generated: run `bun scripts/history-parser-version.mjs --write` after editing a file it lists.
  */
-export const HISTORY_PARSER_VERSION = '3b8b1f34da683454';
+export const HISTORY_PARSER_VERSION = '3352a94eab7bd99a';

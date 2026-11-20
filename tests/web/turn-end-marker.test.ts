@@ -4,7 +4,8 @@
  * fence, alone, in a turn no person started. Everything else stays on screen.
  */
 import { describe, expect, it } from 'vitest';
-import { LEGACY_NO_ACTION_TAG, NO_ACTION_TAG, noActionRows, readTurnMarker, stripSelfReportBlock, stripTurnMarker } from '@/utils/turn-end-marker';
+import { LEGACY_NO_ACTION_TAG, NO_ACTION_TAG, noActionRows, readTurnMarker, stripTurnMarker } from '@/utils/turn-end-marker';
+import { stripInternalLines } from '../../src/lib/internal-lines';
 
 describe('readTurnMarker', () => {
   it('reads the marker as the last line and returns the text without it', () => {
@@ -144,14 +145,16 @@ describe('noActionRows: only a finished, clean agent turn ending in the line alo
   });
 });
 
-describe('a self-report field written into a reply (stripSelfReportBlock)', () => {
+describe('a self-report field written into a reply (internal-lines.ts stripInternalLines)', () => {
   it('cuts a bare FOR_USER_* line and everything after it', () => {
     const reply = 'I checked the live state. Two things wait on you:\n1. Keep or close the old change?\n\nFOR_USER_BRIEF\nNeeds you:\n- the old change'
-    expect(stripSelfReportBlock(reply)).toBe('I checked the live state. Two things wait on you:\n1. Keep or close the old change?')
+    expect(stripInternalLines(reply)).toBe('I checked the live state. Two things wait on you:\n1. Keep or close the old change?')
     expect(stripTurnMarker(reply)).toBe('I checked the live state. Two things wait on you:\n1. Keep or close the old change?')
-    expect(stripSelfReportBlock('Done.\n**FOR_USER_BRIEF:**\n- a line')).toBe('Done.')
-    // Another field alone on a line is someone explaining the format: it stays.
-    expect(stripSelfReportBlock('The fields:\nFOR_USER_ASK:\nwhat the user must do')).toBe('The fields:\nFOR_USER_ASK:\nwhat the user must do')
+    expect(stripInternalLines('Done.\n**FOR_USER_BRIEF:**\n- a line')).toBe('Done.')
+    // Another field with the session's words after it is someone explaining the format: it stays.
+    expect(stripInternalLines('The fields:\nFOR_USER_ASK:\nwhat the user must do')).toBe('The fields:\nFOR_USER_ASK:\nwhat the user must do')
+    // At the end of a reply every field goes, not only the Brief's (2026-11-20: FOR_USER_STATE / NOW / NEXT ended replies).
+    expect(stripInternalLines('Done.\n\nFOR_USER_STATE: working\nFOR_USER_NEXT: ship')).toBe('Done.')
   })
 
   it('keeps a mention in a sentence, a code block, and a reply that is only the field', () => {
@@ -160,7 +163,7 @@ describe('a self-report field written into a reply (stripSelfReportBlock)', () =
       'Example:\n```\nFOR_USER_BRIEF:\n- a line\n```\nThat is the shape.',
       'Example:\n    FOR_USER_BRIEF\nindented code',
       'FOR_USER_BRIEF:\n- the letter',
-    ]) expect(stripSelfReportBlock(text)).toBe(text)
+    ]) expect(stripInternalLines(text)).toBe(text)
   })
 
   it('also holds it back while streaming', () => {

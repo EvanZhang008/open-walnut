@@ -253,6 +253,7 @@ export const DAEMON_SOURCE_FILES = [
   'src/lib/history-injected-banner.ts',
   'src/lib/history-session-envelope.ts',
   'src/lib/history-turn-window.ts',
+  'src/lib/internal-lines.ts',
   'src/lib/history-walnut-riders.ts',
   'src/lib/turn-end-marker.ts',
   'src/lib/walnut-added.ts',

@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest'
 import { asksToDecide, openNoteLines, readsUnfinished, userQuestionIn } from '../../src/core/sessions/stale-note.js'
 import { admitOwnNote } from '../../src/core/sessions/owed-to-user.js'
 import { asksDecisionLine } from '../../src/ops/work.js'
+import { STATUS_REPORT_CHANNEL } from '../../src/lib/internal-lines.js';
 
 const note = (summary: string, progress: string, rest = '') =>
   `## Executive Summary\n${summary}\n\n## User Request\nMake it work. Waiting for nothing. You decide the details.\n\n## Progress\n${progress}\n\n## Work Log\n- did: waited for the review, it is pending no more; the build is running again later\n${rest}`
@@ -174,7 +175,9 @@ describe('a line that asks for a decision', () => {
   it('the line the sender reads back names it and both ways on', () => {
     const line = asksDecisionLine('You decide: keep the groups or unsubscribe them')
     expect(line).toContain('"You decide: keep the groups or unsubscribe them"')
-    expect(line).toMatch(/FOR_USER_ASK/)
+    // Its own ask, in the status report or task_report_set: never FOR_USER_ lines in a reply (2026-11-20).
+    expect(line).toContain(STATUS_REPORT_CHANNEL)
+    expect(line).not.toMatch(/FOR_USER_/)
     expect(line).toMatch(/task_report_set/)
     expect(line).toMatch(/lead already decided it, drop it/)
   })
@@ -209,7 +212,7 @@ describe('the own-close gate asks once', () => {
     const t = { id: 'stale-once-3', note: CASES['buried decision'].note }
     const first = await admitOwnNote(t)
     expect(first.ok).toBe(false)
-    if (!first.ok) expect(first.message).toMatch(/make it your own ask \(FOR_USER_ASK/)
+    if (!first.ok) expect(first.message).toContain(`make it your own ask (${STATUS_REPORT_CHANNEL})`)
     expect((await admitOwnNote({ id: 'stale-once-4', note: t.note }, { not_done: ['Whether to keep the groups is the user\'s call'] } as never)).ok).toBe(true)
   })
 })

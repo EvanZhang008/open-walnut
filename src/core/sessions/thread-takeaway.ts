@@ -29,6 +29,7 @@ import {
 } from './thread-meta.js';
 import type { SessionRecord, SessionThreadMeta, SessionThreadMetaPatch } from '../types.js';
 import { isQuietTurn } from './quiet-turn.js';
+import { stripInternalLines } from '../../lib/internal-lines.js';
 
 export const THREAD_TAKEAWAY_REQUIREMENT = 'State the answer this thread reached in one sentence, at most 25 words. No preamble, no "good question". Same language as the question.';
 
@@ -248,7 +249,7 @@ export async function handleThreadTakeawayResult(data: ResultData, turnUuid: str
   const record = await getSessionByClaudeId(sessionId);
   if (!record?.threadMeta?.length) return;
   const headId = turnUuid ? threadHeadForMsg(turnUuid, record.threadAnchors, record.threadMeta) : undefined;
-  if (headId && !data.isError && data.result) rememberAnswer(keyOf(sessionId, headId), data.result);
+  if (headId && !data.isError && data.result) rememberAnswer(keyOf(sessionId, headId), stripInternalLines(data.result));
   for (const [key, job] of parked) {
     if (job.sessionId !== sessionId) continue;
     parked.delete(key);
@@ -263,7 +264,7 @@ function onBusEvent(event: BusEvent): void {
   // Synchronous: the next delivery right after this result replaces the uuid.
   const turnUuid = data.userUuid ?? turnUserUuid(data.sessionId);
   lastResultUuid.set(data.sessionId, turnUuid);
-  if (turnUuid && !data.isError && data.result) lastResultText.set(data.sessionId, { uuid: turnUuid, text: boundedAnswer(data.result) });
+  if (turnUuid && !data.isError && data.result) lastResultText.set(data.sessionId, { uuid: turnUuid, text: boundedAnswer(stripInternalLines(data.result)) });
   else lastResultText.delete(data.sessionId);
   void handleThreadTakeawayResult(data, turnUuid).catch((err) => {
     log.session.warn('thread takeaway: result handler failed', {

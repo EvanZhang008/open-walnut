@@ -133,8 +133,9 @@ class SelfCallError extends Error {
  * machine once writes work again (src/core/sessions/machine-wake.ts).
  */
 export const DISK_FULL_HINT = ' This is the machine, not your work: do not ask the user about it and do not stop on it.'
-  + ' Free space only from your own build output or scratch if you have some. Otherwise report your turn as'
-  + ' waiting on the machine (FOR_USER_STATE: waiting, FOR_USER_WAITING_ON: machine: free disk on the Walnut server);'
+  + ' Free space only from your own build output or scratch if you have some. Otherwise, in your status report (Walnut asks'
+  + ' for it in a question of its own right after your turn; never write its lines in a reply), say you are waiting on the'
+  + ' machine: free disk on the Walnut server;'
   + ' Walnut tells your lead, and wakes this task when writes work again.'
 
 /**

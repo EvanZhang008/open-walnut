@@ -382,9 +382,10 @@ nothing). When your own work runs outside this session (CI, a deploy or land
 queue, a test run on another host), arm its trigger with `"watches":"own"` and
 no `wait`: it never parks the task, and its fire brings you back. The session
 goes idle by itself; the task stays out of Waiting and reads Working. Say so in
-the turn-end report: `FOR_USER_STATE: working`, with what runs in
-`FOR_USER_NOW` (or `FOR_USER_WAITING_ON: own: the build of my change`), never
-`outside:`. Walnut keeps a park out of it too: a report on your own work takes
+your status report, which Walnut asks for in a question of its own right after
+your turn (never write its lines in a reply): working, with what runs now, or
+waiting on your own work (the build of my change), never on something outside.
+Walnut keeps a park out of it too: a report on your own work takes
 a park Walnut restored back to In Progress, and an `"own"` trigger never holds a
 park, keeps a routine parked or counts as an outside wait.
 

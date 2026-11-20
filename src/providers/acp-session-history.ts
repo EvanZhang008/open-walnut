@@ -4,7 +4,7 @@ import { log } from '../logging/index.js'
 import { DaemonFileReader } from '../core/daemon-file-reader.js'
 import type { SessionHistoryMessage } from '../core/session-history.js'
 import type { SessionRecord } from '../core/types.js'
-import { AcpHistoryFold, projectAcpJournalHistory } from './acp-journal-projector.js'
+import { AcpHistoryFold, projectAcpJournalHistory, shownAcpMessages } from './acp-journal-projector.js'
 import type { JournalRecord } from './acp-worker/protocol.js'
 import { isProductionDaemonDir } from '../lib/daemon-dir.js'
 import { isByteCeilingError } from '../core/byte-ceiling.js'
@@ -409,7 +409,7 @@ function releaseFullFoldSlot(): void {
 }
 
 function serveEntry(entry: FoldCacheEntry): AcpSessionHistoryState {
-  const messages = entry.legacy ? entry.legacy.messages : entry.fold.messages
+  const messages = entry.legacy ? entry.legacy.messages : shownAcpMessages(entry.fold.messages)
   return {
     // DEEP copy, not a slice: the fold keeps mutating its message OBJECTS on
     // later incremental reads (continuation chunks do `text +=` in place), and

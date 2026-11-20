@@ -31,7 +31,9 @@ describe('a 507 from the disk guard', () => {
     const message = (out as { message: string }).message
     expect(message).toContain('Walnut API error (507): Data disk is critically full')
     expect(message.endsWith(DISK_FULL_HINT)).toBe(true)
-    expect(DISK_FULL_HINT).toContain('FOR_USER_WAITING_ON: machine')
+    // Said in the status report, never as its lines in a reply (internal-lines.ts, 2026-11-20).
+    expect(DISK_FULL_HINT).toContain('say you are waiting on the machine')
+    expect(DISK_FULL_HINT).not.toContain('FOR_USER_')
     expect(DISK_FULL_HINT).toContain('do not ask the user')
   })
 })

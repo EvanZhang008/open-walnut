@@ -49,6 +49,7 @@ import { userSaidLine } from './user-spoke.js';
 import type { OpenLineKind } from './stale-note.js';
 import { awaitsUserDecision } from '../human-inbox/open-decision.js';
 import { admitHeldRequests, type HeldRequestRefusal } from './requests-held.js';
+import { STATUS_REPORT_CHANNEL } from '../../lib/internal-lines.js';
 
 /** Every kind of thing a close owes the user. tests/e2e/owed-close.test.ts holds a close by each one. */
 export type OwedSource = 'progress' | 'ask' | 'letter' | 'choice' | 'thread' | 'decision' | 'held';
@@ -429,7 +430,7 @@ export async function admitSessionClose(
   // line misread as the user's never flashes on his Needs you; the same conclusion again is held.
   if (closer.taskId === task.id && !held && items.every((i) => i.source === 'decision') && !toldConclusion(task.id, items)) {
     return { ok: false, code: 'owed_to_user', items, message: `Not closed: your conclusion says the user still has to decide or answer: ${itemsText(items)}. `
-      + 'A task is done when what the user wanted has happened, not when his decision was handed on. If it waits on him, keep it open (your own Needs you ask, FOR_USER_ASK or task_report_set) and carry on once he answered. '
+      + `A task is done when what the user wanted has happened, not when his decision was handed on. If it waits on him, keep it open (your own Needs you ask, in ${STATUS_REPORT_CHANNEL}) and carry on once he answered. `
       + 'If that line only describes work, or it is already settled, complete again with a not_done and result that say what is really left. Completing again with the same conclusion holds the task open for him.' };
   }
   let failed: string | undefined;
@@ -505,7 +506,7 @@ export async function admitOwnNote(task: Pick<Task, 'id' | 'note'>, fields?: Str
     + 'Bring the note up to date first (task_note_write: mark what is finished [DONE] and say it in the Executive Summary, drop what no longer applies), '
     + 'and pass what is really still open as not_done when you complete. Nothing of this call was kept: complete again with the same result, evidence and score. '
     + (asks
-      ? 'A decision for the user written in a note reaches nobody: if it is still the user\'s to decide, make it your own ask (FOR_USER_ASK at the end of your turn, or task_report_set) instead of completing; if your lead already decided it, drop the line. '
+      ? `A decision for the user written in a note reaches nobody: if it is still the user's to decide, make it your own ask (${STATUS_REPORT_CHANNEL}) instead of completing; if your lead already decided it, drop the line. `
       : '')
     + 'Walnut asks this once: completing again with the same lines goes through as it is.';
   return { ok: false, code: 'stale_note', message, items: lines.map((l) => ({ source: 'note' as const, kind: l.kind, text: l.text })) };

@@ -20,6 +20,7 @@
 import { bus, EventNames, type BusEvent } from '../../core/event-bus.js'
 import { toolDetail } from '../../core/tool-summary.js'
 import { isQuietTurn } from '../../core/sessions/quiet-turn.js'
+import { stripInternalLines } from '../../lib/internal-lines.js'
 
 /** A follow that sees no end in this long stops; the reply is still in Main's chat. */
 export const MAIN_FOLLOW_MAX_MS = 15 * 60_000
@@ -128,8 +129,9 @@ export function followMainReply(
         }
         if (held) return
         const result = typeof d.result === 'string' ? d.result : ''
-        // The streamed words when there were any (the result is only the turn's last message).
-        const last: FollowLine = { type: 'result', text: text.trim() ? text : result }
+        // The streamed words when there were any (the result is only the turn's last message),
+        // as a person reads them: no status report lines (internal-lines.ts).
+        const last: FollowLine = { type: 'result', text: stripInternalLines(text.trim() ? text : result) }
         if (midTurn) {
           held = { timer: setTimeout(() => finish(last), MID_TURN_NEXT_MS), last }
           held.timer.unref?.()

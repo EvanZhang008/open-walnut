@@ -16,6 +16,7 @@ import { SESSION_ENGINE_IDS, SESSION_MODE_IDS } from '../core/types.js';
 import { CLAUDE_PLUGIN_ID_MAX_CHARS, CLAUDE_PLUGINS_OFF_MAX_ITEMS } from '../core/sessions/claude-plugins-off.js';
 import { isoDateTime, LIST_MAX } from '../lib/zod-rules.js'
 import { TASK_DIR_VAR, stopTmpPathNote } from '../lib/tmp-draft-path.js';
+import { STATUS_REPORT_CHANNEL } from '../lib/internal-lines.js';
 
 defineOp({
   name: 'task_start',
@@ -223,7 +224,7 @@ export function asksDecisionLine(line: string): string {
   const shown = Array.from(line.replace(/\s+/g, ' ').trim());
   return `Your message asks for a decision ("${shown.length > 160 ? `${shown.slice(0, 159).join('')}…` : shown.join('')}"). `
     + 'If it is the user\'s to make, a message to another task does not reach them: make it your own ask '
-    + '(FOR_USER_ASK at the end of your turn, or task_report_set) so it is on their Needs you; if your lead already decided it, '
+    + `(${STATUS_REPORT_CHANNEL}) so it is on their Needs you; if your lead already decided it, `
     + 'drop it. If the task you wrote to decides it itself, nothing more is needed. Handing the user\'s decision to your lead '
     + 'does not finish your task: keep it open until the user answered and you did what follows.';
 }

@@ -33,6 +33,7 @@ import { log } from '../logging/index.js'
 import { holdPushForQuiet, initQuietHold } from './push/quiet-hold.js'
 import { deliverPush } from './push/deliver.js'
 import { isQuietTurn } from './sessions/quiet-turn.js'
+import { stripInternalLines } from '../lib/internal-lines.js'
 
 /**
  * Send a push notification if no WebSocket clients are connected.
@@ -125,7 +126,8 @@ export function initPushNotifications(): void {
             // meaningless to the user. Push the reply itself, from Walnut.
             await maybePush(
               'Walnut',
-              data.result ? data.result.slice(0, 150) : 'New response',
+              // The reply as a person reads it: no status report lines (internal-lines.ts).
+              data.result ? stripInternalLines(data.result).slice(0, 150) : 'New response',
               { type: 'session_result', sessionId, agentId: lane.agentId, conversationId: lane.conversationId }
             )
             break

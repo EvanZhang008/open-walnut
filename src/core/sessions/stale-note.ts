@@ -80,7 +80,7 @@ const QUESTION_RES: readonly RegExp[] = [
  * A note line written for the user to act on ("You: approve the release", "The user: pick a host").
  * Notes only: in a message, "You, the lead, have the logs" is not a question.
  */
-const FOR_USER_LINE_RE = /^\s*(?:you|the user)\s*[:,]\s*\S/i;
+const ADDRESSES_USER_LINE_RE = /^\s*(?:you|the user)\s*[:,]\s*\S/i;
 
 const LINE_MAX = 200;
 
@@ -132,7 +132,7 @@ export function asksToDecide(text: string): boolean {
 
 /** Whether a note line asks the user: a decision phrase, or a line written for the user to act on. */
 function noteAsks(text: string): boolean {
-  return FOR_USER_LINE_RE.test(text.replace(QUOTED_RE, ' ')) || asksToDecide(text);
+  return ADDRESSES_USER_LINE_RE.test(text.replace(QUOTED_RE, ' ')) || asksToDecide(text);
 }
 
 /** Whether a line says something is still under way (pure). */

@@ -5704,7 +5704,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         }
       }
 
-      const { sessionId, taskId, result, isError, totalCost, costDelta, duration, turnGen, usage: turnUsage, model: turnModel, speed: turnSpeed, processDied } = eventData<'session:result'>(event)
+      const { sessionId, taskId, result: rawResult, isError, totalCost, costDelta, duration, turnGen, usage: turnUsage, model: turnModel, speed: turnSpeed, processDied } = eventData<'session:result'>(event)
+      // The reply as a person reads it: Walnut's own lines (a status report, an old version tag) left out.
+      const { stripInternalLines } = await import('../lib/internal-lines.js')
+      const result = typeof rawResult === 'string' ? stripInternalLines(rawResult) : rawResult
       log.web.info('session result received', { sessionId, taskId, resultLength: result?.length ?? 0 })
 
       // Record session cost (external Claude Code CLI process).
