@@ -64,6 +64,7 @@ import { WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
 import { noteSessionChangesComputed } from './session-git-status.js';
 import { isByteCeilingError } from './byte-ceiling.js';
+import { registerMemoryHolder } from './observability/memory-ledger.js';
 
 // The compute PRIMITIVES (op parse, reverse-apply reconstruction, grouping
 // policy) live in providers/session-changes-core.ts, shared verbatim with the
@@ -342,6 +343,11 @@ const MAX_CACHE_CHARS = 64 * 1024 * 1024;
  *  allocate real multi-hundred-MB strings and OOM parallel vitest workers). */
 let maxCacheChars = MAX_CACHE_CHARS;
 let cacheChars = 0;
+registerMemoryHolder({
+  name: 'session-changes.diffs',
+  budgetBytes: MAX_CACHE_CHARS * 2,
+  read: () => ({ entries: changesCache.size, chars: cacheChars }),
+});
 
 /** Approx retained chars of one fileMap's op payloads. */
 function fileMapChars(fileMap: Map<string, FileAccum>): number {

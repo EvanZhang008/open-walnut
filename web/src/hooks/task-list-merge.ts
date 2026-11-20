@@ -304,3 +304,49 @@ export function changedFields(before: Task, after: Task): Partial<Task> {
   }
   return fields as Partial<Task>;
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** Clock slack between this page and the server's window edge: a row this close to the edge
+ *  that the server left out is still kept rather than dropped from the loaded archive. */
+const ARCHIVE_EDGE_SLACK_MS = 60 * 60 * 1000;
+
+/**
+ * Archive rows a windowed answer leaves out on purpose. Once the page holds the whole
+ * completed archive, a refetch asks only for the recent window (open tasks plus completed
+ * in the last `withinDays`) and keeps the archive it already has: refetching all of it
+ * (7.9k tasks, 11.5 MB of JSON on 2026-11-20) at every socket reconnect and bulk event
+ * was the page's biggest repeated allocation. The rows kept are the ones the server's window
+ * omits (core/task-recent-completed.ts): completed, not pinned or tiered, finished before the
+ * window. Anything else missing from the answer is gone for real and is dropped.
+ */
+export function archiveRowsOutsideWindow(prev: Task[], fetched: Task[], withinDays: number, now = Date.now()): Task[] {
+  const fetchedIds = new Set(fetched.map((t) => t.id));
+  const edge = now - withinDays * DAY_MS + ARCHIVE_EDGE_SLACK_MS;
+  return prev.filter((t) => {
+    if (fetchedIds.has(t.id)) return false;
+    if (!(t.status === 'done' || t.phase === 'COMPLETE') || t.pinned || t.focus_tier) return false;
+    const doneAt = Date.parse(t.completed_at ?? t.updated_at ?? '');
+    return Number.isFinite(doneAt) && doneAt < edge;
+  });
+}
+
+/** The merge of a windowed refetch into a page that holds the archive: the window's rows merged
+ *  as usual, the archive rows it left out kept as they were; `prev` itself when nothing changed. */
+export function mergeWindowedRefetch(
+  prev: Task[],
+  fetched: Task[],
+  withinDays: number,
+  retain?: ReadonlySet<string>,
+  eventRows?: ReadonlyMap<string, Task>,
+  now = Date.now(),
+): Task[] {
+  const archive = archiveRowsOutsideWindow(prev, fetched, withinDays, now);
+  const archiveIds = new Set(archive.map((t) => t.id));
+  const merged = mergeFetchedTasks(prev.filter((t) => !archiveIds.has(t.id)), fetched, retain, eventRows);
+  const next = [...merged, ...archive];
+  if (next.length === prev.length) {
+    const before = new Set(prev);
+    if (next.every((t) => before.has(t))) return prev;
+  }
+  return next;
+}

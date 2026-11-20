@@ -10,9 +10,10 @@ import * as tasksApi from '@/api/tasks';
 import { withWriteRetry } from '@/api/write-retry';
 import { perf } from '@/utils/perf-logger';
 import { log } from '@/utils/log';
+import { registerPageVital } from '@/utils/page-vitals';
 import { scrollLog } from '@/utils/scroll-debug';
 import { fetchWithRetry, isRetryableFetchError } from '@/utils/fetch-retry';
-import { tasksShallowEqual, mergeFetchedTasks, overlayLaterEdits, changedFields, noteLocalEdits as noteEdits, settleLocalEdits as settleEdits, heldOverEcho, type LocalEdit } from './task-list-merge';
+import { tasksShallowEqual, mergeFetchedTasks, mergeWindowedRefetch, overlayLaterEdits, changedFields, noteLocalEdits as noteEdits, settleLocalEdits as settleEdits, heldOverEcho, type LocalEdit } from './task-list-merge';
 import { normalizeTags } from '../../../src/core/tag-model';
 import { deletedTaskId } from '../../../src/core/task-deleted-id';
 import { markFirstScreen } from '@/utils/after-first-screen';
@@ -495,6 +496,9 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   // Once a surface asks for the archive every later list fetch is the whole
   // list, so a refetch can keep dropping rows the answer no longer carries.
   const wantAllTasks = useRef(false);
+  // The whole archive is on the page: later refetches ask for the recent window only and keep
+  // the archive rows they already hold (mergeWindowedRefetch).
+  const archiveLoaded = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const opErrorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -721,8 +725,9 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     // fetchTasks takes no query: `/` and `/tasks` share this one cache, so every
     // condition is evaluated in the browser (see api/tasks.ts). `filter` stays a
     // refetch key + log field only.
+    const askAll = wantAllTasks.current && !archiveLoaded.current;
     tasksApi.fetchTaskList({
-      ...(wantAllTasks.current ? {} : { recentCompletedDays: tasksApi.RECENT_COMPLETED_DAYS }),
+      ...(askAll ? {} : { recentCompletedDays: tasksApi.RECENT_COMPLETED_DAYS }),
       onDispatch: () => {
         if (listDispatch.current?.generation === generation) listDispatch.current.at = performance.now();
       },
@@ -733,7 +738,9 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
         endPerf?.(`${tasks.length} tasks`);
         log.info('tasks', 'fetch complete', { count: tasks.length, completedHidden: hidden, elapsed, attempt });
         hasLoadedRef.current = true;
-        setCompletedHidden(hidden);
+        if (askAll) archiveLoaded.current = true;
+        const keepArchive = !askAll && archiveLoaded.current;
+        setCompletedHidden(keepArchive ? 0 : hidden);
         // startTransition: adopting ~6k tasks renders thousands of rows — as a
         // sync render that was a 2-3s main-thread block on every page load.
         // Time-sliced, the page stays responsive while rows mount. Loading
@@ -755,7 +762,9 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
               const row = eventRowOf.current.get(id);
               if (row) eventRows.set(id, row);
             }
-            return mergeFetchedTasks(prev, answer, retain, eventRows);
+            return keepArchive
+              ? mergeWindowedRefetch(prev, answer, tasksApi.RECENT_COMPLETED_DAYS, retain, eventRows)
+              : mergeFetchedTasks(prev, answer, retain, eventRows);
           });
           setLoading(false);
           setRefreshing(false);
@@ -791,6 +800,10 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   useEffect(() => {
     if (!loading) markFirstScreen();
   }, [loading]);
+
+  // The page's memory line (page-vitals.ts) says how many tasks the list holds.
+  const taskCount = tasks.length;
+  useEffect(() => registerPageVital('tasks', () => taskCount), [taskCount]);
 
   useEffect(() => {
     refetch();

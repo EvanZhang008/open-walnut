@@ -54,6 +54,8 @@ import {
   clearStreamState,
   initStreamState,
   __resetForTesting,
+  historyCacheMessageCount,
+  MAX_CACHED_MESSAGES,
   type CachedHistory,
 } from '@/cache/session-cache';
 
@@ -184,6 +186,25 @@ describe('history cache', () => {
     // sid-0 should survive (was re-inserted later)
     expect(getHistoryCache(makeSid(0))).toBeDefined();
     expect(getHistoryCache(makeSid(0))!.msgCount).toBe(10);
+  });
+
+  it('holds at most MAX_CACHED_MESSAGES across sessions, least recently used out first', () => {
+    // Three whale histories of 3,000 messages: the third pushes the first out.
+    setHistoryCache(makeSid(0), makeHistory(3_000));
+    setHistoryCache(makeSid(1), makeHistory(3_000));
+    expect(historyCacheMessageCount()).toBe(6_000);
+    setHistoryCache(makeSid(2), makeHistory(3_000));
+    expect(getHistoryCache(makeSid(0))).toBeUndefined();
+    expect(getHistoryCache(makeSid(1))).toBeDefined();
+    expect(getHistoryCache(makeSid(2))).toBeDefined();
+    expect(historyCacheMessageCount()).toBeLessThanOrEqual(MAX_CACHED_MESSAGES);
+  });
+
+  it('keeps the session just written even when it alone is over the budget', () => {
+    setHistoryCache(makeSid(0), makeHistory(10));
+    setHistoryCache(makeSid(1), makeHistory(MAX_CACHED_MESSAGES + 500));
+    expect(getHistoryCache(makeSid(1))).toBeDefined();
+    expect(getHistoryCache(makeSid(0))).toBeUndefined();
   });
 });
 

@@ -43,6 +43,7 @@ import { isAcpEngine, resolveEngine } from './agents/engine-registry.js';
 import { CLOUD_BOX_DEFAULT_IDLE_LIMIT, CLOUD_BOX_DEFAULT_LIMIT, CLOUD_BOX_HOST_ALIAS } from './hosts/cloud-box-host.js';
 import { NeedsLeaderError } from './replication/needs-leader.js';
 import { OrgError } from './org/org-store.js';
+import { registerMemoryHolder, stringCharsOf } from './observability/memory-ledger.js';
 import {
   assertOutsideHistoryImport, assertSessionHistoryWrite, isHistoryRefusal, sessionHistoryWriteNeedsCheck,
   taskDbHandle, type SessionHistoryFields,
@@ -77,6 +78,12 @@ async function ensureSessionInit(): Promise<void> {
 const STORE_CACHE_ENABLED = process.env.WALNUT_STORE_CACHE !== '0';
 let sessionStoreCache: SessionRecord[] | null = null;
 let sessionStoreCacheDataVersion: string | null = null;
+// Every session row (7.2k on the maintainer's board, 2026-11-20), so it grows with use.
+registerMemoryHolder({
+  name: 'session-tracker.store',
+  budgetBytes: 160 * 1024 * 1024,
+  read: () => ({ entries: sessionStoreCache?.length ?? 0, chars: stringCharsOf(sessionStoreCache) }),
+});
 
 /**
  * The version a snapshot is trusted at: which open of the database (a reopened

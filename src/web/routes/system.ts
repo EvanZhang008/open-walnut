@@ -13,6 +13,7 @@ import { isFollower } from '../../core/server-role.js'
 import { validateBearerCredential } from '../middleware/auth.js'
 import { createDesktopUpdateCache, EMPTY_DESKTOP_UPDATE, type DesktopUpdateAnswer } from './desktop-update-cache.js'
 import { getBuildInfo } from '../../lib/build-info.js'
+import { memoryReport } from '../../core/observability/memory-ledger.js'
 
 export const systemRouter = Router()
 
@@ -95,6 +96,15 @@ export const LIVENESS_ALIASES = [
 export const livenessAliasRouter = Router()
 // Mounted on /api (server.ts), so each path is registered without that prefix.
 livenessAliasRouter.get(LIVENESS_ALIASES.map((p) => p.slice('/api'.length)), systemHealth)
+
+// GET /api/system/memory: what this process holds, by cache, against each budget
+// (core/observability/memory-ledger.ts). `heap=1` also walks the JS heap (tens of ms per
+// million objects), so only a caller on this machine may ask for it.
+systemRouter.get('/memory', async (req, res) => {
+  if (!(await maySeeHealthDetail(req.headers.authorization))) { res.status(403).json({ error: 'Memory detail needs a device token.' }); return }
+  const heap = req.query.heap === '1' && isOnThisMachine(req)
+  res.json(await memoryReport({ heap }))
+})
 
 const desktopUpdateCache = createDesktopUpdateCache()
 

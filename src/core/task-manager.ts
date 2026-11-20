@@ -63,6 +63,7 @@ import { MERGE_EVENT_SOURCE } from './task-deleted-id.js';
 import { checkLaunchDefaultsPatch, checkLaunchDefaultsShape } from './sessions/project-launch-defaults.js';
 import { checkClaudePluginsOffPatch } from './sessions/claude-plugins-off.js';
 import { pointTaskAtSession } from './sessions/task-session-link.js';
+import { registerMemoryHolder, stringCharsOf } from './observability/memory-ledger.js';
 import type { TaskMergedInto } from './event-types.js';
 import {
   clearProjectTombstone,
@@ -175,6 +176,12 @@ let taskStoreCacheDataVersion: string | null = null;
  *  snapshot changes. getTask() is called from ~40 files; without this each call
  *  cloned and scanned the whole board to return one row. */
 let taskStoreIndex: Map<string, Task> | null = null;
+// Every task row with its note (7.9k on the maintainer's board, 2026-11-20).
+registerMemoryHolder({
+  name: 'task-manager.store',
+  budgetBytes: 160 * 1024 * 1024,
+  read: () => ({ entries: taskStoreCache?.tasks.length ?? 0, chars: stringCharsOf(taskStoreCache?.tasks) }),
+});
 
 /** Drop the cached whole-store snapshot. Called from withWriteLock.finally. */
 function invalidateTaskStoreCache(): void {

@@ -44,8 +44,16 @@ import { tracePhase } from '@/utils/main-thread-tracer';
 import { runWhenVisible } from '@/utils/page-visibility';
 import { idbSetHistory, idbDeleteHistory } from './history-idb';
 import { log } from '@/utils/log';
+import { registerPageVital } from '@/utils/page-vitals';
 
 const MAX_CACHED = 20;
+/**
+ * Messages the history cache may hold across all sessions. The count bound alone let a few
+ * whole whale histories (3,000+ messages each, after "Load earlier") sit in memory long after
+ * their columns closed. 8,000 is 20 sessions of the 400-message tail a column loads; the
+ * session just written is always kept, however long it is.
+ */
+export const MAX_CACHED_MESSAGES = 8_000;
 
 // ── History cache (LRU via Map insertion order) ──────────────────────────────
 
@@ -67,6 +75,15 @@ export interface CachedHistory {
 
 const historyCache = new Map<string, CachedHistory>();
 
+/** Messages held by the history cache, all sessions together. */
+export function historyCacheMessageCount(): number {
+  let n = 0;
+  for (const h of historyCache.values()) n += h.messages.length;
+  return n;
+}
+registerPageVital('historySessions', () => historyCache.size);
+registerPageVital('historyMsgs', historyCacheMessageCount);
+
 function historyCacheSet(sid: string, data: CachedHistory): void {
   // Delete first so re-insert moves it to the end (most-recently-used)
   historyCache.delete(sid);
@@ -74,6 +91,13 @@ function historyCacheSet(sid: string, data: CachedHistory): void {
   if (historyCache.size > MAX_CACHED) {
     const oldest = historyCache.keys().next().value;
     if (oldest) historyCache.delete(oldest);
+  }
+  // Then the message budget, least recently used first, never the one just written.
+  let held = historyCacheMessageCount();
+  for (const [key, entry] of historyCache) {
+    if (held <= MAX_CACHED_MESSAGES || key === sid) break;
+    historyCache.delete(key);
+    held -= entry.messages.length;
   }
   // Write-through to the reload-surviving tier (debounced, fire-and-forget):
   // every history consumer funnels here, so IndexedDB stays as fresh as the

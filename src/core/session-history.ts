@@ -38,6 +38,7 @@ import { backfillMirrorSidecar, resolveSessionMirrorPath, looksAlreadyMirrored, 
 import { noteMessageBlockTypes, noteTranscriptLineType } from './transcript-line-types.js';
 import { _resetTailWindowsForTesting, dropTailWindows, setTailWindowShedding } from './history-tail-window.js';
 import { isByteCeilingError } from './byte-ceiling.js';
+import { registerMemoryHolder } from './observability/memory-ledger.js';
 
 // The parser itself (parseSessionMessages and the row types) lives in history-parse.ts, pure, so
 // the session daemon can bundle it; this module re-exports all of it and gives it the logger.
@@ -261,6 +262,11 @@ function isFresh(entry: ParsedHistoryCacheEntry, mtimeMs: number, size: number |
   return entry.mtimeMs === mtimeMs && (entry.size === undefined || size === undefined || entry.size === size);
 }
 let historyCacheChars = 0;
+registerMemoryHolder({
+  name: 'session-history.parsed',
+  budgetBytes: MAX_HISTORY_CACHE_CHARS * 2,
+  read: () => ({ entries: parsedHistoryCache.size, chars: historyCacheChars }),
+});
 
 /**
  * Resolved remote path cache — sessionId@host → full remote path of the JSONL

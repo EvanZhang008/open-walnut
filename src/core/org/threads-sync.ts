@@ -26,6 +26,7 @@ import { writeTextFile } from '../../utils/fs.js'
 import { dbNodes, dirtyNodes, dropExpired, loadNode, markDirty, nodeRow, replaceNode, setJsonMark, snapshotOf, threadsDb, threadsDbGeneration, positionsOf, unchangedText, writeNode, type NodeSnapshot } from './threads-db.js'
 import { mergeThreadsConflict } from './threads-merge.js'
 import { CLOSED_KEEP_MS, normalizeThreads, ThreadError, type OrgThread, type ThreadsFile } from './threads-model.js'
+import { registerMemoryHolder } from '../observability/memory-ledger.js'
 
 export const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
@@ -305,6 +306,11 @@ const cache = new Map<string, { texts: string[]; pos: number[]; until: number; c
 /** The cache's bound: the nodes used last are kept, up to this much text. */
 const CACHE_CHARS = 32 * 1024 * 1024
 let cacheChars = 0
+registerMemoryHolder({
+  name: 'threads.texts',
+  budgetBytes: CACHE_CHARS * 2,
+  read: () => ({ entries: cache.size, chars: cacheChars }),
+})
 
 function dropCache(node: string): void {
   const c = cache.get(node)

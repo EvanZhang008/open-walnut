@@ -8,6 +8,7 @@ import { AcpHistoryFold, projectAcpJournalHistory, shownAcpMessages } from './ac
 import type { JournalRecord } from './acp-worker/protocol.js'
 import { isProductionDaemonDir } from '../lib/daemon-dir.js'
 import { isByteCeilingError } from '../core/byte-ceiling.js'
+import { registerMemoryHolder } from '../core/observability/memory-ledger.js'
 
 interface JournalReader {
   readFile(filePath: string): Promise<string | null>
@@ -140,6 +141,15 @@ const MAX_FOLD_CACHE_ENTRIES = 16
 const MAX_FOLD_CACHE_CHARS = 48 * 1024 * 1024
 
 const foldCache = new Map<string, FoldCacheEntry>()
+registerMemoryHolder({
+  name: 'acp-history.folds',
+  budgetBytes: MAX_FOLD_CACHE_CHARS * 2,
+  read: () => {
+    let chars = 0
+    for (const e of foldCache.values()) chars += e.fold.charCount
+    return { entries: foldCache.size, chars }
+  },
+})
 const inflight = new Map<string, Promise<AcpSessionHistoryState | null>>()
 
 export function _resetAcpHistoryCacheForTesting(): void {
