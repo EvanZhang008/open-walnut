@@ -11,6 +11,7 @@ import { link, linkTarget } from './hosts/link.js'
 import { isSelfHost } from '../replica/self-host.js'
 import { getConfig } from './config-manager.js'
 import { byteCeilingError, isByteCeilingError } from './byte-ceiling.js'
+import { rangeBytes } from './range-gz.js'
 import { claudeProjectsSearchRoots, TRANSCRIPT_FIND_DEPTH } from './claude-config-dir.js'
 import { encodeProjectPath, isSafeForProjectEncoding, type SessionFileReader } from './session-file-reader.js'
 import type { FileGitCommit } from './file-history-git.js'
@@ -527,6 +528,16 @@ export class DaemonFileReader implements SessionFileReader {
     return this.readFileRangeBufferOnce(remotePath, start)
   }
 
+  /**
+   * fs-read-range-gz-v1: on another host a range comes gzipped (a JSONL packs 2 to 4 times),
+   * and what an older page or a whole read of a large transcript spends its time on is
+   * moving those bytes over the tunnel. The local daemon gains nothing from it.
+   */
+  private rangeGz(conn: { hasCapability?: (cap: string) => boolean }): { gz?: true } {
+    const remote = this.host !== '__local__' && !isSelfHost(this.host)
+    return remote && conn.hasCapability?.('fs-read-range-gz-v1') === true ? { gz: true } : {}
+  }
+
   private async readFileRangeBufferOnce(remotePath: string, start: number): Promise<{ buf: Buffer; fileSize: number } | null> {
     await this.resolve()
     const conn = await link(this.host)
@@ -539,7 +550,7 @@ export class DaemonFileReader implements SessionFileReader {
     const limit = DaemonFileReader.maxReadBytes()
     for (;;) {
       const res = await conn.send('fs.readRange', {
-        path: remotePath, start: offset, length: DaemonFileReader.CHUNK_SIZE,
+        path: remotePath, start: offset, length: DaemonFileReader.CHUNK_SIZE, ...this.rangeGz(conn),
       })
       if (!res.ok) {
         const errMsg = typeof res.error === 'string' ? res.error : ''
@@ -549,7 +560,7 @@ export class DaemonFileReader implements SessionFileReader {
       fileSize = (res.fileSize as number) ?? fileSize
       const bytesRead = (res.bytesRead as number) ?? 0
       if (bytesRead > 0) {
-        chunks.push(Buffer.from(res.data as string, 'base64'))
+        chunks.push(await rangeBytes(res, bytesRead))
         offset += bytesRead
         totalBytes += bytesRead
         if (totalBytes > limit) {
@@ -584,7 +595,7 @@ export class DaemonFileReader implements SessionFileReader {
   ): Promise<{ buf: Buffer; fileSize: number; eof: boolean } | null> {
     await this.resolve()
     const conn = await link(this.host)
-    const res = await conn.send('fs.readRange', { path: remotePath, start, length })
+    const res = await conn.send('fs.readRange', { path: remotePath, start, length, ...this.rangeGz(conn) })
     if (!res.ok) {
       const errMsg = typeof res.error === 'string' ? res.error : ''
       if (/ENOENT|ENOTFILE|no such file/i.test(errMsg)) return null
@@ -592,7 +603,7 @@ export class DaemonFileReader implements SessionFileReader {
     }
     const bytesRead = (res.bytesRead as number) ?? 0
     return {
-      buf: bytesRead > 0 ? Buffer.from(res.data as string, 'base64') : Buffer.alloc(0),
+      buf: bytesRead > 0 ? await rangeBytes(res, bytesRead) : Buffer.alloc(0),
       fileSize: (res.fileSize as number) ?? 0,
       eof: Boolean(res.eof) || bytesRead === 0,
     }

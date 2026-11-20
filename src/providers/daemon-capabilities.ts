@@ -371,6 +371,13 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // the path ends a connection every few MB carried up). Both twins. Optional: without
   // it the copy rides the session socket.
   'host-slice-unbound-v1',
+  // 'fs-read-range-gz-v1': `fs.readRange {gz: true}` answers a range of 16 KB or more as
+  // `dataGz` (gzip level 1, base64) when that is smaller, else `data` as before. A JSONL
+  // packs 2 to 4 times smaller (measured 2026-11-20 on 4 MB windows of a 49 MB transcript),
+  // and an older page reads up to four of them over the tunnel: 8 agents paging large
+  // transcripts on one host took over 15 s each (41 x 503 in one run). Both twins. Optional:
+  // without it the server asks without `gz` and reads `data`.
+  'fs-read-range-gz-v1',
   // 'leader-epoch-v1' (leader-core.ts, docs/plan/walnut-control-plane.md): the
   // primary describes its Walnut with `leader.configure` ({home, walnutId,
   // backup}) and takes the lead back with `leader.claim` (trusted socket). The

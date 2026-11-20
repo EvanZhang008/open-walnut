@@ -13687,6 +13687,13 @@ async function cmdFsStat(ws, id, cmd) {
   }
 }
 
+// fs-read-range-gz-v1: a range shorter than this goes plain (gzip would save little).
+const RANGE_GZ_MIN_BYTES = 16 * 1024;
+// The range gzipped at level 1 (fast; a JSONL packs 2 to 4 times), or null when gzip failed.
+function gzipRange(bytes) {
+  return new Promise((resolve) => zlib.gzip(bytes, { level: 1 }, (err, out) => resolve(err ? null : out)));
+}
+
 // Byte-range read for LARGE files. A whole-file fs.read of a multi-MB session
 // JSONL serializes into ONE giant WS frame; some corporate SSH proxies kill the
 // tunnel mid-frame and the read times out forever (inc-1783532915925). Range
@@ -13722,8 +13729,11 @@ async function cmdFsReadRange(ws, id, cmd) {
     const toRead = Math.min(length, st.size - start);
     const buf = Buffer.alloc(toRead);
     const readResult = await fh.read(buf, 0, toRead, start);
+    const bytes = buf.subarray(0, readResult.bytesRead);
+    // fs-read-range-gz-v1: gzipped off this loop (zlib's thread pool) when the caller asked.
+    const gz = cmd.gz === true && readResult.bytesRead >= RANGE_GZ_MIN_BYTES ? await gzipRange(bytes) : null;
     sendOk(ws, id, {
-      data: buf.subarray(0, readResult.bytesRead).toString('base64'),
+      ...(gz && gz.length < readResult.bytesRead ? { dataGz: gz.toString('base64') } : { data: bytes.toString('base64') }),
       bytesRead: readResult.bytesRead,
       fileSize: st.size,
       eof: start + readResult.bytesRead >= st.size,
