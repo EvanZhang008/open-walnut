@@ -6,9 +6,9 @@
  * take them now, and that a reply sent is not read yet.
  *
  * His reply reads as received the moment the server took it (2026-11-20, the user: once his words
- * are sent the card must never look unsent): his words echoed under "Sent", then whether the task
- * has read them, from the message's own delivery, kept until the card leaves. A failed send keeps
- * his words in the box, with the reason.
+ * are sent the card must never look unsent): his words under "Sent", then whether the task has read
+ * them, from the message's own delivery. They are read from the thread's record (ThreadSentWords),
+ * so a reload or a redraw keeps them. A failed send keeps his words in the box, with the reason.
  */
 import { useRef, useState } from 'react';
 import { AskCardFrame } from '@/components/actions/AskCard';
@@ -24,6 +24,7 @@ import type { OrgThreadsState } from './useOrgThreads';
 import { OrgThreadSnooze } from './OrgThreadSnooze';
 import { ThreadLetterAnswer, answersLetter } from './ThreadLetterAnswer';
 import { ThreadOptions } from './OrgInlineAnswer';
+import { ThreadSentWords } from './ThreadSentWords';
 
 export function PoppedThreadCard({ node, t, state }: { node: string; t: OrgThread; state: OrgThreadsState }) {
   const openTask = useOpenTask();
@@ -33,12 +34,8 @@ export function PoppedThreadCard({ node, t, state }: { node: string; t: OrgThrea
   const owner = t.owner!;
   // A thread holding its task's own ask (core/org/thread-report-ask.ts): its question, then its own summary under it.
   const detail = t.heldAsk ? t.heldAsk.reply : t.reply;
-  // His reply this card sent: shown from the server's answer at once, its delivery read live after.
-  const [sent, setSent] = useState<{ text: string; id?: string; delivery?: OrgThreadMessage['delivery'] } | null>(null);
-  const live = sent?.id ? t.messages.find((m) => m.id === sent.id)?.delivery : undefined;
-  const sentState = (live ?? sent?.delivery)?.state ?? 'pending';
-  // A reply sent earlier (another card, a reload) still on its way: the plain note, as before.
-  const unread = !sent && t.messages.some((m) => m.delivery?.state === 'pending' || m.delivery?.state === 'claimed');
+  // His reply this card sent, from the server's answer: shown at once, until the thread's record holds it.
+  const [sent, setSent] = useState<OrgThreadMessage | null>(null);
   // His words (typed, or a choice's label clicked) go to the task that owns the thread. A retry of
   // the same words keeps its key; other words (a click after a failed typed send) take a new one.
   const reply = async (text: string): Promise<boolean> => {
@@ -47,7 +44,7 @@ export function PoppedThreadCard({ node, t, state }: { node: string; t: OrgThrea
       if (key.current?.text !== text) key.current = { text, key: `pr-${randomId().replace(/-/g, '').slice(0, 24)}` };
       const back = await replyOnOrgThread(node, t.id, text, t.ask_id, key.current.key);
       key.current = null;
-      setSent({ text, ...(back.message ? { id: back.message.id, delivery: back.message.delivery } : {}) });
+      if (back.message) setSent(back.message);
       return true;
     } catch (err) {
       log.warn('org-threads', 'reply below not sent', { taskId: node, threadId: t.id, owner: owner.task_id, error: err instanceof Error ? err.message : String(err) });
@@ -65,17 +62,7 @@ export function PoppedThreadCard({ node, t, state }: { node: string; t: OrgThrea
         detail={detail?.trim() ? <AgentText compact {...threadSummarySource(t)} text={detail} testId="org-thread-popped-summary" /> : undefined}
         status={(<>
           {t.can_answer_now === false && <p className="org-thread-stand-in-note" data-testid="org-thread-not-now">{owner.title} is not running now: your reply is kept and goes to it when it is back.</p>}
-          {sent && (
-            <div className="org-thread-sent" data-testid="org-thread-popped-sent" data-delivery={sentState}>
-              <p className="org-thread-sent-words" data-testid="org-thread-popped-sent-words">{sent.text}</p>
-              <p className="org-thread-stand-in-note" data-testid="org-thread-unread-by-task">
-                {sentState === 'delivered' ? `Sent: ${owner.title} has read it.`
-                  : sentState === 'dropped' ? `Not delivered: this thread settled before ${owner.title} read it.`
-                  : `Sent: ${owner.title} has not read it yet.`}
-              </p>
-            </div>
-          )}
-          {unread && <p className="org-thread-stand-in-note" data-testid="org-thread-unread-by-task">Sent, {owner.title} has not read it yet.</p>}
+          <ThreadSentWords t={t} owner={owner.title} justSent={sent} />
           {failed && <p className="org-thread-error" role="alert" data-testid="org-thread-popped-failed">{failed}</p>}
         </>)}
         // A thread holding a decision letter is answered by the letter (its buttons, its box).

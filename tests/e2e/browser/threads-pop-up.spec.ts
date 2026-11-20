@@ -219,3 +219,47 @@ test('on: a choice on a thread below is clicked on the lead, and goes to the sub
   await expect(popped).toHaveCount(0, { timeout: 20_000 })
   expect(pageErrors).toEqual([])
 })
+
+// 2026-11-20: his reply on a card of a thread below vanished after a redraw while the card stayed
+// (the card echoed it from its own memory). His words are read from the thread's record: they stay
+// on the card through leaving the page and coming back, until the task has read them.
+test('on: his reply stays on the card through a redraw while the task has not read it', async ({ page, request }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (err) => pageErrors.push(err.message))
+  const WORDS = `Paint the fence green, just do it ${STAMP}`
+  const opened = await post<{ thread: { id: string } }>(request, `/api/v1/tasks/${ids.owner}/threads/open`, {
+    title: `Fence colour ${STAMP}`, text: `Green or white for the garden fence? ${STAMP}`, state: 'needs', from: 'node',
+    user_kind: 'user_own', user_kind_why: 'It is his own garden.',
+  }, ids.ownerSid)
+  const id = opened.thread.id
+  await flag(request, true)
+  // The task is busy in a long turn: his reply waits for its end, so it stays on its way meanwhile.
+  const busy = await request.post(`/api/v1/sessions/${ids.ownerSid}/messages`, { data: { text: 'snapshot-long-turn:25000' } })
+  expect(busy.ok(), await busy.text()).toBe(true)
+  await expect.poll(async () => (await (await request.get(`/api/tasks/${ids.owner}`)).json()).task?.phase, { timeout: 20_000 }).toBe('IN_PROGRESS')
+  await isolateUiPrefs(page)
+  await loadHome(page)
+  await openLead(page)
+  const popped = page.locator(`[data-testid="org-thread"][data-thread-id="${id}"]`)
+  await expect(popped).toBeVisible({ timeout: 20_000 })
+  await popped.getByTestId('org-thread-popped-input').click()
+  await page.keyboard.type(WORDS, { delay: 10 })
+  await popped.getByTestId('org-thread-popped-send').click()
+  const sent = popped.getByTestId('org-thread-popped-sent')
+  await expect(sent.getByTestId('org-thread-popped-sent-words')).toHaveText(WORDS, { timeout: 2_000 })
+  // He leaves the Org page and comes back: the card is drawn anew, his words are still on it.
+  await page.locator('.sidebar-home-group a').first().click()
+  await expect(page.getByTestId('org-page')).toHaveCount(0)
+  await openLead(page)
+  await expect(popped).toBeVisible({ timeout: 20_000 })
+  await expect(sent.getByTestId('org-thread-popped-sent-words')).toHaveText(WORDS)
+  await expect(sent.getByTestId('org-thread-unread-by-task')).toHaveText(`Sent: Task status foundation ${STAMP} has not read it yet.`)
+  await shot(page, '5-redrawn')
+  // The long turn ends, the task reads his words, and the card leaves.
+  await expect.poll(async () => {
+    const file = await (await request.get(`/api/v1/tasks/${ids.owner}/threads`)).json() as { threads: Array<{ id: string; messages: Array<{ text: string; delivery?: { state: string } }> }> }
+    return file.threads.find((t) => t.id === id)?.messages.find((m) => m.text === WORDS)?.delivery?.state ?? 'none'
+  }, { timeout: 90_000 }).toBe('delivered')
+  await expect(popped).toHaveCount(0, { timeout: 20_000 })
+  expect(pageErrors).toEqual([])
+})
