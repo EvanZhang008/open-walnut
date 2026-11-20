@@ -113,10 +113,12 @@ const settled: AnswerSettle = () => {};
 /** One thing a task asks of the user, as the one ask card (AskCard.tsx): what it asks, a line of
  *  why, the box to type in and its buttons, Snooze last. `onAnswer` hides it the moment an answer
  *  goes (the block's own list); alone it waits for the status to drop it. */
-export const AskCard = memo(function AskCard({ task, item, onAnswer = () => settled, failure, below }: {
+export const AskCard = memo(function AskCard({ task, item, onAnswer = () => settled, failure, below, threadId }: {
   task: Task; item: ActionItem; onAnswer?: (id: string) => AnswerSettle; failure?: AnswerFailure;
   /** Its own card is in the chat below (a session's strip, its own live prompt): point at it. */
   below?: boolean;
+  /** Drawn on the thread that holds this ask (core/org/thread-report-ask.ts): the answer is filed under it. */
+  threadId?: string;
 }) {
   // A snooze written here reads at once, until the server's value moves (here, or from another
   // place showing the same item): then the server's wins.
@@ -154,7 +156,7 @@ export const AskCard = memo(function AskCard({ task, item, onAnswer = () => sett
     );
   } else if (!until) {
     answer = ANSWERS[item.kind] === 'approval' ? <ApprovalAnswer item={item} task={task} /> : (
-      <OrgInlineAnswer alert={alertOfItem(task, item)} task={task} summary={item.summary} onAnswer={() => onAnswer(item.id)} failure={failure} {...(item.sessionId ? { sessionId: item.sessionId } : {})} />
+      <OrgInlineAnswer alert={alertOfItem(task, item)} task={task} summary={item.summary} onAnswer={() => onAnswer(item.id)} failure={failure} {...(item.sessionId ? { sessionId: item.sessionId } : {})} {...(threadId ? { threadId } : {})} />
     );
   }
   // A live prompt's own card says its question: the card would say it twice.

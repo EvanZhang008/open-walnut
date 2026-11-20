@@ -61,6 +61,21 @@ export interface ViewThread<M extends ViewMessage = ViewMessage> {
   owner?: { task_id: string; title: string };
   /** The decision letter it holds (letter-thread-model.ts): the letter keeps its own re-check clock. */
   letter?: { id: string; done?: true; off?: true };
+  /** Projected on read (thread-report-ask.ts): it reads needs because it holds the task's own ask. */
+  heldAsk?: ThreadHeldAsk;
+}
+
+/**
+ * The task's own ask, read on its thread (thread-report-ask.ts): the thread reads `needs` with this
+ * on it while the task asks that decision. `id` is the task's Action needed item id (its decision
+ * id), `ask` its words now, `reply` the thread's own summary under the question, `was` its stored state.
+ * Never a second ask: the task's status counts it, so the thread's `needs` count leaves it out.
+ */
+export interface ThreadHeldAsk {
+  id: string;
+  ask: string;
+  reply?: string;
+  was: string;
 }
 
 /**
@@ -426,7 +441,8 @@ export interface ThreadOverdue {
  * pending is the node's call and a snoozed thread is put aside: none is ever overdue. Null when not due yet.
  */
 export function threadOverdue(t: ViewThread & { state: string }, now: number = Date.now(), deadline?: string): ThreadOverdue | null {
-  if (t.closed || snoozedNow(t, now)) return null;
+  // The task's own ask on it keeps the ask's own clock (needs-recheck.ts), never a second one.
+  if (t.closed || snoozedNow(t, now) || t.heldAsk) return null;
   const why = t.state === 'new' || t.state === 'working' ? 'reply' : t.state === 'needs' ? 'needs' : null;
   // A thread waiting on him for a decision letter: the letter's own 4-hour check asks its task (sessions/letter-recheck.ts).
   if (!why || (why === 'needs' && t.letter && !t.letter.done && !t.letter.off)) return null;
@@ -530,7 +546,8 @@ export function threadCounts<M extends ViewMessage>(threads: ReadonlyArray<ViewT
   const listed = listedForHim(threads, now);
   const shown = listed.filter((t) => !t.owner);
   const below = listed.filter((t) => !!t.owner);
-  const needs = shown.filter((t) => t.state === 'needs');
+  // A thread holding the task's own ask is that task's Needs you, counted there (thread-report-ask.ts).
+  const needs = shown.filter((t) => t.state === 'needs' && !t.heldAsk);
   const pinned = pinnedFirst(shown.filter(pinnedNow));
   const newest = (list: readonly (typeof threads)[number][]) => list.reduce<(typeof threads)[number] | undefined>((a, t) => (!a || t.updatedAt > a.updatedAt ? t : a), undefined);
   const top = newest(needs) ?? pinned[0] ?? newest(shown) ?? newest(below);

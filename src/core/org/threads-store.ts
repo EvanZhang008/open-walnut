@@ -22,7 +22,8 @@ import {
 import { threadsDbOnNow, useThreadsDb, writeThreadsLeftovers } from './threads-backend.js';
 import { dbDropExpired, dbMutateThreads, dbReadThreads, dbThreadNodes, flushNodeExport, jsonNodes, threadsJsonFile as threadsFile } from './threads-sync.js';
 import { askOwnerKept, askOwnerOf, pointerTaskIds, withAskPointers } from './thread-task-ask.js';
-import type { ThreadAskedIn } from './thread-view.js';
+import type { ThreadAskedIn, ThreadHeldAsk } from './thread-view.js';
+import { placeAsk, withHeldAsk, type TaskAsk } from './thread-report-ask.js';
 import { stampAskIds, threadsPopUpNow } from './thread-popup-rules.js';
 import { liveLetter } from './letter-thread-model.js';
 
@@ -63,12 +64,16 @@ export async function readThreads(taskId: string): Promise<ThreadsFile> {
  * (the route, the status counts, the recheck, the push), so they agree. A store Walnut cannot read
  * leaves the threads as they are: a miss shows an ask twice, never hides one.
  */
-export async function withTaskAsks<T extends OrgThread>(taskId: string, threads: readonly T[], tasks?: readonly import('../types.js').Task[]): Promise<Array<T & { askedIn?: ThreadAskedIn }>> {
-  if (!threads.some((t) => !t.closed && t.state === 'needs')) return [...threads];
+export async function withTaskAsks<T extends OrgThread>(taskId: string, threads: readonly T[], tasks?: readonly import('../types.js').Task[]): Promise<Array<T & { askedIn?: ThreadAskedIn; heldAsk?: ThreadHeldAsk }>> {
+  const needs = threads.some((t) => !t.closed && t.state === 'needs');
+  if (!needs && !threads.some((t) => t.reportAsk && !t.closed)) return [...threads];
   try {
     const all = tasks ?? await (await import('../task-manager.js')).listTasks();
     const node = all.find((t) => t.id === taskId);
     if (!node) return [...threads];
+    // The task's own ask reads on the thread that holds it (thread-report-ask.ts); a stored needs
+    // thread is never one of those, so the pointers below read the same threads either way.
+    if (!needs) return withHeldAsk(node, threads);
     const { treeAround } = await import('../same-ask-tree.js');
     // Completed tasks can still hold an answered decision. Use open copies for membership only,
     // then project the real rows so a completion never revives the thread's old ask.
@@ -81,7 +86,7 @@ export async function withTaskAsks<T extends OrgThread>(taskId: string, threads:
     const ids = pointerTaskIds(threads);
     const quiet = around.filter((t) => ids.has(t.id) && t.user_status?.state !== 'needs');
     const personAt = quiet.length ? await personWroteAt(quiet) : new Map<string, string>();
-    return withAskPointers(node, threads, around, { personAt: (id) => personAt.get(id) });
+    return withHeldAsk(node, withAskPointers(node, threads, around, { personAt: (id) => personAt.get(id) }));
   } catch {
     return [...threads];
   }
@@ -465,10 +470,22 @@ export interface OwnThreadOpen { title: string; text: string; state: ThreadState
  * the user (a write into needs, or a reopen, is dropped), so the same-ask check of patchThread and
  * openNodeThread has nothing to check. A write its thread refuses is left out. One change event.
  */
-export async function writeOwnThreads(taskId: string, plan: (cur: ThreadsFile) => { writes: OwnThreadWrite[]; opens: OwnThreadOpen[] }, by: ThreadWriter): Promise<string[]> {
+export async function writeOwnThreads(
+  taskId: string, plan: (cur: ThreadsFile) => { writes: OwnThreadWrite[]; opens: OwnThreadOpen[] }, by: ThreadWriter,
+  ask?: { ask: TaskAsk; named?: string },
+): Promise<string[]> {
   const at = new Date().toISOString();
   const handsToUser = (p: ThreadPatch) => p.state === 'needs' || !!p.reopen;
   const changed = await mutateThreads(taskId, (cur) => {
+    const r = writeOwn(cur);
+    if (!ask) return r;
+    // The report's ask goes on its thread in the same write, after the lines (thread-report-ask.ts).
+    const placed = placeAsk(r.file, ask.ask, at, ask.named);
+    if (placed === r.file) return r;
+    const moved = placed.threads.filter((t, i) => t.reportAsk?.id !== r.file.threads[i]?.reportAsk?.id).map((t) => t.id);
+    return { file: placed, out: [...new Set([...r.out, ...moved])] };
+  });
+  function writeOwn(cur: ThreadsFile): { file: ThreadsFile; out: string[] } {
     const { writes, opens } = plan(cur);
     let file = cur;
     const done: string[] = [];
@@ -490,9 +507,21 @@ export async function writeOwnThreads(taskId: string, plan: (cur: ThreadsFile) =
       } catch (err) { if (!(err instanceof ThreadError)) throw err; }
     }
     return { file: done.length ? file : cur, out: done };
-  });
+  }
   if (changed.length) emit({ taskId, kind: 'updated', ...(changed.length === 1 ? { threadId: changed[0] } : {}) });
   return changed;
+}
+
+/** The task's ask placed on its thread on its own (thread-report-ask.ts keepAskOnThread); true when it moved. */
+export async function placeTaskAsk(taskId: string, ask: TaskAsk): Promise<boolean> {
+  if (isFollower()) return false;
+  const at = new Date().toISOString();
+  const id = await mutateThreads(taskId, (cur) => {
+    const placed = placeAsk(cur, ask, at);
+    return { file: placed, out: placed === cur ? null : placed.threads.find((t) => t.reportAsk?.id === ask.id)?.id ?? null };
+  });
+  if (id) emit({ taskId, kind: 'updated', threadId: id });
+  return !!id;
 }
 
 /** The primary's sweep: every node's closed threads past their week are deleted for good. */

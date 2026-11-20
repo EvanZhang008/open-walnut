@@ -266,7 +266,8 @@ enum OrgThreadModel {
         case "new": return "New"
         case "working": return "Working"
         case "needs": return "Needs you"
-        case "answered": return "Done"
+        // Answered and open waits for his look: "To read", never "Done" (Done is a thread he closed).
+        case "answered": return "To read"
         case "pending": return "Pending"
         default: return t.state.capitalized
         }

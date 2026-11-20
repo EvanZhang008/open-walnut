@@ -314,6 +314,20 @@ export interface OrgThread {
   ackedAt?: string;
   /** When the node was told every task of that acknowledged thread is done (thread-ack.ts): once per ack. */
   ackDone?: string;
+  /** The task's own ask (its report's FOR_USER_ASK) lives on this thread: it reads needs while the task asks it (thread-report-ask.ts). */
+  reportAsk?: ThreadReportAsk;
+}
+
+/**
+ * Walnut put the task's own ask on this thread (thread-report-ask.ts): the decision id the task's
+ * Action needed item carries, and when. Stored as the place only; whether the thread reads needs is
+ * read from the task on every read. An older build keeps it unread (normalizeThread spreads unknown fields).
+ */
+export interface ThreadReportAsk {
+  id: string;
+  at: string;
+  /** The question when it was placed, for the record (the read shows the task's words now). */
+  ask?: string;
 }
 
 /**
@@ -476,6 +490,7 @@ function normalizeThread(t: unknown): OrgThread | null {
   for (const k of ['ackedAt', 'ackDone'] as const) if (next[k] !== undefined && !(isStr(next[k]) && Number.isFinite(Date.parse(next[k]!)))) delete next[k];
   const letter = next.letter !== undefined ? normalizeThreadLetter(next.letter) : undefined;
   if (letter) next.letter = letter; else delete next.letter;
+  if (next.reportAsk && !(typeof next.reportAsk === 'object' && isStr(next.reportAsk.id) && next.reportAsk.id && isStr(next.reportAsk.at))) delete next.reportAsk;
   return next;
 }
 

@@ -74,6 +74,11 @@ export interface OrgThread {
   letter?: { id: string; task: string; options: Array<{ id: string; label: string; description?: string }>; off?: true; done?: true };
   /** He acknowledged it while its work still ran, so it went pending instead of closing (experiment ack_means_known, core/org/thread-ack.ts). */
   ackedAt?: string;
+  /** Walnut put the task's own ask on this thread (core/org/thread-report-ask.ts): stored as the place only. */
+  reportAsk?: { id: string; at: string; ask?: string };
+  /** Projected on read: it reads needs because it holds the task's own ask now; `id` is that ask's
+   *  Action needed item, `reply` the thread's own summary under the question, `was` its stored state. */
+  heldAsk?: { id: string; ask: string; reply?: string; was: string };
 }
 
 const base = (taskId: string) => `/api/v1/tasks/${encodeURIComponent(taskId)}/threads`;

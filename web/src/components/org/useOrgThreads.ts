@@ -160,7 +160,8 @@ export function useOrgThreads(taskId: string | undefined, enabled: boolean): Org
     if (!enabled) return;
     const d = data as { task?: { id?: string }; taskId?: string } | null;
     const id = d?.task?.id ?? d?.taskId;
-    if (id && !ownerReadTimer.current && threads?.some((t) => t.askOwner?.task === id || t.tasks?.includes(id))) {
+    // The node's own status too, when a thread holds its ask (core/org/thread-report-ask.ts): it reads needs only while the task asks it.
+    if (id && !ownerReadTimer.current && threads?.some((t) => t.askOwner?.task === id || t.tasks?.includes(id) || (id === taskId && !!(t.reportAsk || t.heldAsk)))) {
       ownerReadTimer.current = setTimeout(() => { ownerReadTimer.current = null; void load('owner-changed'); }, 150);
     }
   };

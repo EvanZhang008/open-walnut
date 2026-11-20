@@ -290,7 +290,12 @@ async function readNodeThreads(tasks: readonly Task[]): Promise<Map<string, Thre
       const read = await safely('threads', async () => {
         threadFileReads += 1;
         const threads = (await readThreads(t.id)).threads;
-        threadOwners.set(t.id, new Set(threads.flatMap((row) => [...(row.tasks ?? []), ...(row.askOwner ? [row.askOwner.task] : [])])));
+        const owners = new Set(threads.flatMap((row) => [...(row.tasks ?? []), ...(row.askOwner ? [row.askOwner.task] : [])]));
+        // A thread holding the task's own ask reads by that task's status: its own change recounts it.
+        if (threads.some((row) => row.reportAsk)) owners.add(t.id);
+        threadOwners.set(t.id, owners);
+        // An ask an older build left beside the threads goes on its thread once (org/thread-report-ask.ts).
+        void import('./org/thread-report-ask.js').then((m) => m.keepAskOnThread(t, threads)).catch(() => {});
         return threads;
       }, null);
       // An unreadable file is not cached (the next pass tries again), nor a read a change overtook.
@@ -1200,6 +1205,10 @@ async function derivePass(
       if (facts.followWorkers) task.user_status = next;
       changed += 1;
       ownerThreadsChanged(task.id, follow);
+      // Its ask, newly shown, goes on its thread when no thread holds it yet (org/thread-report-ask.ts).
+      if (next.state === 'needs' || next.actions?.length) {
+        void import('./org/thread-report-ask.js').then((m) => m.keepAskOnThread({ ...task, user_status: next })).catch(() => {});
+      }
       // Its leader carries its questions (rollUpAsks): re-derived in the next pass, one level each.
       if (task.parent_task_id) follow(task.parent_task_id);
       // The tasks whose same ask waits on it (same-ask.ts) read its new status in the next pass.

@@ -62,8 +62,12 @@ function route(fn: (req: Request, res: Response) => Promise<void>) {
 }
 
 /** A task's lines as threads, only under the experiment task_threads and for a task that is no Org node (an Org node's lines stay its chat's). */
-function ownLineThreads(task: Task) {
-  return task.org_role || !threadsForEveryTask() ? [] : lineThreads(task.user_status, task.user_status?.checkedAt ?? task.updated_at ?? new Date().toISOString())
+/** The task's own lines as threads, but the ask a stored thread already holds (org/thread-report-ask.ts): never twice. */
+function ownLineThreads(task: Task, stored: readonly { closed?: unknown; heldAsk?: { id: string } }[] = []) {
+  if (task.org_role || !threadsForEveryTask()) return []
+  const held = new Set(stored.filter((t) => !t.closed && t.heldAsk).map((t) => t.heldAsk!.id))
+  return lineThreads(task.user_status, task.user_status?.checkedAt ?? task.updated_at ?? new Date().toISOString())
+    .filter((t) => !t.line.item || !held.has(t.line.item))
 }
 
 async function nodeTask(req: Request): Promise<Task> {
@@ -154,7 +158,7 @@ orgThreadsV1Router.get('/tasks/:id/threads', route(async (req, res) => {
     // Action needed), never in shown_count.
     // threads_pop_up: what waits on him below this node, the owner's own records, outside `limit`.
     ...below.map((t) => ({ ...t, shown: true })),
-    ...(closedOnly || !flag(req.query.lines) ? [] : ownLineThreads(task)).map((t) => ({ ...t, shown: true })),
+    ...(closedOnly || !flag(req.query.lines) ? [] : ownLineThreads(task, all)).map((t) => ({ ...t, shown: true })),
   ]
   // Answers still missing are read from the node's chat meanwhile; a kept one says so (org-threads:changed).
   void resolveThreadAnswers(task.id)

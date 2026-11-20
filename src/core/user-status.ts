@@ -230,6 +230,8 @@ export interface StatusReport {
   threads?: StatusThreadLine[];
   /** Subjects it follows that no thread covered (FOR_USER_THREAD_NEW): opened as threads, never stored here. */
   threads_new?: StatusThreadNew[];
+  /** The thread its ask is about (FOR_USER_ASK_THREAD, a thread id): the ask is placed there, never stored here. */
+  ask_thread?: string;
   /** Its state came from its thread lines, not FOR_USER_STATE (status-threads.ts settleStateFromThreads). */
   from_threads?: true;
 }

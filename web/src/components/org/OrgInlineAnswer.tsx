@@ -236,8 +236,10 @@ function ChoiceAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords
 }
 
 /** The ask's own form (user_status.askForm), or its words: one message into the task's session. */
-function SessionAnswer({ alert, failure, onSend, sessionId, summary, shape }: FormProps & {
+function SessionAnswer({ alert, failure, onSend, sessionId, summary, shape, threadId }: FormProps & {
   sessionId: string | null; summary: string; shape: 'yes_no' | 'single' | 'multi' | 'text';
+  /** Answered on the thread that holds the ask: the answer is filed under it. */
+  threadId?: string;
 }) {
   const { send } = useSessionSend(sessionId);
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
@@ -245,7 +247,7 @@ function SessionAnswer({ alert, failure, onSend, sessionId, summary, shape }: Fo
   const failed = alert.kind === 'error' || alert.source === 'error';
   if (!sessionId) return <div className="org-answer-note">It has no session to answer. Open it to start one.</div>;
   const reply = (text: string, images?: ImageAttachment[]): Promise<boolean> => settled((settle) => {
-    void send(sessionId, text, images).catch(() => false).then((ok) => {
+    void send(sessionId, text, images, threadId ? { threadId } : undefined).catch(() => false).then((ok) => {
       log.info('org-page', 'org alert answered', { taskId: alert.taskId, shape, sessionId, ok, images: images?.length ?? 0 });
       settle(ok ? undefined : { message: 'Not sent. Try again.' });
     });
@@ -311,7 +313,7 @@ function SessionAnswer({ alert, failure, onSend, sessionId, summary, shape }: Fo
 
 /** The ask's answer, in its row. `onAnswer` hides the row the moment an answer goes and returns how
  *  to settle it; `failure` (the last try failed) shows the reason with the form. */
-export function OrgInlineAnswer({ alert, task, summary, onAnswer, failure, sessionId: askingSession }: {
+export function OrgInlineAnswer({ alert, task, summary, onAnswer, failure, sessionId: askingSession, threadId }: {
   alert: OrgAlertView;
   task: Task | undefined;
   summary: string;
@@ -319,6 +321,8 @@ export function OrgInlineAnswer({ alert, task, summary, onAnswer, failure, sessi
   failure?: AnswerFailure;
   /** The session that asks (an Action needed item's own), else the task's. */
   sessionId?: string;
+  /** The thread that holds this ask (core/org/thread-report-ask.ts): a words answer is filed under it. */
+  threadId?: string;
 }) {
   // A letter or a choice this browser cannot find takes the words form instead.
   const [wordsOnly, setWordsOnly] = useState(false);
@@ -350,7 +354,7 @@ export function OrgInlineAnswer({ alert, task, summary, onAnswer, failure, sessi
       ) : shape === 'choice' ? (
         <ChoiceAnswer alert={alert} failure={failure} onSend={send} onWords={toWords} />
       ) : (
-        <SessionAnswer alert={alert} failure={failure} onSend={send} sessionId={sessionId} summary={summary} shape={shape === 'prompt' ? 'text' : shape} />
+        <SessionAnswer alert={alert} failure={failure} onSend={send} sessionId={sessionId} summary={summary} shape={shape === 'prompt' ? 'text' : shape} {...(threadId ? { threadId } : {})} />
       )}
     </div>
   );

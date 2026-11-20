@@ -25,6 +25,8 @@ export function PoppedThreadCard({ node, t, state }: { node: string; t: OrgThrea
   // One key per reply: a retry of the same send is filed once (threads-model.ts fileMessage).
   const key = useRef<string | null>(null);
   const owner = t.owner!;
+  // A thread holding its task's own ask (core/org/thread-report-ask.ts): its question, then its own summary under it.
+  const detail = t.heldAsk ? t.heldAsk.reply : t.reply;
   const unread = t.messages.some((m) => m.delivery?.state === 'pending' || m.delivery?.state === 'claimed');
   return (
     <li className="org-thread is-popped" data-testid="org-thread" data-thread-id={t.id} data-state={t.state} data-owner={owner.task_id}>
@@ -32,8 +34,8 @@ export function PoppedThreadCard({ node, t, state }: { node: string; t: OrgThrea
         testId="org-thread-popped"
         data={{ 'data-can-answer': t.can_answer_now === false ? 'false' : 'true' }}
         title={<button type="button" className="org-thread-link" data-testid="org-thread-owner" onClick={() => openTask(owner.task_id)}>{owner.title}</button>}
-        question={<AgentText compact inline {...threadSummarySource(t)} text={t.ask?.trim() || t.title} testId="org-thread-popped-ask" />}
-        detail={t.reply?.trim() ? <AgentText compact {...threadSummarySource(t)} text={t.reply} testId="org-thread-popped-summary" /> : undefined}
+        question={<AgentText compact inline {...threadSummarySource(t)} text={t.heldAsk?.ask || t.ask?.trim() || t.title} testId="org-thread-popped-ask" />}
+        detail={detail?.trim() ? <AgentText compact {...threadSummarySource(t)} text={detail} testId="org-thread-popped-summary" /> : undefined}
         status={(<>
           {t.can_answer_now === false && <p className="org-thread-stand-in-note" data-testid="org-thread-not-now">{owner.title} is not running now: your reply is kept and goes to it when it is back.</p>}
           {unread && <p className="org-thread-stand-in-note" data-testid="org-thread-unread-by-task">Sent, {owner.title} has not read it yet.</p>}

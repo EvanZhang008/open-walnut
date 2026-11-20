@@ -12,7 +12,9 @@
  *    or closed when done and the task opened it (his own request is answered; he closes it);
  *  - sets the task's state from them when FOR_USER_STATE said needs with no ask, or done while a
  *    subject still runs (settleStateFromThreads). A real ask always wins.
- * No line ever moves a thread into needs: what needs the user's decision is FOR_USER_ASK.
+ * No line ever moves a thread into needs: what needs the user's decision is FOR_USER_ASK. That ask
+ * lives on one of the threads (FOR_USER_ASK_THREAD names it, else Walnut's rule picks it), which
+ * reads needs while the task asks it (org/thread-report-ask.ts), so he sees one card for it.
  * The refs live in memory between the question and its answer only, so a thread opened meanwhile
  * never shifts them.
  */
@@ -57,8 +59,9 @@ export function threadQuestionBlock(open: readonly Pick<OrgThread, 'id' | 'title
   const words = langName ? ` (titles and progress in ${langName})` : '';
   const newLine = `A subject you now follow that no thread covers: FOR_USER_THREAD_NEW: <working | waiting> | <title> | <one line on where it stands> (at most ${THREAD_NEW_MAX}).`;
   const rule = 'What needs the user\'s decision stays on FOR_USER_ASK, never a thread line.';
+  const askLine = 'With a FOR_USER_ASK, the thread it is about: FOR_USER_ASK_THREAD: <ref>.';
   const block = listed.length
-    ? `\nThis task's open threads (one per subject the user follows here): ${listed.join('; ')}.\nOne line per thread: FOR_USER_THREAD: <ref> | <working | waiting | answered | done> | <one line on where it stands>${words}. ${newLine} ${rule}`
+    ? `\nThis task's open threads (one per subject the user follows here): ${listed.join('; ')}.\nOne line per thread: FOR_USER_THREAD: <ref> | <working | waiting | answered | done> | <one line on where it stands>${words}. ${newLine} ${rule} ${askLine}`
     : `\n${newLine.replace(/\.$/, '')}${words}. ${rule}`;
   return { block, refs };
 }
@@ -78,6 +81,7 @@ export async function threadQuestionFor(task: Pick<Task, 'id' | 'org_role' | 'th
 }
 
 const LINE_RE = /^[^\S\n]*[*_`]*FOR_USER_THREAD(_NEW)?[*_`]*[^\S\n]*[:\uff1a][*_`]*[^\S\n]*(.*)$/gm;
+const ASK_THREAD_RE = /^[^\S\n]*[*_`]*FOR_USER_ASK_THREAD[*_`]*[^\S\n]*[:\uff1a][*_`]*[^\S\n]*(.*)$/m;
 
 function oneLine(s: string, max: number): string {
   const t = s.replace(/\s+/g, ' ').replace(/[*`]+$/, '').trim();
@@ -91,7 +95,8 @@ function stateWord(raw: string): ThreadLineState | null {
 }
 
 /** The thread lines of an answer, by the refs the question listed. Unknown refs and state words are dropped. Pure. */
-export function readThreadLines(answer: string, refs: ThreadRefs): Pick<StatusReport, 'threads' | 'threads_new'> {
+export function readThreadLines(answer: string, refs: ThreadRefs): Pick<StatusReport, 'threads' | 'threads_new' | 'ask_thread'> {
+  const named = refs.get((ASK_THREAD_RE.exec(answer)?.[1] ?? '').split(/[|\uff5c]/)[0].trim().toLowerCase().replace(/[^a-z0-9]/g, ''));
   const threads = new Map<string, StatusThreadLine>();
   const opened: StatusThreadNew[] = [];
   const known = new Set([...refs.values()].map((r) => r.title.trim().toLowerCase()));
@@ -113,7 +118,7 @@ export function readThreadLines(answer: string, refs: ThreadRefs): Pick<StatusRe
     const progress = oneLine(parts.slice(2).join('|'), PROGRESS_MAX);
     threads.set(target.id, { id: target.id, title: target.title, state, ...(progress ? { progress } : {}) });
   }
-  return { ...(threads.size ? { threads: [...threads.values()] } : {}), ...(opened.length ? { threads_new: opened } : {}) };
+  return { ...(threads.size ? { threads: [...threads.values()] } : {}), ...(opened.length ? { threads_new: opened } : {}), ...(named ? { ask_thread: named.id } : {}) };
 }
 
 /**
@@ -196,14 +201,26 @@ export function planThreadWrites(file: ThreadsFile, lines: readonly StatusThread
   return { writes, opens };
 }
 
-/** Write the report's thread lines to `taskId`'s threads, by the task. Never throws; returns the threads changed. */
-export async function applyThreadLines(taskId: string, report: Pick<StatusReport, 'threads' | 'threads_new'>): Promise<string[]> {
+/**
+ * Write the report's thread lines to `taskId`'s threads, by the task, and put the ask the stored
+ * report makes (`asks`) on its thread in the same write (org/thread-report-ask.ts). Never throws;
+ * returns the threads changed.
+ */
+export async function applyThreadLines(taskId: string, report: Pick<StatusReport, 'threads' | 'threads_new' | 'ask_thread'>, asks?: StatusReport | null): Promise<string[]> {
   const lines = report.threads ?? [];
   const opened = report.threads_new ?? [];
-  if (!lines.length && !opened.length) return [];
+  const { reportAskOf, placeAsk } = await import('../org/thread-report-ask.js');
+  const ask = reportAskOf(asks);
+  if (!lines.length && !opened.length && !ask) return [];
   try {
-    const { writeOwnThreads } = await import('../org/threads-store.js');
-    const changed = await writeOwnThreads(taskId, (cur) => planThreadWrites(cur, lines, opened), `task:${taskId}`);
+    const { writeOwnThreads, readThreads } = await import('../org/threads-store.js');
+    // Only the ask, and its place would not move (none can take it, or it is there already): no write.
+    if (!lines.length && !opened.length && ask) {
+      const cur = await readThreads(taskId);
+      if (placeAsk(cur, ask, new Date().toISOString(), report.ask_thread) === cur) return [];
+    }
+    const changed = await writeOwnThreads(taskId, (cur) => planThreadWrites(cur, lines, opened), `task:${taskId}`,
+      ask ? { ask, ...(report.ask_thread ? { named: report.ask_thread } : {}) } : undefined);
     if (changed.length) log.session.info('status question: threads kept current', { taskId, changed });
     return changed;
   } catch (err) {
