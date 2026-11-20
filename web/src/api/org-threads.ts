@@ -72,6 +72,8 @@ export interface OrgThread {
   ask_id?: string;
   /** The decision letter it holds (experiment letters_as_threads, core/org/letter-thread-model.ts): its card answers the letter. */
   letter?: { id: string; task: string; options: Array<{ id: string; label: string; description?: string; recommended?: true }>; off?: true; done?: true };
+  /** The Board choice it holds (experiment brief_off, core/org/choice-thread-model.ts): its card answers the choice. */
+  choice?: { board: string; id: string; task?: string; options: Array<{ value: string; label: string }>; recommended?: string; off?: true; done?: true };
   /** He acknowledged it while its work still ran, so it went pending instead of closing (experiment ack_means_known, core/org/thread-ack.ts). */
   ackedAt?: string;
   /** Walnut put the task's own ask on this thread (core/org/thread-report-ask.ts): stored as the place only. */

@@ -117,7 +117,8 @@ describe('threads come first', () => {
     expect(css).toMatch(/\.org-thread \.org-thread-fold\.is-whole,/)
     expect(css).toMatch(/\.org-thread\[data-state="needs"\] \.org-thread-fold \{ display: block; -webkit-line-clamp: unset; max-height: none; overflow: visible; \}/)
     expect(css).toMatch(/:has\(:where\(\.markdown-body > :not\(p, h1, h2, h3, h4, h5, h6\), img, a\[data-file-path\], \.rich-blocks\)\) \{ display: block; -webkit-line-clamp: unset; max-height: 240px; overflow: auto; \}/)
-    const source = fs.readFileSync(path.join(__dirname, '../../web/src/components/org/OrgThreads.tsx'), 'utf8')
+    // Fold and the card's text parts live beside the card in thread-card-text.tsx.
+    const source = fs.readFileSync(path.join(__dirname, '../../web/src/components/org/thread-card-text.tsx'), 'utf8')
     const folds = [...source.matchAll(/<Fold\s+className="([^"]+)"/g)].map((m) => m[1])
     expect(folds.length).toBeGreaterThan(0)
     for (const name of folds) expect(name).toMatch(/^org-thread-/)

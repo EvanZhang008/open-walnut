@@ -746,6 +746,7 @@ let topicsHandle: { stop: () => void } | null = null
 let threadFollowHandle: { stop: () => void } | null = null
 let threadRepliesHandle: { stop: () => void } | null = null
 let letterThreadsHandle: { stop: () => void } | null = null
+let choiceThreadsHandle: { stop: () => void } | null = null
 let projectionSelfHealHandle: { stop: () => void } | null = null
 /** Cloud box only: 60s drain of cache/task-queue/ (see core/task-queue.ts). */
 let taskQueueFlushHandle: { stop: () => void } | null = null
@@ -2260,6 +2261,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if (role() === 'leader') void import('../core/org/thread-reply.js').then((m) => { threadRepliesHandle?.stop(); threadRepliesHandle = m.startThreadReplies() }).catch(() => {})
     // A decision letter waits on a thread of the task that sent it (src/core/human-inbox/letter-threads.ts).
     if (role() === 'leader') void import('../core/human-inbox/letter-threads.js').then((m) => { letterThreadsHandle?.stop(); letterThreadsHandle = m.startLetterThreads() }).catch(() => {})
+    // brief_off: a Board choice waits on a thread of the leader that keeps the Board (src/core/boards/choice-threads.ts).
+    if (role() === 'leader') void import('../core/boards/choice-threads.js').then((m) => { choiceThreadsHandle?.stop(); choiceThreadsHandle = m.startChoiceThreads() }).catch(() => {})
     // Whether the user is in Main's or a lead's chat (src/core/org/user-away.ts), and the reports he asked for.
     void import('../core/org/user-away.js').then((m) => m.startUserAway()).catch(() => {})
     if (role() === 'leader') void import('../core/org/morning-report.js').then((m) => m.startReportClock()).catch(() => {})
@@ -7664,6 +7667,10 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   if (letterThreadsHandle) {
     letterThreadsHandle.stop()
     letterThreadsHandle = null
+  }
+  if (choiceThreadsHandle) {
+    choiceThreadsHandle.stop()
+    choiceThreadsHandle = null
   }
   if (threadAnswersHandle) {
     threadAnswersHandle.stop()

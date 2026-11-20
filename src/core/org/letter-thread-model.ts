@@ -13,8 +13,8 @@
  * Pure: each function takes the file and returns the next one. letter-threads.ts runs them under
  * the threads file lock.
  */
-import crypto from 'node:crypto';
 import type { OrgThread, ThreadsFile, ThreadWriter } from './threads-model.js';
+import { heldThreadId, holdsHeld, liveHeld, openHeldThread, settleHeldThread, type HeldOutcome } from './held-thread-model.js';
 
 export const LETTER_THREAD_TITLE_MAX = 120;
 const ASK_MAX = 400;
@@ -38,7 +38,7 @@ export interface ThreadLetter {
 
 /** The one thread id of a letter's thread. */
 export function letterThreadId(letterId: string): string {
-  return `th-${crypto.createHash('sha256').update(`letter:${letterId}`).digest('hex').slice(0, 24)}`;
+  return heldThreadId('letter', letterId);
 }
 
 const isStr = (v: unknown): v is string => typeof v === 'string';
@@ -57,12 +57,12 @@ export function normalizeThreadLetter(v: unknown): ThreadLetter | undefined {
 
 /** A letter the thread still stands for: not ended, not set aside by the experiment going off. */
 export function liveLetter(t: Pick<OrgThread, 'letter'>): boolean {
-  return !!t.letter && !t.letter.done && !t.letter.off;
+  return liveHeld(t, 'letter');
 }
 
 /** The thread still waits on him for its letter's decision: open, in needs, holding a live letter. */
 export function holdsLetter(t: Pick<OrgThread, 'closed' | 'state' | 'letter'>): boolean {
-  return liveLetter(t) && !t.closed && t.state === 'needs';
+  return holdsHeld(t, 'letter');
 }
 
 export interface LetterThreadInput {
@@ -80,66 +80,27 @@ export interface LetterThreadInput {
  */
 export function openLetterThread(file: ThreadsFile, input: LetterThreadInput): { file: ThreadsFile; thread: OrgThread; changed: 'opened' | 'reopened' | null } {
   const id = letterThreadId(input.letter.id);
-  const cur = file.threads.find((t) => t.id === id);
-  if (cur) {
-    const asideNow = !!cur.letter?.off && !cur.letter.done && !cur.movedTo && (!!cur.closed || cur.state === 'needs');
-    if (!asideNow) return { file, thread: cur, changed: null };
-    const { closed: _c, ...rest } = cur;
-    const { off: _o, ...letter } = cur.letter!;
-    const next: OrgThread = { ...rest, state: 'needs', letter, updatedAt: input.at, by: input.by };
-    return { file: { ...file, threads: file.threads.map((t) => (t.id === id ? next : t)) }, thread: next, changed: 'reopened' };
-  }
-  const l = input.letter;
-  const sent = new Date(l.createdAt).toISOString();
-  const subject = clip(l.subject, LETTER_THREAD_TITLE_MAX) || 'A decision waits for you';
-  const detail = l.detail?.trim() ? clip(l.detail, REPLY_MAX) : undefined;
-  const thread: OrgThread = {
-    id, title: subject, titled: true, ask: clip(l.subject, ASK_MAX) || subject, state: 'needs',
-    ...(detail ? { reply: detail, replyAt: sent, reply_by: input.by } : {}),
-    messages: [],
-    opener: { text: clip(l.preview?.trim() || l.subject, TEXT_MAX), at: sent, from: 'letter', ref: l.id, by: input.by },
-    createdAt: sent, updatedAt: input.at, by: input.by,
-    letter: { id: l.id, task: l.task, options: l.options.slice(0, OPTIONS_MAX) },
-  };
-  return { file: { ...file, threads: [...file.threads, thread] }, thread, changed: 'opened' };
+  return openHeldThread(file, 'letter', id, () => {
+    const l = input.letter;
+    const sent = new Date(l.createdAt).toISOString();
+    const subject = clip(l.subject, LETTER_THREAD_TITLE_MAX) || 'A decision waits for you';
+    const detail = l.detail?.trim() ? clip(l.detail, REPLY_MAX) : undefined;
+    return {
+      id, title: subject, titled: true, ask: clip(l.subject, ASK_MAX) || subject, state: 'needs',
+      ...(detail ? { reply: detail, replyAt: sent, reply_by: input.by } : {}),
+      messages: [],
+      opener: { text: clip(l.preview?.trim() || l.subject, TEXT_MAX), at: sent, from: 'letter', ref: l.id, by: input.by },
+      createdAt: sent, updatedAt: input.at, by: input.by,
+      letter: { id: l.id, task: l.task, options: l.options.slice(0, OPTIONS_MAX) },
+    };
+  }, input.at, input.by);
 }
 
-/** How the letter ended, as its thread says it. */
-export type LetterOutcome =
-  /** He answered it himself (a pick or his words): nothing new for him, so the thread closes as known. */
-  | { kind: 'his'; words: string }
-  /** Someone answered it for him (a lead, a VP, Main): news for him, so the thread stays as answered. */
-  | { kind: 'for_him'; words: string }
-  /** Nobody needs to answer it any more (settled, withdrawn, archived): the thread closes as dropped. */
-  | { kind: 'moot'; words: string; byHim?: boolean }
-  /** The experiment went off: closed, and opened again when it comes back (ThreadLetter.off). */
-  | { kind: 'off' };
+/** How the letter ended, as its thread says it (held-thread-model.ts HeldOutcome): his answer, an
+ *  answer for him, nobody needs to answer it (settled, withdrawn, archived), or the experiment off. */
+export type LetterOutcome = HeldOutcome;
 
-/**
- * The letter no longer waits on him: its thread, while it still waits on him for it (holdsLetter),
- * says how it ended. A thread that left needs (his words on it made it working, its node moved it
- * on) is its own conversation now and is left as it is. Null when nothing changed.
- */
+/** The letter no longer waits on him: its thread says how it ended (held-thread-model.ts settleHeldThread). */
 export function settleLetterThread(file: ThreadsFile, threadId: string, outcome: LetterOutcome, at: string): { file: ThreadsFile; thread: OrgThread } | null {
-  const cur = file.threads.find((t) => t.id === threadId);
-  if (!cur || !holdsLetter(cur)) return null;
-  let next: OrgThread;
-  if (outcome.kind === 'off') {
-    next = { ...cur, letter: { ...cur.letter!, off: true }, closed: { how: 'dropped', at, by: 'agent', told: true } };
-  } else {
-    const reply = clip(outcome.words, REPLY_MAX);
-    const by: ThreadWriter = outcome.kind === 'his' || (outcome.kind === 'moot' && outcome.byHim) ? 'human' : 'agent';
-    const { pinned: _p, snoozed: _s, ...rest } = cur;
-    next = {
-      ...(outcome.kind === 'for_him' ? cur : rest), state: 'answered', reply, replyAt: at, reply_by: by, updatedAt: at, by,
-      // Ended: a later ask on this thread is the node's own, never this letter's again.
-      letter: { ...cur.letter!, done: true },
-      ...(outcome.kind === 'his' ? { closed: { how: 'acked' as const, at, by, reacted: true, told: true }, reactedAt: at } : {}),
-      ...(outcome.kind === 'moot' ? { closed: { how: 'dropped' as const, at, by, told: true } } : {}),
-    };
-    // Walnut wrote this summary from the letter: no session's words, so no session to open paths on.
-    delete next.reply_sid;
-    delete next.reply_host;
-  }
-  return { file: { ...file, threads: file.threads.map((t) => (t.id === threadId ? next : t)) }, thread: next };
+  return settleHeldThread(file, threadId, 'letter', outcome, at);
 }

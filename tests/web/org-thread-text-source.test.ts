@@ -62,16 +62,17 @@ describe('each block names the writer the server recorded', () => {
   })
 })
 
-describe('guard: every text block in OrgThreads.tsx opens from its own writer', () => {
-  const src = code('web/src/components/org/OrgThreads.tsx')
+describe('guard: every text block in OrgThreads.tsx (and its thread-card-text.tsx) opens from its own writer', () => {
+  // The card's own text parts (Answer, his words) live beside it in thread-card-text.tsx.
+  const src = code('web/src/components/org/OrgThreads.tsx') + code('web/src/components/org/thread-card-text.tsx')
   /** Every JSX element `<Name ...>` up to its own end, attributes and all. */
   const elements = (name: string) => [...src.matchAll(new RegExp(`<${name}\\b([\\s\\S]*?)\\/?>`, 'g'))].map((m) => m[1])
 
   it('the blocks are the ones listed, each with its source', () => {
     const agentText = elements('AgentText')
-    // The node's own words, three times (the summary on its own, and the held ask's question and
-    // the summary under it), Walnut's stand-in line and his words; a new AgentText must be listed
-    // here with its writer.
+    // The summary (on its own, and under the task's ask a thread holds), the held ask's question
+    // while its item is a step behind (d145248e3b), Walnut's stand-in line and his words; a new
+    // AgentText must be listed here with its writer.
     expect(agentText).toHaveLength(5)
     expect(agentText.filter((a) => /\{\.\.\.threadSummarySource\(t\)\}/.test(a))).toHaveLength(3)
     expect(agentText.filter((a) => /\{\.\.\.threadStandInSource\(t, card\.summary\)\}/.test(a))).toHaveLength(1)

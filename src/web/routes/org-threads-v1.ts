@@ -43,6 +43,7 @@ import { threadsForEveryTask } from '../../core/org/keeps-threads.js'
 import { fileThreadMessage, mergeThread, openNodeThread, patchThread, readThreads, splitThread, withTaskAsks } from '../../core/org/threads-store.js'
 import { resolveThreadAnswers } from '../../core/org/thread-answers.js'
 import { cardView, sharedAnswers, shownToHim, threadCounts } from '../../core/org/thread-view.js'
+import { threadStateOf } from '../../core/org/thread-groups.js'
 import { followerName, isFollower } from '../../core/server-role.js'
 import { body, header, param, resolveTask, RouteError } from './board-v1.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
@@ -126,6 +127,34 @@ const positive = (v: unknown) => {
   const n = typeof v === 'string' ? Number(v) : NaN
   return Number.isInteger(n) && n > 0 ? n : undefined
 }
+
+/**
+ * GET /api/v1/thread-states?ids=a,b,c  { on, states: { [taskId]: { state, id, title } }, more? }
+ * What each task's own open threads give it (thread-groups.ts threadStateOf: needs > read >
+ * working > waiting), read as his Threads read them (withTaskAsks: a decision a task asks waits
+ * here), for a Board card's status while the Brief is off (experiment brief_off). Only the tasks
+ * that have threads are read, at most THREAD_STATES_MAX of them (`more`: how many were left out).
+ * Off, or for a task with no open thread, nothing: the card keeps its own status.
+ */
+const THREAD_STATES_MAX = 300
+orgThreadsV1Router.get('/thread-states', route(async (req, res) => {
+  const { briefOffOn } = await import('../../core/org/brief-off.js')
+  if (!(await briefOffOn())) { res.json({ on: false, states: {} }); return }
+  const { threadTaskIds } = await import('../../core/org/threads-store.js')
+  const nodes = new Set(await threadTaskIds())
+  const asked = [...new Set(String(req.query.ids ?? '').split(',').map((x) => x.trim()))].filter((id) => nodes.has(id))
+  const ids = asked.slice(0, THREAD_STATES_MAX)
+  const tasks = ids.length ? await (await import('../../core/task-manager.js')).listTasks() : []
+  const now = Date.now()
+  const states: Record<string, { state: string; id: string; title: string }> = {}
+  for (const id of ids) {
+    const file = await readThreads(id).catch(() => null)
+    if (!file?.threads.length) continue
+    const got = threadStateOf(await withTaskAsks(id, file.threads, tasks), now)
+    if (got) states[id] = got
+  }
+  res.json({ on: true, states, ...(asked.length > ids.length ? { more: asked.length - ids.length } : {}) })
+}))
 
 orgThreadsV1Router.get('/tasks/:id/threads', route(async (req, res) => {
   const task = await nodeTask(req)

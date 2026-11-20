@@ -45,6 +45,8 @@ import { decisionAnswered } from './human-inbox/open-decision.js';
 import { triggerWatchesOwnWork } from './task-wait-wake.js';
 import { keepsThreads, threadsForEveryTask } from './org/keeps-threads.js';
 import { heldLetterIds, holdsLettersNow, isLetterThread, lettersAsThreadsNow } from './human-inbox/letter-threads.js';
+import { briefOffNow, setBriefOff } from './org/brief-off.js';
+import { isChoiceThread } from './boards/choice-threads.js';
 import { applyActions, type ActionItem } from './action-needed.js';
 import { taskLines } from './task-lines.js';
 import { approvalItemsByTask, letterItem, promptItem } from './action-needed-facts.js';
@@ -421,6 +423,15 @@ async function readChoices(allIds: readonly string[]): Promise<StatusFacts['choi
         const list = out.get(tid) ?? [];
         list.push({ title: c.title, board: owner, id: c.id, ...(c.at ? { at: c.at } : {}) });
         out.set(tid, list);
+      }
+    }
+    // brief_off: a choice its leader's thread holds is counted and answered there, once (boards/choice-threads.ts).
+    if (briefOffNow() && out.size) {
+      const { heldChoiceKeys } = await import('./boards/choice-threads.js');
+      const held = await heldChoiceKeys([...out.values()].flat());
+      if (held.size) for (const [tid, list] of out) {
+        const left = list.filter((c) => !held.has(`${c.board}/${c.id}`));
+        if (left.length) out.set(tid, left); else out.delete(tid);
       }
     }
   }, undefined);
@@ -1342,6 +1353,7 @@ let followWorkersSeen: boolean | undefined;
 let popUpSeen: boolean | undefined;
 let lettersAsThreadsSeen: boolean | undefined;
 let oneCardSeen: boolean | undefined;
+let briefOffSeen: boolean | undefined;
 
 async function experimentSwitched(): Promise<boolean> {
   const { getConfig } = await import('./config-manager.js');
@@ -1375,7 +1387,13 @@ async function experimentSwitched(): Promise<boolean> {
   lettersAsThreadsSeen = asThreads;
   // Which tasks keep Threads moved too: a letter their thread held counts again, or no more.
   if (lettersMoved || (threadsMoved && asThreads)) dropSlow('letters');
-  return moved || threadsMoved || popMoved || lettersMoved || oneCardMoved;
+  // The Brief off (org/brief-off.ts): a Board choice its thread holds counts there, or on its task again.
+  const briefOff = experimentalEnabled(flags, 'brief_off');
+  const briefOffMoved = briefOffSeen !== undefined && briefOffSeen !== briefOff;
+  briefOffSeen = briefOff;
+  setBriefOff(briefOff);
+  if (briefOffMoved || (threadsMoved && briefOff)) dropSlow('choices');
+  return moved || threadsMoved || popMoved || lettersMoved || oneCardMoved || briefOffMoved;
 }
 
 function onEvent(event: { name: string; data: unknown; source?: string }): void {
@@ -1467,6 +1485,8 @@ function onEvent(event: { name: string; data: unknown; source?: string }): void 
       if (typeof d.taskId === 'string') { threadsChanged(d.taskId); markNow(d.taskId); } else { threadsChanged(); markAll(); }
       // letters_as_threads: whether a thread still holds a letter decides whether the letter counts.
       if (lettersAsThreadsNow() && (typeof d.threadId !== 'string' || isLetterThread(d.threadId))) dropSlow('letters');
+      // brief_off: whether a thread still holds a Board choice decides whether the choice counts.
+      if (briefOffNow() && (typeof d.threadId !== 'string' || isChoiceThread(d.threadId))) dropSlow('choices');
       return;
   }
 }

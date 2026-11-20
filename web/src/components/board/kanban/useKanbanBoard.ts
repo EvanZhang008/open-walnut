@@ -30,6 +30,8 @@ import { buildBoardVM, type KanbanBoardVM } from './kanban-model';
 import { applyOverlays, type OverlayMap, type TaskPhasePatch } from './kanban-overlay';
 import { useTeamSummaries } from './useTeamSummaries';
 import { useTeamStatusReady } from './useTeamStatusReady';
+import { useTeamThreadStates } from './useTeamThreadStates';
+import { useExperimental } from '@/hooks/useExperimental';
 
 const MINUTE_MS = 60_000;
 
@@ -190,6 +192,9 @@ export function useKanbanBoard({ ownerId, payload, threadSeen, baseline, overlay
   const teamList = useMemo(() => (payload?.team ?? []).map((e) => e.id), [payload?.team]);
   const teamSummaries = useTeamSummaries(ownerId, teamList, byId);
   const summaries = teamSummaries.map;
+  // brief_off: a card's status chip reads its task's own threads (kanban-thread-status.ts).
+  const briefOff = useExperimental('brief_off');
+  const threadStates = useTeamThreadStates(ownerId, teamList, briefOff);
 
   // G8: the team's done tasks older than the store's window load once, on demand.
   const missing = (payload?.team ?? []).some((e) => !byId.has(e.id));
@@ -231,12 +236,12 @@ export function useKanbanBoard({ ownerId, payload, threadSeen, baseline, overlay
       payload: { lanes_effective: shown.lanes, cards: shown.cards, team: shown.team, kanban_seen: payload.kanban_seen },
       ...(baseline !== undefined ? { baseline } : {}),
       liveOf, now: clock, formatWaitUntil: (iso: string) => waitText(iso, clock), titleOf: (id) => byId.get(id)?.title ?? '',
-      signals, isChoice, storeLoading: !!store?.loading || !statusReady || !teamSummaries.ready,
+      signals, isChoice, threadStates, storeLoading: !!store?.loading || !statusReady || !teamSummaries.ready,
       humanPhase: (id) => !!shown.tasks[id],
     });
     return { ...built, cards: stabilize(cache.current, built.cards) };
     // `epoch` and `clock` are the triggers: the session store and the clock moved.
-  }, [tasks, payload, shown, teamIds, prompts, elements, threadSeen, ownerId, baseline, taskOf, isChoice, store?.loading, statusReady, epoch, clock, summaries, teamSummaries.ready]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tasks, payload, shown, teamIds, prompts, elements, threadSeen, ownerId, baseline, taskOf, isChoice, threadStates, store?.loading, statusReady, epoch, clock, summaries, teamSummaries.ready]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return { vm, lanes: shown.lanes, cards: shown.cards, taskOf, teamIds, isChoice, now };
 }

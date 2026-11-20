@@ -17,6 +17,7 @@ import {
 } from './kanban-card-model';
 import { changeLog, type KanbanChange } from './kanban-changes-model';
 import { chipCounts, sevChipShown } from './kanban-filter-model';
+import type { TaskThreadState } from '@open-walnut/thread-groups';
 
 export interface KanbanLaneVM {
   lane: BoardLane;
@@ -90,6 +91,8 @@ export interface KanbanBoardInput {
   /** boardSignals of the page, filed by task. */
   signals?: readonly BoardSignal[];
   isChoice?: (id: string) => boolean;
+  /** brief_off: each task's own thread state (useTeamThreadStates); a card's chip reads it. */
+  threadStates?: ReadonlyMap<string, TaskThreadState>;
   /** The task store has not answered yet. */
   storeLoading?: boolean;
   /** R3-02: tasks whose phase this user just changed from the board (a pending write): the move is theirs. */
@@ -222,6 +225,7 @@ export function buildBoardVM(input: KanbanBoardInput): KanbanBoardVM {
       ownerId, titleOf: input.titleOf, baseline: baseline?.cards[entry.id], hasBaseline: !!baseline,
       baselineAt: baseline?.at ?? null, now, formatWaitUntil: input.formatWaitUntil, isChoice: input.isChoice,
       humanPhase: !!input.humanPhase?.(entry.id),
+      ...(input.threadStates?.get(entry.id) ? { thread: input.threadStates.get(entry.id)! } : {}),
     });
   }
   const list = Object.values(cards);

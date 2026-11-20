@@ -295,6 +295,8 @@ async function captureUserAsk(record: HintRecord | null | undefined, task: Task 
 /** Main's or a lead's Brief state, for the `brief` hint (sessions/brief-hint.ts); null elsewhere. */
 async function briefFor(task: Task | undefined | null, target: HintTarget, hints: readonly EffectiveHint[]): Promise<BriefHintState | null> {
   if (!task || (target.role !== 'main' && target.role !== 'lead') || !hints.some((h) => h.kind === 'brief' && h.enabled)) return null;
+  // The Brief is off (org/brief-off.ts): nothing reminds a node to write one.
+  if (await (await import('../org/brief-off.js')).briefOffOn()) return null;
   try {
     const { listTasks } = await import('../task-manager.js');
     const { briefHintStateOf } = await import('../sessions/brief-hint.js');

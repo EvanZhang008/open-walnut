@@ -9,6 +9,7 @@ import { getBoard } from './board-store.js'
 import { markChoiceDelivery, setBoardChoice } from './board-items.js'
 import { buildChoicePrompt, deliverBoardText, type BoardDelivery } from './board-delivery.js'
 import { boardWriterStamp, type BoardCaller } from './board-team.js'
+import { briefOffNow } from '../org/brief-off.js'
 
 export type ChoiceDelivery = BoardDelivery | { state: 'skipped'; reason: 'unchanged' | 'cleared' | 'self' }
 
@@ -36,5 +37,7 @@ export async function answerBoardChoice(
       caller.kind === 'human' ? undefined : { callerSid: caller.sessionId })
     result.choice = await markChoiceDelivery(boardTaskId, choiceId, result.choice, delivery.state !== 'stored')
   }
+  // brief_off: the choice's thread settles before the answer returns, so the card a click came from reads it at once.
+  if (briefOffNow()) await (await import('./choice-threads.js')).syncBoardChoiceThreads(boardTaskId)
   return { choice: result.choice, delivery }
 }

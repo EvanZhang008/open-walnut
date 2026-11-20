@@ -40,6 +40,7 @@
       "@open-walnut/reply-thread": ["../src/core/org/reply-thread"],
       "@open-walnut/thread-view": ["../src/core/org/thread-view"],
       "@open-walnut/inbox-needs": ["../src/core/human-inbox/needs-model"],
+      "@open-walnut/thread-groups": ["../src/core/org/thread-groups"],
       "@open-walnut/live-activity": ["../src/core/live-activity"],
       "@open-walnut/terminal-key": ["../src/core/terminal-key"],
       "@open-walnut/brief-structure": ["../src/core/sessions/brief-structure"],

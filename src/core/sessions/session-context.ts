@@ -115,6 +115,7 @@ import { approvalsLine, currentApprovalsAsk, currentReplyLanguage, refreshReplyL
 import { TASK_ROUTING_CONTRACT } from '../task-routing-contract.js'
 import { PromptComposer, promptRollback, type PromptBlockId } from './prompt-blocks.js'
 import { IS_DEMO } from '../../constants.js'
+import { briefOffNow, briefOffOn } from '../org/brief-off.js'
 
 /**
  * What a session does when Claude Code answers "API Error: <model>'s safeguards flagged this message":
@@ -254,6 +255,8 @@ const threadsLine = (where: string, last: string): string =>
 
 /** Main's and every lead's Threads. */
 export const THREADS_LINE = threadsLine('the Threads view beside your Brief on the Org page', THREADS_MOVE_RULE)
+/** The same with the Brief off: Threads are what the user reads, grouped by state. */
+export const THREADS_OFF_LINE = threadsLine('on the Org page, grouped by state', THREADS_MOVE_RULE)
 
 /** What needs him while he is away goes to his inbox in one thread (org/user-away.ts, human-inbox/away-thread.ts). */
 const AWAY_LETTERS_RULE =
@@ -284,6 +287,11 @@ export const MESSAGE_ABOUT_LINE =
   + 'line off and shows those tasks under your message as live pills; a reply without it shows the task whose message '
   + 'you answered and the tasks you sent to. It goes in a chat reply only, never in the self-report or the Brief; an agent-ack turn needs none.\n\n'
 
+/** Where a node keeps what it must remember: the tail of BRIEF_LINE, and all that is left of it with the Brief off. */
+const OWN_MEMORY_RULE = 'MEMORY.md, which only you read: Walnut asks for it '
+  + 'at every turn end too, and agent_memory_read / agent_memory_write change it any time. It is not Walnut\'s '
+  + 'global MEMORY.md (memory_read).\n\n'
+
 /** Main's and every lead's Brief (sessions/brief.ts): the user reads it instead of the chat. */
 export const BRIEF_LINE =
   'Your Brief is the short letter the user reads at the top of your chat (the Brief view on the Org page) '
@@ -299,9 +307,10 @@ export const BRIEF_LINE =
   + 'in its task\'s section, removes a finished task\'s line, adds every task that asks the user to Needs you, and shows each task '
   + 'it names with its live status; the Brief is only your letter, so keep it to the work that matters now; '
   + 'a COMPLETE task is verified by the user and leaves the Brief. Everything else you need to remember (a deadline days '
-  + 'away, a reminder, a thing to raise later) goes into your own MEMORY.md, which only you read: Walnut asks for it '
-  + 'at every turn end too, and agent_memory_read / agent_memory_write change it any time. It is not Walnut\'s '
-  + 'global MEMORY.md (memory_read).\n\n'
+  + 'away, a reminder, a thing to raise later) goes into your own ' + OWN_MEMORY_RULE
+
+/** BRIEF_LINE with the experiment brief_off on (org/brief-off.ts): no Brief to keep, only the memory rule. */
+export const BRIEF_OFF_LINE = 'What you need to remember (a deadline days away, a reminder, a thing to raise later) goes into your own ' + OWN_MEMORY_RULE
 
 /**
  * Main's and every lead's chat is read by the user (the Org page, the phone) whoever started the
@@ -434,7 +443,7 @@ export function orgRoleParts(task: OrgRoleTask): Array<[PromptBlockId, string]> 
 }
 
 /** The away, Brief, Threads and walnut-about rules of Main and every lead, in that order. */
-const ORG_MANUALS = (): string => AWAY_INBOX_LINE + BRIEF_LINE + THREADS_LINE + MESSAGE_ABOUT_LINE
+const ORG_MANUALS = (): string => AWAY_INBOX_LINE + (briefOffNow() ? BRIEF_OFF_LINE + THREADS_OFF_LINE : BRIEF_LINE + THREADS_LINE) + MESSAGE_ABOUT_LINE
 
 /** Main's or a lead's role lines, a task's Threads rules when it keeps them ('' for any other task). */
 export function orgRoleLine(task: OrgRoleTask): string {
@@ -464,6 +473,8 @@ export async function buildSessionContext(
   /** The task as the caller holds it (a host replica's ask made while the Mac is away, WP12: not in its copy yet). */
   opts?: { task?: import('../types.js').Task },
 ): Promise<SessionContext> {
+  // The Brief's switch as the config says now (org/brief-off.ts): ORG_MANUALS reads it synchronously.
+  await briefOffOn()
   const { composed, task } = await composeSessionContext(taskId, host, opts)
   // What a cap moved goes to the task's memory folder before the session can read the pointer to it.
   const { writeOverflows } = await import('./memory-folder.js')

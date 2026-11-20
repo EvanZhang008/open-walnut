@@ -21,6 +21,7 @@ import { usePendingApprovals } from '@/components/approvals/ApprovalRow';
 import { approvalsForNode } from '@/components/approvals/approvals-store';
 import { readOrgPlace, writeOrgPlace } from './org-place';
 import { isBoolean, usePageViewOf } from '@/utils/view-memory';
+import { useExperimental } from '@/hooks/useExperimental';
 import { oneOf } from '@/hooks/usePersistentState';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { yieldFullscreen } from '@/hooks/useFullscreen';
@@ -100,6 +101,9 @@ interface Props {
   onBack?: () => void;
   now: number;
 }
+
+/** What the side bar of a node that keeps Threads holds, in words. */
+const railParts = (briefOff: boolean): string => (briefOff ? 'Tasks and Threads' : 'Tasks, Brief and Threads');
 
 /** The quote Quote puts in the chat: which task, and what it asks. */
 export const alertQuote = (a: OrgAlertView): string => `> ${a.title}: ${askWords(a)}\n\n`;
@@ -245,7 +249,11 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   // before the view it was left on.
   const keepsBrief = !isRouter && (contact?.org_role === 'main' || contact?.org_role === 'lead'
     || (!!row.contactId && (row.kind === 'main' || row.isLead)));
-  const topView: OrgTopView = keepsBrief ? topPick : 'task';
+  // The Brief is off (core/org/brief-off.ts): Threads by state take its place; a node left on the
+  // Brief opens on Threads, and nothing reads or refreshes the letter.
+  const briefOff = useExperimental('brief_off');
+  const showsBrief = keepsBrief && !briefOff;
+  const topView: OrgTopView = keepsBrief ? (briefOff && topPick === 'brief' ? 'threads' : topPick) : 'task';
   /** All tasks or the Board (2026-11-12, the user: "under tasks, just show all taks, and then board").
    *  A node an older build left on Status or Team reads neither and opens on All tasks. */
   const [taskMode, setTaskMode] = usePageViewOf<OrgTaskMode>('org', 'node.taskMode', row.key, 'all', oneOf(ORG_TASK_MODES));
@@ -263,7 +271,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
     if (!sectionOpen(to, flipped)) flipSection(to);
     setFocusSection({ tab: to, n: Date.now() });
   };
-  const brief = keepsBrief ? contact?.brief : undefined;
+  const brief = showsBrief ? contact?.brief : undefined;
   const pickTop = (v: OrgTopView) => setTopPick(v);
   /** The panel above or beside the chat (Task, Brief, Threads) closed: the chat takes its room;
    *  kept per node (2026-11-02, the user: "it is a panel too, you can at least let me close it"). */
@@ -273,10 +281,10 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   // another window of this browser takes the dot off here too, at once (org-brief-model.ts).
   useSyncExternalStore(subscribeSeen, seenVersion, seenVersion);
   useEffect(() => { if (!railHidden && topView === 'brief' && contact && brief?.at) markBriefSeen(contact.id, brief.at); }, [railHidden, topView, contact, brief?.at]);
-  const briefNew = (railHidden || topView !== 'brief') && !!contact && briefUnread(contact.id, brief?.at);
+  const briefNew = showsBrief && (railHidden || topView !== 'brief') && !!contact && briefUnread(contact.id, brief?.at);
   // Opening a node whose Brief is stale asks it for one refresh turn (core/sessions/brief-refresh.ts).
-  const briefFresh = useBriefRefresh(keepsBrief ? contact : undefined, tasks);
-  const updating = keepsBrief && !!contact && briefUpdating(contact, now);
+  const briefFresh = useBriefRefresh(showsBrief ? contact : undefined, tasks);
+  const updating = showsBrief && !!contact && briefUpdating(contact, now);
   const title = row.kind === 'main' ? 'CEO' : isRouter ? row.name : row.contactTitle;
   // Main is always someone to talk to: its task is made by the first chat.
   const canTalk = row.kind === 'main' || !!row.contactId || !!row.node?.needsLead;
@@ -457,7 +465,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   const rail = (
     <OrgTaskRail
       row={row} rows={rows} tasks={tasks} tabs={tabs} alerts={alertsShown} approvals={approvals} flipped={flipped} onFlip={flipSection} focus={focusSection} onFocused={() => setFocusSection(null)}
-      view={topView} onView={pickTop} keepsBrief={keepsBrief} briefNew={briefNew} threadsNew={threadsNew} threadsCount={threadsCount} onClose={() => setRailHidden(true)}
+      view={topView} onView={pickTop} keepsBrief={keepsBrief} briefOff={briefOff} briefNew={briefNew} threadsNew={threadsNew} threadsCount={threadsCount} onClose={() => setRailHidden(true)}
       mode={taskMode} onMode={setTaskMode} renderBoard={hasBoard && row.contactId ? renderBoard : null} briefFolded={briefFolded} onBriefFolded={setBriefFolded} briefFresh={briefFresh} briefUpdating={updating}
       threads={threads} onThreadFollowUp={followUp}
       contact={contact} title={title} onOpenAlert={openAlert} onQuote={quoteAlert} canQuote={!!sessionId} answers={answers}
@@ -493,8 +501,8 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
             className={`org-rail-toggle${railHidden ? '' : ' is-on'}`}
             data-testid="org-rail-toggle"
             aria-pressed={!railHidden}
-            aria-label={keepsBrief ? 'Side bar: Tasks, Brief and Threads' : 'Side bar: Tasks'}
-            title={railHidden ? (keepsBrief ? 'Show Tasks, Brief and Threads' : 'Show the tasks') : 'Hide the side bar'}
+            aria-label={keepsBrief ? `Side bar: ${railParts(briefOff)}` : 'Side bar: Tasks'}
+            title={railHidden ? (keepsBrief ? `Show ${railParts(briefOff)}` : 'Show the tasks') : 'Hide the side bar'}
             onClick={() => setRailHidden(!railHidden)}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16" /></svg>

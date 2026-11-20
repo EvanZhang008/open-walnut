@@ -69,6 +69,7 @@ const SURFACES: Record<string, 'hook' | 'fallback' | 'renderer'> = {
   'components/sessions/SessionMessage.tsx': 'hook',
   'components/sessions/StreamingBlockView.tsx': 'hook',
   'components/org/OrgThreads.tsx': 'hook',
+  'components/org/thread-card-text.tsx': 'hook',
   // A task's thread listed above it (threads_pop_up): AgentText opens the summary's paths from its writer.
   'components/org/PoppedThreadCard.tsx': 'renderer',
   'components/triage/TriagePanel.tsx': 'hook',

@@ -19,6 +19,8 @@ import type { KanbanPromptRequest } from './kanban-contract';
 import { STALE_AFTER_MS } from './kanban-contract';
 import { absoluteText, agoText, clockText, durationText, latestIso } from './kanban-time';
 import { cardChange, cutTitle, footOf, writerLead, writerText, type KanbanCardChange, type KanbanFootChange } from './kanban-changes-model';
+import type { TaskThreadState } from '@open-walnut/thread-groups';
+import { threadCardStatus } from './kanban-thread-status';
 
 /** What the session-status store knows, plus the open prompt's request (G3). */
 export type KanbanLive = LiveStatus & {
@@ -32,7 +34,7 @@ export type KanbanTone = 'red' | 'amber' | 'green' | 'violet' | 'grey';
 export type KanbanStatusKind =
   | 'question' | 'plan' | 'permission' | 'error' | 'handed-back' | 'board-signal' | 'worker-below'
   | 'still-open' | 'turn-ended' | 'running' | 'waiting-until' | 'waiting' | 'done' | 'idle' | 'stopped'
-  | 'no-session' | 'loading' | 'needs' | 'stuck' | 'to-read' | 'carries-on';
+  | 'no-session' | 'loading' | 'needs' | 'stuck' | 'to-read' | 'carries-on' | 'thread';
 
 export interface KanbanStatus {
   text: string;
@@ -172,6 +174,8 @@ export interface KanbanCardInput {
   isChoice?: (id: string) => boolean;
   /** R3-02: this user's own phase write (Complete, Reopen, Undo) is pending: an automatic move is theirs. */
   humanPhase?: boolean;
+  /** brief_off: what the task's own threads say (kanban-thread-status.ts); the chip reads it. */
+  thread?: TaskThreadState;
 }
 
 const defaultWaitUntil = (iso: string) => new Date(iso).toLocaleString();
@@ -411,7 +415,7 @@ export function buildCardVM(i: KanbanCardInput): KanbanCardVM {
   const live = i.live;
   const display = liveDisplay(hasSession, live);
   const running = display === 'running';
-  const quiet = cardStatus(task, live, card, laneKind, { signals: i.signals, nested: i.nested, now, formatWaitUntil: fmt, isChoice: i.isChoice });
+  const quiet = threadCardStatus(cardStatus(task, live, card, laneKind, { signals: i.signals, nested: i.nested, now, formatWaitUntil: fmt, isChoice: i.isChoice }), i.thread);
   // C12 (spec 4.2): a card someone placed, completed later, says why it sits in the done lane.
   const placedIn = placed.completedAfterMove && card?.lane ? laneById(lanes, card.lane)?.name : undefined;
   const status = placedIn ? { ...quiet, tooltip: `${quiet.tooltip}\n${completedHereText(placedIn)}` } : quiet;

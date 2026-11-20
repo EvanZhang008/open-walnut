@@ -180,6 +180,12 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'A topic is a group chat you start with tasks, Main, a VP or people by email. What you write wakes every task in it (or only the ones you @mention), and each one\'s answer is posted back as its own message. Tasks wake each other only by @mention, at most three wakes between your messages, so two agents never talk in a loop.',
     default: false,
   },
+  {
+    id: 'brief_off',
+    name: 'Threads instead of the Brief',
+    description: 'The Brief is gone from Main, every VP and every lead: their Threads, grouped by state (Needs you, To read, Working, Waiting, Done), take its place, and their agents are no longer asked to write one. A choice a Board asks you waits on you as a thread of the leader that keeps that Board, its options as buttons: answer it there or on the Board, either one answers both. A Board card\'s status comes from its task\'s threads. Briefs already written are kept.',
+    default: false,
+  },
 ] as const;
 
 export type ExperimentalFeatureId = typeof EXPERIMENTAL_FEATURES[number]['id'];

@@ -21,6 +21,7 @@ import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
 import { briefAsksUser, briefSectionOf, briefToRead } from '../sessions/brief-structure.js';
 import { sameAreaTasks, sameTaskArea } from '../router/same-area.js';
 import { awaitsUserDecision } from '../human-inbox/open-decision.js';
+import { briefOffNow } from './brief-off.js';
 
 const SCHEDULE_FILE = path.join(WALNUT_HOME, 'org', 'report-schedule.json');
 /** A report the clock could not send this long after its time is dropped, with a log line. */
@@ -111,7 +112,8 @@ export function buildMorningReport(owner: Task, tasks: readonly Task[], letters:
             : s?.now ? { now: flat(s.now, 160) } : {}),
       };
     }),
-    ...(owner.brief?.text?.trim() ? { brief: { text: owner.brief.text.trim(), ...(owner.brief.at ? { at: hhmm(Date.parse(owner.brief.at)) } : {}) } } : {}),
+    // The Brief is off (brief-off.ts): no letter nobody keeps goes into the report.
+    ...(owner.brief?.text?.trim() && !briefOffNow() ? { brief: { text: owner.brief.text.trim(), ...(owner.brief.at ? { at: hhmm(Date.parse(owner.brief.at)) } : {}) } } : {}),
   });
   const counts = { needs: needs.length, done: done.length, moved: moved.length };
   void now;

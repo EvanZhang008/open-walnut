@@ -41,7 +41,7 @@ const strip = (src: string): string => src.replace(/\/\*[\s\S]*?\*\//g, '').repl
 const read = (rel: string): string => strip(readFileSync(join(ROOT, rel), 'utf8'));
 
 /** The parts that answer something waiting on him: drawing one draws a needs-you item. */
-const ANSWER_PARTS = /<(OrgInlineAnswer|KanbanCardPrompt|AskOptions|ThreadOptions|ThreadLetterAnswer|ApprovalReply|PermissionRequestCard|PermissionAnswerButtons|PermissionAnswerForm)\b/;
+const ANSWER_PARTS = /<(OrgInlineAnswer|KanbanCardPrompt|AskOptions|ThreadOptions|ThreadLetterAnswer|ThreadChoiceAnswer|ApprovalReply|PermissionRequestCard|PermissionAnswerButtons|PermissionAnswerForm)\b/;
 /** The one card. */
 /** The one card (OneCardFrame: the same card behind threads_one_card, core/org/one-card.ts). */
 const THE_CARD = /<(AskCardFrame|AskCard|OneCardFrame)\b/;
@@ -52,6 +52,7 @@ const NOT_A_CARD: Record<string, string> = {
   'web/src/components/org/OrgInlineAnswer.tsx': 'the answer parts (AskOptions, the words box, a Board prompt), drawn inside the card',
   'web/src/components/common/PermissionPromptControls.tsx': 'a live prompt\'s answer form, a part the toast and the bell panel draw',
   'web/src/components/org/ThreadLetterAnswer.tsx': 'a decision letter\'s answer on its thread, a part the thread card draws inside the card',
+  'web/src/components/org/ThreadChoiceAnswer.tsx': 'a Board choice\'s answer on its thread (brief_off), a part the thread card draws inside the card',
   'web/src/components/board/kanban/KanbanCardPrompt.tsx': 'a Board card\'s live prompt, a part the Board card draws inside the card',
   // Its own surfaces, not a card in a list of what waits on him.
   'web/src/components/sessions/StreamingBlockView.tsx': 'the chat transcript\'s own record of the prompt, under the strip that carries its card',
@@ -139,8 +140,9 @@ describe('every source of choices keeps its buttons on a thread card', () => {
   it('a card waiting on him offers no Acknowledge: it shows only off needs', () => {
     const threads = read('web/src/components/org/OrgThreads.tsx');
     // The actions row with Acknowledge is drawn only when the card does not wait on him.
-    expect(threads).toMatch(/\{needs \? null : /);
-    expect(threads.indexOf('{needs ? null : ')).toBeLessThan(threads.indexOf('data-testid="org-thread-ack"'));
+    // A card holding a Board choice (brief_off, ThreadChoiceAnswer) waits on him too.
+    expect(threads.indexOf('{needs || choice ? null : ')).toBeGreaterThan(-1);
+    expect(threads.indexOf('{needs || choice ? null : ')).toBeLessThan(threads.indexOf('data-testid="org-thread-ack"'));
     expect(read('web/src/components/org/PoppedThreadCard.tsx')).not.toMatch(/org-thread-ack|Acknowledge/);
   });
 });

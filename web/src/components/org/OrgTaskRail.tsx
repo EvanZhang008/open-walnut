@@ -345,7 +345,7 @@ function AllTasks({ tabs, alerts, approvals, flipped, onFlip, focus, onFocused, 
   );
 }
 
-export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, flipped, onFlip, focus, onFocused, view, onView, keepsBrief, briefNew, threadsNew, threadsCount, onClose, mode, onMode, renderBoard, briefFolded, onBriefFolded, briefFresh, briefUpdating, threads, onThreadFollowUp, contact, title, onOpenAlert, onQuote, canQuote, answers, now, placement, width }: {
+export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, flipped, onFlip, focus, onFocused, view, onView, keepsBrief, briefOff = false, briefNew, threadsNew, threadsCount, onClose, mode, onMode, renderBoard, briefFolded, onBriefFolded, briefFresh, briefUpdating, threads, onThreadFollowUp, contact, title, onOpenAlert, onQuote, canQuote, answers, now, placement, width }: {
   row: ChannelRow;
   rows: readonly ChannelRow[];
   tasks: readonly Task[];
@@ -364,6 +364,8 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, flipped
   view: OrgTopView;
   onView: (view: OrgTopView) => void;
   keepsBrief: boolean;
+  /** The Brief is off (experiment brief_off): no Brief tab, and Threads read grouped by state. */
+  briefOff?: boolean;
   briefNew: boolean;
   /** A thread he would see has news since he last looked at Threads. */
   threadsNew: boolean;
@@ -401,7 +403,7 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, flipped
     if (row.kind === 'main') for (const r of rows) for (const a of r.alerts) if (!m.has(a.taskId)) m.set(a.taskId, `${r.name} VP`);
     return m;
   }, [row.kind, rows]);
-  const brief = keepsBrief ? contact?.brief : undefined;
+  const brief = keepsBrief && !briefOff ? contact?.brief : undefined;
   // A Board picked on a node that keeps none (any more) shows all its tasks.
   const shownMode: OrgTaskMode = mode === 'board' && !renderBoard ? 'all' : mode;
   // Full screen is the same pop-up sheet a session panel opens into, and the same one state of the
@@ -414,7 +416,7 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, flipped
     <aside className={`org-rail is-${placement}${isFullscreen ? ' is-wide' : ''}${fullscreenClass}`} data-testid="org-rail" data-placement={placement} {...(isFullscreen ? { 'data-fullscreen': '1' } : {})} {...(width && !isFullscreen ? { style: { width } } : {})}>
       <div className="org-top has-switch" data-testid="org-top" data-view={view}>
         {/* Threads first (2026-11-04, the user: "this thread shoudl also be the first"), then Tasks and Brief. */}
-        <div className="org-top-tabs" role="group" aria-label={keepsBrief ? 'Threads, Tasks or Brief' : 'Tasks'}>
+        <div className="org-top-tabs" role="group" aria-label={keepsBrief ? (briefOff ? 'Threads or Tasks' : 'Threads, Tasks or Brief') : 'Tasks'}>
           {keepsBrief && (
             <button type="button" aria-pressed={view === 'threads'} className={`org-top-tab${view === 'threads' ? ' is-on' : ''}`} data-testid="org-top-threads" onClick={() => onView('threads')}>
               Threads{threadsCount > 0 && <span className="org-top-count">{threadsCount}</span>}
@@ -424,7 +426,7 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, flipped
           <button type="button" aria-pressed={view === 'task'} className={`org-top-tab${view === 'task' ? ' is-on' : ''}`} data-testid="org-top-task" onClick={() => onView('task')}>
             Tasks<span className="org-top-count">{row.counts.open}</span>
           </button>
-          {keepsBrief && (<>
+          {keepsBrief && !briefOff && (<>
             <button type="button" aria-pressed={view === 'brief'} className={`org-top-tab${view === 'brief' ? ' is-on' : ''}`} data-testid="org-top-brief" onClick={() => onView('brief')}>
               Brief{briefNew && <i className="org-top-new" data-testid="org-top-brief-new"><span className="org-sr-only">, rewritten since you read it</span></i>}
             </button>
@@ -446,13 +448,13 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, flipped
           </button>
         </span>
       </div>
-      {view === 'brief' ? (
+      {view === 'brief' && !briefOff ? (
         <div className="org-rail-body">
           <OrgBrief owner={contact} tasks={tasks} name={title} now={now} folded={briefFolded} fresh={briefFresh} updating={briefUpdating} />
         </div>
       ) : view === 'threads' ? (
         <div className="org-rail-body">
-          <OrgThreads name={title} owner={contact} state={threads} tasks={tasks} onFollowUp={onThreadFollowUp} now={now} />
+          <OrgThreads name={title} owner={contact} state={threads} tasks={tasks} onFollowUp={onThreadFollowUp} now={now} byState={briefOff} />
         </div>
       ) : (
         <div className="org-task-view" data-testid="org-task-view" data-mode={shownMode}>

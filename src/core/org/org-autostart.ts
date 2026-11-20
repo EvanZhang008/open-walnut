@@ -22,6 +22,7 @@
 import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
 import { isOrgEnabled, isOrgNode } from './org-enabled.js';
+import { briefOffNow } from './brief-off.js';
 
 /** The start's source: framed as Walnut's own note in the session (send-frame.ts). */
 export const ORG_START_SOURCE = 'org-autostart';
@@ -41,6 +42,14 @@ export interface OrgStartOutcome {
 export function orgStartMessage(task: Pick<Task, 'org_role' | 'title' | 'org_name' | 'project'>, title: string): string {
   if (task.org_role === 'router') return 'Walnut opened your isolated router conversation. You are a router beside the VPs, not a VP or their subordinate. No incoming content has been supplied. Wait for a confirmed item in your own area; VP collaboration links do not grant data access.';
   const who = task.org_role === 'main' ? 'the CEO of the org' : `the ${title} in the org`;
+  // The Brief is off (org/brief-off.ts): the user reads the Threads instead.
+  if (briefOffNow()) {
+    return [
+      `Walnut started your session in the background: you are ${who}.`,
+      'First read your teams with org_get, then bring your Threads up to date (thread_list, thread_update) so the user sees where his requests stand.',
+      'Nobody waits on an answer to this note: when that is done, end your turn. The user and your teams reach you here.',
+    ].join(' ');
+  }
   return [
     `Walnut started your session in the background: you are ${who}.`,
     'First read your teams with org_get, then write your Brief (brief_read, then brief_write) so the user sees where the work stands.',

@@ -36,7 +36,7 @@ import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { addTask, getTask, updateTaskRaw } from '../../src/core/task-manager.js'
 import { getSessionByClaudeId } from '../../src/core/session-tracker.js'
 import { ensureMainTask, ensureProjectLead } from '../../src/core/org/org-store.js'
-import { readThreads, threadTaskIds } from '../../src/core/org/threads-store.js'
+import { readThreads, threadTaskIds, writeThreadsFor } from '../../src/core/org/threads-store.js'
 import { getLetter } from '../../src/core/human-inbox/store.js'
 import { lettersAsThreadsNow, syncAllLetterThreads, syncLetterThread } from '../../src/core/human-inbox/letter-threads.js'
 import { letterThreadId } from '../../src/core/org/letter-thread-model.js'
@@ -142,6 +142,7 @@ afterAll(async () => {
 
 let early = ''
 let fresh = ''
+let late = ''
 
 describe('decision letters wait on the thread', () => {
   it('off: a decision letter is a letter only', async () => {
@@ -244,7 +245,7 @@ describe('decision letters wait on the thread', () => {
   })
 
   it('off again closes the open ones and the letter counts as a letter; on again opens them again', async () => {
-    const late = await decide(trees, 'Mulch with straw or with bark?', ['Straw', 'Bark'])
+    late = await decide(trees, 'Mulch with straw or with bark?', ['Straw', 'Bark'])
     await vi.waitFor(async () => expect(await threadOf(late)).toMatchObject({ state: 'needs' }), { timeout: 10_000, interval: 200 })
     await flag(false)
     await vi.waitFor(async () => expect(await threadOf(late)).toMatchObject({ closed: { how: 'dropped' }, letter: { off: true } }), { timeout: 10_000, interval: 200 })
@@ -257,5 +258,26 @@ describe('decision letters wait on the thread', () => {
     }, { timeout: 10_000, interval: 200 })
     expect(await threadsOfLetter(late)).toHaveLength(1)
     expect(await letterItems(trees.taskId)).toEqual([])
+  })
+
+  it('a thread deleted a week after it closed is never opened again; one set aside and deleted opens once', async () => {
+    // The sweep deletes a closed thread after its week (threads-model.ts prune): as it would, here.
+    const prune = (node: string, id: string) => writeThreadsFor(node, (cur) => ({ file: { ...cur, threads: cur.threads.filter((t) => t.id !== id) }, out: true }))
+    const dropped = await decide(trees, 'Net the cherries or let the birds have some?', ['Net them', 'Share'])
+    await vi.waitFor(async () => expect(await threadOf(dropped)).toMatchObject({ state: 'needs' }), { timeout: 10_000, interval: 200 })
+    // He closes the thread without answering the letter; a week later it is deleted.
+    expect((await api('PATCH', `/tasks/${trees.taskId}/threads/${letterThreadId(dropped)}`, { close: 'dropped' })).status).toBe(200)
+    await prune(trees.taskId, letterThreadId(dropped))
+    expect(await syncAllLetterThreads()).toMatchObject({ opened: 0 })
+    expect(await syncLetterThread((await getLetter(dropped))!)).toBeNull()
+    expect(await threadsOfLetter(dropped)).toEqual([])
+    // Set aside by the experiment going off, then deleted: on again opens it once.
+    await flag(false)
+    await vi.waitFor(async () => expect(await threadOf(late)).toMatchObject({ letter: { off: true } }), { timeout: 10_000, interval: 200 })
+    await prune(trees.taskId, letterThreadId(late))
+    await flag(true)
+    await vi.waitFor(async () => expect(await threadsOfLetter(late)).toHaveLength(1), { timeout: 10_000, interval: 200 })
+    expect(await syncAllLetterThreads()).toMatchObject({ opened: 0 })
+    expect(await threadsOfLetter(late)).toHaveLength(1)
   })
 })

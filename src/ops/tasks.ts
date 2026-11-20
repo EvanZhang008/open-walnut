@@ -1206,7 +1206,9 @@ defineOp({
       : ((await call('GET', '/me')) as { task?: { id?: string } } | undefined)?.task?.id
     if (!id) throw new Error('No task of your own: pass task.')
     const body = await call('GET', `/tasks/${encodeURIComponent(id)}/brief${args.compact === true ? '?compact=1' : ''}`) as
-      { title?: string; compact?: boolean; brief?: { text?: string; at: string } | null; fresh?: { stale?: boolean; words?: string } | null; issues?: string[]; health?: { line?: string; alarms?: unknown[] } }
+      { title?: string; compact?: boolean; brief?: { text?: string; at: string } | null; fresh?: { stale?: boolean; words?: string } | null; issues?: string[]; health?: { line?: string; alarms?: unknown[] }; off?: boolean; note?: string }
+    // The Brief is off (experiment brief_off): what was written stays readable, and nothing is asked.
+    if (body.off) return withOutcome(body, `The Brief of "${body.title}" is off${body.brief ? `; its last letter (written ${body.brief.at}) is read only` : ''}.`, body.note ?? 'Keep your Threads current instead.')
     // Main's: Walnut's own alarms ringing now (core/health-monitor), one line each in the letter.
     const health = body.health?.alarms?.length ? ` ${body.health.line}` : ''
     if (body.compact) {
@@ -1249,7 +1251,8 @@ defineOp({
     if (typeof args.content !== 'string' && !edits.length) throw new Error('Pass content (the whole letter) or edits.')
     const body = await call('PUT', `/tasks/${encodeURIComponent(id)}/brief`, {
       ...(typeof args.content === 'string' ? { content: args.content } : {}), ...(edits.length ? { edits } : {}),
-    }) as { title?: string; chars?: number; own_chars?: number; limit?: number; issues?: Array<{ kind: string; line: string }> }
+    }) as { title?: string; chars?: number; own_chars?: number; limit?: number; issues?: Array<{ kind: string; line: string }>; off?: boolean; note?: string }
+    if (body.off) return withOutcome(body, `The Brief of "${body.title}" is off: nothing was written.`, body.note ?? 'Keep your Threads current instead.')
     const issues = body.issues ?? []
     return withOutcome(
       body,

@@ -7,18 +7,11 @@
  * the behavior from before it; the fields it stores (options, recommended, a send's clientId) are
  * written either way. No store import here: the stores import this.
  */
-import { experimentalEnabled } from '../experimental.js';
+import { experimentCache } from '../experimental-cache.js';
 
-let on = false;
+const flag = experimentCache('threads_one_card');
 /** The experiment as last read (user-status-sync.ts sets it on every config change). */
-export function setOneCard(value: boolean): void { on = value; }
-export function oneCardNow(): boolean { return on; }
-
+export const setOneCard = flag.set;
+export const oneCardNow = flag.now;
 /** The experiment, read from the config now (a route right after Settings changed it agrees). */
-export async function oneCardOn(): Promise<boolean> {
-  try {
-    const { getConfig } = await import('../config-manager.js');
-    on = experimentalEnabled((await getConfig()).experimental, 'threads_one_card');
-  } catch { /* the last value read stands */ }
-  return on;
-}
+export const oneCardOn = flag.on;

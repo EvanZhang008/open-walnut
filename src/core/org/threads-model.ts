@@ -63,6 +63,7 @@ import { sameDecisionWords } from '../ask-decision.js';
 import crypto from 'node:crypto';
 import { threadsPopUpNow } from './thread-popup-rules.js';
 import { normalizeThreadLetter, type ThreadLetter } from './letter-thread-model.js';
+import { normalizeThreadChoice, type ThreadChoice } from './choice-thread-model.js';
 
 export const THREAD_STATES = ['new', 'working', 'needs', 'answered', 'pending'] as const;
 export type ThreadState = typeof THREAD_STATES[number];
@@ -314,6 +315,8 @@ export interface OrgThread {
   askId?: string;
   /** The decision letter this thread holds (experiment letters_as_threads, letter-thread-model.ts). */
   letter?: ThreadLetter;
+  /** The Board choice this thread holds (experiment brief_off, choice-thread-model.ts). */
+  choice?: ThreadChoice;
   /**
    * He acknowledged it while its work was still open (experiment ack_means_known, thread-ack.ts):
    * he knows where it stands, so it went pending instead of closing. An older build keeps it unread.
@@ -499,6 +502,8 @@ function normalizeThread(t: unknown): OrgThread | null {
   for (const k of ['ackedAt', 'ackDone'] as const) if (next[k] !== undefined && !(isStr(next[k]) && Number.isFinite(Date.parse(next[k]!)))) delete next[k];
   const letter = next.letter !== undefined ? normalizeThreadLetter(next.letter) : undefined;
   if (letter) next.letter = letter; else delete next.letter;
+  const choice = next.choice !== undefined ? normalizeThreadChoice(next.choice) : undefined;
+  if (choice) next.choice = choice; else delete next.choice;
   if (next.reportAsk && !(typeof next.reportAsk === 'object' && isStr(next.reportAsk.id) && next.reportAsk.id && isStr(next.reportAsk.at))) delete next.reportAsk;
   if (next.options !== undefined) { const o = next.state === 'needs' && !next.closed ? storedOptions(next.options) : undefined; if (o) next.options = o; else delete next.options; }
   return next;
@@ -1150,7 +1155,7 @@ export function moveThreadOut(file: ThreadsFile, id: string, to: MoveEnd, by: Th
   const closed: ThreadClosed = { how: 'dropped', at, by, told: true };
   // threads_pop_up: what stays is a pointer, never a copy: no message, no summary (relocateThreadOut).
   const gone: OrgThread = pointerOnly
-    ? { id: cur.id, title: cur.title, state: cur.state, messages: [], createdAt: cur.createdAt, updatedAt: at, by, closed, movedTo, ...(cur.letter ? { letter: cur.letter } : {}) }
+    ? { id: cur.id, title: cur.title, state: cur.state, messages: [], createdAt: cur.createdAt, updatedAt: at, by, closed, movedTo, ...(cur.letter ? { letter: cur.letter } : {}), ...(cur.choice ? { choice: cur.choice } : {}) }
     : { ...rest, updatedAt: at, by, closed, movedTo };
   return { file: replace(file, gone, at), thread: cur };
 }

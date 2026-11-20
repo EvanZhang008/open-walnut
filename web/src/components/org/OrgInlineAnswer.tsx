@@ -240,11 +240,13 @@ export function ApprovalReply({ sessionId, summary, onSent }: { sessionId: strin
   );
 }
 
-interface ChoiceFound { owner: string; id: string; title: string; options: Array<{ value: string; label: string }>; recommended?: string }
+export interface ChoiceFound { owner: string; id: string; title: string; options: Array<{ value: string; label: string }>; recommended?: string }
 
-function ChoiceAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords: () => void }) {
-  const [found, setFound] = useState<ChoiceFound | null | undefined>(undefined);
+function ChoiceAnswer({ alert, failure, onSend, onWords, known }: FormProps & { onWords: () => void; known?: ChoiceFound }) {
+  const [found, setFound] = useState<ChoiceFound | null | undefined>(known);
   useEffect(() => {
+    // A thread that holds the choice (core/org/choice-thread-model.ts) names it: nothing to look up.
+    if (known) return;
     let alive = true;
     // The server finds it by the rule the task's status counts by: on any Board, not only the
     // task's own team Board (a lead's Board asks about its project's tasks).
@@ -255,7 +257,7 @@ function ChoiceAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords
         if (alive) setFound(null);
       });
     return () => { alive = false; };
-  }, [alert.taskId]);
+  }, [alert.taskId, known]);
   useEffect(() => { if (found === null) onWords(); }, [found, onWords]);
   if (!found) return <div className="org-answer-note" role="status">{found === undefined ? 'Loading the choice…' : ''}</div>;
   const answer = (body: { option?: string; text?: string }, images?: ImageAttachment[]): Promise<boolean> => {
@@ -365,7 +367,7 @@ function SessionAnswer({ alert, failure, onSend, sessionId, summary, shape, thre
 
 /** The ask's answer, in its row. `onAnswer` hides the row the moment an answer goes and returns how
  *  to settle it; `failure` (the last try failed) shows the reason with the form. */
-export function OrgInlineAnswer({ alert, task, summary, onAnswer, failure, sessionId: askingSession, threadId }: {
+export function OrgInlineAnswer({ alert, task, summary, onAnswer, failure, sessionId: askingSession, threadId, choice }: {
   alert: OrgAlertView;
   task: Task | undefined;
   summary: string;
@@ -375,6 +377,8 @@ export function OrgInlineAnswer({ alert, task, summary, onAnswer, failure, sessi
   sessionId?: string;
   /** The thread that holds this ask (core/org/thread-report-ask.ts): a words answer is filed under it. */
   threadId?: string;
+  /** The Board choice a thread holds (core/org/choice-thread-model.ts): answered by its own ids. */
+  choice?: ChoiceFound;
 }) {
   // A letter or a choice this browser cannot find takes the words form instead.
   const [wordsOnly, setWordsOnly] = useState(false);
@@ -404,7 +408,7 @@ export function OrgInlineAnswer({ alert, task, summary, onAnswer, failure, sessi
       </>) : shape === 'letter' ? (
         <LetterAnswer alert={alert} failure={failure} onSend={send} onWords={toWords} />
       ) : shape === 'choice' ? (
-        <ChoiceAnswer alert={alert} failure={failure} onSend={send} onWords={toWords} />
+        <ChoiceAnswer alert={alert} failure={failure} onSend={send} onWords={toWords} {...(choice ? { known: choice } : {})} />
       ) : (
         <SessionAnswer alert={alert} failure={failure} onSend={send} sessionId={sessionId} summary={summary} shape={shape === 'prompt' ? 'text' : shape} {...(threadId ? { threadId } : {})} />
       )}

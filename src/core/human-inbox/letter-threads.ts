@@ -20,14 +20,15 @@
  * (marked `off`); coming back on opens them again. Leader only: a replica keeps no Threads.
  */
 import { log } from '../../logging/index.js';
-import { experimentalEnabled } from '../experimental.js';
+import { experimentCache } from '../experimental-cache.js';
 import type { Task } from '../types.js';
 import { holdsLetter, letterThreadId, openLetterThread, settleLetterThread, type LetterOutcome } from '../org/letter-thread-model.js';
+import { forgetHeld, heldSeen, noteHeld, startHeldThreads } from '../org/held-threads.js';
 import { awaitsUserDecision, userAnsweredInThread } from './open-decision.js';
 import { LETTER_TYPE_ROUTES, filesUpdatesAsThreads } from './letter-to-thread.js';
 import type { LetterRecord, LetterType } from './types.js';
 
-let on = false;
+const flag = experimentCache('letters_as_threads');
 /** The ids of letters' threads seen here: a change of one of them may change which letters count. */
 const letterThreads = new Set<string>();
 /** Whether a thread change may move which letters count (an unknown thread id: no). */
@@ -36,15 +37,9 @@ export function isLetterThread(threadId: string): boolean { return letterThreads
 let holderTasks = new Set<string>();
 export function holdsLettersNow(taskId: string): boolean { return holderTasks.has(taskId); }
 /** The experiment as last read. */
-export function lettersAsThreadsNow(): boolean { return on; }
+export const lettersAsThreadsNow = flag.now;
 /** The experiment, read from the config now (a status pass right after Settings changed it agrees). */
-export async function lettersAsThreadsOn(): Promise<boolean> {
-  try {
-    const { getConfig } = await import('../config-manager.js');
-    on = experimentalEnabled((await getConfig()).experimental, 'letters_as_threads');
-  } catch { /* the last value read stands */ }
-  return on;
-}
+export const lettersAsThreadsOn = flag.on;
 
 /** Why this letter never waits on a thread, whoever sent it; null when it may. Pure. */
 export function letterThreadSkip(l: Pick<LetterRecord, 'type' | 'sender' | 'items' | 'credentialAsk' | 'actions'>): string | null {
@@ -141,8 +136,11 @@ async function syncNow(seen: LetterRecord, taskId: string, tasks?: readonly Task
   const waits = awaitsUserDecision(l);
   const at = new Date().toISOString();
   const aside = !!holder?.thread.letter?.off && !holder.thread.letter.done && (!!holder.thread.closed || holder.thread.state === 'needs');
+  const on = flag.now();
   if (waits && on && (!holder || aside)) {
     if (!(await letterThreadTask(l, tasks))) return null;
+    // It had a thread here that was deleted a week after it closed (held-threads.ts): never a second one.
+    if (!holder && (await heldSeen(id)) === 'open') return null;
     const { letterItem } = await import('../action-needed-facts.js');
     const item = letterItem(l);
     const input = {
@@ -157,9 +155,14 @@ async function syncNow(seen: LetterRecord, taskId: string, tasks?: readonly Task
       const r = openLetterThread(cur, input);
       return { file: r.file, out: r.changed, ...(r.changed ? { changed: { kind: r.changed === 'opened' ? 'opened' as const : 'updated' as const, threadId: id } } : {}) };
     });
-    if (changed) log.notif.info('letter threads: a decision letter waits on its thread', { letterId: l.id, taskId: node, threadId: id, how: changed });
+    if (changed) {
+      await noteHeld(id, 'letter', l.id, 'open');
+      log.notif.info('letter threads: a decision letter waits on its thread', { letterId: l.id, taskId: node, threadId: id, how: changed });
+    }
     return changed;
   }
+  // Ended: no record of its thread is needed any more.
+  if (!waits) await forgetHeld((e) => e.id === id);
   if (!holder || !holdsLetter(holder.thread)) return null;
   const { WITHDRAWN_ACTION_ID } = await import('./store.js');
   const outcome: LetterOutcome | null = waits ? (on ? null : { kind: 'off' }) : letterOutcome(l, WITHDRAWN_ACTION_ID);
@@ -169,20 +172,21 @@ async function syncNow(seen: LetterRecord, taskId: string, tasks?: readonly Task
     return r ? { file: r.file, out: true, changed: { kind: 'updated' as const, threadId: id } } : { file: cur, out: false };
   });
   if (!done) return null;
+  if (outcome.kind === 'off') await noteHeld(id, 'letter', l.id, 'off');
   log.notif.info('letter threads: a letter\'s thread settled with it', { letterId: l.id, taskId: holder.node, threadId: id, outcome: outcome.kind });
   return outcome.kind === 'off' ? 'off' : 'settled';
 }
 
 /**
- * Every letter's thread made to match (the migration; run at boot with the experiment on and on
- * every switch of it): each decision letter in the inbox, then each open thread still holding a
+ * Every letter's thread made to match (the migration; run at boot, on or off, and on every
+ * switch of it): each decision letter in the inbox, then each open thread still holding a
  * letter that left the inbox since. Idempotent: run twice, the second run changes nothing.
  */
 export async function syncAllLetterThreads(): Promise<{ opened: number; settled: number }> {
   const out = { opened: 0, settled: 0 };
   const { isFollower } = await import('../server-role.js');
   if (isFollower()) return out;
-  await lettersAsThreadsOn();
+  await flag.on();
   const inbox = await import('./store.js');
   const tasks = await (await import('../task-manager.js')).listTasks();
   const count = (d: Done) => { if (d === 'opened' || d === 'reopened') out.opened++; else if (d) out.settled++; };
@@ -199,6 +203,8 @@ export async function syncAllLetterThreads(): Promise<{ opened: number; settled:
       else if (await settleGone(node, t.id)) out.settled++;
     }
   }
+  // A letter that left the inbox since needs no record of its thread.
+  await forgetHeld((e) => e.kind === 'letter' && !seen.has(e.key));
   if (out.opened || out.settled) log.notif.info('letter threads: synced', out);
   return out;
 }
@@ -252,42 +258,18 @@ export async function heldLetterIds(letters: readonly Pick<LetterRecord, 'id' | 
 
 const LETTER_EVENTS = ['human-inbox:letter', 'human-inbox:answered', 'human-inbox:state'];
 
-/** Follow the letters and the experiment switch (server boot, leader only). */
+/** Follow the letters and the experiment switch (server boot, leader only; held-threads.ts startHeldThreads). */
 export function startLetterThreads(opts: { firstMs?: number } = {}): { stop: () => void } {
-  let stopped = false;
-  let first: ReturnType<typeof setTimeout> | null = null;
-  void (async () => {
-    const { bus, EventNames } = await import('../event-bus.js');
-    if (stopped) return;
-    let seen = await lettersAsThreadsOn();
-    bus.subscribe('letter-threads', (event) => {
-      if (event.name === EventNames.CONFIG_CHANGED) {
-        void lettersAsThreadsOn().then((now) => {
-          if (now === seen) return;
-          seen = now;
-          log.notif.info('letter threads: experiment switched', { on: now });
-          return syncAllLetterThreads().then(() => undefined);
-        }).catch((err: unknown) => log.notif.warn('letter threads: switch not synced', { error: err instanceof Error ? err.message : String(err) }));
-        return;
-      }
+  return startHeldThreads({
+    name: 'letter-threads', flag, events: LETTER_EVENTS, syncAll: syncAllLetterThreads,
+    ...(opts.firstMs !== undefined ? { firstMs: opts.firstMs } : {}),
+    onEvent: (event, on) => {
       if (!on) return;
       const letterId = (event.data as { letterId?: unknown } | undefined)?.letterId;
       if (typeof letterId !== 'string') return;
       void import('./store.js').then(({ getLetter }) => getLetter(letterId, { deferBodies: true }))
         .then((l) => (l ? syncLetterThread(l) : null))
         .catch(() => {});
-    }, { global: true, interest: [...LETTER_EVENTS, EventNames.CONFIG_CHANGED] });
-    // At boot with the experiment on: the letters sent before (or while this server was down).
-    if (seen && !stopped) {
-      first = setTimeout(() => { void syncAllLetterThreads().catch(() => {}); }, opts.firstMs ?? 5_000);
-      first.unref?.();
-    }
-  })();
-  return {
-    stop: () => {
-      stopped = true;
-      if (first) clearTimeout(first);
-      void import('../event-bus.js').then(({ bus }) => bus.unsubscribe('letter-threads')).catch(() => {});
     },
-  };
+  });
 }

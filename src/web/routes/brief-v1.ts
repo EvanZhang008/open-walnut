@@ -7,6 +7,9 @@
  *        sections (only those a move touched), issues?, rules (a session's first read only) }  (brief-compact.ts)
  *   PUT /api/v1/tasks/:id/brief  { content } | { edits: [{ old, new }] }  ->  { brief, issues (lines to fix) }
  *
+ * With the experiment brief_off on, both answer `{ off: true, note }`: the PUT writes nothing (200,
+ * `written: false`), the GET gives a session its last letter read only and a person's client none.
+ *
  * `brief.text_sources` says who wrote each part of the text (brief-source.ts). The writer of a PUT
  * is the request's caller (`x-walnut-caller-sid`), never anything its body says.
  *
@@ -32,6 +35,7 @@ import { log } from '../../logging/index.js'
 import { body, header, param, resolveTask, RouteError } from './board-v1.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { sendLinkFailure } from '../middleware/link-failure-answer.js'
+import { BRIEF_OFF_NOTE, briefOffOn } from '../../core/org/brief-off.js'
 
 export const briefV1Router = Router()
 
@@ -55,6 +59,13 @@ async function uiLanguage(): Promise<string | undefined> {
 
 briefV1Router.get('/tasks/:id/brief', route(async (req, res) => {
   const task = await resolveTask(param(req.params.id))
+  // The Brief is off (core/org/brief-off.ts): a session still reads its last letter, read only; a
+  // person's client (no caller session) gets none, so no screen shows a letter nobody keeps.
+  if (await briefOffOn()) {
+    const reader = !!header(req, 'x-walnut-caller-sid')
+    res.json({ task_id: task.id, title: task.title, off: true, note: BRIEF_OFF_NOTE, brief: reader && task.brief ? briefOut(task.brief) : null })
+    return
+  }
   const tasks = await listTasks()
   const freshRaw = briefFreshness(task, tasks)
   const fresh = freshRaw ? { ...freshRaw, words: freshnessWords(freshRaw) } : null
@@ -132,6 +143,12 @@ function wantsCompact(q: unknown): boolean {
 briefV1Router.put('/tasks/:id/brief', route(async (req, res) => {
   if (role() === 'replica') throw new RouteError(501, 'not_supported_cloud', 'A Brief is written on the primary box')
   const task = await resolveTask(param(req.params.id))
+  // Off: a success that writes nothing, so a session on an older prompt moves on instead of retrying.
+  if (await briefOffOn()) {
+    log.task.info('brief write skipped: the Brief is off', { taskId: task.id, by: header(req, 'x-walnut-caller-sid') ? 'session' : 'human' })
+    res.json({ task_id: task.id, title: task.title, off: true, written: false, note: BRIEF_OFF_NOTE })
+    return
+  }
   const b = body(req)
   const edits = Array.isArray(b.edits) ? (b.edits as BriefEdit[]) : undefined
   const content = typeof b.content === 'string' ? b.content : undefined

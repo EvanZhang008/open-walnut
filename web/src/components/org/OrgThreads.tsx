@@ -47,7 +47,7 @@
  *   Closed     the ones closed this week (kept a week, then deleted) open from one quiet line at
  *              the bottom, Reopen on each
  */
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { userStateOf } from '@open-walnut/org-tree';
 import { USER_STATE_LABELS, shownState } from '@open-walnut/user-status';
@@ -59,16 +59,11 @@ import { ReplyComposer } from '@/components/chat/ReplyComposer';
 import type { ImageAttachment } from '@/api/chat';
 import { draftKey } from '@/utils/drafts';
 import { resolveTaskSessionId } from '@/utils/session-status';
-import { RichMarkdown } from '@/components/chat/RichBlocks';
 import { AgentText } from '@/components/common/AgentText';
-import { MessageAbout, rowAbout } from '@/components/sessions/message-about';
-import { stripTurnMarker } from '@/utils/turn-end-marker';
-import { stripQuestionTag } from '@/utils/question-tag';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { useOpenTask } from '@/hooks/useOpenTask';
 import { useAgentFileOpener } from '@/hooks/useAgentFileOpener';
-import type { AgentTextSource } from '@/utils/agent-text-source';
-import { THREAD_LIST_SOURCE, THREAD_WORDS_SOURCE, threadAnswerSource, threadOpenerSource, threadStandInSource, threadSummarySource } from './thread-text-source';
+import { THREAD_LIST_SOURCE, threadAnswerSource, threadOpenerSource, threadStandInSource, threadSummarySource } from './thread-text-source';
 import { timeAgo } from '@/utils/time';
 import { isBoolean, usePageView } from '@/utils/view-memory';
 import { useExperimental } from '@/hooks/useExperimental';
@@ -79,10 +74,14 @@ import { PoppedThreadCard } from './PoppedThreadCard';
 import { TopicThreadBadge } from '@/components/topics/TopicThreadBadge';
 import { ThreadsTopicBar } from '@/components/topics/topic-entry';
 import { ThreadLetterAnswer, answersLetter } from './ThreadLetterAnswer';
+import { ThreadChoiceAnswer, answersChoice } from './ThreadChoiceAnswer';
 import { useFocusedThread } from './thread-focus';
 import { AskCard } from '@/components/actions/ActionNeeded';
 import { AskCardFrame } from '@/components/actions/AskCard';
 import { ThreadOptions } from './OrgInlineAnswer';
+import { Answer, Words } from './thread-card-text';
+import { THREAD_GROUPS, groupThreads, type ThreadGroup } from '@open-walnut/thread-groups';
+import { OrgThreadsByState, groupOpen, isThreadGroups } from './OrgThreadsByState';
 import '@/styles/org-threads.css';
 import '@/styles/notice-card.css';
 
@@ -136,6 +135,8 @@ interface Props {
   /** Send a message filed under this thread; null when the node has no chat yet. */
   onFollowUp: ((threadId: string, text: string, images?: ImageAttachment[]) => Promise<boolean>) | null;
   now: number;
+  /** The Brief is off (experiment brief_off): every thread in its state's group (OrgThreadsByState). */
+  byState?: boolean;
 }
 
 function closedWords(t: OrgThread, now: number): string {
@@ -144,13 +145,6 @@ function closedWords(t: OrgThread, now: number): string {
   if (t.movedTo) return `Moved to ${t.movedTo.title} ${timeAgo(c.at, { now })}`;
   const who = c.by === 'human' ? '' : ' by the agent';
   return `${c.how === 'acked' ? 'Acknowledged' : 'Dropped'}${who} ${timeAgo(c.at, { now })}`;
-}
-
-/** A clock time today, a date and time before: when an answer came, the way a chat shows it. */
-function clock(at: string, now: number): string {
-  const d = new Date(at);
-  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  return new Date(now).toDateString() === d.toDateString() ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`;
 }
 
 /** When a snoozed thread comes back, as a person says it: "Tomorrow, 9:00 AM", "Nov 9, 12:00 AM". */
@@ -220,101 +214,6 @@ function FollowUp({ threadId, title, owner, onSend }: {
       />
       {failed && <span className="org-thread-error" data-testid="org-thread-follow-failed">Not sent. Your words and pictures are still here.</span>}
     </div>
-  );
-}
-
-/**
- * Long words fold to a few lines. The toggle sits on the text itself, at its left, and a click on
- * the folded text opens it too (a link or a pill inside still does its own thing).
- */
-function Fold({ children, className, testId }: { children: React.ReactNode; className: string; testId: string }) {
-  const box = useRef<HTMLDivElement>(null);
-  const [long, setLong] = useState(false);
-  const [whole, setWhole] = useState(false);
-  useLayoutEffect(() => {
-    const el = box.current;
-    if (!el || whole) return;
-    const measure = () => setLong(el.scrollHeight > el.clientHeight + 4);
-    measure();
-    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
-    ro?.observe(el);
-    return () => ro?.disconnect();
-  }, [whole]);
-  const folded = long && !whole;
-  return (
-    <>
-      <div
-        ref={box}
-        className={`org-thread-fold ${className}${whole ? ' is-whole' : ''}${folded ? ' is-folded' : ''}`}
-        data-testid={testId}
-        onClick={folded ? (e) => {
-          // A link, a picture, a pill, a disclosure or a selection keeps its own click.
-          if ((e.target as HTMLElement).closest('a, button, img, summary, details, input, [data-source], [data-lightbox-src]')) return;
-          if (window.getSelection()?.isCollapsed === false) return;
-          setWhole(true);
-        } : undefined}
-      >
-        {children}
-      </div>
-      {(long || whole) && (
-        <button type="button" className="org-thread-toggle" data-testid={`${testId}-more`} aria-expanded={whole} onClick={() => setWhole(!whole)}>
-          <span aria-hidden="true">{whole ? '▴' : '▾'}</span>{whole ? 'Collapse' : 'Expand'}
-        </button>
-      )}
-    </>
-  );
-}
-
-/**
- * The node's answer as its chat shows it, folded to a few lines with the rest one click away. A
- * path or a picture in it is its writer's (`source`): this block opens and loads from that machine
- * itself and keeps the click, so nothing around it opens the same link a second time.
- */
-function Answer({ text, about, at, by, known, now, testId = 'org-thread-answer', re, source }: {
-  text: string; about?: string[]; at: string; by: string; known: boolean; now: number; testId?: string;
-  /** His words it answers, one line, on a card (the conversation shows them in full instead). */
-  re?: string;
-  /** Who wrote these words (./thread-text-source.ts); unknownSource when Walnut did not record it. */
-  source: AgentTextSource;
-}) {
-  const body = useMemo(() => stripTurnMarker(stripQuestionTag(text)), [text]);
-  const ids = useMemo(() => rowAbout(about, text), [about, text]);
-  // Its own opener: the session record is read on a click, never on mount; a lookup still in
-  // flight is dropped when the source changes or the block unmounts (useAgentFileOpener).
-  const file = useAgentFileOpener(source);
-  // An unknown writer refuses a relative path too, as AgentText does (never a search of every host).
-  const onEntityClick = useEntityClickHandler(undefined, file.onFileOpen, file.fileHost, file.fileSessionId, file.refusesAll);
-  const onClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    onEntityClick(e);
-    // Handled here: the list around it must not handle the same link again.
-    if ((e.target as HTMLElement).closest('a')) e.stopPropagation();
-  }, [onEntityClick]);
-  return (
-    <div className={`org-thread-answer${known ? '' : ' is-news'}`} data-testid={testId} data-known={known ? 'true' : 'false'} data-text-source={sourceAttr(source)}>
-      {/* New to him: a dot before who wrote it, never a coloured guide line (2026-11-20). */}
-      <div className="org-thread-answer-by" data-tone={known ? undefined : 'live'}>{!known && <span className="wn-dot" aria-hidden="true" />}{by} · {clock(at, now)}</div>
-      {re && <div className="org-thread-re" data-testid="org-thread-re">{re}</div>}
-      <Fold className="org-thread-answer-body" testId="org-thread-answer-body">
-        <RichMarkdown text={body} cwd={file.render.cwd} host={file.render.host} inlineImages={file.render.images} onClick={onClick} />
-      </Fold>
-      {ids.length > 0 && <MessageAbout ids={ids} />}
-    </div>
-  );
-}
-
-/** For tests and logs: which kind of writer a block names ('host', 'session' or 'unknown'). */
-function sourceAttr(s: AgentTextSource): string {
-  return s.unknownSource ? 'unknown' : s.host !== undefined ? 'host' : 'session';
-}
-
-function Words({ m }: { m: OrgThreadMessage }) {
-  // Pictures render as the chat renders them: a path on its own line becomes the image. His words
-  // and pictures are his own, on this machine (the primary), whatever host the node runs on.
-  const text = [m.text, ...(m.images ?? [])].filter(Boolean).join('\n\n');
-  return (
-    <Fold className="org-thread-words-fold" testId="org-thread-words">
-      <AgentText text={text} className="org-thread-words" {...THREAD_WORDS_SOURCE} />
-    </Fold>
   );
 }
 
@@ -447,9 +346,14 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   const pinned = pinnedNow(t);
   // The one card (experiment threads_one_card, core/org/one-card.ts); off, the card as before it.
   const oneCard = useExperimental('threads_one_card');
+  // Its state's word matches the group it is drawn in once the Brief is off (OrgThreadsByState): an open answered one reads To read.
+  const briefOff = useExperimental('brief_off');
+  const toRead = oneCard || briefOff;
   // Its decision is asked in a task (core/org/thread-task-ask.ts): the card says where, not Needs you.
   const asked = !closed && !!t.askedIn;
   const letter = answersLetter(t);
+  // It holds a Board choice (experiment brief_off): the card IS that choice, answered on its Board.
+  const choice = !closed && answersChoice(t);
   // It holds the task's own ask (core/org/thread-report-ask.ts): the card IS that ask, with its box.
   const held = oneCard && !closed && !asked ? t.heldAsk : undefined;
   // Any kind of item: the task's ask, a question or a prompt its session waits on (taskAskNow).
@@ -481,7 +385,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
       <button type="button" className="org-thread-head" data-peek-row="" aria-expanded={open} aria-controls={`${t.id}-conversation`} data-testid="org-thread-head" onClick={() => setOpen(!open)}>
         <span className="org-thread-state" data-testid="org-thread-state">
           <i style={{ background: closed || asked ? 'var(--fg-muted, #86868B)' : STATE_DOT[t.state] }} />
-          {closed ? (t.movedTo ? 'Moved' : t.closed!.how === 'acked' ? 'Done' : 'Dropped') : asked ? (t.askedIn!.answered ? 'Done in a task' : 'Asked in a task') : stateLabel(t.state, oneCard)}
+          {closed ? (t.movedTo ? 'Moved' : t.closed!.how === 'acked' ? 'Done' : 'Dropped') : asked ? (t.askedIn!.answered ? 'Done in a task' : 'Asked in a task') : stateLabel(t.state, toRead)}
         </span>
         <span className="org-thread-meta">
           {pinned && (<>
@@ -531,7 +435,8 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
       {/* It holds a decision letter: the letter's buttons and box answer it, here and in the inbox at
           once, in the one ask card's row. */}
       {oneCard && letter && !heldItem && <AskCardFrame testId="org-thread-letter-card" className="org-thread-ask" answer={<ThreadLetterAnswer t={t} />} tools={<ThreadTools t={t} snoozed={snoozed} state={state} pinned={pinned} />} />}
-      {needs && !heldItem && !letter && <NeedsAnswer t={t} owner={owner} onFollowUp={onFollowUp} snoozed={snoozed} state={state} pinned={pinned} />}
+      {choice && !letter && <AskCardFrame testId="org-thread-choice-card" className="org-thread-ask" answer={<ThreadChoiceAnswer t={t} />} tools={<ThreadTools t={t} snoozed={snoozed} state={state} pinned={pinned} />} />}
+      {needs && !heldItem && !letter && !choice && <NeedsAnswer t={t} owner={owner} onFollowUp={onFollowUp} snoozed={snoozed} state={state} pinned={pinned} />}
       {chips.length > 0 && <TaskChips ids={chips} tasks={tasks} />}
       {/* The card is its title and summary: the new answers fold behind one line until a click
           (2026-11-08, the user: "the history should all be collapsed unless I click to expand"). */}
@@ -567,7 +472,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
       {!oneCard && letter && <ThreadLetterAnswer t={t} />}
       {/* A card waiting on him answers in the ask card's row above (its own box and Snooze, or the
           held ask's): none of them twice, and no Acknowledge. */}
-      {needs ? null : (<>
+      {needs || choice ? null : (<>
         {onFollowUp && !closed && !letter ? (
           <FollowUp threadId={t.id} title={t.title} owner={owner} onSend={(text, images) => onFollowUp(t.id, text, images)} />
         ) : null}
@@ -599,11 +504,13 @@ export function ThreadItem({ t, all, shared, tasks, state, onFollowUp, name, now
     : <ThreadCard t={t} all={all} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={now} snoozed={snoozed} owner={owner} focused={focused} />;
 }
 
-export function OrgThreads({ name, owner, state, tasks, onFollowUp, now }: Props) {
+export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState = false }: Props) {
   // Whether the week's closed threads are open stays as it was left (utils/view-memory.ts).
   const [showClosed, setShowClosed] = usePageView('org', 'threads.showClosed', false, isBoolean);
   const [showHidden, setShowHidden] = usePageView('org', 'threads.showInProgress', false, isBoolean);
   const [showSnoozed, setShowSnoozed] = usePageView('org', 'threads.showSnoozed', false, isBoolean);
+  const [groupFlips, setGroupFlips] = usePageView<ThreadGroup[]>('org', 'threads.groupFlips', [], isThreadGroups);
+  const flipGroup = (g: ThreadGroup) => setGroupFlips((f) => (f.includes(g) ? f.filter((x) => x !== g) : [...f, g]));
   const all = state.threads;
   const needsFirst = useExperimental('top_thread');
   const shared = useMemo(() => sharedAnswers(all ?? []), [all]);
@@ -634,7 +541,13 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now }: Props
   // A chat message's thread line asked for one of these (thread-focus.ts): its section opens, and
   // it is brought into view and marked a moment.
   const rootRef = useRef<HTMLDivElement>(null);
+  const groups = useMemo(() => (byState ? groupThreads(all ?? [], clock) : null), [byState, all, clock]);
   const focused = useFocusedThread(owner?.id, all, rootRef, (t) => {
+    if (groups) {
+      const g = THREAD_GROUPS.find((x) => groups[x].some((y) => y.id === t.id));
+      if (g && !groupOpen(g, groupFlips)) flipGroup(g);
+      return;
+    }
     if (t.closed) setShowClosed(true);
     else if (snoozedIds.has(t.id)) setShowSnoozed(true);
     else if (hidden.some((x) => x.id === t.id)) setShowHidden(true);
@@ -645,6 +558,8 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now }: Props
       <ThreadsTopicBar owner={owner} />
       {state.error && <p className="org-thread-error" data-testid="org-threads-error">{state.error}</p>}
       {all === null && !state.error && <p className="org-threads-empty" aria-busy="true">Loading…</p>}
+      {groups && all !== null && <OrgThreadsByState groups={groups} flipped={groupFlips} onFlip={flipGroup} card={card} name={name} />}
+      {!groups && (<>
       {all !== null && !open.length && (
         <p className="org-threads-empty" data-testid="org-threads-empty">
           {hidden.length || snoozed.length
@@ -671,6 +586,7 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now }: Props
         </button>
       )}
       {showClosed && closed.length > 0 && <ul className="org-thread-list" data-testid="org-thread-list-closed" data-show="closed">{closed.map(card)}</ul>}
+      </>)}
     </div>
   );
 }

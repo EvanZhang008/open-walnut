@@ -36,7 +36,7 @@ export const BRIEF_REFRESH_SOURCE = 'brief-refresh';
 
 export type BriefRefreshSkip =
   | 'not_org_node' | 'complete' | 'no_brief' | 'fresh' | 'recent' | 'running'
-  | 'no_session' | 'team_stopped' | 'snoozed' | 'in_flight' | 'not_delivered' | 'not_found' | 'org_off';
+  | 'no_session' | 'team_stopped' | 'snoozed' | 'in_flight' | 'not_delivered' | 'not_found' | 'org_off' | 'brief_off';
 
 export interface BriefRefreshResult {
   sent: boolean;
@@ -171,6 +171,8 @@ export async function requestBriefRefresh(taskId: string, by: BriefRefreshRecord
   // The org is off (org/org-enabled.ts): no node is asked for a refresh turn.
   const { isOrgEnabled } = await import('../org/org-enabled.js');
   if (!(await isOrgEnabled())) return { sent: false, why: 'org_off' };
+  // The Brief is off (org/brief-off.ts): there is no letter to bring up to date.
+  if (await (await import('../org/brief-off.js')).briefOffOn()) return { sent: false, why: 'brief_off' };
   inFlight.add(taskId);
   try {
     const { getTask, listTasks, updateTaskRaw } = await import('../task-manager.js');
