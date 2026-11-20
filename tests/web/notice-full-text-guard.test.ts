@@ -68,7 +68,7 @@ const KINDS: Record<string, { file: string; how: string; check: (src: string, cs
     how: 'the reply\'s first line two lines long; a click opens the whole reply, which scrolls',
     check: (src) => {
       expect(src).toContain('onOpen={() => onToggle(r.id)}');
-      expect(src).toContain('className="qb-receipt-reply" text={r.reply}');
+      expect(src).toMatch(/<AgentText text=\{r\.reply\} className="qb-receipt-reply"/);
       expect(read('web/src/styles/quickbar.css')).toMatch(/\.qb-receipt-reply \{[^}]*overflow-y: auto/);
     },
   },

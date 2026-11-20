@@ -71,8 +71,6 @@ const SURFACES: Record<string, 'hook' | 'fallback' | 'renderer'> = {
   'components/org/OrgThreads.tsx': 'hook',
   // A task's thread listed above it (threads_pop_up): AgentText opens the summary's paths from its writer.
   'components/org/PoppedThreadCard.tsx': 'renderer',
-  // The quick bar's receipt in the corner stack: AgentText opens the reply's paths (no writer recorded).
-  'components/quickbar/QuickBarReceipts.tsx': 'renderer',
   'components/triage/TriagePanel.tsx': 'hook',
   'components/inbox/LetterView.tsx': 'hook',
   'components/inbox/LetterCardBody.tsx': 'hook',
