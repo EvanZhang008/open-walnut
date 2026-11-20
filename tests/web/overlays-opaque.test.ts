@@ -24,7 +24,7 @@ const WEB = path.resolve(__dirname, '../../web/src');
 const STYLES = path.join(WEB, 'styles');
 
 /** The legible glass's own classes: the material, never an overlay. */
-const GLASS_CLASSES = ['wn-glass', 'wn-glass-fill'];
+const GLASS_CLASSES = ['wn-glass', 'wn-glass-fill', 'wn-glass-frost'];
 /** The overlays that take the legible glass, with why each one may. */
 const GLASS_OVERLAYS: Record<string, string> = {
   'cal-create-popover': 'the calendar\'s new-item popover beside the block it creates',
@@ -40,6 +40,8 @@ const GLASS_OVERLAYS: Record<string, string> = {
 };
 /** The tint floor: the raised surface's share of the glass. */
 const GLASS_TINT_MIN = 84;
+/** The frosted glass's floor: see-through by the user's ask (2026-11-20), over a 36 px blur or more. */
+const FROST_TINT_MIN = 55;
 
 function files(dir: string, ext: string): string[] {
   const out: string[] = [];
@@ -241,6 +243,27 @@ describe('the legible glass stays legible, and only where it is listed', () => {
       const px = Number(m[1].match(/blur\((\d+)px\)/)?.[1] ?? 0);
       expect(px, m[1]).toBeGreaterThanOrEqual(20);
     }
+  });
+
+  it('the frosted glass (the quick bar, the notices) is more see-through, so it blurs harder', () => {
+    // 2026-11-20, the user asked for frosted glass: words behind must still never read through.
+    const tints = [...allCss.matchAll(/--glass-frost-bg\s*:\s*([^;]+);/g)].map((m) => m[1].trim());
+    expect(tints.length).toBeGreaterThan(0);
+    for (const t of tints) {
+      const m = t.match(/^color-mix\(in srgb,\s*(.+?)\s+(\d+(?:\.\d+)?)%\s*,\s*transparent\)$/);
+      expect(m, t).not.toBeNull();
+      expect(seeThrough(m![1]), `the tinted surface itself is solid: ${t}`).toBe(false);
+      expect(Number(m![2]), t).toBeGreaterThanOrEqual(FROST_TINT_MIN);
+    }
+    for (const m of allCss.matchAll(/--glass-frost-blur\s*:\s*([^;]+);/g)) {
+      const px = Number(m[1].match(/blur\((\d+)px\)/)?.[1] ?? 0);
+      expect(px, m[1]).toBeGreaterThanOrEqual(36);
+    }
+    const blocks = [...glassCss.matchAll(/@supports[^{]*backdrop-filter[^{]*\{((?:[^{}]*\{[^{}]*\})+)\s*\}/g)].map((m) => m[1]);
+    const outside = blocks.reduce((css, b) => css.replace(b, ''), allCss);
+    const painted = [...outside.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter((m) => /background(?:-color)?\s*:\s*var\(--glass-frost-bg\)/.test(m[2]));
+    expect(painted.map((m) => m[1].trim()), 'the frost tint is painted outside its @supports block').toEqual([]);
+    expect(blocks.join('\n')).toMatch(/backdrop-filter\s*:\s*var\(--glass-frost-blur\)/);
   });
 
   it('it is see-through only where the engine blurs, and solid with Reduce transparency or on a low-end device', () => {

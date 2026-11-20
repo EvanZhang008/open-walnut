@@ -1,5 +1,5 @@
 /* The quick bar (web/src/components/quickbar/): a floating bar in the Spotlight spirit, the
-   legible glass (wn-glass, overlay-glass.css) over the page, and in the Mac app's panel the
+   frosted glass (wn-glass-frost, overlay-glass.css) over the page, and in the Mac app's panel the
    system's own glass behind a page that paints nothing (.qb-panel-doc). */
 
 .qb-layer {
@@ -13,11 +13,12 @@
   position: fixed;
   inset: 0;
   pointer-events: auto;
-  background: rgba(0, 0, 0, 0.12);
+  /* Light: the page stays in colour behind the frost. */
+  background: rgba(0, 0, 0, 0.06);
   animation: qb-fade 140ms ease-out;
 }
 
-:root[data-theme="dark"] .qb-scrim { background: rgba(0, 0, 0, 0.32); }
+:root[data-theme="dark"] .qb-scrim { background: rgba(0, 0, 0, 0.2); }
 
 .qb-center {
   position: fixed;

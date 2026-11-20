@@ -147,6 +147,40 @@ html .wn-glass {
   box-shadow: inset 0 1px 0 var(--glass-legible-highlight), var(--glass-legible-shadow);
 }
 
+/* --- Frosted glass: the quick bar and the notices (2026-11-20, the user: "can it be glass,
+   frosted glass like that?"). More see-through than the legible glass: the page shows through as
+   colour and shapes, never as words, under a heavier blur. The same rules hold: portalled to
+   <body> only, listed in GLASS_OVERLAYS, solid without blur support, with Reduce transparency
+   and on a low-end device. One set of values for every surface that takes it (`wn-glass-frost`). */
+html:root {
+  --glass-frost-bg: color-mix(in srgb, var(--bg-elevated, var(--card-bg)) 62%, transparent);
+  --glass-frost-blur: blur(40px) saturate(1.9);
+  --glass-frost-border: rgba(255, 255, 255, 0.55);
+  --glass-frost-highlight: rgba(255, 255, 255, 0.8);
+  --glass-frost-shadow: 0 22px 60px rgba(0, 0, 0, 0.2), 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+html:root[data-theme="dark"] {
+  --glass-frost-bg: color-mix(in srgb, var(--bg-elevated, var(--card-bg)) 58%, transparent);
+  --glass-frost-border: rgba(255, 255, 255, 0.16);
+  --glass-frost-highlight: rgba(255, 255, 255, 0.14);
+  --glass-frost-shadow: 0 22px 60px rgba(0, 0, 0, 0.55), 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+
+@media (prefers-color-scheme: dark) {
+  html:root:not([data-theme]) {
+    --glass-frost-bg: color-mix(in srgb, var(--bg-elevated, var(--card-bg)) 58%, transparent);
+    --glass-frost-border: rgba(255, 255, 255, 0.16);
+    --glass-frost-highlight: rgba(255, 255, 255, 0.14);
+    --glass-frost-shadow: 0 22px 60px rgba(0, 0, 0, 0.55), 0 2px 10px rgba(0, 0, 0, 0.4);
+  }
+}
+
+html .wn-glass-frost {
+  border: 1px solid var(--glass-frost-border);
+  box-shadow: inset 0 1px 0 var(--glass-frost-highlight), var(--glass-frost-shadow);
+}
+
 @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) and (background: color-mix(in srgb, red 50%, transparent)) {
   html .wn-glass,
   html .wn-glass.wn-glass,
@@ -154,6 +188,12 @@ html .wn-glass {
     background: var(--glass-legible-bg);
     -webkit-backdrop-filter: var(--glass-legible-blur);
     backdrop-filter: var(--glass-legible-blur);
+  }
+
+  html .wn-glass-frost.wn-glass-frost {
+    background: var(--glass-frost-bg);
+    -webkit-backdrop-filter: var(--glass-frost-blur);
+    backdrop-filter: var(--glass-frost-blur);
   }
 }
 
@@ -164,7 +204,8 @@ html .wn-glass {
 @media (prefers-reduced-transparency: reduce) {
   html .wn-glass,
   html .wn-glass.wn-glass,
-  html .wn-glass-fill.wn-glass-fill {
+  html .wn-glass-fill.wn-glass-fill,
+  html .wn-glass-frost.wn-glass-frost {
     background: var(--bg-elevated, var(--card-bg));
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
@@ -172,7 +213,8 @@ html .wn-glass {
 }
 
 html[data-glass="solid"] .wn-glass.wn-glass,
-html[data-glass="solid"] .wn-glass-fill.wn-glass-fill {
+html[data-glass="solid"] .wn-glass-fill.wn-glass-fill,
+html[data-glass="solid"] .wn-glass-frost.wn-glass-frost {
   background: var(--bg-elevated, var(--card-bg));
   -webkit-backdrop-filter: none;
   backdrop-filter: none;

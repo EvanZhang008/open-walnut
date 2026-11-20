@@ -74,7 +74,7 @@ function QuickBarOverlay() {
   return createPortal(
     <div className="qb-layer" data-open={open ? 'true' : 'false'}>
       {open && <div className="qb-scrim" onMouseDown={() => barRef.current?.close()} />}
-      <div className="qb-center wn-glass" hidden={!open}>
+      <div className="qb-center wn-glass-frost" hidden={!open}>
         <QuickBar ref={barRef} surface="overlay" onClose={() => setOpen(false)} onSend={onSend} />
       </div>
       <QuickBarReceipts floating receipts={receipts} onOpenChat={openChat} onPutBack={putBack} onToggle={toggleOpen} onDismiss={dismiss} onPin={pin} />
