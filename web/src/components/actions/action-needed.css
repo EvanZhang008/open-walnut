@@ -84,3 +84,15 @@
 .action-needed-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 
 .action-needed-approval .org-answer-words, .action-needed-approval .org-answer-note, .action-needed-approval .org-answer-error { flex-basis: 100%; }
+
+/* A phone: every control of an item is a finger's size, 44 px (phone-pages.css, the home rows). */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .action-needed :is(button, [role='button'], a[href], input:not([type='hidden']), textarea, select) {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  /* And every word is readable there, 12 px at least (the phone's floor, findSmallText). */
+  .app-shell-navigation .action-needed :is(.action-needed-title, .action-needed-kind, .action-needed-ago, .action-needed-until,
+    .action-needed-more, .org-answer-other, .org-answer-note, .org-answer-error),
+  .app-shell-navigation .status-card-also-working { font-size: 12px; }
+}
