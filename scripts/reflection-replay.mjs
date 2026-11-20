@@ -53,9 +53,24 @@ const { replyLanguageText } = await import(src('core/sessions/output-mode.ts'));
 const YAML = (await import('yaml')).default;
 
 // ── The home's data, read-only ──
-const tasks = readJson(path.join(homeAbs, 'tasks', 'tasks.json'), null)?.tasks;
+// Tasks live in tasks/tasks.sqlite (tasks.json only on old homes): read a copy of the database
+// (with its WAL, so the newest rows are in it), never the live file.
+async function readTasks() {
+  const db = path.join(homeAbs, 'tasks', 'tasks.sqlite');
+  if (fs.existsSync(db) && fs.statSync(db).size > 0) {
+    const copy = path.join(scratch, 'tasks-copy.sqlite');
+    fs.copyFileSync(db, copy);
+    for (const ext of ['-wal', '-shm']) if (fs.existsSync(db + ext)) fs.copyFileSync(db + ext, copy + ext);
+    const Database = (await import(src('lib/sqlite.ts'))).default;
+    const { rowToTask } = await import(src('core/task-db.ts'));
+    const handle = new Database(copy);
+    try { return handle.prepare('SELECT * FROM tasks').all().map(rowToTask); } finally { handle.close(); }
+  }
+  return readJson(path.join(homeAbs, 'tasks', 'tasks.json'), null)?.tasks;
+}
+const tasks = await readTasks();
 if (!Array.isArray(tasks)) {
-  process.stderr.write(`no tasks in ${path.join(homeAbs, 'tasks', 'tasks.json')}\n`);
+  process.stderr.write(`no tasks in ${path.join(homeAbs, 'tasks')}\n`);
   process.exit(1);
 }
 const config = (() => { try { return YAML.parse(readText(path.join(homeAbs, 'config.yaml'))) ?? {}; } catch { return {}; } })();
