@@ -18,7 +18,7 @@
  */
 import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
-import type { StatusReport } from '../user-status.js';
+import { OUTSIDE_WAIT_KINDS, waitWordsNameUser, type StatusReport } from '../user-status.js';
 import { cutEnd } from '../text-cut.js';
 import { keepsThreads } from '../org/keeps-threads.js';
 import { sortedThreads, THREAD_TITLE_MAX, type OrgThread, type ThreadPatch, type ThreadsFile } from '../org/threads-model.js';
@@ -68,7 +68,9 @@ export async function threadQuestionFor(task: Pick<Task, 'id' | 'org_role' | 'th
   if (!asksThreads(task)) return { block: '', refs: new Map() };
   try {
     const { readThreads } = await import('../org/threads-store.js');
-    const open = sortedThreads((await readThreads(task.id)).threads).filter((t) => !t.closed);
+    // A thread waiting on him (needs) is his to move, by his answer or the task's own thread_update:
+    // it is not asked, so no line can take it out of his sight (review round 1).
+    const open = sortedThreads((await readThreads(task.id)).threads).filter((t) => !t.closed && t.state !== 'needs');
     return threadQuestionBlock(open, langName);
   } catch {
     return { block: '', refs: new Map() };
@@ -132,7 +134,12 @@ export function settleStateFromThreads(report: StatusReport): StatusReport {
   const lines = [...(report.threads ?? []), ...(report.threads_new ?? [])];
   if (!lines.length) return report;
   if ((report.state === 'needs' && report.ask?.trim()) || report.kindless_ask) return report;
-  if (report.state === 'waiting' && report.waiting_kind === 'you') return report;
+  // A turn that answered his message keeps answered_person beside this state (status-question.ts):
+  // it reads "the answer to read; then it waits on: ..." until he writes again or its next turn of
+  // its own parks it (user-status.ts), so the answer is his to read first (2026-10-31, the user: "I
+  // have not even read it and it is put into wait") and the wait is named (review round 1).
+  // A wait that names him, by its kind or its words, is his (report-phase.ts phaseForReport).
+  if (report.state === 'waiting' && (report.waiting_kind === 'you' || waitWordsNameUser(report.waiting_on, !!report.waiting_kind && OUTSIDE_WAIT_KINDS.has(report.waiting_kind)))) return report;
   // Its own work going on is working already, in its own words.
   if (report.state === 'working' || (report.state === 'waiting' && report.waiting_kind === 'own')) return report;
   if (lines.some((l) => l.state === 'working')) return asState(report, 'working');
@@ -153,9 +160,9 @@ const TARGET: Record<Exclude<ThreadLineState, 'done'>, OrgThread['state']> = { w
 
 /** The write one line makes on its thread, or null for none. Pure. */
 export function patchForLine(t: OrgThread, line: StatusThreadLine): ThreadPatch | null {
-  if (t.closed) return null;
-  // A thread waiting on him stays his until it is answered or settled: a line never hides his ask.
-  if (t.state === 'needs' && (line.state === 'working' || line.state === 'waiting')) return null;
+  // A thread waiting on him stays his until he answers or the task settles it with thread_update:
+  // no line moves it, whatever it says (it may have moved into needs since the question was asked).
+  if (t.closed || t.state === 'needs') return null;
   const reply = line.progress;
   if (line.state === 'done') {
     // A subject the task opened itself ends closed; his own request is answered, and he closes it.

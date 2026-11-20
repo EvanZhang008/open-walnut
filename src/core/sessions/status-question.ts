@@ -77,8 +77,6 @@ async function saveStatusAnswer(
   // Its thread lines set its state when its own words did not (status-threads.ts), and go to its
   // threads once the report is stored: they are never part of it.
   const { settleStateFromThreads, applyThreadLines } = await import('./status-threads.js');
-  const { threads: threadLines, threads_new: threadsNew, ...settled } = settleStateFromThreads(report);
-  report = settled;
   // Whether this turn answered a person's message: such a turn never parks the task (report-phase.ts).
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const { turnAnsweredPerson } = await import('./report-phase.js');
@@ -86,8 +84,10 @@ async function saveStatusAnswer(
   // Asked inside a running turn (a watch, task-watch.ts): no turn ended, so the last turn's end
   // stays the boundary, and that turn's end asks again.
   const prev = current.status_report;
-  // A state its threads set leaves what it answered on those threads: the task itself reads where it stands.
-  const answered = report.from_threads ? false : opts.midTurn ? !!prev?.answered_person : turnAnsweredPerson(rec?.humanInputAt, turnEndedMs, prev);
+  const answered = opts.midTurn ? !!prev?.answered_person : turnAnsweredPerson(rec?.humanInputAt, turnEndedMs, prev);
+  // answered_person is kept beside a state its threads set: the answer is his to read first.
+  const { threads: threadLines, threads_new: threadsNew, ...settled } = settleStateFromThreads(report);
+  report = settled;
   const endedAt = opts.midTurn ? prev?.turn_ended_at : new Date(turnEndedMs).toISOString();
   // The writer is the session asked, recorded here; a session_id the parsed answer carried is dropped.
   report = { ...report, rule: STATUS_RULE_VERSION, ...(endedAt ? { turn_ended_at: endedAt } : {}), ...(answered ? { answered_person: true } : {}), session_id: sessionId };

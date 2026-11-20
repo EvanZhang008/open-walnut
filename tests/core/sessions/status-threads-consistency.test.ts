@@ -157,3 +157,32 @@ describe('the write each line makes', () => {
     expect(patchForLine({ ...base, state: 'working' }, { id: base.id, title: base.title, state: 'done', progress: 'The fence is up.' })).toEqual({ state: 'answered', reply: 'The fence is up.' })
   })
 })
+
+// Review round 1 of a4a6d630c: four ways a line could hide what waits on him.
+describe('a thread line never hides what waits on the user', () => {
+  const line = (state: ThreadLineState) => ({ ref: 't1', id: 'th-aaaaaa09', title: 'Pick the apple variety', state, progress: 'Asked at the stand' })
+  const needs = { id: 'th-aaaaaa09', title: 'Pick the apple variety', state: 'needs', messages: [], createdAt: '2026-11-20T10:00:00Z', updatedAt: '2026-11-20T10:00:00Z', opener: { text: 'x', at: '2026-11-20T10:00:00Z', from: 'node', by: 'agent' } } as never
+
+  it('no line state moves a thread in needs, not even done or answered', () => {
+    for (const s of STATES) expect(patchForLine(needs, line(s) as never), s).toBeNull()
+  })
+
+  it('a thread in needs is not asked about', () => {
+    const { refs: listed } = threadQuestionBlock([...THREADS, { id: 'th-aaaaaa09', title: 'Pick the apple variety', state: 'needs' as const }].filter((t) => t.state !== 'needs'))
+    expect([...listed.values()].some((v) => v.id === 'th-aaaaaa09')).toBe(false)
+  })
+
+  it('a wait whose words name him keeps its state, whatever its kind', () => {
+    const report = { state: 'waiting', at: '2026-11-20T17:59:00Z', waiting_kind: 'other', waiting_on: 'your review of the tray order', threads: [line('working')] } as never
+    expect(settleStateFromThreads(report)).toBe(report)
+  })
+
+  it('a turn that answered him reads its answer first, then names what it waits on', () => {
+    const at = new Date(NOW - 60_000).toISOString()
+    const { threads: _t, threads_new: _n, ...settled } = settleStateFromThreads({ state: 'needs', at, threads: [line('waiting')] } as never)
+    expect(settled.state).toBe('waiting')
+    const s = deriveUserStatus({ phase: 'NEED_ACTION', hasSession: true, processStatus: 'idle', phaseChangedAt: new Date(NOW - 120_000).toISOString(), report: { ...settled, answered_person: true } }, NOW)
+    expect(s.state).toBe('read')
+    expect(s.waitingOn ?? '').toContain('Pick the apple variety')
+  })
+})

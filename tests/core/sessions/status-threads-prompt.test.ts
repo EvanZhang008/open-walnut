@@ -57,7 +57,8 @@ afterAll(async () => { await fs.rm(WALNUT_HOME, { recursive: true, force: true }
 describe('the status question lists the task\'s threads', () => {
   it('every open thread in the file is in the prompt by its ref, a closed one is not', async () => {
     const { block, refs } = await threadQuestionFor({ id: TASK, threads_on: true })
-    const open = FIXTURE.filter((t) => !t.closed)
+    // A thread waiting on him is his to move: never asked (review round 1).
+    const open = FIXTURE.filter((t) => !t.closed && t.state !== 'needs')
     expect(refs.size).toBe(open.length)
     for (const t of open) {
       const ref = [...refs.entries()].find(([, v]) => v.id === t.id)?.[0]
