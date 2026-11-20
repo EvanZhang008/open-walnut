@@ -584,16 +584,23 @@ export function registerSessionChatRpc(): void {
       if (record && (record.process_status === 'idle' || record.process_status === 'stopped' || record.process_status === 'error')) {
         forceIdle = true
       } else if (record && record.process_status === 'running') {
-        // The newer of the two clocks. `last_status_change` is stamped only by a
-        // classification verdict, so a resume (idle → running through the
-        // runner's un-stamped write) left it at the previous turn's end, and the
-        // first turn after five quiet minutes read as stale: no `Answering…`
-        // until the first delta. `statusUpdatedAt` moves on every status change.
-        const lastChangeMs = Math.max(
+        // Only a buffer that claims a turn has anything to correct: a running record whose buffer
+        // already says no turn (a session kept running between turns by its own background work)
+        // answers isStreaming=false as it is, with no warning (2026-11-20: 77 of 83 of these
+        // warnings corrected nothing).
+        const evidenceAt = sessionStreamBuffer.streamingEvidenceAt(sid)
+        // The newest sign of life. `last_status_change` is stamped only by a classification
+        // verdict, so a resume (idle → running through the runner's un-stamped write) left it at
+        // the previous turn's end; `statusUpdatedAt` moves on every status change. Neither moves
+        // when a session stays `running` across turns, so the buffer's own evidence (the turn's
+        // markStreaming, its last delta) counts too: without it a new turn of such a session,
+        // or one streaming for over five minutes, read as stale and showed no `Answering…`.
+        const lastLiveMs = evidenceAt == null ? 0 : Math.max(
+          evidenceAt,
           record.last_status_change ? Date.parse(record.last_status_change) || 0 : 0,
           record.statusUpdatedAt ? Date.parse(record.statusUpdatedAt) || 0 : 0,
         )
-        if (lastChangeMs > 0 && Date.now() - lastChangeMs > STALE_RUNNING_MS) {
+        if (lastLiveMs > 0 && Date.now() - lastLiveMs > STALE_RUNNING_MS) {
           // A turn blocked on a permission prompt / AskUserQuestion is live for
           // as long as the human takes to answer: hours, not minutes. The
           // stale rule exists for a record nothing will ever advance (server
@@ -603,13 +610,19 @@ export function registerSessionChatRpc(): void {
           if (pending.length > 0) {
             log.web.info('stale running on subscribe kept (pending permission)', {
               sessionId: sid,
-              staleMs: Date.now() - lastChangeMs,
+              staleMs: Date.now() - lastLiveMs,
               pendingCount: pending.length,
             })
+          } else if ((sessionStreamBuffer.streamingEvidenceAt(sid) ?? 0) > (evidenceAt ?? 0)) {
+            // A new turn's markStreaming (or a delta) landed during the await: live after all.
           } else {
+            // A buffer stuck on "streaming": something re-arming markStreaming or a late delta
+            // would refresh its evidence, so only five quiet minutes of the buffer itself end it
+            // here; the idle/stopped/error branch above and the result handlers' markDone stay
+            // the other bounds.
             log.web.warn('stale running on subscribe (read-only, no buffer mutation)', {
               sessionId: sid,
-              staleMs: Date.now() - lastChangeMs,
+              staleMs: Date.now() - lastLiveMs,
             })
             forceIdle = true
           }

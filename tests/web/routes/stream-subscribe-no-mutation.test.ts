@@ -26,6 +26,7 @@ import { WALNUT_HOME } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
 import { createSessionRecord, updateSessionRecord } from '../../../src/core/session-tracker.js'
 import { sessionStreamBuffer } from '../../../src/web/session-stream-buffer.js'
+import { log } from '../../../src/logging/index.js'
 import WebSocket from 'ws'
 
 let server: HttpServer
@@ -114,9 +115,10 @@ describe('session:stream-subscribe RPC — read-only invariant', () => {
     // Set and `buffers` Map directly because the public API (markDone/clear)
     // is designed to be called from lifecycle events only; a test-only
     // reset helper doesn't exist.
-    const anyBuffer = sessionStreamBuffer as unknown as { streaming: Set<string>; buffers: Map<string, unknown> }
+    const anyBuffer = sessionStreamBuffer as unknown as { streaming: Set<string>; buffers: Map<string, unknown>; markedStreamingAt: Map<string, number> }
     anyBuffer.streaming.clear()
     anyBuffer.buffers.clear()
+    anyBuffer.markedStreamingAt.clear()
   })
 
   it('does NOT mutate buffer isStreaming when DB record is stale-terminal', async () => {
@@ -185,14 +187,13 @@ describe('session:stream-subscribe RPC — read-only invariant', () => {
     const taskId = 'task-stale-run-1'
     await seedTask(taskId)
 
-    // Running since ten minutes ago on both status clocks, nothing since: an
-    // orphaned running record.
+    // Running since ten minutes ago on both status clocks, and the buffer's turn
+    // started then too with nothing since: a turn nothing will ever end.
     await inThePast(10 * 60 * 1000, async () => {
       await createSessionRecord(sid, taskId, 'StreamSubscribe', undefined, { mode: 'bypass', initialProcessStatus: 'idle' })
       await updateSessionRecord(sid, { process_status: 'running', last_status_change: new Date().toISOString() })
+      sessionStreamBuffer.markStreaming(sid)
     })
-
-    sessionStreamBuffer.markStreaming(sid)
     expect((sessionStreamBuffer as unknown as { streaming: Set<string> }).streaming.has(sid)).toBe(true)
 
     const ws = await openWs()
@@ -234,10 +235,9 @@ describe('session:stream-subscribe RPC — read-only invariant', () => {
           receivedAt: twoHoursAgo,
         },
       })
+      sessionStreamBuffer.markStreaming(sid)
+      sessionStreamBuffer.appendPermission(sid, 'req-stale-ask', 'AskUserQuestion', { questions: [] })
     })
-
-    sessionStreamBuffer.markStreaming(sid)
-    sessionStreamBuffer.appendPermission(sid, 'req-stale-ask', 'AskUserQuestion', { questions: [] })
 
     const ws = await openWs()
     try {
@@ -320,5 +320,75 @@ describe('session:stream-subscribe RPC — read-only invariant', () => {
     } finally {
       ws.close()
     }
+  })
+  // 2026-11-20 (alarm log.spike on "stale running on subscribe"): a session its own background
+  // work keeps `running` between turns never moves its status clocks, so the stale rule judged
+  // every subscribe of it by the turn that started it, hours back. 77 of 83 warnings corrected a
+  // buffer that already said no turn; the rest hid a live turn's `Answering…`. Each test below is
+  // one shape of that record: running, status clocks an hour old.
+  async function seedRunningSinceAnHour(sid: string, taskId: string): Promise<void> {
+    await seedTask(taskId)
+    await inThePast(60 * 60 * 1000, async () => {
+      await createSessionRecord(sid, taskId, 'StreamSubscribe', undefined, { mode: 'bypass', initialProcessStatus: 'idle' })
+      await updateSessionRecord(sid, { process_status: 'running', last_status_change: new Date().toISOString() })
+    })
+  }
+
+  async function subscribeWatchingWarnings(sid: string): Promise<{ isStreaming: boolean; staleWarnings: number }> {
+    const warn = vi.spyOn(log.web, 'warn')
+    const ws = await openWs()
+    try {
+      const snapshot = await rpcCall(ws, 'session:stream-subscribe', { sessionId: sid }) as { isStreaming: boolean }
+      const staleWarnings = warn.mock.calls.filter(([m]) => String(m).startsWith('stale running on subscribe')).length
+      return { isStreaming: snapshot.isStreaming, staleWarnings }
+    } finally {
+      warn.mockRestore()
+      ws.close()
+    }
+  }
+
+  it('a running record whose buffer holds no turn answers not streaming, with no warning', async () => {
+    const sid = 'sid-running-between-turns-1'
+    await seedRunningSinceAnHour(sid, 'task-running-between-turns-1')
+    // The last turn ended (markDone) while its background subagent runs on.
+    sessionStreamBuffer.markStreaming(sid)
+    sessionStreamBuffer.appendTextDelta(sid, 'started a background check')
+    sessionStreamBuffer.markDone(sid)
+
+    expect(await subscribeWatchingWarnings(sid)).toEqual({ isStreaming: false, staleWarnings: 0 })
+    // Never marked at all: the same answer, the same silence.
+    expect(await subscribeWatchingWarnings('sid-running-never-marked-1')).toEqual({ isStreaming: false, staleWarnings: 0 })
+  })
+
+  it('a new turn of a session kept running across turns is live: its markStreaming is the evidence', async () => {
+    const sid = 'sid-running-new-turn-1'
+    await seedRunningSinceAnHour(sid, 'task-running-new-turn-1')
+    // A message was just sent; the record stays running, so no clock moved.
+    sessionStreamBuffer.markStreaming(sid)
+
+    expect(await subscribeWatchingWarnings(sid)).toEqual({ isStreaming: true, staleWarnings: 0 })
+  })
+
+  it('a turn streaming for longer than five minutes is live while its deltas arrive', async () => {
+    const sid = 'sid-running-long-turn-1'
+    await seedRunningSinceAnHour(sid, 'task-running-long-turn-1')
+    await inThePast(10 * 60 * 1000, async () => {
+      sessionStreamBuffer.markStreaming(sid)
+    })
+    sessionStreamBuffer.appendTextDelta(sid, 'still working')
+
+    expect(await subscribeWatchingWarnings(sid)).toEqual({ isStreaming: true, staleWarnings: 0 })
+  })
+
+  it('a turn whose buffer saw nothing for five minutes is corrected, and that correction is warned', async () => {
+    const sid = 'sid-running-stuck-buffer-1'
+    await seedRunningSinceAnHour(sid, 'task-running-stuck-buffer-1')
+    await inThePast(10 * 60 * 1000, async () => {
+      sessionStreamBuffer.markStreaming(sid)
+      sessionStreamBuffer.appendTextDelta(sid, 'the result of this turn never arrived')
+    })
+
+    expect(await subscribeWatchingWarnings(sid)).toEqual({ isStreaming: false, staleWarnings: 1 })
+    expect((sessionStreamBuffer as unknown as { streaming: Set<string> }).streaming.has(sid)).toBe(true)
   })
 })

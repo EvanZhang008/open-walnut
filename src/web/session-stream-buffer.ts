@@ -154,6 +154,9 @@ interface BufferEntry {
 class SessionStreamBuffer {
   private buffers = new Map<string, BufferEntry>()
   private streaming = new Set<string>()
+  /** When markStreaming last fired per session (ms): with an entry's lastActivity, the
+   *  buffer's own evidence that its turn is alive (streamingEvidenceAt). */
+  private markedStreamingAt = new Map<string, number>()
   private pruneTimer: ReturnType<typeof setInterval> | null = null
   /** Pending deferred clears (clearSoon) — cancelled when a new turn starts. */
   private pendingClears = new Map<string, ReturnType<typeof setTimeout>>()
@@ -466,6 +469,7 @@ class SessionStreamBuffer {
   markStreaming(sessionId: string): void {
     const had = this.streaming.has(sessionId)
     this.streaming.add(sessionId)
+    this.markedStreamingAt.set(sessionId, Date.now())
     // A new turn is starting — a deferred clear scheduled by the PREVIOUS
     // turn's result must not fire mid-turn (it would wipe the new turn's
     // blocks AND delete the streaming flag → blank snapshot on reload).
@@ -481,6 +485,7 @@ class SessionStreamBuffer {
   markDone(sessionId: string): void {
     const had = this.streaming.has(sessionId)
     this.streaming.delete(sessionId)
+    this.markedStreamingAt.delete(sessionId)
     const entry = this.buffers.get(sessionId)
     // Blocks are retained for cross-turn viewing but stamped as finished — the
     // next turn's first data append drops them, and getSnapshot never serves
@@ -512,11 +517,22 @@ class SessionStreamBuffer {
     log.ws.debug('stream buffer cleared', { sessionId, eventsDropped: entry?.blocks.length ?? 0 })
     this.buffers.delete(sessionId)
     this.streaming.delete(sessionId)
+    this.markedStreamingAt.delete(sessionId)
     const pending = this.pendingClears.get(sessionId)
     if (pending) {
       clearTimeout(pending)
       this.pendingClears.delete(sessionId)
     }
+  }
+
+  /** When this buffer last saw its turn alive (ms): the newer of the last markStreaming and the
+   *  last data append; null when it claims no turn. session:stream-subscribe's stale-running
+   *  read judges by this, never by the record's status clocks alone: those do not move while a
+   *  session stays `running` across turns (its own background work keeps it there), so a new
+   *  turn of such a session, or a long one, read as stale and showed no `Answering…`. */
+  streamingEvidenceAt(sessionId: string): number | null {
+    if (!this.streaming.has(sessionId)) return null
+    return Math.max(this.markedStreamingAt.get(sessionId) ?? 0, this.buffers.get(sessionId)?.lastActivity ?? 0)
   }
 
   getSnapshot(sessionId: string): StreamSnapshot {
@@ -572,6 +588,7 @@ class SessionStreamBuffer {
     this.pendingClears.clear()
     this.buffers.clear()
     this.streaming.clear()
+    this.markedStreamingAt.clear()
   }
 }
 
