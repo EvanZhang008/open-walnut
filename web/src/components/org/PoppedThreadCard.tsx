@@ -12,6 +12,7 @@ import { draftKey } from '@/utils/drafts';
 import { useOpenTask } from '@/hooks/useOpenTask';
 import { replyOnOrgThread, type OrgThread } from '@/api/org-threads';
 import { log } from '@/utils/log';
+import { randomId } from '@/utils/random-id';
 import { AgentText } from '@/components/common/AgentText';
 import { threadSummarySource } from './thread-text-source';
 import type { OrgThreadsState } from './useOrgThreads';
@@ -50,7 +51,7 @@ export function PoppedThreadCard({ node, t, state }: { node: string; t: OrgThrea
               // The reply goes as words: pictures belong in the task's own chat for now.
               if (images?.length) { setFailed(`Pictures go in ${owner.title}'s own chat: open it to send them.`); return false; }
               try {
-                key.current ??= `pr-${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`;
+                key.current ??= `pr-${randomId().replace(/-/g, '').slice(0, 24)}`;
                 await replyOnOrgThread(node, t.id, text, t.ask_id, key.current);
                 key.current = null;
                 return true;

@@ -42,6 +42,7 @@ const ALSO = ['web/src', 'packages']
 const KNOWN: Record<string, 'defines' | 'builds' | 'calls' | 'reads'> = {
   'lib/attachment-headers.ts': 'defines',
   'core/sessions/cloud-images.ts': 'builds', // withImagePaths
+  'core/org/thread-reply.ts': 'calls', // his reply on a thread below, sent to its owner with its pictures' header
   'core/sessions/session-uploads.ts': 'builds', // withFilePaths (the phone writes the same text itself)
   'core/answer-pictures.ts': 'builds', // picturesHeader (letter answers, Board threads, prompt answers)
   'web/routes/session-chat.ts': 'calls', // the web's WS send: attachmentHeaderBlock('images', …)

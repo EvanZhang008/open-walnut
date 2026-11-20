@@ -53,6 +53,7 @@ const STORE_LOCKS = new Set<string>([
   "src/core/artifacts/migrate.ts: skillsDirOf(scope, key)",     // the same scope lock, taking an older release's JSON file in
   'src/core/artifacts/migrate.ts: notesLockOf(key)',            // WALNUT_HOME/artifacts/nodes/<task>/notes.notes, as memory-folder.ts takes it
   'src/core/artifacts/node-memory.ts: file',                    // WALNUT_HOME/artifacts/nodes/<task>/MEMORY.md
+  'src/core/org/threads-sync.ts: p',                             // WALNUT_HOME/org/threads/<node>.json: the database store's JSON write-back
   'src/core/org/reflection/records.ts: file',                   // WALNUT_HOME/artifacts/nodes/<node>/guidance.md and reflections/<date>.md
   'src/core/send-relay-index.ts: file',                         // cache/send-queue/relays/<session>.json
   'src/core/session-queue-store.ts: SESSION_QUEUE_FILE',        // the session message queue (its one lock, persist)
