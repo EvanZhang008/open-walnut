@@ -111,9 +111,9 @@ function running(): CopyJob[] {
 /** A found ~/.ssh/config row of a machine that joined the host network is that machine (joined-twins.ts). */
 async function joinedRow(host: string): Promise<string> {
   if (host === LOCAL) return host
-  const [{ getConfig }, { joinedAliasOf }] = await Promise.all([import('../config-manager.js'), import('./joined-twins.js')])
+  const [{ getConfig }, { foundTwinAliasOf }] = await Promise.all([import('../config-manager.js'), import('./joined-twins.js')])
   const config = await getConfig()
-  return joinedAliasOf(config.hosts ?? {}, config.net)(host) || host
+  return foundTwinAliasOf(config.hosts ?? {}, config.net)(host) || host
 }
 
 /** One side's host: `def` when not named, else an alias or a `@tag` selector (a named found twin is its joined row). */

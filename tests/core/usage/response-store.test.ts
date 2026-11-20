@@ -155,9 +155,10 @@ describe('response-level usage storage', () => {
     await s.importHost('local', evidence([record()]), owners);
     expect(s.getOverview({}).summary.verified_calls).toBe(1);
   });
-  it('keeps the same response on different hosts separate and groups subagents once', async () => {
-    const s = store(); await s.importHost('local', evidence([{ ...record(), agentId: 'agent-one' }]), owners);
-    await s.importHost('remote', evidence([record()]), owners);
+  it('counts one response once, whichever host read it, and groups subagents once', async () => {
+    // Two names of one machine (or a session copied to another host) read the same transcript: one response, one row.
+    const s = store(); await s.importHost('local', evidence([{ ...record(), agentId: 'agent-one' }, record('reply-2')]), owners);
+    await s.importHost('remote', evidence([record('reply-2')]), owners);
     const result = s.getOverview({});
     expect(result.summary.api_calls).toBe(2);
     expect(result.byAgent.map(x => x.name).sort()).toEqual(['main', 'subagent']);

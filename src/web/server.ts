@@ -4393,6 +4393,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     })()
   }
 
+  // One machine, one host: the aliases whose daemon confirmed they are one process read as one
+  // in every list from the start (core/hosts/daemon-twins.ts).
+  if (!process.env.VITEST) void import('../core/hosts/daemon-twins.js').then((m) => m.daemonTwinsReady()).catch(() => {})
+
   // Usage & Costs: read each host's new usage every 30 min (incremental, so
   // Today stays current); the first pass waits 2 min after boot.
   if (bootPolicy('usage-collect') && !process.env.VITEST) {

@@ -78,10 +78,12 @@ export async function configuredIdentityOf(host: string): Promise<string | null>
  * `config`: check against these rows instead of config.yaml's (a caller that already holds the config).
  */
 export async function recordedSameDaemon(host: string, config?: Pick<Config, 'hosts'>): Promise<string[]> {
+  // The profile first: most aliases have no pair, and resolving an SSH row runs `ssh -G`.
+  const pairs = (await readHostProfile(host)).sameDaemon ?? {};
+  if (!Object.keys(pairs).some((other) => other !== host)) return [];
   const rows = config ? ((config.hosts ?? {}) as Record<string, HostRow>) : await rowsNow();
   const mine = rows && await linkIdentityOf(host, rows[host]);
   if (!rows || !mine) return [];
-  const pairs = (await readHostProfile(host)).sameDaemon ?? {};
   const out: string[] = [];
   for (const [other, pair] of Object.entries(pairs)) {
     if (other !== host && pair?.self === mine && pair.other === await linkIdentityOf(other, rows[other])) out.push(other);
@@ -97,32 +99,49 @@ export async function rememberSameDaemon(host: string, others: readonly string[]
   const rows = await rowsNow();
   const mine = rows && await linkIdentityOf(host, rows[host]);
   if (!rows || !mine || dialled.get(host) !== mine) return;
+  let changed = false;
+  /** The aliases confirmed here that a list of hosts can join (never this Mac's own key). */
+  const paired: string[] = [];
   for (const other of others) {
     const theirs = await linkIdentityOf(other, rows[other]);
     if (!theirs || other === host || dialled.get(other) !== theirs) continue;
+    if (other !== '__local__') paired.push(other);
     for (const [a, self, b, peer] of [[host, mine, other, theirs], [other, theirs, host, mine]] as const) {
       const key = JSON.stringify([a, self, b, peer]);
       if (written.has(key)) continue;
       const current = (await readHostProfile(a)).sameDaemon?.[b];
       if (current?.self !== self || current.other !== peer) {
         await updateHostProfile(a, (p) => { p.sameDaemon = { ...(p.sameDaemon ?? {}), [b]: { self, other: peer, at: new Date().toISOString() } }; });
+        changed = true;
       }
       written.add(key);
     }
   }
+  // Every list of hosts reads the pairs from a snapshot (daemon-twins.ts): a new pair joins the machine's names now.
+  // A pair confirmed again that the snapshot lacks (a first read that failed) is read too; one it holds costs nothing.
+  const lacking = host !== '__local__' && paired.length > 0 && !(await import('./daemon-twins.js')).daemonTwinsKnown(host, paired);
+  if (changed || lacking) void refreshTwins();
+}
+
+/** Loaded when needed: daemon-twins.ts reads this module. */
+function refreshTwins(): Promise<void> {
+  return import('./daemon-twins.js').then((m) => m.refreshDaemonTwins()).catch(() => undefined);
 }
 
 /** The two are up on different daemon processes: the pair goes from both profiles. */
 export async function forgetSameDaemon(host: string, other: string): Promise<void> {
   // Rare (two daemons where one was seen): the next confirmed pair is checked against the file again.
   written.clear();
+  let forgot = false;
   for (const [a, b] of [[host, other], [other, host]]) {
     if (!(await readHostProfile(a)).sameDaemon?.[b]) continue;
     await updateHostProfile(a, (p) => {
       const { [b]: _gone, ...rest } = p.sameDaemon ?? {};
       p.sameDaemon = rest;
     });
+    forgot = true;
   }
+  if (forgot) void refreshTwins();
 }
 
 /** Tests: forget what this server wrote. */

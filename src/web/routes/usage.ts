@@ -6,6 +6,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { DEFAULT_PRICING, PRICING_VERSION } from '../../core/usage/index.js'
 import type { UsagePeriod, UsageFilter } from '../../core/usage/types.js'
 import { reconciledOverview, collectUsage, collectionState, INCREMENTAL, responseUsageStore } from '../../core/usage/collection.js'
+import { usageMachines } from '../../core/usage/usage-machines.js'
 
 export const usageRouter = Router()
 
@@ -42,8 +43,11 @@ usageRouter.get('/costs', async (req: Request, res: Response, next: NextFunction
     const engine = typeof req.query.engine === 'string' && req.query.engine !== 'all' ? req.query.engine : undefined
     // `origin`: work Walnut started or work it did not (a bare `codex exec`, a terminal `claude`); absent counts both.
     const origin = req.query.origin === 'walnut' || req.query.origin === 'outside' ? req.query.origin : 'all'
+    const config = await getConfig()
+    // Every name of one machine counts as the machine's, and a copy of one response under two names is kept once.
+    const { machineOf } = await usageMachines(config, store.rollup)
     const report = await buildCostReport(view, { start: parseDate(req.query.start), end: parseDate(req.query.end), engine, origin }, {
-      rollup: store.rollup, db: store.database, timeZone: store.timezone, overrides: (await getConfig()).usage?.prices,
+      rollup: store.rollup, db: store.database, timeZone: store.timezone, overrides: config.usage?.prices, hostOf: machineOf,
       tasks: async (ids) => new Map((ids.length ? await listTasksByIds(ids) : []).map(t => [t.id,
         { title: t.title, project: t.project ?? '', routine: !!t.routine_start }])),
       sessions: async () => new Map((await listSessions()).map(s => [s.claudeSessionId, {

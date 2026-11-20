@@ -6,6 +6,7 @@
  * (differently) in each surface.
  */
 
+import { twinMachineLabelOf } from './daemon-twins.js'
 import type { DaemonConnectPhase, DaemonConnectState } from '../../providers/daemon-connection.js'
 import { ptyStreamMissingSentence } from './terminal-link.js'
 import { daemonUpdateHowSentence, type DaemonLinkKind } from '../../providers/daemon-update-paths.js'
@@ -207,8 +208,9 @@ export function buildHostStatus(
   readiness?: HostReadiness,
   extra: HostStatusExtra = {},
 ): HostStatus {
-  const label = hostDef.label ?? hostKey
-  if (extra.off) return offHostStatus(hostKey, hostDef, now)
+  // Another alias of a machine the person uses is named as that machine (daemon-twins.ts).
+  const label = twinMachineLabelOf(hostKey, hostDef) ?? hostDef.label ?? hostKey
+  if (extra.off) return offHostStatus(hostKey, hostDef, now, label)
   const status: HostStatus = {
     host: hostKey,
     label,
@@ -369,9 +371,9 @@ function classifyFor(message: string, hostKey: string, def: HostDef, label: stri
 }
 
 /** An ephemeral test server never dials remotes: one quiet grey frame, no error, no hint, no problems. */
-function offHostStatus(hostKey: string, def: HostDef, now: number): HostStatus {
+function offHostStatus(hostKey: string, def: HostDef, now: number, label: string): HostStatus {
   return {
-    host: hostKey, label: def.label ?? hostKey, hostname: def.hostname, ...(def.user ? { user: def.user } : {}),
+    host: hostKey, label, hostname: def.hostname, ...(def.user ? { user: def.user } : {}),
     connected: false, phase: 'off', phaseLabel: OFF_PHASE_LABEL, steps: describeConnectSteps('idle'),
     phaseElapsedMs: 0, connectElapsedMs: 0, at: now, serverNow: now, ...hostRouteFields(def),
   }

@@ -218,3 +218,13 @@ export function limitsRead(read: { incoming: string; seen: string | null; shown:
   if (read.seen === null) return { take: true, sent };
   return { take: echo < 0 && read.incoming !== read.seen && read.shown === read.seen, sent };
 }
+
+/** Another alias of the machine a row shows, and whether it is a host-network row. */
+export interface AlsoReached { alias: string; net: boolean }
+
+/** "Also over SSH as newdev": the other names this machine is reached by, in a sentence. */
+export function alsoReachedLabel(also: readonly AlsoReached[]): string {
+  const ssh = also.filter((a) => !a.net).map((a) => a.alias), net = also.filter((a) => a.net).map((a) => a.alias);
+  const parts = [ssh.length ? `over SSH as ${ssh.join(', ')}` : '', net.length ? `over the host network as ${net.join(', ')}` : ''].filter(Boolean);
+  return parts.length ? `Also ${parts.join(' and ')}` : '';
+}

@@ -2,7 +2,8 @@
  * Settings > Remote Hosts: one machine that joined with a link, a row of the list beside the
  * SSH hosts (useHostNetwork.ts): its name, its system and how this Mac reaches it, a Link
  * tag, its state line and one action (useLinkedHostRow.tsx). Remove, in its menu, also takes
- * it off the list your cloud companion keeps.
+ * it off the list your cloud companion keeps. Its other names (an SSH row of the same machine,
+ * found in ~/.ssh/config: GET /api/hosts/net `twins`) show on this row, never as rows of their own.
  */
 import type { FleetHost } from '@/api/hosts-fleet';
 import type { NetMachine, NetRelay } from '@/api/hosts-net';
@@ -11,6 +12,7 @@ import { HostDetails } from './HostDetails';
 import { HostRow } from './HostRow';
 import { useLinkedHostRow } from './useLinkedHostRow';
 import { hostRowId } from '@/utils/host-settings-nav';
+import { alsoReachedLabel, type AlsoReached } from './remote-hosts-model';
 
 /** `linux-x64` -> `Linux x86_64`. */
 export function platformLabel(p?: string): string {
@@ -29,8 +31,10 @@ export function pathLabel(m: Pick<NetMachine, 'path' | 'rttMs'>, relay: NetRelay
   return '';
 }
 
-export function NetMachineRow({ machine: m, name, relay, error, card, now, detailsOpen, onDetails, onRemove }: {
+export function NetMachineRow({ machine: m, name, relay, error, card, now, detailsOpen, onDetails, onRemove, also = [] }: {
   machine: NetMachine; name: string; relay: NetRelay; error?: string; card?: FleetHost; now: number;
+  /** The machine's other aliases (an SSH row of the same daemon), shown here instead of as rows. */
+  also?: readonly AlsoReached[];
   detailsOpen: boolean; onDetails: (open: boolean) => void; onRemove: () => void | Promise<unknown>;
 }) {
   // "Linux x86_64, direct, 31 ms": the path reads on in the platform's sentence.
@@ -43,7 +47,13 @@ export function NetMachineRow({ machine: m, name, relay, error, card, now, detai
       id={hostRowId(m.host)}
       alias={m.host}
       name={name}
-      sub={sub && <span className="settings-addons-muted settings-addons-ellipsis" data-testid="host-network-path">{sub}</span>}
+      sub={(sub || also.length > 0) && (
+        <span className="settings-addons-muted settings-addons-ellipsis">
+          {sub && <span data-testid="host-network-path">{sub}</span>}
+          {sub && also.length > 0 && ' \u00b7 '}
+          {also.length > 0 && <span data-testid="host-also-reached">{alsoReachedLabel(also)}</span>}
+        </span>
+      )}
       tag={<SettingsTag title="Joined with a link: no SSH">Link</SettingsTag>}
       dot={live.dot}
       state={live.state}

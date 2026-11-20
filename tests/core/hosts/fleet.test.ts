@@ -41,6 +41,8 @@ vi.mock('../../../src/core/usage/cost-report.js', () => ({
 vi.mock('../../../src/core/usage/collection.js', () => ({
   responseUsageStore: () => ({ rollup: {}, database: {}, timezone: 'America/Los_Angeles' }),
 }))
+// Each host is its own machine here (one machine, one host: usage-machines.ts).
+vi.mock('../../../src/core/usage/usage-machines.js', () => ({ usageMachines: async () => ({ machineOf: (host: string) => host }) }))
 
 const bootConn = { conn: null as null | { checkBootStart: () => Promise<void> } }
 vi.mock('../../../src/providers/daemon-connection.js', async (orig) => ({

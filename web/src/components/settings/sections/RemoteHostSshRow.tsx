@@ -28,7 +28,7 @@ import { ReplicaKeepRows, type ReplicaKeep } from './ReplicaKeepRows';
 import { useLinkedHostRow } from './useLinkedHostRow';
 import { sshNameOf, sshResolvedHints, useSshResolved } from './useSshResolved';
 import { hostnameProblem, untouchedDraft } from './host-row-model';
-import { hostName, waitsForYes, type HostEntry } from './remote-hosts-model';
+import { alsoReachedLabel, hostName, waitsForYes, type AlsoReached, type HostEntry } from './remote-hosts-model';
 import type { ActionState } from './useHostFleet';
 import { hostRowId } from '@/utils/host-settings-nav';
 
@@ -44,6 +44,8 @@ export const TURN_OFF_NOTE = 'Walnut disconnects and stops connecting to it; the
 export const REMOVE_NOTE = 'Walnut disconnects and stops connecting to it. Nothing on the host is deleted: its daemon and sessions there keep running.';
 
 interface Props {
+  /** The machine's other aliases (rows of the same daemon), shown on this row instead of as rows of their own. */
+  also?: readonly AlsoReached[];
   host: HostEntry;
   idx: number;
   editing: boolean;
@@ -283,6 +285,7 @@ export function RemoteHostSshRow(props: Props) {
         <>
           {alias && <span className="rh-host-alias">{alias}</span>}
           {sub && <span className="settings-addons-mono settings-addons-muted settings-addons-ellipsis rh-host-hostname">{sub}</span>}
+          {(props.also?.length ?? 0) > 0 && <span className="settings-addons-muted settings-addons-ellipsis" data-testid="host-also-reached">{alsoReachedLabel(props.also!)}</span>}
         </>
       }
       tag={<SettingsTag title={host.discovered ? 'Found in ~/.ssh/config: Walnut reaches it with ssh' : 'Walnut reaches it with ssh'}>SSH</SettingsTag>}

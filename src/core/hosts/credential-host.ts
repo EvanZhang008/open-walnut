@@ -16,44 +16,15 @@
 import os from 'node:os'
 import type { Config } from '../types.js'
 import { hostDisplayName } from './host-display-name.js'
-import { recordedSameDaemon } from './same-daemon-record.js'
+import { LOCAL_HOST_ALIAS, preferredAlias, sameDaemonAliases } from './daemon-twins.js'
 
-export const LOCAL_HOST_ALIAS = '__local__'
+export { LOCAL_HOST_ALIAS, sameDaemonAliases }
 
 type Row = NonNullable<Config['hosts']>[string] & { label?: unknown; enabled?: unknown; discovered?: unknown }
 
 /** This machine's name in a sentence: "your Mac" on macOS, else "this computer". */
 export function localHostLabel(platform: NodeJS.Platform = os.platform()): string {
   return platform === 'darwin' ? 'your Mac' : 'this computer'
-}
-
-/**
- * The aliases recorded as one daemon with `host`, `host` included, sorted. Each pair is checked
- * against the rows in `config` (both sides still connect where they did when it was recorded);
- * pairs are followed through, so A-B and B-C join C to A.
- */
-export async function sameDaemonAliases(host: string, config: Config): Promise<string[]> {
-  const seen = new Set<string>([host])
-  const pending = [host]
-  for (let i = 0; i < pending.length; i++) {
-    for (const other of await recordedSameDaemon(pending[i], config)) {
-      if (!seen.has(other)) { seen.add(other); pending.push(other) }
-    }
-  }
-  return [...seen].sort()
-}
-
-/** The alias a person picked over the others: enabled, then one they added (not found), then labelled, then by name. */
-function preferred(aliases: string[], rows: Record<string, Row | undefined>): string {
-  const rank = (a: string) => {
-    const r = rows[a]
-    return [r?.enabled === false ? 1 : 0, r?.discovered === true ? 1 : 0, typeof r?.label === 'string' && r.label.trim() ? 0 : 1]
-  }
-  return [...aliases].sort((a, b) => {
-    const x = rank(a), y = rank(b)
-    for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] - y[i]
-    return a < b ? -1 : a > b ? 1 : 0
-  })[0]
 }
 
 /**
@@ -64,6 +35,6 @@ export async function credentialHost(host: string, config: Config): Promise<{ ho
   if (host === LOCAL_HOST_ALIAS) return { host, label: localHostLabel() }
   const rows = (config.hosts ?? {}) as Record<string, Row | undefined>
   const aliases = await sameDaemonAliases(host, config).catch(() => [host])
-  const known = aliases.length > 1 ? preferred(aliases, rows) : host
+  const known = aliases.length > 1 ? preferredAlias(aliases, rows, config.net) : host
   return { host: known, label: hostDisplayName(known, rows[known]?.label) }
 }

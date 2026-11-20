@@ -102,7 +102,7 @@ describe('collecting Claude Code sessions outside Walnut', () => {
     for (const row of rows) expect(row.hosts).toBe(1);
   });
 
-  it('sessions that appear in the record while a long read runs are routed to their owner name, on every page', async () => {
+  it('sessions that appear in the record while a long read runs are the machine\'s own, on every page', async () => {
     mocks.config.mockResolvedValue({ usage: {}, net: { enabled: true },
       hosts: { studio: { transport: 'net', endpoint: 'x', enabled: true }, old: { discovered: true, hostname: 'studio', enabled: true } } });
     const mine = { claudeSessionId: 'on-studio', host: 'studio', engine: 'claude', taskId: 't2' };
@@ -117,10 +117,11 @@ describe('collecting Claude Code sessions outside Walnut', () => {
       : first);
     await collectUsage(INCREMENTAL, '2026-11-06T10:00:00.000Z');
     const rows = responseUsageStore().database.prepare("SELECT session_id s, host h FROM response_usage WHERE session_id IN ('late-1','late-2')").all() as { s: string; h: string }[];
-    expect(rows.filter(r => r.s === 'late-1').length).toBe(0); // owned by the name 'old': that name's own read stores it
+    // Recorded under the name 'old', a name of the machine read as 'studio': stored once, under the machine's name.
+    expect(rows.filter(r => r.s === 'late-1')).toEqual([{ s: 'late-1', h: 'studio' }]);
     expect(rows.find(r => r.s === 'late-2')?.h).toBe('studio');
     const rollup = responseUsageStore().rollup;
-    expect(rollup.originOf('old', 'late-1')?.outside).toBeFalsy();
+    expect(rollup.originOf('studio', 'late-1')?.outside).toBeFalsy();
     expect(rollup.originOf('studio', 'late-2')?.outside).toBeFalsy(); // the second page came at once, still Walnut's
   });
 

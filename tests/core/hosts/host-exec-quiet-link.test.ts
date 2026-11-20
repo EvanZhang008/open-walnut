@@ -29,7 +29,7 @@ vi.mock('../../../src/core/hosts/host-display-name.js', () => ({ hostDisplayName
 vi.mock('../../../src/core/sessions/session-send-core.js', () => ({ resolveCaller: async () => ({ kind: 'session', record: { taskId: 't-quiet', claudeSessionId: 's-quiet', host: 'devbox' } }) }))
 vi.mock('../../../src/core/task-manager.js', () => ({ getTask: async () => ({ title: 'Quiet link' }) }))
 vi.mock('../../../src/core/config-manager.js', () => ({ getConfig: async () => ({ hosts: { macbox: {}, devbox: {} } }) }))
-vi.mock('../../../src/core/hosts/joined-twins.js', () => ({ joinedAliasOf: () => () => null }))
+vi.mock('../../../src/core/hosts/joined-twins.js', () => ({ joinedAliasOf: () => () => null, foundTwinAliasOf: () => () => null }))
 vi.mock('../../../src/core/hosts/host-exec-prompts.js', () => ({ promptRefusal: async () => null }))
 vi.mock('../../../src/core/hosts/host-exec-jobs.js', () => ({ startedRun: () => undefined, noteStarted: async () => {} }))
 vi.mock('../../../src/core/hosts/host-exec-grant.js', () => ({

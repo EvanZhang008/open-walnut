@@ -84,6 +84,8 @@ export interface CostReportDeps {
   tasks: (ids: string[]) => Promise<Map<string, { title: string; project: string; routine?: boolean }>>;
   /** Coding session id -> its record, for engine and title when a session has no task. */
   sessions: () => Promise<Map<string, { title?: string; taskId?: string; project?: string; engine?: string; type?: string }>>;
+  /** A row's host name as its machine's (another alias of one daemon reads as the machine: collection.ts usageMachines). */
+  hostOf?: (host: string) => string;
 }
 
 const FEATURE: Record<string, string> = {
@@ -243,6 +245,8 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
   const ready = deps.rollup.isReady();
   if (!ready) void deps.rollup.backfill().catch(() => {});
   const pricer = new CostPricer(thresholds, deps.overrides);
+  // One machine, one row: every name of it counts as the machine's.
+  const hostOf = deps.hostOf ?? ((host: string) => host);
   const totals = emptyLine('total', 'Total');
   const daily = new Map<string, { date: string; costUsd: number; requests: number }>();
   const groups = new Map<string, GroupAcc>();
@@ -294,7 +298,7 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
     const walnutInto = (model: string, feature: string, featureName: string, host: string): [GroupAcc, string, string][] => {
       const [mk, ml] = modelLine(model);
       return all
-        ? [[byAgent, WALNUT_KEY, 'Walnut'], [byModel, mk, ml], [byProject, WALNUT_PROJECT_KEY, WALNUT_PROJECT], [byHost, host, host],
+        ? [[byAgent, WALNUT_KEY, 'Walnut'], [byModel, mk, ml], [byProject, WALNUT_PROJECT_KEY, WALNUT_PROJECT], [byHost, hostOf(host), hostOf(host)],
           [byKind, 'walnut', WORK_KINDS.walnut], [byFeature, feature, featureName]]
         : [[byFeature, feature, featureName], [byModel, mk, ml]];
     };
@@ -326,6 +330,9 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
     const rows = engine ? rows0.filter(r => r.engine === engine) : rows0;
     const sessions = await deps.sessions();
     const origins = deps.rollup.origins();
+    // A session's origin may be kept under another name of its machine (its rows were stored under one, its look under the other).
+    const originOfMachine = new Map<string, RunOrigin>();
+    for (const o of origins.values()) originOfMachine.set(originKey(hostOf(o.host), o.sessionId), o);
     const accounts = new Map<string, CostAccountLine>();
     const perTask = new Map<string, { taskId?: string; sessionId: string; lineKey: string; hosts: Set<string>; engines: Set<string>;
       priced: CostLine; folder?: RunOrigin; outside: boolean; days: Map<string, { p: Priced; subagent: boolean; sessionId: string; outside: boolean }[]> }>();
@@ -334,13 +341,13 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
     for (const r of rows) {
       const p = pricer.price(r.model, r.band, { ...r, requests: r.calls });
       const [mk, ml] = modelLine(r.model);
-      const origin = origins.get(originKey(r.host, r.sessionId as string));
+      const origin = origins.get(originKey(r.host, r.sessionId as string)) ?? originOfMachine.get(originKey(hostOf(r.host), r.sessionId as string));
       const session = sessions.get(r.sessionId as string);
       const taskId = (r.taskId as string | null) ?? session?.taskId ?? undefined;
       // Outside Walnut only when the host's own Codex rollout says no Walnut session ran it. A row with no
       // task or record is not taken for one: Walnut removes the records of deleted tasks, not their usage.
       const outside = !!origin?.outside;
-      const into: [GroupAcc, string, string][] = [[byEngine, r.engine, engineLabel(r.engine)], [byModel, mk, ml], [byHost, r.host, r.host]];
+      const into: [GroupAcc, string, string][] = [[byEngine, r.engine, engineLabel(r.engine)], [byModel, mk, ml], [byHost, hostOf(r.host), hostOf(r.host)]];
       if (engineCaps(r.engine).rolloutUsage) {
         const a = codexAccount(origin?.provider);
         into.push([group('account', 'Codex by account'), a.key, a.label]);
@@ -358,7 +365,7 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
       // The line opens the first session seen for it (a task may have several).
       const t = perTask.get(lineKey) ?? { taskId, sessionId: r.sessionId as string, lineKey,
         hosts: new Set<string>(), engines: new Set<string>(), priced: emptyLine(lineKey, ''), days: new Map(), outside, ...(folder ? { folder } : {}) };
-      t.hosts.add(r.host); t.engines.add(r.engine); addPriced(t.priced, p);
+      t.hosts.add(hostOf(r.host)); t.engines.add(r.engine); addPriced(t.priced, p);
       const day = t.days.get(r.date) ?? [];
       day.push({ p, subagent: r.agent === 'subagent', sessionId: r.sessionId as string, outside }); t.days.set(r.date, day);
       perTask.set(lineKey, t);
@@ -403,7 +410,7 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
       const p = pricer.price(r.model, r.band, { ...r, requests: r.calls });
       const [mk, ml] = modelLine(r.model);
       count(r.date, p, [[byAgent, IMPORTED_KEY, IMPORTED_LABEL], [byModel, mk, ml], [byProject, IMPORTED_KEY, IMPORTED_LABEL],
-        [byHost, r.host as string, r.host as string], [byKind, 'imported', WORK_KINDS.imported]], 'imported', [r.model, IMPORTED_LABEL]);
+        [byHost, hostOf(r.host as string), hostOf(r.host as string)], [byKind, 'imported', WORK_KINDS.imported]], 'imported', [r.model, IMPORTED_LABEL]);
     }
   }
   const order = all ? ['agent', 'model', 'project', 'host', 'account', 'kind', 'feature']
@@ -412,7 +419,13 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
     : [...(engine ? [] : ['engine']), 'model', 'host', 'project', 'account'];
   report.groups = order.flatMap(id => groups.get(id) ? [groups.get(id)!.result()] : []);
   if (all) report.groups.splice(report.groups.findIndex(g => g.id === 'feature'), 0, tokens.result());
-  report.stored = deps.rollup.hostBounds();
+  // One line per machine: its names' stored days together.
+  const stored = new Map<string, NonNullable<CostReport['stored']>[number]>();
+  for (const b of deps.rollup.hostBounds()) {
+    const host = hostOf(b.host), key = `${host}\u0000${b.imported ? 1 : 0}`, had = stored.get(key);
+    stored.set(key, had ? { ...had, from: had.from < b.from ? had.from : b.from, to: had.to > b.to ? had.to : b.to } : { ...b, host });
+  }
+  report.stored = [...stored.values()];
   report.daily = [...daily.values()].sort((a, b) => a.date.localeCompare(b.date));
   // Named from what this period's counted rows could not be priced, so a filter leaves out the others' models.
   report.unpricedModels = [...new Set([...unpriced.values()].map(u => u.model))].sort();

@@ -43,9 +43,9 @@ export async function callerOf(sid: string | undefined): Promise<Caller> {
 export async function sameMachineAs(alias: string): Promise<string | null> {
   const name = alias.trim()
   if (!name || normHost(name) === LOCAL) return null
-  const [{ getConfig }, { joinedAliasOf }] = await Promise.all([import('../config-manager.js'), import('./joined-twins.js')])
+  const [{ getConfig }, { foundTwinAliasOf }] = await Promise.all([import('../config-manager.js'), import('./joined-twins.js')])
   const config = await getConfig()
-  const to = joinedAliasOf(config.hosts ?? {}, config.net)(name)
+  const to = foundTwinAliasOf(config.hosts ?? {}, config.net)(name)
   return to && to !== name ? to : null
 }
 
@@ -74,7 +74,8 @@ export async function targetHost(raw: string, caller: Caller, sameHostHint = 'ru
     log.session.info('host exec: a found twin is its joined machine', { asked: host, host: joined, taskId: caller.taskId })
     host = joined
   }
-  if (host === caller.host) {
+  // Another alias of the session's own daemon is still this machine (daemon-twins.ts): its own Bash runs it.
+  if (host === caller.host || (host !== LOCAL && caller.host !== LOCAL && await oneMachine(host, caller.host))) {
     throw new HostExecError(`This session already runs on ${host === LOCAL ? 'this Mac' : host}: ${sameHostHint}`, 400, 'same_host')
   }
   if (host !== LOCAL) {
@@ -83,6 +84,14 @@ export async function targetHost(raw: string, caller: Caller, sameHostHint = 'ru
     if (!Object.hasOwn(hosts, host)) throw new HostExecError(`Unknown host: ${host} (host_list names them)`, 404, 'unknown_host')
   }
   return host
+}
+
+/** Whether two aliases are one machine as every list reads them (joined-twins.ts). */
+async function oneMachine(a: string, b: string): Promise<boolean> {
+  const [{ getConfig }, { joinedAliasOf }] = await Promise.all([import('../config-manager.js'), import('./joined-twins.js')])
+  const config = await getConfig()
+  const machineOf = joinedAliasOf(config.hosts ?? {}, config.net)
+  return (machineOf(a) || a) === (machineOf(b) || b)
 }
 
 export async function hostName(host: string): Promise<string> {

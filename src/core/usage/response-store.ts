@@ -121,6 +121,30 @@ export class ResponseUsageStore {
       { source: 'Collection diagnostics', host, status: 'unverified', matchedCalls: 0, unmatchedCalls: 0,
         detail: `Canonical parse: ${evidence.canonical.diagnostics.invalid_lines ?? 0} invalid lines, ${evidence.canonical.diagnostics.unreadable_files ?? 0} unreadable files. Upstream parse: ${evidence.upstream.diagnostics.length} diagnostics. These cover the lines read in this pass, not only selected sessions.` },
     ];
+    // One response is one row, whichever name of its machine read it: a response this session already
+    // has on that day, stored under another name (an alias of the same daemon, read before it was known
+    // as one), is that row, written again in place (2026-11-20: newdev and clouddev were one box, and
+    // each of its responses was stored once per name).
+    // With several copies stored, the one the rollup keeps (cost-rollup.ts keptCopy), so its removal of the others never takes this one.
+    const stored = this.db.prepare('SELECT rowid, id, host, model, response_id responseId FROM response_usage WHERE session_id=? AND date=?');
+    const pairs = new Map<string, Map<string, string>>();
+    for (const row of rows) {
+      const pair = `${row.sessionId}\0${row.date}`;
+      let ids = pairs.get(pair);
+      if (!ids) {
+        const copies = new Map<string, { rowid: number; id: string; host: string }[]>();
+        for (const r of stored.all(row.sessionId, row.date) as { rowid: number; id: string; host: string; model: string; responseId: string }[]) {
+          const key = `${r.model}\0${r.responseId}`;
+          copies.set(key, [...copies.get(key) ?? [], r]);
+        }
+        ids = new Map([...copies].map(([key, list]) => [key, this.rollup.keptCopy(list).id]));
+        pairs.set(pair, ids);
+        if (pairs.size % 50 === 0) await setImmediate();
+      }
+      const key = `${row.model}\0${row.responseId}`;
+      const existing = ids.get(key);
+      if (existing) row.id = existing; else ids.set(key, row.id);
+    }
     // A re-import may move a response to another day or session: its old pair is
     // re-summed too, or the per-day sums would still count it there.
     const before = this.db.prepare('SELECT session_id sessionId, date FROM response_usage WHERE id=?');
@@ -158,6 +182,11 @@ export class ResponseUsageStore {
       verifiedCalls: rows.verified ?? 0, unverifiedCalls: rows.calls - (rows.verified ?? 0),
       byModel: groups('model').map(({ name, ...row }) => ({ model: name, ...row })),
       byAgent: groups('agent_id').map(({ name, ...row }) => ({ agent: name, ...row })) };
+  }
+
+  /** A name no longer read on its own (another name of a machine read under the machine's): its collection mark goes. */
+  forgetHost(host: string): void {
+    this.db.prepare('DELETE FROM usage_checks WHERE host=?').run(host);
   }
 
   finishHost(host: string, until: string, checks: SourceCheck[]) {

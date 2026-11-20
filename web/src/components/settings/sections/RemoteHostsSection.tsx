@@ -69,9 +69,12 @@ function RemoteHostsBody({ config, onSave, store }: Props & { store: ReturnType<
   const editor = useSshHostEditor({ config, onSave, netAliases });
   const fleet = useHostFleet();
   const { hosts, refusals, savedAliases, savedHosts, savedUnderCompanion } = editor;
-  // A found row that is a joined machine shows once, as that machine (it is still saved).
+  // Another alias of a machine (a found row of a joined machine, or one its daemon confirmed is the
+  // same process) shows once, on that machine's row (it is still saved).
   const twins = network.net?.twins ?? {};
-  const machines = network.net?.machines ?? [];
+  const joined = network.net?.machines ?? [];
+  // A joined machine that is another alias of a machine listed under its SSH row (the host network off) shows on that row.
+  const machines = joined.filter((m) => !twins[m.host]);
   const relay = network.net?.relay ?? 'own';
   const hostLabels = Object.fromEntries(Object.entries(config.hosts ?? {}).map(([key, h]) => [key, h?.label?.trim() || (h.transport === 'net' ? machineName(key) : key)]));
 
@@ -83,11 +86,14 @@ function RemoteHostsBody({ config, onSave, store }: Props & { store: ReturnType<
   useFocusKeeper(() => root.current?.closest('.settings-pane') ?? root.current?.closest('.settings-card') ?? root.current);
 
   const asTwin = (h: HostEntry) => hiddenAsTwin(h, twins, refusals.get(h._key));
+  // A machine's other aliases, shown on its own row (each still saved as it is).
+  const alsoOf = (alias: string) => Object.keys(twins).filter((a) => twins[a] === alias).sort()
+    .map((a) => ({ alias: a, net: config.hosts?.[a]?.transport === 'net' }));
   const isUnsaved = (h: HostEntry) => h.savedAlias === undefined && !(h.alias && savedHosts.get(h.alias) === h.hostname);
   const drafts = hosts.filter((h) => h.savedAlias === undefined && !asTwin(h));
   const savedRows = hosts.filter((h) => h.savedAlias !== undefined && !asTwin(h));
   const local = fleet.shown.find((h) => h.local);
-  const rowHosts = new Set([...hosts.map((h) => h.alias), ...machines.map((m) => m.host)]);
+  const rowHosts = new Set([...hosts.map((h) => h.alias), ...joined.map((m) => m.host)]);
   const others = fleet.shown.filter((h) => !h.local && !rowHosts.has(h.host));
   // The rows in the order shown; after a Remove, focus goes to the next one (or Add host).
   const rowKeys = [
@@ -203,6 +209,7 @@ function RemoteHostsBody({ config, onSave, store }: Props & { store: ReturnType<
         onField={(field, value) => editor.updateHost(host._key, field, value)}
         onKeep={(patch) => editor.updateKeep(host._key, patch)}
         onRemove={() => removeHost(host)}
+        also={host.savedAlias ? alsoOf(host.savedAlias) : undefined}
         onTurnOn={() => editor.turnOn(host._key)}
         onHostnameLeft={() => editor.hostnameLeft(host._key)}
         onAliasLeft={() => editor.showAliasRefusal(host._key)}
@@ -279,6 +286,7 @@ function RemoteHostsBody({ config, onSave, store }: Props & { store: ReturnType<
                 key={m.host}
                 machine={m}
                 name={machineName(m.host)}
+                also={alsoOf(m.host)}
                 relay={relay}
                 error={network.removeError[m.host]}
                 card={fleet.card(m.host)}

@@ -29,6 +29,7 @@ import { isIP } from 'node:net'
 import { whereOf } from '../net/net-where.js'
 import { foundHostWaits } from './found-hosts.js'
 import { notOfferedStands, type OfferRow } from './found-host-offer.js'
+import { daemonTwins, type NetSwitch, type TwinRows } from './daemon-twins.js'
 
 type HostRows = Record<string, { hostname?: unknown; discovered?: unknown; transport?: unknown; endpoint?: unknown; label?: unknown; enabled?: unknown } | undefined>
 
@@ -48,8 +49,38 @@ function namesOneMachine(ip: string): boolean {
   return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127)
 }
 
-/** Each found row that is a joined machine, with that machine's alias. */
+/**
+ * Each alias that is another name of a machine the person uses, with that machine's alias: a
+ * found row of a joined machine (below), and an alias whose daemon confirmed it is the same
+ * process as another one's (daemon-twins.ts: `newdev` found in ~/.ssh/config and `clouddev` on
+ * the host network are one daemon, so `newdev` reads as `clouddev`). One machine, one host.
+ */
 export function joinedTwins(hosts: HostRows, net: unknown): Array<{ alias: string; joined: string }> {
+  const to = new Map(foundJoinedTwins(hosts, net).map((t) => [t.alias, t.joined]))
+  for (const t of daemonTwins(hosts as TwinRows, net as NetSwitch)) if (!to.has(t.alias)) to.set(t.alias, t.joined)
+  // Each to the machine's own name, however many names lead there (a found row of a joined row that is a daemon's other alias).
+  const end = (alias: string): string => {
+    const seen = new Set([alias])
+    let at = alias
+    for (let next = to.get(at); next && !seen.has(next); next = to.get(at)) { seen.add(next); at = next }
+    return at
+  }
+  return [...to.keys()].map((alias) => ({ alias, joined: end(alias) })).filter((t) => t.joined !== t.alias)
+}
+
+/**
+ * Only a found row of a joined machine read as that machine: for a call that names one host's
+ * link (host_exec, host_copy). Another alias of one daemon reaches the same daemon over its own
+ * link, so the name a call gives is kept (2026-11-20 review: with the host network off, newdev's
+ * SSH link works and the host-network row does not).
+ */
+export function foundTwinAliasOf(hosts: HostRows, net: unknown): <A extends string | null | undefined>(alias: A) => A | string {
+  const to = new Map(foundJoinedTwins(hosts, net).map((t) => [t.alias, t.joined]))
+  return (alias) => (alias && to.get(alias)) || alias
+}
+
+/** Each found row that is a joined machine, with that machine's alias. */
+function foundJoinedTwins(hosts: HostRows, net: unknown): Array<{ alias: string; joined: string }> {
   if (!net || typeof net !== 'object' || (net as { enabled?: unknown }).enabled !== true) return []
   const joined = Object.entries(hosts).filter(([, h]) => h?.transport === 'net' && typeof h.endpoint === 'string' && h.enabled !== false) as Array<[string, NonNullable<HostRows[string]>]>
   if (joined.length === 0) return []

@@ -222,13 +222,16 @@ export function probeInBackground(host: string, conn: VitalsConn | undefined, pr
 function refreshSpend(): Promise<void> {
   if (spendRun) return spendRun
   spendRun = (async () => {
-    const [{ buildCostReport }, { responseUsageStore }] = await Promise.all([
-      import('../usage/cost-report.js'), import('../usage/collection.js'),
+    const [{ buildCostReport }, { responseUsageStore }, { usageMachines }] = await Promise.all([
+      import('../usage/cost-report.js'), import('../usage/collection.js'), import('../usage/usage-machines.js'),
     ])
     const store = responseUsageStore()
+    const config = await getConfig()
+    // A machine's spend is its names' together (one machine, one host).
+    const { machineOf } = await usageMachines(config, store.rollup)
     const from = new Date(Date.now() - (SPEND_DAYS - 1) * 86_400_000).toLocaleDateString('en-CA', { timeZone: store.timezone })
     const report = await buildCostReport('agents', { start: from }, {
-      rollup: store.rollup, db: store.database, timeZone: store.timezone, overrides: (await getConfig()).usage?.prices,
+      rollup: store.rollup, db: store.database, timeZone: store.timezone, overrides: config.usage?.prices, hostOf: machineOf,
       // Only the host group is read: no task or session titles are needed.
       tasks: async () => new Map(), sessions: async () => new Map(),
     })

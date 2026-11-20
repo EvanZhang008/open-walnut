@@ -64,6 +64,9 @@ export interface DayBucket {
 // (1,000 rows: p99 99 ms; 5,000 held the loop for 0.9 s).
 const BATCH = 250;
 
+/** Set once the copies of one response stored under several names of one machine were removed. */
+const DEDUPED_KEY = 'responses_deduped';
+
 export class CostRollup {
   private lock: Promise<unknown> = Promise.resolve();
   private thresholdsKey = '';
@@ -187,9 +190,99 @@ export class CostRollup {
     this.db.prepare('INSERT OR REPLACE INTO usage_rollup_meta VALUES (?,?)').run(key, value);
   }
 
-  /** True once the Claude rows match the response table under the current thresholds. */
+  /** True once the Claude rows match the response table under the current thresholds (and its copies are gone). */
   isReady(): boolean {
-    return this.meta('claude_built') === this.thresholdsKey;
+    return this.meta('claude_built') === this.thresholdsKey && this.meta(DEDUPED_KEY) === '1';
+  }
+
+  /** How a response stored under several names is resolved: the lowest rank keeps it (the machine's own name). */
+  setHostRank(rank: (host: string) => number): void { this.hostRank = rank; }
+  private hostRank: (host: string) => number = () => 0;
+
+  /**
+   * Of the copies of one response (one session, day, model and response id), the one kept: the best-ranked
+   * name, then the earliest stored. The one rule for the removal below, a pair's re-sum and an import's write.
+   */
+  keptCopy<T extends { rowid: number; host: string }>(copies: readonly T[]): T {
+    let best = copies[0], bestRank = this.hostRank(best.host);
+    for (const c of copies.slice(1)) {
+      const r = this.hostRank(c.host);
+      if (r < bestRank || (r === bestRank && c.rowid < best.rowid)) { best = c; bestRank = r; }
+    }
+    return best;
+  }
+
+  /** Copies may have been stored again (an older build read under another name): the next backfill removes them once more. */
+  redoDedupe(): void {
+    this.db.prepare('DELETE FROM usage_rollup_meta WHERE key=?').run(DEDUPED_KEY);
+  }
+
+  /**
+   * A host's collection mark this build wrote (it reads each machine once, under one name). A mark of a name
+   * that is no longer read on its own, without this, was an older build's: it may have stored copies again.
+   */
+  markOwnPass(host: string): void { this.setMeta(`machine_pass:${host}`, '1'); }
+  ownPass(host: string): boolean { return this.meta(`machine_pass:${host}`) === '1'; }
+  forgetOwnPass(host: string): void { this.db.prepare('DELETE FROM usage_rollup_meta WHERE key=?').run(`machine_pass:${host}`); }
+
+  /** The rows of `rows` that are copies of a kept one, by rowid (each response once: keptCopy). */
+  private copiesIn<T extends { rowid: number; host: string; model: string; response_id: string }>(rows: readonly T[]): Set<number> {
+    const byKey = new Map<string, T[]>();
+    for (const r of rows) {
+      const key = `${r.model}\u0000${r.response_id}`;
+      const list = byKey.get(key);
+      if (list) list.push(r); else byKey.set(key, [r]);
+    }
+    const gone = new Set<number>();
+    for (const list of byKey.values()) {
+      if (list.length < 2) continue;
+      const kept = this.keptCopy(list);
+      for (const r of list) if (r !== kept) gone.add(r.rowid);
+    }
+    return gone;
+  }
+
+  /**
+   * One response, one row. Before one machine was read once (collection.ts), each name of it
+   * (`clouddev`, `newdev`, `clouddev-net`: one box) stored every response it read under its own
+   * name, so the box's sums counted each response two and three times (2026-11-20). The copies
+   * of one response are in the same session on the same day; the one under the best-ranked name
+   * stays (the earliest stored among equals), the others go: each is the same response, the
+   * same tokens. Walks the (session, day) index in pages, with a yield between them.
+   */
+  private async dedupeResponses(): Promise<number> {
+    // Two seeks, each one the (session, day) index serves whole: on within a pair by rowid, then the next pair.
+    const cols = 'rowid, session_id, date, host, model, response_id';
+    const within = this.db.prepare(`SELECT ${cols} FROM response_usage WHERE session_id=? AND date=? AND rowid>? ORDER BY rowid LIMIT ${BATCH}`);
+    const nextPair = this.db.prepare(`SELECT session_id, date FROM response_usage WHERE (session_id, date) > (?, ?) ORDER BY session_id, date LIMIT 1`);
+    const drop = this.db.prepare('DELETE FROM response_usage WHERE rowid=?');
+    type Row = { rowid: number; session_id: string; date: string; host: string; model: string; response_id: string };
+    let removed = 0;
+    let at = nextPair.get('', '') as { session_id: string; date: string } | undefined;
+    // A pair's rows are judged together (its copies may lie pages apart), a page at a time read.
+    let sinceYield = 0;
+    while (at) {
+      const rows: Row[] = [];
+      for (let after = 0; ;) {
+        const page = within.all(at.session_id, at.date, after) as Row[];
+        rows.push(...page);
+        if (page.length < BATCH) break;
+        after = page[page.length - 1].rowid;
+        await setImmediate();
+      }
+      // Judged as a whole pair, removed a page at a time (a busy session-day can hold tens of thousands of copies).
+      const gone = [...this.copiesIn(rows)];
+      for (let i = 0; i < gone.length; i += BATCH) {
+        this.db.transaction(() => { for (const id of gone.slice(i, i + BATCH)) drop.run(id); })();
+        await setImmediate();
+      }
+      removed += gone.length;
+      at = nextPair.get(at.session_id, at.date) as { session_id: string; date: string } | undefined;
+      // A yield for about every page of rows read, however small the pairs are.
+      sinceYield += rows.length + 1;
+      if (sinceYield >= BATCH) { sinceYield = 0; await setImmediate(); }
+    }
+    return removed;
   }
 
   /**
@@ -202,6 +295,13 @@ export class CostRollup {
       if (this.isReady()) return;
       // Fixed for the whole run: a change while it runs leaves it unready, and it runs again.
       const thresholds = this.thresholds, key = this.thresholdsKey;
+      if (this.meta(DEDUPED_KEY) !== '1') {
+        const removed = await this.dedupeResponses();
+        this.setMeta(DEDUPED_KEY, '1');
+        this.setMeta(`${DEDUPED_KEY}:removed`, String(removed));
+        if (removed) this.setMeta('claude_built', ''); // the sums are rebuilt below, from one row per response
+        else if (this.isReady()) return; // nothing was copied: the sums stand
+      }
       const sums = new Map<string, RollupRow>();
       const read = this.db.prepare(`SELECT rowid, date, host, source, session_id, task_id, model, agent_id,
         input_tokens, output_tokens, cache_read_tokens, cache_write_5m, cache_write_1h, cache_creation_tokens
@@ -223,24 +323,29 @@ export class CostRollup {
     const list = [...new Map([...pairs].map(p => [`${p.sessionId}\u0000${p.date}`, p])).values()];
     return this.exclusive(async () => {
       if (!this.isReady()) return; // the pending backfill covers them
-      const read = this.db.prepare(`SELECT 0 rowid, date, host, source, session_id, task_id, model, agent_id,
+      const read = this.db.prepare(`SELECT rowid, date, host, source, session_id, task_id, model, agent_id, response_id,
         input_tokens, output_tokens, cache_read_tokens, cache_write_5m, cache_write_1h, cache_creation_tokens
         FROM response_usage WHERE session_id=? AND date=?`);
       const drop = this.db.prepare("DELETE FROM usage_rollup WHERE engine='claude' AND session_id=? AND date=?");
+      // A copy of a response this pair already holds (stored under another name of its machine) goes as it is summed.
+      const dropCopy = this.db.prepare('DELETE FROM response_usage WHERE rowid=?');
       // Written in chunks of about BATCH rows read, with a yield between them; a
       // busy session-day alone is one chunk.
       for (let i = 0; i < list.length;) {
         const sums = new Map<string, RollupRow>();
         const batch: typeof list = [];
+        const copies: number[] = [];
         let rowsRead = 0;
         while (i < list.length && (rowsRead < BATCH || !batch.length)) {
           const p = list[i++];
           batch.push(p);
-          const rows = read.all(p.sessionId, p.date) as RawResponse[];
+          const rows = read.all(p.sessionId, p.date) as (RawResponse & { response_id: string })[];
           rowsRead += rows.length;
-          for (const r of rows) this.fold(sums, r, this.thresholds);
+          const gone = this.copiesIn(rows);
+          for (const r of rows) if (gone.has(r.rowid)) copies.push(r.rowid); else this.fold(sums, r, this.thresholds);
         }
         this.db.transaction(() => {
+          for (const id of copies) dropCopy.run(id);
           for (const p of batch) drop.run(p.sessionId, p.date);
           this.insertAll([...sums.values()]);
         })();
