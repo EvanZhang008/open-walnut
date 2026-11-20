@@ -1,5 +1,9 @@
 # Web GUI — Quick Reference
 
+**Before you change anything the user can see, read [`.claude/skills/walnut-ui-requirements/SKILL.md`](../../.claude/skills/walnut-ui-requirements/SKILL.md)**:
+the rules every UI change must meet (keep every existing feature, walk the core flows, few states in
+the user's words, his yes on a new design, layout, look, proof), each with its real incident.
+
 **Full implementation details: `.claude/skills/walnut-web-frontend/SKILL.md`** (single-timeline
 model, optimistic dedup, UX patterns, file structure). **Load that skill BEFORE touching session
 chat, turn boundaries, or streaming block rendering** — that area has an incident history.

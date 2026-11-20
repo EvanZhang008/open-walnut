@@ -5,7 +5,8 @@
 > concise quick-references; the **deep implementation details live in skills** (auto-discovered,
 > load on demand): `walnut-core-internals` (src/core/),
 > `walnut-web-frontend` (web/src/), `walnut-testing` (tests/), `walnut-ops` (incidents + src/logging/).
-> Load the matching skill before non-trivial work in that area.
+> Load the matching skill before non-trivial work in that area. **Any change the user can see:
+> read `.claude/skills/walnut-ui-requirements/SKILL.md` first** (the rules every UI change must meet).
 > **Important docs:** browse [`docs/`](./docs/README.md) first; model work starts with
 > [Claude model configuration](./docs/reference/claude-model-configuration.md).
 > **This file holds only what every session needs before it touches anything** (40 KB cap,

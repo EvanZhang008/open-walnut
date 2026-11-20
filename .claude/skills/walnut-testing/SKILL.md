@@ -5,6 +5,8 @@ description: Testing details for the Walnut repo — 5-tier pyramid (unit/integr
 
 # Testing — Implementation Details
 
+**Before you plan, build, test or ship anything the user can see, read the `walnut-ui-requirements` skill** ([.claude/skills/walnut-ui-requirements/SKILL.md](../walnut-ui-requirements/SKILL.md)): the rules every UI change must meet, each with its real incident. Its proof and core-flow rules decide what a UI test must cover.
+
 For testing philosophy, run commands, and anti-patterns, see project `CLAUDE.md`.
 For the layered pipeline (which tier to run when), see
 [docs/reference/testing-pipeline.md](../../../docs/reference/testing-pipeline.md).

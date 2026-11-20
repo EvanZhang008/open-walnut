@@ -5,6 +5,8 @@ description: "4-agent pipeline: design + implement code tests + Playwright UI te
 
 # /test-and-verify-walnut
 
+**Before you plan, build, test or ship anything the user can see, read the `walnut-ui-requirements` skill** ([.claude/skills/walnut-ui-requirements/SKILL.md](../walnut-ui-requirements/SKILL.md)): the rules every UI change must meet, each with its real incident.
+
 Every test must answer: **"If I reverted my code changes, would this test fail?"** NO → delete it.
 
 **FIRST**: Read `.claude/skills/walnut-console-ops/SKILL.md` for UI layout and interaction patterns.

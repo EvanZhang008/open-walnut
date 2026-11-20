@@ -1,17 +1,17 @@
 ---
 name: walnut-web-frontend
-description: Implementation details for web/src/ (React SPA) — session chat single-timeline model (streaming blocks, render-filter absorption, optimistic dedup, turn watermark), UX patterns (task refs, images, plan cards, slash commands), frontend file structure. MUST read before touching session chat, turn boundaries, or streaming block rendering.
+description: Implementation details for web/src/ (React SPA) — session chat single-timeline model (streaming blocks, render-filter absorption, optimistic dedup, turn watermark), UX patterns (task refs, images, plan cards, slash commands), frontend file structure. Read walnut-ui-requirements first for any change the user can see. MUST read before touching session chat, turn boundaries, or streaming block rendering.
 ---
 
 # Web GUI — Implementation Details
+
+**Before you plan, build, test or ship anything the user can see, read the `walnut-ui-requirements` skill** ([.claude/skills/walnut-ui-requirements/SKILL.md](../walnut-ui-requirements/SKILL.md)): the rules every UI change must meet, each with its real incident.
 
 For architecture overview and routes, see project `CLAUDE.md`.
 
 **Rendering model text (markdown, rich HTML, marked extensions, sanitize policy) lives in its own skill: `walnut-markdown-rendering`.** Load that one before changing `web/src/utils/markdown.ts` or `rich-blocks.ts`; it holds the hard rules (never patch marked, register a retune on BOTH `Marked` instances, collapse blank lines at render time only).
 
 ## UX Implementation Details
-
-- **Design options go out as ONE HTML page**: when the user has to pick between designs or mockups, send one self-contained HTML page with every option's picture inline, your pick and why first, then the backup, then the rest. Never a folder of separate images.
 
 - **Source-aware message isolation**: Streaming agent responses from different sources (heartbeat, cron, triage, user-chat) render as separate message blocks. `useChat` tracks `currentSourceRef` during streaming and passes it to `upsertLastAssistant` which only merges into the last assistant message if the source matches. The turn-merger in `chatEntriesToMessages` checks `entry.source` boundaries to prevent cross-source merging on history reload.
 - **Rich task references**: Session result/error messages use `[taskId|Project / Title]` format rendered as clickable pills via a custom `marked` inline extension (`ChatMessage.tsx`). Backend enriches events with task metadata (`resolveTaskRef()` in `server.ts`); frontend builds the format via `buildTaskRef()` in `useChat.ts`. Entity refs (`<task-ref>`, `<session-ref>`) also render as clickable pills. On MainPage, clicking a task ref focuses it in TodoPanel (auto-switches tab, expands groups, scrolls into view) and clicking a session ref opens the inline SessionPanel + focuses the linked task — no page navigation.

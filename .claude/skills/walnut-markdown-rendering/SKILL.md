@@ -5,6 +5,8 @@ description: How Walnut turns model text into rendered output — the two marked
 
 # Markdown & rich-HTML rendering
 
+**Before you plan, build, test or ship anything the user can see, read the `walnut-ui-requirements` skill** ([.claude/skills/walnut-ui-requirements/SKILL.md](../walnut-ui-requirements/SKILL.md)): the rules every UI change must meet, each with its real incident.
+
 Every visible model reply goes through `web/src/utils/markdown.ts`. Rich (HTML) replies additionally go through `web/src/utils/rich-blocks.ts` before rendering. Both files are incident-dense: each rule below is a shipped bug.
 
 ## Hard rules
