@@ -183,10 +183,10 @@ describe('one corner for every notice', () => {
     // Never hidden for want of room, except beside the open notification center, which lists the
     // same news (an 800px window hid every toast: engine-matrix.spec.ts).
     expect(src).toMatch(/toggle\('is-tucked', centerOpen && /);
-    // The short form keeps one line of why a toast is there (it is clamped, never hidden).
+    // The short form keeps one line of why a toast is there (cut to one line, never hidden).
     const css = read('web/src/styles/corner-stack.css');
     expect(css).not.toMatch(/\.is-compact[^{]*notification-toast-body\s*\{\s*display:\s*none/);
-    expect(css).toMatch(/:is\(\.is-compact, \.has-approval\)[^{]*notification-toast-body\s*\{[^}]*-webkit-line-clamp:\s*1/);
+    expect(css).toMatch(/:is\(\.is-compact, \.has-approval\)[^{]*notification-toast-body\s*\{[^}]*white-space:\s*nowrap;[^}]*text-overflow:\s*ellipsis/);
   });
 
   it('the stack reads no panel, composer, column or sheet geometry, and publishes the room it covers from its own box', () => {
