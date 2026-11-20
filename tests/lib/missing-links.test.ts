@@ -13,7 +13,7 @@ import path from 'node:path'
 import { z } from 'zod'
 import { guardedPath } from '../setup/exec-guard.js'
 import {
-  LINK_NOTE_EXEMPT, LINK_NOTE_OPS, askUserQuestionText, findMissingLinks, opLinkNotes, opMissingLinksNote,
+  LINK_NOTE_EXEMPT, LINK_NOTE_OPS, askUserQuestionText, findMissingLinks, linkNotes, opLinkNotes, opMissingLinksNote, withoutTaskIds,
 } from '../../src/lib/missing-links.js'
 import { _setGithubCommitCheck, deadCommitLinksNote, findDeadCommitLinks } from '../../src/lib/github-commit-check.js'
 import { ASK_LINKS_HOOK_COMMAND, askLinksHooks } from '../../src/providers/ask-links-hook.js'
@@ -84,8 +84,23 @@ describe('Walnut\'s own ids and other hex stay quiet', () => {
     ['a list after "pull request"', 'Open the pull request\n1. Fix x'],
     ['"PR" and one digit of something else', 'the PR 2 days ago'],
     ['a file anchor', 'see docs/guide.md#3 and src/x.ts#12'],
+    // 2026-11-20: Walnut task ids read as commits ("is live (as 745ead8d said)", "task 2d950859 landed").
+    ['a task id after a CJK clause', '\u5df2\u7ecf\u4e0a\u7ebf\uff08745ead8d \u8bf4\u7684\uff09'],
+    ['a task id before "landed"', 'task 2d950859 landed; ask 745ead8d'],
+    ['a task id a few words after "commit"', 'the commit for it is with 2d950859 now'],
   ])('%s', (_name, text) => {
     expect(refs(text)).toEqual([])
+  })
+})
+
+describe('a short hash that is a Walnut task id', () => {
+  it('is left out when the task store knows it, and kept otherwise', async () => {
+    const isTaskId = async (id: string) => id === '2d950859'
+    const notes = await linkNotes('commit 2d950859 and commit 0e72622de', 'Your reply', 'Fix it.', { isTaskId })
+    expect(notes).toHaveLength(1)
+    expect(notes[0]).toContain('0e72622de (commit)')
+    expect(notes[0]).not.toContain('2d950859')
+    expect(await withoutTaskIds([{ kind: 'commit', ref: '2d950859' }], async () => { throw new Error('server down') })).toHaveLength(1)
   })
 })
 

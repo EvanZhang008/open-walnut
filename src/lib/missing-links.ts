@@ -19,10 +19,10 @@
  *   - a ticket: V or P and 8 to 11 digits (V1234567890);
  *   - a pull request: "PR #12", "PR 12" (two digits or more), "pull request #12", owner/repo#12;
  *   - a commit: a bare lowercase hex run with a digit and a letter in it, not glued to a path, an
- *     id or a word: 40 characters always; 7 to 12 only after a word that says it is one ("commit",
- *     "landed", "sha", "hash", a Chinese "commit" or "version") a few words before it, so a short
- *     task or session id ("task a9b9810d") stays quiet, as do UUIDs, rq-.../lt-... ids, sha256 sums
- *     and paths.
+ *     id or a word: 40 characters always; 7 to 12 only right after a word that says it is one
+ *     ("commit", "landed as", "sha", a Chinese "commit"), so a short task or session id ("task
+ *     a9b9810d", "(745ead8d said)") stays quiet, as do UUIDs, rq-.../lt-... ids, sha256 sums and
+ *     paths. One the caller can look up as a Walnut task id (linkNotes' isTaskId) never counts.
  * Text in fenced code blocks and inside URLs is not read. An id counts as linked when it is the
  * text of a Markdown or HTML link, when an http(s) URL follows it on its line ("CR-1: <url>",
  * "**CR-1** (<url>") or comes right before it ("<url> (PR 12)"), or when any URL in the text
@@ -51,8 +51,13 @@ const FENCE_RE = /```[\s\S]*?(?:```|$)/g
 const MD_LINK_RE = /\[([^\]\n]{1,300})\]\(\s*(https?:\/\/[^)\s]+)[^)]*\)/gi
 const A_TAG_RE = /<a\b[^>]{0,2000}?\bhref\s*=\s*["']?(https?:\/\/[^"'\s>]+)[^>]{0,2000}>([^<]{0,400})<\/a>/gi
 const TAG_RE = /<[^>\n]{1,2000}>/g
-/** A word a few words before a short hash that says it is a commit (the escapes: Chinese "commit", "version", "goes live"). */
-const COMMIT_WORD_RE = /(?:\b(?:commit(?:ted)?|land(?:ed)?|merged|revert(?:ed|s)?|cherry-picked|sha|hash|head)|\u63d0\u4ea4|\u7248\u672c|\u4e0a\u7ebf)\W{0,3}(?:\S+\s+){0,2}\S*$/i
+/**
+ * A word right before a short hash that says it is a commit ("commit 0e72622de", "landed as
+ * 9815ea32a", the escapes: Chinese "commit", "commit number"), at most a linking word between.
+ * 2026-11-20: a looser window (two words, any run of CJK) read Walnut task ids as commits:
+ * "...\u4e0a\u7ebf\uff08745ead8d \u8bf4\u7684\uff09" ("live (as 745ead8d said)").
+ */
+const COMMIT_WORD_RE = /(?:\b(?:commit(?:ted)?|land(?:ed)?|merged|revert(?:ed|s)?|cherry-picked|sha|hash)|\u63d0\u4ea4(?:\u53f7)?)[ \t:=#\uff1a]*(?:(?:is|as|at|in|to|\u4e86|\u4e3a|\u662f)[ \t:\uff1a]*)?$/i
 
 interface Found { kind: LinkRefKind; ref: string; key: string; at: number; end: number }
 
@@ -216,10 +221,10 @@ export function opMissingLinksNote(op: string, args: unknown): string | null {
  * Both notes for a text for the user: ids with no link, and GitHub commit links that open
  * nothing (github-commit-check.ts, which asks GitHub). Never throws.
  */
-export async function linkNotes(text: string, what: string, fix: string): Promise<string[]> {
+export async function linkNotes(text: string, what: string, fix: string, opts: LinkNoteOptions = {}): Promise<string[]> {
   const notes: string[] = []
   try {
-    const missing = missingLinksNote(findMissingLinks(text), what, fix)
+    const missing = missingLinksNote(await withoutTaskIds(findMissingLinks(text), opts.isTaskId), what, fix)
     if (missing) notes.push(missing)
   } catch { /* a note never fails the call */ }
   try {
@@ -230,9 +235,23 @@ export async function linkNotes(text: string, what: string, fix: string): Promis
 }
 
 /** linkNotes for a session's op: nothing for an op whose words the user does not read. */
-export async function opLinkNotes(op: string, args: unknown): Promise<string[]> {
+export async function opLinkNotes(op: string, args: unknown, opts: LinkNoteOptions = {}): Promise<string[]> {
   const t = opUserText(op, args)
-  return t ? linkNotes(t.text, t.what, t.fix) : []
+  return t ? linkNotes(t.text, t.what, t.fix, opts) : []
+}
+
+export interface LinkNoteOptions {
+  /** Whether a short hex id is a Walnut task id (or a prefix of one): the caller's own task store. */
+  isTaskId?: (id: string) => Promise<boolean>
+}
+
+/** Short "commits" that are Walnut task ids, left out (at most 5 looked up, 2026-11-20: 2d950859). */
+export async function withoutTaskIds(missing: MissingLink[], isTaskId: LinkNoteOptions['isTaskId']): Promise<MissingLink[]> {
+  if (!isTaskId) return missing
+  const short = missing.filter((m) => m.kind === 'commit' && m.ref.length <= 12).slice(0, 5)
+  const tasks = new Set<string>()
+  await Promise.all(short.map(async (m) => { if (await isTaskId(m.ref).catch(() => false)) tasks.add(m.ref) }))
+  return missing.filter((m) => !tasks.has(m.ref))
 }
 
 /** The words of a Claude Code AskUserQuestion call's input (its questions, headers and options). */

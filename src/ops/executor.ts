@@ -495,7 +495,13 @@ export async function executeOp(
   const outcome = once ? await runOnce(once, op.name, args, explicitSid, run) : await run()
   // Text a session hands on gets one line back when it names a draft in a temp dir (tmp-draft-path.ts)
   // or, for the user, an id with no link to open it (missing-links.ts).
-  return human || pluginId ? outcome : await withHandedTextNote(op.name, args, outcome, origin, explicitSid)
+  if (human || pluginId) return outcome
+  // A short hex id the server knows as a task (or a prefix of one) is no commit (missing-links.ts).
+  const isTaskId = async (id: string): Promise<boolean> => {
+    const r = await rawRequest(base, 'GET', `/api/tasks/${encodeURIComponent(id)}`, undefined, 2_000, { sid: explicitSid, explicitSid, callerKind, origin })
+    return r.ok || /ambiguous/i.test(r.message)
+  }
+  return withHandedTextNote(op.name, args, outcome, origin, explicitSid, isTaskId)
 }
 
 /**
@@ -509,7 +515,7 @@ export async function executeOp(
  * In the session's own process (WALNUT_TASK_DIR set: its MCP server, its CLI) and on the server
  * answering a session (a gateway call); never for a person or a plugin.
  */
-async function withHandedTextNote(name: string, args: Record<string, unknown>, outcome: OpOutcome, origin: string, sid: string | undefined): Promise<OpOutcome> {
+async function withHandedTextNote(name: string, args: Record<string, unknown>, outcome: OpOutcome, origin: string, sid: string | undefined, isTaskId?: (id: string) => Promise<boolean>): Promise<OpOutcome> {
   if (!outcome.ok || !isPlainObject(outcome.result)) return outcome
   // This process is the calling session's own (its MCP server, its CLI) only when it runs under
   // that session's id: a server started from a task's shell inherits a task directory too.
@@ -525,7 +531,7 @@ async function withHandedTextNote(name: string, args: Record<string, unknown>, o
     })
     if (tmp) notes.push(tmp)
   } catch { /* a note never fails the call */ }
-  if (process.env.WALNUT_LINK_NOTE !== '0') notes.push(...await opLinkNotes(name, args))
+  if (process.env.WALNUT_LINK_NOTE !== '0') notes.push(...await opLinkNotes(name, args, { isTaskId }))
   return notes.length ? { ...outcome, result: { ...outcome.result, walnut_note: notes.join(' ') } } : outcome
 }
 

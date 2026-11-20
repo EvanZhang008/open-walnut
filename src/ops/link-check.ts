@@ -2,12 +2,13 @@
  * link_check: which code reviews, tickets, pull requests or commits a text for the user names with
  * no link to open them (src/lib/missing-links.ts). A session may call it on a draft; Walnut's own
  * PreToolUse hook on AskUserQuestion (providers/ask-links-hook.ts) pipes the hook's input to it and
- * prints the note it answers as the hook's additionalContext. It runs in the caller's own process
- * and reads nothing from the server.
+ * prints the note it answers as the hook's additionalContext. It runs in the caller's own process;
+ * it asks the server only whether a short hex id is a Walnut task id, and GitHub whether a linked
+ * commit exists (github-commit-check.ts).
  */
 import { z } from 'zod'
 import { defineOp } from './registry.js'
-import { ASK_LINKS_FIX, ASK_LINKS_WHAT, askUserQuestionText, findMissingLinks, linkNotes, missingLinksNote } from '../lib/missing-links.js'
+import { ASK_LINKS_FIX, ASK_LINKS_WHAT, askUserQuestionText, findMissingLinks, linkNotes, missingLinksNote, withoutTaskIds } from '../lib/missing-links.js'
 import { deadCommitLinksNote, findDeadCommitLinks } from '../lib/github-commit-check.js'
 
 defineOp({
@@ -21,16 +22,20 @@ defineOp({
     text: z.string().max(200000).optional().describe('The text to check (Markdown or HTML)'),
     hook_input: z.record(z.string(), z.unknown()).optional().describe('Set by Walnut\'s AskUserQuestion hook: the hook\'s own input; the answer is then the hook\'s output'),
   },
-  handler: async (args) => {
+  handler: async (args, call) => {
+    // A short hex id this Walnut knows as a task (or a prefix of one) is no commit.
+    const isTaskId = async (id: string) => {
+      try { await call('GET', `/api/tasks/${encodeURIComponent(id)}`); return true } catch (err) { return /ambiguous/i.test(String(err)) }
+    }
     if (args.hook_input) {
       if (process.env.WALNUT_LINK_NOTE === '0') return {}
       const hook = args.hook_input as { tool_name?: unknown; tool_input?: unknown }
       if (hook.tool_name !== 'AskUserQuestion') return {}
-      const notes = await linkNotes(askUserQuestionText(hook.tool_input), ASK_LINKS_WHAT, ASK_LINKS_FIX)
+      const notes = await linkNotes(askUserQuestionText(hook.tool_input), ASK_LINKS_WHAT, ASK_LINKS_FIX, { isTaskId })
       return notes.length ? { hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: notes.join(' ') } } : {}
     }
     const text = String(args.text ?? '')
-    const missing = findMissingLinks(text)
+    const missing = await withoutTaskIds(findMissingLinks(text), isTaskId)
     const dead = await findDeadCommitLinks(text)
     const fix = 'Fix it before it goes to the user.'
     const notes = [missingLinksNote(missing, 'This text', fix), deadCommitLinksNote(dead, 'This text', fix)].filter(Boolean)

@@ -6,8 +6,8 @@
  * goes to the user as written, and the note reaches the model as `additionalContext` beside the
  * answer, so its next words to the user carry the links.
  *
- * The check runs in the session's own `walnut` CLI on its host (op link_check, which reads nothing
- * from the server): the hook pipes its input there on stdin, wrapped as `hook_input`, so no content
+ * The check runs in the session's own `walnut` CLI on its host (op link_check, which asks the server
+ * only whether a short hex id is a task): the hook pipes its input there on stdin, wrapped as `hook_input`, so no content
  * rides a command line. No shortcut in sh: the hook's input always holds digits (its session id), and
  * a question is rare enough that one CLI call each is nothing.
  * Only an answer with `hookSpecificOutput` is printed: an older CLI that knows no link_check prints
