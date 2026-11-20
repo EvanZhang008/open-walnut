@@ -10,8 +10,9 @@
  * chat or task list); a view that shows it reads its own route, folded and read-only.
  *
  * Not the global MEMORY.md / USER.md (memory_read / memory_write, the user's standing memory):
- * this one lives on the task (`task.agent_memory`), is named with the task everywhere, and is
- * read and written through agent_memory_read / agent_memory_write.
+ * this one is a file in Walnut's artifacts folder (`artifacts/nodes/<taskId>/MEMORY.md`,
+ * artifacts/node-memory.ts), is named with the task everywhere, and is read and written through
+ * agent_memory_read / agent_memory_write.
  *
  * Length: Walnut keeps it useful, not stingy. Up to AGENT_MEMORY_SOFT_CHARS it is left alone;
  * past it every turn-end ask tells the agent to rewrite it shorter, keeping everything still
@@ -179,13 +180,13 @@ AGENT_MEMORY:`;
 }
 
 /** After a compaction: the file read back (its head when long), so the summary cannot lose it. '' when empty. */
-export function agentMemoryAfterCompaction(task: Pick<Task, 'title' | 'agent_memory'>): string {
-  const text = task.agent_memory?.text.trim();
+export function agentMemoryAfterCompaction(task: Pick<Task, 'title'>, memory: AgentMemory | undefined): string {
+  const text = memory?.text.trim();
   if (!text) return '';
   const cut = cutEnd(text, AFTER_COMPACTION_CHARS);
   const shown = text.length > AFTER_COMPACTION_CHARS
     ? `${text.slice(0, cut)}\n… (${text.length - cut} more characters: agent_memory_read reads the whole file)`
     : text;
-  const writer = agentMemoryWriterNote(task.agent_memory);
+  const writer = agentMemoryWriterNote(memory);
   return `Your own MEMORY.md (for "${task.title}", yours only, not Walnut's global MEMORY.md; agent_memory_write changes it):\n${writer ? `${writer}\n` : ''}${shown}`;
 }

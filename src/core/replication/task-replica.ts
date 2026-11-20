@@ -89,8 +89,10 @@ export interface TaskReplicaDeps {
 }
 
 async function defaultDeps(): Promise<TaskReplicaDeps> {
-  const [tm, targets] = await Promise.all([import('../task-manager.js'), import('./replica-targets.js')])
-  return { view: tm.taskStoreForReplica, targets: targets.replicaTargets }
+  const [tm, targets, { replicaRows }] = await Promise.all([import('../task-manager.js'), import('./replica-targets.js'), import('../artifacts/node-memory.js')])
+  // Each node's MEMORY.md rides on its row in the followers' copies (node-memory.ts replicaRows).
+  const view = async () => { const v = await tm.taskStoreForReplica(); return { ...v, tasks: await replicaRows(v.tasks) } }
+  return { view, targets: targets.replicaTargets }
 }
 
 export interface TaskReplicaRoundResult {

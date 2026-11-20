@@ -1170,12 +1170,6 @@ export interface Task {
    *  (trigger_create `watches`): the 4-hour re-checks skip what a live one watches
    *  (sessions/recheck-watch.ts). */
   recheck_watch?: import('./sessions/recheck-watch.js').RecheckWatch[] | null;
-  /** The agent's own MEMORY.md (Main, a lead, a leader): its working memory, not shown to the
-   *  user by default and not Walnut's global MEMORY.md (src/core/sessions/agent-memory.ts).
-   *  `by` / `by_name` / `by_at`: the latest write by someone other than the task's own session (the
-   *  user, another task), so the owner never reads another's lines as its own. The owner's appends
-   *  keep it; only the owner replacing the whole file clears it. */
-  agent_memory?: { text: string; at: string; refused?: { at: string; chars: number }; by?: 'human' | 'agent' | `task:${string}`; by_name?: string; by_at?: string };
   /** A watch on this task (task_watch): who hears where it stands, and how often at least
    *  (src/core/sessions/task-watch.ts). Every status it gives restarts the clock; a completion ends it. */
   watch?: import('./sessions/task-watch.js').TaskWatch | null;

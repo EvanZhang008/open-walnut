@@ -26,7 +26,7 @@ const EXPECTED: Record<string, { by: 'copy' | 'mac'; why: string }> = {
   '/tasks/meta/sprints': { by: 'copy', why: 'read from the task records' },
   '/tasks/meta/tag-display': { by: 'copy', why: 'read from the task records' },
   '/tasks/meta/tags': { by: 'copy', why: 'read from the task records' },
-  '/tasks/:id/agent-memory': { by: 'copy', why: 'task.agent_memory, a field of the record' },
+  '/tasks/:id/agent-memory': { by: 'copy', why: 'knowledge/nodes/<id>/MEMORY.md, a file the copy holds' },
   '/tasks/:id/brief': { by: 'copy', why: 'task.brief and the task list' },
   '/tasks/:id/watch': { by: 'copy', why: 'task.watch, a field of the record' },
   '/tasks/:id/agent-skills': { by: 'mac', why: 'the agent-skills store, kept only on the primary' },

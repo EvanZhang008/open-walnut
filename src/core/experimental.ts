@@ -96,6 +96,12 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'On the Org page and in the Org chart, a VP with tasks that lead their own team gets one line under it, "6 leaders", folded. Open it to see those leaders by project, and the leaders under each of them. Every fold stays as you left it.',
     default: false,
   },
+  {
+    id: 'notes_artifacts',
+    name: 'Walnut artifacts in Notes',
+    description: 'A "Walnut artifacts" section under the notes tree lists what Walnut\'s agents keep as standing knowledge: the org\'s skills, the shared notes, and each VP\'s and lead\'s MEMORY.md, team guidance, skills, notes and reflections. Click one to read it.',
+    default: false,
+  },
 ] as const;
 
 export type ExperimentalFeatureId = typeof EXPERIMENTAL_FEATURES[number]['id'];

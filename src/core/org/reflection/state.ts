@@ -6,7 +6,7 @@
 import path from 'node:path';
 import { WALNUT_HOME } from '../../../constants.js';
 import { readJsonFile, updateJsonFile } from '../../../utils/fs.js';
-import { TASK_ID_RE } from '../../knowledge/paths.js';
+import { TASK_ID_RE } from '../../artifacts/paths.js';
 
 export interface ReflectionState {
   version: 1;

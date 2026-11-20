@@ -24,6 +24,7 @@ vi.mock('../../../src/core/sessions/session-send-core.js', async (importOriginal
 
 import express from 'express'
 import request from 'supertest'
+import { changeNodeMemory, readNodeMemory } from '../../../src/core/artifacts/node-memory.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { sessionRunner } from '../../../src/providers/claude-code-session.js'
 import { addTask, getTask, queryTasksSlimPage, updateTaskRaw } from '../../../src/core/task-manager.js'
@@ -128,13 +129,13 @@ describe('the MEMORY.md rules', () => {
   })
 
   it('is read back after a compaction, and nothing is said when it is empty', () => {
-    expect(agentMemoryAfterCompaction({ title: 'Garden lead', agent_memory: { text: '- a', at: NOW } }))
+    expect(agentMemoryAfterCompaction({ title: 'Garden lead' }, { text: '- a', at: NOW }))
       .toBe("Your own MEMORY.md (for \"Garden lead\", yours only, not Walnut's global MEMORY.md; agent_memory_write changes it):\n- a")
     expect(agentMemoryAfterCompaction({ title: 'x' })).toBe('')
-    const long = agentMemoryAfterCompaction({ title: 'x', agent_memory: { text: 'k'.repeat(9_000), at: NOW } })
+    const long = agentMemoryAfterCompaction({ title: 'x' }, { text: 'k'.repeat(9_000), at: NOW })
     expect(long).toContain('… (3000 more characters: agent_memory_read reads the whole file)')
     expect(long.length).toBeLessThan(6_300)
-    expect(agentMemoryAfterCompaction({ title: 'x', agent_memory: { text: '  ', at: NOW } })).toBe('')
+    expect(agentMemoryAfterCompaction({ title: 'x' }, { text: '  ', at: NOW })).toBe('')
   })
 })
 
@@ -206,22 +207,22 @@ describe('MEMORY.md in the turn-end self-report', () => {
     expect(prompt).toContain('AGENT_MEMORY:')
     const stored = await getTask(lead.id)
     expect(stored.brief).toEqual(before)
-    expect(stored.agent_memory?.text).toMatch(/^- \d{4}-\d{2}-\d{2}: The fence supplier answers by Friday\.$/)
+    expect((await readNodeMemory(lead.id))?.text).toMatch(/^- \d{4}-\d{2}-\d{2}: The fence supplier answers by Friday\.$/)
   })
 
   it('shows the stored file next time and keeps it on "unchanged"', async () => {
-    const before = (await getTask(lead.id)).agent_memory
+    const before = (await readNodeMemory(lead.id))!
     const fake = fakeSession(LEAD_SID, REPORT('unchanged', 'unchanged'))
     await runTriage(payload(LEAD_SID, await getTask(lead.id)))
     expect(fake.askSideQuestion.mock.calls[0]![0] as string).toContain('The fence supplier answers by Friday.\n</own_memory>')
-    expect((await getTask(lead.id)).agent_memory).toEqual(before)
+    expect((await readNodeMemory(lead.id))!).toEqual(before)
   })
 
   it('an answer past the limit writes nothing, and the next ask says it was not written', async () => {
-    const before = (await getTask(lead.id)).agent_memory!
+    const before = (await readNodeMemory(lead.id))!
     fakeSession(LEAD_SID, REPORT('unchanged', `replace:\n${'q'.repeat(AGENT_MEMORY_MAX_CHARS + 10)}`))
     await runTriage(payload(LEAD_SID, await getTask(lead.id)))
-    const after = (await getTask(lead.id)).agent_memory!
+    const after = (await readNodeMemory(lead.id))!
     expect(after.text).toBe(before.text)
     expect(after.refused?.chars).toBe(AGENT_MEMORY_MAX_CHARS + 10)
     __resetTriageRateLimiter()
@@ -229,7 +230,7 @@ describe('MEMORY.md in the turn-end self-report', () => {
     await runTriage(payload(LEAD_SID, await getTask(lead.id)))
     expect(fake.askSideQuestion.mock.calls[0]![0] as string).toContain(`Your last answer (${AGENT_MEMORY_MAX_CHARS + 10} characters) was NOT written`)
     // Said once: the "unchanged" answer lets it go.
-    expect((await getTask(lead.id)).agent_memory).toEqual({ text: before.text, at: before.at })
+    expect((await readNodeMemory(lead.id))!).toEqual({ text: before.text, at: before.at })
     __resetTriageRateLimiter()
     const again = fakeSession(LEAD_SID, REPORT('unchanged', 'unchanged'))
     await runTriage(payload(LEAD_SID, await getTask(lead.id)))
@@ -241,24 +242,24 @@ describe('MEMORY.md in the turn-end self-report', () => {
     fakeSession(LEAD_SID, REPORT('unchanged', `replace:\n${file}`))
     await runTriage(payload(LEAD_SID, await getTask(lead.id)))
     const after = await getTask(lead.id)
-    expect(after.agent_memory?.text).toBe(file)
-    expect(after.agent_memory).not.toHaveProperty('refused')
+    expect((await readNodeMemory(lead.id))?.text).toBe(file)
+    expect(await readNodeMemory(lead.id)).not.toHaveProperty('refused')
     expect(JSON.stringify(after.ext ?? {})).not.toContain('example.com/fence')
     expect(after.status_report?.next).toBe('They carry on.')
   })
 
   it('a stray "**unchanged**" keeps the file', async () => {
-    const before = (await getTask(lead.id)).agent_memory
+    const before = (await readNodeMemory(lead.id))!
     fakeSession(LEAD_SID, REPORT('unchanged', '**unchanged** (nothing new)'))
     await runTriage(payload(LEAD_SID, await getTask(lead.id)))
-    expect((await getTask(lead.id)).agent_memory).toEqual(before)
+    expect((await readNodeMemory(lead.id))!).toEqual(before)
   })
 
   it('asks Main too', async () => {
     const fake = fakeSession(LEAD_SID, REPORT('**Needs you:** nothing.', 'append: Raise the budget next week.'))
     await runTriage(payload(LEAD_SID, await getTask(main.id)))
     expect(fake.askSideQuestion.mock.calls[0]![0] as string).toContain('AGENT_MEMORY:')
-    expect((await getTask(main.id)).agent_memory?.text).toContain('Raise the budget next week.')
+    expect((await readNodeMemory(main.id))!?.text).toContain('Raise the budget next week.')
   })
 
   it('asks a leader with an open subtask, with no Brief', async () => {
@@ -267,14 +268,14 @@ describe('MEMORY.md in the turn-end self-report', () => {
     const prompt = fake.askSideQuestion.mock.calls[0]![0] as string
     expect(prompt).not.toContain('FOR_USER_BRIEF')
     expect(prompt).toContain('AGENT_MEMORY:')
-    expect((await getTask(leader.id)).agent_memory?.text).toContain('Check the fence paint.')
+    expect((await readNodeMemory(leader.id))!?.text).toContain('Check the fence paint.')
   })
 
   it('never asks a plain worker', async () => {
     const fake = fakeSession(WORKER_SID, REPORT(null, 'append: should not be stored'))
     await runTriage(payload(WORKER_SID, await getTask(worker.id)))
     expect(fake.askSideQuestion.mock.calls[0]![0] as string).not.toContain('AGENT_MEMORY')
-    expect((await getTask(worker.id)).agent_memory).toBeUndefined()
+    expect((await readNodeMemory(worker.id))!).toBeUndefined()
   })
 })
 
@@ -290,11 +291,11 @@ describe('the MEMORY.md route and the task lists', () => {
     const app = createApp()
     const put = await request(app).put(`/api/v1/tasks/${lead.id}/agent-memory`).send({ content: '# Garden\n- one', mode: 'replace' })
     expect(put.status).toBe(200)
-    expect((await getTask(lead.id)).agent_memory?.text).toBe('# Garden\n- one')
+    expect((await readNodeMemory(lead.id))!?.text).toBe('# Garden\n- one')
     const big = await request(app).put(`/api/v1/tasks/${lead.id}/agent-memory`).send({ content: 'w'.repeat(AGENT_MEMORY_MAX_CHARS + 1) })
     expect(big.status).toBe(413)
     expect(big.body.error?.code ?? big.body.code).toBe('agent_memory_too_long')
-    expect((await getTask(lead.id)).agent_memory?.text).toBe('# Garden\n- one')
+    expect((await readNodeMemory(lead.id))!?.text).toBe('# Garden\n- one')
   })
 
   it('its own session writes it; append is the default; parallel appends keep both', async () => {
@@ -305,11 +306,11 @@ describe('the MEMORY.md route and the task lists', () => {
       request(app).put(`/api/v1/tasks/${lead.id}/agent-memory`).set('x-walnut-caller-sid', 'lead-own-sid').send({ content: 'second' }),
     ])
     expect([a.status, b.status]).toEqual([200, 200])
-    const text = (await getTask(lead.id)).agent_memory!.text
+    const text = (await readNodeMemory(lead.id))!.text
     expect(text.startsWith('# Garden\n- one\n')).toBe(true)
     expect(text).toMatch(/: first(\n|$)/)
     expect(text).toMatch(/: second(\n|$)/)
-    await updateTaskRaw(lead.id, { agent_memory: { text: '# Garden\n- one', at: NOW } } as never)
+    await changeNodeMemory(lead.id, () => ({ text: '# Garden\n- one', at: NOW }))
   })
 
   // 2026-10-27, the user: "all human action can be done by agent also". A person writes any
@@ -321,7 +322,7 @@ describe('the MEMORY.md route and the task lists', () => {
     const res = await request(createApp()).put(`/api/v1/tasks/${lead.id}/agent-memory`)
       .set('x-walnut-caller-sid', 'worker-own-sid').send({ content: 'Fence paint arrives Friday' })
     expect(res.status).toBe(200)
-    const written = (await getTask(lead.id)).agent_memory!
+    const written = (await readNodeMemory(lead.id))!
     expect(written.text).toMatch(/^# Garden\n- one\n- \d{4}-\d{2}-\d{2}: Fence paint arrives Friday$/)
     expect(info).toHaveBeenCalledWith("agent memory written by another task's session", {
       taskId: lead.id, mode: 'append', callerSid: 'worker-own-sid', callerTaskId: worker.id, chars: res.body.chars,
@@ -331,7 +332,7 @@ describe('the MEMORY.md route and the task lists', () => {
     expect(res.body.memory).toMatchObject({ by: `task:${worker.id}`, by_name: 'the task "Fix the fence"' })
     const note = `Last written by the task "Fix the fence" at ${written.at}.`
     expect(agentMemoryPrompt(written, 'Garden lead')).toContain(`</own_memory>\n${note}`)
-    expect(agentMemoryAfterCompaction({ title: 'Garden lead', agent_memory: written })).toContain(`agent_memory_write changes it):\n${note}\n# Garden`)
+    expect(agentMemoryAfterCompaction({ title: 'Garden lead' }, written)).toContain(`agent_memory_write changes it):\n${note}\n# Garden`)
     // Its own session's write clears the writer and logs no such line.
     info.mockClear()
     ownCallers.set('lead-own-sid', lead.id)
@@ -339,19 +340,19 @@ describe('the MEMORY.md route and the task lists', () => {
       .set('x-walnut-caller-sid', 'lead-own-sid').send({ content: '# Garden\n- one', mode: 'replace' })
     expect(own.status).toBe(200)
     expect(info.mock.calls.filter(([msg]) => String(msg).includes('another task'))).toEqual([])
-    const cleared = (await getTask(lead.id)).agent_memory!
+    const cleared = (await readNodeMemory(lead.id))!
     expect(cleared).not.toHaveProperty('by')
     expect(cleared).not.toHaveProperty('by_name')
     expect(agentMemoryPrompt(cleared, 'Garden lead')).not.toContain('Last written by')
     // A person's write is recorded as the user's, with no name.
     const person = await request(createApp()).put(`/api/v1/tasks/${lead.id}/agent-memory`).send({ content: '# Garden\n- one', mode: 'replace' })
     expect(person.status).toBe(200)
-    const byPerson = (await getTask(lead.id)).agent_memory!
+    const byPerson = (await readNodeMemory(lead.id))!
     expect(byPerson.by).toBe('human')
     expect(byPerson).not.toHaveProperty('by_name')
     expect(agentMemoryWriterNote(byPerson)).toBe(`Last written by the user at ${byPerson.at}.`)
     info.mockRestore()
-    await updateTaskRaw(lead.id, { agent_memory: { text: '# Garden\n- one', at: NOW } } as never)
+    await changeNodeMemory(lead.id, () => ({ text: '# Garden\n- one', at: NOW }))
   })
 
   // 2026-10-27 review: the owner appends at every turn end, so an append must not erase the
@@ -362,7 +363,7 @@ describe('the MEMORY.md route and the task lists', () => {
     const put = await request(createApp()).put(`/api/v1/tasks/${lead.id}/agent-memory`)
       .set('x-walnut-caller-sid', 'worker-own-sid').send({ content: 'Paint is blue, not green' })
     expect(put.status).toBe(200)
-    const byWorker = (await getTask(lead.id)).agent_memory!
+    const byWorker = (await readNodeMemory(lead.id))!
     expect(byWorker).toMatchObject({ by: `task:${worker.id}`, by_name: 'the task "Fix the fence"', by_at: byWorker.at })
     const note = `Last written by the task "Fix the fence" at ${byWorker.at}.`
 
@@ -371,23 +372,23 @@ describe('the MEMORY.md route and the task lists', () => {
     const fake = fakeSession(LEAD_SID, REPORT('unchanged', 'append: Order the blue paint.'))
     await runTriage(payload(LEAD_SID, await getTask(lead.id)))
     expect(fake.askSideQuestion.mock.calls[0]![0] as string).toContain(`</own_memory>\n${note}`)
-    const afterAppend = (await getTask(lead.id)).agent_memory!
+    const afterAppend = (await readNodeMemory(lead.id))!
     expect(afterAppend.text).toMatch(/Paint is blue, not green\n- \d{4}-\d{2}-\d{2}: Order the blue paint\.$/)
     expect(afterAppend).toMatchObject({ by: `task:${worker.id}`, by_name: 'the task "Fix the fence"', by_at: byWorker.at })
-    expect(agentMemoryAfterCompaction({ title: 'Garden lead', agent_memory: afterAppend })).toContain(note)
+    expect(agentMemoryAfterCompaction({ title: 'Garden lead' }, afterAppend)).toContain(note)
     // Its own PUT append keeps it too.
     await request(createApp()).put(`/api/v1/tasks/${lead.id}/agent-memory`).set('x-walnut-caller-sid', 'lead-own-sid').send({ content: 'one more' })
-    expect(agentMemoryWriterNote((await getTask(lead.id)).agent_memory)).toBe(note)
+    expect(agentMemoryWriterNote((await readNodeMemory(lead.id))!)).toBe(note)
 
     // The lead replaces the whole file: every line is its own now, and the note is gone.
     const replaced = await request(createApp()).put(`/api/v1/tasks/${lead.id}/agent-memory`)
       .set('x-walnut-caller-sid', 'lead-own-sid').send({ content: '# Garden\n- one', mode: 'replace' })
     expect(replaced.status).toBe(200)
-    const mine = (await getTask(lead.id)).agent_memory!
+    const mine = (await readNodeMemory(lead.id))!
     expect(mine).toEqual({ text: '# Garden\n- one', at: mine.at })
-    expect(agentMemoryAfterCompaction({ title: 'Garden lead', agent_memory: mine })).not.toContain('Last written by')
+    expect(agentMemoryAfterCompaction({ title: 'Garden lead' }, mine)).not.toContain('Last written by')
     expect(agentMemoryPrompt(mine, 'Garden lead')).not.toContain('Last written by')
-    await updateTaskRaw(lead.id, { agent_memory: { text: '# Garden\n- one', at: NOW } } as never)
+    await changeNodeMemory(lead.id, () => ({ text: '# Garden\n- one', at: NOW }))
   })
 
   it('names a writer as the user reads it, whitespace collapsed, at most 60 characters', () => {
@@ -405,13 +406,12 @@ describe('the MEMORY.md route and the task lists', () => {
     await updateTaskRaw(done.id, { org_role: 'lead', phase: 'COMPLETE' } as never)
     const res = await request(createApp()).put(`/api/v1/tasks/${done.id}/agent-memory`).send({ content: 'late' })
     expect(res.status).toBe(409)
-    expect((await getTask(done.id)).agent_memory).toBeUndefined()
+    expect((await readNodeMemory(done.id))!).toBeUndefined()
   })
 
-  it('task_get shows only its size', async () => {
+  it('task_get does not show it', async () => {
     const view = taskView(await getTask(lead.id) as unknown as Record<string, unknown>)
     expect(view).not.toHaveProperty('agent_memory')
-    expect(view.agent_memory_chars).toBe('# Garden\n- one'.length)
   })
 
   it('no task list carries it, slim or minimal', async () => {
@@ -421,7 +421,7 @@ describe('the MEMORY.md route and the task lists', () => {
       expect(row).toBeDefined()
       expect(row).not.toHaveProperty('agent_memory')
     }
-    expect((await getTask(lead.id)).agent_memory?.text).toBe('# Garden\n- one')
+    expect((await readNodeMemory(lead.id))!?.text).toBe('# Garden\n- one')
   })
 })
 

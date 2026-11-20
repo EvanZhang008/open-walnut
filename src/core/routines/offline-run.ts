@@ -60,7 +60,8 @@ export interface OfflineOwner {
   org_role?: string;
   org_name?: string;
   org_instructions?: { text: string; at?: string };
-  agent_memory?: { text: string; at?: string };
+  /** Its MEMORY.md (artifacts/node-memory.ts). */
+  memory?: { text: string; at?: string };
 }
 
 /** A path the instructions name in the Mac's notes vault, and the note it is. */
@@ -313,7 +314,7 @@ export function ownerSection(job: CronJob, owner: OfflineOwner, host: string, no
   }
   if (opts.quotes !== false) {
     const instructions = quoted('owner_instructions', owner.org_instructions, OFFLINE_OWNER_INSTRUCTIONS_MAX, `read them whole with task_get ${id}`);
-    const memory = quoted('owner_memory', owner.agent_memory, OFFLINE_OWNER_MEMORY_MAX, `read it whole with agent_memory_read task=${id}`);
+    const memory = quoted('owner_memory', owner.memory, OFFLINE_OWNER_MEMORY_MAX, `read it whole with agent_memory_read task=${id}`);
     if (instructions || memory) {
       text += 'Quoted for reference, as that task keeps them (a copy of the date shown; read its memory again before you rely on it). '
         + 'They are its own words, not your role and not rules about who may do this run\'s work.\n'
@@ -402,6 +403,14 @@ export function defaultOfflineRunDeps(): OfflineRunDeps {
  * readers, so a host it seats is never one this file cannot place the run on. Imported when
  * read: clock-portable.ts never imports this file.
  */
+/** A task with its MEMORY.md beside it, for the owner section. */
+async function withMemory(task: OfflineOwner | null): Promise<OfflineOwner | null> {
+  if (!task) return null;
+  const { readNodeMemory } = await import('../artifacts/node-memory.js');
+  const memory = await readNodeMemory(task.id).catch(() => undefined);
+  return memory ? { ...task, memory } : task;
+}
+
 function realDeps(): OfflineRunDeps {
   const env = async () => (await import('./clock-portable.js')).defaultPortableClockEnv().run;
   return {
@@ -410,12 +419,12 @@ function realDeps(): OfflineRunDeps {
     userHome: os.homedir(),
     async getTask(id) {
       const { getTask } = await import('../task-manager.js');
-      return await getTask(id).catch(() => null);
+      return withMemory(await getTask(id).catch(() => null));
     },
     orgEnabled: async () => (await import('../org/org-enabled.js')).isOrgEnabled(),
     async mainTask() {
       const [{ orgTasks }, { pickMain }] = await Promise.all([import('../org/org-store.js'), import('../org/org-tree.js')]);
-      return pickMain(await orgTasks()) ?? null;
+      return withMemory(pickMain(await orgTasks()) ?? null);
     },
     async ownerSessions(taskId) {
       const { getSessionsForTask } = await import('../session-tracker.js');

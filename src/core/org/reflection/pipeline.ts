@@ -267,7 +267,8 @@ export function defaultDeps(): ReflectDeps {
       const { USER_FILE } = await import('../../../constants.js');
       // Bounded, so one call stays near its budget whatever the files grow to.
       const user = (await fsp.readFile(USER_FILE, 'utf-8').catch(() => '')).slice(0, RULES_PART_MAX);
-      const memory = (node.agent_memory?.text ?? '').slice(0, RULES_PART_MAX);
+      const { readNodeMemory } = await import('../../artifacts/node-memory.js');
+      const memory = ((await readNodeMemory(node.id).catch(() => undefined))?.text ?? '').slice(0, RULES_PART_MAX);
       return [user && `## The user's standing rules (USER.md)\n${user}`, memory && `## The lead's memory (MEMORY.md)\n${memory}`].filter(Boolean).join('\n\n');
     },
     replyLanguage: async () => {

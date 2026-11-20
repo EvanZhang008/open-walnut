@@ -28,7 +28,8 @@ import {
   nextAgentMemory, type AgentMemory, type AgentMemoryWriterStamp,
 } from '../../core/sessions/agent-memory.js'
 import { resolveCaller } from '../../core/sessions/session-send-core.js'
-import { getTask, updateTaskRaw } from '../../core/task-manager.js'
+import { getTask } from '../../core/task-manager.js'
+import { changeNodeMemory, readNodeMemory } from '../../core/artifacts/node-memory.js'
 import { log } from '../../logging/index.js'
 import { body, header, param, resolveTask, RouteError } from './board-v1.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
@@ -53,7 +54,7 @@ function route(fn: (req: Request, res: Response) => Promise<void>) {
 
 agentMemoryV1Router.get('/tasks/:id/agent-memory', route(async (req, res) => {
   const task = await resolveTask(param(req.params.id))
-  const memory = task.agent_memory ?? null
+  const memory = (await readNodeMemory(task.id)) ?? null
   res.json({
     task_id: task.id, title: task.title, memory,
     chars: memory?.text.length ?? 0, soft_limit: AGENT_MEMORY_SOFT_CHARS, limit: AGENT_MEMORY_MAX_CHARS,
@@ -80,15 +81,12 @@ agentMemoryV1Router.put('/tasks/:id/agent-memory', route(async (req, res) => {
   const now = new Date().toISOString()
   let written: AgentMemory = { text: '', at: now }
   let complete = false
-  // Read-modify-write under the row lock: an append racing a turn-end answer keeps both.
-  await updateTaskRaw(task.id, (current) => {
-    const text = nextAgentMemory(current.agent_memory?.text ?? '', b.content as string, mode, now)
-    written = { text, at: now, ...agentMemoryWriterAfter(current.agent_memory, mode, stamp, now) }
-    return { agent_memory: written }
-  }, {
-    emitEvent: true, source: 'agent-memory',
-    shouldUpdate: (current) => { complete = current.phase === 'COMPLETE'; return !complete },
-  })
+  // Read-modify-write under the file's lock: an append racing a turn-end answer keeps both.
+  await changeNodeMemory(task.id, (current) => {
+    const text = nextAgentMemory(current?.text ?? '', b.content as string, mode, now)
+    written = { text, at: now, ...agentMemoryWriterAfter(current, mode, stamp, now) }
+    return written
+  }, { shouldWrite: async () => { complete = (await getTask(task.id)).phase === 'COMPLETE'; return !complete } })
   if (complete) throw new RouteError(409, 'task_complete', `"${task.title}" is complete: its MEMORY.md is kept as it was. Reopen the task to change it.`)
   if (sid && !own) {
     log.task.info('agent memory written by another task\'s session', { taskId: task.id, mode, callerSid: sid, callerTaskId, chars: written.text.length })

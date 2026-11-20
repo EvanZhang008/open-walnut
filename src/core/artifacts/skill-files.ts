@@ -53,16 +53,20 @@ export function parseSkillFile(name: string, text: string, fallbackAt: string): 
   };
 }
 
-/** Written last when a scope's folder holds all its skills: a folder without it is a move cut short. */
+/**
+ * Written after a scope's change: the release before this one reads a scope's folder only when it
+ * holds this mark (it reads its old JSON file otherwise), so a folder this release wrote reads the
+ * same there after a roll back.
+ */
 const MOVED_MARK = '.moved';
 
 const missing = (err: unknown): boolean => (err as NodeJS.ErrnoException)?.code === 'ENOENT';
 
 /**
- * Every skill of a folder, by name; null when the folder is not a whole move yet (missing, or a
- * move cut short: no mark). Any error but a missing file throws, so a read that fails for a moment
- * (too many open files, a permission) never reads as fewer skills, which a write would then make
- * true. A folder of a name with no SKILL.md, or one without a description, is no skill.
+ * Every skill of a folder, by name; null when there is no folder. Any error but a missing file
+ * throws, so a read that fails for a moment (too many open files, a permission) never reads as
+ * fewer skills, which a write would then make true. A folder of a name with no SKILL.md, or one
+ * without a description, is no skill.
  */
 export async function readSkillDir(dir: string, nameRe: RegExp): Promise<SkillFile[] | null> {
   let names: string[];
@@ -72,7 +76,6 @@ export async function readSkillDir(dir: string, nameRe: RegExp): Promise<SkillFi
     if (missing(err)) return null;
     throw err;
   }
-  if (!names.includes(MOVED_MARK)) return null;
   const out: SkillFile[] = [];
   for (const name of names.filter((n) => nameRe.test(n)).sort()) {
     const file = path.join(dir, name, 'SKILL.md');
@@ -90,7 +93,7 @@ export async function readSkillDir(dir: string, nameRe: RegExp): Promise<SkillFi
   return out;
 }
 
-/** Mark a scope's folder as holding all its skills (after the last file of a move). */
+/** Mark a scope's folder for the release before (MOVED_MARK). */
 export async function markSkillDirMoved(dir: string): Promise<void> {
   await writeTextFile(path.join(dir, MOVED_MARK), `${new Date().toISOString()}\n`);
 }

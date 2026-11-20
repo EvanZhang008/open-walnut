@@ -83,9 +83,7 @@ export function taskExecution(task: Record<string, unknown>): Record<string, unk
 export function taskView(task: Record<string, unknown>): Record<string, unknown> {
   const { status, session_status, exec_session_status, plan_session_status,
     session_id, exec_session_id, plan_session_id, session_ids, last_start,
-    session_history_count, session_status_unavailable, agent_memory, ...fields } = task
-  // Another task's own MEMORY.md is not task_get material: its size only; agent_memory_read reads it.
-  const memoryChars = (agent_memory as { text?: string } | undefined)?.text?.length
+    session_history_count, session_status_unavailable, agent_memory: _oldMemory, ...fields } = task
   // A completed task is verified: Done, with none of its last open words (as the v1 projection).
   if (fields.phase === 'COMPLETE' || status === 'done') {
     delete fields.status_report
@@ -93,7 +91,7 @@ export function taskView(task: Record<string, unknown>): Record<string, unknown>
   }
   // A summary is the note's history: say when it was written, beside the live status (agentStatusView).
   const writtenAt = typeof fields.summary === 'string' && fields.summary ? summaryAt(fields) : undefined
-  return { ...fields, ...(writtenAt ? { summary_at: writtenAt } : {}), ...(memoryChars ? { agent_memory_chars: memoryChars } : {}), execution: taskExecution(task) }
+  return { ...fields, ...(writtenAt ? { summary_at: writtenAt } : {}), execution: taskExecution(task) }
 }
 
 /** Launch fields newer than the oldest server this op may reach; the server names each one it honoured in `applied`. */

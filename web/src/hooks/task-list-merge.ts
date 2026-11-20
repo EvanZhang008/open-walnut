@@ -30,7 +30,7 @@ export const UNCOMPARED_TASK_FIELDS: Readonly<Record<string, string>> = {
   session_status_unavailable: 'not drawn', family_group_id: 'not drawn', auto_links: 'not drawn',
   created_by_op: 'not drawn', applied_ops: 'not drawn', ledger_desc: 'not drawn', walnut_agent: 'set at create',
   agent_id: 'set at create', status_report: 'drawn through user_status', promise_alarm: 'not drawn',
-  needs_recheck: 'not drawn', letter_recheck: 'not drawn', matter_news: 'not drawn', recheck_watch: 'not drawn', agent_memory: 'read on its own panel',
+  needs_recheck: 'not drawn', letter_recheck: 'not drawn', matter_news: 'not drawn', recheck_watch: 'not drawn',
   cwd_missing: 'not drawn', watch: 'not drawn (the server keeps who hears a task)',
   // The engine comparison's facts: the server reads them for Usage & Costs; no task row draws them.
   engine_pick: 'not drawn (Usage & Costs reads it on the server)', start_failures: 'not drawn (Usage & Costs)',

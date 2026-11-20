@@ -23,6 +23,7 @@ vi.mock('../../../src/core/session-tracker.js', async (importOriginal) => {
   }
 })
 
+import { changeNodeMemory, readNodeMemory } from '../../../src/core/artifacts/node-memory.js'
 import { runOfflineHandover, _resetOfflineHandoverForTesting, _setHandoverBackoffForTesting } from '../../../src/core/offline-handover.js'
 import { addTask, getTask, updateTask, updateTaskRaw } from '../../../src/core/task-manager.js'
 import { closeDb } from '../../../src/core/task-db.js'
@@ -81,7 +82,7 @@ const memRec = (taskId: string, memory: Record<string, unknown>, over: Record<st
 
 async function owner(memory?: string, extra: Record<string, unknown> = {}): Promise<string> {
   const id = (await addTask({ title: 'Platform', project: 'Platform', ...extra } as never)).task.id
-  if (memory !== undefined) await updateTaskRaw(id, { agent_memory: { text: memory, at: '2026-11-12T00:00:00.000Z' } } as never)
+  if (memory !== undefined) await changeNodeMemory(id, () => ({ text: memory, at: '2026-11-12T00:00:00.000Z' }))
   return id
 }
 
@@ -126,7 +127,7 @@ describe('one call, one entry: the drain and a retry straight at the Mac share t
     const r = await online(id, 'once only', opId)
     expect(r.status).toBe(200)
     await drain([memRec(id, { mode: 'append', content: 'once only' }, { opId })])
-    expect((await getTask(id)).agent_memory!.text.match(/once only/g)).toHaveLength(1)
+    expect((await readNodeMemory(id))!.text.match(/once only/g)).toHaveLength(1)
   })
 
   it('the record drained first: the retry at the Mac answers the first write and adds nothing', async () => {
@@ -134,11 +135,11 @@ describe('one call, one entry: the drain and a retry straight at the Mac share t
     const id = await owner('- 2026-11-12: first line')
     const opId = writeOpId('oc-ReTrYcAl_00000002', 'PUT', `/tasks/${encodeURIComponent(id)}/agent-memory`, 0)
     await drain([memRec(id, { mode: 'append', content: 'drained first' }, { opId })])
-    expect((await getTask(id)).agent_memory!.text.match(/drained first/g)).toHaveLength(1)
+    expect((await readNodeMemory(id))!.text.match(/drained first/g)).toHaveLength(1)
     const r = await online(id, 'drained first', opId)
     expect(r.status).toBe(200)
     expect(await r.json()).toMatchObject({ duplicate: true, opId })
-    expect((await getTask(id)).agent_memory!.text.match(/drained first/g)).toHaveLength(1)
+    expect((await readNodeMemory(id))!.text.match(/drained first/g)).toHaveLength(1)
   })
 
   it('another call with the same words is another entry', async () => {
@@ -146,7 +147,7 @@ describe('one call, one entry: the drain and a retry straight at the Mac share t
     const id = await owner('- 2026-11-12: first line')
     await drain([memRec(id, { mode: 'append', content: 'same words' }, { opId: writeOpId('oc-ReTrYcAl_00000003', 'PUT', `/tasks/${id}/agent-memory`, 0) })])
     await online(id, 'same words', writeOpId('oc-ReTrYcAl_00000004', 'PUT', `/tasks/${id}/agent-memory`, 0))
-    expect((await getTask(id)).agent_memory!.text.match(/same words/g)).toHaveLength(2)
+    expect((await readNodeMemory(id))!.text.match(/same words/g)).toHaveLength(2)
   })
 })
 
@@ -157,15 +158,15 @@ describe('an away MEMORY.md append at wake', () => {
     sessions.set(RUN_SID, run)
     const rec = memRec(id, { mode: 'append', content: 'reflection: CR 2 still waits \u4f60\u597d' })
     // The owner wrote its own line after the host saved the entry, before the Mac drained it.
-    await updateTaskRaw(id, (cur) => ({ agent_memory: { text: `${cur.agent_memory!.text}\n- 2026-11-13: owner line`, at: new Date().toISOString() } }) as never)
+    await changeNodeMemory(id, (cur) => ({ text: `${cur!.text}\n- 2026-11-13: owner line`, at: new Date().toISOString() }))
     await drain([rec])
-    const t = await getTask(id)
-    expect(t.agent_memory!.text.split('\n')).toEqual([
+    const t = (await readNodeMemory(id))!
+    expect(t.text.split('\n')).toEqual([
       '- 2026-11-12: first line',
       '- 2026-11-13: owner line',
       `- ${new Date(rec.at).toISOString().slice(0, 10)}: reflection: CR 2 still waits \u4f60\u597d`,
     ])
-    expect(t.agent_memory).toMatchObject({ by: `task:${run}`, by_name: expect.any(String) })
+    expect(t).toMatchObject({ by: `task:${run}`, by_name: expect.any(String) })
     expect(allEntries().filter((e) => e.taskId === id)).toEqual([])
   })
 
@@ -174,22 +175,22 @@ describe('an away MEMORY.md append at wake', () => {
     const rec = memRec(id, { mode: 'append', content: 'once' })
     await drain([rec])
     await drain([{ ...rec }])
-    expect((await getTask(id)).agent_memory!.text.match(/once/g)).toHaveLength(1)
+    expect((await readNodeMemory(id))!.text.match(/once/g)).toHaveLength(1)
   })
 
   it('the task\'s own session writes unstamped (its earlier writer record kept, as online)', async () => {
     const id = await owner('- 2026-11-12: first line')
     sessions.set(OWN_SID, id)
     await drain([memRec(id, { mode: 'append', content: 'mine' }, { actor: { kind: 'session', sid: OWN_SID } })])
-    const t = await getTask(id)
-    expect(t.agent_memory!.text).toMatch(/mine$/)
-    expect(t.agent_memory!.by).toBeUndefined()
+    const t = (await readNodeMemory(id))!
+    expect(t.text).toMatch(/mine$/)
+    expect(t.by).toBeUndefined()
   })
 
   it('a file with no memory yet gets the entry as its first line', async () => {
     const id = await owner()
     await drain([memRec(id, { mode: 'append', content: 'first ever' })])
-    expect((await getTask(id)).agent_memory!.text).toMatch(/^- \d{4}-\d{2}-\d{2}: first ever$/)
+    expect((await readNodeMemory(id))!.text).toMatch(/^- \d{4}-\d{2}-\d{2}: first ever$/)
   })
 })
 
@@ -197,17 +198,17 @@ describe('an away MEMORY.md replace at wake', () => {
   it('over the very text it was made on: it lands', async () => {
     const id = await owner('old text')
     await drain([memRec(id, { mode: 'replace', content: 'new whole file', baseHash: agentMemoryHash('old text') })])
-    expect((await getTask(id)).agent_memory!.text).toBe('new whole file')
+    expect((await readNodeMemory(id))!.text).toBe('new whole file')
   })
 
   it('over a text the Mac changed since, or with no base named: a conflict, the Mac\'s file kept, the replacement logged whole', async () => {
     const id = await owner('old text')
-    await updateTaskRaw(id, { agent_memory: { text: 'old text\n- owner wrote more', at: new Date().toISOString() } } as never)
+    await changeNodeMemory(id, () => ({ text: 'old text\n- owner wrote more', at: new Date().toISOString() }))
     await drain([
       memRec(id, { mode: 'replace', content: 'stale replace', baseHash: agentMemoryHash('old text') }),
       memRec(id, { mode: 'replace', content: 'blind replace' }),
     ])
-    expect((await getTask(id)).agent_memory!.text).toBe('old text\n- owner wrote more')
+    expect((await readNodeMemory(id))!.text).toBe('old text\n- owner wrote more')
     const entries = allEntries().filter((e) => e.taskId === id)
     expect(entries.map((e) => [e.kind, e.field, e.kept, e.replica])).toEqual([
       ['task-field', 'agent_memory', 'mac', 'stale replace'],
@@ -228,8 +229,8 @@ describe('refusals the log keeps', () => {
       memRec(full, { mode: 'append', content: 'one entry too many' }),
       memRec('mgonezzz-0000', { mode: 'append', content: 'for nobody' }),
     ])
-    expect((await getTask(done)).agent_memory!.text).toBe('kept')
-    expect((await getTask(full)).agent_memory!.text).toBe('x'.repeat(19_990))
+    expect((await readNodeMemory(done))!.text).toBe('kept')
+    expect((await readNodeMemory(full))!.text).toBe('x'.repeat(19_990))
     const entries = allEntries()
     expect(entries.find((e) => e.taskId === done || (e.record as { taskId?: string } | undefined)?.taskId === done)?.kind).toBe('refused')
     expect(entries.find((e) => e.taskId === full || (e.record as { taskId?: string } | undefined)?.taskId === full)?.kind).toBe('refused')

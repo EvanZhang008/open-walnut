@@ -3,13 +3,13 @@
  * create some kind memory folder u can add it there, all walnut CEO / VP need to do the
  * similar").
  *
- *   WALNUT_HOME/knowledge/nodes/<taskId>/notes/   one per task: Main, every VP and lead, any task
- *   WALNUT_HOME/knowledge/shared/notes/           what is the same for everyone (the skills index and
+ *   WALNUT_HOME/artifacts/nodes/<taskId>/notes/   one per task: Main, every VP and lead, any task
+ *   WALNUT_HOME/artifacts/shared/notes/           what is the same for everyone (the skills index and
  *                                                 standing memory the persona moved), and a taskless session's
  *
- * In Walnut's knowledge folder since 2026-11-19 (knowledge/paths.ts). The folder it moved from,
- * `agent-memory/<taskId>/`, is still read where the new one lacks a file, and a node's own notes are
- * still written there too, so the release before this one reads the same notes (knowledge/migrate.ts).
+ * In Walnut's artifacts folder since 2026-11-19 (artifacts/paths.ts), its only place since 2026-11-20.
+ * What an older release still writes to the folder it moved from (`agent-memory/<taskId>/`) is taken
+ * in before the folder is read or written (artifacts/migrate.ts takeLegacyNotes).
  *
  * Two kinds of file, one folder, one op pair (agent_memory_read / agent_memory_write with `file`):
  * - Walnut's: `<block>.md`, the rest of an always-loaded block that did not fit its cap
@@ -20,7 +20,7 @@
  *
  * Why not agentMemoryDir (constants.ts): that is per console AGENT (Personal AI, Mentor, ...), with
  * the global MEMORY.md / USER.md inside; a node is a task, so its folder is keyed like its own
- * MEMORY.md, Board and skills (agent-skills/<taskId>.json). A read looks in the task's folder, then
+ * MEMORY.md, Board and skills (artifacts/nodes/<taskId>/). A read looks in the task's folder, then
  * in _shared. Only the primary writes (a replica, the companion included, reads nothing here: the folder is
  * the Mac's, like Threads and agent skills).
  */
@@ -29,12 +29,12 @@ import path from 'node:path'
 import { log } from '../../logging/index.js'
 import { isFollower } from '../server-role.js'
 import { withFileLock } from '../../utils/file-lock.js'
-import { legacyNotesDirOf, memoryCopyOf, notesDirOf, SHARED_KEY, TASK_ID_RE } from '../knowledge/paths.js'
+import { memoryCopyOf, NOTE_NAME_RE, notesDirOf, SHARED_KEY, TASK_ID_RE } from '../artifacts/paths.js'
 import { writeTextFile } from '../../utils/fs.js'
 import { byteLength, promptBlock, walnutFileKey, walnutFolderBlock, type PromptOverflow, type PromptPart } from './prompt-blocks.js'
 
 export const SHARED_FOLDER = SHARED_KEY
-export const MEMORY_FILE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,62}\.md$/
+export const MEMORY_FILE_NAME_RE = NOTE_NAME_RE
 /** A node's own note files: a few long documents, not a second MEMORY.md per topic. */
 export const OWN_NOTE_FILES_MAX = 20
 export const OWN_NOTE_MAX_CHARS = 20_000
@@ -49,9 +49,15 @@ export function memoryFolderOf(taskId?: string | null): string {
   return notesDirOf(key)
 }
 
-/** The folder this one moved from (agent-memory/<key>), read where the new one lacks a file. */
 const isShared = (dir: string): boolean => dir === notesDirOf(null)
-const legacyOf = (dir: string): string => legacyNotesDirOf(isShared(dir) ? SHARED_FOLDER : path.basename(path.dirname(dir)))
+
+/** What an older release left in the folder this one moved from, taken in first (artifacts/migrate.ts). */
+async function takeLegacy(taskId: string | null | undefined): Promise<void> {
+  const own = ownFolder(taskId)
+  const { takeLegacyNotes } = await import('../artifacts/migrate.js')
+  await Promise.all([...(own ? [takeLegacyNotes(taskId!.trim())] : []), takeLegacyNotes(null)])
+    .catch((err) => log.session.warn('memory folder: an older release\'s notes not taken in yet', { taskId, error: err instanceof Error ? err.message : String(err) }))
+}
 
 function checkName(name: string): string {
   const n = name.trim()
@@ -107,24 +113,21 @@ export async function writeOverflows(taskId: string | null | undefined, part: Pr
       log.session.warn('memory folder: writing a moved block failed', { taskId: who, block: o.id, error: err instanceof Error ? err.message : String(err) })
     }
   }
-  // Swept in the folder it moved from too: Walnut's old files there are still listed until they go.
-  for (const d of [dir, legacyOf(dir)]) {
-    const names = await fsp.readdir(d).catch(() => [] as string[])
-    for (const name of names) {
-      const id = walnutFolderBlock(name)
-      if (!id || keep.has(name) || promptBlock(id).part !== part) continue
-      try {
-        const st = await fsp.stat(path.join(d, name))
-        if (Date.now() - st.mtimeMs < WALNUT_FILE_KEEP_MS) continue
-        await fsp.rm(path.join(d, name), { force: true })
-      } catch { /* the next start tries again */ }
-    }
+  const names = await fsp.readdir(dir).catch(() => [] as string[])
+  for (const name of names) {
+    const id = walnutFolderBlock(name)
+    if (!id || keep.has(name) || promptBlock(id).part !== part) continue
+    try {
+      const st = await fsp.stat(path.join(dir, name))
+      if (Date.now() - st.mtimeMs < WALNUT_FILE_KEEP_MS) continue
+      await fsp.rm(path.join(dir, name), { force: true })
+    } catch { /* the next start tries again */ }
   }
 }
 
 export interface MemoryFileInfo { name: string; bytes: number; at: string; walnut: boolean; shared: boolean }
 
-async function listOneDir(dir: string, shared: boolean): Promise<MemoryFileInfo[]> {
+async function listDir(dir: string, shared: boolean): Promise<MemoryFileInfo[]> {
   const names = await fsp.readdir(dir).catch(() => [] as string[])
   const out: MemoryFileInfo[] = []
   for (const name of names.filter((n) => MEMORY_FILE_NAME_RE.test(n)).sort()) {
@@ -134,12 +137,6 @@ async function listOneDir(dir: string, shared: boolean): Promise<MemoryFileInfo[
   return out
 }
 
-/** A folder's files: the knowledge folder's, then those of the folder it moved from that it lacks. */
-async function listDir(dir: string, shared: boolean): Promise<MemoryFileInfo[]> {
-  const [now, before] = await Promise.all([listOneDir(dir, shared), listOneDir(legacyOf(dir), shared)])
-  const names = new Set(now.map((f) => f.name))
-  return [...now, ...before.filter((f) => !names.has(f.name))].sort((a, b) => a.name.localeCompare(b.name))
-}
 
 /** A folder key memoryFolderOf takes ('' for one it refuses: a placeholder, a path). */
 const ownFolder = (taskId: string | null | undefined): string => {
@@ -153,6 +150,7 @@ const ownFolder = (taskId: string | null | undefined): string => {
  */
 export async function listMemoryFiles(taskId?: string | null): Promise<MemoryFileInfo[]> {
   if (isFollower()) return []
+  await takeLegacy(taskId)
   const dir = ownFolder(taskId)
   const own = dir ? await listDir(dir, false) : []
   const names = new Set(own.map((f) => f.name))
@@ -181,6 +179,7 @@ export async function readMemoryFile(
   taskId: string | null | undefined, name: string, opts: { regenerate?: () => Promise<readonly PromptOverflow[]> } = {},
 ): Promise<MemoryFileRead> {
   const n = checkName(name)
+  if (!isFollower()) await takeLegacy(taskId)
   const found = await readFrom(taskId, n)
   if (found) return found
   const key = walnutFileKey(n)
@@ -225,12 +224,11 @@ async function readFrom(taskId: string | null | undefined, n: string): Promise<M
   const own = ownFolder(taskId)
   const dirs: Array<[string, boolean]> = [...(own ? [[own, false] as [string, boolean]] : []), [memoryFolderOf(null), true]]
   for (const [dir, shared] of dirs) {
-    for (const file of [path.join(dir, n), path.join(legacyOf(dir), n)]) {
-      const text = await fsp.readFile(file, 'utf-8').catch(() => null)
-      if (text === null) continue
-      const st = await fsp.stat(file).catch(() => null)
-      return { name: n, text, at: st?.mtime.toISOString() ?? '', walnut: !!walnutFolderBlock(n), shared }
-    }
+    const file = path.join(dir, n)
+    const text = await fsp.readFile(file, 'utf-8').catch(() => null)
+    if (text === null) continue
+    const st = await fsp.stat(file).catch(() => null)
+    return { name: n, text, at: st?.mtime.toISOString() ?? '', walnut: !!walnutFolderBlock(n), shared }
   }
   return null
 }
@@ -241,13 +239,10 @@ export async function removeMemoryFolder(taskId: string): Promise<void> {
   let dir: string
   try { dir = memoryFolderOf(taskId) } catch { return }
   if (isShared(dir)) return
-  for (const d of [dir, legacyOf(dir)]) {
-    await fsp.rm(d, { recursive: true, force: true }).catch(() => {})
-    await fsp.rm(`${d}.notes.lock`, { recursive: true, force: true }).catch(() => {})
-  }
-  // The copy of its MEMORY.md beside the folder (knowledge/migrate.ts) goes too.
+  await fsp.rm(dir, { recursive: true, force: true }).catch(() => {})
+  await fsp.rm(`${dir}.notes.lock`, { recursive: true, force: true }).catch(() => {})
+  // Its MEMORY.md beside the folder goes with the task, as it did on the task's row.
   await fsp.rm(memoryCopyOf(taskId.trim()), { force: true }).catch(() => {})
-  void import('../knowledge/migrate.js').then((m) => m.forgetMemoryCopy(taskId.trim())).catch(() => {})
 }
 
 /** A node's own note: written whole; `content: ""` removes it. Walnut's file names are refused. */
@@ -264,12 +259,11 @@ export async function writeOwnNote(taskId: string, name: string, content: string
   const file = path.join(dir, n)
   // Under the folder's lock: two writes at once must not both pass the count and leave one note too many.
   await fsp.mkdir(path.dirname(dir), { recursive: true })
-  return withFileLock(`${dir}.notes`, async () => {
-    // The folder it moved from gets the same change, for the release before this one.
-    const before = path.join(legacyOf(dir), n)
+  const { notesLockOf, takeLegacyNotesLocked } = await import('../artifacts/migrate.js')
+  return withFileLock(notesLockOf(taskId), async () => {
+    await takeLegacyNotesLocked(taskId)
     if (!content.trim()) {
       await fsp.rm(file, { force: true })
-      await fsp.rm(before, { force: true })
       return { name: n, bytes: 0, removed: true, count: (await listDir(dir, false)).filter((f) => !f.walnut).length }
     }
     const mine = (await listDir(dir, false)).filter((f) => !f.walnut)
@@ -278,7 +272,6 @@ export async function writeOwnNote(taskId: string, name: string, content: string
     }
     const text = content.endsWith('\n') ? content : `${content}\n`
     await writeIfChanged(file, text)
-    await writeIfChanged(before, text).catch((err) => log.session.warn('memory folder: the copy for the release before was not written', { taskId, file: n, error: err instanceof Error ? err.message : String(err) }))
     return { name: n, bytes: byteLength(content), removed: false, count: mine.length + (mine.some((f) => f.name === n) ? 0 : 1) }
   })
 }

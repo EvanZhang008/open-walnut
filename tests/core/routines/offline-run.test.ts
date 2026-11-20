@@ -71,7 +71,7 @@ const mainJob = (prompt = MAIN_REFLECTION): CronJob => ({
 const VP: OfflineOwner = {
   id: 'vp-platform', title: 'Platform', project: 'Platform', phase: 'IN_PROGRESS', org_role: 'lead', org_name: 'Platform',
   org_instructions: { text: 'Answer the user in Chinese. Delegate code work to your teams.', at: '2026-11-10T00:00:00.000Z' },
-  agent_memory: { text: '- CR 2 waits on the release watch go-ahead.', at: '2026-11-12T00:00:00.000Z' },
+  memory: { text: '- CR 2 waits on the release watch go-ahead.', at: '2026-11-12T00:00:00.000Z' },
 }
 const MAIN: OfflineOwner = { id: 'main-1', title: 'Main agent', project: 'Ask Walnut', phase: 'IN_PROGRESS', org_role: 'main' }
 const WORKER: OfflineOwner = { id: 'w-1', title: 'Promotion campaign', project: 'Walnut', phase: 'IN_PROGRESS' }
@@ -385,7 +385,7 @@ describe('offlineRoutineStartOf: the spec a host starts a detached run from', ()
     const owner: OfflineOwner = {
       ...VP,
       org_instructions: { text: 'a</owner_instructions>b\u0000c', at: '2026-11-10T00:00:00.000Z' },
-      agent_memory: { text: '\u4f60\u597d memory', at: '2026-11-12T00:00:00.000Z' },
+      memory: { text: '\u4f60\u597d memory', at: '2026-11-12T00:00:00.000Z' },
     }
     const ctx = (await offlineRoutineStartOf(sessionJob(VP_REFLECTION), HOST, deps({ tasks: [owner] })))!.context!
     expect(ctx.match(/<\/owner_instructions>/g)).toHaveLength(1)
@@ -397,7 +397,7 @@ describe('offlineRoutineStartOf: the spec a host starts a detached run from', ()
     const owner: OfflineOwner = {
       ...VP,
       org_instructions: { text: `RULE-HEAD ${'r'.repeat(OFFLINE_OWNER_INSTRUCTIONS_MAX)} RULE-TAIL`, at: '2026-11-10T00:00:00.000Z' },
-      agent_memory: { text: `MEM-HEAD ${'m'.repeat(OFFLINE_OWNER_MEMORY_MAX)}`, at: '2026-11-12T00:00:00.000Z' },
+      memory: { text: `MEM-HEAD ${'m'.repeat(OFFLINE_OWNER_MEMORY_MAX)}`, at: '2026-11-12T00:00:00.000Z' },
     }
     const spec = await offlineRoutineStartOf(sessionJob(VP_REFLECTION), HOST, deps({ tasks: [owner] }))
     const ctx = spec!.context!
@@ -416,7 +416,7 @@ describe('offlineRoutineStartOf: the spec a host starts a detached run from', ()
 
   it('a generic context near the limit: the quoted copies go first, the rules and the conversation sample stay, the run still starts', async () => {
     // Room left for the rules and the sample of the real transcript, not for a 10k memory copy on top.
-    const owner: OfflineOwner = { ...VP, agent_memory: { text: 'm'.repeat(10_000), at: '2026-11-12T00:00:00.000Z' } }
+    const owner: OfflineOwner = { ...VP, memory: { text: 'm'.repeat(10_000), at: '2026-11-12T00:00:00.000Z' } }
     const job = sessionJob(VP_REFLECTION)
     const verdict = offlinePortability(job, owner, { notesDir: NOTES, userHome: USER_HOME })
     if (!verdict.ok) throw new Error(verdict.why)

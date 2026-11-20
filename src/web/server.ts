@@ -39,6 +39,7 @@ import { searchRouter } from './routes/search.js'
 import { replicasStatusRouter } from './routes/replicas-status.js'
 import { searchAgentRouter } from './routes/search-agent.js'
 import { memoryRouter } from './routes/memory.js'
+import { artifactsRouter } from './routes/artifacts.js'
 import { configRouter, setStaticRootReporter } from './routes/config.js'
 import { backupRouter, setBackupScheduler } from './routes/backup.js'
 import { encryptedBackupRouter, setDriveEventEmitter } from './routes/backup-encrypted.js'
@@ -2241,8 +2242,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if (role() === 'leader') void import('../core/org/morning-report.js').then((m) => m.startReportClock()).catch(() => {})
     // A look at Main or a lead whose Brief is stale asks it for one refresh turn (src/core/sessions/brief-refresh.ts).
     if (role() === 'leader') void import('../core/sessions/brief-refresh.js').then((m) => m.startBriefRefreshLooks()).catch(() => {})
-    // What agents read, moved into one knowledge folder and kept in line with the places it came from (src/core/knowledge/migrate.ts).
-    if (role() === 'leader') void import('../core/knowledge/migrate.js').then((m) => m.startKnowledge()).catch(() => {})
+    // What agents keep, in one artifacts folder, the only place for it (src/core/artifacts/migrate.ts).
+    if (role() === 'leader') void import('../core/artifacts/migrate.js').then((m) => m.startArtifacts()).catch(() => {})
     // The org nodes' duties (src/core/org/duties/): each runs for the nodes that turned it on.
     if (role() === 'leader') void import('../core/org/duties/registry.js').then((m) => m.startOrgDuties({ ephemeral: IS_EPHEMERAL })).catch(() => {})
     // Main and the VPs that have no session yet start by themselves, a minute after boot (src/core/org/org-autostart.ts).
@@ -2422,6 +2423,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/search/agent', searchAgentRouter)
   app.use('/api/search', searchRouter)
   app.use('/api/memory', memoryRouter)
+  app.use('/api/artifacts', artifactsRouter)
   app.use('/api/config', configRouter)
   // Primary box only: these endpoints sign real AWS requests with the box's
   // credential (incl. an EC2 instance role in the cloud). A replica reachable

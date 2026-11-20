@@ -7,7 +7,7 @@
  *    ride the agent's session prompt, so it reads an edit with its next message
  *    (src/core/sessions/instruction-notice.ts); nothing is woken for it. Saved unchanged, emptied,
  *    or restored, the role follows the default again.
- *  - Its own MEMORY.md: the working memory the agent writes for itself (Task.agent_memory). Folded
+ *  - Its own MEMORY.md: the working memory the agent writes for itself (artifacts/nodes/<id>/MEMORY.md). Folded
  *    and read-only: the agent owns it.
  *  - Its duties (NodeDuties.tsx): one switch per registry entry, saved at once.
  *  - Main also reads Walnut's memory (MEMORY.md / USER.md), edited on the Memory page, which keeps

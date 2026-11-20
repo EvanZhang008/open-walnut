@@ -1308,8 +1308,8 @@ about, not the words it mentions: work on a privacy feature or a filter passes.
 
 The working memory Main, a lead or a leader keeps for itself (`src/core/sessions/agent-memory.ts`):
 pending items, deadlines, reminders. It is not the global `MEMORY.md` and no list, Brief or Board
-shows it; `GET /tasks` (slim and minimal) omits `agent_memory`, and `task_get` reports only
-`agent_memory_chars`.
+shows it. Since 2026-11-20 it is a file in Walnut's artifacts folder
+(`artifacts/nodes/<id>/MEMORY.md`), no longer a field of the task: read it here.
 
 - `GET /api/v1/tasks/:id/agent-memory` → `200 { "task_id", "title", "memory": { "text", "at",
   "refused"?, "by"?, "by_name"?, "by_at"? } | null, "chars", "soft_limit": 12000, "limit": 20000 }`.

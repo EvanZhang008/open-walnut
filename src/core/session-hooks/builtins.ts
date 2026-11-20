@@ -320,7 +320,7 @@ export function buildSelfReportPrompt(
   existingNote?: string,
   currentTitle?: string,
   opts?: {
-    uiLanguage?: string; mainAgent?: boolean; complete?: boolean; memory?: { title: string; current?: NonNullable<Task['agent_memory']> };
+    uiLanguage?: string; mainAgent?: boolean; complete?: boolean; memory?: { title: string; current?: import('../sessions/agent-memory.js').AgentMemory };
     /** Ask the FOR_USER_* status lines too (default). False when the turn-end status question
      *  asked them already (sessions/status-question.ts). */
     status?: boolean;
@@ -929,7 +929,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
     let uiLanguage: string | undefined;
     let mainAgent = false;
     // When the team's statuses were read for the ask: the Brief is dated then.
-    let memory: { title: string; current?: NonNullable<Task['agent_memory']> } | undefined;
+    let memory: { title: string; current?: import('../sessions/agent-memory.js').AgentMemory } | undefined;
     const askedAt = Date.now();
     // Its status was asked at the turn end on its own (sessions/status-question.ts): not again here.
     const statusOwned = statusQuestionOwns(p.sessionId);
@@ -951,7 +951,8 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
         const leads = (await (await import('../task-manager.js')).getChildTasks(taskRow.id).catch(() => [] as Task[]))
           .some((c) => c.phase !== 'COMPLETE');
         if (keepsAgentMemory(taskRow, leads)) {
-          memory = { title: taskRow.title, ...(taskRow.agent_memory ? { current: taskRow.agent_memory } : {}) };
+          const current = await (await import('../artifacts/node-memory.js')).readNodeMemory(taskRow.id);
+          memory = { title: taskRow.title, ...(current ? { current } : {}) };
         }
       } catch (err) {
         // Do NOT degrade to an empty note: the prompt would say "NOTE is EMPTY,
@@ -1157,24 +1158,24 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
     const shownRefusal = memory?.current?.refused;
     if (memory && !memoryAsk && shownRefusal) {
       // The refusal was said once; an answer that writes nothing lets it go.
-      const { updateTaskRaw } = await import('../task-manager.js');
-      await updateTaskRaw(taskId, (current) => {
-        const m = current.agent_memory;
+      const { changeNodeMemory } = await import('../artifacts/node-memory.js');
+      await changeNodeMemory(taskId, (m) => {
         if (!m?.refused || m.refused.at !== shownRefusal.at) return null;
         const { refused: _r, ...rest } = m;
-        return { agent_memory: rest };
-      }, { shouldUpdate: (current) => current.phase !== 'COMPLETE' }).catch(() => {});
+        return rest;
+      }, { shouldWrite: async () => (await (await import('../task-manager.js')).getTask(taskId)).phase !== 'COMPLETE' }).catch(() => {});
     }
     if (memory && memoryAsk) {
       try {
-        const { updateTaskRaw } = await import('../task-manager.js');
+        const [{ changeNodeMemory }, { getTask }] = await Promise.all([import('../artifacts/node-memory.js'), import('../task-manager.js')]);
         const now = new Date().toISOString();
         let outcome = '';
-        await updateTaskRaw(taskId, (current) => {
-          const next = applyAgentMemoryAnswer(current.agent_memory, memoryAsk, memory!.current?.at, now);
+        // A completed task's MEMORY.md is kept as it was.
+        await changeNodeMemory(taskId, (current) => {
+          const next = applyAgentMemoryAnswer(current, memoryAsk, memory!.current?.at, now);
           outcome = next.outcome;
-          return next.memory ? { agent_memory: next.memory } : null;
-        }, { emitEvent: true, source: 'status-report', shouldUpdate: (current) => current.phase !== 'COMPLETE' });
+          return next.memory ?? null;
+        }, { shouldWrite: async () => (await getTask(taskId)).phase !== 'COMPLETE' });
         if (outcome && outcome !== 'written') {
           log.session.warn('turn-complete-summary: own MEMORY.md not written', { sessionId: p.sessionId, taskId, mode: memoryAsk.mode, outcome, chars: memoryAsk.content.length });
         }

@@ -4,8 +4,8 @@
  * skill in Walnut's org skill registry (2026-11-19, the user: "let's do this in walnut as it is
  * shared across different agents").
  *
- * Files are plain Markdown under the node's folder of Walnut's knowledge
- * (`WALNUT_HOME/knowledge/nodes/<nodeTaskId>/`), so the user can read and edit them as notes:
+ * Files are plain Markdown under the node's folder of Walnut's artifacts
+ * (`WALNUT_HOME/artifacts/nodes/<nodeTaskId>/`), so the user can read and edit them as notes:
  *   guidance.md               "- <rule>  (from <task>, <date>)" one line a lesson
  *   reflections/<date>.md     the day's findings, appended
  * A guidance line the user deletes stays deleted: its text is kept in the node's reflection
@@ -13,7 +13,7 @@
  */
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { nodeKnowledgeDir } from '../../knowledge/paths.js';
+import { nodeArtifactsDir } from '../../artifacts/paths.js';
 import { withFileLock } from '../../../utils/file-lock.js';
 import { normalizeForQuote, type Finding } from './judge.js';
 import type { ReflectionSignal } from './signals.js';
@@ -22,8 +22,8 @@ export const GUIDANCE_LINES_MAX = 40;
 export const GUIDANCE_NEW_PER_DAY_MAX = 3;
 /** Places of the org skill registry the reflection leaves to the nodes themselves. */
 const SKILL_ROOM_KEPT = 5;
-export const guidanceFileOf = (nodeId: string): string => path.join(nodeKnowledgeDir(nodeId), 'guidance.md');
-export const reflectionDayFileOf = (nodeId: string, date: string): string => path.join(nodeKnowledgeDir(nodeId), 'reflections', `${date}.md`);
+export const guidanceFileOf = (nodeId: string): string => path.join(nodeArtifactsDir(nodeId), 'guidance.md');
+export const reflectionDayFileOf = (nodeId: string, date: string): string => path.join(nodeArtifactsDir(nodeId), 'reflections', `${date}.md`);
 
 export interface GuidanceLine { text: string; from?: string; date?: string }
 

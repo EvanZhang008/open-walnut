@@ -20,6 +20,7 @@
 import type { Task } from '../types.js';
 import { screenDocumentForPrompt } from '../memory-safety.js';
 import { agentMemoryAfterCompaction } from './agent-memory.js';
+import { readNodeMemory } from '../artifacts/node-memory.js';
 import { HOOK_CONTEXT_MAX } from './open-items.js';
 
 import { OWN_READBACK_MARK, ownReadbackEnabled } from './own-readback-mark.js';
@@ -39,7 +40,7 @@ const isNode = (task: Pick<Task, 'org_role'>): boolean => task.org_role === 'mai
 export async function ownReadbackText(task: Task, hook: OwnReadbackHook, now = Date.now()): Promise<string> {
   if (task.phase === 'COMPLETE' || !ownReadbackEnabled()) return '';
   const parts: string[] = [];
-  const memory = agentMemoryAfterCompaction(task);
+  const memory = agentMemoryAfterCompaction(task, await readNodeMemory(task.id).catch(() => undefined));
   if (memory) parts.push(screenDocumentForPrompt(memory, 'agent MEMORY.md'));
   const { listAgentSkills, agentSkillsIndex } = await import('./agent-skills.js');
   const [own, org] = await Promise.all([

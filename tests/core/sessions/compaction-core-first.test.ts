@@ -9,6 +9,7 @@ import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { createMockConstants } from '../../helpers/mock-constants.js';
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-compaction-core-first'));
+import { changeNodeMemory, readNodeMemory } from '../../../src/core/artifacts/node-memory.js'
 import { WALNUT_HOME } from '../../../src/constants.js';
 import { addTask, updateTaskRaw } from '../../../src/core/task-manager.js';
 import { createSessionRecord, updateSessionRecord } from '../../../src/core/session-tracker.js';
@@ -27,7 +28,7 @@ beforeEach(async () => {
 async function node(role: 'main' | 'lead', prompt: 'current' | 'ancient') {
   const { task } = await addTask({ title: role === 'main' ? 'Main agent' : 'Lead', project: role === 'main' ? 'Ask Walnut' : 'marina', org_role: role });
   const memory = Array.from({ length: 300 }, (_, i) => `- line ${i}: a tracking note about one of the teams, long enough to matter.`).join('\n');
-  await updateTaskRaw(task.id, { agent_memory: { text: memory, at: new Date().toISOString() } } as never);
+  await changeNodeMemory(task.id, () => ({ text: memory, at: new Date().toISOString() }));
   const sid = randomUUID();
   await createSessionRecord(sid, task.id, task.project, WALNUT_HOME);
   await updateSessionRecord(sid, { appliedAppendSystemPrompt: prompt === 'current' ? (await buildSessionContext(task.id)).systemPrompt : WALNUT_PROMPT_MARK });

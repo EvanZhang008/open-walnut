@@ -15,7 +15,7 @@ import { managerOf } from '../../../src/core/org/reflection/team.js'
 type Rec = { claudeSessionId: string; output_mode: 'markdown'; hintState?: SessionHintState; lastCompactUuid?: string }
 const task = (t: Partial<Task>): Task => ({ id: 'x', title: 'X', phase: 'IN_PROGRESS', status: 'in_progress', project: 'Marina', ...t }) as Task
 const WORKER = task({ id: 'w' })
-const guidance = (lines: string[]): TeamGuidanceState => ({ node: 'Marina VP', lines, file: '/tmp/knowledge/nodes/vp/guidance.md' })
+const guidance = (lines: string[]): TeamGuidanceState => ({ node: 'Marina VP', lines, file: '/tmp/artifacts/nodes/vp/guidance.md' })
 
 function send(rec: Rec, g: TeamGuidanceState | null, opts: { afterCompaction?: boolean } = {}): string[] {
   const config = { session: {} } as never
@@ -58,7 +58,7 @@ describe('the team-guidance hint', () => {
     const lines = Array.from({ length: 30 }, (_, i) => `Rule ${i}: ${'a careful sentence about the work '.repeat(3)}`)
     const text = teamGuidanceText(guidance(lines))
     expect(text.length).toBeLessThanOrEqual(1900)
-    expect(text).toMatch(/- \.\.\. \d+ more in \/tmp\/knowledge\/nodes\/vp\/guidance\.md$/)
+    expect(text).toMatch(/- \.\.\. \d+ more in \/tmp\/artifacts\/nodes\/vp\/guidance\.md$/)
   })
 
   it('names the org\'s skills to a worker, beside the guidance or alone, and is told again when one is added', () => {
@@ -73,7 +73,7 @@ describe('the team-guidance hint', () => {
     const many = Array.from({ length: 40 }, (_, i) => ({ name: `skill-${i}`, description: 'a way of working the org wrote down '.repeat(2) }))
     const full = teamGuidanceText({ ...guidance(Array.from({ length: 30 }, (_, i) => `Rule ${i}: ${'a careful sentence '.repeat(4)}`)), skills: many })
     expect(full.length).toBeLessThanOrEqual(1900)
-    expect(full).toMatch(/more in \/tmp\/knowledge\/nodes\/vp\/guidance\.md/)
+    expect(full).toMatch(/more in \/tmp\/artifacts\/nodes\/vp\/guidance\.md/)
     expect(full).toMatch(/- \.\.\. \d+ more: agent_skill_read with no name lists them\.$/)
     expect(teamGuidanceIdentity({ lines: [], skills })).not.toBe(teamGuidanceIdentity({ lines: [], skills: [...skills, { name: 'b', description: 'c' }] }))
   })

@@ -18,6 +18,7 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-apiv1-own-readback'))
 
+import { changeNodeMemory, readNodeMemory } from '../../../src/core/artifacts/node-memory.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
 import { addTask, completeTask, updateTaskRaw } from '../../../src/core/task-manager.js'
@@ -66,7 +67,7 @@ const ctxOf = (r: { result?: any }) => (r.result?.hookSpecificOutput?.additional
 describe('own readback', () => {
   it('a VP\'s new conversation reads back its memory, its skills and its recent work', async () => {
     const vp = await seedNode('Acme VP', 'lead', OWN_READBACK_LINE)
-    await updateTaskRaw(vp.id, () => ({ agent_memory: { text: '- the CR for the parser waits on review', at: new Date().toISOString() } }))
+    await changeNodeMemory(vp.id, () => ({ text: '- the CR for the parser waits on review', at: new Date().toISOString() }))
     expect((await op('agent_skill_write', { name: 'land-a-change', description: 'How I land a team change', content: '1. Rebase.\n2. Land.' }, vp.sid)).ok).toBe(true)
     expect((await op('agent_skill_write', { name: 'not-taken-up', description: 'When a task did not take a message up', content: 'Read its history tail first.', scope: 'org' }, vp.sid)).ok).toBe(true)
     const filed = await fileThreadMessage(vp.id, { text: 'is the parser fix live?', at: new Date(Date.now() - 60_000).toISOString(), via: 'chat', sid: vp.sid } as never)
@@ -91,7 +92,7 @@ describe('own readback', () => {
 
   it('turned off (WALNUT_OWN_READBACK=0): the hook gets nothing and open_items reads MEMORY.md back again', async () => {
     const vp = await seedNode('Switched VP', 'lead', OWN_READBACK_LINE)
-    await updateTaskRaw(vp.id, () => ({ agent_memory: { text: '- switched memory line', at: new Date().toISOString() } }))
+    await changeNodeMemory(vp.id, () => ({ text: '- switched memory line', at: new Date().toISOString() }))
     process.env.WALNUT_OWN_READBACK = '0'
     try {
       expect((await op('agent_memory_read', { hook: 'compact' }, vp.sid)).result).toEqual({})
@@ -116,7 +117,7 @@ describe('own readback', () => {
     const memory = { text: '- remember the parser review', at: new Date().toISOString() }
     const hooked = await seedNode('Hooked VP', 'lead', `prompt\n${OWN_READBACK_LINE}`)
     const older = await seedNode('Older VP', 'lead', 'a prompt from before the readback')
-    for (const t of [hooked, older]) await updateTaskRaw(t.id, () => ({ agent_memory: memory }))
+    for (const t of [hooked, older]) await changeNodeMemory(t.id, () => (memory))
     const compact = async (sid: string) => ctxOf(await op('open_items', { hook: 'compact' }, sid))
     expect(await compact(hooked.sid)).not.toContain('remember the parser review')
     expect(await compact(older.sid)).toContain('remember the parser review')

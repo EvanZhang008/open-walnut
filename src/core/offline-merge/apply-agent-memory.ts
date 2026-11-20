@@ -15,15 +15,15 @@
  * Checked as the online route checks it (web/routes/agent-memory-v1.ts): a complete task's file is
  * not written and a result past the limit is not written at all; both are refusals the batch logs.
  * The writer is recorded as online: the task's own session writes unstamped, another task's session
- * as that task, a person's device as the user. One row write under the lock, with the record's op
- * key, so a redrain after a crash writes nothing twice.
+ * as that task, a person's device as the user. One write of the file (artifacts/node-memory.ts) under
+ * its lock, with the record's op key, so a redrain after a crash writes nothing twice (a key an older
+ * release kept on the row counts too).
  */
 
 import crypto from 'node:crypto';
 import { log } from '../../logging/index.js';
-import type { Task } from '../types.js';
 import type { V2Context, V2Record } from './apply-v2.js';
-import { entryBase, exactTask, opKeyOf, withOp } from './apply-fields.js';
+import { entryBase, exactTask, opKeyOf } from './apply-fields.js';
 import { RefusedWrite } from './patch-check.js';
 
 export function agentMemoryHash(text: string): string {
@@ -64,11 +64,11 @@ export async function applyAgentMemoryWrite(ctx: V2Context, record: V2Record, ta
   const { AgentMemoryTooLongError, agentMemoryWriterAfter, nextAgentMemory } = await import('../sessions/agent-memory.js');
   const at = new Date(ctx.at).toISOString();
   const st: { outcome: 'applied' | 'skipped' | 'complete' | 'conflict' | 'too-long'; mac?: string; chars?: number } = { outcome: 'skipped' };
-  const tm = await import('../task-manager.js');
-  await tm.updateTaskRaw(taskId, (cur: Readonly<Task>) => {
-    if (opKey && cur.applied_ops?.includes(opKey)) { st.outcome = 'skipped'; return null; }
-    if (cur.phase === 'COMPLETE') { st.outcome = 'complete'; return null; }
-    const current = cur.agent_memory?.text ?? '';
+  const { appliedOps, changeNodeMemory, withAppliedOp } = await import('../artifacts/node-memory.js');
+  // Under the file's lock, the op key written with the text: a redrain after a crash writes nothing twice.
+  await changeNodeMemory(taskId, (cur) => {
+    if (opKey && appliedOps(cur).includes(opKey)) { st.outcome = 'skipped'; return null; }
+    const current = cur?.text ?? '';
     if (mode === 'replace' && (!baseHash || agentMemoryHash(current) !== baseHash)) { st.outcome = 'conflict'; st.mac = current; return null; }
     let text: string;
     try {
@@ -78,11 +78,8 @@ export async function applyAgentMemoryWrite(ctx: V2Context, record: V2Record, ta
       throw err;
     }
     st.outcome = 'applied';
-    return {
-      agent_memory: { text, at, ...agentMemoryWriterAfter(cur.agent_memory, mode, stamp, at) },
-      ...(opKey ? { applied_ops: withOp(cur, opKey) } : {}),
-    } as Partial<Task>;
-  }, { emitEvent: true, source: 'agent-memory' });
+    return { text, at, ...agentMemoryWriterAfter(cur, mode, stamp, at), ...(opKey ? { ops: withAppliedOp(cur?.ops, opKey) } : {}) };
+  }, { shouldWrite: async () => { const now = await exactTask(taskId); if (now?.phase === 'COMPLETE') { st.outcome = 'complete'; return false } return true } });
   if (st.outcome === 'complete') throw new RefusedWrite(`"${pre.title}" is complete: its MEMORY.md is kept as it was.`);
   if (st.outcome === 'too-long') throw new RefusedWrite(`This MEMORY.md would be ${st.chars} characters, over its limit: nothing of this write was applied.`);
   if (st.outcome === 'conflict') {
