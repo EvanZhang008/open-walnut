@@ -32,7 +32,8 @@ function send(id: string, action: 'hold' | 'release', source: string): Promise<H
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id, action, source }),
-    keepalive: action === 'release',
+    // Tiny bodies: a hold or release sent as the page leaves still arrives.
+    keepalive: true,
   }).then((res) => (res.ok ? res.json() as Promise<HoldAnswer> : null), () => null)
 }
 

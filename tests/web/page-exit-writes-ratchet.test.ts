@@ -27,6 +27,8 @@ const KNOWN: Record<string, 'client' | 'raw' | 'local'> = {
   'utils/ui-prefs-sync.ts': 'raw',
   'utils/time-tracking.ts': 'raw',
   'utils/browser-logger.ts': 'raw',
+  // A voice input's music hold: its release at pagehide goes by navigator.sendBeacon.
+  'api/media-hold.ts': 'raw',
   // A preview page's state for the disk: keepalive when it fits the browser's keepalive body limit (about
   // 64 KB); a larger one written at unload is lost only for its last WRITE_MS of changes.
   'components/common/preview-page-storage.ts': 'raw',
