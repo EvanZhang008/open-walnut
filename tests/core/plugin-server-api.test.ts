@@ -417,7 +417,13 @@ describe('createServerPluginApi', () => {
     } as never)
     try {
       const { api } = setup()
-      expect(await api.hosts.list()).toEqual([
+      const listed = await api.hosts.list()
+      // This machine's platform is Node's own; a host Walnut never reached has none yet.
+      const { platformOf } = await import('../../src/core/plugins/plugin-hosts.js')
+      expect(listed[0]?.platform).toEqual(platformOf(process.platform, process.arch))
+      expect(listed[0]?.platform).not.toBeNull()
+      expect(listed.slice(1).map((h) => h.platform ?? null)).toEqual([null, null])
+      expect(listed.map(({ platform: _platform, ...rest }) => rest)).toEqual([
         { alias: '__local__', local: true, enabled: true },
         { alias: 'devbox', label: 'Dev box', local: false, enabled: true, hostname: 'devbox.example.test', user: 'me', port: 2222 },
         { alias: 'hidden', local: false, enabled: false, hostname: 'hidden.example.test' },
