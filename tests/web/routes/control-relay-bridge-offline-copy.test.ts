@@ -186,16 +186,16 @@ for (const [label, send] of PATHS) {
 
 describe('the control routes still answer every other failure exactly as before', () => {
   it('a relay error that is not BridgeOfflineError keeps its own message', async () => {
-    // Only the BridgeOfflineError branch changed. A timeout still surfaces
-    // verbatim, and it must not pick up the outage sentence.
+    // Only the BridgeOfflineError branch picks up the outage sentence. A timeout reads as
+    // its own plain sentence (2026-11-20: the bridge's words reached the phone as they were).
     lastBridgeLossAtMock.mockReturnValue(Date.now() - 41 * 60_000)
     bridgeRequestMock.mockRejectedValue(new Error('bridge request timed out: session.control → __local__'))
 
     const res = await request(createApp()).post(`/api/v1/sessions/${SID}/model`).send({ model: 'opus' })
     expect(res.status).toBe(503)
     expect(res.body.error.code).toBe('bridge_offline')
-    expect(res.body.error.message).toMatch(/timed out/)
-    expect(res.body.error.message).not.toMatch(/unreachable for/)
+    expect(res.body.error.message).toBe("Your Mac didn't answer in time. It may have done it: check before you try again.")
+    expect(res.body.error.message).not.toMatch(/unreachable for|bridge request|session\.control|__local__/)
   })
 
   it('a successful relay is untouched by the copy change', async () => {

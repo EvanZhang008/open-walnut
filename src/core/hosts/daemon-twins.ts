@@ -16,7 +16,9 @@
  *
  * Of the aliases of one daemon, the person's is the one they added and named (preferredAlias);
  * the others are left out of every list and read as it, while a session or task bound to one of
- * them keeps its alias and keeps working over that link.
+ * them keeps its alias and keeps working over that link from the Mac. The daemon's bridge to the
+ * cloud companion goes by that one name only (daemonKeeperAlias), so while the Mac is away the
+ * companion reaches only sessions bound to it; one bound to another alias waits for the Mac.
  */
 import type { Config } from '../types.js'
 
@@ -170,7 +172,7 @@ export function daemonTwinGroups(rows: TwinRows): string[][] {
 export function daemonTwins(rows: TwinRows, net: NetSwitch): Array<{ alias: string; joined: string }> {
   const out: Array<{ alias: string; joined: string }> = []
   for (const members of daemonTwinGroups(rows)) {
-    const keeper = preferredAlias(members, rows, net ?? null)
+    const keeper = daemonKeeperAlias(members, rows, net ?? null)
     if (!usable(rows[keeper], net ?? null)) continue // none of them is in use: each stays as it is
     for (const alias of members) if (alias !== keeper) out.push({ alias, joined: keeper })
   }

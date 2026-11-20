@@ -37,6 +37,11 @@ vi.mock('../../src/core/host-slice.js', () => ({
     }
   },
 }))
+// These tests pace one link's copies; which aliases share its daemon is not read from disk here.
+vi.mock('../../src/core/hosts/same-daemon-record.js', () => ({
+  recordedSameDaemon: async () => [], rememberSameDaemon: async () => {}, forgetSameDaemon: async () => {},
+  targetIdentityOf: async () => null, configuredIdentityOf: async () => null,
+}))
 vi.mock('../../src/core/offline-handover.js', () => ({ runOfflineHandover: async () => {} }))
 vi.mock('../../src/core/skill-sync.js', () => ({
   buildSkillSyncPayload: async () => ({ hash: 'skills-1', skill: 'walnut', skills: [{ name: 'walnut', body: big(228 * KB) }] }),

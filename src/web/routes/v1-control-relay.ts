@@ -158,10 +158,18 @@ async function sendControlToPrimary(
   }
 }
 
-/** A relay to the Mac that failed after it was sent, in one plain sentence. */
-async function relayErrorSentence(err: string): Promise<string> {
-  const { relayFailureSentence, MAC_BRIDGE_ALIAS } = await import('./cloud-send-words.js')
-  return relayFailureSentence(err, MAC_BRIDGE_ALIAS, 'your Mac')
+/**
+ * A relay to the Mac that failed AFTER it was sent, in one plain sentence. The Mac may have
+ * done it, so the sentence says to look before trying again (a retry could do it twice).
+ */
+export function relayErrorSentence(err: string): string {
+  const e = err.toLowerCase()
+  const check = 'It may have done it: check before you try again.'
+  if (e.includes('timed out')) return `Your Mac didn't answer in time. ${check}`
+  if (e.includes('disconnected') || e.includes('closed')) return `Your Mac's link dropped before it answered. ${check}`
+  // A lower layer's command and host names are not words a person reads.
+  const detail = err.replace(/\b(?:session\.control|bridge request)\b\s*:?\s*/gi, '').replace(/\s*→\s*__local__/g, '').replace(/[.\s]+$/, '').trim()
+  return `Your Mac could not finish this${detail ? ` (${detail})` : ''}. ${check}`
 }
 
 function errorText(err: unknown): string {
@@ -204,7 +212,7 @@ export async function tryControlRelay(
   // reported verbatim and never retried.
   // The lower layer's words ("bridge request timed out: session.control → __local__") are
   // not a sentence a person reads: the hop is named in plain words (cloud-send-words.ts).
-  const message = sent.offline ? bridgeOfflineMessage(sent.lastLossAt, sent.waitedMs) : await relayErrorSentence(errorText(sent.error))
+  const message = sent.offline ? bridgeOfflineMessage(sent.lastLossAt, sent.waitedMs) : relayErrorSentence(errorText(sent.error))
   return { ok: false, notSent: sent.offline, answer: (res) => sendV1Error(res, 503, 'bridge_offline', message) }
 }
 

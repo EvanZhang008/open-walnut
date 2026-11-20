@@ -17,8 +17,8 @@ vi.mock('../../src/core/hosts/same-daemon-record.js', () => ({
   forgetSameDaemon: async () => {},
 }))
 const hosts = vi.hoisted(() => ({
-  clouddev: { hostname: 'clouddev.example.invalid', label: 'Big box', enabled: true },
-  newdev: { hostname: 'box.example.invalid', discovered: true, enabled: true },
+  zbox: { hostname: 'zbox.example.invalid', label: 'Big box', enabled: true },
+  abox: { hostname: 'box.example.invalid', discovered: true, enabled: true },
 }))
 vi.mock('../../src/core/config-manager.js', async (orig) => ({
   ...(await orig<typeof import('../../src/core/config-manager.js')>()),
@@ -36,10 +36,12 @@ async function waitFor(pred: () => boolean, ms = 5000): Promise<void> {
 
 describe('daemonKeeperAlias', () => {
   it('picks this machine, else the row the person added and named, in any order', () => {
-    expect(daemonKeeperAlias(['newdev', 'clouddev'], hosts)).toBe('clouddev')
-    expect(daemonKeeperAlias(['clouddev', 'newdev'], hosts)).toBe('clouddev')
-    expect(daemonKeeperAlias(['newdev', '__local__'], hosts)).toBe('__local__')
+    expect(daemonKeeperAlias(['abox', 'zbox'], hosts)).toBe('zbox')
+    expect(daemonKeeperAlias(['zbox', 'abox'], hosts)).toBe('zbox')
+    expect(daemonKeeperAlias(['abox', '__local__'], hosts)).toBe('__local__')
     expect(daemonKeeperAlias(['solo'], {})).toBe('solo')
+    // Not the first by name: the row the person added wins over a found one sorted before it.
+    expect(daemonKeeperAlias(['abox-found', 'zbox'], { zbox: { label: 'Z box', enabled: true }, 'abox-found': { discovered: true, enabled: true } })).toBe('zbox')
   })
 })
 
@@ -49,11 +51,11 @@ describe('two links to one daemon', () => {
   beforeEach(async () => { daemon = new MockDaemon(); daemon.setBridgeConnected(true); await daemon.start() })
   afterEach(async () => {
     for (const c of conns.splice(0)) { try { c.disconnect() } catch { /* best effort */ } }
-    for (const h of ['clouddev', 'newdev']) setPooledConnectionForTest(h, null)
+    for (const h of ['zbox', 'abox']) setPooledConnectionForTest(h, null)
     await daemon.stop()
   })
 
-  async function link(host: 'clouddev' | 'newdev'): Promise<DaemonConnection> {
+  async function link(host: 'zbox' | 'abox'): Promise<DaemonConnection> {
     const c = new DaemonConnection(host, TARGET)
     conns.push(c)
     setPooledConnectionForTest(host, c)
@@ -68,7 +70,7 @@ describe('two links to one daemon', () => {
     .map((c) => (c.payload as { hostAlias: string }).hostAlias)
   const repush = (c: DaemonConnection): void => { (c as unknown as { pushBridgeConfig(): void }).pushBridgeConfig() }
 
-  for (const order of [['clouddev', 'newdev'], ['newdev', 'clouddev']] as const) {
+  for (const order of [['zbox', 'abox'], ['abox', 'zbox']] as const) {
     it(`every push names the person's alias once both are up (${order.join(' then ')})`, async () => {
       const first = await link(order[0])
       await waitFor(() => named().length >= 1)
@@ -82,7 +84,7 @@ describe('two links to one daemon', () => {
       }
       await waitFor(() => named().length >= from + 2)
       const afterBoth = named().slice(from)
-      expect(afterBoth.every((n) => n === 'clouddev'), JSON.stringify(named())).toBe(true)
+      expect(afterBoth.every((n) => n === 'zbox'), JSON.stringify(named())).toBe(true)
     })
   }
 })

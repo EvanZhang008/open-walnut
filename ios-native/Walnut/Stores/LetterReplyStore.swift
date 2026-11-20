@@ -437,8 +437,10 @@ final class LetterReplyStore {
     /// waits for the Mac, however long that is, so it is never given up on as
     /// "Not confirmed"; a slow re-read picks up the Mac's outcome.
     func isHeldForMac(letterId: String, entry: LetterThreadEntry) -> Bool {
+        // The turn as the server recorded it last: once the Mac has it, `held` is gone from
+        // there, whatever an earlier response said.
         guard entry.isHuman else { return false }
-        return delivery(letterId: letterId, entry: entry)?.isHeldForMac == true
+        return entry.delivery?.asDelivery.isHeldForMac == true
     }
 
     nonisolated static func hasOutcome(_ entry: LetterThreadEntry) -> Bool {

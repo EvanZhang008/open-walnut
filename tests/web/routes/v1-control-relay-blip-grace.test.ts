@@ -523,7 +523,7 @@ describe('session-control-v1 fork across a bridge blip', () => {
     const res = await request(createApp()).post('/api/v1/sessions/sid-src/fork').send({})
 
     expect(res.status).toBe(503)
-    expect(res.body).toEqual({ error: { code: 'bridge_offline', message: 'bridge disconnected' } })
+    expect(res.body).toEqual({ error: { code: 'bridge_offline', message: "Your Mac's link dropped before it answered. It may have done it: check before you try again." } })
     await settle(50)
     expect(first.controlFrames()).toHaveLength(1)
     expect(second!.controlFrames()).toHaveLength(0)

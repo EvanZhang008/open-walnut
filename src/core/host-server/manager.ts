@@ -533,9 +533,15 @@ export function createHostServerManager(deps: ManagerDeps) {
     // A daemon reached by several aliases keeps ONE server per Walnut: only the name it goes by
     // (daemonKeeperAlias) sets it up or takes it down. 2026-11-20: the found twin `newdev`, off by
     // default, took down the server `clouddev` runs on that same machine.
+    // This computer's own daemon under another row keeps the this-computer branch below.
     const keeper = host?.connected && host.daemonKeeper ? await host.daemonKeeper().catch(() => hostKey) : hostKey
-    if (keeper !== hostKey) {
-      notEligible(hostKey, 'another-name', `This host is another name of ${keeper}: its Walnut server is set up there.`)
+    if (keeper !== hostKey && keeper !== '__local__') {
+      // Nothing is set up or taken down from here, even while the keeper's own link is down:
+      // the server it set up keeps running, and a change reaches it when that link is back.
+      const up = hosts.get(keeper)?.connected === true
+      notEligible(hostKey, 'another-name', up
+        ? `This host is another name of ${keeper}: its Walnut server is set up there.`
+        : `This host is another name of ${keeper}: its Walnut server is set up there, and a change reaches it once Walnut connects to ${keeper} again.`)
       return
     }
     const settings = await deps.settingsOf(hostKey)

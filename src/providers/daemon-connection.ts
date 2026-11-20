@@ -2227,18 +2227,25 @@ export class DaemonConnection {
   async daemonNames(): Promise<{ keeper: string; aliases: string[] }> {
     const aliases = await this.sameDaemonHosts().catch(() => [this.hostKey])
     if (aliases.length < 2) return { keeper: this.hostKey, aliases: [this.hostKey] }
+    // A config that cannot be read keeps the name last worked out for these aliases: a guess
+    // would rename the daemon's bridge until the next push.
+    const last = this.lastKeeper && aliases.includes(this.lastKeeper) ? this.lastKeeper : null
     try {
-      const [{ getConfig }, { daemonKeeperAlias }] = await Promise.all([
+      const [{ getConfig, isFallbackConfig }, { daemonKeeperAlias }] = await Promise.all([
         import('../core/config-manager.js'),
         import('../core/hosts/daemon-twins.js'),
       ])
       const cfg = await getConfig()
-      return { keeper: daemonKeeperAlias(aliases, (cfg.hosts ?? {}) as never, cfg.net as never), aliases }
+      if (isFallbackConfig(cfg)) return { keeper: last ?? this.hostKey, aliases }
+      this.lastKeeper = daemonKeeperAlias(aliases, (cfg.hosts ?? {}) as never, (cfg.net ?? null) as never)
+      return { keeper: this.lastKeeper, aliases }
     } catch {
-      // A config that cannot be read: the name every link computes alike without it.
-      return { keeper: aliases.includes('__local__') ? '__local__' : [...aliases].sort()[0], aliases }
+      return { keeper: last ?? this.hostKey, aliases }
     }
   }
+
+  /** The name daemonNames last worked out from a readable config. */
+  private lastKeeper: string | null = null
 
   /**
    * The triggers whose def differs from the set pushed before (new ones included), and keeps this

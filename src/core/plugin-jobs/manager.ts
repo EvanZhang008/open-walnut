@@ -402,8 +402,10 @@ export function createPluginJobsManager(deps: ManagerDeps) {
     }
     const jobs = (rec?.jobs ?? []).filter((j) => j.plugin === pluginId).map((j) => ({ ...j, host: target }))
     const elsewhere: PluginJobsView['elsewhere'] = []
+    // Another name of the daemon the jobs run on is that same machine, not elsewhere.
+    const sameMachine = new Set(rec?.handle.daemonNames ? (await rec.handle.daemonNames().catch(() => null))?.aliases ?? [] : [])
     for (const [key, other] of hosts) {
-      if (key === target) continue
+      if (key === target || sameMachine.has(key)) continue
       const n = other.jobs.filter((j) => j.plugin === pluginId).length
       if (n > 0) elsewhere.push({ host: key, jobs: n })
     }
