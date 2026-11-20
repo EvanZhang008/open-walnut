@@ -27,8 +27,8 @@ const TITLE = `Move the nightly ledger export to the new storage bucket and reti
 // A question and a detail past the card's 1.5x room together (one scrolls inside), the detail at the 240 characters
 // a row's item keeps (core/action-needed.ts detailOf).
 // (An ask is at most 300 characters: core/sessions/report-set.ts.)
-const QUESTION = `Both changes are ready for review: the scheduler sends one more region's clusters to the new platform each night, and the function calls itself on a timer and was checked on the dev box. Both roll back with one revert. Do you agree that I ship them all this afternoon ${STAMP}?`
-const DETAIL = `The scheduler change is in review with its tests green, the function change calls itself on a timer and was checked on the dev box, and both roll back with one revert if the first region shows any trouble after ${STAMP}.`
+const QUESTION = `Both neighbourhood-garden improvements are ready: wheelbarrow-friendly gravel pathways between the raised strawberry beds, rainwater-harvesting barrels feeding the drip irrigation overnight, and both undo with one switch. Do you agree that I start them this weekend ${STAMP}?`
+const DETAIL = `The tomato plan has its seed list and spacing drawn up, the rain barrel timer fills the drip line on its own and was tried on the shed tap, and both undo with one switch if the first bed looks too wet after ${STAMP}.`
 const made: string[] = []
 let sessionId = ''
 const historyOf = async (request: APIRequestContext, sid: string) =>
@@ -166,7 +166,7 @@ test('hovering the ask card\'s text opens it downward in its column, at most 1.5
   // A click in its box and typing keep it open, the box where it is.
   const boxAt = (await card.getByTestId('org-answer-input').boundingBox())!
   await card.getByTestId('org-answer-input').click()
-  await page.keyboard.type('Ship the scheduler first')
+  await page.keyboard.type('Start with the tomatoes')
   await page.waitForTimeout(400)
   expect((await cardState(card)).open, 'open while typing').toBe(true)
   expect(Math.abs((await card.getByTestId('org-answer-input').boundingBox())!.y - boxAt.y), 'the box did not move').toBeLessThanOrEqual(1)
