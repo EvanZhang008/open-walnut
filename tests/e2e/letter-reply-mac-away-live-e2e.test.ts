@@ -124,7 +124,9 @@ describe.skipIf(!liveWallsAvailable())('the phone answers letters while the Mac 
       await sleep(2 * T)
       const lines = got()
       for (const text of [first.text, second.text, label]) expect(lines.filter((m) => m.includes(text)), text).toHaveLength(1)
-      expect(lines.findIndex((m) => m.includes(first.text))).toBeLessThan(lines.findIndex((m) => m.includes(second.text)))
+      // In order: the session's queue may hand both to the CLI as one message, first then second.
+      const all = lines.join('\n')
+      expect(all.indexOf(first.text)).toBeLessThan(all.indexOf(second.text))
       // The companion's letter, once its copy holds the Mac's turns: delivered, no longer held.
       const settled = (turns: Entry[]) => turns.length > 0 && turns.every((t) => t.delivery && t.delivery.status !== 'pending' && t.delivery.held === undefined)
       const thread = await waitFor(async () => { const t = await humanTurns(talk); return settled(t.turns) ? t : null }, 180_000, 'the companion to read the replies delivered')
