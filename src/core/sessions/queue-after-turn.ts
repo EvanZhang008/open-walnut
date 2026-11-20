@@ -26,6 +26,12 @@ const GRACE_MS = 400;
 const SWEEP_MS = 30_000;
 /** A sweep never releases a second row this soon after the first (its turn may not have registered yet). */
 const RELEASE_GAP_MS = 20_000;
+/**
+ * A row still 'processing' this long after the turn ended is not on its way in: its line went to a
+ * CLI that never took it (2026-11-20: a line in doubt, redelivered at a daemon reconnect, sat in
+ * 'processing' for hours and kept the user's reply held behind it, never sent).
+ */
+export const STUCK_PROCESSING_MS = 60_000;
 
 export function isAfterTurnHold(row: Pick<QueuedMessage, 'status' | 'parkedReason'>): boolean {
   return row.status === 'parked' && row.parkedReason === AFTER_TURN_REASON;
@@ -64,6 +70,10 @@ export async function holdsForRunningTurn(sessionId: string): Promise<boolean> {
 const watching = new Set<string>();
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 const releasedAt = new Map<string, number>();
+/** Session → 'processing' row id → when it was first seen so with no turn running. */
+const idleProcessing = new Map<string, Map<string, number>>();
+/** The stuck rows already named in the log, once each. */
+const stuckTold = new Set<string>();
 let sweep: ReturnType<typeof setInterval> | null = null;
 let subscribed = false;
 
@@ -123,11 +133,13 @@ export async function releaseAfterTurn(sessionId: string, opts?: { viaEvent?: bo
   const held = queue.filter(isAfterTurnHold);
   if (held.length === 0) {
     watching.delete(sessionId);
+    idleProcessing.delete(sessionId);
     disarmSweepIfIdle();
     return 'none';
   }
-  if (await turnRunning(sessionId)) return 'running';
-  if (queue.some((row) => row.status === 'pending' || row.status === 'processing')) return 'busy';
+  // A turn runs: the clock of a row seen 'processing' with no turn starts again after it.
+  if (await turnRunning(sessionId)) { idleProcessing.delete(sessionId); return 'running'; }
+  if (onItsWayIn(sessionId, queue)) return 'busy';
   if (!opts?.viaEvent && Date.now() - (releasedAt.get(sessionId) ?? 0) < RELEASE_GAP_MS) return 'busy';
 
   const { sessionStops } = await import('./session-stop.js');
@@ -153,6 +165,31 @@ export async function releaseAfterTurn(sessionId: string, opts?: { viaEvent?: bo
   releasedAt.set(sessionId, Date.now());
   if (sent.sent) log.session.info('queue after turn: held message released', { sessionId, messageId: next.id });
   return 'released';
+}
+
+/**
+ * Another row is on its way in (an Interrupt & send, a Send now, the row of the turn that just
+ * ended): pending, or 'processing' for less than STUCK_PROCESSING_MS since no turn runs. Asked
+ * only once no turn runs.
+ */
+function onItsWayIn(sessionId: string, queue: readonly QueuedMessage[], now = Date.now()): boolean {
+  const seen = idleProcessing.get(sessionId);
+  const next = new Map<string, number>();
+  let busy = false;
+  for (const row of queue) {
+    if (row.status === 'pending') busy = true;
+    if (row.status !== 'processing') continue;
+    const since = seen?.get(row.id) ?? now;
+    next.set(row.id, since);
+    if (now - since < STUCK_PROCESSING_MS) busy = true;
+    else if (!stuckTold.has(row.id)) {
+      stuckTold.add(row.id);
+      log.session.warn('queue after turn: a row stuck in processing with no turn running no longer holds the next one', { sessionId, messageId: row.id, stuckMs: now - since });
+    }
+  }
+  if (next.size) idleProcessing.set(sessionId, next);
+  else idleProcessing.delete(sessionId);
+  return busy;
 }
 
 /** A person's Stop came: every row held for the turn's end is set aside like the rest. */
@@ -196,6 +233,8 @@ export function stopQueueAfterTurn(): void {
   timers.clear();
   watching.clear();
   releasedAt.clear();
+  idleProcessing.clear();
+  stuckTold.clear();
   if (sweep) clearInterval(sweep);
   sweep = null;
 }

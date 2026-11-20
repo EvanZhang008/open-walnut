@@ -16,14 +16,14 @@ import { WALNUT_HOME } from '../../../src/constants.js';
 import { sessionRunner } from '../../../src/providers/claude-code-session.js';
 import { bus, EventNames } from '../../../src/core/event-bus.js';
 import {
-  resetCache, sendMessageToSession, getQueue, editMessage, deleteMessage, enqueueMessage,
+  resetCache, sendMessageToSession, getQueue, editMessage, deleteMessage, enqueueMessage, markNextProcessing,
 } from '../../../src/core/session-message-queue.js';
 import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../../src/core/session-tracker.js';
 import { getSessionQueuePayload } from '../../../src/core/sessions/session-extras.js';
 import { STOP_PARKED_REASON } from '../../../src/core/relay-fates.js';
 import {
   AFTER_TURN_REASON, isAfterTurnHold, presentAfterTurn, releaseAfterTurn, setAsideAfterTurnHolds,
-  startQueueAfterTurn, stopQueueAfterTurn,
+  startQueueAfterTurn, stopQueueAfterTurn, STUCK_PROCESSING_MS,
 } from '../../../src/core/sessions/queue-after-turn.js';
 
 const running = new Set<string>();
@@ -195,6 +195,33 @@ describe('release when the turn ends', () => {
     await enqueueMessage('r3', 'steer now');
     running.delete('r3');
     expect(await releaseAfterTurn('r3', { viaEvent: true })).toBe('busy');
+  });
+
+  // 2026-11-20: a line in doubt redelivered at a daemon reconnect sat in 'processing' for hours,
+  // and the user's reply held for "the running turn" behind it was never sent.
+  it('a row stuck in processing with no turn running stops holding the next one after a minute', async () => {
+    await enqueueMessage('r8', 'a notice whose line the CLI never took');
+    expect((await markNextProcessing('r8')).length).toBe(1);
+    running.add('r8');
+    const row = await hold('r8', 'his reply');
+    running.delete('r8');
+    const t0 = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(t0);
+    // Just after the turn: the processing row may be the turn's own, leaving a moment after its result.
+    expect(await releaseAfterTurn('r8', { viaEvent: true })).toBe('busy');
+    clock.mockReturnValue(t0 + STUCK_PROCESSING_MS - 1_000);
+    expect(await releaseAfterTurn('r8', { viaEvent: true })).toBe('busy');
+    // A turn ran in between: its clock starts again after it.
+    running.add('r8');
+    expect(await releaseAfterTurn('r8', { viaEvent: true })).toBe('running');
+    running.delete('r8');
+    clock.mockReturnValue(t0 + STUCK_PROCESSING_MS + 1_000);
+    expect(await releaseAfterTurn('r8', { viaEvent: true })).toBe('busy');
+    clock.mockReturnValue(t0 + 2 * STUCK_PROCESSING_MS + 2_000);
+    expect(await releaseAfterTurn('r8', { viaEvent: true })).toBe('released');
+    clock.mockRestore();
+    expect((await getQueue('r8')).find((r) => r.id === row.id)?.status).toBe('pending');
+    expect(sends.map((s) => s.sessionId)).toEqual(['r8']);
   });
 
   it('a sweep never sends a second row right after the first', async () => {
