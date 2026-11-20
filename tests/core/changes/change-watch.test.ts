@@ -306,6 +306,83 @@ describe('waking the session', () => {
   })
 })
 
+describe('the same state read again is no news', () => {
+  // 2026-11-20: one stage blocked on two failures, each read giving one of them or no data, woke
+  // a session twelve times in three days, and a merged review flickering in a read told "merged"
+  // five times (src/core/changes/told.ts).
+  const blocked = (text: string): ChangeStage => ({ name: 'prod', status: 'blocked', blocker: { kind: 'failure', text } })
+  const noData: ChangeStage = { name: 'prod', status: 'pending', note: 'No data in this read' }
+
+  it('a stage blocked on the same failures, read over and over between reads with no data, is told once per failure', async () => {
+    task('t1', [`cr:${CR1}`])
+    answers.set(CR1, deploying([{ name: 'prod', status: 'running' }]))
+    await tick()
+    for (let round = 0; round < 6; round++) {
+      for (const stage of [blocked('approval failed'), noData, blocked('Hydra test failed'), noData]) {
+        answers.set(CR1, deploying([stage]))
+        await tick({ force: true })
+      }
+    }
+    expect(sent.map((m) => m.text.match(/prod blocked \((.*)\)/)?.[1])).toEqual(['approval failed', 'Hydra test failed'])
+    // The stage really moved on: running again, then the same failure is news again.
+    answers.set(CR1, deploying([{ name: 'prod', status: 'running' }]))
+    await tick({ force: true })
+    answers.set(CR1, deploying([blocked('approval failed')]))
+    await tick({ force: true })
+    expect(sent).toHaveLength(3)
+    // What it was told survives a restart: it is stored with the change.
+    expect(snap()!.told).toEqual({ 'stage@?:prod': ['prod blocked (approval failed)'] })
+  })
+
+  it('a review state read again after a flicker is told once; a new revision is news again', async () => {
+    task('t1', [`cr:${CR1}`])
+    answers.set(CR1, open({ revision: 1 }))
+    await tick()
+    for (let round = 0; round < 5; round++) {
+      answers.set(CR1, { ok: true, snapshot: { label: 'CR-1001', review: { state: 'merged', revision: 1 } } })
+      await tick({ force: true })
+      answers.set(CR1, open({ revision: 1 }))
+      await tick({ force: true })
+    }
+    expect(sent.filter((m) => /merged/.test(m.text))).toHaveLength(1)
+  })
+
+  it('the same failed checks after a rerun are told once; a new revision or checks green in between make them news', async () => {
+    task('t1', [`cr:${CR1}`])
+    answers.set(CR1, open({ revision: 1, checks: { passed: 4, failed: 0, pending: 1 } }))
+    await tick()
+    for (let round = 0; round < 4; round++) {
+      answers.set(CR1, open({ revision: 1, checks: { passed: 2, failed: 3, pending: 0 } }))
+      await tick({ force: true })
+      answers.set(CR1, open({ revision: 1, checks: { passed: 2, failed: 0, pending: 3 } }))
+      await tick({ force: true })
+    }
+    expect(sent).toHaveLength(1)
+    answers.set(CR1, open({ revision: 2, checks: { passed: 2, failed: 3, pending: 0 } }))
+    await tick({ force: true })
+    expect(sent).toHaveLength(2)
+    answers.set(CR1, open({ revision: 2, checks: { passed: 5, failed: 0, pending: 0 } }))
+    await tick({ force: true })
+    answers.set(CR1, open({ revision: 2, checks: { passed: 2, failed: 3, pending: 0 } }))
+    await tick({ force: true })
+    expect(sent).toHaveLength(3)
+  })
+
+  it('news a failed wake never told is told on a later read', async () => {
+    task('t1', [`cr:${CR1}`])
+    answers.set(CR1, deploying([{ name: 'prod', status: 'running' }]))
+    await tick()
+    sendFails = true
+    answers.set(CR1, deploying([blocked('approval failed')]))
+    await tick({ force: true })
+    expect(snap()!.told).toBeUndefined()
+    sendFails = false
+    clock = T0 + 2 * MIN
+    await tick()
+    expect(sent).toHaveLength(1)
+  })
+})
+
 describe('a plugin\'s provider', () => {
   it('registers through walnut.registry.changeProvider under its namespaced id and goes with the plugin', async () => {
     _resetChangeProvidersForTesting()

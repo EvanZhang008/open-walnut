@@ -126,6 +126,9 @@ export interface ChangeSnapshot {
   /** The review read fine, but its deploy could not be shown: nothing deploys it (`none`), or the
    *  deploy's read failed (with `deploy` kept, that is the last one read). The card says which. */
   deployIssue?: ChangeDeployIssue
+  /** The lines its session was last told that still stand, by what each is about (changes/told.ts):
+   *  the same state read again is no news. Walnut's own; a provider never sets it. */
+  told?: Record<string, string[]>
 }
 
 export interface ChangeDeployIssue { code: ChangeErrorCode | 'none'; message: string }

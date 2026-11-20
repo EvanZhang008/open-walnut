@@ -27,6 +27,7 @@ import { followTaskLinks, sendTaskNews, taskNewsTarget } from '../task-news.js'
 import { changeSettled, taskChangeLinks, type ChangeLink, type ChangeSnapshot } from './model.js'
 import { changeProviderFor, type ChangeReadResult, type RegisteredChangeProvider } from './registry.js'
 import { CHANGE_ERROR_EVERY_MS, changeNews, changeWakeLines, nextReadAt, type ChangeNews } from './cadence.js'
+import { toldAfter, untoldNews } from './told.js'
 import { ensureCoreChangeProviders } from './github.js'
 import { abortableDeadline, DEADLINE_MESSAGE } from './deadline.js'
 
@@ -105,6 +106,11 @@ function sameSnapshot(a: ChangeSnapshot | undefined, b: ChangeSnapshot | undefin
   if (!a || !b) return a === b
   const strip = ({ checkedAt: _c, nextAt, ...rest }: ChangeSnapshot) => JSON.stringify({ ...rest, next: !!nextAt })
   return strip(a) === strip(b)
+}
+
+function setTold(snap: ChangeSnapshot, told: Record<string, string[]> | undefined): void {
+  if (told) snap.told = told
+  else delete snap.told
 }
 
 /** The next snapshot from a read's answer (or the previous one when the link was not read). */
@@ -257,7 +263,9 @@ async function settleTask(
       if (result.ok) lastGood.set(link.url, now)
       nextDue.set(link.url, next.nextAt ? Date.parse(next.nextAt) : null)
     }
-    const news = result ? changeNews(prev, next, { skipReview: !!task.pr_status?.[link.url] }) : []
+    // Only what the session was not told yet; what it was told and still stands rides the snapshot.
+    const news = result ? untoldNews(prev, next, changeNews(prev, next, { skipReview: !!task.pr_status?.[link.url] })) : []
+    if (result) setTold(next, toldAfter(prev, next, []))
     planned.push({ url: link.url, next, news, settledNow: !!prev && !changeSettled(prev) && changeSettled(next) })
   }
 
@@ -277,6 +285,7 @@ async function settleTask(
       try {
         await deps.send(target.sessionId, text, task.id, newsKey)
         report.woken++
+        for (const p of told) setTold(p.next, toldAfter(p.next, p.next, p.news))
         log.task.info('change-watch: session woken', { taskId: task.id, sessionId: target.sessionId, changes: told.map((p) => p.url), why: told.flatMap((p) => p.news.map((n) => n.kind)) })
       } catch (err) {
         // Keep what the session last heard, so the next read finds the same news and tells it again.
@@ -314,7 +323,8 @@ export async function taskChangeView(task: Pick<Task, 'tags' | 'change_status'>,
     if (!provider) continue
     const snap = task.change_status?.[link.url] ?? placeholder(link, provider.id)
     const good = lastGood.get(link.url)
-    const { nextAt: storedNext, ...rest } = snap
+    // What its session was told is the watcher's own bookkeeping, not part of the card.
+    const { nextAt: storedNext, told: _told, ...rest } = snap
     const next = snap.checkedAt && nextDue.has(link.url) ? nextDue.get(link.url) : storedNext ? Date.parse(storedNext) : null
     changes.push({
       ...rest,

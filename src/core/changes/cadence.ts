@@ -63,6 +63,8 @@ export interface ChangeNews {
   kind: ChangeNewsKind
   /** One short line, without the URL. */
   text: string
+  /** The stage a stage line is about. */
+  stage?: string
 }
 
 /** A blocker that ends by itself: waiting on it asks nothing of the session. */
@@ -103,7 +105,7 @@ export function changeNews(prev: ChangeSnapshot | undefined, next: ChangeSnapsho
     const old = before.get(stage.name)
     if (stuckKind(old) === kind && old?.blocker?.text === stage.blocker?.text) continue
     const why = stage.blocker?.text ?? stage.note
-    out.push({ kind, text: `${stage.name} ${kind === 'stage_failed' ? 'failed' : 'blocked'}${why ? ` (${why})` : ''}` })
+    out.push({ kind, stage: stage.name, text: `${stage.name} ${kind === 'stage_failed' ? 'failed' : 'blocked'}${why ? ` (${why})` : ''}` })
   }
   if (next.deploy?.done && !prev.deploy?.done) out.push({ kind: 'deployed', text: 'deployed to the last stage' })
   return out
