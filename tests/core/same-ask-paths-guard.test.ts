@@ -100,7 +100,12 @@ describe('every write that asks the user is checked', () => {
 
   it('a Thread handed to the user: both writes in the store run the check', () => {
     const writers = filesWith(/\b(openThread|updateThread)\(/)
-    expect(writers).toEqual(['src/core/org/threads-model.ts', 'src/core/org/threads-store.ts'])
+    expect(writers).toEqual(['src/core/org/thread-ack.ts', 'src/core/org/threads-model.ts', 'src/core/org/threads-store.ts'])
+    // His Acknowledge kept open (ack_means_known) writes only pending, as him: it never hands a thread to him.
+    const ack = [...code('src/core/org/thread-ack.ts').matchAll(/\bupdateThread\(([^;]*)\);/g)].map((m) => m[1])
+    expect(ack.length).toBe(1)
+    expect(ack[0]).toMatch(/state: 'pending'/)
+    expect(ack[0]).toMatch(/'human', at$/)
     const store = code('src/core/org/threads-store.ts')
     expect(store).toMatch(/export async function openNodeThread[\s\S]*?refuseSameAskThread\([\s\S]*?openThread\(/)
     expect(store).toMatch(/export async function patchThread[\s\S]*?refuseSameAskThread\([\s\S]*?updateThread\(/)
