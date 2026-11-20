@@ -172,7 +172,7 @@ describe('the mock CLI keeps the input line uuid of the turn it runs', () => {
       readdirSync: (root: string) => [...new Set(Object.keys(files).filter((f) => f.startsWith(`${root}/`)).map((f) => f.slice(root.length + 1).split('/')[0]))],
       appendFileSync: (f: string, text: string) => { files[f] = (files[f] ?? '') + text } }
     let n = 0
-    const make = new Function('fs', 'path', 'randomUUID', 'env', 'lastInput', `let transcriptParent = null, lastInputUserUuid = lastInput, persistedUser = null;
+    const make = new Function('fs', 'path', 'randomUUID', 'env', 'lastInput', `let transcriptParent = null, lastInputUserUuid = lastInput, persistedUser = null, persistTurnsHere = false;
       const process = { cwd: () => '/w', env, pid: 1 };
       ${fns}
       function fileEditTurn(sid, rows, effectiveMessage, turnInputUuid) { const root = '/t'; if (root) {${fileEdit}} }
