@@ -51,6 +51,12 @@ async function openDraw(page: Page, panel: Locator) {
 }
 
 const status = (dialog: Locator) => dialog.locator('.drawing-workspace-status');
+/** The drawings list, shown (the choice is kept from one dialog to the next). */
+async function showList(dialog: Locator) {
+  const toggle = dialog.locator('.drawing-workspace-files-toggle');
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+  await expect(dialog.locator('.drawing-workspace-files')).toBeVisible();
+}
 const ws = (dialog: Locator) => dialog.locator('.drawing-workspace');
 
 async function canvasBox(dialog: Locator) {
@@ -443,7 +449,7 @@ test.describe('Draw in the composer (drawing_app)', () => {
     const inB = await openDraw(page, panelB);
     await expect(status(inB)).toHaveText('Saved to Notes when you draw');
     await expect(ws(inB)).not.toHaveAttribute('data-drawing-path', /./);
-    await inB.getByRole('button', { name: 'Show drawings list' }).click();
+    await showList(inB);
     await expect(inB.locator('.drawing-workspace-files')).toContainText('No drawings in this task yet');
     await expect(inB.getByRole('list', { name: 'Other drawings' })).toBeVisible();
     await shot(page, 'own-drawing-b');
@@ -475,7 +481,7 @@ test.describe('Draw in the composer (drawing_app)', () => {
     await shot(page, 'conflict-before-new');
 
     // New drawing over the conflict opens a blank one at once.
-    await againA.getByRole('button', { name: 'Show drawings list' }).click();
+    await showList(againA);
     await againA.locator('.drawing-workspace-files').getByRole('button', { name: 'New drawing' }).click();
     await expect(status(againA)).toHaveText('Saved to Notes when you draw', { timeout: 20_000 });
     await expect(againA.locator('.drawing-workspace-conflict')).toHaveCount(0);
