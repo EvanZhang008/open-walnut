@@ -78,7 +78,7 @@ export function QuickBarAsk({ turns, onTask }: { turns: readonly AskTurn[]; onTa
             <div className="qb-ask-q">{t.question}</div>
             {t.failed
               ? <div className="qb-ask-a qb-ask-failed" role="status">{t.failed}</div>
-              : t.answer ? <AgentText text={t.answer} className="qb-ask-a" task={null} compact /> : <div className="qb-ask-a">{t.done ? '' : 'Thinking…'}</div>}
+              : t.answer ? <AgentText text={t.answer} className="qb-ask-a" unknownSource compact /> : <div className="qb-ask-a">{t.done ? '' : 'Thinking…'}</div>}
           </div>
         ))}
         <div ref={endRef} />

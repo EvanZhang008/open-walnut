@@ -21,6 +21,8 @@ export interface Receipt {
   state: ReceiptState;
   /** The task the words went to (the CEO's id once the send answered). */
   taskId?: string;
+  /** The session the reply is written in, so a path in it opens on that session's machine. */
+  sessionId?: string;
   started?: boolean;
   reply: string;
   activity?: string;
@@ -46,7 +48,7 @@ const FINAL: ReadonlySet<ReceiptState> = new Set(['replied', 'held', 'failed', '
 export function applyLine(r: Receipt, line: QuickFollowLine, now = Date.now()): Receipt {
   if (FINAL.has(r.state)) return r;
   switch (line.type) {
-    case 'sent': return { ...r, state: 'sent', taskId: line.taskId, started: line.started };
+    case 'sent': return { ...r, state: 'sent', taskId: line.taskId, ...(line.sessionId ? { sessionId: line.sessionId } : {}), started: line.started };
     case 'held': return { ...r, state: 'held', taskId: line.taskId, endedAt: now };
     case 'delivered': return r.state === 'sent' ? { ...r, state: 'delivered' } : r;
     case 'text': return { ...r, state: 'thinking', reply: r.reply + line.delta };

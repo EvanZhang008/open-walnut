@@ -12,6 +12,7 @@
  *   { type: 'capture' }                        take a screenshot of an area, then call attach()
  * App to page (the panel page): open(), hotkey(), attach(base64Png), close() (a click in another app).
  */
+import { taskIdOfPath } from '@/utils/task-path';
 
 export type NativeQuickBarMessage =
   | { type: 'flag'; on: boolean }
@@ -76,6 +77,6 @@ export function isQuickBarSearchKey(e: KeyboardEvent): boolean {
 
 /** A task path's id, sent beside the path so an older Mac app (which reads only `taskId`) opens it. */
 export function openTaskOf(to: string): { taskId?: string } {
-  const m = to.match(/^\/tasks\/([^/?#]+)$/);
-  return m ? { taskId: decodeURIComponent(m[1]) } : {};
+  const taskId = taskIdOfPath(to);
+  return taskId ? { taskId } : {};
 }

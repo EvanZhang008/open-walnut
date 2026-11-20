@@ -39,6 +39,7 @@ const WEB_SRC = join(ROOT, 'web/src');
 
 /** View-named state that is a passing thing, by file#name, and why. */
 const PASSING: Record<string, string> = {
+  'components/quickbar/QuickBar.tsx#mode': 'what the quick bar does with the words (send, a search, a question); every open starts on the message',
   'components/tasks/ChangeDeployView.tsx#openStages': 'the stages opened in one change card, a popover, for one look',
   'components/org/RouterFolderPicker.tsx#filter': 'the words typed in the folder finder of one open settings dialog',
   'components/actions/ActionNeeded.tsx#restShown': "one strip's other asks unfolded for one look; each task's strip starts with its first asks in sight",

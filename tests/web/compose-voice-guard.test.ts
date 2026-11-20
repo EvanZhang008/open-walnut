@@ -183,6 +183,10 @@ const EXACT: Record<string, Exact> = {
 
 /** A mic the scan cannot link to its box: markers in the file show the owner writes the words in. */
 const DELEGATED: Record<string, { markers: string[]; why: string }> = {
+  'components/quickbar/QuickBar.tsx|textarea placeholder=placeholder': {
+    markers: ['useBoxDictation(boxRef, text, setText)', 'onTranscribe: dictation.onTranscribe', 'ref={boxRef}'],
+    why: "the quick bar listens as it opens: its own speech hook writes the words into boxRef through useBoxDictation",
+  },
   'components/common/BoxMic.tsx|input ref=setRefs': {
     markers: ['box.current = el;', 'return away.current ? null : box.current;', 'boxRef={dictationBox}', 'handleRef={mic}', 'onTranscribe={dictation.onTranscribe}'],
     why: 'MicInput uses a focus-aware view of the same input ref, so dictation does not refocus a field left while its words arrive',

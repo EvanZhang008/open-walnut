@@ -8,6 +8,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
+import { taskPath } from '@/utils/task-path';
 import { useExperimental } from '@/hooks/useExperimental';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { rememberSend, type QuickPerson } from './quickbar-people';
@@ -82,7 +83,7 @@ function QuickBarOverlay() {
   const openChat = useLeanCallback((r: Receipt) => {
     if (!r.taskId) return;
     dismiss(r.id);
-    navigate(`/tasks/${r.taskId}`);
+    navigate(taskPath(r.taskId));
   }, [dismiss, navigate]);
 
   return createPortal(

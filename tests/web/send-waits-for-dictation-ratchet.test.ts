@@ -194,6 +194,8 @@ const OWN_ENTER: Role = { role: 'enter', why: 'its only submit is its own Enter 
 const LEAVE: Role = { role: 'leave', why: 'saves or closes when the box is left (and on its Enter): the MicInput blur and Enter lifecycle (components/common/BoxMic.tsx) owns the wait' };
 
 const SELF_GATED: Record<string, Role> = {
+  // The quick bar's people list: the words narrow it; Enter picks the row the list highlights.
+  'components/quickbar/QuickBarPicker.tsx|MicInput data-testid="qb-picker-search"': FILTER,
   'apps/mail/MailMessageList.tsx|MicInput data-testid="mail-search-input"': {
     ...FILTER,
     submits: ['onSubmit={(event) => { event.preventDefault(); void runMailSearch(draft); }}'],

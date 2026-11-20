@@ -71,7 +71,7 @@ export function QuickBarReceipts({ receipts, floating, onOpenChat, onPutBack, on
             </button>
             {r.open && (
               <div className="qb-receipt-more">
-                {r.reply && <AgentText text={r.reply} className="qb-receipt-reply" task={null} compact />}
+                {r.reply && <AgentText text={r.reply} className="qb-receipt-reply" {...(r.sessionId ? { sessionId: r.sessionId } : { unknownSource: true })} compact />}
                 <div className="qb-receipt-actions">
                   {staysUntilDismissed(r) && <button type="button" className="qb-btn qb-btn-primary" onClick={() => onResend(r.id)}>Send again</button>}
                   {staysUntilDismissed(r) && <button type="button" className="qb-btn" onClick={() => onPutBack(r)}>Put it back</button>}

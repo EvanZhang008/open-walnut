@@ -264,6 +264,8 @@
 }
 
 .qb-picker-search::placeholder { color: var(--qb-muted); }
+/* The search's mic sits inside its right edge (MicInput's wrapper). */
+.qb-picker-search-field { display: flex; align-items: center; width: 100%; padding-right: 10px; }
 
 .qb-picker-list {
   max-height: 340px;

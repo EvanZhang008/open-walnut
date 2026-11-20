@@ -30,6 +30,7 @@ import { PersonAvatar } from './PersonAvatar';
 import { AttachPictureButton, PictureStrip, usePictureInput } from '@/components/common/PictureStrip';
 import { useImageAttachments } from '@/components/common/image-attachments';
 import '@/styles/quickbar.css';
+import { taskPath } from '@/utils/task-path';
 
 /** How long the count runs after a take ends before the words go. */
 export const SEND_COUNTDOWN_MS = 2_000;
@@ -502,7 +503,7 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
       {countdownAt !== null && <div key={countdownAt} className="qb-count" style={{ animationDuration: `${SEND_COUNTDOWN_MS}ms` }} />}
       {picking && <QuickBarPicker sections={sections} current={shown} onPick={pick} onClose={() => { setPicking(false); boxRef.current?.focus(); }} />}
       {(mode === 'tasks' || mode === 'notes') && <QuickBarResults ref={resultsRef} mode={mode} query={query} onOpen={openResult} />}
-      {mode === 'ask' && <QuickBarAsk turns={asking.turns} onTask={(taskId) => openResult({ key: taskId, title: '', sub: '', to: `/tasks/${taskId}` })} />}
+      {mode === 'ask' && <QuickBarAsk turns={asking.turns} onTask={(taskId) => openResult({ key: taskId, title: '', sub: '', to: taskPath(taskId) })} />}
       <QuickBarFoot
         mode={mode}
         recording={recording}

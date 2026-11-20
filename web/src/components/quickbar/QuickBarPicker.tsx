@@ -8,6 +8,7 @@ import { searchQuickTasks } from '@/api/quick';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { filterPeople, personLine, type PeopleSection, type QuickPerson } from './quickbar-people';
 import { PersonAvatar } from './PersonAvatar';
+import { MicInput } from '@/components/common/BoxMic';
 
 /** The rows in the order they are numbered (Cmd-1 is the first). */
 export function flatPicks(sections: readonly PeopleSection[]): QuickPerson[] {
@@ -68,12 +69,16 @@ export function QuickBarPicker({ sections, current, onPick, onClose }: PickerPro
   let n = 0;
   return (
     <div className="qb-picker" onKeyDown={onKeyDown}>
-      <input
+      {/* A filter: the words narrow the list, Enter picks the highlighted row (the list's keys). */}
+      <MicInput
         ref={inputRef}
         className="qb-picker-search"
+        fieldClassName="qb-picker-search-field"
+        data-testid="qb-picker-search"
         data-no-draft="search"
         value={query}
-        onChange={(e) => setQuery(e.target.value)}
+        setText={setQuery}
+        compact
         placeholder="Who? Type a name or a task"
         aria-label="Find who to talk to"
         aria-controls="qb-picker-list"

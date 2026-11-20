@@ -64,6 +64,8 @@ const DERIVED = renderingFiles(GRAPH, SEEDS, new Set([...SHARED].map((f) => path
  */
 const SURFACES: Record<string, 'hook' | 'fallback' | 'renderer'> = {
   'components/chat/ChatMessage.tsx': 'hook',
+  'components/quickbar/QuickBarReceipts.tsx': 'renderer', // the reply, drawn through AgentText from its session
+  'components/quickbar/QuickBarAsk.tsx': 'renderer', // a quick answer, drawn through AgentText (no session wrote it)
   'components/sessions/SessionMessage.tsx': 'hook',
   'components/sessions/StreamingBlockView.tsx': 'hook',
   'components/org/OrgThreads.tsx': 'hook',

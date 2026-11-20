@@ -6,6 +6,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { searchQuickNotes, searchQuickTasks } from '@/api/quick';
 import { log } from '@/utils/log';
+import { taskPath } from '@/utils/task-path';
 
 export interface QuickResult { key: string; title: string; sub: string; to: string }
 
@@ -37,7 +38,7 @@ export const QuickBarResults = forwardRef<QuickBarResultsHandle, {
       setState('searching');
       const run = mode === 'tasks'
         ? searchQuickTasks(query, ctl.signal).then(({ tasks }) => tasks.map((task): QuickResult => ({
-          key: task.id, title: task.title, sub: [task.project, task.stateLabel].filter(Boolean).join(' · '), to: `/tasks/${task.id}`,
+          key: task.id, title: task.title, sub: [task.project, task.stateLabel].filter(Boolean).join(' · '), to: taskPath(task.id),
         })))
         : searchQuickNotes(query, ctl.signal).then((notes) => notes.map((note): QuickResult => ({
           key: note.path, title: note.title || note.name || note.path.replace(/\.md$/, ''), sub: note.path.replace(/\.md$/, ''),
@@ -77,6 +78,7 @@ export const QuickBarResults = forwardRef<QuickBarResultsHandle, {
           key={row.key}
           data-row={i}
           role="option"
+          data-peek-row=""
           aria-selected={i === cursor}
           className={`qb-result${i === cursor ? ' qb-result-on' : ''}`}
           onMouseMove={() => setCursor(i)}
