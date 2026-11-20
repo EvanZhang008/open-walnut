@@ -16,23 +16,17 @@
 import { expect, test } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { useSyntheticMic } from './stt-failure-helpers'
-import { bar, box, chip, DRAFT, KEY, openApp, setFlag, shot, stubAll, voiceOff } from './quick-bar-helpers'
+import { bar, box, chip, DRAFT, KEY, openApp, pinFlag, shot, stubAll, voiceOff } from './quick-bar-helpers'
 
 test.describe.configure({ mode: 'serial' })
-
-let restore: Record<string, boolean> | null = null
 
 test.beforeEach(async ({ page }) => {
   await isolateUiPrefs(page)
   await useSyntheticMic(page)
 })
 
-test.afterAll(async ({ request }) => {
-  if (restore) await request.put('/api/config', { data: { experimental: restore } })
-})
-
-test('off, the key opens nothing', async ({ page, request }) => {
-  restore = await setFlag(request, false)
+test('off, the key opens nothing', async ({ page }) => {
+  await pinFlag(page, false)
   await stubAll(page)
   await openApp(page, false)
   await page.keyboard.press(KEY)
@@ -42,13 +36,14 @@ test('off, the key opens nothing', async ({ page, request }) => {
 
 test('the switch turned on while Walnut is open: the key and the rail\'s magnifier both open the bar', async ({ page, request }) => {
   // 2026-11-20: the key was tried while the experiment was still off; once on, no reload is needed.
-  await setFlag(request, false)
+  const flag = await pinFlag(page, false)
   const sends = await stubAll(page)
   await voiceOff(page)
   await openApp(page, false)
   const magnifier = page.getByTestId('sidebar-quick-bar')
   await expect(magnifier).toHaveCount(0)
-  await setFlag(request, true)
+  flag.set(true)
+  await flag.announce(request)
   await expect(magnifier).toBeVisible({ timeout: 15_000 })
   await expect(magnifier).toHaveAttribute('title', /Control-Option-Command-Space/)
   await page.keyboard.press(KEY)
@@ -63,8 +58,8 @@ test('the switch turned on while Walnut is open: the key and the rail\'s magnifi
   expect(sends.takes).toBe(0)
 })
 
-test('speak, the name said first picks the VP, and two seconds later it sends and the reply shows', async ({ page, request }) => {
-  await setFlag(request, true)
+test('speak, the name said first picks the VP, and two seconds later it sends and the reply shows', async ({ page }) => {
+  await pinFlag(page, true)
   const sends = await stubAll(page)
   await openApp(page)
 
@@ -124,8 +119,8 @@ test('speak, the name said first picks the VP, and two seconds later it sends an
   expect(sends.bodies[1]).toMatchObject({ to: 'pw-vp-walnut', text: 'ship the quick bar first today' })
 })
 
-test('Enter during the take closes the bar at once; the last words are written out and sent after, once, to the first name only', async ({ page, request }) => {
-  await setFlag(request, true)
+test('Enter during the take closes the bar at once; the last words are written out and sent after, once, to the first name only', async ({ page }) => {
+  await pinFlag(page, true)
   // The second "to ..." is part of what was said: only the first picks who gets it. "ship it" comes
   // only with the final words, and the engine answers them 1.5 s after Enter.
   const sends = await stubAll(page, { draft: 'to CEO, to Walnut VP,', final: 'to CEO, to Walnut VP, ship it', finalDelayMs: 1_500 })
@@ -155,8 +150,8 @@ test('Enter during the take closes the bar at once; the last words are written o
   expect(sends.bodies).toHaveLength(1)
 })
 
-test('Esc during the take only stops listening: the words stay, the bar stays, nothing is sent', async ({ page, request }) => {
-  await setFlag(request, true)
+test('Esc during the take only stops listening: the words stay, the bar stays, nothing is sent', async ({ page }) => {
+  await pinFlag(page, true)
   const sends = await stubAll(page)
   await openApp(page)
   await page.keyboard.press(KEY)
@@ -176,8 +171,8 @@ test('Esc during the take only stops listening: the words stay, the bar stays, n
   await expect(bar(page)).toBeHidden()
 })
 
-test('a mode left open does not stop the next take: the key after a Notes search listens again', async ({ page, request }) => {
-  await setFlag(request, true)
+test('a mode left open does not stop the next take: the key after a Notes search listens again', async ({ page }) => {
+  await pinFlag(page, true)
   await stubAll(page)
   await openApp(page)
   await page.keyboard.press('Meta+k')
@@ -191,8 +186,8 @@ test('a mode left open does not stop the next take: the key after a Notes search
   await expect(bar(page)).toHaveAttribute('data-recording', 'true', { timeout: 10_000 })
 })
 
-test('Tab during a take that starts like a keyword picks who gets it, never a mode', async ({ page, request }) => {
-  await setFlag(request, true)
+test('Tab during a take that starts like a keyword picks who gets it, never a mode', async ({ page }) => {
+  await pinFlag(page, true)
   const sends = await stubAll(page, { draft: 'ask the VP to ship it', final: 'ask the VP to ship it' })
   await openApp(page)
   await page.keyboard.press(KEY)
@@ -206,8 +201,8 @@ test('Tab during a take that starts like a keyword picks who gets it, never a mo
   expect(sends.bodies).toHaveLength(0)
 })
 
-test('words emptied elsewhere (the other window sent them): the next take reads its name again', async ({ page, request }) => {
-  await setFlag(request, true)
+test('words emptied elsewhere (the other window sent them): the next take reads its name again', async ({ page }) => {
+  await pinFlag(page, true)
   const sends = await stubAll(page, { draft: 'to Walnut VP, move the review', final: 'to Walnut VP, move the review' })
   await openApp(page)
   await page.keyboard.press(KEY)
@@ -229,8 +224,8 @@ test('words emptied elsewhere (the other window sent them): the next take reads 
   expect(sends.bodies[0]).toMatchObject({ to: 'pw-vp-walnut' })
 })
 
-test('Tab lists who to talk to: Cmd-number and typed words pick', async ({ page, request }) => {
-  await setFlag(request, true)
+test('Tab lists who to talk to: Cmd-number and typed words pick', async ({ page }) => {
+  await pinFlag(page, true)
   const sends = await stubAll(page)
   await voiceOff(page)
   await openApp(page)
@@ -259,8 +254,8 @@ test('Tab lists who to talk to: Cmd-number and typed words pick', async ({ page,
   await expect.poll(() => sends.bodies.at(-1)).toEqual({ to: 'pw-task-tile', text: 'Sand, please', follow: true })
 })
 
-test('a send that never went out says so and puts the words back', async ({ page, request }) => {
-  await setFlag(request, true)
+test('a send that never went out says so and puts the words back', async ({ page }) => {
+  await pinFlag(page, true)
   const sends = await stubAll(page)
   sends.fail = true
   await voiceOff(page)
@@ -295,8 +290,8 @@ test('a send that never went out says so and puts the words back', async ({ page
   expect(sends.bodies.at(-1)).toMatchObject({ text: 'Move the review to Friday' })
 })
 
-test('/quickbar, the Mac app panel page, reports its size and mode and answers the app', async ({ page, request }) => {
-  await setFlag(request, true)
+test('/quickbar, the Mac app panel page, reports its size and mode and answers the app', async ({ page }) => {
+  await pinFlag(page, true)
   const sends = await stubAll(page)
   // The app's message handler, as WKWebView gives it to the page.
   await page.addInitScript(() => {

@@ -24,27 +24,33 @@ export async function shot(page: Page, name: string): Promise<void> {
   await page.screenshot({ path: path.join(SHOT_DIR, `quick-bar-${name}.png`) }).catch(() => {})
 }
 
-export async function setFlag(request: APIRequestContext, on: boolean): Promise<Record<string, boolean>> {
-  const cfg = await (await request.get('/api/config')).json() as { config?: { experimental?: Record<string, boolean> } }
-  const before = { ...(cfg.config?.experimental ?? {}) }
-  const res = await request.put('/api/config', { data: { experimental: { ...before, quick_bar: on } } })
-  expect(res.ok(), await res.text()).toBe(true)
-  return before
-}
-
 /**
- * The switch as this page reads it, without writing the server's config: the app's own GET of
- * the config answers with `quick_bar` set. For a spec file that runs beside quick-bar.spec.ts,
- * which turns the server's switch off and on (spec files run in parallel workers on one server).
+ * The switch as this page reads it, never the server's config: the app's own GET of the config
+ * answers with `quick_bar` set as `set` last left it. Spec files run in parallel workers on one
+ * server, and a switch written there turned the rail's magnifier on under another spec's walk of
+ * the rail (2026-11-20, corner-stack-room's railWalk opened the bar and its scrim hid a notice's
+ * close button). `set` only moves what the next read answers: `announce` tells the page it moved.
  */
-export async function pinFlag(page: Page, on: boolean): Promise<void> {
+export interface PinnedFlag { set: (on: boolean) => void; announce: (request: APIRequestContext) => Promise<void> }
+
+export async function pinFlag(page: Page, on: boolean): Promise<PinnedFlag> {
+  let now = on
   await page.route('**/api/config', async (r) => {
     if (r.request().method() !== 'GET') return r.fallback()
     const res = await r.fetch()
     const body = await res.json() as { config?: { experimental?: Record<string, boolean> } }
-    if (body.config) body.config.experimental = { ...(body.config.experimental ?? {}), quick_bar: on }
+    if (body.config) body.config.experimental = { ...(body.config.experimental ?? {}), quick_bar: now }
     await r.fulfill({ response: res, json: body })
   })
+  return {
+    set: (v) => { now = v },
+    // A save with nothing in it changes no setting, and the server still says the config changed,
+    // so the page reads it again (web/src/hooks/useExperimental.ts) and gets the pinned answer.
+    announce: async (request) => {
+      const res = await request.put('/api/config', { data: {} })
+      expect(res.ok(), await res.text()).toBe(true)
+    },
+  }
 }
 
 /** `takes`: recordings the engine was asked to write out (none may run while voice is off). */

@@ -8,8 +8,8 @@
  *   - the people list not loading (Walnut restarting): the chip and the send name one person, the
  *     last one sent to or the CEO, the bar says it is retrying, and Retry now loads the list.
  * Voice is off (the bar opens for typing); the searches, the answer and the people list are stubbed,
- * and the switch is pinned in the page (pinFlag), so the server's own switch, which quick-bar.spec.ts
- * turns off and on in a parallel worker, never moves under these tests.
+ * and the switch is pinned in the page (pinFlag), never written to the server's config, which every
+ * spec file in a parallel worker shares.
  */
 import { expect, test, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'

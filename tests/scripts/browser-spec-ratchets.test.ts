@@ -2015,3 +2015,26 @@ describe('the shared fixture vault is opened through one helper', () => {
     expect(offendersOf('return vaultSession(page, base, { password: MASTER })')).toEqual([])
   })
 })
+
+describe('the quick bar switch', () => {
+  // The fixture server has one config for every worker. quick-bar.spec.ts turned the server's
+  // quick_bar switch on, and the rail's magnifier came up under corner-stack-room's walk of the
+  // rail in another worker: the walk clicked it and the bar's scrim hid a notice's close button
+  // (2026-11-20). A spec pins the switch in its own page (pinFlag in quick-bar-helpers.ts) and
+  // writes the server's config only to say it changed, with nothing in it.
+  const configWrite = /\.put\(\s*['"`]\/api\/config['"`]\s*(?:,\s*([^\n]*))?/g
+  const writesOf = (text: string) => [...text.matchAll(configWrite)].map((m) => (m[1] ?? '').trim())
+
+  it('no browser source that names the switch writes it to the server', () => {
+    const readers = sources.filter(({ text }) => text.includes('quick_bar'))
+    expect(readers.map(({ file }) => file)).toEqual(expect.arrayContaining(['quick-bar-helpers.ts']))
+    const offenders = readers.flatMap(({ file, text }) => writesOf(text)
+      .filter((args) => !/^\{\s*data:\s*\{\s*\}\s*\}\s*\)/.test(args)).map((args) => `${file}: put('/api/config', ${args}`))
+    expect(offenders).toEqual([])
+  })
+
+  it('catches a write of the switch and accepts the empty announce', () => {
+    expect(writesOf("await request.put('/api/config', { data: { experimental: { ...before, quick_bar: on } } })")).toEqual(['{ data: { experimental: { ...before, quick_bar: on } } })'])
+    expect(writesOf("const res = await request.put('/api/config', { data: {} })")).toEqual(['{ data: {} })'])
+  })
+})
