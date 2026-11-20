@@ -9,184 +9,41 @@
  * `data-peek="off"` stay untouched. One capturing listener serves every surface.
  */
 import '@/styles/truncation-peek.css';
-import { clippingAncestors } from './clip-ancestors';
 import { collapseRow, expandRow, growsDown, within, type RowMarks } from './truncation-peek-row';
+import { CONTROL, cutTextsIn, onTextOf, optedOut, PEEK_ROW_SELECTOR, peekTargetOf, rowControl } from './truncation-peek-find';
 
-/** How far up from the hovered node the cut-off text is looked for. */
-const MAX_DEPTH = 6;
+export { cutTextsIn, findCutText, isCut, PEEK_ROW_SELECTOR, peekTargetOf } from './truncation-peek-find';
 
-/** Fields show their own text (a value, not child nodes): never peeked. */
-const SKIP_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT', 'OPTION']);
-
-function optedOut(el: Element): boolean {
-  return !!el.closest('[data-peek="off"], [inert], [aria-hidden="true"], [contenteditable="true"], [contenteditable=""]');
-}
-
-function hasOwnText(el: Element): boolean {
-  for (const n of Array.from(el.childNodes)) if (n.nodeType === Node.TEXT_NODE && n.textContent && n.textContent.trim()) return true;
-  return false;
-}
-
-/**
- * The right edge the page clips `el` at: the ancestors that hide their overflow sideways, the
- * nearest scroller and the window. `scrolls`: a scroller came before any other clip, so what
- * runs past it is reached by scrolling it, not cut.
- */
-function clipOf(el: Element): { right: number; scrolls: boolean } {
-  let right = window.innerWidth;
-  // The ancestors that really clip it (a fixed or absolute box escapes some): the one clip rule.
-  for (const c of clippingAncestors(el, { stop: document.body })) {
-    if (!c.x) continue;
-    const cs = getComputedStyle(c.el);
-    const edge = c.el.getBoundingClientRect().right - (parseFloat(cs.borderRightWidth) || 0);
-    const scroller = cs.overflowX === 'auto' || cs.overflowX === 'scroll';
-    if (!scroller) { right = Math.min(right, edge); continue; }
-    // A scroller: the last edge that counts.
-    return edge < right ? { right: edge, scrolls: true } : { right, scrolls: false };
-  }
-  return { right, scrolls: false };
-}
-
-function clipRight(el: Element): number { return clipOf(el).right; }
-
-function contentRect(el: Element): DOMRect {
-  const range = document.createRange();
-  range.selectNodeContents(el);
-  return range.getBoundingClientRect();
-}
-
-/** Text that runs past what the page shows of it, by its own box (ellipsis, clamp) or a clipping ancestor. */
-export function isCut(el: HTMLElement, cs: CSSStyleDeclaration): boolean {
-  if (!el.textContent || !el.textContent.trim()) return false;
-  const clamped = cs.webkitLineClamp && cs.webkitLineClamp !== 'none';
-  if (el.clientWidth > 0) {
-    if (el.scrollWidth - el.clientWidth > 1) return true;
-    // A single line's descenders can stand a pixel or two past its box: only a hidden line counts.
-    if (clamped && el.scrollHeight - el.clientHeight > 4) return true;
-  }
-  return contentRect(el).right > clipRight(el) + 1;
-}
-
-/** The cut-off text the pointer is on, or null. */
-export function findCutText(target: EventTarget | null): HTMLElement | null {
-  if (!(target instanceof Element) || optedOut(target)) return null;
-  let textHost: HTMLElement | null = null;
-  let el: Element | null = target;
-  for (let depth = 0; el && el !== document.body && depth < MAX_DEPTH; el = el.parentElement, depth++) {
-    if (!(el instanceof HTMLElement)) continue;
-    if (SKIP_TAGS.has(el.tagName) || el.isContentEditable) return null;
-    const cs = getComputedStyle(el);
-    if (cs.visibility === 'hidden' || cs.opacity === '0') return null;
-    if (cs.textOverflow === 'ellipsis' || (cs.webkitLineClamp && cs.webkitLineClamp !== 'none')) return isCut(el, cs) ? el : null;
-    if (!textHost && hasOwnText(el)) textHost = el;
-  }
-  // No ellipsis on the way up: one line of text a column cuts off at its edge (the Org list's
-  // lines). Text that wraps is never cut sideways.
-  if (!textHost) return null;
-  const ws = getComputedStyle(textHost).whiteSpace;
-  if (ws !== 'nowrap' && ws !== 'pre') return null;
-  // Inside a scroller (a code block, a diff) the rest of the line is reached by scrolling.
-  const clip = clipOf(textHost);
-  if (!clip.scrolls && contentRect(textHost).right > clip.right + 1) return textHost;
-  return null;
-}
-
-
-/** A task row (or any list row) that expands as a whole: the pointer anywhere on it shows every cut-off text in it. */
-export const PEEK_ROW_SELECTOR = '[data-peek-row]';
 /** A row opens once the pointer rests on it this long, so sweeping across rows moves nothing. */
 const ROW_OPEN_MS = 140;
-/** A row's own buttons (its ⋮ menu, Start, Close): over one the row keeps quiet, so the button shows. */
-const CONTROL = 'button, a[href], [role="button"], [role="menuitem"], [role="option"], [role="treeitem"], [role="tab"], [role="checkbox"], input, select, textarea, summary';
-
-/**
- * The row's own control under `target`, if any. A control that reads as part of the row's text
- * (its project name, which filters on click) carries `data-peek-through`, so the row still
- * expands over it; the row itself is never its own control.
- */
-function rowControl(target: Element): Element | null {
-  const c = target.closest(CONTROL);
-  return c && !c.matches('[data-peek-row], [data-peek-through]') ? c : null;
-}
-
-function isTruncating(cs: CSSStyleDeclaration): boolean {
-  return cs.textOverflow === 'ellipsis' || (!!cs.webkitLineClamp && cs.webkitLineClamp !== 'none');
-}
-
-/** Every text in `row` the page cut off, in document order (not those of a row nested in it). */
-export function cutTextsIn(row: Element): HTMLElement[] {
-  const out: HTMLElement[] = [];
-  for (const el of [row, ...Array.from(row.querySelectorAll<HTMLElement>('*'))]) {
-    if (!(el instanceof HTMLElement)) continue;
-    if (out.some((h) => h.contains(el))) continue;
-    if (el.closest(PEEK_ROW_SELECTOR) !== row.closest(PEEK_ROW_SELECTOR) || optedOut(el) || el.isContentEditable || SKIP_TAGS.has(el.tagName)) continue;
-    const cs = getComputedStyle(el);
-    if (!isTruncating(cs) || cs.visibility === 'hidden' || cs.display === 'none' || el.getClientRects().length === 0) continue;
-    if (isCut(el, cs)) out.push(el);
-  }
-  return out;
-}
-
-/**
- * What the pointer at `target` peeks: the cut-off texts of the row it is on (anywhere on the
- * row, except on one of the row's own buttons that holds none of them), else the cut-off text
- * right under it. `key` is the row, or that text.
- */
-export function peekTargetOf(target: EventTarget | null): { key: Element; hosts: HTMLElement[] } | null {
-  if (!(target instanceof Element) || optedOut(target)) return null;
-  const row = target.closest(PEEK_ROW_SELECTOR);
-  if (row && growsDown(row)) {
-    // A card with a box to type in opens from its text only: its box and buttons stay as they are.
-    const hosts = cutTextsIn(row);
-    return hosts.length && onTextOf(row, target, hosts) ? { key: row, hosts } : null;
-  }
-  if (row) {
-    const hosts = cutTextsIn(row);
-    if (hosts.length) {
-      const control = rowControl(target);
-      const onOwnButton = control && row.contains(control) && !hosts.some((h) => control.contains(h) || h.contains(control));
-      if (!onOwnButton) return { key: row, hosts };
-      return null;
-    }
-  }
-  const host = findCutText(target);
-  if (!host) return null;
-  // Unmarked components widen through the same whole-container path.
-  const key = boxOf(host.closest(CONTROL) ?? host.parentElement ?? host);
-  const hosts = cutTextsIn(key);
-  if (!hosts.includes(host)) hosts.push(host);
-  return { key, hosts };
-}
-
-/** What the pointer on a card's text is never on: its box to type in, its buttons, a menu. A link in the text is text. */
-const NOT_TEXT = 'input, textarea, select, button, summary, [role="button"], [role="menuitem"], [role="option"], [role="checkbox"], [contenteditable="true"], [contenteditable=""]';
-
-/** Whether `target` is on one of `row`'s texts: a cut-off one, or one the page would cut. */
-function onTextOf(row: Element, target: Element, hosts: HTMLElement[]): boolean {
-  for (let el: Element | null = target; el && el !== row; el = el.parentElement) {
-    if (el.matches(NOT_TEXT)) return false;
-    if (hosts.includes(el as HTMLElement) || isTruncating(getComputedStyle(el))) return true;
-  }
-  return false;
-}
 
 /** An open card that grows downward and holds `node`: it keeps open while the person works in it. */
 function openDownHolding(node: EventTarget | Node | null): Active | null {
   if (!(node instanceof Node)) return null;
-  for (const a of [active, lingering]) if (a?.marked.down && a.key.contains(node)) return a;
+  for (const a of [active, lingering, ...held]) if (a?.marked.down && a.key.contains(node)) return a;
   return null;
 }
 
 /**
- * The nearest element from `el` up that draws a box of its own. An inline element (a sentence's
- * span around a cut host name) has none: its placeholder would hold one line's height and the
- * words around it would reflow, so the container that opens is the block that holds it
- * (2026-11-16: a session notice's sentence opened 86px taller than its placeholder).
+ * Whether the open card `a` stays through something that closes every other peek (the window
+ * losing focus, a scroll, the pointer leaving the window): it grows downward, so it sits in its
+ * list's flow and moves with it, and focus is in it (typing in its box) or, with `pointerToo`,
+ * the pointer is still on it.
  */
-function boxOf(el: Element): Element {
-  let at: Element = el;
-  while (at.parentElement && at.parentElement !== document.body && /^(inline|contents)$/.test(getComputedStyle(at).display)) at = at.parentElement;
-  return at;
+function keeps(a: Active | null, pointerToo: boolean): boolean {
+  return !!a?.marked.down && (a.key.contains(document.activeElement) || (pointerToo && !!pointer && within(a.key, pointer)));
+}
+
+/** Ends every peek but a card that `keeps`. */
+function hidePeekUnless(pointerToo: boolean): void {
+  if (!keeps(active, pointerToo)) close();
+  if (!keeps(lingering, pointerToo)) closeLingering();
+  if (!active && !lingering) closeHeld();
+}
+
+/** Whether `a` comes before `b` in the page, outside it: a card above another in its list. */
+function precedes(a: Element, b: Element): boolean {
+  return !a.contains(b) && !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
 }
 
 /** The container being opened and the attributes to restore on exit. */
@@ -202,15 +59,32 @@ let pointer: { x: number; y: number } | null = null;
 let lingering: Active | null = null;
 let lingerTimer: ReturnType<typeof setTimeout> | null = null;
 const LINGER_MS = 220;
+/**
+ * Cards that grow downward above the open one, still open, top first. Closing the card above as
+ * the pointer reached the one below moved that one up from under the pointer (2026-11-20
+ * review); they close together once the pointer is off the stack.
+ */
+let held: Active[] = [];
+
+function shut(a: Active): void {
+  if (a.timer) clearTimeout(a.timer);
+  collapseRow(a.marked);
+  putTitlesBack(a.titles);
+}
+
+function closeHeld(): void {
+  const was = held;
+  held = [];
+  for (const a of was.reverse()) shut(a);
+}
 
 function closeLingering(): void {
   if (lingerTimer) { clearTimeout(lingerTimer); lingerTimer = null; }
   const was = lingering;
   if (!was) return;
   lingering = null;
-  if (!active) observer?.disconnect();
-  collapseRow(was.marked);
-  putTitlesBack(was.titles);
+  if (!active) { observer?.disconnect(); closeHeld(); }
+  shut(was);
 }
 
 /** The pointer left the open row `state`: it stays open a moment (see `lingering`). */
@@ -254,6 +128,7 @@ function putTitlesBack(titles: Array<[Element, string]>): void {
 export function hidePeek(): void {
   close();
   closeLingering();
+  closeHeld();
 }
 
 /** Ends the current peek without moving the list. */
@@ -261,14 +136,25 @@ function close(): void {
   if (!active) return;
   const was = active;
   active = null;
-  if (was.timer) clearTimeout(was.timer);
-  if (!lingering) observer?.disconnect();
-  collapseRow(was.marked);
-  putTitlesBack(was.titles);
+  if (!lingering) { observer?.disconnect(); closeHeld(); }
+  shut(was);
 }
 
-function renderAll(state: Active): void {
-  closeLingering();
+/** Opens `state`. `atPointer`: it opens only if it is still under the pointer once what closes above it moved it. */
+function renderAll(state: Active, atPointer = true): void {
+  const was = lingering;
+  if (was?.marked.down && growsDown(state.key) && precedes(was.key, state.key)) {
+    // The card above stays open: closing it now would move this one up from under the pointer.
+    if (lingerTimer) { clearTimeout(lingerTimer); lingerTimer = null; }
+    lingering = null;
+    held.push(was);
+  } else {
+    // A card that grew downward above it closes first and may move it from under the pointer.
+    const shifts = !!was?.marked.down || held.length > 0;
+    closeLingering();
+    closeHeld();
+    if (shifts && atPointer && pointer && !within(state.key, pointer)) { close(); settleSoon(); return; }
+  }
   state.marked = expandRow(state.key, state.hosts);
 }
 
@@ -279,7 +165,9 @@ function renderAll(state: Active): void {
  * has cut-off text there; then it is closed.
  */
 function reopenInPlace(a: Active): boolean {
-  if (!a.key.isConnected || !a.marked.length || !pointer || !within(a.key, pointer)) return false;
+  // Still being read (the pointer on it) or worked in (focus in its box).
+  const here = (!!pointer && within(a.key, pointer)) || a.key.contains(document.activeElement);
+  if (!a.key.isConnected || !a.marked.length || !here) return false;
   collapseRow(a.marked);
   a.marked = [];
   const hosts = cutTextsIn(a.key);
@@ -296,13 +184,16 @@ function watchActive(): void {
   observer ??= new MutationObserver(() => {
     const moved = (state: Active) => !!state.marked.placeholder &&
       (state.marked.placeholder.nextSibling !== state.key || !state.key.matches(':popover-open'));
-    if (lingering && (!lingering.key.isConnected || moved(lingering))) closeLingering();
+    const changed = (state: Active) => state.hosts.some((h, i) => !h.isConnected || h.isContentEditable || h.textContent !== state.texts[i]);
+    held = held.filter((h) => h.key.isConnected || (shut(h), false));
+    // A card kept open for its focus opens its new text again, with its new cap.
+    if (lingering && (!lingering.key.isConnected || moved(lingering) || (lingering.marked.down && changed(lingering) && !reopenInPlace(lingering)))) closeLingering();
     const a = active;
     if (!a) return;
     // React can move the same node without disconnecting it or changing any text. Its old
     // shell must go immediately; settle on whatever is now under the pointer at the new order.
     if (!a.key.isConnected || moved(a)) { close(); settleSoon(); return; }
-    if (!a.hosts.some((h, i) => !h.isConnected || h.isContentEditable || h.textContent !== a.texts[i])) return;
+    if (!changed(a)) return;
     if (reopenInPlace(a)) return;
     close();
     settleSoon();
@@ -318,7 +209,7 @@ function activate(key: Element, hosts: HTMLElement[], target: Element, keyboard 
   state.timer = setTimeout(() => {
     if (active !== state) return;
     state.timer = null;
-    if (key.matches(':hover') || (keyboard && key.contains(document.activeElement))) renderAll(state);
+    if (key.matches(':hover') || (keyboard && key.contains(document.activeElement))) renderAll(state, !keyboard);
     else close();
   }, keyboard ? 0 : ROW_OPEN_MS);
 }
@@ -333,6 +224,20 @@ function onOver(e: PointerEvent): void {
   releaseLostPress();
   pointer = { x: e.clientX, y: e.clientY };
   const target = e.target instanceof Element ? e.target : null;
+  const up = target ? held.findIndex((h) => h.key.contains(target)) : -1;
+  if (up >= 0) {
+    // Back up on a card kept open above: it is the open one again; what is below it closes,
+    // which moves nothing above it.
+    const below = [active, lingering, ...held.splice(up + 1).reverse()];
+    const back = held.pop()!;
+    active = null;
+    lingering = null;
+    if (lingerTimer) { clearTimeout(lingerTimer); lingerTimer = null; }
+    for (const a of below) if (a) shut(a);
+    active = back;
+    watchActive();
+    return;
+  }
   if (lingering && target) {
     // Back on the row just left: it is the open row again.
     if (lingering.key.contains(target)) {
@@ -343,7 +248,9 @@ function onOver(e: PointerEvent): void {
       watchActive();
       return;
     }
-    if (!within(lingering.key, pointer)) closeLingering();
+    // A card that grows downward closes on its own clock: closing it now would move what is below
+    // it, the row the pointer is reaching included.
+    if (!within(lingering.key, pointer) && !lingering.marked.down) closeLingering();
   }
   // On the open row, its own buttons included: it stays open (closing it would move the button
   // out from under the pointer and open it again).
@@ -394,14 +301,16 @@ function settleSoon(): void {
 /** Whether a scroll or a wheel at `t` moves what peeks (another pane streaming its chat does not). */
 function movesPeek(t: EventTarget | null): boolean {
   if (!(t instanceof Element) || t === document.documentElement || t === document.body) return true;
-  const shown = [active, lingering].filter((a): a is Active => !!a);
+  const shown = [active, lingering, ...held].filter((a): a is Active => !!a);
   // A text of an open card that grows downward scrolls inside itself: reading on keeps it open.
   return shown.some(({ key: r, marked }) => t.contains(r) || (r.contains(t) && !(marked.down && t !== r)));
 }
 
 function hideAndSettle(e?: Event): void {
   if (e && e.type !== 'resize' && (pressed || !movesPeek(e.target))) return;
-  hidePeek();
+  // A card that grows downward moves with its list: it stays while the pointer or focus is on it
+  // (a phone's keyboard opening resizes the window and scrolls the box into view).
+  hidePeekUnless(true);
   settleSoon();
 }
 
@@ -481,7 +390,7 @@ function releaseLostPress(): boolean {
 function onOut(e: PointerEvent): void {
   // Out of the window: nothing else will say the pointer left. A finger "leaves" as it lifts: a
   // tap's card stays open until the next tap (`tapped`).
-  if (!e.relatedTarget && e.pointerType !== 'touch') hidePeek();
+  if (!e.relatedTarget && e.pointerType !== 'touch') hidePeekUnless(false);
 }
 
 const MODIFIERS = new Set(['Shift', 'Meta', 'Control', 'Alt', 'CapsLock']);
@@ -500,7 +409,11 @@ export function installTruncationPeek(): void {
   }, true);
   document.addEventListener('focusout', (e) => {
     const next = e.relatedTarget;
-    if (active && (!(next instanceof Element) || !active.key.contains(next))) hidePeek();
+    // A press in a card that grows downward blurs its box with nothing to focus (WebKit focuses no
+    // button it clicks; text takes no focus): closing it then would move the button from under
+    // the press and lose the click. The pointer still on it keeps it; linger closes it later.
+    const pressedIn = !!active?.marked.down && !!pointer && within(active.key, pointer);
+    if (active && (!(next instanceof Element) || !active.key.contains(next))) { if (!pressedIn) hidePeek(); }
     // Focus leaving a card that stayed open for it, after the pointer had already left.
     else if (lingering?.marked.down && !(next instanceof Element && lingering.key.contains(next))) closeLingering();
   }, true);
@@ -525,7 +438,8 @@ export function installTruncationPeek(): void {
   document.addEventListener('scroll', hideAndSettle, { capture: true, passive: true });
   window.addEventListener('resize', hideAndSettle);
   // A button may still be held across a blur; the next move with none held ends the press.
-  window.addEventListener('blur', hidePeek);
-  document.addEventListener('visibilitychange', hidePeek);
+  // A card with focus in its box stays through a window switch.
+  window.addEventListener('blur', () => hidePeekUnless(false));
+  document.addEventListener('visibilitychange', () => hidePeekUnless(false));
   document.addEventListener('dragend', () => { releaseLostPress(); hidePeek(); settleSoon(); }, { capture: true, passive: true });
 }

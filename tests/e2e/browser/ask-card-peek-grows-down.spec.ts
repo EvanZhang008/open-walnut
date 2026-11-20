@@ -13,7 +13,7 @@
  *   - the task's own one-line title row above it still widens (the 2026-11-15 design)
  * Real: the fixture server, the mock CLI's session, the report route, Home's Needs you section.
  */
-import { expect, test, type Browser, type Locator, type Page } from '@playwright/test'
+import { expect, test, type APIRequestContext, type Browser, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
@@ -30,6 +30,9 @@ const TITLE = `Move the nightly ledger export to the new storage bucket and reti
 const QUESTION = `Both changes are ready for review: the scheduler sends one more region's clusters to the new platform each night, and the function calls itself on a timer and was checked on the dev box. Both roll back with one revert. Do you agree that I ship them all this afternoon ${STAMP}?`
 const DETAIL = `The scheduler change is in review with its tests green, the function change calls itself on a timer and was checked on the dev box, and both roll back with one revert if the first region shows any trouble after ${STAMP}.`
 const made: string[] = []
+let sessionId = ''
+const historyOf = async (request: APIRequestContext, sid: string) =>
+  ((await (await request.get(`/api/v1/sessions/${sid}/history?tail=80`)).json()) as { messages?: Array<{ text?: string }> }).messages?.map((m) => m.text ?? '').join('\n') ?? ''
 
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(240_000)
@@ -98,12 +101,19 @@ test.beforeAll(async ({ request }) => {
   // overwrite the ask below.
   const started = await request.post('/api/sessions/quick-start', { data: { cwd: `${fixtureRoot}/projects/walnut`, message: `Ledger ready ${STAMP}`, taskId: made[0] } })
   expect(started.ok(), await started.text()).toBe(true)
-  const { sessionId } = (await started.json()) as { sessionId: string }
-  await expect.poll(async () => ((await (await request.get(`/api/v1/sessions/${sessionId}/history?tail=80`)).json()) as { messages?: Array<{ text?: string }> }).messages?.map((m) => m.text ?? '').join('\n') ?? '', { timeout: 90_000 }).toContain(`Ledger ready ${STAMP}`)
-  expect((await request.patch(`/api/tasks/${made[0]}`, { data: { phase: 'NEED_ACTION' } })).ok()).toBe(true)
-  const asked = await request.put(`/api/v1/tasks/${made[0]}/report`, { data: { state: 'needs', ask: QUESTION, ask_kind: 'yes_no', ask_more: DETAIL } })
-  expect(asked.ok(), await asked.text()).toBe(true)
-  await expect.poll(async () => (((await (await request.get(`/api/tasks/${made[0]}`)).json()).task?.user_status?.actions ?? []) as Array<{ kind: string }>).map((a) => a.kind).join(','), { timeout: 60_000 }).toContain('ask')
+  sessionId = ((await started.json()) as { sessionId: string }).sessionId
+  await expect.poll(() => historyOf(request, sessionId), { timeout: 90_000 }).toContain(`Ledger ready ${STAMP}`)
+  // A second task asking too, a card of its own in the same list (no session: a card without a box).
+  const second = await request.post('/api/tasks', { data: { title: `Rotate the staging keys ${STAMP}`, project: PROJECT, source: 'local' } })
+  expect(second.ok(), await second.text()).toBe(true)
+  made.push(((await second.json()) as { task: { id: string } }).task.id)
+  const asks = [QUESTION, `The staging keys are 90 days old and the vendor wants them rotated before the audit; rotating means a short outage of the preview builds while the new keys spread. Do you want me to rotate them tonight ${STAMP}?`]
+  for (const [i, id] of made.entries()) {
+    expect((await request.patch(`/api/tasks/${id}`, { data: { phase: 'NEED_ACTION' } })).ok()).toBe(true)
+    const asked = await request.put(`/api/v1/tasks/${id}/report`, { data: { state: 'needs', ask: asks[i], ask_kind: 'yes_no', ask_more: DETAIL } })
+    expect(asked.ok(), await asked.text()).toBe(true)
+    await expect.poll(async () => (((await (await request.get(`/api/tasks/${id}`)).json()).task?.user_status?.actions ?? []) as Array<{ kind: string }>).map((a) => a.kind).join(','), { timeout: 60_000 }).toContain('ask')
+  }
 })
 
 test.afterAll(async ({ request }) => {
@@ -237,3 +247,63 @@ test('on a touch screen a tap on the card\'s text opens it, a tap again closes i
     await context.close()
   }
 })
+
+test('two ask cards in one list: moving from the open one to the one below opens it where the pointer is, nothing jumps', async ({ page }) => {
+  const { card: first } = await openNeeds(page)
+  const otherRow = await showSectionCard(page, 'needs', made[1])
+  const other = askOf(otherRow)
+  await expect(other).toBeVisible({ timeout: 30_000 })
+  // Upper and lower by where they are, whichever order the section sorts them in.
+  const [upper, lower] = (await first.boundingBox())!.y < (await other.boundingBox())!.y ? [first, other] : [other, first]
+  await upper.scrollIntoViewIfNeeded()
+  await page.mouse.move(1, 1)
+  await upper.locator('.ask-card-question').hover({ position: { x: 20, y: 6 } })
+  await expect.poll(async () => (await cardState(upper)).open, 'the upper card opens').toBe(true)
+  // Down to the lower card's text, in steps as a hand moves.
+  // Where it is while the upper one is open: where the hand aims.
+  const q = (await lower.locator('.ask-card-question').boundingBox())!
+  const at = { x: q.x + 20, y: q.y + 6 }
+  await page.mouse.move(at.x, at.y, { steps: 8 })
+  await expect.poll(async () => (await cardState(lower)).open, 'the lower card opens').toBe(true)
+  await page.waitForTimeout(400)
+  const now = (await lower.locator('.ask-card-question').boundingBox())!
+  expect(Math.abs(now.y - q.y), `the lower card did not move under the pointer (${q.y} -> ${now.y})`).toBeLessThanOrEqual(1)
+  expect(await lower.locator('.ask-card-question').evaluate((el, p) => el.contains(document.elementFromPoint(p.x, p.y)), at), 'the pointer is still on its text').toBe(true)
+  expect((await cardState(lower)).open, 'still open').toBe(true)
+  // Off the cards: both close.
+  await page.mouse.move(1, 1)
+  await expect.poll(async () => (await cardState(upper)).open || (await cardState(lower)).open, 'both close').toBe(false)
+})
+
+test('a press in the open card with focus in its box keeps it open: the button stays put and its click lands', async ({ page, request }) => {
+  const { card } = await openNeeds(page)
+  await page.mouse.move(1, 1)
+  await card.locator('.ask-card-question').hover({ position: { x: 20, y: 6 } })
+  await expect.poll(async () => (await cardState(card)).open, 'the text opens').toBe(true)
+  await card.getByTestId('org-answer-input').click()
+  const yes = card.getByRole('button', { name: 'Yes', exact: true })
+  // A press on the question's text: nothing there takes focus, so the box blurs to nothing.
+  const q = (await card.locator('.ask-card-question').boundingBox())!
+  const yesBefore = (await yes.boundingBox())!
+  await page.mouse.move(q.x + 30, q.y + 8)
+  await page.mouse.down()
+  await page.waitForTimeout(250)
+  expect((await cardState(card)).open, 'open through a press on its text').toBe(true)
+  await page.mouse.up()
+  await page.waitForTimeout(250)
+  expect((await cardState(card)).open, 'open after it').toBe(true)
+  expect(Math.abs((await yes.boundingBox())!.y - yesBefore.y), 'Yes did not move').toBeLessThanOrEqual(1)
+  // Focus back in the box, then a press on Yes (WebKit focuses no clicked button: the box blurs to nothing).
+  await card.getByTestId('org-answer-input').click()
+  const down = (await yes.boundingBox())!
+  await page.mouse.move(down.x + down.width / 2, down.y + down.height / 2)
+  await page.mouse.down()
+  await page.waitForTimeout(250)
+  expect((await cardState(card)).open, 'open through the press on Yes').toBe(true)
+  const held = (await yes.boundingBox())!
+  expect(Math.abs(held.y - down.y), `Yes did not move between down and up (${down.y} -> ${held.y})`).toBeLessThanOrEqual(1)
+  await page.mouse.up()
+  // The click landed: its answer reached the task's session.
+  await expect.poll(() => historyOf(request, sessionId), { timeout: 30_000, message: 'the Yes answer reached the session' }).toMatch(/\bYes\b/)
+})
+

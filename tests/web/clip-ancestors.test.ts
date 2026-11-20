@@ -139,7 +139,7 @@ describe('guard: every visible-box measure asks the one clip rule', () => {
   });
 
   it('the visible-box measures of the toolbars, the live lines, page find and plugin bounds use it', () => {
-    for (const p of ['utils/toolbar-bounds.ts', 'components/notes/NotesBubbleMenu.tsx', 'utils/thread-live-lines.ts', 'utils/page-find-geometry.ts', 'plugins/plugin-bounds.ts', 'utils/truncation-peek.ts']) {
+    for (const p of ['utils/toolbar-bounds.ts', 'components/notes/NotesBubbleMenu.tsx', 'utils/thread-live-lines.ts', 'utils/page-find-geometry.ts', 'plugins/plugin-bounds.ts', 'utils/truncation-peek-find.ts']) {
       expect(all.find((f) => f.p === p)?.s, p).toMatch(/clippingAncestors\(/);
     }
   });
