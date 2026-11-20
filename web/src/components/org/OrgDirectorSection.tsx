@@ -12,7 +12,8 @@
  */
 import { useEffect, useState, type MouseEvent } from 'react';
 import { ContextMenu, useContextMenu } from '@/components/common/ContextMenu';
-import { initials, rowAvatarColor, type ChannelRow } from './org-channels-model';
+import { rowAvatarColor, type ChannelRow } from './org-channels-model';
+import { NodeAvatar } from './OrgAvatar';
 import { TAB_DOT } from './org-task-tabs';
 import { directorRows, type LeaderGroup, type LeaderNode } from './org-leaders';
 import { directorMenuItems, endNewDirector, useDirectorActions, useNewDirectorAsk, type DirectorProject } from './director-actions';
@@ -67,7 +68,8 @@ export function OrgDirectorSection({ vps, groupsOf, projectsOf, query, openTaskI
               onClick={() => actions.openTask(d.id)}
               onContextMenu={(e) => onMenu(e, d)}
             >
-              <span className="org-avatar is-director" style={{ background: rowAvatarColor(vp) }} aria-hidden="true">{initials(vp.name)}</span>
+              {/* Its own avatar with the experiment on; off, its VP's letters, as before. */}
+              <NodeAvatar taskId={d.id} name={vp.name} size={26} color={rowAvatarColor(vp)} className="is-director" />
               <span className="org-channel-mid">
                 <span className="org-channel-top">
                   <span className="org-channel-name">{d.title}</span>
