@@ -41,6 +41,7 @@ import { cutEnd } from './text-cut.js';
 import type { ThreadCounts } from './org/thread-view.js';
 import { outlivingLine, type OutlivingSource } from './sessions/outliving-work.js';
 import type { SameAskFold } from './same-ask.js';
+import type { StatusThreadLine, StatusThreadNew } from './sessions/status-threads.js';
 import { reportDecision, type AskMemory, type StatusDecision } from './ask-decision.js';
 import type { ActionItem } from './action-needed.js';
 // The web reads Action needed through this module's alias (@open-walnut/user-status).
@@ -225,6 +226,12 @@ export interface StatusReport {
   ask_said?: true;
   /** Any other report: the decision the task last asked, so asking it again soon keeps its id. */
   last_ask?: AskMemory;
+  /** Its word on each of its threads (FOR_USER_THREAD, sessions/status-threads.ts): written to the threads, never stored here. */
+  threads?: StatusThreadLine[];
+  /** Subjects it follows that no thread covered (FOR_USER_THREAD_NEW): opened as threads, never stored here. */
+  threads_new?: StatusThreadNew[];
+  /** Its state came from its thread lines, not FOR_USER_STATE (status-threads.ts settleStateFromThreads). */
+  from_threads?: true;
 }
 
 /** The status rules a report is asked under: 2 = the task's own build, test run, deploy or land is

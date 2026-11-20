@@ -17,7 +17,7 @@ import { isFollower } from '../server-role.js';
 import { walnutLetterLanguage as letterLang } from '../human-inbox/walnut-letters/languages.js';
 import {
   addMovedMessages, emptyThreads, enteredNeeds, fileMessage, markClosesTold, markRechecked, mergeThreads, movedAway, moveThreadIn, moveThreadOut, normalizeThreads, openThread, patchHandsToUser, setAnswers, splitThreadMessage, stampLegacyReplyAt, sweepClosed, ThreadError, updateThread,
-  type FileMessageInput, type FileMessageResult, type MoveEnd, type OpenThreadInput, type ThreadAskOwner, type ThreadMoveKind, type OrgThread, type ThreadAnswer, type ThreadPatch, type ThreadRecheck, type ThreadsFile, type ThreadTextSource, type ThreadWriter,
+  type FileMessageInput, type FileMessageResult, type MoveEnd, type OpenThreadInput, type ThreadAskOwner, type ThreadMoveKind, type OrgThread, type ThreadAnswer, type ThreadPatch, type ThreadState, type ThreadRecheck, type ThreadsFile, type ThreadTextSource, type ThreadWriter,
 } from './threads-model.js';
 import { askOwnerKept, askOwnerOf, pointerTaskIds, withAskPointers } from './thread-task-ask.js';
 import type { ThreadAskedIn } from './thread-view.js';
@@ -380,6 +380,47 @@ export async function setThreadAnswers(taskId: string, answers: ReadonlyMap<stri
   // One change for the whole read: a client reads the node's threads once, not once per thread.
   if (changed.length) emit({ taskId, kind: 'answered', ...(changed.length === 1 ? { threadId: changed[0] } : {}) });
   return changed.length;
+}
+
+/** A task's own write on one of its threads; `fallback` when the thread refuses `patch` (a close he has not reacted to). */
+export interface OwnThreadWrite { id: string; patch: ThreadPatch; fallback?: ThreadPatch }
+/** A subject the task opens itself, in its own state (a hidden one too). */
+export interface OwnThreadOpen { title: string; text: string; state: ThreadState }
+
+/**
+ * A task's own writes on its threads from its status answer (sessions/status-threads.ts), in one
+ * locked write: `plan` reads the threads as they are under the lock. Nothing here hands a thread to
+ * the user (a write into needs, or a reopen, is dropped), so the same-ask check of patchThread and
+ * openNodeThread has nothing to check. A write its thread refuses is left out. One change event.
+ */
+export async function writeOwnThreads(taskId: string, plan: (cur: ThreadsFile) => { writes: OwnThreadWrite[]; opens: OwnThreadOpen[] }, by: ThreadWriter): Promise<string[]> {
+  const at = new Date().toISOString();
+  const handsToUser = (p: ThreadPatch) => p.state === 'needs' || !!p.reopen;
+  const changed = await mutateThreads(taskId, (cur) => {
+    const { writes, opens } = plan(cur);
+    let file = cur;
+    const done: string[] = [];
+    for (const w of writes) {
+      for (const p of [w.patch, w.fallback]) {
+        if (!p || handsToUser(p)) continue;
+        try { file = updateThread(file, w.id, p, by, at).file; done.push(w.id); break; } catch (err) { if (!(err instanceof ThreadError)) throw err; }
+      }
+    }
+    const open = new Set(file.threads.filter((t) => !t.closed).map((t) => t.title.trim().toLowerCase()));
+    for (const o of opens) {
+      if (o.state === 'needs' || open.has(o.title.trim().toLowerCase())) continue;
+      try {
+        // A thread a node opens starts in his sight (openThread); it takes the task's state in the same write.
+        const r = openThread(file, { title: o.title, text: o.text, from: 'node', state: 'answered' }, by, at);
+        file = o.state === 'answered' ? r.file : updateThread(r.file, r.thread.id, { state: o.state }, by, at).file;
+        open.add(o.title.trim().toLowerCase());
+        done.push(r.thread.id);
+      } catch (err) { if (!(err instanceof ThreadError)) throw err; }
+    }
+    return { file: done.length ? file : cur, out: done };
+  });
+  if (changed.length) emit({ taskId, kind: 'updated', ...(changed.length === 1 ? { threadId: changed[0] } : {}) });
+  return changed;
 }
 
 /** The primary's sweep: every node's closed threads past their week are deleted for good. */

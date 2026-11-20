@@ -74,6 +74,11 @@ async function saveStatusAnswer(
   // announce it as completed again (updateTaskRaw names the event by phase).
   const current = await getTask(taskId).catch(() => null);
   if (!current || current.phase === 'COMPLETE' || current.status === 'done') return false;
+  // Its thread lines set its state when its own words did not (status-threads.ts), and go to its
+  // threads once the report is stored: they are never part of it.
+  const { settleStateFromThreads, applyThreadLines } = await import('./status-threads.js');
+  const { threads: threadLines, threads_new: threadsNew, ...settled } = settleStateFromThreads(report);
+  report = settled;
   // Whether this turn answered a person's message: such a turn never parks the task (report-phase.ts).
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const { turnAnsweredPerson } = await import('./report-phase.js');
@@ -81,7 +86,8 @@ async function saveStatusAnswer(
   // Asked inside a running turn (a watch, task-watch.ts): no turn ended, so the last turn's end
   // stays the boundary, and that turn's end asks again.
   const prev = current.status_report;
-  const answered = opts.midTurn ? !!prev?.answered_person : turnAnsweredPerson(rec?.humanInputAt, turnEndedMs, prev);
+  // A state its threads set leaves what it answered on those threads: the task itself reads where it stands.
+  const answered = report.from_threads ? false : opts.midTurn ? !!prev?.answered_person : turnAnsweredPerson(rec?.humanInputAt, turnEndedMs, prev);
   const endedAt = opts.midTurn ? prev?.turn_ended_at : new Date(turnEndedMs).toISOString();
   // The writer is the session asked, recorded here; a session_id the parsed answer carried is dropped.
   report = { ...report, rule: STATUS_RULE_VERSION, ...(endedAt ? { turn_ended_at: endedAt } : {}), ...(answered ? { answered_person: true } : {}), session_id: sessionId };
@@ -115,6 +121,7 @@ async function saveStatusAnswer(
   await updateTaskRaw(taskId, { status_report: report }, {
     emitEvent: true, source: 'status-report', shouldUpdate: (cur) => cur.phase !== 'COMPLETE' && cur.status !== 'done',
   });
+  await applyThreadLines(taskId, { threads: threadLines, threads_new: threadsNew });
   const { applyReportPhase } = await import('./report-phase.js');
   if (!opts.midTurn) await applyReportPhase(taskId, sessionId, report, turnEndedMs);
   // A lead's or Main's promise with nothing to bring it back gets a follow-up (promise-alarm.ts).
@@ -196,11 +203,15 @@ export async function askStatus(taskId: string, sessionId: string, turnEndedMs: 
     // The asks its tree already holds, so it does not ask the user the same again (same-ask.ts).
     const { sameAskQuestionFor } = await import('../same-ask-tree.js');
     const sameAsk = await sameAskQuestionFor(taskId);
+    // Its open threads, each asked where it stands (status-threads.ts).
+    const { threadQuestionFor, readThreadLines } = await import('./status-threads.js');
+    const threads = await threadQuestionFor(task, lang ? uiLanguageName(lang) : undefined);
     const answer = (await sessionRunner.requestTurnCompleteSelfReport(
-      sessionId, buildStatusPrompt(FOR_USER_PROMPT, task.title, lang ? uiLanguageName(lang) : undefined) + sameAsk + owed.block, STATUS_TIMEOUT_MS,
+      sessionId, buildStatusPrompt(FOR_USER_PROMPT, task.title, lang ? uiLanguageName(lang) : undefined) + sameAsk + owed.block + threads.block, STATUS_TIMEOUT_MS,
     )).trim();
     if (owed.listed.length) await applyOwedAnswer(taskId, owed.listed, answer);
-    const report = readStatusReport(answer);
+    const read = readStatusReport(answer);
+    const report = read && threads.block ? { ...read, ...readThreadLines(answer, threads.refs) } : read;
     if (!report) {
       log.session.warn('status question: no status in the answer', { sessionId, taskId, why, head: answer.slice(0, 200) });
       return false;

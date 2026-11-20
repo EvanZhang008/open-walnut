@@ -270,6 +270,7 @@ const AWAY_LETTERS_RULE =
 const TASK_THREADS_RULES = threadsLine('the Threads view beside your chat, opened from its ⋮ menu or its Threads chip',
   'When you hand one of his asks to a task, name the thread (task_create, task_send or task_start with thread): the thread '
   + 'lists that task and stays yours. A thread in needs makes your task read Needs you, and his phone buzzes for it when he is away. '
+  + 'Routine progress on a subject goes to its thread (Walnut asks where each stands at every turn end), a letter only for what needs him right away. '
   + AWAY_LETTERS_RULE + THREAD_ONE_PLACE_RULE).trim()
 /** A versioned block (instruction-diff.ts `task-threads`): a running session hears it at once when turned on, and that it is gone when turned off. */
 const TASK_THREADS_VERSION = `v${createHash('sha1').update(TASK_THREADS_RULES).digest('hex').slice(0, 8)}`
