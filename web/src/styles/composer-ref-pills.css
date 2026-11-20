@@ -85,3 +85,7 @@
   --pill-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'><path d='M14 3H6v18h12V7z'/><path d='M14 3v4h4'/></svg>");
   background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
+/* A topic member's "@Name" (TopicComposer): a person glyph under the "@". */
+.composer-ref-pill[data-kind="member"] {
+  --pill-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='8' r='4'/><path d='M4 20a8 8 0 0 1 16 0'/></svg>");
+}

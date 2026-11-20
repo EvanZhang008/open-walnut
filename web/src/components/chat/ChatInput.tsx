@@ -17,6 +17,7 @@ import { useRoomAbove } from '@/hooks/useRoomAbove';
 import { composeRefs, inlineRefs, type InlineRefSplit, type RefTable } from './composer-refs';
 import { fileRefsIn } from './composer-ref-pills';
 import { useComposerPills } from './useComposerPills';
+import type { NamedSpans } from './composer-ref-pills';
 import { ComposerRefLayer } from './ComposerRefLayer';
 import { relativeTo } from './mention-path';
 import { routeMention } from './session-mention';
@@ -399,6 +400,8 @@ interface ChatInputProps {
    *  on `value`, so every mutation path is covered (draft restore, prefill, mention
    *  rewrite, voice insert, post-send reset), not just typing. */
   onValueChange?: (text: string) => void;
+  /** Plain "@Name" spans drawn as pills (a topic's members, TopicComposer); keep it stable (useMemo). */
+  namedPills?: NamedSpans;
   /** Let an EMPTY composer send. Only an owner that gives '' a meaning sets it: a
    *  bound draft sends its task's title, a fork just branches. Enter counts too. */
   allowEmptySend?: boolean;
@@ -459,7 +462,7 @@ export function ChatInput(props: ChatInputProps) {
   );
 }
 
-function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSplit, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, light, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, noteSlot, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp, fileTarget, drawingTarget, promptRecallKey, inputTestId, sendTestId }: ChatInputProps) {
+function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSplit, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, light, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, noteSlot, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp, fileTarget, drawingTarget, promptRecallKey, inputTestId, sendTestId, namedPills }: ChatInputProps) {
   // ONE read of the persisted draft, split once for both pieces of state below.
   const [initialDraft] = useState(() => readDraftSplit(draftKey));
   const [value, setValue] = useState(initialDraft.body);
@@ -1406,6 +1409,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
     table: tableRef.current,
     active: mentionOpen ? { start: mentionAtIndexRef.current, end: mentionEndRef.current } : null,
     pickedFiles: pickedFilesRef.current,
+    ...(namedPills ? { named: namedPills } : {}),
     writeCut: (cut) => {
       applyText(cut.text);
       saveComposed(cut.text);

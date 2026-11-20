@@ -37,7 +37,7 @@ export function isEmail(s: string): boolean {
 }
 
 // Who "@Name" names: the server's own rule, one module (src/core/topics/topic-mentions.ts).
-export { mentionShortForms, parseMentions } from '../../../../src/core/topics/topic-mentions';
+export { mentionShortForms, mentionSpans, parseMentions, type MentionSpan } from '../../../../src/core/topics/topic-mentions';
 
 /** A row of the @ list: a member first, else a task not in the topic yet (picking it asks first). */
 export type MentionCandidate =
@@ -282,4 +282,24 @@ export function mentionKeyAction(e: { key: string; shiftKey?: boolean; isComposi
   if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') return 'pick';
   if (e.key === 'Escape') return 'close';
   return null;
+}
+
+/** What a mention chip's card says about the member it names: what it is, then one line about it. */
+export interface MentionCardFacts {
+  /** 'CEO', 'VP', 'Task', 'Email' or 'Bot by email'. */
+  kind: string;
+  /** Its place in the topic and what it does: "Host · Leads Walnut", "Member · robin@x.org". */
+  line: string;
+  /** It has a chat in Walnut to open (a task or an Org node). */
+  opens: boolean;
+}
+
+/** `leads`: an Org node's projects ("Leads Walnut, Walnut-Idea"); `phase`: a task's phase. */
+export function mentionCardFacts(m: Pick<TopicMember, 'name' | 'ref' | 'role' | 'status' | 'pendingTurn'>, about: { leads?: string; phase?: string } = {}): MentionCardFacts {
+  const label = memberStatusLabel(m);
+  const status = label === 'Member' ? 'In this topic' : label;
+  const kind = m.ref.kind === 'org' ? (m.ref.node === 'main' ? 'CEO' : 'VP') : m.ref.kind === 'task' ? 'Task' : m.ref.bot ? 'Bot by email' : 'Email';
+  const phase = about.phase ? about.phase.toLowerCase().replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase()) : '';
+  const what = m.ref.kind === 'person' ? m.ref.email : m.ref.kind === 'org' ? (about.leads ?? '') : phase;
+  return { kind, line: [status, what].filter(Boolean).join(' · '), opens: m.ref.kind !== 'person' };
 }

@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 import {
   authorOf, defaultHost, isEmail, mentionCandidates, parseMentions, reachLine, refKey, stackedAvatars, topicKey, topicOfKey,
   topicOfThread, topicSubtitle, reachSummary, shortName, nameContext, continuesBlock, personMailConfirm, personEmails, listWords, NO_MAILBOX_WORDS, mailboxConfirm, activePersonEmails,
-  mentionKeyAction, mentionShortForms,
+  mentionKeyAction, mentionShortForms, mentionSpans, mentionCardFacts,
 } from '../../web/src/components/topics/topic-model';
 import type { TopicMember, TopicSummary } from '../../web/src/api/topics';
 import { mentionShortForms as serverShortForms, parseMentions as serverParseMentions } from '../../src/core/topics/topic-mentions';
@@ -98,6 +98,34 @@ describe('parseMentions', () => {
   it('is the server\'s own rule, one module: the composer shows who the server wakes', () => {
     expect(parseMentions).toBe(serverParseMentions);
     expect(mentionShortForms).toBe(serverShortForms);
+  });
+});
+
+describe('mentionSpans: where each "@Name" is, for the chips', () => {
+  const ROBIN = m('mb-robin', 'Robin (test)', { ref: { kind: 'person', name: 'Robin (test)', email: 'robin@example.com' } });
+
+  it('gives every mention with its place, the same member more than once, by the rule parseMentions uses', () => {
+    const text = '@Walnut VP and @Robin: @robin (test), mail a@Robin no';
+    const spans = mentionSpans(text, [VP, ROBIN]);
+    expect(spans.map((s) => [text.slice(s.start, s.end), s.id])).toEqual([
+      ['@Walnut VP', 'mb-vp'], ['@Robin', 'mb-robin'], ['@robin (test)', 'mb-robin'],
+    ]);
+    expect(parseMentions(text, [VP, ROBIN])).toEqual(['mb-vp', 'mb-robin']);
+  });
+
+  it('a name that does not end where the word ends, or a member who left, is no span', () => {
+    expect(mentionSpans('@Docs and @Gone', MEMBERS)).toEqual([]);
+  });
+});
+
+describe('mentionCardFacts: what a chip\'s card says', () => {
+  it('says what the member is and its place in the topic', () => {
+    expect(mentionCardFacts(VP, { leads: 'Leads Walnut, Walnut-Idea' })).toEqual({ kind: 'VP', line: 'Host · Leads Walnut, Walnut-Idea', opens: true });
+    expect(mentionCardFacts(m('mb-ceo', 'CEO', { ref: { kind: 'org', node: 'main' } }))).toEqual({ kind: 'CEO', line: 'In this topic', opens: true });
+    expect(mentionCardFacts(DOC, { phase: 'IN_PROGRESS' })).toEqual({ kind: 'Task', line: 'In this topic · In progress', opens: true });
+    expect(mentionCardFacts(ANN)).toEqual({ kind: 'Email', line: 'In this topic · ann@example.com', opens: false });
+    const bot = m('mb-bot', 'Helper', { status: 'pending', ref: { kind: 'person', name: 'Helper', email: 'bot@example.com', bot: true } });
+    expect(mentionCardFacts(bot)).toEqual({ kind: 'Bot by email', line: 'Waiting for your yes · bot@example.com', opens: false });
   });
 });
 

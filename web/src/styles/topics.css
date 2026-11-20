@@ -69,29 +69,73 @@
   color: var(--fg-muted); font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums;
 }
 .topic-time::before, .topic-time::after { content: ""; flex: 1; height: 1px; background: var(--border); }
-/* A message: one row, avatar column 32, words on the page (no bubble). */
-.topic-msg { display: flex; align-items: flex-start; gap: 12px; padding: 6px 20px; margin-top: 6px; }
-.topic-msg.is-cont { margin-top: 0; padding-top: 2px; }
-.topic-msg:hover { background: color-mix(in srgb, var(--fg) 3%, transparent); }
+/* A message: a chat bubble. A member's on the left (avatar column 32, name above the first bubble
+   of its block), the user's own on the right in the accent colour, no avatar or name. */
+.topic-msg { display: flex; align-items: flex-start; gap: 8px; padding: 0 20px; margin-top: 12px; }
+.topic-msg.is-cont { margin-top: 2px; }
 .topic-msg.is-sending { opacity: 0.6; }
-.topic-msg-gutter { width: 32px; flex: none; display: flex; justify-content: center; }
-.topic-msg-clock { visibility: hidden; padding-top: 3px; font-size: 10.5px; color: var(--fg-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.topic-msg-gutter { width: 32px; flex: none; display: flex; justify-content: center; padding-top: 22px; }
+.topic-msg.is-cont .topic-msg-gutter { padding-top: 8px; }
+.topic-msg-clock { visibility: hidden; font-size: 10.5px; color: var(--fg-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .topic-msg:hover .topic-msg-clock { visibility: visible; }
 @media (hover: none) { .topic-msg-clock { visibility: visible; } }
 .topic-sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
-.topic-msg-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.topic-msg-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; line-height: 20px; }
-.topic-msg-name { flex: none; max-width: 60%; font-size: 14px; font-weight: 600; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.topic-msg-context { min-width: 0; font-size: 12px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topic-msg-body { min-width: 0; max-width: min(72%, 640px); display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.topic-msg.is-human { justify-content: flex-end; }
+.topic-msg.is-human .topic-msg-body { align-items: flex-end; }
+.topic-msg-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; max-width: 100%; line-height: 20px; padding: 0 4px; }
+.topic-msg-name { flex: 0 1 auto; min-width: 0; font-size: 13px; font-weight: 600; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topic-msg-context { min-width: 24px; font-size: 12px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .topic-msg-tag {
   flex: none; padding: 0 6px; border-radius: 4px; font-size: 11px; line-height: 16px; font-weight: 500;
   color: var(--fg-secondary, var(--fg-muted)); background: var(--bg-secondary);
 }
 .topic-msg-time { flex: none; font-size: 12px; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
-.topic-msg-bubble { color: var(--fg); font-size: 14px; line-height: 1.55; overflow-wrap: anywhere; }
+.topic-msg-bubble {
+  max-width: 100%; min-width: 0; overflow: hidden; padding: 8px 12px; border-radius: 18px; background: var(--bg-secondary);
+  color: var(--fg); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere;
+}
+/* The corner toward the writer stays a little sharper on the block's first bubble. */
+.topic-msg:not(.is-cont):not(.is-human) .topic-msg-bubble { border-top-left-radius: 6px; }
+.topic-msg.is-human .topic-msg-bubble { background: var(--accent); color: #fff; }
+.topic-msg.is-human:not(.is-cont) .topic-msg-bubble { border-top-right-radius: 6px; }
+.topic-msg.is-human .topic-msg-bubble .markdown-body,
+.topic-msg.is-human .topic-msg-bubble .markdown-body a { color: inherit; }
 .topic-msg-bubble .markdown-body p { margin: 0; }
 .topic-msg-bubble .markdown-body p + p { margin-top: 8px; }
-.topic-msg-reach { font-size: 12px; line-height: 16px; color: var(--fg-muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
+.topic-msg-reach { max-width: 100%; padding: 0 4px; font-size: 11.5px; line-height: 16px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
+
+/* "@Name" in a message: the member's chip (TopicMention.tsx). */
+.topic-mention-slot { display: inline; }
+.topic-mention {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%; margin: 0 1px; padding: 1px 6px 1px 2px;
+  border: 0; border-radius: 999px; vertical-align: -3px; cursor: pointer;
+  background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent);
+  font: inherit; font-size: 13px; font-weight: 500; line-height: 18px;
+}
+.topic-mention:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+.topic-mention:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.topic-mention .topic-avatar { flex: none; }
+.topic-mention-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topic-mention.is-left { opacity: 0.6; }
+/* A person reached by email: a small envelope after the name. */
+.topic-mention-mail {
+  flex: none; width: 12px; height: 12px; background: currentColor;
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='5' width='18' height='14' rx='2'/><path d='m3 7 9 6 9-6'/></svg>") center / contain no-repeat;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='5' width='18' height='14' rx='2'/><path d='m3 7 9 6 9-6'/></svg>") center / contain no-repeat;
+}
+/* On the user's own (accent) bubble the chip turns light. */
+.topic-msg.is-human .topic-mention { background: rgba(255, 255, 255, 0.22); color: inherit; }
+.topic-msg.is-human .topic-mention:hover { background: rgba(255, 255, 255, 0.32); }
+.topic-msg.is-human .topic-mention:focus-visible { outline-color: currentColor; }
+/* The card a chip opens. */
+.task-kebab-menu.topic-mention-card { width: 280px; padding: 12px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
+.topic-mention-card-head { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.topic-mention-card-names { min-width: 0; display: flex; flex-direction: column; }
+.topic-mention-card-name { font-size: 14px; font-weight: 600; color: var(--fg); overflow-wrap: anywhere; }
+.topic-mention-card-kind { font-size: 12px; color: var(--fg-muted); }
+.topic-mention-card-line { margin: 0; font-size: 12.5px; line-height: 18px; color: var(--fg-secondary, var(--fg-muted)); overflow-wrap: anywhere; }
+.topic-mention-card-open { align-self: flex-start; }
 /* Walnut's own line: small, centred, between two hairlines. */
 .topic-msg.is-walnut {
   align-items: center; gap: 12px; margin: 12px 20px; padding: 0; color: var(--fg-muted); font-size: 12px; text-align: center;

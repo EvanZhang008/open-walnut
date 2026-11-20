@@ -47,19 +47,31 @@ function mentionForms<Id extends string>(members: readonly MentionMember<Id>[]):
   return [...full, ...short]
 }
 
+/** One "@Name" in a text: where it starts (the "@") and ends, and whom it names. */
+export interface MentionSpan<Id extends string = string> { start: number; end: number; id: Id }
+
 /**
- * The members "@Name" names in `text`, once each, in the order they first appear. Matched
- * case-insensitively, only after the start or a non-word character (an email's "a@b" names no one)
- * and only where the name ends ("@Marinas" does not name Marina).
+ * Every "@Name" in `text` that names a member, in order (the same member may appear more than
+ * once). Matched case-insensitively, only after the start or a non-word character (an email's
+ * "a@b" names no one) and only where the name ends ("@Marinas" does not name Marina).
  */
-export function parseMentions<Id extends string>(text: string, members: readonly MentionMember<Id>[]): Id[] {
+export function mentionSpans<Id extends string>(text: string, members: readonly MentionMember<Id>[]): MentionSpan<Id>[] {
   const forms = mentionForms(members)
   const lower = text.toLowerCase()
-  const found: Id[] = []
+  const out: MentionSpan<Id>[] = []
   for (let i = lower.indexOf('@'); i !== -1; i = lower.indexOf('@', i + 1)) {
     if (isWordChar(text[i - 1])) continue
     const hit = forms.find(({ form }) => lower.startsWith(form, i + 1) && !isWordChar(text[i + 1 + form.length]))
-    if (hit && !found.includes(hit.id)) found.push(hit.id)
+    if (!hit) continue
+    out.push({ start: i, end: i + 1 + hit.form.length, id: hit.id })
+    i += hit.form.length
   }
+  return out
+}
+
+/** The members "@Name" names in `text`, once each, in the order they first appear (mentionSpans). */
+export function parseMentions<Id extends string>(text: string, members: readonly MentionMember<Id>[]): Id[] {
+  const found: Id[] = []
+  for (const { id } of mentionSpans(text, members)) if (!found.includes(id)) found.push(id)
   return found
 }

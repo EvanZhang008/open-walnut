@@ -77,6 +77,29 @@ describe('composerSegments', () => {
   });
 });
 
+describe('named spans: a topic member\'s plain "@Name" is drawn as a pill', () => {
+  const named = (body: string) => [...body.matchAll(/@Robin \(test\)/g)].map((x) => ({ start: x.index!, end: x.index! + x[0].length }));
+
+  it('draws each named span as one member pill, the "@" under its icon', () => {
+    const body = 'hi @Robin (test) and @Robin (test).';
+    const segs = composerSegments(body, new Map(), { named });
+    const pills = segs.filter((x) => x.pill);
+    expect(pills.map((x) => [x.start, x.end, x.pill!.kind, x.pill!.open, x.pill!.label])).toEqual([
+      [3, 16, 'member', '@', 'Robin (test)'],
+      [21, 34, 'member', '@', 'Robin (test)'],
+    ]);
+    expect(segs.map((x) => x.text).join('')).toBe(body);
+    // The pill is one unit for the keys, like any reference.
+    expect(pillAt(segs, 16, 'before')?.start).toBe(3);
+  });
+
+  it('a span the owner gives that does not start at an "@" or is the bare "@", and the @query being typed, stay text', () => {
+    expect(hasPills(composerSegments('hello', new Map(), { named: () => [{ start: 0, end: 5 }] }))).toBe(false);
+    expect(hasPills(composerSegments('@', new Map(), { named: () => [{ start: 0, end: 1 }] }))).toBe(false);
+    expect(hasPills(composerSegments('@Robin (test)', new Map(), { named, active: { start: 0, end: 13 } }))).toBe(false);
+  });
+});
+
 describe('pillAt: a pill is one unit for the keys', () => {
   const { body, table } = inlineRefs(`a ${SAMPLE_TAG.task} b`);
   const segs = composerSegments(body, table);
@@ -107,8 +130,8 @@ describe('guard: every reference kind renders as a pill, in every composer', () 
     expect([...regexKinds].sort()).toEqual([...kindUnion].sort());
   });
 
-  it('each entity kind and a file has a pill kind and a CSS rule', () => {
-    for (const kind of [...kindUnion, 'file']) {
+  it('each entity kind, a file and a topic member has a pill kind and a CSS rule', () => {
+    for (const kind of new Set([...kindUnion, 'file', ...Object.keys(PILL_KINDS)])) {
       expect(PILL_KINDS, `a new reference kind "${kind}": add it to PILL_KINDS`).toHaveProperty(kind);
       expect(css, `a new reference kind "${kind}": give it a .composer-ref-pill[data-kind="${kind}"] rule`).toContain(`.composer-ref-pill[data-kind="${kind}"]`);
     }

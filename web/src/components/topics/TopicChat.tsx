@@ -28,6 +28,7 @@ import { isImeKey } from '@/utils/ime-key';
 import { usePageView, isBoolean } from '@/utils/view-memory';
 import { authorOf, continuesBlock, nameContext, reachSummary, shortName, topicSubtitle } from './topic-model';
 import { MemberAvatar, StackedAvatars } from './TopicAvatars';
+import { MentionChips, useMentionSlots } from './TopicMention';
 import { TopicComposer } from './TopicComposer';
 import { TopicSidePanel } from './TopicSidePanel';
 import { useTopicsOn } from './topics-flag';
@@ -79,10 +80,12 @@ function clock(at: string): string {
 }
 
 /**
- * One message as a row, the way a team chat draws it: the avatar and a line with the name, a small
- * Host or Email mark and the time, then the words on the page itself (no bubble), then a quiet line
- * of who it reached. A line that continues the writer's block (`cont`) shows only its words, its
- * time on hover in the avatar's column.
+ * One message as a chat bubble, the way a group chat app draws it (iMessage, WhatsApp groups): a
+ * member's on the left, its avatar beside the first bubble of its block and its name, a small Host
+ * or Email mark and the time above it; the user's own on the right in the accent colour, with no
+ * avatar or name. Under a bubble, a quiet line of who it reached. A bubble that continues the
+ * writer's block (`cont`) shows only its words, its time on hover in the avatar's column. Every
+ * "@Name" in the words is the member's chip (TopicMention.tsx).
  */
 function Message({ m, topic, cont }: { m: LocalMessage; topic: Topic; cont: boolean }) {
   const who = authorOf(m, topic.members);
@@ -90,6 +93,8 @@ function Message({ m, topic, cont }: { m: LocalMessage; topic: Topic; cont: bool
   const ref = who.kind === 'member' ? who.member?.ref : undefined;
   // The writer's own row only: a task write elsewhere never redraws the topic.
   const task = useStoreTask(ref?.kind === 'task' ? ref.taskId : null);
+  const words = useRef<HTMLDivElement>(null);
+  const slots = useMentionSlots(words, who.kind === 'walnut' ? '' : m.text, topic.members);
   if (who.kind === 'walnut') {
     return <li className="topic-msg is-walnut" data-testid="topic-message" data-author="walnut" data-message-id={m.id}><span>{m.text}</span></li>;
   }
@@ -98,27 +103,30 @@ function Message({ m, topic, cont }: { m: LocalMessage; topic: Topic; cont: bool
   const context = human ? '' : nameContext(name);
   return (
     <li className={`topic-msg${human ? ' is-human' : ''}${cont ? ' is-cont' : ''}${m.local ? ' is-sending' : ''}`} data-testid="topic-message" data-author={m.author} data-message-id={m.id} data-via={m.via}>
-      <span className="topic-msg-gutter">
-        {cont
-          ? <time className="topic-msg-clock" dateTime={m.at}>{clock(m.at)}</time>
-          : <MemberAvatar who={human ? 'human' : { name: who.kind === 'member' ? who.name : '', ...(ref ? { ref } : {}) }} size={32} />}
-      </span>
+      {!human && (
+        <span className="topic-msg-gutter">
+          {cont
+            ? <time className="topic-msg-clock" dateTime={m.at}>{clock(m.at)}</time>
+            : <MemberAvatar who={{ name: who.kind === 'member' ? who.name : '', ...(ref ? { ref } : {}) }} size={32} />}
+        </span>
+      )}
       <div className="topic-msg-body">
-        {/* A line that continues a block shows no name; a screen reader still hears who wrote it. */}
+        {/* A bubble that continues a block shows no name; a screen reader still hears who wrote it. */}
         {cont && <span className="topic-sr-only">{human ? name : shortName(name)}</span>}
         {!cont && (
           <span className="topic-msg-head">
-            <span className="topic-msg-name" data-testid="topic-message-name" title={name}>{human ? name : shortName(name)}</span>
+            {human ? <span className="topic-sr-only">{name}</span> : <span className="topic-msg-name" data-testid="topic-message-name" title={name}>{shortName(name)}</span>}
             {context && <span className="topic-msg-context">{context}</span>}
             {!human && who.kind === 'member' && who.member?.role === 'host' && <span className="topic-msg-tag">Host</span>}
-            {m.via === 'mail' && <span className="topic-msg-tag">Email</span>}
+            {m.via === 'mail' && <span className="topic-msg-tag" data-testid="topic-message-mail">Email</span>}
             <time className="topic-msg-time" dateTime={m.at}>{clock(m.at)}</time>
           </span>
         )}
-        <div className="topic-msg-bubble" data-testid="topic-message-text">
+        <div ref={words} className="topic-msg-bubble" data-testid="topic-message-text">
           {/* A task member's words open its paths on its own machine; anyone else's name none. */}
           <AgentText text={m.text} compact {...(task ? { task } : { unknownSource: true })} />
         </div>
+        <MentionChips slots={slots} topic={topic} />
         {(reach.line || m.local) && (
           <span className="topic-msg-reach" data-testid="topic-message-reach" title={m.local ? undefined : reach.full}>{m.local ? 'Sending…' : reach.line}</span>
         )}

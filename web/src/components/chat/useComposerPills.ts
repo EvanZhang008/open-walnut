@@ -12,7 +12,7 @@
  */
 import { useEffect, useMemo, useRef, type KeyboardEvent, type RefObject } from 'react';
 import { cutSpan, type RefTable } from './composer-refs';
-import { composerSegments, hasPills, pillAt, type ComposerSegment } from './composer-ref-pills';
+import { composerSegments, hasPills, pillAt, type ComposerSegment, type NamedSpans } from './composer-ref-pills';
 
 export interface ComposerPills {
   segments: readonly ComposerSegment[];
@@ -31,6 +31,8 @@ export function useComposerPills(a: {
   pickedFiles: ReadonlySet<string>;
   /** When the browser refuses the edit: write the cut text the composer's own way. */
   writeCut: (cut: { text: string; caret: number }) => void;
+  /** Plain "@Name" spans its owner draws as pills (a topic's members). */
+  named?: NamedSpans;
 }): ComposerPills {
   const { textareaRef, value, table, pickedFiles } = a;
   // The `@query` span by its numbers: the caller makes a new object every render.
@@ -40,10 +42,11 @@ export function useComposerPills(a: {
     () => composerSegments(value, table, {
       active: activeStart !== undefined && activeEnd !== undefined ? { start: activeStart, end: activeEnd } : null,
       files: pickedFiles,
+      named: a.named,
     }),
     // The picked set changes only together with the text.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [value, table, activeStart, activeEnd],
+    [value, table, activeStart, activeEnd, a.named],
   );
   const segRef = useRef(segments);
   segRef.current = segments;

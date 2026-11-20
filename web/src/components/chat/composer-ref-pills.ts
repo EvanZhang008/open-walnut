@@ -16,15 +16,15 @@
 import { extractEntityRefs, sourceDisplayName, sourceOfRefId, type EntityRefKind } from '@/utils/entity-ref-tags';
 import { listInlineRefs, type RefTable } from './composer-refs';
 
-/** Every kind of reference the composer can hold. */
-export type ComposerPillKind = EntityRefKind | 'file';
+/** Every kind of reference the composer can hold; `member` is a topic member's "@Name" (TopicComposer). */
+export type ComposerPillKind = EntityRefKind | 'file' | 'member';
 
 /**
  * Every kind, once. A kind missing here does not type-check, and
  * tests/web/composer-ref-pills.test.ts fails on a reference kind of entity-ref-tags.ts
  * that is not drawn as a pill or has no CSS rule.
  */
-export const PILL_KINDS: Record<ComposerPillKind, true> = { task: true, session: true, project: true, source: true, file: true };
+export const PILL_KINDS: Record<ComposerPillKind, true> = { task: true, session: true, project: true, source: true, file: true, member: true };
 
 export interface ComposerPill {
   kind: ComposerPillKind;
@@ -94,6 +94,19 @@ function fileSpans(body: string, files?: ReadonlySet<string>): Span[] {
 }
 
 /**
+ * Plain "@Name" spans the box's owner names (a topic's members, TopicComposer): each is drawn as a
+ * `member` pill, its "@" under the icon. Only the owner knows which names are real, so it says.
+ */
+export type NamedSpans = (body: string) => ReadonlyArray<{ start: number; end: number }>;
+
+function namedSpans(body: string, named?: NamedSpans): Span[] {
+  if (!named) return [];
+  return named(body)
+    .filter((s) => s.end > s.start + 1 && body[s.start] === '@')
+    .map((s) => ({ start: s.start, end: s.end, pill: { kind: 'member' as const, open: '@', lead: '', label: body.slice(s.start + 1, s.end), close: '' } }));
+}
+
+/**
  * The body cut into plain text and pills. `active` is the `@query` the user is typing
  * right now (the palette's span): it stays plain text until it is picked. `files`, when
  * given, are the file references the picker wrote: a path the user typed or pasted
@@ -102,10 +115,10 @@ function fileSpans(body: string, files?: ReadonlySet<string>): Span[] {
 export function composerSegments(
   body: string,
   table: RefTable,
-  opts: { active?: { start: number; end: number } | null; files?: ReadonlySet<string> } = {},
+  opts: { active?: { start: number; end: number } | null; files?: ReadonlySet<string>; named?: NamedSpans } = {},
 ): ComposerSegment[] {
   const { active } = opts;
-  const spans = [...entitySpans(body, table), ...fileSpans(body, opts.files)]
+  const spans = [...entitySpans(body, table), ...fileSpans(body, opts.files), ...namedSpans(body, opts.named)]
     .filter((s) => !active || s.end <= active.start || s.start >= active.end)
     .sort((a, b) => a.start - b.start);
   const out: ComposerSegment[] = [];

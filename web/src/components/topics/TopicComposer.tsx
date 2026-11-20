@@ -2,7 +2,8 @@
  * The topic's composer: the chat's own box (ChatInput, light: its mic, its kept draft, a failed
  * send keeping the words), with the topic's own "@": the members first, then open tasks not in
  * the topic. Picking a member writes "@Name "; picking a task asks "Add it to this topic?" first,
- * so a mistyped name never pulls an unrelated task in (each member wake costs a turn). The list
+ * so a mistyped name never pulls an unrelated task in (each member wake costs a turn). Every "@Name"
+ * that names a member is drawn as a pill in the box (ChatInput namedPills), and goes as one unit. The list
  * takes the arrows, Enter, Tab and Esc while it is open (caught before the box sees them; an input
  * method's keys stay its own, mentionKeyAction) and is placed by useMenuPlacement above the box.
  * A mouse pick closes it like Enter does: the click that bubbles up from the list reads nothing.
@@ -17,7 +18,7 @@ import { detectMention } from '@/components/chat/mention-trigger';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { draftKey } from '@/utils/drafts';
-import { mentionCandidates, mentionKeyAction, orgRef, refKey, taskRef, type MentionCandidate } from './topic-model';
+import { mentionCandidates, mentionKeyAction, mentionSpans, orgRef, refKey, taskRef, type MentionCandidate } from './topic-model';
 import { useOpenTaskNames, useOrgNodeNames } from './member-candidates';
 import { MemberAvatar } from './TopicAvatars';
 import type { TopicActions } from './useTopics';
@@ -37,6 +38,8 @@ export function TopicComposer({ topic, actions }: { topic: Topic; actions: Pick<
   const orgNodes = useOrgNodeNames();
   const rows = useMemo(() => (at ? mentionCandidates(at.query, topic.members, openTasks, 8, orgNodes) : []), [at, topic.members, openTasks, orgNodes]);
   const open = !!at && rows.length > 0;
+  // Every "@Name" that names a member is drawn as a pill in the box: the same rule that decides who it wakes.
+  const namedPills = useMemo(() => (body: string) => mentionSpans(body, topic.members), [topic.members]);
   const placement = useMenuPlacement(open, wrap, menuRef, { preferSide: 'up', align: 'start', minHeight: 120, onAnchorLost: () => setAt(null) });
 
   const box = () => wrap.current?.querySelector('textarea') ?? null;
@@ -97,6 +100,7 @@ export function TopicComposer({ topic, actions }: { topic: Topic; actions: Pick<
         showCommands={false}
         disabled={!!topic.closed}
         {...(prefill ? { prefillText: prefill.text, prefillNonce: prefill.nonce, prefillMode: 'replace' as const } : {})}
+        namedPills={namedPills}
         inputTestId="topic-input"
         sendTestId="topic-send"
         sendTitle="Post to the topic"
