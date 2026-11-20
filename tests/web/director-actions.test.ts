@@ -6,6 +6,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { directorMenuItems } from '../../web/src/components/org/director-actions.js'
 
+const topicsFlag = vi.hoisted(() => ({ on: false }))
+vi.mock('../../web/src/components/topics/topics-flag.js', () => ({ topicsOnNow: () => topicsFlag.on, useTopicsOn: () => topicsFlag.on }))
+
 describe('a Director\'s menu', () => {
   it('opens its chat, opens it, and takes it off the Directors, in that order', () => {
     const openChat = vi.fn(); const openTask = vi.fn(); const remove = vi.fn()
@@ -15,5 +18,15 @@ describe('a Director\'s menu', () => {
     items.find((i) => i.key === 'task')!.onSelect!()
     items.find((i) => i.key === 'remove')!.onSelect!()
     expect([openChat.mock.calls.length, openTask.mock.calls.length, remove.mock.calls.length]).toEqual([1, 1, 1])
+  })
+
+  it('offers "Add to topic…" after Open task only with the topics experiment on and the task named', () => {
+    const fns = { openChat: vi.fn(), openTask: vi.fn(), remove: vi.fn() }
+    const labels = (id?: string) => directorMenuItems({ id, title: 'Crane lead', ...fns }).map((i) => (i.divider ? '---' : String(i.label)))
+    topicsFlag.on = true
+    expect(labels('task-crane')).toEqual(['Crane lead', 'Open chat', 'Open task', 'Add to topic…', '---', 'Remove from Directors'])
+    expect(labels()).not.toContain('Add to topic…')
+    topicsFlag.on = false
+    expect(labels('task-crane')).not.toContain('Add to topic…')
   })
 })

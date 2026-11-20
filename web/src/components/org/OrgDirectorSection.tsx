@@ -89,6 +89,7 @@ export function OrgDirectorSection({ vps, groupsOf, projectsOf, query, openTaskI
         <ContextMenu
           point={menu.state.point}
           items={directorMenuItems({
+            id: picked.id,
             title: picked.title,
             openChat: () => actions.openChat({ id: picked.id, sessionId: picked.sessionId }),
             openTask: () => actions.openTask(picked.id),

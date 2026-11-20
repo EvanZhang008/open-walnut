@@ -26,7 +26,7 @@ export function orgNodeMember(row: { key: string; kind?: string; name: string; v
   return [{ ref: orgRef(row.key), name }];
 }
 
-export const taskMember = (task: Pick<Task, 'id' | 'title' | 'project' | 'org_role' | 'org_name'>): PickedMember =>
+export const taskMember = (task: Pick<Task, 'id' | 'title'> & Partial<Pick<Task, 'project' | 'org_role' | 'org_name'>>): PickedMember =>
   ({ ref: taskRef(task.id), name: orgDisplayTitle(task) });
 
 /** A Threads view's own node as a member: the CEO and a VP as org nodes (the topic follows the node), any other task as itself. */

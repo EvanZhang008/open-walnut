@@ -13,9 +13,12 @@ import type { ContextMenuItem } from '@/utils/context-menu';
 import { useTaskStoreActions } from '@/contexts/TasksContext';
 import { useOpenTask } from '@/hooks/useOpenTask';
 import { log } from '@/utils/log';
+import { taskMember, topicMenuItems } from '@/components/topics/topic-entry';
 
 /** A Director's right-click menu. Pure, so tests reach it. */
-export function directorMenuItems({ title, openChat, openTask, remove }: {
+export function directorMenuItems({ id, title, openChat, openTask, remove }: {
+  /** The Director's task: with it, "Add to topic…" (experiment `topics`, nothing while it is off). */
+  id?: string;
   title: string;
   openChat: () => void;
   openTask: () => void;
@@ -25,6 +28,7 @@ export function directorMenuItems({ title, openChat, openTask, remove }: {
     { key: 'head', section: true, label: title },
     { key: 'chat', label: 'Open chat', onSelect: openChat },
     { key: 'task', label: 'Open task', onSelect: openTask },
+    ...(id ? topicMenuItems([taskMember({ id, title })]) : []),
     { key: 'sep', divider: true },
     { key: 'remove', label: 'Remove from Directors', title: 'It stays where it is, with its subtasks and its chat; it is only no longer listed here', onSelect: remove },
   ];

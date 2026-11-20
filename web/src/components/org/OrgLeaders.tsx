@@ -167,6 +167,7 @@ export function OrgLeaders({ groups, surface, vpKey, vpName, projects, showProje
     <ContextMenu
       point={menu.state.point}
       items={directorMenuItems({
+        id: picked.id,
         title: picked.title,
         openChat: () => { onLeave?.(); actions.openChat({ id: picked.id, sessionId: picked.sessionId }); },
         openTask: () => onOpen(picked.id),
