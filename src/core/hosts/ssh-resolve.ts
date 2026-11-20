@@ -16,9 +16,9 @@
  */
 import { execFile } from 'node:child_process'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { knownAccount } from '../../lib/account.js'
+import { sshDir } from '../../lib/ssh-home.js'
 
 export interface SshResolved {
   name: string
@@ -64,7 +64,7 @@ const kept = new Map<string, { at: number; config: string; answer: Promise<SshRe
 /** ~/.ssh/config's mtime and size ('' when there is none): a change answers again. */
 function configStamp(): string {
   try {
-    const st = fs.statSync(path.join(os.homedir(), '.ssh', 'config'))
+    const st = fs.statSync(path.join(sshDir(), 'config'))
     return `${st.mtimeMs}:${st.size}`
   } catch {
     return ''
