@@ -43,22 +43,22 @@ const CJK = '\u8fd9\u662f\u4e00\u4e2a\u5173\u4e8e\u4efb\u52a1\u7684\u5f88\u957f\
 const SEMI = '\uff1b'
 const COMMA = '\u3001'
 const UUID = '0b6f2c1e-4d8a-4c3b-9f1e-7a2d5c8e9b10'
-const PATH = `/Users/someone/.local/state/open-walnut/tasks/${UUID}/videos/top-thread.mp4`
+const LONG_PATH = `/Users/someone/.local/state/open-walnut/tasks/${UUID}/videos/top-thread.mp4`
 const COMMITS = ['a1b2c3d4', 'e5f6a7b8', 'c9d0e1f2', '0a1b2c3d', '4e5f6a7b']
   .map((h) => `https://github.com/someone/open-walnut/commit/${h.repeat(5)}`).join(COMMA)
 const TOKEN = `wn${'a1b2c3d4e5'.repeat(16)}`
 const CODE_LINE = `const wide = "${'abcdefghij'.repeat(29)}"`
 const HEAD = `Long title ${STAMP}`
 // Not the project's name: a contact named by the project would resolve to this task.
-const TITLE = `${HEAD} ${CJK}${PATH}${SEMI}${TOKEN.slice(0, 90)}`
+const TITLE = `${HEAD} ${CJK}${LONG_PATH}${SEMI}${TOKEN.slice(0, 90)}`
 
 function longMarkdown(taskId: string): string {
   const pill = `<task-ref id="${taskId}" label="Wide pages work"/>`
   return [
-    `${CJK}${PATH}${SEMI}${CJK}${PATH.replace('top-thread', 'second-take')}${SEMI}${CJK}`,
+    `${CJK}${LONG_PATH}${SEMI}${CJK}${LONG_PATH.replace('top-thread', 'second-take')}${SEMI}${CJK}`,
     `${CJK}${COMMA}${COMMITS}`,
     `${CJK}${pill}${CJK}${pill}${CJK}`,
-    ['| Path | Commit | Token |', '| --- | --- | --- |', `| ${PATH} | ${COMMITS.split(COMMA)[0]} | ${TOKEN} |`].join('\n'),
+    ['| Path | Commit | Token |', '| --- | --- | --- |', `| ${LONG_PATH} | ${COMMITS.split(COMMA)[0]} | ${TOKEN} |`].join('\n'),
     ['```text', CODE_LINE, '```'].join('\n'),
     TOKEN,
   ].join('\n\n')
@@ -94,7 +94,7 @@ test.beforeAll(async ({ request }) => {
   const at = new Date(Date.now() - 60_000).toISOString()
   const threads = [0, 1, 2].map((n) => ({
     id: `th-${(0xa00 + n).toString(16).padStart(12, '0')}`,
-    title: n === 0 ? TITLE : `Wide thread ${n} ${CJK}${PATH}`, titled: true,
+    title: n === 0 ? TITLE : `Wide thread ${n} ${CJK}${LONG_PATH}`, titled: true,
     state: ['needs', 'answered', 'working'][n], createdAt: at, updatedAt: at,
     messages: [{ id: `tm-wide-${n}`, at, text: md, via: 'chat', answer: { at: new Date(Date.parse(at) + 1000 + n).toISOString(), text: md } }],
   }))
