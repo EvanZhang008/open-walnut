@@ -794,8 +794,14 @@ export const LINE_NOT_ANSWERED_REASON = 'Not answered: Claude Code read this mes
 export const LINE_ENDED_UNANSWERED_REASON = 'The session ended before Claude Code answered this message'
 /** The CLI read past a line without taking it, and it cannot be written again under its uuid: a Retry sends a new line. */
 export const LINE_NOT_ACKNOWLEDGED_REASON = 'Claude Code did not acknowledge this message. It may have skipped a duplicate UUID, or another process may have read its input. Retry to send it again'
-/** The state a line takes when it ends that way (settleLineFate). */
+/**
+ * A line the CLI read past whose rewrite the daemon refused (its marker is out of view): parked,
+ * kept under its uuid, so a late word of the CLI on it still settles it and a Retry makes no
+ * second copy (as a line parked unread, parkUnreadLine).
+ */
 const UNACKNOWLEDGED_LINE = 'unacknowledged'
+const LINE_UNACKNOWLEDGED_KEPT_REASON = 'Not acknowledged: Claude Code read past this message and Walnut could not write it again. '
+  + 'The message is kept: if Claude Code runs it later, it shows then. Retry sends it again without making a second copy.'
 /** Teardowns that are the user's own choice (a Stop, the task completed); any other one Walnut chose itself. */
 const USER_TEARDOWNS = new Set(['user_terminated', 'task_completed'])
 /**
@@ -4850,13 +4856,13 @@ export class ClaudeCodeSession {
     // A rewrite was asked for (the CLI answered a probe behind this line, so it read
     // past it) and the daemon still answered "waiting": its marker is out of the
     // daemon's view, so it will not write the line again, and the CLI will never name
-    // it. Its rows end as a line the CLI did not acknowledge (Retry sends a new line),
-    // as when the daemon cannot rewrite at all: never 'processing' for good, holding
-    // every row lined up behind it (2026-11-20: such a row stayed 'processing' for
-    // ten hours and held the user's reply on a thread card, never sent).
+    // it. Its rows are parked, kept under their uuid (UNACKNOWLEDGED_LINE): never
+    // 'processing' for good, holding every row lined up behind it (2026-11-20: such a
+    // row stayed 'processing' for ten hours and held the user's reply on a thread
+    // card, never sent).
     const unjudged = lostPid != null && known?.fate === 'waiting' && !known.state
     if (unjudged) {
-      log.session.warn('a rewrite of a line the CLI read past was refused: the daemon cannot see its marker any more, so its rows end unacknowledged', {
+      log.session.warn('a rewrite of a line the CLI read past was refused: the daemon cannot see its marker any more, so its rows are parked, kept under their uuid', {
         sessionId: this.claudeSessionId, uuid, pid: this.pid, messageIds: rows.map((r) => r.id),
       })
       this._lostLines.delete(uuid!)
@@ -5372,6 +5378,8 @@ export class ClaudeCodeSession {
       if (untracked) this.removeWrittenRows(rows)
       return
     }
+    // Never taken off the line registry: the CLI's late word on the line still settles its rows.
+    if (known.state === UNACKNOWLEDGED_LINE) { this.parkLineRows(rows, LINE_UNACKNOWLEDGED_KEPT_REASON); return }
     if (known.fate === 'cancelled') {
       const registered = lineRows(sid, uuid)
       const returned = markers.length ? markers : rows.map((r) => ({ message: r.message, messageId: r.id }))
@@ -5393,7 +5401,7 @@ export class ClaudeCodeSession {
       return
     }
     if (known.fate === 'unanswered') { this.resendUnanswered(uuid, rows, known.state); return }
-    this.parkLineRows(rows, known.state === UNACKNOWLEDGED_LINE ? LINE_NOT_ACKNOWLEDGED_REASON : `Claude Code dropped this message without running it (${known.state ?? 'dropped'})`, true)
+    this.parkLineRows(rows, `Claude Code dropped this message without running it (${known.state ?? 'dropped'})`, true)
   }
 
   /**
