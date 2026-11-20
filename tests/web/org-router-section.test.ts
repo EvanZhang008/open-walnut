@@ -129,8 +129,11 @@ describe('the Routers section in the Org list', () => {
     expect(section).not.toMatch(/onOpenTask/)
   })
 
-  it('walks Up and Down through the VPs before the routers, in drawn order', () => {
-    expect(listCode).toMatch(/const keys = \[main\.key, \.\.\.shown\.map\(\(r\) => r\.key\), \.\.\.routers\.map\(\(r\) => r\.key\)\]/)
+  it('walks Up and Down through the VPs before the routers, then the open topics, in drawn order', () => {
+    expect(listCode).toMatch(/const keys = \[main\.key, \.\.\.shown\.map\(\(r\) => r\.key\), \.\.\.routers\.map\(\(r\) => r\.key\), \.\.\.topics\.rows\.map\(\(t\) => topicKey\(t\.id\)\)\]/)
+    // The topic rows the keys walk are the ones the section draws: one hook, never a second filter.
+    expect(listCode).toMatch(/const topics = useOrgTopicRows\(query\)/)
+    expect(listCode).toMatch(/<OrgTopicsSection topics=\{topics\}/)
   })
 
   it('searches VPs and routers', () => {

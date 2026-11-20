@@ -37,7 +37,7 @@
 }
 .topic-head-mid { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .topic-head-title { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.topic-main { flex: 1; min-height: 0; display: flex; }
+.topic-main { flex: 1; min-height: 0; display: flex; position: relative; }
 .topic-conversation { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .topic-messages { flex: 1; min-height: 0; overflow-y: auto; list-style: none; margin: 0; padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
 .topic-time { align-self: center; color: var(--fg-muted); font-size: 12px; }
@@ -58,6 +58,7 @@
 .topic-msg.is-human .topic-msg-bubble { background: color-mix(in srgb, var(--accent) 16%, var(--bg-secondary)); }
 .topic-msg-reach { font-size: 11px; color: var(--fg-muted); }
 .topic-composer { padding: 8px 12px 12px; border-top: 1px solid var(--border); }
+.topic-composer-refused { margin-top: 6px; font-size: 12px; color: var(--error); }
 
 .topic-mention-menu { min-width: 260px; max-width: 420px; overflow-y: auto; }
 .topic-mention-row { display: flex; align-items: center; gap: 8px; width: 100%; }
@@ -75,7 +76,17 @@
 .topic-member-status { font-size: 11px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topic-host-summary { font-size: 13px; }
 .topic-side-add { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
-@media (max-width: 900px) { .topic-side { display: none; } }
+/* A narrow window (TopicChat TOPIC_SHEET_QUERY, the only place that decides it): Members lays the
+   panel over the conversation, inside the chat, never past its edges; a scrim under it. */
+.topic-side.is-sheet {
+  position: absolute; top: 0; right: 0; bottom: 0; z-index: 3;
+  width: min(300px, calc(100% - 40px)); box-sizing: border-box; /* a strip of the scrim stays, to click back */
+  background: var(--bg); box-shadow: -8px 0 24px rgba(0, 0, 0, 0.18);
+}
+.topic-sheet-scrim { position: absolute; inset: 0; z-index: 2; background: rgba(0, 0, 0, 0.22); }
+.topic-sheet-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.topic-sheet-head .topic-side-head { margin: 0; }
+.topic-sheet-close { font-size: 18px; padding: 2px 6px; }
 
 /* Shared bits: dialogs and pickers */
 .topic-muted { margin: 0; color: var(--fg-muted); font-size: 12px; }

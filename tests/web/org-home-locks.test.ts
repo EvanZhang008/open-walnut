@@ -71,7 +71,8 @@ describe('the panels Home locked, beside their node', () => {
 
   it('is wired into the Org page: the strip holds them, the page writes back only its own', () => {
     const page = fs.readFileSync(path.resolve(import.meta.dirname, '../../web/src/pages/OrgPage.tsx'), 'utf8')
-    expect(page).toMatch(/phone \? \[\] : homeLocksFor\(selected\.key, homeLocks, tasks, rowKeyOf, new Set\(homeOff\)\)/)
+    // None beside a topic either: it shows no node (2026-11-20, a topic showed the default node's).
+    expect(page).toMatch(/phone \|\| topicId \? \[\] : homeLocksFor\(selected\.key, homeLocks, tasks, rowKeyOf, new Set\(homeOff\)\)/)
     // Where they do not fit beside the chat they wait as tabs at the edge, never laid over the chat.
     expect(page).toMatch(/const fromHome = useMemo\(\(\) => \(overlays \? \[\] : homeHere\)/)
     expect(page).toMatch(/data-testid="org-locked-dock-item"/)

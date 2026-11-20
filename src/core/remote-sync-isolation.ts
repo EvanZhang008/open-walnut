@@ -35,6 +35,17 @@ import { WALNUT_HOME } from '../constants.js';
  */
 export function remoteSyncIsolationReason(): string | null {
   if (process.env.WALNUT_ALLOW_REMOTE_SYNC_IN_TEST === '1') return null
+  return throwawayServerReason()
+}
+
+/**
+ * Why this process is not the user's real Walnut (a test runner, an ephemeral or temp-home server),
+ * or null when it is. The one test both outward opt-ins read: task sync above, and the topics mail
+ * bridge (core/topics/topic-mail.ts, WALNUT_TOPICS_MAIL_IN_TEST=1), since an ephemeral copy of the
+ * user's data holds his real mail accounts and real people.
+ */
+export function throwawayServerReason(): string | null {
+  if (process.argv.includes('--_ephemeral-child')) return 'an ephemeral server'
   if (process.env.VITEST || process.env.VITEST_WORKER_ID) return 'test runner (VITEST)'
   if (process.env.NODE_ENV === 'test') return 'NODE_ENV=test'
   if (isUnderTempDir(WALNUT_HOME)) return `data dir under the OS temp dir (${WALNUT_HOME})`

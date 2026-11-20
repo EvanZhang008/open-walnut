@@ -311,6 +311,17 @@ describe('org channels', () => {
     expect(initials('')).toBe('?')
   })
 
+  it('initials leave out punctuation and a parenthesised note (a topic member "Robin (test)" read "R(")', () => {
+    expect(initials('Robin (test)')).toBe(initials('Robin'))
+    expect(initials('Robin (test)')).toBe('RO')
+    expect(initials('Robin Hale (bot)')).toBe('RH')
+    expect(initials('Dana [external]')).toBe('DA')
+    expect(initials('O\'Neil, Pat')).toBe('OP')
+    expect(initials('(test)')).toBe('TE')
+    expect(initials('#launch-plan')).toBe('LP')
+    expect(initials('!!!')).toBe('?')
+  })
+
   it('a project put under another VP is part of that VP\'s row, not a row of its own', () => {
     // 2026-10-26: six projects moved under one VP still showed as channels of their own.
     const list: Task[] = [

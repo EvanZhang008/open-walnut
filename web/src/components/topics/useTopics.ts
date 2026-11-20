@@ -2,7 +2,9 @@
  * Topics in the browser: one list and one copy of each open topic for the whole page, kept current
  * by the server's `topic:updated` event ({ topicId }) and read again after a reconnect, the way the
  * Org Threads are (useOrgThreads). Every surface (the Org list, a chat, a thread card, the pickers)
- * reads the same copy. Nothing is fetched while the experiment is off.
+ * reads the same copy. Nothing is fetched while the experiment is off. A post is drawn at once and
+ * meets the server's copy by its clientId; a failed send's clientId stays with its words, so sending
+ * them again is answered once (topic-send.ts).
  */
 import { useEffect, useSyncExternalStore } from 'react';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
@@ -13,6 +15,7 @@ import {
 import { wsClient } from '@/api/ws';
 import { log } from '@/utils/log';
 import { parseMentions } from './topic-model';
+import { sendClientId, withAnswer, withSending, type PendingSend } from './topic-send';
 
 interface ListState { list: TopicSummary[] | null; error: string | null }
 interface OneState { topic: Topic | null; error: string | null; seq: number }
@@ -21,6 +24,8 @@ let listState: ListState = { list: null, error: null };
 let listSeq = 0;
 let listInflight: Promise<void> | null = null;
 const ones = new Map<string, OneState>();
+/** Per topic, the send not yet answered with success: the same words sent again reuse its clientId. */
+const pendingSends = new Map<string, PendingSend>();
 /** How many views show each topic: only those are read again on an event. */
 const watching = new Map<string, number>();
 const listeners = new Set<() => void>();
@@ -54,9 +59,9 @@ function loadOne(id: string, why: string): Promise<void> {
   return readTopic(id)
     .then((topic) => {
       if (ones.get(id)?.seq !== seq) return;
-      // A message still on its way stays drawn under what the server has so far.
-      const sending = (ones.get(id)?.topic?.messages ?? []).filter((m) => (m as LocalMessage).local && !topic.messages.some((x) => x.id === m.id));
-      setOne(id, { topic: sending.length ? { ...topic, messages: [...topic.messages, ...sending] } : topic, error: null });
+      // A message still on its way stays drawn under what the server has so far, until the server has it.
+      const before: LocalMessage[] = ones.get(id)?.topic?.messages ?? [];
+      setOne(id, { topic: { ...topic, messages: withSending<LocalMessage>(topic.messages, before) }, error: null });
     })
     .catch((err) => {
       log.warn('topics', 'topic read failed', { topicId: id, why, error: errText(err) });
@@ -148,16 +153,21 @@ export function useTopic(id: string | null, enabled: boolean): { topic: Topic | 
   const post = useLeanCallback(async (text: string): Promise<boolean> => {
     const topic = id ? ones.get(id)?.topic : null;
     if (!id || !topic || !text.trim()) return false;
-    const clientId = newClientId();
+    const clientId = sendClientId(pendingSends.get(id), text, newClientId);
+    const retry = pendingSends.get(id)?.clientId === clientId;
+    pendingSends.set(id, { text, clientId });
     const localId = `local-${clientId}`;
     const mentions = parseMentions(text, topic.members);
-    withLocal(id, { id: localId, at: new Date().toISOString(), author: 'human', text, mentions, via: 'ui', local: 'sending' });
-    log.info('topics', 'post', { topicId: id, mentions: mentions.length });
+    // A retry whose first try the server kept (its answer was lost) is drawn already: no second copy.
+    const held = topic.messages.some((m) => !(m as LocalMessage).local && m.clientId === clientId);
+    if (!held) withLocal(id, { id: localId, clientId, at: new Date().toISOString(), author: 'human', text, mentions, via: 'ui', local: 'sending' }, localId);
+    log.info('topics', 'post', { topicId: id, mentions: mentions.length, retry });
     try {
       const res = await postTopicMessage(id, text, { mentions, clientId });
-      // The server's copy replaces ours; the read after it brings the delivery lines.
-      withLocal(id, ones.get(id)?.topic?.messages.some((m) => m.id === res.message.id) ? null : res.message, localId);
-      setOne(id, { error: null });
+      if (pendingSends.get(id)?.clientId === clientId) pendingSends.delete(id);
+      // The server's copy replaces ours (by clientId), unless a read brought it first; the read after it brings the delivery lines.
+      const s = ones.get(id);
+      setOne(id, { ...(s?.topic ? { topic: { ...s.topic, messages: withAnswer<LocalMessage>(s.topic.messages, res.message, localId) } } : {}), error: null });
       soon(`one:${id}`, () => { void loadOne(id, 'post'); });
       void loadList('post');
       return true;
@@ -191,6 +201,7 @@ export function topicMade(topic: Topic): void {
 export function resetTopicsStore(): void {
   listState = { list: null, error: null };
   ones.clear();
+  pendingSends.clear();
   watching.clear();
   notify();
 }

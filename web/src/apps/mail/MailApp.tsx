@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { useMediaQuery } from '@/hooks/useMediaQuery';
 import type { AppComponentProps } from '../registry';
 import { AddAccountDialog } from './AddAccountDialog';
 import { MailAccountsPane } from './MailAccountsPane';
@@ -62,18 +63,6 @@ function RetryButton({ busy }: { busy: boolean }) {
   );
 }
 
-function useNarrowViewport(): boolean {
-  const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW_QUERY).matches);
-  useEffect(() => {
-    const media = window.matchMedia(NARROW_QUERY);
-    const onChange = () => setNarrow(media.matches);
-    onChange();
-    media.addEventListener('change', onChange);
-    return () => media.removeEventListener('change', onChange);
-  }, []);
-  return narrow;
-}
-
 /**
  * `?account=&message=`, which is what a task's backlink and a digest letter point at.
  *
@@ -129,7 +118,7 @@ function usePaneWidths() {
 
 export function MailApp(props: AppComponentProps) {
   const mail = useMailConsole();
-  const narrow = useNarrowViewport();
+  const narrow = useMediaQuery(NARROW_QUERY);
   const panes = usePaneWidths();
   const [adding, setAdding] = useState(false);
   const [showMailboxes, setShowMailboxes] = useState(false);

@@ -16,7 +16,10 @@ import { stripAboutTag } from '../org/message-about.js';
 import { isQuietTurn } from '../sessions/quiet-turn.js';
 import { intermediateResult, type ResultOutliving } from '../sessions/outliving-work.js';
 import { parseHinted } from '../hints/hint-format.js';
-import { PENDING_TURN_MAX_MS, TOPIC_TEXT_MAX, type MemberId } from './topics-model.js';
+import { holdNotice } from '../sessions/held-notices.js';
+import { buildWalnutMessage } from '../peers/walnut-message-tag.js';
+import { PENDING_TURN_MAX_MS, TOPIC_TEXT_MAX, walnutLine, type MemberId, type Topic } from './topics-model.js';
+import { TOPIC_NEWS_OUTCOME } from './topic-text.js';
 
 /** A transcript row as the projection gives it (thread-answers.ts AnswerRow). */
 export interface ReplyRow { role: string; text: string; timestamp: string; kind?: string; textWithoutContext?: string; opensTurn?: true }
@@ -32,14 +35,14 @@ async function readRows(sessionId: string, since: string): Promise<ReplyRow[]> {
   return rowsSince(sessionId, since);
 }
 
-/** session id -> the topics with a turn in flight in it. */
-const waiting = new Map<string, Set<string>>();
+/** session id -> the topics with a turn in flight in it, each with when it was noted (ms). */
+const waiting = new Map<string, Map<string, number>>();
 let indexed = false;
 
-export function notePendingTurn(sessionId: string, topicId: string): void {
-  const set = waiting.get(sessionId) ?? new Set<string>();
-  set.add(topicId);
-  waiting.set(sessionId, set);
+export function notePendingTurn(sessionId: string, topicId: string, at = Date.now()): void {
+  const topics = waiting.get(sessionId) ?? new Map<string, number>();
+  topics.set(topicId, at);
+  waiting.set(sessionId, topics);
 }
 
 /** Rebuild the index from the topic files (start, or the experiment turned on). */
@@ -47,7 +50,7 @@ export async function indexPendingTurns(): Promise<void> {
   const { listTopics } = await import('./topics-store.js');
   waiting.clear();
   for (const t of await listTopics()) {
-    for (const m of t.members) if (m.pendingTurn) notePendingTurn(m.pendingTurn.sessionId, t.id);
+    for (const m of t.members) if (m.pendingTurn) notePendingTurn(m.pendingTurn.sessionId, t.id, Date.parse(m.pendingTurn.since) || Date.now());
   }
   indexed = true;
 }
@@ -90,7 +93,14 @@ export function rowFor(row: Pick<ReplyRow, 'text' | 'textWithoutContext'>, topic
  * then answer that work too), or when any other input reached the turn before it spoke (a person's
  * words, another task's note, a mixed batch): the member posts with topic_post then.
  */
-export function replyFromRows(rows: readonly ReplyRow[], since: string, topicId: string): { text: string; spoke: boolean } {
+export interface TopicReply {
+  text: string;
+  spoke: boolean;
+  /** The words were not taken: the wake went into a busy turn or one batched with other input. */
+  busy?: true;
+}
+
+export function replyFromRows(rows: readonly ReplyRow[], since: string, topicId: string): TopicReply {
   const isInput = (r: ReplyRow) => r.role === 'user' && !r.kind;
   let at = -1;
   let kind: ReturnType<typeof rowFor> = 'other';
@@ -101,11 +111,12 @@ export function replyFromRows(rows: readonly ReplyRow[], since: string, topicId:
   }
   if (at < 0) return { text: '', spoke: false };
   // Batched with other input: its words may answer that too.
-  if (kind === 'mixed') return { text: '', spoke: true };
+  if (kind === 'mixed') return { text: '', spoke: true, busy: true };
   // Delivered into a running turn: the row before it is that turn's tool call.
   const before = rows.slice(0, at).reverse().find((r) => r.role === 'assistant');
-  if (before?.kind === 'tool' && before.timestamp >= since) return { text: '', spoke: true };
-  let last = '';
+  if (before?.kind === 'tool' && before.timestamp >= since) return { text: '', spoke: true, busy: true };
+  // The turn's final text: every text row after its last tool call (a tool call starts it over).
+  let final: string[] = [];
   let spoke = false;
   for (let i = at + 1; i < rows.length; i++) {
     const r = rows[i];
@@ -113,38 +124,74 @@ export function replyFromRows(rows: readonly ReplyRow[], since: string, topicId:
       const prev = rows[i - 1];
       // After the turn's words: the next turn's input. Before them, or after a tool call: it reached this turn.
       if (spoke && prev.role === 'assistant' && prev.kind !== 'tool') break;
-      return { text: '', spoke: true };
+      return { text: '', spoke: true, busy: true };
     }
-    if (r.role !== 'assistant' || r.kind) continue;
+    if (r.role !== 'assistant') continue;
+    if (r.kind === 'tool') { final = []; continue; }
+    if (r.kind) continue;
     spoke = true;
     const words = stripAboutTag(withoutWalnutControl(r.text)).trim();
-    last = words;
+    if (words) final.push(words);
   }
-  return { text: last ? [...last].slice(0, TOPIC_TEXT_MAX).join('') : '', spoke };
+  const text = final.join('\n\n');
+  return { text: text ? [...text].slice(0, TOPIC_TEXT_MAX).join('') : '', spoke };
 }
 
-/** Post the replies waiting in `sessionId`. Exported for tests; never throws. Returns how many were posted. */
+/** What a member whose words were not taken is told, riding its next message (never a wake). */
+export function notTakenNotice(topic: Pick<Topic, 'id' | 'title'>): string {
+  return buildWalnutMessage({
+    kind: 'notification',
+    attrs: { from: 'Walnut', about: `Topic: ${topic.title}`, outcome: TOPIC_NEWS_OUTCOME, note: 'about your last topic turn: not a request' },
+    body: `Your words in that turn were not posted to topic ${topic.id} "${topic.title}": the turn also handled other input. Post with topic_post if you meant to answer.`,
+  });
+}
+
+export const notTakenLine = (name: string): string => `${name} was woken but its reply was not posted (busy turn).`;
+
+/**
+ * Post the replies waiting in `sessionId`. Exported for tests; never throws. Returns how many were posted.
+ * A topic noted for this session whose file shows no turn in it yet is noted again (its delivery may
+ * still be writing), until PENDING_TURN_MAX_MS after it was noted. A reply not taken because the
+ * turn was busy is said: the member hears it with its next message, and the topic gets a line.
+ */
 export async function captureReplies(sessionId: string, nowMs = Date.now()): Promise<number> {
-  const topicIds = [...(waiting.get(sessionId) ?? [])];
-  if (!topicIds.length) return 0;
+  const noted = waiting.get(sessionId);
+  if (!noted?.size) return 0;
   waiting.delete(sessionId);
   let posted = 0;
   const store = await import('./topics-store.js');
-  for (const topicId of topicIds) {
+  for (const [topicId, notedAt] of noted) {
     try {
       const topic = await store.readTopic(topicId);
       if (!topic) continue;
-      for (const member of topic.members.filter((m) => m.pendingTurn?.sessionId === sessionId)) {
+      const mine = topic.members.filter((m) => m.pendingTurn?.sessionId === sessionId);
+      if (!mine.length) {
+        if (nowMs - notedAt <= PENDING_TURN_MAX_MS) notePendingTurn(sessionId, topicId, notedAt);
+        continue;
+      }
+      for (const member of mine) {
         const turn = member.pendingTurn!;
         const expired = nowMs - Date.parse(turn.since) > PENDING_TURN_MAX_MS;
-        const reply = expired ? { text: '', spoke: true } : replyFromRows(await readRows(sessionId, turn.since), turn.since, topicId);
+        const reply: TopicReply = expired ? { text: '', spoke: true } : replyFromRows(await readRows(sessionId, turn.since), turn.since, topicId);
         // Not spoken yet: the turn that ended was an earlier one; wait for the next end.
-        if (!reply.spoke) { notePendingTurn(sessionId, topicId); continue; }
+        if (!reply.spoke) { notePendingTurn(sessionId, topicId, notedAt); continue; }
         await store.updateMember(topicId, member.id, { pendingTurn: undefined });
-        if (!reply.text || member.status !== 'active') continue;
-        const { postMessage } = await import('./topic-post.js');
-        await postMessage(topicId, { author: member.id as MemberId, text: reply.text, via: 'agent', allowClosed: !!topic.closed });
-        posted++;
+        if (member.status !== 'active') continue;
+        // More was said to it while this turn ran: the follow-up wake asks again, so nothing is said here.
+        if (reply.busy && !turn.more) {
+          holdNotice(sessionId, `topic-not-taken:${topicId}`, notTakenNotice(topic));
+          await store.mutateTopic(topicId, (t) => { t.messages.push(walnutLine(notTakenLine(member.name))); });
+          continue;
+        }
+        if (reply.text && !reply.busy) {
+          const { postMessage } = await import('./topic-post.js');
+          await postMessage(topicId, { author: member.id as MemberId, text: reply.text, via: 'agent', allowClosed: !!topic.closed });
+          posted++;
+        }
+        if (turn.more && !expired) {
+          const [{ wakeAgain }, { userName }] = await Promise.all([import('./topic-delivery.js'), import('./topic-post.js')]);
+          await wakeAgain(topicId, member.id, await userName());
+        }
       }
     } catch (err) {
       log.task.warn('topics: a reply was not posted', { topicId, sessionId, error: err instanceof Error ? err.message : String(err) });

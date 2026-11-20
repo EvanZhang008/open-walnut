@@ -1,5 +1,5 @@
 /**
- * The words of the topics mail bridge: the subject token, the body, and reading a reply back.
+ * The words of the topics mail bridge: the subject, the body, and reading a reply back.
  * Pure functions, so every rule here is tested on its own.
  */
 
@@ -8,17 +8,9 @@ export const TOPIC_MAIL_FOOTER = 'Reply to this email to post in the topic. Ment
 /** The longest text one inbound mail may post; the rest is cut with a note. */
 export const MAX_INBOUND_CHARS = 8_000
 
-const SUBJECT_TOKEN = /\[topic (tp-[0-9a-z]{4,40})\]/i
-
 export function topicMailSubject(title: string, topicId: string): string {
   const clean = title.replace(/[\r\n]+/g, ' ').trim() || 'Topic'
   return `${clean} [topic ${topicId}]`
-}
-
-/** The topic id a subject carries ("Re: Launch plan [topic tp-0a1b...]"), else undefined. */
-export function topicIdFromSubject(subject: string): string | undefined {
-  const match = SUBJECT_TOKEN.exec(subject ?? '')
-  return match ? match[1]!.toLowerCase() : undefined
 }
 
 /** The body of one outbound mail: each new message as "Name: text", then the footer. */

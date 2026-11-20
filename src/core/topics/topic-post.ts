@@ -5,15 +5,15 @@
  */
 import { log } from '../../logging/index.js';
 import { CEO_LABEL, ORG_MAIN_NODE, VP_LABEL, orgDisplayTitle } from '../org/org-tree.js';
-import { keepsThreads } from '../org/keeps-threads.js';
 import {
   MAIL_EVERY_MINUTES_DEFAULT, TOPIC_MEMBERS_MAX, TOPIC_TEXT_MAX, TOPIC_TITLE_MAX, TopicError, USER_FALLBACK_NAME,
-  freshRound, isAgentMember, mentionsOf, newMemberId, newMessageId, newTopicId, sameRef, uniqueName,
+  freshRound, isAgentMember, mentionsOf, newMemberId, newMessageId, newTopicId, sameRef, uniqueName, walnutLine,
   type MemberId, type MemberRef, type MessageVia, type Topic, type TopicActor, type TopicMember, type TopicMessage,
 } from './topics-model.js';
 import { assertTopicsOn, mutateTopic, notifyTopicMessage, readTopic, writeNewTopic } from './topics-store.js';
 import { planClosing, planDelivery, type DeliveryPlan } from './topic-wake.js';
 import { deliver, memberTask } from './topic-delivery.js';
+import { openHostThread, rehostThread } from './topic-host.js';
 import { topicMailTransport, type TopicMailAccount } from './topic-mail-port.js';
 import { withDeadline } from '../../lib/with-deadline.js';
 
@@ -46,9 +46,13 @@ export function parseMemberRef(raw: unknown): MemberRef {
   throw new TopicError('bad_input', 400, 'A member is {kind:"task",taskId}, {kind:"org",node:"main"|"project:<key>"} or {kind:"person",name,email,bot?}.');
 }
 
+/** A member made from a ref, with the task it reaches now (a task member's own, an org node's current one). */
+interface MadeMember { member: TopicMember; taskId?: string }
+
 /** The member a ref makes: its name, and pending when an agent added a person. */
-async function newMember(ref: MemberRef, by: TopicActor, taken: readonly string[], at: string): Promise<TopicMember> {
+async function newMember(ref: MemberRef, by: TopicActor, taken: readonly string[], at: string): Promise<MadeMember> {
   let name: string;
+  let taskId: string | undefined;
   if (ref.kind === 'person') {
     name = ref.name;
   } else {
@@ -56,15 +60,41 @@ async function newMember(ref: MemberRef, by: TopicActor, taken: readonly string[
     const task = await memberTask(probe);
     if (ref.kind === 'task' && !task) throw new TopicError('bad_input', 400, `No task ${ref.taskId}.`);
     if (ref.kind === 'task') ref = { kind: 'task', taskId: task!.id };
+    taskId = task?.id;
     name = task ? orgDisplayTitle(task) : ref.kind === 'org' && ref.node === ORG_MAIN_NODE ? CEO_LABEL : `${(ref as { node: string }).node.slice(8)} ${VP_LABEL}`;
   }
   return {
-    id: newMemberId(), ref, name: uniqueName(name, taken), role: 'member', joinedAt: at, addedBy: by,
-    status: ref.kind === 'person' && by !== 'human' ? 'pending' : 'active',
+    member: {
+      id: newMemberId(), ref, name: uniqueName(name, taken), role: 'member', joinedAt: at, addedBy: by,
+      status: ref.kind === 'person' && by !== 'human' ? 'pending' : 'active',
+    },
+    ...(taskId ? { taskId } : {}),
   };
 }
 
-export interface CreateTopicInput { title: string; members: MemberRef[]; host?: number; text?: string; by: TopicActor }
+/**
+ * One task is one member: an org node whose current task is already a task member (or the other
+ * way round) is refused, 409 already_member naming the member it already is. `held`: the members in
+ * the topic (or made before) with the task each reaches.
+ */
+function refuseSameTask(made: MadeMember, held: readonly MadeMember[]): void {
+  if (!made.taskId) return;
+  const twin = held.find((h) => h.taskId === made.taskId && h.member.status !== 'left' && !sameRef(h.member.ref, made.member.ref));
+  if (twin) throw new TopicError('already_member', 409, `${made.member.name} is already in this topic as @${twin.member.name} (the same task).`);
+}
+
+/** The members of `topic` that are not gone, with the task each reaches now. */
+async function heldTasks(topic: Pick<Topic, 'members'>): Promise<MadeMember[]> {
+  const out: MadeMember[] = [];
+  for (const m of topic.members) {
+    if (m.status === 'left' || !isAgentMember(m)) continue;
+    const task = m.ref.kind === 'task' ? { id: m.ref.taskId } : await memberTask(m).catch(() => undefined);
+    out.push({ member: m, ...(task ? { taskId: task.id } : {}) });
+  }
+  return out;
+}
+
+export interface CreateTopicInput { title: string; members: MemberRef[]; host?: number; text?: string; by: TopicActor; clientId?: string }
 
 export async function createTopic(input: CreateTopicInput): Promise<{ topic: Topic; message?: TopicMessage; delivery?: DeliveryAnswer }> {
   await assertTopicsOn();
@@ -77,8 +107,13 @@ export async function createTopic(input: CreateTopicInput): Promise<{ topic: Top
   if (!refs.length) throw new TopicError('bad_input', 400, 'A topic needs at least one member.');
   if (refs.length > TOPIC_MEMBERS_MAX) throw new TopicError('bad_input', 400, `A topic holds at most ${TOPIC_MEMBERS_MAX} members.`);
   const at = new Date().toISOString();
-  const members: TopicMember[] = [];
-  for (const ref of refs) members.push(await newMember(ref, input.by, members.map((m) => m.name), at));
+  const made: MadeMember[] = [];
+  for (const ref of refs) {
+    const one = await newMember(ref, input.by, made.map((m) => m.member.name), at);
+    refuseSameTask(one, made);
+    made.push(one);
+  }
+  const members = made.map((m) => m.member);
   // The host: the one asked for (an index into `members` as given), else the first org member, else the first task.
   const asked = typeof input.host === 'number' ? input.members[input.host] : undefined;
   const host = asked ? members.find((m) => sameRef(m.ref, asked)) : members.find((m) => m.ref.kind === 'org') ?? members.find((m) => m.ref.kind === 'task');
@@ -89,24 +124,12 @@ export async function createTopic(input: CreateTopicInput): Promise<{ topic: Top
     round: freshRound(0, at), mail: { everyMinutes: MAIL_EVERY_MINUTES_DEFAULT },
   };
   const hostTask = host ? await memberTask(host).catch(() => undefined) : undefined;
-  if (hostTask && keepsThreads(hostTask)) {
-    try {
-      const { openNodeThread } = await import('../org/threads-store.js');
-      // Out of his sight (pending) until the host has something for him: the topic is the conversation.
-      const thread = await openNodeThread(hostTask.id, {
-        title, from: 'node', ref: topic.id,
-        text: `Topic ${topic.id} "${title}" with ${members.map((m) => m.name).join(', ')}. This thread keeps where it stands.`,
-        quiet_summary: `Topic "${title}" with ${members.map((m) => m.name).join(', ')}: nothing settled yet.`,
-      }, input.by);
-      topic.thread = { node: hostTask.id, threadId: thread.id };
-    } catch (err) {
-      log.task.warn('topics: the host thread was not opened', { topicId: topic.id, hostTask: hostTask.id, error: err instanceof Error ? err.message : String(err) });
-    }
-  }
+  const thread = hostTask ? await openHostThread(topic, hostTask, input.by) : undefined;
+  if (thread) topic.thread = thread;
   await writeNewTopic(topic);
   if (!input.text?.trim()) return { topic };
   const author = input.by === 'human' ? 'human' : members[0].id;
-  const posted = await postMessage(topic.id, { author, text: input.text, via: input.by === 'human' ? 'ui' : 'agent' });
+  const posted = await postMessage(topic.id, { author, text: input.text, via: input.by === 'human' ? 'ui' : 'agent', ...(input.clientId ? { clientId: input.clientId } : {}) });
   return { topic: (await readTopic(topic.id)) ?? topic, ...posted };
 }
 
@@ -120,7 +143,11 @@ export interface PostInput {
   mentions?: string[];
   /** A captured closing reply goes into a closed topic (it wakes nobody there). */
   allowClosed?: boolean;
+  /** The author's own id for this post (kept on the message, answered to the author only). */
+  clientId?: string;
 }
+
+const CLIENT_ID_MAX = 120;
 
 export async function postMessage(topicId: string, input: PostInput): Promise<{ message: TopicMessage; delivery: DeliveryAnswer }> {
   await assertTopicsOn();
@@ -134,11 +161,18 @@ export async function postMessage(topicId: string, input: PostInput): Promise<{ 
       const m = t.members.find((x) => x.id === input.author);
       if (!m || m.status !== 'active') throw new TopicError('not_member', 409, `Not an active member of topic ${t.id}.`);
     }
-    const message: TopicMessage = { id: newMessageId(), at: new Date().toISOString(), author: input.author, text, via: input.via, mentions: mentionsOf(text, input.mentions, t.members) };
+    const clientId = typeof input.clientId === 'string' ? input.clientId.trim().slice(0, CLIENT_ID_MAX) : '';
+    const message: TopicMessage = {
+      id: newMessageId(), at: new Date().toISOString(), author: input.author, text, via: input.via,
+      mentions: mentionsOf(text, input.mentions, t.members), ...(clientId ? { clientId } : {}),
+    };
     const plan = planDelivery(t, message, { userName: name });
+    // The mail bridge sends exactly what the plan says (L1): who gets it, and who gets it at once.
+    if (plan.mail.length) message.toMail = [...plan.mail];
+    if (plan.mailNow.length) message.mailNow = [...plan.mailNow];
     t.round = plan.round;
     t.messages.push(message);
-    if (plan.budgetLine) t.messages.push({ id: newMessageId(), at: message.at, author: 'walnut', text: plan.budgetLine, mentions: [], via: 'system' });
+    if (plan.budgetLine) t.messages.push(walnutLine(plan.budgetLine, message.at));
     return { message, plan };
   });
   return runDelivery(topic, out.message, out.plan, { userName: name });
@@ -147,7 +181,7 @@ export async function postMessage(topicId: string, input: PostInput): Promise<{ 
 async function runDelivery(topic: Topic, message: TopicMessage, plan: DeliveryPlan, opts: { userName: string; closing?: boolean; byMember?: boolean }): Promise<{ message: TopicMessage; delivery: DeliveryAnswer }> {
   const { topic: after, outcome } = await deliver(topic, message, plan, opts);
   const saved = after.messages.find((m) => m.id === message.id) ?? message;
-  const delivery: DeliveryAnswer = { wake: outcome.woke, fold: outcome.folded, mail: outcome.mailed, mailNow: plan.mailNow, refused: outcome.refused };
+  const delivery: DeliveryAnswer = { wake: outcome.woke, fold: outcome.folded, mail: plan.mail, mailNow: plan.mailNow, refused: outcome.refused };
   await notifyTopicMessage(after, saved, { ...plan, wake: outcome.woke, fold: outcome.folded, refused: outcome.refused });
   return { message: saved, delivery };
 }
@@ -174,23 +208,40 @@ export async function callerMemberAsync(topic: Topic, by: TopicActor): Promise<T
   }
 }
 
-export async function changeMembers(topicId: string, change: { add?: MemberRef[]; remove?: string[] }, by: TopicActor): Promise<Topic> {
+/**
+ * Add and remove members. The host is removed only with another host named (`host`, an active task
+ * or org member staying in the topic): the topic's thread goes with it (topic-host.ts). A task
+ * already in the topic, as itself or as an org node's current task, is refused (409 already_member).
+ */
+export async function changeMembers(topicId: string, change: { add?: MemberRef[]; remove?: string[]; host?: string }, by: TopicActor): Promise<Topic> {
   await assertTopicsOn();
   const current = await readTopic(topicId);
   if (!current) throw new TopicError('not_found', 404, `No topic ${topicId}.`);
   if (by !== 'human') await callerMemberAsync(current, by);
   const at = new Date().toISOString();
   // Names and tasks are read outside the lock; a member added twice at once is kept once below.
-  const made: TopicMember[] = [];
+  const held = await heldTasks(current);
+  const made: MadeMember[] = [];
   for (const ref of change.add ?? []) {
-    if (made.some((m) => sameRef(m.ref, ref))) continue;
-    made.push(await newMember(ref, by, [...current.members.map((m) => m.name), ...made.map((m) => m.name)], at));
+    if (made.some((m) => sameRef(m.member.ref, ref)) || current.members.some((m) => m.status !== 'left' && sameRef(m.ref, ref))) continue;
+    const one = await newMember(ref, by, [...current.members.map((m) => m.name), ...made.map((m) => m.member.name)], at);
+    refuseSameTask(one, [...held, ...made]);
+    made.push(one);
   }
-  const { topic } = await mutateTopic(topicId, (t) => {
+  const { topic, out: rehosted } = await mutateTopic(topicId, (t) => {
     if (t.closed) throw new TopicError('closed', 409, `Topic ${t.id} is closed.`);
+    const removing = new Set(change.remove ?? []);
+    const oldHost = t.members.find((x) => x.role === 'host' && x.status !== 'left');
+    const newHost = change.host ? t.members.find((x) => x.id === change.host) : undefined;
+    if (change.host && (!newHost || newHost.status !== 'active' || !isAgentMember(newHost) || removing.has(newHost.id))) {
+      throw new TopicError('bad_input', 400, 'host must be an active task or org member of the topic that stays in it.');
+    }
+    if (oldHost && removing.has(oldHost.id) && !newHost) {
+      throw new TopicError('host_required', 409, `@${oldHost.name} hosts this topic: name the new host (host: a task or org member's id) to remove it.`);
+    }
     const added: string[] = [];
     const removed: string[] = [];
-    for (const m of made) {
+    for (const { member: m } of made) {
       const old = t.members.find((x) => sameRef(x.ref, m.ref));
       if (old && old.status !== 'left') continue;
       if (old) { old.status = m.status; old.joinedAt = at; old.addedBy = by; added.push(old.name); continue; }
@@ -198,22 +249,26 @@ export async function changeMembers(topicId: string, change: { add?: MemberRef[]
       t.members.push({ ...m, name: uniqueName(m.name, t.members.map((x) => x.name)) });
       added.push(m.name);
     }
-    for (const id of change.remove ?? []) {
+    for (const id of removing) {
       const m = t.members.find((x) => x.id === id);
       if (!m || m.status === 'left') continue;
       m.status = 'left';
+      m.role = 'member';
       delete m.pendingTurn;
       removed.push(m.name);
-      if (m.role === 'host') {
-        m.role = 'member';
-        const next = t.members.find((x) => x.status === 'active' && isAgentMember(x));
-        if (next) next.role = 'host';
-      }
     }
     const words = [added.length ? `Added ${added.map((n) => `@${n}`).join(', ')}` : '', removed.length ? `Removed ${removed.map((n) => `@${n}`).join(', ')}` : ''].filter(Boolean);
-    if (words.length) t.messages.push({ id: newMessageId(), at, author: 'walnut', text: `${words.join('. ')}.`, mentions: [], via: 'system' });
+    let moved: TopicMember | undefined;
+    if (newHost && newHost.id !== oldHost?.id) {
+      if (oldHost) oldHost.role = 'member';
+      newHost.role = 'host';
+      moved = { ...newHost };
+      words.push(`@${newHost.name} hosts the topic now`);
+    }
+    if (words.length) t.messages.push(walnutLine(`${words.join('. ')}.`, at));
+    return moved;
   });
-  return topic;
+  return rehosted ? rehostThread(topic, rehosted, by) : topic;
 }
 
 /** The user's yes for a person an agent added: only then is the person mailed. */
@@ -224,7 +279,7 @@ export async function confirmMember(topicId: string, memberId: string): Promise<
     if (!m) throw new TopicError('not_found', 404, `No member ${memberId} in topic ${t.id}.`);
     if (m.status !== 'pending') throw new TopicError('conflict', 409, `@${m.name} is ${m.status}, not waiting for a yes.`);
     m.status = 'active';
-    t.messages.push({ id: newMessageId(), at: new Date().toISOString(), author: 'walnut', text: `@${m.name} confirmed by the user.`, mentions: [], via: 'system' });
+    t.messages.push(walnutLine(`@${m.name} confirmed by the user.`));
   });
   return topic;
 }
@@ -240,7 +295,7 @@ export async function closeTopic(topicId: string, by: TopicActor): Promise<{ top
     if (t.closed) throw new TopicError('closed', 409, `Topic ${t.id} is already closed.`);
     const at = new Date().toISOString();
     const closer = by === 'human' ? name : t.members.find((m) => m.ref.kind === 'task' && m.ref.taskId === by.slice(5))?.name ?? 'a member';
-    const message: TopicMessage = { id: newMessageId(), at, author: 'walnut', text: `Closed by ${closer}.`, mentions: [], via: 'system' };
+    const message = walnutLine(`Closed by ${closer}.`, at);
     t.messages.push(message);
     const plan = planClosing(t);
     t.closed = { at, by };
@@ -292,7 +347,7 @@ export async function chooseTopicMail(topicId: string, input: { accountId: strin
     t.mail = { ...(account ? { accountId: account.accountId } : {}), everyMinutes: every ?? t.mail?.everyMinutes ?? MAIL_EVERY_MINUTES_DEFAULT };
     if (before === t.mail.accountId) return;
     const text = account ? `Email to this topic's people now goes out from ${account.address}.` : 'No mailbox is chosen: nothing is emailed.';
-    t.messages.push({ id: newMessageId(), at: new Date().toISOString(), author: 'walnut', text, mentions: [], via: 'system' });
+    t.messages.push(walnutLine(text));
   });
   log.task.info('topics: mailbox chosen', { topicId, accountId: account?.accountId ?? null, everyMinutes: topic.mail?.everyMinutes });
   return topic;

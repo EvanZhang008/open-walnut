@@ -34,6 +34,7 @@ const TEXT_ONLY_ANSWERS: Record<string, string> = {
 /** Files drawing a ChatInput that refuse a picture on purpose, and why. */
 const REFUSES_PICTURES: Record<string, string> = {
   'components/board/BoardReplyDock.tsx': "a Board mark's note is words kept on the page; its threads and choices take pictures",
+  'components/topics/TopicComposer.tsx': "a topic line goes to several members' turns and out by mail as text; the composer refuses a picture with words and keeps it in the box",
 }
 
 /** Composers with their own <textarea> that stay text only, and why. */

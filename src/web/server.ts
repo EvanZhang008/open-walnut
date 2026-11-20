@@ -3810,6 +3810,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // (it then backs up its own temp data home to the destination its config names).
   if (isEphemeral && process.env.WALNUT_EPHEMERAL_BACKUP === '1') await startBackups()
 
+  // Topics: a woken member's reply is posted back as its message (core/topics/topic-replies.ts) and
+  // person members are mailed (core/topics/topic-mail.ts), only while the experiment topics is on:
+  // started and stopped with it (core/topics/topics-runtime.ts). An ephemeral server too, so
+  // dev:ephemeral can try the feature; its mail bridge sends nothing unless
+  // WALNUT_TOPICS_MAIL_IN_TEST=1 (its copy of the data holds the user's real accounts and people).
+  topicsHandle = (await import('../core/topics/topics-runtime.js')).startTopicsRuntime()
+
   if (!isEphemeral) {
     if (bootPolicy('git-auto-commit')) gitAutoCommitHandle = startGitAutoCommit(compactionRecovered)
 
@@ -3917,14 +3924,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // ends, and closed threads are deleted after their week (core/org/thread-answers.ts).
       const { startThreadAnswers } = await import('../core/org/thread-answers.js')
       threadAnswersHandle = startThreadAnswers()
-      // Topics: a woken member's reply is posted back as its message (core/topics/topic-replies.ts);
-      // idle while the experiment topics is off.
-      const { startTopics } = await import('../core/topics/topic-replies.js')
-      const replies = startTopics()
-      // The mail bridge: person members are mailed and their replies posted (core/topics/topic-mail.ts).
-      const mail = await import('../core/topics/topic-mail.js')
-      await mail.startTopicMailBridge().catch((err) => log.web.warn('topics: mail bridge did not start', { error: err instanceof Error ? err.message : String(err) }))
-      topicsHandle = { stop: () => { replies.stop(); mail.stopTopicMailBridge() } }
 
       // The session's current turn (sessions/turn-run.ts): every reader of "is Walnut retrying this
       // turn" asks it; its attempts start over at any send that is not a retrier's. Primary only.

@@ -20,6 +20,7 @@
 import { useEffect, useRef, type RefObject } from 'react';
 import { hasActiveModalOverlay } from './useModalOverlay';
 import { escapeWasConsumedByOthers } from '@/utils/escape-beep-guard';
+import { isImeKey } from '@/utils/ime-key';
 import { log } from '@/utils/log';
 import { pairChordDir } from '@/utils/tree-split-state';
 
@@ -89,12 +90,8 @@ export function isDrawerChord(e: Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' 
   return mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
 }
 
-/** Is this key part of an IME composition? WebKit reports the key that ENDS a
- *  composition (Esc cancelling a pinyin candidate) with isComposing false and
- *  keyCode 229, the same rule ChatInput applies. */
-export function isImeKey(e: Pick<KeyboardEvent, 'isComposing'> & { keyCode?: number }): boolean {
-  return e.isComposing || e.keyCode === 229;
-}
+/** The IME rule lives in utils/ime-key.ts (pure models use it too); re-exported for this module's callers. */
+export { isImeKey };
 
 /** Should Esc go to the panels at all? */
 export function escapeIsFree(

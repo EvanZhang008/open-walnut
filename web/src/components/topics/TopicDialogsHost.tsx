@@ -66,7 +66,7 @@ function AddToTopicDialog({ members, onClose, onAdded }: { members: PickedMember
                 const inAll = keys.every((k) => t.members.some((m) => m.status !== 'left' && refKey(m.ref) === k));
                 return (
                   <li key={t.id}>
-                    <button type="button" className="topic-candidate" data-testid="topic-add-pick" data-topic-id={t.id}
+                    <button type="button" className="topic-candidate" data-testid="topic-add-pick" data-peek-row="" data-topic-id={t.id}
                       disabled={inAll || busy !== null} title={inAll ? `${who} already in it` : `Add ${who} to “${t.title}”`}
                       onClick={() => void add(t.id)}>
                       <StackedAvatars members={t.members} size={18} />

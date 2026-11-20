@@ -3,16 +3,19 @@
  * members with their status (Confirm for a person an agent added, who gets no mail until the user
  * says yes; Remove), Add (the member picker), and how many of this round's member wakes are used.
  * While a person is in the topic (or being added): "Email from", the mailbox they are emailed from.
- * Adding a person, or confirming one, first asks: Walnut will email them, from that mailbox.
+ * Adding a person, or confirming one, first asks: Walnut will email them, from that mailbox; so does
+ * choosing a mailbox while people are in it (mail starts going to them from it).
+ * On a narrow window TopicChat lays it over the conversation as a sheet (`sheet`): a close button on
+ * top, the rest the same.
  */
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type RefObject } from 'react';
 import type { Topic } from '@/api/topics';
 import { useConfirm } from '@/hooks/useConfirm';
 import { AgentText } from '@/components/common/AgentText';
 import { useOrgThreads } from '@/components/org/useOrgThreads';
 import type { PickedMember } from './topic-dialogs';
 import { MemberPicker } from './MemberPicker';
-import { ROUND_WAKES, memberStatusLabel, personEmails, personMailConfirm, refKey } from './topic-model';
+import { ROUND_WAKES, activePersonEmails, mailboxConfirm, memberStatusLabel, personEmails, personMailConfirm, refKey } from './topic-model';
 import { TopicMailFrom } from './TopicMailFrom';
 import { mailboxWords, useMailAccounts } from './useMailAccounts';
 import { MemberAvatar } from './TopicAvatars';
@@ -32,7 +35,12 @@ function HostThread({ topic }: { topic: Topic }) {
   );
 }
 
-export function TopicSidePanel({ topic, actions }: { topic: Topic; actions: Pick<TopicActions, 'addMembers' | 'removeMember' | 'confirmMember' | 'setMail'> }) {
+export function TopicSidePanel({ topic, actions, sheet }: {
+  topic: Topic;
+  actions: Pick<TopicActions, 'addMembers' | 'removeMember' | 'confirmMember' | 'setMail'>;
+  /** Laid over the conversation (a narrow window): its close button, and where focus starts. */
+  sheet?: { onClose: () => void; closeRef: RefObject<HTMLButtonElement | null> };
+}) {
   const confirm = useConfirm();
   const [adding, setAdding] = useState<PickedMember[] | null>(null);
   const live = useMemo(() => topic.members.filter((m) => m.status !== 'left'), [topic.members]);
@@ -54,12 +62,25 @@ export function TopicSidePanel({ topic, actions }: { topic: Topic; actions: Pick
     if (addingEmails.length && !(await confirm({ title: 'Email from this topic?', message: personMailConfirm(addingEmails, from), confirmLabel: 'Add' }))) return;
     if (await actions.addMembers(adding.map((p) => p.ref))) setAdding(null);
   };
+  const pickMailbox = async (accountId: string | null) => {
+    // Choosing one starts mail to the people already in the topic: only his yes to these words does.
+    const people = activePersonEmails(live);
+    const address = mailboxWords(accounts, accountId);
+    if (address && people.length && !(await confirm({ title: 'Email from this mailbox?', message: mailboxConfirm(people, address), confirmLabel: 'Use it' }))) return;
+    await actions.setMail(accountId);
+  };
   const confirmPerson = async (id: string, email: string) => {
     if (await confirm({ title: 'Email from this topic?', message: personMailConfirm([email], from, 'Confirm?'), confirmLabel: 'Confirm' })) await actions.confirmMember(id);
   };
 
   return (
-    <aside className="topic-side" data-testid="topic-side" aria-label="Topic members">
+    <aside className={`topic-side${sheet ? ' is-sheet' : ''}`} data-testid="topic-side" aria-label="Topic members">
+      {sheet && (
+        <div className="topic-sheet-head">
+          <span className="topic-side-head">Members and mail</span>
+          <button ref={sheet.closeRef} type="button" className="topic-chip-x topic-sheet-close" data-testid="topic-sheet-close" aria-label="Close the members panel" title="Close (Esc)" onClick={sheet.onClose}>×</button>
+        </div>
+      )}
       <HostThread topic={topic} />
       <section className="topic-side-block">
         <h3 className="topic-side-head">Members · {live.length}</h3>
@@ -94,7 +115,7 @@ export function TopicSidePanel({ topic, actions }: { topic: Topic; actions: Pick
       </section>
       {showsMail && (
         <section className="topic-side-block">
-          <TopicMailFrom value={mailbox} onPick={(id) => void actions.setMail(id)} disabled={closed} />
+          <TopicMailFrom value={mailbox} onPick={(id) => void pickMailbox(id)} disabled={closed} />
         </section>
       )}
       <section className="topic-side-block">

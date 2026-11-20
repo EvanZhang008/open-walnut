@@ -26,8 +26,8 @@ import os from 'node:os'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { isFollower } from '../../core/server-role.js'
 import { requestOrigin } from '../middleware/request-origin.js'
-import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN, hostOrigin } from '../../lib/caller-origin.js'
-import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
+import { LOCAL_ORIGIN, hostOrigin } from '../../lib/caller-origin.js'
+import { isPersonCaller } from './person-caller.js'
 import { APPROVAL_WAIT_MAX_MS, type ApprovalDeviceKind, type ApprovalMode, type ApprovalRequester } from '../../core/approvals/types.js'
 import { ambientTestRun } from '../../core/test-run.js'
 import { log } from '../../logging/index.js'
@@ -45,10 +45,7 @@ function header(req: Request, name: string): string | undefined {
 
 /** A person: see the header. Answers the refusal itself and returns false otherwise. */
 function personOnly(req: Request, res: Response, what: string): boolean {
-  const origin = requestOrigin(req)
-  const person = !header(req, 'x-walnut-caller-sid') && !header(req, CALLER_KIND_HEADER)
-    && (origin === LOCAL_ORIGIN || origin === REMOTE_HTTP_ORIGIN)
-  if (person) return true
+  if (isPersonCaller(req)) return true
   res.status(403).json({ error: `Only a person ${what}: an agent, a session or a script cannot.`, code: HUMAN_ONLY })
   return false
 }

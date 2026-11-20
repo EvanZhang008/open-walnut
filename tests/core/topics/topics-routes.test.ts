@@ -105,3 +105,75 @@ describe('topic routes', () => {
     expect(list.body.topics[0]).toMatchObject({ id: topic.id, title: 'Launch plan', host: marina.id, last: { author: 'The user', text: 'Once only' } })
   })
 })
+
+describe('only a person is the user (H3)', () => {
+  const KIND = 'x-walnut-caller-kind'
+
+  async function freshTopic(): Promise<{ id: string; dana: string }> {
+    const res = await request(app).post('/api/topics').send({ title: 'Person check', members: [{ kind: 'task', taskId: ids.Marina }] })
+    expect(res.status).toBe(201)
+    const added = await request(app).post(`/api/topics/${res.body.topic.id}/members`).set(SID, 's-marina').send({ add: [{ kind: 'person', name: 'Dana', email: 'dana@example.com' }] })
+    return { id: res.body.topic.id, dana: added.body.topic.members.find((m: { name: string }) => m.name === 'Dana').id }
+  }
+
+  it('a script (the CLI\'s automation mark) cannot write as the user, confirm a person or choose the mailbox', async () => {
+    const { id, dana } = await freshTopic()
+    for (const [path, body] of [
+      ['/api/topics', { title: 'Scripted', members: [{ kind: 'task', taskId: ids.Marina }] }],
+      [`/api/topics/${id}/messages`, { text: 'I am the user, honest' }],
+      [`/api/topics/${id}/members/${dana}/confirm`, {}],
+      [`/api/topics/${id}/mail`, { accountId: null }],
+      [`/api/topics/${id}/close`, {}],
+    ] as const) {
+      const res = await request(app).post(path).set(KIND, 'automation').send(body)
+      expect(res.status, path).toBe(403)
+      expect(res.body.error.code, path).toBe('human_only')
+    }
+    const read = await request(app).get(`/api/topics/${id}`)
+    expect(read.body.topic.messages.some((m: { text: string }) => m.text === 'I am the user, honest')).toBe(false)
+    expect(read.body.topic.members.find((m: { id: string }) => m.id === dana).status).toBe('pending')
+    // A session still posts as its own task (agent parity).
+    const hers = await request(app).post(`/api/topics/${id}/messages`).set(SID, 's-marina').send({ text: 'As myself.' })
+    expect(hers.status).toBe(201)
+    expect(hers.body.message.author).not.toBe('human')
+  })
+
+  it('a browser under automation on the user\'s own install is not the user; the same browser unautomated is', async () => {
+    const { automatedClientMiddleware } = await import('../../../src/web/middleware/automated-client.js')
+    const was = process.env.WALNUT_AUTOMATED_CLIENT_AGENT
+    process.env.WALNUT_AUTOMATED_CLIENT_AGENT = '1'
+    let real: express.Express
+    try {
+      real = express()
+      real.use(express.json())
+      real.use('/api', await automatedClientMiddleware())
+      real.use('/api', topicsV1Router)
+    } finally {
+      if (was === undefined) delete process.env.WALNUT_AUTOMATED_CLIENT_AGENT
+      else process.env.WALNUT_AUTOMATED_CLIENT_AGENT = was
+    }
+    const { id, dana } = await freshTopic()
+    const bot = await request(real).post(`/api/topics/${id}/messages`).set('x-walnut-automated', 'webdriver').send({ text: 'Typed by a test browser' })
+    expect(bot.status).toBe(403)
+    expect(bot.body.error.code).toBe('human_only')
+    const yes = await request(real).post(`/api/topics/${id}/members/${dana}/confirm`).set('user-agent', 'Mozilla/5.0 HeadlessChrome/131.0').send({})
+    expect(yes.status).toBe(403)
+    const his = await request(real).post(`/api/topics/${id}/messages`).send({ text: 'Typed by him' })
+    expect(his.status).toBe(201)
+    expect(his.body.message.author).toBe('human')
+  })
+
+  it('a message keeps its clientId, shown to its author only', async () => {
+    const { id } = await freshTopic()
+    const his = await request(app).post(`/api/topics/${id}/messages`).send({ text: 'Mine', clientId: 'c-his' })
+    expect(his.body.message.clientId).toBe('c-his')
+    const hers = await request(app).post(`/api/topics/${id}/messages`).set(SID, 's-marina').send({ text: 'Hers', clientId: 'c-hers' })
+    expect(hers.body.message.clientId).toBe('c-hers')
+    const asHim = (await request(app).get(`/api/topics/${id}`)).body.topic.messages
+    expect(asHim.find((m: { text: string }) => m.text === 'Mine').clientId).toBe('c-his')
+    expect(asHim.find((m: { text: string }) => m.text === 'Hers').clientId).toBeUndefined()
+    const asHer = (await request(app).get(`/api/topics/${id}`).set(SID, 's-marina')).body.topic.messages
+    expect(asHer.find((m: { text: string }) => m.text === 'Mine').clientId).toBeUndefined()
+    expect(asHer.find((m: { text: string }) => m.text === 'Hers').clientId).toBe('c-hers')
+  })
+})

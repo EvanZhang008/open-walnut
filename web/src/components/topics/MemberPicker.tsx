@@ -2,10 +2,11 @@
  * Picking a topic's members: the ones picked as chips (★ makes one the host, × takes it off), a
  * search over the CEO, the VPs and the open tasks (member-candidates.ts), and "Add a person by
  * email" for someone outside Walnut, or their bot. Used by the New topic dialog and by Add in a
- * topic's side panel.
+ * topic's side panel. The search's Enter and the person's Add wait for words still being dictated.
  */
-import { useMemo, useState } from 'react';
-import { MicInput } from '@/components/common/BoxMic';
+import { useMemo, useRef, useState } from 'react';
+import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import type { PickedMember } from './topic-dialogs';
 import { useMemberCandidates } from './member-candidates';
 import { isEmail, rankByName, refKey } from './topic-model';
@@ -40,6 +41,12 @@ export function MemberPicker({ picked, onChange, host, onHost, exclude, autoFocu
     add({ ref: { kind: 'person', name: person.name.trim(), email: person.email.trim(), ...(person.bot ? { bot: true } : {}) }, name: person.name.trim() });
     setPerson(null);
   };
+  // Enter picks the first row, and Add adds the person, once the words being dictated are in.
+  const searchMic = useRef<BoxMicHandle | null>(null);
+  const nameMic = useRef<BoxMicHandle | null>(null);
+  const pickFirst = useSendAfterDictation([searchMic], () => void addFirst());
+  const personGate = useSendAfterDictation([nameMic], () => void addPerson());
+  function addFirst() { if (rows[0]) add(rows[0]); }
 
   return (
     <div className="topic-picker" data-testid="topic-member-picker">
@@ -68,7 +75,8 @@ export function MemberPicker({ picked, onChange, host, onHost, exclude, autoFocu
         aria-label="Search members to add"
         data-testid="topic-member-search"
         autoFocus={autoFocus}
-        onEnter={() => { if (rows[0]) add(rows[0]); }}
+        micRef={searchMic}
+        onEnter={pickFirst.send}
       />
       {rows.length > 0 && (
         <ul className="topic-candidates" role="listbox" aria-label="Members to add" data-testid="topic-candidates">
@@ -86,16 +94,16 @@ export function MemberPicker({ picked, onChange, host, onHost, exclude, autoFocu
       {query.trim() && rows.length === 0 && <p className="topic-muted">No task or VP matches “{query.trim()}”.</p>}
       {person ? (
         <div className="topic-person" data-testid="topic-person-form">
-          <MicInput data-no-draft="picker" className="app-modal-input" placeholder="Name" aria-label="Their name" data-testid="topic-person-name" value={person.name} setText={(name) => setPerson((p) => (p ? { ...p, name } : p))} />
+          <MicInput data-no-draft="picker" className="app-modal-input" placeholder="Name" aria-label="Their name" data-testid="topic-person-name" value={person.name} micRef={nameMic} setText={(name) => setPerson((p) => (p ? { ...p, name } : p))} />
           <input data-no-draft="picker" className="app-modal-input" type="email" placeholder="name@example.com" aria-label="Their email" data-testid="topic-person-email" value={person.email}
-            onChange={(e) => setPerson({ ...person, email: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addPerson(); } }} />
+            onChange={(e) => setPerson({ ...person, email: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); personGate.send(); } }} />
           <label className="topic-person-bot">
             <input type="checkbox" data-testid="topic-person-bot" checked={person.bot} onChange={(e) => setPerson({ ...person, bot: e.target.checked })} />
             It is a bot
           </label>
           <span className="topic-person-actions">
             <button type="button" className="app-modal-btn" onClick={() => setPerson(null)}>Cancel</button>
-            <button type="button" className="app-modal-btn primary" data-testid="topic-person-add" disabled={!personOk} onClick={addPerson}>Add</button>
+            <button type="button" className="app-modal-btn primary" data-testid="topic-person-add" disabled={!personOk && !personGate.micBusy && !personGate.waiting} onClick={personGate.send} {...dictationWaitProps(personGate)}>Add</button>
           </span>
           <p className="topic-muted">They get the topic by email and can reply to it. Nothing is mailed until you send a message.</p>
         </div>

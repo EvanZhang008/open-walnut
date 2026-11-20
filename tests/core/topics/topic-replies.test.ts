@@ -40,14 +40,14 @@ describe('a topic reply is only the words of the turn its own wake opened', () =
 
   it('wake, another task\'s note, then a reply: nothing is posted', () => {
     expect(replyFromRows([user(wake(A), 1), user(note, 2), said('Here is the plan for Orchard: ...', 3)], SINCE, A))
-      .toEqual({ text: '', spoke: true })
+      .toEqual({ text: '', spoke: true, busy: true })
   })
 
   it('a wake batched with a person\'s words, or delivered into a running turn: nothing is posted', () => {
     expect(replyFromRows([user(`${wake(A)}\n\nAlso, fix the login page.`, 1), said('Done with the login page.', 2)], SINCE, A))
-      .toEqual({ text: '', spoke: true })
+      .toEqual({ text: '', spoke: true, busy: true })
     expect(replyFromRows([said('Building.', 1), tool(2), user(wake(A), 3), said('Build is green.', 4)], SINCE, A))
-      .toEqual({ text: '', spoke: true })
+      .toEqual({ text: '', spoke: true, busy: true })
   })
 
   it('two topics\' wakes in one session: each topic gets only its own reply', () => {
@@ -63,7 +63,7 @@ describe('a topic reply is only the words of the turn its own wake opened', () =
     expect(replyFromRows([{ ...user(wake(A), 0), timestamp: '2026-11-20T09:00:00.000Z' }, said('Old words.', 1)], SINCE, A)).toEqual({ text: '', spoke: false })
   })
 
-  it('the agent-ack line alone posts nothing and ends the wait', () => {
+  it('the agent-ack line alone posts nothing and ends the wait (not a busy turn: nothing is said about it)', () => {
     expect(replyFromRows([user(wake(A), 1), said('Checking.', 2), tool(3), said('<walnut-turn status="agent-ack"/>', 4)], SINCE, A))
       .toEqual({ text: '', spoke: true })
   })

@@ -9,7 +9,11 @@
  * bridge's own (the previous mail it sent to that person), shape-checked like any reply's.
  *
  * Receiving is a tap on the poll's arrival capture: the same arrivals the router intake reads,
- * handed over as a lazy loader that reads the cache only when a bridge is listening.
+ * handed over as a lazy loader that reads the cache only when a bridge is listening. Each arrival
+ * carries its `Precedence` / `Auto-Submitted` from the cached envelope, so the bridge can drop an
+ * automatic reply. A reply the bridge takes (posts in a topic) never reaches the router intake and
+ * is not announced as new mail: it was delivered twice before, in the topic and minutes later to a
+ * member task by the Mail router (review 2026-11-20).
  */
 import type { MailApprovals } from './approvals.js'
 import type { MailIncomingCapture, SendDto } from './contract.js'
@@ -17,6 +21,7 @@ import type { MailDrafts } from './drafts.js'
 import type { MailSends } from './sends.js'
 import type { MailService } from './service.js'
 import type { MailStore } from './store.js'
+import type { MessagePayload } from './service-dto.js'
 import { plainTextOf } from '../../lib/message-text.js'
 import { canonicalMessageId } from '../../core/topics/topic-mail-text.js'
 import {
@@ -100,11 +105,22 @@ export function createTopicMailTransport(deps: {
   }
 }
 
+/** The cached `bulkHeaders`, only its two string fields (a hand-edited or older blob carries anything). */
+function bulkHeadersOf(raw: unknown): TopicMailIncoming['bulkHeaders'] | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const { precedence, autoSubmitted } = raw as Record<string, unknown>
+  const out = {
+    ...(typeof precedence === 'string' && precedence ? { precedence } : {}),
+    ...(typeof autoSubmitted === 'string' && autoSubmitted ? { autoSubmitted } : {}),
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
 async function incomingOf(store: Pick<MailStore, 'messagesByIds'>, accountId: string, ids: string[]): Promise<TopicMailIncoming[]> {
   const out: TopicMailIncoming[] = []
   for (let at = 0; at < ids.length; at += BATCH) {
     for (const row of await store.messagesByIds(accountId, ids.slice(at, at + BATCH))) {
-      let payload: { from?: { address?: string }; inReplyTo?: string; references?: string[] } = {}
+      let payload: Pick<MessagePayload, 'from' | 'inReplyTo' | 'references' | 'bulkHeaders'> = {}
       try { payload = row.payload ? JSON.parse(row.payload) : {} } catch { /* an unreadable blob: headers only */ }
       out.push({
         accountId,
@@ -114,28 +130,31 @@ async function incomingOf(store: Pick<MailStore, 'messagesByIds'>, accountId: st
         subject: row.subject,
         ...(payload.inReplyTo ? { inReplyTo: payload.inReplyTo } : {}),
         references: Array.isArray(payload.references) ? payload.references.filter((one) => typeof one === 'string') : [],
+        ...(bulkHeadersOf(payload.bulkHeaders) ? { bulkHeaders: bulkHeadersOf(payload.bulkHeaders)! } : {}),
       })
     }
   }
   return out
 }
 
-/** The poll's arrival capture, with the topics bridge told first. The capture itself is unchanged. */
+/** The poll's arrival capture, with the topics bridge told first; what the bridge takes is left out of it. */
 export function tapTopicMailArrivals(
   capture: MailIncomingCapture,
   store: Pick<MailStore, 'messagesByIds'>,
   log?: { warn(message: string, meta?: Record<string, unknown>): void },
 ): MailIncomingCapture {
-  return (accountId, headlines, opts) => {
-    if (topicMailListening()) {
-      const ids = [...new Set(headlines.flatMap((one) => (one.messageId ? [one.messageId] : [])))]
-      if (ids.length > 0) {
-        topicMailArrivals(accountId, () => incomingOf(store, accountId, ids).catch((error) => {
-          log?.warn('topic mail could not read the new arrivals', { accountId, error: reason(error) })
-          return []
-        }))
-      }
-    }
-    return capture(accountId, headlines, opts)
+  return async (accountId, headlines, opts) => {
+    if (!topicMailListening()) return capture(accountId, headlines, opts)
+    const ids = [...new Set(headlines.flatMap((one) => (one.messageId ? [one.messageId] : [])))]
+    if (ids.length === 0) return capture(accountId, headlines, opts)
+    const taken = await topicMailArrivals(accountId, () => incomingOf(store, accountId, ids).catch((error) => {
+      log?.warn('topic mail could not read the new arrivals', { accountId, error: reason(error) })
+      return []
+    }))
+    if (taken.size === 0) return capture(accountId, headlines, opts)
+    const rest = headlines.filter((one) => !one.messageId || !taken.has(one.messageId))
+    const finish = await capture(accountId, rest, opts)
+    // "Keep the ingested ones" (void) would announce the taken replies too: name the rest instead.
+    return async () => (await finish()) ?? rest
   }
 }

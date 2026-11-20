@@ -2,7 +2,8 @@
  * The Org list's Topics (experiment `topics`): a heading with "+ New topic", then one row per open
  * topic, newest first: its members' stacked avatars, its title, when it last moved, and its last
  * line ("Name: words"). A click selects it like a node (`topic:<id>`), and the page shows its chat
- * (TopicChat). Inside the list's listbox it is a group of options, like the Routers.
+ * (TopicChat). Inside the list's listbox it is a group of options, like the Routers. The rows come
+ * from useOrgTopicRows, which the list also reads, so Up and Down walk them in the order drawn.
  */
 import { shortAgo } from '@/components/org/OrgChannelList';
 import type { TopicSummary } from '@/api/topics';
@@ -17,17 +18,25 @@ function matches(t: TopicSummary, words: string[]): boolean {
   return words.every((w) => hay.includes(w));
 }
 
-export function OrgTopicsSection({ selectedKey, query, now, onSelect }: {
+export interface OrgTopicRows { on: boolean; rows: TopicSummary[]; error: string | null }
+
+/** The open topics the Org list shows for `query`, newest first (none while the experiment is off). */
+export function useOrgTopicRows(query: string): OrgTopicRows {
+  const on = useTopicsOn();
+  const { list, error } = useTopicList(on);
+  if (!on) return { on, rows: [], error: null };
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  return { on, rows: openTopics(list ?? []).filter((t) => matches(t, words)), error };
+}
+
+export function OrgTopicsSection({ topics, selectedKey, now, onSelect }: {
+  topics: OrgTopicRows;
   selectedKey: string | null;
-  query: string;
   now: number;
   onSelect: (key: string) => void;
 }) {
-  const on = useTopicsOn();
-  const { list, error } = useTopicList(on);
+  const { on, rows, error } = topics;
   if (!on) return null;
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  const rows = openTopics(list ?? []).filter((t) => matches(t, words));
   return (
     <div className="org-topics" role="group" aria-label="Topics" data-testid="org-topics" data-count={rows.length}>
       <div className="org-list-section org-topics-head" role="presentation" data-testid="org-topics-head">
@@ -47,6 +56,7 @@ export function OrgTopicsSection({ selectedKey, query, now, onSelect }: {
               aria-selected={selected}
               className={`org-channel is-topic${selected ? ' is-selected' : ''}`}
               data-testid="org-topic"
+              data-peek-row=""
               data-key={key}
               data-topic-id={t.id}
               title={t.title}

@@ -58,6 +58,12 @@ export interface TopicMailIncoming {
   subject: string
   inReplyTo?: string
   references: string[]
+  /**
+   * `Precedence` / `Auto-Submitted` as the provider's listing carried them (lowercased; an older
+   * responder's `X-Autoreply` reads as `autoSubmitted: auto-replied`). An automatic mail is never
+   * posted (topic-mail-inbound.ts).
+   */
+  bulkHeaders?: { precedence?: string; autoSubmitted?: string }
 }
 
 export interface TopicMailTransport {
@@ -71,7 +77,8 @@ export interface TopicMailTransport {
   bodyText(accountId: string, messageId: string): Promise<string>
 }
 
-export type TopicMailArrivalListener = (accountId: string, load: () => Promise<TopicMailIncoming[]>) => void
+/** Answers the cache ids of the arrivals it takes (a reply posted in a topic): the plugin's router never sees those. */
+export type TopicMailArrivalListener = (accountId: string, load: () => Promise<TopicMailIncoming[]>) => Promise<readonly string[]> | void
 
 let transport: TopicMailTransport | null = null
 const listeners = new Set<TopicMailArrivalListener>()
@@ -97,9 +104,30 @@ export function topicMailListening(): boolean {
   return listeners.size > 0
 }
 
-/** Called by the mail plugin for each poll's new arrivals. Never throws, never blocks the poll. */
-export function topicMailArrivals(accountId: string, load: () => Promise<TopicMailIncoming[]>): void {
+/** How long the poll waits for the bridge's claims (state and topic reads only, no network). */
+export const TOPIC_MAIL_CLAIM_WAIT_MS = 15_000
+
+/**
+ * Called by the mail plugin for each poll's new arrivals; resolves to the cache ids the listeners
+ * took. Never throws: a listener that fails or takes longer than `waitMs` takes nothing (the mail
+ * then goes to the router as before: a reply seen twice beats a reply lost).
+ */
+export async function topicMailArrivals(accountId: string, load: () => Promise<TopicMailIncoming[]>, waitMs = TOPIC_MAIL_CLAIM_WAIT_MS): Promise<Set<string>> {
+  const claims: Array<Promise<readonly string[]>> = []
   for (const listener of listeners) {
-    try { listener(accountId, load) } catch { /* a listener reports its own failures */ }
+    try {
+      const answer = listener(accountId, load)
+      if (answer) claims.push(Promise.resolve(answer).catch(() => []))
+    } catch { /* a listener reports its own failures */ }
   }
+  const taken = new Set<string>()
+  if (claims.length === 0) return taken
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<readonly string[]>((resolve) => { timer = setTimeout(() => resolve([]), waitMs); timer.unref?.() })
+  try {
+    for (const ids of await Promise.all(claims.map((one) => Promise.race([one, late])))) for (const id of ids) taken.add(id)
+  } finally {
+    clearTimeout(timer)
+  }
+  return taken
 }

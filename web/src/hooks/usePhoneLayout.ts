@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import { mediaQuerySubscribe } from './useMediaQuery';
 
 /**
  * The phone layout: one surface at a time. The task panel is the home screen,
@@ -10,13 +11,6 @@ import { useSyncExternalStore } from 'react';
  * tests/web/phone-media-query-ratchet.test.ts keeps them the same.
  */
 export const PHONE_LAYOUT_QUERY = '(max-width: 768px), (pointer: coarse) and (max-height: 500px)';
-
-function subscribe(onChange: () => void): () => void {
-  if (typeof window === 'undefined' || !window.matchMedia) return () => {};
-  const media = window.matchMedia(PHONE_LAYOUT_QUERY);
-  media.addEventListener('change', onChange);
-  return () => media.removeEventListener('change', onChange);
-}
 
 /**
  * A narrow page that is no phone: the browser extension's side panel and popup frame Walnut at
@@ -35,7 +29,7 @@ export function isPhoneLayout(): boolean {
 
 /** True while the window is phone width; re-renders when it crosses the line. */
 export function usePhoneLayout(): boolean {
-  return useSyncExternalStore(subscribe, isPhoneLayout, () => false);
+  return useSyncExternalStore(mediaQuerySubscribe(PHONE_LAYOUT_QUERY), isPhoneLayout, () => false);
 }
 
 /** The Home strip this window keeps (layout-record.ts): a phone has its own, so a phone showing one

@@ -5,7 +5,8 @@
  * when something waits on the user, how many. Up and Down move the selection. While the
  * pointer is over the list the rows keep their order, so a click lands on the row aimed at.
  * After the VPs, the Routers (OrgRouterSection): router nodes, which are neither VPs nor tasks under one
- * (2026-11-10, the person: "router should be placed below all VPs").
+ * (2026-11-10, the person: "router should be placed below all VPs"); then, with the `topics`
+ * experiment on, the open topics (OrgTopicsSection), which Up and Down reach too.
  * A project another VP took over has no row of its own: it sits in "Archived" at
  * the bottom (folded), saying which VP has it now; a click opens that VP. A right-click on any
  * row opens Walnut's own menu of what that row can do (the page builds it: OrgPage rowMenu).
@@ -33,7 +34,8 @@ import { useOpenTask } from '@/hooks/useOpenTask';
 import { OrgEditableName } from './OrgEditableName';
 import { NodeAvatar, OrgAvatar } from './OrgAvatar';
 import { OrgRouterSection } from './OrgRouterSection';
-import { OrgTopicsSection } from '@/components/topics/OrgTopicsSection';
+import { OrgTopicsSection, useOrgTopicRows } from '@/components/topics/OrgTopicsSection';
+import { topicKey } from '@/components/topics/topic-model';
 import { OrgReorgReminder } from './OrgReorgReminder';
 import { OrgSettingsMenu } from './OrgSettingsMenu';
 import { useOrgSettings } from './useOrgSettings';
@@ -262,8 +264,9 @@ export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, 
   // click meant for another. The new order shows once the pointer leaves.
   const hold = usePointerHold(rows);
   const shown = hold.shown;
-  // Up and Down walk the CEO, the VPs, then the routers, in the order they are drawn.
-  const keys = [main.key, ...shown.map((r) => r.key), ...routers.map((r) => r.key)];
+  // Up and Down walk the CEO, the VPs, the routers, then the open topics, in the order they are drawn.
+  const topics = useOrgTopicRows(query);
+  const keys = [main.key, ...shown.map((r) => r.key), ...routers.map((r) => r.key), ...topics.rows.map((t) => topicKey(t.id))];
   const keptUnder = (r: ChannelRow) => (keptOf && onUnwatch
     ? <KeptChildren row={r} kept={keptOf(r)} open={openTaskIds} onUnwatch={onUnwatch} {...(onToggleLock ? { onToggleLock } : {})} />
     : null);
@@ -334,7 +337,7 @@ export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, 
         {directors && sections && <OrgDirectorSection vps={shown} groupsOf={directors.groupsOf} projectsOf={directors.projectsOf} query={query} openTaskIds={openTaskIds} />}
         {/* Routers sit below every VP (2026-11-10, the person), above the folded Archived. */}
         <OrgRouterSection rows={routers} selectedKey={selectedKey} now={now} onSelect={onSelect} onMenu={routerMenu ? onMenu : undefined} />
-        <OrgTopicsSection selectedKey={selectedKey} query={query} now={now} onSelect={onSelect} />
+        <OrgTopicsSection topics={topics} selectedKey={selectedKey} now={now} onSelect={onSelect} />
         <MovedSection moved={moved} query={query} onSelect={onSelect} onMenu={onMenu} />
       </div>
       {total === 0 && <p className="org-empty-note" data-testid="org-empty">No open work yet. Ask the CEO to start something.</p>}

@@ -4,17 +4,13 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  bareAddress, canonicalMessageId, MAX_INBOUND_CHARS, stripQuotedReply, topicIdFromSubject, topicMailSubject,
+  bareAddress, canonicalMessageId, MAX_INBOUND_CHARS, stripQuotedReply, topicMailSubject,
 } from '../../../src/core/topics/topic-mail-text.js'
 
 describe('subject token', () => {
-  it('builds and reads "<title> [topic tp-...]", through Re:/Fwd: and case changes', () => {
+  it('builds "<title> [topic tp-...]" (a reply is matched by its References, never by the subject)', () => {
     expect(topicMailSubject('Launch plan', 'tp-0123456789ab')).toBe('Launch plan [topic tp-0123456789ab]')
     expect(topicMailSubject('Two\nlines', 'tp-0123456789ab')).toBe('Two lines [topic tp-0123456789ab]')
-    expect(topicIdFromSubject('Re: Launch plan [topic tp-0123456789ab]')).toBe('tp-0123456789ab')
-    expect(topicIdFromSubject('RE: FW: Launch plan [Topic TP-0123456789AB]')).toBe('tp-0123456789ab')
-    expect(topicIdFromSubject('Launch plan')).toBeUndefined()
-    expect(topicIdFromSubject('[topic tp-]')).toBeUndefined()
   })
 })
 

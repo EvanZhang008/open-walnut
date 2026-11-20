@@ -21,8 +21,9 @@ import { patchThread, readThreads } from '../../../src/core/org/threads-store.js
 import { listedForHim } from '../../../src/core/org/thread-view.js'
 import { _setTopicSendForTesting, ORG_OFF_WHY } from '../../../src/core/topics/topic-delivery.js'
 import { _clearHeldNotices } from '../../../src/core/sessions/held-notices.js'
-import { createTopic, postMessage } from '../../../src/core/topics/topic-post.js'
-import { readTopic } from '../../../src/core/topics/topics-store.js'
+import { changeMembers, createTopic, postMessage } from '../../../src/core/topics/topic-post.js'
+import { topicRules } from '../../../src/core/topics/topic-text.js'
+import { mutateTopic, readTopic } from '../../../src/core/topics/topics-store.js'
 import type { Topic } from '../../../src/core/topics/topics-model.js'
 
 const sent: string[] = []
@@ -93,10 +94,54 @@ describe('the org switched off', () => {
   })
 
   it('with the org on, the same member\'s message wakes Main', async () => {
+    // The turn the user's message woke has ended (else this wake waits for it: one turn at a time).
+    await mutateTopic(topic.id, (one) => { for (const m of one.members) delete m.pendingTurn })
     const t = (await readTopic(topic.id))!
     sent.length = 0
     const hers = await postMessage(topic.id, { author: member(t, 'Marina').id, text: '@CEO the venue sent the contract.', via: 'agent' })
     expect(hers.delivery.wake).toEqual([member(t, 'CEO').id])
     expect(sent).toEqual(['s-main'])
+  })
+})
+
+describe('one task is one member (L3)', () => {
+  it('adding Main\'s own task to a topic Main is in is refused, naming the member it already is', async () => {
+    await expect(changeMembers(topic.id, { add: [{ kind: 'task', taskId: ids.main }] }, 'human'))
+      .rejects.toMatchObject({ code: 'already_member', status: 409, message: expect.stringContaining('@CEO') })
+    await expect(createTopic({ title: 'Twice', members: [{ kind: 'org', node: 'main' }, { kind: 'task', taskId: ids.main }], by: 'human' }))
+      .rejects.toMatchObject({ code: 'already_member' })
+    expect((await readTopic(topic.id))!.members.filter((m) => m.status !== 'left')).toHaveLength(2)
+  })
+})
+
+describe('the host and its thread (L2)', () => {
+  it('the host is removed only with a new host named; the thread moves to the new host\'s Threads', async () => {
+    const t = (await createTopic({ title: 'Catering', members: [{ kind: 'org', node: 'main' }, { kind: 'task', taskId: ids.marina }], by: 'human' })).topic
+    const ceo = member(t, 'CEO')
+    const marina = member(t, 'Marina')
+    expect(ceo.role).toBe('host')
+    expect(t.thread?.node).toBe(ids.main)
+    await expect(changeMembers(t.id, { remove: [ceo.id] }, 'human')).rejects.toMatchObject({ code: 'host_required', status: 409 })
+    expect(member((await readTopic(t.id))!, 'CEO').status).toBe('active')
+
+    // Marina keeps Threads (turned on for her): the thread goes there with the host.
+    await updateTaskRaw(ids.marina, { threads_on: true } as never)
+    const after = await changeMembers(t.id, { remove: [ceo.id], host: marina.id }, 'human')
+    expect(member(after, 'Marina').role).toBe('host')
+    expect(member(after, 'CEO')).toMatchObject({ status: 'left', role: 'member' })
+    expect(after.thread?.node).toBe(ids.marina)
+    expect((await readThreads(ids.marina)).threads.some((x) => x.id === after.thread!.threadId && !x.closed)).toBe(true)
+    // Off Main's open Threads: closed there, pointing at Marina (or only a pointer left).
+    const left = (await readThreads(ids.main)).threads.find((x) => x.id === t.thread!.threadId)
+    expect(!left || !!left.closed || !!left.movedTo).toBe(true)
+    expect(after.messages.at(-1)?.text).toContain('@Marina hosts the topic now')
+  })
+
+  it('the closing wake tells the host to set its thread to answered with the conclusion', async () => {
+    const t = (await readTopic(topic.id))!
+    const host = t.members.find((m) => m.role === 'host')!
+    const rules = topicRules(t, host, true).join('\n')
+    expect(rules).toContain(`set its thread ${t.thread!.threadId} to answered with the topic's conclusion`)
+    expect(topicRules(t, member(t, 'Marina'), true).join('\n')).not.toContain('to answered')
   })
 })

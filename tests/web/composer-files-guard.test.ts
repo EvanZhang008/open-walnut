@@ -19,6 +19,7 @@ const PICTURES_ONLY: Record<string, string> = {
   'components/sessions/SideQuestionDrawer.tsx': 'a side question starts its own thread through the side-thread route, which takes pictures inline',
   'components/tasks/AgentSearchFollowUp.tsx': 'a follow-up to one search answer, a short question about rows already shown',
   'components/notes/NotesSessionChat.tsx': 'the notes page chat keeps sends locally until its session exists, and that queue holds pictures only',
+  'components/topics/TopicComposer.tsx': "a topic line is text only: it goes to several members' turns and out by mail, and keeps no file",
 }
 
 function walk(dir: string, out: string[] = []): string[] {

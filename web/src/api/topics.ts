@@ -7,7 +7,7 @@
  *   POST /api/topics                          { title, members, host?, text?, clientId? } -> { topic }
  *   GET  /api/topics/:id?since=<tpm id>       { topic }
  *   POST /api/topics/:id/messages             { text, mentions?, clientId? } -> { message, delivery }
- *   POST /api/topics/:id/members              { add?, remove? } -> { topic }
+ *   POST /api/topics/:id/members              { add?, remove?, host? } -> { topic }   (removing the host names the new one)
  *   POST /api/topics/:id/members/:mid/confirm -> { topic }
  *   POST /api/topics/:id/close                -> { topic }
  *   GET  /api/topics/mail-accounts            { accounts: TopicMailAccount[], available }
@@ -47,8 +47,12 @@ export interface TopicMessage {
   via: 'ui' | 'agent' | 'mail' | 'system';
   woke?: string[];
   folded?: string[];
+  /** The person members it is to be mailed to; `mailed` holds the ones the mail really went to. */
+  toMail?: string[];
   mailed?: string[];
   refused?: Array<{ member: string; why: string }>;
+  /** The clientId its POST carried, returned only to its author: the browser matches its own copy by it. */
+  clientId?: string;
 }
 
 export interface TopicThreadLink { node: string; threadId: string }
@@ -92,7 +96,7 @@ export interface TopicDelivery {
 const base = '/api/topics';
 const one = (id: string) => `${base}/${encodeURIComponent(id)}`;
 
-/** A fresh id for one send, so a retry of the same POST is answered with the first result. */
+/** A fresh id for one send, so a retry of the same POST is answered with the first result (useTopics keeps it with a failed send's words). */
 export function newClientId(): string {
   const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
   return c?.randomUUID ? c.randomUUID() : `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -134,7 +138,7 @@ export async function postTopicMessage(id: string, text: string, opts: { mention
   });
 }
 
-export async function editTopicMembers(id: string, change: { add?: MemberRef[]; remove?: string[] }): Promise<Topic> {
+export async function editTopicMembers(id: string, change: { add?: MemberRef[]; remove?: string[]; host?: MemberId }): Promise<Topic> {
   const res = await apiPost<{ topic: Topic }>(`${one(id)}/members`, change);
   return res.topic;
 }

@@ -4,7 +4,8 @@
  * org node picked, else the first task, as the server's own default; ★ on a chip moves it. The
  * title and the first message are kept as drafts until the topic is made. With a person picked,
  * "Email from" picks the mailbox they are emailed from, and Create first asks the user's yes to
- * Walnut emailing them (from that mailbox, or none chosen yet: nothing is sent).
+ * Walnut emailing them (from that mailbox, or none chosen yet: nothing is sent). Create waits for a
+ * title or first message still being dictated (useSendAfterDictation), then makes the topic.
  */
 import { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -13,7 +14,8 @@ import { useConfirm } from '@/hooks/useConfirm';
 import { ModalOverlayOwner, useModalOverlay } from '@/hooks/useModalOverlay';
 import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
-import { MicField, MicInput } from '@/components/common/BoxMic';
+import { MicField, MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { log } from '@/utils/log';
 import type { PickedMember } from './topic-dialogs';
 import { MemberPicker } from './MemberPicker';
@@ -31,6 +33,8 @@ export function NewTopicDialog({ initial, onClose, onMade }: {
   const title = useDraft(draftKey('topic-new', 'title'));
   const first = useDraft(draftKey('topic-new', 'text'));
   const firstBox = useRef<HTMLTextAreaElement>(null);
+  const titleMic = useRef<BoxMicHandle | null>(null);
+  const firstMic = useRef<BoxMicHandle | null>(null);
   const [picked, setPicked] = useState<PickedMember[]>(initial);
   const [host, setHost] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
@@ -81,6 +85,9 @@ export function NewTopicDialog({ initial, onClose, onMade }: {
     }
   };
 
+  // Create waits for words still being dictated into the title or the first message.
+  const gate = useSendAfterDictation([titleMic, firstMic], () => void create());
+
   return createPortal(
     <ModalOverlayOwner.Provider value={modalOwner}>
       <div className="app-modal-overlay" role="dialog" aria-modal="true" aria-label="New topic" data-testid="topic-new-dialog" onMouseDown={onClose}>
@@ -95,6 +102,7 @@ export function NewTopicDialog({ initial, onClose, onMade }: {
             value={title.text}
             setText={title.setText}
             target={title.key}
+            micRef={titleMic}
             placeholder="What it is about"
             data-testid="topic-new-title"
             autoFocus
@@ -108,7 +116,7 @@ export function NewTopicDialog({ initial, onClose, onMade }: {
           />
           {emails.length > 0 && <TopicMailFrom value={mailFrom} onPick={setMailFrom} />}
           <label className="topic-field-label" htmlFor="topic-new-text">First message (optional)</label>
-          <MicField boxRef={firstBox} text={first.text} setText={first.setText} target={first.key}>
+          <MicField boxRef={firstBox} text={first.text} setText={first.setText} target={first.key} handleRef={firstMic}>
             <textarea
               ref={firstBox}
               id="topic-new-text"
@@ -124,7 +132,7 @@ export function NewTopicDialog({ initial, onClose, onMade }: {
           {error && <p className="topic-error" data-testid="topic-new-error">{error}</p>}
           <div className="app-modal-actions">
             <button type="button" className="app-modal-btn" onClick={onClose}>Cancel</button>
-            <button type="button" className="app-modal-btn primary" data-testid="topic-new-create" disabled={!ready} onClick={() => void create()}>
+            <button type="button" className="app-modal-btn primary" data-testid="topic-new-create" disabled={!ready && !gate.micBusy && !gate.waiting} onClick={gate.send} {...dictationWaitProps(gate)}>
               {busy ? 'Creating…' : 'Create topic'}
             </button>
           </div>

@@ -668,8 +668,17 @@ export function avatarColor(name: string): string {
   return PALETTE[h % PALETTE.length]!;
 }
 
+/** The words of a name, letters and digits only: "-", "_", "." and other punctuation split them (an apostrophe joins). */
+const nameWords = (s: string): string[] => s.replace(/['\u2019]/g, '').split(/[^\p{L}\p{N}\p{M}]+/u).filter(Boolean);
+
+/**
+ * The avatar letters of a name (the Org tiles, a topic's members): the first two of one word, else
+ * the first of the first two words. A parenthesised or bracketed part is a note, not the name, so
+ * "Robin (test)" reads as "Robin" does; punctuation is never a letter (2026-11-20: "R(").
+ */
 export function initials(name: string): string {
-  const words = name.replace(/[-_.]+/g, ' ').split(/\s+/).filter(Boolean);
+  const bare = nameWords(name.replace(/[([{][^)\]}]*[)\]}]/g, ' '));
+  const words = bare.length ? bare : nameWords(name);
   if (!words.length) return '?';
   const first = Array.from(words[0]!);
   if (words.length === 1) return first.slice(0, 2).join('').toUpperCase();

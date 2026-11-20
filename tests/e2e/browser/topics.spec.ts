@@ -5,14 +5,22 @@
  *   - on: "+ New topic" in the list's Topics group opens the dialog; two tasks and the project's VP
  *     are picked (the VP hosts it by default), the topic is made and its chat opens, its row lists it
  *   - a message posted from the composer shows in the chat, on the right, and is stored
- *   - "@" lists the members; Enter picks one, and the stored message names that member
+ *   - "@" lists the members; Enter picks one, and the stored message names that member; a mouse click
+ *     on a row picks one too and closes the list
  *   - a person added by email (a bot) from the side panel joins only through the confirm, which names
  *     the address and the mailbox ("Email from": a fixture account that can send when there is one,
- *     else "no mailbox chosen yet"); Cancel adds no one
+ *     else "once you choose a mailbox"); Cancel adds no one
  *   - a person picked in the New topic dialog is added only through the same confirm
  *   - the Org page keeps the topic as its place: Home and back to Org, and a reload, reopen it
  *   - the VP keeps Threads, so the topic's thread is on the VP's Threads view with the members'
  *     avatars; its "Open topic" opens the chat again
+ *   - a topic stands alone: none of the node pins the page keeps stand beside it (they are there
+ *     again back on the node), the detail pane is named by the topic's title, and Down from the last
+ *     router (or VP) row reaches the first topic row and opens its chat
+ *   - a narrow window (800 px) opens Members as a sheet over the conversation, inside the chat; Esc,
+ *     its ×, the scrim and Members again close it; a wide window keeps the panel beside the chat
+ *   - with a person in the topic, choosing a mailbox asks first, naming them and the mailbox; Cancel
+ *     changes nothing (only with a fixture account that can send)
  * The fixture is shared, so this file makes its own project and tasks and removes what it made.
  */
 import fs from 'node:fs'
@@ -60,7 +68,10 @@ async function sendableAccount(request: APIRequestContext): Promise<MailAccount 
   const body = (await res.json()) as { accounts: MailAccount[] }
   return body.accounts.find((a) => a.canSend) ?? null
 }
-const NO_MAILBOX = 'no mailbox chosen yet: nothing is sent until you choose one'
+/** The yes before a person is added: from the mailbox, or once one is chosen (topic-model personMailConfirm). */
+const addWords = (email: string, account: MailAccount | null) => (account
+  ? `Walnut will email ${email} from ${account.address} with this topic's new messages. Add?`
+  : `Walnut will email ${email} once you choose a mailbox for this topic (nothing is sent until then). Add?`)
 const mailConfirm = (page: Page) => page.locator('[role="dialog"]', { hasText: 'Email from this topic?' })
 
 interface StoredTopic { mail?: { accountId?: string; everyMinutes: number }; id: string; members: Array<{ id: string; name: string; ref: { kind: string; email?: string; bot?: boolean }; status: string; role: string }>; messages: Array<{ id: string; text: string; author: string; mentions: string[] }>; thread?: { node: string; threadId: string } }
@@ -183,6 +194,14 @@ test('on: a topic made from the Org page with two tasks and the VP; a message, a
     return !!alpha && t.messages.some((m) => m.text.endsWith('can you check the copy?') && m.mentions.includes(alpha.id))
   }).toBe(true)
 
+  // A mouse click on a row picks it as Enter does: the list closes and stays closed, the box holds "@Name ".
+  await input.fill('@Bet')
+  await expect(menu).toBeVisible()
+  await menu.locator('[data-testid="topic-mention-row"]', { hasText: `Beta ${STAMP}` }).click()
+  await expect(input).toHaveValue(`@Beta ${STAMP} `)
+  await expect(menu).toHaveCount(0)
+  await input.fill('')
+
   // A person by email, from the side panel: "Email from" shows while one is being added, and the add
   // goes out only through the confirm that names the address and the mailbox.
   const side = chat(page).getByTestId('topic-side')
@@ -216,7 +235,7 @@ test('on: a topic made from the Org page with two tasks and the VP; a message, a
     await expect(menu).toHaveCount(0)
     await expect(side.getByTestId('topic-side-add')).toBeVisible()
   }
-  const asked = `Walnut will email ${email} from ${account ? account.address : NO_MAILBOX} with this topic's new messages. Add?`
+  const asked = addWords(email, account)
   // Cancel: nobody is added and the picked person stays to add.
   await side.getByTestId('topic-side-add-save').click()
   await expect(mailConfirm(page)).toContainText(asked)
@@ -271,7 +290,7 @@ test('a person picked in the New topic dialog joins only through the confirm', a
     await expect(dialog).toBeVisible()
     await expect(dialog.getByTestId('topic-mail-from-button')).toHaveAttribute('data-account-id', account.accountId)
   }
-  const words = `Walnut will email ${email} from ${account ? account.address : NO_MAILBOX} with this topic's new messages. Add?`
+  const words = addWords(email, account)
   const before = ((await (await request.get('/api/topics')).json()) as { topics: Array<{ title: string }> }).topics.length
   await dialog.getByTestId('topic-new-create').click()
   await expect(mailConfirm(page)).toContainText(words)
@@ -319,4 +338,146 @@ test('the topic thread on the VP Threads view wears the members and opens the to
   await expect(chat(page)).toHaveAttribute('data-topic-id', ids.topic)
   await expect(chat(page).getByTestId('topic-title')).toHaveText(`Launch plan ${STAMP}`)
   await expect(list(page).locator(`[data-testid="org-topic"][data-topic-id="${ids.topic}"]`)).toHaveAttribute('aria-selected', 'true')
+})
+
+test('a topic stands alone on the Org page: no node pins beside it, named by its title, reached by the arrows', async ({ page }) => {
+  test.skip(!ids.topic, 'the topic was not made')
+  await page.setViewportSize({ width: 1600, height: 940 })
+  await openOrg(page)
+  // A pin beside every node of the list, so the node the page falls back to (whichever it is) has one.
+  const nodes = await list(page).locator('[data-testid="org-channel-main"], [data-testid="org-channel"]')
+    .evaluateAll((els) => els.map((el) => el.getAttribute('data-key')).filter((k): k is string => !!k))
+  expect(nodes).toContain(NODE)
+  await page.evaluate(({ nodes, id }) => {
+    localStorage.setItem('open-walnut-layout:org-columns', JSON.stringify({ v: 1, value: nodes.map((node) => ({ id: `task:${id}`, locked: true, node })) }))
+  }, { nodes, id: ids.alpha })
+  // Home and back: the page reads its pins again, and the node it shows has its pin beside it.
+  await page.getByRole('link', { name: 'Home', exact: true }).first().click()
+  await expect(page.getByTestId('org-page')).toHaveCount(0)
+  await page.getByTestId('sidebar-org').click()
+  const pinned = page.locator(`[data-testid="org-side-strip"] [data-testid="org-side"][data-target="task:${ids.alpha}"]`)
+  await expect(pinned).toBeVisible({ timeout: 30_000 })
+
+  // The topic: no node's pins beside it, and the pane says which topic it is.
+  const row = list(page).locator(`[data-testid="org-topic"][data-topic-id="${ids.topic}"]`)
+  await row.click()
+  await expect(chat(page)).toHaveAttribute('data-topic-id', ids.topic)
+  await expect(page.getByTestId('org-side-strip')).toHaveCount(0)
+  await expect(page.locator('.org-detail-pane')).toHaveAttribute('aria-label', `Launch plan ${STAMP}`)
+  await shot(page, 'alone')
+  // Back on a node, its pin is there still (the topic rewrote none).
+  await list(page).locator(`[data-testid="org-channel"][data-key="${NODE}"]`).click()
+  await expect(page.getByTestId('org-detail')).toHaveAttribute('data-key', NODE)
+  await expect(pinned).toBeVisible({ timeout: 30_000 })
+  const stored = await page.evaluate(() => localStorage.getItem('open-walnut-layout:org-columns') ?? '')
+  expect(stored).toContain(`"node":"${NODE}"`)
+
+  // Down from the last row before the topics (a router, else a VP) reaches the first topic and opens it.
+  const routers = list(page).getByTestId('org-channel-router')
+  const last = (await routers.count()) > 0 ? routers.last() : list(page).getByTestId('org-channel').last()
+  await last.click()
+  // The pick is drawn first (a key pressed in the same instant reads the row selected before).
+  await expect(last).toHaveAttribute('aria-selected', 'true')
+  await last.press('ArrowDown')
+  const first = list(page).getByTestId('org-topic').first()
+  await expect(first).toBeFocused()
+  await expect(first).toHaveAttribute('aria-selected', 'true')
+  await expect(chat(page)).toHaveAttribute('data-topic-id', (await first.getAttribute('data-topic-id')) ?? 'none')
+})
+
+test('a narrow window opens Members as a sheet over the conversation', async ({ page }) => {
+  test.skip(!ids.topic, 'the topic was not made')
+  await page.setViewportSize({ width: 800, height: 900 })
+  await openOrg(page)
+  await list(page).locator(`[data-testid="org-topic"][data-topic-id="${ids.topic}"]`).click()
+  await expect(chat(page)).toHaveAttribute('data-topic-id', ids.topic)
+  const toggle = chat(page).getByTestId('topic-toggle-side')
+  const side = chat(page).getByTestId('topic-side')
+  const scrim = chat(page).getByTestId('topic-sheet-scrim')
+  // Too narrow to stand beside the chat: hidden until Members is pressed.
+  await expect(side).toHaveCount(0)
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false')
+  await toggle.click()
+  await expect(side).toBeVisible()
+  await expect(side).toHaveClass(/is-sheet/)
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true')
+  await expect(side.getByTestId('topic-sheet-close')).toBeFocused()
+  // Over the messages, inside the chat: never past its edges.
+  const sheetBox = (await side.boundingBox())!
+  const msgBox = (await chat(page).getByTestId('topic-messages').boundingBox())!
+  const chatBox = (await chat(page).boundingBox())!
+  expect(sheetBox.x).toBeLessThan(msgBox.x + msgBox.width)
+  expect(sheetBox.x + sheetBox.width).toBeGreaterThan(msgBox.x)
+  expect(sheetBox.x).toBeGreaterThanOrEqual(chatBox.x - 1)
+  expect(sheetBox.x + sheetBox.width).toBeLessThanOrEqual(chatBox.x + chatBox.width + 1)
+  expect(sheetBox.x + sheetBox.width).toBeLessThanOrEqual(800)
+  await expect(scrim).toBeVisible()
+  await shot(page, 'members-sheet')
+  // Esc closes it and focus goes back to Members.
+  await page.keyboard.press('Escape')
+  await expect(side).toHaveCount(0)
+  await expect(toggle).toBeFocused()
+  // Its ×.
+  await toggle.click()
+  await expect(side).toBeVisible()
+  await side.getByTestId('topic-sheet-close').click()
+  await expect(side).toHaveCount(0)
+  // A click on the scrim beside it.
+  await toggle.click()
+  await expect(side).toBeVisible()
+  await scrim.click({ position: { x: 8, y: 8 } })
+  await expect(side).toHaveCount(0)
+  await expect(scrim).toHaveCount(0)
+  // Members again.
+  await toggle.click()
+  await expect(side).toBeVisible()
+  await toggle.click()
+  await expect(side).toHaveCount(0)
+  // Wide again: the panel stands beside the chat, as the page keeps it.
+  await page.setViewportSize({ width: 1600, height: 940 })
+  await expect(side).toBeVisible()
+  await expect(side).not.toHaveClass(/is-sheet/)
+  await expect(scrim).toHaveCount(0)
+  const wideSide = (await side.boundingBox())!
+  const wideMsgs = (await chat(page).getByTestId('topic-messages').boundingBox())!
+  expect(wideSide.x).toBeGreaterThanOrEqual(wideMsgs.x + wideMsgs.width - 1)
+})
+
+test('with a person in the topic, choosing a mailbox asks first', async ({ page, request }) => {
+  test.skip(!ids.topic, 'the topic was not made')
+  const account = await sendableAccount(request)
+  test.skip(!account, 'no fixture mail account can send')
+  const stored = await readTopic(request, ids.topic)
+  const robin = stored.members.find((m) => m.ref.kind === 'person' && m.status === 'active')
+  expect(robin, 'the first test added a person').toBeTruthy()
+  await page.setViewportSize({ width: 1600, height: 940 })
+  await openOrg(page)
+  await list(page).locator(`[data-testid="org-topic"][data-topic-id="${ids.topic}"]`).click()
+  const side = chat(page).getByTestId('topic-side')
+  const button = side.getByTestId('topic-mail-from-button')
+  const menu = page.getByTestId('topic-mail-from-menu')
+  // No mailbox first: choosing none sends nothing, so it asks nothing.
+  if (stored.mail?.accountId) {
+    await button.click()
+    await menu.getByRole('menuitemradio', { name: 'No mailbox (nothing is emailed)' }).click()
+    await expect(button).toHaveAttribute('data-account-id', '')
+    await expect.poll(async () => (await readTopic(request, ids.topic)).mail?.accountId ?? null).toBeNull()
+  }
+  const words = `Walnut will email ${robin!.ref.email} from ${account!.address} with this topic's new messages. Use it?`
+  const asked = page.locator('[role="dialog"]', { hasText: 'Email from this mailbox?' })
+  // Cancel: the topic keeps no mailbox.
+  await button.click()
+  await menu.getByRole('menuitemradio', { name: account!.address }).click()
+  await expect(asked).toContainText(words)
+  await shot(page, 'mailbox-confirm')
+  await asked.getByRole('button', { name: 'Cancel' }).click()
+  await expect(asked).toHaveCount(0)
+  await expect(button).toHaveAttribute('data-account-id', '')
+  expect((await readTopic(request, ids.topic)).mail?.accountId ?? null).toBeNull()
+  // Use it: the mailbox is the topic's.
+  await button.click()
+  await menu.getByRole('menuitemradio', { name: account!.address }).click()
+  await asked.getByRole('button', { name: 'Use it' }).click()
+  await expect(button).toHaveAttribute('data-account-id', account!.accountId)
+  await expect.poll(async () => (await readTopic(request, ids.topic)).mail?.accountId).toBe(account!.accountId)
 })

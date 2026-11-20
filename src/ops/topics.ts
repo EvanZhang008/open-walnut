@@ -27,7 +27,7 @@ const MEMBER_REF = z.union([
 
 interface Member { id: string; name: string; role: string; status: string }
 interface TopicView { id: string; title: string; members?: Member[]; messages?: unknown[]; closed?: unknown }
-interface Delivery { wake: string[]; fold: string[]; mail: string[]; refused: Array<{ member: string; why: string }> }
+interface Delivery { wake: string[]; fold: string[]; mail: string[]; mailNow?: string[]; refused: Array<{ member: string; why: string }> }
 
 function names(topic: TopicView | undefined, ids: readonly string[]): string {
   return ids.map((id) => topic?.members?.find((m) => m.id === id)?.name ?? id).join(', ')
@@ -38,7 +38,9 @@ function deliveryWords(topic: TopicView | undefined, d: Delivery | undefined): s
   const parts = [
     d.wake.length ? `woke ${names(topic, d.wake)}` : 'woke nobody',
     d.fold.length ? `${names(topic, d.fold)} read it next time` : '',
-    d.mail.length ? `mailed ${names(topic, d.mail)}` : '',
+    // Nothing is mailed by the post itself: the mail bridge sends, at once or on its schedule.
+    d.mailNow?.length ? `mailing ${names(topic, d.mailNow)} now` : '',
+    d.mail.some((id) => !d.mailNow?.includes(id)) ? `${names(topic, d.mail.filter((id) => !d.mailNow?.includes(id)))} will be mailed` : '',
     d.refused.length ? `not woken: ${d.refused.map((r) => `${names(topic, [r.member])} (${r.why})`).join(', ')}` : '',
   ].filter(Boolean)
   return parts.join('; ')
@@ -113,11 +115,12 @@ defineOp({
 defineOp({
   name: 'topic_members',
   title: 'Change who is in a topic',
-  description: `${TOPICS_SCOPE} Adds members (task, org node, or a person by mail) and removes members by id. A person you add is pending until the user confirms them in the topic: nothing is mailed to them before. Your task must be a member.`,
+  description: `${TOPICS_SCOPE} Adds members (task, org node, or a person by mail) and removes members by id. A person you add is pending until the user confirms them in the topic: nothing is mailed to them before. Removing the host needs host, the member who hosts it next (its thread moves there). Your task must be a member.`,
   input: {
     id: TOPIC_ID,
     add: z.array(MEMBER_REF).max(23).optional().describe('Members to add'),
     remove: z.array(z.string().regex(/^mb-[a-f0-9]{8}$/)).max(24).optional().describe('Member ids to remove'),
+    host: z.string().regex(/^mb-[a-f0-9]{8}$/).optional().describe('The member id (a task or org member) who hosts the topic from now; required to remove the host'),
     clientId: CLIENT_ID,
   },
   handler: async (args, call) => {

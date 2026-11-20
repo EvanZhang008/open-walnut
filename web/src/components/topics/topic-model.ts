@@ -1,10 +1,12 @@
 /**
  * The pure rules the topic views draw with (experiment `topics`), kept apart so tests reach them:
- * the Org page's selection key of a topic, "@Name" mentions, the @ autocomplete, the small line
- * under a message (who it woke, who reads it next time, who it was mailed to), and the stacked
- * avatars a topic shows for its members.
+ * the Org page's selection key of a topic, "@Name" mentions, the @ autocomplete (and the keys its
+ * list takes), the small line under a message (who it woke, who reads it next time, who it was
+ * mailed to or will be), the stacked avatars a topic shows for its members, and the words of the
+ * yes asked before Walnut emails a person.
  */
 import type { MemberRef, Topic, TopicMember, TopicMessage, TopicSummary } from '@/api/topics';
+import { isImeKey } from '@/utils/ime-key';
 
 /** The Org page selects a topic through its `node` param, beside 'main' and 'project:<key>'. */
 export const TOPIC_KEY_PREFIX = 'topic:';
@@ -33,28 +35,8 @@ export function isEmail(s: string): boolean {
   return /^[^\s@<>()]+@[^\s@<>()]+\.[^\s@<>()]+$/.test(s.trim());
 }
 
-const isWordChar = (c: string | undefined) => !!c && /[\p{L}\p{N}_]/u.test(c);
-
-/**
- * The members "@Name" names in `text`, in the order they first appear. Names match
- * case-insensitively, the longest first (so "@Doc writer" wins over "@Doc"), only after the start
- * or a non-word character (an email's "a@b" names no one) and only when the name ends there.
- */
-export function parseMentions(text: string, members: readonly MemberLike[]): string[] {
-  const named = members.filter((m) => m.status !== 'left' && m.name.trim())
-    .sort((a, b) => b.name.length - a.name.length);
-  const lower = text.toLowerCase();
-  const found: string[] = [];
-  for (let i = lower.indexOf('@'); i !== -1; i = lower.indexOf('@', i + 1)) {
-    if (isWordChar(text[i - 1])) continue;
-    const hit = named.find((m) => {
-      const n = m.name.toLowerCase();
-      return lower.startsWith(n, i + 1) && !isWordChar(text[i + 1 + n.length]);
-    });
-    if (hit && !found.includes(hit.id)) found.push(hit.id);
-  }
-  return found;
-}
+// Who "@Name" names: the server's own rule, one module (src/core/topics/topic-mentions.ts).
+export { mentionShortForms, parseMentions } from '../../../../src/core/topics/topic-mentions';
 
 /** A row of the @ list: a member first, else a task not in the topic yet (picking it asks first). */
 export type MentionCandidate =
@@ -117,10 +99,12 @@ const list = (ids: readonly string[] | undefined, nameOf: (id: string) => string
   (ids ?? []).map(nameOf).filter(Boolean).join(', ');
 
 /**
- * The small line under a message: "woke A, B · C, D read it next time · mailed E", then each wake
- * that was not done and why ("F not woken: round budget used up"). Empty when it reached no one.
+ * The small line under a message: "woke A, B · C, D read it next time · mailed E · G will be
+ * mailed", then each wake that was not done and why ("F not woken: round budget used up"). Empty
+ * when it reached no one. `mailed` is mail that really went out; `toMail` is who it is to go to,
+ * so one there and not yet in `mailed` will be mailed.
  */
-export function reachLine(m: Pick<TopicMessage, 'woke' | 'folded' | 'mailed' | 'refused'>, members: readonly MemberLike[]): string {
+export function reachLine(m: Pick<TopicMessage, 'woke' | 'folded' | 'toMail' | 'mailed' | 'refused'>, members: readonly MemberLike[]): string {
   const nameOf = (id: string) => members.find((x) => x.id === id)?.name ?? '';
   const refusedIds = new Set((m.refused ?? []).map((r) => r.member));
   const parts: string[] = [];
@@ -131,6 +115,8 @@ export function reachLine(m: Pick<TopicMessage, 'woke' | 'folded' | 'mailed' | '
   if (folded) parts.push(`${folded} read it next time`);
   const mailed = list(m.mailed, nameOf);
   if (mailed) parts.push(`mailed ${mailed}`);
+  const toMail = list((m.toMail ?? []).filter((id) => !(m.mailed ?? []).includes(id)), nameOf);
+  if (toMail) parts.push(`${toMail} will be mailed`);
   for (const r of m.refused ?? []) {
     const name = nameOf(r.member);
     if (name) parts.push(`${name} not woken: ${r.why}`);
@@ -182,8 +168,8 @@ export function memberStatusLabel(m: Pick<TopicMember, 'status' | 'role' | 'pend
   return m.role === 'host' ? 'Host' : 'Member';
 }
 
-/** What the confirm says when no mailbox is chosen for the topic yet. */
-export const NO_MAILBOX_WORDS = 'no mailbox chosen yet: nothing is sent until you choose one';
+/** What the confirm says in place of "from <mailbox>" while the topic has none chosen. */
+export const NO_MAILBOX_WORDS = 'once you choose a mailbox for this topic (nothing is sent until then)';
 
 /** "a@x", "a@x and b@y", "a@x, b@y and c@z". */
 export function listWords(items: readonly string[]): string {
@@ -195,11 +181,38 @@ export function listWords(items: readonly string[]): string {
  * The yes asked before a person joins a topic (added, or an agent's add confirmed): Walnut emails
  * them in the user's name, from the topic's mailbox. `from`: that mailbox's address, or null.
  */
-export function personMailConfirm(emails: readonly string[], from: string | null, ask: 'Add?' | 'Confirm?' = 'Add?'): string {
-  return `Walnut will email ${listWords(emails)} from ${from ?? NO_MAILBOX_WORDS} with this topic's new messages. ${ask}`;
+export function personMailConfirm(emails: readonly string[], from: string | null, ask: 'Add?' | 'Confirm?' | 'Use it?' = 'Add?'): string {
+  const where = from ? `from ${from} with this topic's new messages` : NO_MAILBOX_WORDS;
+  return `Walnut will email ${listWords(emails)} ${where}. ${ask}`;
+}
+
+/** The yes asked before a mailbox is chosen while people are in the topic: mail starts going to them from it. */
+export function mailboxConfirm(emails: readonly string[], from: string): string {
+  return personMailConfirm(emails, from, 'Use it?');
+}
+
+/** The addresses of the topic's active people: who a chosen mailbox starts mailing. */
+export function activePersonEmails(members: readonly Pick<TopicMember, 'ref' | 'status'>[]): string[] {
+  return members.flatMap((m) => (m.status === 'active' && m.ref.kind === 'person' ? [m.ref.email.trim()] : []));
 }
 
 /** The emails of the people among `refs`. */
 export function personEmails(refs: readonly MemberRef[]): string[] {
   return refs.flatMap((r) => (r.kind === 'person' ? [r.email.trim()] : []));
+}
+
+/**
+ * What a key does while the @ list is open: move the highlight, pick the highlighted row, close the
+ * list, or nothing (the box takes it). A key of an input method's composition is the IME's: the
+ * Enter that commits a Chinese or Japanese word never picks a row (isImeKey: isComposing, or
+ * WebKit's keyCode 229 on the key that ends one).
+ */
+export type MentionKey = 'next' | 'prev' | 'pick' | 'close' | null;
+export function mentionKeyAction(e: { key: string; shiftKey?: boolean; isComposing?: boolean; keyCode?: number }): MentionKey {
+  if (isImeKey({ isComposing: !!e.isComposing, keyCode: e.keyCode })) return null;
+  if (e.key === 'ArrowDown') return 'next';
+  if (e.key === 'ArrowUp') return 'prev';
+  if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') return 'pick';
+  if (e.key === 'Escape') return 'close';
+  return null;
 }

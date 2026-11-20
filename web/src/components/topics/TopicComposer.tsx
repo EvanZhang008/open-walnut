@@ -3,20 +3,22 @@
  * send keeping the words), with the topic's own "@": the members first, then open tasks not in
  * the topic. Picking a member writes "@Name "; picking a task asks "Add it to this topic?" first,
  * so a mistyped name never pulls an unrelated task in (each member wake costs a turn). The list
- * takes the arrows, Enter, Tab and Esc while it is open (caught before the box sees them) and is
- * placed by useMenuPlacement above the box.
+ * takes the arrows, Enter, Tab and Esc while it is open (caught before the box sees them; an input
+ * method's keys stay its own, mentionKeyAction) and is placed by useMenuPlacement above the box.
+ * A mouse pick closes it like Enter does: the click that bubbles up from the list reads nothing.
+ * A topic line is text only (it goes to several members' turns and out by mail): a pasted picture
+ * is refused with words and stays in the box with the text, never dropped silently.
  */
 import { useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { orgDisplayTitle } from '@open-walnut/org-tree';
 import type { Topic } from '@/api/topics';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { detectMention } from '@/components/chat/mention-trigger';
-import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { draftKey } from '@/utils/drafts';
-import { mentionCandidates, refKey, taskRef, type MentionCandidate } from './topic-model';
+import { mentionCandidates, mentionKeyAction, refKey, taskRef, type MentionCandidate } from './topic-model';
+import { useOpenTaskNames } from './member-candidates';
 import { MemberAvatar } from './TopicAvatars';
 import type { TopicActions } from './useTopics';
 
@@ -26,15 +28,12 @@ export function TopicComposer({ topic, actions }: { topic: Topic; actions: Pick<
   const wrap = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const confirm = useConfirm();
-  const tasks = useTasksContextSafe()?.tasks;
   const [value, setValue] = useState('');
   const [at, setAt] = useState<Open | null>(null);
   const [hi, setHi] = useState(0);
   const [prefill, setPrefill] = useState<{ text: string; nonce: number } | null>(null);
-  const openTasks = useMemo(
-    () => (tasks ?? []).filter((t) => t.phase !== 'COMPLETE' && t.status !== 'done').map((t) => ({ id: t.id, name: orgDisplayTitle(t) })),
-    [tasks],
-  );
+  const [refused, setRefused] = useState<string | null>(null);
+  const openTasks = useOpenTaskNames();
   const rows = useMemo(() => (at ? mentionCandidates(at.query, topic.members, openTasks) : []), [at, topic.members, openTasks]);
   const open = !!at && rows.length > 0;
   const placement = useMenuPlacement(open, wrap, menuRef, { preferSide: 'up', align: 'start', minHeight: 120, onAnchorLost: () => setAt(null) });
@@ -61,22 +60,38 @@ export function TopicComposer({ topic, actions }: { topic: Topic; actions: Pick<
   };
   const onKeyDownCapture = (e: KeyboardEvent) => {
     if (!open) return;
-    const take = () => { e.preventDefault(); e.stopPropagation(); };
-    if (e.key === 'ArrowDown') { take(); setHi((i) => (i + 1) % rows.length); }
-    else if (e.key === 'ArrowUp') { take(); setHi((i) => (i - 1 + rows.length) % rows.length); }
-    else if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') { take(); const c = rows[Math.min(hi, rows.length - 1)]; if (c) void pick(c); }
-    else if (e.key === 'Escape') { take(); setAt(null); }
+    // An IME's keys stay its own (mentionKeyAction): the Enter that commits a word never picks a row.
+    const action = mentionKeyAction({ key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode });
+    if (!action) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (action === 'next') setHi((i) => (i + 1) % rows.length);
+    else if (action === 'prev') setHi((i) => (i - 1 + rows.length) % rows.length);
+    else if (action === 'pick') { const c = rows[Math.min(hi, rows.length - 1)]; if (c) void pick(c); }
+    else setAt(null);
   };
 
   return (
     <div ref={wrap} className="topic-composer" data-testid="topic-composer" onKeyDownCapture={onKeyDownCapture}
       onKeyUp={(e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Home' || e.key === 'End') read(value); }}
-      onClick={() => read(value)}>
+      onClick={(e) => {
+        // A click on a row of the (portalled) list bubbles here through React: the pick wrote the
+        // name already, and reading the old "@Al" again would open the list once more.
+        if (menuRef.current?.contains(e.target as Node)) return;
+        read(value);
+      }}>
       <ChatInput
         light
         placeholder={topic.closed ? 'This topic is closed' : 'Say something in the topic… @Name wakes only that member'}
         draftKey={draftKey('topic', topic.id)}
-        onSend={(text) => actions.post(text)}
+        onSend={(text, images) => {
+          if (images?.length) {
+            setRefused('A topic takes text only. Remove the picture to post.');
+            return Promise.resolve(false);
+          }
+          setRefused(null);
+          return actions.post(text);
+        }}
         onValueChange={(text) => { setValue(text); read(text); }}
         showCommands={false}
         disabled={!!topic.closed}
@@ -85,6 +100,7 @@ export function TopicComposer({ topic, actions }: { topic: Topic; actions: Pick<
         sendTestId="topic-send"
         sendTitle="Post to the topic"
       />
+      {refused && <div className="topic-composer-refused" role="alert" data-testid="topic-composer-refused">{refused}</div>}
       {open && createPortal(
         <div ref={menuRef} role="listbox" aria-label="Mention a member" className="task-kebab-menu topic-mention-menu" data-testid="topic-mention-menu"
           style={menuPlacementStyle(placement)} onPointerDown={(e) => e.stopPropagation()} onMouseDown={(e) => e.preventDefault()}>

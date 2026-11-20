@@ -42,6 +42,18 @@ export const escapeAttr: (value: string) => string = kit.escapeAttr;
  *  would decode into a real tag on the reader's side. */
 export const escapeBody: (body: string) => string = kit.escapeBody;
 
+/**
+ * escapeBody's two rules for any other tag Walnut frames text with (a topic's `<topic-line>`,
+ * core/topics/topic-text.ts): text can then never open or close that tag. `tag` is a fixed name of
+ * letters and dashes. `escapeTagIn(x, 'walnut-message') === escapeBody(x)`.
+ */
+export function escapeTagIn(text: string, tag: string): string {
+  const name = tag.replace(/[^a-z-]/gi, '');
+  return text
+    .replace(new RegExp(`&lt;(\\/?)(${name})`, 'gi'), '&amp;lt;$1$2')
+    .replace(new RegExp(`<(\\/?)(${name})`, 'gi'), '&lt;$1$2');
+}
+
 /** Exact inverse of escapeBody (reverse order of its two rules). */
 export function unescapeBody(body: string): string {
   return body

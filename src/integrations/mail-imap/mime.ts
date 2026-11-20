@@ -86,18 +86,24 @@ export const LIST_HEADERS = ['list-unsubscribe', 'list-unsubscribe-post', 'list-
 /**
  * `Precedence` and `Auto-Submitted`: two sorting signals (a bulk sender, an automated notice). The poll
  * asks for them with the list headers; like those they are NOT part of the envelope hash, so rows
- * cached before this existed are never rewritten to learn them.
+ * cached before this existed are never rewritten to learn them. `X-Autoreply` / `X-Autorespond`, the
+ * older vacation responders' mark, are read as `Auto-Submitted: auto-replied` (the topics mail bridge
+ * never posts an automatic reply, core/topics/topic-mail-inbound.ts).
  */
-export const BULK_HEADERS = ['precedence', 'auto-submitted'] as const
+export const BULK_HEADERS = ['precedence', 'auto-submitted', 'x-autoreply', 'x-autorespond'] as const
 
 /** Every header a late `fetchListHeaders` asks for (always with `BODY.PEEK`, never setting `\Seen`). */
 export const LATE_HEADER_FIELDS = [...LIST_HEADERS, ...BULK_HEADERS] as const
 
-/** `{ precedence, autoSubmitted }`, lowercased; `Auto-Submitted: no` means "not automated" and is dropped. */
+/** `{ precedence, autoSubmitted }`, lowercased; `Auto-Submitted: no` means "not automated" and is dropped; an `X-Autoreply` / `X-Autorespond` is `auto-replied`. */
 export function bulkHeadersOf(headers: Record<string, string>): { precedence?: string; autoSubmitted?: string } | undefined {
   const precedence = (headers.precedence ?? '').trim().toLowerCase().split(/[\s;]/)[0] ?? ''
   const auto = (headers['auto-submitted'] ?? '').trim().toLowerCase().split(/[\s;]/)[0] ?? ''
-  const autoSubmitted = auto && auto !== 'no' ? auto : ''
+  const legacy = [headers['x-autoreply'], headers['x-autorespond']].some((v) => {
+    const word = (v ?? '').trim().toLowerCase()
+    return word !== '' && word !== 'no' && word !== 'false'
+  })
+  const autoSubmitted = auto && auto !== 'no' ? auto : legacy ? 'auto-replied' : ''
   if (!precedence && !autoSubmitted) return undefined
   return { ...(precedence ? { precedence } : {}), ...(autoSubmitted ? { autoSubmitted } : {}) }
 }

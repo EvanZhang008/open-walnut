@@ -122,6 +122,9 @@ const SURFACES: Record<string, 'hook' | 'fallback' | 'renderer'> = {
   'components/sessions/SideQuestionDrawer.tsx': 'renderer',
   'components/sessions/SessionDiffView.tsx': 'fallback',
   'components/sessions/SessionPanel.tsx': 'fallback',
+  // A topic's lines and its host's summary, drawn through AgentText (its writer's task when known).
+  'components/topics/TopicChat.tsx': 'renderer',
+  'components/topics/TopicSidePanel.tsx': 'renderer',
 }
 
 describe('every surface that renders agent text opens its paths and letters', () => {

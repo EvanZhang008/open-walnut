@@ -2,18 +2,24 @@
  * The topics mail bridge: a person (or someone else's bot) outside Walnut takes part in a topic by
  * email.
  *
- * Outbound: one pass a minute (and one right away when a message mentions a person) mails each
- * ACTIVE person member the messages after `mail.lastSentMessageId`: at once when one of them
- * mentions that person, else at most once per `topic.mail.everyMinutes` (15 by default). Every mail
- * goes through the mail plugin's one send path (topic-mail-port.ts), so the user's Approvals
- * switch decides whether a letter asks him first. A pending person is never mailed: an outward
- * send to a real person needs the user's own yes.
+ * Outbound: one pass a minute mails each ACTIVE person member the messages after
+ * `mail.lastSentMessageId`, exactly as each message's plan says (topic-wake.ts): at once when a
+ * message lists that person in `mailNow` (the user's message to everyone, a mention by the user or
+ * an agent; such a message starts a pass right away), else at most once per
+ * `topic.mail.everyMinutes` (15 by default). A person's own message never mails anyone at once. A
+ * mail that carries none of the user's own lines counts toward the person's round: after
+ * PERSON_MAILS_PER_ROUND of them nothing more goes to that person until the user writes again, and
+ * one walnut line says so (two bots that answer every mail would otherwise mail each other through
+ * the user's mailbox forever, review 2026-11-20). Each message lists who a mail carrying it really
+ * went to (`mailed`). Every mail goes through the mail plugin's one send path
+ * (topic-mail-port.ts), so the user's Approvals switch decides whether a letter asks him first. A
+ * pending person is never mailed: an outward send to a real person needs the user's own yes.
  *
- * Inbound: each poll's new mail whose subject carries "[topic tp-...]" or that replies to a mail
- * sent here, from an active person member of that topic, is posted as that member with the
- * quoted part stripped; each mail once (keyed by its Message-ID, kept on disk).
+ * Inbound: topic-mail-inbound.ts decides which arriving mail is a person's reply.
  *
- * Inert with the `topics` flag off, and on a follower.
+ * Inert with the `topics` flag off, and on a follower; started and stopped with the flag
+ * (topics-runtime.ts). On a test or ephemeral server it sends nothing (logged once) unless
+ * WALNUT_TOPICS_MAIL_IN_TEST=1: a copy of the user's data holds his real accounts and people.
  */
 import path from 'node:path'
 import { createSubsystemLogger } from '../../logging/index.js'
@@ -21,14 +27,15 @@ import {
   onTopicMailArrivals, topicMailTransport,
   type TopicMailIncoming, type TopicMailSendOutcome, type TopicMailTransport,
 } from './topic-mail-port.js'
-import { createTopicMailState, memberKey, type TopicMailState } from './topic-mail-state.js'
-import {
-  bareAddress, canonicalMessageId, stripQuotedReply, topicIdFromSubject, topicMailBody, topicMailSubject,
-} from './topic-mail-text.js'
+import { createTopicMailState, lineKey, memberKey, pruneState, type TopicMailState } from './topic-mail-state.js'
+import { claimTopicMail, postClaimedMail, type TopicMailClaim } from './topic-mail-inbound.js'
+import { canonicalMessageId, topicMailBody, topicMailSubject } from './topic-mail-text.js'
 import { authorName, MAIL_EVERY_MINUTES_DEFAULT, USER_FALLBACK_NAME, type Topic, type TopicMember, type TopicMessage } from './topics-model.js'
 
 export const TOPIC_MAIL_PASS_MS = 60_000
 export const FAILURE_LINE_AFTER = 3
+/** Mails a person gets a round that carry none of the user's own lines; then none until he writes. */
+export const PERSON_MAILS_PER_ROUND = 3
 /** References carried on a mail: the last few sent to that person. */
 const REFERENCES_KEPT = 10
 
@@ -41,6 +48,8 @@ export interface TopicMailCore {
   registerTopicMessageListener(fn: (topic: Topic, message: TopicMessage) => void): (() => void) | void
   /** Appends one `walnut` system line; without it the bridge only logs what it would have said. */
   postSystemLine?(topicId: string, text: string): Promise<unknown>
+  /** Records on these messages that a mail carrying them went to the member (`mailed`). */
+  markMailed?(topicId: string, memberId: string, messageIds: readonly string[]): Promise<unknown>
 }
 
 export interface TopicMailBridgeDeps {
@@ -51,6 +60,8 @@ export interface TopicMailBridgeDeps {
   isOn: () => Promise<boolean>
   /** How the user's own messages are signed in a mail. */
   ownerName: () => Promise<string>
+  /** Why this server must send no mail (a test or ephemeral server), or null when it may. */
+  heldReason?: () => string | null
   onArrivals?: typeof onTopicMailArrivals
   now?: () => number
   intervalMs?: number
@@ -60,8 +71,12 @@ export interface TopicMailBridgeDeps {
 export interface TopicMailBridge {
   /** One outbound pass over every topic. */
   pass(): Promise<void>
-  /** Inbound: one poll's arrivals of one account. */
-  handleArrivals(accountId: string, load: () => Promise<TopicMailIncoming[]>): Promise<void>
+  /**
+   * Inbound: one poll's arrivals of one account. `onClaimed` gets the cache ids of the mail the
+   * bridge takes (before any body is read), so the plugin keeps them from its router; it is always
+   * called once, with none when nothing was taken or the run failed.
+   */
+  handleArrivals(accountId: string, load: () => Promise<TopicMailIncoming[]>, onClaimed?: (messageIds: string[]) => void): Promise<void>
   /** The core's message listener: a mention of a person starts a pass now. */
   onMessage(topic: Topic, message: TopicMessage): void
   start(): void
@@ -94,8 +109,9 @@ export function createTopicMailBridge(deps: TopicMailBridgeDeps): TopicMailBridg
     await deps.core.postSystemLine(topicId, text).catch((error) => log.warn('topic mail line not posted', { topicId, error: reason(error) }))
   }
 
-  /** A line said once per key, ever. */
-  const once = async (key: string, topicId: string, text: string): Promise<void> => {
+  /** A line said once per key, ever (while the topic lives: pruneState). */
+  const once = async (what: string, topicId: string, text: string): Promise<void> => {
+    const key = lineKey(topicId, what)
     const fresh = await deps.state.update((state) => {
       if (state.lines.includes(key)) return false
       state.lines.push(key)
@@ -116,7 +132,22 @@ export function createTopicMailBridge(deps: TopicMailBridgeDeps): TopicMailBridg
     return topic.messages.filter((one) => (Date.parse(one.at) || 0) >= joined)
   }
 
-  const settle = async (topic: Topic, member: TopicMember, upto: string, messageId?: string): Promise<void> => {
+  /** The lines of `after` a mail to `member` carries: not its own, not Walnut's. */
+  const mailLines = (member: TopicMember, after: readonly TopicMessage[]): TopicMessage[] =>
+    after.filter((one) => one.author !== member.id && one.author !== 'walnut')
+
+  /** The lines a mail up to `upto` carries (what unsentFor gives, cut at `upto`). */
+  const batchUpTo = (topic: Topic, member: TopicMember, upto: string): TopicMessage[] => {
+    const after = unsentFor(topic, member)
+    const end = after.findIndex((one) => one.id === upto)
+    return mailLines(member, end >= 0 ? after.slice(0, end + 1) : after)
+  }
+
+  /** A send settled: the member's mark moves to `upto`. `wentOut` false: it may have gone out (never marked as mailed). */
+  const settle = async (topic: Topic, member: TopicMember, upto: string, messageId?: string, wentOut = true): Promise<void> => {
+    // Read before the member's mark moves: the lines this mail carried.
+    const batch = batchUpTo(topic, member, upto)
+    const counts = batch.length > 0 && !batch.some((one) => one.author === 'human')
     const mail = {
       ...member.mail,
       lastSentAt: new Date(now()).toISOString(),
@@ -130,8 +161,16 @@ export function createTopicMailBridge(deps: TopicMailBridgeDeps): TopicMailBridg
       delete entry.pending
       entry.failures = 0
       entry.failureLine = false
+      if (counts) {
+        entry.roundMails = entry.round === topic.round.n ? (entry.roundMails ?? 0) + 1 : 1
+        entry.round = topic.round.n
+      }
       if (messageId) state.sent.push({ id: messageId, topicId: topic.id, memberId: member.id })
     })
+    if (wentOut && batch.length && deps.core.markMailed) {
+      await deps.core.markMailed(topic.id, member.id, batch.map((one) => one.id))
+        .catch((error) => log.warn('topic mail could not record who was mailed', { topicId: topic.id, memberId: member.id, error: reason(error) }))
+    }
   }
 
   const failed = async (topic: Topic, member: TopicMember, why: string): Promise<void> => {
@@ -165,7 +204,7 @@ export function createTopicMailBridge(deps: TopicMailBridgeDeps): TopicMailBridg
         return
       case 'unknown':
         // It may have gone out: never sent again. The user can check the account's Sent folder.
-        await settle(topic, member, upto)
+        await settle(topic, member, upto, undefined, false)
         await postLine(topic.id, `Walnut cannot tell whether the mail to ${member.name} went out; check the Sent folder of the mail account.`)
         return
       case 'discarded': {
@@ -198,12 +237,28 @@ export function createTopicMailBridge(deps: TopicMailBridgeDeps): TopicMailBridg
       return
     }
     const after = unsentFor(topic, member)
-    const lines = after.filter((one) => one.author !== member.id && one.author !== 'walnut')
+    const lines = mailLines(member, after)
     if (lines.length === 0) return
-    const mentioned = lines.some((one) => one.mentions.includes(member.id))
+    // At once only what the plan said (mailNow); the rest waits for the schedule.
+    const atOnce = lines.some((one) => one.mailNow?.includes(member.id))
     const every = (topic.mail?.everyMinutes ?? MAIL_EVERY_MINUTES_DEFAULT) * 60_000
     const lastAt = Date.parse(member.mail?.lastSentAt ?? '')
-    if (!mentioned && Number.isFinite(lastAt) && now() - lastAt < every) return
+    if (!atOnce && Number.isFinite(lastAt) && now() - lastAt < every) return
+    // The round's budget: a mail with none of the user's lines is the person's round; past it, nothing.
+    if (!lines.some((one) => one.author === 'human')) {
+      const entry = (await deps.state.read()).members[key]
+      const used = entry?.round === topic.round.n ? entry.roundMails ?? 0 : 0
+      if (used >= PERSON_MAILS_PER_ROUND) {
+        const tell = await deps.state.update((state) => {
+          const e = (state.members[key] ??= {})
+          if (e.budgetTold === topic.round.n) return false
+          e.budgetTold = topic.round.n
+          return true
+        })
+        if (tell) await postLine(topic.id, `${member.name} got ${PERSON_MAILS_PER_ROUND} mails this round; nothing more is mailed to them until ${owner} writes again.`)
+        return
+      }
+    }
 
     const upto = after[after.length - 1]!.id
     const sent = (await deps.state.read()).sent.filter((one) => one.topicId === topic.id && one.memberId === member.id)
@@ -230,26 +285,36 @@ export function createTopicMailBridge(deps: TopicMailBridgeDeps): TopicMailBridg
     await settleOutcome(topic, member, upto, outcome, t)
   }
 
+  let toldHeld = false
   const passOnce = async (): Promise<void> => {
     if (!(await deps.isOn())) return
+    const held = deps.heldReason?.() ?? null
+    if (held) {
+      if (!toldHeld) log.warn('topic mail is held: this server sends no mail (WALNUT_TOPICS_MAIL_IN_TEST=1 lets it)', { why: held })
+      toldHeld = true
+      return
+    }
     const t = deps.transport()
     let accounts: Awaited<ReturnType<TopicMailTransport['accounts']>> | null = null
     let owner: string | null = null
+    const listed = new Map<string, { closedAt?: string }>()
     for (const { id } of await deps.core.listTopics()) {
+      listed.set(id, {})
       const topic = await deps.core.readTopic(id).catch(() => null)
       if (!topic) continue
+      if (topic.closed?.at) listed.set(id, { closedAt: topic.closed.at })
       const persons = topic.members.filter(isActivePerson)
       if (persons.length === 0) continue
       const accountId = topic.mail?.accountId
       if (!accountId) {
-        await once(`no-account:${topic.id}`, topic.id, `No mail account is set for this topic, so ${persons.map((one) => one.name).join(', ')} get no mail.`)
+        await once('no-account', topic.id, `No mail account is set for this topic, so ${persons.map((one) => one.name).join(', ')} get no mail.`)
         continue
       }
       if (!t) continue // the mail plugin is off or still starting: the next pass tries again
       accounts ??= await t.accounts().catch(() => [])
       const account = accounts.find((one) => one.accountId === accountId)
       if (!account?.canSend) {
-        await once(`cannot-send:${topic.id}:${accountId}`, topic.id, `The mail account ${account?.address || accountId} cannot send, so this topic's people get no mail.`)
+        await once(`cannot-send:${accountId}`, topic.id, `The mail account ${account?.address || accountId} cannot send, so this topic's people get no mail.`)
         continue
       }
       owner ??= await deps.ownerName().catch(() => USER_FALLBACK_NAME)
@@ -260,6 +325,10 @@ export function createTopicMailBridge(deps: TopicMailBridgeDeps): TopicMailBridg
           log.warn('topic mail pass could not finish a member', { topicId: topic.id, memberId: member.id, error: reason(error) })
         }
       }
+    }
+    // What belongs to topics gone or closed over a week goes (a write only when something does).
+    if (pruneState(structuredClone(await deps.state.read()), listed, now())) {
+      await deps.state.update((state) => { pruneState(state, listed, now()) })
     }
   }
 
@@ -280,54 +349,40 @@ export function createTopicMailBridge(deps: TopicMailBridgeDeps): TopicMailBridg
     return running
   }
 
-  const inboundOne = async (mail: TopicMailIncoming, t: TopicMailTransport): Promise<void> => {
-    const rfc = canonicalMessageId(mail.rfcMessageId)
-    const seenKey = `${mail.accountId}|${rfc || `id:${mail.messageId}`}`
-    const state = await deps.state.read()
-    if (state.seen.includes(seenKey)) return
-    let topicId = topicIdFromSubject(mail.subject)
-    if (!topicId) {
-      const replied = new Set([mail.inReplyTo, ...mail.references].map((one) => canonicalMessageId(one)).filter(Boolean))
-      topicId = state.sent.find((one) => replied.has(one.id))?.topicId
-    }
-    if (!topicId) return
-    const topic = await deps.core.readTopic(topicId).catch(() => null)
-    if (!topic) return
-    const from = bareAddress(mail.from)
-    const member = topic.members.find((one) => isActivePerson(one) && bareAddress(emailOf(one)) === from)
-    if (!member) {
-      log.info('topic mail ignored a reply from someone not in the topic', { topicId })
-      return
-    }
-    // Marked first: a reply posted twice is worse than one a crash lost.
-    const fresh = await deps.state.update((s) => {
-      if (s.seen.includes(seenKey)) return false
-      s.seen.push(seenKey)
-      return true
-    })
-    if (!fresh) return
-    const text = stripQuotedReply(await t.bodyText(mail.accountId, mail.messageId))
-    if (!text) return
-    await deps.core.appendMemberMessage(topic.id, member.id, text, 'mail')
-  }
-
-  const handleArrivals = (accountId: string, load: () => Promise<TopicMailIncoming[]>): Promise<void> => {
+  const handleArrivals = (accountId: string, load: () => Promise<TopicMailIncoming[]>, onClaimed?: (messageIds: string[]) => void): Promise<void> => {
+    const claimedIds: string[] = []
+    let told = false
+    const tell = (): void => { if (!told) { told = true; onClaimed?.(claimedIds) } }
     const run = inbound.then(async () => {
       if (!(await deps.isOn())) return
       const t = deps.transport()
       if (!t) return
-      for (const mail of await load()) {
-        await inboundOne({ ...mail, accountId: mail.accountId || accountId }, t)
+      const inbound = { readTopic: deps.core.readTopic, appendMemberMessage: deps.core.appendMemberMessage, state: deps.state, log }
+      // Claims first, from headers and state only: the plugin's router waits on this, never on a body read.
+      const taken: Array<{ mail: TopicMailIncoming; claim: TopicMailClaim }> = []
+      for (const raw of await load()) {
+        const mail = { ...raw, accountId: raw.accountId || accountId }
+        const claim = await claimTopicMail(mail, inbound)
+          .catch((error): TopicMailClaim => { log.warn('topic mail reply not read', { accountId, error: reason(error) }); return { claimed: false, why: 'error' } })
+        if (!claim.claimed) continue
+        claimedIds.push(mail.messageId)
+        taken.push({ mail, claim })
+      }
+      tell()
+      for (const { mail, claim } of taken) {
+        await postClaimedMail(mail, claim, t, inbound)
           .catch((error) => log.warn('topic mail reply not posted', { accountId, error: reason(error) }))
       }
     }).catch((error) => log.warn('topic mail arrivals not read', { accountId, error: reason(error) }))
+      .finally(tell)
     inbound = run
     return run
   }
 
+  /** A message whose plan mails an active person at once starts a pass now. */
   const onMessage = (topic: Topic, message: TopicMessage): void => {
-    const mentionsPerson = message.mentions.some((id) => topic.members.some((one) => one.id === id && isActivePerson(one)))
-    if (mentionsPerson) void pass()
+    const atOnce = (message.mailNow ?? []).some((id) => topic.members.some((one) => one.id === id && isActivePerson(one)))
+    if (atOnce) void pass()
   }
 
   return {
@@ -338,7 +393,7 @@ export function createTopicMailBridge(deps: TopicMailBridgeDeps): TopicMailBridg
       if (timer) return
       timer = setInterval(() => { void pass() }, deps.intervalMs ?? TOPIC_MAIL_PASS_MS)
       timer.unref?.()
-      stops.push(subscribe((accountId, load) => { void handleArrivals(accountId, load) }))
+      stops.push(subscribe((accountId, load) => new Promise<string[]>((claimed) => { void handleArrivals(accountId, load, claimed) })))
       const off = deps.core.registerTopicMessageListener((topic, message) => onMessage(topic, message))
       if (typeof off === 'function') stops.push(off)
     },
@@ -351,6 +406,11 @@ export function createTopicMailBridge(deps: TopicMailBridgeDeps): TopicMailBridg
   }
 }
 
+/** Why this server's bridge sends no mail: a test or ephemeral server, unless WALNUT_TOPICS_MAIL_IN_TEST=1. */
+export function topicMailHeldReason(throwaway: () => string | null, env: NodeJS.ProcessEnv = process.env): string | null {
+  return env.WALNUT_TOPICS_MAIL_IN_TEST === '1' ? null : throwaway()
+}
+
 let active: TopicMailBridge | null = null
 
 /** Starts this server's one bridge on the real topics store and mail port (startup wiring calls it). */
@@ -359,8 +419,9 @@ export async function startTopicMailBridge(): Promise<TopicMailBridge> {
   const { WALNUT_HOME } = await import('../../constants.js')
   const { getConfig } = await import('../config-manager.js')
   const { isFollower } = await import('../server-role.js')
+  const { throwawayServerReason } = await import('../remote-sync-isolation.js')
   const store = await import('./topics-store.js')
-  const { newMessageId } = await import('./topics-model.js')
+  const { walnutLine } = await import('./topics-model.js')
   active = createTopicMailBridge({
     core: {
       listTopics: store.listTopics,
@@ -369,13 +430,19 @@ export async function startTopicMailBridge(): Promise<TopicMailBridge> {
       updateMember: store.updateMember,
       registerTopicMessageListener: store.registerTopicMessageListener,
       // A system line runs no delivery: appended under the topic's lock as the core does its own.
-      postSystemLine: (topicId, text) => store.mutateTopic(topicId, (topic) => {
-        topic.messages.push({ id: newMessageId(), at: new Date().toISOString(), author: 'walnut', via: 'system', mentions: [], text })
-      }),
+      postSystemLine: (topicId, text) => store.mutateTopic(topicId, (topic) => { topic.messages.push(walnutLine(text)) }),
+      markMailed: (topicId, memberId, ids) => store.mutateTopic(topicId, (topic) => {
+        const want = new Set(ids)
+        for (const m of topic.messages) {
+          if (!want.has(m.id) || m.mailed?.some((one) => one === memberId)) continue
+          m.mailed = [...(m.mailed ?? []), memberId as TopicMember['id']]
+        }
+      }, { touch: false }),
     },
     transport: topicMailTransport,
     state: createTopicMailState(path.join(WALNUT_HOME, 'topic-mail', 'state.json')),
     isOn: async () => !isFollower() && (await store.topicsEnabled()),
+    heldReason: () => topicMailHeldReason(throwawayServerReason),
     ownerName: async () => (await getConfig()).user?.name || USER_FALLBACK_NAME,
   })
   active.start()

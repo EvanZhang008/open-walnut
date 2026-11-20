@@ -17,10 +17,8 @@
  * agent's (the extension refuses them as well).
  */
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { requestOrigin } from '../middleware/request-origin.js'
+import { isPersonCaller } from './person-caller.js'
 import { fromThisMachine } from '../middleware/local-trust.js'
-import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js'
-import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
 import { ambientTestRun } from '../../core/test-run.js'
 import { log } from '../../logging/index.js'
 import { startTabTidy, _stopTabTidyForTesting, type TidyDeps } from './browser-tab-tidy.js'
@@ -45,10 +43,6 @@ browserV1Router.get('/browser/security-alert', async (req, res, next) => {
   } catch (error) { next(error) }
 })
 
-function header(req: Request, name: string): string | undefined {
-  const v = req.headers[name]
-  return typeof v === 'string' && v ? v : undefined
-}
 
 const hub = () => import('../../core/browser-control/hub.js')
 
@@ -107,15 +101,9 @@ function extensionOf(req: Request, res: Response): string | null {
   return null
 }
 
-/** A person's own request: no session, no agent kind, from this machine or their own browser. */
-function personCaller(req: Request): boolean {
-  const origin = requestOrigin(req)
-  return !header(req, 'x-walnut-caller-sid') && !header(req, CALLER_KIND_HEADER) && (origin === LOCAL_ORIGIN || origin === REMOTE_HTTP_ORIGIN)
-}
-
 /** A person, not an agent: what agents may do in the browser is theirs to set. */
 function personOnly(req: Request, res: Response): boolean {
-  const ok = personCaller(req)
+  const ok = isPersonCaller(req)
   if (!ok) res.status(403).json({ error: 'Only a person changes which sites agents may use in their browser.', code: 'human_only' })
   return ok
 }
@@ -462,7 +450,7 @@ browserV1Router.post('/browser/act', (req, res, next) => {
     // A task's tabs are its own; a caller Walnut cannot place (a script, an agent outside a
     // task) shares one set of tabs apart from the person's own.
     const owner = requester.taskId ? `task:${requester.taskId}` : requester.sessionId ? `session:${requester.sessionId}`
-      : personCaller(req) ? 'person' : 'agent'
+      : isPersonCaller(req) ? 'person' : 'agent'
     const s = await sites()
     const args = (await import('../../core/browser-control/act-args.js')).cleanArgs(b)
 
@@ -547,7 +535,7 @@ browserV1Router.post('/browser/act', (req, res, next) => {
       if (mine && typeof mine.url === 'string') checkedSite = w.siteOf(mine.url) || undefined
       // A sign-in step: the next open of this site tells the person's tabs in full again.
       if (checkedSite) w.forgetPersonTabsNote({ owner, device: c.device }, checkedSite)
-      if (theirs.length && !personCaller(req)) {
+      if (theirs.length && !isPersonCaller(req)) {
         const site = w.siteOf(mine!.url!)
         const scope = { owner, device: c.device, tab: tab!, site }
         const request = typeof b.request === 'string' ? b.request : undefined
@@ -931,7 +919,7 @@ export const tidyDeps: TidyDeps = {
 }
 
 // The task's Browser view: its tabs, a live frame, Stop (browser-view-v1.ts).
-mountBrowserView(browserV1Router, { personCaller, run, walnutAddresses, extensionOf })
+mountBrowserView(browserV1Router, { personCaller: isPersonCaller, run, walnutAddresses, extensionOf })
 
 export function _resetBrowserRoutesForTesting(): void {
   ownCache = null

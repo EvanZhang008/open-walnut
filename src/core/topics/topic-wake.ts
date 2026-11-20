@@ -5,8 +5,12 @@
  * member; with mentions only the ones named, the rest read it at their next turn. A member's
  * message wakes nobody unless it names someone, and then at most ROUND_WAKES members a round in
  * all, each pair of members at most once each way a round (two agents never ping-pong). What is
- * not woken folds into the member's next message. Persons are mailed by the mail bridge: now when
- * named, else on its schedule. Pending and left members get nothing; the author never wakes itself.
+ * not woken folds into the member's next message. Persons are mailed by the mail bridge: the user's
+ * message to everyone, and a mention by the user or an agent, at once; everything else on its
+ * schedule. A person's own message (a mail reply) never mails anyone at once: two outside bots that
+ * answer every mail would otherwise mail each other through the user's mailbox forever (review
+ * 2026-11-20; the bridge also caps the mails a person gets a round, topic-mail.ts). Pending and left
+ * members get nothing; the author never wakes itself.
  *
  * Delivery (topic-delivery.ts) may still refuse a planned wake (no session, the task is complete).
  */
@@ -75,8 +79,9 @@ export function planDelivery(topic: Topic, message: TopicMessage, opts: { userNa
   const round = copyRound(topic.round);
   const plan = emptyPlan(round);
   const others = agents.filter((id) => id !== author);
+  const byPerson = topic.members.some((m) => m.id === author && !isAgentMember(m));
   plan.mail = persons.filter((id) => id !== author);
-  plan.mailNow = plan.mail.filter((id) => named.has(id));
+  plan.mailNow = byPerson ? [] : plan.mail.filter((id) => named.has(id));
   let overBudget = false;
   for (const id of others) {
     if (!named.has(id)) { plan.fold.push(id); continue; }

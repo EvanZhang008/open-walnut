@@ -9,6 +9,7 @@
  * This file is pure: the types, the ids, the @mention parser and the summary the list shows.
  */
 import { randomBytes } from 'node:crypto';
+import { parseMentions as parseMentionsOf } from './topic-mentions.js';
 
 export type TopicId = `tp-${string}`;
 export type MemberId = `mb-${string}`;
@@ -21,7 +22,14 @@ export type MemberRef =
   | { kind: 'org'; node: string }
   | { kind: 'person'; name: string; email: string; bot?: boolean };
 
-export interface TopicPendingTurn { sessionId: string; since: string; messageId: string }
+export interface TopicPendingTurn {
+  sessionId: string;
+  /** When the turn's (first) wake went out: its reply is read from the turn that wake opened. */
+  since: string;
+  messageId: string;
+  /** More was said to the member while this turn ran: one follow-up wake when it ends (topic-delivery.ts). */
+  more?: boolean;
+}
 
 export interface TopicMember {
   id: MemberId;
@@ -53,8 +61,15 @@ export interface TopicMessage {
   via: MessageVia;
   woke?: MemberId[];
   folded?: MemberId[];
+  /** The persons this message goes to by mail (topic-wake.ts DeliveryPlan.mail): sent by the bridge. */
+  toMail?: MemberId[];
+  /** Of `toMail`, those the bridge mails at once; the rest wait for its schedule. */
+  mailNow?: MemberId[];
+  /** The persons a mail carrying this message actually went to (the bridge adds each as it goes out). */
   mailed?: MemberId[];
   refused?: { member: MemberId; why: string }[];
+  /** The id the author's POST carried (dedupe and the browser's merge); answered to its author only. */
+  clientId?: string;
 }
 
 export interface TopicRound {
@@ -111,6 +126,11 @@ export class TopicError extends Error {
   }
 }
 
+/** One of Walnut's own lines in a topic ("Added @Ada."): it wakes and mails nobody. */
+export function walnutLine(text: string, at = new Date().toISOString()): TopicMessage {
+  return { id: newMessageId(), at, author: 'walnut', text, mentions: [], via: 'system' };
+}
+
 export function freshRound(n: number, at: string): TopicRound {
   return { n, startedAt: at, hops: 0, pairs: {} };
 }
@@ -148,31 +168,9 @@ export function uniqueName(want: string, taken: readonly string[]): string {
   for (let i = 2; ; i++) if (!used.has(`${base} ${i}`.toLowerCase())) return `${base} ${i}`;
 }
 
-const WORD_CHAR = /[\p{L}\p{N}_]/u;
-
-/**
- * The members "@Name" in `text` names, in the order they first appear. Matched case-insensitively,
- * longest name first, so "@Acme VP" is the VP and not a member called "Acme". Members who left
- * are never named. Pure.
- */
+/** Who "@Name" names: one rule shared with the web composer (topic-mentions.ts). */
 export function parseMentions(text: string, members: readonly TopicMember[]): MemberId[] {
-  const lower = text.toLowerCase();
-  const taken = new Array<boolean>(text.length).fill(false);
-  const found: Array<{ at: number; id: MemberId }> = [];
-  const byLength = members.filter((m) => m.status !== 'left').sort((a, b) => b.name.length - a.name.length);
-  for (const m of byLength) {
-    const handle = `@${m.name.toLowerCase()}`;
-    for (let at = lower.indexOf(handle); at >= 0; at = lower.indexOf(handle, at + 1)) {
-      const end = at + handle.length;
-      // A handle stands alone: "mail@marina.example" names nobody, nor does "@Marinas".
-      if (end < text.length && WORD_CHAR.test(text[end])) continue;
-      if (at > 0 && WORD_CHAR.test(text[at - 1])) continue;
-      if (taken.slice(at, end).some(Boolean)) continue;
-      for (let i = at; i < end; i++) taken[i] = true;
-      if (!found.some((f) => f.id === m.id)) found.push({ at, id: m.id });
-    }
-  }
-  return found.sort((a, b) => a.at - b.at).map((f) => f.id);
+  return parseMentionsOf<MemberId>(text, members);
 }
 
 /** Mentions given by id and parsed from the text, once each, only of this topic's members. */

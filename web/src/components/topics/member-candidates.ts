@@ -1,14 +1,18 @@
 /**
  * Who can join a topic, from the browser's own task list: the CEO and every VP (an org node, so the
  * topic follows the node when its task changes), then every open task that is not one of those
- * nodes. Pure apart from the hook, so the picker and the @ list read the same rows.
+ * nodes. Pure apart from the hooks, so the picker and the @ list read the same rows.
+ *
+ * The hooks never read the whole task context (it changes on every task write,
+ * tests/web/tasks-context-readers-ratchet.test.ts): they work their list out of the rows and keep
+ * the same array while it reads the same, so an open topic draws again only when a name changes.
  */
-import { useMemo } from 'react';
+import { useRef } from 'react';
 import type { Task } from '@open-walnut/core';
 import { buildOrgTree, orgDisplayTitle, orgProjectNode } from '@open-walnut/org-tree';
-import { useTasksContextSafe } from '@/contexts/TasksContext';
+import { useTaskListSelect } from '@/contexts/TasksContext';
 import type { PickedMember } from './topic-dialogs';
-import { orgRef, taskRef } from './topic-model';
+import { orgRef, refKey, taskRef } from './topic-model';
 
 export interface Candidate extends PickedMember {
   /** A short word under the name: "Org node", the task's project. */
@@ -33,7 +37,31 @@ export function memberCandidates(tasks: readonly Task[]): Candidate[] {
   return out;
 }
 
+/** A list worked out from the task rows, the same array while `same` holds for each entry. */
+function useKeptList<T>(derive: (tasks: readonly Task[]) => T[], same: (a: T, b: T) => boolean): T[] {
+  const kept = useRef<T[]>([]);
+  return useTaskListSelect(({ tasks }) => {
+    const next = derive(tasks);
+    const prev = kept.current;
+    if (prev.length === next.length && prev.every((x, i) => same(x, next[i]!))) return prev;
+    kept.current = next;
+    return next;
+  }) ?? kept.current;
+}
+
+const sameCandidate = (a: Candidate, b: Candidate) => a.name === b.name && a.hint === b.hint && refKey(a.ref) === refKey(b.ref);
+
 export function useMemberCandidates(): Candidate[] {
-  const tasks = useTasksContextSafe()?.tasks;
-  return useMemo(() => memberCandidates(tasks ?? []), [tasks]);
+  return useKeptList(memberCandidates, sameCandidate);
+}
+
+export interface OpenTaskName { id: string; name: string }
+
+/** The open tasks by their shown name, for the composer's @ list. */
+export function openTaskNames(tasks: readonly Task[]): OpenTaskName[] {
+  return tasks.filter((t) => !isDone(t)).map((t) => ({ id: t.id, name: orgDisplayTitle(t) }));
+}
+
+export function useOpenTaskNames(): OpenTaskName[] {
+  return useKeptList(openTaskNames, (a, b) => a.id === b.id && a.name === b.name);
 }

@@ -5,7 +5,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { createTopicMailTransport, tapTopicMailArrivals } from '../../../src/integrations/mail/topic-transport.js'
-import { onTopicMailArrivals, type TopicMailIncoming } from '../../../src/core/topics/topic-mail-port.js'
+import { onTopicMailArrivals, topicMailArrivals, type TopicMailIncoming } from '../../../src/core/topics/topic-mail-port.js'
 import type { MailIncomingCapture } from '../../../src/integrations/mail/contract.js'
 
 function fakes(asked: () => Promise<unknown>) {
@@ -143,6 +143,34 @@ describe('arrival tap', () => {
       expect(store.messagesByIds).toHaveBeenCalledWith('fake:a', ['msg-1', 'msg-2'])
     } finally {
       off()
+    }
+  })
+
+  it('leaves out of the capture what the bridge takes, and still announces the rest', async () => {
+    const store = { messagesByIds: vi.fn(async () => rows) }
+    const capture = vi.fn<MailIncomingCapture>(async () => finish)
+    const off = onTopicMailArrivals(async () => ['msg-1'])
+    try {
+      const tapped = tapTopicMailArrivals(capture, store as never)
+      const headlines = [{ from: '', subject: '', messageId: 'msg-1' }, { from: '', subject: '', messageId: 'msg-2' }]
+      const done = await tapped('fake:a', headlines, { inbox: true })
+      expect(capture).toHaveBeenCalledWith('fake:a', [headlines[1]], { inbox: true })
+      expect(await done()).toEqual([headlines[1]])
+    } finally {
+      off()
+    }
+  })
+
+  it('a listener that fails or answers too late takes nothing: the mail still reaches the router', async () => {
+    const offs = [
+      onTopicMailArrivals(() => new Promise<string[]>(() => undefined)),
+      onTopicMailArrivals(async () => { throw new Error('boom') }),
+      onTopicMailArrivals(() => { throw new Error('sync boom') }),
+    ]
+    try {
+      expect([...await topicMailArrivals('fake:a', async () => [], 20)]).toEqual([])
+    } finally {
+      for (const off of offs) off()
     }
   })
 })

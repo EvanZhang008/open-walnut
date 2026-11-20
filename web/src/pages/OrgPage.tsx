@@ -18,6 +18,9 @@
  * the one `open` names plus the ones the user locked (org-side-columns.ts), saved in the
  * layout record so the pins come back after a restart. On a phone the list, the detail and the
  * opened task take turns. The old org chart (drag to reparent) stays one click away.
+ * A topic (experiment `topics`) is selected like a node (`node=topic:<id>`): its chat takes the
+ * detail pane, named by its title; no node's pins or Home locks stand beside it (and none are
+ * rewritten), only the free panel the URL names.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { useCommittedRef } from '@/hooks/useCommittedRef';
@@ -70,6 +73,7 @@ import { OrgRouterSetup } from '@/components/org/OrgRouterSetup';
 import { TopicChat } from '@/components/topics/TopicChat';
 import { topicOfKey } from '@/components/topics/topic-model';
 import { useTopicsOn } from '@/components/topics/topics-flag';
+import { useTopicList } from '@/components/topics/useTopics';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { useRouterAreaNames } from '@/components/org/router-area-names';
 import { onOpenOnPage } from '@/utils/taskbar-minimize';
@@ -255,6 +259,9 @@ export function OrgPage() {
   // A topic is selected like a node, `topic:<id>` (experiment topics): its chat takes the detail pane.
   const topicsOn = useTopicsOn();
   const topicId = topicsOn ? topicOfKey(nodeParam) : null;
+  // The detail pane is named by the topic it shows (the list's copy holds its title).
+  const topicList = useTopicList(topicsOn).list;
+  const topicTitle = (topicId && topicList?.find((t) => t.id === topicId)?.title) || 'Topic';
   const tabParam = params.get('tab') ?? pendingPlace?.tab ?? null;
   const urlTab = TABS.includes(tabParam as OrgTab) ? (tabParam as OrgTab) : null;
   // With no node named (or one whose row is gone), the default is picked once the tasks are in and
@@ -342,8 +349,8 @@ export function OrgPage() {
   // chat with them unasked (the VP: "don't squeeze the chat away"); its kept row still opens one.
   const overlays = useSyncExternalStore(onOverlayChange, overlaysNow, () => false);
   const homeHere = useMemo(
-    () => (phone ? [] : homeLocksFor(selected.key, homeLocks, tasks, rowKeyOf, new Set(homeOff))),
-    [phone, selected.key, homeLocks, tasks, rowKeyOf, homeOff],
+    () => (phone || topicId ? [] : homeLocksFor(selected.key, homeLocks, tasks, rowKeyOf, new Set(homeOff))),
+    [phone, topicId, selected.key, homeLocks, tasks, rowKeyOf, homeOff],
   );
   const fromHome = useMemo(() => (overlays ? [] : homeHere), [overlays, homeHere]);
   // A pin saved before pins had a node, or under a node gone since, goes (once the tasks are known)
@@ -355,8 +362,9 @@ export function OrgPage() {
     setPins((prev) => { const next = adoptLegacyPins(prev, ownerOf, selected.key, known); return next === prev ? prev : [...next]; });
   }, [tasksUnknown, nodeArriving, tasks, rowKeyOf, channels, selected.key]);
   // The pins of the node shown: one locked under another node stands only beside that node. None
-  // while the named node is still arriving (the page would draw Main's for a moment).
-  const shownPins = useMemo(() => (nodeArriving ? [] : pinsOfNode(pins, selected.key)), [pins, selected.key, nodeArriving]);
+  // while the named node is still arriving (the page would draw Main's for a moment), and none beside
+  // a topic: no node is shown then (`selected` is only the default the page would fall back to).
+  const shownPins = useMemo(() => (nodeArriving || topicId ? [] : pinsOfNode(pins, selected.key)), [pins, selected.key, nodeArriving, topicId]);
   // `sameSession` changes with `tasks`: a task's panel and its session's become one once the tasks are known.
   const strip = useMemo(
     () => orgStripView([...fromHome, ...shownPins.filter((p) => !fromHome.some((h) => h.id === p.id))], openParam, sameSession),
@@ -385,10 +393,11 @@ export function OrgPage() {
   // shown, with every other node's pins as they are.
   useEffect(() => {
     // Not while the named node arrives: its pins are not drawn yet, and writing none would drop them.
-    if (phone || nodeArriving) return;
+    // Not beside a topic either: it shows no node's pins, and its free panel is the URL's alone.
+    if (phone || nodeArriving || topicId) return;
     const own = strip.filter((s) => !fromHome.some((h) => h.id === s.id) || shownPins.some((p) => p.id === s.id));
     writeStrip(setNodePins(pins, selected.key, own));
-  }, [strip, phone, nodeArriving, writeStrip, fromHome, shownPins, pins, selected.key]);
+  }, [strip, phone, nodeArriving, topicId, writeStrip, fromHome, shownPins, pins, selected.key]);
   // Remember the place as the URL moves (not before the URL has caught up with a restore).
   const urlPlaced = !!(params.get('node') || params.get('open'));
   useEffect(() => {
@@ -442,8 +451,9 @@ export function OrgPage() {
   }, [navigate, setParams]);
 
   // Only for the node still shown, and keeping the entry's state (a phone's pick marker).
+  // A topic shown is the place, not the default node behind it: a pill of that node's task selects it.
   const shownKey = useRef(selected.key);
-  shownKey.current = selected.key;
+  shownKey.current = topicId && nodeParam ? nodeParam : selected.key;
   // The node opened the view the URL named (OrgNodeDetail): the URL lets go of it, so a reload
   // comes back to the view the node was left on, not to the one a link once named.
   const tabUsed = useCallback((key: string) => {
@@ -525,7 +535,7 @@ export function OrgPage() {
     setSideInbox(null);
     // The user closed the node's free panel: it no longer comes back with the node. (A phone keeps
     // none, and its × never closes the one a wide window keeps.)
-    if (!phone) writeNodeOpen(shownKey.current, null);
+    if (!phone && !topicOfKey(shownKey.current)) writeNodeOpen(shownKey.current, null);
     if ((window.history.state as { usr?: { orgSide?: boolean } } | null)?.usr?.orgSide) { navigate(-1); return; }
     setParams(() => { const next = liveParams(); next.delete('open'); return next; },
       { replace: true, state: (window.history.state as { usr?: unknown } | null)?.usr ?? null });
@@ -539,12 +549,15 @@ export function OrgPage() {
     const home = homeIdsOf(id);
     if (home.length) setHomeOff([...homeOff, ...home.filter((h) => !homeOff.includes(h))].slice(-HOME_OFF_MAX));
     const node = selected.key;
-    setPins((cols) => cols.filter((c) => c.node !== node || (c.id !== id && !sameSession(c.id, id))));
+    // Beside a topic the strip holds only the free panel: the default node's pins are not touched.
+    if (!topicId) setPins((cols) => cols.filter((c) => c.node !== node || (c.id !== id && !sameSession(c.id, id))));
     if (openParam && (id === openParam || sameSession(id, openParam))) closeSide();
-  }, [openParam, closeSide, sameSession, homeIdsOf, homeOff, setHomeOff, selected.key]);
+  }, [openParam, closeSide, sameSession, homeIdsOf, homeOff, setHomeOff, selected.key, topicId]);
   const restoredGone = (id: string, close: () => void) => (restoredSide.current?.has(id) ? { onRestoredGone: close } : {});
   /** The lock: the free panel joins the pins; an unlocked pin becomes the free panel (one per page). */
   const togglePanelLock = useCallback((id: string) => {
+    // Beside a topic no node is shown to lock a panel under (its panel offers no lock).
+    if (topicId) return;
     // A panel Home locked: unlocked here, it leaves this page (the VP: "unlocking on Org only takes it
     // off here"); Home keeps its own lock.
     if (homeIdsOf(id).length && strip.some((c) => c.id === id && c.locked)) { closePanel(id); return; }
@@ -554,7 +567,7 @@ export function OrgPage() {
     setPins((prev) => setNodePins(prev, node, here));
     const target = parseSideTarget(id);
     if (wasPinned && target && id !== openParam && !(openParam && sameSession(id, openParam))) openSide(target);
-  }, [shownPins, strip, openParam, sameSession, openSide, homeIdsOf, closePanel, selected.key]);
+  }, [shownPins, strip, openParam, sameSession, openSide, homeIdsOf, closePanel, selected.key, topicId]);
 
   // A kept row's lock unlocks and locks again like the panel's own (useKeptLockToggle); a row
   // unlocked there stays, with an open lock, until the page closes.
@@ -693,7 +706,7 @@ export function OrgPage() {
         />
       )}
       {showDetail && (!phone || phoneView === 'detail') && (
-        <section className="org-detail-pane" aria-label={selected.name} aria-busy={nodeArriving || undefined}>
+        <section className="org-detail-pane" aria-label={topicId ? topicTitle : selected.name} aria-busy={nodeArriving || undefined}>
           {routerSetup && <OrgRouterSetup tasks={tasks} onCancel={() => { setRouterSetup(false); setParams(() => { const next = liveParams(); next.delete('router_setup'); return next; }, { replace: true }); }} onDone={(id) => { setRouterSetup(false); refetch(); select(`router:${id}`); }} />}
           {topicId && !routerSetup && <TopicChat key={topicId} topicId={topicId} {...(phone ? { onBack: back } : {})} />}
           {!topicId && !nodeArriving && !routerSetup && <OrgNodeDetail
@@ -750,7 +763,7 @@ export function OrgPage() {
                 target={target}
                 tasks={tasks}
                 locked={slot.locked}
-                onToggleLock={() => togglePanelLock(slot.id)}
+                {...(topicId ? {} : { onToggleLock: () => togglePanelLock(slot.id) })}
                 onClose={() => closePanel(slot.id)}
                 {...restoredGone(slot.id, () => closePanel(slot.id))}
                 onOpenSession={openSession}

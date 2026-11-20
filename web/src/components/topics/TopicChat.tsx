@@ -8,14 +8,22 @@
  *   │ composer (TopicComposer: @ lists the members, then tasks)             │ members │
  *   └────────────────────────────────────────────────────────────────────────┴─────────┘
  *
- * The side panel's shown/hidden is kept (usePageView). Live through useTopic (topic:updated).
+ * The side panel's shown/hidden is kept (usePageView). A window too narrow for it beside the chat
+ * (TOPIC_SHEET_QUERY) shows it only when Members is pressed, as a sheet laid over the conversation
+ * inside the chat (a scrim under it, the conversation inert); Members again, its ×, Esc or a click on
+ * the scrim closes it, and focus goes back to Members. That sheet is a passing look, never kept.
+ * Live through useTopic (topic:updated).
  */
-import { useEffect, useLayoutEffect, useRef } from 'react';
-import type { Task } from '@open-walnut/core';
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import type { Topic, TopicMessage } from '@/api/topics';
 import { AgentText } from '@/components/common/AgentText';
-import { useTasksContextSafe } from '@/contexts/TasksContext';
+import { useStoreTask } from '@/contexts/TasksContext';
 import { useConfirm } from '@/hooks/useConfirm';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
+import { useMediaQuery } from '@/hooks/useMediaQuery';
+import { hasActiveModalOverlay } from '@/hooks/useModalOverlay';
+import { hasOpenOverlayLayer } from '@/hooks/useOverlayLayer';
+import { isImeKey } from '@/utils/ime-key';
 import { usePageView, isBoolean } from '@/utils/view-memory';
 import { authorOf, reachLine, topicSubtitle } from './topic-model';
 import { MemberAvatar, StackedAvatars, nameColor } from './TopicAvatars';
@@ -27,6 +35,34 @@ import { useTopic, type LocalMessage } from './useTopics';
 /** A time line between messages more than this apart. */
 const GAP_MS = 30 * 60_000;
 
+/** Too narrow for the side panel beside the conversation: Members lays it over as a sheet. */
+export const TOPIC_SHEET_QUERY = '(max-width: 900px)';
+
+/**
+ * The sheet's keyboard: focus moves to its × on open, Esc closes it (unless something above it, a
+ * menu or a confirm, took the key, or an input method did), and focus goes back to Members on close
+ * when it was in the sheet or lost.
+ */
+function useSheetKeys(open: boolean, close: () => void, closeRef: RefObject<HTMLButtonElement | null>, returnRef: RefObject<HTMLButtonElement | null>) {
+  useEffect(() => {
+    if (!open) return;
+    closeRef.current?.focus({ preventScroll: true });
+    const sheet = closeRef.current?.closest('.topic-side') ?? null;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || isImeKey(e) || hasActiveModalOverlay() || hasOpenOverlayLayer()) return;
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      const at = document.activeElement;
+      if (!at || at === document.body || !at.isConnected || (sheet && sheet.contains(at))) returnRef.current?.focus({ preventScroll: true });
+    };
+  }, [open, close, closeRef, returnRef]);
+}
+
 function when(at: string): string {
   const d = new Date(at);
   if (Number.isNaN(d.getTime())) return '';
@@ -36,15 +72,16 @@ function when(at: string): string {
     : d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
-function Message({ m, topic, tasks }: { m: LocalMessage; topic: Topic; tasks: readonly Task[] }) {
+function Message({ m, topic }: { m: LocalMessage; topic: Topic }) {
   const who = authorOf(m, topic.members);
   const reach = reachLine(m, topic.members);
+  const ref = who.kind === 'member' ? who.member?.ref : undefined;
+  // The writer's own row only: a task write elsewhere never redraws the topic.
+  const task = useStoreTask(ref?.kind === 'task' ? ref.taskId : null);
   if (who.kind === 'walnut') {
     return <li className="topic-msg is-walnut" data-testid="topic-message" data-author="walnut" data-message-id={m.id}>{m.text}</li>;
   }
   const human = who.kind === 'human';
-  const ref = who.kind === 'member' ? who.member?.ref : undefined;
-  const task = ref?.kind === 'task' ? tasks.find((t) => t.id === ref.taskId) ?? null : null;
   return (
     <li className={`topic-msg${human ? ' is-human' : ''}${m.local ? ' is-sending' : ''}`} data-testid="topic-message" data-author={m.author} data-message-id={m.id} data-via={m.via}>
       {!human && <MemberAvatar who={{ name: who.kind === 'member' ? who.name : '', ...(ref ? { ref } : {}) }} size={30} />}
@@ -67,9 +104,16 @@ function Message({ m, topic, tasks }: { m: LocalMessage; topic: Topic; tasks: re
 export function TopicChat({ topicId, onBack }: { topicId: string; onBack?: () => void }) {
   const on = useTopicsOn();
   const { topic, error, ...actions } = useTopic(topicId, on);
-  const tasks = useTasksContextSafe()?.tasks ?? [];
   const confirm = useConfirm();
   const [side, setSide] = usePageView('org', 'topics.side', true, isBoolean);
+  const narrow = useMediaQuery(TOPIC_SHEET_QUERY);
+  const [sheetOverlayOpen, setSheetOverlayOpen] = useState(false);
+  useEffect(() => { if (!narrow) setSheetOverlayOpen(false); }, [narrow]);
+  const shown = narrow ? sheetOverlayOpen : side;
+  const sheetCloseRef = useRef<HTMLButtonElement>(null);
+  const membersRef = useRef<HTMLButtonElement>(null);
+  const closeSheet = useLeanCallback(() => setSheetOverlayOpen(false), []);
+  useSheetKeys(narrow && sheetOverlayOpen && !!topic, closeSheet, sheetCloseRef, membersRef);
   const listRef = useRef<HTMLOListElement>(null);
   const nearEnd = useRef(true);
   const count = topic?.messages.length ?? 0;
@@ -96,7 +140,7 @@ export function TopicChat({ topicId, onBack }: { topicId: string; onBack?: () =>
   };
   let prevAt = 0;
   return (
-    <div className={`topic-chat${side ? ' shows-side' : ''}`} data-testid="topic-chat" data-topic-id={topic.id} data-closed={topic.closed ? 'true' : undefined}>
+    <div className={`topic-chat${shown ? ' shows-side' : ''}`} data-testid="topic-chat" data-topic-id={topic.id} data-closed={topic.closed ? 'true' : undefined}>
       <header className="topic-head">
         {onBack && <button type="button" className="btn btn-sm" onClick={onBack} aria-label="Back to the list">‹</button>}
         <StackedAvatars members={topic.members} size={26} testId="topic-head-stack" />
@@ -104,12 +148,13 @@ export function TopicChat({ topicId, onBack }: { topicId: string; onBack?: () =>
           <span className="topic-head-title" data-testid="topic-title">{topic.title}</span>
           <span className="topic-muted" data-testid="topic-subtitle">{topicSubtitle(topic)}{topic.closed ? ' · closed' : ''}</span>
         </span>
-        <button type="button" className="btn btn-sm" data-testid="topic-toggle-side" aria-pressed={side} onClick={() => setSide(!side)}>Members</button>
+        <button ref={membersRef} type="button" className="btn btn-sm" data-testid="topic-toggle-side" aria-pressed={shown}
+          onClick={() => (narrow ? setSheetOverlayOpen(!sheetOverlayOpen) : setSide(!side))}>Members</button>
         {!topic.closed && <button type="button" className="btn btn-sm" data-testid="topic-close" onClick={() => void close()}>Close</button>}
       </header>
       {error && <p className="topic-error" data-testid="topic-error">{error}</p>}
       <div className="topic-main">
-        <div className="topic-conversation">
+        <div className="topic-conversation" inert={narrow && shown}>
           <ol ref={listRef} className="topic-messages" data-testid="topic-messages"
             onScroll={(e) => { const el = e.currentTarget; nearEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>
             {!!topic.droppedMessages && <li className="topic-msg is-walnut">{topic.droppedMessages} older messages are no longer kept</li>}
@@ -120,13 +165,14 @@ export function TopicChat({ topicId, onBack }: { topicId: string; onBack?: () =>
               prevAt = at;
               return [
                 gap ? <li key={`t-${m.id}`} className="topic-time" aria-hidden="true">{when(m.at)}</li> : null,
-                <Message key={m.id} m={m} topic={topic} tasks={tasks} />,
+                <Message key={m.id} m={m} topic={topic} />,
               ];
             })}
           </ol>
           <TopicComposer topic={topic} actions={actions} />
         </div>
-        {side && <TopicSidePanel topic={topic} actions={actions} />}
+        {shown && narrow && <div className="topic-sheet-scrim" data-testid="topic-sheet-scrim" aria-hidden="true" onClick={closeSheet} />}
+        {shown && <TopicSidePanel topic={topic} actions={actions} {...(narrow ? { sheet: { onClose: closeSheet, closeRef: sheetCloseRef } } : {})} />}
       </div>
     </div>
   );

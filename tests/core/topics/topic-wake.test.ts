@@ -51,6 +51,24 @@ describe('mentions', () => {
     expect(parseMentions('@acme vp and @ACME, also @Lee and @Marina.', t.members)).toEqual([VP, 'mb-00000010', MARINA])
     expect(parseMentions('mail@marina.example is no mention, @Marinas neither', t.members)).toEqual([])
   })
+
+  it('a short form names its member while it is unique: "@Robin" is "Robin (test)", so the server wakes who the composer showed', () => {
+    const t = topic()
+    const ROBIN = 'mb-00000011' as MemberId
+    const HALE = 'mb-00000012' as MemberId
+    t.members.push(member(ROBIN, 'Robin (test)', { kind: 'person', name: 'Robin (test)', email: 'robin@example.com' }))
+    expect(parseMentions('@Robin can you price it?', t.members)).toEqual([ROBIN])
+    expect(parseMentions('@robin (test) and @Robin', t.members)).toEqual([ROBIN])
+    expect(msg(t, 'human', '@Robin please').mentions).toEqual([ROBIN])
+    // The first word of "Acme VP" names it while no other member is called "Acme".
+    expect(parseMentions('@Acme ship it', t.members)).toEqual([VP])
+    // Two Robins: the short form names no one, a full name still names its member.
+    t.members.push(member(HALE, 'Robin Hale', { kind: 'task', taskId: 't-hale' }))
+    expect(parseMentions('@Robin are you there?', t.members)).toEqual([])
+    expect(parseMentions('@Robin Hale are you there?', t.members)).toEqual([HALE])
+    // A prefix is never a short form.
+    expect(parseMentions('@Rob', t.members)).toEqual([])
+  })
 })
 
 describe('the user writes', () => {
@@ -146,5 +164,18 @@ describe('closing', () => {
     const plan = planDelivery(t, msg(t, MARINA, '@Orchard one more'))
     expect(plan.wake).toEqual([])
     expect(plan.fold).toEqual([])
+  })
+})
+
+describe('a person writes (by mail)', () => {
+  it('mails nobody at once, even another person it names; an agent naming a person still does', () => {
+    const t = topic()
+    const KIT = 'mb-00000011' as MemberId
+    t.members.push(member(KIT, 'Kit', { kind: 'person', name: 'Kit', email: 'kit@example.com', bot: true }))
+    const byPerson = planDelivery(t, { ...msg(t, DANA, '@Kit ok, over to you'), via: 'mail' })
+    expect(byPerson.mail).toEqual([KIT])
+    expect(byPerson.mailNow).toEqual([])
+    const byAgent = planDelivery(t, msg(t, MARINA, '@Kit please check'))
+    expect(byAgent.mailNow).toEqual([KIT])
   })
 })

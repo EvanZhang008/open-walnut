@@ -108,10 +108,18 @@ const id = (uid: number) => encodeMessageId('INBOX', '7', uid)
 
 describe('the poll carries Precedence and Auto-Submitted, outside the hash', () => {
   it('lists both headers and parses them lowercased (Auto-Submitted: no is not automated)', () => {
-    expect([...BULK_HEADERS]).toEqual(['precedence', 'auto-submitted'])
+    expect([...BULK_HEADERS]).toEqual(['precedence', 'auto-submitted', 'x-autoreply', 'x-autorespond'])
     expect(bulkHeadersOf({ precedence: 'Bulk', 'auto-submitted': 'auto-generated' })).toEqual({ precedence: 'bulk', autoSubmitted: 'auto-generated' })
     expect(bulkHeadersOf({ 'auto-submitted': 'no' })).toBeUndefined()
     expect(bulkHeadersOf({})).toBeUndefined()
+  })
+
+  it('reads an older responder\'s X-Autoreply / X-Autorespond as Auto-Submitted: auto-replied', () => {
+    expect(bulkHeadersOf({ 'x-autoreply': 'yes' })).toEqual({ autoSubmitted: 'auto-replied' })
+    expect(bulkHeadersOf({ 'x-autorespond': 'On vacation' })).toEqual({ autoSubmitted: 'auto-replied' })
+    expect(bulkHeadersOf({ 'x-autoreply': 'no' })).toBeUndefined()
+    // A real Auto-Submitted value wins.
+    expect(bulkHeadersOf({ 'auto-submitted': 'auto-generated', 'x-autoreply': 'yes' })).toEqual({ autoSubmitted: 'auto-generated' })
   })
 
   it('puts them on the envelope and leaves the envelope hash unchanged', () => {

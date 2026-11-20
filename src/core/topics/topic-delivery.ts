@@ -8,7 +8,17 @@
  * reply is posted back (topic-replies.ts). A fold holds the new lines for the member's next message
  * (held-notices.ts, one notice per topic). A task with no session or a complete one is not woken:
  * the message records why (the web shows it under the message); a topic never starts or reopens a task.
- * Persons are only recorded as mailed: the mail bridge sends.
+ * Persons are not mailed here: the message lists them (`toMail`) and the mail bridge sends.
+ *
+ * A woken member's `pendingTurn` is on disk BEFORE its wake is sent: a turn that ends at once (its
+ * result can come before this delivery's last write) still finds the turn its reply belongs to
+ * (review 2026-11-20, a reply lost by that race). A wake that was not delivered takes it back.
+ *
+ * One topic turn at a time per member: a member whose topic turn is still in flight is never sent
+ * another wake into it (its answer to the first would be lost in the second's turn: 2026-11-20
+ * acceptance, a member's real answer never posted). The turn is marked `more` instead (the wake
+ * still counted against the round); when it ends, its reply is posted and ONE follow-up wake
+ * carries what it has not read (wakeAgain, from topic-replies.ts).
  */
 import { log } from '../../logging/index.js';
 import { PeerThrottle } from '../peers/peer-throttle.js';
@@ -16,7 +26,7 @@ import { holdFoldedNotice } from '../sessions/held-notices.js';
 import { ORG_MAIN_NODE, pickLead, pickMain } from '../org/org-tree.js';
 import type { Task } from '../types.js';
 import {
-  type MemberId, type Topic, type TopicMember, type TopicMessage, type TopicPendingTurn,
+  PENDING_TURN_MAX_MS, type MemberId, type Topic, type TopicMember, type TopicMessage, type TopicPendingTurn,
 } from './topics-model.js';
 import { messageLine, renderFoldedTopic, topicWakeText, unreadFor, type FoldPart } from './topic-text.js';
 import type { DeliveryPlan, DeliveryRefusal } from './topic-wake.js';
@@ -45,6 +55,8 @@ export const COMPLETE_WHY = 'its task is complete';
 export const NO_TASK_WHY = 'its task was not found';
 
 export const ORG_OFF_WHY = 'the org is off';
+/** A wake held back because the member's topic turn still runs: it reads the line when that turn ends. */
+export const QUEUED_WHY = 'its turn is still running: it reads this when that turn ends';
 
 export type MemberTarget = { taskId: string; sessionId: string; orgNode: boolean } | { why: string; taskId?: string };
 
@@ -75,11 +87,8 @@ export async function memberTarget(member: TopicMember): Promise<MemberTarget> {
 export interface DeliveryOutcome {
   woke: MemberId[];
   folded: MemberId[];
-  mailed: MemberId[];
   refused: DeliveryRefusal[];
 }
-
-interface MemberUpdate { readUpto?: string; pendingTurn?: TopicPendingTurn }
 
 function laterOf(topic: Topic, a: string | undefined, b: string): string {
   if (!a) return b;
@@ -98,9 +107,10 @@ export async function deliver(topic: Topic, message: TopicMessage, plan: Deliver
   const byMember = opts.byMember ?? (message.author !== 'human' && message.author !== 'walnut');
   const orgOff = byMember ? !(await import('../org/org-enabled.js').then((m) => m.isOrgEnabled()).catch(() => true)) : false;
   const fold = [...plan.fold];
-  const outcome: DeliveryOutcome = { woke: [], folded: [], mailed: [...plan.mail], refused: [...plan.refused] };
-  const updates = new Map<MemberId, MemberUpdate>();
+  const outcome: DeliveryOutcome = { woke: [], folded: [], refused: [...plan.refused] };
+  const readUpto = new Map<MemberId, string>();
   const nowIso = new Date().toISOString();
+  const { mutateTopic } = await import('./topics-store.js');
 
   for (const id of plan.wake) {
     const member = topic.members.find((m) => m.id === id);
@@ -123,17 +133,22 @@ export async function deliver(topic: Topic, message: TopicMessage, plan: Deliver
         continue;
       }
     }
+    // The turn goes down first (see the file comment); the one it replaced comes back if the send fails.
+    const claim = await claimTurn(topic.id, id, target.sessionId, message.id, nowIso);
+    if (claim.queued) {
+      outcome.refused.push({ member: id, why: QUEUED_WHY });
+      continue;
+    }
+    notePendingTurn(target.sessionId, topic.id);
     try {
       await sendWake(target.sessionId, text, { taskId: target.taskId });
       outcome.woke.push(id);
-      // A turn already waited on in the same session keeps its start: the reply read covers both.
-      const prev = member.pendingTurn?.sessionId === target.sessionId ? member.pendingTurn : undefined;
-      updates.set(id, { readUpto: message.id, pendingTurn: { sessionId: target.sessionId, since: prev?.since ?? nowIso, messageId: message.id } });
-      notePendingTurn(target.sessionId, topic.id);
+      readUpto.set(id, message.id);
     } catch (err) {
       const why = `not delivered: ${err instanceof Error ? err.message : String(err)}`;
       outcome.refused.push({ member: id, why });
       log.task.warn('topics: a wake was not delivered', { topicId: topic.id, memberId: id, sessionId: target.sessionId, error: why });
+      await restorePendingTurn(topic.id, id, message.id, claim.before).catch(() => {});
     }
   }
 
@@ -148,24 +163,86 @@ export async function deliver(topic: Topic, message: TopicMessage, plan: Deliver
     if (!lines.length) continue;
     const head = { id: topic.id, title: topic.title };
     holdFoldedNotice<FoldPart>(target.sessionId, `topic:${topic.id}`, { at: Date.now(), lines }, (parts, dropped) => renderFoldedTopic(head, parts, dropped));
-    updates.set(id, { readUpto: message.id });
+    readUpto.set(id, message.id);
   }
 
-  const { mutateTopic } = await import('./topics-store.js');
+  // The turns are already on disk; never written again here (a reply captured meanwhile cleared one).
   const { topic: saved } = await mutateTopic(topic.id, (t) => {
     const m = t.messages.find((x) => x.id === message.id);
     if (m) {
       if (outcome.woke.length) m.woke = [...new Set([...(m.woke ?? []), ...outcome.woke])];
       if (outcome.folded.length) m.folded = [...new Set([...(m.folded ?? []), ...outcome.folded])];
-      if (outcome.mailed.length) m.mailed = [...new Set([...(m.mailed ?? []), ...outcome.mailed])];
       if (outcome.refused.length) m.refused = [...(m.refused ?? []), ...outcome.refused];
     }
-    for (const [id, u] of updates) {
+    for (const [id, upto] of readUpto) {
       const member = t.members.find((x) => x.id === id);
-      if (!member) continue;
-      if (u.readUpto) member.readUpto = laterOf(t, member.readUpto, u.readUpto);
-      if (u.pendingTurn) member.pendingTurn = u.pendingTurn;
+      if (member) member.readUpto = laterOf(t, member.readUpto, upto);
     }
   });
   return { topic: saved, outcome };
+}
+
+/**
+ * Claim member `id`'s topic turn in `sessionId` (one locked write), before its wake is sent. A turn
+ * still in flight (not past PENDING_TURN_MAX_MS) is not replaced: it is marked `more` and the wake
+ * is not sent (`queued`). Else the new turn is written; `before` is the expired one it replaced.
+ */
+async function claimTurn(topicId: string, id: MemberId, sessionId: string, messageId: string, nowIso: string): Promise<{ queued: true } | { queued: false; before?: TopicPendingTurn }> {
+  const { mutateTopic } = await import('./topics-store.js');
+  const { out } = await mutateTopic(topicId, (t): { queued: true } | { queued: false; before?: TopicPendingTurn } => {
+    const member = t.members.find((x) => x.id === id);
+    if (!member) return { queued: false };
+    const cur = member.pendingTurn;
+    if (cur && Date.parse(nowIso) - Date.parse(cur.since) <= PENDING_TURN_MAX_MS) {
+      cur.more = true;
+      return { queued: true };
+    }
+    member.pendingTurn = { sessionId, since: nowIso, messageId };
+    return { queued: false, ...(cur ? { before: cur } : {}) };
+  }, { touch: false });
+  return out;
+}
+
+/**
+ * The one follow-up wake of a member whose turn ended while more was said to it (`more`): every
+ * line it has not read, in one wake (a closing wake when the topic closed meanwhile). False when
+ * there is nothing unread, no session to wake, or another turn is already in flight.
+ */
+export async function wakeAgain(topicId: string, memberId: string, userName: string): Promise<boolean> {
+  const { mutateTopic, readTopic } = await import('./topics-store.js');
+  const topic = await readTopic(topicId);
+  const member = topic?.members.find((m) => m.id === memberId);
+  if (!topic || !member || member.status !== 'active') return false;
+  const unread = unreadFor(topic, member);
+  const last = topic.messages[topic.messages.length - 1];
+  if (!unread.length || !last) return false;
+  const target = await memberTarget(member).catch((): MemberTarget => ({ why: 'not reached' }));
+  if ('why' in target) return false;
+  const text = topicWakeText({ topic, member, unread, userName, closing: !!topic.closed });
+  const claim = await claimTurn(topic.id, member.id, target.sessionId, last.id, new Date().toISOString());
+  if (claim.queued) return false;
+  notePendingTurn(target.sessionId, topic.id);
+  try {
+    await sendWake(target.sessionId, text, { taskId: target.taskId });
+  } catch (err) {
+    log.task.warn('topics: a follow-up wake was not delivered', { topicId, memberId, sessionId: target.sessionId, error: err instanceof Error ? err.message : String(err) });
+    await restorePendingTurn(topic.id, member.id, last.id, claim.before).catch(() => {});
+    return false;
+  }
+  await mutateTopic(topic.id, (t) => {
+    const m = t.members.find((x) => x.id === member.id);
+    if (m) m.readUpto = laterOf(t, m.readUpto, last.id);
+  }, { touch: false });
+  return true;
+}
+
+/** A wake that was not delivered: its turn goes back to what it was (only while it is still this one). */
+async function restorePendingTurn(topicId: string, id: MemberId, messageId: string, before: TopicPendingTurn | undefined): Promise<void> {
+  const { mutateTopic } = await import('./topics-store.js');
+  await mutateTopic(topicId, (t) => {
+    const member = t.members.find((x) => x.id === id);
+    if (!member || member.pendingTurn?.messageId !== messageId) return;
+    if (before) member.pendingTurn = before;
+    else delete member.pendingTurn;
+  }, { touch: false });
 }
