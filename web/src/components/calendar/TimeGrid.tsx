@@ -438,7 +438,7 @@ export const TimeGrid = memo(function TimeGrid({
     tint: string;
     copy: boolean;
   } | null>(null);
-  const copyable = useCallback((item: CalendarItem) => !!onCopyItem && canAltCopy(item), [onCopyItem]);
+  const copyable = useLeanCallback((item: CalendarItem) => !!onCopyItem && canAltCopy(item), [onCopyItem]);
   // Alt pressed or let go while the pointer stands still changes the gesture too.
   useAltCopy(!!moveGhost, (alt) => {
     const drag = dragRef.current;

@@ -5,6 +5,7 @@
  * over captured cell rects — no per-cell droppable churn mid-drag).
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { createPortal } from 'react-dom';
 import { useDroppable } from '@dnd-kit/core';
 import { useDragGesture } from '@/hooks/useDragGesture';
@@ -208,7 +209,7 @@ export const MonthView = memo(function MonthView({
   // Floating chip clone under the cursor — the "in my hand" feedback the cell
   // highlight alone doesn't give.
   const [dragPointer, setDragPointer] = useState<{ x: number; y: number; title: string; tint: string; copy: boolean } | null>(null);
-  const copyable = useCallback((item: CalendarItem) => !!onCopyItem && canAltCopy(item), [onCopyItem]);
+  const copyable = useLeanCallback((item: CalendarItem) => !!onCopyItem && canAltCopy(item), [onCopyItem]);
   useAltCopy(!!dragPointer, (alt) => {
     const drag = dragRef.current;
     if (!drag || !copyable(drag.item)) return;

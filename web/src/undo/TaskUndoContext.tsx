@@ -14,6 +14,7 @@
  * and the data to rebuild it from, and the page that comes back revives it for the time left.
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import type { Task } from '@open-walnut/core';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { startDateMs } from '@open-walnut/user-status';
@@ -108,13 +109,13 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
   // while the first is up, so each has its own id).
   const undoneToast = useRef('');
   const undoneSeq = useRef(0);
-  const sayUndoneLine = useCallback((line: Omit<NotificationInput, 'id' | 'dedupKey'>) => {
+  const sayUndoneLine = useLeanCallback((line: Omit<NotificationInput, 'id' | 'dedupKey'>) => {
     if (undoneToast.current) dismissToast(undoneToast.current);
     const id = `undo:done:${++undoneSeq.current}`;
     undoneToast.current = id;
     notify({ ...line, id, dedupKey: id });
   }, [notify, dismissToast]);
-  const showUndone = useCallback((undone: Pick<UndoablePush, 'title' | 'body' | 'redo'>, how: Settled | undefined) => {
+  const showUndone = useLeanCallback((undone: Pick<UndoablePush, 'title' | 'body' | 'redo'>, how: Settled | undefined) => {
     const body = undone.body ? `${undone.title}  \u00b7  ${undone.body}` : undone.title;
     if (how === 'stale') {
       sayUndoneLine({ kind: 'hint', severity: 'info', title: 'Not undone: it changed since', body, persistent: false, durationMs: 3000 });
@@ -182,7 +183,7 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
   }, [stack]);
 
   const drop = useCallback((key: string) => { stack.drop(key); }, [stack]);
-  const notUndone = useCallback((title: string, body?: string) => { showUndone({ title, ...(body ? { body } : {}) }, 'stale'); }, [showUndone]);
+  const notUndone = useLeanCallback((title: string, body?: string) => { showUndone({ title, ...(body ? { body } : {}) }, 'stale'); }, [showUndone]);
   /** A write the server refused takes its Undo and toast down (the store says why). */
   const withdrawIfRefused = (write: Promise<boolean | void>, withdraw: () => void) => {
     void write.then((ok) => { if (ok === false) withdraw(); }, withdraw);
