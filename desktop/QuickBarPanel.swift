@@ -290,8 +290,12 @@ final class QuickBarPanel: NSObject {
             let height = (msg["height"] as? NSNumber).map { CGFloat(truncating: $0) } ?? 72
             place(mode: (msg["mode"] as? String) ?? "hidden", height: height)
         case "open":
-            guard let taskId = msg["taskId"] as? String,
-                  let to = "/tasks/\(taskId)".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+            // A task's chat by its id, or any app path the page names (a note: /notes?path=...).
+            let path = (msg["to"] as? String).flatMap { $0.hasPrefix("/") ? $0 : nil }
+                ?? (msg["taskId"] as? String).map { "/tasks/\($0)" }
+            var allowed = CharacterSet.urlQueryAllowed
+            allowed.remove(charactersIn: "&=?#")
+            guard let path, let to = path.addingPercentEncoding(withAllowedCharacters: allowed),
                   let url = URL(string: "\(AppLink.scheme)://open?to=\(to)") else { return }
             openLink(url)
         case "capture":

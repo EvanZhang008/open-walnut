@@ -4,7 +4,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  addresseeOf, filterPeople, sectionPeople, startingPerson, initialsOf,
+  addresseeOf, filterPeople, sectionPeople, startingPerson, initialsOf, personOfRecent,
   STAY_WITH_LAST_MS, RECENT_TASK_MS, type QuickPerson,
 } from '../../web/src/components/quickbar/quickbar-people';
 
@@ -85,3 +85,15 @@ describe('filterPeople and initials', () => {
     expect([initialsOf(ceo), initialsOf(walnut), initialsOf(tile)]).toEqual(['CEO', 'W', 'P']);
   });
 });
+
+describe('personOfRecent (the people list did not load)', () => {
+  it('opens on the last one sent to, as a loaded list would, so the chip and the send stay one person', () => {
+    expect(personOfRecent([{ id: 'v1', title: 'Walnut VP', at: NOW - 60_000, kind: 'vp' }], NOW)).toMatchObject({ id: 'v1', title: 'Walnut VP', kind: 'vp' })
+    // An entry written before `kind` was kept still names its person.
+    expect(personOfRecent([{ id: 't1', title: 'Pick the tile color', at: NOW - 60_000 }], NOW)).toMatchObject({ id: 't1', title: 'Pick the tile color' })
+  })
+  it('nobody when the last send is old or there is none: the chip says CEO and the words go to the CEO', () => {
+    expect(personOfRecent([{ id: 'v1', title: 'Walnut VP', at: NOW - STAY_WITH_LAST_MS - 1 }], NOW)).toBeNull()
+    expect(personOfRecent([], NOW)).toBeNull()
+  })
+})

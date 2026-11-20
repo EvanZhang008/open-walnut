@@ -17,7 +17,8 @@ export interface QuickPerson {
   needs: number;
 }
 
-export interface RecentSend { id: string; title: string; at: number }
+/** `kind` since 2026-11-20 (older entries have none). */
+export interface RecentSend { id: string; title: string; at: number; kind?: QuickPerson['kind'] }
 
 /** The person the bar opens on is the last one sent to, for this long; then the CEO. */
 export const STAY_WITH_LAST_MS = 10 * 60_000;
@@ -33,8 +34,8 @@ export function readRecents(): RecentSend[] {
   } catch { return []; }
 }
 
-export function rememberSend(person: Pick<QuickPerson, 'id' | 'title'>, now = Date.now()): RecentSend[] {
-  const next = [{ id: person.id, title: person.title, at: now }, ...readRecents().filter((r) => r.id !== person.id)].slice(0, MAX_RECENTS);
+export function rememberSend(person: Pick<QuickPerson, 'id' | 'title'> & { kind?: QuickPerson['kind'] }, now = Date.now()): RecentSend[] {
+  const next = [{ id: person.id, title: person.title, at: now, ...(person.kind ? { kind: person.kind } : {}) }, ...readRecents().filter((r) => r.id !== person.id)].slice(0, MAX_RECENTS);
   try { localStorage.setItem(RECENTS_KEY, JSON.stringify(next)); } catch { /* private mode: no memory */ }
   return next;
 }
@@ -190,4 +191,15 @@ export function hueOf(id: string): number {
 export function personLine(p: Pick<QuickPerson, 'kind' | 'needs' | 'line' | 'stateLabel'>): string {
   if (p.kind !== 'task' && p.needs > 0) return `${stateCountLabel('needs', p.needs)}${p.line ? ` \u00b7 ${p.line}` : ''}`;
   return p.line || p.stateLabel;
+}
+
+/**
+ * The person the bar opens on when the people list did not load: the last one sent to within
+ * STAY_WITH_LAST_MS, as startingPerson would pick from a loaded list, else null (the chip then
+ * says CEO, and the words go to the CEO).
+ */
+export function personOfRecent(recents: readonly RecentSend[], now = Date.now()): QuickPerson | null {
+  const last = recents[0];
+  if (!last || now - last.at > STAY_WITH_LAST_MS) return null;
+  return { id: last.id, title: last.title, kind: last.kind ?? 'task', project: '', state: '', stateLabel: '', line: '', needs: 0 };
 }

@@ -13,88 +13,12 @@
  * The microphone is synthetic, the engine canned, and the people list and the send are stubbed
  * (the send's own contract is tests/e2e/quick-input.test.ts); the rest is the real app.
  */
-import { expect, test, type APIRequestContext, type Page, type Route } from '@playwright/test'
-import fs from 'node:fs/promises'
-import path from 'node:path'
+import { expect, test } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { stubSttStatus } from './voice-selection-helpers'
 import { useSyntheticMic } from './stt-failure-helpers'
-
-const SHOT_DIR = process.env.WALNUT_TASK_DIR ? path.join(process.env.WALNUT_TASK_DIR, 'shots') : '/tmp/quick-bar/shots'
-const KEY = 'Control+Alt+Meta+Space'
-const DRAFT = 'to Walnut VP, ship the'
-const FINAL = 'to Walnut VP, ship the quick bar first'
-
-const PEOPLE = [
-  { id: 'pw-ceo', title: 'CEO', kind: 'ceo', project: '', state: 'waiting', stateLabel: 'Waiting', line: 'Your next message', needs: 0 },
-  { id: 'pw-vp-walnut', title: 'Walnut VP', kind: 'vp', project: 'Walnut', state: 'waiting', stateLabel: 'Waiting', line: 'Pick the artifacts layout', needs: 3 },
-  { id: 'pw-vp-garden', title: 'Garden VP', kind: 'vp', project: 'Garden', state: 'working', stateLabel: 'Working', line: 'Planting the spring beds', needs: 0 },
-  { id: 'pw-task-tile', title: 'Pick the tile color', kind: 'task', project: 'Garden', state: 'needs', stateLabel: 'Needs you', line: 'Blue or sand?', needs: 1 },
-]
+import { bar, box, chip, DRAFT, KEY, openApp, setFlag, shot, stubAll, voiceOff } from './quick-bar-helpers'
 
 test.describe.configure({ mode: 'serial' })
-
-async function shot(page: Page, name: string): Promise<void> {
-  await fs.mkdir(SHOT_DIR, { recursive: true })
-  await page.screenshot({ path: path.join(SHOT_DIR, `quick-bar-${name}.png`) }).catch(() => {})
-}
-
-async function setFlag(request: APIRequestContext, on: boolean): Promise<Record<string, boolean>> {
-  const cfg = await (await request.get('/api/config')).json() as { config?: { experimental?: Record<string, boolean> } }
-  const before = { ...(cfg.config?.experimental ?? {}) }
-  const res = await request.put('/api/config', { data: { experimental: { ...before, quick_bar: on } } })
-  expect(res.ok(), await res.text()).toBe(true)
-  return before
-}
-
-/** `takes`: recordings the engine was asked to write out (none may run while voice is off). */
-interface Sends { bodies: Array<{ to?: string; text: string; follow?: boolean }>; fail: boolean; takes: number }
-
-/** The canned engine, the people list and the send (a reply streamed in three lines). */
-async function stubAll(page: Page, said: { draft?: string; final?: string } = {}): Promise<Sends> {
-  const sends: Sends = { bodies: [], fail: false, takes: 0 }
-  await stubSttStatus(page)
-  await page.route('**/api/stt/warmup', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }))
-  // The live words grow over two drafts, as they do while one talks: the second must replace the
-  // first, never land beside it (2026-11-20: "to Walnut VP to Walnut VP, ..." in the proof video).
-  let drafts = 0
-  await page.route('**/api/stt/draft', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: said.draft ?? (drafts++ === 0 ? 'to Walnut VP' : DRAFT), durationMs: 30 }) }))
-  await page.route('**/api/stt/transcribe', (r) => { sends.takes++; return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: said.final ?? FINAL, durationMs: 40 }) }) })
-  await page.route('**/api/stt/save', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ recordingId: 'rec-qb-1', debugAudioPath: '/tmp/rec-qb-1.webm' }) }))
-  await page.route('**/api/v1/quick/people**', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ people: PEOPLE }) }))
-  await page.route('**/api/v1/quick/send', async (r: Route) => {
-    const body = JSON.parse(r.request().postData() ?? '{}')
-    sends.bodies.push(body)
-    if (sends.fail) { await r.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Walnut is restarting' }) }); return }
-    const to = body.to ?? 'pw-ceo'
-    const lines = [
-      { type: 'sent', taskId: to, sessionId: 's-1', started: false, messageId: 'm-1' },
-      { type: 'delivered' },
-      { type: 'text', delta: 'On it. ' },
-      { type: 'result', text: 'On it. The bar ships first, the phone next.' },
-    ]
-    await r.fulfill({ status: 200, contentType: 'application/x-ndjson', body: lines.map((l) => JSON.stringify(l)).join('\n') + '\n' })
-  })
-  return sends
-}
-
-/** Voice off (no engine): the bar opens for typing. Registered last, so it wins over stubAll's. */
-async function voiceOff(page: Page): Promise<void> {
-  await page.route('**/api/stt/status', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ engine: null, available: false }) }))
-}
-
-/** Walnut open; with the experiment on, also its key listener (the switch is read after the page shows). */
-async function openApp(page: Page, barOn = true): Promise<void> {
-  await page.setContent(`<a href="${test.info().project.use.baseURL}/">Open Walnut</a>`)
-  await page.getByRole('link', { name: 'Open Walnut' }).click()
-  // A busy dev host takes a while to boot the app (the other specs give it 45 to 90 s).
-  await expect(page.locator('.main-page')).toBeVisible({ timeout: 90_000 })
-  if (barOn) await expect(page.locator('.qb-layer')).toBeAttached({ timeout: 15_000 })
-}
-
-const bar = (page: Page) => page.locator('.qb-center .qb-bar')
-const box = (page: Page) => page.getByRole('textbox', { name: 'Message' })
-const chip = (page: Page) => page.locator('.qb-to-name')
 
 let restore: Record<string, boolean> | null = null
 
@@ -151,6 +75,9 @@ test('speak, the name said first picks the VP, and two seconds later it sends an
   // The live words, and the chip already shows who the words go to.
   await expect(box(page)).toHaveValue(DRAFT, { timeout: 15_000 })
   await expect(chip(page)).toHaveText('Walnut VP')
+  // The keys say what they do now: Esc stops listening, Enter sends (2026-11-20, "done" read as nothing).
+  await expect(page.locator('.qb-keys')).toHaveText(/esc\s*stop listening.*↵\s*send/)
+  await expect(page.locator('.qb-keys')).not.toContainText('done')
   await shot(page, '1-listening')
 
   // The key again ends the take: the address leaves the words, the count starts.
@@ -197,15 +124,28 @@ test('speak, the name said first picks the VP, and two seconds later it sends an
   expect(sends.bodies[1]).toMatchObject({ to: 'pw-vp-walnut', text: 'ship the quick bar first today' })
 })
 
-test('Enter during the take sends at once, once, and reads only the first name', async ({ page, request }) => {
+test('Enter during the take closes the bar at once; the last words are written out and sent after, once, to the first name only', async ({ page, request }) => {
   await setFlag(request, true)
-  // The second "to ..." is part of what was said: only the first picks who gets it.
-  const sends = await stubAll(page, { draft: 'to CEO, to Walnut VP,', final: 'to CEO, to Walnut VP, ship it' })
+  // The second "to ..." is part of what was said: only the first picks who gets it. "ship it" comes
+  // only with the final words, and the engine answers them 1.5 s after Enter.
+  const sends = await stubAll(page, { draft: 'to CEO, to Walnut VP,', final: 'to CEO, to Walnut VP, ship it', finalDelayMs: 1_500 })
   await openApp(page)
   await page.keyboard.press(KEY)
   await expect(bar(page)).toHaveAttribute('data-recording', 'true', { timeout: 10_000 })
   await expect(box(page)).toHaveValue('to CEO, to Walnut VP,', { timeout: 15_000 })
+  // Timed in the page: from the key to the bar hidden.
+  await page.evaluate(() => {
+    const w = window as unknown as { __qbT: { key?: number; hidden?: number } }
+    w.__qbT = {}
+    document.addEventListener('keydown', (e) => { if (e.key === 'Enter') w.__qbT.key = performance.now() }, true)
+    const center = document.querySelector('.qb-center')!
+    new MutationObserver(() => { if (center.hasAttribute('hidden') && w.__qbT.hidden === undefined) w.__qbT.hidden = performance.now() }).observe(center, { attributes: true })
+  })
   await box(page).press('Enter')
+  await expect(bar(page)).toBeHidden()
+  const took = await page.evaluate(() => { const t = (window as unknown as { __qbT: { key: number; hidden: number } }).__qbT; return t.hidden - t.key })
+  expect(took).toBeLessThan(100)
+  expect(sends.bodies).toHaveLength(0)
   await expect.poll(() => sends.bodies.length, { timeout: 10_000 }).toBe(1)
   expect(sends.bodies[0]).toEqual({ text: 'to Walnut VP, ship it', follow: true })
   await expect(bar(page)).toBeHidden()
@@ -213,6 +153,80 @@ test('Enter during the take sends at once, once, and reads only the first name',
   await expect.poll(() => page.evaluate(() => localStorage.getItem('draft:quickbar'))).toBeNull()
   await page.waitForTimeout(2_600)
   expect(sends.bodies).toHaveLength(1)
+})
+
+test('Esc during the take only stops listening: the words stay, the bar stays, nothing is sent', async ({ page, request }) => {
+  await setFlag(request, true)
+  const sends = await stubAll(page)
+  await openApp(page)
+  await page.keyboard.press(KEY)
+  await expect(bar(page)).toHaveAttribute('data-recording', 'true', { timeout: 10_000 })
+  await expect(box(page)).toHaveValue(DRAFT, { timeout: 15_000 })
+  await box(page).press('Escape')
+  await expect(bar(page)).toHaveAttribute('data-recording', 'false', { timeout: 10_000 })
+  await expect(box(page)).toHaveValue('ship the quick bar first', { timeout: 10_000 })
+  await expect(chip(page)).toHaveText('Walnut VP')
+  await expect(bar(page)).toBeVisible()
+  await expect(page.locator('.qb-count')).toHaveCount(0)
+  await expect(page.locator('.qb-keys')).toHaveText(/esc\s*close/)
+  await page.waitForTimeout(2_400)
+  expect(sends.bodies).toHaveLength(0)
+  // Esc again closes; Enter on the next open sends them.
+  await box(page).press('Escape')
+  await expect(bar(page)).toBeHidden()
+})
+
+test('a mode left open does not stop the next take: the key after a Notes search listens again', async ({ page, request }) => {
+  await setFlag(request, true)
+  await stubAll(page)
+  await openApp(page)
+  await page.keyboard.press('Meta+k')
+  await expect(bar(page)).toHaveAttribute('data-recording', 'false')
+  await page.locator('.qb-mode-pill.qb-mode-notes').click()
+  await expect(bar(page)).toHaveAttribute('data-mode', 'notes')
+  await page.keyboard.press('Meta+k')
+  await expect(bar(page)).toBeHidden()
+  await page.keyboard.press(KEY)
+  await expect(bar(page)).toHaveAttribute('data-mode', 'send')
+  await expect(bar(page)).toHaveAttribute('data-recording', 'true', { timeout: 10_000 })
+})
+
+test('Tab during a take that starts like a keyword picks who gets it, never a mode', async ({ page, request }) => {
+  await setFlag(request, true)
+  const sends = await stubAll(page, { draft: 'ask the VP to ship it', final: 'ask the VP to ship it' })
+  await openApp(page)
+  await page.keyboard.press(KEY)
+  await expect(box(page)).toHaveValue('ask the VP to ship it', { timeout: 15_000 })
+  await box(page).press('Tab')
+  await expect(page.locator('.qb-picker')).toBeVisible()
+  await expect(bar(page)).toHaveAttribute('data-mode', 'send')
+  await expect(bar(page)).toHaveAttribute('data-recording', 'true')
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.qb-picker')).toHaveCount(0)
+  expect(sends.bodies).toHaveLength(0)
+})
+
+test('words emptied elsewhere (the other window sent them): the next take reads its name again', async ({ page, request }) => {
+  await setFlag(request, true)
+  const sends = await stubAll(page, { draft: 'to Walnut VP, move the review', final: 'to Walnut VP, move the review' })
+  await openApp(page)
+  await page.keyboard.press(KEY)
+  await expect(box(page)).toHaveValue('to Walnut VP, move the review', { timeout: 15_000 })
+  await box(page).press('Escape')
+  await expect(box(page)).toHaveValue('move the review', { timeout: 10_000 })
+  await box(page).press('Escape')
+  await expect(bar(page)).toBeHidden()
+  // The words leave the shared draft (the Mac app's panel sent them, say).
+  await page.evaluate(() => {
+    const key = Object.keys(localStorage).find((k) => k.includes('quickbar') && k.includes('draft'))
+    if (key) { localStorage.removeItem(key); window.dispatchEvent(new StorageEvent('storage', { key })) }
+  })
+  await page.keyboard.press(KEY)
+  await expect(bar(page)).toHaveAttribute('data-recording', 'true', { timeout: 10_000 })
+  await expect(box(page)).toHaveValue(/to Walnut VP, move the review/, { timeout: 15_000 })
+  await box(page).press('Enter')
+  await expect.poll(() => sends.bodies.length, { timeout: 10_000 }).toBe(1)
+  expect(sends.bodies[0]).toMatchObject({ to: 'pw-vp-walnut' })
 })
 
 test('Tab lists who to talk to: Cmd-number and typed words pick', async ({ page, request }) => {
@@ -229,7 +243,7 @@ test('Tab lists who to talk to: Cmd-number and typed words pick', async ({ page,
   await expect(picker).toBeVisible()
   await expect(picker.locator('.qb-section-label')).toHaveText(['Pinned', 'VPs', 'Tasks'])
   await expect(picker.locator('.qb-person-name')).toHaveText(['CEO', 'Walnut VP', 'Garden VP', 'Pick the tile color'])
-  await expect(picker.locator('.qb-person').nth(1).locator('.qb-person-line')).toHaveText('3 need you · Pick the artifacts layout')
+  await expect(picker.locator('.qb-person').nth(1).locator('.qb-person-line')).toHaveText('3 Needs you · Pick the artifacts layout')
   await shot(page, '4-picker')
   await page.keyboard.press('Meta+3')
   await expect(chip(page)).toHaveText('Garden VP')
@@ -263,8 +277,15 @@ test('a send that never went out says so and puts the words back', async ({ page
   await expect(receipt.locator('.qb-receipt-status')).toHaveText('Not sent · Walnut is restarting')
   await shot(page, '5-failed')
   await receipt.locator('.qb-receipt-head').click()
+  // It stays (words that never went out are never dropped), and Send again sends them as they were.
+  await page.waitForTimeout(8_600)
+  await expect(receipt.locator('.qb-receipt-status')).toHaveText('Not sent · Walnut is restarting')
+  await receipt.getByRole('button', { name: 'Send again' }).click()
+  await expect(page.locator('.qb-receipt-status').first()).toHaveText('Not sent · Walnut is restarting')
+  expect(sends.bodies.at(-1)).toMatchObject({ text: 'Move the review to Friday' })
   sends.fail = false
-  await receipt.getByRole('button', { name: 'Put it back' }).click()
+  await page.locator('.qb-receipt-head').first().click()
+  await page.locator('.qb-receipt').first().getByRole('button', { name: 'Put it back' }).click()
   await expect(bar(page)).toBeVisible()
   await expect(box(page)).toHaveValue('Move the review to Friday')
   await box(page).press('Enter')

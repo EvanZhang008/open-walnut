@@ -14,6 +14,8 @@ interface ReceiptsProps {
   floating?: boolean;
   onOpenChat: (r: Receipt) => void;
   onPutBack: (r: Receipt) => void;
+  /** Send the words again as they were (a failed or held send). */
+  onResend: (id: string) => void;
   onToggle: (id: string) => void;
   onDismiss: (id: string) => void;
   onPin: (id: string, on: boolean) => void;
@@ -37,7 +39,7 @@ function firstLine(text: string): string {
   return text.replace(/[#*_`>]+/g, '').split('\n').map((l) => l.trim()).find(Boolean) ?? '';
 }
 
-export function QuickBarReceipts({ receipts, floating, onOpenChat, onPutBack, onToggle, onDismiss, onPin }: ReceiptsProps) {
+export function QuickBarReceipts({ receipts, floating, onOpenChat, onPutBack, onResend, onToggle, onDismiss, onPin }: ReceiptsProps) {
   if (receipts.length === 0) return null;
   const list = (
     <div className="qb-receipts" aria-live="polite">
@@ -71,7 +73,8 @@ export function QuickBarReceipts({ receipts, floating, onOpenChat, onPutBack, on
               <div className="qb-receipt-more">
                 {r.reply && <AgentText text={r.reply} className="qb-receipt-reply" task={null} compact />}
                 <div className="qb-receipt-actions">
-                  {staysUntilDismissed(r) && <button type="button" className="qb-btn qb-btn-primary" onClick={() => onPutBack(r)}>Put it back</button>}
+                  {staysUntilDismissed(r) && <button type="button" className="qb-btn qb-btn-primary" onClick={() => onResend(r.id)}>Send again</button>}
+                  {staysUntilDismissed(r) && <button type="button" className="qb-btn" onClick={() => onPutBack(r)}>Put it back</button>}
                   {r.taskId && <button type="button" className="qb-btn" onClick={() => onOpenChat(r)}>Open chat</button>}
                   <button type="button" className="qb-btn qb-btn-quiet" onClick={() => onDismiss(r.id)}>Dismiss</button>
                 </div>

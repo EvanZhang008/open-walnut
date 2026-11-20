@@ -13,7 +13,7 @@ import { rememberSend, type QuickPerson } from './quickbar-people';
 import { QuickBar, type QuickBarHandle } from './QuickBar';
 import { QuickBarReceipts } from './QuickBarReceipts';
 import { useQuickReceipts, type Receipt } from './useQuickReceipts';
-import { exposeToNative, hasNativeQuickBar, postToNative } from './quickbar-native';
+import { exposeToNative, hasNativeQuickBar, postToNative, openTaskOf } from './quickbar-native';
 import type { QuickImage } from '@/api/quick';
 
 type Mode = 'bar' | 'receipts' | 'hidden';
@@ -23,7 +23,7 @@ export function QuickBarPanelPage() {
   const [mode, setMode] = useState<Mode>(() => (hasNativeQuickBar() ? 'hidden' : 'bar'));
   const barRef = useRef<QuickBarHandle | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const { receipts, send, dismiss, toggleOpen, pin } = useQuickReceipts();
+  const { receipts, send, resend, dismiss, toggleOpen, pin } = useQuickReceipts();
 
   useLayoutEffect(() => {
     document.documentElement.classList.add('qb-panel-doc');
@@ -96,11 +96,12 @@ export function QuickBarPanelPage() {
           surface={hasNativeQuickBar() ? 'panel' : 'overlay'}
           onClose={closeBar}
           onSend={onSend}
+          onOpen={(to) => { if (!postToNative({ type: 'open', to, ...openTaskOf(to) })) window.open(to, '_blank'); }}
           onCapture={hasNativeQuickBar() ? () => postToNative({ type: 'capture' }) : undefined}
         />
       </div>
       {mode !== 'hidden' && (
-        <QuickBarReceipts receipts={receipts} onOpenChat={openChat} onPutBack={putBack} onToggle={toggleOpen} onDismiss={dismiss} onPin={pin} />
+        <QuickBarReceipts receipts={receipts} onOpenChat={openChat} onPutBack={putBack} onResend={resend} onToggle={toggleOpen} onDismiss={dismiss} onPin={pin} />
       )}
     </div>
   );

@@ -7,7 +7,8 @@
  *                                              registers Control-Option-Command-Space only while on
  *   { type: 'layout', mode, width, height }    the panel page's size: `bar` (centered, takes keys),
  *                                              `receipts` (top right, never takes keys), `hidden`
- *   { type: 'open', taskId }                   open that task's chat in the Walnut window
+ *   { type: 'open', taskId } | { type: 'open', to } open that task's chat, or an app path (a note:
+ *                                              `/notes?path=...`), in the Walnut window
  *   { type: 'capture' }                        take a screenshot of an area, then call attach()
  * App to page (the panel page): open(), hotkey(), attach(base64Png), close() (a click in another app).
  */
@@ -16,6 +17,8 @@ export type NativeQuickBarMessage =
   | { type: 'flag'; on: boolean }
   | { type: 'layout'; mode: 'bar' | 'receipts' | 'hidden'; width: number; height: number }
   | { type: 'open'; taskId: string }
+  // `taskId` beside `to` for a task: a Mac app from before `to` reads only the id.
+  | { type: 'open'; to: string; taskId?: string }
   | { type: 'capture' };
 
 interface Handler { postMessage(message: NativeQuickBarMessage): void }
@@ -58,6 +61,21 @@ export function isQuickBarKey(e: KeyboardEvent): boolean {
  */
 export const OPEN_QUICK_BAR_EVENT = 'walnut:quick-bar-open';
 
-export function openQuickBar(): void {
-  window.dispatchEvent(new Event(OPEN_QUICK_BAR_EVENT));
+export interface OpenQuickBarDetail { listen?: boolean; mode?: 'send' | 'tasks' | 'notes' | 'ask' }
+
+export function openQuickBar(detail: OpenQuickBarDetail = {}): void {
+  window.dispatchEvent(new CustomEvent<OpenQuickBarDetail>(OPEN_QUICK_BAR_EVENT, { detail }));
+}
+
+/** Cmd-K (Ctrl-K elsewhere), the search key every app knows: opens the bar for typing. */
+export function isQuickBarSearchKey(e: KeyboardEvent): boolean {
+  // On a Mac Control-K is a text field's own key (delete to the end of the line): only Command-K.
+  const onMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+  return (e.metaKey || (!onMac && e.ctrlKey)) && !e.altKey && !e.shiftKey && (e.key === 'k' || e.key === 'K');
+}
+
+/** A task path's id, sent beside the path so an older Mac app (which reads only `taskId`) opens it. */
+export function openTaskOf(to: string): { taskId?: string } {
+  const m = to.match(/^\/tasks\/([^/?#]+)$/);
+  return m ? { taskId: decodeURIComponent(m[1]) } : {};
 }

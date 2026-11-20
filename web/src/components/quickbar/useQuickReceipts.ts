@@ -81,7 +81,7 @@ export function useQuickReceipts() {
     setReceipts((all) => all.map((r) => (r.id === id ? fn(r) : r)));
   }, []);
 
-  const send = useLeanCallback((person: QuickPerson, text: string, images: QuickImage[]) => {
+  const send = useLeanCallback((person: Pick<QuickPerson, 'id' | 'title' | 'kind'>, text: string, images: QuickImage[]) => {
     const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     const receipt: Receipt = { id, person: { id: person.id, title: person.title, kind: person.kind }, text, images, state: 'sending', reply: '' };
     setReceipts((all) => [receipt, ...all].slice(0, MAX_RECEIPTS));
@@ -98,6 +98,14 @@ export function useQuickReceipts() {
     pinned.current.delete(id);
     setReceipts((all) => all.filter((r) => r.id !== id));
   }, []);
+
+  /** Words that never went out, sent again as they were, to the same person: a new receipt follows them. */
+  const resend = useLeanCallback((id: string) => {
+    const r = receipts.find((x) => x.id === id);
+    if (!r || !staysUntilDismissed(r)) return;
+    dismiss(id);
+    send(r.person, r.text, r.images);
+  }, [receipts, dismiss, send]);
 
   const toggleOpen = useLeanCallback((id: string) => update(id, (r) => ({ ...r, open: !r.open })), [update]);
   const pin = useLeanCallback((id: string, on: boolean) => {
@@ -121,5 +129,5 @@ export function useQuickReceipts() {
 
   useEffect(() => () => { for (const c of aborts.current.values()) c.abort(); }, []);
 
-  return { receipts, send, dismiss, toggleOpen, pin };
+  return { receipts, send, resend, dismiss, toggleOpen, pin };
 }
