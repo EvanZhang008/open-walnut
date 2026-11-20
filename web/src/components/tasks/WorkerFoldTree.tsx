@@ -129,7 +129,7 @@ export function FoldTree({ host, entries, ctl, focusedTaskId, onOpen, twoLine }:
             type="button"
             className="worker-fold-all"
             data-testid={folded > 0 ? 'worker-fold-show-all' : 'worker-fold-all-back'}
-            {...tipProps(folded > 0 ? `Show all ${entries.length} on their own rows (they stay in this team)` : 'Put all back into the team')}
+            {...tipProps(folded > 0 ? (entries.length === 1 ? 'Show on its own row (stays in this team)' : `Show all ${entries.length} on their own rows (they stay in this team)`) : 'Put all back into the team')}
             onClick={(e) => { e.stopPropagation(); ctl.showTeam(host.id, folded > 0); }}
             onKeyDown={(e) => e.stopPropagation()}
           >{folded > 0 ? ICONS.ICON_FOLD_TAKE_OUT : ICONS.ICON_FOLD_PUT_BACK}<span>All</span></button>

@@ -110,6 +110,8 @@ test.describe('worker fold', () => {
     await expect(statusSectionCard(panel, 'waiting', w1)).toHaveCount(0)
 
     // The whole team, then all back.
+    // The words say the team stays: showing workers as rows never takes them from their leader.
+    await expect(tree.getByTestId('worker-fold-show-all')).toHaveAttribute('data-fold-tip', 'Show all 2 on their own rows (they stay in this team)')
     await tree.getByTestId('worker-fold-show-all').click()
     await expect(statusSectionCard(panel, 'waiting', w1)).toBeVisible()
     await expect(statusSectionCard(panel, 'waiting', w2)).toBeVisible()
