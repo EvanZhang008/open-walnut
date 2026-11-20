@@ -44,7 +44,9 @@ test('app sidebar shows only the daily surfaces — no management pages, no Othe
   // own after Home's (d5d8b3cfe), no longer inside Home's group.
   // Passwords is a built-in app of its own (309a0ecbb, web/src/apps/core-apps.tsx order 60).
   const CORE_PREFIX = ['Org', 'Home', 'Task panel', 'Quick question', 'Agenda', 'Scratchpad', 'Notes', 'Calendar', 'Mail', 'Tasks', 'Routines', 'Passwords']
-  const labels = (await page.locator('.sidebar-nav .sidebar-link').allTextContents()).map((t) => t.trim())
+  // The quick bar's magnifier (experiment quick_bar, right under Org) is a system control like
+  // the bell, not an app: another spec on the shared fixture may have left its switch on.
+  const labels = (await page.locator('.sidebar-nav .sidebar-link:not([data-testid="sidebar-quick-bar"])').allTextContents()).map((t) => t.trim())
 
   // The core entries come first, in this exact order, and Apps then Settings always close it.
   const CORE_SUFFIX = ['Apps', 'Settings']
