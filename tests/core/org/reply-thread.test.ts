@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { threadHintText, type ThreadHintState } from '../../../src/core/org/thread-capture.js'
-import { answerThreads, answerTasks, threadOfHints, threadOfHintText } from '../../../src/core/org/reply-thread.js'
+import { answerThreads, answerTasks, sentOnThread, threadOfHints, threadOfHintText } from '../../../src/core/org/reply-thread.js'
 
 const base: ThreadHintState = { threadId: 'th-0a1b2c3d4e5f', title: 'Notes and "artifacts" in one place', created: false, followUp: false, duplicate: false, open: [], closed: [] }
 
@@ -47,7 +47,26 @@ describe('the thread a threads hint names', () => {
   it('only the threads hint counts; no hint, no thread', () => {
     expect(threadOfHints([{ kind: 'user-away', text: 'he is back' }])).toBeNull()
     expect(threadOfHints(undefined)).toBeNull()
-    expect(threadOfHints([{ kind: 'threads', text: threadHintText(base) }])?.id).toBe(base.threadId)
+    expect(threadOfHints([{ kind: 'threads', text: threadHintText({ ...base, followUp: true }) }])?.id).toBe(base.threadId)
+  })
+
+  // 2026-11-20, the user, on three plain chat messages each under "Answer to ...": "why it show,
+  // repy to taht thread always even if I am not, i am just tlaiing in main chat".
+  for (const c of CASES) {
+    it(`a line only for a message sent on its thread: ${c.name}`, () => {
+      const got = threadOfHints([{ kind: 'threads', text: threadHintText(c.state) }])
+      if (c.state.followUp) expect(got?.id).toBe(base.threadId)
+      else expect(got, 'a message typed in the chat and only filed by Walnut shows as a plain message').toBeNull()
+    })
+  }
+
+  it('every head the writer uses is classed: sent on the thread, or filed from the chat (a new wording fails here)', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../../src/core/org/thread-capture.ts'), 'utf8')
+    const body = src.slice(src.indexOf('export function threadHintText'), src.indexOf('/** A thread the node should look at again'))
+    const heads = [...new Set([...body.matchAll(/`([a-z][a-z -]*? thread) \$\{s\.threadId\}/g)].map((m) => m[1]!))].sort()
+    const sentOn = heads.filter((h) => sentOnThread(`${h} th-abc123 "T".`))
+    expect(sentOn).toEqual(['a follow-up in thread', 'his reply in thread'])
+    expect(heads.filter((h) => !sentOn.includes(h))).toEqual(['already filed under thread', 'filed as new thread', 'filed under thread'])
   })
 
   it('every way the writer begins is one the reader knows (a new wording fails here)', () => {

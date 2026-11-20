@@ -7,6 +7,13 @@
  * The thread of his message is the one Walnut filed it under: the `threads` hint it carried to the
  * node names it (thread-capture.ts threadHintText), so the line says exactly what the node was
  * told, never a second guess. The node's answer belongs to the thread of the message it answers.
+ *
+ * Only a message he sent ON a thread carries the line: a card's box, its choice, a Follow up, a
+ * reply on a task's card (the send named the thread, thread-capture.ts followUp). A message he only
+ * typed in the chat is filed too, for the node, but it answered nothing, so it shows as a plain
+ * message (2026-11-20, the user: "why it show, repy to taht thread always even if I am not, i am
+ * just tlaiing in main chat"). One rule, here, for every client: the server serves `thread` only
+ * then, so the web, the phone and the quick bar read it the same way, old rows included.
  */
 
 /** The thread a chat row carries (additive `thread` on history and transcript rows). */
@@ -33,6 +40,14 @@ const TASK = '([A-Za-z0-9][A-Za-z0-9_.:-]*)';
 const BELOW_RE = new RegExp(` \\(${TASK}\\), a task below you:`);
 const MOVED_RE = new RegExp(` \\(${TASK}\\) with its work:`);
 
+/** The heads of a hint for a message sent on a thread (followUp), not one Walnut filed by itself. */
+const SENT_ON_RE = /^(?:his reply in thread|a follow-up in thread) /;
+
+/** Did the send itself name the thread (his answer on it), not Walnut's filing of plain chat? */
+export function sentOnThread(text: string): boolean {
+  return SENT_ON_RE.test(text.trim());
+}
+
 /** The thread a `threads` hint's text names (the reverse of thread-capture.ts threadHintText). */
 export function threadOfHintText(text: string): ReplyThread | null {
   const m = HEAD_RE.exec(text.trim());
@@ -45,10 +60,13 @@ export function threadOfHintText(text: string): ReplyThread | null {
   return { id: m[1]!, ...(title ? { title } : {}), ...(node ? { node } : {}) };
 }
 
-/** The thread a user row was filed under: its `threads` hint's. Null when it carried none. */
+/**
+ * The thread a user row answered: its `threads` hint's, when he sent it on that thread. Null when it
+ * carried none, or when Walnut only filed a message he typed in the chat (see the header).
+ */
 export function threadOfHints(hints: readonly HintLike[] | undefined): ReplyThread | null {
   const hint = hints?.find((h) => h.kind === 'threads');
-  return hint ? threadOfHintText(hint.text) : null;
+  return hint && sentOnThread(hint.text) ? threadOfHintText(hint.text) : null;
 }
 
 /** The shape the carry reads (a history row). */

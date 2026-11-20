@@ -4,7 +4,10 @@
  * (`GET /api/v1/sessions/:id/transcript`, `/history`) read carry the thread his message was filed
  * under, as that thread is when the rows are read.
  *
- *   1. two messages about two subjects: each user row carries its own thread (the one its threads
+ *   0. a message he only typed in the chat is filed under a thread for the node, but carries no
+ *      line, nor does its answer: it answered nothing (2026-11-20, the user: "i am just tlaiing in
+ *      main chat");
+ *   1. two replies sent on two threads: each user row carries its own thread (the one its threads
  *      hint named), and the answer after each carries the same;
  *   2. a renamed thread reads under its new title; a closed one still carries its line;
  *   3. a thread merged into another: his row follows his message there;
@@ -52,9 +55,9 @@ async function setFlag(on: boolean): Promise<void> {
 }
 
 /** The web send's own steps (routes/session-chat.ts): hints composed, queued, then committed. */
-async function typeIntoChat(sid: string, text: string): Promise<string> {
+async function typeIntoChat(sid: string, text: string, threadId?: string): Promise<string> {
   const record = await getSessionByClaudeId(sid)
-  const prepared = await prepareHintedSend(sid, record, text, { sentBy: 'person' })
+  const prepared = await prepareHintedSend(sid, record, text, { sentBy: 'person', ...(threadId ? { threadId } : {}) })
   await sendMessageToSession(sid, text, { source: 'ui', taskId: record?.taskId, enqueueMessage: prepared.enqueueText, hinted: true })
   await prepared.commit()
   return prepared.enqueueText
@@ -105,6 +108,8 @@ const rowOf = (rows: Row[], text: string) => rows.find((r) => r.text.includes(te
 
 const FOLDERS = 'what should the two folders be called?'
 const SHORTCUT = 'add a global shortcut for the quick menu'
+const FOLDERS_REPLY = 'shared ones first, then the projects'
+const SHORTCUT_REPLY = 'make it Cmd+K like the other apps'
 
 beforeAll(async () => {
   process.env.WALNUT_THREAD_JOIN_SECS = '0'
@@ -135,46 +140,58 @@ describe('the thread line on the rows clients read', () => {
   let folders = ''
   let shortcut = ''
 
-  it('two subjects: each message and its answer carry their own thread, on the web and the phone', async () => {
-    await writeChat(LEAD_SID, [{ type: 'user', text: await typeIntoChat(LEAD_SID, FOLDERS) }, { type: 'assistant', text: 'Call them Shared and Projects.' }], false)
-    await writeChat(LEAD_SID, [{ type: 'user', text: await typeIntoChat(LEAD_SID, SHORTCUT) }, { type: 'assistant', text: 'Looking at the menu code.' }, { type: 'assistant', text: 'Cmd+K opens it now.' }])
+  it('a message only typed in the chat is filed for the node, but neither it nor its answer carries a line', async () => {
+    await writeChat(LEAD_SID, [{ type: 'user', text: await typeIntoChat(LEAD_SID, FOLDERS) }, { type: 'assistant', text: 'Two options for the folders.' }], false)
+    await writeChat(LEAD_SID, [{ type: 'user', text: await typeIntoChat(LEAD_SID, SHORTCUT) }, { type: 'assistant', text: 'Looking at the menu code.' }])
     const list = await threads()
     folders = list.find((t) => t.messages.some((m) => m.text === FOLDERS))!.id
     shortcut = list.find((t) => t.messages.some((m) => m.text === SHORTCUT))!.id
     expect(folders).not.toBe(shortcut)
     for (const rows of [await webRows(), await phoneRows(), await phoneHistory()]) {
-      expect(rowOf(rows, FOLDERS)?.thread).toMatchObject({ id: folders, title: expect.stringContaining('two folders') })
+      for (const text of [FOLDERS, 'Two options for the folders', SHORTCUT, 'Looking at the menu code']) {
+        expect(rowOf(rows, text)?.thread, text).toBeUndefined()
+      }
+    }
+  })
+
+  it('two replies sent on two threads: each message and its answer carry their own thread, on the web and the phone', async () => {
+    await writeChat(LEAD_SID, [{ type: 'user', text: await typeIntoChat(LEAD_SID, FOLDERS_REPLY, folders) }, { type: 'assistant', text: 'Call them Shared and Projects.' }])
+    await writeChat(LEAD_SID, [{ type: 'user', text: await typeIntoChat(LEAD_SID, SHORTCUT_REPLY, shortcut) }, { type: 'assistant', text: 'Wiring it up.' }, { type: 'assistant', text: 'Cmd+K opens it now.' }])
+    for (const rows of [await webRows(), await phoneRows(), await phoneHistory()]) {
+      expect(rowOf(rows, FOLDERS_REPLY)?.thread).toMatchObject({ id: folders, title: expect.stringContaining('two folders') })
       expect(rowOf(rows, 'Call them Shared')?.thread?.id).toBe(folders)
-      expect(rowOf(rows, SHORTCUT)?.thread?.id).toBe(shortcut)
+      expect(rowOf(rows, SHORTCUT_REPLY)?.thread?.id).toBe(shortcut)
       // The answer's line sits under its last words only, once.
       expect(rowOf(rows, 'Cmd+K opens it')?.thread?.id).toBe(shortcut)
       expect(rows.filter((r) => r.role === 'assistant' && r.thread?.id === shortcut)).toHaveLength(1)
-      expect(rowOf(rows, FOLDERS)?.thread?.node).toBeUndefined()
+      expect(rowOf(rows, FOLDERS_REPLY)?.thread?.node).toBeUndefined()
     }
   })
 
   it('a renamed thread reads under its new title; a closed one still has its line', async () => {
     await patch(folders, { title: 'Folder names' })
-    expect(rowOf(await webRows(), FOLDERS)?.thread).toMatchObject({ id: folders, title: 'Folder names' })
+    expect(rowOf(await webRows(), FOLDERS_REPLY)?.thread).toMatchObject({ id: folders, title: 'Folder names' })
     await fetch(`${base}/api/v1/tasks/${leadId}/threads/${folders}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ close: 'acked' }) })
-    expect(rowOf(await phoneRows(), FOLDERS)?.thread).toMatchObject({ id: folders, title: 'Folder names', closed: true })
+    expect(rowOf(await phoneRows(), FOLDERS_REPLY)?.thread).toMatchObject({ id: folders, title: 'Folder names', closed: true })
     await fetch(`${base}/api/v1/tasks/${leadId}/threads/${folders}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reopen: true }) })
   })
 
   it('a thread merged into another: his row follows his message there', async () => {
     const third = 'and the shortcut should work in the side panel too'
+    const thirdReply = 'the side panel one can wait a week'
     await writeChat(LEAD_SID, [{ type: 'user', text: await typeIntoChat(LEAD_SID, third) }])
     const own = (await threads()).find((t) => t.messages.some((m) => m.text === third))!.id
     expect(own).not.toBe(shortcut)
-    expect(rowOf(await webRows(), third)?.thread?.id).toBe(own)
+    await writeChat(LEAD_SID, [{ type: 'user', text: await typeIntoChat(LEAD_SID, thirdReply, own) }])
+    expect(rowOf(await webRows(), thirdReply)?.thread?.id).toBe(own)
     await patch(own, { merge_into: shortcut })
-    expect(rowOf(await webRows(), third)?.thread).toMatchObject({ id: shortcut })
+    expect(rowOf(await webRows(), thirdReply)?.thread).toMatchObject({ id: shortcut })
   })
 
   it('a thread that moved to another lead: the row names the lead that holds it now', async () => {
     const lead = (await threads()).find((t) => t.id === folders)!
     await moveThread({ from: { task: leadId, title: 'Orchard' }, to: { task: otherLeadId, title: 'Meadow' }, threadId: lead.id, by: 'human', kind: 'hand' })
-    const row = rowOf(await webRows(), FOLDERS)
+    const row = rowOf(await webRows(), FOLDERS_REPLY)
     expect(row?.thread).toMatchObject({ id: folders, node: otherLeadId, title: 'Folder names' })
     expect(row?.thread?.closed).toBeUndefined()
   })

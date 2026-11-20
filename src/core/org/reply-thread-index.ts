@@ -7,8 +7,9 @@
  *                his words, as thread-answers.ts finds it); then any move is followed to the node
  *                holding it (thread-follow.ts). A thread swept after its closed week keeps the
  *                title it was filed under and opens nothing.
- *   the answer   the thread that keeps this row as a message's answer (thread-answers.ts), else the
- *                thread of the message it answers (reply-thread.ts answerThreads).
+ *   the answer   only an answer to a message he sent on a thread: the thread that keeps this row
+ *                as a message's answer (thread-answers.ts), else the thread of the message it
+ *                answers (reply-thread.ts answerThreads).
  *
  * Each node's threads are read once and kept until one of them changes (`org-threads:changed`) or
  * a minute passes, so a chat read while a turn streams costs no read of the store. Only the
@@ -193,7 +194,9 @@ async function resolveReplyThreads<R extends ReplyRow>(rows: readonly R[], ctx: 
   const carried = answerThreads(out, (r) => r.thread);
   for (let i = 0; i < out.length; i++) {
     const row = out[i]!;
-    if (row.role !== 'assistant') continue;
+    // Only the answer to a message he sent on a thread carries a line: an answer to words he only
+    // typed in the chat is a plain answer, as his message is (reply-thread.ts threadOfHints).
+    if (row.role !== 'assistant' || !carried.has(i)) continue;
     const words = head(row.text);
     const kept = own.answers.get(row.timestamp)?.filter((a) => a.head && a.head === words) ?? [];
     // One row answering two of his messages: the one the carry names (the later message), else the latest asked.
