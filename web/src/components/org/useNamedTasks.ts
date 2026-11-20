@@ -1,8 +1,7 @@
 /**
  * The rows of the tasks a thread card names (its node, its chips, its deadline), for a card that
  * must not read the whole task list: that list changes on every task write anywhere
- * (tests/web/tasks-context-readers-ratchet.test.ts). Shared by the card above a chat (TopThread)
- * and the inbox's needs cards (InboxNeedsThreads).
+ * (tests/web/tasks-context-readers-ratchet.test.ts). Read by the card above a chat (TopThread).
  */
 import { useRef } from 'react';
 import type { Task } from '@open-walnut/core';

@@ -75,10 +75,6 @@ import {
   type LetterEnvelope,
 } from '@/api/human-inbox';
 import { taskPath } from '@/utils/task-path';
-import { useExperimental } from '@/hooks/useExperimental';
-import { useInboxNeeds } from '@/stores/inbox-needs-store';
-import { inboxRailCount } from '@/contexts/notifications/needs-count';
-import { InboxNeedsThreads } from '@/components/inbox/InboxNeedsThreads';
 
 interface NotificationPanelProps {
   open: boolean;
@@ -283,11 +279,6 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   // Counts read the LIVE letters, never the current view: with Archived open the
   // view holds only archived rows, which badged the Inbox 0.
   const counts = useMemo(() => sectionCounts(feed, inbox.liveLetters), [feed, inbox.liveLetters]);
-  // inbox_needs_threads: the inbox leads with every thread that needs him; a letter one of them
-  // holds is listed and counted once, as its thread.
-  const needsOn = useExperimental('inbox_needs_threads');
-  const needs = useInboxNeeds(needsOn);
-  const inboxCount = needsOn ? inboxRailCount(feed, inbox.liveLetters, needs.threads) : counts.inbox;
   const approvals = usePendingApprovals();
 
   // Letter mutations: patch locally (the panel must feel instant), call the
@@ -377,8 +368,8 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   }, [feed, section, hostCardIds, answeredHeld]);
 
   const inboxRows = useMemo(
-    () => filterInboxLetters(needs.held.size ? inbox.letters.filter((l) => !needs.held.has(l.id)) : inbox.letters, unreadOnly, keptReadIds),
-    [inbox.letters, unreadOnly, keptReadIds, needs.held],
+    () => filterInboxLetters(inbox.letters, unreadOnly, keptReadIds),
+    [inbox.letters, unreadOnly, keptReadIds],
   );
 
   // Same-origin entries collapse into one expandable group (iPhone-style):
@@ -642,7 +633,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
                 one at a time, so "how many are still unread" is the number that
                 means something here. */}
             <RailButton
-              label="Inbox" count={inboxCount}
+              label="Inbox" count={counts.inbox}
               active={section === 'inbox'} onClick={() => pickSection('inbox')}
             />
             {/* Every LISTING section carries a badge showing what the tab LISTS
@@ -711,7 +702,6 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
                 onLayoutChange={changeInboxLayout}
                 selectedId={openLetterId}
                 reader={letterReader}
-                {...(needsOn && !showArchived ? { needs: <InboxNeedsThreads needs={needs} /> } : {})}
                 letters={inboxRows}
                 loaded={inbox.loaded}
                 error={inbox.error}

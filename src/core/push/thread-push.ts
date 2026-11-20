@@ -172,7 +172,6 @@ export async function deliverThreadPush(
   thread: Pick<OrgThread, 'id' | 'title' | 'ask' | 'reply'>,
   node: Pick<Task, 'id' | 'org_role' | 'project'>,
   now: number,
-  /** What the banner says (needs-push.ts: a decision letter's words, the thread's tap); default the thread's own. */
   content: PushContent = threadPushContent(thread, node),
 ): Promise<ThreadPushDelivery> {
   const tokens: PushTokenEntry[] = (await getConfig()).push_tokens ?? []

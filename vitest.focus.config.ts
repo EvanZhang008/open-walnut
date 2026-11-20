@@ -41,7 +41,6 @@ const config = mergeConfig(
         '@open-walnut/message-about': path.resolve(import.meta.dirname, 'src/core/org/message-about.ts'),
         '@open-walnut/reply-thread': path.resolve(import.meta.dirname, 'src/core/org/reply-thread.ts'),
         '@open-walnut/thread-view': path.resolve(import.meta.dirname, 'src/core/org/thread-view.ts'),
-        '@open-walnut/inbox-needs': path.resolve(import.meta.dirname, 'src/core/human-inbox/needs-model.ts'),
         '@open-walnut/thread-groups': path.resolve(import.meta.dirname, 'src/core/org/thread-groups.ts'),
         '@open-walnut/live-activity': path.resolve(import.meta.dirname, 'src/core/live-activity.ts'),
         '@open-walnut/terminal-key': path.resolve(import.meta.dirname, 'src/core/terminal-key.ts'),

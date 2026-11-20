@@ -93,19 +93,6 @@ export async function letterThreadTask(l: LetterRecord, tasks?: readonly Task[])
   return task;
 }
 
-/**
- * This letter, as it is now, waits on him as a thread (the experiment on, the leader, a decision
- * still waiting on him, a task whose Threads take it): that task and the thread's id. The phone
- * buzzes for the thread instead of the letter (push/needs-push.ts). Null otherwise.
- */
-export async function letterWaitsOnThread(l: LetterRecord): Promise<{ task: Task; threadId: string } | null> {
-  if (l.type !== 'action_required' || !(await lettersAsThreadsOn())) return null;
-  const { isFollower } = await import('../server-role.js');
-  if (isFollower() || !awaitsUserDecision(l)) return null;
-  const task = await letterThreadTask(l);
-  return task ? { task, threadId: letterThreadId(l.id) } : null;
-}
-
 type Done = 'opened' | 'reopened' | 'settled' | 'off' | null;
 
 /**

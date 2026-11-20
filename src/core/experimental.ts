@@ -163,12 +163,6 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
-    id: 'inbox_needs_threads',
-    name: 'The inbox lists every thread that needs you',
-    description: 'The inbox leads with every thread waiting on you, from Main, the VPs, the leads and every task with Threads on, the most urgent first: pinned ones, then the ones whose work is due within a day or marked immediate, then the ones that have waited longest. Each is the same card as in Threads, so an answer in the inbox answers it everywhere. Your other letters stay listed below. The bell counts each thing once, and your phone buzzes for a decision as its thread, never for a thread that only has news.',
-    default: false,
-  },
-  {
     id: 'ack_means_known',
     name: 'Acknowledge means you know',
     description: 'Acknowledging a thread whose work is still open (a task it went to not done, your reply still on its way, its letter still waiting) no longer closes it: it leaves your sight under "in progress, nothing for you" and stays tracked until it is really over. Its agent hears that you know and tells you the outcome once, or closes it. A thread with nothing open closes as before.',

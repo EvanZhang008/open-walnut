@@ -81,11 +81,11 @@ describe('one card for everything that waits on him', () => {
     for (const rel of Object.keys(NOT_A_CARD)) expect(drawers, `${rel} draws no answer part now: drop it`).toContain(rel);
   });
 
-  it('every thread card (the Threads view, the top above a chat, the inbox) goes through ThreadItem, whose waiting card is the one card', () => {
+  it('every thread card (the Threads view, the top above a chat) goes through ThreadItem, whose waiting card is the one card', () => {
     const files = walk(WEB).map((p) => relative(ROOT, p).split('\\').join('/'))
     const drawsThread = files.filter((rel) => /<(ThreadItem|ThreadCard|PoppedThreadCard)\b/.test(read(rel)))
-    expect(drawsThread.sort()).toEqual(['web/src/components/inbox/InboxNeedsThreads.tsx', 'web/src/components/org/OrgThreads.tsx', 'web/src/components/org/TopThread.tsx'])
-    for (const rel of ['web/src/components/org/TopThread.tsx', 'web/src/components/inbox/InboxNeedsThreads.tsx']) {
+    expect(drawsThread.sort()).toEqual(['web/src/components/org/OrgThreads.tsx', 'web/src/components/org/TopThread.tsx'])
+    for (const rel of ['web/src/components/org/TopThread.tsx']) {
       expect(read(rel), rel).toMatch(/<ThreadItem\b/)
       expect(read(rel), `${rel}: only ThreadItem, never a card of its own`).not.toMatch(/<(ThreadCard|PoppedThreadCard)\b/)
     }
@@ -93,6 +93,16 @@ describe('one card for everything that waits on him', () => {
     const needs = threads.slice(threads.indexOf('function NeedsAnswer'), threads.indexOf('function ThreadCard('))
     expect(needs).toMatch(/<AskCardFrame\b/)
     expect(threads).toMatch(/<NeedsAnswer\b/)
+  });
+
+  // 2026-11-20, the user, on a block of thread cards above his letters: "whyh the fuck put the
+  // thread in inbox". The inbox holds letters only; a thread shows only in Threads (and its top card).
+  it('the inbox and the bell panel draw no thread card and read no thread list', () => {
+    const files = walk(WEB).map((p) => relative(ROOT, p).split('\\').join('/'))
+      .filter((rel) => rel.startsWith('web/src/components/inbox/') || rel.startsWith('web/src/components/common/Notification') || rel.startsWith('web/src/contexts/notifications/'))
+    expect(files.length).toBeGreaterThan(3)
+    const hits = files.filter((rel) => /<(ThreadItem|ThreadCard|PoppedThreadCard|TopThread|OrgThreads\w*)\b|inbox\/needs|useThreads\b|org-threads/.test(read(rel)))
+    expect(hits, 'the inbox lists letters only: show a thread in Threads, never in the inbox').toEqual([])
   });
 
   it('one kind of choice button: only AskOptions draws org-answer-option', () => {
