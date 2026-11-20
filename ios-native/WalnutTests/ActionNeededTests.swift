@@ -70,6 +70,10 @@ final class ActionNeededTests: XCTestCase {
         XCTAssertEqual(ActionNeededModel.pages([a, c], answered: mid).map(\.id), ["a", "b", "c"])
         let later = WalnutActionItem(kind: "ask", id: "d", summary: "New?")
         XCTAssertEqual(ActionNeededModel.pages([later], answered: marked).map(\.id), ["d"])
+        // The same id asked again with new words: open again.
+        let reworded = WalnutActionItem(kind: "letter", id: "a", summary: "Publish on Monday?")
+        XCTAssertTrue(ActionNeededModel.liveMarks([reworded, b], answered: marked).isEmpty)
+        XCTAssertEqual(ActionNeededModel.liveMarks([a, b], answered: marked).keys.sorted(), ["a"])
     }
 
     func testThePageShownFollowsItsAsk() {

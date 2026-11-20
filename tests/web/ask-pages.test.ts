@@ -136,9 +136,17 @@ describe('the phone draws the same card, one page at a time', () => {
   const swift = readFileSync(join(__dirname, '../../ios-native/Walnut/Views/Tasks/ActionNeededView.swift'), 'utf8');
 
   it('one page from ActionNeededModel.pages, never a list of every ask', () => {
-    expect(swift).toMatch(/ActionNeededModel\.pages\(items, answered: answered\)/);
+    expect(swift).toMatch(/ActionNeededModel\.pages\(items, answered: marks\)/);
+    expect(swift).toMatch(/ActionNeededModel\.liveMarks\(items, answered: answered\)/);
     expect(swift).not.toMatch(/ForEach\(shown\)/);
     expect(swift).toMatch(/line\(item, index: index, count: pages\.count\)/);
+  });
+
+  it('pages by its arrows only: no swipe until one is proven not to set off the row\'s own swipes', () => {
+    // A full swipe right on a board row marks its task Done (BoardRowGestures), and a leftward drag
+    // closes the Tasks drawer: a page swipe on the card must not reach either (not proven yet).
+    expect(swift).not.toMatch(/DragGesture/);
+    expect(swift).toMatch(/swipe \(the web's\) waits until it is\s*\n\s*\/\/ proven on the simulator/);
   });
 
   it('its arrows have names and the place is said', () => {

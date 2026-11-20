@@ -147,8 +147,23 @@ enum ActionNeededModel {
         let gone = answered.values
             .filter { a in !open.contains(a.item.id) && a.peers.contains { open.contains($0) } }
             .sorted { $0.index < $1.index }
-        for a in gone { pages.insert(a.item, at: min(max(a.index, 0), pages.count)) }
+        // After the last page that came before it when it was answered (the web's rule).
+        for a in gone {
+            let before = Set(a.peers.prefix(max(a.index, 0)))
+            let at = (pages.lastIndex { before.contains($0.id) }).map { $0 + 1 } ?? 0
+            pages.insert(a.item, at: at)
+        }
         return pages
+    }
+
+    /// The marks that still hold (the web's liveMarks): a mark whose id is asked again with other
+    /// words is dropped, so a reworded ask reads open.
+    static func liveMarks(_ items: [WalnutActionItem], answered: [String: Answered]) -> [String: Answered] {
+        let byId = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        return answered.filter { entry in
+            guard let now = byId[entry.key] else { return true }
+            return now.summary == entry.value.item.summary
+        }
     }
 
     /// The page to show (pageIndex): the kept one, else the one now at its place, never past the end.
@@ -181,7 +196,7 @@ private struct SnoozeAnswer: Decodable { let task_id: String? }
 /// edge, the only colour a 7pt orange dot for "needs you" and the links; quiet grey keys, Snooze as
 /// quiet text with a clock at the right. One ask at a time ("max shoudl 1 decision, and can left and
 /// right"): each ask is its own page with its own words, options and box, "‹ 1/3 ›" beside Snooze
-/// and a sideways swipe page through them, and an answered page stays, marked with what was said.
+/// pages through them, and an answered page stays, marked with what was said.
 struct ActionNeededView: View {
     let task: WalnutTask
     let items: [WalnutActionItem]
@@ -203,12 +218,15 @@ struct ActionNeededView: View {
 
     private static let corner: CGFloat = 18
 
-    private var pages: [WalnutActionItem] { ActionNeededModel.pages(items, answered: answered) }
+    /// The marks that still hold: the same id asked again with new words is a new, open ask.
+    private var marks: [String: ActionNeededModel.Answered] { ActionNeededModel.liveMarks(items, answered: answered) }
+    private var pages: [WalnutActionItem] { ActionNeededModel.pages(items, answered: marks) }
 
     var body: some View {
         let pages = self.pages
         let index = ActionNeededModel.pageIndex(pages.map(\.id), at: at)
-        if pages.contains(where: { answered[$0.id] == nil }) {
+        let marks = self.marks
+        if pages.contains(where: { marks[$0.id] == nil }) {
             let item = pages[index]
             VStack(alignment: .leading, spacing: 8) {
                 line(item, index: index, count: pages.count)
@@ -228,16 +246,9 @@ struct ActionNeededView: View {
                     .blendMode(.plusLighter)
             }
             .shadow(color: .black.opacity(0.06), radius: 12, y: 6)
-            // A clear sideways stroke pages it; an upright one scrolls the list as before.
-            .gesture(
-                DragGesture(minimumDistance: 24)
-                    .onEnded { value in
-                        guard pages.count > 1,
-                              abs(value.translation.width) > abs(value.translation.height) * 1.5,
-                              abs(value.translation.width) > 44 else { return }
-                        go(value.translation.width < 0 ? 1 : -1, pages: pages, from: index)
-                    }
-            )
+            // Paged by its two arrows only for now. A sideways swipe (the web's) waits until it is
+            // proven on the simulator not to set off the row's own swipe actions (a full swipe right
+            // marks the task Done, BoardRowGestures) or the Tasks drawer's leftward close.
             .accessibilityElement(children: .contain)
             .accessibilityLabel(pages.count > 1 ? ActionNeededModel.placeText(index, of: pages.count) : "Action needed")
             .accessibilityIdentifier("board.row.actions.\(task.id)")
@@ -278,7 +289,7 @@ struct ActionNeededView: View {
     @ViewBuilder
     private func line(_ item: WalnutActionItem, index: Int, count: Int) -> some View {
         let later = until(item)
-        let done = answered[item.id]
+        let done = marks[item.id]
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 8) {
                 // "Needs you": the card's one colour. Grey while put aside, a ring once answered.
