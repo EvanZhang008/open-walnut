@@ -45,6 +45,10 @@ export const TOOL_ITEMS: Record<string, { kind: ToolItemKind; priority: number; 
   // task list or the owner read lands): it leaves just before Terminal, so arriving it
   // never pushes Terminal into "..." (2026-10-26).
   board: { kind: 'chip', priority: 6.1, name: 'Board' },
+  // The App this session opened beside its chat (Drawing): a tab once opened, like Files
+  // (2026-11-20, the user: "I want the draw actually open an like file tab kind of thing").
+  // It joins only after the person opened it, and leaves before the host's own chips.
+  app: { kind: 'chip', priority: 6.3, name: 'App' },
   time: { kind: 'info', priority: 7, name: 'Last activity' },
   // Open in new tab is the kebab's Window row only (2026-11-19, the user: "open in new tab can
   // be added into drop down").
@@ -72,7 +76,8 @@ export const SLOT_ID_PREFIX = 'slot:';
  */
 export function toolItemSpec(id: string, el?: HTMLElement | null): { kind: ToolItemKind; priority: number; name: string } | undefined {
   const own = TOOL_ITEMS[id];
-  if (own) return own;
+  // The App chip is named by its App (Drawing), which the row carries like a slot's title.
+  if (own) return el?.dataset.headerName ? { ...own, name: el.dataset.headerName } : own;
   if (!id.startsWith(SLOT_ID_PREFIX)) return undefined;
   return { kind: 'chip', priority: 6.5, name: el?.dataset.headerName || 'Plugin' };
 }

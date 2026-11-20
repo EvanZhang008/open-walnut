@@ -71,8 +71,9 @@ export interface DrawingWorkspaceProps {
   onDocumentPathChange?(path: string | null, change?: { renamedFrom?: string }): void;
   /** The person's steps on the canvas, for a recorder beside it (drawing-activity.ts). */
   onActivity?(activity: Activity): void;
-  /** A host's or plugin's own control in the top bar, before the drawing's buttons. */
-  barExtra?: ReactNode;
+  /** A host's or plugin's own control in the top bar, before the drawing's buttons. As a function
+   *  it gets `saveNow`: save what is on the canvas and answer the drawing's path (null: no file yet). */
+  barExtra?: ReactNode | ((bar: { saveNow(): Promise<string | null> }) => ReactNode);
   /** A host's or plugin's own overlay on the canvas (the canvas box is `position: relative`). */
   canvasExtra?: ReactNode;
   /** Tests pass their own server. */
@@ -80,6 +81,14 @@ export interface DrawingWorkspaceProps {
 }
 
 const draftStore = tabDrawingStore;
+
+/** Save the drawing shown and answer its path: a sketch becomes a file with its first content. */
+async function saveNow(controller: DrawingSync | null): Promise<string | null> {
+  if (!controller) return null;
+  controller.flushDraft();
+  await controller.saveAll();
+  return controller.snapshot().path ?? null;
+}
 const isText = (v: unknown): v is string => typeof v === 'string';
 const POLL_MS = 5_000;
 const LIST_POLL_MS = 30_000;
@@ -709,7 +718,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               </h2>}
           {state && <span className="drawing-workspace-status" data-state={state} role="status" aria-live="polite">{STATUS_TEXT[state]}</span>}
           <span className="drawing-workspace-bar-gap" />
-          {barExtra}
+          {typeof barExtra === 'function' ? barExtra({ saveNow: () => saveNow(sync.current) }) : barExtra}
           {onAttach && <button type="button" className="drawing-primary-button drawing-workspace-attach" onClick={() => void attach()} disabled={!!busy || !hasScene || !canAttach || !Canvas} title={canAttach ? 'Add this drawing to your message as a picture' : 'Attachment limit reached'}>{busy === 'attach' ? 'Attaching…' : 'Attach PNG'}</button>}
           {canAssist && (
             <button type="button" className="drawing-quiet-button drawing-workspace-assistant-toggle" aria-pressed={assistantShown}

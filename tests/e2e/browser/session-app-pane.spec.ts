@@ -2,8 +2,8 @@
  * A plugin App beside a session's chat (AppContribution.sessionPane, the split's App view).
  *
  * The fixture plugin (fixtures/plugin-session-pane-plugin/web.mjs) brings two Apps with a pane
- * (Sketch, Notes) and one without (Plain). The flow, from the session's ⋮ menu only (the header
- * gets no chip for it):
+ * (Sketch, Notes) and one without (Plain). The flow starts from the session's ⋮ menu (the header
+ * has no chip for an App until it was opened; from then on its chip is its tab, like Files):
  *
  *   1. Open → Apps opens the App view in the split; the pane gets the session, its task, its own
  *      path, and the focus (a person opened it). Plain is never offered.
@@ -81,8 +81,9 @@ async function shot(page: Page, name: string): Promise<void> {
 test('the ⋮ menu opens a plugin App beside the chat, kept across a reload, per App', async ({ page }) => {
   const { panel, errors } = await openSession(page)
 
-  // No resident chip: the header offers nothing for Apps.
+  // No chip before the first open: the header offers nothing for Apps.
   await expect(panel.locator('.session-panel-header').getByText(/Sketch Fixture|Apps/)).toHaveCount(0)
+  await expect(panel.getByTestId('session-app-chip')).toHaveCount(0)
 
   const group = await openViewsMenu(panel)
   // The row shows once the plugin's Apps have registered (the menu follows the registry).
@@ -128,6 +129,19 @@ test('the ⋮ menu opens a plugin App beside the chat, kept across a reload, per
   await again.getByTestId('session-menu-apps').click()
   await expect(pane(page)).toHaveCount(0)
   await expect(panel.locator('.session-panel-chat-col')).toBeVisible()
+
+  // Opened once, the App has its tab in the header (2026-11-20: "open an like file tab kind of
+  // thing"): it brings the same App back on its document, and again closes it, never a second one.
+  const chip = panel.getByTestId('session-app-chip')
+  await expect(chip).toHaveText('Sketch Fixture')
+  await chip.click()
+  await expect(pane(page)).toHaveCount(1)
+  await expect(page.getByTestId('pane-fixture-doc')).toHaveText('plans/b.sketch')
+  await expect(chip).toHaveClass(/session-action-chip-active/)
+  await expect(panel.locator('.session-panel-chat-col')).toBeVisible()
+  await shot(page, '3-chip-brings-it-back')
+  await chip.click()
+  await expect(pane(page)).toHaveCount(0)
   expect(errors).toEqual([])
 })
 

@@ -16,6 +16,7 @@ import path from 'node:path';
 import { seedColumns } from './draft-helpers';
 import { startSessionAt, panelFor, openPlusMenu } from './engine-settings-popover-helpers';
 import { useDrawingFixture } from './plugin-fixture';
+import { openKebabGroup } from './kebab-group-helpers';
 
 const SHOTS = '/tmp/drawing-composer';
 /** Two CJK characters (test data): the text tool and the SVG export must keep them. */
@@ -564,6 +565,105 @@ test.describe('Draw in the composer (drawing_app)', () => {
     await expect(page.locator('.notes-tree-name').filter({ hasText: 'Review service.excalidraw' })).toBeVisible({ timeout: 30_000 });
     await page.waitForTimeout(800);
     await shot(page, 'task-in-notes');
+    expect(errors).toEqual([]);
+  });
+
+  // 2026-11-20, the user: "I want the draw actually open an like file tab kind of thing ... because
+  // sometime I want to be able to chat while I draw".
+  test('Drawing opens as a tab beside the chat: draw, chat, its tab brings the same drawing back; the + dialog moves there too', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    const res = await page.request.post('/api/sessions/quick-start', {
+      data: { cwd: path.join(fixture.home(), 'projects'), message: 'Sketch the checkout flow', project: 'Drawing Fixture', engine: 'claude' },
+    });
+    expect(res.ok(), await res.text()).toBe(true);
+    const { sessionId, taskId } = await res.json() as { sessionId: string; taskId: string };
+    await seedColumns(page, [sessionId]);
+    await page.evaluate((url) => { location.href = url; }, `${fixture.base()}/`);
+    const panel = panelFor(page, sessionId);
+    await expect(panel.locator('.chat-plus-btn')).toBeVisible({ timeout: 60_000 });
+    // No Drawing tab before the first open.
+    await expect(panel.getByTestId('session-app-chip')).toHaveCount(0);
+
+    // ⋮ → Open → Drawing: a tab beside the chat, the chat still there.
+    await panel.locator('.task-kebab-btn').click();
+    const open = await openKebabGroup(page.locator('.task-kebab-menu:visible'), 'session-kebab-open');
+    await open.getByTestId('session-menu-apps').click();
+    const pane = page.getByTestId('session-app-pane');
+    await expect(pane).toHaveAttribute('data-app-key', 'walnut-drawing:main', { timeout: 60_000 });
+    // A session with no drawing yet offers a new one.
+    await pane.getByRole('button', { name: 'New drawing' }).last().click({ timeout: 60_000 });
+    await expect(pane.locator('canvas.excalidraw__canvas.interactive')).toBeVisible({ timeout: 60_000 });
+    await expect(panel.locator('.session-panel-chat-col')).toBeVisible();
+    const chip = panel.getByTestId('session-app-chip');
+    await expect(chip).toHaveText('Drawing');
+    await expect(chip).toHaveClass(/session-action-chip-active/);
+    await shot(page, 'tab-open');
+
+    // A few strokes: saved in this task's own folder.
+    await focusCanvas(pane);
+    await drag(page, pane, 'r', [120, 120], [320, 230]);
+    await drag(page, pane, 'o', [120, 280], [300, 360]);
+    await saved(pane);
+    const drawn = await onServer(page, pane);
+    expect(path.basename(path.dirname(drawn.path))).toMatch(new RegExp(`\\(${taskId.replace(/[^A-Za-z0-9_-]/g, '-')}\\)$`));
+    expect(drawn.scene.elements.map((e) => e.type)).toEqual(['rectangle', 'ellipse']);
+
+    // A message in the chat beside it: the drawing stays as it is.
+    const composer = panel.locator('.chat-input-textarea').first();
+    await composer.click();
+    await composer.fill('The box is checkout, the circle is payment');
+    await composer.press('Enter');
+    await expect(panel.locator('.session-panel-chat-col').getByText('The box is checkout, the circle is payment').first()).toBeVisible({ timeout: 30_000 });
+    await expect(ws(pane)).toHaveAttribute('data-drawing-path', drawn.path);
+    await shot(page, 'tab-chat-while-drawing');
+
+    // Its tab closes it and brings the same drawing back: one tab, never a second.
+    await chip.click();
+    await expect(pane).toHaveCount(0);
+    await chip.click();
+    await expect(page.getByTestId('session-app-pane')).toHaveCount(1);
+    await expect(ws(page.getByTestId('session-app-pane'))).toHaveAttribute('data-drawing-path', drawn.path, { timeout: 30_000 });
+    // The ⋮ menu's Drawing row is the same tab.
+    await panel.locator('.task-kebab-btn').click();
+    const again = await openKebabGroup(page.locator('.task-kebab-menu:visible'), 'session-kebab-open');
+    await expect(again.getByTestId('session-menu-apps')).toHaveAttribute('aria-pressed', 'true');
+    await page.keyboard.press('Escape');
+    await shot(page, 'tab-back');
+
+    // The + menu's Draw still opens its dialog; Beside the chat moves that drawing into the tab.
+    await chip.click();
+    await expect(page.getByTestId('session-app-pane')).toHaveCount(0);
+    const dialog = await openDraw(page, panel);
+    await focusCanvas(dialog);
+    await drag(page, dialog, 'r', [140, 300], [300, 380]);
+    await saved(dialog);
+    const fromDialog = await onServer(page, dialog);
+    await dialog.getByRole('button', { name: 'Beside the chat' }).click();
+    await expect(dialog).toHaveCount(0);
+    const docked = page.getByTestId('session-app-pane');
+    await expect(ws(docked)).toHaveAttribute('data-drawing-path', fromDialog.path, { timeout: 30_000 });
+    await expect(panel.locator('.session-panel-chat-col')).toBeVisible();
+    await shot(page, 'dialog-moved-beside-chat');
+
+    // New drawing in the dialog, one stroke, Beside the chat at once (before its first save):
+    // the tab opens that new drawing with the stroke, never the one shown before.
+    await chip.click();
+    await expect(page.getByTestId('session-app-pane')).toHaveCount(0);
+    const second = await openDraw(page, panel);
+    await showList(second);
+    await second.locator('.drawing-workspace-files').getByRole('button', { name: 'New drawing' }).click();
+    await focusCanvas(second);
+    await drag(page, second, 'o', [160, 160], [300, 260]);
+    await second.getByRole('button', { name: 'Beside the chat' }).click();
+    await expect(second).toHaveCount(0);
+    const fresh = page.getByTestId('session-app-pane');
+    await expect(ws(fresh)).toHaveAttribute('data-drawing-path', /\.excalidraw$/, { timeout: 30_000 });
+    const moved = await onServer(page, fresh);
+    expect(moved.path).not.toBe(fromDialog.path);
+    expect(moved.path).not.toBe(drawn.path);
+    expect(path.dirname(moved.path)).toBe(path.dirname(drawn.path));
+    expect(moved.scene.elements.map((e) => e.type)).toEqual(['ellipse']);
     expect(errors).toEqual([]);
   });
 

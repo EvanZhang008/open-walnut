@@ -17,8 +17,9 @@ export interface SessionAppOpenRequest {
   documentPath?: string;
 }
 
-export function openSessionApp(request: SessionAppOpenRequest): void {
-  window.dispatchEvent(new CustomEvent<SessionAppOpenRequest>(SESSION_APP_OPEN_EVENT, { detail: request }));
+/** True when a panel showing the session took it (it cancels the event), false when none is mounted. */
+export function openSessionApp(request: SessionAppOpenRequest): boolean {
+  return !window.dispatchEvent(new CustomEvent<SessionAppOpenRequest>(SESSION_APP_OPEN_EVENT, { detail: request, cancelable: true }));
 }
 
 /** The request an event carries, or null for a malformed one (another script's event of the same name). */

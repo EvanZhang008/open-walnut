@@ -118,3 +118,4 @@
   .drawing-app-dialog { height: 100dvh; border-radius: 0; }
 }
 .drawing-app-loading { margin: auto; display: flex; align-items: center; gap: 8px; color: var(--fg-muted); }
+.drawing-app-beside-note { font-size: 12px; color: var(--fg-muted); }

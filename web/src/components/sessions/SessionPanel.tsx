@@ -157,7 +157,7 @@ import '@/styles/phone-session.css';
 import { useFullscreen, useSheetPlace } from '@/hooks/useFullscreen';
 import { fullscreenPlace } from '@/hooks/fullscreen-owner';
 import { usePanelView, TERMINAL_DOCK_VIEWS, withPanelApp, withPanelAppDoc } from './panel-view';
-import { SessionPluginAppPane } from './SessionPluginAppPane';
+import { SessionPluginAppPane, useSessionPaneApps } from './SessionPluginAppPane';
 import { SESSION_APP_OPEN_EVENT, sessionAppOpenRequest } from './session-app-open';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { useHeightVar } from '@/hooks/useHeightVar';
@@ -1795,6 +1795,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const setAppDocument = useLeanCallback((key: string, path: string | null) => {
     setPanelApp((prev) => withPanelAppDoc(prev, key, path));
   }, [setPanelApp]);
+  const paneApps = useSessionPaneApps();
+  const keptPaneApp = !inset && panelApp?.key ? paneApps.find((app) => app.key === panelApp.key) ?? null : null;
   const openAppViewRef = useRef(openAppView);
   openAppViewRef.current = openAppView;
   useEffect(() => {
@@ -1802,6 +1804,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     const onOpen = (event: Event) => {
       const request = sessionAppOpenRequest(event);
       if (!request || request.sessionId !== sessionId) return;
+      // Taken: the caller hears that a panel opened it.
+      event.preventDefault();
       openAppViewRef.current(request.appKey, request.documentPath ? { documentPath: request.documentPath } : undefined);
     };
     window.addEventListener(SESSION_APP_OPEN_EVENT, onOpen);
@@ -3337,6 +3341,22 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                     data-hidden={hid('threads')}
                   >
                     Threads{threadsShown > 0 && <span className="session-action-chip-count" data-testid="session-threads-chip-count">{threadsShown}</span>}
+                  </button>
+                )}
+                {/* The App this session opened beside its chat (Drawing): its tab, like Files, from
+                    the first open on (kept per session and place); the ⋮ menu's row opens it first. */}
+                {keptPaneApp && (
+                  <button
+                    className={`session-action-chip${activeView === 'app' ? ' session-action-chip-active' : ''}`}
+                    onClick={() => openAppView(keptPaneApp.key, { toggle: true })}
+                    title={`${keptPaneApp.title} beside the chat`}
+                    data-testid="session-app-chip"
+                    data-app-key={keptPaneApp.key}
+                    data-header-id="app"
+                    data-header-name={keptPaneApp.title}
+                    data-hidden={hid('app')}
+                  >
+                    {keptPaneApp.title}
                   </button>
                 )}
               </>
