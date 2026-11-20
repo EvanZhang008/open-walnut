@@ -13,8 +13,9 @@ import path from 'node:path'
 import { z } from 'zod'
 import { guardedPath } from '../setup/exec-guard.js'
 import {
-  LINK_NOTE_EXEMPT, LINK_NOTE_OPS, askUserQuestionText, findMissingLinks, opMissingLinksNote,
+  LINK_NOTE_EXEMPT, LINK_NOTE_OPS, askUserQuestionText, findMissingLinks, opLinkNotes, opMissingLinksNote,
 } from '../../src/lib/missing-links.js'
+import { _setGithubCommitCheck, deadCommitLinksNote, findDeadCommitLinks } from '../../src/lib/github-commit-check.js'
 import { ASK_LINKS_HOOK_COMMAND, askLinksHooks } from '../../src/providers/ask-links-hook.js'
 import { sessionSettingsHooks } from '../../src/providers/session-settings-hooks.js'
 import { definePluginOp, getOp, listOps, removePluginOps } from '../../src/ops/registry.js'
@@ -221,5 +222,61 @@ describe('the AskUserQuestion hook', () => {
     const groups = (sessionSettingsHooks({}) as { PreToolUse: Array<{ matcher?: string }> }).PreToolUse
     expect(groups.some((g) => g.matcher === 'AskUserQuestion')).toBe(true)
     expect(askLinksHooks({ WALNUT_LINK_NOTE: '0' })).toBeNull()
+  })
+})
+
+describe('a GitHub commit link that opens nothing', () => {
+  const calls: string[] = []
+  const answers: Record<string, number> = {}
+  beforeAll(() => {
+    _setGithubCommitCheck({
+      cacheFile: path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'gh-commits-')), 'cache.json'),
+      fetch: async (url) => { calls.push(url); return { status: answers[url] ?? 500 } },
+    })
+  })
+  const API = 'https://github.com/acme/app'
+
+  it('is noted when GitHub lacks the commit, and stays quiet when it has it', async () => {
+    answers[`${API}/commit/a6ab69182`] = 404
+    answers[API] = 200
+    answers[`${API}/commit/aa738a6d77`] = 200
+    const dead = await findDeadCommitLinks('Landed: https://github.com/acme/app/commit/a6ab69182 and https://github.com/acme/app/commit/aa738a6d77')
+    expect(dead.map((d) => d.hash)).toEqual(['a6ab69182'])
+    const note = deadCommitLinksNote(dead, 'Your thread summary (thread_update reply)', 'Fix it.')!
+    expect(note).toContain('https://github.com/acme/app/commit/a6ab69182, a commit GitHub does not have')
+    expect(note).toContain('not yet on GitHub, with no link')
+  })
+
+  it('asks GitHub once: a commit it has stays known, one it lacks is kept for a while', async () => {
+    calls.length = 0
+    await findDeadCommitLinks('https://github.com/acme/app/commit/a6ab69182 https://github.com/acme/app/commit/aa738a6d77')
+    expect(calls).toEqual([])
+  })
+
+  it('says nothing for a private repository, a rate limit or no network', async () => {
+    answers[`${API}/commit/0e72622de`] = 404
+    answers[API] = 404
+    answers['https://github.com/acme/limit/commit/0e72622de'] = 429
+    expect(await findDeadCommitLinks('https://github.com/acme/app/commit/0e72622de https://github.com/acme/limit/commit/0e72622de https://github.com/acme/down/commit/0e72622de')).toEqual([])
+    // A visible repository's 404 is a missing commit.
+    answers[`${API}/commit/1f2e3d4c5`] = 404
+    answers[API] = 200
+    expect((await findDeadCommitLinks('https://github.com/acme/app/commit/1f2e3d4c5')).map((d) => d.hash)).toEqual(['1f2e3d4c5'])
+  })
+
+  it('rides the op note with the missing-id note', async () => {
+    answers[`${API}/commit/b1c2d3e4f`] = 404
+    answers[API] = 200
+    const notes = await opLinkNotes('thread_update', { id: 'th-1234567', reply: 'CR-1234567 is up; landed https://github.com/acme/app/commit/b1c2d3e4f' })
+    expect(notes).toHaveLength(2)
+    expect(notes[0]).toContain('CR-1234567 (code review)')
+    expect(notes[1]).toContain('commit/b1c2d3e4f, a commit GitHub does not have')
+    expect(await opLinkNotes('task_send', { text: 'https://github.com/acme/app/commit/b1c2d3e4f' })).toEqual([])
+  })
+
+  it('turns off', async () => {
+    process.env.WALNUT_GITHUB_COMMIT_CHECK = '0'
+    try { expect(await findDeadCommitLinks('https://github.com/acme/app/commit/b1c2d3e4f')).toEqual([]) }
+    finally { delete process.env.WALNUT_GITHUB_COMMIT_CHECK }
   })
 })

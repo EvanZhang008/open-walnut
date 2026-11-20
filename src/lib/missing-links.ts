@@ -31,6 +31,8 @@
  * and a gateway call runs this on the server's event loop).
  */
 
+import { deadCommitLinksNote, findDeadCommitLinks } from './github-commit-check.js'
+
 export type LinkRefKind = 'code review' | 'ticket' | 'pull request' | 'commit'
 
 export interface MissingLink {
@@ -195,14 +197,42 @@ function at(v: unknown, path: string[], out: string[]): void {
   if (v && typeof v === 'object') at((v as Record<string, unknown>)[path[0]], path.slice(1), out)
 }
 
-/** The note for a session's op whose words for the user name ids with no link, or null. */
-export function opMissingLinksNote(op: string, args: unknown): string | null {
+/** The words of a LINK_NOTE_OPS op the user reads, joined; null for any other op. */
+function opUserText(op: string, args: unknown): { text: string; what: string; fix: string } | null {
   const spec = LINK_NOTE_OPS[op]
   if (!spec || !args || typeof args !== 'object') return null
   const parts: string[] = []
   for (const f of spec.fields) at(args, f.split('.'), parts)
-  const missing = findMissingLinks(parts.join('\n\n'))
-  return missingLinksNote(missing, spec.what, spec.fix)
+  return { text: parts.join('\n\n'), what: spec.what, fix: spec.fix }
+}
+
+/** The note for a session's op whose words for the user name ids with no link, or null. */
+export function opMissingLinksNote(op: string, args: unknown): string | null {
+  const t = opUserText(op, args)
+  return t ? missingLinksNote(findMissingLinks(t.text), t.what, t.fix) : null
+}
+
+/**
+ * Both notes for a text for the user: ids with no link, and GitHub commit links that open
+ * nothing (github-commit-check.ts, which asks GitHub). Never throws.
+ */
+export async function linkNotes(text: string, what: string, fix: string): Promise<string[]> {
+  const notes: string[] = []
+  try {
+    const missing = missingLinksNote(findMissingLinks(text), what, fix)
+    if (missing) notes.push(missing)
+  } catch { /* a note never fails the call */ }
+  try {
+    const dead = deadCommitLinksNote(await findDeadCommitLinks(text), what, fix)
+    if (dead) notes.push(dead)
+  } catch { /* a note never fails the call */ }
+  return notes
+}
+
+/** linkNotes for a session's op: nothing for an op whose words the user does not read. */
+export async function opLinkNotes(op: string, args: unknown): Promise<string[]> {
+  const t = opUserText(op, args)
+  return t ? linkNotes(t.text, t.what, t.fix) : []
 }
 
 /** The words of a Claude Code AskUserQuestion call's input (its questions, headers and options). */
