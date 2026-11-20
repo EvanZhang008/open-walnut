@@ -119,10 +119,12 @@ struct ActionNeededView: View {
                 Text(ActionNeededModel.label(item.kind).uppercased())
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(later == nil ? Theme.warning : .secondary)
-                Text(item.summary)
+                // The agent's own words: markdown and file links as everywhere else (LetterAgentTextTests).
+                Text(MarkdownParser.inline(item.summary))
                     .font(.caption)
                     .foregroundStyle(later == nil ? .primary : .secondary)
                     .lineLimit(2)
+                    .handlingFilePathLinks(task: task, field: .needs)
                 Spacer(minLength: 0)
             }
             if let later {
