@@ -106,7 +106,19 @@ interface TaskRows {
   actions: TaskStoreActions;
 }
 
-export interface TaskStoreActions { has: (taskId: string) => boolean; update: TasksContextValue['update'] }
+/**
+ * The store's writes without its rows: a hook or a panel that only WRITES (a thread acted on, a
+ * Board card's phase) reads these, never the whole context, so a task write elsewhere does not
+ * draw it again (2026-11-20: an open chat's panel drew once per agent status write because its
+ * Threads hook read the full context for predictStatus; app-responsiveness-budget.spec.ts).
+ */
+export interface TaskStoreActions {
+  has: (taskId: string) => boolean;
+  update: TasksContextValue['update'];
+  setPhase: TasksContextValue['setPhase'];
+  complete: TasksContextValue['complete'];
+  predictStatus: TasksContextValue['predictStatus'];
+}
 
 /** Module level on purpose: its closures hold the rows, never a render (useLeanCallback.ts). */
 function makeTaskRows(tasks: readonly Task[], loading: boolean, error: string | null): TaskRows {
@@ -116,6 +128,9 @@ function makeTaskRows(tasks: readonly Task[], loading: boolean, error: string | 
     actions: {
       has: (taskId) => rowOf(rows, taskId) !== null,
       update: (id, updates) => (rows.store ? rows.store.update(id, updates) : Promise.resolve(false)),
+      setPhase: (id, phase, opts) => (rows.store ? rows.store.setPhase(id, phase, opts) : Promise.resolve(false)),
+      complete: (id, opts) => (rows.store ? rows.store.complete(id, opts) : Promise.resolve(false)),
+      predictStatus: (id, make, opts) => (rows.store ? rows.store.predictStatus(id, make, opts) : () => {}),
     },
   };
   return rows;

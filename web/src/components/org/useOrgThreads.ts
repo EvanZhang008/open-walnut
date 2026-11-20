@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { fetchOrgThreads, patchOrgThread, splitOrgThread, type OrgThread, type OrgThreadPatch } from '@/api/org-threads';
 import { useEvent } from '@/hooks/useWebSocket';
-import { useTasksContextSafe } from '@/contexts/TasksContext';
+import { useTaskStoreActions } from '@/contexts/TasksContext';
 import { statusWithThreads } from '@/hooks/status-prediction';
 import { log } from '@/utils/log';
 
@@ -86,7 +86,9 @@ function redraw(taskId: string): OrgThread[] | null {
 export function resetOrgThreadsForTest(): void { nodes.clear(); listeners.clear(); }
 
 export function useOrgThreads(taskId: string | undefined, enabled: boolean): OrgThreadsState {
-  const tasks = useTasksContextSafe();
+  // The store's writes only, never its rows: an open chat keeps this hook mounted, and the full
+  // context changes on every task write (TaskStoreActions).
+  const tasks = useTaskStoreActions();
   const threads = useSyncExternalStore(subscribe, () => (taskId && enabled ? nodes.get(taskId)?.drawn ?? null : null));
   const [error, setError] = useState<string | null>(null);
   /** A write the server refused: kept until the next write saves (a re-read does not clear it). */

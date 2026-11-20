@@ -18,7 +18,7 @@ import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { useLeaderPresence } from '@/hooks/useLeaderPresence';
 import { log } from '@/utils/log';
 import { useOpenTask } from '@/hooks/useOpenTask';
-import { useTasksContextSafe, type TasksContextValue } from '@/contexts/TasksContext';
+import { useTaskStoreActions, type TaskStoreActions } from '@/contexts/TasksContext';
 import { autoLaneKind, firstLaneOfKind, type BoardCard, type BoardLane } from '../../../../../src/core/boards/board-lanes';
 import { boardErrorMessage, boardPath } from '../useTaskBoard';
 import type {
@@ -106,9 +106,9 @@ function storeRequest(write: (onError: (err: Error) => void) => Promise<boolean>
   });
 }
 
-/** The store when it holds the task's row; null for a row it does not carry (or no store: a pop-out). */
-function storeFor(store: TasksContextValue | null, taskId: string): TasksContextValue | null {
-  return store && store.tasks.some((t) => t.id === taskId) ? store : null;
+/** The store's writes when it holds the task's row; null for a row it does not carry (or no store: a pop-out). */
+function storeFor(store: TaskStoreActions | null, taskId: string): TaskStoreActions | null {
+  return store && store.has(taskId) ? store : null;
 }
 
 const quote = (title: string) => `"${title.length > 60 ? `${title.slice(0, 59)}…` : title}"`;
@@ -127,7 +127,8 @@ export function useKanbanWrites(deps: KanbanWritesDeps): KanbanWrites {
   const d = useRef(deps);
   d.current = deps;
   const openTask = useOpenTask();
-  const tasksStore = useTasksContextSafe();
+  // The writes only (TaskStoreActions): the whole context would draw the Board on every task write.
+  const tasksStore = useTaskStoreActions();
   const storeNow = useRef(tasksStore);
   storeNow.current = tasksStore;
   const base = boardPath(ownerId);
