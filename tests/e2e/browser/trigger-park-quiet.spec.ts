@@ -8,8 +8,10 @@
  * the fixture server (mock CLI) calls `POST /api/v1/routines/trigger` with the
  * caller-sid header the ops executor adds. Everything after that is the console:
  *
- *  1. The task leaves the default task list on its own (no reload), and the
- *     folded Waiting / snoozed section counts it; opening it shows it with the hourglass.
+ *  1. The park alone keeps its open ask on the list as Needs you (an ask of the user
+ *     outranks any trigger, 2026-11-19); once the turn's own report says it waits outside,
+ *     the task leaves the default task list on its own (no reload), and the folded
+ *     Waiting / snoozed section counts it; opening it shows it with the hourglass.
  *  2. The Inbox has no letter about it: no "Waiting: <title>" envelope, and the
  *     inbox's count of letters for this task stays at zero.
  *
@@ -102,6 +104,20 @@ test('a session\'s trigger parks its task off the list, and no letter reaches th
   litterRoutines.push(out.job.id)
   expect(out.wait.parked).toBe(true)
   expect(out.wait.letter_id).toBeUndefined()
+
+  // The park alone leaves its open ask standing: an ask of the user is Needs you in every phase,
+  // whatever trigger it holds (2026-11-19, user-status.ts openAskOf). The row stays, live.
+  await page.waitForTimeout(1_500)
+  expect((await taskOf(taskId)).phase).toBe('WAITING')
+  await expect.poll(async () => (await taskOf(taskId)).user_status?.state, { timeout: 10_000 }).toBe('needs')
+  await expect(anyRow.first()).toBeVisible()
+  // The turn that armed it ends the way a real one does: its own status report, now a wait
+  // outside it (the turn-end status question). Only that newer report takes the ask back.
+  const settled = await request.put(`/api/v1/tasks/${taskId}/report`, {
+    headers: { 'x-walnut-caller-sid': sid },
+    data: { state: 'waiting', waiting_kind: 'outside', waiting_on: 'A review on PR 123' },
+  })
+  expect(settled.ok(), await settled.text()).toBe(true)
 
   // 1. It leaves the list live, and the folded Waiting / snoozed section under the
   // list counts it (the footer that said "N Waiting hidden" became that section).
