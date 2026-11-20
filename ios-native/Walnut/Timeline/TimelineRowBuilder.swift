@@ -337,13 +337,18 @@ final class TimelineRowBuilder {
                 let u = side / 12
                 color.setStroke()
                 let curve = UIBezierPath()
-                curve.move(to: CGPoint(x: 2.5 * u, y: 1.5 * u))
-                curve.addArc(withCenter: CGPoint(x: 9.5 * u, y: 1.5 * u), radius: 7 * u,
-                             startAngle: .pi, endAngle: .pi / 2, clockwise: false)
+                // The web's path (reply-thread-line.tsx ReplyArc): one round stroke, no corner.
+                curve.move(to: CGPoint(x: 2.4 * u, y: 1.2 * u))
+                curve.addCurve(to: CGPoint(x: 6 * u, y: 9.8 * u),
+                               controlPoint1: CGPoint(x: 2 * u, y: 6.2 * u),
+                               controlPoint2: CGPoint(x: 2.9 * u, y: 9.7 * u))
+                curve.addCurve(to: CGPoint(x: 10 * u, y: 9.7 * u),
+                               controlPoint1: CGPoint(x: 7.3 * u, y: 9.9 * u),
+                               controlPoint2: CGPoint(x: 8.5 * u, y: 9.8 * u))
                 let head = UIBezierPath()
-                head.move(to: CGPoint(x: 7.2 * u, y: 6.2 * u))
-                head.addLine(to: CGPoint(x: 9.7 * u, y: 8.5 * u))
-                head.addLine(to: CGPoint(x: 7.2 * u, y: 10.8 * u))
+                head.move(to: CGPoint(x: 8.4 * u, y: 8.1 * u))
+                head.addLine(to: CGPoint(x: 10.1 * u, y: 9.7 * u))
+                head.addLine(to: CGPoint(x: 8.4 * u, y: 11.2 * u))
                 for path in [curve, head] {
                     path.lineWidth = max(1, 1.3 * u)
                     path.lineCapStyle = .round

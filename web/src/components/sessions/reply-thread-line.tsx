@@ -63,15 +63,18 @@ function useOpenReplyThread(): (t: ReplyThread) => void {
 }
 
 /**
- * The mark in front of the title: one smooth quarter curve from the message down and over to the
- * thread, ending in a small arrowhead (2026-11-20, the user: "not this stiff 90 degrees: a perfect
- * curve with an arrow"). Drawn in the text's own color and weight, so both themes read it.
+ * The mark in front of the title: one round stroke from the message straight down, round at the
+ * bottom, then right to the thread, ending in an arrowhead pointing right; no corner anywhere (2026-11-20, the user:
+ * "not this stiff 90 degrees: a perfect curve with an arrow", then "not this kind of like bit curved
+ * from 90", drawing a round U that ends in an arrow; 2026-11-21 its variant B, drawn inside the 12x12 box so
+ * neither client clips it). Drawn in the text's own color and weight, so
+ * both themes read it. The phone draws the same path (TimelineRowBuilder.replyArc).
  */
 function ReplyArc() {
   return (
     <svg className="msg-reply-thread-arrow" data-testid="msg-reply-thread-arc" viewBox="0 0 12 12" width="1em" height="1em" aria-hidden="true" focusable="false">
-      <path d="M2.5 1.5 A7 7 0 0 0 9.5 8.5" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-      <path d="M7.2 6.2 L9.7 8.5 L7.2 10.8" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M2.4 1.2 C2 6.2 2.9 9.7 6 9.8 C7.3 9.9 8.5 9.8 10 9.7" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <path d="M8.4 8.1 L10.1 9.7 L8.4 11.2" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
