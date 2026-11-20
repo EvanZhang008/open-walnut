@@ -1,39 +1,33 @@
 /**
  * The Org page's "Edit name and avatar…" (the "Org avatars" experiment): which row it is for,
  * how its name is changed, and the dialog itself. Off, `edit` is undefined and the row menu
- * shows no such row.
+ * shows no such row. It never reads the whole task store (tasks-context-readers-ratchet): the
+ * dialog reads its one row, and a rename goes through the store's writers.
  */
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { editOrgNode } from '@/api/org';
-import { useTasksContext } from '@/contexts/TasksContext';
+import { useTaskStoreActions } from '@/contexts/TasksContext';
+import { useExperimental } from '@/hooks/useExperimental';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { rowTaskId, type ChannelRow } from './org-channels-model';
-import { OrgAvatarDialog, type AvatarDialogTarget } from './OrgAvatarDialog';
-import { useOrgAvatars } from './useOrgAvatars';
+import { OrgAvatarDialog, type AvatarDialogTarget, type RenameKind } from './OrgAvatarDialog';
 
 export function useAvatarEditor(rows: readonly ChannelRow[]): { edit: ((row: ChannelRow) => void) | undefined; dialog: ReactNode } {
-  const { on } = useOrgAvatars();
-  const { tasks, update, refetch } = useTasksContext();
+  const on = useExperimental('org_avatars');
+  const actions = useTaskStoreActions();
   const [target, setTarget] = useState<AvatarDialogTarget | null>(null);
-  const others = useMemo(() => rows.map((r) => rowTaskId(r)).filter(Boolean) as string[], [rows]);
 
-  const edit = useCallback((row: ChannelRow) => {
+  const edit = useLeanCallback((row: ChannelRow) => {
     const taskId = rowTaskId(row);
     if (!taskId) return;
-    const task = tasks.find((t) => t.id === taskId);
-    // A VP has a name of its own; a router or a project's one task is named by its title (unless
-    // its router settings named it); the CEO keeps its name.
-    const rename: AvatarDialogTarget['rename'] = row.kind === 'main' ? null
-      : task?.org_role === 'lead' ? 'vp'
-      : task?.org_name ? null : 'title';
-    setTarget({ taskId, name: row.name, rename, others });
-  }, [tasks, others]);
+    setTarget({ taskId, name: row.name, main: row.kind === 'main', others: rows.map((r) => rowTaskId(r)).filter(Boolean) as string[] });
+  }, [rows]);
 
-  const rename = useCallback(async (name: string) => {
-    if (!target) return;
-    if (target.rename === 'vp') await editOrgNode(target.taskId, { name });
-    else if (target.rename === 'title') await update(target.taskId, { title: name });
-    refetch();
-  }, [target, update, refetch]);
+  const rename = useLeanCallback(async (name: string, kind: RenameKind) => {
+    if (!target || !kind) return;
+    if (kind === 'vp') await editOrgNode(target.taskId, { name });
+    else if (actions) await actions.update(target.taskId, { title: name });
+  }, [target, actions]);
 
   return {
     edit: on ? edit : undefined,

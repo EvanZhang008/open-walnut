@@ -21,6 +21,7 @@ import { draftKey } from '@/utils/drafts';
 import { drawOrgAvatars, setOrgAvatar, type OrgAvatarSet } from '@/api/org';
 import { log } from '@/utils/log';
 import { useOrgAvatars } from './useOrgAvatars';
+import { useStoreTask } from '@/contexts/TasksContext';
 import { avatarFileValue } from './avatar-upload';
 import '@/styles/org-avatar-dialog.css';
 
@@ -28,23 +29,30 @@ type Tab = 'presets' | 'ai' | 'upload';
 const TABS: ReadonlyArray<[Tab, string]> = [['presets', 'Presets'], ['ai', 'Ask AI to draw'], ['upload', 'Upload']];
 const isTab = (v: unknown): v is Tab => v === 'presets' || v === 'ai' || v === 'upload';
 
+/** How a node's name is changed here: a VP's name, a task's title, or not here. */
+export type RenameKind = 'vp' | 'title' | null;
+
 export interface AvatarDialogTarget {
   taskId: string;
   name: string;
-  /** How its name is changed here: a VP's name, a task's title, or not here (the CEO keeps its name). */
-  rename: 'vp' | 'title' | null;
+  /** The CEO, which keeps its name. */
+  main: boolean;
   /** The ids of the org's other nodes, for the "worn already" dots. */
   others: readonly string[];
 }
 
 interface Props {
   target: AvatarDialogTarget;
-  onRename: (name: string) => Promise<void>;
+  onRename: (name: string, kind: RenameKind) => Promise<void>;
   onClose: () => void;
 }
 
 export function OrgAvatarDialog({ target, onRename, onClose }: Props) {
   const modalOwner = useModalOverlay(onClose);
+  const task = useStoreTask(target.taskId);
+  // A VP has a name of its own; a router or a project's one task is named by its title (unless
+  // its router settings named it); the CEO keeps its name.
+  const renameKind: RenameKind = target.main ? null : task?.org_role === 'lead' ? 'vp' : task?.org_name ? null : 'title';
   const avatars = useOrgAvatars();
   const current = avatars.of(target.taskId, target.name);
   const [tab, setTab] = usePageView<Tab>('org', 'avatar-dialog-tab', 'presets', isTab);
@@ -95,7 +103,7 @@ export function OrgAvatarDialog({ target, onRename, onClose }: Props) {
   };
 
   // A task's title is never blank (a VP's blank name gives it back its project's).
-  const blankTitle = target.rename === 'title' && !name.trim();
+  const blankTitle = renameKind === 'title' && !name.trim();
   const save = async (value: OrgAvatarSet | null) => {
     if (blankTitle && !(value && 'reset' in value)) { setError('A task needs a title.'); return; }
     setBusy(true); setError('');
@@ -103,7 +111,7 @@ export function OrgAvatarDialog({ target, onRename, onClose }: Props) {
       const nextName = name.trim();
       // The picture first: when the server refuses it, nothing (not the name either) has changed.
       if (value) await setOrgAvatar(target.taskId, value);
-      if (target.rename && nextName !== target.name.trim()) await onRename(nextName);
+      if (renameKind && nextName !== target.name.trim()) await onRename(nextName, renameKind);
       promptDraft.clear();
       log.info('org', 'avatar dialog saved', { taskId: target.taskId, renamed: nextName !== target.name.trim(), avatar: value ? Object.keys(value)[0] : 'unchanged' });
       onClose();
@@ -127,9 +135,9 @@ export function OrgAvatarDialog({ target, onRename, onClose }: Props) {
             <img className="org-avatar-now" src={shown} width={64} height={64} alt="" data-testid="org-avatar-current" />
             <label className="org-avatar-name">
               <span>Name</span>
-              <input value={name} onChange={(e) => setName(e.target.value)} disabled={!target.rename} maxLength={target.rename === 'vp' ? 60 : 200}
+              <input value={name} onChange={(e) => setName(e.target.value)} disabled={!renameKind} maxLength={renameKind === 'vp' ? 60 : 200}
                 data-testid="org-avatar-name" data-no-draft="rename" onKeyDown={(e) => { if (e.key === 'Enter') void save(picked); }} />
-              <small>{target.rename === 'vp' ? 'Blank gives it its project’s name.' : target.rename ? 'The task’s title.' : 'The CEO keeps its name.'}</small>
+              <small>{renameKind === 'vp' ? 'Blank gives it its project’s name.' : renameKind ? 'The task’s title.' : 'The CEO keeps its name.'}</small>
             </label>
           </div>
           <div className="org-avatar-tabs" role="tablist">
