@@ -62,7 +62,9 @@ enum TimelineTurnMarker {
     /// tasks line of an Org chat (`MessageAboutTag`), nor Walnut's own lines (the
     /// status report, an old version tag: `InternalLines`).
     static func strip(_ text: String) -> String {
-        let text = InternalLines.strip(MessageAboutTag.strip(text))
+        // Walnut's own lines go first, as in the history parse: a report after the tasks
+        // line would push it out of the last lines its read looks at.
+        let text = MessageAboutTag.strip(InternalLines.strip(text))
         let reading = read(text)
         return reading.ack ? reading.text : text
     }
@@ -71,7 +73,7 @@ enum TimelineTurnMarker {
     /// START of the marker is held back too, so the tag never flashes up character
     /// by character (`stripTurnMarker(text, true)` on the web).
     static func stripLive(_ text: String) -> String {
-        let text = InternalLines.strip(MessageAboutTag.strip(text, streaming: true), streaming: true)
+        let text = MessageAboutTag.strip(InternalLines.strip(text, streaming: true), streaming: true)
         let reading = read(text)
         if reading.ack { return reading.text }
         let cut = text.lastIndex(of: "\n")

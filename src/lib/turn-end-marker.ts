@@ -77,9 +77,11 @@ export function readTurnMarker(text: string | undefined): TurnMarker {
  * held back too, so the tag never flashes up character by character.
  */
 export function stripTurnMarker(text: string, streaming = false): string {
-  // The tasks line of an Org chat (message-about.ts) goes first: it may follow the marker.
-  // Walnut's own lines (the status report, an old version tag) never print (internal-lines.ts).
-  text = stripInternalLines(stripAboutTag(text, streaming), streaming);
+  // Walnut's own lines (the status report, an old version tag) never print (internal-lines.ts),
+  // and go first, as in the history parse: the tasks line of an Org chat (message-about.ts) is
+  // read among the last lines, which a report after it would push out. The tasks line goes
+  // next: it may follow the marker.
+  text = stripAboutTag(stripInternalLines(text, streaming), streaming);
   const read = readTurnMarker(text);
   if (read.noAction) return read.text;
   if (!streaming) return text;

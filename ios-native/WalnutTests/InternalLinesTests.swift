@@ -74,6 +74,19 @@ final class InternalLinesTests: XCTestCase {
         XCTAssertEqual(about, ["mt-a-1"])
     }
 
+    /// A tasks line before the report (review, 2026-11-20): the report goes first, so the
+    /// tasks line is read and never prints, while it streams in too.
+    func testATasksLineBeforeTheReportNeverPrints() {
+        let text = "Answer\n<walnut-about tasks=\"mt-a-1\"/>\nFOR_USER_STATE: a\nFOR_USER_NOW: b\nFOR_USER_NEXT: c"
+        XCTAssertEqual(TimelineTurnMarker.strip(text), "Answer")
+        XCTAssertEqual(TimelineTurnMarker.stripLive(text), "Answer")
+        let ns = text as NSString
+        for end in 1...ns.length {
+            let live = TimelineTurnMarker.stripLive(ns.substring(to: end))
+            XCTAssertFalse(live.contains("<w") || live.contains("FOR_"), "stripLive at \(end): \(live)")
+        }
+    }
+
     /// The agent-ack line after the report still folds the turn away.
     func testTheAckLineAfterTheReportStillReads() {
         let text = "Nothing for you.\nFOR_USER_STATE: working\n\(TimelineTurnMarker.tag)"

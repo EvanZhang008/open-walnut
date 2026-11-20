@@ -87,6 +87,15 @@ describe('the text as the screen shows it leaves Walnut\'s lines out', () => {
     expect(stripInternalLines(plain)).toBe(plain)
   })
 
+  it('a tasks line before the report never prints, while it streams in too (review, 2026-11-20)', () => {
+    const text = 'Answer\n<walnut-about tasks="mt-a-1"/>\nFOR_USER_STATE: a\nFOR_USER_NOW: b\nFOR_USER_NEXT: c'
+    expect(stripTurnMarker(text)).toBe('Answer')
+    for (let end = 1; end <= text.length; end++) {
+      const live = stripTurnMarker(text.slice(0, end), true)
+      expect(live.includes('<w') || live.includes('FOR_'), `at ${end}: ${live}`).toBe(false)
+    }
+  })
+
   it('the turn-end marker right after the report still folds the turn', () => {
     const text = `Nothing for you.\nFOR_USER_STATE: working\n${NO_ACTION_TAG}`
     expect(readTurnMarker(stripInternalLines(text))).toEqual({ text: 'Nothing for you.', noAction: true })

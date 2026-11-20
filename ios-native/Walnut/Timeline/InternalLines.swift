@@ -73,7 +73,8 @@ enum InternalLines {
             if trimmed(line).isEmpty || test(walnutTag, line) { continue }
             if isField(i) { start = i; continue }
             // While it streams in, the next field's name as far as it has come ("F", "FOR"): part of the report.
-            if streaming, i == out.count - 1, !code[i], test(fieldStart, line) { continue }
+            // So is a tag line of Walnut's as far as it has come ("<walnut-ab"): it stays out until whole.
+            if streaming, i == out.count - 1, !code[i], test(fieldStart, line) || isTagStart(line) { continue }
             // A value carried on, indented four spaces deep too (that is not code inside the report).
             if (!code[i] || test(indentedCode, line)) && test(continuation, line) { continue }
             break
@@ -90,6 +91,12 @@ enum InternalLines {
         }
         let joined = kept.joined(separator: "\n")
         return joined == text ? text : replaceFirst(trailingSpace, in: joined, with: "")
+    }
+
+    /// While a reply streams in, a last line that is so far only the start of one of Walnut's tag lines.
+    private static func isTagStart(_ line: String) -> Bool {
+        let t = trimmed(line)
+        return !t.isEmpty && t.utf16.count < 8 && "<walnut-".hasPrefix(t)
     }
 
     /// `^\s{0,3}(`{3,}|~{3,})(.*)$`: the fence's mark and what follows it.

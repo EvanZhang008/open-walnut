@@ -143,6 +143,23 @@
     "shown": "Done."
   },
   {
+    "label": "a tag line of Walnut's before the report stays",
+    "text": "Answer\n<walnut-about tasks=\"abc-123\"/>\nFOR_USER_STATE: a\nFOR_USER_NOW: b\nFOR_USER_NEXT: c",
+    "shown": "Answer\n<walnut-about tasks=\"abc-123\"/>"
+  },
+  {
+    "label": "streaming: the start of a tag line after the report is held back",
+    "text": "Done.\nFOR_USER_STATE: working\n<walnut-ab",
+    "streaming": true,
+    "shown": "Done.\n<walnut-ab"
+  },
+  {
+    "label": "streaming: a tag start with no report before it is left to the tag's own hold",
+    "text": "Done.\n<wal",
+    "streaming": true,
+    "shown": "Done.\n<wal"
+  },
+  {
     "label": "not streaming: a letter after a report line is the session's words",
     "text": "Done.\n\nFOR_USER_STATE: working\nF",
     "streaming": false,

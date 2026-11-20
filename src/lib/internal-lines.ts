@@ -40,6 +40,9 @@ const CONTINUATION = /^(?:\s+\S|\s{0,3}(?:[-*+]|\d+[.)])\s)/;
 /** While a reply streams in, a last line that is so far only the start of a field name. */
 const FIELD_START = /^\s{0,3}(?:\*\*)?F(?:O(?:R(?:_(?:U(?:S(?:E(?:R(?:_[A-Z0-9_]*)?)?)?)?)?)?)?)?$/;
 
+/** While a reply streams in, a last line that is so far only the start of one of Walnut's tag lines. */
+const isTagStart = (line: string) => { const t = line.trim(); return t.length > 0 && t.length < 8 && '<walnut-'.startsWith(t); };
+
 export const FENCE = /^\s{0,3}(`{3,}|~{3,})(.*)$/;
 /** Four spaces (or a tab) in: an indented code block, whose lines are code. */
 export const INDENTED_CODE = /^(?: {4}|\t)/;
@@ -95,7 +98,8 @@ export function stripInternalLines(text: string, streaming = false): string {
     if (!line.trim() || WALNUT_TAG_LINE.test(line)) continue;
     if (isField(i)) { start = i; continue; }
     // While it streams in, the next field's name as far as it has come ("F", "FOR"): part of the report.
-    if (streaming && i === out.length - 1 && !code[i] && FIELD_START.test(line)) continue;
+    // So is a tag line of Walnut's as far as it has come ("<walnut-ab"): it stays out until whole.
+    if (streaming && i === out.length - 1 && !code[i] && (FIELD_START.test(line) || isTagStart(line))) continue;
     // A value carried on, indented four spaces deep too (that is not code inside the report).
     if ((!code[i] || INDENTED_CODE.test(line)) && CONTINUATION.test(line)) continue;
     // The session's own words: the report, if any, started after them.
