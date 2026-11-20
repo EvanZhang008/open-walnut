@@ -14,8 +14,18 @@ export interface ReflectionState {
   since: string;
   /** Candidate keys judged, with when and the verdict, kept SEEN_KEEP_MS. */
   seen: Record<string, { at: string; verdict: string }>;
-  /** Judge calls spent today (the server's local date). */
-  day: { date: string; calls: number };
+  /**
+   * Today (the server's local date; the whole object resets when the date changes):
+   * - `calls`: judge calls spent.
+   * - `budgetLeft`: keys of today's moments the spent budget left unjudged (at most BUDGET_LEFT_KEPT;
+   *   `budgetLeftCount` counts them all). They stay unseen: any later pass judges them, today or
+   *   tomorrow, while they are under MOMENT_MAX_AGE_MS old (candidates.ts).
+   * - `budgetDropped`: moments of an earlier date the budget left unjudged: marked seen
+   *   ('skipped_dropped'), so never judged.
+   * - `chatSends`: on a Main or lead task's own state, the corrections sent to its chat today (the
+   *   user's own chat), from any node's reflection: at most CHAT_SENDS_PER_DAY_MAX.
+   */
+  day: { date: string; calls: number; budgetLeft?: string[]; budgetLeftCount?: number; budgetDropped?: number; chatSends?: number };
   /** Guidance lines the reflection wrote (normalized text), to see which ones the user deleted since. */
   written: string[];
   /** Guidance lines someone removed: never written again (normalized text). */
@@ -31,6 +41,12 @@ export const SEEN_KEEP_MS = 45 * 24 * 3600_000;
 export const SKILLS_PER_DAY_MAX = 1;
 /** Judge calls one node may spend in a day; past it the rest wait for tomorrow. */
 export const DAILY_CALLS_MAX = 40;
+/** Of those, the calls only the specific signals (asks, defects, not his to answer, overrules) may spend. */
+export const DAILY_CALLS_RESERVED = 15;
+/** Corrections a Main or lead task's chat (the user's own) may get a day from reflections; the rest go to the nightly note only. */
+export const CHAT_SENDS_PER_DAY_MAX = 2;
+/** Keys of `budgetLeft` kept; past it a pass that meets one counts it again. */
+export const BUDGET_LEFT_KEPT = 200;
 
 export const stateFileOf = (nodeId: string): string => {
   if (!TASK_ID_RE.test(nodeId)) throw new Error(`Invalid node id: ${nodeId}`);
@@ -78,13 +94,41 @@ export async function updateReflectionState<T>(nodeId: string, fn: (s: Reflectio
  * marked seen (`pending`), so a pass that fails or a restart after the send never judges or sends it
  * again. 'seen' when another pass claimed it, 'budget' when today's calls are spent.
  */
-export async function claimCandidate(nodeId: string, key: string, nowMs = Date.now(), max = DAILY_CALLS_MAX): Promise<'ok' | 'seen' | 'budget'> {
+export async function claimCandidate(
+  nodeId: string, key: string, nowMs = Date.now(), max = DAILY_CALLS_MAX, opts: { free?: boolean } = {},
+): Promise<'ok' | 'seen' | 'budget'> {
   return updateReflectionState(nodeId, (s) => {
     if (s.seen[key]) return 'seen';
-    if (s.day.calls >= max) return 'budget';
-    s.day.calls++;
+    // A check with no model call (wrong_language) spends nothing of the budget.
+    if (!opts.free) {
+      if (s.day.calls >= max) return 'budget';
+      s.day.calls++;
+    }
     s.seen[key] = { at: new Date(nowMs).toISOString(), verdict: 'pending' };
     return 'ok';
+  }, nowMs);
+}
+
+/**
+ * Record what the spent budget left unjudged this pass: today's moments in `budgetLeft` (unseen,
+ * judged by a later pass while young enough), an earlier day's counted in `budgetDropped` and marked
+ * seen. Answers today's left count.
+ */
+export async function recordBudgetLeft(nodeId: string, left: readonly string[], dropped: readonly string[], nowMs = Date.now()): Promise<number> {
+  if (!left.length && !dropped.length) return 0;
+  return updateReflectionState(nodeId, (s) => {
+    const kept = s.day.budgetLeft ?? [];
+    let count = s.day.budgetLeftCount ?? kept.length;
+    for (const k of left) {
+      if (kept.includes(k)) continue;
+      count++;
+      if (kept.length < BUDGET_LEFT_KEPT) kept.push(k);
+    }
+    s.day.budgetLeft = kept;
+    s.day.budgetLeftCount = count;
+    if (dropped.length) s.day.budgetDropped = (s.day.budgetDropped ?? 0) + dropped.length;
+    for (const k of dropped) s.seen[k] ??= { at: new Date(nowMs).toISOString(), verdict: 'skipped_dropped' };
+    return count;
   }, nowMs);
 }
 
@@ -93,6 +137,15 @@ export async function markSeen(nodeId: string, keys: readonly string[], verdict:
   if (!keys.length) return;
   await updateReflectionState(nodeId, (s) => {
     for (const k of keys) s.seen[k] ??= { at: new Date(nowMs).toISOString(), verdict };
+  }, nowMs);
+}
+
+/** Take one of today's corrections to a Main or lead task's chat, kept on that task's own state; false when spent. */
+export async function takeChatSend(targetId: string, nowMs = Date.now(), max = CHAT_SENDS_PER_DAY_MAX): Promise<boolean> {
+  return updateReflectionState(targetId, (s) => {
+    if ((s.day.chatSends ?? 0) >= max) return false;
+    s.day.chatSends = (s.day.chatSends ?? 0) + 1;
+    return true;
   }, nowMs);
 }
 

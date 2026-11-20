@@ -7,7 +7,10 @@
  * Files are plain Markdown under the node's folder of Walnut's artifacts
  * (`WALNUT_HOME/artifacts/nodes/<nodeTaskId>/`), so the user can read and edit them as notes:
  *   guidance.md               "- <rule>  (from <task>, <date>)" one line a lesson
- *   reflections/<date>.md     the day's findings, appended
+ *   reflections/<date>.md     the day's findings, appended: each says the rule it became and the
+ *                             task its correction went to
+ *   reflections/<date>.json   the same entries as JSON (DayFile, schemaVersion 1), for scripts
+ *                             and the nightly note; a day before it has only the Markdown
  * A guidance line the user deletes stays deleted: its text is kept in the node's reflection
  * state (state.ts `removed`) and never written again.
  */
@@ -96,46 +99,122 @@ export function deletedSince(before: readonly string[], now: readonly GuidanceLi
   return before.filter((k) => !kept.has(k));
 }
 
+/**
+ * The rule a finding became: a new guidance line (its number in the file), a skill (with the line
+ * when one was added too), a line already listed, or none (and why, in `text`).
+ */
+export interface DayRule { kind: 'guidance' | 'skill' | 'existing' | 'none'; text: string; line?: number; name?: string }
+
 export interface DayEntry {
   at: string;
   signal: ReflectionSignal;
   task: { id: string; title: string };
+  /** The thread his message was filed in, when it was a thread message. */
+  thread?: { id: string; title: string };
   finding: Finding;
-  corrected: 'sent' | 'already_fixed' | 'failed' | 'off';
-  guidance: string;
-  skill?: string;
+  /** `held`: a real correction kept from the session (`held` says why), in the record and the nightly note only. */
+  corrected: 'sent' | 'already_fixed' | 'failed' | 'off' | 'held';
+  /** own_cap: past a Main or lead chat's few a day; one_per_pass: its session got one this pass; no_asking_session / no_session: no known session to send to. */
+  held?: 'own_cap' | 'one_per_pass' | 'no_asking_session' | 'no_session';
+  rule: DayRule;
+  /** The task its correction was sent to; absent when none was sent. */
+  handedTo?: { taskId: string; title: string };
 }
+
+/** The day file's JSON twin: the entries for a script and the nightly note, no Markdown to parse. */
+export const DAY_SCHEMA_VERSION = 1;
+export interface DayFile { schemaVersion: 1; nodeId: string; nodeName: string; date: string; entries: DayEntry[] }
+export const reflectionDayJsonOf = (nodeId: string, date: string): string => reflectionDayFileOf(nodeId, date).replace(/\.md$/, '.json');
 
 const SIGNAL_LABEL: Record<ReflectionSignal, string> = {
   frustration: 'the user was frustrated', overruled: 'the user overruled the session',
-  many_rounds: 'many rounds for one answer', decision_ask: 'checked before the user read it',
+  many_rounds: 'many rounds for one answer', needs_ask: 'an ask that reached Needs you',
+  not_for_user: 'the user said the ask was not his to answer',
+  regression: 'the user said something broke', built_different: 'the user said it is not what he asked for',
+  duplicate_display: 'the user said something shows more than once', wrong_language: 'an answer in another language than his setting',
 };
+
+/** The rule as one line of text. Pure. */
+export function ruleLine(r: DayRule | undefined): string {
+  if (!r) return 'none';
+  switch (r.kind) {
+    case 'guidance': return `guidance line ${r.line ?? '?'}: ${r.text}`;
+    case 'skill': return `skill ${r.name ?? '?'}${r.line ? ` and guidance line ${r.line}` : ''}: ${r.text}`;
+    case 'existing': return `already listed (guidance line ${r.line ?? '?'})${r.text ? `: ${r.text}` : ''}`;
+    default: return `none${r.text ? ` (${r.text})` : ''}`;
+  }
+}
+
+export const handedToLine = (e: Pick<DayEntry, 'handedTo' | 'held'>): string => (e.handedTo ? `${e.handedTo.title} (${e.handedTo.taskId})` : `none${e.held ? ` (${e.held})` : ''}`);
 
 /** One finding as its day's record shows it. Pure. */
 export function renderDayEntry(e: DayEntry): string {
   const f = e.finding;
   return [
     `## ${e.at.slice(11, 16)} ${e.task.title} (${e.task.id})`,
-    `- Why looked: ${SIGNAL_LABEL[e.signal]}. Kind: ${f.kind}.`,
+    `- Why looked: ${SIGNAL_LABEL[e.signal] ?? e.signal}. Kind: ${f.kind}.`,
+    ...(e.thread ? [`- Thread: ${e.thread.title} (${e.thread.id})`] : []),
     `- The session said: "${f.session_quote}"`,
     ...(f.user_quote ? [`- The user said: "${f.user_quote}"`] : []),
-    ...(f.rule_quote ? [`- Rule: "${f.rule_quote}"`] : []),
+    ...(f.rule_quote ? [`- Rule quoted: "${f.rule_quote}"`] : []),
     `- What went wrong: ${f.what_went_wrong}`,
     `- The right way: ${f.correct_action}`,
-    `- Correction: ${e.corrected === 'sent' ? 'sent to the session' : e.corrected === 'already_fixed' ? 'not sent, the session had already taken up the right way' : e.corrected === 'failed' ? 'could not be sent' : 'not sent'}`,
-    `- Guidance: ${e.guidance}`,
-    ...(e.skill ? [`- Skill: ${e.skill}`] : []),
+    `- Correction: ${e.corrected === 'sent' ? 'sent to the session' : e.corrected === 'already_fixed' ? 'not sent, the session had already taken up the right way' : e.corrected === 'failed' ? 'could not be sent' : e.corrected === 'held' ? `held (${e.held ?? 'held'})` : 'not sent'}`,
+    `- Rule: ${ruleLine(e.rule)}`,
+    `- Handed to: ${handedToLine(e)}`,
     '',
   ].join('\n');
 }
 
+/** An entry read back from a day's JSON, older or hand-edited ones included: missing fields read as none. */
+function normalizeEntry(raw: unknown): DayEntry | null {
+  const e = raw as Partial<DayEntry> | null;
+  if (!e || typeof e !== 'object' || typeof e.at !== 'string' || !e.finding || typeof e.finding !== 'object' || !e.task) return null;
+  const rule = e.rule && typeof e.rule === 'object' && typeof e.rule.kind === 'string' ? e.rule : { kind: 'none' as const, text: '' };
+  const { handedTo, ...rest } = e;
+  return { ...rest, rule, ...(handedTo && typeof handedTo.taskId === 'string' ? { handedTo } : {}) } as DayEntry;
+}
+
+/** A day's JSON as read: missing, unreadable (not JSON, or no entries list), or its entries. */
+type DayJson = { state: 'missing' } | { state: 'bad' } | { state: 'ok'; entries: DayEntry[] };
+
+async function readDayJson(nodeId: string, date: string): Promise<DayJson> {
+  const raw = await fsp.readFile(reflectionDayJsonOf(nodeId, date), 'utf-8').catch(() => null);
+  if (raw === null) return { state: 'missing' };
+  try {
+    const f = JSON.parse(raw) as Partial<DayFile>;
+    return Array.isArray(f.entries) ? { state: 'ok', entries: f.entries.map(normalizeEntry).filter((x): x is DayEntry => !!x) } : { state: 'bad' };
+  } catch {
+    return { state: 'bad' };
+  }
+}
+
+/** The day's entries from its JSON, or null when it has none readable (a day before the JSON, no finding, a broken file). */
+export async function readDayEntries(nodeId: string, date: string): Promise<DayEntry[] | null> {
+  const day = await readDayJson(nodeId, date);
+  return day.state === 'ok' ? day.entries : null;
+}
+
+/**
+ * Append one finding to the day's Markdown and its JSON twin, both under the Markdown file's lock.
+ * A JSON that no longer parses is kept aside as `<date>.json.bad` and the JSON starts again: the
+ * entries it held are all in the Markdown, which the nightly note reads for whatever the JSON lacks
+ * (nightly.ts dayLines), so none is dropped.
+ */
 export async function appendDayEntry(nodeId: string, nodeName: string, date: string, entry: DayEntry): Promise<string> {
   const file = reflectionDayFileOf(nodeId, date);
+  const json = reflectionDayJsonOf(nodeId, date);
   await withFileLock(file, async () => {
     await fsp.mkdir(path.dirname(file), { recursive: true });
     const had = await fsp.readFile(file, 'utf-8').catch(() => '');
     const head = had ? '' : `# Session reflection: ${nodeName}, ${date}\n\n`;
     await fsp.appendFile(file, head + renderDayEntry(entry), 'utf-8');
+    const read = await readDayJson(nodeId, date);
+    if (read.state === 'bad') await fsp.rename(json, `${json}.bad`).catch(() => {});
+    const day: DayFile = { schemaVersion: DAY_SCHEMA_VERSION, nodeId, nodeName, date, entries: [...(read.state === 'ok' ? read.entries : []), entry] };
+    const tmp = `${json}.${process.pid}.tmp`;
+    await fsp.writeFile(tmp, `${JSON.stringify(day, null, 2)}\n`, 'utf-8');
+    await fsp.rename(tmp, json);
   });
   return file;
 }

@@ -8,7 +8,7 @@
  */
 import fsp from 'node:fs/promises';
 import type { Task } from '../../types.js';
-import { reflectionDayFileOf } from './records.js';
+import { handedToLine, readDayEntries, reflectionDayFileOf, ruleLine, type DayEntry } from './records.js';
 import { localDate, readReflectionState, updateReflectionState } from './state.js';
 
 /** Minutes after local midnight: before the VPs' 20:00 reflection routines. */
@@ -21,14 +21,38 @@ export type NightlySend = (node: Task, text: string, title: string) => Promise<b
 
 const oneLine = (l: string): string => (l.length > LINE_MAX ? `${l.slice(0, LINE_MAX - 3).trimEnd()}...` : l);
 
-/** The note for one day's record: its findings, one line each, and where the whole record is. Pure. */
-export function nightlyText(nodeName: string, file: string, record: string): string {
+/** One finding as the note lists it: kind, what went wrong, the rule it became, the task it went to. Pure. */
+export function nightlyLine(e: DayEntry): string {
+  return oneLine(`- ${e.at.slice(11, 16)} ${e.finding.kind} in ${e.task.title}: ${e.finding.what_went_wrong} Rule: ${ruleLine(e.rule)}. Handed to: ${handedToLine(e)}.`);
+}
+
+/** The one-line findings of a day's Markdown (a day, or the part of one, written before its JSON). Pure. */
+function markdownLines(record: string): string[] {
   const lines: string[] = [];
   let title = '';
   for (const raw of record.split('\n')) {
     if (raw.startsWith('## ')) title = raw.slice(3).trim();
     else if (raw.startsWith('- What went wrong: ') && title) { lines.push(oneLine(`- ${title}: ${raw.slice(19).trim()}`)); title = ''; }
   }
+  return lines;
+}
+
+/**
+ * The day's findings, one line each. Every finding since the JSON began is in both files; on the
+ * day the JSON began, the Markdown's first entries are only there, so they are listed from it. Pure.
+ */
+export function dayLines(markdown: string, entries: readonly DayEntry[]): string[] {
+  const md = markdownLines(markdown);
+  return [...md.slice(0, Math.max(0, md.length - entries.length)), ...entries.map(nightlyLine)];
+}
+
+/**
+ * The note for one day's record: its findings, one line each, and where the whole record is. Pure.
+ * `record` is the day's Markdown, its entries (its JSON), or both.
+ */
+export function nightlyText(nodeName: string, file: string, record: string | readonly DayEntry[] | { markdown: string; entries: readonly DayEntry[] }): string {
+  const lines = typeof record === 'string' ? dayLines(record, [])
+    : 'markdown' in record ? dayLines(record.markdown, record.entries) : dayLines('', record);
   let body = '';
   for (const [i, l] of lines.entries()) {
     // Every finding is the reader's: the ones the note has no room for are counted, with the file that holds them.
@@ -37,7 +61,7 @@ export function nightlyText(nodeName: string, file: string, record: string): str
   }
   return [
     `${nodeName}'s reflection today found ${lines.length} decision${lines.length === 1 ? '' : 's'} to fix in your team's sessions. `
-      + `The whole record (what each session said, the correction it got, the guidance line added): ${file}`,
+      + `The whole record (what each session said, the correction it got, the rule it became, the task it went to): ${file}`,
     '',
     body.trimEnd(),
     '',
@@ -52,10 +76,10 @@ export async function nightlyNote(node: Task, nodeName: string, nowMs: number, s
   const date = localDate(nowMs);
   if ((await readReflectionState(node.id, nowMs)).nightly === date) return 'done';
   const file = reflectionDayFileOf(node.id, date);
-  const record = await fsp.readFile(file, 'utf-8').catch(() => '');
+  const record = { markdown: await fsp.readFile(file, 'utf-8').catch(() => ''), entries: (await readDayEntries(node.id, date)) ?? [] };
   // Marked first: a send that fails is not sent again tonight (the record stays for tomorrow's reading).
   await updateReflectionState(node.id, (s) => { s.nightly = date; }, nowMs);
-  if (!record.trim()) return 'none';
+  if (!dayLines(record.markdown, record.entries).length) return 'none';
   const ok = await send(node, nightlyText(nodeName, file, record), `${nodeName}'s reflection: today's record`).catch(() => false);
   return ok ? 'sent' : 'failed';
 }

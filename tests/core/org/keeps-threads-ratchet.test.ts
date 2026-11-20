@@ -23,6 +23,8 @@ const ALLOWED: Record<string, string> = {
   // A task with Threads on keeps his words as its asks too (hint-send.ts): read back from there.
   'core/sessions/own-readback.ts': 'Org nodes read their work back from threads; a task from its asks',
   'core/sessions/user-spoke.ts': 'a task with Threads on keeps his words as its asks too',
+  // The reflection caps its corrections to an Org node's own chat (the user's), whatever it keeps.
+  'core/org/reflection/pipeline.ts': 'caps corrections to the Org nodes\' own chats',
 }
 
 /** Every file that reads or writes a node's threads (it imports the store), and the routes and ops. */

@@ -13,7 +13,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-reflectio
 import { WALNUT_HOME } from '../../../src/constants.js'
 import type { Task } from '../../../src/core/types.js'
 import { reflectForNode, type ReflectDeps } from '../../../src/core/org/reflection/pipeline.js'
-import { addGuidance, guidanceFileOf, readGuidance, readGuidanceStrict, reflectionDayFileOf } from '../../../src/core/org/reflection/records.js'
+import { addGuidance, guidanceFileOf, readDayEntries, readGuidance, readGuidanceStrict, reflectionDayFileOf } from '../../../src/core/org/reflection/records.js'
 import { localDate, readReflectionState, updateReflectionState } from '../../../src/core/org/reflection/state.js'
 
 const NOW = Date.parse('2026-11-19T20:00:00Z')
@@ -50,6 +50,7 @@ function deps(over: Partial<ReflectDeps> & { answer?: string; messages?: Record<
     send: async (task, text) => { sent.push({ task: task.id, text }); return true },
     confirmSend: async () => true,
     readMessages: async (taskId) => messages[taskId] ?? [],
+    readThreads: async () => [],
     rulesText: async () => '## USER.md\n- Fix root causes, not symptoms.',
     replyLanguage: async () => null,
     nowMs: () => NOW,
@@ -79,6 +80,10 @@ describe('reflection pass', () => {
     const day = await fs.readFile(reflectionDayFileOf(vp.id, localDate(NOW)), 'utf-8')
     expect(day).toContain('Upgrade the autoscaler (w-1)')
     expect(day).toContain('sent to the session')
+    expect(day).toContain('- Rule: guidance line 1: Many dependents are no reason')
+    expect(day).toContain('- Handed to: Upgrade the autoscaler (w-1)')
+    const entries = await readDayEntries(vp.id, localDate(NOW))
+    expect(entries).toEqual([expect.objectContaining({ rule: expect.objectContaining({ kind: 'guidance', line: 1 }), handedTo: { taskId: 'w-1', title: 'Upgrade the autoscaler' } })])
   })
 
   it('judges a message once, and never one older than the switch', async () => {
@@ -132,18 +137,31 @@ describe('reflection pass', () => {
     expect(r.candidates).toBe(1)
     expect(r.judged).toBe(0)
     expect(calls).toHaveLength(0)
+    // Never dropped unsaid: counted once in the state, and still unseen for a later day.
+    expect(r.skipped).toBe(1)
+    await reflectForNode(vp, NAME, ALL, d)
+    const state = await readReflectionState(vp.id, NOW)
+    expect(state.day.budgetLeftCount).toBe(1)
+    expect(state.day.budgetLeft).toEqual(['msg:w-1:m1'])
+    expect(state.seen['msg:w-1:m1']).toBeUndefined()
   })
 
-  it('checks a decision ask before the user reads it', async () => {
-    const asking = { ...worker, user_status: { state: 'needs', at: iso(8) } } as unknown as Task
+  it('checks an ask in Needs you before the user reads it, once per decision', async () => {
+    const asking = { ...worker, user_status: { state: 'needs', source: 'session', at: iso(8), ask: 'Approve keeping the package on 1.4?', askSessionId: 'sess-1', decision: { id: 'ask-pkg001', key: 'k' } } } as unknown as Task
     const { d, sent, calls } = deps({
       messages: {}, answer: finding({ user_quote: '' }),
       readTranscript: async () => [{ role: 'assistant', text: SESSION_TURN, timestamp: iso(9) }] as never,
     })
     const r = await reflectForNode(vp, NAME, [vp, asking], d)
-    expect(r.findings[0].candidate.signal).toBe('decision_ask')
-    expect(calls[0]).toContain('asking the user to decide')
+    expect(r.findings[0].candidate.signal).toBe('needs_ask')
+    expect(r.findings[0].candidate.key).toBe('ask:w-1:ask-pkg001')
+    expect(calls[0]).toContain('THE ASK')
+    expect(calls[0]).toContain('Approve keeping the package on 1.4?')
     expect(sent).toHaveLength(1)
+    // The same decision reworded later is not judged again.
+    const reworded = { ...asking, user_status: { ...asking.user_status!, at: iso(2), ask: 'Keep 1.4?' } } as Task
+    await reflectForNode(vp, NAME, [vp, reworded], d)
+    expect(calls).toHaveLength(1)
   })
 
   it('judges a candidate once even when its step fails, and the failure sends nothing', async () => {

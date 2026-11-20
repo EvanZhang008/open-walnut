@@ -33,7 +33,7 @@ describe('reflection judge: quotes are checked', () => {
     // A rule is optional (a missing fact), a user quote is not, except before he answered.
     expect(verifyFinding(answer({ rule_quote: '' }), input).verdict).toBe('bad_decision')
     expect(verifyFinding(answer({ user_quote: '' }), input).verdict).toBe('unverified')
-    expect(verifyFinding(answer({ user_quote: '' }), { ...input, signal: 'decision_ask' }).verdict).toBe('bad_decision')
+    expect(verifyFinding(answer({ user_quote: '' }), { ...input, signal: 'needs_ask' }).verdict).toBe('bad_decision')
   })
 
   it('reads no_issue, bad JSON and a failed call as no finding', async () => {

@@ -11,17 +11,35 @@
  * Measured on the maintainer's real record (2026-11-19, 1211 messages over 30 days in 100 tasks):
  * 38 frustration, 19 overrule and 47 many-round hits, with false hits among them (swearing about
  * himself, a "no no, I want to understand" that is confusion), so the judge sees every one.
+ *
+ * v2 (2026-11-20, the user: "Make sure our reflect also capture this.... I can't tell u every
+ * day"): words that say something that worked broke (regression), what was built is not what he
+ * said (built_different), the same thing shows more than once (duplicate_display); an ask that
+ * reached Needs you (needs_ask, pipeline candidates.ts); an answer in the wrong language
+ * (wrong_language, language.ts, judged by no model).
  */
 
-export type ReflectionSignal = 'frustration' | 'overruled' | 'many_rounds' | 'decision_ask';
+export const REFLECTION_SIGNALS = [
+  'frustration', 'overruled', 'many_rounds', 'needs_ask', 'not_for_user', 'regression', 'built_different', 'duplicate_display', 'wrong_language',
+] as const;
+export type ReflectionSignal = typeof REFLECTION_SIGNALS[number];
 
 export interface SpokenMessage { id: string; at: string; text: string }
 
 /** Words aimed at a session's work when he is angry or fed up (English and Chinese, escaped). */
 const FRUSTRATION_RE = new RegExp([
-  'ridiculous', 'stupid', '\\bwtf\\b', 'what the hell', 'are you kidding', 'you are wrong', 'completely wrong', 'so dumb',
+  // "why" asked about what an agent did; a plain "why does X work" is judged too, the judge decides.
+  '\\bwhy (?:did|do|does|is|are|would|the hell|the fuck|u|you)\\b', '^\\s*why\\b',
+  '\\bagain\\b', '\\bkeeps? (?:asking|doing|showing|breaking|failing|saying|making|telling|adding|getting|losing)\\b', '\\bfuck',
+  'ridiculous', 'stupid', '\\bange?ry\\b', 'so angr', '\\bwtf\\b', 'what the hell', 'are you kidding', 'you are wrong', 'completely wrong', 'so dumb',
   'i told you', 'i already said', 'how many times', 'for the \\w+ time', 'not what i asked', 'makes no sense',
   'be careful', 'too much\\?', '\\?{3,}', '!{3,}',
+  // Measured on 11-20's misses: his "why we need this", "so ugly", "it just doesn't".
+  '\\bwhy (?:we|i|need|this|it|there|so)\\b', '\\bugly\\b', '\\bgarbage\\b', '\\bweird\\b', 'not working', 'doesn\'t work', 'just doesn\'?t',
+  '\\u96be\\u770b', // nan kan (ugly)
+  'freaking',
+  '\\u4e3a\\u5565', // wei sha (why)
+  '\\u4e0d\\u80fd\\u8fd9\\u6837', // bu neng zhe yang (it cannot be like this)
   '\\u4ed6\\u5988', // ta ma
   '\\u4f60\\u6709\\u75c5', // ni you bing
   '\\u65e0\\u8bed', // wu yu
@@ -34,10 +52,69 @@ const FRUSTRATION_RE = new RegExp([
   '\\u6211\\u8bf4\\u8fc7', // wo shuo guo
   '\\u6211\\u8bf4\\u4e86', // wo shuo le
   '\\u8bf4\\u4e86\\u591a\\u5c11\\u904d', // shuo le duo shao bian
-  '\\u600e\\u4e48\\u53c8', // zen me you
   '\\u4ec0\\u4e48\\u9b3c', // shen me gui
   '\\u778e', // xia (blindly)
   '\\u5c0f\\u5fc3', // xiao xin (careful)
+  '\\u4e3a\\u4ec0\\u4e48', // wei shen me (why)
+  // you (again), only where it complains: zen me you / wei shen me you, you shi, you lai, you chu, you kai shi
+  '(?:\\u600e\\u4e48|\\u4e3a\\u4ec0\\u4e48)\\u53c8', '\\u53c8(?:\\u662f|\\u6765|\\u51fa|\\u5f00\\u59cb)',
+  '\\u4e00\\u76f4', // yi zhi (all the time)
+  '\\u8001\\u662f', // lao shi (always)
+  '\\u603b\\u662f', // zong shi (always)
+  '\\u6211\\u64cd|\\u64cd\\u4f60|\\u64cd[!\\uff01]', // wo cao, cao ni, cao! (never cao zuo, operate)
+].join('|'), 'im');
+
+/** Something that worked is broken now. */
+const REGRESSION_RE = new RegExp([
+  '\\bbroke', '\\bregress', 'used to', 'no longer', 'was working', 'disappeared', '\\b(?:is|are) gone\\b', 'got lost', '\\blost (?:the|my|all|its)\\b',
+  '\\b(?:back|want|wnat) (?:the )?or?i?gi?nal\\b', '\\bthe or?i?gi?nal (?:one|version|design|ui|layout|look)\\b', 'remove(?:d|s)? (?:some |an |the )?existing',
+  '\\u539f\\u6765\\u7684', // yuan lai de (the original)
+  '\\u6ca1\\u6709\\u6d88\\u5931', // mei you xiao shi (it did not go away)
+  '\\u53c8\\u574f', // you huai (broken again)
+  '\\u4ee5\\u524d(?:\\u53ef\\u4ee5|\\u80fd|\\u662f|\\u4e0d\\u662f|\\u90fd)', // yi qian ke yi / neng / shi / bu shi / dou (it could / was, before)
+  '\\u4e4b\\u524d\\u8fd8', // zhi qian hai (still did before)
+  '\\u4e0d\\u89c1\\u4e86', // bu jian le (gone)
+  '\\u4e22\\u4e86', // diu le (lost)
+  '(?:\\u600e\\u4e48|\\u53c8|\\u90fd|\\u5168)\\u6ca1\\u4e86', // zen me / you / dou / quan mei le (gone, all of it)
+  '\\u600e\\u4e48\\u53d8\\u4e86', // zen me bian le (why did it change)
+  '\\u88ab\\u6539', // bei gai (was changed)
+].join('|'), 'i');
+
+/** What was built is not what he said, or someone said yes for him. */
+const BUILT_DIFFERENT_RE = new RegExp([
+  'not what i (?:said|asked|wanted)', 'i (?:said|asked) for', 'didn\'t ask', 'did not ask', 'i never (?:said|saw|approved)',
+  'completely differ', 'not (?:riht|right)', '^\\s*not \\w+, i (?:want|wnat|mean)',
+  '\\u7406\\u89e3\\u9519', // li jie cuo (misunderstood)
+  '\\u6211\\u8981\\u7684\\u662f', // wo yao de shi (what I want is)
+  '\\u6211\\u8bf4\\u7684\\u662f', // wo shuo de shi (what I said is)
+  '\\u6211\\u6ca1\\u8ba9', // wo mei rang (I did not tell you to)
+  '\\u4e0d\\u662f\\u6211\\u8981\\u7684', // bu shi wo yao de (not what I want)
+  '\\u8c01\\u8ba9\\u4f60', // shei rang ni (who told you to)
+  '\\u6211\\u6ca1\\u770b\\u8fc7', // wo mei kan guo (I never saw it)
+].join('|'), 'i');
+
+/** The same thing shown more than once. */
+const DUPLICATE_RE = new RegExp([
+  'duplicat', 'duplciat', '\\btwice\\b', 'three times', 'two kinds', 'both place', 'two (?:places|threads)',
+  '\\u4e24\\u79cd', // liang zhong (two kinds)
+  '(?:shows|shown|appears|listed|showing|appearing) .{0,40}times',
+  '\\u91cd\\u590d', // chong fu (repeated)
+  '\\u4e24\\u6b21', // liang ci (twice)
+  '\\u4e09\\u6b21', // san ci (three times)
+  '\\u51fa\\u73b0\\u4e86.{0,6}\\u6b21', // chu xian le ... ci (showed up ... times)
+  '\\u4e24\\u904d', // liang bian (twice)
+  '\\u597d\\u51e0\\u4e2a\\u4e00\\u6837', // hao ji ge yi yang (several the same)
+].join('|'), 'i');
+
+/** His words say the ask should not have come to him: already done, his to skip, the agent's to decide. */
+const NOT_FOR_USER_RE = new RegExp([
+  'already (?:did|done|said|answered|replied|approved|sent|told|reviewed|read|ok)', 'do it (?:yourself|urself)', '\\bu decide', 'you decide', 'your call',
+  'i don\'?t care how', 'why (?:ask|asking) me', 'why (?:do|did) (?:u|you) (?:keep )?ask', 'just do it',
+  '\\u4f60\\u81ea\\u5df1', // ni zi ji (you yourself)
+  '\\u81ea\\u5df1\\u51b3\\u5b9a', // zi ji jue ding (decide yourself)
+  '\\u4e0d\\u7528\\u95ee\\u6211', // bu yong wen wo (no need to ask me)
+  '\\u4e3a\\u4ec0\\u4e48\\u95ee\\u6211', // wei shen me wen wo (why ask me)
+  '\\u5df2\\u7ecf(?:\\u505a|\\u8bf4|\\u56de|\\u540c\\u610f)', // yi jing zuo / shuo / hui / tong yi (already did / said / answered / agreed)
 ].join('|'), 'i');
 
 /** An opening that turns down what came before. */
@@ -87,16 +164,36 @@ export const MANY_ROUNDS_FOLLOW_UPS_MIN = 3;
 export const MANY_ROUNDS_QUIET_MS = 30 * 60_000;
 
 export function isFrustrated(text: string): boolean { return FRUSTRATION_RE.test(text); }
+export function saysRegression(text: string): boolean { return REGRESSION_RE.test(text); }
+export function saysBuiltDifferent(text: string): boolean { return BUILT_DIFFERENT_RE.test(text); }
+export function saysDuplicate(text: string): boolean { return DUPLICATE_RE.test(text); }
+export function saysNotForUser(text: string): boolean { return NOT_FOR_USER_RE.test(text); }
+
+/** His answer from a card (user-status.ts askAnswerText): `Answer to "<ask>": <words>`. */
+export interface CardAnswer { ask: string; words: string }
+const CARD_ANSWER_RE = /^Answer to "([\s\S]*?)": ([\s\S]*)$/;
+
+/** The card answer a message is, or null. The ask is the agent's words, the rest his. Pure. */
+export function parseCardAnswer(text: string): CardAnswer | null {
+  const m = CARD_ANSWER_RE.exec(text.trim());
+  return m ? { ask: m[1].trim(), words: m[2].trim() } : null;
+}
 export function recommends(text: string): boolean { return RECOMMENDS_RE.test(text); }
 export function opensWithOverrule(text: string): boolean { return OVERRULE_OPEN_RE.test(text); }
 export function isFollowUp(text: string): boolean { return FOLLOW_UP_RE.test(text); }
 
 /**
- * The signals one of his messages carries. `before` is the session's turn he answered (its last
- * assistant text), when known: an overrule needs a turn that recommended or asked.
+ * The signals one of his messages carries (for a card answer, pass only his words). `before` is the
+ * session's turn he answered (its last assistant text), when known: an overrule needs a turn that
+ * recommended or asked.
  */
 export function messageSignals(text: string, before?: string): ReflectionSignal[] {
   const out: ReflectionSignal[] = [];
+  // The product's defects first: the most specific reason a message is looked at leads.
+  if (saysRegression(text)) out.push('regression');
+  if (saysBuiltDifferent(text)) out.push('built_different');
+  if (saysDuplicate(text)) out.push('duplicate_display');
+  if (saysNotForUser(text)) out.push('not_for_user');
   if (isFrustrated(text)) out.push('frustration');
   if (opensWithOverrule(text) && (before === undefined || recommends(before))) out.push('overruled');
   return out;

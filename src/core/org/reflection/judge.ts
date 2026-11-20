@@ -8,9 +8,16 @@
  */
 import type { ReflectionSignal } from './signals.js';
 
-export type FindingKind =
-  | 'hack_to_avoid_change' | 'change_too_big_excuse' | 'broke_user_rule' | 'question_not_for_user'
-  | 'unchecked_claim' | 'decided_differently' | 'too_many_rounds' | 'risky_retry' | 'other';
+/** Every kind a finding can be. A new kind needs its replay case (tests/core/org/reflection-categories.test.ts). */
+export const FINDING_KINDS = [
+  'hack_to_avoid_change', 'change_too_big_excuse', 'broke_user_rule', 'question_not_for_user', 'unchecked_claim',
+  'decided_differently', 'too_many_rounds', 'risky_retry', 'regression', 'built_different', 'approved_for_user',
+  'duplicate_display', 'wrong_language', 'other',
+] as const;
+export type FindingKind = typeof FINDING_KINDS[number];
+
+/** The kinds that are a defect of the product, not of one turn: the task it was said in owns the fix or hands it on. */
+export const PRODUCT_DEFECT_KINDS: ReadonlySet<FindingKind> = new Set(['regression', 'built_different', 'duplicate_display']);
 
 export interface Finding {
   kind: FindingKind;
@@ -39,6 +46,14 @@ export interface JudgeInput {
   signal: ReflectionSignal;
   /** The task, as the user reads it. */
   taskTitle: string;
+  /** The thread his message was filed in (a Main or lead task's Threads), when it was. */
+  threadTitle?: string;
+  /** Other signals the message carries besides `signal`. */
+  also?: readonly ReflectionSignal[];
+  /** needs_ask: the ask as Needs you showed it to him. */
+  askText?: string;
+  /** needs_ask: his messages of the last 48 hours in the task and its lead's threads, rendered. */
+  evidenceText?: string;
   /** The turns, rendered (context.ts renderTurns). */
   turnsText: string;
   /** When the moment is: the user's message judged (the last of them), or the decision ask's turn end. */
@@ -58,10 +73,15 @@ export interface JudgeInput {
 export type CallModel = (system: string, user: string, nodeId?: string) => Promise<string>;
 
 const SIGNAL_LINE: Record<ReflectionSignal, string> = {
-  frustration: 'The user\'s message reads frustrated or angry. Find out whether the session did something that earned it.',
+  frustration: 'The user\'s message reads frustrated or angry. Find what the agents did that earned it, and the rule that prevents it.',
   overruled: 'The user\'s message turns down what the session recommended or decided. Find out whether the session judged wrongly, and what rule or fact it missed.',
   many_rounds: 'The user sent many messages in a short time, several of them follow-up questions. Find out whether one clear answer could have settled it, and what made the extra rounds.',
-  decision_ask: 'The session ended its turn asking the user to decide or approve, and the user has not read it yet. Find out whether what it recommends or asks is a bad decision.',
+  needs_ask: 'The task put an ask to the user (Needs you, shown below as THE ASK). Find out whether it was his to answer at all: asking the user to decide or approve something he should never have seen is the bad decision here; a bad recommendation in it is one too.',
+  not_for_user: 'The user\'s words say the question put to him was not his (already done or answered, his approval already given, the agent\'s own call). Find why it reached him, and the rule that keeps such asks off his list.',
+  regression: 'The user\'s message says something that worked is broken, gone or changed. Find the change that broke it.',
+  built_different: 'The user\'s message says what was built or decided is not what he said, or that an agent said yes for him. Find where his words were changed.',
+  duplicate_display: 'The user\'s message says the same thing shows more than once. Find what shows it twice.',
+  wrong_language: 'An answer to the user was not in the language his reply-language setting names.',
 };
 
 export const JUDGE_SYSTEM = [
@@ -70,14 +90,20 @@ export const JUDGE_SYSTEM = [
   '- hack_to_avoid_change: a workaround or shortcut chosen to keep the change small, instead of the correct change.',
   '- change_too_big_excuse: "many things depend on it" or "the change is too big" used as the reason not to make the correct change.',
   '- broke_user_rule: it went against one of the user\'s rules listed below (quote the rule).',
-  '- question_not_for_user: it put to the user a choice that was not his to make (one it should have decided itself and reported).',
+  '- question_not_for_user: it put to the user a choice that was not his to make: one it should have decided itself and reported; a follow-up step of something he already said yes to (he agreed to publish a change, then was asked about its description); something he already answered elsewhere (a card, a thread, another message); his words about ONE thing used as a gate for others (he asked to see one item first, the session gates every item).',
   '- unchecked_claim: it stated a cause, number or status as fact without having checked it.',
   '- decided_differently: it chose A and the user chose B, because it missed a rule or a fact it could have had.',
   '- risky_retry: it repeated or retried an action on something real the user owns (a real send from his account, a sign-in, a payment, a device) after a try failed, instead of stopping after one try to read the evidence.',
   '- too_many_rounds: the user needed several rounds for what one clear answer could settle (no conclusion first, half an answer, an unclear question).',
-  'Judge what the user\'s message is ABOUT: the session actions it reacts to (usually the last SESSION turn before it, sometimes the run of turns that led to it; for a decision ask, the last SESSION turn; for many rounds, the rounds listed). A problem in an older turn the message is not about is no_issue here.',
+  '- regression: something that worked is broken by a newer change (a reply lost, a card still waiting after he answered, a view that used to fold now gone).',
+  '- built_different: what was built is not what the user said (he asked for one simple thing, it shipped something else or more).',
+  '- approved_for_user: an agent said yes in the user\'s name, or shipped a design he never saw, where the choice was his.',
+  '- duplicate_display: the same thing is shown to him more than once (one item listed several times).',
+  'A message that starts `Answer to "<ask>": ` is his answer from a card: the quoted ask is the agent\'s words, the rest is his.',
+  'For a frustrated message, find the cause in the agents\' work and give the rule that prevents it; answer no_issue only when the anger is at something outside the agents (a vendor, a colleague, himself).',
+  'Judge what the user\'s message is ABOUT: the session actions it reacts to (usually the last SESSION turn before it, sometimes the run of turns that led to it; for an ask, THE ASK and the last SESSION turn; for many rounds, the rounds listed). A problem in an older turn the message is not about is no_issue here.',
   'NOT a bad decision (answer no_issue): the user simply preferred another reasonable option the session could not have known; the user is angry at himself, another person, a tool or the world, not at the session\'s work; the user is only asking to understand or for a summary; the session already did what was asked; the listed rules pull both ways on it (one says decide, another says ask him); anything you cannot quote.',
-  'Evidence: session_quote is a short passage copied EXACTLY from a SESSION turn\'s text (not from a tool line); user_quote one copied exactly from a USER turn ("" only for a decision ask the user has not answered); rule_quote one copied exactly from RULES, or "" when no listed rule covers it and the lesson is a missing fact. Copy, never paraphrase: the quotes are checked word for word and a finding with a quote that does not match is thrown away.',
+  'Evidence: session_quote is a short passage copied EXACTLY from a SESSION turn\'s text (not from a tool line); user_quote one copied exactly from a USER turn or his recent messages ("" only for an ask he has not answered); rule_quote one copied exactly from RULES, or "" when no listed rule covers it and the lesson is a missing fact. Copy, never paraphrase: the quotes are checked word for word and a finding with a quote that does not match is thrown away.',
   'already_fixed: true when the session\'s turns after the user\'s message already took up the right way in full (it agreed and is doing all of it, or did it).',
   'correction: 2 to 5 sentences to the session itself, in the language the reply-language line names: what was wrong, the right way, and what to do now. When the session already took up part of the right way, name only what it still misses; "" when nothing is missing. Write it only for the session to act on; never ask it to contact anyone.',
   'guidance: one or two sentences, a general rule that would have prevented this in any session (no names from this case: no package, project or person names). "" when a GUIDANCE line already says it; then same_as is that line\'s number.',
@@ -87,14 +113,21 @@ export const JUDGE_SYSTEM = [
 
 export function judgePrompt(input: JudgeInput): string {
   const guidance = input.guidance.length ? input.guidance.map((g, i) => `${i + 1}. ${g}`).join('\n') : '(none yet)';
+  const also = (input.also ?? []).filter((s) => s !== input.signal);
   return [
     `TASK: ${input.taskTitle}`,
+    ...(input.threadTitle ? [`THREAD: ${input.threadTitle} (his message was filed in this thread of the task; SESSION turns are the task's answers in it)`] : []),
     `WHY YOU ARE LOOKING: ${SIGNAL_LINE[input.signal]}`,
+    ...also.map((s) => `ALSO: ${SIGNAL_LINE[s]}`),
     `THE MOMENT: ${input.momentAt}. USER messages after it are not part of this review (they are judged on their own); SESSION turns after it show what the session did next.`,
     `REPLY LANGUAGE: ${input.replyLanguage ?? 'the language the user writes in'}`,
     '', 'RULES:', input.rulesText || '(none)',
     '', 'GUIDANCE (already written for this team):', guidance,
-    '', 'THE SESSION (oldest first):', input.turnsText,
+    ...(input.askText ? ['', 'THE ASK (what Needs you showed him, in the task\'s own words):', input.askText] : []),
+    ...(input.evidenceText !== undefined
+      ? ['', 'THE USER\'S MESSAGES OF THE LAST 48 HOURS (in this task and its lead\'s threads: what he already said yes to or answered):', input.evidenceText || '(none)']
+      : []),
+    '', 'THE SESSION (oldest first):', input.turnsText || '(no turns)',
   ].join('\n');
 }
 
@@ -121,7 +154,6 @@ export function quoteHolds(quote: string, source: string): boolean {
   return true;
 }
 
-const KINDS: readonly FindingKind[] = ['hack_to_avoid_change', 'change_too_big_excuse', 'broke_user_rule', 'question_not_for_user', 'unchecked_claim', 'decided_differently', 'too_many_rounds', 'risky_retry', 'other'];
 const str = (v: unknown, max = 2000): string => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 
 /** The judge's answer read and checked. Pure. */
@@ -132,7 +164,8 @@ export function verifyFinding(raw: string, input: Pick<JudgeInput, 'signal' | 's
   if (parsed.verdict !== 'bad_decision') return { verdict: 'no_issue', why: str(parsed.why) || 'no bad decision' };
   const f = parsed.finding ?? {};
   const finding: Finding = {
-    kind: KINDS.includes(f.kind as FindingKind) ? f.kind as FindingKind : 'other',
+    // wrong_language is the deterministic check's own (language.ts), never the judge's.
+    kind: (FINDING_KINDS as readonly unknown[]).includes(f.kind) && f.kind !== 'wrong_language' ? f.kind as FindingKind : 'other',
     session_quote: str(f.session_quote, 600), user_quote: str(f.user_quote, 600), rule_quote: str(f.rule_quote, 600),
     what_went_wrong: str(f.what_went_wrong, 800), correct_action: str(f.correct_action, 800),
     already_fixed: f.already_fixed === true, correction: str(f.correction, 1500), guidance: str(f.guidance, 400),
@@ -146,7 +179,8 @@ export function verifyFinding(raw: string, input: Pick<JudgeInput, 'signal' | 's
   if (!finding.session_quote || !quoteHolds(finding.session_quote, input.sessionText)) {
     return { verdict: 'unverified', why: `session quote not in the record: "${finding.session_quote.slice(0, 120)}"` };
   }
-  const userQuoteNeeded = input.signal !== 'decision_ask';
+  // An ask he has not answered has no words of his to quote.
+  const userQuoteNeeded = input.signal !== 'needs_ask';
   if ((userQuoteNeeded || finding.user_quote) && !quoteHolds(finding.user_quote, input.userText)) {
     return { verdict: 'unverified', why: `user quote not in the record: "${finding.user_quote.slice(0, 120)}"` };
   }

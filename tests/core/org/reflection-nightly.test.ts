@@ -13,7 +13,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-reflectio
 import { WALNUT_HOME } from '../../../src/constants.js'
 import type { Task } from '../../../src/core/types.js'
 import { nightlyNote, nightlyText } from '../../../src/core/org/reflection/nightly.js'
-import { reflectionDayFileOf } from '../../../src/core/org/reflection/records.js'
+import { appendDayEntry, readDayEntries, reflectionDayFileOf, reflectionDayJsonOf } from '../../../src/core/org/reflection/records.js'
 import { localDate } from '../../../src/core/org/reflection/state.js'
 
 const vp = { id: 'vp-marina', title: 'Marina VP', org_role: 'lead', phase: 'IN_PROGRESS' } as Task
@@ -63,4 +63,66 @@ describe('the nightly record', () => {
     expect(listed.every((l) => l.length <= 240)).toBe(true)
     expect(text).not.toContain('not listed here')
   })
+
+  it('lists each finding from the day\'s JSON with its kind, rule and task', async () => {
+    const date = localDate(at(20, 0))
+    const finding = { kind: 'regression', session_quote: 's', user_quote: 'u', rule_quote: '', what_went_wrong: 'The card lost its reply.', correct_action: 'c', already_fixed: false, correction: 'x', guidance: 'g', same_as: 0, skill: null } as const
+    await appendDayEntry(vp.id, 'Marina VP', date, {
+      at: '2026-11-19T14:02:00.000Z', signal: 'regression', task: { id: 'vp-marina', title: 'Marina VP' }, finding, corrected: 'sent',
+      rule: { kind: 'guidance', text: 'Keep a reply under its card.', line: 3 }, handedTo: { taskId: 'vp-marina', title: 'Marina VP' },
+    })
+    const sent: string[] = []
+    expect(await nightlyNote(vp, 'Marina VP', at(20, 0), async (_n, t) => { sent.push(t); return true })).toBe('sent')
+    expect(sent[0]).toContain('regression in Marina VP: The card lost its reply. Rule: guidance line 3: Keep a reply under its card.. Handed to: Marina VP (vp-marina).')
+    const md = await fs.readFile(reflectionDayFileOf(vp.id, date), 'utf-8')
+    expect(md).toContain('- Rule: guidance line 3: Keep a reply under its card.')
+    expect(md).toContain('- Handed to: Marina VP (vp-marina)')
+  })
+
+  it('reads an entry written without the rule and task fields, and a day with only its Markdown', async () => {
+    const date = localDate(at(20, 0))
+    const json = reflectionDayJsonOf(vp.id, date)
+    await fs.mkdir(path.dirname(json), { recursive: true })
+    await fs.writeFile(json, JSON.stringify({ schemaVersion: 1, entries: [{ at: '2026-11-19T10:00:00.000Z', signal: 'frustration', task: { id: 'w-1', title: 'Old' }, finding: { kind: 'other', what_went_wrong: 'Old shape.' }, corrected: 'sent', guidance: 'added: x' }] }), 'utf-8')
+    const entries = await readDayEntries(vp.id, date)
+    expect(entries?.[0].rule).toEqual({ kind: 'none', text: '' })
+    expect(entries?.[0].handedTo).toBeUndefined()
+    const sent: string[] = []
+    await nightlyNote(vp, 'Marina VP', at(20, 0), async (_n, t) => { sent.push(t); return true })
+    expect(sent[0]).toContain('Old shape. Rule: none. Handed to: none.')
+    expect(await readDayEntries(vp.id, '2001-01-01')).toBeNull()
+  })
+
+  it('lists on the upgrade day the entries only the Markdown holds, then the JSON\'s', async () => {
+    const date = localDate(at(20, 0))
+    const file = reflectionDayFileOf(vp.id, date)
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    // Written before the JSON began: Markdown only.
+    await fs.writeFile(file, '# Session reflection: Marina VP, x\n\n## 09:00 Early task (w-0)\n- What went wrong: Before the upgrade.\n\n', 'utf-8')
+    const finding = { kind: 'regression', session_quote: 's', user_quote: 'u', rule_quote: '', what_went_wrong: 'After the upgrade.', correct_action: 'c', already_fixed: false, correction: 'x', guidance: 'g', same_as: 0, skill: null } as const
+    await appendDayEntry(vp.id, 'Marina VP', date, { at: '2026-11-19T15:00:00.000Z', signal: 'regression', task: { id: 'w-1', title: 'Later task' }, finding, corrected: 'held', held: 'own_cap', rule: { kind: 'none', text: '' } })
+    const sent: string[] = []
+    await nightlyNote(vp, 'Marina VP', at(20, 0), async (_n, t) => { sent.push(t); return true })
+    expect(sent[0]).toContain('found 2 decisions')
+    expect(sent[0]).toContain('- 09:00 Early task (w-0): Before the upgrade.')
+    expect(sent[0]).toContain('After the upgrade. Rule: none. Handed to: none (own_cap).')
+  })
+
+  it('keeps a day whose JSON no longer parses: the bad file set aside, its entries read from the Markdown', async () => {
+    const date = localDate(at(20, 0))
+    const file = reflectionDayFileOf(vp.id, date)
+    const json = reflectionDayJsonOf(vp.id, date)
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await fs.writeFile(file, '# Session reflection: Marina VP, x\n\n## 09:00 Early task (w-0)\n- What went wrong: Kept in the Markdown.\n\n', 'utf-8')
+    await fs.writeFile(json, '{"schemaVersion":1,"entries":[{"at":', 'utf-8')
+    const finding = { kind: 'regression', session_quote: 's', user_quote: 'u', rule_quote: '', what_went_wrong: 'Written after.', correct_action: 'c', already_fixed: false, correction: 'x', guidance: 'g', same_as: 0, skill: null } as const
+    await appendDayEntry(vp.id, 'Marina VP', date, { at: '2026-11-19T15:00:00.000Z', signal: 'regression', task: { id: 'w-1', title: 'Later task' }, finding, corrected: 'sent', rule: { kind: 'none', text: '' } })
+    expect(await fs.readFile(`${json}.bad`, 'utf-8')).toContain('"entries":[{"at":')
+    expect((await readDayEntries(vp.id, date))?.map((e) => e.task.id)).toEqual(['w-1'])
+    const sent: string[] = []
+    await nightlyNote(vp, 'Marina VP', at(20, 0), async (_n, t) => { sent.push(t); return true })
+    expect(sent[0]).toContain('found 2 decisions')
+    expect(sent[0]).toContain('Kept in the Markdown.')
+  })
 })
+

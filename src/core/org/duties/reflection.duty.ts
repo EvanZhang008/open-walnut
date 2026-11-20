@@ -10,7 +10,8 @@ import type { OrgDuty } from './types.js';
 export const reflectionDuty: OrgDuty = {
   id: 'reflection',
   name: 'Reflect on the sessions it manages',
-  description: 'Finds where the user was frustrated, overruled a session\'s decision, or needed many rounds for one answer; '
+  description: 'Finds where the user was frustrated, overruled a session\'s decision, needed many rounds for one answer, '
+    + 'said something broke, is not what he asked for or shows twice, got an ask that was not his, or an answer in the wrong language; '
     + 'tells that session what went wrong and writes the lesson as team guidance.',
   roles: ['main', 'lead'],
   start: () => {
