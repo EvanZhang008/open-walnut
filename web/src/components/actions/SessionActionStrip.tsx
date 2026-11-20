@@ -8,7 +8,7 @@
  * first thread there instead (org/TopThread.tsx), under the items that are not threads yet (a live
  * prompt, an approval), which still lead as they do today and are not counted in its "1 / N".
  */
-import { memo } from 'react';
+import { memo, useLayoutEffect, useRef } from 'react';
 import type { Task } from '@open-walnut/core';
 import { keepsThreads } from '@open-walnut/keeps-threads';
 import { useExperimental } from '@/hooks/useExperimental';
@@ -26,16 +26,38 @@ export const SessionActionStrip = memo(function SessionActionStrip({ task, sessi
   return <ActionNeeded task={task} variant="strip" sessionId={sessionId} />;
 });
 
+/**
+ * The room the top may take: a third of the panel's body it sits in, kept as --session-top-room
+ * while the body resizes (2026-11-20, the user: "one thing takes up all of my space ... at most a
+ * third or a half"). A share of the body, never a fixed size; top-thread.css splits it.
+ */
+function useTopRoom(shown: boolean) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const body = el?.parentElement;
+    if (!el || !body) return;
+    const set = () => el.style.setProperty('--session-top-room', `${Math.floor(body.clientHeight / 3)}px`);
+    set();
+    const watch = new ResizeObserver(set);
+    watch.observe(body);
+    return () => watch.disconnect();
+  }, [shown]);
+  return ref;
+}
+
 /** The top of a chat whose task keeps Threads: the items that are not threads (when the strip is on), then the first thread. */
 function SessionTop({ task, sessionId, actions }: { task: Task; sessionId: string; actions: boolean }) {
   const threads = useOrgThreads(task.id, true);
   // One list and one clock for both: what the top shows and what the strip leaves to it.
   const { at, list } = useTopThreads(threads);
   const items = actions && task.phase !== 'COMPLETE' ? actionsNotThreads(task.user_status?.actions ?? [], list) : [];
+  const shown = items.length > 0 || list.length > 0;
+  const room = useTopRoom(shown);
   // Nothing to show draws nothing: an empty first child would still move the chat under the glass header.
-  if (!items.length && !list.length) return null;
+  if (!shown) return null;
   return (
-    <div className="session-top" data-testid="session-top">
+    <div className="session-top" data-testid="session-top" ref={room}>
       {items.length > 0 && <ActionNeeded task={task} variant="strip" sessionId={sessionId} items={items} />}
       {list.length > 0 && <TopThread task={task} sessionId={sessionId} threads={threads} list={list} at={at} />}
     </div>

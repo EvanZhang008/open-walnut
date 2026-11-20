@@ -79,6 +79,17 @@ describe('one card for everything that waits on him', () => {
     for (const rel of Object.keys(NOT_A_CARD)) expect(drawers, `${rel} draws no answer part now: drop it`).toContain(rel);
   });
 
+  it('every thread card (the Threads view, the top above a chat) goes through ThreadItem, whose waiting card is the one card', () => {
+    const files = walk(WEB).map((p) => relative(ROOT, p).split('\\').join('/'))
+    const drawsThread = files.filter((rel) => /<(ThreadItem|ThreadCard|PoppedThreadCard)\b/.test(read(rel)))
+    expect(drawsThread.sort()).toEqual(['web/src/components/org/OrgThreads.tsx', 'web/src/components/org/TopThread.tsx'])
+    expect(read('web/src/components/org/TopThread.tsx')).toMatch(/<ThreadItem\b/)
+    const threads = read('web/src/components/org/OrgThreads.tsx')
+    const needs = threads.slice(threads.indexOf('function NeedsAnswer'), threads.indexOf('function ThreadCard('))
+    expect(needs).toMatch(/<AskCardFrame\b/)
+    expect(threads).toMatch(/<NeedsAnswer\b/)
+  });
+
   it('one kind of choice button: only AskOptions draws org-answer-option', () => {
     const drawn = walk(WEB).map((p) => relative(ROOT, p).split('\\').join('/')).filter((rel) => /data-testid="org-answer-option"/.test(read(rel)));
     expect(drawn).toEqual(['web/src/components/org/OrgInlineAnswer.tsx']);

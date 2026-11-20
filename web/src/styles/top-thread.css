@@ -1,10 +1,28 @@
 /* The first thread above a chat (experiment top_thread, components/org/TopThread.tsx): the Threads
-   view's own card under one quiet bar ("1 / 16", the arrows, Hide), or one line while hidden. It
-   never scrolls as a whole: the reply box's @ and / lists open over the chat below it. A long
-   summary or answer scrolls inside its own block, so the chat keeps its room. */
-.session-top { flex: none; display: flex; flex-direction: column; gap: 4px; margin: 0 8px; min-width: 0; }
-.session-top > .action-needed.is-strip { margin: 0; }
-.top-thread { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+   view's own card under one quiet bar ("1 / 16", the arrows, Hide), or one line while hidden.
+   The whole top (the strip's items and this card) takes at most a third of the panel's body, less
+   when it is short (2026-11-20, the user: "one thing takes up all of my space ... at most a third
+   or a half"): --session-top-room, a third of the body measured as it resizes (SessionActionStrip
+   useTopRoom), the body's own share before the first measure. It never scrolls as a whole
+   (the reply box's @ and / lists open over the chat below it): what gives way is the card's long
+   words (its summary, its unread answers, its open conversation), each scrolling in its own block,
+   while the strip's items keep at most about 30% of the room (they scroll as one block beyond
+   it), and the stepper, the card's head, its choices, its box and its buttons stay in sight. */
+.session-top {
+  flex: none; display: flex; flex-direction: column; gap: 4px; margin: 0 8px; min-width: 0;
+  max-height: var(--session-top-room, calc(100% / 3)); min-height: 0;
+}
+.session-top > .action-needed.is-strip { margin: 0; flex: 0 0.2 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.session-top > .action-needed.is-strip:has(+ .top-thread:not(.is-hidden)) { max-height: calc(var(--session-top-room, 100vh) * 0.3); }
+.top-thread { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 0 1 auto; min-height: 0; }
+.top-thread-bar { flex: none; }
+.top-thread-list { flex: 0 1 auto; min-height: 0; }
+.top-thread-list > .org-thread { flex: 0 1 auto; min-height: 0; }
+.top-thread-list > .org-thread > *, .top-thread-list .org-thread-held-ask > * { flex: none; }
+/* The words that give way: each scrolls inside itself. */
+.top-thread-list > .org-thread > :is(.org-thread-summary, .org-thread-unread, .org-thread-conversation),
+.top-thread-list .org-thread-held-ask > .org-thread-summary { flex: 0 1 auto; min-height: 1.25em; overflow-y: auto; overscroll-behavior: contain; }
+.top-thread-list .org-thread-held-ask { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
 .top-thread-bar { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--fg-muted, #86868b); }
 .top-thread-step {
   all: unset; cursor: pointer; width: 22px; height: 22px; border-radius: 6px; text-align: center; line-height: 22px;
@@ -18,7 +36,6 @@
 .top-thread-hide { all: unset; cursor: pointer; margin-left: auto; padding: 2px 6px; border-radius: 6px; }
 .top-thread-hide:hover { background: var(--bg-secondary); color: var(--fg); }
 .top-thread-list .org-thread[data-state="needs"] { border-color: color-mix(in srgb, var(--error, #ff3b30) 45%, var(--border)); }
-.top-thread-list :is(.org-thread-summary, .org-thread-unread) { max-height: 30vh; overflow-y: auto; }
 .top-thread-line {
   all: unset; cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 8px;
   border: 1px solid var(--border); background: var(--bg); font-size: 12px; color: var(--fg); min-width: 0;
