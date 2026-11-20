@@ -478,7 +478,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   const from = (o: { from: string; ref?: string }) => `${FROM_LABEL[o.from] ?? FROM_LABEL.node}${o.ref ? `: ${o.ref}` : ''}`;
   return (
     <li className={`org-thread${closed ? ' is-closed' : ''}${open ? ' is-open' : ''}${snoozed ? ' is-snoozed' : ''}${pinned ? ' is-pinned' : ''}${focused ? ' is-focused' : ''}`} data-testid="org-thread" data-thread-id={t.id} data-focused={focused ? 'true' : undefined} data-state={closed ? 'closed' : t.state} data-snoozed={snoozed ? 'true' : undefined} data-pinned={pinned ? 'true' : undefined} data-asked-in={asked ? t.askedIn!.task : undefined} data-held-ask={held ? held.id : undefined}>
-      <button type="button" className="org-thread-head" aria-expanded={open} aria-controls={`${t.id}-conversation`} data-testid="org-thread-head" onClick={() => setOpen(!open)}>
+      <button type="button" className="org-thread-head" data-peek-row="" aria-expanded={open} aria-controls={`${t.id}-conversation`} data-testid="org-thread-head" onClick={() => setOpen(!open)}>
         <span className="org-thread-state" data-testid="org-thread-state">
           <i style={{ background: closed || asked ? 'var(--fg-muted, #86868B)' : STATE_DOT[t.state] }} />
           {closed ? (t.movedTo ? 'Moved' : t.closed!.how === 'acked' ? 'Done' : 'Dropped') : asked ? (t.askedIn!.answered ? 'Done in a task' : 'Asked in a task') : stateLabel(t.state, oneCard)}
