@@ -61,8 +61,10 @@ taskActionsV1Router.put('/tasks/:id/actions/:item/snooze', route(async (req, res
     { emitEvent: true, source: 'action-snooze' })
   log.task.info(until ? 'action snoozed' : 'action unsnoozed', { taskId: task.id, item, until, by })
   // The row moves at once: derive this task's status again before answering.
-  const { syncUserStatuses } = await import('../../core/user-status-sync.js')
-  await syncUserStatuses(new Set([task.id])).catch(() => 0)
+  // Within a bound: a slow pass must not hold the answer past its caller's timeout (user-status-sync.ts).
+  const { syncUserStatuses, STATUS_ANSWER_WAIT_MS } = await import('../../core/user-status-sync.js')
+  const { withinMs } = await import('../../lib/within-ms.js')
+  await withinMs(syncUserStatuses(new Set([task.id])).catch(() => 0), STATUS_ANSWER_WAIT_MS, 0)
   const row = await getTask(task.id).catch(() => task)
   res.json({ task_id: task.id, item, snoozed_until: until, user_status: row.user_status ?? null })
 }))

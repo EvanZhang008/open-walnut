@@ -17,6 +17,8 @@ import { briefLangOf, briefOwnChars, briefWalnutLines, structureBrief, type Brie
 import { briefIssues, completeBriefRefs, type BriefIssue } from './brief-rules.js';
 import { briefSourcesOf, sourcesAfterInsertions, sourcesAfterRewrite, spliceBriefEdit, UNKNOWN_WRITER, type BriefTextSource, type BriefWriter } from './brief-source.js';
 import { wholeHtmlSource } from '../boards/board-html-source.js';
+import { withinMs } from '../../lib/within-ms.js';
+
 
 export class BriefWriteError extends Error {
   constructor(readonly status: number, readonly code: string, message: string, readonly extra?: Record<string, unknown>) {
@@ -130,9 +132,13 @@ export async function writeNodeBrief(
   // before the write would otherwise be stored as its old mark and read as a move a moment later.
   let tasks = await listTasks();
   const { briefAskScope } = await import('./brief-structure.js');
-  const { syncUserStatuses } = await import('../user-status-sync.js');
+  const { syncUserStatuses, STATUS_ANSWER_WAIT_MS } = await import('../user-status-sync.js');
   const scope = new Set([...briefAskScope(task, tasks).map((t) => t.id), ...[...first.matchAll(/<task-ref\b[^>]*\bid="([^"]+)"/g)].map((m) => m[1]!)]);
-  if (await syncUserStatuses(scope).catch(() => 0)) tasks = await listTasks();
+  // Waited for only so long (STATUS_ANSWER_WAIT_MS): a slow pass (a busy Mac: 2 to 18 s,
+  // 2026-11-20) held the write past its caller's 10 s gateway timeout, which then read as a failed
+  // write. Past the bound the Walnut lines of the letter are shaped from the statuses as stored, so
+  // a status the pass then changes reads as a move on the Brief until its next write.
+  if (await withinMs(syncUserStatuses(scope).catch(() => 0), STATUS_ANSWER_WAIT_MS, 0)) tasks = await listTasks();
   let complete = false;
   let failure: unknown;
   let out: { brief: TaskBrief; issues: BriefIssue[] } | null = null;
