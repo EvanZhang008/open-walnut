@@ -13,6 +13,9 @@
  *   2. The long summary scrolls inside the card (its own scroll, not the page's).
  *   3. A shorter window: still a third of the new height (a share of the body, never a fixed size).
  *   4. Hide makes the top one line; Show brings the card back, held to the same third.
+ *   5. A phone with its keyboard up (2026-11-20 review: the body shrinks to a few lines while the
+ *      stepper, the choices and the box kept their size and ran over the chat): the strip and the
+ *      card's words fold away, the box he types in stays in sight, and nothing runs over the chat.
  * Real: the fixture server, a mock CLI session, the threads and inbox routes, the status sync.
  * PROOF_VIDEO_DIR=<dir> records it (proof-video.ts).
  */
@@ -21,6 +24,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome, seedColumns } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { startProofVideo } from './proof-video'
+import { PHONE, setKeyboardInset } from './phone-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
@@ -175,4 +179,68 @@ test('the top keeps to a third of the panel: the long summary scrolls in its car
   await video.hold(1200)
   await video.stop('top-thread-room')
   expect(errors).toEqual([])
+})
+
+test.describe('a phone with its keyboard up', () => {
+  test.use({ viewport: PHONE.viewport, screen: PHONE.screen, deviceScaleFactor: PHONE.deviceScaleFactor, isMobile: true, hasTouch: true, userAgent: PHONE.userAgent })
+
+  test('the box he types in stays in sight, and the top never runs over the chat', async ({ page }) => {
+    const errors: string[] = []
+    page.on('pageerror', (e) => errors.push(e.message))
+    const video = await startProofVideo(page)
+    await isolateUiPrefs(page)
+    await page.setContent(`<a href="http://localhost:${TEST_PORT}/">Open Walnut</a>`)
+    await page.getByRole('link', { name: 'Open Walnut', exact: true }).click()
+    await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 90_000 })
+    await page.getByRole('region', { name: /Needs you/ }).getByRole('button', { name: new RegExp(`^Release room ${STAMP}`) }).first().click()
+    const panel = page.locator(`.session-panel.is-phone-layer[data-session-id="${ids.sid}"]`)
+    const card = panel.getByTestId('top-thread')
+    await expect(card).toHaveAttribute('data-thread-id', ids.thread, { timeout: 60_000 })
+    const top = panel.getByTestId('session-top')
+    const body = panel.locator('.session-panel-body')
+    const history = panel.locator('.session-history').first()
+    const input = card.getByTestId('org-thread-follow-input')
+
+    /** The top ends above the chat, and the box is inside the window and the top. */
+    const fits = async () => {
+      await page.waitForTimeout(400)
+      const [t, h, b, i] = [await box(top), await box(history), await box(body), await box(input)]
+      expect(t.y + t.height, `top ends ${t.y + t.height}, chat starts ${h.y}`).toBeLessThanOrEqual(h.y + 1)
+      expect(i.y).toBeGreaterThanOrEqual(t.y - 1)
+      expect(i.y + i.height).toBeLessThanOrEqual(Math.min(t.y + t.height, b.y + b.height) + 1)
+      expect(h.height, 'the chat keeps a line or two').toBeGreaterThan(40)
+    }
+    // No keyboard: the card keeps its choices, in at most half the body.
+    await expect(top).toHaveAttribute('data-room', /full|tight|lean/)
+    await expect(card.getByTestId('org-answer-option').first()).toBeVisible()
+    expect((await box(top)).height).toBeLessThanOrEqual((await box(body)).height / 2 + 1)
+    await fits()
+    await page.screenshot({ path: `${SHOTS}/phone-no-keyboard.png` })
+    await video.caption('A phone: the card keeps its title, its choices and its box')
+    await video.hold(1200)
+    // The keyboard comes up: the body is a few lines now.
+    for (const inset of [336, 380]) {
+      await setKeyboardInset(page, inset)
+      await expect.poll(async () => (await box(body)).height).toBeLessThan(400)
+      await expect(top).toHaveAttribute('data-room', /min|box/)
+      await expect(panel.getByTestId('session-action-needed')).toBeHidden()
+      await fits()
+      await page.screenshot({ path: `${SHOTS}/phone-keyboard-${inset}.png` })
+      await video.caption(`Keyboard up (${inset}px): the box stays in sight, the chat keeps the rest`)
+      await video.hold(1200)
+    }
+    // He types: the words are in the box he sees.
+    await input.click()
+    await page.keyboard.type('Hold it')
+    await expect(input).toHaveValue('Hold it')
+    await fits()
+    // The keyboard goes down: everything again.
+    await setKeyboardInset(page, 0)
+    await expect(top).toHaveAttribute('data-room', /full|tight|lean/)
+    await expect(input).toHaveValue('Hold it')
+    await video.caption('Keyboard down: everything again, his words still in the box')
+    await video.hold(1200)
+    await video.stop('top-thread-room-phone')
+    expect(errors).toEqual([])
+  })
 })

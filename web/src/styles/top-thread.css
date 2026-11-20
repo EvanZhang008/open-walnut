@@ -12,7 +12,11 @@
   flex: none; display: flex; flex-direction: column; gap: 4px; margin: 0 8px; min-width: 0;
   max-height: var(--session-top-room, calc(100% / 3)); min-height: 0;
 }
-.session-top > .action-needed.is-strip { margin: 0; flex: 0 0.2 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.session-top > .action-needed.is-strip {
+  margin: 0; flex: 0 0.2 auto; overflow-y: auto; overscroll-behavior: contain;
+  /* About one item always shows: a letter waiting on him never folds to nothing. */
+  min-height: min(40px, calc(var(--session-top-room, 120px) * 0.3));
+}
 .session-top > .action-needed.is-strip:has(+ .top-thread:not(.is-hidden)) { max-height: calc(var(--session-top-room, 100vh) * 0.3); }
 .top-thread { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 0 1 auto; min-height: 0; }
 .top-thread-bar { flex: none; }
@@ -23,6 +27,24 @@
 .top-thread-list > .org-thread > :is(.org-thread-summary, .org-thread-unread, .org-thread-conversation),
 .top-thread-list .org-thread-held-ask > .org-thread-summary { flex: 0 1 auto; min-height: 1.25em; overflow-y: auto; overscroll-behavior: contain; }
 .top-thread-list .org-thread-held-ask { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
+/* Too little room for all of it (SessionActionStrip ROOM_LEVELS, data-room), each level folding
+   more away. Tight: the card's long words (the strip keeps its row or so and scrolls). Lean (a
+   phone's short body): the strip too, its letters still in Needs you and the inbox, and the card
+   keeps its title on one line, its choices and its box. Min (a phone with its keyboard up): only
+   that title line and the box, taking what they need even past the share, so the words he types
+   stay in sight, under the question they answer, and nothing runs over the chat. Box: the box
+   alone, when even that is too much. */
+.session-top:is([data-room="tight"], [data-room="lean"], [data-room="min"], [data-room="box"]) .top-thread-list :is(.org-thread-summary, .org-thread-unread, .org-thread-conversation),
+.session-top:is([data-room="lean"], [data-room="min"], [data-room="box"]) .top-thread-list > .org-thread > :not(.ask-card, .org-thread-follow, .org-thread-held-ask, .org-thread-head),
+.session-top:is([data-room="lean"], [data-room="min"], [data-room="box"]) .top-thread-list .org-thread-head > :not(.org-thread-title),
+.session-top:is([data-room="lean"], [data-room="min"], [data-room="box"]) .top-thread-list .ask-card > :not(.ask-card-answer),
+.session-top:is([data-room="lean"], [data-room="min"], [data-room="box"]) .top-thread-list :is(.ask-card-tools, .org-thread-held-ask > :not(.ask-card)),
+.session-top:is([data-room="lean"], [data-room="min"], [data-room="box"]) > .action-needed.is-strip,
+.session-top:is([data-room="min"], [data-room="box"]) :is(.top-thread-bar, .top-thread-list .org-answer-options),
+.session-top[data-room="box"] .top-thread-list .org-thread-head { display: none; }
+.session-top:is([data-room="lean"], [data-room="min"]) .top-thread-list .org-thread-title { grid-row: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.session-top:is([data-room="min"], [data-room="box"]) { max-height: none; }
+.session-top:is([data-room="min"], [data-room="box"]) .top-thread-list > .org-thread { padding: 6px 8px; gap: 4px; }
 .top-thread-bar { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--fg-muted, #86868b); }
 .top-thread-step {
   all: unset; cursor: pointer; width: 22px; height: 22px; border-radius: 6px; text-align: center; line-height: 22px;

@@ -27,9 +27,26 @@ export const SessionActionStrip = memo(function SessionActionStrip({ task, sessi
 });
 
 /**
- * The room the top may take: a third of the panel's body it sits in, kept as --session-top-room
+ * How much of the top still shows, tried in order until it fits: everything in a third of the
+ * body; then the strip and the card's long words fold away, in a third, then in a half (a phone's
+ * body is short: "at most a third or a half"); then the card keeps only its title line, its
+ * choices and its box (lean); then only that title line and the box (min); then the box alone (a
+ * phone with its keyboard up leaves a body of a few lines: the box he is typing in stays in sight,
+ * the chat keeps the rest). Read by top-thread.css as data-room.
+ */
+const ROOM_LEVELS = [
+  { room: 'full', share: 3 }, { room: 'tight', share: 3 }, { room: 'tight', share: 2 }, { room: 'lean', share: 2 },
+  { room: 'min', share: 3 }, { room: 'box', share: 3 },
+] as const;
+/** The most a level with no cap (min) may take of the body before the next one is tried. */
+const MIN_SHARE = 0.6;
+
+/**
+ * The room the top may take: a share of the panel's body it sits in, kept as --session-top-room
  * while the body resizes (2026-11-20, the user: "one thing takes up all of my space ... at most a
- * third or a half"). A share of the body, never a fixed size; top-thread.css splits it.
+ * third or a half"), and the level of ROOM_LEVELS that fits it. Never a fixed size; top-thread.css
+ * splits it. Re-fitted on the next frame when the body resizes or the top's own content changes
+ * (never inside the observer, which would loop on its own change).
  */
 function useTopRoom(shown: boolean) {
   const ref = useRef<HTMLDivElement>(null);
@@ -37,11 +54,23 @@ function useTopRoom(shown: boolean) {
     const el = ref.current;
     const body = el?.parentElement;
     if (!el || !body) return;
-    const set = () => el.style.setProperty('--session-top-room', `${Math.floor(body.clientHeight / 3)}px`);
-    set();
-    const watch = new ResizeObserver(set);
-    watch.observe(body);
-    return () => watch.disconnect();
+    const fit = () => {
+      const h = body.clientHeight;
+      for (const [i, level] of ROOM_LEVELS.entries()) {
+        el.style.setProperty('--session-top-room', `${Math.floor(h / level.share)}px`);
+        el.dataset.room = level.room;
+        if (i === ROOM_LEVELS.length - 1) break;
+        if (level.room === 'min' ? el.offsetHeight <= h * MIN_SHARE : el.scrollHeight <= el.clientHeight + 1) break;
+      }
+    };
+    fit();
+    let frame = 0;
+    const later = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(fit); };
+    const resized = new ResizeObserver(later);
+    resized.observe(body);
+    const changed = new MutationObserver(later);
+    changed.observe(el, { childList: true, subtree: true, characterData: true });
+    return () => { resized.disconnect(); changed.disconnect(); cancelAnimationFrame(frame); };
   }, [shown]);
   return ref;
 }
