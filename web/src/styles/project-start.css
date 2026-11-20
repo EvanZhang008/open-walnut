@@ -1,18 +1,74 @@
-/* Start a new task from a project (experiment project_first_start): the draft's Project pill,
-   host pill and source chip (DraftProjectStartPill), the value chips above them
-   (DraftProjectSourceRow), their flyouts (ProjectStartFlyout), and the project settings'
-   "Code source" section (ProjectCodeSource). */
+/* Start a new task from a project (experiment project_first_start): the draft's one Work in
+   pill and the suggestion under its row (DraftWorkInPill), its popover (WorkInPicker), the value
+   chips above the row (DraftProjectSourceRow), their flyouts (ProjectStartFlyout), and the
+   project settings' "Code source" section (ProjectCodeSource). */
 
-.draft-composer-bar > .draft-project-start-pill.is-empty { color: var(--fg-muted); }
-.draft-composer-bar > .draft-project-source-chip {
+.draft-composer-bar > .draft-work-in-pill { gap: 0; max-width: 100%; }
+.draft-composer-bar > .draft-work-in-pill.is-empty { color: var(--fg-muted); }
+.draft-work-in-pill .work-in-icon { flex: none; margin-right: 5px; }
+.work-in-icon.is-git { color: var(--success); }
+.work-in-icon.is-box { color: var(--warning); }
+.work-in-icon.is-folder, .work-in-icon.is-host { color: var(--fg-muted); }
+.draft-work-in-detail {
+  flex: 0 1 auto;
+  min-width: 3ch;
+  margin-left: 4px;
   color: var(--fg-muted);
-  cursor: default;
-  gap: 4px;
-  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.draft-composer-bar > .draft-start-host-pill .draft-pill-dot { margin-left: 5px; }
+.draft-work-in-pill.is-empty .draft-work-in-detail { margin-left: 0; }
+.draft-work-in-pill .draft-pill-dot { margin-left: 5px; }
+.draft-work-in-project-tag {
+  flex: none;
+  max-width: 140px;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 5px;
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-size: 11px;
+  line-height: 17px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.draft-work-in-project-tag.has-source,
+.draft-work-in-pill .draft-work-in-project-tag { background: var(--accent-subtle); color: var(--accent); }
+.draft-work-in-pill .draft-work-in-project-tag.is-new { background: none; border: 1px dashed var(--accent); line-height: 15px; }
+
+/* "This is Marina's code. Start in a fresh git worktree instead?": one quiet line under the row. */
+.draft-work-in-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--accent-subtle);
+  font-size: 12px;
+  color: var(--fg);
+}
+.draft-work-in-suggest-text { flex: 1 1 180px; min-width: 0; }
+.draft-work-in-suggest-use,
+.draft-work-in-suggest-keep {
+  flex: none;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+/* Both quiet: a suggestion, not a call to action. */
+.draft-work-in-suggest-use,
+.draft-work-in-suggest-keep { border: 1px solid var(--border); background: var(--bg); color: var(--fg); }
+.draft-work-in-suggest-use { color: var(--accent); }
+.draft-work-in-suggest-use:hover,
+.draft-work-in-suggest-keep:hover { background: var(--bg-hover, var(--bg-secondary)); }
 
 /* The value chips: one line per array input, wrapping inside the column. */
 .draft-project-source-row {
@@ -85,11 +141,8 @@
   color: var(--fg);
   z-index: 1200;
 }
-.project-start-picker { width: 340px; }
-.psp-head { position: sticky; top: 0; background: inherit; padding: 6px 10px 4px; z-index: 1; }
-.psp-title { font-weight: 600; font-size: 13px; }
+.work-in-picker { width: 380px; padding: 0 0 4px; }
 .psp-title-small { font-size: 11px; font-weight: 500; color: var(--fg-muted); padding: 4px 10px 2px; }
-.psp-sub { color: var(--fg-muted); font-size: 11px; margin: 2px 0 6px; line-height: 1.35; }
 .psp-search {
   width: 100%;
   box-sizing: border-box;
@@ -104,7 +157,6 @@
 }
 .project-start-add .psp-search { margin: 4px 8px; width: calc(100% - 16px); }
 .psp-search:focus { border-color: var(--accent); }
-.psp-list { display: flex; flex-direction: column; }
 .psp-group {
   padding: 8px 10px 2px;
   font-size: 10px;
@@ -112,62 +164,6 @@
   text-transform: uppercase;
   color: var(--fg-muted);
 }
-.psp-row { display: flex; align-items: center; gap: 6px; padding-right: 10px; }
-.psp-row:hover { background: var(--accent-subtle); }
-.psp-pick {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 1px;
-  padding: 5px 10px;
-  border: none;
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.psp-pick.is-current .psp-name { color: var(--accent); font-weight: 600; }
-.psp-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.psp-line { max-width: 100%; color: var(--fg-muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.psp-host {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  max-width: 120px;
-  color: var(--fg-muted);
-  font-size: 11px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.psp-setup {
-  flex: none;
-  border: none;
-  background: none;
-  color: var(--accent);
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-  padding: 2px 0;
-}
-.psp-setup:hover { text-decoration: underline; }
-.psp-folder {
-  margin-top: 4px;
-  padding: 7px 10px;
-  border: none;
-  border-top: 1px solid var(--border);
-  background: none;
-  color: var(--fg-muted);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.psp-folder:hover { background: var(--accent-subtle); color: var(--fg); }
-.psp-folder strong { color: var(--fg); font-weight: 500; }
 .psp-option {
   display: flex;
   align-items: center;
@@ -185,6 +181,113 @@
 .psp-option-meta { color: var(--fg-muted); font-weight: 400; }
 .psp-option-free { color: var(--accent); }
 .psp-empty { padding: 8px 12px; color: var(--fg-muted); }
+.psp-host-dot { flex: none; }
+
+/* The Work in popover: search, Projects | Folders, rows with an icon and what a pick gives. */
+.wip-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 8px 6px;
+  background: var(--bg-elevated, var(--bg));
+}
+.wip-tabs { display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--bg-secondary); }
+.wip-tab {
+  flex: 1;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.wip-tab.is-on { background: var(--bg-elevated, var(--bg)); color: var(--fg); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
+.wip-list { display: flex; flex-direction: column; padding: 0 4px; }
+.wip-row { position: relative; display: flex; align-items: center; border-radius: 8px; }
+.wip-row:hover, .wip-row:focus-within { background: var(--bg-hover, var(--accent-subtle)); }
+.wip-row.is-current { background: var(--accent-subtle); }
+.wip-pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 8px;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.wip-ico {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+}
+.wip-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.wip-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wip-line { color: var(--fg-muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.work-in-check { flex: none; color: var(--accent); }
+.wip-row .draft-work-in-project-tag { margin-left: 0; }
+/* "Set up source…": one small action, shown on the row under the pointer or the keyboard. */
+.wip-setup {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 6px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  opacity: 0;
+}
+.wip-row:hover .wip-setup, .wip-row:focus-within .wip-setup, .wip-setup:focus-visible { opacity: 1; }
+/* A touch screen has no hover: the action is always there. */
+@media (hover: none) { .wip-setup { opacity: 1; } }
+.wip-setup:hover { background: var(--bg-secondary); color: var(--accent); }
+.wip-host,
+.wip-browse {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 4px 0 0;
+  padding: 7px 8px;
+  border: none;
+  border-top: 1px solid var(--border);
+  background: none;
+  color: var(--fg-muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+/* "Runs on" stays in view at the bottom of a long Projects list, as the search does at the top
+   (-4px: the popover's own bottom padding). */
+.wip-host {
+  position: sticky;
+  bottom: -4px;
+  z-index: 1;
+  background: var(--bg-elevated, var(--bg));
+}
+.wip-host strong { color: var(--fg); font-weight: 500; }
+.wip-host:hover, .wip-browse:hover { color: var(--fg); background: var(--bg-hover, var(--accent-subtle)); }
+/* The hover tint is see-through: over the sticky row's solid ground, never over the rows behind it. */
+.wip-host:hover { background: linear-gradient(var(--bg-hover, var(--accent-subtle)), var(--bg-hover, var(--accent-subtle))) var(--bg-elevated, var(--bg)); }
+.wip-caret { margin-left: auto; }
 
 /* Project settings: Code source. */
 .project-code-source { display: flex; flex-direction: column; gap: 8px; }

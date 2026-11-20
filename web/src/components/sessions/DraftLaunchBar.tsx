@@ -53,10 +53,13 @@
  *   the model + engine stay in the composer's controls row, where a real
  *   session's mode and model pills sit.
  *
- * With the experiment `project_first_start` (owner passes onProjectStart), a "Project" pill
- * leads row 2 (DraftProjectStartPill) and replaces the trailing project chip; once a project
- * with a code source is picked, the host pill and the source chip take the folder pill's place,
- * its value chips (DraftProjectSourceRow) the isolated-workspace row's, and the quick folders go.
+ * With the experiment `project_first_start` (owner passes onProjectStart), ONE "Work in" pill
+ * (DraftWorkInPill) answers where the task runs, a project or a folder: it stands where the
+ * folder pill, the isolated-workspace chip, the quick folders and the project chip stood (the
+ * quick folders are its Folders tab). A project with a code source adds its value chips above
+ * the row (DraftProjectSourceRow); a folder of such a project, one suggestion under it. A folder
+ * start isolates exactly as without the pill (the defaults, More's switch, the body above the
+ * row), and the pill says so ("· isolated copy") where the auto chip stood.
  *
  * The pills keep their original class names AND the `.draft-composer-bar`
  * container marker: that pair is the documented DOM hook the browser specs use to
@@ -90,7 +93,7 @@ import { DraftWorkspaceAutoChip, DraftWorkspaceRow } from '@/components/workspac
 import { DraftWorkspaceMenuItem } from '@/components/workspaces/DraftWorkspaceMenuItem';
 import { draftProjectChip, draftProjectIsNew, draftProjectProvenance } from './draft-project-chip';
 import { SyncChoiceChip } from '@/components/tasks/SyncChoice';
-import { DraftProjectStartPill, DraftSourceChip, DraftStartHostPill, useDraftProjectStart, type DraftRowUpdate } from './DraftProjectStartPill';
+import { DraftWorkInPill, DraftWorkInSuggest, useDraftProjectStart, useWorkIn, type DraftRowUpdate } from './DraftWorkInPill';
 import { DraftProjectSourceRow } from './DraftProjectSourceRow';
 import { projectStartEligible } from './draft-project-start';
 
@@ -225,14 +228,16 @@ export function DraftLaunchBar({
   // client sends, so its More edits the task fields but offers no project.
   const isRepair = draft.intent === 'fix-walnut';
   const projectMenu = decisionsOn && !isRepair;
-  // Project first (experiment): 'off' keeps today's row exactly; 'pick' leads with the Project
-  // pill; 'source' (a project with a code source) has no folder pill, a host pill and value chips.
+  // Project first (experiment): flag off (or a draft that cannot start from a project) keeps
+  // today's row exactly; on, the Work in pill is the row's one "where" ('source': a project with a
+  // code source, its value chips above the row; else a folder).
   const ps = useDraftProjectStart(draft, projectStartEligible(draft) && !emptyFolder && workspaces, onProjectStart);
-  const projectFirst = ps.mode !== 'off';
+  const workIn = ps.canPick;
   const fromSource = ps.mode === 'source';
+  const work = useWorkIn(draft, ps);
   const projectChip = draftProjectChip(draft, { isKnownProject, hasMenu: projectMenu, always: alwaysProject });
-  // While project-first may apply (also after "Choose a folder instead"), a project pick goes
-  // through it: one with a code source puts the draft back on it.
+  // While the Work in pill applies (also after a folder pick), a project pick goes through it:
+  // one with a code source puts the draft back on it.
   const pickProject = useCallback((project: string) => {
     if (draft.taskId) onBoundProjectMove?.(project);
     else if (ps.canPick) ps.pick(project);
@@ -242,7 +247,7 @@ export function DraftLaunchBar({
     value: draft.project ?? '',
     isNew: draftProjectIsNew(draft, isKnownProject),
     why: draftProjectProvenance(draft, isKnownProject),
-    // While the project comes first, More's project row is the same pick as the Project pill.
+    // While the Work in pill applies, More's project row is the same pick as its Projects tab.
     onPick: (project: string) => (ps.canPick ? ps.pick(project) : onProjectChange(draft.id, project)),
   } : undefined;
   // No quick chips on a fork draft: the folder is immutable, so a row of other
@@ -250,8 +255,10 @@ export function DraftLaunchBar({
   // Same for Ask Walnut.
   const chipDot = useQuickChipHostDots();
   // A host that is off (a test server) never runs a session: its chips would only be refused.
-  const chips = (isFork || isWalnut || fromSource ? [] : quickDirsFor({ cwd: draft.cwd, host: draft.host ?? null, hostLabel: draft.hostLabel }))
+  // With the Work in pill they are its Folders tab instead of a row.
+  const quick = (isFork || isWalnut ? [] : quickDirsFor(fromSource ? undefined : { cwd: draft.cwd, host: draft.host ?? null, hostLabel: draft.hostLabel }))
     .filter((d) => !d.host || chipDot(d.host)?.kind !== 'off');
+  const chips = workIn ? [] : quick;
   const currentKey = chipKey({ cwd: draft.cwd, host: draft.host ?? null });
   const chipHostLabel = useQuickChipHostLabels(chips);
   const isAi = (field: DraftAiField) => !!draft.aiFields?.has(field);
@@ -339,14 +346,9 @@ export function DraftLaunchBar({
 
       {!isWalnut && (
         <div className="draft-launch-pills draft-composer-bar">
-          {projectFirst && (
-            <DraftProjectStartPill draft={draft} project={ps.project} onPick={ps.pick} onUpdate={onProjectStart!} onOpenFolderPicker={onOpenPicker} />
-          )}
-          {fromSource ? (
-            <>
-              <DraftStartHostPill draft={draft} onUpdate={onProjectStart!} />
-              <DraftSourceChip source={ps.source} />
-            </>
+          {workIn ? (
+            <DraftWorkInPill draft={draft} ps={ps} work={work} pillRef={cwdPillRef} folders={quick}
+              onPickFolder={pickDir} onBrowse={onOpenPicker} onUpdate={onProjectStart!} />
           ) : <DraftFolderPill
             draft={draft}
             pillRef={cwdPillRef}
@@ -365,9 +367,9 @@ export function DraftLaunchBar({
               onClick={() => { onClearFolder(draft.id); onAfterQuickPick?.(); }}
             >&times;</button>
           )}
-          {!isFork && workspaces && draft.cwd && !fromSource && <DraftWorkspaceAutoChip draftId={draft.id} />}
+          {!isFork && workspaces && draft.cwd && !workIn && <DraftWorkspaceAutoChip draftId={draft.id} />}
           <DraftPillsBreak />
-          {projectChip && !projectFirst && (
+          {projectChip && !workIn && (
             <DraftProjectChip
               chip={projectChip}
               menu={projectMenu ? menu : undefined}
@@ -388,6 +390,7 @@ export function DraftLaunchBar({
           {decisionsOn && <DraftMoreButton menu={menu} moreRef={moreRef} priorityVisible={priorityVisible} withProject={!isRepair} />}
         </div>
       )}
+      {workIn && !isWalnut && <DraftWorkInSuggest draft={draft} ps={ps} work={work} onUpdate={onProjectStart!} />}
 
       {decisionsOn && (
         <DraftTaskMenuPopover

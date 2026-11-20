@@ -129,7 +129,7 @@ export const EXPERIMENTAL_FEATURES = [
   {
     id: 'project_first_start',
     name: 'Start new tasks from a project',
-    description: 'A new task starts by picking a project instead of a folder. A project that knows where its code comes from (a git checkout, or a workspace plugin with its list of packages) and its host gives every new task a fresh isolated workspace from there, and removes it once the task is done and its work is merged. Projects without a code source, and the Inbox, keep the folder picker.',
+    description: 'A new task asks one question, "Work in": a project or a folder. A project that knows where its code comes from (a git checkout, or a workspace plugin with its list of packages) and its host gives every new task a fresh isolated workspace from there, and removes it once the task is done and its work is merged. A folder is tagged with the project whose code it holds, which offers a fresh workspace instead. Projects without a code source, and the Inbox, work in a folder.',
     default: false,
   },
   {

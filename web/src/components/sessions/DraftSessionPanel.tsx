@@ -51,7 +51,7 @@ import { quickParseTask, updateTask, fetchTask } from '@/api/tasks';
 import { useQuickParseEnabled, setQuickParseEnabled, ensureQuickParseLoaded } from '@/hooks/useQuickParse';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { DraftLaunchBar } from './DraftLaunchBar';
-import type { DraftRowUpdate } from './DraftProjectStartPill';
+import type { DraftRowUpdate } from './DraftWorkInPill';
 import { HostGateErrorBar, useRestoreImages, type DraftGateError } from './HostGateErrorBar';
 import { useModelOptions } from './path-selector/model-options';
 import { useEnabledModes } from '@/hooks/useEnabledModes';

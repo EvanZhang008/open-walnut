@@ -1,8 +1,9 @@
 /**
- * The one flyout shell of the draft's project-first row (the project picker, the host list, a
+ * The one flyout shell of the draft's project-first row (the Work in popover, its host list, a
  * value chip's "+ Add"): portalled to <body>, placed by useMenuPlacement against its trigger
  * (upward first, like the folder picker beside it), closed by an outside press, by Escape
- * (consumed: the page's own Escape would also clear the focused task) and when the trigger goes.
+ * (consumed: the page's own Escape would also clear the focused task; only the newest open one
+ * closes) and when the trigger goes.
  * The portal stops pointerdown so a sortable ancestor never starts a drag (web/src/AGENTS.md).
  */
 import { useEffect, useRef, type ReactNode, type RefObject } from 'react';
@@ -11,6 +12,9 @@ import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import '@/styles/project-start.css';
 
 export const PROJECT_START_FLYOUT_CLASS = 'project-start-flyout';
+
+/** The open flyouts, oldest first: Escape closes only the newest (a nested host list, not its popover). */
+const openStack: object[] = [];
 
 export function ProjectStartFlyout({ open, anchorRef, onClose, className, testId, label, children, minHeight = 160 }: {
   open: boolean;
@@ -29,6 +33,8 @@ export function ProjectStartFlyout({ open, anchorRef, onClose, className, testId
   closeRef.current = onClose;
   useEffect(() => {
     if (!open) return;
+    const me = {};
+    openStack.push(me);
     const onDown = (e: MouseEvent) => {
       const t = e.target as Element | null;
       if (anchorRef.current?.contains(t)) return;
@@ -37,7 +43,8 @@ export function ProjectStartFlyout({ open, anchorRef, onClose, className, testId
       closeRef.current();
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
+      // Every open flyout listens on window capture; only the topmost answers.
+      if (e.key !== 'Escape' || openStack[openStack.length - 1] !== me) return;
       e.stopPropagation();
       closeRef.current();
       anchorRef.current?.focus({ preventScroll: true });
@@ -45,6 +52,7 @@ export function ProjectStartFlyout({ open, anchorRef, onClose, className, testId
     document.addEventListener('mousedown', onDown);
     window.addEventListener('keydown', onKey, true);
     return () => {
+      openStack.splice(openStack.indexOf(me), 1);
       document.removeEventListener('mousedown', onDown);
       window.removeEventListener('keydown', onKey, true);
     };

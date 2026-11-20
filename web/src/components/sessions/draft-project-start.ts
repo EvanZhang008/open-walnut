@@ -6,9 +6,12 @@
  *   off     the experiment is off, the draft cannot start from a project (bound, fork, Ask
  *           Walnut, a repair, a host without a folder picker), or the person chose a folder
  *           instead: today's row, exactly.
- *   pick    the Project pill leads; no project with a code source is picked yet, so the
- *           folder pill follows as today (a project without a source keeps the folder flow).
- *   source  a project with a code source is picked: no folder pill, a host pill, value chips.
+ *   pick    no project with a code source is picked yet: the draft runs in a folder (a project
+ *           without a source keeps the folder flow).
+ *   source  a project with a code source is picked: a fresh workspace, its value chips.
+ *
+ * While the draft may start from a project (`canPick`, also in 'off' after a folder pick), the
+ * row shows ONE "Work in" pill for both (DraftWorkInPill, its words in draft-work-in.ts).
  *
  * The server reads the source (src/core/workspaces/project-source.ts) and resolves the start
  * itself (`fromProject` on quick-start); this file only mirrors what the row shows.
@@ -64,7 +67,7 @@ export interface DraftProjectStartState {
   source: StartSource | null;
   /** The draft's project by its current name (a rename followed). */
   project: string;
-  /** A project pick on this draft goes through pickProjectForStart (also after "Choose a folder instead"). */
+  /** The Work in pill applies: a project pick goes through pickProjectForStart (also after a folder pick). */
   canPick: boolean;
 }
 
@@ -106,10 +109,9 @@ function folderOf(d: DraftColumn): FolderKept {
 const sameProject = (a: string | undefined, b: string | undefined) => (a ?? '').trim().toLowerCase() === (b ?? '').trim().toLowerCase();
 
 /**
- * Enter or leave source mode after a write on the draft (a pick, a parse, "Choose a folder
- * instead"). Entering keeps the folder the draft stood on (`fromProjectPrev`) and puts the
- * source's folder and host on it, so the host pill, the engine checks and the slash commands read
- * the host the start runs on. Leaving gives the folder back: the new project's own default folder
+ * Enter or leave source mode after a write on the draft (a pick, a parse). Entering keeps the
+ * folder the draft stood on (`fromProjectPrev`) and puts the source's folder and host on it, so
+ * the host chooser, the engine checks and the slash commands read the host the start runs on. Leaving gives the folder back: the new project's own default folder
  * when the project changed and it has one (as its "+" does), else the one kept on entering.
  * Returns the SAME object when nothing changes.
  */
@@ -150,12 +152,15 @@ export function settleProjectStart(before: DraftColumn, after: DraftColumn, ctx:
 }
 
 /**
- * A pick in the project picker (or the project chip and More while project-first is on). A
- * project with a source starts from it, its chips back on the favourites and its own host; one
- * without a source (or the Inbox) is today's project pick, and a draft that stood on a source
- * gets its folder back (settleProjectStart).
+ * A project pick in the Work in popover (or More while project-first is on). A project with a
+ * source starts from it, its chips back on the favourites and its own host; one without a source
+ * (or the Inbox) is today's project pick, and a draft that stood on a source gets its folder back
+ * (settleProjectStart). `toHome` (the Work in popover, where a project row says "Works in its
+ * folder"): one without a source also puts the draft on its own default folder and host.
  */
-export function pickProjectForStart(draft: DraftColumn, project: string, source: StartSource | null | undefined, home?: ProjectHome): DraftColumn {
+export function pickProjectForStart(
+  draft: DraftColumn, project: string, source: StartSource | null | undefined, home?: ProjectHome, opts: { toHome?: boolean } = {},
+): DraftColumn {
   const base = clearAiFields(draft, source ? ['project', 'cwd'] : ['project']);
   const { fromProjectInputs: _inputs, fromProjectHostPicked: _host, fromProject, ...rest } = base;
   const after: DraftColumn = {
@@ -163,27 +168,29 @@ export function pickProjectForStart(draft: DraftColumn, project: string, source:
     project,
     projectSource: 'user',
     userTouched: true,
-    // A project with a source re-enters project-first, also after "Choose a folder instead";
-    // one without keeps a folder chosen instead.
+    // A project with a source re-enters project-first, also after a folder pick; one without
+    // keeps the folder picked instead.
     ...(source ? { fromProject: true } : fromProject === false ? { fromProject: false } : {}),
   };
-  return settleProjectStart(draft, after, { active: true, source: source ?? null, home });
+  const settled = settleProjectStart(draft, after, { active: true, source: source ?? null, home });
+  if (source || !opts.toHome || !home?.cwd || (settled.cwd === home.cwd && (settled.host ?? null) === home.host)) return settled;
+  return { ...settled, cwd: home.cwd, host: home.host, hostLabel: undefined, cwdPinned: false, createCwd: false };
 }
 
-/** "Choose a folder instead": this draft leaves project-first mode, back on its own folder (the folder picker opens). */
-export function chooseFolderInstead(draft: DraftColumn): DraftColumn {
-  const { fromProjectInputs: _inputs, ...rest } = draft;
-  return settleProjectStart(draft, { ...rest, fromProject: false, userTouched: true }, { active: true, source: null });
-}
-
-/** A folder picked by hand: the draft no longer starts from its project's source, and keeps the picked folder. */
-export function leaveForFolderPick(d: DraftColumn): DraftColumn {
-  if (!d.fromProject && !d.fromProjectPrev && !d.fromProjectHostPicked && !d.fromProjectInputs) return d;
+/**
+ * A folder picked by hand: the draft no longer starts from a project's code source, and keeps the
+ * picked folder. While the Work in pill applies (`workIn`) the pick is final against every way a
+ * draft enters source mode (a hand pick, a project "+" seed, the background parse): it writes
+ * `fromProject: false`, so only a later project pick brings a source back.
+ */
+export function leaveForFolderPick(d: DraftColumn, workIn = false): DraftColumn {
+  const left = workIn && d.fromProject !== false;
+  if (!left && !d.fromProject && !d.fromProjectPrev && !d.fromProjectHostPicked && !d.fromProjectInputs) return d;
   const { fromProjectInputs: _inputs, fromProjectPrev: _prev, fromProjectHostPicked: _host, ...rest } = d;
-  return d.fromProject ? { ...rest, fromProject: false } : rest;
+  return left || d.fromProject ? { ...rest, fromProject: false } : rest;
 }
 
-/** The host pill: another host for this start only. */
+/** The Work in popover's "Runs on": another host for this start only. */
 export function pickStartHost(draft: DraftColumn, host: string | null, hostLabel?: string): DraftColumn {
   return { ...draft, host, hostLabel: host ? hostLabel : undefined, fromProjectHostPicked: true, userTouched: true };
 }
@@ -239,30 +246,6 @@ export function addOptions(field: Pick<SourceArrayField, 'values' | 'suggestions
 /** The draft after a chip's × or an Add: that field's list is now this start's own. */
 export function setSourceValues(draft: DraftColumn, key: string, values: string[]): DraftColumn {
   return { ...draft, fromProjectInputs: { ...draft.fromProjectInputs, [key]: strings(values) }, userTouched: true };
-}
-
-/** The picker's second line: what a start from the project makes. */
-export function sourceLine(source: StartSource): string {
-  const base = folderName(source.anchor);
-  if (source.provider === AUTO_PROVIDER) return base ? `New workspace of ${base}` : 'New workspace';
-  const name = source.provider_name ?? source.provider;
-  const favs = sourceArrayFields(source).flatMap((f) => f.favourites);
-  if (favs.length) return `${name}: ${favs.slice(0, 3).join(', ')}${favs.length > 3 ? ` +${favs.length - 3}` : ''}`;
-  return base ? `${name} of ${base}` : name;
-}
-
-/** The source chip's words: what each start makes. A provider whose name already says
- *  "workspace" or "worktree" is not followed by "workspace" again. */
-export function sourceChipWords(source: StartSource | null): string {
-  if (!source || source.provider === AUTO_PROVIDER) return 'New workspace';
-  if (source.provider === 'git-worktree') return 'New git worktree';
-  const name = (source.provider_name ?? source.provider).trim();
-  return /\b(workspace|worktree)s?$/i.test(name) ? `New ${name}` : `New ${name} workspace`;
-}
-
-function folderName(p: string): string {
-  const parts = (p ?? '').replace(/\/+$/, '').split('/');
-  return parts[parts.length - 1] ?? '';
 }
 
 export interface ProjectStartRequest {

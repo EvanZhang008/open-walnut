@@ -1,36 +1,18 @@
 /**
  * Start a new task from a project (experiment project_first_start), as data
  * (draft-project-start.ts): the row's shape per draft (the flag off keeps today's
- * row), what a project pick writes and what leaving a source gives back, the value
- * chips of a source's array inputs, the "+ Add" rows, and what Start sends. The one
- * class every case guards: the row says "new workspace" only when Start sends
+ * row), what a project pick writes and what leaving a source gives back (a folder
+ * pick included), the value chips of a source's array inputs, the "+ Add" rows, and
+ * what Start sends. The Work in pill's own data is draft-work-in.test.ts. The one
+ * class every case guards: the row says "fresh workspace" only when Start sends
  * `fromProject`, and a draft off a source never runs in that source's folder.
  */
 
 import { describe, it, expect } from 'vitest';
-import type { StartSource } from '@/api/projects';
+import { draft, git, plugin } from './helpers/project-start';
 
 const ps = await import('@/components/sessions/draft-project-start');
 type DraftColumn = import('@/components/sessions/draft-column').DraftColumn;
-
-function draft(over: Partial<DraftColumn> = {}): DraftColumn {
-  return { id: 'draft:t-1', cwd: '/home/u', host: null, meta: {} as DraftColumn['meta'], ...over };
-}
-
-const git: StartSource = {
-  provider: 'git-worktree', provider_name: 'Git worktree', anchor: '/repos/marina', host: 'big-box', host_label: 'Big box',
-  inputs: {}, suggestions: {},
-};
-const plugin: StartSource = {
-  provider: 'fake-multirepo', provider_name: 'Fake multi-repo', anchor: '/ws/multi', host: '__local__', host_label: 'This computer',
-  inputs: { packages: ['Alpha', 'Beta'], mode: 'fresh' },
-  suggestions: { packages: ['Alpha', 'Beta', 'Gamma', 'Delta'] },
-  input_schema: {
-    type: 'object',
-    properties: { packages: { type: 'array', title: 'Packages' }, mode: { type: 'string', enum: ['fresh', 'local'] } },
-    required: ['packages'],
-  },
-};
 
 describe('projectStartMode', () => {
   const on = { flagOn: true, eligible: true };
@@ -89,18 +71,27 @@ describe('pickProjectForStart', () => {
     expect('fromProject' in next).toBe(false);
   });
 
-  it('"Choose a folder instead" leaves project-first mode, back on the draft\'s own folder', () => {
+  it('a folder pick leaves project-first mode, on the picked folder', () => {
     const on = ps.setSourceValues(ps.pickProjectForStart(draft({ cwd: '/home/u/notes' }), 'Acme', plugin), 'packages', ['Alpha']);
-    const next = ps.chooseFolderInstead(on);
-    expect(next).toMatchObject({ fromProject: false, cwd: '/home/u/notes', host: null, cwdPinned: false, createCwd: false });
+    const next = ps.leaveForFolderPick({ ...on, cwd: '/home/u/other', host: null });
+    expect(next).toMatchObject({ fromProject: false, cwd: '/home/u/other', host: null });
     expect(next.fromProjectInputs).toBeUndefined();
     expect(next.fromProjectPrev).toBeUndefined();
   });
 
-  it('after "Choose a folder instead", a project with a source puts the draft back on it; one without keeps the folder', () => {
-    const off = ps.chooseFolderInstead(ps.pickProjectForStart(draft(), 'Marina', git));
+  it('after a folder pick, a project with a source puts the draft back on it; one without keeps the folder', () => {
+    const off = ps.leaveForFolderPick({ ...ps.pickProjectForStart(draft(), 'Marina', git), cwd: '/home/u', host: null });
     expect(ps.pickProjectForStart(off, 'Marina', git)).toMatchObject({ fromProject: true, cwd: '/repos/marina', host: 'big-box' });
     expect(ps.pickProjectForStart(off, 'Life', null)).toMatchObject({ fromProject: false, cwd: '/home/u', project: 'Life' });
+  });
+
+  it('a Work in row of a project without a source brings its own folder and host; More\'s pick keeps the folder', () => {
+    const home = { cwd: '/home/u/life', host: 'life-box' };
+    expect(ps.pickProjectForStart(draft({ cwd: '/home/u/notes' }), 'Life', null, home, { toHome: true }))
+      .toMatchObject({ project: 'Life', cwd: '/home/u/life', host: 'life-box', cwdPinned: false });
+    expect(ps.pickProjectForStart(draft({ cwd: '/home/u/notes' }), 'Life', null, home)).toMatchObject({ cwd: '/home/u/notes', host: null });
+    // A project with a source starts from it, whatever its default folder.
+    expect(ps.pickProjectForStart(draft(), 'Marina', git, home, { toHome: true })).toMatchObject({ cwd: '/repos/marina', host: 'big-box' });
   });
 });
 
@@ -130,8 +121,8 @@ describe('leaving a source (the draft never runs in the other project\'s checkou
     expect(next).toMatchObject({ project: 'Acme', fromProject: true, cwd: '/ws/multi', host: null, fromProjectPrev: { cwd: '/home/u/notes', host: null } });
     expect(next.fromProjectHostPicked).toBeUndefined();
     expect(ps.projectStartRequest(next, { source: plugin, project: 'Acme' })).toEqual({ project: 'Acme', workspaceInputs: { packages: ['Alpha', 'Beta'] } });
-    // And back out of B: the first folder, not A's checkout.
-    expect(ps.chooseFolderInstead(next)).toMatchObject({ cwd: '/home/u/notes', host: null });
+    // And back out of B to a project without a source: the first folder, not A's checkout.
+    expect(ps.pickProjectForStart(next, 'Life', null)).toMatchObject({ cwd: '/home/u/notes', host: null });
   });
 
   it('a folder picked by hand keeps that folder and leaves the source', () => {
@@ -142,6 +133,22 @@ describe('leaving a source (the draft never runs in the other project\'s checkou
     expect(next.fromProjectHostPicked).toBeUndefined();
     const plain = draft();
     expect(ps.leaveForFolderPick(plain)).toBe(plain);
+  });
+
+  it('with the Work in pill, a folder pick leaves a source whoever chose it: a "+" seed and the parse too', () => {
+    const rows = [{ name: 'Marina', startSource: git }];
+    const ctx = { flagOn: true, eligible: true, rows };
+    for (const projectSource of ['seed', 'ai'] as const) {
+      const d = draft({ project: 'Marina', projectSource });
+      expect(ps.draftProjectStart(d, ctx).mode).toBe('source');
+      const picked = ps.leaveForFolderPick({ ...d, cwd: '/home/u/other', host: null }, true);
+      expect(picked).toMatchObject({ fromProject: false, project: 'Marina', cwd: '/home/u/other' });
+      expect(ps.draftProjectStart(picked, ctx).mode).not.toBe('source');
+    }
+    // A plain folder pick says the same once, and the flag off writes nothing.
+    expect(ps.leaveForFolderPick(draft(), true).fromProject).toBe(false);
+    const plain = draft();
+    expect(ps.leaveForFolderPick(plain, false)).toBe(plain);
   });
 });
 
@@ -211,27 +218,6 @@ describe('value chips', () => {
   });
 });
 
-describe('sourceLine', () => {
-  it('says what a start makes', () => {
-    expect(ps.sourceLine(git)).toBe('Git worktree of marina');
-    expect(ps.sourceLine(plugin)).toBe('Fake multi-repo: Alpha, Beta');
-    expect(ps.sourceLine({ ...git, provider: 'auto', provider_name: undefined })).toBe('New workspace of marina');
-  });
-});
-
-describe('sourceChipWords', () => {
-  it('names each kind of start once, never "workspace workspace"', () => {
-    expect(ps.sourceChipWords(null)).toBe('New workspace');
-    expect(ps.sourceChipWords({ ...git, provider: 'auto', provider_name: undefined })).toBe('New workspace');
-    expect(ps.sourceChipWords(git)).toBe('New git worktree');
-    expect(ps.sourceChipWords(plugin)).toBe('New Fake multi-repo workspace');
-    // A provider whose own name already ends in workspace / worktree (2026-11-20, real data).
-    for (const name of ['Monorepo workspace', 'Team Workspaces', 'Sparse worktree']) {
-      expect(ps.sourceChipWords({ ...plugin, provider_name: name })).toBe(`New ${name}`);
-    }
-    expect(ps.sourceChipWords({ ...plugin, provider_name: undefined, provider: 'fake-multirepo' })).toBe('New fake-multirepo workspace');
-  });
-});
 
 describe('projectStartRequest', () => {
   const acme = { source: plugin, project: 'Acme' };

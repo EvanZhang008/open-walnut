@@ -131,6 +131,8 @@ import { restoreDraftColumns, saveDraftColumns } from '@/components/sessions/dra
 import { onOpenProjectSettings } from '@/utils/project-settings-open';
 import { useExperimental } from '@/hooks/useExperimental';
 import { draftProjectStart, leaveForFolderPick, projectStartEligible, projectStartRequest, settleProjectStart, startSourceOf, type ProjectStartRequest } from '@/components/sessions/draft-project-start';
+import { withDetectedOwner } from '@/components/sessions/draft-work-in';
+import { knownHomeOf } from '@/utils/home-folder';
 import { withHomeFolder } from '@/components/sessions/draft-home-default';
 import { reconcileActiveSession } from '@/stores/active-session';
 import { loadColWeights, saveColWeights, resizeAtBoundary } from './columnSizing';
@@ -1522,12 +1524,17 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // parse that landed while the picker was open survives, and a quick folder
     // chip (no `openedMeta`) takes only model/engine from its render-time meta.
     setDraftColumns(prev => mapDraft(prev, draftId, (d) => {
-      // A folder picked by hand: this draft no longer starts from its project's code source.
-      return leaveForFolderPick(applyDraftPathPick(d, path, meta, openedMeta, projectForDirRef.current, projectTakenRef.current));
+      // With the Work in pill, a folder under a project's code belongs to that project
+      // (detectProjectForFolder), unless the person picked the project himself.
+      const forDir = withDetectedOwner(projectForDirRef.current, d, path.host, { ...projectStartRef.current, home: knownHomeOf(path.host) });
+      // A folder picked by hand: this draft no longer starts from a project's code source (with
+      // the Work in pill, whoever put it there: a pick, a project "+" seed, the parse).
+      const workIn = projectStartRef.current.on && projectStartEligible(d);
+      return leaveForFolderPick(applyDraftPathPick(d, path, meta, openedMeta, forDir, projectTakenRef.current), workIn);
     }));
   }, []);
 
-  /** A project-first write on a draft row (DraftProjectStartPill: a project pick, the host, the value chips). */
+  /** A project-first write on a draft row (the Work in pill: a project pick, the host, the value chips, "Keep this folder"). */
   const handleDraftRowUpdate = useLeanCallback((draftId: string, update: (d: DraftColumn) => DraftColumn) => {
     setDraftColumns(prev => mapDraft(prev, draftId, update));
   }, []);
@@ -1634,7 +1641,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Not before the registry loaded: an empty one would rename every owned folder's pill.
   useEffect(() => {
     if (!projectRegistry.loaded) return;
-    setDraftColumns(prev => mapDrafts(prev, (d) => refreshFolderProject(d, projectForDir, projectRegistry.isKnownProject)));
+    setDraftColumns(prev => mapDrafts(prev, (d) => refreshFolderProject(
+      d, withDetectedOwner(projectForDir, d, d.host, { ...projectStartRef.current, home: knownHomeOf(d.host) }), projectRegistry.isKnownProject,
+    )));
   }, [projectForDir, projectRegistry.isKnownProject, projectRegistry.loaded]);
 
   /** Registry membership for the launch bar's "new" badge — reports everything as
@@ -3407,7 +3416,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // Isolated workspace (off by default). On but not ready (no provider, a
     // required field empty): the Start waits and the row says why.
     // A start from a project makes its workspace from the source: the draft's own choice is not read.
+    // A folder start under the Work in pill isolates exactly as it does without it (the defaults, More's switch).
     const wsRequest = fromProject ? null : draftWorkspaceRequest(draftId);
+    const detectedByCode = projectStartRef.current.on && !!draft.project
+      && projectTakenRef.current(draft.project) && projectForDirRef.current(draft.cwd).toLowerCase() !== draft.project.toLowerCase();
     if (wsRequest && 'error' in wsRequest) {
       setDraftWorkspace(draftId, { startError: wsRequest.error });
       return false;
@@ -3451,8 +3463,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       {
         columnId: draftId,
         ...(draft.taskId ? { taskId: draft.taskId } : {}),
-        // Folder-derived project → the server may stamp a NEW row's default_cwd.
-        ...(draft.project && draft.projectSource === 'folder' ? { projectFromFolder: true } : {}),
+        // Folder-derived project → the server may stamp a NEW row's default_cwd. Not a project the
+        // Work in pill found by its code (the folder has no registry owner of that name): the
+        // server's folder rule would file the task under a new project named after the folder.
+        ...(draft.project && draft.projectSource === 'folder' && !detectedByCode ? { projectFromFolder: true } : {}),
         // A host refusal (409), or a start from a project refused for good, brings this very draft back.
         restore: { draft, composerText: text, ...(images?.length ? { images } : {}) },
         ...(startOpts?.overrideReadiness ? { overrideReadiness: true } : {}),

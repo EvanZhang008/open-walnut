@@ -10,7 +10,7 @@ import { useRef, useState, type RefObject } from 'react';
 import type { StartSource } from '@/api/projects';
 import { setDraftWorkspace, useDraftWorkspace } from '@/components/workspaces/draft-workspace-store';
 import { ProjectStartFlyout } from './ProjectStartFlyout';
-import type { DraftRowUpdate } from './DraftProjectStartPill';
+import type { DraftRowUpdate } from './DraftWorkInPill';
 import type { DraftColumn } from './draft-column';
 import { addOptions, setSourceValues, sourceArrayFields, type SourceArrayField } from './draft-project-start';
 

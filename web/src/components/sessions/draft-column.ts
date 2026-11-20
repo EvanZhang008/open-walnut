@@ -208,6 +208,9 @@ export interface DraftColumn {
   /** The person picked this start's host on the host pill: Start names it; absent, the server
    *  uses the project's own host. */
   fromProjectHostPicked?: boolean;
+  /** The folder (`host::cwd`) whose "start in a fresh workspace instead?" the person answered
+   *  "Keep this folder" (draft-work-in.ts workInSuggestion). */
+  workInKept?: string;
 }
 
 /** Undo what entering walnut mode wrote to `meta`, keeping what the user picked
