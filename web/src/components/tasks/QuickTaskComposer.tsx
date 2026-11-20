@@ -6,6 +6,7 @@ import { QuickTaskConfirm, type ConfirmDraft, type ConfirmField } from './QuickT
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation } from '@/hooks/useSendAfterDictation';
 import { useDraftClaim } from '@/hooks/useDraft';
+import { useOutsidePress } from '@/hooks/useOutsidePress';
 import { clearDraft, draftKey, readDraftJson, writeDraftJson } from '@/utils/drafts';
 import '@/styles/task-mic.css';
 
@@ -137,18 +138,7 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
     if (!textRef.current.trim() && !draftRef.current.title.trim()) reset();
   }, [open, reset]);
 
-  useEffect(() => {
-    if (!open) return;
-    const handler = (event: MouseEvent) => {
-      if (submittingRef.current) return;
-      if (popoverRef.current && !popoverRef.current.contains(event.target as Node)) close();
-    };
-    const timer = setTimeout(() => document.addEventListener('mousedown', handler), 100);
-    return () => {
-      clearTimeout(timer);
-      document.removeEventListener('mousedown', handler);
-    };
-  }, [close, open]);
+  useOutsidePress(open, popoverRef, close);
 
   // Merge a landed parse into the form: fill only what the user hasn't taken
   // over, badge each filled field ✦. The title is special — a raw-fallback

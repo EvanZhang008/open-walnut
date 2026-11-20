@@ -20,6 +20,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, typ
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOutsidePress } from '@/hooks/useOutsidePress';
 import type { WorkingDirEntry } from '@/api/sessions';
 import type { SessionEffort, SessionMode, TaskPriority } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
@@ -797,17 +798,7 @@ export function SessionPathSelector({
   }, [editMode, flatItems, selectedIdx, handleDismiss, confirmCurrent, handleSelect, drillOrFill, hostFilter, hostTabs, ghost, editingPath, inputState, fillPath, validity, createOption, createTarget, handleConfirm, handleCreate]);
 
   // Close on outside click — saves edits when editing an existing selection (see handleDismiss).
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      const t = e.target as HTMLElement;
-      if (popoverRef.current && !popoverRef.current.contains(t)) {
-        handleDismiss();
-      }
-    };
-    const timer = setTimeout(() => document.addEventListener('mousedown', handler), 100);
-    return () => { clearTimeout(timer); document.removeEventListener('mousedown', handler); };
-  }, [open, handleDismiss]);
+  useOutsidePress(open, popoverRef, handleDismiss);
 
   if (!open) return null;
 

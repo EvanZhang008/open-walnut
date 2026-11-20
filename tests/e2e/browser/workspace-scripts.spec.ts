@@ -16,7 +16,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
-import { REAL_PANEL, draftComposer, draftMoreButton, draftPanel, draftTaskMenu, openDraft, openDraftSettings, pickDraftFolder } from './draft-helpers'
+import { REAL_PANEL, draftComposer, draftCwdPill, draftMoreButton, draftPanel, draftTaskMenu, openDraft, openDraftSettings, pickDraftFolder, serverHome, shownHomePath } from './draft-helpers'
 import { openKebabGroup } from './kebab-group-helpers'
 import { isolateUiPrefs, openProjectDetails, selectSection } from './todo-panel-helpers'
 
@@ -115,15 +115,18 @@ test("a repository setup nobody allowed holds a person's start until they choose
   // The folder typed into the picker and not confirmed: the press on More closes the picker,
   // which takes the folder and adds the Project chip, moving More under the pointer. The
   // menu still opens on that first press (a real mouse click at More's place).
-  await draft.getByRole('button', { name: 'Choose folder and host' }).click()
+  // The pill already reads the home folder (draft-home-default.ts), so it is found by place, not label.
+  await draftCwdPill(draft).click()
   await page.getByPlaceholder('Type a folder path, or pick one below').fill(repo)
-  await page.getByText(`${repo}/`, { exact: true }).click()
+  // The list folds the server's home to ~ (draft-helpers.ts shownHomePath).
+  await page.getByText(shownHomePath(`${repo}/`, await serverHome(page)), { exact: true }).click()
   await page.waitForTimeout(300)
   const moreBox = (await draftMoreButton(draft).boundingBox())!
   await page.mouse.click(moreBox.x + moreBox.width / 2, moreBox.y + moreBox.height / 2)
   const menu = draftTaskMenu(page)
   await expect(menu).toBeVisible({ timeout: 10_000 })
-  await expect(draft.getByRole('button', { name: /^Folder and host: / })).toBeVisible()
+  // The typed folder, not the home default it replaced.
+  await expect(draftCwdPill(draft)).toHaveAccessibleName(`Folder and host: ${repo} on Local. Change`)
   await menu.getByTestId('draft-menu-workspace').click()
   await expect(draftTaskMenu(page)).toHaveCount(0)
   await expect(draft.getByTestId('draft-workspace-row').getByTestId('draft-workspace-provider-git-worktree')).toHaveAttribute('aria-checked', 'true', { timeout: 30_000 })
@@ -235,6 +238,9 @@ test('setup runs in a new workspace before its first session; the session has no
   // The project's folder is the repository, so its editor shows the repository's walnut.json.
   const project = (await readTask(page, taskId)).project!
   expect((await page.request.put(`/api/projects/${encodeURIComponent(project)}/metadata`, { data: { default_cwd: repo } })).ok()).toBe(true)
+  // A new task lands pinned (Focus), and the All list draws a pinned task only under Pinned: the
+  // project gets its row in Projects from a task that is not pinned, as project-launch-defaults.spec.ts seeds.
+  expect((await page.request.post('/api/tasks', { data: { title: 'Web project seed', project, pinned: false } })).ok()).toBe(true)
   const pane = await openProjectDetails(page, project)
   await pane.getByTestId('project-scripts-edit').click()
   const dialog = page.getByTestId('project-scripts-dialog')
