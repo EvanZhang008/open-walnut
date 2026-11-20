@@ -17,6 +17,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-stale-note-close'))
 
 import { WALNUT_HOME } from '../../src/constants.js'
+import { STATUS_REPORT_CHANNEL } from '../../src/lib/internal-lines.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { addTask, getTask, updateTask, updateTaskRaw } from '../../src/core/task-manager.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
@@ -145,7 +146,7 @@ describe('its own session completing a task whose note reads as unfinished', () 
     const res = await json('POST', `/api/v1/tasks/${task.id}/complete`, {}, sid)
     expect(res.status).toBe(409)
     const body = await res.json() as { error?: { message?: string }; message?: string; items?: { kind: string }[] }
-    expect(JSON.stringify(body)).toMatch(/make it your own ask \(FOR_USER_ASK/)
+    expect(body.error?.message ?? body.message).toContain(`make it your own ask (${STATUS_REPORT_CHANNEL})`)
     expect(body.items?.map((i) => i.kind)).toEqual(['question'])
   }, 60_000)
 
