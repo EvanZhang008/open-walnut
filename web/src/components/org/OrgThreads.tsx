@@ -80,7 +80,7 @@ const TASK_DOT: Record<string, string> = {
 };
 /** A thread's state in words: the task-state names where they mean the same (USER_STATE_LABELS). */
 const STATE_LABEL: Record<OrgThreadState, string> = {
-  new: 'New', working: USER_STATE_LABELS.working, needs: USER_STATE_LABELS.needs, answered: 'Answered', pending: 'Pending',
+  new: 'New', working: USER_STATE_LABELS.working, needs: USER_STATE_LABELS.needs, answered: 'Done', pending: 'Pending',
 };
 const STATE_DOT: Record<OrgThreadState, string> = {
   new: 'var(--accent, #0A84FF)', working: 'var(--success, #34C759)', needs: 'var(--error, #FF3B30)', answered: 'var(--fg-muted, #86868B)',
@@ -359,7 +359,7 @@ function AskedIn({ a }: { a: NonNullable<OrgThread['askedIn']> }) {
   const openTask = useOpenTask();
   return (
     <p className="org-thread-follows org-thread-asked-in" data-testid="org-thread-asked-in" data-task-id={a.task} data-answered={a.answered ? 'true' : undefined} title={a.ask}>
-      {a.answered ? 'Answered in' : 'Asked in'}{' '}
+      {a.answered ? 'Done in' : 'Asked in'}{' '}
       <button type="button" className="org-thread-link" data-testid="org-thread-asked-in-task" onClick={() => openTask(a.task)}>{a.title}</button>
       {a.answered ? ': nothing more to decide here.' : ': answer it there. This thread comes back if that task stops asking it.'}
     </p>
@@ -404,7 +404,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
       <button type="button" className="org-thread-head" aria-expanded={open} aria-controls={`${t.id}-conversation`} data-testid="org-thread-head" onClick={() => setOpen(!open)}>
         <span className="org-thread-state" data-testid="org-thread-state">
           <i style={{ background: closed || asked ? 'var(--fg-muted, #86868B)' : STATE_DOT[t.state] }} />
-          {closed ? (t.movedTo ? 'Moved' : t.closed!.how === 'acked' ? 'Done' : 'Dropped') : asked ? (t.askedIn!.answered ? 'Answered in a task' : 'Asked in a task') : STATE_LABEL[t.state]}
+          {closed ? (t.movedTo ? 'Moved' : t.closed!.how === 'acked' ? 'Done' : 'Dropped') : asked ? (t.askedIn!.answered ? 'Done in a task' : 'Asked in a task') : STATE_LABEL[t.state]}
         </span>
         <span className="org-thread-meta">
           {pinned && (<>
