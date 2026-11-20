@@ -33,6 +33,7 @@ struct TimelineHarnessView: View {
                 streaming: store.streaming,
                 liveText: store.liveText,
                 liveTextTruncated: false,
+                liveThinking: store.liveThinking,
                 liveTools: store.liveTools,
                 activity: store.activity,
                 scope: "harness",
@@ -134,6 +135,12 @@ struct TimelineHarnessView: View {
                 // Two islands streaming in, held before the turn ends (see `startIslandPair`).
                 Button("Island pair") { store.startIslandPair() }
                     .accessibilityIdentifier("harness.islandPair")
+                // A turn that only thinks: its reasoning streams with no reply and no
+                // call, the lone thought's fold line; Stop saves it as a history thought.
+                Button(store.streamOn ? "Stop" : "Thought") {
+                    store.streamOn ? store.stopStream() : store.startThoughtStream()
+                }
+                .accessibilityIdentifier("harness.thoughtStream")
                 // The stream holds mid-script and again before the turn ends, until a
                 // test taps this, so a slow runner reads each stage before it moves on.
                 Button("Next") { store.islandHeld = false }
@@ -164,6 +171,7 @@ final class TimelineHarnessStore {
     var messages: [ChatMessage] = []
     var streaming = false
     var liveText = ""
+    var liveThinking = ""
     var liveTools: [LiveToolCall] = []
     var activity: String?
     var scrollToBottomSignal = 0
@@ -540,11 +548,39 @@ final class TimelineHarnessStore {
 
     private static let pairStepID = "h-pair-step"
 
+    /// Reasoning only, a sentence at a time, until Stop.
+    func startThoughtStream() {
+        guard !streamOn else { return }
+        streamOn = true
+        streaming = true
+        liveText = ""
+        liveThinking = ""
+        activity = nil
+        streamTask = Task { @MainActor [weak self] in
+            var tick = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(600))
+                guard let self, self.streamOn else { return }
+                tick += 1
+                self.liveThinking += (tick == 1 ? "" : " ") + "Step \(tick): weighing what the request needs before answering."
+            }
+        }
+    }
+
     func stopStream() {
         streamOn = false
         streamTask?.cancel()
         streamTask = nil
         messages.removeAll { $0.id == Self.pairStepID }
+        if !liveThinking.isEmpty {
+            counter += 1
+            messages.append(ChatMessage(
+                id: "h-thought-\(counter)", role: "assistant",
+                text: String(liveThinking.prefix(160)), createdAt: "2026-08-08T07:00:00Z",
+                kind: .thinking, thinkingText: liveThinking
+            ))
+        }
+        liveThinking = ""
         if !liveText.isEmpty {
             counter += 1
             messages.append(ChatMessage(

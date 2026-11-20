@@ -817,14 +817,15 @@ final class TimelineRowBuilder {
         let liveText = TimelineTurnMarker.stripLive(liveText)
         // Once the turn has called a tool, its reasoning rides that call's run
         // (`liveToolRows`), the way the transcript folds it: one collapsed line
-        // for everything the turn did. Before that it is a collapsed "Thinking"
-        // row above the live text. Either way it disappears the moment the store
+        // for everything the turn did. Before that it is the thought's own fold
+        // line, "> Thinking", above the live text. Either way it disappears the moment the store
         // clears its accumulation (a canonical history load lands), which is the
         // same instant the fetched `kind:"thinking"` rows appear, so the same
         // reasoning is never on screen twice.
         let thinkingRidesRun = liveTools.contains { Self.liveCallFolds($0) }
-        let thinkingRows = thinkingRidesRun ? [] : liveThinkingRows(liveThinking: liveThinking,
-                                                                    width: width, scope: scope)
+        let thinkingRows = thinkingRidesRun ? [] : loneLiveThinkingRows(
+            liveThinking: liveThinking, width: width, scope: scope,
+            expandedRowIDs: expandedRowIDs, running: true)
         rows.append(contentsOf: thinkingRows)
         if !liveText.isEmpty {
             let seg = LiveMarkdownWindow.segments(liveText)
@@ -1079,6 +1080,42 @@ final class TimelineRowBuilder {
                         id: TimelineScope.namespace(scope, "live-thinking"),
                         width: width).map { [$0] } ?? []
     }
+
+    /// The live reasoning drawn ON ITS OWN (no run carries it): the thought's fold
+    /// line (`thoughtFoldRows`), breathing while the turn streams.
+    func loneLiveThinkingRows(liveThinking: String, width: CGFloat,
+                              scope: String = TimelineScope.unscoped,
+                              expandedRowIDs: Set<String>, running: Bool) -> [TimelineRow] {
+        let id = TimelineScope.namespace(scope, Self.liveThoughtFoldID)
+        return thoughtFoldRows(liveThinkingRows(liveThinking: liveThinking, width: width, scope: scope),
+                               id: id, expanded: expandedRowIDs.contains(id), running: running, width: width)
+    }
+
+    /// Message id of the live turn's lone thought line (scoped by the caller).
+    static let liveThoughtFoldID = "live-thinking-fold"
+
+    /// The fold line's id for a saved thought drawn on its own.
+    static func thoughtFoldID(scope: String, messageID: String) -> String {
+        "\(TimelineScope.namespace(scope, messageID))#thought"
+    }
+
+    /// A thought drawn on its own, outside an opened fold or run, is the line every
+    /// fold is: the chevron, then "Thinking", no icon and no first line. Its thinking
+    /// row (the icon, the line, the tap that opens the whole thought) is inside, laid
+    /// out under the line once it is opened (the web's `SessionThinking` outside a step
+    /// list; 2026-11-20, the user: "collpe like > Thinking ... just liek all other not
+    /// even icon icon isinside te collpes"). A thought inside an opened fold or run is
+    /// its thinking row, as before, and never goes through here.
+    func thoughtFoldRows(_ thought: [TimelineRow], id: String, expanded: Bool,
+                         running: Bool = false, width: CGFloat = 0) -> [TimelineRow] {
+        guard !thought.isEmpty else { return [] }
+        let line = foldRow(id: id, phrase: Self.thoughtPhrase, failures: .none,
+                           expanded: expanded, running: running, width: width)
+        return expanded ? [line] + thought : [line]
+    }
+
+    /// The word a thought's own fold line reads.
+    static let thoughtPhrase = "Thinking"
 
     /// The IN-FLIGHT turn's reasoning: the same collapsed "Thinking" capsule a
     /// history row shows, and nothing under it. It used to preview the newest
@@ -1412,12 +1449,13 @@ final class TimelineRowBuilder {
     /// The live run is ONE id per conversation, reused by every turn. Once the
     /// turn's calls are gone (it ended, or the next one has called nothing yet)
     /// the reader's "open" is forgotten, or every later turn's run would arrive
-    /// already open.
+    /// already open. The lone thought's line is one id per conversation too, and
+    /// is forgotten once the turn's reasoning is gone (`liveThinking` empty).
     static func forgettingEndedLiveRun(_ expanded: Set<String>, liveTools: [LiveToolCall],
-                                       scope: String) -> Set<String> {
-        guard liveTools.isEmpty else { return expanded }
+                                       liveThinking: String = "", scope: String) -> Set<String> {
         var kept = expanded
-        kept.remove(TimelineScope.namespace(scope, liveRunID))
+        if liveTools.isEmpty { kept.remove(TimelineScope.namespace(scope, liveRunID)) }
+        if liveThinking.isEmpty { kept.remove(TimelineScope.namespace(scope, liveThoughtFoldID)) }
         return kept
     }
 

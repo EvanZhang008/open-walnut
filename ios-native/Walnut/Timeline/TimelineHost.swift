@@ -190,7 +190,8 @@ struct TimelineHost: UIViewControllerRepresentable {
             guard width > 0 else { return } // pre-layout; onWidthChange re-fires
             input.width = width
             expandedRowIDs = TimelineRowBuilder.forgettingEndedLiveRun(
-                expandedRowIDs, liveTools: input.liveTools, scope: input.scope)
+                expandedRowIDs, liveTools: input.liveTools, liveThinking: input.liveThinking,
+                scope: input.scope)
             input.expandedRowIDs = expandedRowIDs
             input.sizeCategory = controller.traitCollection.preferredContentSizeCategory
             input.wrappedCodeKeys = wrappedCodeKeys(scope: input.scope)

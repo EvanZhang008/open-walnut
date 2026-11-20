@@ -223,8 +223,10 @@ final class ToolRunFoldTests: XCTestCase {
     }
 
     func testReasoningWithNoToolAroundItIsNotARun() async throws {
+        // Not a run: each thought is its own "Thinking" line (LoneThoughtFoldTests).
         let built = await rows([user("u"), thinking("k1"), thinking("k2"), prose("p")])
-        XCTAssertEqual(kinds(built), ["bubble", "thinking", "thinking", "text"])
+        XCTAssertEqual(kinds(built), ["bubble", "toolRun", "toolRun", "text"])
+        XCTAssertEqual(try runPayload(built[1]).phrase, "Thinking")
     }
 
     func testProseUserRowsAndNotificationsCloseARun() async throws {
@@ -468,17 +470,11 @@ final class ToolRunFoldTests: XCTestCase {
     }
 
     func testLiveReasoningBeforeAnyCallIsOneClosedLine() async throws {
+        // The thought's own fold line, "Thinking", closed (LoneThoughtFoldTests pins it).
         let built = await rows([], streaming: true, liveThinking: "Reading the request.")
-        XCTAssertEqual(kinds(built), ["thinking"], "and no second Thinking shimmer")
-        guard case .thinking(let line, let preview, _, let maxLines, _, _) = built[0].content else {
-            return XCTFail("not a thinking row")
-        }
-        XCTAssertNil(line)
-        XCTAssertNil(preview)
-        XCTAssertEqual(maxLines, 0)
-        let capsule = TimelineRowBuilder().toolRunRow(id: "x#run", members: [member("Bash")],
-                                                      failures: .none, running: false, expanded: false)
-        XCTAssertEqual(built[0].height, capsule.height, "one capsule line, nothing under it")
+        XCTAssertEqual(kinds(built), ["toolRun"], "and no second Thinking shimmer")
+        XCTAssertEqual(try runPayload(built[0]).phrase, "Thinking")
+        XCTAssertFalse(try runPayload(built[0]).expanded)
     }
 
     func testTheLiveRunOpensToItsChips() async throws {

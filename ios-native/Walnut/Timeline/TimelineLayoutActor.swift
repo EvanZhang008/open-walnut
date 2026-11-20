@@ -169,6 +169,16 @@ actor TimelineLayoutActor {
             if !identities.isEmpty { richEntryIdentities[key] = identities }
             return built
         }
+        /// A message's rows where it stands on its own, outside an opened fold or run:
+        /// a thought there is its fold line, its thinking row inside
+        /// (`TimelineRowBuilder.thoughtFoldRows`).
+        func standaloneRows(for message: ChatMessage, queued: QueuedSend.Status?) -> [TimelineRow] {
+            let built = memoizedRows(for: message, queued: queued)
+            guard message.kind == .thinking else { return built }
+            let id = TimelineRowBuilder.thoughtFoldID(scope: input.scope, messageID: message.id)
+            return builder.thoughtFoldRows(built, id: id, expanded: input.expandedRowIDs.contains(id),
+                                           width: input.width)
+        }
         // A BANKED SEND SITS AFTER THE LIVE REGION, not where it happens to be in
         // `messages`. The store appends its bubble to the end of the message list,
         // but the live rows are appended after ALL of them, so an in-order build put
@@ -231,8 +241,9 @@ actor TimelineLayoutActor {
             for part in parts {
                 switch part {
                 case .message(let message):
-                    rows.append(contentsOf: memoizedRows(for: message,
-                                                         queued: input.queuedMessageStates[message.id]))
+                    let queued = input.queuedMessageStates[message.id]
+                    rows.append(contentsOf: inFold ? memoizedRows(for: message, queued: queued)
+                                                   : standaloneRows(for: message, queued: queued))
                 case .run(let key, let members):
                     if inFold {
                         for member in members { rows.append(contentsOf: memoizedRows(for: member, queued: nil)) }
@@ -366,7 +377,7 @@ actor TimelineLayoutActor {
                                    after: reply.filter(TimelineTurnFold.isAckOnly).flatMap(TimelineFoldSteps.steps))
                 }
                 for message in reply where !TimelineTurnFold.isAckOnly(message) {
-                    rows.append(contentsOf: memoizedRows(for: message, queued: input.queuedMessageStates[message.id]))
+                    rows.append(contentsOf: standaloneRows(for: message, queued: input.queuedMessageStates[message.id]))
                 }
                 if !later.isEmpty {
                     appendPlan(TimelineTurnFold.plan(later, turns: TimelineTurnShape.shape(later, streaming: false),
@@ -379,8 +390,8 @@ actor TimelineLayoutActor {
             for part in TimelineToolRunFold.fold(inline) {
                 switch part {
                 case .message(let message):
-                    rows.append(contentsOf: memoizedRows(for: message,
-                                                         queued: input.queuedMessageStates[message.id]))
+                    rows.append(contentsOf: standaloneRows(for: message,
+                                                           queued: input.queuedMessageStates[message.id]))
                 case .run(let key, let members):
                     appendRun(key: key, members: members)
                 }
@@ -416,8 +427,9 @@ actor TimelineLayoutActor {
             // A turn whose calls still ride a received message's row keeps its
             // reasoning in that row too, as it did while streaming.
             if !runFoldedElsewhere {
-                rows.append(contentsOf: builder.liveThinkingRows(
-                    liveThinking: input.liveThinking, width: input.width, scope: input.scope))
+                rows.append(contentsOf: builder.loneLiveThinkingRows(
+                    liveThinking: input.liveThinking, width: input.width, scope: input.scope,
+                    expandedRowIDs: input.expandedRowIDs, running: false))
             }
         }
         rows.append(contentsOf: afterLiveRows)
