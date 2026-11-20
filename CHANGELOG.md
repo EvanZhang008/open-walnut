@@ -6,6 +6,20 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.37] - 2026-11-20
+
+### Fixed
+
+- The old-kernel rehearsal finishes an interrupted dpkg before it tries the qemu install again
+- A passing notice sits above the review bar; the search guard sees plain search fields
+- A task's own trigger fire and wait clock reach a cold session at once
+- The disk alarm's sweep runs as a low-disk round while the alarm rings
+- Identify credential owners and share renewal letters
+- The user's own yes for anything involving others, his name or no undo, whatever the Approvals switch says
+- A browser that went quiet with agents on is named as closed, not as switched off
+- A node's teams clear the notice stack; Files helpers read the chip, not the explorer
+- The compact bar's actions end on the page's edge again with a kept scrollbar gutter
+
 ## [0.6.36] - 2026-11-19
 
 ### Fixed
