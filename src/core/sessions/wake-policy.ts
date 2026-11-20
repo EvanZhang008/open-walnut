@@ -49,6 +49,8 @@ export const NOTICE_RIDES: readonly string[] = [
   'stopped', 'waiting', 'blocked',
   // Notes that asked for no reply (quiet-notes.ts).
   'quiet-notes',
+  // A topic's lines that did not wake the member (topics/topic-text.ts): it reads them next time.
+  'topic-news',
   // A write made while the server was away applied, or had nothing to do (offline-handover.ts).
   'applied', 'noop',
   // An engine switch or a move picked earlier expired without running (engine-switch-watch.ts).

@@ -742,6 +742,7 @@ let laneAskSyncStop: (() => void) | null = null
 let foreignWriterWatchdog: { stop: () => void } | null = null
 let sessionProjectionHandle: { stop: () => void } | null = null
 let threadAnswersHandle: { stop: () => void } | null = null
+let topicsHandle: { stop: () => void } | null = null
 let threadFollowHandle: { stop: () => void } | null = null
 let threadRepliesHandle: { stop: () => void } | null = null
 let letterThreadsHandle: { stop: () => void } | null = null
@@ -2776,6 +2777,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/v1', (await import('./routes/task-actions-v1.js')).taskActionsV1Router)
   app.use('/api/v1', (await import('./routes/brief-v1.js')).briefV1Router)
   app.use('/api/v1', (await import('./routes/org-threads-v1.js')).orgThreadsV1Router)
+  // Topics: group chats of tasks, org nodes and people (core/topics/; experiment topics, 404 while off).
+  app.use('/api', (await import('./routes/topics-v1.js')).topicsV1Router)
   // Private tasks: make a synced task local, send a local one to its project's service (core/private-tasks/).
   app.use('/api/v1', (await import('./routes/private-tasks-v1.js')).privateTasksV1Router)
   // The message-hint registry: list, change, reset (reads anywhere, writes primary-only).
@@ -3914,6 +3917,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // ends, and closed threads are deleted after their week (core/org/thread-answers.ts).
       const { startThreadAnswers } = await import('../core/org/thread-answers.js')
       threadAnswersHandle = startThreadAnswers()
+      // Topics: a woken member's reply is posted back as its message (core/topics/topic-replies.ts);
+      // idle while the experiment topics is off.
+      const { startTopics } = await import('../core/topics/topic-replies.js')
+      const replies = startTopics()
+      // The mail bridge: person members are mailed and their replies posted (core/topics/topic-mail.ts).
+      const mail = await import('../core/topics/topic-mail.js')
+      await mail.startTopicMailBridge().catch((err) => log.web.warn('topics: mail bridge did not start', { error: err instanceof Error ? err.message : String(err) }))
+      topicsHandle = { stop: () => { replies.stop(); mail.stopTopicMailBridge() } }
 
       // The session's current turn (sessions/turn-run.ts): every reader of "is Walnut retrying this
       // turn" asks it; its attempts start over at any send that is not a retrier's. Primary only.
@@ -7651,6 +7662,10 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   if (threadAnswersHandle) {
     threadAnswersHandle.stop()
     threadAnswersHandle = null
+  }
+  if (topicsHandle) {
+    topicsHandle.stop()
+    topicsHandle = null
   }
   if (sessionProjectionHandle) {
     sessionProjectionHandle.stop()

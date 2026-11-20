@@ -1,0 +1,131 @@
+/* Topics (experiment `topics`): the Org list group, the chat, the dialogs, the thread card's mark.
+   Avatars reuse the Org list's tile (.org-avatar, org-page.css). */
+
+.topic-avatar.is-person { border-radius: 50%; }
+.topic-avatar.is-human { background: var(--accent, #007AFF); font-size: 10px !important; }
+.topic-avatar.is-walnut { background: var(--fg-muted, #86868B); }
+.topic-avatar-bot {
+  position: absolute; right: -3px; bottom: -3px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--card-bg, #fff); color: var(--fg); font-size: 9px; line-height: 12px; text-align: center;
+}
+
+.topic-stack { display: inline-flex; align-items: center; flex: none; }
+.topic-stack > .org-avatar { box-shadow: 0 0 0 2px var(--card-bg, #fff); }
+.topic-stack > * + * { margin-left: -7px; }
+.topic-stack-more {
+  display: inline-flex; align-items: center; justify-content: center; padding: 0 4px;
+  border-radius: 9px; background: var(--bg-secondary); color: var(--fg-muted); font-size: 10.5px; font-weight: 600;
+  box-shadow: 0 0 0 2px var(--card-bg, #fff);
+}
+
+/* The Org list's group */
+.org-topics-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.org-topics-new {
+  border: none; background: transparent; color: var(--accent); font: inherit; font-size: 11px;
+  text-transform: none; letter-spacing: 0; font-weight: 600; cursor: pointer; padding: 0 2px;
+}
+.org-topics-new:hover { text-decoration: underline; }
+.org-channel.is-topic .topic-stack { min-width: 34px; }
+
+/* The chat */
+.topic-chat { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--bg); color: var(--fg); }
+.topic-chat.is-empty { padding: 20px; }
+.topic-head {
+  display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.topic-head-mid { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.topic-head-title { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topic-main { flex: 1; min-height: 0; display: flex; }
+.topic-conversation { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.topic-messages { flex: 1; min-height: 0; overflow-y: auto; list-style: none; margin: 0; padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+.topic-time { align-self: center; color: var(--fg-muted); font-size: 12px; }
+.topic-msg { display: flex; align-items: flex-start; gap: 9px; max-width: 82%; }
+.topic-msg.is-human { align-self: flex-end; flex-direction: row-reverse; }
+.topic-msg.is-sending { opacity: 0.65; }
+.topic-msg.is-walnut {
+  align-self: center; max-width: 90%; color: var(--fg-muted); font-size: 12px; text-align: center;
+}
+.topic-msg-body { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.topic-msg.is-human .topic-msg-body { align-items: flex-end; text-align: right; }
+.topic-msg-name { font-size: 12px; font-weight: 600; }
+.topic-msg-bubble {
+  padding: 8px 12px; border-radius: 14px; background: var(--bg-secondary); color: var(--fg);
+  font-size: 13.5px; line-height: 1.5; overflow-wrap: anywhere;
+}
+.topic-msg-bubble .markdown-body p { margin: 0; }
+.topic-msg.is-human .topic-msg-bubble { background: color-mix(in srgb, var(--accent) 16%, var(--bg-secondary)); }
+.topic-msg-reach { font-size: 11px; color: var(--fg-muted); }
+.topic-composer { padding: 8px 12px 12px; border-top: 1px solid var(--border); }
+
+.topic-mention-menu { min-width: 260px; max-width: 420px; overflow-y: auto; }
+.topic-mention-row { display: flex; align-items: center; gap: 8px; width: 100%; }
+.topic-mention-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.topic-mention-hint { color: var(--fg-muted); font-size: 11px; flex: none; }
+
+/* The side panel */
+.topic-side { width: 260px; flex: none; border-left: 1px solid var(--border); overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 14px; }
+.topic-side-head { margin: 0 0 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--fg-muted); }
+.topic-members { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.topic-member { display: flex; align-items: center; gap: 8px; }
+.topic-member.is-pending .topic-member-name { font-style: italic; }
+.topic-member-mid { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.topic-member-name { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topic-member-status { font-size: 11px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topic-host-summary { font-size: 13px; }
+.topic-side-add { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+@media (max-width: 900px) { .topic-side { display: none; } }
+
+/* Shared bits: dialogs and pickers */
+.topic-muted { margin: 0; color: var(--fg-muted); font-size: 12px; }
+.topic-error { margin: 6px 0 0; color: var(--error, #d70015); font-size: 12px; }
+.topic-link-btn { border: none; background: transparent; padding: 4px 0; color: var(--accent); font: inherit; font-size: 12.5px; cursor: pointer; text-align: left; }
+.topic-link-btn:hover { text-decoration: underline; }
+.app-modal.topic-dialog { width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow-y: auto; box-sizing: border-box; }
+.topic-dialog .topic-muted:first-of-type { margin-top: 6px; }
+.topic-field-label { display: block; margin-top: 14px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+.topic-field-label + .app-modal-input, .topic-field-label + .mic-field .app-modal-input { margin-top: 4px; }
+.topic-first-text { resize: vertical; font-family: inherit; min-height: 64px; }
+.topic-picker { display: flex; flex-direction: column; gap: 6px; }
+.topic-picker .app-modal-input { margin-top: 4px; }
+.topic-picked { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.topic-chip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 4px 2px 3px; border-radius: 14px;
+  border: 1px solid var(--border); font-size: 12.5px; max-width: 100%;
+}
+.topic-chip.is-host { border-color: var(--accent); }
+.topic-chip-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
+.topic-chip-host, .topic-chip-x {
+  border: none; background: transparent; color: var(--fg-muted); cursor: pointer; padding: 0 3px; font-size: 13px; line-height: 1;
+}
+.topic-chip.is-host .topic-chip-host { color: var(--accent); }
+.topic-chip-x:hover { color: var(--error, #d70015); }
+.topic-candidates { list-style: none; margin: 0; padding: 2px 0; max-height: 240px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+.topic-candidate {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: none; background: transparent;
+  color: var(--fg); font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.topic-candidate:hover:not(:disabled) { background: color-mix(in srgb, var(--fg) 6%, transparent); }
+.topic-candidate:disabled { opacity: 0.55; cursor: default; }
+.topic-candidate-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topic-candidate-hint { flex: none; color: var(--fg-muted); font-size: 11.5px; }
+.topic-add-list { margin-top: 12px; }
+.topic-person { display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px dashed var(--border); border-radius: 8px; }
+.topic-person .app-modal-input { margin-top: 0; }
+.topic-person-bot { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.topic-person-actions { display: flex; justify-content: flex-end; gap: 6px; }
+
+/* A thread card that is a topic's */
+.topic-thread-badge { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.topic-thread-badge .topic-muted { flex: 1; }
+
+/* The Threads view's own row of actions */
+.org-threads-bar { display: flex; justify-content: flex-end; margin-bottom: 6px; }
+
+/* "Email from" (TopicMailFrom.tsx): the label, the mailbox button that opens its menu, and a note while none is chosen. */
+.topic-mail-from { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.topic-mail-from .topic-field-label { margin-top: 0; }
+.topic-dialog .topic-mail-from { margin-top: 14px; }
+.topic-mail-from-anchor { display: inline-flex; max-width: 100%; }
+.topic-mail-from-btn { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -162,6 +162,12 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'Acknowledging a thread whose work is still open (a task it went to not done, your reply still on its way, its letter still waiting) no longer closes it: it leaves your sight under "in progress, nothing for you" and stays tracked until it is really over. Its agent hears that you know and tells you the outcome once, or closes it. A thread with nothing open closes as before.',
     default: false,
   },
+  {
+    id: 'topics',
+    name: 'Topics: group chats of tasks',
+    description: 'A topic is a group chat you start with tasks, Main, a VP or people by email. What you write wakes every task in it (or only the ones you @mention), and each one\'s answer is posted back as its own message. Tasks wake each other only by @mention, at most three wakes between your messages, so two agents never talk in a loop.',
+    default: false,
+  },
 ] as const;
 
 export type ExperimentalFeatureId = typeof EXPERIMENTAL_FEATURES[number]['id'];

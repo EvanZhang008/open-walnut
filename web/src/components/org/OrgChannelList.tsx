@@ -33,6 +33,7 @@ import { useOpenTask } from '@/hooks/useOpenTask';
 import { OrgEditableName } from './OrgEditableName';
 import { NodeAvatar, OrgAvatar } from './OrgAvatar';
 import { OrgRouterSection } from './OrgRouterSection';
+import { OrgTopicsSection } from '@/components/topics/OrgTopicsSection';
 import { OrgReorgReminder } from './OrgReorgReminder';
 import { OrgSettingsMenu } from './OrgSettingsMenu';
 import { useOrgSettings } from './useOrgSettings';
@@ -333,6 +334,7 @@ export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, 
         {directors && sections && <OrgDirectorSection vps={shown} groupsOf={directors.groupsOf} projectsOf={directors.projectsOf} query={query} openTaskIds={openTaskIds} />}
         {/* Routers sit below every VP (2026-11-10, the person), above the folded Archived. */}
         <OrgRouterSection rows={routers} selectedKey={selectedKey} now={now} onSelect={onSelect} onMenu={routerMenu ? onMenu : undefined} />
+        <OrgTopicsSection selectedKey={selectedKey} query={query} now={now} onSelect={onSelect} />
         <MovedSection moved={moved} query={query} onSelect={onSelect} onMenu={onMenu} />
       </div>
       {total === 0 && <p className="org-empty-note" data-testid="org-empty">No open work yet. Ask the CEO to start something.</p>}

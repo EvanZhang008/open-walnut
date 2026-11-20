@@ -65,6 +65,8 @@ export const RIDER_NOTICE_OUTCOMES: readonly string[] = [
   'completed', 'error', 'stopped', 'blocked',
   // Notes that asked for no reply, held for the next message (sessions/quiet-notes.ts, 2026-11-12).
   'quiet-notes',
+  // A topic's lines that did not wake the member, held for its next message (topics/topic-text.ts).
+  'topic-news',
 ];
 const RIDER_OUTCOMES = new Set(RIDER_NOTICE_OUTCOMES);
 /** `name="value"`, first occurrence wins (same rule as the envelope parser). */

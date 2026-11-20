@@ -1436,6 +1436,11 @@ export interface OrgThreadsChangedEvent {
   owner?: string;
 }
 
+/** A topic changed (core/topics/topics-store.ts): re-read it. */
+export interface TopicUpdatedEvent {
+  topicId: string;
+}
+
 /** A task's agent tabs in the person's browser came or went (routes/browser-v1.ts): re-read the Browser view. */
 export interface BrowserTabsChangedEvent {
   taskId: string;
@@ -1572,6 +1577,7 @@ export interface EventPayloadMap {
   'board:changed': BoardChangedEvent;
   'browser:tabs': BrowserTabsChangedEvent;
   'org-threads:changed': OrgThreadsChangedEvent;
+  'topic:updated': TopicUpdatedEvent;
   'vault:changed': VaultChangedEvent;
 
   'plugin:lifecycle-changed': PluginLifecycleChangedEvent;

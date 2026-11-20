@@ -159,6 +159,8 @@ const CALL_SITES: Record<string, number> = {
   // A link watcher's news (pull requests: source pr-watch; changes: source change-watch), a Walnut envelope.
   'src/core/task-news.ts': 1,
   'src/core/task-wait-until.ts': 1,
+  // A topic's wake: a `topic` envelope (source topic), an agent's row, never the user's own.
+  'src/core/topics/topic-delivery.ts': 1,
   'src/core/transfer/transfer.ts': 1,
   'src/core/workspaces/manager.ts': 3,              // workspace launch and its folder fallback keep the start's original source
   // an ACP session's first line (framed by its start); a textless kick for rows a late init put back;

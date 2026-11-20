@@ -71,6 +71,11 @@ function bindConfigChanges() {
   wsClient.onEvent('_ws:reconnected', () => { void read(true); });
 }
 
+/** The same answer outside a render, for a menu built at the click (the page's last read). */
+export function experimentalOn(id: ExperimentalFeatureId): boolean {
+  return experimentalEnabled(cached ?? lastRead(), id);
+}
+
 export function useExperimental(id: ExperimentalFeatureId): boolean {
   const [flags, setFlags] = useState<ExperimentalFlags>(() => cached ?? lastRead());
   useEffect(() => {

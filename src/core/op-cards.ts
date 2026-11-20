@@ -135,6 +135,9 @@ export const OP_CARDS: Record<string, OpCardSpec> = {
   },
   thread_create: { kind: 'thread', toLabel: () => 'New thread', title: (a) => s(a.title), detail: (a) => s(a.text) },
   thread_file: { kind: 'thread', toLabel: () => 'Thread', title: (a) => s(a.title), detail: (a) => s(a.text) },
+  // A topic is a group chat: the card names it, its words go to its members.
+  topic_create: { kind: 'send', toLabel: () => 'New topic', title: (a) => s(a.title), detail: (a) => s(a.text) },
+  topic_post: { kind: 'send', toLabel: () => 'Topic', detail: (a) => s(a.text) },
   brief_write: {
     kind: 'brief',
     toLabel: () => 'Brief',

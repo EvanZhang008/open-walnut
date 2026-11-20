@@ -21,6 +21,7 @@ import { readAboutTag, stripAboutTag } from './message-about.js';
 import { userWordsOf } from './thread-capture.js';
 import { letterAnswerMissing, verifiedSource, type OrgThread, type ThreadAnswer, type ThreadMessage, type ThreadTextSource } from './threads-model.js';
 import { isQuietTurn } from '../sessions/quiet-turn.js';
+import { intermediateResult, type ResultOutliving } from '../sessions/outliving-work.js';
 import { splitComposedFraming } from '../../lib/composed-framing.js';
 import { keepsThreads } from './keeps-threads.js';
 
@@ -260,8 +261,8 @@ function gaveUp(id: string): boolean { return (tries.get(id) ?? 0) >= TRIES_MAX;
 
 const PAGES_MAX = 8;
 
-/** The session's transcript rows from `since` on (full text), paging back as far as it needs. */
-async function rowsSince(sid: string, since: string): Promise<AnswerRow[]> {
+/** The session's transcript rows from `since` on (full text), paging back as far as it needs (also topics/topic-replies.ts). */
+export async function rowsSince(sid: string, since: string): Promise<AnswerRow[]> {
   const { buildSessionTranscript } = await import('../session-projection.js');
   const pages: AnswerRow[][] = [];
   let before: string | undefined;
@@ -384,9 +385,9 @@ export function startThreadAnswers(): { stop: () => void } {
     if (stopped) return;
     bus.subscribe('org-thread-answers', (event) => {
       if (event.name !== EventNames.SESSION_RESULT) return;
-      const d = event.data as { sessionId?: string; taskId?: string; teamActive?: boolean; backgroundActive?: boolean; turnGen?: number };
+      const d = event.data as { sessionId?: string; taskId?: string; turnGen?: number } & ResultOutliving;
       // An intermediate result (a team or a background job still running) is not the turn's end.
-      if (!d.sessionId || d.teamActive || d.backgroundActive || isQuietTurn(d.sessionId, d.turnGen)) return;
+      if (!d.sessionId || intermediateResult(d) || isQuietTurn(d.sessionId, d.turnGen)) return;
       // A moment later: the turn's last words reach its transcript just after its result.
       const endedAt = new Date().toISOString();
       const timer = setTimeout(() => { void answersForSession(d.sessionId!, d.taskId, endedAt); }, RESULT_SETTLE_MS);

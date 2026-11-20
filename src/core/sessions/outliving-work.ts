@@ -60,3 +60,18 @@ export function outlivingLine(sources: readonly OutlivingSource[]): string {
   const named = sources.map((s) => OUTLIVING_SOURCES[s]);
   return named.length ? `Its own work goes on after its turn: ${named.join(', ')}` : '';
 }
+
+/** The part of a session:result payload (event-types.ts) that says its own work runs on. */
+export interface ResultOutliving {
+  teamActive?: boolean;
+  backgroundActive?: boolean;
+}
+
+/**
+ * A session:result that is no turn's end: its agent team or a background job it started still
+ * runs, and the CLI comes back with a follow-up turn when that ends. The one test every reader of
+ * a turn's end (a reply capture, an answer read) makes. Pure.
+ */
+export function intermediateResult(d: ResultOutliving | null | undefined): boolean {
+  return !!(d?.teamActive || d?.backgroundActive);
+}

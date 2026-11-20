@@ -1263,6 +1263,12 @@ export interface OpenThreadInput {
   same_ask_reason?: string;
   /** With state needs: the choices he picks from (thread-options.ts). */
   options?: unknown;
+  /**
+   * Walnut's own, never a route's: a thread whose conversation lives elsewhere (a topic's host
+   * thread, topics/topic-post.ts) opens `pending` with this summary, out of his sight until the
+   * node sets needs or answered or writes a new summary.
+   */
+  quiet_summary?: string;
 }
 
 /** A thread's options from a write, or a ThreadError naming what is wrong with them. */
@@ -1288,9 +1294,11 @@ export function openThread(file: ThreadsFile, input: OpenThreadInput, by: Thread
   if (typeof input.text !== 'string' || !input.text.trim()) throw new ThreadError('bad_input', 400, 'text (what reached you, for him) is required.');
   if (!THREAD_SOURCES.includes(input.from)) throw new ThreadError('bad_input', 400, `from must be one of ${THREAD_SOURCES.join(', ')}.`);
   if (input.state !== undefined && !THREAD_STATES.includes(input.state)) throw new ThreadError('bad_input', 400, `state must be one of ${THREAD_STATES.join(', ')}.`);
-  // A thread the node opens is for him to act on or follow: never hidden from the start.
-  if (input.state !== undefined && HIDDEN_STATES.has(input.state)) throw new ThreadError('bad_input', 400, 'A thread you open is for him to see: open it as needs or answered.');
-  if (waitsOnUser(input.state ?? 'needs')) checkHandedToUser(by, input);
+  const quiet = isStr(input.quiet_summary) && input.quiet_summary.trim() ? clip(input.quiet_summary, THREAD_REPLY_MAX) : undefined;
+  // A thread the node opens is for him to act on or follow: never hidden from the start (but Walnut's quiet one).
+  if (quiet && input.state !== undefined && input.state !== 'pending') throw new ThreadError('bad_input', 400, 'A quiet thread opens pending.');
+  if (!quiet && input.state !== undefined && HIDDEN_STATES.has(input.state)) throw new ThreadError('bad_input', 400, 'A thread you open is for him to see: open it as needs or answered.');
+  if (!quiet && waitsOnUser(input.state ?? 'needs')) checkHandedToUser(by, input);
   const options = optionsOf(input.options);
   if (options.length && !waitsOnUser(input.state ?? 'needs')) throw new ThreadError('bad_input', 400, 'options go with state needs: he picks one while it waits on him.');
   if (waitsOnUser(input.state ?? 'needs')) checkChoicesAsOptions(by, [input.text], options);
@@ -1299,7 +1307,7 @@ export function openThread(file: ThreadsFile, input: OpenThreadInput, by: Thread
   const s = by === 'human' ? undefined : verifiedSource(source);
   const thread: OrgThread = {
     id: input.id && THREAD_ID_RE.test(input.id) ? input.id : newThreadId(),
-    title: clip(input.title, THREAD_TITLE_MAX), titled: true, state: input.state ?? 'needs', messages: [],
+    title: clip(input.title, THREAD_TITLE_MAX), titled: true, state: quiet ? 'pending' : input.state ?? 'needs', messages: [],
     opener: {
       text: clip(input.text, THREAD_ANSWER_MAX), at, from: input.from, by,
       ...(input.ref?.trim() ? { ref: clip(input.ref, THREAD_TITLE_MAX) } : {}),
@@ -1307,6 +1315,7 @@ export function openThread(file: ThreadsFile, input: OpenThreadInput, by: Thread
     },
     createdAt: at, updatedAt: at, by, ...(tasks.length ? { tasks } : {}), ...(options.length ? { options } : {}),
   };
+  if (quiet) { setReply(thread, quiet, by, source); thread.replyAt = at; }
   return { file: { ...file, threads: prune([...file.threads, thread], at) }, thread };
 }
 

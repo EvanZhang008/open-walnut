@@ -67,6 +67,9 @@ import {
 } from '@/components/org/org-answered';
 import { OrgPaneHandle } from '@/components/org/OrgPaneHandle';
 import { OrgRouterSetup } from '@/components/org/OrgRouterSetup';
+import { TopicChat } from '@/components/topics/TopicChat';
+import { topicOfKey } from '@/components/topics/topic-model';
+import { useTopicsOn } from '@/components/topics/topics-flag';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { useRouterAreaNames } from '@/components/org/router-area-names';
 import { onOpenOnPage } from '@/utils/taskbar-minimize';
@@ -249,6 +252,9 @@ export function OrgPage() {
   // Until the URL has caught up, the page is already at the restored place (no first lead flashing by).
   const pendingPlace = restoring.current && !params.get('node') && !params.get('open') ? restore : null;
   const nodeParam = params.get('node') ?? pendingPlace?.node ?? null;
+  // A topic is selected like a node, `topic:<id>` (experiment topics): its chat takes the detail pane.
+  const topicsOn = useTopicsOn();
+  const topicId = topicsOn ? topicOfKey(nodeParam) : null;
   const tabParam = params.get('tab') ?? pendingPlace?.tab ?? null;
   const urlTab = TABS.includes(tabParam as OrgTab) ? (tabParam as OrgTab) : null;
   // With no node named (or one whose row is gone), the default is picked once the tasks are in and
@@ -271,7 +277,7 @@ export function OrgPage() {
   const nodeArriving = tasksUnknown && (nodeParam ? !rowOf(channels, nodeParam) : !settledDefault);
   // On a phone the list shows until a row is picked (and again when the picked one is gone).
   const picked = !!rowOf(channels, nodeParam);
-  const showDetail = !phone || picked;
+  const showDetail = !phone || picked || !!topicId;
   // The chart's cards: the row menu moves projects with them, and the leaders under a row come from them.
   const cards = useMemo(() => vpCards(channels.projects), [channels.projects]);
   const leaders = useOrgLeaders(cards, tasks);
@@ -646,7 +652,7 @@ export function OrgPage() {
           routerMenu={!!avatarEditor.edit}
           total={channels.rows.length}
           vps={vpCount(channels.rows)}
-          selectedKey={phone ? null : selected.key}
+          selectedKey={phone ? null : topicId ? nodeParam : selected.key}
           query={query}
           onQuery={setQuery}
           onSelect={select}
@@ -689,7 +695,8 @@ export function OrgPage() {
       {showDetail && (!phone || phoneView === 'detail') && (
         <section className="org-detail-pane" aria-label={selected.name} aria-busy={nodeArriving || undefined}>
           {routerSetup && <OrgRouterSetup tasks={tasks} onCancel={() => { setRouterSetup(false); setParams(() => { const next = liveParams(); next.delete('router_setup'); return next; }, { replace: true }); }} onDone={(id) => { setRouterSetup(false); refetch(); select(`router:${id}`); }} />}
-          {!nodeArriving && !routerSetup && <OrgNodeDetail
+          {topicId && !routerSetup && <TopicChat key={topicId} topicId={topicId} {...(phone ? { onBack: back } : {})} />}
+          {!topicId && !nodeArriving && !routerSetup && <OrgNodeDetail
             key={selected.key}
             row={selected}
             rows={channels.rows}

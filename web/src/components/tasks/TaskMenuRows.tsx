@@ -30,6 +30,7 @@ import { TaskStatusMenuSection } from './TaskStatusControl';
 import { BackgroundMenuItem, WatchMenuItem } from './WatchToggle';
 import { QuoteInSessionItem } from './QuoteInSessionItem';
 import { TeamMenuItems } from './TeamMenuItems';
+import { AddToTopicMenuItem } from '@/components/topics/topic-entry';
 import { TaskSyncMenuRows } from './TaskSyncMenuRows';
 import { PluginFieldsSection, usePluginTaskFields } from './PluginFieldPicker';
 import { MoveHostMenuItems } from '@/components/transfer/MoveHostMenuItems';
@@ -184,6 +185,7 @@ export function TaskMenuRows(p: TaskMenuRowsProps) {
         </KebabGroup>
 
         <TeamMenuItems task={task} afterAction={close} />
+        <AddToTopicMenuItem task={task} afterAction={close} />
 
         {/* A sync that failed or has not happened yet needs to be seen, outside the group. */}
         <TaskSyncWarning task={task} integrations={integrations} />

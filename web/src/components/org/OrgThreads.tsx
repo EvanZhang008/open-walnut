@@ -76,6 +76,8 @@ import type { OrgThread, OrgThreadMessage, OrgThreadState } from '@/api/org-thre
 import type { OrgThreadsState } from './useOrgThreads';
 import { OrgThreadSnooze } from './OrgThreadSnooze';
 import { PoppedThreadCard } from './PoppedThreadCard';
+import { TopicThreadBadge } from '@/components/topics/TopicThreadBadge';
+import { ThreadsTopicBar } from '@/components/topics/topic-entry';
 import { ThreadLetterAnswer, answersLetter } from './ThreadLetterAnswer';
 import { useFocusedThread } from './thread-focus';
 import { AskCard } from '@/components/actions/ActionNeeded';
@@ -487,6 +489,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
         </span>
         <span className="org-thread-title" data-testid="org-thread-title">{t.title}</span>
       </button>
+      <TopicThreadBadge threadId={t.id} />
       {snoozed && t.snoozed && <p className="org-thread-snoozed" data-testid="org-thread-snoozed-until">Snoozed until {backAt(t.snoozed.until, now)}</p>}
       {follows && <p className="org-thread-follows">Asks again about “{follows.title}”</p>}
       {/* It came here with its work from another node (core/org/thread-follow.ts), or left for one. */}
@@ -631,6 +634,7 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now }: Props
   const card = (t: OrgThread) => <ThreadItem key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={clock} snoozed={snoozedIds.has(t.id)} owner={owner} focused={focused === t.id} />;
   return (
     <div ref={rootRef} className="org-threads" data-testid="org-threads" onClick={onEntityClick}>
+      <ThreadsTopicBar owner={owner} />
       {state.error && <p className="org-thread-error" data-testid="org-threads-error">{state.error}</p>}
       {all === null && !state.error && <p className="org-threads-empty" aria-busy="true">Loading…</p>}
       {all !== null && !open.length && (

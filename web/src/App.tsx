@@ -31,6 +31,7 @@ import { LinkCaptureHost } from './plugins/LinkCaptureHost';
 import { PluginDialogHost } from './plugins/PluginDialogHost';
 import { PasswordsUnlockHost } from './plugins/PasswordsUnlockHost';
 import { SessionRawViewHost } from './components/sessions/SessionRawView';
+import { TopicDialogsHost } from './components/topics/TopicDialogsHost';
 import { MainPage } from './pages/MainPage';
 import { AgentsPage } from './pages/AgentsPage';
 import { OrgPage } from './pages/OrgPage';
@@ -191,6 +192,7 @@ export function App() {
       <QuickBarHost />
       <HostConnectCard />
       <FirstRunHost />
+      <TopicDialogsHost />
       <div className={isHome ? 'main-page-wrapper' : 'main-page-wrapper main-page-wrapper-hidden'}>
         <RouteShownContext.Provider value={isHome}>
           <StableMainPage visible={isHome} navigateRef={navigateRef} />

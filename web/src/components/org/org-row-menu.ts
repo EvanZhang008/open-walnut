@@ -16,6 +16,7 @@ import type { ChannelMenuTarget } from './OrgChannelList';
 import type { OrgTab } from './OrgNodeDetail';
 import { dropPlan, type VpCard } from './org-chart-model';
 import { rowTaskId, type ChannelRow } from './org-channels-model';
+import { orgNodeMember, topicMenuItems } from '@/components/topics/topic-entry';
 
 /** A picker one row opens: what it is for, its rows, and what a pick does. */
 export interface OrgRowPick {
@@ -57,6 +58,7 @@ export function orgRowMenu({ target, cards, select, openChart, pick, newDirector
     ...(canTalk ? [{ key: 'chat', label: 'Open chat', onSelect: () => select(r.key, 'chat') }] : []),
     { key: 'team', label: 'Open tasks', onSelect: () => select(r.key, 'team') },
     ...(editAvatar && rowTaskId(r) ? [{ key: 'avatar', label: 'Edit name and avatar…', onSelect: () => editAvatar(r) }] : []),
+    ...topicMenuItems(orgNodeMember(r)),
   ];
   if (r.kind === 'main') return [...items, { key: 'sep', divider: true }, { key: 'chart', label: 'Open the org chart', onSelect: () => openChart() }];
 

@@ -22,11 +22,12 @@ import { createEnvelopeKit } from './envelope-kit.js';
 const kit = createEnvelopeKit();
 
 export type WalnutMessageAttrName =
-  | 'from' | 'from-session' | 'from-task' | 'host'
+  | 'from' | 'from-session' | 'from-task' | 'host' | 'title'
   | 'about' | 'about-session' | 'about-task'
   | 'request' | 'asked' | 'outcome' | 'anonymous' | 'note';
 export type WalnutMessageAttrs = Partial<Record<WalnutMessageAttrName, string | undefined>>;
-export type WalnutMessageKind = 'peer-note' | 'reply' | 'notification' | 'trigger';
+/** `topic`: a topic's wake (core/topics/topic-text.ts), built on the server only (the daemons never write one). */
+export type WalnutMessageKind = 'peer-note' | 'reply' | 'notification' | 'trigger' | 'topic';
 
 const TAG = 'walnut-message';
 
@@ -71,7 +72,8 @@ export function buildWalnutMessage(input: {
   attrs?: WalnutMessageAttrs;
   body: string;
 }): string {
-  return kit.buildWalnutMessage(input);
+  // The kit's kind list is the daemons' (envelope-kit.ts); a server-only kind serializes the same way.
+  return kit.buildWalnutMessage(input as Parameters<typeof kit.buildWalnutMessage>[0]);
 }
 
 export interface ParsedWalnutMessage {

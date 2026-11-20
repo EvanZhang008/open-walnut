@@ -38,6 +38,8 @@ import { MailSortEngine } from './sort-engine.js'
 import { MailStore } from './store.js'
 import { MailSync, mailSyncForTesting, setActiveMailSync } from './sync.js'
 import { createMailTools } from './tools.js'
+import { createTopicMailTransport, tapTopicMailArrivals } from './topic-transport.js'
+import { registerTopicMailTransport } from '../../core/topics/topic-mail-port.js'
 import { MailUnsubscribe } from './unsubscribe.js'
 import { asksPerson, recordUnasked } from '../../core/approvals/ask-me.js'
 import { sensitiveHold } from '../../core/outbound/sensitive-hold.js'
@@ -300,7 +302,16 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   // and this plugin already owns exactly one timer. A replica arms no tick at all, which is also how
   // the digest stays off there without a second replica check.
   const captureIncoming = createMailRouterIntake({ store, home: routingHome, log: walnut.log })
-  sync = new MailSync({ walnut, store, service, retention, events, sends, approvals, digest, sort, captureIncoming, retryIncoming: captureIncoming.retry })
+  sync = new MailSync({
+    walnut, store, service, retention, events, sends, approvals, digest, sort,
+    // The topics mail bridge reads the same arrivals (core/topics/topic-mail.ts); the capture is unchanged.
+    captureIncoming: tapTopicMailArrivals(captureIncoming, store, walnut.log),
+    retryIncoming: captureIncoming.retry,
+  })
+  // Topic mail sends through the same drafts and approval ledger as every other mail. A replica sends nothing.
+  const unregisterTopicTransport = walnut.replica
+    ? () => undefined
+    : registerTopicMailTransport(createTopicMailTransport({ service, drafts, approvals, sends }))
   relistDue = (accountId) => sync.markRelistDue(accountId)
   relistNow = (accountId) => sync.relistNow(accountId)
   setActiveMailSync(sync)
@@ -554,6 +565,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   // reaching for "the current one" could.
   return {
     dispose: async () => {
+      unregisterTopicTransport()
       unregisterItemSource()
       unregisterRouterSource()
       accountsWatch.dispose()

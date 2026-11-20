@@ -26,6 +26,7 @@ import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { useDialogFocus } from '@/hooks/useDialogFocus';
 import { log } from '@/utils/log';
 import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
+import { orgNodeMember, topicMenuItems } from '@/components/topics/topic-entry';
 import { OrgChartProject } from './OrgChartProject';
 import { OrgChartCeo, OrgChartVp, pressable } from './OrgChartVp';
 import { OrgLeaders } from './OrgLeaders';
@@ -241,6 +242,7 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
     if (!card) {
       return [
         { key: 'open', label: 'Open chat', onSelect: () => pick(main.key) },
+        ...topicMenuItems(orgNodeMember(main)),
         ...(mainTask ? [{ key: 'edit', label: 'Edit instructions…', onSelect: () => openEditor({ kind: 'edit', task: mainTask }, from) }] : []),
       ];
     }
@@ -249,10 +251,11 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
       { key: 'open', label: 'Open chat', onSelect: () => pick(card.key) },
       // Its Directors' fold opens on a name input (director-actions.ts), for a VP with none yet too.
       ...(leadersOn && card.role === 'VP' && card.projects.length ? [{ key: 'director', label: 'New Director…', onSelect: () => askNewDirector(card.key, 'chart') }] : []),
+      ...topicMenuItems(orgNodeMember(card.row)),
       ...(card.project ? [{
-        key: 'edit', label: 'Edit name and instructions…',
-        onSelect: () => openEditor({ kind: 'edit', ...(lead ? { task: lead } : {}), project: card.project, name: card.name }, from),
-      }] : []),
+      key: 'edit', label: 'Edit name and instructions…',
+      onSelect: () => openEditor({ kind: 'edit', ...(lead ? { task: lead } : {}), project: card.project, name: card.name }, from),
+    }] : []),
     ];
   };
   const nodeMore = (card: VpCard | null, label: string) => (

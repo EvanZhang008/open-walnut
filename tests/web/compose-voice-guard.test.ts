@@ -103,6 +103,7 @@ const EXACT: Record<string, Exact> = {
   'apps/mail/MailFilterCard.tsx|input data-testid=testId': MACHINE,
   'apps/mail/compose/AddressChipsField.tsx|input data-testid=`mail-compose-${name}`': MACHINE,
   'components/agents/AgentForm.tsx|input id="agent-id"': MACHINE,
+  'components/topics/MemberPicker.tsx|input data-testid="topic-person-email"': MACHINE,
   'components/apps-page/PluginStoreGrid.tsx|input id="plugin-source-url"': MACHINE,
   'components/commands/CommandForm.tsx|input id="cmd-name"': MACHINE,
   'components/common/DatePicker.tsx|input placeholder="3:30 PM"': MACHINE,

@@ -151,6 +151,8 @@ enum TimelineInboundMessage {
         "completed", "error", "stopped", "blocked",
         // Notes that asked for no reply, held for the next message (sessions/quiet-notes.ts).
         "quiet-notes",
+        // A topic's lines that did not wake the member (topics/topic-text.ts on the server).
+        "topic-news",
     ]
 
     private static func isRider(_ attributes: [String: String]) -> Bool {

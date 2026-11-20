@@ -85,6 +85,7 @@ const INTERRUPTING_SEND_SOURCES: ReadonlySet<string> = new Set([
   'brief-refresh', // sessions/brief-refresh.ts: the user opened a node whose Brief is stale
   'choice-recheck', // sessions/needs-recheck.ts: a Board owner asked to confirm a choice
   'thread-recheck', // org/thread-recheck.ts: a node asked about a thread that sat with no reply
+  'topic',         // topics/topic-delivery.ts: a group chat the task is in woke it
   'idle-compact',  // sessions/idle-compaction.ts: a quiet turn, which moves no phase anyway
   'context-compact', // sessions/context-full-recovery.ts: the same quiet /compact, for a full context
 ]);

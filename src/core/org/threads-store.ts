@@ -232,7 +232,7 @@ async function refuseSameAskThread(taskId: string, text: string | undefined, by:
  * session record, never from the body); absent = an unknown writer (or the user, by 'human').
  */
 export async function openNodeThread(taskId: string, input: OpenThreadInput, by: ThreadWriter, source?: ThreadTextSource): Promise<OrgThread> {
-  if ((input.state ?? 'needs') === 'needs') await refuseSameAskThread(taskId, input.title, by, input);
+  if (!input.quiet_summary?.trim() && (input.state ?? 'needs') === 'needs') await refuseSameAskThread(taskId, input.title, by, input);
   const at = new Date().toISOString();
   const thread = await mutateThreads(taskId, (cur) => {
     const r = openThread(cur, input, by, at, source);

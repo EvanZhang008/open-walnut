@@ -196,6 +196,10 @@ export const EventNames = {
   // Envelope only: clients re-read GET /api/v1/tasks/:id/threads.
   ORG_THREADS_CHANGED: 'org-threads:changed',
 
+  // A topic (core/topics/: a group chat of tasks, org nodes and people) changed: a message, a
+  // member, its close. Envelope only: clients re-read GET /api/topics/:id.
+  TOPIC_UPDATED: 'topic:updated',
+
   // Who holds a Passwords unlock changed (core/vault/sessions.ts). Envelope only: each
   // window re-reads GET /api/v1/vault/status (web/src/api/vault-live.ts).
   VAULT_CHANGED: 'vault:changed',

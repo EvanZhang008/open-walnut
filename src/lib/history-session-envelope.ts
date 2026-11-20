@@ -119,6 +119,8 @@ export interface SessionEnvelope {
    *  outcome sentence (an org digest's projects, a status push's tasks), before
    *  `Next:`. Walnut's words, not another session's. */
   detail?: string;
+  /** A topic's wake (wire kind `topic`, shown as a peer-note from the topic): which topic. */
+  topic?: { id: string };
   /** The exact slice this envelope occupied — the "raw envelope" disclosure. */
   raw: string;
 }
@@ -469,8 +471,9 @@ const TAG_OPENER = /<walnut-message\s/g;
 const TAG_HEAD = /^<walnut-message\s/;
 /** `name="value"`. A value cannot hold a `"` — the serializer escapes it. */
 const ATTR = /([a-z][a-z0-9_-]*)="([^"]*)"/g;
-/** The kinds the tag carries. Anything else degrades to raw text on purpose. */
-const TAG_KINDS = new Set(['peer-note', 'reply', 'notification', 'trigger', 'app-state']);
+/** The kinds the tag carries. Anything else degrades to raw text on purpose. `topic` is a topic's
+ *  wake (core/topics/topic-text.ts): it reads as a note from the topic, its members' words. */
+const TAG_KINDS = new Set(['peer-note', 'reply', 'notification', 'trigger', 'app-state', 'topic']);
 /** `Title [8hex]` as `sessionHandle()` prints it (4+ so a short id still reads). */
 const HANDLE = /\[([0-9a-f]{4,})\]\s*$/i;
 /** The one line a peer-note with a `request` may be followed by. */
@@ -546,8 +549,10 @@ function parseWalnutTag(text: string, at: number): ParseAt | 'broken' {
   const head = text.slice(at, headEnd).replace(/\r$/, '');
   if (!head.endsWith('>')) return 'broken';
   const attrs = parseAttrs(head.slice(TAG.length, head.length - 1));
-  const kind = attrs.kind;
-  if (!kind || !TAG_KINDS.has(kind)) return 'broken';
+  const wire = attrs.kind;
+  if (!wire || !TAG_KINDS.has(wire)) return 'broken';
+  const topicId = wire === 'topic' ? attrs.about : undefined;
+  const kind = wire === 'topic' ? 'peer-note' : wire;
 
   const bodyStart = headEnd + 1;
   const closeAt = text.indexOf(TAG_CLOSE, bodyStart);
@@ -621,6 +626,7 @@ function parseWalnutTag(text: string, at: number): ParseAt | 'broken' {
       ...(followUp ? { followUp } : {}),
       ...(quote.length ? { quote } : {}),
       ...(detail ? { detail } : {}),
+      ...(topicId ? { topic: { id: topicId } } : {}),
       raw: text.slice(at, end),
     },
   };

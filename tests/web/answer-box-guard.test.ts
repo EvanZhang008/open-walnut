@@ -43,6 +43,7 @@ const BOXES: Record<string, Kind> = {
   'components/sessions/SessionChatHistory.tsx': COMPOSER,
   'components/sessions/SessionDiffView.tsx': COMPOSER,
   'components/transfer/TransferDialog.tsx': COMPOSER,
+  'components/topics/NewTopicDialog.tsx': COMPOSER,
   'components/sessions/TriggerPickerPopover.tsx': COMPOSER,
   // Forms and editors: settings, code, instructions, never an answer to an ask.
   'components/common/AnswerBox.tsx': form('the shared box itself'),
