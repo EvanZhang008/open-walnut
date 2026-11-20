@@ -7,6 +7,7 @@
  */
 import type { MemberRef, Topic, TopicMember, TopicMessage, TopicSummary } from '@/api/topics';
 import { isImeKey } from '@/utils/ime-key';
+import { QUEUED_WHY } from '../../../../src/core/topics/topic-reasons';
 
 /** The Org page selects a topic through its `node` param, beside 'main' and 'project:<key>'. */
 export const TOPIC_KEY_PREFIX = 'topic:';
@@ -41,6 +42,7 @@ export { mentionShortForms, parseMentions } from '../../../../src/core/topics/to
 /** A row of the @ list: a member first, else a task not in the topic yet (picking it asks first). */
 export type MentionCandidate =
   | { kind: 'member'; member: MemberLike }
+  | { kind: 'org'; node: string; name: string }
   | { kind: 'task'; taskId: string; name: string };
 
 /** How well `name` answers `q`: 0 starts with it, 1 a word starts with it, 2 holds it, -1 no. */
@@ -62,12 +64,16 @@ export function rankByName<T>(rows: readonly T[], nameOf: (r: T) => string, quer
     .map((x) => x.r);
 }
 
-/** The @ autocomplete: members that match first, then open tasks that are not members yet. */
+/**
+ * The @ autocomplete: members that match first, then the CEO and VPs (Org nodes) and open tasks
+ * that are not members yet.
+ */
 export function mentionCandidates(
   query: string,
   members: readonly MemberLike[],
   tasks: ReadonlyArray<{ id: string; name: string }>,
   limit = 8,
+  nodes: ReadonlyArray<{ node: string; name: string }> = [],
 ): MentionCandidate[] {
   const q = query.trim().toLowerCase();
   const rank = <T,>(rows: T[], nameOf: (r: T) => string) => rankByName(rows, nameOf, q);
@@ -76,6 +82,8 @@ export function mentionCandidates(
   const out: MentionCandidate[] = rank([...live], (m) => m.name).map((member) => ({ kind: 'member', member }));
   // Tasks only once something is typed: a bare "@" lists the members.
   if (q) {
+    const nodesIn = new Set(live.flatMap((m) => (m.ref.kind === 'org' ? [m.ref.node] : [])));
+    for (const n of rank(nodes.filter((x) => !nodesIn.has(x.node)), (x) => x.name)) out.push({ kind: 'org', node: n.node, name: n.name });
     const others = rank(tasks.filter((t) => !inTopic.has(t.id)), (t) => t.name);
     for (const t of others) out.push({ kind: 'task', taskId: t.id, name: t.name });
   }
@@ -132,16 +140,27 @@ export function reachLine(m: Pick<TopicMessage, 'woke' | 'folded' | 'toMail' | '
 export function reachSummary(m: Pick<TopicMessage, 'woke' | 'folded' | 'toMail' | 'mailed' | 'refused'>, members: readonly MemberLike[]): { line: string; full: string } {
   const full = reachLine(m, members);
   if (!full) return { line: '', full };
-  const nameOf = (id: string) => shortName(members.find((x) => x.id === id)?.name ?? '');
+  // The short name, unless another member shares it ("Release notes · Atlas" and "· Lantern").
+  const shorts = members.map((x) => shortName(x.name));
+  const nameOf = (id: string) => {
+    const full = members.find((x) => x.id === id)?.name ?? '';
+    const short = shortName(full);
+    return shorts.filter((s) => s === short).length > 1 ? full : short;
+  };
   const names = (ids: readonly string[]) => ids.map(nameOf).filter(Boolean);
   const say = (ids: readonly string[], one: (n: string) => string, many: (k: number) => string) => {
     const n = names(ids);
     return n.length === 0 ? '' : n.length === 1 ? one(n[0]!) : many(n.length);
   };
-  const refusedIds = (m.refused ?? []).map((r) => r.member);
+  // A refused wake that still reaches the member later (folded: the round's budget or a pair
+  // limit; or queued behind its running turn) reads later; only one that reaches no one is "not woken".
+  const folded = m.folded ?? [];
+  const later = (r: { member: string; why: string }) => folded.includes(r.member) || r.why === QUEUED_WHY;
+  const refusedIds = (m.refused ?? []).filter((r) => !later(r)).map((r) => r.member);
+  const readLater = [...new Set([...folded, ...(m.refused ?? []).filter(later).map((r) => r.member)])].filter((id) => !refusedIds.includes(id));
   const parts = [
     say(m.woke ?? [], (n) => `Woke ${n}`, (k) => `Woke ${k}`),
-    say((m.folded ?? []).filter((id) => !refusedIds.includes(id)), (n) => `${n} reads later`, (k) => `${k} read later`),
+    say(readLater, (n) => `${n} reads later`, (k) => `${k} read later`),
     say(m.mailed ?? [], (n) => `Mailed ${n}`, (k) => `Mailed ${k}`),
     say((m.toMail ?? []).filter((id) => !(m.mailed ?? []).includes(id)), (n) => `${n} by email`, (k) => `${k} by email`),
     say(refusedIds, (n) => `${n} not woken`, (k) => `${k} not woken`),

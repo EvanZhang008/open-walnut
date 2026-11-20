@@ -30,7 +30,7 @@ import {
 import { createTopicMailState, lineKey, memberKey, pruneState, type TopicMailState } from './topic-mail-state.js'
 import { claimTopicMail, postClaimedMails, releaseTopicMailClaims, type TopicMailClaim } from './topic-mail-inbound.js'
 import { canonicalMessageId, topicMailBody, topicMailSubject } from './topic-mail-text.js'
-import { authorName, MAIL_EVERY_MINUTES_DEFAULT, USER_FALLBACK_NAME, type Topic, type TopicMember, type TopicMessage } from './topics-model.js'
+import { authorName, MAIL_EVERY_MINUTES_DEFAULT, USER_FALLBACK_NAME, midSentenceName, type Topic, type TopicMember, type TopicMessage } from './topics-model.js'
 
 export const TOPIC_MAIL_PASS_MS = 60_000
 export const FAILURE_LINE_AFTER = 3
@@ -263,7 +263,7 @@ export function createTopicMailBridge(deps: TopicMailBridgeDeps): TopicMailBridg
           e.budgetTold = topic.round.n
           return true
         })
-        if (tell) await postLine(topic.id, `${member.name} got ${PERSON_MAILS_PER_ROUND} mails this round; nothing more is mailed to them until ${owner} writes again.`)
+        if (tell) await postLine(topic.id, `${member.name} got ${PERSON_MAILS_PER_ROUND} mails this round; nothing more is mailed to them until ${midSentenceName(owner)} writes again.`)
         return
       }
     }

@@ -77,6 +77,8 @@
 .topic-msg-gutter { width: 32px; flex: none; display: flex; justify-content: center; }
 .topic-msg-clock { visibility: hidden; padding-top: 3px; font-size: 10.5px; color: var(--fg-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .topic-msg:hover .topic-msg-clock { visibility: visible; }
+@media (hover: none) { .topic-msg-clock { visibility: visible; } }
+.topic-sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .topic-msg-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .topic-msg-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; line-height: 20px; }
 .topic-msg-name { flex: none; max-width: 60%; font-size: 14px; font-weight: 600; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

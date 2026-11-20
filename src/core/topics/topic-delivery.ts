@@ -59,7 +59,8 @@ export const NO_TASK_WHY = 'its task was not found';
 
 export const ORG_OFF_WHY = 'the org is off';
 /** A wake held back because the member's topic turn still runs: it reads the line when that turn ends. */
-export const QUEUED_WHY = 'its turn is still running: it reads this when that turn ends';
+export { QUEUED_WHY } from './topic-reasons.js';
+import { QUEUED_WHY } from './topic-reasons.js';
 
 export type MemberTarget = { taskId: string; sessionId: string; orgNode: boolean } | { why: string; taskId?: string };
 

@@ -194,6 +194,11 @@ export function capMessages(topic: Topic): void {
 /** What the user is called when his own name is not set (config.user.name). */
 export const USER_FALLBACK_NAME = 'The user';
 
+/** The user's name inside a sentence: the fallback reads "the user", a set name stays as it is. */
+export function midSentenceName(name: string): string {
+  return name === USER_FALLBACK_NAME ? 'the user' : name;
+}
+
 /** The name a message's author reads as. */
 export function authorName(topic: Pick<Topic, 'members'>, author: TopicMessage['author'], userName = USER_FALLBACK_NAME): string {
   if (author === 'human') return userName;

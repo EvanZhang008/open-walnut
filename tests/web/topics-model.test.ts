@@ -156,9 +156,23 @@ describe('reachSummary, names and blocks', () => {
     expect(reachSummary({ woke: ['mb-doc', 'mb-vp'], mailed: ['mb-ann'] }, MEMBERS).line).toBe('Woke 2 · Mailed Ann');
   });
 
-  it('says a refused wake as not woken, not also as reads later', () => {
+  it('counts a refused wake that still reaches the member (folded, or queued behind its turn) as reads later', async () => {
+    const { QUEUED_WHY } = await import('../../src/core/topics/topic-reasons')
     expect(reachSummary({ folded: ['mb-doc', 'mb-docw'], refused: [{ member: 'mb-doc', why: 'round budget used up' }] }, MEMBERS).line)
-      .toBe('Doc writer reads later · Doc not woken');
+      .toBe('2 read later');
+    expect(reachSummary({ refused: [{ member: 'mb-doc', why: QUEUED_WHY }] }, MEMBERS).line).toBe('Doc reads later');
+  });
+
+  it('says not woken only for a wake that reaches no one', () => {
+    expect(reachSummary({ woke: ['mb-vp'], refused: [{ member: 'mb-doc', why: 'its task has no session' }] }, MEMBERS).line)
+      .toBe('Woke Walnut VP · Doc not woken');
+  });
+
+  it('keeps the full name when two members share a short one', () => {
+    const atlas = m('mb-a', 'Release notes · Atlas');
+    const lantern = m('mb-l', 'Release notes · Lantern');
+    expect(reachSummary({ woke: ['mb-a'] }, [atlas, lantern]).line).toBe('Woke Release notes · Atlas');
+    expect(reachSummary({ woke: ['mb-a'] }, [atlas]).line).toBe('Woke Release notes');
   });
 
   it('is empty when the message reached no one', () => {
@@ -299,5 +313,16 @@ describe('who the picker and the @ list offer', () => {
     expect(hints).toContain('Leads Acme')
     expect(hints).not.toContain('Org node')
     expect(openTaskNames(tasks).map((t) => t.id)).toEqual(['t-work'])
+  })
+})
+
+describe('the @ list offers Org nodes', () => {
+  it('lists the CEO and VPs not in the topic once something is typed, after the members', () => {
+    const nodes = [{ node: 'main', name: 'CEO' }, { node: 'project:walnut', name: 'Walnut VP' }, { node: 'project:acme', name: 'Acme VP' }]
+    const rows = mentionCandidates('vp', MEMBERS, [], 8, nodes)
+    // Walnut VP is a member already (an org ref): it is listed once, as the member.
+    expect(rows.filter((r) => r.kind === 'member').map((r) => r.kind === 'member' && r.member.id)).toEqual(['mb-vp'])
+    expect(rows.filter((r) => r.kind === 'org').map((r) => r.kind === 'org' && r.node)).toEqual(['project:acme'])
+    expect(mentionCandidates('', MEMBERS, [], 8, nodes).some((r) => r.kind === 'org')).toBe(false)
   })
 })

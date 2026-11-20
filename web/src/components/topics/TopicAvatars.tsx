@@ -80,17 +80,19 @@ export function GroupAvatar({ members, size = 34, testId = 'topic-group-avatar' 
 }
 
 /** Up to four members, overlapping, the host first; "+N" for the rest unless `noMore` (a count is beside it). */
-export function StackedAvatars({ members, size = 22, max = 4, testId = 'topic-stack', noMore = false }: {
+export function StackedAvatars({ members, size = 22, max = 4, testId = 'topic-stack', noMore = false, noTitle = false }: {
   members: ReadonlyArray<Pick<TopicMember, 'id' | 'name' | 'ref' | 'role' | 'status'>>;
   size?: number;
   max?: number;
   testId?: string;
   noMore?: boolean;
+  /** Inside a button with its own label and title: no tooltip of names of its own. */
+  noTitle?: boolean;
 }) {
   const { shown, more: extra } = stackedAvatars(members, max);
   const more = noMore ? 0 : extra;
   return (
-    <span className="topic-stack" data-testid={testId} data-count={shown.length + more} title={members.filter((m) => m.status !== 'left').map((m) => m.name).join(', ')}>
+    <span className="topic-stack" data-testid={testId} data-count={shown.length + more} title={noTitle ? undefined : members.filter((m) => m.status !== 'left').map((m) => m.name).join(', ')}>
       {shown.map((m) => <MemberAvatar key={m.id} who={{ name: m.name, ref: m.ref }} size={size} />)}
       {more > 0 && <span className="topic-stack-more" style={{ height: size, minWidth: size }}>+{more}</span>}
     </span>

@@ -104,6 +104,8 @@ function Message({ m, topic, cont }: { m: LocalMessage; topic: Topic; cont: bool
           : <MemberAvatar who={human ? 'human' : { name: who.kind === 'member' ? who.name : '', ...(ref ? { ref } : {}) }} size={32} />}
       </span>
       <div className="topic-msg-body">
+        {/* A line that continues a block shows no name; a screen reader still hears who wrote it. */}
+        {cont && <span className="topic-sr-only">{human ? name : shortName(name)}</span>}
         {!cont && (
           <span className="topic-msg-head">
             <span className="topic-msg-name" data-testid="topic-message-name" title={name}>{human ? name : shortName(name)}</span>
@@ -174,9 +176,9 @@ export function TopicChat({ topicId, onBack }: { topicId: string; onBack?: () =>
           <span className="topic-head-sub" data-testid="topic-subtitle">{topicSubtitle(topic)}{topic.closed ? ' · closed' : ''}</span>
         </span>
         <button ref={membersRef} type="button" className="topic-ghost-btn topic-head-members" data-testid="topic-toggle-side" aria-pressed={shown}
-          aria-label="Members" title={shown ? 'Hide members' : 'Show members'}
+          aria-label={`Members, ${liveCount}`} title={shown ? 'Hide members' : 'Show members'}
           onClick={() => (narrow ? setSheetOverlayOpen(!sheetOverlayOpen) : setSide(!side))}>
-          <StackedAvatars members={topic.members} size={22} max={3} noMore testId="topic-head-stack" />
+          <StackedAvatars members={topic.members} size={22} max={3} noMore noTitle testId="topic-head-stack" />
           <span className="topic-head-count">{liveCount}</span>
         </button>
         {!topic.closed && <button type="button" className="topic-ghost-btn" data-testid="topic-close" onClick={() => void close()}>Close</button>}

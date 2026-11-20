@@ -66,6 +66,17 @@ export function openTaskNames(tasks: readonly Task[]): OpenTaskName[] {
   return tasks.filter((t) => !isDone(t) && t.org_role !== 'main' && t.org_role !== 'lead').map((t) => ({ id: t.id, name: orgDisplayTitle(t) }));
 }
 
+export interface OrgNodeName { node: string; name: string }
+
+/** The CEO and the VPs as Org nodes, for the composer's @ list (the picker's first rows). */
+export function orgNodeNames(tasks: readonly Task[]): OrgNodeName[] {
+  return memberCandidates(tasks).flatMap((c) => (c.ref.kind === 'org' ? [{ node: c.ref.node, name: c.name }] : []));
+}
+
+export function useOrgNodeNames(): OrgNodeName[] {
+  return useKeptList(orgNodeNames, (a, b) => a.node === b.node && a.name === b.name);
+}
+
 export function useOpenTaskNames(): OpenTaskName[] {
   return useKeptList(openTaskNames, (a, b) => a.id === b.id && a.name === b.name);
 }

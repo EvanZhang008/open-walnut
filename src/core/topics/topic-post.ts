@@ -6,7 +6,7 @@
 import { log } from '../../logging/index.js';
 import { CEO_LABEL, ORG_MAIN_NODE, VP_LABEL, orgDisplayTitle } from '../org/org-tree.js';
 import {
-  MAIL_EVERY_MINUTES_DEFAULT, TOPIC_MEMBERS_MAX, TOPIC_TEXT_MAX, TOPIC_TITLE_MAX, TopicError, USER_FALLBACK_NAME,
+  MAIL_EVERY_MINUTES_DEFAULT, TOPIC_MEMBERS_MAX, TOPIC_TEXT_MAX, TOPIC_TITLE_MAX, TopicError, USER_FALLBACK_NAME, midSentenceName,
   freshRound, isAgentMember, mentionsOf, newMemberId, newMessageId, newTopicId, sameRef, uniqueName, walnutLine,
   type MemberId, type MemberRef, type MessageVia, type Topic, type TopicActor, type TopicMember, type TopicMessage,
 } from './topics-model.js';
@@ -294,8 +294,7 @@ export async function closeTopic(topicId: string, by: TopicActor): Promise<{ top
   const { topic, out } = await mutateTopic(topicId, (t) => {
     if (t.closed) throw new TopicError('closed', 409, `Topic ${t.id} is already closed.`);
     const at = new Date().toISOString();
-    // Mid-sentence the fallback name reads "the user", never "The user".
-    const closer = by === 'human' ? (name === USER_FALLBACK_NAME ? name.toLowerCase() : name) : t.members.find((m) => m.ref.kind === 'task' && m.ref.taskId === by.slice(5))?.name ?? 'a member';
+    const closer = by === 'human' ? midSentenceName(name) : t.members.find((m) => m.ref.kind === 'task' && m.ref.taskId === by.slice(5))?.name ?? 'a member';
     const message = walnutLine(`Closed by ${closer}.`, at);
     t.messages.push(message);
     const plan = planClosing(t);

@@ -179,3 +179,12 @@ describe('a person writes (by mail)', () => {
     expect(byAgent.mailNow).toEqual([KIT])
   })
 })
+
+describe('the user named inside a sentence', () => {
+  it('reads "the user" for the fallback name and keeps a set name', async () => {
+    const { budgetLineText } = await import('../../../src/core/topics/topic-wake.js')
+    const { USER_FALLBACK_NAME } = await import('../../../src/core/topics/topics-model.js')
+    expect(budgetLineText(USER_FALLBACK_NAME)).toMatch(/wait for the user\.$/)
+    expect(budgetLineText('Evan')).toMatch(/wait for Evan\.$/)
+  })
+})

@@ -17,8 +17,8 @@ import { detectMention } from '@/components/chat/mention-trigger';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { draftKey } from '@/utils/drafts';
-import { mentionCandidates, mentionKeyAction, refKey, taskRef, type MentionCandidate } from './topic-model';
-import { useOpenTaskNames } from './member-candidates';
+import { mentionCandidates, mentionKeyAction, orgRef, refKey, taskRef, type MentionCandidate } from './topic-model';
+import { useOpenTaskNames, useOrgNodeNames } from './member-candidates';
 import { MemberAvatar } from './TopicAvatars';
 import type { TopicActions } from './useTopics';
 
@@ -34,7 +34,8 @@ export function TopicComposer({ topic, actions }: { topic: Topic; actions: Pick<
   const [prefill, setPrefill] = useState<{ text: string; nonce: number } | null>(null);
   const [refused, setRefused] = useState<string | null>(null);
   const openTasks = useOpenTaskNames();
-  const rows = useMemo(() => (at ? mentionCandidates(at.query, topic.members, openTasks) : []), [at, topic.members, openTasks]);
+  const orgNodes = useOrgNodeNames();
+  const rows = useMemo(() => (at ? mentionCandidates(at.query, topic.members, openTasks, 8, orgNodes) : []), [at, topic.members, openTasks, orgNodes]);
   const open = !!at && rows.length > 0;
   const placement = useMenuPlacement(open, wrap, menuRef, { preferSide: 'up', align: 'start', minHeight: 120, onAnchorLost: () => setAt(null) });
 
@@ -55,7 +56,7 @@ export function TopicComposer({ topic, actions }: { topic: Topic; actions: Pick<
     if (c.kind === 'member') { insert(c.member.name); return; }
     const yes = await confirm({ title: `Add ${c.name} to this topic?`, message: 'It is woken when someone names it with @, and reads what it missed then.', confirmLabel: 'Add to topic' });
     if (!yes) return;
-    if (!(await actions.addMembers([taskRef(c.taskId)]))) return;
+    if (!(await actions.addMembers([c.kind === 'org' ? orgRef(c.node) : taskRef(c.taskId)]))) return;
     insert(c.name);
   };
   const onKeyDownCapture = (e: KeyboardEvent) => {
@@ -105,14 +106,15 @@ export function TopicComposer({ topic, actions }: { topic: Topic; actions: Pick<
         <div ref={menuRef} role="listbox" aria-label="Mention a member" className="task-kebab-menu topic-mention-menu" data-testid="topic-mention-menu"
           style={menuPlacementStyle(placement)} onPointerDown={(e) => e.stopPropagation()} onMouseDown={(e) => e.preventDefault()}>
           {rows.map((c, i) => {
-            const key = c.kind === 'member' ? c.member.id : refKey(taskRef(c.taskId));
+            const ref = c.kind === 'member' ? c.member.ref : c.kind === 'org' ? orgRef(c.node) : taskRef(c.taskId);
+            const key = c.kind === 'member' ? c.member.id : refKey(ref);
             const name = c.kind === 'member' ? c.member.name : c.name;
             return (
               <button key={key} type="button" role="option" aria-selected={i === hi}
                 className={`task-kebab-item topic-mention-row${i === hi ? ' task-kebab-item-active' : ''}`}
                 data-testid="topic-mention-row" data-kind={c.kind}
                 onMouseEnter={() => setHi(i)} onClick={() => void pick(c)}>
-                <MemberAvatar who={{ name, ref: c.kind === 'member' ? c.member.ref : taskRef(c.taskId) }} size={20} />
+                <MemberAvatar who={{ name, ref }} size={20} />
                 <span className="topic-mention-name">{name}</span>
                 <span className="topic-mention-hint">{c.kind === 'member' ? (c.member.role === 'host' ? 'Host' : 'In the topic') : 'Add to topic'}</span>
               </button>

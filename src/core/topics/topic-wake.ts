@@ -15,7 +15,7 @@
  * Delivery (topic-delivery.ts) may still refuse a planned wake (no session, the task is complete).
  */
 import {
-  ROUND_WAKES, freshRound, isAgentMember,
+  ROUND_WAKES, freshRound, isAgentMember, midSentenceName,
   type MemberId, type Topic, type TopicMessage, type TopicRound,
 } from './topics-model.js';
 
@@ -41,7 +41,7 @@ export const PAIR_LIMIT_WHY = 'pair limit';
 export const BUDGET_WHY = 'round budget used up';
 
 export function budgetLineText(userName: string): string {
-  return `This round's ${ROUND_WAKES} member wakes are used up; the rest wait for ${userName}.`;
+  return `This round's ${ROUND_WAKES} member wakes are used up; the rest wait for ${midSentenceName(userName)}.`;
 }
 
 function emptyPlan(round: TopicRound): DeliveryPlan {
