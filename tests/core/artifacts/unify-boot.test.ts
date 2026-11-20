@@ -65,7 +65,12 @@ describe('the one tree at boot', () => {
     expect(fss.existsSync(at('artifacts/skills/proof-video/SKILL.md'))).toBe(true)
     // The bookmarks follow; the old folders are gone, kept in the backup.
     expect((await getConfig()).favorites?.notes).toEqual(['projects/Marina/notes/plan.md', 'notes/tidepool/pier.md'])
-    expect(fss.existsSync(at('notes'))).toBe(false)
+    // The old place answers through links (old-places.ts): a script's old absolute path reads and writes the tree.
+    expect(await fs.readFile(at('notes/marina/plan.md'), 'utf-8')).toBe('# Plan\n')
+    expect(await fs.readFile(at('notes/Projects/Marina/Tracking.md'), 'utf-8')).toBe('# Tracking\n')
+    expect((await fs.lstat(at('notes/marina'))).isSymbolicLink()).toBe(true)
+    await fs.writeFile(at('notes/tidepool/buoys.md'), 'Buoys.\n')
+    expect(await fs.readFile(at('artifacts/notes/tidepool/buoys.md'), 'utf-8')).toBe('Buoys.\n')
     // A path a message named under the folder's first name still opens.
     expect(await fs.readFile(at(`knowledge/nodes/${task.id}/reflections/2026-11-19.md`), 'utf-8')).toBe('# Session reflection\n')
     expect(await fs.readFile(at('knowledge/org/skills/proof-video/SKILL.md'), 'utf-8')).toContain('Sharp.')
@@ -83,6 +88,10 @@ describe('the one tree at boot', () => {
     expect(notesRoot()).toBe(at('notes'))
     expect(await fs.readFile(at('notes/marina/plan.md'), 'utf-8')).toBe('# Plan\n')
     expect(await fs.readFile(at(`artifacts/nodes/${task.id}/MEMORY.md`), 'utf-8')).toContain('- a new line')
+    // The links went before the notes came home: real folders again, the file written through a link included.
+    expect((await fs.lstat(at('notes/marina'))).isSymbolicLink()).toBe(false)
+    expect(await fs.readFile(at('notes/tidepool/buoys.md'), 'utf-8')).toBe('Buoys.\n')
+    expect(fss.existsSync(at('notes/.walnut-links'))).toBe(false)
     expect(nodeArtifactsDir(task.id)).toBe(at(`artifacts/nodes/${task.id}`))
     expect((await getConfig()).favorites?.notes).toEqual(['marina/plan.md', 'tidepool/pier.md'])
     expect(fss.existsSync(at('knowledge/.walnut-links'))).toBe(false)
@@ -134,7 +143,38 @@ describe('what names a note follows the tree (review 2026-11-20)', () => {
     expect(resolveNotePath('marina/plan.md')).toBe(at('artifacts/projects/Cove/notes/plan.md'))
     expect(nodeArtifactsDir(task.id)).toBe(at(`artifacts/projects/Cove/memory/${task.id}`))
     expect(fss.existsSync(at('artifacts/projects/Marina'))).toBe(false)
+    // The old place's link follows the folder.
+    expect(await fs.readFile(at('notes/marina/plan.md'), 'utf-8')).toBe('# Plan\n')
+    expect(await fs.realpath(at('notes/marina'))).toBe(await fs.realpath(at('artifacts/projects/Cove/notes')))
     await boot(false)
     expect(await fs.readFile(at('notes/marina/plan.md'), 'utf-8')).toBe('# Plan\n')
+  })
+
+  it('takes in a file written beside the links, and keeps the links', async () => {
+    await boot(true)
+    await put('notes/seawall/new.md', 'Seawall.\n')
+    expect(await boot(true)).toBe('tree')
+    expect(await fs.readFile(at('artifacts/notes/seawall/new.md'), 'utf-8')).toBe('Seawall.\n')
+    expect(fss.existsSync(at('notes/seawall'))).toBe(false)
+    expect(await fs.readFile(at('notes/marina/plan.md'), 'utf-8')).toBe('# Plan\n')
+    await boot(false)
+    expect(await fs.readFile(at('notes/seawall/new.md'), 'utf-8')).toBe('Seawall.\n')
+  })
+
+  it('keeps Obsidian\'s list right across on and off, and a person\'s own link into artifacts/ moves with the vault', async () => {
+    await fs.mkdir(at('.obsidian'), { recursive: true })
+    await fs.writeFile(at('.obsidian/app.json'), JSON.stringify({ userIgnoreFilters: ['archive/'] }))
+    await fs.symlink(`../artifacts/nodes/${task.id}/reflections`, at('notes/refl'))
+    const list = async () => (JSON.parse(await fs.readFile(at('.obsidian/app.json'), 'utf-8')) as { userIgnoreFilters: string[] }).userIgnoreFilters
+    await boot(true)
+    expect(await list()).toEqual(['archive/', 'notes/'])
+    await boot(false)
+    expect(await list()).toEqual(['archive/'])
+    // Obsidian, running, writes its old list back once: the next start takes the entry out again.
+    await fs.writeFile(at('.obsidian/app.json'), JSON.stringify({ userIgnoreFilters: ['archive/', 'notes/'] }))
+    await boot(false)
+    expect(await list()).toEqual(['archive/'])
+    expect((await fs.lstat(at('notes/refl'))).isSymbolicLink()).toBe(true)
+    await fs.rm(at('.obsidian'), { recursive: true, force: true })
   })
 })

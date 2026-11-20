@@ -17,11 +17,9 @@ import { setNotesRoot } from '../../notes/note-paths.js';
 import { artifactsDir, legacyArtifactsDir, setArtifactsByProject } from '../paths.js';
 import { mapVaultPath, movedPath, projectDirOf, type MoveMap } from './layout.js';
 import { ABORTED_FILE, abortRollback, abortSwitch, adoptStrayVault, finishSwitch, mergeInto, readUnified, rollbackUnified, unifyTree, vaultMapOf, vaultPathBack, writeRecord, type UnifiedRecord, type UnifyDirs } from './migrate-unified.js';
+import { linkKnowledgePlaces, linkVaultPlaces, obsidianExcludesNotes, unlinkKnowledgePlaces } from './old-places.js';
 import { readConfigLists, rewriteNoteRefs, type ConfigLists } from './refs.js';
 import { clearTaskHomes, loadTaskHomes, renameHomes, watchTaskHomes } from './task-homes.js';
-
-/** Marks `knowledge/` as this module's folder of links to the old places (not a folder to take in). */
-export const OLD_PLACES_MARK = '.walnut-links';
 
 const dirsNow = (): UnifyDirs => ({ notes: NOTES_DIR, artifacts: artifactsDir() });
 
@@ -36,36 +34,9 @@ export function applyLayout(record: UnifiedRecord | null, tasks: readonly Pick<T
   if (record) { loadTaskHomes(artifactsDir(), tasks); watchTaskHomes(followProjectRename); } else clearTaskHomes();
 }
 
-/**
- * `knowledge/` (the artifacts folder's first name, 2026-11-19 to 11-20) as links into the tree:
- * a path a message from those days named (knowledge/nodes/<id>/reflections/<day>.md) still
- * opens, and the folder holds no copy of the notes (Obsidian reads the whole home).
- */
-async function linkOldPlaces(record: UnifiedRecord): Promise<void> {
-  const k = legacyArtifactsDir();
-  const st = await fsp.lstat(k).catch(() => null);
-  if (st?.isSymbolicLink()) await fsp.unlink(k);
-  else if (st) return; // a real folder someone else made: left alone
-  await fsp.mkdir(path.join(k, 'nodes'), { recursive: true });
-  await fsp.writeFile(path.join(k, OLD_PLACES_MARK), 'Links to where these files are now (src/core/artifacts/unify/boot.ts).\n');
-  const homes = new Map<string, string>();
-  for (const [from, to] of record.moves) {
-    const m = /^a:nodes\/([^/]+)\/MEMORY\.md$/.exec(from) ?? /^a:nodes\/([^/]+)\/(?:notes|reflections)\//.exec(from);
-    if (m && !homes.has(m[1]!)) homes.set(m[1]!, to.replace(/\/(MEMORY\.md|notes\/.*|reflections\/.*)$/, ''));
-  }
-  const link = async (at: string, target: string): Promise<void> => {
-    await fsp.mkdir(path.dirname(at), { recursive: true });
-    await fsp.symlink(path.relative(path.dirname(at), target), at).catch(() => {});
-  };
-  for (const [id, home] of homes) await link(path.join(k, 'nodes', id), path.join(artifactsDir(), home));
-  await link(path.join(k, 'org', 'skills'), path.join(artifactsDir(), 'skills'));
-  await link(path.join(k, 'shared', 'notes'), path.join(artifactsDir(), 'memory', '_shared', 'notes'));
-}
-
-async function unlinkOldPlaces(): Promise<void> {
-  const k = legacyArtifactsDir();
-  if (await fsp.stat(path.join(k, OLD_PLACES_MARK)).catch(() => null)) await fsp.rm(k, { recursive: true, force: true });
-}
+/** knowledge/ (the artifacts folder's first name) as links into the tree (old-places.ts). */
+const linkOldPlaces = (record: UnifiedRecord): Promise<unknown> => linkKnowledgePlaces(legacyArtifactsDir(), artifactsDir(), record.moves);
+const unlinkOldPlaces = (): Promise<unknown> => unlinkKnowledgePlaces(legacyArtifactsDir(), artifactsDir());
 
 /** A folder of the vault, through a child (a folder has no rule of its own); a whole project's notes stand for the project. */
 const folderVia = (map: (rel: string) => string) => (folder: string): string => {
@@ -154,6 +125,7 @@ export async function startUnifiedTree(opts: { on: boolean; leader: boolean; tas
 
 async function bootStep(dirs: UnifyDirs, opts: { on: boolean; tasks: readonly Task[]; projects: readonly string[] }): Promise<void> {
   let record = await readUnified(dirs);
+  const onFolders = !record;
   // A step a stop cut short is finished first, whichever way it went; one that cannot finish is
   // undone; an undo a stop cut short is finished (never the step it undoes).
   if (record?.state === 'switching') await finishOrAbortSwitch(dirs, record);
@@ -185,6 +157,22 @@ async function bootStep(dirs: UnifyDirs, opts: { on: boolean; tasks: readonly Ta
       const report = await rollbackUnified(dirs, backPlaced(dirs, live));
       log.memory.info('one tree: moved back to the folders before', { ...report });
     });
+  }
+  const now = await readUnified(dirs);
+  if (now?.state === 'live') await linkOldVault(dirs, now);
+  // A start that began on the folders (not the one that just came back) takes out an entry Obsidian wrote back.
+  else if (!now && onFolders) await obsidianExcludesNotes(dirs, false).catch(() => {});
+}
+
+/** The old vault place answers through links while the tree is live (old-places.ts). */
+async function linkOldVault(dirs: UnifyDirs, record: UnifiedRecord): Promise<void> {
+  try {
+    const report = await linkVaultPlaces(dirs, pairsOf(record));
+    if (report.missing.length) log.memory.warn('one tree: some old note places have nothing to link to', { places: report.missing.slice(0, 20), count: report.missing.length });
+    if (report.blocked.length) log.memory.warn('one tree: some old note places hold real files, so they do not link', { places: report.blocked.slice(0, 20), count: report.blocked.length });
+    if (report.made || report.removed) log.memory.info('one tree: the old note places link to the tree', { made: report.made, removed: report.removed, kept: report.kept });
+  } catch (err) {
+    log.memory.warn('one tree: the old note places were not linked', { error: String(err) });
   }
 }
 
@@ -276,6 +264,7 @@ async function renameProjectFolder(from: string, to: string): Promise<void> {
   for (const [f, t] of record.moves) if (stayed.has(t) && !f.startsWith('a:')) next.vault.exact[f] = t;
   await writeRecord(dirs, next);
   setNoteMoves(vaultMapOf(next), pairsOf(next));
+  await linkOldVault(dirs, next);
   renameHomes(a, b);
   const pairs = files.filter((f) => !stayed.has(f)).map((f) => [f, swap(f)] as [string, string]);
   const swapLists = (now: ConfigLists): ConfigLists => Object.fromEntries(Object.entries(now).map(([k, l]) => [k, l.map(swapFile)]));

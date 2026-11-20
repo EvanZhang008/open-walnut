@@ -22,6 +22,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { log } from '../../../logging/index.js';
+import { linksIntoTree, unlinkVaultPlaces } from './old-places.js';
 import { artifactRules, invertMap, mapPath, mapVaultPath, numbered, planArtifacts, planVault, TREE_TOP_NAMES, vaultRules, type MoveMap, type MoveRule } from './layout.js';
 
 export const UNIFIED_FILE = '.unified.json';
@@ -113,6 +114,8 @@ export async function unifyTree(dirs: UnifyDirs, input: UnifyInput, placed?: Pla
   if (await readUnified(dirs)) throw new Error('already in one tree');
   // A vault that is a link (to a synced folder) stays where it is: the move would leave that folder.
   if ((await fsp.lstat(dirs.notes).catch(() => null))?.isSymbolicLink()) throw new Error(`the notes folder is a link (${dirs.notes}): left where it is`);
+  // Links a tree before left (old-places.ts) are no notes of the vault.
+  await unlinkVaultPlaces(dirs, { onlyMarked: true });
   const listedAt = Date.now();
   const vaultFiles = await filesUnder(dirs.notes);
   const isOldArtifact = (rel: string): boolean => OLD_ARTIFACT_DIRS.includes(rel.split('/')[0]!);
@@ -346,6 +349,8 @@ async function finishRollback(dirs: UnifyDirs, record: UnifiedRecord, placed: Pl
   const stage = path.join(dirs.artifacts, STAGE);
   const keptRel = record.kept ?? path.join('.backup', `unified-tree-${stamp()}`);
   const kept = path.join(dirs.artifacts, keptRel);
+  // The old places' links out just before the notes come home: notes/ is theirs alone again.
+  await unlinkVaultPlaces(dirs);
   await fsp.mkdir(kept, { recursive: true });
   // The tree out (the stage's own artifacts folders are not its: nodes/, org/, shared/ go in below).
   for (const name of record.tops ?? []) {
@@ -394,6 +399,8 @@ export async function adoptStrayVault(dirs: UnifyDirs, record: UnifiedRecord): P
     if (!(await linksIntoTree(dirs, path.join(dirs.notes, rel)))) files.push(rel);
   }
   if (!files.length) return 0;
+  // Beside the old places' links (old-places.ts) only the files go to the backups; the links stay.
+  const linked = await hasTreeLink(dirs);
   for (const rel of files) {
     const from = path.join(dirs.notes, rel);
     const place = mapVaultPath(rel, vaultMapOf(record));
@@ -405,17 +412,23 @@ export async function adoptStrayVault(dirs: UnifyDirs, record: UnifiedRecord): P
     n++;
   }
   await fsp.mkdir(path.join(dirs.artifacts, '.backup'), { recursive: true });
-  await fsp.rename(dirs.notes, path.join(dirs.artifacts, '.backup', `notes-stray-${at}`));
+  const kept = path.join(dirs.artifacts, '.backup', `notes-stray-${at}`);
+  if (linked) {
+    for (const rel of files) {
+      await fsp.mkdir(path.dirname(path.join(kept, rel)), { recursive: true });
+      await fsp.rename(path.join(dirs.notes, rel), path.join(kept, rel));
+      // The folders it leaves empty go too (a link may need the place).
+      for (let d = path.dirname(rel); d !== '.'; d = path.dirname(d)) if (!(await fsp.rmdir(path.join(dirs.notes, d)).then(() => true, () => false))) break;
+    }
+  } else await fsp.rename(dirs.notes, kept);
   if (n) log.memory.info('one tree: took in files written to the old vault place', { files: n });
   return n;
 }
 
-/** `file` is a link whose target is the tree or inside it (a link into the tree is never a note to take in). */
-export async function linksIntoTree(dirs: UnifyDirs, file: string): Promise<boolean> {
-  const st = await fsp.lstat(file).catch(() => null);
-  if (!st?.isSymbolicLink()) return false;
-  const rel = path.relative(dirs.artifacts, path.resolve(path.dirname(file), await fsp.readlink(file)));
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+/** Any link into the tree under notes/ (never following one). */
+async function hasTreeLink(dirs: UnifyDirs): Promise<boolean> {
+  for (const rel of await filesUnder(dirs.notes)) if (await linksIntoTree(dirs, path.join(dirs.notes, rel))) return true;
+  return false;
 }
 
 /** Merge the files of `from` that `into` lacks (an undo's late writes); the rest stay where they are. */

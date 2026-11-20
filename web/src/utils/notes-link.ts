@@ -1,6 +1,7 @@
 /**
- * Detect file paths that are really NOTES in the local vault (~/.open-walnut/notes/)
- * so click handlers can route them to the Notes page instead of the raw FileViewer.
+ * Detect file paths that are really NOTES in the local vault (the notes folder, or the one
+ * tree once the notes moved into it) so click handlers can route them to the Notes page
+ * instead of the raw FileViewer.
  */
 import { fetchNotesDir } from '@/api/config';
 
@@ -11,8 +12,9 @@ import { fetchNotesDir } from '@/api/config';
  *
  * Remote-session paths (host set) are never vault notes — same string on
  * another machine is a different file. `~/`-prefixed paths are expanded using
- * the home prefix derived from notesDir (only when the vault sits at the
- * standard <home>/.open-walnut/notes location).
+ * the home prefix derived from notesDir (only when the vault sits at a standard
+ * place under <home>/.open-walnut). A path under the old notes folder while the
+ * vault is the one tree is a note by its old path: the server follows the move.
  */
 export async function vaultRelativeNotePath(absPath: string, host?: string): Promise<string | null> {
   if (host && host !== '__local__') return null;
@@ -21,11 +23,13 @@ export async function vaultRelativeNotePath(absPath: string, host?: string): Pro
   if (!notesDir) return null; // cloud mode / config unavailable
 
   let p = absPath;
+  const walnutHome = notesDir.match(/^(.*\/\.open-walnut)\/(?:notes|artifacts)\/?$/)?.[1];
   if (p.startsWith('~/')) {
-    const home = notesDir.match(/^(.*)\/\.open-walnut\/notes\/?$/)?.[1];
-    if (!home) return null;
-    p = home + p.slice(1);
+    if (!walnutHome) return null;
+    p = walnutHome.replace(/\/\.open-walnut$/, '') + p.slice(1);
   }
   const root = notesDir.replace(/\/$/, '') + '/';
-  return p.startsWith(root) ? p.slice(root.length) : null;
+  if (p.startsWith(root)) return p.slice(root.length);
+  const oldRoot = walnutHome ? `${walnutHome}/notes/` : null;
+  return oldRoot && oldRoot !== root && p.startsWith(oldRoot) ? p.slice(oldRoot.length) : null;
 }

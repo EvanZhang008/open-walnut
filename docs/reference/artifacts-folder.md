@@ -93,6 +93,19 @@ The vault's root is the tree from then on (`notesRoot()`), so the Notes page sho
   `excluded_folders` follow their folders (a project's whole notes folder stands for the project).
 - **`knowledge/`** becomes a folder of links (marked `.walnut-links`) into the tree, so a path an
   older message named still opens without a second copy of the notes for Obsidian.
+- **`notes/` answers too** (`old-places.ts`): while the tree is live it holds links into it (marked
+  `.walnut-links`), one per folder that moved whole (`notes/walnut` to `projects/Walnut/notes`), one
+  per file where a folder split. A script, routine prompt, skill or memory that names
+  `~/.open-walnut/notes/...` reads and writes the same file as before, on this machine or through a
+  synced copy, with nothing rewritten (2026-11-20: the first live move broke a trigger that read
+  `notes/walnut/reviews`). Made at every start and after a project rename; taken out before the way
+  back. A real file written there beside the links is taken in at the next start. An Obsidian vault
+  on the whole home gets `notes/` in its "Excluded files" while the links stand, so it does not list
+  every note twice (only an entry it added is taken out, at the way back and the next start). Where a
+  folder split, its files link one by one, and an editor that saves by replacing the file makes it a
+  real file there: Walnut takes it in at the next start, keeping the tree's copy in the backups when
+  that one is newer. Walnut's own code names no old absolute path
+  (`tests/core/artifacts/old-vault-paths-ratchet.test.ts`).
 - **Off again**: the next start puts every file where it was (the record's exact entries; a file
   made in the tree meanwhile by its folder: a task's memory to `nodes/<id>/`, a new project's notes
   to `Projects/<name>/`), checked by hash the same way and recorded (`rolling-back`) so a stop part
