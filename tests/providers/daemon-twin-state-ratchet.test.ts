@@ -38,6 +38,6 @@ describe('daemon state kept once per Walnut', () => {
     expect(conn).toMatch(/buildHostSlice\(\[keeper, \.\.\.aliases/)
     expect(read('src/core/host-server/manager.ts')).toMatch(/daemonKeeper\(\)/)
     expect(read('src/core/plugin-jobs/manager.ts')).toMatch(/daemonNames\(\)/)
-    expect(read('src/core/host-replica.ts')).toMatch(/daemonTwins\(/)
+    expect(read('src/core/host-replica.ts')).toMatch(/daemonKeeperAlias\(/)
   })
 })

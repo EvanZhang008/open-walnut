@@ -6,6 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MockDaemon } from '../helpers/mock-daemon.js'
+import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/integrations/cloud-bridge-config.js', () => ({
   getBridgeConfigForHost: vi.fn(async (host: string) => ({ enabled: true, url: 'wss://cloud.example.invalid/bridge', token: `token-${host}`, hostAlias: host })),
@@ -20,12 +21,13 @@ const hosts = vi.hoisted(() => ({
   zbox: { hostname: 'zbox.example.invalid', label: 'Big box', enabled: true },
   abox: { hostname: 'box.example.invalid', discovered: true, enabled: true },
 }))
-vi.mock('../../src/core/config-manager.js', async (orig) => ({
-  ...(await orig<typeof import('../../src/core/config-manager.js')>()),
-  getConfig: async () => ({ version: 1, hosts }),
-}))
+// The rows are written to this test's own config (a temp home), not mocked: a dynamic import can
+// reach the real config module (walnut-testing skill), and a mock it misses would answer an empty
+// config, whose name by sort order is the found alias here.
+vi.mock('../../src/constants.js', () => createMockConstants('walnut-twin-bridge-name'))
 
 import { DaemonConnection, setPooledConnectionForTest } from '../../src/providers/daemon-connection.js'
+import { getConfig, saveConfig } from '../../src/core/config-manager.js'
 import { daemonKeeperAlias } from '../../src/core/hosts/daemon-twins.js'
 
 const TARGET = { hostname: '127.0.0.1', user: undefined, port: undefined }
@@ -48,7 +50,7 @@ describe('daemonKeeperAlias', () => {
 describe('two links to one daemon', () => {
   let daemon: MockDaemon
   const conns: DaemonConnection[] = []
-  beforeEach(async () => { daemon = new MockDaemon(); daemon.setBridgeConnected(true); await daemon.start() })
+  beforeEach(async () => { await saveConfig({ ...(await getConfig()), hosts } as never); daemon = new MockDaemon(); daemon.setBridgeConnected(true); await daemon.start() })
   afterEach(async () => {
     for (const c of conns.splice(0)) { try { c.disconnect() } catch { /* best effort */ } }
     for (const h of ['zbox', 'abox']) setPooledConnectionForTest(h, null)
