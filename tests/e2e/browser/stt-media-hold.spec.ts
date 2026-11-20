@@ -30,7 +30,7 @@ async function held(page: Page): Promise<{ active: boolean; enabled: boolean }> 
 /** Writes stt.pause_media (null: unset, which reads as on), merged into the stored stt section. */
 async function setPauseMedia(page: Page, on: boolean | null): Promise<void> {
   await page.evaluate(async (value) => {
-    const config = await (await fetch('/api/config')).json() as { stt?: Record<string, unknown> }
+    const { config } = await (await fetch('/api/config')).json() as { config: { stt?: Record<string, unknown> } }
     const r = await fetch('/api/config', {
       method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-walnut-config-write': 'merge' },
       body: JSON.stringify({ stt: { ...config.stt, pause_media: value } }),
@@ -102,7 +102,7 @@ test.describe('the music while you dictate', () => {
     await page.getByTestId('stt-while-dictating').screenshot({ path: '/tmp/voice-flaky/shots/chromium-media-hold-switch-on.png' })
     await toggle.click()
     await expect(toggle).toHaveAttribute('aria-checked', 'false')
-    await expect.poll(async () => page.evaluate(async () => ((await (await fetch('/api/config')).json()) as { stt?: { pause_media?: boolean } }).stt?.pause_media)).toBe(false)
+    await expect.poll(async () => page.evaluate(async () => ((await (await fetch('/api/config')).json()) as { config: { stt?: { pause_media?: boolean } } }).config.stt?.pause_media)).toBe(false)
     await page.getByTestId('stt-while-dictating').screenshot({ path: '/tmp/voice-flaky/shots/chromium-media-hold-switch-off.png' })
 
     // Off: a take asks once, hears "off", and the server holds nothing.

@@ -55,4 +55,12 @@ describe('every voice input holds the music off', () => {
     if (NOT_VOICE_INPUT[file]) return
     expect(fs.readFileSync(path.join(ROOT, file), 'utf8')).toMatch(HOLDS)
   })
+
+  // A released id stays ended (late renews start nothing), so an id that is a constant
+  // would hold the music only for the first recording (review of 2026-11-20).
+  it.each(found)('%s never holds under a fixed id', (file) => {
+    const text = fs.readFileSync(path.join(ROOT, file), 'utf8')
+    expect(text).not.toMatch(/mediaHold\(\)\.hold\(\s*['"`][^'"`$]*['"`]/)
+    expect(text).not.toMatch(/acquireMediaHold\([^)]*\bid\s*:/)
+  })
 })

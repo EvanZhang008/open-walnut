@@ -360,6 +360,9 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
     if (openingRef.current) {
       cancelOpenRef.current = true;
       setMicOpening(false);
+      // The music comes back now, not when the browser finally answers (a permission prompt can wait for good).
+      mediaHoldRef.current?.release();
+      mediaHoldRef.current = null;
       return;
     }
 

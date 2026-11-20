@@ -8,9 +8,10 @@
  * which is one: no helper to install, no permission prompt, no Apple Events to the app.
  *
  * The script never toggles. Pause is sent only to an app that plays now, and Play only to
- * the same app (bundle and process) that Walnut paused and that is still paused. Spotify
- * and Music get their own scripting command as a second try when the system command did
- * not take, which Walnut's Rhythm plugin already uses for Spotify.
+ * the same app (bundle and process) that Walnut paused and that is still paused. Only when
+ * the system refused the command do Spotify and Music get their own scripting command as a
+ * second try (as Walnut's Rhythm plugin drives Spotify): that one is an Apple Event, and
+ * the first time macOS asks whether Walnut may control the app.
  *
  * Off the Mac, and on an isolated server (tests, ephemeral copies), there is no
  * controller at all: such a server must never touch the music of the Mac it runs on.
@@ -87,7 +88,7 @@ function run(argv) {
     if (!before.playing) return JSON.stringify({ ok: true, now: before, paused: false });
     var sent = send(1);
     var quiet = settle(false);
-    if (!quiet && byScript(before.bundle, 'pause')) quiet = settle(false);
+    if (!quiet && !sent && byScript(before.bundle, 'pause')) quiet = settle(false);
     // A command the system took counts even when the state read lags: the resume checks again.
     return JSON.stringify({ ok: true, now: before, paused: quiet || sent, verified: quiet });
   }
@@ -98,7 +99,7 @@ function run(argv) {
     if (before.bundle !== wantBundle || before.pid !== wantPid) return JSON.stringify({ ok: true, now: before, resumed: false, reason: 'other-app' });
     var played = send(0);
     var on = settle(true);
-    if (!on && byScript(wantBundle, 'play')) on = settle(true);
+    if (!on && !played && byScript(wantBundle, 'play')) on = settle(true);
     return JSON.stringify({ ok: true, now: before, resumed: on || played, verified: on });
   }
   return JSON.stringify({ ok: false, error: 'unknown action ' + action });

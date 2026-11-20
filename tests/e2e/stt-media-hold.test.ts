@@ -111,4 +111,16 @@ describe('POST /api/stt/media-hold', () => {
     expect((await post({ id: 'x', action: 'hold' })).status).toBe(400)
     expect((await post({ id: 'web-e2e00005', action: 'toggle' })).status).toBe(400)
   })
+
+  it('the Settings switch round trip: PUT /api/config stt.pause_media false turns the hold off', async () => {
+    const put = await fetch(`http://localhost:${port}/api/config`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: `http://localhost:${port}` },
+      body: JSON.stringify({ stt: { pause_media: false } }),
+    })
+    expect(put.status).toBe(200)
+    const read = await (await fetch(`http://localhost:${port}/api/config`)).json() as { config: { stt?: { pause_media?: boolean } } }
+    expect(read.config.stt?.pause_media).toBe(false)
+    expect((await post({ id: 'web-e2e00006', action: 'hold' })).data).toMatchObject({ enabled: false, active: false })
+    expect(fake.calls).toEqual([])
+  })
 })

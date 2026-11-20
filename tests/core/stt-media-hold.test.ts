@@ -207,6 +207,29 @@ describe('media hold', () => {
     expect(fake.state.playing).toBe(true)
   })
 
+  it('a release that lands while the hold still waits for the setting: the hold never starts', async () => {
+    const fake = fakeMediaController()
+    const waiting: Array<(on: boolean) => void> = []
+    const letEnabledAnswer = () => { for (const answer of waiting.splice(0)) answer(true) }
+    const hold = new MediaHold({
+      controller: () => fake.controller,
+      enabled: () => new Promise<boolean>((resolve) => { waiting.push(resolve) }),
+      now,
+    })
+    holds.push(hold)
+    const holding = hold.hold('mac-eeeeee', 'mac-dictation')
+    await new Promise((r) => setTimeout(r, 0))
+    const releasing = hold.release('mac-eeeeee')
+    letEnabledAnswer()
+    expect((await holding).active).toBe(false)
+    await new Promise((r) => setTimeout(r, 0))
+    letEnabledAnswer()
+    await releasing
+    await hold.idle()
+    expect(fake.calls).toEqual([])
+    expect(fake.state.playing).toBe(true)
+  })
+
   it('no controller (off the Mac, an isolated server): holds still tell the windows', async () => {
     const { hold, events } = make({ controller: null })
     const view = await hold.hold('web-aaaaaa', 'mic')

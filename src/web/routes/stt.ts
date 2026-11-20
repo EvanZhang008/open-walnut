@@ -309,8 +309,8 @@ sttRouter.post('/cleanup/warmup', async (_req: Request, res: Response) => {
  * POST /api/stt/dictation/stop  → { text, durationMs, recordingId? } (transcribed like /transcribe)
  * GET  /api/stt/dictation       → { recording: boolean }
  */
-/** The server recorder's hold: no renewals, so it lasts as long as a recording may. */
-const SERVER_MIC_HOLD = 'server-mic-dictation';
+/** The server recorder's hold, one id per recording: no renewals, so it lasts as long as a recording may. */
+let serverMicHold: string | null = null;
 const SERVER_MIC_HOLD_MS = MAX_RECORD_MS + 30_000;
 
 sttRouter.get('/dictation', (_req: Request, res: Response) => {
@@ -321,7 +321,9 @@ sttRouter.post('/dictation/start', async (_req: Request, res: Response) => {
   try {
     await startMicRecording();
     // This machine's own microphone listens: its music holds off until the stop.
-    void mediaHold().hold(SERVER_MIC_HOLD, 'server-mic', SERVER_MIC_HOLD_MS).catch(() => {});
+    const holdId = `server-mic-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    serverMicHold = holdId;
+    void mediaHold().hold(holdId, 'server-mic', SERVER_MIC_HOLD_MS).catch(() => {});
     res.json({ recording: true });
   } catch (err) {
     res.status(409).json({ error: err instanceof Error ? err.message : String(err) });
@@ -330,7 +332,11 @@ sttRouter.post('/dictation/start', async (_req: Request, res: Response) => {
 
 sttRouter.post('/dictation/stop', express.json(), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { audioBase64 } = await stopMicRecording().finally(() => { void mediaHold().release(SERVER_MIC_HOLD).catch(() => {}); });
+    const { audioBase64 } = await stopMicRecording().finally(() => {
+      const holdId = serverMicHold;
+      serverMicHold = null;
+      if (holdId) void mediaHold().release(holdId).catch(() => {});
+    });
     const config = await getConfig();
     const language = (req.body?.language as string | undefined) || config.stt?.language;
     const sttReq = { audio: audioBase64, format: 'wav', language };

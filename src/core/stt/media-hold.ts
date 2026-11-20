@@ -76,6 +76,9 @@ export class MediaHold {
   private readonly holds = new Map<string, Hold>()
   /** Ids released lately: a renew that was on its way when its release landed starts nothing. */
   private readonly ended = new Map<string, number>()
+  /** Call order, so a release that lands while a hold call still waits is seen by it. */
+  private callSeq = 0
+  private readonly endedSeq = new Map<string, number>()
   private paused: PausedPlayer[] = []
   private queue: Promise<unknown> = Promise.resolve()
   private writes: Promise<unknown> = Promise.resolve()
@@ -91,11 +94,14 @@ export class MediaHold {
   /** Start a hold, or renew it (the same id again). */
   async hold(id: string, source: string, ttlMs = HOLD_TTL_MS): Promise<MediaHoldView> {
     if (!isMediaHoldId(id)) throw new Error('A media hold id is 6 to 80 letters, digits, - or _.')
+    const asked = this.callSeq++
     if (this.sweep()) await this.afterChange()
     const known = this.holds.get(id)
     const endedAt = this.ended.get(id)
     if (!known && endedAt !== undefined && this.now() - endedAt < HOLD_MAX_MS) return this.view(await this.deps.enabled())
     if (!known && !(await this.deps.enabled())) return this.view(false)
+    // Its release landed while this call waited above: the hold is over before it began.
+    if ((this.endedSeq.get(id) ?? -1) > asked) return this.view(true)
     const now = this.now()
     const startedAt = known?.startedAt ?? now
     if (!known && this.holds.size >= MAX_HOLDS) throw new Error('Too many voice inputs hold the music at once.')
@@ -223,7 +229,12 @@ export class MediaHold {
   private markEnded(id: string): void {
     this.ended.delete(id)
     this.ended.set(id, this.now())
-    if (this.ended.size > 200) this.ended.delete(this.ended.keys().next().value as string)
+    this.endedSeq.set(id, this.callSeq++)
+    if (this.ended.size > 200) {
+      const oldest = this.ended.keys().next().value as string
+      this.ended.delete(oldest)
+      this.endedSeq.delete(oldest)
+    }
   }
 
   private sweep(): boolean {
