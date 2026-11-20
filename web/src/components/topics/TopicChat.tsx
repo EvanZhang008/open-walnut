@@ -109,7 +109,7 @@ function Message({ m, topic, cont }: { m: LocalMessage; topic: Topic; cont: bool
         {!cont && (
           <span className="topic-msg-head">
             <span className="topic-msg-name" data-testid="topic-message-name" title={name}>{human ? name : shortName(name)}</span>
-            {context && <span className="topic-msg-context" title={context}>{context}</span>}
+            {context && <span className="topic-msg-context">{context}</span>}
             {!human && who.kind === 'member' && who.member?.role === 'host' && <span className="topic-msg-tag">Host</span>}
             {m.via === 'mail' && <span className="topic-msg-tag">Email</span>}
             <time className="topic-msg-time" dateTime={m.at}>{clock(m.at)}</time>
