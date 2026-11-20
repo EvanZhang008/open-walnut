@@ -20,9 +20,10 @@
 .status-card-actions-below { padding: 0 8px 4px 34px; }
 
 /* The strip under a session's title bar (experiment action_needed_everywhere): the same items, the
-   first two in sight and "N more" for the rest. */
+   first two in sight and "N more" for the rest. It never scrolls by itself: a box's @ and / lists
+   open over the chat below it, never cut off at its edge. */
 .action-needed.is-strip {
-  flex: none; margin-left: 8px; margin-right: 8px; margin-bottom: 0; max-height: 45vh; overflow-y: auto; border-radius: 6px;
+  flex: none; margin-left: 8px; margin-right: 8px; margin-bottom: 0; border-radius: 6px;
 }
 
 .action-needed-more {

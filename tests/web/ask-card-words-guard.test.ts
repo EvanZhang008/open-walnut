@@ -39,6 +39,10 @@ describe('an ask shows its words box at once', () => {
       expect(src, `${file}: no org-answer-other`).not.toMatch(/org-answer-other/)
       expect(src, `${file}: no Reply… / Other… button`).not.toMatch(/>\s*(Reply|Other)…\s*<\/button>/)
       expect(src, `${file}: no words box focuses itself`).not.toMatch(/<(WordsField|ReplyField)\b[^>]*\bautoFocus\b/)
+      // A card's box keeps its own draft: words typed in it never also show in the session's composer
+      // or the Board's box, to be sent twice (and a failed send keeps them there, never cleared by hand).
+      expect(src, `${file}: no shared draft key`).not.toMatch(/\b(sessionDraftKey|boardChoiceDraftKey)\b/)
+      expect(src, `${file}: the composer keeps a failed send's words`).not.toMatch(/\bclearDraft\(/)
     }
   })
 })

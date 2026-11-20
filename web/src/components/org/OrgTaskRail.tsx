@@ -221,7 +221,7 @@ function AskRow({ a, task, vp, own, onOpen, onQuote, canQuote, answers }: {
         >{a.via.title} ›</a>{' '}{link}
       </>) : own ? <>{link} <span className="org-ask-own" data-testid="org-ask-own">asks you</span></> : link}
       question={<AgentText compact inline {...askSource} text={summary} testId="org-ask-summary" />}
-      detail={more ? <AgentText compact inline {...askSource} text={more} className="org-ask-more" testId="org-ask-more" /> : undefined}
+      detail={more ? <AgentText compact inline {...askSource} text={more} testId="org-ask-more" /> : undefined}
       status={failure?.of === 'snooze' ? <div className="org-answer-error" role="alert" data-testid="org-answer-error">{failure.message}</div> : null}
       answer={<OrgInlineAnswer alert={a} task={task} summary={summary} onAnswer={answers.start} {...(failure && failure.of !== 'snooze' ? { failure } : {})} />}
       tools={<>

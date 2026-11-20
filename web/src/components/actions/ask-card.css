@@ -22,7 +22,8 @@
 .ask-card-answer .org-answer-inline > * { flex-basis: auto; }
 .ask-card-answer .org-answer-words { order: 1; flex: 1 1 100%; min-width: 0; }
 .ask-card-answer :is(.kanban-prompt, .permission-request-card) { order: 0; flex: 1 1 100%; min-width: 0; }
-.ask-card-answer :is(.btn, .org-answer-check, .approval-actions) { order: 2; flex: none; }
+/* Only the card's own buttons: never those inside the composer or a prompt's card, which keep their own order. */
+.ask-card-answer :is(.btn, .org-answer-check, .approval-actions):not(:is(.org-answer-words, .kanban-prompt, .permission-request-card) *) { order: 2; flex: none; }
 .ask-card-answer .approval-actions { display: flex; gap: 6px; }
 .ask-card-answer .ask-card-tools { order: 3; flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
 .ask-card-answer :is(.org-answer-note, .org-answer-error) { order: 4; flex: 1 1 100%; }

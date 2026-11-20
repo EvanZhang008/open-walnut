@@ -9,6 +9,7 @@ import type { AskOption } from './user-status.js';
 import type { ApprovalView } from './approvals/types.js';
 import type { LetterRecord } from './human-inbox/types.js';
 import type { SessionRecord } from './types.js';
+import { USER_KIND_LEAD_WORDS } from './human-inbox/walnut-letters/thread-words.js';
 
 const one = (s: unknown, max = 200): string => (typeof s === 'string' ? s : '').replace(/\s+/g, ' ').trim().slice(0, max);
 
@@ -59,11 +60,20 @@ export function promptItem(sessionId: string, p: Pick<Pending, 'requestId' | 'to
   return { kind, id: p.requestId, summary: what ? `Allow ${tool}: ${what}` : `Allow ${tool}?`, at: p.receivedAt, sessionId, blocking: true };
 }
 
+/** The kind words a decision letter starts with, in every language Walnut writes them: built from
+ *  USER_KIND_LEAD_WORDS itself, so a reworded or new language is stripped too. The reason after them stays. */
+const KIND_LEAD = (() => {
+  const KIND = '\uE000', WHY = '\uE001';
+  const leads = Object.values(USER_KIND_LEAD_WORDS).map((words) => words(KIND, WHY).split(WHY)[0]!.trim()
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(KIND, '[^)\\uFF09]*?'));
+  return new RegExp(`^\\s*(?:${leads.join('|')})\\s*`);
+})();
+
 /** An open decision letter's item: its subject and its buttons. */
 export function letterItem(l: Pick<LetterRecord, 'id' | 'subject' | 'createdAt' | 'actions'> & { textPreview?: string }): ActionItem {
   const options = (l.actions ?? []).map((a) => ({ id: a.id, label: one(a.label, 80) })).filter((o) => o.label).slice(0, 6);
   const summary = one(l.subject) || 'A letter waits for your answer';
   // Its preview without the kind words Walnut leads a decision with (thread-words.ts USER_KIND_LEAD_WORDS).
-  const preview = (l.textPreview ?? '').replace(/^\s*(?:Yours to decide \([^)]*\):|由你决定（[^）]*）：)\s*/, '');
+  const preview = (l.textPreview ?? '').replace(KIND_LEAD, '');
   return { kind: 'letter', id: l.id, summary, ...detailOf(preview, summary), at: new Date(l.createdAt).toISOString(), ...(options.length ? { options } : {}) };
 }

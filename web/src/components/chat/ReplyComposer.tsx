@@ -5,8 +5,8 @@
  * names a task or a session, / lists the asking session's commands, a pasted or dropped picture goes
  * with the words, and the mic dictates, as in the chat; what the composer learns next, this box has.
  *
- * It never takes the focus by itself (a page shows many of them). `initial` puts back the words of a
- * send that failed.
+ * It never takes the focus by itself (a page shows many of them). A send that fails keeps its words
+ * and pictures in the box (onSend resolves false).
  */
 import { useState } from 'react';
 import type { ImageAttachment } from '@/api/chat';
@@ -15,13 +15,12 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 
 export interface ReplyComposerProps {
   placeholder: string;
-  /** The words are kept under this key until sent: the ask's own box (the session's composer, the
-   *  Board choice's), else one of the card's own. */
+  /** The card's own box: its words and pictures wait here until sent, and come back after a
+   *  failed send (ChatInput keeps them when the send says false). */
   draftKey: string;
-  /** Words to put back (a failed send's). */
-  initial?: string;
-  onSend: (text: string, images?: ImageAttachment[]) => void;
-  /** The session it answers: its commands on /. */
+  /** Resolves true once taken; false keeps the words and pictures in the box. */
+  onSend: (text: string, images?: ImageAttachment[]) => Promise<boolean>;
+  /** The session it answers: its commands on /, and where a file goes. */
   sessionId?: string | null;
   /** The task it answers for: not offered to itself on @. */
   taskId?: string;
@@ -30,46 +29,33 @@ export interface ReplyComposerProps {
   sendTitle?: string;
 }
 
-export function ReplyComposer(props: ReplyComposerProps) {
+export function ReplyComposer({ placeholder, draftKey, onSend, sessionId, taskId, testId = 'org-answer-input', sendTestId = 'org-answer-send', sendTitle = 'Send' }: ReplyComposerProps) {
+  // The session's commands are read once the box is used, never for every card on a page.
+  const [used, setUsed] = useState(false);
+  const commands = useSlashCommands(undefined, undefined, sessionId ?? undefined, !!sessionId && used);
   return (
-    <div className="org-answer-words reply-composer" data-testid="reply-composer">
-      {props.sessionId ? <WithCommands {...props} sessionId={props.sessionId} /> : <Box {...props} />}
+    <div className="org-answer-words reply-composer" data-testid="reply-composer" onFocusCapture={() => { if (!used) setUsed(true); }}>
+      <ChatInput
+        light
+        placeholder={placeholder}
+        draftKey={draftKey}
+        // A file goes to the asking session's host; with none, to this machine (as the Home composer's).
+        fileTarget={sessionId ? { sessionId } : {}}
+        onSend={(text, images) => onSend(text, images)}
+        showCommands={false}
+        enableEntityMention
+        {...(taskId ? { mentionSelfTaskId: taskId } : {})}
+        {...(sessionId ? {
+          sessionCommands: commands.items,
+          searchSessionCommands: commands.search,
+          onRefreshSessionCommands: commands.refresh,
+          onSessionCommandsPaletteOpen: commands.onPaletteOpen,
+          sessionCommandsStatus: commands.status,
+        } : {})}
+        inputTestId={testId}
+        sendTestId={sendTestId}
+        sendTitle={sendTitle}
+      />
     </div>
-  );
-}
-
-function WithCommands(props: ReplyComposerProps & { sessionId: string }) {
-  const slash = useSlashCommands(undefined, undefined, props.sessionId);
-  return <Box {...props} commands={slash} />;
-}
-
-function Box({ placeholder, draftKey, initial, onSend, sessionId, taskId, testId = 'org-answer-input', sendTestId = 'org-answer-send', sendTitle = 'Send', commands }: ReplyComposerProps & {
-  commands?: ReturnType<typeof useSlashCommands>;
-}) {
-  // A failed send's words, put in once when it comes back.
-  const [prefill] = useState(() => (initial ? { text: initial, nonce: Date.now() } : null));
-  return (
-    <ChatInput
-      light
-      placeholder={placeholder}
-      draftKey={draftKey}
-      // Any file goes where its words go: to the asking session's host, else this machine.
-      fileTarget={sessionId ? { sessionId } : {}}
-      onSend={(text, images) => { onSend(text, images); }}
-      showCommands={false}
-      enableEntityMention
-      {...(taskId ? { mentionSelfTaskId: taskId } : {})}
-      {...(commands ? {
-        sessionCommands: commands.items,
-        searchSessionCommands: commands.search,
-        onRefreshSessionCommands: commands.refresh,
-        onSessionCommandsPaletteOpen: commands.onPaletteOpen,
-        sessionCommandsStatus: commands.status,
-      } : {})}
-      {...(prefill ? { prefillText: prefill.text, prefillNonce: prefill.nonce } : {})}
-      inputTestId={testId}
-      sendTestId={sendTestId}
-      sendTitle={sendTitle}
-    />
   );
 }

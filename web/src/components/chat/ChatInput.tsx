@@ -2377,6 +2377,9 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
           onRefine={refineDictation}
           controlRef={micControlRef}
           disabled={disabled}
+          // A light box (one of many: an ask card's) is the Voice panel's Insert target only once
+          // it is focused; the page's own composer stays the target on mount.
+          {...(light ? { insertBox: () => textareaRef.current } : {})}
         />
         <input
           ref={fileInputRef}

@@ -140,6 +140,28 @@ test('every kind shows its box to type in, with no click and no "Reply…"', asy
   await expect(approval.getByTestId('org-answer-input')).toHaveAttribute('placeholder', /Approve still needed/)
 })
 
+test('a reply that fails keeps its words in the box, and the box is its own', async ({ page }) => {
+  await openNeeds(page)
+  // The server refuses the letter's reply once: the row comes back with the reason and the words.
+  let refused = 0
+  await page.route('**/api/v1/human-inbox/*/human-reply', async (route) => {
+    if (refused++ === 0) await route.fulfill({ status: 500, body: '{"error":"down"}', contentType: 'application/json' })
+    else await route.continue()
+  })
+  const letter = () => itemOf(page.locator('body'), 'letter').first()
+  const box = () => letter().getByTestId('org-answer-input')
+  await showSectionCard(page, 'needs', ids.letter)
+  await box().fill(`Sign it on Friday ${STAMP}`)
+  await box().press('Enter')
+  await expect(letter().getByTestId('org-answer-error')).toBeVisible({ timeout: 30_000 })
+  await expect(box()).toHaveValue(`Sign it on Friday ${STAMP}`)
+  // Its words live under the card's own key: the task's session composer never shows them.
+  const keys = await page.evaluate(() => Object.keys(localStorage).filter((k) => localStorage.getItem(k)?.includes('Sign it on Friday')))
+  expect(keys.every((k) => k.startsWith('draft:letter-reply:')), keys.join(',')).toBe(true)
+  await page.unroute('**/api/v1/human-inbox/*/human-reply')
+  await box().fill('')
+})
+
 test('wide: the buttons and Snooze beside the box; narrow: on the line under it', async ({ page }) => {
   await openNeeds(page)
   const item = itemOf(await showSectionCard(page, 'needs', ids.ask), 'ask')

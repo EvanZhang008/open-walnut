@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { applyActions, itemSnoozeEndedMs, markSnoozes, ownLineIsItem, writeSnooze, type ActionItem } from '../../src/core/action-needed.js'
 import { approvalItemsByTask, letterItem, promptItem } from '../../src/core/action-needed-facts.js'
 import type { UserStatus } from '../../src/core/user-status.js'
+import { USER_KIND_LEAD_WORDS } from '../../src/core/human-inbox/walnut-letters/thread-words.js'
 import type { ApprovalView } from '../../src/core/approvals/types.js'
 
 const NOW = Date.parse('2026-11-19T20:00:00Z')
@@ -130,6 +131,16 @@ describe('the items, from their facts', () => {
   it('a letter carries its actions as options', () => {
     expect(letterItem({ id: 'lt-9', subject: 'Go?', createdAt: NOW, actions: [{ id: 'go', label: 'Go' }] }))
       .toMatchObject({ kind: 'letter', id: 'lt-9', summary: 'Go?', options: [{ id: 'go', label: 'Go' }] })
+  })
+
+  it('a letter\'s line of why drops the kind words Walnut leads it with, in every language, and keeps the reason', () => {
+    for (const lang of Object.keys(USER_KIND_LEAD_WORDS) as Array<keyof typeof USER_KIND_LEAD_WORDS>) {
+      for (const kind of ['user_own', 'spending', 'a_new_kind']) {
+        const textPreview = `${USER_KIND_LEAD_WORDS[lang](kind, 'Only you can sign it.')} The landlord sent the final terms.`
+        const item = letterItem({ id: 'lt-1', subject: 'Sign the lease?', createdAt: NOW, textPreview })
+        expect(item.detail, `${lang} ${kind}`).toBe('Only you can sign it. The landlord sent the final terms.')
+      }
+    }
   })
 
   it('approvals group by their asking task: only pending ones of a task, never a test run\'s', () => {

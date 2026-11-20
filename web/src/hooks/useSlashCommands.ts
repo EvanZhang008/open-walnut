@@ -65,7 +65,7 @@ export interface UseSlashCommands {
  * hook is mounted, and every palette open revalidates a list older than a
  * minute. `refresh()` forces a server-side re-scan (?fresh=1).
  */
-export function useSlashCommands(cwd?: string, host?: string, sessionId?: string): UseSlashCommands {
+export function useSlashCommands(cwd?: string, host?: string, sessionId?: string, enabled = true): UseSlashCommands {
   const [items, setItems] = useState<SlashCommandItem[]>([]);
   const [status, setStatus] = useState<UseSlashCommands['status']>({ source: 'discovery', degraded: false });
   const [loading, setLoading] = useState(false);
@@ -131,13 +131,15 @@ export function useSlashCommands(cwd?: string, host?: string, sessionId?: string
   }, [cwd, host, sessionId, applyResult, clearRetry]);
 
   useEffect(() => {
+    // Off (a card's box nobody uses yet): nothing is fetched until it is on.
+    if (!enabled) return;
     load(false);
     return () => {
       clearRetry();
       // A fetch resolving after unmount must neither publish nor arm a retry.
       keyRef.current = '';
     };
-  }, [load, clearRetry]);
+  }, [load, clearRetry, enabled]);
 
   /** Force a fresh server-side re-scan (bypasses both caches). */
   const refresh = useCallback(() => { load(true); }, [load]);

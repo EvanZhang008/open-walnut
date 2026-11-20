@@ -395,7 +395,6 @@ describe('one corner for every notice', () => {
       '.org-composer-input': "the chat composer's text box in Org's detail column: a chat, which the stack overlaps by design as on Home (CHAT_SURFACES)",
       '.org-side-card-desc': "a card's text in Org's side panel, at the right",
       '.org-rail-body': "the node's task rail, beside the chat at the right (above it when narrow)",
-      '.org-ask-more': "a list inside the task rail's question row",
       '.org-answer-menu': 'a menu the person opens, placed by its trigger',
     };
     const room = read('web/src/components/common/corner-stack-room.ts');

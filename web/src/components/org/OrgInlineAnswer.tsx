@@ -12,8 +12,11 @@
  * them, and an approval's goes to its session while the approval still waits for Approve or Deny.
  *
  * The row answers the click, not the server: the row goes the moment the answer is sent, and a
- * failure brings it back with the reason and the words the user typed (a busy server on the Mac
- * held a 24 ms op for 5 s, 2026-09-29).
+ * failure brings it back with the reason (a busy server on the Mac held a 24 ms op for 5 s,
+ * 2026-09-29). Its words and pictures wait in the box's own draft until the server took them: every
+ * send resolves true or false to the composer, which keeps them on false.
+ * Each box keeps its own draft (never the session's composer, nor the Board's), so words typed here
+ * never show up in another box to be sent twice.
  */
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { Task } from '@open-walnut/core';
@@ -26,9 +29,6 @@ import { buildImageRefsPayload } from '@/api/image-upload';
 import type { ImageAttachment } from '@/api/chat';
 import { getLetterSnapshot, loadLetters, patchLetter, subscribeLetters } from '@/components/inbox/letter-store';
 import { useSessionSend } from '@/hooks/useSessionSend';
-import { clearDraft } from '@/utils/drafts';
-import { sessionDraftKey } from '@/utils/composer-insert';
-import { boardChoiceDraftKey } from '@/components/board/BoardReplyDock';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { log } from '@/utils/log';
 import { openLetterFor } from './org-answer-shape';
@@ -36,8 +36,8 @@ import { answerMessage, formOptions, inlineShape, type AskOption } from './org-a
 import type { OrgAlertView } from './org-channels-model';
 import '@/styles/inline-answer.css';
 
-/** Where an answer failed: the reason, and the words the user had typed, to put back. */
-export interface AnswerFailure { message: string; draft?: string; /** The pictures to put back with the words. */ images?: ImageAttachment[]; /** What failed: an answer (default), or the row's snooze, which the row says itself. */ of?: 'answer' | 'snooze' }
+/** Where an answer failed: the reason (the words and pictures stay in the box's own draft). */
+export interface AnswerFailure { message: string; /** What failed: an answer (default), or the row's snooze, which the row says itself. */ of?: 'answer' | 'snooze' }
 /** Settles an answer sent from a row: no argument once it was taken, a failure to bring the row back. */
 export type AnswerSettle = (failure?: AnswerFailure) => void;
 
@@ -64,18 +64,25 @@ function Options({ options, recommended, onPick, testId }: {
   );
 }
 
+/** Sends words from a box: true once taken, false keeps them (and their pictures) in it. */
+type WordsSend = (text: string, images?: ImageAttachment[]) => Promise<boolean>;
+const kept = Promise.resolve(false);
+
 /** A line in the user's own words: the chat's own composer (ReplyComposer), so @, / and pictures
- *  work as in the chat. Kept under `draftKey` (the ask's own box: the session's composer, the Board
- *  choice's) until the answer is taken. */
-function WordsField({ placeholder, initial = '', draftKey, onSend, sessionId, taskId }: {
+ *  work as in the chat. Kept under `draftKey`, this box's own, until the answer is taken. */
+function WordsField({ placeholder, draftKey, onSend, sessionId, taskId }: {
   placeholder: string;
-  initial?: string;
   draftKey: string;
-  onSend: (text: string, images?: ImageAttachment[]) => void;
+  onSend: WordsSend;
   sessionId?: string | null;
   taskId?: string;
 }) {
-  return <ReplyComposer placeholder={placeholder} initial={initial} draftKey={draftKey} onSend={onSend} sessionId={sessionId ?? null} {...(taskId ? { taskId } : {})} />;
+  return <ReplyComposer placeholder={placeholder} draftKey={draftKey} onSend={onSend} sessionId={sessionId ?? null} {...(taskId ? { taskId } : {})} />;
+}
+
+/** Runs an answer that settles its row, and tells the box whether it was taken. */
+function settled(run: (settle: AnswerSettle) => void, settle: AnswerSettle): Promise<boolean> {
+  return new Promise((resolve) => run((failure) => { settle(failure); resolve(!failure); }));
 }
 
 const Failed = ({ failure }: { failure: AnswerFailure | undefined }) =>
@@ -104,17 +111,16 @@ function LetterAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords
   useEffect(() => { if (fresh && !letter) onWords(); }, [fresh, letter, onWords]);
   if (!letter) return <div className="org-answer-note" role="status">{fresh ? '' : 'Loading the letter…'}</div>;
   // Words written back answer the letter as a pick does (the server's one rule, awaitsUserDecision).
-  const replyWords = (text: string, images?: ImageAttachment[]) => {
-    if (!text.trim()) return;
-    const settle = onSend();
-    humanReplyToLetter(letter.id, text, images).then((result) => {
+  const replyWords: WordsSend = (text, images) => {
+    if (!text.trim()) return kept;
+    return settled((settle) => humanReplyToLetter(letter.id, text, images).then((result) => {
       if (result.letter) patchLetter(letter.id, { answered: result.letter.answered, read: true });
       log.info('org-page', 'org alert answered', { taskId: alert.taskId, shape: 'letter-reply', letterId: letter.id, images: images?.length ?? 0 });
       settle();
     }, (err: unknown) => {
       log.warn('org-page', 'org alert reply failed', { taskId: alert.taskId, letterId: letter.id, error: String(err) });
-      settle({ message: 'Not sent. Try again.', draft: text, ...(images?.length ? { images } : {}) });
-    });
+      settle({ message: 'Not sent. Try again.' });
+    }), onSend());
   };
   const pick = (actionId: string) => {
     const settle = onSend();
@@ -137,23 +143,22 @@ function LetterAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords
         options={letter.actions!.map((a) => ({ value: a.id, label: a.label, ...(a.description ? { title: a.description } : {}) }))}
         onPick={pick}
       />
-      <ReplyField placeholder="Reply…" failure={failure} onSend={replyWords} taskId={alert.taskId} draftKey={`draft:letter-reply:${letter.id}`} />
+      <ReplyField placeholder="Reply…" onSend={replyWords} taskId={alert.taskId} draftKey={`draft:letter-reply:${letter.id}`} />
       <Failed failure={failure} />
     </>
   );
 }
 
 /** The words box beside an ask's own buttons, always shown. One component wherever an ask is answered. */
-export function ReplyField({ placeholder, failure, onSend, draftKey, sessionId = null, taskId }: {
+export function ReplyField({ placeholder, onSend, draftKey, sessionId = null, taskId }: {
   placeholder: string;
-  failure: AnswerFailure | undefined;
-  onSend: (text: string, images?: ImageAttachment[]) => void;
+  onSend: WordsSend;
   /** The card's own box: its words wait here until sent. */
   draftKey: string;
   sessionId?: string | null;
   taskId?: string;
 }) {
-  return <WordsField placeholder={placeholder} initial={failure?.draft ?? ''} draftKey={draftKey} onSend={onSend} sessionId={sessionId} {...(taskId ? { taskId } : {})} />;
+  return <WordsField placeholder={placeholder} draftKey={draftKey} onSend={onSend} sessionId={sessionId} {...(taskId ? { taskId } : {})} />;
 }
 
 /** An approval answered in words: they go to its session as the user's message; only Approve or
@@ -163,19 +168,20 @@ export function ApprovalReply({ sessionId, summary, onSent }: { sessionId: strin
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
   const [failure, setFailure] = useState<AnswerFailure | undefined>(undefined);
   if (!sessionId) return null;
-  const reply = (text: string, images?: ImageAttachment[]) => {
-    if (!text.trim()) return;
+  const reply: WordsSend = (text, images) => {
+    if (!text.trim()) return kept;
     setNote(null);
     setFailure(undefined);
-    void send(sessionId, `About the approval "${summary}": ${text}`, images).catch(() => false).then((ok) => {
+    return send(sessionId, `About the approval "${summary}": ${text}`, images).catch(() => false).then((ok) => {
       log.info('action-needed', 'approval reply sent', { sessionId, ok, images: images?.length ?? 0 });
       if (ok) { setNote({ ok: true, text: 'Sent to its session. The approval still waits for Approve or Deny.' }); onSent?.(); }
-      else setFailure({ message: 'Not sent. Try again.', draft: text, ...(images?.length ? { images } : {}) });
+      else setFailure({ message: 'Not sent. Try again.' });
+      return ok;
     });
   };
   return (
     <>
-      <ReplyField key={note ? 'sent' : 'open'} placeholder="Tell it something (Approve still needed)" failure={failure} onSend={reply} sessionId={sessionId} draftKey={`draft:approval-reply:${sessionId}:${summary}`} />
+      <ReplyField placeholder="Tell it something (Approve still needed)" onSend={reply} sessionId={sessionId} draftKey={`draft:approval-reply:${sessionId}:${summary}`} />
       {note && <div className="org-answer-note" role="status" data-testid="approval-reply-sent">{note.text}</div>}
       <Failed failure={failure} />
     </>
@@ -200,25 +206,22 @@ function ChoiceAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords
   }, [alert.taskId]);
   useEffect(() => { if (found === null) onWords(); }, [found, onWords]);
   if (!found) return <div className="org-answer-note" role="status">{found === undefined ? 'Loading the choice…' : ''}</div>;
-  const wordsKey = boardChoiceDraftKey(found.owner, found.id);
-  const answer = (body: { option?: string; text?: string }, images?: ImageAttachment[]) => {
-    const settle = onSend();
+  const answer = (body: { option?: string; text?: string }, images?: ImageAttachment[]): Promise<boolean> => {
     // A choice's words are its answer: a picture goes with words, never alone ('' clears the words).
-    if (images?.length && !body.option && !body.text) { settle({ message: 'Add a few words to go with the picture.', images }); return; }
+    if (images?.length && !body.option && !body.text) { onSend()({ message: 'Add a few words to go with the picture.' }); return kept; }
     // Pictures go up over HTTP first; the answer carries their names (api/image-upload.ts).
-    buildImageRefsPayload(images).then((pictures) => apiPut(`/api/v1/tasks/${encodeURIComponent(found.owner)}/board/choices/${encodeURIComponent(found.id)}`, { ...body, ...pictures })).then(() => {
+    return settled((settle) => buildImageRefsPayload(images).then((pictures) => apiPut(`/api/v1/tasks/${encodeURIComponent(found.owner)}/board/choices/${encodeURIComponent(found.id)}`, { ...body, ...pictures })).then(() => {
       log.info('org-page', 'org alert answered', { taskId: alert.taskId, shape: 'choice', owner: found.owner, choiceId: found.id, option: body.option ?? '' });
-      if (body.text) clearDraft(wordsKey);
       settle();
     }, (err: unknown) => {
       log.warn('org-page', 'org alert answer failed', { taskId: alert.taskId, shape: 'choice', error: String(err) });
       // A replica answers 501 to every Board write.
       const message = (err as { status?: number }).status === 501 ? 'Boards are read only here. Answer it from the main Walnut.' : 'Not saved. Try again.';
-      settle({ message, ...(body.text ? { draft: body.text } : {}), ...(images?.length ? { images } : {}) });
-    });
+      settle({ message });
+    }), onSend());
   };
   const words = (
-    <WordsField placeholder={found.options.length ? 'Reply…' : 'Your answer'} initial={failure?.draft ?? ''} draftKey={wordsKey} onSend={(t, images) => answer({ text: t }, images)} taskId={alert.taskId} />
+    <WordsField placeholder={found.options.length ? 'Reply…' : 'Your answer'} draftKey={`draft:choice-reply:${found.owner}:${found.id}`} onSend={(t, images) => answer({ text: t }, images)} taskId={alert.taskId} />
   );
   return (
     <>
@@ -241,15 +244,12 @@ function SessionAnswer({ alert, failure, onSend, sessionId, summary, shape }: Fo
   // A failed session: its probe says so, or the task's status names the failure as its ask.
   const failed = alert.kind === 'error' || alert.source === 'error';
   if (!sessionId) return <div className="org-answer-note">It has no session to answer. Open it to start one.</div>;
-  const wordsKey = sessionDraftKey(sessionId);
-  const reply = (text: string, words?: string, images?: ImageAttachment[]) => {
-    const settle = onSend();
+  const reply = (text: string, images?: ImageAttachment[]): Promise<boolean> => settled((settle) => {
     void send(sessionId, text, images).catch(() => false).then((ok) => {
       log.info('org-page', 'org alert answered', { taskId: alert.taskId, shape, sessionId, ok, images: images?.length ?? 0 });
-      if (ok && words !== undefined) clearDraft(wordsKey);
-      settle(ok ? undefined : { message: 'Not sent. Try again.', ...(words !== undefined ? { draft: words } : {}), ...(images?.length ? { images } : {}) });
+      settle(ok ? undefined : { message: 'Not sent. Try again.' });
     });
-  };
+  }, onSend());
   const retry = () => {
     const settle = onSend();
     retrySession(sessionId).then((result) => {
@@ -267,14 +267,13 @@ function SessionAnswer({ alert, failure, onSend, sessionId, summary, shape }: Fo
   const words = (
     <WordsField
       placeholder={failed ? 'Or tell it what to do' : shape === 'text' ? 'Your answer' : 'Reply…'}
-      initial={failure?.draft ?? ''}
-      draftKey={wordsKey}
+      draftKey={`draft:ask-reply:${sessionId}:${alert.itemId ?? alert.taskId}`}
       sessionId={sessionId}
       taskId={alert.taskId}
       onSend={(t, images) => {
         // The words are the answer: a picture goes with them, never as "(no answer)".
-        if (!t.trim() && images?.length) { onSend()({ message: 'Add a few words to go with the picture.', images }); return; }
-        reply(answerMessage(alert.form, summary, { words: t }), t, images);
+        if (!t.trim() && images?.length) { onSend()({ message: 'Add a few words to go with the picture.' }); return kept; }
+        return reply(answerMessage(alert.form, summary, { words: t }), images);
       }}
     />
   );
@@ -338,13 +337,12 @@ export function OrgInlineAnswer({ alert, task, summary, onAnswer, failure, sessi
         />
         {/* A tool step answered in words declines it with them (a question's card has its own Other). */}
         {alert.kind !== 'question' && alert.itemId && (
-          <ReplyField placeholder="Tell it what to do instead (declines this step)" failure={failure} sessionId={sessionId} taskId={alert.taskId} draftKey={`draft:prompt-reply:${alert.itemId}`} onSend={(text) => {
-            if (!text.trim()) return;
-            const settle = onAnswer(alert.taskId);
-            respondToPermission(sessionId, alert.itemId!, false, text).then(() => settle(), (err: unknown) => {
+          <ReplyField placeholder="Tell it what to do instead (declines this step)" sessionId={sessionId} taskId={alert.taskId} draftKey={`draft:prompt-reply:${alert.itemId}`} onSend={(text) => {
+            if (!text.trim()) return kept;
+            return settled((settle) => respondToPermission(sessionId, alert.itemId!, false, text).then(() => settle(), (err: unknown) => {
               log.warn('org-page', 'prompt reply failed', { taskId: alert.taskId, sessionId, error: String(err) });
-              settle({ message: 'Not sent. Try again.', draft: text });
-            });
+              settle({ message: 'Not sent. Try again.' });
+            }), onAnswer(alert.taskId));
           }} />
         )}
       </>) : shape === 'letter' ? (
