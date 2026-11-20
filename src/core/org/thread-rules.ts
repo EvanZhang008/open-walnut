@@ -11,17 +11,20 @@
  * closed a thread right after answering it: "I had not replied, had not said continue ... so
  * clearly I had not acknowledged it ... you cannot remove it". Walnut enforces the second half:
  * a node's known mark or close before he reacted is refused (threads-model.ts checkReacted).
+ * 2026-11-20, the user, on a card that stayed up as unread while he kept talking about it in the
+ * chat: the node checks its threads against his words before each turn ends (the Stop hook names
+ * the answered ones he wrote after, org/thread-summary-stop.ts answeredBeforeHim).
  */
 
 export const THREADS_KNOWN_RULE =
   'Clean your threads yourself, on every turn that touches one: what he already knows leaves the card, what is still news '
   + 'stays. An answer counts as known only once he reacted to it after you gave it (a reply about it, an ok '
   + 'or thanks, a follow-up that builds on it, his Acknowledge). Silence after your answer is NOT knowing, however clear the '
-  + 'answer: the thread stays open in answered with your answer on its card (an answer that only says who took it is no news: '
-  + 'that thread is pending, below), and you never mark it known or close it then (Walnut '
+  + 'answer: the thread stays open in answered with your answer on its card, and you never mark it known or close it then (Walnut '
   + 'refuses). Once he reacted, mark what he reacted to known (thread_update known: the last message of his you answered and he '
   + 'reacted to, or "all"), and close a thread he reacted to as finished (close: acked). When he asks you to close it or says it is '
-  + 'done or no longer wanted, in the thread or your chat, close it then, with user_words quoting him.';
+  + 'done or no longer wanted, in the thread or your chat, close it then, with user_words quoting him. '
+  + 'His chat words count for every thread they build on, wherever Walnut filed them.';
 
 /** A node may open a thread itself (2026-11-01, the user: "not only limited to threads I started"), never as a feed. */
 export const THREADS_OPEN_RULE =

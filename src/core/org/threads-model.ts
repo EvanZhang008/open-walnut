@@ -614,11 +614,21 @@ export function recentConversation(file: ThreadsFile, at: string, within = SAME_
     }
   }
   if (!best || !Number.isFinite(now) || now - best.ms > within || now < best.ms - 60_000) return undefined;
-  // The node opened a thread of its own since: the conversation moved on to it, so his next
-  // message is not joined to the one before.
+  // The node opened a thread of its own since that he can see (it waits on him, or holds an answer
+  // for him): the conversation may have moved on to it, so his next message is not joined to the
+  // one before. A thread it opened for its own bookkeeping (working, pending: out of his sight) moves
+  // nothing; his next words still follow the subject he was on (2026-11-20, the user, after a
+  // follow-up on a thread he had just read went to a thread of its own and the read one stayed up:
+  // he had been following up on that thread all along, so it had no need to stay on show).
   const since = best.ms;
-  if (file.threads.some((t) => t.opener && Date.parse(t.opener.at) > since)) return undefined;
+  if (file.threads.some((t) => t.opener && Date.parse(t.opener.at) > since && inHisSight(t, now))) return undefined;
   return isOpen(best.t) ? best.t : undefined;
+}
+
+/** A thread his view can show for what it holds: open, not snoozed, waiting on him or answered. */
+function inHisSight(t: OrgThread, now: number): boolean {
+  const snoozed = !!t.snoozed && Date.parse(t.snoozed.until) > now;
+  return isOpen(t) && !snoozed && (t.state === 'needs' || t.state === 'answered');
 }
 
 /** He closed it himself (not moved, not the node's close) at most `FOLLOW_UP_REOPENS_MS` before `at`. */
@@ -923,6 +933,12 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   // A thread that moved lives on at the other node: it is changed there, never opened again here.
   if (movedAway(cur) && (patch.reopen || patch.pin)) {
     throw new ThreadError('thread_closed', 409, `Thread ${id} moved to ${cur.movedTo!.title} (${cur.movedTo!.task}) with its work: it is open there.`);
+  }
+  // He closed it himself with Acknowledge: it stays closed (2026-11-20, the user: a thread he closed
+  // stays closed, he already knows it). Only he opens it again (a Follow up on it); a node's news
+  // about it is a new thread.
+  if (patch.reopen && by !== 'human' && cur.closed?.by === 'human' && cur.closed.how === 'acked' && !cur.closed.reacted) {
+    throw new ThreadError('thread_closed', 409, `Thread ${id} is closed: the user acknowledged it himself, so it stays closed. Something new about it is a new thread (thread_create); his own Follow up on it opens it again.`);
   }
   // Handed to the user: needs, from a state it was not in, or a closed thread reopened into it.
   if (patchHandsToUser(cur, patch)) checkHandedToUser(by, patch);

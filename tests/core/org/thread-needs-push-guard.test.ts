@@ -66,8 +66,8 @@ describe('a move into needs is seen (enteredNeeds)', () => {
     f = fileMessage(marked, { text: 'and the invoice?', via: 'follow-up', at: iso(40), threadId: a }).file
     const msg = f.threads.find((t) => t.id === a)!.messages.at(-1)!.id
     expect(enteredNeeds(f, splitThreadMessage(f, a, msg, NODE, iso(39)).file)).toEqual([])
-    // Closed by him, reopened by the node straight into needs: a new entry.
-    const closed = { ...marked, threads: marked.threads.map((t) => ({ ...t, closed: { how: 'acked' as const, at: iso(30), by: 'human' as const } })) }
+    // Closed by the node, reopened by it straight into needs: a new entry (one he acknowledged stays closed).
+    const closed = { ...marked, threads: marked.threads.map((t) => ({ ...t, closed: { how: 'dropped' as const, at: iso(30), by: NODE } })) }
     expect(enteredNeeds(closed, updateThread(closed, a, { reopen: true, state: 'needs', ...KIND }, NODE, iso(20)).file).map((t) => t.id)).toEqual([a])
   })
 
