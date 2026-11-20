@@ -18,6 +18,7 @@ import { expect, test, type Page, type Locator } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { composerMic, openSession, stubSttStatus, type ComposerMic } from './voice-selection-helpers'
 import { loadHome } from './draft-helpers'
+import { useSyntheticMic as useSyntheticMicIn } from './fake-mic'
 
 export const SHOTS = '/tmp/stt-failure-recovery/shots'
 /** What the live preview shows while recording. */
@@ -39,37 +40,8 @@ export async function useSyntheticMic(page: Page): Promise<void> {
   micLogs.set(page, lines)
   page.on('console', (m) => { if (/synthetic-mic|\[stt\]|stt/i.test(m.text())) lines.push(`${m.type()}: ${m.text()}`) })
   page.on('pageerror', (e) => lines.push(`pageerror: ${e.message}`))
-  await page.addInitScript(() => {
-    const fake = async (): Promise<MediaStream> => {
-      console.log('[synthetic-mic] getUserMedia called')
-      const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
-      const ctx = new Ctx()
-      // Never hang the recorder on a context that will not resume.
-      await Promise.race([ctx.resume().catch(() => {}), new Promise((r) => setTimeout(r, 1000))])
-      console.log(`[synthetic-mic] context ${ctx.state}`)
-      const osc = ctx.createOscillator()
-      osc.frequency.value = 220
-      const gain = ctx.createGain()
-      gain.gain.value = 0.3
-      const dst = ctx.createMediaStreamDestination()
-      osc.connect(gain).connect(dst)
-      osc.start()
-      // A test can fall silent (a pause before the stop) through this node.
-      Object.assign(window, { __syntheticMicGain: gain })
-      console.log('[synthetic-mic] stream ready')
-      return dst.stream
-    }
-    // On the prototype as well as the instance: WebKit kept answering with the
-    // native method after an instance-only patch in the app page.
-    if (typeof MediaDevices !== 'undefined') {
-      Object.defineProperty(MediaDevices.prototype, 'getUserMedia', { value: fake, configurable: true, writable: true })
-    }
-    if (!navigator.mediaDevices) {
-      Object.defineProperty(navigator, 'mediaDevices', { value: {}, configurable: true })
-    }
-    Object.defineProperty(navigator.mediaDevices, 'getUserMedia', { value: fake, configurable: true, writable: true });
-    (window as unknown as { __syntheticMic?: boolean }).__syntheticMic = true
-  })
+  // A steady tone: speech right up to the stop (fake-mic.ts).
+  await useSyntheticMicIn(page)
 }
 
 export interface EngineLane {

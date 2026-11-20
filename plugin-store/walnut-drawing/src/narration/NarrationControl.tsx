@@ -40,7 +40,7 @@ export const NARRATION_CSS = `
   font-size: 13.5px; line-height: 20px; pointer-events: none;
 }
 /* Above the drawing's own note in that slot (Make a diagram), never on it. */
-.drawing-diagram-note ~ .walnut-narration-strip { bottom: 116px; }
+.drawing-diagram-note ~ .drawing-workspace-overlay .walnut-narration-strip, .drawing-diagram-note ~ .walnut-narration-strip { bottom: 116px; }
 .walnut-narration-strip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .walnut-narration-strip-muted { color: rgb(255 255 255 / 65%); }
 .walnut-narration-strip[data-tone="error"] { background: rgb(130 20 24 / 92%); }

@@ -13,6 +13,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import type { Page } from '@playwright/test'
 
 const SAMPLE_RATE = 48_000
 const TONE_HZ = 440
@@ -64,38 +65,70 @@ export function fakeMicArgsFor(wav: Buffer, name = 'mic.wav'): string[] {
 
 export const FAKE_MIC_ARGS: string[] = fakeMicArgsFor(toneWav(), 'tone.wav')
 
+export interface SyntheticMicOptions {
+  /** The tone's level to start with (0 = digital zero, a dead mic). Default 0.3. */
+  gain?: number
+  /** Speak and pause by turns, like sentences: the tone is on for `onMs`, then a faint hiss for `offMs`, from `leadMs`. Left out, it is steady. */
+  speech?: { leadMs: number; onMs: number; offMs: number }
+  /** Wait this long before answering, as a slow device does. */
+  openDelayMs?: number
+}
+
 /**
- * A microphone for any engine (WebKit has no fake capture flag): an init script that answers
- * getUserMedia with a stream made in the page, a tone that speaks for `onMs` and pauses for
- * `offMs`, again and again, starting after `leadMs`, over a faint hiss (a real mic is never pure
- * zero). It goes to a MediaStream destination only: nothing reaches the speakers.
+ * The one synthetic microphone of the browser specs, for any engine (WebKit has no fake capture
+ * flag): getUserMedia answers a stream made in the page, a 220 Hz tone through a gain into a
+ * MediaStream destination, so nothing reaches the speakers (in WebKit an automated page keeps its
+ * AudioContext only with the voice-test agent, webkit-recorder.ts). Patched on the prototype as
+ * well as the instance: WebKit kept answering with the native method after an instance-only patch.
+ * The page gets `__micGain(g)` (set the level now), `__syntheticMicGain` (the newest stream's
+ * gain node), `__micStreams` (every stream handed out) and `__syntheticMic`; it logs
+ * `[synthetic-mic]` lines a spec can print when a recording never starts.
  */
-export function scriptedMicInit({ leadMs = 600, onMs = 1_800, offMs = 2_600 } = {}): string {
-  return `(() => {
-    const fake = async () => {
-      const Ctx = window.AudioContext || window.webkitAudioContext
+export async function useSyntheticMic(page: Page, opts: SyntheticMicOptions = {}): Promise<void> {
+  await page.addInitScript((o: SyntheticMicOptions) => {
+    const fake = async (): Promise<MediaStream> => {
+      console.log('[synthetic-mic] getUserMedia called')
+      if (o.openDelayMs) await new Promise((r) => setTimeout(r, o.openDelayMs))
+      const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
       const ctx = new Ctx()
-      if (ctx.state === 'suspended') await ctx.resume().catch(() => {})
-      const osc = ctx.createOscillator(); osc.frequency.value = 200
-      const wobble = ctx.createOscillator(); wobble.frequency.value = 4
-      const depth = ctx.createGain(); depth.gain.value = 40
-      wobble.connect(depth); depth.connect(osc.frequency)
-      const level = ctx.createGain(); level.gain.value = 0.001
-      osc.connect(level)
-      const out = ctx.createMediaStreamDestination()
-      level.connect(out)
-      osc.start(); wobble.start()
-      const t0 = ctx.currentTime + ${leadMs} / 1000
-      for (let i = 0; i < 400; i++) {
-        const at = t0 + i * (${onMs} + ${offMs}) / 1000
-        level.gain.setValueAtTime(0.3, at)
-        level.gain.setValueAtTime(0.001, at + ${onMs} / 1000)
-      }
-      return out.stream
+      // Never hang the recorder on a context that will not resume.
+      await Promise.race([ctx.resume().catch(() => {}), new Promise((r) => setTimeout(r, 1000))])
+      console.log(`[synthetic-mic] context ${ctx.state}`)
+      const osc = ctx.createOscillator()
+      osc.frequency.value = 220
+      const gain = ctx.createGain()
+      const dst = ctx.createMediaStreamDestination()
+      osc.connect(gain).connect(dst)
+      if (o.speech) {
+        // A pitch that wanders (4 Hz) and a level that speaks, then pauses over a hiss.
+        const wobble = ctx.createOscillator()
+        wobble.frequency.value = 4
+        const depth = ctx.createGain()
+        depth.gain.value = 40
+        wobble.connect(depth).connect(osc.frequency)
+        wobble.start()
+        const quiet = 0.001
+        gain.gain.value = quiet
+        const t0 = ctx.currentTime + o.speech.leadMs / 1000
+        const cycle = (o.speech.onMs + o.speech.offMs) / 1000
+        for (let i = 0; i < 400; i++) {
+          gain.gain.setValueAtTime(o.gain ?? 0.3, t0 + i * cycle)
+          gain.gain.setValueAtTime(quiet, t0 + i * cycle + o.speech.onMs / 1000)
+        }
+      } else gain.gain.value = o.gain ?? 0.3
+      osc.start()
+      const w = window as unknown as { __micStreams?: MediaStream[]; __micGain?: (g: number) => void; __syntheticMicGain?: GainNode }
+      w.__micStreams = [...(w.__micStreams ?? []), dst.stream]
+      w.__micGain = (g: number) => { gain.gain.cancelScheduledValues(ctx.currentTime); gain.gain.setValueAtTime(g, ctx.currentTime) }
+      w.__syntheticMicGain = gain
+      console.log('[synthetic-mic] stream ready')
+      return dst.stream
     }
-    // Over the device's own method (WebKit keeps it on the prototype), or a mediaDevices of its own.
-    if (typeof MediaDevices !== 'undefined') Object.defineProperty(MediaDevices.prototype, 'getUserMedia', { value: fake, configurable: true, writable: true })
+    if (typeof MediaDevices !== 'undefined') {
+      Object.defineProperty(MediaDevices.prototype, 'getUserMedia', { value: fake, configurable: true, writable: true })
+    }
     if (!navigator.mediaDevices) Object.defineProperty(navigator, 'mediaDevices', { value: {}, configurable: true })
-    Object.defineProperty(navigator.mediaDevices, 'getUserMedia', { value: fake, configurable: true, writable: true })
-  })()`
+    Object.defineProperty(navigator.mediaDevices, 'getUserMedia', { value: fake, configurable: true, writable: true });
+    (window as unknown as { __syntheticMic?: boolean }).__syntheticMic = true
+  }, opts)
 }

@@ -9,7 +9,7 @@
  *
  * Runs in Chromium (drawing-narration-layout.spec.ts) and in WebKit, the Mac app's engine
  * (drawing-narration-layout.webkit.spec.ts): the microphone is a stream made in the page (fake-mic.ts
- * scriptedMicInit), speech to text a stub at the network. Nothing plays a sound.
+ * useSyntheticMic), speech to text a stub at the network. Nothing plays a sound.
  *
  * Env for a proof video: PROOF_VIDEO_DIR, NARRATION_VIEWPORT=<w>x<h>, NARRATION_SCENE=<a drawing
  * file's JSON (GET /api/drawings/file)>, NARRATION_TARGETS=<JSON list of the words that start
@@ -20,7 +20,7 @@ import fs from 'node:fs'
 import { loadHome } from './draft-helpers'
 import { useDrawingFixture } from './plugin-fixture'
 import { startProofVideo } from './proof-video'
-import { scriptedMicInit } from './fake-mic'
+import { useSyntheticMic } from './fake-mic'
 import { isolateUiPrefs } from './todo-panel-helpers'
 
 const [VW, VH] = (process.env.NARRATION_VIEWPORT ?? '1280x800').split('x').map(Number)
@@ -98,8 +98,26 @@ async function shapeOnScreen(page: Page, docPath: string, words: string) {
   const box = await workspace(page).locator('canvas.excalidraw__canvas.interactive').boundingBox()
   const { zoom, scrollX, scrollY } = await host.evaluate((el) => ({ zoom: Number(el.dataset.zoom ?? 1), scrollX: Number(el.dataset.scrollX ?? 0), scrollY: Number(el.dataset.scrollY ?? 0) }))
   if (!box) throw new Error('no canvas')
-  return { x: box.x + (shape.x + shape.width / 2 + scrollX) * zoom, y: box.y + (shape.y + shape.height / 2 + scrollY) * zoom }
+  const left = box.x + (shape.x + scrollX) * zoom
+  const top = box.y + (shape.y + scrollY) * zoom
+  return { x: left + (shape.width * zoom) / 2, y: top + (shape.height * zoom) / 2, top, right: left + shape.width * zoom }
 }
+
+/** Pan the canvas until the shape's top right corner is at (x, y) on the page. */
+async function panShapeCornerTo(page: Page, docPath: string, words: string, x: number, y: number) {
+  for (let i = 0; i < 4; i++) {
+    const at = await shapeOnScreen(page, docPath, words)
+    const dx = at.right - x
+    const dy = at.top - y
+    if (Math.abs(dx) < 3 && Math.abs(dy) < 3) return
+    await page.mouse.move(x, y - 200)
+    await page.mouse.wheel(dx, dy)
+    await page.waitForTimeout(300)
+  }
+}
+
+const overlaps = (a: { x: number; y: number; width: number; height: number }, b: typeof a) =>
+  a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
 
 async function centerOf(l: Locator) {
   const b = await l.boundingBox()
@@ -118,7 +136,8 @@ export function registerNarrationLayoutScenario(): void {
     page.on('console', (m) => { if (m.type() === 'error' && !/favicon|ERR_ABORTED|\[api\] [A-Z]+ \/api\/(?!drawings|stt)\S+ FAILED after \d+ms \(timeout/.test(m.text())) errors.push(m.text()) })
     // This spec opens the sidebar: its prefs stay its own, never the shared fixture's.
     await isolateUiPrefs(page)
-    await page.addInitScript(scriptedMicInit())
+    // Sentences: 1.8 s of speech, then 2.6 s of quiet, again and again.
+    await useSyntheticMic(page, { speech: { leadMs: 600, onMs: 1_800, offMs: 2_600 } })
     const video = await startProofVideo(page)
     let heard = 0
     await page.route('**/api/stt/transcribe', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: SAID[heard++ % SAID.length], durationMs: 30, recordingId: `rec-${heard}` }) }))
@@ -169,6 +188,20 @@ export function registerNarrationLayoutScenario(): void {
     await expect(strip).toContainText(SAID[1].slice(0, 20), { timeout: 30_000 })
     await expectSamePlaces(page, idle, 'when the second sentence came in')
     await video.hold(1_200)
+
+    if (!video.on) {
+      // A shape selected near the bottom: its "Make a diagram" button keeps clear of the strip
+      // (2026-11-20: held only above the editor's bottom bar, it sat on the words).
+      await page.mouse.click(second.x, second.y)
+      const c = (await workspace(page).locator('.drawing-workspace-canvas').boundingBox())!
+      const s1 = (await strip.boundingBox())!
+      await panShapeCornerTo(page, docPath, TARGETS[1], s1.x + s1.width / 2 + 40, c.y + c.height - 80)
+      const diagramPill = workspace(page).locator('.drawing-diagram-pill')
+      await expect(diagramPill).toBeVisible()
+      await expect.poll(async () => overlaps((await diagramPill.boundingBox())!, (await strip.boundingBox())!), { message: 'the Make a diagram button sits on the caption strip' }).toBe(false)
+      await expectSamePlaces(page, idle, 'when a shape was selected')
+      await page.keyboard.press('Escape')
+    }
 
     // The strip is over the canvas, clear of the bar and of the editor's bottom tools.
     const stripBox = (await strip.boundingBox())!

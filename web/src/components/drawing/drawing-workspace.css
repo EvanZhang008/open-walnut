@@ -214,6 +214,8 @@
 /* The canvas and what sits on it. */
 .drawing-workspace-canvas { position: relative; flex: 1 1 auto; min-height: 240px; }
 .drawing-canvas-host { position: absolute; inset: 0; }
+/* A plugin's overlay (canvasExtra): its children place themselves in the canvas box. */
+.drawing-workspace-overlay { display: contents; }
 .drawing-workspace-empty, .drawing-workspace-loading {
   position: absolute;
   inset: 0;

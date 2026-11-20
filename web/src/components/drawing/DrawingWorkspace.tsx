@@ -40,6 +40,7 @@ import type { CanvasMenu, DrawingCanvasHandle, ExcalidrawCanvasProps } from './E
 // The chat (SessionPanel and its composer) loads only when the assistant is opened.
 const DrawingAssistant = lazy(() => import('./DrawingAssistant'));
 import { usePageTheme } from './usePageTheme';
+import { useOverlayRoom } from './canvas-overlay';
 import './drawing-workspace.css';
 
 export interface DrawingWorkspaceState {
@@ -231,6 +232,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const [snap, setSnap] = useState<DrawingSnapshot | null>(null);
   const sync = useRef<DrawingSync | null>(null);
   const canvas = useRef<DrawingCanvasHandle | null>(null);
+  const overlay = useRef<HTMLDivElement>(null);
+  const overlayRoom = useOverlayRoom(overlay, !!(source && canvasExtra));
   const root = useRef<HTMLDivElement>(null);
   const [Canvas, setCanvas] = useState<CanvasModule | null>(null);
   const [canvasError, setCanvasError] = useState<string | null>(null);
@@ -766,7 +769,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               onLibrarySource={addLibrarySource}
               onScene={(scene: DrawingScene, key: number) => sync.current?.edit(scene, key)}
               onTextEditEnd={() => sync.current?.textEditEnded()}
-              onReady={(handle) => { canvas.current = handle; }} onActivity={onActivity} />
+              onReady={(handle) => { canvas.current = handle; }} onActivity={onActivity} bottomRoom={overlayRoom} />
           )}
           {textDialogOpen && (
             <form className="drawing-text-diagram" aria-label="Text to diagram"
@@ -796,8 +799,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                     <button type="button" className="drawing-icon-button" aria-label="Dismiss" onClick={() => setDiagram(null)}><Icon d={ICON.close} /></button></>}
             </div>
           )}
-          {/* Last, so a plugin's overlay can make room for the notes above (CSS `~`). */}
-          {source && canvasExtra}
+          {/* Last, so a plugin's overlay can make room for the notes above (CSS `~`); the editor's
+              own buttons keep clear of what it shows (canvas-overlay.ts). */}
+          {source && canvasExtra && <div ref={overlay} className="drawing-workspace-overlay">{canvasExtra}</div>}
         </div>
         <footer className="drawing-workspace-credit">
           <a href="https://github.com/excalidraw/excalidraw" target="_blank" rel="noreferrer noopener">Powered by Excalidraw</a>

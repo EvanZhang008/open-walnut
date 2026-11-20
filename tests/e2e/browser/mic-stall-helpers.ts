@@ -12,6 +12,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { stubEngine, openComposer } from './stt-failure-helpers'
+import { useSyntheticMic } from './fake-mic'
 
 const SHOTS = '/tmp/voice-flaky/shots'
 
@@ -21,32 +22,9 @@ async function shot(page: Page, name: string): Promise<void> {
   await page.screenshot({ path: `${SHOTS}/${engine}-${name}.png` })
 }
 
-/** getUserMedia answers an oscillator; `window.__micGain(g)` sets its level (0 = digital zero). */
-async function useControllableMic(page: Page, startGain: number, openDelayMs = 0): Promise<void> {
-  await page.addInitScript(([g0, delay]: [number, number]) => {
-    const fake = async (): Promise<MediaStream> => {
-      if (delay) await new Promise((r) => setTimeout(r, delay))
-      const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
-      const ctx = new Ctx()
-      await Promise.race([ctx.resume().catch(() => {}), new Promise((r) => setTimeout(r, 1000))])
-      const osc = ctx.createOscillator()
-      osc.frequency.value = 220
-      const gain = ctx.createGain()
-      gain.gain.value = g0
-      const dst = ctx.createMediaStreamDestination()
-      osc.connect(gain).connect(dst)
-      osc.start();
-      const w = window as unknown as { __micStreams?: MediaStream[] }
-      w.__micStreams = [...(w.__micStreams ?? []), dst.stream];
-      (window as unknown as { __micGain: (g: number) => void }).__micGain = (g: number) => { gain.gain.setValueAtTime(g, ctx.currentTime) }
-      return dst.stream
-    }
-    if (typeof MediaDevices !== 'undefined') {
-      Object.defineProperty(MediaDevices.prototype, 'getUserMedia', { value: fake, configurable: true, writable: true })
-    }
-    if (!navigator.mediaDevices) Object.defineProperty(navigator, 'mediaDevices', { value: {}, configurable: true })
-    Object.defineProperty(navigator.mediaDevices, 'getUserMedia', { value: fake, configurable: true, writable: true })
-  }, [startGain, openDelayMs] as [number, number])
+/** getUserMedia answers an oscillator (fake-mic.ts); `window.__micGain(g)` sets its level (0 = digital zero). */
+function useControllableMic(page: Page, startGain: number, openDelayMs = 0): Promise<void> {
+  return useSyntheticMic(page, { gain: startGain, openDelayMs })
 }
 
 const setGain = (page: Page, g: number) => page.evaluate((v) => (window as unknown as { __micGain: (g: number) => void }).__micGain(v), g)

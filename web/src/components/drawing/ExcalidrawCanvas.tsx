@@ -28,6 +28,7 @@ import { editorFingerprint, sceneFromEditor, type DrawingScene } from './drawing
 import { libraryFingerprint, parseLibraryItems, tabLibrary, takeAddLibrary, type LibraryItem, type LibraryStore } from './drawing-library';
 import { applyDiagram, boundsOf, diagramSource, type Bounds, type DiagramEditor } from './drawing-diagram';
 import { ActivityTracker, type Activity, type ActivityElement } from './drawing-activity';
+import { pillTop, type SelectionPill } from './canvas-overlay';
 
 export interface DiagramInput {
   elements: Array<Record<string, unknown>>;
@@ -81,6 +82,8 @@ export interface ExcalidrawCanvasProps {
   library?: LibraryStore;
   /** The person's steps on the canvas (drawing-activity.ts); left out, nothing is tracked. */
   onActivity?(activity: Activity): void;
+  /** Pixels at the bottom an overlay of the host's shows in (canvas-overlay.ts): the selection's button stays above them. */
+  bottomRoom?: number;
 }
 
 type AnyElements = Parameters<NonNullable<React.ComponentProps<typeof Excalidraw>['onChange']>>[0];
@@ -139,7 +142,7 @@ function editorUiOffsets(host: HTMLElement): { top: number; right: number; botto
 const PILL_BOTTOM_CLEAR = 88;
 
 /** Where the "Make a diagram" button sits: above the selection's top right, or under it near the top. */
-interface Pill { x: number; y: number; below: boolean }
+type Pill = SelectionPill;
 
 function pillFor(elements: AnyElements, appState: AnyAppState): Pill | null {
   const busy = appState.newElement || appState.selectionElement || appState.isResizing || appState.isRotating
@@ -155,7 +158,7 @@ function pillFor(elements: AnyElements, appState: AnyAppState): Pill | null {
   const bottom = Math.round((b.maxY + appState.scrollY) * zoom);
   const below = top < 56;
   // Never under the editor's own corner controls (zoom, undo, help) along the bottom.
-  return { x: Math.max(120, Math.min(x, appState.width - 8)), y: below ? Math.min(bottom + 8, appState.height - PILL_BOTTOM_CLEAR) : Math.min(top - 8, appState.height - PILL_BOTTOM_CLEAR), below };
+  return { x: Math.max(120, Math.min(x, appState.width - 8)), y: below ? Math.min(bottom + 8, appState.height - PILL_BOTTOM_CLEAR) : Math.min(top - 8, appState.height - PILL_BOTTOM_CLEAR), below, height: appState.height };
 }
 
 const MenuIcon = ({ d }: { d: string }) => (
@@ -165,7 +168,7 @@ const ICON_DOWNLOAD = 'M12 4v11m0 0-4-4m4 4 4-4M5 19h14';
 const ICON_DIAGRAM = 'M4 5h6v5H4zM14 14h6v5h-6zM7 10v4h7';
 const ICON_TEXT = 'M5 6h14M12 6v12M9 18h6';
 
-export default function ExcalidrawCanvas({ scene, sceneKey, theme, autoFocus = false, onScene, onReady, onTextEditEnd, menu, diagramBusy = false, onBrowseLibraries, onLibrarySource, library = tabLibrary, onActivity }: ExcalidrawCanvasProps) {
+export default function ExcalidrawCanvas({ scene, sceneKey, theme, autoFocus = false, onScene, onReady, onTextEditEnd, menu, diagramBusy = false, onBrowseLibraries, onLibrarySource, library = tabLibrary, onActivity, bottomRoom = 0 }: ExcalidrawCanvasProps) {
   const api = useRef<ExcalidrawImperativeAPI | null>(null);
   const host = useRef<HTMLDivElement>(null);
   const shownKey = useRef(sceneKey);
@@ -334,7 +337,7 @@ export default function ExcalidrawCanvas({ scene, sceneKey, theme, autoFocus = f
       }
     }
     const next = menu ? pillFor(elements, appState) : null;
-    const key = next ? `${next.x}|${next.y}|${next.below}` : '';
+    const key = next ? `${next.x}|${next.y}|${next.below}|${next.height}` : '';
     if (key !== pillKey.current) {
       pillKey.current = key;
       setPill(next);
@@ -422,7 +425,7 @@ export default function ExcalidrawCanvas({ scene, sceneKey, theme, autoFocus = f
     </Excalidraw>
       {menu && pill && !diagramBusy && (
         <button type="button" className="drawing-diagram-pill" data-below={pill.below ? 'true' : undefined}
-          style={{ left: pill.x, top: pill.y }}
+          style={{ left: pill.x, top: pillTop(pill, bottomRoom) }}
           onPointerDown={(e) => e.stopPropagation()}
           onClick={() => menu.onMakeDiagram()}>
           <MenuIcon d={ICON_DIAGRAM} />
