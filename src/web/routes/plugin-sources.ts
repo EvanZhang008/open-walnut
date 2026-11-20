@@ -24,6 +24,8 @@
 import { Router } from 'express';
 import { WALNUT_HOME } from '../../constants.js';
 import { registry } from '../../core/integration-registry.js';
+import { getConfig } from '../../core/config-manager.js';
+import { hasInstallChoice } from '../../core/plugins/store-install-mode.js';
 import {
   addSource, addNpmSource, checkSource, removeSource, listSources, setSourceAutoUpdate,
   isValidSlug, parseShareSnippet, isValidSourceUrl,
@@ -97,7 +99,8 @@ export interface PluginSourcesRouterDeps {
   updateDeadlineMs?: number;
 }
 
-export type PluginStatus = 'loaded' | 'needs-config' | 'needs-dependency' | 'unsupported' | 'duplicate' | 'error' | 'pending-restart';
+/** `not-installed`: an optional plugin of the source (manifest `install`) nobody installed yet. */
+export type PluginStatus = 'loaded' | 'needs-config' | 'needs-dependency' | 'unsupported' | 'duplicate' | 'error' | 'pending-restart' | 'not-installed';
 
 /**
  * A LOADED plugin is 'loaded' whatever its capability mix — the registry check
@@ -111,11 +114,12 @@ export type PluginStatus = 'loaded' | 'needs-config' | 'needs-dependency' | 'uns
  * true of one row: a plugin held back by a missing dependency was never imported, so
  * "needs a newer Walnut" would be a guess, while the dependency is a fact.
  */
-function statusFor(pluginId: string | null, error?: string): PluginStatus {
+function statusFor(pluginId: string | null, error: string | undefined, waiting: boolean): PluginStatus {
   if (error || !pluginId) return 'error';
   // Updated on disk while loaded: the running code is the OLD one until a restart.
   if (isRestartPending(pluginId)) return 'pending-restart';
   if (registry.has(pluginId)) return 'loaded';
+  if (waiting) return 'not-installed';
   if (getUnconfiguredPlugins().some(p => p.id === pluginId)) return 'needs-config';
   if (getUnmetDependencyPlugins().some(p => p.id === pluginId)) return 'needs-dependency';
   if (getUnsupportedPlugins().some(p => p.id === pluginId)) return 'unsupported';
@@ -136,12 +140,17 @@ function capabilitiesFor(pluginId: string | null): string[] | undefined {
   return plugin.capabilities ?? ['sync'];
 }
 
-function withStatuses(view: PluginSourceView) {
+/** The user's install choices (`plugins.<id>.enabled`), for telling a waiting optional plugin apart. */
+async function installChoices(): Promise<Record<string, { enabled?: unknown } | undefined>> {
+  return (await getConfig()).plugins ?? {};
+}
+
+function withStatuses(view: PluginSourceView, choices: Record<string, { enabled?: unknown } | undefined>) {
   return {
     ...view,
     plugins: view.plugins.map(p => ({
       ...p,
-      status: statusFor(p.id, p.error),
+      status: statusFor(p.id, p.error, !!p.id && p.install === 'optional' && !hasInstallChoice(choices, p.id)),
       capabilities: capabilitiesFor(p.id),
     })),
   };
@@ -215,7 +224,8 @@ export function createPluginSourcesRouter(
   router.get('/', async (_req, res) => {
     try {
       const sources = await listSources();
-      res.json(sources.map(withStatuses));
+      const choices = await installChoices();
+      res.json(sources.map((source) => withStatuses(source, choices)));
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
@@ -285,7 +295,7 @@ export function createPluginSourcesRouter(
         log.warn('dependency plan after add failed', { error: String(err) });
       }
       res.status(201).json({
-        ...withStatuses(refreshed),
+        ...withStatuses(refreshed, await installChoices()),
         ...(pendingDependencies.length ? { pendingDependencies } : {}),
       });
     } catch (err) {
@@ -403,7 +413,7 @@ export function createPluginSourcesRouter(
         }
       }
       const refreshed = (await listSources()).find(s => s.slug === slug) ?? source;
-      res.json({ installed, skipped, plugins: withStatuses(refreshed) });
+      res.json({ installed, skipped, plugins: withStatuses(refreshed, await installChoices()) });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
@@ -466,7 +476,7 @@ export function createPluginSourcesRouter(
     }
     try {
       const view = await setSourceAutoUpdate(slug, on);
-      res.json({ ...view, plugins: withStatuses(view) });
+      res.json({ ...view, plugins: withStatuses(view, await installChoices()) });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       res.status(/not found/.test(message) ? 404 : 400).json({ error: message });

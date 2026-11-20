@@ -100,6 +100,15 @@ export interface PluginSourceState {
   lastKnownPlugins?: KnownStorePlugin[];
   /** git: what automatic updates did here, for the store's "Updated to" line. */
   auto?: SourceAutoState;
+  /**
+   * Set once a Walnut that knows install modes sorted this source's plugins: before it, every
+   * plugin of the source was loaded, so the first sort keeps all of them installed
+   * (store-install-mode.ts). A source added by such a Walnut starts with it.
+   */
+  installModes?: number;
+  /** Plugins this machine installed from this source (store-install-mode.ts): installed even
+   *  when config.yaml lost their `enabled` key. A Remove takes an id out. */
+  kept?: string[];
 }
 
 /** What the store says about a git source's updates. Older Walnut ignores the whole field. */
@@ -118,6 +127,20 @@ export interface KnownStorePlugin {
   name: string | null;
 }
 
+/**
+ * How a store plugin comes onto a machine that has its source (manifest `install`):
+ * `auto` loads with the source, `optional` waits for the user's Install in Apps. A manifest
+ * that says nothing (every store written before the field) is `auto`, today's behaviour.
+ */
+export type StoreInstallMode = 'auto' | 'optional';
+
+export function parseStoreInstallMode(raw: unknown): StoreInstallMode {
+  return raw === 'optional' ? 'optional' : 'auto';
+}
+
+/** Bump only with a migration that must run again over every source (store-install-mode.ts). */
+export const STORE_INSTALL_MODES_VERSION = 1;
+
 export interface DiscoveredStorePlugin {
   /** Absolute path of the plugin directory (contains manifest.json). */
   dir: string;
@@ -125,6 +148,12 @@ export interface DiscoveredStorePlugin {
   id: string | null;
   name: string | null;
   version: string | null;
+  /** The manifest's `install` (absent reads `auto`). */
+  install: StoreInstallMode;
+  /** Manifest description, for the Apps card of a plugin that is not installed yet. */
+  description?: string;
+  /** Manifest category, raw (the catalog parses it). */
+  category?: unknown;
   error?: string;
 }
 
@@ -325,8 +354,38 @@ async function ensureStoresIgnored(): Promise<void> {
 
 // ── State file ──
 
-async function readState(): Promise<Record<string, PluginSourceState>> {
+/** Each source's runtime state (store-install-mode.ts reads `installModes` and `kept`). */
+export async function readState(): Promise<Record<string, PluginSourceState>> {
   return readJsonFile<Record<string, PluginSourceState>>(SOURCES_STATE_FILE, {});
+}
+
+/**
+ * Record what an install-mode sort did: the sources it sorted (`installModes`) and the plugins
+ * this machine installed from each (`kept`), so an installed plugin survives a later write that
+ * replaces the whole `plugins` section of config.yaml without its `enabled` key.
+ */
+export async function recordSourceSort(sort: { settle: readonly string[]; keep: ReadonlyArray<{ slug: string; id: string }> }): Promise<void> {
+  if (sort.settle.length === 0 && sort.keep.length === 0) return;
+  await updateState((state) => {
+    for (const slug of sort.settle) {
+      state[slug] = { ...(state[slug] ?? {}), installModes: STORE_INSTALL_MODES_VERSION };
+    }
+    for (const { slug, id } of sort.keep) {
+      const row = (state[slug] ??= {});
+      if (!(row.kept ?? []).includes(id)) row.kept = [...(row.kept ?? []), id];
+    }
+  });
+}
+
+/** A Remove of an optional store plugin: no source keeps it installed any more. */
+export async function forgetKeptPlugin(id: string): Promise<void> {
+  await updateState((state) => {
+    for (const row of Object.values(state)) {
+      if (!row.kept?.includes(id)) continue;
+      row.kept = row.kept.filter((kept) => kept !== id);
+      if (row.kept.length === 0) delete row.kept;
+    }
+  });
 }
 
 async function updateState(
@@ -361,10 +420,13 @@ export async function scanStorePlugins(storeDir: string): Promise<DiscoveredStor
         id: typeof raw.id === 'string' ? raw.id : null,
         name: typeof raw.name === 'string' ? raw.name : null,
         version: typeof raw.version === 'string' ? raw.version : null,
+        install: parseStoreInstallMode(raw.install),
+        ...(typeof raw.description === 'string' && raw.description.trim() ? { description: raw.description.trim() } : {}),
+        ...(raw.category !== undefined ? { category: raw.category } : {}),
         ...(typeof raw.id !== 'string' ? { error: 'manifest.json missing "id"' } : {}),
       };
     } catch (err) {
-      return { dir, id: null, name: null, version: null, error: `invalid manifest.json: ${err instanceof Error ? err.message : String(err)}` };
+      return { dir, id: null, name: null, version: null, install: 'auto', error: `invalid manifest.json: ${err instanceof Error ? err.message : String(err)}` };
     }
   };
 
@@ -394,8 +456,8 @@ export async function scanStorePlugins(storeDir: string): Promise<DiscoveredStor
 }
 
 /**
- * Plugin directories from all enabled, installed sources (git clones and npm
- * packages alike) — consumed by discoverPluginDirs() in the integration loader.
+ * Every plugin directory of every enabled, installed source (git clones and npm packages
+ * alike), whatever its install mode. Which of them load is store-install-mode.ts's call.
  */
 export async function getStorePluginDirs(): Promise<string[]> {
   const config = await getConfig();
@@ -522,7 +584,7 @@ export async function addSource(url: string, ref?: string): Promise<PluginSource
       hardenGitConfigPerms(url, dir);
       const sha = await currentSha(dir);
       state = await updateState((current) => {
-        current[slug] = { url, ref, lastSha: sha, lastSyncedAt: new Date().toISOString() };
+        current[slug] = { url, ref, lastSha: sha, lastSyncedAt: new Date().toISOString(), installModes: STORE_INSTALL_MODES_VERSION };
       });
       await mutateConfiguredSources((current) => {
         if (current.some((item) => !isNpmSourceConfig(item) && item.url === url)) {
@@ -587,6 +649,7 @@ export async function addNpmSource(rawSpec: string): Promise<PluginSourceView> {
           resolved: installed.resolved,
           ...(installed.integrity ? { integrity: installed.integrity } : {}),
           lastSyncedAt: new Date().toISOString(),
+          installModes: STORE_INSTALL_MODES_VERSION,
         };
       });
       await mutateConfiguredSources((current) => {
@@ -712,11 +775,14 @@ export async function updateSource(slug: string, opts: { requireClean?: boolean 
         hardenGitConfigPerms(source.url, dir);
         const toSha = await currentSha(dir);
         await updateState((state) => {
+          // A restore keeps what the source had settled: its plugins were already sorted.
+          const settled = state[slug]?.installModes;
           state[slug] = {
             url: source.url,
             ref: source.ref,
             lastSha: toSha,
             lastSyncedAt: new Date().toISOString(),
+            ...(settled ? { installModes: settled } : {}),
           };
         });
         log.info('plugin source restored', { slug, url: maskSourceUrl(source.url), toSha });

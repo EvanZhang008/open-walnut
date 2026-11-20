@@ -1,11 +1,14 @@
 /**
- * Install and Remove for a plugin that ships in Walnut's bundled store folder
- * (src/web/routes/plugin-bundled-routes.ts). No React: the section owns busy state and
+ * Install and Remove for a plugin that ships in Walnut's bundled store folder, or an optional
+ * plugin of an installed Plugin Store source (src/web/routes/plugin-bundled-routes.ts). No React: the section owns busy state and
  * feedback, this only speaks the two routes and turns an answer into one result shape.
  */
 
 /** What the store tells the user about a bundled row before it is installed. */
 export const BUNDLED_AVAILABLE_TITLE = 'Ships with Walnut; not loaded until installed.';
+
+/** The same for an optional plugin of an installed source (manifest `install: "optional"`). */
+export const STORE_OPTIONAL_TITLE = 'Comes with its source; not loaded until installed.';
 
 export type BundledActionResult =
   | { ok: true; state?: string }
@@ -48,7 +51,7 @@ export interface BundledActionHooks {
  * plugins that run on it), and a list refresh only when something changed.
  */
 export async function runBundledAction(
-  row: { id: string; name: string },
+  row: { id: string; name: string; sourceSlug?: string },
   action: 'install' | 'remove',
   hooks: BundledActionHooks,
 ): Promise<boolean> {
@@ -61,7 +64,7 @@ export async function runBundledAction(
       hooks.setError(result.dependents ? removeRefusedMessage(row.name, result.dependents, hooks.nameOf) : result.error);
       return false;
     }
-    hooks.setNotice(action === 'install' ? installedNotice(row.name, result.state) : `Removed ${row.name}; it is back under Get more.`);
+    hooks.setNotice(action === 'install' ? installedNotice(row.name, result.state) : removedNotice(row));
     await hooks.onChanged();
     return true;
   } catch (err) {
@@ -70,6 +73,13 @@ export async function runBundledAction(
   } finally {
     hooks.setBusy(null);
   }
+}
+
+/** After a Remove: where the plugin waits to be installed again. */
+export function removedNotice(row: { name: string; sourceSlug?: string }): string {
+  return row.sourceSlug
+    ? `Removed ${row.name}; it waits under its source to install again.`
+    : `Removed ${row.name}; it is back under Get more.`;
 }
 
 /** The notice after an Install: honest about a plugin that loaded but is not running yet. */

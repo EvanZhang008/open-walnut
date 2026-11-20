@@ -43,7 +43,7 @@ function describe(row: SourceRow): string {
 
 function pluginLine(p: SourcePlugin): string {
   const status = p.status ?? 'unknown';
-  const color = status === 'loaded' ? chalk.green : status === 'needs-config' ? chalk.yellow : chalk.red;
+  const color = status === 'loaded' ? chalk.green : status === 'needs-config' ? chalk.yellow : status === 'not-installed' ? chalk.dim : chalk.red;
   return `  ${p.id ?? '(no id)'}  ${color(status)}${p.error ? chalk.dim(`  ${p.error}`) : ''}`;
 }
 

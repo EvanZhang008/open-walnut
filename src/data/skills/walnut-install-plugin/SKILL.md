@@ -71,6 +71,7 @@ curl -s "$base/api/plugin-sources" | jq .
 | `duplicate` | A higher-priority source already owns the Plugin id. | Identify and remove one copy. |
 | `error` | The manifest or artifact is invalid. | Report the exact error. |
 | `pending-restart` | Changed legacy code cannot be replaced live. | Tell the user a restart is needed. Do not restart it yourself. |
+| `not-installed` | An optional plugin of the source (manifest `install: "optional"`): it waits on the Apps page until the user presses Install. | Name it and what it does; install it only when the user asks (`POST /api/plugin-runtime/bundled/<id>/install`). |
 
 ## Configure `needs-config`
 

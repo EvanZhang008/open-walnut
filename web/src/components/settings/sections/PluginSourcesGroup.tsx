@@ -30,7 +30,7 @@ export interface StorePlugin {
   name: string | null;
   version: string | null;
   error?: string;
-  status: 'loaded' | 'needs-config' | 'needs-dependency' | 'unsupported' | 'duplicate' | 'error' | 'pending-restart';
+  status: 'loaded' | 'needs-config' | 'needs-dependency' | 'unsupported' | 'duplicate' | 'error' | 'pending-restart' | 'not-installed';
 }
 
 /** One installed source (git repo or npm package), as GET /api/plugin-sources reports it. */
@@ -72,6 +72,7 @@ export const STATUS_LABELS: Record<StorePlugin['status'], { label: string; tone:
   duplicate: { label: 'Shadowed', tone: 'neutral' },
   error: { label: 'Invalid', tone: 'warning' },
   'pending-restart': { label: 'Restart to activate', tone: 'warning' },
+  'not-installed': { label: 'Not installed', tone: 'neutral' },
 };
 
 /** The four Provenance rows of a git or npm source: full URL, installed ref, integrity, id. */

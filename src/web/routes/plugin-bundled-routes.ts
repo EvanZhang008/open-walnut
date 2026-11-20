@@ -15,6 +15,12 @@
  * record, and deletes the whole `plugins.<id>` key. Without that key the folder is not
  * installed, so the next registry read, and every later boot, lists it as available.
  *
+ * The same two routes install and remove an OPTIONAL plugin of an installed Plugin Store
+ * source (manifest `install: "optional"`, src/core/plugins/store-install-mode.ts): its source
+ * carries the files, and `plugins.<id>.enabled` decides whether discovery loads them, exactly
+ * as for a bundled folder. An `auto` store plugin has no Remove of its own (its source does);
+ * its switch turns it off.
+ *
  * Cloud mode relays both to the primary over the plugin-manage bridge, like `/discover`.
  */
 
@@ -35,6 +41,8 @@ export interface BundledPluginConfigWriter {
   enable(pluginId: string): Promise<void>
   /** Delete `plugins.<id>`; resolves whether a key was there. */
   remove(pluginId: string): Promise<boolean>
+  /** An optional store plugin's Remove: its source no longer keeps it installed (sources.json). */
+  forgetKept?(pluginId: string): Promise<void>
 }
 
 export interface BundledPluginRouteDeps {
@@ -43,7 +51,11 @@ export interface BundledPluginRouteDeps {
   discover?(pluginId: string): Promise<DiscoveredPluginRecord>
   disable(pluginId: string, opts?: { cascade?: boolean }): Promise<PluginLifecycleRecord>
   /** Drop a disabled bundled plugin's record (integration-loader forgetBundledPlugin). */
-  forget?(pluginId: string): Promise<boolean>
+  forget?(pluginId: string, opts?: { storeOptional?: boolean }): Promise<boolean>
+  /** The installed store source that carries this id, and the plugin's install mode. */
+  storePlugin?(pluginId: string): Promise<{ slug: string; install: 'auto' | 'optional' } | null>
+  /** The running copy of this id came from a store source (not a link or a plain folder). */
+  loadedFromStore?(pluginId: string): boolean
   managePrimary(
     pluginId: string,
     operation: PluginManagementAction,
@@ -63,6 +75,10 @@ const defaultConfigWriter: BundledPluginConfigWriter = {
   async remove(pluginId) {
     const { removePluginConfig } = await import('../../core/config-manager.js')
     return removePluginConfig(pluginId)
+  },
+  async forgetKept(pluginId) {
+    const { forgetKeptPlugin } = await import('../../core/plugin-sources.js')
+    await forgetKeptPlugin(pluginId)
   },
 }
 
@@ -93,7 +109,10 @@ export function mountBundledPluginRoutes(router: Router, deps: BundledPluginRout
     deps.bundledStoreDir === undefined ? resolveBundledStoreDir() : deps.bundledStoreDir
   const inStore = async (pluginId: string): Promise<boolean> =>
     (await scanBundledStore(await storeDir())).some((entry) => entry.id === pluginId)
-  const notInStore = (pluginId: string) => ({ error: `"${pluginId}" is not in this build's bundled plugin store` })
+  const notInStore = (pluginId: string) => ({ error: `"${pluginId}" is not in this build's bundled plugin store, nor an optional plugin of an installed source` })
+  /** An optional plugin of an installed store source: the other thing these routes install. */
+  const storeOptional = async (pluginId: string): Promise<boolean> =>
+    (await deps.storePlugin?.(pluginId).catch(() => null))?.install === 'optional'
 
   router.post('/bundled/:pluginId/install', async (req, res) => {
     try {
@@ -109,14 +128,16 @@ export function mountBundledPluginRoutes(router: Router, deps: BundledPluginRout
         res.status(501).json({ error: 'Plugin discovery is unavailable' })
         return
       }
-      if (!(await inStore(pluginId))) {
+      const optional = await storeOptional(pluginId)
+      if (!optional && !(await inStore(pluginId))) {
         res.status(404).json(notInStore(pluginId))
         return
       }
       const existing = deps.list().find((record) => record.id === pluginId)
       // Same id already running from a link or a source: that copy wins discovery, so
-      // writing `enabled: true` here would change nothing but the user's config.
-      if (existing && !existing.bundled) {
+      // writing `enabled: true` here would change nothing but the user's config. An optional
+      // store plugin counts only when the running copy IS the store's.
+      if (existing && !existing.bundled && !(optional && deps.loadedFromStore?.(pluginId))) {
         res.status(409).json({ error: `A plugin with the id "${pluginId}" is already installed from another place`, code: 'not-bundled' })
         return
       }
@@ -163,23 +184,27 @@ export function mountBundledPluginRoutes(router: Router, deps: BundledPluginRout
         return
       }
       const record = deps.list().find((entry) => entry.id === pluginId)
-      if (record && !record.bundled) {
+      const optional = await storeOptional(pluginId)
+      // A link or plain folder with the same id is the user's own copy: never this Remove's.
+      if (record && !record.bundled && !(optional && deps.loadedFromStore?.(pluginId))) {
         res.status(409).json({ error: `"${pluginId}" was not installed from the bundled store; remove it where it came from`, code: 'not-bundled' })
         return
       }
       if (!record) {
         // Never discovered (not built, or already gone): only the config key is left to clean.
-        if (!(await inStore(pluginId))) {
+        if (!optional && !(await inStore(pluginId))) {
           res.status(404).json(notInStore(pluginId))
           return
         }
+        if (optional) await config.forgetKept?.(pluginId)
         res.json({ removed: await config.remove(pluginId) })
         return
       }
       // The switch's own OFF: dependents gate, teardown, polling stop. It refuses (409)
       // before touching anything while another plugin runs on this one.
       const plugin = await deps.disable(pluginId)
-      await deps.forget(pluginId)
+      await deps.forget(pluginId, record.bundled ? {} : { storeOptional: true })
+      if (!record.bundled) await config.forgetKept?.(pluginId)
       await config.remove(pluginId)
       res.json({ removed: true, plugin })
     } catch (error) {

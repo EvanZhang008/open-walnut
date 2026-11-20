@@ -33,6 +33,8 @@ export interface PluginManifest {
   storage?: { files?: boolean | { maxBytes?: number }; tmp?: boolean | { ttlHours?: number } }
   /** Where the tasks the plugin's agents run in show: `everywhere` (default) or only in its own view. */
   taskVisibility?: 'everywhere' | 'plugin'
+  /** In a Plugin Store source: `auto` (default) comes with the source, `optional` waits for the user's Install. */
+  install?: 'auto' | 'optional'
   /**
    * Work that keeps running on one machine: `{ "<name>": { "every": "5m" } }` or
    * `{ "<name>": { "kind": "long-running" } }`; one long-running job may say `"serves": true`
@@ -108,6 +110,9 @@ export async function validatePlugin(root = process.cwd()): Promise<ValidationRe
   }
   if (manifest.taskVisibility !== undefined && manifest.taskVisibility !== 'everywhere' && manifest.taskVisibility !== 'plugin') {
     errors.push("manifest.taskVisibility must be 'everywhere' or 'plugin'")
+  }
+  if (manifest.install !== undefined && manifest.install !== 'auto' && manifest.install !== 'optional') {
+    errors.push("manifest.install must be 'auto' or 'optional'")
   }
   if (manifest.jobs !== undefined) errors.push(...jobErrors(manifest))
   if (manifest.category !== undefined && !(PLUGIN_CATEGORIES as readonly unknown[]).includes(manifest.category)) {

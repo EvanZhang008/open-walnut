@@ -92,6 +92,11 @@ export interface PluginCatalogEntry {
    * installs is the two-phase consent in the store.
    */
   requires?: Record<string, string>
+  /** A plugin of an installed Plugin Store source that waits for an Install (store-install-mode.ts):
+   *  the source it is in. Never read from a catalog file. */
+  sourceSlug?: string
+  /** Store plugins only: the manifest's `install`. */
+  install?: 'auto' | 'optional'
 }
 
 /**
@@ -114,6 +119,8 @@ export interface PluginDependencyPlanItem {
   resolvable: PluginDependencyResolvable
   /** Where it would come from, when the catalog knows. */
   source?: PluginCatalogSource
+  /** An optional plugin of an installed source: Install takes it from there (the bundled route). */
+  sourceSlug?: string
   /** The version that IS here and does not fit the range. Present only then, so the
    *  store can say "(have 1.0.0)" without implying it for a plugin that is merely off. */
   found?: string
@@ -167,6 +174,8 @@ export interface InstalledPluginFacts {
   /** git / npm, for an externally-sourced plugin; `bundled` for one loaded from the
    *  bundled store folder (its row offers Remove, which takes it back to available). */
   sourceKind?: 'git' | 'npm' | 'bundled'
+  /** Store plugins only: the manifest's `install` (an optional one can be removed on its own). */
+  install?: 'auto' | 'optional'
   /** Present when this plugin is a `walnut-plugin link` into a git work tree. */
   linked?: LinkedCheckoutInfo
   /** The linked scan ran out of budget before it reached this plugin: "not scanned", not "not linked". */
@@ -209,8 +218,11 @@ export interface PluginRegistryRow {
   settingsIn?: 'plugins' | 'app'
   /** True when this id is in the curated catalog (vs discovered only). */
   catalog: boolean
-  /** External source slug — what Update/Remove act on. */
+  /** External source slug — what Update/Remove act on. On an available row: the installed
+   *  source that carries this optional plugin, whose Install loads it. */
   sourceSlug?: string
+  /** Store plugins only: `auto` comes with its source, `optional` waits for an Install. */
+  install?: 'auto' | 'optional'
   /** Can the ON/OFF toggle act on this row at all. */
   toggleable: boolean
   /** Only when true: the linked scan never reached this row, so its chip reads "not checked". */
@@ -323,7 +335,7 @@ function resolveDependencyNeed(
   // A builtin entry that is not in the lifecycle records is not on this machine at all:
   // there is nothing to switch on, and nothing to install either.
   if (!entry || entry.source.kind === 'builtin') return { ...base, resolvable: 'none' }
-  return { ...base, resolvable: 'catalog', source: entry.source }
+  return { ...base, resolvable: 'catalog', source: entry.source, ...(entry.sourceSlug ? { sourceSlug: entry.sourceSlug } : {}) }
 }
 
 /**
@@ -473,6 +485,7 @@ export function mergePluginRegistry(
       ...(plugin.settingsIn ? { settingsIn: plugin.settingsIn } : {}),
       catalog: !!entry,
       ...(plugin.sourceSlug ? { sourceSlug: plugin.sourceSlug } : {}),
+      ...(plugin.install ? { install: plugin.install } : {}),
       toggleable: isToggleable(status),
       ...(plugin.linkedScanSkipped ? { linkedScanSkipped: true } : {}),
       ...(plugin.dir ? { dir: plugin.dir } : {}),
@@ -525,7 +538,9 @@ export function mergePluginRegistry(
       ...(plan.length ? { dependencyPlan: plan } : {}),
       ...(blockedBy.length ? { blockedBy } : {}),
       configurable: false,
-      catalog: true,
+      catalog: !entry.sourceSlug,
+      ...(entry.sourceSlug ? { sourceSlug: entry.sourceSlug } : {}),
+      ...(entry.install ? { install: entry.install } : {}),
       toggleable: false,
     })
   }

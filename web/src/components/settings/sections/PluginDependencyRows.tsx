@@ -36,6 +36,8 @@ export interface DependencyPlanItem {
   range: string;
   resolvable: 'installed' | 'catalog' | 'none';
   source?: DependencySource;
+  /** An optional plugin of an installed source: its Install is one click, as for `bundled`. */
+  sourceSlug?: string;
   /** The version that IS here and does not fit the range. */
   found?: string;
 }

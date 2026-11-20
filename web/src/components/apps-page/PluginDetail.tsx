@@ -26,7 +26,7 @@ import { PluginJobsControls } from '@/components/settings/PluginJobsControls'
 import { PluginConnectionPanel, CONNECTION_BADGE } from '@/components/settings/PluginConnectionPanel'
 import { PluginConfigCards } from '@/components/settings/sections/PluginConfigCards'
 import { PluginAlsoNeeds, PluginCascadeConfirm, PluginDependencyNeeds, PluginPendingDependencies, dependencyBusyKey } from '@/components/settings/sections/PluginDependencyRows'
-import { BUNDLED_AVAILABLE_TITLE } from '@/components/settings/sections/plugin-bundled-actions'
+import { BUNDLED_AVAILABLE_TITLE, STORE_OPTIONAL_TITLE } from '@/components/settings/sections/plugin-bundled-actions'
 import { firstSentence, needsSetupHelp, rowTags } from '@/components/settings/sections/plugin-row-view'
 import { RESTART_PENDING_STATE } from '@/components/settings/plugin-update-types'
 import { plainText } from '@/components/settings/plugin-update-view'
@@ -225,21 +225,26 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, fo
     </>
   )
 
+  // An optional plugin of a source is removed on its own (back to waiting under its source);
+  // any other source plugin goes with its whole source.
+  const ownRemove = row.source.kind === 'bundled' || row.install === 'optional'
   const removable = row.installed && (row.sourceSlug || row.source.kind === 'bundled')
   const remove = removable ? (
     <SettingsGroup className="apps-detail-group" data-testid={`plugin-remove-group-${row.id}`}>
       <SettingsRow
         label={`Remove ${row.name}`}
-        help={row.sourceSlug
+        help={!ownRemove
           ? 'Deletes the files Walnut installed for it. Plugins from the same source go with it.'
-          : 'Turns it off and forgets its settings. It stays under Get more.'}
+          : row.sourceSlug
+            ? 'Turns it off and forgets its settings. Its source keeps it, ready to install again.'
+            : 'Turns it off and forgets its settings. It stays under Get more.'}
         control={
           <InlineConfirmButton
-            disabled={store.busy === (row.sourceSlug ?? row.id)}
+            disabled={store.busy === (ownRemove ? row.id : row.sourceSlug)}
             aria-label={`Remove ${row.name}`}
             data-testid={`plugin-remove-${row.id}`}
             onConfirm={async () => {
-              if (row.sourceSlug) { if (await store.handleRemove(row.sourceSlug)) onBack() }
+              if (!ownRemove && row.sourceSlug) { if (await store.handleRemove(row.sourceSlug)) onBack() }
               else if (await store.handleBundled(row, 'remove')) onBack()
             }}
           />
@@ -250,8 +255,8 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, fo
 
   const installAction = !row.installed ? (
     <>
-      {row.source.kind === 'bundled' && (
-        <SettingsButton variant="primary" data-testid={`plugin-install-${row.id}`} title={BUNDLED_AVAILABLE_TITLE} busy={store.busy === row.id} busyLabel="Installing..." onClick={() => void store.handleBundled(row, 'install')}>
+      {(row.source.kind === 'bundled' || row.sourceSlug) && (
+        <SettingsButton variant="primary" data-testid={`plugin-install-${row.id}`} title={row.sourceSlug ? STORE_OPTIONAL_TITLE : BUNDLED_AVAILABLE_TITLE} busy={store.busy === row.id} busyLabel="Installing..." onClick={() => void store.handleBundled(row, 'install')}>
           Install
         </SettingsButton>
       )}
@@ -371,7 +376,7 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, fo
               nameFor={store.nameOf}
               // "Install..." ASKS: it opens the consent rows for this source instead of cloning on one click.
               onInstall={(item) => {
-                if (item.source?.kind === 'bundled') {
+                if (item.source?.kind === 'bundled' || item.sourceSlug) {
                   void store.handleBundled({ id: item.id, name: store.nameOf(item.id) }, 'install', dependencyBusyKey(row.id, item.id))
                 } else if (row.sourceSlug) {
                   store.setError(null)

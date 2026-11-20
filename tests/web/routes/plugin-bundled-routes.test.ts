@@ -72,6 +72,9 @@ function setup(options: {
     forgetBundled: vi.fn(async () => true),
     clearQuarantine: vi.fn(async () => undefined),
     pluginSourceOwners: async () => new Map<string, { slug: string; kind: 'git' | 'npm' }>(),
+    // No store sources here: the optional-plugin half lives in plugin-store-optional-routes.test.ts.
+    storePlugin: async () => null,
+    storeCatalog: async () => [],
     unconfiguredSchemas: async () => new Map<string, Record<string, unknown> | undefined>(),
     linked: {
       detect: vi.fn(async () => null),

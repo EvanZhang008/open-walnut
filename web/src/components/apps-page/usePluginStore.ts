@@ -26,7 +26,7 @@ import type { PluginSource } from '@/components/settings/sections/PluginSourcesG
 import type { ConnectionReport } from '@/components/settings/PluginConnectionPanel'
 import { failureFeedback, resolveRowState, successFeedback, type Feedback } from '@/components/settings/plugin-update-view'
 import { sourceRowKey, type UpdateState, type UpdateStatusRow } from '@/components/settings/plugin-update-types'
-import { isLinkedRow, isUpdatableRow, type RegistryResponse, type RegistryRow } from './plugin-store-model'
+import { addedNoticeTail, isLinkedRow, isUpdatableRow, type RegistryResponse, type RegistryRow } from './plugin-store-model'
 
 /** The state a source's update row would carry from the server's `updated` answer. */
 function updatedState(body: Record<string, unknown>): UpdateState {
@@ -261,8 +261,10 @@ export function usePluginStore() {
     const plan = (body.pendingDependencies ?? []) as DependencyPlanItem[]
     setPending(plan.length > 0 && body.slug ? { slug: body.slug as string, plan, ...(opts.rowId ? { rowId: opts.rowId } : {}) } : null)
     setAddedPluginIds(((body.plugins ?? []) as Array<{ id?: string | null }>).map((p) => p.id).filter((id): id is string => typeof id === 'string'))
+    // An optional plugin (manifest `install`) waits under its source for an Install of its own.
+    const waiting = ((body.plugins ?? []) as Array<{ status?: string }>).filter((p) => p.status === 'not-installed').length
     setNotice(count > 0
-      ? `Added${what}: found ${count} plugin${count === 1 ? '' : 's'}. New plugins are active now; open one that needs setup to finish it.`
+      ? `Added${what}: found ${count} plugin${count === 1 ? '' : 's'}. ${addedNoticeTail(count, waiting)}`
       : `Added${what}, but no plugins found (no manifest.json at the root or in top-level folders).`)
     updates.reload()
     emitPluginsChanged()
@@ -370,7 +372,7 @@ export function usePluginStore() {
    * Bundled store: Install writes `enabled: true` and loads it live; Remove turns it off,
    * forgets it and deletes its config, so it goes back to Get more.
    */
-  const handleBundled = (row: { id: string; name: string }, action: 'install' | 'remove', busyKey = row.id) =>
+  const handleBundled = (row: { id: string; name: string; sourceSlug?: string }, action: 'install' | 'remove', busyKey = row.id) =>
     runBundledAction(row, action, {
       busyKey, setBusy, setError, setNotice, nameOf,
       onChanged: async () => { emitPluginsChanged(); await requestRefresh() },

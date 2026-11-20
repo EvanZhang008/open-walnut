@@ -57,7 +57,11 @@ export interface RegistryRow {
   /** `'app'`: the plugin's own App draws its settings, so Settings goes to the App. */
   settingsIn?: 'plugins' | 'app'
   catalog: boolean
+  /** The installed source it comes from. On a row that is not installed: the source that
+   *  carries this optional plugin, whose Install loads it. */
   sourceSlug?: string
+  /** Store plugins only: `auto` comes with its source, `optional` waits for an Install. */
+  install?: 'auto' | 'optional'
   toggleable: boolean
   /** Present only when the manifest's icon exists on the server; otherwise the tile is a monogram. */
   iconUrl?: string
@@ -122,10 +126,11 @@ export type CardTone = 'on' | 'off' | 'warn' | 'bad' | 'update' | 'get' | 'fixed
 
 /** The one status a card shows: what most needs the user first, then on or off. */
 export function cardStatus(
-  row: Pick<RegistryRow, 'status' | 'state' | 'installed'>,
+  row: Pick<RegistryRow, 'status' | 'state' | 'installed'> & { sourceSlug?: string },
   opts: { update?: UpdateState; connectionAlert?: string } = {},
 ): { text: string; tone: CardTone } {
-  if (!row.installed) return { text: 'Get', tone: 'get' }
+  // An optional plugin of an installed source has its Install button on the card already.
+  if (!row.installed) return row.sourceSlug ? { text: 'Not installed', tone: 'off' } : { text: 'Get', tone: 'get' }
   switch (row.status) {
     case 'failed':
     case 'quarantined': return { text: 'Failed', tone: 'bad' }
@@ -319,3 +324,11 @@ export function updateNote(
   }
 }
 
+
+/** After a source is added: what came on, and what waits under it for its own Install. */
+export function addedNoticeTail(count: number, waiting: number): string {
+  if (waiting === 0) return 'New plugins are active now; open one that needs setup to finish it.'
+  const plural = (n: number) => `${n} plugin${n === 1 ? '' : 's'}`
+  if (waiting >= count) return `${waiting === 1 ? 'It waits' : 'They wait'} under the source: press Install on the ones you want.`
+  return `${plural(count - waiting)} came on; ${plural(waiting)} ${waiting === 1 ? 'waits' : 'wait'} under the source for you to press Install.`
+}

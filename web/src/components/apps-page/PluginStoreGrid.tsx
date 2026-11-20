@@ -20,7 +20,7 @@ import { PluginPendingDependencies } from '@/components/settings/sections/Plugin
 import { PluginSourceHead, UpdatesHead } from '@/components/settings/sections/PluginSourcesGroup'
 import { sourceRowKey } from '@/components/settings/plugin-update-types'
 import { firstSentence } from '@/components/settings/sections/plugin-row-view'
-import { BUNDLED_AVAILABLE_TITLE } from '@/components/settings/sections/plugin-bundled-actions'
+import { BUNDLED_AVAILABLE_TITLE, STORE_OPTIONAL_TITLE } from '@/components/settings/sections/plugin-bundled-actions'
 import { buildInstallLink, INSTALL_LINK_SCHEME, type InstallLinkTarget } from '../../../../src/core/plugin-install-link'
 import { peekPendingInstall, settlePendingInstall, subscribeOpenLinks } from '@/utils/open-link'
 import { useDraft } from '@/hooks/useDraft'
@@ -68,6 +68,7 @@ function fallbackLine(row: RegistryRow): string {
   if (row.installed) return originKind(row)
   if (row.source.kind === 'builtin') return 'Ships with Walnut, but not in this build.'
   if (row.source.kind === 'bundled') return BUNDLED_AVAILABLE_TITLE
+  if (row.sourceSlug) return STORE_OPTIONAL_TITLE
   return originKind(row)
 }
 
@@ -169,13 +170,15 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen }: {
   const parentOf = partParents(installed)
   const partsOf = (id: string) => installed.filter((row) => parentOf.get(row.id) === id)
   const topLevel = installed.filter((row) => !parentOf.has(row.id))
+  // An optional plugin of an installed source waits under that source, not under Get more.
+  const waiting = available.filter((row) => !!row.sourceSlug)
   // A search finds a plugin by its parts too: "MCP" finds Slack, which holds its MCP server.
   const matches = (row: RegistryRow) => pluginMatches(row, query) || partsOf(row.id).some((part) => pluginMatches(part, query))
 
   const showGroups = filter === 'all' || (PLUGIN_CATEGORY_ORDER as readonly string[]).includes(filter)
   const showGetMore = filter === 'all' || filter === 'get'
   const categoryRank = (row: RegistryRow) => PLUGIN_CATEGORY_ORDER.indexOf(categoryOf(row))
-  const shown = topLevel
+  const shown = [...topLevel, ...waiting]
     .filter((row) => matches(row) && (filter === 'all' || categoryOf(row) === filter))
     .map((row, index) => ({ row, index }))
     .sort((a, b) => categoryRank(a.row) - categoryRank(b.row) || a.index - b.index)
@@ -185,9 +188,9 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen }: {
   // Remove live on its head); a filter or a search shows only sections with a match.
   const groups = sourceSections(shown, store.sources)
     .filter((section) => section.rows.length > 0 || (section.kind === 'source' && !narrowed))
-  const matchingAvailable = available.filter((row) => pluginMatches(row, query))
+  const matchingAvailable = available.filter((row) => !row.sourceSlug && pluginMatches(row, query))
   const searching = query.trim() !== ''
-  const presentKey = PLUGIN_CATEGORY_ORDER.filter((category) => topLevel.some((row) => categoryOf(row) === category)).join(',')
+  const presentKey = PLUGIN_CATEGORY_ORDER.filter((category) => [...topLevel, ...waiting].some((row) => categoryOf(row) === category)).join(',')
   const linkInstalled = linkRequest ? installedSourceFor(linkRequest, store.sources) : null
   // Until the installed sources are read, the card cannot tell a fresh install from one already
   // there: it says it is checking rather than offer an Install that may be wrong.
@@ -227,6 +230,18 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen }: {
         kind={originKind(row)}
         dim={row.installed && (row.status === 'disabled' || row.status === 'unsupported')}
         onSelect={() => onOpen(row.id)}
+        control={!row.installed && row.sourceSlug ? (
+          <button
+            type="button"
+            className="apps-card-open"
+            disabled={store.busy === row.id}
+            onClick={() => void store.handleBundled(row, 'install')}
+            data-testid={`plugin-card-install-${row.id}`}
+            aria-label={`Install ${row.name}`}
+          >
+            {store.busy === row.id ? 'Installing...' : 'Install'}
+          </button>
+        ) : undefined}
         // An App is registered only while its plugin runs, so Open is never a dead button.
         open={app ? { label: 'Open', onClick: () => navigate(app.path), testId: `plugin-card-open-${row.id}` } : undefined}
       />

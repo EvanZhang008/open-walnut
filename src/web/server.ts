@@ -105,7 +105,7 @@ import { usageTracker } from '../core/usage/index.js'
 import * as chatHistory from '../core/chat-history.js'
 import { gitPullWalnut, ensureRepo, commitIfDirty, autoSync, isGitAvailable, isLockContention, checkRepoSize, getSyncGuardState, REPO_SIZE_RECOVERY_KEY } from '../integrations/git-sync.js'
 import { registry } from '../core/integration-registry.js'
-import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, forgetBundledPlugin, getPluginJobSources, getPluginLifecycleRecords, getPluginReloadIds, isPluginCatalogueLoading, loadNewPlugins, loadPlugins, migrateConfigToPlugins, pluginsKeepingTasks, reloadLoadedPlugin, reloadLoadedPlugins, runPluginMigrations, getUnconfiguredPlugins, pluginStarting } from '../core/integration-loader.js'
+import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, forgetBundledPlugin, isStoreSourcePlugin, getPluginJobSources, getPluginLifecycleRecords, getPluginReloadIds, isPluginCatalogueLoading, loadNewPlugins, loadPlugins, migrateConfigToPlugins, pluginsKeepingTasks, reloadLoadedPlugin, reloadLoadedPlugins, runPluginMigrations, getUnconfiguredPlugins, pluginStarting } from '../core/integration-loader.js'
 import { disposeCoreServices, publishCalendarSource, publishFeatureNodes } from '../core/platform-services.js'
 import type { SyncPollContext } from '../core/integration-types.js'
 import { recordSyncSuccess, recordSyncFailure, decideSyncFailureNotice, decideConnectionNotice, getSyncHealth, reconcileCardWanted, StreakWarnings, type ConnectionWatch } from '../core/plugin-sync-health.js'
@@ -2624,7 +2624,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     }),
     // Bundled store Remove: after `disable` above has turned it off, drop the record so
     // the row reads available (the next boot leaves it there too, once config forgets it).
-    forgetBundled: (pluginId) => runPluginMutation(() => forgetBundledPlugin(registry, pluginId)),
+    forgetBundled: (pluginId, opts) => runPluginMutation(() => forgetBundledPlugin(registry, pluginId, opts)),
+    loadedFromStore: (pluginId) => isStoreSourcePlugin(registry, pluginId),
     clearQuarantine: (pluginId) => runPluginMutation(async () => {
       await stopPluginSyncPolling(pluginId)
       try {

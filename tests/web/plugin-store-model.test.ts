@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
+  addedNoticeTail,
   cardStatus,
   originKind,
   partParents,
@@ -54,6 +55,9 @@ describe('cardStatus', () => {
     expect(cardStatus(row({ id: 'a', status: 'failed' }))).toEqual({ text: 'Failed', tone: 'bad' })
     expect(cardStatus(row({ id: 'a', status: 'needs-config' }))).toEqual({ text: 'Needs setup', tone: 'warn' })
     expect(cardStatus(row({ id: 'a', status: 'disabled' }))).toEqual({ text: 'Off', tone: 'off' })
+    // An optional plugin waiting under its installed source: its card carries the Install button.
+    expect(cardStatus({ status: 'available', installed: false, sourceSlug: 'team-store' })).toEqual({ text: 'Not installed', tone: 'off' })
+    expect(cardStatus({ status: 'available', installed: false })).toEqual({ text: 'Get', tone: 'get' })
     expect(cardStatus(row({ id: 'a', state: 'stale-after-update' }))).toEqual({ text: 'Restart to finish', tone: 'warn' })
     expect(cardStatus(row({ id: 'a' }), { connectionAlert: 'Sign in needed' })).toEqual({ text: 'Sign in needed', tone: 'warn' })
     expect(cardStatus(row({ id: 'a' }), { update: { kind: 'available', behind: 2 } })).toEqual({ text: 'Update available', tone: 'update' })
@@ -183,5 +187,14 @@ describe('updateNote', () => {
     expect(updateNote({ kind: 'available', toVersion: 'acme@1.4.0' })!.text).toBe('Update moves this plugin to v1.4.0.')
     expect(updateNote({ kind: 'available', behind: 1 })!.text).toBe('Update moves this plugin to the newest of 1 new commit.')
     expect(updateNote({ kind: 'diverged', behind: 2, ahead: 1 })!.text).toContain('1 commit the remote does not, and the remote has 2 commits it does not')
+  })
+})
+
+describe('addedNoticeTail', () => {
+  it('names what came on and what waits for its own Install', () => {
+    expect(addedNoticeTail(3, 0)).toBe('New plugins are active now; open one that needs setup to finish it.')
+    expect(addedNoticeTail(8, 6)).toBe('2 plugins came on; 6 plugins wait under the source for you to press Install.')
+    expect(addedNoticeTail(2, 1)).toBe('1 plugin came on; 1 plugin waits under the source for you to press Install.')
+    expect(addedNoticeTail(1, 1)).toBe('It waits under the source: press Install on the ones you want.')
   })
 })

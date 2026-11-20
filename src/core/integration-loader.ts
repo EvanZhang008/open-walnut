@@ -30,7 +30,7 @@ import { bundleEsm } from '../lib/transpile.js';
 import { parseManifestJobs } from './plugin-jobs/manifest.js';
 import { bunGlobal } from '../lib/runtime.js';
 import { readPluginWebModule, retainPluginWebModule, type PluginWebModule } from './plugins/plugin-web-module.js';
-import { WALNUT_HOME, IS_EPHEMERAL } from '../constants.js';
+import { WALNUT_HOME, IS_EPHEMERAL, PLUGIN_STORES_DIR } from '../constants.js';
 import { remoteSyncIsolationReason } from './remote-sync-isolation.js';
 import { getVersion, isVersionKnown } from './version.js';
 import { createSubsystemLogger } from '../logging/index.js';
@@ -331,12 +331,35 @@ export function disableLoadedPlugin(
  * plugin that did not come from the bundled store: removing one of those is its
  * source's job, not this one's.
  */
-export function forgetBundledPlugin(registry: IntegrationRegistry, pluginId: string): Promise<boolean> {
+/**
+ * The copy of this id that runs came from a Plugin Store source (a clone under plugin-stores/),
+ * not a link, a plain folder, a builtin or the bundled store: what an optional store plugin's
+ * Remove may take back. Discovery's first-wins order means the id alone never says which copy.
+ */
+export function isStoreSourcePlugin(registry: IntegrationRegistry, pluginId: string): boolean {
+  const source = pluginSources.get(registry)?.get(pluginId);
+  if (!source || source.bundled || source.isBuiltin) return false;
+  // Record dirs are realpaths (discovery canonicalizes them); the stores dir may sit behind a link.
+  return [path.resolve(PLUGIN_STORES_DIR), storesRealDir].some((root) => !!root && source.dir.startsWith(root + path.sep));
+}
+
+/** The stores dir's realpath, read by discovery before any record can name it. */
+let storesRealDir: string | null = null;
+
+export function forgetBundledPlugin(
+  registry: IntegrationRegistry,
+  pluginId: string,
+  opts: { storeOptional?: boolean } = {},
+): Promise<boolean> {
   return runPluginOperation(registry, async () => {
     const manager = pluginManagers.get(registry);
     if (!manager?.get(pluginId)) return false;
     const source = pluginSources.get(registry)?.get(pluginId);
-    if (!source?.bundled) throw new Error(`Plugin "${pluginId}" is not a bundled plugin`);
+    // An optional plugin of a store source is removed the same way (its caller checked the
+    // manifest): without its config key, discovery leaves it under its source again.
+    if (!source?.bundled && !(opts.storeOptional && isStoreSourcePlugin(registry, pluginId))) {
+      throw new Error(`Plugin "${pluginId}" is not a bundled plugin`);
+    }
     const { live } = dependentsToTearDown(dependencyGate(registry, manager), pluginId);
     if (live.length > 0) throw new PluginDependentsError(pluginId, live);
     registry.unregister(pluginId, 'disabled');
@@ -1300,9 +1323,14 @@ async function discoverPluginDirs(
     });
   }
 
+  storesRealDir = await fsp.realpath(PLUGIN_STORES_DIR).catch(() => storesRealDir);
   try {
-    const { getStorePluginDirs } = await import('./plugin-sources.js');
-    for (const dir of await getStorePluginDirs()) await addCandidate(dir, false);
+    // With the config at hand, only the store plugins that are installed (store-install-mode.ts);
+    // without it (the config migration) every one, as it only reads their manifests.
+    const dirs = pluginConfigs
+      ? await (await import('./plugins/store-install-mode.js')).resolveStorePluginDirs(pluginConfigs)
+      : await (await import('./plugin-sources.js')).getStorePluginDirs();
+    for (const dir of dirs) await addCandidate(dir, false);
   } catch (err) {
     log.debug('plugin-source scan failed', {
       error: err instanceof Error ? err.message : String(err),

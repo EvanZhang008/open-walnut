@@ -40,8 +40,10 @@ import {
   loadPluginCatalog,
   mergePluginRegistry,
   type InstalledPluginFacts,
+  type PluginCatalogEntry,
   type PluginRegistryResult,
 } from '../../core/plugins/plugin-catalog.js'
+import type { PluginSourceView } from '../../core/plugin-sources.js'
 import type { PluginLifecycleRecord } from '../../core/plugins/plugin-manager.js'
 import { RESTART_PENDING_STATE, clearRestartPending, isRestartPending, markRestartPending } from '../../core/plugins/restart-pending.js'
 import {
@@ -123,7 +125,7 @@ export interface PluginRuntimeRouterDeps {
     payload?: { cascade?: boolean },
   ): ReturnType<typeof managePrimaryPlugin>
   /** Which external source installed each plugin id — for the store's Update/Remove. */
-  pluginSourceOwners?(): Promise<Map<string, { slug: string; kind: 'git' | 'npm' }>>
+  pluginSourceOwners?(sources?: readonly PluginSourceView[]): Promise<Map<string, { slug: string; kind: 'git' | 'npm'; install?: 'auto' | 'optional' }>>
   /** Config schemas for plugins that did NOT load because config is missing. */
   unconfiguredSchemas?(): Promise<Map<string, Record<string, unknown> | undefined>>
   /** Overridable so a test can point the catalog overlay at a temp home. */
@@ -139,8 +141,15 @@ export interface PluginRuntimeRouterDeps {
   cache?: UpdateStatusCache
   /** Override for the 60 s update deadline (tests only). */
   updateDeadlineMs?: number
-  /** Drop a disabled bundled plugin's record, so its row reads available again. */
-  forgetBundled?(pluginId: string): Promise<boolean>
+  /** Drop a disabled bundled plugin's record, so its row reads available again. `storeOptional`:
+   *  it is an optional plugin of a store source, which the same Remove takes back. */
+  forgetBundled?(pluginId: string, opts?: { storeOptional?: boolean }): Promise<boolean>
+  /** The store source on disk that carries this id, and the plugin's install mode (tests inject). */
+  storePlugin?(pluginId: string): Promise<{ slug: string; install: 'auto' | 'optional' } | null>
+  /** Optional store plugins nobody installed, as catalog rows (tests inject). */
+  storeCatalog?(loadedIds: ReadonlySet<string>, sources?: readonly PluginSourceView[]): Promise<PluginCatalogEntry[]>
+  /** The running copy of this id came from a store source (integration-loader isStoreSourcePlugin). */
+  loadedFromStore?(pluginId: string): boolean
   /** The bundled store folder: undefined resolves this build's, null means none (tests). */
   bundledStoreDir?: string | null
   /** Install/Remove's two config writes (tests inject a fake). */
@@ -191,19 +200,38 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
    * id → the external source that installed it. Imported lazily so the plugin-sources
    * module (and the config read behind it) stays off this router's import path.
    */
-  const resolveSourceOwners = deps.pluginSourceOwners ?? (async () => {
-    const { listSources } = await import('../../core/plugin-sources.js')
-    const owners = new Map<string, { slug: string; kind: 'git' | 'npm' }>()
-    for (const source of await listSources()) {
+  const resolveSourceOwners = deps.pluginSourceOwners ?? (async (sources?: readonly PluginSourceView[]) => {
+    const list = sources ?? await (await import('../../core/plugin-sources.js')).listSources()
+    const owners = new Map<string, { slug: string; kind: 'git' | 'npm'; install?: 'auto' | 'optional' }>()
+    for (const source of list) {
       // A source whose clone is gone still OWNS the plugins it carried (one may still be
       // loaded from memory): the row keeps its slug, its chip and its Remove (N2-3).
       const carried = source.plugins.length > 0 ? source.plugins : (source.lastKnownPlugins ?? [])
       for (const plugin of carried) {
-        if (plugin.id) owners.set(plugin.id, { slug: source.slug, kind: source.kind ?? 'git' })
+        // First source wins an id, the order discovery loads them in (findStorePlugin agrees).
+        if (!plugin.id || owners.has(plugin.id)) continue
+        const install = 'install' in plugin ? plugin.install : undefined
+        owners.set(plugin.id, { slug: source.slug, kind: source.kind ?? 'git', ...(install ? { install } : {}) })
       }
     }
     return owners
   })
+  const resolveStoreCatalog = deps.storeCatalog ?? (async (loadedIds: ReadonlySet<string>, sources?: readonly PluginSourceView[]) => {
+    const [{ listSources }, { availableStoreEntries }, { getConfig }] = await Promise.all([
+      import('../../core/plugin-sources.js'),
+      import('../../core/plugins/store-install-mode.js'),
+      import('../../core/config-manager.js'),
+    ])
+    const [list, config] = await Promise.all([sources ?? listSources(), getConfig()])
+    return availableStoreEntries(list, config.plugins ?? {}, loadedIds)
+  })
+  /** One read of the sources serves both lookups above, unless a test injected them. */
+  const readSources = async (): Promise<readonly PluginSourceView[] | undefined> =>
+    deps.pluginSourceOwners && deps.storeCatalog
+      ? undefined
+      : (await import('../../core/plugin-sources.js')).listSources()
+  const resolveStorePlugin = deps.storePlugin ?? (async (pluginId: string) =>
+    (await import('../../core/plugins/store-install-mode.js')).findStorePlugin(pluginId))
   /**
    * A needs-config plugin is NOT in the registry (that is what "did not load" means),
    * so its schema cannot be read from there — and those are exactly the plugins whose
@@ -306,7 +334,9 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
     try {
       const catalog = await loadPluginCatalog(deps.walnutHome ?? WALNUT_HOME, { bundledStoreDir: deps.bundledStoreDir })
       const lifecycle = cloudMode ? (await listPrimaryModules()).plugins : deps.list()
-      let owners = new Map<string, { slug: string; kind: 'git' | 'npm' }>()
+      let owners = new Map<string, { slug: string; kind: 'git' | 'npm'; install?: 'auto' | 'optional' }>()
+      // The optional plugins of the installed sources nobody installed: offered under their source.
+      let storeEntries: PluginCatalogEntry[] = []
       let pendingSchemas = new Map<string, Record<string, unknown> | undefined>()
       let linkedCheckouts = new Map<string, LinkedCheckoutInfo>()
       // The scan ran out of budget before it reached every link. A row it never looked at
@@ -328,13 +358,17 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
         } else {
           linkedScanSkipped = true
         }
+        const sources = await readSources().catch(() => undefined)
         try {
-          owners = await resolveSourceOwners()
+          owners = await resolveSourceOwners(sources)
         } catch {
           // A store list that renders is worth more than one that 500s because the
           // sources file could not be read; the rows just lose their slug.
           sourcesUnavailable = true
         }
+        try {
+          storeEntries = await resolveStoreCatalog(new Set(lifecycle.map((record) => record.id)), sources)
+        } catch { /* the optional rows are missing until the next read; nothing else is */ }
       }
       // Where each plugin's code loads from, for the Apps detail page. Only this host knows;
       // a replica's lifecycle list is the Mac's, so it says nothing rather than a wrong path.
@@ -388,7 +422,7 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
           // and its row's Remove takes it back to available.
           ...(record.bundled
             ? { sourceKind: 'bundled' as const }
-            : owner ? { sourceSlug: owner.slug, sourceKind: owner.kind } : {}),
+            : owner ? { sourceSlug: owner.slug, sourceKind: owner.kind, ...(owner.install ? { install: owner.install } : {}) } : {}),
           ...(linkedCheckouts.has(record.id) ? { linked: linkedCheckouts.get(record.id) } : {}),
           ...(linkedScanSkipped && !record.builtin && !record.bundled && !owner && !linkedCheckouts.has(record.id)
             ? { linkedScanSkipped: true }
@@ -397,7 +431,12 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
           ...(withUi.has(record.id) ? { hasUi: true } : {}),
         }
       })
-      const merged: PluginRegistryResult = mergePluginRegistry(catalog, installed)
+      // A source's own copy of an id outranks a catalog entry that names it.
+      const storeIds = new Set(storeEntries.map((entry) => entry.id))
+      const merged: PluginRegistryResult = mergePluginRegistry(
+        [...catalog.filter((entry) => !storeIds.has(entry.id)), ...storeEntries],
+        installed,
+      )
       const rows = await withPluginIconUrls(merged.rows, catalog, iconDirs)
       // A replica's home is not where the checkouts live, so it says nothing about it.
       const homeDir = cloudMode ? undefined : await homeDirPromise
@@ -423,7 +462,9 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
     list: () => deps.list(),
     ...(deps.discover ? { discover: (pluginId: string) => deps.discover!(pluginId) } : {}),
     disable: (pluginId, opts) => deps.disable(pluginId, opts),
-    ...(deps.forgetBundled ? { forget: (pluginId: string) => deps.forgetBundled!(pluginId) } : {}),
+    ...(deps.forgetBundled ? { forget: (pluginId: string, opts?: { storeOptional?: boolean }) => deps.forgetBundled!(pluginId, opts) } : {}),
+    storePlugin: (pluginId: string) => resolveStorePlugin(pluginId),
+    ...(deps.loadedFromStore ? { loadedFromStore: (pluginId: string) => deps.loadedFromStore!(pluginId) } : {}),
     managePrimary,
     publishCloudChange,
     ...(deps.bundledStoreDir !== undefined ? { bundledStoreDir: deps.bundledStoreDir } : {}),
