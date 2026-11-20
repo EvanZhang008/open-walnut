@@ -4,11 +4,21 @@
    only the answers he has not reacted to yet (the rule beside them). */
 .org-threads { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px 16px; }
 .org-threads-empty { margin: 4px 0; font-size: 13px; color: var(--fg-muted, #86868b); }
-.org-thread-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.org-thread-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+/* Packed tight (2026-11-20, the user: "shoudl be narrow"): small padding and gaps, the words whole. */
 .org-thread {
-  border: 1px solid var(--border); border-radius: 8px; padding: 12px; background: var(--bg);
-  display: flex; flex-direction: column; gap: 8px; min-width: 0;
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--bg);
+  display: flex; flex-direction: column; gap: 6px; min-width: 0;
 }
+/* A thread card in the one ask card (PoppedThreadCard, a thread of a task below) shows what it asks
+   and its whole summary, never two lines and a cut (2026-11-20, the user: "the threa over here
+   shoud show all , not just 2 line only the one show on top"). A very long summary stops at about
+   fifteen lines and scrolls inside its own block. Guard: tests/e2e/browser/thread-card-whole-summary.spec.ts. */
+.org-thread .ask-card { gap: 3px; }
+.org-thread :is(.ask-card-question, .ask-card-detail) { display: block; -webkit-line-clamp: unset; line-clamp: none; }
+.org-thread .ask-card-detail { max-height: 240px; overflow-y: auto; overscroll-behavior: contain; line-height: 1.4; }
+.org-thread .ask-card-detail :is(p, ul, ol) { margin-top: 0; margin-bottom: 2px; }
+.org-thread .ask-card-detail > :last-child { margin-bottom: 0; }
 .org-thread.is-closed { background: var(--bg-secondary); }
 /* Two rows: state and time, then the title across the whole card (a CJK title squeezed beside the
    time broke after every character). */

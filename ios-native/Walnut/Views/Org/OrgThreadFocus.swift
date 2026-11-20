@@ -228,6 +228,11 @@ enum OrgThreadRevealModel {
 
 /// The thread card's layout rules, pure so they are pinned without a snapshot.
 enum OrgThreadCardLayout {
+    /// A card's summary reads whole up to about 28 phone lines (1,200 columns, about 600 Chinese
+    /// characters); only a longer one folds, with Expand under it (2026-11-20, the user: "the threa
+    /// over here shoud show all , not just 2 line"). At 110 columns a summary read two lines and a cut.
+    static let summaryBudget = 1200
+
     /// At accessibility text sizes the header stacks: the state on its own line, then when and
     /// who opened it, wrapping at word boundaries. In one row the state label was squeezed to a
     /// few letters and broke inside its word ("Need / s you"), and "Opened by" was cut off.

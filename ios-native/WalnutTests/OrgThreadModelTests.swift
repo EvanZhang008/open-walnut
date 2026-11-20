@@ -193,6 +193,17 @@ final class OrgThreadModelTests: XCTestCase {
         XCTAssertNotNil(OrgThreadModel.preview(String(repeating: "\u{4E2D}", count: 120), budget: 200))
     }
 
+    func testACardSummaryOfRealSizeReadsWholeNotTwoLines() {
+        // 2026-11-20: a summary folded at 110 columns read two lines and a cut. One of the size the
+        // nodes write (a few sentences, up to about 500 Chinese characters) reads whole; only a
+        // much longer one folds, with Expand.
+        XCTAssertGreaterThanOrEqual(OrgThreadCardLayout.summaryBudget, 1000)
+        let real = String(repeating: "\u{4E2D}", count: 500)
+        XCTAssertNil(OrgThreadModel.preview(real, budget: OrgThreadCardLayout.summaryBudget))
+        let huge = String(repeating: "\u{4E2D}", count: 700)
+        XCTAssertNotNil(OrgThreadModel.preview(huge, budget: OrgThreadCardLayout.summaryBudget))
+    }
+
     func testTwoTaskPillsSideBySideInTheBriefGetADotBetween() {
         let text = #"- <task-ref id="a" label="A"/> <task-ref id="vp" label="VP"/>：words <task-ref id="b" label="B"/>"#
         XCTAssertEqual(OrgBriefView.separatingRefs(text), #"- <task-ref id="a" label="A"/> · <task-ref id="vp" label="VP"/>：words <task-ref id="b" label="B"/>"#)

@@ -692,7 +692,7 @@ struct OrgThreadCard: View {
                 // He acknowledged it while its work ran: what it waits on, in place of the summary.
                 OrgThreadKnownBlock(thread: t, name: name)
             } else if let reply = t.reply?.trimmingCharacters(in: .whitespacesAndNewlines), !reply.isEmpty {
-                OrgFoldedMarkdown(markdown: reply, budget: 110, id: "org.thread.summary", source: OrgThreadModel.summarySource(t))
+                OrgFoldedMarkdown(markdown: reply, budget: OrgThreadCardLayout.summaryBudget, id: "org.thread.summary", source: OrgThreadModel.summarySource(t))
             }
             chips
             if !conversation {
