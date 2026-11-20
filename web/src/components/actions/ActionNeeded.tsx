@@ -188,8 +188,12 @@ const STRIP_LINES = 2;
 /** The block under a row; nothing when the task asks nothing. `variant`: 'row' (a task row, whose
  *  click opens the task: a click inside never reaches it), 'card' (a Threads card) or 'strip' (under
  *  a session's title bar, where that session's own live prompt points at its card below). */
-export const ActionNeeded = memo(function ActionNeeded({ task, variant = 'row', sessionId }: { task: Task; variant?: 'row' | 'strip' | 'card'; sessionId?: string }) {
-  const items = task.user_status?.actions ?? [];
+export const ActionNeeded = memo(function ActionNeeded({ task, variant = 'row', sessionId, items: only }: {
+  task: Task; variant?: 'row' | 'strip' | 'card'; sessionId?: string;
+  /** Only these of the task's items (the strip above a top thread leaves out the ones that are threads). */
+  items?: readonly ActionItem[];
+}) {
+  const items = only ?? task.user_status?.actions ?? [];
   const [restShown, setRestShown] = useState(false);
   // Answered from here and not yet gone from the status: hidden; a failure brings it back.
   const [sent, setSent] = useState<ReadonlySet<string>>(new Set());

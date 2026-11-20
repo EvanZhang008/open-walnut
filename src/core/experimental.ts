@@ -103,6 +103,12 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
+    id: 'top_thread',
+    name: 'The first thread above the chat',
+    description: 'A chat whose task keeps Threads (Main, a VP, a lead, or a task with Threads on) shows the first of its Threads above the chat, the same card as in Threads with its own reply box: "1 / 16" and the arrows step through every one, the ones that need you first. Hide it to one line that counts them; Show brings it back. Asks that are not threads yet, like a permission prompt, still show above it.',
+    default: false,
+  },
+  {
     id: 'org_leaders',
     name: 'Leaders under each VP',
     description: 'On the Org page and in the Org chart, a VP with tasks that lead their own team gets one line under it, "6 leaders", folded. Open it to see those leaders by project, and the leaders under each of them. Every fold stays as you left it.',

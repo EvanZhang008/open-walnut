@@ -99,9 +99,11 @@
 }
 
 /* An ask that waits on the person keeps the theme's colours: it is where his eye must go (a live
-   prompt's card, and the Action needed strip under a session's title bar). */
+   prompt's card, the Action needed strip under a session's title bar, and the first thread above
+   the chat, which reads as the same card as in Threads). */
 .permission-request-card.is-pending,
-.action-needed.is-strip {
+.action-needed.is-strip,
+.top-thread {
   --accent: var(--chat-hue-accent);
   --accent-subtle: var(--chat-hue-accent-subtle);
   --warning: var(--chat-hue-warning);

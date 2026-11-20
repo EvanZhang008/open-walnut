@@ -48,7 +48,7 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { userStateOf } from '@open-walnut/org-tree';
 import { USER_STATE_LABELS, shownState } from '@open-walnut/user-status';
-import { cardView, exchangesOf, overdueLine, threadDeadline, pinnedFirst, pinnedNow, sharedAnswers, shownToHim, snoozedNow, type SummaryLine, type ThreadExchange } from '@open-walnut/thread-view';
+import { cardView, exchangesOf, listedForHim, orderedForHim, overdueLine, threadDeadline, pinnedNow, sharedAnswers, snoozedNow, type SummaryLine, type ThreadExchange } from '@open-walnut/thread-view';
 import { ThreadPinIcon } from '@/components/sessions/ThreadIcons';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
@@ -68,6 +68,7 @@ import type { AgentTextSource } from '@/utils/agent-text-source';
 import { THREAD_LIST_SOURCE, THREAD_WORDS_SOURCE, threadAnswerSource, threadOpenerSource, threadStandInSource, threadSummarySource } from './thread-text-source';
 import { timeAgo } from '@/utils/time';
 import { isBoolean, usePageView } from '@/utils/view-memory';
+import { useExperimental } from '@/hooks/useExperimental';
 import type { OrgThread, OrgThreadMessage, OrgThreadState } from '@/api/org-threads';
 import type { OrgThreadsState } from './useOrgThreads';
 import { OrgThreadSnooze } from './OrgThreadSnooze';
@@ -489,9 +490,16 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   );
 }
 
-/** A thread of a task below (threads_pop_up) stays in sight while his reply to it is on its way. */
-function shownHere(t: OrgThread, shared: ReadonlySet<string>, at: number): boolean {
-  return shownToHim(t, shared, at) || (!!t.owner && !t.closed && t.messages.some((m) => m.delivery?.state === 'pending' || m.delivery?.state === 'claimed'));
+/** One thread of his list as every surface draws it: a thread of a task below is the ask card
+ *  (PoppedThreadCard), the node's own the thread card. The Threads view and the top of the chat
+ *  (TopThread) both draw through this, so one thread reads the same in both. */
+export function ThreadItem({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed, owner }: {
+  t: OrgThread; all: readonly OrgThread[]; shared: ReadonlySet<string>; tasks: readonly Task[];
+  owner: Task | undefined; state: OrgThreadsState; onFollowUp: Props['onFollowUp']; name: string; now: number; snoozed: boolean;
+}) {
+  return t.owner && owner
+    ? <PoppedThreadCard node={owner.id} t={t} state={state} />
+    : <ThreadCard t={t} all={all} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={now} snoozed={snoozed} owner={owner} />;
 }
 
 export function OrgThreads({ name, owner, state, tasks, onFollowUp, now }: Props) {
@@ -500,20 +508,25 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now }: Props
   const [showHidden, setShowHidden] = usePageView('org', 'threads.showInProgress', false, isBoolean);
   const [showSnoozed, setShowSnoozed] = usePageView('org', 'threads.showSnoozed', false, isBoolean);
   const all = state.threads;
+  const needsFirst = useExperimental('top_thread');
   const shared = useMemo(() => sharedAnswers(all ?? []), [all]);
   const { open, hidden, snoozed, clock } = useMemo(() => {
     // The page's clock ticks once a minute; the re-read at a snooze's end (useOrgThreads) must not wait for it.
     const at = Math.max(now, Date.now());
     const list = all ?? [];
+    // The list the header and the tab count (thread-view.ts listedForHim), so they agree.
+    const listed = listedForHim(list, at);
+    const shownSet = new Set(listed);
     return {
       clock: at,
       // Pinned ones lead, newest pin first; the rest newest change first (as the server sorts
-      // them), so one just unpinned goes back to its place before the server answers.
-      open: pinnedFirst(list.filter((t) => shownHere(t, shared, at)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))),
-      hidden: list.filter((t) => !t.closed && !snoozedNow(t, at) && !shownHere(t, shared, at)),
+      // them), so one just unpinned goes back to its place before the server answers. Under
+      // top_thread the ones that need him lead the rest, the order the top of the chat steps in.
+      open: orderedForHim(listed, { needsFirst }),
+      hidden: list.filter((t) => !t.closed && !snoozedNow(t, at) && !shownSet.has(t)),
       snoozed: list.filter((t) => snoozedNow(t, at)).sort((a, b) => a.snoozed!.until.localeCompare(b.snoozed!.until)),
     };
-  }, [all, shared, now]);
+  }, [all, now, needsFirst]);
   const closed = useMemo(() => (all ?? []).filter((t) => !!t.closed), [all]);
   // Task pills outside the text blocks (an answer's About line) open the task, as they do in the
   // chat. Every block of text opens its own paths from its own writer and keeps the click; a path
@@ -521,7 +534,7 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now }: Props
   const listFile = useAgentFileOpener(THREAD_LIST_SOURCE);
   const onEntityClick = useEntityClickHandler(undefined, listFile.onFileOpen, listFile.fileHost, listFile.fileSessionId, listFile.refusesAll);
   const snoozedIds = useMemo(() => new Set(snoozed.map((t) => t.id)), [snoozed]);
-  const card = (t: OrgThread) => t.owner && owner ? <PoppedThreadCard key={t.id} node={owner.id} t={t} state={state} /> : <ThreadCard key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={clock} snoozed={snoozedIds.has(t.id)} owner={owner} />;
+  const card = (t: OrgThread) => <ThreadItem key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={clock} snoozed={snoozedIds.has(t.id)} owner={owner} />;
   return (
     <div className="org-threads" data-testid="org-threads" onClick={onEntityClick}>
       {state.error && <p className="org-thread-error" data-testid="org-threads-error">{state.error}</p>}

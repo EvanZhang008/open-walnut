@@ -61,6 +61,8 @@ interface NodeThreads {
   settledAt: number;
   /** The server counts this node's threads into its status (seen once on a row). */
   counted: boolean;
+  /** A read the surfaces hearing the same event (or mounting together) share, until this task ends. */
+  joinable?: { why: string; p: Promise<boolean | 'stale'> };
 }
 /** How long after a write's answer the server's derived status for an EARLIER write may still land. */
 const SETTLE_MS = 3_000;
@@ -82,6 +84,38 @@ function redraw(taskId: string): OrgThread[] | null {
   return n.drawn;
 }
 
+/** The reasons every surface of one node hears at the same moment: one read answers them all. */
+const SHARED_READS: ReadonlySet<string> = new Set(['open', 'changed', 'reconnect']);
+
+/**
+ * Read a node's threads. True when the list is drawn, false when the read failed, 'stale' when a
+ * later read of the node won. Several surfaces show one node (the Org page, its chat's top thread,
+ * a Threads pane): an event they all hear, or a mount they share, starts one read, not one each.
+ * Only within the same task of the event loop: a change announced later always reads again.
+ */
+function readNode(taskId: string, why: string): Promise<boolean | 'stale'> {
+  const node = nodeOf(taskId);
+  if (SHARED_READS.has(why) && node.joinable?.why === why) return node.joinable.p;
+  const mine = ++node.seq;
+  const p: Promise<boolean | 'stale'> = fetchOrgThreads(taskId).then((next) => {
+    // A later read of this node wins: an answer that comes back late is dropped.
+    if (mine !== node.seq) return 'stale';
+    node.read = next;
+    redraw(taskId);
+    return true;
+  }, (err: unknown) => {
+    if (mine !== node.seq) return 'stale';
+    log.warn('org-threads', 'threads read failed', { taskId, why, error: err instanceof Error ? err.message : String(err) });
+    return false;
+  });
+  if (SHARED_READS.has(why)) {
+    const joinable = { why, p };
+    node.joinable = joinable;
+    queueMicrotask(() => { if (node.joinable === joinable) node.joinable = undefined; });
+  }
+  return p;
+}
+
 /** Test seam: forget every node (a module store outlives a test's page). */
 export function resetOrgThreadsForTest(): void { nodes.clear(); listeners.clear(); }
 
@@ -101,19 +135,11 @@ export function useOrgThreads(taskId: string | undefined, enabled: boolean): Org
   /** Read the threads; false when the read failed (a later read that wins counts as done). */
   const load = useCallback(async (why: string): Promise<boolean> => {
     if (!taskId) return true;
-    const node = nodeOf(taskId);
-    const mine = ++node.seq;
-    try {
-      const next = await fetchOrgThreads(taskId);
-      // A later read of this node wins: an answer that comes back late is dropped.
-      if (mine === node.seq) { node.read = next; redraw(taskId); setError(null); }
-      return true;
-    } catch (err) {
-      if (mine !== node.seq) return true;
-      log.warn('org-threads', 'threads read failed', { taskId, why, error: err instanceof Error ? err.message : String(err) });
-      setError('Threads could not be read. They come back when the server answers.');
-      return false;
-    }
+    const got = await readNode(taskId, why);
+    // A later read that wins counts as done.
+    if (got === 'stale') return true;
+    setError(got ? null : 'Threads could not be read. They come back when the server answers.');
+    return got;
   }, [taskId]);
   useEffect(() => {
     setError(null);

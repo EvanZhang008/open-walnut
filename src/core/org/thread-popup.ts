@@ -22,7 +22,7 @@ import { keepsThreads } from './keeps-threads.js';
 import { orgNodesAbove, orgPlaces, type OrgPlaces } from './thread-follow.js';
 import { orgDisplayTitle } from './org-tree.js';
 import { deliveryOpen, movedAway, type OrgThread } from './threads-model.js';
-import { sharedAnswers, shownToHim } from './thread-view.js';
+import { listedAbove, sharedAnswers } from './thread-view.js';
 
 export { setThreadsPopUp, stampAskIds, threadsPopUpNow, threadsPopUpOn } from './thread-popup-rules.js';
 
@@ -68,12 +68,6 @@ export async function viewerIdsOf(ownerId: string, all?: readonly Task[]): Promi
   const c = await context(all);
   const owner = c.byId.get(ownerId);
   return owner ? [...viewersOf(owner, c.byId, c.places)] : [];
-}
-
-/** A popped thread is listed: it waits on him, or his reply on it has not reached its owner yet. */
-function listedAbove(t: OrgThread, shared: ReadonlySet<string>, now: number): boolean {
-  if (t.closed) return false;
-  return (t.state === 'needs' && shownToHim(t, shared, now)) || t.messages.some(deliveryOpen);
 }
 
 export interface PoppedIndex {

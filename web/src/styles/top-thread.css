@@ -1,0 +1,35 @@
+/* The first thread above a chat (experiment top_thread, components/org/TopThread.tsx): the Threads
+   view's own card under one quiet bar ("1 / 16", the arrows, Hide), or one line while hidden. It
+   never scrolls as a whole: the reply box's @ and / lists open over the chat below it. A long
+   summary or answer scrolls inside its own block, so the chat keeps its room. */
+.session-top { flex: none; display: flex; flex-direction: column; gap: 4px; margin: 0 8px; min-width: 0; }
+.session-top > .action-needed.is-strip { margin: 0; }
+.top-thread { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.top-thread-bar { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--fg-muted, #86868b); }
+.top-thread-step {
+  all: unset; cursor: pointer; width: 22px; height: 22px; border-radius: 6px; text-align: center; line-height: 22px;
+  font-size: 15px; color: var(--fg);
+}
+.top-thread-step:hover:not(:disabled) { background: var(--bg-secondary); }
+.top-thread-step:disabled { cursor: default; color: var(--fg-muted, #86868b); opacity: 0.5; }
+.top-thread-step:focus-visible, .top-thread-hide:focus-visible, .top-thread-line:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.top-thread-pos { font-variant-numeric: tabular-nums; color: var(--fg); font-weight: 500; }
+.top-thread-left { margin-left: 4px; }
+.top-thread-hide { all: unset; cursor: pointer; margin-left: auto; padding: 2px 6px; border-radius: 6px; }
+.top-thread-hide:hover { background: var(--bg-secondary); color: var(--fg); }
+.top-thread-list .org-thread[data-state="needs"] { border-color: color-mix(in srgb, var(--error, #ff3b30) 45%, var(--border)); }
+.top-thread-list :is(.org-thread-summary, .org-thread-unread) { max-height: 30vh; overflow-y: auto; }
+.top-thread-line {
+  all: unset; cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg); font-size: 12px; color: var(--fg); min-width: 0;
+}
+.top-thread-line:hover { background: var(--bg-secondary); }
+.top-thread-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--fg-muted, #86868b); }
+.top-thread-dot.is-needs { background: var(--error, #ff3b30); }
+.top-thread-show { color: var(--accent, #0a84ff); font-weight: 500; }
+
+/* A phone: finger-sized controls. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .top-thread-step { width: 44px; height: 44px; line-height: 44px; }
+  .app-shell-navigation .top-thread-hide, .app-shell-navigation .top-thread-line { min-height: 44px; box-sizing: border-box; }
+}
