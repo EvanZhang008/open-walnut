@@ -13,3 +13,19 @@ describe('org names', () => {
     expect(orgSettingsOf({ org: { name: 'x'.repeat(200) } }).name).toHaveLength(ORG_NAME_MAX)
   })
 })
+
+describe('how the Directors are listed', () => {
+  it('reads the defaults when nothing is stored, the stored value else', () => {
+    expect(orgSettingsOf({})).toMatchObject({ directorsLayout: 'fold', directorsShowProjects: true, directorsEnabled: false })
+    expect(orgSettingsOf({ org: { directors_layout: 'sections', directors_projects: false } }))
+      .toMatchObject({ directorsLayout: 'sections', directorsShowProjects: false })
+    // A hand-edited wrong value is the default.
+    expect(orgSettingsOf({ org: { directors_layout: 'grid' as never, directors_projects: 'no' as never } }))
+      .toMatchObject({ directorsLayout: 'fold', directorsShowProjects: true })
+  })
+
+  it('says whether the Directors experiment is on', () => {
+    expect(orgSettingsOf({ experimental: { org_leaders: true } }).directorsEnabled).toBe(true)
+    expect(orgSettingsOf({ experimental: { org_leaders: false } }).directorsEnabled).toBe(false)
+  })
+})

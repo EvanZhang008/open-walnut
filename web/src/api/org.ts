@@ -53,6 +53,10 @@ export interface OrgSettings {
   name: string;
   founderTitle: string;
   enabled?: boolean;
+  /** How the Directors are listed (src/core/org/org-settings.ts): absent from an older server = 'fold'. */
+  directorsLayout?: 'fold' | 'sections';
+  /** The fold groups its Directors under their project's name: absent = true. */
+  directorsShowProjects?: boolean;
 }
 
 /** Start Main's or a VP's first session in the background (src/core/org/org-autostart.ts). `auto`:

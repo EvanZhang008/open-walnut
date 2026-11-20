@@ -199,7 +199,7 @@ function waitClockPatch(t: Task, phase: string | undefined, named: unknown): { w
 const OPTIMISTIC_FIELDS = new Set([
   'title', 'status', 'phase', 'priority', 'project',
   'due_date', 'start_date', 'end_date', 'unread', 'parent_task_id',
-  'wait_until', 'watched_at', 'background_at', 'threads_on',
+  'wait_until', 'watched_at', 'background_at', 'threads_on', 'director',
 ]);
 
 /** Tag INSTRUCTION fields: they carry no value to spread, so the resulting
@@ -311,6 +311,8 @@ function applyFieldUpdate(tasks: Task[], id: string, updates: Record<string, unk
     const next = { ...t, ...filtered, ...tagPatch };
     // Mirrors task-manager: '' stops watching and the row holds no watched_at at all.
     if ('watched_at' in filtered && !filtered.watched_at) delete next.watched_at;
+    // Mirrors task-director: 'auto' (or null) stores no choice.
+    if ('director' in filtered && filtered.director !== 'yes' && filtered.director !== 'no') delete next.director;
     // Mirrors task-manager: Background and Watching hold a task one at a time, '' takes it out.
     if (filtered.watched_at && !('background_at' in filtered)) delete next.background_at;
     if ('background_at' in filtered) {
@@ -1136,6 +1138,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       priority: (input.priority ?? 'none'),
       phase: 'TODO',
       project: input.project ?? '',
+      ...(input.director ? { director: input.director } : {}),
       source: input.source ?? 'local',
       session_ids: [],
       created_at: now,

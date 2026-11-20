@@ -6,7 +6,9 @@
  * The menu stays short (2026-10-26, the user: "too messy ... create a dedicated VP for this
  * project, that is what it means"): a list of VPs or of projects is ONE row that opens a picker at
  * the cursor, the way a folder menu's Project row does, never a run of rows; and a VP is named the
- * way a person says it ("the Routines VP", not "Routines's VP"). Pure, so tests reach it.
+ * way a person says it ("the Routines VP", not "Routines's VP"). With the Directors on, a VP's row
+ * also offers "New Director…" (director-actions.ts: its fold, or the DIRECTORS section, opens on a
+ * name input). Pure, so tests reach it.
  */
 import type { ContextMenuItem } from '@/utils/context-menu';
 import type { ChartStart } from './OrgChartSheet';
@@ -21,12 +23,14 @@ export interface OrgRowPick {
   onPick: (value: string) => void;
 }
 
-export function orgRowMenu({ target, cards, select, openChart, pick }: {
+export function orgRowMenu({ target, cards, select, openChart, pick, newDirector }: {
   target: ChannelMenuTarget;
   cards: readonly VpCard[];
   select: (key: string, tab?: OrgTab) => void;
   openChart: (start?: ChartStart) => void;
   pick: (p: OrgRowPick) => void;
+  /** Absent while the Directors are off. */
+  newDirector?: ((vpKey: string) => void) | undefined;
 }): ContextMenuItem[] {
   const projectOf = (key: string) => cards.flatMap((c) => c.projects).find((p) => p.key === key);
   const canGetVp = (key: string) => { const p = projectOf(key); return !!p && !!dropPlan(cards, p, null); };
@@ -52,10 +56,13 @@ export function orgRowMenu({ target, cards, select, openChart, pick }: {
   ];
   if (r.kind === 'main') return [...items, { key: 'sep', divider: true }, { key: 'chart', label: 'Open the org chart', onSelect: () => openChart() }];
 
+  const vp = newDirector ? cards.find((c) => c.key === r.key && c.role === 'VP' && c.projects.length > 0) : undefined;
+  if (vp && newDirector) items.push({ key: 'sep-director', divider: true }, { key: 'director', label: 'New Director…', onSelect: () => newDirector(vp.key) });
   const own = projectOf(r.key);
   const under = own ? cards.filter((c) => c.key !== r.key && dropPlan(cards, own, c)) : [];
   const led = (r.led ?? []).filter((l) => canGetVp(l.key));
-  if (under.length || led.length) items.push({ key: 'sep-move', divider: true });
+  // New Director and the moves are one group: what changes under this VP.
+  if ((under.length || led.length) && !vp) items.push({ key: 'sep-move', divider: true });
   if (under.length) {
     items.push({
       key: 'move',

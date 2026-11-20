@@ -806,6 +806,19 @@ describe('/api/v1/org', () => {
       expect((await getConfig()).org).toBeUndefined()
     })
 
+    it('keeps how the Directors are listed in config.yaml, only the values that are not the default, and refuses another value', async () => {
+      const { getConfig } = await import('../../src/core/config-manager.js')
+      expect((await api('GET', '/org/settings')).json).toMatchObject({ directorsLayout: 'fold', directorsShowProjects: true, directorsEnabled: expect.any(Boolean) })
+      const saved = await api('PUT', '/org/settings', { directorsLayout: 'sections', directorsShowProjects: false, directorsEnabled: true })
+      expect(saved).toMatchObject({ status: 200, json: { directorsLayout: 'sections', directorsShowProjects: false } })
+      expect((await getConfig()).org).toEqual({ directors_layout: 'sections', directors_projects: false })
+      expect((await api('PUT', '/org/settings', { directorsLayout: 'grid' })).status).toBe(400)
+      expect((await api('PUT', '/org/settings', { directorsShowProjects: 'no' })).status).toBe(400)
+      // Back to the defaults: nothing stored.
+      await api('PUT', '/org/settings', { directorsLayout: 'fold', directorsShowProjects: true })
+      expect((await getConfig()).org).toBeUndefined()
+    })
+
     it('there is no switch that refuses Main\'s or a VP\'s own commands; an older Walnut\'s value is ignored and dropped', async () => {
       // 2026-11-04, the user, of a "Refuse their 4th command" switch: "remove this shodln;'t do this at all".
       const { sessionSettingsHooks } = await import('../../src/providers/session-settings-hooks.js')

@@ -8,7 +8,8 @@ import type { Task } from '../../src/core/types.js'
 import { buildOrgTree, type OrgTaskLike } from '../../src/core/org/org-tree.js'
 import { buildChannels } from '../../web/src/components/org/org-channels-model.js'
 import { vpCards } from '../../web/src/components/org/org-chart-model.js'
-import { leaderGroups, leaderTotal, leadersLabel, leadersMatch, sourcesOf, subsMatch } from '../../web/src/components/org/org-leaders.js'
+import { directorRows, directorsLabel, flatDirectors, foldGroups, leaderGroups, leaderTotal, leadersMatch, sourcesOf, subsMatch } from '../../web/src/components/org/org-leaders.js'
+import type { ChannelRow } from '../../web/src/components/org/org-channels-model.js'
 
 let n = 0
 const t = (project: string, over: Partial<OrgTaskLike> = {}): OrgTaskLike => {
@@ -80,8 +81,10 @@ describe('leaders under a VP', () => {
   })
 
   it('counts and search', () => {
-    expect(leadersLabel(1)).toBe('1 leader')
-    expect(leadersLabel(6)).toBe('6 leaders')
+    // 2026-11-20, the user: "the tab leader should change to directors".
+    expect(directorsLabel(1)).toBe('1 director')
+    expect(directorsLabel(0)).toBe('0 directors')
+    expect(directorsLabel(6)).toBe('6 directors')
     const team = t('Find', { title: 'Pipeline watch leader' })
     const sub = t('Find', { parent_task_id: team.id, title: 'Deep resolver' })
     const subWorker = t('Find', { parent_task_id: sub.id })
@@ -95,5 +98,39 @@ describe('leaders under a VP', () => {
     const top = groups[0]!.leaders[0]!
     expect(subsMatch(top, 'resolver')).toBe(true)
     expect(subsMatch(top, 'pipeline')).toBe(false)
+  })
+
+  it('with the project names off, the fold is one group with no name, in the same order', () => {
+    const lead = t('Hall', { org_role: 'lead', title: 'Hall VP', org_leads: ['Annex'] })
+    const a = t('Hall', { title: 'Hall team' })
+    const b = t('Annex', { title: 'Annex team' })
+    const all = [lead, a, t('Hall', { parent_task_id: a.id }), b, t('Annex', { parent_task_id: b.id })]
+    const groups = groupsOf(all, 'Hall')
+    expect(groups.map((g) => g.name)).toEqual(['Hall', 'Annex'])
+    expect(foldGroups(groups, true)).toBe(groups)
+    const flat = foldGroups(groups, false)
+    expect(flat.map((g) => [g.name, g.leaders.map((l) => l.title)])).toEqual([['', ['Hall team', 'Annex team']]])
+    expect(foldGroups([], false)).toEqual([])
+  })
+
+  it('the DIRECTORS section: one level, by VP in the list order, a Director\'s own Directors right after it', () => {
+    const lead = t('Wharf', { org_role: 'lead', title: 'Wharf VP' })
+    const top = t('Wharf', { title: 'Dock team' })
+    const sub = t('Wharf', { parent_task_id: top.id, title: 'Crane lead' })
+    const all = [lead, top, sub, t('Wharf', { parent_task_id: sub.id }), t('Wharf', { title: 'Lone promoted', director: 'yes' })]
+    const groups = groupsOf(all, 'Wharf')
+    expect(flatDirectors(groups).map((d) => d.title).sort()).toEqual(['Crane lead', 'Dock team', 'Lone promoted'])
+    // Crane lead comes right after the Director it is under.
+    const order = flatDirectors(groups).map((d) => d.title)
+    expect(order.indexOf('Crane lead')).toBe(order.indexOf('Dock team') + 1)
+    const vpA = { key: 'project:wharf', name: 'Wharf', vpName: 'Harbour' } as ChannelRow
+    const vpB = { key: 'project:other', name: 'Other' } as ChannelRow
+    const groupsOf2 = (r: ChannelRow) => (r.key === vpA.key ? groups : [])
+    const rows = directorRows([vpB, vpA], groupsOf2)
+    expect(rows.map((r) => [r.vp.key, r.director.title])).toEqual(order.map((title) => [vpA.key, title]))
+    // A search shows the Directors it finds, or every Director of a VP whose name it finds.
+    expect(directorRows([vpA], groupsOf2, 'crane').map((r) => r.director.title)).toEqual(['Crane lead'])
+    expect(directorRows([vpA], groupsOf2, 'harbour')).toHaveLength(3)
+    expect(directorRows([vpA], groupsOf2, 'nothing here')).toEqual([])
   })
 })

@@ -8,7 +8,8 @@ import { AdoptWorkerFlyout } from './AdoptWorkerFlyout';
 import { ReleaseWorkerFlyout } from './ReleaseWorkerFlyout';
 import { resolveParent } from './adopt-candidates';
 import { subtasksOf } from './subtask-index';
-import { teamRowSummary } from './team-menu-model';
+import { directorEntry, teamRowSummary } from './team-menu-model';
+import { useExperimental } from '@/hooks/useExperimental';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import '@/styles/subtask-pill.css';
 
@@ -34,7 +35,10 @@ const ICON_TEAM = (
  *     leaves the team and keeps running on its own);
  *   - "Leave leader “X”" on a worker;
  *   - "Stop the team" on a leader: every open task under it stops (its sessions, triggers and
- *     wake clocks, core/sessions/team-stop.ts), and "Resume the team" turns those back on.
+ *     wake clocks, core/sessions/team-stop.ts), and "Resume the team" turns those back on;
+ *   - with the Directors on (`org_leaders`), on an open task in a project that is no org node:
+ *     "Make it a Director" (Task.director 'yes': it shows under its VP on the Org page) or, on one
+ *     that is a Director now (team-menu-model directorEntry), "Remove from Directors" ('no').
  *
  * All three write through the store's `reparentTask`, so the Worker and Leader
  * pills follow at once. Rendered only inside a TasksProvider (a pop-out window
@@ -48,6 +52,7 @@ export function TeamMenuItems({ task, afterAction }: {
   afterAction: () => void;
 }) {
   const store = useTasksContextSafe();
+  const directorsOn = useExperimental('org_leaders');
   const [expanded, setExpanded] = useState(false);
   const [picker, setPicker] = useState<'adopt' | 'release' | null>(null);
   const adoptRef = useRef<HTMLButtonElement>(null);
@@ -60,8 +65,16 @@ export function TeamMenuItems({ task, afterAction }: {
   }, [hasWorkers]);
   if (!store) return null;
   const leader = task.parent_task_id ? resolveParent(store.tasks, NO_INDEX, task.parent_task_id) : null;
-  const summary = teamRowSummary(store.tasks, task, leader ? orgDisplayTitle(leader) : null);
-  const teamStopped = !!store.tasks.find((t) => t.id === task.id)?.team_stop;
+  const row = store.tasks.find((t) => t.id === task.id);
+  // The store's row is the current word (a write made from this menu shows at once).
+  const director = directorsOn && row ? directorEntry(store.tasks, row) : null;
+  const summary = teamRowSummary(store.tasks, task, leader ? orgDisplayTitle(leader) : null, !!director?.isDirector);
+  const teamStopped = !!row?.team_stop;
+  const setDirector = (yes: boolean) => {
+    log.info('tasks', yes ? 'made a director' : 'removed from directors', { taskId: task.id });
+    void store.update(task.id, { director: yes ? 'yes' : 'no' });
+    afterAction();
+  };
   const teamAction = (action: 'team-stop' | 'team-resume') => {
     log.info('tasks', action === 'team-stop' ? 'team stop requested' : 'team resume requested', { taskId: task.id });
     apiPost(`/api/v1/tasks/${encodeURIComponent(task.id)}/${action}`, {}, { timeoutMs: 120_000 })
@@ -144,6 +157,20 @@ export function TeamMenuItems({ task, afterAction }: {
                   <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" aria-hidden="true"><path d="M2 1.2v7.6L8.6 5z" /></svg>
                 </span>
                 <span>Resume the team</span>
+              </button>
+            )}
+            {director && (
+              <button
+                type="button"
+                className="task-kebab-item"
+                data-testid={director.isDirector ? 'kebab-director-remove' : 'kebab-director-make'}
+                title={director.isDirector
+                  ? 'No longer listed under its VP on the Org page; its subtasks and chat stay as they are'
+                  : 'Listed under its VP on the Org page, with or without subtasks'}
+                onClick={(e) => { e.stopPropagation(); setDirector(!director.isDirector); }}
+              >
+                <span className="task-kebab-icon" aria-hidden="true">{director.isDirector ? '☆' : '★'}</span>
+                <span>{director.isDirector ? 'Remove from Directors' : 'Make it a Director'}</span>
               </button>
             )}
             {task.parent_task_id && (

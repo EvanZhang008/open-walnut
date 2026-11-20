@@ -195,3 +195,6 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 .org-settings-stops-head { font-weight: 600; }
 .org-settings-stops ul { margin: 0; padding-left: 16px; color: var(--fg-muted); line-height: 1.4; }
 .org-settings-all { align-self: flex-start; }
+/* With the Directors on: how they are listed (useDirectorSettings). The layout's segments sit under its words. */
+.org-settings-directors { display: flex; flex-direction: column; gap: 8px; padding-top: 6px; border-top: 1px solid var(--border); }
+.org-settings-row.is-stacked { flex-direction: column; align-items: stretch; gap: 6px; }

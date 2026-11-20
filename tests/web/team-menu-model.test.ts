@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { Task } from '@open-walnut/core';
-import { releaseCandidates, teamRowSummary } from '../../web/src/components/tasks/team-menu-model';
+import { directorEntry, releaseCandidates, teamRowSummary } from '../../web/src/components/tasks/team-menu-model';
 
 function task(over: Partial<Task> & { id: string }): Task {
   return { title: over.id, project: 'Walnut', phase: 'TODO', status: 'open', created_at: '', updated_at: '', ...over } as unknown as Task;
@@ -41,6 +41,31 @@ describe('teamRowSummary', () => {
     const mid = task({ id: 'mid', parent_task_id: 'top' });
     const sub = task({ id: 'sub', parent_task_id: 'mid' });
     expect(teamRowSummary([mid, sub], mid, 'Top')).toBe('Leader · 1, Worker of “Top”');
+  });
+});
+
+describe('the Director entry of the Team row', () => {
+  it('says Director first in the collapsed row when it is one', () => {
+    const lead = task({ id: 'lead' });
+    const w = task({ id: 'w', parent_task_id: 'lead' });
+    expect(teamRowSummary([lead, w], lead, null, true)).toBe('Director, Leader · 1');
+    expect(teamRowSummary([lead], lead, null, true)).toBe('Director');
+  });
+
+  it('is a Director by the shared rule: its choice, else an open subtask', () => {
+    const lead = task({ id: 'lead' });
+    const w = task({ id: 'w', parent_task_id: 'lead' });
+    expect(directorEntry([lead, w], lead)).toEqual({ isDirector: true });
+    expect(directorEntry([lead, { ...w, phase: 'COMPLETE' } as Task], lead)).toEqual({ isDirector: false });
+    expect(directorEntry([lead, w], { ...lead, director: 'no' })).toEqual({ isDirector: false });
+    const solo = task({ id: 'solo', director: 'yes' });
+    expect(directorEntry([solo], solo)).toEqual({ isDirector: true });
+  });
+
+  it('has none on an org node, a task in the Inbox or a finished task', () => {
+    for (const t of [task({ id: 'vp', org_role: 'lead' }), task({ id: 'ceo', org_role: 'main' }), task({ id: 'inbox', project: '' }), task({ id: 'done', phase: 'COMPLETE' })]) {
+      expect(directorEntry([t], t)).toBeNull();
+    }
   });
 });
 

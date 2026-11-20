@@ -110,8 +110,8 @@ export const EXPERIMENTAL_FEATURES = [
   },
   {
     id: 'org_leaders',
-    name: 'Leaders under each VP',
-    description: 'On the Org page and in the Org chart, a VP with tasks that lead their own team gets one line under it, "6 leaders", folded. Open it to see those leaders by project, and the leaders under each of them. Every fold stays as you left it.',
+    name: 'Directors under each VP',
+    description: 'On the Org page and in the Org chart, a VP gets one line under it, "6 directors", folded. A Director is a task that leads its own team, or any task you made one. Open the line to see them by project and the Directors under each; right-click one to take it off, add one with "+ New Director", or make any task one from its menu (Team). Settings → Org picks the layout. Every fold stays as you left it.',
     default: false,
   },
   {

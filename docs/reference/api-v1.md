@@ -1609,7 +1609,7 @@ team is talked to through that task; the Inbox never gets a lead.
   session (`handover`), and on a take-over Walnut closes it once the turn that
   read the notice ends, or at once when it has no session (`closed`).
   `400 no_vp_for_inbox | bad_vp`, `404 unknown_project`.
-- `GET /api/v1/org/settings` → `200 { name, founderTitle, defaultInstructions }`: the org's name (the
+- `GET /api/v1/org/settings` → `200 { name, founderTitle, defaultInstructions, enabled, directorsLayout, directorsShowProjects, directorsEnabled }`: the org's name (the
   Org page's title, default `"Org"`) and the user's role at the top of the org
   chart (default `"Founder"`), kept in config.yaml under `org`. `defaultInstructions
   { main, lead }` (additive, 2026-10-27, read-only) is Walnut's default core instructions
@@ -1624,6 +1624,14 @@ team is talked to through that task; the Inbox never gets a lead.
   at them; agents' `org_send` and `task_send` to them answer `409 org_off`, a person's own message
   still goes in); `PUT { enabled: true }` starts the nodes that never started. `400 bad_enabled`
   for a non-boolean, `409 test_run` for a change of it from a test run.
+  Directors (additive, 2026-11-20; an older server sends none of them: read absent as the default):
+  `directorsLayout: "fold" | "sections"` (default `"fold"`: one folded "N directors" line under each VP;
+  `"sections"`: one DIRECTORS section after the VPs, a row per Director), `directorsShowProjects:
+  boolean` (default `true`: the fold groups its Directors under their project's name; `false`: the
+  hierarchy alone), both kept in config.yaml under `org` as `directors_layout` and `directors_projects`
+  (only a value that is not the default is written) and set with `PUT`; `400 bad_directors_layout` /
+  `bad_directors_projects` for another value. `directorsEnabled: boolean` (read-only, `PUT` ignores it;
+  absent = off) says whether the Directors experiment (`org_leaders`) is on.
 - `POST /api/v1/org/nodes/:id/start { auto? }` (additive, 2026-11-03) → `202 { queued: true }`, or
   `200 { queued: false, skipped }` (`has_session`, `starting`, `complete`, `failed_before`,
   `test_run`, `autostart_off`, `missing`; a test run's request always answers `test_run`): starts Main's or a VP's first session in the background, on its

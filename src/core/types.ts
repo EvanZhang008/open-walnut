@@ -1488,7 +1488,9 @@ export interface Config {
   /** The org above the work (src/core/org/org-settings.ts): its name, the user's role on the chart,
    *  and `enabled`: `false` turns the whole org off (no Main or VP session started, none of the
    *  org's own messages; org-enabled.ts). Absent = on, so an install that never set it keeps it. */
-  org?: { name?: string; founder_title?: string; enabled?: boolean };
+  /** The org's own settings (core/org/org-settings.ts). `directors_layout` / `directors_projects`: how
+   *  the Org page lists Directors (default 'fold' / true; only the other value is written). */
+  org?: { name?: string; founder_title?: string; enabled?: boolean; directors_layout?: 'fold' | 'sections'; directors_projects?: boolean };
   /** Whether an agent's step waits for the person's yes (core/approvals/ask-me.ts). `ask_me`
    *  absent or false: none of Walnut's own steps waits (a post, a send, a browser step), each is
    *  recorded as done without asking; true: every one asks. A script's `walnut approve` asks

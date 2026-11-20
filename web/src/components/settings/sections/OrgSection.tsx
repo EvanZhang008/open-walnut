@@ -9,16 +9,22 @@
  * Saved through the org's own settings route (PUT /api/v1/org/settings), as the org's name is, so
  * every window reads it from one place (useOrgSettings) and the Org page follows at once. The Org
  * page shows the same switch in its own settings panel (OrgSettingsMenu, useOrgSwitch.ts).
+ *
+ * While the Directors experiment is on, a Directors group picks how the Org page lists them (its
+ * layout, and whether the fold names their projects: useDirectorSettings.ts), the gear shows it too.
  */
 import { SectionCard } from '../inputs/SectionCard';
 import { SettingsGroup, SettingsRow } from '../SettingsSection';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
+import { SegmentedControl } from '../inputs/SegmentedControl';
+import { DIRECTORS_LAYOUT_OPTIONS, DIRECTORS_PROJECTS_HELP, directorsLayoutHelp, useDirectorSettings } from '../../org/useDirectorSettings';
 import { ORG_OFF_STILL, ORG_OFF_STOPS, orgSwitchFooter, useOrgSwitch } from '../../org/useOrgSwitch';
 
 export { ORG_OFF_STOPS };
 
 export function OrgSection() {
   const org = useOrgSwitch();
+  const dir = useDirectorSettings();
   return (
     <SectionCard id="org" title="Org" showSave={false}>
       <SettingsGroup footer={orgSwitchFooter(org.on)}>
@@ -32,6 +38,14 @@ export function OrgSection() {
         </ul>
         <p className="settings-row-help">{ORG_OFF_STILL}</p>
       </SettingsGroup>
+      {dir.on && (
+        <SettingsGroup heading="Directors" data-testid="org-directors-settings">
+          <SettingsRow label="Layout" help={directorsLayoutHelp(dir.layout)} error={dir.error} data-testid="org-directors-layout-row"
+            control={<SegmentedControl aria-label="Directors layout" value={dir.layout} options={DIRECTORS_LAYOUT_OPTIONS} disabled={dir.busy} onChange={dir.setLayout} />} />
+          <SettingsRow label="Project names" help={DIRECTORS_PROJECTS_HELP} htmlFor="org-directors-projects" data-testid="org-directors-projects-row"
+            control={<ToggleSwitch id="org-directors-projects" checked={dir.showProjects} busy={dir.busy} onChange={dir.setShowProjects} />} />
+        </SettingsGroup>
+      )}
     </SectionCard>
   );
 }

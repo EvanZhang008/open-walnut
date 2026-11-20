@@ -1,7 +1,8 @@
 /**
- * The leaders under each VP for the Org list (OrgLeaders.tsx), from the chart's own cards so the
- * list and the chart list the same projects in the same order. Off while the `org_leaders`
- * experiment is off: no line, and search finds what it found before.
+ * The Directors under each VP for the Org list (OrgLeaders.tsx, OrgDirectorSection.tsx), from the
+ * chart's own cards so the list and the chart list the same projects in the same order, and the VP's
+ * projects a New Director may go to. Off while the `org_leaders` experiment is off: no line, and
+ * search finds what it found before.
  */
 import { useMemo } from 'react';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
@@ -10,8 +11,16 @@ import { useExperimental } from '@/hooks/useExperimental';
 import type { VpCard } from './org-chart-model';
 import { filterChannels, type ChannelRow } from './org-channels-model';
 import { leaderGroups, leadersMatch, sourcesOf, type LeaderGroup } from './org-leaders';
+import type { DirectorProject } from './director-actions';
 
 const NONE: readonly LeaderGroup[] = [];
+const NO_PROJECTS: readonly DirectorProject[] = [];
+
+/** What the list draws the Directors from: a VP row's groups, and its projects. */
+export interface OrgDirectorsView {
+  groupsOf: (row: ChannelRow) => readonly LeaderGroup[];
+  projectsOf: (row: ChannelRow) => readonly DirectorProject[];
+}
 
 export function useOrgLeaders(cards: readonly VpCard[], tasks: readonly Task[]) {
   const on = useExperimental('org_leaders');
@@ -21,11 +30,14 @@ export function useOrgLeaders(cards: readonly VpCard[], tasks: readonly Task[]) 
     // The Inbox is no one's team: no leaders line there.
     return new Map(cards.filter((c) => c.role === 'VP').map((c) => [c.key, leaderGroups(sourcesOf(c.projects), byId)] as const));
   }, [on, cards, tasks]);
-  const leadersOf = useLeanCallback((row: ChannelRow) => byKey?.get(row.key) ?? NONE, [byKey]);
+  const projects = useMemo(() => new Map(cards.map((c) => [c.key, c.projects.map((p) => ({ project: p.project, name: p.name }))] as const)), [cards]);
+  const groupsOf = useLeanCallback((row: ChannelRow) => byKey?.get(row.key) ?? NONE, [byKey]);
+  const projectsOf = useLeanCallback((row: ChannelRow) => projects.get(row.key) ?? NO_PROJECTS, [projects]);
+  const directors = useMemo<OrgDirectorsView>(() => ({ groupsOf, projectsOf }), [groupsOf, projectsOf]);
   /** filterChannels, and a VP one of whose leaders the search finds. */
   const filter = useLeanCallback((rows: readonly ChannelRow[], q: string): ChannelRow[] => {
     const hit = new Set(filterChannels(rows, q).map((r) => r.key));
     return rows.filter((r) => hit.has(r.key) || (!!byKey && leadersMatch(byKey.get(r.key) ?? NONE, q)));
   }, [byKey]);
-  return { leadersOf: byKey ? leadersOf : undefined, filter };
+  return { directors: byKey ? directors : undefined, filter };
 }

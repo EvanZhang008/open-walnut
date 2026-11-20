@@ -150,7 +150,12 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
     engine_split_projects: 'the projects the split shares, read with it on the Mac',
   },
   // The org runs on the primary only. Named in the copy, an older replica would refuse the whole org row.
-  org: { enabled: 'the org switch, read where the org runs, on the Mac (org/org-enabled.ts)' },
+  org: {
+    enabled: 'the org switch, read where the org runs, on the Mac (org/org-enabled.ts)',
+    // Named in the copy, an older replica would refuse the whole org row (and lose the org's name).
+    directors_layout: 'how the Org page lists the Directors (org/org-settings.ts); a replica shows the default',
+    directors_projects: 'whether the Directors fold names their projects (org/org-settings.ts); a replica shows the default',
+  },
   agent: {
     agents: 'agent definitions (prompts, tools) run on the Mac',
     session_organize: 'a background job of the Mac',

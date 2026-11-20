@@ -1,5 +1,5 @@
 import type { Task } from '@open-walnut/core';
-import { CEO_LABEL, VP_LABEL, orgDisplayTitle } from '@open-walnut/org-tree';
+import { CEO_LABEL, VP_LABEL, isDirector, orgDisplayTitle } from '@open-walnut/org-tree';
 import { projectDisplayName } from '@/utils/project-display';
 import { isDoneTask } from './adopt-candidates';
 import { subtasksOf } from './subtask-index';
@@ -14,12 +14,13 @@ import { subtasksOf } from './subtask-index';
  * reads like the row it was opened on. `Leader · n` counts open workers (a
  * leader whose workers are all finished says how many are done), `Worker of “X”`
  * names its leader (`Worker` alone when the leader is not in this browser's
- * list, e.g. a finished one not loaded); '' for a task in no team.
+ * list, e.g. a finished one not loaded), `Director` when it is one (only while the Directors are on:
+ * `director`); '' for a task in no team.
  */
-export function teamRowSummary(tasks: readonly Task[], task: Pick<Task, 'id' | 'parent_task_id' | 'org_role'>, leaderTitle: string | null): string {
+export function teamRowSummary(tasks: readonly Task[], task: Pick<Task, 'id' | 'parent_task_id' | 'org_role'>, leaderTitle: string | null, director = false): string {
   const workers = subtasksOf(tasks, task.id);
   const open = workers.filter((t) => !isDoneTask(t)).length;
-  const parts: string[] = [];
+  const parts: string[] = director ? ['Director'] : [];
   if (open > 0) parts.push(`${leaderWord(task)} · ${open}`);
   else if (workers.length > 0) parts.push(`${leaderWord(task)} · ${workers.length} done`);
   if (task.parent_task_id) parts.push(leaderTitle !== null ? `Worker of “${leaderTitle}”` : 'Worker');
@@ -49,3 +50,15 @@ export function releaseCandidates(tasks: readonly Task[], leaderId: string, quer
 
 /** From this many workers on, the Release picker gets a filter box. */
 export const RELEASE_FILTER_FROM = 8;
+
+/**
+ * The Team row's Director entry (2026-11-20, the user: "we can also de-promote or promote any task to
+ * director"): null where it cannot be one (an org node, a task in the Inbox, a finished task), else
+ * whether it is one now by the shared rule (its choice, else whether it leads an open subtask), so the
+ * row offers "Make it a Director" or "Remove from Directors".
+ */
+export function directorEntry(tasks: readonly Task[], task: Pick<Task, 'id' | 'project' | 'org_role' | 'director' | 'phase' | 'status'>): { isDirector: boolean } | null {
+  if (task.org_role || !(task.project ?? '').trim() || isDoneTask(task)) return null;
+  const open = subtasksOf(tasks, task.id).filter((t) => !isDoneTask(t)).length;
+  return { isDirector: isDirector(task.director, open) };
+}

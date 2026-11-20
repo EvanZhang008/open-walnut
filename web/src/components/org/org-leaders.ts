@@ -13,8 +13,10 @@
  */
 import type { Task } from '@open-walnut/core';
 import { directorsOf, orgDisplayTitle, projectKey, type OrgDirector, type OrgTaskNode } from '@open-walnut/org-tree';
+import { resolveTaskSessionId } from '@/utils/session-status';
 import { stateTab, type OrgStateTab } from './org-task-tabs';
 import type { VpProject } from './org-chart-model';
+import type { ChannelRow } from './org-channels-model';
 
 export interface LeaderNode {
   id: string;
@@ -24,6 +26,8 @@ export interface LeaderNode {
   leads: number;
   /** On the user's Watching list (Task.watched_at): it wears the eye, wherever else it shows. */
   watched: boolean;
+  /** Its session (its chat), when it has one: "Open chat" opens it. */
+  sessionId?: string;
   /** The leaders among the tasks under it, at any depth below (a task that is none adds none). */
   subs: LeaderNode[];
 }
@@ -52,6 +56,7 @@ function leaderOf(d: OrgDirector, byId: ReadonlyMap<string, Task>): LeaderNode {
     state: task ? stateTab(task) : 'waiting',
     leads: d.leads,
     watched: !!task?.watched_at,
+    ...(task && resolveTaskSessionId(task) ? { sessionId: resolveTaskSessionId(task)! } : {}),
     subs: d.subs.map((s) => leaderOf(s, byId)),
   };
 }
@@ -77,9 +82,20 @@ export function leaderGroups(projects: readonly LeaderSource[], byId: ReadonlyMa
 /** How many leaders the toggle counts: the ones right under the VP's projects. */
 export const leaderTotal = (groups: readonly LeaderGroup[]): number => groups.reduce((n, g) => n + g.leaders.length, 0);
 
-export const leadersLabel = (n: number): string => `${n} leader${n === 1 ? '' : 's'}`;
+/** The fold's words (2026-11-20, the user: "the tab leader should change to directors"). */
+export const directorsLabel = (n: number): string => `${n} director${n === 1 ? '' : 's'}`;
 
-function* allLeaders(nodes: readonly LeaderNode[]): Generator<LeaderNode> {
+/** The groups the fold draws: by project (the default), or, with the project names off (Settings →
+ *  Org), one group with no name holding every Director in the same order. */
+export function foldGroups(groups: readonly LeaderGroup[], showProjects: boolean): readonly LeaderGroup[] {
+  if (showProjects || groups.length === 0) return groups;
+  return [{ key: '*', project: '', name: '', leaders: groups.flatMap((g) => g.leaders) }];
+}
+
+/** Every Director, a Director's own Directors right after it: the DIRECTORS section's rows (one level). */
+export const flatDirectors = (groups: readonly LeaderGroup[]): LeaderNode[] => groups.flatMap((g) => [...allLeaders(g.leaders)]);
+
+export function* allLeaders(nodes: readonly LeaderNode[]): Generator<LeaderNode> {
   for (const n of nodes) { yield n; yield* allLeaders(n.subs); }
 }
 
@@ -96,4 +112,18 @@ export function leadersMatch(groups: readonly LeaderGroup[], q: string): boolean
 export function subsMatch(leader: LeaderNode, q: string): boolean {
   const words = wordsOf(q);
   return !!words.length && [...allLeaders(leader.subs)].some((l) => hits(l, words));
+}
+
+/** One row of the DIRECTORS section (OrgDirectorSection): a Director and the VP it is under. */
+export interface DirectorRow { director: LeaderNode; vp: ChannelRow }
+
+/** The section's rows: by VP in the list's order, then the tree's order, one level. A search shows the
+ *  Directors it finds, and every Director of a VP whose name it finds. */
+export function directorRows(vps: readonly ChannelRow[], groupsOf: (row: ChannelRow) => readonly LeaderGroup[], query = ''): DirectorRow[] {
+  const words = wordsOf(query);
+  return vps.flatMap((vp) => {
+    const all = flatDirectors(groupsOf(vp));
+    const vpHit = words.length > 0 && words.every((w) => (vp.vpName ?? vp.name).toLowerCase().includes(w));
+    return (words.length && !vpHit ? all.filter((d) => hits(d, words)) : all).map((director) => ({ director, vp }));
+  });
 }

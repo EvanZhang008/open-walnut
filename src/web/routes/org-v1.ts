@@ -14,9 +14,12 @@
  *                                                     put a project under another project's VP
  *                                                     (its lead), or back under its own (vp '');
  *                                                     no task changes project
- *   GET  /org/settings        → { name, founderTitle, enabled, defaultInstructions }  the org's name, the user's role, the
- *                               org switch (org-enabled.ts), Walnut's default core instructions
- *   PUT  /org/settings { name?, founderTitle?, enabled? } → the same, after the change (blank = default)
+ *   GET  /org/settings        → { name, founderTitle, enabled, defaultInstructions, directorsLayout,
+ *                               directorsShowProjects, directorsEnabled }  the org's name, the user's role, the
+ *                               org switch (org-enabled.ts), Walnut's default core instructions, how the
+ *                               Directors are listed, and whether the Directors experiment is on (read-only)
+ *   PUT  /org/settings { name?, founderTitle?, enabled?, directorsLayout?, directorsShowProjects? } → the same,
+ *                               after the change (blank = default)
  *   POST /org/nodes/:id/start { auto? } → { queued, skipped? }  start Main's or a VP's first session (org-autostart.ts)
  *   POST /org/report { of?, since?, at?, send? } → { report } | { letterId } | { scheduledAt, since }
  *                                                     Main's or a lead's report for the user
@@ -33,7 +36,7 @@ import { role } from '../../core/server-role.js'
 import type { Task } from '../../core/types.js'
 import { matchIdRef, missingIsNull } from '../../lib/id-ref.js'
 import { bus, EventNames } from '../../core/event-bus.js'
-import { getOrgSettings, setOrgSettings } from '../../core/org/org-settings.js'
+import { getOrgSettings, isDirectorsLayout, setOrgSettings } from '../../core/org/org-settings.js'
 import {
   OrgError, contactLaunch, ensureMainTask, getOrgTree, orgReportsOf, resolveOrgContact, setProjectVp,
 } from '../../core/org/org-store.js'
@@ -356,11 +359,14 @@ orgV1Router.get('/org/settings', async (_req: Request, res: Response, next: Next
 orgV1Router.put('/org/settings', async (req: Request, res: Response, next: NextFunction) => {
   try {
     primaryOnly('The org\'s names are changed')
-    const body = (req.body ?? {}) as { name?: unknown; founderTitle?: unknown; enabled?: unknown }
+    const body = (req.body ?? {}) as { name?: unknown; founderTitle?: unknown; enabled?: unknown; directorsLayout?: unknown; directorsShowProjects?: unknown }
     for (const k of ['name', 'founderTitle'] as const) {
       if (body[k] !== undefined && typeof body[k] !== 'string') throw new OrgError('bad_name', 400, `\`${k}\` is a string.`)
     }
     if (body.enabled !== undefined && typeof body.enabled !== 'boolean') throw new OrgError('bad_enabled', 400, '`enabled` is true or false.')
+    if (body.directorsLayout !== undefined && !isDirectorsLayout(body.directorsLayout)) throw new OrgError('bad_directors_layout', 400, '`directorsLayout` is "fold" or "sections".')
+    if (body.directorsShowProjects !== undefined && typeof body.directorsShowProjects !== 'boolean') throw new OrgError('bad_directors_projects', 400, '`directorsShowProjects` is true or false.')
+    // `directorsEnabled` is the experiment's switch, read-only here: ignored.
     // A test window on the real Walnut never turns the user's org off or on.
     if (body.enabled !== undefined && await isTestRunRequest(req)) throw new OrgError('test_run', 409, 'A test run does not change the org switch.')
     const wasOn = (await getOrgSettings()).enabled

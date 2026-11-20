@@ -79,4 +79,19 @@ describe('the Org row menu', () => {
     const items = orgRowMenu({ target: { moved }, cards, select, openChart, pick: () => {} })
     expect(labels(items)).toEqual(['Seeds', 'Open the Garden VP', 'Create a dedicated VP for Seeds…'])
   })
+
+  it('with the Directors on, a VP\'s row offers New Director…, which asks for that VP\'s input; off, it does not', () => {
+    const { ch, cards, select, openChart } = setup(projects)
+    const row = ch.rows.find((r) => r.name === 'Kitchen')!
+    const asked: string[] = []
+    const on = orgRowMenu({ target: { row }, cards, select, openChart, pick: () => {}, newDirector: (k) => { asked.push(k) } })
+    expect(labels(on)).toEqual(['Kitchen', 'Open chat', 'Open tasks', 'New Director…', 'Move under another VP…'])
+    on.find((i) => i.key === 'director')!.onSelect!()
+    expect(asked).toEqual([row.key])
+    const off = orgRowMenu({ target: { row }, cards, select, openChart, pick: () => {} })
+    expect(labels(off)).not.toContain('New Director…')
+    // The CEO's row has none.
+    const main = orgRowMenu({ target: { row: ch.main }, cards, select, openChart, pick: () => {}, newDirector: () => {} })
+    expect(labels(main)).not.toContain('New Director…')
+  })
 })

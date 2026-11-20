@@ -29,6 +29,7 @@ import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMe
 import { OrgChartProject } from './OrgChartProject';
 import { OrgChartCeo, OrgChartVp, pressable } from './OrgChartVp';
 import { OrgLeaders } from './OrgLeaders';
+import { askNewDirector } from './director-actions';
 import { leaderGroups, sourcesOf } from './org-leaders';
 import { useExperimental } from '@/hooks/useExperimental';
 import { OrgEditableName } from './OrgEditableName';
@@ -246,6 +247,8 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
     const lead = card.leadId ? byId.get(card.leadId) : undefined;
     return [
       { key: 'open', label: 'Open chat', onSelect: () => pick(card.key) },
+      // Its Directors' fold opens on a name input (director-actions.ts), for a VP with none yet too.
+      ...(leadersOn && card.role === 'VP' && card.projects.length ? [{ key: 'director', label: 'New Director…', onSelect: () => askNewDirector(card.key, 'chart') }] : []),
       ...(card.project ? [{
         key: 'edit', label: 'Edit name and instructions…',
         onSelect: () => openEditor({ kind: 'edit', ...(lead ? { task: lead } : {}), project: card.project, name: card.name }, from),
@@ -364,7 +367,7 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
                   onOpenChat={() => pick(c.key)}
                   line={nowLine(c.projects, byId)}
                   more={c.role === 'VP' ? nodeMore(c, `More for ${theVp(c.name)}`) : null}
-                  {...(leadersOn && c.role === 'VP' ? { leaders: <OrgLeaders groups={leaderGroups(sourcesOf(c.projects), byId)} surface="chart" vpKey={c.key} vpName={c.name} onLeave={onClose} /> } : {})}
+                  {...(leadersOn && c.role === 'VP' ? { leaders: <OrgLeaders groups={leaderGroups(sourcesOf(c.projects), byId)} projects={c.projects} showProjects={settings.directorsShowProjects !== false} surface="chart" vpKey={c.key} vpName={c.name} onLeave={onClose} /> } : {})}
                 >
                   <ul className="oc-projects" data-testid="org-chart-projects" aria-label={`Projects ${theVp(c.name)} leads`} hidden={c.projects.length === 0}>
                     {c.projects.map((p) => (

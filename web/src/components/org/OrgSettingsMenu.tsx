@@ -3,6 +3,8 @@
  * some kind of setting right"): a gear beside "Org chart" opens a small panel with the org's one
  * switch (useOrgSwitch.ts, the same value Settings → Org shows),
  * what turning the org off stops, and a link to the full Settings page. The gear reads "Off" while the org is off.
+ * While the Directors experiment is on it also picks how the Directors are listed (useDirectorSettings.ts),
+ * the same values Settings → Org shows.
  */
 import { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -13,6 +15,8 @@ import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch';
 import { ICON_GEAR } from '@/components/common/Icons';
 import { log } from '@/utils/log';
 import { ORG_OFF_STILL, ORG_OFF_STOPS, orgSwitchFooter, useOrgSwitch } from './useOrgSwitch';
+import { SegmentedControl } from '@/components/settings/inputs/SegmentedControl';
+import { DIRECTORS_LAYOUT_OPTIONS, DIRECTORS_PROJECTS_HELP, directorsLayoutHelp, useDirectorSettings } from './useDirectorSettings';
 import '@/styles/org-rail.css';
 
 export function OrgSettingsMenu() {
@@ -21,6 +25,7 @@ export function OrgSettingsMenu() {
   const menuRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const { on, busy, error, set, clearError } = useOrgSwitch();
+  const dir = useDirectorSettings();
   const placement = useMenuPlacement(open, btnRef, menuRef, { align: 'right', minHeight: 200, onAnchorLost: () => setOpen(false) });
   useOverlayLayer({
     open,
@@ -68,6 +73,23 @@ export function OrgSettingsMenu() {
             <ul>{ORG_OFF_STOPS.map((line) => <li key={line}>{line}.</li>)}</ul>
             <div className="org-answer-q">{ORG_OFF_STILL}</div>
           </div>
+          {dir.on && (
+            <div className="org-settings-directors" data-testid="org-settings-directors">
+              <div className="org-settings-stops-head">Directors</div>
+              <div className="org-settings-row is-stacked">
+                <span className="org-settings-label"><strong>Layout</strong><span className="org-answer-q">{directorsLayoutHelp(dir.layout)}</span></span>
+                <SegmentedControl aria-label="Directors layout" value={dir.layout} options={DIRECTORS_LAYOUT_OPTIONS} disabled={dir.busy} onChange={dir.setLayout} />
+              </div>
+              <div className="org-settings-row">
+                <label htmlFor="org-settings-directors-projects" className="org-settings-label">
+                  <strong>Project names</strong>
+                  <span className="org-answer-q">{DIRECTORS_PROJECTS_HELP}</span>
+                </label>
+                <ToggleSwitch id="org-settings-directors-projects" data-testid="org-settings-directors-projects" checked={dir.showProjects} busy={dir.busy} onChange={dir.setShowProjects} />
+              </div>
+              {dir.error && <div className="org-thread-error" role="alert">{dir.error}</div>}
+            </div>
+          )}
           <button type="button" className="btn btn-sm org-settings-all" data-testid="org-settings-all"
             onClick={() => { setOpen(false); navigate('/settings#org'); }}>All Org settings</button>
         </div>,

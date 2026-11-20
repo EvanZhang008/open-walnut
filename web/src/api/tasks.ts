@@ -219,6 +219,8 @@ export interface CreateTaskInput {
    *  (Satellite) instead of the tier the user saw it land in. */
   pinned?: boolean;
   focus_tier?: string;
+  /** Born a Director under its VP (Task.director; src/core/task-director.ts). */
+  director?: 'yes';
 }
 
 export interface UpdateTaskInput {

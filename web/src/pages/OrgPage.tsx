@@ -48,6 +48,7 @@ import type { ContextMenuItem } from '@/components/common/ContextMenu';
 import { vpCards } from '@/components/org/org-chart-model';
 import { OptionPickerFlyout, useCursorFlyout, type CursorPoint } from '@/components/tasks/CursorFlyout';
 import { orgRowMenu, type OrgRowPick } from '@/components/org/org-row-menu';
+import { askNewDirector } from '@/components/org/director-actions';
 import { OrgNodeDetail, type OrgAnswers, type OrgTab } from '@/components/org/OrgNodeDetail';
 import type { AnswerFailure } from '@/components/org/OrgInlineAnswer';
 import { OrgSidePanel, parseSideTarget, sideTargetParam, type OrgSideTarget } from '@/components/org/OrgSidePanel';
@@ -590,9 +591,9 @@ export function OrgPage() {
   // picker at the cursor, the way a folder menu's Project row does.
   const picker = useCursorFlyout<OrgRowPick>();
   const rowMenu = useCallback((target: ChannelMenuTarget, point: CursorPoint, origin: HTMLElement | null): ContextMenuItem[] =>
-    orgRowMenu({ target, cards, select, openChart, pick: (p) => picker.open(p, point, origin) }),
+    orgRowMenu({ target, cards, select, openChart, pick: (p) => picker.open(p, point, origin), newDirector: leaders.directors ? (key) => askNewDirector(key, 'list') : undefined }),
   // eslint-disable-next-line react-hooks/exhaustive-deps -- picker.open only sets its state
-  [cards, select, openChart]);
+  [cards, select, openChart, leaders.directors]);
 
   // The two dividers of the page itself (2026-11-02, the user, pointing at the line before an opened
   // task: "this line need ot move the bar"): the list's right edge and the opened tasks' left edge,
@@ -651,7 +652,7 @@ export function OrgPage() {
           openTaskIds={openTaskIds}
           onToggleLock={keptLock.toggle}
           onUnwatch={unwatch}
-          {...(leaders.leadersOf ? { leadersOf: leaders.leadersOf } : {})}
+          {...(leaders.directors ? { directors: leaders.directors } : {})}
           now={now}
         />
       )}
