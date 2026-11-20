@@ -35,8 +35,8 @@ tasks goes in `shared/`. Paths come only from `paths.ts` (`nodeArtifactsDir`, `s
 - **MEMORY.md**: the node at every turn end and after a compaction, anyone with `agent_memory_read`
   (`GET /api/v1/tasks/:id/agent-memory`). It is no field of the task any more.
 - **Team guidance**: the sessions a node manages, through the same hint.
-- **A person**: the Notes page's "Walnut artifacts" section under the notes tree (experimental
-  switch `notes_artifacts`, `GET /api/artifacts`) lists every file; a click opens it in the file viewer.
+- **A person**: with the one tree on (below), the Notes page shows every file of it, the notes and
+  the artifacts alike; before that, the artifacts folder in a file browser.
 
 A `SKILL.md` is the common format (front matter, then the text): `name`, `description`, `at`, `by`,
 `by_name`, `kind`, `scope`, each value a JSON string. A `MEMORY.md` has `at`, `by`, `by_name`,
@@ -45,6 +45,64 @@ A `SKILL.md` is the common format (front matter, then the text): `name`, `descri
 longer matches its `hash` is dated by the file's time; a sync or a touch that only moves the time
 changes nothing, so a turn-end rewrite asked over that file still lands.
 Writes through Walnut (`agent_skill_write`) are still screened for injection.
+
+## One tree with the notes (experimental `notes_unified`)
+
+2026-11-20, the user: "can we unified the note and the artifacts? ... artifacts/walnut-project/
+prject0name/skills|notes|memory|drawing ... I want all the artifact need for a project inlcude
+drawaing wthat ever, is stored here." With the switch on (Settings, default off), the next start
+moves the vault and the artifacts folder into one tree by project (`src/core/artifacts/unify/`):
+
+```
+WALNUT_HOME/artifacts/
+  projects/<project>/notes/          the vault's folder of that project (Projects/<name>/, or a top folder named like it)
+  projects/<project>/skills/         the skills of its tasks
+  projects/<project>/memory/<taskId>/  a task's MEMORY.md, memory folder, guidance, reflections
+  projects/<project>/drawings/       its drawings
+  notes/                             every other vault file, its path unchanged under notes/
+  skills/                            the org's skills
+  memory/<taskId>/, memory/_shared/notes/   a task with no project, what belongs to no task
+  drawings/                          the drawings of no project
+  .unified.json                      the record: the map, every move, the backup
+```
+
+The vault's root is the tree from then on (`notesRoot()`), so the Notes page shows all of it.
+
+- **The move**: a copy-on-write clone of everything into `.unify-stage/`, a sha256 of every file on
+  both sides (the counts must match), then the record (`switching`), then two renames: the old
+  `notes/` and `nodes/`, `org/`, `shared/` into `.backup/unify-<stamp>/`, the stage into place, the
+  record `live`. A stop in between is finished at the next start; until then nothing makes an
+  empty `notes/` (the boot keeps the tree's layout), and a `notes/` something made anyway goes
+  beside the backup. A file written to the old places after they were listed is taken from the
+  backup into the tree. A check that fails moves nothing; a vault that is a link (to a synced
+  folder) is left where it is.
+- **Names clash** (any case, as APFS): the later file gets " 2" (a drawing's files together), a skill
+  folder "-2". The real vault had none.
+- **Nothing is rewritten inside a note.** Every old path still opens: `movedNotePath`
+  (`src/core/notes/note-path-moves.ts`, the record's exact entries, then its folder rules) is asked
+  by every resolver of a note path, the path-form links of the index, and the web client, which gets
+  the map with the notes list (`tests/core/notes/path-form-links-moved.test.ts` fails on a new
+  resolver that does not ask). What names a note by path is re-pointed: the Notes index (hashes
+  kept), the search index's note docs (vectors kept), the bookmarks, each replica's
+  `notes_exclude`, each project's tracking note.
+- **A task that changes project** takes its memory folder and its drawings' task folder along
+  (`task-homes.ts`, one move at a time per task, to the project the task has when it runs); its
+  skills stay with the project they were made in. **A renamed project** takes its whole folder,
+  and the record's map follows, so an old path still lands.
+- **What is left out stays out**: each replica's `notes_exclude` and the search's
+  `excluded_folders` follow their folders (a project's whole notes folder stands for the project).
+- **`knowledge/`** becomes a folder of links (marked `.walnut-links`) into the tree, so a path an
+  older message named still opens without a second copy of the notes for Obsidian.
+- **Off again**: the next start puts every file where it was (the record's exact entries; a file
+  made in the tree meanwhile by its folder: a task's memory to `nodes/<id>/`, a new project's notes
+  to `Projects/<name>/`), checked by hash the same way and recorded (`rolling-back`) so a stop part
+  way is finished, then re-points the records back; the tree is kept in
+  `.backup/unified-tree-<stamp>/`. A `notes/` something made meanwhile keeps its files. An older
+  release started on the tree sees an empty vault: turn the switch off and start once first.
+
+Limits: a replica (the cloud companion) has no map yet, so an old path-form link reads unresolved
+there; a raw `artifacts/nodes/<id>/...` path a message named in the last day opens only through
+Walnut's ops, not as a file.
 
 ## The places before it
 
@@ -96,5 +154,6 @@ side (what it replaces stays in the backups). A note or a skill the older releas
 roll back comes back on the way forward. A read that fails for any reason but a missing file
 refuses the write rather than reading fewer skills or an empty memory.
 
-Ratchets: `tests/core/artifacts/artifacts-move.test.ts`, `tests/core/artifacts/legacy-places-ratchet.test.ts`,
+Ratchets: `tests/core/artifacts/unify-*.test.ts`, `tests/core/notes/note-path-moves.test.ts`,
+`tests/core/notes/path-form-links-moved.test.ts`, `tests/core/artifacts/artifacts-move.test.ts`, `tests/core/artifacts/legacy-places-ratchet.test.ts`,
 `tests/core/hints/team-guidance-hint.test.ts`.
