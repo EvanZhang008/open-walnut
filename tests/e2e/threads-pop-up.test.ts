@@ -42,6 +42,7 @@ import { ridingKeys, ridingLine } from '../../src/core/sessions/status-riding.js
 import { ANSWERED_KEY } from '../../src/core/org/thread-answered-notes.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
 import { syncUserStatuses, settleUserStatusSync } from '../../src/core/user-status-sync.js'
+import { DaemonConnection } from '../../src/providers/daemon-connection.js'
 import type { OrgThread, ThreadMessage } from '../../src/core/org/threads-model.js'
 
 let server: Server
@@ -268,5 +269,32 @@ describe('threads pop up', () => {
     const r = await api<{ owner: { task_id: string } }>('POST', `/tasks/${vp.taskId}/threads`, { text: 'Put them on the bench by the gate.', thread: t.id })
     expect(r.json.owner.task_id).toBe(garden.taskId)
     await vi.waitFor(() => expect((queued.get(garden.sid) ?? []).some((m) => m.message?.includes('bench by the gate'))).toBe(true), { timeout: 15_000, interval: 300 })
+  }, 60_000)
+
+  it('a phone\'s Follow up through the companion on a task\'s card at its VP goes to that thread and its owner', async () => {
+    // 2026-11-20, the user on his phone: "this already followed up, but it did not leave". The
+    // phone announces the thread first (PUT .../follow-ups/:messageId), then the companion relays
+    // the words alone into the VP's chat; the announce was refused (404: not the VP's own thread),
+    // so the words were filed in another of the VP's threads and the card stayed on Needs you.
+    const t = await ask(trays.taskId, 'Paint the gate green or leave it bare?')
+    await vi.waitFor(async () => expect((await listOf(vp.taskId)).threads.map((x) => x.id)).toContain(t.id), { timeout: 10_000, interval: 200 })
+    const messageId = 'qm-mobile-popped-follow-1'
+    const announced = await api('PUT', `/tasks/${vp.taskId}/threads/${t.id}/follow-ups/${messageId}`)
+    expect(announced.status).toBe(200)
+    const conn = new DaemonConnection('__local__', null)
+    ;(conn as unknown as { send: (cmd: string, params: Record<string, unknown>) => Promise<unknown> }).send = async () => ({ ok: true })
+    await (conn as unknown as { handleMessageRequest: (e: Record<string, unknown>) => Promise<void> })
+      .handleMessageRequest({ ev: 'message-request', relayId: 7, sessionId: vp.sid, message: 'Green, the same as the shed.', messageId })
+    // Filed in the owner's one record, as his reply; none of the VP's own threads holds it.
+    await vi.waitFor(async () => {
+      const owned = (await readThreads(trays.taskId)).threads.find((x) => x.id === t.id)!
+      expect(owned.messages.map((m) => m.text)).toContain('Green, the same as the shed.')
+      expect(owned.state).not.toBe('needs')
+    }, { timeout: 15_000, interval: 300 })
+    expect((await readThreads(vp.taskId)).threads.some((x) => x.messages.some((m) => m.text === 'Green, the same as the shed.'))).toBe(false)
+    // Off the VP's list: it no longer waits on him.
+    await vi.waitFor(async () => expect((await listOf(vp.taskId)).threads.map((x) => x.id)).not.toContain(t.id), { timeout: 10_000, interval: 300 })
+    // A thread that is on no node above or below is still refused.
+    expect((await api('PUT', `/tasks/${vp.taskId}/threads/th-0000000000ff/follow-ups/qm-mobile-popped-follow-2`)).status).toBe(404)
   }, 60_000)
 })

@@ -304,7 +304,11 @@ orgThreadsV1Router.put('/tasks/:id/threads/:thread/follow-ups/:messageId', route
   const id = threadIdOf(req)
   const messageId = param(req.params.messageId)
   if (!/^qm-[A-Za-z0-9-]{1,64}$/.test(messageId)) throw new RouteError(400, 'bad_request', `Not a message id: ${messageId}`)
-  if (!(await readThreads(task.id)).threads.some((t) => t.id === id)) throw new RouteError(404, 'no_thread', `No thread ${id} on this node.`)
+  // A task's thread shown here (threads_pop_up) or one that moved on is answered here too: the
+  // relayed words then go to that one record and its owner (thread-capture.ts). 2026-11-20: a
+  // phone's Follow up on a task's popped card at its VP was refused here and filed by Walnut's pick.
+  const own = (await readThreads(task.id)).threads.find((t) => t.id === id)
+  if (!own && !(await elsewhereThread(task.id, id))) throw new RouteError(404, 'no_thread', `No thread ${id} on this node.`)
   const { noteFollowUpIntent } = await import('../../core/org/thread-follow-up-intent.js')
   noteFollowUpIntent(task.id, id, messageId)
   log.task.info('org thread follow-up announced', { taskId: task.id, threadId: id, messageId })
