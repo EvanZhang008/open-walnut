@@ -16,7 +16,6 @@ const KNOWN_REPAINTING: Record<string, string> = {
   'mic-pulse': 'the mic button while recording',
   'mic-transcribe-pulse': 'the mic button while a clip is transcribed',
   'thread-live-scan': 'the thread stack page',
-  'thread-review-scan': 'the thread stack page',
   'todo-group-pulse': 'a task group drop target during a drag',
   'todo-nest-pulse': 'a nest drop target during a drag',
   'wf-stage-flow': 'the workflow graph page',
