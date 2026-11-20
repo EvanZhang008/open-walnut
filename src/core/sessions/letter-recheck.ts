@@ -18,6 +18,7 @@
  *
  * Primary only; an ephemeral server never wakes a task for a letter it copied from the real Walnut.
  */
+import { ANSWERED_THERE_RECHECK } from '../answered-there.js';
 import { log } from '../../logging/index.js';
 import type { LetterRecord } from '../human-inbox/types.js';
 import type { Task } from '../types.js';
@@ -42,6 +43,7 @@ export function letterRecheckBody(letters: readonly LetterRecord[], nowMs: numbe
     `Your ${letters.length === 1 ? 'letter asks' : 'letters ask'} the user for a decision, still unanswered:`,
     ...lines,
     'The user may have done it outside Walnut, or the blocker may have cleared on its own. Check each one now yourself (human_inbox_get reads it).',
+    ANSWERED_THERE_RECHECK,
     'No longer needed: settle it with one line the user reads, walnut tools call human_inbox_mark \'{"id":"<letter id>","settled":"<why nobody needs to answer>"}\', and carry on. '
       + 'Still needed and nothing changed: leave it, and answer with only the agent-ack line, <walnut-turn status="agent-ack"/>, so the user\'s chat does not repeat the same status. '
       + 'If a script can tell when it is done, arm a trigger on it (trigger_create, wait:false, watches:"<letter id>"); this re-check stays quiet about that letter while the trigger is armed.',

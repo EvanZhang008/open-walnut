@@ -22,6 +22,7 @@
 import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
 import { NEEDS_RECHECK_MS, agoWords } from '../user-status.js';
+import { ANSWERED_THERE_RECHECK } from '../answered-there.js';
 import { snoozeEndedMs } from '../snooze.js';
 import { itemSnoozeEndedMs } from '../action-needed.js';
 import { statusDecision } from '../ask-decision.js';
@@ -60,7 +61,8 @@ export function recheckBody(ask: string, checkedAt: string | undefined, nowMs: n
   return [
     `Your status asks the user: "${ask}"${decisionId ? ` (decision ${decisionId})` : ''}${Number.isFinite(at) ? `, last checked ${agoWords(nowMs - at)}` : ''}.`,
     'The user may have done it outside Walnut (a sign-in in a terminal, a tap on the phone, a review), and nothing told you. Check it now yourself: run the command, look for the file, read the letter, the review or the state it needed.',
-    'Done: carry on with the work, and your report no longer asks it; if a letter of yours asked it, settle that letter (human_inbox_mark with "settled": one line saying why). '
+    ANSWERED_THERE_RECHECK,
+    'Done: carry on with the work, and your report no longer asks it; if a letter of yours asked it, settle that letter (human_inbox_mark with "settled": one line saying why); if a thread of yours asked it, update that thread (thread_update: answered with one line saying they did it, or close it). '
       + 'Still needed and nothing changed: answer with only the agent-ack line, <walnut-turn status="agent-ack"/>, so the user\'s chat does not repeat the same status; your report still counts as checked now. '
       + 'If a script can tell when it is done, arm a trigger on it (trigger_create, wait:false, watches:"ask") so you hear the moment it is: each run of its check counts as this ask\'s check, and this re-check stays quiet while it keeps running.',
   ].join('\n');

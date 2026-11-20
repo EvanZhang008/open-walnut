@@ -21,6 +21,7 @@ import { buildWalnutMessage } from '../peers/walnut-message-tag.js';
 import { threadDeadline, threadOverdue, type ThreadOverdue } from './thread-view.js';
 import type { OrgThread, ThreadRecheck } from './threads-model.js';
 import { keepsThreads } from './keeps-threads.js';
+import { ANSWERED_THERE_RECHECK } from '../answered-there.js';
 
 /** The send source of the note (org-enabled.ts ORG_OFF_BLOCKED_SOURCES, task-wait-resume.ts). */
 export const THREAD_RECHECK_SOURCE = 'thread-recheck';
@@ -66,7 +67,10 @@ export function threadRecheckBody(due: readonly DueThread[], nowMs: number): str
       ? `- ${t.id} ${q(t.title)}: his last message (${ago}) has no reply on this thread (state ${t.state}). Answer it now: thread_update with the summary and answered or needs, or pending if it only went to a team.`
       : `- ${t.id} ${q(t.title)}: still ${t.state} with nothing new since ${ago}; he does not see it. Give it its state: answered or needs with the summary, pending if a team has it, or close it if he reacted to it as finished.`;
   });
-  return `These threads are due a check. Answer missing replies; an unchanged ask is not a reason to remind him again.\n${lines.join('\n')}`;
+  const head = 'These threads are due a check. Answer missing replies; an unchanged ask is not a reason to remind him again.';
+  // A thread that waits on him may have been answered where it lives (answered-there.ts).
+  const there = due.some((d) => d.overdue.why === 'needs') ? `\n${ANSWERED_THERE_RECHECK}` : '';
+  return `${head}${there}\n${lines.join('\n')}`;
 }
 
 /**

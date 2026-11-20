@@ -51,7 +51,7 @@
  * Pure: every function takes the file and returns the next one, or throws ThreadError. The
  * store (threads-store.ts) runs them under the file lock.
  */
-import { userKindVerdict } from './user-kind.js';
+import { userKindVerdict, type UserKindInput } from './user-kind.js';
 import type { AskOption } from '../user-status.js';
 import { AskOptionsError, checkNeedsOptions, threadOptionsOf } from './thread-options.js';
 import { oneCardNow } from './one-card.js';
@@ -777,6 +777,9 @@ export interface ThreadPatch {
   /** With state needs from an agent: which of the user's kinds this is, and why (user-kind.ts). Never stored. */
   user_kind?: string;
   user_kind_why?: string;
+  /** With user_kind: the user's earlier words the reason rests on, and what they were about (user-kind.ts). Never stored. */
+  user_kind_words?: string;
+  user_kind_about?: string;
   /** With state needs from an agent: why it asks what a task in the node's team already asks (same-ask.ts). Never stored. */
   same_ask_reason?: string;
   /** With close from a node: his own words asking for it (closeAskOf). Never stored. */
@@ -794,9 +797,9 @@ export interface ThreadPatch {
  */
 const waitsOnUser = (state: ThreadState): boolean => state === 'needs';
 
-function checkHandedToUser(by: ThreadWriter, input: { user_kind?: unknown; user_kind_why?: unknown }): void {
+function checkHandedToUser(by: ThreadWriter, input: UserKindInput, subject: string): void {
   if (by === 'human') return;
-  const v = userKindVerdict(input);
+  const v = userKindVerdict({ ...input, subject });
   if (!v.ok) throw new ThreadError('user_kind', 409, v.message.replace(/^Not sent to the user:/, 'Not handed to the user:'));
 }
 
@@ -986,7 +989,10 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
     throw new ThreadError('thread_closed', 409, `Thread ${id} is closed: the user acknowledged it himself, so it stays closed. Something new about it is a new thread (thread_create); his own Follow up on it opens it again.`);
   }
   // Handed to the user: needs, from a state it was not in, or a closed thread reopened into it.
-  if (patchHandsToUser(cur, patch)) checkHandedToUser(by, patch);
+  if (patchHandsToUser(cur, patch)) {
+    // The ask's own words only: never older context, where a sender names its source (user-kind.ts).
+    checkHandedToUser(by, patch, [patch.title ?? cur.title, patch.ask, patch.reply].filter(isStr).join('\n'));
+  }
   if (patch.pin === false && cur.pinned) checkHisPin(cur, by, 'unpinned');
   if (patch.snooze?.trim() && cur.pinned) checkHisPin(cur, by, 'snoozed');
   if (patch.close && !cur.closed) checkHisPin(cur, by, 'closed');
@@ -1266,6 +1272,9 @@ export interface OpenThreadInput {
   /** With state needs (the default): which of the user's kinds this is, and why (user-kind.ts). Never stored. */
   user_kind?: string;
   user_kind_why?: string;
+  /** With user_kind: the user's earlier words the reason rests on, and what they were about (user-kind.ts). Never stored. */
+  user_kind_words?: string;
+  user_kind_about?: string;
   /** With state needs: why it asks what a task in the node's team already asks (same-ask.ts). Never stored. */
   same_ask_reason?: string;
   /** With state needs: the choices he picks from (thread-options.ts). */
@@ -1305,7 +1314,7 @@ export function openThread(file: ThreadsFile, input: OpenThreadInput, by: Thread
   // A thread the node opens is for him to act on or follow: never hidden from the start (but Walnut's quiet one).
   if (quiet && input.state !== undefined && input.state !== 'pending') throw new ThreadError('bad_input', 400, 'A quiet thread opens pending.');
   if (!quiet && input.state !== undefined && HIDDEN_STATES.has(input.state)) throw new ThreadError('bad_input', 400, 'A thread you open is for him to see: open it as needs or answered.');
-  if (!quiet && waitsOnUser(input.state ?? 'needs')) checkHandedToUser(by, input);
+  if (!quiet && waitsOnUser(input.state ?? 'needs')) checkHandedToUser(by, input, [input.title, input.text].filter(isStr).join('\n'));
   const options = optionsOf(input.options);
   if (options.length && !waitsOnUser(input.state ?? 'needs')) throw new ThreadError('bad_input', 400, 'options go with state needs: he picks one while it waits on him.');
   if (waitsOnUser(input.state ?? 'needs')) checkChoicesAsOptions(by, [input.text], options);

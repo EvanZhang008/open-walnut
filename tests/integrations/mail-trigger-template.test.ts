@@ -29,10 +29,13 @@ function setup(rows: MessageRow[]) {
   const template = createMailTriggerTemplate({
     listAccounts: async () => accounts,
     store: {
-      mailboxesByRole: async () => [
-        { account_id: 'imap:me', mailbox_id: 'INBOX', unread: 0 },
-        { account_id: 'imap:work', mailbox_id: 'INBOX', unread: 0 },
-      ],
+      mailboxesByRole: async (role: string) => {
+        const box = role === 'sent' ? 'Sent' : 'INBOX'
+        return [
+          { account_id: 'imap:me', mailbox_id: box, unread: 0 },
+          { account_id: 'imap:work', mailbox_id: box, unread: 0 },
+        ]
+      },
       listMessages: async (query) => {
         listed.push(query)
         const pairs = query.pairs ?? []
@@ -48,7 +51,7 @@ describe('mail trigger template', () => {
   it('first run records a cursor and stays quiet, so arming never replays the inbox', async () => {
     const { template, listed } = setup([row({ message_id: 'm1', at: T0 - 60_000 })])
     const r = await template.check({}, { state: null, now: new Date(T0).toISOString() })
-    expect(r).toEqual({ fire: false, state: { armedAt: T0, since: {} } })
+    expect(r).toEqual({ fire: false, state: { armedAt: T0, since: {}, sentSince: {}, sentArmedAt: T0 } })
     expect(listed).toHaveLength(0)
   })
 
@@ -62,7 +65,7 @@ describe('mail trigger template', () => {
     expect(r.fire).toBe(true)
     expect(r.items?.map((i) => i.id)).toEqual(['imap:me/a', 'imap:me/b'])
     expect(r.items?.[0]).toMatchObject({ title: 'Alice: First', from: 'alice@example.com', subject: 'First', preview: 'preview' })
-    expect(r.state).toEqual({ armedAt: T0, since: { 'imap:me': T0 + 120_000 } })
+    expect(r.state).toEqual({ armedAt: T0, since: { 'imap:me': T0 + 120_000 }, sentSince: {}, sentArmedAt: expect.any(Number) })
   })
 
   it('never fires mail from before it was armed, also on the run right after', async () => {
@@ -79,7 +82,7 @@ describe('mail trigger template', () => {
     const { template } = setup([row({ message_id: 'late', at: T0 + H - 10 * 60_000 })])
     const r = await template.check({}, { state: { armedAt: T0, since: { 'imap:me': T0 + H } }, now: new Date(T0 + H).toISOString() })
     expect(r.items?.map((i) => i.id)).toEqual(['imap:me/late'])
-    expect(r.state).toEqual({ armedAt: T0, since: { 'imap:me': T0 + H } })
+    expect(r.state).toEqual({ armedAt: T0, since: { 'imap:me': T0 + H }, sentSince: {}, sentArmedAt: expect.any(Number) })
   })
 
   it('keeps one cursor per account, so an account that syncs late still fires', async () => {
@@ -90,7 +93,7 @@ describe('mail trigger template', () => {
     ])
     const r = await template.check({}, { state: { armedAt: T0, since: { 'imap:me': T0 + 3 * H } }, now: new Date(T0 + 3 * H).toISOString() })
     expect(r.items?.map((i) => i.id)).toEqual(['imap:work/w1'])
-    expect(r.state).toEqual({ armedAt: T0, since: { 'imap:me': T0 + 3 * H, 'imap:work': T0 + H } })
+    expect(r.state).toEqual({ armedAt: T0, since: { 'imap:me': T0 + 3 * H, 'imap:work': T0 + H }, sentSince: {}, sentArmedAt: expect.any(Number) })
   })
 
   it('a date in the future counts as now, so it cannot push the cursor past real mail', async () => {
@@ -98,7 +101,7 @@ describe('mail trigger template', () => {
     const { template } = setup([row({ message_id: 'future', at: T0 + 365 * 86_400_000 })])
     const r = await template.check({}, { state: { armedAt: T0, since: {} }, now: new Date(now).toISOString() })
     expect(r.items?.[0]).toMatchObject({ id: 'imap:me/future', at: new Date(now).toISOString() })
-    expect(r.state).toEqual({ armedAt: T0, since: { 'imap:me': now } })
+    expect(r.state).toEqual({ armedAt: T0, since: { 'imap:me': now }, sentSince: {}, sentArmedAt: expect.any(Number) })
   })
 
   it('with more new mail than one fire carries, sends the oldest and leaves the cursor at the last one sent', async () => {
@@ -108,7 +111,7 @@ describe('mail trigger template', () => {
     expect(r.items).toHaveLength(50)
     expect(r.items?.[0]?.id).toBe('imap:me/n0')
     expect(r.items?.[49]?.id).toBe('imap:me/n49')
-    expect(r.state).toEqual({ armedAt: T0, since: { 'imap:me': T0 + 50_000 } })
+    expect(r.state).toEqual({ armedAt: T0, since: { 'imap:me': T0 + 50_000 }, sentSince: {}, sentArmedAt: expect.any(Number) })
   })
 
   it('filters by sender, subject and account', async () => {
@@ -128,7 +131,7 @@ describe('mail trigger template', () => {
     expect(oneAccount.items?.map((i) => i.id)).toEqual(['imap:work/x3'])
     const none = await template.check({ from: 'nobody' }, { state, now })
     expect(none.fire).toBe(false)
-    expect(none.state).toEqual({ armedAt: T0, since: { 'imap:me': T0 + 2, 'imap:work': T0 + 3 } })
+    expect(none.state).toEqual({ armedAt: T0, since: { 'imap:me': T0 + 2, 'imap:work': T0 + 3 }, sentSince: {}, sentArmedAt: expect.any(Number) })
   })
 
   it('prepare resolves an account by address and refuses one that does not exist', async () => {
@@ -156,5 +159,65 @@ describe('mail trigger template', () => {
     ])
     const r = await template.check({}, { state: { armedAt: T0, since: {} }, now: new Date(T0 + 300_000).toISOString() })
     expect(r.items?.map((i) => i.id)).toEqual(['imap:me/m-plain', 'imap:me/m-routed'])
+  })
+
+  describe("the user's own replies (2026-11-20: a task kept asking what he had answered in the same thread)", () => {
+    const H = 3_600_000
+    const mine = (id: string, at: number, to: string, subject = 'Re: Move the meeting') => row({
+      message_id: id, at, mailbox_id: 'Sent', from_addr: 'me@example.com', subject,
+      payload: JSON.stringify({ from: { address: 'me@example.com' }, to: [{ name: 'Alex Mist', address: to }] }),
+    })
+
+    it('a watch on one correspondent fires on his reply alone, marked from_user', async () => {
+      const { template } = setup([
+        row({ message_id: 'ask', at: T0 + 60_000, from_addr: 'alex@example.com', subject: 'Move the meeting' }),
+        mine('reply', T0 + 2 * 60_000, 'alex@example.com'),
+        mine('other', T0 + 3 * 60_000, 'someone@else.example', 'Lunch'),
+      ])
+      const state = { armedAt: T0, since: { 'imap:me': T0 + 60_000 }, sentSince: {}, sentArmedAt: T0 }
+      const r = await template.check({ from: 'alex@' }, { state, now: new Date(T0 + 5 * 60_000).toISOString() })
+      expect(r.fire).toBe(true)
+      const own = r.items?.filter((i) => i.from_user)
+      expect(own?.map((i) => i.id)).toEqual(['imap:me/reply'])
+      expect(own?.[0]).toMatchObject({ to: ['alex@example.com'], subject: 'Re: Move the meeting', title: "The user's own reply to Alex Mist: Re: Move the meeting" })
+      expect(r.state).toMatchObject({ sentSince: { 'imap:me': T0 + 2 * 60_000 } })
+    })
+
+    it('rides along with new mail in a whole-inbox watch, and never fires alone there', async () => {
+      const { template } = setup([mine('reply', T0 + 60_000, 'alex@example.com')])
+      const quiet = await template.check({}, { state: { armedAt: T0, since: {}, sentSince: {}, sentArmedAt: T0 }, now: new Date(T0 + 2 * 60_000).toISOString() })
+      expect(quiet.fire).toBe(false)
+      expect(quiet.state).toMatchObject({ sentSince: {}, sentArmedAt: expect.any(Number) })
+      const { template: busy } = setup([mine('reply', T0 + 60_000, 'alex@example.com'), row({ message_id: 'new', at: T0 + 3 * 60_000 })])
+      const r = await busy.check({}, { state: quiet.state, now: new Date(T0 + 4 * 60_000).toISOString() })
+      expect(r.items?.map((i) => [i.id, i.from_user ?? false])).toEqual([['imap:me/new', false], ['imap:me/reply', true]])
+    })
+
+    it('a reply from before the trigger was armed never comes', async () => {
+      const { template } = setup([mine('old', T0 - H, 'alex@example.com')])
+      const r = await template.check({ from: 'alex@' }, { state: { armedAt: T0, since: {}, sentSince: {}, sentArmedAt: T0 }, now: new Date(T0 + 60_000).toISOString() })
+      expect(r.fire).toBe(false)
+    })
+
+    it('a whole-inbox watch never fires on his reply beside mail it already delivered (the lookback repeats)', async () => {
+      const { template } = setup([row({ message_id: 'in1', at: T0 + 60_000 }), mine('reply', T0 + 5 * 60_000, 'alex@example.com')])
+      const state = { armedAt: T0, since: { 'imap:me': T0 + 60_000 }, sentSince: {}, sentArmedAt: T0 }
+      const r = await template.check({}, { state, now: new Date(T0 + 6 * 60_000).toISOString() })
+      expect(r.items?.some((i) => i.from_user)).toBe(false)
+      expect(r.state).toMatchObject({ sentSince: {} })
+    })
+
+    it('an older trigger (no sentArmedAt) never replays his old mail after the upgrade', async () => {
+      const { template } = setup([mine('weeks-ago', T0 + H, 'alex@example.com')])
+      const r = await template.check({ from: 'alex@' }, { state: { armedAt: T0, since: {} }, now: new Date(T0 + 30 * 24 * H).toISOString() })
+      expect(r.fire).toBe(false)
+      expect(r.state).toMatchObject({ sentArmedAt: T0 + 30 * 24 * H })
+    })
+
+    it('tells the session his reply is not new work', async () => {
+      const { template } = setup([])
+      const p = await template.prepare({ from: 'alex@' })
+      expect(p.prompt).toMatch(/from_user: true is the user's own reply, not new work/)
+    })
   })
 })

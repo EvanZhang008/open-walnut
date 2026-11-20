@@ -39,7 +39,7 @@ describe('the charter itself', () => {
       /Only some things are the user's to decide: an outward message or post, spending, credentials, permissions, deleting cloud resources or data, a hard-to-reverse choice no existing rule covers, and a fact only they have\./,
       /Everything else you decide and do, then say what you chose\./,
       /Undoing something an agent broke or changed \(a reinstall, a rebuild, a revert, a rerun\), choosing between reasonable options, and anything reversible are never theirs/,
-      /if I am wrong, can I undo it, and can I read or try the answer\? If yes, decide/,
+      /if I am wrong, can I undo it, can I read or try the answer, and did they already agree to it\? If yes, decide/,
       /Information you cannot see, or a collision with another team's work, goes to the task that owns it or to your lead, not to the user/,
       /A lead or Main who is brought a question that is not the user's decides it and tells the team; it never passes it up/,
       /Whenever a task hands the user a decision \(a letter, a thread waiting on them\), Walnut asks which of these kinds it is/,

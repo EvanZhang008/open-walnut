@@ -9,7 +9,7 @@ import type { OpCall } from './core.js'
 import { PROOF_IN_PLACE_RULE, WORD_TO_USER_RULE, THREAD_ONE_PLACE_RULE, THREADS_MOVE_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_OPTIONS_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from '../core/org/thread-rules.js'
 import { ASK_OPTIONS_MAX } from '../core/user-status.js'
 import { THREAD_STATES } from '../core/org/threads-model.js'
-import { USER_KINDS, USER_KIND_PARAM, USER_KIND_WHY_PARAM } from '../core/org/user-kind.js'
+import { USER_KINDS, USER_KIND_ABOUT_PARAM, USER_KIND_PARAM, USER_KIND_WHY_PARAM, USER_KIND_WORDS_PARAM } from '../core/org/user-kind.js'
 
 const THREADS_SCOPE = 'Your Threads are the user\'s own requests to you, one thread per subject, on the Org page beside your Brief '
   + '(Main and every lead keep them; a VP is a lead), or beside your chat on a task the user turned Threads on for. Walnut files every message he sends you, and tells you in that message which '
@@ -78,6 +78,8 @@ defineOp({
     state: z.enum(THREAD_STATES).optional().describe('working (you are on it; out of his sight until your answer), needs (waiting on him), answered (you answered; he may close it), pending (only handed off: hidden even with your answer on it). A new reply without a state sets answered'),
     user_kind: z.enum(USER_KINDS).optional().describe(USER_KIND_PARAM),
     user_kind_why: z.string().max(300).optional().describe(USER_KIND_WHY_PARAM),
+    user_kind_words: z.string().max(500).optional().describe(USER_KIND_WORDS_PARAM),
+    user_kind_about: z.string().max(200).optional().describe(USER_KIND_ABOUT_PARAM),
     same_ask_reason: z.string().max(300).optional().describe(SAME_ASK_REASON_PARAM),
     ask_owner: z.string().max(128).optional().describe('The id of the task in your team whose Needs you already asks him this thread\'s decision: the thread then points at that ask (read as pending with askedIn, its conversation kept) and waits on him again by itself once that task stops asking it or asks another decision. Refused (409) when that task asks him nothing now. "" takes it off'),
     reply: z.string().max(2000).optional().describe('The summary the card shows: the latest first (the open question or what he must decide), then one or two sentences of background; Markdown ("" clears it)'),
@@ -123,6 +125,8 @@ defineOp({
     options: z.array(OPTION_ARG).max(ASK_OPTIONS_MAX).optional().describe(OPTIONS_WHY),
     user_kind: z.enum(USER_KINDS).optional().describe(USER_KIND_PARAM),
     user_kind_why: z.string().max(300).optional().describe(USER_KIND_WHY_PARAM),
+    user_kind_words: z.string().max(500).optional().describe(USER_KIND_WORDS_PARAM),
+    user_kind_about: z.string().max(200).optional().describe(USER_KIND_ABOUT_PARAM),
     same_ask_reason: z.string().max(300).optional().describe(SAME_ASK_REASON_PARAM),
     tasks: z.array(z.string().min(1)).max(12).optional().describe('Tasks it is about'),
     task: TASK_ARG,

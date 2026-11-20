@@ -304,6 +304,9 @@ export interface NewLetter {
   user_kind?: string;
   userKindWhy?: string;
   user_kind_why?: string;
+  /** The user's earlier words the reason rests on, and what they were about (org/user-kind.ts). Never stored. */
+  user_kind_words?: string;
+  user_kind_about?: string;
   /**
    * Why this letter goes again though the sender sent one with the same subject minutes ago
    * (human-inbox/duplicate-letter.ts). Either spelling; never stored.

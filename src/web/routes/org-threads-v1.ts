@@ -10,8 +10,8 @@
  *                                                          `shown` is his view's rule over all of them; 503 primary_only on every replica)
  *   GET   /api/v1/tasks/:id/threads/:thread                { task_id, thread }  (one thread whole, its `shown` as above)
  *   POST  /api/v1/tasks/:id/threads                        { text, images?, thread? } -> file one of his messages
- *   PATCH /api/v1/tasks/:id/threads/:thread                { title?, ask?, state?, user_kind?, user_kind_why?, same_ask_reason?, ask_owner?, reply?, options?, tasks?, add_tasks?, known?, close?, user_words?, reopen?, snooze?, pin?, merge_into? }
- *   POST  /api/v1/tasks/:id/threads/open                   { title, text, from, ref?, state?, options?, user_kind?, user_kind_why?, same_ask_reason?, tasks? } -> the node opens one itself
+ *   PATCH /api/v1/tasks/:id/threads/:thread                { title?, ask?, state?, user_kind?, user_kind_why?, user_kind_words?, user_kind_about?, same_ask_reason?, ask_owner?, reply?, options?, tasks?, add_tasks?, known?, close?, user_words?, reopen?, snooze?, pin?, merge_into? }
+ *   POST  /api/v1/tasks/:id/threads/open                   { title, text, from, ref?, state?, options?, user_kind?, user_kind_why?, user_kind_words?, user_kind_about?, same_ask_reason?, tasks? } -> the node opens one itself
  *                                                          (`options`: with needs, the choices he clicks, [{ id?, label, detail?, recommended? }], 2 to 5;
  *                                                          a needs write whose words list A:/B: or 1./2. choices with none answers 409 needs_options)
  *   POST  /api/v1/tasks/:id/threads/:thread/split          { message } -> that message becomes its own thread
@@ -331,6 +331,8 @@ orgThreadsV1Router.post('/tasks/:id/threads/open', route(async (req, res) => {
     ...(b.options !== undefined ? { options: b.options } : {}),
     ...(str(b, 'user_kind') ? { user_kind: str(b, 'user_kind') } : {}),
     ...(str(b, 'user_kind_why') ? { user_kind_why: str(b, 'user_kind_why') } : {}),
+    ...(str(b, 'user_kind_words') ? { user_kind_words: str(b, 'user_kind_words') } : {}),
+    ...(str(b, 'user_kind_about') ? { user_kind_about: str(b, 'user_kind_about') } : {}),
     ...(str(b, 'same_ask_reason') ? { same_ask_reason: str(b, 'same_ask_reason') } : {}),
   }, by, source)
   log.task.info('org thread opened by the node', { taskId: task.id, threadId: thread.id, by, from: thread.opener?.from })
@@ -349,7 +351,7 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
   const { by, source } = await callerOf(req)
   const mergeInto = str(b, 'merge_into')
   const patch: ThreadPatch = {}
-  for (const k of ['title', 'ask', 'reply', 'state', 'close', 'known', 'snooze', 'user_kind', 'user_kind_why', 'same_ask_reason', 'ask_owner', 'user_words'] as const) {
+  for (const k of ['title', 'ask', 'reply', 'state', 'close', 'known', 'snooze', 'user_kind', 'user_kind_why', 'user_kind_words', 'user_kind_about', 'same_ask_reason', 'ask_owner', 'user_words'] as const) {
     const v = str(b, k)
     if (v !== undefined) (patch as Record<string, unknown>)[k] = v
   }

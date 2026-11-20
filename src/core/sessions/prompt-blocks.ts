@@ -123,9 +123,9 @@ export const PROMPT_BLOCKS: readonly PromptBlockDef[] = [
   { id: 'fleet', title: 'Your machines', part: 'context', kind: 'list', cap: 2_000, state: true,
     holds: 'the rest of the machines you can use',
     why: 'One line per host; a big fleet keeps the first hosts and reads the rest on demand.' },
-  { id: 'how-we-work', title: 'How we work', part: 'context', kind: 'rules', cap: 6_200,
+  { id: 'how-we-work', title: 'How we work', part: 'context', kind: 'rules', cap: 6_900,
     holds: '',
-    why: 'The team charter measured 6.1 K with the user\'s-own-yes rule (2026-11-17: anything involving other people, his name or no undo waits for his yes); every bullet is a rule the same for every role.' },
+    why: 'The team charter measured 6.7 K with the user\'s-own-yes rule (2026-11-17: anything involving other people, his name or no undo waits for his yes) and the ask-once rule (2026-11-20: finish what he agreed to, read where the answer would be before an ask); every bullet is a rule the same for every role.' },
   { id: 'user-profile', title: 'Your user', part: 'context', kind: 'user', cap: 6_000,
     holds: '',
     why: 'Versioned. USER.md capped at USER_CHAR_BUDGET (4,000 characters), its version named once in its head; measured 4.6 K.' },
@@ -198,12 +198,13 @@ export function walnutFileKey(name: string): { block: PromptBlockId; scope: stri
  * role's core instructions to 7,500 for Main and a lead), plus 1,000: Walnut text added
  * anywhere fails its block's cap first, and this whole-prompt ceiling after.
  * 2026-11-17: each budget +600 for the charter's user's-own-yes rule (approval-kinds.ts), the same in every role.
+ * 2026-11-20: each budget +700 for the charter's ask-once rule (answered-there.ts).
  */
 export const PROMPT_BUDGETS = {
-  main: 53_100,
-  lead: 40_400,
-  worker: 19_100,
-  ask: 32_200,
+  main: 53_800,
+  lead: 41_100,
+  worker: 19_800,
+  ask: 32_900,
 } as const
 
 export interface PromptOverflow {

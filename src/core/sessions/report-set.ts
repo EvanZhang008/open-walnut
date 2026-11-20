@@ -32,6 +32,9 @@ export interface ReportChange {
   /** needs, set by a task (not a person): which of the user's own kinds the ask is, and why (org/user-kind.ts). */
   user_kind?: string;
   user_kind_why?: string;
+  /** needs: the user's earlier words user_kind_why rests on, and what they were about (org/user-kind.ts). Never stored. */
+  user_kind_words?: string;
+  user_kind_about?: string;
   /** needs: the decision it is (ask-decision.ts): its id, kept in other words, or "new" for another decision. */
   ask_id?: string;
   /** needs, the same decision: what is really new about it (a fact, an option, a deadline). */
@@ -83,7 +86,7 @@ export function reportOfChange(raw: unknown, by: StatusLineBy, byName: string | 
   // in readStatusReport (an ask with no kind reads as a report to its lead).
   let own: { kind: string; why: string } | undefined;
   if (c.state === 'needs' && by !== 'human') {
-    const verdict = userKindVerdict(c);
+    const verdict = userKindVerdict({ ...c, subject: ask });
     if (!verdict.ok) throw new ReportChangeError(verdict.message.replace(/^Not sent to the user:/, 'Not put on the user:'), 'user_kind', 409);
     own = { kind: verdict.kind, why: verdict.why };
   }

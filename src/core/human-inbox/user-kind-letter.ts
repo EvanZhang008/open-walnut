@@ -23,7 +23,7 @@ function escapeHtml(s: string): string {
 
 /** The letter without the kind fields (never stored). */
 export function withoutUserKind(input: LetterInput): LetterInput {
-  const { userKind: _a, user_kind: _b, userKindWhy: _c, user_kind_why: _d, ...rest } = input;
+  const { userKind: _a, user_kind: _b, userKindWhy: _c, user_kind_why: _d, user_kind_words: _e, user_kind_about: _f, ...rest } = input;
   return rest;
 }
 
@@ -38,7 +38,9 @@ export async function admitUserKindLetter(input: LetterInput, sender: LetterSend
   if (!createLetterCheck().shape(rest as unknown as Record<string, unknown>).ok) return rest;
   const { isTriageSender } = await import('./triage-quota.js');
   if (await isTriageSender(sender, {})) return rest;
-  const verdict = userKindVerdict(input);
+  // The ask's own words (its subject and preview), never the body, where a sender names its source.
+  const subject = [input.subject, input.text].filter((v): v is string => typeof v === 'string').join('\n');
+  const verdict = userKindVerdict({ ...input, subject });
   if (!verdict.ok) {
     log.notif.info('human-inbox: decision letter refused, no user kind named', { senderTaskId: sender.taskId });
     throw new LetterError(verdict.message, 'user_kind', 409);

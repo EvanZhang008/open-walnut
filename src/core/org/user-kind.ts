@@ -122,11 +122,93 @@ export type UserKindVerdict =
 
 function str(v: unknown): string { return typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : ''; }
 
+/**
+ * A reason that says the user already agreed to it, with nothing new named (2026-11-20, the user:
+ * "why the fuck is this need you, shoudl be done right , nothing need from me"): a task whose CRs he
+ * had agreed to publish sat in Needs you asking whether to swap in their new descriptions. A step
+ * that finishes what they agreed to is the task's own (team-charter.ts, answered-there.ts). A reason
+ * that names what is new in the step (a new step, another recipient, one beyond or outside what they
+ * agreed to) still reaches them. "New descriptions" alone is not that: it was the follow-up of 11-20. Pure; exported for tests.
+ */
+export function followsAgreedStep(why: string): boolean {
+  // Only the user's own yes counts ("Alex already agreed to move the meeting" is someone else's).
+  const agreed = /\b(?:he|she|you|the user) (?:has |had )?(?:already |previously |earlier )?(?:agreed|approved|said (?:yes|ok(?:ay)?)|ok(?:ay)?(?:'?e)?d|signed off|gave (?:the |his |her |a )?(?:go-ahead|yes|ok(?:ay)?|approval))\b|(?:\u4ed6|\u5979|\u4f60)(?:\u5df2(?:\u7ecf)?|\u65e9\u5c31|\u4e4b\u524d)?(?:\u540c\u610f|\u6279\u51c6|\u70b9\u5934|\u7b54\u5e94|\u62cd\u677f)(?:\u8fc7|\u4e86)|(?:\u4ed6|\u5979|\u4f60)(?:\u5df2(?:\u7ecf)?|\u65e9\u5c31)(?:\u540c\u610f|\u6279\u51c6|\u70b9\u5934|\u7b54\u5e94|\u62cd\u677f)/i;
+  if (!agreed.test(why)) return false;
+  // A step of another of his kinds (a code only he has, money, a delete, his name) is still his.
+  const newStep = /\b(?:a new (?:step|action)|new (?:public|outward)|another (?:step|team|person|recipient|channel)|beyond|outside (?:what|the)|not covered|did not cover|didn't cover|never agreed|not agreed|never approved|not approved|extra|one-time code|code|password|passkey|sign(?:s|ing)? in|log(?:s|ging)? in|pay(?:s|ing|ment)?|charge|spend(?:s|ing)?|delet(?:e|es|ing)|in (?:his|her|their|the user's) name)\b|\$\s?\d|\u65b0\u7684\u4e00\u6b65|\u53e6\u4e00|\u8d85\u51fa|\u4e0d\u5728.{0,8}\u8303\u56f4|\u6ca1(?:\u6709)?\u540c\u610f|\u9a8c\u8bc1\u7801|\u5bc6\u7801|\u767b\u5f55|\u4ed8\u6b3e|\u82b1\u94b1|\u5220\u9664|\u4ee5\u4ed6\u7684\u540d\u4e49/i;
+  return !newStep.test(why);
+}
+
+/**
+ * A reason that rests on words the user said earlier ("you said the CR descriptions go to you
+ * first"). 2026-11-20: a task asked him about the descriptions of its CRs on such a reason, and
+ * his words had been about one other CR, in another task. Asking only ("he asked to pick a date")
+ * is not a citation. Pure; exported for tests.
+ */
+export function citesUserWords(why: string): boolean {
+  return /\b(?:you|he|she|the user) (?:said|told (?:me|us)|required|insisted)\b|\b(?:you|he|she|the user) asked (?:me |us )?to (?:see|show|send|review|check|run)\b.*\b(?:first|before)\b|\bper (?:his|her|your|the user's) (?:words|rule|instruction|ask|request)\b|\b(?:his|her|your|the user's) (?:own )?(?:words|rule|instruction)\b|(?:\u4f60|\u4ed6|\u5979)\u8bf4\u8fc7|(?:\u4f60|\u4ed6|\u5979)\u8bf4(?:\u4e86)?(?:\u8981|\u5148|\u4e0d\u8981)|(?:\u4f60|\u4ed6|\u5979)(?:\u8981\u6c42|\u4ea4\u4ee3)\u8fc7|\u539f\u8bdd|\u6309(?:\u4f60|\u4ed6|\u5979)\u7684\u8bdd/i.test(why);
+}
+
+/** The ids and links in a text that name one thing (a CR, a task, a ticket, a post), lower case. */
+function thingIdsOf(text: string): string[] {
+  const ids = text.match(/https?:\/\/\S+|\b[a-z]{1,8}-\d{3,}\b|\b[a-z0-9]{8}-[a-z0-9]{4}(?:-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12})?\b|\b\d{6,}\b/gi) ?? [];
+  return ids.map((id) => id.toLowerCase().replace(/[).,;\]]+$/, ''));
+}
+
+/**
+ * Whether the words were about this ask: every id or link `about` names appears in the ask's own
+ * title or question (never the reason or older context, where a sender names its source). Pure.
+ */
+function wordsAboutThisAsk(about: string, subject: string): boolean {
+  const here = subject.toLowerCase();
+  const ids = thingIdsOf(about);
+  // With no id to compare, Walnut cannot tell: it passes, and the charter rule holds the rest.
+  return !ids.length || ids.every((id) => here.includes(id));
+}
+
+/** The cited-words half of the check, for userKindVerdict. Null when it passes. */
+function citedWordsRefusal(why: string, input: UserKindInput): string | null {
+  // Only a caller that knows the ask's text checks it (the turn-end line has no room for the words).
+  if (input.subject === undefined || !citesUserWords(why)) return null;
+  const words = str(input.userKindWords ?? input.user_kind_words);
+  const about = str(input.userKindAbout ?? input.user_kind_about);
+  if (!words || !about) {
+    return 'Not sent to the user: user_kind_why rests on words the user said earlier. Pass them with user_kind_words '
+      + '(their words, verbatim) and user_kind_about (the task, CR, ticket or post those words were about), so Walnut can '
+      + 'check they were about this ask. Words of theirs cover only what they were about.';
+  }
+  if (wordsAboutThisAsk(about, str(input.subject))) return null;
+  return `Not sent to the user: the words you cite were about ${about}, and the question itself does not name it, so it reads as `
+    + 'about something else. Those words cover only what they were about; never make them a rule for anything else. Decide this '
+    + 'yourself, and a step that follows from what they already agreed to is yours: do it, then tell them in one line. If the '
+    + `question really is about ${about}, name it in the question.`;
+}
+
+export interface UserKindInput {
+  userKind?: unknown; user_kind?: unknown; userKindWhy?: unknown; user_kind_why?: unknown;
+  /** The user's own earlier words the reason rests on, verbatim, and what they were about. */
+  userKindWords?: unknown; user_kind_words?: unknown; userKindAbout?: unknown; user_kind_about?: unknown;
+  /** The text of this ask (its title, question and detail), to check cited words against. Never read from the caller's JSON. */
+  subject?: string;
+}
+
 /** `user_kind` + `user_kind_why`, either spelling of the keys, judged. Pure. */
-export function userKindVerdict(input: { userKind?: unknown; user_kind?: unknown; userKindWhy?: unknown; user_kind_why?: unknown }): UserKindVerdict {
+export function userKindVerdict(input: UserKindInput): UserKindVerdict {
   const kind = str(input.userKind ?? input.user_kind);
   const why = str(input.userKindWhy ?? input.user_kind_why);
   const known = (USER_KINDS as readonly string[]).includes(kind);
+  // Only explicit ops (a subject passed); the turn-end line keeps the old verdict, a refusal there
+  // would silently turn the ask into a report to the lead.
+  if (known && why.length >= USER_KIND_WHY_MIN && input.subject !== undefined && followsAgreedStep(why)) {
+    return {
+      ok: false,
+      message: 'Not sent to the user: user_kind_why says they already agreed to this, so the step that follows is yours. '
+        + 'Do it now and tell them in one line afterwards (a new description or picture for the same change, carrying out their words). '
+        + 'Only if this step goes beyond what they agreed to, name what is new in it in user_kind_why.',
+    };
+  }
+  const cited = known && why.length >= USER_KIND_WHY_MIN ? citedWordsRefusal(why, input) : null;
+  if (cited) return { ok: false, message: cited };
   if (known && why.length >= USER_KIND_WHY_MIN) return { ok: true, kind: kind as UserKind, why };
   const kinds = USER_KINDS.map((k) => `${k} (${USER_KIND_WORDS[k]})`).join('; ');
   return {
@@ -157,5 +239,9 @@ export const USER_KIND_PARAM =
   'Required when you hand the user a question (an action_required letter, a thread moved to needs or opened waiting on them): '
   + 'which of the user\'s own kinds it is. ' + Object.entries(USER_KIND_WORDS).map(([k, w]) => `${k}: ${w}`).join('; ') + '. '
   + 'Anything else is yours to decide.';
+export const USER_KIND_WORDS_PARAM =
+  'With user_kind, when user_kind_why rests on words the user said earlier: those words, verbatim. Words of theirs cover only what they were about.';
+export const USER_KIND_ABOUT_PARAM =
+  'With user_kind_words: the task, CR, ticket or post those words were about (its id or link). Refused when it is not what this ask is about.';
 export const USER_KIND_WHY_PARAM =
   `With user_kind: one line (at least ${USER_KIND_WHY_MIN} characters), in the language you write to the user, saying what in THIS question makes it that kind. The user reads it first. ${NOT_THE_USERS_DECISION}`;
