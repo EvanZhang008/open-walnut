@@ -17,7 +17,7 @@ import { resolveTaskSessionId } from '@/utils/session-status';
 import { stateWord, type UserState } from '@open-walnut/user-status';
 import { stateTab, type OrgStateTab } from './org-task-tabs';
 import type { VpCard, VpProject } from './org-chart-model';
-import type { ChannelRow } from './org-channels-model';
+import { shownName, type ChannelRow } from './org-channels-model';
 
 export interface LeaderNode {
   id: string;
@@ -135,7 +135,7 @@ export function directorRows(vps: readonly ChannelRow[], groupsOf: (row: Channel
   const words = wordsOf(query);
   return vps.flatMap((vp) => {
     const all = flatDirectors(groupsOf(vp));
-    const vpHit = words.length > 0 && words.every((w) => (vp.vpName ?? vp.name).toLowerCase().includes(w));
+    const vpHit = words.length > 0 && words.every((w) => shownName(vp).toLowerCase().includes(w));
     return (words.length && !vpHit ? all.filter((d) => hits(d, words)) : all).map((director) => ({ director, vp }));
   });
 }

@@ -12,7 +12,7 @@
  */
 import { useEffect, useState, type MouseEvent } from 'react';
 import { ContextMenu, useContextMenu } from '@/components/common/ContextMenu';
-import { rowAvatarColor, type ChannelRow } from './org-channels-model';
+import { rowAvatarColor, type ChannelRow, shownName } from './org-channels-model';
 import { NodeAvatar } from './OrgAvatar';
 import { TAB_DOT } from './org-task-tabs';
 import { directorRows, type LeaderGroup, type LeaderNode } from './org-leaders';
@@ -38,7 +38,7 @@ export function OrgDirectorSection({ vps, groupsOf, projectsOf, query, openTaskI
   useEffect(() => { if (asked) setAdding(true); }, [asked?.n]); // eslint-disable-line react-hooks/exhaustive-deps -- one answer per ask
   const onAdding = (on: boolean) => { setAdding(on); if (!on && asked) endNewDirector(asked.n); };
   const rows = directorRows(vps, groupsOf, query);
-  const projects = vps.flatMap((vp) => projectsOf(vp).map((p) => ({ ...p, vpName: vp.vpName ?? vp.name })));
+  const projects = vps.flatMap((vp) => projectsOf(vp).map((p) => ({ ...p, vpName: shownName(vp) })));
   const askedVp = asked ? vps.find((v) => v.key === asked.vpKey) : undefined;
   const defaultProject = askedVp ? projectsOf(askedVp)[0]?.project : undefined;
   if (!rows.length && !adding) return null;
@@ -48,7 +48,7 @@ export function OrgDirectorSection({ vps, groupsOf, projectsOf, query, openTaskI
     <div className="org-directors" role="group" aria-label={DIRECTORS_SECTION_LABEL} data-testid="org-directors" data-count={rows.length}>
       <div className="org-list-section" role="presentation" data-testid="org-directors-head">{DIRECTORS_SECTION_LABEL} · {rows.length}</div>
       {rows.map(({ director: d, vp }) => {
-        const vpName = vp.vpName ?? vp.name;
+        const vpName = shownName(vp);
         const state = d.stateText;
         const open = openTaskIds?.has(d.id);
         return (

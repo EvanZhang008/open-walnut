@@ -9,7 +9,7 @@ import { editOrgNode } from '@/api/org';
 import { useTaskStoreActions } from '@/contexts/TasksContext';
 import { useExperimental } from '@/hooks/useExperimental';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
-import { rowTaskId, type ChannelRow } from './org-channels-model';
+import { rowTaskId, type ChannelRow, shownName } from './org-channels-model';
 import { OrgAvatarDialog, type AvatarDialogTarget, type RenameKind } from './OrgAvatarDialog';
 
 export function useAvatarEditor(rows: readonly ChannelRow[]): { edit: ((row: ChannelRow) => void) | undefined; dialog: ReactNode } {
@@ -20,7 +20,7 @@ export function useAvatarEditor(rows: readonly ChannelRow[]): { edit: ((row: Cha
   const edit = useLeanCallback((row: ChannelRow) => {
     const taskId = rowTaskId(row);
     if (!taskId) return;
-    setTarget({ taskId, name: row.name, main: row.kind === 'main', others: rows.map((r) => rowTaskId(r)).filter(Boolean) as string[] });
+    setTarget({ taskId, name: shownName(row), main: row.kind === 'main', others: rows.map((r) => rowTaskId(r)).filter(Boolean) as string[] });
   }, [rows]);
 
   const rename = useLeanCallback(async (name: string, kind: RenameKind) => {

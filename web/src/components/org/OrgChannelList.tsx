@@ -28,7 +28,7 @@ import '@/styles/org-rail.css';
 import { readOrgPlace, writeOrgPlace } from './org-place';
 import { timeAgo } from '@/utils/time';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
-import { askCount, avatarColor, type ChannelRow, type ChannelState, type MovedRow } from './org-channels-model';
+import { askCount, avatarColor, type ChannelRow, type ChannelState, type MovedRow, shownName } from './org-channels-model';
 import { usePointerHold } from './hold-order';
 import { useOpenTask } from '@/hooks/useOpenTask';
 import { OrgEditableName } from './OrgEditableName';
@@ -89,7 +89,7 @@ function Row({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; select
       data-testid={row.kind === 'main' ? 'org-channel-main' : 'org-channel'}
       data-key={row.key}
       data-state={row.state}
-      title={`${row.vpName ?? row.name}: ${STATE_LABEL[row.state]}${row.lastAt ? `, moved ${timeAgo(new Date(row.lastAt).toISOString(), { now })}` : ''}`}
+      title={`${shownName(row)}: ${STATE_LABEL[row.state]}${row.lastAt ? `, moved ${timeAgo(new Date(row.lastAt).toISOString(), { now })}` : ''}`}
       onClick={() => onSelect(row.key)}
       onContextMenu={onMenu ? (e) => onMenu(e, { row }) : undefined}
     >
@@ -97,7 +97,7 @@ function Row({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; select
       <span className="org-channel-mid">
         <span className="org-channel-top">
           {/* A VP the user named goes by that name, as on the org chart. */}
-          <span className="org-channel-name">{row.vpName ?? row.name}</span>
+          <span className="org-channel-name">{shownName(row)}</span>
           {!!row.led?.length && (
             <span className="org-channel-led" data-testid="org-channel-led" title={`Also leads ${row.led.map((l) => l.name).join(', ')}`}>+{row.led.length}</span>
           )}
@@ -122,7 +122,7 @@ function KeptChildren({ row, kept, open, onUnwatch, onToggleLock }: { row: Chann
   const openTask = useOpenTask();
   if (!kept.length) return null;
   return (
-    <div className="org-watched" role="group" aria-label={`Kept in view, under ${row.vpName ?? row.name}`} data-testid="org-watched" data-key={row.key}>
+    <div className="org-watched" role="group" aria-label={`Kept in view, under ${shownName(row)}`} data-testid="org-watched" data-key={row.key}>
       {kept.map(({ task: t, watched, locked, relock }) => {
         const st = stateTab(t);
         const title = orgDisplayTitle(t);
@@ -330,7 +330,7 @@ export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, 
             <Row row={r} selected={selectedKey === r.key} now={now} onSelect={onSelect} onMenu={onMenu} />
             {keptUnder(r)}
             {directors && !sections && (
-              <OrgLeaders groups={directors.groupsOf(r)} projects={directors.projectsOf(r)} showProjects={showProjects} surface="list" vpKey={r.key} vpName={r.vpName ?? r.name} query={query} {...(openTaskIds ? { openTaskIds } : {})} />
+              <OrgLeaders groups={directors.groupsOf(r)} projects={directors.projectsOf(r)} showProjects={showProjects} surface="list" vpKey={r.key} vpName={shownName(r)} query={query} {...(openTaskIds ? { openTaskIds } : {})} />
             )}
           </div>
         ))}

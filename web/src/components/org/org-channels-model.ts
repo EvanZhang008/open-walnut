@@ -656,6 +656,11 @@ export function rowAvatarColor(row: Pick<ChannelRow, 'kind' | 'name'>): string {
   return row.kind === 'router' ? ROUTER_AVATAR_COLOR : avatarColor(row.name);
 }
 
+/** The name an Org row shows (and edits): its VP's own name when it has one, else its row name. */
+export function shownName(row: Pick<ChannelRow, 'name' | 'vpName'>): string {
+  return row.vpName ?? row.name;
+}
+
 /** The task an Org row stands for (its avatar's owner): Main, the VP (or the project's one task), the router. */
 export function rowTaskId(row: Pick<ChannelRow, 'kind' | 'key' | 'contactId'>): string | undefined {
   if (row.kind === 'router') return row.key.startsWith('router:') ? row.key.slice('router:'.length) : undefined;
