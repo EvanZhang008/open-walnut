@@ -44,10 +44,11 @@ async function until(what: string, ok: () => Promise<boolean>): Promise<void> {
   }
 }
 
-/** A turn's own report, as the session hook stores it; the server's sync derives the status. */
+/** A turn's own report, as the session hook stores it; the server's sync derives the status. A wait
+ *  outside the task: a wait on the user is Needs you in every phase (user-status.ts openAskOf). */
 async function report(taskId: string, now: string, atMs: number): Promise<void> {
   await updateTaskRaw(taskId, {
-    status_report: { state: 'waiting', waiting_kind: 'you', waiting_on: 'You, no rush', now, at: new Date(atMs).toISOString() },
+    status_report: { state: 'waiting', waiting_kind: 'outside', waiting_on: 'The permit office', now, at: new Date(atMs).toISOString() },
   }, { emitEvent: true, source: 'status-report' })
   await until(`${taskId} reads "${now}"`, async () => (await getTask(taskId)).user_status?.now === now)
 }
