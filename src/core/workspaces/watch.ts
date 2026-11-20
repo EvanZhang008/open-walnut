@@ -2,7 +2,8 @@
  * Task workspaces' one bus subscriber: a completed or deleted task's workspace
  * is cleaned up by the rule in decisions.ts (cleanup.ts), and a completed task's
  * workspace that waited for its session goes once that session stops. Started at
- * server boot (primary only), with the boot pass that resumes interrupted jobs.
+ * server boot (primary only), with the boot pass that resumes interrupted jobs and
+ * the clock that re-checks workspaces kept for unmerged commits (merge-recheck.ts).
  */
 
 import { bus, EventNames, type BusEvent } from '../event-bus.js'
@@ -11,8 +12,17 @@ import { IS_EPHEMERAL } from '../../constants.js'
 import { onTaskCompleted, onTaskDeleted, onTaskSessionStopped, resumeWorkspaces } from './cleanup.js'
 import { log } from '../../logging/index.js'
 import { bootPolicy } from '../boot-policy.js'
+import { runPeriodic, type PeriodicHandle } from '../periodic-task.js'
+import { MERGE_RECHECK_TICK_MS, sweepMergeRechecks } from './merge-recheck.js'
 
 const SUBSCRIBER = 'task-workspaces'
+/** The first re-check pass after a boot: a restart picks up checks that fell due meanwhile. */
+const RECHECK_BOOT_DELAY_MS = 3 * 60_000
+/** A pass stops starting new checks after this long (each fetches, so one can take minutes). */
+const RECHECK_BUDGET_MS = 30 * 60_000
+
+let recheck: PeriodicHandle | null = null
+let recheckKick: ReturnType<typeof setTimeout> | null = null
 
 type WorkspaceAction = { action: 'complete' | 'delete'; task: Task } | { action: 'session-stopped'; taskId: string }
 
@@ -58,8 +68,19 @@ export function startWorkspaceWatch(): void {
   // A test server runs over copied tasks while HOME stays real: it resumes nothing at boot.
   if (IS_EPHEMERAL) return
   void resumeWorkspaces().catch((err) => log.web.warn('workspace boot resume failed', { error: String(err) }))
+  if (recheck) return
+  recheck = runPeriodic('workspace-merge-recheck', MERGE_RECHECK_TICK_MS, RECHECK_BUDGET_MS, async (ctx) => {
+    const checked = await sweepMergeRechecks(ctx)
+    if (checked > 0) log.web.info('workspace merge re-check pass', { checked })
+  })
+  recheckKick = setTimeout(() => recheck?.kick(), RECHECK_BOOT_DELAY_MS)
+  recheckKick.unref?.()
 }
 
 export function stopWorkspaceWatch(): void {
   bus.unsubscribe(SUBSCRIBER)
+  recheck?.stop()
+  recheck = null
+  if (recheckKick) clearTimeout(recheckKick)
+  recheckKick = null
 }

@@ -77,6 +77,9 @@ export function notACodeTaskStart(
   return null
 }
 
+const isLocal = (h: string) => !h || h === 'local' || h === '__local__'
+const sameHost = (a: string, b: string) => (isLocal(a) && isLocal(b)) || a === b
+
 function inside(child: string, parent: string): boolean {
   const p = parent.replace(/\/+$/, '')
   const c = child.replace(/\/+$/, '')
@@ -118,6 +121,8 @@ export interface DefaultWorkspaceDeps {
   candidates(cwd: string, host: string, budgetMs: number): Promise<{ candidates: WorkspaceCandidate[]; degraded?: string }>
   taskDirRoot(taskId: string, host: string): Promise<string | null>
   listTasks(): Promise<Task[]>
+  /** The project's own code source while `project_first_start` is on (project-source.ts), or null. */
+  projectSource(project: string | undefined): Promise<{ provider: string; anchor: string; inputs: Record<string, unknown>; host: string } | null>
 }
 
 const realDeps: DefaultWorkspaceDeps = {
@@ -143,6 +148,20 @@ const realDeps: DefaultWorkspaceDeps = {
   async listTasks() {
     const tm = await import('../task-manager.js')
     return tm.listTasks()
+  },
+  async projectSource(project) {
+    if (!project?.trim()) return null
+    const { getConfig } = await import('../config-manager.js')
+    const { experimentalEnabled } = await import('../experimental.js')
+    if (!experimentalEnabled((await getConfig()).experimental, 'project_first_start')) return null
+    const { launchProjectName } = await import('../sessions/project-launch-defaults.js')
+    const name = await launchProjectName(project)
+    const tm = await import('../task-manager.js')
+    const meta = name ? await Promise.resolve().then(() => tm.getProjectMetadata(name)).catch(() => null) : null
+    const ps = await import('./project-source.js')
+    const source = ps.explicitWorkspaceSource(meta) ? ps.effectiveWorkspaceSource(meta) : null
+    const host = ps.projectHost(meta)
+    return source ? { ...source, anchor: ps.anchorOn(source.anchor, host), host } : null
   },
 }
 
@@ -178,6 +197,8 @@ export async function draftDefaultAsk(cwd: string, host: string): Promise<{ prov
 export interface DefaultWorkspace {
   /** The host it is made on: '__local__' or a config.hosts key. */
   host: string
+  /** The folder it is made from when that is not where the start would run (a project's code source). */
+  anchor?: string
   provider: string
   inputs: Record<string, unknown>
   displayName: string
@@ -190,7 +211,7 @@ export interface DefaultWorkspace {
  */
 export async function defaultWorkspaceFor(
   task: Task,
-  params: { workspace?: unknown; noWorkspace?: boolean; idle?: boolean; source?: string; startAttemptId?: string },
+  params: { workspace?: unknown; noWorkspace?: boolean; idle?: boolean; source?: string; startAttemptId?: string; cwd?: string; host?: string },
   place: () => Promise<{ cwd: string; host?: string; createTaskDir?: boolean }>,
 ): Promise<DefaultWorkspace | null> {
   const skip = (why: string, extra: Record<string, unknown> = {}) => {
@@ -202,6 +223,20 @@ export async function defaultWorkspaceFor(
     if (not) return null
     const { role } = await import('../server-role.js')
     if (role() === 'replica') return null
+    // A project that says where its code comes from: a task with no folder of its own, started
+    // naming none, is made from there (a recorded folder, a lead's copy say, keeps the rules below),
+    // whatever the project's isolation setting says: the source means "start from it". Its folder
+    // is on the project's host, so a start that names another host runs as before, without it.
+    const source = params.cwd === undefined && !task.cwd ? await deps.projectSource(task.project) : null
+    const fromProject = source && (params.host === undefined || sameHost(params.host, source.host)) ? source : null
+    if (source && !fromProject) log.session.info('project code source not used: the start names another host', { taskId: task.id, host: params.host, sourceHost: source.host })
+    if (fromProject) {
+      const pick = fromProject.provider === 'auto' ? await draftDefaultAsk(fromProject.anchor, fromProject.host) : fromProject
+      if (!pick) return skip('no provider claims the project\'s code source', { cwd: fromProject.anchor, host: fromProject.host })
+      const displayName = (await (await import('./registry.js')).findProvider(pick.provider))?.displayName ?? pick.provider
+      log.session.info('default workspace from the project\'s code source', { taskId: task.id, provider: pick.provider, anchor: fromProject.anchor, host: fromProject.host })
+      return { provider: pick.provider, inputs: pick.inputs, displayName, host: fromProject.host, anchor: fromProject.anchor }
+    }
     const on = isolationOn({ globalOn: await deps.globalOn(), project: await deps.projectIsolation(task.project), optOut: params.noWorkspace })
     if (!on) return null
     const where = await place()

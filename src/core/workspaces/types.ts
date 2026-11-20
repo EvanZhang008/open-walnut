@@ -81,13 +81,24 @@ export interface TaskWorkspace {
   error_code?: string
   progress?: string
   kept_reason?: string
+  /** When a cleanup kept it (an older Walnut ignores it). */
+  kept_at?: string
+  /**
+   * Kept only for commits not merged or pushed yet: Walnut fetches and checks again every
+   * few hours (merge-recheck.ts) and removes it once they are merged, by content too, until
+   * 14 days after `kept_at`. `next_at`: the next check; `last`: what the newest check found.
+   * Absent: nothing looks again. An older Walnut keeps the field and never acts on it.
+   */
+  merge_recheck?: { next_at: string; last_at?: string; last?: string }
   /** The branch a removal left behind because it holds commits found nowhere else. */
   branch_kept?: boolean
+  /** Why the removal left the branch (a branch merged only as rebased copies keeps the originals). */
+  branch_kept_reason?: string
   job_id?: string
   /** The name the folder and branch are derived from, fixed at the first request so a retry finds the same place. */
   name?: string
   /** While `removing`: what asked, and the state to go back to if the host refuses. */
-  removal?: { trigger: 'manual' | 'complete'; from: 'ready' | 'kept' }
+  removal?: { trigger: 'manual' | 'complete'; from: 'ready' | 'kept'; recheck?: true }
   pending_start?: WorkspacePendingStart
   /**
    * Made again because a session of the task still had its folder in the one a cleanup
@@ -213,7 +224,19 @@ export interface WorkspaceProbeSummary {
     path: string; name?: string; dirty: boolean; changes: number; unreadable: boolean; merged: boolean | null; exists: boolean
     /** Entries git ignores (the first few) and how many: a removal deletes them too. */
     ignored?: string[]; ignoredCount?: number
+    /** A stash, or a detached HEAD no ref holds: work a removal would lose. */
+    stashed?: boolean; lostHead?: boolean
   }>
   branch?: string
   branchMerged?: boolean | null
+  /** The branch is merged only as rebased copies (a re-check): a removal keeps the branch. */
+  branchMergedByContent?: boolean
+  /** Repositories under the root nobody listed. */
+  unlisted?: string[]
+  /** Not clean only because the provider's listing failed or a folder scan was cut short. */
+  blocked?: boolean
+  /** The host did the re-check asked for (fetched, then judged merged by content too). */
+  rechecked?: boolean
+  /** Repositories whose fetch failed in that re-check. */
+  fetchFailed?: string[]
 }

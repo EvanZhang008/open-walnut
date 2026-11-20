@@ -1,0 +1,231 @@
+/* Start a new task from a project (experiment project_first_start): the draft's Project pill,
+   host pill and source chip (DraftProjectStartPill), the value chips above them
+   (DraftProjectSourceRow), their flyouts (ProjectStartFlyout), and the project settings'
+   "Code source" section (ProjectCodeSource). */
+
+.draft-composer-bar > .draft-project-start-pill.is-empty { color: var(--fg-muted); }
+.draft-composer-bar > .draft-project-source-chip {
+  color: var(--fg-muted);
+  cursor: default;
+  gap: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.draft-composer-bar > .draft-start-host-pill .draft-pill-dot { margin-left: 5px; }
+
+/* The value chips: one line per array input, wrapping inside the column. */
+.draft-project-source-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px 0 4px;
+}
+.draft-source-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+.draft-source-field-label { color: var(--fg-muted); margin-right: 2px; }
+.draft-source-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 22px;
+  max-width: 220px;
+  padding: 0 2px 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--accent-subtle, var(--bg-secondary));
+  color: var(--fg);
+}
+.draft-source-value-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.draft-source-star { color: var(--accent); font-size: 10px; }
+.draft-source-remove,
+.draft-source-add {
+  border: none;
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font: inherit;
+}
+.draft-source-remove {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  padding: 0;
+  line-height: 1;
+}
+.draft-source-remove:hover { background: var(--bg-hover, var(--border)); color: var(--fg); }
+.draft-source-add {
+  height: 22px;
+  padding: 0 8px;
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+}
+.draft-source-add:hover, .draft-source-add[aria-expanded="true"] { color: var(--accent); border-color: var(--accent); }
+.draft-source-none { color: var(--fg-muted); font-style: italic; }
+
+/* The flyouts: the project picker's look (.task-kebab-project-flyout). */
+.project-start-flyout {
+  min-width: 220px;
+  max-width: 360px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elevated, var(--bg));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0;
+  font-size: 12px;
+  color: var(--fg);
+  z-index: 1200;
+}
+.project-start-picker { width: 340px; }
+.psp-head { position: sticky; top: 0; background: inherit; padding: 6px 10px 4px; z-index: 1; }
+.psp-title { font-weight: 600; font-size: 13px; }
+.psp-title-small { font-size: 11px; font-weight: 500; color: var(--fg-muted); padding: 4px 10px 2px; }
+.psp-sub { color: var(--fg-muted); font-size: 11px; margin: 2px 0 6px; line-height: 1.35; }
+.psp-search {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 5px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--fg);
+  outline: none;
+}
+.project-start-add .psp-search { margin: 4px 8px; width: calc(100% - 16px); }
+.psp-search:focus { border-color: var(--accent); }
+.psp-list { display: flex; flex-direction: column; }
+.psp-group {
+  padding: 8px 10px 2px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.psp-row { display: flex; align-items: center; gap: 6px; padding-right: 10px; }
+.psp-row:hover { background: var(--accent-subtle); }
+.psp-pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 5px 10px;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.psp-pick.is-current .psp-name { color: var(--accent); font-weight: 600; }
+.psp-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.psp-line { max-width: 100%; color: var(--fg-muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.psp-host {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 120px;
+  color: var(--fg-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.psp-setup {
+  flex: none;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 0;
+}
+.psp-setup:hover { text-decoration: underline; }
+.psp-folder {
+  margin-top: 4px;
+  padding: 7px 10px;
+  border: none;
+  border-top: 1px solid var(--border);
+  background: none;
+  color: var(--fg-muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.psp-folder:hover { background: var(--accent-subtle); color: var(--fg); }
+.psp-folder strong { color: var(--fg); font-weight: 500; }
+.psp-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.psp-option:hover { background: var(--accent-subtle); }
+.psp-option.is-current { color: var(--accent); font-weight: 600; }
+.psp-option-meta { color: var(--fg-muted); font-weight: 400; }
+.psp-option-free { color: var(--accent); }
+.psp-empty { padding: 8px 12px; color: var(--fg-muted); }
+
+/* Project settings: Code source. */
+.project-code-source { display: flex; flex-direction: column; gap: 8px; }
+.pcs-choices { display: flex; flex-wrap: wrap; gap: 4px; }
+.pcs-choice {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.pcs-choice.is-picked { border-color: var(--accent); background: var(--accent-subtle); color: var(--accent); }
+.pcs-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.pcs-field-label { color: var(--fg-muted); }
+.pcs-input {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+}
+.pcs-input:focus { outline: none; border-color: var(--accent); }
+.pcs-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.pcs-chips .pcs-input { width: 140px; }
+.pcs-note { font-size: 11px; color: var(--fg-muted); line-height: 1.4; }
+.pcs-note.is-error { color: var(--danger, #c0392b); }
+.pcs-actions { display: flex; gap: 6px; align-items: center; }
+.pcs-save {
+  padding: 3px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--accent-fg, #fff);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.pcs-save:disabled { opacity: 0.5; cursor: default; }
+.pcs-legacy { display: flex; flex-direction: column; gap: 6px; }

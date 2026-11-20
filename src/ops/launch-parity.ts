@@ -31,6 +31,8 @@ export const LAUNCH_PARITY: Readonly<Record<string, ParityEntry>> = {
   createCwd: { op: ['task_create.create_cwd', 'task_start.create_cwd'] },
   cwdChosen: { op: ['task_create.cwd', 'task_start.cwd'], note: 'an op that names cwd chose it (it never fills one in) and sends cwd_chosen; a VP\'s or lead\'s start keeps it only on a request with no caller session' },
   workspace: { op: ['task_create.workspace', 'task_start.workspace', 'workspace_providers'] },
+  fromProject: { op: 'task_create.project', note: 'with the project_first_start experiment on, a new task in a project with a code source and no cwd starts from that source' },
+  workspaceInputs: { op: ['task_create.workspace', 'task_start.workspace'], note: 'an agent names the provider and its inputs (the packages) in workspace' },
   taskId: { op: 'task_start.id', note: 'a bound draft starts an existing task' },
   taskMeta: { op: 'task_create', note: 'each field is listed in TASK_META_PARITY' },
   images: { none: 'An agent hands files over as paths in message; a pasted image exists only in a browser.' },

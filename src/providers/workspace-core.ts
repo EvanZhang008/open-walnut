@@ -32,6 +32,12 @@
  *    holds, keeps the whole workspace; a branch is deleted only when it is a
  *    `walnut/` branch no worktree has checked out and its commits are reachable
  *    from another ref; git's own refusal (no --force) is the second layer.
+ *  - a re-check of a kept workspace (`recheck: true`, 'workspace-recheck-v1') fetches
+ *    first (never prompting: no askpass, ssh in batch mode) and also counts a commit as
+ *    merged when `git cherry` marks it '-' AND its exact patch (`git patch-id --verbatim`,
+ *    whitespace included) is one of the upstream's commits; a fetch that fails judges by
+ *    what is here, never by content. A branch merged only by content is never deleted:
+ *    the removal takes the worktree folder and keeps the branch (and its reflog).
  *  - every git spawn gets a clean environment: an inherited GIT_DIR /
  *    GIT_WORK_TREE / GIT_INDEX_FILE would point git at another repository.
  *
@@ -153,6 +159,8 @@ export interface WorkspaceRepoProbe {
   unpushed?: number
   /** Plugin repositories: `refs/stash` exists (a removal would lose it). */
   stashed?: boolean
+  /** A re-check (`recheck`): the unpushed commits' changes are all on their branches' upstreams (`git cherry`). */
+  pushedByContent?: boolean
   /** HEAD is detached on a commit no branch, remote or tag holds. */
   lostHead?: boolean
   /** Ignored entries git shows (first few) and their count: a removal deletes them too. */
@@ -172,6 +180,21 @@ export interface WorkspaceProbe {
   branchMerged?: boolean | null
   /** Repositories found under the root that the provider never listed. */
   unlisted?: string[]
+  /**
+   * The caller asked for a re-check (`recheck: true`): the remotes were fetched first, and a
+   * commit whose change is already on the upstream (`git cherry` marks it '-', as a review that
+   * rebased it leaves it) counts as merged. Echoed so the server knows this daemon did it.
+   */
+  rechecked?: boolean
+  /** Repositories whose fetch failed: judged by what is here, never by content. */
+  fetchFailed?: string[]
+  /** git-worktree: the branch is merged only by content (rebased upstream), not by ancestry. */
+  branchMergedByContent?: boolean
+  /**
+   * Not clean only for a reason that may pass by itself: the provider's listing failed or a
+   * folder scan was cut short (a repository git could not read shows as `unreadable`).
+   */
+  blocked?: boolean
 }
 
 export interface WorkspaceJob {
@@ -208,6 +231,12 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
   var SCAN_DEPTH = 3
   var SCAN_MAX_DIRS = 4000
   var GIT_TIMEOUT_MS = 60_000
+  /** A re-check's fetch of one repository, and how many repositories fetch at once. */
+  var FETCH_TIMEOUT_MS = 90_000
+  var FETCH_PARALLEL = 4
+  /** The `git log -p` a patch comparison reads, and the paths it may name: past either, not proven. */
+  var PATCH_CAP = 16 * 1024 * 1024
+  var PATCH_MAX_PATHS = 500
   var JOB_TTL_MS = 60 * 60 * 1000
   var MAX_JOBS = 200
   var MAX_RUNNING = 4
@@ -894,7 +923,7 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
    * stash and the commits on local branches that no remote-tracking ref holds.
    */
   async function probeRepo(repo: WorkspaceRepo, kind: 'git' | 'plugin', mergedCheck?: () => Promise<boolean | null>,
-    collectIgnored?: string[]): Promise<WorkspaceRepoProbe> {
+    collectIgnored?: string[], byContent?: boolean): Promise<WorkspaceRepoProbe> {
     var p = P.resolve(repo.path)
     var base = { path: p, ...(repo.name ? { name: repo.name } : {}) }
     if (!(await isDir(p))) return Object.assign(base, { exists: false, dirty: false, changes: 0, unreadable: false, merged: null })
@@ -922,6 +951,11 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
         if (n.ok && /^\d+$/.test(n.out)) {
           out.unpushed = Number(n.out)
           out.merged = out.unpushed === 0
+          // A re-check: commits a review merged with new hashes are on the upstream by content.
+          if (byContent && out.unpushed > 0 && (await branchesOnUpstream(p))) {
+            out.pushedByContent = true
+            out.merged = true
+          }
         }
       }
     } else if (mergedCheck) {
@@ -950,7 +984,8 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
     return { found: found, truncated: truncated }
   }
 
-  async function gitBranchMerged(sourceRepo: string, branch: string, baseRef: { name?: string; sha?: string } | undefined): Promise<{ tip?: string; merged: boolean | null }> {
+  async function gitBranchMerged(sourceRepo: string, branch: string, baseRef: { name?: string; sha?: string } | undefined,
+    byContent?: boolean): Promise<{ tip?: string; merged: boolean | null; byContent?: boolean }> {
     var tipR = await git(['rev-parse', '--verify', '-q', 'refs/heads/' + branch], sourceRepo)
     if (!tipR.ok || !tipR.out) return { merged: true }
     var tip = tipR.out
@@ -966,7 +1001,118 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
     var refs = await git(['for-each-ref', '--contains', tip, '--format=%(refname)', 'refs/heads', 'refs/remotes', 'refs/tags'], sourceRepo)
     if (!refs.ok) return { tip: tip, merged: null }
     var others = refs.out.split('\n').filter((r) => r && r !== 'refs/heads/' + branch)
-    return { tip: tip, merged: others.length > 0 }
+    if (others.length > 0) return { tip: tip, merged: true }
+    // A re-check: its changes are on the base (or the base's upstream) under new hashes.
+    for (var c = 0; byContent && c < cands.length; c++) {
+      if (!(await git(['rev-parse', '--verify', '-q', cands[c]], sourceRepo)).ok) continue
+      if (await onUpstreamByContent(sourceRepo, cands[c], tip)) return { tip: tip, merged: true, byContent: true }
+    }
+    return { tip: tip, merged: false }
+  }
+
+  // ── re-check of a kept workspace (`recheck`): fetch first, then merged by content too ──
+
+  /**
+   * Is every change of `tip` beyond `upstream` already on `upstream`? `git cherry` marks a
+   * commit '-' when a commit with the same patch is there (a review that rebased or
+   * cherry-picked it gives it a new hash). A merge commit in the range is never accepted:
+   * cherry skips merges, and a merge's own conflict resolution would be lost.
+   */
+  async function onUpstreamByContent(repoPath: string, upstream: string, tip: string): Promise<boolean> {
+    var merges = await git(['rev-list', '--count', '--merges', upstream + '..' + tip], repoPath)
+    if (!merges.ok || merges.out !== '0') return false
+    var ch = await git(['cherry', upstream, tip], repoPath)
+    if (!ch.ok) return false
+    var lines = ch.out ? ch.out.split('\n').filter(Boolean) : []
+    if (!lines.every((l) => l.charAt(0) === '-')) return false
+    // cherry ignores whitespace: a change that differs only in it would be lost. Confirm exactly.
+    return samePatchesUpstream(repoPath, upstream, tip, lines.length)
+  }
+
+  /** The exact patch id (`--verbatim`: whitespace counts) of every commit `git log` lists; null when it could not tell. */
+  async function verbatimPatchIds(repoPath: string, logArgs: string[]): Promise<{ ids: string[]; commits: number } | null> {
+    var env = cleanEnv({ LC_ALL: 'C' })
+    var lg = await run('git', ['log', '--no-merges', '--no-renames', '--no-color', '--no-ext-diff', '--no-textconv', '--no-show-signature',
+      '--binary', '--format=commit %H', '-p'].concat(logArgs), { cwd: repoPath, timeoutMs: GIT_TIMEOUT_MS, env: env, stdoutCap: PATCH_CAP })
+    if (lg.code !== 0 || lg.spawnError || lg.timedOut || lg.overflow) return null
+    // Bytes that are not UTF-8 decode to U+FFFD on both sides: two different ones would look equal.
+    if (lg.stdout.indexOf('\uFFFD') >= 0) return null
+    if (!lg.stdout.trim()) return { ids: [], commits: 0 }
+    var pid = await run('git', ['patch-id', '--verbatim'], { cwd: repoPath, input: lg.stdout, timeoutMs: GIT_TIMEOUT_MS, env: env })
+    if (pid.code !== 0 || pid.spawnError || pid.timedOut || pid.overflow) return null
+    var ids: string[] = []
+    var rows = pid.stdout.split('\n')
+    for (var i = 0; i < rows.length; i++) {
+      var m = /^([0-9a-f]{40,64}) [0-9a-f]{40,64}$/.exec(rows[i].trim())
+      if (m) ids.push(m[1])
+    }
+    return { ids: ids, commits: ids.length }
+  }
+
+  /**
+   * Every one of the `expected` commits of upstream..tip has a commit on the upstream (since
+   * they parted) with the very same patch. A commit with no patch, or one too large to read,
+   * is not proven, so the answer is no.
+   */
+  async function samePatchesUpstream(repoPath: string, upstream: string, tip: string, expected: number): Promise<boolean> {
+    if (expected === 0) return true
+    var mine = await verbatimPatchIds(repoPath, [upstream + '..' + tip])
+    if (!mine || mine.commits !== expected) return false
+    // NUL-separated, so a path git would quote is named as it is (a mangled one only fails closed).
+    var names = await git(['log', '-z', '--no-merges', '--no-renames', '--format=', '--name-only', upstream + '..' + tip], repoPath)
+    if (!names.ok) return false
+    var paths = names.out.split('\0').map((x) => x.replace(/^\n+/, '')).filter(Boolean).filter((v, i, a) => a.indexOf(v) === i)
+    if (!paths.length || paths.length > PATCH_MAX_PATHS) return false
+    // Only upstream commits that touch these paths can carry the same patch; --full-diff keeps each whole.
+    var theirs = await verbatimPatchIds(repoPath, ['--full-diff', tip + '..' + upstream, '--'].concat(paths.map((x) => ':(literal)' + x)))
+    if (!theirs) return false
+    return mine.ids.every((id) => theirs!.ids.indexOf(id) >= 0)
+  }
+
+  /** Plugin repositories: every local branch holding commits no remote holds has them on its remote upstream by content. */
+  async function branchesOnUpstream(repoPath: string): Promise<boolean> {
+    var heads = await git(['for-each-ref', '--format=%(refname)%09%(upstream)', 'refs/heads'], repoPath)
+    if (!heads.ok) return false
+    var lines = heads.out ? heads.out.split('\n').filter(Boolean) : []
+    for (var i = 0; i < lines.length; i++) {
+      var parts = lines[i].split('\t')
+      var ref = parts[0]
+      var up = parts[1] || ''
+      if (ref.indexOf('refs/heads/') !== 0) return false
+      var n = await git(['rev-list', '--count', ref, '--not', '--remotes'], repoPath)
+      if (!n.ok || !/^\d+$/.test(n.out)) return false
+      if (n.out === '0') continue
+      // Only a remote upstream counts: a local one is not pushed anywhere.
+      if (up.indexOf('refs/remotes/') !== 0) return false
+      if (!(await onUpstreamByContent(repoPath, up, ref))) return false
+    }
+    return true
+  }
+
+  /** The remote to fetch for a base ref: its branch's remote, the remote its name starts with, '' for all, null for none. */
+  async function baseRemote(repoPath: string, baseName: string | undefined): Promise<string | null> {
+    if (baseName && validRef(baseName)) {
+      var cfg = await git(['config', '--get', 'branch.' + baseName + '.remote'], repoPath)
+      if (cfg.ok && cfg.out && cfg.out !== '.' && validRef(cfg.out)) return cfg.out
+    }
+    var rl = await git(['remote'], repoPath)
+    if (!rl.ok) return ''
+    var remotes = rl.out ? rl.out.split('\n').filter(Boolean) : []
+    if (!remotes.length) return null
+    var best = ''
+    for (var i = 0; i < remotes.length; i++) {
+      if (baseName && validRef(remotes[i]) && baseName.indexOf(remotes[i] + '/') === 0 && remotes[i].length > best.length) best = remotes[i]
+    }
+    return best
+  }
+
+  /** Bring remote-tracking refs up to date (`remote` '' = every remote). No tags, no gc, no prompt; null when it worked, else why. */
+  async function fetchRemotes(repoPath: string, remote: string): Promise<string | null> {
+    var args = ['-c', 'gc.auto=0', '-c', 'maintenance.auto=false', '-c', 'credential.interactive=false',
+      'fetch', '--quiet', '--no-tags', remote || '--all']
+    var r = await run('git', args, { cwd: repoPath, timeoutMs: FETCH_TIMEOUT_MS, group: true, env: await fetchEnv(repoPath) })
+    if (r.code === 0 && !r.spawnError && !r.timedOut) return null
+    return gitErr({ err: (r.spawnError || (r.timedOut ? 'git fetch timed out' : '') || r.stderr).trim(), code: r.code })
   }
 
   /** The repositories a plugin workspace holds now: the recorded ones plus what listRepos answers today. */
@@ -1008,21 +1154,35 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
     recorded = recorded.map((r) => ({ ...r, path: P.isAbsolute(r.path) ? r.path : P.join(root, r.path) }))
     var problems: string[] = []
     var out: WorkspaceProbe = { root: root, rootExists: await isDir(root), repos: [], clean: true, merged: true, problems: problems }
+    var recheck = args.recheck === true
+    var fetchFailed: string[] = []
+    if (recheck) out.rechecked = true
     var blocked = false
     var unlisted: string[] = []
     var repos = recorded
     if (isGit) {
       var branch = typeof args.branch === 'string' && validRef(args.branch) ? args.branch : undefined
       var sourceRepo = typeof args.sourceRepo === 'string' ? P.resolve(args.sourceRepo) : undefined
-      var bm: { tip?: string; merged: boolean | null } = { merged: null }
+      var bm: { tip?: string; merged: boolean | null; byContent?: boolean } = { merged: null }
       if (branch && sourceRepo && (await isDir(sourceRepo))) {
-        bm = await gitBranchMerged(sourceRepo, branch, args.baseRef as { name?: string; sha?: string } | undefined)
+        var baseRef = args.baseRef as { name?: string; sha?: string } | undefined
+        var byContent = false
+        if (recheck) {
+          var remote = await baseRemote(sourceRepo, baseRef && baseRef.name)
+          var fetchErr = remote === null ? null : await fetchRemotes(sourceRepo, remote)
+          if (fetchErr) {
+            fetchFailed.push(sourceRepo)
+            problems.push('could not fetch ' + (remote || 'the remotes') + ' of ' + sourceRepo + ' (' + fetchErr + ')')
+          } else byContent = true
+        }
+        bm = await gitBranchMerged(sourceRepo, branch, baseRef, byContent)
       } else if (branch) {
         problems.push('the source repository ' + (sourceRepo || '(unknown)') + ' is gone, so the branch cannot be checked')
       }
       out.branch = branch
       out.branchTip = bm.tip
       out.branchMerged = bm.merged
+      if (bm.merged === true && bm.byContent) out.branchMergedByContent = true
       // The worktree is the root itself, whatever the task row says its repositories are.
       var named = recorded[0] && P.resolve(recorded[0].path) === root ? recorded[0].name : undefined
       var ignoredAll: string[] = []
@@ -1053,7 +1213,8 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
         }
       }
       if (repos.length === 0 && out.rootExists) problems.push('the provider listed no repositories to check')
-      for (var i = 0; i < repos.length; i++) out.repos.push(await probeRepo(repos[i], 'plugin'))
+      var fetched = recheck ? await fetchEach(repos, problems, fetchFailed) : []
+      for (var i = 0; i < repos.length; i++) out.repos.push(await probeRepo(repos[i], 'plugin', undefined, undefined, fetched[i] === true))
     }
     if (unlisted.length) {
       out.unlisted = unlisted.slice(0, 20)
@@ -1079,7 +1240,48 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
     out.merged = isGit
       ? out.branchMerged === true
       : out.repos.every((r) => !r.exists || r.merged === true)
+    if (fetchFailed.length) out.fetchFailed = fetchFailed
+    if (blocked) out.blocked = true
     return out
+  }
+
+  /**
+   * A background fetch never asks the person anything: no terminal prompt, no askpass program
+   * (an empty GIT_ASKPASS also stops git from falling back to core.askPass or SSH_ASKPASS), no
+   * credential helper prompt, and ssh in batch mode unless the user set their own ssh command.
+   */
+  async function fetchEnv(repoPath: string): Promise<Record<string, string | undefined>> {
+    var env = cleanEnv({ LC_ALL: 'C', GCM_INTERACTIVE: 'never', SSH_ASKPASS_REQUIRE: 'never', GIT_ASKPASS: '' })
+    delete env.SSH_ASKPASS
+    if (!env.GIT_SSH_COMMAND && !env.GIT_SSH) {
+      var own = await git(['config', '--get', 'core.sshCommand'], repoPath)
+      if (!(own.ok && own.out)) env.GIT_SSH_COMMAND = 'ssh -o BatchMode=yes'
+    }
+    return env
+  }
+
+  /** A re-check fetches every repository of a plugin workspace, a few at once; true at each index whose fetch worked. */
+  async function fetchEach(repos: WorkspaceRepo[], problems: string[], failed: string[]): Promise<boolean[]> {
+    var ok: boolean[] = []
+    var next = 0
+    var worker = async () => {
+      while (next < repos.length) {
+        var at = next++
+        var p = P.resolve(repos[at].path)
+        if (!(await isDir(p))) continue
+        var rl = await git(['remote'], p)
+        if (rl.ok && !rl.out) continue
+        var err = rl.ok ? await fetchRemotes(p, '') : gitErr(rl)
+        if (err) {
+          failed.push(p)
+          problems.push((repos[at].name || P.basename(p)) + ': could not fetch its remotes (' + err + ')')
+        } else ok[at] = true
+      }
+    }
+    var workers: Array<Promise<void>> = []
+    for (var w = 0; w < FETCH_PARALLEL; w++) workers.push(worker())
+    await Promise.all(workers)
+    return ok
   }
 
   // ── removal ──
@@ -1117,24 +1319,31 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
       await git(['worktree', 'prune'], sourceRepo)
       var branchDeleted = false
       var branchKept = false
+      var keptWhy = ''
       if (pr.branch && pr.branchTip) {
         // The branch name comes from the task row: delete only a branch Walnut names
-        // (walnut/…) that no worktree has checked out, never e.g. a tampered "main".
-        var mayDelete = args.deleteBranch === 'if-merged' && pr.branchMerged === true && pr.branch.indexOf('walnut/') === 0
-        if (mayDelete) {
+        // (walnut/…) that no worktree has checked out, never e.g. a tampered "main". A branch
+        // merged only by content has its own commits (and reflog) nowhere else: it stays.
+        if (args.deleteBranch !== 'if-merged') keptWhy = 'the removal was asked to keep it'
+        else if (pr.branchMerged !== true) keptWhy = 'it holds commits that are not merged anywhere'
+        else if (pr.branchMergedByContent) keptWhy = 'its commits are on the upstream only as rebased copies, so the branch keeps the originals'
+        else if (pr.branch.indexOf('walnut/') !== 0) keptWhy = 'it is not a branch Walnut made'
+        if (!keptWhy) {
           var still = await git(['worktree', 'list', '--porcelain'], sourceRepo)
-          mayDelete = still.ok && !parseWorktreeList(still.out).some((e) => e.branch === 'refs/heads/' + pr.branch)
+          if (!still.ok || parseWorktreeList(still.out).some((e) => e.branch === 'refs/heads/' + pr.branch)) keptWhy = 'another worktree may have it checked out'
         }
-        if (mayDelete) {
+        if (!keptWhy) {
           var del = await git(['update-ref', '-d', 'refs/heads/' + pr.branch, pr.branchTip], sourceRepo)
           branchDeleted = del.ok
-          branchKept = !del.ok
-        } else {
-          branchKept = true
+          if (!del.ok) keptWhy = 'git could not delete it (' + gitErr(del) + ')'
         }
+        branchKept = !branchDeleted
       }
       await fsp.rmdir(P.dirname(root)).catch(() => {})
-      return { removed: true, root: root, rootGone: !(await exists(root)), branchDeleted: branchDeleted, branchKept: branchKept, probe: pr }
+      return {
+        removed: true, root: root, rootGone: !(await exists(root)), branchDeleted: branchDeleted, branchKept: branchKept,
+        ...(branchKept && keptWhy ? { branchKeptReason: keptWhy } : {}), probe: pr,
+      }
     }
     if (!spec) throw coded('unknown workspace provider: ' + provider, 'unknown_provider')
     var regions = await pluginRegions(spec)

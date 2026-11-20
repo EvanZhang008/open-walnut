@@ -21,6 +21,7 @@ import { getConfig } from '../config-manager.js';
 import { getFrequentDirs, scoreFrequentDir } from '../frequent-dirs.js';
 import { quickStartSession, QuickStartError } from './quick-start.js';
 import { mobileWorkspacePlace } from '../workspaces/launch.js';
+import { checkProjectStartBody, mobileProjectStart } from './mobile-project-launch.js';
 import { resolveModelSwitchValue, VALID_SESSION_EFFORT_IDS, VALID_SESSION_MODEL_IDS, VALID_SESSION_MODE_IDS } from '../types.js';
 import type { SessionEffort, SessionEngine, SessionMode } from '../types.js';
 import { DEFAULT_ENGINE, engineCaps, isAcpEngine, normalizeEngine, resolveEngine } from '../agents/engine-registry.js';
@@ -85,6 +86,9 @@ export interface MobileLaunchInput {
    *  through its task: a project's default engine of that kind may then run. An older client
    *  needs the id, so such an engine yields to Claude Code there, as the global default does. */
   sessionIdOptional?: true;
+  /** Start from the project's code source (mobile-project-launch.ts): `cwd` is ignored, `project` names it. */
+  fromProject?: true;
+  workspaceInputs?: Record<string, unknown>;
 }
 
 /** HTTP status → frozen v1 error code (also the relay errorKind vocabulary). */
@@ -104,8 +108,10 @@ export function launchErrorCode(status: number): string {
 function validateLaunchBody(body: unknown): MobileLaunchInput {
   const {
     cwd, host: rawHost, message, taskId, taskTitle, project, model: rawModel, mode, effort, overrideReadiness,
-    walnutAgent, agentId, voice, sync, sessionIdOptional, engine,
+    walnutAgent, agentId, voice, sync, sessionIdOptional, engine, fromProject, workspaceInputs,
   } = (body ?? {}) as {
+    fromProject?: unknown;
+    workspaceInputs?: unknown;
     cwd?: unknown;
     host?: unknown;
     message?: unknown;
@@ -144,7 +150,8 @@ function validateLaunchBody(body: unknown): MobileLaunchInput {
     throw new QuickStartError(ASK_HOST_REFUSAL, 400);
   }
 
-  if (!isAsk) {
+  const project_ = fromProject === true && !isAsk ? checkProjectStartBody(project, workspaceInputs) : undefined;
+  if (!isAsk && !project_) {
     if (typeof cwd !== 'string' || !cwd.trim()) {
       throw new QuickStartError('cwd is required', 400);
     }
@@ -177,7 +184,8 @@ function validateLaunchBody(body: unknown): MobileLaunchInput {
     throw new QuickStartError('project must be a string up to 256 characters', 400);
   }
 
-  // Host: '' / absent = the primary box. Non-string is a shape error here;
+  // Host: '' / absent = the primary box (a start from a project: the project's own host, and
+  // '__local__' the primary box, as on the web route). Non-string is a shape error here;
   // whether the alias exists/is enabled is a config check in performMobileLaunch.
   let host: string | undefined;
   if (rawHost !== undefined && rawHost !== null && rawHost !== '') {
@@ -205,7 +213,8 @@ function validateLaunchBody(body: unknown): MobileLaunchInput {
   }
 
   return {
-    cwd: isAsk ? '' : cwd as string, host, message: msg,
+    cwd: isAsk || project_ ? '' : cwd as string, host, message: msg,
+    ...(project_ ?? {}),
     taskId: typeof taskId === 'string' ? taskId : undefined,
     taskTitle: typeof taskTitle === 'string' ? taskTitle.trim() : undefined,
     project: typeof project === 'string' ? project.trim() : undefined,
@@ -306,7 +315,8 @@ export async function computeLaunchOptions(): Promise<LaunchOptionsResult> {
   return { hosts, dirs };
 }
 
-export interface MobileLaunchResult { sessionId?: string; taskId: string; title: string }
+/** `preparing`: a start from a project files its task now and starts once the workspace is ready (no sessionId). */
+export interface MobileLaunchResult { sessionId?: string; taskId: string; title: string; preparing?: boolean; workspaceError?: string }
 
 /**
  * The phone's request dies at 30s and a relayed one also pays up to 8s of
@@ -327,6 +337,9 @@ export async function performMobileLaunch(
   /** The session asking (`x-walnut-caller-sid`): the launch runs at most as loose as it. */
   opts: { callerSid?: string } = {},
 ): Promise<MobileLaunchResult> {
+  // A start from a project: its source names the folder, the host and the workspace.
+  const fromProject = input.fromProject ? await mobileProjectStart(input) : null;
+  if (fromProject) input = fromProject.input;
   // Host: must be an enabled config.hosts alias. Refused with the gate's own
   // host_removed body, so the phone and the web draft answer a gone host alike.
   if (input.host !== undefined) {
@@ -346,7 +359,7 @@ export async function performMobileLaunch(
   const engine = pick ? pick.engine : input.engine;
   const preassignedSessionId = engineCaps(engine).idProvisioning === 'provider-issued' ? undefined : randomUUID();
   // A task with a ready isolated workspace launches in it (core/workspaces/launch.ts).
-  const wsPlace = input.taskId && !ask ? await mobileWorkspacePlace(input.taskId, input.cwd, input.host) : null;
+  const wsPlace = input.taskId && !ask && !fromProject ? await mobileWorkspacePlace(input.taskId, input.cwd, input.host) : null;
   const task = await quickStartSession({
     message: input.message,
     ...(input.voice ? { messageSuffix: voiceReplyBlock() } : {}),
@@ -385,7 +398,13 @@ export async function performMobileLaunch(
     } : {}),
     ...(input.overrideReadiness ? { overrideReadiness: true } : {}),
     hostGate: { deadlineMs: MOBILE_HOST_GATE_DEADLINE_MS },
+    ...(fromProject?.plan?.defer ? { deferStart: true, preassignedSessionId: undefined } : {}),
   });
+  const prepared = await fromProject?.finish(task, {
+    message: input.message, model: pick?.model ?? input.model, mode: pick?.mode ?? input.mode, effort: input.effort, engine: normalizeEngine(engine),
+    engineDecided: !!pick && (pick.source.engine === 'project' || !!input.engine), sessionId: preassignedSessionId, source, callerSid: opts.callerSid,
+  });
+  if (prepared) return prepared;
   if (ask) rememberAskModelPick(input.rawModel, input.taskId);
   log.web.info(`${source}: session created`, {
     sessionId: preassignedSessionId, taskId: task.id, cwd: ask ? ASK_LAUNCH_CWD : wsPlace?.cwd ?? input.cwd, host: (wsPlace ? wsPlace.host : input.host) ?? '',

@@ -5511,7 +5511,8 @@ if (process.env.PW_WORKSPACE_FIXTURE === '1') {
       workspace: {
         providers: [{
           id: 'fake-multirepo',
-          displayName: 'Fake multi-repo',
+          // A demo recording may show the provider under another name; specs read the default.
+          displayName: process.env.PW_WORKSPACE_FIXTURE_PROVIDER_NAME || 'Fake multi-repo',
           priority: 50,
           markers: ['fake-workspace.json'],
           command: [process.execPath, '{script}'],

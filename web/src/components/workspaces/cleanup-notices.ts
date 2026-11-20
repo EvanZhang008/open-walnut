@@ -42,7 +42,7 @@ export function cleanupNotice(taskId: string, title: string | undefined, prev: T
     return {
       severity: 'warning', key: `cleanup-removed:${taskId}`,
       title: `Cleanup ${script!.name} failed; workspace removed`,
-      body: `${scriptLine}The workspace of ${quoted(title)} was removed anyway, since nothing in it would be lost${next.branch_kept ? '; its branch was kept, since it has commits found nowhere else' : ''}.${outputWhere}`,
+      body: `${scriptLine}The workspace of ${quoted(title)} was removed anyway, since nothing in it would be lost${next.branch_kept ? `; its branch was kept, since ${next.branch_kept_reason || 'it has commits found nowhere else'}` : ''}.${outputWhere}`,
     };
   }
   return {

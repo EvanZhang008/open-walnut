@@ -120,6 +120,13 @@ describe('GET /api/v1/config — allowlist projection', () => {
     expect(typeof res.body.processNice).toBe('number')
     expect(typeof res.body.memory.rssMb).toBe('number')
   })
+
+  it('projects the experiment switches as booleans only (the phone reads project_first_start)', async () => {
+    await fs.writeFile(CONFIG_FILE, CONFIG_WITH_EVERY_SECRET + 'experimental:\n  project_first_start: true\n  chat_reading_split: false\n  odd_value: yes-please\n')
+    const res = await request(createApp()).get('/api/v1/config')
+    expect(res.status).toBe(200)
+    expect(res.body.config.experimental).toEqual({ project_first_start: true, chat_reading_split: false })
+  })
 })
 
 describe('GET /api/v1/usage/overview', () => {

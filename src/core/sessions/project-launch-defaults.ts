@@ -29,6 +29,7 @@ import {
   type SessionEngine, type SessionMode,
 } from '../types.js';
 import { isKnownEngine } from '../agents/engine-registry.js';
+import { checkWorkspaceSourceShape } from '../workspaces/project-source.js';
 
 /** The three metadata keys, in the order the settings list them. */
 export const PROJECT_LAUNCH_DEFAULT_KEYS = ['default_engine', 'default_model', 'default_mode'] as const;
@@ -258,5 +259,8 @@ export function checkLaunchDefaultsShape(patch: Record<string, unknown>): Record
       throw new ProjectSettingsError(`default_mode must be one of: ${SESSION_MODES.map((m) => m.id).join(', ')}`);
     }
   }
+  // Where the project's code comes from (workspaces/project-source.ts).
+  const sourceRefusal = checkWorkspaceSourceShape(out);
+  if (sourceRefusal) throw new ProjectSettingsError(sourceRefusal);
   return out;
 }

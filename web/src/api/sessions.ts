@@ -1299,6 +1299,12 @@ export async function quickStartSession(opts: {
    *  `preparing` and carries no sessionId. `{ auto: true }`: the default, the server picks
    *  the provider that claims the folder, or none (core/workspaces/launch.ts). */
   workspace?: { provider: string; inputs?: Record<string, unknown> } | { auto: true };
+  /** Start from `project`'s code source (server: core/workspaces/project-source.ts): the server
+   *  resolves the folder, the host (`host` overrides the project's) and the workspace; `cwd` is
+   *  ignored. The answer is usually `preparing`, as for an isolated workspace. */
+  fromProject?: boolean;
+  /** With `fromProject`: this start's values of the source's inputs (the packages ticked). */
+  workspaceInputs?: Record<string, unknown>;
   /** Message hints the first message asks for (`on_request`: the ask drawer's object-context). */
   hints?: Record<string, { arg?: string }>;
   /** A new task with no folder (`cwd` ''): it starts in its own task directory on this machine

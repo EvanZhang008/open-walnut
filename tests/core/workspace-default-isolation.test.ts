@@ -112,7 +112,8 @@ describe('which provider', () => {
 })
 
 describe('defaultWorkspaceFor', () => {
-  function deps(over: { global?: boolean; project?: 'on' | 'off'; candidates?: WorkspaceCandidate[]; degraded?: string; tasks?: Record<string, Task> } = {}) {
+  type Source = { provider: string; anchor: string; inputs: Record<string, unknown>; host: string }
+  function deps(over: { global?: boolean; project?: 'on' | 'off'; candidates?: WorkspaceCandidate[]; degraded?: string; tasks?: Record<string, Task>; source?: Source } = {}) {
     const asked: Array<{ cwd: string; host: string }> = []
     __setDefaultWorkspaceDepsForTesting({
       globalOn: async () => over.global ?? true,
@@ -120,6 +121,7 @@ describe('defaultWorkspaceFor', () => {
       candidates: async (cwd, host) => { asked.push({ cwd, host }); return { candidates: over.candidates ?? [git], ...(over.degraded ? { degraded: over.degraded } : {}) } },
       taskDirRoot: async () => '/state/tasks',
       listTasks: async () => Object.values(over.tasks ?? {}),
+      projectSource: async () => over.source ?? null,
     })
     return asked
   }
@@ -170,6 +172,32 @@ describe('defaultWorkspaceFor', () => {
     expect(await defaultWorkspaceFor(task(), { source: 'api-v1' }, place())).toBeNull()
     deps()
     expect(await defaultWorkspaceFor(task(), { source: 'api-v1' }, async () => { throw new Error('needs a cwd') })).toBeNull()
+  })
+
+  it('a project\'s own code source (project_first_start) makes the workspace from its anchor and host, settings aside', async () => {
+    const source = { provider: 'monorepo', anchor: '/ws/acme', inputs: { packages: ['Alpha'] }, host: 'dev' }
+    const asked = deps({ global: false, project: 'off', source })
+    const fresh = (t: Partial<Task> = {}) => task({ cwd: undefined, ...t })
+    expect(await defaultWorkspaceFor(fresh(), { source: 'api-v1' }, place())).toEqual({
+      provider: 'monorepo', inputs: { packages: ['Alpha'] }, displayName: 'monorepo', host: 'dev', anchor: '/ws/acme',
+    })
+    expect(asked).toEqual([])
+    // A start that names its folder, a task with its own folder (a lead's copy), an opt-out, or no new work: not used.
+    expect(await defaultWorkspaceFor(fresh(), { source: 'api-v1', cwd: '/r/app' }, place())).toBeNull()
+    expect(await defaultWorkspaceFor(task(), { source: 'api-v1' }, place())).toBeNull()
+    expect(await defaultWorkspaceFor(fresh(), { source: 'api-v1', noWorkspace: true }, place())).toBeNull()
+    expect(await defaultWorkspaceFor(fresh({ session_id: 's1' }), { source: 'api-v1' }, place())).toBeNull()
+    // An explicit host wins: the source's folder is on the project's host, so another host starts as before.
+    expect(await defaultWorkspaceFor(fresh(), { source: 'api-v1', host: 'dev' }, place())).toMatchObject({ anchor: '/ws/acme', host: 'dev' })
+    expect(await defaultWorkspaceFor(fresh(), { source: 'api-v1', host: 'other' }, place())).toBeNull()
+    expect(await defaultWorkspaceFor(fresh(), { source: 'api-v1', host: '' }, place())).toBeNull()
+    deps({ global: true, source })
+    expect(await defaultWorkspaceFor(fresh(), { source: 'api-v1', host: 'other' }, place({ host: 'other' }))).toEqual({ host: 'other', provider: 'git-worktree', inputs: {}, displayName: 'Git worktree' })
+    deps({ global: false, project: 'off', source })
+    // 'auto' asks the anchor's host which provider claims it.
+    const autoAsked = deps({ global: false, source: { ...source, provider: 'auto', inputs: {} }, candidates: [git, plugin] })
+    expect(await defaultWorkspaceFor(fresh(), { source: 'api-v1' }, place())).toMatchObject({ provider: 'monorepo', anchor: '/ws/acme', host: 'dev' })
+    expect(autoAsked).toEqual([{ cwd: '/ws/acme', host: 'dev' }])
   })
 
   it('a draft that sent its default before the host answered gets the claiming provider, or none', async () => {

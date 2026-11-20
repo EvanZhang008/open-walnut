@@ -29,6 +29,7 @@ import { log } from '../../logging/index.js'
 import { relayControlAction, sendV1Error as sendError } from './v1-control-relay.js'
 import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
 import { companionSkillRoutes } from '../../replica/companion-copy-routes.js'
+import { experimentalConfigView } from '../../core/experimental-prefs.js'
 
 export const consoleV1Router = Router()
 // The companion's skill reads take the Mac's copy, its skill writes need the Mac (stage 4d); a pass-through elsewhere.
@@ -90,8 +91,18 @@ async function buildConfigProjection(res?: Response): Promise<Record<string, unk
     // Whether the chat always shows what Walnut added to a message (additive, 2026-10-29).
     // On unless the person turned it off (2026-10-31, the user: they should be visible).
     ui: { show_walnut_additions: config.ui?.show_walnut_additions !== false },
+    // The experiments that are on or off by choice (additive, 2026-11-20): the phone shows what
+    // an experiment changes only when it is on, as the web does. Booleans only.
+    experimental: experimentalFlagsOf(config),
   }
   return projection
+}
+
+/** The experiment switches as a client reads them (a test run's own choices included), booleans only. */
+function experimentalFlagsOf(config: Parameters<typeof experimentalConfigView>[0]): Record<string, boolean> {
+  const out: Record<string, boolean> = {}
+  for (const [id, on] of Object.entries(experimentalConfigView(config).experimental ?? {})) if (typeof on === 'boolean') out[id] = on
+  return out
 }
 
 /** `config` with the companion's held config copy laid over it (top-level keys), else `config` as it is. */

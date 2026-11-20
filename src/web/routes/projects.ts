@@ -91,8 +91,9 @@ function leadOf(leads: readonly SlimTask[], project: string): { id: string; titl
  * Build the projects listing payload — registry rows + task counts + favorite
  * flag, plus Inbox counts. Envelope (NOT a bare array — Inbox has no registry
  * row and needs its own slot):
- *   { projects: [{ name, source, order_index?, metadata?, favorite, counts, lead? }], inbox: { counts } }
+ *   { projects: [{ name, source, order_index?, metadata?, favorite, counts, lead?, start_source }], inbox: { counts } }
  * `lead` (additive): the project's open lead, `{ id, title }`, when it has one.
+ * `start_source` (additive): where a new task of it gets its code, or null (project-source.ts).
  * Shared by GET /api/projects and GET /api/v1/projects.
  */
 export async function buildProjectsPayload(): Promise<{
@@ -115,6 +116,9 @@ export async function buildProjectsPayload(): Promise<{
     return !!c && c.todo + c.active + c.done > 0
   })
   const leads = tasks.filter((t) => t.org_role === 'lead' && t.phase !== 'COMPLETE')
+  // Where a new task of the project gets its code (core/workspaces/project-source.ts); local reads only.
+  const { startSourceReader } = await import('../../core/workspaces/project-source.js')
+  const startSourceOf = await startSourceReader()
   const projects = Object.entries(shown).map(([name, record]) => {
     const lead = leadOf(leads, name)
     return {
@@ -128,6 +132,7 @@ export async function buildProjectsPayload(): Promise<{
       favorite: favorites.has(name.toLowerCase()),
       counts: byProject.get(name.toLowerCase()) ?? emptyCounts(),
       ...(lead ? { lead } : {}),
+      start_source: startSourceOf(record.metadata),
     }
   })
 
@@ -303,10 +308,12 @@ export async function buildProjectMetadataPayload(name: string): Promise<Record<
   const record = await getProjectRecord(name)
   const canonical = record?.name ?? name
   const { byProject } = await collectCounts()
+  const { startSourceReader } = await import('../../core/workspaces/project-source.js')
   return {
     name: canonical,
     source: record?.source ?? 'local',
     metadata: record?.metadata ?? {},
+    start_source: (await startSourceReader())(record?.metadata),
     // MEMORY.md header for memory/projects/<project>/ — a FLAT one-segment
     // path (memory-dir-migration flattened the old two-segment layout).
     memorySummary: getProjectSummary(canonical)?.description ?? null,

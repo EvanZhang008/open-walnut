@@ -51,6 +51,7 @@ import { quickParseTask, updateTask, fetchTask } from '@/api/tasks';
 import { useQuickParseEnabled, setQuickParseEnabled, ensureQuickParseLoaded } from '@/hooks/useQuickParse';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { DraftLaunchBar } from './DraftLaunchBar';
+import type { DraftRowUpdate } from './DraftProjectStartPill';
 import { HostGateErrorBar, useRestoreImages, type DraftGateError } from './HostGateErrorBar';
 import { useModelOptions } from './path-selector/model-options';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
@@ -500,13 +501,15 @@ interface Props {
   onClearFolder?: (draftId: string) => void;
   /** The host is writing (a save as todo or a start on its way): Save as todo waits, so one click makes one todo. */
   saveBusy?: boolean;
+  /** A write on the draft row: present, the draft may start from a project (DraftLaunchBar). */
+  onProjectStart?: DraftRowUpdate;
 }
 
 export function DraftSessionPanel({
   draft, autoFocus, onStart, onSaveAsTask, onClose, headerLeading,
   onPathChange, onProjectChange, onMetaChange, onModeChange, isKnownProject, onAiParse, onWalnutToggle,
   onTaskFieldChange, onReturnFieldToWalnut, launchNotice, intro, gateError, onGateErrorClear, restoreImages,
-  onCustomizeWalnut, repairTarget, phoneLayer, walnutLabel, plainChat, placeholder, composerBar, composerPill, ownFolder, pickFolder, ownFolderLabel, onClearFolder, saveBusy = false,
+  onCustomizeWalnut, repairTarget, phoneLayer, walnutLabel, plainChat, placeholder, composerBar, composerPill, ownFolder, pickFolder, ownFolderLabel, onClearFolder, saveBusy = false, onProjectStart,
 }: Props) {
   countRender('DraftSessionPanel');
   const rootRef = useRef<HTMLDivElement>(null);
@@ -846,7 +849,8 @@ export function DraftSessionPanel({
   const startWith = useCallback(async (body: string, images?: ImageAttachment[]): Promise<boolean> => {
     // Ask Walnut needs no folder — the server owns the cwd (WALNUT_HOME); nor does a host that
     // starts such a task in its own directory.
-    if (!draft.cwd && !draft.walnut && !ownFolder) {
+    // A start from a project's code source names no folder: the server makes the workspace.
+    if (!draft.cwd && !draft.walnut && !ownFolder && !draft.fromProject) {
       // The picker is the RECOVERY, not the explanation (alone it read as a dead
       // Start button), so say why next to the pill. Cleared once a folder lands.
       setNeedsFolder(true);
@@ -856,7 +860,7 @@ export function DraftSessionPanel({
     const override = overrideNextRef.current;
     overrideNextRef.current = false;
     return onStart(draft.id, body, images, override ? { overrideReadiness: true } : undefined);
-  }, [draft.cwd, draft.walnut, draft.id, onStart, ownFolder]);
+  }, [draft.cwd, draft.walnut, draft.id, onStart, ownFolder, draft.fromProject]);
 
   // "Start anyway" (the host gate's override) is a send by another name: click
   // ChatInput's own send button (in THIS column) so pasted IMAGES ride along and
@@ -1073,6 +1077,7 @@ export function DraftSessionPanel({
           composerText={text}
           getComposer={getComposer}
           openMenuNonce={openMenuNonce}
+          {...(onProjectStart ? { onProjectStart } : {})}
           {...(ownFolder ? { emptyFolder: ownFolderLabel ?? 'its own', alwaysProject: true, workspaces: false, ...(onClearFolder ? { onClearFolder } : {}) } : {})}
         />}
         {/* The default engine is out of usage here: where this task starts instead. */}

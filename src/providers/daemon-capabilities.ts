@@ -949,6 +949,12 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // twins (the core is text-injected), NOT sidecar-gated, not bridge-reachable. Optional:
   // without it a new workspace skips its setup script and says the daemon needs an update.
   'workspace-scripts-v1',
+  // 'workspace-recheck-v1': `workspace.status` and `workspace.remove` take `recheck: true`
+  // (workspace-core.ts): fetch the remotes first, and count a commit whose patch `git cherry`
+  // finds on the upstream as merged; the probe echoes `rechecked`. Both twins (the core is
+  // text-injected), NOT sidecar-gated, not bridge-reachable. Optional: without it a workspace
+  // kept for unmerged commits is not re-checked (core/workspaces/merge-recheck.ts).
+  'workspace-recheck-v1',
   // 'journal-v2' (offline-journal-core.ts, docs/plan/walnut-replica-servers-impl.md section 5):
   // the journal of each Walnut is append-only NDJSON in the host's one journal root
   // (~/.open-walnut/tmp for the host's own daemon, kept across reboots), under a per-home lock, with op ids, revs and actors; v1 journals are moved in

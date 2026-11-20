@@ -2147,6 +2147,15 @@ export interface Config {
     /** Wake the task's session on a failed check, a comment or review, or a conflict (default true). */
     wake_agent?: boolean;
   };
+  /** Task workspaces (src/core/workspaces/). */
+  workspaces?: {
+    /**
+     * Check a workspace kept for unmerged commits again every 6 hours for 14 days, fetching
+     * its repositories' remotes in the background, and remove it once an exact check proves
+     * its commits merged (merge-recheck.ts). Default true; false: nothing fetches or looks again.
+     */
+    merge_recheck?: boolean;
+  };
   /** Audio capture configuration (system audio recording) */
   audio?: {
     /** Bundle IDs of apps to exclude from recording (e.g. 'com.spotify.client') */

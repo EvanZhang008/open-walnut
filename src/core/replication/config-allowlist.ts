@@ -125,6 +125,7 @@ export const CONFIG_COPY_DROPPED: Readonly<Record<string, string>> = Object.free
   push_tokens: 'push device tokens',
   push: 'push signing key settings',
   cloud_bridge: 'bridge credentials',
+  workspaces: 'task workspaces are made, re-checked and removed by the Mac only',
   expose: 'the tunnel settings of the Mac',
   cloud: 'companion credentials',
   sync: 'git sync remote and credentials',

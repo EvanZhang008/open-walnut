@@ -35,6 +35,8 @@ import { ProjectScriptsDialog, scriptRoles } from '@/components/workspaces/Proje
 import type { ProjectScript } from '@/api/workspaces';
 import { AgentText } from '@/components/common/AgentText';
 import { ProjectLaunchDefaults } from './ProjectLaunchDefaults';
+import { ProjectCodeSource } from './ProjectCodeSource';
+import { useExperimental } from '@/hooks/useExperimental';
 
 interface ProjectDetailPaneProps {
   /** Never '' — Inbox has no registry row. */
@@ -62,6 +64,7 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
   const confirm = useConfirm();
   const tasksStore = useTasksContextSafe();
   const { name: entryName, row } = useProjectEntry(project);
+  const projectFirst = useExperimental('project_first_start');
 
   const displayName = row?.name ?? detailName;
   // API calls keep `displayName`.
@@ -280,6 +283,9 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
           </div>
         )}
       </div>
+
+      {/* Where a new task gets its code (experiment project_first_start). */}
+      {projectFirst && <ProjectCodeSource project={entryName} metadata={metadata} row={row} onSaved={setMetadata} />}
 
       {/* Project scripts (src/core/workspaces/scripts.ts): the saved list here, the
           editor (with the repository's walnut.json beside it) in a dialog. */}

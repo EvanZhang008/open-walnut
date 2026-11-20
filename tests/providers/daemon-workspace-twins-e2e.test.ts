@@ -168,6 +168,10 @@ describe('task workspaces in both daemon twins', () => {
       expect(await rpc({ cmd: 'workspace.runScript', provider: 'git-worktree', jobId: 'job-script-2', root: repo, command: 'true' })).toMatchObject({ ok: false, code: 'forbidden_path' })
       const status = await rpc({ cmd: 'workspace.status', provider: 'git-worktree', root: res.root, repos: res.repos, branch: res.branch, sourceRepo: res.sourceRepo, baseRef: res.baseRef })
       expect(status.probe).toMatchObject({ clean: true, merged: true })
+      // ── a kept workspace's re-check (workspace-recheck-v1): this repository has no remote, so nothing to fetch ──
+      expect(hello.capabilities).toContain('workspace-recheck-v1')
+      const rechecked = await rpc({ cmd: 'workspace.status', provider: 'git-worktree', root: res.root, repos: res.repos, branch: res.branch, sourceRepo: res.sourceRepo, baseRef: res.baseRef, recheck: true })
+      expect(rechecked.probe).toMatchObject({ clean: true, merged: true, rechecked: true })
       fs.writeFileSync(path.join(res.root, 'dirty.txt'), 'x')
       const kept = await rpc({ cmd: 'workspace.remove', provider: 'git-worktree', jobId: 'job-git-rm1', root: res.root, repos: res.repos, branch: res.branch, sourceRepo: res.sourceRepo, baseRef: res.baseRef, anchor: repo, deleteBranch: 'if-merged', requireMerged: true })
       expect(kept.ok).toBe(true)

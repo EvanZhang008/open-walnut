@@ -9,6 +9,9 @@
  *        as the web launcher's suggestions).
  *   POST /sessions { cwd, host?, message?, taskId?, model?, mode? }
  *        → 201 { sessionId, taskId, title }
+ *   POST /sessions { fromProject: true, project, host?, workspaceInputs?, message?, ... }
+ *        → 201 { taskId, title, preparing: true }: a start from the project's code source
+ *        (core/sessions/mobile-project-launch.ts); the session starts once its workspace is ready.
  *   POST /sessions { walnutAgent: true, agentId?, message?, taskId?, model? }
  *        → the phone's New chat: an ASK, the same task the web draft's Ask
  *        tab creates (core/sessions/ask-launch-plan.ts). No cwd (the server

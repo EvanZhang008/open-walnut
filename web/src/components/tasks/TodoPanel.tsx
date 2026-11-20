@@ -170,6 +170,7 @@ import { useVerticalSplitter } from '@/hooks/useVerticalSplitter';
 import { useFoldAnchor } from '@/hooks/useFoldAnchor';
 import { useResizableHeight } from '@/hooks/useResizableHeight';
 import { ProjectDetailPane } from './ProjectDetailPane';
+import { onOpenProjectSettings } from '@/utils/project-settings-open';
 import { SortableTierCard, TierDropZone, GroupChip } from './FocusSatelliteCards';
 import { useFolderContextMenu } from './FolderContextMenu';
 import { PROJECT_SORT_OPTIONS, useProjectContextMenu } from './ProjectContextMenu';
@@ -6948,6 +6949,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     setDetailTarget({ type: 'project', project });
     onClearFocus?.();
   }, [onClearFocus]);
+  // "Set up source…" in a draft's project picker opens this pane (utils/project-settings-open.ts).
+  useEffect(() => onOpenProjectSettings(showProjectDetail), [showProjectDetail]);
 
   const handleUpdateTitle = useLeanCallback((id: string, title: string) => {
     if (onUpdate) onUpdate(id, { title });

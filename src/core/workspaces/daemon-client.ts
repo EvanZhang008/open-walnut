@@ -20,6 +20,8 @@ export const WORKSPACE_CAPABILITY = 'workspace-v1'
 /** Project scripts: `workspace.scriptsFile` and `workspace.runScript` (scripts.ts). */
 export const WORKSPACE_SCRIPTS_CAPABILITY = 'workspace-scripts-v1'
 const SCRIPT_COMMANDS = new Set(['workspace.scriptsFile', 'workspace.runScript'])
+/** A kept workspace's re-check: `recheck: true` on workspace.status / .remove (merge-recheck.ts). */
+export const WORKSPACE_RECHECK_CAPABILITY = 'workspace-recheck-v1'
 const DIAL_MS = 20_000
 const CONFIGURE_MS = 30_000
 
@@ -101,6 +103,10 @@ export async function workspaceRpc(host: string, cmd: string, params: Record<str
   const conn = await connect(host)
   if (SCRIPT_COMMANDS.has(cmd) && !conn.hasCapability(WORKSPACE_SCRIPTS_CAPABILITY)) {
     throw new WorkspaceError(`The Walnut daemon on ${hostLabel(host)} needs an update before it can run project scripts.`, 409, 'daemon-upgrade')
+  }
+  // An older daemon ignores `recheck` and would answer by ancestry alone: never send it there.
+  if (params.recheck === true && !conn.hasCapability(WORKSPACE_RECHECK_CAPABILITY)) {
+    throw new WorkspaceError(`The Walnut daemon on ${hostLabel(host)} needs an update before it can check again whether a kept workspace was merged.`, 409, 'daemon-upgrade')
   }
   const provider = typeof params.provider === 'string' ? params.provider : undefined
   // detect needs the allowlist whenever plugins exist; other commands only for a plugin provider.

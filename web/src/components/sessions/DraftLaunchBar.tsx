@@ -53,6 +53,11 @@
  *   the model + engine stay in the composer's controls row, where a real
  *   session's mode and model pills sit.
  *
+ * With the experiment `project_first_start` (owner passes onProjectStart), a "Project" pill
+ * leads row 2 (DraftProjectStartPill) and replaces the trailing project chip; once a project
+ * with a code source is picked, the host pill and the source chip take the folder pill's place,
+ * its value chips (DraftProjectSourceRow) the isolated-workspace row's, and the quick folders go.
+ *
  * The pills keep their original class names AND the `.draft-composer-bar`
  * container marker: that pair is the documented DOM hook the browser specs use to
  * reach them, and moving the row must not force every spec to re-learn where it
@@ -85,6 +90,9 @@ import { DraftWorkspaceAutoChip, DraftWorkspaceRow } from '@/components/workspac
 import { DraftWorkspaceMenuItem } from '@/components/workspaces/DraftWorkspaceMenuItem';
 import { draftProjectChip, draftProjectIsNew, draftProjectProvenance } from './draft-project-chip';
 import { SyncChoiceChip } from '@/components/tasks/SyncChoice';
+import { DraftProjectStartPill, DraftSourceChip, DraftStartHostPill, useDraftProjectStart, type DraftRowUpdate } from './DraftProjectStartPill';
+import { DraftProjectSourceRow } from './DraftProjectSourceRow';
+import { projectStartEligible } from './draft-project-start';
 
 /** `host::cwd`: one directory's identity (same as draft-column's dirKey). */
 function chipKey(d: { cwd: string; host: string | null }): string {
@@ -128,6 +136,9 @@ interface Props {
   onClearFolder?: (draftId: string) => void;
   /** false: the host's launch makes no isolated workspace (the browser extension), so none is offered. */
   workspaces?: boolean;
+  /** A write on the draft row. Present: the draft may start from a project (experiment
+   *  `project_first_start`, draft-project-start.ts); absent: today's row only. */
+  onProjectStart?: DraftRowUpdate;
 }
 
 /** The chip label: the folder's name, the host's home as `~` (utils/home-folder.ts). */
@@ -138,7 +149,7 @@ function chipName(d: { cwd: string; host?: string | null }): string {
 export function DraftLaunchBar({
   draft, pickerOpen, onOpenPicker, onClosePicker,
   onPathChange, onProjectChange, isKnownProject, onBoundProjectMove, onAfterQuickPick,
-  onTaskFieldChange, onReturnFieldToWalnut, composerText, getComposer, openMenuNonce, emptyFolder, alwaysProject, onClearFolder, workspaces = true,
+  onTaskFieldChange, onReturnFieldToWalnut, composerText, getComposer, openMenuNonce, emptyFolder, alwaysProject, onClearFolder, workspaces = true, onProjectStart,
 }: Props) {
   // Anchor for the folder picker's POPOUT: the panel portals to <body> (so the
   // column can't clip it and siblings can't paint over it) but opens FROM this
@@ -214,23 +225,32 @@ export function DraftLaunchBar({
   // client sends, so its More edits the task fields but offers no project.
   const isRepair = draft.intent === 'fix-walnut';
   const projectMenu = decisionsOn && !isRepair;
+  // Project first (experiment): 'off' keeps today's row exactly; 'pick' leads with the Project
+  // pill; 'source' (a project with a code source) has no folder pill, a host pill and value chips.
+  const ps = useDraftProjectStart(draft, projectStartEligible(draft) && !emptyFolder && workspaces, onProjectStart);
+  const projectFirst = ps.mode !== 'off';
+  const fromSource = ps.mode === 'source';
   const projectChip = draftProjectChip(draft, { isKnownProject, hasMenu: projectMenu, always: alwaysProject });
+  // While project-first may apply (also after "Choose a folder instead"), a project pick goes
+  // through it: one with a code source puts the draft back on it.
   const pickProject = useCallback((project: string) => {
     if (draft.taskId) onBoundProjectMove?.(project);
+    else if (ps.canPick) ps.pick(project);
     else onProjectChange(draft.id, project);
-  }, [draft.taskId, draft.id, onBoundProjectMove, onProjectChange]);
+  }, [draft.taskId, draft.id, onBoundProjectMove, onProjectChange, ps.canPick, ps.pick]);
   const menuProject = projectMenu && !isWalnut ? {
     value: draft.project ?? '',
     isNew: draftProjectIsNew(draft, isKnownProject),
     why: draftProjectProvenance(draft, isKnownProject),
-    onPick: (project: string) => onProjectChange(draft.id, project),
+    // While the project comes first, More's project row is the same pick as the Project pill.
+    onPick: (project: string) => (ps.canPick ? ps.pick(project) : onProjectChange(draft.id, project)),
   } : undefined;
   // No quick chips on a fork draft: the folder is immutable, so a row of other
   // folders would be five inert buttons (or worse, five ways to break the fork).
   // Same for Ask Walnut.
   const chipDot = useQuickChipHostDots();
   // A host that is off (a test server) never runs a session: its chips would only be refused.
-  const chips = (isFork || isWalnut ? [] : quickDirsFor({ cwd: draft.cwd, host: draft.host ?? null, hostLabel: draft.hostLabel }))
+  const chips = (isFork || isWalnut || fromSource ? [] : quickDirsFor({ cwd: draft.cwd, host: draft.host ?? null, hostLabel: draft.hostLabel }))
     .filter((d) => !d.host || chipDot(d.host)?.kind !== 'off');
   const currentKey = chipKey({ cwd: draft.cwd, host: draft.host ?? null });
   const chipHostLabel = useQuickChipHostLabels(chips);
@@ -314,18 +334,27 @@ export function DraftLaunchBar({
       {/* The "Isolated workspace" body, right above the folder it isolates: nothing
           while off (the switch is in More), so a folder pick never grows the bar.
           A bound draft has no More: its inline toggle shows from the first paint. */}
-      {!isWalnut && !isFork && workspaces && <DraftWorkspaceRow draftId={draft.id} cwd={draft.cwd} host={draft.host ?? null} boundTaskId={draft.taskId} project={draft.project} />}
+      {fromSource && <DraftProjectSourceRow draft={draft} source={ps.source} onUpdate={onProjectStart!} />}
+      {!isWalnut && !isFork && workspaces && !fromSource && <DraftWorkspaceRow draftId={draft.id} cwd={draft.cwd} host={draft.host ?? null} boundTaskId={draft.taskId} project={draft.project} />}
 
       {!isWalnut && (
         <div className="draft-launch-pills draft-composer-bar">
-          <DraftFolderPill
+          {projectFirst && (
+            <DraftProjectStartPill draft={draft} project={ps.project} onPick={ps.pick} onUpdate={onProjectStart!} onOpenFolderPicker={onOpenPicker} />
+          )}
+          {fromSource ? (
+            <>
+              <DraftStartHostPill draft={draft} onUpdate={onProjectStart!} />
+              <DraftSourceChip source={ps.source} />
+            </>
+          ) : <DraftFolderPill
             draft={draft}
             pillRef={cwdPillRef}
             pickerOpen={pickerOpen}
             ai={isAi('cwd')}
             onOpenPicker={onOpenPicker}
             {...(emptyFolder ? { emptyFolder } : {})}
-          />
+          />}
           {emptyFolder && onClearFolder && draft.cwd && !isFork && (
             <button
               type="button"
@@ -336,9 +365,9 @@ export function DraftLaunchBar({
               onClick={() => { onClearFolder(draft.id); onAfterQuickPick?.(); }}
             >&times;</button>
           )}
-          {!isFork && workspaces && draft.cwd && <DraftWorkspaceAutoChip draftId={draft.id} />}
+          {!isFork && workspaces && draft.cwd && !fromSource && <DraftWorkspaceAutoChip draftId={draft.id} />}
           <DraftPillsBreak />
-          {projectChip && (
+          {projectChip && !projectFirst && (
             <DraftProjectChip
               chip={projectChip}
               menu={projectMenu ? menu : undefined}
@@ -376,7 +405,7 @@ export function DraftLaunchBar({
           focusNonce={menu.mode === 'keyboard' ? menu.focusNonce : 0}
           focusTarget={menu.anchor?.classList.contains('draft-project-chip') ? 'project' : 'tier'}
           project={menuProject}
-          workspace={!isWalnut && !isFork && workspaces
+          workspace={!isWalnut && !isFork && workspaces && !fromSource
             ? <DraftWorkspaceMenuItem draftId={draft.id} hasFolder={!!draft.cwd} onDone={() => menu.close('select')} />
             : undefined}
         />

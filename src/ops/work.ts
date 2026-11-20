@@ -669,6 +669,7 @@ defineOp({
     '(name@marketplace) the project\'s Claude Code sessions start without, so their skills, agents and ' +
     'MCP servers stay out of each request; the user\'s own plugin settings are not changed. ' +
     'isolated_workspace says whether the project\'s code tasks start in an isolated workspace by default (on, off, or null to follow the global setting). ' +
+    'workspace_source says where a new task of the project gets its code: a workspace provider, the folder it is made from, and its default inputs. ' +
     'Do not use project rename or merge for settings.',
   input: {
     name: z.string().min(1).describe('Project name; Inbox has no metadata row'),
@@ -678,6 +679,11 @@ defineOp({
     default_model: z.string().nullable().optional().describe('Default model id of default_engine; needs default_engine; null clears it'),
     default_mode: z.enum(SESSION_MODE_IDS).nullable().optional().describe('Default permission mode for new tasks; null clears it'),
     isolated_workspace: z.enum(['on', 'off']).nullable().optional().describe('on: a new task of this project whose folder is a repository starts in its own isolated workspace (a git worktree, or a workspace plugin\'s); off: in the folder itself; null follows the global setting (Settings > Experimental)'),
+    workspace_source: z.object({
+      provider: z.string().min(1).describe('A workspace provider id (workspace_providers lists them), or "auto" for the one that claims the folder'),
+      anchor: z.string().optional().describe('Absolute folder on the project\'s host the workspace is made from; absent uses default_cwd'),
+      inputs: z.record(z.string(), z.unknown()).optional().describe('The provider\'s input values used by default (an array field holds the favourites)'),
+    }).strict().nullable().optional().describe('Where a new task of this project gets its code; null clears it'),
     claude_plugins_off: z.array(z.string().min(1).max(CLAUDE_PLUGIN_ID_MAX_CHARS).regex(/^\s*[^\s@]+@[^\s@]+\s*$/))
       .max(CLAUDE_PLUGINS_OFF_MAX_ITEMS).nullable().optional()
       .describe('Claude Code plugin ids (name@marketplace) this project\'s Claude Code sessions leave out; [] or null clears it'),
@@ -685,7 +691,7 @@ defineOp({
   handler: async (args, call) => {
     const { name, ...body } = args;
     if (Object.values(body).every((v) => v === undefined)) {
-      throw new Error('project_metadata_update needs one of default_cwd, default_host, default_engine, default_model, default_mode, isolated_workspace, claude_plugins_off');
+      throw new Error('project_metadata_update needs one of default_cwd, default_host, default_engine, default_model, default_mode, isolated_workspace, workspace_source, claude_plugins_off');
     }
     return call('PUT', `/projects/${encodeURIComponent(String(name))}/metadata`, body);
   },

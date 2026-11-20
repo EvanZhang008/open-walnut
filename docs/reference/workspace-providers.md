@@ -40,6 +40,22 @@ In a new draft, the option is then on as one **chip** beside the folder pill ("�
 
 Setup and teardown scripts run for a default workspace exactly as for a picked one.
 
+## Starting from a project
+
+A project can say where its code comes from, so a new task is started by picking the project instead of a folder. Its settings hold a **Code source** (`workspace_source` in the project's metadata):
+
+- `provider`: the workspace provider (`git-worktree`, a plugin provider's id, or `auto` for the one that claims the folder);
+- `anchor`: the folder on the project's host the workspace is made from (a git checkout, or the folder a plugin's marker claims). Absent: the project's default folder;
+- `inputs`: the provider's field values used by default. A list field (packages, say) holds the project's favourites, ticked on every start.
+
+The project's **default host** is where the workspace is made. A project with no code source, but a default folder and **Isolated workspace** turned on, reads as `auto` from that folder; nothing is rewritten.
+
+With **Settings › Experimental › Start new tasks from a project** on, the draft and the phone lead with a Project pick. Picking a project with a source shows its host (changeable for this start) and, for list fields, the values as chips: the favourites ticked, and suggestions from the values used before, most used first. Start files the task at once ("Preparing workspace…") and its session starts inside the new workspace, exactly as when you pick a folder and turn on Isolated workspace. Each start counts the list values its workspace really used: only the list fields the provider's own fields name (for `auto`, the provider that claimed the folder; none when this machine does not know it), at most 16 fields, 200 values a field and 200 characters a value. Projects without a source, and the Inbox, keep the folder picker.
+
+An agent's `task_create` (or `task_start` of a task that never ran) in such a project, with no folder named and none recorded on the task, starts from the project's source too while the experiment is on, whatever the project's **Isolated workspace** setting says (a code source means "start from it"); `workspace: false` still works in the folder itself, and a start that names another host than the project's runs there as before, without the source.
+
+How a client starts one: `POST /api/sessions/quick-start` or `POST /api/v1/sessions` with `fromProject: true`, `project`, and optionally `host` (absent or `""`: the project's own host; `"__local__"`: this machine) and `workspaceInputs` (each field replaces the source's own). A start from a project's source always makes a workspace from it, whatever the project's **Isolated workspace** setting says; only an `auto` source whose folder no provider claims starts in that folder as a plain start (the answer then carries a `sessionId`, not `preparing`). A project with no source answers `400` with code `no-project-source`. Each project row of the project lists carries `start_source` (`null` when it has none), read from this machine's provider list only, so a list never waits on a host. Full shapes: `docs/reference/api-v1.md`.
+
 ## The built-in git worktree
 
 - The worktree lives in a folder Walnut owns on that host, never inside the repository: `~/.open-walnut-worktrees/<repo>/<task-name>`. The daemon reads `WALNUT_WORKTREES_ROOT` to put it elsewhere.
@@ -101,7 +117,7 @@ A plugin workspace is checked harder, because its provider deletes the whole fol
 
 | When | Clean, all work merged or pushed | Unmerged commits | Uncommitted or unreadable |
 |---|---|---|---|
-| Task completed | removed (branch deleted) | kept, the task says why | kept, the task says why |
+| Task completed | removed (branch deleted) | kept, the task says why; re-checked every 6 h for 14 days after a fetch, removed once merged, by exact content too (below; such a branch is kept) | kept, the task says why |
 | Task deleted | removed (branch deleted) | kept, a notification says where | kept, a notification says where |
 | Remove workspace… (by hand) | removed after a confirm | git worktree: folder removed, **branch kept**; plugin: refused | refused |
 
@@ -111,7 +127,25 @@ Only the Walnut that made a workspace resumes, launches, cleans up or removes it
 
 The confirm dialog of **Remove workspace…** says exactly what goes and what stays, for example "Deletes the worktree folder …" and "Keeps branch walnut/…: it has commits that are not merged or pushed anywhere". After the confirm, the request returns at once. The host probes again before it deletes anything and refuses when something changed. The task's Workspace row then shows why it was not removed.
 
-A removal deletes a branch only when it is a `walnut/` branch, no worktree has it checked out, and its commits are in another ref. A branch name on the task row is never trusted further than that.
+A removal deletes a branch only when it is a `walnut/` branch, no worktree has it checked out, and its commits are in another ref. A branch a re-check found merged only by content (its changes are on the upstream under other hashes) is kept: the removal takes the worktree folder only, and the task row records `branch_kept` with `branch_kept_reason`, so the original commits and the branch's reflog stay. A branch name on the task row is never trusted further than that.
+
+### Kept for unmerged commits: checked again
+
+A code review usually merges a task's commits days after the task completed, often rebased to new hashes. So a workspace the completion cleanup kept **only** because its commits are not merged or pushed yet (clean, nothing stashed, no lost HEAD, no repository nobody listed) is checked again (`src/core/workspaces/merge-recheck.ts`):
+
+- every 6 hours, for 14 days after it was kept. The row records `kept_at` and `merge_recheck` (`next_at`, `last`), so a restart picks the clock up; a sweep every 15 minutes acts only on the ones due;
+- each check first runs a **background `git fetch`** on the workspace's host: for a git worktree, the remote of its base branch's upstream **in your own source checkout** (it moves that checkout's remote-tracking refs, never a branch or the working tree); for a plugin workspace, every remote of every repository (four at a time). No tags, no automatic gc, 90 seconds each, and it never asks you anything: no terminal prompt, no askpass program (`GIT_ASKPASS` empty, `SSH_ASKPASS` unset, `SSH_ASKPASS_REQUIRE=never`), no credential helper prompt, and ssh runs with `-o BatchMode=yes` unless you set your own `GIT_SSH_COMMAND` or `core.sshCommand`. A fetch that needs a password or a passphrase fails instead, and the workspace stays kept. An ssh agent that asks you to confirm every use of a key (a hardware key, a password manager's agent) is not stopped by batch mode, so it may ask every 6 hours: turn the re-check off then (below);
+- then it probes as usual, and also counts a commit as merged when `git cherry <upstream> <branch>` marks it `-` **and** its exact patch (`git patch-id --verbatim`, whitespace included, binary content included) is the patch of a commit the upstream gained since they parted. `git cherry` ignores whitespace, so a local commit that differs from the upstream's only in indentation stays unmerged. For a git worktree the upstream is the base branch or its upstream; for a plugin repository, each local branch's remote upstream (a branch with no upstream never counts). A merge commit in the range never counts by content, since cherry skips it and its conflict resolution would be lost; a commit with no patch, or a range too large to read, never counts either;
+- merged now: the normal removal from `kept`, and the daemon's own probe before it deletes fetches and judges the same way (`recheck: true` on `workspace.status` and `workspace.remove`, daemon capability `workspace-recheck-v1`). A git worktree merged by ancestry loses its branch as before; one merged only by content keeps its branch (above).
+
+Everything else leaves it kept. A host Walnut cannot reach, a daemon without the capability (the check is skipped, never run by ancestry alone), a fetch that fails (that repository is judged by what is there, never by content), a check that did not finish (a plugin provider's listing that failed, a folder scan cut short, a repository git could not read), a session or script still at work in it, or a task reopened meanwhile: kept, checked again later. New work in it (an uncommitted change, a stash, a lost HEAD, a repository nobody listed): kept as any other, no more checks. After 14 days the kept reason ends with "Walnut stopped checking it again 14 days after it was kept" and what the last check found. A removal by hand works as before at any time. Only the Walnut that made the workspace checks it, never an ephemeral server.
+
+Known limits:
+
+- **Squash merges are not recognized.** A review that squashes several commits into one leaves no commit with any of their patches, so the workspace stays kept, and the re-check stops after 14 days. Remove it by hand once you see it merged.
+- **Workspaces kept before the re-check existed are not checked.** Their rows have no `merge_recheck`; completing the task again (reopen, then complete) puts one on.
+
+**Turning it off.** `workspaces: { merge_recheck: false }` in the config (`PUT /api/config` with that section, or `config.yaml`) stops every background fetch and check. Workspaces kept from then on say only why they were kept; ones already kept are left as they are and checked again if you turn it back on within their 14 days. Default: on, since it only ever removes what the exact check proves merged.
 
 ## Writing a plugin provider
 

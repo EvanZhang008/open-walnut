@@ -22,6 +22,8 @@ import { __settleCompletionCheck, onTaskCompleted, onTaskDeleted, onTaskSessionS
 import { deferTaskStart, workspaceLaunchPlan, workspaceStartPlace } from '../../src/core/workspaces/launch.js'
 import { recordedCwd } from '../../src/core/sessions/task-start.js'
 import { workspaceEventAction } from '../../src/core/workspaces/watch.js'
+import { WorkspaceError, workspaceRpc, __setWorkspaceConnectionForTesting } from '../../src/core/workspaces/daemon-client.js'
+import { MERGE_RECHECK_EVERY_MS, MERGE_RECHECK_FOR_MS, recheckKeptWorkspace, sweepMergeRechecks } from '../../src/core/workspaces/merge-recheck.js'
 import { __setDefaultWorkspaceDepsForTesting } from '../../src/core/workspaces/default-isolation.js'
 
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-ws-server-')))
@@ -170,10 +172,24 @@ interface Fake {
   createReply?: Record<string, unknown>
   /** Runs while the host probes (a reopen racing the completion cleanup). */
   duringProbe?: () => void
+  /** What the daemon's own probe before a removal finds (default: `probe`). */
+  removeProbe?: WorkspaceProbeSummary
+  /** The clock (managerDeps().now). */
+  clock: number
+  /** The host's daemon has no 'workspace-recheck-v1' (workspaceRpc refuses `recheck`). */
+  oldDaemon?: boolean
+  /** A daemon that ignores `recheck` without saying so (no `rechecked` echo). */
+  ignoresRecheck?: boolean
+  /** The host cannot be reached. */
+  offline?: boolean
+  /** `workspaces.merge_recheck: false` in the config. */
+  recheckOff?: boolean
+  /** What the daemon's removal answers when it is done (default: removed, branch kept by hand). */
+  removeResult?: Record<string, unknown>
 }
 
 function fake(): Fake {
-  const f: Fake = { tasks: new Map(), calls: [], jobs: new Map(), launched: [], inFolder: [], notes: [], probe: probe({}), busy: false, live: false }
+  const f: Fake = { tasks: new Map(), calls: [], jobs: new Map(), launched: [], inFolder: [], notes: [], probe: probe({}), busy: false, live: false, clock: 1_700_000_000_000 }
   current = f
   let n = 0
   __setWorkspacePluginSourceForTesting(async () => [])
@@ -190,6 +206,8 @@ function fake(): Fake {
     },
     rpc: async (_host, cmd, params) => {
       f.calls.push({ cmd, params })
+      if (f.offline) throw new WorkspaceError('Walnut is not connected to devbox right now', 503, 'host-offline')
+      if (params.recheck === true && f.oldDaemon) throw new WorkspaceError('The Walnut daemon on devbox needs an update', 409, 'daemon-upgrade')
       if (cmd === 'workspace.create') {
         if (f.createReply) return f.createReply
         // Like the daemon: a job id it already knows answers with that job, it does not start over.
@@ -201,13 +219,14 @@ function fake(): Fake {
       if (cmd === 'workspace.job') return { ok: true, job: f.jobs.has(String(params.jobId)) ? f.jobs.get(String(params.jobId)) : null }
       if (cmd === 'workspace.status') {
         f.duringProbe?.()
-        return { ok: true, probe: f.probe }
+        return { ok: true, probe: { ...f.probe, ...(params.recheck === true && !f.ignoresRecheck ? { rechecked: true } : {}) } }
       }
       if (cmd === 'workspace.remove') {
         // Like the daemon: it probes again and refuses what would lose work.
-        const job = !f.probe.clean ? { state: 'failed', error: `kept: ${f.probe.problems.join('; ')}`, code: 'not_clean' }
-          : params.requireMerged === true && !f.probe.merged ? { state: 'failed', error: `kept: ${f.probe.problems.join('; ')}`, code: 'not_merged' }
-            : { state: 'done', result: { removed: true, branchKept: params.requireMerged === false } }
+        const pr = f.removeProbe ?? f.probe
+        const job = !pr.clean ? { state: 'failed', error: `kept: ${pr.problems.join('; ')}`, code: 'not_clean' }
+          : params.requireMerged === true && !pr.merged ? { state: 'failed', error: `kept: ${pr.problems.join('; ')}`, code: 'not_merged' }
+            : { state: 'done', result: f.removeResult ?? { removed: true, branchKept: params.requireMerged === false } }
         f.jobs.set(String(params.jobId), job)
         return { ok: true, jobId: params.jobId, state: 'running' }
       }
@@ -232,7 +251,8 @@ function fake(): Fake {
     listTasks: async () => [...f.tasks.values()],
     walnutHome: async () => HOME_A,
     cloudMode: () => false,
-    now: () => 1_700_000_000_000,
+    mergeRecheckOn: async () => f.recheckOff !== true,
+    now: () => f.clock,
     sleep: async () => { await new Promise((r) => setImmediate(r)) },
     jobId: () => `job-${++n}`,
   })
@@ -627,5 +647,228 @@ describe('watch', () => {
     expect(workspaceEventAction({ name: 'task:updated', data: { task: withWs } })).toBeNull()
     expect(workspaceEventAction({ name: 'task:deleted', data: { id: 't1', task: withWs } })).toEqual({ action: 'delete', task: withWs })
     expect(workspaceEventAction({ name: 'task:phase-changed', data: { task: { id: 't2' }, oldPhase: 'TODO', newPhase: 'COMPLETE' } })).toBeNull()
+  })
+})
+
+describe('merge re-check of a workspace kept for unmerged commits', () => {
+  let f: Fake
+  beforeEach(() => { f = fake() })
+  const H = 60 * 60_000
+  const unmerged = () => probe({ merged: false, branchMerged: false, problems: ['repo: branch walnut/x has commits that are not merged or pushed anywhere'] })
+  const statusCalls = () => f.calls.filter((c) => c.cmd === 'workspace.status')
+  /** A completed task whose completion cleanup kept its workspace for unmerged commits only. */
+  async function keptUnmerged(id: string): Promise<TaskWorkspace> {
+    addTask(f, { id, phase: 'COMPLETE' as never, workspace: { ...gitWs } })
+    f.probe = unmerged()
+    await onTaskCompleted(id, { grace: false })
+    f.calls.length = 0
+    return f.tasks.get(id)!.workspace!
+  }
+
+  it('completion keeps it with the clock on the row; only an unmerged-only keep is checked again', async () => {
+    const ws = await keptUnmerged('m1')
+    expect(ws).toMatchObject({ state: 'kept', kept_at: new Date(f.clock).toISOString(), merge_recheck: { next_at: new Date(f.clock + MERGE_RECHECK_EVERY_MS).toISOString() } })
+    expect(ws.kept_reason).toMatch(/^repo: branch walnut\/x has commits that are not merged or pushed anywhere; Walnut checks again every 6 hours/)
+    addTask(f, { id: 'm2', phase: 'COMPLETE' as never, workspace: { ...gitWs } })
+    f.probe = probe({ clean: false, merged: false, problems: ['repo: 1 uncommitted change'] })
+    await onTaskCompleted('m2', { grace: false })
+    expect(f.tasks.get('m2')!.workspace).toMatchObject({ state: 'kept', kept_reason: 'repo: 1 uncommitted change' })
+    expect(f.tasks.get('m2')!.workspace!.merge_recheck).toBeUndefined()
+  })
+
+  it('a sweep acts only on due ones; still unmerged stays kept and moves its clock', async () => {
+    await keptUnmerged('m3')
+    expect(await sweepMergeRechecks()).toBe(0)
+    expect(statusCalls()).toHaveLength(0)
+    f.clock += 6 * H
+    expect(await sweepMergeRechecks()).toBe(1)
+    expect(statusCalls()[0].params).toMatchObject({ recheck: true, branch: 'walnut/x' })
+    expect(f.tasks.get('m3')!.workspace).toMatchObject({
+      state: 'kept', merge_recheck: { next_at: new Date(f.clock + 6 * H).toISOString(), last: 'its commits were still not merged' },
+    })
+    expect(f.calls.some((c) => c.cmd === 'workspace.remove')).toBe(false)
+  })
+
+  it('merged by now: removed through the normal removal, the host\'s own probe asked to re-check too', async () => {
+    await keptUnmerged('m4')
+    f.clock += 6 * H
+    f.probe = probe({ branchMerged: true })
+    expect(await recheckKeptWorkspace('m4')).toBe('removing')
+    await __settleWorkspaceDriver('m4')
+    expect(f.calls.find((c) => c.cmd === 'workspace.remove')!.params).toMatchObject({ recheck: true, requireMerged: true, deleteBranch: 'if-merged' })
+    const ws = f.tasks.get('m4')!.workspace!
+    expect(ws.state).toBe('removed')
+    expect(ws.merge_recheck).toBeUndefined()
+    expect(ws.kept_at).toBeUndefined()
+  })
+
+  it('the host\'s second probe refuses: kept again, still checked, its 14 days counted from the first keep', async () => {
+    const first = await keptUnmerged('m5')
+    f.clock += 6 * H
+    // The server's probe says merged; the daemon's own, a moment later, does not.
+    f.probe = probe({})
+    f.removeProbe = unmerged()
+    expect(await recheckKeptWorkspace('m5')).toBe('removing')
+    await __settleWorkspaceDriver('m5')
+    expect(f.tasks.get('m5')!.workspace).toMatchObject({ state: 'kept', kept_at: first.kept_at })
+    expect(f.tasks.get('m5')!.workspace!.merge_recheck).toBeDefined()
+  })
+
+  it('after 14 days it stops checking, and the kept reason says so and why', async () => {
+    await keptUnmerged('m6')
+    f.clock += 6 * H
+    await sweepMergeRechecks()
+    f.clock += MERGE_RECHECK_FOR_MS
+    f.calls.length = 0
+    expect(await recheckKeptWorkspace('m6')).toBe('stopped')
+    expect(statusCalls()).toHaveLength(0)
+    const ws = f.tasks.get('m6')!.workspace!
+    expect(ws.merge_recheck).toBeUndefined()
+    expect(ws.state).toBe('kept')
+    expect(ws.kept_reason).toMatch(/not merged or pushed anywhere; Walnut stopped checking it again 14 days after it was kept \(last check: its commits were still not merged\)$/)
+    f.clock += 7 * H
+    expect(await sweepMergeRechecks()).toBe(0)
+  })
+
+  it('a host offline, a daemon without the capability, or one that did not fetch: kept, checked again later', async () => {
+    await keptUnmerged('m7')
+    f.probe = probe({})
+    f.clock += 6 * H
+    f.offline = true
+    expect(await recheckKeptWorkspace('m7')).toBe('kept')
+    expect(f.tasks.get('m7')!.workspace!.merge_recheck!.last).toMatch(/^the host could not be checked \(Walnut is not connected/)
+    f.offline = false
+    f.oldDaemon = true
+    f.clock += 6 * H
+    expect(await recheckKeptWorkspace('m7')).toBe('kept')
+    expect(f.tasks.get('m7')!.workspace!.merge_recheck!.last).toBe("the host's Walnut daemon needs an update")
+    f.oldDaemon = false
+    f.ignoresRecheck = true
+    f.clock += 6 * H
+    expect(await recheckKeptWorkspace('m7')).toBe('kept')
+    expect(f.calls.some((c) => c.cmd === 'workspace.remove')).toBe(false)
+    expect(f.tasks.get('m7')!.workspace).toMatchObject({ state: 'kept', merge_recheck: { next_at: new Date(f.clock + 6 * H).toISOString() } })
+  })
+
+  it('a reopened task, a session still in it, another Walnut\'s workspace: never checked; a reopen mid-check wins', async () => {
+    await keptUnmerged('m8')
+    f.probe = probe({})
+    f.clock += 6 * H
+    f.tasks.set('m8', { ...f.tasks.get('m8')!, phase: 'IN_PROGRESS' as never })
+    expect(await sweepMergeRechecks()).toBe(0)
+    expect(statusCalls()).toHaveLength(0)
+    f.tasks.set('m8', { ...f.tasks.get('m8')!, phase: 'COMPLETE' as never })
+    f.live = true
+    expect(await recheckKeptWorkspace('m8')).toBe('kept')
+    expect(statusCalls()).toHaveLength(0)
+    expect(f.tasks.get('m8')!.workspace!.merge_recheck!.last).toMatch(/^its work still went on/)
+    f.live = false
+    addTask(f, { id: 'm9', phase: 'COMPLETE' as never, workspace: { ...f.tasks.get('m8')!.workspace!, home: HOME_B } })
+    expect(await recheckKeptWorkspace('m9')).toBe('skipped')
+    expect(statusCalls()).toHaveLength(0)
+    // Reopened while the host probes: the removal's locked write refuses.
+    f.clock += 6 * H
+    f.duringProbe = () => { f.tasks.set('m8', { ...f.tasks.get('m8')!, phase: 'TODO' as never }) }
+    expect(await recheckKeptWorkspace('m8')).toBe('skipped')
+    expect(f.tasks.get('m8')!.workspace!.state).toBe('kept')
+    expect(f.calls.some((c) => c.cmd === 'workspace.remove')).toBe(false)
+  })
+
+  it('new uncommitted work in it: kept as any other, no more checks', async () => {
+    await keptUnmerged('m10')
+    f.clock += 6 * H
+    f.probe = probe({ clean: false, merged: true, problems: ['repo: 2 uncommitted changes'] })
+    expect(await recheckKeptWorkspace('m10')).toBe('stopped')
+    expect(f.tasks.get('m10')!.workspace).toMatchObject({ state: 'kept', kept_reason: 'repo: 2 uncommitted changes' })
+    expect(f.tasks.get('m10')!.workspace!.merge_recheck).toBeUndefined()
+    expect(f.calls.some((c) => c.cmd === 'workspace.remove')).toBe(false)
+  })
+
+  it('a check that did not finish (a listing that failed, a repository git could not read): kept, checked again', async () => {
+    await keptUnmerged('m13')
+    f.clock += 6 * H
+    f.probe = probe({ clean: false, merged: false, blocked: true, problems: ['the provider could not list the repositories'] })
+    expect(await recheckKeptWorkspace('m13')).toBe('kept')
+    let ws = f.tasks.get('m13')!.workspace!
+    expect(ws.merge_recheck).toMatchObject({ next_at: new Date(f.clock + 6 * H).toISOString() })
+    expect(ws.merge_recheck!.last).toMatch(/^the check did not finish \(the provider could not list/)
+    expect(ws.kept_reason).toMatch(/not merged or pushed anywhere; Walnut checks again/)
+    f.clock += 6 * H
+    f.probe = probe({ clean: false, merged: false, problems: ['repo: could not be read (index.lock)'], repos: [
+      { path: '/w/x', dirty: false, changes: 0, unreadable: true, merged: null, exists: true },
+    ] })
+    expect(await recheckKeptWorkspace('m13')).toBe('kept')
+    ws = f.tasks.get('m13')!.workspace!
+    expect(ws.merge_recheck!.last).toMatch(/^the check did not finish/)
+    // Work of its own beside the unreadable one stops the checks as before.
+    f.clock += 6 * H
+    f.probe = probe({ clean: false, merged: false, blocked: true, problems: ['repo: has stashed changes'], repos: [
+      { path: '/w/x', dirty: false, changes: 0, unreadable: false, merged: false, exists: true, stashed: true },
+    ] })
+    expect(await recheckKeptWorkspace('m13')).toBe('stopped')
+    expect(f.tasks.get('m13')!.workspace!.merge_recheck).toBeUndefined()
+  })
+
+  it('the config switch off: nothing fetches or looks again, and a new keep does not promise a check', async () => {
+    await keptUnmerged('m14')
+    f.recheckOff = true
+    f.clock += 6 * H
+    expect(await sweepMergeRechecks()).toBe(0)
+    expect(await recheckKeptWorkspace('m14')).toBe('skipped')
+    expect(statusCalls()).toHaveLength(0)
+    // Left as it is: turned back on within its 14 days, it is checked again.
+    expect(f.tasks.get('m14')!.workspace!.merge_recheck).toBeDefined()
+    addTask(f, { id: 'm15', phase: 'COMPLETE' as never, workspace: { ...gitWs } })
+    f.probe = unmerged()
+    await onTaskCompleted('m15', { grace: false })
+    const ws = f.tasks.get('m15')!.workspace!
+    expect(ws).toMatchObject({ state: 'kept', kept_reason: 'repo: branch walnut/x has commits that are not merged or pushed anywhere' })
+    expect(ws.merge_recheck).toBeUndefined()
+    f.recheckOff = false
+    expect(await sweepMergeRechecks()).toBe(1)
+  })
+
+  it('a removal that keeps the branch records why', async () => {
+    await keptUnmerged('m16')
+    f.clock += 6 * H
+    f.probe = probe({ branchMerged: true, branchMergedByContent: true })
+    f.removeResult = { removed: true, branchDeleted: false, branchKept: true, branchKeptReason: 'its commits are on the upstream only as rebased copies, so the branch keeps the originals' }
+    expect(await recheckKeptWorkspace('m16')).toBe('removing')
+    await __settleWorkspaceDriver('m16')
+    expect(f.tasks.get('m16')!.workspace).toMatchObject({ state: 'removed', branch_kept: true, branch_kept_reason: expect.stringMatching(/rebased copies/) })
+  })
+
+  it('a restart: the row alone (written by an earlier run) is enough for the next sweep', async () => {
+    const keptAt = new Date(f.clock - 3 * 24 * H).toISOString()
+    addTask(f, { id: 'm11', phase: 'COMPLETE' as never, workspace: { ...gitWs, state: 'kept', kept_reason: 'x', kept_at: keptAt, merge_recheck: { next_at: new Date(f.clock - H).toISOString() } } })
+    // A kept row from before the re-check existed has no merge_recheck: left alone.
+    addTask(f, { id: 'm12', phase: 'COMPLETE' as never, workspace: { ...gitWs, state: 'kept', kept_reason: 'x' } })
+    f.probe = probe({})
+    expect(await sweepMergeRechecks()).toBe(1)
+    await __settleWorkspaceDriver('m11')
+    expect(f.tasks.get('m11')!.workspace!.state).toBe('removed')
+    expect(f.tasks.get('m12')!.workspace!.state).toBe('kept')
+    expect(statusCalls()).toHaveLength(1)
+  })
+})
+
+describe('the re-check needs a daemon that does it', () => {
+  afterEach(() => __setWorkspaceConnectionForTesting(null))
+  it('workspaceRpc never sends `recheck` to a daemon without workspace-recheck-v1', async () => {
+    const sent: Array<Record<string, unknown>> = []
+    const conn = (caps: string[]) => async () => ({
+      hasCapability: (c: string) => caps.includes(c),
+      send: async (_cmd: string, params: Record<string, unknown>) => { sent.push(params); return { ok: true, probe: {} } },
+    })
+    const params = { provider: 'git-worktree', root: '/w/x', recheck: true }
+    __setWorkspaceConnectionForTesting(conn(['workspace-v1']))
+    await expect(workspaceRpc('devbox', 'workspace.status', params, 1000)).rejects.toMatchObject({ code: 'daemon-upgrade' })
+    await expect(workspaceRpc('devbox', 'workspace.remove', params, 1000)).rejects.toMatchObject({ code: 'daemon-upgrade' })
+    // Without the option an older daemon answers as before.
+    await workspaceRpc('devbox', 'workspace.status', { provider: 'git-worktree', root: '/w/x' }, 1000)
+    expect(sent.map((p) => p.recheck)).toEqual([undefined])
+    __setWorkspaceConnectionForTesting(conn(['workspace-v1', 'workspace-recheck-v1']))
+    await workspaceRpc('devbox', 'workspace.status', params, 1000)
+    expect(sent[1]).toMatchObject({ recheck: true })
   })
 })

@@ -195,6 +195,19 @@ export interface DraftColumn {
    *  resumes in place; only the message and the model are the user's to pick.
    *  Mutually exclusive with `taskId` (a bound draft) by construction. */
   forkOf?: { sessionId: string; title?: string };
+  /** Start from a project (experiment `project_first_start`, draft-project-start.ts): true = the
+   *  Start makes a fresh workspace from the picked project's code source, with no folder; false =
+   *  the person chose a folder instead for this draft; absent = the project comes first. */
+  fromProject?: boolean;
+  /** This start's values of the source's array inputs, per field; a field left out takes the
+   *  project's favourites. */
+  fromProjectInputs?: Record<string, string[]>;
+  /** The folder this draft stood on before it started from a project's source (which puts the
+   *  source's folder and host on the row), given back when it leaves (settleProjectStart). */
+  fromProjectPrev?: { cwd: string; host: string | null; hostLabel?: string; cwdPinned?: boolean; createCwd?: boolean };
+  /** The person picked this start's host on the host pill: Start names it; absent, the server
+   *  uses the project's own host. */
+  fromProjectHostPicked?: boolean;
 }
 
 /** Undo what entering walnut mode wrote to `meta`, keeping what the user picked

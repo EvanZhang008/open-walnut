@@ -127,6 +127,12 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
+    id: 'project_first_start',
+    name: 'Start new tasks from a project',
+    description: 'A new task starts by picking a project instead of a folder. A project that knows where its code comes from (a git checkout, or a workspace plugin with its list of packages) and its host gives every new task a fresh isolated workspace from there, and removes it once the task is done and its work is merged. Projects without a code source, and the Inbox, keep the folder picker.',
+    default: false,
+  },
+  {
     id: 'notes_artifacts',
     name: 'Walnut artifacts in Notes',
     description: 'A "Walnut artifacts" section under the notes tree lists what Walnut\'s agents keep as standing knowledge: the org\'s skills, the shared notes, and each VP\'s and lead\'s MEMORY.md, team guidance, skills, notes and reflections. Click one to read it.',

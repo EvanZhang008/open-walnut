@@ -27,7 +27,7 @@ import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import { wsClient } from '@/api/ws';
 import { fetchWithRetry } from '@/utils/fetch-retry';
 import { runWhenVisible } from '@/utils/page-visibility';
-import { fetchProjects, type ProjectSummary } from '@/api/projects';
+import { fetchProjects, type ProjectSummary, type StartSource } from '@/api/projects';
 import type { SessionEngine, SessionMode } from '@open-walnut/core';
 
 /** One registry row, flattened to what the UI actually reads. */
@@ -44,6 +44,8 @@ export interface ProjectRegistryRow {
   defaultMode?: SessionMode;
   /** Its code tasks start in an isolated workspace ('on') or never do ('off'); absent follows the global setting. */
   isolatedWorkspace?: 'on' | 'off';
+  /** Where a new task of it gets its code (server: project-source.ts); absent: the folder flow. */
+  startSource?: StartSource;
 }
 
 /** A project's launch defaults, as the draft and the settings read them. */
@@ -60,6 +62,8 @@ export interface UseProjectRegistryReturn {
    * this from the loaded task list.
    */
   projectNames: string[];
+  /** The rows themselves, name-sorted (the start picker reads each one's start source). */
+  rows: readonly ProjectRegistryRow[];
   /** Case-insensitive membership test (project identity is NOCASE server-side). */
   isKnownProject: (name: string) => boolean;
   /** lowercased name → provider source ('local' | 'ms-todo' | 'jira' | …). Drives the one-letter badges. */
@@ -165,6 +169,7 @@ function toRows(projects: ProjectSummary[]): ProjectRegistryRow[] {
     ...(p.metadata?.default_engine && p.metadata.default_model ? { defaultModel: p.metadata.default_model } : {}),
     ...(p.metadata?.default_mode ? { defaultMode: p.metadata.default_mode } : {}),
     ...(p.metadata?.isolated_workspace === 'on' || p.metadata?.isolated_workspace === 'off' ? { isolatedWorkspace: p.metadata.isolated_workspace } : {}),
+    ...(p.start_source ? { startSource: p.start_source } : {}),
   })));
 }
 
@@ -177,7 +182,8 @@ function rowsEqual(a: readonly ProjectRegistryRow[], b: readonly ProjectRegistry
     if (x.name !== y.name || x.source !== y.source || x.favorite !== y.favorite
       || x.defaultCwd !== y.defaultCwd || x.defaultHost !== y.defaultHost
       || x.defaultEngine !== y.defaultEngine || x.defaultModel !== y.defaultModel || x.defaultMode !== y.defaultMode
-      || x.isolatedWorkspace !== y.isolatedWorkspace) return false;
+      || x.isolatedWorkspace !== y.isolatedWorkspace
+      || JSON.stringify(x.startSource) !== JSON.stringify(y.startSource)) return false;
   }
   return true;
 }
@@ -538,6 +544,7 @@ export function useProjectRegistry(): UseProjectRegistryReturn {
 
   return useMemo(() => ({
     projectNames: snap.projectNames,
+    rows: snap.rows,
     isKnownProject,
     sourceByName: snap.sourceByName,
     favoriteByName: snap.favoriteByName,

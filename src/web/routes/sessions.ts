@@ -51,6 +51,7 @@ import { sessionRunner } from '../../providers/claude-code-session.js'
 import { readAcpSessionHistoryState } from '../../providers/acp-session-history.js'
 import type { ImagePayload } from './images.js'
 import { quickStartSession, QuickStartError } from '../../core/sessions/quick-start.js'
+import { quickStartBodyFromProject } from '../../core/workspaces/project-source.js'
 import { routeSource, startRouteSource } from '../../core/sessions/send-sent-by.js'
 import { workspaceLaunchPlan } from '../../core/workspaces/launch.js'
 import {
@@ -355,6 +356,10 @@ function buildFixWalnutBrief(): string {
 sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: NextFunction) => {
   const requestTs = Date.now()
   try {
+    // A start from a project (`fromProject`): its source fills in cwd, host and workspace first.
+    const fromProject = await quickStartBodyFromProject(req.body as Record<string, unknown>)
+    if (fromProject && 'refuse' in fromProject) { res.status(fromProject.refuse.status).json(fromProject.refuse.body); return }
+    if (fromProject) req.body = fromProject.body
     const { cwd: rawCwdIn, host, message, model: rawModel, mode, effort: rawEffort, images, taskId: existingTaskId, taskMeta, project, projectFromFolder, intent, createCwd, engine, walnutAgent, agentId, overrideReadiness, ownTaskDir } = req.body as {
       cwd: string
       host?: string
@@ -850,13 +855,15 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         return
       }
       if (wsPlan?.begin) {
-        res.json(await wsPlan.begin(updatedTask, {
+        const answer = await wsPlan.begin(updatedTask, {
           message: sessionMessage, ...(messagePrefix ? { messagePrefix } : {}), ...(model ? { model } : {}), ...(launchMode ? { mode: launchMode } : {}),
           ...(launchEffort ? { effort: launchEffort } : {}),
           ...(effectiveEngine ? { engine: effectiveEngine } : {}), engine_decided: true, ...(preassignedSessionId ? { session_id: preassignedSessionId } : {}),
           source: startRouteSource('quick-start', req.headers), at: new Date(requestTs).toISOString(),
           ...(startedBySid ? { caller_sid: startedBySid } : {}),
-        }))
+        })
+        fromProject?.used(answer)
+        res.json(answer)
         return
       }
       // sessionId is present for native starts (see preassignedSessionId above).

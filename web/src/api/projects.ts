@@ -46,7 +46,42 @@ export interface ProjectMetadata {
    * entirely when the key is missing.
    */
   tracking_note?: string;
+  /** Where a new task of the project gets its code (src/core/workspaces/project-source.ts):
+   *  a workspace provider, the folder it is made from, and the provider's default inputs. */
+  workspace_source?: WorkspaceSource;
   [key: string]: unknown;
+}
+
+/** `metadata.workspace_source`: the provider, the folder (else default_cwd) and its default inputs. */
+export interface WorkspaceSource {
+  provider: string;
+  anchor?: string;
+  inputs?: Record<string, unknown>;
+}
+
+/** The subset of JSON Schema a workspace provider's fields use (src/core/workspaces/types.ts). */
+export interface StartSourceInputSchema {
+  type?: 'object';
+  properties?: Record<string, { type: 'string' | 'boolean' | 'array'; title?: string; description?: string; enum?: string[]; default?: unknown; placeholder?: string }>;
+  required?: string[];
+}
+
+/**
+ * What a start from the project uses, as the server reads it (project-source.ts startSourceOf):
+ * `provider` 'auto' is a legacy project (default folder + isolated workspace on), whose
+ * workspace is the provider that claims the folder.
+ */
+export interface StartSource {
+  provider: string;
+  provider_name?: string;
+  anchor: string;
+  /** '__local__' or a hosts key. */
+  host: string;
+  host_label?: string;
+  inputs: Record<string, unknown>;
+  /** Per array-of-string field: favourites first, then the values used before, by count. */
+  suggestions: Record<string, string[]>;
+  input_schema?: StartSourceInputSchema;
 }
 
 export interface ProjectSummary {
@@ -58,6 +93,8 @@ export interface ProjectSummary {
   /** Folded in from config.favorites.projects so the UI needs no second call. */
   favorite: boolean;
   counts: ProjectCounts;
+  /** Where a new task of it gets its code; null or absent (an older server): the folder flow. */
+  start_source?: StartSource | null;
 }
 
 export interface ProjectListResponse {
@@ -74,6 +111,7 @@ export interface ProjectDetail {
   /** MEMORY.md header for memory/projects/<project>/, or null. */
   memorySummary: string | null;
   counts: ProjectCounts;
+  start_source?: StartSource | null;
 }
 
 export function fetchProjects(): Promise<ProjectListResponse> {

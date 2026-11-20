@@ -27,6 +27,7 @@ import {
   START_RPC_MS,
 } from './manager.js'
 import { resumeScriptRuns, scriptRunning, teardownBeforeCleanup } from './scripts.js'
+import { keptOnlyUnmerged, keptPatch } from './merge-recheck.js'
 import { log } from '../../logging/index.js'
 
 /** The longest a deleted task's cleanup waits for a script running in its workspace (the scripts' own cap). */
@@ -74,7 +75,7 @@ async function workGoesOn(task: Task, ws: TaskWorkspace, before: 'teardown' | 'r
   if (Number.isFinite(since) && deps.now() - since >= GIVE_UP_AFTER_MS) {
     const root = ws.root
     await deps.write(task.id, (cur, row) => (cur && isLaunchReady(cur) && cur.root === root && row.phase === 'COMPLETE'
-      ? stamp(cur, { state: 'kept', kept_reason: `its work did not look over a day after the task completed: ${why}` })
+      ? stamp(cur, keptPatch(cur, `its work did not look over a day after the task completed: ${why}`, false))
       : null))
     log.web.info(`workspace kept: ${why}, a day after completion`, { taskId: task.id, root })
     return true
@@ -141,8 +142,9 @@ async function completionCheck(taskId: string, grace: boolean): Promise<void> {
   if (!task || task.phase !== 'COMPLETE' || !ws || !isLaunchReady(ws) || ws.root !== first.workspace.root) return
   // A kept (or reopened) task is never flipped to kept by a check it outlived.
   const root = ws.root
-  const keep = (reason: string) => deps.write(taskId, (cur, row) => (cur && isLaunchReady(cur) && cur.root === root && row.phase === 'COMPLETE'
-    ? stamp(cur, { state: 'kept', kept_reason: reason })
+  // Kept only for commits not merged yet: checked again later (merge-recheck.ts).
+  const keep = (reason: string, unmergedOnly = false) => deps.write(taskId, (cur, row) => (cur && isLaunchReady(cur) && cur.root === root && row.phase === 'COMPLETE'
+    ? stamp(cur, keptPatch(cur, reason, unmergedOnly))
     : null))
   let probe: WorkspaceProbeSummary
   try {
@@ -151,7 +153,7 @@ async function completionCheck(taskId: string, grace: boolean): Promise<void> {
     return void await keep(`it could not be checked (${errText(err)})`)
   }
   const decision = cleanupDecision(ws, probe, 'complete')
-  if (decision.action !== 'remove') return void await keep(decision.reason ?? 'it could not be checked')
+  if (decision.action !== 'remove') return void await keep(decision.reason ?? 'it could not be checked', keptOnlyUnmerged(probe) && await deps.mergeRecheckOn())
   if (await workGoesOn(task, ws, 'removal')) return
   const started = await beginRemoval(task, ws, 'complete', (row) => row.phase === 'COMPLETE')
   if (!started) log.web.info('workspace cleanup skipped: the task changed meanwhile', { taskId, root })

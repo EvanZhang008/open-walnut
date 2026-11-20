@@ -1101,7 +1101,9 @@ async function startInDefaultWorkspace(task: Task, params: SessionStartParams): 
     }
     const fresh = await getTask(task.id);
     if (notACodeTaskStart(fresh, params)) return null;
-    const made = await startInNewWorkspace(fresh, params, { provider: auto.provider, inputs: auto.inputs, byDefault: true }).catch((err) => {
+    // A project's code source names the folder the workspace is made from, and its host.
+    const at = auto.anchor ? { ...params, cwd: auto.anchor, host: auto.host === '__local__' ? '' : auto.host } : params;
+    const made = await startInNewWorkspace(fresh, at, { provider: auto.provider, inputs: auto.inputs, byDefault: true }).catch((err) => {
       // A default never blocks the start: it goes on in the folder, as before.
       log.session.warn('default workspace not made', { taskId: task.id, provider: auto.provider, error: err instanceof Error ? err.message : String(err) });
       return null;

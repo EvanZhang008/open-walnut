@@ -32,7 +32,7 @@ const MERGED = [
   'private_tasks', 'calendar', 'favorites', 'ordering', 'session_server', 'net', 'hosts_warmup',
   'hosts_found', 'first_run', 'health_monitor', 'external_session_import', 'session', 'triage', 'backup',
   'keep_awake', 'time', 'search', 'session_hooks', 'hooks', 'self_repair', 'updates', 'ui',
-  'pull_requests', 'audio', 'stt', 'jev', 'push', 'cloud_bridge', 'expose', 'cloud', 'sync',
+  'pull_requests', 'workspaces', 'audio', 'stt', 'jev', 'push', 'cloud_bridge', 'expose', 'cloud', 'sync',
 ]
 /** Maps of named entries: an entry is removed by leaving it out. */
 const REPLACED_MAPS = [

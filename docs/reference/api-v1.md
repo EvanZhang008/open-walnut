@@ -237,7 +237,7 @@ path on the companion".
 | POST | `/api/v1/routines/:id/toggle` | Enable/disable (cloud relays) |
 | POST | `/api/v1/routines/:id/run` | Run now, forced; `{ catchUpMs }` runs one of its missed runs (cloud relays) |
 | POST | `/api/v1/routines/:id/missed/dismiss` | `{ slotMs }`: set a missed run aside (cloud relays; added 2026-11-09) |
-| GET | `/api/v1/projects` | Project registry + counts + favorite flags + Inbox; each row's `lead` `{ id, title }` (added 2026-10-28) is its open org lead, when it has one |
+| GET | `/api/v1/projects` | Project registry + counts + favorite flags + Inbox; each row's `lead` `{ id, title }` (added 2026-10-28) is its open org lead, when it has one; each row's `start_source` (added 2026-11) says where a new task of it gets its code, or `null` (see Session launch) |
 | POST | `/api/v1/projects` | Idempotent create (201 new / 200 existing); `{ name, source?, user_words? }`: a session naming a service whose audience is `shared` passes `user_words` (the user's quoted ask), else `403 user_decision` |
 | PATCH | `/api/v1/projects/:name` | Rename, merge-on-collision (501 on REPLICA) |
 | DELETE | `/api/v1/projects/:name?remote=1` | Delete; ?remote=1 = provider cascade (501 on REPLICA) |
@@ -3520,6 +3520,35 @@ host's SSH daemon). Works on BOTH boxes:
     that predates ask launches answers `400 bad_request` "cwd is required", so
     offer this only when the `GET /api/v1/asks` answer carries `"launch": true`.
 
+- Start from a project (additive, 2026-11): `POST /api/v1/sessions` body
+  `{ "fromProject": true, "project", "host"?, "workspaceInputs"?, "message"?, "model"?, "mode"?, "effort"? }`,
+  with no `cwd` (one sent is ignored) → `201 { "taskId", "title", "preparing": true }`, no `sessionId`.
+  Both answers are possible: an `"auto"` source whose folder no provider claims (no git checkout,
+  no plugin marker there) makes no workspace and starts in that folder as a plain launch, answering
+  the usual `201 { "sessionId", "taskId", ... }` without `preparing`. A client handles both.
+  - The project's code source (`start_source` on its `GET /api/v1/projects` row) names the folder,
+    the host and the workspace provider. The task is filed at once and its session starts once
+    the workspace is ready, inside it; open it through `taskId` (its task row shows
+    "Preparing workspace…" meanwhile).
+  - `host`: overrides the project's host for this start (`"__local__"` = the primary box; `""`/absent
+    = the project's own host). An unknown or disabled alias is `409 host_removed`, as above.
+  - `workspaceInputs`: the provider's field values for this start (the packages ticked, say),
+    each field replacing the source's own. Checked against the provider's fields: `400 bad-inputs`.
+  - `preparing: false` with `workspaceError` (the provider's sentence) when the host refused to
+    make the workspace: the task exists and shows the error with Retry.
+  - `400 no-project-source`: the project has no code source (pick a folder instead);
+    `404 unknown-project`: no such project; `400 bad_request`: `fromProject` without `project`,
+    or `workspaceInputs` that is not an object. Nothing is written in either case.
+  - Servers before it answer `400 bad_request` "cwd is required": offer the project start only
+    when the project rows carry `start_source`.
+  - `start_source` on a project row: `{ "provider", "provider_name"?, "anchor", "host", "host_label"?,
+    "inputs", "suggestions", "input_schema"? }`. `provider` is a workspace provider id, or `"auto"`
+    (the one that claims the folder; no `provider_name` or `input_schema` then). `anchor` is the
+    folder it is made from, `host` `"__local__"` or a host alias, `inputs` the project's default
+    values (an array field holds its favourites, ticked on every start), `suggestions` per array
+    field: the favourites, then the values used before, most used first (at most 30).
+    `input_schema` is the provider's fields, in the shape the `workspace_providers` op lists them.
+
 ### Session control (additive, 2026-08) — model / effort / fork / model-options
 
 Semantics are identical to the web console's session controls: both surfaces
@@ -4351,7 +4380,7 @@ rejected, 4096-char cap.
   inverse of a redact-passthrough: only explicitly allowlisted fields ever
   appear (`user.name`, `defaults`, `provider.type/model/bedrock_region`,
   `agent` model fields, `hosts` as `{ label, enabled }` only, `session`
-  timeout/modes). Credentials, API keys, host connection details, and any
+  timeout/modes, `experimental` as `{ <flag id>: boolean }`, additive 2026-11-20). Credentials, API keys, host connection details, and any
   future secret-bearing field are structurally absent, not masked. Works on
   both boxes (`cloud: true` on a REPLICA). Read-only by design — config
   WRITE is desktop-only (Class D).

@@ -69,6 +69,8 @@ export interface WorkspaceManagerDeps {
   walnutHome(): Promise<string>
   /** A replica (the companion or a host replica): workspaces are made and removed by the Mac only. */
   cloudMode(): boolean
+  /** The background merge re-check is on (`workspaces.merge_recheck`, default true). */
+  mergeRecheckOn(): Promise<boolean>
   now(): number
   sleep(ms: number): Promise<void>
   jobId(): string
@@ -185,6 +187,10 @@ const realDeps: WorkspaceManagerDeps = {
     try { return await fs.promises.realpath(WALNUT_HOME) } catch { return path.resolve(WALNUT_HOME) }
   })()),
   cloudMode: () => role() === 'replica',
+  async mergeRecheckOn() {
+    const { getConfig } = await import('../config-manager.js')
+    return (await getConfig()).workspaces?.merge_recheck !== false
+  },
   now: () => Date.now(),
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   jobId: () => `ws-${Date.now().toString(36)}-${randomBytes(5).toString('hex')}`,
@@ -615,9 +621,16 @@ function summarize(raw: Record<string, unknown>): WorkspaceProbeSummary {
       path: r.path, ...(r.name ? { name: r.name } : {}), dirty: !!r.dirty, changes: Number(r.changes) || 0, unreadable: !!r.unreadable,
       merged: r.merged ?? null, exists: !!r.exists,
       ...(Array.isArray(r.ignored) ? { ignored: r.ignored.slice(0, 8).map(String), ignoredCount: Number(r.ignoredCount) || r.ignored.length } : {}),
+      ...(r.stashed === true ? { stashed: true } : {}),
+      ...(r.lostHead === true ? { lostHead: true } : {}),
     })),
     ...(typeof raw.branch === 'string' ? { branch: raw.branch } : {}),
     ...(raw.branchMerged !== undefined ? { branchMerged: raw.branchMerged as boolean | null } : {}),
+    ...(raw.branchMergedByContent === true ? { branchMergedByContent: true } : {}),
+    ...(Array.isArray(raw.unlisted) ? { unlisted: (raw.unlisted as unknown[]).slice(0, 20).map(String) } : {}),
+    ...(raw.blocked === true ? { blocked: true } : {}),
+    ...(raw.rechecked === true ? { rechecked: true } : {}),
+    ...(Array.isArray(raw.fetchFailed) ? { fetchFailed: (raw.fetchFailed as unknown[]).map(String) } : {}),
   }
 }
 
@@ -631,10 +644,13 @@ export function probeParams(ws: TaskWorkspace): Record<string, unknown> {
   }
 }
 
-/** Check every repository of the workspace on its host. */
-export async function probeWorkspace(ws: TaskWorkspace, timeoutMs = STATUS_RPC_MS): Promise<WorkspaceProbeSummary> {
+/**
+ * Check every repository of the workspace on its host. `recheck`: fetch first and count
+ * commits whose changes are on the upstream as merged (merge-recheck.ts only).
+ */
+export async function probeWorkspace(ws: TaskWorkspace, timeoutMs = STATUS_RPC_MS, opts: { recheck?: boolean } = {}): Promise<WorkspaceProbeSummary> {
   if (!ws.root) throw new WorkspaceError('This workspace has no folder yet.', 409, 'no-root')
-  const res = await deps.rpc(ws.host, 'workspace.status', probeParams(ws), timeoutMs)
+  const res = await deps.rpc(ws.host, 'workspace.status', { ...probeParams(ws), ...(opts.recheck ? { recheck: true } : {}) }, timeoutMs)
   if (!res.ok) throw new WorkspaceError(`Could not check the workspace: ${replyError(res, 'the host refused')}`, 502, 'probe-failed')
   return summarize(res.probe as Record<string, unknown>)
 }
@@ -668,13 +684,15 @@ export async function removalPreview(taskId: string): Promise<{ task: Task; prob
  * still COMPLETE", so a reopen in between wins).
  */
 export async function beginRemoval(task: Task, ws: TaskWorkspace, trigger: 'manual' | 'complete',
-  still?: (task: Readonly<Task>) => boolean): Promise<Task | null> {
+  still?: (task: Readonly<Task>) => boolean, opts: { recheck?: boolean } = {}): Promise<Task | null> {
   const jobId = deps.jobId()
   const from = ws.state === 'kept' ? 'kept' : 'ready'
   const { scriptRunning } = await import('./scripts.js')
+  // The host's own probe before it deletes judges the same way the re-check did (fetch, by content).
+  const removal: NonNullable<TaskWorkspace['removal']> = { trigger, from, ...(opts.recheck && trigger === 'complete' ? { recheck: true as const } : {}) }
   // A setup or teardown running in it holds the removal (its end runs the check again).
   const written = await deps.write(task.id, (cur, row) => (cur && isLaunchReady(cur) && cur.root === ws.root && !scriptRunning(cur) && (!still || still(row))
-    ? stamp(cur, { state: 'removing', job_id: jobId, removal: { trigger, from }, progress: 'Checking every repository', error: undefined })
+    ? stamp(cur, { state: 'removing', job_id: jobId, removal, progress: 'Checking every repository', error: undefined })
     : null))
   if (written) void drive(task.id)
   return written
@@ -708,17 +726,26 @@ async function runRemove(task: Task, ws: TaskWorkspace): Promise<void> {
   const settle = (patch: Partial<TaskWorkspace>) => deps.write(task.id, (cur) => (cur?.job_id === jobId && cur.state === 'removing'
     ? stamp(cur, { removal: undefined, progress: undefined, ...patch })
     : null))
+  const recheck = ws.removal?.recheck === true
   const refuse = async (error: string, code?: string) => {
-    log.web.info('workspace kept', { taskId: task.id, trigger, error, code })
+    log.web.info('workspace kept', { taskId: task.id, trigger, error, code, recheck })
     const kept = code === 'not_clean' || code === 'not_merged'
-    if (kept && trigger === 'complete') await settle({ state: 'kept', kept_reason: keptReason(error) })
-    else await settle({ state: from, error: kept ? `Not removed: ${keptReason(error)}` : `Could not remove it: ${error}` })
+    if (kept && trigger === 'complete') {
+      // Refused only for commits not merged yet: it is checked again later (merge-recheck.ts).
+      const { keptPatch } = await import('./merge-recheck.js')
+      const reason = keptReason(error)
+      const unmergedOnly = code === 'not_merged' && await deps.mergeRecheckOn()
+      await deps.write(task.id, (cur) => (cur?.job_id === jobId && cur.state === 'removing'
+        ? stamp(cur, { removal: undefined, progress: undefined, ...keptPatch(cur, reason, unmergedOnly, recheck) })
+        : null))
+    } else await settle({ state: from, error: kept ? `Not removed: ${keptReason(error)}` : `Could not remove it: ${error}` })
   }
   try {
     // A plugin workspace's unpushed work lives only in its folder: merged is required
     // for it even by hand. A git worktree removed by hand keeps its branch instead.
     const res = await deps.rpc(ws.host, 'workspace.remove', {
       ...probeParams(ws), jobId, deleteBranch: 'if-merged', requireMerged: trigger !== 'manual' || ws.provider !== GIT_WORKTREE_ID,
+      ...(recheck ? { recheck: true } : {}),
     }, START_RPC_MS)
     if (!res.ok) return void await refuse(replyError(res, 'the host refused'), typeof res.code === 'string' ? res.code : undefined)
   } catch (err) {
@@ -729,8 +756,9 @@ async function runRemove(task: Task, ws: TaskWorkspace): Promise<void> {
   })
   if (outcome.state === 'done') {
     const branchKept = outcome.result.branchKept === true
-    log.web.info('workspace removed', { taskId: task.id, root: ws.root, trigger, branchKept })
-    await settle({ state: 'removed', branch_kept: branchKept || undefined, error: undefined, kept_reason: undefined, launch_error: undefined, pending_start: undefined })
+    const keptWhy = branchKept && typeof outcome.result.branchKeptReason === 'string' ? outcome.result.branchKeptReason.slice(0, 300) : undefined
+    log.web.info('workspace removed', { taskId: task.id, root: ws.root, trigger, branchKept, branchKeptReason: keptWhy })
+    await settle({ state: 'removed', branch_kept: branchKept || undefined, branch_kept_reason: keptWhy, error: undefined, kept_reason: undefined, kept_at: undefined, merge_recheck: undefined, launch_error: undefined, pending_start: undefined })
     return
   }
   await refuse(outcome.error, outcome.state === 'failed' ? outcome.code : 'lost')
