@@ -16,13 +16,20 @@
  *        prompt, so nothing was sent (a new message would refuse that prompt).
  *        With `follow: true` the answer is an NDJSON stream instead: `{"type":"sent"|"held",
  *        taskId, sessionId, started}`, then Main's reply to THIS message as it is written
- *        (`text` deltas, `activity` lines, one `result` or `error`; quick-main-follow.ts).
+ *        (`delivered` once its session takes it, `text` deltas, `activity` lines, one `result` or
+ *        `error`; quick-main-follow.ts).
  *   POST /quick/task-message { taskId, text, images? }   → { taskId, sessionId, started, held? }
  *        The same for one task found in the list: the text goes into that task's chat as the
  *        user's own message, or starts its session with it when it has none. Fire and forget.
  *        `images` (both sends): up to 5 `{ data: base64, mediaType }`, a screenshot from the
  *        clipboard; saved here and named by path in the message, the phone's way
  *        (session-send-v1.ts). With an image the text may be empty.
+ *        Both are the one send below.
+ *   POST /quick/send { to?, text, images?, follow? }     → as /quick/main
+ *        The quick bar's send (web/src/components/quickbar/): `to` is the task id the people list
+ *        named (a VP, any task), Main when absent or `ceo`; `follow` streams that task's reply.
+ *   GET  /quick/people?limit=                            → { people: [{ id, title, kind, state, line, needs, ... }] }
+ *        Who the bar can talk to: CEO, every VP, then open tasks, needing the user first (quick-people.ts).
  *   POST /quick/session { text, taskId?, images? }       → NDJSON stream, as /quick/main with follow
  *        A normal Claude Code session in Walnut, the Ask Walnut chat's own kind: with no `taskId` a
  *        new ask is started with the text (the phone's New chat, mobile-launch.ts), with the
@@ -196,23 +203,57 @@ quickInputV1Router.get('/quick/main', async (_req: Request, res: Response, next:
 quickInputV1Router.post('/quick/main', async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!primaryOnly(res)) return
-    const images = extractValidImages(req.body?.images)
-    const text = textOf(req.body?.text, MAX_TEXT_CHARS) ?? (images.length > 0 && blankText(req.body?.text) ? '' : null)
-    if (text === null) {
-      res.status(400).json({ error: `text must be 1-${MAX_TEXT_CHARS} characters`, code: 'bad_request' })
-      return
-    }
-    if (req.body?.follow === true) {
-      await sendAndFollow(() => sendToMain(text, images, quickSource(req)), res)
-      return
-    }
-    const answer = await sendToMain(text, images, quickSource(req))
-    delete answer.midTurn
-    res.json(answer)
+    await quickSend(req, res, null, `text must be 1-${MAX_TEXT_CHARS} characters`)
   } catch (err) {
     next(err)
   }
 })
+
+/** The quick bar's one send: `to` names the task (a VP, any task), Main when absent or `ceo`. */
+quickInputV1Router.post('/quick/send', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!primaryOnly(res)) return
+    const to = typeof req.body?.to === 'string' ? req.body.to.trim() : ''
+    const toMain = !to || to.toLowerCase() === 'ceo' || to.toLowerCase() === 'main'
+    await quickSend(req, res, toMain ? null : to, `text must be 1-${MAX_TEXT_CHARS} characters`, { testRunGuard: true })
+  } catch (err) {
+    next(err)
+  }
+})
+
+/**
+ * One send for every quick box: the text (and screenshots) into Main's chat (`taskId` null) or one
+ * task's, as the user's own message; `follow: true` streams the reply to it (sendAndFollow).
+ */
+async function quickSend(req: Request, res: Response, taskId: string | null, badRequest: string, opts: { testRunGuard?: boolean } = {}): Promise<void> {
+  const images = extractValidImages(req.body?.images)
+  const text = textOf(req.body?.text, MAX_TEXT_CHARS) ?? (images.length > 0 && blankText(req.body?.text) ? '' : null)
+  if (text === null || taskId === '') {
+    res.status(400).json({ error: badRequest, code: 'bad_request' })
+    return
+  }
+  let send: () => Promise<QuickMainResult>
+  if (taskId === null) {
+    // A marked test run talks to its own stand-in CEO, never the user's (content-v1.ts).
+    const standIn = opts.testRunGuard ? await (await import('./content-v1.js')).testRunCeo() : null
+    send = standIn ? () => sendToTaskFromRequest(req, standIn, text, images) : () => sendToMain(text, images, quickSource(req))
+  } else {
+    const task = await exactTask(taskId, res)
+    if (!task) return
+    if (opts.testRunGuard && task.org_role && task.org_role !== 'main' && (await import('../../core/test-run.js')).ambientTestRun()) {
+      res.status(409).json({ error: 'A test run never writes into a VP or router chat', code: 'test_run_unmarked' })
+      return
+    }
+    send = () => sendToTaskFromRequest(req, task, text, images)
+  }
+  if (req.body?.follow === true) {
+    await sendAndFollow(send, res)
+    return
+  }
+  const answer = await send()
+  delete answer.midTurn
+  res.json(answer)
+}
 
 /**
  * `follow: true`: one NDJSON stream with the send's outcome, then Main's reply to this message as
@@ -258,14 +299,9 @@ quickInputV1Router.post('/quick/session', async (req: Request, res: Response, ne
     }
     const taskId = typeof req.body?.taskId === 'string' ? req.body.taskId.trim() : ''
     if (taskId) {
-      const { getTask } = await import('../../core/task-manager.js')
-      const task = await getTask(taskId).catch(() => null)
-      if (!task || task.id !== taskId) {
-        res.status(404).json({ error: `No task ${taskId}`, code: 'task_not_found' })
-        return
-      }
-      const cliText = await withSavedImages(text, images)
-      await sendAndFollow(async () => sendToTaskSession(task, await taskSessionRecord(task), text, cliText, false, quickSource(req), startRouteSource('api-v1', req.headers), startingSid(req)), res)
+      const task = await exactTask(taskId, res)
+      if (!task) return
+      await sendAndFollow(() => sendToTaskFromRequest(req, task, text, images), res)
       return
     }
     await sendAndFollow(() => startAsk(text, images, startRouteSource('quick-input', req.headers), startingSid(req)), res)
@@ -285,23 +321,8 @@ async function startAsk(text: string, images: SessionImage[], source: string, ca
 quickInputV1Router.post('/quick/task-message', async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!primaryOnly(res)) return
-    const images = extractValidImages(req.body?.images)
-    const text = textOf(req.body?.text, MAX_TEXT_CHARS) ?? (images.length > 0 && blankText(req.body?.text) ? '' : null)
     const taskId = typeof req.body?.taskId === 'string' ? req.body.taskId.trim() : ''
-    if (text === null || !taskId) {
-      res.status(400).json({ error: `taskId and text (1-${MAX_TEXT_CHARS} characters) are required`, code: 'bad_request' })
-      return
-    }
-    const { getTask } = await import('../../core/task-manager.js')
-    // An exact id only: the launcher sends the id it listed, and a prefix could reach another task.
-    const task = await getTask(taskId).catch(() => null)
-    if (!task || task.id !== taskId) {
-      res.status(404).json({ error: `No task ${taskId}`, code: 'task_not_found' })
-      return
-    }
-    const answer = await sendToTaskSession(task, await taskSessionRecord(task), text, await withSavedImages(text, images), false, quickSource(req), startRouteSource('api-v1', req.headers), startingSid(req))
-    delete answer.midTurn
-    res.json(answer)
+    await quickSend(req, res, taskId, `taskId and text (1-${MAX_TEXT_CHARS} characters) are required`)
   } catch (err) {
     next(err)
   }
@@ -360,6 +381,23 @@ export async function sendToTaskChat(task: Task, text: string, source: string = 
   return sendToTaskSession(task, await taskSessionRecord(task), text, await withSavedImages(text, images), false, source)
 }
 
+/**
+ * The task a quick send names, by its exact id only (the launcher sends the id it listed, and a
+ * prefix could reach another task); answers 404 itself and gives null when there is none.
+ */
+async function exactTask(taskId: string, res: Response): Promise<Task | null> {
+  const { getTask } = await import('../../core/task-manager.js')
+  const task = await getTask(taskId).catch(() => null)
+  if (task && task.id === taskId) return task
+  res.status(404).json({ error: `No task ${taskId}`, code: 'task_not_found' })
+  return null
+}
+
+/** The words into one task's chat as this request's: its source, its start's source and caller. */
+async function sendToTaskFromRequest(req: Request, task: Task, text: string, images: SessionImage[]): Promise<QuickMainResult> {
+  return sendToTaskSession(task, await taskSessionRecord(task), text, await withSavedImages(text, images), false, quickSource(req), startRouteSource('api-v1', req.headers), startingSid(req))
+}
+
 /** The session making this request: a task it starts here runs at most as loose as it (delegated-mode.ts). */
 function startingSid(req: Request): string | undefined {
   return req.get('x-walnut-caller-sid')?.trim() || undefined
@@ -411,6 +449,7 @@ quickInputV1Router.get('/quick/tasks', async (req: Request, res: Response, next:
     const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 200) : ''
     const asked = Number(req.query.limit)
     const limit = Number.isFinite(asked) ? Math.max(1, Math.min(20, Math.floor(asked))) : 6
+    const { recentQuickTasks, quickTasks } = await import('./quick-people.js')
     if (!q) {
       // `recent`: the open tasks to offer before any words (the Spotlight action's task picker).
       res.json({ tasks: req.query.recent === '1' ? await recentQuickTasks(limit) : [] })
@@ -422,55 +461,14 @@ quickInputV1Router.get('/quick/tasks', async (req: Request, res: Response, next:
   }
 })
 
-export interface QuickTaskRow {
-  id: string
-  title: string
-  project: string
-  state: string
-  stateLabel: string
-}
-
-/** Tasks matching the words, best first, open ones before finished ones. */
-const STATE_RANK: Record<string, number> = { needs: 0, read: 1, working: 2, waiting: 3, done: 4 }
-
-/** Open board tasks, the ones needing the user first, then the most recently changed. */
-export async function recentQuickTasks(limit: number): Promise<QuickTaskRow[]> {
-  const [{ listTasks }, { USER_STATE_LABELS, fallbackUserState }] = await Promise.all([
-    import('../../core/task-manager.js'),
-    import('../../core/user-status.js'),
-  ])
-  const { phoneListedTasks } = await import('../../core/test-run.js')
-  // What the board shows: no plugin's own task (a test task only to a test run's own phone,
-  // core/test-run.ts), not Main or a lead.
-  return phoneListedTasks(await listTasks())
-    .filter((t) => t.phase !== 'COMPLETE' && !t.org_role)
-    .map((task) => ({ task, state: task.user_status?.state ?? fallbackUserState(task.phase) }))
-    .sort((a, b) => (STATE_RANK[a.state] ?? 9) - (STATE_RANK[b.state] ?? 9)
-      || String(b.task.updated_at ?? '').localeCompare(String(a.task.updated_at ?? '')))
-    .slice(0, limit)
-    .map(({ task, state }) => ({ id: task.id, title: task.title, project: task.project ?? '', state, stateLabel: USER_STATE_LABELS[state] }))
-}
-
-export async function quickTasks(q: string, limit: number): Promise<QuickTaskRow[]> {
-  const [{ search }, { getTask }, { USER_STATE_LABELS, fallbackUserState }] = await Promise.all([
-    import('../../core/search.js'),
-    import('../../core/task-manager.js'),
-    import('../../core/user-status.js'),
-  ])
-  // A typing-speed list: the keyword lanes answer at once, the semantic lane gets a short wait.
-  const hits = await search(q, { types: ['task'], limit: limit * 2, semanticDeadlineMs: 150 })
-  const seen = new Set<string>()
-  const rows: QuickTaskRow[] = []
-  for (const hit of hits) {
-    const id = hit.taskId
-    if (!id || seen.has(id)) continue
-    seen.add(id)
-    const task = await getTask(id).catch(() => null)
-    if (!task) continue
-    const state = task.user_status?.state ?? fallbackUserState(task.phase)
-    rows.push({ id: task.id, title: task.title, project: task.project ?? '', state, stateLabel: USER_STATE_LABELS[state] })
+quickInputV1Router.get('/quick/people', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!primaryOnly(res)) return
+    const asked = Number(req.query.limit)
+    const limit = Number.isFinite(asked) ? Math.max(0, Math.min(30, Math.floor(asked))) : 12
+    const { quickPeople } = await import('./quick-people.js')
+    res.json({ people: await quickPeople(limit) })
+  } catch (err) {
+    next(err)
   }
-  const open = rows.filter((r) => r.state !== 'done')
-  const done = rows.filter((r) => r.state === 'done')
-  return [...open, ...done].slice(0, limit)
-}
+})

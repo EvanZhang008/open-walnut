@@ -71,6 +71,7 @@ const BOXES: Record<string, Kind> = {
   'components/tasks/TaskForm.tsx': form("a task's fields"),
   'components/passwords/ItemEditor.tsx': form("a vault item's notes"),
   'components/board/kanban/KanbanCardEditor.tsx': form("a card's fields"),
+  'components/quickbar/QuickBar.tsx': form('the quick bar: a one-line message whose mic is the bar itself (useSpeechToText, the hotkey starts and stops it), never a second mic inside the box'),
   'components/board/board-items.frame.js': form("the Board frame's hidden mark field; the note is written in BoardReplyDock (ChatInput)"),
 }
 

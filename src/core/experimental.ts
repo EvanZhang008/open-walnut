@@ -126,6 +126,12 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'A decision letter from a task that keeps Threads also waits on you as a thread of that task, with the letter\'s buttons on its card. Answer it on the card or in the inbox: either one answers both. The Action needed strip and the counts show it once, as the thread. Letters already waiting get their thread when you turn this on.',
     default: false,
   },
+  {
+    id: 'quick_bar',
+    name: 'Quick bar (Control-Option-Command-Space)',
+    description: 'Press Control-Option-Command-Space to open a small bar: it listens at once, shows your words as you speak, and sends them to the CEO, a VP or any task you pick (Tab, or start with "to Walnut VP, ..."). Two seconds after you stop it sends; Esc cancels and any key lets you edit. A small note in the corner shows when the message arrived and the first line of the reply. In the Mac app the key works from any app once your Mac app has this version; in a browser, while Walnut is open.',
+    default: false,
+  },
 ] as const;
 
 export type ExperimentalFeatureId = typeof EXPERIMENTAL_FEATURES[number]['id'];

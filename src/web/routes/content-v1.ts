@@ -216,8 +216,8 @@ contentV1Router.post('/content/draft', (req: Request, res: Response) => {
 /** One find-or-make at a time per test run, so two quick clicks never make two stand-ins. */
 const standInFlight = new Map<string, Promise<Task>>()
 
-/** The test run's stand-in CEO, found or made; null outside a marked test run. */
-async function testRunCeo(): Promise<Task | null> {
+/** The test run's stand-in CEO, found or made; null outside a marked test run (also quick-input-v1.ts). */
+export async function testRunCeo(): Promise<Task | null> {
   const { ambientTestRun, testRunMarkingEnabled } = await import('../../core/test-run.js')
   const label = ambientTestRun()
   if (!label || !(await testRunMarkingEnabled())) return null

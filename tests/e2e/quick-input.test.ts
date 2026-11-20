@@ -327,3 +327,58 @@ describe('POST /api/v1/quick/task-message', () => {
     expect((await post('/quick/task-message', { text: 'x' })).status).toBe(400)
   })
 })
+
+describe('the quick bar: GET /api/v1/quick/people and POST /api/v1/quick/send', () => {
+  it('lists the CEO, then each VP, then open tasks; sends to whoever is picked and follows that reply', async () => {
+    const { ensureMainTask } = await import('../../src/core/org/org-store.js')
+    const main = await ensureMainTask()
+    const vp = ((await (await post('/tasks', { title: 'Garden VP', project: 'Garden' })).json()) as { task: { id: string } }).task
+    await updateTaskRaw(vp.id, { org_role: 'lead' } as never)
+    const tile = ((await (await post('/tasks', { title: 'Pick the tile color', project: 'Garden' })).json()) as { task: { id: string } }).task
+
+    const people = ((await (await fetch(`http://localhost:${port}/api/v1/quick/people?limit=30`)).json()) as { people: Array<Record<string, unknown>> }).people
+    expect(people[0]).toMatchObject({ id: main.id, kind: 'ceo' })
+    const vpAt = people.findIndex((p) => p.id === vp.id)
+    expect(people[vpAt]).toMatchObject({ kind: 'vp', title: 'Garden VP', project: 'Garden' })
+    const firstTask = people.findIndex((p) => p.kind === 'task')
+    expect(vpAt).toBeLessThan(firstTask)
+    expect(people.find((p) => p.id === tile.id)).toMatchObject({ kind: 'task', project: 'Garden' })
+    for (const p of people) expect(typeof p.line).toBe('string')
+    // Tasks keep the board's order: the ones needing the user first.
+    const taskStates = people.filter((p) => p.kind === 'task').map((p) => p.state)
+    const firstNotNeeds = taskStates.findIndex((s) => s !== 'needs')
+    if (firstNotNeeds >= 0) expect(taskStates.slice(firstNotNeeds)).not.toContain('needs')
+
+    // To the VP, which has no session: it is started with the words.
+    starts.length = 0
+    const started = await (await post('/quick/send', { to: vp.id, text: 'Plan the spring beds' })).json() as Record<string, unknown>
+    expect(started).toMatchObject({ taskId: vp.id, started: true })
+    expect(starts).toEqual([expect.objectContaining({ taskIdPrefix: vp.id, message: 'Plan the spring beds' })])
+
+    // No `to`, `ceo`, or the CEO's own id: all reach the CEO.
+    for (const body of [{ text: 'Hello CEO' }, { to: 'ceo', text: 'Hello CEO' }, { to: main.id, text: 'Hello CEO' }]) {
+      const sent = await (await post('/quick/send', body)).json() as Record<string, unknown>
+      expect(sent.taskId).toBe(main.id)
+    }
+
+    // Refusals: an unknown or partial id, and no words.
+    expect((await post('/quick/send', { to: 'nope-0000', text: 'x' })).status).toBe(404)
+    expect((await post('/quick/send', { to: vp.id.slice(0, 6), text: 'x' })).status).toBe(404)
+    expect((await post('/quick/send', { to: vp.id, text: '  ' })).status).toBe(400)
+
+    // A VP with a live session: the words go in as the person's, and `follow` streams its reply.
+    const vpSid = '33333333-4444-4555-8666-777777777777'
+    await createSessionRecord(vpSid, vp.id, 'Garden', WALNUT_HOME)
+    await updateTaskRaw(vp.id, { session_id: vpSid } as never)
+    await updateSessionRecord(vpSid, { process_status: 'idle' } as never)
+    starts.length = 0
+    const res = await post('/quick/send', { to: vp.id, text: 'echo-input PEAR-3', follow: true })
+    expect(res.headers.get('content-type')).toContain('application/x-ndjson')
+    const streamed = lines(await res.text())
+    expect(streamed[0]).toMatchObject({ type: 'sent', taskId: vp.id, sessionId: vpSid, started: false })
+    expect(starts).toHaveLength(0)
+    const last = streamed[streamed.length - 1]
+    expect(last.type).toBe('result')
+    expect(String(last.text).split('<system-reminder>')[0]).toContain('PEAR-3')
+  })
+})

@@ -106,7 +106,8 @@ final class GlobalDictation: NSObject {
             let err = GetEventParameter(event, EventParamName(kEventParamDirectObject),
                                         EventParamType(typeEventHotKeyID), nil,
                                         MemoryLayout<EventHotKeyID>.size, nil, &hkID)
-            guard err == noErr, hkID.id == dictationHotKeyID else { return noErr }
+            // Another key of this app (the quick bar's) goes on to its own handler.
+            guard err == noErr, hkID.id == dictationHotKeyID else { return OSStatus(eventNotHandledErr) }
             DispatchQueue.main.async { activeDictation?.toggle() }
             return noErr
         }, 1, &spec, nil, &eventHandler)

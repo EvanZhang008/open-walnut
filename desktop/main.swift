@@ -107,6 +107,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // System-wide dictation hotkey. Lives in the app because only a signed bundle
     // gets a microphone permission prompt (see GlobalDictation.swift).
     var dictation: GlobalDictation?
+    /// The quick bar's panel (QuickBarPanel.swift): its key is registered once the page says the experiment is on.
+    var quickBar: QuickBarPanel?
     // Measures the page process and replaces it when it is bloated and nobody
     // is looking (see WebContentPolicy.swift for why a long-lived WKWebView
     // needs this and a browser tab does not).
@@ -153,6 +155,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // Only listens if the user opted in and Input Monitoring is granted.
             dictation?.startFnMonitorIfEnabled()
         }
+        quickBar = QuickBarPanel(portProvider: { [weak self] in self?.serverPort },
+                                 openLink: { [weak self] url in self?.application(NSApp, open: [url]) })
         // Spotlight and Shortcuts actions run in this process (WalnutIntents.swift).
         WalnutIntentsPort.provider = { [weak self] in self?.serverPort }
 
@@ -1650,6 +1654,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // data-theme or the OS switching under 'system') so the strip never
         // disagrees with the page under it.
         config.userContentController.add(self, name: "walnutChrome")
+        // The quick bar's switch (QuickBarPanel.swift): the page posts {type:'flag', on}.
+        config.userContentController.add(self, name: QuickBarPanel.handlerName)
         config.userContentController.addScriptMessageHandler(ClaudeSignInBridge(consoleURL: URL(string: "http://localhost:\(port)")!), contentWorld: .page, name: "walnutClaudeSignIn")
         // The app's update (AppUpdater.swift): the page asks with
         // webkit.messageHandlers.walnutUpdate.postMessage({op}) and gets a promise;
@@ -2327,6 +2333,11 @@ extension AppDelegate: WKScriptMessageHandler {
         case "walnutChrome":
             guard let bg = message.body as? String else { return }
             setChromeBackground(css: bg, in: message.webView?.window)
+        case QuickBarPanel.handlerName:
+            // A test copy beside the person's own app never takes their keys.
+            guard let body = message.body as? [String: Any], body["type"] as? String == "flag",
+                  ProcessInfo.processInfo.environment["WALNUT_DESKTOP_E2E_BACKGROUND"] != "1" else { return }
+            quickBar?.setEnabled(body["on"] as? Bool == true)
         default:
             return
         }

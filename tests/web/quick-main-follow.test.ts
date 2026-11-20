@@ -34,6 +34,7 @@ describe('quick input: Main reply follow', () => {
     await tick()
     expect(f.ended()).toBe(true)
     expect(f.lines).toEqual([
+      { type: 'delivered' },
       { type: 'activity', detail: expect.stringContaining('List files') },
       { type: 'text', delta: 'MAN' },
       { type: 'text', delta: 'GO' },
@@ -48,7 +49,7 @@ describe('quick input: Main reply follow', () => {
     emit(EventNames.SESSION_RESULT, { result: 'quick', turnGen: 2 })
     f.follower.bind(SID, { messageId: 'qm-fast' })
     await tick()
-    expect(f.lines).toEqual([{ type: 'text', delta: 'quick' }, { type: 'result', text: 'quick' }])
+    expect(f.lines).toEqual([{ type: 'delivered' }, { type: 'text', delta: 'quick' }, { type: 'result', text: 'quick' }])
     expect(f.ended()).toBe(true)
   })
 
@@ -88,6 +89,7 @@ describe('quick input: Main reply follow', () => {
     emit(EventNames.SESSION_RESULT, { result: 'KIWI', turnGen: 4 })
     await tick()
     expect(f.lines).toEqual([
+      { type: 'delivered' },
       { type: 'text', delta: 'thirty-nine forty' },
       { type: 'reset' },
       { type: 'text', delta: 'KIWI' },
@@ -104,7 +106,7 @@ describe('quick input: Main reply follow', () => {
     emit(EventNames.SESSION_RESULT, { result: 'both answered', turnGen: 6 })
     // It ends only once the MID_TURN_NEXT_MS window passed with no next turn.
     await vi.waitFor(() => { expect(f.ended()).toBe(true) }, { timeout: MID_TURN_NEXT_MS + 10_000, interval: 20 })
-    expect(f.lines).toEqual([{ type: 'text', delta: 'both answered' }, { type: 'result', text: 'both answered' }])
+    expect(f.lines).toEqual([{ type: 'delivered' }, { type: 'text', delta: 'both answered' }, { type: 'result', text: 'both answered' }])
   })
 
   it('stop() ends it quietly and later events are ignored', async () => {

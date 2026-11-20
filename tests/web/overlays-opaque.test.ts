@@ -35,6 +35,8 @@ const GLASS_OVERLAYS: Record<string, string> = {
   'cal-overflow-popover': 'a month cell\'s "+N more" list',
   'cal-cal-list': 'the new-event form\'s calendar picker',
   'cal-day-flyout': 'the new-event form\'s mini month (date picker)',
+  'qb-center': 'the quick bar over the page (Control-Option-Command-Space): one line of words, read as you speak',
+  'qb-receipt': 'the quick bar\'s receipt cards in the top right corner after a send',
 };
 /** The tint floor: the raised surface's share of the glass. */
 const GLASS_TINT_MIN = 84;

@@ -1,3 +1,5 @@
+import { QuickBarHost } from '@/components/quickbar/QuickBarHost';
+import { QuickBarPanelPage } from '@/components/quickbar/QuickBarPanelPage';
 import { withRecentHumanInput } from '@/utils/recent-opened';
 import { isHomePath } from './utils/home-path';
 import { memo, useEffect, useRef } from 'react';
@@ -147,14 +149,14 @@ export function App() {
   // Sidebar links return the user to where they last were in a section (Calendar's
   // ?view=&d=, Settings' #pane) — see utils/last-location.ts for which locations
   // are recorded.
-  useEffect(() => { if (location.pathname !== '/open-ref') rememberLocation(location); }, [location]);
+  useEffect(() => { if (location.pathname !== '/open-ref' && location.pathname !== '/quickbar') rememberLocation(location); }, [location]);
   // Local page-use counts (Settings > Page use); Settings records its pane itself.
-  useEffect(() => { if (location.pathname !== '/open-ref') recordVisit(pageKeyForPath(location.pathname)); }, [location.pathname]);
+  useEffect(() => { if (location.pathname !== '/open-ref' && location.pathname !== '/quickbar') recordVisit(pageKeyForPath(location.pathname)); }, [location.pathname]);
 
   // Warm the Notes page's tree + autocomplete corpora once the app has settled,
   // at low priority, so the first note the user opens is served from memory.
   useEffect(() => {
-    if (isPopoutPath(location.pathname)) return;
+    if (isPopoutPath(location.pathname) || location.pathname === '/quickbar') return;
     scheduleNotesPrefetch({ pathname: location.pathname });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -168,6 +170,8 @@ export function App() {
   // Home stays mounted under visibility: hidden off its route; its chats' marks must not paint on this page.
   useHidesHighlights(!isHomePath(location.pathname));
 
+  // The Mac app's floating quick bar panel (desktop/QuickBarPanel.swift): the bar alone, no app around it.
+  if (location.pathname === '/quickbar') return <QuickBarPanelPage />;
   if (isPopoutPath(location.pathname)) return <><StaleBuildPill /><LinkCaptureHost /><PluginDialogHost /><PasswordsUnlockHost /><SessionRawViewHost /><AnywhereFileViewer /><PopoutRoot /></>;
 
   const isHome = isHomePath(location.pathname);
@@ -184,6 +188,7 @@ export function App() {
       <PageFind />
       <UnpairedNotice />
       <ApprovalPrompts />
+      <QuickBarHost />
       <HostConnectCard />
       <FirstRunHost />
       <div className={isHome ? 'main-page-wrapper' : 'main-page-wrapper main-page-wrapper-hidden'}>

@@ -29,6 +29,8 @@ const EARLY_MAX = 400
 export const MID_TURN_NEXT_MS = 2_500
 
 export type FollowLine =
+  /** The session took the message into a turn (never sent for a session the message started). */
+  | { type: 'delivered' }
   | { type: 'text'; delta: string }
   | { type: 'reset' }
   | { type: 'activity'; detail: string }
@@ -101,6 +103,7 @@ export function followMainReply(
         if (messageId && ids && !ids.includes(messageId)) return
         delivered = true
         gen = typeof d.turnGen === 'number' ? d.turnGen : undefined
+        onLine({ type: 'delivered' })
         return
       }
       case EventNames.SESSION_TEXT_DELTA: {
@@ -124,7 +127,7 @@ export function followMainReply(
         // A result of a turn older than the one that took the message is an earlier turn's.
         if (gen !== undefined && typeof d.turnGen === 'number' && d.turnGen < gen) return
         if (d.isError === true) {
-          finish({ type: 'error', code: 'turn_failed', message: typeof d.result === 'string' && d.result ? d.result : 'CEO\'s turn failed' })
+          finish({ type: 'error', code: 'turn_failed', message: typeof d.result === 'string' && d.result ? d.result : 'The turn failed' })
           return
         }
         if (held) return
@@ -142,7 +145,7 @@ export function followMainReply(
       }
       case EventNames.SESSION_ERROR: {
         if (!delivered) return
-        finish({ type: 'error', code: 'session_error', message: typeof d.error === 'string' ? d.error : 'CEO\'s session failed' })
+        finish({ type: 'error', code: 'session_error', message: typeof d.error === 'string' ? d.error : 'The session failed' })
         return
       }
     }
