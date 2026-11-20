@@ -38,7 +38,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { WALNUT_HOME } from '../../constants.js';
 import { log } from '../../logging/index.js';
-import type { Task } from '../types.js';
+import { isProgramRunTask, type Task } from '../types.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import { buildOrgTree, projectKey, type OrgTaskNode } from './org-tree.js';
 import { newsItem, shortTitle, teamNews, type TeamNewsItem, type TeamNewsTask } from './team-news.js';
@@ -564,6 +564,30 @@ async function owedOfTeam(open: readonly Task[], nowMs: number): Promise<TeamOwe
   }
 }
 
+/**
+ * The projects a lead leads, each team task's project, and the team tasks a note reads: its
+ * projects' tasks and its own workers, wherever they live (what waits on it is its to hear).
+ * An imported program's run (PROGRAM_RUN_TAG) is that program's work: no note lists it, open or
+ * done (2026-11-19: the idle sweep closes them in bulk, and a VP's note read "Done: ..." for
+ * them). The Org page still counts it (org-tree.ts).
+ */
+export function teamOf(lead: Pick<Task, 'id'>, tasks: readonly Task[], seen?: Readonly<Record<string, unknown>>): {
+  led: ReturnType<typeof buildOrgTree>['projects']; projectById: Map<string, string>; open: Task[]; completed: Task[];
+} {
+  const led = buildOrgTree(tasks).projects.filter((p) => p.lead?.id === lead.id);
+  const projectById = new Map<string, string>();
+  for (const p of led) for (const n of walk(p.teams)) projectById.set(n.id, p.project);
+  for (const t of tasks) {
+    if (t.parent_task_id === lead.id && t.phase !== 'COMPLETE' && !t.plugin_only && !projectById.has(t.id)) projectById.set(t.id, t.project ?? '');
+  }
+  // Done here: told about before (in `seen`, the last note's), and finished in a project this lead still leads.
+  const ledKeys = new Set(led.map((p) => projectKey(p.project)));
+  const completed = seen
+    ? tasks.filter((t) => t.phase === 'COMPLETE' && !t.plugin_only && !isProgramRunTask(t) && seen[t.id] !== undefined && ledKeys.has(projectKey(t.project)))
+    : [];
+  return { led, projectById, open: tasks.filter((t) => projectById.has(t.id) && !isProgramRunTask(t)), completed };
+}
+
 /** The note the next message into this lead's session carries, or null. Never throws. */
 export async function pendingTeamNote(lead: Task, sessionId: string, nowMs = Date.now()): Promise<PendingTeamNote | null> {
   const claimedAt = claims.get(lead.id);
@@ -573,16 +597,8 @@ export async function pendingTeamNote(lead: Task, sessionId: string, nowMs = Dat
   try {
     const { listTasks } = await import('../task-manager.js');
     const tasks = await listTasks();
-    const tree = buildOrgTree(tasks);
-    const led = tree.projects.filter((p) => p.lead?.id === lead.id);
-    const projectById = new Map<string, string>();
-    for (const p of led) for (const n of walk(p.teams)) projectById.set(n.id, p.project);
-    // Its own workers too, wherever they live: what waits on it is its to hear.
-    for (const t of tasks) {
-      if (t.parent_task_id === lead.id && t.phase !== 'COMPLETE' && !t.plugin_only && !projectById.has(t.id)) projectById.set(t.id, t.project ?? '');
-    }
-    const open = tasks.filter((t) => projectById.has(t.id));
     const prev = validState((await readAll())[lead.id]);
+    const { led, projectById, open, completed } = teamOf(lead, tasks, prev?.seen);
     const { pendingTeamAsks, clearTeamAsks, answeredUserAsks } = await import('./team-asks.js');
     const pending = await pendingTeamAsks(lead.id);
     // What the user said in a task's own chat that the task already answered is no ask of the team.
@@ -590,11 +606,6 @@ export async function pendingTeamNote(lead: Task, sessionId: string, nowMs = Dat
     if (answered.length) await clearTeamAsks(lead.id, answered.map((a) => ({ id: a.id, count: a.count ?? 1 }))).catch(() => undefined);
     const gone = new Set(answered.map((a) => a.id));
     const asks = pending.filter((a) => !gone.has(a.id));
-    // Done here: told about before, and finished in a project this lead still leads.
-    const ledKeys = new Set(led.map((p) => projectKey(p.project)));
-    const completed = prev
-      ? tasks.filter((t) => t.phase === 'COMPLETE' && !t.plugin_only && prev.seen[t.id] !== undefined && ledKeys.has(projectKey(t.project)))
-      : [];
     const now = new Date(nowMs).toISOString();
     const { workerToldLead } = await import('./lead-traffic.js');
     // What its notices already tell (riding this message or told since the last note) is not said again.
@@ -659,13 +670,7 @@ export async function teamSnapshotText(lead: Task, nowMs = Date.now()): Promise<
   try {
     const { listTasks } = await import('../task-manager.js');
     const tasks = await listTasks();
-    const led = buildOrgTree(tasks).projects.filter((p) => p.lead?.id === lead.id);
-    const projectById = new Map<string, string>();
-    for (const p of led) for (const n of walk(p.teams)) projectById.set(n.id, p.project);
-    for (const t of tasks) {
-      if (t.parent_task_id === lead.id && t.phase !== 'COMPLETE' && !t.plugin_only && !projectById.has(t.id)) projectById.set(t.id, t.project ?? '');
-    }
-    const open = tasks.filter((t) => projectById.has(t.id));
+    const { led, projectById, open } = teamOf(lead, tasks);
     const { pendingTeamAsks, answeredUserAsks } = await import('./team-asks.js');
     const pending = await pendingTeamAsks(lead.id);
     const gone = new Set(answeredUserAsks(tasks, pending).map((a) => a.id));

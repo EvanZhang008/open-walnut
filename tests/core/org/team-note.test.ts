@@ -1,6 +1,7 @@
 /** What a lead hears about its teams before its next message (src/core/org/team-note.ts), pure part. */
 import { describe, it, expect } from 'vitest'
-import { buildTeamNoteText, groupTeamAsks, noteDue, OWED_TOLD_MAX, planTeamNote, teamFingerprint, TEAM_NOTE_FORM, TEAM_NOTE_GAP_MS, TEAM_NOTE_MAX } from '../../../src/core/org/team-note.js'
+import { buildTeamNoteText, groupTeamAsks, noteDue, OWED_TOLD_MAX, planTeamNote, teamFingerprint, teamOf, TEAM_NOTE_FORM, TEAM_NOTE_GAP_MS, TEAM_NOTE_MAX } from '../../../src/core/org/team-note.js'
+import { EXTERNAL_SESSION_IMPORT_TAG, PROGRAM_RUN_TAG, type Task } from '../../../src/core/types.js'
 import type { TeamNewsTask } from '../../../src/core/org/team-news.js'
 
 const at = (min: number) => new Date(Date.UTC(2026, 9, 26, 12, min)).toISOString()
@@ -381,5 +382,31 @@ describe('team note: no progress lines, paced like the main agent\'s', () => {
     for (let i = 0; i < OWED_TOLD_MAX + 5; i++) state = planTeamNote(state, base, [], at(100), owe(`ua-x${i}`)).next
     expect(state.owedTold).toHaveLength(OWED_TOLD_MAX)
     expect(state.owedTold?.at(-1)).toBe(`ua-x${OWED_TOLD_MAX + 4}`)
+  })
+})
+
+describe("team note: an imported program's run is no one's team work", () => {
+  it('a note lists none, open or done; a person\'s imports and a leftover program-run tag alone still count', () => {
+    const project = 'Imported from this Mac'
+    const task = (id: string, extra: Partial<Task>): Task => ({ id, title: `${id} title`, project, phase: 'NEED_ACTION', status: 'in_progress', ...extra }) as Task
+    const run = [EXTERNAL_SESSION_IMPORT_TAG, PROGRAM_RUN_TAG]
+    const tasks = [
+      task('vp', { org_role: 'lead', phase: 'IN_PROGRESS', title: 'Imports VP' }),
+      task('run-open', { tags: run }),
+      task('mine-open', { tags: [EXTERNAL_SESSION_IMPORT_TAG] }),
+      task('leftover-open', { tags: [PROGRAM_RUN_TAG] }),
+      task('run-done', { tags: run, phase: 'COMPLETE' }),
+      task('mine-done', { tags: [EXTERNAL_SESSION_IMPORT_TAG], phase: 'COMPLETE' }),
+    ]
+    const seen = Object.fromEntries(tasks.map((x) => [x.id, 'seen']))
+    const team = teamOf({ id: 'vp' }, tasks, seen)
+    const openIds = team.open.map((x) => x.id)
+    expect(openIds).toEqual(expect.arrayContaining(['mine-open', 'leftover-open']))
+    expect(openIds).not.toContain('run-open')
+    expect(team.completed.map((x) => x.id)).toEqual(['mine-done'])
+    // The plan built from them never names a run, however many the idle sweep closed.
+    const plan = planTeamNote(undefined, team.open as TeamNewsTask[], team.completed as TeamNewsTask[], NOW, { leadId: 'vp', led: [project] })
+    expect(JSON.stringify(plan)).not.toContain('run-open')
+    expect(JSON.stringify(plan)).not.toContain('run-done')
   })
 })
