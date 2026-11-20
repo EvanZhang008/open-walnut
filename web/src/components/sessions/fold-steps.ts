@@ -100,7 +100,7 @@ const NONE: ReadonlySet<string> = new Set();
 /** The line of a fold with nothing counted (reasoning alone, injected context). */
 export const EMPTY_FOLD_PHRASE = 'Thinking';
 
-export function foldStepsPhrase(steps: readonly FoldStep[], waiting: ReadonlySet<string> = NONE): string {
+export function foldStepsPhrase(steps: readonly FoldStep[], waiting: ReadonlySet<string> = NONE, opts: { quietSends?: boolean } = {}): string {
   let received = 0;
   let sent = 0;
   let tools = 0;
@@ -142,11 +142,14 @@ export function foldStepsPhrase(steps: readonly FoldStep[], waiting: ReadonlySet
   // A compaction is said by name, never counted as a notice (2026-11-04 review: "2 notices" hid it).
   if (compacted) pieces.push(compactedName(walnutLines));
   if (received > 0) pieces.push(`Received ${count(received, 'message', 'messages')}`);
-  if (sent > 0) pieces.push(`Sent ${sent}`);
+  // With the chat's thread lines on (experiment reply_thread_line), "Sent 2" beside his message read
+  // as his own delivery: a fold says its sends only when they are all it holds, in words.
+  if (sent > 0 && !opts.quietSends) pieces.push(`Sent ${sent}`);
   if (tools > 0) pieces.push(`Ran ${count(tools, 'tool', 'tools')}`);
   if (denied > 0) pieces.push(`Denied ${count(denied, 'tool', 'tools')}`);
   if (notices > 0) pieces.push(count(notices, 'notice', 'notices'));
   if (pieces.length > 0) return pieces.join(' \u00b7 ');
+  if (sent > 0) return `Sent ${count(sent, 'message', 'messages')}`;
   if (updates > 0) return updates === 1 ? 'An update' : `${updates} updates`;
   if (errorNotices > 0) return count(errorNotices, 'notice', 'notices');
   return acks > 0 ? 'Acknowledged' : EMPTY_FOLD_PHRASE;

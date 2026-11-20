@@ -1122,6 +1122,7 @@ final class SessionConversationStore {
             row.sentTo = m.sentTo
             row.about = m.about
             row.aboutTagged = m.aboutTagged
+            row.thread = m.thread
             row.opensTurn = m.opensTurn
             return row
         }
@@ -1261,6 +1262,7 @@ final class SessionConversationStore {
         row.sentTo = m.sentTo
         row.about = m.about
         row.aboutTagged = m.aboutTagged
+        row.thread = m.thread
         row.opensTurn = m.opensTurn
         return row
     }

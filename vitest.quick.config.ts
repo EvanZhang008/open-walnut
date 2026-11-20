@@ -49,6 +49,7 @@ const config = mergeConfig(
         '@open-walnut/user-status': path.resolve(import.meta.dirname, 'src/core/user-status.ts'),
         '@open-walnut/board-summary-text': path.resolve(import.meta.dirname, 'src/core/boards/board-summary-text.ts'),
         '@open-walnut/message-about': path.resolve(import.meta.dirname, 'src/core/org/message-about.ts'),
+        '@open-walnut/reply-thread': path.resolve(import.meta.dirname, 'src/core/org/reply-thread.ts'),
         '@open-walnut/thread-view': path.resolve(import.meta.dirname, 'src/core/org/thread-view.ts'),
         '@open-walnut/live-activity': path.resolve(import.meta.dirname, 'src/core/live-activity.ts'),
         '@open-walnut/terminal-key': path.resolve(import.meta.dirname, 'src/core/terminal-key.ts'),

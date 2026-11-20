@@ -106,6 +106,8 @@ import { isMergeableHistoryTool } from './SessionMessage';
 import { SessionEnvelopeSegments } from './SessionProvenanceCard';
 import { splitLeadingRiders, splitRiders } from '@open-walnut/history-walnut-riders';
 import { useShowWalnutAdditions } from '@/hooks/useShowWalnutAdditions';
+import { ReplyThreadContext, useReplyThreadLineOn } from './reply-thread-line';
+import { answerThreads } from '@open-walnut/reply-thread';
 import { injectedContextKind } from './injected-context';
 import { stripQuestionTag } from '@/utils/question-tag';
 import { ThreadCommentCard } from './ThreadCommentCard';
@@ -1824,6 +1826,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // The notes above a person's words show (Settings, Message hints): right after a
   // fold they join it, so two fold rows never sit back to back (fold-rows.ts).
   const alwaysShowAdded = useShowWalnutAdditions();
+  // The thread line (reply-thread-line.tsx): each answer goes with the thread of the message it
+  // answers, read here from the rows before it when the row itself was served without one.
+  // A sent message that arrived says nothing more under it ("Delivered" goes): its line says where it went.
+  const replyHost = useContext(ReplyThreadContext);
+  const threadLineOn = useReplyThreadLineOn() && !!replyHost;
+  const answerThreadAt = useMemo(() => (threadLineOn ? answerThreads(messages, (m) => m.thread) : null), [threadLineOn, messages]);
   const currentKey = stackMode ? stack.currentKey : ROOT_THREAD_KEY;
   /** The question the composer posts into (both views). */
   const targetKey = hasQuestions ? stack.currentKey : ROOT_THREAD_KEY;
@@ -5172,7 +5180,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             {noActionSet.has(globalIndex) ? <NoActionMark /> : null}
           </>
         ) : (
-          <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools={part.suppressTools} {...(thinkingFolded.has(globalIndex) ? { answerOnly: true } : {})} {...(ridersFolded.has(globalIndex) ? { ridersFolded: true } : {})} {...(trailingFolded.has(globalIndex) ? { trailingFolded: true } : {})} showCopyActions={stream ? stream.showCopy : globalIndex === lastAssistantTextIndex && !part.toolsAfter} {...(part.toolsAfter ? { noActions: true } : {})} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+          <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools={part.suppressTools} {...(thinkingFolded.has(globalIndex) ? { answerOnly: true } : {})} {...(ridersFolded.has(globalIndex) ? { ridersFolded: true } : {})} {...(trailingFolded.has(globalIndex) ? { trailingFolded: true } : {})} showCopyActions={stream ? stream.showCopy : globalIndex === lastAssistantTextIndex && !part.toolsAfter} {...(part.toolsAfter ? { noActions: true } : {})} {...(answerThreadAt?.has(globalIndex) ? { replyThread: answerThreadAt.get(globalIndex) } : {})} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
         )}
       </div>
     );
@@ -5668,7 +5676,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       <div key={`turn-${id}`} data-turn-fold-index={head.globalIndex} {...threadWrapperProps(head.m.msgId ?? head.m.walnutMessageId, 'session-msg-bare')}>
         <ProcessFoldRow foldId={id} foldKey={turnFoldKey(id)} testId="turn-fold" failed={failed} running={running}
           findMembers={findMembersAttr(items.flatMap((x) => rowsOf(x.part)))}
-          lead={running ? WORKING_LEAD : workedForLead(secondsBetween(startAt, endAt))} phrase={foldStepsPhrase(steps, waitingTools)}>
+          lead={running ? WORKING_LEAD : workedForLead(secondsBetween(startAt, endAt))} phrase={foldStepsPhrase(steps, waitingTools, { quietSends: threadLineOn })}>
           {body}
         </ProcessFoldRow>
       </div>,
@@ -5855,7 +5863,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         const tailFailed = failedOf(tail);
         const failed: FoldFailures = { calls: tailFailed.calls + streamFailedOf(members), errors: tailFailed.errors + streamErrorLinesOf(group) };
         const live = isThinkingTail(stepIdx[stepIdx.length - 1] ?? -1);
-        const phrase = foldStepsPhrase([...(tailCarry ? envelopeSteps(tailCarry.riders) : []), ...tail.flatMap(foldStepsOf), ...streamFoldStepsOf(group)], waitingTools) + streamHeldPhrase(group);
+        const phrase = foldStepsPhrase([...(tailCarry ? envelopeSteps(tailCarry.riders) : []), ...tail.flatMap(foldStepsOf), ...streamFoldStepsOf(group)], waitingTools, { quietSends: threadLineOn }) + streamHeldPhrase(group);
         // Keyed like the answered turn's fold, so the row and its open state carry
         // over when the turn ends and history takes the tools. A step that stopped on
         // the person stands above it while the turn runs too.
@@ -6221,7 +6229,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         )}
         <OptimisticImagePreviews images={m.images} />
         <QueuedImageThumbs urls={m.images?.length ? undefined : m.imageUrls} />
-        <DeliveryMetaLine status={m.status} timestamp={m.timestamp} turnRunning={isStreaming} onRetry={() => onRetryFailed?.(m.queueId)} />
+        <DeliveryMetaLine status={threadLineOn && m.thread && m.status === 'delivered' ? undefined : m.status} timestamp={m.timestamp} turnRunning={isStreaming} onRetry={() => onRetryFailed?.(m.queueId)} />
         {m.status === 'received' && (
           <>
             <div className="session-msg-received-badge">{m.changing ? 'Deleting…' : 'Queued'}</div>
@@ -6233,7 +6241,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             )}
           </>
         )}
-        {m.status === 'delivered' && (
+        {/* With its thread line on, an arrived message says nothing more: the line names where it went. */}
+        {m.status === 'delivered' && !(threadLineOn && m.thread) && (
           <div className="session-msg-delivered-badge">Delivered ✓</div>
         )}
         {failedSend(m)}
@@ -6347,7 +6356,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           // The stream's blocks are no saved rows yet: the find counts their history twins.
           findMembers={undefined}
           running={live || (isStreaming && streamRunHasCallingTool(members))}
-          phrase={foldStepsPhrase(streamFoldStepsOf(group), waitingTools) + streamHeldPhrase(group)}>
+          phrase={foldStepsPhrase(streamFoldStepsOf(group), waitingTools, { quietSends: threadLineOn }) + streamHeldPhrase(group)}>
           {renderGroupBody(group)}
         </ProcessFoldRow>
       </div>

@@ -606,6 +606,7 @@ extension ChatMessage {
         copy.aboutTagged = aboutTagged
         copy.opensTurn = opensTurn
         copy.walnutAddedToggle = walnutAddedToggle
+        copy.thread = thread
         return copy
     }
 }

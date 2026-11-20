@@ -36,9 +36,9 @@ export interface AnswerRow {
 }
 
 /** How far before its filing time a message's chat row may sit (clock and queue slack). */
-const ROW_BEFORE_MS = 2 * 60_000;
+export const ROW_BEFORE_MS = 2 * 60_000;
 /** A queued message reaches the chat late, never this late. */
-const ROW_AFTER_MS = 12 * 3600_000;
+export const ROW_AFTER_MS = 12 * 3600_000;
 /** Messages older than this are not looked for again. */
 const LOOK_BACK_MS = 14 * 24 * 3600_000;
 const COMPARE_CHARS = 160;
@@ -69,7 +69,8 @@ function withoutFraming(text: string): string {
   return splitComposedFraming(text)?.words || text;
 }
 
-function rowMatches(row: AnswerRow, m: ThreadMessage): boolean {
+/** Is this chat row the message he filed (his words, as both sides keep them)? Pure. */
+export function rowMatches(row: AnswerRow, m: Pick<ThreadMessage, 'text' | 'images' | 'via'>): boolean {
   if (row.role !== 'user') return false;
   const words = rowWords(row, m.via !== 'letter');
   if (!words) return false;

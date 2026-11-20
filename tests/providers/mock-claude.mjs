@@ -88,14 +88,15 @@ let lastInputUserUuid = null;
 function persistFileOf(sid) {
   const root = process.env.MOCK_CLAUDE_PERSIST_DIR;
   const allow = (process.env.MOCK_CLAUDE_PERSIST_SESSIONS ?? '').split(',').filter(Boolean);
-  const all = process.env.MOCK_CLAUDE_PERSIST_ALL === '1';
+  const all = process.env.MOCK_CLAUDE_PERSIST_ALL === '1' || persistTurnsHere;
   if (!root || !sid) return null;
   try {
     for (const d of fs.readdirSync(root)) {
       const f = path.join(root, d, `${sid}.jsonl`);
       if (!fs.existsSync(f)) continue;
-      // Listed, or a session a big-context-turn began (its later plain turns stay on reload too).
-      if (allow.includes(sid) || all || fs.readFileSync(f, 'utf8').includes('"msg_big_context_')) return f;
+      // Listed, or a session a big-context-turn began (its later plain turns stay on reload too),
+      // or one a MOCK_PERSIST_TURNS message opted in (the mark beside it outlives this process).
+      if (allow.includes(sid) || all || fs.existsSync(`${f}.mock-persist`) || fs.readFileSync(f, 'utf8').includes('"msg_big_context_')) return f;
     }
   } catch { /* no transcript dir */ }
   if (!all) return null;
@@ -106,11 +107,16 @@ function persistFileOf(sid) {
     fs.mkdirSync(dir, { recursive: true });
     const f = path.join(dir, `${sid}.jsonl`);
     if (!fs.existsSync(f)) fs.writeFileSync(f, '');
+    if (persistTurnsHere && !fs.existsSync(`${f}.mock-persist`)) fs.writeFileSync(`${f}.mock-persist`, '');
     return f;
   } catch { return null; }
 }
 // The user line of the turn in flight, once written (persistPlainUser).
 let persistedUser = null;
+// `MOCK_PERSIST_TURNS` in a message: this process files every later plain turn as its CLI
+// transcript, as MOCK_CLAUDE_PERSIST_ALL does for every session (a spec whose session must
+// read his own lines back from history, the way the real CLI writes them).
+let persistTurnsHere = false;
 /**
  * The user line on its own, when a slow turn STARTS, the way the real CLI writes
  * it before answering: a reload while the answer is still coming finds what was
@@ -707,6 +713,10 @@ function computeMessageParts() {
   speakAtMs = sp ? Number(sp[1]) : null;
   let words = sw ? bare.replace(sw[0], ' ').trim() : bare;
   if (sp) words = words.replace(/\s*MOCK_SPEAK_AT:\d+\s*/, ' ').trim();
+  if (/(^|\s)MOCK_PERSIST_TURNS(\s|$)/.test(words)) {
+    persistTurnsHere = true;
+    words = words.replace(/\s*MOCK_PERSIST_TURNS\s*/, ' ').trim();
+  }
   effectiveMessage = words;
   const slowMatch = words.match(/^slow:(\d+)\s+(.*)/);
   if (slowMatch) {

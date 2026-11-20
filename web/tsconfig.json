@@ -37,6 +37,7 @@
       "@open-walnut/user-status": ["../src/core/user-status"],
       "@open-walnut/board-summary-text": ["../src/core/boards/board-summary-text"],
       "@open-walnut/message-about": ["../src/core/org/message-about"],
+      "@open-walnut/reply-thread": ["../src/core/org/reply-thread"],
       "@open-walnut/thread-view": ["../src/core/org/thread-view"],
       "@open-walnut/live-activity": ["../src/core/live-activity"],
       "@open-walnut/terminal-key": ["../src/core/terminal-key"],

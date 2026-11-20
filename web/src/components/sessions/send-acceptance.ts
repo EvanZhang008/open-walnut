@@ -49,6 +49,8 @@ export function acceptedBubble<T extends AcceptableBubble>(m: T, res: SendAck, d
     ...rest, queueId: res.messageId, status: delivered ? 'delivered' : 'received',
     ...(res.dedupText ? { dedupText: res.dedupText } : {}),
     ...(res.enqueuedAt ? { timestamp: res.enqueuedAt } : {}),
+    // The thread his words were filed under: the bubble's line before history has the row.
+    ...(res.thread ? { thread: res.thread } : {}),
   } as T;
 }
 

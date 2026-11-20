@@ -19,6 +19,7 @@ import { useTaskListSelect } from '@/contexts/TasksContext';
 import { useSessionSend } from '@/hooks/useSessionSend';
 import { isBoolean, usePageView } from '@/utils/view-memory';
 import { ThreadItem } from './OrgThreads';
+import { setTopThreads, useFocusedThread } from './thread-focus';
 import type { OrgThreadsState } from './useOrgThreads';
 import { TOP_HIDDEN_VIEW, hiddenLine, topIndex, topThreads } from './top-thread-model';
 import type { OrgThread } from '@/api/org-threads';
@@ -74,6 +75,14 @@ export function TopThread({ task, sessionId, threads, list, at }: {
     if (i >= 0) lastIndex.current = i;
     if (t && t.id !== atId) setAtId(t.id);
   }, [i, t, atId]);
+  // A thread line in this chat about one of these steps the top to it and marks it (thread-focus.ts);
+  // hidden, the top lists none, so the line opens the Threads view as without it.
+  useEffect(() => {
+    setTopThreads(task.id, hidden ? null : list.map((x) => x.id));
+    return () => setTopThreads(task.id, null);
+  }, [task.id, hidden, list]);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const focused = useFocusedThread(hidden ? undefined : task.id, list, rootRef, (x) => setAtId(x.id));
   const tasks = useNamedTasks(t?.tasks);
   if (!t) return null;
   const n = list.length;
@@ -93,7 +102,7 @@ export function TopThread({ task, sessionId, threads, list, at }: {
     );
   }
   return (
-    <div className="top-thread" data-testid="top-thread" data-count={n} data-thread-id={t.id}>
+    <div ref={rootRef} className="top-thread" data-testid="top-thread" data-count={n} data-thread-id={t.id}>
       <div className="top-thread-bar">
         <button type="button" className="top-thread-step" data-testid="top-thread-prev" aria-label="Previous thread" disabled={i === 0} onClick={() => step(i - 1)}>{'‹'}</button>
         <span className="top-thread-pos" data-testid="top-thread-pos">{i + 1} / {n}</span>
@@ -104,7 +113,7 @@ export function TopThread({ task, sessionId, threads, list, at }: {
       </div>
       <ul className="org-thread-list top-thread-list" data-testid="top-thread-list">
         <ThreadItem key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} state={threads} onFollowUp={followUp}
-          name={orgDisplayTitle(task)} now={at} snoozed={false} owner={task} />
+          name={orgDisplayTitle(task)} now={at} snoozed={false} owner={task} focused={focused === t.id} />
       </ul>
     </div>
   );

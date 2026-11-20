@@ -206,6 +206,9 @@ import '@/styles/session-header-fit.css';
 import '@/styles/session-plain-chat.css';
 import { IslandHostContext, type IslandHost } from '@/components/chat/island-host';
 import { MessageAboutContext } from './message-about';
+import { ReplyThreadContext, type ReplyThreadHost } from './reply-thread-line';
+import { orgNodePath } from '@/apps/mail/mail-route-model';
+import { keepsThreads } from '@open-walnut/keeps-threads';
 import { dropSavedColumn } from '@/utils/layout-record';
 import { useTreeSplit } from '@/hooks/useTreeSplit';
 import { answeringPages, paneColumns, type NavRetarget } from '@/utils/tree-split-state';
@@ -1824,6 +1827,22 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   }, [sessionTask?.id, taskStore]);
   // The menu's Threads rows, the same on the desktop's Open group and the phone's rows.
   const threadsMenuRows = threadsMenu ? { on: threadsOn, onOpen: () => void openThreads(), onTurnOff: () => void turnOffThreads() } : undefined;
+  // The chat's thread lines (reply-thread-line.tsx) open this task's own Threads: the Threads view
+  // beside the chat, or for Main and a lead their node on the Org page. Inside that node (the Org
+  // page's chat) the node's own host stands.
+  const outerReplyHost = useContext(ReplyThreadContext);
+  const showOwnThreads = useLeanCallback(() => {
+    if (threadsKept) { if (activeView !== 'threads') toggleView('threads'); return; }
+    if (sessionTask) navigate(orgNodePath(sessionTask));
+  }, [threadsKept, activeView, toggleView, sessionTask, navigate]);
+  const replyHost = useMemo<ReplyThreadHost | null>(() => {
+    const id = sessionTask?.id;
+    if (!id) return null;
+    if (outerReplyHost?.chat === id) return outerReplyHost;
+    if (threadsKept) return { chat: id, threads: taskThreads.threads, showOwn: showOwnThreads };
+    if (sessionTask.org_role && keepsThreads(sessionTask)) return { chat: id, threads: null, showOwn: showOwnThreads };
+    return null;
+  }, [sessionTask, outerReplyHost, threadsKept, taskThreads.threads, showOwnThreads]);
   // A link asked for this task's Threads (a thread push): open them once the task shows them on.
   // The ask is taken first, so one already answered (the view is up) never reopens it later.
   const threadsAskTick = useThreadsViewAskTick();
@@ -3140,6 +3159,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   };
 
   return (
+    <ReplyThreadContext.Provider value={replyHost}>
     <SessionUsageOpenContext.Provider value={openUsageFor}>
     <PlanContentContext.Provider value={planContentValue}>
     <SessionPinsContext.Provider value={pinsApi}>
@@ -4391,6 +4411,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     </SessionPinsContext.Provider>
     </PlanContentContext.Provider>
     </SessionUsageOpenContext.Provider>
+    </ReplyThreadContext.Provider>
   );
 });
 

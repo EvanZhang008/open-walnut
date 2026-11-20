@@ -115,6 +115,12 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
+    id: 'reply_thread_line',
+    name: 'Show which thread a message is about',
+    description: 'In the chat of Main, a VP, a lead or a task with Threads, a small gray line under each message you send names the thread Walnut filed it under, and the same line under the answer names that thread and the task it is about. Click the line to open that thread. A message that arrived no longer says Delivered.',
+    default: false,
+  },
+  {
     id: 'notes_artifacts',
     name: 'Walnut artifacts in Notes',
     description: 'A "Walnut artifacts" section under the notes tree lists what Walnut\'s agents keep as standing knowledge: the org\'s skills, the shared notes, and each VP\'s and lead\'s MEMORY.md, team guidance, skills, notes and reflections. Click one to read it.',

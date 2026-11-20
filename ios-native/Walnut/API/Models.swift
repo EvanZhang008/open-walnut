@@ -238,6 +238,11 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     /// itself with its `<walnut-about>` line (taken off `text`), not the turn's fallback.
     var about: [String]? = nil
     var aboutTagged: Bool? = nil
+    /// User and assistant text rows (additive 2026-11-20, experiment `reply_thread_line`,
+    /// server `src/core/org/reply-thread.ts`): the thread his message was filed under, or
+    /// the one the answer answers, as it is now. Drawn as "↳ <title>" under the row.
+    /// nil with the experiment off and on an older server.
+    var thread: ReplyThread? = nil
     /// Any row (additive 2026-11-19, server `history-parse.ts`): the CLI began a new turn
     /// on this row from a line no row shows (a background agent's notification). The turn
     /// shape starts a turn here as at a sent user row (`TimelineTurnShape.shape`).
@@ -284,7 +289,7 @@ struct ChatMessage: Codable, Identifiable, Equatable {
         case id, role, text, createdAt, kind, source, detail, resultPreview, agent
         case thinkingText, inputPreview, detailRef, inFlight, answeredBy, isError
         case messageId, sentBy, added, textWithoutContext, injectedAfter, injectedBefore, sentTo
-        case about, aboutTagged, walnutMessageId, opensTurn
+        case about, aboutTagged, walnutMessageId, opensTurn, thread
     }
 
     init(id: String, role: String, text: String, createdAt: String, kind: Kind?, source: String? = nil,
@@ -367,6 +372,17 @@ struct WalnutAddedItem: Codable, Equatable, Hashable {
 /// release-notes"); `text` is its words. Decodes leniently, like `WalnutAddedItem`.
 /// One target of a send (`ChatMessage.sentTo`): the ref the call or its answer
 /// printed (an id or id prefix), and the task it resolved to.
+/// The thread a chat row belongs to (additive 2026-11-20, server `src/core/org/reply-thread.ts`).
+/// `node`: the task holding it when not the session's own; `closed`: a closed one; `gone`: no
+/// longer kept. Every field but `id` may be absent.
+struct ReplyThread: Codable, Equatable, Hashable {
+    let id: String
+    var title: String? = nil
+    var node: String? = nil
+    var closed: Bool? = nil
+    var gone: Bool? = nil
+}
+
 struct SentTarget: Codable, Equatable, Hashable {
     let ref: String
     var taskId: String? = nil
@@ -1283,6 +1299,9 @@ struct SessionTranscript: Codable {
         /// `ChatMessage.about`.
         var about: [String]? = nil
         var aboutTagged: Bool? = nil
+        /// User and assistant text rows: their thread (additive 2026-11-20). See
+        /// `ChatMessage.thread`.
+        var thread: ReplyThread? = nil
         /// Rich reads only: the drawer's handle on the full text the previews cut
         /// (additive). See `ChatMessage.detailRef`.
         var detailRef: String? = nil
@@ -1302,7 +1321,7 @@ struct SessionTranscript: Codable {
              injectedAfter: [CliInjectedItem]? = nil, injectedBefore: [CliInjectedItem]? = nil,
              sentTo: [SentTarget]? = nil, detailRef: String? = nil,
              about: [String]? = nil, aboutTagged: Bool? = nil, cliError: Bool? = nil,
-             walnutMessageId: String? = nil, opensTurn: Bool? = nil) {
+             walnutMessageId: String? = nil, opensTurn: Bool? = nil, thread: ReplyThread? = nil) {
             self.role = role
             self.text = text
             self.timestamp = timestamp
@@ -1325,6 +1344,7 @@ struct SessionTranscript: Codable {
             self.cliError = cliError
             self.walnutMessageId = walnutMessageId
             self.opensTurn = opensTurn
+            self.thread = thread
         }
     }
 

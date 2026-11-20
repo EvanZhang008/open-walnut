@@ -50,6 +50,8 @@ export interface SendAck {
   deliveredTo?: string;
   alreadyDelivered?: boolean;
   recovered?: KeptRow;
+  /** The thread his words were filed under (experiment reply_thread_line, core/org/reply-thread.ts). */
+  thread?: import('@open-walnut/reply-thread').ReplyThread;
 }
 
 const KEPT_MAX = 200;

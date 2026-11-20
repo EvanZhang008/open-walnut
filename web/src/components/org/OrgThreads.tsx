@@ -74,6 +74,7 @@ import type { OrgThreadsState } from './useOrgThreads';
 import { OrgThreadSnooze } from './OrgThreadSnooze';
 import { PoppedThreadCard } from './PoppedThreadCard';
 import { ThreadLetterAnswer, answersLetter } from './ThreadLetterAnswer';
+import { useFocusedThread } from './thread-focus';
 import '@/styles/org-threads.css';
 
 /** A task's live status dot, the colours of the Task view's tabs (OrgTaskRail TAB_DOT). */
@@ -352,12 +353,14 @@ function AskedIn({ a }: { a: NonNullable<OrgThread['askedIn']> }) {
   );
 }
 
-function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed, owner }: {
+function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed, owner, focused }: {
   t: OrgThread; all: readonly OrgThread[]; shared: ReadonlySet<string>; tasks: readonly Task[];
   owner: Task | undefined;
   state: OrgThreadsState; onFollowUp: Props['onFollowUp']; name: string; now: number;
   /** It is put aside now (the Snoozed section): it says when it comes back. */
   snoozed: boolean;
+  /** A chat message's thread line just opened it (thread-focus.ts): marked a moment. */
+  focused: boolean;
 }) {
   /** The whole conversation shown, in place of what the card keeps. */
   const [open, setOpen] = useState(false);
@@ -387,7 +390,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   const quote = (x: ThreadExchange<OrgThreadMessage>) => `\u201c${oneLine(x.messages.map((m) => m.text || 'A picture').join(' / '), QUOTE_WORDS)}\u201d`;
   const from = (o: { from: string; ref?: string }) => `${FROM_LABEL[o.from] ?? FROM_LABEL.node}${o.ref ? `: ${o.ref}` : ''}`;
   return (
-    <li className={`org-thread${closed ? ' is-closed' : ''}${open ? ' is-open' : ''}${snoozed ? ' is-snoozed' : ''}${pinned ? ' is-pinned' : ''}`} data-testid="org-thread" data-thread-id={t.id} data-state={closed ? 'closed' : t.state} data-snoozed={snoozed ? 'true' : undefined} data-pinned={pinned ? 'true' : undefined} data-asked-in={asked ? t.askedIn!.task : undefined}>
+    <li className={`org-thread${closed ? ' is-closed' : ''}${open ? ' is-open' : ''}${snoozed ? ' is-snoozed' : ''}${pinned ? ' is-pinned' : ''}${focused ? ' is-focused' : ''}`} data-testid="org-thread" data-thread-id={t.id} data-focused={focused ? 'true' : undefined} data-state={closed ? 'closed' : t.state} data-snoozed={snoozed ? 'true' : undefined} data-pinned={pinned ? 'true' : undefined} data-asked-in={asked ? t.askedIn!.task : undefined}>
       <button type="button" className="org-thread-head" aria-expanded={open} aria-controls={`${t.id}-conversation`} data-testid="org-thread-head" onClick={() => setOpen(!open)}>
         <span className="org-thread-state" data-testid="org-thread-state">
           <i style={{ background: closed || asked ? 'var(--fg-muted, #86868B)' : STATE_DOT[t.state] }} />
@@ -493,13 +496,15 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
 /** One thread of his list as every surface draws it: a thread of a task below is the ask card
  *  (PoppedThreadCard), the node's own the thread card. The Threads view and the top of the chat
  *  (TopThread) both draw through this, so one thread reads the same in both. */
-export function ThreadItem({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed, owner }: {
+export function ThreadItem({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed, owner, focused = false }: {
   t: OrgThread; all: readonly OrgThread[]; shared: ReadonlySet<string>; tasks: readonly Task[];
   owner: Task | undefined; state: OrgThreadsState; onFollowUp: Props['onFollowUp']; name: string; now: number; snoozed: boolean;
+  /** A chat message's thread line just opened it (thread-focus.ts). */
+  focused?: boolean;
 }) {
   return t.owner && owner
     ? <PoppedThreadCard node={owner.id} t={t} state={state} />
-    : <ThreadCard t={t} all={all} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={now} snoozed={snoozed} owner={owner} />;
+    : <ThreadCard t={t} all={all} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={now} snoozed={snoozed} owner={owner} focused={focused} />;
 }
 
 export function OrgThreads({ name, owner, state, tasks, onFollowUp, now }: Props) {
@@ -534,9 +539,17 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now }: Props
   const listFile = useAgentFileOpener(THREAD_LIST_SOURCE);
   const onEntityClick = useEntityClickHandler(undefined, listFile.onFileOpen, listFile.fileHost, listFile.fileSessionId, listFile.refusesAll);
   const snoozedIds = useMemo(() => new Set(snoozed.map((t) => t.id)), [snoozed]);
-  const card = (t: OrgThread) => <ThreadItem key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={clock} snoozed={snoozedIds.has(t.id)} owner={owner} />;
+  // A chat message's thread line asked for one of these (thread-focus.ts): its section opens, and
+  // it is brought into view and marked a moment.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const focused = useFocusedThread(owner?.id, all, rootRef, (t) => {
+    if (t.closed) setShowClosed(true);
+    else if (snoozedIds.has(t.id)) setShowSnoozed(true);
+    else if (hidden.some((x) => x.id === t.id)) setShowHidden(true);
+  });
+  const card = (t: OrgThread) => <ThreadItem key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={clock} snoozed={snoozedIds.has(t.id)} owner={owner} focused={focused === t.id} />;
   return (
-    <div className="org-threads" data-testid="org-threads" onClick={onEntityClick}>
+    <div ref={rootRef} className="org-threads" data-testid="org-threads" onClick={onEntityClick}>
       {state.error && <p className="org-thread-error" data-testid="org-threads-error">{state.error}</p>}
       {all === null && !state.error && <p className="org-threads-empty" aria-busy="true">Loading…</p>}
       {all !== null && !open.length && (

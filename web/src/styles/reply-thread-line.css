@@ -1,0 +1,36 @@
+/* The thread line under a chat message (components/sessions/reply-thread-line.tsx): the bubble's own
+   small meta type (.msg-time), no border, no background; brighter on hover. One run of text, so a
+   long title wraps under its own arrow. */
+.msg-reply-thread {
+  margin-top: 3px;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+/* Under his bubble: as wide as a bubble may be, right-aligned to it. */
+.msg-reply-thread.is-user {
+  max-width: max(85%, min(100%, 280px));
+  margin: -3px 0 6px auto;
+  padding-right: 6px;
+  text-align: right;
+}
+.msg-reply-thread.is-answer { margin-top: 6px; text-align: left; }
+.msg-reply-thread-link,
+.msg-reply-thread-task {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+.msg-reply-thread-arrow { margin-right: 4px; }
+.msg-reply-thread-sep { margin: 0 5px; }
+.msg-reply-thread-link:hover:not(:disabled),
+.msg-reply-thread-task:hover,
+.msg-reply-thread-link:focus-visible,
+.msg-reply-thread-task:focus-visible { color: var(--fg-secondary); text-decoration: underline; text-underline-offset: 2px; }
+.msg-reply-thread-link:disabled { cursor: default; }

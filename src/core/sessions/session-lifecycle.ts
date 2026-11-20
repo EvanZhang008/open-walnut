@@ -1982,9 +1982,12 @@ export async function readSessionRichHistory(sessionId: string, tail?: number): 
   // may still change (same predicate the web delta path uses).
   const { isUnsettledRow } = await import('../history-delta.js');
   const marked = sliced.map((m) => (isUnsettledRow(m) ? { ...m, unsettled: true } : m));
+  // The thread each row belongs to, in a chat that keeps Threads (experiment reply_thread_line).
+  const { replyThreadChat, withReplyThreads } = await import('../org/reply-thread-index.js');
+  const replyChat = await replyThreadChat(record);
 
   return {
-    messages: marked,
+    messages: replyChat ? await withReplyThreads(marked, replyChat) : marked,
     total,
     ...(forkedFromSessionId ? { forkedFromSessionId } : {}),
     ...(adjustedForkBoundary != null ? { forkBoundaryIndex: adjustedForkBoundary } : {}),

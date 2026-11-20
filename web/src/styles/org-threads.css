@@ -119,3 +119,6 @@
   font: inherit; font-size: 12px; cursor: pointer;
 }
 .org-threads-closed-toggle:hover { color: var(--fg-secondary, var(--fg)); }
+
+/* The card a chat message's thread line opened (sessions/reply-thread-line.tsx), marked a moment. */
+.org-thread.is-focused { box-shadow: 0 0 0 2px var(--accent); transition: box-shadow 0.3s ease; }

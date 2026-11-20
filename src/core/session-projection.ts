@@ -90,6 +90,7 @@ import { walnutAddedOf, type CliAddedItem, type WalnutAddedItem } from '../lib/w
 import { InjectedLines } from './sessions/transcript-injected.js'
 import { sendTargetRefs } from '../lib/send-targets.js'
 import { cutEnd } from './text-cut.js'
+import type { ReplyThread } from './org/reply-thread.js'
 
 /** LEGACY git-synced paths — dual-written while `sync.legacy_projection_files`
  *  is on (see projection-cache.ts); the cache/ paths are the live copies. */
@@ -537,6 +538,12 @@ export interface ProjectedTranscriptMessage {
    *  task pills under the replies of Main's and a lead's session. Absent when none. */
   about?: string[]
   aboutTagged?: true
+  /** User and assistant text rows (additive, 2026-11-20, experiment `reply_thread_line`): the
+   *  thread his message was filed under, or the one the answer answers (core/org/reply-thread.ts),
+   *  as it is now: its title, the task holding it when that is not this session's, `closed`, or
+   *  `gone` (no longer kept: shown, opens nothing). A client draws "↳ <title>" under the row.
+   *  Absent with the experiment off and in a chat that keeps no Threads. */
+  thread?: ReplyThread
   /** Assistant text rows (additive, 2026-11-06): the row is Claude Code's own error reply,
    *  `text` reading "Claude Code: Prompt is too long" (or "Claude Code: API Error: ..."), not
    *  the model's answer. It stays role `assistant`, the turn's last words, for every reader of
@@ -790,9 +797,13 @@ export async function buildSessionTranscript(
     windowed = !older.reachedStart
     bounds = transcriptSliceBounds(history, opts!)
   }
-  const tail = opts?.full
+  const window = opts?.full
     ? history
     : bounds ? history.slice(bounds.start, bounds.end) : history.slice(-TRANSCRIPT_TAIL)
+  // The thread each row belongs to, in a chat that keeps Threads (experiment reply_thread_line).
+  const { replyThreadChat, withReplyThreads } = await import('./org/reply-thread-index.js')
+  const replyChat = await replyThreadChat(record)
+  const tail: Array<typeof window[number] & { thread?: ReplyThread }> = replyChat ? await withReplyThreads(window, replyChat) : window
   // `full` implies `rich`: a consumer paging a whole conversation wants the
   // expanded-card fields, and that is the shape the mobile CHAT read has shipped.
   // Computed once, ABOVE the loop, so the two field gates below cannot drift.
@@ -857,6 +868,8 @@ export async function buildSessionTranscript(
         ...(m.role === 'user' && m.walnutMessageId ? { walnutMessageId: m.walnutMessageId } : {}),
         // The tasks the reply is about (history parse, core/org/message-about.ts), for the phone's pills.
         ...(m.role === 'assistant' && m.about?.length ? { about: m.about, ...(m.aboutTagged ? { aboutTagged: true as const } : {}) } : {}),
+        // The thread his message was filed under, or the answer's (experiment reply_thread_line).
+        ...(m.thread ? { thread: m.thread } : {}),
         // Claude Code's own error reply, drawn as its error line on the phone (history twin: session-history cliError).
         ...(m.cliError ? { cliError: true as const } : {}),
       })

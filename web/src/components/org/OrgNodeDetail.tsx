@@ -26,6 +26,8 @@ import { yieldFullscreen } from '@/hooks/useFullscreen';
 import { useOpenTask } from '@/hooks/useOpenTask';
 import type { Task } from '@open-walnut/core';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
+import { threadFocusAsk, topShows, useThreadFocusTick } from './thread-focus';
+import { ReplyThreadContext, type ReplyThreadHost } from '@/components/sessions/reply-thread-line';
 import { OrgPaneHandle } from './OrgPaneHandle';
 import { TaskBoardPane } from '@/components/board/TaskBoardPane';
 import { LiveActivityLine } from '@/components/board/LiveActivityLine';
@@ -321,6 +323,19 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   const threadsCounted = useMemo<ThreadCounts | undefined>(() => (threads.threads ? threadCounts(threads.threads) : row.threads), [threads.threads, row.threads]);
   const threadsCount = threadsCounted?.shown ?? 0;
   const followUp = sessionId ? (threadId: string, text: string, images?: ImageAttachment[]) => send(sessionId, text, images, { threadId }) : null;
+  /** The chat's thread lines (reply-thread-line.tsx) open this node's own Threads in the side bar. */
+  const replyHost = useMemo<ReplyThreadHost | null>(() => (threadsId
+    ? { chat: threadsId, threads: threads.threads, showOwn: () => { setRailHidden(false); setTopPick('threads'); } }
+    : null), [threadsId, threads.threads, setRailHidden, setTopPick]);
+  // A thread line clicked in another chat (Home, Ask Walnut, another node's) asked for one of this
+  // node's threads: the side bar shows Threads, which then brings that card into view (thread-focus.ts).
+  // One the chat's top shows already (TopThread) steps there instead.
+  const focusTick = useThreadFocusTick();
+  useEffect(() => {
+    const asked = threadsId ? threadFocusAsk(threadsId) : null;
+    if (asked && !topShows(threadsId!, asked)) { setRailHidden(false); setTopPick('threads'); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per ask
+  }, [focusTick, threadsId]);
   /** The contact's Board is its team's (resolveTeamBoardTask): the contact's own choices and its
    *  subtasks' are there, another task's are not. */
   const onContactBoard = (id: string): boolean => {
@@ -508,7 +523,9 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
         {shown === 'team' && renderTeam()}
         {shown === 'chat' && (sessionId ? (
           <div ref={chatHostRef} className="org-chat-host" data-testid="org-chat">
-            <SessionPanel key={sessionId} sessionId={sessionId} viewPlace="org-node" embedded headerSlot={chatTools} {...(!isRouter && hasBoard && row.contactId ? { onHostBoard: () => openTasks('board') } : {})} inboxRequest={chatInbox?.sid === sessionId ? chatInbox.n : 0} {...(routerEmptyChat ? { emptyHistory: routerEmptyChat } : {})} onSessionClick={onOpenSession} />
+            <ReplyThreadContext.Provider value={replyHost}>
+              <SessionPanel key={sessionId} sessionId={sessionId} viewPlace="org-node" embedded headerSlot={chatTools} {...(!isRouter && hasBoard && row.contactId ? { onHostBoard: () => openTasks('board') } : {})} inboxRequest={chatInbox?.sid === sessionId ? chatInbox.n : 0} {...(routerEmptyChat ? { emptyHistory: routerEmptyChat } : {})} onSessionClick={onOpenSession} />
+            </ReplyThreadContext.Provider>
           </div>
         ) : (
           // No session yet: it starts by itself in the background (org-autostart.ts); Retry only after a failure.

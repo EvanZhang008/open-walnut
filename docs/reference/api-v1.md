@@ -2704,7 +2704,14 @@ directory on that host.
   (additive, 2026-11-19) rides the first row of a turn the CLI began on a line no row shows (a
   background agent's notification): a client starts a turn there, as at a sent user row, so a
   session its background agents wake reads as one short turn per wake-up; an older client
-  ignores it. The history route's rows carry it too. Rows of one message come as thinking,
+  ignores it. The history route's rows carry it too. `thread` (additive, 2026-11-20, experiment
+  `reply_thread_line`) rides a user text row the person sent into a chat that keeps Threads, and
+  the assistant text row that answers it: `{ id, title?, node?, closed?, gone? }`, the thread
+  Walnut filed his message under (the one its `threads` hint named, followed through a merge, a
+  split or a move) as it is now: `node` is the task holding it when that is not this session's,
+  `closed: true` a closed one (it still opens), `gone: true` one no longer kept (shown, opens
+  nothing). A client draws "↳ <title>" under the row and opens that thread on a tap; absent with
+  the experiment off. Rows of one message come as thinking,
   then the text, then the tool calls (see the `/conversations/:id/messages`
   notes on row order). The primary
   box exports tails for every session it can reach — local from disk, remote
@@ -3786,6 +3793,9 @@ an id outside `[A-Za-z0-9_-]`.
   sent to (`task_send`, `org_send`). A client draws them as live task pills
   under the replies of Main's and a lead's (VP's) session, and should also hide
   the line in streamed text it shows before the row arrives.
+  User and assistant rows (additive, 2026-11-20, experiment `reply_thread_line`):
+  `thread` (optional), the same object as on the transcript's rows; the web
+  console reads it on `GET /api/sessions/:id/history` too.
 - `GET /api/v1/sessions/:id/chat-earlier` (additive, 2026-10) → `200 {
   "agentId", "conversationId", "messages": [rows] }` for a chat's lane
   session: what the chat said before this session started (the chat history

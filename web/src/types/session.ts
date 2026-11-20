@@ -365,6 +365,9 @@ export interface SessionHistoryMessage {
   about?: string[];
   /** `about` came from the message's own `<walnut-about>` line. */
   aboutTagged?: boolean;
+  /** His message: the thread Walnut filed it under; an answer: the thread of the message it
+   *  answers (src/core/org/reply-thread.ts, experiment reply_thread_line). Drawn as "↳ <title>". */
+  thread?: import('@open-walnut/reply-thread').ReplyThread;
   /** The CLI began a turn on this row from a line the chat does not show (a background
    *  agent's notification): a turn starts here (turnStartsOf, src/lib/turn-end-marker.ts). */
   opensTurn?: true;

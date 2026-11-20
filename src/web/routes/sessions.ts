@@ -1486,6 +1486,9 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
     }
     // Look up session record to get cwd
     const record = await getSessionByClaudeId(sessionId)
+    // The thread line under each message in a chat that keeps Threads (experiment reply_thread_line).
+    const replyChat = await (await import('../../core/org/reply-thread-index.js')).replyThreadChat(record)
+    if (replyChat) (await import('./reply-threads-json.js')).replyThreadsOnJson(res, replyChat)
     // The turns a window counts are the main conversation's: an Ask here
     // question's turns fold under one row each (history-turn-window.ts).
     const questionIds = questionTurnIds(record?.threadAnchors)

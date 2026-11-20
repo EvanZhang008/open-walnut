@@ -230,9 +230,12 @@ final class TimelineRowBuilder {
             let shown = TimelineTurnMarker.strip(message.text)
             var rows = assistantRows(shown == message.text ? message : message.replacingText(shown),
                                      width: width, idPrefix: namespace)
-            // In Main's or a lead's chat, the tasks a reply is about, under it
-            // (MessageAboutTag): the server's, else the row's own line while fresh.
-            if showAbout, !rows.isEmpty {
+            // The thread the reply answers (experiment reply_thread_line), in place of
+            // the About pills; else, in Main's or a lead's chat, the tasks a reply is about,
+            // under it (MessageAboutTag): the server's, else the row's own line while fresh.
+            if let thread = message.thread, !rows.isEmpty {
+                rows.append(threadRow(id: "\(namespace)#thread", thread: thread, mine: false, width: width))
+            } else if showAbout, !rows.isEmpty {
                 let ids = MessageAboutTag.rowAbout(message.about, text: message.text)
                 if !ids.isEmpty { rows.append(aboutRow(id: "\(namespace)#about", ids: ids, width: width)) }
             }
@@ -301,6 +304,20 @@ final class TimelineRowBuilder {
         // does not carry: the states ride the revision, so a moved task reloads the cell.
         return textRow(id: id, revision: drawnStates.joined(separator: ",").hashValue,
                        attributed: text, width: width)
+    }
+
+    /// The thread a message went to, one line of the bubble's small gray type under it
+    /// (experiment reply_thread_line; web `reply-thread-line.tsx`): "↳ <title>", right
+    /// under his bubble, left under the answer. Not a link here yet: the web opens it.
+    func threadRow(id: String, thread: ReplyThread, mine: Bool, width: CGFloat) -> TimelineRow {
+        let line = "\u{21B3} " + (thread.title ?? "A thread")
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = mine ? .right : .left
+        let text = NSAttributedString(string: line, attributes: [
+            .font: TimelineTextStyler.caption2Font, .foregroundColor: ReadableText.secondaryUIColor,
+            .paragraphStyle: paragraph,
+        ])
+        return textRow(id: id, revision: line.hashValue, attributed: text, width: width)
     }
 
     /// The word in front of a reply's task pills (the web's "About").
@@ -401,6 +418,9 @@ final class TimelineRowBuilder {
                     height: height
                 ))
             }
+        }
+        if let thread = message.thread, message.failed != true {
+            rows.append(threadRow(id: nextID(), thread: thread, mine: true, width: width))
         }
         if message.failed == true {
             // Revision distinguishes the waiting copy from the terminal one so

@@ -60,6 +60,7 @@ export default defineConfig({
       '@open-walnut/user-status': path.resolve(__dirname, '../src/core/user-status.ts'),
       '@open-walnut/board-summary-text': path.resolve(__dirname, '../src/core/boards/board-summary-text.ts'),
       '@open-walnut/message-about': path.resolve(__dirname, '../src/core/org/message-about.ts'),
+      '@open-walnut/reply-thread': path.resolve(__dirname, '../src/core/org/reply-thread.ts'),
       '@open-walnut/thread-view': path.resolve(__dirname, '../src/core/org/thread-view.ts'),
       '@open-walnut/live-activity': path.resolve(__dirname, '../src/core/live-activity.ts'),
       '@open-walnut/terminal-key': path.resolve(__dirname, '../src/core/terminal-key.ts'),

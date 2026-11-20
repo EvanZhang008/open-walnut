@@ -133,6 +133,8 @@ export interface QueueRowWire {
   message: string;
   status: string;
   enqueuedAt?: string;
+  /** The thread the row's words were filed under (experiment reply_thread_line). */
+  thread?: import('@open-walnut/reply-thread').ReplyThread;
   parkedReason?: string;
   /** Parked only until the agent can run on the host (QueuedMessage.waitsFor): it goes out by itself. */
   waitsFor?: string;
@@ -196,6 +198,7 @@ export function queueRowBubble(m: QueueRowWire, draftOrigin?: DraftOrigin): Opti
     // question tree across a reload (its own page, and a parked one marks the question failed).
     ...(m.userUuid ? { userUuid: m.userUuid } : {}),
     ...(m.sentBy === 'person' || m.sentBy === 'agent' ? { sentBy: m.sentBy } : {}),
+    ...(m.thread ? { thread: m.thread } : {}),
     ...(draftOrigin ? { draftOrigin } : {}),
   };
 }

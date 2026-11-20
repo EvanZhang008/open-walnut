@@ -60,6 +60,8 @@ import { useShowWalnutAdditions } from '@/hooks/useShowWalnutAdditions';
 import { showHintTagsAsTyped } from '@/utils/hint-display';
 import { stripTurnMarker } from '@/utils/turn-end-marker';
 import { MessageAbout, MessageAboutContext, rowAbout } from './message-about';
+import { ReplyThreadContext, ReplyThreadLine, useReplyThreadLineOn } from './reply-thread-line';
+import { answerTasks, type ReplyThread } from '@open-walnut/reply-thread';
 import { shortenFileAboutLine } from '@/utils/thread-tree';
 import { InjectedBannerRow } from './InjectedBannerRow';
 import { searchPromptBannerSplit } from './search-ask';
@@ -263,6 +265,9 @@ interface SessionMessageProps {
   trailingFolded?: boolean;
   /** Only the last assistant output renders copy actions, keeping middle rows compact. */
   showCopyActions?: boolean;
+  /** An answer's thread when the row itself carries none: the thread of the message it answers,
+   *  read by the chat from the rows before it (SessionChatHistory, reply-thread.ts answerThreads). */
+  replyThread?: ReplyThread;
   /** The calls of a row whose words drew it already (SessionChatHistory's
    *  `toolsAfter`): no second copy, pin or time strip for the same message. */
   noActions?: boolean;
@@ -1318,7 +1323,7 @@ export const SessionMessage = memo(function SessionMessage(props: SessionMessage
   return <SessionMessageBubble {...props} />;
 });
 
-function SessionMessageBubble({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, suppressTools, answerOnly, ridersFolded, trailingFolded, showCopyActions = false, noActions = false, onSessionClick, onFileOpen }: SessionMessageProps) {
+function SessionMessageBubble({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, suppressTools, answerOnly, ridersFolded, trailingFolded, showCopyActions = false, noActions = false, replyThread, onSessionClick, onFileOpen }: SessionMessageProps) {
   const { role, text: arrivingText, timestamp, tools: rawTools, thinking } = message;
   // A reply still arriving is this same row (SessionChatHistory draws a stream
   // block as the row its persisted twin will be): its words hold while the
@@ -1333,6 +1338,14 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
   // In Main's or a lead's chat, the tasks a reply is about show under it (message-about.tsx).
   const showAbout = useContext(MessageAboutContext);
   const aboutIds = useMemo(() => (showAbout && role === 'assistant' ? rowAbout(message.about, rawText) : []), [showAbout, role, message.about, rawText]);
+  // The thread line (reply-thread-line.tsx): under his message, and under the answer in place of About.
+  const replyHost = useContext(ReplyThreadContext);
+  const lineOn = useReplyThreadLineOn() && !!replyHost;
+  const lineThread = lineOn ? (role === 'assistant' ? message.thread ?? replyThread : role === 'user' ? message.thread : undefined) : undefined;
+  const lineTasks = useMemo(
+    () => (lineThread && role === 'assistant' ? answerTasks(rowAbout(message.about, rawText), replyHost?.chat) : undefined),
+    [lineThread, role, message.about, rawText, replyHost?.chat],
+  );
   const tools = suppressTools || answerOnly ? undefined : rawTools;
   const time = formatTime(timestamp);
   const isUser = role === 'user';
@@ -1578,7 +1591,9 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
         ) : (
           <RichMarkdown text={bodyText} cwd={sessionCwd} host={imageHost} inlineImages={imagesKnown} scope={message.msgId} />
         ))}
-        {bodyText && aboutIds.length > 0 && <MessageAbout ids={aboutIds} />}
+        {bodyText && (lineThread && !isUser
+          ? <ReplyThreadLine thread={lineThread} side="answer" {...(lineTasks?.length ? { tasks: lineTasks } : {})} />
+          : aboutIds.length > 0 && <MessageAbout ids={aboutIds} />)}
         {tools && tools.length > 0 && (() => {
           // CLI content order is prose first, tool_use blocks after — render
           // in that order. Merge consecutive generic tools into one "Ran 3
@@ -1653,12 +1668,14 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
       )}
     </div>
   );
+  // His message's line sits under the bubble, outside it (the bubble is the row itself).
+  const userLine = lineThread && isUser && personWords ? <ReplyThreadLine thread={lineThread} side="user" /> : null;
   const leadShown = !!riderSegments && !(personWords && (!showAdded || ridersFolded));
   // The notes after the words: the history places them in the fold of the turn they start
   // (SessionChatHistory `trailingFolded`); drawn here only when it did not.
   // A row with no words of the person shows them as they are: they are the message.
   const trailShown = !!trailSegments && !trailingFolded && (!personWords || showAdded);
-  if (!leadShown && !trailShown) return row;
+  if (!leadShown && !trailShown) return userLine ? <>{row}{userLine}</> : row;
   // Not `.session-msg-content`: that class marks THE message body, which quote
   // pins and passage selection find as the row's first match.
   const cardsOf = (segments: EnvelopeSegment[]) => (
@@ -1681,6 +1698,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
         </div>
       )}
       {row}
+      {userLine}
       {trailShown && (
         <div className="session-msg session-msg-envelope session-msg-riders" data-testid="session-rider-row">
           {personWords ? (

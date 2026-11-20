@@ -425,6 +425,11 @@ export function registerSessionChatRpc(): void {
     // i.e. the image preamble, if any, plus the user's own words. Emitter and
     // matcher must agree on one basis; this is it.
     const displayedByHistory = stripReferenceCards(outputMode.displayText)
+    // The thread his words were just filed under, for the bubble's line before history has the row
+    // (experiment reply_thread_line, core/org/reply-thread-index.ts).
+    const replyIndex = await import('../../core/org/reply-thread-index.js')
+    const replyChat = await replyIndex.replyThreadChat(record)
+    const thread = replyChat ? await replyIndex.threadOfSent(outputMode.hints, replyChat) : null
     // `enqueuedAt` is the bubble's time floor (optimistic-dedup.ts): its history
     // row can only be written after this instant, so the client matches it by
     // time when the row lands under an index watermark that already moved on.
@@ -433,6 +438,7 @@ export function registerSessionChatRpc(): void {
       messageId: msg.id,
       enqueuedAt: msg.enqueuedAt,
       ...(displayedByHistory !== data.message ? { dedupText: displayedByHistory } : {}),
+      ...(thread ? { thread } : {}),
       // Sent from a panel on a session an engine switch replaced: the message went to the task's
       // current session (engine-switch.ts activeSessionFor), and the panel follows it there.
       ...(msg.sessionId && msg.sessionId !== data.sessionId ? { deliveredTo: msg.sessionId } : {}),
@@ -536,7 +542,9 @@ export function registerSessionChatRpc(): void {
       const wait = m.status === 'pending' ? waitOf(m.id, why) : null
       return wait ? { ...shown, heldReason: wait.reason, ...(wait.retryAt ? { heldRetryAt: wait.retryAt } : {}) } : shown
     })
-    return { messages, ...(launchPrompt ? { launchPrompt } : {}) }
+    // Each row's thread, as its line under the bubble shows it (experiment reply_thread_line).
+    const { withQueueThreads } = await import('../../core/org/reply-thread-index.js')
+    return { messages: await withQueueThreads(messages, sid), ...(launchPrompt ? { launchPrompt } : {}) }
   })
 
   registerMethod('session:stream-subscribe', async (payload: unknown, _ws) => {
