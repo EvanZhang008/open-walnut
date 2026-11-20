@@ -279,7 +279,8 @@ test('a reaction survives split and an answered flip; only new words bring the c
   await card(page, id).getByTestId('org-thread-follow-input').fill('A different subject: redesign the task detail view.')
   await card(page, id).getByTestId('org-thread-follow-send').click()
   const visible = page.getByTestId('org-thread-list').locator(`[data-thread-id="${id}"]`)
-  await expect(visible).toHaveCount(0)
+  // The card leaves once the server took the follow-up (the box sends it, then the thread is in progress).
+  await expect(visible).toHaveCount(0, { timeout: 20_000 })
   const stored = (await threads(request)).find((t) => t.id === id)!
   const split = await request.post(`/api/v1/tasks/${ids.lead}/threads/${id}/split`, {
     data: { message: stored.messages[stored.messages.length - 1].id }, headers: { 'x-walnut-caller-sid': ids.leadSid },
