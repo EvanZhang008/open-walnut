@@ -54,9 +54,10 @@ describe('ratchet: Web Audio taps of the mic', () => {
     expect(fn).toContain('rec.refresh(blob)');
     expect(fn.indexOf('rec.refresh(blob)')).toBeLessThan(fn.indexOf('pcmRef.current'));
     // The draft timer goes through it, never straight to the side capture.
-    const timer = hook.slice(hook.indexOf('draftTimerRef.current = setInterval'));
+    const timer = hook.slice(hook.indexOf('const draftTick = async'));
     expect(timer).toMatch(/await liveDraftSource\(\)/);
     expect(timer.slice(0, 600)).not.toMatch(/pcmRef\.current/);
+    expect(hook).toMatch(/draftTimerRef\.current = setInterval\(draftTick,/);
   });
 
   it('the stop sends the whole recording once and hands its text over untouched', () => {
@@ -72,4 +73,42 @@ describe('ratchet: Web Audio taps of the mic', () => {
     // The one assignment of the final text is that answer.
     expect(stop.match(/\bfinalText\s*=(?!=)\s*\S+/g)).toEqual(['finalText = result.text;']);
   });
+
+  it('the recorder\'s draft has no byte cap, the first draft comes near a second, and every engine reads repaired audio', () => {
+    // 2026-11-20, the user: "I talk and it just doesn't show anything for long
+    // time". A headset take doubled its bytes (src/lib/audio-block-repeat.ts) and
+    // hit the 4 MB cap 76 s in: no drafts for the rest of the take. The recorder's
+    // path uploads only its open window, so only its time cap stays.
+    const hook = readFileSync(join(ROOT, 'web/src/hooks/useSpeechToText.ts'), 'utf8');
+    const rec = hook.slice(hook.indexOf('const liveDraftSource = async'), hook.indexOf('const webmDraftTick = async'));
+    expect(rec).toMatch(/RECORDER_DRAFT_MAX_MS/);
+    expect(rec).not.toMatch(/blob\.size\s*>\s*DRAFT_MAX_BYTES/);
+    expect(rec).toMatch(/takeRebase\(\)/);
+    const first = Number(/const FIRST_DRAFT_MS = (\d+);/.exec(hook)?.[1]);
+    expect(first).toBeGreaterThan(0);
+    expect(first).toBeLessThanOrEqual(1200);
+    expect(hook).toMatch(/setTimeout\(\(\) => \{[^}]*void draftTick\(\)/);
+    // A tick with no audio yet asks the recorder for it (WebKit's first chunk
+    // comes 2 s in), and a tick that was decoding when the stop came uploads nothing.
+    const tick = hook.slice(hook.indexOf('const draftTick = async'), hook.indexOf('draftTimerRef.current = setInterval(draftTick'));
+    expect(tick).toMatch(/recorder\.requestData\(\)/);
+    expect(tick).toMatch(/await liveDraftSource\(\);\s*(\/\/[^\n]*\n\s*)*if \(recorderStopped\(\)\) return;/);
+    // Every WAV convertToWav hands out passes the repair...
+    const convert = readFileSync(join(ROOT, 'src/core/stt/audio-convert.ts'), 'utf8');
+    const body = convert.slice(convert.indexOf('async function toHeardWav'), convert.indexOf('async function heardOnce'));
+    const returns = body.match(/return [^;]*;/g) ?? [];
+    expect(returns.length).toBeGreaterThan(0);
+    expect(returns.every((r) => /heardOnce\(outputPath\)/.test(r))).toBe(true);
+    // ...and every engine reads its audio through convertToWav or audioForUpload.
+    const engines = readdirSync(join(ROOT, 'src/core/stt')).filter((f) => /^engine-.*\.ts$/.test(f));
+    expect(engines.length).toBeGreaterThan(3);
+    for (const f of engines) {
+      const src = readFileSync(join(ROOT, 'src/core/stt', f), 'utf8');
+      // engine-qwen.ts only picks the MLX or llama engine; its own transcribe throws.
+      const reads = (src.match(/async transcribe\([^)]*\)[^{]*\{[^\n]*/g) ?? []).filter((m) => !/\{ throw /.test(m));
+      if (!reads.length) continue;
+      expect(/convertToWav\(|audioForUpload\(/.test(src), `${f} reads repaired audio`).toBe(true);
+    }
+  });
 });
+

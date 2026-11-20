@@ -128,6 +128,8 @@ export const DICTATION_DISCARDED_ERROR = 'The dictation was thrown away before i
 // chunks only decode as a from-the-start concatenation). Drop-if-busy keeps at
 // most one draft request in flight either way.
 const DRAFT_INTERVAL_MS = 2000;
+// The first draft, just after the recorder's first one-second chunk arrives.
+const FIRST_DRAFT_MS = 1150;
 const DRAFT_MAX_BYTES = 4 * 1024 * 1024; // upload cap per draft request, EVERY path
 // Belt to COMMIT_FORCE_AFTER_MS's braces. forceAfterMs only fires when the
 // window contains speech and a cut point can be placed in it, so a window can
@@ -720,6 +722,8 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
       // transcription on stop is untouched by this.
       const draftFormat = mimeType.includes('webm') ? 'webm' : mimeType.includes('mp4') ? 'mp4' : 'webm';
       draftBusyRef.current = false;
+      // Read afresh after an await (TypeScript keeps the state it saw before it).
+      const recorderStopped = () => recorder.state === 'inactive';
 
       // Records that [from, to) of the recording was abandoned by the draft
       // pipeline: the preview misses those words (the final text never does,
@@ -846,22 +850,32 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
       const liveDraftSource = async (): Promise<PcmSource | 'webm' | null> => {
         const rec = recPcmRef.current;
         if (rec && liveSourceRef.current !== 'side' && liveSourceRef.current !== 'webm') {
+          // Decoded here, never uploaded: only its length in time bounds it
+          // (RECORDER_DRAFT_MAX_MS). An upload cap here ended the draft of every
+          // take past 2.5 minutes, and at 76 s for a take whose recorder wrote
+          // each 10 ms twice (2026-11-20).
           const blob = new Blob(chunksRef.current, { type: recorder.mimeType });
           if (blob.size === 0) return null;                      // no chunk yet
-          if (blob.size > DRAFT_MAX_BYTES) {
-            retireDraftLane(`clip past the ${DRAFT_MAX_BYTES} byte draft cap`);
-            return null;
-          }
           try {
             const t0 = Date.now();
             await rec.refresh(blob);
             if (mediaRecorderRef.current !== recorder) return null;
+            const rebase = rec.takeRebase();
+            if (rebase) {
+              // The draft's timeline changed (the recorder repeats its sound, or
+              // turned out not to): positions taken on the old one move with it.
+              windowStartRef.current = Math.floor(windowStartRef.current * rebase);
+              log.warn('stt', rebase < 1
+                ? `the recorder writes each 10 ms of sound ${Math.round(1 / rebase)} times; the live draft hears it once`
+                : 'the recorder stopped repeating its sound at one phase; the live draft hears it as decoded');
+            }
             const decodeMs = Date.now() - t0;
             if (decodeMs > 1000 && !slowDecodeLogged) {
               slowDecodeLogged = true;
               log.warn('stt', `decoding the recorder's audio took ${decodeMs}ms for ${Math.round(rec.totalSamples / 16)}ms of audio`);
             }
-            if (rec.totalSamples > RECORDER_DRAFT_MAX_MS * 16) {
+            // What a tick costs is the audio decoded, repeats included.
+            if (rec.decodedSamples > RECORDER_DRAFT_MAX_MS * 16) {
               retireDraftLane(`take past ${RECORDER_DRAFT_MAX_MS / 60_000} minutes, the recorder's audio is no longer decoded every tick`);
               return null;
             }
@@ -894,6 +908,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
           return;
         }
         const base64 = await blobToBase64(blob, 'draft audio');
+        if (recorderStopped()) return;
         const abort = new AbortController();
         draftAbortRef.current = abort;
         try {
@@ -916,12 +931,29 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
         }
       };
 
-      draftTimerRef.current = setInterval(async () => {
+      // WebKit hands the recorder's first chunk over only 2 s in, then one a
+      // second (2026-11-20, measured: 2002 ms): a tick that finds no audio yet
+      // asks the recorder for what it has and drafts the moment it arrives.
+      let draftOnChunk = false;
+      recorder.addEventListener('dataavailable', () => {
+        if (!draftOnChunk) return;
+        draftOnChunk = false;
+        void draftTick();
+      });
+      const draftTick = async () => {
         if (draftBusyRef.current) return;                       // previous request still in flight
         if (mediaRecorderRef.current !== recorder || recorder.state === 'inactive') return;
+        if (chunksRef.current.length === 0) {
+          draftOnChunk = true;
+          try { recorder.requestData(); } catch { /* not recording any more */ }
+          return;
+        }
         draftBusyRef.current = true;
         try {
           const source = await liveDraftSource();
+          // Stopped while this tick decoded: the stop's whole-clip pass owns the
+          // text now, and a draft sent after it would only queue ahead of it.
+          if (recorderStopped()) return;
           if (source === 'webm') await webmDraftTick();
           else if (source) await pcmDraftTick(source);
         } catch {
@@ -929,7 +961,14 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
         } finally {
           draftBusyRef.current = false;
         }
-      }, DRAFT_INTERVAL_MS);
+      };
+      // The first words show as soon as the recorder's first chunk is in, not a
+      // whole interval later; then a draft every DRAFT_INTERVAL_MS.
+      draftTimerRef.current = setInterval(draftTick, DRAFT_INTERVAL_MS);
+      const firstTick = setTimeout(() => {
+        if (draftTimerRef.current !== undefined) void draftTick();
+      }, FIRST_DRAFT_MS);
+      recorder.addEventListener('stop', () => clearTimeout(firstTick), { once: true });
     } catch (err) {
       setMicOpening(false);
       stopStream();

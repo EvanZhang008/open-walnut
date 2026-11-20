@@ -13,14 +13,22 @@
  * with its header) at 16 kHz mono, the rate the engines use, so slices need no
  * resampling. The samples before the last block are kept and only the rest is
  * mixed and measured again, so a tick costs one decode plus the new audio.
+ *
+ * With some headsets the Mac app's recorder writes every 10 ms twice
+ * (src/lib/audio-block-repeat.ts): the draft heard speech at half its tempo and
+ * came back empty. The decode is read once as spoken, decided from the sound
+ * itself as soon as there is enough of it.
  */
 
 import { findSilenceCommitPoint, type PcmBlockInfo, type CommitPointOptions } from './stt-segments';
 import { encodeWav, lastVoiceIn, voiceBetween, type PcmSource } from './pcm-stream';
+import { findBlockRepeat, removeBlockRepeat, type BlockRepeat } from '../../../src/lib/audio-block-repeat';
 
 const SAMPLE_RATE = 16000;
 /** ~85 ms, the side capture's block length, so the silence rules read the same. */
 const BLOCK = 1365;
+/** Audio after which a take that repeats nothing is taken not to (20 s). */
+const SETTLE_SAMPLES = SAMPLE_RATE * 20;
 
 /** What a decode returns: the channels of the audio, at SAMPLE_RATE. */
 export interface DecodedAudio {
@@ -50,6 +58,10 @@ export class RecorderPcm implements PcmSource {
   private total = 0;
   private blocks: PcmBlockInfo[] = [];
   private gen = 0;
+  // null: not decided yet; 'none': the recording repeats nothing.
+  private repeat: BlockRepeat | 'none' | null = null;
+  private rebase = 0;
+  private decoded = 0;
 
   constructor(private readonly decode: DecodeAudio) {}
 
@@ -69,7 +81,36 @@ export class RecorderPcm implements PcmSource {
     const audio = await this.decode(await blob.arrayBuffer());
     if (gen !== this.gen) return;
     if (audio.sampleRate !== SAMPLE_RATE) throw new Error(`decoded at ${audio.sampleRate} Hz, not ${SAMPLE_RATE}`);
-    const len = audio.length;
+    // Mono as the side capture and the server's ffmpeg make it: the mean of the
+    // channels (the Mac app records two, the second one silent).
+    const channels = Array.from({ length: audio.numberOfChannels }, (_, c) => audio.getChannelData(c));
+    const n = channels.length || 1;
+    let mono = new Float32Array(audio.length);
+    for (let i = 0; i < mono.length; i++) {
+      let s = 0;
+      for (const ch of channels) s += ch[i];
+      mono[i] = s / n;
+    }
+    this.decoded = audio.length;
+    if (this.repeat === null) {
+      const verdict = findBlockRepeat(mono, SAMPLE_RATE);
+      // A first second of a headset still switching can read as no repeat:
+      // "none" is only taken as settled once the take is long enough.
+      this.repeat = verdict === 'none' && mono.length < SETTLE_SAMPLES ? null : verdict;
+      if (this.repeat && this.repeat !== 'none') {
+        // Every position taken so far was on the repeated timeline.
+        this.rebase = 1 / this.repeat.factor;
+        this.blocks.length = 0;
+      }
+    } else if (this.repeat !== 'none' && findBlockRepeat(mono, SAMPLE_RATE) === 'none') {
+      // The take stopped repeating at one phase (findBlockRepeat leaves such a
+      // take as it is): the draft goes back to the audio as decoded.
+      this.rebase = this.repeat.factor;
+      this.repeat = 'none';
+      this.blocks.length = 0;
+    }
+    if (this.repeat && this.repeat !== 'none') mono = removeBlockRepeat(mono, this.repeat);
+    const len = mono.length;
     // Keep every whole block but the last: the end of a stream decoded again
     // with more bytes after it can differ in its final frames. A decode a few
     // frames shorter than the last one keeps only the blocks inside it.
@@ -81,15 +122,7 @@ export class RecorderPcm implements PcmSource {
       grown.set(this.samples.subarray(0, from));
       this.samples = grown;
     }
-    // Mono as the side capture and the server's ffmpeg make it: the mean of the
-    // channels (the Mac app records two, the second one silent).
-    const channels = Array.from({ length: audio.numberOfChannels }, (_, c) => audio.getChannelData(c));
-    const n = channels.length || 1;
-    for (let i = from; i < len; i++) {
-      let s = 0;
-      for (const ch of channels) s += ch[i];
-      this.samples[i] = s / n;
-    }
+    this.samples.set(mono.subarray(from), from);
     for (let start = from; start < len; start += BLOCK) {
       const end = Math.min(len, start + BLOCK);
       let sumSq = 0;
@@ -97,6 +130,22 @@ export class RecorderPcm implements PcmSource {
       this.blocks.push({ startSample: start, length: end - start, rms: Math.sqrt(sumSq / (end - start)) });
     }
     this.total = len;
+  }
+
+  /** Samples the last decode held before any repeat was dropped: what a tick costs to decode. */
+  get decodedSamples(): number {
+    return this.decoded;
+  }
+
+  /**
+   * What positions taken before this refresh must be multiplied by, once: set
+   * when the refresh found the recording repeats its sound (1/factor), or that
+   * it does not after all (factor). 0 otherwise.
+   */
+  takeRebase(): number {
+    const f = this.rebase;
+    this.rebase = 0;
+    return f;
   }
 
   lastVoiceSample(voiceRms: number): number {

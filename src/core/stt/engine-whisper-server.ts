@@ -27,7 +27,7 @@ import { tmpdir } from 'node:os';
 import { dirname } from 'node:path';
 import { log } from '../../logging/index.js';
 import { sttSpawnEnv } from './spawn-env.js';
-import { isFfmpegAvailable } from './audio-convert.js';
+import { isFfmpegAvailable, audioForUpload } from './audio-convert.js';
 import { probeDaemonPatiently, waitForPortReleased } from './daemon-health.js';
 import { assertVoiceHere, voiceOffHere } from './voice-here.js';
 import type { SttEngine, SttRequest, SttResult } from './types.js';
@@ -320,12 +320,13 @@ export function createWhisperServerEngine(cfg: WhisperServerConfig): SttEngine {
       // Nobody is waiting for a dropped live draft; do not queue it.
       req.signal?.throwIfAborted();
 
-      // Build multipart form data directly from base64 — no temp file needed
-      const audioBuffer = Buffer.from(req.audio, 'base64');
-      const blob = new Blob([audioBuffer], { type: `audio/${req.format}` });
+      // The original bytes, or the repaired WAV when the recording needed it
+      // (wav-repair.ts: a recorder that wrote each 10 ms twice, long silences).
+      const { audio: audioBuffer, format } = await audioForUpload(req.audio, req.format, Number.POSITIVE_INFINITY);
+      const blob = new Blob([new Uint8Array(audioBuffer)], { type: `audio/${format}` });
 
       const form = new FormData();
-      form.append('file', blob, `audio.${req.format}`);
+      form.append('file', blob, `audio.${format}`);
       form.append('response_format', 'json');
       if (req.language) {
         form.append('language', req.language);
@@ -336,7 +337,7 @@ export function createWhisperServerEngine(cfg: WhisperServerConfig): SttEngine {
         form.append('prompt', effectivePrompt);
       }
 
-      log.stt.info(`Sending ${(audioBuffer.length / 1024).toFixed(1)}KB ${req.format} to whisper-server :${port}`);
+      log.stt.info(`Sending ${(audioBuffer.length / 1024).toFixed(1)}KB ${format} to whisper-server :${port}`);
 
       const res = await fetch(`http://127.0.0.1:${port}/inference`, {
         method: 'POST',

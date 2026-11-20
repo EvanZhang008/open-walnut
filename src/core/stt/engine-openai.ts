@@ -12,6 +12,10 @@
 
 import { log } from '../../logging/index.js';
 import type { SttEngine, SttRequest, SttResult } from './types.js';
+import { audioForUpload } from './audio-convert.js';
+
+/** The transcription API's upload limit is 25 MB; a repaired WAV past this keeps the original. */
+const OPENAI_UPLOAD_MAX_BYTES = 24 * 1024 * 1024;
 
 interface OpenAiSttConfig {
   apiKey: string;
@@ -36,13 +40,14 @@ export function createOpenAiEngine(cfg: OpenAiSttConfig): SttEngine {
     async transcribe(req: SttRequest): Promise<SttResult> {
       const t0 = Date.now();
 
-      // Build multipart form data
-      const audioBuffer = Buffer.from(req.audio, 'base64');
-      const mimeType = `audio/${req.format}`;
+      // The original bytes, or the repaired WAV when the recording needed it
+      // (wav-repair.ts) and it stays under the API's 25 MB upload limit.
+      const { audio: audioBuffer, format } = await audioForUpload(req.audio, req.format, OPENAI_UPLOAD_MAX_BYTES);
+      const mimeType = `audio/${format}`;
 
-      const blob = new Blob([audioBuffer], { type: mimeType });
+      const blob = new Blob([new Uint8Array(audioBuffer)], { type: mimeType });
       const formData = new FormData();
-      formData.append('file', blob, `audio.${req.format}`);
+      formData.append('file', blob, `audio.${format}`);
       formData.append('model', model);
       if (req.language) {
         formData.append('language', req.language);

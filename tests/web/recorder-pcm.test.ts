@@ -124,4 +124,78 @@ describe('RecorderPcm', () => {
     expect(pcm.sliceWavBase64(RATE)).toBeNull();
     expect(pcm.sliceWavBase64(500, 100)).toBeNull();
   });
+
+  describe('a recorder that writes each 10 ms twice (a headset in the Mac app)', () => {
+    /** Smoothed noise, speech-like enough for the repeat finder. */
+    const speech = (n: number, seed = 3) => {
+      let x = seed >>> 0, y = 0;
+      return Float32Array.from({ length: n }, () => {
+        x = (x * 1664525 + 1013904223) >>> 0;
+        y = 0.7 * y + 0.3 * (x / 0x80000000 - 1);
+        return 0.25 * y;
+      });
+    };
+    const twice = (s: Float32Array) => {
+      const out = new Float32Array(s.length * 2);
+      for (let at = 0; at < s.length; at += 160) {
+        const b = s.subarray(at, Math.min(s.length, at + 160));
+        out.set(b, at * 2);
+        out.set(b, at * 2 + b.length);
+      }
+      return out;
+    };
+
+    it('reads the sound once, and tells the caller once to divide the positions it holds', async () => {
+      const d = fakeDecoder();
+      const pcm = new RecorderPcm(d.decode);
+      const spoken = speech(4 * RATE);
+      d.set(audio([twice(spoken)]));
+      await pcm.refresh(blob());
+      expect(pcm.totalSamples).toBe(spoken.length);
+      expect(pcm.decodedSamples).toBe(2 * spoken.length);
+      expect(pcm.takeRebase()).toBe(0.5);
+      expect(pcm.takeRebase()).toBe(0);
+      // The next, longer decode keeps the same reading.
+      const more = speech(6 * RATE);
+      more.set(spoken);
+      d.set(audio([twice(more)]));
+      await pcm.refresh(blob());
+      expect(pcm.totalSamples).toBe(more.length);
+      expect(pcm.takeRebase()).toBe(0);
+      const s = wavSamples(pcm.sliceWavBase64(5 * RATE, 5 * RATE + 100)!.base64);
+      expect(s[10]).toBe(Math.round(more[5 * RATE + 10] * 32767));
+    });
+
+    it('a take that repeats nothing is decided only once 20 s were heard', async () => {
+      const d = fakeDecoder();
+      const pcm = new RecorderPcm(d.decode);
+      d.set(audio([speech(3 * RATE)]));
+      await pcm.refresh(blob());
+      expect(pcm.totalSamples).toBe(3 * RATE);
+      // Still undecided: the next decode is read afresh (a headset that settles
+      // in its first seconds is only read once it is heard).
+      const late = twice(speech(5 * RATE, 9));
+      d.set(audio([late]));
+      await pcm.refresh(blob());
+      expect(pcm.takeRebase()).toBe(0.5);
+      expect(pcm.totalSamples).toBe(5 * RATE);
+    });
+
+    it('a take that stops repeating goes back to the audio as decoded', async () => {
+      const d = fakeDecoder();
+      const pcm = new RecorderPcm(d.decode);
+      const head = twice(speech(4 * RATE, 5));
+      d.set(audio([head]));
+      await pcm.refresh(blob());
+      expect(pcm.takeRebase()).toBe(0.5);
+      // The same bytes, then 6 s that repeat nothing.
+      const grown = new Float32Array(head.length + 6 * RATE);
+      grown.set(head);
+      grown.set(speech(6 * RATE, 6), head.length);
+      d.set(audio([grown]));
+      await pcm.refresh(blob());
+      expect(pcm.takeRebase()).toBe(2);
+      expect(pcm.totalSamples).toBe(grown.length);
+    });
+  });
 });

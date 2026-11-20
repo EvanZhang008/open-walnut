@@ -56,7 +56,7 @@ const GATES = new Set(['assertVoiceHere', 'voiceOffHere']);
 /** `<file>#<function>` → how many process calls it holds, and why they run no voice. */
 const EXEMPT: Record<string, { calls: number; why: string }> = {
   'src/core/stt/audio-convert.ts#probeFfmpeg': { calls: 1, why: 'ffmpeg -version: finds ffmpeg, converts nothing' },
-  'src/core/stt/audio-convert.ts#convertToWav': { calls: 1, why: 'converts audio a request brought; ffmpeg loads no model and records nothing' },
+  'src/core/stt/audio-convert.ts#toHeardWav': { calls: 1, why: 'converts audio a request brought; ffmpeg loads no model and records nothing' },
   'src/core/stt/detect.ts#whichBinary': { calls: 1, why: 'detection: which' },
   'src/core/stt/detect.ts#getVersion': { calls: 1, why: 'detection: <binary> --version, which loads no model' },
   'src/core/stt/detect.ts#detectUv': { calls: 1, why: 'detection: uv --version' },
@@ -74,7 +74,7 @@ const EXEMPT: Record<string, { calls: number; why: string }> = {
 
 /** Engines whose isAvailable() need not ask the gate. */
 const ENGINE_EXEMPT: Record<string, string> = {
-  'src/core/stt/engine-openai.ts': 'a hosted API: no local process, no model, no microphone',
+  'src/core/stt/engine-openai.ts': 'a hosted API: no model, no microphone; its one local process is the ffmpeg conversion in audio-convert.ts',
   'src/core/stt/engine-qwen.ts': 'its own isAvailable is the no-runtime branch, never available and starting nothing; the other branches return the mlx and llama engines',
 };
 

@@ -38,22 +38,43 @@ interface Lanes {
   transcribe: number
   drafts: number
   draftsAfterStop: string[]
-  stopped: boolean
   /** The whole-clip pass hears no words (and Retry's pass with it). */
   emptyWhole: boolean
 }
 
 async function stubLanes(page: Page): Promise<Lanes> {
-  const seen: Lanes = { transcribe: 0, drafts: 0, draftsAfterStop: [], stopped: false, emptyWhole: false }
+  const seen: Lanes = { transcribe: 0, drafts: 0, draftsAfterStop: [], emptyWhole: false }
   await stubSttStatus(page)
+  // "After the stop" is read in the page: a draft is after the stop when the
+  // recorder's stop() ran before the page sent it, not when the test meant to
+  // click (the first preview comes about a second in, so a regular tick can
+  // fall between the two).
+  await page.addInitScript(() => {
+    let stopped = false
+    const MR = window.MediaRecorder
+    if (MR) {
+      const start = MR.prototype.start, stop = MR.prototype.stop
+      MR.prototype.start = function (this: MediaRecorder, ...a: Parameters<MediaRecorder['start']>) { stopped = false; return start.apply(this, a) }
+      MR.prototype.stop = function (this: MediaRecorder) { stopped = true; return stop.apply(this) }
+    }
+    const f = window.fetch
+    window.fetch = function (input: RequestInfo | URL, init?: RequestInit) {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (!stopped || !url.includes('/api/stt/draft')) return f.call(this, input, init)
+      const headers = new Headers(init?.headers)
+      headers.set('x-test-after-stop', '1')
+      return f.call(this, input, { ...init, headers })
+    } as typeof window.fetch
+  })
   await page.route('**/api/stt/warmup', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }))
   await page.route('**/api/stt/draft', async (route) => {
     const { format, audio } = route.request().postDataJSON() as { format: string; audio: string }
-    if (seen.stopped) seen.draftsAfterStop.push(format)
+    const afterStop = route.request().headers()['x-test-after-stop'] === '1'
+    if (afterStop) seen.draftsAfterStop.push(format)
     else seen.drafts++
     // After the stop: the tail is a WAV slice, the check sends the whole webm.
     const silent = format === 'wav' && wavLevel(audio) < 0.01
-    const text = silent ? '' : !seen.stopped ? PREVIEW : format === 'wav' ? TAIL : WHOLE
+    const text = silent ? '' : !afterStop ? PREVIEW : format === 'wav' ? TAIL : WHOLE
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text, durationMs: 30 }) })
   })
   const whole = async (route: Route) => {
@@ -104,7 +125,6 @@ export function registerWholeClipScenarios(): void {
     await expect(d.panel.getByTitle(/clipboard/i)).toHaveCount(0)
     const send = d.send
     for (let round = 1; round <= 2; round++) {
-      seen.stopped = false
       seen.draftsAfterStop = []
       const before = seen.transcribe
       await d.textarea.fill('')
@@ -112,7 +132,6 @@ export function registerWholeClipScenarios(): void {
       await expect(d.mic).toHaveClass(/mic-recording/, { timeout: 15_000 })
       // The drafts show while he speaks.
       await expect(d.textarea).toHaveValue(PREVIEW, { timeout: 15_000 })
-      seen.stopped = true
       await d.mic.click()
       await expect(d.textarea).toHaveValue(WHOLE, { timeout: 20_000 })
       expect(seen.transcribe, 'the stop sent the whole clip once').toBe(before + 1)
@@ -138,7 +157,6 @@ export function registerWholeClipScenarios(): void {
     await page.waitForTimeout(3000)
     const heard = seen.drafts
     await expect.poll(() => seen.drafts, { timeout: 15_000 }).toBeGreaterThanOrEqual(heard + 2)
-    seen.stopped = true
     await d.mic.click()
     await expect(d.textarea).toHaveValue(WHOLE, { timeout: 20_000 })
     expect(seen.transcribe).toBe(1)
@@ -155,7 +173,6 @@ export function registerWholeClipScenarios(): void {
     await d.mic.click()
     await expect(d.mic).toHaveClass(/mic-recording/, { timeout: 15_000 })
     await expect(d.textarea).toHaveValue(PREVIEW, { timeout: 30_000 })
-    seen.stopped = true
     await d.mic.click()
     await expect(d.textarea).toHaveValue(WHOLE, { timeout: 20_000 })
     expect(seen.transcribe, 'the stop sent the whole clip once').toBe(1)
@@ -172,7 +189,6 @@ export function registerWholeClipScenarios(): void {
     await d.mic.click()
     await expect(d.mic).toHaveClass(/mic-recording/, { timeout: 15_000 })
     await expect(d.textarea).toHaveValue(PREVIEW, { timeout: 15_000 })
-    seen.stopped = true
     seen.emptyWhole = true
     await d.mic.click()
     // The preview is not taken for the text: it stays, flagged, with Retry.

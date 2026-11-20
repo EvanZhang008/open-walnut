@@ -84,4 +84,64 @@ export function registerLiveDraftRecorderScenarios(): void {
     expect(drafts.filter((x) => x.format !== 'wav').map((x) => x.format)).toEqual([])
     expect(logs.some((l) => l.includes("live draft reads the recorder's own audio")), logs.join('\n')).toBe(true)
   })
+
+  test('the first live text comes about a second after the recorder starts, and the stop sends the clip at once', async ({ page }) => {
+    // 2026-11-20, the user: "I talk and it just doesn't show anything for long
+    // time ... it take super long at the end". The first draft waited for the
+    // 2 s interval; this holds it near a second, and the stop's upload close
+    // behind the stop, whatever the engine does with it.
+    test.setTimeout(120_000)
+    const sttLogs: string[] = []
+    page.on('console', (m) => { if (/\[stt\]/.test(m.text())) sttLogs.push(m.text().slice(0, 160)) })
+    await useSyntheticMic(page)
+    await stubSttStatus(page)
+    await page.addInitScript(() => {
+      const marks: Record<string, number> = {}
+      Object.assign(window, { __sttMarks: marks })
+      const MR = window.MediaRecorder
+      if (MR) {
+        const start = MR.prototype.start, stop = MR.prototype.stop
+        MR.prototype.start = function (this: MediaRecorder, ...a: Parameters<MediaRecorder['start']>) {
+          marks.start ??= performance.now()
+          const chunks: string[] = []
+          Object.assign(window, { __sttChunks: chunks })
+          this.addEventListener('dataavailable', (e) => chunks.push(`${Math.round(performance.now() - marks.start)}ms:${e.data.size}B`))
+          return start.apply(this, a)
+        }
+        MR.prototype.stop = function (this: MediaRecorder) { marks.stop ??= performance.now(); return stop.apply(this) }
+      }
+      const f = window.fetch
+      window.fetch = function (input: RequestInfo | URL, init?: RequestInit) {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+        if (url.includes('/api/stt/draft')) marks.draft ??= performance.now()
+        if (url.includes('/api/stt/transcribe')) marks.transcribe ??= performance.now()
+        return f.call(this, input, init)
+      } as typeof window.fetch
+    })
+    await page.route('**/api/stt/warmup', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }))
+    await page.route('**/api/stt/draft', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: DRAFT_TEXT, durationMs: 30 }) }))
+    await page.route('**/api/stt/transcribe', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: DRAFT_TEXT, durationMs: 60 }) }))
+    await page.route('**/api/stt/save', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"recordingId":"rec-live-2"}' }))
+    const d = await openComposer(page)
+
+    await d.mic.click()
+    await expect(d.mic).toHaveClass(/mic-recording/, { timeout: 15_000 })
+    await expect(d.textarea).toHaveValue(DRAFT_TEXT, { timeout: 15_000 })
+    await d.mic.click()
+    await expect(d.mic).not.toHaveClass(/mic-recording/, { timeout: 15_000 })
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __sttMarks: Record<string, number> }).__sttMarks.transcribe), { timeout: 10_000 }).toBeDefined()
+    const m = await page.evaluate(() => (window as unknown as { __sttMarks: Record<string, number> }).__sttMarks)
+    const chunks = await page.evaluate(() => (window as unknown as { __sttChunks?: string[] }).__sttChunks ?? [])
+    console.log(`[stt-latency] recorder chunks: ${chunks.slice(0, 8).join(' ')}`)
+    console.log(`[stt-latency] page log: ${sttLogs.slice(0, 12).join(' | ')}`)
+    const firstDraftMs = m.draft - m.start
+    const stopToUploadMs = m.transcribe - m.stop
+    console.log(`[stt-latency] first draft ${Math.round(firstDraftMs)} ms after start; stop to upload ${Math.round(stopToUploadMs)} ms`)
+    // The first tick fires at 1150 ms; the old 2 s interval can never pass this.
+    expect(firstDraftMs, 'first live draft request after the recorder starts (ms)').toBeLessThan(1800)
+    expect(stopToUploadMs, 'stop to the whole-clip upload (ms)').toBeLessThan(1500)
+  })
 }
+

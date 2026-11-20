@@ -5,12 +5,13 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { writeFile, unlink } from 'node:fs/promises';
+import { readFile, writeFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { sttSpawnEnv } from './spawn-env.js';
 import { cafToWav } from './caf-to-wav.js';
+import { repairWavFile } from './wav-repair.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -101,6 +102,33 @@ export function isConformingWav(buf: Buffer): boolean {
  * dictation.
  */
 export async function convertToWav(audioBase64: string, inputFormat: string): Promise<string> {
+  return (await toHeardWav(audioBase64, inputFormat)).path;
+}
+
+/**
+ * The audio a cloud engine uploads: the original bytes as they are, unless the
+ * repair (wav-repair.ts) changed what the engine would hear, then that WAV.
+ * A WAV over `maxBytes`, or no ffmpeg on this box, keeps the original.
+ */
+export async function audioForUpload(
+  audioBase64: string, format: string, maxBytes: number,
+): Promise<{ audio: Buffer; format: string }> {
+  const original = { audio: Buffer.from(audioBase64, 'base64'), format };
+  let path: string | null = null;
+  try {
+    const wav = await toHeardWav(audioBase64, format);
+    path = wav.path;
+    if (!wav.repaired) return original;
+    const audio = await readFile(wav.path);
+    return audio.length <= maxBytes ? { audio, format: 'wav' } : original;
+  } catch {
+    return original;
+  } finally {
+    if (path) await unlink(path).catch(() => {});
+  }
+}
+
+async function toHeardWav(audioBase64: string, inputFormat: string): Promise<{ path: string; repaired: boolean }> {
   const inputPath = tempPath(inputFormat);
   const outputPath = tempPath('wav');
 
@@ -108,7 +136,7 @@ export async function convertToWav(audioBase64: string, inputFormat: string): Pr
     const buf = Buffer.from(audioBase64, 'base64');
     if (isConformingWav(buf)) {
       await writeFile(outputPath, buf);
-      return outputPath;
+      return heardOnce(outputPath);
     }
   }
   // The phone's PCM CAF is rewrapped in-process, so no box needs ffmpeg for it.
@@ -116,7 +144,7 @@ export async function convertToWav(audioBase64: string, inputFormat: string): Pr
     const wav = cafToWav(Buffer.from(audioBase64, 'base64'));
     if (wav) {
       await writeFile(outputPath, wav);
-      return outputPath;
+      return heardOnce(outputPath);
     }
   }
 
@@ -133,10 +161,20 @@ export async function convertToWav(audioBase64: string, inputFormat: string): Pr
       if (err.code === 'ENOENT') throw new Error(`Reading ${inputFormat} audio needs ffmpeg, which is not installed`);
       throw err;
     });
-    return outputPath;
+    return await heardOnce(outputPath);
   } finally {
     await unlink(inputPath).catch(() => {});
   }
+}
+
+/**
+ * Every WAV an engine reads passes here (wav-repair.ts): a recording that
+ * repeats each 10 ms is heard once and long silences are shortened. A repair
+ * that fails leaves the audio as it was.
+ */
+async function heardOnce(wavPath: string): Promise<{ path: string; repaired: boolean }> {
+  const repaired = await repairWavFile(wavPath).catch(() => false);
+  return { path: wavPath, repaired };
 }
 
 /** Clean up a temp file */
