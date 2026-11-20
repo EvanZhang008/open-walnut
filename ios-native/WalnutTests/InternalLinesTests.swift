@@ -61,6 +61,7 @@ final class InternalLinesTests: XCTestCase {
         XCTAssertEqual(TimelineTurnMarker.stripLive("[v16908844] Done."), "Done.")
     }
 
+    @MainActor
     func testASavedReplyAndTheProvisionalRowShowNoReport() {
         XCTAssertEqual(TimelineTurnMarker.strip(report), "Two subagents still run.")
         let reply = ChatMessage(id: "r1", role: "assistant", text: report, createdAt: "2026-11-20T01:00:05Z", kind: nil)
