@@ -137,12 +137,12 @@ afterAll(async () => {
 }, 60_000)
 
 async function expectAnsweredByWords(letterId: string, words: string, before: number, line = WORDS_ANSWER_LINE): Promise<void> {
-  // The letter reads answered in his words, and its thread leaves needs.
+  // The letter reads answered in his words, and its thread leaves needs: his words make it the node's turn (working).
   await vi.waitFor(async () => {
     const l = await getLetter(letterId)
     expect(l?.thread?.some((t) => t.from === 'human' && t.text === words)).toBe(true)
   }, { timeout: 10_000, interval: 200 })
-  await vi.waitFor(async () => expect((await readThreads(vp.taskId)).threads.find((t) => t.id === letterThreadId(letterId))?.state).not.toBe('needs'), { timeout: 10_000, interval: 200 })
+  await vi.waitFor(async () => expect((await readThreads(vp.taskId)).threads.find((t) => t.id === letterThreadId(letterId))?.state).toBe('working'), { timeout: 10_000, interval: 200 })
   // The session gets his words once, as the letter's answer, never also as a chat row.
   await vi.waitFor(() => expect(rowsSince(before).filter((m) => m.includes('[Letter reply]') && m.includes(words))).toHaveLength(1), { timeout: 15_000, interval: 200 })
   await new Promise((r) => setTimeout(r, 500))
