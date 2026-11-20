@@ -694,6 +694,17 @@ esac
     expect(out.stdout).toMatch(/not signed in/)
     expect(gateBranches(g.bare)).toBe('')
   })
+
+  // gh's status command checks the token with GitHub, so a dropped request reads as signed out
+  // (2026-11-20: two deep-test probes refused while gh was signed in). Every script asks the
+  // stored token instead. scripts/leak-scan/ is left out: the leak gate's own files change only
+  // with the maintainer's approval of that push, and its check there only skips an early look.
+  it('no script asks gh auth status, which needs the network, whether gh is signed in', () => {
+    const r = spawnSync('git', ['grep', '-l', '-E', 'gh +auth +status', '--', 'scripts/', ':!scripts/leak-scan/'], { cwd: ROOT, encoding: 'utf8' })
+    expect(r.status === 0 || r.status === 1).toBe(true)
+    const offenders = r.stdout.split('\n').filter(Boolean)
+    expect(offenders).toEqual([])
+  })
 })
 
 /** push-gate-status.sh, the workflow's status writer, against a stub gh that records each write. */

@@ -242,7 +242,10 @@ if [ -z "$runner" ]; then
   [ -n "$repo" ] || { echo "Test gate: $plain is not a GitHub repository, so there is nothing to judge here."; exit 0; }
   command -v jq >/dev/null 2>&1 || refuse "the test gate reads its verdict with jq, which is not installed here."
   command -v gh >/dev/null 2>&1 || refuse "the test gate reads its verdict with the GitHub CLI (gh), which is not installed here."
-  gh auth status >/dev/null 2>&1 || refuse "the GitHub CLI (gh) is not signed in here (gh auth login), so the test gate cannot read its verdict."
+  # Signed in is the stored token, read here with no network: gh's own status command also checks the
+  # token with GitHub and fails on a dropped request, which refused deep-test probes as "not signed
+  # in" while gh was (2026-11-20 02:43Z and 02:52Z).
+  gh auth token >/dev/null 2>&1 || refuse "the GitHub CLI (gh) is not signed in here (gh auth login), so the test gate cannot read its verdict."
   errf=$(mktemp)
   # Every GitHub read has its own time limit: one gh call that hung for most of an hour once left
   # the gate blind to verdicts already written, until its deadline said "did not answer"
