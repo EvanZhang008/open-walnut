@@ -452,6 +452,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
       ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
       ...(opts?.hints ? { requestedHints: opts.hints } : {}),
       ...(opts?.draftOrigin ? { draftOrigin: opts.draftOrigin } : {}),
+      ...(opts?.threadId ? { threadId: opts.threadId } : {}),
     };
     setOptimisticMsgs((prev) => [...prev, optimistic]);
 
@@ -596,6 +597,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         sessionId, message: failedMsg.text, retryOf: queueId, ...imagePayload,
         ...(failedMsg.userUuid ? { userUuid: failedMsg.userUuid } : {}),
         ...(failedMsg.requestedHints ? { hints: failedMsg.requestedHints } : {}),
+        ...(failedMsg.threadId ? { threadId: failedMsg.threadId } : {}),
       }))
       .then((res) => {
         release([queueId]);
@@ -604,6 +606,11 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         // alreadyDelivered: the first send's acknowledgement was lost, not the send: its
         // line already ran (the server sent nothing again). History holds it and its answer.
         if (res?.alreadyDelivered) log.info('send', 'retry: the message was already delivered', { sessionId, queueId });
+        if (res?.answeredLetter) {
+          // The retry delivered the letter answer his words are: the session gets them as that answer.
+          setOptimisticMsgs((prev) => prev.filter((m) => m.queueId !== queueId));
+          return;
+        }
         if (res?.messageId) adoptAnswer(queueId, res);
       })
       .catch((e: Error) => {

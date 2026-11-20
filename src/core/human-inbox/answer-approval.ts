@@ -28,7 +28,7 @@ export const RISKY_STEPS: readonly RiskyStep[] = [
   { id: 'history', label: 'rewriting git history or force-pushing', re: /\brewrit|\bforce[- ]?push|\bpush[ \t]+(?:[^\s;|&]+[ \t]+){0,4}?(?:-f\b|--force)|filter-(?:repo|branch)|\breset\s+--hard|\bsquash(?!\s+(?:and|&)\s+merge)|\u6539\u5199|\u91cd\u5199|\u5f3a\u63a8|\u5f3a\u5236\u63a8\u9001/i },
   { id: 'unpublish', label: 'unpublishing, deprecating or withdrawing a release', re: /\bunpublish|\bdeprecat|\byank|\bretract|\bwithdraw|\u64a4\u56de|\u6536\u56de|\u64a4\u9500|\u64a4\u4e0b|\u4e0b\u67b6|\u4e0b\u7ebf/i },
   { id: 'delete', label: 'deleting something', re: /\bdelet|\bremov|\bwipe|\bpurg|\berase|\bdestroy|\bdrop\b|\u5220|\u9500\u6bc1|\u79fb\u9664|\u62b9\u6389/i },
-  { id: 'outward', label: 'publishing or sending something outside Walnut', re: /\bpublish|\bpost(?:ing)? (?:it|to|on|the)\b|\btweet|\bsend (?:it|them|the|an?|to)\b|\bemail (?:them|him|her|the)\b|\bpush(?:ed|ing)? (?:it )?to\b|\bmake (?:it )?public|\u53d1\u5e03|\u53d1\u5e16|\u53d1\u9001|\u53d1\u7ed9|\u53d1\u51fa|\u63a8\u5230|\u63a8\u4e0a|\u516c\u5f00/i },
+  { id: 'outward', label: 'publishing, releasing or sending something outside Walnut', re: /\bpublish|\brelease|\bship(?:s|ped|ping)?\b|\bdeploy|\u4e0a\u7ebf|\u53d1\u7248|\u53d1\u65b0\u7248|\bpost(?:ing)? (?:it|to|on|the)\b|\btweet|\bsend (?:it|them|the|an?|to)\b|\bemail (?:them|him|her|the)\b|\bpush(?:ed|ing)? (?:it )?to\b|\bmake (?:it )?public|\u53d1\u5e03|\u53d1\u5e16|\u53d1\u9001|\u53d1\u7ed9|\u53d1\u51fa|\u63a8\u5230|\u63a8\u4e0a|\u516c\u5f00/i },
   { id: 'spend', label: 'spending money', re: /\bbuy\b|\bpurchas|\bpay\b|\bpayment|\bsubscrib|\bspend|\u8d2d\u4e70|\u4ed8\u6b3e|\u4ed8\u8d39|\u82b1\u94b1|\u8ba2\u9605/i },
   { id: 'access', label: 'credentials or permissions', re: /\brotat|\brevok|\bpassword|\bcredential|\bapi[- ]?key|\bpermission|\bgrant (?:access|it)|\u5bc6\u7801|\u8f6e\u6362|\u540a\u9500|\u6743\u9650|\u6388\u6743/i },
 ];
@@ -60,7 +60,7 @@ export function stepsIn(text: string): RiskyStep[] {
 }
 
 /** An answer that says only yes: what it approves is in the letter, not in it. */
-const BARE_YES = /^[\s"'\u201c\u201d]*(?:yes|yep|yeah|ok(?:ay)?|k{1,2}|y|sure|approved?|go(?:\s+ahead)?|do\s+it|confirm(?:ed)?|accept(?:ed)?|agreed?|proceed|lgtm|ship\s+it|sounds\s+good|please|\u540c\u610f|\u597d\u7684?|\u53ef\u4ee5|\u884c|\u662f\u7684?|\u5bf9|\u786e\u8ba4|\u6279\u51c6|\u7ee7\u7eed|\u6ca1\u95ee\u9898|\u5c31\u8fd9\u6837)(?:[\s,.!\uff0c\u3002\uff01\u3001]+(?:yes|yep|yeah|ok(?:ay)?|sure|approved?|go(?:\s+ahead)?|do\s+it|confirm(?:ed)?|accept(?:ed)?|agreed?|proceed|lgtm|ship\s+it|sounds\s+good|please|\u540c\u610f|\u597d\u7684?|\u53ef\u4ee5|\u884c|\u662f\u7684?|\u5bf9|\u786e\u8ba4|\u6279\u51c6|\u7ee7\u7eed|\u6ca1\u95ee\u9898|\u5c31\u8fd9\u6837|with|both|all|it|them|everything|that|\u90fd|\u5168\u90e8|\u5427))*[\s.!\u3002\uff01]*$/i;
+const BARE_YES = /^[\s"'\u201c\u201d]*(?:yes|yep|yeah|ok(?:ay)?|k{1,2}|y|sure|approved?|go(?:\s+ahead)?|do\s+it|confirm(?:ed)?|accept(?:ed)?|agreed?|proceed|lgtm|sounds\s+good|please|\u540c\u610f|\u597d\u7684?|\u53ef\u4ee5|\u884c|\u662f\u7684?|\u5bf9|\u786e\u8ba4|\u6279\u51c6|\u7ee7\u7eed|\u6ca1\u95ee\u9898|\u5c31\u8fd9\u6837)(?:[\s,.!\uff0c\u3002\uff01\u3001]+(?:yes|yep|yeah|ok(?:ay)?|sure|approved?|go(?:\s+ahead)?|do\s+it|confirm(?:ed)?|accept(?:ed)?|agreed?|proceed|lgtm|sounds\s+good|please|\u540c\u610f|\u597d\u7684?|\u53ef\u4ee5|\u884c|\u662f\u7684?|\u5bf9|\u786e\u8ba4|\u6279\u51c6|\u7ee7\u7eed|\u6ca1\u95ee\u9898|\u5c31\u8fd9\u6837|with|both|all|it|them|everything|that|\u90fd|\u5168\u90e8|\u5427))*[\s.!\u3002\uff01]*$/i;
 
 export function isBareYes(text: string): boolean {
   return BARE_YES.test(text.trim());
@@ -86,17 +86,45 @@ export const USER_WORDS_MIN = 2;
 /** His words, bare: no quotes, spaces or end marks. */
 const bare = (t: string): string => t.replace(/[\s"'\u201c\u201d.,!?\u3002\uff0c\uff01\uff1f\u3001]+/g, '').toLowerCase();
 
+/** Latin letters and digits, or CJK: what a label's words are made of. */
+const CJK = /^[\u3400-\u9fff\uf900-\ufaff]+$/;
+
 /**
- * Words shorter than USER_WORDS_MIN still answer when they are a clear yes ("K", "ok", a single
- * yes word) or name the picked option by its own label ("\u53d1" for "\u53d1\u65b0\u7248") (2026-11-20, the
- * user typed "K" on a card recommending a release; the agent was refused for his one letter).
- * A risky step still needs words that name it (below): a yes alone never approves one. Pure.
+ * Do his words name this option: its whole label, a whole word of it, or, in Chinese, its first
+ * character or a whole run of its characters ("\u53d1" for "\u53d1\u65b0\u7248"). Never a piece of a
+ * Latin word: "n" names nothing in "Release now". Pure.
  */
-export function wordsAnswer(words: string, action?: Pick<LetterAction, 'label'>): boolean {
-  if (words.length >= USER_WORDS_MIN) return true;
-  if (!words || !bare(words)) return false;
-  if (isBareYes(words)) return true;
-  return !!action && bare(action.label).includes(bare(words));
+export function namesOption(words: string, label: string): boolean {
+  const w = bare(words);
+  if (!w) return false;
+  if (w === bare(label)) return true;
+  const parts = label.toLowerCase().split(/[^a-z0-9\u00c0-\u024f\u3400-\u9fff\uf900-\ufaff]+/).filter(Boolean);
+  if (CJK.test(w)) {
+    const runs = label.split(/[^\u3400-\u9fff\uf900-\ufaff]+/).filter(Boolean);
+    return runs.includes(w) || (w.length === 1 && runs[0]?.[0] === w);
+  }
+  return /^[a-z0-9]+$/.test(w) && parts.includes(w);
+}
+
+/** An option as the guard reads it: `recommended` is the one the letter marked (LetterAction.recommended). */
+export type GuardOption = Pick<LetterAction, 'label'> & { recommended?: boolean };
+
+/**
+ * Are these words enough to answer with, and do they pick this option by themselves?
+ * `verified`: Walnut read them as his own message on that letter's card (its thread or its own
+ * reply), written after the letter was sent (letter-ops.ts verifiedUserWords), not only as the
+ * task quotes them. Only verified words are read loosely (2026-11-20, the user typed "K" on a card
+ * recommending a release): a bare yes ("K", "ok") picks the option the letter marked recommended
+ * and no other (none marked: it picks nothing), and short words pick the option they name
+ * (namesOption). Words a task only quotes keep the strict rule: at least USER_WORDS_MIN
+ * characters, and they never pick by themselves. Pure.
+ */
+export function wordsAnswer(words: string, action?: GuardOption, verified = false): { ok: boolean; picks: boolean } {
+  if (!verified) return { ok: words.length >= USER_WORDS_MIN, picks: false };
+  if (!words || !bare(words)) return { ok: false, picks: false };
+  if (isBareYes(words)) return action ? { ok: !!action.recommended, picks: !!action.recommended } : { ok: true, picks: false };
+  if (action && namesOption(words, action.label)) return { ok: true, picks: true };
+  return { ok: words.length >= USER_WORDS_MIN, picks: false };
 }
 
 /**
@@ -105,21 +133,30 @@ export function wordsAnswer(words: string, action?: Pick<LetterAction, 'label'>)
  * Pure; letter-ops.ts throws on a refusal.
  */
 export function checkTaskAnswer(input: {
-  action?: Pick<LetterAction, 'id' | 'label' | 'description'>;
+  action?: Pick<LetterAction, 'id' | 'label' | 'description'> & { recommended?: boolean };
   /** A reply's text, or the note beside a pick. */
   text?: string;
   userWords?: string;
   letter?: { subject?: string; preview?: string };
+  /** Walnut read `userWords` as his own message on that letter's card (see wordsAnswer). */
+  verified?: boolean;
 }): AnswerCheck {
   const words = (input.userWords ?? '').trim();
-  if (!wordsAnswer(words, input.action)) {
+  const read = wordsAnswer(words, input.action, input.verified === true);
+  if (!read.ok) {
     return {
       ok: false, code: 'user_words',
       message: 'Answering for the user needs the user\'s own words: pass user_words with exactly what they said '
         + '(quoted, in their language) that names this answer. Without them, tell the user what you would answer '
-        + 'and let them answer the letter.',
+        + 'and let them answer the letter.'
+        + (input.verified && input.action && isBareYes(words)
+          ? ' Their yes picks only the option the letter marked recommended; ask them which one they mean.'
+          : ''),
     };
   }
+  // He picked this very option on its card (his yes to the one it recommends, or its name):
+  // he saw what it does there, so it needs no more words, risky or not.
+  if (read.picks) return { ok: true };
   const own = [input.action?.label, input.action?.description, input.text].filter((t): t is string => !!t?.trim()).join('\n');
   const vague = input.action
     ? pointsAway(input.action.label) || (!!input.text?.trim() && pointsAway(input.text))

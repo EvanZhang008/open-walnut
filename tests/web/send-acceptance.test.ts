@@ -177,3 +177,27 @@ describe('the kept record', () => {
     expect(await confirmKept('s-other', U1)).toBeUndefined()
   })
 })
+
+describe('a lost answer of words that answered a thread\'s letter', () => {
+  // 2026-11-20 review: such a send keeps no queue row, so the queue read proved nothing and Enter sent it again.
+  it('asks the server by the same uuid, which finds the answer and records nothing new', async () => {
+    const client = (await import('@/api/ws')).wsClient as { sendRpc: (m: string, p: Record<string, unknown>) => Promise<unknown> }
+    const orig = client.sendRpc
+    const calls: Array<Record<string, unknown>> = []
+    client.sendRpc = (async (method: string, payload: Record<string, unknown>) => {
+      if (method === 'session:get-queue') return { messages: [] }
+      calls.push(payload)
+      if (!payload.confirmLetterAnswer) throw new Error('the answer was lost')
+      return { messageId: 'letter-lt-1', answeredLetter: { id: 'lt-1', threadId: 'th-aaaaaaaaaaaa' } }
+    }) as typeof orig
+    try {
+      await expect(sendSessionMessage({ sessionId: 's-letter', message: 'K', userUuid: U1, threadId: 'th-aaaaaaaaaaaa' }))
+        .resolves.toMatchObject({ answeredLetter: { id: 'lt-1' } })
+      expect(calls.map((c) => [c.userUuid, !!c.confirmLetterAnswer])).toEqual([[U1, false], [U1, true]])
+      // No thread named: no such question; the loss stays the error it was.
+      calls.length = 0
+      await expect(sendSessionMessage({ sessionId: 's-letter', message: 'K', userUuid: U2 })).rejects.toThrow('the answer was lost')
+      expect(calls).toHaveLength(1)
+    } finally { client.sendRpc = orig }
+  })
+})

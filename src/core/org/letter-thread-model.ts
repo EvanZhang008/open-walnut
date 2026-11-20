@@ -29,7 +29,7 @@ export interface ThreadLetter {
   /** The task that sent it: its letter answer is found by it (web: openLetterFor). */
   task: string;
   /** The letter's buttons, as it had them when the thread opened. */
-  options: Array<{ id: string; label: string; description?: string }>;
+  options: Array<{ id: string; label: string; description?: string; recommended?: true }>;
   /** Closed by Walnut because the experiment went off: opened again when it comes back on. */
   off?: true;
   /** The letter ended (answered, settled, archived): the thread no longer holds it, whatever it asks later. */
@@ -51,7 +51,7 @@ export function normalizeThreadLetter(v: unknown): ThreadLetter | undefined {
   const options = (Array.isArray(x.options) ? x.options : [])
     .filter((o): o is ThreadLetter['options'][number] => !!o && typeof o === 'object' && isStr(o.id) && isStr(o.label))
     .slice(0, OPTIONS_MAX)
-    .map((o) => ({ id: o.id, label: o.label, ...(isStr(o.description) && o.description ? { description: o.description } : {}) }));
+    .map((o) => ({ id: o.id, label: o.label, ...(isStr(o.description) && o.description ? { description: o.description } : {}), ...(o.recommended === true ? { recommended: true as const } : {}) }));
   return { id: x.id, task: x.task, options, ...(x.off === true ? { off: true as const } : {}), ...(x.done === true ? { done: true as const } : {}) };
 }
 

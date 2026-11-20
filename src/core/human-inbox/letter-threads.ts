@@ -124,7 +124,7 @@ async function syncNow(seen: LetterRecord, taskId: string, tasks?: readonly Task
     const input = {
       letter: {
         id: l.id, task: taskId, subject: item.summary, ...(item.detail ? { detail: item.detail } : {}), preview: item.detail ?? l.textPreview, createdAt: l.createdAt,
-        options: (l.actions ?? []).map((a) => ({ id: a.id, label: a.label, ...(a.description ? { description: a.description } : {}) })),
+        options: (l.actions ?? []).map((a) => ({ id: a.id, label: a.label, ...(a.description ? { description: a.description } : {}), ...(a.recommended ? { recommended: true as const } : {}) })),
       },
       by: `task:${taskId}` as const, at,
     };

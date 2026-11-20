@@ -194,6 +194,9 @@ export async function handleHumanInboxRelayAction(
         ...(pictures.length ? { images: pictures } : {}),
         ...(p.clientId !== undefined ? { clientId: str(p.clientId) } : {}),
         ...(by ? { by } : {}),
+        // His words on the letter's thread, sent on a replica (org/letter-follow-up.ts).
+        ...(p.whileWaiting === true ? { whileWaiting: true } : {}),
+        ...(p.repeatOnly === true ? { repeatOnly: true } : {}),
       }, { answerBy: Date.now() + RELAY_DELIVERY_WAIT_MS }) as unknown as Record<string, unknown>;
     }
     default:

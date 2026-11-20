@@ -145,6 +145,21 @@ export async function confirmKept(sessionId: string, userUuid: string): Promise<
 }
 
 /**
+ * Did a send whose answer was lost answer the letter its thread holds? The server finds the answer
+ * by the send's own uuid and never records a new one (session-chat.ts confirmLetterAnswer).
+ */
+async function confirmLetterAnswer(body: Record<string, unknown>): Promise<SendAck | undefined> {
+  try {
+    const res = await withDeadline(
+      wsClient.sendRpc<SendAck>('session:send', withSendTestRun({ ...body, confirmLetterAnswer: true })), CONFIRM_READ_MS, 'letter answer read timed out');
+    return res?.answeredLetter ? res : undefined;
+  } catch (e) {
+    log.warn('send', 'could not ask whether a lost send answered a letter', { sessionId: body.sessionId, error: (e as Error).message });
+    return undefined;
+  }
+}
+
+/**
  * Send a person's message to a session. Resolves when the server accepted it
  * (its answer, or its own record of the line when the answer was lost); throws
  * the RPC's error when nothing shows the server kept it. `userUuid` absent: one
@@ -165,7 +180,12 @@ export async function sendSessionMessage<T extends SendAck = SendAck>(
   } catch (e) {
     if (!userUuid || payload.switchEngine) throw e;
     const row = await confirmKept(payload.sessionId, userUuid);
-    if (!row) throw e;
+    if (!row) {
+      // Words on a thread may have answered its letter, which keeps no queue row: ask by the same id.
+      const answered = typeof payload.threadId === 'string' ? await confirmLetterAnswer(body) : undefined;
+      if (answered) return answered as T;
+      throw e;
+    }
     log.info('send', 'the answer was lost, the server kept the message', {
       sessionId: payload.sessionId, messageId: row.messageId, error: (e as Error).message,
     });

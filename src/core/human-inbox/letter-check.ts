@@ -192,6 +192,9 @@ export function createLetterCheck() {
       }
       const ids = new Set(list.map((a) => (a as Record<string, unknown>).id))
       if (ids.size !== list.length) return { ok: false, message: 'action ids must be unique' }
+      const marked = list.filter((a) => (a as Record<string, unknown>).recommended !== undefined)
+      if (marked.some((a) => typeof (a as Record<string, unknown>).recommended !== 'boolean')) return { ok: false, message: 'action recommended must be true or false' }
+      if (list.filter((a) => (a as Record<string, unknown>).recommended === true).length > 1) return { ok: false, message: 'at most one action is recommended' }
     }
     const itemError = itemsError(input.items) || itemIdsError(input.items, actions)
     if (itemError) return { ok: false, message: itemError }

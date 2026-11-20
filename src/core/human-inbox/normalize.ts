@@ -63,6 +63,7 @@ function normalizeActions(raw: unknown): LetterAction[] | undefined {
       id: a.id as string,
       label: a.label as string,
       ...(typeof a.description === 'string' ? { description: a.description } : {}),
+      ...(a.recommended === true ? { recommended: true } : {}),
     }));
   return actions.length > 0 ? actions : undefined;
 }

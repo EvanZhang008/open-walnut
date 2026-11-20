@@ -46,6 +46,8 @@ export interface LetterAction {
   id: string;
   label: string;
   description?: string;
+  /** The one option the sender recommends: shown first and marked, and his bare yes in words picks it (answer-approval.ts). Additive. */
+  recommended?: boolean;
 }
 
 /** Stamped server-side from the caller's session id — agents cannot set this. */

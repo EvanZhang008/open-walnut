@@ -60,6 +60,7 @@ const ACTION = z.object({
   id: z.string().min(1).describe('Stable id you receive back when the human picks this option'),
   label: z.string().min(1).describe('Button text, e.g. "Option A: cache the result"'),
   description: z.string().optional().describe('One line of trade-off shown under the button'),
+  recommended: z.boolean().optional().describe('The one option you recommend: shown first; a bare yes from the user picks it'),
 })
 
 defineOp({

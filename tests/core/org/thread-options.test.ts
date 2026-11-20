@@ -11,7 +11,7 @@
 import { describe, it, expect } from 'vitest'
 import { AskOptionsError, readAskOptions, recommendedFirst } from '../../../src/core/ask-options.js'
 import { listsChoices, threadOptionsOf } from '../../../src/core/org/thread-options.js'
-import { THREADS_OPTIONS_LINE, THREADS_OPTIONS_RULE } from '../../../src/core/org/thread-rules.js'
+import { THREADS_OPTIONS_RULE } from '../../../src/core/org/thread-rules.js'
 import { THREADS_LINE, TASK_THREADS_LINE } from '../../../src/core/sessions/session-context.js'
 import { getOp } from '../../../src/ops/index.js'
 import { emptyThreads, fileMessage, normalizeThreads, openThread, ThreadError, updateThread, type ThreadsFile } from '../../../src/core/org/threads-model.js'
@@ -148,9 +148,9 @@ describe('a thread\'s options', () => {
 })
 
 describe('every place a node reads the rule carries it', () => {
-  it('the always-loaded Threads line (short), the thread ops (whole) and their options field', () => {
-    expect(THREADS_LINE).toContain(THREADS_OPTIONS_LINE)
-    expect(TASK_THREADS_LINE).toContain(THREADS_OPTIONS_LINE)
+  it('the thread ops (whole) and their options field; the always-loaded prompt stays within its budget without it', () => {
+    expect(THREADS_LINE).not.toContain(THREADS_OPTIONS_RULE)
+    expect(TASK_THREADS_LINE).not.toContain(THREADS_OPTIONS_RULE)
     for (const name of ['thread_update', 'thread_create']) {
       const op = getOp(name)!
       expect(op.description, name).toContain(THREADS_OPTIONS_RULE)

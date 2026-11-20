@@ -41,6 +41,7 @@ import { duplicateLetterMessage, duplicateReplyMessage, findDuplicateLetter, fin
 import { cleanPictureNames } from '../answer-pictures.js';
 import type { AwayThreadMark, InboxItemReceipt } from './types.js';
 import { letterOriginOf } from './letter-origin.js';
+import { awaitsUserDecision } from './open-decision.js';
 import { kindOfLetter } from './walnut-letters/registry.js';
 import { resolveCredentialAsk, findCredentialLetter, storedCredentialAskOf, credentialAskContext } from './credential-ask.js';
 import { isSignInAsk, loginCommandWords } from '../sign-in-ask.js';
@@ -1445,7 +1446,13 @@ export async function repeatsRecordedTurn(
  */
 export async function humanReplyTurn(
   id: string,
-  input: { text: string; clientId?: string; by?: LetterAnsweredBy; images?: string[]; flagsAt?: number },
+  input: {
+    text: string; clientId?: string; by?: LetterAnsweredBy; images?: string[]; flagsAt?: number;
+    /** Only while the letter still waits for his decision (his words on its thread answer it, org/letter-follow-up.ts): answered meanwhile is refused, checked under the lock. */
+    whileWaiting?: boolean;
+    /** Only the turn already on record under `clientId` (a resend after a lost receipt): never a new one. */
+    repeatOnly?: boolean;
+  },
 ): Promise<HumanReplyTurn> {
   requireValidId(id);
   const text = str(input?.text).trim();
@@ -1466,7 +1473,11 @@ export async function humanReplyTurn(
       ? -1
       : letter.thread.findIndex(t => t.from === 'human' && t.clientId === clientId);
     if (existing >= 0) return { record: { ...letter }, turn: existing, duplicate: true };
+    if (input.repeatOnly) throw new LetterError('No reply with this clientId is on record.', 'not_found', 404);
     if (empty) throw invalid('text is required');
+    if (input.whileWaiting && !awaitsUserDecision(letter)) {
+      throw new LetterError('This letter no longer waits for a decision: it was answered a moment ago.', 'already_answered', 409);
+    }
     const at = Date.now();
     letter.thread.push({
       from: 'human',

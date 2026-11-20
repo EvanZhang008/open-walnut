@@ -52,7 +52,8 @@ export const THREAD_ONE_PLACE_RULE =
  * A choice is clicked, never only read (2026-11-20, the user, on a needs thread whose summary listed
  * A (recommended) and B under only Acknowledge: "if you recommend this, why can I not just click
  * it?"; "Acknowledge is for when I do not need to make any choice"). Enforced where it writes:
- * thread-options.ts refuses a needs write listing choices with no options.
+ * thread-options.ts refuses a needs write listing choices with no options. Not in the always-loaded
+ * prompt (its budget, prompt-blocks-guard.test.ts): the thread ops carry it, and the refusal teaches it.
  */
 export const THREADS_OPTIONS_RULE =
   'A thread in needs that asks him to pick among choices carries them as options (thread_update or thread_create: 2 to 5, '
@@ -60,9 +61,6 @@ export const THREADS_OPTIONS_RULE =
   + 'and his click is his answer, filed in the thread. Walnut refuses a needs write whose words list choices (A:, B:, 1., 2.) without options. '
   + 'When he types instead: words naming an option, or a clear yes ("ok", "K") to the recommended one, are that option; only unclear words '
   + 'get one specific question back as the summary, never the same question and options again.';
-
-/** Its short form in the always-loaded prompt (the prompt's cap, prompt-blocks.ts); the op and the 409 carry the rest. */
-export const THREADS_OPTIONS_LINE = 'A needs thread asking him to pick carries options.';
 
 /**
  * His Threads view shows only what has something for him (2026-11-01, the user: "if a task is just

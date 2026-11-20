@@ -275,6 +275,8 @@ export interface OptimisticMessage extends SessionHistoryMessage {
   userUuid?: string;
   /** The message hints the send asked for (SessionSendOptions.hints); a retry asks again. */
   requestedHints?: Record<string, { arg?: string }>;
+  /** The thread the send named (a thread card's box): a retry names it again, so words that answered its letter answer it once. */
+  threadId?: string;
   /** The composer draft the words came from (SessionSendOptions.draftOrigin): local, never sent. */
   draftOrigin?: DraftOrigin;
   /** Error message when status is 'failed' */

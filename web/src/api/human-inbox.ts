@@ -25,6 +25,8 @@ export interface LetterAction {
   id: string;
   label: string;
   description?: string;
+  /** The option the sender recommends: shown first and marked (core/human-inbox/types.ts). */
+  recommended?: boolean;
 }
 
 /** Stamped server-side from the caller's session id — an agent can't forge it. */

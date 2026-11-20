@@ -249,6 +249,27 @@ export function registerSessionChatRpc(): void {
       return { messageId: `model-switch-${Date.now()}` }
     }
 
+    // A send that names a thread holding a live decision letter answers that letter with his words,
+    // once by the send's own id, instead of reaching the chat as a follow-up (core/org/letter-follow-up.ts).
+    // Before the retry branch: a Retry or a resend after a lost receipt finds the same answer.
+    const sentThread = typeof data.threadId === 'string' && /^th-[a-f0-9]{6,32}$/.test(data.threadId) ? data.threadId : undefined
+    if (sentThread && record?.taskId) {
+      const { answerLetterOnThread } = await import('../../core/org/letter-follow-up.js')
+      const confirmOnly = data.confirmLetterAnswer === true
+      const answered = await answerLetterOnThread({
+        taskId: record.taskId, threadId: sentThread, text: data.message as string,
+        ...(savedPaths.length ? { images: savedPaths } : {}), ...(userUuid ? { clientId: userUuid } : {}),
+        ...(confirmOnly ? { confirmOnly } : {}),
+      })
+      if (answered?.delivery.status === 'failed') {
+        // His words are on the letter, its delivery failed: the box keeps them, and a Retry delivers that turn.
+        throw new Error(`Your answer is on the letter but did not reach the task${answered.delivery.reason ? ` (${answered.delivery.reason})` : ''}. Retry to send it again.`)
+      }
+      if (answered) return { messageId: `letter-${answered.letterId}`, answeredLetter: { id: answered.letterId, threadId: answered.threadId } }
+    }
+    // A client asking whether a lost send answered a letter never enqueues anything.
+    if (data.confirmLetterAnswer === true) return { notKept: true }
+
     // User-initiated send to a remote session = a deliberate retry. Forget any
     // cached connection failure (e.g. after the user refreshed their SSH credentials) so processNext
     // reconnects fresh instead of fast-failing against the 60s failure cache.
@@ -330,18 +351,6 @@ export function registerSessionChatRpc(): void {
       })
       log.web.info('session:send RPC engine switch', { sessionId: data.sessionId, taskId: record.taskId, engine: switchTo.engine, state: out.state })
       return { messageId: out.switchId, engineSwitch: out }
-    }
-
-    // A send that names a thread holding a live decision letter answers that letter with his words,
-    // once, instead of reaching the chat as a follow-up (core/org/letter-follow-up.ts).
-    const sentThread = typeof data.threadId === 'string' && /^th-[a-f0-9]{6,32}$/.test(data.threadId) ? data.threadId : undefined
-    if (sentThread && record?.taskId && !data.retryOf) {
-      const { answerLetterOnThread } = await import('../../core/org/letter-follow-up.js')
-      const answered = await answerLetterOnThread({
-        taskId: record.taskId, threadId: sentThread, text: data.message as string,
-        ...(savedPaths.length ? { images: savedPaths } : {}), ...(userUuid ? { clientId: userUuid } : {}),
-      })
-      if (answered) return { messageId: `letter-${answered.letterId}`, answeredLetter: { id: answered.letterId, threadId: answered.threadId } }
     }
 
     const outputMode = await prepareHintedSend(data.sessionId, record, augmentedMessage, {

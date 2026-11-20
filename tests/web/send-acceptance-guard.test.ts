@@ -38,7 +38,8 @@ describe('one rule decides that a send was accepted', () => {
 
   it('the rule stands a lost answer in with the server\'s record of the send\'s user line', () => {
     const src = read(RULE)
-    expect(src).toMatch(/const row = await confirmKept\(payload\.sessionId, userUuid\);\n\s*if \(!row\) throw e;/)
+    // No row: words on a thread may have answered its letter, asked by the same uuid; else the loss stands.
+    expect(src).toMatch(/const row = await confirmKept\(payload\.sessionId, userUuid\);\n\s*if \(!row\) \{[\s\S]{0,300}?confirmLetterAnswer\(body\)[\s\S]{0,120}?throw e;\n\s*\}/)
     expect(src).toMatch(/wsClient\.onEvent\('session:message-queued'/)
     // The server names that line on the queued event (an older server: the queue read still finds it).
     expect(read('src/core/session-message-queue.ts')).toMatch(/\.\.\.\(msg\.userUuid \? \{ userUuid: msg\.userUuid \} : \{\}\),\n\s*enqueuedAt: msg\.enqueuedAt,/)

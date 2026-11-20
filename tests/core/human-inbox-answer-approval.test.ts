@@ -4,7 +4,7 @@
  * another task's request (src/core/human-inbox/reply-instead.ts). Pure.
  */
 import { describe, it, expect } from 'vitest'
-import { checkTaskAnswer, isBareYes, stepsIn } from '../../src/core/human-inbox/answer-approval.js'
+import { checkTaskAnswer, isBareYes, namesOption, stepsIn } from '../../src/core/human-inbox/answer-approval.js'
 import { ANSWERED_RECENTLY_MS, OPEN_REQUEST_MS, replyInsteadOf } from '../../src/core/human-inbox/reply-instead.js'
 import { completionSettleReason, isLeftBehindDecision, letterActivityAt } from '../../src/core/human-inbox/decision-settle.js'
 import type { SessionRequest } from '../../src/core/session-requests.js'
@@ -14,13 +14,46 @@ describe('a task answering for the user', () => {
   it('needs the user\'s own words', () => {
     expect(checkTaskAnswer({ action: { id: 'a', label: 'Plan A' } })).toMatchObject({ ok: false, code: 'user_words' })
     expect(checkTaskAnswer({ text: 'Go', userWords: ' ' })).toMatchObject({ ok: false, code: 'user_words' })
-    // One letter of his is enough when it is a clear yes or names the option by its own label
-    // (2026-11-20: "K" on a card recommending a release). Test data: \u53d1\u65b0\u7248 is "release it", \u53d1 its verb.
-    expect(checkTaskAnswer({ action: { id: 'release', label: '\u53d1\u65b0\u7248' }, userWords: 'K' })).toEqual({ ok: true })
-    expect(checkTaskAnswer({ action: { id: 'release', label: '\u53d1\u65b0\u7248' }, userWords: '\u53d1' })).toEqual({ ok: true })
-    expect(checkTaskAnswer({ action: { id: 'release', label: '\u53d1\u65b0\u7248' }, userWords: 'x' })).toMatchObject({ ok: false, code: 'user_words' })
-    // A one-letter yes never approves a risky step it does not name.
-    expect(checkTaskAnswer({ action: { id: 'del', label: 'Delete the old branch' }, userWords: 'K' })).toMatchObject({ ok: false, code: 'human_approval' })
+    // Words a task only quotes keep the strict rule: one letter is never enough, a yes picks nothing.
+    const release = { id: 'release', label: '\u53d1\u65b0\u7248', recommended: true }
+    expect(checkTaskAnswer({ action: release, userWords: 'K' })).toMatchObject({ ok: false, code: 'user_words' })
+    expect(checkTaskAnswer({ action: release, userWords: '\u53d1' })).toMatchObject({ ok: false, code: 'user_words' })
+  })
+
+  it('his own words read from the card: a yes picks only the recommended option, a name only its option', () => {
+    // 2026-11-20: "K" on a card recommending a release. Test data: \u53d1\u65b0\u7248 is "release it", \u53d1 its verb.
+    const release = { id: 'release', label: '\u53d1\u65b0\u7248', recommended: true }
+    const hold = { id: 'hold', label: 'Not yet' }
+    // Verified on that card, the yes picks the option it recommends, a release (outward) included.
+    expect(checkTaskAnswer({ action: release, userWords: 'K', verified: true })).toEqual({ ok: true })
+    expect(checkTaskAnswer({ action: { id: 'r', label: 'Release it', recommended: true }, userWords: 'ok', verified: true })).toEqual({ ok: true })
+    // ...and no other option; with none recommended it picks nothing, and says to ask him.
+    const other = checkTaskAnswer({ action: hold, userWords: 'K', verified: true })
+    expect(other).toMatchObject({ ok: false, code: 'user_words' })
+    expect((other as { message: string }).message).toMatch(/recommended/)
+    expect(checkTaskAnswer({ action: { id: 'r', label: 'Release it' }, userWords: 'y', verified: true })).toMatchObject({ ok: false, code: 'user_words' })
+    // A name picks its option: the first Chinese character, a whole word, the whole label.
+    expect(checkTaskAnswer({ action: release, userWords: '\u53d1', verified: true })).toEqual({ ok: true })
+    expect(checkTaskAnswer({ action: { id: 'h', label: 'Hold the build' }, userWords: 'hold', verified: true })).toEqual({ ok: true })
+    // Never a piece of a Latin word: "n" (no) is not "Release now".
+    expect(checkTaskAnswer({ action: { id: 'r', label: 'Release now' }, userWords: 'n', verified: true })).toMatchObject({ ok: false, code: 'user_words' })
+    expect(namesOption('n', 'Release now')).toBe(false)
+    expect(namesOption('now', 'Release now')).toBe(true)
+    expect(namesOption('\u65b0', '\u53d1\u65b0\u7248')).toBe(false)
+    // A one-letter yes never approves a risky step on an option it does not pick.
+    expect(checkTaskAnswer({ action: { id: 'del', label: 'Delete the old branch' }, userWords: 'K', verified: true })).toMatchObject({ ok: false })
+  })
+
+  it('a release, a deploy or a ship is a step that leaves Walnut, and "ship it" is no bare yes', () => {
+    expect(stepsIn('Release the Mac app').map((s) => s.id)).toContain('outward')
+    expect(stepsIn('deploy to prod').map((s) => s.id)).toContain('outward')
+    expect(stepsIn('ship the build').map((s) => s.id)).toContain('outward')
+    expect(stepsIn('\u53d1\u65b0\u7248').map((s) => s.id)).toContain('outward')
+    expect(stepsIn('\u4eca\u5929\u4e0a\u7ebf').map((s) => s.id)).toContain('outward')
+    expect(isBareYes('ship it')).toBe(false)
+    // Words a task only quotes never pick a release: they must ask for it by name.
+    expect(checkTaskAnswer({ action: { id: 'r', label: 'Release it', recommended: true }, userWords: 'ok' })).toMatchObject({ ok: false, code: 'human_approval' })
+    expect(checkTaskAnswer({ action: { id: 'r', label: 'Release it', recommended: true }, userWords: 'ok, release it' })).toEqual({ ok: true })
     expect(checkTaskAnswer({ action: { id: 'a', label: 'Plan A' }, userWords: 'A please' })).toEqual({ ok: true })
   })
 

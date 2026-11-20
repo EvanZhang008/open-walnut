@@ -181,7 +181,9 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
     // (core/hints/hint-send.ts): a rich session answers the phone in the same
     // style, and a voice send asks for the voice-reply hint, which goes last
     // (it overrides the output style for this one reply).
-    // His words on a thread holding a live decision letter answer that letter, once (core/org/letter-follow-up.ts).
+    // His words on a thread holding a live decision letter answer that letter, once by the qm- id
+    // (a resend of it finds the same answer), never from an automated client (core/org/letter-follow-up.ts).
+    // The 202 is an ordinary accepted send to an older app: its thread Follow up keeps no chat bubble.
     const sentThread = threadIdOf(req.body?.threadId) ? req.body.threadId as string : undefined
     if (sentThread && record.taskId && routeSource('mobile', req.headers) === 'mobile') {
       const { answerLetterOnThread } = await import('../../core/org/letter-follow-up.js')
@@ -189,6 +191,11 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
         taskId: record.taskId, threadId: sentThread, text,
         ...(savedPaths.length ? { images: savedPaths } : {}), ...(clientMessageId ? { clientId: clientMessageId } : {}),
       })
+      if (answered?.delivery.status === 'failed') {
+        // On the letter, not delivered: the app keeps his words, and its resend of this id delivers that turn.
+        sendError(res, 502, 'letter_answer_not_delivered', `Your answer is on the letter but did not reach the task${answered.delivery.reason ? ` (${answered.delivery.reason})` : ''}. Send it again.`)
+        return
+      }
       if (answered) {
         res.status(202).json({ messageId: clientMessageId ?? `letter-${answered.letterId}`, answeredLetter: { id: answered.letterId, threadId: answered.threadId } })
         return

@@ -9,7 +9,13 @@
  *      the letter's answer (with the line telling it how to read a short yes), never as a chat row.
  *   2. The phone's send (POST .../messages with threadId) does the same.
  *   3. A send naming an ordinary thread stays a follow-up in the chat.
- *   4. An agent answering for him with his "K" picks the option (human_inbox_answer), no refusal.
+ *   4. An agent answering for him with his "K" picks the recommended option only once Walnut reads
+ *      his "K" on that card; a "K" it only quotes, or one for another option, is refused.
+ *   5. Review findings (2026-11-20): a browser under automation never answers as him; a Retry, a
+ *      resend after a lost receipt and the phone's resend of its qm- id answer once; a letter
+ *      answered in the inbox meanwhile leaves his words a plain follow-up; a failed delivery comes
+ *      back as an error and its Retry delivers that turn; a letter with no recommended option
+ *      tells the asker to ask him which.
  *
  * What's real: server, WebSocket, bus, task store, inbox, threads store, queue, session runner.
  * Mocked: constants, the daemon (MockDaemon), the CLI.
@@ -23,6 +29,17 @@ import { WebSocket } from 'ws'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-letter-thread-follow-up'))
+// A switch to make a letter answer's delivery fail (the session queue refuses it), as a dead host does.
+const failing = vi.hoisted(() => ({ on: false }))
+vi.mock('../../src/core/session-message-queue.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../src/core/session-message-queue.js')>()
+  return {
+    ...real,
+    sendMessageToSession: ((...args: Parameters<typeof real.sendMessageToSession>) => failing.on && args[2]?.source === 'human-inbox'
+      ? Promise.reject(new Error('test: the session queue refused it'))
+      : real.sendMessageToSession(...args)) as typeof real.sendMessageToSession,
+  }
+})
 
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
@@ -34,7 +51,7 @@ import { readThreads } from '../../src/core/org/threads-store.js'
 import { getLetter } from '../../src/core/human-inbox/store.js'
 import { lettersAsThreadsNow } from '../../src/core/human-inbox/letter-threads.js'
 import { letterThreadId } from '../../src/core/org/letter-thread-model.js'
-import { WORDS_ANSWER_LINE } from '../../src/core/human-inbox/letter-ops.js'
+import { WORDS_ANSWER_ASK_LINE, WORDS_ANSWER_LINE, humanReplyAndDeliver } from '../../src/core/human-inbox/letter-ops.js'
 import { executeOp } from '../../src/ops/index.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
 
@@ -59,10 +76,10 @@ const op = async (name: string, args: Record<string, unknown>, sid: string) => {
 }
 
 /** A decision letter from the lead, as its session sends one; its thread waits on him. */
-async function decide(subject: string): Promise<string> {
+async function decide(subject: string, recommended = true): Promise<string> {
   const out = await op('human_inbox_send', {
     subject, type: 'action_required', markdown: `${subject} I recommend releasing it.`,
-    actions: [{ id: 'release', label: 'Release it' }, { id: 'hold', label: 'Not yet' }],
+    actions: [{ id: 'release', label: 'Release it', ...(recommended ? { recommended: true } : {}) }, { id: 'hold', label: 'Not yet' }],
     user_kind: 'user_own', user_kind_why: 'It ships his own app to him',
   }, vp.sid)
   const id = out.letterId as string
@@ -70,9 +87,9 @@ async function decide(subject: string): Promise<string> {
   return id
 }
 
-function rpc(method: string, payload: unknown): Promise<{ ok: boolean; result?: Record<string, unknown>; error?: string }> {
+function rpc(method: string, payload: unknown, query = ''): Promise<{ ok: boolean; result?: Record<string, unknown>; error?: string }> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`)
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws${query}`)
     const id = `t-${Math.random().toString(36).slice(2)}`
     const timer = setTimeout(() => { ws.close(); reject(new Error(`rpc ${method} timed out`)) }, 20_000)
     ws.once('error', reject)
@@ -117,7 +134,7 @@ afterAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 }, 60_000)
 
-async function expectAnsweredByWords(letterId: string, words: string, before: number): Promise<void> {
+async function expectAnsweredByWords(letterId: string, words: string, before: number, line = WORDS_ANSWER_LINE): Promise<void> {
   // The letter reads answered in his words, and its thread leaves needs.
   await vi.waitFor(async () => {
     const l = await getLetter(letterId)
@@ -129,8 +146,11 @@ async function expectAnsweredByWords(letterId: string, words: string, before: nu
   await new Promise((r) => setTimeout(r, 500))
   const rows = rowsSince(before)
   expect(rows.filter((m) => m.includes(words))).toHaveLength(1)
-  expect(rows.find((m) => m.includes('[Letter reply]'))).toContain(WORDS_ANSWER_LINE)
+  expect(rows.find((m) => m.includes('[Letter reply]'))).toContain(line)
 }
+
+const letterRows = (before: number, words: string) => rowsSince(before).filter((m) => m.includes('[Letter reply]') && m.includes(words))
+const humanTurns = async (letterId: string) => ((await getLetter(letterId))?.thread ?? []).filter((t) => t.from === 'human')
 
 describe('his words on a thread holding a letter answer the letter', () => {
   it('the console\'s send naming the thread answers the letter, once', async () => {
@@ -149,6 +169,13 @@ describe('his words on a thread holding a letter answer the letter', () => {
     expect(r.status).toBe(202)
     expect(r.json.answeredLetter?.id).toBe(letter)
     await expectAnsweredByWords(letter, 'ok go', before)
+    // The phone's resend of the same qm- id (its 202 was lost) is the same answer: nothing queued again.
+    const again = await api<{ answeredLetter?: { id: string }; messageId?: string }>('POST', `/sessions/${vp.sid}/messages`, { text: 'ok go', threadId: letterThreadId(letter), messageId: 'qm-letter-follow-1' })
+    expect(again.status).toBe(202)
+    expect(again.json).toMatchObject({ messageId: 'qm-letter-follow-1', answeredLetter: { id: letter } })
+    await new Promise((r) => setTimeout(r, 800))
+    expect(rowsSince(before).filter((m) => m.includes('ok go'))).toHaveLength(1)
+    expect(await humanTurns(letter)).toHaveLength(1)
   })
 
   it('a send naming an ordinary thread stays a follow-up in the chat', async () => {
@@ -160,9 +187,96 @@ describe('his words on a thread holding a letter answer the letter', () => {
     await vi.waitFor(() => expect(rowsSince(before).some((m) => m.includes('Start with the pears') && !m.includes('[Letter reply]'))).toBe(true), { timeout: 10_000, interval: 200 })
   })
 
-  it('an agent answering for him with his "K" picks the option', async () => {
+  it('an agent answering for him with his "K" picks the recommended option only once his "K" is on that card', async () => {
     const letter = await decide('Release the new web build?')
+    // A "K" the agent only quotes: not his words on record, so one letter is not enough.
+    await expect(op('human_inbox_answer', { id: letter, action_id: 'release', user_words: 'K' }, vp.sid)).rejects.toThrow(/own words/)
+    // His "K" on the card is on record now (the letter's own reply).
+    await humanReplyAndDeliver(letter, { text: 'K', clientId: 'test-his-k' })
+    // It picks the recommended option, and no other.
+    await expect(op('human_inbox_answer', { id: letter, action_id: 'hold', user_words: 'K' }, vp.sid)).rejects.toThrow(/recommended/)
     await op('human_inbox_answer', { id: letter, action_id: 'release', user_words: 'K' }, vp.sid)
     await vi.waitFor(async () => expect((await getLetter(letter))?.answered?.actionId).toBe('release'), { timeout: 10_000, interval: 200 })
+  })
+
+  it('a browser under automation never answers a letter as him', async () => {
+    const letter = await decide('Release the new tablet build?')
+    const before = queued.get(vp.sid)?.length ?? 0
+    const was = process.env.WALNUT_AUTOMATED_CLIENT_AGENT
+    process.env.WALNUT_AUTOMATED_CLIENT_AGENT = '1'
+    try {
+      const r = await rpc('session:send', { sessionId: vp.sid, message: 'K from a robot', threadId: letterThreadId(letter), userUuid: randomUUID() }, '?automated=1')
+      expect(r.ok, r.error).toBe(true)
+      expect(r.result?.answeredLetter).toBeUndefined()
+    } finally {
+      if (was === undefined) delete process.env.WALNUT_AUTOMATED_CLIENT_AGENT; else process.env.WALNUT_AUTOMATED_CLIENT_AGENT = was
+    }
+    // Its words stay a follow-up in the chat; the letter still waits for him.
+    await vi.waitFor(() => expect(rowsSince(before).some((m) => m.includes('K from a robot') && !m.includes('[Letter reply]'))).toBe(true), { timeout: 10_000, interval: 200 })
+    expect(await humanTurns(letter)).toHaveLength(0)
+    expect((await getLetter(letter))?.answered).toBeUndefined()
+  })
+
+  it('a Retry and a resend after a lost receipt answer once', async () => {
+    const letter = await decide('Release the new watch build?')
+    const before = queued.get(vp.sid)?.length ?? 0
+    const userUuid = randomUUID()
+    const first = await rpc('session:send', { sessionId: vp.sid, message: 'K', threadId: letterThreadId(letter), userUuid })
+    expect(first.result?.answeredLetter).toMatchObject({ id: letter })
+    await vi.waitFor(() => expect(letterRows(before, 'K')).toHaveLength(1), { timeout: 15_000, interval: 200 })
+    // The web's Retry of that bubble (retryOf, the same uuid, the thread named again).
+    const retry = await rpc('session:send', { sessionId: vp.sid, message: 'K', threadId: letterThreadId(letter), userUuid, retryOf: 'temp-1' })
+    expect(retry.result?.answeredLetter).toMatchObject({ id: letter })
+    // The web asking after a lost receipt: found by the uuid, never recorded again.
+    const asked = await rpc('session:send', { sessionId: vp.sid, message: 'K', threadId: letterThreadId(letter), userUuid, confirmLetterAnswer: true })
+    expect(asked.result?.answeredLetter).toMatchObject({ id: letter })
+    const unknown = await rpc('session:send', { sessionId: vp.sid, message: 'K', threadId: letterThreadId(letter), userUuid: randomUUID(), confirmLetterAnswer: true })
+    expect(unknown.result).toMatchObject({ notKept: true })
+    await new Promise((r) => setTimeout(r, 800))
+    expect(rowsSince(before).filter((m) => m.includes('K') && m.includes(letter))).toHaveLength(1)
+    expect(await humanTurns(letter)).toHaveLength(1)
+  })
+
+  it('a letter answered in the inbox meanwhile leaves his words a plain follow-up', async () => {
+    const letter = await decide('Release the new desktop build?')
+    // The store's own check, under the letter's lock: an answered letter takes no words answer.
+    expect((await api('POST', `/human-inbox/${letter}/answer`, { actionId: 'hold' })).status).toBeLessThan(300)
+    await expect(humanReplyAndDeliver(letter, { text: 'K', clientId: 'test-late-k', whileWaiting: true })).rejects.toMatchObject({ code: 'already_answered' })
+    const before = queued.get(vp.sid)?.length ?? 0
+    const r = await rpc('session:send', { sessionId: vp.sid, message: 'K after hold', threadId: letterThreadId(letter), userUuid: randomUUID() })
+    expect(r.ok, r.error).toBe(true)
+    expect(r.result?.answeredLetter).toBeUndefined()
+    await vi.waitFor(() => expect(rowsSince(before).some((m) => m.includes('K after hold'))).toBe(true), { timeout: 10_000, interval: 200 })
+    const rows = rowsSince(before).filter((m) => m.includes('K after hold'))
+    expect(rows.every((m) => !m.includes('[Letter reply]') && !m.includes(WORDS_ANSWER_LINE))).toBe(true)
+  })
+
+  it('a failed delivery comes back as an error, and its Retry delivers that turn once', async () => {
+    const letter = await decide('Release the new server build?')
+    const before = queued.get(vp.sid)?.length ?? 0
+    const userUuid = randomUUID()
+    failing.on = true
+    let r: Awaited<ReturnType<typeof rpc>>
+    try {
+      r = await rpc('session:send', { sessionId: vp.sid, message: 'K', threadId: letterThreadId(letter), userUuid })
+    } finally {
+      failing.on = false
+    }
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/did not reach the task/)
+    expect((await humanTurns(letter)).map((t) => t.delivery?.status)).toEqual(['failed'])
+    const retry = await rpc('session:send', { sessionId: vp.sid, message: 'K', threadId: letterThreadId(letter), userUuid, retryOf: 'temp-2' })
+    expect(retry.ok, retry.error).toBe(true)
+    expect(retry.result?.answeredLetter).toMatchObject({ id: letter })
+    await vi.waitFor(() => expect(rowsSince(before).filter((m) => m.includes('[Letter reply]') && m.includes(letter))).toHaveLength(1), { timeout: 15_000, interval: 200 })
+    expect(await humanTurns(letter)).toHaveLength(1)
+  })
+
+  it('with no option recommended, the asker is told to ask him which', async () => {
+    const letter = await decide('Release the new kiosk build?', false)
+    const before = queued.get(vp.sid)?.length ?? 0
+    const r = await rpc('session:send', { sessionId: vp.sid, message: 'K', threadId: letterThreadId(letter), userUuid: randomUUID() })
+    expect(r.result?.answeredLetter).toMatchObject({ id: letter })
+    await expectAnsweredByWords(letter, 'K', before, WORDS_ANSWER_ASK_LINE)
   })
 })

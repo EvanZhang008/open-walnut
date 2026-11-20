@@ -331,13 +331,24 @@ function clip(value: string, max: number): string {
  * `note` is deliberately LAST, so a multi-line reply can only add lines that are
  * still visibly inside the fence.
  */
-/** A letter answered in words alone: what to make of them (a clear yes, a named option, or one question back). */
+/**
+ * A letter answered in words alone: what to make of them. With an option marked recommended, a
+ * clear yes is that one; with none, a yes names no option, so the asker asks him which.
+ */
 export const WORDS_ANSWER_LINE = 'They answered in words, with no button: words that name one of your options, or a clear yes ("ok", "K", '
-  + '"go") to the one you recommended, are that option, so act on it; only when they are unclear, ask one specific question '
+  + '"go") to the one you marked recommended, are that option, so act on it; only when they are unclear, ask one specific question '
   + '(on its thread: its summary, in needs), never the same question and buttons again.';
+export const WORDS_ANSWER_ASK_LINE = 'They answered in words, with no button: words that name one of your options are that option, so act on it. '
+  + 'You marked no option recommended, so a bare yes ("ok", "K") names none of them: ask them which one (on its thread: '
+  + 'its summary, in needs), never the same question and buttons again.';
+
+/** The line a words-only answer carries: with a recommended option or without. */
+export function wordsAnswerLine(actions: readonly { recommended?: boolean }[] | undefined): string {
+  return actions?.some((a) => a.recommended) ? WORDS_ANSWER_LINE : WORDS_ANSWER_ASK_LINE;
+}
 
 export function buildLetterDeliveryText(
-  letter: Pick<LetterRecord, 'id' | 'subject'>,
+  letter: Pick<LetterRecord, 'id' | 'subject'> & { actions?: readonly { recommended?: boolean }[] },
   human: { choice?: string; text?: string; by?: LetterAnsweredBy; replaces?: LetterAnsweredBy },
   /** The images header naming the pictures sent with the answer (core/answer-pictures.ts picturesHeader), or ''. */
   pictures = '',
@@ -377,7 +388,7 @@ export function buildLetterDeliveryText(
     ...(pictures ? ['The pictures named above, under the images header, came with this answer: they are part of it.', ''] : []),
     // His words with no button (2026-11-20: "K" on a card recommending a release): read them as the
     // option they name, a clear yes as the one you recommended; ask only when they are unclear.
-    ...(!human.choice && human.text && !by ? [WORDS_ANSWER_LINE, ''] : []),
+    ...(!human.choice && human.text && !by ? [wordsAnswerLine(letter.actions), ''] : []),
     'Continue the work accordingly, then reply in the letter thread (not just in this '
     + 'session) so the answer reaches them wherever they are:',
     `walnut tools call human_inbox_reply '{"letter":"${letter.id}","text":"..."}'`,
@@ -589,10 +600,40 @@ async function refuseApprovalByTask(
     ...(action ? { action, ...(answer.note ? { text: answer.note } : {}) } : { text: answer.text ?? '' }),
     userWords: by.userWords,
     letter: { subject: letter.subject, preview: letter.textPreview },
+    verified: await verifiedUserWords(letter, by.userWords),
   });
   if (!verdict.ok) {
     log.notif.info('human-inbox: a task\'s answer for the user refused', { letterId: id, taskId: by.taskId, code: verdict.code, ...(verdict.code === 'human_approval' ? { steps: verdict.steps } : {}) });
     throw new LetterError(verdict.message, verdict.code, verdict.code === 'user_words' ? 400 : 403);
+  }
+}
+
+/** His words, bare, to compare a quote with the record: no quotes, spaces or end marks, any case. */
+const bareWords = (t: string): string => t.replace(/[\s"'\u201c\u201d.,!?\u3002\uff0c\uff01\uff1f\u3001]+/g, '').toLowerCase();
+
+/**
+ * Are the words a task quotes his own message on this letter's card, written after it was sent?
+ * Read from the record, never the quote: the letter's own replies of his (no `by`), and his
+ * messages on the letter's thread (letters_as_threads, org/letter-thread-model.ts). Only then does
+ * answer-approval.ts read short words loosely. Never throws: unreadable is unverified.
+ */
+export async function verifiedUserWords(
+  letter: Pick<LetterRecord, 'id' | 'createdAt' | 'thread' | 'sender'>,
+  quoted: string | undefined,
+): Promise<boolean> {
+  const want = bareWords(quoted ?? '');
+  if (!want) return false;
+  const after = letter.createdAt;
+  if (letter.thread.some((t) => t.from === 'human' && !t.by && t.at >= after && bareWords(t.text) === want)) return true;
+  const taskId = letter.sender.taskId;
+  if (!taskId) return false;
+  try {
+    const { letterThreadId } = await import('../org/letter-thread-model.js');
+    const { threadHolder } = await import('../org/threads-store.js');
+    const held = await threadHolder(taskId, letterThreadId(letter.id));
+    return !!held?.thread.messages.some((m) => Date.parse(m.at) >= after && bareWords(m.text) === want);
+  } catch {
+    return false;
   }
 }
 
@@ -713,7 +754,7 @@ export async function withdrawLetterAndAnnounce(
  */
 export async function humanReplyAndDeliver(
   id: string,
-  input: { text: string; clientId?: string; by?: LetterAnsweredBy; images?: string[]; flagsAt?: number },
+  input: { text: string; clientId?: string; by?: LetterAnsweredBy; images?: string[]; flagsAt?: number; whileWaiting?: boolean; repeatOnly?: boolean },
   wait: DeliveryWait = {},
 ): Promise<AnsweredLetter> {
   await refuseApprovalByTask(id, input.by, { text: input.text });

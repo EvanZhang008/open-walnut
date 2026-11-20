@@ -185,6 +185,7 @@ function LetterAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords
       <AskOptions
         testId="org-answer-letter"
         options={letter.actions!.map((a) => ({ value: a.id, label: a.label, ...(a.description ? { title: a.description } : {}) }))}
+        {...(letter.actions!.find((a) => a.recommended) ? { recommended: letter.actions!.find((a) => a.recommended)!.id } : {})}
         onPick={pick}
       />
       <ReplyField placeholder="Reply…" onSend={replyWords} taskId={alert.taskId} draftKey={`draft:letter-reply:${letter.id}`} />
