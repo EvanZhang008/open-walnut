@@ -41,6 +41,7 @@ src/web/static
 .claude/*
 !.claude/skills/
 .claude/skills/*
+!.claude/skills/walnut-ui-requirements/
 
 # Generated snapshots
 todo-snapshot.md

@@ -1,0 +1,59 @@
+---
+name: walnut-ui-requirements
+description: The requirements every change the user can see in Walnut must meet (cards, panels, lists, inbox, chat, states and tabs, styling, proof videos). MUST read before planning, building, testing or shipping any change to web/src/, the Mac app's web pages or the phone's views. Each rule is one line with a real incident.
+---
+
+# Walnut UI requirements
+
+Read this before you plan a UI change, and check every rule again before you land it. Each rule is
+one sentence; the example under it is a real incident from the user's own use. The implementation
+detail lives elsewhere and is linked, never copied: [web/src/AGENTS.md](../../../web/src/AGENTS.md)
+(invariants, menus and overlays), the `walnut-web-frontend` skill (how the SPA works), and the root
+[AGENTS.md](../../../AGENTS.md) (test tiers, where browser runs go).
+
+## Keep what works
+
+1. **Never drop an existing feature: before you change a card or panel, list everything it has now (buttons, text, links, replies, states, inputs, shortcuts), and after the change check each one is still there and still works.**
+   Example (2026-11-20): after a thread card was redesigned, the user's reply on it vanished from the card and never reached the task.
+2. **Walk the core flows again before every release, on a copy of the user's data, and add a test for each.**
+   Example (2026-11-20): replying inside a card, pressing Acknowledge and switching tabs broke in builds that had passed their own new tests.
+
+## States, tabs and words
+
+3. **Use as few states and tabs as possible, named with the user's own words, and a tab shows only its own kind.**
+   Example (2026-11-20): Threads shipped All / Needs you / To read / Waiting / Done plus a "Known" group, which the user could not read; he asked for Needs you / Waiting / Closed.
+4. **No new design of an everyday view ships before the user has seen it and said yes himself; an agent never approves it for him.**
+   Example (2026-11-20): the "Known" state went live without the user ever seeing its design. Send the choice as ONE HTML page with every option's picture inline, your pick and why first.
+5. **Plain input is a plain message: never attach what the user types to a question or thread on its own.**
+   Example (2026-11-20): every message in the main chat was labelled "Answer to ...".
+6. **A card that asks the user to decide holds one decision at a time; several decisions page left and right.**
+   Example (2026-11-20): on the Needs you card of a task row the user asked for "at most one decision per card, page left and right".
+7. **The inbox holds only letters the user must act on: no threads, no plugin INFO notices.**
+   Example (2026-11-20): a plugin's new-message count arrived as an info letter ("why send me this"). Rules: [org and inbox](../../../docs/reference/org-and-inbox.md).
+
+## Layout and look
+
+8. **Never fill the screen: an expanded card grows to about 1.5 times its size at most, stays inside its own column, shows the full text on hover, and never pushes its buttons out of view.**
+   Example (2026-11-20): expanding a Needs you card filled the whole window, and a fix had to ship the same day.
+9. **No hard square corners and no solid highlight blocks; notices, cards and shortcut bars share one frosted glass look.**
+   Example (2026-11-20): the user found the Needs you card ugly for its hard square corners and its solid orange block, beside frosted glass notices.
+10. **Lists scroll up and down only, never sideways.**
+    Example (2026-11-20): the Threads view scrolled sideways and had to lose its horizontal overflow.
+11. **Show text in full in a compact layout; never cut it to two lines with an ellipsis.**
+    Example (2026-11-20): the user asked for card text in full and compact, after summaries cut to two lines hid the part he needed.
+12. **Menus and overlays follow the hard rules in [web/src/AGENTS.md](../../../web/src/AGENTS.md#menus--overlays--hard-rules), and a page's view choice is kept with `usePageView`.**
+    Example (2026-10): menus that overflowed the viewport and tabs that reset on reload; each rule there is a shipped incident.
+
+## Proof and shipping
+
+13. **Proof is a Playwright video recorded on a Linux dev host with a copy of the user's data, his window size and his flags, at least 1280 px wide, slow enough to see each step and its result.**
+    Example (2026-11-20): a demo on toy fixtures looked good while the real product with real data looked bad.
+14. **One task ships one thing; when many asks pile onto one task, split them and land them one at a time.**
+    Example (2026-11-20): one task carried the Needs you card's new look, one-decision paging and the full-window expand fix at once, so each slipped behind the others.
+15. **Report to the user briefly, with pictures or GIFs instead of long text.**
+    Example (2026-11-20): the user's standing rule after long reports: pictures or GIFs over long text, his exact question answered first.
+
+## Before you land
+
+Go through this list for the change: every item of rule 1 checked, the core flows of rule 2 walked,
+the video of rule 13 watched by you frame by frame, and the user's own yes for any new design (rule 4).

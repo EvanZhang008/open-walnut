@@ -14,6 +14,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { ignoredByGit } from './repo-files';
 
 const ROOT = path.resolve(__dirname, '../..');
 const SKILLS = path.join(ROOT, '.claude/skills');
@@ -59,6 +60,11 @@ describe('UI requirements reach every UI agent', () => {
       return !fs.existsSync(p) || !topOf(fs.readFileSync(p, 'utf8'), false).includes(NAME);
     });
     expect(missing, `These files must name ${NAME} in their first ${TOP_LINES} lines:\n${missing.join('\n')}`).toEqual([]);
+  });
+
+  it('the skill and every guide file ship with the repo, not only on this disk', () => {
+    const files = [path.relative(ROOT, SKILL_FILE), ...FIXED_GUIDES, ...uiSkills().map((d) => `.claude/skills/${d}/SKILL.md`)];
+    expect(ignoredByGit(ROOT, files), 'git ignores these files; add a !.claude/skills/<name>/ line to .gitignore').toEqual([]);
   });
 
   it('every UI skill in the repo points at the skill near its top', () => {

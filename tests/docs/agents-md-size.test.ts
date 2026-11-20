@@ -11,6 +11,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { ignoredByGit } from './repo-files';
 
 const ROOT = path.resolve(__dirname, '../..');
 const FILE = path.join(ROOT, 'AGENTS.md');
@@ -52,6 +53,8 @@ describe('root AGENTS.md', () => {
     expect(paths.length).toBeGreaterThan(10);
     const missing = paths.filter((p) => !fs.existsSync(path.join(ROOT, p)));
     expect(missing, `AGENTS.md names paths that do not exist; fix the pointer or restore the file:\n${missing.join('\n')}`).toEqual([]);
+    const ignored = ignoredByGit(ROOT, paths);
+    expect(ignored, `AGENTS.md names files that .gitignore keeps out of the repo (a new skill folder needs its !.claude/skills/<name>/ line):\n${ignored.join('\n')}`).toEqual([]);
   });
 
   it('finds links and backticked paths, and skips patterns', () => {
