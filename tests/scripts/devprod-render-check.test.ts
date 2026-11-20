@@ -78,6 +78,14 @@ const PAGES: Record<string, string> = {
     <script>console.error('[error-boundary] render crash — tree recovered by boundary', { error: 'ReferenceError: groupBy is not defined' })</script>
     </body></html>`,
   '/blank': `<!doctype html><html><body><div id="root"></div><script>groupBy.length</script></body></html>`,
+  // The shell mounts 4 s after the network went quiet (a loaded Mac with real data, 2026-11-20).
+  '/late': `<!doctype html><html><body><div id="root"></div><script>setTimeout(() => { document.getElementById('root').innerHTML = '<nav>Walnut</nav>' }, 4000)</script></body></html>`,
+  // Nothing thrown, nothing ever mounted: still a blank page, never hidden by the longer wait.
+  '/silent-blank': `<!doctype html><html><body><div id="root"></div></body></html>`,
+  // The app's own boot-crash line (web/src/main.tsx), no page error.
+  '/boot-crash': `<!doctype html><html><body><div id="root"></div><script>console.error('[boot] the app failed to load', { error: 'x' })</script></body></html>`,
+  // A harmless rejection on a busy boot, then the shell mounts 5 s later.
+  '/late-after-rejection': `<!doctype html><html><body><div id="root"></div><script>Promise.reject(new Error('aborted fetch')); setTimeout(() => { document.getElementById('root').innerHTML = '<nav>Walnut</nav>' }, 5000)</script></body></html>`,
   '/warned': `<!doctype html><html><body><div id="root"><nav>ok</nav></div><script>setTimeout(() => { throw new Error('late') }, 10)</script></body></html>`,
 };
 
@@ -210,6 +218,35 @@ describe.skipIf(!hasChromium)('devprod-render-check.mjs verdicts', () => {
     expect(r.out).toContain('#root is empty');
     expect(r.out).toContain('groupBy');
     expect(r.code).toBe(1);
+    // An uncaught error ends the wait well before the 20 s budget.
+    expect(emptyAfter(r.out)).toBeLessThan(18_000);
+  });
+
+  it('0: a shell that mounts seconds after the network settled is OK, never a blank page', async () => {
+    const r = await run(`${base}/late`);
+    expect(r.out).toContain('render-check OK');
+    expect(r.out).not.toContain('#root is empty');
+    expect(r.code).toBe(0);
+  });
+
+  const emptyAfter = (out: string) => Number(/#root is empty after (\d+)ms/.exec(out)?.[1] ?? NaN);
+
+  it('1: a blank page with nothing thrown still fails when the wait ends (the longer wait hides no crash)', async () => {
+    const r = await run(`${base}/silent-blank`, ['--timeout-ms', '3000']);
+    expect(r.out).toContain('#root is empty');
+    expect(r.code).toBe(1);
+  });
+
+  it('1: the app\'s own boot-crash line ends the wait soon after it, not at the end of the budget', async () => {
+    const r = await run(`${base}/boot-crash`);
+    expect(r.code).toBe(1);
+    expect(emptyAfter(r.out)).toBeLessThan(10_000);
+  });
+
+  it('0: a stray rejection before a late mount is no crash', async () => {
+    const r = await run(`${base}/late-after-rejection`);
+    expect(r.out).toContain('render-check OK');
+    expect(r.code).toBe(0);
   });
 
   it('0 with a warning: an uncaught exception that did not unmount the app only warns (fails under --strict)', async () => {
