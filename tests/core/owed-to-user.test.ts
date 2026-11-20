@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { OWED_STATUS_SOURCES, namesUser, statusAskItem, userNameOf, userProgressItems } from '../../src/core/sessions/owed-to-user.js'
+import { OWED_STATUS_SOURCES, holdsOwnAsk, namesUser, statusAskItem, userNameOf, userProgressItems } from '../../src/core/sessions/owed-to-user.js'
 import { extractProgressLines } from '../../src/core/task-progress.js'
 import { deriveUserStatus, type UserStatus } from '../../src/core/user-status.js'
 import { phaseForReport } from '../../src/core/sessions/report-phase.js'
@@ -110,6 +110,30 @@ describe('a hold stays until it is settled, whatever a later turn reports', () =
         expect(s.ask).toBe(owed.ask)
       }
     }
+  })
+
+  it('the status says its ask is the hold\'s own (heldAsk), and a close never counts that ask as a new item, however stale', () => {
+    // The status is derived moments after a hold; a second hold that adds an item rewrites the
+    // hold's words while the status still carries the first's (2026-11-20: the close read them as a
+    // new ask of the user, and the holds nested: "Left for you: 1) ... 2) Left for you: 1) ...").
+    const s = deriveUserStatus({ phase: 'NEED_ACTION', hasSession: true, processStatus: 'idle', report: { state: 'done', at: later } as never, owedHold: { ask: owed.ask, at: owed.at } })
+    expect(s).toMatchObject({ state: 'needs', ask: owed.ask, heldAsk: true })
+    const second = { ...owed, items: [...owed.items, 'Answer the letter "Pick a design"'], ask: `${owed.ask}; 2) Answer the letter "Pick a design"`, at: later }
+    expect(holdsOwnAsk({ result_report: { via: 'complete', at: later, owed: second }, user_status: s }, statusAskItem(s)!)).toBe(true)
+    // Its own report's ask is the report's, not the hold's: it stays an item of the user.
+    const own = deriveUserStatus({ phase: 'NEED_ACTION', hasSession: true, processStatus: 'idle', report: { state: 'needs', ask: 'Which host?', at: later } as never, owedHold: { ask: owed.ask, at: owed.at } })
+    expect(own).toMatchObject({ state: 'needs', ask: 'Which host?' })
+    expect(own.heldAsk).toBeUndefined()
+    expect(holdsOwnAsk({ result_report: { via: 'complete', at: later, owed: second }, user_status: own }, 'Which host?')).toBe(false)
+    // The same words on a status built after the hold was settled are asked anew, flag or not; the
+    // flagged status with no later word is still the settled hold's echo.
+    const settled = { ...owed, settled: { at: later, how: 'dropped' as const } }
+    expect(holdsOwnAsk({ result_report: { via: 'complete', at: later, owed: settled }, user_status: { ...s, at: '2026-11-02T10:06:00.000Z' } }, owed.ask)).toBe(false)
+    expect(holdsOwnAsk({ result_report: { via: 'complete', at: later, owed: settled }, user_status: s }, owed.ask)).toBe(true)
+    // A status from before the flag: the open hold's own words are still its own, other words are not.
+    const unflagged = { ...s }; delete (unflagged as { heldAsk?: true }).heldAsk
+    expect(holdsOwnAsk({ result_report: { via: 'complete', at: owed.at, owed }, user_status: unflagged }, owed.ask)).toBe(true)
+    expect(holdsOwnAsk({ result_report: { via: 'complete', at: later, owed: second }, user_status: unflagged }, owed.ask)).toBe(false)
   })
 
   it('a running turn still reads Working; Main and a lead are never held; a settled hold is gone', () => {

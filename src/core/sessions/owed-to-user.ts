@@ -116,11 +116,19 @@ export function answeredForUser(task: Pick<Task, 'ask_answered' | 'asks_answered
   return !!s && answeredAbove(s, answersOf(task)) !== s;
 }
 
-/** Whether `ask` is a hold's own (its status reads it back): while it is open, or settled after that status was built (pure). */
-function holdsOwnAsk(task: Pick<Task, 'result_report' | 'user_status'>, ask: string): boolean {
+/**
+ * Whether `ask` is a hold's own (its status reads it back), so no item of the user: a status that says
+ * so (heldAsk, whichever hold it read: the hold's items carry what it named, and a settled hold is no
+ * longer his), else the open hold's words, or a settled hold's from before that status was built (pure).
+ * 2026-11-20: the status is derived 25 ms after a hold, so a second close met the first hold's words
+ * on a status while the hold already named more, and counted them as a new item: the holds nested.
+ */
+export function holdsOwnAsk(task: Pick<Task, 'result_report' | 'user_status'>, ask: string): boolean {
   const owed = task.result_report?.owed;
-  if (!owed || ask !== owed.ask) return false;
-  return !owed.settled || !(Date.parse(task.user_status?.at ?? '') > Date.parse(owed.settled.at));
+  // The same words on a status built after the hold was settled are asked anew.
+  const askedAgain = !!owed?.settled && Date.parse(task.user_status?.at ?? '') > Date.parse(owed.settled.at);
+  if (task.user_status?.heldAsk && task.user_status.ask === ask) return !askedAgain;
+  return !!owed && ask === owed.ask && !askedAgain;
 }
 
 /** The ask its stored status makes of the user, when that is owed (pure). */

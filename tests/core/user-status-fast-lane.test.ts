@@ -14,7 +14,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-user-status-
 import { WALNUT_HOME } from '../../src/constants.js'
 import { addTask, getTask, updateTask } from '../../src/core/task-manager.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
-import { sessionMovesNow, startUserStatusSync, stopUserStatusSync, settleUserStatusSync, syncUserStatuses } from '../../src/core/user-status-sync.js'
+import { holdStatusWritesForTest, sessionMovesNow, startUserStatusSync, stopUserStatusSync, settleUserStatusSync, syncUserStatuses } from '../../src/core/user-status-sync.js'
 
 beforeEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
@@ -106,5 +106,72 @@ describe('the fast lane', () => {
     await settleUserStatusSync()
     // The newer answer stands: the older pass did not write over it.
     expect((await getTask(t.id)).user_status?.state).not.toBe('needs')
+  })
+
+  it('a pass that left a task to a later one returns only once that one has written it', async () => {
+    // 2026-11-20: a pass of every task returned while the fast pass that had claimed one row was
+    // still writing it, and its caller read the row with no status (tests/e2e/owed-close.test.ts).
+    const x = (await addTask({ title: 'Before it', project: 'Acme' })).task
+    const t = (await addTask({ title: 'Left to the later pass', project: 'Acme' })).task
+    await updateTask(x.id, { phase: 'NEED_ACTION' }, { source: 'api' })
+    await updateTask(t.id, { phase: 'NEED_ACTION' }, { source: 'api' })
+    const gate = () => { let open!: () => void; const p = new Promise<void>((r) => { open = r }); return { p, open } }
+    const xWrite = gate(), xAt = gate(), tWrite = gate(), tReached = gate()
+    // The earlier pass (every task) stalls on its write of x; the later pass (t alone) claims t
+    // meanwhile and stalls on its write of t.
+    let earlierPass = 0
+    holdStatusWritesForTest(async (id, pass) => {
+      if (id === x.id) { earlierPass = pass; xAt.open(); await xWrite.p }
+      if (id === t.id && pass !== earlierPass) { tReached.open(); await tWrite.p }
+    })
+    try {
+      const earlier = syncUserStatuses(null, Date.now())
+      await xAt.p
+      const later = syncUserStatuses(new Set([t.id]), Date.now())
+      await tReached.p
+      xWrite.open()
+      // The earlier pass has left t to the later one: it does not return while that write is held.
+      const settled = await Promise.race([earlier.then(() => 'returned'), sleep(200).then(() => 'pending')])
+      expect(settled).toBe('pending')
+      expect((await getTask(t.id)).user_status).toBeUndefined()
+      tWrite.open()
+      await Promise.all([earlier, later])
+      // Whoever awaited the earlier pass reads t derived.
+      expect((await getTask(t.id)).user_status?.state).toBe('needs')
+    } finally {
+      holdStatusWritesForTest(null)
+    }
+  })
+
+  it('a pass whose write a later pass overtook returns only once that pass has written', async () => {
+    // The same, met at the write: both passes derived the task, the later one claimed it while the
+    // earlier one's write waited for the lock, so the lock refused the earlier write (shouldUpdate).
+    const t = (await addTask({ title: 'Overtaken at the write', project: 'Acme' })).task
+    await updateTask(t.id, { phase: 'NEED_ACTION' }, { source: 'api' })
+    const gate = () => { let open!: () => void; const p = new Promise<void>((r) => { open = r }); return { p, open } }
+    const first = gate(), second = gate(), earlierAtWrite = gate(), laterAtWrite = gate()
+    let arrived = 0
+    // The earlier pass claims the task and stalls at its write; only then does the later pass start,
+    // so it claims the task over the earlier one and stalls at its own write.
+    holdStatusWritesForTest(async (id) => {
+      if (id !== t.id) return
+      arrived += 1
+      if (arrived === 1) { earlierAtWrite.open(); await first.p } else { laterAtWrite.open(); await second.p }
+    })
+    try {
+      const earlier = syncUserStatuses(new Set([t.id]), Date.now())
+      await earlierAtWrite.p
+      const later = syncUserStatuses(new Set([t.id]), Date.now())
+      await laterAtWrite.p
+      first.open()
+      const settled = await Promise.race([earlier.then(() => 'returned'), sleep(200).then(() => 'pending')])
+      expect(settled).toBe('pending')
+      expect((await getTask(t.id)).user_status).toBeUndefined()
+      second.open()
+      await Promise.all([earlier, later])
+      expect((await getTask(t.id)).user_status?.state).toBe('needs')
+    } finally {
+      holdStatusWritesForTest(null)
+    }
   })
 })

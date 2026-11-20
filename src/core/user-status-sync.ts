@@ -89,6 +89,13 @@ let fastRunning: Promise<void> | null = null;
  */
 let passSeq = 0;
 const derivedBy = new Map<string, number>();
+/**
+ * The passes that are running, by number. A pass that leaves a task to a later pass (derivedBy)
+ * waits for that pass before it returns, so whoever awaited it reads the task derived (2026-11-20:
+ * a pass of every task returned while the fast pass that had claimed one row was still writing it,
+ * and its caller read the row with no status at all).
+ */
+const passes = new Map<number, Promise<void>>();
 let timer: ReturnType<typeof setTimeout> | null = null;
 let sweep: ReturnType<typeof setInterval> | null = null;
 let running: Promise<void> | null = null;
@@ -1092,8 +1099,27 @@ export async function syncUserStatuses(
    *  the lane this pass ran in, so a hand's change stays fast for every hop. */
   follow: (id: string) => void = mark,
 ): Promise<number> {
-  const { listTasks, updateTaskRaw } = await import('./task-manager.js');
   const pass = ++passSeq;
+  const leftTo = new Set<number>();
+  let ended!: () => void;
+  passes.set(pass, new Promise<void>((r) => { ended = r; }));
+  try {
+    return await derivePass(pass, ids, nowMs, follow, leftTo);
+  } finally {
+    passes.delete(pass);
+    ended();
+    // A task this pass left to a later one is written by that one: this pass returns only once it
+    // has (a later pass never waits on an earlier one, so the waits never form a cycle).
+    await Promise.all([...leftTo].map((p) => passes.get(p)).filter((p) => p !== undefined));
+  }
+}
+
+async function derivePass(
+  pass: number, ids: ReadonlySet<string> | null, nowMs: number, follow: (id: string) => void,
+  /** The later passes this one left a task to. */
+  leftTo: Set<number>,
+): Promise<number> {
+  const { listTasks, updateTaskRaw } = await import('./task-manager.js');
   const t0 = Date.now();
   const everything = await listTasks();
   const { getConfig } = await import('./config-manager.js');
@@ -1123,7 +1149,8 @@ export async function syncUserStatuses(
     if (settlesAt === null && routineRunToClose(task, own ?? next, true)) toClose.push({ task, status: own ?? next });
     // A pass that began later has derived it from newer facts (the fast lane beside a whole
     // pass): this one's answer is the older, and writing it would put a stale status back.
-    if ((derivedBy.get(task.id) ?? 0) > pass) continue;
+    const later = derivedBy.get(task.id) ?? 0;
+    if (later > pass) { leftTo.add(later); continue; }
     derivedBy.set(task.id, pass);
     if (sameStatus(task.user_status, next)) continue;
     if (settlesAt !== null) {
@@ -1131,6 +1158,7 @@ export async function syncUserStatuses(
       recheckAt(task.id, settlesAt);
       continue;
     }
+    if (holdWrite) await holdWrite(task.id, pass);
     const res = await updateTaskRaw(task.id, { user_status: next }, {
       emitEvent: true, source: OWN_SOURCE,
       // Completed while its facts were read: it reads Done, and the write would announce it again.
@@ -1139,6 +1167,10 @@ export async function syncUserStatuses(
       log.task.debug('user-status: write skipped', { taskId: task.id, error: errText(err) });
       return { changed: false };
     });
+    // A later pass claimed it while this write waited for the lock (shouldUpdate refused it): that
+    // pass writes it, and this one returns only once it has, like a task it skipped.
+    const claimed = derivedBy.get(task.id) ?? 0;
+    if (claimed > pass) leftTo.add(claimed);
     if (res.changed) {
       const prior = task.user_status;
       // With the experiment on, a parent later in this pass reads the accepted child status.
@@ -1437,6 +1469,10 @@ export function startUserStatusSync(): void {
   sweep.unref?.();
   log.task.info('user-status: started');
 }
+
+/** Tests only: awaited before each status write, to hold one pass's write while another runs. */
+let holdWrite: ((taskId: string, pass: number) => Promise<void>) | null = null;
+export function holdStatusWritesForTest(fn: typeof holdWrite): void { holdWrite = fn; }
 
 /**
  * Run what is pending now and wait until no pass is queued or running, so a test that watches

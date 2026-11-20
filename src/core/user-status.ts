@@ -445,6 +445,12 @@ export interface UserStatus {
   /** 'thread': a thread waiting on him, on a task with Threads on (taskThreadNeeds); Main's and a lead's never (they carry counts). */
   /** 'approval': an approval its session asked for (action-needed.ts). */
   source?: 'prompt' | 'letter' | 'choice' | 'error' | 'session' | 'thread' | 'approval';
+  /** needs: `ask` is a close's hold read back (result_report.owed, sessions/owed-to-user.ts), the
+   *  items the user still has of a task its session tried to close. A later close never counts it
+   *  as a new item of his, however stale this status is against the hold (2026-11-20: the status
+   *  still read the first hold's words when a second hold had added an item, and the close nested
+   *  them: "Left for you: 1) ... 2) Left for you: 1) ..."). */
+  heldAsk?: true;
   /** Main or a lead: what its Threads hold for the user (shown, waiting on him, the newest's title).
    *  The Org page shows them as threads; the node itself is never Needs you (orgNodeNeverNeeds). */
   threads?: ThreadCounts;
@@ -1279,7 +1285,9 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     const fromReport = report?.state === 'needs' && !none(report.ask);
     const heldAsk = fromReport ? clean(report!.ask) : clean(input.owedHold.ask);
     // A held ask from an earlier close has no recorded writer: unknown, never the current report's.
-    return strip({ state: 'needs', source: 'session', ask: heldAsk, ...w, ...(fromReport ? src : {}) });
+    // The hold's own words are marked as such (heldAsk): a later close reads them as the hold, never
+    // as a new item of the user.
+    return strip({ state: 'needs', source: 'session', ask: heldAsk, ...(fromReport ? {} : { heldAsk: true as const }), ...w, ...(fromReport ? src : {}) });
   }
   // An open ask of the user is Needs you in EVERY phase, before anything that says what else it waits
   // on: a watch, a trigger, a clock, its own work, a park, a start waiting for a host (openAskOf).

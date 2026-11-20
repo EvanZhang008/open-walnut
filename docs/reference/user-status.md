@@ -17,7 +17,11 @@ The status is derived after a 1.5 s debounce, and a pass of every task (a letter
 thread change is derived 25 ms later for that task alone, while a whole pass may still be
 running, and the hops that follow (the owner's thread counts) stay in the lane. A pass never
 writes a task that was marked after the pass began, so the slower pass cannot put an older
-status back. A session event that no later write of its turn corrects takes the lane too: a turn
+status back; and it returns only once the later pass it left that task to has written it, so
+whoever awaited a pass reads the task derived (2026-11-20: a caller read a row with no status
+while the fast pass that claimed it was still writing). A close's hold is read back into the
+status with `heldAsk`, so a later close never counts the status's echo of an earlier hold as a
+new item of the user (`sessions/owed-to-user.ts holdsOwnAsk`). A session event that no later write of its turn corrects takes the lane too: a turn
 that starts running, a prompt opened or answered, a session started (`sessionMovesNow`), so an
 answer a page shows as Working is derived as Working at once. A turn that ends and a session's
 own writes keep the debounce, so its report and phase write fold into one pass. A pass over 1 s logs
