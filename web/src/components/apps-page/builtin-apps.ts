@@ -7,13 +7,14 @@
  * same app preferences: off means `unpinned`, which takes it off the rail and
  * nothing else (the route, links and the Command Palette keep working). A key the
  * user hid from the rail's right-click menu (`hidden`) reads off too, and switching
- * it on clears both.
+ * it on clears both. A registry app the experiment quiet_rail keeps off the rail by default
+ * (Tasks, Routines, Passwords, Calendar) reads off until the user switches it on.
  *
  * Three can never go: Home (every link and every fallback lands there), Apps (the
  * one place a hidden app comes back from) and Settings (everything else). Voice and
  * the bell are system controls, not apps, so they are not listed at all.
  */
-import type { AppPreferences } from '@/apps/preferences'
+import { appOnSidebar, type AppPreferences, type SidebarDefault } from '@/apps/preferences'
 import type { RegisteredApp } from '@/apps/registry'
 import { railItemKey, type RailItemId } from '@/apps/rail-items'
 
@@ -59,7 +60,7 @@ const RAIL_COPY: Readonly<Record<RailItemId, Copy & { title: string }>> = {
   'home-scratchpad': { title: 'Scratchpad', line: 'A quick note pad, on Home or beside any page', tint: '#FF9F0A' },
 }
 
-/** Rail order: Home, its panel toggles, Org, the side bars, then the registry apps as the rail draws them. */
+/** Rail order: Org, Home, its panel toggles, the side bars, then the registry apps as the rail draws them. */
 const HOME_GROUP: readonly RailItemId[] = ['home-todo', 'home-chat']
 const SIDE_BAR_GROUP: readonly RailItemId[] = ['home-agenda', 'home-scratchpad']
 
@@ -74,7 +75,7 @@ function offRail(preferences: AppPreferences, key: string): boolean {
 export function builtinEntries(
   coreApps: readonly RegisteredApp[],
   preferences: AppPreferences,
-  opts: { phone?: boolean } = {},
+  opts: { phone?: boolean; sidebarDefault?: SidebarDefault; quietRail?: boolean } = {},
 ): BuiltinEntry[] {
   const out: BuiltinEntry[] = []
   const railEntry = (id: RailItemId): BuiltinEntry => {
@@ -92,13 +93,13 @@ export function builtinEntries(
     return {
       key: app.key, id: app.id, title: app.title, line: copy.line, tint: copy.tint, app,
       homePanel: false, sideBar: false, ...(lock ? { lock } : {}),
-      shown: lock ? true : !offRail(preferences, app.key),
+      shown: lock ? true : appOnSidebar(app, preferences, opts.sidebarDefault ?? 'declared', opts.quietRail),
     }
   }
+  out.push(railEntry('org'))
   const home = coreApps.find((app) => app.id === 'home')
   if (home) out.push(appEntry(home))
   for (const id of HOME_GROUP) out.push(railEntry(id))
-  out.push(railEntry('org'))
   // A phone mounts neither the agenda nor the scratchpad, so the rail never shows them there.
   if (!opts.phone) for (const id of SIDE_BAR_GROUP) out.push(railEntry(id))
   for (const app of coreApps) if (app.id !== 'home') out.push(appEntry(app))

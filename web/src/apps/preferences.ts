@@ -172,10 +172,15 @@ export type SidebarDefault = 'declared' | 'by-hand'
  * or the Sidebar and the Apps page's switch can disagree about the same row.
  */
 export function effectiveAppPlacement(
-  app: Pick<RegisteredApp, 'key' | 'kind' | 'placement'>,
+  app: Pick<RegisteredApp, 'key' | 'kind' | 'placement' | 'quietRail'>,
   preferences: AppPreferences,
   sidebarDefault: SidebarDefault = 'declared',
+  quietRail = false,
 ): AppPlacement {
+  // Experiment quiet_rail: a core app used now and then is off the rail until the person pins
+  // it (setAppOnSidebar stores that pin as a placement). With the experiment off, or in an
+  // older build, a core screen ignores the stored placement and stays where it always was.
+  if (quietRail && app.quietRail) return preferences.placement[app.key] ?? 'settings'
   if (!supportsPlacementOverride(app)) return app.placement
   return preferences.placement[app.key] ?? (sidebarDefault === 'by-hand' ? 'settings' : app.placement)
 }
@@ -197,13 +202,14 @@ export function setAppPlacement(
 
 /** Whether this App has a Sidebar row: the same rule `resolveApps` uses for `sidebar`. */
 export function appOnSidebar(
-  app: Pick<RegisteredApp, 'key' | 'kind' | 'placement' | 'lockVisibility'>,
+  app: Pick<RegisteredApp, 'key' | 'kind' | 'placement' | 'lockVisibility' | 'quietRail'>,
   preferences: AppPreferences,
   sidebarDefault: SidebarDefault = 'declared',
+  quietRail = false,
 ): boolean {
   if (app.lockVisibility) return true
   if (preferences.hidden.includes(app.key) || preferences.unpinned.includes(app.key)) return false
-  return effectiveAppPlacement(app, preferences, sidebarDefault) === 'sidebar'
+  return effectiveAppPlacement(app, preferences, sidebarDefault, quietRail) === 'sidebar'
 }
 
 /**
@@ -215,12 +221,17 @@ export function appOnSidebar(
  */
 export function setAppOnSidebar(
   preferences: AppPreferences,
-  app: Pick<RegisteredApp, 'key' | 'kind'>,
+  app: Pick<RegisteredApp, 'key' | 'kind' | 'quietRail'>,
   on: boolean,
+  quietRail = false,
 ): AppPreferences {
+  // While quiet_rail is on, a quiet app's off is its placement alone, never `unpinned`: the
+  // person's off ends with the experiment, and the rail is then what it was before it.
+  if (!on && quietRail && app.quietRail) return setAppPlacement(setAppDisposition(preferences, app.key, 'pinned'), app.key, 'settings')
   if (!on) return setAppDisposition(preferences, app.key, 'unpinned')
   const pinned = setAppDisposition(preferences, app.key, 'pinned')
-  return supportsPlacementOverride(app) ? setAppPlacement(pinned, app.key, 'sidebar') : pinned
+  // A quiet app's on is stored as a placement too, so it holds once the experiment is on.
+  return supportsPlacementOverride(app) || app.quietRail ? setAppPlacement(pinned, app.key, 'sidebar') : pinned
 }
 
 function mergedOrder(
@@ -278,7 +289,12 @@ export function moveApp(
   return { ...preferences, order }
 }
 
-export function resolveApps(apps: RegisteredApp[], preferences: AppPreferences, sidebarDefault: SidebarDefault = 'declared'): ResolvedApps {
+export function resolveApps(
+  apps: RegisteredApp[],
+  preferences: AppPreferences,
+  sidebarDefault: SidebarDefault = 'declared',
+  quietRail = false,
+): ResolvedApps {
   const defaultOrder = [...apps].sort((a, b) => a.order - b.order || a.key.localeCompare(b.key))
   const byKey = new Map(defaultOrder.map((app) => [app.key, app]))
   const all = mergedOrder(defaultOrder, preferences.order)
@@ -298,7 +314,7 @@ export function resolveApps(apps: RegisteredApp[], preferences: AppPreferences, 
     discoverable,
     hidden: all.filter(isHidden),
     // The one Sidebar rule (appOnSidebar), never a second copy of it here.
-    sidebar: all.filter((app) => appOnSidebar(app, preferences, sidebarDefault)),
+    sidebar: all.filter((app) => appOnSidebar(app, preferences, sidebarDefault, quietRail)),
   }
 }
 

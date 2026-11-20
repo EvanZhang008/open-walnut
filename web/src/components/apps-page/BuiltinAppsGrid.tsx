@@ -8,10 +8,11 @@
  */
 import { useSyncExternalStore, type ComponentType } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useAppCatalog } from '@/apps/hooks'
-import { ChatBubbleIcon, OrgChartIcon, ScratchpadIcon, TaskPanelIcon, CalendarIcon } from '@/apps/icons'
+import { useAppCatalog, useSidebarDefault } from '@/apps/hooks'
+import { AgendaIcon, ChatBubbleIcon, OrgChartIcon, ScratchpadIcon, TaskPanelIcon } from '@/apps/icons'
 import type { RailItemId } from '@/apps/rail-items'
-import { getAppPreferences, subscribeAppPreferences, updateAppDisposition } from '@/apps/store'
+import { getAppPreferences, subscribeAppPreferences, updateAppDisposition, updateAppOnSidebar } from '@/apps/store'
+import { useExperimental } from '@/hooks/useExperimental'
 import { homePanelOpen, type HomePanelId } from '@/pages/home-panel-live'
 import { usePhoneLayout } from '@/hooks/usePhoneLayout'
 import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch'
@@ -24,7 +25,7 @@ const RAIL_ICONS: Readonly<Record<RailItemId, ComponentType<{ size?: number }>>>
   'home-todo': TaskPanelIcon,
   'home-chat': ChatBubbleIcon,
   org: OrgChartIcon,
-  'home-agenda': CalendarIcon,
+  'home-agenda': AgendaIcon,
   'home-scratchpad': ScratchpadIcon,
 }
 
@@ -39,18 +40,23 @@ const HOME_PANELS: Partial<Record<RailItemId, { panel: HomePanelId; toggleEvent:
   'home-scratchpad': { panel: 'scratchpad', toggleEvent: 'sidebar:toggle-scratchpad' },
 }
 
-function setOnRail(entry: BuiltinEntry, on: boolean): void {
-  updateAppDisposition(entry.key, on ? 'pinned' : 'unpinned')
+function setOnRail(entry: BuiltinEntry, on: boolean, quietRail: boolean): void {
+  // A registry app goes through the one Sidebar switch: a quiet_rail app's pin is a placement.
+  if (entry.app) updateAppOnSidebar(entry.app, on, quietRail)
+  else updateAppDisposition(entry.key, on ? 'pinned' : 'unpinned')
   const drive = !on && entry.rail ? HOME_PANELS[entry.rail] : undefined
   // The event TOGGLES, so it fires only when this window's MainPage said the panel is open.
   if (drive && homePanelOpen(drive.panel) === true) window.dispatchEvent(new CustomEvent(drive.toggleEvent))
 }
 
-function useBuiltinEntries(): BuiltinEntry[] {
+/** The built-in entries every part of the Apps page reads (the grid, a detail page, the page's count). */
+export function useBuiltinEntries(): BuiltinEntry[] {
   const apps = useAppCatalog()
   const preferences = useSyncExternalStore(subscribeAppPreferences, getAppPreferences, getAppPreferences)
   const phone = usePhoneLayout()
-  return builtinEntries(apps.all.filter((app) => app.kind === 'core'), preferences, { phone })
+  const sidebarDefault = useSidebarDefault()
+  const quietRail = useExperimental('quiet_rail')
+  return builtinEntries(apps.all.filter((app) => app.kind === 'core'), preferences, { phone, sidebarDefault, quietRail })
 }
 
 const openPath = (entry: BuiltinEntry): string => (entry.app ? entry.app.path : entry.rail === 'org' ? '/org' : '/')
@@ -77,6 +83,7 @@ const LockGlyph = () => (
 export function BuiltinAppsGrid({ query, onOpen }: { query: string; onOpen: (key: string) => void }) {
   const navigate = useNavigate()
   const entries = useBuiltinEntries().filter((entry) => builtinMatches(entry, query))
+  const quietRail = useExperimental('quiet_rail')
   if (entries.length === 0) return null
   return (
     <div className="apps-grid" data-testid="apps-builtin-grid">
@@ -93,7 +100,7 @@ export function BuiltinAppsGrid({ query, onOpen }: { query: string; onOpen: (key
           control={entry.lock ? undefined : (
             <ToggleSwitch
               checked={entry.shown}
-              onChange={(next) => setOnRail(entry, next)}
+              onChange={(next) => setOnRail(entry, next, quietRail)}
               aria-label={`Show ${entry.title} on the sidebar`}
               data-testid={`apps-builtin-card-toggle-${entry.id}`}
             />
@@ -112,6 +119,7 @@ export function BuiltinAppsGrid({ query, onOpen }: { query: string; onOpen: (key
 export function BuiltinDetail({ entryKey, onBack }: { entryKey: string; onBack: () => void }) {
   const navigate = useNavigate()
   const entry = useBuiltinEntries().find((candidate) => candidate.key === entryKey)
+  const quietRail = useExperimental('quiet_rail')
   const back = (
     <button type="button" className="apps-back" onClick={onBack} data-testid="plugin-detail-back">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
@@ -154,7 +162,7 @@ export function BuiltinDetail({ entryKey, onBack }: { entryKey: string; onBack: 
           ) : (
             <ToggleSwitch
               checked={entry.shown}
-              onChange={(next) => setOnRail(entry, next)}
+              onChange={(next) => setOnRail(entry, next, quietRail)}
               aria-label={`Show ${entry.title} on the sidebar`}
               data-testid={`apps-builtin-toggle-${entry.id}`}
             />

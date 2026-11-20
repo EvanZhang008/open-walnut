@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { AppRegistry, appPathMatches, type RegisteredApp } from '../../web/src/apps/registry.js'
-import { createAppPreferences, parseAppPreferences, setAppDisposition } from '../../web/src/apps/preferences.js'
+import { createAppPreferences, parseAppPreferences, setAppDisposition, setAppOnSidebar } from '../../web/src/apps/preferences.js'
 import { railItemKey, railItemShown, railItemsShownFor } from '../../web/src/apps/rail-items.js'
 import { builtinEntries, builtinMatches } from '../../web/src/components/apps-page/builtin-apps.js'
 import { categoryOf, pluginMatches } from '../../web/src/components/apps-page/categories.js'
@@ -19,10 +19,10 @@ function coreApps(): RegisteredApp[] {
 }
 
 describe('Apps page: built-in entries', () => {
-  it('lists Home, its panels, Org, the side bars, then the registry apps, in rail order', () => {
+  it('lists Org, Home, its panels, the side bars, then the registry apps, in rail order', () => {
     const entries = builtinEntries(coreApps(), createAppPreferences())
     expect(entries.map((entry) => entry.id)).toEqual([
-      'home', 'home-todo', 'home-chat', 'org', 'home-agenda', 'home-scratchpad', 'notes', 'tasks', 'apps', 'settings',
+      'org', 'home', 'home-todo', 'home-chat', 'home-agenda', 'home-scratchpad', 'notes', 'tasks', 'apps', 'settings',
     ])
     expect(entries.every((entry) => entry.shown)).toBe(true)
     // The side bars open beside any page, so they are their own group, not Home's panels.
@@ -48,6 +48,17 @@ describe('Apps page: built-in entries', () => {
     // Back on: `pinned` clears both lists.
     const back = setAppDisposition(prefs, railItemKey('org'), 'pinned')
     expect(railItemShown(back, 'org')).toBe(true)
+  })
+
+  it('reads a quiet_rail app as off until switched on, while the experiment is on', () => {
+    const quiet = coreApps().map((app) => (app.id === 'tasks' ? { ...app, quietRail: true } : app))
+    const byId = (prefs = createAppPreferences(), quietRail = true) =>
+      new Map(builtinEntries(quiet, prefs, { quietRail }).map((entry) => [entry.id, entry]))
+    expect(byId().get('tasks')!.shown).toBe(false)
+    expect(byId().get('notes')!.shown).toBe(true)
+    expect(byId(createAppPreferences(), false).get('tasks')!.shown).toBe(true)
+    const on = setAppOnSidebar(createAppPreferences(), quiet.find((app) => app.id === 'tasks')!, true, true)
+    expect(byId(on).get('tasks')!.shown).toBe(true)
   })
 
   it('matches the search on the name and the line', () => {

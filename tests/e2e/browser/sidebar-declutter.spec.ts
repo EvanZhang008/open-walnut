@@ -39,11 +39,11 @@ test('app sidebar shows only the daily surfaces — no management pages, no Othe
   await expect(page.locator('.settings-nav')).toBeVisible({ timeout: 30_000 })
   await expandSidebar(page)
 
-  // Org is a page of its own, right under the Home group (not one of Home's panel toggles).
-  // Agenda and Scratchpad open beside any page, so they are a Side bar group of their own
-  // after Org (d5d8b3cfe), no longer inside Home's group.
+  // Org is a page of its own and the rail's first row (2026-11-20), not one of Home's panel
+  // toggles. Agenda and Scratchpad open beside any page, so they are a Side bar group of their
+  // own after Home's (d5d8b3cfe), no longer inside Home's group.
   // Passwords is a built-in app of its own (309a0ecbb, web/src/apps/core-apps.tsx order 60).
-  const CORE_PREFIX = ['Home', 'Task panel', 'Quick question', 'Org', 'Agenda', 'Scratchpad', 'Notes', 'Calendar', 'Mail', 'Tasks', 'Routines', 'Passwords']
+  const CORE_PREFIX = ['Org', 'Home', 'Task panel', 'Quick question', 'Agenda', 'Scratchpad', 'Notes', 'Calendar', 'Mail', 'Tasks', 'Routines', 'Passwords']
   const labels = (await page.locator('.sidebar-nav .sidebar-link').allTextContents()).map((t) => t.trim())
 
   // The core entries come first, in this exact order, and Apps then Settings always close it.

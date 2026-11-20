@@ -86,8 +86,8 @@ export function AppsIcon({ size = 18 }: IconProps) {
   )
 }
 
-// The Home group's panel toggles and Org, sized for the Apps page's tiles. The rail
-// draws its own copies (Sidebar.tsx); these match them stroke for stroke.
+// The Home group's panel toggles and Org: the rail (Sidebar.tsx, sized by its CSS) and the
+// Apps page's tiles draw these same ones.
 export function TaskPanelIcon({ size = 18 }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
@@ -116,12 +116,27 @@ export function OrgChartIcon({ size = 18 }: IconProps) {
   )
 }
 
+// A pencil (lucide `pencil-line`), not a page: Notes already wears the page, and the two sit
+// side by side on the rail.
 export function ScratchpadIcon({ size = 18 }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M5 3.5h9.5l4.5 4.5v12.5H5z" />
-      <path d="M14.5 3.5V8H19" />
-      <path d="M8.5 12.5h7M8.5 16.5h4.5" />
+      <path d="M12 20h9" />
+      <path d="M16.4 3.6a2.1 2.1 0 0 1 3 3L7.4 18.6a2 2 0 0 1-.9.5l-2.9.8.8-2.9a2 2 0 0 1 .5-.9z" />
+      <path d="M15 5l3 3" />
+    </svg>
+  )
+}
+
+// The agenda side bar (today's events beside any page), lucide `calendar-clock`: the
+// Calendar app keeps the plain calendar, so the two never look the same on the rail.
+export function AgendaIcon({ size = 18 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21 7.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3.5" />
+      <path d="M16 2v4M8 2v4M3 10h5" />
+      <circle cx="16" cy="16" r="6" />
+      <path d="M16 14v2.3l1.5 1.2" />
     </svg>
   )
 }

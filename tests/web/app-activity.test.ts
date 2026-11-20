@@ -458,7 +458,7 @@ describe('who may hide an app', () => {
     const callers = sources
       .filter(({ rel, text }) => !OWNERS.has(rel) && /\b(?:updateAppOnSidebar|keepAppOnSidebar|setAppOnSidebar|setAppPlacement)\b/.test(text))
       .map(({ rel }) => rel)
-    expect(callers.sort()).toEqual(['components/apps-page/PluginDetail.tsx', 'components/layout/Sidebar.tsx'])
+    expect(callers.sort()).toEqual(['components/apps-page/BuiltinAppsGrid.tsx', 'components/apps-page/PluginDetail.tsx', 'components/layout/Sidebar.tsx'])
     expect(sources.filter(({ rel, text }) => !OWNERS.has(rel) && /\bplacement:\s*\{\s*\.\.\./.test(text)).map(({ rel }) => rel)).toEqual([])
   })
 

@@ -31,6 +31,12 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
+    id: 'quiet_rail',
+    name: 'Fewer icons on the sidebar',
+    description: 'Tasks, Routines, Passwords and Calendar leave the sidebar and open from the Apps page instead. Each keeps its address and its links; turn its switch on in Apps to put it back on the sidebar.',
+    default: false,
+  },
+  {
     id: 'router_chat_sources',
     name: 'Router reads chat messages',
     description: 'New direct messages, mentions and watched-channel messages from a connected chat (Slack) go to your router, the one that reads your mail, which hands each one with its link to the task or VP that owns it. Each chat account can be filtered in Router settings. Off: the chat plugin keeps its own letters.',

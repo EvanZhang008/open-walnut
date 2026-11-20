@@ -11,18 +11,16 @@
  * Plugins used to live in Settings (`#plugin-store`, and a plugin's own panel at
  * `#<plugin>:<panel>`), which still forward here (settings-routing legacyPluginTarget).
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAppActivity, useAppCatalog } from '@/apps/hooks'
 import { AppsIcon } from '@/apps/icons'
-import { getAppPreferences, subscribeAppPreferences } from '@/apps/store'
 import { useSettingsConfig } from '@/hooks/useSettingsConfig'
-import { usePhoneLayout } from '@/hooks/usePhoneLayout'
 import { peekPendingInstall, subscribeOpenLinks } from '@/utils/open-link'
-import { BuiltinAppsGrid, BuiltinDetail } from '@/components/apps-page/BuiltinAppsGrid'
+import { BuiltinAppsGrid, BuiltinDetail, useBuiltinEntries } from '@/components/apps-page/BuiltinAppsGrid'
 import { MakeAppCard } from '@/components/apps-page/MakeAppCard'
 import { AppQuickOpen } from '@/components/apps-page/AppQuickOpen'
-import { builtinEntries, builtinMatches } from '@/components/apps-page/builtin-apps'
+import { builtinMatches } from '@/components/apps-page/builtin-apps'
 import { PLUGIN_CATEGORY_LABELS, isAppsFilter, type AppsFilter } from '@/components/apps-page/categories'
 import { usePageView } from '@/utils/view-memory'
 import { PluginStoreGrid, type PluginStoreSummary } from '@/components/apps-page/PluginStoreGrid'
@@ -72,7 +70,6 @@ function AppsPageBody() {
   const apps = useAppCatalog()
   // Experiment apps_stay_open: Pinned and Recently used lead the page (empty when off).
   const activity = useAppActivity(apps)
-  const preferences = useSyncExternalStore(subscribeAppPreferences, getAppPreferences, getAppPreferences)
   // The category picked stays picked when the page is left and opened again (utils/view-memory.ts).
   const [kept, setFilter] = usePageView<AppsFilter>('apps', 'filter', 'all', isAppsFilter)
   const [query, setQuery] = useState('')
@@ -88,7 +85,6 @@ function AppsPageBody() {
     show()
     return subscribeOpenLinks(show)
   }, [])
-  const phone = usePhoneLayout()
   const store = usePluginStore()
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
@@ -129,10 +125,7 @@ function AppsPageBody() {
     el.scrollTop = detailOpen ? 0 : gridScroll.current
   }, [detailOpen, pluginId, appKey])
 
-  const builtins = useMemo(
-    () => builtinEntries(apps.all.filter((app) => app.kind === 'core'), preferences, { phone }),
-    [apps.all, preferences, phone],
-  )
+  const builtins = useBuiltinEntries()
   const onRail = builtins.filter((entry) => entry.shown).length
   const builtinHits = builtins.filter((entry) => builtinMatches(entry, query)).length
   const showBuiltin = filter === 'all' || filter === 'builtin'

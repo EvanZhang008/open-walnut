@@ -112,14 +112,14 @@ export function hideApp(key: string): void {
 }
 
 /** An Open row made the app's own Sidebar row: it is on the Sidebar now, so no longer "open". */
-export function keepAppOnSidebar(app: Pick<RegisteredApp, 'key' | 'kind'>): void {
+export function keepAppOnSidebar(app: Pick<RegisteredApp, 'key' | 'kind' | 'quietRail'>): void {
   updateAppOnSidebar(app, true)
   markAppClosed(app.key)
 }
 
 /** The Apps page's switch, as one write (see `setAppOnSidebar`). */
-export function updateAppOnSidebar(app: Pick<RegisteredApp, 'key' | 'kind'>, on: boolean): void {
-  publish((current) => setAppOnSidebar(current, app, on))
+export function updateAppOnSidebar(app: Pick<RegisteredApp, 'key' | 'kind' | 'quietRail'>, on: boolean, quietRail = false): void {
+  publish((current) => setAppOnSidebar(current, app, on, quietRail))
 }
 
 export function moveAppPreference(apps: RegisteredApp[], key: string, direction: 'up' | 'down'): void {

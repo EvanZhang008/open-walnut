@@ -176,6 +176,101 @@ test('the sidebar opens Apps, and its entry is active there but not on a plugin 
   expect(pageErrors).toEqual([])
 })
 
+/**
+ * Experiment quiet_rail (src/core/experimental.ts, off by default; 2026-11-20, the user: "remove
+ * some not common used one back to app like tasks, routine ... password, calendar"). With it on,
+ * Tasks, Routines, Passwords and Calendar leave the rail: each card on the Apps page opens it, its
+ * old address still opens it, and its own switch puts it back. Org stays the rail's first row.
+ */
+async function setQuietRail(page: Page, on: boolean): Promise<void> {
+  const res = await page.request.put(`http://127.0.0.1:${fixture!.port}/api/config`, { data: { experimental: { quiet_rail: on } } })
+  expect(res.ok()).toBe(true)
+}
+
+const QUIET = ['tasks', 'routines', 'passwords', 'calendar'] as const
+
+test('quiet_rail: the apps used now and then open from Apps, their old links still work, and every rail icon works', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  await setQuietRail(page, true)
+  try {
+    await home(page)
+    const nav = page.locator('.sidebar-nav')
+    await expect(nav.locator('> :first-child')).toHaveAttribute('data-testid', 'sidebar-org')
+    for (const id of QUIET) await expect(page.getByTestId(`sidebar-core-app-${id}`)).toHaveCount(0)
+    await expect(page.getByTestId('sidebar-core-app-notes')).toBeVisible()
+
+    // Every icon still on the rail does what it says: a page link lands on its page, Org on /org,
+    // a panel toggle opens its panel and closes it again.
+    await page.getByTestId('sidebar-org').click()
+    await expect(page).toHaveURL(/\/org$/)
+    await expect(page.getByTestId('sidebar-org')).toHaveAttribute('aria-current', 'page')
+    const links = await nav.locator('a.sidebar-link[data-testid^="sidebar-core-app-"]').evaluateAll(
+      (els) => els.map((el) => ({ id: el.getAttribute('data-testid')!, path: new URL((el as HTMLAnchorElement).href).pathname })))
+    expect(links.map((link) => link.id)).toEqual(expect.arrayContaining(['sidebar-core-app-home', 'sidebar-core-app-notes', 'sidebar-core-app-apps', 'sidebar-core-app-settings']))
+    for (const link of links) {
+      await page.getByTestId(link.id).click()
+      await expect(page).toHaveURL(new RegExp(`^[^?#]*${link.path === '/' ? '/(?:[?#].*)?$' : link.path.replace(/[/]/g, '\\/')}`))
+      await expect(page.getByTestId(link.id)).toHaveClass(/\bactive\b/)
+    }
+    await page.getByTestId('sidebar-core-app-home').click()
+    const toggles = nav.locator('button.sidebar-panel-toggle:not([data-testid="sidebar-org"]):not([data-testid="sidebar-quick-bar"])')
+    expect(await toggles.count()).toBeGreaterThanOrEqual(4)
+    for (let i = 0; i < await toggles.count(); i += 1) {
+      const button = toggles.nth(i)
+      const before = await button.getAttribute('class')
+      await button.click()
+      await expect(button).not.toHaveAttribute('class', before ?? '')
+      await button.click()
+      await expect(button).toHaveAttribute('class', before ?? '')
+    }
+
+    // Each moved app opens from its card on the Apps page.
+    for (const id of QUIET) {
+      await openApps(page)
+      await expect(page.getByTestId(`apps-builtin-${id}`)).toHaveAttribute('data-shown', 'false')
+      await expect(page.getByTestId(`apps-builtin-${id}-status`)).toHaveText('Only in Apps')
+      const open = page.getByTestId(`apps-builtin-card-open-${id}`)
+      await open.scrollIntoViewIfNeeded()
+      await open.click()
+      await expect(page).toHaveURL(new RegExp(`/${id}(?:[?#].*)?$`))
+      await expect(page.locator(`main[data-app-path="/${id}"]`)).toHaveCount(1)
+      await expect(page.getByTestId('apps-page')).toHaveCount(0)
+    }
+
+    // An old address (a bookmark, a link in a chat) still opens each one: a hard load of the
+    // URL is the point here, so this is the one place this spec uses page.goto.
+    for (const id of QUIET) {
+      await page.goto(`http://127.0.0.1:${fixture!.port}/${id}`)
+      await expect(page.locator(`main[data-app-path="/${id}"]`)).toHaveCount(1, { timeout: 60_000 })
+      await expect(page.getByTestId(`sidebar-core-app-${id}`)).toHaveCount(0)
+    }
+
+    // Its own switch puts one back on the rail, and takes it off again.
+    await home(page)
+    await openApps(page)
+    const tasksSwitch = page.getByTestId('apps-builtin-card-toggle-tasks')
+    await tasksSwitch.click()
+    await expect(page.getByTestId('sidebar-core-app-tasks')).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByTestId('apps-builtin-tasks')).toHaveAttribute('data-shown', 'true')
+    await tasksSwitch.click()
+    await expect(page.getByTestId('sidebar-core-app-tasks')).toHaveCount(0)
+    await expect(page.getByTestId('apps-builtin-tasks')).toHaveAttribute('data-shown', 'false')
+    // The page's own count agrees with the cards: the four moved apps are not counted.
+    const grid = page.getByTestId('apps-builtin-grid')
+    const [shown, total] = [await grid.locator('[data-shown="true"]').count(), await grid.locator('[data-shown]').count()]
+    expect(total - shown).toBeGreaterThanOrEqual(QUIET.length)
+    await expect(page.locator('#apps-builtin-title .apps-section-count')).toHaveText(`${shown} of ${total} on the sidebar`)
+    await serverHoldsAppPreferences(page)
+    expect(pageErrors).toEqual([])
+  } finally {
+    await setQuietRail(page, false)
+  }
+  // Off again: the rail is what it was.
+  await home(page)
+  for (const id of QUIET) await expect(page.getByTestId(`sidebar-core-app-${id}`)).toBeVisible({ timeout: 30_000 })
+})
+
 test('a built-in card switch takes it off the sidebar, a reload keeps it off, and on brings it back', async ({ page }) => {
   await home(page)
   await openApps(page)
@@ -762,3 +857,4 @@ test('an App can be pinned on the Apps page from its plugin page before it was e
     await setAppsStayOpen(page, false)
   }
 })
+

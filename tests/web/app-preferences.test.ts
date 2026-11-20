@@ -358,3 +358,48 @@ describe('App preferences', () => {
     expect(parsed.hidden).toContain('also-missing:app')
   })
 })
+
+describe('experiment quiet_rail: core apps used now and then open from the Apps page', () => {
+  const quiet = (key: string, order: number): RegisteredApp => ({ ...app(key, order), quietRail: true })
+  const catalog = [app('core:home', 10, true), app('core:notes', 20), quiet('core:tasks', 40), quiet('core:routines', 50), app('core:settings', 1000, true)]
+  const sidebarOf = (preferences = createAppPreferences(), on = true) =>
+    resolveApps(catalog, preferences, 'declared', on).sidebar.map((item) => item.key)
+
+  it('names exactly Calendar, Tasks, Routines and Passwords among the built-in apps', async () => {
+    const { CORE_APPS } = await import('../../web/src/apps/core-app-list.js')
+    const ids = CORE_APPS.filter((entry) => 'quietRail' in entry && entry.quietRail).map((entry) => entry.id)
+    expect(ids).toEqual(['calendar', 'tasks', 'routines', 'passwords'])
+  })
+
+  it('keeps them off the rail while on, and where they always were while off', () => {
+    expect(sidebarOf()).toEqual(['core:home', 'core:notes', 'core:settings'])
+    expect(sidebarOf(createAppPreferences(), false)).toEqual(['core:home', 'core:notes', 'core:tasks', 'core:routines', 'core:settings'])
+    // Off the rail is not gone: the Apps page and the Command Palette still list them.
+    expect(resolveApps(catalog, createAppPreferences(), 'declared', true).discoverable.map((item) => item.key)).toContain('core:tasks')
+  })
+
+  it('puts one back with the person\'s own switch, and takes it off again', () => {
+    const pinned = setAppOnSidebar(createAppPreferences(), catalog[2], true, true)
+    expect(pinned.placement['core:tasks']).toBe('sidebar')
+    expect(sidebarOf(pinned)).toEqual(['core:home', 'core:notes', 'core:tasks', 'core:settings'])
+    expect(appOnSidebar(catalog[2], pinned, 'by-hand', true)).toBe(true)
+    const off = setAppOnSidebar(pinned, catalog[2], false, true)
+    expect(sidebarOf(off)).toEqual(['core:home', 'core:notes', 'core:settings'])
+    expect(off.unpinned).not.toContain('core:tasks')
+    // With the experiment off neither answer changes the rail: it is what it was before.
+    expect(sidebarOf(pinned, false)).toEqual(sidebarOf(createAppPreferences(), false))
+    expect(sidebarOf(off, false)).toEqual(sidebarOf(createAppPreferences(), false))
+    // An unpin made before (the rail's own menu) still holds, experiment on or off.
+    const unpinned = setAppDisposition(createAppPreferences(), 'core:tasks', 'unpinned')
+    expect(sidebarOf(setAppOnSidebar(unpinned, catalog[2], true, true))).toContain('core:tasks')
+    // With the experiment off, a quiet app's switch is today's switch: off unpins it.
+    const offWhileOff = setAppOnSidebar(createAppPreferences(), catalog[2], false, false)
+    expect(sidebarOf(offWhileOff, false)).not.toContain('core:tasks')
+    expect(sidebarOf(setAppOnSidebar(offWhileOff, catalog[2], true, false), false)).toContain('core:tasks')
+  })
+
+  it('leaves the other core apps\' placement fixed', () => {
+    const moved = setAppPlacement(createAppPreferences(), 'core:notes', 'settings')
+    expect(effectiveAppPlacement(catalog[1], moved, 'declared', true)).toBe('sidebar')
+  })
+})

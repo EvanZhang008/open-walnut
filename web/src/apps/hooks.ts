@@ -63,20 +63,21 @@ export function useAppCatalog(): AppCatalog {
   // the Command Palette all read this catalogue, so filtering once is what keeps them agreed.
   const activeKey = activePluginKey(useWebPluginRuntime())
   const sidebarDefault = useSidebarDefault()
+  const quietRail = useExperimental('quiet_rail')
 
   return useMemo(() => {
     const combined = filterAppsByPlugin(
       [...registrySnapshot.apps, ...adaptWebviewApps(webviews.apps)],
       activeKey,
     ).sort((a, b) => a.order - b.order || a.key.localeCompare(b.key))
-    const resolved = resolveApps(combined, preferences, sidebarDefault)
+    const resolved = resolveApps(combined, preferences, sidebarDefault, quietRail)
     return {
       ...resolved,
       loadingWebviews: webviews.loading,
       findByPath: (pathname: string) => findAppByPath(resolved.all, pathname),
       findByRouteId: (routeId: string) => findHostedAppByRouteId(resolved.all, routeId),
     }
-  }, [preferences, registrySnapshot, webviews.apps, webviews.loading, activeKey, sidebarDefault])
+  }, [preferences, registrySnapshot, webviews.apps, webviews.loading, activeKey, sidebarDefault, quietRail])
 }
 
 /** The keys pinned on the Apps page, or null while the experiment `apps_stay_open` is off. */

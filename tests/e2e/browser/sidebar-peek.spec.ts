@@ -274,11 +274,13 @@ test('the hamburger still docks the full sidebar, and the docked sidebar shows n
   await expect(rail(page)).toHaveClass(/\bcollapsed\b/)
 })
 
-test('Org is its own top-level entry, right under the Home group', async ({ page, baseURL }) => {
+test('Org is its own top-level entry, the rail\'s first row', async ({ page, baseURL }) => {
   await boot(page, baseURL!)
   const org = page.getByTestId('sidebar-org')
   await expect(page.locator('.sidebar-home-group [data-testid="sidebar-org"]')).toHaveCount(0)
-  await expect(page.locator('.sidebar-nav > .sidebar-home-group + [data-testid="sidebar-org"]')).toHaveCount(1)
+  await expect(page.locator('.sidebar-nav > :first-child')).toHaveAttribute('data-testid', 'sidebar-org')
+  // Home's group follows it (the quick bar's magnifier may sit between them).
+  await expect(page.locator('.sidebar-nav > [data-testid="sidebar-org"] ~ .sidebar-home-group')).toHaveCount(1)
   // Same box as the other top-level rows (Notes), not a Home panel toggle's smaller one.
   const [orgBox, notesBox] = [await org.boundingBox(), await notes(page).boundingBox()]
   expect(orgBox!.height).toBe(notesBox!.height)

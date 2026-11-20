@@ -58,6 +58,12 @@ export interface CoreAppContribution {
    * under `/apps/<id>`, which must not count as being on the Apps page.
    */
   exactPath?: boolean
+  /**
+   * Off the Sidebar by default while the experiment quiet_rail is on: an app used now and
+   * then (Tasks, Routines, Passwords, Calendar) that the Apps page opens. The person's own
+   * pin on the Apps page puts it back (stored as its placement). See `effectiveAppPlacement`.
+   */
+  quietRail?: boolean
 }
 
 export interface RegisteredApp {
@@ -90,6 +96,8 @@ export interface RegisteredApp {
   requiresPlugin?: string
   /** Set only by `registerCore`; see `CoreAppContribution.exactPath`. */
   exactPath?: boolean
+  /** Set only by `registerCore`; see `CoreAppContribution.quietRail`. */
+  quietRail?: boolean
   pluginId?: string
   pluginName?: string
   webview?: PluginApp
@@ -187,6 +195,7 @@ export class AppRegistry {
       lockVisibility: contribution.lockVisibility ?? false,
       ...(contribution.requiresPlugin ? { requiresPlugin: contribution.requiresPlugin } : {}),
       ...(contribution.exactPath ? { exactPath: true } : {}),
+      ...(contribution.quietRail ? { quietRail: true } : {}),
     })
   }
 
