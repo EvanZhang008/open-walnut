@@ -171,6 +171,8 @@ export function createOverlay(deps: OverlayDeps): Overlay {
   const log = deps.log ?? (() => {})
   const byOp = new Map<string, OverlayEntry>()
   let fetchedAt = 0
+  /** When the last ask failed (0: the last one answered). */
+  let failedAt = 0
   let inflight: Promise<void> | null = null
   let saveTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -288,14 +290,18 @@ export function createOverlay(deps: OverlayDeps): Overlay {
 
   async function refresh(maxAgeMs = 0): Promise<void> {
     if (inflight) return inflight
-    if (maxAgeMs > 0 && now() - fetchedAt < maxAgeMs) return
+    // A failed ask counts as an ask: a daemon that does not answer is asked once per `maxAgeMs`,
+    // never once per read (a forced refresh, maxAgeMs 0, always asks).
+    if (maxAgeMs > 0 && now() - Math.max(fetchedAt, failedAt) < maxAgeMs) return
     inflight = (async () => {
       try {
         const reply = await deps.fetchPending() as PendingReply & { nextSeq?: unknown }
         nextSeqAsked = typeof reply.nextSeq === 'number' ? reply.nextSeq : Number.MAX_SAFE_INTEGER
         take(reply)
         fetchedAt = now()
+        failedAt = 0
       } catch (err) {
+        failedAt = now()
         log('warn', 'replica overlay: follower.pending failed, keeping what is known', { error: (err as Error).message })
         const gone = expire()
         if (gone.length) { save(); tell(gone) }

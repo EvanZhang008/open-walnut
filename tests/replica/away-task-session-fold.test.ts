@@ -11,6 +11,8 @@
  *     it (GET /tasks/:id, GET /tasks), so task_get's execution reads running / idle;
  *   - task_get_bulk projects a task made here instead of "not found".
  */
+import fs from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { Request, Response } from 'express'
 import { createOverlay, type Overlay } from '../../src/replica/overlay.js'
@@ -123,6 +125,44 @@ describe('the overlay folds a session this host started alone into its task, for
   })
 })
 
+describe('the journal read behind the overlay', () => {
+  it('a read that failed is asked again once per age, never once per read; a forced refresh always asks', async () => {
+    let clock = T0
+    let fail = true
+    const fetchPending = vi.fn(async () => { if (fail) throw new Error('daemon busy'); return { records: [create], nextSeq: 100 } })
+    const o = createOverlay({ fetchPending, now: () => clock, log: () => {} })
+    for (let i = 0; i < 5; i++) await o.refresh(1_000)
+    expect(fetchPending).toHaveBeenCalledTimes(1)
+    await o.refresh()
+    expect(fetchPending).toHaveBeenCalledTimes(2)
+    clock += 1_500; fail = false
+    await o.refresh(1_000)
+    expect(fetchPending).toHaveBeenCalledTimes(3)
+    expect(o.task(TASK, null)).toMatchObject({ id: TASK })
+    o.close()
+  })
+})
+
+describe('the session fold is for readers only', () => {
+  // Enumerated from the source: a new caller of taskForReaders must be a read, and is named here.
+  const READERS = ['away-reads.ts', 'away-wiring.ts', 'overlay.ts']
+  const dir = path.join(__dirname, '../../src/replica')
+
+  it('only the reads call taskForReaders', () => {
+    const callers = fs.readdirSync(dir).filter((f) => f.endsWith('.ts') && /\btaskForReaders\(/.test(fs.readFileSync(path.join(dir, f), 'utf8')))
+    expect(callers.sort()).toEqual(READERS)
+  })
+
+  it('the row every write reads comes from overlay.task, in the real wiring', () => {
+    const src = fs.readFileSync(path.join(dir, 'away-wiring.ts'), 'utf8')
+    const body = /const shownTask = async[\s\S]*?\n  }\n/.exec(src)?.[0] ?? ''
+    expect(body).toContain('overlay.task(')
+    expect(body).not.toContain('taskForReaders(')
+    // The one reader call of the wiring is the broadcast of a changed row.
+    expect(src.match(/\btaskForReaders\(/g)).toHaveLength(1)
+  })
+})
+
 describe('a write made on the host after a start alone', () => {
   it('journals the journal\'s own phase as its base, and no session field', async () => {
     const o = overlayWith([create], () => [{ sid: SID, at: T0 + 1_000, mode: 'default', status: 'idle' }])
@@ -209,6 +249,26 @@ describe('the live state of a session started here', () => {
     await launch.fresh()
     expect(request).toHaveBeenCalledTimes(4)
     expect(warns).toHaveLength(2)
+  })
+
+  it('a reader that arrives while a look is under way waits for that look, never reads the state from before it', async () => {
+    let answer: (v: { sessions: Array<Record<string, unknown>> }) => void = () => {}
+    const request = vi.fn(() => new Promise<{ sessions: Array<Record<string, unknown>> }>((r) => { answer = r }))
+    const launch = createAskLaunch({
+      port: {} as never, actorOf: () => null, hostKey: 'devbox', persona: async () => null, capabilities: () => [],
+      request, broadcast: () => {}, sessionContext: async () => '', now: () => T0, log: () => {},
+    })
+    launch.noteStarted({ sid: SID, taskId: TASK, cwd: '/work/acme', mode: 'default', title: 'Import', project: 'Acme' })
+    launch.stop()
+    const first = launch.fresh()
+    let secondDone = false
+    const second = launch.fresh().then(() => { secondDone = true })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(secondDone).toBe(false)
+    answer({ sessions: [{ sid: SID, state: 'idle', lastActiveAt: '2026-11-19T09:00:09.000Z' }] })
+    await Promise.all([first, second])
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(launch.rows()[0]).toMatchObject({ process_status: 'idle' })
   })
 
   it('nothing started here: a reader asks the daemon nothing', async () => {

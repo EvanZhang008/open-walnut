@@ -273,7 +273,11 @@ export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
   }
 
   async function fresh(maxAgeMs = POLL_MS): Promise<void> {
-    if (!rows().length || now() - lookedAt < maxAgeMs) return
+    if (!rows().length) return
+    // A look under way is the newest there is: a second reader waits for it, never reads the
+    // state from before it.
+    if (looking) return looking
+    if (now() - lookedAt < maxAgeMs) return
     await look()
   }
 
