@@ -285,6 +285,8 @@ test('a VP\'s right-click New Director… opens the fold on a name input; Enter 
   await expect(page.getByTestId('org-side')).toHaveAttribute('data-target', `task:${id}`, { timeout: 30_000 })
   const t = await taskOf(request, id)
   expect(t.director).toBe('yes')
+  // In the VP's own project, never the Inbox.
+  expect(t.project).toBe(PROJECT)
   expect(t.session_id ?? '').toBe('')
   expect(t.session_ids ?? []).toEqual([])
   // The fold keeps "+ New Director" as its last row; Escape closes the input it opens.
@@ -347,6 +349,17 @@ test('the chart: a card\'s menu has New Director…, its input\'s Escape stays i
   await page.keyboard.press('Escape')
   await expect(card.getByTestId('org-new-director-form')).toHaveCount(0)
   await expect(page.getByTestId('org-chart')).toBeVisible()
+  // Enter makes it: the sheet closes, so the new task opens in sight, beside the page.
+  await card.click({ button: 'right', position: { x: 40, y: 16 } })
+  await page.getByTestId('org-chart-node-menu').getByRole('menuitem', { name: 'New Director…' }).click()
+  await card.getByTestId('org-new-director-input').fill(`Chart director ${STAMP}`)
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('org-chart')).toHaveCount(0)
+  await expect(page.getByTestId('org-side')).toHaveAttribute('data-target', /^task:/, { timeout: 30_000 })
+  const chartMade = (await page.getByTestId('org-side').getAttribute('data-target'))!.slice('task:'.length)
+  made.push(chartMade)
+  expect((await taskOf(request, chartMade)).project).toBe(PROJECT)
+  await page.getByTestId('org-open-chart').click()
   await card.locator(`[data-testid="org-leader"][data-task-id="${ids.team}"]`).click({ button: 'right' })
   await expect(page.getByTestId('org-director-menu').getByRole('menuitem')).toHaveText(['Open chat', 'Open task', 'Remove from Directors'])
   await page.getByTestId('org-director-menu').getByRole('menuitem', { name: 'Open task' }).click()

@@ -168,7 +168,7 @@ export function OrgLeaders({ groups, surface, vpKey, vpName, projects, showProje
         title: picked.title,
         openChat: () => { onLeave?.(); actions.openChat({ id: picked.id, sessionId: picked.sessionId }); },
         openTask: () => onOpen(picked.id),
-        remove: () => actions.remove(picked.id),
+        remove: () => actions.remove(picked.id, picked.leads),
       })}
       onClose={menu.close}
       returnFocus={menu.state.origin}
@@ -176,7 +176,7 @@ export function OrgLeaders({ groups, surface, vpKey, vpName, projects, showProje
       testId="org-director-menu"
     />
   );
-  const newRow = <OrgNewDirector projects={projects} inList={inList} editing={adding} onEditing={onAdding} />;
+  const newRow = <OrgNewDirector projects={projects} inList={inList} editing={adding} onEditing={onAdding} onLeave={onLeave} />;
   // No Director yet: nothing, unless the VP's "New Director…" asked for the input.
   if (!total) {
     return adding ? (

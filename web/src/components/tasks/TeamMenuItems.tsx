@@ -10,7 +10,7 @@ import { resolveParent } from './adopt-candidates';
 import { subtasksOf } from './subtask-index';
 import { directorEntry, teamRowSummary } from './team-menu-model';
 import { useExperimental } from '@/hooks/useExperimental';
-import { orgDisplayTitle } from '@open-walnut/org-tree';
+import { directorWrite, orgDisplayTitle } from '@open-walnut/org-tree';
 import '@/styles/subtask-pill.css';
 
 const NO_INDEX: ReadonlyMap<string, Task> = new Map();
@@ -72,7 +72,7 @@ export function TeamMenuItems({ task, afterAction }: {
   const teamStopped = !!row?.team_stop;
   const setDirector = (yes: boolean) => {
     log.info('tasks', yes ? 'made a director' : 'removed from directors', { taskId: task.id });
-    void store.update(task.id, { director: yes ? 'yes' : 'no' });
+    void store.update(task.id, { director: directorWrite(yes, director?.open ?? 0) });
     afterAction();
   };
   const teamAction = (action: 'team-stop' | 'team-resume') => {

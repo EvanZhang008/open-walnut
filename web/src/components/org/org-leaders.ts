@@ -15,7 +15,7 @@ import type { Task } from '@open-walnut/core';
 import { directorsOf, orgDisplayTitle, projectKey, type OrgDirector, type OrgTaskNode } from '@open-walnut/org-tree';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { stateTab, type OrgStateTab } from './org-task-tabs';
-import type { VpProject } from './org-chart-model';
+import type { VpCard, VpProject } from './org-chart-model';
 import type { ChannelRow } from './org-channels-model';
 
 export interface LeaderNode {
@@ -126,4 +126,11 @@ export function directorRows(vps: readonly ChannelRow[], groupsOf: (row: Channel
     const vpHit = words.length > 0 && words.every((w) => (vp.vpName ?? vp.name).toLowerCase().includes(w));
     return (words.length && !vpHit ? all.filter((d) => hits(d, words)) : all).map((director) => ({ director, vp }));
   });
+}
+
+/** The projects a New Director may go to, per VP card: only a VP's own projects. The Inbox is no
+ *  one's team: a Director made there would show in no Directors list (2026-11-20 review). */
+export function directorProjectsByVp(cards: readonly Pick<VpCard, 'key' | 'role' | 'projects'>[]): Map<string, { project: string; name: string }[]> {
+  return new Map(cards.filter((c) => c.role === 'VP').map((c) => [c.key, c.projects
+    .filter((p) => !!p.project.trim()).map((p) => ({ project: p.project, name: p.name }))] as const));
 }

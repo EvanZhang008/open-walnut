@@ -369,6 +369,10 @@ orgV1Router.put('/org/settings', async (req: Request, res: Response, next: NextF
     // `directorsEnabled` is the experiment's switch, read-only here: ignored.
     // A test window on the real Walnut never turns the user's org off or on.
     if (body.enabled !== undefined && await isTestRunRequest(req)) throw new OrgError('test_run', 409, 'A test run does not change the org switch.')
+    // Nor the user's own Directors layout (they are his settings, not the run's).
+    if ((body.directorsLayout !== undefined || body.directorsShowProjects !== undefined) && await isTestRunRequest(req)) {
+      throw new OrgError('test_run', 409, 'A test run does not change the Directors settings.')
+    }
     const wasOn = (await getOrgSettings()).enabled
     const settings = await setOrgSettings(body)
     // Every other window (and the Mac app) reads the new names at once. Turned back on, the nodes

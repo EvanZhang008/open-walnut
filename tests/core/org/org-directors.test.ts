@@ -161,3 +161,18 @@ describe('Task.director in the projection and the store', () => {
     expect((rowToTask(future) as unknown as Record<string, unknown>).some_future_field).toBe('kept')
   })
 })
+
+describe('directorWrite: what make and remove write', () => {
+  it('takes a leader off with no, any other task back to auto; makes a leader auto and a lone task yes', async () => {
+    const { directorWrite, isDirector } = await import('../../../src/core/org/org-directors.js')
+    expect(directorWrite(false, 2)).toBe('no')
+    expect(directorWrite(false, 0)).toBe('auto')
+    expect(directorWrite(true, 2)).toBe('auto')
+    expect(directorWrite(true, 0)).toBe('yes')
+    // Each write gives the asked result under the shared rule (auto = undefined).
+    for (const open of [0, 1, 3]) for (const make of [true, false]) {
+      const w = directorWrite(make, open)
+      expect(isDirector(w === 'auto' ? undefined : w, open)).toBe(make)
+    }
+  })
+})

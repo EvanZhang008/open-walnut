@@ -74,7 +74,7 @@ export function OrgDirectorSection({ vps, groupsOf, projectsOf, query, openTaskI
                   <span className="org-channel-name">{d.title}</span>
                 </span>
                 <span className="org-channel-latest" data-testid="org-director-line">
-                  <i className="org-director-dot" style={{ background: TAB_DOT[d.state] }} aria-hidden="true" />{vpName} · {state}
+                  <i className="org-director-dot" style={{ background: TAB_DOT[d.state] }} aria-hidden="true" />{state} · {vpName}
                 </span>
               </span>
             </button>
@@ -91,7 +91,7 @@ export function OrgDirectorSection({ vps, groupsOf, projectsOf, query, openTaskI
             title: picked.title,
             openChat: () => actions.openChat({ id: picked.id, sessionId: picked.sessionId }),
             openTask: () => actions.openTask(picked.id),
-            remove: () => actions.remove(picked.id),
+            remove: () => actions.remove(picked.id, picked.leads),
           })}
           onClose={menu.close}
           returnFocus={menu.state.origin}

@@ -6,6 +6,7 @@
  * which opens and shows its name input. Every write goes through the task store, so the row moves at
  * once (useTasks applies `director` before the server answers).
  */
+import { directorWrite } from '@open-walnut/org-tree';
 import { useSyncExternalStore } from 'react';
 import type { Task } from '@open-walnut/core';
 import type { ContextMenuItem } from '@/utils/context-menu';
@@ -68,15 +69,18 @@ export function useDirectorActions() {
     /** Its own chat beside the page (its session), else the task. */
     openChat: (t: Pick<Task, 'id'> & { sessionId?: string | undefined }) => openTask(t.id, t.sessionId ? { sessionId: t.sessionId } : undefined),
     openTask: (id: string) => openTask(id),
-    remove: (id: string) => {
+    /** `leads`: its open workers now (directorWrite: a leader is set to 'no', any other back to auto). */
+    remove: (id: string, leads: number) => {
       log.info('org-page', 'director removed', { taskId: id });
-      void store?.update(id, { director: 'no' });
+      void store?.update(id, { director: directorWrite(false, leads) });
     },
     /** Made, NOT started: the user's first message in its chat starts it. Opens it beside the page. */
-    create: async (title: string, project: string): Promise<Task | null> => {
+    create: async (title: string, project: string, onLeave?: () => void): Promise<Task | null> => {
       if (!store) return null;
       const task = await store.create({ title, project, director: 'yes' });
       log.info('org-page', 'director created', { taskId: task.id, project });
+      // A sheet over the page (the Org chart) closes first, or the task opens behind it.
+      onLeave?.();
       openTask(task.id);
       return task;
     },

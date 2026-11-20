@@ -8,7 +8,7 @@ import type { Task } from '../../src/core/types.js'
 import { buildOrgTree, type OrgTaskLike } from '../../src/core/org/org-tree.js'
 import { buildChannels } from '../../web/src/components/org/org-channels-model.js'
 import { vpCards } from '../../web/src/components/org/org-chart-model.js'
-import { directorRows, directorsLabel, flatDirectors, foldGroups, leaderGroups, leaderTotal, leadersMatch, sourcesOf, subsMatch } from '../../web/src/components/org/org-leaders.js'
+import { directorProjectsByVp, directorRows, directorsLabel, flatDirectors, foldGroups, leaderGroups, leaderTotal, leadersMatch, sourcesOf, subsMatch } from '../../web/src/components/org/org-leaders.js'
 import type { ChannelRow } from '../../web/src/components/org/org-channels-model.js'
 
 let n = 0
@@ -132,5 +132,17 @@ describe('leaders under a VP', () => {
     expect(directorRows([vpA], groupsOf2, 'crane').map((r) => r.director.title)).toEqual(['Crane lead'])
     expect(directorRows([vpA], groupsOf2, 'harbour')).toHaveLength(3)
     expect(directorRows([vpA], groupsOf2, 'nothing here')).toEqual([])
+  })
+})
+
+describe('the projects a New Director may go to', () => {
+  it('lists only a VP\'s own projects: never the Inbox row, never a blank project', () => {
+    const cards = [
+      { key: 'project:', role: 'Inbox' as const, projects: [{ project: '', name: 'Inbox' }] },
+      { key: 'project:growth', role: 'VP' as const, projects: [{ project: 'Growth', name: 'Growth' }, { project: ' ', name: 'blank' }, { project: 'Ads', name: 'Ads' }] },
+    ] as unknown as Parameters<typeof directorProjectsByVp>[0]
+    const by = directorProjectsByVp(cards)
+    expect(by.has('project:')).toBe(false)
+    expect(by.get('project:growth')).toEqual([{ project: 'Growth', name: 'Growth' }, { project: 'Ads', name: 'Ads' }])
   })
 })

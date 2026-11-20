@@ -55,11 +55,11 @@ describe('the Director entry of the Team row', () => {
   it('is a Director by the shared rule: its choice, else an open subtask', () => {
     const lead = task({ id: 'lead' });
     const w = task({ id: 'w', parent_task_id: 'lead' });
-    expect(directorEntry([lead, w], lead)).toEqual({ isDirector: true });
-    expect(directorEntry([lead, { ...w, phase: 'COMPLETE' } as Task], lead)).toEqual({ isDirector: false });
-    expect(directorEntry([lead, w], { ...lead, director: 'no' })).toEqual({ isDirector: false });
+    expect(directorEntry([lead, w], lead)).toEqual({ isDirector: true, open: 1 });
+    expect(directorEntry([lead, { ...w, phase: 'COMPLETE' } as Task], lead)).toEqual({ isDirector: false, open: 0 });
+    expect(directorEntry([lead, w], { ...lead, director: 'no' })).toEqual({ isDirector: false, open: 1 });
     const solo = task({ id: 'solo', director: 'yes' });
-    expect(directorEntry([solo], solo)).toEqual({ isDirector: true });
+    expect(directorEntry([solo], solo)).toEqual({ isDirector: true, open: 0 });
   });
 
   it('has none on an org node, a task in the Inbox or a finished task', () => {

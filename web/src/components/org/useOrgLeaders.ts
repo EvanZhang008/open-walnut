@@ -10,7 +10,7 @@ import type { Task } from '@open-walnut/core';
 import { useExperimental } from '@/hooks/useExperimental';
 import type { VpCard } from './org-chart-model';
 import { filterChannels, type ChannelRow } from './org-channels-model';
-import { leaderGroups, leadersMatch, sourcesOf, type LeaderGroup } from './org-leaders';
+import { directorProjectsByVp, leaderGroups, leadersMatch, sourcesOf, type LeaderGroup } from './org-leaders';
 import type { DirectorProject } from './director-actions';
 
 const NONE: readonly LeaderGroup[] = [];
@@ -30,7 +30,7 @@ export function useOrgLeaders(cards: readonly VpCard[], tasks: readonly Task[]) 
     // The Inbox is no one's team: no leaders line there.
     return new Map(cards.filter((c) => c.role === 'VP').map((c) => [c.key, leaderGroups(sourcesOf(c.projects), byId)] as const));
   }, [on, cards, tasks]);
-  const projects = useMemo(() => new Map(cards.map((c) => [c.key, c.projects.map((p) => ({ project: p.project, name: p.name }))] as const)), [cards]);
+  const projects = useMemo(() => directorProjectsByVp(cards), [cards]);
   const groupsOf = useLeanCallback((row: ChannelRow) => byKey?.get(row.key) ?? NONE, [byKey]);
   const projectsOf = useLeanCallback((row: ChannelRow) => projects.get(row.key) ?? NO_PROJECTS, [projects]);
   const directors = useMemo<OrgDirectorsView>(() => ({ groupsOf, projectsOf }), [groupsOf, projectsOf]);

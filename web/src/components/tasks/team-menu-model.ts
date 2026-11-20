@@ -57,8 +57,8 @@ export const RELEASE_FILTER_FROM = 8;
  * whether it is one now by the shared rule (its choice, else whether it leads an open subtask), so the
  * row offers "Make it a Director" or "Remove from Directors".
  */
-export function directorEntry(tasks: readonly Task[], task: Pick<Task, 'id' | 'project' | 'org_role' | 'director' | 'phase' | 'status'>): { isDirector: boolean } | null {
+export function directorEntry(tasks: readonly Task[], task: Pick<Task, 'id' | 'project' | 'org_role' | 'director' | 'phase' | 'status'>): { isDirector: boolean; open: number } | null {
   if (task.org_role || !(task.project ?? '').trim() || isDoneTask(task)) return null;
   const open = subtasksOf(tasks, task.id).filter((t) => !isDoneTask(t)).length;
-  return { isDirector: isDirector(task.director, open) };
+  return { isDirector: isDirector(task.director, open), open };
 }

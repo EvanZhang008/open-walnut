@@ -20,11 +20,13 @@ interface Props {
   /** Editing from the start (a VP's "New Director…"). */
   editing: boolean;
   onEditing: (on: boolean) => void;
+  /** Closes a sheet over the page (the Org chart) before the new task opens. */
+  onLeave?: (() => void) | undefined;
 }
 
 const projectLabel = (p: DirectorProject) => (p.vpName && p.vpName !== p.name ? `${p.name} (${p.vpName})` : p.name);
 
-export function OrgNewDirector({ projects, defaultProject, inList, editing, onEditing }: Props) {
+export function OrgNewDirector({ projects, defaultProject, inList, editing, onEditing, onLeave }: Props) {
   const actions = useDirectorActions();
   const [title, setTitle] = useState('');
   const first = projects.find((p) => p.project === defaultProject)?.project ?? projects[0]?.project ?? '';
@@ -42,7 +44,7 @@ export function OrgNewDirector({ projects, defaultProject, inList, editing, onEd
     if (!name || busy) return;
     setBusy(true);
     setError(null);
-    actions.create(name, project || first)
+    actions.create(name, project || first, onLeave)
       .then(() => close())
       .catch((err) => {
         log.warn('org-page', 'new director not made', { project, error: err instanceof Error ? err.message : String(err) });

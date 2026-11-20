@@ -17,6 +17,17 @@ export function isDirector(choice: DirectorChoice | undefined, openWorkers: numb
   return openWorkers > 0;
 }
 
+/**
+ * What making a task a Director, or taking it off, writes (Task.director): the least that gives the
+ * asked result, so the default keeps working. Taken off: 'no' only for a leader (auto would keep it on);
+ * a task with no open worker goes back to auto, so it becomes one by itself once it leads a team. Made
+ * one: auto for a leader (it is one by default), 'yes' for a task with no open worker.
+ */
+export function directorWrite(make: boolean, openWorkers: number): 'yes' | 'no' | 'auto' {
+  if (make) return openWorkers > 0 ? 'auto' : 'yes';
+  return openWorkers > 0 ? 'no' : 'auto';
+}
+
 /** A Director and the Directors below it. */
 export interface OrgDirector {
   id: string;
