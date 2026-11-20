@@ -284,6 +284,11 @@ export interface NewLetter {
   userAsked?: boolean;
   user_asked?: boolean;
   /**
+   * An update from a task that keeps Threads: the thread (th-...) it belongs to
+   * (human-inbox/letter-to-thread.ts). Never stored on a letter.
+   */
+  thread?: string;
+  /**
    * Why this letter about a snoozed task cannot wait for the snooze's date (human-inbox/
    * snooze-letter.ts): required then, and it leads the body. Either spelling; never stored apart.
    */

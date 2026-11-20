@@ -219,7 +219,8 @@ function readBool(res: Response, value: unknown, field: string): boolean | null 
 
 // ─── Send ────────────────────────────────────────────────────────────────────
 
-// POST /api/v1/human-inbox { subject, type, html?|markdown?, text?, actions?, task_refs?, pin? }
+// POST /api/v1/human-inbox { subject, type, html?|markdown?, text?, actions?, task_refs?, pin?, thread? }
+// -> { id } a letter, or { id, threadId, filedToThread } an update filed to a thread (letter-to-thread.ts)
 humanInboxV1Router.post('/human-inbox', async (req: Request, res: Response, next: NextFunction) => {
   await guard(res, next, 'POST /human-inbox', async () => {
     const b = body(req)
@@ -232,6 +233,13 @@ humanInboxV1Router.post('/human-inbox', async (req: Request, res: Response, next
     if (CLOUD_MODE) {
       await relayControlAction(res, 'server.human-inbox.send', SERVER_RELAY_SID,
         { ...b, callerSid: callerSid(req) ?? null }, 201)
+      return
+    }
+    // Routine progress from a task that keeps Threads goes to its thread, not the inbox.
+    const { fileLetterAsThreadUpdate, filedAnswer } = await import('../../core/human-inbox/letter-to-thread.js')
+    const filed = await fileLetterAsThreadUpdate(b as unknown as Omit<NewLetter, 'sender'>, callerSid(req))
+    if (filed) {
+      res.status(201).json(filedAnswer(filed))
       return
     }
     const { sendLetterAsCallerOnce } = await import('../../core/human-inbox/letter-ops.js')

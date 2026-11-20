@@ -74,9 +74,12 @@ export interface AwaySendResult {
   addedToThread: boolean;
 }
 
-/** One send at a time per node: two parallel letters would both start a thread and both buzz. */
+/**
+ * One send at a time per node: two parallel letters would both start a thread and both buzz. A
+ * routine update filed as a thread (letter-to-thread.ts) waits in the same queue.
+ */
 const chains = new Map<string, Promise<unknown>>();
-function serial<T>(key: string, fn: () => Promise<T>): Promise<T> {
+export function oneSendPerNode<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const prev = chains.get(key) ?? Promise.resolve();
   const next = prev.then(fn, fn);
   const tail = next.catch(() => {});
@@ -106,7 +109,7 @@ export async function sendAway(
   const { listTasksByIds } = await import('../task-manager.js');
   const [task] = await listTasksByIds([taskId]).catch(() => []);
   if (!task || !keepsThreads(task)) return null;
-  return serial(taskId, async () => {
+  return oneSendPerNode(taskId, async () => {
     const { userAwayFrom } = await import('../org/user-away.js');
     const state = await userAwayFrom(task, now);
     if (!state?.away) return null;

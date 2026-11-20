@@ -43,7 +43,7 @@ walnut tools call day_review '{"date":"<today>","sections":"calendar,focus,tasks
 Send ONE letter:
 
 ```
-walnut tools call human_inbox_send '{"type":"info","subject":"Morning brief: <weekday>","markdown":"..."}'
+walnut tools call human_inbox_send '{"type":"info","subject":"Morning brief: <weekday>","markdown":"...","user_asked":true}'
 ```
 
 Body, in this order, one phone screen:

@@ -33,7 +33,7 @@ export function createLetterCheck() {
   const MAX_TASK_REFS = 50
   const TASK_REF_MAX_CHARS = 200
   /** human_inbox_send's inputs (src/ops/human-inbox.ts): the op refuses any other key. */
-  const OP_INPUTS = ['subject', 'type', 'markdown', 'html', 'text', 'actions', 'items', 'task_refs', 'pin', 'user_asked', 'snooze_reason', 'user_kind', 'user_kind_why', 'resend_reason', 'same_ask_reason', 'credential_ask']
+  const OP_INPUTS = ['subject', 'type', 'markdown', 'html', 'text', 'actions', 'items', 'task_refs', 'pin', 'user_asked', 'snooze_reason', 'user_kind', 'user_kind_why', 'resend_reason', 'same_ask_reason', 'credential_ask', 'thread']
 
   const str = (v: unknown): string => (typeof v === 'string' ? v : '')
   const filled = (v: unknown): boolean => typeof v === 'string' && v.length > 0
@@ -230,6 +230,7 @@ export function createLetterCheck() {
     for (const k of ['markdown', 'html', 'text']) if (args[k] !== undefined && typeof args[k] !== 'string') issues.push(`${k}: must be a string`)
     if (args.pin !== undefined && typeof args.pin !== 'boolean') issues.push('pin: must be a boolean')
     if (args.user_asked !== undefined && typeof args.user_asked !== 'boolean') issues.push('user_asked: must be a boolean')
+    if (args.thread !== undefined && (typeof args.thread !== 'string' || !/^th-[a-f0-9]{6,32}$/.test(args.thread))) issues.push('thread: must be a thread id (th-...)')
     if (args.snooze_reason !== undefined && typeof args.snooze_reason !== 'string') issues.push('snooze_reason: must be a string')
     if (args.resend_reason !== undefined && typeof args.resend_reason !== 'string') issues.push('resend_reason: must be a string')
     for (const k of ['user_kind', 'user_kind_why']) if (args[k] !== undefined && typeof args[k] !== 'string') issues.push(`${k}: must be a string`)

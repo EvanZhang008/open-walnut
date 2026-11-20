@@ -134,9 +134,14 @@ export async function handleHumanInboxRelayAction(
     }
     case 'send': {
       const { callerSid, ...input } = p;
+      const sid = typeof callerSid === 'string' ? callerSid : undefined;
+      // A routine update from a task that keeps Threads goes to its thread, as on the primary.
+      const { fileLetterAsThreadUpdate, filedAnswer } = await import('./letter-to-thread.js');
+      const filed = await fileLetterAsThreadUpdate(input as unknown as Omit<NewLetter, 'sender'>, sid);
+      if (filed) return filedAnswer(filed) as unknown as Record<string, unknown>;
       const { letter, addedToThread, openAsk } = await sendLetterAsCallerOnce(
         input as unknown as Omit<NewLetter, 'sender'>,
-        typeof callerSid === 'string' ? callerSid : undefined,
+        sid,
       );
       // The away thread (away-thread.ts) answers the same through a replica as on the primary.
       return { id: letter.id, ...(addedToThread ? { addedToThread: true } : {}), ...(openAsk ? { openAsk } : {}) };

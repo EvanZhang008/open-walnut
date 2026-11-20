@@ -60,7 +60,9 @@ describe('a lead the user is away from', () => {
     expect(lastEvent().quiet).toBeUndefined();
 
     await typedAgo(2 * 60 * 60_000);
-    const first = await run('human_inbox_send', { subject: 'Deploy is live', type: 'info', markdown: 'Prod serves **abc**.', text: 'Prod serves abc' }, LEAD_SID);
+    // Only a review joins the away thread now: an info or completion letter from a lead is filed as
+    // an update of its Threads instead (letter-to-thread.ts, tests/e2e/letter-to-thread.test.ts).
+    const first = await run('human_inbox_send', { subject: 'Deploy is live', type: 'review', markdown: 'Prod serves **abc**.', text: 'Prod serves abc' }, LEAD_SID);
     expect(first.addedToThread).toBeUndefined();
     expect((await getLetter(first.letterId)).awayThread).toMatchObject({ taskId: leadId });
     expect(lastEvent()).toMatchObject({ letterId: first.letterId, kind: 'new' });
@@ -78,7 +80,7 @@ describe('a lead the user is away from', () => {
 
     // He read it: the next turn is news, and buzzes once more.
     await setLetterState(first.letterId, 'read', true);
-    await run('human_inbox_send', { subject: 'Tests green', type: 'completion', markdown: '461 passed' }, LEAD_SID);
+    await run('human_inbox_send', { subject: 'Tests green', type: 'review', markdown: '461 passed' }, LEAD_SID);
     expect(lastEvent()).toMatchObject({ letterId: first.letterId, kind: 'reply' });
     expect(lastEvent().quiet).toBeUndefined();
 
@@ -102,12 +104,12 @@ describe('a lead the user is away from', () => {
 
     // He answered a letter on the phone (a person, not the chat): still away, still one thread.
     await updateSessionRecord(LEAD_SID, { humanInputAt: new Date().toISOString() } as never);
-    const still = await run('human_inbox_send', { subject: 'Still going', type: 'info', markdown: 'z' }, LEAD_SID);
+    const still = await run('human_inbox_send', { subject: 'Still going', type: 'review', markdown: 'z' }, LEAD_SID);
     expect(still).toMatchObject({ letterId: first.letterId, addedToThread: true });
 
         // He comes back and writes in the chat: letters are letters again.
     await typedAgo(0);
-    const back = await run('human_inbox_send', { subject: 'One more', type: 'info', markdown: 'y' }, LEAD_SID);
+    const back = await run('human_inbox_send', { subject: 'One more', type: 'review', markdown: 'y' }, LEAD_SID);
     expect(back.letterId).not.toBe(first.letterId);
     expect((await getLetter(back.letterId)).awayThread).toBeUndefined();
   });
@@ -117,8 +119,8 @@ describe('a lead the user is away from', () => {
     for (const l of (await listLetters()).letters) await setLetterState(l.id, 'archived', true);
     await typedAgo(2 * 60 * 60_000);
     const [a, b] = await Promise.all([
-      run('human_inbox_send', { subject: 'Parallel one', type: 'info', markdown: '1' }, LEAD_SID),
-      run('human_inbox_send', { subject: 'Parallel two', type: 'info', markdown: '2' }, LEAD_SID),
+      run('human_inbox_send', { subject: 'Parallel one', type: 'review', markdown: '1' }, LEAD_SID),
+      run('human_inbox_send', { subject: 'Parallel two', type: 'review', markdown: '2' }, LEAD_SID),
     ]);
     expect(a.letterId).toBe(b.letterId);
     expect([a.addedToThread, b.addedToThread].filter(Boolean)).toHaveLength(1);

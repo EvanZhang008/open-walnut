@@ -42,6 +42,18 @@ function openAskOf(body: unknown): { letterId: string; subject: string; sentAt: 
     : undefined
 }
 
+/** An update filed to a thread instead of a letter (core/human-inbox/letter-to-thread.ts). */
+function filedOf(body: unknown): { threadId: string; title: string; created: boolean; state: string; clipped?: true; ignoredThread?: string } | undefined {
+  const f = (body as { filedToThread?: unknown } | undefined)?.filedToThread as Record<string, unknown> | undefined
+  return f && typeof f.threadId === 'string'
+    ? {
+      threadId: f.threadId, title: String(f.title ?? ''), created: f.created === true, state: String(f.state ?? ''),
+      ...(f.clipped === true ? { clipped: true as const } : {}),
+      ...(typeof f.ignoredThread === 'string' ? { ignoredThread: f.ignoredThread } : {}),
+    }
+    : undefined
+}
+
 const LETTER_TYPE = z.enum(['completion', 'action_required', 'review', 'info'])
 
 const ACTION = z.object({
@@ -64,6 +76,7 @@ defineOp({
     + 'the request named) unless the user themself asked this task for a letter or report (user_asked:true). '
     + 'One place per update: Main and the leads (a VP is a lead) put a result, answer or update about one of the user\'s '
     + 'Threads in that thread only (thread_update), whether he is in the chat or away, never also a letter; the inbox is for what has no thread. '
+    + 'Routine progress belongs on threads; the inbox holds only what needs him right away. From a task that keeps Threads, Walnut files an info or completion letter as an update of its thread (the one `thread` names, else the open one its subject matches, else a new one), with no letter and no buzz, unless user_asked or pin. '
     + 'A letter from or about a snoozed task (start date still to come) is refused (409 task_snoozed) unless '
     + 'snooze_reason says why it cannot wait for that date. '
     + 'One letter per question: the same subject again within 10 minutes is refused (409 duplicate_letter, '
@@ -112,7 +125,10 @@ defineOp({
     user_asked: z.boolean().optional().describe(
       'The user themself asked this task for this letter or report. Only then does a report letter go out '
       + 'while this task answers another task\'s request, or a letter of Main or a lead about one of its open threads '
-      + '(only when he asked in his own words for it as a letter, not just for the result)'),
+      + '(only when he asked in his own words for it as a letter, not just for the result). It also keeps an info or completion letter '
+      + 'of a task that keeps Threads out of that task\'s Threads (a digest he set up, "tell me when X")'),
+    thread: z.string().regex(/^th-[a-f0-9]{6,32}$/).optional().describe(
+      'From a task that keeps Threads, with info or completion: the open thread (th-...) this update belongs to'),
     snooze_reason: z.string().optional().describe(
       'Required when this task, or one in task_refs, is snoozed (its start date is still to come): one line '
       + 'the user reads saying why this cannot wait for that date. It leads the letter'),
@@ -127,6 +143,19 @@ defineOp({
   },
   bind: { method: 'POST', path: '/human-inbox' },
   mapResult: ({ body }) => {
+    const filed = filedOf(body)
+    if (filed) {
+      return {
+        threadId: filed.threadId,
+        filedToThread: filed,
+        instruction:
+          `Filed as an update of your thread ${filed.threadId} "${filed.title}"${filed.created ? ' (opened for it)' : ''}, not a letter: `
+          + 'routine progress goes to threads, a letter only for what needs him right away (a decision, a review, or a letter he asked for: user_asked). '
+          + (filed.ignoredThread ? `${filed.ignoredThread} is not one of your open threads, so it went by its subject. ` : '')
+          + (filed.clipped ? 'It was longer than a thread summary holds and was cut: keep updates short, link the rest by path. ' : '')
+          + 'Keep that thread current with thread_update.',
+      }
+    }
     const added = (body as { addedToThread?: unknown } | undefined)?.addedToThread === true
     const openAsk = openAskOf(body)
     return {

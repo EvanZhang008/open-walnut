@@ -172,6 +172,20 @@ export async function sendLetterAsCaller(
 }
 
 /**
+ * A report the asking task gives the user already (reply-instead.ts): refused with the request
+ * named, unless the user themself asked for the letter. Also run before a letter is filed as a
+ * thread update (letter-to-thread.ts), so that refusal reads the same either way.
+ */
+export async function refuseReplyInstead(input: Omit<NewLetter, 'sender'>, sender: LetterSender): Promise<void> {
+  if (input.userAsked === true || input.user_asked === true) return;
+  const { findReplyInstead, replyInsteadMessage } = await import('./reply-instead.js');
+  const hit = await findReplyInstead(input.type, sender, Date.now(), { pinned: input.pin === true });
+  if (!hit) return;
+  log.notif.info('human-inbox: report letter refused, the asking task tells the user', { taskId: sender.taskId, askerTaskId: hit.taskId, requestId: hit.requestId });
+  throw new LetterError(replyInsteadMessage(hit), 'reply_instead', 409);
+}
+
+/**
  * sendLetterAsCaller, also saying whether the letter was already sent: `opts.opKey`
  * (a host's journal record, offline-merge/apply-letter.ts) names one in the store, so
  * nothing is written, charged against a budget or announced again.
@@ -185,6 +199,8 @@ export async function sendLetterAsCallerOnce(
     const first = await findLetterByOp(opts.opKey);
     if (first) return { letter: first, duplicate: true };
   }
+  // The thread an update names (letter-to-thread.ts) rides no letter.
+  { const { thread: _t, ...rest } = input; input = rest; }
   const sender = await resolveLetterSender(callerSid);
   const { resolveCredentialAsk } = await import('./credential-ask.js');
   const credentialAsk = await resolveCredentialAsk(input);
@@ -197,16 +213,8 @@ export async function sendLetterAsCallerOnce(
   // A deliberate resend says why (duplicate-letter.ts); the reason is never stored.
   const resendReason = resendReasonOf(input);
   { const { resendReason: _a, resend_reason: _b, ...rest } = input; input = rest; }
-  // A report the asking task gives the user already (reply-instead.ts). A host's journal op was
-  // written while the server was away and is never refused on the way in.
-  if (!opts.opKey && input.userAsked !== true && input.user_asked !== true) {
-    const { findReplyInstead, replyInsteadMessage } = await import('./reply-instead.js');
-    const hit = await findReplyInstead(input.type, sender, Date.now(), { pinned: input.pin === true });
-    if (hit) {
-      log.notif.info('human-inbox: report letter refused, the asking task tells the user', { taskId: sender.taskId, askerTaskId: hit.taskId, requestId: hit.requestId });
-      throw new LetterError(replyInsteadMessage(hit), 'reply_instead', 409);
-    }
-  }
+  // A host's journal op was written while the server was away and is never refused on the way in.
+  if (!opts.opKey) await refuseReplyInstead(input, sender);
   // A snoozed task is not raised before its date unless the session says why or the user asked
   // for the letter (snooze-letter.ts). A host's journal op is never refused on the way in, as a
   // report above: it was written while the server was away and the host holds no snooze check.

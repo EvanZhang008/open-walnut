@@ -297,8 +297,10 @@ asks, then reply on the PR" beats "there are new comments". The fire already
 carries the items as JSON, so do not ask the model to go re-fetch them.
 
 When the user asked to be told ("tell me when X", "let me know if"), say so in
-the prompt: "send the user a letter (human_inbox_send) saying X happened". That
-letter is one they asked for. Without that ask, a fire sends no letter.
+the prompt: "send the user a letter (human_inbox_send with user_asked: true)
+saying X happened". That letter is one they asked for; without user_asked, a
+task that keeps Threads files it as a thread update instead. Without that ask,
+a fire sends no letter.
 
 ## Name writing
 

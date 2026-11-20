@@ -137,12 +137,16 @@ describe('a thread that waits on him', () => {
 });
 
 describe('one place per update is prompt text only', () => {
-  it('a lead\'s letter about one of its open threads is sent like any other (no thread_instead refusal)', async () => {
+  it('a lead\'s letter about one of its open threads is never refused (no thread_instead refusal)', async () => {
     const lead = await newLead();
     const id = await asked(lead, 'Is the packaging done?');
     const worker = (await addTask({ title: 'Package the app', project: `Proj${n}`, source: 'local', parent_task_id: lead.id } as never)).task.id;
     await run(lead, 'thread_update', { id, state: 'answered', add_tasks: [worker], reply: 'Shipped, video at /x/pkg.mp4' });
-    const sent = await run(lead, 'human_inbox_send', { subject: 'Packaging shipped', type: 'info', markdown: 'Video: /x/pkg.mp4', task_refs: [worker] });
+    // An update that only informs is filed into the thread it names (letter-to-thread.ts), not refused.
+    const filed = await run(lead, 'human_inbox_send', { subject: 'Packaging shipped', type: 'info', markdown: 'Video: /x/pkg.mp4', task_refs: [worker], thread: id });
+    expect(filed).toMatchObject({ threadId: id });
+    // A review is a letter like any other, and its own thread takes replies.
+    const sent = await run(lead, 'human_inbox_send', { subject: 'Packaging shipped', type: 'review', markdown: 'Video: /x/pkg.mp4', task_refs: [worker] });
     expect(sent.letterId).toMatch(/^lt-/);
     await run(lead, 'human_inbox_reply', { letter: sent.letterId, text: 'One more note on the packaging' });
     expect((await getLetter(sent.letterId))!.thread.map((e) => e.text)).toContain('One more note on the packaging');
