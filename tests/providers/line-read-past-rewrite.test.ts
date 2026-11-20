@@ -304,7 +304,9 @@ describe('a lost line across a server restart, an old window, and a pending perm
     await vi.waitFor(() => expect(h.probes().length).toBeGreaterThanOrEqual(1), { timeout: 2000 })
   })
 
-  it('a rewrite the daemon cannot judge (marker out of its window) is not asked about again', async () => {
+  // 2026-11-20: such a row stayed 'processing' for ten hours (it once read "the CLI's word decides"),
+  // and every row lined up for after the turn waited behind it; the user's reply was never sent.
+  it('a rewrite the daemon cannot judge (marker out of its window) ends unacknowledged: parked with Retry, not asked about again', async () => {
     // The daemon writes the first copy, then answers the lostPid rewrite with a bare "waiting".
     const h = harness({ daemonSays: (w) => (w.lostPid != null ? { fate: 'waiting' } : undefined) })
     await enqueueMessage(SID, 'printed megabytes ago')
@@ -315,10 +317,16 @@ describe('a lost line across a server restart, an old window, and a pending perm
     await vi.waitFor(async () => expect(await rows()).toEqual([{ id, status: 'pending' }]), { timeout: 2000 })
     h.internals.onLinesReclaimedFor(SID, 'lost')
     await vi.waitFor(() => expect(h.writes).toHaveLength(2), { timeout: 2000 })
-    await sleep(500)
+    await vi.waitFor(async () => expect(await rows()).toEqual([{ id, status: 'parked' }]), { timeout: 2000 })
+    await sleep(300)
     expect(h.probes()).toHaveLength(1)
-    expect(await rows()).toEqual([{ id, status: 'processing' }])
-    expect(h.events.some((e) => e.name === EventNames.SESSION_BATCH_FAILED)).toBe(false)
+    expect(h.writes).toHaveLength(2)
+    const failed = h.events.find((e) => e.name === EventNames.SESSION_BATCH_FAILED)
+    expect(failed?.data).toMatchObject({ sessionId: SID, messageIds: [id] })
+    expect(String(failed?.data.error)).toMatch(/did not acknowledge this message/)
+    // A Retry goes out as a new line: the old uuid cannot be written again.
+    const [row] = await getQueue(SID)
+    expect(row.lineUuid).not.toBe(h.writes[0].uuid)
   })
 
   it('one answer proves the CLI read past every unnamed line before it: they go out again in order', async () => {

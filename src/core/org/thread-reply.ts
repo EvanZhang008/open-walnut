@@ -257,9 +257,10 @@ async function tellAbove(owner: string): Promise<void> {
 
 /**
  * Every node's replies on their way, read again (a boot, every SWEEP_MS): pending ones get their
- * wake when the owner can take them; a claimed one whose queue row is gone with no delivered event
- * heard (a crash before it was queued, a restart that lost the event) goes back to pending: sent
- * again rather than lost, and the leaders are never told of a reply that did not arrive. Delivered
+ * wake when the owner can take them; a claimed one whose row went out as a line is delivered (its
+ * event came before this server mapped the row); one whose queue row is gone with no line (a
+ * crash before it was queued) goes back to pending: sent again rather than lost, and the leaders
+ * are never told of a reply that did not arrive. Delivered
  * ones the leaders were not told of are told.
  */
 export async function sweepThreadReplies(): Promise<void> {
@@ -267,6 +268,7 @@ export async function sweepThreadReplies(): Promise<void> {
   if (!(await threadsPopUpOn())) return;
   const store = await import('./threads-store.js');
   const { findQueuedMessage } = await import('../session-message-queue.js');
+  const { wentOutAsLine } = await import('../session-queue-lines.js');
   for (const node of await store.threadTaskIds()) {
     const msgs = (await store.readThreads(node)).threads.flatMap((t) => t.messages.filter((m) => m.delivery));
     if (!msgs.length) continue;
@@ -274,6 +276,9 @@ export async function sweepThreadReplies(): Promise<void> {
     for (const m of msgs.filter((x) => x.delivery!.state === 'claimed')) {
       const qm = m.delivery!.queued;
       if (qm && await findQueuedMessage(qm)) { queuedRows.set(qm, node); continue; }
+      // Its row went out as a line and left the queue (its delivered event fell before this
+      // server mapped the row, at a restart): delivered, never sent a second time.
+      if (qm && await wentOutAsLine(qm)) { await markDelivered(node, qm); continue; }
       // Its delivered event may still be on its way.
       if (qm && queuedRows.has(qm) && Date.now() - Date.parse(m.delivery!.at) < CLAIM_SETTLES_MS) continue;
       if (qm) queuedRows.delete(qm);

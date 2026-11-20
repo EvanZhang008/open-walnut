@@ -792,6 +792,10 @@ export const LINE_NOT_ANSWERED_REASON = 'Not answered: Claude Code read this mes
   + 'twice (its process ended both times). Retry sends it again.'
 /** The user's stop (or the task's completion) ended the process while a line it took waited for its answer: nobody is told to resend. */
 export const LINE_ENDED_UNANSWERED_REASON = 'The session ended before Claude Code answered this message'
+/** The CLI read past a line without taking it, and it cannot be written again under its uuid: a Retry sends a new line. */
+export const LINE_NOT_ACKNOWLEDGED_REASON = 'Claude Code did not acknowledge this message. It may have skipped a duplicate UUID, or another process may have read its input. Retry to send it again'
+/** The state a line takes when it ends that way (settleLineFate). */
+const UNACKNOWLEDGED_LINE = 'unacknowledged'
 /** Teardowns that are the user's own choice (a Stop, the task completed); any other one Walnut chose itself. */
 const USER_TEARDOWNS = new Set(['user_terminated', 'task_completed'])
 /**
@@ -4843,15 +4847,20 @@ export class ClaudeCodeSession {
     if (lineSid && known?.fate === 'waiting' && known.state === 'queued' && this.pid != null) {
       this.noteLineQueued(uuid!, this.pid)
     }
-    // A rewrite was asked for and the daemon still answered "waiting": the line's
-    // marker is out of its view, so nothing can be proven about it. Leave it to the
-    // CLI's word, as before send-lost-line-v1, instead of asking again and again.
+    // A rewrite was asked for (the CLI answered a probe behind this line, so it read
+    // past it) and the daemon still answered "waiting": its marker is out of the
+    // daemon's view, so it will not write the line again, and the CLI will never name
+    // it. Its rows end as a line the CLI did not acknowledge (Retry sends a new line),
+    // as when the daemon cannot rewrite at all: never 'processing' for good, holding
+    // every row lined up behind it (2026-11-20: such a row stayed 'processing' for
+    // ten hours and held the user's reply on a thread card, never sent).
     const unjudged = lostPid != null && known?.fate === 'waiting' && !known.state
     if (unjudged) {
-      log.session.info('a rewrite of an unnamed line was refused: the daemon cannot see its marker any more', {
+      log.session.warn('a rewrite of a line the CLI read past was refused: the daemon cannot see its marker any more, so its rows end unacknowledged', {
         sessionId: this.claudeSessionId, uuid, pid: this.pid, messageIds: rows.map((r) => r.id),
       })
       this._lostLines.delete(uuid!)
+      known = { fate: 'dropped', state: UNACKNOWLEDGED_LINE }
     }
     // In the CLI's pipe and not yet named by it (a write, or the daemon's record
     // alone): ask about it if it stays unnamed (send-lost-line-v1), and note how long
@@ -5384,7 +5393,7 @@ export class ClaudeCodeSession {
       return
     }
     if (known.fate === 'unanswered') { this.resendUnanswered(uuid, rows, known.state); return }
-    this.parkLineRows(rows, `Claude Code dropped this message without running it (${known.state ?? 'dropped'})`, true)
+    this.parkLineRows(rows, known.state === UNACKNOWLEDGED_LINE ? LINE_NOT_ACKNOWLEDGED_REASON : `Claude Code dropped this message without running it (${known.state ?? 'dropped'})`, true)
   }
 
   /**
@@ -6071,7 +6080,7 @@ export class ClaudeCodeSession {
       this._lostLines.delete(uuid)
       this._queuedLines.delete(uuid)
       // A Retry goes out as a new line: this daemon may not be able to write the old one again.
-      this.parkLineRows(rows, 'Claude Code did not acknowledge this message. It may have skipped a duplicate UUID, or another process may have read its input. Retry to send it again', true)
+      this.parkLineRows(rows, LINE_NOT_ACKNOWLEDGED_REASON, true)
       return
     }
     log.session.warn('the CLI read past a line without taking it: it goes out again under the same uuid', {

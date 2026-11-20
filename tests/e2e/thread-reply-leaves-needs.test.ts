@@ -33,7 +33,9 @@ import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { addTask, updateTaskRaw } from '../../src/core/task-manager.js'
 import { getSessionByClaudeId } from '../../src/core/session-tracker.js'
 import { ensureMainTask, ensureProjectLead } from '../../src/core/org/org-store.js'
-import { openNodeThread, readThreads } from '../../src/core/org/threads-store.js'
+import { openNodeThread, readThreads, updateReplyDeliveries } from '../../src/core/org/threads-store.js'
+import { sweepThreadReplies } from '../../src/core/org/thread-reply.js'
+import { deleteMessage, enqueueMessage, findQueuedMessage, getQueue, markProcessing, removeProcessed, unparkMessage } from '../../src/core/session-message-queue.js'
 import { threadsPopUpNow } from '../../src/core/org/thread-popup.js'
 import { oneCardNow } from '../../src/core/org/one-card.js'
 import { listedForHim } from '../../src/core/org/thread-view.js'
@@ -239,6 +241,44 @@ describe('his reply takes the card out of Needs you at once', () => {
     expect((await api('POST', `/sessions/${plan.sid}/messages`, { text: words, threadId: t.id })).status).toBeLessThan(300)
     await leftNeeds(garden.taskId, garden.taskId, t.id, words, 'chat Follow up naming a thread that moved on')
     await leftNeeds(plan.taskId, garden.taskId, t.id, words, 'chat Follow up naming a thread that moved on')
+  })
+})
+
+describe('a reply on its way is sent once, across a restart too', () => {
+  /** His reply filed below and claimed into the owner's queue under `qm`, as the wake does. */
+  async function claimed(title: string, words: string, qm: string): Promise<{ thread: string; message: string }> {
+    const t = await ask(trays.taskId, title)
+    const r = await api<{ message: { id: string } }>('POST', `/tasks/${plan.taskId}/threads`, { text: words, thread: t.id })
+    expect(r.status).toBe(200)
+    await updateReplyDeliveries(trays.taskId, (_t, m) => (m.id === r.json.message.id ? { ...m.delivery!, state: 'claimed', at: new Date().toISOString(), queued: qm } : undefined))
+    await enqueueMessage(trays.sid, words, { id: qm, sentBy: 'person', heldReason: 'test: held so no delivery takes it' })
+    return { thread: t.id, message: r.json.message.id }
+  }
+  const deliveryOf = async (id: string) => (await readThreads(trays.taskId)).threads.flatMap((t) => t.messages).find((m) => m.id === id)?.delivery
+
+  // Review of 2026-11-20: after a restart the after-turn release can deliver a held reply before the
+  // reply sweep maps its row, so its delivered event finds no owner; the sweep then read the row as
+  // lost and sent his words a second time.
+  it('a claimed reply whose row went out as a line before the sweep mapped it is delivered, never sent again', async () => {
+    const qm = `qm-reply-${randomUUID()}`
+    const { message } = await claimed('Water the trays at dawn or at dusk?', 'At dawn', qm)
+    // The row goes out as a line and leaves the queue (its delivered event fell before the mapping).
+    await unparkMessage(trays.sid, qm)
+    expect((await markProcessing(trays.sid)).map((m) => m.id)).toContain(qm)
+    await removeProcessed(trays.sid, [qm])
+    expect(await findQueuedMessage(qm)).toBeNull()
+    await sweepThreadReplies()
+    expect((await deliveryOf(message))?.state).toBe('delivered')
+    expect((await getQueue(trays.sid)).some((m) => m.message.includes('At dawn'))).toBe(false)
+  })
+
+  it('a claimed reply whose row is still in the owner\'s queue stays claimed: it goes when that row goes, once', async () => {
+    const qm = `qm-reply-${randomUUID()}`
+    const { message } = await claimed('Label the trays by row or by seed?', 'By seed', qm)
+    await sweepThreadReplies()
+    expect((await deliveryOf(message))).toMatchObject({ state: 'claimed', queued: qm })
+    expect((await getQueue(trays.sid)).filter((m) => m.message === 'By seed')).toHaveLength(1)
+    await deleteMessage(trays.sid, qm)
   })
 })
 
