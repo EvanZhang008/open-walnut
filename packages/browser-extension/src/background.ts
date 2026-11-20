@@ -19,6 +19,7 @@ import { ApiError, DEFAULT_SERVER, api, call, cleanServerUrl, connection, discon
 import { displayHost, matchItem } from '../../../src/core/vault/url-match'
 import { generate, DEFAULT_PASSWORD, type GeneratorOptions } from '../../../src/core/vault/generator'
 import { cursorUp, frameHelloBox } from './agent-cursor'
+import { pageOpen } from './agent-opened'
 import { adoptTab, agentMessage, agentOn, initAgent, isAgentTab, releaseAllTabs, releaseTab, relayState, tabOwnerOf } from './agent'
 import { initSelfUpdate } from './self-update'
 import { injectOpenTabs, reachPage, toPage } from './page-reach'
@@ -123,6 +124,8 @@ const ALLOWED: Record<string, SenderKind | SenderKind[]> = {
   unlock: ['popup', 'sidepanel'], lock: 'popup', 'site-items': ['popup', 'sidepanel'], search: 'popup', 'copy-secret': 'popup', 'fill-tab': ['popup', 'sidepanel'],
   generate: 'popup', 'open-walnut': ['popup', 'sidepanel'], 'totp-code': 'popup', copied: ['popup', 'sidepanel'], 'wallet-items': 'popup', 'item-detail': 'popup',
   'site-count': 'sidepanel', 'unlock-for': 'sidepanel',
+  // A window an agent's page asks for (agent-popups.ts, agent-opened.ts).
+  'agent-page-open': 'content',
   'page-init': 'content', 'frame-ready': 'content', 'open-menu': 'content', 'menu-focus': 'content', 'seen-login': 'content', 'seen-username': 'content',
   'connect-hello': 'content', 'connect-code': 'content',
   'menu-data': 'menu', 'menu-codes': 'menu', 'menu-fill': 'menu', 'menu-generate': 'menu', 'menu-regenerate': 'menu', 'menu-copied': 'menu',
@@ -169,6 +172,8 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
   const kind = senderKind(sender)
   const may = ALLOWED[msg.type]
   if (!kind || !(Array.isArray(may) ? may.includes(kind) : may === kind)) return { ok: false, error: `Not for this page: ${msg.type}` }
+  // Before anything is awaited: a page's asks for one window keep their order (agent-opened.ts).
+  if (msg.type === 'agent-page-open') return pageOpen(msg, sender)
   // The chosen time passed with no use: locked before anything is answered.
   await lockIfIdle(lockNow).catch(() => false)
   if (USE.has(msg.type)) void touch()

@@ -91,6 +91,14 @@ export async function agentWindowId(): Promise<number | undefined> {
   return ownAgentWindow(ext as unknown as OwnApi)
 }
 
+/** An agent's own tab of the agent window (not the person's, not one near them, no other window): its record and tab. */
+export async function agentsOwnHere(tabId: number): Promise<{ rec: AgentTab; tab: Tab } | undefined> {
+  const rec = await agentTabs.get(tabId).catch(() => undefined)
+  if (!rec || nearPerson(rec)) return undefined
+  const tab = await ext.tabs.get(tabId).catch(() => null)
+  return tab && tab.windowId !== undefined && tab.windowId === await agentWindowId() ? { rec, tab } : undefined
+}
+
 /**
  * The sites (origins) an owner signed in on with fill_login: no page JavaScript (evaluate) runs
  * there for that owner, since it could read the password Walnut just put in. Memory only, as
@@ -149,6 +157,8 @@ export const acting = new Map<number, number>()
  * download is (download-owner.ts): a read step never makes a download the agent's.
  */
 export const opening = new Map<number, number>()
+/** The grant of the last step in each tab: what a window its page opens may load (agent-opened.ts pageOpen). */
+export const stepAllow = new Map<number, WireCommand['allow']>()
 export const ACTING_MS = 15_000
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))

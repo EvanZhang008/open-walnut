@@ -13,9 +13,10 @@
  *     the person (request_sign_in) carries on.
  */
 import { ext } from './ext'
+import { popupsLive } from './agent-popups'
 import { more } from './agent-api'
 import { endLinger } from './cdp'
-import { AgentError, agentTabs, agentWindowId, mark, personsTab, where, type AgentTab, type WireCommand } from './agent-shared'
+import { AgentError, agentTabs, agentWindowId, mark, opening, personsTab, where, type AgentTab, type WireCommand } from './agent-shared'
 import { revealForPerson } from './agent-window'
 
 /** The person has the tab: since when (ms). */
@@ -59,6 +60,9 @@ export async function takeOver(c: WireCommand): Promise<Record<string, unknown>>
   if (!held) throw new AgentError('That tab is no agent\'s now (closed, or given back with Stop).', 'not_your_tab')
   // The person has the tab now: the agent's lingering debugger hold goes (cdp.ts linger).
   await endLinger(more.debugger, tabId).catch(() => undefined)
+  // Their clicks open windows as the browser does (an agent's step asks the extension: agent-popups.ts).
+  opening.delete(tabId)
+  await popupsLive(tabId, 0)
   const tab = await ext.tabs.get(tabId).catch(() => null)
   if (!tab || tab.windowId === undefined) throw new AgentError('That tab was closed.', 'not_your_tab')
   const rec = await agentTabs.get(tabId)

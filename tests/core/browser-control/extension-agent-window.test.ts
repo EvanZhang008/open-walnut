@@ -191,7 +191,7 @@ describe('the agent window', () => {
       ['agent-popups.ts: return !!(await ext.windows.update?.(t.windowId, { state: \'minimized\' }).catch(() => null))', 'a popup window an agent\'s own page opened: to the Dock at once (minimizeAgentPopup)'],
       ['agent-window.ts: const tab = await api.tabs.create({ url: \'about:blank\', windowId, active: false })', 'agent window, in the background (newAgentTab)'],
       ['agent-groups.ts: const t = await api.tabs.create({ url: api.runtime.getURL(AGENT_PAGE), windowId, active: false, index: 0 }).catch(() => null)', 'agent window page, not active'],
-      ['agent-page.ts: const t = await more.tabs.create({ url: href, windowId: tab.windowId, active: false, openerTabId: tabId }).finally(() => linking.delete(tabId))', 'a link the page opened, in its own window, in the background'],
+      ['agent-opened.ts: const t = await more.tabs.create({ url: href, windowId: tab.windowId, active: false, openerTabId: tabId }).finally(() => linking.delete(tabId))', 'a link the page opened, in its own window, in the background'],
       // The person's own click, the one call that focuses a window (revealForPerson; its callers are listed below).
       ['agent-window.ts: if (windowId !== undefined) await api.windows.update?.(windowId, { focused: true }).catch(() => undefined)', 'revealForPerson: the person\'s click'],
       // The person's own clicks and keys: the toolbar popup, the side panel, the fill shortcut, Connect.

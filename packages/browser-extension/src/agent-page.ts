@@ -1,19 +1,15 @@
 /**
  * An agent's page actions in its tab (agent.ts sends them here): the top frame and every frame
  * in it, same origin or not (each frame's own site is checked, here and in the frame), a ref
- * like f3:e12 going to frame 3; a wait for an address; and the tabs an agent's tab opens, which
- * are the same agent's.
+ * like f3:e12 going to frame 3; a wait for an address. The tabs an agent's tab opens are
+ * agent-opened.ts's.
  */
 import { ext, type Tab } from './ext'
-import { more, type NewTab } from './agent-api'
+import { more } from './agent-api'
 import { siteKey } from '../../../src/core/vault/url-match'
 import { walnutAddress } from './walnut-address'
 import { pageCheck } from './page-reach'
-import { popupRecord } from './agent-tab-kind'
-import { minimizeAgentPopup, openCalls } from './agent-popups'
-import { muteAgentTab } from './agent-media'
-import { noteAgentMade } from './agent-tidy'
-import { frontInWindow } from './agent-window'
+import { openLink, openedField, openedSince } from './agent-opened'
 import { holdersOf } from './cdp'
 import { whenDialog } from './agent-dialog'
 import { closeTab } from './tab-close'
@@ -273,150 +269,6 @@ export function outwardHeld(hold: unknown): AgentError {
   return new AgentError(`That would ${h.what ?? 'act'} (${h.why ?? 'it acts in the person\'s name'}): it waits for the person's yes.`, 'outward_needs_ok', { hold })
 }
 
-// ── tabs an agent's tab opens ──
-
-/** New tabs an agent tab opened lately, for the answer of the action that opened them. */
-const opened: Array<{ tab: number; opener: number; at: number }> = []
-/** Links this extension is opening for an agent itself (opener tab → address), set up there. */
-const linking = new Map<number, string>()
-
-async function adoptOpened(tabId: number, rec: AgentTab, url?: string, openerId?: number): Promise<void> {
-  await agentTabs.set(tabId, popupRecord(rec, url))
-  // Opened from an agent's own tab: tidied with the agent's tabs; one from the person's tab is theirs.
-  if (!personsTab(rec)) await noteAgentMade(tabId)
-  // A popup window an agent's own tab of the agent window opened goes to the Dock at once
-  // (agent-popups.ts); one opened near the person (their window, their tab) stays as it opened.
-  if (!nearPerson(rec) && openerId !== undefined && (await ext.tabs.get(openerId).catch(() => null))?.windowId === await agentWindowId()) await minimizeAgentPopup(tabId)
-  await muteAgentTab(tabId)
-  await loaded(tabId)
-  // What loaded may be Walnut itself: never an agent's.
-  if ((await pageCheck(tabId))?.walnut) { await agentTabs.delete(tabId); await closeTab(tabId); return }
-  await mark(tabId, true, rec.who)
-}
-
-/**
- * New tabs with no opener the browser names (a page's window.open into a new popup window: Chrome
- * sets openerTabId only within one window), each with the check of which agent tab opened it.
- */
-const unnamed: Array<{ tab: number; at: number; check: Promise<number | undefined> }> = []
-/** Each tab's window.open count when its step began (agent.ts beforeStep), to tell whether the step opened one. */
-export const openCallsBefore = new Map<number, number>()
-/** New tabs whose opener the browser named, while their adoption is under way. */
-const named: Array<{ tab: number; opener: number; at: number; check: Promise<number | undefined> }> = []
-
-/**
- * A new window's tab is an agent tab's when one was being acted in just then, and the new page has
- * an opener and came from that tab's origin (its referrer). Read in the extension's own world.
- */
-async function openerOf(t: NewTab): Promise<number | undefined> {
-  const now = Date.now()
-  const until = (id: number) => Math.max(acting.get(id) ?? 0, opening.get(id) ?? 0)
-  const live = [...new Set([...acting.keys(), ...opening.keys()])].filter((id) => until(id) >= now).sort((a, b) => until(b) - until(a))
-  const candidates: Array<{ id: number; rec: AgentTab; url: string }> = []
-  for (const id of live) {
-    const rec = await agentTabs.get(id)
-    const tab = rec ? await ext.tabs.get(id).catch(() => null) : null
-    if (rec && tab?.url) candidates.push({ id, rec, url: tab.url })
-  }
-  if (!candidates.length || t.id === undefined || !more.scripting) return undefined
-  // Read as soon as the page has its referrer (a popup is about:blank first), not once it loaded:
-  // a popup window of an agent's is minimized as soon as it is known (agent-popups.ts).
-  let info: { referrer?: string; opener?: boolean } | undefined
-  for (const until = Date.now() + 10_000; Date.now() < until; await sleep(200)) {
-    // The browser may name the opener a moment after the tab's creation (a page's window.open into
-    // a tab): then it is that tab's, for certain.
-    const named = (await ext.tabs.get(t.id).catch(() => null) as NewTab | null)?.openerTabId
-    const byName = named !== undefined ? candidates.find((c) => c.id === named) : undefined
-    if (byName) {
-      opened.push({ tab: t.id, opener: byName.id, at: Date.now() })
-      if (opened.length > 50) opened.shift()
-      await adoptOpened(t.id, byName.rec, t.pendingUrl || t.url, byName.id)
-      return byName.id
-    }
-    const [r] = await more.scripting.executeScript({ target: { tabId: t.id }, func: () => ({ referrer: document.referrer, opener: !!window.opener }) }).catch(() => [])
-    info = r?.result as typeof info
-    if (info?.referrer) break
-  }
-  // A sign-in page that cuts its opener (Cross-Origin-Opener-Policy) still names the page it came
-  // from in its referrer; a window with neither came from no page.
-  if (!info?.referrer) return undefined
-  const from = originOf(info.referrer)
-  const hit = candidates.find((c) => originOf(c.url) === from)
-  if (!hit) return undefined
-  // The person has a page of that site open too: it may be theirs, so it stays theirs.
-  const others = await ext.tabs.query({}).catch(() => [] as Tab[])
-  for (const o of others) {
-    if (o.id === undefined || o.id === t.id || !o.url || originOf(o.url) !== from) continue
-    const r = await agentTabs.get(o.id)
-    if (!r || nearPerson(r)) return undefined
-  }
-  opened.push({ tab: t.id, opener: hit.id, at: Date.now() })
-  if (opened.length > 50) opened.shift()
-  await adoptOpened(t.id, hit.rec, t.pendingUrl || t.url, hit.id)
-  return hit.id
-}
-
-/** A tab or window an agent tab opened is the same agent's (the person's own tab only while an agent acts in it). */
-export function watchOpened(): void {
-  more.tabs.onCreated.addListener((t: NewTab) => {
-    const opener = t.openerTabId
-    if (t.id === undefined) return
-    if (opener === undefined) {
-      unnamed.push({ tab: t.id, at: Date.now(), check: openerOf(t).catch(() => undefined) })
-      if (unnamed.length > 20) unnamed.shift()
-      return
-    }
-    const id = t.id
-    // One this extension opens itself is set up there (its create may answer after this event).
-    // (A page's window.open names no address yet when its tab is made: that is never one of these.)
-    const linked = linking.get(opener)
-    if (linked !== undefined && linked === (t.pendingUrl || t.url)) return
-    // Known at once, so the answer of the step that opened it waits for this tab's adoption
-    // (a page's window.open opens a tab of the agent window: agent-popups.ts).
-    const at = Date.now()
-    const check = agentTabs.get(opener).then(async (rec) => {
-      if (!rec || (personsTab(rec) && (acting.get(opener) ?? 0) < Date.now())) return undefined
-      opened.push({ tab: id, opener, at })
-      if (opened.length > 50) opened.shift()
-      await adoptOpened(id, rec, t.pendingUrl || t.url, opener)
-      return opener
-    }).catch(() => undefined)
-    named.push({ tab: id, opener, at, check })
-    if (named.length > 20) named.shift()
-  })
-}
-
-/** A link to a new tab, opened here as the agent's own (the browser would block a page's new tab from it). */
-async function openLink(c: WireCommand, tabId: number, tab: Tab, rec: AgentTab, href: string): Promise<{ tab: number; url: string } | undefined> {
-  await checkPage(c.allow, href)
-  // In the agent window it comes to the front; in the person's window it stays behind their tab.
-  linking.set(tabId, href)
-  const t = await more.tabs.create({ url: href, windowId: tab.windowId, active: false, openerTabId: tabId }).finally(() => linking.delete(tabId))
-  if (t.id === undefined) return undefined
-  if (!personsTab(rec)) await frontInWindow(ext, tab.windowId, t.id)
-  await adoptOpened(t.id, rec, href, tabId)
-  return (await agentTabs.get(t.id)) ? { tab: t.id, url: href } : undefined
-}
-
-/**
- * A tab or window the step opened from this tab since `started` (a window the page opened with no
- * opener named: waited for briefly, to learn whether it was this tab's). Real input uses it too
- * (agent-trusted.ts), as the browser opens a page's own new tab or window from a trusted click.
- */
-export async function openedSince(tabId: number, started: number): Promise<{ tab: number; url?: string } | undefined> {
-  // The page called window.open during the step (agent-popups.ts counts it): the browser's new
-  // tab can come a moment after the step's input, so it is waited for briefly.
-  if (!opened.some((o) => o.opener === tabId && o.at >= started) && (await openCalls(tabId) ?? 0) > (openCallsBefore.get(tabId) ?? 0)) {
-    for (const until = Date.now() + 3000; Date.now() < until && !named.some((n) => n.opener === tabId && n.at >= started) && !unnamed.some((u) => u.at >= started); ) await sleep(100)
-  }
-  if (!opened.some((o) => o.opener === tabId && o.at >= started)) {
-    const checks = [...named.filter((n) => n.opener === tabId && n.at >= started), ...unnamed.filter((u) => u.at >= started)].map((u) => u.check)
-    if (checks.length) await Promise.race([Promise.all(checks), sleep(8000)])
-  }
-  const o = opened.find((x) => x.opener === tabId && x.at >= started)
-  return o ? { tab: o.tab, url: (await ext.tabs.get(o.tab).catch(() => ({} as Tab))).url } : undefined
-}
-
 /** `found`: the match a click by its words already found (real input handed it over: agent-trusted.ts). */
 export async function pageOp(c: WireCommand, tabId: number, tab: Tab, rec: AgentTab, found?: Awaited<ReturnType<typeof refByText>>): Promise<Record<string, unknown>> {
   let a = c.args
@@ -469,10 +321,10 @@ export async function pageOp(c: WireCommand, tabId: number, tab: Tab, rec: Agent
     const onePart = c.action === 'text' && (a.ref !== undefined || (typeof a.selector === 'string' && !!a.selector))
     if (frameId === 0 && WHOLE_TAB.has(c.action) && !onePart) r = await wholeTab(c, tabId, r)
     let link: { tab: number; url: string } | undefined
-    if (typeof r.newTab === 'string') { link = await openLink(c, tabId, tab, rec, r.newTab); delete r.newTab }
+    if (typeof r.newTab === 'string') { link = await openLink(c.allow, tabId, tab, rec, r.newTab); delete r.newTab }
     if (MAY_NAVIGATE.has(c.action)) await settled(tabId)
     const popup = link ?? await openedSince(tabId, started)
-    return { ...r, ...(matched ? { matched } : {}), ...(await where(tabId)), ...(popup ? { opened: popup } : {}) }
+    return { ...r, ...(matched ? { matched } : {}), ...(await where(tabId)), ...openedField(popup) }
   } finally {
     acting.set(tabId, Date.now() + ACTING_MS)
   }

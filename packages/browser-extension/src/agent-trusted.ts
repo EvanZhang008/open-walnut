@@ -34,7 +34,8 @@ import { cdpClick, cdpEvaluate, cdpHover, cdpPress, cdpSetFiles, cdpType, cdpWhe
 import { run, watched } from './agent-debugger'
 import { ACTING_MS, AgentError, acting, agentWindowId, checkPage, filledHere, frameOp, nearPerson, personsTab, reached, settled, where, WALNUT_PAGE, type AgentTab, type WireCommand } from './agent-shared'
 import { allowedPaths } from './agent-upload'
-import { openedSince, outwardHeld, refByText } from './agent-page'
+import { outwardHeld, refByText } from './agent-page'
+import { openedSince, openedField } from './agent-opened'
 import { barCancelled, comboModifiers } from './cdp'
 import { cancelKnown } from './agent-live'
 import { trustedOutward } from './page-agent-outward'
@@ -194,7 +195,7 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
   let dialog: DialogInfo | undefined
   // A default step sends only mouse and key events: the page stays fillable (agent-debugger.ts run).
   const taint = { taint: !soft }
-  // A window or tab the page opens from this step is the agent's (agent-page.ts watchOpened).
+  // A window or tab the page opens from this step is the agent's (agent-opened.ts).
   const started = Date.now()
   acting.set(tabId, started + 30_000 + ACTING_MS)
   try {
@@ -299,8 +300,8 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
     // A dialog the step opened holds the page: nothing loads until it is answered.
     if (dialog) return { ...out, ...(matched ? { matched } : {}), dialog, note: 'The step opened a dialog: dialog accept (with text for a prompt) or dialog dismiss answers it.', ...(await where(tabId)) }
     if (c.action !== 'hover' && c.action !== 'evaluate') await settled(tabId)
-    const popup = c.action === 'click' || c.action === 'press' || c.action === 'type' ? await openedSince(tabId, started) : undefined
-    return { ...out, ...(matched ? { matched } : {}), ...(await where(tabId)), ...(popup ? { opened: popup } : {}) }
+    const popup = c.action === 'click' || c.action === 'press' || c.action === 'type' || c.action === 'evaluate' ? await openedSince(tabId, started) : undefined
+    return { ...out, ...(matched ? { matched } : {}), ...(await where(tabId)), ...openedField(popup) }
   } finally {
     acting.set(tabId, Date.now() + ACTING_MS)
     if (armed) disarmProbe(tabId, probe, c.allow)

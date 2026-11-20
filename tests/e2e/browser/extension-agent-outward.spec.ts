@@ -56,9 +56,11 @@ const PAGES: Record<string, () => string> = {
   '/feedback': () => `<h1>News</h1>
     <form onsubmit="event.preventDefault(); document.getElementById('sent').textContent = 'Thanks: ' + this.fb.value"><label>Your feedback <textarea name="fb"></textarea></label><button>Send feedback</button></form><p id="sent"></p>
     <label>Chat <textarea id="chat" onkeydown="if (event.key === 'Enter') { event.preventDefault(); document.getElementById('said').textContent = 'Said: ' + this.value }"></textarea></label><p id="said"></p>`,
-  '/popup': () => `<h1>Help</h1><button id="help" onclick="window.open('/help-window', 'help', 'width=480,height=400')">Open the help window</button>`
+  '/popup': () => `<h1>Help</h1><button id="help" onclick="window.helpWin = window.open('/help-window', 'help', 'width=480,height=400')">Open the help window</button>`
     // A site that kept its own copy of window.open before any step (Walnut's patch never reaches it): a real popup window.
-    + `<script>const early = window.open.bind(window)</script><button id="early" onclick="early('/help-window?early', 'early', 'width=480,height=400')">Open it the early way</button>`,
+    + `<script>const early = window.open.bind(window)</script><button id="early" onclick="early('/help-window?early', 'early', 'width=480,height=400')">Open it the early way</button>`
+    // A clean copy of window.open from a frame made at the click (a common way around a wrapped open).
+    + `<button id="clean" onclick="const f = document.createElement('iframe'); document.body.append(f); window.cleanWin = f.contentWindow.open('/help-window?clean', 'clean', 'width=480,height=400')">Open it from a new frame</button>`,
   '/help-window': () => `<h1>Help window</h1><p>Orders ship in 2 days.</p>`,
   '/frame': () => `<h1>Account</h1><iframe src="/frame-inner" title="Sign in" width="420" height="160"></iframe>`,
   '/frame-inner': () => `<button id="in" onclick="setTimeout(() => { document.getElementById('st').textContent = 'You are signed in.' }, 600)">Sign in here</button><p id="st"></p>`,
@@ -482,8 +484,10 @@ test('a window the page opens from the agent tab is the agent\'s, named in the c
 
 // 2026-11-19, the user's Chrome: an agent's evaluate clicked a site's "Sign in with GitHub"; its
 // window.open made a popup window in front of him, listed as his, which the agent could not close.
-// Every step (evaluate too) counts as acting, and in an agent's own tab a page's popup opens as a
-// tab of the agent window; a popup window that still comes is the agent's and is minimized.
+// Chrome shows the opener's window for any window a page opens itself (2026-11-20: a tab instead of
+// the popup still brought the agent window in front of him), so in an agent's own tab the page's
+// window.open asks the extension, which opens a background tab of the agent window; the page gets a
+// stand-in window. A popup window that still comes (an early copy) is the agent's and is minimized.
 test('a popup a page opens from an evaluate is the agent\'s tab in the agent window, not a window over the person\'s', async () => {
   const page = ctx.pages()[0]
   expect((await act(page, { action: 'navigate', tab, url: site('shop.example.test', '/popup') })).status).toBe(200)
@@ -507,7 +511,43 @@ test('a popup a page opens from an evaluate is the agent\'s tab in the agent win
   expect(after.focused).toBe(before.focused)
   const opener = await sw().evaluate(async (id: number) => (await chrome.tabs.get(id)).openerTabId, child!.id)
   expect(opener).toBe(tab)
+  // The extension made it, not the page's own window.open (the browser would have shown the window
+  // for that): the new page has no opener.
+  expect((await act(page, { action: 'evaluate', tab: child!.id, expression: 'window.opener === null' })).body.value).toBe(true)
+  // The page's stand-in: open while the tab is, its address the tab's, closed once the agent closes it.
+  const held = async () => (await act(page, { action: 'evaluate', tab, expression: '({ closed: window.helpWin.closed, path: window.helpWin.location.pathname })' })).body.value
+  expect(await held()).toEqual({ closed: false, path: '/help-window' })
   expect((await act(page, { action: 'close', tab: child!.id })).body).toMatchObject({ closed: true })
+  await expect.poll(async () => (await held()).closed).toBe(true)
+})
+
+test('a clean copy of window.open from a frame the page makes at the click asks the extension too', async () => {
+  const page = ctx.pages()[0]
+  expect((await act(page, { action: 'navigate', tab, url: site('shop.example.test', '/popup') })).status).toBe(200)
+  const before = await sw().evaluate(async () => (await chrome.windows.getAll()).map((w) => w.id!).sort())
+  const r = await act(page, { action: 'evaluate', tab, expression: "document.getElementById('clean').click(); 'clicked'" })
+  expect(r.status, JSON.stringify(r.body)).toBe(200)
+  expect(r.body.opened, JSON.stringify(r.body)).toMatchObject({ tab: expect.any(Number) })
+  const child = r.body.opened.tab as number
+  expect((await act(page, { action: 'evaluate', tab: child, expression: 'location.search + " " + (window.opener === null)' })).body.value).toBe('?clean true')
+  expect(await sw().evaluate(async () => (await chrome.windows.getAll()).map((w) => w.id!).sort())).toEqual(before)
+  expect((await act(page, { action: 'close', tab: child })).body).toMatchObject({ closed: true })
+  await expect.poll(async () => (await act(page, { action: 'evaluate', tab, expression: 'window.cleanWin.closed' })).body.value).toBe(true)
+})
+
+test('a page\'s stand-in window closes its tab, and the same name loads the same tab again', async () => {
+  const page = ctx.pages()[0]
+  expect((await act(page, { action: 'navigate', tab, url: site('shop.example.test', '/popup') })).status).toBe(200)
+  const helpTabs = () => sw().evaluate(async () => (await chrome.tabs.query({})).filter((t) => (t.url || t.pendingUrl || '').includes('/help-window')).map((t) => ({ id: t.id!, url: t.url || t.pendingUrl })))
+  expect((await act(page, { action: 'evaluate', tab, expression: "window.w1 = window.open('/help-window?one', 'helper', 'width=400'); 'ok'" })).status).toBe(200)
+  await expect.poll(async () => (await helpTabs()).length).toBe(1)
+  const [first] = await helpTabs()
+  expect((await act(page, { action: 'evaluate', tab, expression: "window.w2 = window.open('/help-window?two', 'helper', 'width=400'); window.w1 === window.w2" })).body.value).toBe(true)
+  await expect.poll(async () => (await helpTabs()).map((t) => t.url)).toEqual([site('shop.example.test', '/help-window?two')])
+  expect((await helpTabs())[0]!.id).toBe(first!.id)
+  // The page closes its window: the tab goes.
+  expect((await act(page, { action: 'evaluate', tab, expression: 'window.w1.close(); window.w1.closed' })).body.value).toBe(true)
+  await expect.poll(async () => (await helpTabs()).length).toBe(0)
 })
 
 test('a popup window a page still opens from an agent tab (its own early copy of window.open) is the agent\'s, minimized, and closes', async () => {
