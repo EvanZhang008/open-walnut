@@ -37,7 +37,7 @@ import { updateTaskRaw } from '../../src/core/task-manager.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
 import { updateSessionRecord } from '../../src/core/session-tracker.js'
 import { getQueue, sendMessageToSession } from '../../src/core/session-message-queue.js'
-import { isColdHold, stopColdHold } from '../../src/core/sessions/cold-hold.js'
+import { isColdHold, sessionIsCold, stopColdHold } from '../../src/core/sessions/cold-hold.js'
 import { buildWalnutMessage } from '../../src/core/peers/walnut-message-tag.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
@@ -103,14 +103,19 @@ function envelopes(kind = 'trigger'): string[] {
     .filter((t) => t.includes(`<walnut-message kind="${kind}"`))
 }
 
-/** Phase edges of ONE task, in order, while `run` runs. */
+/**
+ * Phase edges of ONE task, in order, while `run` runs: each task:updated whose phase differs from
+ * the phase before it, starting from the phase the task has now. A write that moves no phase (the
+ * derived status of the park, written 25 ms after it on the status sync's fast lane) is no edge.
+ */
 async function phasesDuring(taskId: string, run: () => Promise<void>, settled: (seen: string[]) => boolean): Promise<string[]> {
   const { bus, EventNames } = await import('../../src/core/event-bus.js')
   const seen: string[] = []
+  let last: string = (await task(taskId)).phase
   const name = `task-waiting-e2e-${Math.random().toString(36).slice(2)}`
   bus.subscribe(name, (e) => {
     const t = (e.data as { task?: { id: string; phase: string } }).task
-    if (t?.id === taskId && seen[seen.length - 1] !== t.phase) seen.push(t.phase)
+    if (t?.id === taskId && t.phase !== last) { last = t.phase; seen.push(t.phase) }
   }, { global: true, interest: [EventNames.TASK_UPDATED] })
   try {
     await run()
@@ -422,9 +427,13 @@ describe('a cold idle session', () => {
   async function goCold(): Promise<void> {
     await until('the turn to end', () => task(taskId), (t) => t.phase !== 'IN_PROGRESS')
     const past = Date.now() - 2 * 3_600_000
-    await updateSessionRecord(sid, {
-      promptCache: { tokens: 400_000, ttlMs: 3_600_000, requestAt: new Date(past - 3_600_000).toISOString(), expiresAt: new Date(past).toISOString() },
-    } as never)
+    const expired = { tokens: 400_000, ttlMs: 3_600_000, requestAt: new Date(past - 3_600_000).toISOString(), expiresAt: new Date(past).toISOString() }
+    // The turn's own bookkeeping (idle-compaction storeFacts, the process going idle) lands after
+    // the phase moved and can write the live facts over these: write until the session reads cold.
+    await until('the session to read cold', async () => {
+      await updateSessionRecord(sid, { promptCache: expired } as never)
+      return sessionIsCold(sid)
+    }, (cold) => cold)
   }
   const news = (body: string) => buildWalnutMessage({ kind: 'notification', attrs: { from: 'Trigger: CI watch', outcome: 'check_failed', note: 'your trigger check failed' }, body })
 
