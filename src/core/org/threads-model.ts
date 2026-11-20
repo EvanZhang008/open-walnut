@@ -142,6 +142,8 @@ export interface ThreadDelivery {
   by?: ThreadWriter;
   /** Dropped because he took it back from the queue before the task read it (thread-reply.ts markWithdrawn). */
   withdrawn?: true;
+  /** Delivered because the task read it in its own Threads before its queue row went (thread-reply.ts repliesReadByOwner). */
+  read?: 'threads';
 }
 
 /** His reply has not reached the owner's session yet. */
@@ -1000,7 +1002,7 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   if (patch.close && !cur.closed) checkHisPin(cur, by, 'closed');
   // His reply from a card above has not reached the task yet: it is not done with it (thread-reply.ts).
   if (threadsPopUpNow() && by !== 'human' && !cur.closed && (patch.close || patch.state === 'answered') && cur.messages.some(deliveryOpen)) {
-    throw new ThreadError('reply_pending', 409, `Thread ${id} holds his reply that has not reached you yet: read it first (it comes with your next message).`);
+    throw new ThreadError('reply_pending', 409, `Thread ${id} holds his reply that has not reached you yet: read it first (thread_list shows it now; it also comes with your next message).`);
   }
   if (onlyPin(patch)) return pinOnly(file, cur, patch.pin!, by, at);
   const next: OrgThread = { ...cur, updatedAt: at, by };

@@ -89,6 +89,14 @@ async function callerOf(req: Request): Promise<ThreadCaller> {
   return resolveThreadCaller(header(req, 'x-walnut-caller-sid'))
 }
 
+/** The node's own session reads these threads of its own: his replies on them are in its hands now (thread-reply.ts repliesReadByOwner). */
+async function ownerReads(req: Request, taskId: string, threadIds: string[]): Promise<void> {
+  if (!header(req, 'x-walnut-caller-sid') || !threadIds.length) return
+  if ((await callerOf(req)).by !== `task:${taskId}`) return
+  const { repliesReadByOwner } = await import('../../core/org/thread-reply.js')
+  await repliesReadByOwner(taskId, threadIds).catch((err) => log.task.warn('org thread replies: owner read not recorded', { taskId, error: err instanceof Error ? err.message : String(err) }))
+}
+
 async function writerOf(req: Request): Promise<ThreadWriter> {
   return (await callerOf(req)).by
 }
@@ -165,6 +173,7 @@ orgThreadsV1Router.get('/tasks/:id/threads', route(async (req, res) => {
   // too large to carry back) has none to give, and an empty list read as "no open threads" on the
   // phone while its header counted four (2026-11-06): it says it cannot answer instead.
   if (isFollower()) throw primaryOnly('get the threads from')
+  await ownerReads(req, task.id, (await readThreads(task.id)).threads.filter((t) => !t.closed).map((t) => t.id))
   const file = await readThreads(task.id)
   // `awaits` on each Known thread (core/org/thread-known.ts): what it waits on, for its card.
   const all = await withKnownAwaits(await withTaskAsks(task.id, sortedThreads(file.threads)))
@@ -254,6 +263,7 @@ orgThreadsV1Router.get('/tasks/:id/threads/:thread', route(async (req, res) => {
     return
   }
   const id = threadIdOf(req)
+  await ownerReads(req, task.id, [id])
   const all = await withKnownAwaits(await withTaskAsks(task.id, (await readThreads(task.id)).threads))
   const thread = all.find((t) => t.id === id)
   if (!thread || movedAway(thread)) {

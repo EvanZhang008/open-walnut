@@ -21,7 +21,7 @@ import crypto from 'node:crypto';
 import { log } from '../../logging/index.js';
 import type { SessionRecord } from '../types.js';
 import { threadsPopUpNow } from './thread-popup-rules.js';
-import type { FileMessageResult, OrgThread, ThreadDelivery, ThreadMessage, ThreadWriter } from './threads-model.js';
+import { deliveryOpen, type FileMessageResult, type OrgThread, type ThreadDelivery, type ThreadMessage, type ThreadWriter } from './threads-model.js';
 
 const GATHER_MS = 1_500;
 const SWEEP_MS = 5 * 60_000;
@@ -184,6 +184,37 @@ async function markWithdrawn(owner: string, qm: string): Promise<void> {
   const at = new Date().toISOString();
   await store.updateReplyDeliveries(owner, (_t, m) => (m.delivery?.queued === qm && m.delivery.state === 'claimed' ? { ...m.delivery, state: 'dropped', at, withdrawn: true } : undefined));
   queuedRows.delete(qm);
+}
+
+/**
+ * The task that owns these threads read them in its own Threads (thread_list, or one thread): his
+ * replies on them still on its way are in its hands now (2026-11-20: a reply held behind a stuck
+ * queue row stayed "on its way" after the task had read it there, and every thread_update of the
+ * task was refused with reply_pending while its stop hook asked for that very update). Each is
+ * marked delivered (`read: 'threads'`); a queue row that carries only such replies and still waits
+ * is withdrawn, so his words reach the task once. The leaders are told as for any delivery.
+ */
+export async function repliesReadByOwner(owner: string, threadIds: readonly string[]): Promise<number> {
+  const store = await import('./threads-store.js');
+  const ids = new Set(threadIds);
+  if (!(await store.readThreads(owner)).threads.some((t) => ids.has(t.id) && t.messages.some(deliveryOpen))) return 0;
+  const at = new Date().toISOString();
+  const read = await store.updateReplyDeliveries(owner, (t, m) => (ids.has(t.id) && deliveryOpen(m) ? { ...m.delivery!, state: 'delivered', at, read: 'threads' } : undefined));
+  const rows = new Set(read.map((r) => r.message.delivery?.queued).filter((qm): qm is string => !!qm));
+  if (rows.size) {
+    const { deleteMessage, findQueuedMessage } = await import('../session-message-queue.js');
+    // A row that also carries a reply on a thread the task did not read keeps going.
+    const still = new Set((await store.readThreads(owner)).threads.flatMap((t) => t.messages.filter(deliveryOpen).map((m) => m.delivery?.queued)));
+    for (const qm of rows) {
+      queuedRows.delete(qm);
+      const row = still.has(qm) ? null : await findQueuedMessage(qm);
+      if (row && row.status !== 'processing') await deleteMessage(row.sessionId, qm).catch(() => false);
+    }
+  }
+  if (!(await store.hasOpenDeliveries(owner))) pendingOwners.delete(owner);
+  log.task.info('org thread replies read by their owner in its Threads', { owner, messages: read.map((r) => r.message.id), rows: [...rows] });
+  if (read.length) await tellAbove(owner);
+  return read.length;
 }
 
 /**

@@ -79,9 +79,9 @@ async function startSessionFor(taskId: string, project: string): Promise<string>
   return sid
 }
 
-async function api<T = Record<string, unknown>>(method: string, p: string, body?: unknown): Promise<{ status: number; json: T }> {
+async function api<T = Record<string, unknown>>(method: string, p: string, body?: unknown, callerSid?: string): Promise<{ status: number; json: T }> {
   const res = await fetch(`http://127.0.0.1:${port}${p.startsWith('/api/') ? '' : '/api/v1'}${p}`, {
-    method, headers: { 'content-type': 'application/json' }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    method, headers: { 'content-type': 'application/json', ...(callerSid ? { 'x-walnut-caller-sid': callerSid } : {}) }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   })
   return { status: res.status, json: await res.json().catch(() => ({})) as T }
 }
@@ -270,6 +270,27 @@ describe('a reply on its way is sent once, across a restart too', () => {
     await sweepThreadReplies()
     expect((await deliveryOf(message))?.state).toBe('delivered')
     expect((await getQueue(trays.sid)).some((m) => m.message.includes('At dawn'))).toBe(false)
+  })
+
+  // 2026-11-20: the owner read his reply in its own Threads while its queue row was held, and
+  // every thread_update it made was refused with reply_pending while its stop hook asked for it.
+  it('the owner reading its Threads takes his reply: delivered, its waiting row withdrawn, its update no longer refused', async () => {
+    const qm = `qm-reply-${randomUUID()}`
+    const { thread, message } = await claimed('Stack the trays in the barn or the shed?', 'In the barn', qm)
+    const update = () => api('PATCH', `/tasks/${trays.taskId}/threads/${thread}`, { state: 'answered', reply: 'Stacked in the barn.' }, trays.sid)
+    const refused = await update()
+    expect(refused.status).toBe(409)
+    expect(JSON.stringify(refused.json)).toContain('reply_pending')
+    // The owner's thread_list: its own session reads its Threads.
+    expect((await api('GET', `/tasks/${trays.taskId}/threads?open=1`, undefined, trays.sid)).status).toBe(200)
+    expect(await deliveryOf(message)).toMatchObject({ state: 'delivered', read: 'threads' })
+    expect(await findQueuedMessage(qm)).toBeNull()
+    expect((await update()).status).toBe(200)
+    // A read by anyone else (the user, another task) takes nothing.
+    const other = await claimed('Mark the trays with chalk or tape?', 'Chalk', `qm-reply-${randomUUID()}`)
+    expect((await api('GET', `/tasks/${trays.taskId}/threads?open=1`)).status).toBe(200)
+    expect((await api('GET', `/tasks/${trays.taskId}/threads?open=1`, undefined, plan.sid)).status).toBe(200)
+    expect((await deliveryOf(other.message))?.state).toBe('claimed')
   })
 
   it('a claimed reply whose row is still in the owner\'s queue stays claimed: it goes when that row goes, once', async () => {
