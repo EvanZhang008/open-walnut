@@ -62,6 +62,25 @@ async function stubSearches(page: Page): Promise<Searches> {
   return seen
 }
 
+/**
+ * The task paths the page went to. A task's path opens it on Home and puts Home's URL back
+ * (App.tsx, open-session.ts openTaskHere), so its URL shows only for a moment: what the bar did is
+ * the one step it took to the task's path.
+ */
+async function tasksOpened(page: Page): Promise<() => Promise<string[]>> {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __qbOpened: string[] }
+    w.__qbOpened = []
+    const push = history.pushState.bind(history)
+    history.pushState = (data, unused, url) => {
+      const to = String(url ?? '')
+      if (to.startsWith('/tasks/')) w.__qbOpened.push(to)
+      return push(data, unused, url)
+    }
+  })
+  return () => page.evaluate(() => (window as unknown as { __qbOpened: string[] }).__qbOpened)
+}
+
 const results = (page: Page) => page.locator('.qb-result')
 /** The bar's one text box, named for what it does in each mode ("Message", "Search tasks", ...). */
 const box = (page: Page) => page.locator('.qb-center textarea.qb-text')
@@ -71,6 +90,7 @@ test('task + Tab searches tasks; the arrows choose, Enter opens it; Backspace on
   const sends = await stubAll(page)
   await voiceOff(page)
   const seen = await stubSearches(page)
+  const opened = await tasksOpened(page)
   await openApp(page)
   await page.getByTestId('sidebar-quick-bar').click()
   await expect(box(page)).toBeFocused()
@@ -107,7 +127,7 @@ test('task + Tab searches tasks; the arrows choose, Enter opens it; Backspace on
   await expect(results(page).nth(1)).toHaveAttribute('aria-selected', 'true')
   await box(page).press('Enter')
   await expect(bar(page)).toBeHidden()
-  await expect(page).toHaveURL(/\/tasks\/pw-task-beds$/)
+  await expect.poll(opened).toEqual(['/tasks/pw-task-beds'])
   expect(sends.bodies).toHaveLength(0)
 
   // The next open is the message again.
@@ -194,6 +214,7 @@ test('? asks a quick question: the answer shows in the bar, asking again goes on
   const sends = await stubAll(page)
   await voiceOff(page)
   const seen = await stubSearches(page)
+  const opened = await tasksOpened(page)
   await openApp(page)
   await page.getByTestId('sidebar-quick-bar').click()
   await box(page).pressSequentially('?how long is the drive to the coast')
@@ -214,7 +235,7 @@ test('? asks a quick question: the answer shows in the bar, asking again goes on
   await shot(page, 'm3-ask')
   await page.getByTestId('qb-ask-task').click()
   await expect.poll(() => seen.sessions.length).toBe(1)
-  await expect(page).toHaveURL(/\/tasks\/pw-ask-task$/)
+  await expect.poll(opened).toEqual(['/tasks/pw-ask-task'])
   await expect(bar(page)).toBeHidden()
   expect(seen.sessions[0]).toContain('Q: how long is the drive to the coast')
   expect(seen.sessions[0]).toContain('A: Back is the same')
