@@ -1,13 +1,15 @@
 /**
- * Ids the user would have to look up: a code review, a ticket, a pull request or a commit named in
- * text written for the user with no link to open it, and the one note that tells the writer.
+ * Ids the user would have to look up: a code review, a ticket or a pull request named in text
+ * written for the user with no link to open it, and the one note that tells the writer.
  *
  * Why (2026-11-20, the user, of a report thread: "when u send this thread pelase make sure u have all
  * the necesary info, like link i cna just lcick ... make sure we shoudl do this from now one"): every
  * thread, letter and question to him carries what he needs, and everything it names is a full URL
- * he can click, never an id he must search for. The rule rides the prompt (team-charter.ts, the
+ * he can click, never an id he must search for. The rule rides the prompt (the user's profile, the
  * decision line in sessions/session-context.ts); this check reminds the writer at the moment it
  * slips. It only reminds and never refuses: the text has already gone out.
+ * Commits are not asked for (2026-11-20, the user: no one reads a commit, so give him the rest and
+ * no commit links): a hash with no link stays quiet.
  *
  * Where it runs: a session's Walnut op that hands the user words (LINK_NOTE_OPS, ops/executor.ts adds
  * the note to the op's answer) and a Claude Code AskUserQuestion (the PreToolUse hook in
@@ -17,27 +19,22 @@
  * What counts as named (few false alarms on purpose):
  *   - a code review: CR-1234 and longer;
  *   - a ticket: V or P and 8 to 11 digits (V1234567890);
- *   - a pull request: "PR #12", "PR 12" (two digits or more), "pull request #12", owner/repo#12;
- *   - a commit: a bare lowercase hex run with a digit and a letter in it, not glued to a path, an
- *     id or a word: 40 characters always; 7 to 12 only right after a word that says it is one
- *     ("commit", "landed as", "sha", a Chinese "commit"), so a short task or session id ("task
- *     a9b9810d", "(745ead8d said)") stays quiet, as do UUIDs, rq-.../lt-... ids, sha256 sums and
- *     paths. One the caller can look up as a Walnut task id (linkNotes' isTaskId) never counts.
+ *   - a pull request: "PR #12", "PR 12" (two digits or more), "pull request #12", owner/repo#12.
  * Text in fenced code blocks and inside URLs is not read. An id counts as linked when it is the
  * text of a Markdown or HTML link, when an http(s) URL follows it on its line ("CR-1: <url>",
  * "**CR-1** (<url>") or comes right before it ("<url> (PR 12)"), or when any URL in the text
- * carries it (the review or ticket id, /pull/<n>, the commit's hash or a prefix of it).
+ * carries it (the review or ticket id, /pull/<n>).
  * Linear in the text, and it reads at most MAX_SCAN characters (a letter's HTML can be megabytes,
  * and a gateway call runs this on the server's event loop).
  */
 
 import { deadCommitLinksNote, findDeadCommitLinks } from './github-commit-check.js'
 
-export type LinkRefKind = 'code review' | 'ticket' | 'pull request' | 'commit'
+export type LinkRefKind = 'code review' | 'ticket' | 'pull request'
 
 export interface MissingLink {
   kind: LinkRefKind
-  /** The id as written ("CR-123456", "PR #12", "0e72622de"). */
+  /** The id as written ("CR-123456", "PR #12"). */
   ref: string
 }
 
@@ -51,14 +48,6 @@ const FENCE_RE = /```[\s\S]*?(?:```|$)/g
 const MD_LINK_RE = /\[([^\]\n]{1,300})\]\(\s*(https?:\/\/[^)\s]+)[^)]*\)/gi
 const A_TAG_RE = /<a\b[^>]{0,2000}?\bhref\s*=\s*["']?(https?:\/\/[^"'\s>]+)[^>]{0,2000}>([^<]{0,400})<\/a>/gi
 const TAG_RE = /<[^>\n]{1,2000}>/g
-/**
- * A word right before a short hash that says it is a commit ("commit 0e72622de", "landed as
- * 9815ea32a", the escapes: Chinese "commit", "commit number"), at most a linking word between.
- * 2026-11-20: a looser window (two words, any run of CJK) read Walnut task ids as commits:
- * "...\u4e0a\u7ebf\uff08745ead8d \u8bf4\u7684\uff09" ("live (as 745ead8d said)").
- */
-const COMMIT_WORD_RE = /(?:\b(?:commit(?:ted)?|land(?:ed)?|merged|revert(?:ed|s)?|cherry-picked|sha|hash)|\u63d0\u4ea4(?:\u53f7)?)[ \t:=#\uff1a]*(?:(?:is|as|at|in|to|\u4e86|\u4e3a|\u662f)[ \t:\uff1a]*)?$/i
-
 interface Found { kind: LinkRefKind; ref: string; key: string; at: number; end: number }
 
 const spaces = (m: string): string => ' '.repeat(m.length)
@@ -72,22 +61,15 @@ function refsIn(text: string): Found[] {
   for (const m of text.matchAll(/(?<![\w-])([VP]\d{8,11})(?![\w-])/g)) push('ticket', m[0], m[1], m.index!)
   for (const m of text.matchAll(/\b(?:PR|pull request)(?:[ \t]?#[ \t]?(\d{1,7})|[ \t](\d{2,7}))\b/gi)) push('pull request', m[0], m[1] ?? m[2], m.index!)
   for (const m of text.matchAll(/(?<![\w/.-])[A-Za-z0-9][\w.-]{0,38}\/[\w.-]{1,100}(?<!\.(?:md|mdx|txt|html?|json|ya?ml|tsx?|jsx?|py|rs|go|sh))#(\d{1,7})\b/g)) push('pull request', m[0], m[1], m.index!)
-  for (const m of text.matchAll(/(?<![\w./#:@=-])([0-9a-f]{7,40})(?![\w/-]|\.\w)/g)) {
-    const h = m[1]
-    if (!/\d/.test(h) || !/[a-f]/.test(h)) continue
-    if (h.length !== 40 && (h.length > 12 || !COMMIT_WORD_RE.test(text.slice(Math.max(0, m.index! - 40), m.index!).split('\n').pop()!))) continue
-    push('commit', h, h, m.index!)
-  }
   return out
 }
 
-/** What the text's URLs carry, read once: the ids in them, pull request numbers, commit hashes. */
-function indexUrls(urls: readonly string[]): { text: string; pulls: Set<string>; hashes: string[] } {
+/** What the text's URLs carry, read once: the ids in them and pull request numbers. */
+function indexUrls(urls: readonly string[]): { text: string; pulls: Set<string> } {
   const text = urls.join(' ').toLowerCase()
   const pulls = new Set<string>()
   for (const m of text.matchAll(/\/(?:pulls?|merge_requests|pull-requests)\/(\d{1,7})(?!\d)/g)) pulls.add(m[1])
-  const hashes = [...new Set([...text.matchAll(/[0-9a-f]{7,40}/g)].map((m) => m[0]))].slice(0, 2000)
-  return { text, pulls, hashes }
+  return { text, pulls }
 }
 
 function urlCarries(f: Found, idx: ReturnType<typeof indexUrls>): boolean {
@@ -97,8 +79,6 @@ function urlCarries(f: Found, idx: ReturnType<typeof indexUrls>): boolean {
       return idx.text.includes(f.key.toLowerCase())
     case 'pull request':
       return idx.pulls.has(f.key)
-    case 'commit':
-      return idx.hashes.some((h) => h.startsWith(f.key) || f.key.startsWith(h))
   }
 }
 
@@ -153,7 +133,6 @@ const WHAT_URL: Record<LinkRefKind, string> = {
   'code review': 'the code review page',
   ticket: 'the ticket page',
   'pull request': 'the pull request page',
-  commit: 'the commit page (for a GitHub repository: https://github.com/<owner>/<repo>/commit/<hash>)',
 }
 
 /**
@@ -221,10 +200,10 @@ export function opMissingLinksNote(op: string, args: unknown): string | null {
  * Both notes for a text for the user: ids with no link, and GitHub commit links that open
  * nothing (github-commit-check.ts, which asks GitHub). Never throws.
  */
-export async function linkNotes(text: string, what: string, fix: string, opts: LinkNoteOptions = {}): Promise<string[]> {
+export async function linkNotes(text: string, what: string, fix: string): Promise<string[]> {
   const notes: string[] = []
   try {
-    const missing = missingLinksNote(await withoutTaskIds(findMissingLinks(text), opts.isTaskId), what, fix)
+    const missing = missingLinksNote(findMissingLinks(text), what, fix)
     if (missing) notes.push(missing)
   } catch { /* a note never fails the call */ }
   try {
@@ -235,24 +214,11 @@ export async function linkNotes(text: string, what: string, fix: string, opts: L
 }
 
 /** linkNotes for a session's op: nothing for an op whose words the user does not read. */
-export async function opLinkNotes(op: string, args: unknown, opts: LinkNoteOptions = {}): Promise<string[]> {
+export async function opLinkNotes(op: string, args: unknown): Promise<string[]> {
   const t = opUserText(op, args)
-  return t ? linkNotes(t.text, t.what, t.fix, opts) : []
+  return t ? linkNotes(t.text, t.what, t.fix) : []
 }
 
-export interface LinkNoteOptions {
-  /** Whether a short hex id is a Walnut task id (or a prefix of one): the caller's own task store. */
-  isTaskId?: (id: string) => Promise<boolean>
-}
-
-/** Short "commits" that are Walnut task ids, left out (at most 5 looked up, 2026-11-20: 2d950859). */
-export async function withoutTaskIds(missing: MissingLink[], isTaskId: LinkNoteOptions['isTaskId']): Promise<MissingLink[]> {
-  if (!isTaskId) return missing
-  const short = missing.filter((m) => m.kind === 'commit' && m.ref.length <= 12).slice(0, 5)
-  const tasks = new Set<string>()
-  await Promise.all(short.map(async (m) => { if (await isTaskId(m.ref).catch(() => false)) tasks.add(m.ref) }))
-  return missing.filter((m) => !tasks.has(m.ref))
-}
 
 /** The words of a Claude Code AskUserQuestion call's input (its questions, headers and options). */
 export function askUserQuestionText(toolInput: unknown): string {

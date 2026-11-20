@@ -1,5 +1,5 @@
 /**
- * Words for the user that name a code review, ticket, pull request or commit with no link to open it
+ * Words for the user that name a code review, ticket or pull request with no link to open it
  * get one note back to the writer (src/lib/missing-links.ts; 2026-11-20, the user: every thread,
  * letter and question carries what he needs, "like link i cna just lcick"). The examples are written
  * the way agents write to him: linked, not linked, and only Walnut's own ids (which must stay quiet).
@@ -13,7 +13,7 @@ import path from 'node:path'
 import { z } from 'zod'
 import { guardedPath } from '../setup/exec-guard.js'
 import {
-  LINK_NOTE_EXEMPT, LINK_NOTE_OPS, askUserQuestionText, findMissingLinks, linkNotes, opLinkNotes, opMissingLinksNote, withoutTaskIds,
+  LINK_NOTE_EXEMPT, LINK_NOTE_OPS, askUserQuestionText, findMissingLinks, linkNotes, opLinkNotes, opMissingLinksNote,
 } from '../../src/lib/missing-links.js'
 import { _setGithubCommitCheck, deadCommitLinksNote, findDeadCommitLinks } from '../../src/lib/github-commit-check.js'
 import { ASK_LINKS_HOOK_COMMAND, askLinksHooks } from '../../src/providers/ask-links-hook.js'
@@ -41,8 +41,7 @@ describe('ids named with a link the user can click stay quiet', () => {
     ['the URL after a bold id', '**CR-1234567**: https://short.example/x'],
     ['a links section further down', `${TICKET} V1234567890 is updated.\n\nLinks:\n- https://tickets.example.com/V1234567890`],
     ['a pull request URL', 'PR #4821 merged: https://github.com/acme/app/pull/4821'],
-    ['a commit URL with the full hash', `${COMMIT} 0e72622de ${LANDED}: https://github.com/acme/app/commit/0e72622de1f3a9c0b6d8e2f4a1b3c5d7e9f0a2b4`],
-  ])('%s', (_name, text) => {
+    ])('%s', (_name, text) => {
     expect(refs(text)).toEqual([])
   })
 })
@@ -53,9 +52,6 @@ describe('ids named with no link are found, each once', () => {
     ['a ticket', `${TICKET} V1234567890 is updated`, ['ticket:V1234567890']],
     ['a pull request, several spellings', 'PR #4821 and PR 77 and pull request #9', ['pull request:PR #4821', 'pull request:PR 77', 'pull request:pull request #9']],
     ['owner/repo#n', 'Fixed in acme/app#77', ['pull request:acme/app#77']],
-    ['a commit glued to CJK text', `${COMMIT}0e72622de${LANDED}`, ['commit:0e72622de']],
-    ['a full 40-character hash', 'fixed in 0e72622de1f3a9c0b6d8e2f4a1b3c5d7e9f0a2b4', ['commit:0e72622de1f3a9c0b6d8e2f4a1b3c5d7e9f0a2b4']],
-    ['a short hash after "commit"', 'commit 0e72622de is on main; landed as 9815ea32a', ['commit:0e72622de', 'commit:9815ea32a']],
     ['the same id twice', 'CR-1234567 is up. CR-1234567 needs your yes.', ['code review:CR-1234567']],
     ['a URL for one id does not cover another', 'CR-1111111 is done (https://code.example.com/reviews/CR-1111111/x); CR-2222222 needs your yes.', ['code review:CR-2222222']],
     ['a pull request URL of another number', 'PR #12 is ready: https://github.com/acme/app/pull/13 is the old one, see above', ['pull request:PR #12']],
@@ -88,19 +84,22 @@ describe('Walnut\'s own ids and other hex stay quiet', () => {
     ['a task id after a CJK clause', '\u5df2\u7ecf\u4e0a\u7ebf\uff08745ead8d \u8bf4\u7684\uff09'],
     ['a task id before "landed"', 'task 2d950859 landed; ask 745ead8d'],
     ['a task id a few words after "commit"', 'the commit for it is with 2d950859 now'],
+    // 2026-11-20, the user: no one reads a commit, so a commit is never asked for a link.
+    ['a commit glued to CJK text', `${COMMIT}0e72622de${LANDED}`],
+    ['a full 40-character hash', 'fixed in 0e72622de1f3a9c0b6d8e2f4a1b3c5d7e9f0a2b4'],
+    ['a short hash after "commit"', 'commit 0e72622de is on main; landed as 9815ea32a'],
   ])('%s', (_name, text) => {
     expect(refs(text)).toEqual([])
   })
 })
 
-describe('a short hash that is a Walnut task id', () => {
-  it('is left out when the task store knows it, and kept otherwise', async () => {
-    const isTaskId = async (id: string) => id === '2d950859'
-    const notes = await linkNotes('commit 2d950859 and commit 0e72622de', 'Your reply', 'Fix it.', { isTaskId })
+describe('no note asks for a commit link', () => {
+  it('a commit named with a code review gets a note for the review only, and nothing hints at commit links', async () => {
+    const notes = await linkNotes(`CR-1234567 ${REVIEW}; ${COMMIT} 0e72622de`, 'Your reply', 'Fix it.')
     expect(notes).toHaveLength(1)
-    expect(notes[0]).toContain('0e72622de (commit)')
-    expect(notes[0]).not.toContain('2d950859')
-    expect(await withoutTaskIds([{ kind: 'commit', ref: '2d950859' }], async () => { throw new Error('server down') })).toHaveLength(1)
+    expect(notes[0]).toContain('CR-1234567 (code review)')
+    expect(notes[0]).not.toMatch(/commit/i)
+    expect(await linkNotes('commit 0e72622de landed', 'Your reply', 'Fix it.')).toEqual([])
   })
 })
 
@@ -118,8 +117,8 @@ describe('a long text', () => {
 
 describe('the note', () => {
   it('names what is missing, what to add and how to fix it', () => {
-    const note = opMissingLinksNote('thread_update', { id: 'th-1234567', reply: `CR-245678901 ${REVIEW}; ${COMMIT} 0e72622de` })!
-    expect(note).toMatch(/^Walnut note: Your thread summary \(thread_update reply\) names CR-245678901 \(code review\), 0e72622de \(commit\) for the user with no link to open it\./)
+    const note = opMissingLinksNote('thread_update', { id: 'th-1234567', reply: `CR-245678901 ${REVIEW}; PR #12` })!
+    expect(note).toMatch(/^Walnut note: Your thread summary \(thread_update reply\) names CR-245678901 \(code review\), PR #12 \(pull request\) for the user with no link to open it\./)
     expect(note).toContain('full https:// URL')
     expect(note).toContain('thread_update with reply')
     expect(opMissingLinksNote('thread_update', { id: 'th-1234567', reply: 'All done: https://code.example.com/reviews/CR-245678901 (CR-245678901)' })).toBeNull()
@@ -259,7 +258,8 @@ describe('a GitHub commit link that opens nothing', () => {
     expect(dead.map((d) => d.hash)).toEqual(['a6ab69182'])
     const note = deadCommitLinksNote(dead, 'Your thread summary (thread_update reply)', 'Fix it.')!
     expect(note).toContain('https://github.com/acme/app/commit/a6ab69182, a commit GitHub does not have')
-    expect(note).toContain('not yet on GitHub, with no link')
+    expect(note).toContain('The user wants no commit links')
+    expect(note).not.toMatch(/link (that|GitHub's)/)
   })
 
   it('asks GitHub once: a commit it has stays known, one it lacks is kept for a while', async () => {

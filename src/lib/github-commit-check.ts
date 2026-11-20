@@ -1,6 +1,7 @@
 /**
  * A GitHub commit link in words for the user that opens nothing: the commit is not in that
- * repository on GitHub. The note that tells the writer, beside missing-links.ts's.
+ * repository on GitHub. The note that tells the writer to take it out (beside missing-links.ts's):
+ * the user wants no commit links at all (2026-11-20: no one reads a commit).
  *
  * Why (2026-11-20, the Walnut VP): a task gave it https://github.com/<owner>/<repo>/commit/<hash>
  * where <hash> was the commit on the maintainer's own main, which reaches GitHub as a copy under
@@ -107,6 +108,5 @@ export function deadCommitLinksNote(dead: readonly DeadCommitLink[], what: strin
   if (!dead.length) return null
   const list = dead.map((d) => d.url).join(', ')
   return `Walnut note: ${what} links ${list}, a commit GitHub does not have in that repository, so the link opens nothing. `
-    + 'A commit that reached GitHub as a copy (a rebase, a cherry-pick, a replayed push) has another hash there: link that one. '
-    + `One not on GitHub yet: say it is on main and not yet on GitHub, with no link. ${fix}`
+    + `The user wants no commit links (2026-11-20): take it out. ${fix}`
 }

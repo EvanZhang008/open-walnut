@@ -1,13 +1,12 @@
 /**
  * The PreToolUse hook (matcher `AskUserQuestion`) that reminds a session when its question to the
- * user names a code review, ticket, pull request or commit with no link to open it
+ * user names a code review, ticket or pull request with no link to open it
  * (src/lib/missing-links.ts; 2026-11-20, the user: every thread, letter and question carries what he
  * needs, with links he can click). It never decides the permission and never refuses: the question
  * goes to the user as written, and the note reaches the model as `additionalContext` beside the
  * answer, so its next words to the user carry the links.
  *
- * The check runs in the session's own `walnut` CLI on its host (op link_check, which asks the server
- * only whether a short hex id is a task): the hook pipes its input there on stdin, wrapped as `hook_input`, so no content
+ * The check runs in the session's own `walnut` CLI on its host (op link_check): the hook pipes its input there on stdin, wrapped as `hook_input`, so no content
  * rides a command line. No shortcut in sh: the hook's input always holds digits (its session id), and
  * a question is rare enough that one CLI call each is nothing.
  * Only an answer with `hookSpecificOutput` is printed: an older CLI that knows no link_check prints
