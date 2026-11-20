@@ -83,16 +83,4 @@
 .action-needed-more:hover { text-decoration: underline; }
 .action-needed-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 
-/* A VP's Threads: its team's asks, one card per task, above its own threads (TeamActions.tsx). */
-.team-actions { display: flex; flex-direction: column; gap: 6px; margin: 0 0 10px; }
-.team-actions-title { font-size: 12px; font-weight: 600; color: var(--fg-muted); }
-.team-actions-task { border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; background: var(--bg); }
-.team-actions-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.team-actions-name {
-  all: unset; cursor: pointer; font-weight: 600; font-size: 13px; min-width: 0; overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap;
-}
-.team-actions-name:hover { text-decoration: underline; }
-.team-actions-name:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
-.team-actions-state { flex: none; color: var(--fg-muted); font-size: 11px; }
 .action-needed-approval .org-answer-words, .action-needed-approval .org-answer-note, .action-needed-approval .org-answer-error { flex-basis: 100%; }

@@ -14,10 +14,10 @@
  * An answered line goes the moment it is sent and comes back with the reason when the server says
  * no; a snoozed line greys out with its time and an Unsnooze, and comes back by itself then.
  *
- * The same block is drawn in three places, all from the one list, so an item answered or snoozed in
- * one goes from all (2026-11-19, the user: "我点进去之后，如果它有 needs you，它直接就能显示在……
- * title bar，或者在下面", and asks "放到 thread 里面"): a task's row, the strip under a session's
- * title bar (`variant="strip"`, experiment action_needed_everywhere) and a VP's Threads (TeamActions).
+ * The same block is drawn in two places, from the one list, so an item answered or snoozed in one
+ * goes from both (2026-11-19, the user: "我点进去之后，如果它有 needs you，它直接就能显示在……
+ * title bar，或者在下面"): a task's row, the strip under a session's
+ * title bar (`variant="strip"`, experiment action_needed_everywhere).
  */
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Task } from '@open-walnut/core';

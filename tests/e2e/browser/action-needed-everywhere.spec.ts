@@ -1,19 +1,19 @@
 /**
- * Action needed in three places, one record (experiment action_needed_everywhere; 2026-11-19, the
- * user: "我点进去之后，如果它有 needs you，它直接就能显示在……title bar，或者在下面", and "thread 里面
- * 也可以加……这些 task 本身的……需要我 make decision 的"): a task's row, the strip under its session's
- * title bar, and its VP's Threads ("From your team"). Each item is answered in one of them and goes
- * from the other two:
- *   - a decision letter answered in the VP's Threads: gone from its row and its session's strip
- *   - an approval approved in the session's strip: gone from its row and the Threads
+ * Action needed in two places, one record (experiment action_needed_everywhere; 2026-11-19, the
+ * user: "我点进去之后，如果它有 needs you，它直接就能显示在……title bar，或者在下面"): a task's row and
+ * the strip under its session's title bar. Each item is answered in one of them and goes from the other:
+ *   - a decision letter answered in the session's strip: gone from its row; the VP's Threads stay
+ *     as they were, with no team asks on top (2026-11-20, the user: "你把我这个整个 thread 整个 UI
+ *     全部全部都变了")
+ *   - an approval approved in the session's strip: gone from its row
  *   - the session's own live question: the strip points at its card below, never a second answer;
- *     answered on the row, it leaves the strip and the Threads
+ *     answered on the row, it leaves the strip
  *   - three asks: the strip shows the first two and "1 more"; a snooze in one place reads in the
  *     others, and an unsnooze elsewhere is not held back by a place's own earlier snooze
  *   - a reply typed on the row (the thread card's own words box) answers a letter: its task gets
- *     the words, and the item leaves the strip and the Threads
+ *     the words, and the item leaves the strip
  *   - the strip stays short: one row per ask in a wide column, two in a narrow one (buttons below)
- *   - the switch off: no strip and no "From your team"
+ *   - the switch off: no strip
  * Real: the fixture server, the mock CLI's prompt, the approvals and inbox routes, the status sync.
  */
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
@@ -71,7 +71,6 @@ const kinds = async (request: APIRequestContext, id: string) => (await statusOf(
 const line = (scope: Locator, kind: string) => scope.locator(`[data-testid="action-item"][data-kind="${kind}"]`)
 const panelOf = (page: Page, sid: string) => page.locator(`.main-page-session-column .session-panel[data-session-id="${sid}"]`)
 const stripOf = (page: Page, sid: string) => panelOf(page, sid).getByTestId('session-action-needed')
-const teamCard = (page: Page, id: string) => page.locator(`[data-testid="team-actions-task"][data-task-id="${id}"]`)
 
 async function openHome(page: Page, sid: string): Promise<void> {
   await isolateUiPrefs(page)
@@ -137,7 +136,7 @@ test.afterAll(async ({ request }) => {
   }
 })
 
-test('a letter answered in the VP\'s Threads leaves its row and its session\'s strip', async ({ page, request }) => {
+test('a letter answered in the session\'s strip leaves its row; the VP\'s Threads show no team asks', async ({ page, request }) => {
   await openHome(page, ids.letterSid)
   const card = await showSectionCard(page, 'needs', ids.letter)
   await expect(line(card, 'letter').getByRole('button', { name: 'Sign it' })).toBeVisible({ timeout: 30_000 })
@@ -149,20 +148,19 @@ test('a letter answered in the VP\'s Threads leaves its row and its session\'s s
   expect(box.y).toBeGreaterThanOrEqual(header.y + header.height - 1)
   expect(box.y).toBeLessThan(header.y + header.height + 80)
 
+  // The VP's Threads are the user's own threads only: no team asks put on top of them.
   await toThreads(page)
-  const team = teamCard(page, ids.letter)
-  await expect(page.getByTestId('team-actions')).toContainText('From your team')
-  await expect(team).toContainText(`Lease terms ${STAMP}`)
-  await line(team, 'letter').getByRole('button', { name: 'Sign it' }).click()
-  await expect(team).toHaveCount(0, { timeout: 30_000 })
-  await expect.poll(async () => ((await (await request.get(`/api/v1/human-inbox/${ids.letterId}`)).json()).letter?.answered?.actionId ?? ''), { timeout: 30_000 }).toBe('sign')
-
+  await expect(page.getByTestId('org-threads').getByTestId('action-item')).toHaveCount(0)
+  await expect(page.getByText('From your team')).toHaveCount(0)
   await toHome(page)
+
+  await line(stripOf(page, ids.letterSid), 'letter').getByRole('button', { name: 'Sign it' }).click()
+  await expect.poll(async () => ((await (await request.get(`/api/v1/human-inbox/${ids.letterId}`)).json()).letter?.answered?.actionId ?? ''), { timeout: 30_000 }).toBe('sign')
   await expect(stripOf(page, ids.letterSid)).toHaveCount(0, { timeout: 30_000 })
-  await expect(page.locator(`[data-testid="action-needed"][data-action-task="${ids.letter}"]`)).toHaveCount(0)
+  await expect(page.locator(`[data-testid="action-needed"][data-action-task="${ids.letter}"]`)).toHaveCount(0, { timeout: 30_000 })
 })
 
-test('an approval approved in the session\'s strip leaves its row and the Threads', async ({ page, request }) => {
+test('an approval approved in the session\'s strip leaves its row', async ({ page, request }) => {
   await openHome(page, ids.approvalSid)
   const asked = await post<{ approval: { id: string }; waitToken: string }>(request, '/api/v1/approvals',
     { what: `Deploy build 1182 to staging ${STAMP}`, cwd, command: 'deploy.sh' }, { 'x-walnut-caller-sid': ids.approvalSid })
@@ -176,12 +174,9 @@ test('an approval approved in the session\'s strip leaves its row and the Thread
   expect(waited.approval.status).toBe('approved')
   await expect(strip).toHaveCount(0, { timeout: 30_000 })
   await expect(page.locator(`[data-testid="action-needed"][data-action-task="${ids.approval}"]`)).toHaveCount(0, { timeout: 30_000 })
-  await toThreads(page)
-  await expect(teamCard(page, ids.question)).toBeVisible({ timeout: 30_000 })
-  await expect(teamCard(page, ids.approval)).toHaveCount(0)
 })
 
-test('the session\'s own question points at its card below; answered on the row, it leaves the strip and the Threads', async ({ page, request }) => {
+test('the session\'s own question points at its card below; answered on the row, it leaves the strip', async ({ page, request }) => {
   await openHome(page, ids.questionSid)
   const strip = stripOf(page, ids.questionSid)
   const item = line(strip, 'question')
@@ -192,17 +187,12 @@ test('the session\'s own question points at its card below; answered on the row,
   const promptCard = panelOf(page, ids.questionSid).locator('[data-prompt-pending="true"]')
   await expect(promptCard).toBeInViewport({ timeout: 10_000 })
 
-  await toThreads(page)
-  await expect(teamCard(page, ids.question)).toBeVisible({ timeout: 30_000 })
-  await toHome(page)
   const card = await showSectionCard(page, 'needs', ids.question)
   const row = line(card, 'question')
   await row.locator('.nfc-answer-opt', { hasText: 'Local' }).click()
   await row.getByRole('button', { name: 'Submit' }).click()
   await expect.poll(async () => ((await (await request.get(`/api/sessions/${ids.questionSid}`)).json()).session?.pendingPermission ?? null), { timeout: 30_000 }).toBeNull()
   await expect(stripOf(page, ids.questionSid)).toHaveCount(0, { timeout: 30_000 })
-  await toThreads(page)
-  await expect(teamCard(page, ids.question)).toHaveCount(0, { timeout: 30_000 })
 })
 
 async function sendLetter(request: APIRequestContext, subject: string, actions: Array<{ id: string; label: string }>): Promise<string> {
@@ -243,7 +233,7 @@ test('three asks: the strip shows the first two and "1 more"; a snooze in the st
   expect(renew).toBeTruthy()
 })
 
-test('a reply typed on the row answers the letter: its task gets the words, and it leaves the strip and the Threads', async ({ page, request }) => {
+test('a reply typed on the row answers the letter: its task gets the words, and it leaves the strip', async ({ page, request }) => {
   await openHome(page, ids.letterSid)
   const card = await showSectionCard(page, 'needs', ids.letter)
   const item = card.locator('[data-testid="action-item"][data-kind="letter"]', { hasText: `Paint the hall ${STAMP}?` })
@@ -264,8 +254,6 @@ test('a reply typed on the row answers the letter: its task gets the words, and 
     return ((await res.json()) as { messages?: Array<{ text?: string }> }).messages?.map((m) => m.text ?? '').join('\n') ?? ''
   }, { timeout: 60_000 }).toContain(words)
   await expect.poll(async () => ((await statusOf(request, ids.letter)).actions ?? []).some((a) => a.id === itemId), { timeout: 30_000 }).toBe(false)
-  await toThreads(page)
-  await expect(page.locator(`[data-testid="team-actions-task"][data-task-id="${ids.letter}"] [data-item-id="${itemId}"]`)).toHaveCount(0)
 })
 
 test('the strip stays short: one row per ask in a wide column, two in a narrow one (its buttons below)', async ({ page }) => {
@@ -299,13 +287,11 @@ test('the strip stays short: one row per ask in a wide column, two in a narrow o
   await page.setViewportSize({ width: 1280, height: 900 })
 })
 
-test('the switch off: no strip and no "From your team"', async ({ page, request }) => {
+test('the switch off: no strip', async ({ page, request }) => {
   await setFlag(request, false)
   await openHome(page, ids.letterSid)
   const card = await showSectionCard(page, 'needs', ids.letter)
   await expect(card.getByRole('button', { name: 'Renew', exact: true })).toBeVisible({ timeout: 30_000 })
   await expect(stripOf(page, ids.letterSid)).toHaveCount(0)
-  await toThreads(page)
-  await expect(page.getByTestId('team-actions')).toHaveCount(0)
   await setFlag(request, true)
 })
