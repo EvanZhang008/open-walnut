@@ -11,6 +11,7 @@
  * - a paused trigger, one gone, one whose check runs on another host than the one that relayed it,
  *   and one with no task are refused, each with its own code, and nothing runs;
  * - a test a task's session asked for acts for that task while it may run, on its own host only;
+ * - one box under two host aliases of one daemon is one host: either link vouches for its checks;
  * - a token nobody held, and any call with no caller at all (a person), act for no one;
  * - host_copy takes a check's call too;
  * - whose grants a check uses is the server's word (CronJob.checkActsFor): the session that wrote the
@@ -211,6 +212,37 @@ describe('a trigger check\'s host_exec', () => {
     expect(errorOf(await relay('devbox', 'host_exec', { host: 'macbox', command: 'true' }, { kind: 'test', id: 'tt-neverminted00' }))).toContain('trigger_test_over')
     // A malformed one is no trigger at all: the call stays "not a session".
     expect(errorOf(await relay('devbox', 'host_exec', { host: 'macbox', command: 'true' }, { kind: 'test', id: 'not-a-test' }))).toContain('session_only')
+  })
+
+  it('one box under two host aliases: a check of either alias is vouched for over either link', async () => {
+    // 2026-11-19: clouddev and newdev are one daemon, which relays a check's call over either
+    // link; a check armed on clouddev called in over newdev and was refused trigger_wrong_host.
+    // The two links' hellos name one daemon process (daemon-connection.ts oneDaemon); otherbox's another.
+    const link = (host: string, liveInstanceId: string) => ({ host, connected: true, liveInstanceId }) as unknown as daemonConnections.DaemonConnection
+    daemonConnections.setPooledConnectionForTest('devbox', link('devbox', 'd-one'))
+    daemonConnections.setPooledConnectionForTest('devbox-net', link('devbox-net', 'd-one'))
+    daemonConnections.setPooledConnectionForTest('otherbox', link('otherbox', 'd-two'))
+    try {
+      expect(errorOf(await relay('devbox-net', 'host_exec', { host: 'macbox', command: 'echo over-the-other-link' }, { kind: 'armed', id: 'trg-armed' }))).toBe('')
+      expect(sent.filter((s) => s.cmd === 'exec.run').at(-1)!.params.taskId).toBe(ownerTask)
+      // A test of the check, started under one alias, relayed over the other, both ways.
+      const viaNet = noteTestRun(ownerTask, 'devbox-net', 30)!
+      expect(errorOf(await relay('devbox', 'host_exec', { host: 'macbox', command: 'true' }, { kind: 'test', id: viaNet }))).toBe('')
+      const viaSsh = noteTestRun(ownerTask, 'devbox', 30)!
+      expect(errorOf(await relay('devbox-net', 'host_exec', { host: 'macbox', command: 'true' }, { kind: 'test', id: viaSsh }))).toBe('')
+      // The caller is on the check's own host, whichever link relayed it.
+      const { triggerCallerInScope, withTriggerCaller } = await import('../../src/core/hosts/trigger-caller.js')
+      const token = holdRelayTrigger({ kind: 'armed', id: 'trg-armed' }, 'devbox-net')
+      expect((await withTriggerCaller(token, () => triggerCallerInScope()))?.host).toBe('devbox')
+      // Another daemon is still another host, and so is a link with no daemon confirmed on it.
+      expect(errorOf(await relay('otherbox', 'host_exec', { host: 'macbox', command: 'true' }, { kind: 'armed', id: 'trg-armed' }))).toContain('trigger_wrong_host')
+      daemonConnections.setPooledConnectionForTest('devbox-net', link('devbox-net', null as never))
+      expect(errorOf(await relay('devbox-net', 'host_exec', { host: 'macbox', command: 'true' }, { kind: 'armed', id: 'trg-armed' }))).toContain('trigger_wrong_host')
+      daemonConnections.setPooledConnectionForTest('devbox-net', link('devbox-net', 'd-one'))
+      expect(errorOf(await relay('otherbox', 'host_exec', { host: 'macbox', command: 'true' }, { kind: 'test', id: viaSsh }))).toContain('trigger_test_over')
+    } finally {
+      for (const h of ['devbox', 'devbox-net', 'otherbox']) daemonConnections.setPooledConnectionForTest(h, null)
+    }
   })
 
   it('a token this server never held, or one with no caller behind it, acts for no one', async () => {

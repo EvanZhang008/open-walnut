@@ -31,6 +31,7 @@ import crypto from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { log } from '../../logging/index.js'
 import { HostExecError, normHost, type Caller } from './host-exec-target.js'
+import { oneHost } from './session-host-origin.js'
 
 export const CALLER_TRIGGER_HEADER = 'x-walnut-caller-trigger'
 
@@ -116,17 +117,21 @@ export async function triggerCallerInScope(now = Date.now()): Promise<Caller | n
   const h = heldOf(scope.getStore(), now)
   if (!h) return null
   const { getTask } = await import('../task-manager.js')
-  const titled = async (taskId: string): Promise<Caller> => {
+  // The caller is on the host its check runs on, under that host's own alias, whichever alias's
+  // link relayed the call: the same-host checks downstream (host-exec-target, host-copy, grants)
+  // then answer the same over either link.
+  const titled = async (taskId: string, host: string): Promise<Caller> => {
     const task = await getTask(taskId).catch(() => undefined)
     if (!task) throw refused(`This check acts for task ${taskId}, which no longer exists; nothing ran.`, 'trigger_no_task', { taskId })
-    return { sid: `trigger:${h.ref.id}`, taskId, taskTitle: task.title ?? taskId, host: h.host }
+    return { sid: `trigger:${h.ref.id}`, taskId, taskTitle: task.title ?? taskId, host }
   }
   if (h.ref.kind === 'test') {
     const run = testRuns.get(h.ref.id)
-    if (!run || run.until <= now || run.host !== h.host) {
+    // One box can be two host aliases of one daemon, which relays over either link (oneHost).
+    if (!run || run.until <= now || !(await oneHost(h.host, run.host))) {
       throw refused('This test of a check is over, or ran on another host; nothing ran.', 'trigger_test_over')
     }
-    return titled(run.taskId)
+    return titled(run.taskId, run.host)
   }
   const { getRoutine } = await import('../routines/routines-core.js')
   const job = await getRoutine(h.ref.id).then((r) => r.job as Record<string, unknown>).catch(() => null)
@@ -136,8 +141,9 @@ export async function triggerCallerInScope(now = Date.now()): Promise<Caller | n
     throw refused(`Trigger ${h.ref.id} is paused or has no check; nothing ran.`, 'trigger_off', { triggerId: h.ref.id })
   }
   const checkHost = normHost(typeof check.host === 'string' ? check.host.trim() : '')
-  if (checkHost !== h.host) {
-    // The daemon of one host vouches only for its own checks.
+  if (!(await oneHost(h.host, checkHost))) {
+    // The daemon of one host vouches only for its own checks: under any of its aliases (2026-11-19:
+    // a check armed on clouddev called in over newdev's link to the same daemon, refused).
     log.session.warn('trigger caller: a host relayed a call for a check that runs elsewhere', { triggerId: h.ref.id, relayHost: h.host, checkHost })
     throw refused(`Trigger ${h.ref.id}'s check runs on ${checkHost}, not on ${h.host}; nothing ran.`, 'trigger_wrong_host', { triggerId: h.ref.id })
   }
@@ -145,7 +151,7 @@ export async function triggerCallerInScope(now = Date.now()): Promise<Caller | n
   if (!taskId) {
     throw refused(`Trigger ${h.ref.id}'s check was written by no task's session, so it runs nothing on other hosts; re-arm it from the task's session.`, 'trigger_no_task', { triggerId: h.ref.id })
   }
-  return titled(taskId)
+  return titled(taskId, checkHost)
 }
 
 /**
