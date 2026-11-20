@@ -70,6 +70,19 @@ export function stringCharsOf(value: unknown, depth = 4): number {
   return n;
 }
 
+/**
+ * stringCharsOf over every `step`-th row, scaled back up: a record cache of thousands of rows is
+ * estimated in a fraction of a full walk (the sample runs on the event loop every 10 min).
+ */
+export function sampledStringChars(rows: readonly unknown[] | null | undefined, step = 8): number {
+  if (!rows || rows.length === 0) return 0;
+  if (rows.length <= step * 4) return stringCharsOf(rows as unknown[]);
+  let n = 0;
+  let seen = 0;
+  for (let i = 0; i < rows.length; i += step) { n += stringCharsOf(rows[i], 3); seen++; }
+  return Math.round((n / seen) * rows.length);
+}
+
 function bytesOf(r: MemoryHolderReading): number {
   return Math.round(r.bytes ?? (r.chars ?? 0) * 2);
 }
@@ -89,6 +102,17 @@ export function readMemoryHolders(): MemoryHolderRow[] {
 const MB = 1048576;
 const mb = (n: number | undefined): number | undefined => (n === undefined ? undefined : Math.round(n / MB));
 
+export interface ProcessMemoryMb { rssMb: number; heapUsedMb: number; heapTotalMb: number; externalMb: number; arrayBuffersMb: number }
+
+/** This process's memory in whole MB: the one place every report and log line reads it. */
+export function processMemoryMb(): ProcessMemoryMb {
+  const m = process.memoryUsage();
+  return {
+    rssMb: mb(m.rss)!, heapUsedMb: mb(m.heapUsed)!, heapTotalMb: mb(m.heapTotal)!,
+    externalMb: mb(m.external)!, arrayBuffersMb: mb(m.arrayBuffers)!,
+  };
+}
+
 interface JscModule {
   heapStats(): { heapSize: number; heapCapacity: number; extraMemorySize: number; objectCount: number; objectTypeCounts: Record<string, number> };
   memoryUsage(): { current: number; peak: number; currentCommit: number; peakCommit: number };
@@ -107,25 +131,23 @@ async function loadJsc(): Promise<JscModule | null> {
 
 export interface MemoryReport {
   uptimeSec: number;
-  process: { rssMb: number; heapUsedMb: number; heapTotalMb: number; externalMb: number; arrayBuffersMb: number };
+  process: ProcessMemoryMb;
   /** The JS engine's allocator (Bun): what it holds now and its high-water mark. */
   engine?: { currentMb: number; peakMb: number; currentCommitMb: number; peakCommitMb: number };
   /** Only with `heap: true`: walks the whole heap (tens of ms per million objects). */
   heap?: { liveMb: number; capacityMb: number; extraMb: number; objects: number; topTypes: Array<[string, number]> };
+  /** Set when `heap` was asked for but not walked (one walk a minute, one at a time). */
+  heapSkipped?: string;
   holders: Array<MemoryHolderRow & { mb: number; budgetMb: number }>;
   holdersMb: number;
 }
 
 /** The report GET /api/system/memory answers. */
-export async function memoryReport(opts: { heap?: boolean } = {}): Promise<MemoryReport> {
-  const m = process.memoryUsage();
+export async function memoryReport(opts: { heap?: boolean } = {}, now = Date.now()): Promise<MemoryReport> {
   const rows = readMemoryHolders();
   const report: MemoryReport = {
     uptimeSec: Math.round(process.uptime()),
-    process: {
-      rssMb: mb(m.rss)!, heapUsedMb: mb(m.heapUsed)!, heapTotalMb: mb(m.heapTotal)!,
-      externalMb: mb(m.external)!, arrayBuffersMb: mb(m.arrayBuffers)!,
-    },
+    process: processMemoryMb(),
     holders: rows.map((r) => ({ ...r, mb: Math.round((r.bytes / MB) * 10) / 10, budgetMb: Math.round(r.budgetBytes / MB) })),
     holdersMb: Math.round(rows.reduce((n, r) => n + r.bytes, 0) / MB),
   };
@@ -133,7 +155,10 @@ export async function memoryReport(opts: { heap?: boolean } = {}): Promise<Memor
   if (j) {
     const u = j.memoryUsage();
     report.engine = { currentMb: mb(u.current)!, peakMb: mb(u.peak)!, currentCommitMb: mb(u.currentCommit)!, peakCommitMb: mb(u.peakCommit)! };
-    if (opts.heap) {
+    if (opts.heap && now - lastHeapWalkAt < HEAP_WALK_EVERY_MS) {
+      report.heapSkipped = `the heap was walked ${Math.round((now - lastHeapWalkAt) / 1000)} s ago; one walk a minute`;
+    } else if (opts.heap) {
+      lastHeapWalkAt = now;
       const h = j.heapStats();
       report.heap = {
         liveMb: mb(h.heapSize)!, capacityMb: mb(h.heapCapacity)!, extraMb: mb(h.extraMemorySize)!, objects: h.objectCount,
@@ -143,6 +168,10 @@ export async function memoryReport(opts: { heap?: boolean } = {}): Promise<Memor
   }
   return report;
 }
+
+/** heapStats() walks every object on the event loop (about 50 ms per million): at most one a minute. */
+const HEAP_WALK_EVERY_MS = 60_000;
+let lastHeapWalkAt = -Infinity;
 
 /** How often the health tick logs a sample. */
 export const SAMPLE_EVERY_MS = 10 * 60_000;
@@ -158,10 +187,9 @@ const overWarnedAt = new Map<string, number>();
 export function sampleMemory(now = Date.now()): void {
   if (now - lastSampleAt < SAMPLE_EVERY_MS) return;
   lastSampleAt = now;
-  const m = process.memoryUsage();
   const rows = readMemoryHolders();
   log.obs.info('memory sample', {
-    rssMb: mb(m.rss), heapUsedMb: mb(m.heapUsed), heapTotalMb: mb(m.heapTotal), externalMb: mb(m.external),
+    ...processMemoryMb(),
     uptimeSec: Math.round(process.uptime()),
     holdersMb: Math.round(rows.reduce((n, r) => n + r.bytes, 0) / MB),
     top: rows.slice(0, 8).map((r) => `${r.name}=${Math.round(r.bytes / MB)}MB/${r.entries}`).join(' '),
@@ -178,5 +206,6 @@ export function sampleMemory(now = Date.now()): void {
 /** Reset sampler state (tests only). */
 export function _resetMemoryLedgerForTesting(): void {
   lastSampleAt = 0;
+  lastHeapWalkAt = -Infinity;
   overWarnedAt.clear();
 }

@@ -384,6 +384,8 @@ export class SessionHealthMonitor {
     try {
       const { checkProcessFdHealth } = await import('./observability/process-health.js')
       checkProcessFdHealth()
+    } catch { /* observability is best-effort */ }
+    try {
       // Memory ledger: one sample line per 10 min, a warn for a cache over its budget.
       const { sampleMemory } = await import('./observability/memory-ledger.js')
       sampleMemory()

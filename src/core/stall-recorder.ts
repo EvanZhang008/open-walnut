@@ -77,6 +77,7 @@ import { cpuCheckpoint, cpuCheckpoints, startCpuCheckpoints, stopCpuCheckpoints 
 import { refreshVmBaseline, resetSystemContext, sampleMemContext } from './stall-recorder-system.js';
 import { pruneStallDir, writeWhole } from './stall-recorder-retention.js';
 import { connectInspectorDriver, stallViews, type CpuProfile, type ProfilerDriver } from './stall-recorder-profiler.js';
+import { processMemoryMb } from './observability/memory-ledger.js';
 
 export type { CpuProfile, ProfilerDriver } from './stall-recorder-profiler.js';
 export { holdVerdict, profileHoldShare, type HoldContext, type HoldVerdict, type ProfileHold } from './stall-recorder-hold.js';
@@ -496,8 +497,8 @@ export async function startStallRecorder(options: StallRecorderOptions = {}): Pr
 }
 
 function memoryFields(): Record<string, number> {
-  const m = process.memoryUsage();
-  return { rssMb: mb(m.rss), heapUsedMb: mb(m.heapUsed), heapTotalMb: mb(m.heapTotal), externalMb: mb(m.external) };
+  const { rssMb, heapUsedMb, heapTotalMb, externalMb } = processMemoryMb();
+  return { rssMb, heapUsedMb, heapTotalMb, externalMb };
 }
 
 export async function stopStallRecorder(): Promise<void> {

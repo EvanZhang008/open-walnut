@@ -1040,11 +1040,18 @@ const SEARCH_CANDIDATE_LIMIT = 2000
 
 // GET /api/sessions?q=<filter>
 /** Multi-KB spawn-time bookkeeping never belongs on a LIST payload — it is
- *  read back record-by-record where needed (side-thread fork, cold resume). */
-function stripHeavyRecordFields<T extends { appliedAppendSystemPrompt?: string }>(sessions: T[]): T[] {
+ *  read back record-by-record where needed (side-thread fork, cold resume).
+ *  A lane's persona (`profile.systemPrompt`, ~70 KB) neither: the store cache
+ *  already leaves it out of stopped sessions, so a list answers the same shape
+ *  for every row. */
+function stripHeavyRecordFields<T extends { appliedAppendSystemPrompt?: string; profile?: { systemPrompt?: string } }>(sessions: T[]): T[] {
   return sessions.map((s) => {
-    if (s.appliedAppendSystemPrompt === undefined) return s
+    if (s.appliedAppendSystemPrompt === undefined && s.profile?.systemPrompt === undefined) return s
     const { appliedAppendSystemPrompt: _dropped, ...rest } = s
+    if (rest.profile?.systemPrompt !== undefined) {
+      const { systemPrompt: _persona, ...profile } = rest.profile
+      return { ...rest, profile } as T
+    }
     return rest as T
   })
 }

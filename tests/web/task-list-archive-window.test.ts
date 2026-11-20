@@ -32,6 +32,12 @@ describe('archiveRowsOutsideWindow', () => {
     expect(kept.map((t) => t.id)).toEqual([archived.id, fallbackStamp.id]);
   });
 
+  it('drops an old completed ask the answer lacks: asks always ride the window, so it is deleted', () => {
+    const ask = old({ walnut_agent: true } as Partial<Task>);
+    const askProject = old({ project: 'Ask Walnut' });
+    expect(archiveRowsOutsideWindow([ask, askProject], [], 7, NOW)).toEqual([]);
+  });
+
   it('never keeps a row the answer carries', () => {
     const archived = old();
     expect(archiveRowsOutsideWindow([archived], [archived], 7, NOW)).toEqual([]);

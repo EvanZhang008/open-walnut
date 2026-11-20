@@ -316,8 +316,8 @@ const ARCHIVE_EDGE_SLACK_MS = 60 * 60 * 1000;
  * in the last `withinDays`) and keeps the archive it already has: refetching all of it
  * (7.9k tasks, 11.5 MB of JSON on 2026-11-20) at every socket reconnect and bulk event
  * was the page's biggest repeated allocation. The rows kept are the ones the server's window
- * omits (core/task-recent-completed.ts): completed, not pinned or tiered, finished before the
- * window. Anything else missing from the answer is gone for real and is dropped.
+ * omits (core/task-recent-completed.ts, the same rule): completed, not pinned, tiered or an ask,
+ * finished before the window. Anything else missing from the answer is gone for real and is dropped.
  */
 export function archiveRowsOutsideWindow(prev: Task[], fetched: Task[], withinDays: number, now = Date.now()): Task[] {
   const fetchedIds = new Set(fetched.map((t) => t.id));
@@ -325,6 +325,8 @@ export function archiveRowsOutsideWindow(prev: Task[], fetched: Task[], withinDa
   return prev.filter((t) => {
     if (fetchedIds.has(t.id)) return false;
     if (!(t.status === 'done' || t.phase === 'COMPLETE') || t.pinned || t.focus_tier) return false;
+    // Asks always ride the window (isAnyAsk on the server): one missing from it is deleted.
+    if (t.walnut_agent === true || /^ask\s/i.test((t.project ?? '').trim())) return false;
     const doneAt = Date.parse(t.completed_at ?? t.updated_at ?? '');
     return Number.isFinite(doneAt) && doneAt < edge;
   });

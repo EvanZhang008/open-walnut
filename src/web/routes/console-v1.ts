@@ -30,6 +30,7 @@ import { relayControlAction, sendV1Error as sendError } from './v1-control-relay
 import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
 import { companionSkillRoutes } from '../../replica/companion-copy-routes.js'
 import { experimentalConfigView } from '../../core/experimental-prefs.js'
+import { processMemoryMb } from '../../core/observability/memory-ledger.js'
 
 export const consoleV1Router = Router()
 // The companion's skill reads take the Mac's copy, its skill writes need the Mac (stage 4d); a pass-through elsewhere.
@@ -129,14 +130,14 @@ consoleV1Router.get('/config', async (_req: Request, res: Response, next: NextFu
     // internal route: visible without shell access).
     let processNice = 0
     try { processNice = (await import('node:os')).getPriority() } catch { /* diagnostics only */ }
-    const mem = process.memoryUsage()
+    const { rssMb, heapUsedMb } = processMemoryMb()
     res.json({
       config,
       cloud: isCompanion(),
       processNice,
       memory: {
-        rssMb: Math.round(mem.rss / 1048576),
-        heapUsedMb: Math.round(mem.heapUsed / 1048576),
+        rssMb,
+        heapUsedMb,
         uptimeSec: Math.round(process.uptime()),
       },
     })

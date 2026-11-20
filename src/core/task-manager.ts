@@ -63,7 +63,7 @@ import { MERGE_EVENT_SOURCE } from './task-deleted-id.js';
 import { checkLaunchDefaultsPatch, checkLaunchDefaultsShape } from './sessions/project-launch-defaults.js';
 import { checkClaudePluginsOffPatch } from './sessions/claude-plugins-off.js';
 import { pointTaskAtSession } from './sessions/task-session-link.js';
-import { registerMemoryHolder, stringCharsOf } from './observability/memory-ledger.js';
+import { registerMemoryHolder, sampledStringChars } from './observability/memory-ledger.js';
 import type { TaskMergedInto } from './event-types.js';
 import {
   clearProjectTombstone,
@@ -180,7 +180,7 @@ let taskStoreIndex: Map<string, Task> | null = null;
 registerMemoryHolder({
   name: 'task-manager.store',
   budgetBytes: 160 * 1024 * 1024,
-  read: () => ({ entries: taskStoreCache?.tasks.length ?? 0, chars: stringCharsOf(taskStoreCache?.tasks) }),
+  read: () => ({ entries: taskStoreCache?.tasks.length ?? 0, chars: sampledStringChars(taskStoreCache?.tasks) }),
 });
 
 /** Drop the cached whole-store snapshot. Called from withWriteLock.finally. */

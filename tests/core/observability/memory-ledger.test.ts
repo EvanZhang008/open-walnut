@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   registerMemoryHolder, readMemoryHolders, memoryReport, sampleMemory, stringCharsOf,
-  memoryHolderNames, SAMPLE_EVERY_MS, _resetMemoryLedgerForTesting,
+  memoryHolderNames, SAMPLE_EVERY_MS, sampledStringChars, _resetMemoryLedgerForTesting,
 } from '../../../src/core/observability/memory-ledger.js';
 import { log } from '../../../src/logging/index.js';
 
@@ -57,6 +57,31 @@ describe('memoryReport', () => {
       expect(r.process.rssMb).toBeGreaterThan(0);
       expect(r.holders.find((h) => h.name === 'test.r')).toMatchObject({ entries: 3, mb: 2, budgetMb: 1, overBudget: true });
     } finally { off(); }
+  });
+});
+
+describe('memoryReport heap walk', () => {
+  it('walks the heap at most once a minute', async () => {
+    const t0 = 5_000_000_000;
+    const first = await memoryReport({ heap: true }, t0);
+    const second = await memoryReport({ heap: true }, t0 + 1000);
+    const third = await memoryReport({ heap: true }, t0 + 61_000);
+    // Under Node there is no bun:jsc, so neither field appears; under Bun the second is refused.
+    if (first.engine) {
+      expect(first.heap?.objects).toBeGreaterThan(0);
+      expect(second.heap).toBeUndefined();
+      expect(second.heapSkipped).toMatch(/one walk a minute/);
+      expect(third.heap?.objects).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe('sampledStringChars', () => {
+  it('scales a sample of every 8th row back up, and walks small lists whole', () => {
+    const rows = Array.from({ length: 800 }, () => ({ t: 'x'.repeat(10) }));
+    expect(sampledStringChars(rows)).toBe(800 * 11);
+    expect(sampledStringChars([{ a: 'abc' }])).toBe(4);
+    expect(sampledStringChars(null)).toBe(0);
   });
 });
 

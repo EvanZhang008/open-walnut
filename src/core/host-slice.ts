@@ -162,7 +162,7 @@ function inHostCopy(s: SessionRecord, now: number): boolean {
 export async function buildHostSlice(hostKey: string | readonly string[], now = Date.now()): Promise<HostSlice> {
   const list = (typeof hostKey === 'string' ? [hostKey] : hostKey).map(normalizeHostKey);
   const keys = new Set(list);
-  const [{ listSessions, isListableSession }, { listTasksByIds }, requests] = await Promise.all([
+  const [{ listSessions, isListableSession, withHeavyFields }, { listTasksByIds }, requests] = await Promise.all([
     import('./session-tracker.js'),
     import('./task-manager.js'),
     import('./session-requests.js'),
@@ -270,7 +270,8 @@ export async function buildHostSlice(hostKey: string | readonly string[], now = 
         // Only while due: the host adds it once and journals it as told.
         const sid = s.claudeSessionId;
         const busy = noticeDelivering(sid) || noticeInFlight(queues[sid] ?? []);
-        const routing = task && !busy ? instructionNoticeForHost(s, task) : null;
+        // The notice reads the spawn prompt, which the list leaves out of a stopped session.
+        const routing = task && !busy ? instructionNoticeForHost(withHeavyFields(s), task) : null;
         return routing ? { taskRoutingPolicy: routing.policy, taskRoutingDue: routing.due } : {};
       })(),
       ...(() => {

@@ -70,6 +70,7 @@ import { permissionsApplicable } from '../../core/permissions/applicable.js'
 import { withoutCloudBoxHost } from '../../core/hosts/cloud-box-host.js'
 import { walnutRequestTagHeaders } from '../../core/sessions/request-tag.js'
 import { keepFoundHostScan } from '../../core/hosts/found-hosts.js'
+import { processMemoryMb } from '../../core/observability/memory-ledger.js'
 
 // GET /api/config
 configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
@@ -105,14 +106,8 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
     // symptom was invisible from the UI, so the number is now always available.
     // uptimeSec is the denominator that makes it meaningful (2 GB after a week is
     // ordinary; 2 GB after five minutes is the bug).
-    const mem = process.memoryUsage()
-    const memory = {
-      rssMb: Math.round(mem.rss / 1048576),
-      heapUsedMb: Math.round(mem.heapUsed / 1048576),
-      heapTotalMb: Math.round(mem.heapTotal / 1048576),
-      externalMb: Math.round(mem.external / 1048576),
-      uptimeSec: Math.round(process.uptime()),
-    }
+    const { rssMb, heapUsedMb, heapTotalMb, externalMb } = processMemoryMb()
+    const memory = { rssMb, heapUsedMb, heapTotalMb, externalMb, uptimeSec: Math.round(process.uptime()) }
     // canRevealLocalFiles: whether POST /api/files/reveal can hand a path to the
     // desktop (`open`): the Mac's console only, never a replica (its desktop is not
     // the person's). The UI hides

@@ -43,7 +43,7 @@ import { isAcpEngine, resolveEngine } from './agents/engine-registry.js';
 import { CLOUD_BOX_DEFAULT_IDLE_LIMIT, CLOUD_BOX_DEFAULT_LIMIT, CLOUD_BOX_HOST_ALIAS } from './hosts/cloud-box-host.js';
 import { NeedsLeaderError } from './replication/needs-leader.js';
 import { OrgError } from './org/org-store.js';
-import { registerMemoryHolder, stringCharsOf } from './observability/memory-ledger.js';
+import { registerMemoryHolder, sampledStringChars } from './observability/memory-ledger.js';
 import {
   assertOutsideHistoryImport, assertSessionHistoryWrite, isHistoryRefusal, sessionHistoryWriteNeedsCheck,
   taskDbHandle, type SessionHistoryFields,
@@ -82,7 +82,7 @@ let sessionStoreCacheDataVersion: string | null = null;
 registerMemoryHolder({
   name: 'session-tracker.store',
   budgetBytes: 160 * 1024 * 1024,
-  read: () => ({ entries: sessionStoreCache?.length ?? 0, chars: stringCharsOf(sessionStoreCache) }),
+  read: () => ({ entries: sessionStoreCache?.length ?? 0, chars: sampledStringChars(sessionStoreCache) }),
 });
 
 /**
@@ -126,6 +126,47 @@ function totalChanges(db: NonNullable<ReturnType<typeof getDb>>): number {
   return db.prepare('SELECT total_changes() AS n').pluck().get() as number;
 }
 
+// ── Heavy prompt fields stay in SQLite for sessions that are not live ─────
+//
+// Two fields are most of the cache: the system prompt a CLI was spawned with
+// (`appliedAppendSystemPrompt`, ~22 KB) and a lane's persona (`profile.systemPrompt`,
+// ~70 KB). On the maintainer's board (2026-11-20) 7,116 of 7,203 rows were stopped and
+// those two fields of theirs were about 90 MB of the server's heap. Everything that needs
+// them for a session reads its row straight from SQLite (resume, respawn, prompt refresh,
+// notices, lanes, forks: getSessionByClaudeId), every writer re-reads its row inside the
+// write transaction, and replication strips both fields anyway. A cached row of a stopped
+// or errored session therefore leaves them out; the one list reader that needs them
+// (host-slice's notice) takes the row through withHeavyFields. A row that comes back to
+// life is re-read by the write-through patch and carries them again.
+// Ratchet: tests/core/session-store-heavy-fields.test.ts.
+const SLIM_STATUSES = new Set(['stopped', 'error']);
+
+/** The cached copy of a row: without the heavy prompt fields when the session is not live. */
+function slimForCache(record: SessionRecord): SessionRecord {
+  if (!SLIM_STATUSES.has(record.process_status ?? '')) return record;
+  const hasPrompt = record.appliedAppendSystemPrompt !== undefined;
+  const hasPersona = record.profile?.systemPrompt !== undefined;
+  if (!hasPrompt && !hasPersona) return record;
+  const slim: SessionRecord = { ...record };
+  if (hasPrompt) delete slim.appliedAppendSystemPrompt;
+  if (hasPersona) {
+    const { systemPrompt: _persona, ...rest } = record.profile!;
+    slim.profile = rest as SessionRecord['profile'];
+  }
+  return slim;
+}
+
+/**
+ * The record with its heavy prompt fields: itself when it has them, else its row from
+ * SQLite. For a reader that got the record from a list (listSessions and the like) and
+ * needs `appliedAppendSystemPrompt` or `profile.systemPrompt`.
+ */
+export function withHeavyFields(record: SessionRecord): SessionRecord {
+  if (!SLIM_STATUSES.has(record.process_status ?? '')) return record;
+  if (record.appliedAppendSystemPrompt !== undefined && (record.profile === undefined || record.profile.systemPrompt !== undefined)) return record;
+  return getSessionByClaudeIdSync(record.claudeSessionId) ?? record;
+}
+
 /** Store-shape counters for tests and the daily loop check. */
 const sessionStoreStats = { fullScans: 0, patchedRows: 0, cloneReads: 0, viewReads: 0, clonedRows: 0 };
 export function _sessionStoreStatsForTesting(): Readonly<typeof sessionStoreStats> { return { ...sessionStoreStats }; }
@@ -155,7 +196,7 @@ function patchSessionCacheRows(ids: ReadonlySet<string>): void {
     for (const id of chunk) {
       const row = present.get(id);
       if (!row) { removed.add(id); continue; }
-      const record = rowToSession(row);
+      const record = slimForCache(rowToSession(row));
       const index = at.get(id);
       if (index === undefined) {
         at.set(id, sessionStoreCache.length);
@@ -496,7 +537,7 @@ async function loadStoreRows(): Promise<SessionRecord[]> {
       rows = db.prepare('SELECT * FROM sessions').all() as Record<string, any>[];
       after = dataVersion();
     } while (before !== after);
-    sessionStoreCache = rows.map(rowToSession);
+    sessionStoreCache = rows.map((row) => slimForCache(rowToSession(row)));
     sessionStoreCacheDataVersion = after;
     sessionStoreStats.fullScans += 1;
   }

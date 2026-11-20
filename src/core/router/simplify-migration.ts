@@ -66,8 +66,9 @@ function defaults(deps: RouterSimplifyDeps): Required<RouterSimplifyDeps> {
       await updateTaskRaw(taskId, (current) => current.router_area_id ? null : { router_area_id: areaId }, { source: 'router-simplify-restore', emitEvent: false });
     }),
     listProfiles: deps.listProfiles ?? (async () => {
-      const { listSessions } = await import('../session-tracker.js');
-      return (await listSessions()).map((record) => ({ sessionId: record.claudeSessionId, profile: record.profile }));
+      // The backup must hold each profile whole: the list leaves a stopped session's persona out.
+      const { listSessions, withHeavyFields } = await import('../session-tracker.js');
+      return (await listSessions()).map((record) => ({ sessionId: record.claudeSessionId, profile: (record.profile ? withHeavyFields(record) : record).profile }));
     }),
     setProfile: deps.setProfile ?? (async (sessionId, profile) => {
       const { updateSessionRecord } = await import('../session-tracker.js');

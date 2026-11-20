@@ -88,14 +88,10 @@ function historyCacheSet(sid: string, data: CachedHistory): void {
   // Delete first so re-insert moves it to the end (most-recently-used)
   historyCache.delete(sid);
   historyCache.set(sid, data);
-  if (historyCache.size > MAX_CACHED) {
-    const oldest = historyCache.keys().next().value;
-    if (oldest) historyCache.delete(oldest);
-  }
-  // Then the message budget, least recently used first, never the one just written.
+  // Least recently used out first, never the one just written, until both bounds hold.
   let held = historyCacheMessageCount();
   for (const [key, entry] of historyCache) {
-    if (held <= MAX_CACHED_MESSAGES || key === sid) break;
+    if ((historyCache.size <= MAX_CACHED && held <= MAX_CACHED_MESSAGES) || key === sid) break;
     historyCache.delete(key);
     held -= entry.messages.length;
   }

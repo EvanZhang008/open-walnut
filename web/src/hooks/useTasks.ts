@@ -478,6 +478,9 @@ export function folderSubtreeIds(rootId: string, meta: Record<string, FolderMeta
   return out;
 }
 
+/** How long a loaded archive is kept as it is before a refetch brings the whole list again. */
+const ARCHIVE_REFRESH_MS = 30 * 60_000;
+
 export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   const [allTasks, setTasks] = useState<Task[]>([]);
   // Rows held back while their delete can still be undone. Every reader sees `tasks`;
@@ -496,9 +499,11 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   // Once a surface asks for the archive every later list fetch is the whole
   // list, so a refetch can keep dropping rows the answer no longer carries.
   const wantAllTasks = useRef(false);
-  // The whole archive is on the page: later refetches ask for the recent window only and keep
-  // the archive rows they already hold (mergeWindowedRefetch).
-  const archiveLoaded = useRef(false);
+  // When the whole archive last came (-Infinity: never). Until it is ARCHIVE_REFRESH_MS old, refetches
+  // ask for the recent window only and keep the archive rows they hold (mergeWindowedRefetch);
+  // after that the next refetch brings the whole list again, so an archive row deleted or
+  // edited while the page was away is put right at most that late.
+  const archiveAt = useRef(-Infinity);
   const [error, setError] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const opErrorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -725,7 +730,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     // fetchTasks takes no query: `/` and `/tasks` share this one cache, so every
     // condition is evaluated in the browser (see api/tasks.ts). `filter` stays a
     // refetch key + log field only.
-    const askAll = wantAllTasks.current && !archiveLoaded.current;
+    const askAll = wantAllTasks.current && performance.now() - archiveAt.current >= ARCHIVE_REFRESH_MS;
     tasksApi.fetchTaskList({
       ...(askAll ? {} : { recentCompletedDays: tasksApi.RECENT_COMPLETED_DAYS }),
       onDispatch: () => {
@@ -738,8 +743,8 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
         endPerf?.(`${tasks.length} tasks`);
         log.info('tasks', 'fetch complete', { count: tasks.length, completedHidden: hidden, elapsed, attempt });
         hasLoadedRef.current = true;
-        if (askAll) archiveLoaded.current = true;
-        const keepArchive = !askAll && archiveLoaded.current;
+        if (askAll) archiveAt.current = performance.now();
+        const keepArchive = !askAll && wantAllTasks.current;
         setCompletedHidden(keepArchive ? 0 : hidden);
         // startTransition: adopting ~6k tasks renders thousands of rows — as a
         // sync render that was a 2-3s main-thread block on every page load.
