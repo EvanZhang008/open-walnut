@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { log } from '../../logging/index.js';
 import { USAGE_DB_FILE } from '../../constants.js';
 import { reopenIfWiped } from '../../lib/sqlite-wiped.js';
-import { ResponseUsageStore, type UsageEvidence, type UsageOwner, type SourceCheck } from './response-store.js';
+import { PluginDatabaseClient } from '../plugins/plugin-storage.js';
+import { ResponseUsageStore, type OverviewPart, type UsageEvidence, type UsageOwner, type UsageReader, type SourceCheck } from './response-store.js';
 import { getConfig } from '../config-manager.js';
 import { listSessions } from '../session-tracker.js';
 import { link } from '../hosts/link.js';
@@ -56,8 +57,59 @@ export function hostSince(host: string): string | undefined {
   const at = until ? Date.parse(until) : NaN;
   return Number.isFinite(at) ? new Date(at - OVERLAP_MS).toISOString() : undefined;
 }
-export function reconciledOverview(filter: UsageFilter, limit: number) {
-  return { ...responseUsageStore().getOverview(filter, limit), collection: state };
+/** A worker's connection to the usage database, for the store it was opened beside. */
+let reader: { store: ResponseUsageStore; client: PluginDatabaseClient } | null = null;
+let readerWarned = false;
+
+/** Drops the worker's connection; the next overview opens another. */
+function dropReader(client: PluginDatabaseClient): void {
+  if (reader?.client !== client) return;
+  reader = null;
+  void client.dispose().catch(() => {});
+}
+
+/** The overview's reader: a worker's connection, so its scans never hold the loop thread; this
+ *  store's own (undefined) when no worker can start. A store reopened after a wipe gets a new one
+ *  (the old connection holds the deleted file), and so does a worker that died: a read it refuses
+ *  drops it, and that one overview reads on this store's own connection. Made in one synchronous
+ *  step, so two first requests share one worker. */
+function usageReader(current: ResponseUsageStore): UsageReader | undefined {
+  if (reader?.store !== current) {
+    if (reader) dropReader(reader.client);
+    try {
+      reader = { store: current, client: new PluginDatabaseClient(USAGE_DB_FILE, undefined, { existingOnly: true }) };
+    } catch (err) {
+      if (!readerWarned) log.usage.warn('usage overview reads on the loop thread: no worker', { error: String(err) });
+      readerWarned = true;
+      return undefined;
+    }
+  }
+  const { client } = reader;
+  const own = current.ownReader();
+  const guard = async <T>(read: () => Promise<T>, fallback: () => Promise<T>): Promise<T> => {
+    try { return await read(); } catch (err) {
+      // A statement error is the query's own: the store's connection answers it the same.
+      log.usage.warn('usage overview worker read failed; reading on the loop thread', { error: String(err) });
+      dropReader(client);
+      return fallback();
+    }
+  };
+  return {
+    get: (sql, args) => guard(() => client.get(sql, [...args]), () => own.get(sql, args)),
+    all: (sql, args) => guard(() => client.all(sql, [...args]), () => own.all(sql, args)),
+  };
+}
+
+/** Test seam: the worker's connection goes. */
+export async function _closeUsageReaderForTesting(): Promise<void> {
+  const r = reader;
+  reader = null;
+  await r?.client.dispose().catch(() => {});
+}
+
+export async function reconciledOverview(filter: UsageFilter, limit: number, parts?: readonly OverviewPart[]) {
+  const current = responseUsageStore();
+  return { ...await current.getOverview(filter, limit, { reader: usageReader(current), parts }), collection: state };
 }
 
 export function collectUsage(since?: string, until = new Date().toISOString()): Promise<unknown> {

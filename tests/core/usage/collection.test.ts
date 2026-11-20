@@ -37,7 +37,7 @@ describe('daemon-backed usage collection', () => {
     finish(page('2026-10-13T00:00:00Z'));
     await first;
     expect(collectionState()).toMatchObject({ running: false, id, until: '2026-10-13T00:00:00Z' });
-    expect(responseUsageStore().getOverview({}).accuracy.until).toBe('2026-10-13T00:00:00Z');
+    expect((await responseUsageStore().getOverview({})).accuracy.until).toBe('2026-10-13T00:00:00Z');
   });
   it('preserves the active range when a full rebuild joins a partial scan', async () => {
     let finish!: (value: ReturnType<typeof page>) => void;
@@ -57,14 +57,14 @@ describe('daemon-backed usage collection', () => {
     mocks.send.mockResolvedValueOnce({ ...page('2026-10-14T00:00:00Z'), done: false, key: 'page-key', offset: 500 })
       .mockRejectedValueOnce(new Error('Page timed out'));
     await collectUsage(undefined, '2026-10-14T00:00:00Z');
-    expect(responseUsageStore().getOverview({}).accuracy.until).toBe('2026-10-13T00:00:00Z');
+    expect((await responseUsageStore().getOverview({})).accuracy.until).toBe('2026-10-13T00:00:00Z');
     // The failure is said beside the checks of the last finished pass, which stay.
-    const checks = responseUsageStore().getOverview({}).accuracy.checks;
+    const checks = (await responseUsageStore().getOverview({})).accuracy.checks;
     expect(checks.at(-1)?.source).toBe('Host collection');
     expect(checks.some(check => check.source !== 'Host collection')).toBe(true);
     mocks.send.mockResolvedValueOnce(page('2026-10-14T00:00:00Z'));
     await collectUsage(undefined, '2026-10-14T00:00:00Z');
-    expect(responseUsageStore().getOverview({}).accuracy.until).toBe('2026-10-14T00:00:00Z');
-    expect(responseUsageStore().getOverview({}).accuracy.checks.some(check => check.source === 'Host collection')).toBe(false);
+    expect((await responseUsageStore().getOverview({})).accuracy.until).toBe('2026-10-14T00:00:00Z');
+    expect((await responseUsageStore().getOverview({})).accuracy.checks.some(check => check.source === 'Host collection')).toBe(false);
   });
 });

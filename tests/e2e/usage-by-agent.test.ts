@@ -4,7 +4,8 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 vi.mock('../../src/constants.js', () => createMockConstants('response-usage-e2e'));
 import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
-import { responseUsageStore } from '../../src/core/usage/collection.js';
+import { responseUsageStore, _closeUsageReaderForTesting } from '../../src/core/usage/collection.js';
+import { PluginDatabaseClient } from '../../src/core/plugins/plugin-storage.js';
 import { reconcileUsage, type ProxyUsageRecord } from '../../src/providers/usage-reconcile-core.js';
 import { canonicalRecordFromAssistant, type CanonicalUsageRecord } from '../../src/providers/usage-scan-core.js';
 
@@ -27,7 +28,7 @@ beforeAll(async () => {
   }, [{ sessionId: 'session-one', taskId: 'task-one', project: 'Example', title: 'Review the change' }]);
   responseUsageStore().finishHost('local', timestamp, imported.checks);
 });
-afterAll(async () => { responseUsageStore().close(); await stopServer(); await fs.rm(WALNUT_HOME, { recursive: true, force: true }); });
+afterAll(async () => { await _closeUsageReaderForTesting(); responseUsageStore().close(); await stopServer(); await fs.rm(WALNUT_HOME, { recursive: true, force: true }); });
 async function get(path: string) {
   const result = await fetch(`http://127.0.0.1:${port}${path}`); expect(result.status).toBe(200); return result.json();
 }
@@ -165,5 +166,38 @@ describe('reconciled usage through the real server', () => {
     expect(whole.totals.costUsd).toBeCloseTo(before + 4, 6);
     expect(whole.groups.find((g: { id: string }) => g.id === 'agent').lines.map((l: { label: string }) => l.label)).toContain('Imported');
     expect(whole.stored).toContainEqual({ host: 'Bill', from: '2000-01-01', to: '2000-01-01', imported: true });
+  });
+});
+
+// 2026-11-20: /api/usage/summary built four whole overviews over 2.4 M rows on the loop thread
+// (13 s of CPU, a 24 s stall on the Mac). Every route reads through the worker's connection now.
+describe('the usage routes and the loop thread', () => {
+  it('every route reads the rows through the worker, with the same answer as the store itself', async () => {
+    const all = vi.spyOn(PluginDatabaseClient.prototype, 'all');
+    const one = vi.spyOn(PluginDatabaseClient.prototype, 'get');
+    try {
+      for (const route of ['/api/usage/summary', '/api/usage/daily', '/api/usage/by-model', '/api/usage/by-agent', '/api/usage/by-source', '/api/usage/recent', '/api/usage/overview']) {
+        const before = all.mock.calls.length + one.mock.calls.length;
+        await get(route);
+        expect(all.mock.calls.length + one.mock.calls.length, route).toBeGreaterThan(before);
+      }
+      const own = await responseUsageStore().getOverview({}, 1);
+      expect((await get('/api/usage/summary')).allTime).toEqual(own.summary);
+      expect((await get('/api/usage/overview')).byAgent).toEqual(own.byAgent);
+    } finally {
+      all.mockRestore();
+      one.mockRestore();
+    }
+  });
+
+  it('a worker that refuses a read is dropped: that answer comes from the store, the next from a new worker', async () => {
+    const own = await responseUsageStore().getOverview({}, 1);
+    const all = vi.spyOn(PluginDatabaseClient.prototype, 'all').mockRejectedValueOnce(new Error('Plugin database worker is unavailable'));
+    try {
+      expect((await get('/api/usage/overview')).byAgent).toEqual(own.byAgent);
+      const before = all.mock.calls.length;
+      expect((await get('/api/usage/overview')).byAgent).toEqual(own.byAgent);
+      expect(all.mock.calls.length).toBeGreaterThan(before);
+    } finally { all.mockRestore(); }
   });
 });

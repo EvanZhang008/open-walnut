@@ -30,6 +30,15 @@ interface StoredResponse {
   estimate: number | null; verification: Verification; pricingVersion: string;
 }
 
+/** Reads rows for getOverview: positional `?` arguments, as SQLite binds them. */
+export interface UsageReader {
+  get(sql: string, args: readonly unknown[]): Promise<Record<string, unknown> | undefined>;
+  all(sql: string, args: readonly unknown[]): Promise<Record<string, unknown>[]>;
+}
+
+/** The aggregates of getOverview a caller can ask for alone. */
+export type OverviewPart = 'daily' | 'bySource' | 'byModel' | 'byAgent' | 'recent' | 'sessions';
+
 export class ResponseUsageStore {
   private db: DatabaseType;
   /** Per-day sums every Usage & Costs read goes through (cost-rollup.ts). */
@@ -193,15 +202,23 @@ export class ResponseUsageStore {
     this.db.prepare('INSERT OR REPLACE INTO usage_checks VALUES (?,?,?)').run(host, until, JSON.stringify(checks));
   }
 
-  legacyCoverage(filter: UsageFilter) {
-    if (!this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='usage'").get()) return [];
+  private async legacyCoverage(reader: UsageReader, filter: UsageFilter): Promise<{ source: string; model: string; calls: number }[]> {
+    if (!await reader.get("SELECT name FROM sqlite_master WHERE type='table' AND name='usage'", [])) return [];
     const clauses = ['1=1']; const args: string[] = [];
     if (filter.startDate) { clauses.push("date(timestamp, 'localtime') >= ?"); args.push(filter.startDate); }
     if (filter.endDate) { clauses.push("date(timestamp, 'localtime') <= ?"); args.push(filter.endDate); }
     if (filter.source) { clauses.push('source = ?'); args.push(filter.source); }
     if (filter.model) { clauses.push('model = ?'); args.push(filter.model); }
     if (filter.agentId) { clauses.push('agent_id = ?'); args.push(filter.agentId); }
-    return this.db.prepare(`SELECT source, model, COUNT(*) calls FROM usage WHERE ${clauses.join(' AND ')} GROUP BY source, model`).all(...args) as { source: string; model: string; calls: number }[];
+    return await reader.all(`SELECT source, model, COUNT(*) calls FROM usage WHERE ${clauses.join(' AND ')} GROUP BY source, model`, args) as { source: string; model: string; calls: number }[];
+  }
+
+  /** This store's own connection as a reader (tests, and when no worker can be started). */
+  ownReader(): UsageReader {
+    return {
+      get: async (sql, args) => this.db.prepare(sql).get(...(args as never[])) as Record<string, unknown> | undefined,
+      all: async (sql, args) => this.db.prepare(sql).all(...(args as never[])) as Record<string, unknown>[],
+    };
   }
 
   /** Each host's last collected time ('' when it never finished a pass). */
@@ -229,7 +246,16 @@ export class ResponseUsageStore {
     this.db.prepare('INSERT OR REPLACE INTO usage_checks VALUES (?,?,?)').run(host, previous?.until ?? '', JSON.stringify([...kept, failure]));
   }
 
-  getOverview(filter: UsageFilter, limit = 100) {
+  /**
+   * Every aggregate under one filter. Each one scans the per-response table (2.4 M rows, 2.2 GB on
+   * the Mac, 2026-11-20): `reader` is a worker's connection (collection.ts usageReader), so none of it
+   * runs on the loop thread, and `parts` names the aggregates a caller reads (the summary total
+   * always runs). /api/usage/summary built four whole overviews on the loop thread: 13 s of CPU,
+   * a 24 s stall.
+   */
+  async getOverview(filter: UsageFilter, limit = 100, opts: { reader?: UsageReader; parts?: readonly OverviewPart[] } = {}) {
+    const reader = opts.reader ?? this.ownReader();
+    const wants = (part: OverviewPart) => !opts.parts || opts.parts.includes(part);
     const clauses: string[] = []; const args: string[] = [];
     for (const [field, value, op] of [
       ['date', filter.startDate, '>='], ['date', filter.endDate, '<='], ['source', filter.source, '='],
@@ -238,26 +264,26 @@ export class ResponseUsageStore {
     clauses.push(BILLED_DAY_RESPONSE_CLAUSE); // a day an imported bill covers is already in the bill
     const where = `WHERE ${clauses.join(' AND ')}`;
     const verified = `verification='verified' AND pricing_version='${PRICING_VERSION}'`;
-    const total = this.db.prepare(`SELECT COUNT(*) calls, SUM(CASE WHEN ${verified} THEN 1 ELSE 0 END) verified,
+    const total = await reader.get(`SELECT COUNT(*) calls, SUM(CASE WHEN ${verified} THEN 1 ELSE 0 END) verified,
       SUM(CASE WHEN ${verified} THEN estimate_usd ELSE 0 END) cost,
       SUM(input_tokens) input, SUM(output_tokens) output, SUM(cache_read_tokens) read,
       SUM(cache_creation_tokens) writes,
       SUM(CASE WHEN input_tokens IS NULL OR output_tokens IS NULL OR cache_read_tokens IS NULL OR cache_creation_tokens IS NULL THEN 1 ELSE 0 END) unknown,
       SUM(CASE WHEN source='session' AND (${verified}) THEN estimate_usd ELSE 0 END) session
-      FROM response_usage ${where}`).get(...args) as Record<string, number | null>;
-    const group = (field: string) => this.db.prepare(`SELECT ${field} name, COUNT(*) calls,
+      FROM response_usage ${where}`, args) as Record<string, number | null>;
+    const group = async (field: string) => (await reader.all(`SELECT ${field} name, COUNT(*) calls,
       SUM(CASE WHEN ${verified} THEN estimate_usd ELSE 0 END) cost,
       SUM(CASE WHEN NOT (${verified}) THEN 1 ELSE 0 END) unverified,
       SUM(input_tokens) input, SUM(output_tokens) output, SUM(cache_read_tokens) read,
       SUM(cache_creation_tokens) writes,
       SUM(CASE WHEN input_tokens IS NULL OR output_tokens IS NULL OR cache_read_tokens IS NULL OR cache_creation_tokens IS NULL THEN 1 ELSE 0 END) unknown FROM response_usage ${where}
-      GROUP BY ${field} ORDER BY cost DESC`).all(...args).map(raw => {
+      GROUP BY ${field} ORDER BY cost DESC`, args)).map(raw => {
       const r = raw as Record<string, string | number | null>;
       return { name: r.name ?? 'Unknown', cost_usd: Number(r.cost ?? 0), input_tokens: Number(r.input ?? 0), output_tokens: Number(r.output ?? 0),
         cache_read_tokens: Number(r.read ?? 0), cache_creation_tokens: Number(r.writes ?? 0), api_calls: Number(r.calls),
         token_counts_complete: !r.unknown, verified_calls: Number(r.calls) - Number(r.unverified), unverified_calls: Number(r.unverified), percentage: total.cost ? Number(r.cost) / total.cost * 100 : 0 };
     });
-    const recent = this.db.prepare(`SELECT * FROM response_usage ${where} ORDER BY timestamp DESC LIMIT ?`).all(...args, limit).map(raw => {
+    const recent = !wants('recent') ? [] : (await reader.all(`SELECT * FROM response_usage ${where} ORDER BY timestamp DESC LIMIT ?`, [...args, limit])).map(raw => {
       const r = raw as Record<string, string | number | null>;
       return { id: r.id, timestamp: r.timestamp, date: r.date, source: r.source, model: r.model,
         input_tokens: r.input_tokens === null ? null : Number(r.input_tokens), output_tokens: r.output_tokens === null ? null : Number(r.output_tokens),
@@ -267,13 +293,17 @@ export class ResponseUsageStore {
         verification: r.pricing_version === PRICING_VERSION ? r.verification : 'unpriced', sessionId: r.session_id, taskId: r.task_id, agentId: r.agent_id,
         taskTitle: r.title, project: r.project, host: r.host };
     });
-    const sessions = this.db.prepare(`SELECT session_id sessionId, MAX(title) title, MAX(task_id) taskId, MAX(project) project, MAX(host) host,
+    const sessions = !wants('sessions') ? [] : await reader.all(`SELECT session_id sessionId, MAX(title) title, MAX(task_id) taskId, MAX(project) project, MAX(host) host,
       COUNT(*) calls, SUM(CASE WHEN ${verified} THEN estimate_usd ELSE 0 END) cost,
       SUM(CASE WHEN NOT (${verified}) THEN 1 ELSE 0 END) unverified FROM response_usage ${where}
-      GROUP BY session_id ORDER BY cost DESC LIMIT 100`).all(...args);
-    const checksRows = this.db.prepare('SELECT * FROM usage_checks').all() as { host: string; until: string; checks: string }[];
-    const bounds = this.db.prepare('SELECT MIN(date) min, MAX(date) max FROM response_usage').get();
-    const legacy = this.legacyCoverage(filter);
+      GROUP BY session_id ORDER BY cost DESC LIMIT 100`, args);
+    const checksRows = await reader.all('SELECT * FROM usage_checks', []) as { host: string; until: string; checks: string }[];
+    const bounds = await reader.get('SELECT MIN(date) min, MAX(date) max FROM response_usage', []);
+    const legacy = await this.legacyCoverage(reader, filter);
+    const daily = wants('daily') ? (await group('date')).filter(r => r.verified_calls > 0).map(r => ({ ...r, date: r.name })).sort((a, b) => String(a.date).localeCompare(String(b.date))) : [];
+    const bySource = wants('bySource') ? await group('source') : [];
+    const byModel = wants('byModel') ? await group('model') : [];
+    const byAgent = wants('byAgent') ? await group('agent_id') : [];
     const legacyCalls = legacy.reduce((sum, row) => sum + row.calls, 0);
     const helperChecks: SourceCheck[] = legacy.map(row => ({ source: row.source, host: 'Application', status: 'unverified',
       matchedCalls: 0, unmatchedCalls: row.calls, detail: `${row.model}: legacy turn records are retained for audit, not added to response counts or cost. They may overlap verified calls; their own amounts remain unverified.` }));
@@ -282,7 +312,7 @@ export class ResponseUsageStore {
         input_tokens: Number(total.input ?? 0), output_tokens: Number(total.output ?? 0), cache_read_tokens: Number(total.read ?? 0),
         cache_creation_tokens: Number(total.writes ?? 0), token_counts_complete: !total.unknown, verified_calls: Number(total.verified ?? 0),
         unverified_calls: Number(total.calls ?? 0) - Number(total.verified ?? 0), legacy_records: legacyCalls },
-      daily: group('date').filter(r => r.verified_calls > 0).map(r => ({ ...r, date: r.name })).sort((a, b) => String(a.date).localeCompare(String(b.date))), bySource: group('source'), byModel: group('model'), byAgent: group('agent_id'),
+      daily, bySource, byModel, byAgent,
       recent, sessions, dateBounds: bounds, accuracy: {
         timezone: this.timezone, pricingVersion: PRICING_VERSION, until: checksRows.some(r => !r.until) ? null : checksRows.map(r => r.until).sort()[0] ?? null,
         checks: [...checksRows.flatMap(r => JSON.parse(r.checks) as SourceCheck[]), ...helperChecks],

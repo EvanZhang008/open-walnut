@@ -14,7 +14,7 @@ export const usageRouter = Router()
 // Query params (all optional, ANDed): start, end (YYYY-MM-DD), source, model, agent.
 // This is the endpoint the interactive dashboard uses; the older per-view
 // endpoints below stay for back-compat.
-usageRouter.get('/overview', (req: Request, res: Response, next: NextFunction) => {
+usageRouter.get('/overview', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const filter: UsageFilter = {
       startDate: parseDate(req.query.start),
@@ -24,7 +24,7 @@ usageRouter.get('/overview', (req: Request, res: Response, next: NextFunction) =
       agentId: parseTok(req.query.agent),
     }
     const limit = Math.min(Math.max(parseInt(req.query.limit as string, 10) || 100, 1), 500)
-    res.json(reconciledOverview(filter, limit))
+    res.json(await reconciledOverview(filter, limit))
   } catch (err) { next(err) }
 })
 
@@ -163,59 +163,61 @@ usageRouter.patch('/sessions/:sid/budget', async (req: Request, res: Response) =
 })
 
 // GET /api/usage/summary — all period summaries
-usageRouter.get('/summary', (_req: Request, res: Response, next: NextFunction) => {
+usageRouter.get('/summary', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const today = new Intl.DateTimeFormat('en-CA').format(new Date())
     const daysAgo = (days: number) => { const day = new Date(); day.setDate(day.getDate() - days); return new Intl.DateTimeFormat('en-CA').format(day) }
-    res.json({ today: reconciledOverview({ startDate: today, endDate: today }, 1).summary,
-      week: reconciledOverview({ startDate: daysAgo(7) }, 1).summary,
-      month: reconciledOverview({ startDate: daysAgo(30) }, 1).summary,
-      allTime: reconciledOverview({}, 1).summary })
+    // Only the totals: each period is one scan, off the loop thread.
+    const summary = async (filter: UsageFilter) => (await reconciledOverview(filter, 1, [])).summary
+    res.json({ today: await summary({ startDate: today, endDate: today }),
+      week: await summary({ startDate: daysAgo(7) }),
+      month: await summary({ startDate: daysAgo(30) }),
+      allTime: await summary({}) })
   } catch (err) { next(err) }
 })
 
 // GET /api/usage/daily?days=30 — daily cost time series
-usageRouter.get('/daily', (req: Request, res: Response, next: NextFunction) => {
+usageRouter.get('/daily', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const days = Math.min(Math.max(parseInt(req.query.days as string, 10) || 30, 1), 365)
     const start = new Date(); start.setDate(start.getDate() - days)
-    const daily = reconciledOverview({ startDate: new Intl.DateTimeFormat('en-CA').format(start) }, 1).daily
+    const daily = (await reconciledOverview({ startDate: new Intl.DateTimeFormat('en-CA').format(start) }, 1, ['daily'])).daily
     res.json({ daily })
   } catch (err) { next(err) }
 })
 
 // GET /api/usage/by-source?period=30d — breakdown by source
-usageRouter.get('/by-source', (req: Request, res: Response, next: NextFunction) => {
+usageRouter.get('/by-source', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const period = parsePeriod(req.query.period as string)
-    const sources = reconciledOverview(periodFilter(period), 1).bySource
+    const sources = (await reconciledOverview(periodFilter(period), 1, ['bySource'])).bySource
     res.json({ sources })
   } catch (err) { next(err) }
 })
 
 // GET /api/usage/by-model?period=30d — breakdown by model
-usageRouter.get('/by-model', (req: Request, res: Response, next: NextFunction) => {
+usageRouter.get('/by-model', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const period = parsePeriod(req.query.period as string)
-    const models = reconciledOverview(periodFilter(period), 1).byModel
+    const models = (await reconciledOverview(periodFilter(period), 1, ['byModel'])).byModel
     res.json({ models })
   } catch (err) { next(err) }
 })
 
 // GET /api/usage/by-agent?period=30d — breakdown by the agent that spent it
-usageRouter.get('/by-agent', (req: Request, res: Response, next: NextFunction) => {
+usageRouter.get('/by-agent', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const period = parsePeriod(req.query.period as string)
-    const agents = reconciledOverview(periodFilter(period), 1).byAgent
+    const agents = (await reconciledOverview(periodFilter(period), 1, ['byAgent'])).byAgent
     res.json({ agents })
   } catch (err) { next(err) }
 })
 
 // GET /api/usage/recent?limit=50 — recent records
-usageRouter.get('/recent', (req: Request, res: Response, next: NextFunction) => {
+usageRouter.get('/recent', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const limit = Math.min(Math.max(parseInt(req.query.limit as string, 10) || 50, 1), 500)
-    const records = reconciledOverview({}, limit).recent
+    const records = (await reconciledOverview({}, limit, ['recent'])).recent
     res.json({ records })
   } catch (err) { next(err) }
 })

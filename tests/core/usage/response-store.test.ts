@@ -34,7 +34,7 @@ const owners = [{ sessionId: 'session-one', title: 'Review the change', taskId: 
 describe('response-level usage storage', () => {
   it('stores only matched token prices as verified cost', async () => {
     const s = store(); await s.importHost('local', evidence([record()]), owners);
-    const result = s.getOverview({});
+    const result = (await s.getOverview({}));
     expect(result.summary.total_cost).toBeCloseTo(3.71454, 8);
     expect(result.recent[0].cache_creation_input_tokens).toBe(460039);
     expect(result.summary.token_counts_complete).toBe(true);
@@ -44,22 +44,22 @@ describe('response-level usage storage', () => {
   });
   it('the older overview leaves out a day an imported bill covers, the way the rollup does', async () => {
     const s = store(); await s.importHost('local', evidence([record()]), owners);
-    expect(s.getOverview({}).summary.total_cost).toBeCloseTo(3.71454, 8);
+    expect((await s.getOverview({})).summary.total_cost).toBeCloseTo(3.71454, 8);
     await s.rollup.replaceImport('bill', [{ date: '2026-10-13', model: 'claude-opus-5-5', input: 1, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 }]);
-    const after = s.getOverview({});
+    const after = (await s.getOverview({}));
     expect(after.summary.total_cost).toBe(0);
     expect(after.daily.reduce((n: number, d: { cost_usd?: number; cost?: number }) => n + (d.cost_usd ?? d.cost ?? 0), 0)).toBe(0);
   });
   it('reports token matches separately from price verification', async () => {
     const s = store(); const imported = await s.importHost('local', evidence([{ ...record(), pricing_context_complete: false }]), owners);
     s.finishHost('local', '2026-10-14T00:00:00Z', imported.checks);
-    const checks = s.getOverview({}).accuracy.checks;
+    const checks = (await s.getOverview({})).accuracy.checks;
     expect(checks.find(c => c.source === 'Canonical transcript')?.matchedCalls).toBe(1);
-    expect(s.getOverview({}).summary.verified_calls).toBe(0);
+    expect((await s.getOverview({})).summary.verified_calls).toBe(0);
   });
   it('does not publish an unmatched price as a number', async () => {
     const s = store(); await s.importHost('local', evidence([record()], false), owners);
-    const result = s.getOverview({});
+    const result = (await s.getOverview({}));
     expect(result.summary.verified_calls).toBe(0);
     expect(result.summary.unverified_calls).toBe(1);
     expect(result.recent[0]?.cost_usd).toBeNull();
@@ -69,12 +69,12 @@ describe('response-level usage storage', () => {
     const s = store(); await s.importHost('local', evidence([record()], false), owners);
     await s.importHost('local', evidence([record()]), owners);
     await s.importHost('local', evidence([record()]), owners);
-    expect(s.getOverview({}).summary).toMatchObject({ api_calls: 1, verified_calls: 1, unverified_calls: 0 });
+    expect((await s.getOverview({})).summary).toMatchObject({ api_calls: 1, verified_calls: 1, unverified_calls: 0 });
   });
   it('unknown models and incomplete counters never become zero-priced verified calls', async () => {
     const s = store(); await s.importHost('local', evidence([{ ...record(), model: 'unknown-model' }]), owners);
     await s.importHost('local', evidence([{ ...record('reply-2'), input_tokens: null, complete: false }]), owners);
-    const result = s.getOverview({});
+    const result = (await s.getOverview({}));
     expect(result.summary.verified_calls).toBe(0);
     expect(result.recent.every(r => r.cost_usd === null)).toBe(true);
     expect(result.recent.some(r => r.input_tokens === null)).toBe(true);
@@ -95,14 +95,14 @@ describe('response-level usage storage', () => {
     const s = store(); await s.importHost('local', evidence([record()]), owners);
     await s.importHost('local', evidence([{ ...record(), timestamp: '2026-10-12T12:00:00Z' }]),
       [{ ...owners[0], title: 'Corrected title', taskId: 'task-two' }]);
-    expect(s.getOverview({}).summary.api_calls).toBe(1);
-    expect(s.getOverview({}).sessions[0]).toMatchObject({ title: 'Corrected title', taskId: 'task-two' });
-    expect(s.getOverview({ startDate: '2026-10-13' }).summary.api_calls).toBe(0);
+    expect((await s.getOverview({})).summary.api_calls).toBe(1);
+    expect((await s.getOverview({})).sessions[0]).toMatchObject({ title: 'Corrected title', taskId: 'task-two' });
+    expect((await s.getOverview({ startDate: '2026-10-13' })).summary.api_calls).toBe(0);
   });
   it('keeps matched tokens unpriced when the provider route or pricing context is unknown', async () => {
     const s = store();
     await s.importHost('local', evidence([{ ...record(), pricing_context_complete: false }]), owners);
-    const result = s.getOverview({});
+    const result = (await s.getOverview({}));
     expect(result.summary.verified_calls).toBe(0);
     expect(result.recent[0]).toMatchObject({ verification: 'unpriced', cost_usd: null });
   });
@@ -112,19 +112,19 @@ describe('response-level usage storage', () => {
     db.exec(`CREATE TABLE usage (source TEXT, model TEXT, timestamp TEXT, date TEXT, agent_id TEXT, cost_usd REAL);
       INSERT INTO usage VALUES ('session','claude-opus-5-5','2026-10-13T12:00:00Z','2026-10-13','main',690);`);
     db.close();
-    const result = s.getOverview({ startDate: '2026-10-13', endDate: '2026-10-13' });
+    const result = (await s.getOverview({ startDate: '2026-10-13', endDate: '2026-10-13' }));
     expect(result.summary).toMatchObject({ api_calls: 1, verified_calls: 1, legacy_records: 1 });
     expect(result.summary.total_cost).toBeCloseTo(3.71454, 8);
     expect(result.accuracy.checks.some(c => c.detail.includes('retained for audit'))).toBe(true);
-    expect(s.getOverview({ agentId: 'subagent' }).summary.legacy_records).toBe(0);
+    expect((await s.getOverview({ agentId: 'subagent' })).summary.legacy_records).toBe(0);
   });
   it('does not advance the collection cutoff on a partial import followed by failure', async () => {
     const s = store(); const first = await s.importHost('local', evidence([record()]), owners);
     s.finishHost('local', '2026-10-13T00:00:00Z', first.checks);
     await s.importHost('local', evidence([record('reply-2')]), owners);
     s.markHostUnavailable('local', 'Next page timed out');
-    expect(s.getOverview({}).accuracy.until).toBe('2026-10-13T00:00:00Z');
-    expect(s.getOverview({}).accuracy.checks.find(c => c.source === 'Host collection')?.status).toBe('unverified');
+    expect((await s.getOverview({})).accuracy.until).toBe('2026-10-13T00:00:00Z');
+    expect((await s.getOverview({})).accuracy.checks.find(c => c.source === 'Host collection')?.status).toBe('unverified');
   });
   it('keeps the last finished checks when a host cannot be read, and says so beside them', async () => {
     const s = store(); const first = await s.importHost('local', evidence([record()]), owners);
@@ -148,18 +148,18 @@ describe('response-level usage storage', () => {
     const s = store(); await s.importHost('local', evidence([record()]), owners);
     const db = new Database(path.join(roots[0], 'usage.sqlite'));
     db.prepare("UPDATE response_usage SET pricing_version='previous'").run(); db.close();
-    const result = s.getOverview({});
+    const result = (await s.getOverview({}));
     expect(result.summary).toMatchObject({ verified_calls: 0, unverified_calls: 1, total_cost: 0 });
     expect(result.recent[0].cost_usd).toBeNull();
     expect(result.bySource[0].unverified_calls).toBe(1);
     await s.importHost('local', evidence([record()]), owners);
-    expect(s.getOverview({}).summary.verified_calls).toBe(1);
+    expect((await s.getOverview({})).summary.verified_calls).toBe(1);
   });
   it('counts one response once, whichever host read it, and groups subagents once', async () => {
     // Two names of one machine (or a session copied to another host) read the same transcript: one response, one row.
     const s = store(); await s.importHost('local', evidence([{ ...record(), agentId: 'agent-one' }, record('reply-2')]), owners);
     await s.importHost('remote', evidence([record('reply-2')]), owners);
-    const result = s.getOverview({});
+    const result = (await s.getOverview({}));
     expect(result.summary.api_calls).toBe(2);
     expect(result.byAgent.map(x => x.name).sort()).toEqual(['main', 'subagent']);
     expect(result.summary.total_cost).toBeCloseTo(7.42908, 8);
