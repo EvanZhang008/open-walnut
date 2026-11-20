@@ -10,6 +10,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { log } from '@/utils/log';
+import { MicInput } from '@/components/common/BoxMic';
 import { useDirectorActions, type DirectorProject } from './director-actions';
 
 interface Props {
@@ -73,9 +74,10 @@ export function OrgNewDirector({ projects, defaultProject, inList, editing, onEd
       // Its keys are its own: the list's Up and Down (and a sheet's Escape) never take them.
       onKeyDown={(e) => e.stopPropagation()}
     >
-      <input
+      <MicInput
         ref={input}
         className="org-new-director-input"
+        fieldClassName="mic-field-compact mic-field-grow"
         // A one-line name, made on Enter (as a rename is): nothing long to keep.
         data-no-draft="rename"
         data-testid="org-new-director-input"
@@ -83,14 +85,14 @@ export function OrgNewDirector({ projects, defaultProject, inList, editing, onEd
         placeholder="Director's title"
         value={title}
         disabled={busy}
-        onChange={(e) => setTitle(e.target.value)}
+        setText={setTitle}
+        // Enter makes it once a title still being dictated is in (the box's send gate).
+        onEnter={submit}
         onKeyDown={(e) => {
-          if (e.nativeEvent.isComposing) return;
-          if (e.key === 'Enter') { e.preventDefault(); submit(); }
-          else if (e.key === 'Escape') { e.preventDefault(); close(); }
+          if (e.key === 'Escape') { e.preventDefault(); close(); }
         }}
         onBlur={(e) => {
-          // Left empty for somewhere else (not its own project picker): it closes.
+          // Left empty for somewhere else (not its own mic or project picker): it closes.
           if (!title.trim() && !form.current?.contains(e.relatedTarget as Node | null)) close();
         }}
       />
