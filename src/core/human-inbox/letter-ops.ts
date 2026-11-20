@@ -331,6 +331,11 @@ function clip(value: string, max: number): string {
  * `note` is deliberately LAST, so a multi-line reply can only add lines that are
  * still visibly inside the fence.
  */
+/** A letter answered in words alone: what to make of them (a clear yes, a named option, or one question back). */
+export const WORDS_ANSWER_LINE = 'They answered in words, with no button: words that name one of your options, or a clear yes ("ok", "K", '
+  + '"go") to the one you recommended, are that option, so act on it; only when they are unclear, ask one specific question '
+  + '(on its thread: its summary, in needs), never the same question and buttons again.';
+
 export function buildLetterDeliveryText(
   letter: Pick<LetterRecord, 'id' | 'subject'>,
   human: { choice?: string; text?: string; by?: LetterAnsweredBy; replaces?: LetterAnsweredBy },
@@ -370,6 +375,9 @@ export function buildLetterDeliveryText(
     `${marker} (end of letter answer)`,
     '',
     ...(pictures ? ['The pictures named above, under the images header, came with this answer: they are part of it.', ''] : []),
+    // His words with no button (2026-11-20: "K" on a card recommending a release): read them as the
+    // option they name, a clear yes as the one you recommended; ask only when they are unclear.
+    ...(!human.choice && human.text && !by ? [WORDS_ANSWER_LINE, ''] : []),
     'Continue the work accordingly, then reply in the letter thread (not just in this '
     + 'session) so the answer reaches them wherever they are:',
     `walnut tools call human_inbox_reply '{"letter":"${letter.id}","text":"..."}'`,

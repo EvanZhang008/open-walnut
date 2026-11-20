@@ -332,6 +332,18 @@ export function registerSessionChatRpc(): void {
       return { messageId: out.switchId, engineSwitch: out }
     }
 
+    // A send that names a thread holding a live decision letter answers that letter with his words,
+    // once, instead of reaching the chat as a follow-up (core/org/letter-follow-up.ts).
+    const sentThread = typeof data.threadId === 'string' && /^th-[a-f0-9]{6,32}$/.test(data.threadId) ? data.threadId : undefined
+    if (sentThread && record?.taskId && !data.retryOf) {
+      const { answerLetterOnThread } = await import('../../core/org/letter-follow-up.js')
+      const answered = await answerLetterOnThread({
+        taskId: record.taskId, threadId: sentThread, text: data.message as string,
+        ...(savedPaths.length ? { images: savedPaths } : {}), ...(userUuid ? { clientId: userUuid } : {}),
+      })
+      if (answered) return { messageId: `letter-${answered.letterId}`, answeredLetter: { id: answered.letterId, threadId: answered.threadId } }
+    }
+
     const outputMode = await prepareHintedSend(data.sessionId, record, augmentedMessage, {
       requested: requestedHintsOf(data.hints), sentBy: 'person',
       // Sent from a thread's Follow up on the Org page's Threads (core/org/thread-capture.ts).

@@ -470,6 +470,12 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
       };
       const res = await sendSessionMessage(rpcPayload as typeof rpcPayload & { sessionId: string; message: string });
       if (followRedirect(res, tempId, sessionId)) return true;
+      if (res?.answeredLetter) {
+        // His words answered the letter its thread holds: the session gets them as its answer.
+        log.info('send', 'words answered a letter', { sessionId, letterId: res.answeredLetter.id, threadId: res.answeredLetter.threadId });
+        setOptimisticMsgs((prev) => prev.filter((m) => m.queueId !== tempId));
+        return true;
+      }
       if (res?.engineSwitch) {
         // The message starts the task's new session: its bubble shows there, not in this one.
         log.info('send', 'engine switch accepted', { sessionId, state: res.engineSwitch.state });

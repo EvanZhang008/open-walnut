@@ -52,6 +52,9 @@ export interface SendAck {
   recovered?: KeptRow;
   /** The thread his words were filed under (experiment reply_thread_line, core/org/reply-thread.ts). */
   thread?: import('@open-walnut/reply-thread').ReplyThread;
+  /** His words answered the decision letter the named thread holds (core/org/letter-follow-up.ts):
+   *  they reach the session as that letter's answer, never as this chat message. */
+  answeredLetter?: { id: string; threadId: string };
 }
 
 const KEPT_MAX = 200;

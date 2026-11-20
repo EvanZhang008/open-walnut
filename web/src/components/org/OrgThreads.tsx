@@ -393,23 +393,31 @@ function NeedsAnswer({ t, owner, onFollowUp, snoozed, state, pinned }: {
 }) {
   /** A click that did not go (a typed reply's failure is the box's own). */
   const [failed, setFailed] = useState(false);
+  /** His reply went (typed or clicked): the card says so at once, until the thread moves on. */
+  const [sentFor, setSentFor] = useState<string | null>(null);
   const answer = async (label: string): Promise<boolean> => {
     if (!onFollowUp) return false;
     setFailed(false);
     const ok = await onFollowUp(t.id, label).catch(() => false);
-    if (!ok) setFailed(true);
+    if (!ok) setFailed(true); else setSentFor(t.updatedAt);
     return ok;
   };
+  const sent = sentFor === t.updatedAt;
   return (
     <AskCardFrame
       testId="org-thread-ask"
       className="org-thread-ask"
-      data={{ 'data-thread-id': t.id }}
-      status={failed ? <p className="org-thread-error" role="alert" data-testid="org-thread-ask-failed">Not sent. Try again.</p> : undefined}
+      status={failed
+        ? <p className="org-thread-error" role="alert" data-testid="org-thread-ask-failed">Not sent. Try again.</p>
+        : sent ? <p className="org-thread-stand-in-note" role="status" data-testid="org-thread-ask-sent">Your reply is sent.</p> : undefined}
       answer={onFollowUp ? (<>
         <ThreadOptions thread={t} onAnswer={answer} />
         {/* The thread's one box, the same on every open card. */}
-        <FollowUp threadId={t.id} title={t.title} owner={owner} onSend={(text, images) => onFollowUp(t.id, text, images)} />
+        <FollowUp threadId={t.id} title={t.title} owner={owner} onSend={async (text, images) => {
+          const ok = await onFollowUp(t.id, text, images);
+          if (ok) setSentFor(t.updatedAt);
+          return ok;
+        }} />
       </>) : undefined}
       tools={<ThreadTools t={t} snoozed={snoozed} state={state} pinned={pinned} />}
     />

@@ -60,7 +60,7 @@ export function stepsIn(text: string): RiskyStep[] {
 }
 
 /** An answer that says only yes: what it approves is in the letter, not in it. */
-const BARE_YES = /^[\s"'\u201c\u201d]*(?:yes|yep|yeah|ok(?:ay)?|sure|approved?|go(?:\s+ahead)?|do\s+it|confirm(?:ed)?|accept(?:ed)?|agreed?|proceed|lgtm|ship\s+it|sounds\s+good|please|\u540c\u610f|\u597d\u7684?|\u53ef\u4ee5|\u884c|\u662f\u7684?|\u5bf9|\u786e\u8ba4|\u6279\u51c6|\u7ee7\u7eed|\u6ca1\u95ee\u9898|\u5c31\u8fd9\u6837)(?:[\s,.!\uff0c\u3002\uff01\u3001]+(?:yes|yep|yeah|ok(?:ay)?|sure|approved?|go(?:\s+ahead)?|do\s+it|confirm(?:ed)?|accept(?:ed)?|agreed?|proceed|lgtm|ship\s+it|sounds\s+good|please|\u540c\u610f|\u597d\u7684?|\u53ef\u4ee5|\u884c|\u662f\u7684?|\u5bf9|\u786e\u8ba4|\u6279\u51c6|\u7ee7\u7eed|\u6ca1\u95ee\u9898|\u5c31\u8fd9\u6837|with|both|all|it|them|everything|that|\u90fd|\u5168\u90e8|\u5427))*[\s.!\u3002\uff01]*$/i;
+const BARE_YES = /^[\s"'\u201c\u201d]*(?:yes|yep|yeah|ok(?:ay)?|k{1,2}|y|sure|approved?|go(?:\s+ahead)?|do\s+it|confirm(?:ed)?|accept(?:ed)?|agreed?|proceed|lgtm|ship\s+it|sounds\s+good|please|\u540c\u610f|\u597d\u7684?|\u53ef\u4ee5|\u884c|\u662f\u7684?|\u5bf9|\u786e\u8ba4|\u6279\u51c6|\u7ee7\u7eed|\u6ca1\u95ee\u9898|\u5c31\u8fd9\u6837)(?:[\s,.!\uff0c\u3002\uff01\u3001]+(?:yes|yep|yeah|ok(?:ay)?|sure|approved?|go(?:\s+ahead)?|do\s+it|confirm(?:ed)?|accept(?:ed)?|agreed?|proceed|lgtm|ship\s+it|sounds\s+good|please|\u540c\u610f|\u597d\u7684?|\u53ef\u4ee5|\u884c|\u662f\u7684?|\u5bf9|\u786e\u8ba4|\u6279\u51c6|\u7ee7\u7eed|\u6ca1\u95ee\u9898|\u5c31\u8fd9\u6837|with|both|all|it|them|everything|that|\u90fd|\u5168\u90e8|\u5427))*[\s.!\u3002\uff01]*$/i;
 
 export function isBareYes(text: string): boolean {
   return BARE_YES.test(text.trim());
@@ -83,6 +83,22 @@ export type AnswerCheck =
 
 export const USER_WORDS_MIN = 2;
 
+/** His words, bare: no quotes, spaces or end marks. */
+const bare = (t: string): string => t.replace(/[\s"'\u201c\u201d.,!?\u3002\uff0c\uff01\uff1f\u3001]+/g, '').toLowerCase();
+
+/**
+ * Words shorter than USER_WORDS_MIN still answer when they are a clear yes ("K", "ok", a single
+ * yes word) or name the picked option by its own label ("\u53d1" for "\u53d1\u65b0\u7248") (2026-11-20, the
+ * user typed "K" on a card recommending a release; the agent was refused for his one letter).
+ * A risky step still needs words that name it (below): a yes alone never approves one. Pure.
+ */
+export function wordsAnswer(words: string, action?: Pick<LetterAction, 'label'>): boolean {
+  if (words.length >= USER_WORDS_MIN) return true;
+  if (!words || !bare(words)) return false;
+  if (isBareYes(words)) return true;
+  return !!action && bare(action.label).includes(bare(words));
+}
+
 /**
  * Judge a task's answer for the user. `userWords` are the user's own words, quoted by the task;
  * `letter` is what the letter asks (its subject and preview), read when the answer points at it.
@@ -96,7 +112,7 @@ export function checkTaskAnswer(input: {
   letter?: { subject?: string; preview?: string };
 }): AnswerCheck {
   const words = (input.userWords ?? '').trim();
-  if (words.length < USER_WORDS_MIN) {
+  if (!wordsAnswer(words, input.action)) {
     return {
       ok: false, code: 'user_words',
       message: 'Answering for the user needs the user\'s own words: pass user_words with exactly what they said '

@@ -14,6 +14,13 @@ describe('a task answering for the user', () => {
   it('needs the user\'s own words', () => {
     expect(checkTaskAnswer({ action: { id: 'a', label: 'Plan A' } })).toMatchObject({ ok: false, code: 'user_words' })
     expect(checkTaskAnswer({ text: 'Go', userWords: ' ' })).toMatchObject({ ok: false, code: 'user_words' })
+    // One letter of his is enough when it is a clear yes or names the option by its own label
+    // (2026-11-20: "K" on a card recommending a release). Test data: \u53d1\u65b0\u7248 is "release it", \u53d1 its verb.
+    expect(checkTaskAnswer({ action: { id: 'release', label: '\u53d1\u65b0\u7248' }, userWords: 'K' })).toEqual({ ok: true })
+    expect(checkTaskAnswer({ action: { id: 'release', label: '\u53d1\u65b0\u7248' }, userWords: '\u53d1' })).toEqual({ ok: true })
+    expect(checkTaskAnswer({ action: { id: 'release', label: '\u53d1\u65b0\u7248' }, userWords: 'x' })).toMatchObject({ ok: false, code: 'user_words' })
+    // A one-letter yes never approves a risky step it does not name.
+    expect(checkTaskAnswer({ action: { id: 'del', label: 'Delete the old branch' }, userWords: 'K' })).toMatchObject({ ok: false, code: 'human_approval' })
     expect(checkTaskAnswer({ action: { id: 'a', label: 'Plan A' }, userWords: 'A please' })).toEqual({ ok: true })
   })
 

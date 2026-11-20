@@ -57,7 +57,9 @@ export const THREAD_ONE_PLACE_RULE =
 export const THREADS_OPTIONS_RULE =
   'A thread in needs that asks him to pick among choices carries them as options (thread_update or thread_create: 2 to 5, '
   + 'each a short label and a line of detail, the recommended one first with recommended: true): his card shows them as buttons '
-  + 'and his click is his answer, filed in the thread. Walnut refuses a needs write whose words list choices (A:, B:, 1., 2.) without options.';
+  + 'and his click is his answer, filed in the thread. Walnut refuses a needs write whose words list choices (A:, B:, 1., 2.) without options. '
+  + 'When he types instead: words naming an option, or a clear yes ("ok", "K") to the recommended one, are that option; only unclear words '
+  + 'get one specific question back as the summary, never the same question and options again.';
 
 /** Its short form in the always-loaded prompt (the prompt's cap, prompt-blocks.ts); the op and the 409 carry the rest. */
 export const THREADS_OPTIONS_LINE = 'A needs thread asking him to pick carries options.';

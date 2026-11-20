@@ -155,9 +155,9 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
     // Remote sessions: RemoteSessionManager.prepareOutbound() uploads the local
     // files and rewrites the paths on the way to the exec host (no work here).
     let enqueueText: string | undefined
+    const savedPaths: string[] = []
     if (images.length > 0) {
       const { saveImageToDisk } = await import('./images.js')
-      const savedPaths: string[] = []
       for (const img of images) {
         try {
           const { filePath } = await saveImageToDisk(img.data, img.mediaType)
@@ -181,6 +181,19 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
     // (core/hints/hint-send.ts): a rich session answers the phone in the same
     // style, and a voice send asks for the voice-reply hint, which goes last
     // (it overrides the output style for this one reply).
+    // His words on a thread holding a live decision letter answer that letter, once (core/org/letter-follow-up.ts).
+    const sentThread = threadIdOf(req.body?.threadId) ? req.body.threadId as string : undefined
+    if (sentThread && record.taskId && routeSource('mobile', req.headers) === 'mobile') {
+      const { answerLetterOnThread } = await import('../../core/org/letter-follow-up.js')
+      const answered = await answerLetterOnThread({
+        taskId: record.taskId, threadId: sentThread, text,
+        ...(savedPaths.length ? { images: savedPaths } : {}), ...(clientMessageId ? { clientId: clientMessageId } : {}),
+      })
+      if (answered) {
+        res.status(202).json({ messageId: clientMessageId ?? `letter-${answered.letterId}`, answeredLetter: { id: answered.letterId, threadId: answered.threadId } })
+        return
+      }
+    }
     const outputMode = await prepareHintedSend(sessionId, record, enqueueText ?? text, {
       sentBy: routeSource('mobile', req.headers) === 'mobile' ? 'person' : 'agent', ...(voice ? { requested: { 'voice-reply': {} } } : {}),
       // A retry reuses its qm- id: an Org node's Threads file it once (core/org/thread-capture.ts).
