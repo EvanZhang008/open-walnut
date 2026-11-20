@@ -61,8 +61,8 @@ export interface ChangeWatchDeps {
   /** Read-modify-write of one task's change_status; null from the function writes nothing. */
   writeTask(id: string, patch: (current: Readonly<Task>) => Partial<Task> | null): Promise<void>
   deliveryTarget(taskId: string): Promise<{ sessionId: string; running: boolean } | null>
-  /** `messageId` is stable for the same news, so a retold wake still queued is not queued twice. */
-  send(sessionId: string, text: string, taskId: string, messageId: string): Promise<void>
+  /** `newsKey` is the same for the same news: one still queued is not queued twice (task-news.ts sendTaskNews). */
+  send(sessionId: string, text: string, taskId: string, newsKey: string): Promise<void>
   /** The experiment `change_status`. */
   enabled(): Promise<boolean>
   /** The pull request settings: `wake_agent: false` silences this watcher's wakes too. */
@@ -273,9 +273,9 @@ async function settleTask(
         attrs: { from: 'Walnut: change watch', about: told.map((p) => p.next.label).join(', '), note: 'news on a change linked to this task' },
         body,
       })
-      const messageId = `change-watch-${createHash('sha1').update(`${task.id}\n${body}`).digest('hex').slice(0, 16)}`
+      const newsKey = `change-watch-${createHash('sha1').update(`${task.id}\n${body}`).digest('hex').slice(0, 16)}`
       try {
-        await deps.send(target.sessionId, text, task.id, messageId)
+        await deps.send(target.sessionId, text, task.id, newsKey)
         report.woken++
         log.task.info('change-watch: session woken', { taskId: task.id, sessionId: target.sessionId, changes: told.map((p) => p.url), why: told.flatMap((p) => p.news.map((n) => n.kind)) })
       } catch (err) {
@@ -365,7 +365,7 @@ export function defaultChangeWatchDeps(): ChangeWatchDeps {
       await updateTaskRaw(id, patch, { emitEvent: true, source: CHANGE_WATCH_SOURCE })
     },
     deliveryTarget: taskNewsTarget,
-    send: (sessionId, text, taskId, messageId) => sendTaskNews(CHANGE_WATCH_SOURCE, sessionId, text, taskId, messageId),
+    send: (sessionId, text, taskId, newsKey) => sendTaskNews(CHANGE_WATCH_SOURCE, sessionId, text, taskId, newsKey),
     enabled: changeStatusEnabled,
     async config() {
       const { getConfig } = await import('../config-manager.js')

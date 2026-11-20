@@ -43,8 +43,8 @@
  *    the pending one instead of stacking (a stable coalescing key per child and kind).
  */
 
-import { randomUUID } from 'node:crypto';
 import { isSupersededSession } from './engine-switch-marker.js';
+import { eventRowId, queuedEventRow } from './event-rows.js';
 import { log } from '../../logging/index.js';
 import { refNamesId } from '../../lib/id-ref.js';
 import { lastTaskInputAt } from './task-input-clock.js';
@@ -698,12 +698,10 @@ async function deliverNotices(target: SessionRecord, raw: SubtaskNotice[]): Prom
   const { notices, shown } = await withRemaining(raw[0].parentTaskId, raw);
   const text = notices.map(buildSubtaskNoticeText).join('\n\n');
   const key = notices.length === 1 ? noticeQueueId(notices[0]) : undefined;
-  const deliveryId = key ? `${key}-${randomUUID()}` : undefined;
+  const deliveryId = key ? eventRowId(key) : undefined;
   if (key) {
-    const { getQueue, editMessage } = await import('../session-message-queue.js');
-    const row = [...await getQueue(parentSid)].reverse().find((m) =>
-      (m.id === key || m.id.startsWith(`${key}-`)) && m.status === 'pending'
-      && !m.lineUuid && !m.lineTries && !m.lineInDoubt);
+    const { editMessage } = await import('../session-message-queue.js');
+    const row = await queuedEventRow(parentSid, key);
     if (row && await editMessage(parentSid, row.id, text, { onlyUnsent: true })) {
       log.session.info('subtask notice replaced a pending one', { parentSid, messageId: row.id, kind: notices[0].kind });
       return;

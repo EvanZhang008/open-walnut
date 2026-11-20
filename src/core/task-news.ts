@@ -8,6 +8,7 @@
  */
 
 import type { Task } from './types.js'
+import { eventRowId, queuedEventRow } from './sessions/event-rows.js'
 
 /** The session that should hear a task's news, or null. `running` is a turn in progress. */
 export async function taskNewsTarget(taskId: string): Promise<{ sessionId: string; running: boolean } | null> {
@@ -18,10 +19,14 @@ export async function taskNewsTarget(taskId: string): Promise<{ sessionId: strin
 }
 
 /** Send a watcher's news. `endsWait`: a task parked on what the watcher follows waited for exactly
- *  this. `messageId` is stable for the same news, so a retold wake still queued is not queued twice. */
-export async function sendTaskNews(source: string, sessionId: string, text: string, taskId: string, messageId: string): Promise<void> {
+ *  this. `newsKey` names the news (the same text for the same task): one still waiting in the queue
+ *  is not queued twice, and news told again after it went out is a new row (sessions/event-rows.ts).
+ *  A crash between this send and the watcher's status write tells the news once more on the next
+ *  read: a repeated line, never a lost one. */
+export async function sendTaskNews(source: string, sessionId: string, text: string, taskId: string, newsKey: string): Promise<void> {
+  if (await queuedEventRow(sessionId, newsKey)) return
   const { sendMessageToSession } = await import('./session-message-queue.js')
-  await sendMessageToSession(sessionId, text, { source, taskId, endsWait: true, messageId })
+  await sendMessageToSession(sessionId, text, { source, taskId, endsWait: true, messageId: eventRowId(newsKey) })
 }
 
 const FOLLOW_DELAY_MS = 3_000

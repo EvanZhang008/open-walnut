@@ -55,8 +55,8 @@ export interface PrWatchDeps {
   writeTask(id: string, patch: (current: Readonly<Task>) => Partial<Task> | null): Promise<void>
   /** The session that should hear about news, or null. `running` is a turn in progress. */
   deliveryTarget(taskId: string): Promise<{ sessionId: string; running: boolean } | null>
-  /** `messageId` is stable for the same news, so a retold wake still queued is not queued twice. */
-  send(sessionId: string, text: string, taskId: string, messageId: string): Promise<void>
+  /** `newsKey` is the same for the same news: one still queued is not queued twice (task-news.ts sendTaskNews). */
+  send(sessionId: string, text: string, taskId: string, newsKey: string): Promise<void>
   /** `why` goes on the task's note, the record of why it closed. */
   complete(taskId: string, why: string): Promise<void>
   /** Why a merged task must stay open (owed to the user, open subtasks), or null. */
@@ -255,9 +255,9 @@ async function settleTask(
         },
         body,
       })
-      const messageId = `pr-watch-${createHash('sha1').update(`${task.id}\n${body}`).digest('hex').slice(0, 16)}`
+      const newsKey = `pr-watch-${createHash('sha1').update(`${task.id}\n${body}`).digest('hex').slice(0, 16)}`
       try {
-        await deps.send(target.sessionId, text, task.id, messageId)
+        await deps.send(target.sessionId, text, task.id, newsKey)
         report.woken++
         woke = true
         for (const p of news) {
@@ -361,7 +361,7 @@ export function defaultPrWatchDeps(): PrWatchDeps {
       await updateTaskRaw(id, patch, { emitEvent: true, source: PR_WATCH_SOURCE })
     },
     deliveryTarget: taskNewsTarget,
-    send: (sessionId, text, taskId, messageId) => sendTaskNews(PR_WATCH_SOURCE, sessionId, text, taskId, messageId),
+    send: (sessionId, text, taskId, newsKey) => sendTaskNews(PR_WATCH_SOURCE, sessionId, text, taskId, newsKey),
     async complete(taskId, why) {
       const { completeTask, addNote } = await import('../task-manager.js')
       const { bus, EventNames } = await import('../event-bus.js')

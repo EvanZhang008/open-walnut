@@ -250,7 +250,8 @@ const INTERNAL_QUEUE_READS: Record<string, number> = {
   'core/sessions/session-stop.ts': 1,
   'core/sessions/team-stop.ts': 1,
   'core/sessions/auto-recover-env.ts': 3,
-  'core/sessions/subtask-notices.ts': 2,
+  'core/sessions/subtask-notices.ts': 1,
+  'core/sessions/event-rows.ts': 1, // queuedEventRow: news of a key still waiting to go (its pending-row look moved here from subtask-notices)
   'core/sessions/session-send-core.ts': 1,
   'core/sessions/undelivered-requests.ts': 2,
   'core/sessions/folder-gone.ts': 3,

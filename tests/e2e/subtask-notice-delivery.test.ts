@@ -15,6 +15,7 @@ import { addTask } from '../../src/core/task-manager.js'
 import { getQueue } from '../../src/core/session-message-queue.js'
 import { updateSessionRecord } from '../../src/core/session-tracker.js'
 import { flushSubtaskNotices, queueSubtaskNotice } from '../../src/core/sessions/subtask-notices.js'
+import { sendTaskNews } from '../../src/core/task-news.js'
 
 let server: Server
 let daemon: MockDaemon
@@ -89,6 +90,24 @@ describe('subtask notices through the server, queue and CLI stdin', () => {
     expect(res.status).toBe(200)
     expect((await res.json()).sessions.some((s: { claudeSessionId: string }) => s.claudeSessionId === sid)).toBe(true)
   }, 90_000)
+
+  it('the same watch news told again after it ran reaches the CLI again, under a new uuid', async () => {
+    // 2026-11-20: "CR-1001 3 checks failed" told again seven hours later (a new revision) went
+    // out under the first telling's uuid, and Claude Code skipped it as a duplicate.
+    const news = '<walnut-message kind="trigger" from="Walnut: change watch">CR-1001 3 checks failed</walnut-message>'
+    const uuids: string[] = []
+    for (let round = 0; round < 2; round++) {
+      await sendTaskNews('change-watch', sid, news, taskId, 'change-watch-0123456789abcdef')
+      await vi.waitFor(async () => {
+        const read = (await fs.readFile(path.join(WALNUT_HOME, 'received.jsonl'), 'utf8')).trim().split('\n').map((l) => JSON.parse(l))
+        expect(read.filter((r) => String(r.text).includes('CR-1001 3 checks failed'))).toHaveLength(round + 1)
+        expect(await getQueue(sid)).toEqual([])
+      }, { timeout: 20_000 })
+      const sent = daemon.getCommandHistoryFor('send').filter((c) => String(c.payload.message).includes('CR-1001 3 checks failed'))
+      uuids.push(String(sent[sent.length - 1].payload.uuid))
+    }
+    expect(new Set(uuids).size).toBe(2)
+  }, 60_000)
 
   it('a waiting edge into a running parent is held for its next message, never written into the CLI', async () => {
     const child = (await addTask({ title: 'Notice held child', project: 'Test', parent_task_id: taskId })).task
