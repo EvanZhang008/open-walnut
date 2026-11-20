@@ -252,11 +252,30 @@ function threadsChanged(taskId?: string): void {
   else { nodeThreads.clear(); threadsGenAll++; }
 }
 
+/** Per org node: its Threads joined with the task asks they point at (withTaskAsks), kept while
+ *  the same rows point at tasks that read the same (askPointerSignature) and for at most
+ *  JOINED_ASKS_MS, the time his word to one of those tasks may take to count (the join reads the
+ *  session records; the minute sweep re-joined them as often before). */
+const joined = new Map<string, { rows: NodeThreadRows; sig: string; at: number; out: NodeThreadRows }>();
+const JOINED_ASKS_MS = 60_000;
+
+async function joinedAsks(nodeId: string, rows: NodeThreadRows, all: readonly Task[], now: number): Promise<NodeThreadRows> {
+  const [{ withTaskAsks }, { askPointerSignature }] = await Promise.all([import('./org/threads-store.js'), import('./org/thread-task-ask.js')]);
+  const sig = askPointerSignature(rows, all as never);
+  // No thread waits on him: nothing to join.
+  if (!sig) { joined.delete(nodeId); return rows; }
+  const hit = joined.get(nodeId);
+  if (hit && hit.rows === rows && hit.sig === sig && now - hit.at < JOINED_ASKS_MS) return hit.out;
+  const out = await withTaskAsks(nodeId, rows, all);
+  joined.set(nodeId, { rows, sig, at: now, out });
+  return out;
+}
+
 async function readNodeThreads(tasks: readonly Task[]): Promise<Map<string, ThreadCounts>> {
   const out = new Map<string, ThreadCounts>();
   const nodes = tasks.filter((t) => keepsThreads(t) && t.phase !== 'COMPLETE');
   if (!nodes.length) return out;
-  const { readThreads, withTaskAsks } = await import('./org/threads-store.js');
+  const { readThreads } = await import('./org/threads-store.js');
   const { threadCounts } = await import('./org/thread-view.js');
   const { poppedIndex, threadsPopUpNow } = await import('./org/thread-popup.js');
   // threads_pop_up: one read of every owner for the whole pass, never one per node (org/thread-popup.ts).
@@ -283,7 +302,7 @@ async function readNodeThreads(tasks: readonly Task[]): Promise<Map<string, Thre
     const counts = await safely('threads', async () => {
       // The tasks as they are now: one read a pass, shared by every node.
       all ??= await (await import('./task-manager.js')).listTasks();
-      const own = await withTaskAsks(t.id, threads, all);
+      const own = await joinedAsks(t.id, threads, all, now);
       if (!threadsPopUpNow()) return threadCounts(own, now);
       // What waits on him below counts here too, never as this task's Needs you (thread-view.ts threadCounts).
       const listed = (await (below ??= poppedIndex({ all }))).byViewer.get(t.id) ?? [];
@@ -1515,5 +1534,6 @@ export function stopUserStatusSync(): void {
   threadOwners.clear();
   dropSlow();
   threadsChanged();
+  joined.clear();
   threadsReadAllAt = Date.now();
 }
