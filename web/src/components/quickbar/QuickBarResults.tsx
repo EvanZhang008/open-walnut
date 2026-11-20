@@ -41,7 +41,7 @@ export const QuickBarResults = forwardRef<QuickBarResultsHandle, {
           key: task.id, title: task.title, sub: [task.project, task.stateLabel].filter(Boolean).join(' · '), to: taskPath(task.id),
         })))
         : searchQuickNotes(query, ctl.signal).then((notes) => notes.map((note): QuickResult => ({
-          key: note.path, title: note.title || note.name || note.path.replace(/\.md$/, ''), sub: note.path.replace(/\.md$/, ''),
+          key: note.path, title: note.name, sub: note.meta,
           // Quotes too (encodeURIComponent keeps ' and the Mac app's links refuse it).
           to: `/notes?path=${encodeURIComponent(note.path).replace(/'/g, '%27')}`,
         })));

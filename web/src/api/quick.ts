@@ -4,7 +4,8 @@
  * question's answer.
  */
 import { apiGet } from './client';
-import { searchNotesHybrid, type SearchResult } from './notes-v2';
+import { searchNotesHybrid } from './notes-v2';
+import { noteHitLabel } from '../../../src/core/note-hit-label';
 import type { QuickPerson } from '@/components/quickbar/quickbar-people';
 
 export function fetchQuickPeople(limit = 12, signal?: AbortSignal): Promise<{ people: QuickPerson[] }> {
@@ -19,11 +20,20 @@ export function searchQuickTasks(q: string, signal?: AbortSignal): Promise<{ tas
   return apiGet('/api/v1/quick/tasks', params, { signal, timeoutMs: 8_000 });
 }
 
-/** Notes matching the words, by title and text (the Notes page's own search, its fast lane). */
-export async function searchQuickNotes(q: string, signal?: AbortSignal): Promise<SearchResult[]> {
+/** A note found: its path, and how its row names it (the file name, then its folder and its title). */
+export interface QuickNoteRow { path: string; name: string; meta: string }
+
+/**
+ * Notes matching the words, by title and text (the Notes page's own search, its fast lane), each
+ * labelled as every notes result list labels it (src/core/note-hit-label.ts): the file name first.
+ */
+export async function searchQuickNotes(q: string, signal?: AbortSignal): Promise<QuickNoteRow[]> {
   if (!q.trim()) return [];
   const { results } = await searchNotesHybrid(q, { mode: 'string', limit: 8, signal });
-  return results;
+  return results.filter((n) => n.path).map((n) => {
+    const label = noteHitLabel(n);
+    return { path: n.path, name: label.name, meta: [label.folder, label.title].filter(Boolean).join(' · ') };
+  });
 }
 
 export type QuickFollowLine =
