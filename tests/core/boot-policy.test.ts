@@ -66,6 +66,7 @@ const OLD_TRUTH: Record<BootJob, (cloud: boolean) => boolean> = {
   'companion-queues': cloudOnly,
   'companion-stream-door': leaderOnly, // new in WP13: the Mac's door for the companion's forward streams
   'companion-stream-forward': cloudOnly, // new in WP13: the companion's forward on a stream (cap bridge-stream-v1)
+  'hub-port-door': leaderOnly, // new: a joined machine's hub forward into the primary's own loopback port
   'hook-task-domains': leaderOnly,
   'session-request-sweep': leaderOnly,
   'lane-orphan-passes': leaderOnly,

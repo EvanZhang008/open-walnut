@@ -20,6 +20,7 @@ secrets and the host's MCP servers all work. Hosts reached over SSH keep working
 | No companion | `src/core/net/net-local.ts`, `net-rows.ts`, `join-ticket.ts` (the Mac) | The Mac keeps the list (`net.joined`) and its walnut-net checks each join (capability `net-join-v1`) |
 | The Mac | `src/core/net/net-mac.ts`, `src/web/routes/hosts-net.ts` | Reads the list, makes each machine a `transport: net` host, hands each daemon its config |
 | The link | `src/core/hosts/net-link.ts`, `DaemonConnection.dialNetHost` | Asks the Mac's walnut-net for a loopback port that reaches the machine's daemon |
+| Hub forwards | `src/providers/hub-forward-core.ts` (both twins), `stream-relay-core.ts` `openOut`, `src/core/hosts/hub-ports.ts` (the Mac), `src/commands/net-hub.ts` | A machine's 127.0.0.1 port that reaches one port on the Mac's own loopback (below) |
 | Relay | `scripts/cloud/net-relay.sh` | iroh-relay behind Caddy (`/relay`, `/ping`), and address discovery on UDP 7842 |
 | Join | `src/core/net/net-join-script.ts`, `scripts/join.sh`, `src/commands/net.ts` | The script an invite link serves (and the same script with a ticket, attached to every release), and `walnut net join` |
 | Join on Windows | `src/core/net/net-join-ps1.ts`, `scripts/join.ps1` | The PowerShell twin: readies WSL and its own Linux, then runs the join above inside it (below) |
@@ -60,6 +61,93 @@ run as scripts over `exec.script`, and a host-network machine gets the same auto
 compiler and dtach fixes as an SSH host. A daemon without `pty-stream-v1`
 (an older build, or the JS twin on Node) shows no Terminal tab, and its status says
 it needs an update.
+
+## Reaching a port on the primary (hub forwards)
+
+A joined machine can open a port on its own 127.0.0.1 whose connections reach one port on the
+primary's own loopback (the Mac's), over the daemon link the primary already holds to it. The
+use it was made for: a machine's coderelay sends its model requests to its local port, and they
+reach the Mac's coderelay, which listens on the Mac's 127.0.0.1 only. No port opens on any
+network: the machine listens on 127.0.0.1, the Mac connects its own 127.0.0.1, and the bytes ride
+the link that is already there (capability `hub-forward-v1`, both daemon twins).
+
+It takes two keys, and both are off until set. With neither, nothing listens and every such
+stream is refused, as before.
+
+**On the machine**, its own file names each forward: `hub-forwards.json` in its net state dir
+(`~/.local/state/open-walnut/net/` for the user's own daemon, beside its key). Nothing the
+primary sends writes it. `walnut net hub-forward add 18403` writes it (`add <local_port> [port]`,
+the primary's port defaulting to the same; `remove <local_port>`; no argument lists the forwards
+and how each is doing). By hand:
+
+    { "forwards": [{ "local_port": 18403, "to": "primary", "port": 18403 }] }
+
+| Key | Meaning |
+|---|---|
+| `local_port` | The port on this machine's 127.0.0.1 (never another address) |
+| `to` | `primary`, the only target (may be left out) |
+| `port` | The port on the primary's own loopback |
+| `walnut` | Only when more than one Walnut leads this machine: the id of the one whose primary takes it |
+
+The daemon reads the file every 5 seconds: a change applies then, and a port it could not bind
+(another program has it) is tried again then. At most 16 forwards; an entry it cannot use is left
+out and logged.
+
+**On the primary**, `config.yaml` lists which of its own loopback ports each machine may reach:
+
+    net:
+      hub_ports:
+        - port: 18403
+          hosts: [home-pc]
+
+`hosts` are host aliases (the rows in Settings > Remote Hosts). A stream is taken only for a
+listed port from a listed host; the host is the link's own (the daemon this Mac dialled, whose
+key walnut-net proved), never a name the stream carries. The Mac then connects 127.0.0.1 on that
+port. It is always 127.0.0.1: a stream that names any other address (or anything that is not
+an address) is refused.
+Only the primary takes them (boot policy `hub-port-door`); a replica refuses. A port that is
+Walnut's own on the Mac (its server, its door for host servers, its session daemon's socket,
+which all trust a caller on loopback) is refused even when listed.
+
+How a connection goes: the machine's daemon accepts it on 127.0.0.1, holds it paused, and sends
+`stream-open {sid, from: 'hub', port}` to the primary's session link (the server socket that
+named its Walnut there and was heard last; never a lane, a follower, the companion or a probe).
+The primary checks `net.hub_ports`, connects its port, and answers `stream.accept`; or it
+answers `stream.close` with why, and the daemon closes the connection. From then on it is a port
+stream like the ones above: the same 256 KiB window each way (a slow reader slows the sender),
+FINs both ways, a reset on a cut.
+
+- **Bounded**: at most 32 hub streams at once on the machine, and 32 per host on the primary;
+  the next is refused until one ends. An open waits at most 8 s for the primary's answer.
+- **A dropped link** cuts its forwarded connections (a reset, never a clean end). The listener
+  stays: while no primary is linked a connection is closed at once, and once the link is back
+  the next one goes through.
+- **Logged**, with the host and port and never a byte of what they carry: on the machine
+  `hub forward: listening`, `opened`, `refused` (with why) and `cannot listen`; on the primary
+  `hub port: opened` and `hub port: refused`. The same refusal again is one line per 5 s per
+  port, with the count it held back (`alsoRefused`); a new reason always gets its line.
+- **Older versions**: a primary older than hub forwards answers `stream.close` ("this server
+  does not take that stream"), and the machine closes the connection and keeps listening. The
+  primary asks a machine's daemon only `hub.status`, and only when it has `hub-forward-v1`; an
+  older daemon reads as needing an update.
+
+**Status**: `walnut.hosts.list()` and `walnut.hosts.get(alias)` (the plugin API; the coderelay
+App's Hosts tab reads it) carry `hub` on a host `net.hub_ports` names, one entry per port:
+
+| Field | Meaning |
+|---|---|
+| `port` | The port on the primary's loopback |
+| `linked` | The primary's link to the host is up |
+| `forward` | The host's own forward to it (`localPort`, `listening`, `error`), from its daemon's `hub.status` (asked at most every 15 s, waited for at most 1.5 s); null while not known |
+| `needsUpdate` | The host's daemon has no `hub-forward-v1` yet |
+| `up` | Linked and the host's forward listens |
+| `active`, `opened`, `refused` | Streams open now, opened and refused since this server started |
+| `lastConnectedAt`, `lastRefusedAt`, `lastError` | When a stream last reached the port (ms since the epoch), the last refusal and its reason |
+
+On the machine, `walnut net hub-forward` shows the same from its side (`hub.status`, which the
+daemon answers to its primary and its own local clients, never the companion's bridge, a host
+server, a lane or a test probe). A refusal there counts what the primary refused, never a
+connection the machine's own client closed before the answer.
 
 ## Joining a machine
 
@@ -241,6 +329,9 @@ machine it has on the companion's list).
 - An invite is checked by hash in constant time, a wrong one counts toward the caller's
   auth rate limit, and only the Mac that owns the companion may make one, list the
   machines or remove one.
+- A hub forward opens nothing on any network: the machine listens on 127.0.0.1, and the Mac
+  takes a stream only for a port its own `net.hub_ports` lists for that machine, on its own
+  127.0.0.1 (above).
 - Address discovery on UDP 7842 tells a caller its own public address and nothing else:
   it relays nothing and accepts no stream. It has its own certificate, made on the
   companion; machines trust that certificate alone (the pin rides their config).
@@ -338,7 +429,8 @@ when it is removed is not told, but it can no longer reach anything.
 | A machine's key, config and log | `~/.local/state/open-walnut/net/` for the user's own daemon (the login service or not; never moved by `XDG_STATE_HOME`, so one machine has one key), else `<daemon dir>/net` |
 | The downloaded walnut-net | `<net state>/bin/walnut-net-<version>` (this version and one older) |
 | The member list | the companion's `${XDG_STATE_HOME}/open-walnut/net-members.json` (outside its synced data) |
-| The Mac's settings | `net.enabled`, `net.relay`, and with no companion `net.joined`, in `config.yaml` |
+| The Mac's settings | `net.enabled`, `net.relay`, `net.hub_ports`, and with no companion `net.joined`, in `config.yaml` |
+| A machine's hub forwards | `hub-forwards.json` in its net state dir (above) |
 
 ## Releases
 

@@ -28,13 +28,24 @@ export interface IncomingStreamInfo {
   /** The Walnut it is for (the leader's data dir). */
   home?: string
   purpose?: string
+  /** A hub stream's port on this server's loopback (`from: 'hub'`, hub-forward-v1). */
+  port?: number
+  /** An address the opener named; a hub stream that names one is refused (core/hosts/hub-ports.ts). */
+  host?: string
 }
+
+/** What an incoming stream is plugged into; null refuses it. */
+export type StreamPlug = ((stream: Duplex) => void) | null
 
 export interface StreamEndpointOptions {
   /** Write one command frame to the daemon. Throws when the link is down. */
   send: (frame: Record<string, unknown>) => void
-  /** What to plug an incoming stream into; null refuses it. */
-  accept?: (info: IncomingStreamInfo) => ((stream: Duplex) => void) | null
+  /**
+   * What to plug an incoming stream into; null refuses it, and so does a throw, with the
+   * error's words. A promise decides later (a hub stream connects its port first): the opener
+   * waits for the accept or the close until then, and a rejection refuses with its words.
+   */
+  accept?: (info: IncomingStreamInfo) => StreamPlug | Promise<StreamPlug>
   window?: number
   openTimeoutMs?: number
   /**
@@ -236,6 +247,8 @@ class Endpoint implements StreamEndpoint {
   private readonly streams = new Map<string, LinkStream>()
   private readonly opening = new Map<string, { resolve: (s: LinkStream) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout>; stream: LinkStream }>()
   private counter = 0
+  /** Moves on at every closeAll (a link drop): an acceptor decided after it answers nothing. */
+  private epoch = 0
 
   constructor(private readonly opts: StreamEndpointOptions) {
     this.window = opts.window ?? DEFAULT_WINDOW
@@ -334,10 +347,40 @@ class Endpoint implements StreamEndpoint {
       from: typeof msg.from === 'string' ? msg.from : '',
       ...(typeof msg.home === 'string' ? { home: msg.home } : {}),
       ...(typeof msg.purpose === 'string' ? { purpose: msg.purpose } : {}),
+      ...(typeof msg.port === 'number' ? { port: msg.port } : {}),
+      // Any `host` the opener put in is passed on, so a hub stream that names one is refused.
+      ...(msg.host !== undefined ? { host: typeof msg.host === 'string' ? msg.host.slice(0, 256) : `(${typeof msg.host})` } : {}),
     }
-    const plug = this.opts.accept?.(info) ?? null
+    let decided: StreamPlug | Promise<StreamPlug>
+    try {
+      decided = this.opts.accept?.(info) ?? null
+    } catch (err) {
+      this.refuse(sid, err)
+      return
+    }
+    if (decided && typeof (decided as Promise<StreamPlug>).then === 'function') {
+      // Decided later: by then the link may have closed or come back with the same id in use (a
+      // daemon that restarted counts its ids anew). Then nothing is sent and the plug is never
+      // called; the acceptor's own deadline lets go of what it holds.
+      const epoch = this.epoch
+      const stale = () => epoch !== this.epoch || this.streams.has(sid)
+      ;(decided as Promise<StreamPlug>).then(
+        (plug) => { if (!stale()) this.plugIncoming(sid, info, plug) },
+        (err) => { if (!stale()) this.refuse(sid, err) },
+      )
+      return
+    }
+    this.plugIncoming(sid, info, decided as StreamPlug)
+  }
+
+  private refuse(sid: string, err?: unknown): void {
+    const error = err instanceof Error && err.message ? err.message.slice(0, 200) : 'this server does not take that stream'
+    try { this.send({ cmd: 'stream.close', sid, error }) } catch { /* gone */ }
+  }
+
+  private plugIncoming(sid: string, info: IncomingStreamInfo, plug: StreamPlug): void {
     if (!plug) {
-      try { this.send({ cmd: 'stream.close', sid, error: 'this server does not take that stream' }) } catch { /* gone */ }
+      this.refuse(sid)
       return
     }
     const stream = new LinkStream(this, sid, info.purpose ?? '')
@@ -354,6 +397,7 @@ class Endpoint implements StreamEndpoint {
   }
 
   closeAll(reason: string): void {
+    this.epoch += 1
     for (const [sid, p] of [...this.opening]) {
       this.opening.delete(sid)
       clearTimeout(p.timer)

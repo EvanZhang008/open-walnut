@@ -70,6 +70,8 @@ import { createPluginJobSupervisor } from './plugin-jobs-core.js'
 import { createPluginJobHarness } from './plugin-job-harness.js'
 import { createPluginJobDoor } from './plugin-job-door.js'
 import { createStreamRelay } from './stream-relay-core.js'
+import { createHubForwards, parseHubForwards } from './hub-forward-core.js'
+import { netStateDirOf } from './net-config-core.js'
 import { createPtyStreams } from './pty-stream-core.js'
 import { createHostResume } from './host-resume-core.js'
 import { createCliOwner } from './cli-owner-core.js'
@@ -313,6 +315,9 @@ export function getDaemonSource(): string {
     ['__CREATE_PLUGIN_JOB_DOOR__', createPluginJobDoor.toString()],
     ['__CREATE_FEATURE_RELAY__', createFeatureRelay.toString()],
     ['__CREATE_STREAM_RELAY__', createStreamRelay.toString()],
+    ['__CREATE_HUB_FORWARDS__', createHubForwards.toString()],
+    ['__PARSE_HUB_FORWARDS__', parseHubForwards.toString()],
+    ['__NET_STATE_DIR_OF__', netStateDirOf.toString()],
     ['__CREATE_PTY_STREAMS__', createPtyStreams.toString()],
     ['__CREATE_HOST_RESUME__', createHostResume.toString()],
     ['__CREATE_CLI_OWNER__', createCliOwner.toString()],
@@ -590,6 +595,23 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       // A port stream of a relay without `connect` is refused, never dialled.
       relay.openPort('a', 'o2', 8080, '127.0.0.1')
       if (sent.join(',') !== 'b:stream-open,a:stream-close,a:stream-close' || relay.count() !== 1) throw new Error('stream relay did not build')
+    }
+    // Hub forwards smoke: a reconstructed copy reads its file and listens on 127.0.0.1 only.
+    const createHub = reconstructed['__CREATE_HUB_FORWARDS__'] as typeof createHubForwards | undefined
+    const parseHub = reconstructed['__PARSE_HUB_FORWARDS__'] as typeof parseHubForwards | undefined
+    if (createHub && parseHub) {
+      const listened: string[] = []
+      const hub = createHub<string, { destroy(): void }>({
+        file: '/f', read: () => '{"forwards":[{"local_port":1,"port":2}]}', parse: parseHub,
+        listen: (port, host) => { listened.push(`${host}:${port}`); return { close: () => {} } },
+        links: () => [], openOut: () => {}, log: () => {}, now: () => 0, every: () => () => {},
+      })
+      hub.start()
+      if (listened.join(',') !== '127.0.0.1:1' || hub.status().forwards.length !== 1) throw new Error('hub forwards did not build')
+    }
+    const stateDirOf = reconstructed['__NET_STATE_DIR_OF__'] as typeof netStateDirOf | undefined
+    if (stateDirOf && stateDirOf({ prodDaemon: false, daemonDir: '/d', home: '/h', join: (...p: string[]) => p.join('/') }) !== '/d/net') {
+      throw new Error('net state dir did not build')
     }
     // Terminal streams smoke: a reconstructed copy without a pty refuses an open, never spawns.
     const createPtys = reconstructed['__CREATE_PTY_STREAMS__'] as typeof createPtyStreams | undefined
@@ -4451,6 +4473,8 @@ function dispatchCommand(ws, id, cmd) {
       const op = cmd.cmd.slice(4);
       return replyTransfer(ws, id, cmd.cmd, function () { return hostMcp[op](cmd); }, false);
     }
+    // This machine's hub forwards (hub-forward-v1). Twin of daemon-standalone.ts.
+    case 'hub.status': return cmdHubStatus(ws, id);
     // The host network (net-v1); not bridge- or follower-reachable: it decides who may
     // reach this daemon. Mirrors daemon-standalone.ts.
     case 'net.status': case 'net.identity': case 'net.configure': case 'net.forward': case 'net.probe': case 'net.invites': case 'net.join': {
@@ -5988,18 +6012,31 @@ function primaryClientFor(home) {
 // socket that named its Walnut here, the one heard last, never a quiet one. Its
 // bulk channel names none and drops stream frames. Twin of daemon-standalone.ts.
 function primaryForBridge(home) {
-  var now = Date.now();
-  var best = null, bestAt = -Infinity;
-  for (const client of wsClients) {
-    if (!isServerClient(client) || !gatewayClientHomes.has(client)) continue;
+  var best = null;
+  for (const l of freshLeaderLinks()) {
     // A named link's companion reaches its own Walnut's primary only.
-    if (!servesBridgeHome(client, home || '')) continue;
-    var at = typeof client.lastHeardAt === 'number' ? client.lastHeardAt : now;
-    if (now - at > TRUSTED_CLIENT_QUIET_MS || at <= bestAt) continue;
-    best = client;
-    bestAt = at;
+    if (!servesBridgeHome(l.link, home || '')) continue;
+    if (!best || l.heardAt > best.heardAt) best = l;
   }
-  return best;
+  return best ? best.link : null;
+}
+
+// The primary server sockets here that named their Walnut (host.slice, leader.configure) and
+// were heard lately, in connection order: never the bridge, a follower, a lane or a probe.
+// A companion stream (primaryForBridge) and a hub forward (hubLinks) go to one of them.
+// Twin of daemon-standalone.ts.
+function freshLeaderLinks() {
+  var now = Date.now();
+  var out = [];
+  for (const client of wsClients) {
+    if (!isServerClient(client)) continue;
+    var home = gatewayClientHomes.get(client);
+    if (home === undefined) continue;
+    var at = typeof client.lastHeardAt === 'number' ? client.lastHeardAt : now;
+    if (now - at > TRUSTED_CLIENT_QUIET_MS) continue;
+    out.push({ link: client, home: home, heardAt: at });
+  }
+  return out;
 }
 
 function streamTarget(ws, to) {
@@ -14557,10 +14594,12 @@ try {
 } catch (err) { daemonPorts = null; }
 // The host network sidecar (net-core.cjs): 'net-v1' is advertised only when it loads.
 // Mirrors daemon-standalone.ts.
+// This host's net state dir (net-config-core.ts netStateDirOf, inlined): its key, config, and
+// its hub forwards file. Mirrors daemon-standalone.ts.
+var NET_STATE_DIR = (__NET_STATE_DIR_OF__)({ serviceStateDir: SERVICE_MODE ? DAEMON_STATE_DIR : null, prodDaemon: IS_PROD_DAEMON_DIR, daemonDir: DAEMON_DIR, home: HOME_DIR, join: path.join });
 let netSupervisor = null;
 try {
   const netCore = require(path.join(__dirname, 'net-core.cjs'));
-  const NET_STATE_DIR = netCore.netStateDir({ serviceStateDir: SERVICE_MODE ? DAEMON_STATE_DIR : null, prodDaemon: IS_PROD_DAEMON_DIR, daemonDir: DAEMON_DIR, home: HOME_DIR });
   netSupervisor = netCore.createNetSupervisor({
     spawn: function (command, args, opts) { return spawn(command, args, opts); },
     stateDir: NET_STATE_DIR,
@@ -14569,6 +14608,46 @@ try {
     log: function (level, msg, data) { logMsg(level, msg, data); },
   });
 } catch (err) { netSupervisor = null; }
+// Hub forwards (hub-forward-v1, hub-forward-core.ts, inlined): this machine's own file names
+// the 127.0.0.1 ports whose connections go to one port on the primary's loopback; nothing the
+// primary sends writes it. Twin of daemon-standalone.ts.
+var HUB_FORWARDS_FILE = path.join(NET_STATE_DIR, 'hub-forwards.json');
+// The primary links a hub stream may take (freshLeaderLinks), each with its Walnut's id.
+// Twin of daemon-standalone.ts.
+function hubLinks() {
+  return freshLeaderLinks().filter(function (l) { return !!l.home; }).map(function (l) {
+    var rec = leaderBook.recordOf(l.home);
+    return { link: l.link, home: l.home, heardAt: l.heardAt, walnutId: rec && rec.walnutId ? rec.walnutId : null };
+  });
+}
+var hubForwards = (__CREATE_HUB_FORWARDS__)({
+  file: HUB_FORWARDS_FILE,
+  read: function () { try { return fs.readFileSync(HUB_FORWARDS_FILE, 'utf8').slice(0, 64 * 1024); } catch (e) { return null; } },
+  parse: (__PARSE_HUB_FORWARDS__),
+  listen: function (port, host, onConnection, ready) {
+    var srv = net.createServer({ allowHalfOpen: true }, function (sock) { sock.on('error', function () {}); onConnection(sock); });
+    var up = false;
+    // Before it listens, an error is why it cannot; after (an accept failing), the listener is
+    // closed and reported down, so the next read of the file binds the port again.
+    srv.on('error', function (err) {
+      if (up) { up = false; try { srv.close(); } catch (e) { /* not listening */ } }
+      ready(err);
+    });
+    srv.listen(port, host, function () { up = true; ready(null); });
+    return { close: function () { up = false; try { srv.close(); } catch (e) { /* not listening */ } } };
+  },
+  links: hubLinks,
+  openOut: function (link, sock, meta, hooks) { streamRelay.openOut(link, sock, meta, hooks); },
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+  now: function () { return Date.now(); },
+  every: function (ms, fn) { var t = setInterval(fn, ms); if (t.unref) t.unref(); return function () { clearInterval(t); }; },
+});
+// hub.status: this machine's forwards and how each is doing. Its primary and its own local
+// clients (the CLI); never the bridge, a follower, a lane or a probe.
+function cmdHubStatus(ws, id) {
+  if (!isServerClient(ws)) return sendError(ws, id, 'hub.status: not for this socket');
+  sendOk(ws, id, hubForwards.status());
+}
 function ensureTaskDirFor(taskId, home) {
   if (!taskDirCore || !TASK_DIR_ROOT) return null;
   try { return taskDirCore.ensureTaskDir(TASK_DIR_ROOT, taskId, home); } catch (err) { return null; }
@@ -17268,6 +17347,8 @@ async function startDaemon() {
     fs.renameSync(portTmp, PORT_FILE);
     // The host network runs once this daemon answers on its port (net-v1).
     if (netSupervisor) netSupervisor.start();
+    // Hub forwards listen once the links they ride can come (hub-forward-v1).
+    hubForwards.start();
     // daemon.pid names us now: the journal writes are ours (journal v2 migration).
     migrateJournals();
     // Agent gateway: second (unix-socket) listener + on-PATH walnut shim. Both

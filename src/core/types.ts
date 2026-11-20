@@ -1693,6 +1693,9 @@ export interface Config {
     joined?: Record<string, { name: string; platform?: string; addedAt: number }>;
     /** Where this Mac last reached each machine, by network id (src/core/net/net-where.ts). */
     where?: Record<string, { addrs?: string[]; relay?: string }>;
+    /** The ports on this Walnut's own 127.0.0.1 a machine's hub forward may reach, and which
+     *  hosts (aliases) may (src/core/hosts/hub-ports.ts). None: no machine reaches any. */
+    hub_ports?: Array<{ port: number; hosts: string[] }>;
   };
   hosts?: Record<string, {
     hostname: string;

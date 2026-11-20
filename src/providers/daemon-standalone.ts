@@ -107,7 +107,8 @@ import { createFollowerGateway, type FollowerCaller, type FollowerGatewayRespons
 import { createHostServerSupervisor } from './host-server-core.js'
 import { createPluginJobSupervisor } from './plugin-jobs-core.js'
 import { createPluginJobDoor } from './plugin-job-door.js'
-import { createStreamRelay } from './stream-relay-core.js'
+import { createStreamRelay, type PortSocket } from './stream-relay-core.js'
+import { createHubForwards, parseHubForwards } from './hub-forward-core.js'
 import { createPtyStreams, type PtyChild, type PtySpawnOptions } from './pty-stream-core.js'
 import { createHostResume } from './host-resume-core.js'
 import { createCliOwner } from './cli-owner-core.js'
@@ -2780,6 +2781,8 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // processes. Keep in sync with daemon-source.ts.
     case 'ports.list': return replyTransfer(ws, id as number, 'ports.list', () => daemonPorts.list(cmd), false)
     case 'ports.stop': return replyTransfer(ws, id as number, 'ports.stop', () => daemonPorts.stop(cmd), false)
+    // This machine's hub forwards ('hub-forward-v1', hub-forward-core.ts). Keep in sync with daemon-source.ts.
+    case 'hub.status': return cmdHubStatus(ws, id as number)
     case 'net.status': return replyTransfer(ws, id as number, 'net.status', () => netSupervisor.status(), false)
     case 'net.identity': return replyTransfer(ws, id as number, 'net.identity', async () => ({ endpointId: await netSupervisor.identity() }), false)
     case 'net.configure': return replyTransfer(ws, id as number, 'net.configure', () => netSupervisor.configure(cmd), false)
@@ -4618,19 +4621,33 @@ function primaryClientFor(home: string): ServerWebSocket<WsData> | null {
  * Keep in sync with daemon-source.ts.
  */
 function primaryForBridge(home = ''): ServerWebSocket<WsData> | null {
-  const now = Date.now()
-  let best: ServerWebSocket<WsData> | null = null
-  let bestAt = -Infinity
-  for (const client of wsClients) {
-    if (!isServerClient(client) || !gatewayClientHomes.has(client)) continue
+  let best: { link: ServerWebSocket<WsData>; heardAt: number } | null = null
+  for (const l of freshLeaderLinks()) {
     // A named link's companion reaches its own Walnut's primary only.
-    if (!servesBridgeHome(client, home)) continue
-    const at = typeof client.data?.lastHeardAt === 'number' ? client.data.lastHeardAt : now
-    if (now - at > TRUSTED_CLIENT_QUIET_MS || at <= bestAt) continue
-    best = client
-    bestAt = at
+    if (!servesBridgeHome(l.link, home)) continue
+    if (!best || l.heardAt > best.heardAt) best = l
   }
-  return best
+  return best?.link ?? null
+}
+
+/**
+ * The primary server sockets here that named their Walnut (host.slice, leader.configure) and
+ * were heard lately, in connection order: never the bridge, a follower, a lane or a probe.
+ * A companion stream (primaryForBridge) and a hub forward (hubLinks) go to one of them.
+ * Keep in sync with daemon-source.ts.
+ */
+function freshLeaderLinks(): Array<{ link: ServerWebSocket<WsData>; home: string; heardAt: number }> {
+  const now = Date.now()
+  const out: Array<{ link: ServerWebSocket<WsData>; home: string; heardAt: number }> = []
+  for (const client of wsClients) {
+    if (!isServerClient(client)) continue
+    const home = gatewayClientHomes.get(client)
+    if (home === undefined) continue
+    const at = typeof client.data?.lastHeardAt === 'number' ? client.data.lastHeardAt : now
+    if (now - at > TRUSTED_CLIENT_QUIET_MS) continue
+    out.push({ link: client, home, heardAt: at })
+  }
+  return out
 }
 
 /** Where a stream `ws` opens to `to` goes, or why it cannot. */
@@ -12780,6 +12797,43 @@ const netSupervisor = createNetSupervisor({
   log: (level, msg, data) => logMsg(level, msg, data),
 })
 
+// ── Hub forwards (capability 'hub-forward-v1', hub-forward-core.ts) ──
+// PARITY: keep in sync with daemon-source.ts. This machine's own file (beside its network
+// key) names the 127.0.0.1 ports whose connections go to one port on the primary's loopback;
+// nothing the primary sends writes it.
+const HUB_FORWARDS_FILE = path.join(NET_STATE_DIR, 'hub-forwards.json')
+/** The primary links a hub stream may take (freshLeaderLinks), each with its Walnut's id. */
+function hubLinks(): Array<{ link: ServerWebSocket<WsData>; home: string; walnutId: string | null; heardAt: number }> {
+  return freshLeaderLinks().filter((l) => l.home).map((l) => ({ ...l, walnutId: leaderBook.recordOf(l.home)?.walnutId ?? null }))
+}
+const hubForwards = createHubForwards<ServerWebSocket<WsData>, net.Socket>({
+  file: HUB_FORWARDS_FILE,
+  read: () => { try { return fs.readFileSync(HUB_FORWARDS_FILE, 'utf8').slice(0, 64 * 1024) } catch { return null } },
+  parse: parseHubForwards,
+  listen: (port, host, onConnection, ready) => {
+    const srv = net.createServer({ allowHalfOpen: true }, (sock) => { sock.on('error', () => {}); onConnection(sock) })
+    let up = false
+    // Before it listens, an error is why it cannot; after (an accept failing), the listener is
+    // closed and reported down, so the next read of the file binds the port again.
+    srv.on('error', (err) => {
+      if (up) { up = false; try { srv.close() } catch { /* not listening */ } }
+      ready(err)
+    })
+    srv.listen(port, host, () => { up = true; ready(null) })
+    return { close: () => { up = false; try { srv.close() } catch { /* not listening */ } } }
+  },
+  links: hubLinks,
+  openOut: (link, sock, meta, hooks) => streamRelay.openOut(link, sock as unknown as PortSocket, meta, hooks),
+  log: (level, msg, data) => logMsg(level, msg, data),
+  now: () => Date.now(),
+  every: (ms, fn) => { const t = setInterval(fn, ms); t.unref?.(); return () => clearInterval(t) },
+})
+/** `hub.status`: this machine's forwards and how each is doing. Its primary and its own local clients (the CLI); never the bridge, a follower, a lane or a probe. */
+function cmdHubStatus(ws: ServerWebSocket<WsData>, id: number) {
+  if (!isServerClient(ws)) return sendError(ws, id, 'hub.status: not for this socket')
+  sendOk(ws, id, hubForwards.status())
+}
+
 // ── The secrets the user shared with this host (capability 'secrets-v1') ──
 // PARITY: keep in sync with daemon-source.ts. The logic is secrets-core.ts.
 const SECRETS_ROOT = secretsRoot(process.env, HOME_DIR)
@@ -14778,6 +14832,8 @@ if (action === '--start' || SERVICE_MODE) {
   fs.renameSync(portTmp, PORT_FILE)
   // The host network runs once this daemon answers on its port (net-v1).
   netSupervisor.start()
+  // Hub forwards listen once the links they ride can come (hub-forward-v1).
+  hubForwards.start()
   // daemon.pid names us now: the journal writes are ours (journal v2 migration).
   migrateJournals()
   // Agent gateway: second (unix-socket) listener + on-PATH `walnut` shim. Both

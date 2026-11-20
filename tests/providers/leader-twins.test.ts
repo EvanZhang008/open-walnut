@@ -269,8 +269,11 @@ describe('leader protocol: both twins', () => {
       expect(bridgeBranch).toMatch(/primaryForBridge\(bridgeHomeOf\(ws\)\)/)
       expect(bridgeBranch).toMatch(/from: 'companion'/)
       // The server socket that named its Walnut (never its bulk channel), heard last, never a quiet one.
-      const pick = fnBody(src, 'primaryForBridge')
-      expect(pick).toMatch(/!isServerClient\(client\) \|\| !gatewayClientHomes\.has\(client\)\) continue/)
+      // (freshLeaderLinks, which a hub forward's pick shares.)
+      expect(fnBody(src, 'primaryForBridge')).toMatch(/of freshLeaderLinks\(\)/)
+      const pick = fnBody(src, 'freshLeaderLinks')
+      expect(pick).toMatch(/if \(!isServerClient\(client\)\) continue/)
+      expect(pick).toMatch(/gatewayClientHomes\.get\(client\)[\s\S]*if \(home === undefined\) continue/)
       expect(pick).toMatch(/now - at > TRUSTED_CLIENT_QUIET_MS/)
       // A follower: to the primary of its own Walnut or the companion; the primary: to its follower.
       expect(target).toMatch(/origin === 'follower'/)

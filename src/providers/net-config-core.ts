@@ -96,10 +96,18 @@ export function parseNetConfig(req: NetConfigureRequest): { relayMode?: 'public'
  * test's, the companion's tunnel daemon) keeps its own beside it.
  */
 export function netStateDir(opts: { serviceStateDir?: string | null; prodDaemon: boolean; daemonDir: string; home?: string }): string {
+  return netStateDirOf({ ...opts, home: opts.home ?? os.homedir(), join: path.join })
+}
+
+/**
+ * netStateDir's rule with its path join handed in: the source daemon twin inlines this
+ * one (`__NET_STATE_DIR_OF__`), so its body references nothing at module scope.
+ */
+export function netStateDirOf(opts: { serviceStateDir?: string | null; prodDaemon: boolean; daemonDir: string; home: string; join: (...parts: string[]) => string }): string {
   // Never XDG_STATE_HOME: a daemon a shell started may have it and the login service not,
   // and two paths would be two keys for one machine.
-  if (opts.serviceStateDir || opts.prodDaemon) return path.join(opts.home ?? os.homedir(), '.local', 'state', 'open-walnut', 'net')
-  return path.join(opts.daemonDir, 'net')
+  if (opts.serviceStateDir || opts.prodDaemon) return opts.join(opts.home, '.local', 'state', 'open-walnut', 'net')
+  return opts.join(opts.daemonDir, 'net')
 }
 
 /** The walnut-net executable for this install: $WALNUT_NET_BIN, else beside the daemon, else none. */

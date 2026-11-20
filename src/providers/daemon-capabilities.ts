@@ -460,6 +460,15 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // uses `ssh -L`. Both twins. Optional: without it the Mac says the daemon
   // there needs an update.
   'port-stream-v1',
+  // 'hub-forward-v1' (hub-forward-core.ts, stream-relay-core.ts openOut): a port stream the
+  // other way. This machine's own file (`hub-forwards.json` in its net state dir; nothing the
+  // primary sends writes it) names 127.0.0.1 ports; each connection on one becomes a stream
+  // this daemon opens to the primary's server socket, `stream-open {sid, from: 'hub', port}`,
+  // which the primary takes only for a port its own config lists for this host
+  // (core/hosts/hub-ports.ts) and connects on ITS OWN 127.0.0.1. `hub.status` answers the
+  // forwards and how each is doing (the primary's server socket only). Both twins. Optional:
+  // without it the primary never asks, and its host status says the daemon needs an update.
+  'hub-forward-v1',
   // 'pty-stream-v1' (pty-stream-core.ts, through stream-relay-core.ts openPty): the
   // primary, on its own server socket (never the bridge, a follower, a lane or a
   // probe), may open `stream.open {sid, to: 'pty', command, cols, rows, env?}`: the

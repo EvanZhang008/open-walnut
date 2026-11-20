@@ -463,7 +463,7 @@ export function registerCommands(program: Command): void {
   // The host network on this machine (src/commands/net.ts).
   const netCmd = program
     .command('net')
-    .description('This machine on your Walnut host network (join | status)')
+    .description('This machine on your Walnut host network (join | status | hub-forward)')
   netCmd
     .command('join <companion-or-ticket> [code]')
     .description('Join this machine to your Walnut machines with an invite (the invite link runs this): a companion and its code, or the ticket of a Mac with no companion')
@@ -478,6 +478,13 @@ export function registerCommands(program: Command): void {
     .action(async () => {
       const { runNetStatus } = await import('./net.js');
       process.exitCode = await runNetStatus();
+    });
+  netCmd
+    .command('hub-forward [action] [ports...]')
+    .description("This machine's hub forwards: a 127.0.0.1 port here that reaches one port on the primary's own loopback (list | add <local_port> [port] | remove <local_port>)")
+    .action(async (action: string | undefined, ports: string[] | undefined) => {
+      const { runNetHubForward } = await import('./net-hub.js');
+      process.exitCode = await runNetHubForward(action, ports ?? []);
     });
 
   program

@@ -42,7 +42,7 @@ async function daemonDir(): Promise<string> {
  * One command to this account's own daemon (at `atPort`, else the port its port file names).
  * A refusal of a daemon shutting down for a swap is asked again of the next one (daemon-drain-resend.ts).
  */
-async function daemonRpc(cmd: string, params: Record<string, unknown> = {}, timeoutMs = 30_000, atPort?: number): Promise<Record<string, unknown>> {
+export async function daemonRpc(cmd: string, params: Record<string, unknown> = {}, timeoutMs = 30_000, atPort?: number): Promise<Record<string, unknown>> {
   let refusedAt = 0
   return resendThroughSwap(cmd, {
     once: (budget) => daemonRpcOnce(cmd, params, budget, atPort),
@@ -146,7 +146,7 @@ async function waitDaemon(ms: number): Promise<boolean> {
   return false
 }
 
-function errText(r: Record<string, unknown>): string {
+export function errText(r: Record<string, unknown>): string {
   const e = r.error as { message?: unknown } | string | undefined
   if (typeof e === 'string') return e
   return typeof e?.message === 'string' ? e.message : 'refused'

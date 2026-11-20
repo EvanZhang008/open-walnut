@@ -12,6 +12,7 @@
 
 import { spawn } from 'node:child_process'
 import { getConfig } from '../config-manager.js'
+import { hubPortRules, hubPortStatus, type HubPortStatus } from '../hosts/hub-ports.js'
 import { checkScriptInput, runBoundedScript, SCRIPT_STDERR_TAIL, type ScriptInput, type ScriptResult } from '../../providers/host-script-core.js'
 
 export const LOCAL_HOST_ALIAS = '__local__'
@@ -24,6 +25,12 @@ export interface PluginHostInfo {
   hostname?: string
   user?: string
   port?: number
+  /**
+   * The ports of this Walnut's own loopback `net.hub_ports` opens to this host, and whether the
+   * host's hub forward to each is up and when it last connected (core/hosts/hub-ports.ts).
+   * Absent when none is listed for it.
+   */
+  hub?: HubPortStatus[]
 }
 
 /** A run's input and answer: the shared runner's (host-script-core.ts), on this machine and on a host's daemon alike. */
@@ -46,15 +53,32 @@ function hostInfo(alias: string, def: HostDef): PluginHostInfo {
 }
 
 export async function listPluginHosts(): Promise<PluginHostInfo[]> {
-  const hosts = ((await getConfig()).hosts ?? {}) as Record<string, HostDef>
+  const config = await getConfig()
+  const rows = configuredHosts(config)
+  return Promise.all(rows.map((row) => withHub(row, config)))
+}
+
+export async function getPluginHost(alias: string): Promise<PluginHostInfo | null> {
+  const config = await getConfig()
+  const row = configuredHosts(config).find((host) => host.alias === alias)
+  return row ? withHub(row, config) : null
+}
+
+/** This machine first, then every host in Settings, Hosts: what the config says, nothing asked of a host. */
+function configuredHosts(config: Awaited<ReturnType<typeof getConfig>>): PluginHostInfo[] {
+  const hosts = (config.hosts ?? {}) as Record<string, HostDef>
   return [
     { alias: LOCAL_HOST_ALIAS, local: true, enabled: true },
     ...Object.entries(hosts).filter(([alias]) => alias !== LOCAL_HOST_ALIAS).map(([alias, def]) => hostInfo(alias, def ?? {})),
   ]
 }
 
-export async function getPluginHost(alias: string): Promise<PluginHostInfo | null> {
-  return (await listPluginHosts()).find((host) => host.alias === alias) ?? null
+/** A host `net.hub_ports` names, with its hub status (at most a short wait for its daemon's word). */
+async function withHub(row: PluginHostInfo, config: Awaited<ReturnType<typeof getConfig>>): Promise<PluginHostInfo> {
+  if (row.local || !hubPortRules(config).rules.some((r) => r.hosts.includes(row.alias))) return row
+  // A status that cannot be read never fails the list.
+  const hub = await hubPortStatus(row.alias, { config }).catch(() => null)
+  return hub && hub.length ? { ...row, hub } : row
 }
 
 export type SpawnLike = typeof spawn
@@ -66,7 +90,8 @@ export async function runOnPluginHost(
 ): Promise<PluginHostRunResult> {
   const checked = checkScriptInput(input)
   if ('error' in checked) throw new Error(checked.error)
-  const host = await getPluginHost(alias)
+  // The hosts as configured: a run never waits on anyone's hub status.
+  const host = configuredHosts(await getConfig()).find((h) => h.alias === alias)
   if (!host) throw new Error(`Walnut has no host named "${alias}" (Settings, Hosts).`)
   if (host.local) {
     return runBoundedScript({

@@ -358,6 +358,8 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/plugin-job-door.ts',
   // Streams between servers through the daemon (stream-relay-v1): same rule.
   'src/providers/stream-relay-core.ts',
+  // Hub forwards on this machine (hub-forward-v1): same rule.
+  'src/providers/hub-forward-core.ts',
   // Terminal streams through the daemon (pty-stream-v1): same rule.
   'src/providers/pty-stream-core.ts',
   'src/providers/feature-relay-core.ts',

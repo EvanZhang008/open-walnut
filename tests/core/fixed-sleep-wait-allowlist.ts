@@ -439,6 +439,8 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/providers/spawn-window-send-barrier.test.ts", sleep: "await new Promise((r) => setTimeout(r, 500));", reason: "negative: the message stays stranded without the drain (positive part already awaited by waitFor)" },
   { file: "tests/providers/stream-lane.test.ts", sleep: "await sleep(300)", reason: "negative: a lane to another daemon must not come up" },
   { file: "tests/providers/stream-lane.test.ts", sleep: "await sleep(200)", reason: "negative: no lane without stream-lane-v1" },
+  { file: "tests/providers/stream-relay-hub.test.ts", sleep: "await new Promise((r) => setTimeout(r, 300))", reason: "time under test: a reader that never reads holds the stream; the daemon stops reading its socket within this time" },
+  { file: "tests/providers/stream-relay-hub.test.ts", sleep: "await new Promise((r) => setTimeout(r, 200))", reason: "negative: once paused, the daemon sends no more of the 4 MB while the reader still reads nothing" },
   { file: "tests/providers/stream-relay.test.ts", sleep: "await new Promise((r) => setTimeout(r, 50))", reason: "negative: no more frames go out while the reader is paused" },
   { file: "tests/providers/stream-relay.test.ts", sleep: "await new Promise((r) => setTimeout(r, 10))", reason: "negative: no uncaught exception after the link drop" },
   { file: "tests/providers/transcript-archive.test.ts", sleep: "await new Promise(r => setTimeout(r, 300))", reason: "negative: a restore must still be waiting while the pass holds its lock" },

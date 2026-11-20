@@ -21,7 +21,9 @@
  *  6. Remove turns the machine's network off and drops it from this Mac's list, and its
  *     connection with it;
  *  7. the machine joins again under its name, nothing reads as dialling it, and the Mac
- *     reaches it.
+ *     reaches it;
+ *  8. a hub forward the machine's own CLI adds reaches a port on the Mac's loopback over that
+ *     link once, and only while, the Mac's config lists it for that machine.
  *
  * Needs walnut-net (WALNUT_NET_TEST_BIN, else dist/daemon-binaries/walnut-net-<platform>-<arch>)
  * and bun; skipped without them. WALNUT_NET_E2E_RELAY=public runs it live on iroh's public
@@ -315,6 +317,77 @@ suite(`host network with no companion: a ticket joins a machine (relay: ${RELAY}
       await new Promise<void>((resolve) => service.close(() => resolve()))
     }
   }, 120_000)
+
+  it('a hub forward on the machine reaches a listed port on the Mac\'s loopback over the network link, and nothing else', async () => {
+    // "The Mac's coderelay": a service on this machine's 127.0.0.1 only.
+    let macConns = 0
+    const body = Buffer.alloc(1024 * 1024 + 5)
+    for (let i = 0; i < body.length; i++) body[i] = (i * 31) & 0xff
+    const service = http.createServer((req, res) => res.end(req.url === '/bin' ? body : `mac coderelay ${req.url}`))
+    service.on('connection', () => { macConns++ })
+    await new Promise<void>((resolve) => service.listen(0, '127.0.0.1', resolve))
+    const svc = (service.address() as net.AddressInfo).port
+    const free = async () => {
+      const s = net.createServer()
+      await new Promise<void>((r) => s.listen(0, '127.0.0.1', () => r()))
+      const p = (s.address() as net.AddressInfo).port
+      await new Promise<void>((r) => s.close(() => r()))
+      return p
+    }
+    const local = await free()
+    const get = (p: string) => new Promise<{ status: number; body: Buffer }>((resolve, reject) => {
+      const req = http.get({ host: '127.0.0.1', port: local, path: p, agent: false }, (res) => {
+        const parts: Buffer[] = []
+        res.on('data', (b: Buffer) => parts.push(b))
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(parts) }))
+      })
+      req.on('error', reject)
+    })
+    const walnut = (args: string[]) => new Promise<{ code: number; out: string }>((resolve) => {
+      const run = spawn(path.join(base, 'host', 'bin', 'walnut'), args, { env: hostEnv, stdio: ['ignore', 'pipe', 'pipe'] })
+      let out = ''
+      run.stdout!.on('data', (b: Buffer) => { out += b.toString() })
+      run.stderr!.on('data', (b: Buffer) => { out += b.toString() })
+      run.once('exit', (c) => resolve({ code: c ?? -1, out }))
+    })
+    const { migrateStoredConfig } = await import('../../src/core/config-manager.js')
+    const { listPluginHosts } = await import('../../src/core/plugins/plugin-hosts.js')
+    try {
+      // On the machine: its own file, written by its own CLI; it listens on 127.0.0.1.
+      const added = await walnut(['net', 'hub-forward', 'add', String(local), String(svc)])
+      expect(added.code, added.out).toBe(0)
+      expect(added.out).toContain(`127.0.0.1:${local} -> the primary's 127.0.0.1:${svc}: listening`)
+      expect(fs.existsSync(path.join(host.daemonDir, 'net', 'hub-forwards.json'))).toBe(true)
+
+      // The Mac lists nothing yet: the machine's connection is refused, nothing reaches the service.
+      await expect(get('/before')).rejects.toThrow()
+      expect(macConns).toBe(0)
+      const refusedThere = ((await hostRpc('hub.status')).forwards as Array<Record<string, unknown>>)[0]
+      expect(refusedThere).toMatchObject({ refused: 1, opened: 0, lastRefusal: `port ${svc} on this Walnut is not open to hub forwards (net.hub_ports)` })
+      expect((await listPluginHosts()).find((h) => h.alias === machine)?.hub).toBeUndefined()
+
+      // The Mac lists the port for this machine: the bytes go over the host network link.
+      await migrateStoredConfig((doc) => { (doc.net as Record<string, unknown>).hub_ports = [{ port: svc, hosts: [machine] }]; return true })
+      expect((await get('/v1/messages')).body.toString()).toBe('mac coderelay /v1/messages')
+      expect((await get('/bin')).body.equals(body)).toBe(true)
+      expect(macConns).toBe(2)
+      const row = (await listPluginHosts()).find((h) => h.alias === machine)
+      expect(row?.hub).toEqual([expect.objectContaining({ port: svc, linked: true, up: true, needsUpdate: false, forward: { localPort: local, listening: true, error: null }, opened: 2 })])
+      expect(row!.hub![0].lastConnectedAt).toBeGreaterThan(Date.now() - 60_000)
+      // Listed for another machine only: refused again.
+      await migrateStoredConfig((doc) => { (doc.net as Record<string, unknown>).hub_ports = [{ port: svc, hosts: ['some-other-machine'] }]; return true })
+      await expect(get('/other')).rejects.toThrow()
+      expect(macConns).toBe(2)
+      expect(isolation!.calls().join('\n')).not.toContain(machine)
+
+      const removed = await walnut(['net', 'hub-forward', 'remove', String(local)])
+      expect(removed.code, removed.out).toBe(0)
+      expect(removed.out).toContain('No hub forwards on this machine.')
+    } finally {
+      await migrateStoredConfig((doc) => { delete (doc.net as Record<string, unknown>).hub_ports; return true })
+      await new Promise<void>((resolve) => service.close(() => resolve()))
+    }
+  }, 180_000)
 
   it('the same command again says the link is spent, and the machine keeps its network', async () => {
     const r = await runJoin(ticket)

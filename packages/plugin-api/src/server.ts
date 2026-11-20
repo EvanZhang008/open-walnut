@@ -226,6 +226,32 @@ export interface HostInfo {
   hostname?: string
   user?: string
   port?: number
+  /** The ports of this Walnut's own loopback that `net.hub_ports` opens to this host (hub
+   *  forwards), each with whether the host's forward is up and when it last connected. Absent
+   *  when none is listed for the host. */
+  hub?: HostHubPort[]
+}
+
+/** One port of this Walnut's loopback a host reaches through its hub forward. */
+export interface HostHubPort {
+  /** The port on this Walnut's 127.0.0.1. */
+  port: number
+  /** Walnut's link to the host is up. */
+  linked: boolean
+  /** The host's own forward to this port, as its daemon says; null while not known. */
+  forward: { localPort: number; listening: boolean; error: string | null } | null
+  /** The host's Walnut daemon is older than hub forwards: it needs an update first. */
+  needsUpdate: boolean
+  /** Linked and the host's forward listens: a connection there reaches this port now. */
+  up: boolean
+  /** Streams of the host open to the port now, opened and refused since this server started. */
+  active: number
+  opened: number
+  refused: number
+  /** When a stream of the host last reached the port, in ms since the epoch. */
+  lastConnectedAt: number | null
+  lastRefusedAt: number | null
+  lastError: string | null
 }
 
 export interface HostRunInput {

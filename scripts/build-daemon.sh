@@ -254,6 +254,7 @@ SOURCES=(
   src/providers/plugin-job-harness.ts
   src/providers/plugin-job-door.ts
   src/providers/stream-relay-core.ts
+  src/providers/hub-forward-core.ts
   src/providers/pty-stream-core.ts
   src/providers/feature-relay-core.ts
   src/providers/host-resume-core.ts

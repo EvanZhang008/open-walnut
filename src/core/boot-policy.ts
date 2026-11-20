@@ -90,6 +90,8 @@ export const BOOT_POLICY = [
   // The companion on the same path (WP13): its forward rides a stream through the Mac's own daemon.
   { job: 'companion-stream-door', leader: true, replica: false, why: 'only the leader takes the companion\'s forward streams' },
   { job: 'companion-stream-forward', leader: false, replica: false, companionUntil: '5b', why: 'the host replica front (WP2) forwards on its own link' },
+  // Hub forwards (hub-forward-v1): a joined machine's connection to one of the primary's own loopback ports.
+  { job: 'hub-port-door', leader: true, replica: false, why: 'only the primary connects its own loopback ports for its machines' },
   { job: 'hook-task-domains', leader: true, replica: false, why: 'task and cron hook actions fire on the Mac' },
   { job: 'session-request-sweep', leader: true, replica: false, why: OFF_HOST_DATA },
   { job: 'lane-orphan-passes', leader: true, replica: false, why: OFF_HOST_DATA },

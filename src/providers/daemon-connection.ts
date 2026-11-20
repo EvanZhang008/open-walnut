@@ -144,6 +144,7 @@ import { NeedsLeaderError } from '../core/replication/needs-leader.js'
 import { daemonUpdateGapWhy, daemonUpdateMinGapMs, daemonUpdateWaitMs, parseEtimeMs } from './daemon-update-gap.js'
 // The companion's forward on a stream ('bridge-stream-v1', replica plan WP13): the Mac's door.
 import { companionStreamAcceptor } from '../web/v1-forward/stream-door.js'
+import { acceptHubStream } from '../core/hosts/hub-ports.js'
 // Static: the trigger push asks it on every connect, and a module load there delays the set.
 import * as sameDaemonRecord from '../core/hosts/same-daemon-record.js'
 
@@ -3827,8 +3828,11 @@ export class DaemonConnection {
         // A host server's browser reaching this Mac: into the tunnel port, which
         // trusts nothing on loopback (the same door a tunnel here uses).
         // The companion's forward ('bridge-stream-v1'): into its own door (web/v1-forward/stream-door.ts).
+        // A machine's hub forward ('hub-forward-v1'): into a port this Walnut's config opens to
+        // this host, on its own 127.0.0.1 (core/hosts/hub-ports.ts), or refused with why.
         accept: (info) => (info.from === 'follower' ? (stream) => { void this.plugFollowerStream(stream) }
-          : info.from === 'companion' ? companionStreamAcceptor(this.hostKey, info.sid) : null),
+          : info.from === 'companion' ? companionStreamAcceptor(this.hostKey, info.sid)
+            : info.from === 'hub' ? acceptHubStream(this.hostKey, info) : null),
       })
     }
     return this.streams

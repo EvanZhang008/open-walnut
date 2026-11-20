@@ -109,6 +109,7 @@ const FILES: Record<string, string> = {
   HOST_EXEC_DIR: 'host: commands run on this host, each answered to the socket that asked',
   HOST_VITALS_DIR: 'host: this machine\'s load and memory',
   NET_STATE_DIR: 'host: one network identity per account (net.configure is the host\'s)',
+  HUB_FORWARDS_FILE: 'host: this machine\'s own hub forwards, written on this machine only; each stream goes to the one Walnut leading here, or the one its forward names (hub-forward-core.ts)',
   SECRETS_ROOT: 'host: one store per account; each secret records the Walnut that wrote it (secrets-core.ts)',
   PW_SILENCE_DIR: 'host: one generated preload per account, the same text whichever Walnut writes it (pw-silence-core.ts)',
 }
@@ -121,7 +122,6 @@ function fileConstants(src: string): string[] {
 const TWIN_ONLY: Record<string, string> = {
   ACP_ARTIFACT_DIR: 'standalone: ACP sessions run only in the bun twin',
   HOST_EXEC_DIR: 'standalone: the source twin builds the path inline',
-  NET_STATE_DIR: 'standalone: the source twin builds the path inline',
   WORKSPACE_STATE_DIR: 'standalone: the source twin passes the dir inline',
 }
 

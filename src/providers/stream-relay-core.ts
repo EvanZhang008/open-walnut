@@ -29,6 +29,14 @@
  * both ways (half close); a socket error, an abort or a link drop closes the
  * stream, and a connected socket is reset then, never ended as if the request were done.
  *
+ * A hub stream ('hub-forward-v1', `openOut`) is a port stream the other way: a
+ * connection this daemon accepted on its own loopback (hub-forward-core.ts, a
+ * forward the machine's own config names) goes to the primary as `stream-open
+ * {sid, from: 'hub', port}`, and the primary decides whether it connects that
+ * port on ITS loopback. Until the primary's `stream.accept` the socket is paused
+ * (what it sent early is held, at most a window); a `stream.close` instead is a
+ * refusal and cuts the socket. Then the same window, FINs and cuts as above.
+ *
  * A terminal stream ('pty-stream-v1', `stream.open {sid, to: 'pty', ...}`) has a
  * pty on this host as its other end: pty-stream-core.ts, handed in as `ptys`, so
  * every stream on a link shares one id space, one frame dispatch and one drop.
@@ -50,6 +58,17 @@ export interface PortSocket {
   resetAndDestroy?(): void
   pause(): void
   resume(): void
+}
+
+/** What the owner of a daemon-opened stream (openOut) hears. */
+export interface OutHooks {
+  /** The primary accepted it: bytes move. */
+  opened(): void
+  /**
+   * It is gone; `opened` says whether it ever moved bytes, `error` why it ended (before it
+   * opened: a refusal), `local` that this host's own connection ended it (never the other side).
+   */
+  gone(opened: boolean, error?: string, local?: boolean): void
 }
 
 export interface StreamRelayDeps<L> {
@@ -105,7 +124,12 @@ export function createStreamRelay<L>(deps: StreamRelayDeps<L>) {
   const PORT_CONNECT_MS = deps.connectTimeoutMs ?? 8_000
   interface PortEnd {
     link: L; sid: string; port: number; sock: PortSocket | null
-    connected: boolean; unacked: number; paused: boolean
+    /** The socket is connected / both sides take bytes (a dial: at connect; openOut: at the primary's accept). */
+    connected: boolean; open: boolean; unacked: number; paused: boolean
+    /** openOut's owner; null for a stream the primary opened. */
+    out: OutHooks | null
+    /** What the socket sent before the primary accepted (openOut), sent at the accept. */
+    early: Uint8Array[]; earlyBytes: number
     /** The link's FIN went into the socket / the socket's FIN went to the link. */
     linkEnded: boolean; sockEnded: boolean
     /** An earlier address refused (localhost's 127.0.0.1): the answer if the next one fails too. */
@@ -162,12 +186,21 @@ export function createStreamRelay<L>(deps: StreamRelayDeps<L>) {
     return portsByLink.get(end.link)?.get(end.sid) === end
   }
 
-  function forgetPort(end: PortEnd): void {
+  function forgetPort(end: PortEnd, error?: string, local = false): void {
     if (end.timer) { clearTimeout(end.timer); end.timer = null }
     const m = portsByLink.get(end.link)
     if (!m || m.get(end.sid) !== end) return
     m.delete(end.sid)
     if (m.size === 0) portsByLink.delete(end.link)
+    tellGone(end, error, local)
+  }
+
+  /** openOut's owner hears the end once. */
+  function tellGone(end: PortEnd, error?: string, local = false): void {
+    const out = end.out
+    if (!out) return
+    end.out = null
+    try { out.gone(end.open, error, local) } catch { /* the owner's bookkeeping never breaks the relay */ }
   }
 
   /**
@@ -186,9 +219,9 @@ export function createStreamRelay<L>(deps: StreamRelayDeps<L>) {
   }
 
   /** End a port stream at both sides: the link hears `error`, the socket is cut. */
-  function abortPort(end: PortEnd, error: string): void {
+  function abortPort(end: PortEnd, error: string, local = false): void {
     if (!portTracked(end)) return
-    forgetPort(end)
+    forgetPort(end, error, local)
     deps.send(end.link, 'stream-close', { sid: end.sid, error })
     cutSocket(end)
   }
@@ -196,6 +229,49 @@ export function createStreamRelay<L>(deps: StreamRelayDeps<L>) {
   function socketError(err: Error & { code?: string }, port: number): string {
     if (err.code === 'ECONNREFUSED') return `nothing is listening on port ${port} on this host`
     return `port ${port} on this host: ${String(err.message || err.code || 'connection failed').slice(0, 160)}`
+  }
+
+  /** Send what the socket gave to the link, in pieces, and stop reading past the window. */
+  function sendPieces(end: PortEnd, sock: PortSocket, chunk: Uint8Array): void {
+    for (let off = 0; off < chunk.length; off += PORT_PIECE) {
+      const piece = chunk.subarray(off, off + PORT_PIECE)
+      deps.send(end.link, 'stream-data', { sid: end.sid, d: Buffer.from(piece.buffer, piece.byteOffset, piece.length).toString('base64') })
+      end.unacked += piece.length
+    }
+    if (end.unacked > PORT_WINDOW && !end.paused) { end.paused = true; sock.pause() }
+  }
+
+  /**
+   * The socket side of a port stream, both kinds: its bytes and FIN go to the link
+   * once the stream is open (before, an openOut socket's are held, at most a window),
+   * a reset or close ends the stream. `onError` is the kind's own answer to an error.
+   */
+  function wireSocket(end: PortEnd, sock: PortSocket, onError: (err: Error & { code?: string }) => void): void {
+    const mine = () => end.sock === sock && portTracked(end)
+    sock.on('data', (chunk) => {
+      if (!mine()) return
+      if (!end.open) {
+        end.early.push(chunk)
+        end.earlyBytes += chunk.length
+        if (!end.paused) { end.paused = true; sock.pause() }
+        if (end.earlyBytes > PORT_WINDOW) abortPort(end, 'the connection sent too much before the stream was open', true)
+        return
+      }
+      sendPieces(end, sock, chunk)
+    })
+    sock.on('end', () => {
+      if (!mine() || end.sockEnded) return
+      end.sockEnded = true
+      // Before the accept, the FIN follows the held bytes then (openStarted).
+      if (!end.open) return
+      deps.send(end.link, 'stream-end', { sid: end.sid })
+      if (end.linkEnded) forgetPort(end)
+    })
+    sock.on('error', (err) => { if (mine()) onError(err) })
+    sock.on('close', () => {
+      // Closed without an error and without both FINs (a reset): the link hears it.
+      if (mine()) abortPort(end, 'the connection on this host closed', true)
+    })
   }
 
   function dialPort(end: PortEnd, hosts: string[], i: number): void {
@@ -209,39 +285,78 @@ export function createStreamRelay<L>(deps: StreamRelayDeps<L>) {
       return
     }
     end.sock = sock
-    const mine = () => end.sock === sock && portTracked(end)
     sock.on('connect', () => {
-      if (!mine()) return
+      if (end.sock !== sock || !portTracked(end)) return
       if (end.timer) { clearTimeout(end.timer); end.timer = null }
       end.connected = true
+      end.open = true
       deps.send(end.link, 'stream-accept', { sid: end.sid })
     })
-    sock.on('data', (chunk) => {
-      if (!mine()) return
-      for (let off = 0; off < chunk.length; off += PORT_PIECE) {
-        const piece = chunk.subarray(off, off + PORT_PIECE)
-        deps.send(end.link, 'stream-data', { sid: end.sid, d: Buffer.from(piece.buffer, piece.byteOffset, piece.length).toString('base64') })
-        end.unacked += piece.length
-      }
-      if (end.unacked > PORT_WINDOW && !end.paused) { end.paused = true; sock.pause() }
-    })
-    sock.on('end', () => {
-      if (!mine() || end.sockEnded) return
-      end.sockEnded = true
-      deps.send(end.link, 'stream-end', { sid: end.sid })
-      if (end.linkEnded) forgetPort(end)
-    })
-    sock.on('error', (err) => {
-      if (!mine()) return
+    wireSocket(end, sock, (err) => {
       // `localhost` is 127.0.0.1 or ::1: a server on one of them refuses on the other.
       if (!end.connected && err.code === 'ECONNREFUSED' && i + 1 < hosts.length) { end.refused = true; dialPort(end, hosts, i + 1); return }
       // ::1 may not exist at all (EADDRNOTAVAIL): the refusal on 127.0.0.1 is the answer then.
       abortPort(end, !end.connected && end.refused ? socketError(Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }), end.port) : socketError(err, end.port))
     })
-    sock.on('close', () => {
-      // Closed without an error and without both FINs (a reset): the link hears it.
-      if (mine()) abortPort(end, 'the connection on this host closed')
-    })
+  }
+
+  /** A port stream's starting state. */
+  function newPortEnd(link: L, sid: string, port: number, sock: PortSocket | null, out: OutHooks | null): PortEnd {
+    return {
+      link, sid, port, sock, connected: sock !== null, open: false, unacked: 0, paused: false, out, early: [], earlyBytes: 0,
+      linkEnded: false, sockEnded: false, refused: false, timer: null,
+    }
+  }
+
+  /**
+   * A connection this daemon accepted (hub-forward-core.ts) goes to `to`, the
+   * primary, as a stream it opens: `stream-open {sid, ...meta}` (meta says `from:
+   * 'hub'` and the port). The socket waits, paused, for the primary's accept; a
+   * close instead (a refusal, an older primary that takes no such stream) or no
+   * answer within the open deadline cuts it. `hooks` hears the accept and the end.
+   */
+  function openOut(to: L, sock: PortSocket, meta: Record<string, unknown>, hooks: OutHooks): void {
+    const port = typeof meta.port === 'number' ? meta.port : 0
+    if ((portsByLink.get(to)?.size ?? 0) >= MAX_PORTS_PER_LINK) {
+      try { sock.destroy() } catch { /* gone */ }
+      try { hooks.gone(false, 'too many port streams on this link') } catch { /* bookkeeping */ }
+      return
+    }
+    const sid = `r${++counter}`
+    const end = newPortEnd(to, sid, port, sock, hooks)
+    let m = portsByLink.get(to)
+    if (!m) { m = new Map(); portsByLink.set(to, m) }
+    m.set(sid, end)
+    // Nothing reaches the link before the accept.
+    end.paused = true
+    sock.pause()
+    wireSocket(end, sock, (err) => abortPort(end, `the connection on this host: ${String(err.message || err.code || 'failed').slice(0, 160)}`, true))
+    const timer = setTimeout(() => {
+      end.timer = null
+      if (!end.open) abortPort(end, `the primary did not answer within ${Math.round(PORT_CONNECT_MS / 1000)}s`)
+    }, PORT_CONNECT_MS)
+    timer.unref?.()
+    end.timer = timer
+    deps.send(to, 'stream-open', { ...meta, sid })
+  }
+
+  /** The primary accepted an openOut stream: the held bytes go, then the socket is read again. */
+  function openStarted(end: PortEnd): void {
+    const sock = end.sock
+    if (end.open || !sock) return
+    if (end.timer) { clearTimeout(end.timer); end.timer = null }
+    end.open = true
+    const early = end.early
+    end.early = []
+    end.earlyBytes = 0
+    end.paused = false
+    for (const chunk of early) sendPieces(end, sock, chunk)
+    try { end.out?.opened() } catch { /* bookkeeping */ }
+    if (end.sockEnded) {
+      deps.send(end.link, 'stream-end', { sid: end.sid })
+      return
+    }
+    if (!end.paused) sock.resume()
   }
 
   /**
@@ -261,7 +376,7 @@ export function createStreamRelay<L>(deps: StreamRelayDeps<L>) {
     if (!hosts) return refuse('a port stream reaches only this host\'s own loopback (127.0.0.1, localhost or ::1)')
     if (daemonSocketPort(port)) return refuse(`port ${port} is a Walnut session daemon's own socket on this host, which a port stream never reaches`)
     if ((portsByLink.get(from)?.size ?? 0) >= MAX_PORTS_PER_LINK) return refuse('too many port streams on this link')
-    const end: PortEnd = { link: from, sid, port, sock: null, connected: false, unacked: 0, paused: false, linkEnded: false, sockEnded: false, refused: false, timer: null }
+    const end = newPortEnd(from, sid, port, null, null)
     let m = portsByLink.get(from)
     if (!m) { m = new Map(); portsByLink.set(from, m) }
     m.set(sid, end)
@@ -288,8 +403,13 @@ export function createStreamRelay<L>(deps: StreamRelayDeps<L>) {
   /** A frame from the link for one of its port streams. */
   function portFrame(end: PortEnd, kind: string, msg: Record<string, unknown>): void {
     const sock = end.sock
+    if (kind === 'accept') {
+      // The primary's answer to a stream this daemon opened; on a stream the primary opened it means nothing.
+      if (end.out && !end.open) openStarted(end)
+      return
+    }
     if (kind === 'data') {
-      if (!end.connected || end.linkEnded || !sock || typeof msg.d !== 'string' || msg.d.length > MAX_DATA_CHARS) {
+      if (!end.open || end.linkEnded || !sock || typeof msg.d !== 'string' || msg.d.length > MAX_DATA_CHARS) {
         deps.log('warn', 'stream relay: a bad data frame ends the port stream', { sid: end.sid, port: end.port })
         abortPort(end, 'bad data frame')
         return
@@ -304,22 +424,21 @@ export function createStreamRelay<L>(deps: StreamRelayDeps<L>) {
       const n = msg.n
       if (typeof n !== 'number' || !(n > 0) || n > 64 * 1024 * 1024) return
       end.unacked = Math.max(0, end.unacked - n)
-      if (end.paused && end.unacked <= PORT_WINDOW) { end.paused = false; sock?.resume() }
+      if (end.open && end.paused && end.unacked <= PORT_WINDOW) { end.paused = false; sock?.resume() }
       return
     }
     if (kind === 'end') {
       if (end.linkEnded) return
-      if (!end.connected || !sock) { abortPort(end, 'ended before it was open'); return }
+      if (!end.open || !sock) { abortPort(end, 'ended before it was open'); return }
       end.linkEnded = true
       sock.end()
       if (end.sockEnded) forgetPort(end)
       return
     }
     if (kind === 'close') {
-      forgetPort(end)
+      forgetPort(end, typeof msg.error === 'string' && msg.error ? msg.error.slice(0, 200) : 'closed by the other side')
       cutSocket(end)
     }
-    // 'accept' is the daemon's own word here: nothing to do.
   }
 
   function onLink(link: L): Map<string, Pair> {
@@ -432,6 +551,7 @@ export function createStreamRelay<L>(deps: StreamRelayDeps<L>) {
       for (const end of ports.values()) {
         if (end.timer) { clearTimeout(end.timer); end.timer = null }
         cutSocket(end)
+        tellGone(end, 'the link to the other side closed')
       }
     }
     const m = byLink.get(link)
@@ -446,6 +566,7 @@ export function createStreamRelay<L>(deps: StreamRelayDeps<L>) {
   return {
     open,
     openPort,
+    openOut,
     openPty,
     frame,
     dropLink,
