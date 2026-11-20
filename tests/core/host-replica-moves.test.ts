@@ -15,13 +15,15 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-host-replica-moves'))
 vi.mock('../../src/core/skill-store.js', () => ({ listAllSkills: async () => [] }))
-vi.mock('../../src/core/config-manager.js', () => ({ getConfig: async () => ({}) }))
+const cfg = vi.hoisted(() => ({ value: {} as Record<string, unknown> }))
+vi.mock('../../src/core/config-manager.js', () => ({ getConfig: async () => cfg.value }))
 
 import { NOTES_DIR, MEMORY_FILE, WALNUT_HOME } from '../../src/constants.js'
-import { noteEntries, syncHostReplica, sha12, _resetHostReplicaForTesting, _hostReplicaSavedForTesting, type ReplicaTarget } from '../../src/core/host-replica.js'
+import { forgetHostReplica, noteEntries, syncHostReplica, sha12, _resetHostReplicaForTesting, _hostReplicaSavedForTesting, type ReplicaTarget } from '../../src/core/host-replica.js'
 import { _resetAttachmentReplicaForTesting } from '../../src/core/attachment-replica.js'
 import { createHostReplica } from '../../src/providers/host-replica-core.js'
 import { createAttachmentCopy } from '../../src/providers/attachment-copy-core.js'
+import { _resetReplicaStatusForTesting, needsConfirm, peekKindState } from '../../src/core/replication/replica-status.js'
 import { setNoteMoves } from '../../src/core/notes/note-path-moves.js'
 import type { MoveMap } from '../../src/core/artifacts/unify/map.js'
 
@@ -99,6 +101,8 @@ beforeEach(async () => {
   for (let i = 0; i < 210; i++) write(`acme/pics/p${i}.png`, Buffer.from(`png-${i}`))
   write('family/a.md', '---\nid: n_fam01\n---\n# Family')
   calls = []
+  cfg.value = {}
+  _resetReplicaStatusForTesting()
   setNoteMoves(null)
   _resetHostReplicaForTesting()
   _resetAttachmentReplicaForTesting()
@@ -189,6 +193,62 @@ describe('a host without the capability', () => {
     expect(picSync.params.renamed).toBeUndefined()
     // The copy as it was.
     expect(h.replica.answer(WALNUT_HOME, 'note_read', { path: 'acme/day-042' }, '')).toMatchObject({ ok: true })
+  })
+
+  it('stops sending a manifest it refused three times until something could change the answer', async () => {
+    const h = host('oldbox', { moves: false, attachments: true })
+    await syncHostReplica(h.target)
+    moveIntoTree()
+    const picSyncs = () => calls.filter((c) => c.cmd === 'attachments.sync')
+    const refuseThrice = async (t: ReplicaTarget) => {
+      calls = []
+      for (let i = 0; i < 3; i++) expect((await syncHostReplica(t))[0]).toMatchObject({ action: 'failed' })
+      expect(noteSyncs().length).toBeGreaterThanOrEqual(3)
+      expect(picSyncs()).toHaveLength(3)
+    }
+    const quiet = async (t: ReplicaTarget) => {
+      calls = []
+      for (let i = 0; i < 3; i++) expect((await syncHostReplica(t))[0]).toMatchObject({ kind: 'notes', action: 'unchanged' })
+      expect(noteSyncs()).toEqual([])
+      expect(picSyncs()).toEqual([])
+    }
+    await refuseThrice(h.target)
+    // Refused as it is three times: the same manifest is not sent again, and nothing warns.
+    await quiet(h.target)
+    // Settings still offers the confirm the three refusals earned.
+    const st = peekKindState('host:oldbox', 'host-notes')!
+    expect(st.refusals).toBe(3)
+    expect(needsConfirm(st)).toBe(true)
+
+    // The host's connection, build or box changed: the held manifest goes once more, and its
+    // refusal holds it again at once (the count stays).
+    forgetHostReplica('oldbox')
+    calls = []
+    expect((await syncHostReplica(h.target))[0]).toMatchObject({ action: 'failed' })
+    expect(noteSyncs().length).toBeGreaterThan(0)
+    expect(picSyncs()).toHaveLength(1)
+    await quiet(h.target)
+
+    // The host's daemon updates and takes moves, the keys unchanged: the move goes as moves.
+    const updated = { ...h.target, moves: true }
+    calls = []
+    expect((await syncHostReplica(updated))[0]).toMatchObject({ kind: 'notes', action: 'synced', moved: COUNT + 1 })
+    expect(picSyncs()).toHaveLength(1)
+    expect(picSyncs()[0]!.params.renamed).toBeDefined()
+    expect(h.replica.answer(WALNUT_HOME, 'note_read', { path: 'projects/Acme/notes/day-042' }, '')).toMatchObject({ ok: true })
+  })
+
+  it('a refused manifest goes again when the user leaves the old folder out, the keys unchanged', async () => {
+    const h = host('oldbox', { moves: false, attachments: true })
+    await syncHostReplica(h.target)
+    moveIntoTree()
+    calls = []
+    for (let i = 0; i < 4; i++) await syncHostReplica(h.target)
+    expect(noteSyncs().length).toBeGreaterThanOrEqual(3)
+    // The user excludes the folder the copy still holds under its old name.
+    cfg.value = { hosts: { oldbox: { keep: { notes_exclude: ['acme'] } } } }
+    calls = []
+    expect((await syncHostReplica(h.target))[0]).toMatchObject({ kind: 'notes', action: 'synced' })
   })
 })
 

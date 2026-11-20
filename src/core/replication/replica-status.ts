@@ -43,6 +43,13 @@ export interface KindState {
   /** Rounds refused in a row by the half rule, of the same leader manifest (count and keys). */
   refusals: number
   lastRefusal?: KindRefusal
+  /**
+   * The leader's own: a manifest refused CONFIRM_AFTER_REFUSALS rounds in a row is not sent
+   * again while nothing that could change the answer changed (`manifest`: its keys, the moves
+   * capability and the exclusions), until `until` (a recheck, or 0 after the target's
+   * connection, build or box changed). Never shown: Settings shows the refusal itself.
+   */
+  holdFor?: { manifest: string; until: number }
   /** The user confirmed the removal: the next sync carries `confirm:true`, if `confirmFor` still matches. */
   confirmNext: boolean
   confirmFor?: KindConfirm

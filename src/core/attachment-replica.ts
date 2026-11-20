@@ -31,6 +31,7 @@ import { log } from '../logging/index.js'
 import { MAX_UPLOAD_FRAME_BYTES } from '../providers/ssh-upload-budget.js'
 import { leftOut } from './replication/keep-rule.js'
 import { recordMoves } from './replication/manifest-moves.js'
+import { CONFIRM_AFTER_REFUSALS, manifestKeysHashOf } from './replication/kind.js'
 
 const MAX_FILES = 20_000
 const MAX_FILE_BYTES = 50 * 1024 * 1024
@@ -42,6 +43,8 @@ export const ROUND_BYTES = 128 * 1024 * 1024
 const CHUNK_BYTES = MAX_UPLOAD_FRAME_BYTES
 const PUT_TIMEOUT_MS = 60_000
 const NEXT_ROUND_MS = 15_000
+/** A manifest the copy refused and is held back is tried again this often. */
+const REFUSED_RECHECK_MS = 6 * 60 * 60 * 1000
 const MEMO_MS = 30 * 60_000
 
 export interface AttachmentEntry { k: string; h: string; n: number; mtimeMs: number }
@@ -162,11 +165,17 @@ interface TargetState {
   unsupportedUntil: number
   /** The one tree's moves went with a manifest the target took (on this connection). */
   movesTaken: boolean
+  /**
+   * The half rule's refusals in a row of one manifest (its keys, the moves capability and the
+   * exclusions): from the third it is not sent again before `until` (a recheck, or 0 once the
+   * target's connection, build or box changed), as host-replica.ts holds the notes.
+   */
+  refused: { manifest: string; count: number; until: number } | null
 }
 const states = new Map<string, TargetState>()
 function stateOf(hostKey: string): TargetState {
   let s = states.get(hostKey)
-  if (!s) { s = { memo: null, dropped: false, running: false, again: null, unsupportedUntil: 0, movesTaken: false }; states.set(hostKey, s) }
+  if (!s) { s = { memo: null, dropped: false, running: false, again: null, unsupportedUntil: 0, movesTaken: false, refused: null }; states.set(hostKey, s) }
   return s
 }
 
@@ -208,9 +217,22 @@ export async function syncAttachments(target: AttachmentTarget, keep: Attachment
     // so the half rule counts only files really gone. The leader keeps no manifest per target
     // here, so the record names them; once taken they go no more on this connection.
     const renamed = target.moves && !s.movesTaken ? recordMoves(manifest) : []
+    // Refused as it is three rounds in a row and nothing changed since: not sent this round. An
+    // empty copy (no asOf) takes anything, so it is never held from one.
+    const holdHash = crypto.createHash('sha256').update(JSON.stringify([manifestKeysHashOf(manifest), target.moves === true, keep.exclude ?? null])).digest('hex')
+    if (st.asOf != null && s.refused?.manifest === holdHash && s.refused.count >= CONFIRM_AFTER_REFUSALS && Date.now() < s.refused.until) {
+      return { action: 'skipped', entries: entries.length }
+    }
     // `exclude`: the folders the user left out, so the copy drops them however many files they hold.
     const reply = await target.send('attachments.sync', { home, entries: manifest, asOf: Date.now(), exclude: keep.exclude, ...(renamed.length ? { renamed } : {}) })
-    if (reply.ok !== true) return { action: 'failed', error: String(reply.error ?? 'refused') }
+    if (reply.ok !== true) {
+      if (reply.errorKind === 'manifest_removes_most_rows' || String(reply.error ?? '').startsWith('manifest_removes_most_rows')) {
+        const count = s.refused?.manifest === holdHash ? s.refused.count + 1 : 1
+        s.refused = { manifest: holdHash, count, until: Date.now() + REFUSED_RECHECK_MS }
+      }
+      return { action: 'failed', error: String(reply.error ?? 'refused') }
+    }
+    s.refused = null
     if (renamed.length) s.movesTaken = true
     const need = Array.isArray(reply.need) ? (reply.need as unknown[]).filter((k): k is string => typeof k === 'string') : []
     const have = (reply.have && typeof reply.have === 'object' ? reply.have : {}) as Record<string, unknown>
@@ -258,6 +280,8 @@ export function forgetAttachments(hostKey: string): void {
   s.dropped = false
   s.unsupportedUntil = 0
   s.movesTaken = false
+  // A held manifest goes once more; the count stays, so another refusal holds it again at once.
+  if (s.refused) s.refused.until = 0
 }
 
 /** Tests: no state, no round armed. */

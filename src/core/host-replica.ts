@@ -38,6 +38,7 @@ import { log } from '../logging/index.js'
 import type { Config } from './types.js'
 import { _resetAttachmentReplicaForTesting, forgetAttachments, syncAttachments } from './attachment-replica.js'
 import { replicaExtras, type Extras } from './host-replica-extras.js'
+import { peekKindState } from './replication/replica-status.js'
 import { cleanKeepEntries, leftOut } from './replication/keep-rule.js'
 import { companionKeepOf } from './replication/companion-keep.js'
 import { noteRoundFailure, noteRoundReached } from './replication/round-outage.js'
@@ -227,24 +228,33 @@ export interface ReplicaRoundResult {
   moved?: number
 }
 
+/** A manifest a host refused and holds back is tried again this often, so a host that changed on its own is seen. */
+const REFUSED_RECHECK_MS = 6 * 60 * 60 * 1000
+
 /**
  * The half rule's leader side for a host copy (section 4): a refused manifest counts
  * toward the Settings row while it holds still; a confirm the user gave rides along only
  * for that count and key set.
  */
-async function removalGuard(hostKey: string, kind: ReplicaKind, entries: ReplicaEntry[]): Promise<{
-  params: Record<string, unknown>; refused: (reply: Record<string, unknown>) => Promise<void>; accepted: () => void
+async function removalGuard(hostKey: string, kind: ReplicaKind, entries: ReplicaEntry[], answerBy: unknown): Promise<{
+  params: Record<string, unknown>; held: boolean; refused: (reply: Record<string, unknown>) => Promise<void>; accepted: () => void
 }> {
   const status = await import('./replication/replica-status.js')
-  const { manifestKeysHashOf } = await import('./replication/kind.js')
+  const { CONFIRM_AFTER_REFUSALS, manifestKeysHashOf } = await import('./replication/kind.js')
   const kindName = `host-${kind}`
   const st = status.peekKindState(`host:${hostKey}`, kindName)
   const keys = manifestKeysHashOf(entries)
   const now = Date.now()
   const c = st?.confirmNext ? st.confirmFor : undefined
   const confirm = c && c.expiresAt > now && c.entries === entries.length && c.keys === keys ? { entries: c.entries, keys: c.keys } : null
+  // What the host's answer depends on besides the keys: whether it takes moves, what is left out.
+  const holdHash = sha12(JSON.stringify([keys, answerBy]))
   return {
     params: confirm ? { confirm: true, confirmFor: confirm } : {},
+    // Refused as it is three rounds in a row and nothing changed since: the round leaves it
+    // unsent (2026-11-20: hosts from before moves refused the one tree's move every round, over
+    // a hundred warnings an hour, though nothing could change before they updated).
+    held: !confirm && st?.holdFor?.manifest === holdHash && now < st.holdFor.until,
     refused: async (reply) => {
       const s = status.kindState(statusTarget(hostKey), kindName)
       if (confirm) { s.confirmNext = false; s.confirmFor = undefined }
@@ -255,12 +265,18 @@ async function removalGuard(hostKey: string, kind: ReplicaKind, entries: Replica
         ...(typeof d.local === 'number' ? { local: d.local } : {}), ...(typeof d.removing === 'number' ? { removing: d.removing } : {}),
       }
       s.action = 'failed'
-      log.session.warn('host replica: the host refused a manifest that removes most of its copy', { host: hostKey, kind, entries: entries.length, refusals: s.refusals })
+      const hold = s.refusals >= CONFIRM_AFTER_REFUSALS
+      s.holdFor = hold ? { manifest: holdHash, until: now + REFUSED_RECHECK_MS } : undefined
+      log.session.warn('host replica: the host refused a manifest that removes most of its copy', {
+        host: hostKey, kind, entries: entries.length, refusals: s.refusals,
+        ...(hold ? { held: 'not sent again until it changes, the host takes moves or is replaced, the user confirms, or 6 h pass' } : {}),
+      })
     },
     accepted: () => {
       if (!st) return
       st.refusals = 0
       st.lastRefusal = undefined
+      st.holdFor = undefined
       if (confirm) { st.confirmNext = false; st.confirmFor = undefined }
       st.action = 'synced'
     },
@@ -374,6 +390,12 @@ export function forgetHostReplica(hostKey: string): void {
   const prefix = `${hostKey}\u0000`
   for (const key of [...lastManifest.keys()]) if (key.startsWith(prefix)) lastManifest.delete(key)
   for (const key of [...wholeOnly]) if (key.startsWith(prefix)) wholeOnly.delete(key)
+  // A new process or box may answer otherwise (an empty copy takes anything): a held manifest goes
+  // once more. The refusal count stays, so another refusal holds it again at once.
+  for (const kind of REPLICA_KINDS) {
+    const st = peekKindState(`host:${hostKey}`, `host-${kind}`)
+    if (st?.holdFor) st.holdFor.until = 0
+  }
   forgetAttachments(hostKey)
 }
 
@@ -495,7 +517,8 @@ async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep
     : undefined
   const manifestHash = sha12(JSON.stringify([entries, opts ?? null]))
   if (lastManifest.get(memoKey) === manifestHash) return { kind, action: 'unchanged', entries: entries.length }
-  const guard = await removalGuard(target.hostKey, kind, entries)
+  const guard = await removalGuard(target.hostKey, kind, entries, [target.moves === true, opts ?? null])
+  if (guard.held) return { kind, action: 'unchanged', entries: entries.length }
   const asOf = Date.now()
   const base = { home, kind, asOf, manifestId: manifestHash, ...(opts ? { opts } : {}), ...guard.params }
   const taken = await lastTaken(memoKey)
