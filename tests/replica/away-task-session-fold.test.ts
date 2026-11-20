@@ -263,7 +263,8 @@ describe('the live state of a session started here', () => {
     const first = launch.fresh()
     let secondDone = false
     const second = launch.fresh().then(() => { secondDone = true })
-    await new Promise((r) => setTimeout(r, 20))
+    // A full turn of the event loop, no clock: the daemon has not answered, so neither reader has.
+    await new Promise((r) => setImmediate(r))
     expect(secondDone).toBe(false)
     answer({ sessions: [{ sid: SID, state: 'idle', lastActiveAt: '2026-11-19T09:00:09.000Z' }] })
     await Promise.all([first, second])
