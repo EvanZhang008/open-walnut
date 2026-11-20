@@ -99,11 +99,16 @@ function stop(): void {
 /** This copy of a thread no longer needs him (its node's list says so): off the list now, and the list reads again. */
 export function noteLeft(row: Pick<InboxNeedsThread, 'id' | 'updatedAt'>): void {
   if (users === 0 || left.get(row.id)?.updatedAt === row.updatedAt) return;
-  left.set(row.id, { updatedAt: row.updatedAt, at: Date.now() });
+  const hold = { updatedAt: row.updatedAt, at: Date.now() };
+  left.set(row.id, hold);
   set(view(state.loaded, state.error));
   later();
   // The hold ends by itself: shown again from the last read unless a read took it off meanwhile.
-  setTimeout(() => { if (users > 0) set(view(state.loaded, state.error)); }, LEFT_HOLD_MS + 50);
+  // The timer ends this hold itself, so the view never depends on the clock having moved past it.
+  setTimeout(() => {
+    if (left.get(row.id) === hold) left.delete(row.id);
+    if (users > 0) set(view(state.loaded, state.error));
+  }, LEFT_HOLD_MS);
 }
 
 /** A card answered here: the list reads again at once (the card itself leaves with its node's Threads). */
