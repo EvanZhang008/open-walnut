@@ -57,6 +57,7 @@ const ERROR_CARD_SITES: Record<string, string> = {
   'pages/MainPage.tsx': 'Quick Start, clicked',
   'popout/PopoutSession.tsx': 'Fork, clicked in a popout',
   'undo/TaskUndoContext.tsx': 'a pin or an undo the person pressed',
+  'components/calendar/calendar-item-actions.ts': 'an event the person copied (Alt-drag) or redid could not be created',
 }
 
 /** Every place that reports through the task store's operation error (OperationErrorBridge). */

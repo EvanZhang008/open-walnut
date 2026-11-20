@@ -42,8 +42,7 @@ import { QuickCreatePopover, type CreateSeed } from '@/components/calendar/Quick
 import { CalendarsPopover } from '@/components/calendar/CalendarsPopover';
 import { CalendarContextMenu, type CalendarContextTarget } from '@/components/calendar/CalendarContextMenu';
 import { CalendarItemPopover } from '@/components/calendar/CalendarItemPopover';
-import { calendarEventNeedsApproval } from '@/api/calendar';
-import { useCalendarWriteConfirmation } from '@/components/calendar/calendar-event-actions';
+import { useCalendarItemActions } from '@/components/calendar/calendar-item-actions';
 import { gridLocalIso, gridSnapMinute } from '@/components/calendar/calendar-grid-settings';
 import { emptyDayLine, isDayEmpty } from '@/components/calendar/phone-empty-day';
 
@@ -59,9 +58,8 @@ function parseDroppableId(id: string): { zone: 'day' | 'allday' | 'col'; day: st
 
 export function CalendarPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { tasks, update, create } = useTasksContext();
+  const { tasks, create } = useTasksContext();
   const { setPhase, deleteTask } = useUndoableTaskActions();
-  const confirmCalendarWrite = useCalendarWriteConfirmation();
 
   // A phone opens on one day: seven columns at phone width are 45px each.
   const phoneLayout = usePhoneLayout();
@@ -124,6 +122,8 @@ export function CalendarPage() {
   // handled inside the views via useDragGesture and set chipDragging here so
   // the item arrays freeze either way (React #185 invariant #2).
   const [activeTask, setActiveTask] = useState<Task | null>(null);
+  // Every change to an item (shared with the homepage agenda), each one undoable.
+  const actions = useCalendarItemActions();
   const [chipDragging, setChipDragging] = useState(false);
 
   const throughDay = view === 'month' ? to : formatDateOnly(addDays(parseDateLocal(to), 1));
@@ -223,14 +223,10 @@ export function CalendarPage() {
       if (!task || !e.over) return;
       const target = parseDroppableId(String(e.over.id));
       if (!target) return;
-      if (target.zone === 'col') {
-        const slot = preview?.slot ?? 0;
-        update(task.id, { start_date: gridLocalIso(target.day, slot * SLOT_MINUTES) });
-      } else {
-        update(task.id, { start_date: target.day });
-      }
+      const slot = preview?.slot ?? 0;
+      actions.scheduleTask(task.id, target.zone === 'col' ? gridLocalIso(target.day, slot * SLOT_MINUTES) : target.day);
     },
-    [computeColPreview, scheduleDropPreview, update]
+    [computeColPreview, scheduleDropPreview, actions]
   );
 
   const handleDragCancel = useCallback(() => {
@@ -238,74 +234,6 @@ export function CalendarPage() {
     dragPointerY.current = null;
     scheduleDropPreview(null);
   }, [scheduleDropPreview]);
-
-  // ----- chip interactions (shared by views) -------------------------------
-  const moveItem = useCallback(
-    async (itemId: string, newWhen: string) => {
-      // Event ids may themselves contain ':' — split on the FIRST colon only.
-      const sep = itemId.indexOf(':');
-      const kind = itemId.slice(0, sep);
-      const rest = itemId.slice(sep + 1);
-      if (kind === 'task-start') {
-        // Moving a spanned task keeps its duration — end_date shifts with the
-        // start (macOS-Calendar behavior, same as events below). A drop into
-        // the all-day row / a month cell drops the block shape entirely.
-        const task = tasks.find((t) => t.id === rest);
-        const patch: { start_date: string; end_date?: string } = { start_date: newWhen };
-        if (task?.end_date?.includes('T') && task.start_date?.includes('T')) {
-          if (newWhen.includes('T')) {
-            const durMs = parseDateLocal(task.end_date).getTime() - parseDateLocal(task.start_date).getTime();
-            if (durMs > 0) {
-              const end = new Date(parseDateLocal(newWhen).getTime() + durMs);
-              const pad = (n: number) => String(n).padStart(2, '0');
-              patch.end_date = `${end.getFullYear()}-${pad(end.getMonth() + 1)}-${pad(end.getDate())}T${pad(end.getHours())}:${pad(end.getMinutes())}:00`;
-            }
-          } else {
-            patch.end_date = '';
-          }
-        }
-        update(rest, patch);
-      }
-      else if (kind === 'task-due') update(rest, { due_date: newWhen });
-      else if (kind === 'event') {
-        const ev = calendar.events.find((e) => e.id === rest);
-        if (!ev || !(await confirmCalendarWrite(ev, 'update'))) return;
-        if (!newWhen.includes('T')) {
-          // dropped in the all-day row / a month cell with a date-only value
-          calendar.moveEvent(rest, { start: newWhen, end: newWhen, human_confirm: calendarEventNeedsApproval(ev) });
-          return;
-        }
-        // Moving keeps the duration.
-        const durMs = Math.max(
-          15 * 60_000,
-          parseDateLocal(ev.end || ev.start).getTime() - parseDateLocal(ev.start).getTime()
-        );
-        const newStart = parseDateLocal(newWhen);
-        const newEnd = new Date(newStart.getTime() + durMs);
-        const pad = (n: number) => String(n).padStart(2, '0');
-        const fmt = (d: Date) =>
-          `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
-        calendar.moveEvent(rest, { start: newWhen, end: fmt(newEnd), human_confirm: calendarEventNeedsApproval(ev) });
-      }
-    },
-    [update, calendar, confirmCalendarWrite]
-  );
-
-  const resizeItem = useCallback(
-    async (itemId: string, newEnd: string) => {
-      const sep = itemId.indexOf(':');
-      const kind = itemId.slice(0, sep);
-      const rest = itemId.slice(sep + 1);
-      if (kind === 'task-start') {
-        update(rest, { end_date: newEnd });
-        return;
-      }
-      const ev = calendar.events.find((e) => e.id === rest);
-      if (!ev || !(await confirmCalendarWrite(ev, 'update'))) return;
-      calendar.moveEvent(rest, { start: ev.start, end: newEnd, human_confirm: calendarEventNeedsApproval(ev) });
-    },
-    [calendar, update]
-  );
 
   const openCreate = useCallback((seed: CreateSeed) => setCreateSeed(seed), []);
 
@@ -338,23 +266,9 @@ export function CalendarPage() {
     []
   );
 
-  const unscheduleTask = useCallback(
-    (item: CalendarItem) => {
-      if (item.kind === 'event') return;
-      // '' clears the date through the web update path. Unscheduling the start
-      // also clears end_date — a dangling end without a start means nothing.
-      if (item.kind === 'task-due') update(item.task.id, { due_date: '' });
-      else update(item.task.id, { start_date: '', ...(item.task.end_date ? { end_date: '' } : {}) });
-    },
-    [update]
-  );
-
   const deleteEventItem = useCallback(
-    async (item: CalendarItem) => {
-      if (item.kind !== 'event' || !(await confirmCalendarWrite(item.event, 'delete'))) return;
-      calendar.removeEvent(item.event.id, calendarEventNeedsApproval(item.event));
-    },
-    [calendar, confirmCalendarWrite]
+    (item: CalendarItem) => { if (item.kind === 'event') void actions.deleteEvent(item.event); },
+    [actions]
   );
 
   const completeTaskItem = useCallback(
@@ -376,16 +290,6 @@ export function CalendarPage() {
   const openItemPopover = useCallback(
     (item: CalendarItem, anchorEl: HTMLElement) => setOpenItem({ item, anchorEl }),
     []
-  );
-
-  /** Item-popover save for tasks: newWhen '' clears the chip's date. */
-  const saveTaskWhen = useCallback(
-    (item: CalendarItem, newWhen: string, newEnd?: string) => {
-      if (item.kind === 'event') return;
-      if (item.kind === 'task-due') update(item.task.id, { due_date: newWhen });
-      else update(item.task.id, { start_date: newWhen, ...(newEnd !== undefined ? { end_date: newEnd } : {}) });
-    },
-    [update]
   );
 
   // N27: a phone's empty day says so (only once its events are in and no calendar problem is up).
@@ -428,7 +332,8 @@ export function CalendarPage() {
                 anchor={anchor}
                 items={items}
                 dragging={activeTask !== null}
-                onMoveItem={moveItem}
+                onMoveItem={actions.moveItem}
+                onCopyItem={actions.copyItem}
                 onChipDragging={setChipDragging}
                 onCreate={openCreate}
                 onNavigateDay={(d) => setParam({ view: 'day', d })}
@@ -442,8 +347,9 @@ export function CalendarPage() {
                 items={items}
                 dropPreview={dropPreview}
                 metricsRef={gridMetricsRef}
-                onMoveItem={moveItem}
-                onResizeItem={resizeItem}
+                onMoveItem={actions.moveItem}
+                onCopyItem={actions.copyItem}
+                onResizeItem={actions.resizeItem}
                 onChipDragging={setChipDragging}
                 onCreate={openCreate}
                 onContextMenu={openContextMenu}
@@ -462,7 +368,7 @@ export function CalendarPage() {
           seed={createSeed}
           onClose={() => setCreateSeed(null)}
           onCreateTask={create}
-          onCreateEvent={canCreateEvent ? calendar.createEvent : undefined}
+          onCreateEvent={canCreateEvent ? actions.createEvent : undefined}
         />
       )}
       {calsAnchor && <CalendarsPopover anchorEl={calsAnchor} onClose={() => setCalsAnchor(null)} hiddenEvents={calendar.hiddenEvents} onShowEvent={calendar.showEvent} />}
@@ -470,7 +376,7 @@ export function CalendarPage() {
         <CalendarContextMenu
           target={ctxTarget}
           onClose={() => setCtxTarget(null)}
-          onUnscheduleTask={unscheduleTask}
+          onUnscheduleTask={actions.unscheduleTask}
           onCompleteTask={completeTaskItem}
           onDeleteTask={deleteTaskItem}
           onDeleteEvent={deleteEventItem}
@@ -485,18 +391,10 @@ export function CalendarPage() {
           item={openItem.item}
           anchorEl={openItem.anchorEl}
           onClose={() => setOpenItem(null)}
-          onSaveEvent={async (ev, patch) => {
-            if (!(await confirmCalendarWrite(ev, 'update'))) return false;
-            calendar.moveEvent(ev.id, { ...patch, human_confirm: calendarEventNeedsApproval(ev) });
-            return true;
-          }}
-          onDeleteEvent={async (ev) => {
-            if (!(await confirmCalendarWrite(ev, 'delete'))) return false;
-            calendar.removeEvent(ev.id, calendarEventNeedsApproval(ev));
-            return true;
-          }}
+          onSaveEvent={actions.saveEvent}
+          onDeleteEvent={actions.deleteEvent}
           onHideEvent={calendar.hideEvent}
-          onSaveTaskWhen={saveTaskWhen}
+          onSaveTaskWhen={actions.saveTaskWhen}
         />
       )}
     </div>

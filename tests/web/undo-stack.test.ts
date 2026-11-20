@@ -224,5 +224,164 @@ describe('undo stack', () => {
     expect(log).toEqual(['no snooze', 'unpin b'])
     expect(stack.undoLatest()).toBe(false)
   })
-})
 
+  // Redo is the same history run forward: an Undo of an action that can be redone puts it on the
+  // redo list, and its redo does the action again through the call that did it first (which pushes
+  // a fresh entry with the same key).
+  describe('redo', () => {
+    /** A target with a position, moved by `act` (which pushes its Undo as the app's actions do). */
+    function board(stack: ReturnType<typeof createUndoStack>) {
+      const at: Record<string, number> = {}
+      const act = (id: string, to: number) => {
+        const from = at[id] ?? 0
+        at[id] = to
+        stack.push({ key: `move:${id}`, undo: () => { at[id] = from }, redo: () => act(id, to) })
+      }
+      return { at, act }
+    }
+
+    it('undo then redo puts it back where the action put it, and it can be undone again', () => {
+      const { clock } = fakeClock()
+      const stack = createUndoStack(clock)
+      const { at, act } = board(stack)
+      act('a', 5)
+      expect(stack.undoLatest()).toBe(true)
+      expect(at.a).toBe(0)
+      expect(stack.hasRedo()).toBe(true)
+      expect(stack.redoLatest()).toBe(true)
+      expect(at.a).toBe(5)
+      expect(stack.hasRedo()).toBe(false)
+      expect(stack.undoLatest()).toBe(true)
+      expect(at.a).toBe(0)
+    })
+
+    it('several undos are redone newest-undone first, all the way forward', () => {
+      const { clock } = fakeClock()
+      const stack = createUndoStack(clock)
+      const { at, act } = board(stack)
+      act('a', 1)
+      act('b', 2)
+      act('a', 3)
+      stack.undoLatest(); stack.undoLatest(); stack.undoLatest()
+      expect(at).toEqual({ a: 0, b: 0 })
+      stack.redoLatest()
+      expect(at).toEqual({ a: 1, b: 0 })
+      stack.redoLatest()
+      expect(at).toEqual({ a: 1, b: 2 })
+      stack.redoLatest()
+      expect(at).toEqual({ a: 3, b: 2 })
+      expect(stack.redoLatest()).toBe(false)
+      // And back again, the same three steps.
+      stack.undoLatest(); stack.undoLatest(); stack.undoLatest()
+      expect(at).toEqual({ a: 0, b: 0 })
+    })
+
+    it('a new action ends the redo list, as in every editor', () => {
+      const { clock } = fakeClock()
+      const stack = createUndoStack(clock)
+      const { at, act } = board(stack)
+      act('a', 1)
+      stack.undoLatest()
+      act('b', 2)
+      expect(stack.hasRedo()).toBe(false)
+      expect(stack.redoLatest()).toBe(false)
+      expect(at).toEqual({ a: 0, b: 2 })
+    })
+
+    it('a redo whose action pushes later (after a wait) still keeps the rest of the list', () => {
+      const { clock } = fakeClock()
+      const stack = createUndoStack(clock)
+      const later: (() => void)[] = []
+      const log: string[] = []
+      // Its redo says it is still on its way: a promise that settles once the push came.
+      const act = (id: string): number => stack.push({ key: id, undo: () => log.push(`undo ${id}`), redo: () => new Promise<void>((done) => { later.push(() => { act(id); done() }) }) })
+      act('a'); act('b')
+      stack.undoLatest(); stack.undoLatest()
+      stack.redoLatest()
+      later.shift()!()
+      expect(stack.hasRedo()).toBe(true)
+      stack.redoLatest()
+      later.shift()!()
+      expect(stack.size()).toBe(2)
+    })
+
+    it('a redo lives the undo window, then it is gone', () => {
+      const { clock, advance } = fakeClock()
+      const stack = createUndoStack(clock)
+      const { act } = board(stack)
+      act('a', 1)
+      stack.undoLatest()
+      advance(UNDO_WINDOW_MS - 1)
+      expect(stack.hasRedo()).toBe(true)
+      advance(1)
+      expect(stack.hasRedo()).toBe(false)
+    })
+
+    it('an action with no redo is not redoable, and the page leaving ends the list', () => {
+      const { clock } = fakeClock()
+      const stack = createUndoStack(clock)
+      stack.push({ key: 'x', undo: () => {} })
+      stack.undoLatest()
+      expect(stack.hasRedo()).toBe(false)
+      const { act } = board(stack)
+      act('a', 1)
+      stack.undoLatest()
+      stack.commitAll()
+      expect(stack.hasRedo()).toBe(false)
+    })
+
+    it('an Undo from its own toast button is redoable too', () => {
+      const { clock } = fakeClock()
+      const stack = createUndoStack(clock)
+      const at = { a: 0 }
+      const act = (to: number): number => { const from = at.a; at.a = to; return stack.push({ key: 'a', undo: () => { at.a = from }, redo: () => act(to) }) }
+      const handle = act(4)
+      expect(stack.undo(handle)).toBe(true)
+      stack.redoLatest()
+      expect(at.a).toBe(4)
+    })
+    it('an undo that finds its target changed elsewhere takes nothing back and leaves nothing to redo', () => {
+      const { clock } = fakeClock()
+      const stack = createUndoStack(clock)
+      const settled: string[] = []
+      let redone = 0
+      stack.push({ key: 'a', undo: () => false, redo: () => { redone++ }, onSettled: (how) => settled.push(how) })
+      expect(stack.undoLatest()).toBe(true)
+      expect(settled).toEqual(['stale'])
+      expect(stack.hasRedo()).toBe(false)
+      expect(stack.redoLatest()).toBe(false)
+      expect(redone).toBe(0)
+    })
+
+    it('a redo that ends without pushing (canceled, nothing to do) no longer makes a new action look like it', async () => {
+      const { clock } = fakeClock()
+      const stack = createUndoStack(clock)
+      const act = (key: string, push = true): Promise<void> | void => {
+        if (push) stack.push({ key, undo: () => {}, redo: () => act(key) })
+      }
+      stack.push({ key: 'old', undo: () => {}, redo: () => act('old') })
+      stack.push({ key: 'k', undo: () => {}, redo: () => Promise.resolve(act('k', false)) })
+      stack.undoLatest(); stack.undoLatest()
+      // The newest undone is 'old': redo it (it pushes), then 'k', whose redo pushes nothing.
+      stack.redoLatest()
+      expect(stack.hasRedo()).toBe(true)
+      stack.redoLatest()
+      await Promise.resolve(); await Promise.resolve()
+      // A genuinely new action on 'k' now: it ends the redo list.
+      stack.push({ key: 'old', undo: () => {}, redo: () => act('old') })
+      stack.undoLatest()
+      stack.push({ key: 'k', undo: () => {} })
+      expect(stack.hasRedo()).toBe(false)
+    })
+
+    it('a redo past its window is gone even when its timer came late (a page back from the background)', () => {
+      const { clock, setNow } = fakeClock()
+      const stack = createUndoStack(clock)
+      stack.push({ key: 'a', undo: () => {}, redo: () => {} })
+      stack.undoLatest()
+      setNow(UNDO_WINDOW_MS + 1) // the clock moved on; the timer has not fired
+      expect(stack.hasRedo()).toBe(false)
+      expect(stack.redoLatest()).toBe(false)
+    })
+  })
+})

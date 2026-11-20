@@ -31004,12 +31004,36 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 }
 
 .cal-move-ghost {
+  --cal-chip-tint: var(--accent);
   position: absolute;
   left: 2px;
   right: 2px;
   border-radius: 6px;
-  border: 2px solid var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 2px solid var(--cal-chip-tint);
+  background: color-mix(in srgb, var(--cal-chip-tint) 14%, transparent);
+}
+
+/* Alt-drag copies (alt-copy.ts): a "+" on the block in hand, the copy cursor, and the
+   original chip stays as it was. */
+.cal-move-ghost-copy::after {
+  content: '+';
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--success);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+.cal-grid-copying,
+.cal-grid-copying * {
+  cursor: copy !important;
 }
 
 /* The block being created: a drag selection, then the popover's placeholder

@@ -8,7 +8,9 @@
  *    a dropPreview down. Slot lines are CSS gradients, not 48 divs.
  *  - chip move / drag-to-create: ONE view-level useDragGesture each (rAF-
  *    coalesced by the hook); preview via CSS transform on a ghost, state
- *    writes at most once per painted frame.
+ *    writes at most once per painted frame. Alt (Option) held at the drop
+ *    copies an event instead of moving it (useAltCopy).
+ *  - every preview is drawn in the colour the item will have (item-tint.ts).
  */
 import {
   memo,
@@ -43,6 +45,8 @@ import type { CalendarItem } from './calendar-items';
 import { CalendarChip } from './CalendarChip';
 import { isCreateKind, ONE_LINE_BELOW_PX, type CreateKind, type CreateSeed } from './QuickCreatePopover';
 import { usePageView } from '@/utils/view-memory';
+import { chipTint, NEW_TASK_TINT, useNewEventTint } from './item-tint';
+import { canAltCopy, useAltCopy } from './alt-copy';
 
 export const SLOT_PX = 24;
 const CLICK_TOLERANCE_PX = 4;
@@ -79,6 +83,8 @@ interface Props {
   /** The page reads column rects from here to compute dnd-kit drop slots. */
   metricsRef: MutableRefObject<GridMetrics | null>;
   onMoveItem: (itemId: string, newWhen: string) => void;
+  /** Alt-drag of an event: a copy where it was dropped, the original stays. */
+  onCopyItem?: (itemId: string, newWhen: string) => void;
   /** Bottom-edge resize: events → new end; task-start chips → new end_date. */
   onResizeItem?: (itemId: string, newEnd: string) => void;
   onChipDragging: (dragging: boolean) => void;
@@ -101,6 +107,8 @@ interface ChipDrag {
   /** Snapped minutes-of-day for the ghost top (null → all-day row). */
   previewMin: number | null;
   moved: boolean;
+  /** Alt is down on an item that can be copied: the drop copies it. */
+  copy: boolean;
 }
 
 interface CreateDrag {
@@ -272,6 +280,7 @@ export const TimeGrid = memo(function TimeGrid({
   dropPreview,
   metricsRef,
   onMoveItem,
+  onCopyItem,
   onResizeItem,
   onChipDragging,
   onCreate,
@@ -426,8 +435,17 @@ export const TimeGrid = memo(function TimeGrid({
     startMin: number | null;
     lengthMin: number;
     title: string;
-    tint?: string;
+    tint: string;
+    copy: boolean;
   } | null>(null);
+  const copyable = useCallback((item: CalendarItem) => !!onCopyItem && canAltCopy(item), [onCopyItem]);
+  // Alt pressed or let go while the pointer stands still changes the gesture too.
+  useAltCopy(!!moveGhost, (alt) => {
+    const drag = dragRef.current;
+    if (!drag || !copyable(drag.item)) return;
+    drag.copy = alt;
+    setMoveGhost((g) => (g ? { ...g, copy: alt } : g));
+  });
 
   const moveGesture = useDragGesture({
     onMove: (m) => {
@@ -442,13 +460,15 @@ export const TimeGrid = memo(function TimeGrid({
       const previewMin = inAllDay ? null : Math.max(Math.min(0, drag.item.startMin), Math.min(endMinute - SNAP_MINUTES, minAtY(overDay, m.y) - drag.grabOffsetMin));
       drag.overDay = overDay;
       drag.previewMin = previewMin;
+      drag.copy = m.event.altKey && copyable(drag.item);
       setMoveGhost({
         itemId: drag.item.id,
         day: overDay,
         startMin: previewMin,
         lengthMin: drag.item.endMin - drag.item.startMin,
         title: drag.item.kind === 'event' ? drag.item.event.title : drag.item.task.title,
-        tint: drag.item.kind === 'event' ? drag.item.event.color : undefined,
+        tint: chipTint(drag.item),
+        copy: drag.copy,
       });
     },
     onEnd: ({ canceled }) => {
@@ -462,7 +482,9 @@ export const TimeGrid = memo(function TimeGrid({
         drag.previewMin === null
           ? drag.overDay // dropped in the all-day row → strip the time
           : gridLocalIso(drag.overDay, drag.previewMin);
-      if (newWhen !== drag.item.when) onMoveItem(drag.item.id, newWhen);
+      if (newWhen === drag.item.when) return;
+      if (drag.copy) onCopyItem?.(drag.item.id, newWhen);
+      else onMoveItem(drag.item.id, newWhen);
     },
   });
 
@@ -471,11 +493,11 @@ export const TimeGrid = memo(function TimeGrid({
       if (item.kind === 'event' && item.event.readonly) return;
       publishMetrics();
       const grabMin = item.allDay ? 0 : minAtY(item.day, e.clientY) - item.startMin;
-      dragRef.current = { item, grabOffsetMin: Math.max(0, grabMin), overDay: null, previewMin: null, moved: false };
+      dragRef.current = { item, grabOffsetMin: Math.max(0, grabMin), overDay: null, previewMin: null, moved: false, copy: e.altKey && copyable(item) };
       onChipDragging(true);
       moveGesture.onPointerDown(e);
     },
-    [moveGesture, minAtY, onChipDragging, publishMetrics]
+    [moveGesture, minAtY, onChipDragging, publishMetrics, copyable]
   );
 
   const handleChipClick = useCallback(
@@ -491,7 +513,7 @@ export const TimeGrid = memo(function TimeGrid({
 
   // ---- resize gesture (bottom edge; events + task-start chips) -----------------
   const resizeRef = useRef<{ item: CalendarItem; endMin: number; colTop: number } | null>(null);
-  const [resizeGhost, setResizeGhost] = useState<{ itemId: string; day: string; startMin: number; endMin: number } | null>(null);
+  const [resizeGhost, setResizeGhost] = useState<{ itemId: string; day: string; startMin: number; endMin: number; tint: string } | null>(null);
 
   const resizeGesture = useDragGesture({
     cursor: 'ns-resize',
@@ -502,7 +524,7 @@ export const TimeGrid = memo(function TimeGrid({
       if (!rect) return;
       const raw = Math.round((rs.item.endMin + (m.dy + rs.colTop - rect.top) / slotPx * SLOT_MINUTES) / SNAP_MINUTES) * SNAP_MINUTES;
       rs.endMin = Math.min(Math.max(endMinute, rs.item.endMin), Math.max(rs.item.startMin + SNAP_MINUTES_MIN, raw));
-      setResizeGhost({ itemId: rs.item.id, day: rs.item.day, startMin: rs.item.startMin, endMin: rs.endMin });
+      setResizeGhost({ itemId: rs.item.id, day: rs.item.day, startMin: rs.item.startMin, endMin: rs.endMin, tint: chipTint(rs.item) });
     },
     onEnd: ({ canceled }) => {
       const rs = resizeRef.current;
@@ -534,6 +556,10 @@ export const TimeGrid = memo(function TimeGrid({
   // block being dragged reads "New Event" or "New Task" before the popover opens.
   const [keptKind] = usePageView<CreateKind>('calendar', 'createKind', 'event', isCreateKind);
   const createKind: CreateKind = canCreateEvent ? keptKind : 'task';
+  // The block being dragged out is drawn in the colour it will have once dropped: the new
+  // event's calendar (the default one the form starts on), or a task's.
+  const newEventTint = useNewEventTint();
+  const createTint = createKind === 'event' ? newEventTint ?? NEW_TASK_TINT : NEW_TASK_TINT;
   /** Where the popover draws the block being created: the day's column, minute → px. */
   const timedPlaceholder = useLeanCallback(
     (day: string) => {
@@ -649,7 +675,7 @@ export const TimeGrid = memo(function TimeGrid({
   };
 
   return (
-    <div className="cal-grid" data-days={days} data-start-minute={startMinute} data-end-minute={endMinute}
+    <div className={`cal-grid${moveGhost?.copy ? ' cal-grid-copying' : ''}`} data-days={days} data-start-minute={startMinute} data-end-minute={endMinute}
       style={{ '--cal-slot-px': `${slotPx}px`, '--cal-hour-px': `${slotPx * 2}px` } as React.CSSProperties}>
       <div className="cal-grid-header">
         <div className="cal-grid-gutter" />
@@ -722,7 +748,7 @@ export const TimeGrid = memo(function TimeGrid({
               day={d}
               isToday={d === todayStr}
               items={timedByDay.get(d) ?? []}
-              ghostItemId={moveGhost?.itemId ?? null}
+              ghostItemId={moveGhost && !moveGhost.copy ? moveGhost.itemId : null}
               startMinute={startMinute}
               endMinute={endMinute}
               slotPx={slotPx}
@@ -749,12 +775,14 @@ export const TimeGrid = memo(function TimeGrid({
           {moveGhost && moveGhost.startMin !== null && (
             <GridOverlay day={moveGhost.day} dayList={dayList}>
               <div
-                className="cal-move-ghost cal-move-ghost-solid"
+                className={`cal-move-ghost cal-move-ghost-solid${moveGhost.copy ? ' cal-move-ghost-copy' : ''}`}
+                data-testid="cal-move-ghost"
+                data-copy={moveGhost.copy ? 'true' : undefined}
                 style={{
                   top: gridY(moveGhost.startMin, startMinute, slotPx),
                   height: Math.max(gridY(moveGhost.lengthMin, 0, slotPx), MIN_EVENT_PX),
-                  ...(moveGhost.tint ? ({ '--cal-chip-tint': moveGhost.tint } as React.CSSProperties) : {}),
-                }}
+                  '--cal-chip-tint': moveGhost.tint,
+                } as React.CSSProperties}
               >
                 <span className="cal-move-ghost-title">{moveGhost.title}</span>
                 <span className="cal-drop-time">{minsToLabel(moveGhost.startMin)}</span>
@@ -770,7 +798,8 @@ export const TimeGrid = memo(function TimeGrid({
                 style={{
                   top: gridY(resizeGhost.startMin, startMinute, slotPx),
                   height: Math.max(gridY(resizeGhost.endMin, resizeGhost.startMin, slotPx), MIN_EVENT_PX),
-                }}
+                  '--cal-chip-tint': resizeGhost.tint,
+                } as React.CSSProperties}
               >
                 <span className="cal-drop-time" style={{ top: 'auto', bottom: -18 }}>
                   {minsToLabel(resizeGhost.endMin)}
@@ -785,10 +814,12 @@ export const TimeGrid = memo(function TimeGrid({
               <div
                 className={`cal-chip cal-create-placeholder cal-create-sel${gridY(createSel.endMin, createSel.startMin, slotPx) < ONE_LINE_BELOW_PX ? ' cal-chip-oneline' : ''}`}
                 data-kind={createKind}
+                data-testid="cal-create-sel"
                 style={{
                   top: gridY(createSel.startMin, startMinute, slotPx),
                   height: gridY(createSel.endMin, createSel.startMin, slotPx),
-                }}
+                  '--cal-chip-tint': createTint,
+                } as React.CSSProperties}
               >
                 <span className="cal-chip-title">{createKind === 'task' ? 'New Task' : 'New Event'}</span>
                 <span className="cal-chip-time">{clockRange(createSel.startMin, createSel.endMin)}</span>

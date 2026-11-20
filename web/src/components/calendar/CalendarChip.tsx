@@ -8,6 +8,7 @@
 import { memo, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import { clockLabel, clockRange } from '@/utils/calendar-date';
 import type { CalendarItem } from './calendar-items';
+import { chipTint } from './item-tint';
 
 export interface CalendarChipProps {
   item: CalendarItem;
@@ -56,7 +57,8 @@ export const CalendarChip = memo(function CalendarChip({
     .filter(Boolean)
     .join(' ');
 
-  const tint = isEvent ? item.event.color : undefined;
+  // The same tint every preview of this item uses (item-tint.ts).
+  const tint = chipTint(item);
   // A timed block: title first, then its time, then where (each only when a whole line is left).
   const block = !compact && lines !== undefined;
   const showTime = block && !item.allDay && lines >= 2;
@@ -70,7 +72,7 @@ export const CalendarChip = memo(function CalendarChip({
       // click-open detail, not a hover expansion that covers the next event. List chips grow.
       data-peek={style?.top !== undefined ? 'off' : undefined}
       className={cls}
-      style={{ ...style, ...(tint ? { '--cal-chip-tint': tint } : {}), ...(block ? { '--cal-title-lines': titleLines } : {}) } as CSSProperties}
+      style={{ ...style, '--cal-chip-tint': tint, ...(block ? { '--cal-title-lines': titleLines } : {}) } as CSSProperties}
       data-lines={block ? lines : undefined}
       data-item-id={item.id}
       data-day={item.day}

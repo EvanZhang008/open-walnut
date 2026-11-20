@@ -13,6 +13,8 @@ import { formatDateOnly, monthGridRange, sameDay } from '@/utils/calendar-date';
 import type { CalendarItem } from './calendar-items';
 import { CalendarChip } from './CalendarChip';
 import type { CreateSeed } from './QuickCreatePopover';
+import { chipTint } from './item-tint';
+import { canAltCopy, useAltCopy } from './alt-copy';
 
 const MAX_CHIPS = 3;
 const CLICK_TOLERANCE_PX = 4;
@@ -24,6 +26,8 @@ interface Props {
   /** A rail-task dnd-kit drag is in flight (highlights droppables via dnd-kit). */
   dragging: boolean;
   onMoveItem: (itemId: string, newWhen: string) => void;
+  /** Alt-drag of an event: a copy on the day it was dropped, the original stays. */
+  onCopyItem?: (itemId: string, newWhen: string) => void;
   /** Report chip-gesture activity up so the page freezes the item arrays. */
   onChipDragging: (dragging: boolean) => void;
   onCreate: (seed: CreateSeed) => void;
@@ -39,6 +43,8 @@ interface ChipDrag {
   /** day under the pointer right now (preview target). */
   overDay: string | null;
   moved: boolean;
+  /** Alt is down on an item that can be copied: the drop copies it. */
+  copy: boolean;
 }
 
 const MonthDayCell = memo(function MonthDayCell({
@@ -141,6 +147,7 @@ export const MonthView = memo(function MonthView({
   items,
   dragging,
   onMoveItem,
+  onCopyItem,
   onChipDragging,
   onCreate,
   onNavigateDay,
@@ -200,7 +207,14 @@ export const MonthView = memo(function MonthView({
   const [preview, setPreview] = useState<{ itemId: string; overDay: string } | null>(null);
   // Floating chip clone under the cursor — the "in my hand" feedback the cell
   // highlight alone doesn't give.
-  const [dragPointer, setDragPointer] = useState<{ x: number; y: number; title: string; tint?: string } | null>(null);
+  const [dragPointer, setDragPointer] = useState<{ x: number; y: number; title: string; tint: string; copy: boolean } | null>(null);
+  const copyable = useCallback((item: CalendarItem) => !!onCopyItem && canAltCopy(item), [onCopyItem]);
+  useAltCopy(!!dragPointer, (alt) => {
+    const drag = dragRef.current;
+    if (!drag || !copyable(drag.item)) return;
+    drag.copy = alt;
+    setDragPointer((p) => (p ? { ...p, copy: alt } : p));
+  });
 
   const dayAtPoint = useCallback((x: number, y: number): string | null => {
     for (const { day, rect } of cellRectsRef.current) {
@@ -214,12 +228,14 @@ export const MonthView = memo(function MonthView({
       const drag = dragRef.current;
       if (!drag) return;
       if (Math.abs(m.dx) + Math.abs(m.dy) > CLICK_TOLERANCE_PX) drag.moved = true;
+      drag.copy = m.event.altKey && copyable(drag.item);
       if (drag.moved) {
         setDragPointer({
           x: m.x,
           y: m.y,
           title: drag.item.kind === 'event' ? drag.item.event.title : drag.item.task.title,
-          tint: drag.item.kind === 'event' ? drag.item.event.color : undefined,
+          tint: chipTint(drag.item),
+          copy: drag.copy,
         });
       }
       const overDay = dayAtPoint(m.x, m.y);
@@ -241,7 +257,8 @@ export const MonthView = memo(function MonthView({
       const newWhen = drag.item.when.includes('T')
         ? `${drag.overDay}T${drag.item.when.split('T')[1]}`
         : drag.overDay;
-      onMoveItem(drag.item.id, newWhen);
+      if (drag.copy) onCopyItem?.(drag.item.id, newWhen);
+      else onMoveItem(drag.item.id, newWhen);
     },
   });
 
@@ -254,11 +271,11 @@ export const MonthView = memo(function MonthView({
         day: el.dataset.day!,
         rect: el.getBoundingClientRect(),
       }));
-      dragRef.current = { item, overDay: null, moved: false };
+      dragRef.current = { item, overDay: null, moved: false, copy: e.altKey && copyable(item) };
       onChipDragging(true);
       gesture.onPointerDown(e);
     },
-    [gesture, onChipDragging]
+    [gesture, onChipDragging, copyable]
   );
 
   const handleChipClick = useCallback(
@@ -299,7 +316,7 @@ export const MonthView = memo(function MonthView({
   const overflowItems = overflowDay ? byDay.get(overflowDay) ?? [] : [];
 
   return (
-    <div className={`cal-month${dragging ? ' cal-month-dragging' : ''}`} ref={gridRef}>
+    <div className={`cal-month${dragging ? ' cal-month-dragging' : ''}${dragPointer?.copy ? ' cal-grid-copying' : ''}`} ref={gridRef}>
       <div className="cal-month-weekdays">
         {WEEKDAYS.map((w) => (
           <div key={w} className="cal-month-weekday">
@@ -318,7 +335,7 @@ export const MonthView = memo(function MonthView({
               isToday={sameDay(day, today)}
               items={byDay.get(dayStr) ?? []}
               previewDay={preview?.overDay ?? null}
-              draggedItemId={preview?.itemId ?? null}
+              draggedItemId={preview && !dragPointer?.copy ? preview.itemId : null}
               onChipPointerDown={handleChipPointerDown}
               onChipClick={handleChipClick}
               onChipContextMenu={onContextMenu ? handleChipContextMenu : undefined}
@@ -333,12 +350,13 @@ export const MonthView = memo(function MonthView({
       {dragPointer &&
         createPortal(
           <div
-            className="cal-drag-cursor-chip"
+            className={`cal-drag-cursor-chip${dragPointer.copy ? ' cal-move-ghost-copy' : ''}`}
+            data-copy={dragPointer.copy ? 'true' : undefined}
             style={{
               left: dragPointer.x + 10,
               top: dragPointer.y + 12,
-              ...(dragPointer.tint ? ({ '--cal-chip-tint': dragPointer.tint } as React.CSSProperties) : {}),
-            }}
+              '--cal-chip-tint': dragPointer.tint,
+            } as React.CSSProperties}
           >
             {dragPointer.title}
           </div>,

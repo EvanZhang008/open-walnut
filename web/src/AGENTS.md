@@ -121,8 +121,9 @@ show inline after the open ones, other completed hits that show the query fold i
   node carries `data-column-id` (the session id). Ratchets:
   `tests/e2e/browser/column-complete-close.spec.ts` (holds the tick to act inside it),
   `tests/web/session-columns.test.ts`.
-- **Complete, reopen, snooze, pin and delete of a task take an Undo for 5 seconds, on the toast and
-  on mod+z** (`undo/undo-stack.ts`, `undo/TaskUndoContext.tsx`, `useTaskUndo()`). Every surface that
+- **Complete, reopen, snooze, pin and delete of a task, and every calendar change
+  (`calendar/calendar-item-actions.ts`), take an Undo for 5 seconds, on the toast and on mod+z; an
+  Undo is redone with mod+shift+z** (`undo/undo-stack.ts`, `undo/TaskUndoContext.tsx`, `useTaskUndo()`). Every surface that
   does one of them goes through `useTaskUndo()` (or `useUndoableTaskActions()` for complete, phase and
   delete), never straight to the store, or it has no Undo (`tests/web/undo-surfaces-ratchet.test.ts`). A
   DELETE is a hard delete on the server, so it is HELD: the row is hidden (`hideTasks`) and the

@@ -370,12 +370,15 @@ test('a drag past midnight keeps its real end: the end date shows and the event 
 })
 
 test('Enter before the calendars are read still creates the event, once they arrive', async ({ page }) => {
-  await openCalendar(page)
-  // The one route here: hold the calendar list so the title is typed and sent before it lands.
+  // The one route here: hold the calendar list from the first load (the form starts on the list
+  // the page already read, item-tint.ts), so the title is typed and sent before any list lands.
+  let release = () => {}
+  const held = new Promise<void>((r) => { release = r })
   await page.route('**/api/calendar/sources', async (route) => {
-    await new Promise((r) => setTimeout(r, 1500))
+    await held
     await route.continue()
   })
+  await openCalendar(page)
   const today = localDay(0)
   const slot = await calendarEmptySlotPoint(page, today, 7)
   await page.mouse.click(slot.x, slot.y)
@@ -384,6 +387,10 @@ test('Enter before the calendars are read still creates the event, once they arr
   const title = `EarlyEnter ${Date.now()}`
   await popover(page).getByLabel('Event title').fill(title)
   await page.keyboard.press('Enter')
+  // Still open: it waits for the calendars, then creates.
+  await page.waitForTimeout(500)
+  await expect(popover(page)).toHaveCount(1)
+  release()
   await expect(popover(page)).toHaveCount(0, { timeout: 10_000 })
   let id = ''
   await expect.poll(async () => {

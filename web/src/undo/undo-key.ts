@@ -1,5 +1,5 @@
 /**
- * When mod+z belongs to the task undo stack rather than to the page.
+ * When mod+z (undo) and mod+shift+z (redo) belong to the app's undo stack rather than to the page.
  *
  * Text fields keep their own undo: in a box with text, mod+z takes back typing, as everywhere
  * else. The one exception is an EMPTY composer: completing a task from the keyboard moves the
@@ -21,8 +21,31 @@ export function isUndoChord(e: Pick<KeyLike, 'key' | 'code' | 'metaKey' | 'ctrlK
   return mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
 }
 
-export function undoKeyApplies(e: KeyLike, active: Element | null, mac = isMacPlatform()): boolean {
-  if (e.defaultPrevented || e.isComposing || !isUndoChord(e, mac)) return false;
+/** Redo: mod+shift+z everywhere, and ctrl+y off the Mac (Windows and Linux apps use both). */
+export function isRedoChord(e: Pick<KeyLike, 'key' | 'code' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'>, mac = isMacPlatform()): boolean {
+  if (e.altKey) return false;
+  const mod = mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+  if (!mod) return false;
+  const isZ = e.code === 'KeyZ' || e.key.toLowerCase() === 'z';
+  if (isZ) return e.shiftKey;
+  return !mac && !e.shiftKey && (e.code === 'KeyY' || e.key.toLowerCase() === 'y');
+}
+
+/** Which history key this is, if any. */
+export function historyChord(e: Pick<KeyLike, 'key' | 'code' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'>, mac = isMacPlatform()): 'undo' | 'redo' | null {
+  return isUndoChord(e, mac) ? 'undo' : isRedoChord(e, mac) ? 'redo' : null;
+}
+
+/** When undo or redo belongs to the app's stack rather than to the page (the same rule for both:
+ *  a field with text of its own keeps its own history). */
+export function historyKeyApplies(e: KeyLike, active: Element | null, mac = isMacPlatform()): 'undo' | 'redo' | null {
+  if (e.defaultPrevented || e.isComposing) return null;
+  const chord = historyChord(e, mac);
+  if (!chord) return null;
+  return focusYieldsHistoryKey(active) ? chord : null;
+}
+
+function focusYieldsHistoryKey(active: Element | null): boolean {
   if (!active || (typeof document !== 'undefined' && active === document.body)) return true;
   const el = active as HTMLElement;
   if (el.closest?.('.cm-editor, .xterm, .monaco-editor')) return false;
@@ -37,4 +60,8 @@ export function undoKeyApplies(e: KeyLike, active: Element | null, mac = isMacPl
 /** The chord as the toast shows it. */
 export function undoKeyLabel(mac = isMacPlatform()): string {
   return mac ? '⌘Z' : 'Ctrl+Z';
+}
+
+export function redoKeyLabel(mac = isMacPlatform()): string {
+  return mac ? '⇧⌘Z' : 'Ctrl+Shift+Z';
 }

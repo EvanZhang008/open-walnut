@@ -9,6 +9,13 @@
  * exactly once: at expiry, when the page goes (`commitAll`, the request then leaves with
  * keepalive), or never, when the entry is undone.
  *
+ * Redo is the same history run forward: an entry undone that carries a `redo` goes on the redo
+ * list for its own window, and mod+shift+z (or the "Undone" toast's Redo) runs the newest one. A
+ * redo does the action again through the same call that did it first, so that call pushes a fresh
+ * entry (and toast) with the same key; any other new action clears the redo list, as in every
+ * editor. An undo that finds its target changed elsewhere says so (`undo` returns false): nothing
+ * was taken back, so nothing can be redone over that change.
+ *
  * Pure module (timers injectable) so the ordering rules are unit tested
  * (tests/web/undo-stack.test.ts); TaskUndoContext.tsx wires it to the stores and toasts.
  */
@@ -25,13 +32,27 @@ export interface UndoEntryInput {
   /** The second half of one gesture (a pin, then its group): the replaced entry's `undo`
    *  is kept, so one Undo goes back to before the first half. */
   merge?: boolean;
-  undo: () => void;
+  /** Takes the action back. Returns false when it no longer applies (the target changed
+   *  elsewhere since): nothing was undone, and it is not redoable. */
+  undo: () => void | boolean;
+  /** Does the action again, through the call that did it first (it pushes its own entry with the
+   *  same key; a promise while that push may still come). Present only on redoable actions. */
+  redo?: () => void | Promise<unknown>;
   commit?: () => void;
   /** Called when the entry leaves the stack for any reason (undone, expired, committed). */
   onSettled?: (how: Settled) => void;
 }
 
-export type Settled = 'undone' | 'expired' | 'committed' | 'replaced' | 'dropped';
+/** `stale`: undone, but its undo found the target changed elsewhere and left it. */
+export type Settled = 'undone' | 'stale' | 'expired' | 'committed' | 'replaced' | 'dropped';
+
+interface RedoEntry {
+  key: string;
+  redo: () => void | Promise<unknown>;
+  seq: number;
+  expiresAt: number;
+  timer: unknown;
+}
 
 interface Entry extends UndoEntryInput {
   seq: number;
@@ -61,6 +82,9 @@ export interface UndoStack {
   undoLatest: () => boolean;
   /** Undo one entry by handle (its toast's button). False when it already settled. */
   undo: (handle: number) => boolean;
+  /** Redo the newest action undone in its window. False when there is none. */
+  redoLatest: () => boolean;
+  hasRedo: () => boolean;
   /** Forget a key's entry with neither its undo nor its commit (the action was refused). */
   drop: (key: string) => boolean;
   /** Take one entry away without undoing it, if it is still there (its write was refused). */
@@ -83,6 +107,22 @@ export interface UndoStack {
 export function createUndoStack(clock: UndoClock = realClock): UndoStack {
   let seq = 0;
   const entries: Entry[] = [];
+  const redos: RedoEntry[] = [];
+  /** Keys a redo is doing again right now: their push is that redo, not a new action. A key
+   *  leaves when its push comes, or when the redo ends without one (canceled, nothing to do). */
+  const redoing = new Map<string, number>();
+  const liveRedos = () => {
+    const now = clock.now();
+    for (const r of [...redos]) if (r.expiresAt <= now) removeRedo(r);
+    return redos;
+  };
+
+  const removeRedo = (r: RedoEntry) => {
+    const at = redos.indexOf(r);
+    if (at >= 0) redos.splice(at, 1);
+    clock.clearTimeout(r.timer);
+  };
+  const clearRedos = () => { for (const r of [...redos]) removeRedo(r); };
 
   const remove = (entry: Entry) => {
     const at = entries.indexOf(entry);
@@ -93,7 +133,14 @@ export function createUndoStack(clock: UndoClock = realClock): UndoStack {
   const settle = (entry: Entry, how: Settled) => {
     remove(entry);
     if (how === 'undone') {
-      try { entry.undo(); } catch (err) { console.error('[undo] undo failed', err); }
+      let applied = true;
+      try { applied = entry.undo() !== false; } catch (err) { console.error('[undo] undo failed', err); applied = false; }
+      if (!applied) how = 'stale';
+      else if (entry.redo) {
+        const r: RedoEntry = { key: entry.key, redo: entry.redo, seq: ++seq, expiresAt: clock.now() + UNDO_WINDOW_MS, timer: undefined };
+        r.timer = clock.setTimeout(() => removeRedo(r), UNDO_WINDOW_MS);
+        redos.push(r);
+      }
     } else {
       try { entry.commit?.(); } catch (err) { console.error('[undo] commit failed', err); }
     }
@@ -111,6 +158,9 @@ export function createUndoStack(clock: UndoClock = realClock): UndoStack {
 
   return {
     push(input, windowMs = UNDO_WINDOW_MS) {
+      // A redo's own push keeps the rest of the redo list; any other action ends it.
+      if (redoing.has(input.key)) redoing.delete(input.key);
+      else clearRedos();
       let undo = input.undo;
       // Only the second half of one gesture takes the first half's place.
       if (input.merge) {
@@ -140,6 +190,23 @@ export function createUndoStack(clock: UndoClock = realClock): UndoStack {
       settle(entry, 'undone');
       return true;
     },
+    redoLatest() {
+      const list = liveRedos();
+      const newest = list[list.length - 1];
+      if (!newest) return false;
+      removeRedo(newest);
+      const mark = newest.seq;
+      redoing.set(newest.key, mark);
+      // The key stops counting as a redo once the redo is over, pushed or not.
+      const done = () => { if (redoing.get(newest.key) === mark) redoing.delete(newest.key); };
+      try {
+        const result = newest.redo();
+        if (result && typeof (result as Promise<unknown>).then === 'function') void (result as Promise<unknown>).then(done, done);
+        else done();
+      } catch (err) { console.error('[undo] redo failed', err); done(); }
+      return true;
+    },
+    hasRedo: () => liveRedos().length > 0,
     drop(key) {
       const found = entries.filter((e) => e.key === key);
       for (const e of found) { remove(e); e.onSettled?.('dropped'); }
@@ -153,6 +220,7 @@ export function createUndoStack(clock: UndoClock = realClock): UndoStack {
       return true;
     },
     commitAll() {
+      clearRedos();
       for (const e of [...entries]) settle(e, 'committed');
     },
     pause(handle) {
@@ -186,6 +254,7 @@ export function createUndoStack(clock: UndoClock = realClock): UndoStack {
     sweep() {
       const now = clock.now();
       for (const e of [...entries]) if (e.expiresAt <= now) settle(e, 'expired');
+      liveRedos();
     },
     size: () => entries.length,
   };

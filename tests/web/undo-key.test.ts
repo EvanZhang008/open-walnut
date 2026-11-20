@@ -4,7 +4,10 @@
  * text (that is the text's own undo), a rich editor, a code editor or a terminal.
  */
 import { describe, expect, it } from 'vitest'
-import { isUndoChord, undoKeyApplies } from '../../web/src/undo/undo-key'
+import { historyKeyApplies, isRedoChord, isUndoChord } from '../../web/src/undo/undo-key'
+
+/** True when mod+z is the app's undo here. */
+const undoKeyApplies = (e: KeyboardEvent, active: Element | null, mac: boolean) => historyKeyApplies(e, active, mac) === 'undo'
 
 const z = (mods: Partial<KeyboardEvent> = {}) => ({
   key: 'z', code: 'KeyZ', metaKey: false, ctrlKey: false, shiftKey: false, altKey: false,
@@ -70,5 +73,30 @@ describe('snooze toast words', async () => {
     expect(other).toMatch(/Nov\s*5/)
     expect(other).toMatch(/8:00/)
     expect(formatSnoozeDate('not a date', now)).toBe('not a date')
+  })
+})
+
+describe('redo chord', () => {
+  const y = (mods: Partial<KeyboardEvent> = {}) => ({ ...z(mods), key: 'y', code: 'KeyY' }) as KeyboardEvent
+  it('is Cmd+Shift+Z on a Mac; Ctrl+Shift+Z or Ctrl+Y elsewhere; never Alt', () => {
+    expect(isRedoChord(z({ metaKey: true, shiftKey: true }), true)).toBe(true)
+    expect(isRedoChord(z({ metaKey: true }), true)).toBe(false)
+    expect(isRedoChord(y({ metaKey: true }), true)).toBe(false)
+    expect(isRedoChord(z({ ctrlKey: true, shiftKey: true }), true)).toBe(false)
+    expect(isRedoChord(z({ ctrlKey: true, shiftKey: true }), false)).toBe(true)
+    expect(isRedoChord(y({ ctrlKey: true }), false)).toBe(true)
+    expect(isRedoChord(y({ ctrlKey: true, shiftKey: true }), false)).toBe(false)
+    expect(isRedoChord(z({ metaKey: true, shiftKey: true, altKey: true }), true)).toBe(false)
+  })
+
+  it('follows the same focus rule as undo: a field with text keeps its own redo', () => {
+    const redo = z({ metaKey: true, shiftKey: true })
+    expect(historyKeyApplies(redo, null, true)).toBe('redo')
+    expect(historyKeyApplies(z({ metaKey: true }), null, true)).toBe('undo')
+    expect(historyKeyApplies(redo, el('TEXTAREA', { cls: ['chat-input-textarea'], value: '' }), true)).toBe('redo')
+    expect(historyKeyApplies(redo, el('TEXTAREA', { cls: ['chat-input-textarea'], value: 'typed' }), true)).toBeNull()
+    expect(historyKeyApplies(redo, el('INPUT'), true)).toBeNull()
+    expect(historyKeyApplies(redo, el('DIV', { inside: ['cm-editor'] }), true)).toBeNull()
+    expect(historyKeyApplies(z({ metaKey: true, shiftKey: true, isComposing: true }), null, true)).toBeNull()
   })
 })

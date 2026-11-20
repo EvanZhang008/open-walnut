@@ -23,6 +23,7 @@ import type { CreateTaskInput } from '@/api/tasks';
 import { usePageView } from '@/utils/view-memory';
 import { clockRange, minutesOfDay } from '@/utils/calendar-date';
 import { EventCreateForm, type CreateEventInput, type EventPreview } from './EventCreateForm';
+import { NEW_TASK_TINT, useNewEventTint } from './item-tint';
 
 export type CreateKind = 'event' | 'task';
 /** A block shorter than this shows its title and time on one line. */
@@ -281,7 +282,10 @@ function PlaceholderBlock({
   const away = (timedHost ? offset < 0 || offset > 1 : offset !== 0) || allDay === timedHost;
   const title = preview?.title || (kind === 'event' ? 'New Event' : 'New Task');
   const style: React.CSSProperties & Record<string, string | number> = {};
-  if (preview?.color && kind === 'event') style['--cal-chip-tint'] = preview.color;
+  // The colour it will have: the form's calendar once it reports one, its default calendar's
+  // before that (the drag that opened it was already drawn in it), a task's otherwise.
+  const newEventTint = useNewEventTint();
+  const tint = kind === 'event' ? preview?.color ?? newEventTint ?? NEW_TASK_TINT : NEW_TASK_TINT;
   if (timedHost && startMin !== null) {
     const top = placeholder.minuteToPx!(startMin);
     const bottom = placeholder.minuteToPx!(Math.max(endMin ?? startMin + 30, startMin + 15));
@@ -296,7 +300,7 @@ function PlaceholderBlock({
       className={`cal-chip cal-create-placeholder${timedHost ? '' : ' cal-chip-compact'}${oneLine ? ' cal-chip-oneline' : ''}`}
       data-testid="cal-create-placeholder"
       data-kind={kind}
-      style={style}
+      style={{ ...style, '--cal-chip-tint': tint } as React.CSSProperties}
       aria-hidden="true"
     >
       <span className="cal-chip-title">{title}</span>

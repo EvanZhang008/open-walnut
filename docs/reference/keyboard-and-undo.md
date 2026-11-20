@@ -15,7 +15,8 @@ Mac and Ctrl elsewhere.
 | mod+Shift+[ / mod+Shift+] | Previous / next session column (wraps) |
 | mod+I | Put the caret in the current column's composer (with the session switching modifier too) |
 | mod+Shift+D | Complete the current task, close its column, go to the next task that needs you |
-| mod+Z | Undo the last complete, reopen, snooze, pin or delete, for 5 seconds |
+| mod+Z | Undo the last complete, reopen, snooze, pin, delete or calendar change, for 5 seconds |
+| mod+Shift+Z (also Ctrl+Y off the Mac) | Redo what was just undone, for 5 seconds |
 | hold the jump modifier | Each column shows its number |
 
 Browsers keep some chords for their tabs and never pass them to a page. So the session switching
@@ -62,5 +63,29 @@ how it was before the first one.
 A delete removes the task on the server only when its Undo window ends: until then the task is
 only hidden. Closing or reloading the page inside the window sends the delete at once.
 
-Code: `web/src/keyboard/`, `web/src/undo/`, `web/src/pages/useHomeKeyboard.ts`,
+## Redo
+
+An Undo can be done again: mod+Shift+Z (Ctrl+Y works too off the Mac), or the Redo button on the
+"Undone" line, for 5 seconds after the Undo. Several Undos are redone newest first, and any new
+action ends the redo list, as in every editor. A redo does the action again through the same call
+that did it the first time. An Undo that finds its target changed elsewhere since (by an agent or
+another window) leaves it and says "Not undone: it changed since", and then there is nothing to
+redo, so a Redo never writes over that change.
+
+## Calendar
+
+On the homepage's day agenda and the Calendar page, a move, a resize, a copy, a new event, a task
+dropped on the grid and a time edited in the popover are each one Undo, and each can be redone.
+Hold Alt (Option on a Mac) while dragging an event to copy it: the block in your hand gets a "+"
+and the original stays. Letting go of Alt before the drop makes it a move again. A copy takes only
+the calendar, title and times, never the people invited, so it invites and notifies nobody. A task
+dragged with Alt moves (a task is one piece of work, not something to duplicate). A meeting that
+needs your confirmation to change asks again for its Undo and Redo, and an Undo waits for the
+change it takes back to be written first.
+
+Every block shown while dragging is drawn in the colour the item will have once dropped: a new
+event in its calendar's colour (the default calendar the form starts on), a moved or copied one in
+its own (`web/src/components/calendar/item-tint.ts`).
+
+Code: `web/src/keyboard/`, `web/src/undo/`, `web/src/components/calendar/calendar-item-actions.ts`, `web/src/pages/useHomeKeyboard.ts`,
 `web/src/pages/useColumnCompleteClose.ts`, `web/src/components/tasks/next-needs-you.ts`.

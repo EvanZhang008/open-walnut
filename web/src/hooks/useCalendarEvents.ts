@@ -41,9 +41,9 @@ export interface UseCalendarEvents {
   sources: CalendarSourceStatus[];
   loading: boolean;
   /** Optimistic move/resize; rolls back and refetches on failure. */
-  moveEvent: (id: string, patch: { start: string; end: string; title?: string; human_confirm?: boolean }) => void;
+  moveEvent: (id: string, patch: { start: string; end: string; title?: string; human_confirm?: boolean }) => Promise<boolean>;
   createEvent: (input: { calendarId: string; title: string; start: string; end: string; allDay?: boolean }) => Promise<CalendarEvent>;
-  removeEvent: (id: string, humanConfirm?: boolean) => void;
+  removeEvent: (id: string, humanConfirm?: boolean) => Promise<boolean>;
   /** Hide one external calendar and persist it in the shared visibility config. */
   hideCalendar: (calendarId: string) => void;
   /** Hide one event in Walnut only; the source calendar keeps it. */

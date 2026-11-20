@@ -12,6 +12,7 @@ import { chordLabel, chordOf, hasCommandModifier, normalizeChord } from '../../w
 import { COMMANDS, RESERVED, bindings, chordsFor, commandFor, type CommandId } from '../../web/src/keyboard/commands'
 import { cycleDir, fixedChords, isHelpChord, jumpIndex, shortcutGroups, type KeyEnv } from '../../web/src/keyboard/shortcuts'
 import { chordConflict, cleanOverrides } from '../../web/src/keyboard/shortcut-overrides'
+import { historyChord } from '../../web/src/undo/undo-key'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 const read = (p: string) => readFileSync(path.join(ROOT, p), 'utf8')
@@ -98,6 +99,7 @@ describe('the fixed keys', () => {
       for (const ch of fixedChords(env).keys()) {
         const e = press(ch)
         const answered = jumpIndex(e, env) > 0 || cycleDir(e, env) !== 0 || isHelpChord(e, env, true) || /\+(Z|F|Shift\+E)$/.test(ch)
+          || historyChord(e, env !== 'other') !== null
         expect(answered, `${env}: ${ch} is listed fixed but nothing answers it`).toBe(true)
       }
     })

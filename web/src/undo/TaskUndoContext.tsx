@@ -3,7 +3,8 @@
  * writes through the shared stores as before (optimistic, the same frame on every
  * surface) and pushes an entry on the app's undo stack (undo-stack.ts) with a 5 second
  * toast. mod+z takes back the newest one from anywhere in the app, except while the caret
- * is in a field with text of its own to undo (see `undoKeyApplies`).
+ * is in a field with text of its own to undo (see `historyKeyApplies`); mod+shift+z (ctrl+y
+ * off the Mac), or the Redo on the "Undone" toast, does it again (undo-stack.ts).
  *
  * A delete is a hard delete on the server, so it is held: the row is hidden at once and
  * the DELETE goes out when the window closes (or at once when the page goes, as one batch
@@ -17,11 +18,11 @@ import type { Task } from '@open-walnut/core';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { startDateMs } from '@open-walnut/user-status';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
-import { useNotifications } from '@/contexts/notifications';
+import { useNotifications, type NotificationInput } from '@/contexts/notifications';
 import type { FocusTier } from '@/api/focus';
 import { tierLabelOf } from '@/components/sessions/task-meta-constants';
-import { createUndoStack, UNDO_WINDOW_MS, type UndoStack } from './undo-stack';
-import { undoKeyApplies, undoKeyLabel } from './undo-key';
+import { createUndoStack, UNDO_WINDOW_MS, type Settled, type UndoStack } from './undo-stack';
+import { historyKeyApplies, redoKeyLabel, undoKeyLabel } from './undo-key';
 import { formatSnoozeDate } from './undo-labels';
 import { hasActiveModalOverlay } from '@/hooks/useModalOverlay';
 import { hasOpenOverlayLayer } from '@/hooks/useOverlayLayer';
@@ -32,7 +33,11 @@ export interface UndoablePush {
   key: string;
   title: string;
   body?: string;
-  undo: () => void;
+  /** False when it no longer applies (changed elsewhere since): nothing is taken back. */
+  undo: () => void | boolean;
+  /** Does the action again through the call that did it first (it pushes its own entry with this
+   *  key; a promise while that push may still come); without one, an Undo of it cannot be redone. */
+  redo?: () => void | Promise<unknown>;
   commit?: () => void;
   /** The second half of one gesture: keep the replaced entry's undo (undo-stack.ts). */
   merge?: boolean;
@@ -58,6 +63,9 @@ export interface TaskUndo {
   push: (entry: UndoablePush) => () => void;
   /** Take a key's entry and toast away without undoing it (the server refused the action). */
   drop: (key: string) => void;
+  /** An Undo that ran later (after the write it takes back) found its target changed elsewhere
+   *  and left it: say so in place of its "Undone" line. */
+  notUndone: (title: string, body?: string) => void;
   /** `ring`: the completion ring clicked again, a reopen that takes a fresh completion back. */
   setPhase: (id: string, phase: string, opts?: { ring?: boolean }) => void;
   /** Put a task's phase back as it was (every Undo of a phase goes through here): a
@@ -91,17 +99,49 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
   const store = useTasksContext();
   const focusBar = useFocusBarContext();
   const { notify, dismissToast } = useNotifications();
-  const latest = useRef({ store, focusBar, notify, dismissToast });
-  latest.current = { store, focusBar, notify, dismissToast };
   const stackRef = useRef<UndoStack | null>(null);
   if (!stackRef.current) stackRef.current = createUndoStack();
   const stack = stackRef.current;
+  /** What an Undo took back, said in a line with its Redo while it can be redone; or that it
+   *  took nothing back, its target having changed elsewhere since. */
+  // One line at a time: each replaces the one before (a toast's dedup would drop a second one
+  // while the first is up, so each has its own id).
+  const undoneToast = useRef('');
+  const undoneSeq = useRef(0);
+  const sayUndoneLine = useCallback((line: Omit<NotificationInput, 'id' | 'dedupKey'>) => {
+    if (undoneToast.current) dismissToast(undoneToast.current);
+    const id = `undo:done:${++undoneSeq.current}`;
+    undoneToast.current = id;
+    notify({ ...line, id, dedupKey: id });
+  }, [notify, dismissToast]);
+  const showUndone = useCallback((undone: Pick<UndoablePush, 'title' | 'body' | 'redo'>, how: Settled | undefined) => {
+    const body = undone.body ? `${undone.title}  \u00b7  ${undone.body}` : undone.title;
+    if (how === 'stale') {
+      sayUndoneLine({ kind: 'hint', severity: 'info', title: 'Not undone: it changed since', body, persistent: false, durationMs: 3000 });
+      return;
+    }
+    // Only the entry just undone is offered again, never an older one still on the list.
+    const canRedo = !!undone.redo && stack.hasRedo();
+    sayUndoneLine({ kind: 'hint', severity: 'info', title: 'Undone',
+      body, persistent: false, durationMs: canRedo ? UNDO_WINDOW_MS : 2000,
+      ...(canRedo ? {
+        action: { label: 'Redo', kind: 'callback' as const },
+        actionKeyHint: redoKeyLabel(),
+        onAction: () => { stack.redoLatest(); },
+      } : {}) });
+  }, [stack, sayUndoneLine]);
+  const latest = useRef({ store, focusBar, notify, dismissToast, showUndone });
+  latest.current = { store, focusBar, notify, dismissToast, showUndone };
 
   const row = (id: string) => latest.current.store.tasks.find((t) => t.id === id);
+  /** The actions themselves, for a redo to do one again (each is defined below). */
+  const again = useRef<Pick<TaskUndo, 'setPhase' | 'toggleComplete' | 'setStartDate' | 'pin' | 'pinToTier' | 'unpin' | 'setTier' | 'deleteTask'> | null>(null);
 
   const toastSeq = useRef(0);
   /** The live entries, by handle: what a reload saves, and when each was pushed. */
   const live = useRef(new Map<number, { entry: UndoablePush; pushedAt: number }>());
+  /** How the entry undone last settled ('stale': it found its target changed and left it). */
+  const lastUndo = useRef<Settled | undefined>(undefined);
   const push = useCallback((entry: UndoablePush) => {
     // Its own toast id each time: a replaced entry's toast is still going when this one comes.
     const toastId = `undo:${entry.key}:${++toastSeq.current}`;
@@ -110,9 +150,11 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
     handle = stack.push({
       key: entry.key,
       undo: entry.undo,
+      ...(entry.redo ? { redo: entry.redo } : {}),
       commit: entry.commit,
       merge: entry.merge,
       onSettled: (how) => {
+        if (how === 'undone' || how === 'stale') lastUndo.current = how;
         live.current.delete(handle);
         latest.current.dismissToast(toastId);
         if (how === 'expired' || how === 'committed') entry.onExpired?.();
@@ -130,7 +172,7 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
       durationMs: windowMs,
       action: { label: 'Undo', kind: 'callback' },
       actionKeyHint: undoKeyLabel(),
-      onAction: () => { stack.undo(handle); },
+      onAction: () => { if (stack.undo(handle)) latest.current.showUndone(entry, lastUndo.current); },
       // The stack's clock is the toast's: it stands still while the toast is out of sight.
       ownClock: true,
       timeLeftMs: () => stack.timeLeft(handle),
@@ -140,6 +182,7 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
   }, [stack]);
 
   const drop = useCallback((key: string) => { stack.drop(key); }, [stack]);
+  const notUndone = useCallback((title: string, body?: string) => { showUndone({ title, ...(body ? { body } : {}) }, 'stale'); }, [showUndone]);
   /** A write the server refused takes its Undo and toast down (the store says why). */
   const withdrawIfRefused = (write: Promise<boolean | void>, withdraw: () => void) => {
     void write.then((ok) => { if (ok === false) withdraw(); }, withdraw);
@@ -160,18 +203,20 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
   const phaseUndo = useCallback((id: string, nowDone: boolean, before: PhaseSnapshot) => () => {
     const cur = row(id);
     // A refusal already put it back, or something newer moved it: nothing to undo.
-    if (cur && isDone(cur) !== nowDone) return;
+    if (cur && isDone(cur) !== nowDone) return false;
     void restorePhase(id, before);
+    return true;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restorePhase]);
 
-  const pushPhaseUndo = useCallback((t: Task, nowDone: boolean, write: Promise<boolean>) => {
+  const pushPhaseUndo = useCallback((t: Task, nowDone: boolean, write: Promise<boolean>, redo: () => void) => {
     const before = phaseSnapshot(t);
     withdrawIfRefused(write, push({
       key: `phase:${t.id}`,
       title: nowDone ? 'Task completed' : 'Task reopened',
       body: t.title,
       undo: phaseUndo(t.id, nowDone, before),
+      redo,
       revive: { kind: 'phase', data: { id: t.id, nowDone, before } },
     }));
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -211,7 +256,7 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
     if (!t || t.phase === phase) return;
     const wasDone = isDone(t);
     const nowDone = phase === 'COMPLETE';
-    if (wasDone !== nowDone) pushPhaseUndo(t, nowDone, write);
+    if (wasDone !== nowDone) pushPhaseUndo(t, nowDone, write, () => again.current?.setPhase(id, phase));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pushPhaseUndo]);
 
@@ -220,7 +265,17 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
     if (t && isDone(t) && takeBackFreshCompletion(id)) return;
     if (t && !isDone(t)) noteCompleted(t);
     const write = latest.current.store.toggleComplete(id);
-    if (t) pushPhaseUndo(t, !isDone(t), write);
+    // Its redo goes to the state it went to, never a second toggle (which would flip it back
+    // had it changed meanwhile).
+    if (t) {
+      const nowDone = !isDone(t);
+      pushPhaseUndo(t, nowDone, write, () => {
+        const cur = row(id);
+        if (!cur || isDone(cur) === nowDone) return;
+        if (nowDone) again.current?.setPhase(id, 'COMPLETE');
+        else again.current?.toggleComplete(id);
+      });
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pushPhaseUndo]);
 
@@ -246,6 +301,7 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
           void Promise.resolve(written).then((ok) => { if (!ok) back(); }, back);
         }
       },
+      redo: () => again.current?.setStartDate(id, date),
       revive: { kind: 'snooze', data: { id, before } },
     }));
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -280,7 +336,7 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
     const done = latest.current.focusBar.pin(id);
     if (!snap.pinned && t && !isDone(t)) {
       freshPins.current.set(id, { until: Date.now() + PIN_THEN_TIER_MS, snap });
-      withdrawIfRefused(done, push({ key: `pin:${id}`, title: 'Pinned', body: t.title, undo: () => restorePin(id, snap), revive: { kind: 'pin', data: { id, snap } } }));
+      withdrawIfRefused(done, push({ key: `pin:${id}`, title: 'Pinned', body: t.title, undo: () => restorePin(id, snap), redo: () => { void again.current?.pin(id); }, revive: { kind: 'pin', data: { id, snap } } }));
     }
     await done;
     // The tier pick follows the pin's answer: its moment starts now, however slow that was.
@@ -305,6 +361,7 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
           settleUndo = latest.current.store.patchTasksLocal({ [id]: { pinned: snap.pinned, focus_tier: snap.pinned ? snap.tier : undefined } }, { pending: true });
         } else restorePin(id, snap);
       },
+      redo: () => { void again.current?.pinToTier(id, tier); },
       revive: { kind: 'pin', data: { id, snap } },
     });
     try {
@@ -328,7 +385,7 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
     const done = latest.current.focusBar.unpin(id);
     freshPins.current.delete(id);
     if (snap.pinned) {
-      withdrawIfRefused(done, push({ key: `pin:${id}`, title: 'Unpinned', ...(t ? { body: t.title } : {}), undo: () => restorePin(id, snap), revive: { kind: 'pin', data: { id, snap } } }));
+      withdrawIfRefused(done, push({ key: `pin:${id}`, title: 'Unpinned', ...(t ? { body: t.title } : {}), undo: () => restorePin(id, snap), redo: () => { void again.current?.unpin(id); }, revive: { kind: 'pin', data: { id, snap } } }));
     }
     await done;
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -350,6 +407,9 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
         title: `${!snap.pinned || fresh ? 'Pinned to' : 'Moved to'} ${tierName(tier)}`,
         ...(t ? { body: t.title } : {}),
         undo: () => restorePin(id, snap),
+        // A merged entry was a pin and its group: its redo is both again.
+        // The pins' order as it is now, not as it was then (others may have moved since).
+        redo: () => { void (fresh ? again.current?.pinToTier(id, tier) : again.current?.setTier(id, tier)); },
         // A merged entry undoes to before the pin (the stack keeps the pin's undo).
         revive: { kind: 'pin', data: { id, snap: fresh ? pinned!.snap : snap } },
       }));
@@ -404,6 +464,7 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
       body: t.title,
       // A reload keeps it held: the page hands it to the server as it goes (onLeave).
       revive: { kind: 'delete', data: { id, heldAt, ...(opts?.force ? { force: true } : {}) } },
+      redo: () => again.current?.deleteTask(id, opts),
       undo: () => {
         heldDeletes.current.delete(id);
         latest.current.store.unhideTasks([id]);
@@ -496,9 +557,22 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const active = document.activeElement;
-      if (e.repeat || !undoKeyApplies(e, active)) return;
+      const chord = e.repeat ? null : historyKeyApplies(e, active);
+      if (!chord) return;
       // A dialog or a menu over the page owns its keys: nothing is undone behind it.
       if (hasActiveModalOverlay() || hasOpenOverlayLayer() || document.querySelector('.wn-context-menu, .task-kebab-menu, [role="menu"]')) return;
+      if (chord === 'redo') {
+        if (!stack.hasRedo()) {
+          const inText = !!active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT');
+          if (!inText) latest.current.notify({ kind: 'hint', severity: 'info', title: 'Nothing to redo', dedupKey: 'undo:nothing', persistent: false, durationMs: 1800 });
+          return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        if (undoneToast.current) latest.current.dismissToast(undoneToast.current);
+        stack.redoLatest();
+        return;
+      }
       if (!stack.hasLive()) {
         // Outside any text box the key would do nothing at all: say so.
         const inText = !!active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT');
@@ -512,11 +586,7 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
       // The key has no button to watch go: a line says what it took back.
       const newest = Math.max(...[...live.current.keys()]);
       const undone = live.current.get(newest)?.entry;
-      if (stack.undoLatest() && undone) {
-        latest.current.notify({ kind: 'hint', severity: 'info', title: 'Undone',
-          body: undone.body ? `${undone.title}  \u00b7  ${undone.body}` : undone.title,
-          dedupKey: 'undo:done', persistent: false, durationMs: 2000 });
-      }
+      if (stack.undoLatest() && undone) latest.current.showUndone(undone, lastUndo.current);
     };
     const save = (): boolean => {
       const now = Date.now();
@@ -582,9 +652,11 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
     };
   }, [stack, reviveWaiting]);
 
+  again.current = { setPhase, toggleComplete, setStartDate, pin, pinToTier, unpin, setTier, deleteTask };
+
   const value = useMemo<TaskUndo>(
-    () => ({ push, drop, setPhase, restorePhase, registerReviver, noteCompleted, toggleComplete, setStartDate, pin, pinToTier, unpin, setTier, deleteTask, isDeleteHeld, onDelete }),
-    [push, drop, setPhase, restorePhase, registerReviver, noteCompleted, toggleComplete, setStartDate, pin, pinToTier, unpin, setTier, deleteTask, isDeleteHeld, onDelete],
+    () => ({ push, drop, notUndone, setPhase, restorePhase, registerReviver, noteCompleted, toggleComplete, setStartDate, pin, pinToTier, unpin, setTier, deleteTask, isDeleteHeld, onDelete }),
+    [push, drop, notUndone, setPhase, restorePhase, registerReviver, noteCompleted, toggleComplete, setStartDate, pin, pinToTier, unpin, setTier, deleteTask, isDeleteHeld, onDelete],
   );
   return <TaskUndoContext.Provider value={value}>{children}</TaskUndoContext.Provider>;
 }

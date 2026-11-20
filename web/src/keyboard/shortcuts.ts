@@ -140,7 +140,8 @@ export function shortcutGroups(env: KeyEnv, overrides: Overrides = {}): Shortcut
       rows: [
         cmd('task.new'),
         cmd('task.completeNext'),
-        { id: 'undo', keys: [[k.mod, 'Z']], label: 'Undo the last task action (for 5 seconds)' },
+        { id: 'undo', keys: [[k.mod, 'Z']], label: 'Undo the last task or calendar action (for 5 seconds)' },
+        { id: 'redo', keys: [[k.mod, k.shift, 'Z'], ...(env === 'other' ? [[k.mod, 'Y']] : [])], label: 'Redo what was just undone (for 5 seconds)' },
         cmd('task.search'),
         { id: 'task.filter', keys: [['F']], label: 'Filter the task list' },
       ],
@@ -168,6 +169,8 @@ export function fixedChords(env: KeyEnv): Map<string, string> {
   out.set(`${sw}+Shift+]`, rows.get('session.cycle')!);
   out.set(`${mod}+Shift+E`, rows.get('session.drawer')!);
   out.set(`${mod}+Z`, rows.get('undo')!);
+  out.set(`${mod}+Shift+Z`, rows.get('redo')!);
+  if (env === 'other') out.set('Ctrl+Y', rows.get('redo')!);
   out.set(`${mod}+F`, rows.get('page.find')!);
   out.set(`${mod}+/`, rows.get('help')!);
   return out;

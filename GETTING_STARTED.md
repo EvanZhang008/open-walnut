@@ -748,7 +748,8 @@ same list the app shows, checked by `tests/web/keyboard-shortcuts.test.ts`.
 |---|---|---|---|
 | New task | `⌘N` | `⌃N` | `Alt+N` |
 | Complete the current task and go to the next one that needs you | `⌘⇧D` | `⌘⇧D` | `Ctrl+Shift+D` |
-| Undo the last task action (for 5 seconds) | `⌘Z` | `⌘Z` | `Ctrl+Z` |
+| Undo the last task or calendar action (for 5 seconds) | `⌘Z` | `⌘Z` | `Ctrl+Z` |
+| Redo what was just undone (for 5 seconds) | `⌘⇧Z` | `⌘⇧Z` | `Ctrl+Shift+Z` or `Ctrl+Y` |
 | Search tasks | `⌘K` or `/` | `⌘K` or `/` | `Ctrl+K` or `/` |
 | Filter the task list | `F` | `F` | `F` |
 

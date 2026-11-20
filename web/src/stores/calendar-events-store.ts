@@ -23,6 +23,7 @@ import {
   setCalendarEventVisibility,
   updateCalendarEvent,
   updateCalendarSource,
+  type CalendarDefault,
   type CalendarEvent,
   type CalendarInfo,
   type CalendarSourceStatus,
@@ -49,6 +50,8 @@ export interface CalendarSourcesEntry {
   calendarsLoaded: boolean;
   /** The source is off or unreachable — the popover says so instead of listing. */
   unavailable: boolean;
+  /** Where a new event goes by default (`GET /sources`' check of the configured one). */
+  defaultCalendar?: CalendarDefault;
 }
 
 const NO_EVENTS: CalendarEvent[] = [];
@@ -305,17 +308,19 @@ function insertEvent(event: CalendarEvent): void {
 
 // ── write API (same call signatures the hook has always exposed) ──
 
-/** Optimistic move/resize/retitle; rolls back to the exact previous record on failure. */
-export function moveCalendarEvent(id: string, patch: { start: string; end: string; title?: string; human_confirm?: boolean }): void {
+/** Optimistic move/resize/retitle; rolls back to the exact previous record on failure.
+ *  Resolves true once the source took it, false when it was refused (and rolled back). */
+export function moveCalendarEvent(id: string, patch: { start: string; end: string; title?: string; human_confirm?: boolean }): Promise<boolean> {
   const before = captureEvent(id);
   if (!patch.human_confirm) patchEvent(id, { start: patch.start, end: patch.end, ...(patch.title ? { title: patch.title } : {}) });
   writesInFlight += 1;
-  updateCalendarEvent(id, patch)
-    .then((res) => { replaceEvent(id, res.event); })
+  return updateCalendarEvent(id, patch)
+    .then((res) => { replaceEvent(id, res.event); return true; })
     .catch((err) => {
       log.warn('calendar', 'event move failed, rolling back', { id, error: String(err).slice(0, 200) });
       if (!patch.human_confirm) restoreEvent(before);
       reportWriteFailure(id, 'update', err);
+      return false;
     })
     .finally(settleWrite);
 }
@@ -359,16 +364,17 @@ export async function createCalendarEventOptimistic(
   }
 }
 
-export function removeCalendarEvent(id: string, humanConfirm = false): void {
+export function removeCalendarEvent(id: string, humanConfirm = false): Promise<boolean> {
   const before = captureEvent(id);
   if (!humanConfirm) dropEvent(id);
   writesInFlight += 1;
-  deleteCalendarEvent(id, humanConfirm)
-    .then(() => { if (humanConfirm) dropEvent(id); })
+  return deleteCalendarEvent(id, humanConfirm)
+    .then(() => { if (humanConfirm) dropEvent(id); return true; })
     .catch((err) => {
       log.warn('calendar', 'event delete failed, rolling back', { id, error: String(err).slice(0, 200) });
       if (!humanConfirm) restoreEvent(before);
       reportWriteFailure(id, 'delete', err);
+      return false;
     })
     .finally(settleWrite);
 }
@@ -431,6 +437,7 @@ export function ensureCalendarsLoaded(force = false): Promise<CalendarInfo[]> {
     .then((res) => {
       const first = res.sources[0];
       setSources(res.sources);
+      sourcesEntry = { ...sourcesEntry, defaultCalendar: res.defaultCalendar };
       setCalendars(res.calendars, !first?.available || !first?.enabled);
       return res.calendars;
     })

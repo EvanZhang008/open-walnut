@@ -20,6 +20,8 @@ import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { DatePicker } from '@/components/common/DatePicker';
 import { clockLabel, longDayLabel } from '@/utils/calendar-date';
 import type { CreateSeed } from './QuickCreatePopover';
+import { getCalendarSourcesEntry } from '@/stores/calendar-events-store';
+import { newEventCalendars } from './item-tint';
 
 export interface EventPreview {
   title: string;
@@ -66,9 +68,15 @@ export function EventCreateForm({
   // Esc or a click outside keeps it for the next slot the popover opens on.
   const titleDraft = useDraft(draftKey('calendar-event', 'new'));
   const { text: title, setText: setTitle } = titleDraft;
-  const [calendars, setCalendars] = useState<CalendarInfo[] | null>(null);
-  const [calendarId, setCalendarId] = useState('');
-  const [defaultWarning, setDefaultWarning] = useState<string | null>(null);
+  // The calendars Walnut already read start the form, so its block shows in the new event's
+  // own colour from the first frame (item-tint.ts); a fresh read then follows.
+  const [initial] = useState(() => {
+    const cached = getCalendarSourcesEntry();
+    return cached.calendarsLoaded && cached.calendars.length ? newEventCalendars(cached.calendars, cached.defaultCalendar) : null;
+  });
+  const [calendars, setCalendars] = useState<CalendarInfo[] | null>(initial?.writable ?? null);
+  const [calendarId, setCalendarId] = useState(initial?.preselect?.id ?? '');
+  const [defaultWarning, setDefaultWarning] = useState<string | null>(initial?.warning ?? null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -77,26 +85,17 @@ export function EventCreateForm({
     listCalendarSources()
       .then((res) => {
         if (!alive) return;
-        const defaultId = res.defaultCalendar?.id ?? null;
-        // The default stays pickable even when hidden in Walnut: the user chose it on purpose.
-        const writable = res.calendars.filter((c) => !c.readonly && (!c.hidden || c.id === defaultId));
-        setCalendars(writable);
-        // The configured default, not whichever calendar macOS happens to list first (that
-        // order is EventKit's, and on a Mac with a work account it can be the work calendar).
-        // A default that is set but unusable preselects nothing: the server refuses to guess
-        // a replacement, so the form must not guess one either.
-        if (res.defaultCalendar?.configuredId && !defaultId) {
-          setDefaultWarning(res.defaultCalendar.warning ?? 'The default calendar cannot be used. Pick a calendar.');
-          return;
-        }
-        const preselect = writable.find((c) => c.id === defaultId) ?? writable[0];
-        if (preselect) setCalendarId(preselect.id);
+        const picked = newEventCalendars(res.calendars, res.defaultCalendar);
+        setCalendars(picked.writable);
+        setDefaultWarning(picked.warning);
+        // A calendar the person already picked in this form stays theirs.
+        setCalendarId((cur) => (cur && picked.writable.some((c) => c.id === cur) && cur !== initial?.preselect?.id ? cur : picked.preselect?.id ?? ''));
       })
-      .catch(() => alive && setCalendars([]));
+      .catch(() => alive && setCalendars((cur) => cur ?? []));
     return () => {
       alive = false;
     };
-  }, []);
+  }, [initial]);
 
   const seedAllDay = !seed.start.includes('T');
   const [allDay, setAllDay] = useState(seedAllDay);
