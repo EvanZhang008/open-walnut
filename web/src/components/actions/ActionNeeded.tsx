@@ -11,15 +11,18 @@
  * (OrgInlineAnswer, the Org page's). ANSWERS below names the surface of each kind;
  * tests/core/action-needed-ratchet.test.ts fails on a kind with none.
  *
- * An answered line goes the moment it is sent and comes back with the reason when the server says
- * no; a snoozed line greys out with its time and an Unsnooze, and comes back by itself then.
+ * One ask at a time (ask-pages.ts; 2026-11-20, the user: "max shoudl 1 decision, and can left and
+ * right"): each ask is its own page, with its own words, options and box, and "‹ 1/3 ›" pages
+ * through them. An answered page stays, marked with what was said, and opens again with the reason
+ * when the server says no; a snoozed page greys out with its time and an Unsnooze, and comes back
+ * by itself then.
  *
  * The same block is drawn in two places, from the one list, so an item answered or snoozed in one
  * goes from both (2026-11-19, the user: "我点进去之后，如果它有 needs you，它直接就能显示在……
  * title bar，或者在下面"): a task's row, the strip under a session's
  * title bar (`variant="strip"`, experiment action_needed_everywhere).
  */
-import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { Task } from '@open-walnut/core';
 import { ACTION_KIND_LABELS, type ActionItem, type ActionKind } from '@open-walnut/user-status';
 import { apiPut } from '@/api/client';
@@ -37,6 +40,8 @@ import { log } from '@/utils/log';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { AskCardFrame } from './AskCard';
+import { AskPager, usePageGestures } from './AskPager';
+import { anyOpen, useAskPages, type AnsweredAsk } from './ask-pages';
 import './action-needed.css';
 
 /** How each kind is answered on a row: the surface it reuses (the ratchet reads this). */
@@ -81,9 +86,16 @@ function SnoozeButton({ label, onPick }: { label: string; onPick: (until: string
   );
 }
 
-function ApprovalAnswer({ item, task }: { item: ActionItem; task: Task }) {
+function ApprovalAnswer({ item, task, onDone }: { item: ActionItem; task: Task; onDone?: (said: string) => void }) {
   const s = useApprovals();
   const a = s.items.get(item.id);
+  // Approved or denied while shown here: its page stays, marked with that word.
+  const was = useRef(a?.status);
+  useEffect(() => {
+    const now = a?.status;
+    if (was.current === 'pending' && (now === 'approved' || now === 'denied')) onDone?.(now === 'approved' ? 'Approved' : 'Denied');
+    was.current = now;
+  }, [a?.status, onDone]);
   const words = <ApprovalReply sessionId={item.sessionId ?? resolveTaskSessionId(task)} summary={item.summary} />;
   // The store has not read it yet (or it just ended): its dialog has it.
   if (!a || a.status !== 'pending') {
@@ -112,10 +124,14 @@ function showPromptBelow(from: HTMLElement | null): boolean {
 const settled: AnswerSettle = () => {};
 
 /** One thing a task asks of the user, as the one ask card (AskCard.tsx): what it asks, a line of
- *  why, the box to type in and its buttons, Snooze last. `onAnswer` hides it the moment an answer
- *  goes (the block's own list); alone it waits for the status to drop it. */
-export const AskCard = memo(function AskCard({ task, item, onAnswer = () => settled, failure, below, threadId }: {
-  task: Task; item: ActionItem; onAnswer?: (id: string) => AnswerSettle; failure?: AnswerFailure;
+ *  why, the box to type in and its buttons, Snooze last. `onAnswer` marks it answered the moment an
+ *  answer goes (the block's own pages); alone it waits for the status to drop it. */
+export const AskCard = memo(function AskCard({ task, item, onAnswer = () => settled, failure, below, threadId, answered, pager }: {
+  task: Task; item: ActionItem; onAnswer?: (id: string, said?: string) => AnswerSettle; failure?: AnswerFailure;
+  /** Answered from here: its words stay, its answer is the line that says what was said. */
+  answered?: AnsweredAsk;
+  /** The block's "‹ 1/3 ›", beside Snooze. */
+  pager?: ReactNode;
   /** Its own card is in the chat below (a session's strip, its own live prompt): point at it. */
   below?: boolean;
   /** Drawn on the thread that holds this ask (core/org/thread-report-ask.ts): the answer is filed under it. */
@@ -147,27 +163,34 @@ export const AskCard = memo(function AskCard({ task, item, onAnswer = () => sett
     });
   };
   let answer: ReactNode = null;
-  const snooze = until
+  const snooze = answered ? null : until
     ? <button type="button" className="btn btn-sm action-needed-snooze" data-testid="action-unsnooze" onClick={() => write(null)}>Unsnooze</button>
     : <SnoozeButton label={label} onPick={write} />;
-  if (!until && below && !answerHere) {
+  if (answered) {
+    answer = (
+      <div className="ask-card-answered" role="status" data-testid="action-answered">
+        <span className="ask-card-answered-mark" aria-hidden="true">✓</span>
+        {answered.said ? <>Answered: <span className="ask-card-answered-said">{answered.said}</span></> : 'Answered'}
+      </div>
+    );
+  } else if (!until && below && !answerHere) {
     answer = (
       <button type="button" className="btn btn-sm action-needed-below" data-testid="action-answer-below"
         onClick={(e) => { if (!showPromptBelow(e.currentTarget)) setAnswerHere(true); }}>Answer below <span aria-hidden="true">↓</span></button>
     );
   } else if (!until) {
-    answer = ANSWERS[item.kind] === 'approval' ? <ApprovalAnswer item={item} task={task} /> : (
-      <OrgInlineAnswer alert={alertOfItem(task, item)} task={task} summary={item.summary} onAnswer={() => onAnswer(item.id)} failure={failure} {...(item.sessionId ? { sessionId: item.sessionId } : {})} {...(threadId ? { threadId } : {})} />
+    answer = ANSWERS[item.kind] === 'approval' ? <ApprovalAnswer item={item} task={task} onDone={(said) => { onAnswer(item.id, said); }} /> : (
+      <OrgInlineAnswer alert={alertOfItem(task, item)} task={task} summary={item.summary} onAnswer={(_task, said) => onAnswer(item.id, said)} failure={failure} {...(item.sessionId ? { sessionId: item.sessionId } : {})} {...(threadId ? { threadId } : {})} />
     );
   }
   // A live prompt's own card says its question: the card would say it twice.
-  const says = !!until || (below && !answerHere) || ANSWERS[item.kind] !== 'prompt';
+  const says = !!answered || !!until || (below && !answerHere) || ANSWERS[item.kind] !== 'prompt';
   const source = taskTextSource(task, 'needs');
   return (
     <AskCardFrame
       testId="action-item"
-      className={`action-needed-item${until ? ' is-snoozed' : ''}`}
-      data={{ 'data-kind': item.kind, 'data-item-id': item.id }}
+      className={`action-needed-item${answered ? ' is-answered' : until ? ' is-snoozed' : ''}`}
+      data={{ 'data-kind': item.kind, 'data-item-id': item.id, 'data-answered': answered ? 'true' : undefined }}
       question={says ? <AgentText compact inline {...source} text={item.summary} testId="action-summary" /> : undefined}
       detail={says && item.detail ? <AgentText compact inline {...source} text={item.detail} testId="action-detail" /> : undefined}
       status={<>
@@ -179,58 +202,68 @@ export const AskCard = memo(function AskCard({ task, item, onAnswer = () => sett
         {note ? <div className="org-answer-error" role="alert" data-testid="action-snooze-note">{note}</div> : null}
       </>}
       answer={answer}
-      tools={snooze}
+      tools={snooze || pager ? <>{pager}{snooze}</> : undefined}
     />
   );
 });
 
-/** The strip shows this many lines, then "N more": a session's chat keeps its room, and the first
- *  asks (blocking first, then oldest: markSnoozes) are always in sight. */
-const STRIP_LINES = 2;
-
 /** The block under a row; nothing when the task asks nothing. `variant`: 'row' (a task row, whose
  *  click opens the task: a click inside never reaches it), 'card' (a Threads card) or 'strip' (under
- *  a session's title bar, where that session's own live prompt points at its card below). */
+ *  a session's title bar, where that session's own live prompt points at its card below). Every
+ *  variant shows one ask at a time, the same pages. */
 export const ActionNeeded = memo(function ActionNeeded({ task, variant = 'row', sessionId, items: only }: {
   task: Task; variant?: 'row' | 'strip' | 'card'; sessionId?: string;
   /** Only these of the task's items (the strip above a top thread leaves out the ones that are threads). */
   items?: readonly ActionItem[];
 }) {
   const items = only ?? task.user_status?.actions ?? [];
-  const [restShown, setRestShown] = useState(false);
-  // Answered from here and not yet gone from the status: hidden; a failure brings it back.
-  const [sent, setSent] = useState<ReadonlySet<string>>(new Set());
+  const book = useAskPages(task.id, items);
   const [failures, setFailures] = useState<Record<string, AnswerFailure>>({});
-  const onAnswer = useLeanCallback((id: string): AnswerSettle => {
-    setSent((s) => new Set(s).add(id));
+  // Paged by its arrows or keys: the focus goes to the new page's arrow, never lost with the old card.
+  const refocus = useRef<'prev' | 'next' | null>(null);
+  const holder = useRef<HTMLDivElement>(null);
+  const onAnswer = useLeanCallback((id: string, said?: string): AnswerSettle => {
+    const item = book.pages.find((p) => p.id === id);
+    if (item) book.answer(item, said);
     setFailures((f) => { const { [id]: _gone, ...rest } = f; return rest; });
     return (failure) => {
       if (!failure) return;
-      setSent((s) => { const n = new Set(s); n.delete(id); return n; });
+      book.reopen(id);
       setFailures((f) => ({ ...f, [id]: failure }));
     };
   }, []);
-  const shown = items.filter((i) => !sent.has(i.id));
-  if (!shown.length || task.phase === 'COMPLETE') return null;
+  const { pages, index } = book;
+  const count = pages.length;
+  const go = (delta: number, from?: 'prev' | 'next') => { if (book.go(delta) && from) refocus.current = from; };
+  const gestures = usePageGestures(count, (delta) => go(delta, delta < 0 ? 'prev' : 'next'));
+  useLayoutEffect(() => {
+    const from = refocus.current;
+    refocus.current = null;
+    if (!from || !holder.current) return;
+    const want = holder.current.querySelector<HTMLButtonElement>(`[data-testid="action-page-${from}"]:not(:disabled)`)
+      ?? holder.current.querySelector<HTMLButtonElement>('.ask-pager-btn:not(:disabled)');
+    want?.focus({ preventScroll: true });
+  }, [index]);
+  if (!count || !anyOpen(pages, book.answered) || task.phase === 'COMPLETE') return null;
   const stop = (e: { stopPropagation: () => void }) => e.stopPropagation();
   const strip = variant === 'strip';
-  const lines = strip && !restShown ? shown.slice(0, STRIP_LINES) : shown;
-  const rest = shown.length - lines.length;
+  const item = pages[index]!;
+  const pager = count > 1 ? <AskPager index={index} count={count} onGo={go} /> : undefined;
   return (
     // On a row a click, a key or a drag inside answers here: it never opens or drags the row.
     // Escape still goes on, to the file viewer a path in its words opened (keepKeysInside).
-    <div className={`action-needed${strip ? ' is-strip' : ''}`} data-testid={strip ? 'session-action-needed' : 'action-needed'} data-action-task={task.id}
+    <div className={`action-needed${strip ? ' is-strip' : ''}${count > 1 ? ' is-paged' : ''}`} data-testid={strip ? 'session-action-needed' : 'action-needed'} data-action-task={task.id}
+      data-pages={count} data-page={index + 1}
       {...(variant === 'row' ? { onClick: stop, onKeyDown: keepKeysInside, onPointerDown: stop } : {})}>
-      {/* Its edge says what it is; the words stay for a screen reader. */}
-      <div className="action-needed-title">Action needed{strip ? ` · ${shown.length}` : ''}</div>
-      {lines.map((item) => (
-        <AskCard key={item.id} task={task} item={item} onAnswer={onAnswer} failure={failures[item.id]}
+      {/* Its card says what it is; the words stay for a screen reader, with the page it is on. */}
+      <div className="action-needed-title" aria-live="polite" data-testid="action-needed-place">
+        {count > 1 ? `Decision ${index + 1} of ${count}` : 'Action needed'}
+      </div>
+      <div ref={holder} className="ask-pages" data-testid="action-pages" {...gestures}>
+        <AskCard key={item.id} task={task} item={item} onAnswer={onAnswer} failure={failures[item.id]} pager={pager}
+          {...(book.answered[item.id] ? { answered: book.answered[item.id] } : {})}
           below={strip && !!sessionId && item.sessionId === sessionId && ANSWERS[item.kind] === 'prompt'} />
-      ))}
-      {strip && (rest > 0 || restShown) && shown.length > STRIP_LINES ? (
-        <button type="button" className="action-needed-more" data-testid="action-needed-more" aria-expanded={restShown}
-          onClick={() => setRestShown(!restShown)}>{restShown ? 'Show fewer' : `${rest} more`}</button>
-      ) : null}
+      </div>
     </div>
   );
 });

@@ -142,8 +142,9 @@ interface FormProps {
   /** The last try at this ask failed: its reason and the words to put back. */
   failure: AnswerFailure | undefined;
   /** The answer goes now: the row goes with it (the page answers the click before the server
-   *  does); settle it with the server's answer. */
-  onSend: () => AnswerSettle;
+   *  does); settle it with the server's answer. `said` is what the answer says (a pick's label, the
+   *  words), for a card that keeps it in sight once answered (actions/ask-pages.ts). */
+  onSend: (said?: string) => AnswerSettle;
 }
 
 function LetterAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords: () => void }) {
@@ -171,10 +172,10 @@ function LetterAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords
     }, (err: unknown) => {
       log.warn('org-page', 'org alert reply failed', { taskId: alert.taskId, letterId: letter.id, error: String(err) });
       settle({ message: 'Not sent. Try again.' });
-    }), onSend());
+    }), onSend(text));
   };
   const pick = (actionId: string) => {
-    const settle = onSend();
+    const settle = onSend(letter.actions?.find((a) => a.id === actionId)?.label);
     answerLetter(letter.id, actionId).then((result) => {
       if (result.letter) patchLetter(letter.id, { answered: result.letter.answered, read: true });
       log.info('org-page', 'org alert answered', { taskId: alert.taskId, shape: 'letter', letterId: letter.id, actionId, delivery: result.delivery });
@@ -272,7 +273,7 @@ function ChoiceAnswer({ alert, failure, onSend, onWords, known }: FormProps & { 
       // A replica answers 501 to every Board write.
       const message = (err as { status?: number }).status === 501 ? 'Boards are read only here. Answer it from the main Walnut.' : 'Not saved. Try again.';
       settle({ message });
-    }), onSend());
+    }), onSend(body.text ?? found.options.find((o) => o.value === body.option)?.label));
   };
   const words = (
     <WordsField placeholder={found.options.length ? 'Reply…' : 'Your answer'} draftKey={`draft:choice-reply:${found.owner}:${found.id}`} onSend={(t, images) => answer({ text: t }, images)} taskId={alert.taskId} />
@@ -300,14 +301,14 @@ function SessionAnswer({ alert, failure, onSend, sessionId, summary, shape, thre
   // A failed session: its probe says so, or the task's status names the failure as its ask.
   const failed = alert.kind === 'error' || alert.source === 'error';
   if (!sessionId) return <div className="org-answer-note">It has no session to answer. Open it to start one.</div>;
-  const reply = (text: string, images?: ImageAttachment[]): Promise<boolean> => settled((settle) => {
+  const reply = (text: string, images?: ImageAttachment[], said?: string): Promise<boolean> => settled((settle) => {
     void send(sessionId, text, images, threadId ? { threadId } : undefined).catch(() => false).then((ok) => {
       log.info('org-page', 'org alert answered', { taskId: alert.taskId, shape, sessionId, ok, images: images?.length ?? 0 });
       settle(ok ? undefined : { message: 'Not sent. Try again.' });
     });
-  }, onSend());
+  }, onSend(said));
   const retry = () => {
-    const settle = onSend();
+    const settle = onSend('Retry');
     retrySession(sessionId).then((result) => {
       log.info('org-page', 'org alert answered', { taskId: alert.taskId, shape: 'retry', sessionId, status: result.status });
       // Its folder is gone: a retry sent nothing. The session's own panel has the way on.
@@ -329,7 +330,7 @@ function SessionAnswer({ alert, failure, onSend, sessionId, summary, shape, thre
       onSend={(t, images) => {
         // The words are the answer: a picture goes with them, never as "(no answer)".
         if (!t.trim() && images?.length) { onSend()({ message: 'Add a few words to go with the picture.' }); return kept; }
-        return reply(answerMessage(alert.form, summary, { words: t }), images);
+        return reply(answerMessage(alert.form, summary, { words: t }), images, t);
       }}
     />
   );
@@ -337,7 +338,7 @@ function SessionAnswer({ alert, failure, onSend, sessionId, summary, shape, thre
     <>
       {failed && <AskOptions testId="org-answer-retry" options={[{ value: 'retry', label: 'Retry', title: 'Start the failed session again' }]} onPick={retry} />}
       {(shape === 'yes_no' || shape === 'single') && options.length > 0 && (
-        <AskOptions testId="org-answer-form" options={options.map((o) => ({ value: o.id, label: o.label, ...(o.detail ? { title: o.detail } : {}) }))} {...(recommended ? { recommended } : {})} onPick={(id) => reply(answerMessage(alert.form, summary, { picked: [id] }))} />
+        <AskOptions testId="org-answer-form" options={options.map((o) => ({ value: o.id, label: o.label, ...(o.detail ? { title: o.detail } : {}) }))} {...(recommended ? { recommended } : {})} onPick={(id) => reply(answerMessage(alert.form, summary, { picked: [id] }), undefined, options.find((o) => o.id === id)?.label)} />
       )}
       {shape === 'multi' && options.length > 0 && (
         <div className="org-answer-multi" data-testid="org-answer-multi">
@@ -355,7 +356,7 @@ function SessionAnswer({ alert, failure, onSend, sessionId, summary, shape, thre
             className="btn btn-sm btn-primary"
             data-testid="org-answer-send-picked"
             disabled={!picked.size}
-            onClick={() => reply(answerMessage(alert.form, summary, { picked: options.filter((o) => picked.has(o.id)).map((o) => o.id) }))}
+            onClick={() => reply(answerMessage(alert.form, summary, { picked: options.filter((o) => picked.has(o.id)).map((o) => o.id) }), undefined, options.filter((o) => picked.has(o.id)).map((o) => o.label).join(', '))}
           >Send{picked.size ? ` ${picked.size}` : ''}</button>
         </div>
       )}
@@ -371,7 +372,7 @@ export function OrgInlineAnswer({ alert, task, summary, onAnswer, failure, sessi
   alert: OrgAlertView;
   task: Task | undefined;
   summary: string;
-  onAnswer: (taskId: string) => AnswerSettle;
+  onAnswer: (taskId: string, said?: string) => AnswerSettle;
   failure?: AnswerFailure;
   /** The session that asks (an Action needed item's own), else the task's. */
   sessionId?: string;
@@ -385,7 +386,7 @@ export function OrgInlineAnswer({ alert, task, summary, onAnswer, failure, sessi
   const toWords = useMemo(() => () => setWordsOnly(true), []);
   const sessionId = askingSession ?? (task ? resolveTaskSessionId(task) : null);
   const shape = wordsOnly ? 'text' : inlineShape(alert);
-  const send = (): AnswerSettle => onAnswer(alert.taskId);
+  const send = (said?: string): AnswerSettle => onAnswer(alert.taskId, said);
   // A live prompt answers through its own card, which says when it was taken.
   const promptDone = () => { onAnswer(alert.taskId)(); };
   return (
@@ -402,7 +403,7 @@ export function OrgInlineAnswer({ alert, task, summary, onAnswer, failure, sessi
             return settled((settle) => respondToPermission(sessionId, alert.itemId!, false, text).then(() => settle(), (err: unknown) => {
               log.warn('org-page', 'prompt reply failed', { taskId: alert.taskId, sessionId, error: String(err) });
               settle({ message: 'Not sent. Try again.' });
-            }), onAnswer(alert.taskId));
+            }), onAnswer(alert.taskId, text));
           }} />
         )}
       </>) : shape === 'letter' ? (

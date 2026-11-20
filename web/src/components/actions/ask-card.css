@@ -1,21 +1,60 @@
 /* The one ask card (AskCard.tsx): title, what it asks, a line of why, the words box with its buttons
-   and Snooze last. A wide card keeps the buttons beside the box; a narrow one puts them below. */
+   and Snooze last. A wide card keeps the buttons beside the box; a narrow one puts them below.
+
+   Its look (2026-11-20, the user, of the ten designs: "I mean 1 is good let's do it"): the frosted
+   card of the notices and the quick bar (overlay-glass.css's hairline and white top edge), 18px
+   corners outside, 10 on the box and 8 on the buttons inside it. The only colour is a 7px orange dot
+   for "needs you" and the blue of its links: quiet grey buttons, Snooze as quiet text with a clock
+   at the right, and the send arrow grey until there are words, then blue. */
 .ask-card { display: flex; flex-direction: column; gap: 4px; min-width: 0; container-type: inline-size; }
+
+/* Its frame where it stands on its own: a task's ask (ActionNeeded) and a node's Needs you list
+   (OrgTaskRail). Inside another card (a thread's, a Board card's, a popped card, a chat's top) it
+   takes only the parts below. The card sits in the page's flow and nothing moves under it, so it
+   takes the glass's tint, hairline and top edge but no backdrop blur, which would cost every scroll
+   frame and show nothing. */
+.action-needed .ask-card,
+.ask-card.org-ask {
+  padding: 12px 12px 8px;
+  border-radius: 18px;
+  background: var(--glass-legible-bg, var(--bg-elevated, var(--card-bg)));
+  border: 1px solid var(--glass-frost-border, var(--border));
+  box-shadow: inset 0 1px 0 var(--glass-frost-highlight, transparent), var(--card-shadow-hover);
+}
+.ask-card.org-ask { margin: 6px 8px; }
+
 .ask-card-title {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--fg-muted);
 }
 .ask-card-title a { color: inherit; text-decoration: none; font-weight: 600; }
 .ask-card-title a:hover { text-decoration: underline; }
+/* A node's list says "needs you" with the same dot, on its title's line. */
+.ask-card .org-ask-mark .wn-dot { background: var(--warning, #ff9500); }
+
+/* What it asks, after the dot; the why under it, its words in line with the question's. */
 .ask-card-question {
+  position: relative; padding-left: 15px;
   min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
-  overflow-wrap: anywhere; line-height: 1.35; font-size: 13px; font-weight: 600; color: var(--fg);
+  overflow-wrap: anywhere; font-size: 14px; line-height: 20px; font-weight: 500; color: var(--fg);
 }
+.ask-card-question::before {
+  content: ''; position: absolute; left: 0; top: 6.5px; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--warning, #ff9500);
+}
+/* A node's list has the dot on its title's line already. */
+.ask-card:has(.org-ask-mark) .ask-card-question { padding-left: 0; }
+.ask-card:has(.org-ask-mark) .ask-card-question::before { content: none; }
 .ask-card-detail {
   min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-  overflow-wrap: anywhere; line-height: 1.35; font-size: 12px; color: var(--fg-muted);
+  overflow-wrap: anywhere; font-size: 13px; line-height: 19px; color: var(--fg-secondary, var(--fg-muted));
 }
+.ask-card-question + .ask-card-detail { padding-left: 15px; }
+.ask-card:has(.org-ask-mark) .ask-card-detail { padding-left: 0; }
+.ask-card :is(.ask-card-question, .ask-card-detail) a:not(.btn) { color: var(--accent-text, var(--accent)); }
 .ask-card-status { color: var(--fg-muted); font-size: 12px; }
-.ask-card-answer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+
+.ask-card-answer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.ask-card-answer:not(:first-child) { margin-top: 8px; }
 .ask-card-answer:empty { display: none; }
 /* Its answer's own parts take their places in this one row. */
 .ask-card-answer :is(.org-answer-inline, .action-needed-approval, .org-answer-options, .org-answer-multi) { display: contents; }
@@ -27,14 +66,60 @@
 .ask-card-answer :is(.kanban-prompt, .permission-request-card) { order: 0; flex: 1 1 100%; min-width: 0; }
 /* Only the card's own buttons: never those inside the composer or a prompt's card, which keep their own order. */
 .ask-card-answer :is(.btn, .org-answer-check, .approval-actions):not(:is(.org-answer-words, .kanban-prompt, .permission-request-card) *) { order: 2; flex: none; }
-.ask-card-answer .approval-actions { display: flex; gap: 6px; }
-.ask-card-answer .ask-card-tools { order: 3; flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+.ask-card-answer .approval-actions { display: flex; gap: 8px; }
+.ask-card-answer .ask-card-tools { order: 3; flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 4px; }
 .ask-card-answer :is(.org-answer-note, .org-answer-error) { order: 4; flex: 1 1 100%; }
 .ask-card-answer .org-answer-note:empty { display: none; }
 @container (min-width: 600px) {
   .ask-card-answer .org-answer-words { flex: 1 1 320px; }
 }
-.ask-card.is-snoozed :is(.ask-card-question, .ask-card-detail) { color: var(--fg-muted); font-weight: 500; }
+
+/* The box: a soft grey field inside the card, no frame of its own until it has the focus. */
+.ask-card .org-answer-words .chat-input-container { padding: 0; }
+.ask-card .org-answer-words .chat-input-box {
+  background: var(--bg-secondary); border-color: transparent; border-radius: 10px; box-shadow: none;
+}
+.ask-card .org-answer-words .chat-input-box:focus-within { border-color: var(--border-strong); box-shadow: none; }
+/* Its composer greys the theme's colours as every chat's does (chat-palette.css); an ask that waits
+   on him keeps its blue send, from the theme's own accent. */
+.ask-card .org-answer-words .chat-send-btn-icon { width: 28px; height: 28px; background: var(--chat-hue-accent, var(--accent)); color: #fff; }
+.ask-card .org-answer-words .chat-send-btn-icon svg { width: 15px; height: 15px; }
+.ask-card .org-answer-words .chat-send-btn-icon:disabled { opacity: 1; background: var(--bg-tertiary, var(--bg-hover)); color: var(--fg-muted); cursor: default; }
+
+/* Its choices: quiet grey keys; the recommended one keeps its word. */
+.ask-card-answer .btn:not(:is(.org-answer-words, .kanban-prompt, .permission-request-card, .ask-card-tools) *) {
+  min-height: 28px; padding: 4px 14px; border: none; border-radius: 8px;
+  background: var(--bg-secondary); color: var(--fg); font-size: 13px; font-weight: 400; box-shadow: none;
+}
+.ask-card-answer .btn:not(:is(.org-answer-words, .kanban-prompt, .permission-request-card, .ask-card-tools) *):hover:not(:disabled) { background: var(--bg-tertiary, var(--bg-hover)); }
+.ask-card-answer .btn:not(:is(.org-answer-words, .kanban-prompt, .permission-request-card, .ask-card-tools) *):disabled { opacity: 0.5; }
+.ask-card-answer .btn[data-recommended] { font-weight: 600; }
+.ask-card-answer .btn[data-recommended]::after { color: var(--fg-muted); opacity: 1; }
+.ask-card .org-answer-check { border-color: transparent; background: var(--bg-secondary); border-radius: 8px; min-height: 28px; font-size: 13px; }
+.ask-card .org-answer-check.is-on { border-color: var(--border-strong); background: var(--bg-tertiary, var(--bg-hover)); }
+
+/* The card's own tools at the right (Snooze, a thread's Pin): quiet text. Snooze has a clock. */
+.ask-card-tools .btn {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 6px;
+  border: none; border-radius: 8px; background: transparent; color: var(--fg-muted); font-size: 13px; box-shadow: none;
+}
+.ask-card-tools .btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
+.ask-card-tools .action-needed-snooze > [aria-hidden='true'] { display: none; }
+.ask-card-tools .action-needed-snooze::before {
+  content: ''; flex: none; width: 15px; height: 15px; background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'%3E%3Ccircle cx='8' cy='8' r='6.25'/%3E%3Cpath d='M8 4.75V8l2.25 1.5'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'%3E%3Ccircle cx='8' cy='8' r='6.25'/%3E%3Cpath d='M8 4.75V8l2.25 1.5'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+/* Put aside: its dot and words go grey; it needs nothing of him until then. */
+.ask-card.is-snoozed :is(.ask-card-question, .ask-card-detail) { color: var(--fg-muted); }
+.ask-card.is-snoozed .ask-card-question::before { background: var(--fg-muted); }
+/* Answered from here: the words stay, the dot goes, a line says what was said. */
+.ask-card.is-answered .ask-card-question { color: var(--fg-secondary, var(--fg)); }
+.ask-card.is-answered .ask-card-question::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--fg-muted); }
+.ask-card-answered { flex: 1 1 100%; min-width: 0; font-size: 13px; line-height: 19px; color: var(--fg-muted); overflow-wrap: break-word; }
+.ask-card-answered-mark { margin-right: 6px; font-weight: 600; }
+.ask-card-answered-said { color: var(--fg); }
 
 /* A phone: every control is a finger's size and every word 12 px at least (phone-pages.css). */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {

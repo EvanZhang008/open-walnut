@@ -1,17 +1,26 @@
-/* Action needed under a task's row (ActionNeeded.tsx): one line per thing it asks of the user. */
+/* Action needed under a task's row (ActionNeeded.tsx): one ask at a time, its card (ask-card.css)
+   with "‹ 1/3 ›" beside Snooze when it asks more. */
 .action-needed {
-  display: flex; flex-direction: column; gap: 6px; margin: 6px 0 2px; padding: 6px 8px;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--warning, #bf8700) 9%, var(--bg));
+  display: flex; flex-direction: column; margin: 6px 0 2px;
   color: var(--fg); font-size: 12px; cursor: default; flex-basis: 100%; min-width: 0;
 }
-/* The block's heading is for a screen reader only: its tint says what it is (2026-11-20, the user:
-   "why so much garbage Action needed, Ask just now"). */
+/* The block's heading and the page it is on are for a screen reader only: its card says what it
+   is (2026-11-20, the user: "why so much garbage Action needed, Ask just now"). */
 .action-needed-title { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.action-needed-item + .action-needed-item { border-top: 1px solid color-mix(in srgb, var(--warning, #bf8700) 22%, transparent); padding-top: 8px; margin-top: 2px; }
-.action-needed:not(:has(.action-needed-item:not(.is-snoozed))) {
-  background: color-mix(in srgb, var(--fg-muted) 6%, var(--bg));
+.ask-pages { min-width: 0; }
+/* Sideways strokes page (AskPager.tsx usePageGestures); the list still scrolls up and down. */
+.action-needed.is-paged .ask-pages { touch-action: pan-y; }
+
+.ask-pager { display: inline-flex; align-items: center; gap: 0; color: var(--fg-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.ask-pager-at { min-width: 26px; text-align: center; }
+.ask-pager-btn {
+  all: unset; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 28px; border-radius: 8px; color: var(--fg-muted); cursor: pointer;
 }
+.ask-pager-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
+.ask-pager-btn:disabled { opacity: 0.35; cursor: default; }
+.ask-pager-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 /* A row's own state beside its ask: "Working" while its turn still runs. */
 .status-card-also-working {
   flex: none; font-size: 10.5px; padding: 0 6px; border-radius: 8px; line-height: 16px;
@@ -19,21 +28,13 @@
 }
 .status-card-actions-below, .todo-row-actions-below { padding: 0 8px 4px 34px; }
 
-/* The strip under a session's title bar (experiment action_needed_everywhere): the same items, the
-   first two in sight and "N more" for the rest. It never scrolls by itself: a box's @ and / lists
-   open over the chat below it, never cut off at its edge. */
-.action-needed.is-strip {
-  flex: none; margin-left: 8px; margin-right: 8px; margin-bottom: 0; border-radius: 6px;
-}
+/* The strip under a session's title bar (experiment action_needed_everywhere): the same one card.
+   It never scrolls by itself: a box's @ and / lists open over the chat below it, never cut off at
+   its edge. */
+.action-needed.is-strip { flex: none; margin: 6px 8px 0; }
 
-.action-needed-more {
-  all: unset; cursor: pointer; align-self: flex-start; font-size: 11px; color: var(--warning-text, var(--warning, #9a6700));
-}
-.action-needed-more:hover { text-decoration: underline; }
-.action-needed-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
-
-/* A phone: the strip's own words are readable (the cards' controls: ask-card.css). */
+/* A phone: the pager's arrows are a finger's size (ask-card.css gives every control 44 px). */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  .app-shell-navigation .action-needed .action-needed-more { font-size: 12px; min-height: 44px; }
   .app-shell-navigation .status-card-also-working { font-size: 12px; }
+  .app-shell-navigation .ask-pager { font-size: 13px; }
 }

@@ -49,7 +49,9 @@ async function openNeeds(page: Page): Promise<{ row: Locator; card: Locator }> {
   const card = askOf(row)
   await expect(card).toBeVisible({ timeout: 30_000 })
   await expect(card.getByTestId('org-answer-input')).toBeVisible({ timeout: 30_000 })
-  await card.scrollIntoViewIfNeeded()
+  // Mid-list, with room below for its 1.5x: a card left at the list's bottom edge opens past the
+  // fold whatever its size (how far down depends on what else the shared list holds).
+  await card.evaluate((el) => el.scrollIntoView({ block: 'center' }))
   return { row, card }
 }
 
@@ -188,7 +190,8 @@ test('in a narrow column the opened card stays at 1.5 times its height; the rest
   const shots = process.env.PEEK_SHOTS
   // A narrow list (a small window or a resized panel): the texts need far more than the room.
   await page.locator('.todo-panel').evaluate((el: HTMLElement) => { el.style.width = '250px'; el.style.minWidth = '250px'; el.style.maxWidth = '250px'; el.style.flex = 'none' })
-  await card.scrollIntoViewIfNeeded()
+  // Narrowed, it is taller: mid-list again (openNeeds).
+  await card.evaluate((el) => el.scrollIntoView({ block: 'center' }))
   await page.mouse.move(1, 1)
   const before = await cardState(card)
   await card.locator('.ask-card-question').hover({ position: { x: 20, y: 6 } })

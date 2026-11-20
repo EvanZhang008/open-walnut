@@ -8,10 +8,10 @@
  *   - an approval approved in the session's strip: gone from its row
  *   - the session's own live question: the strip points at its card below, never a second answer;
  *     answered on the row, it leaves the strip
- *   - three asks: the strip shows the first two and "1 more"; a snooze in one place reads in the
- *     others, and an unsnooze elsewhere is not held back by a place's own earlier snooze
+ *   - three asks: the strip shows one at a time, "1/3", and pages; a snooze in one place reads in
+ *     the others, and an unsnooze elsewhere is not held back by a place's own earlier snooze
  *   - a reply typed on the row (the thread card's own words box) answers a letter: its task gets
- *     the words, and the item leaves the strip
+ *     the words, and its page stays marked answered on the row and in the strip
  *   - each card stays short: its buttons beside its box in a wide column, under it in a narrow one
  *   - the switch off: no strip
  * Real: the fixture server, the mock CLI's prompt, the approvals and inbox routes, the status sync.
@@ -21,7 +21,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { holdApprovalsLock } from './approvals-lock'
 import { loadHome, seedColumns } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { asksOf, endRunningTurn, presetPanelDesign, setStatusSectionOpen, showSectionCard, startRunningTurn } from './status-section-helpers'
+import { asksOf, endRunningTurn, pageToAsk, presetPanelDesign, setStatusSectionOpen, showSectionCard, startRunningTurn } from './status-section-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
@@ -204,18 +204,20 @@ async function sendLetter(request: APIRequestContext, subject: string, actions: 
   return ((await sent.json()) as { id: string }).id
 }
 
-test('three asks: the strip shows the first two and "1 more"; a snooze in the strip greys the row too, an unsnooze on the row brings the strip back', async ({ page, request }) => {
+test('three asks: the strip shows one at a time and pages; a snooze in the strip greys the row too, an unsnooze on the row brings the strip back', async ({ page, request }) => {
   const renew = await sendLetter(request, `Renew it ${STAMP}?`, [{ id: 'yes', label: 'Renew' }, { id: 'no', label: 'Let it end' }])
   await sendLetter(request, `Paint the hall ${STAMP}?`, [{ id: 'white', label: 'White' }, { id: 'grey', label: 'Grey' }])
   await sendLetter(request, `Keep the keys ${STAMP}?`, [{ id: 'keep', label: 'Keep' }, { id: 'give', label: 'Give back' }])
   await expect.poll(() => kinds(request, ids.letter), { timeout: 60_000 }).toBe('letter,letter,letter')
   await openHome(page, ids.letterSid)
   const strip = stripOf(page, ids.letterSid)
-  await expect(strip.getByTestId('action-item')).toHaveCount(2)
-  await expect(strip.getByTestId('action-needed-more')).toHaveText('1 more')
-  await strip.getByTestId('action-needed-more').click()
-  await expect(strip.getByTestId('action-item')).toHaveCount(3)
-  await expect(strip.getByTestId('action-needed-more')).toHaveText('Show fewer')
+  await expect(strip.getByTestId('action-item')).toHaveCount(1)
+  await expect(strip.getByTestId('action-page-at')).toHaveText('1/3')
+  await expect(strip.getByTestId('action-needed-more')).toHaveCount(0)
+  await strip.getByTestId('action-page-next').click()
+  await expect(strip.getByTestId('action-page-at')).toHaveText('2/3')
+  await strip.getByTestId('action-page-prev').click()
+  await expect(strip.getByTestId('action-page-at')).toHaveText('1/3')
 
   // Snooze the first in the strip: the row shows it snoozed as well (the same item).
   const first = strip.getByTestId('action-item').first()
@@ -224,7 +226,7 @@ test('three asks: the strip shows the first two and "1 more"; a snooze in the st
   await page.locator('.snooze-row[data-snooze="one-hour"]').click()
   await expect(first.getByTestId('action-snoozed-until')).toContainText('Snoozed until', { timeout: 15_000 })
   const card = await showSectionCard(page, 'needs', ids.letter)
-  const onRow = asksOf(card).locator(`[data-testid="action-item"][data-item-id="${firstId}"]`)
+  const onRow = await pageToAsk(asksOf(card), asksOf(card).locator(`[data-testid="action-item"][data-item-id="${firstId}"]`))
   await expect(onRow.getByTestId('action-snoozed-until')).toContainText('Snoozed until', { timeout: 30_000 })
   // Unsnooze it on the row: the strip's line is back too, not held by its own earlier snooze.
   await onRow.getByTestId('action-unsnooze').click()
@@ -236,17 +238,19 @@ test('three asks: the strip shows the first two and "1 more"; a snooze in the st
 test('a reply typed on the row answers the letter: its task gets the words, and it leaves the strip', async ({ page, request }) => {
   await openHome(page, ids.letterSid)
   const card = await showSectionCard(page, 'needs', ids.letter)
-  const item = asksOf(card).locator('[data-testid="action-item"][data-kind="letter"]', { hasText: `Paint the hall ${STAMP}?` })
+  const item = await pageToAsk(asksOf(card), asksOf(card).locator('[data-testid="action-item"][data-kind="letter"]', { hasText: `Paint the hall ${STAMP}?` }))
   const itemId = (await item.getAttribute('data-item-id'))!
+  // The row and the strip show the same page of the task's asks.
   const strip = stripOf(page, ids.letterSid)
-  await strip.getByTestId('action-needed-more').click().catch(() => {})
   await expect(strip.locator(`[data-item-id="${itemId}"]`)).toBeVisible()
   // The same box a thread card answers with, shown at once: no click opens it.
   const words = `Neither: keep it the colour it is now ${STAMP}`
   await item.getByTestId('org-answer-input').fill(words)
   await item.getByTestId('org-answer-send').click()
-  await expect(card.locator(`[data-item-id="${itemId}"]`)).toHaveCount(0, { timeout: 30_000 })
-  await expect(strip.locator(`[data-item-id="${itemId}"]`)).toHaveCount(0, { timeout: 30_000 })
+  // Answered: its page stays in both places, marked with the words, while other asks are open.
+  await expect(asksOf(card).locator(`[data-item-id="${itemId}"]`).getByTestId('action-answered')).toContainText(words, { timeout: 30_000 })
+  await expect(strip.locator(`[data-item-id="${itemId}"]`).getByTestId('action-answered')).toContainText(words, { timeout: 30_000 })
+  await expect(asksOf(card).locator(`[data-item-id="${itemId}"]`).getByTestId('org-answer-input')).toHaveCount(0)
   // The task's session gets his words, and the letter no longer waits on him.
   await expect.poll(async () => {
     const res = await request.get(`/api/v1/sessions/${ids.letterSid}/history?tail=80`)

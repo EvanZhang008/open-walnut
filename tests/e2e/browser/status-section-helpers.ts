@@ -95,6 +95,19 @@ export async function setStatusSectionOpen(scope: Page | Locator, key: StatusSec
 /** A row's asks (ActionNeeded): drawn right under the row, never inside it (the row is a button). */
 export const asksOf = (row: Locator): Locator => row.locator('xpath=following-sibling::*[1][@data-asks-for]')
 
+/**
+ * A task's ask block shows one ask at a time (web/src/components/actions/ask-pages.ts): page it from
+ * its first page until `item` (a locator inside `block`) is the one shown.
+ */
+export async function pageToAsk(block: Locator, item: Locator, max = 12): Promise<Locator> {
+  const prev = block.getByTestId('action-page-prev')
+  const next = block.getByTestId('action-page-next')
+  for (let i = 0; i < max && (await item.count()) === 0 && (await prev.count()) > 0 && !(await prev.isDisabled()); i++) await prev.click()
+  for (let i = 0; i < max && (await item.count()) === 0 && (await next.count()) > 0 && !(await next.isDisabled()); i++) await next.click()
+  await expect(item).toBeVisible({ timeout: 15_000 })
+  return item
+}
+
 export async function showSectionCard(scope: Page | Locator, key: StatusSectionKey, taskId: string, maxClicks = 40): Promise<Locator> {
   const card = statusSectionCard(scope, key, taskId)
   const more = scope.getByTestId(`status-section-${key}-more`).first()
