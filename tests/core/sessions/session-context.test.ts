@@ -395,7 +395,9 @@ describe('buildSessionContext (identity note)', () => {
     // the Approvals switch says (a lead signed him up for a colleague's office hour in his name).
     // 12050 → 12300 (2026-11-18) for the ack line's limit: a turn with work left or waiting on the
     // session's own job ends in words, never the ack line (40 of 108 overnight acks followed work). 12,240.
-    expect(systemPrompt.length).toBeLessThan(12300)
+    // 12300 → 12550 (2026-11-20) for the charter's full-URL rule: everything a thread, letter or question
+    // to the user names is a full URL he can click. 12,424.
+    expect(systemPrompt.length).toBeLessThan(12550)
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {

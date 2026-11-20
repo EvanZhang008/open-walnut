@@ -81,7 +81,10 @@ import { TASK_ROUTING_CONTRACT } from './task-routing-contract.js';
 // Raised to 12,000 on 2026-11-17 for the charter's USERS_OWN_YES_RULE (approval-kinds.ts): anything
 // that involves other people, speaks in the user's name or cannot be undone waits for his own yes,
 // whatever the Approvals switch says (a VP signed him up for a colleague's office hour in his name).
-export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 12_000;
+//
+// Raised to 12,300 on 2026-11-20 for the charter's full-URL rule: a thread, letter or question to
+// the user carries all he needs, each thing it names as a full URL he can click (12,156 measured).
+export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 12_300;
 
 // The phase LIST comes from PHASE_ORDER, so adding or removing a phase updates
 // this prompt with no second edit. The phases the prompt names are typed
