@@ -183,3 +183,76 @@ function inMarkedRow(node: ts.Node, depth = 0): boolean {
   }
   return false;
 }
+
+/** What a field is in JSX: an element a person types into, or a component that renders one. */
+const FIELD_TAGS = /^(textarea|input)$/;
+const FIELD_COMPONENTS = /^(ChatInput|ReplyComposer|OrgInlineAnswer|AnswerBox|ThreadFollowUp|FollowUp|ActionNeeded|AskCardFrame|OneCardFrame|PermissionAnswerButtons|KanbanCardEditor|KanbanCardPrompt|[A-Z][A-Za-z]*(Input|Composer|Editor|Answer|Reply))$/;
+const NOT_TYPED_INPUTS = /^(checkbox|radio|hidden|button|submit|reset|range|color|file|image)$/;
+
+export interface PeekRowSite { file: string; line: number; tag: string; classes: string[]; grow: boolean; fields: string[] }
+
+function jsxAttr(el: ts.JsxOpeningLikeElement, name: string): ts.JsxAttribute | undefined {
+  return el.attributes.properties.find((a): a is ts.JsxAttribute => ts.isJsxAttribute(a) && a.name.getText() === name);
+}
+
+/** The fields an element renders: in its JSX, its attributes' JSX, and the consts of its function it renders as `{name}`. */
+function fieldsUnder(node: ts.Node, fn: ts.Node | undefined, seen = new Set<string>()): string[] {
+  const out: string[] = [];
+  const visit = (n: ts.Node) => {
+    if (ts.isJsxElement(n) || ts.isJsxSelfClosingElement(n)) {
+      const open = ts.isJsxElement(n) ? n.openingElement : n;
+      const tag = open.tagName.getText();
+      const type = jsxAttr(open, 'type')?.initializer;
+      const typed = !(type && ts.isStringLiteral(type) && NOT_TYPED_INPUTS.test(type.text));
+      if ((FIELD_TAGS.test(tag) && (tag !== 'input' || typed)) || FIELD_COMPONENTS.test(tag) || jsxAttr(open, 'contentEditable')) out.push(tag);
+    }
+    if (fn && ts.isJsxExpression(n) && n.expression && ts.isIdentifier(n.expression) && !seen.has(n.expression.text)) {
+      const name = n.expression.text;
+      seen.add(name);
+      const look = (m: ts.Node) => {
+        if (ts.isVariableDeclaration(m) && ts.isIdentifier(m.name) && m.name.text === name && m.initializer) out.push(...fieldsUnder(m.initializer, fn, seen));
+        else ts.forEachChild(m, look);
+      };
+      look(fn);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(node);
+  return out;
+}
+
+/**
+ * Every element in web/src marked `data-peek-row`, whether it carries `data-peek-grow="down"`,
+ * and the fields it renders (utils/truncation-peek-row.ts `growsDown`: a row with a field opens
+ * in its own column, never across the window).
+ */
+export function findPeekRows(webSrc: string): PeekRowSite[] {
+  const out: PeekRowSite[] = [];
+  for (const file of walk(webSrc, [])) {
+    const text = fs.readFileSync(file, 'utf8');
+    if (!text.includes('data-peek-row')) continue;
+    const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const visit = (node: ts.Node) => {
+      if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) {
+        const open = ts.isJsxElement(node) ? node.openingElement : node;
+        if (jsxAttr(open, 'data-peek-row')) {
+          let fn: ts.Node | undefined = node.parent;
+          while (fn && !ts.isFunctionLike(fn) && !ts.isSourceFile(fn)) fn = fn.parent;
+          const grow = jsxAttr(open, 'data-peek-grow')?.initializer;
+          const cn = jsxAttr(open, 'className')?.initializer?.getText() ?? '';
+          out.push({
+            file: path.relative(webSrc, file),
+            line: sf.getLineAndCharacterOfPosition(open.getStart()).line + 1,
+            tag: open.tagName.getText(),
+            classes: [...cn.matchAll(/[a-z][a-z0-9-]+/g)].map((m) => m[0]).filter((c) => c.includes('-') || /^[a-z]+$/.test(c)),
+            grow: !!grow && ts.isStringLiteral(grow) && grow.text === 'down',
+            fields: [...new Set(fieldsUnder(ts.isJsxElement(node) ? node : open, fn))],
+          });
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+  }
+  return out;
+}

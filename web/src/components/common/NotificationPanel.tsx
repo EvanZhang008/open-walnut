@@ -1025,7 +1025,8 @@ const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }
   const title = (phoneTitles && tool ? PHONE_TOOL_TITLES[tool] : undefined) ?? tool ?? n.title;
 
   return (
-    <div data-peek-row="" className={`notification-feed-item nfc-perm-card notification-feed-item--${n.severity}${n.read ? '' : ' unread'}`}>
+    // A decision card in a narrow panel: its text opens downward, never across the window.
+    <div data-peek-row="" data-peek-grow="down" className={`notification-feed-item nfc-perm-card notification-feed-item--${n.severity}${n.read ? '' : ' unread'}`}>
       <div className="notification-feed-item-head">
         <span className={`notification-feed-dot notification-feed-dot--${n.severity}`} />
         <span className="notification-feed-item-title">{title}</span>

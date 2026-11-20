@@ -7,7 +7,9 @@
  *   repeat text in full view). A new row written that way fails here; drop the title, the peek
  *   needs nothing, or mark the element `data-peek="off"` if it must keep it;
  * - every shared peek widens the real row sideways in the top layer (2026-11-15, the user: the
- *   whole card gets wider, not taller), never a floating clone of its text.
+ *   whole card gets wider, not taller), never a floating clone of its text. The one exception is
+ *   a card a person types into: it opens downward in its own column, capped at 1.5 times its
+ *   height (2026-11-20; tests/web/peek-card-grows-down-guard.test.ts).
  */
 import path from 'node:path';
 import fs from 'node:fs';
@@ -120,7 +122,8 @@ describe('all truncation peeks widen the real row, never taller, never cloned te
     expect(row).toContain('duration: 160');
     expect(read('utils/truncation-peek.ts')).toContain('const ROW_OPEN_MS = 140');
     expect(row).toContain('rect.right - width');
-    // The old vertical peek: wrapping text and rows that take the height of what they hold.
+    // The old vertical peek: wrapping text and rows that take the height of what they hold. A card
+    // that grows downward has its own stylesheet (truncation-peek-down.css), scoped to its texts.
     expect(css).not.toMatch(/height:\s*auto|flex-wrap:\s*wrap|white-space:\s*normal|overflow-wrap:\s*anywhere/);
     expect(css).not.toMatch(/\.truncation-peek\b/);
     const calendar = read('components/calendar/CalendarChip.tsx');

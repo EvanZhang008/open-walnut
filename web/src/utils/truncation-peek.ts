@@ -2,13 +2,15 @@
  * Cut-off text has one behavior everywhere: its whole real container widens in the top layer,
  * keeping its exact height and leaving neighbouring rows still. No cloned text tooltip.
  * Mark a component `data-peek-row` to open all its cut-off texts when hovered anywhere;
- * unmarked text opens its nearest control or layout container through the same path.
+ * unmarked text opens its nearest control or layout container through the same path. A card
+ * a person types into (`growsDown`) opens only from its text, in place in its own column, and
+ * a tap opens it on a touch screen (truncation-peek-row.ts).
  * Native titles are lifted during the peek and restored on exit. Fields, touch, drags and
  * `data-peek="off"` stay untouched. One capturing listener serves every surface.
  */
 import '@/styles/truncation-peek.css';
 import { clippingAncestors } from './clip-ancestors';
-import { collapseRow, expandRow, within, type RowMarks } from './truncation-peek-row';
+import { collapseRow, expandRow, growsDown, within, type RowMarks } from './truncation-peek-row';
 
 /** How far up from the hovered node the cut-off text is looked for. */
 const MAX_DEPTH = 6;
@@ -133,6 +135,11 @@ export function cutTextsIn(row: Element): HTMLElement[] {
 export function peekTargetOf(target: EventTarget | null): { key: Element; hosts: HTMLElement[] } | null {
   if (!(target instanceof Element) || optedOut(target)) return null;
   const row = target.closest(PEEK_ROW_SELECTOR);
+  if (row && growsDown(row)) {
+    // A card with a box to type in opens from its text only: its box and buttons stay as they are.
+    const hosts = cutTextsIn(row);
+    return hosts.length && onTextOf(row, target, hosts) ? { key: row, hosts } : null;
+  }
   if (row) {
     const hosts = cutTextsIn(row);
     if (hosts.length) {
@@ -149,6 +156,25 @@ export function peekTargetOf(target: EventTarget | null): { key: Element; hosts:
   const hosts = cutTextsIn(key);
   if (!hosts.includes(host)) hosts.push(host);
   return { key, hosts };
+}
+
+/** What the pointer on a card's text is never on: its box to type in, its buttons, a menu. A link in the text is text. */
+const NOT_TEXT = 'input, textarea, select, button, summary, [role="button"], [role="menuitem"], [role="option"], [role="checkbox"], [contenteditable="true"], [contenteditable=""]';
+
+/** Whether `target` is on one of `row`'s texts: a cut-off one, or one the page would cut. */
+function onTextOf(row: Element, target: Element, hosts: HTMLElement[]): boolean {
+  for (let el: Element | null = target; el && el !== row; el = el.parentElement) {
+    if (el.matches(NOT_TEXT)) return false;
+    if (hosts.includes(el as HTMLElement) || isTruncating(getComputedStyle(el))) return true;
+  }
+  return false;
+}
+
+/** An open card that grows downward and holds `node`: it keeps open while the person works in it. */
+function openDownHolding(node: EventTarget | Node | null): Active | null {
+  if (!(node instanceof Node)) return null;
+  for (const a of [active, lingering]) if (a?.marked.down && a.key.contains(node)) return a;
+  return null;
 }
 
 /**
@@ -195,7 +221,7 @@ function linger(state: Active): void {
     lingerTimer = setTimeout(() => {
       lingerTimer = null;
       // A row about to open closes it itself, in its own step; a press holds it as it is.
-      if (active?.timer || pressed) wait();
+      if (active?.timer || pressed || (state.marked.down && state.key.contains(document.activeElement))) wait();
       else closeLingering();
     }, LINGER_MS);
   };
@@ -300,7 +326,8 @@ function activate(key: Element, hosts: HTMLElement[], target: Element, keyboard 
 let downAt: { x: number; y: number } | null = null;
 
 function onOver(e: PointerEvent): void {
-  if (e.pointerType === 'touch') { hidePeek(); return; }
+  // A touch on an open card that grows downward keeps it (onUp toggles it from its text).
+  if (e.pointerType === 'touch') { if (!openDownHolding(e.target)) hidePeek(); return; }
   // A press in progress: a click lands on the row as it is; a drag closes it (onMove).
   if (e.buttons !== 0) return;
   releaseLostPress();
@@ -338,7 +365,8 @@ function onOver(e: PointerEvent): void {
 function over(target: Element | null): void {
   if (pressed) return;
   // Still on the row that peeks, off its own buttons: nothing to scan again.
-  const sameRow = active && target && active.key.matches(PEEK_ROW_SELECTOR) && target.closest(PEEK_ROW_SELECTOR) === active.key && !rowControl(target);
+  // A card that grows downward opens only from its text, so its other parts are scanned again.
+  const sameRow = active && target && active.key.matches(PEEK_ROW_SELECTOR) && !growsDown(active.key) && target.closest(PEEK_ROW_SELECTOR) === active.key && !rowControl(target);
   if (active && target && (sameRow || active.key === target || (active.hosts.length === 1 && active.hosts[0].contains(target)))) {
     active.titles.push(...takeTitles(target));
     return;
@@ -366,8 +394,9 @@ function settleSoon(): void {
 /** Whether a scroll or a wheel at `t` moves what peeks (another pane streaming its chat does not). */
 function movesPeek(t: EventTarget | null): boolean {
   if (!(t instanceof Element) || t === document.documentElement || t === document.body) return true;
-  const shown = [active?.key, lingering?.key].filter((r): r is Element => !!r);
-  return shown.some((r) => t.contains(r) || r.contains(t));
+  const shown = [active, lingering].filter((a): a is Active => !!a);
+  // A text of an open card that grows downward scrolls inside itself: reading on keeps it open.
+  return shown.some(({ key: r, marked }) => t.contains(r) || (r.contains(t) && !(marked.down && t !== r)));
 }
 
 function hideAndSettle(e?: Event): void {
@@ -403,11 +432,37 @@ function onMove(e: PointerEvent): void {
   }
 }
 
-function onUp(): void {
+function onUp(e: PointerEvent): void {
   if (!pressed) return;
   pressed = false;
+  if (e.type === 'pointerup' && e.pointerType === 'touch' && !dragged) tapped(e);
   // After a drag the rows are where it dropped them: start over from what the pointer is on.
   if (dragged) { dragged = false; hidePeek(); settleSoon(); }
+}
+
+/**
+ * A touch screen has no hover: a tap on the text of a card that grows downward opens it, a tap
+ * on its text again or anywhere outside it closes it. A link or a button in it does its own job.
+ */
+function tapped(e: PointerEvent): void {
+  const target = e.target instanceof Element ? e.target : null;
+  if (!target || (downAt && Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 4)) return;
+  const control = target.closest(CONTROL);
+  const row = target.closest(PEEK_ROW_SELECTOR);
+  if (!row || !growsDown(row) || (control && row.contains(control) && control !== row)) return;
+  const open = openDownHolding(target);
+  if (open) {
+    if (onTextOf(row, target, open.hosts)) hidePeek();
+    return;
+  }
+  const next = peekTargetOf(target);
+  if (!next) return;
+  hidePeek();
+  pointer = { x: e.clientX, y: e.clientY };
+  const state: Active = { key: next.key, hosts: next.hosts, titles: takeTitles(target, next.key), texts: next.hosts.map((h) => h.textContent ?? ''), timer: null, marked: [] };
+  active = state;
+  watchActive();
+  renderAll(state);
 }
 
 /**
@@ -424,8 +479,9 @@ function releaseLostPress(): boolean {
 }
 
 function onOut(e: PointerEvent): void {
-  // Out of the window: nothing else will say the pointer left.
-  if (!e.relatedTarget) hidePeek();
+  // Out of the window: nothing else will say the pointer left. A finger "leaves" as it lifts: a
+  // tap's card stays open until the next tap (`tapped`).
+  if (!e.relatedTarget && e.pointerType !== 'touch') hidePeek();
 }
 
 const MODIFIERS = new Set(['Shift', 'Meta', 'Control', 'Alt', 'CapsLock']);
@@ -437,7 +493,7 @@ export function installTruncationPeek(): void {
   installed = true;
   document.addEventListener('focusin', (e) => {
     const target = e.target;
-    if (!(target instanceof Element) || !target.matches(':focus-visible')) return;
+    if (!(target instanceof Element) || openDownHolding(target) || !target.matches(':focus-visible')) return;
     const next = peekTargetOf(target);
     if (next) activate(next.key, next.hosts, target, true);
     else hidePeek();
@@ -445,6 +501,8 @@ export function installTruncationPeek(): void {
   document.addEventListener('focusout', (e) => {
     const next = e.relatedTarget;
     if (active && (!(next instanceof Element) || !active.key.contains(next))) hidePeek();
+    // Focus leaving a card that stayed open for it, after the pointer had already left.
+    else if (lingering?.marked.down && !(next instanceof Element && lingering.key.contains(next))) closeLingering();
   }, true);
   document.addEventListener('pointerover', onOver, true);
   document.addEventListener('pointerout', onOut, true);
@@ -456,9 +514,12 @@ export function installTruncationPeek(): void {
   document.addEventListener('dragstart', hidePeek, { capture: true, passive: true });
   // React resolves the real control first; restore afterwards so a new menu is not hidden
   // underneath the top layer. Capture would change its geometry before its own click handler.
-  document.addEventListener('click', () => { setTimeout(hidePeek, 0); }, { capture: true, passive: true });
+  // A card that grows downward has no top layer to hide a menu under: a click in it (its box,
+  // its buttons) keeps it open, so the box does not move as it is clicked.
+  document.addEventListener('click', (e) => { if (!openDownHolding(e.target)) setTimeout(hidePeek, 0); }, { capture: true, passive: true });
   // A modifier held for a click (Cmd or Shift to select) is no action of its own.
-  document.addEventListener('keydown', (e) => { if (!MODIFIERS.has(e.key)) hidePeek(); }, { capture: true, passive: true });
+  // Typing an answer in a card that grows downward keeps its question open above the box.
+  document.addEventListener('keydown', (e) => { if (!MODIFIERS.has(e.key) && !openDownHolding(e.target)) hidePeek(); }, { capture: true, passive: true });
   // Anything that moves the page under the pointer ends it, and what the pointer rests on after peeks.
   document.addEventListener('wheel', hideAndSettle, { capture: true, passive: true });
   document.addEventListener('scroll', hideAndSettle, { capture: true, passive: true });

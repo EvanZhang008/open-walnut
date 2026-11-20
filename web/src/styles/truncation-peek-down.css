@@ -1,0 +1,20 @@
+/* A card a person types into opens its cut-off texts in place (utils/truncation-peek-row.ts
+   openDown): each wraps in full at the card's own width and the card grows downward in its own
+   column. A text past its share of the height cap scrolls inside itself, and its wheel never
+   scrolls the list behind it. No top layer, no placeholder, no widening. */
+[data-peek-down] {
+  box-sizing: border-box !important;
+  -webkit-line-clamp: unset !important;
+  line-clamp: none !important;
+  white-space: normal !important;
+  text-overflow: clip !important;
+  overflow-wrap: anywhere !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  height: auto !important;
+  max-height: var(--peek-down-max, none) !important;
+}
+[data-peek-down] * {
+  white-space: normal !important;
+}

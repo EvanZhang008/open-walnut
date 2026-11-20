@@ -38,7 +38,9 @@ export function AskCardFrame({ title, question, detail, status, answer, tools, c
   data?: Record<`data-${string}`, string | undefined>;
 }) {
   return (
-    <div className={`ask-card ${className}`.trim()} data-testid={testId} data-peek-row="" {...data}>
+    // A card with a box to type in: hovering its text opens it downward in its own column, never
+    // across the window over the panes beside it (utils/truncation-peek-row.ts growsDown).
+    <div className={`ask-card ${className}`.trim()} data-testid={testId} data-peek-row="" data-peek-grow="down" {...data}>
       {title ? <div className="ask-card-title">{title}</div> : null}
       {question ? <div className="ask-card-question">{question}</div> : null}
       {detail ? <div className="ask-card-detail">{detail}</div> : null}
