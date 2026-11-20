@@ -38,6 +38,7 @@ const transport: TopicMailTransport = {
   sendState: async (draftId) => ({ draftId, state: 'discarded' }),
   drop: async () => {},
   bodyText: async () => '',
+  handBack: async () => {},
 }
 
 beforeAll(async () => {

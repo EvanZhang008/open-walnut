@@ -13,7 +13,8 @@
  * carries its `Precedence` / `Auto-Submitted` from the cached envelope, so the bridge can drop an
  * automatic reply. A reply the bridge takes (posts in a topic) never reaches the router intake and
  * is not announced as new mail: it was delivered twice before, in the topic and minutes later to a
- * member task by the Mail router (review 2026-11-20).
+ * member task by the Mail router (review 2026-11-20). One the bridge took but could not post is
+ * handed back and entered by the router's next retry (handBack).
  */
 import type { MailApprovals } from './approvals.js'
 import type { MailIncomingCapture, SendDto } from './contract.js'
@@ -47,6 +48,8 @@ export function createTopicMailTransport(deps: {
   drafts: Pick<MailDrafts, 'create' | 'get' | 'discard'>
   approvals: Pick<MailApprovals, 'requestSend'>
   sends: Pick<MailSends, 'list'>
+  /** The router intake's way back in (router-intake.ts handBack): a mail the bridge took but could not post. */
+  handBack?: (accountId: string, messageIds: readonly string[]) => Promise<void>
 }): TopicMailTransport {
   return {
     async accounts() {
@@ -101,6 +104,10 @@ export function createTopicMailTransport(deps: {
     async bodyText(accountId, messageId) {
       const read = await deps.service.readMessage(accountId, messageId)
       return read.body ? plainTextOf(read.body) : ''
+    },
+
+    async handBack(accountId, messageIds) {
+      await deps.handBack?.(accountId, messageIds).catch(() => undefined)
     },
   }
 }

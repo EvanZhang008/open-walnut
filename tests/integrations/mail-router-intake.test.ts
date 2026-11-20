@@ -864,6 +864,16 @@ describe('the router intake helper', () => {
     expect(warnings).toContain('mail router intake failed; entering that batch one by one');
   });
 
+  it('a mail the topics bridge took but could not post is handed back once and entered by the next retry', async () => {
+    const { store } = await seeded(1);
+    const recorder = intake(store, { current: bound() });
+    await recorder.capture.handBack(ACCOUNT, ['inbox:m-1', 'inbox:m-1']);
+    expect(await recorder.pending()).toEqual(ids(1));
+    await recorder.capture.retry(ACCOUNT);
+    expect(messagesOf(recorder.written)).toEqual([['inbox:m-1']]);
+    expect(await recorder.pending()).toEqual([]);
+  });
+
   it('one mail its router always refuses holds back no other, and leaves the queue after MAIL_INTAKE_MAX_TRIES retries', async () => {
     const { store } = await seeded(3);
     const warnings: string[] = [];

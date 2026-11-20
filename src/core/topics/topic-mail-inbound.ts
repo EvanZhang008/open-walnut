@@ -17,7 +17,10 @@
  * reply was posted in the topic and, minutes later, routed to a member task as new mail): the
  * claim decides from the cache's headers and the bridge's own state alone (no body read, no
  * network), and the tap waits only for it; the post then reads the body and appends the line.
- * A mail claimed once (its key in `seen`) stays claimed when it comes by again.
+ * A mail claimed once (its key in `seen`) stays claimed when it comes by again. A claim the tap
+ * no longer waited for is undone (releaseTopicMailClaims): the router has that mail then. A claimed
+ * mail that cannot be posted (the topic closed, the person left, only quoted lines, a body that
+ * cannot be read) goes back to the router (topic-mail.ts), so a claim never loses a mail.
  */
 import type { TopicMailIncoming, TopicMailTransport } from './topic-mail-port.js'
 import type { TopicMailState } from './topic-mail-state.js'
@@ -37,7 +40,7 @@ export interface TopicMailInboundDeps {
   readTopic(id: string): Promise<Topic | null | undefined>
   appendMemberMessage(topicId: string, memberId: string, text: string, via: 'mail'): Promise<unknown>
   state: TopicMailState
-  log: { info(message: string, meta?: Record<string, unknown>): void }
+  log: { info(message: string, meta?: Record<string, unknown>): void; warn?(message: string, meta?: Record<string, unknown>): void }
 }
 
 const emailOf = (member: TopicMember): string => (member.ref.kind === 'person' ? member.ref.email : '')
@@ -50,7 +53,7 @@ const emailOf = (member: TopicMember): string => (member.ref.kind === 'person' ?
 export type TopicMailClaim =
   | { claimed: false; why: string }
   | { claimed: true; seen: true }
-  | { claimed: true; seen?: false; topicId: string; memberId: string }
+  | { claimed: true; seen?: false; topicId: string; memberId: string; key: string }
 
 /** Decides whether the bridge takes this mail; never throws for a bad mail. */
 export async function claimTopicMail(mail: TopicMailIncoming, deps: TopicMailInboundDeps): Promise<TopicMailClaim> {
@@ -86,15 +89,51 @@ export async function claimTopicMail(mail: TopicMailIncoming, deps: TopicMailInb
     return true
   })
   if (!fresh) return { claimed: true, seen: true }
-  return { claimed: true, topicId: target.topic.id, memberId: target.member.id }
+  return { claimed: true, topicId: target.topic.id, memberId: target.member.id, key: seenKey }
 }
 
-/** Posts a claimed reply: its body without the quote. Why it was not posted, or undefined. */
+/** Undoes claims the tap no longer waited for: those mails were handed to the router, so they are not the topic's. */
+export async function releaseTopicMailClaims(state: TopicMailState, claims: readonly TopicMailClaim[]): Promise<void> {
+  const keys = new Set(claims.flatMap((one) => (one.claimed && !one.seen ? [one.key] : [])))
+  if (keys.size === 0) return
+  await state.update((s) => { s.seen = s.seen.filter((key) => !keys.has(key)) })
+}
+
+/**
+ * Posts a claimed reply: its body without the quote. Never throws: answers why a claimed mail was
+ * not posted (the caller hands it back to the router), or undefined when it was (or was posted before).
+ */
 export async function postClaimedMail(mail: TopicMailIncoming, claim: TopicMailClaim, t: TopicMailTransport, deps: TopicMailInboundDeps): Promise<string | undefined> {
-  if (!claim.claimed) return claim.why
-  if (claim.seen) return 'seen'
-  const text = stripQuotedReply(await t.bodyText(mail.accountId, mail.messageId))
-  if (!text) return 'only quote'
-  await deps.appendMemberMessage(claim.topicId, claim.memberId, text, 'mail')
-  return undefined
+  if (!claim.claimed || claim.seen) return undefined
+  try {
+    const text = stripQuotedReply(await t.bodyText(mail.accountId, mail.messageId))
+    if (!text) return 'it held only quoted lines'
+    await deps.appendMemberMessage(claim.topicId, claim.memberId, text, 'mail')
+    return undefined
+  } catch (error) {
+    return (error instanceof Error ? error.message : String(error)).slice(0, 200) || 'unknown error'
+  }
+}
+
+/**
+ * Posts one poll's claimed mails in order. One that cannot be posted gets one walnut line in its
+ * topic (while the topic exists) and goes back to the mail router through the transport, so a
+ * claimed mail is never lost (review 2026-11-20). Never throws.
+ */
+export async function postClaimedMails(
+  taken: ReadonlyArray<{ mail: TopicMailIncoming; claim: TopicMailClaim }>,
+  t: TopicMailTransport,
+  deps: TopicMailInboundDeps & { postLine(topicId: string, text: string): Promise<void> },
+): Promise<void> {
+  for (const { mail, claim } of taken) {
+    const why = await postClaimedMail(mail, claim, t, deps)
+    if (!why || !claim.claimed || claim.seen) continue
+    deps.log.warn?.('topic mail reply not posted; it goes back to the mail router', { accountId: mail.accountId, topicId: claim.topicId, error: why })
+    const topic = await deps.readTopic(claim.topicId).catch(() => null)
+    if (topic) {
+      const name = topic.members.find((one) => one.id === claim.memberId)?.name || 'a person'
+      await deps.postLine(topic.id, `A mail from ${name} could not be posted: ${why}.`).catch(() => undefined)
+    }
+    await t.handBack(mail.accountId, [mail.messageId]).catch(() => undefined)
+  }
 }

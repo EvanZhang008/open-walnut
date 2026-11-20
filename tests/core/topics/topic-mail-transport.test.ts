@@ -173,4 +173,31 @@ describe('arrival tap', () => {
       for (const off of offs) off()
     }
   })
+
+  it('a listener still claiming when the wait ends finds its window aborted; one that answered in time does not', async () => {
+    const windows: AbortSignal[] = []
+    let answerLate!: (ids: string[]) => void
+    const offs = [
+      onTopicMailArrivals((_a, _l, window) => { windows.push(window.signal); return Promise.resolve(['msg-1']) }),
+      onTopicMailArrivals((_a, _l, window) => { windows.push(window.signal); return new Promise<string[]>((go) => { answerLate = go }) }),
+    ]
+    try {
+      expect([...await topicMailArrivals('fake:a', async () => [], 20)]).toEqual(['msg-1'])
+      expect(windows.map((one) => one.aborted)).toEqual([false, true])
+      answerLate(['msg-2'])
+    } finally {
+      for (const off of offs) off()
+    }
+  })
+})
+
+describe('handing a mail back to the router', () => {
+  it('passes the ids to the router intake, and never throws when that fails', async () => {
+    const got: Array<[string, readonly string[]]> = []
+    const transport = createTopicMailTransport({ handBack: async (accountId: string, ids: readonly string[]) => { got.push([accountId, ids]) } } as never)
+    await transport.handBack('fake:a', ['msg-1'])
+    expect(got).toEqual([['fake:a', ['msg-1']]])
+    const failing = createTopicMailTransport({ handBack: async () => { throw new Error('queue file unwritable') } } as never)
+    await expect(failing.handBack('fake:a', ['msg-1'])).resolves.toBeUndefined()
+  })
 })

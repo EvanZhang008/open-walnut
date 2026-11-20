@@ -75,10 +75,26 @@ export interface TopicMailTransport {
   drop(draftId: string): Promise<void>
   /** The arrival's plain text (fetched once when the cache has no body yet). */
   bodyText(accountId: string, messageId: string): Promise<string>
+  /**
+   * Gives arrivals the bridge claimed but could not post (the topic closed, the person left, only
+   * quoted lines) back to the plugin's router, which enters them at its next retry; never throws.
+   */
+  handBack(accountId: string, messageIds: readonly string[]): Promise<void>
+}
+
+/**
+ * The wait of one poll for a listener's claims. `signal` aborts when the tap stops waiting: a
+ * listener that sees it aborted when its claims are ready takes nothing (it undoes its claims and
+ * posts none), since the tap has already handed every arrival to the router.
+ */
+export interface TopicMailClaimWindow {
+  readonly signal: AbortSignal
 }
 
 /** Answers the cache ids of the arrivals it takes (a reply posted in a topic): the plugin's router never sees those. */
-export type TopicMailArrivalListener = (accountId: string, load: () => Promise<TopicMailIncoming[]>) => Promise<readonly string[]> | void
+export type TopicMailArrivalListener = (
+  accountId: string, load: () => Promise<TopicMailIncoming[]>, window: TopicMailClaimWindow,
+) => Promise<readonly string[]> | void
 
 let transport: TopicMailTransport | null = null
 const listeners = new Set<TopicMailArrivalListener>()
@@ -110,20 +126,36 @@ export const TOPIC_MAIL_CLAIM_WAIT_MS = 15_000
 /**
  * Called by the mail plugin for each poll's new arrivals; resolves to the cache ids the listeners
  * took. Never throws: a listener that fails or takes longer than `waitMs` takes nothing (the mail
- * then goes to the router as before: a reply seen twice beats a reply lost).
+ * then goes to the router as before), and the late one's window is aborted so it never posts what
+ * the router got: each arrival is either claimed by a topic or handed to the router, never both.
+ *
+ * Why the abort is exact: the timer aborts every window still open in the same callback that ends
+ * the wait, and a listener resolves its answer in the same tick it checks its signal. So either
+ * the answer came first (the race below takes it, in microtasks no timer can come between), or the
+ * signal was already aborted when the listener looked.
  */
 export async function topicMailArrivals(accountId: string, load: () => Promise<TopicMailIncoming[]>, waitMs = TOPIC_MAIL_CLAIM_WAIT_MS): Promise<Set<string>> {
   const claims: Array<Promise<readonly string[]>> = []
+  const open: Array<{ window: AbortController; done: boolean }> = []
   for (const listener of listeners) {
+    const entry = { window: new AbortController(), done: false }
     try {
-      const answer = listener(accountId, load)
-      if (answer) claims.push(Promise.resolve(answer).catch(() => []))
+      const answer = listener(accountId, load, { signal: entry.window.signal })
+      if (!answer) continue
+      open.push(entry)
+      claims.push(Promise.resolve(answer).then((ids) => { entry.done = true; return ids }, () => { entry.done = true; return [] }))
     } catch { /* a listener reports its own failures */ }
   }
   const taken = new Set<string>()
   if (claims.length === 0) return taken
   let timer: ReturnType<typeof setTimeout> | undefined
-  const late = new Promise<readonly string[]>((resolve) => { timer = setTimeout(() => resolve([]), waitMs); timer.unref?.() })
+  const late = new Promise<readonly string[]>((resolve) => {
+    timer = setTimeout(() => {
+      for (const one of open) if (!one.done) one.window.abort()
+      resolve([])
+    }, waitMs)
+    timer.unref?.()
+  })
   try {
     for (const ids of await Promise.all(claims.map((one) => Promise.race([one, late])))) for (const id of ids) taken.add(id)
   } finally {

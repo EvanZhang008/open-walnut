@@ -1,161 +1,18 @@
 /**
- * The topics mail bridge with an in-memory topics core and a fake mail transport: nothing here
- * reaches a mailbox or a mail server. Addresses are example.com / example.org only.
+ * The topics mail bridge, outbound and its bookkeeping, with an in-memory topics core and a fake
+ * mail transport (topic-mail-fixture.ts): nothing here reaches a mailbox or a mail server.
+ * Inbound replies: topic-mail-inbound.test.ts.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
-import { createTopicMailBridge, PERSON_MAILS_PER_ROUND, type TopicMailBridge, type TopicMailCore } from '../../../src/core/topics/topic-mail.js'
-import { MAIL_EVERY_MINUTES_DEFAULT as DEFAULT_EVERY_MINUTES, freshRound, type Topic, type TopicMessage } from '../../../src/core/topics/topics-model.js'
+import { createTopicMailBridge, PERSON_MAILS_PER_ROUND } from '../../../src/core/topics/topic-mail.js'
+import { MAIL_EVERY_MINUTES_DEFAULT as DEFAULT_EVERY_MINUTES } from '../../../src/core/topics/topics-model.js'
 import { createTopicMailState, CLOSED_KEEP_MS, lineKey, pruneState } from '../../../src/core/topics/topic-mail-state.js'
-import { planDelivery } from '../../../src/core/topics/topic-wake.js'
-import {
-  topicMailArrivals, topicMailListening,
-  type TopicMailIncoming, type TopicMailOutgoing, type TopicMailSendOutcome, type TopicMailTransport,
-} from '../../../src/core/topics/topic-mail-port.js'
 import { TOPIC_MAIL_FOOTER } from '../../../src/core/topics/topic-mail-text.js'
-import { tapTopicMailArrivals } from '../../../src/integrations/mail/topic-transport.js'
-import type { MailIncomingCapture } from '../../../src/integrations/mail/contract.js'
-import type { MailHeadline } from '../../../src/integrations/mail/events.js'
+import { ACCOUNT, ADA, AGENT, BOB, T0, TOPIC, ada, env, iso, reply, setup, useMailTestEnv } from './topic-mail-fixture.js'
 
-const TOPIC = 'tp-0123456789ab'
-const ADA = 'mb-0000000a'
-const BOB = 'mb-0000000b'
-const AGENT = 'mb-0000000c'
-const ACCOUNT = 'fake:walnut'
-const T0 = Date.parse('2026-11-20T10:00:00.000Z')
-
-let clock = T0
-let dir = ''
-let stateFile = ''
-
-function iso(ms: number): string {
-  return new Date(ms).toISOString()
-}
-
-// Only the fields the bridge reads; the rest of a Topic is the core's.
-function makeTopic(over: Partial<Topic> = {}): Topic {
-  return {
-    id: TOPIC,
-    title: 'Launch plan',
-    mail: { accountId: ACCOUNT, everyMinutes: DEFAULT_EVERY_MINUTES },
-    members: [
-      { id: AGENT, ref: { kind: 'task', name: 'Planner' }, name: 'Planner', status: 'active', joinedAt: iso(T0 - 60_000) },
-      { id: ADA, ref: { kind: 'person', name: 'Ada', email: 'Ada@Example.com' }, name: 'Ada', status: 'active', joinedAt: iso(T0 - 60_000) },
-      { id: BOB, ref: { kind: 'person', name: 'Bob', email: 'bob@example.com' }, name: 'Bob', status: 'pending', joinedAt: iso(T0 - 60_000) },
-    ],
-    messages: [],
-    round: freshRound(0, iso(T0 - 60_000)),
-    ...over,
-  } as unknown as Topic
-}
-
-function fakeCore(topic: Topic) {
-  const posted: Array<{ topicId: string; memberId: string; text: string; via: string }> = []
-  const lines: string[] = []
-  let listener: ((topic: Topic, message: TopicMessage) => void) | undefined
-  let n = 0
-  const add = (author: string, text: string, mentions: string[] = []): TopicMessage => {
-    const message = { via: 'ui', id: `tpm-${String(++n).padStart(12, '0')}`, at: iso(clock), author, text, mentions } as TopicMessage
-    if (author !== 'walnut') {
-      const plan = planDelivery(topic, message)
-      if (plan.mail.length) message.toMail = plan.mail
-      if (plan.mailNow.length) message.mailNow = plan.mailNow
-      topic.round = plan.round
-    }
-    topic.messages.push(message)
-    return message
-  }
-  const core: TopicMailCore = {
-    listTopics: async () => [{ id: topic.id }],
-    readTopic: async (id) => (id === topic.id ? structuredClone(topic) : null),
-    appendMemberMessage: async (topicId, memberId, text, via) => {
-      posted.push({ topicId, memberId, text, via })
-      add(memberId, text)
-    },
-    updateMember: async (_topicId, memberId, patch) => {
-      const member = topic.members.find((one) => one.id === memberId)!
-      member.mail = { ...patch.mail }
-    },
-    registerTopicMessageListener: (fn) => {
-      listener = fn
-      return () => { listener = undefined }
-    },
-    postSystemLine: async (_topicId, text) => {
-      lines.push(text)
-      add('walnut', text)
-    },
-    markMailed: async (_topicId, memberId, ids) => {
-      for (const m of topic.messages) if (ids.includes(m.id) && !m.mailed?.includes(memberId as never)) m.mailed = [...(m.mailed ?? []), memberId as never]
-    },
-  }
-  return { core, posted, lines, add, emit: (message: TopicMessage) => listener?.(topic, message), hasListener: () => !!listener }
-}
-
-function fakeTransport() {
-  const sent: TopicMailOutgoing[] = []
-  const dropped: string[] = []
-  const states = new Map<string, TopicMailSendOutcome>()
-  const bodies = new Map<string, string>()
-  const bodyReads: string[] = []
-  const control = { mode: 'sent' as 'sent' | 'waiting' | 'failed' | 'throw' }
-  let n = 0
-  const transport: TopicMailTransport = {
-    accounts: async () => [{ accountId: ACCOUNT, address: 'walnut@example.org', canSend: true }],
-    send: async (mail) => {
-      sent.push(structuredClone(mail))
-      n += 1
-      const draftId = `dr-${n}`
-      if (control.mode === 'throw') throw new Error('connection refused')
-      const outcome: TopicMailSendOutcome = control.mode === 'sent'
-        ? { draftId, state: 'sent', messageId: `<walnut-${n}@example.org>` }
-        : control.mode === 'failed' ? { draftId, state: 'failed', error: '550 mailbox unavailable' } : { draftId, state: 'waiting' }
-      states.set(draftId, outcome)
-      return outcome
-    },
-    sendState: async (draftId) => states.get(draftId) ?? { draftId, state: 'discarded' },
-    drop: async (draftId) => { dropped.push(draftId) },
-    bodyText: async (_accountId, messageId) => {
-      bodyReads.push(messageId)
-      return bodies.get(messageId) ?? ''
-    },
-  }
-  return { transport, sent, dropped, states, bodies, bodyReads, control }
-}
-
-const quiet = { info: () => undefined, warn: () => undefined }
-
-function setup(over: { topic?: Partial<Topic>; on?: boolean } = {}) {
-  const topic = makeTopic(over.topic)
-  const core = fakeCore(topic)
-  const mail = fakeTransport()
-  const flag = { on: over.on ?? true }
-  const make = (): TopicMailBridge => createTopicMailBridge({
-    core: core.core,
-    transport: () => mail.transport,
-    state: createTopicMailState(stateFile),
-    isOn: async () => flag.on,
-    ownerName: async () => 'Owner',
-    now: () => clock,
-    log: quiet,
-  })
-  return { topic, ...core, mail, flag, bridge: make(), make }
-}
-
-function ada(topic: Topic) {
-  return topic.members.find((one) => one.id === ADA)!
-}
-
-beforeEach(async () => {
-  clock = T0
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'topic-mail-test-'))
-  stateFile = path.join(dir, 'topic-mail', 'state.json')
-})
-
-afterEach(async () => {
-  await fs.rm(dir, { recursive: true, force: true })
-})
+useMailTestEnv()
 
 describe('outbound schedule', () => {
   it('mails the first new messages at the first pass, then nothing when nothing is new', async () => {
@@ -165,7 +22,7 @@ describe('outbound schedule', () => {
     expect(s.mail.sent).toHaveLength(1)
     expect(s.mail.sent[0]!.to).toEqual({ name: 'Ada', address: 'Ada@Example.com' })
     await s.bridge.pass()
-    clock += 60 * 60_000
+    env.clock += 60 * 60_000
     await s.bridge.pass()
     expect(s.mail.sent).toHaveLength(1)
   })
@@ -176,12 +33,12 @@ describe('outbound schedule', () => {
     await s.bridge.pass()
     expect(s.mail.sent).toHaveLength(1)
 
-    clock += 60_000
+    env.clock += 60_000
     s.add(AGENT, 'An update nobody is called on')
     await s.bridge.pass()
     expect(s.mail.sent).toHaveLength(1)
 
-    clock += 2 * 60_000
+    env.clock += 2 * 60_000
     s.add(AGENT, '@Ada can you check the numbers?', [ADA])
     await s.bridge.pass()
     expect(s.mail.sent).toHaveLength(2)
@@ -189,11 +46,11 @@ describe('outbound schedule', () => {
     expect(s.mail.sent[1]!.text).toContain('Planner: An update nobody is called on')
     expect(s.mail.sent[1]!.text).toContain('Planner: @Ada can you check the numbers?')
 
-    clock += 60_000
+    env.clock += 60_000
     s.add(AGENT, 'Another quiet update')
     await s.bridge.pass()
     expect(s.mail.sent).toHaveLength(2)
-    clock += DEFAULT_EVERY_MINUTES * 60_000
+    env.clock += DEFAULT_EVERY_MINUTES * 60_000
     await s.bridge.pass()
     expect(s.mail.sent).toHaveLength(3)
   })
@@ -202,11 +59,11 @@ describe('outbound schedule', () => {
     const s = setup({ topic: { mail: { accountId: ACCOUNT, everyMinutes: 5 } } })
     s.add('human', 'one')
     await s.bridge.pass()
-    clock += 4 * 60_000
+    env.clock += 4 * 60_000
     s.add(AGENT, 'two')
     await s.bridge.pass()
     expect(s.mail.sent).toHaveLength(1)
-    clock += 60_000
+    env.clock += 60_000
     await s.bridge.pass()
     expect(s.mail.sent).toHaveLength(2)
   })
@@ -217,11 +74,11 @@ describe('outbound schedule', () => {
     try {
       s.add('human', 'earlier line')
       await s.bridge.pass()
-      clock += 60_000
+      env.clock += 60_000
       s.emit(s.add(AGENT, '@Ada please confirm', [ADA]))
       await vi.waitFor(() => expect(s.mail.sent).toHaveLength(2))
       // A mention of a task member alone starts nothing.
-      clock += 60_000
+      env.clock += 60_000
       s.emit(s.add(ADA, '@Planner thanks', [AGENT]))
       await new Promise((resolve) => setTimeout(resolve, 20))
       expect(s.mail.sent).toHaveLength(2)
@@ -265,12 +122,12 @@ describe('subject, body and threading', () => {
     expect(first.text).toBe(`Owner: Kickoff\n\nPlanner: Plan is drafted\n\n${TOPIC_MAIL_FOOTER}\n`)
     expect(first.inReplyTo).toBeUndefined()
     expect(ada(s.topic).mail).toEqual({
-      lastSentAt: iso(clock),
+      lastSentAt: iso(env.clock),
       lastSentMessageId: s.topic.messages[1]!.id,
       threadMessageId: '<walnut-1@example.org>',
     })
 
-    clock += 60_000
+    env.clock += 60_000
     s.add(AGENT, '@Ada one more', [ADA])
     await s.bridge.pass()
     const second = s.mail.sent[1]!
@@ -279,7 +136,7 @@ describe('subject, body and threading', () => {
     expect(second.text.startsWith('Planner: @Ada one more')).toBe(true)
     expect(ada(s.topic).mail?.threadMessageId).toBe('<walnut-2@example.org>')
 
-    clock += 60_000
+    env.clock += 60_000
     s.add('human', '@Ada last', [ADA])
     await s.bridge.pass()
     expect(s.mail.sent[2]!.inReplyTo).toBe('<walnut-2@example.org>')
@@ -303,7 +160,7 @@ describe('approval waits and send outcomes', () => {
     s.add('human', 'first')
     await s.bridge.pass()
     expect(s.mail.sent).toHaveLength(1)
-    clock += 60_000
+    env.clock += 60_000
     s.add(AGENT, '@Ada urgent', [ADA])
     await s.bridge.pass()
     await s.bridge.pass()
@@ -332,7 +189,7 @@ describe('approval waits and send outcomes', () => {
     await s.bridge.pass()
     s.mail.states.set('dr-1', { draftId: 'dr-1', state: 'discarded' })
     await s.bridge.pass()
-    clock += 60 * 60_000
+    env.clock += 60 * 60_000
     await s.bridge.pass()
     expect(s.mail.sent).toHaveLength(1)
     expect(ada(s.topic).mail?.lastSentMessageId).toBe(s.topic.messages[0]!.id)
@@ -341,10 +198,10 @@ describe('approval waits and send outcomes', () => {
   it('a send a restart cut off is never sent again', async () => {
     const s = setup()
     s.add('human', 'hello')
-    await fs.mkdir(path.dirname(stateFile), { recursive: true })
-    await fs.writeFile(stateFile, JSON.stringify({
+    await fs.mkdir(path.dirname(env.stateFile), { recursive: true })
+    await fs.writeFile(env.stateFile, JSON.stringify({
       version: 1, seen: [], sent: [], lines: [],
-      members: { [`${TOPIC}/${ADA}`]: { pending: { draftId: '', upto: s.topic.messages[0]!.id, at: iso(clock) } } },
+      members: { [`${TOPIC}/${ADA}`]: { pending: { draftId: '', upto: s.topic.messages[0]!.id, at: iso(env.clock) } } },
     }))
     const bridge = s.make()
     await bridge.pass()
@@ -376,7 +233,7 @@ describe('failures', () => {
     await s.bridge.pass()
     expect(s.mail.sent).toHaveLength(5)
     expect(ada(s.topic).mail?.threadMessageId).toBe('<walnut-5@example.org>')
-    const saved = JSON.parse(await fs.readFile(stateFile, 'utf-8'))
+    const saved = JSON.parse(await fs.readFile(env.stateFile, 'utf-8'))
     expect(saved.members[`${TOPIC}/${ADA}`]).toMatchObject({ failures: 0, failureLine: false })
   })
 
@@ -390,175 +247,6 @@ describe('failures', () => {
     await s.bridge.pass()
     expect(s.mail.sent).toHaveLength(2)
     expect(ada(s.topic).mail?.lastSentMessageId).toBe(s.topic.messages[0]!.id)
-  })
-})
-
-function reply(over: Partial<TopicMailIncoming> = {}): TopicMailIncoming {
-  return {
-    accountId: ACCOUNT,
-    messageId: 'msg-1',
-    rfcMessageId: '<reply-1@example.com>',
-    from: 'Ada Lovelace <ADA@example.COM>',
-    subject: 'Re: Launch plan [topic tp-0123456789ab]',
-    inReplyTo: '<walnut-1@example.org>',
-    references: [],
-    ...over,
-  }
-}
-
-/** One mail sent to Ada (<walnut-1@example.org>), so a reply has something to answer. */
-async function mailedAda(s: ReturnType<typeof setup>): Promise<void> {
-  s.add('human', 'Kickoff')
-  await s.bridge.pass()
-  expect(s.mail.sent[0]?.to.address).toBe('Ada@Example.com')
-}
-
-describe('inbound replies', () => {
-  it('posts a reply to the mail sent to that person, from that person, in the topic\'s account, quote stripped', async () => {
-    const s = setup()
-    await mailedAda(s)
-    s.mail.bodies.set('msg-1', 'I can take it.\n\nOn Fri, Nov 20, 2026 at 10:00 AM Walnut <walnut@example.org> wrote:\n> Owner: Kickoff\n')
-    await s.bridge.handleArrivals(ACCOUNT, async () => [reply()])
-    expect(s.posted).toEqual([{ topicId: TOPIC, memberId: ADA, text: 'I can take it.', via: 'mail' }])
-  })
-
-  it('finds the mail it answers by In-Reply-To or References, whatever the subject says', async () => {
-    const s = setup()
-    await mailedAda(s)
-    s.mail.bodies.set('msg-2', 'Answer by thread only')
-    s.mail.bodies.set('msg-3', 'Answer by references')
-    await s.bridge.handleArrivals(ACCOUNT, async () => [
-      reply({ messageId: 'msg-2', rfcMessageId: '<r2@example.com>', subject: 'Re: Launch plan', inReplyTo: '<walnut-1@example.org>' }),
-      reply({ messageId: 'msg-3', rfcMessageId: '<r3@example.com>', subject: 'Re: something', inReplyTo: undefined, references: ['walnut-1@example.org'] }),
-    ])
-    expect(s.posted.map((one) => one.text)).toEqual(['Answer by thread only', 'Answer by references'])
-  })
-
-  it('a From and a subject token alone are not enough: it must answer a mail sent to that same person, in the topic\'s account', async () => {
-    const s = setup()
-    // Bob active too, so a mail of his could pass on From alone.
-    s.topic.members.find((one) => one.id === BOB)!.status = 'active'
-    await mailedAda(s)
-    s.mail.bodies.set('msg-1', 'spoof')
-    await s.bridge.handleArrivals(ACCOUNT, async () => [
-      // The subject token, no References: anyone can write that.
-      reply({ messageId: 'msg-a', rfcMessageId: '<a@example.com>', inReplyTo: undefined }),
-      // Bob answering the mail Ada got (Bob was mailed his own: <walnut-2@example.org>).
-      reply({ messageId: 'msg-b', rfcMessageId: '<b@example.com>', from: 'bob@example.com' }),
-      // A stranger, answering Ada's mail.
-      reply({ messageId: 'msg-c', rfcMessageId: '<c@example.com>', from: 'mallory@example.org' }),
-      // Ada's address, but the reply came into another account.
-      reply({ messageId: 'msg-d', rfcMessageId: '<d@example.com>', accountId: 'fake:other' }),
-      // Answers a mail the bridge never sent.
-      reply({ messageId: 'msg-e', rfcMessageId: '<e@example.com>', inReplyTo: '<someone-else@example.org>' }),
-    ])
-    expect(s.posted).toHaveLength(0)
-    expect(s.mail.bodyReads).toHaveLength(0)
-  })
-
-  it('never posts an automatic mail (Auto-Submitted, Precedence, an older X-Autoreply), nor the bridge\'s own mail coming back', async () => {
-    const s = setup()
-    await mailedAda(s)
-    s.mail.bodies.set('msg-1', 'I am out of office.')
-    const autos: Array<TopicMailIncoming['bulkHeaders']> = [
-      { autoSubmitted: 'auto-replied' }, { autoSubmitted: 'auto-generated' },
-      { precedence: 'auto_reply' }, { precedence: 'bulk' }, { precedence: 'junk' }, { precedence: 'list' },
-    ]
-    autos.forEach((_, i) => s.mail.bodies.set(`auto-${i}`, 'I am out of office.'))
-    s.mail.bodies.set('own', 'Owner: Kickoff')
-    await s.bridge.handleArrivals(ACCOUNT, async () => [
-      ...autos.map((bulkHeaders, i) => reply({ messageId: `auto-${i}`, rfcMessageId: `<auto-${i}@example.com>`, bulkHeaders })),
-      // The bridge's own mail, delivered back into the inbox (a copy, a list echo).
-      reply({ messageId: 'own', rfcMessageId: '<walnut-1@example.org>' }),
-    ])
-    expect(s.posted).toHaveLength(0)
-    expect(s.mail.bodyReads).toEqual([])
-    // "Auto-Submitted: no" is a person's mail.
-    s.mail.bodies.set('msg-1', 'Here by hand.')
-    await s.bridge.handleArrivals(ACCOUNT, async () => [reply({ bulkHeaders: { autoSubmitted: 'no' } })])
-    expect(s.posted.map((one) => one.text)).toEqual(['Here by hand.'])
-  })
-
-  it('never posts the same mail twice, also after a restart', async () => {
-    const s = setup()
-    await mailedAda(s)
-    s.mail.bodies.set('msg-1', 'Once only')
-    await s.bridge.handleArrivals(ACCOUNT, async () => [reply()])
-    await s.bridge.handleArrivals(ACCOUNT, async () => [reply()])
-    // The same Message-ID under another cache id (the mail moved folders).
-    await s.bridge.handleArrivals(ACCOUNT, async () => [reply({ messageId: 'msg-1b' })])
-    await s.make().handleArrivals(ACCOUNT, async () => [reply()])
-    expect(s.posted).toHaveLength(1)
-  })
-
-  it('posts nothing for a reply that is only quote', async () => {
-    const s = setup()
-    await mailedAda(s)
-    s.mail.bodies.set('msg-1', '> Owner: Kickoff\n')
-    await s.bridge.handleArrivals(ACCOUNT, async () => [reply()])
-    expect(s.posted).toHaveLength(0)
-  })
-
-  it('takes arrivals from the mail plugin through the port while started', async () => {
-    const s = setup()
-    await mailedAda(s)
-    s.mail.bodies.set('msg-1', 'via the port')
-    expect(topicMailListening()).toBe(false)
-    s.bridge.start()
-    try {
-      expect(topicMailListening()).toBe(true)
-      topicMailArrivals(ACCOUNT, async () => [reply()])
-      await vi.waitFor(() => expect(s.posted).toHaveLength(1))
-    } finally {
-      s.bridge.stop()
-    }
-    expect(topicMailListening()).toBe(false)
-    expect(s.hasListener()).toBe(false)
-  })
-
-  it('a reply the bridge posts never reaches the mail router, nor is it announced; other mail goes on as before', async () => {
-    const s = setup()
-    await mailedAda(s)
-    s.mail.bodies.set('msg-1', 'Posted once, in the topic')
-    // The body read waits: the router must not wait for it, only for the claim.
-    let bodyGo!: () => void
-    const bodyGate = new Promise<void>((go) => { bodyGo = go })
-    const readBody = s.mail.transport.bodyText
-    s.mail.transport.bodyText = async (accountId, messageId) => { await bodyGate; return readBody(accountId, messageId) }
-    const routed: string[][] = []
-    const router = vi.fn<MailIncomingCapture>(async (_accountId, headlines) => {
-      routed.push(headlines.map((one) => one.messageId))
-      return async () => undefined
-    })
-    const rows = [
-      { message_id: 'msg-1', rfc_message_id: '<reply-1@example.com>', from_addr: 'ada@example.com', subject: 'Re: Launch plan',
-        payload: JSON.stringify({ from: { address: 'Ada@Example.com' }, inReplyTo: '<walnut-1@example.org>', references: [] }) },
-      { message_id: 'msg-n', rfc_message_id: '<news@example.com>', from_addr: 'news@example.org', subject: 'Weekly news', payload: '{}' },
-    ]
-    const tapped = tapTopicMailArrivals(router, { messagesByIds: async () => rows } as never)
-    const headlines: MailHeadline[] = [
-      { from: 'ada@example.com', subject: 'Re: Launch plan', messageId: 'msg-1' },
-      { from: 'news@example.org', subject: 'Weekly news', messageId: 'msg-n' },
-    ]
-    s.bridge.start()
-    try {
-      const finish = await tapped(ACCOUNT, headlines, { inbox: true })
-      expect(routed).toEqual([['msg-n']])
-      expect(s.posted).toHaveLength(0)
-      // The poll announces only what is not the topic's.
-      expect(await finish()).toEqual([headlines[1]])
-      bodyGo()
-      await vi.waitFor(() => expect(s.posted.map((one) => one.text)).toEqual(['Posted once, in the topic']))
-      // The same reply seen again (an unread refresh, a folder move) is still the topic's.
-      await tapped(ACCOUNT, [headlines[0]!], { inbox: true })
-      expect(routed).toEqual([['msg-n'], []])
-      expect(s.posted).toHaveLength(1)
-    } finally {
-      s.bridge.stop()
-    }
-    // With no bridge listening, the router gets everything, unchanged.
-    await tapped(ACCOUNT, headlines, { inbox: true })
-    expect(routed.at(-1)).toEqual(['msg-1', 'msg-n'])
   })
 })
 
@@ -582,7 +270,7 @@ describe('two outside bots never mail each other forever', () => {
         s.emit(s.add(me, `@${other === PIP ? 'Pip' : 'Ada'} ok`, [other]))
       }
       answered = s.mail.sent.length
-      clock += DEFAULT_EVERY_MINUTES * 60_000
+      env.clock += DEFAULT_EVERY_MINUTES * 60_000
     }
   }
 
@@ -615,7 +303,7 @@ describe('mail goes exactly as each message\'s plan says (L1)', () => {
     const s = setup()
     s.add('human', 'first')
     await s.bridge.pass()
-    clock += 60_000
+    env.clock += 60_000
     const toAll = s.add('human', 'To everyone, no mention')
     expect(toAll.mailNow).toEqual([ADA])
     const quiet = s.add(AGENT, 'A quiet agent line')
@@ -624,12 +312,12 @@ describe('mail goes exactly as each message\'s plan says (L1)', () => {
     await s.bridge.pass()
     expect(s.mail.sent).toHaveLength(2)
     expect(s.topic.messages.find((m) => m.id === toAll.id)?.mailed).toEqual([ADA])
-    clock += 60_000
+    env.clock += 60_000
     const later = s.add(AGENT, 'Another quiet line')
     await s.bridge.pass()
     expect(s.mail.sent).toHaveLength(2)
     expect(s.topic.messages.find((m) => m.id === later.id)?.mailed).toBeUndefined()
-    clock += DEFAULT_EVERY_MINUTES * 60_000
+    env.clock += DEFAULT_EVERY_MINUTES * 60_000
     await s.bridge.pass()
     expect(s.topic.messages.find((m) => m.id === later.id)?.mailed).toEqual([ADA])
   })
@@ -656,14 +344,14 @@ describe('the bookkeeping stays small (L5)', () => {
 
   it('a pass prunes a topic that is gone, and caps the inbound keys', async () => {
     const s = setup()
-    await fs.mkdir(path.dirname(stateFile), { recursive: true })
-    await fs.writeFile(stateFile, JSON.stringify({
+    await fs.mkdir(path.dirname(env.stateFile), { recursive: true })
+    await fs.writeFile(env.stateFile, JSON.stringify({
       version: 1, seen: Array.from({ length: 5200 }, (_, i) => `k${i}`), sent: [], lines: [lineKey('tp-ffffffffffff', 'no-account')],
       members: { 'tp-ffffffffffff/mb-00000001': { failures: 2 } },
     }))
     s.add('human', 'hello')
     await s.make().pass()
-    const saved = JSON.parse(await fs.readFile(stateFile, 'utf-8'))
+    const saved = JSON.parse(await fs.readFile(env.stateFile, 'utf-8'))
     expect(Object.keys(saved.members)).toEqual([`${TOPIC}/${ADA}`])
     expect(saved.lines).toEqual([])
     expect(saved.seen).toHaveLength(5000)
@@ -683,7 +371,7 @@ describe('flag off', () => {
     expect(s.mail.sent).toHaveLength(0)
     expect(s.lines).toHaveLength(0)
     expect(load).not.toHaveBeenCalled()
-    await expect(fs.stat(stateFile)).rejects.toThrow()
+    await expect(fs.stat(env.stateFile)).rejects.toThrow()
   })
 })
 
@@ -692,8 +380,8 @@ describe('a test or ephemeral server sends no mail (A2)', () => {
     const s = setup()
     const warned: string[] = []
     const bridge = createTopicMailBridge({
-      core: s.core, transport: () => s.mail.transport, state: createTopicMailState(stateFile),
-      isOn: async () => true, ownerName: async () => 'Owner', now: () => clock,
+      core: s.core, transport: () => s.mail.transport, state: createTopicMailState(env.stateFile),
+      isOn: async () => true, ownerName: async () => 'Owner', now: () => env.clock,
       heldReason: () => 'an ephemeral server',
       log: { info: () => undefined, warn: (m) => { warned.push(m) } },
     })

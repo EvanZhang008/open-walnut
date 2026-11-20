@@ -76,6 +76,8 @@ export interface MailRouterIntakeDeps {
 export type MailRouterIntake = MailIncomingCapture & {
   /** Enters the account's pending arrivals again; never throws. */
   retry(accountId: string): Promise<void>
+  /** Keeps arrivals another reader took first and gave back (the topics mail bridge) for the next retry; never throws. */
+  handBack(accountId: string, messageIds: readonly string[]): Promise<void>
 }
 
 async function rowsByIds(store: MailRouterIntakeDeps['store'], accountId: string, ids: readonly string[]): Promise<Map<string, MessageRow>> {
@@ -274,7 +276,10 @@ export function createMailRouterIntake(deps: MailRouterIntakeDeps): MailRouterIn
     }
   }
 
-  return Object.assign(capture, { retry })
+  const handBack = (accountId: string, messageIds: readonly string[]): Promise<void> =>
+    keep(accountId, [...new Set(messageIds)].map((id) => ({ id, seenAt: now() })))
+
+  return Object.assign(capture, { retry, handBack })
 }
 
 /** Whether a router of this mailbox watches more than the Inbox: only then do other folders' arrivals go to the intake. */

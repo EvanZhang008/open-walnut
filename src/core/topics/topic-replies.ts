@@ -8,7 +8,9 @@
  *
  * Which sessions wait on a reply is kept in memory (rebuilt from the topic files at start), so a
  * turn's end in any other session costs nothing. A topic turn older than PENDING_TURN_MAX_MS is
- * dropped. Started with the server on the primary (startTopics); idle while the experiment is off.
+ * dropped, and so is one whose session stopped or whose turn ended in an error (endTurnsOf, after
+ * its words are read); a dropped turn that was told more (`more`) sends its one follow-up wake.
+ * Started with the server on the primary (startTopics); idle while the experiment is off.
  */
 import { log } from '../../logging/index.js';
 import { withoutWalnutControl } from '../../lib/walnut-control-text.js';
@@ -20,6 +22,7 @@ import { holdNotice } from '../sessions/held-notices.js';
 import { buildWalnutMessage } from '../peers/walnut-message-tag.js';
 import { PENDING_TURN_MAX_MS, TOPIC_TEXT_MAX, walnutLine, type MemberId, type Topic } from './topics-model.js';
 import { TOPIC_NEWS_OUTCOME } from './topic-text.js';
+import { sessionTurnLive, TOPIC_TURN_SETTLE_MS } from './topic-turn-live.js';
 
 /** A transcript row as the projection gives it (thread-answers.ts AnswerRow). */
 export interface ReplyRow { role: string; text: string; timestamp: string; kind?: string; textWithoutContext?: string; opensTurn?: true }
@@ -200,7 +203,13 @@ export async function captureReplies(sessionId: string, nowMs = Date.now()): Pro
   return posted;
 }
 
-/** Drop topic turns older than PENDING_TURN_MAX_MS (a session that never ended its turn). */
+/** The one follow-up wake of a member whose dropped turn was told more meanwhile. */
+async function wakeAfterDrop(topicId: string, memberId: string): Promise<void> {
+  const [{ wakeAgain }, { userName }] = await Promise.all([import('./topic-delivery.js'), import('./topic-post.js')]);
+  await wakeAgain(topicId, memberId, await userName());
+}
+
+/** Drop topic turns older than PENDING_TURN_MAX_MS (a session that never ended its turn); one told more wakes again. */
 export async function expirePendingTurns(nowMs = Date.now()): Promise<number> {
   const store = await import('./topics-store.js');
   let dropped = 0;
@@ -210,9 +219,71 @@ export async function expirePendingTurns(nowMs = Date.now()): Promise<number> {
       await store.updateMember(t.id, m.id, { pendingTurn: undefined }).catch(() => {});
       waiting.get(m.pendingTurn.sessionId)?.delete(t.id);
       dropped++;
+      if (m.pendingTurn.more && m.status === 'active') {
+        await wakeAfterDrop(t.id, m.id).catch((err) => log.task.warn('topics: a follow-up wake after an expired turn failed', {
+          topicId: t.id, memberId: m.id, error: err instanceof Error ? err.message : String(err),
+        }));
+      }
     }
   }
   return dropped;
+}
+
+/**
+ * The session stopped, or its turn ended in an error: its topic turns bring no reply. What it said
+ * is posted first (captureReplies); then each turn still pending in it is dropped, unless the
+ * session runs a turn or holds a queued wake again, or the turn is under TOPIC_TURN_SETTLE_MS old
+ * (its wake may be what resumes the session). One that was told more sends its follow-up wake.
+ * Returns how many were dropped; never throws.
+ */
+export async function endTurnsOf(sessionId: string, nowMs = Date.now()): Promise<number> {
+  let dropped = 0;
+  try {
+    await captureReplies(sessionId, nowMs);
+    const noted = waiting.get(sessionId);
+    if (!noted?.size || await sessionTurnLive(sessionId)) return 0;
+    const store = await import('./topics-store.js');
+    for (const topicId of [...noted.keys()]) {
+      const { topic, out: ended } = await store.mutateTopic(topicId, (t) => {
+        const gone: Array<{ id: string; more: boolean }> = [];
+        for (const m of t.members) {
+          const turn = m.pendingTurn;
+          if (turn?.sessionId !== sessionId || nowMs - Date.parse(turn.since) <= TOPIC_TURN_SETTLE_MS) continue;
+          delete m.pendingTurn;
+          gone.push({ id: m.id, more: !!turn.more && m.status === 'active' });
+        }
+        return gone;
+      }, { touch: false });
+      dropped += ended.length;
+      if (!topic.members.some((m) => m.pendingTurn?.sessionId === sessionId)) noted.delete(topicId);
+      for (const one of ended) if (one.more) await wakeAfterDrop(topicId, one.id).catch(() => {});
+    }
+    if (!noted.size && waiting.get(sessionId) === noted) waiting.delete(sessionId);
+  } catch (err) {
+    log.task.warn('topics: the turns of a stopped session were not cleared', { sessionId, error: err instanceof Error ? err.message : String(err) });
+  }
+  return dropped;
+}
+
+/** One session's reply reads and turn drops, one after another (a result and a stop come close together). */
+const sessionChains = new Map<string, Promise<unknown>>();
+function inOrder(sessionId: string, run: () => Promise<unknown>): void {
+  const next = (sessionChains.get(sessionId) ?? Promise.resolve()).then(run).catch(() => {});
+  sessionChains.set(sessionId, next);
+  void next.finally(() => { if (sessionChains.get(sessionId) === next) sessionChains.delete(sessionId); });
+}
+
+/**
+ * Whether a bus event ends a session's turns without a result: a turn that ended in an error
+ * (`session:error`), or the session stopped (`session:status-changed` to stopped or error). A
+ * delivery failure whose message is still queued for a retry is neither: that wake still comes.
+ */
+export function endsTopicTurn(name: string, data: unknown): boolean {
+  const d = (data ?? {}) as { errorKind?: string; parked?: boolean; process_status?: string; status?: { process_status?: string } };
+  if (name === 'session:error') return !(d.errorKind === 'delivery_failed' && !d.parked);
+  if (name !== 'session:status-changed') return false;
+  const status = d.status?.process_status ?? d.process_status;
+  return status === 'stopped' || status === 'error';
 }
 
 /** How long after a turn's result its transcript is read (thread-answers.ts waits the same). */
@@ -227,23 +298,25 @@ export function startTopics(): { stop: () => void } {
     const { bus, EventNames } = await import('../event-bus.js');
     if (stopped) return;
     bus.subscribe('topic-replies', (event) => {
-      if (event.name !== EventNames.SESSION_RESULT) return;
       const d = event.data as { sessionId?: string; turnGen?: number } & ResultOutliving;
-      if (!d.sessionId || intermediateResult(d) || isQuietTurn(d.sessionId, d.turnGen)) return;
+      if (!d.sessionId) return;
+      const ending = event.name !== EventNames.SESSION_RESULT;
+      if (ending ? !endsTopicTurn(event.name, event.data) : intermediateResult(d)) return;
+      if (isQuietTurn(d.sessionId, d.turnGen)) return;
       if (indexed && !waiting.has(d.sessionId)) return;
       const sid = d.sessionId;
       const timer = setTimeout(() => {
         timers.delete(timer);
-        void (async () => {
+        inOrder(sid, async () => {
           const { topicsEnabled } = await import('./topics-store.js');
           if (!(await topicsEnabled())) return;
           if (!indexed) await indexPendingTurns().catch(() => {});
-          await captureReplies(sid);
-        })();
+          await (ending ? endTurnsOf(sid) : captureReplies(sid));
+        });
       }, RESULT_SETTLE_MS);
       timer.unref?.();
       timers.add(timer);
-    }, { global: true, interest: ['session:result'] });
+    }, { global: true, interest: ['session:result', 'session:error', 'session:status-changed'] });
   })();
   // The experiment on at boot: know which sessions owe a reply before the first turn ends.
   void import('./topics-store.js').then(async (m) => { if (!stopped && await m.topicsEnabled()) await indexPendingTurns(); }).catch(() => {});
@@ -270,6 +343,7 @@ export function startTopics(): { stop: () => void } {
 /** Test seam. */
 export function _resetTopicRepliesForTesting(): void {
   waiting.clear();
+  sessionChains.clear();
   indexed = false;
 }
 

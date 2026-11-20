@@ -311,7 +311,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   // Topic mail sends through the same drafts and approval ledger as every other mail. A replica sends nothing.
   const unregisterTopicTransport = walnut.replica
     ? () => undefined
-    : registerTopicMailTransport(createTopicMailTransport({ service, drafts, approvals, sends }))
+    : registerTopicMailTransport(createTopicMailTransport({ service, drafts, approvals, sends, handBack: captureIncoming.handBack }))
   relistDue = (accountId) => sync.markRelistDue(accountId)
   relistNow = (accountId) => sync.relistNow(accountId)
   setActiveMailSync(sync)

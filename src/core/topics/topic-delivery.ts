@@ -18,7 +18,9 @@
  * another wake into it (its answer to the first would be lost in the second's turn: 2026-11-20
  * acceptance, a member's real answer never posted). The turn is marked `more` instead (the wake
  * still counted against the round); when it ends, its reply is posted and ONE follow-up wake
- * carries what it has not read (wakeAgain, from topic-replies.ts).
+ * carries what it has not read (wakeAgain, from topic-replies.ts). In flight means live
+ * (topic-turn-live.ts): the member's delivery session still runs that turn or holds its wake. A
+ * turn that no longer runs, or one in another session, is stale: the new wake replaces it.
  */
 import { log } from '../../logging/index.js';
 import { PeerThrottle } from '../peers/peer-throttle.js';
@@ -26,11 +28,12 @@ import { holdFoldedNotice } from '../sessions/held-notices.js';
 import { ORG_MAIN_NODE, pickLead, pickMain } from '../org/org-tree.js';
 import type { Task } from '../types.js';
 import {
-  PENDING_TURN_MAX_MS, type MemberId, type Topic, type TopicMember, type TopicMessage, type TopicPendingTurn,
+  type MemberId, type Topic, type TopicMember, type TopicMessage, type TopicPendingTurn,
 } from './topics-model.js';
 import { messageLine, renderFoldedTopic, topicWakeText, unreadFor, type FoldPart } from './topic-text.js';
 import type { DeliveryPlan, DeliveryRefusal } from './topic-wake.js';
 import { notePendingTurn } from './topic-replies.js';
+import { sessionTurnLive, turnHoldsWake } from './topic-turn-live.js';
 
 /** The send source of a topic wake (task-wait-resume.ts: an interruption; hints/hint-send.ts: hinted). */
 export const TOPIC_SEND_SOURCE = 'topic';
@@ -184,16 +187,21 @@ export async function deliver(topic: Topic, message: TopicMessage, plan: Deliver
 
 /**
  * Claim member `id`'s topic turn in `sessionId` (one locked write), before its wake is sent. A turn
- * still in flight (not past PENDING_TURN_MAX_MS) is not replaced: it is marked `more` and the wake
- * is not sent (`queued`). Else the new turn is written; `before` is the expired one it replaced.
+ * still live (turnHoldsWake: this session, running it or holding its wake, under
+ * PENDING_TURN_MAX_MS) is not replaced: it is marked `more` and the wake is not sent (`queued`).
+ * Else the new turn is written; `before` is the stale one it replaced.
  */
 async function claimTurn(topicId: string, id: MemberId, sessionId: string, messageId: string, nowIso: string): Promise<{ queued: true } | { queued: false; before?: TopicPendingTurn }> {
-  const { mutateTopic } = await import('./topics-store.js');
+  const { mutateTopic, readTopic } = await import('./topics-store.js');
+  // The session is read outside the topic's lock (the session store and the queue). A turn written
+  // between this read and the lock is under TOPIC_TURN_SETTLE_MS old, so it holds the wake anyway.
+  const seen = (await readTopic(topicId).catch(() => null))?.members.find((x) => x.id === id)?.pendingTurn;
+  const live = seen?.sessionId === sessionId ? await sessionTurnLive(sessionId) : false;
   const { out } = await mutateTopic(topicId, (t): { queued: true } | { queued: false; before?: TopicPendingTurn } => {
     const member = t.members.find((x) => x.id === id);
     if (!member) return { queued: false };
     const cur = member.pendingTurn;
-    if (cur && Date.parse(nowIso) - Date.parse(cur.since) <= PENDING_TURN_MAX_MS) {
+    if (cur && turnHoldsWake(cur, sessionId, live, Date.parse(nowIso))) {
       cur.more = true;
       return { queued: true };
     }

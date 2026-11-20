@@ -28,7 +28,7 @@ import {
   type TopicMailIncoming, type TopicMailSendOutcome, type TopicMailTransport,
 } from './topic-mail-port.js'
 import { createTopicMailState, lineKey, memberKey, pruneState, type TopicMailState } from './topic-mail-state.js'
-import { claimTopicMail, postClaimedMail, type TopicMailClaim } from './topic-mail-inbound.js'
+import { claimTopicMail, postClaimedMails, releaseTopicMailClaims, type TopicMailClaim } from './topic-mail-inbound.js'
 import { canonicalMessageId, topicMailBody, topicMailSubject } from './topic-mail-text.js'
 import { authorName, MAIL_EVERY_MINUTES_DEFAULT, USER_FALLBACK_NAME, type Topic, type TopicMember, type TopicMessage } from './topics-model.js'
 
@@ -74,9 +74,11 @@ export interface TopicMailBridge {
   /**
    * Inbound: one poll's arrivals of one account. `onClaimed` gets the cache ids of the mail the
    * bridge takes (before any body is read), so the plugin keeps them from its router; it is always
-   * called once, with none when nothing was taken or the run failed.
+   * called once, with none when nothing was taken or the run failed. It answers false when the tap
+   * stopped waiting: the bridge then undoes those claims and posts none of them (the router has
+   * them). Resolves once this batch's claimed mail is posted.
    */
-  handleArrivals(accountId: string, load: () => Promise<TopicMailIncoming[]>, onClaimed?: (messageIds: string[]) => void): Promise<void>
+  handleArrivals(accountId: string, load: () => Promise<TopicMailIncoming[]>, onClaimed?: (messageIds: string[]) => boolean | void): Promise<void>
   /** The core's message listener: a mention of a person starts a pass now. */
   onMessage(topic: Topic, message: TopicMessage): void
   start(): void
@@ -97,7 +99,13 @@ export function createTopicMailBridge(deps: TopicMailBridgeDeps): TopicMailBridg
   let again = false
   /** Members whose send failed in the current run (a pass and its reruns): never retried in it. */
   const failedThisRun = new Set<string>()
-  let inbound: Promise<void> = Promise.resolve()
+  /**
+   * Inbound runs on two chains: claims (headers and state only; the tap waits on them) and
+   * deliveries (body reads, posts, the wakes a post starts). A slow delivery never delays the next
+   * poll's claims (review 2026-11-20: it made the tap time out and the mail go to both).
+   */
+  let claims: Promise<void> = Promise.resolve()
+  let deliveries: Promise<void> = Promise.resolve()
   let timer: ReturnType<typeof setInterval> | null = null
   let stops: Array<() => void> = []
 
@@ -349,34 +357,46 @@ export function createTopicMailBridge(deps: TopicMailBridgeDeps): TopicMailBridg
     return running
   }
 
-  const handleArrivals = (accountId: string, load: () => Promise<TopicMailIncoming[]>, onClaimed?: (messageIds: string[]) => void): Promise<void> => {
-    const claimedIds: string[] = []
+  const handleArrivals = (accountId: string, load: () => Promise<TopicMailIncoming[]>, onClaimed?: (messageIds: string[]) => boolean | void): Promise<void> => {
     let told = false
-    const tell = (): void => { if (!told) { told = true; onClaimed?.(claimedIds) } }
-    const run = inbound.then(async () => {
+    /** Tells the tap once; false when it no longer waited for this batch. */
+    const tell = (ids: string[]): boolean => {
+      if (told) return false
+      told = true
+      return onClaimed?.(ids) !== false
+    }
+    let posted: Promise<void> = Promise.resolve()
+    const run = claims.then(async () => {
       if (!(await deps.isOn())) return
       const t = deps.transport()
       if (!t) return
       const inbound = { readTopic: deps.core.readTopic, appendMemberMessage: deps.core.appendMemberMessage, state: deps.state, log }
       // Claims first, from headers and state only: the plugin's router waits on this, never on a body read.
       const taken: Array<{ mail: TopicMailIncoming; claim: TopicMailClaim }> = []
-      for (const raw of await load()) {
-        const mail = { ...raw, accountId: raw.accountId || accountId }
-        const claim = await claimTopicMail(mail, inbound)
-          .catch((error): TopicMailClaim => { log.warn('topic mail reply not read', { accountId, error: reason(error) }); return { claimed: false, why: 'error' } })
-        if (!claim.claimed) continue
-        claimedIds.push(mail.messageId)
-        taken.push({ mail, claim })
+      try {
+        for (const raw of await load()) {
+          const mail = { ...raw, accountId: raw.accountId || accountId }
+          const claim = await claimTopicMail(mail, inbound)
+            .catch((error): TopicMailClaim => { log.warn('topic mail reply not read', { accountId, error: reason(error) }); return { claimed: false, why: 'error' } })
+          if (claim.claimed) taken.push({ mail, claim })
+        }
+      } catch (error) {
+        // The router gets this batch (tell answers none): the claims made so far are undone.
+        await releaseTopicMailClaims(deps.state, taken.map((one) => one.claim))
+        throw error
       }
-      tell()
-      for (const { mail, claim } of taken) {
-        await postClaimedMail(mail, claim, t, inbound)
-          .catch((error) => log.warn('topic mail reply not posted', { accountId, error: reason(error) }))
+      if (!tell(taken.map((one) => one.mail.messageId))) {
+        await releaseTopicMailClaims(deps.state, taken.map((one) => one.claim))
+        if (taken.length) log.warn('topic mail claims came after the mail poll stopped waiting; the mail router has them', { accountId, count: taken.length })
+        return
       }
+      if (taken.length === 0) return
+      posted = deliveries = deliveries.then(() => postClaimedMails(taken, t, { ...inbound, postLine }))
+        .catch((error) => log.warn('topic mail replies not posted', { accountId, error: reason(error) }))
     }).catch((error) => log.warn('topic mail arrivals not read', { accountId, error: reason(error) }))
-      .finally(tell)
-    inbound = run
-    return run
+      .finally(() => { tell([]) })
+    claims = run
+    return run.then(() => posted)
   }
 
   /** A message whose plan mails an active person at once starts a pass now. */
@@ -393,7 +413,14 @@ export function createTopicMailBridge(deps: TopicMailBridgeDeps): TopicMailBridg
       if (timer) return
       timer = setInterval(() => { void pass() }, deps.intervalMs ?? TOPIC_MAIL_PASS_MS)
       timer.unref?.()
-      stops.push(subscribe((accountId, load) => new Promise<string[]>((claimed) => { void handleArrivals(accountId, load, claimed) })))
+      // The answer is given in the same tick its window is checked (topic-mail-port.ts: why that is exact).
+      stops.push(subscribe((accountId, load, window) => new Promise<string[]>((answer) => {
+        void handleArrivals(accountId, load, (ids) => {
+          if (window?.signal.aborted) return false
+          answer(ids)
+          return true
+        })
+      })))
       const off = deps.core.registerTopicMessageListener((topic, message) => onMessage(topic, message))
       if (typeof off === 'function') stops.push(off)
     },
