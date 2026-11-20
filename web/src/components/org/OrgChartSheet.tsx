@@ -28,6 +28,9 @@ import { log } from '@/utils/log';
 import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { OrgChartProject } from './OrgChartProject';
 import { OrgChartCeo, OrgChartVp, pressable } from './OrgChartVp';
+import { OrgLeaders } from './OrgLeaders';
+import { leaderGroups, sourcesOf } from './org-leaders';
+import { useExperimental } from '@/hooks/useExperimental';
 import { OrgEditableName } from './OrgEditableName';
 import { OrgNodeEditor, type OrgNodeEditorMode } from './OrgNodeEditor';
 import { useOrgSettings } from './useOrgSettings';
@@ -103,6 +106,7 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
   const cards = vpCards(rows);
   const { settings, save } = useOrgSettings();
   const byId = useMemo(() => new Map(tasks.map((t) => [t.id, t] as const)), [tasks]);
+  const leadersOn = useExperimental('org_leaders');
   const pick = (key: string) => { onClose(); onPick(key); };
   // A click outside the sheet: pressed and released on the backdrop itself (a press inside that
   // ends outside is a selection or a drag, not a click outside). What was open at the press
@@ -360,6 +364,7 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
                   onOpenChat={() => pick(c.key)}
                   line={nowLine(c.projects, byId)}
                   more={c.role === 'VP' ? nodeMore(c, `More for ${theVp(c.name)}`) : null}
+                  {...(leadersOn && c.role === 'VP' ? { leaders: <OrgLeaders groups={leaderGroups(sourcesOf(c.projects), byId)} surface="chart" vpKey={c.key} vpName={c.name} onLeave={onClose} /> } : {})}
                 >
                   <ul className="oc-projects" data-testid="org-chart-projects" aria-label={`Projects ${theVp(c.name)} leads`} hidden={c.projects.length === 0}>
                     {c.projects.map((p) => (

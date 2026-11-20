@@ -42,6 +42,7 @@ import { log } from '@/utils/log';
 import { beginSessionOpen } from '@/utils/session-open-latency';
 import { primeSessionOpenHistory } from '@/api/session-open-prime';
 import { OrgChartSheet, type ChartStart } from '@/components/org/OrgChartSheet';
+import { useOrgLeaders } from '@/components/org/useOrgLeaders';
 import { OrgChannelList, type ChannelMenuTarget } from '@/components/org/OrgChannelList';
 import { placeParams, readOrgPlace, writeOrgPlace } from '@/components/org/org-place';
 import type { ContextMenuItem } from '@/components/common/ContextMenu';
@@ -272,7 +273,11 @@ export function OrgPage() {
   // On a phone the list shows until a row is picked (and again when the picked one is gone).
   const picked = !!rowOf(channels, nodeParam);
   const showDetail = !phone || picked;
-  const visibleRows = useMemo(() => filterChannels(channels.rows, query), [channels.rows, query]);
+  // The chart's cards: the row menu moves projects with them, and the leaders under a row come from them.
+  const cards = useMemo(() => vpCards(channels.projects), [channels.projects]);
+  const leaders = useOrgLeaders(cards, tasks);
+  const filterRows = leaders.filter;
+  const visibleRows = useMemo(() => filterRows(channels.rows, query), [filterRows, channels.rows, query]);
   const moved = useMemo(() => movedProjects(channels, tasks), [channels, tasks]);
   const openParam = params.get('open') ?? pendingPlace?.open ?? null;
   const side = useMemo(() => parseSideTarget(openParam), [openParam]);
@@ -586,7 +591,6 @@ export function OrgPage() {
   // (the chart opens on the same question, so a move is confirmed in one place). The menu stays
   // short (2026-10-26, the user: "too messy"): a list of VPs or projects is one row that opens a
   // picker at the cursor, the way a folder menu's Project row does.
-  const cards = useMemo(() => vpCards(channels.projects), [channels.projects]);
   const picker = useCursorFlyout<OrgRowPick>();
   const rowMenu = useCallback((target: ChannelMenuTarget, point: CursorPoint, origin: HTMLElement | null): ContextMenuItem[] =>
     orgRowMenu({ target, cards, select, openChart, pick: (p) => picker.open(p, point, origin) }),
@@ -650,6 +654,7 @@ export function OrgPage() {
           openTaskIds={openTaskIds}
           onToggleLock={keptLock.toggle}
           onUnwatch={unwatch}
+          {...(leaders.leadersOf ? { leadersOf: leaders.leadersOf } : {})}
           now={now}
         />
       )}

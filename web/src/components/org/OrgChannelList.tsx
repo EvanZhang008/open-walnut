@@ -16,6 +16,8 @@
  * org-pins.ts) and the ones whose session panel is locked, one short line each, a little indented, an
  * eye or a lock (or both) saying why, then its own state's dot; a click opens it on Home, ×
  * stops watching it.
+ * Then, with the `org_leaders` experiment on, the leaders under a VP (OrgLeaders): one folded "N leaders"
+ * line; a watched leader keeps its row above as well.
  */
 import { useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { threadCountLabel } from '@open-walnut/thread-view';
@@ -37,6 +39,8 @@ import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { TAB_DOT, stateTab, type KeptTask } from './org-task-tabs';
 import { KeptWhy } from './OrgKeptWhy';
 import { MicInput } from '@/components/common/BoxMic';
+import { OrgLeaders } from './OrgLeaders';
+import type { LeaderGroup } from './org-leaders';
 
 const STATE_LABEL: Record<ChannelState, string> = {
   alert: 'Needs you', working: 'Working', quiet: 'Waiting', parked: 'Waiting',
@@ -231,10 +235,12 @@ interface Props {
   onUnwatch?: (taskId: string) => void;
   /** A kept row's lock: unlock its session panel, or lock it again (useKeptLockToggle). */
   onToggleLock?: (taskId: string) => void;
+  /** The leaders under a VP's row (org-leaders.ts), folded under it; absent while the experiment is off. */
+  leadersOf?: (row: ChannelRow) => readonly LeaderGroup[];
   now: number;
 }
 
-export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, total, vps, selectedKey, query, onQuery, onSelect, onOpenChart, onNewRouter, keptOf, openTaskIds, onUnwatch, onToggleLock, now }: Props) {
+export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, total, vps, selectedKey, query, onQuery, onSelect, onOpenChart, onNewRouter, keptOf, openTaskIds, onUnwatch, onToggleLock, leadersOf, now }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
   const orgName = useOrgSettings();
   // A right-click selects a word in WebKit before the menu opens: that selection is the
@@ -272,6 +278,13 @@ export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, 
     // Up and Down move between the chats; on a task kept under a row they are left alone.
     if ((e.target as HTMLElement).closest('.org-watched')) return;
     e.preventDefault();
+    // Among the leaders, Up and Down walk every option in the order drawn, so they lead out again.
+    if ((e.target as HTMLElement).closest('.org-leaders')) {
+      const all = [...(listRef.current?.querySelectorAll<HTMLElement>('[role="option"]') ?? [])];
+      const at = all.indexOf(e.target as HTMLElement);
+      all[at + (e.key === 'ArrowDown' ? 1 : -1)]?.focus();
+      return;
+    }
     const at = selectedKey ? keys.indexOf(selectedKey) : -1;
     const next = keys[Math.min(keys.length - 1, Math.max(0, at + (e.key === 'ArrowDown' ? 1 : -1)))];
     if (!next) return;
@@ -319,6 +332,7 @@ export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, 
           <div key={r.key} className="org-channel-wrap" role="presentation">
             <Row row={r} selected={selectedKey === r.key} now={now} onSelect={onSelect} onMenu={onMenu} />
             {keptUnder(r)}
+            {leadersOf && <OrgLeaders groups={leadersOf(r)} surface="list" vpKey={r.key} vpName={r.vpName ?? r.name} query={query} {...(openTaskIds ? { openTaskIds } : {})} />}
           </div>
         ))}
         {/* Routers sit below every VP (2026-11-10, the person), above the folded Archived. */}

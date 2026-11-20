@@ -84,6 +84,12 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'What a task needs from you (an approval, a question, a letter, a choice) also shows in a strip under its session\'s title bar. It is the same item as on the task\'s row: answer or snooze it in either and it goes from both.',
     default: false,
   },
+  {
+    id: 'org_leaders',
+    name: 'Leaders under each VP',
+    description: 'On the Org page and in the Org chart, a VP with tasks that lead their own team gets one line under it, "6 leaders", folded. Open it to see those leaders by project, and the leaders under each of them. Every fold stays as you left it.',
+    default: false,
+  },
 ] as const;
 
 export type ExperimentalFeatureId = typeof EXPERIMENTAL_FEATURES[number]['id'];

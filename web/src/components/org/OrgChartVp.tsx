@@ -84,11 +84,13 @@ interface VpProps {
   line: NowLine;
   /** Its ⋯ menu, for a VP (the Inbox has none). */
   more: ReactNode;
+  /** The leaders under it (OrgLeaders), between its head and its projects; absent while the experiment is off. */
+  leaders?: ReactNode;
   /** The project rows, and the drop hint. */
   children: ReactNode;
 }
 
-export function OrgChartVp({ card: c, line, className, zone, draggable, onDragStart, onDragEnd, onContextMenu, onOpenChat, more, children }: VpProps) {
+export function OrgChartVp({ card: c, line, className, zone, draggable, onDragStart, onDragEnd, onContextMenu, onOpenChat, more, leaders, children }: VpProps) {
   // Its own key is its home project's row key too: the card and that row open apart.
   const [open, toggle] = useChartOpen(`vp:${c.key}`);
   const detailId = domId('oc-detail', c.key);
@@ -129,6 +131,7 @@ export function OrgChartVp({ card: c, line, className, zone, draggable, onDragSt
           </span>
         </div>
       </div>
+      {leaders}
       {open && (
         <div className="oc-detail" id={detailId} data-testid="org-chart-vp-detail">
           {c.projects.length === 0 && <p className="oc-detail-line is-muted" data-testid="org-chart-vp-empty">{c.line}</p>}
