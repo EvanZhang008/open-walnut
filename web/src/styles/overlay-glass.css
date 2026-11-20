@@ -155,7 +155,9 @@ html .wn-glass {
 html:root {
   --glass-frost-bg: color-mix(in srgb, var(--bg-elevated, var(--card-bg)) 62%, transparent);
   --glass-frost-blur: blur(40px) saturate(1.9);
-  --glass-frost-border: rgba(255, 255, 255, 0.55);
+  /* Light: a dark hairline, as a macOS panel's edge; a white one vanished on a white page
+     (2026-11-20). The white top highlight stays. Dark keeps its own below. */
+  --glass-frost-border: rgba(0, 0, 0, 0.1);
   --glass-frost-highlight: rgba(255, 255, 255, 0.8);
   --glass-frost-shadow: 0 22px 60px rgba(0, 0, 0, 0.2), 0 2px 10px rgba(0, 0, 0, 0.1);
 }

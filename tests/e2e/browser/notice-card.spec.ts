@@ -211,6 +211,7 @@ test('in the light theme the card reads the same', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' })
   await isolateUiPrefs(page)
   await captureWs(page)
+  await stubQuick(page)
   await page.route('**/api/quiet*', (r) => r.fulfill({ json: { quiet: false } }))
   await page.goto('/')
   await expect(page.locator('.main-page')).toBeVisible({ timeout: 90_000 })
@@ -221,6 +222,15 @@ test('in the light theme the card reads the same', async ({ page }) => {
   await page.waitForTimeout(400)
   await shot(page, '6-light')
   if (!BEFORE) {
-    for (const card of await frames(page)) expect(new Set(card.sides)).toEqual(new Set(['1px']))
+    for (const card of await frames(page)) {
+      expect(new Set(card.sides)).toEqual(new Set(['1px']))
+      // A dark hairline in the light theme: a white one vanished on a white page (2026-11-20).
+      expect(card.colours[0], `${card.cls}: an edge that shows on white`).toMatch(/^rgba\(0, 0, 0, 0\.\d+\)$/)
+    }
   }
+  // The quick bar takes the same edge in the light theme.
+  await page.keyboard.press('Control+Alt+Meta+Space')
+  await expect(page.getByRole('textbox', { name: 'Message' })).toBeVisible({ timeout: 15_000 })
+  await page.waitForTimeout(400)
+  await shot(page, '7-light-bar')
 })
