@@ -14,3 +14,12 @@ export const useInFoldBody = () => useContext(InFoldBody);
  *  ended (cut, interrupted) stops breathing with the run (ToolRunShell `flat`). */
 export const RunLive = createContext(true);
 export const useRunLive = () => useContext(RunLive);
+
+/** Whether a row renders inside a list of steps the reader opened (an opened fold's body,
+ *  an opened run's body). Only there a "Thinking" row says the thought's first line; on
+ *  its own in the timeline it is the one quiet word, however many thoughts it holds
+ *  (2026-11-20, the user, of one live thought drawn with its first line between two of
+ *  his messages: "even if only one thining shoud also collapes"). Off by default, so a
+ *  new place that draws the row starts quiet. */
+export const InStepList = createContext(false);
+export const useInStepList = () => useContext(InStepList);

@@ -9,7 +9,7 @@
  * history is fetched again, after a reconnect.
  */
 import { createContext, useCallback, useContext, useSyncExternalStore, type ReactNode } from 'react';
-import { InFoldBody } from './fold-body-context';
+import { InFoldBody, InStepList } from './fold-body-context';
 import { StepIcon } from './StepIcon';
 import '@/styles/turn-folds.css';
 import { foldFailureWords, type FoldFailures } from './fold-rows';
@@ -104,7 +104,7 @@ export function ProcessFoldRow({ foldId, phrase, lead, children, foldKey, failed
         {failedWords && <span className="tool-run-fail">{failedWords}</span>}
         {running && <span className="tool-run-live-dot" />}
       </button>
-      {open && <div className="process-fold-body"><InFoldBody.Provider value>{children}</InFoldBody.Provider></div>}
+      {open && <div className="process-fold-body"><InFoldBody.Provider value><InStepList.Provider value>{children}</InStepList.Provider></InFoldBody.Provider></div>}
     </div>
   );
 }

@@ -10,6 +10,13 @@
  * Each thought's words must be on screen at most once, and no line but the thinking
  * row itself may say "Thinking".
  *
+ * A thinking row on its own in the timeline is the word alone: its first line shows
+ * only inside a list of steps the reader opened (a fold's body, a run's body), in
+ * every one of those ways (2026-11-20, the user, of one live thought drawn with its
+ * first line between two of his messages: "even if only one thining shoud also
+ * collapes"). `barePreviews` is that guard: it reads the screen, so a new way of
+ * drawing a thought that shows its words unopened fails here too.
+ *
  * History and the WS are mocked (mock-session-harness.ts).
  */
 import { test, expect, type Locator } from '@playwright/test';
@@ -40,7 +47,14 @@ async function thinkingOnScreen(hist: Locator, markers: string[]) {
       .filter((el) => visible(el) && (el.textContent ?? '').trim() === 'Thinking' && !el.closest('.tool-run-row--step'))
       .map((el) => (el as HTMLElement).outerHTML.slice(0, 120));
     const rows = Array.from(h.querySelectorAll('.tool-run-row--step')).filter(visible).length;
-    return { shown, otherLines, rows };
+    // A thinking row that says its thought's words without having been opened, outside
+    // any list of steps the reader opened.
+    const barePreviews = Array.from(h.querySelectorAll('.tool-run-row--step'))
+      .filter((row) => visible(row) && (row.querySelector(':scope > .tool-run-toggle > .tool-run-label')?.textContent ?? '').trim() === 'Thinking'
+        && !row.closest('.process-fold-body, .tool-run-body'))
+      .map((row) => (row.querySelector(':scope > .tool-run-toggle')?.textContent ?? '').trim())
+      .filter((line) => line !== 'Thinking');
+    return { shown, otherLines, rows, barePreviews };
   }, markers);
 }
 
@@ -48,6 +62,7 @@ async function expectOnce(hist: Locator, markers: string[], where: string) {
   const r = await thinkingOnScreen(hist, markers);
   for (const m of markers) expect(r.shown[m], `${where}: "${m}" is drawn ${r.shown[m]} times`).toBeLessThanOrEqual(1);
   expect(r.otherLines, `${where}: a line besides the thinking row says "Thinking"`).toEqual([]);
+  expect(r.barePreviews, `${where}: a thinking row on its own shows its thought's words`).toEqual([]);
   return r;
 }
 
@@ -115,3 +130,31 @@ for (const withId of [true, false]) {
     await bothWays(hist, ['TH_LIVE_ALONE', 'TH_LIVE_AFTER'], 'live, reasoning around a call');
   });
 }
+
+test('one live thought on its own is the word alone; opened it shows the thought, shut it hides it again', async ({ page }) => {
+  await mockSession(page, LIVE_BASE, 'running');
+  const hist = await open(page);
+  await waitForWs(page);
+  await expect(hist).toContainText('TH_ANSWER0', { timeout: 60000 });
+  // An answer so far (a table: words a reader reads, never narration), then one thought
+  // after it: a stretch of reasoning alone, with no step beside it to fold with.
+  await injectEvent(page, 'session:text-delta', { sessionId: SID, delta: 'TH_SOFAR here is the table\n\n| a | b |\n|---|---|\n| 1 | 2 |\n', msgId: 'th-s1' });
+  await injectEvent(page, 'session:thinking-delta', { sessionId: SID, delta: 'TH_SOLO_FIRST tally the closed ones\nTH_SOLO_REST then check each cause', msgId: 'th-s2' });
+  await expect(hist).toContainText('TH_SOFAR', { timeout: 30000 });
+  const row = hist.locator('.tool-run-row--step', { has: page.locator(':scope > .tool-run-toggle > .tool-run-label', { hasText: /^Thinking$/ }) })
+    .filter({ hasNot: page.locator('.process-fold-body') });
+  await expect(row).toHaveCount(1);
+  // Its own row in the timeline, in no fold and no run.
+  expect(await row.evaluate((el) => !!el.closest('.process-fold-body, .tool-run-body'))).toBe(false);
+  await expect(row.locator(':scope > .tool-run-toggle .tool-run-detail')).toHaveCount(0);
+  await expect(hist).not.toContainText('TH_SOLO_FIRST');
+  await expectOnce(hist, ['TH_SOLO_FIRST', 'TH_SOLO_REST'], 'one live thought, shut');
+
+  await row.locator(':scope > .tool-run-toggle').click();
+  await expect(row.locator('.chat-thinking-content')).toContainText('TH_SOLO_REST');
+  await expectOnce(hist, ['TH_SOLO_FIRST', 'TH_SOLO_REST'], 'one live thought, opened');
+
+  await row.locator(':scope > .tool-run-toggle').click();
+  await expect(hist).not.toContainText('TH_SOLO_FIRST');
+  await expectOnce(hist, ['TH_SOLO_FIRST', 'TH_SOLO_REST'], 'one live thought, shut again');
+});

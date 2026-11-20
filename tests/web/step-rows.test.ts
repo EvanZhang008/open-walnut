@@ -38,6 +38,7 @@ const { toolStepIcon, toolDisplayName } = await import('@/components/sessions/St
 const { toolTarget } = await import('@/components/sessions/step-target')
 const { ProcessFoldRow } = await import('@/components/sessions/TurnFolds')
 const { GenericToolCall, SessionThinking } = await import('@/components/sessions/SessionMessage')
+const { InStepList } = await import('@/components/sessions/fold-body-context')
 const { SessionOutboundCards } = await import('@/components/sessions/SessionOutboundCard')
 const { detectOutboundCalls } = await import('@/components/sessions/session-outbound')
 
@@ -135,9 +136,16 @@ describe('every kind of step is one row with its own line icon', () => {
     const bash = html(createElement(GenericToolCall, { tool: { name: 'Bash', toolUseId: 'b1', input: { command: 'ls -la' }, result: 'ok' } as never, status: 'done' }))
     expect(firstIcon(bash)).toBe('terminal')
     expect(bash).toContain('chat-tool-block-command')
-    const thought = html(createElement(SessionThinking, { text: '**Checking** the fold\nsecond line' }))
+    // Inside a list of steps the reader opened, the thought's first line; on its own, the
+    // word alone (2026-11-20, the user: "even if only one thining shoud also collapes").
+    const thought = html(createElement(InStepList.Provider, { value: true }, createElement(SessionThinking, { text: '**Checking** the fold\nsecond line' })))
     expect(firstIcon(thought)).toBe('thought')
     expect(thought).toContain('Checking the fold')
+    const alone = html(createElement(SessionThinking, { text: '**Checking** the fold\nsecond line' }))
+    expect(firstIcon(alone)).toBe('thought')
+    expect(alone).toContain('>Thinking<')
+    expect(alone).not.toContain('Checking')
+    expect(alone).not.toContain('tool-run-detail')
     const tool = { name: 'Bash', toolUseId: 's1', input: { command: `walnut tools call task_send '{"to":"mw1","title":"Ready","text":"All done."}'` }, result: '{"ok":true}' }
     const calls = detectOutboundCalls(tool as never, tool.result)
     expect(calls.length).toBe(1)

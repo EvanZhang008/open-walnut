@@ -29,7 +29,7 @@ import { SuggestSegments, useSuggestSegments } from '@/components/chat/SuggestSe
 import { RichMarkdown } from '@/components/chat/RichBlocks';
 import { disclosureIds, useRowDisclosure } from './row-disclosure';
 import { StepIcon, toolDisplayName, toolStepIcon } from './StepIcon';
-import { RunLive, useInFoldBody, useRunLive } from './fold-body-context';
+import { InStepList, RunLive, useInFoldBody, useInStepList, useRunLive } from './fold-body-context';
 
 /** The most calls a run lays out as rows of an opened fold (ToolRunShell `flat`). */
 const FLAT_RUN_MAX = 40;
@@ -284,12 +284,15 @@ function formatTime(ts: string): string {
  *  runs (ToolRunShell). `live` appends the pulsing dot while tokens stream. */
 export function SessionThinking({ text, live, disclosureId }: { text: string; live?: boolean; disclosureId?: string }) {
   const [open, setOpen] = useRowDisclosure(disclosureId, false);
+  const inStepList = useInStepList();
   // Signature-only thinking has no displayable text — render nothing rather
   // than an expandable-but-blank row.
   if (!text.trim()) return null;
-  // A step row like every other (step-rows.css): the icon, the word, and the thought's
-  // first line, muted, so a reader scanning an opened turn reads what it was thinking.
-  const firstLine = open ? '' : thinkingFirstLine(text);
+  // A step row like every other (step-rows.css): the icon, the word, and, inside a list
+  // of steps the reader opened, the thought's first line, muted, so a reader scanning an
+  // opened turn reads what it was thinking. On its own in the timeline it is the word
+  // alone (fold-body-context.ts InStepList): the thought is one click away.
+  const firstLine = open || !inStepList ? '' : thinkingFirstLine(text);
   return (
     <div className="tool-run-row tool-run-row--step">
       <button className="tool-run-toggle" aria-expanded={open} onClick={() => setOpen((p) => !p)}>
@@ -507,7 +510,7 @@ export function ToolRunShell({ phrase, calls, failCount, running, count, disclos
           </>
         ) : line}
       </button>
-      {open && <div className="tool-run-body"><SoleCallContext.Provider value={calls?.length === 1}>{children}</SoleCallContext.Provider></div>}
+      {open && <div className="tool-run-body"><InStepList.Provider value><SoleCallContext.Provider value={calls?.length === 1}>{children}</SoleCallContext.Provider></InStepList.Provider></div>}
     </div>
   );
 }
