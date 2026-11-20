@@ -424,12 +424,22 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     const controller = sync.current;
     if (!controller || controller.source.kind !== 'sketch' || !controller.snapshot().unsaved) return true;
     // Already in Notes (a conflict waiting for a choice included): its unsaved edits stay with that
-    // file and come back when it opens, so New drawing or another file may take its place.
-    if (controller.snapshot().path) { controller.flushDraft(); return true; }
+    // file and come back when it opens, so New drawing or another file may take its place. Not when
+    // the file is gone or refused the save (nothing would open those edits again), nor when this
+    // browser could not keep them.
+    const shown = controller.snapshot();
+    if (shown.path && shown.state !== 'missing' && shown.state !== 'error') {
+      controller.flushDraft();
+      if (controller.snapshot().kept) return true;
+      setNotice('This browser could not keep this drawing\'s unsaved edits, so it stays open here. Export it or save it as a copy first.');
+      return false;
+    }
     await controller.save();
     if (!mounted.current || sync.current !== controller) return false;
     if (!controller.snapshot().unsaved) return true;
-    setNotice('This drawing is not in Notes yet, so it stays open here. Open another one once it is saved.');
+    setNotice(controller.snapshot().path
+      ? 'This drawing could not be saved, so it stays open here. Save it as a copy first, then open another one.'
+      : 'This drawing is not in Notes yet, so it stays open here. Open another one once it is saved.');
     return false;
   };
 

@@ -171,3 +171,16 @@ describe("where a composer's Draw saves", () => {
     expect(composerDrawing(undefined, { fileTarget: { sessionId: 's9' } }).draftId).toBe('s9');
   });
 });
+
+// Review 2026-11-20: a drawing gives its place only while its edits can come back.
+describe('leaving a drawing for New drawing or another file', () => {
+  it('lets a drawing in Notes go only when its file is there and this browser kept its edits', async () => {
+    const fs = await import('node:fs');
+    const src = fs.readFileSync(new URL('../../web/src/components/drawing/DrawingWorkspace.tsx', import.meta.url), 'utf8');
+    const leave = src.slice(src.indexOf('const canLeave = async'), src.indexOf('const openFile = async'));
+    expect(leave).toMatch(/if \(shown\.path && shown\.state !== 'missing' && shown\.state !== 'error'\) \{\s*controller\.flushDraft\(\);\s*if \(controller\.snapshot\(\)\.kept\) return true;/);
+    // Its refusal answers the click over a conflict bar too.
+    expect(src).toMatch(/\{\(notice \|\| \(snap\?\.error && !conflict/);
+  });
+});
+

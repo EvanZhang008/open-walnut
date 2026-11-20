@@ -22,6 +22,8 @@ const settling = new Map<string, Promise<void>>();
  */
 const movedAway = new Map<string, { to: string; at: number }>();
 const MOVE_MEMORY_MS = 60_000;
+/** A drawing whose unsaved edits this browser already keeps once more (releaseSketchToFile). */
+const KEPT_TWICE = 'This drawing has two sets of unsaved edits in this browser, so it stays open here. Let it save, or save it as a copy, then start another.';
 
 export abstract class DrawingSyncBase {
   protected snap: DrawingSnapshot;
@@ -118,13 +120,13 @@ export abstract class DrawingSyncBase {
       // Read only now, like `open`: the controller left behind has written its last draft.
       const left = readDraftOf(store, this.sketchKey, parseSketchDraft).draft;
       // A drawing already in Notes hands its unsaved edits to its file; only one not there yet stays.
-      if (left?.scene && sceneHasContent(left.scene) && !releaseSketchToFile(store, left)) refused = 'The last new drawing is not in Notes yet, so it stays open here. Start another once it is saved.';
+      if (left?.scene && sceneHasContent(left.scene) && !releaseSketchToFile(store, left)) refused = left.path ? KEPT_TWICE : 'The last new drawing is not in Notes yet, so it stays open here. Start another once it is saved.';
       else store.write(this.sketchKey, '');
     } else if (this.source.kind === 'sketch' && this.source.open) {
       // Written only now: a sketch left behind has finished writing its own draft. One that is
       // still not in Notes stays: nothing opens over it.
       const left = readDraftOf(store, this.sketchKey, parseSketchDraft).draft;
-      if (left?.scene && !releaseSketchToFile(store, left)) refused = 'This drawing is not in Notes yet, so it stays open here. Open the other one once it is saved.';
+      if (left?.scene && !releaseSketchToFile(store, left)) refused = left.path ? KEPT_TWICE : 'This drawing is not in Notes yet, so it stays open here. Open the other one once it is saved.';
       else store.write(this.sketchKey, JSON.stringify({ v: 1, path: this.source.open }));
     }
     const { draft, unreadable } = readDraftOf(store, this.sketchKey, parseSketchDraft);
