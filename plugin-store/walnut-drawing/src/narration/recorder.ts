@@ -47,6 +47,15 @@ const ANCHOR_KEEP_MS = 60_000
 /** A walkthrough longer than this stops by itself. */
 export const MAX_TAKE_MS = 2 * 60 * 60 * 1000
 
+/** 00:39, 12:05, 1:02:03: always two digits of minutes, as the design shows. */
+export function elapsed(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  const h = Math.floor(s / 3600)
+  const m = String(Math.floor((s % 3600) / 60)).padStart(2, '0')
+  const sec = String(s % 60).padStart(2, '0')
+  return h ? `${h}:${m}:${sec}` : `${m}:${sec}`
+}
+
 function micError(err: unknown): string {
   const name = (err as { name?: string })?.name
   if (name === 'NotAllowedError' || name === 'SecurityError') return 'Microphone blocked: allow it for Walnut, then press Record again'

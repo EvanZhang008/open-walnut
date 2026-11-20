@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { downsample, encodeWav, MAX_MS, SAMPLE_RATE, Segmenter, type Sentence } from '../../plugin-store/walnut-drawing/src/narration/segmenter'
 import { Take, type TakeData } from '../../plugin-store/walnut-drawing/src/narration/take'
-import { NarrationRecorder, type RecorderDeps } from '../../plugin-store/walnut-drawing/src/narration/recorder'
+import { elapsed, NarrationRecorder, type RecorderDeps } from '../../plugin-store/walnut-drawing/src/narration/recorder'
 
 /** `ms` of a 220 Hz tone (speech-loud) or of near silence. */
 function sound(ms: number, loud: boolean): Float32Array {
@@ -64,6 +64,12 @@ describe('Segmenter', () => {
     expect(view.getUint32(40, true)).toBe(6)
     expect(view.getInt16(46, true)).toBe(32767)
     expect(view.getInt16(48, true)).toBe(-32768)
+  })
+})
+
+describe('the timer on the pill', () => {
+  it('always shows two digits of minutes, as the design does, and hours only past one', () => {
+    expect([0, 39_000, 725_000, 3_723_000].map(elapsed)).toEqual(['00:00', '00:39', '12:05', '1:02:03'])
   })
 })
 

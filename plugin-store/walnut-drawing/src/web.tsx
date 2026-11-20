@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AppProps, DrawingActivity, DrawingViewProps, SessionAppProps, WalnutWebApi } from '@open-walnut/plugin-api/web'
-import { NARRATION_CSS, NarrationControl, useRecorderState } from './narration/NarrationControl'
+import { NARRATION_CSS, NarrationControl, NarrationStrip, useRecorderState } from './narration/NarrationControl'
 import { NarrationRecorder, openBrowserMic } from './narration/recorder'
 import type { TakeData } from './narration/take'
 
@@ -94,7 +94,7 @@ export function activate(walnut: WalnutWebApi): void {
     }, [props.taskId])
     if (!DrawingView) return <div role="status">This Walnut version has no Drawing editor. Update Walnut to open this app.</div>
     const narration = narrationOn
-      ? { onDocumentPathChange, barExtra: <NarrationControl recorder={recorder} path={shownPath} />, ...(recording ? { onActivity } : {}) }
+      ? { onDocumentPathChange, barExtra: <NarrationControl recorder={recorder} path={shownPath} />, canvasExtra: <NarrationStrip recorder={recorder} />, ...(recording ? { onActivity } : {}) }
       : {}
     return <DrawingView {...props} onState={onState} {...narration} />
   }

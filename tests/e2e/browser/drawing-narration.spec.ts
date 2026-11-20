@@ -103,7 +103,7 @@ test('a walkthrough: Record, point at a table while saying it is the core table,
 
   // Off: the editor is as it was, no Record button anywhere.
   await openDrawing(page, 'Shop design', doc.path)
-  await expect(workspace(page).locator('.walnut-narration')).toHaveCount(0)
+  await expect(workspace(page).locator('.walnut-narration-pill')).toHaveCount(0)
   await video.caption('Experiment off: the Drawing app is unchanged, no Record button')
   await video.hold(2_000)
   await shot(page, '01-switch-off')
@@ -155,7 +155,7 @@ test('a walkthrough: Record, point at a table while saying it is the core table,
     await video.caption('Stop: the walkthrough is saved beside the drawing')
   }
   await stop.click()
-  await expect(workspace(page).getByText('Walkthrough saved')).toBeVisible({ timeout: 30_000 })
+  await expect(workspace(page).locator('.walnut-narration-pill')).toHaveAttribute('data-phase', 'saved', { timeout: 30_000 })
   await video.hold(1_500)
   await shot(page, '05-saved')
   await expect(record).toBeVisible({ timeout: 10_000 })

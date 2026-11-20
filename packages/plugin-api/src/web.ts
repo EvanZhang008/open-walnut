@@ -252,6 +252,12 @@ export interface DrawingViewProps {
   onActivity?(activity: DrawingActivity): void
   /** A control of yours in the drawing's top bar, before Walnut's own buttons (keep it small). */
   barExtra?: ReactNode
+  /**
+   * Something of yours over the canvas, such as a caption strip: the canvas box is
+   * `position: relative`, so place it with `position: absolute` and keep it off the editor's own
+   * toolbars (about 72 px at the top and at the bottom). It shows only while a drawing is open.
+   */
+  canvasExtra?: ReactNode
 }
 
 /**

@@ -72,6 +72,8 @@ export interface DrawingWorkspaceProps {
   onActivity?(activity: Activity): void;
   /** A host's or plugin's own control in the top bar, before the drawing's buttons. */
   barExtra?: ReactNode;
+  /** A host's or plugin's own overlay on the canvas (the canvas box is `position: relative`). */
+  canvasExtra?: ReactNode;
   /** Tests pass their own server. */
   api?: DrawingApi;
 }
@@ -195,7 +197,7 @@ const STATUS_TEXT: Record<DrawingSnapshot['state'], string> = {
 };
 
 export function DrawingWorkspace(props: DrawingWorkspaceProps) {
-  const { taskId, sessionId, documentPath, draftId, preview, onClose, onAttach, canAttach = true, onState, onDocumentPathChange, onActivity, barExtra } = props;
+  const { taskId, sessionId, documentPath, draftId, preview, onClose, onAttach, canAttach = true, onState, onDocumentPathChange, onActivity, barExtra, canvasExtra } = props;
   const api = props.api ?? drawingApi;
   const scope = useMemo(() => ({ ...(taskId ? { taskId } : {}), ...(sessionId ? { sessionId } : {}) }), [taskId, sessionId]);
   const scopeId = taskId ? `task:${taskId}` : sessionId ? `session:${sessionId}` : 'inbox';
@@ -794,6 +796,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                     <button type="button" className="drawing-icon-button" aria-label="Dismiss" onClick={() => setDiagram(null)}><Icon d={ICON.close} /></button></>}
             </div>
           )}
+          {/* Last, so a plugin's overlay can make room for the notes above (CSS `~`). */}
+          {source && canvasExtra}
         </div>
         <footer className="drawing-workspace-credit">
           <a href="https://github.com/excalidraw/excalidraw" target="_blank" rel="noreferrer noopener">Powered by Excalidraw</a>

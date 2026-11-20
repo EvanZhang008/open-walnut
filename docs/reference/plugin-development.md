@@ -1407,7 +1407,7 @@ export function activate(walnut: WalnutWebApi) {
 
 ### Drawing activity
 
-`DrawingView` takes two optional props for a feature built beside the canvas: `onActivity(activity)` reports the person's own steps as they happen (`add`, `edit`, `delete`, `select` with the whole selection, `point` with the element now under the pointer), each with element ids, their words and `at`; a scene that arrives from outside (an agent's edit) is never reported. `barExtra` puts a small control of yours in the drawing's top bar. Leave both out and the editor is unchanged.
+`DrawingView` takes three optional props for a feature built beside the canvas: `onActivity(activity)` reports the person's own steps as they happen (`add`, `edit`, `delete`, `select` with the whole selection, `point` with the element now under the pointer), each with element ids, their words and `at`; a scene that arrives from outside (an agent's edit) is never reported. `barExtra` puts a small control of yours in the drawing's top bar: keep it one size in every state, so nothing beside it moves. `canvasExtra` lays something of yours over the canvas (the canvas box is `position: relative`; stay clear of the editor's top and bottom toolbars), the place for words that change as you go, such as a caption. Leave them out and the editor is unchanged.
 
 ## Optional Webview
 

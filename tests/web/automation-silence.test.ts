@@ -269,6 +269,7 @@ describe('the WebKit voice specs, the one place a test browser may make an Audio
   // claims the exemption fails here until it is listed, with why. The mark is written once,
   // as VOICE_TEST_UA_MARK in webkit-recorder.ts, and a spec claims it by using that (or VOICE_TEST_USER_AGENT, built from it).
   const VOICE_TEST_SPECS: Record<string, string> = {
+    'tests/e2e/browser/drawing-narration-layout.webkit.spec.ts': 'the walkthrough pill keeps its place in WebKit, from a synthetic mic',
     'tests/e2e/browser/mic-stall.webkit.spec.ts': 'the mic warning in WebKit, from a synthetic mic',
     'tests/e2e/browser/send-waits-for-dictation.webkit.spec.ts': 'send waits for dictation, from a synthetic mic',
     'tests/e2e/browser/session-voice-selection.webkit.spec.ts': 'the quote pill hold while dictating, from a synthetic mic',

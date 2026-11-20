@@ -63,3 +63,39 @@ export function fakeMicArgsFor(wav: Buffer, name = 'mic.wav'): string[] {
 }
 
 export const FAKE_MIC_ARGS: string[] = fakeMicArgsFor(toneWav(), 'tone.wav')
+
+/**
+ * A microphone for any engine (WebKit has no fake capture flag): an init script that answers
+ * getUserMedia with a stream made in the page, a tone that speaks for `onMs` and pauses for
+ * `offMs`, again and again, starting after `leadMs`, over a faint hiss (a real mic is never pure
+ * zero). It goes to a MediaStream destination only: nothing reaches the speakers.
+ */
+export function scriptedMicInit({ leadMs = 600, onMs = 1_800, offMs = 2_600 } = {}): string {
+  return `(() => {
+    const fake = async () => {
+      const Ctx = window.AudioContext || window.webkitAudioContext
+      const ctx = new Ctx()
+      if (ctx.state === 'suspended') await ctx.resume().catch(() => {})
+      const osc = ctx.createOscillator(); osc.frequency.value = 200
+      const wobble = ctx.createOscillator(); wobble.frequency.value = 4
+      const depth = ctx.createGain(); depth.gain.value = 40
+      wobble.connect(depth); depth.connect(osc.frequency)
+      const level = ctx.createGain(); level.gain.value = 0.001
+      osc.connect(level)
+      const out = ctx.createMediaStreamDestination()
+      level.connect(out)
+      osc.start(); wobble.start()
+      const t0 = ctx.currentTime + ${leadMs} / 1000
+      for (let i = 0; i < 400; i++) {
+        const at = t0 + i * (${onMs} + ${offMs}) / 1000
+        level.gain.setValueAtTime(0.3, at)
+        level.gain.setValueAtTime(0.001, at + ${onMs} / 1000)
+      }
+      return out.stream
+    }
+    // Over the device's own method (WebKit keeps it on the prototype), or a mediaDevices of its own.
+    if (typeof MediaDevices !== 'undefined') Object.defineProperty(MediaDevices.prototype, 'getUserMedia', { value: fake, configurable: true, writable: true })
+    if (!navigator.mediaDevices) Object.defineProperty(navigator, 'mediaDevices', { value: {}, configurable: true })
+    Object.defineProperty(navigator.mediaDevices, 'getUserMedia', { value: fake, configurable: true, writable: true })
+  })()`
+}
