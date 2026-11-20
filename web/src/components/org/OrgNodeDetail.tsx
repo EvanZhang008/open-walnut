@@ -16,6 +16,7 @@
  *            team and never sees the Inbox's tasks), no Brief and no Threads. A VP gets none of it.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { usePendingApprovals } from '@/components/approvals/ApprovalRow';
 import { approvalsForNode } from '@/components/approvals/approvals-store';
 import { readOrgPlace, writeOrgPlace } from './org-place';
@@ -324,9 +325,10 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   const threadsCount = threadsCounted?.shown ?? 0;
   const followUp = sessionId ? (threadId: string, text: string, images?: ImageAttachment[]) => send(sessionId, text, images, { threadId }) : null;
   /** The chat's thread lines (reply-thread-line.tsx) open this node's own Threads in the side bar. */
+  const showOwnThreads = useLeanCallback(() => { setRailHidden(false); setTopPick('threads'); }, [setRailHidden, setTopPick]);
   const replyHost = useMemo<ReplyThreadHost | null>(() => (threadsId
-    ? { chat: threadsId, threads: threads.threads, showOwn: () => { setRailHidden(false); setTopPick('threads'); } }
-    : null), [threadsId, threads.threads, setRailHidden, setTopPick]);
+    ? { chat: threadsId, threads: threads.threads, showOwn: showOwnThreads }
+    : null), [threadsId, threads.threads, showOwnThreads]);
   // A thread line clicked in another chat (Home, Ask Walnut, another node's) asked for one of this
   // node's threads: the side bar shows Threads, which then brings that card into view (thread-focus.ts).
   // One the chat's top shows already (TopThread) steps there instead.
