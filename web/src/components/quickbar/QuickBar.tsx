@@ -159,15 +159,26 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
     requestAnimationFrame(() => tookWords());
   }, [stt, tookWords]);
 
+  // Opened before the voice setup was read: the take waits for it, and never starts without voice
+  // (a take started blind kept recording, and its late words landed in a box put back since).
+  const takeWhenKnown = useRef(false);
   const startTake = useLeanCallback(() => {
+    if (sttStatus.isLoading) { takeWhenKnown.current = true; return; }
     if (voiceOff || recording) return;
     setNotice(null);
     dictation.started();
     stt.toggleRecording();
-  }, [voiceOff, recording, dictation, stt]);
+  }, [voiceOff, recording, dictation, stt, sttStatus.isLoading]);
+
+  useEffect(() => {
+    if (sttStatus.isLoading || !takeWhenKnown.current) return;
+    takeWhenKnown.current = false;
+    startTake();
+  }, [sttStatus.isLoading, startTake]);
 
   const close = useLeanCallback(() => {
     stopCount();
+    takeWhenKnown.current = false;
     // A take still running keeps its words for the next open; nothing is sent.
     if (stt.isRecording) void stt.finishRecording();
     setPicking(false);
@@ -192,6 +203,10 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
     attach: (image) => pictures.set([...pictures.images, { ...image, name: 'screenshot.png' }]),
     restore: (to, words, shots) => {
       stopCount();
+      // The words come back as they were sent: a take still running, or its late words, add nothing.
+      takeWhenKnown.current = false;
+      if (stt.isRecording) stt.discardRecording();
+      dictation.reset();
       loadPeople();
       setPicking(false);
       pickedByHand.current = true;
@@ -202,7 +217,7 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
       requestAnimationFrame(() => boxRef.current?.focus({ preventScroll: true }));
     },
     close: () => close(),
-  }), [close, stopCount, loadPeople, startTake, finishTake, recording, countdownAt, send, text, images, onClose, people]);
+  }), [close, stopCount, loadPeople, startTake, finishTake, recording, countdownAt, send, text, images, onClose, people, stt, dictation]);
 
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
 

@@ -51,3 +51,13 @@ export function exposeToNative(api: QuickBarPageApi | null): void {
 export function isQuickBarKey(e: KeyboardEvent): boolean {
   return e.code === 'Space' && e.ctrlKey && e.altKey && e.metaKey && !e.shiftKey;
 }
+
+/**
+ * Open the quick bar from a click (the rail's magnifier, QuickBarRailButton.tsx), as the key does:
+ * the page's bar (QuickBarHost.tsx) hears it, the experiment on or not being its own question.
+ */
+export const OPEN_QUICK_BAR_EVENT = 'walnut:quick-bar-open';
+
+export function openQuickBar(): void {
+  window.dispatchEvent(new Event(OPEN_QUICK_BAR_EVENT));
+}

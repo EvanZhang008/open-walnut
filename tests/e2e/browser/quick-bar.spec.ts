@@ -1,6 +1,7 @@
 /**
  * The quick bar (experiment `quick_bar`; web/src/components/quickbar/), in Chromium:
- *   - off, Control-Option-Command-Space does nothing;
+ *   - off, Control-Option-Command-Space does nothing; turned on with the page open, the key and the
+ *     rail's magnifier (QuickBarRailButton.tsx) both open the bar, no reload needed;
  *   - on, the key opens the bar listening at once, the live words show as they are said, the
  *     name said first ("to Walnut VP, ...") picks who gets them, and two seconds after the take
  *     ends the words go to that person; the receipt in the corner follows the reply;
@@ -46,18 +47,19 @@ async function setFlag(request: APIRequestContext, on: boolean): Promise<Record<
   return before
 }
 
-interface Sends { bodies: Array<{ to?: string; text: string; follow?: boolean }>; fail: boolean }
+/** `takes`: recordings the engine was asked to write out (none may run while voice is off). */
+interface Sends { bodies: Array<{ to?: string; text: string; follow?: boolean }>; fail: boolean; takes: number }
 
 /** The canned engine, the people list and the send (a reply streamed in three lines). */
 async function stubAll(page: Page, said: { draft?: string; final?: string } = {}): Promise<Sends> {
-  const sends: Sends = { bodies: [], fail: false }
+  const sends: Sends = { bodies: [], fail: false, takes: 0 }
   await stubSttStatus(page)
   await page.route('**/api/stt/warmup', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }))
   // The live words grow over two drafts, as they do while one talks: the second must replace the
   // first, never land beside it (2026-11-20: "to Walnut VP to Walnut VP, ..." in the proof video).
   let drafts = 0
   await page.route('**/api/stt/draft', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: said.draft ?? (drafts++ === 0 ? 'to Walnut VP' : DRAFT), durationMs: 30 }) }))
-  await page.route('**/api/stt/transcribe', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: said.final ?? FINAL, durationMs: 40 }) }))
+  await page.route('**/api/stt/transcribe', (r) => { sends.takes++; return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: said.final ?? FINAL, durationMs: 40 }) }) })
   await page.route('**/api/stt/save', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ recordingId: 'rec-qb-1', debugAudioPath: '/tmp/rec-qb-1.webm' }) }))
   await page.route('**/api/v1/quick/people**', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ people: PEOPLE }) }))
   await page.route('**/api/v1/quick/send', async (r: Route) => {
@@ -112,6 +114,29 @@ test('off, the key opens nothing', async ({ page, request }) => {
   await page.keyboard.press(KEY)
   await page.waitForTimeout(400)
   await expect(page.locator('.qb-bar')).toHaveCount(0)
+})
+
+test('the switch turned on while Walnut is open: the key and the rail\'s magnifier both open the bar', async ({ page, request }) => {
+  // 2026-11-20: the key was tried while the experiment was still off; once on, no reload is needed.
+  await setFlag(request, false)
+  const sends = await stubAll(page)
+  await voiceOff(page)
+  await openApp(page, false)
+  const magnifier = page.getByTestId('sidebar-quick-bar')
+  await expect(magnifier).toHaveCount(0)
+  await setFlag(request, true)
+  await expect(magnifier).toBeVisible({ timeout: 15_000 })
+  await expect(magnifier).toHaveAttribute('title', /Control-Option-Command-Space/)
+  await page.keyboard.press(KEY)
+  await expect(bar(page)).toBeVisible()
+  await expect(box(page)).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(bar(page)).toBeHidden()
+  await magnifier.click()
+  await expect(bar(page)).toBeVisible()
+  await expect(box(page)).toBeFocused()
+  await shot(page, '0-magnifier')
+  expect(sends.takes).toBe(0)
 })
 
 test('speak, the name said first picks the VP, and two seconds later it sends and the reply shows', async ({ page, request }) => {
@@ -244,6 +269,9 @@ test('a send that never went out says so and puts the words back', async ({ page
   await expect(box(page)).toHaveValue('Move the review to Friday')
   await box(page).press('Enter')
   await expect(page.locator('.qb-receipt-status').first()).toHaveText('Replied')
+  // Voice off from the start: no take ran, not even one opened before the voice setup was read.
+  expect(sends.takes).toBe(0)
+  expect(sends.bodies.at(-1)).toMatchObject({ text: 'Move the review to Friday' })
 })
 
 test('/quickbar, the Mac app panel page, reports its size and mode and answers the app', async ({ page, request }) => {

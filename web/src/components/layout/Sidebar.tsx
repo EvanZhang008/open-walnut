@@ -8,6 +8,7 @@ import { useAudioCapture } from '@/hooks/useAudioCapture';
 import { useAppActivity, useAppCatalog } from '@/apps/hooks';
 import { appPathMatches } from '@/apps/registry';
 import { useRailItemsShown } from '@/apps/rail-items';
+import { QuickBarRailButton } from '@/components/quickbar/QuickBarRailButton';
 import { CalendarIcon, PuzzleIcon } from '@/apps/icons';
 import {
   hideApp,
@@ -419,6 +420,7 @@ export function Sidebar({
             <Fragment key={`${app.key}:${app.generation}`}>
               <div className="sidebar-home-group">{link}{homePanelToggles}</div>
               {railShown.org && orgEntry}
+              <QuickBarRailButton />
               {sideBarGroup}
             </Fragment>
           ) : link;

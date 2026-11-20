@@ -14,7 +14,7 @@ import { rememberSend, type QuickPerson } from './quickbar-people';
 import { QuickBar, type QuickBarHandle } from './QuickBar';
 import { QuickBarReceipts } from './QuickBarReceipts';
 import { useQuickReceipts, type Receipt } from './useQuickReceipts';
-import { isQuickBarKey, postToNative } from './quickbar-native';
+import { isQuickBarKey, OPEN_QUICK_BAR_EVENT, postToNative } from './quickbar-native';
 import type { QuickImage } from '@/api/quick';
 
 export function QuickBarHost() {
@@ -43,8 +43,14 @@ function QuickBarOverlay() {
       if (open) barRef.current?.hotkey();
       else show();
     };
+    // The rail's magnifier: the same as the key, but a second click while open leaves it open.
+    const onOpen = () => { if (!open) show(); };
     window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
+    window.addEventListener(OPEN_QUICK_BAR_EVENT, onOpen);
+    return () => {
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener(OPEN_QUICK_BAR_EVENT, onOpen);
+    };
   }, [open, show]);
 
   const onSend = useLeanCallback((person: QuickPerson, text: string, images: QuickImage[]) => {
