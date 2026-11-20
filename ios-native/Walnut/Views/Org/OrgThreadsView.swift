@@ -1028,8 +1028,14 @@ struct OrgThreadCard: View {
 
     @ViewBuilder
     private func actionButtons(fullWidth: Bool) -> some View {
-        // Known: he already acknowledged it.
-        if !waitsOnHim && !known {
+        if known {
+            // He already acknowledged it: Close ends it now, without hearing how its work ends
+            // (the server reads his second Acknowledge as that close).
+            Button { onEdit(.acknowledge) } label: { actionLabel("Close", fullWidth: fullWidth) }
+                .buttonStyle(.bordered)
+                .accessibilityHint("You will not hear when its work ends")
+                .accessibilityIdentifier("org.thread.closeKnown")
+        } else if !waitsOnHim {
             Button { onEdit(.acknowledge) } label: { actionLabel("Acknowledge", fullWidth: fullWidth) }
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.tint)

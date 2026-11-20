@@ -14,7 +14,11 @@
  *   5. the node may close the thread he acknowledged without a new reaction of his;
  *   6. B's task done and the node writes the outcome: back to To read;
  *   7. B's task done and nothing new: the node hears it once, and 10 minutes later Walnut closes it;
- *   8. he writes in a Known thread: it is working, not Known.
+ *   8. he writes in a Known thread: it is working, not Known;
+ *   9. the node wrote something new and left it pending: Walnut brings it back to To read;
+ *  10. his second Acknowledge (Close) on a Known thread closes it at once;
+ *  11. a thread that changed after the pass read it is settled only as it is now;
+ *  12. the flag turned off: a Known thread left from before is still settled.
  *   Neither the return nor the close buzzes his phone.
  *
  * What's real: server, bus, task store, threads store, the riding store, the session runner, the
@@ -37,12 +41,13 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
-import { addTask, updateTaskRaw } from '../../src/core/task-manager.js'
+import { addTask, listTasks, updateTaskRaw } from '../../src/core/task-manager.js'
 import { getSessionByClaudeId } from '../../src/core/session-tracker.js'
 import { updateConfig } from '../../src/core/config-manager.js'
 import { ensureProjectLead } from '../../src/core/org/org-store.js'
 import { fileThreadMessage, patchThread, readThreads, setThreadAnswers } from '../../src/core/org/threads-store.js'
 import { runThreadFollowPass } from '../../src/core/org/thread-follow.js'
+import { ackedThreads, openTasksOf, settleKnown } from '../../src/core/org/thread-ack.js'
 import { KNOWN_CLOSE_MS, isKnown } from '../../src/core/org/thread-known.js'
 import { pendingRiding, ridingLine } from '../../src/core/sessions/status-riding.js'
 import type { AckWaits } from '../../src/core/org/thread-known.js'
@@ -179,7 +184,8 @@ describe('his Acknowledge means he knows', () => {
     expect(t.ackedAt).toBeTruthy()
     expect(isKnown(t)).toBe(true)
     expect(t.known).toMatchObject({ by: 'human', through: t.messages[t.messages.length - 1].id })
-    expect(await shownCount()).toBeLessThanOrEqual(before)
+    // A thread at work was out of his view before; it stays out, Known.
+    expect(await shownCount()).toBe(before)
     const read = await readOne(id)
     expect(read.shown).toBe(false)
     expect(read.awaits).toEqual({
@@ -288,5 +294,82 @@ describe('his Acknowledge means he knows', () => {
     expect(t.state).toBe('working')
     expect(isKnown(t)).toBe(false)
     expect((await readOne(id)).awaits).toBeUndefined()
+  })
+
+  it('the node wrote something new and left it pending: 10 minutes after its work ended Walnut brings it back to To read', async () => {
+    sendApns.mockClear()
+    const tray = await newTask('Wash the baking trays')
+    const id = await runningThread('Wash the trays before Monday', [tray])
+    await ack(id)
+    pendingRiding(sid)?.markTold()
+    // The node's quiet update after his ack: news he has not seen, kept out of sight.
+    expect((await api('PATCH', `/tasks/${lead}/threads/${id}`, { state: 'pending', reply: 'All twelve trays are washed and stacked.' }, sid)).status).toBe(200)
+    await updateTaskRaw(tray, { phase: 'COMPLETE' } as never, { emitEvent: true })
+    const doneAt = Date.now()
+    await runThreadFollowPass({ now: doneAt })
+    pendingRiding(sid)?.markTold()
+    expect((await readOne(id)).shown).toBe(false)
+    await runThreadFollowPass({ now: doneAt + KNOWN_CLOSE_MS })
+    const back = await readOne(id)
+    expect(back.closed).toBeUndefined()
+    expect(back.state).toBe('answered')
+    expect(back.shown).toBe(true)
+    await noBuzz(id)
+  })
+
+  it('his second Acknowledge on a Known thread closes it at once', async () => {
+    const id = await runningThread('Sharpen the bread knives', [oven])
+    await ack(id)
+    expect(isKnown(await threadOf(id))).toBe(true)
+    pendingRiding(sid)?.markTold()
+    const r = await ack(id)
+    expect(r.json.thread.closed).toMatchObject({ how: 'acked', by: 'human' })
+    expect(ridingLine(sid, `thread-ack:${id}`)).toBeUndefined()
+  })
+
+  it('a thread that changed after the pass read it is settled only as it is now', async () => {
+    const jar = await newTask('Label the jam jars')
+    const id = await runningThread('Label the jars', [jar])
+    await ack(id)
+    pendingRiding(sid)?.markTold()
+    await updateTaskRaw(jar, { phase: 'COMPLETE' } as never, { emitEvent: true })
+    const open = openTasksOf(await listTasks())
+    // Read before he writes in it: the pass would tell the node its work ended.
+    const stale = await ackedThreads()
+    expect(stale.some((n) => n.threads.some((t) => t.id === id))).toBe(true)
+    await fileThreadMessage(lead, { text: 'use the round labels', via: 'follow-up', threadId: id, at: new Date().toISOString() })
+    const r = await settleKnown(stale, open)
+    expect(r.told).toBe(0)
+    expect((await threadOf(id)).ackDone).toBeUndefined()
+    expect((await threadOf(id)).state).toBe('working')
+    expect(ridingLine(sid, `thread-ack:${id}`)).toBeUndefined()
+    // A task added to its list after the read: it waits for a pass that knows that task.
+    const lid = await newTask('Print the lids')
+    const id2 = await runningThread('Print the jar lids', [jar])
+    await ack(id2)
+    pendingRiding(sid)?.markTold()
+    const before = await ackedThreads()
+    await patchThread(lead, id2, { add_tasks: [lid] }, `task:${lead}`)
+    expect((await settleKnown(before, open)).told).toBe(0)
+    expect((await threadOf(id2)).ackDone).toBeUndefined()
+  })
+
+  it('the flag turned off: a Known thread left from before is still settled, never left Known', async () => {
+    const bin = await newTask('Empty the flour bin')
+    const id = await runningThread('Empty the flour bin', [bin])
+    await ack(id)
+    pendingRiding(sid)?.markTold()
+    await flag(false)
+    try {
+      await updateTaskRaw(bin, { phase: 'COMPLETE' } as never, { emitEvent: true })
+      const doneAt = Date.now()
+      await runThreadFollowPass({ now: doneAt })
+      expect((await threadOf(id)).ackDone).toBeTruthy()
+      pendingRiding(sid)?.markTold()
+      await runThreadFollowPass({ now: doneAt + KNOWN_CLOSE_MS })
+      expect((await threadOf(id)).closed).toMatchObject({ how: 'acked', by: 'agent' })
+    } finally {
+      await flag(true)
+    }
   })
 })

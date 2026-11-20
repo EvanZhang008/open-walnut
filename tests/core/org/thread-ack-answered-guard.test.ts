@@ -12,7 +12,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { OrgThread, ThreadState } from '../../../src/core/org/threads-model.js'
 import { ackWaitsOf, type AckWaits } from '../../../src/core/org/thread-ack.js'
-import { THREAD_GROUPS } from '../../../src/core/org/thread-groups.js'
+import { THREAD_GROUPS, THREAD_GROUP_LABELS } from '../../../src/core/org/thread-groups.js'
 
 const AT = '2026-11-20T06:00:00.000Z'
 const OPEN_TASKS = new Map([['t-oven', 'Fix the oven timer']])
@@ -63,12 +63,11 @@ describe('every state group has its place on each surface', () => {
   const root = path.resolve(import.meta.dirname, '../../..')
   const read = (p: string) => fs.readFileSync(path.join(root, p), 'utf8')
 
-  it('the web opens or folds each group by default and names its chip', () => {
+  it('the web opens or folds each group by default and names it', () => {
     const byState = read('web/src/components/org/OrgThreadsByState.tsx')
-    const bar = read('web/src/components/org/ThreadsFilterBar.tsx')
     for (const g of THREAD_GROUPS) {
       expect(byState, g).toMatch(new RegExp(`\\b${g}: (true|false)`))
-      expect(bar, g).toMatch(new RegExp(`\\b${g}: '`))
+      expect(THREAD_GROUP_LABELS[g], g).toBeTruthy()
     }
   })
 

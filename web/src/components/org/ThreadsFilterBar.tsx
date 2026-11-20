@@ -3,12 +3,10 @@
  * each group that holds a thread, with its count. A click opens that group when it is folded and
  * brings it to the top (the phone's jump bar does the same). All goes back to the top.
  */
-import type { ThreadGroup } from '@open-walnut/thread-groups';
+import { THREAD_GROUP_LABELS, type ThreadGroup } from '@open-walnut/thread-groups';
 
 /** A chip's word: the group's own name, Waiting / snoozed shortened to fit the row. */
-const CHIP_LABEL: Record<ThreadGroup, string> = {
-  needs: 'Needs you', read: 'To read', known: 'Known', working: 'Working', waiting: 'Waiting', done: 'Done',
-};
+const CHIP_LABEL: Record<ThreadGroup, string> = { ...THREAD_GROUP_LABELS, waiting: 'Waiting' };
 
 export function ThreadsFilterBar({ counts, at, onJump }: {
   /** Each group in the order drawn, with how many threads it holds. */

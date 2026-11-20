@@ -153,6 +153,10 @@ describe('what the node hears', () => {
     expect(knownStep(told, false, Date.parse(at(15)) + KNOWN_CLOSE_MS)).toBe('close')
     // New work opened on it after it ended: the clock starts again.
     expect(knownStep(told, true, now)).toBe('rewait')
+    // He pinned or snoozed it since: it stays in his hands, Walnut neither shows nor closes it.
+    const late = Date.parse(at(15)) + KNOWN_CLOSE_MS
+    expect(knownStep({ ...told, pinned: { at: at(16), by: 'human' } }, false, late)).toBe('wait')
+    expect(knownStep({ ...told, snoozed: { until: new Date(late + 60_000).toISOString(), at: at(16) } }, false, late)).toBe('wait')
     // The node wrote a new summary after his ack but left it pending: shown, never closed unseen.
     const wrote = updateThread(ackKnown(f, id, at(4)).file, id, { state: 'pending', reply: 'Timer fixed and tested.' }, NODE, at(12)).thread
     expect(knownStep({ ...wrote, ackDone: at(15) }, false, Date.parse(at(15)) + KNOWN_CLOSE_MS)).toBe('show')

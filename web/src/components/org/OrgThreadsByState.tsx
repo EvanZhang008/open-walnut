@@ -33,7 +33,7 @@ export function OrgThreadsByState({ groups, flipped, onFlip, card, name }: {
   name: string;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
-  /** The chip last clicked: a passing place, not a view choice. */
+  /** The chip last clicked: a passing place, not a view choice (the group it opens stays open, as a click on its head). */
   const [at, setAt] = useState<ThreadGroup | null>(null);
   const any = THREAD_GROUPS.some((g) => groups[g].length > 0);
   const jump = (g: ThreadGroup | null) => {

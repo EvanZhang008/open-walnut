@@ -9,7 +9,8 @@
  *     group, open, reading Known, saying what it waits on (the task chip, what it is to finish) and
  *     how it ends; a Known chip counts it; it has no Acknowledge any more.
  *  3. Acknowledge on an answered card (the result is in), its task still open: it closes (Done).
- * With the Brief on (the list as before): the Known thread is in its own "1 known" section, open.
+ * With the Brief on (the list as before): the Known thread is in its own "1 known" section, open,
+ * and its Close ends it.
  * The fixture is shared: this file makes its own project and tasks, and puts the flags back.
  */
 import fs from 'node:fs'
@@ -151,7 +152,9 @@ test('Acknowledge: a thread still at work is Known and says what it waits on; a 
   await expect(wait).toContainText(`Waiting on Fix the oven timer ${STAMP} to finish:`)
   await expect(known.getByTestId('org-thread-known-what')).toHaveText('Swap the timer board and check it counts down to the second.')
   await expect(known.getByTestId('org-thread-known-ends')).toHaveText('When it ends: it comes back to To read only if there is something new for you; otherwise it closes. Your phone does not buzz.')
+  // Acknowledged already: Close in its place.
   await expect(known.getByTestId('org-thread-ack')).toHaveCount(0)
+  await expect(known.getByTestId('org-thread-close-known')).toBeVisible()
   await expect(group(page, 'working').locator(`[data-thread-id="${ids.work}"]`)).toHaveCount(0)
   const kept = await threadOf(request, ids.work)
   expect(kept?.state).toBe('pending')
@@ -186,5 +189,9 @@ test('with the Brief on, the Known thread has its own section, open', async ({ p
   await expect(known.getByTestId('org-thread-known-wait')).toContainText(`Fix the oven timer ${STAMP}`)
   await expect(page.locator(`ul[data-show="hidden"] [data-thread-id="${ids.work}"]`)).toHaveCount(0)
   await shot(page, '4-brief-on-known')
+  // Close: it ends now, closed by him.
+  await known.getByTestId('org-thread-close-known').click()
+  await expect(page.locator(`ul[data-show="known"] [data-thread-id="${ids.work}"]`)).toHaveCount(0, { timeout: 15_000 })
+  await expect.poll(async () => (await threadOf(request, ids.work))?.closed).toMatchObject({ how: 'acked', by: 'human' })
   expect(pageErrors).toEqual([])
 })

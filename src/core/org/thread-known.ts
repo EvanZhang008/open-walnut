@@ -14,7 +14,7 @@
  *
  * Pure and web-safe: the web and the server group by the same rule (thread-groups.ts).
  */
-import { hasThreadNews, type ViewThread } from './thread-view.js';
+import { hasThreadNews, pinnedNow, snoozedNow, type ViewThread } from './thread-view.js';
 
 /** After its waits ended, how long a Known thread with nothing new stays before Walnut closes it. */
 export const KNOWN_CLOSE_MS = 10 * 60_000;
@@ -52,14 +52,15 @@ export function backFromKnown(t: AckShape): boolean {
  *   tell    its waits just ended: the node hears it once, and the clock starts (`ackDone`)
  *   show    the node wrote something new but left it pending: back to To read
  *   close   nothing new: Walnut closes it
- * Pure.
+ * One he pinned or snoozed since his ack keeps it in his hands: Walnut neither shows nor closes it.
+ * `shared`: the answers shared with another thread (thread-view.ts sharedAnswers), as his view reads news. Pure.
  */
 export type KnownStep = 'none' | 'wait' | 'rewait' | 'tell' | 'show' | 'close';
 
-export function knownStep(t: ViewThread & { state: string }, open: boolean, now: number): KnownStep {
+export function knownStep(t: ViewThread & { state: string }, open: boolean, now: number, shared?: ReadonlySet<string>): KnownStep {
   if (!isKnown(t)) return 'none';
   if (open) return t.ackDone ? 'rewait' : 'wait';
   if (!t.ackDone) return 'tell';
-  if (now - Date.parse(t.ackDone) < KNOWN_CLOSE_MS) return 'wait';
-  return hasThreadNews(t) ? 'show' : 'close';
+  if (now - Date.parse(t.ackDone) < KNOWN_CLOSE_MS || pinnedNow(t) || snoozedNow(t, now)) return 'wait';
+  return hasThreadNews(t, shared) ? 'show' : 'close';
 }

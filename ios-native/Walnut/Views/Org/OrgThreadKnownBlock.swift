@@ -7,12 +7,15 @@ import SwiftUI
 struct OrgThreadKnownBlock: View {
     let thread: OrgThread
     let name: String
+    @Environment(TasksStore.self) private var tasks
 
     private static let ends = "comes back to To read only if there is something new for you; otherwise it closes. Your phone does not buzz."
 
     private var waits: [OrgThread.Awaits.Waiting] {
         // An older server sends no `awaits`: the thread's own task list says what it went to.
-        thread.awaits.map { $0.tasks ?? [] } ?? (thread.tasks ?? []).map { OrgThread.Awaits.Waiting(id: $0, title: $0) }
+        thread.awaits.map { $0.tasks ?? [] } ?? (thread.tasks ?? []).map { id in
+            OrgThread.Awaits.Waiting(id: id, title: tasks.tasks.first { $0.id == id }?.title ?? id)
+        }
     }
 
     private var ended: Bool {

@@ -138,6 +138,9 @@ interface Props {
   byState?: boolean;
 }
 
+/** Drawn as Known: he acknowledged it while its work ran, and it is no ask of a task (askedIn) or a task's thread below. */
+const knownHere = (t: OrgThread): boolean => !t.askedIn && !t.owner && isKnown(t);
+
 function closedWords(t: OrgThread, now: number): string {
   const c = t.closed!;
   // It went to another node with its work (core/org/thread-follow.ts): open there.
@@ -342,7 +345,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   // need to make any choice").
   const needs = oneCard && !closed && !asked && t.state === 'needs';
   // He acknowledged it while its work ran (core/org/thread-known.ts): the card says what it waits on, not its summary.
-  const known = !asked && isKnown(t);
+  const known = knownHere(t);
   const back = backFromKnown(t);
   const card = useMemo(() => cardView(t, shared), [t, shared]);
   // It sat too long with nothing from the node: the card says so (core/org/thread-view.ts threadOverdue).
@@ -467,8 +470,10 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
             <span className="org-thread-closed" data-testid="org-thread-closed">{closedWords(t, now)}</span>
             <button type="button" className="btn btn-sm" data-testid="org-thread-reopen" onClick={() => void state.update(t.id, { reopen: true })}>Reopen</button>
           </>) : (<>
-            {/* Known: he already acknowledged it. */}
-            {!letter && !known && <button type="button" className="btn btn-sm btn-primary" data-testid="org-thread-ack" onClick={() => void state.update(t.id, { close: 'acked' })}>Acknowledge</button>}
+            {/* Known: he already acknowledged it; Close ends it now, without hearing how its work ends. */}
+            {!letter && (known
+              ? <button type="button" className="btn btn-sm" data-testid="org-thread-close-known" title="Close it now: you will not hear when its work ends" onClick={() => void state.update(t.id, { close: 'acked' })}>Close</button>
+              : <button type="button" className="btn btn-sm btn-primary" data-testid="org-thread-ack" onClick={() => void state.update(t.id, { close: 'acked' })}>Acknowledge</button>)}
             <ThreadTools t={t} snoozed={snoozed} state={state} pinned={pinned} />
           </>)}
         </div>
@@ -516,8 +521,8 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
       // them), so one just unpinned goes back to its place before the server answers. Under
       // top_thread the ones that need him lead the rest, the order the top of the chat steps in.
       open: orderedForHim(listed, { needsFirst }),
-      known: list.filter((t) => !snoozedNow(t, at) && !shownSet.has(t) && isKnown(t)),
-      hidden: list.filter((t) => !t.closed && !snoozedNow(t, at) && !shownSet.has(t) && !isKnown(t)),
+      known: list.filter((t) => !snoozedNow(t, at) && !shownSet.has(t) && knownHere(t)),
+      hidden: list.filter((t) => !t.closed && !snoozedNow(t, at) && !shownSet.has(t) && !knownHere(t)),
       snoozed: list.filter((t) => snoozedNow(t, at)).sort((a, b) => a.snoozed!.until.localeCompare(b.snoozed!.until)),
     };
   }, [all, now, needsFirst]);
@@ -554,7 +559,7 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
       {all !== null && !open.length && (
         <p className="org-threads-empty" data-testid="org-threads-empty">
           {hidden.length || snoozed.length || known.length
-            ? `Nothing for you now. ${hidden.length ? `${name} is on the ones below; each` : 'Each snoozed one below'} comes back here when there is news.`
+            ? `Nothing for you now. ${hidden.length ? `${name} is on the ones below; each` : known.length ? 'Each one you know below' : 'Each snoozed one below'} comes back here when there is news.`
             : `Nothing open. Each request you send ${name} becomes a thread here; asks about the same thing stay in one thread.`}
         </p>
       )}

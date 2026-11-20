@@ -294,7 +294,9 @@ export async function runThreadFollowPass(opts: { now?: number } = {}): Promise<
   let n = 0;
   for (const move of planThreadFollows(nodes, p)) if (await runMove(move, 'agent', { tellFrom: true }, 'work')) n++;
   knownDueAt = undefined;
-  await ack.settleKnown(acked, ack.openTasksOf(p.all), opts.now)
+  // Judged against every task, as at his ack (orgTasks leaves test-run tasks out, which would read as done).
+  const { listTasks } = await import('../task-manager.js');
+  await ack.settleKnown(acked, ack.openTasksOf(await listTasks()), opts.now)
     .then((r) => { knownDueAt = r.nextAt; })
     .catch((err) => log.task.warn('org threads: known threads not settled', { error: err instanceof Error ? err.message : String(err) }));
   return n;
