@@ -140,13 +140,16 @@ export async function transcribeAudio(
   language?: string,
   /** Optional model override — retry with a specific ggml model via whisper-cli */
   model?: string,
+  /** A caller's own cancel, and where it was said when not the page (a plugin: `plugin:<id>`). */
+  opts: { signal?: AbortSignal; surface?: string } = {},
 ): Promise<TranscribeResult> {
+  const deadline = AbortSignal.timeout(FINAL_PASS_TIMEOUT_MS);
   const res = await sttFetch('/api/stt/transcribe', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     // The page it was said on (a session, a plugin's composer), kept with the recording.
-    body: JSON.stringify({ audio: audioBase64, format, language, model, surface: location.pathname.slice(0, 100) }),
-    signal: AbortSignal.timeout(FINAL_PASS_TIMEOUT_MS),
+    body: JSON.stringify({ audio: audioBase64, format, language, model, surface: (opts.surface ?? location.pathname).slice(0, 100) }),
+    signal: opts.signal ? AbortSignal.any([opts.signal, deadline]) : deadline,
   });
   if (!res.ok) {
     let message = res.statusText;

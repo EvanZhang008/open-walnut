@@ -11,6 +11,9 @@
  *   POST /api/drawings/append {path,revision,elements}       add elements (an agent's edit)
  *   POST /api/drawings/update {path,revision,update?,remove?,add?}  change, remove and add in one step
  *   GET  /api/drawings/render?path&format=png|svg            {path,revision,format,pngPath|svgPath,width,height,note?}
+ *   GET  /api/drawings/narration?path[&take&part&from&to]    {path,takes,overview} the recorded walkthroughs,
+ *        one line per part; with take/part/from/to {path,takes,detail} of that part or span (narration-align.ts)
+ *   POST /api/drawings/narration {path,take}                 {takes} save one take (replaces the take with its id)
  *   POST /api/drawings/diagram {mode,elements?,files?,prompt?,taskId?,sessionId?}   {elements,note?}
  *        skeleton shapes from one model call (core/drawings/diagram.ts); nothing is written
  *
@@ -42,6 +45,7 @@ import { isLargeScene, runCodec } from '../../core/drawings/scene-codec.js'
 import { LibraryConflictError, readLibrary, writeLibrary, type DrawingLibrary } from '../../core/drawings/library.js'
 import { fetchLibraryFile, fetchLibraryPreview, getCatalog } from '../../core/drawings/library-catalog.js'
 import { makeDiagram, MAX_DIAGRAM_BODY_BYTES } from '../../core/drawings/diagram.js'
+import { narrationAnswer, saveNarrationTake } from '../../core/drawings/narration-store.js'
 import { ensureIndexBootstrap } from './notes-v2.js'
 
 export const drawingsRouter = Router()
@@ -212,6 +216,25 @@ drawingsRouter.get('/render', async (req, res, next) => {
   try {
     res.setHeader('Cache-Control', 'no-cache')
     res.json(await renderDrawing(req.query.path, req.query.format))
+  } catch (err) {
+    fail(res, next, err)
+  }
+})
+
+drawingsRouter.get('/narration', async (req, res, next) => {
+  try {
+    res.setHeader('Cache-Control', 'no-cache')
+    const { path, ...query } = req.query
+    res.json(await narrationAnswer(path, query))
+  } catch (err) {
+    fail(res, next, err)
+  }
+})
+
+drawingsRouter.post('/narration', async (req, res, next) => {
+  try {
+    const { path, take } = await bodyOf(req)
+    res.json(await saveNarrationTake(path, take))
   } catch (err) {
     fail(res, next, err)
   }

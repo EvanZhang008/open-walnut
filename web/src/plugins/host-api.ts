@@ -11,6 +11,8 @@ import { pluginUiRegistry } from './registry'
 import { registerLinkHandler, type LinkHandlerContribution } from './link-handlers'
 import { createWebAi } from './plugin-ai'
 import { createWebPasswords } from './plugin-passwords'
+import { createWebStt } from './plugin-stt'
+import { usePluginExperimental } from './use-experimental'
 import { createPluginViews } from './views'
 import { createPluginUseView } from './use-view'
 import { createPluginUseDraft } from './use-draft'
@@ -269,6 +271,7 @@ export function createWebPluginApi(
     appState,
     ai: createWebAi(pluginId, context.signal),
     passwords: createWebPasswords(pluginId, pluginName),
+    stt: createWebStt(pluginId, context.signal),
     // The same two choices Walnut's own surfaces offer; the item is checked there (normalizeContentItem).
     content: {
       actions: (item) => contentActions(item),
@@ -373,6 +376,7 @@ export function createWebPluginApi(
       views: createPluginViews(pluginId),
       useView: createPluginUseView(pluginId),
       useDraft: createPluginUseDraft(pluginId),
+      useExperimental: usePluginExperimental,
     },
     get unsafe() {
       if (!unsafeWarned) {

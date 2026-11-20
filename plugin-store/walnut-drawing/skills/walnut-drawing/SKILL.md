@@ -27,6 +27,12 @@ Every write sends the revision from your last read. A stale revision is refused:
 3. One `walnut_drawing_update`: `remove` the strokes you replace, `add` clean `rectangle`/`ellipse`/`diamond` shapes with `text` labels near where the person drew them, and `arrow`s with `start`/`end` naming those shapes. Keep the person's own typed text and anything you did not interpret.
 4. Render again and check that every word is readable and every arrow lands on the right shape.
 
+## What the person said while drawing
+
+A drawing may carry recorded walkthroughs: the person pressed Record and talked while drawing. `walnut_drawing_read` then answers with `walkthroughs`, an overview with one line per part: its time span, the element it was about (label and id) and the gist of what was said. Answer from it when you can ("which is the core table?": find the part that says so and name its element).
+
+When the overview is not enough (a part about several elements, "this one" with no clear element, the exact words), call `walnut_drawing_narration` with `take` and `part` from the overview, or `from`/`to` in seconds. It lists each sentence with its times, the elements it was matched to and why (the pointer rested on it, it was selected, just drawn or changed, or named in the words), and every step on the canvas in that span. Say when a match is only a guess (nothing pointed at or selected), and give the time so the person can check.
+
 ## Shapes
 
 `rectangle`, `ellipse`, `diamond`, `text`, `arrow`, `line` and `freedraw`. Give shapes `x`, `y`, `width` and `height`; give text `x`, `y`, `text` and optionally `fontSize`; give lines and arrows `x`, `y` and `points` relative to that origin, or `start`/`end` to connect shapes. A shape's optional `text` becomes its label. `strokeColor` and `backgroundColor` are optional. Match the existing scene's positions and styles. Complete scene elements are accepted too, but you do not need to build every internal field.

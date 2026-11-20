@@ -823,6 +823,8 @@ export async function deleteNoteAttachment(relPath: unknown): Promise<{ ok: true
   if (drawing) {
     const { deleteDrawingCompanion } = await import('../../core/drawings/companion-sync.js')
     await deleteDrawingCompanion(toRelPath(fullPath), (abs) => deleteNoteFile(abs))
+    const { deleteNarration } = await import('../../core/drawings/narration-store.js')
+    await deleteNarration(toRelPath(fullPath))
   }
   try {
     const { deleteAttachmentText } = await import('../../core/notes-index.js')

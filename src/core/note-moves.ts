@@ -7,6 +7,7 @@
 import { log } from '../logging/index.js'
 import { getConfig, updateConfig } from './config-manager.js'
 import { moveDrawingCompanion } from './drawings/companion-sync.js'
+import { moveNarration } from './drawings/narration-store.js'
 import { bus, EventNames } from './event-bus.js'
 import { updateNotePath } from './notes-index.js'
 import { scheduleNotesIndexUpdate } from './notes-indexer.js'
@@ -73,6 +74,8 @@ export async function followMovedNote(fromRel: string, toRel: string, opts: { in
  * follow it. The scene's own bookmark is the caller's `followMovedNote`.
  */
 export async function followMovedDrawingCompanion(fromRel: string, toRel: string): Promise<void> {
+  // Its recorded walkthroughs (not a note: no index row or bookmark) go along too.
+  await moveNarration(fromRel, toRel)
   const companion = await moveDrawingCompanion(fromRel, toRel)
   if (companion) await followMovedNote(companion.from, companion.to)
 }

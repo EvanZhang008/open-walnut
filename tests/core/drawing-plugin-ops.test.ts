@@ -10,11 +10,11 @@ function setup() {
 }
 
 describe('Drawing plugin ops', () => {
-  it('registers list, read, create, append, render, update and rename as one plugin capability', () => {
+  it('registers list, read, narration, create, append, render, update and rename as one plugin capability', () => {
     const { ops, skill } = setup()
-    expect(ops.map((op) => op.name)).toEqual(['list', 'read', 'create', 'append', 'render', 'update', 'rename'])
+    expect(ops.map((op) => op.name)).toEqual(['list', 'read', 'narration', 'create', 'append', 'render', 'update', 'rename'])
     expect(ops.every((op) => op.remote === 'allow')).toBe(true)
-    expect(ops.filter((op) => op.readonly).map((op) => op.name)).toEqual(['list', 'read', 'render'])
+    expect(ops.filter((op) => op.readonly).map((op) => op.name)).toEqual(['list', 'read', 'narration', 'render'])
     expect(skill).toHaveBeenCalledOnce()
     expect(skill.mock.calls[0][0].id).toBe('drawing')
   })
@@ -24,6 +24,31 @@ describe('Drawing plugin ops', () => {
     const call = vi.fn().mockResolvedValue({ scene: {}, revision: 'r1' })
     await ops.find((op) => op.name === 'read')!.handler({ path: 'inbox/review & user.excalidraw' }, { call })
     expect(call).toHaveBeenCalledWith('GET', '/api/drawings/file?path=inbox%2Freview%20%26%20user.excalidraw')
+  })
+
+  it('read carries the walkthrough overview of a drawing that has one, and nothing else changes without', async () => {
+    const { ops } = setup()
+    const read = ops.find((op) => op.name === 'read')!
+    const call = vi.fn(async (_m: string, url: string) => url.startsWith('/api/drawings/narration')
+      ? { path: 'inbox/a.excalidraw', takes: 1, overview: 'Walkthroughs (1) ...' }
+      : { path: 'inbox/a.excalidraw', revision: 'r1', scene: {} })
+    expect(await read.handler({ path: 'inbox/a.excalidraw' }, { call })).toEqual({ path: 'inbox/a.excalidraw', revision: 'r1', scene: {}, walkthroughs: 'Walkthroughs (1) ...' })
+    expect(call).toHaveBeenLastCalledWith('GET', '/api/drawings/narration?path=inbox%2Fa.excalidraw')
+    const none = vi.fn(async (_m: string, url: string) => url.startsWith('/api/drawings/narration') ? { takes: 0, overview: '' } : { revision: 'r1' })
+    expect(await read.handler({ path: 'inbox/a.excalidraw' }, { call: none })).toEqual({ revision: 'r1' })
+    const failing = vi.fn(async (_m: string, url: string) => { if (url.startsWith('/api/drawings/narration')) throw new Error('old server'); return { revision: 'r1' } })
+    expect(await read.handler({ path: 'inbox/a.excalidraw' }, { call: failing })).toEqual({ revision: 'r1' })
+  })
+
+  it('narration asks for the overview, or one part or span in detail', async () => {
+    const { ops } = setup()
+    const narration = ops.find((op) => op.name === 'narration')!
+    expect(narration.inputSchema?.required).toEqual(['path'])
+    const call = vi.fn().mockResolvedValue({ takes: 1 })
+    await narration.handler({ path: 'inbox/a & b.excalidraw' }, { call })
+    expect(call).toHaveBeenLastCalledWith('GET', '/api/drawings/narration?path=inbox%2Fa+%26+b.excalidraw')
+    await narration.handler({ path: 'inbox/a.excalidraw', take: 2, part: 3, from: 'x' }, { call })
+    expect(call).toHaveBeenLastCalledWith('GET', '/api/drawings/narration?path=inbox%2Fa.excalidraw&take=2&part=3')
   })
 
   it('sends only declared list context as query parameters', async () => {

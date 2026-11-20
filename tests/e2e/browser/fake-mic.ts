@@ -18,13 +18,10 @@ const SAMPLE_RATE = 48_000
 const TONE_HZ = 440
 const AMPLITUDE = 0.1
 
-function toneWav(): Buffer {
-  const samples = SAMPLE_RATE // one second, looped by Chromium
-  const data = Buffer.alloc(samples * 2)
-  for (let i = 0; i < samples; i++) {
-    const v = Math.sin((2 * Math.PI * TONE_HZ * i) / SAMPLE_RATE) * AMPLITUDE
-    data.writeInt16LE(Math.round(v * 32767), i * 2)
-  }
+/** 16-bit PCM mono WAV of `samples` (-1..1) at `rate`. */
+export function wavOf(samples: ArrayLike<number>, rate: number): Buffer {
+  const data = Buffer.alloc(samples.length * 2)
+  for (let i = 0; i < samples.length; i++) data.writeInt16LE(Math.round(Math.max(-1, Math.min(1, samples[i])) * 32767), i * 2)
   const header = Buffer.alloc(44)
   header.write('RIFF', 0)
   header.writeUInt32LE(36 + data.length, 4)
@@ -33,8 +30,8 @@ function toneWav(): Buffer {
   header.writeUInt32LE(16, 16)
   header.writeUInt16LE(1, 20) // PCM
   header.writeUInt16LE(1, 22) // mono
-  header.writeUInt32LE(SAMPLE_RATE, 24)
-  header.writeUInt32LE(SAMPLE_RATE * 2, 28)
+  header.writeUInt32LE(rate, 24)
+  header.writeUInt32LE(rate * 2, 28)
   header.writeUInt16LE(2, 32)
   header.writeUInt16LE(16, 34)
   header.write('data', 36)
@@ -42,16 +39,27 @@ function toneWav(): Buffer {
   return Buffer.concat([header, data])
 }
 
-/** Written once per worker, before any browser launches (module load). */
-function writeToneFile(): string {
+function toneWav(): Buffer {
+  const samples = new Float32Array(SAMPLE_RATE) // one second, looped by Chromium
+  for (let i = 0; i < samples.length; i++) samples[i] = Math.sin((2 * Math.PI * TONE_HZ * i) / SAMPLE_RATE) * AMPLITUDE
+  return wavOf(samples, SAMPLE_RATE)
+}
+
+/** A WAV in a temp folder of its own (written before any browser launches: module load). */
+function writeWavFile(wav: Buffer, name: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-fake-mic-'))
-  const file = path.join(dir, 'tone.wav')
-  fs.writeFileSync(file, toneWav())
+  const file = path.join(dir, name)
+  fs.writeFileSync(file, wav)
   return file
 }
 
-export const FAKE_MIC_ARGS: string[] = [
-  '--use-fake-ui-for-media-stream',
-  '--use-fake-device-for-media-stream',
-  `--use-file-for-fake-audio-capture=${writeToneFile()}`,
-]
+/** The flags for a fake microphone that plays `wav` (Chromium loops it). */
+export function fakeMicArgsFor(wav: Buffer, name = 'mic.wav'): string[] {
+  return [
+    '--use-fake-ui-for-media-stream',
+    '--use-fake-device-for-media-stream',
+    `--use-file-for-fake-audio-capture=${writeWavFile(wav, name)}`,
+  ]
+}
+
+export const FAKE_MIC_ARGS: string[] = fakeMicArgsFor(toneWav(), 'tone.wav')

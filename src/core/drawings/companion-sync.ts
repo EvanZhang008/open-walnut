@@ -23,7 +23,7 @@ import { titleOfScenePath } from './paths.js'
 import { isLargeScene, runCodec } from './scene-codec.js'
 import { DrawingInputError } from './scene.js'
 import {
-  createExclusively, fileIdentity, readSceneFile, replaceAtomically, resolveVaultFile, sameIdentity, type FileIdentity,
+  createExclusively, fileIdentity, moveBesideScene, readOrNull, readSceneFile, replaceAtomically, resolveVaultFile, sameIdentity, type FileIdentity,
 } from './vault-files.js'
 
 /** What a save or a read knows about the scene file it handled. */
@@ -41,15 +41,6 @@ async function mtimeOf(abs: string): Promise<number | null> {
     return (await fsp.lstat(abs)).mtimeMs
   } catch {
     return null
-  }
-}
-
-async function readOrNull(abs: string): Promise<string | null> {
-  try {
-    return await fsp.readFile(abs, 'utf-8')
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
-    throw err
   }
 }
 
@@ -173,18 +164,7 @@ export async function moveDrawingCompanion(fromScene: string, toScene: string): 
     moved = await withUserFileLock(fromAbs, async () => {
       const current = await readOrNull(fromAbs)
       if (current === null || !isOwnCompanion(current, fromScene)) return false
-      if (from.toLowerCase() === to.toLowerCase()) {
-        // Only the letter case changes: on a case-insensitive disk both paths are this one file.
-        const there = await fileIdentity(toAbs)
-        const mine = await fileIdentity(fromAbs)
-        if (there && (!mine || there.ino !== mine.ino)) return false
-        await replaceAtomically(fromAbs, retargetCompanion(current, toScene))
-        await fsp.rename(fromAbs, toAbs)
-        return true
-      }
-      if (!(await createExclusively(toAbs, retargetCompanion(current, toScene)))) return false
-      await fsp.unlink(fromAbs)
-      return true
+      return moveBesideScene({ rel: from, abs: fromAbs }, { rel: to, abs: toAbs }, retargetCompanion(current, toScene))
     })
     synced.delete(await resolveVaultFile(fromScene))
   } catch (err) {

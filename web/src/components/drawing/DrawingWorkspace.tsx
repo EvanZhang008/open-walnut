@@ -13,7 +13,7 @@
  * (drawing-overlay.ts): the editor is never mounted again, so its view and selection stay.
  * "New drawing" is a sketch until its first content (no empty files).
  */
-import { Suspense, lazy, useEffect, useMemo, useRef, useState, type ComponentType, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useDraft } from '@/hooks/useDraft';
 import { MicField, MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
@@ -34,6 +34,7 @@ import { LibraryBrowser } from './LibraryBrowser';
 import { workspacePlace, workspaceViewKeys } from './workspace-place';
 import { drawingAssistantAsk, followDrawingRename } from './drawing-assistant-context';
 import type { DrawingAssistantRequest } from './DrawingAssistant';
+import type { Activity } from './drawing-activity';
 import type { CanvasMenu, DrawingCanvasHandle, ExcalidrawCanvasProps } from './ExcalidrawCanvas';
 
 // The chat (SessionPanel and its composer) loads only when the assistant is opened.
@@ -65,8 +66,12 @@ export interface DrawingWorkspaceProps {
   canAttach?: boolean;
   /** What is open, for an agent beside it (debounced; only for a drawing file). */
   onState?(state: DrawingWorkspaceState): void;
-  /** The file shown changed (another picked, a sketch saved as a file). */
-  onDocumentPathChange?(path: string | null): void;
+  /** The file shown changed (another picked, a sketch saved as a file; `renamedFrom`: the same one renamed). */
+  onDocumentPathChange?(path: string | null, change?: { renamedFrom?: string }): void;
+  /** The person's steps on the canvas, for a recorder beside it (drawing-activity.ts). */
+  onActivity?(activity: Activity): void;
+  /** A host's or plugin's own control in the top bar, before the drawing's buttons. */
+  barExtra?: ReactNode;
   /** Tests pass their own server. */
   api?: DrawingApi;
 }
@@ -190,7 +195,7 @@ const STATUS_TEXT: Record<DrawingSnapshot['state'], string> = {
 };
 
 export function DrawingWorkspace(props: DrawingWorkspaceProps) {
-  const { taskId, sessionId, documentPath, draftId, preview, onClose, onAttach, canAttach = true, onState, onDocumentPathChange } = props;
+  const { taskId, sessionId, documentPath, draftId, preview, onClose, onAttach, canAttach = true, onState, onDocumentPathChange, onActivity, barExtra } = props;
   const api = props.api ?? drawingApi;
   const scope = useMemo(() => ({ ...(taskId ? { taskId } : {}), ...(sessionId ? { sessionId } : {}) }), [taskId, sessionId]);
   const scopeId = taskId ? `task:${taskId}` : sessionId ? `session:${sessionId}` : 'inbox';
@@ -302,13 +307,19 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   // The file shown (a sketch becomes one with its first content): remembered for this place, and
   // told to the host so its pane opens the same one next time.
   const shownPath = snap?.path ?? null;
+  // The path shown last and its controller (the rename effect below keeps it).
+  const shownPathOf = useRef<{ controller: DrawingSync | null; path: string | null }>({ controller: null, path: null });
   const reportPath = useRef(onDocumentPathChange);
   reportPath.current = onDocumentPathChange;
   useEffect(() => {
     if (!shownPath) return;
     if (view.keepsLastDocument) setLastDocument(shownPath);
     reportedPath.current = shownPath;
-    reportPath.current?.(shownPath);
+    // The same controller under another path is this drawing renamed (shownPathOf, below, still
+    // holds the path it showed before: it is updated after this effect).
+    const before = shownPathOf.current;
+    const renamed = before.controller !== null && before.controller === sync.current && before.path && before.path !== shownPath;
+    reportPath.current?.(shownPath, renamed ? { renamedFrom: before.path! } : undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- per file shown
   }, [shownPath]);
 
@@ -353,7 +364,6 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
 
   // The same drawing under a new path (one controller, renamed here, elsewhere or by Walnut): its
   // assistant conversation follows it. Another drawing opened is another controller.
-  const shownPathOf = useRef<{ controller: DrawingSync | null; path: string | null }>({ controller: null, path: null });
   useEffect(() => {
     const path = snap?.path ?? null;
     const controller = sync.current;
@@ -666,6 +676,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               </h2>}
           {state && <span className="drawing-workspace-status" data-state={state} role="status" aria-live="polite">{STATUS_TEXT[state]}</span>}
           <span className="drawing-workspace-bar-gap" />
+          {barExtra}
           {onAttach && <button type="button" className="drawing-primary-button drawing-workspace-attach" onClick={() => void attach()} disabled={!!busy || !hasScene || !canAttach || !Canvas} title={canAttach ? 'Add this drawing to your message as a picture' : 'Attachment limit reached'}>{busy === 'attach' ? 'Attaching…' : 'Attach PNG'}</button>}
           {canAssist && (
             <button type="button" className="drawing-quiet-button drawing-workspace-assistant-toggle" aria-pressed={assistantShown}
@@ -723,7 +734,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               onLibrarySource={addLibrarySource}
               onScene={(scene: DrawingScene, key: number) => sync.current?.edit(scene, key)}
               onTextEditEnd={() => sync.current?.textEditEnded()}
-              onReady={(handle) => { canvas.current = handle; }} />
+              onReady={(handle) => { canvas.current = handle; }} onActivity={onActivity} />
           )}
           {textDialogOpen && (
             <form className="drawing-text-diagram" aria-label="Text to diagram"

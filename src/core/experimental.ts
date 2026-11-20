@@ -55,6 +55,12 @@ export const EXPERIMENTAL_FEATURES = [
   default: false,
 },
   {
+    id: 'drawing_narration',
+    name: 'Record a walkthrough of a drawing',
+    description: 'A Record button in the Drawing app: talk while you draw, and Walnut keeps each sentence with the time you said it and the shapes you drew, selected or pointed at then, so the drawing\'s assistant knows which part you meant (for example which table you called the core table).',
+    default: false,
+  },
+  {
     id: 'agent_window_hides_while_sharing',
     name: 'Hide the agent window while you share your screen',
     description: 'While this Mac shares or records its screen (a meeting app sharing a window, an app or the whole screen), the browser on this Mac keeps Walnut\'s agent window minimized, so an agent\'s pages never show in the share. It stays minimized after the share: open it from the Dock.',

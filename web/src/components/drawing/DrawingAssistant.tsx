@@ -19,6 +19,7 @@ import { sendSessionMessage } from '@/api/session-send';
 import { updateTask } from '@/api/tasks';
 import { isPopoutPath, openTaskInApp } from '@/popout/openPopout';
 import { log } from '@/utils/log';
+import { useExperimental } from '@/hooks/useExperimental';
 import { DRAWING_ASSISTANT_AGENT, drawingAssistantContext, drawingAssistantKey, drawingTaskTitle } from './drawing-assistant-context';
 
 /** A message the editor hands the assistant (Make a diagram, Text to diagram); `id` grows per ask,
@@ -78,8 +79,10 @@ export function DrawingAssistant({ path, title, request, onRequestDone, onClose,
     setFirstAsk(null);
     launchedHere.current = false;
   }
+  // With walkthroughs on, the assistant also hears where what was said while drawing is.
+  const walkthroughs = useExperimental('drawing_narration');
   // The first question carries the drawing as it is named then (a rename since opening included).
-  const prepareContext = useLeanCallback(async () => drawingAssistantContext(path, title), [path, title]);
+  const prepareContext = useLeanCallback(async () => drawingAssistantContext(path, title, walkthroughs), [path, title, walkthroughs]);
   const adjustLaunch = useLeanCallback((body: AskSessionLaunch) => {
     launchedHere.current = true;
     return unpinned(body);
@@ -143,7 +146,7 @@ export function DrawingAssistant({ path, title, request, onRequestDone, onClose,
           title={`Assistant for ${title}`}
           quote={{ who: '', when: '', where: 'Drawing', preview: title }}
           agentId={DRAWING_ASSISTANT_AGENT}
-          contextBlock={drawingAssistantContext(path, title)}
+          contextBlock={drawingAssistantContext(path, title, walkthroughs)}
           contextName="Drawing you are changing"
           prepareContext={prepareContext}
           adjustLaunch={adjustLaunch}

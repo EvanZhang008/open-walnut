@@ -2,7 +2,7 @@ export type * from './shared.js'
 export type * from './content-actions.js'
 
 import type { ContentActionsService, ContentActionsViewProps } from './content-actions.js'
-import type { ComponentType, RefObject } from 'react'
+import type { ComponentType, ReactNode, RefObject } from 'react'
 import type { AiService, Disposable, PluginLogger, TaskPhase, TaskPriority } from './shared.js'
 import type { AppStatePublishOptions, EventApi, OpsService, PluginFetchInit, PluginFetchResponse } from './server.js'
 
@@ -237,8 +237,34 @@ export interface DrawingViewProps {
   onAttach?(file: File): Promise<string | null>
   canAttach?: boolean
   onState?(state: DrawingViewState): void
-  /** The person picked another drawing (at once, not with the state updates); null: none open. */
-  onDocumentPathChange?(path: string | null): void
+  /**
+   * The person picked another drawing (at once, not with the state updates); null: none open.
+   * `change.renamedFrom` is set when it is the same drawing under a new name or folder.
+   */
+  onDocumentPathChange?(path: string | null, change?: { renamedFrom?: string }): void
+  /**
+   * What the person does on the canvas, as it happens: shapes drawn, changed or removed, the
+   * selection, and the element under the pointer. Only the person's own steps: a scene that
+   * arrives from outside (the AI's edit, another window) is not reported. Leave it out and the
+   * canvas does no extra work. Optional on an older host: feature-detect by checking an event
+   * ever arrives.
+   */
+  onActivity?(activity: DrawingActivity): void
+  /** A control of yours in the drawing's top bar, before Walnut's own buttons (keep it small). */
+  barExtra?: ReactNode
+}
+
+/**
+ * One step on the canvas (`DrawingViewProps.onActivity`). `select` carries the whole selection
+ * after the change (empty: cleared); `point` the element now under the pointer (empty: none).
+ * A shape's `label` is its words (its own text, or the text inside it); a label inside a shape is
+ * reported as the shape. `at` is `Date.now()` when it happened.
+ */
+export interface DrawingActivity {
+  kind: 'add' | 'edit' | 'delete' | 'select' | 'point'
+  ids: string[]
+  labels: string[]
+  at: number
 }
 
 /**
@@ -463,6 +489,11 @@ export interface WebUiService {
    * mount, never under the user's hands. Optional: feature-detect it on an older host.
    */
   useDraft?(name: string, options?: { id?: string }): [string, (next: string | ((prev: string) => string)) => void, () => void]
+  /**
+   * Whether one of Walnut's experiments (Settings, Experimental) is on, as a hook: it changes when
+   * the person flips the switch. An id Walnut does not know reads false. Optional: feature-detect.
+   */
+  useExperimental?(id: string): boolean
   readonly views: {
     CalendarView: PluginComponent
     FileView: PluginComponent<FileViewProps>
@@ -552,6 +583,29 @@ export interface PasswordsService {
   unlock?(input?: { reason?: string }): Promise<boolean>
 }
 
+/** What `walnut.stt.transcribe` answers. */
+export interface SttTranscript {
+  text: string
+  durationMs: number
+  /** Walnut keeps the audio it transcribed (the person's Voice history): this take's id there. */
+  recordingId?: string
+}
+
+/**
+ * Walnut's speech to text, the same the person's own mic buttons use: their engine, language
+ * and vocabulary from Settings, Voice, wherever it runs (this computer, another host, a cloud
+ * service). Each call is one take; for times within a long recording, cut it where the person
+ * pauses and send the pieces one by one (you know when each piece started).
+ */
+export interface SttService {
+  /**
+   * The words in `audio` (webm, wav, mp3, ogg, mp4, m4a or flac; at most about 18 MB). `format`
+   * defaults from the blob's type. Rejects with the engine's reason when it fails; aborting
+   * `signal` cancels.
+   */
+  transcribe(audio: Blob, options?: { format?: string; language?: string; signal?: AbortSignal }): Promise<SttTranscript>
+}
+
 export interface WalnutWebApi {
   readonly pluginId: string
   readonly pluginName: string
@@ -595,6 +649,8 @@ export interface WalnutWebApi {
    * older than it does not have it, so feature-detect.
    */
   readonly passwords?: PasswordsService
+  /** Speech to text (see SttService). Optional: a host older than it does not have it, so feature-detect. */
+  readonly stt?: SttService
   readonly unsafe: {
     readonly react: unknown
     readonly host: unknown

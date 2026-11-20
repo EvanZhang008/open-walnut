@@ -1399,6 +1399,16 @@ export function activate(walnut: WalnutWebApi) {
 
 `size` is `'sm'` (the default, the smaller icon) or `'md'`; the button is Walnut's own round 34px mic either way. `disabled` follows your box. Place the mic in your box's button row rather than over the text; it is drawn by Walnut, so its look follows Walnut's, and its inner class names are not part of this contract.
 
+### Speech to text: `walnut.stt`
+
+`walnut.stt.transcribe(audio, { format?, language?, signal? })` turns a recording your App made into words with the same engine, language and vocabulary the person's own mic buttons use (Settings → Voice), wherever that engine runs. It answers `{ text, durationMs, recordingId? }`; the take is kept in the person's Voice history like any other, with your plugin named as where it was said. `audio` is a `Blob` of webm, wav, mp3, ogg, mp4, m4a or flac, at most about 18 MB; `format` defaults from the blob's type. One call is one take and the answer has no times inside it: for times within a long recording, cut it where the person pauses and send the pieces one by one, since you know when each piece began. Drawing's walkthrough recorder does exactly that (`plugin-store/walnut-drawing/src/narration/`). Optional: feature-detect `walnut.stt` on an older host.
+
+`walnut.ui.useExperimental(id)` reads one of Walnut's experiments (Settings → Experimental) as a hook, so a feature of yours can ship switched off behind one; an id Walnut does not know reads false. Optional too.
+
+### Drawing activity
+
+`DrawingView` takes two optional props for a feature built beside the canvas: `onActivity(activity)` reports the person's own steps as they happen (`add`, `edit`, `delete`, `select` with the whole selection, `point` with the element now under the pointer), each with element ids, their words and `at`; a scene that arrives from outside (an agent's edit) is never reported. `barExtra` puts a small control of yours in the drawing's top bar. Leave both out and the editor is unchanged.
+
 ## Optional Webview
 
 A Webview is served from the plugin's declared static directory and rendered without `allow-same-origin`. It has no shared cookies or `localStorage`, and a direct authenticated `/api` call from inside it does not work. Use `/walnut-app-sdk.js` and its `postMessage` bridge for host API calls, events, theme changes, and navigation.

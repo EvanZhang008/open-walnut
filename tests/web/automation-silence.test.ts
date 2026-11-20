@@ -357,6 +357,7 @@ describe('ratchet: every sound in the web app stays silent under automation', ()
   const SILENT_BY: Record<string, string> = {
     'web/src/utils/chime.ts': 'returns before it builds an AudioContext (automatedBrowser)',
     'web/src/utils/pcm-stream.ts': 'its capture node reaches the speakers only through a gain of zero, and the page silencer',
+    'plugin-store/walnut-drawing/src/narration/recorder.ts': 'its capture node reaches the speakers only through a gain of zero, and the page silencer',
     'web/src/hooks/useSpeechToText.ts': 'a meter: its graph never reaches the speakers',
     'web/src/components/common/FileContentView.tsx': 'its <audio>/<video> are muted by the page silencer, and its HTML preview runs it per load',
     'web/src/apps/mail/mail-html.ts': 'drops every media element from a mail',

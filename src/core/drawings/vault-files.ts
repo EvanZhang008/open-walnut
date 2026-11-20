@@ -154,3 +154,32 @@ export async function readSceneFile(abs: string): Promise<{ bytes: string; ident
   const bytes = await fsp.readFile(abs, 'utf-8')
   return { bytes, identity: { ino: stat.ino, mtimeMs: stat.mtimeMs, size: stat.size } }
 }
+
+/** A file's text, or null when nothing is there. */
+export async function readOrNull(abs: string): Promise<string | null> {
+  try {
+    return await fsp.readFile(abs, 'utf-8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw err
+  }
+}
+
+/**
+ * Move a file that goes with a scene (its companion note, its walkthroughs) to its new path with
+ * `bytes` as its content. False when something else already is at the new path. Only the letter
+ * case changing is one file on a case-insensitive disk: it is rewritten and renamed in place.
+ */
+export async function moveBesideScene(from: { rel: string; abs: string }, to: { rel: string; abs: string }, bytes: string): Promise<boolean> {
+  if (from.rel.toLowerCase() === to.rel.toLowerCase()) {
+    const there = await fileIdentity(to.abs)
+    const mine = await fileIdentity(from.abs)
+    if (there && (!mine || there.ino !== mine.ino)) return false
+    await replaceAtomically(from.abs, bytes)
+    await fsp.rename(from.abs, to.abs)
+    return true
+  }
+  if (!(await createExclusively(to.abs, bytes))) return false
+  await fsp.unlink(from.abs)
+  return true
+}

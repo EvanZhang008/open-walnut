@@ -14,7 +14,9 @@
  *  - the drawing menu's Download PNG / SVG and the diagram actions, and the "Make a diagram"
  *    button over a selection;
  *  - the view (zoom, scroll) and the editor's instance id as data attributes on its box, which
- *    the browser tests read to prove full screen kept the same editor and view.
+ *    the browser tests read to prove full screen kept the same editor and view;
+ *  - with `onActivity`, the person's steps (drawing-activity.ts): drawn, changed, removed,
+ *    selected, pointed at. A scene loaded from outside is a new baseline, never a step.
  */
 import './excalidraw-assets';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -25,6 +27,7 @@ import { randomId } from '@/utils/random-id';
 import { editorFingerprint, sceneFromEditor, type DrawingScene } from './drawing-scene';
 import { libraryFingerprint, parseLibraryItems, tabLibrary, takeAddLibrary, type LibraryItem, type LibraryStore } from './drawing-library';
 import { applyDiagram, boundsOf, diagramSource, type Bounds, type DiagramEditor } from './drawing-diagram';
+import { ActivityTracker, type Activity, type ActivityElement } from './drawing-activity';
 
 export interface DiagramInput {
   elements: Array<Record<string, unknown>>;
@@ -76,6 +79,8 @@ export interface ExcalidrawCanvasProps {
   onLibrarySource?(source: string): void;
   /** Tests pass their own. */
   library?: LibraryStore;
+  /** The person's steps on the canvas (drawing-activity.ts); left out, nothing is tracked. */
+  onActivity?(activity: Activity): void;
 }
 
 type AnyElements = Parameters<NonNullable<React.ComponentProps<typeof Excalidraw>['onChange']>>[0];
@@ -160,13 +165,15 @@ const ICON_DOWNLOAD = 'M12 4v11m0 0-4-4m4 4 4-4M5 19h14';
 const ICON_DIAGRAM = 'M4 5h6v5H4zM14 14h6v5h-6zM7 10v4h7';
 const ICON_TEXT = 'M5 6h14M12 6v12M9 18h6';
 
-export default function ExcalidrawCanvas({ scene, sceneKey, theme, autoFocus = false, onScene, onReady, onTextEditEnd, menu, diagramBusy = false, onBrowseLibraries, onLibrarySource, library = tabLibrary }: ExcalidrawCanvasProps) {
+export default function ExcalidrawCanvas({ scene, sceneKey, theme, autoFocus = false, onScene, onReady, onTextEditEnd, menu, diagramBusy = false, onBrowseLibraries, onLibrarySource, library = tabLibrary, onActivity }: ExcalidrawCanvasProps) {
   const api = useRef<ExcalidrawImperativeAPI | null>(null);
   const host = useRef<HTMLDivElement>(null);
   const shownKey = useRef(sceneKey);
   const lastFp = useRef<string | null>(null);
-  const latest = useRef({ scene, sceneKey, onScene, onReady, onLibrarySource, onTextEditEnd });
-  latest.current = { scene, sceneKey, onScene, onReady, onLibrarySource, onTextEditEnd };
+  const latest = useRef({ scene, sceneKey, onScene, onReady, onLibrarySource, onTextEditEnd, onActivity });
+  latest.current = { scene, sceneKey, onScene, onReady, onLibrarySource, onTextEditEnd, onActivity };
+  // The steps tracker, made the first time someone listens; `key` is the scene it diffs from.
+  const activity = useRef<{ tracker: ActivityTracker; key: number; selected: unknown } | null>(null);
   const wasEditingText = useRef(false);
   const instance = useMemo(() => randomId(), []);
   const [pill, setPill] = useState<Pill | null>(null);
@@ -189,7 +196,44 @@ export default function ExcalidrawCanvas({ scene, sceneKey, theme, autoFocus = f
     loadScene(editor, scene);
   }, [scene, sceneKey]);
 
-  useEffect(() => () => latest.current.onReady(null), []);
+  useEffect(() => () => {
+    latest.current.onReady(null);
+    activity.current?.tracker.dispose();
+  }, []);
+
+  // Someone starts listening: what is on the canvas now is the baseline, so the first step is the
+  // person's next change. They stop: the tracker goes, and nothing is diffed meanwhile.
+  const listening = !!onActivity;
+  useEffect(() => {
+    if (!listening) {
+      activity.current?.tracker.dispose();
+      activity.current = null;
+      return;
+    }
+    const editor = api.current;
+    if (!editor) return;
+    const a = activity.current ??= { tracker: new ActivityTracker((step) => latest.current.onActivity?.(step)), key: Number.NaN, selected: null };
+    const appState = editor.getAppState();
+    a.key = shownKey.current;
+    a.selected = appState.selectedElementIds;
+    a.tracker.baseline(editor.getSceneElements() as unknown as readonly ActivityElement[], appState.selectedElementIds);
+  }, [listening]);
+
+  /** The person's steps since the last scene (only while someone listens). */
+  const track = (elements: AnyElements, appState: AnyAppState, changed: boolean) => {
+    if (!latest.current.onActivity) return;
+    const a = activity.current ??= { tracker: new ActivityTracker((step) => latest.current.onActivity?.(step)), key: Number.NaN, selected: null };
+    const els = elements as unknown as readonly ActivityElement[];
+    if (a.key !== shownKey.current) {
+      a.key = shownKey.current;
+      a.selected = appState.selectedElementIds;
+      a.tracker.baseline(els, appState.selectedElementIds);
+      return;
+    }
+    if (!changed && a.selected === appState.selectedElementIds) return;
+    a.selected = appState.selectedElementIds;
+    a.tracker.change(els, appState.selectedElementIds);
+  };
 
   // Zoom to fit, measured from this editor's box (fitKeyOf). Before the editor's own key handler,
   // which listens on its container inside this box.
@@ -329,13 +373,16 @@ export default function ExcalidrawCanvas({ scene, sceneKey, theme, autoFocus = f
         // Still loading the first scene: nothing here is the person's yet.
         if (appState.isLoading) return;
         const fp = editorFingerprint(elements, appState, files);
-        if (fp !== lastFp.current) {
+        const changed = fp !== lastFp.current;
+        if (changed) {
           lastFp.current = fp;
           latest.current.onScene(sceneFromEditor(elements, appState, files), shownKey.current);
         }
+        track(elements, appState, changed);
         // After the scene it closed with, so a rename that waited for the box sees that scene.
         if (textClosed) latest.current.onTextEditEnd?.();
       }}
+      onPointerUpdate={({ pointer }) => { if (latest.current.onActivity) activity.current?.tracker.pointer(pointer.x, pointer.y); }}
       onLibraryChange={(items) => {
         const parsed = parseLibraryItems(items);
         const fp = libraryFingerprint(parsed);

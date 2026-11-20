@@ -26,7 +26,34 @@ export function activate(walnut: WalnutServerApi): void {
       name: 'read', title: 'Read a drawing', readonly: true, remote: 'allow',
       description: 'Read an editable drawing, its scene elements and its current revision. Read before appending; the scene contains positions, shape types, text and arrow connections.',
       inputSchema: { type: 'object', properties: { path: pathProperty }, required: ['path'], additionalProperties: false },
-      handler: (args, ctx) => ctx.call('GET', `/api/drawings/file?path=${encodeURIComponent(String(args.path ?? ''))}`),
+      handler: async (args, ctx) => {
+        const path = encodeURIComponent(String(args.path ?? ''))
+        const doc = await ctx.call('GET', `/api/drawings/file?path=${path}`)
+        // A drawing with recorded walkthroughs answers with their overview (coarse, one line per part).
+        try {
+          const told = await ctx.call('GET', `/api/drawings/narration?path=${path}`) as { takes?: number; overview?: string }
+          if (told?.takes && told.overview && doc && typeof doc === 'object') return { ...(doc as Record<string, unknown>), walkthroughs: told.overview }
+        } catch { /* no walkthroughs to tell */ }
+        return doc
+      },
+    },
+    {
+      name: 'narration', title: 'Read what was said while drawing', readonly: true, remote: 'allow',
+      description: 'A drawing\'s recorded walkthroughs: what the person said while drawing, each sentence lined up with the elements they drew, selected or pointed at then. With only path: the overview, one line per part (time span, element, gist), the same that walnut_drawing_read shows. With take and part (numbers from the overview), or from/to in seconds: that part in detail, each sentence with its times, the elements it was matched to and why, and every draw, change, selection and pointer rest in that span. Use it to answer which element the person meant ("the core table"). Read-only.',
+      inputSchema: {
+        type: 'object', properties: {
+          path: pathProperty,
+          take: { type: 'integer', minimum: 1, description: 'The take number from the overview (default: the newest)' },
+          part: { type: 'integer', minimum: 1, description: 'The part number from the overview' },
+          from: { type: 'number', minimum: 0, description: 'Start of a span, seconds from the start of the take' },
+          to: { type: 'number', minimum: 0, description: 'End of a span, seconds from the start of the take' },
+        }, required: ['path'], additionalProperties: false,
+      },
+      handler: (args, ctx) => {
+        const query = new URLSearchParams({ path: String(args.path ?? '') })
+        for (const key of ['take', 'part', 'from', 'to']) if (typeof args[key] === 'number') query.set(key, String(args[key]))
+        return ctx.call('GET', `/api/drawings/narration?${query}`)
+      },
     },
     {
       name: 'create', title: 'Create a drawing', readonly: false, remote: 'allow',

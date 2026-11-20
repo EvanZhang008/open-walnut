@@ -5,6 +5,7 @@
  * for transcription via the configured STT engine.
  */
 
+import { blobToBase64 } from '@/utils/blob-base64';
 import { useState, useRef, useCallback, useEffect } from 'react';
 import {
   transcribeAudio, draftTranscribe, saveRecording, retranscribeRecording, warmupStt,
@@ -552,15 +553,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
           : 'webm'; // fallback
 
         // Convert blob to base64 using FileReader (avoids stack overflow on large audio)
-        const readBlobBase64 = () => new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            const dataUrl = reader.result as string;
-            resolve(dataUrl.split(',')[1] ?? '');
-          };
-          reader.onerror = () => reject(new Error('Failed to read audio blob'));
-          reader.readAsDataURL(blob);
-        });
+        const readBlobBase64 = () => blobToBase64(blob, 'audio blob');
 
         // Keep the full clip for Retry, then write it (plus the final text) to
         // the recordings history. Fire-and-forget: the text is already in the
@@ -900,12 +893,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
           retireDraftLane(`clip past the ${DRAFT_MAX_BYTES} byte draft cap`);
           return;
         }
-        const base64 = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onloadend = () => resolve((reader.result as string).split(',')[1] ?? '');
-          reader.onerror = () => reject(new Error('draft blob read failed'));
-          reader.readAsDataURL(blob);
-        });
+        const base64 = await blobToBase64(blob, 'draft audio');
         const abort = new AbortController();
         draftAbortRef.current = abort;
         try {

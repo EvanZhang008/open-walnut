@@ -40,6 +40,7 @@ const UI_METHOD_SURFACE: Readonly<Record<string, string>> = {
   injectCss: 'a stylesheet, no surface',
   useView: 'state, no surface',
   useDraft: 'state, no surface',
+  useExperimental: 'a read of a switch, no surface',
 }
 
 function interfaceMethods(source: string, name: string): string[] {

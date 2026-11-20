@@ -421,6 +421,8 @@ export interface WalnutWebApiHost {
     readonly views: PluginViews
     readonly useView: PluginUseView
     readonly useDraft: PluginUseDraft
+    /** One of Walnut's experiments, as a hook (plugins/use-experimental.ts). */
+    readonly useExperimental: (id: string) => boolean
   }
   /**
    * Share what this App shows with the AI working on a task (see the server
@@ -440,6 +442,8 @@ export interface WalnutWebApiHost {
   readonly ai: import('./plugin-ai').WebAiService
   /** Keep a secret the person typed in their Passwords (plugin-passwords.ts). */
   readonly passwords: Required<import('../../../packages/plugin-api/src/web').PasswordsService>
+  /** Walnut's speech to text (plugin-stt.ts). */
+  readonly stt: import('../../../packages/plugin-api/src/web').SttService
   readonly unsafe: {
     readonly react: unknown
     readonly host: unknown
