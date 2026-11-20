@@ -291,10 +291,10 @@ const RESULT_SETTLE_MS = 1500;
 const EXPIRE_EVERY_MS = 10 * 60_000;
 
 /** The primary's topic replies: started next to startThreadAnswers; idle while the experiment is off. */
-export function startTopics(): { stop: () => void } {
+export function startTopics(): { stop: () => void; ready: Promise<void> } {
   let stopped = false;
   const timers = new Set<ReturnType<typeof setTimeout>>();
-  void (async () => {
+  const subscribed = (async () => {
     const { bus, EventNames } = await import('../event-bus.js');
     if (stopped) return;
     bus.subscribe('topic-replies', (event) => {
@@ -319,7 +319,7 @@ export function startTopics(): { stop: () => void } {
     }, { global: true, interest: ['session:result', 'session:error', 'session:status-changed'] });
   })();
   // The experiment on at boot: know which sessions owe a reply before the first turn ends.
-  void import('./topics-store.js').then(async (m) => { if (!stopped && await m.topicsEnabled()) await indexPendingTurns(); }).catch(() => {});
+  const firstIndex = import('./topics-store.js').then(async (m) => { if (!stopped && await m.topicsEnabled()) await indexPendingTurns(); }).catch(() => {});
   const expire = setInterval(() => {
     void (async () => {
       const { topicsEnabled } = await import('./topics-store.js');
@@ -328,6 +328,8 @@ export function startTopics(): { stop: () => void } {
   }, EXPIRE_EVERY_MS);
   expire.unref?.();
   return {
+    // Subscribed and the first index of pending turns built (tests wait on it, never on a clock).
+    ready: Promise.all([subscribed, firstIndex]).then(() => {}),
     stop: () => {
       stopped = true;
       clearInterval(expire);

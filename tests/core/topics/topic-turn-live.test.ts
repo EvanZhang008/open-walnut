@@ -186,8 +186,8 @@ describe('a stopped or failed session lets its turns go (M2)', () => {
     const replies = startTopics()
     try {
       await turnOfMarina('s-marina', 5 * 60_000)
-      // Let the start's own index of pending turns settle first.
-      await new Promise((go) => setTimeout(go, 50))
+      // The start's own index of pending turns is built first.
+      await replies.ready
       notePendingTurn('s-marina', topic.id)
       bus.emit(EventNames.SESSION_ERROR, { sessionId: 's-marina', error: 'the model call failed' }, ['*'], { source: 'test' })
       await vi.waitFor(async () => expect((await marina()).pendingTurn).toBeUndefined(), { timeout: 5_000 })

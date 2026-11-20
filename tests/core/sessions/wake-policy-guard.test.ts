@@ -68,6 +68,8 @@ const DYNAMIC_OUTCOMES: Record<string, string[]> = {
   // session-requests.ts: a request past its deadline, still queued or not.
   "stillQueued ? 'timeout' : 'error'": ['timeout', 'error'],
   QUIET_NOTES_OUTCOME: ['quiet-notes'],
+  // topics/topic-text.ts: a topic's lines that did not wake the member.
+  TOPIC_NEWS_OUTCOME: ['topic-news'],
   // adopt-notice.ts AdoptNoticeKind.
   'n.kind': ['adopted', 'released'],
   "sw.move ? 'move-expired' : 'switch-expired'": ['move-expired', 'switch-expired'],
