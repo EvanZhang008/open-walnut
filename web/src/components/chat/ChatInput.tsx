@@ -249,6 +249,9 @@ function readKeptAttachments(key: string | null | undefined): ComposerAttachment
 }
 
 interface ChatInputProps {
+  /** Test ids of its text box and its send button (a box embedded in a card names its own). */
+  inputTestId?: string;
+  sendTestId?: string;
   /** May return a Promise<boolean> — false means the send failed and the draft must be preserved.
    *  `origin` names the draft the words came from: a later Retry of a failed send settles it. */
   onSend: (text: string, images?: ImageAttachment[], origin?: DraftOrigin) => void | Promise<boolean>;
@@ -456,7 +459,7 @@ export function ChatInput(props: ChatInputProps) {
   );
 }
 
-function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSplit, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, light, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, noteSlot, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp, fileTarget, drawingTarget, promptRecallKey }: ChatInputProps) {
+function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSplit, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, light, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, noteSlot, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp, fileTarget, drawingTarget, promptRecallKey, inputTestId, sendTestId }: ChatInputProps) {
   // ONE read of the persisted draft, split once for both pieces of state below.
   const [initialDraft] = useState(() => readDraftSplit(draftKey));
   const [value, setValue] = useState(initialDraft.body);
@@ -2020,6 +2023,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
       className="chat-send-btn-icon"
       onClick={handleSend}
       disabled={!canSend}
+      {...(sendTestId ? { 'data-testid': sendTestId } : {})}
       type="button"
       aria-label={sendTitle}
       title={sendTitle}
@@ -2133,6 +2137,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
             ref={textareaRef}
             className={`chat-input-textarea${pills.on ? ' has-ref-pills' : ''}`}
             data-draft-key={draftKey}
+            {...(inputTestId ? { 'data-testid': inputTestId } : {})}
             defaultValue={initialDraft.body}
             onChange={(e) => handleChange(e.target.value)}
             onKeyDown={handleKeyDown}

@@ -12,7 +12,7 @@
  *     others, and an unsnooze elsewhere is not held back by a place's own earlier snooze
  *   - a reply typed on the row (the thread card's own words box) answers a letter: its task gets
  *     the words, and the item leaves the strip
- *   - the strip stays short: one row per ask in a wide column, two in a narrow one (buttons below)
+ *   - each card stays short: its buttons beside its box in a wide column, under it in a narrow one
  *   - the switch off: no strip
  * Real: the fixture server, the mock CLI's prompt, the approvals and inbox routes, the status sync.
  */
@@ -241,8 +241,7 @@ test('a reply typed on the row answers the letter: its task gets the words, and 
   const strip = stripOf(page, ids.letterSid)
   await strip.getByTestId('action-needed-more').click().catch(() => {})
   await expect(strip.locator(`[data-item-id="${itemId}"]`)).toBeVisible()
-  // The same "Reply…" box a thread card answers with.
-  await item.getByTestId('org-answer-other').click()
+  // The same box a thread card answers with, shown at once: no click opens it.
   const words = `Neither: keep it the colour it is now ${STAMP}`
   await item.getByTestId('org-answer-input').fill(words)
   await item.getByTestId('org-answer-send').click()
@@ -256,18 +255,19 @@ test('a reply typed on the row answers the letter: its task gets the words, and 
   await expect.poll(async () => ((await statusOf(request, ids.letter)).actions ?? []).some((a) => a.id === itemId), { timeout: 30_000 }).toBe(false)
 })
 
-test('the strip stays short: one row per ask in a wide column, two in a narrow one (its buttons below)', async ({ page }) => {
+test('the strip keeps each card short: its buttons beside the box when wide, under it when narrow', async ({ page }) => {
   // Wide: one session column beside the task list.
   await openHome(page, ids.letterSid)
   let strip = stripOf(page, ids.letterSid)
   let items = strip.getByTestId('action-item')
   await expect(items.first()).toBeVisible({ timeout: 30_000 })
+  const mid = (b: { y: number; height: number }) => b.y + b.height / 2
   for (const item of await items.all()) {
-    const box = (await item.boundingBox())!
-    const words = (await item.getByTestId('action-summary').boundingBox())!
+    const box = (await item.locator('.org-answer-words').boundingBox())!
     const button = (await item.getByTestId('org-answer-option').first().boundingBox())!
-    expect(box.height, 'one row').toBeLessThan(40)
-    expect(Math.abs((button.y + button.height / 2) - (words.y + words.height / 2)), 'its buttons beside its words').toBeLessThan(8)
+    expect(Math.abs(mid(button) - mid(box)), 'its buttons beside its box').toBeLessThan(12)
+    // No heading, kind or age: what it asks, a line of why, the box and its buttons.
+    await expect(item.getByTestId('action-kind')).toHaveCount(0)
   }
   await page.screenshot({ path: `test-results/strip-wide-${test.info().project.name}.png`, clip: (await strip.boundingBox())! })
 
@@ -277,11 +277,9 @@ test('the strip stays short: one row per ask in a wide column, two in a narrow o
   items = strip.getByTestId('action-item')
   await expect.poll(async () => (await strip.boundingBox())?.width ?? 0).toBeLessThan(600)
   for (const item of await items.all()) {
-    const box = (await item.boundingBox())!
-    const words = (await item.getByTestId('action-summary').boundingBox())!
-    const answer = (await item.locator('.action-needed-answer').boundingBox())!
-    expect(answer.y, 'its buttons on the row below its words').toBeGreaterThanOrEqual(words.y + words.height - 1)
-    expect(box.height, 'two rows at most').toBeLessThan(70)
+    const box = (await item.locator('.org-answer-words').boundingBox())!
+    const button = (await item.getByTestId('org-answer-option').first().boundingBox())!
+    expect(button.y, 'its buttons on the line under its box').toBeGreaterThanOrEqual(box.y + box.height - 1)
   }
   await page.screenshot({ path: `test-results/strip-narrow-${test.info().project.name}.png`, clip: (await strip.boundingBox())! })
   await page.setViewportSize({ width: 1280, height: 900 })

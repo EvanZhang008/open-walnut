@@ -119,7 +119,7 @@ test('an approval asked while the task works: Needs you, still Working, approved
   await expect(block(card)).toBeVisible()
   await expect(card.getByTestId('status-card-also-working')).toHaveText('Working')
   const item = line(card, 'approval')
-  await expect(item.getByTestId('action-kind')).toHaveText('Approval')
+  await expect(item).toHaveAttribute('data-kind', 'approval')
   await expect(item.getByTestId('action-summary')).toHaveText(`Push commit d0f4f51 to origin main ${STAMP}`)
   // The one approvals line counts only approvals no row shows: those of no task (another spec's
   // may be pending too), never this one.
@@ -129,6 +129,8 @@ test('an approval asked while the task works: Needs you, still Working, approved
   }
   await expect.poll(async () => (await approvalsLineCount(page)) === (await noTask()), { timeout: 15_000 }).toBe(true)
   // The row lists it with its buttons: the corner's card keeps its short form, so it never covers the row at full size.
+  // In sight, clear of the corner (a row under the corner card is not in sight).
+  await item.evaluate((el) => el.scrollIntoView({ block: 'start' }))
   await expect(page.locator(`[data-testid="corner-stack"] [data-testid="approval-card"][data-approval-id="${asked.approval.id}"]`)).toHaveClass(/approval-card-line/, { timeout: 15_000 })
   await page.screenshot({ path: `test-results/action-needed-approval-${test.info().project.name}.png`, clip: (await card.boundingBox())! })
 
@@ -144,7 +146,7 @@ test('a live question: its options on the row, a pick answers the session', asyn
   await openHome(page)
   const card = await showSectionCard(page, 'needs', ids.question)
   const item = line(card, 'question')
-  await expect(item.getByTestId('action-kind')).toHaveText('Question')
+  await expect(item).toHaveAttribute('data-kind', 'question')
   // The prompt's own card says its question (no second summary line).
   await expect(item).toContainText('Which validation target?')
   await expect(item.getByTestId('action-summary')).toHaveCount(0)
@@ -162,7 +164,7 @@ test('a decision letter: its actions on the row; Snooze takes it off Needs you a
   await openHome(page)
   let card = await showSectionCard(page, 'needs', ids.letter)
   const item = line(card, 'letter')
-  await expect(item.getByTestId('action-kind')).toHaveText('Letter')
+  await expect(item).toHaveAttribute('data-kind', 'letter')
   await expect(item.getByTestId('action-summary')).toHaveText(`Pick the bucket policy ${STAMP}`)
   await expect(item.getByRole('button', { name: 'Prefix only' })).toBeVisible({ timeout: 30_000 })
   await expect(item.getByRole('button', { name: 'Whole bucket' })).toBeVisible()

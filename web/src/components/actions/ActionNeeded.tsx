@@ -2,8 +2,8 @@
  * Action needed on a task's row (2026-11-19, the user: "会在这个 task 的 panel 上面……显示一个
  * approval, action needed……我就可以直接在那里面 approve, make decision", and "这个东西本身
  * snooze……check again later……snooze until"). One block under the row, one line per thing the task
- * asks of the user (user_status.actions, core/action-needed.ts): its kind, what it asks, and its
- * answer right there, each with its own Snooze.
+ * asks of the user (user_status.actions, core/action-needed.ts): what it asks, a line of why, a box
+ * to type the answer in (always shown), its buttons and its own Snooze.
  *
  * Every answer is the one that thing already has, never a new one: an approval's Approve / Deny
  * (ApprovalButtons, Touch ID and Passwords included), a session prompt's own controls
@@ -32,10 +32,10 @@ import { taskTextSource } from '@/utils/agent-text-source';
 import type { OrgAlertView } from '@/components/org/org-channels-model';
 import { SnoozeDateFlyout, SnoozeFlyout } from '@/components/tasks/SnoozeChoices';
 import { snoozeUntilText } from '@/components/tasks/quick-sort-model';
-import { timeAgo } from '@/utils/time';
 import { log } from '@/utils/log';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
+import { AskCardFrame } from './AskCard';
 import './action-needed.css';
 
 /** How each kind is answered on a row: the surface it reuses (the ratchet reads this). */
@@ -68,7 +68,7 @@ function SnoozeButton({ label, onPick }: { label: string; onPick: (until: string
   return (
     <>
       <button ref={btn} type="button" className="btn btn-sm action-needed-snooze" data-testid="action-snooze"
-        aria-haspopup="dialog" aria-expanded={menu !== null} aria-label={`Snooze ${label}`}
+        aria-haspopup="dialog" aria-expanded={menu !== null} aria-label={`Snooze this ${label.toLowerCase()}`}
         onClick={() => setMenu(menu ? null : 'presets')}>Snooze <span aria-hidden="true">▾</span></button>
       {menu === 'presets' && (
         <SnoozeFlyout soon point={point()} anchorRef={btn} onSnooze={onPick} onPickDate={() => setMenu('date')} onClose={() => setMenu((m) => (m === 'presets' ? null : m))} />
@@ -108,8 +108,13 @@ function showPromptBelow(from: HTMLElement | null): boolean {
   return !!card;
 }
 
-const Line = memo(function Line({ task, item, onAnswer, failure, below }: {
-  task: Task; item: ActionItem; onAnswer: (id: string) => AnswerSettle; failure?: AnswerFailure;
+const settled: AnswerSettle = () => {};
+
+/** One thing a task asks of the user, as the one ask card (AskCard.tsx): what it asks, a line of
+ *  why, the box to type in and its buttons, Snooze last. `onAnswer` hides it the moment an answer
+ *  goes (the block's own list); alone it waits for the status to drop it. */
+export const AskCard = memo(function AskCard({ task, item, onAnswer = () => settled, failure, below }: {
+  task: Task; item: ActionItem; onAnswer?: (id: string) => AnswerSettle; failure?: AnswerFailure;
   /** Its own card is in the chat below (a session's strip, its own live prompt): point at it. */
   below?: boolean;
 }) {
@@ -139,6 +144,9 @@ const Line = memo(function Line({ task, item, onAnswer, failure, below }: {
     });
   };
   let answer: ReactNode = null;
+  const snooze = until
+    ? <button type="button" className="btn btn-sm action-needed-snooze" data-testid="action-unsnooze" onClick={() => write(null)}>Unsnooze</button>
+    : <SnoozeButton label={label} onPick={write} />;
   if (!until && below && !answerHere) {
     answer = (
       <button type="button" className="btn btn-sm action-needed-below" data-testid="action-answer-below"
@@ -149,29 +157,27 @@ const Line = memo(function Line({ task, item, onAnswer, failure, below }: {
       <OrgInlineAnswer alert={alertOfItem(task, item)} task={task} summary={item.summary} onAnswer={() => onAnswer(item.id)} failure={failure} {...(item.sessionId ? { sessionId: item.sessionId } : {})} />
     );
   }
+  // A live prompt's own card says its question: the card would say it twice.
+  const says = !!until || (below && !answerHere) || ANSWERS[item.kind] !== 'prompt';
+  const source = taskTextSource(task, 'needs');
   return (
-    <div className={`action-needed-item${until ? ' is-snoozed' : ''}`} data-testid="action-item" data-kind={item.kind} data-item-id={item.id} data-peek-row="">
-      {/* Its kind and age, its Snooze at the end; what it asks on the lines below (a narrow panel
-          keeps the words: they never share a line with the buttons). */}
-      <div className="action-needed-head">
-        <span className={`action-needed-kind action-kind-${item.kind}`} data-testid="action-kind">{label}</span>
-        {item.at && !until ? <span className="action-needed-ago">{timeAgo(item.at)}</span> : null}
-        <span className="action-needed-fill" />
-        {until
-          ? <button type="button" className="btn btn-sm" data-testid="action-unsnooze" onClick={() => write(null)}>Unsnooze</button>
-          : <SnoozeButton label={label} onPick={write} />}
-      </div>
-      {/* A live prompt's own card says its question: the line would say it twice. */}
-      {until || (below && !answerHere) || ANSWERS[item.kind] !== 'prompt'
-        ? <div className="action-needed-summary"><AgentText compact inline {...taskTextSource(task, 'needs')} text={item.summary} testId="action-summary" /></div> : null}
-      {until ? (
-        <div className="action-needed-until" data-testid="action-snoozed-until">
-          Snoozed until {snoozeUntilText(until)}{item.blocking ? ' · its session waits on it' : ''}
-        </div>
-      ) : null}
-      {note ? <div className="org-answer-error" role="alert" data-testid="action-snooze-note">{note}</div> : null}
-      {answer ? <div className="action-needed-answer">{answer}</div> : null}
-    </div>
+    <AskCardFrame
+      testId="action-item"
+      className={`action-needed-item${until ? ' is-snoozed' : ''}`}
+      data={{ 'data-kind': item.kind, 'data-item-id': item.id }}
+      question={says ? <AgentText compact inline {...source} text={item.summary} testId="action-summary" /> : undefined}
+      detail={says && item.detail ? <AgentText compact inline {...source} text={item.detail} testId="action-detail" /> : undefined}
+      status={<>
+        {until ? (
+          <div className="ask-card-status" data-testid="action-snoozed-until">
+            Snoozed until {snoozeUntilText(until)}{item.blocking ? ' · its session waits on it' : ''}
+          </div>
+        ) : null}
+        {note ? <div className="org-answer-error" role="alert" data-testid="action-snooze-note">{note}</div> : null}
+      </>}
+      answer={answer}
+      tools={snooze}
+    />
   );
 });
 
@@ -207,9 +213,10 @@ export const ActionNeeded = memo(function ActionNeeded({ task, variant = 'row', 
     // On a row a click, a key or a drag inside answers here: it never opens or drags the row.
     <div className={`action-needed${strip ? ' is-strip' : ''}`} data-testid={strip ? 'session-action-needed' : 'action-needed'} data-action-task={task.id}
       {...(variant === 'row' ? { onClick: stop, onKeyDown: stop, onPointerDown: stop } : {})}>
+      {/* Its edge says what it is; the words stay for a screen reader. */}
       <div className="action-needed-title">Action needed{strip ? ` · ${shown.length}` : ''}</div>
       {lines.map((item) => (
-        <Line key={item.id} task={task} item={item} onAnswer={onAnswer} failure={failures[item.id]}
+        <AskCard key={item.id} task={task} item={item} onAnswer={onAnswer} failure={failures[item.id]}
           below={strip && !!sessionId && item.sessionId === sessionId && ANSWERS[item.kind] === 'prompt'} />
       ))}
       {strip && (rest > 0 || restShown) && shown.length > STRIP_LINES ? (

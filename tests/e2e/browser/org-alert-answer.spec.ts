@@ -117,8 +117,8 @@ async function openAnswer(page: Page, id: string, shape: string) {
   else await expect(row.getByTestId('org-alert-snooze')).toBeVisible()
   const inline = page.locator(`[data-testid="org-answer-inline"][data-answer-task="${id}"]`)
   await expect(inline).toHaveAttribute('data-shape', shape)
-  // Inside the rail.
-  const box = (await inline.boundingBox())!
+  // Inside the rail (the answer's parts sit in its card's answer row: the card's box).
+  const box = (await row.boundingBox())!
   const rail = (await page.getByTestId('org-rail').boundingBox())!
   expect(box.x).toBeGreaterThanOrEqual(rail.x - 0.5)
   expect(box.x + box.width).toBeLessThanOrEqual(rail.x + rail.width + 0.5)
@@ -352,12 +352,14 @@ test('a Board choice: its options, the recommended one marked; a pick answers it
   await expect(options.getByTestId('org-answer-option')).toHaveText(['Plan A', 'Plan B', 'Plan C'], { timeout: 30_000 })
   await expect(options.locator('[data-value="b"]')).toHaveClass(/btn-primary/)
   // The question is the row's summary (a clamped line once collapsed to nothing in WebKit), and
-  // words are one click away, never the first thing shown.
+  // the words box is shown with the options, no click opens it (2026-11-20, the user: "Why the fuck
+  // i need to clcik reply").
+
   const summary = alertRow(page, ids.choice).getByTestId('org-ask-summary')
   await expect(summary).toBeVisible()
   expect((await summary.boundingBox())!.height).toBeGreaterThan(10)
-  await expect(menu.getByTestId('org-answer-input')).toHaveCount(0)
-  await expect(menu.getByTestId('org-answer-other')).toBeVisible()
+  await expect(menu.getByTestId('org-answer-input')).toBeVisible()
+  await expect(menu.getByTestId('org-answer-other')).toHaveCount(0)
   await page.screenshot({ path: `test-results/org-answer-choice-${test.info().project.name}.png` })
   const gone = await watchRowGone(page, ids.choice)
   await options.locator('[data-value="c"]').click()
@@ -441,17 +443,15 @@ test('an ask its task shaped: a clear summary, More for the detail, Yes / No and
     await expect.poll(async () => (await (await request.get(`/api/tasks/${id}`)).json()).task?.user_status?.askForm?.kind ?? '', { timeout: 30_000 }).not.toBe('')
   }
   await openTeam(page)
-  // Yes / No: the summary is the form's, More opens the detail.
+  // Yes / No: the summary is the form's, its detail the line under it (no More to click).
   const ynRow = alertRow(page, yn)
   const ynForm = await openAnswer(page, yn, 'yes_no')
   await expect(ynRow.getByTestId('org-ask-summary')).toHaveText(`Ship 0.6.22 on Saturday ${STAMP}?`)
-  await expect(ynRow.getByTestId('org-ask-more')).toHaveCount(0)
-  await ynRow.getByTestId('org-ask-more-toggle').click()
-  // AgentText renders the newline as a `<br>` (markdown `breaks`), which textContent drops:
-  // read what the user sees, the rendered text, where it is a line break.
-  await expect.poll(() => ynRow.getByTestId('org-ask-more').innerText()).toMatch(/The notes cover the rail\.\n+The review is done\./)
+  await expect(ynRow.getByTestId('org-ask-more-toggle')).toHaveCount(0)
+  await expect(ynRow.getByTestId('org-ask-more')).toContainText('The notes cover the rail.')
+  await expect(ynRow.getByTestId('org-ask-more')).toContainText('The review is done.')
   await expect(ynForm.getByTestId('org-answer-option')).toHaveText(['Yes', 'No'])
-  await expect(ynForm.getByTestId('org-answer-input')).toHaveCount(0)
+  await expect(ynForm.getByTestId('org-answer-input')).toBeVisible()
   // Multiple choice: check, then Send.
   const mForm = await openAnswer(page, multi, 'multi')
   const send = mForm.getByTestId('org-answer-send-picked')

@@ -24,10 +24,11 @@
  *
  * A row in Needs you always says what it asks (askSummary is never empty); a node is never a bare
  * row of its own (the user: "u need to show what are actually waiting"). The node's own ask is a row
- * too, the first, named for the node: every Needs you count has its rows (2026-10-31). Each row says
- * when its ask was checked, or Not verified, on a line of its own (cardChecked), and any action that
- * takes a row off (an answer, a snooze) takes it off on the click. No title tooltips: they drew over
- * the row's own menus.
+ * too, the first, named for the node: every Needs you count has its rows (2026-10-31). Each row is
+ * the one ask card (AskCard.tsx): its task, what it asks, a line of why, the box to type in and its
+ * buttons; no category word and no "Checked ..." line (2026-11-20, the user: "this is too
+ * complcaited, just thread"). Any action that takes a row off (an answer, a snooze) takes it off on
+ * the click. No title tooltips: they drew over the row's own menus.
  */
 import '@/styles/org-rail.css';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -51,10 +52,11 @@ import { useWatchToggle } from '@/components/tasks/WatchToggle';
 import * as ICONS from '@/components/common/Icons';
 import { snoozeTakesOff } from '@open-walnut/user-status';
 import { askSummary, lineSetBy, readStatusLine } from './org-ask-form';
-import { alertCategoryLabel, askCount, cardChecked, isAsk, type ChannelRow, type OrgAlertView } from './org-channels-model';
+import { askCount, isAsk, type ChannelRow, type OrgAlertView } from './org-channels-model';
 import { taskPath } from '@/utils/task-path';
 import type { Approval } from '@/api/approvals';
 import { ApprovalRows } from '@/components/approvals/ApprovalRow';
+import { AskCardFrame } from '@/components/actions/AskCard';
 import type { ImageAttachment } from '@/api/chat';
 import { AgentText } from '@/components/common/AgentText';
 import { taskTextSource } from '@/utils/agent-text-source';
@@ -183,9 +185,6 @@ function AskRow({ a, task, vp, own, onOpen, onQuote, canQuote, answers }: {
   const { summary, more } = askSummary(a);
   // The ask's words: their recorded writer (a letter's or a choice's is not on the task: unknown).
   const askSource = taskTextSource(task, 'needs');
-  const checked = cardChecked(a);
-  const category = alertCategoryLabel(a);
-  const [open, setOpen] = useState(false);
   const failure = answers.failed.get(a.taskId);
   // A failure belongs to the ask it answered: a new ask of the task drops it.
   const askKey = `${a.kind}|${a.source ?? ''}|${a.ask ?? ''}|${a.form?.summary ?? ''}`;
@@ -195,73 +194,65 @@ function AskRow({ a, task, vp, own, onOpen, onQuote, canQuote, answers }: {
     if (!failedFor) { setFailedFor(askKey); return; }
     if (failedFor !== askKey) { setFailedFor(''); answers.seen(a.taskId); }
   }, [failure, failedFor, askKey, answers, a.taskId]);
+  // The one ask card (AskCard.tsx): which task, what it asks, a line of why, the box to type in, its
+  // buttons and the card's tools (2026-11-20, the user: "this is too complcaited, just thread").
+  const link = (
+    <a
+      className="org-alert-link"
+      data-testid="org-alert-link"
+      href={taskPath(a.taskId)}
+      aria-label={`Open ${a.title}`}
+      onClick={(e) => { e.preventDefault(); onOpen(a); }}
+    >{a.title}</a>
+  );
   return (
-    <div className={`org-alert org-ask${own ? ' is-own' : ''}`} data-testid="org-alert" data-task-id={a.taskId} data-kind={a.kind} {...(own ? { 'data-own': '1' } : {})} {...(a.source ? { 'data-source': a.source } : {})}>
-      {own && <div className="org-ask-own" data-testid="org-ask-own">{own} asks you</div>}
-      {a.via && (
-        // The top-level task itself, opened as a task: the subtask's letter or Board choice is not its.
-        <div className="org-ask-via-line">
-          <a
-            className="org-ask-via"
-            data-testid="org-ask-via"
-            href={taskPath(a.via.id)}
-            aria-label={`Part of ${a.via.title}`}
-            onClick={(e) => { e.preventDefault(); onOpen({ ...a, taskId: a.via!.id, title: a.via!.title, source: undefined }); }}
-          >{a.via.title} ›</a>
-        </div>
-      )}
-      {/* One line: what to do with it, then what it asks or has to read (2026-11-03, the user: "in one line"). */}
-      <div className="org-ask-summary" {...(a.category ? { 'data-category': a.category } : {})}>
-        {category && <><span className={`org-ask-category org-ask-category-${a.category}`} data-testid="org-ask-category">{category}:</span>{' '}</>}
-        <AgentText compact inline {...askSource} text={summary} testId="org-ask-summary" />
-      </div>
-      {checked && <div className={`org-alert-checked${checked.unverified ? ' is-unverified' : ''}`} data-testid="org-alert-checked" data-unverified={checked.unverified ? '1' : '0'}>{checked.text}</div>}
-      <div className="org-ask-meta">
+    <AskCardFrame
+      testId="org-alert"
+      className={`org-alert org-ask${own ? ' is-own' : ''}`}
+      data={{ 'data-task-id': a.taskId, 'data-kind': a.kind, 'data-own': own ? '1' : undefined, 'data-source': a.source, 'data-category': a.category, 'data-vp': vp }}
+      title={a.via ? (<>
+        {/* The top-level task itself, opened as a task: the subtask's letter or Board choice is not its. */}
         <a
-          className="org-alert-link"
-          data-testid="org-alert-link"
-          href={taskPath(a.taskId)}
-          aria-label={`Open ${a.title}`}
-          onClick={(e) => { e.preventDefault(); onOpen(a); }}
-        >{a.title}</a>
-        {vp && <span className="org-ask-vp" data-testid="org-ask-vp">{vp}</span>}
-        <span className="org-ask-tools">
-          {more && (
-            <button type="button" className="org-ask-tool" data-testid="org-ask-more-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? 'Less' : 'More'}</button>
-          )}
+          className="org-ask-via"
+          data-testid="org-ask-via"
+          href={taskPath(a.via.id)}
+          aria-label={`Part of ${a.via.title}`}
+          onClick={(e) => { e.preventDefault(); onOpen({ ...a, taskId: a.via!.id, title: a.via!.title, source: undefined }); }}
+        >{a.via.title} ›</a>{' '}{link}
+      </>) : own ? <>{link} <span className="org-ask-own" data-testid="org-ask-own">asks you</span></> : link}
+      question={<AgentText compact inline {...askSource} text={summary} testId="org-ask-summary" />}
+      detail={more ? <AgentText compact inline {...askSource} text={more} className="org-ask-more" testId="org-ask-more" /> : undefined}
+      status={failure?.of === 'snooze' ? <div className="org-answer-error" role="alert" data-testid="org-answer-error">{failure.message}</div> : null}
+      answer={<OrgInlineAnswer alert={a} task={task} summary={summary} onAnswer={answers.start} {...(failure && failure.of !== 'snooze' ? { failure } : {})} />}
+      tools={<>
+        <button
+          type="button"
+          className="btn btn-sm org-ask-tool"
+          data-testid="org-alert-quote"
+          disabled={!canQuote}
+          aria-label={canQuote ? 'Quote it in this chat, to talk it over here' : 'Start a chat here first'}
+          onClick={() => onQuote(a)}
+        >Quote</button>
+        {task && <OrgWatchToggle task={task} className="org-ask-tool" />}
+        {/* Done and asking nothing: close it from the card (2026-11-03, the user: "see if can closed"). */}
+        {a.category === 'close' && (
           <button
             type="button"
-            className="org-ask-tool"
-            data-testid="org-alert-quote"
-            disabled={!canQuote}
-            aria-label={canQuote ? 'Quote it in this chat, to talk it over here' : 'Start a chat here first'}
-            onClick={() => onQuote(a)}
-          >Quote</button>
-          {/* Only where a snooze takes the ask off the user (never a live prompt, never Main's own). */}
-          {snoozeTakesOff({ state: 'needs', source: a.kind === 'question' || a.kind === 'permission' ? 'prompt' : a.source }, task?.org_role === 'main') && (
-            <OrgAlertSnooze alert={a} current={task?.start_date ?? undefined} onStart={() => answers.start(a.taskId)} />
-          )}
-          {task && <OrgWatchToggle task={task} className="org-ask-tool" />}
-          {/* Done and asking nothing: close it from the card (2026-11-03, the user: "see if can closed"). */}
-          {a.category === 'close' && (
-            <button
-              type="button"
-              className="org-ask-tool org-ask-close"
-              data-testid="org-ask-close"
-              onClick={() => {
-                const settle = answers.start(a.taskId);
-                // Through the store: Home, the board and every count see it closed on the click.
-                void complete(a.taskId).then((ok) => settle(ok ? undefined : { of: 'answer', message: 'Could not close it: the server refused. Try again.' }));
-              }}
-            >Close</button>
-          )}
-        </span>
-      </div>
-      {open && more && <AgentText compact {...askSource} text={more} className="org-ask-more" testId="org-ask-more" />}
-      {/* A refused snooze says so on the row, whatever the answer form is (a task with no session has none). */}
-      {failure?.of === 'snooze' && <div className="org-answer-error" role="alert" data-testid="org-answer-error">{failure.message}</div>}
-      <OrgInlineAnswer alert={a} task={task} summary={summary} onAnswer={answers.start} {...(failure && failure.of !== 'snooze' ? { failure } : {})} />
-    </div>
+            className="btn btn-sm org-ask-tool org-ask-close"
+            data-testid="org-ask-close"
+            onClick={() => {
+              const settle = answers.start(a.taskId);
+              // Through the store: Home, the board and every count see it closed on the click.
+              void complete(a.taskId).then((ok) => settle(ok ? undefined : { of: 'answer', message: 'Could not close it: the server refused. Try again.' }));
+            }}
+          >Close</button>
+        )}
+        {/* Only where a snooze takes the ask off the user (never a live prompt, never Main's own). */}
+        {snoozeTakesOff({ state: 'needs', source: a.kind === 'question' || a.kind === 'permission' ? 'prompt' : a.source }, task?.org_role === 'main') && (
+          <OrgAlertSnooze alert={a} current={task?.start_date ?? undefined} onStart={() => answers.start(a.taskId)} />
+        )}
+      </>}
+    />
   );
 }
 

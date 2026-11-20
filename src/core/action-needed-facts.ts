@@ -4,7 +4,7 @@
  * decision letters. Each fact turns into an item here, so the item's shape has one writer.
  */
 import type { ActionItem } from './action-needed.js';
-import { promptKind } from './action-needed.js';
+import { detailOf, promptKind } from './action-needed.js';
 import type { AskOption } from './user-status.js';
 import type { ApprovalView } from './approvals/types.js';
 import type { LetterRecord } from './human-inbox/types.js';
@@ -13,9 +13,12 @@ import type { SessionRecord } from './types.js';
 const one = (s: unknown, max = 200): string => (typeof s === 'string' ? s : '').replace(/\s+/g, ' ').trim().slice(0, max);
 
 /** A pending approval's item. */
-export function approvalItem(a: Pick<ApprovalView, 'id' | 'what' | 'createdAt' | 'mode' | 'guard' | 'requester'>): ActionItem {
+export function approvalItem(a: Pick<ApprovalView, 'id' | 'what' | 'createdAt' | 'mode' | 'guard' | 'requester' | 'detail' | 'detailRole'>): ActionItem {
+  const summary = one(a.what) || 'Approve a step';
   return {
-    kind: 'approval', id: a.id, summary: one(a.what) || 'Approve a step', at: a.createdAt,
+    kind: 'approval', id: a.id, summary, at: a.createdAt,
+    // Only a detail said for the person; a technical one (a command's context, a diff) stays in Details.
+    ...(a.detailRole === 'summary' ? detailOf(a.detail, summary) : {}),
     ...(a.requester?.sessionId ? { sessionId: a.requester.sessionId } : {}),
     ...(a.mode === 'biometric' || a.guard ? { proof: true as const } : {}),
   };
@@ -57,7 +60,10 @@ export function promptItem(sessionId: string, p: Pick<Pending, 'requestId' | 'to
 }
 
 /** An open decision letter's item: its subject and its buttons. */
-export function letterItem(l: Pick<LetterRecord, 'id' | 'subject' | 'createdAt' | 'actions'>): ActionItem {
+export function letterItem(l: Pick<LetterRecord, 'id' | 'subject' | 'createdAt' | 'actions'> & { textPreview?: string }): ActionItem {
   const options = (l.actions ?? []).map((a) => ({ id: a.id, label: one(a.label, 80) })).filter((o) => o.label).slice(0, 6);
-  return { kind: 'letter', id: l.id, summary: one(l.subject) || 'A letter waits for your answer', at: new Date(l.createdAt).toISOString(), ...(options.length ? { options } : {}) };
+  const summary = one(l.subject) || 'A letter waits for your answer';
+  // Its preview without the kind words Walnut leads a decision with (thread-words.ts USER_KIND_LEAD_WORDS).
+  const preview = (l.textPreview ?? '').replace(/^\s*(?:Yours to decide \([^)]*\):|由你决定（[^）]*）：)\s*/, '');
+  return { kind: 'letter', id: l.id, summary, ...detailOf(preview, summary), at: new Date(l.createdAt).toISOString(), ...(options.length ? { options } : {}) };
 }

@@ -23,6 +23,7 @@ const form = (why: string): Kind => ({ kind: 'form', why })
 const BOXES: Record<string, Kind> = {
   // Answers in words.
   'components/org/OrgInlineAnswer.tsx': ANSWER,
+  'components/chat/ReplyComposer.tsx': COMPOSER,
   'components/inbox/LetterView.tsx': ANSWER,
   'components/common/PermissionAnswerForm.tsx': ANSWER,
   'components/sessions/PromptCards.tsx': ANSWER,
@@ -107,9 +108,12 @@ describe('every free-text answer box is the AnswerBox', () => {
     expect(Object.keys(BOXES).filter((f) => !fs.existsSync(path.join(WEB_SRC, f)))).toEqual([])
   })
 
-  it.each(Object.entries(BOXES).filter(([, k]) => k.kind === 'answer').map(([f]) => f))('%s answers in the AnswerBox', (rel) => {
+  // Or in the chat's own composer (ReplyComposer, ChatInput light): an ask's card takes @, / and
+  // pictures as the chat does (2026-11-20, the user: "make sure they potenially reuse, liek the at
+  // works like the slash works").
+  it.each(Object.entries(BOXES).filter(([, k]) => k.kind === 'answer').map(([f]) => f))('%s answers in the AnswerBox or the chat composer', (rel) => {
     const src = read(rel)
-    expect(src).toMatch(/<AnswerBox\b/)
+    expect(src).toMatch(/<(AnswerBox|ReplyComposer)\b/)
     expect(src, 'no raw textarea in an answer surface').not.toMatch(/<textarea\b/)
   })
 

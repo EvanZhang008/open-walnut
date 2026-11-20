@@ -160,7 +160,8 @@ test('the sidebar opens Main and the leads; a lead\'s red is its threads, its ta
   await expect(detail.getByTestId('org-detail-title')).toHaveText('CEO')
   await openTasksBy(detail, 'all')
   const mainAsk = taskSection(detail, 'needs').locator(`[data-testid="org-alert"][data-task-id="${ids.ask}"]`)
-  await expect(mainAsk.getByTestId('org-ask-vp')).toHaveText(`${ALPHA} VP`, { timeout: 30_000 })
+  // The VP it is under rides on the card, never as a label on it (2026-11-20: no source words).
+  await expect(mainAsk).toHaveAttribute('data-vp', `${ALPHA} VP`, { timeout: 30_000 })
   // Back to the VP from its row.
   await alpha.click()
   await expect(alpha).toHaveAttribute('aria-selected', 'true')
@@ -325,7 +326,7 @@ test('a task whose Board asks the user to choose needs them: its row, its line, 
   await expect(alert).toHaveAttribute('data-kind', 'needs')
   await expect(alert.getByTestId('org-alert-link')).toHaveText(`Renewal ${STAMP}`)
   await expect(alert.getByTestId('org-ask-summary')).toHaveText(`Pick the renewal date ${STAMP}`)
-  await expect(alert.getByTestId('org-ask-category')).toHaveText('Decide:')
+  await expect(alert.getByTestId('org-ask-category')).toHaveCount(0)
   // The task's name leads to where the ask lives: the Board.
   await alert.getByTestId('org-alert-link').click()
   await expect(page.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'board')

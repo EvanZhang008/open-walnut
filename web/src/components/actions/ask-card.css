@@ -1,0 +1,42 @@
+/* The one ask card (AskCard.tsx): title, what it asks, a line of why, the words box with its buttons
+   and Snooze last. A wide card keeps the buttons beside the box; a narrow one puts them below. */
+.ask-card { display: flex; flex-direction: column; gap: 4px; min-width: 0; container-type: inline-size; }
+.ask-card-title {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--fg-muted);
+}
+.ask-card-title a { color: inherit; text-decoration: none; font-weight: 600; }
+.ask-card-title a:hover { text-decoration: underline; }
+.ask-card-question {
+  min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow-wrap: anywhere; line-height: 1.35; font-size: 13px; font-weight: 600; color: var(--fg);
+}
+.ask-card-detail {
+  min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow-wrap: anywhere; line-height: 1.35; font-size: 12px; color: var(--fg-muted);
+}
+.ask-card-status { color: var(--fg-muted); font-size: 12px; }
+.ask-card-answer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.ask-card-answer:empty { display: none; }
+/* Its answer's own parts take their places in this one row. */
+.ask-card-answer :is(.org-answer-inline, .action-needed-approval, .org-answer-options, .org-answer-multi) { display: contents; }
+.ask-card-answer .org-answer-inline > * { flex-basis: auto; }
+.ask-card-answer .org-answer-words { order: 1; flex: 1 1 100%; min-width: 0; }
+.ask-card-answer :is(.kanban-prompt, .permission-request-card) { order: 0; flex: 1 1 100%; min-width: 0; }
+.ask-card-answer :is(.btn, .org-answer-check, .approval-actions) { order: 2; flex: none; }
+.ask-card-answer .approval-actions { display: flex; gap: 6px; }
+.ask-card-answer .ask-card-tools { order: 3; flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+.ask-card-answer :is(.org-answer-note, .org-answer-error) { order: 4; flex: 1 1 100%; }
+.ask-card-answer .org-answer-note:empty { display: none; }
+@container (min-width: 600px) {
+  .ask-card-answer .org-answer-words { flex: 1 1 320px; }
+}
+.ask-card.is-snoozed :is(.ask-card-question, .ask-card-detail) { color: var(--fg-muted); font-weight: 500; }
+
+/* A phone: every control is a finger's size and every word 12 px at least (phone-pages.css). */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .ask-card :is(button, [role='button'], a[href], input:not([type='hidden']), textarea, select) {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  .app-shell-navigation .ask-card :is(.ask-card-status, .org-answer-note, .org-answer-error) { font-size: 12px; }
+}

@@ -53,6 +53,8 @@ export interface ActionItem {
   id: string;
   /** One line, the thing asked. */
   summary: string;
+  /** A line or two of why, under it (a letter's preview, an ask's more, an approval's summary). */
+  detail?: string;
   /** When it was asked (ISO). */
   at?: string;
   /** The session that asks (a prompt, an ask) or that asked (an approval). */
@@ -119,10 +121,17 @@ export function ownItemOf(s: UserStatus, sessionId?: string): ActionItem | null 
   if (s.state !== 'needs' || !s.ask) return null;
   if (s.source === 'session') {
     const id = s.decision?.id ?? `ask:${hashWords(s.ask)}`;
-    return strip<ActionItem>({ kind: 'ask', id, summary: s.askForm?.summary ?? s.ask, sessionId: s.askSessionId ?? sessionId, ...(s.askForm ? { form: s.askForm, options: s.askForm.options } : {}), at: s.checkedAt });
+    return strip<ActionItem>({ kind: 'ask', id, summary: s.askForm?.summary ?? s.ask, ...(detailOf(s.askForm?.more, s.askForm?.summary ?? s.ask)), sessionId: s.askSessionId ?? sessionId, ...(s.askForm ? { form: s.askForm, options: s.askForm.options } : {}), at: s.checkedAt });
   }
   if (s.source === 'choice' && s.choice) return { kind: 'choice', id: s.choice.id, summary: s.ask, board: s.choice.board };
   return null;
+}
+
+/** An item's detail: its words on one line, cut at 240, and none when they only repeat its summary. */
+export function detailOf(words: string | null | undefined, summary: string): { detail?: string } {
+  const d = (words ?? '').replace(/\s+/g, ' ').trim().slice(0, 240);
+  const same = (x: string) => x.replace(/[\s.。!！?？]+$/g, '').trim();
+  return d && same(d) !== same(summary.replace(/\s+/g, ' ')) ? { detail: d } : {};
 }
 
 /** A short stable id for words (FNV-1a), for an ask that has no decision id. */

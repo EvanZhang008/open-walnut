@@ -5,8 +5,9 @@
  * live prompt shows its own controls (Allow / Deny, a question's options), a decision letter its
  * actions, a Board choice its options, a task's ask form its Yes / No, its choices (multi: check,
  * then Send) or a line; an ask with no shape a line that goes to that task's session. A choice can
- * still be answered in words ("Reply…", the same box a thread card answers with), but the words box is
- * never the first thing shown. Every kind takes words (2026-11-19, the user: "这个能不能搞得像 thread
+ * also be answered in words, in the same box a thread card answers with, shown at once: no click opens
+ * it (2026-11-20, the user: "Why the fuck i need to clcik reply ... Can it jsut show inbox and I can
+ * tuype?"). It never takes the focus by itself: a page shows many of them. Every kind takes words (2026-11-19, the user: "这个能不能搞得像 thread
  * 一样……我想 reply 之类的"): a letter's reply answers it, a tool prompt's declines the step with
  * them, and an approval's goes to its session while the approval still waits for Approve or Deny.
  *
@@ -14,19 +15,17 @@
  * failure brings it back with the reason and the words the user typed (a busy server on the Mac
  * held a 24 ms op for 5 s, 2026-09-29).
  */
-import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { Task } from '@open-walnut/core';
 import { apiGet, apiPut } from '@/api/client';
 import { answerLetter, humanReplyToLetter } from '@/api/human-inbox';
 import { respondToPermission, retrySession } from '@/api/sessions';
 import { KanbanCardPrompt } from '@/components/board/kanban/KanbanCardPrompt';
-import { AnswerBox } from '@/components/common/AnswerBox';
-import { useImageAttachments, type ImageAttachments } from '@/components/common/image-attachments';
+import { ReplyComposer } from '@/components/chat/ReplyComposer';
 import { buildImageRefsPayload } from '@/api/image-upload';
 import type { ImageAttachment } from '@/api/chat';
 import { getLetterSnapshot, loadLetters, patchLetter, subscribeLetters } from '@/components/inbox/letter-store';
 import { useSessionSend } from '@/hooks/useSessionSend';
-import { useDraft } from '@/hooks/useDraft';
 import { clearDraft } from '@/utils/drafts';
 import { sessionDraftKey } from '@/utils/composer-insert';
 import { boardChoiceDraftKey } from '@/components/board/BoardReplyDock';
@@ -65,63 +64,18 @@ function Options({ options, recommended, onPick, testId }: {
   );
 }
 
-/** A line in the user's own words. Kept under `draftKey` (the ask's own box: the session's composer,
- *  the Board choice's) until the answer is taken; the caller clears it then. */
-function WordsField({ placeholder, initial = '', pictures, draftKey: key, onSend, sendLabel = 'Send', autoFocus }: {
+/** A line in the user's own words: the chat's own composer (ReplyComposer), so @, / and pictures
+ *  work as in the chat. Kept under `draftKey` (the ask's own box: the session's composer, the Board
+ *  choice's) until the answer is taken. */
+function WordsField({ placeholder, initial = '', draftKey, onSend, sessionId, taskId }: {
   placeholder: string;
   initial?: string;
-  /** The form's pictures (useFormPictures): they go with the words, and with a pick too. */
-  pictures: ImageAttachments;
-  draftKey: string | null;
+  draftKey: string;
   onSend: (text: string, images?: ImageAttachment[]) => void;
-  sendLabel?: string;
-  autoFocus?: boolean;
+  sessionId?: string | null;
+  taskId?: string;
 }) {
-  const draft = useDraft(key);
-  const [plain, setPlain] = useState(initial);
-  const text = key ? draft.text : plain;
-  const setText = key ? draft.setText : setPlain;
-  const send = (t: string) => { draft.flush(); onSend(t, takePictures(pictures)); };
-  return (
-    <AnswerBox
-      className="org-answer-words"
-      testId="org-answer-input"
-      sendTestId="org-answer-send"
-      draftKey={key}
-      value={text}
-      placeholder={placeholder}
-      autoFocus={autoFocus}
-      onChange={setText}
-      onSubmit={send}
-      sendLabel={sendLabel}
-      pictures={pictures}
-    />
-  );
-}
-
-/**
- * A form's pictures, as in the chat (common/image-attachments.ts): pasted into its words box, sent
- * with the words or with a pick, and put back with a failed send's words.
- */
-function useFormPictures(failure: AnswerFailure | undefined): ImageAttachments {
-  const pictures = useImageAttachments();
-  const { set } = pictures;
-  const back = failure?.images;
-  useEffect(() => { if (back?.length) set(back); }, [back, set]);
-  return pictures;
-}
-
-/** Take the form's pictures for a send (they leave the box with it). */
-function takePictures(pictures: ImageAttachments): ImageAttachment[] | undefined {
-  const images = pictures.images;
-  pictures.clear();
-  return images.length ? images : undefined;
-}
-
-/** "Other": a choice answered in words, opened on a click so the choices stay the first thing. */
-function OtherWords({ open, onOpen, children }: { open: boolean; onOpen: () => void; children: ReactNode }) {
-  if (open) return <>{children}</>;
-  return <button type="button" className="org-answer-other" data-testid="org-answer-other" onClick={onOpen}>Reply…</button>;
+  return <ReplyComposer placeholder={placeholder} initial={initial} draftKey={draftKey} onSend={onSend} sessionId={sessionId ?? null} {...(taskId ? { taskId } : {})} />;
 }
 
 const Failed = ({ failure }: { failure: AnswerFailure | undefined }) =>
@@ -183,27 +137,23 @@ function LetterAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords
         options={letter.actions!.map((a) => ({ value: a.id, label: a.label, ...(a.description ? { title: a.description } : {}) }))}
         onPick={pick}
       />
-      <ReplyField placeholder="Reply in your words" failure={failure} onSend={replyWords} />
+      <ReplyField placeholder="Reply…" failure={failure} onSend={replyWords} taskId={alert.taskId} draftKey={`draft:letter-reply:${letter.id}`} />
       <Failed failure={failure} />
     </>
   );
 }
 
-/** "Reply…": the words box under an ask's own buttons, opened on a click (open at once when a failed
- *  send put words back). One component wherever an ask is answered. */
-export function ReplyField({ placeholder, failure, onSend, draftKey = null }: {
+/** The words box beside an ask's own buttons, always shown. One component wherever an ask is answered. */
+export function ReplyField({ placeholder, failure, onSend, draftKey, sessionId = null, taskId }: {
   placeholder: string;
   failure: AnswerFailure | undefined;
   onSend: (text: string, images?: ImageAttachment[]) => void;
-  draftKey?: string | null;
+  /** The card's own box: its words wait here until sent. */
+  draftKey: string;
+  sessionId?: string | null;
+  taskId?: string;
 }) {
-  const [open, setOpen] = useState(!!failure?.draft || !!failure?.images?.length);
-  const pictures = useFormPictures(failure);
-  return (
-    <OtherWords open={open} onOpen={() => setOpen(true)}>
-      <WordsField placeholder={placeholder} initial={failure?.draft ?? ''} pictures={pictures} draftKey={draftKey} onSend={onSend} autoFocus />
-    </OtherWords>
-  );
+  return <WordsField placeholder={placeholder} initial={failure?.draft ?? ''} draftKey={draftKey} onSend={onSend} sessionId={sessionId} {...(taskId ? { taskId } : {})} />;
 }
 
 /** An approval answered in words: they go to its session as the user's message; only Approve or
@@ -225,7 +175,7 @@ export function ApprovalReply({ sessionId, summary, onSent }: { sessionId: strin
   };
   return (
     <>
-      <ReplyField key={note ? 'sent' : 'open'} placeholder="Tell its session something" failure={failure} onSend={reply} />
+      <ReplyField key={note ? 'sent' : 'open'} placeholder="Tell it something (Approve still needed)" failure={failure} onSend={reply} sessionId={sessionId} draftKey={`draft:approval-reply:${sessionId}:${summary}`} />
       {note && <div className="org-answer-note" role="status" data-testid="approval-reply-sent">{note.text}</div>}
       <Failed failure={failure} />
     </>
@@ -236,8 +186,6 @@ interface ChoiceFound { owner: string; id: string; title: string; options: Array
 
 function ChoiceAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords: () => void }) {
   const [found, setFound] = useState<ChoiceFound | null | undefined>(undefined);
-  const [other, setOther] = useState(!!failure?.draft || !!failure?.images?.length);
-  const pictures = useFormPictures(failure);
   useEffect(() => {
     let alive = true;
     // The server finds it by the rule the task's status counts by: on any Board, not only the
@@ -270,15 +218,15 @@ function ChoiceAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords
     });
   };
   const words = (
-    <WordsField placeholder={found.options.length ? 'Say it in your words' : 'Your answer'} initial={failure?.draft ?? ''} pictures={pictures} draftKey={wordsKey} onSend={(t, images) => answer({ text: t }, images)} autoFocus={found.options.length > 0} />
+    <WordsField placeholder={found.options.length ? 'Reply…' : 'Your answer'} initial={failure?.draft ?? ''} draftKey={wordsKey} onSend={(t, images) => answer({ text: t }, images)} taskId={alert.taskId} />
   );
   return (
     <>
       {found.options.length > 0 && (
-        <Options testId="org-answer-choice" options={found.options} {...(found.recommended ? { recommended: found.recommended } : {})} onPick={(v) => answer({ option: v }, takePictures(pictures))} />
+        <Options testId="org-answer-choice" options={found.options} {...(found.recommended ? { recommended: found.recommended } : {})} onPick={(v) => answer({ option: v })} />
       )}
       {/* A choice with no options is answered in words, on its Board all the same. */}
-      {found.options.length ? <OtherWords open={other} onOpen={() => setOther(true)}>{words}</OtherWords> : words}
+      {words}
       <Failed failure={failure} />
     </>
   );
@@ -290,8 +238,6 @@ function SessionAnswer({ alert, failure, onSend, sessionId, summary, shape }: Fo
 }) {
   const { send } = useSessionSend(sessionId);
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
-  const [other, setOther] = useState(!!failure?.draft || !!failure?.images?.length);
-  const pictures = useFormPictures(failure);
   // A failed session: its probe says so, or the task's status names the failure as its ask.
   const failed = alert.kind === 'error' || alert.source === 'error';
   if (!sessionId) return <div className="org-answer-note">It has no session to answer. Open it to start one.</div>;
@@ -320,23 +266,23 @@ function SessionAnswer({ alert, failure, onSend, sessionId, summary, shape }: Fo
   const recommended = options.find((o) => o.recommended)?.id;
   const words = (
     <WordsField
-      placeholder={failed ? 'Or tell it what to do' : shape === 'text' ? 'Your answer' : 'Say it in your words'}
+      placeholder={failed ? 'Or tell it what to do' : shape === 'text' ? 'Your answer' : 'Reply…'}
       initial={failure?.draft ?? ''}
-      pictures={pictures}
       draftKey={wordsKey}
+      sessionId={sessionId}
+      taskId={alert.taskId}
       onSend={(t, images) => {
         // The words are the answer: a picture goes with them, never as "(no answer)".
         if (!t.trim() && images?.length) { onSend()({ message: 'Add a few words to go with the picture.', images }); return; }
         reply(answerMessage(alert.form, summary, { words: t }), t, images);
       }}
-      autoFocus={shape !== 'text'}
     />
   );
   return (
     <>
       {failed && <Options testId="org-answer-retry" options={[{ value: 'retry', label: 'Retry', title: 'Start the failed session again' }]} onPick={retry} />}
       {(shape === 'yes_no' || shape === 'single') && options.length > 0 && (
-        <Options testId="org-answer-form" options={options.map((o) => ({ value: o.id, label: o.label }))} {...(recommended ? { recommended } : {})} onPick={(id) => reply(answerMessage(alert.form, summary, { picked: [id] }), undefined, takePictures(pictures))} />
+        <Options testId="org-answer-form" options={options.map((o) => ({ value: o.id, label: o.label }))} {...(recommended ? { recommended } : {})} onPick={(id) => reply(answerMessage(alert.form, summary, { picked: [id] }))} />
       )}
       {shape === 'multi' && options.length > 0 && (
         <div className="org-answer-multi" data-testid="org-answer-multi">
@@ -354,11 +300,11 @@ function SessionAnswer({ alert, failure, onSend, sessionId, summary, shape }: Fo
             className="btn btn-sm btn-primary"
             data-testid="org-answer-send-picked"
             disabled={!picked.size}
-            onClick={() => reply(answerMessage(alert.form, summary, { picked: options.filter((o) => picked.has(o.id)).map((o) => o.id) }), undefined, takePictures(pictures))}
+            onClick={() => reply(answerMessage(alert.form, summary, { picked: options.filter((o) => picked.has(o.id)).map((o) => o.id) }))}
           >Send{picked.size ? ` ${picked.size}` : ''}</button>
         </div>
       )}
-      {shape === 'text' || failed ? words : <OtherWords open={other} onOpen={() => setOther(true)}>{words}</OtherWords>}
+      {words}
       <Failed failure={failure} />
     </>
   );
@@ -392,7 +338,7 @@ export function OrgInlineAnswer({ alert, task, summary, onAnswer, failure, sessi
         />
         {/* A tool step answered in words declines it with them (a question's card has its own Other). */}
         {alert.kind !== 'question' && alert.itemId && (
-          <ReplyField placeholder="Tell it what to do instead (declines this step)" failure={failure} onSend={(text) => {
+          <ReplyField placeholder="Tell it what to do instead (declines this step)" failure={failure} sessionId={sessionId} taskId={alert.taskId} draftKey={`draft:prompt-reply:${alert.itemId}`} onSend={(text) => {
             if (!text.trim()) return;
             const settle = onAnswer(alert.taskId);
             respondToPermission(sessionId, alert.itemId!, false, text).then(() => settle(), (err: unknown) => {

@@ -5,30 +5,13 @@
   background: color-mix(in srgb, var(--warning, #bf8700) 9%, var(--bg));
   color: var(--fg); font-size: 12px; cursor: default; flex-basis: 100%; min-width: 0;
 }
-.action-needed-title { font-size: 11px; font-weight: 600; color: var(--warning-text, var(--warning, #9a6700)); letter-spacing: 0.02em; }
-.action-needed-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.action-needed-item + .action-needed-item { border-top: 1px solid color-mix(in srgb, var(--warning, #bf8700) 22%, transparent); padding-top: 6px; }
-.action-needed-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.action-needed-kind {
-  flex: none; font-weight: 700; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.03em;
-  color: var(--warning-text, var(--warning, #9a6700));
-}
-.action-needed-fill { flex: 1; }
-.action-needed-summary {
-  min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
-  overflow-wrap: anywhere; line-height: 1.35;
-}
-.action-needed-ago, .action-needed-until { flex: none; color: var(--fg-muted); font-size: 11px; }
-.action-needed-snooze { flex: none; }
-.action-needed-answer { min-width: 0; }
-.action-needed-approval { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.action-needed-approval .approval-actions { display: flex; gap: 6px; }
-.action-needed-item.is-snoozed .action-needed-kind,
-.action-needed-item.is-snoozed .action-needed-summary { color: var(--fg-muted); }
+/* The block's heading is for a screen reader only: its edge says what it is (2026-11-20, the user:
+   "why so much garbage Action needed, Ask just now"). */
+.action-needed-title { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.action-needed-item + .action-needed-item { border-top: 1px solid color-mix(in srgb, var(--warning, #bf8700) 22%, transparent); padding-top: 8px; margin-top: 2px; }
 .action-needed:not(:has(.action-needed-item:not(.is-snoozed))) {
   border-left-color: var(--border); background: color-mix(in srgb, var(--fg-muted) 6%, var(--bg));
 }
-.action-needed:not(:has(.action-needed-item:not(.is-snoozed))) .action-needed-title { color: var(--fg-muted); }
 /* A row's own state beside its ask: "Working" while its turn still runs. */
 .status-card-also-working {
   flex: none; font-size: 10.5px; padding: 0 6px; border-radius: 8px; line-height: 16px;
@@ -36,46 +19,11 @@
 }
 .status-card-actions-below { padding: 0 8px 4px 34px; }
 
-/* The strip under a session's title bar (experiment action_needed_everywhere): the same lines, the
-   first two in sight and "N more" for the rest, and each line as short as its width allows
-   (2026-11-19, the user: "它占用太多空间了……如果太 narrow 的话，我们就再加一行，把那个那些 button
-   什么放放在放在下面那一行"): wide, one row (kind, its words cut to one line, its buttons, Snooze);
-   narrow, two (kind, words and Snooze; the buttons below). A peek shows the whole words on hover. */
+/* The strip under a session's title bar (experiment action_needed_everywhere): the same items, the
+   first two in sight and "N more" for the rest. */
 .action-needed.is-strip {
-  flex: none; margin-left: 8px; margin-right: 8px; margin-bottom: 0; max-height: 40vh; overflow-y: auto; border-radius: 6px;
-  padding: 4px 8px; gap: 4px; container-type: inline-size;
+  flex: none; margin-left: 8px; margin-right: 8px; margin-bottom: 0; max-height: 45vh; overflow-y: auto; border-radius: 6px;
 }
-/* The orange edge says what it is; the words stay for a screen reader. */
-.action-needed.is-strip > .action-needed-title {
-  position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
-}
-.is-strip .action-needed-item {
-  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 8px; row-gap: 3px; align-items: center;
-  grid-template-areas: "kind summary snooze" "answer answer answer";
-}
-.is-strip .action-needed-item + .action-needed-item { padding-top: 4px; }
-@container (min-width: 600px) {
-  .is-strip .action-needed-item {
-    grid-template-columns: auto minmax(0, 1fr) auto auto;
-    grid-template-areas: "kind summary answer snooze";
-  }
-}
-/* A box to type in or a prompt's own card needs the width: under the words, whatever the width. */
-.is-strip .action-needed-item:has(.org-answer-words, .kanban-prompt, .permission-request-card, .org-answer-multi) {
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  grid-template-areas: "kind summary snooze" "answer answer answer";
-}
-.is-strip .action-needed-head { display: contents; }
-.is-strip .action-needed-kind { grid-area: kind; }
-.is-strip .action-needed-ago, .is-strip .action-needed-fill { display: none; }
-.is-strip .action-needed-head > .btn { grid-area: snooze; }
-.is-strip .action-needed-summary { grid-area: summary; -webkit-line-clamp: 1; }
-.is-strip .action-needed-answer { grid-area: answer; min-width: 0; }
-.is-strip .action-needed-answer:empty { display: none; }
-.is-strip .action-needed-until, .is-strip .org-answer-error { grid-column: 1 / -1; }
-.is-strip .org-answer-inline { gap: 4px 6px; }
-.is-strip .org-answer-inline > .org-answer-other { margin-left: 2px; }
-.is-strip .btn-sm { padding-top: 1px; padding-bottom: 1px; }
 
 .action-needed-more {
   all: unset; cursor: pointer; align-self: flex-start; font-size: 11px; color: var(--warning-text, var(--warning, #9a6700));
@@ -83,16 +31,8 @@
 .action-needed-more:hover { text-decoration: underline; }
 .action-needed-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 
-.action-needed-approval .org-answer-words, .action-needed-approval .org-answer-note, .action-needed-approval .org-answer-error { flex-basis: 100%; }
-
-/* A phone: every control of an item is a finger's size, 44 px (phone-pages.css, the home rows). */
+/* A phone: the strip's own words are readable (the cards' controls: ask-card.css). */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  .app-shell-navigation .action-needed :is(button, [role='button'], a[href], input:not([type='hidden']), textarea, select) {
-    min-height: 44px;
-    min-width: 44px;
-  }
-  /* And every word is readable there, 12 px at least (the phone's floor, findSmallText). */
-  .app-shell-navigation .action-needed :is(.action-needed-title, .action-needed-kind, .action-needed-ago, .action-needed-until,
-    .action-needed-more, .org-answer-other, .org-answer-note, .org-answer-error),
+  .app-shell-navigation .action-needed .action-needed-more { font-size: 12px; min-height: 44px; }
   .app-shell-navigation .status-card-also-working { font-size: 12px; }
 }
