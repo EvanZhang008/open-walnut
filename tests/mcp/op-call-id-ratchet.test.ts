@@ -83,7 +83,11 @@ describe('every client sends a call id with tools.call', () => {
     const cli = read('src/providers/wn-cli.ts')
     expect(cli).toMatch(/name: parsed\.name,[\s\S]{0,200}callId: callId \|\| \(callId = newCallId\(\)\)/)
     const mcp = read('src/providers/walnut-mcp-stdio.ts')
-    expect(mcp.match(/deps\.request\('tools\.call'[^\n]*callId/g)?.length).toBe(2)
+    // The call and its retry without the run id carry the call's own id ...
+    expect(mcp.match(/deps\.request\('tools\.call', (?:spilled \? \{ name, argsFile: spilled, callId \} : )?\{ name, args, callId \}\)/g)?.length).toBe(2)
+    // ... and the op_result read of a lost answer names that call, under an id of its own.
+    expect(mcp).toMatch(/deps\.request\('tools\.call', \{ name: 'op_result', args: \{ call_id: callId \}, callId: newCallId\(\) \}\)/)
+    expect(mcp.match(/deps\.request\('tools\.call'/g)?.length).toBe(3)
   })
 })
 
