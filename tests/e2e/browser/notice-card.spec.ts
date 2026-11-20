@@ -33,6 +33,8 @@ test.describe.configure({ mode: 'serial', timeout: 180_000 })
 async function shot(page: Page, name: string): Promise<void> {
   if (!SHOTS) return
   await fs.mkdir(SHOTS, { recursive: true })
+  // Once the cards' entrances settled (a breathing status dot runs for ever, so it is left out).
+  await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity), null, { timeout: 5_000 }).catch(() => {})
   await page.screenshot({ path: path.join(SHOTS, `${BEFORE ? 'before' : 'after'}-${name}.png`) })
 }
 
