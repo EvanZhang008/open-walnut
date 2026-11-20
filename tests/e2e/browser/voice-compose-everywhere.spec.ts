@@ -168,7 +168,8 @@ test('Follow up: Send while recording waits for the final words and files them o
   lane.release()
   await expect.poll(async () => (await followUps(request, ids.a)).length, { timeout: 30_000 }).toBe(before + 1)
   expect((await followUps(request, ids.a)).at(-1)).toBe(`${TYPED} ${FULL}`)
-  await expect(f.box).toHaveCount(0)
+  // The box stays on its card (no Follow up opener to close), empty once the words are taken.
+  await expect.poll(async () => (await f.card.count()) === 0 || (await f.input.inputValue()) === '', { timeout: 15_000 }).toBe(true)
   // No second copy arrives later.
   await page.waitForTimeout(1500)
   expect(await followUps(request, ids.a)).toHaveLength(before + 1)
@@ -245,7 +246,7 @@ test('Follow up: a failed transcription files nothing and keeps the words; dicta
   expect(sent.endsWith(FULL), why).toBe(true)
 })
 
-test('Follow up: closing the box while its words are still coming drops them; no other box gets them', async ({ page, request }) => {
+test('Follow up: words still coming land in their own box, never in another box the person moved to', async ({ page, request }) => {
   await useSyntheticMic(page)
   const lane = await stubEngine(page)
   await openThreads(page)
@@ -257,19 +258,16 @@ test('Follow up: closing the box while its words are still coming drops them; no
   // Stop the mic: its words are now being transcribed, held by the engine.
   await a.mic.click()
   await expect(a.mic).toHaveClass(/mic-transcribing/, { timeout: 10_000 })
-  await a.box.getByRole('button', { name: 'Cancel' }).click()
-  await expect(a.box).toHaveCount(0)
-  // Another thread's box opens while the old words are still owed.
+  // The person moves to another thread's box (every card has one) while the old words are still owed.
   const b = await openFollowUp(page, ids.b)
+  await b.input.click()
   lane.release()
-  await page.waitForTimeout(2000)
+  await expect(a.input).toHaveValue(new RegExp(FULL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), { timeout: 20_000 })
   await expect(b.input).toHaveValue('')
-  await b.box.getByRole('button', { name: 'Cancel' }).click()
-  const again = await openFollowUp(page, ids.a)
-  await expect(again.input).toHaveValue('')
   expect(await followUps(request, ids.a)).toHaveLength(beforeA)
   expect(await followUps(request, ids.b)).toHaveLength(beforeB)
-  await shot(page, 'follow-closed-dropped')
+  await shot(page, 'follow-own-box')
+  await a.input.fill('')
 })
 
 test('Follow up: Esc while the send waits ends the wait; the words land unsent, and Send sends them', async ({ page, request }) => {
