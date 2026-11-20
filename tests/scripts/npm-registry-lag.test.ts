@@ -70,6 +70,24 @@ describe('npm-registry-lag · which failures are a publish in flight', () => {
     expect(missingVersion(ETARGET_STREAM)).toBe('@aws-sdk/middleware-eventstream@^3.972.31')
   })
 
+  // 2026-11-20, Release archives 44787305257: the launcher's postinstall said it in its own
+  // words, three minutes after the platform package was published, and the build stopped.
+  it('names the platform package the launcher\'s postinstall could not fetch yet, in the launcher\'s own words', () => {
+    const fetcher = fs.readFileSync(path.join(REPO, 'scripts/npm-launcher/fetch-platform.js'), 'utf8')
+    // The words come from the launcher: this fails when it says them differently.
+    expect(fetcher).toContain('throw new Error(`GET ${tarball} answered HTTP ${got.status}`)')
+    expect(fetcher).toContain('throw new Error(`${name}@${version} is not on ${registry}`)')
+    const asPrinted = 'npm error open-walnut: npm did not install @open-walnut/darwin-arm64@0.6.37, the Walnut for this machine, and fetching it failed: npm pack @open-walnut/darwin-arm64@0.6.37: npm error 404 tarball, folder, http url, or git url.; GET https://registry.npmjs.org/@open-walnut/darwin-arm64/-/darwin-arm64-0.6.37.tgz answered HTTP 404. A release whose packages are still reaching the registry installs in a few minutes; otherwise run: npm install -g open-walnut@0.6.37 --allow-scripts=open-walnut'
+    expect(missingVersion(asPrinted)).toBe('@open-walnut/darwin-arm64@0.6.37')
+    const tarball = 'https://registry.npmjs.org/@open-walnut/linux-x64-musl/-/linux-x64-musl-0.6.38-nightly.20261121.1600.tgz'
+    expect(missingVersion(`fetching it failed: GET ${tarball} answered HTTP 404.`)).toBe('@open-walnut/linux-x64-musl@0.6.38-nightly.20261121.1600')
+    expect(missingVersion('fetching it failed: @open-walnut/darwin-x64@0.6.37 is not on https://registry.npmjs.org. A release'))
+      .toBe('@open-walnut/darwin-x64@0.6.37')
+    // Only a missing file waits: a refusal or a server error is the install's own.
+    expect(missingVersion(`fetching it failed: GET ${tarball} answered HTTP 403.`)).toBeNull()
+    expect(missingVersion(`fetching it failed: GET ${tarball} answered HTTP 500.`)).toBeNull()
+  })
+
   it('names the version whose tarball npm did not serve yet, scoped or not, from any registry', () => {
     expect(missingVersion(E404_TARBALL)).toBe('prosemirror-transform@1.12.5')
     expect(missingVersion('npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/@aws-sdk/client-s3/-/client-s3-3.972.80.tgz - Not found'))

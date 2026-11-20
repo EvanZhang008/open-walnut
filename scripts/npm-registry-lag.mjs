@@ -15,6 +15,12 @@
  * after it was published, failed the field rehearsal's install of an older release,
  * whose dependency range took the newest version).
  *
+ * Walnut's own launcher meets the same lag when its postinstall fetches the
+ * platform package (scripts/npm-launcher/fetch-platform.js) and says it in its own
+ * words: `GET <tarball> answered HTTP 404`, or `<name>@<version> is not on <registry>`
+ * (2026-11-20: Release archives 44787305257 built 0.6.37 for darwin-arm64 three
+ * minutes after @open-walnut/darwin-arm64@0.6.37 was published and stopped at once).
+ *
  * So an install that fails with npm's "No matching version found", or with a 404
  * on a version's tarball, runs again after a wait; any other failure (a 404 on a
  * package's index included: a name that does not exist) is the install's own and
@@ -50,6 +56,11 @@ export function missingVersion(output) {
     const m = /404 Not Found - GET \S*?\/((?:@[^/\s]+\/)?([^/\s]+))\/-\/\2-([^/\s]+?)\.tgz(?:\s|$)/.exec(output)
     if (m) return `${m[1]}@${m[3]}`
   }
+  // The launcher's postinstall, which reads the registry itself (fetch-platform.js).
+  const tgz = /GET \S*?\/((?:@[^/\s]+\/)?([^/\s]+))\/-\/\2-([^/\s]+?)\.tgz answered HTTP 404\b/.exec(output)
+  if (tgz) return `${tgz[1]}@${tgz[3]}`
+  const doc = /((?:@[^/\s]+\/)?[^@\s/]+)@(\d[^\s,]*) is not on https?:\/\//.exec(output)
+  if (doc) return `${doc[1]}@${doc[2]}`
   return null
 }
 
