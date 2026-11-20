@@ -13,7 +13,7 @@ import XCTest
 ///  4. An offline open says so in its own words, and says what the page shows: the phone's copy
 ///     of the threads, or only the notification.
 ///  5. One draft per thread for an unsent Follow up (`OrgThreadFollowUpDraft`), which a late
-///     receipt never clears once he wrote more.
+///     receipt never clears once he wrote more (`ReplyBox.afterReceipt`).
 ///  6. What a navigation does with what is presented over the app (`PresentationLowering.plan`),
 ///     and what a sheet holding it says.
 @MainActor
@@ -128,24 +128,26 @@ final class ThreadPushOpenRulesTests: XCTestCase {
         XCTAssertEqual(Set([a, b, c]).count, 3, "one draft per node and thread")
         XCTAssertTrue(a.hasPrefix(OrgThreadFollowUpDraft.prefix))
         let drafts = ComposerDrafts.shared
-        defer { drafts.clear(a) }
-        XCTAssertFalse(OrgThreadFollowUpDraft.exists(a))
-        drafts.setDraft("   ", key: a)
-        XCTAssertFalse(OrgThreadFollowUpDraft.exists(a), "blank words are no draft")
+        defer { drafts.clear(a); drafts.clear(b) }
         drafts.setDraft("Checking in", key: a)
-        XCTAssertTrue(OrgThreadFollowUpDraft.exists(a))
-        XCTAssertFalse(OrgThreadFollowUpDraft.exists(b))
+        XCTAssertEqual(drafts.draft(a), "Checking in")
+        XCTAssertEqual(drafts.draft(b), "", "another thread's box starts empty")
         drafts.clear(a)
-        XCTAssertFalse(OrgThreadFollowUpDraft.exists(a), "sent: gone")
+        XCTAssertEqual(drafts.draft(a), "", "sent: gone")
     }
 
     func testALateReceiptKeepsNewerWords() {
-        let pic = UUID()
-        XCTAssertTrue(OrgThreadFollowUpDraft.sentIsStillTheDraft(sent: "Yes", sentPictures: [pic], draft: "Yes", draftPictures: [pic]))
-        XCTAssertFalse(OrgThreadFollowUpDraft.sentIsStillTheDraft(sent: "Yes", sentPictures: [], draft: "Yes, and also", draftPictures: []),
-                       "he wrote more while it was on its way")
-        XCTAssertFalse(OrgThreadFollowUpDraft.sentIsStillTheDraft(sent: "Yes", sentPictures: [], draft: "Yes", draftPictures: [pic]),
-                       "a picture added since")
+        let pic = UUID(), added = UUID()
+        let same = ReplyBox.afterReceipt(sent: "Yes", sentPictures: [pic], draft: "Yes", draftPictures: [pic])
+        XCTAssertEqual(same.words, "")
+        XCTAssertEqual(same.pictures, [], "what was sent leaves")
+        let more = ReplyBox.afterReceipt(sent: "Yes", sentPictures: [], draft: "Yes, and also", draftPictures: [])
+        XCTAssertEqual(more.words, ", and also", "he wrote more while it was on its way: only that stays")
+        XCTAssertTrue(more.remainder)
+        let newer = ReplyBox.afterReceipt(sent: "Yes", sentPictures: [pic], draft: "Something else", draftPictures: [pic, added])
+        XCTAssertEqual(newer.words, "Something else", "newer words of his stay whole")
+        XCTAssertFalse(newer.remainder)
+        XCTAssertEqual(newer.pictures, [added], "a picture added since stays")
     }
 
     // MARK: - 6. What is over the app

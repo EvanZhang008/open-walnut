@@ -1,47 +1,73 @@
 import SwiftUI
 import UIKit
 
-/// The words box of a card that asks the user something (an ask card under a task's row),
-/// the phone's twin of the web's `ReplyComposer` (2026-11-20, the user: "all the inbox like
-/// this should like input box ... the at works like the slash works"). The letter reply's own
-/// field (`LetterReplyField`, which reads and clears the words on screen), with the same `@`
-/// and `/` lists as every composer (`ComposerSuggestController`), pictures from Photos, the
-/// camera or a paste (`ReplyPictureButton`), and a Send.
+/// The words box of a card that asks the user something (an ask card under a task's row, a
+/// thread's Follow up on its card), the phone's twin of the web's `ReplyComposer` (2026-11-20,
+/// the user: "all the inbox like this should like input box ... the at works like the slash
+/// works"). The letter reply's own field (`LetterReplyField`, which reads and clears the words
+/// on screen), with the same `@` and `/` lists as every composer (`ComposerSuggestController`),
+/// pictures from Photos, the camera or a paste (`ReplyPictureButton`), Walnut's mic when the
+/// box names one (`voiceBox`), and a Send.
 ///
 /// Each box keeps its own draft (`ComposerDrafts`, under `draftKey`), never a composer's, so
 /// words typed here never show up in another box. A send that fails keeps its words and its
-/// pictures: `onSend` answers true once they were taken.
+/// pictures: `onSend` answers true once they were taken. It never takes the keyboard by itself:
+/// a page shows many of them.
 struct ReplyBox: View {
     let placeholder: String
     /// This box's own draft.
     let draftKey: String
-    /// Identifiers: `<idPrefix>.field`, `<idPrefix>.send`, `<idPrefix>.attach`, ...
+    /// Identifiers: `<idPrefix>.input`, `<idPrefix>.send`, `<idPrefix>.attach`, ...
     let idPrefix: String
     /// The task it answers for, and the session whose commands `/` lists.
     var scope = ComposerSuggestController.Scope()
     /// The answer takes pictures; when it does not, Paste with a picture pastes words only.
     var acceptsPictures = true
+    /// What VoiceOver calls the field, when the placeholder alone does not say what it answers.
+    var fieldLabel: String? = nil
+    /// Walnut's mic beside the field: "voice-mic.<voiceBox>", "voice.<voiceBox>.*".
+    var voiceBox: String? = nil
+    /// A family of drafts kept by count (`ComposerDrafts.trimDrafts`): the newest `kept` stay.
+    var draftFamily: (prefix: String, kept: Int)? = nil
+    /// A send of this draft is on its way from another box (one closed and shown again).
+    var busy = false
+    /// The line under the box once a send failed (its words and pictures stay in it).
+    var failureNote: String? = nil
     let onSend: (String, [SelectedImage]) async -> Bool
 
     @Environment(TasksStore.self) private var store: TasksStore?
     @State private var field = LetterReplyFieldController()
     @State private var suggest = ComposerSuggestController()
     @State private var drafts = ComposerDrafts.shared
+    @State private var gate = DictationSendGate()
     @State private var focused = false
     @State private var sending = false
+    @State private var failed = false
+    /// The words that went out while he kept writing: the box kept only what came after them.
+    @State private var sentNote: String?
     @State private var pictureNotice: String?
 
+    private func trim() {
+        guard let draftFamily else { return }
+        drafts.trimDrafts(prefix: draftFamily.prefix, keeping: draftKey, max: draftFamily.kept)
+    }
+
     private var draft: Binding<String> {
-        Binding(get: { drafts.draft(draftKey) }, set: { drafts.setDraft($0, key: draftKey) })
+        Binding(get: { drafts.draft(draftKey) }, set: { drafts.setDraft($0, key: draftKey); trim() })
     }
 
     private var pictures: Binding<[SelectedImage]> {
-        Binding(get: { drafts.images(draftKey) }, set: { drafts.setImages($0, key: draftKey) })
+        Binding(get: { drafts.images(draftKey) }, set: { drafts.setImages($0, key: draftKey); trim() })
     }
 
-    /// Words are the answer: pictures go with them, never alone (the web's ask card).
+    private var blocked: Bool { sending || busy }
+
+    /// Words are the answer: pictures go with them, never alone (the web's ask card). While
+    /// Walnut's mic records, Send waits for its words (`DictationSendGate`).
     private var canSend: Bool {
-        !sending && !drafts.draft(draftKey).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard !blocked else { return false }
+        return gate.isDictating || gate.isWaiting
+            || !drafts.draft(draftKey).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
@@ -54,29 +80,30 @@ struct ReplyBox: View {
                 if acceptsPictures {
                     ReplyPictureButton(
                         images: pictures, notice: $pictureNotice, idPrefix: idPrefix,
-                        disabled: sending, onWillPresent: { field.endEditing() }
+                        disabled: blocked, onWillPresent: { field.endEditing() }
                     )
                 }
-                LetterReplyField(
-                    text: draft, isFocused: $focused, controller: field, maxLines: 4,
-                    identifier: "\(idPrefix).field", accessibilityLabel: placeholder,
-                    onPasteImages: acceptsPictures ? { (images: [UIImage]) in paste(images) } : nil,
-                    onCaretChange: { text, caret in suggest.update(text: text, caret: caret) }
+                fieldWithMic
+                LetterSendButton(
+                    enabled: canSend || sending, waiting: sending || gate.isWaiting,
+                    identifier: "\(idPrefix).send", action: { gate.send { waited in send(waited: waited) } }
                 )
-                .frame(maxWidth: .infinity)
-                .overlay(alignment: .topLeading) {
-                    Text(placeholder)
-                        .lineLimit(1)
-                        .foregroundStyle(draft.wrappedValue.isEmpty ? AnyShapeStyle(.tertiary) : AnyShapeStyle(Color.clear))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, LetterReplyField.verticalInset)
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
-                }
-                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                LetterSendButton(enabled: canSend || sending, waiting: sending, identifier: "\(idPrefix).send", action: send)
+            }
+            if failed, let failureNote {
+                Text(failureNote)
+                    .font(.footnote)
+                    .foregroundStyle(Theme.needsText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("\(idPrefix).failed")
+            } else if let sentNote {
+                Text(sentNote)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("\(idPrefix).sentPart")
             }
         }
+        .dictationSendGate(gate)
         .onAppear {
             suggest.store = store
             suggest.scope = scope
@@ -86,6 +113,38 @@ struct ReplyBox: View {
         .onChange(of: focused) { _, isFocused in if isFocused { suggest.prefetchCommands() } }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(idPrefix)
+    }
+
+    @ViewBuilder
+    private var fieldWithMic: some View {
+        if let voiceBox {
+            VoiceDictationField(
+                text: draft, surface: draftKey, box: voiceBox, placement: .beside,
+                blocked: blocked, refocus: { focused = true }
+            ) { replyField }
+        } else {
+            replyField
+        }
+    }
+
+    private var replyField: some View {
+        LetterReplyField(
+            text: draft, isFocused: $focused, controller: field, maxLines: 4,
+            identifier: "\(idPrefix).input", accessibilityLabel: fieldLabel ?? placeholder,
+            onPasteImages: acceptsPictures ? { (images: [UIImage]) in paste(images) } : nil,
+            onCaretChange: { text, caret in suggest.update(text: text, caret: caret) }
+        )
+        .frame(maxWidth: .infinity)
+        .overlay(alignment: .topLeading) {
+            Text(placeholder)
+                .lineLimit(1)
+                .foregroundStyle(draft.wrappedValue.isEmpty ? AnyShapeStyle(.tertiary) : AnyShapeStyle(Color.clear))
+                .padding(.horizontal, 12)
+                .padding(.vertical, LetterReplyField.verticalInset)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private func pick(_ suggestion: ComposerSuggestion) {
@@ -106,30 +165,58 @@ struct ReplyBox: View {
     /// Send what the field shows. `sending` holds from the tap (a dictation can make the read
     /// wait), so a second tap is the same send. The words stay in the box until the owner says
     /// they were taken; words typed while it sent stay too, and only what was sent leaves.
-    private func send() {
-        guard !sending else { return }
+    /// `waited`: it ran after a wait for dictated words, whose field was redrawn meanwhile, so
+    /// the stored draft (which the words were just added to) is what goes.
+    private func send(waited: Bool) {
+        guard !sending, !busy else { return }
         sending = true
+        failed = false
+        sentNote = nil
         Task { @MainActor in
             defer { sending = false }
-            let shown = await field.commitAndRead(fallback: drafts.draft(draftKey))
+            let shown = waited ? drafts.draft(draftKey) : await field.commitAndRead(fallback: drafts.draft(draftKey))
             let words = shown.trimmingCharacters(in: .whitespacesAndNewlines)
             let images = acceptsPictures ? drafts.images(draftKey) : []
             guard !words.isEmpty else { return }
             let taken = await onSend(suggest.outgoing(words), images)
             AppLog.info("composer", "reply box sent", ["box": idPrefix, "taken": String(taken), "images": String(images.count)])
-            guard taken else { return }
-            let now = drafts.draft(draftKey)
-            if now == shown || now.trimmingCharacters(in: .whitespacesAndNewlines) == words {
+            guard taken else {
+                failed = true
+                return
+            }
+            let after = Self.afterReceipt(
+                sent: shown, sentPictures: images.map(\.id),
+                draft: drafts.draft(draftKey), draftPictures: drafts.images(draftKey).map(\.id))
+            if after.words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, after.pictures.isEmpty {
                 field.clear(sent: words)
                 drafts.clear(draftKey)
                 suggest.reset()
-            } else {
-                // More was typed while it went: keep that, drop the sent part and the sent pictures.
-                let rest = now.hasPrefix(shown) ? String(now.dropFirst(shown.count)).trimmingCharacters(in: .whitespacesAndNewlines) : now
-                field.replace(with: rest, caret: (rest as NSString).length)
-                let sentIDs = Set(images.map(\.id))
-                drafts.setImages(drafts.images(draftKey).filter { !sentIDs.contains($0.id) }, key: draftKey)
+                return
             }
+            if after.words != drafts.draft(draftKey) {
+                field.replace(with: after.words, caret: (after.words as NSString).length)
+            }
+            drafts.setImages(drafts.images(draftKey).filter { after.pictures.contains($0.id) }, key: draftKey)
+            if after.remainder { sentNote = "Sent: \u{201C}\(Self.clip(words))\u{201D}. What you wrote after it is still here." }
         }
+    }
+
+    /// What the draft keeps once the owner took `sent`: what he wrote after it, never the part
+    /// that went out (2026-11-08 review, round 3: "Approve" sent, " and ship it" added on the
+    /// way, and the next Send sent "Approve" a second time). Words that do not start with the
+    /// sent ones are newer words of his and stay whole; the pictures that went out leave the
+    /// draft. `remainder`: the draft kept only what came after the sent words.
+    nonisolated static func afterReceipt(sent: String, sentPictures: [UUID], draft: String, draftPictures: [UUID])
+        -> (words: String, pictures: [UUID], remainder: Bool) {
+        let pictures = draftPictures.filter { !sentPictures.contains($0) }
+        guard !sent.isEmpty, draft.hasPrefix(sent) else { return (draft, pictures, false) }
+        let rest = String(draft.dropFirst(sent.count))
+        let trimmed = String(rest.drop { $0 == " " || $0 == "\n" || $0 == "\t" })
+        return (trimmed, pictures, !trimmed.isEmpty)
+    }
+
+    private static func clip(_ words: String) -> String {
+        let one = words.trimmingCharacters(in: .whitespacesAndNewlines)
+        return one.count > 60 ? String(one.prefix(60)) + "\u{2026}" : one
     }
 }

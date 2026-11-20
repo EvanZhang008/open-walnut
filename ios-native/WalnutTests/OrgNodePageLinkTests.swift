@@ -117,7 +117,6 @@ final class OrgNodePageLinkTests: XCTestCase {
         let applied = try XCTUnwrap(OrgNodePageFocusModel.apply(request(at: t0), to: opened))
         XCTAssertNil(OrgNodePageFocusModel.cover(task, after: applied),
                      "a task opened from Tasks goes down, so the Threads view the push brought is in sight")
-        XCTAssertNil(OrgNodePageFocusModel.cover(.followUp(threadId: "th-aaaaaa", title: "Pricing"), after: applied))
         XCTAssertEqual(OrgNodePageFocusModel.cover(task, after: nil), task,
                        "a request the page did not apply (the same one again) leaves it up")
         XCTAssertNil(OrgNodePageFocusModel.cover(nil, after: applied))
@@ -235,20 +234,9 @@ final class OrgNodePageLinkTests: XCTestCase {
                       "the task's sheet went down: the Threads view is what he sees (the gate's predicted failure)")
     }
 
-    func testAPushForThePageOnScreenClosesAFollowUpComposer() throws {
-        let link = OrgNodePageLink()
-        let controller = hostPage(link: link, cover: .followUp(threadId: "th-aaaaaa", title: "Pricing"))
-        XCTAssertTrue(spin { self.presented(controller) })
-        let r = request(.threads, thread: "th-aaaaaa", at: Date())
-        link.post(r)
-        XCTAssertTrue(spin { link.lastDelivery?.request == r })
-        XCTAssertEqual(link.lastDelivery?.covered, false)
-        XCTAssertTrue(spin { !self.presented(controller) })
-    }
-
     func testAnotherNodesRequestLeavesWhatIsOverThePage() {
         let link = OrgNodePageLink()
-        let controller = hostPage(link: link, cover: .followUp(threadId: "th-aaaaaa", title: "Pricing"))
+        let controller = hostPage(link: link, cover: .task(TaskOpenTarget(id: "t-ship", title: "Ship it")))
         XCTAssertTrue(spin { self.presented(controller) })
         link.post(.init(nodeId: "vp-other", sessionId: "s-9", tab: .threads, threadId: "th-cccccc", at: Date()))
         _ = spin(until: { false }, timeout: 0.5)

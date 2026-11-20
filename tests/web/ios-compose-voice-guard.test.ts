@@ -99,8 +99,10 @@ const SEARCH_EXCLUSIONS: Record<string, string> = {
 describe('every iOS compose field uses the shared voice input', () => {
   it('scans the app and the originally missed thread follow-up', () => {
     expect(inventory.length).toBeGreaterThan(30);
-    const followUp = inventory.find((f) => f.file === 'Views/Org/OrgThreadsView.swift' && f.call === 'TextEditor(text: text)');
-    expect(followUp?.covered).toBe(true);
+    // The thread Follow up is the shared reply box on its card, whose field sits in the shared mic.
+    const source = (file: string) => files.find((f) => f.file === file)!.source;
+    expect(source('Views/Org/OrgThreadsView.swift')).toMatch(/ReplyBox\([\s\S]{0,600}voiceBox: "thread-follow-up"/);
+    expect(source('Views/Shared/ReplyBox.swift')).toMatch(/if let voiceBox \{\s*VoiceDictationField\(/);
   });
 
   it('has no uncovered field, including new fields in an already covered file', () => {

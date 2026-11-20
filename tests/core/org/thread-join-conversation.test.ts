@@ -96,8 +96,8 @@ describe('every Follow up box names its thread', () => {
   const SURFACES: Record<string, RegExp> = {
     // Web and the Mac app (one SPA): the box sits on its own card, under the thread's title, and is named for it.
     'web/src/components/org/thread-card-answer.tsx': /aria-label=\{`Follow up on \\u201c\$\{title\}\\u201d`\}/,
-    // The phone: the sheet's header line.
-    'ios-native/Walnut/Views/Org/OrgThreadsView.swift': /struct OrgThreadFollowUpSheet: View \{\s*let title: String[\s\S]*?Text\(title\)/,
+    // The phone: the box on the card, named for the card's own thread.
+    'ios-native/Walnut/Views/Org/OrgThreadsView.swift': /fieldLabel: "Follow up on \\u\{201C\}\\\(t\.title\)\\u\{201D\}"/,
   }
   it.each(Object.entries(SURFACES))('%s', (file, re) => { expect(read(file)).toMatch(re) })
 

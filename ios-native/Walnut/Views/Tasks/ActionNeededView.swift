@@ -256,7 +256,9 @@ struct ActionNeededView: View {
                 draftKey: "ask-reply:\(task.id):\(item.id)",
                 idPrefix: "action.reply.\(item.id)",
                 scope: .init(selfTaskId: task.id, commands: sid != nil, commandsCwd: session?.cwd, commandsHost: session?.host),
-                acceptsPictures: true
+                acceptsPictures: true,
+                // Walnut's mic beside the words, as on every box he answers in.
+                voiceBox: "ask-reply"
             ) { text, images in
                 await sendWords(item, words: words, sessionID: sid, text: text, images: images)
             }

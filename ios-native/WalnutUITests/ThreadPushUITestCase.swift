@@ -45,6 +45,11 @@ class ThreadPushUITestCase: XCTestCase {
 
     func card(_ threadId: String) -> XCUIElement { el("org.thread.\(threadId)") }
 
+    /// The Follow up box on a thread's card: there on every open card, with no tap.
+    func followUpInput(_ threadId: String) -> XCUIElement {
+        card(threadId).descendants(matching: .any).matching(identifier: "org.thread.followUp.input").firstMatch
+    }
+
     func cardTitle(_ threadId: String) -> XCUIElement {
         card(threadId).descendants(matching: .any).matching(identifier: "org.thread.title").firstMatch
     }

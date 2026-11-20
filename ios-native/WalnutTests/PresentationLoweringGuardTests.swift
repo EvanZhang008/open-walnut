@@ -104,7 +104,6 @@ final class PresentationLoweringGuardTests: XCTestCase {
         "Walnut/Views/Notes/NotesView.swift": (.notPresented, "the search is the tab's own; New Note asks in a DictatedTextPrompt whose name stays in newNoteName until Create or Cancel"),
         "Walnut/Views/Org/OrgNodePage.swift": (.notPresented, "the page's own view switch"),
         "Walnut/Views/Org/OrgNodeTasksView.swift": (.savedOnChange, "its grouping is kept in AppStorage"),
-        "Walnut/Views/Org/OrgThreadsView.swift": (.draft("ComposerDrafts"), "a Follow up's words and pictures, per thread"),
         "Walnut/Views/Passwords/PasswordsSetupView.swift": (.notPresented, "a page pushed from Settings"),
         "Walnut/Views/Passwords/PasswordsHomeView.swift": (.notPresented, "its search, on a pushed page"),
         "Walnut/Views/Sessions/AgentMemorySheet.swift": (.holds, "instructions changed from what was read"),
@@ -358,13 +357,15 @@ final class PresentationLoweringGuardTests: XCTestCase {
         XCTAssertTrue(card.contains("PresentationLowering.root()"), "and the same window")
         XCTAssertFalse(card.contains("isKeyWindow"), "not the key window, which is the Talk panel's while it is up")
 
-        // The Follow up composer closes for a push: it keeps his words in the draft store, never in
-        // its own state, and never refuses to close.
+        // A thread's Follow up is a box on its card, never a sheet a push closes (2026-11-20): its
+        // words live in the draft store, per thread, and the box never holds a push.
         let threads = try String(contentsOf: Self.iosRoot.appendingPathComponent("Walnut/Views/Org/OrgThreadsView.swift"), encoding: .utf8)
-        let sheet = try XCTUnwrap(threads.range(of: "struct OrgThreadFollowUpSheet: View {"))
-        let sheetBody = threads[sheet.upperBound...].prefix(4000)
-        XCTAssertTrue(sheetBody.contains("ComposerDrafts.shared"), "the Follow up's words live in the draft store")
-        XCTAssertFalse(sheetBody.contains("@State private var text"), "not in the sheet's own state")
-        XCTAssertFalse(sheetBody.contains("interactiveDismissDisabled") || sheetBody.contains("holdsNavigation"), "it closes for a push")
+        XCTAssertFalse(threads.contains("OrgThreadFollowUpSheet"), "no Follow up sheet")
+        let box = try XCTUnwrap(threads.range(of: "private var followUpBox: some View {"))
+        let boxBody = threads[box.upperBound...].prefix(1200)
+        XCTAssertTrue(boxBody.contains("ReplyBox(") && boxBody.contains("draftKey: key"), "the card's box keeps its thread's draft")
+        let reply = try String(contentsOf: Self.iosRoot.appendingPathComponent("Walnut/Views/Shared/ReplyBox.swift"), encoding: .utf8)
+        XCTAssertTrue(reply.contains("ComposerDrafts.shared"), "the box's words live in the draft store")
+        XCTAssertFalse(reply.contains("interactiveDismissDisabled") || reply.contains("holdsNavigation"), "it never holds a push")
     }
 }

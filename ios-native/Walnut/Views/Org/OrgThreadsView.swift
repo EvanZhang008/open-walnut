@@ -14,8 +14,8 @@ struct OrgThreadsView: View {
     var focus: OrgThreadFocus? = nil
     /// The request already revealed; the node's page keeps it, so a tab switch does not scroll again.
     var revealedAt: Binding<Date?> = .constant(nil)
-    /// What the node's page shows over itself. A card asks for a task's session or its Follow up
-    /// here and the page presents it, so a request the page takes can take it down.
+    /// What the node's page shows over itself. A card asks for a task's session here and the
+    /// page presents it, so a request the page takes can take it down.
     let cover: Binding<OrgNodePageCover?>
 
     /// How many threads the node's own status counts for him (`user_status.threads.shown`).
@@ -185,13 +185,16 @@ struct OrgThreadsView: View {
             thread: t, all: store.threads ?? [], shared: shared, name: name, now: now, snoozed: snoozed,
             busy: store.busyThreadId == t.id, canFollowUp: sessionId != nil,
             startsOpen: t.id == focusThreadId, compact: compact, followUpSentAt: store.followUpSentAt[t.id],
-            followUpKept: OrgThreadFollowUpDraft.exists(OrgThreadFollowUpDraft.key(nodeId: store.taskId, threadId: t.id)),
+            followUpKey: OrgThreadFollowUpDraft.key(nodeId: store.taskId, threadId: t.id), nodeTaskId: store.taskId, nodeSessionId: sessionId,
             highlighted: highlight?.threadId == t.id,
             highlightFocus: highlight?.threadId == t.id ? highlight : nil,
             testMarked: testMark?.threadId == t.id,
             onEdit: { edit in Task { await store.edit(t.id, edit) } },
             onOpenTask: { cover.wrappedValue = .task($0) },
-            onFollowUpOpen: { cover.wrappedValue = .followUp(threadId: t.id, title: t.title) },
+            onFollowUp: { text, images in
+                guard let sessionId else { return false }
+                return await store.followUp(t.id, sessionId: sessionId, text: text, images: images)
+            },
             onPick: { label in
                 // A choice tapped is his answer in words, filed under the thread like a Follow up.
                 guard let sid = sessionId else { return }
@@ -340,6 +343,9 @@ struct OrgThreadsView: View {
                 withAnimation(reduceMotion || instant ? nil : .default) { proxy.scrollTo(focus.threadId, anchor: .top) }
                 land(focus, instant: instant, proxy: proxy)
             }
+            // The keyboard goes, as the Follow up sheet once closed: a box he was writing in on
+            // another card keeps its words in its draft, and the thread asked for is in sight.
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             withAnimation(reduceMotion ? nil : .easeIn(duration: 0.2)) { highlight = focus }
             testMark = focus
             #if DEBUG
@@ -587,8 +593,11 @@ struct OrgThreadCard: View {
     var compact = false
     /// His last Follow up on it from this phone, shown on the card for a few minutes.
     var followUpSentAt: Date? = nil
-    /// A Follow up he started here and did not send is kept (`OrgThreadFollowUpDraft`).
-    var followUpKept = false
+    /// This thread's Follow up draft (`OrgThreadFollowUpDraft.key`).
+    var followUpKey = ""
+    /// The node's own task (left out of `@`) and its chat (whose commands `/` lists).
+    var nodeTaskId: String? = nil
+    var nodeSessionId: String? = nil
     /// Just revealed for a push or a link: marked for a moment so the eye finds it.
     var highlighted = false
     /// The reveal `highlighted` is for (DEBUG: noted once its outline is drawn).
@@ -598,8 +607,9 @@ struct OrgThreadCard: View {
     let onEdit: (OrgThreadEdit) -> Void
     /// A task chip was tapped: the node's page opens its session over itself.
     let onOpenTask: (TaskOpenTarget) -> Void
-    /// Follow up was tapped: the node's page opens the composer over itself.
-    let onFollowUpOpen: () -> Void
+    /// His Follow up from the box on the card, into the node's chat filed under this thread:
+    /// true once the server took it.
+    var onFollowUp: (String, [SelectedImage]) async -> Bool = { _, _ in false }
     /// A choice of a thread waiting on him was tapped: its label goes as his answer.
     var onPick: (String) -> Void = { _ in }
     /// Read this thread whole: its list read cut answers he already reacted to (`clipped`).
@@ -709,21 +719,13 @@ struct OrgThreadCard: View {
                     .foregroundStyle(Theme.doneText)
                     .accessibilityIdentifier("org.thread.followUp.sent")
             }
-            if followUpKept, canFollowUp, !closed {
-                // A composer closed before Send (Cancel, a swipe, a push that opened another
-                // thread) left his words here: Follow up brings them back.
-                Label("Your unsent follow up is kept. Tap Follow up to finish it.", systemImage: "square.and.pencil")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("org.thread.followUp.kept")
-            }
             conversationToggle()
             if conversation {
                 OrgThreadConversation(thread: t, shared: shared, name: name, now: now)
                 // A conversation that runs screens long closes from its end too.
                 if OrgThreadCardLayout.closesFromEnd(t) { conversationToggle(atEnd: true) }
             }
+            if canFollowUp, !closed { followUpBox }
             actions
         }
         .padding(14)
@@ -1020,6 +1022,33 @@ struct OrgThreadCard: View {
             .frame(maxWidth: fullWidth ? .infinity : nil)
     }
 
+    /// His Follow up, always on an open card (2026-11-20, the user: "why thead nede to click
+    /// follow up, just have. ainbox bar there"): the shared reply box with `@`, `/`, pictures and
+    /// the mic, its own draft per thread, never focused by itself (a page shows many). One send
+    /// per thread at a time, across the boxes that show it (`OrgThreadFollowUpSends`).
+    private var followUpScope: ComposerSuggestController.Scope {
+        let session = nodeSessionId.flatMap { id in tasks.sessions.first { $0.id == id } }
+        return .init(selfTaskId: nodeTaskId, commands: nodeSessionId != nil,
+                     commandsCwd: session?.cwd, commandsHost: session?.host)
+    }
+
+    private var followUpBox: some View {
+        let key = followUpKey
+        return ReplyBox(
+            placeholder: "Follow up on this request", draftKey: key, idPrefix: "org.thread.followUp",
+            scope: followUpScope,
+            fieldLabel: "Follow up on \u{201C}\(t.title)\u{201D}",
+            voiceBox: "thread-follow-up",
+            draftFamily: (OrgThreadFollowUpDraft.prefix, OrgThreadFollowUpDraft.kept),
+            busy: OrgThreadFollowUpSends.shared.inFlight.contains(key),
+            failureNote: "Not sent. Your words and pictures are still here."
+        ) { text, images in
+            guard OrgThreadFollowUpSends.shared.begin(key) else { return false }
+            defer { OrgThreadFollowUpSends.shared.end(key) }
+            return await onFollowUp(text, images)
+        }
+    }
+
     @ViewBuilder
     private func actionButtons(fullWidth: Bool) -> some View {
         // Acknowledged already: the AI places it (server thread-known.ts), no second button.
@@ -1028,11 +1057,6 @@ struct OrgThreadCard: View {
                 .buttonStyle(.walnut(.primary, size: .small))
                 .tint(Theme.accent)
                 .accessibilityIdentifier("org.thread.ack")
-        }
-        if canFollowUp {
-            Button { onFollowUpOpen() } label: { actionLabel("Follow up", fullWidth: fullWidth) }
-                .buttonStyle(.walnut(.secondary, size: .small))
-                .accessibilityIdentifier("org.thread.followUp")
         }
         snoozeMenu(fullWidth: fullWidth)
     }
@@ -1164,45 +1188,20 @@ struct OrgThreadConversation: View {
     }
 }
 
-/// Where an unsent Follow up is kept: the app's composer draft store, one draft per thread, so a
-/// sheet closed by Cancel, a swipe or a push navigation (`PresentationLowering`) gives his words
-/// and pictures back when he opens Follow up on that thread again (2026-11-08 review: a push
-/// dropped a half-written Follow up). Gone once the server took it.
+/// Where an unsent Follow up is kept: the app's composer draft store, one draft per thread, so the
+/// box on a card that scrolled away, a push that opened another thread or a page left and opened
+/// again gives his words and pictures back (2026-11-08 review: a push dropped a half-written
+/// Follow up). Gone once the server took it.
 enum OrgThreadFollowUpDraft {
     nonisolated static let prefix = "thread-follow-up:"
     /// Drafts kept for threads he left unsent, besides the one in hand.
     nonisolated static let kept = 10
 
     nonisolated static func key(nodeId: String, threadId: String) -> String { "\(prefix)\(nodeId)/\(threadId)" }
-
-    /// Something unsent is kept for this thread (words that are not blank, or a picture).
-    @MainActor static func exists(_ key: String, in drafts: ComposerDrafts = .shared) -> Bool {
-        !drafts.draft(key).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !drafts.images(key).isEmpty
-    }
-
-    /// A send's receipt clears the draft only while the draft is still what was sent: a receipt
-    /// that arrives after he wrote more keeps the newer words (2026-11-08 review, round 2).
-    nonisolated static func sentIsStillTheDraft(sent: String, sentPictures: [UUID], draft: String, draftPictures: [UUID]) -> Bool {
-        draft == sent && draftPictures == sentPictures
-    }
-
-    /// What the draft keeps once the server took `sent`: what he wrote after it, never the part
-    /// that went out (2026-11-08 review, round 3: "Approve" sent, " and ship it" added on the way,
-    /// and the next Send sent "Approve" a second time). Words that do not start with the sent
-    /// ones are newer words of his and stay whole; the pictures that went out leave the draft.
-    /// `remainder`: the draft kept only what came after the sent words.
-    nonisolated static func afterReceipt(sent: String, sentPictures: [UUID], draft: String, draftPictures: [UUID])
-        -> (words: String, pictures: [UUID], remainder: Bool) {
-        let pictures = draftPictures.filter { !sentPictures.contains($0) }
-        guard !sent.isEmpty, draft.hasPrefix(sent) else { return (draft, pictures, false) }
-        let rest = String(draft.dropFirst(sent.count))
-        let trimmed = String(rest.drop { $0 == " " || $0 == "\n" || $0 == "\t" })
-        return (trimmed, pictures, !trimmed.isEmpty)
-    }
 }
 
-/// The Follow ups on their way, by draft key: one at a time per thread, across composers (a
-/// composer closed while its send was on its way, then opened again, offered Send for the same
+/// The Follow ups on their way, by draft key: one at a time per thread, across boxes (a card
+/// that left the screen while its send was on its way, then came back, offered Send for the same
 /// words a second time).
 @Observable
 @MainActor
@@ -1214,160 +1213,6 @@ final class OrgThreadFollowUpSends {
     /// False when one is already on its way for `key`.
     func begin(_ key: String) -> Bool { inFlight.insert(key).inserted }
     func end(_ key: String) { inFlight.remove(key) }
-}
-
-/// Follow up on a thread: his words (and pictures, as the chat takes) go into the node's
-/// chat, filed under this thread. Kept in the draft store until sent (`OrgThreadFollowUpDraft`).
-struct OrgThreadFollowUpSheet: View {
-    let title: String
-    /// `OrgThreadFollowUpDraft.key` for this thread.
-    let draftKey: String
-    let send: (String, [SelectedImage]) async -> Bool
-    @Environment(\.dismiss) private var dismiss
-    @State private var drafts = ComposerDrafts.shared
-    @State private var pictureNotice: String?
-    @State private var sendGate = DictationSendGate()
-    @State private var sends = OrgThreadFollowUpSends.shared
-    @State private var failed = false
-    /// The words that went out while he kept writing: the draft kept only what came after them.
-    @State private var sentNote: String?
-    @FocusState private var focused: Bool
-    /// `@` names a task or a session, as in every reply box (`ComposerSuggestController`).
-    @State private var suggest = ComposerSuggestController()
-    @Environment(TasksStore.self) private var suggestStore: TasksStore?
-
-    /// A Follow up of this thread is on its way, from this composer or one closed meanwhile.
-    private var sending: Bool { sends.inFlight.contains(draftKey) }
-
-    private var text: Binding<String> {
-        Binding(get: { drafts.draft(draftKey) }, set: {
-            drafts.setDraft($0, key: draftKey)
-            drafts.trimDrafts(prefix: OrgThreadFollowUpDraft.prefix, keeping: draftKey, max: OrgThreadFollowUpDraft.kept)
-            if suggest.store == nil { suggest.store = suggestStore }
-            suggest.updateAtEnd($0)
-        })
-    }
-
-    private var images: Binding<[SelectedImage]> {
-        Binding(get: { drafts.images(draftKey) }, set: {
-            drafts.setImages($0, key: draftKey)
-            drafts.trimDrafts(prefix: OrgThreadFollowUpDraft.prefix, keeping: draftKey, max: OrgThreadFollowUpDraft.kept)
-        })
-    }
-
-    var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 10) {
-                Text(title)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                ComposerSuggestList(controller: suggest, onPick: { suggestion in
-                    guard let result = suggest.pick(suggestion) else { return }
-                    drafts.setDraft(result.text, key: draftKey)
-                    focused = true
-                }, maxHeight: 200)
-                VoiceDictationField(
-                    text: text, surface: draftKey, box: "thread-follow-up",
-                    placement: .below, blocked: sending, refocus: { focused = true }
-                ) {
-                    TextEditor(text: text)
-                        .focused($focused)
-                        .scrollContentBackground(.hidden)
-                        .frame(minHeight: 80, maxHeight: .infinity)
-                        .padding(8)
-                        .background(Color(uiColor: .secondarySystemBackground), in: MessageBox.shape)
-                        .overlay(alignment: .topLeading) {
-                            if text.wrappedValue.isEmpty {
-                                Text("Write your follow up")
-                                    .font(.body)
-                                    .foregroundStyle(.tertiary)
-                                    .padding(.horizontal, 13)
-                                    .padding(.vertical, 16)
-                                    .allowsHitTesting(false)
-                            }
-                        }
-                        .accessibilityIdentifier("org.thread.followUp.input")
-                }
-                ReplyPictureStrip(images: images, notice: $pictureNotice, idPrefix: "org.thread.followUp")
-                ReplyPictureButton(
-                    images: images, notice: $pictureNotice, idPrefix: "org.thread.followUp",
-                    disabled: sending, onWillPresent: { focused = false }
-                )
-                if failed {
-                    Text("Not sent. Your words are still here.")
-                        .font(.footnote)
-                        .foregroundStyle(Theme.needsText)
-                } else if sending {
-                    Text("Your follow up is on its way.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .accessibilityIdentifier("org.thread.followUp.onItsWay")
-                } else if let sentNote {
-                    Text(sentNote)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("org.thread.followUp.sentPart")
-                }
-            }
-            // Top-aligned and shrinking with the keyboard: never pushed up under the bar.
-            .frame(maxHeight: .infinity, alignment: .top)
-            .padding(16)
-            .navigationTitle("Follow up")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button {
-                        sendGate.send { _ in sendNow() }
-                    } label: {
-                        DictationSendLabel(gate: sendGate, title: sending ? "Sending…" : "Send")
-                    }
-                    .disabled(sending || (!sendGate.isDictating && !sendGate.isWaiting && text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && images.wrappedValue.isEmpty))
-                    .accessibilityIdentifier("org.thread.followUp.send")
-                }
-            }
-            .onAppear { focused = true }
-        }
-        .dictationSendGate(sendGate)
-    }
-
-    private func sendNow() {
-        let key = draftKey
-        guard sends.begin(key) else { return }
-        failed = false
-        sentNote = nil
-        let words = text.wrappedValue, pictures = images.wrappedValue
-        Task {
-            // The draft keeps its `@[label]` tokens; the message carries their tags.
-            let ok = await send(suggest.outgoing(words), pictures)
-            sends.end(key)
-            guard ok else {
-                failed = true
-                return
-            }
-            // A late receipt keeps newer words and never offers sent words again.
-            let after = OrgThreadFollowUpDraft.afterReceipt(
-                sent: words, sentPictures: pictures.map(\.id),
-                draft: drafts.draft(key), draftPictures: drafts.images(key).map(\.id))
-            if after.words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, after.pictures.isEmpty {
-                drafts.clear(key)
-                dismiss()
-                return
-            }
-            drafts.setDraft(after.words, key: key)
-            drafts.setImages(drafts.images(key).filter { after.pictures.contains($0.id) }, key: key)
-            if after.remainder {
-                sentNote = "Sent: \u{201C}\(Self.clip(words))\u{201D}. What you wrote after it is still here."
-            }
-        }
-    }
-
-    private static func clip(_ words: String) -> String {
-        let one = words.trimmingCharacters(in: .whitespacesAndNewlines)
-        return one.count > 60 ? String(one.prefix(60)) + "\u{2026}" : one
-    }
 }
 
 /// Chips that wrap onto the next line instead of running off the screen.

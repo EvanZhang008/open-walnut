@@ -16,11 +16,13 @@ describe('shared iOS dictation lifecycle', () => {
   });
 
   it('allows the thread Send to wait even when the draft is empty', () => {
-    const source = read('Views/Org/OrgThreadsView.swift');
-    expect(source).toContain('surface: draftKey, box: "thread-follow-up"');
-    expect(source).toContain('sendGate.send { _ in sendNow() }');
-    expect(source).toContain('!sendGate.isDictating && !sendGate.isWaiting');
-    expect(source).toContain('.dictationSendGate(sendGate)');
+    // The thread's Follow up is the shared reply box on its card, with Walnut's mic.
+    expect(read('Views/Org/OrgThreadsView.swift')).toContain('voiceBox: "thread-follow-up"');
+    const box = read('Views/Shared/ReplyBox.swift');
+    expect(box).toContain('surface: draftKey, box: voiceBox');
+    expect(box).toContain('gate.send { waited in send(waited: waited) }');
+    expect(box).toContain('gate.isDictating || gate.isWaiting');
+    expect(box).toContain('.dictationSendGate(gate)');
   });
 
   it('marks newly dictated roots covered without covering their pushed destinations', () => {

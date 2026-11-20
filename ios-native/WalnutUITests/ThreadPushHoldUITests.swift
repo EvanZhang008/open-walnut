@@ -8,8 +8,8 @@ import XCTest
 ///    push for the same VP.
 ///  - U: the VP's Memory & instructions edited, then a push for another VP.
 ///  - V: a session note being written, then a push for the same VP and one for another VP.
-///  - W: a Follow up sent, closed while its receipt is on its way, reopened and written again:
-///    the late receipt keeps the newer words.
+///  - W: a Follow up sent from a card's box, the page left while its receipt is on its way,
+///    opened again and written again: the late receipt keeps the newer words.
 final class ThreadPushHoldUITests: ThreadPushUITestCase {
 
     override var answerDelay: (String, String) -> TimeInterval { OrgThreadsFixture.slowSend }
@@ -126,39 +126,31 @@ final class ThreadPushHoldUITests: ThreadPushUITestCase {
     func testWALateReceiptKeepsTheNewerWords() throws {
         try openBarPage("W")
         let thread = ids[2]
-        let follow = card(thread).buttons["org.thread.followUp"]
-        XCTAssertTrue(follow.waitForExistence(timeout: 10))
-        bringIntoView(follow)
-        touch(follow)
-        let input = el("org.thread.followUp.input")
-        XCTAssertTrue(input.waitForExistence(timeout: 10), "W: Follow up opened no composer")
-        input.tap()
+        let input = followUpInput(thread)
+        XCTAssertTrue(input.waitForExistence(timeout: 10), "W: the card has no Follow up box")
+        bringIntoView(input)
+        touch(input)
         clear(input)
         input.typeText("First words")
-        el("org.thread.followUp.send").tap()
-        // On its way (the receipt takes `sendSeconds`): he closes the composer and leaves the page.
-        app.navigationBars["Follow up"].buttons["Cancel"].tap()
-        XCTAssertTrue(input.waitForNonExistence(timeout: 5))
+        card(thread).descendants(matching: .any).matching(identifier: "org.thread.followUp.send").firstMatch.tap()
+        // On its way (the receipt takes `sendSeconds`): he leaves the page.
         back()
         XCTAssertTrue(el("org.bar.threads").waitForExistence(timeout: 15))
         el("org.bar.threads").tap()
         XCTAssertTrue(card(thread).waitForExistence(timeout: 20), "W: the page did not open again")
-        bringIntoView(follow)
-        touch(follow)
-        XCTAssertTrue(input.waitForExistence(timeout: 10), "W: Follow up did not open again")
-        input.tap()
+        XCTAssertTrue(input.waitForExistence(timeout: 10), "W: the box is not on the card again")
+        bringIntoView(input)
+        touch(input)
         clear(input)
         let newer = "Newer words after the send"
         input.typeText(newer)
         shot("W-newer")
         // Past the receipt of the first send.
         Thread.sleep(forTimeInterval: OrgThreadsFixture.sendSeconds + 2)
-        XCTAssertTrue(input.exists, "W: the late receipt closed the composer he is writing in")
         XCTAssertEqual(input.value as? String, newer, "W: the late receipt took his newer words")
         shot("W-after-receipt")
 
         // Leave no draft behind.
         clear(input)
-        app.navigationBars["Follow up"].buttons["Cancel"].tap()
     }
 }

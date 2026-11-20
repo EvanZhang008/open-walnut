@@ -48,7 +48,7 @@ enum OrgNodePageFocusModel {
     }
 
     /// What stays over the page once a request came in. A request the page applied takes down
-    /// what it put over itself (a task's session opened from Tasks, a Follow up composer): the
+    /// what it put over itself (a task's session opened from Tasks): the
     /// view it brought forward, its thread revealed, must be what he sees. A request it did not
     /// apply (another node's, the same one again) leaves it as it was.
     static func cover(_ cover: OrgNodePageCover?, after applied: State?) -> OrgNodePageCover? {
@@ -56,18 +56,16 @@ enum OrgNodePageFocusModel {
     }
 }
 
-/// What an Org node's page shows over itself, one at a time: a task's session opened from a
-/// Tasks row or a thread card's task chip, or a thread's Follow up composer. The page owns it and
+/// What an Org node's page shows over itself: a task's session opened from a Tasks row or a
+/// thread card's task chip (a thread's Follow up is a box on its card). The page owns it and
 /// its views only ask for it, so a request the page takes can take it down
 /// (`OrgNodePageFocusModel.cover`); a sheet each view kept to itself stayed up over the page.
 enum OrgNodePageCover: Identifiable, Equatable {
     case task(TaskOpenTarget)
-    case followUp(threadId: String, title: String)
 
     var id: String {
         switch self {
         case .task(let target): return "task|\(target.id)"
-        case .followUp(let threadId, _): return "followUp|\(threadId)"
         }
     }
 }

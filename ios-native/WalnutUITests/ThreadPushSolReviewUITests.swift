@@ -70,16 +70,14 @@ final class ThreadPushSolReviewUITests: XCTestCase {
         if open.waitForExistence(timeout: 1) { open.tap() }
     }
 
+    /// The Follow up box on a thread's card, there with no tap.
     private func followUp(_ thread: String) -> XCUIElement {
-        el("org.thread.\(thread)").buttons["org.thread.followUp"]
+        el("org.thread.\(thread)").descendants(matching: .any).matching(identifier: "org.thread.followUp.input").firstMatch
     }
 
-    func testPushKeepsTheUnsentFollowUpDraftWhenItClosesTheComposer() throws {
+    func testPushKeepsTheUnsentFollowUpDraftInItsCard() throws {
         try launchVPPage()
-        let follow = followUp(ids[0])
-        XCTAssertTrue(follow.waitForExistence(timeout: 10))
-        touch(follow)
-        let input = el("org.thread.followUp.input")
+        let input = followUp(ids[0])
         XCTAssertTrue(input.waitForExistence(timeout: 10))
         let draft = "Please keep this unsent draft while I read the new push."
         input.tap()
@@ -88,7 +86,6 @@ final class ThreadPushSolReviewUITests: XCTestCase {
         shot("draft-before-push")
 
         push(ids[9])
-        XCTAssertTrue(input.waitForNonExistence(timeout: 15), "The push should close the covering composer")
         XCTAssertTrue(el("org.node.page").waitForExistence(timeout: 15))
         shot("draft-after-push")
 
@@ -99,10 +96,8 @@ final class ThreadPushSolReviewUITests: XCTestCase {
         XCTAssertTrue(el("org.thread.\(ids[0])").waitForExistence(timeout: 15))
         let reopened = followUp(ids[0])
         XCTAssertTrue(reopened.waitForExistence(timeout: 10))
-        touch(reopened)
-        XCTAssertTrue(input.waitForExistence(timeout: 10))
         shot("draft-reopened")
-        XCTAssertEqual(input.value as? String, draft,
+        XCTAssertEqual(reopened.value as? String, draft,
                        "A push must not silently discard the words typed into another thread's Follow up")
     }
 

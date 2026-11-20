@@ -4,7 +4,8 @@ import XCTest
 ///
 ///  - K: the VP's chat with one of its own sheets up (Task Details, then Session Controls).
 ///  - L: a sheet on another tab (the Tasks draft) and the app's own work card list.
-///  - M: a Follow up half written when a push for another thread comes: its words come back.
+///  - M: a Follow up half written in a card's box when a push for another thread comes: its
+///    words stay in that box.
 ///  - N: a thread closed long ago, past the closed ones a list read brings, is found by its id.
 ///  - O: VP B's thread pushed while VP A's page is up, and back.
 ///  - P: he goes Back while a slow push read is on its way: the push gives way to him.
@@ -250,48 +251,33 @@ final class ThreadPushStatesUITests: XCTestCase {
         // The second thread (the first is the review probes' own); drafts outlive a launch, so
         // whatever an earlier run left in it goes first, and this run leaves none.
         let thread = ids[1]
-        let follow = card(thread).buttons["org.thread.followUp"]
-        XCTAssertTrue(follow.waitForExistence(timeout: 10))
-        bringIntoView(follow)
-        XCTAssertTrue(poll(5) { inView(follow) }, "M: Follow up is not in view: \(whereIs(follow))")
-        touch(follow)
-        let input = el("org.thread.followUp.input")
-        XCTAssertTrue(input.waitForExistence(timeout: 10), "Follow up opened no composer")
-        input.tap()
+        // The box is on the card with no tap: no Follow up button, no sheet.
+        let input = card(thread).descendants(matching: .any).matching(identifier: "org.thread.followUp.input").firstMatch
+        XCTAssertTrue(input.waitForExistence(timeout: 10), "M: the card has no Follow up box")
+        XCTAssertFalse(card(thread).buttons["org.thread.followUp"].exists, "M: a Follow up button is still on the card")
+        bringIntoView(input)
+        XCTAssertTrue(poll(5) { inView(input) }, "M: the Follow up box is not in view: \(whereIs(input))")
+        touch(input)
         clear(input)
         let words = "Half a thought about the pricing page"
         input.typeText(words)
         shot("M-typing")
         push(ids[10])
         expectRevealed(ids[10], "M-push")
-        XCTAssertTrue(input.waitForNonExistence(timeout: 10), "M: the composer is still up")
+        XCTAssertTrue(poll(5) { app.keyboards.count == 0 }, "M: the keyboard stayed up over the pushed thread")
 
-        // Back up the list to that thread: it says its follow up is kept.
+        // Back up the list to that thread: its box still holds his words.
         let list = el("org.threads")
         for _ in 0..<10 where !inView(cardTitle(thread)) { list.swipeDown() }
         XCTAssertTrue(poll(5) { inView(cardTitle(thread)) }, "M: the thread is not back in view")
-        bringIntoView(follow)
-        let kept = card(thread).descendants(matching: .any).matching(identifier: "org.thread.followUp.kept").firstMatch
-        XCTAssertTrue(kept.waitForExistence(timeout: 5), "M: the card does not say its follow up is kept")
+        bringIntoView(input)
+        XCTAssertTrue(poll(5) { (input.value as? String) == words }, "M: the words did not stay: \(input.value ?? "nil")")
         shot("M-kept")
-        XCTAssertTrue(poll(5) { inView(follow) }, "M: Follow up is not back in view: \(whereIs(follow))")
-        touch(follow)
-        XCTAssertTrue(input.waitForExistence(timeout: 10), "M: Follow up did not open again")
-        XCTAssertTrue(poll(5) { (input.value as? String) == words }, "M: the words did not come back: \(input.value ?? "nil")")
-        shot("M-restored")
-        // Cancel keeps them too.
-        app.navigationBars["Follow up"].buttons["Cancel"].tap()
-        XCTAssertTrue(input.waitForNonExistence(timeout: 10))
-        XCTAssertTrue(kept.waitForExistence(timeout: 5), "M: Cancel dropped the words")
 
         // Leave no draft behind for the next run.
-        bringIntoView(follow)
-        touch(follow)
-        XCTAssertTrue(input.waitForExistence(timeout: 10), "M: Follow up did not open for the clean up")
-        input.tap()
+        touch(input)
         clear(input)
-        app.navigationBars["Follow up"].buttons["Cancel"].tap()
-        XCTAssertTrue(kept.waitForNonExistence(timeout: 5), "M: an emptied follow up still reads as kept")
+        XCTAssertTrue(poll(5) { ((input.value as? String) ?? "").isEmpty }, "M: the box did not empty")
     }
 
     /// Small drags of the thread list until `e` sits whole in the viewport.

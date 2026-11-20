@@ -182,7 +182,7 @@ struct OrgNodePage: View {
     @State private var page: OrgNodePageFocusModel.State
     /// The request whose thread the Threads view has scrolled to (it owes each request one reveal).
     @State private var revealedAt: Date?
-    /// What the page shows over itself (a task's session, a Follow up composer). Owned here, so
+    /// What the page shows over itself (a task's session). Owned here, so
     /// a request this page takes takes it down and the page underneath is what he sees.
     @State private var cover: OrgNodePageCover?
     @State private var threads: OrgThreadsStore
@@ -320,11 +320,6 @@ struct OrgNodePage: View {
         switch cover {
         case .task(let target):
             TaskSessionSheet(target: target)
-        case .followUp(let threadId, let title):
-            OrgThreadFollowUpSheet(title: title, draftKey: OrgThreadFollowUpDraft.key(nodeId: route.nodeId, threadId: threadId)) { text, images in
-                guard let sessionId = route.sessionId else { return false }
-                return await threads.followUp(threadId, sessionId: sessionId, text: text, images: images)
-            }
         }
     }
 

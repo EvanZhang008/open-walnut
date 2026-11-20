@@ -78,7 +78,7 @@ final class VerticalPagesWidthTests: XCTestCase {
             for t in threads {
                 for snoozed in [false, true] {
                     let card = OrgThreadCard(thread: t, all: threads, shared: [], name: F.name, now: Date(), snoozed: snoozed,
-                                             busy: false, canFollowUp: true, onEdit: { _ in }, onOpenTask: { _ in }, onFollowUpOpen: {})
+                                             busy: false, canFollowUp: true, onEdit: { _ in }, onOpenTask: { _ in })
                     H.assertFits("at \(width) pt, card \(t.id)\(snoozed ? " (snoozed)" : "")", H.provided(card, stores), width: width - 32)
                 }
             }

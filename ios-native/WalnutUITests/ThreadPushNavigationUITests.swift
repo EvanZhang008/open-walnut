@@ -6,9 +6,9 @@ import XCTest
 ///    nothing opens over where he went once the read lands.
 ///  - Y: offline after he left the VP's page: a push opens it on the phone's copy of its threads,
 ///    with the thread, says so, and the page reads again once Walnut is back.
-///  - Z: a push for another VP while a sheet is up over the first VP's page (a task's session, a
-///    Follow up): it lands on the other VP's thread with no frame of the chat list on the way,
-///    and Back goes to that VP's chat.
+///  - Z: a push for another VP while a sheet is up over the first VP's page (a task's session),
+///    or while he writes a Follow up in a card's box there: it lands on the other VP's thread
+///    with no frame of the chat list on the way, and Back goes to that VP's chat.
 final class ThreadPushNavigationUITests: ThreadPushUITestCase {
 
     override var shotPrefix: String { "N" }
@@ -114,20 +114,19 @@ final class ThreadPushNavigationUITests: ThreadPushUITestCase {
         XCTAssertTrue(titled(OrgThreadsFixture.vp2Name).waitForExistence(timeout: 5), "Z: not Design VP's page")
         XCTAssertFalse(el("task.open.done").exists, "Z: the task's session stayed up")
 
-        // A Follow up over Design VP's page, then Growth VP's thread.
-        let follow = card(ids2[0]).buttons["org.thread.followUp"]
+        // A Follow up being written on Design VP's page, then Growth VP's thread.
+        let input = followUpInput(ids2[0])
         let list = el("org.threads")
         for _ in 0..<8 where !inView(cardTitle(ids2[0])) { list.swipeDown() }
-        XCTAssertTrue(follow.waitForExistence(timeout: 10))
-        bringIntoView(follow)
-        touch(follow)
-        let input = el("org.thread.followUp.input")
-        XCTAssertTrue(input.waitForExistence(timeout: 10), "Z: Follow up opened no composer")
+        XCTAssertTrue(input.waitForExistence(timeout: 10), "Z: the card has no Follow up box")
+        bringIntoView(input)
+        touch(input)
+        input.typeText("Z")
         push(ids[4])
         XCTAssertFalse(watchForTheChatList(until: ids[4], "Z-follow-up"), "Z: the chat list showed between the two VPs' pages")
         expectRevealed(ids[4], "Z-follow-up")
         XCTAssertTrue(titled(OrgThreadsFixture.vpName).waitForExistence(timeout: 5), "Z: not Growth VP's page")
-        XCTAssertFalse(input.exists, "Z: the Follow up stayed up")
+        XCTAssertFalse(card(ids2[0]).exists, "Z: Design VP's card stayed in front")
 
         back()
         XCTAssertTrue(el("org.bar.threads").waitForExistence(timeout: 10), "Z: Back did not reach a VP's chat")

@@ -64,7 +64,7 @@ final class ReplySuggestUITests: XCTestCase {
             XCTAssertTrue(menu.waitForExistence(timeout: 10), "no board button on the Tasks page")
             menu.tap()
         }
-        let field = element(app, "action.reply.ask-stub-ship.field")
+        let field = element(app, "action.reply.ask-stub-ship.input")
         if !field.waitForExistence(timeout: 40) { app.swipeDown() }
         XCTAssertTrue(field.waitForExistence(timeout: 30), "the ask card's words box never showed")
         try await pickBothLists(app, stub, field: field, shots: "ask-card", excludes: "task:task-stub-work")

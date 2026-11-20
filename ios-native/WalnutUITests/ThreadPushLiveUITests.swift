@@ -3,7 +3,7 @@ import XCTest
 /// A thread push tapped while the app runs, with the VP's page already up (the P1 case of the
 /// thread push work, `OrgNodePageLink`): the page stays, its Threads view comes forward, and the
 /// pushed thread is scrolled into view and marked, whatever was in front of it (another thread,
-/// the Tasks or the Brief view, a task's session or a Follow up opened from the page).
+/// the Tasks or the Brief view, a task's session opened from the page, a Follow up being written).
 ///
 /// The tap enters through the DEBUG link `walnut://debug-thread-push?...` (`DebugThreadPushLink`),
 /// which does what the notification delegate does with a tapped thread push: the server's payload
@@ -266,25 +266,28 @@ final class ThreadPushLiveUITests: XCTestCase {
         reportRevealMarks()
     }
 
-    /// E. Follow up open on a thread, then a push for another one: the composer closes and the
-    /// pushed thread shows.
-    func testEAPushClosesAnOpenFollowUp() throws {
+    /// E. A Follow up being written in a thread card's box, then a push for another one: the
+    /// keyboard goes and the pushed thread shows.
+    func testEAPushWhileAFollowUpIsWritten() throws {
         try openThreadsPageFromTheBar("E")
-        let follow = card(ids[0]).buttons["org.thread.followUp"]
-        XCTAssertTrue(follow.waitForExistence(timeout: 10), "the first thread has no Follow up")
-        // A touch where the first card's Follow up shows, by coordinate: the bar's page takes it.
-        XCTAssertTrue(poll(5) { inView(follow) }, "the first thread's Follow up is not in view: \(whereIs(follow))")
-        touch(follow)
-        let input = el("org.thread.followUp.input")
-        XCTAssertTrue(input.waitForExistence(timeout: 10), "Follow up opened no composer")
-        input.tap()
+        let input = card(ids[0]).descendants(matching: .any).matching(identifier: "org.thread.followUp.input").firstMatch
+        XCTAssertTrue(input.waitForExistence(timeout: 10), "the first thread's card has no Follow up box")
+        XCTAssertFalse(card(ids[0]).buttons["org.thread.followUp"].exists, "no Follow up button: the box is on the card")
+        // A touch where the first card's box shows, by coordinate: the bar's page takes it.
+        XCTAssertTrue(poll(5) { inView(input) }, "the first thread's Follow up box is not in view: \(whereIs(input))")
+        touch(input)
         input.typeText("Checking in on this")
         shot("E-follow-up")
         push(ids[10])
         // The reveal first: its mark lasts 2.5 s (2026-11-08 run: shown and gone while these waited).
         expectRevealed(ids[10], "E-push")
-        XCTAssertTrue(input.waitForNonExistence(timeout: 10), "E: the Follow up is still up over the page")
         XCTAssertTrue(poll(5) { app.keyboards.count == 0 }, "E: the keyboard stayed up")
         reportRevealMarks()
+        // His words stay in the first thread's box (its draft), and this run leaves none.
+        revealInList(app, input, up: true)
+        XCTAssertTrue(poll(5) { (input.value as? String) == "Checking in on this" }, "E: the words left the box: \(input.value ?? "nil")")
+        touch(input)
+        let n = (input.value as? String)?.count ?? 0
+        input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: n + 2))
     }
 }

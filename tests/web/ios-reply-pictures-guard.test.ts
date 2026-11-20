@@ -113,13 +113,17 @@ describe('every iOS box that writes to an AI takes pictures', () => {
     expect(read('API/WalnutAPIInbox.swift')).toMatch(/"\/human-inbox\/\\\(escape\(id\)\)\/answer"[\s\S]{0,200}images: images\.isEmpty \? nil : images/)
     expect(read('Stores/LetterReplyStore.swift')).toMatch(/SelectedImage\.buildPayloads\(pendingImages\[clientId\]/)
     // An Org thread's Follow up (the user, 2026-11-03: "the follow up in org thread ... should be
-    // able to copy pictures") sends them with its words into the node's chat. The words and
-    // pictures live in the draft store (`ComposerDrafts`), so a push closing the sheet keeps them.
+    // able to copy pictures") sends them with its words into the node's chat. It is the shared
+    // reply box on the thread's card; its words and pictures live in the draft store
+    // (`ComposerDrafts`), per thread, so a card that scrolls away or a push keeps them.
     const followUp = read('Views/Org/OrgThreadsView.swift')
-    expect(followUp).toMatch(/Binding\(get: \{ drafts\.images\(draftKey\) \}/)
-    expect(followUp).toMatch(/ReplyPictureButton\(\s*images: images,/)
+    expect(followUp).toMatch(/ReplyBox\([\s\S]{0,300}draftKey: key/)
+    expect(followUp).toMatch(/return await onFollowUp\(text, images\)/)
+    const box = read('Views/Shared/ReplyBox.swift')
+    expect(box).toMatch(/Binding\(get: \{ drafts\.images\(draftKey\) \}/)
+    expect(box).toMatch(/ReplyPictureButton\(\s*images: pictures,/)
     // Its words go with their picked references as tags (`suggest.outgoing`), the pictures beside them.
-    expect(followUp).toMatch(/pictures = images\.wrappedValue[\s\S]{0,200}await send\(suggest\.outgoing\(words\), pictures\)/)
+    expect(box).toMatch(/let images = acceptsPictures \? drafts\.images\(draftKey\) : \[\][\s\S]{0,200}await onSend\(suggest\.outgoing\(words\), images\)/)
     expect(read('Views/Org/OrgThreadsStore.swift')).toMatch(/SelectedImage\.buildPayloads\(images\.map/)
     expect(read('API/WalnutAPIThreads.swift')).toMatch(/images: images\.isEmpty \? nil : images, messageId: messageId, threadId: threadId/)
   })

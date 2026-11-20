@@ -89,11 +89,6 @@ struct TaskThreadsSheet: View {
         switch cover {
         case .task(let target):
             TaskSessionSheet(target: target)
-        case .followUp(let threadId, let title):
-            OrgThreadFollowUpSheet(title: title, draftKey: OrgThreadFollowUpDraft.key(nodeId: taskId, threadId: threadId)) { text, images in
-                guard let sessionId else { return false }
-                return await store.followUp(threadId, sessionId: sessionId, text: text, images: images)
-            }
         }
     }
 }
