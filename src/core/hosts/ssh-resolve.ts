@@ -9,9 +9,15 @@
  * ~/.ssh/config, so fixing the port there and pressing Retry works.
  *
  * `ssh -G` reads config only, it never connects. It runs as a child process with a deadline
- * (never on the event loop), and the answer is kept for a few seconds per name.
+ * (never on the event loop). The answer is kept per name for KEEP_MS while ~/.ssh/config is
+ * unchanged (its mtime and size): on the Mac each start held the loop thread 250 ms to 1 s
+ * (2026-11-19), and the host list asked every few seconds. An edit to an Include'd file alone
+ * shows within KEEP_MS.
  */
 import { execFile } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { knownAccount } from '../../lib/account.js'
 
 export interface SshResolved {
@@ -51,22 +57,33 @@ const defaultRun: SshGRun = (args, timeoutMs) => new Promise((resolve) => {
   })
 })
 
-const KEEP_MS = 5_000
+const KEEP_MS = 5 * 60_000
 const DEADLINE_MS = 3_000
-const kept = new Map<string, { at: number; answer: Promise<SshResolved | null> }>()
+const kept = new Map<string, { at: number; config: string; answer: Promise<SshResolved | null> }>()
+
+/** ~/.ssh/config's mtime and size ('' when there is none): a change answers again. */
+function configStamp(): string {
+  try {
+    const st = fs.statSync(path.join(os.homedir(), '.ssh', 'config'))
+    return `${st.mtimeMs}:${st.size}`
+  } catch {
+    return ''
+  }
+}
 
 /** Resolve `name` the way ssh would dial it. Null when ssh is not there, refuses, or the name is not one. */
 export function resolveSshName(name: string, deps: { run?: SshGRun; now?: () => number; localUser?: string } = {}): Promise<SshResolved | null> {
   if (!isResolvableName(name)) return Promise.resolve(null)
   const now = (deps.now ?? Date.now)()
+  const config = configStamp()
   const hit = kept.get(name)
-  if (hit && now - hit.at < KEEP_MS && !deps.run) return hit.answer
+  if (hit && now - hit.at < KEEP_MS && hit.config === config && !deps.run) return hit.answer
   const localUser = deps.localUser ?? safeLocalUser()
   const answer = (deps.run ?? defaultRun)(['-G', name], DEADLINE_MS)
     .then((r) => (r.code === 0 ? parseSshG(name, r.stdout, localUser) : null))
     .catch(() => null)
   if (!deps.run) {
-    kept.set(name, { at: now, answer })
+    kept.set(name, { at: now, config, answer })
     if (kept.size > 200) kept.delete(kept.keys().next().value as string)
   }
   return answer

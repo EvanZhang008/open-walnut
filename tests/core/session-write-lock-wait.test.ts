@@ -23,6 +23,8 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-session-writ
 import { WALNUT_HOME } from '../../src/constants.js';
 import { createSessionRecord, getSessionByClaudeId, updateSessionRecord, _resetSessionTrackerForTesting } from '../../src/core/session-tracker.js';
 import * as sessionDb from '../../src/core/session-db.js';
+import { log } from '../../src/logging/index.js';
+import { _resetBlockingCallsForTesting } from '../../src/core/blocking-calls.js';
 
 const SID = '22222222-2222-4222-8222-222222222222';
 
@@ -68,6 +70,8 @@ beforeEach(async () => {
   sessionDb.closeDb();
   _resetSessionTrackerForTesting();
   sessionDb._setSessionLockBudgetForTesting(null);
+  // The once-a-minute gap on the holders look starts fresh.
+  _resetBlockingCallsForTesting();
 });
 
 afterEach(async () => {
@@ -77,14 +81,18 @@ afterEach(async () => {
 });
 
 describe('session writes and another connection\'s write lock', () => {
-  it('keeps the loop turning while a session write waits for the lock, then writes it', async () => {
+  it('keeps the loop turning while a session write waits for the lock, names who has the store open, then writes it', async () => {
+    const warn = vi.spyOn(log.web, 'warn');
+    const holders = () => warn.mock.calls.find((c) => c[0] === 'sqlite: slow write, the processes that had the database open')?.[1] as { file: string; what: string; others: string[] } | undefined;
     await createSessionRecord(SID, '', 'proj', undefined, { title: 'before' });
     const holder = await holdWriteLock();
     const retriesBefore = sessionDb.sessionLockWaitStats().retries;
     const { gapMs } = await longestLoopGap(async () => {
       const write = updateSessionRecord(SID, { title: 'after' });
-      // The write is refused the lock several times while the loop keeps turning, then the holder lets go.
+      // The write is refused the lock while the loop keeps turning; past 100 ms it asks lsof who has
+      // the store open (the line comes when lsof answers); then the holder lets go.
       await vi.waitFor(() => expect(sessionDb.sessionLockWaitStats().retries - retriesBefore).toBeGreaterThanOrEqual(5), { timeout: 10_000 });
+      await vi.waitFor(() => expect(holders()).toBeDefined(), { timeout: 10_000 });
       await holder.release();
       return write;
     });
@@ -92,6 +100,8 @@ describe('session writes and another connection\'s write lock', () => {
     expect(gapMs).toBeLessThan(1_000);
     expect((await getSessionByClaudeId(SID))?.title).toBe('after');
     expect(sessionDb.sessionLockWaitStats().waits).toBeGreaterThanOrEqual(1);
+    expect(holders()).toMatchObject({ file: 'sessions.sqlite', what: 'BEGIN IMMEDIATE' });
+    warn.mockRestore();
   });
 
   it('gives up with SQLITE_BUSY past its budget, writes nothing, and the next write goes through', async () => {

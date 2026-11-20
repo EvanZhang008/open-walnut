@@ -109,7 +109,7 @@ describe('blocking-call ledger', () => {
 describe('a write that waits', () => {
   // On the Mac a one-row session INSERT that takes 0.03 ms on its own took up to
   // 504 ms in the server: the line must say whether the thread ran or waited, and on what.
-  it('says the thread was off the CPU, and names the process that held the write lock', async () => {
+  it('says the thread was off the CPU, and starts no lsof from the write (a child start holds the loop too)', async () => {
     const warn = vi.spyOn(log.web, 'warn').mockImplementation(() => {})
     installBlockingCallTiming()
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blocking-lock-'))
@@ -136,14 +136,9 @@ describe('a write that waits', () => {
       expect(insert?.maxMs).toBeGreaterThanOrEqual(300)
       expect(insert?.wait).toBeDefined()
       expect(insert!.wait!.cpuMs).toBeLessThan(insert!.maxMs / 4)
-      await vi.waitFor(() => {
-        const line = warn.mock.calls.find((c) => c[0] === 'sqlite: slow write, the processes that had the database open')
-        expect(line).toBeDefined()
-      }, { timeout: 5_000 })
-      const line = warn.mock.calls.find((c) => c[0] === 'sqlite: slow write, the processes that had the database open')![1] as { file: string; others: string[] }
-      expect(line.file).toBe('held.sqlite')
-      // lsof answers after the holder exited on a fast machine: the line is there either way, naming whoever had it open then.
-      expect(Array.isArray(line.others)).toBe(true)
+      // No child was started for it: the ledger holds no spawn in the write's span.
+      expect(got?.calls.some((c) => c.kind === 'spawn')).toBe(false)
+      expect(warn.mock.calls.some((c) => c[0] === 'sqlite: slow write, the processes that had the database open')).toBe(false)
     } finally {
       db.close()
       fs.rmSync(dir, { recursive: true, force: true })

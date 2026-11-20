@@ -218,11 +218,12 @@ function waitSince(before: Sample): CallWait | undefined {
 }
 
 /**
- * A write that waited this long, with its thread mostly off the CPU, looks for
- * the other processes that have the database open: one holding the write lock
- * keeps this thread in SQLite's busy wait. At most once a minute.
+ * The other processes that have the database open, for a write that has waited
+ * for the write lock (session-db transactionWhenFree, while the lock is still
+ * held). At most once a minute: the lsof start itself held the Mac's loop
+ * thread about 220 ms (11 starts, 2.4 s, 2026-11-19), so it is never run from a
+ * synchronous write's end any more.
  */
-const HOLDERS_MIN_MS = 100;
 const HOLDERS_GAP_MS = 60_000;
 let lastHoldersAt = 0;
 
@@ -259,12 +260,10 @@ export function installBlockingCallTiming(): void {
       callBegins('sqlite');
       return { start: performance.now(), before: writes ? sampleNow() : null };
     },
-    end: (source, token, _writes, file) => {
+    end: (source, token) => {
       callEnds();
       const t = token as Token;
-      const wait = noteTimed('sqlite', () => sqlLabel(source), t.start, t.before);
-      const ms = performance.now() - t.start;
-      if (wait && ms >= HOLDERS_MIN_MS && wait.cpuMs < ms / 4) lookForHolders(file, source, ms, wait);
+      noteTimed('sqlite', () => sqlLabel(source), t.start, t.before);
     },
   });
   const proto = (childProcess as unknown as { ChildProcess?: { prototype: Record<string, unknown> } }).ChildProcess?.prototype;

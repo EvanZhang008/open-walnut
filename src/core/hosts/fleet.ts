@@ -46,7 +46,8 @@ export const CAPS_CAPABILITY = 'host-caps-v1'
 const VITALS_DEADLINE_MS = 3_000
 const VITALS_TTL_MS = 15_000
 const VITALS_CACHE_MAX = 32
-const SPEND_TTL_MS = 5 * 60_000
+// A 30-day sum moves little in 30 min; each report held the Mac loop about 240 ms in its SQL (2026-11-19, every 5 min before).
+const SPEND_TTL_MS = 30 * 60_000
 const SPEND_FIRST_WAIT_MS = 1_500
 const SPEND_DAYS = 30
 /** The window the Overview shows and the fleet cache keeps. */
