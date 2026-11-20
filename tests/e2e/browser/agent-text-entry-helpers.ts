@@ -262,6 +262,21 @@ export async function setReport(request: APIRequestContext, id: string, body: Re
   return last
 }
 
+/**
+ * A Needs you row's own ask, where Home shows it: the words of its item in the Action needed block
+ * right under the row (StatusSections.tsx `below`, ActionNeeded.tsx), never the row's own Needs you
+ * line, which then says nothing so the ask shows once (ownLineIsItem). Since 2026-11-19 ("Action
+ * needed on task rows"); a spec that looked for the ask in the line found nothing.
+ */
+export const rowAsk = (panel: Locator, taskId: string): Locator =>
+  panel.locator(`[data-asks-for="${taskId}"] [data-testid="action-summary"]`).first()
+
+/** The row shows its ask once: in the block under it, and no Needs you line of its own. */
+export async function expectAskShownOnce(panel: Locator, card: Locator, taskId: string): Promise<void> {
+  await expect(rowAsk(panel, taskId)).toBeVisible({ timeout: 20_000 })
+  await expect(card.getByTestId('status-card-needs-line')).toHaveCount(0)
+}
+
 /** A Home session column of `sid`, if one is open. */
 export const sessionColumn = (page: Page, sid: string): Locator =>
   page.locator(`.main-page-session-column .session-panel[data-session-id="${sid}"]`)

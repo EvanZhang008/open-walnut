@@ -1,8 +1,8 @@
 // Agent words on Home rows, the wait card, the taskbar card, the extension pop-out and triage must open what they name, never the row.
 import { test, expect, type APIRequestContext, type APIResponse, type BrowserContext, type Locator, type Page } from '@playwright/test'
 import {
-  AGENT_TEXT_BASE as base, click, closeFile, closeLinkedLetter, dragSelect, expectImage, expectText, expectViewerFillsPanel, openApp, openTaskSession,
-  seedAgentFiles, sessionColumn, setReport, showPointer, tabTo, taskWithReply, type AgentFiles,
+  AGENT_TEXT_BASE as base, click, closeFile, closeLinkedLetter, dragSelect, expectImage, expectText, expectAskShownOnce, expectViewerFillsPanel, openApp, openTaskSession,
+  rowAsk, seedAgentFiles, sessionColumn, setReport, showPointer, tabTo, taskWithReply, type AgentFiles,
 } from './agent-text-entry-helpers'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { LS_PANEL_DESIGN_KEY } from './status-section-helpers'
@@ -223,12 +223,13 @@ async function expectPopup(context: BrowserContext, page: Page, link: Locator, u
 test('Needs you row: its ask opens the file by pointer and Enter, and the row never opens with it', async ({ page }) => {
   const panel = await homeWithStatusLines(page)
   const card = await sectionCard(page, panel, 'needs', ids.needs)
-  const line = card.getByTestId('status-card-needs-line')
+  // The ask is the item under the row (Action needed), shown once: the row has no Needs you line.
+  await expectAskShownOnce(panel, card, ids.needs)
+  const line = rowAsk(panel, ids.needs)
   const link = line.locator(`a.file-link[data-file-path="${files.picture}"]`)
   await expect(link).toBeVisible()
-  // The source as written reaches the row; only its CSS cuts it to one line.
-  await expect(line.locator('.needs-line-text')).toHaveAttribute('data-agent-text', 'true')
-  expect((await line.boundingBox())!.height).toBeLessThan(24)
+  // The source as written reaches the block, read as agent text.
+  await expect(line).toHaveAttribute('data-agent-text', 'true')
   for (let i = 0; i < 2; i++) {
     await click(page, link)
     await expectImage(page)
@@ -242,7 +243,7 @@ test('Needs you row: its ask opens the file by pointer and Enter, and the row ne
   await expect(page.locator('.file-viewer-overlay')).toHaveCount(0)
   await rowUntouched(page, card, sids.needs)
   await page.setViewportSize({ width: 1024, height: 720 })
-  expect(await line.locator('.needs-line-text').textContent()).toContain(files.picture)
+  expect(await line.textContent()).toContain(files.picture)
   await expect(page.locator('.file-viewer-overlay')).toHaveCount(0)
   await rowUntouched(page, card, sids.needs)
   await page.setViewportSize({ width: 1280, height: 900 })
@@ -251,19 +252,20 @@ test('Needs you row: its ask opens the file by pointer and Enter, and the row ne
   await closeFile(page)
   await rowUntouched(page, card, sids.needs)
   // Selecting the sentence must not activate its row.
-  expect((await dragSelect(page, line.locator('.needs-line-text'), 50)).length).toBeGreaterThan(0)
+  expect((await dragSelect(page, line, 50)).length).toBeGreaterThan(0)
   await expect(page.locator('.file-viewer-overlay')).toHaveCount(0)
   await rowUntouched(page, card, sids.needs)
   await click(page, link)
   await expectImage(page)
   await closeFile(page)
-  const acrossLink = await line.locator('.needs-line-text').evaluate((el) => {
+  const acrossLink = await line.evaluate((el) => {
     const words = el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT).nextNode()!
     const range = el.ownerDocument.createRange()
     range.setStart(words, 1); range.setEnd(words, 3)
     const from = range.getBoundingClientRect()
     const anchor = el.querySelector('a.file-link')!
-    const to = anchor.getBoundingClientRect()
+    // The block's words wrap, and a long path with them: aim at the path's first line, not the box around all its lines.
+    const to = anchor.getClientRects()[0]!
     const end = { x: to.left + 12, y: to.top + to.height / 2 }
     if (!anchor.contains(el.ownerDocument.elementFromPoint(end.x, end.y))) throw new Error('The selection endpoint is not on the visible path')
     return { x: from.left + from.width / 2, y: from.top + from.height / 2, end }
@@ -283,8 +285,8 @@ test('Needs you row: its ask opens the file by pointer and Enter, and the row ne
   await expectImage(page)
   await closeFile(page)
   await rowUntouched(page, card, sids.needs)
-  expect((await dragSelect(page, line.locator('.needs-line-text'), 40)).length).toBeGreaterThan(0)
-  const extend = await line.locator('.needs-line-text').evaluate((el) => {
+  expect((await dragSelect(page, line, 40)).length).toBeGreaterThan(0)
+  const extend = await line.evaluate((el) => {
     const text = el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT).nextNode()!
     const range = el.ownerDocument.createRange()
     range.setStart(text, Math.max(0, text.textContent!.length - 3))

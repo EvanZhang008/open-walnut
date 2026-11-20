@@ -29,6 +29,7 @@ import { ApprovalReply, OrgInlineAnswer, type AnswerFailure, type AnswerSettle }
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { AgentText } from '@/components/common/AgentText';
 import { taskTextSource } from '@/utils/agent-text-source';
+import { keepKeysInside } from '@/utils/keep-keys-inside';
 import type { OrgAlertView } from '@/components/org/org-channels-model';
 import { SnoozeDateFlyout, SnoozeFlyout } from '@/components/tasks/SnoozeChoices';
 import { snoozeUntilText } from '@/components/tasks/quick-sort-model';
@@ -217,8 +218,9 @@ export const ActionNeeded = memo(function ActionNeeded({ task, variant = 'row', 
   const rest = shown.length - lines.length;
   return (
     // On a row a click, a key or a drag inside answers here: it never opens or drags the row.
+    // Escape still goes on, to the file viewer a path in its words opened (keepKeysInside).
     <div className={`action-needed${strip ? ' is-strip' : ''}`} data-testid={strip ? 'session-action-needed' : 'action-needed'} data-action-task={task.id}
-      {...(variant === 'row' ? { onClick: stop, onKeyDown: stop, onPointerDown: stop } : {})}>
+      {...(variant === 'row' ? { onClick: stop, onKeyDown: keepKeysInside, onPointerDown: stop } : {})}>
       {/* Its edge says what it is; the words stay for a screen reader. */}
       <div className="action-needed-title">Action needed{strip ? ` · ${shown.length}` : ''}</div>
       {lines.map((item) => (

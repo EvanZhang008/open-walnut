@@ -16,7 +16,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { test, expect, type Locator, type Page, type Request, type Route } from '@playwright/test'
 import {
-  AGENT_TEXT_BASE as base, click, closeFile, openApp, sessionColumn, setReport, showPointer, tabTo, taskWithReply,
+  AGENT_TEXT_BASE as base, click, closeFile, expectAskShownOnce, openApp, rowAsk, sessionColumn, setReport, showPointer, tabTo, taskWithReply,
 } from './agent-text-entry-helpers'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { LS_PANEL_DESIGN_KEY } from './status-section-helpers'
@@ -293,7 +293,8 @@ async function sectionCard(page: Page, panel: Locator, key: 'needs' | 'waiting',
   return card
 }
 
-const needsLink = (card: Locator) => card.getByTestId('status-card-needs-line').locator(`.needs-line-text a.file-link[data-file-path="${doc}"]`).first()
+/** The path in a Needs you row's ask: in the Action needed block under the row (rowAsk). */
+const needsLink = (panel: Locator, key: Key) => rowAsk(panel, ids[key]).locator(`a.file-link[data-file-path="${doc}"]`).first()
 const waitLink = (card: Locator) => card.getByTestId('status-card-reason').locator(`a.file-link[data-file-path="${doc}"]`).first()
 
 async function expectRemoteText(page: Page): Promise<void> {
@@ -326,7 +327,8 @@ async function settle(page: Page): Promise<void> {
 test('a Needs you ask a remote session wrote opens on that host on the first press and by Enter, never through the task\'s local session', async ({ page }) => {
   const panel = await homeWithStatusLines(page)
   const card = await sectionCard(page, panel, 'needs', ids.remoteNeeds)
-  const link = needsLink(card)
+  await expectAskShownOnce(panel, card, ids.remoteNeeds)
+  const link = needsLink(panel, 'remoteNeeds')
   await expect(link).toBeVisible()
   expect(net.lookups(), 'drawing the row reads no session').toBe(0)
 
@@ -368,7 +370,8 @@ test('a Waiting row a remote session wrote opens its path on that host', async (
 test('a person\'s ask opens on the primary with no session read, though the task runs elsewhere now', async ({ page }) => {
   const panel = await homeWithStatusLines(page)
   const card = await sectionCard(page, panel, 'needs', ids.personNeeds)
-  await click(page, needsLink(card))
+  await expectAskShownOnce(panel, card, ids.personNeeds)
+  await click(page, needsLink(panel, 'personNeeds'))
   await expectPrimaryText(page)
   await closeFile(page)
   await rowUntouched(page, 'personNeeds')
@@ -379,7 +382,8 @@ test('a person\'s ask opens on the primary with no session read, though the task
 test('an ask whose writer Walnut did not record opens nothing on any host and says the source was not recorded', async ({ page }) => {
   const panel = await homeWithStatusLines(page)
   const card = await sectionCard(page, panel, 'needs', ids.unknownNeeds)
-  const link = needsLink(card)
+  await expectAskShownOnce(panel, card, ids.unknownNeeds)
+  const link = needsLink(panel, 'unknownNeeds')
   for (const press of ['pointer', 'Enter'] as const) {
     if (press === 'pointer') await click(page, link)
     else {
@@ -405,8 +409,9 @@ test('an ask whose writer Walnut did not record opens nothing on any host and sa
 test('a session read that fails reads no file and offers a retry; after closing, the next press opens the writer\'s host', async ({ page }) => {
   const panel = await homeWithStatusLines(page)
   const card = await sectionCard(page, panel, 'needs', ids.remoteNeeds)
+  await expectAskShownOnce(panel, card, ids.remoteNeeds)
   net.gate.mode = 'down'
-  await click(page, needsLink(card))
+  await click(page, needsLink(panel, 'remoteNeeds'))
   const failure = page.getByTestId('file-viewer-source-error')
   await expect(failure).toBeVisible({ timeout: 20_000 })
   await expect(failure).toContainText("Couldn't open the path")
@@ -421,7 +426,7 @@ test('a session read that fails reads no file and offers a retry; after closing,
   await expect(page.locator('.file-viewer-overlay')).toHaveCount(0)
 
   net.gate.mode = 'pass'
-  await click(page, needsLink(card))
+  await click(page, needsLink(panel, 'remoteNeeds'))
   await expectRemoteText(page)
   await closeFile(page)
   expect(net.lookups()).toBe(2)
@@ -431,8 +436,9 @@ test('a session read that fails reads no file and offers a retry; after closing,
 test('Try again after a failed session read opens the writer\'s host with no second press on the link', async ({ page }) => {
   const panel = await homeWithStatusLines(page)
   const card = await sectionCard(page, panel, 'needs', ids.remoteNeeds)
+  await expectAskShownOnce(panel, card, ids.remoteNeeds)
   net.gate.mode = 'down'
-  await click(page, needsLink(card))
+  await click(page, needsLink(panel, 'remoteNeeds'))
   await expect(page.getByTestId('file-viewer-source-error')).toBeVisible({ timeout: 20_000 })
   expect(net.files(), 'nothing was read before the retry').toEqual([])
   net.gate.mode = 'pass'
@@ -446,14 +452,15 @@ test('Try again after a failed session read opens the writer\'s host with no sec
 test('a session read still out when a person rewrites the ask opens nothing late; the new words open on the primary', async ({ page, request }) => {
   const panel = await homeWithStatusLines(page)
   const card = await sectionCard(page, panel, 'needs', ids.heldNeeds)
+  await expectAskShownOnce(panel, card, ids.heldNeeds)
   net.gate.mode = 'hold'
-  await click(page, needsLink(card))
+  await click(page, needsLink(panel, 'heldNeeds'))
   await expect.poll(() => net.gate.held, { timeout: 20_000 }).toBe(1)
 
   // A person rewrites the ask through the real route while the read is out: its writer is now theirs.
   await setReport(request, ids.heldNeeds, { state: 'needs', ask: `Read ${doc}:3 instead` },
     (s) => s.state === 'needs' && String(s.ask ?? '').includes('instead') && s.askBy === 'human')
-  await expect(card.getByTestId('status-card-needs-line')).toContainText('instead', { timeout: 30_000 })
+  await expect(rowAsk(panel, ids.heldNeeds)).toContainText('instead', { timeout: 30_000 })
 
   const late = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/sessions/${REMOTE_SID}`)
   net.gate.release()
@@ -462,7 +469,7 @@ test('a session read still out when a person rewrites the ask opens nothing late
   await expect(page.locator('.file-viewer-overlay')).toHaveCount(0)
   expect(net.files(), 'the late answer opened nothing').toEqual([])
 
-  await click(page, needsLink(card))
+  await click(page, needsLink(panel, 'heldNeeds'))
   await expectPrimaryText(page)
   await closeFile(page)
   expect(net.lookups(), 'the person\'s words read no session').toBe(1)
