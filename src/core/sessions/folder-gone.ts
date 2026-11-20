@@ -38,7 +38,7 @@ const kit = createEnvelopeKit()
 export type CwdGone = NonNullable<SessionRecord['cwdGone']>
 export type FolderState = 'present' | 'gone' | 'unknown'
 
-const isLocal = (host?: string | null) => !host || host === '__local__'
+export const isLocal = (host?: string | null) => !host || host === '__local__'
 const PROBE_MS = 5_000
 
 import { isFolderGoneReason } from './folder-gone-words.js'
@@ -236,11 +236,7 @@ async function continueNow(sessionId: string, opts: { by?: string }): Promise<Co
   if (state === 'present') {
     // Pressed twice, or the folder came back: whatever still waits on a gone folder goes
     // out now, so the button never leaves a message stuck behind a refusal.
-    await clearFolderGone(sessionId)
-    const notice = await remake.workspaceRemakeNotice(sessionId)
-    const sent = await sendWaiting(sessionId, record.taskId, notice?.text ?? null)
-    if (sent > 0 && notice) await notice.markTold()
-    await remake.settleRemakeResume(record.taskId)
+    const sent = await folderIsBack(sessionId, record.taskId)
     if (sent > 0) return { status: 'continued', sessionId, cwd: from, from: record.folderMoved?.from ?? from, history: 'kept', sent }
     throw new SessionControlError(`The folder ${from} is there; send a message to continue in it`, 409, { code: 'folder_present' })
   }
@@ -373,10 +369,26 @@ async function moveTaskCwd(taskId: string, from: string, to: string): Promise<vo
  * Put the session's waiting messages back in line with `notice` in front of the first one,
  * and kick a delivery. Returns how many go out.
  */
-async function sendWaiting(sessionId: string, taskId: string, notice: string | null): Promise<number> {
+/**
+ * The folder is there again: the mark goes and what waited on it goes out, a moved workspace's
+ * notice first. The button's answer for a folder that is present, and the start's own look
+ * (folder-back.ts), which passes `since` so only what was parked from then on goes.
+ */
+export async function folderIsBack(sessionId: string, taskId: string, opts: { since?: number } = {}): Promise<number> {
+  await clearFolderGone(sessionId)
+  const remake = await import('../workspaces/remake.js')
+  const notice = await remake.workspaceRemakeNotice(sessionId)
+  const sent = await sendWaiting(sessionId, taskId, notice?.text ?? null, opts.since)
+  if (sent > 0 && notice) await notice.markTold()
+  await remake.settleRemakeResume(taskId)
+  return sent
+}
+
+async function sendWaiting(sessionId: string, taskId: string, notice: string | null, since?: number): Promise<number> {
   const { getQueue, unparkMessage } = await import('../session-message-queue.js')
   const { mutateStore } = await import('../session-queue-store.js')
   const rows = (await getQueue(sessionId)).filter(waitsOnTheFolder)
+    .filter((m) => since === undefined || m.status === 'pending' || Date.parse((m as { parkedAt?: string }).parkedAt ?? '') >= since)
   if (rows.length === 0) return 0
   const first = rows[0]
   if (notice) {

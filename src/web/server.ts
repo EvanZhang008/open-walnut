@@ -4456,6 +4456,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // -- Init SubagentRunner + SessionRunner --
   subagentRunner.init()
   sessionRunner.init(reconnectable)
+  // Folders that came back: what a gone folder stopped (a session's messages, a trigger) runs
+  // again, once the runner takes sends and the restart's recovery is done (folder-back.ts).
+  if (bootPolicy('session-auto-recover') && !isEphemeral && (await (await import('../core/config-manager.js')).getConfig()).hooks?.overrides?.['session-auto-recover']?.enabled !== false) {
+    void sessionRunner.startupRecoveryDone.then(() => import('../core/sessions/folder-back.js')).then((m) => m.sendWhereFoldersCameBack()).catch((err: unknown) => {
+      log.session.warn('folder back: the startup look failed', { error: err instanceof Error ? err.message : String(err) })
+    })
+  }
   // The Walnut subagents the server before this one let go: listed again now (before the left-runs
   // sweep's first round, which would retire a session no run holds), taken up once sessions are reattached.
   void import('../core/subagents/registry.js').then((m) => m.restoreLightSubagents(sessionRunner.startupRecoveryDone)).catch((err: unknown) => {

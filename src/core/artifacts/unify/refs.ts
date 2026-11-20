@@ -32,13 +32,23 @@ async function rewriteSearch(move: RefMove): Promise<number> {
   const { searchV2IndexPath } = await import('../../search/wiring.js');
   const { openSearchDb } = await import('../../../lib/hybrid-search/db.js');
   const opened = openSearchDb({ dbPath: searchV2IndexPath() } as Parameters<typeof openSearchDb>[0]);
-  const db = opened.db as unknown as { prepare(sql: string): { run(...a: unknown[]): { changes: number } }; transaction(fn: () => void): () => void; close(): void };
+  type Stmt = { run(...a: unknown[]): { changes: number }; all(...a: unknown[]): Array<{ id: number; ref: string }> };
+  const db = opened.db as unknown as { prepare(sql: string): Stmt; transaction(fn: () => void): () => void; close(): void };
   try {
-    const up = db.prepare('UPDATE OR IGNORE doc SET ref=? WHERE ref=?');
+    // One pass over the docs under the old root, then each by its id (the table's own key): a
+    // lookup by ref alone has no index (UNIQUE(kind, ref)), and one per moved file scanned the
+    // whole table each time (2026-11-20: 110 s with the server's thread held).
+    const want = new Map(move.pairs.map(([from, to]) => [path.join(move.fromRoot, from), path.join(move.toRoot, to)]));
+    const prefix = move.fromRoot.endsWith(path.sep) ? move.fromRoot : move.fromRoot + path.sep;
+    const rows = db.prepare("SELECT id, ref FROM doc WHERE substr(ref, 1, ?) = ?").all(prefix.length, prefix).filter((r) => want.has(r.ref));
+    const up = db.prepare('UPDATE OR IGNORE doc SET ref=? WHERE id=?');
     let n = 0;
-    db.transaction(() => {
-      for (const [from, to] of move.pairs) n += up.run(path.join(move.toRoot, to), path.join(move.fromRoot, from)).changes;
-    })();
+    // In batches, the event loop let through between them: a move of every note is tens of thousands.
+    for (let i = 0; i < rows.length; i += 500) {
+      const batch = rows.slice(i, i + 500);
+      db.transaction(() => { for (const r of batch) n += up.run(want.get(r.ref), r.id).changes; })();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
     return n;
   } finally {
     db.close();

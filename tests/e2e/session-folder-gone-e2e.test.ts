@@ -27,10 +27,12 @@ import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { addTask, getTask, updateTaskRaw } from '../../src/core/task-manager.js'
 import { getQueue, resetCache, sendMessageToSession } from '../../src/core/session-message-queue.js'
+import { getCronService } from '../../src/web/routes/cron.js'
 import { getSessionByClaudeId, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { encodeProjectPath } from '../../src/core/session-file-reader.js'
 import { localClaudeProjectsDir } from '../../src/core/claude-config-dir.js'
 import { localTaskDirRoot } from '../../src/core/sessions/task-dir-place.js'
+import { sendWhereFoldersCameBack } from '../../src/core/sessions/folder-back.js'
 
 let server: Server
 let daemon: MockDaemon
@@ -224,3 +226,97 @@ describe('the folder and the history are both gone', () => {
     expect(await exists(oldCwd)).toBe(false)
   }, 60_000)
 })
+
+describe('a working folder that is a link to another place (2026-11-20, the notes moved into one tree)', () => {
+  it('delivers into a link, and sends what waited once the folder answers again', async () => {
+    // The old place is a link into the tree, as the move leaves notes/<folder>.
+    const real = path.join(scratch, 'artifacts', 'projects', 'Cove', 'notes')
+    await fs.mkdir(real, { recursive: true })
+    const oldCwd = path.join(scratch, 'notes', 'cove')
+    await fs.mkdir(path.dirname(oldCwd), { recursive: true })
+    await fs.symlink(real, oldCwd)
+    const { taskId, sid } = await startIn('Cove notes', oldCwd)
+    await updateTaskRaw(taskId, { cwd: oldCwd }, { source: 'test' })
+    await writeTranscript(sid, oldCwd)
+
+    // A message into the link goes out, in that folder.
+    let since = mark()
+    await sendMessageToSession(sid, 'Through the link', { source: 'user' })
+    await vi.waitFor(() => expect(linesTo(sid, since).some((l) => l.message.includes('Through the link'))).toBe(true), { timeout: 15_000 })
+    await vi.waitFor(async () => { resetCache(); expect(await getQueue(sid)).toEqual([]) }, { timeout: 15_000 })
+    daemon.simulateDeath(sid, 0)
+    await updateSessionRecord(sid, { process_status: 'stopped' })
+
+    // Between the move and the links the place is not there: the message waits, the folder is marked gone.
+    await fs.unlink(oldCwd)
+    await sendMessageToSession(sid, 'While the place was missing', { source: 'user' })
+    await vi.waitFor(async () => {
+      resetCache()
+      expect((await getQueue(sid)).map((m) => m.status)).toEqual(['parked'])
+      expect((await getSessionByClaudeId(sid))?.cwdGone).toMatchObject({ cwd: oldCwd })
+    }, { timeout: 15_000 })
+
+    // The link is made again; the start's look sends what waited, in the same folder, and the mark goes.
+    await fs.symlink(real, oldCwd)
+    since = mark()
+    expect(await sendWhereFoldersCameBack()).toMatchObject({ sessions: [sid], messages: 1 })
+    await vi.waitFor(() => {
+      const start = daemon.getCommandHistoryFor('start').slice(since.start).find((c) => c.payload.sid === sid)
+      expect(start?.payload.cwd).toBe(oldCwd)
+      expect(linesTo(sid, since).some((l) => l.message.includes('While the place was missing'))).toBe(true)
+    }, { timeout: 15_000 })
+    const record = await getSessionByClaudeId(sid)
+    expect(record?.cwdGone).toBeUndefined()
+    expect(record?.cwd).toBe(oldCwd)
+    await vi.waitFor(async () => { resetCache(); expect(await getQueue(sid)).toEqual([]) }, { timeout: 15_000 })
+    // Nothing more to send: a second look sends nothing.
+    expect(await sendWhereFoldersCameBack()).toMatchObject({ sessions: [], messages: 0 })
+  }, 90_000)
+})
+
+describe('the start\'s look takes back only what the gap stopped', () => {
+  it('leaves an old mark, a finished task and a stop a person made alone, and arms a trigger stopped on its folder', async () => {
+    const real = path.join(scratch, 'artifacts', 'projects', 'Ledger', 'notes')
+    await fs.mkdir(real, { recursive: true })
+    const place = path.join(scratch, 'notes', 'ledger')
+    await fs.symlink(real, place)
+    const mk = async (title: string) => {
+      const s = await startIn(title, place)
+      await fs.unlink(place)
+      await sendMessageToSession(s.sid, `${title}: waiting`, { source: 'user' })
+      await vi.waitFor(async () => { resetCache(); expect((await getSessionByClaudeId(s.sid))?.cwdGone).toBeDefined() }, { timeout: 15_000 })
+      await fs.symlink(real, place)
+      return s
+    }
+    const old = await mk('Old mark')
+    const gone = (await getSessionByClaudeId(old.sid))!.cwdGone!
+    await updateSessionRecord(old.sid, { cwdGone: { ...gone, at: new Date(Date.now() - 3 * 86_400_000).toISOString() } } as never)
+    const done = await mk('Finished task')
+    await updateTaskRaw(done.taskId, { phase: 'COMPLETE' } as never, { source: 'test' })
+
+    // A trigger Walnut stopped because its folder was missing, and one a person paused.
+    const service = getCronService()!
+    const owner = (await addTask({ title: 'Ledger watcher', project: 'Test' })).task.id
+    const base = { enabled: true, schedule: { kind: 'every', everyMs: 300_000 }, sessionTarget: 'main', payload: { kind: 'systemEvent', text: 'go' }, executor: { type: 'session', config: { target: owner } } }
+    const stopped = await service.add({ ...base, name: 'Ledger watch', check: { run: 'echo \'{"fire": false}\'', host: '__local__', cwd: place } } as never)
+    const paused = await service.add({ ...base, name: 'Paused watch', check: { run: 'echo \'{"fire": false}\'', host: '__local__', cwd: place } } as never)
+    for (let i = 1; i <= 5; i++) {
+      await service.applyTriggerChecked({ type: 'trigger.checked', id: stopped.id, atMs: Date.now(), outcome: 'error', error: `cwd does not exist: ${place}`, durationMs: 1, nextRunAtMs: Date.now() + 300_000, consecutiveErrors: i } as never)
+    }
+    expect((await service.list({ includeDisabled: true })).find((j) => j.id === stopped.id)?.enabled).toBe(false)
+    await service.update(paused.id, { enabled: false })
+
+    const report = await sendWhereFoldersCameBack()
+    expect(report.sessions).not.toContain(old.sid)
+    expect(report.sessions).not.toContain(done.sid)
+    expect(report.triggers).toEqual([stopped.id])
+    resetCache()
+    expect((await getQueue(old.sid)).map((m) => m.status)).toEqual(['parked'])
+    expect((await getQueue(done.sid)).map((m) => m.status)).toEqual(['parked'])
+    const jobs = await service.list({ includeDisabled: true })
+    expect(jobs.find((j) => j.id === stopped.id)?.enabled).toBe(true)
+    expect(jobs.find((j) => j.id === paused.id)?.enabled).toBe(false)
+    await service.remove(stopped.id); await service.remove(paused.id)
+  }, 90_000)
+})
+
