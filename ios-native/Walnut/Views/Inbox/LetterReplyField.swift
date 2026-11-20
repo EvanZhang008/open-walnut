@@ -42,6 +42,9 @@ struct LetterReplyField: UIViewRepresentable {
     /// A paste that holds pictures (a screenshot, a copied photo) hands them
     /// here instead of the field; nil = the field pastes text only.
     var onPasteImages: (([UIImage]) -> Void)?
+    /// The words and the caret (UTF-16) after each edit or caret move, for the box's `@` and
+    /// `/` lists (`ComposerSuggestController`). Not called while a composition is marked.
+    var onCaretChange: ((String, Int) -> Void)?
 
     func makeUIView(context: Context) -> UITextView {
         let view = PictureTextView()
@@ -77,6 +80,9 @@ struct LetterReplyField: UIViewRepresentable {
         // (a voice transcript, an edited reply) arrive when nothing is marked,
         // because the voice row and the Edit button both end editing first.
         if view.markedTextRange == nil, view.text != text {
+            // Words the code put here (a transcript, an edit) open no list by themselves.
+            context.coordinator.settingText = true
+            defer { context.coordinator.settingText = false }
             view.text = text
             let end = (text as NSString).length
             view.selectedRange = NSRange(location: end, length: 0)
@@ -113,12 +119,25 @@ struct LetterReplyField: UIViewRepresentable {
         /// the field is not being edited, and is part of `echoOf`, is dropped.
         var echoGuardUntil: Date?
         var echoOf = ""
+        /// The code is setting the text: its selection moves are no one's typing.
+        var settingText = false
 
         init(_ parent: LetterReplyField) { self.parent = parent }
 
         func textViewDidChange(_ textView: UITextView) {
             if dropEcho(textView) { return }
             if parent.text != textView.text { parent.text = textView.text }
+            reportCaret(textView)
+        }
+
+        func textViewDidChangeSelection(_ textView: UITextView) {
+            reportCaret(textView)
+        }
+
+        func reportCaret(_ textView: UITextView) {
+            guard let report = parent.onCaretChange, !settingText, textView.markedTextRange == nil else { return }
+            let selection = textView.selectedRange
+            report(textView.text ?? "", selection.length == 0 ? selection.location : -1)
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
@@ -273,6 +292,24 @@ final class LetterReplyFieldController {
         if view.markedTextRange != nil { view.unmarkText() }
         view.text = ""
         if let coordinator, !coordinator.parent.text.isEmpty { coordinator.parent.text = "" }
+    }
+
+    /// Put a pick from the `@` or `/` list into the field (the view itself, then the binding,
+    /// so `updateUIView` finds them equal and leaves the caret where it is put).
+    func replace(with text: String, caret: Int) {
+        guard let view = textView else {
+            coordinator?.parent.text = text
+            return
+        }
+        if view.markedTextRange != nil { view.unmarkText() }
+        coordinator?.settingText = true
+        view.text = text
+        let length = (text as NSString).length
+        view.selectedRange = NSRange(location: min(max(caret, 0), length), length: 0)
+        coordinator?.settingText = false
+        if let coordinator, coordinator.parent.text != text { coordinator.parent.text = text }
+        view.scrollRangeToVisible(view.selectedRange)
+        coordinator?.reportCaret(view)
     }
 
     /// End editing without sending (the voice row, the Edit button): commits

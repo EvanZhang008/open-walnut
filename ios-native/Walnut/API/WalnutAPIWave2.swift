@@ -335,3 +335,24 @@ extension WalnutAPI {
         _ = try Self.decode(Empty.self, data: data, response: response)
     }
 }
+
+// MARK: - Slash commands (the `/` list of a reply box or a composer)
+
+extension WalnutAPI {
+    /// `GET /api/v1/slash-commands?cwd=&host=`: the commands a session in `cwd` on `host` can
+    /// run (skills, command templates, built-ins). The phone's list for a session: /api/v1 has
+    /// no per-session twin of the web's `/api/sessions/:id/slash-commands` (the CLI's own list).
+    /// A remote host is asked over its daemon, so this waits longer than a plain read.
+    func slashCommands(cwd: String?, host: String?) async throws -> SlashCommandList {
+        try await send("GET", Self.slashCommandsPath(cwd: cwd, host: host), body: nil as [String: String]?, timeout: 25, retrySafe: true)
+    }
+
+    /// "", "local" and "__local__" all name the primary, which the route takes as no host.
+    static func slashCommandsPath(cwd: String?, host: String?) -> String {
+        var items = [URLQueryItem]()
+        if let cwd = cwd?.trimmingCharacters(in: .whitespacesAndNewlines), !cwd.isEmpty { items.append(.init(name: "cwd", value: cwd)) }
+        let h = host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !h.isEmpty, h != "local", h != "__local__" { items.append(.init(name: "host", value: h)) }
+        return items.isEmpty ? "/slash-commands" : "/slash-commands?" + queryString(items)
+    }
+}

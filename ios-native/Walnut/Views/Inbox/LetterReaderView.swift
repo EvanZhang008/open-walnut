@@ -38,6 +38,9 @@ struct LetterReaderView: View {
     private let replies = LetterReplyStore.shared
     @State private var replyField = LetterReplyFieldController()
     @State private var replyFocused = false
+    /// The reply's `@` (a task or a session) and `/` (the asking session's commands) lists,
+    /// the same as every composer's (`ComposerSuggestController`).
+    @State private var suggest = ComposerSuggestController()
     /// True from the Send tap until the reply is handed to the store: the commit
     /// step waits on the input session, and a second tap in that window is the
     /// same send.
@@ -669,6 +672,8 @@ struct LetterReaderView: View {
             onEditPending: { clientId in
                 replyField.endEditing()
                 replies.edit(letterId: letterId, clientId: clientId)
+                // Its references read as tokens again in the box, and go as the same tags.
+                replies.setDraft(suggest.adopt(replies.draft(for: letterId)), for: letterId)
                 replyFocused = true
             },
             onOpenTask: openTask,
@@ -889,6 +894,9 @@ struct LetterReaderView: View {
     /// composer).
     private var composer: some View {
         VStack(spacing: 0) {
+            ComposerSuggestList(controller: suggest, onPick: pickSuggestion, maxHeight: 200)
+                .padding(.horizontal, 10)
+                .padding(.top, suggest.isOpen ? 8 : 0)
             VoiceNoticeRows(voice: voice, idPrefix: "inbox.letter") { text in insertTranscript(text) }
             ReplyPictureStrip(images: replyPictures, notice: $replyPictureNotice, idPrefix: "inbox.letter.reply")
                 .padding(.horizontal, 12)
@@ -913,7 +921,8 @@ struct LetterReaderView: View {
                         // The page and the reply box share this height; the box
                         // growing takes it from the page, so the sum holds still.
                         maxHeight: LetterConversationBox.replyFieldCap(shared: pageVisibleHeight + composerHeight),
-                        onPasteImages: { images in pasteReplyPictures(images) }
+                        onPasteImages: { images in pasteReplyPictures(images) },
+                        onCaretChange: { text, caret in suggest.update(text: text, caret: caret) }
                     )
                     // A UIKit view has no width of its own to offer the row: take
                     // what is left beside the mic and send.
@@ -959,9 +968,38 @@ struct LetterReaderView: View {
         .frame(maxWidth: .infinity)
         .background(.bar)
         .joinsSendGate(sendGate, voice: voice, key: letterId) { text in insertTranscript(text, focus: false) }
+        .onAppear { scopeSuggest() }
+        .onChange(of: letter?.sender) { _, _ in scopeSuggest() }
+        // The sender's session can reach the phone after the letter: its folder names the `/` list.
+        .onChange(of: senderSessionCwd) { _, _ in scopeSuggest() }
+        // The `/` list is read once the box is used.
+        .onChange(of: replyFocused) { _, focused in if focused { suggest.prefetchCommands() } }
         // A group, so the children keep their own identifiers.
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("inbox.letter.composer")
+    }
+
+    /// `@` never offers the task that wrote the letter; `/` lists the commands of the session
+    /// that wrote it (in its folder, on its host).
+    private var senderSessionCwd: String? {
+        guard let sid = letter?.sender?.sessionId else { return nil }
+        return tasks.sessions.first { $0.id == sid }?.cwd
+    }
+
+    private func scopeSuggest() {
+        suggest.store = tasks
+        let sender = letter?.sender
+        let session = sender?.sessionId.flatMap { id in tasks.sessions.first { $0.id == id } }
+        suggest.scope = .init(
+            selfTaskId: sender?.taskId, commands: sender?.sessionId?.isEmpty == false,
+            commandsCwd: session?.cwd, commandsHost: session?.host ?? sender?.host
+        )
+    }
+
+    private func pickSuggestion(_ suggestion: ComposerSuggestion) {
+        guard let result = suggest.pick(suggestion) else { return }
+        replyField.replace(with: result.text, caret: result.caret)
+        if !replyFocused { replyFocused = true }
     }
 
     /// This letter's draft, held by the app-wide store.
@@ -1130,6 +1168,9 @@ struct LetterReaderView: View {
         ])
         replyPictureNotice = nil
         replyField.clear(sent: text)
+        // The message carries each picked reference as its tag; the box starts over.
+        let message = suggest.outgoing(text)
+        suggest.reset()
         // The keyboard stays up for a follow-up, as in the chat composer,
         // except after a committed composition (its input session must end, so
         // it leaves now, after the field is cleared) and at the accessibility
@@ -1142,7 +1183,7 @@ struct LetterReaderView: View {
         let leavesWithOutcome = dynamicTypeSize.isAccessibilitySize && !replyField.committedComposition
         if replyField.committedComposition { replyField.endEditing() }
         guard let clientId = replies.beginSend(
-            letterId: letterId, text: text, images: pictures, afterTurns: letter?.threadEntries.count
+            letterId: letterId, text: message, images: pictures, afterTurns: letter?.threadEntries.count
         ) else {
             if leavesWithOutcome { replyField.endEditing() }
             return
@@ -1350,11 +1391,13 @@ private struct DecisionNoteReveal: ViewModifier {
     }
 }
 
-private struct LetterSendButton: View {
+/// A reply box's Send: the letter reader's and every ask card's (`ReplyBox`).
+struct LetterSendButton: View {
     let enabled: Bool
     /// Waiting for dictated words (`DictationSendGate`): a spinner in the key,
     /// and a tap cancels the wait.
     var waiting = false
+    var identifier = "inbox.letter.send"
     let action: () -> Void
     @ScaledMetric(relativeTo: .body) private var seat: CGFloat = MessageBox.keySize
 
@@ -1389,6 +1432,6 @@ private struct LetterSendButton: View {
         .buttonStyle(.plain)
         .disabled(!enabled)
         .accessibilityLabel(waiting ? DictationSendGate.waitingLabel : "Send")
-        .accessibilityIdentifier("inbox.letter.send")
+        .accessibilityIdentifier(identifier)
     }
 }

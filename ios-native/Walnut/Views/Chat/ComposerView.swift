@@ -160,6 +160,10 @@ struct ComposerBar: View {
     /// Present = this composer takes files: the `+` offers Files and the photo
     /// picker offers videos too. Absent = photos only.
     var onSendFiles: ((String, [SelectedImage], [ComposerFile]) async -> Bool)? = nil
+    /// The `@` list (a task or a session) and, when the scope names a session, its `/`
+    /// commands, the same lists every reply box has (`ComposerSuggestController`). nil = none.
+    /// The field reports no caret, so a list opens for an `@` or `/` at the end of the words.
+    var suggestScope: ComposerSuggestController.Scope? = nil
     /// Returns **"are these words safe with you"**, which is deliberately NOT "did
     /// the send succeed". Stores here own no-loss: a dead round trip becomes a
     /// retryable failed bubble that still holds the full text, and that counts as
@@ -217,6 +221,8 @@ struct ComposerBar: View {
     /// representable syncs with its first-responder status.
     @State private var longDraftFocused = false
     @State private var drafts = ComposerDrafts.shared
+    @State private var suggest = ComposerSuggestController()
+    @Environment(TasksStore.self) private var suggestStore: TasksStore?
     /// Model + effort for the pill. Owned here (not by the parent) so it survives
     /// the parent's body passes; `attach` is idempotent per source.
     @State private var controls = ComposerControlsModel()
@@ -286,6 +292,7 @@ struct ComposerBar: View {
             get: { drafts.draft(draftKey) },
             set: {
                 drafts.setDraft($0, key: draftKey)
+                if suggestScope != nil { feedSuggest($0) }
                 // Freeze-report context. Runs per keystroke, so it must stay
                 // O(1): utf8.count is a stored length on native Swift strings
                 // (String.count walks graphemes — do NOT use it here), and the
@@ -563,6 +570,15 @@ struct ComposerBar: View {
         // band), so the card is what reads as the composer. Opaque on purpose: the
         // transcript scrolls under this inset and must not show through around the
         // card. Extends through the home-indicator area like the band did.
+        // The open `@` or `/` list sits right above the card, over the transcript, so its
+        // coming and going never changes the composer's measured height.
+        .overlay(alignment: .top) {
+            if suggestScope != nil, suggest.isOpen {
+                ComposerSuggestList(controller: suggest, onPick: pickSuggestion, maxHeight: 240)
+                    .padding(.horizontal, ComposerCard.sideInset)
+                    .alignmentGuide(.top) { d in d[.bottom] + 6 }
+            }
+        }
         .background(ComposerCard.backdrop, ignoresSafeAreaEdges: .all)
         // Publish the composer's WHOLE height (notices + voice-retry row +
         // thumbnail strip + field + control row) so the file-preview dock bar can
@@ -1804,6 +1820,13 @@ struct ComposerBar: View {
         let images = selectedImages
         let files = selectedFiles
         guard !text.isEmpty || !images.isEmpty || !files.isEmpty, importingFiles == 0 else { return }
+        // The draft keeps its `@[label]` tokens (a refused send comes back readable); the
+        // message carries their tags.
+        let compose = composeRefs()
+        let onSend = self.onSend
+        let onSendFiles = self.onSendFiles.map { send in { (t: String, i: [SelectedImage], f: [ComposerFile]) in await send(compose(t), i, f) } }
+        let onInterruptSend = self.onInterruptSend.map { send in { (t: String, i: [SelectedImage], f: [ComposerFile]) in await send(compose(t), i, f) } }
+        if suggest.isOpen { suggest.closeList() }
         // A refused send's files come back on top of what was attached since
         // (`deliver`), so the draft can hold more than a message carries.
         if let over = Self.overFileLimitNotice(ComposerFile.countedFiles(files)) {
@@ -1830,7 +1853,7 @@ struct ComposerBar: View {
             } else {
                 disposition = await Self.deliver(
                     text: text, images: images, draftKey: draftKey, drafts: drafts,
-                    onSend: onSend
+                    onSend: { t, i in await onSend(compose(t), i) }
                 )
             }
             // Silent when the owner already has a sentence on screen (`ownerNotice`
@@ -1838,6 +1861,29 @@ struct ComposerBar: View {
             // text reappearing with no explanation reads as a bug.
             if disposition == .returnedToDraft { refusedNotice = Self.refusedNotice }
         }
+    }
+
+    /// Words -> message: each `@[label]` this composer picked becomes its tag.
+    private func composeRefs() -> (String) -> String {
+        guard suggestScope != nil else { return { $0 } }
+        let table = suggest.table
+        return { ComposerRefs.compose($0, table: table) }
+    }
+
+    /// A keystroke reaches the lists only near an `@` or `/` (`updateAtEnd`).
+    private func feedSuggest(_ text: String) {
+        if suggest.store == nil { suggest.store = suggestStore }
+        if let scope = suggestScope, suggest.scope != scope { suggest.scope = scope }
+        suggest.updateAtEnd(text)
+    }
+
+    private func pickSuggestion(_ suggestion: ComposerSuggestion) {
+        // The draft can change without the field (a refused send put back, a transcript):
+        // pick against the words the box holds now, and only while the list still stands.
+        suggest.updateAtEnd(drafts.draft(draftKey))
+        guard suggest.suggestions.contains(suggestion), let result = suggest.pick(suggestion) else { return }
+        drafts.setDraft(result.text, key: draftKey)
+        if useLongDraftEditor { longDraftFocused = true } else { focused = true }
     }
 
     enum SendDisposition: Equatable {
@@ -2547,7 +2593,10 @@ struct ComposerView: View {
             // main agent reads them (`ChatStore.sendWithFiles`).
             onSendFiles: { text, images, files in
                 await chat.sendWithFiles(text, images: images, files: files).keptTheWords
-            }
+            },
+            // `@` names a task or a session, as in every reply box. The main agent runs in no
+            // folder of a session the phone can name, so it has no `/` list here.
+            suggestScope: .init()
         ) { text, images in
             await Self.sendKeepingWords(chat, text, images)
         }

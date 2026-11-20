@@ -99,7 +99,7 @@ const DRIVES_HOME_SCREEN = /com\.apple\.springboard/
 // them as skips. A new fixture class goes here (when it probes) or into IOS_CI_SKIP_UI.
 const PROBES_ITS_FIXTURE = [
   'AgentTextLinksUITests', 'BoardOrderParityUITests', 'DemoModeUITests', 'InboxSelectUITests', 'LetterReplyUITests',
-  'MidTurnQueueUITests', 'ModelPillHealUITests', 'ProvenanceAndInboxUITests', 'SendOnceUITests',
+  'MidTurnQueueUITests', 'ModelPillHealUITests', 'ProvenanceAndInboxUITests', 'ReplySuggestUITests', 'SendOnceUITests',
   'SessionMidTurnOrderUITests', 'SessionStreamStormUITests',
 ]
 

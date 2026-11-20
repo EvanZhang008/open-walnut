@@ -7,6 +7,10 @@ import SwiftUI
 /// Each kind is answered the way the phone already answers it (`ActionNeededModel.answer`): an
 /// approval in its sheet (one tap), a letter's actions, a one-question
 /// prompt's options; the rest open the task's session, where its own card answers it.
+///
+/// Each item also takes the user's words in its own box, always shown (`ReplyBox`, the web's
+/// ask card): `@` names a task or a session, `/` lists the asking session's commands, pictures
+/// go with the words. What the words do per kind is `ActionNeededModel.words`.
 /// tests/core/action-needed-ratchet.test.ts reads `ActionNeededModel.answer` for every kind.
 enum ActionNeededModel {
     enum Answer: Equatable { case approvalSheet, letterOptions, promptOptions, openSession }
@@ -46,6 +50,51 @@ enum ActionNeededModel {
         }
     }
 
+    /// How an item's words box answers it (the web's OrgInlineAnswer, one rule per kind).
+    enum Words: Equatable {
+        /// A reply to the letter: it answers the letter as a pick does.
+        case letterReply
+        /// A message to its session; the approval still waits for Approve or Deny.
+        case approvalNote
+        /// The tool step is declined with the words (what to do instead).
+        case declineStep
+        /// The one question's answer, in the user's words.
+        case questionAnswer
+        /// A message to its session: `Answer to "<summary>": <words>`.
+        case sessionAnswer
+        /// No box: the item is answered in its session (a prompt of several questions).
+        case none
+    }
+
+    static func words(_ item: WalnutActionItem, hasSession: Bool) -> Words {
+        switch item.kind {
+        case "letter": return .letterReply
+        case "approval": return hasSession ? .approvalNote : .none
+        case "permission": return hasSession ? .declineStep : .none
+        case "question": return hasSession && item.question != nil ? .questionAnswer : .none
+        default: return hasSession ? .sessionAnswer : .none
+        }
+    }
+
+    static func placeholder(_ words: Words) -> String {
+        switch words {
+        case .letterReply: return "Reply…"
+        case .approvalNote: return "Tell it something (Approve still needed)"
+        case .declineStep: return "Tell it what to do instead"
+        case .questionAnswer: return "Your answer"
+        case .sessionAnswer, .none: return "Reply…"
+        }
+    }
+
+    /// The message a session gets for words that answer `summary` (server askAnswerText).
+    static func answerMessage(summary: String, words: String) -> String {
+        "Answer to \"\(summary)\": \(words)"
+    }
+
+    static func approvalMessage(summary: String, words: String) -> String {
+        "About the approval \"\(summary)\": \(words)"
+    }
+
     /// The snooze presets, the web's "In 1 hour" first.
     static func presets(now: Date = Date(), calendar: Calendar = .current) -> [(id: String, label: String, until: Date)] {
         let nine = { (d: Date) in calendar.date(bySettingHour: 9, minute: 0, second: 0, of: d) ?? d }
@@ -81,10 +130,16 @@ struct ActionNeededView: View {
     let items: [WalnutActionItem]
     var onOpenSession: () -> Void = {}
 
+    @Environment(TasksStore.self) private var store: TasksStore?
+
     /// Answered or snoozed from here before the server's next status: kept off or marked here.
     @State private var sent = Set<String>()
     @State private var snoozed: [String: Date?] = [:]
     @State private var error: String?
+    /// A line under an item its words reached without answering it (an approval's note).
+    @State private var notes: [String: String] = [:]
+    /// One id per letter reply until it is taken, so a retry after a lost answer is the same reply.
+    @State private var replyIDs: [String: String] = [:]
 
     var body: some View {
         let shown = items.filter { !sent.contains($0.id) }
@@ -149,6 +204,11 @@ struct ActionNeededView: View {
                     }
                     .accessibilityIdentifier("action.snooze.\(item.id)")
                 }
+                wordsBox(item)
+                if let note = notes[item.id] {
+                    Text(note).font(.caption2).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("action.note.\(item.id)")
+                }
             }
         }
         .accessibilityElement(children: .contain)
@@ -174,6 +234,81 @@ struct ActionNeededView: View {
         case .openSession:
             Button("Open") { onOpenSession() }
                 .buttonStyle(.walnut(.secondary, size: .small)).controlSize(.mini)
+        }
+    }
+
+    /// The session the item asks from: its own, else the task's newest.
+    private func sessionID(_ item: WalnutActionItem) -> String? {
+        if let sid = item.sessionId, !sid.isEmpty { return sid }
+        return store?.sessions.filter { $0.taskId == task.id }.max { $0.lastActiveAt < $1.lastActiveAt }?.id
+    }
+
+    /// The words box, always shown (the web's ask card): `@` names a task or session, `/` lists
+    /// the asking session's commands, pictures go with the words where the answer takes them.
+    @ViewBuilder
+    private func wordsBox(_ item: WalnutActionItem) -> some View {
+        let sid = sessionID(item)
+        let words = ActionNeededModel.words(item, hasSession: sid != nil)
+        if words != .none {
+            let session = sid.flatMap { id in store?.sessions.first { $0.id == id } }
+            ReplyBox(
+                placeholder: ActionNeededModel.placeholder(words),
+                draftKey: "ask-reply:\(task.id):\(item.id)",
+                idPrefix: "action.reply.\(item.id)",
+                scope: .init(selfTaskId: task.id, commands: sid != nil, commandsCwd: session?.cwd, commandsHost: session?.host),
+                acceptsPictures: true
+            ) { text, images in
+                await sendWords(item, words: words, sessionID: sid, text: text, images: images)
+            }
+        }
+    }
+
+    /// Answer an item in words. True once the server took them; false keeps them in the box.
+    private func sendWords(_ item: WalnutActionItem, words: ActionNeededModel.Words, sessionID sid: String?,
+                           text: String, images: [SelectedImage]) async -> Bool {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            error = "Add a few words to go with the picture."
+            return false
+        }
+        var payloads: [ImagePayload] = []
+        if !images.isEmpty { payloads = await SelectedImage.buildPayloads(images.map(\.jpegData)) }
+        let api = WalnutAPI()
+        error = nil
+        do {
+            switch words {
+            case .none:
+                return false
+            case .letterReply:
+                let clientId = replyIDs[item.id] ?? UUID().uuidString
+                replyIDs[item.id] = clientId
+                _ = try await api.replyToLetter(id: item.id, text: text, clientId: clientId, images: payloads)
+                replyIDs[item.id] = nil
+                sent.insert(item.id)
+            case .approvalNote:
+                guard let sid else { return false }
+                _ = try await api.sendSessionMessage(id: sid, text: ActionNeededModel.approvalMessage(summary: item.summary, words: text), images: payloads)
+                notes[item.id] = "Sent to its session. The approval still waits for Approve or Deny."
+            case .declineStep:
+                guard let sid else { return false }
+                _ = try await api.respondSessionPermission(id: sid, requestId: item.id, allow: false, message: text, images: payloads)
+                sent.insert(item.id)
+            case .questionAnswer:
+                guard let sid, let question = item.question else { return false }
+                _ = try await api.respondSessionPermission(id: sid, requestId: item.id, allow: true, answers: [question: text], images: payloads)
+                sent.insert(item.id)
+            case .sessionAnswer:
+                guard let sid else { return false }
+                _ = try await api.sendSessionMessage(id: sid, text: ActionNeededModel.answerMessage(summary: item.summary, words: text), images: payloads)
+                sent.insert(item.id)
+            }
+            AppLog.info("action-needed", "answered in words", [
+                "taskId": task.id, "itemId": item.id, "kind": item.kind, "images": String(images.count),
+            ])
+            return true
+        } catch {
+            AppLog.warn("action-needed", "words not sent", ["taskId": task.id, "itemId": item.id, "error": String(describing: error)])
+            self.error = "Not sent. Try again."
+            return false
         }
     }
 

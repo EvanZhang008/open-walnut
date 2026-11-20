@@ -118,7 +118,8 @@ describe('every iOS box that writes to an AI takes pictures', () => {
     const followUp = read('Views/Org/OrgThreadsView.swift')
     expect(followUp).toMatch(/Binding\(get: \{ drafts\.images\(draftKey\) \}/)
     expect(followUp).toMatch(/ReplyPictureButton\(\s*images: images,/)
-    expect(followUp).toMatch(/pictures = images\.wrappedValue[\s\S]{0,80}await send\(words, pictures\)/)
+    // Its words go with their picked references as tags (`suggest.outgoing`), the pictures beside them.
+    expect(followUp).toMatch(/pictures = images\.wrappedValue[\s\S]{0,200}await send\(suggest\.outgoing\(words\), pictures\)/)
     expect(read('Views/Org/OrgThreadsStore.swift')).toMatch(/SelectedImage\.buildPayloads\(images\.map/)
     expect(read('API/WalnutAPIThreads.swift')).toMatch(/images: images\.isEmpty \? nil : images, messageId: messageId, threadId: threadId/)
   })

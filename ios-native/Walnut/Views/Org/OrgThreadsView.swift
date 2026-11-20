@@ -1232,6 +1232,9 @@ struct OrgThreadFollowUpSheet: View {
     /// The words that went out while he kept writing: the draft kept only what came after them.
     @State private var sentNote: String?
     @FocusState private var focused: Bool
+    /// `@` names a task or a session, as in every reply box (`ComposerSuggestController`).
+    @State private var suggest = ComposerSuggestController()
+    @Environment(TasksStore.self) private var suggestStore: TasksStore?
 
     /// A Follow up of this thread is on its way, from this composer or one closed meanwhile.
     private var sending: Bool { sends.inFlight.contains(draftKey) }
@@ -1240,6 +1243,8 @@ struct OrgThreadFollowUpSheet: View {
         Binding(get: { drafts.draft(draftKey) }, set: {
             drafts.setDraft($0, key: draftKey)
             drafts.trimDrafts(prefix: OrgThreadFollowUpDraft.prefix, keeping: draftKey, max: OrgThreadFollowUpDraft.kept)
+            if suggest.store == nil { suggest.store = suggestStore }
+            suggest.updateAtEnd($0)
         })
     }
 
@@ -1257,6 +1262,11 @@ struct OrgThreadFollowUpSheet: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
+                ComposerSuggestList(controller: suggest, onPick: { suggestion in
+                    guard let result = suggest.pick(suggestion) else { return }
+                    drafts.setDraft(result.text, key: draftKey)
+                    focused = true
+                }, maxHeight: 200)
                 VoiceDictationField(
                     text: text, surface: draftKey, box: "thread-follow-up",
                     placement: .below, blocked: sending, refocus: { focused = true }
@@ -1330,7 +1340,8 @@ struct OrgThreadFollowUpSheet: View {
         sentNote = nil
         let words = text.wrappedValue, pictures = images.wrappedValue
         Task {
-            let ok = await send(words, pictures)
+            // The draft keeps its `@[label]` tokens; the message carries their tags.
+            let ok = await send(suggest.outgoing(words), pictures)
             sends.end(key)
             guard ok else {
                 failed = true

@@ -126,6 +126,12 @@
 //                               surface): GET /tasks, /focus/tasks, /tasks/:id,
 //                               /sessions, /sessions/:id, its transcript and its
 //                               SSE stream. Off (the default) they answer as before.
+//                               `&taskMode=asking`: the task asks the user one thing
+//                               (an `ask` Action needed item from the lane session),
+//                               and POST /sessions/:id/messages answers 202.
+//   GET  /api/v1/slash-commands → three commands, whatever the cwd and host (the
+//                               `/` list of a reply box or a session composer).
+//   GET  /api/v1/search        → no hits (the `@` list ranks the phone's own rows).
 //   POST /__stub/status?mode=X[&cloudChat=Y] → what GET /api/v1/status answers
 //                               (ProvenanceAndInboxUITests). Reset puts it back to
 //                               `live`, the answer every other test relies on.
@@ -411,6 +417,12 @@ function workTask() {
     phase: workTaskMode === 'completed' ? 'COMPLETE' : 'IN_PROGRESS',
     priority: 'none', project: 'Stub', pinned: true,
     created_at: '2026-09-24T00:00:00Z', updated_at: '2026-09-24T00:00:00Z',
+    ...(workTaskMode === 'asking' ? {
+      user_status: {
+        state: 'needs', source: 'session', ask: 'Ship the build today?',
+        actions: [{ kind: 'ask', id: 'ask-stub-ship', summary: 'Ship the build today?', sessionId: LANE_SESSION_ID }],
+      },
+    } : {}),
     ...workTaskEdits,
   }
 }
@@ -433,10 +445,22 @@ function answerWorkSession(p, req, res, raw) {
     if (edit.status) workTaskEdits.phase = edit.status === 'done' ? 'COMPLETE' : 'TODO'
     return json(res, 200, { task: workTask() }), true
   }
+  if (p === `/api/v1/sessions/${LANE_SESSION_ID}/messages` && req.method === 'POST' && workTaskMode === 'asking') {
+    let body = {}
+    try { body = JSON.parse(raw || '{}') } catch { /* answered with a minted id */ }
+    console.log(`[stub] work-session message POST ${JSON.stringify(String(body.text ?? ''))}`)
+    return json(res, 202, { messageId: `qm-stub-ask-${Date.now()}` }), true
+  }
   if (req.method !== 'GET') return false
   const now = new Date().toISOString()
   if (p === '/api/v1/tasks') {
-    return json(res, 200, { tasks: workTaskMode === 'live' || workTaskMode === 'long-title' ? [workTask()] : [], syncedAt: now }), true
+    // Asking: a second task, so the ask card's `@` list has one to name besides its own.
+    const other = {
+      id: 'task-stub-other', title: 'Stub release notes', status: 'todo', phase: 'TODO', priority: 'none',
+      project: 'Stub', created_at: '2026-09-25T00:00:00Z', updated_at: '2026-09-25T00:00:00Z',
+    }
+    const tasks = ['live', 'long-title', 'asking'].includes(workTaskMode) ? [workTask()] : []
+    return json(res, 200, { tasks: workTaskMode === 'asking' ? [...tasks, other] : tasks, syncedAt: now }), true
   }
   if (p === '/api/v1/focus/tasks') {
     return json(res, 200, { pinned_tasks: [WORK_TASK_ID], focus_tasks: [WORK_TASK_ID] }), true
@@ -2266,6 +2290,14 @@ const server = http.createServer(async (req, res) => {
   if (answerInbox(p, req, res, raw, url)) return
   if (p === '/api/v1/tasks' && req.method === 'GET') return json(res, 200, { tasks: [] })
   if (p === '/api/v1/sessions' && req.method === 'GET') return json(res, 200, { sessions: [] })
+  if (p === '/api/v1/slash-commands' && req.method === 'GET') {
+    return json(res, 200, { items: [
+      { name: 'review', description: 'Review the change before it lands', source: 'skill', kind: 'skill' },
+      { name: 'commit', description: 'Commit the work with a real message', source: 'built-in' },
+      { name: 'deploy-check', description: 'Check that the deploy is live', source: 'project' },
+    ] })
+  }
+  if (p === '/api/v1/search' && req.method === 'GET') return json(res, 200, { results: [], tasks: [] })
   if (p === '/api/v1/focus/tasks' && req.method === 'GET') return json(res, 200, { tasks: [] })
   if (p === '/api/v1/events' && req.method === 'GET') {
     // Held open with comments only. TasksStore reconnects with backoff when this

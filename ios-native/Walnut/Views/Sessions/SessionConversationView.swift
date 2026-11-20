@@ -576,6 +576,8 @@ struct SessionConversationView: View {
             hostProvenance: .session(hostAlias: session.host, cwd: session.cwd),
             // Videos and files ride this session's uploads (SessionFileUploader).
             onSendFiles: { text, images, files in await store.sendFromComposer(text, images: images, files: files) },
+            // `@` names a task or a session; `/` lists the commands of this session's folder.
+            suggestScope: .init(selfTaskId: session.taskId, commands: true, commandsCwd: session.cwd, commandsHost: session.host),
             onSend: { text, images in await store.sendFromComposer(text, images: images) }
         )
     }
