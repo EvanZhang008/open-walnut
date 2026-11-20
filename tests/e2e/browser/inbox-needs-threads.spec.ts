@@ -10,6 +10,9 @@
  *  3. He clicks the recommended one: it is his answer, filed under the thread through the lead's
  *     chat, and the card leaves the inbox; on the lead's Threads (Org page) it is no longer open
  *     for him either.
+ *  4. Split layout with many threads: the threads are a band of their own that the wheel scrolls to
+ *     its last card, and the letters keep their room below it (2026-11-20: the band took the whole
+ *     pane, which does not scroll, so the later cards and every letter were out of reach).
  * The fixture is shared: this file makes its own project and tasks, and puts the flags back.
  */
 import fs from 'node:fs'
@@ -170,4 +173,45 @@ test('the inbox leads with the thread that needs him; the recommended choice ans
   await expect(detail.locator(`[data-testid="org-thread-list"][data-show="open"] [data-testid="org-thread"][data-thread-id="${ids.thread}"]`)).toHaveCount(0)
   await shot(page, '3-lead-threads')
   expect(pageErrors).toEqual([])
+})
+
+test('split layout with many threads: the wheel reaches the last card, and the letters keep their room', async ({ page, request }) => {
+  const extra: string[] = []
+  for (let i = 0; i < 9; i++) {
+    extra.push((await post<{ thread: { id: string } }>(request, `/api/v1/tasks/${ids.lead}/threads/open`, {
+      title: `Row ${i + 1} of the orchard: prune now or after the frost? ${STAMP}`, text: 'Either is fine for the trees; the frost date decides it.', from: 'node',
+      options: [{ id: 'now', label: 'Prune now', recommended: true }, { id: 'later', label: 'After the frost' }],
+      user_kind: 'user_own', user_kind_why: 'He asked to decide the pruning',
+    }, ids.leadSid)).thread.id)
+  }
+  await isolateUiPrefs(page)
+  await loadHome(page)
+  await page.getByRole('button', { name: 'Notifications' }).click()
+  const panel = page.locator('.notification-panel')
+  await panel.locator('.nfc-rail-btn', { hasText: 'Inbox' }).click()
+  await panel.getByRole('button', { name: 'Split' }).click()
+  const pane = panel.locator('.hib-inbox-pane')
+  await expect(pane).toHaveAttribute('data-layout', 'split')
+  const band = pane.getByTestId('inbox-needs')
+  // The last card in the band's own order (most urgent first, then the longest waiting).
+  const last = band.getByTestId('inbox-needs-item').last()
+  await expect(band.getByTestId('inbox-needs-item')).toHaveCount(extra.length, { timeout: 30_000 })
+  // The letters and the reader keep their room under the band.
+  const columns = await pane.locator('.hib-inbox-columns').boundingBox()
+  const paneBox = await pane.boundingBox()
+  expect(columns!.height).toBeGreaterThanOrEqual(150)
+  expect(columns!.y + columns!.height).toBeLessThanOrEqual(paneBox!.y + paneBox!.height + 1)
+  // A real wheel over the band scrolls it until its last card shows (no programmatic scroll).
+  const box = (await band.boundingBox())!
+  await page.mouse.move(box.x + box.width / 2, box.y + Math.min(box.height / 2, 120))
+  for (let i = 0; i < 40 && !(await last.evaluate((el) => {
+    const r = el.getBoundingClientRect(); const b = el.closest('[data-testid="inbox-needs"]')!.getBoundingClientRect()
+    return r.top >= b.top && r.top < b.bottom
+  })); i++) await page.mouse.wheel(0, 400)
+  expect(await band.evaluate((el) => el.scrollTop)).toBeGreaterThan(0)
+  expect(await last.evaluate((el) => {
+    const r = el.getBoundingClientRect(); const b = el.closest('[data-testid="inbox-needs"]')!.getBoundingClientRect()
+    return r.top >= b.top && r.top < b.bottom
+  })).toBe(true)
+  await shot(page, '4-split-scrolled')
 })

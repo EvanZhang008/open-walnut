@@ -50,3 +50,17 @@
 .hib-needs-urgency.is-pinned,
 .hib-needs-urgency.is-due,
 .hib-needs-urgency.is-immediate { background: var(--accent-subtle); color: var(--warning); }
+/* Split: the pane itself does not scroll (its columns do), so the threads are a band of their own
+   that scrolls, at most about half the pane, and the letters and the reader keep the rest
+   (2026-11-20: with 13 threads the band took the whole pane and pushed the letters to 0 px). */
+.hib-inbox-split > .hib-needs {
+  flex: 0 1 auto;
+  max-height: 45%;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 0;
+  padding: 12px 16px;
+}
+.hib-inbox-split > .hib-needs > .hib-needs-head { position: sticky; top: -12px; z-index: 1; padding: 4px 0; background: var(--bg); }
+.hib-inbox-split > .hib-inbox-columns { min-height: 160px; }
