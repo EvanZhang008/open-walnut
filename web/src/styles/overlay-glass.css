@@ -153,10 +153,12 @@ html .wn-glass {
    <body> only, listed in GLASS_OVERLAYS, solid without blur support, with Reduce transparency
    and on a low-end device. One set of values for every surface that takes it (`wn-glass-frost`). */
 html:root {
-  /* One step stronger (2026-11-20, the user asked for a slightly stronger frosted glass): more of the page
-     shows through as colour and shapes under a heavier blur, so its words still never read. */
-  --glass-frost-bg: color-mix(in srgb, var(--bg-elevated, var(--card-bg)) 42%, transparent);
-  --glass-frost-blur: blur(48px) saturate(2);
+  /* Glass that reads as glass on Walnut's white pages (2026-11-20, the user, of a near-white
+     card: "not glass, I want glass"): a grey tint, as a macOS notification has, and a blur light
+     enough that the page's lines and blocks show through soft while its words never read. A
+     white tint under a heavy blur over a white page looked like a solid white card. */
+  --glass-frost-bg: color-mix(in srgb, var(--bg-tertiary, #e8e8ed) 60%, transparent);
+  --glass-frost-blur: blur(24px) saturate(1.8);
   /* Light: a dark hairline, as a macOS panel's edge; a white one vanished on a white page
      (2026-11-20). The white top highlight stays. Dark keeps its own below. */
   --glass-frost-border: rgba(0, 0, 0, 0.1);

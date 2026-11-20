@@ -28,7 +28,8 @@ const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
 const NONCE = Date.now().toString(36)
 
-test.use({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2, colorScheme: 'dark' })
+// NOTICE_SCHEME=light runs the first test in the light theme (the user's Mac app).
+test.use({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2, colorScheme: process.env.NOTICE_SCHEME === 'light' ? 'light' : 'dark' })
 test.describe.configure({ mode: 'serial', timeout: 180_000 })
 
 async function shot(page: Page, name: string): Promise<void> {

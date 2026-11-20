@@ -40,8 +40,8 @@ const GLASS_OVERLAYS: Record<string, string> = {
 };
 /** The tint floor: the raised surface's share of the glass. */
 const GLASS_TINT_MIN = 84;
-/** The frosted glass's floor: see-through by the user's ask (2026-11-20), and one step more by his
- *  second ask that day ("a little stronger"), over a 44 px blur or more so words behind never read. */
+/** The frosted glass's floor: see-through by the user's asks (2026-11-20: frosted glass, "a little
+ *  stronger", then "not glass, I want glass"), over a 20 px blur or more so words behind never read. */
 const FROST_TINT_MIN = 36;
 
 function files(dir: string, ext: string): string[] {
@@ -261,13 +261,28 @@ describe('the legible glass stays legible, and only where it is listed', () => {
     }
     for (const m of allCss.matchAll(/--glass-frost-blur\s*:\s*([^;]+);/g)) {
       const px = Number(m[1].match(/blur\((\d+)px\)/)?.[1] ?? 0);
-      expect(px, m[1]).toBeGreaterThanOrEqual(44);
+      expect(px, m[1]).toBeGreaterThanOrEqual(20);
     }
     const blocks = [...glassCss.matchAll(/@supports[^{]*backdrop-filter[^{]*\{((?:[^{}]*\{[^{}]*\})+)\s*\}/g)].map((m) => m[1]);
     const outside = blocks.reduce((css, b) => css.replace(b, ''), allCss);
     const painted = [...outside.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter((m) => /background(?:-color)?\s*:\s*var\(--glass-frost-bg\)/.test(m[2]));
     expect(painted.map((m) => m[1].trim()), 'the frost tint is painted outside its @supports block').toEqual([]);
     expect(blocks.join('\n')).toMatch(/backdrop-filter\s*:\s*var\(--glass-frost-blur\)/);
+  });
+
+  it('in the light theme the frost is a grey of its own, never the white of the page it sits on', () => {
+    // 2026-11-20, the user, of a notice card tinted with the page's own white: "not glass, I want
+    // glass". Over Walnut's white pages a white tint reads as a solid white card, blur or not.
+    const light = [...glassCss.matchAll(/html:root\s*\{([^}]*)\}/g)].map((m) => m[1]).find((b) => b.includes('--glass-frost-bg')) ?? '';
+    const tint = light.match(/--glass-frost-bg\s*:\s*color-mix\(in srgb,\s*(.+?)\s+\d+(?:\.\d+)?%/)?.[1] ?? '';
+    expect(tint, 'the light theme names its frost tint in html:root').not.toBe('');
+    // A var() is read from the light theme's own :root in globals.css, else its fallback.
+    const root = strip(fs.readFileSync(path.join(STYLES, 'globals.css'), 'utf8')).match(/:root\s*\{([^}]*)\}/)?.[1] ?? '';
+    const resolved = tint.replace(/var\((--[\w-]+)(?:,\s*([^()]+))?\)/g, (_, name: string, fallback?: string) =>
+      root.match(new RegExp(`${name}\\s*:\\s*([^;]+);`))?.[1]?.trim() ?? fallback?.trim() ?? '').toLowerCase();
+    expect(resolved, `the light frost tint ${tint}`).toMatch(/^#[0-9a-f]{3,6}$/);
+    expect(resolved, `the light frost tint ${tint} is the page's white`).not.toMatch(/^#fff(fff)?$/);
+    expect(tint, 'the light frost tint is not a page or card surface').not.toMatch(/--(bg-elevated|bg-primary|card-bg)\b/);
   });
 
   it('it is see-through only where the engine blurs, and solid with Reduce transparency or on a low-end device', () => {

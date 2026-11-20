@@ -217,6 +217,7 @@ final class QuickBarPanel: NSObject {
             let x = was == "bar" ? p.frame.minX : area.midX - Self.barWidth / 2
             effect?.layer?.cornerRadius = 18
             effect?.layer?.borderWidth = 0
+            effect?.material = .popover
             p.takesKeys = true
             p.setFrame(NSRect(x: x, y: top - h, width: Self.barWidth, height: h), display: true)
             if !p.isKeyWindow {
@@ -235,6 +236,9 @@ final class QuickBarPanel: NSObject {
             // (2026-11-20, the user: "所有的 notification 都应该在左下角").
             effect?.layer?.cornerRadius = 14
             effect?.layer?.borderWidth = 1
+            // The receipts are a notice: the notice card's clearer material (NoticeCardView.swift),
+            // not the bar's near-white popover (2026-11-20, the user: "not glass, I want glass").
+            effect?.material = .menu
             effect?.layer?.borderColor = NSColor.separatorColor.cgColor
             p.setFrame(NSRect(x: area.minX + 16, y: area.minY + 16, width: Self.receiptsWidth, height: h), display: true)
             p.orderFrontRegardless()
