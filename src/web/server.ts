@@ -1508,7 +1508,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   if (process.env.WALNUT_BLOCKING_CALLS !== '0') {
     const { installBlockingCallTiming } = await import('../core/blocking-calls.js')
     installBlockingCallTiming()
-    // On macOS a call that holds the loop 250 ms gets one OS stack sample (slow-call-sampler.ts;
+    // On macOS a call that holds the loop 120 ms gets one OS stack sample (slow-call-sampler.ts;
     // WALNUT_STALL_SAMPLE=0 turns it off): what the thread waited on inside it.
     if (process.env.WALNUT_STALL_SAMPLE !== '0') {
       try {

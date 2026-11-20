@@ -9,7 +9,7 @@
  * waited on inside the call: a file lock, a disk read, a mutex another thread
  * holds. While the loop thread is stuck it can run nothing, so a watcher thread
  * reads the ledger's shared "call running now" stamp every 50 ms (on its own loop, so the main thread being stuck does not stop it); once one call
- * has run SAMPLE_AFTER_MS it runs `sample <pid> 0.5` (at most once per
+ * has run SAMPLE_AFTER_MS it runs `sample <pid> 1` (at most once per
  * SAMPLE_GAP_MS and SAMPLE_MAX times per boot), which stops the process for a moment per sample and writes
  * every thread's stack, the system library frames named (libsqlite3,
  * libsystem_kernel). The loop logs `loop thread sampled in a slow call` with
@@ -24,13 +24,15 @@ import { LOG_DIR } from '../constants.js';
 import { log } from '../logging/index.js';
 import { blockingCallsWithin, currentCallBuffer } from './blocking-calls.js';
 
-/** A call running this long is sampled (ms). */
-export const SAMPLE_AFTER_MS = 250;
+/** A call running this long is sampled (ms). `sample` takes 100 ms or more to attach, and the
+ *  holds it is for run 0.3 to 2.5 s: at 250 ms a 439 ms hold had ended before the first stack
+ *  (2026-11-20), and half a second gave one stack. */
+export const SAMPLE_AFTER_MS = 120;
 /** At most one sample in this long (ms): each stops the process for a moment per stack it takes. */
 export const SAMPLE_GAP_MS = 10 * 60_000;
 /** At most this many samples in one server's life: past it the watcher only counts. */
 export const SAMPLE_MAX = 12;
-const SAMPLE_SECONDS = 0.5;
+const SAMPLE_SECONDS = 1;
 const SAMPLE_KEEP = 30;
 
 export interface SampleFrame { frame: string; n: number; sqlite?: string }
