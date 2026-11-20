@@ -48,6 +48,8 @@ export function LetterReader({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || fileViewRef.current || document.querySelector('.file-viewer-overlay')) return;
+      // An Esc a box inside already took (the reply's @ or / list closing) is that box's alone.
+      if (e.defaultPrevented) return;
       e.stopPropagation();
       onClose();
     };

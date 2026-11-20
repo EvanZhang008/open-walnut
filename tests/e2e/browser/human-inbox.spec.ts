@@ -299,6 +299,10 @@ test('an action_required letter arrives, reads in the reader, and one click answ
 
   // ── The human's free-text reply threads under the letter ──
   const followUp = `PW LTR follow-up ${NONCE}: does this cover the Tuesday incident?`
+  // An Esc the reply box takes (its @ or / list closing) never also closes the reader around it.
+  await reader.getByTestId('letter-reply-input').evaluate((el) => el.addEventListener('keydown', (e) => e.preventDefault(), { once: true }))
+  await reader.getByTestId('letter-reply-input').press('Escape')
+  await expect(reader).toBeVisible()
   await reader.getByTestId('letter-reply-input').fill(followUp)
   await reader.getByTestId('letter-reply-send').click()
   await expect(reader.locator('.hib-thread')).toContainText(followUp, { timeout: 20_000 })
