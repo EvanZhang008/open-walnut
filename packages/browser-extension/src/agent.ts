@@ -31,7 +31,7 @@ import { downloadsAction, watchDownloads } from './agent-downloads'
 import { DEBUGGER_OPS, TRUSTED_OPS, defaultTrustedAct, trustedAct, trustedByDefault, trustedReady } from './agent-trusted'
 import { fileAccessOn } from './agent-upload'
 import { QUIET_WHYS, wakeForStep } from './agent-awake'
-import { openCalls, popupsAsTabs, popupsLive } from './agent-popups'
+import { AGENTS_TAB, openCalls, popupsAsTabs } from './agent-popups'
 import { fillFrames } from './bg-fill'
 import { inHandedReach } from './agent-tab-kind'
 import { noteScreenShare, openInAgentWindow, resizeAgentWindow, windowOf } from './agent-window'
@@ -378,7 +378,7 @@ async function beforeStep(action: string, tabId: number, allow: WireCommand['all
   opening.set(tabId, Date.now() + STEP_MS + ACTING_MS)
   stepAllow.set(tabId, allow)
   if (NO_PATCH_ACTS.has(action)) return
-  if (await agentsOwnHere(tabId) && await popupsAsTabs(tabId, Date.now() + STEP_MS + ACTING_MS)) openCallsBefore.set(tabId, (await openCalls(tabId)) ?? 0)
+  if (await agentsOwnHere(tabId) && await popupsAsTabs(tabId, AGENTS_TAB)) openCallsBefore.set(tabId, (await openCalls(tabId)) ?? 0)
 }
 
 async function run(c: WireCommand): Promise<void> {
@@ -424,7 +424,7 @@ async function run(c: WireCommand): Promise<void> {
         return !QUIET_WHYS.has(wake.why) && out && typeof out === 'object' && !Array.isArray(out) ? { ...(out as Record<string, unknown>), awake: wake } : out
       }) }
     } finally {
-      if (typeof c.args.tab === 'number') { noteWorked(c.args.tab); opening.set(c.args.tab, Date.now() + ACTING_MS); void popupsLive(c.args.tab, Date.now() + ACTING_MS) }
+      if (typeof c.args.tab === 'number') { noteWorked(c.args.tab); opening.set(c.args.tab, Date.now() + ACTING_MS) }
       if (screenTab !== undefined) {
         const n = (onScreen.get(screenTab) ?? 1) - 1
         if (n > 0) onScreen.set(screenTab, n); else onScreen.delete(screenTab)
@@ -567,9 +567,6 @@ export async function releaseTab(tabId: number): Promise<void> {
   if (flight) flight.cancelled = true
   if (!(await agentTabs.get(tabId))) return
   await agentTabs.delete(tabId)
-  // The page's own window.open again, now the tab is the person's (agent-popups.ts).
-  opening.delete(tabId)
-  void popupsLive(tabId, 0)
   await forgetAgentMade(tabId)
   await stopRecording(tabId)
   await mark(tabId, false)

@@ -8,7 +8,7 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 
-const fake = { session: {} as Record<string, unknown>, created: [] as unknown[], updated: [] as unknown[], tabWindow: 3, next: 100 }
+const fake = { session: {} as Record<string, unknown>, created: [] as unknown[], updated: [] as unknown[], removed: [] as number[], scripts: [] as unknown[][], formSent: true, tabWindow: 3, next: 100 }
 const ev = () => ({ addListener() {}, removeListener() {} })
 /** tabs.onUpdated: a made tab says it loaded (agent-shared.ts loaded waits for it). */
 const updated: Array<(id: number, change: { status?: string; url?: string }) => void> = []
@@ -36,8 +36,16 @@ const tab = (id: number) => ({ id, windowId: fake.tabWindow, active: true, url: 
     },
     update: async (id: number, o: unknown) => { fake.updated.push([id, o]); return tab(id) },
     sendMessage: async () => ({ ok: true }),
+    remove: async (id: number) => { fake.removed.push(id) },
   },
-  scripting: { executeScript: async () => [{ frameId: 0, result: {} }] },
+  scripting: {
+    executeScript: async (o: { func: { name: string }; args?: unknown[] }) => {
+      if (o.func.name !== 'sendFormHere') return [{ frameId: 0, result: {} }]
+      fake.scripts.push(o.args ?? [])
+      if (!fake.formSent) throw new Error('Cannot access contents of the page')
+      return [{ frameId: 0, result: true }]
+    },
+  },
   windows: { get: async () => ({ id: 3, state: 'normal', focused: false, type: 'normal' }), onRemoved: ev(), update: async () => ({}) },
   permissions: { contains: async () => true, onRemoved: ev() },
   downloads: { onCreated: ev(), onChanged: ev(), onDeterminingFilename: ev(), search: async () => [] },
@@ -48,7 +56,7 @@ const { pageOpen, OPENS_MAX, _resetPageOpenForTesting } = await import('../../..
 const { opening, stepAllow } = await import('../../../packages/browser-extension/src/agent-shared')
 const { _resetOwnForTesting } = await import('../../../packages/browser-extension/src/agent-window-own')
 
-const sender = { id: 'test', tab: tab(7), frameId: 0, url: 'https://site.example.test/login' }
+const sender = { id: 'test', tab: tab(7), frameId: 0, url: 'https://site.example.test/login', origin: 'https://site.example.test' }
 const ask = (o: Record<string, unknown>) => pageOpen({ op: 'open', id: 'k1', url: 'https://login.example.test/oauth', ...o }, sender as never)
 
 beforeEach(() => {
@@ -56,6 +64,9 @@ beforeEach(() => {
   _resetOwnForTesting()
   fake.created = []
   fake.updated = []
+  fake.removed = []
+  fake.scripts = []
+  fake.formSent = true
   fake.tabWindow = 3
   fake.session = { agentWindow: 3, agentTabs: { 7: { owner: 'task:a', who: 'Sign in' } }, agentMade: { 7: 0 } }
   opening.set(7, Date.now() + 10_000)
@@ -63,23 +74,51 @@ beforeEach(() => {
 })
 
 describe('a window a page asks for opens only for an agent\'s own step', () => {
-  it('refused, nothing opened, the stand-in closed: no step running, no grant, the person\'s tab, a tab they handed over, outside the agent window', async () => {
+  // Review 2026-11-20: a page still asking after its tab was let go (or the person's own click long
+  // after a step) must get its own window back, never a click that opens nothing.
+  it('not the agent\'s to open, nothing opened, the page\'s own way runs (native): no step running, no grant, the person\'s tab, a tab they handed over, outside the agent window, a sandboxed page', async () => {
     opening.set(7, Date.now() - 1)
-    expect(await ask({})).toMatchObject({ ok: false, closed: true })
+    expect(await ask({})).toEqual({ ok: false, native: true })
     opening.set(7, Date.now() + 10_000)
     stepAllow.delete(7)
-    expect(await ask({})).toMatchObject({ ok: false, closed: true })
+    expect(await ask({})).toEqual({ ok: false, native: true })
     stepAllow.set(7, { any: true, sites: [] } as never)
     fake.session.agentTabs = {}
-    expect(await ask({})).toMatchObject({ ok: false, closed: true })
+    expect(await ask({})).toEqual({ ok: false, native: true })
     fake.session.agentTabs = { 7: { owner: 'task:a', handed: 'site.example.test' } }
-    expect(await ask({})).toMatchObject({ ok: false, closed: true })
+    expect(await ask({})).toEqual({ ok: false, native: true })
     fake.session.agentTabs = { 7: { owner: 'task:a', fromPerson: true } }
-    expect(await ask({})).toMatchObject({ ok: false, closed: true })
+    expect(await ask({})).toEqual({ ok: false, native: true })
     fake.session.agentTabs = { 7: { owner: 'task:a', who: 'Sign in' } }
     fake.tabWindow = 4
-    expect(await ask({})).toMatchObject({ ok: false, closed: true })
+    expect(await ask({})).toEqual({ ok: false, native: true })
+    fake.tabWindow = 3
+    // A sandboxed page (an opaque origin, whatever its address): never sent from its site's own page.
+    const boxed = { ...sender, origin: 'null' }
+    expect(await pageOpen({ op: 'form', id: 'f', url: 'https://site.example.test/account', form: { method: 'post', enctype: '', fields: [['a', 'b']] } }, boxed as never)).toEqual({ ok: false, native: true })
+    expect(await pageOpen({ op: 'open', id: 'o', url: 'https://login.example.test/x' }, boxed as never)).toEqual({ ok: false, native: true })
     expect(fake.created).toEqual([])
+  })
+
+  it('a POST form is sent again from its own site\'s page in the new tab, in the page\'s encoding; one that could not be sent leaves no tab', async () => {
+    const form = { method: 'post', enctype: 'application/x-www-form-urlencoded', fields: [['name', 'caf\u00e9']], charset: 'windows-1252' }
+    const r = await pageOpen({ op: 'form', id: 'p1', url: 'https://site.example.test/send', form }, sender as never)
+    expect(r).toMatchObject({ ok: true, tab: expect.any(Number) })
+    expect(fake.created).toEqual([{ url: 'https://site.example.test/robots.txt', windowId: 3, active: false, openerTabId: 7 }])
+    // Sent only from the page's own origin (a robots.txt that went to another site sends nothing).
+    expect(fake.scripts).toEqual([['https://site.example.test/send', 'post', 'application/x-www-form-urlencoded', [['name', 'caf\u00e9']], 'windows-1252', 'https://site.example.test']])
+    // An encoding name that is not one: UTF-8. A GET form in another encoding goes the same way.
+    await pageOpen({ op: 'form', id: 'p2', url: 'https://site.example.test/send', form: { ...form, method: 'get', charset: '"><x' } }, sender as never)
+    expect(fake.scripts[1]![1]).toBe('get')
+    expect(fake.scripts[1]![4]).toBe('UTF-8')
+    // A browser that does not give the page's origin itself (only its address): no form, the page's own way.
+    expect(await pageOpen({ op: 'form', id: 'p5', url: 'https://site.example.test/send', form }, { ...sender, origin: undefined } as never)).toEqual({ ok: false, native: true })
+    // Over 500 fields: not the extension's (the page leaves such a form to the browser).
+    expect(await pageOpen({ op: 'form', id: 'p3', url: 'https://site.example.test/send', form: { ...form, fields: Array.from({ length: 501 }, (_, i) => [`f${i}`, 'x']) } }, sender as never)).toMatchObject({ ok: false, closed: true })
+    fake.formSent = false
+    const no = await pageOpen({ op: 'form', id: 'p4', url: 'https://site.example.test/send', form }, sender as never)
+    expect(no).toEqual({ ok: false, closed: true })
+    expect(fake.removed).toEqual([fake.next - 1])
   })
 
   it('a blank window waits for its address; a page\'s close or an unknown ask opens nothing', async () => {
@@ -116,9 +155,9 @@ describe('a window a page asks for opens only for an agent\'s own step', () => {
     expect(fake.created).toHaveLength(1)
   })
 
-  it('nothing while the person drives the tab (taken over)', async () => {
+  it('the page\'s own way while the person drives the tab (taken over)', async () => {
     fake.session.agentTabs = { 7: { owner: 'task:a', who: 'Sign in', driving: Date.now() } }
-    expect(await ask({})).toMatchObject({ ok: false, closed: true })
+    expect(await ask({})).toEqual({ ok: false, native: true })
     expect(fake.created).toEqual([])
   })
 

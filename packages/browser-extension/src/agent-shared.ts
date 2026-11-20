@@ -15,6 +15,7 @@ import { windowOf } from './agent-window'
 import { ownAgentWindow, type OwnApi } from './agent-window-own'
 import { more } from './agent-api'
 import { endLinger } from './cdp'
+import { popupsLive } from './agent-popups'
 
 /** `allow.record`: Walnut keeps a picture of this step for the Browser replay; post it with this token (agent-replay.ts). */
 export interface WireCommand { id: string; action: string; args: Record<string, unknown>; allow: { any: boolean; sites: string[]; walnut?: string[]; record?: string } }
@@ -69,6 +70,10 @@ async function letGo(tabId: number): Promise<void> {
   // The agent is done with the tab: its steps' lingering debugger hold goes now (cdp.ts linger).
   void endLinger(more.debugger, tabId).catch(() => undefined)
   await restorePersonTab(ext as unknown as GroupApi, tabId).catch(() => undefined)
+  // Its page's new windows are the browser's own again (agent-popups.ts `live`): else a later click
+  // of the person's there would ask the extension, refused, and open nothing (review 2026-11-20).
+  opening.delete(tabId)
+  await popupsLive(tabId, 0)
 }
 
 /**

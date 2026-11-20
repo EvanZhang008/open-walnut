@@ -16,7 +16,7 @@
 import { ext, type Sender, type Tab } from './ext'
 import { more, type NewTab } from './agent-api'
 import { popupRecord } from './agent-tab-kind'
-import { minimizeAgentPopup, openCalls } from './agent-popups'
+import { AGENTS_TAB, minimizeAgentPopup, openCalls, popupsAsTabs } from './agent-popups'
 import { muteAgentTab } from './agent-media'
 import { noteAgentMade } from './agent-tidy'
 import { frontInWindow } from './agent-window'
@@ -198,6 +198,17 @@ export const OPENS_MAX = 8
 export const OPENS_MS = 10_000
 
 type Kid = { opener: number; frameId: number; id: string; origin: string; tab?: number; making?: Promise<unknown>; closing?: boolean }
+/** A form the page sends to a new window (a POST, or a GET in another encoding): sent again from a page of the same site in the new tab. */
+type Form = { method: 'post' | 'get'; enctype: string; fields: Array<[string, string]>; charset: string }
+const asForm = (v: unknown): Form | undefined => {
+  const f = v as Partial<Form> | undefined
+  // The page sends no more than 500 fields (a larger form stays the browser's: agent-popups-page.ts resendable).
+  return f && (f.method === 'post' || f.method === 'get') && Array.isArray(f.fields) && f.fields.length <= 500 ? {
+    method: f.method, enctype: String(f.enctype ?? ''),
+    fields: f.fields.filter((x): x is [string, string] => Array.isArray(x) && typeof x[0] === 'string' && typeof x[1] === 'string'),
+    charset: typeof f.charset === 'string' && /^[\w.:-]{1,40}$/.test(f.charset) ? f.charset : 'UTF-8',
+  } : undefined
+}
 /** Each stand-in the pages hold, by opener tab, frame and the page's own id. */
 const kids = new Map<string, Kid>()
 /** The stand-in of each tab opened for one. */
@@ -221,11 +232,12 @@ function noteRefused(opener: number, url: string, e: unknown): void {
   refused.set(opener, { url, why: e instanceof AgentError ? e.code : e instanceof Error ? e.message : String(e), at: Date.now() })
 }
 
-export type PageOpenReply = { ok: boolean; closed?: boolean; tab?: number; error?: string }
+/** `native`: not the agent's to open (the tab is not an agent's now, no step lately, a sandboxed page): the page's own way runs. */
+export type PageOpenReply = { ok: boolean; closed?: boolean; native?: boolean; tab?: number; error?: string }
 
 /**
- * A page's ask: `open` a window (an address, or none yet), `nav` load another address there, `close`
- * it. Each stand-in's asks run one after another in the order the page made them (a page that opens
+ * A page's ask: `open` a window (an address, or none yet), `form` send a POST form to a new one,
+ * `nav` load another address there, `close` it. Each stand-in's asks run one after another in the order the page made them (a page that opens
  * a blank window and sets its address at once, or opens and closes it): the stand-in is known, and
  * its turn taken, before anything is awaited.
  */
@@ -235,19 +247,26 @@ export function pageOpen(msg: Record<string, unknown>, sender: Sender): Promise<
   if (opener === undefined || !id) return Promise.resolve({ ok: false, closed: true })
   const frameId = sender.frameId ?? 0
   const op = msg.op
-  if (op !== 'open' && op !== 'nav' && op !== 'close') return Promise.resolve({ ok: false, error: 'unknown op' })
+  if (op !== 'open' && op !== 'form' && op !== 'nav' && op !== 'close') return Promise.resolve({ ok: false, error: 'unknown op' })
   let k = kids.get(kidKey(opener, frameId, id))
   if (!k) {
     // An address or a close for a window this background does not know (it closed, or the background restarted): nothing, as the browser does.
-    if (op !== 'open') return Promise.resolve({ ok: true, closed: true })
-    k = { opener, frameId, id, origin: originOf(String(sender.url ?? '')) }
+    if (op !== 'open' && op !== 'form') return Promise.resolve({ ok: true, closed: true })
+    // The page's real origin (Chrome's, not its address): a sandboxed page's is opaque, and a form
+    // sent again from its site would carry that site's Origin and cookies, a window it may not have.
+    const origin = sender.origin ?? originOf(String(sender.url ?? ''))
+    // A form needs the browser's own word on it (a browser that gives no sender.origin: the page's own way).
+    if (!/^https?:\/\//i.test(origin) || (op === 'form' && !sender.origin)) return Promise.resolve({ ok: false, native: true })
+    k = { opener, frameId, id, origin }
     kids.set(kidKey(opener, frameId, id), k)
     if (kids.size > KIDS_MAX) forget(kids.values().next().value as Kid)
   }
   const kid = k
   if (op === 'close') kid.closing = true
   const url = typeof msg.url === 'string' ? msg.url : ''
-  const run = (kid.making ?? Promise.resolve()).then(() => op === 'close' ? closeKid(kid) : ask(kid, url))
+  const form = op === 'form' ? asForm(msg.form) : undefined
+  if (op === 'form' && !form) return Promise.resolve({ ok: false, closed: true })
+  const run = (kid.making ?? Promise.resolve()).then(() => op === 'close' ? closeKid(kid) : ask(kid, url, form))
   kid.making = run.catch(() => undefined)
   return run
 }
@@ -260,21 +279,23 @@ async function closeKid(k: Kid): Promise<PageOpenReply> {
   return { ok: true, closed: true }
 }
 
-async function ask(k: Kid, url: string): Promise<PageOpenReply> {
+async function ask(k: Kid, url: string, form?: Form): Promise<PageOpenReply> {
   if (k.closing) return { ok: false, closed: true }
   const here = await agentsOwnHere(k.opener)
   const allow = stepAllow.get(k.opener)
   // Only an agent's own tab, not while the person drives it, during or just after an agent's step.
+  // Else the page's own way (a click of the person's, the tab let go meanwhile): never one swallowed.
   if (!here || here.rec.driving !== undefined || !allow || (opening.get(k.opener) ?? 0) < Date.now()) {
-    if (k.tab === undefined) forget(k)
-    return { ok: false, closed: k.tab === undefined }
+    if (k.tab !== undefined) return { ok: false }
+    forget(k)
+    return { ok: false, native: true }
   }
   // A blank window first (a page that sets its address once it knows it): no tab until then.
   if (!url || url === 'about:blank') return { ok: true }
-  return load(k, url, allow, here)
+  return load(k, url, allow, here, form)
 }
 
-async function load(k: Kid, url: string, allow: WireCommand['allow'], here: { rec: AgentTab; tab: Tab }): Promise<PageOpenReply> {
+async function load(k: Kid, url: string, allow: WireCommand['allow'], here: { rec: AgentTab; tab: Tab }, form?: Form): Promise<PageOpenReply> {
   if (k.closing) return { ok: false, closed: true }
   // Every address is checked, the first and any later one (a site not allowed, Walnut itself).
   try { await checkPage(allow, url) } catch (e) { noteRefused(k.opener, url, e); return { ok: false, closed: k.tab === undefined } }
@@ -288,11 +309,38 @@ async function load(k: Kid, url: string, allow: WireCommand['allow'], here: { re
   const recent = (opens.get(k.opener) ?? []).filter((t) => now - t < OPENS_MS)
   if (recent.length >= OPENS_MAX) { noteRefused(k.opener, url, new AgentError('too many windows', 'too_many_windows')); return { ok: false, closed: true, error: 'too many windows' } }
   opens.set(k.opener, [...recent, now])
-  const made = await openLink(allow, k.opener, here.tab, here.rec, url, (t) => { k.tab = t; ofTab.set(t, k); noteOpened(t, k.opener) }).catch((e) => { noteRefused(k.opener, url, e); return undefined })
+  // A form (a POST, or a GET in another encoding): the new tab loads a page of the opener's own site
+  // first (the form is sent from there, its Origin the same as the page's would be), then the form is sent in it.
+  const first = form ? `${k.origin}/robots.txt` : url
+  if (form && !/^https?:/i.test(k.origin)) return { ok: false, closed: true }
+  const made = await openLink(allow, k.opener, here.tab, here.rec, first, (t) => { k.tab = t; ofTab.set(t, k); noteOpened(t, k.opener) }).catch((e) => { noteRefused(k.opener, url, e); return undefined })
   if (!made) return { ok: false, closed: true }
   // The page closed its window while the tab was being made.
-  if (k.closing) await closeTab(made.tab).catch(() => false)
+  if (k.closing) { await closeTab(made.tab).catch(() => false); return { ok: false, closed: true } }
+  if (form) {
+    const sent = await more.scripting?.executeScript({ target: { tabId: made.tab }, func: sendFormHere, args: [url, form.method, form.enctype, form.fields, form.charset, k.origin] as [string, string, string, Array<[string, string]>, string, string] }).then((rs) => rs.some((r) => r.result === true), () => false)
+    // Not sent (the site's page would not load or went to another site, a script refused): no tab left behind, and the step says so.
+    if (!sent) { await closeTab(made.tab).catch(() => false); noteRefused(k.opener, url, new AgentError('the form could not be sent', 'form_not_sent')); return { ok: false, closed: true } }
+  }
   return { ok: true, tab: made.tab }
+}
+
+/** Runs in the new tab (the extension's world): sends the page's form from there, only from the page's own origin. Self-contained. */
+function sendFormHere(action: string, method: string, enctype: string, fields: Array<[string, string]>, charset: string, origin: string): boolean {
+  if (location.origin !== origin) return false
+  const f = document.createElement('form')
+  f.method = method === 'get' ? 'get' : 'post'
+  f.action = action
+  f.acceptCharset = charset
+  if (/^(multipart\/form-data|text\/plain)$/i.test(enctype)) f.enctype = enctype
+  for (const [name, value] of fields) {
+    const i = document.createElement('input')
+    i.type = 'hidden'; i.name = name; i.value = value
+    f.append(i)
+  }
+  ;(document.body ?? document.documentElement).append(f)
+  HTMLFormElement.prototype.submit.call(f)
+  return true
 }
 
 /** The tab of a page's stand-in closed or went elsewhere: the page hears it. An opener closing forgets its windows. */
@@ -303,7 +351,10 @@ function watchPageOpened(): void {
     opens.delete(tabId); refused.delete(tabId); stepAllow.delete(tabId)
     for (const x of [...kids.values()]) if (x.opener === tabId) forget(x)
   })
-  ext.tabs.onUpdated.addListener((tabId: number, change: { url?: string }) => {
+  ext.tabs.onUpdated.addListener((tabId: number, change: { url?: string; status?: string }) => {
+    // Each page an agent's own tab loads takes the patch as it starts (a copy of window.open it
+    // keeps from its first moment is then mostly the wrapped one), not only at the next step.
+    if (change.status === 'loading') void agentsOwnHere(tabId).then((here) => here ? popupsAsTabs(tabId, AGENTS_TAB) : false).catch(() => false)
     const k = ofTab.get(tabId)
     if (k && change.url) tell(k, seen(k, change.url))
     // The opener's page went to another site: its windows are not that site's to hear of.

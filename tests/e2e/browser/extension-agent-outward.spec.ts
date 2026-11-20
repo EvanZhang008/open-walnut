@@ -13,6 +13,7 @@
  *  - a screenshot can be a PNG.
  * Sites are *.example.test, mapped to this machine by Chromium's host resolver.
  */
+import { WAYS } from '../../../packages/browser-extension/src/agent-popups-page'
 import { expect, test, chromium, type BrowserContext, type Page, type Worker } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
 import http from 'node:http'
@@ -42,7 +43,7 @@ let tab = 0
 const site = (host: string, p: string) => `http://${host}:${port}${p}`
 const shots = process.env.WALNUT_TASK_DIR ? path.join(process.env.WALNUT_TASK_DIR, 'review', 'fix-shots', 'c') : fs.mkdtempSync(path.join(os.tmpdir(), 'agent-outward-'))
 
-const PAGES: Record<string, () => string> = {
+const PAGES: Record<string, (body?: string) => string> = {
   '/mine': () => `<h1>The person's own page</h1>`,
   '/checkout': () => `<h1>Checkout</h1>
     <button type="button" id="add" onclick="document.getElementById('cart').textContent = 'In cart: 1'">Add to cart</button><p id="cart"></p>
@@ -62,6 +63,34 @@ const PAGES: Record<string, () => string> = {
     // A clean copy of window.open from a frame made at the click (a common way around a wrapped open).
     + `<button id="clean" onclick="const f = document.createElement('iframe'); document.body.append(f); window.cleanWin = f.contentWindow.open('/help-window?clean', 'clean', 'width=480,height=400')">Open it from a new frame</button>`,
   '/help-window': () => `<h1>Help window</h1><p>Orders ship in 2 days.</p>`,
+  // Every way a page opens a new tab or window (agent-popups-page.ts WAYS): one button each, its
+  // data-way the way's name first. The guard test clicks every button there is.
+  '/ways': () => `<h1>Ways</h1>
+    <button data-way="open" onclick="window.open('/help-window?way=open', 'w-open', 'width=300')">open</button>
+    <button data-way="open-frame-content-window" onclick="const f = document.createElement('iframe'); document.body.append(f); f.contentWindow.open('/help-window?way=open-frame-content-window', '_blank')">frame</button>
+    <button data-way="open-frames-index" onclick="document.body.appendChild(document.createElement('iframe')); frames[frames.length - 1].open('/help-window?way=open-frames-index')">frames[i]</button>
+    <button data-way="open-frame-name" onclick="document.body.insertAdjacentHTML('beforeend', '<iframe name=named></iframe>'); window.named.open('/help-window?way=open-frame-name', 'n2', 'width=300')">named frame</button>
+    <button data-way="open-frame-loaded" onclick="const f = document.createElement('iframe'); f.src = '/help-frame'; f.onload = () => frames[frames.length - 1].open('/help-window?way=open-frame-loaded'); document.body.append(f)">loaded frame</button>
+    <button data-way="open-document" onclick="document.open('/help-window?way=open-document', 'w-doc', 'width=300')">document.open</button>
+    <a data-way="link-blank" href="/help-window?way=link-blank" target="_blank" rel="opener">blank link</a>
+    <a data-way="link-name" href="/help-window?way=link-name" target="fresh-name">named link</a>
+    <a data-way="link-modifier" href="/help-window?way=link-modifier" data-ctrl="1">plain link, ctrl</a>
+    <img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" usemap="#m" width="10" height="10"><map name="m"><area data-way="link-area" href="/help-window?way=link-area" target="_blank" shape="rect" coords="0,0,10,10"></map>
+    <form data-way="form-get" action="/help-window" target="_blank"><input type="hidden" name="way" value="form-get"><button>get</button></form>
+    <form data-way="form-post" action="/form-echo?way=form-post" method="post" target="_blank"><input type="hidden" name="greeting" value="hello post caf\u00e9"><button>post</button></form>
+    <form data-way="form-submit-call" action="/help-window" target="_blank" data-call="submit"><input type="hidden" name="way" value="form-submit-call"></form>
+    <button data-way="form-shadow" onclick="const h = document.createElement('div'); document.body.append(h); const r = h.attachShadow({ mode: 'closed' }); r.innerHTML = '<form action=/help-window target=_blank><input type=hidden name=way value=form-shadow><button>go</button></form>'; r.querySelector('button').click()">shadow form</button>
+    <button data-way="open-frame-range" onclick="const f = document.createElement('iframe'); const r = document.createRange(); r.selectNodeContents(document.body); r.collapse(false); r.insertNode(f); frames[frames.length - 1].open('/help-window?way=open-frame-range')">frame by a range</button>
+    <a data-way="link-stopped" data-stopper="1" href="/help-window?way=link-stopped" target="_blank">a link whose click the page stops first</a>
+    <svg width="10" height="10"><a data-way="link-svg" href="/help-window?way=link-svg" target="_blank"><rect width="10" height="10"></rect></a></svg>
+    <iframe name="side" src="/help-frame"></iframe>
+    <script>addEventListener('click', (e) => { if (e.target.closest && e.target.closest('[data-stopper]')) e.stopImmediatePropagation() }, true)</script>
+    <button data-cancel="1" onclick="document.getElementById('cancelled').click()">cancelled</button><a id="cancelled" href="/help-window?way=cancelled" target="_blank" onclick="return false">x</a>`,
+  '/ways-base': () => `<base target="_blank"><a data-way="link-base" href="/help-window?way=link-base">base target</a>
+    <a data-way="link-empty-target" href="/help-window?way=link-empty-target" target="">an empty target: the base target, as Chrome reads it</a>
+    <dialog id="dlg" open><form method="dialog" id="stay-dialog"><button>close</button></form></dialog>`,
+  '/help-frame': () => `<p>A frame of the shop.</p>`,
+  '/form-echo': (body?: string) => `<h1>Form sent</h1><p id="echo">${decodeURIComponent(String(body ?? '').replace(/\+/g, ' '))}</p>`,
   '/frame': () => `<h1>Account</h1><iframe src="/frame-inner" title="Sign in" width="420" height="160"></iframe>`,
   '/frame-inner': () => `<button id="in" onclick="setTimeout(() => { document.getElementById('st').textContent = 'You are signed in.' }, 600)">Sign in here</button><p id="st"></p>`,
   '/keys': () => `<h1>Keys</h1>
@@ -76,8 +105,15 @@ const PAGES: Record<string, () => string> = {
 function startSites(): Promise<void> {
   sites = http.createServer((req, res) => {
     const page = PAGES[new URL(req.url ?? '/', 'http://x').pathname]
-    res.writeHead(page ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' })
-    res.end(page ? `<!doctype html><html><head><title>Test shop</title></head><body>${page()}</body></html>` : 'not found')
+    let body = ''
+    req.on('data', (c) => { body += c })
+    req.on('end', () => {
+      // A site's robots.txt as many serve it: plain text with no charset (the browser reads it as
+      // windows-1252, so a form sent from it in the page's own encoding must say so: review 2026-11-20).
+      if (req.url === '/robots.txt') { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('User-agent: *'); return }
+      res.writeHead(page ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' })
+      res.end(page ? `<!doctype html><html><head><title>Test shop</title></head><body>${page(body)}</body></html>` : 'not found')
+    })
   })
   return new Promise((resolve) => sites.listen(0, '127.0.0.1', () => { port = (sites.address() as AddressInfo).port; resolve() }))
 }
@@ -535,6 +571,91 @@ test('a clean copy of window.open from a frame the page makes at the click asks 
   await expect.poll(async () => (await act(page, { action: 'evaluate', tab, expression: 'window.cleanWin.closed' })).body.value).toBe(true)
 })
 
+// The class guard: every way a page opens a new tab or window (agent-popups-page.ts WAYS) is on the
+// /ways page, and each of its buttons, clicked in an agent's step, opens a tab the extension made
+// (no opener: the page's own new window, which would show the agent window, never ran) that is the
+// agent's, in the agent window, with no new window. A new way in WAYS with no button, or a button
+// whose way goes past the extension, fails here.
+test('every way a page opens a new tab or window goes through the extension: the agent\'s background tab, no window shown', async () => {
+  test.setTimeout(240_000)
+  const page = ctx.pages()[0]
+  const ways = async (path: string) => {
+    expect((await act(page, { action: 'navigate', tab, url: site('shop.example.test', path) })).status).toBe(200)
+    return (await act(page, { action: 'evaluate', tab, expression: "[...document.querySelectorAll('[data-way]')].map((e) => e.getAttribute('data-way'))" })).body.value as string[]
+  }
+  const seen = new Set<string>()
+  for (const path of ['/ways', '/ways-base']) {
+    for (const way of await ways(path)) {
+      seen.add(way.split('-')[0]!)
+      // Under the extension's limit of new tabs from one page (OPENS_MAX in OPENS_MS: agent-opened.ts).
+      await page.waitForTimeout(1300)
+      const before = await sw().evaluate(async () => (await chrome.windows.getAll()).map((w) => w.id!).sort())
+      const fire = `(() => { const el = document.querySelector('[data-way="${way}"]'); const click = (o) => el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ...o })); if (el.tagName === 'FORM') { if (el.dataset.call === 'submit') el.submit(); else el.querySelector('button').click() } else if (el.dataset.ctrl) click({ ctrlKey: true, metaKey: true }); else if (typeof el.click !== 'function') click({}); else el.click(); return 'fired' })()`
+      const r = await act(page, { action: 'evaluate', tab, expression: fire })
+      expect(r.status, `${way}: ${JSON.stringify(r.body)}`).toBe(200)
+      let child: { id: number; windowId: number; owner: string } | undefined
+      await expect.poll(async () => {
+        const ids = await sw().evaluate(async (w: string) => (await chrome.tabs.query({})).filter((t) => (t.url || t.pendingUrl || '').includes(`way=${w}`)).map((t) => t.id!), way)
+        const all = (await act(page, { action: 'tabs', all: true })).body.tabs as Array<{ id: number; owner: string; windowId: number }>
+        child = all.find((t) => ids.includes(t.id))
+        return child?.owner
+      }, { message: `${way}: ${JSON.stringify(r.body)}`, timeout: 15_000 }).toBe('mine')
+      const agentWindow = await sw().evaluate(async (t: number) => (await chrome.tabs.get(t)).windowId, tab)
+      expect(child!.windowId, way).toBe(agentWindow)
+      expect(await sw().evaluate(async () => (await chrome.windows.getAll()).map((w) => w.id!).sort()), way).toEqual(before)
+      const there = await act(page, { action: 'evaluate', tab: child!.id, expression: '({ opener: window.opener === null, text: document.body.innerText })' })
+      expect(there.body.value?.opener, `${way}: the extension made it`).toBe(true)
+      if (way === 'form-post') expect(there.body.value?.text).toContain('greeting=hello post caf\u00e9')
+      expect((await act(page, { action: 'close', tab: child!.id })).body).toMatchObject({ closed: true })
+    }
+  }
+  expect([...seen].sort()).toEqual([...WAYS].sort())
+  // A click the page cancels itself opens nothing.
+  await ways('/ways')
+  expect((await act(page, { action: 'evaluate', tab, expression: "document.querySelector('[data-cancel]').click(); 'ok'" })).status).toBe(200)
+  await page.waitForTimeout(1500)
+  expect(await sw().evaluate(async () => (await chrome.tabs.query({})).some((t) => (t.url || t.pendingUrl || '').includes('way=cancelled')))).toBe(false)
+  // Targets that open no new tab stay the page's own (review 2026-11-20): a sibling frame's name
+  // from inside a frame, a dialog's form under <base target=_blank>.
+  const tabsNow = () => sw().evaluate(async () => (await chrome.tabs.query({})).length)
+  const count = await tabsNow()
+  const sibling = await act(page, { action: 'evaluate', tab, expression: "(async () => { const f = document.createElement('iframe'); document.body.append(f); f.contentDocument.body.innerHTML = '<a href=/help-window?stay=sibling target=side>s</a>'; f.contentDocument.querySelector('a').click(); await new Promise((r) => setTimeout(r, 1200)); return frames.side.location.search })()" })
+  expect(sibling.body.value, JSON.stringify(sibling.body)).toBe('?stay=sibling')
+  await ways('/ways-base')
+  const dialog = await act(page, { action: 'evaluate', tab, expression: "(async () => { document.querySelector('#stay-dialog button').click(); await new Promise((r) => setTimeout(r, 1200)); return document.getElementById('dlg').open })()" })
+  expect(dialog.body.value, JSON.stringify(dialog.body)).toBe(false)
+  expect(await tabsNow()).toBe(count)
+})
+
+// Review 2026-11-20: Stop on the pill gave the tab back, but its page still asked the extension for
+// its new windows, which refused: the person's own click on a target=_blank link opened nothing.
+test('once the person stops the agent on a tab, a link they click there opens its tab as the browser does', async () => {
+  const page = ctx.pages()[0]
+  const opened = await act(page, { action: 'open', url: site('shop.example.test', '/ways') })
+  expect(opened.status, JSON.stringify(opened.body)).toBe(200)
+  const t = opened.body.tab as number
+  // A step there: the page's ways are wrapped and live.
+  expect((await act(page, { action: 'evaluate', tab: t, expression: "'stepped'" })).body.value).toBe('stepped')
+  const there = ctx.pages().find((p) => p.url() === site('shop.example.test', '/ways'))!
+  await there.bringToFront()
+  const vw = await there.evaluate(() => ({ w: innerWidth, h: innerHeight }))
+  // The pill's Stop: the right end of the pill in the bottom right corner (a closed shadow root).
+  await there.mouse.click(vw.w - 14 - 8 - 20, vw.h - 14 - 7 - 11)
+  await expect.poll(async () => (await act(page, { action: 'snapshot', tab: t })).body.code, { timeout: 10_000 }).toBe('not_your_tab')
+  const child = ctx.waitForEvent('page')
+  await there.locator('[data-way="link-blank"]').click()
+  const p = await child
+  await p.waitForLoadState()
+  expect(p.url()).toContain('way=link-blank')
+  // The browser's own tab, opened by the page (its opener kept: rel=opener), the person's.
+  expect(await p.evaluate(() => window.opener !== null)).toBe(true)
+  const id = await sw().evaluate(async () => (await chrome.tabs.query({})).find((x) => (x.url || '').includes('way=link-blank'))!.id!)
+  const all = (await act(page, { action: 'tabs', all: true })).body.tabs as Array<{ id: number; owner: string }>
+  expect(all.find((x) => x.id === id)?.owner).toBe('person')
+  await p.close()
+  await there.close()
+})
+
 test('a page\'s stand-in window closes its tab, and the same name loads the same tab again', async () => {
   const page = ctx.pages()[0]
   expect((await act(page, { action: 'navigate', tab, url: site('shop.example.test', '/popup') })).status).toBe(200)
@@ -550,26 +671,32 @@ test('a page\'s stand-in window closes its tab, and the same name loads the same
   await expect.poll(async () => (await helpTabs()).length).toBe(0)
 })
 
-test('a popup window a page still opens from an agent tab (its own early copy of window.open) is the agent\'s, minimized, and closes', async () => {
+// A copy of window.open a page took at its first moment, before any patch reached it: when the
+// patch at the page's load (agent-opened.ts watchPageOpened) came first, the extension's background
+// tab; when the page's script came first (as here, an inline script, most times), the browser's own
+// popup window, the agent's, minimized at once. Never a window left in front of the person.
+test('a copy of window.open a page took at its first moment: the agent\'s background tab, or its popup window minimized at once, and it closes', async () => {
   const page = ctx.pages()[0]
   // A site the person has no page of (one they have is theirs to open windows from: next test).
   expect((await act(page, { action: 'navigate', tab, url: site('docs.example.test', '/popup') })).status).toBe(200)
   const r = await act(page, { action: 'evaluate', tab, expression: "document.getElementById('early').click(); 'clicked'" })
   expect(r.status, JSON.stringify(r.body)).toBe(200)
-  let popup: { tab: number; window: number; type?: string; state?: string } | undefined
+  const agentWindow = await sw().evaluate(async (t: number) => (await chrome.tabs.get(t)).windowId, tab)
+  let got: { tab: number; window: number; type?: string; state?: string } | undefined
   await expect.poll(async () => {
-    popup = await sw().evaluate(async () => {
+    got = await sw().evaluate(async () => {
       const t = (await chrome.tabs.query({})).find((x) => x.url?.includes('/help-window?early') || x.pendingUrl?.includes('/help-window?early'))
       if (!t) return undefined
       const w = await chrome.windows.get(t.windowId)
       return { tab: t.id!, window: w.id!, type: w.type, state: w.state }
     })
-    const all = popup ? (await act(page, { action: 'tabs', all: true })).body.tabs as Array<{ id: number; owner: string }> : []
-    return popup ? `${popup.type} ${all.find((t) => t.id === popup!.tab)?.owner} ${popup.state}` : 'none'
-  }, { timeout: 20_000 }).toBe('popup mine minimized')
-  // The agent can close what its page opened; the popup window goes with it.
-  expect((await act(page, { action: 'close', tab: popup!.tab })).body).toMatchObject({ closed: true })
-  await expect.poll(() => sw().evaluate(async (id: number) => (await chrome.windows.getAll()).some((w) => w.id === id), popup!.window)).toBe(false)
+    const all = got ? (await act(page, { action: 'tabs', all: true })).body.tabs as Array<{ id: number; owner: string }> : []
+    const owner = got ? all.find((t) => t.id === got!.tab)?.owner : undefined
+    if (!got || owner !== 'mine') return 'none'
+    return got.window === agentWindow ? 'agent window tab' : `${got.type} ${got.state}`
+  }, { timeout: 20_000 }).toMatch(/^(agent window tab|popup minimized)$/)
+  expect((await act(page, { action: 'close', tab: got!.tab })).body).toMatchObject({ closed: true })
+  await expect.poll(() => sw().evaluate(async (id: number) => (await chrome.tabs.query({})).some((t) => t.id === id), got!.tab)).toBe(false)
 })
 
 // Review: the person's own popup on a site an agent is on at the same moment stays theirs, shown.

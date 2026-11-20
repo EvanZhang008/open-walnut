@@ -33,7 +33,7 @@ const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
 // A browser takes 1 to 4 dot-separated numbers only.
 const version = String(pkg.version).split(/[-+]/)[0].split('.').slice(0, 4).map((n) => String(Number(n) || 0)).join('.')
 
-const ENTRIES = ['background', 'content', 'popup', 'menu', 'savebar', 'sidepanel', 'grant']
+const ENTRIES = ['background', 'content', 'page-open-early', 'popup', 'menu', 'savebar', 'sidepanel', 'grant']
 /**
  * Each page: its body class, its html class, and the script it runs (its own name's by default).
  * popup-ask.html is the toolbar popup on Ask: the side panel's page in its popup form (sidepanel.ts),
@@ -88,7 +88,12 @@ export function manifestFor(browser, build) {
     icons: { 16: 'icons/16.png', 32: 'icons/32.png', 48: 'icons/48.png', 128: 'icons/128.png' },
     action: { default_title: 'Walnut', default_popup: 'popup-ask.html', default_icon: { 16: 'icons/16.png', 32: 'icons/32.png' } },
     background: browser === 'chrome' ? { service_worker: 'background.js' } : { scripts: ['background.js'] },
-    content_scripts: [{ matches: SITES, js: ['content.js'], all_frames: true, run_at: 'document_idle' }],
+    content_scripts: [
+      { matches: SITES, js: ['content.js'], all_frames: true, run_at: 'document_idle' },
+      // Before a page's own scripts: its window.open hands over to Walnut once the tab is an
+      // agent's (page-open-early.ts), so a copy the page keeps from its first moment goes there too.
+      ...(browser === 'chrome' ? [{ matches: SITES, js: ['page-open-early.js'], all_frames: true, match_origin_as_fallback: true, run_at: 'document_start', world: 'MAIN' }] : []),
+    ],
     // alarms: agents in this browser (agent.ts) come back after the background was stopped.
     // contextMenus: "Quick question about ..." on a selection or a page, which opens the side panel.
     // downloads: an agent sees the downloads it started (agent-downloads.ts).
