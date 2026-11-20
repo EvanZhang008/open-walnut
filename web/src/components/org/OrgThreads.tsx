@@ -72,6 +72,7 @@ import type { OrgThread, OrgThreadMessage, OrgThreadState } from '@/api/org-thre
 import type { OrgThreadsState } from './useOrgThreads';
 import { OrgThreadSnooze } from './OrgThreadSnooze';
 import { PoppedThreadCard } from './PoppedThreadCard';
+import { ThreadLetterAnswer, answersLetter } from './ThreadLetterAnswer';
 import '@/styles/org-threads.css';
 
 /** A task's live status dot, the colours of the Task view's tabs (OrgTaskRail TAB_DOT). */
@@ -365,6 +366,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   const pinned = pinnedNow(t);
   // Its decision is asked in a task (core/org/thread-task-ask.ts): the card says where, not Needs you.
   const asked = !closed && !!t.askedIn;
+  const letter = answersLetter(t);
   const card = useMemo(() => cardView(t, shared), [t, shared]);
   // It sat too long with nothing from the node: the card says so (core/org/thread-view.ts threadOverdue).
   const overdue = closed || snoozed ? null : overdueLine(t, name, now, (iso) => timeAgo(iso, { now }), threadDeadline(t, tasks, now));
@@ -456,7 +458,9 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
           {exchanges.map((x) => <Exchange key={x.messages[0]?.id ?? 'opener'} x={x} t={t} name={name} state={state} now={now} shared={x.messages.some((m) => shared.has(m.id))} />)}
         </ol>
       )}
-      {onFollowUp && !closed ? (
+      {/* It holds a decision letter: the letter's buttons and box answer it, here and in the inbox at once. */}
+      {letter && <ThreadLetterAnswer t={t} />}
+      {onFollowUp && !closed && !letter ? (
         <FollowUp threadId={t.id} title={t.title} owner={owner} onSend={(text, images) => onFollowUp(t.id, text, images)} />
       ) : null}
       <div className="org-thread-actions">
@@ -464,7 +468,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
           <span className="org-thread-closed" data-testid="org-thread-closed">{closedWords(t, now)}</span>
           <button type="button" className="btn btn-sm" data-testid="org-thread-reopen" onClick={() => void state.update(t.id, { reopen: true })}>Reopen</button>
         </>) : (<>
-          <button type="button" className="btn btn-sm btn-primary" data-testid="org-thread-ack" onClick={() => void state.update(t.id, { close: 'acked' })}>Acknowledge</button>
+          {!letter && <button type="button" className="btn btn-sm btn-primary" data-testid="org-thread-ack" onClick={() => void state.update(t.id, { close: 'acked' })}>Acknowledge</button>}
           <OrgThreadSnooze
             title={t.title}
             label={snoozed ? 'Snoozed' : 'Snooze'}

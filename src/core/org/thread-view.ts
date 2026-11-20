@@ -57,6 +57,8 @@ export interface ViewThread<M extends ViewMessage = ViewMessage> {
   askedIn?: ThreadAskedIn;
   /** Projected on read (thread-popup.ts): a thread of a task below, listed on this node's Threads. */
   owner?: { task_id: string; title: string };
+  /** The decision letter it holds (letter-thread-model.ts): the letter keeps its own re-check clock. */
+  letter?: { id: string; done?: true; off?: true };
 }
 
 /**
@@ -424,7 +426,8 @@ export interface ThreadOverdue {
 export function threadOverdue(t: ViewThread & { state: string }, now: number = Date.now(), deadline?: string): ThreadOverdue | null {
   if (t.closed || snoozedNow(t, now)) return null;
   const why = t.state === 'new' || t.state === 'working' ? 'reply' : t.state === 'needs' ? 'needs' : null;
-  if (!why) return null;
+  // A thread waiting on him for a decision letter: the letter's own 4-hour check asks its task (sessions/letter-recheck.ts).
+  if (!why || (why === 'needs' && t.letter && !t.letter.done && !t.letter.off)) return null;
   let lastHis = '';
   let last = t.opener?.at ?? '';
   for (const m of t.messages) {

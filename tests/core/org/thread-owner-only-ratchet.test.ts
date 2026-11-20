@@ -38,6 +38,7 @@ const WRITERS: Record<string, string> = {
   writeOwnThreads: 'a task\'s own writes on its own records',
   sweepClosedThreads: 'deletes records past their week',
   updateReplyDeliveries: 'moves a reply\'s delivery on the owner\'s record',
+  writeThreadsFor: 'a letter\'s one thread, under an id of the letter, written on the node that holds it (human-inbox/letter-threads.ts follows a move first)',
 }
 const READERS = ['threadTaskIds', 'readThreads', 'withTaskAsks', 'listThreadNodes', 'threadHolder', 'hasOpenDeliveries']
 

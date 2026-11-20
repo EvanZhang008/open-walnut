@@ -44,6 +44,7 @@ import { orgEnabledCached } from './org/org-enabled.js';
 import { decisionAnswered } from './human-inbox/open-decision.js';
 import { triggerWatchesOwnWork } from './task-wait-wake.js';
 import { keepsThreads, threadsForEveryTask } from './org/keeps-threads.js';
+import { heldLetterIds, holdsLettersNow, isLetterThread, lettersAsThreadsNow } from './human-inbox/letter-threads.js';
 import { applyActions, type ActionItem } from './action-needed.js';
 import { taskLines } from './task-lines.js';
 import { approvalItemsByTask, letterItem, promptItem } from './action-needed-facts.js';
@@ -337,17 +338,20 @@ async function readLetters(): Promise<StatusFacts['letters']> {
   await safely('inbox', async () => {
     const { listLetters } = await import('./human-inbox/store.js');
     const { letters: list } = await listLetters({ archived: false });
-    // Oldest first, so the newest letter of a task is the one kept.
     const now = Date.now();
-    for (const l of [...list].sort((a, b) => a.createdAt - b.createdAt)) {
-      const tid = l.sender?.taskId;
+    const open = [...list].sort((a, b) => a.createdAt - b.createdAt).filter((l) => {
       // A decision is answered by a pick or by words written back (open-decision.ts); a review by its pick.
       const done = l.type === 'review' ? !!l.answered : decisionAnswered(l);
-      if (done || l.archived || !tid) continue;
       // A letter the user read a while ago is no news, as for a decision.
-      if (l.read && !(typeof l.readAt === 'number' && now < l.readAt + DECISION_SEEN_GRACE_MS)) continue;
+      return !done && !l.archived && !!l.sender?.taskId && !(l.read && !(typeof l.readAt === 'number' && now < l.readAt + DECISION_SEEN_GRACE_MS));
+    });
+    // letters_as_threads: a decision its thread holds is counted and answered there, once (letter-threads.ts).
+    const held = await heldLetterIds(open.filter((l) => l.type === 'action_required'));
+    // Oldest first, so the newest letter of a task is the one kept.
+    for (const l of open) {
+      const tid = l.sender.taskId!;
       if (l.type === 'review') reviews.set(tid, l.subject);
-      if (l.type !== 'action_required') continue;
+      if (l.type !== 'action_required' || held.has(l.id)) continue;
       out.set(tid, l.subject);
       items.set(tid, [...(items.get(tid) ?? []), letterItem(l)]);
     }
@@ -1272,6 +1276,7 @@ function markAll(): void {
 /** The experiment's value as of the last config change seen (undefined: none seen yet). */
 let followWorkersSeen: boolean | undefined;
 let popUpSeen: boolean | undefined;
+let lettersAsThreadsSeen: boolean | undefined;
 
 async function experimentSwitched(): Promise<boolean> {
   const { getConfig } = await import('./config-manager.js');
@@ -1292,7 +1297,13 @@ async function experimentSwitched(): Promise<boolean> {
   popUpSeen = popUp;
   setThreadsPopUp(popUp);
   if (popMoved) threadsChanged();
-  return moved || threadsMoved || popMoved;
+  // Decision letters as threads (human-inbox/letter-threads.ts): a switch moves which letters count.
+  const asThreads = experimentalEnabled(flags, 'letters_as_threads');
+  const lettersMoved = lettersAsThreadsSeen !== undefined && lettersAsThreadsSeen !== asThreads;
+  lettersAsThreadsSeen = asThreads;
+  // Which tasks keep Threads moved too: a letter their thread held counts again, or no more.
+  if (lettersMoved || (threadsMoved && asThreads)) dropSlow('letters');
+  return moved || threadsMoved || popMoved || lettersMoved;
 }
 
 function onEvent(event: { name: string; data: unknown; source?: string }): void {
@@ -1311,6 +1322,8 @@ function onEvent(event: { name: string; data: unknown; source?: string }): void 
       lane(d.task?.parent_task_id);
       // Thread ask pointers depend on linked task decisions, not only thread-file writes.
       if (typeof d.task?.id === 'string') ownerThreadsChanged(d.task.id, lane);
+      // letters_as_threads: a task whose thread holds a letter stopped keeping Threads or finished: the letter counts again.
+      if (typeof d.task?.id === 'string' && lettersAsThreadsNow() && holdsLettersNow(d.task.id)) dropSlow('letters');
       return;
     }
     case EventNames.CONFIG_CHANGED:
@@ -1380,6 +1393,8 @@ function onEvent(event: { name: string; data: unknown; source?: string }): void 
       // Acted on by hand (the Org page, the phone, a node's own op): the fast lane, its dot moves now.
       // (threads_pop_up: the nodes above a task hear its change as their own: org/thread-reply.ts.)
       if (typeof d.taskId === 'string') { threadsChanged(d.taskId); markNow(d.taskId); } else { threadsChanged(); markAll(); }
+      // letters_as_threads: whether a thread still holds a letter decides whether the letter counts.
+      if (lettersAsThreadsNow() && (typeof d.threadId !== 'string' || isLetterThread(d.threadId))) dropSlow('letters');
       return;
   }
 }

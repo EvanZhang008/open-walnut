@@ -553,6 +553,8 @@ describe('every path that tells an ask changed compares the decision', () => {
       'src/core/org/threads-model.ts': /onlyAskReworded\(/,
       'src/core/routines/trigger-api.ts': /ask_id/,
       'src/core/user-status-sync.ts': /decisionId/,
+      // A reply to an ask the thread no longer asks: judged by the ask id his card showed (threads-model.ts answers.stale).
+      'src/core/org/thread-reply.ts': /answers\?\.stale/,
     }
     const PRIMITIVES = /\b(statusMark|briefMark|briefLineMark|lineMoved|needsChanges|briefFreshness|briefSnapshot|seenOf|rideNotice|rideLine|nextRecheckCount|updateThread|askCheckedAtOf|recordWatch)\(/
     const callers = filesWith(PRIMITIVES).filter((f) => !Object.hasOwn(PATHS, f))

@@ -70,6 +70,8 @@ export interface OrgThread {
   can_answer_now?: boolean;
   /** The decision it asks: a reply names it. */
   ask_id?: string;
+  /** The decision letter it holds (experiment letters_as_threads, core/org/letter-thread-model.ts): its card answers the letter. */
+  letter?: { id: string; task: string; options: Array<{ id: string; label: string; description?: string }>; off?: true; done?: true };
 }
 
 const base = (taskId: string) => `/api/v1/tasks/${encodeURIComponent(taskId)}/threads`;

@@ -24,6 +24,7 @@ import { dbDropExpired, dbMutateThreads, dbReadThreads, dbThreadNodes, flushNode
 import { askOwnerKept, askOwnerOf, pointerTaskIds, withAskPointers } from './thread-task-ask.js';
 import type { ThreadAskedIn } from './thread-view.js';
 import { stampAskIds, threadsPopUpNow } from './thread-popup-rules.js';
+import { liveLetter } from './letter-thread-model.js';
 
 function emit(event: OrgThreadsChangedEvent): void {
   bus.emit(EventNames.ORG_THREADS_CHANGED, event, ['web-ui'], { source: 'org-threads' });
@@ -136,12 +137,29 @@ async function mutateThreads<R>(taskId: string, mutate: (cur: ThreadsFile) => { 
     // already asks him buzzes nothing: that task's ask is the one he answers (thread-task-ask.ts).
     void withTaskAsks(taskId, threads)
       .then(async (read) => {
-        const own = threads.filter((t) => !read.find((r) => r.id === t.id)?.askedIn);
+        // A thread holding a decision letter buzzes nothing either: the letter's own push did (letter-thread-model.ts).
+        const own = threads.filter((t) => !read.find((r) => r.id === t.id)?.askedIn && !liveLetter(t));
         if (own.length) await (await import('../push/thread-push.js')).onThreadsEnteredNeeds(taskId, own);
       })
       .catch(() => {});
   }
   return out as R;
+}
+
+/**
+ * A write of Walnut's own that is no op of a node or of his (human-inbox/letter-threads.ts: the
+ * thread that holds a decision letter): `mutate` under the lock, then one change event when it says
+ * which thread changed.
+ */
+export async function writeThreadsFor<R>(taskId: string, mutate: (cur: ThreadsFile) => { file: ThreadsFile; out: R; changed?: { kind: 'opened' | 'updated'; threadId: string } }): Promise<R> {
+  let changed: { kind: 'opened' | 'updated'; threadId: string } | undefined;
+  const out = await mutateThreads(taskId, (cur) => {
+    const r = mutate(cur);
+    changed = r.changed;
+    return r;
+  });
+  if (changed) emit({ taskId, ...changed });
+  return out;
 }
 
 /** The phone buzzed for this thread's move into needs (push/thread-push.ts). Quiet: nothing he sees changed. */

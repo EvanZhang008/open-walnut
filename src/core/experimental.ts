@@ -114,6 +114,12 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'A "Walnut artifacts" section under the notes tree lists what Walnut\'s agents keep as standing knowledge: the org\'s skills, the shared notes, and each VP\'s and lead\'s MEMORY.md, team guidance, skills, notes and reflections. Click one to read it.',
     default: false,
   },
+  {
+    id: 'letters_as_threads',
+    name: 'Decision letters wait on the thread',
+    description: 'A decision letter from a task that keeps Threads also waits on you as a thread of that task, with the letter\'s buttons on its card. Answer it on the card or in the inbox: either one answers both. The Action needed strip and the counts show it once, as the thread. Letters already waiting get their thread when you turn this on.',
+    default: false,
+  },
 ] as const;
 
 export type ExperimentalFeatureId = typeof EXPERIMENTAL_FEATURES[number]['id'];

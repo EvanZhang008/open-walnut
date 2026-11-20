@@ -17,6 +17,7 @@ import { AgentText } from '@/components/common/AgentText';
 import { threadSummarySource } from './thread-text-source';
 import type { OrgThreadsState } from './useOrgThreads';
 import { OrgThreadSnooze } from './OrgThreadSnooze';
+import { ThreadLetterAnswer, answersLetter } from './ThreadLetterAnswer';
 
 export function PoppedThreadCard({ node, t, state }: { node: string; t: OrgThread; state: OrgThreadsState }) {
   const openTask = useOpenTask();
@@ -38,7 +39,8 @@ export function PoppedThreadCard({ node, t, state }: { node: string; t: OrgThrea
           {unread && <p className="org-thread-stand-in-note" data-testid="org-thread-unread-by-task">Sent, {owner.title} has not read it yet.</p>}
           {failed && <p className="org-thread-error" role="alert" data-testid="org-thread-popped-failed">{failed}</p>}
         </>)}
-        answer={(
+        // A thread holding a decision letter is answered by the letter (its buttons, its box).
+        answer={answersLetter(t) ? <ThreadLetterAnswer t={t} /> : (
           <ReplyComposer
             placeholder={`Answer ${owner.title}`}
             draftKey={draftKey('thread-follow', t.id)}

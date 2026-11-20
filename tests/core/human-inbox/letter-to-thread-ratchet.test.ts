@@ -12,6 +12,7 @@ import {
   LETTER_TYPE_ROUTES, filesUpdatesAsThreads, letterOnlyReason, threadForUpdate, updateSummary,
 } from '../../../src/core/human-inbox/letter-to-thread.js'
 import { createLetterCheck } from '../../../src/core/human-inbox/letter-check.js'
+import { letterThreadSkip } from '../../../src/core/human-inbox/letter-threads.js'
 import { SIMILAR_SUBJECT_MIN, textSimilarity } from '../../../src/core/human-inbox/duplicate-letter.js'
 import { keepsThreads } from '../../../src/core/org/keeps-threads.js'
 import type { OrgThread } from '../../../src/core/org/threads-model.js'
@@ -33,6 +34,28 @@ describe('every letter type is routed', () => {
     for (const [type, r] of Object.entries(LETTER_TYPE_ROUTES)) expect(r.why.length, type).toBeGreaterThan(20)
     const toThread = Object.entries(LETTER_TYPE_ROUTES).filter(([, r]) => r.to === 'thread').map(([t]) => t).sort()
     expect(toThread).toEqual(['completion', 'info'])
+  })
+
+  it('under letters_as_threads each type declares its route too, and only a decision waits on a thread', () => {
+    for (const [type, r] of Object.entries(LETTER_TYPE_ROUTES)) {
+      expect(['thread', 'needs_thread', 'letter'], type).toContain(r.lettersAsThreads.to)
+      expect(r.lettersAsThreads.why.length, type).toBeGreaterThan(20)
+      // An update stays an update: the experiment changes only what was a letter.
+      if (r.to === 'thread') expect(r.lettersAsThreads.to, type).toBe('thread')
+    }
+    const needs = Object.entries(LETTER_TYPE_ROUTES).filter(([, r]) => r.lettersAsThreads.to === 'needs_thread').map(([t]) => t)
+    expect(needs).toEqual(['action_required'])
+  })
+
+  it('a letter only its own pick settles never waits on a thread', () => {
+    const base = { type: 'action_required' as const, sender: { sessionId: 's-1', taskId: 't-1' }, actions: [{ id: 'a', label: 'Yes' }] }
+    expect(letterThreadSkip(base)).toBeNull()
+    expect(letterThreadSkip({ ...base, type: 'review' })).toBe('type')
+    expect(letterThreadSkip({ ...base, sender: { sessionId: 's-1' } })).toBe('no_task')
+    expect(letterThreadSkip({ ...base, sender: { sessionId: 'external', taskId: 't-1', pluginId: 'p' } })).toBe('plugin')
+    expect(letterThreadSkip({ ...base, items: [{}] as never })).toBe('items')
+    expect(letterThreadSkip({ ...base, credentialAsk: { host: 'h' } as never })).toBe('credential')
+    expect(letterThreadSkip({ ...base, actions: [] })).toBe('no_options')
   })
 })
 

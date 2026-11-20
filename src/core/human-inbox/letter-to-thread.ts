@@ -23,15 +23,34 @@ import type { LetterSender, LetterType, NewLetter } from './types.js';
 
 type SendInput = Omit<NewLetter, 'sender'>;
 
+/** Where a letter type goes under the experiment letters_as_threads (letter-threads.ts). */
+export interface LettersAsThreadsRoute {
+  /** `thread`: filed as an update, as without it; `needs_thread`: a letter that also waits on him as a thread of its task, the one place it shows; `letter`: a letter only. */
+  to: 'thread' | 'needs_thread' | 'letter';
+  why: string;
+}
+
 /**
- * Where each letter type goes when a task that keeps Threads sends it. A new type must be listed
- * here (tests/core/human-inbox/letter-to-thread-ratchet.test.ts).
+ * Where each letter type goes when a task that keeps Threads sends it, and under the experiment
+ * letters_as_threads. A new type must be listed here (tests/core/human-inbox/letter-to-thread-ratchet.test.ts).
  */
-export const LETTER_TYPE_ROUTES: Readonly<Record<LetterType, { to: 'thread' | 'letter'; why: string }>> = {
-  info: { to: 'thread', why: 'it only informs: routine progress on a subject, which its thread tracks' },
-  completion: { to: 'thread', why: 'a finished step or result is news on its subject, not a call on him' },
-  action_required: { to: 'letter', why: 'a decision only he can take: its buttons answer it in one tap, and every surface shows it as an ask' },
-  review: { to: 'letter', why: 'something that must have his review needs him right away' },
+export const LETTER_TYPE_ROUTES: Readonly<Record<LetterType, { to: 'thread' | 'letter'; why: string; lettersAsThreads: LettersAsThreadsRoute }>> = {
+  info: {
+    to: 'thread', why: 'it only informs: routine progress on a subject, which its thread tracks',
+    lettersAsThreads: { to: 'thread', why: 'an update stays an update of its thread, as without the experiment' },
+  },
+  completion: {
+    to: 'thread', why: 'a finished step or result is news on its subject, not a call on him',
+    lettersAsThreads: { to: 'thread', why: 'a result stays an update of its thread, as without the experiment' },
+  },
+  action_required: {
+    to: 'letter', why: 'a decision only he can take: its buttons answer it in one tap, and every surface shows it as an ask',
+    lettersAsThreads: { to: 'needs_thread', why: 'a decision waits on him as a thread of the task that asks it, with the letter\'s buttons; the letter stays its record and its answer path' },
+  },
+  review: {
+    to: 'letter', why: 'something that must have his review needs him right away',
+    lettersAsThreads: { to: 'letter', why: 'it carries no options to answer on a card: he reads a result or a document, which the inbox reader shows whole' },
+  },
 };
 
 export interface FiledUpdate {

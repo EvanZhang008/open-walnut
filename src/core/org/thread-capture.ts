@@ -20,6 +20,7 @@ import {
 } from './threads-model.js';
 import { exchangesOf, pinnedNow, snoozedNow, summaryBehindHim, summaryOwed } from './thread-view.js';
 import { keepsThreads } from './keeps-threads.js';
+import { letterThreadId } from './letter-thread-model.js';
 
 /** Open threads named to the node with each message (the newest). */
 export const HINT_OPEN_MAX = 12;
@@ -135,11 +136,14 @@ export async function prepareThreadCapture(input: {
   const cur = await store.readThreads(task.id);
   const at = new Date(input.now ?? Date.now()).toISOString();
   const messageId = newThreadMessageId();
+  // His note answering a letter a thread of this node holds (letters_as_threads) goes under that thread.
+  const letterThread = !input.threadId && words.letter ? cur.threads.find((t) => t.id === letterThreadId(words.letter!) && !movedAway(t)) : undefined;
+  const named = input.threadId ?? letterThread?.id;
   const draft: FileMessageInput = {
     text: words.text, images: words.images, via: input.threadId ? 'follow-up' : words.via,
     ...(words.about ? { about: words.about } : {}),
     ...(words.letter ? { letter: words.letter } : {}),
-    ...(input.threadId ? { threadId: input.threadId, reopenWithin: windowMs('WALNUT_THREAD_REOPEN_SECS', FOLLOW_UP_REOPENS_MS) } : { joinRecent: windowMs('WALNUT_THREAD_JOIN_SECS', SAME_CONVERSATION_MS) }),
+    ...(named ? { threadId: named, reopenWithin: windowMs('WALNUT_THREAD_REOPEN_SECS', FOLLOW_UP_REOPENS_MS) } : { joinRecent: windowMs('WALNUT_THREAD_JOIN_SECS', SAME_CONVERSATION_MS) }),
     // A Follow up carries a key of its own, so a send of it on to the node holding the thread now
     // (it moved between this plan and the write) finds it filed (thread-follow.ts deliverMovedFollowUp).
     ...(input.key || input.threadId ? { key: input.key ?? `fu-${messageId}` } : {}),

@@ -54,6 +54,7 @@ import { pinnedFirst, hasThreadNews, threadReactionAt } from './thread-view.js';
 import { sameDecisionWords } from '../ask-decision.js';
 import crypto from 'node:crypto';
 import { threadsPopUpNow } from './thread-popup-rules.js';
+import { normalizeThreadLetter, type ThreadLetter } from './letter-thread-model.js';
 
 export const THREAD_STATES = ['new', 'working', 'needs', 'answered', 'pending'] as const;
 export type ThreadState = typeof THREAD_STATES[number];
@@ -303,6 +304,8 @@ export interface OrgThread {
   askOwner?: ThreadAskOwner;
   /** The decision it waits on him for: minted each time it enters needs, kept while only its words change (thread-popup.ts stampAskIds). */
   askId?: string;
+  /** The decision letter this thread holds (experiment letters_as_threads, letter-thread-model.ts). */
+  letter?: ThreadLetter;
 }
 
 /**
@@ -462,6 +465,8 @@ function normalizeThread(t: unknown): OrgThread | null {
   if (!validMove(next.movedTo)) delete next.movedTo;
   if (!validMove(next.movedFrom)) delete next.movedFrom;
   if (next.askOwner && !(typeof next.askOwner === 'object' && isStr(next.askOwner.task) && next.askOwner.task && isStr(next.askOwner.at))) delete next.askOwner;
+  const letter = next.letter !== undefined ? normalizeThreadLetter(next.letter) : undefined;
+  if (letter) next.letter = letter; else delete next.letter;
   return next;
 }
 
@@ -1077,7 +1082,7 @@ export function moveThreadOut(file: ThreadsFile, id: string, to: MoveEnd, by: Th
   const closed: ThreadClosed = { how: 'dropped', at, by, told: true };
   // threads_pop_up: what stays is a pointer, never a copy: no message, no summary (relocateThreadOut).
   const gone: OrgThread = pointerOnly
-    ? { id: cur.id, title: cur.title, state: cur.state, messages: [], createdAt: cur.createdAt, updatedAt: at, by, closed, movedTo }
+    ? { id: cur.id, title: cur.title, state: cur.state, messages: [], createdAt: cur.createdAt, updatedAt: at, by, closed, movedTo, ...(cur.letter ? { letter: cur.letter } : {}) }
     : { ...rest, updatedAt: at, by, closed, movedTo };
   return { file: replace(file, gone, at), thread: cur };
 }
