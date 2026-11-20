@@ -89,4 +89,33 @@ describe('the places before the artifacts folder', () => {
       "const notes = path.join(memoryDir, 'knowledge')",
     ]) expect(hits(line), line).toEqual([])
   })
+
+  // 2026-11-20: a note the reflection sent named knowledge/nodes/<id>/reflections/<day>.md, and the
+  // rename a minute later left it pointing nowhere. What Walnut gives a session (a notice, a skill,
+  // a prompt, a doc it reads) names only the artifacts folder; the old names stay a link (migrate.ts).
+  it('are named by nothing Walnut gives a session: no notice, skill, prompt or doc', () => {
+    const NAMED = /(?:\.open-walnut|WALNUT_HOME\}?)\/(?:knowledge|agent-skills|agent-memory)\//
+    const TEXT = /\.(?:ts|tsx|mjs|js|md|json|yaml|yml|txt)$/
+    const SKIP = new Set([...ALLOWED, 'docs/reference/artifacts-folder.md', 'tests/core/artifacts/legacy-places-ratchet.test.ts'])
+    const found: string[] = []
+    const walk = (dir: string): void => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (e.name === 'node_modules' || e.name === 'dist' || e.name === '.git' || e.name === 'test-results') continue
+        const p = path.join(dir, e.name)
+        if (e.isDirectory()) walk(p)
+        else if (TEXT.test(e.name)) {
+          const rel = path.relative(ROOT, p).split(path.sep).join('/')
+          if (SKIP.has(rel)) continue
+          fs.readFileSync(p, 'utf-8').split('\n').forEach((line, i) => { if (NAMED.test(line)) found.push(`${rel}:${i + 1}: ${line.trim().slice(0, 160)}`) })
+        }
+      }
+    }
+    for (const dir of ['src', 'scripts', 'skills', '.claude/skills', 'plugin-store', 'docs', 'web/src']) {
+      if (fs.existsSync(path.join(ROOT, dir))) walk(path.join(ROOT, dir))
+    }
+    expect(found, 'Name the artifacts folder (src/core/artifacts/paths.ts), never knowledge/, agent-skills/ or agent-memory/').toEqual([])
+    expect(NAMED.test('read ~/.open-walnut/knowledge/nodes/x/reflections/2026-11-19.md')).toBe(true)
+    expect(NAMED.test('`${WALNUT_HOME}/agent-memory/x`')).toBe(true)
+    expect(NAMED.test('~/.open-walnut/artifacts/nodes/x/MEMORY.md')).toBe(false)
+  })
 })

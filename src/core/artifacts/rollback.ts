@@ -52,7 +52,9 @@ export async function rollbackArtifacts(): Promise<RollbackReport> {
     }
   }
 
-  // The folder under its first name, for the release that read it there.
+  // The folder under its first name, for the release that read it there: a real folder again, not
+  // the link this release leaves (migrate.ts linkFirstName), which a copy would write through.
+  if ((await fsp.lstat(legacyArtifactsDir()).catch(() => null))?.isSymbolicLink()) await fsp.unlink(legacyArtifactsDir());
   await fsp.cp(artifactsDir(), legacyArtifactsDir(), {
     recursive: true, force: true,
     filter: (src) => { const rel = path.relative(artifactsDir(), src).split(path.sep).join('/'); return !rel || keepsOnRollback(rel); },

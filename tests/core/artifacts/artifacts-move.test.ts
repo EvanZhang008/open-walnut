@@ -242,16 +242,22 @@ describe('the boot move', () => {
     await fs.writeFile(path.join(old, 'nodes', 'vp-1', 'guidance.md'), '- lesson one\n', 'utf-8')
     await fs.writeFile(path.join(old, 'nodes', 'vp-1', 'notes', 'plan.md'), 'The plan.\n', 'utf-8')
     expect(await moveIntoArtifacts([])).toMatchObject({ renamed: true })
-    expect(await exists(old)).toBe(false)
     expect(await fs.readFile(path.join(K(), 'nodes', 'vp-1', 'guidance.md'), 'utf-8')).toBe('- lesson one\n')
-    // An older release writes knowledge/ again: its new file comes in, the newer one here stays.
+    // The first name stays a link to the folder: a path an earlier message named still opens.
+    expect((await fs.lstat(old)).isSymbolicLink()).toBe(true)
+    expect(await fs.readlink(old)).toBe('artifacts')
+    expect(await fs.readFile(path.join(old, 'nodes', 'vp-1', 'notes', 'plan.md'), 'utf-8')).toBe('The plan.\n')
+    expect(await moveIntoArtifacts([])).toMatchObject({ renamed: false })
+    expect((await fs.lstat(old)).isSymbolicLink()).toBe(true)
+    // A real knowledge/ again (an older release on a host the link never reached): its new file comes in, the newer one here stays.
+    await fs.unlink(old)
     await fs.mkdir(path.join(old, 'nodes', 'vp-1', 'notes'), { recursive: true })
     await fs.writeFile(path.join(old, 'nodes', 'vp-1', 'notes', 'new.md'), 'From the older release.\n', 'utf-8')
     await fs.writeFile(path.join(old, 'nodes', 'vp-1', 'guidance.md'), '- stale\n', 'utf-8')
     const t = new Date(Date.now() - 3_600_000)
     await fs.utimes(path.join(old, 'nodes', 'vp-1', 'guidance.md'), t, t)
-    await moveIntoArtifacts([])
-    expect(await exists(old)).toBe(false)
+    expect(await moveIntoArtifacts([])).toMatchObject({ renamed: true })
+    expect((await fs.lstat(old)).isSymbolicLink()).toBe(true)
     expect((await readMemoryFile('vp-1', 'new.md')).text).toBe('From the older release.\n')
     expect(await fs.readFile(path.join(K(), 'nodes', 'vp-1', 'guidance.md'), 'utf-8')).toBe('- lesson one\n')
   })
@@ -271,6 +277,7 @@ describe('going back', () => {
     expect(await rowMemory(id)).toEqual({ text: '- CR 2 waits', at: expect.any(String) })
     expect(JSON.parse(await fs.readFile(path.join(K(), '.moved.json'), 'utf-8')).version).toBe(1)
     // The release before reads skills and notes under the folder's first name, and its MEMORY.md on the row only.
+    expect((await fs.lstat(path.join(WALNUT_HOME, 'knowledge'))).isDirectory()).toBe(true)
     expect(await exists(path.join(WALNUT_HOME, 'knowledge', 'nodes', id, 'skills', 'weekly-review', 'SKILL.md'))).toBe(true)
     expect(await exists(memoryFile(id))).toBe(false)
     // The older release rewrites the memory shorter; coming forward takes the row whole, not merged with the old file.

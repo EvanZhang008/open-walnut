@@ -13,9 +13,13 @@ import { localDate, readReflectionState, updateReflectionState } from './state.j
 
 /** Minutes after local midnight: before the VPs' 20:00 reflection routines. */
 export const NIGHTLY_AT_MIN = 19 * 60 + 45;
-const SUMMARY_MAX = 1500;
+/** The note lists every finding of a usual day (2026-11-20: at 1500 a team's 10 showed as 4), each cut to one line. */
+const SUMMARY_MAX = 3000;
+const LINE_MAX = 240;
 
 export type NightlySend = (node: Task, text: string, title: string) => Promise<boolean>;
+
+const oneLine = (l: string): string => (l.length > LINE_MAX ? `${l.slice(0, LINE_MAX - 3).trimEnd()}...` : l);
 
 /** The note for one day's record: its findings, one line each, and where the whole record is. Pure. */
 export function nightlyText(nodeName: string, file: string, record: string): string {
@@ -23,11 +27,12 @@ export function nightlyText(nodeName: string, file: string, record: string): str
   let title = '';
   for (const raw of record.split('\n')) {
     if (raw.startsWith('## ')) title = raw.slice(3).trim();
-    else if (raw.startsWith('- What went wrong: ') && title) { lines.push(`- ${title}: ${raw.slice(19).trim()}`); title = ''; }
+    else if (raw.startsWith('- What went wrong: ') && title) { lines.push(oneLine(`- ${title}: ${raw.slice(19).trim()}`)); title = ''; }
   }
   let body = '';
   for (const [i, l] of lines.entries()) {
-    if (body.length + l.length > SUMMARY_MAX) { body += `- ... ${lines.length - i} more in the record\n`; break; }
+    // Every finding is the reader's: the ones the note has no room for are counted, with the file that holds them.
+    if (body.length + l.length > SUMMARY_MAX) { body += `- ... and ${lines.length - i} more, not listed here: all ${lines.length} are in ${file}\n`; break; }
     body += `${l}\n`;
   }
   return [

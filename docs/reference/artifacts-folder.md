@@ -64,6 +64,10 @@ or write of what they hold and at every boot (`migrate.ts`):
 - the folder's first name, `knowledge/`, is renamed to `artifacts/` first thing at boot; one an older
   release wrote again beside it is merged file by file (the later wins, the other is kept) and moved
   to the backups
+- `knowledge/` then stays a link to `artifacts/` (relative; a junction on Windows), so a path an
+  earlier message named (the reflection's nightly note of 2026-11-20 03:45 did) still opens; nothing
+  of Walnut's writes through it, and nothing Walnut gives a session names the old places
+  (`tests/core/artifacts/legacy-places-ratchet.test.ts`)
 
 The backup is made before the first take, whichever comes first (the boot move or a read).
 
@@ -81,7 +85,7 @@ backup the release before made). A backup that fails moves nothing.
 
 With Walnut stopped, `bun scripts/artifacts-rollback.ts` writes the old places back from the folder
 (`rollback.ts`): each skills scope to its JSON file, each note to `agent-memory/`, the skills, notes,
-guidance and reflections to `knowledge/` (the release just before this one reads them there), and
+guidance and reflections to `knowledge/`, a real folder again in place of the link (the release just before this one reads them there), and
 each MEMORY.md onto its task's row, moving the file to `.backup/rolled-back/` so coming forward again
 takes the row whole (the older release may have rewritten it). `.moved.json` goes back to version
 1. Then start the older release. Coming forward again, the first boot backs everything up anew and

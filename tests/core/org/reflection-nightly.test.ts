@@ -49,7 +49,18 @@ describe('the nightly record', () => {
   it('keeps the note short whatever the record holds', () => {
     const many = Array.from({ length: 60 }, (_, i) => `## 10:${String(i).padStart(2, '0')} Task ${i} (t-${i})\n- What went wrong: ${'a long sentence about the work '.repeat(3)}\n`).join('\n')
     const text = nightlyText('Marina VP', '/x/2026-11-19.md', many)
-    expect(text.length).toBeLessThan(2200)
-    expect(text).toMatch(/- \.\.\. \d+ more in the record/)
+    expect(text.length).toBeLessThan(3800)
+    // The ones left out are counted, with the file that holds them all.
+    const listed = text.split('\n').filter((l) => l.startsWith('- 10:')).length
+    expect(text).toContain(`- ... and ${60 - listed} more, not listed here: all 60 are in /x/2026-11-19.md`)
+  })
+
+  it('lists every finding of a usual day, each on one short line', () => {
+    const ten = Array.from({ length: 10 }, (_, i) => `## 09:${String(i).padStart(2, '0')} Lagoon task ${i} (t-${i})\n- What went wrong: ${'it skipped the check on the pier '.repeat(12)}\n`).join('\n')
+    const text = nightlyText('Lagoon VP', '/x/2026-11-19.md', ten)
+    const listed = text.split('\n').filter((l) => l.startsWith('- 09:'))
+    expect(listed).toHaveLength(10)
+    expect(listed.every((l) => l.length <= 240)).toBe(true)
+    expect(text).not.toContain('not listed here')
   })
 })

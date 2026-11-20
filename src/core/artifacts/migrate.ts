@@ -321,7 +321,8 @@ async function filesUnder(dir: string): Promise<string[]> {
  */
 async function takeLegacyFolder(): Promise<boolean> {
   const from = legacyArtifactsDir();
-  if (!(await exists(from))) return false;
+  // A real folder only: the link linkFirstName leaves there is the folder itself.
+  if (!(await fsp.lstat(from).catch(() => null))?.isDirectory()) return false;
   if (!(await exists(artifactsDir()))) {
     await fsp.rename(from, artifactsDir());
     return true;
@@ -339,6 +340,21 @@ async function takeLegacyFolder(): Promise<boolean> {
   return true;
 }
 
+/**
+ * The folder's first name stays a link to the folder (2026-11-20: a note the reflection sent at
+ * 03:45 named `knowledge/nodes/<id>/reflections/<day>.md`, and the rename a minute later left it
+ * pointing nowhere). A path an earlier message names keeps opening, by an agent's own Read or in
+ * the app. Relative, so it holds on every host the data reaches; nothing of Walnut's writes through it.
+ */
+export async function linkFirstName(): Promise<boolean> {
+  const link = legacyArtifactsDir();
+  if (await fsp.lstat(link).catch(() => null)) return false;
+  if (!(await exists(artifactsDir()))) return false;
+  if (process.platform === 'win32') await fsp.symlink(artifactsDir(), link, 'junction');
+  else await fsp.symlink(path.basename(artifactsDir()), link);
+  return true;
+}
+
 // ── the whole move ────────────────────────────────────────────────────────
 
 /** The whole move. Each step is on its own: one that fails is logged and the others still run. */
@@ -349,6 +365,11 @@ export async function moveIntoArtifacts(tasks: readonly Task[]): Promise<MoveRep
     report.renamed = await takeLegacyFolder();
   } catch (err) {
     log.memory.warn('artifacts move: the folder\'s first name (knowledge/) was not taken in', { error: errText(err) });
+  }
+  try {
+    await linkFirstName();
+  } catch (err) {
+    log.memory.warn('artifacts move: the folder\'s first name (knowledge/) was not linked to it', { error: errText(err) });
   }
   try {
     report.backup = (await currentMarkerVersion()) >= MARKER_VERSION ? null : await backupReady();
