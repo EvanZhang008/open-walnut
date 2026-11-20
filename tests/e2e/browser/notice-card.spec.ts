@@ -13,12 +13,13 @@
  *   - a click on an ask's words opens the session it came from.
  * NOTICE_SHOTS=<dir> saves a screenshot per step; PROOF_VIDEO_DIR=<dir> records the proof video.
  */
-import { expect, test, type APIRequestContext, type Page, type Route } from '@playwright/test'
+import { expect, test, type Page, type Route } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { captureWs, injectEvent } from './ws-capture-helpers'
 import { startProofVideo } from './proof-video'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { pinFlag } from './quick-bar-helpers'
 
 const SHOTS = process.env.NOTICE_SHOTS || ''
 /** NOTICE_BEFORE=1: the same steps on a build before this change, for its screenshots only. */
@@ -56,14 +57,6 @@ const REMINDER = {
   dedupKey: `reminder:rhythm-${NONCE}`, timestamp: Date.now(),
 }
 
-async function setFlag(request: APIRequestContext, on: boolean): Promise<Record<string, boolean>> {
-  const cfg = await (await request.get('/api/config')).json() as { config?: { experimental?: Record<string, boolean> } }
-  const before = { ...(cfg.config?.experimental ?? {}) }
-  const res = await request.put('/api/config', { data: { experimental: { ...before, quick_bar: on } } })
-  expect(res.ok(), await res.text()).toBe(true)
-  return before
-}
-
 async function stubQuick(page: Page): Promise<void> {
   await page.route('**/api/stt/status', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ engine: null, available: false }) }))
   await page.route('**/api/v1/quick/people**', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ people: [
@@ -97,11 +90,9 @@ async function frames(page: Page) {
   }))
 }
 
-let restore: Record<string, boolean> | null = null
-test.afterAll(async ({ request }) => { if (restore) await request.put('/api/config', { data: { experimental: restore } }) })
-
-test('the notices he sees every day are one card at the bottom left; a click on an ask opens its session', async ({ page, request }) => {
-  restore = await setFlag(request, true)
+test('the notices he sees every day are one card at the bottom left; a click on an ask opens its session', async ({ page }) => {
+  // The switch in this page only (quick-bar-helpers.ts pinFlag): the shared server's stays as it is.
+  await pinFlag(page, true)
   await isolateUiPrefs(page)
   await captureWs(page)
   await stubQuick(page)
@@ -208,6 +199,7 @@ test('the notices he sees every day are one card at the bottom left; a click on 
 })
 
 test('in the light theme the card reads the same', async ({ page }) => {
+  await pinFlag(page, true)
   await page.emulateMedia({ colorScheme: 'light' })
   await isolateUiPrefs(page)
   await captureWs(page)
