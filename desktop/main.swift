@@ -2607,6 +2607,8 @@ extension AppDelegate: NSWindowDelegate {
         child.navigationDelegate = nil
         child.uiDelegate = nil
         child.configuration.userContentController.removeAllScriptMessageHandlers()
+        // Closed, not just dropped: a page left to die later hands its graphics to the kernel.
+        WebContentProcess.close(child)
     }
 }
 

@@ -78,3 +78,39 @@ describe('a retired page is closed, never "killed"', () => {
     expect(retire).toContain('endIfStillRunning(')
   })
 })
+
+describe('a web view the Mac app lets go of is closed first', () => {
+  // 2026-11-20: a page dropped without a close (a popout window that closed, the quick bar's
+  // panel torn down) dies later and its graphics memory is charged to the kernel until the app quits.
+  const stripped = (file: string) => fs.readFileSync(path.join(ROOT, file), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  // A retire closes the page too (WebContentWatchdog.retireReplacedPage hands it to WebContentProcess).
+  const closes = (body: string) => /WebContentProcess\.close\(|\bretireReplacedPage\(/.test(body)
+
+  function letGo(): { at: string; ok: boolean }[] {
+    const out: { at: string; ok: boolean }[] = []
+    for (const file of swiftFiles) {
+      const src = stripped(file)
+      // Web views a type holds strongly; a weak reference never keeps a page.
+      const held = [...src.matchAll(/^(?!.*\bweak\b).*\bvar\s+(\w+)\s*:\s*WKWebView[!?]?\s*(?:$|=)/gm)].map((m) => m[1])
+      const fns = [...src.matchAll(/\bfunc\s+(\w+)/g)].map((m) => ({ name: m[1], at: m.index! }))
+      fns.forEach((f, i) => {
+        const body = src.slice(f.at, fns[i + 1]?.at ?? src.length)
+        const drops = held.some((v) => new RegExp(`\\b${v}\\s*=\\s*nil\\b`).test(body))
+        const windowCloses = f.name === 'windowWillClose' && /WKWebView/.test(body)
+        if (drops || windowCloses) out.push({ at: `${file}:${f.name}`, ok: closes(body) })
+      })
+    }
+    return out
+  }
+
+  it('finds the places that let a web view go', () => {
+    const at = letGo().map((s) => s.at)
+    expect(at).toContain('desktop/main.swift:loadWebUI')
+    expect(at).toContain('desktop/main.swift:windowWillClose')
+    expect(at).toContain('desktop/QuickBarPanel.swift:tearDown')
+  })
+
+  it('every one closes the page (WebContentProcess.close) or retires it', () => {
+    expect(letGo().filter((s) => !s.ok).map((s) => s.at), 'close the web view with WebContentProcess.close before dropping it').toEqual([])
+  })
+})

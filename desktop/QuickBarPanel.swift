@@ -180,6 +180,8 @@ final class QuickBarPanel: NSObject {
         if let o = resignObserver { NotificationCenter.default.removeObserver(o); resignObserver = nil }
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: Self.handlerName)
         webView?.stopLoading()
+        // Closed, not just dropped: a page left to die later hands its graphics to the kernel.
+        if let web = webView { WebContentProcess.close(web) }
         panel?.orderOut(nil)
         panel = nil
         effect = nil
