@@ -35,6 +35,7 @@ import { isCallId, takeCallIdArg, writeOpId } from '../lib/op-call-id.js'
 import { runOnce } from './op-calls.js'
 import { COLLECTION_MAX, oversizedCollection } from '../lib/zod-rules.js'
 import { TASK_DIR_VAR, opTmpPathNote } from '../lib/tmp-draft-path.js'
+import { opMissingLinksNote } from '../lib/missing-links.js'
 
 const DEFAULT_API_ROOT = 'http://127.0.0.1:3456'
 const REQUEST_TIMEOUT_MS = 10_000
@@ -491,33 +492,42 @@ export async function executeOp(
     return once && op.handler ? withEarlierWrites(outcome, base, prov) : outcome
   }
   const outcome = once ? await runOnce(once, op.name, args, explicitSid, run) : await run()
-  // Text a session hands on that names a draft in a temp dir gets one line back (tmp-draft-path.ts).
-  return human || pluginId ? outcome : withTmpPathNote(op.name, args, outcome, origin, explicitSid)
+  // Text a session hands on gets one line back when it names a draft in a temp dir (tmp-draft-path.ts)
+  // or, for the user, an id with no link to open it (missing-links.ts).
+  return human || pluginId ? outcome : withHandedTextNote(op.name, args, outcome, origin, explicitSid)
 }
 
 /**
- * A session's successful op whose arguments name a draft, plan or evidence path in a temp dir:
- * the result carries `walnut_note` asking it to move the file into its task directory and send
- * the new path. In the session's own process (WALNUT_TASK_DIR set: its MCP server, its CLI) and
- * on the server answering a session (a gateway call); never for a person or a plugin.
+ * A session's successful op whose arguments hand on text that needs one more step, as `walnut_note`
+ * on its result:
+ *  - a draft, plan or evidence path in a temp dir: move the file into the task directory and send
+ *    the new path (tmp-draft-path.ts; WALNUT_TMP_WRITE_NOTE=0 turns it off);
+ *  - words for the user (a thread summary, a letter, a Needs you ask) naming a code review, ticket,
+ *    pull request or commit with no link: add its full URL (missing-links.ts; WALNUT_LINK_NOTE=0).
+ * In the session's own process (WALNUT_TASK_DIR set: its MCP server, its CLI) and on the server
+ * answering a session (a gateway call); never for a person or a plugin.
  */
-function withTmpPathNote(name: string, args: Record<string, unknown>, outcome: OpOutcome, origin: string, sid: string | undefined): OpOutcome {
-  if (!outcome.ok || !isPlainObject(outcome.result) || process.env.WALNUT_TMP_WRITE_NOTE === '0') return outcome
+function withHandedTextNote(name: string, args: Record<string, unknown>, outcome: OpOutcome, origin: string, sid: string | undefined): OpOutcome {
+  if (!outcome.ok || !isPlainObject(outcome.result)) return outcome
   // This process is the calling session's own (its MCP server, its CLI) only when it runs under
   // that session's id: a server started from a task's shell inherits a task directory too.
   const self = process.env.WALNUT_SESSION_ID?.trim()
   const own = !sid || sid === self ? process.env.WALNUT_TASK_DIR?.trim() : undefined
   if (!own && !sid) return outcome
+  const notes: string[] = []
   try {
-    const note = opTmpPathNote(name, args, {
+    const tmp = process.env.WALNUT_TMP_WRITE_NOTE === '0' ? null : opTmpPathNote(name, args, {
       taskDir: own || TASK_DIR_VAR,
       ...(own && process.env.TMPDIR ? { tmpdir: process.env.TMPDIR } : {}),
       checkDisk: !!own || !isRemoteHostOrigin(origin),
     })
-    return note ? { ...outcome, result: { ...outcome.result, walnut_note: note } } : outcome
-  } catch {
-    return outcome
-  }
+    if (tmp) notes.push(tmp)
+  } catch { /* a note never fails the call */ }
+  try {
+    const links = process.env.WALNUT_LINK_NOTE === '0' ? null : opMissingLinksNote(name, args)
+    if (links) notes.push(links)
+  } catch { /* a note never fails the call */ }
+  return notes.length ? { ...outcome, result: { ...outcome.result, walnut_note: notes.join(' ') } } : outcome
 }
 
 /**

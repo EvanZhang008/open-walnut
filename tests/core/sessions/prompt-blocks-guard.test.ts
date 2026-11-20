@@ -107,7 +107,8 @@ describe('every block of a composed prompt is within its cap, every prompt withi
 
   it('is far below the prompts measured before the caps', async () => {
     const [main, ask] = await Promise.all([composeRolePrompt('main'), composeRolePrompt('ask')])
-    expect(main.chars).toBeLessThan(90_745 / 2 + 2_000)
+    // +300 on 2026-11-20 for the user's full-URL rule (team charter and the decision line, ~230 characters).
+    expect(main.chars).toBeLessThan(90_745 / 2 + 2_300)
     expect(ask.chars).toBeLessThan(66_030 / 2)
   })
 })

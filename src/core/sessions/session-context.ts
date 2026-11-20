@@ -224,14 +224,16 @@ export const MAIN_FOLLOW_LINE = ORG_FOLLOW_LINE + 'What you learn goes into your
  * 2h. A decision for the user carries its context (2026-10-26, the user, after Main passed on a
  * lead's nine-item list almost word for word: no item said which task it came from, what that
  * task does, or what was being decided). The same for Main and for every lead that reports to
- * Main, in their default prompt rather than in a memory. Ratchet:
+ * Main, in their default prompt rather than in a memory. 2026-11-20, the user: "make sure u have all the
+ * necesary info, like link i cna just lcick": the links are full URLs, never ids. Ratchet:
  * tests/core/sessions/decision-context-rule.test.ts.
  */
 export const DECISION_CONTEXT_LINE =
   'A decision for the user goes to them with its context, never as a bare list. Each item says: which task '
   + '(its <task-ref/>) and what that task is for, in one sentence; what happened and why it came to this; the '
   + 'decision itself, in one sentence; the options and what each one leads to; which one you recommend and why; '
-  + 'and the direct links (the code review, the ticket, the chat thread, the pipeline). No account ids, and no '
+  + 'and the links, each a full URL the user can click (the code review, the ticket, the pull request, the chat thread, '
+  + 'the pipeline). No account ids, and no '
   + 'internal tracker codes unless you explain them.'
 
 export const MAIN_DECISION_LINE =

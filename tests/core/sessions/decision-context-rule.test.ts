@@ -31,7 +31,7 @@ describe('the decision-with-context rule', () => {
       /the decision itself, in one sentence/,
       /the options and what each one leads to/,
       /which one you recommend and why/,
-      /direct links \(the code review, the ticket, the chat thread, the pipeline\)/,
+      /the links, each a full URL the user can click \(the code review, the ticket, the pull request, the chat thread, the pipeline\)/,
       /No account ids, and no internal tracker codes unless you explain them/,
     ]) expect(DECISION_CONTEXT_LINE).toMatch(re)
   })

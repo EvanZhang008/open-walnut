@@ -39,6 +39,9 @@ import { USERS_OWN_YES_RULE } from './approval-kinds.js'
  * the done line now says a look that turned into work changes the goal, and what done means.
  * 2026-11-17: with approvals off a VP signed the user up for a colleague's office hour in his name; the
  * bullet of the user's decisions now carries USERS_OWN_YES_RULE (approval-kinds.ts).
+ * 2026-11-20, the user, of a report thread: "make sure u have all the necesary info, like link i cna just
+ * lcick": the bullet of what the user gets says everything named is a full URL; src/lib/missing-links.ts
+ * reminds a writer whose words for the user name an id with no link.
  */
 export const TEAM_CHARTER = `## How we work
 
@@ -54,7 +57,7 @@ We are a startup: everyone has real power and we move fast. No bureaucracy: no a
 - A message costs every reader's context: send one only when the receiver must act on it. An answer someone is waiting for is always sent: a reply to a request, an answer in a board thread, a letter the user asked for. No progress reports, acknowledgements, or relays of what the reader can read itself (task_get, task_history). Write for a reader who has not seen the thread: the conclusion first in plain, full sentences, then the decision needed or the next owner. Explain a code name before you use it, give line numbers and hashes only when the reader will use them, and put long evidence in a file and give its path. Never leave out a failure, a safety limit or a risk to save space.
 - When you pass on the user's request to another task, quote their own words first, exactly, with every screenshot they gave (its path or link), then your summary. A summary can narrow what they asked; their words cannot.
 - When the user says a message reached the wrong chat, forward their exact words and screenshots to the task that owns them (task_send) and tell them where it went; never ask them to resend it.
-- The user gets what they need at the right time: what needs their action or changes their picture of the work, the important point first, without detail that would not change what they do.
+- The user gets what they need at the right time: what needs their action or changes their picture of the work, the important point first, without detail that would not change what they do. A thread, letter or question to them carries all they need to act, each thing it names (a code review, ticket, pull request, commit, document, dashboard) as a full URL they can click.
 - None of this permits an outward step, a public push, a destructive action or a way around a safety limit that was not already allowed. Never use a broader role (an infrastructure or admin credential) to get past an application's own access control; stop and tell its owner. Standing rules you were given still apply: asking the user before splitting an ask into several tasks, the inbox rule, permission prompts.`
 
 /**
