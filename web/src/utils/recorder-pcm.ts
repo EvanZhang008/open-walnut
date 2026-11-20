@@ -65,6 +65,11 @@ export class RecorderPcm implements PcmSource {
 
   constructor(private readonly decode: DecodeAudio) {}
 
+  /** How many times the recorder wrote each 10 ms of sound (0: not known yet, 1: once). */
+  get repeatFactor(): number {
+    return this.repeat === null ? 0 : this.repeat === 'none' ? 1 : this.repeat.factor;
+  }
+
   get totalSamples(): number {
     return this.total;
   }

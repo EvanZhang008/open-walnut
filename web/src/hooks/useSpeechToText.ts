@@ -228,6 +228,8 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
   // recorder started, to tell at stop how much audio the capture delivered.
   const micHealthRef = useRef<MicHealthState>(initialMicHealth());
   const recordStartedAtRef = useRef(0);
+  // When the first live words showed in this take (0: none yet), for the take's timing line.
+  const firstWordsAtRef = useRef(0);
   // One sample per level tick, for the stop-time "where did the audio go" line.
   const timelineRef = useRef<CaptureSample[]>([]);
   const recBytesRef = useRef(0);
@@ -503,6 +505,18 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
 
       recorder.onstop = async () => {
         // Recording is only ever stopped by the user (or unmount) — we never auto-stop.
+        const stoppedAt = Date.now();
+        const startedAt = recordStartedAtRef.current;
+        const firstWordsAt = firstWordsAtRef.current;
+        const repeatFactor = recPcmRef.current?.repeatFactor ?? 0;
+        // One line per take that the daily voice review reads: how long the
+        // live words took to show, and the whole-clip text after the stop.
+        const logTiming = (chars: number, engineMs: number | null) => log.info('stt', 'take timing', {
+          recordMs: startedAt ? stoppedAt - startedAt : null,
+          firstWordsMs: firstWordsAt && startedAt ? firstWordsAt - startedAt : null,
+          stopToTextMs: Date.now() - stoppedAt,
+          engineMs, chars, repeatFactor, source: liveSourceRef.current ?? 'none',
+        });
         const health = analyserAttachedRef.current ? micHealthRef.current : null;
         stopStream();
         setIsRecording(false);
@@ -658,11 +672,13 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
             }
             const preview = finalText.length > 50 ? finalText.slice(0, 50) + '...' : finalText;
             log.info('stt', `Transcribed: "${preview}" (${tookMs}ms${via})`);
+            logTiming(finalText.length, tookMs);
           } else {
             // An empty transcription used to fail SILENTLY — spinner ends, nothing
             // appears, and the user thinks the recording was eaten. Surface it; the
             // audio is kept in lastAudioRef so Retry can still recover it.
             log.warn('stt', `Transcription returned empty text (${tookMs}ms)`);
+            logTiming(0, tookMs);
             setVoiceStatus({ transcribing: false, lastFailed: true });
             if (isMountedRef.current) {
               // A preview is not the text: with it still in the box, this is an
@@ -709,6 +725,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
       const decode = browserDecoder();
       recPcmRef.current = decode ? new RecorderPcm(decode) : null;
       recordStartedAtRef.current = Date.now();
+      firstWordsAtRef.current = 0;
       setIsRecording(true);
       setMicOpening(false);
       setIsDrafting(false);
@@ -814,6 +831,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
                 const display = joinSegments(confirmedRef.current, text);
                 if (display) {
                   setIsDrafting(true);
+                  if (!firstWordsAtRef.current) firstWordsAtRef.current = Date.now();
                   lastDraftRef.current = display;
                   onDraftRef.current?.(display);
                 }
@@ -915,6 +933,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
           const { text } = await draftTranscribe(base64, draftFormat, languageRef.current, abort.signal);
           if (isMountedRef.current && mediaRecorderRef.current === recorder && text) {
             setIsDrafting(true);
+            if (!firstWordsAtRef.current) firstWordsAtRef.current = Date.now();
             lastDraftRef.current = text;
             onDraftRef.current?.(text);
           }

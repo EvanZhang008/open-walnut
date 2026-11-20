@@ -112,5 +112,16 @@ describe('ratchet: Web Audio taps of the mic', () => {
       expect(/convertToWav\(|audioForUpload\(/.test(src), `${f} reads repaired audio`).toBe(true);
     }
   });
+
+  it('every take that comes back logs its timing for the daily voice review', () => {
+    // 2026-11-20, the user asked for two weeks of daily checks on accuracy and
+    // time; the review reads this line from the forwarded browser log.
+    const hook = readFileSync(join(ROOT, 'web/src/hooks/useSpeechToText.ts'), 'utf8');
+    const stop = hook.slice(hook.indexOf('recorder.onstop = async'), hook.indexOf('recorder.onerror ='));
+    expect(stop).toMatch(/log\.info\('stt', 'take timing', \{/);
+    for (const field of ['recordMs', 'firstWordsMs', 'stopToTextMs', 'engineMs', 'repeatFactor']) expect(stop).toContain(field);
+    // Logged after the text, whether or not it came back empty.
+    expect((stop.match(/logTiming\(/g) ?? []).length).toBeGreaterThanOrEqual(2);
+  });
 });
 
