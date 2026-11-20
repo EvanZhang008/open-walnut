@@ -48,6 +48,7 @@ export function PoppedThreadCard({ node, t, state }: { node: string; t: OrgThrea
       const back = await replyOnOrgThread(node, t.id, text, t.ask_id, key.current.key);
       key.current = null;
       if (back.message) setSent(back.message);
+      state.heard(t.id, back.thread);
       return true;
     } catch (err) {
       log.warn('org-threads', 'reply below not sent', { taskId: node, threadId: t.id, owner: owner.task_id, error: err instanceof Error ? err.message : String(err) });

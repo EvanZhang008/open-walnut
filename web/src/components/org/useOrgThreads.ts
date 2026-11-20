@@ -14,6 +14,26 @@ export interface OrgThreadsState {
   error: string | null;
   update: (threadId: string, patch: OrgThreadPatch) => Promise<boolean>;
   split: (threadId: string, messageId: string) => Promise<boolean>;
+  /**
+   * His reply on a thread went (a card's box, a choice, a Follow up): the thread is drawn as the
+   * server files it at once (his message makes it working, out of Needs you), `saved` when the
+   * server answered with the record, and a read already out is dropped (2026-11-20, the user: a
+   * card he replied on stayed in Needs you; on his data a read takes seconds).
+   */
+  heard: (threadId: string, saved?: OrgThread, words?: string) => void;
+}
+
+/**
+ * A thread he just wrote on, as the server files it: working (the node's move), its held ask
+ * answered, his words on it until the next read brings the filed message. Pure.
+ */
+export function heardOn(t: OrgThread, saved?: OrgThread, words?: string, at: string = new Date().toISOString()): OrgThread {
+  if (t.closed) return saved ? { ...t, ...saved } : t;
+  const { heldAsk: _h, ...rest } = t;
+  // The record the server answered with is the owner's own: what the list adds (its owner, can_answer_now) stays.
+  const merged = saved ? { ...rest, ...saved }
+    : words?.trim() ? { ...rest, messages: [...rest.messages, { id: `local-${at}`, at, text: words, via: 'follow-up' as const }] } : rest;
+  return merged.state === 'needs' || merged.state === 'answered' || merged.state === 'pending' || merged.state === 'new' ? { ...merged, state: 'working' } : merged;
 }
 
 /** What a close, reopen, snooze or pin looks like before the server answers. */
@@ -241,5 +261,15 @@ export function useOrgThreads(taskId: string | undefined, enabled: boolean): Org
     }
   }, [taskId, load]);
 
-  return { threads, error: writeError ?? error, update, split };
+  const heard = useCallback((threadId: string, saved?: OrgThread, words?: string): void => {
+    if (!taskId) return;
+    const node = nodeOf(taskId);
+    // A read out now started before his reply was filed: its answer must not draw the card back.
+    node.seq++;
+    if (node.read) node.read = node.read.map((t) => (t.id === threadId ? heardOn(t, saved, words) : t));
+    redraw(taskId);
+    void load('write');
+  }, [taskId, load]);
+
+  return { threads, error: writeError ?? error, update, split, heard };
 }

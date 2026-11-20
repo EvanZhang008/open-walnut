@@ -289,11 +289,19 @@ test('on, Threads by state: his reply moves the card out of Needs you to Working
     const group = (g: string) => page.locator(`[data-testid="org-thread-group"][data-group="${g}"]`)
     const inGroup = (g: string) => group(g).locator(`[data-testid="org-thread"][data-thread-id="${id}"]`)
     await expect(inGroup('needs')).toBeVisible({ timeout: 20_000 })
+    // On his data a read of the lead's Threads takes seconds (2026-11-20, on a copy of it: 2 to 4 s,
+    // and a read started before his reply could draw the card back): the reads are held 6 s from
+    // here, so only the card's own answer can move it.
+    await page.route(`**/api/v1/tasks/${ids.lead}/threads*`, async (route) => {
+      if (route.request().method() !== 'GET') return route.continue()
+      await new Promise((r) => setTimeout(r, 6_000))
+      return route.continue().catch(() => {})
+    })
     await inGroup('needs').getByTestId('org-thread-popped-input').click()
     await page.keyboard.type(WORDS, { delay: 10 })
     await inGroup('needs').getByTestId('org-thread-popped-send').click()
     // Out of Needs you at once; in Working, with his words and that the task has not read them.
-    await expect(inGroup('needs')).toHaveCount(0, { timeout: 5_000 })
+    await expect(inGroup('needs')).toHaveCount(0, { timeout: 1_500 })
     const working = group('working')
     await expect(working).toBeVisible()
     if ((await working.getAttribute('data-open')) !== 'true') await working.getByTestId('org-thread-group-head').click()

@@ -286,7 +286,7 @@ function NeedsAnswer({ t, owner, onFollowUp, snoozed, state, pinned }: {
     if (!onFollowUp) return false;
     setFailed(false);
     const ok = await onFollowUp(t.id, label).catch(() => false);
-    if (!ok) setFailed(true); else setSentFor(t.updatedAt);
+    if (!ok) setFailed(true); else { setSentFor(t.updatedAt); state.heard(t.id, undefined, label); }
     return ok;
   };
   const sent = sentFor === t.updatedAt;
@@ -302,7 +302,7 @@ function NeedsAnswer({ t, owner, onFollowUp, snoozed, state, pinned }: {
         {/* The thread's one box, the same on every open card. */}
         <FollowUp threadId={t.id} title={t.title} owner={owner} onSend={async (text, images) => {
           const ok = await onFollowUp(t.id, text, images);
-          if (ok) setSentFor(t.updatedAt);
+          if (ok) { setSentFor(t.updatedAt); state.heard(t.id, undefined, text); }
           return ok;
         }} />
       </>) : undefined}
