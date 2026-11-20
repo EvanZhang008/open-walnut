@@ -17,7 +17,7 @@
   flex: none; font-size: 10.5px; padding: 0 6px; border-radius: 8px; line-height: 16px;
   color: var(--accent, #0a84ff); border: 1px solid color-mix(in srgb, var(--accent, #0a84ff) 45%, transparent);
 }
-.status-card-actions-below { padding: 0 8px 4px 34px; }
+.status-card-actions-below, .todo-row-actions-below { padding: 0 8px 4px 34px; }
 
 /* The strip under a session's title bar (experiment action_needed_everywhere): the same items, the
    first two in sight and "N more" for the rest. It never scrolls by itself: a box's @ and / lists

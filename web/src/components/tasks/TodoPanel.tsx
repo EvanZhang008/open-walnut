@@ -1402,10 +1402,11 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
         )}
         {/* Why the task is outside the current filters (focus override, spec 5.12). */}
         {filterOverrideReason}
-        {/* What it asks of the user, each with its answer and its own Snooze (ActionNeeded). */}
-        {!isDone && task.user_status?.actions?.length ? <ActionNeeded task={task} /> : null}
       </div>
     </div>
+    {/* What it asks of the user, each with its answer and its own Snooze (ActionNeeded): under the
+        row, never inside it, as the row is a button and a box to type in cannot live in one. */}
+    {!isDone && task.user_status?.actions?.length ? <div className="todo-row-actions-below" data-asks-for={task.id}><ActionNeeded task={task} /></div> : null}
     </>
   );
 });

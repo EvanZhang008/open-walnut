@@ -5,6 +5,7 @@
  * there with no click, and no "Reply…" opener is anywhere in the block. GUARDED names the kinds this
  * spec plays; tests/web/ask-card-words-guard.test.ts fails on a kind it does not.
  *
+ * No card sits inside an element that is a button (a row is one).
  * The card's layout is checked here too: a wide column keeps the buttons and Snooze beside the box;
  * a narrow one puts them on the line below (the user: "最后一行就显示……snooze……或者说那个可以和
  * input box 放一行也可以，就说不要显得那么的拥挤").
@@ -15,7 +16,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { holdApprovalsLock } from './approvals-lock'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { endRunningTurn, presetPanelDesign, setStatusSectionOpen, showSectionCard, startRunningTurn } from './status-section-helpers'
+import { asksOf, endRunningTurn, presetPanelDesign, setStatusSectionOpen, showSectionCard, startRunningTurn } from './status-section-helpers'
 
 /** The kinds this spec plays: every ActionKind (the guard test reads this list). */
 export const GUARDED = ['approval', 'question', 'permission', 'letter', 'choice', 'ask'] as const
@@ -50,7 +51,7 @@ async function startSession(request: APIRequestContext, taskId: string, message:
 const kindsOf = async (request: APIRequestContext, id: string) =>
   (((await (await request.get(`/api/tasks/${id}`)).json()).task?.user_status?.actions ?? []) as Array<{ kind: string }>).map((a) => a.kind).join(',')
 
-const itemOf = (card: Locator, kind: string) => card.locator(`[data-testid="action-item"][data-kind="${kind}"]`)
+const itemOf = (card: Locator, kind: string) => asksOf(card).locator(`[data-testid="action-item"][data-kind="${kind}"]`)
 /** The box to type in: the shared words box, or a question card's own "Other…" line. */
 const wordsOf = (item: Locator) => item.locator('[data-testid="org-answer-input"], .nfc-answer-input').first()
 
@@ -123,9 +124,12 @@ test('every kind shows its box to type in, with no click and no "Reply…"', asy
     await expect(item.getByRole('button', { name: /^(Reply|Other)…$/ }), `${kind}: no opener`).toHaveCount(0)
     // No heading, kind word or age on it: what it asks, a line of why, the box and its buttons.
     // The block's heading is for a screen reader only.
-    expect((await card.locator('.action-needed-title').boundingBox())?.width ?? 0).toBeLessThanOrEqual(1)
+    expect((await asksOf(card).locator('.action-needed-title').boundingBox())?.width ?? 0).toBeLessThanOrEqual(1)
     await expect(item.getByTestId('action-kind')).toHaveCount(0)
     await expect(item.getByTestId('action-snooze')).toBeVisible()
+    // Never inside a button: a row that is a button reads its insides as one name, so its box to type
+    // in and its buttons would be lost to a screen reader.
+    expect(await item.evaluate((el) => !!el.parentElement?.closest('[role="button"], button')), `${kind}: inside a button`).toBe(false)
   }
   // A line of why under what it asks, when it has one.
   const ask = itemOf(await showSectionCard(page, 'needs', ids.ask), 'ask')
@@ -148,7 +152,7 @@ test('a reply that fails keeps its words in the box, and the box is its own', as
     if (refused++ === 0) await route.fulfill({ status: 500, body: '{"error":"down"}', contentType: 'application/json' })
     else await route.continue()
   })
-  const letter = () => itemOf(page.locator('body'), 'letter').first()
+  const letter = () => page.locator('[data-testid="action-item"][data-kind="letter"]').first()
   const box = () => letter().getByTestId('org-answer-input')
   await showSectionCard(page, 'needs', ids.letter)
   await box().fill(`Sign it on Friday ${STAMP}`)
@@ -176,6 +180,10 @@ test('wide: the buttons and Snooze beside the box; narrow: on the line under it'
     expect(Math.abs((await mid(snooze())) - (await mid(box()))), 'Snooze beside the box').toBeLessThan(10)
   }
   await page.screenshot({ path: `test-results/ask-card-wide-${test.info().project.name}.png`, clip: (await item.boundingBox())! })
+  // The row and its asks under it, as the list draws them.
+  const row = (await (await showSectionCard(page, 'needs', ids.ask)).boundingBox())!
+  const under = (await item.boundingBox())!
+  await page.screenshot({ path: `test-results/ask-card-row-${test.info().project.name}.png`, clip: { x: row.x, y: row.y, width: row.width, height: under.y + under.height - row.y } })
   // A narrow window: the list's column is under 600 px.
   await page.setViewportSize({ width: 820, height: 900 })
   await expect.poll(async () => (await item.boundingBox())?.width ?? 0).toBeLessThan(600)

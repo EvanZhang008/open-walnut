@@ -92,6 +92,9 @@ export async function setStatusSectionOpen(scope: Page | Locator, key: StatusSec
  * task's card is drawn (the shared fixture board may hold many waiting or completed
  * tasks from other specs).
  */
+/** A row's asks (ActionNeeded): drawn right under the row, never inside it (the row is a button). */
+export const asksOf = (row: Locator): Locator => row.locator('xpath=following-sibling::*[1][@data-asks-for]')
+
 export async function showSectionCard(scope: Page | Locator, key: StatusSectionKey, taskId: string, maxClicks = 40): Promise<Locator> {
   const card = statusSectionCard(scope, key, taskId)
   const more = scope.getByTestId(`status-section-${key}-more`).first()

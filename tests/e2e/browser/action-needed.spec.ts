@@ -16,7 +16,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { holdApprovalsLock } from './approvals-lock'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { endRunningTurn, presetPanelDesign, setStatusSectionOpen, showSectionCard, startRunningTurn } from './status-section-helpers'
+import { asksOf, endRunningTurn, presetPanelDesign, setStatusSectionOpen, showSectionCard, startRunningTurn } from './status-section-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
@@ -60,8 +60,8 @@ async function openHome(page: Page): Promise<void> {
   await setStatusSectionOpen(page, 'needs', true)
 }
 
-const block = (card: Locator) => card.getByTestId('action-needed')
-const line = (card: Locator, kind: string) => card.locator(`[data-testid="action-item"][data-kind="${kind}"]`)
+const block = (card: Locator) => asksOf(card).getByTestId('action-needed')
+const line = (card: Locator, kind: string) => asksOf(card).locator(`[data-testid="action-item"][data-kind="${kind}"]`)
 
 test.beforeAll(async ({ request }) => {
   test.setTimeout(420_000)
@@ -132,7 +132,7 @@ test('an approval asked while the task works: Needs you, still Working, approved
   // In sight, clear of the corner (a row under the corner card is not in sight).
   await item.evaluate((el) => el.scrollIntoView({ block: 'start' }))
   await expect(page.locator(`[data-testid="corner-stack"] [data-testid="approval-card"][data-approval-id="${asked.approval.id}"]`)).toHaveClass(/approval-card-line/, { timeout: 15_000 })
-  await page.screenshot({ path: `test-results/action-needed-approval-${test.info().project.name}.png`, clip: (await card.boundingBox())! })
+  await page.screenshot({ path: `test-results/action-needed-approval-${test.info().project.name}.png`, clip: (await item.boundingBox())! })
 
   // A click inside the block answers; it never opens the row's task.
   await item.getByRole('button', { name: 'Approve' }).click()

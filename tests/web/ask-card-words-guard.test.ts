@@ -7,6 +7,7 @@
  * - No component that answers an ask draws an opener for its words ("Reply…", "Other…" buttons,
  *   the old OtherWords / org-answer-other), and the words box never takes the focus by itself.
  */
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -22,6 +23,18 @@ const ANSWER_FILES = [
   'web/src/components/actions/AskCard.tsx',
   'web/src/components/org/OrgTaskRail.tsx',
 ]
+
+describe('an ask card never sits inside a row that is a button', () => {
+  // A row is a button (role="button", a dnd-kit handle): a screen reader reads a button's insides as
+  // its name alone, so a box to type in or a card's own buttons inside one are lost. Every place that
+  // draws the cards on a task's row puts them under the row, in its "...-actions-below" holder.
+  it('every row that draws the cards draws them under it', () => {
+    const out = execFileSync('git', ['grep', '-n', '--untracked', '<ActionNeeded\\b', '--', 'web/src'], { cwd: ROOT, encoding: 'utf8' })
+    const uses = out.split('\n').filter(Boolean).filter((l) => !/variant="strip"/.test(l))
+    expect(uses.length, 'rows that draw the cards').toBeGreaterThan(0)
+    for (const line of uses) expect(line, 'drawn in an "...-actions-below" holder under its row').toMatch(/className="[a-z-]*-actions-below" data-asks-for=\{task\.id\}><ActionNeeded\b/)
+  })
+})
 
 describe('an ask shows its words box at once', () => {
   it('the browser spec plays every kind of item', () => {

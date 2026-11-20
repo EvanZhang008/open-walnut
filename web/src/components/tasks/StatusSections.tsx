@@ -372,7 +372,6 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
           </span>
           {title}
           {reasonBelow ? shownReason : null}
-          {asks ? <ActionNeeded task={task} /> : null}
           {team && fold ? <FoldSummaryLine host={task} entries={team} ctl={fold} /> : null}
         </span>
       ) : (
@@ -412,8 +411,9 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
       />
     </div>
   );
-  // One line (a project's folds) has no room in the row: the asks go right under it.
-  const below = asks && !twoLine ? <div className="status-card-actions-below"><ActionNeeded task={task} /></div> : null;
+  // The asks go right under the row, never inside it: the row is a button, and a box to type in or
+  // its own buttons cannot live in one (a screen reader reads a button's insides as its name only).
+  const below = asks ? <div className="status-card-actions-below" data-asks-for={task.id}><ActionNeeded task={task} /></div> : null;
   if (!team || !fold || !fold.isOpen(task.id)) return below ? <>{card}{below}</> : card;
   return (
     <>

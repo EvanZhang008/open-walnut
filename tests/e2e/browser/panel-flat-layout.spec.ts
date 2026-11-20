@@ -10,7 +10,7 @@ import { test, expect } from './shortcut-test-fixture'
 import type { Page } from '@playwright/test'
 import { isolateUiPrefs, selectSection } from './todo-panel-helpers'
 import { closeDisplayMenu, displayMenu, openDisplayMenu } from './filter-bar-helpers'
-import { endRunningTurn, presetPanelDesign, setStatusSectionOpen, showSectionCard, startRunningTurn, statusSectionRows } from './status-section-helpers'
+import { asksOf, endRunningTurn, presetPanelDesign, setStatusSectionOpen, showSectionCard, startRunningTurn, statusSectionRows } from './status-section-helpers'
 import { openHome } from './home-navigation-helpers'
 
 // The fixture server is shared: every task made here goes again (other specs measure the panel).
@@ -93,7 +93,7 @@ test.describe('Flat layout', () => {
     const waitingRow = await showSectionCard(panel, 'waiting', waiting)
     // The ask is the row's Action needed item, shown whether or not the status line is: never a
     // second copy as its status line (the row block, 2026-11-19).
-    const askOnRow = needsRow.locator('[data-testid="action-item"][data-kind="ask"]').getByTestId('action-summary')
+    const askOnRow = asksOf(needsRow).locator('[data-testid="action-item"][data-kind="ask"]').getByTestId('action-summary')
     await expect(askOnRow).toContainText('Which date should the rollout use?')
     await expect(needsRow.getByTestId('status-card-needs-line')).toHaveCount(0)
     await expect(waitingRow.getByTestId('status-card-reason')).toHaveCount(0)

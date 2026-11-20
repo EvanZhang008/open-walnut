@@ -21,7 +21,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { holdApprovalsLock } from './approvals-lock'
 import { loadHome, seedColumns } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { endRunningTurn, presetPanelDesign, setStatusSectionOpen, showSectionCard, startRunningTurn } from './status-section-helpers'
+import { asksOf, endRunningTurn, presetPanelDesign, setStatusSectionOpen, showSectionCard, startRunningTurn } from './status-section-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
@@ -139,7 +139,7 @@ test.afterAll(async ({ request }) => {
 test('a letter answered in the session\'s strip leaves its row; the VP\'s Threads show no team asks', async ({ page, request }) => {
   await openHome(page, ids.letterSid)
   const card = await showSectionCard(page, 'needs', ids.letter)
-  await expect(line(card, 'letter').getByRole('button', { name: 'Sign it' })).toBeVisible({ timeout: 30_000 })
+  await expect(line(asksOf(card), 'letter').getByRole('button', { name: 'Sign it' })).toBeVisible({ timeout: 30_000 })
   const strip = stripOf(page, ids.letterSid)
   await expect(line(strip, 'letter').getByRole('button', { name: 'Sign it' })).toBeVisible()
   // The strip sits under the title bar, above the chat.
@@ -166,7 +166,7 @@ test('an approval approved in the session\'s strip leaves its row', async ({ pag
     { what: `Deploy build 1182 to staging ${STAMP}`, cwd, command: 'deploy.sh' }, { 'x-walnut-caller-sid': ids.approvalSid })
   await expect.poll(() => kinds(request, ids.approval), { timeout: 30_000 }).toBe('approval')
   const card = await showSectionCard(page, 'needs', ids.approval)
-  await expect(line(card, 'approval')).toBeVisible()
+  await expect(line(asksOf(card), 'approval')).toBeVisible()
   const strip = stripOf(page, ids.approvalSid)
   await expect(line(strip, 'approval').getByTestId('action-summary')).toHaveText(`Deploy build 1182 to staging ${STAMP}`)
   await line(strip, 'approval').getByRole('button', { name: 'Approve' }).click()
@@ -188,7 +188,7 @@ test('the session\'s own question points at its card below; answered on the row,
   await expect(promptCard).toBeInViewport({ timeout: 10_000 })
 
   const card = await showSectionCard(page, 'needs', ids.question)
-  const row = line(card, 'question')
+  const row = line(asksOf(card), 'question')
   await row.locator('.nfc-answer-opt', { hasText: 'Local' }).click()
   await row.getByRole('button', { name: 'Submit' }).click()
   await expect.poll(async () => ((await (await request.get(`/api/sessions/${ids.questionSid}`)).json()).session?.pendingPermission ?? null), { timeout: 30_000 }).toBeNull()
@@ -224,7 +224,7 @@ test('three asks: the strip shows the first two and "1 more"; a snooze in the st
   await page.locator('.snooze-row[data-snooze="one-hour"]').click()
   await expect(first.getByTestId('action-snoozed-until')).toContainText('Snoozed until', { timeout: 15_000 })
   const card = await showSectionCard(page, 'needs', ids.letter)
-  const onRow = card.locator(`[data-testid="action-item"][data-item-id="${firstId}"]`)
+  const onRow = asksOf(card).locator(`[data-testid="action-item"][data-item-id="${firstId}"]`)
   await expect(onRow.getByTestId('action-snoozed-until')).toContainText('Snoozed until', { timeout: 30_000 })
   // Unsnooze it on the row: the strip's line is back too, not held by its own earlier snooze.
   await onRow.getByTestId('action-unsnooze').click()
@@ -236,7 +236,7 @@ test('three asks: the strip shows the first two and "1 more"; a snooze in the st
 test('a reply typed on the row answers the letter: its task gets the words, and it leaves the strip', async ({ page, request }) => {
   await openHome(page, ids.letterSid)
   const card = await showSectionCard(page, 'needs', ids.letter)
-  const item = card.locator('[data-testid="action-item"][data-kind="letter"]', { hasText: `Paint the hall ${STAMP}?` })
+  const item = asksOf(card).locator('[data-testid="action-item"][data-kind="letter"]', { hasText: `Paint the hall ${STAMP}?` })
   const itemId = (await item.getAttribute('data-item-id'))!
   const strip = stripOf(page, ids.letterSid)
   await strip.getByTestId('action-needed-more').click().catch(() => {})
@@ -289,7 +289,7 @@ test('the switch off: no strip', async ({ page, request }) => {
   await setFlag(request, false)
   await openHome(page, ids.letterSid)
   const card = await showSectionCard(page, 'needs', ids.letter)
-  await expect(card.getByRole('button', { name: 'Renew', exact: true })).toBeVisible({ timeout: 30_000 })
+  await expect(asksOf(card).getByRole('button', { name: 'Renew', exact: true })).toBeVisible({ timeout: 30_000 })
   await expect(stripOf(page, ids.letterSid)).toHaveCount(0)
   await setFlag(request, true)
 })
