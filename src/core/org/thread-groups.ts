@@ -13,7 +13,8 @@ export { backFromKnown, isKnown, type AckWaits } from './thread-known.js';
 /**
  * The state group a thread is drawn in once the Brief is off (experiment brief_off): his Threads
  * by state take the Brief's place, and a Board card's status reads its task's threads the same way.
- *   needs    waits on him (a decision, his pick); a thread of a task below listed above it
+ *   needs    waits on him (a decision, his pick), a thread of a task below included
+ *            (one listed above only because his reply is on its way there reads by its state)
  *   read     answered, with words he has not read (listed for him)
  *   known    he acknowledged it while its work ran, and it still waits (thread-known.ts)
  *   working  the node's move (new, working)
@@ -31,7 +32,10 @@ export const THREAD_GROUP_LABELS: Record<ThreadGroup, string> = {
 
 export function threadGroupOf(t: ViewThread & { state: string }, listed: boolean, now: number = Date.now()): ThreadGroup {
   if (t.closed) return 'done';
-  if (t.owner) return listed ? 'needs' : 'waiting';
+  // A thread of a task below is listed while it waits on him or while his reply is on its way
+  // there: only the first is his to answer; the second is the task's move (2026-11-20, the user:
+  // a card he had replied on stayed in Needs you).
+  if (t.owner && !listed) return 'waiting';
   if (snoozedNow(t, now)) return 'waiting';
   // Its decision is asked in a task: he answers it there, so it waits here (thread-task-ask.ts).
   if (t.askedIn && !t.askedIn.answered) return 'waiting';

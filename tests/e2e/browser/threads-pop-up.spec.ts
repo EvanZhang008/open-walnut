@@ -263,3 +263,48 @@ test('on: his reply stays on the card through a redraw while the task has not re
   await expect(popped).toHaveCount(0, { timeout: 20_000 })
   expect(pageErrors).toEqual([])
 })
+
+// 2026-11-20, the user, on a card he had answered that stayed in Needs you: "why this even keep
+// showing after I replied?". With his Threads by state (brief_off), his reply moves the card out of
+// Needs you at once to Working (the task's move), his words on it, before the task reads them.
+test('on, Threads by state: his reply moves the card out of Needs you to Working, his words on it', async ({ page, request }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (err) => pageErrors.push(err.message))
+  const WORDS = `Delete the two long notes, just do it ${STAMP}`
+  const opened = await post<{ thread: { id: string } }>(request, `/api/v1/tasks/${ids.owner}/threads/open`, {
+    title: `Long notes ${STAMP}`, text: `The first note is short now; delete the two long ones? ${STAMP}`, state: 'needs', from: 'node',
+    user_kind: 'user_own', user_kind_why: 'They are his own notes.',
+  }, ids.ownerSid)
+  const id = opened.thread.id
+  await flag(request, true)
+  const briefOff = await request.put('/api/config', { data: { experimental: { brief_off: true } } })
+  expect(briefOff.ok(), await briefOff.text()).toBe(true)
+  try {
+    // The task is busy in a long turn, so his reply is still on its way while the card is read.
+    const busy = await request.post(`/api/v1/sessions/${ids.ownerSid}/messages`, { data: { text: 'snapshot-long-turn:25000' } })
+    expect(busy.ok(), await busy.text()).toBe(true)
+    await isolateUiPrefs(page)
+    await loadHome(page)
+    await openLead(page)
+    const group = (g: string) => page.locator(`[data-testid="org-thread-group"][data-group="${g}"]`)
+    const inGroup = (g: string) => group(g).locator(`[data-testid="org-thread"][data-thread-id="${id}"]`)
+    await expect(inGroup('needs')).toBeVisible({ timeout: 20_000 })
+    await inGroup('needs').getByTestId('org-thread-popped-input').click()
+    await page.keyboard.type(WORDS, { delay: 10 })
+    await inGroup('needs').getByTestId('org-thread-popped-send').click()
+    // Out of Needs you at once; in Working, with his words and that the task has not read them.
+    await expect(inGroup('needs')).toHaveCount(0, { timeout: 5_000 })
+    const working = group('working')
+    await expect(working).toBeVisible()
+    if ((await working.getAttribute('data-open')) !== 'true') await working.getByTestId('org-thread-group-head').click()
+    const card = inGroup('working')
+    await expect(card.getByTestId('org-thread-popped-sent-words')).toHaveText(WORDS)
+    await expect(card.getByTestId('org-thread-unread-by-task')).toHaveText(`Sent: Task status foundation ${STAMP} has not read it yet.`)
+    const file = await (await request.get(`/api/v1/tasks/${ids.owner}/threads`)).json() as { threads: Array<{ id: string; messages: Array<{ text: string; delivery?: { state: string } }> }> }
+    expect(file.threads.find((t) => t.id === id)?.messages.find((m) => m.text === WORDS)?.delivery?.state).not.toBe('delivered')
+    await shot(page, '6-left-needs')
+    expect(pageErrors).toEqual([])
+  } finally {
+    await request.put('/api/config', { data: { experimental: { brief_off: false } } })
+  }
+})

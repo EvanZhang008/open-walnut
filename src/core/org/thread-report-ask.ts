@@ -109,9 +109,21 @@ function withoutPlace(t: OrgThread): OrgThread {
 }
 
 /**
+ * He wrote on the thread after the task asked (his reply on its card, a Follow up, a choice he
+ * clicked): he answered, and the task has yet to read it (2026-11-20, the user, on a card that
+ * stayed in Needs you after his reply: "why this even keep showing after I replied?"). An agent's
+ * reply on his behalf and one that never went (dropped) are not his answer. Pure.
+ */
+export function repliedSinceAsk(t: Pick<OrgThread, 'messages'>, askedAt: string | undefined): boolean {
+  if (!askedAt) return false;
+  return t.messages.some((m) => m.at > askedAt && m.delivery?.state !== 'dropped' && (!m.delivery?.by || m.delivery.by === 'human'));
+}
+
+/**
  * The threads as he reads them: the one holding the task's ask now reads needs, with that ask's id,
- * its summary leading with the question, and `heldAsk`; every other thread as stored. With
- * threads_one_card off (one-card.ts) every thread reads as stored: the places are kept, unread.
+ * its summary leading with the question, and `heldAsk`; every other thread as stored. One he
+ * answered since the task asked reads as stored (his message made it working) until the task asks
+ * again. With threads_one_card off (one-card.ts) every thread reads as stored: the places are kept, unread.
  */
 export function withHeldAsk<T extends OrgThread>(task: AskingTask | null | undefined, threads: readonly T[]): Array<T & { heldAsk?: ThreadHeldAsk }> {
   const ask = oneCardNow() && asksThreads(task) ? taskAskNow(task) : null;
@@ -119,6 +131,7 @@ export function withHeldAsk<T extends OrgThread>(task: AskingTask | null | undef
   return threads.map((t) => {
     // Put aside by him (its Snoozed section), it reads as stored: the task's own ask still shows where it lives.
     if (!openNotWaiting(t) || t.reportAsk?.id !== ask.id || snoozedNow(t)) return t;
+    if (repliedSinceAsk(t, task?.user_status?.at ?? t.reportAsk?.at)) return t;
     const reply = t.reply?.trim() ? t.reply : undefined;
     const heldAsk: ThreadHeldAsk = { id: ask.id, ask: ask.ask, ...(reply ? { reply } : {}), was: t.state };
     return { ...t, state: 'needs' as const, askId: ask.id, reply: reply ? `${ask.ask}\n\n${reply}` : ask.ask, heldAsk, ...(ask.options ? { options: ask.options } : {}) };

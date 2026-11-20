@@ -168,6 +168,24 @@ describe('the read: needs while the task asks it', () => {
     expect(t.reply).toBe('The plan is written.')
   })
 
+  // 2026-11-20, the user, on a card he had answered that stayed in Needs you: "why this even keep
+  // showing after I replied?". His reply on the thread after the task asked is his answer, waiting
+  // for the task to read it: the thread reads as stored until the task asks again.
+  it('his reply on the thread after the ask: not held, until the task asks again', () => {
+    const asked = asking('ask-aaaa01', 'Pick the seed tray size', { at: T(10) })
+    const reply = { id: 'tm-reply01', at: T(12), text: 'The 72-cell ones', via: 'follow-up' as const, delivery: { state: 'claimed' as const, at: T(12) } }
+    const replied = placed.map((t) => ({ ...t, state: 'working' as const, messages: [...t.messages, reply] }))
+    const [t] = withHeldAsk(asked, replied)
+    expect(t.state).toBe('working')
+    expect(t.heldAsk).toBeUndefined()
+    // An agent's reply on his behalf, or one that never went, is not his answer.
+    for (const delivery of [{ state: 'claimed' as const, at: T(12), by: 'task:task-b' }, { state: 'dropped' as const, at: T(13) }]) {
+      expect(withHeldAsk(asked, placed.map((x) => ({ ...x, messages: [...x.messages, { ...reply, delivery }] })))[0].state).toBe('needs')
+    }
+    // His word before the ask was written is no answer to it.
+    expect(withHeldAsk(asking('ask-aaaa01', 'Pick the seed tray size', { at: T(14) }), replied)[0].state).toBe('needs')
+  })
+
   it('a different decision: not held', () => {
     expect(withHeldAsk(asking('ask-bbbb02'), placed)[0].state).toBe('answered')
   })

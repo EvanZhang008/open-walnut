@@ -116,6 +116,14 @@ describe('the state groups of his Threads (brief_off)', () => {
     expect(threadGroupOf(thread({ id: 'b', state: 'needs', owner: { task_id: 't', title: 'T' } } as never), true, NOW)).toBe('needs')
   })
 
+  // 2026-11-20: a card he had replied on stayed in Needs you while his reply was on its way.
+  it('a thread of a task below listed only because his reply is on its way is the task\'s move, not his', () => {
+    const below = thread({ id: 'c', state: 'working', owner: { task_id: 't', title: 'T' },
+      messages: [{ id: 'tm-c', at: at(5), text: 'Plant them next week', via: 'follow-up', delivery: { state: 'claimed', at: at(5) } }] } as never)
+    expect(threadGroupOf(below, true, NOW)).toBe('working')
+    expect(threadGroupOf(below, false, NOW)).toBe('waiting')
+  })
+
   it('a task\'s state is its first group that holds an open thread: needs > read > working > waiting', () => {
     expect(threadStateOf(all, NOW)).toMatchObject({ state: 'needs', title: 'Plant the beds this week or next?' })
     expect(threadStateOf(all.slice(1), NOW)?.state).toBe('read')
