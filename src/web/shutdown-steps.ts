@@ -27,7 +27,12 @@ export const SHUTDOWN_STEPS_RESERVE_MS = HTTP_DRAIN_GRACE_MS + 1_000
 /** A step's own budget when it names none (ms). */
 export const SHUTDOWN_STEP_DEFAULT_MS = 1_500
 
+/** What a step after the HTTP close leaves before the bail, for the exit itself (ms). */
+export const SHUTDOWN_EXIT_MARGIN_MS = 300
+
 let startedAt: number | null = null
+/** When the caller's bail fires; null when none waits. */
+let bailAt: number | null = null
 /** Time every step together may take; null when no bail waits (a test's in-process stop). */
 let stepsBudgetMs: number | null = null
 let current: { name: string; at: number } | null = null
@@ -40,6 +45,7 @@ let current: { name: string; at: number } | null = null
  */
 export function beginShutdownSteps(opts: { bailMs?: number; now?: number } = {}): void {
   startedAt = opts.now ?? Date.now()
+  bailAt = opts.bailMs === undefined ? null : startedAt + opts.bailMs
   stepsBudgetMs = opts.bailMs === undefined ? null : Math.max(0, opts.bailMs - SHUTDOWN_STEPS_RESERVE_MS)
   current = null
 }
@@ -58,14 +64,19 @@ export function shutdownStepSuffix(now = Date.now()): string {
 /**
  * Run one teardown step, waiting at most its budget. A step that throws is
  * logged and counts as done; one that overruns keeps running unawaited.
+ * `afterClose`: a step after the HTTP close, whose budget comes out of the
+ * reserve the steps leave (what the bail has left, less SHUTDOWN_EXIT_MARGIN_MS),
+ * never out of the steps' shared budget, which is spent by then.
  */
 export async function shutdownStep(
   name: string,
   run: () => unknown,
-  opts: { budgetMs?: number } = {},
+  opts: { budgetMs?: number; afterClose?: boolean } = {},
 ): Promise<void> {
   const now = Date.now()
-  const left = stepsBudgetMs === null || startedAt === null ? null : stepsBudgetMs - (now - startedAt)
+  const left = opts.afterClose
+    ? (bailAt === null ? null : bailAt - now - SHUTDOWN_EXIT_MARGIN_MS)
+    : stepsBudgetMs === null || startedAt === null ? null : stepsBudgetMs - (now - startedAt)
   const budget = left === null ? null : Math.max(0, Math.min(opts.budgetMs ?? SHUTDOWN_STEP_DEFAULT_MS, left))
   current = { name, at: now }
   let timer: ReturnType<typeof setTimeout> | null = null

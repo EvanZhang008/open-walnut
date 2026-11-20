@@ -19,7 +19,7 @@ import {
   addMovedMessages, emptyThreads, enteredNeeds, fileMessage, markClosesTold, markRechecked, mergeThreads, movedAway, moveThreadIn, moveThreadOut, normalizeThreads, openThread, patchHandsToUser, setAnswers, splitThreadMessage, stampLegacyReplyAt, sweepClosed, ThreadError, updateThread,
   type FileMessageInput, type FileMessageResult, type MoveEnd, type OpenThreadInput, type ThreadAskOwner, type ThreadMoveKind, type OrgThread, type ThreadAnswer, type ThreadPatch, type ThreadState, type ThreadRecheck, type ThreadsFile, type ThreadTextSource, type ThreadWriter,
 } from './threads-model.js';
-import { threadsDbOnNow, useThreadsDb } from './threads-backend.js';
+import { threadsDbOnNow, useThreadsDb, writeThreadsLeftovers } from './threads-backend.js';
 import { dbDropExpired, dbMutateThreads, dbReadThreads, dbThreadNodes, flushNodeExport, jsonNodes, threadsJsonFile as threadsFile } from './threads-sync.js';
 import { askOwnerKept, askOwnerOf, pointerTaskIds, withAskPointers } from './thread-task-ask.js';
 import type { ThreadAskedIn } from './thread-view.js';
@@ -32,6 +32,15 @@ function leaderOnly(): void {
   if (isFollower()) throw new ThreadError('bad_input', 501, 'Threads are kept on the primary; this server holds no copy.');
 }
 
+/**
+ * Before the JSON files are read or written: what the database still holds for them goes out first
+ * (a crash's leftovers at a start with the experiment off, a write waiting when it went off).
+ */
+async function jsonReady(taskId: string): Promise<void> {
+  await writeThreadsLeftovers();
+  await flushNodeExport(taskId);
+}
+
 /** The tasks that have a threads file (a reader goes through readThreads for each). */
 export async function threadTaskIds(): Promise<string[]> {
   if (isFollower()) return [];
@@ -42,7 +51,7 @@ export async function readThreads(taskId: string): Promise<ThreadsFile> {
   if (isFollower()) return emptyThreads(taskId);
   const file = threadsFile(taskId);
   if (await useThreadsDb()) return dbReadThreads(taskId);
-  await flushNodeExport(taskId);
+  await jsonReady(taskId);
   return normalizeThreads(await readJsonFile<unknown>(file, null), taskId);
 }
 
@@ -116,7 +125,7 @@ async function mutateThreads<R>(taskId: string, mutate: (cur: ThreadsFile) => { 
   const file = threadsFile(taskId);
   // false: the experiment went off before the database write began, so the file takes it.
   if (!((await useThreadsDb()) && (await dbMutateThreads(taskId, step, threadsDbOnNow)))) {
-    await flushNodeExport(taskId);
+    await jsonReady(taskId);
     await updateJsonFile<unknown>(file, null, (raw) => step(normalizeThreads(raw, taskId)));
   }
   if (entered.length) {

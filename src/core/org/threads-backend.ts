@@ -20,7 +20,7 @@ import { WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { experimentalEnabled } from '../experimental.js'
 import { isFollower } from '../server-role.js'
-import { dbNodes, getMeta, readNodeForCheck, replaceNode, setMeta, threadsDb, threadsDbGeneration, threadsDbPath } from './threads-db.js'
+import { dbNodes, dirtyNodes, getMeta, readNodeForCheck, replaceNode, setMeta, threadsDb, threadsDbGeneration, threadsDbPath } from './threads-db.js'
 import type { ThreadsFile } from './threads-model.js'
 import { exportDirtyNodes, flushThreadsExports, jsonNodes, parseThreadsText, sha256, syncFromJson, threadsDir, threadsJsonFile } from './threads-sync.js'
 
@@ -108,8 +108,10 @@ export async function useThreadsDb(): Promise<boolean> {
     return false
   }
   if (!ready || ready.gen !== gen) {
-    const run: NonNullable<typeof ready> = { gen, ok: prepare().catch((err) => {
+    const run: NonNullable<typeof ready> = { gen, ok: prepare().catch(async (err) => {
       log.task.warn('org threads: the database is not used; Threads stay in their JSON files', { error: err instanceof Error ? err.message : String(err) })
+      // What it holds and its files lack goes out to them first, so the JSON mode reads it.
+      await writeDirtyNow()
       return false
     }) }
     void run.ok.then((v) => { run.value = v })
@@ -132,24 +134,31 @@ async function prepare(): Promise<boolean> {
   return true
 }
 
-/**
- * At a start with the experiment off: the changes a crash left in the database and not yet in their
- * files go out to them (only where the file is as the database last wrote or read it), so turning the
- * experiment off never loses its last minute. Nothing else is read, and a home that never had the
- * database never opens one.
- */
-export async function writeThreadsLeftovers(): Promise<void> {
-  if (isFollower() || (await threadsSqliteOn())) return
-  try { await fs.access(threadsDbPath()) } catch { return }
+async function writeDirtyNow(): Promise<void> {
   try {
-    if (!getMeta('imported_at')) return
-    const { dirtyNodes } = await import('./threads-db.js')
-    if (!dirtyNodes().length) return
+    if (!getMeta('imported_at') || !dirtyNodes().length) return
     exportDirtyNodes()
     await flushThreadsExports()
   } catch (err) {
     log.task.warn('org threads: changes left in the database were not written to their files', { error: err instanceof Error ? err.message : String(err) })
   }
+}
+
+let leftovers: Promise<void> | null = null
+
+/**
+ * With the experiment off: the changes a crash left in the database and not yet in their files go
+ * out to them (each where its file is as the database last wrote or read it, else merged), so turning
+ * the experiment off never loses its last minute. Run once per start; the JSON path awaits it before
+ * its first read or write (threads-store.ts), so a boot-time JSON write never lands first. A home
+ * that never had the database never opens one.
+ */
+export function writeThreadsLeftovers(): Promise<void> {
+  return (leftovers ??= (async () => {
+    if (isFollower() || (await threadsSqliteOn())) return
+    try { await fs.access(threadsDbPath()) } catch { return }
+    await writeDirtyNow()
+  })())
 }
 
 /** The first difference between two reads of a node, or null when they are the same. */
@@ -173,7 +182,14 @@ async function importAll(): Promise<boolean> {
   let backup = ''
   if (nodes.length) {
     backup = path.join(WALNUT_HOME, 'org', 'threads-backup', new Date().toISOString().replace(/[:.]/g, '-'))
-    await fs.cp(threadsDir(), backup, { recursive: true, errorOnExist: true, force: false })
+    try {
+      await fs.cp(threadsDir(), backup, { recursive: true, errorOnExist: true, force: false })
+    } catch (err) {
+      // A copy cut short is no backup: it goes, and the move waits for the next start.
+      await fs.rm(backup, { recursive: true, force: true }).catch(() => {})
+      log.task.warn('org threads: the backup of the threads files failed; Threads stay in their JSON files', { error: err instanceof Error ? err.message : String(err) })
+      return false
+    }
   }
   for (const node of nodes) {
     const p = threadsJsonFile(node)
@@ -217,6 +233,7 @@ async function importAll(): Promise<boolean> {
 /** For tests: forget the switch, the readiness and a failed open (`on` forces the experiment, undefined goes back to the config). */
 export function _resetThreadsBackendForTesting(on?: boolean): void {
   forced = on
+  leftovers = null
   flag = undefined
   ready = null
   openFailed = false

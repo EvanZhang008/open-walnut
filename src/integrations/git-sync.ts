@@ -710,8 +710,9 @@ tmp/
 # /api/time/apps routes answer 501 on the cloud replica anyway.
 time-tracking/outside/
 
-# The one-time copy of org/threads/ taken before Threads moved into their database
-# (org/threads-backend.ts): a local rollback point, never history.
+# The one-time copy of the Threads files taken before they moved into their database,
+# and the database's copy of a node set aside before a merge (src/core/org/threads-backend.ts,
+# threads-sync.ts): local rollback points, never history.
 org/threads-backup/
 
 # SQLite (binary, self-managed)

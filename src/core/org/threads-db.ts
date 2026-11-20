@@ -138,29 +138,43 @@ export function dirtyNodes(): string[] {
 }
 
 /**
- * One loaded thread: the object handed out, its place, and the text each part was read from (left
- * out when the snapshot was made from a parsed copy: every stored text is JSON.stringify of what it
- * parses to, so it is worked out again for the threads a write touches, and only for those).
+ * One loaded thread: the object handed out, its place, and the text it was read from: `body` and
+ * `msgs` from the rows, or `full` (the whole thread's JSON) from threads-sync.ts's cache. A write
+ * compares with these texts, never with the object, which the mutation may have changed in place.
  */
-interface Loaded { thread: OrgThread; pos: number; body?: string; msgs?: string[] }
+interface Loaded { thread: OrgThread; pos: number; body?: string; msgs?: string[]; full?: string; orig?: OrgThread }
 /** A node as loaded: its file and what each thread was read from, for the write that follows (writeNode). */
 export interface NodeSnapshot { file: ThreadsFile; rows: Map<string, Loaded> }
 
 const bodyText = (t: OrgThread): string => JSON.stringify({ ...t, messages: [] })
-const bodyOf = (l: Loaded): string => (l.body ??= bodyText(l.thread))
+const original = (l: Loaded): OrgThread => (l.orig ??= JSON.parse(l.full!) as OrgThread)
+const bodyOf = (l: Loaded): string => (l.body ??= bodyText(original(l)))
+const messageCount = (l: Loaded): number => (l.msgs ? l.msgs.length : original(l).messages.length)
 const messageOf = (l: Loaded, seq: number): string | undefined => {
   if (l.msgs) return l.msgs[seq]
-  const m = l.thread.messages[seq]
+  const m = original(l).messages[seq]
   return m && JSON.stringify(m)
 }
 
 /**
- * A snapshot of a node's threads parsed from a copy of what is stored (threads-sync.ts keeps one per
- * node), with each row's stored place (`pos`; a write leaves them 0..n-1, a load may find gaps where
- * a closed thread past its week still waits for the sweep).
+ * `t` is the thread as it was loaded: the same object and the same text (a mutation that changed the
+ * object in place reads as changed). Its text when unchanged, else null.
  */
-export function snapshotOf(file: ThreadsFile, pos: readonly number[]): NodeSnapshot {
-  return { file, rows: new Map(file.threads.map((thread, i) => [thread.id, { thread, pos: pos[i] }])) }
+export function unchangedText(snap: NodeSnapshot, t: OrgThread): string | null {
+  const l = snap.rows.get(t.id)
+  if (!l || l.thread !== t) return null
+  const text = JSON.stringify(t)
+  if (l.full !== undefined) return text === l.full ? text : null
+  return bodyText(t) === l.body && t.messages.length === l.msgs!.length && t.messages.every((m, i) => JSON.stringify(m) === l.msgs![i]) ? text : null
+}
+
+/**
+ * A snapshot of a node's threads parsed from a copy of what is stored (threads-sync.ts keeps one per
+ * node): each thread's text and stored place (`pos`; a write leaves them 0..n-1, a load may find
+ * gaps where a closed thread past its week still waits for the sweep).
+ */
+export function snapshotOf(file: ThreadsFile, pos: readonly number[], texts: readonly string[]): NodeSnapshot {
+  return { file, rows: new Map(file.threads.map((thread, i) => [thread.id, { thread, pos: pos[i], full: texts[i] }])) }
 }
 
 /** Each thread's stored place, in the snapshot's order. */
@@ -233,13 +247,12 @@ function prepareStatements(h: DatabaseType) {
 }
 
 /**
- * Write `next` over what `snap` loaded: only the threads and messages that changed (a thread or a
- * message the mutation handed back as the very object loaded is unchanged; any other is compared by
- * its text). A thread gone from `next` is deleted with its messages; rows `snap` never loaded (closed
- * past their week) are left for the sweep. Returns whether anything was written. Call it inside a
- * transaction.
+ * Write `next` over what `snap` loaded: only the threads and messages whose text changed. `unchanged`:
+ * the ids the caller already found unchanged (unchangedText); without it each is checked here. A
+ * thread gone from `next` is deleted with its messages; rows `snap` never loaded (closed past their
+ * week) are left for the sweep. Returns whether anything was written. Call it inside a transaction.
  */
-export function writeNode(node: string, snap: NodeSnapshot, next: ThreadsFile): boolean {
+export function writeNode(node: string, snap: NodeSnapshot, next: ThreadsFile, unchanged?: ReadonlySet<string>): boolean {
   const s = statements(threadsDb())
   let wrote = false
   const seen = new Set<string>()
@@ -247,7 +260,7 @@ export function writeNode(node: string, snap: NodeSnapshot, next: ThreadsFile): 
     if (seen.has(t.id)) throw new ThreadError('bad_input', 500, `Thread ${t.id} is twice on this node.`)
     seen.add(t.id)
     const prev = snap.rows.get(t.id)
-    if (prev && prev.thread === t) {
+    if (prev && (unchanged ? unchanged.has(t.id) : unchangedText(snap, t) !== null)) {
       if (prev.pos !== pos) { s.setPos.run(pos, node, t.id); wrote = true }
       return
     }
@@ -257,13 +270,12 @@ export function writeNode(node: string, snap: NodeSnapshot, next: ThreadsFile): 
       wrote = true
     }
     t.messages.forEach((m, seq) => {
-      if (prev && prev.thread.messages[seq] === m) return
       const text = JSON.stringify(m)
       if (prev && messageOf(prev, seq) === text) return
       s.upsertMessage.run(node, t.id, seq, m.id, m.at, text)
       wrote = true
     })
-    if (!prev || prev.thread.messages.length > t.messages.length) {
+    if (!prev || messageCount(prev) > t.messages.length) {
       if (s.dropMessagesFrom.run(node, t.id, t.messages.length).changes) wrote = true
     }
   })

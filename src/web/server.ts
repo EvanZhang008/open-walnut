@@ -7304,8 +7304,10 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   ;(await import('../core/push/work-card.js')).stopWorkCard()
   // Visits still in memory (at most FLUSH_MS of them); bounded like every write here.
   await shutdownStep('page visits flush', async () => (await import('../core/page-visits.js')).flushVisitsNow())
-  // Threads changes still waiting to go out to their JSON files (experiment threads_sqlite; a no-op otherwise).
-  await shutdownStep('threads files flush', async () => (await import('../core/org/threads-sync.js')).flushThreadsExports())
+  // Threads changes still waiting to go out to their JSON files (experiment threads_sqlite; a no-op
+  // otherwise). From here every Threads write goes to its file within its own call; the writes of the
+  // requests the HTTP close drains are awaited again after it ('threads files, last').
+  await shutdownStep('threads files flush', async () => (await import('../core/org/threads-sync.js')).stopThreadsExports())
   const searchCopy = searchCopyHandle
   await shutdownStep('search copy', () => searchCopy?.stop())
   searchCopyHandle = null
@@ -7755,6 +7757,7 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
       // Bounded: a long poll in flight held every deploy's shutdown into the bail (http-close.ts).
       try { await closeHttpServer(httpServer, { dropConnections: opts.dropConnections }) } finally { httpServer = null }
     }
+    await shutdownStep('threads files, last', async () => (await import('../core/org/threads-sync.js')).flushThreadsExports(), { budgetMs: 800, afterClose: true })
   } finally {
     releaseSelfApiRoot()
   }

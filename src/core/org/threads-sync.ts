@@ -8,7 +8,10 @@
  *    and a node stays marked dirty until its file holds it, so a crash writes it at the next start.
  *  - Read back in: before a node is used, its file's stat is compared with what was kept; a file whose
  *    text changed (an older build, a sync pull, a hand edit) replaces the node's rows: the file wins.
- *    A file that is gone is written again from the database; one that does not parse is overwritten.
+ *    When the database also held changes not yet in that file, the two are merged by thread instead
+ *    (threads-merge.ts), the database's copy saved first to org/threads-backup/conflicts/. A file that
+ *    is gone is written again from the database; one that does not parse is overwritten.
+ *  - Stopping: once the server stops, every write goes to its file before the call returns.
  *
  * Every call touches one node. The mutation runs synchronously inside one transaction, so two
  * writers of a node never interleave (only this server writes Threads).
@@ -20,7 +23,8 @@ import { WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { withFileLock } from '../../utils/file-lock.js'
 import { writeTextFile } from '../../utils/fs.js'
-import { dbNodes, dirtyNodes, dropExpired, loadNode, markDirty, nodeRow, replaceNode, setJsonMark, snapshotOf, threadsDb, threadsDbGeneration, positionsOf, writeNode, type NodeSnapshot } from './threads-db.js'
+import { dbNodes, dirtyNodes, dropExpired, loadNode, markDirty, nodeRow, replaceNode, setJsonMark, snapshotOf, threadsDb, threadsDbGeneration, positionsOf, unchangedText, writeNode, type NodeSnapshot } from './threads-db.js'
+import { mergeThreadsConflict } from './threads-merge.js'
 import { CLOSED_KEEP_MS, normalizeThreads, ThreadError, type OrgThread, type ThreadsFile } from './threads-model.js'
 
 export const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
@@ -49,7 +53,9 @@ export function parseThreadsText(text: string, node: string): ThreadsFile {
 const TEST_PROCESS = !!(process.env.VITEST || process.env.VITEST_WORKER_ID || process.env.NODE_ENV === 'test')
 const EXPORT_EVERY_MS = 60_000
 let exportEveryOverride: number | undefined
+let stopping = false
 function exportEveryMs(): number {
+  if (stopping) return 0
   if (exportEveryOverride !== undefined) return exportEveryOverride
   const env = TEST_PROCESS ? Number(process.env.WALNUT_THREADS_EXPORT_MS) : NaN
   return Number.isFinite(env) && env >= 0 ? env : EXPORT_EVERY_MS
@@ -66,13 +72,24 @@ const changes = new Map<string, number>()
 const inflight = new Set<{ node: string; done: Promise<unknown> }>()
 const writesOf = (node?: string) => [...inflight].filter((w) => node === undefined || w.node === node).map((w) => w.done)
 
+function forget(): void {
+  for (const t of timers.values()) clearTimeout(t)
+  timers.clear(); lastAt.clear(); chains.clear(); writing.clear(); changes.clear(); inflight.clear(); cache.clear(); cacheChars = 0
+}
+
 function fresh(): void {
   threadsDb()
   const gen = threadsDbGeneration()
   if (gen === stateGen) return
-  for (const t of timers.values()) clearTimeout(t)
-  timers.clear(); lastAt.clear(); chains.clear(); writing.clear(); changes.clear(); inflight.clear(); cache.clear(); cacheChars = 0
+  forget()
   stateGen = gen
+}
+
+/** For tests: this module as a new process finds it (nothing waiting, nothing cached), the database rows kept. */
+export function _forgetThreadsSyncForTesting(): void {
+  forget()
+  stateGen = -1
+  stopping = false
 }
 
 function changed(node: string): void {
@@ -136,15 +153,39 @@ export async function syncFromJson(node: string): Promise<void> {
   }
   // An empty file (a write cut short) never empties a node the database holds threads of.
   if (!text.trim() && current(node).file.threads.length) { keepOurs(node, mark, 'is empty'); return }
+  // Changes here not yet in the file: merged by thread, never dropped whole, the database's copy saved first.
+  let fromDb = 0
+  if (nodeRow(node)?.dirty && current(node).file.threads.length) {
+    const saved = await saveConflictCopy(node, current(node).file).catch((err) => {
+      log.task.warn('org threads: the database copy was not set aside before a merge', { node, error: err instanceof Error ? err.message : String(err) })
+      return ''
+    })
+    if (writing.has(node) || nodeRow(node)?.hash === hash) return
+    const merged = mergeThreadsConflict(file, current(node).file)
+    file = merged.file
+    fromDb = merged.fromDb
+    log.task.warn('org threads: a threads file changed outside while changes here waited for it; merged by thread', { node, fromDatabase: fromDb, saved })
+  }
   try {
-    threadsDb().transaction(() => replaceNode(node, file, mark))()
+    threadsDb().transaction(() => {
+      replaceNode(node, file, mark)
+      if (fromDb) markDirty(node)
+    })()
   } catch (err) {
     keepOurs(node, mark, 'was not taken in', err)
     return
   }
   dropCache(node)
-  changes.set(node, (changes.get(node) ?? 0) + 1)
-  if (row) log.task.info('org threads: a threads file changed outside; read back in', { node, threads: file.threads.length })
+  if (fromDb) changed(node)
+  else changes.set(node, (changes.get(node) ?? 0) + 1)
+  if (row && !fromDb) log.task.info('org threads: a threads file changed outside; read back in', { node, threads: file.threads.length })
+}
+
+/** The database's copy of a node, set aside before a merge changes it: its path. */
+async function saveConflictCopy(node: string, file: ThreadsFile): Promise<string> {
+  const p = path.join(WALNUT_HOME, 'org', 'threads-backup', 'conflicts', `${node}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
+  await writeTextFile(p, JSON.stringify(file, null, 2) + '\n')
+  return p
 }
 
 /** Write a node to its file soon: at once when it was not written this last minute, else when the minute is up. */
@@ -224,6 +265,21 @@ export async function flushThreadsExports(): Promise<void> {
   await Promise.all([...[...nodes].map(runExport), ...chains.values()])
 }
 
+/**
+ * The server stops: every write from now on goes to its file before its call returns (no minute's
+ * wait a timer at exit would never end), and every waiting node is written now. stopServer calls it
+ * before the HTTP close, and flushThreadsExports after it.
+ */
+export async function stopThreadsExports(): Promise<void> {
+  stopping = true
+  await flushThreadsExports()
+}
+
+/** A server starts in this process (a test's restart): writes go back to waiting their minute. */
+export function noteThreadsRunning(): void {
+  stopping = false
+}
+
 /** A node's write that still waits is done now (a JSON read right after the experiment went off). */
 export async function flushNodeExport(node: string): Promise<void> {
   if (stateGen < 0) return
@@ -245,7 +301,7 @@ async function exportWaiting(node: string): Promise<void> {
  * writes them), so a read is one parse and never shares an object with another caller. Dropped when
  * a closed thread in it passes its week (a read leaves that one out), and on any other change.
  */
-const cache = new Map<string, { text: string; pos: number[]; until: number }>()
+const cache = new Map<string, { texts: string[]; pos: number[]; until: number; chars: number }>()
 /** The cache's bound: the nodes used last are kept, up to this much text. */
 const CACHE_CHARS = 32 * 1024 * 1024
 let cacheChars = 0
@@ -253,40 +309,42 @@ let cacheChars = 0
 function dropCache(node: string): void {
   const c = cache.get(node)
   if (!c) return
-  cacheChars -= c.text.length
+  cacheChars -= c.chars
   cache.delete(node)
 }
 
-function keepCache(node: string, file: ThreadsFile, pos: number[]): void {
+/** `texts`: each thread's JSON, when the caller has it already. */
+function keepCache(node: string, file: ThreadsFile, pos: number[], texts = file.threads.map((t) => JSON.stringify(t))): void {
   let until = Infinity
   for (const t of file.threads) {
     const at = t.closed ? Date.parse(t.closed.at) : NaN
     if (Number.isFinite(at)) until = Math.min(until, at + CLOSED_KEEP_MS)
   }
   dropCache(node)
-  const text = JSON.stringify(file)
-  cache.set(node, { text, pos, until })
-  cacheChars += text.length
+  const chars = texts.reduce((n, t) => n + t.length, 0)
+  cache.set(node, { texts, pos, until, chars })
+  cacheChars += chars
   for (const old of cache.keys()) {
     if (cacheChars <= CACHE_CHARS || old === node) break
     dropCache(old)
   }
 }
 
-function cached(node: string): { file: ThreadsFile; pos: number[] } | null {
+function cached(node: string): NodeSnapshot | null {
   const c = cache.get(node)
   if (!c) return null
   if (Date.now() > c.until) { dropCache(node); return null }
   // Used last: kept longest.
   cache.delete(node)
   cache.set(node, c)
-  return { file: JSON.parse(c.text) as ThreadsFile, pos: c.pos }
+  const threads = JSON.parse(`[${c.texts.join(',')}]`) as OrgThread[]
+  return snapshotOf({ version: 1, taskId: node, threads }, c.pos, c.texts)
 }
 
 /** The node as stored now: from the cache, else loaded (and cached before anyone holds it). */
 function current(node: string): NodeSnapshot {
   const hit = cached(node)
-  if (hit) return snapshotOf(hit.file, hit.pos)
+  if (hit) return hit
   const snap = loadNode(node)
   keepCache(node, snap.file, positionsOf(snap))
   return snap
@@ -294,34 +352,33 @@ function current(node: string): NodeSnapshot {
 
 export async function dbReadThreads(node: string): Promise<ThreadsFile> {
   await syncFromJson(node)
-  return cached(node)?.file ?? current(node).file
-}
-
-function freeze(v: unknown): void {
-  if (!v || typeof v !== 'object' || Object.isFrozen(v)) return
-  Object.freeze(v)
-  for (const x of Object.values(v)) freeze(x)
+  return current(node).file
 }
 
 /**
  * The threads as the JSON mode would read them back: a changed thread goes through a JSON round
- * trip and normalizeThreads (what the next JSON read does to the written file); an unchanged one is
- * the row as loaded.
+ * trip and normalizeThreads (what the next JSON read does to the written file); one whose object and
+ * text are as loaded is kept as it is. Also which ids are unchanged, and each thread's text.
  */
-function storedForm(node: string, snap: NodeSnapshot, next: ThreadsFile): ThreadsFile {
+function storedForm(node: string, snap: NodeSnapshot, next: ThreadsFile): { file: ThreadsFile; unchanged: Set<string>; texts: string[] } {
   const threads: OrgThread[] = []
+  const texts: string[] = []
+  const unchanged = new Set<string>()
   for (const t of next.threads) {
-    if (snap.rows.get(t.id)?.thread === t) threads.push(t)
-    else threads.push(...normalizeThreads({ threads: [JSON.parse(JSON.stringify(t))] }, node).threads)
+    const same = unchangedText(snap, t)
+    if (same !== null) { threads.push(t); texts.push(same); unchanged.add(t.id); continue }
+    for (const n of normalizeThreads({ threads: [JSON.parse(JSON.stringify(t))] }, node).threads) {
+      threads.push(n)
+      texts.push(JSON.stringify(n))
+    }
   }
-  return { version: 1, taskId: node, threads }
+  return { file: { version: 1, taskId: node, threads }, unchanged, texts }
 }
 
 /**
- * One node's read-modify-write: `step` gets the node's threads and returns the next ones, a change
- * always in a new object (the model's functions are pure: an object handed back as it came is
- * unchanged, which a test process enforces by freezing them); only what changed is written. `step`
- * throwing writes nothing.
+ * One node's read-modify-write: `step` gets the node's threads and returns the next ones; only what
+ * changed is written, judged by each thread's text against what was loaded (a mutation that changed
+ * an object in place is caught too). `step` throwing writes nothing.
  */
 export async function dbMutateThreads(node: string, step: (cur: ThreadsFile) => ThreadsFile, stillOn: () => boolean): Promise<boolean> {
   const write = { node, done: mutateNow(node, step, stillOn) }
@@ -335,18 +392,17 @@ async function mutateNow(node: string, step: (cur: ThreadsFile) => ThreadsFile, 
   // Checked with nothing awaited before the write: a write that began after the experiment went off
   // goes to the file instead, behind the flush of what waits here.
   if (!stillOn()) return false
-  const { wrote, next } = threadsDb().transaction(() => {
+  const { wrote, stored } = threadsDb().transaction(() => {
     const snap = current(node)
-    if (TEST_PROCESS) freeze(snap.file)
     const stored = storedForm(node, snap, step(snap.file))
-    return { wrote: writeNode(node, snap, stored), next: stored }
+    return { wrote: writeNode(node, snap, stored.file, stored.unchanged), stored }
   })()
   if (wrote) {
     // Before the caller gets its answer, which may hold some of these objects. A write leaves every
     // thread it holds at its index (writeNode).
-    keepCache(node, next, next.threads.map((_, i) => i))
+    keepCache(node, stored.file, stored.file.threads.map((_, i) => i), stored.texts)
     changed(node)
-    // No wait between writes (a test's setting): the call returns once its file holds it.
+    // No wait between writes (stopping, or a test's setting): the call returns once its file holds it.
     if (exportEveryMs() === 0) await exportWaiting(node)
   }
   return true
