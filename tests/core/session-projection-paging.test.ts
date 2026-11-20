@@ -45,6 +45,7 @@ beforeEach(async () => {
   const { _resetHistoryPagesForTests } = await import('../../src/core/session-history-pages.js');
   _resetKeptWindowsForTests();
   _resetHistoryPagesForTests();
+  (await import('../../src/core/transcript-page-share.js'))._resetPageShareForTests();
   await fsp.rm(tmpBase, { recursive: true, force: true });
   await fsp.mkdir(tmpBase, { recursive: true });
 });
@@ -317,9 +318,43 @@ describe('an older page costs the windows it returns, not the depth', () => {
     await buildSessionTranscript('s-deep', { rich: true, visible: 3 });
     const first = await buildSessionTranscript('s-deep', { rich: true, before: at(0.3), visible: 50 });
     bytes = 0;
+    // The kept windows, not the kept page (transcript-page-share.ts), answer this retry.
+    (await import('../../src/core/transcript-page-share.js'))._resetPageShareForTests();
     const again = await buildSessionTranscript('s-deep', { rich: true, before: at(0.3), visible: 50 });
     expect(again.messages).toEqual(first.messages);
     expect(bytes).toBeLessThan(1024 * 1024);
+  }, 120_000);
+
+  // 2026-11-19 20:10Z: a burst of older pages evicted the kept windows (32 MB), so every
+  // retry of a page that missed the route's deadline read its windows again over the tunnel.
+  it('a retried page is the kept page, even once the kept windows are gone', async () => {
+    const { at } = await deepSession();
+    const { _resetKeptWindowsForTests } = await import('../../src/core/jsonl-window.js');
+    const [a, b] = await Promise.all([
+      buildSessionTranscript('s-deep', { rich: true, before: at(0.3), visible: 50 }),
+      buildSessionTranscript('s-deep', { rich: true, before: at(0.3), visible: 50 }),
+    ]);
+    expect(b.messages).toEqual(a.messages);
+    expect(b.messages).not.toBe(a.messages);
+    _resetKeptWindowsForTests();
+    bytes = 0;
+    const again = await buildSessionTranscript('s-deep', { rich: true, before: at(0.3), visible: 50 });
+    expect(again.messages).toEqual(a.messages);
+    expect(bytes).toBe(0);
+    // Another page of it is its own read.
+    await buildSessionTranscript('s-deep', { rich: true, before: at(0.6), visible: 50 });
+    expect(bytes).toBeGreaterThan(0);
+  }, 120_000);
+
+  it('a page cut at a recent time is read again: its turn may still be written', async () => {
+    await deepSession();
+    const now = new Date().toISOString();
+    await buildSessionTranscript('s-deep', { rich: true, before: now, visible: 3 });
+    const { _resetKeptWindowsForTests } = await import('../../src/core/jsonl-window.js');
+    _resetKeptWindowsForTests();
+    bytes = 0;
+    await buildSessionTranscript('s-deep', { rich: true, before: now, visible: 3 });
+    expect(bytes).toBeGreaterThan(0);
   }, 120_000);
 
   it('past its time budget a page that holds a row stops adding windows', async () => {

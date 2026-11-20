@@ -245,12 +245,31 @@ export function olderPage(taskId: unknown, history: Record<string, unknown>): { 
 
 /**
  * How long task_history waits on the page before a cut one to learn whether anything after `since`
- * is still unread. The caller gives up after 10 s in all, and the newest page already had up to 5 s
- * (the route's FRESH_READ_DEADLINE_MS): past it the answer says older rows may exist.
+ * is still unread. The newest page already had up to 5 s (the route's FRESH_READ_DEADLINE_MS), and
+ * this check is only a hint: past it the answer says older rows may exist.
  */
 const OLDER_CHECK_MS = 2_500;
-/** What task_history may spend in all before it answers: under the caller's 10 s, with room to send. */
-const HISTORY_BUDGET_MS = 8_000;
+/** How long task_history's caller waits for it (the op's timeout, every self-call's too). */
+const HISTORY_CALL_MS = 30_000;
+/**
+ * What task_history may spend in all before it answers: under the 20 s a session's call
+ * relayed by its host's daemon waits by default (gateway-core.ts GATEWAY_HUB_TIMEOUT_MS).
+ */
+const HISTORY_BUDGET_MS = 18_000;
+/**
+ * How long the route may build an older page for task_history (`wait=`). An older page has
+ * no saved copy, and the phone's 5 s missed for agents paging many whale JSONLs on one host
+ * at once (2026-11-19 and 11-20: 37 and 41 x 503 in one run, those histories lost).
+ */
+const PAGE_WAIT_MS = 15_000;
+/** Least time left worth one more read of an older page that missed its deadline. */
+const PAGE_RETRY_MIN_MS = 1_000;
+
+/** The route's answer for an older page it could not build in time (its build goes on: retryAfter). */
+export function isPageMiss(err: unknown): boolean {
+  const e = err as { status?: unknown; code?: unknown; retryAfterMs?: unknown } | null;
+  return e?.status === 503 && e.code === 'page_unavailable' && typeof e.retryAfterMs === 'number';
+}
 
 /** `work`, or `fallback` when it is not settled within `ms`. */
 export function withinMs<T>(ms: number, work: Promise<T>, fallback: T): Promise<T> {
@@ -321,12 +340,23 @@ defineOp({
     const live = fresh === true || (fresh !== false && (shape.limit || shape.since))
     const query = new URLSearchParams({
       ...(live ? { fresh: '1' } : {}),
-      ...(before ? { before: String(before) } : {}),
+      ...(before ? { before: String(before), wait: String(PAGE_WAIT_MS) } : {}),
       ...(shape.limit ? { visible: String(shape.limit) } : {}),
       ...(shape.since ? { since: shape.since } : {}),
     }).toString();
     const read = async (sessionId: string, q = query) => {
-      const h = await call('GET', `/sessions/${encodeURIComponent(sessionId)}/transcript${q ? `?${q}` : ''}`) as Record<string, unknown> | undefined;
+      const get = () => call('GET', `/sessions/${encodeURIComponent(sessionId)}/transcript${q ? `?${q}` : ''}`) as Promise<Record<string, unknown> | undefined>;
+      let h: Record<string, unknown> | undefined;
+      try {
+        h = await get();
+      } catch (err) {
+        // An older page that missed the route's deadline is still being built, and the
+        // route keeps it for the retry (transcript-page-share.ts): ask once more in what is left.
+        const left = HISTORY_BUDGET_MS - (Date.now() - startedAt);
+        if (!isPageMiss(err) || left < PAGE_RETRY_MIN_MS) throw err;
+        h = await withinMs(left, get(), undefined);
+        if (h === undefined) throw err;
+      }
       if (!h || !Array.isArray(h.messages)) throw new Error('Transcript response is incomplete; retry task_history.');
       return h;
     };
@@ -404,6 +434,7 @@ defineOp({
       left_out: { cutOlder, cutSince, folded, clipped, chars, note: leftOutLine(out, paged) },
     };
   },
+  timeoutMs: HISTORY_CALL_MS,
   tags: { readonly: true, remote: 'allow' },
 });
 

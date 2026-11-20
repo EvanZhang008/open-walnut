@@ -733,6 +733,28 @@ export async function buildSessionTranscript(
   sessionId: string,
   opts?: BuildTranscriptOptions,
 ): Promise<SessionTranscript> {
+  if (opts?.before === undefined) return buildSessionTranscriptNow(sessionId, opts)
+  // An older page: one build per page, kept a short while, so a read that missed its
+  // deadline leaves its answer to the retry (transcript-page-share.ts).
+  const { sharedPageBuild, pageKey, pageIsSettled } = await import('./transcript-page-share.js')
+  if (!pageIsSettled(opts.before)) return buildSessionTranscriptNow(sessionId, opts)
+  const page = await sharedPageBuild(pageKey(sessionId, { ...opts }), () => buildSessionTranscriptNow(sessionId, opts), transcriptChars)
+  return { ...page, messages: page.messages.slice() }
+}
+
+/** About how much text a transcript holds: its rows' string fields. */
+function transcriptChars(t: SessionTranscript): number {
+  let n = 0
+  for (const m of t.messages) {
+    for (const v of Object.values(m)) if (typeof v === 'string') n += v.length
+  }
+  return n
+}
+
+async function buildSessionTranscriptNow(
+  sessionId: string,
+  opts?: BuildTranscriptOptions,
+): Promise<SessionTranscript> {
   const { readSessionHistoryTail, readSessionHistory, isWindowedHistory } = await import('./session-history.js')
   const { getSessionByClaudeId } = await import('./session-tracker.js')
   const {

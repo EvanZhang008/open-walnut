@@ -2807,7 +2807,13 @@ directory on that host.
     windows. A value that is not an ISO-8601 timestamp
     (`YYYY-MM-DDTHH:MM…`), or is longer than 40 characters, answers
     `400 invalid_before`; a read that fails
-    answers `503 page_unavailable` (retryable).
+    answers `503 page_unavailable` (retryable). A page not built within its
+    deadline (5 s) answers the same 503 with `error.retryAfter` (seconds): its
+    build goes on, and a retry within 30 s joins it or gets the finished page.
+  - `wait=<ms>` (additive, 2026-11) gives a `before` read a longer deadline, up
+    to 25000, for a caller that can hold its request that long (an agent's
+    `task_history`; the phone keeps the 5 s default). Ignored without `before`,
+    below the default, or when not a positive integer.
   - `since=<ISO timestamp>` extends the slice back to the first entry at or after
     that time, typically the newest row the client holds, within the same
     600-entry bound. Send it on a refetch you will stitch onto rows you already

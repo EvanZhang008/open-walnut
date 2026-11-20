@@ -4170,8 +4170,10 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
         return
       }
       // An older page has no saved copy to fall back to: past the deadline it says so in time.
-      const page = await buildTranscriptWithin(() => buildSessionTranscript(sessionId, buildOpts), FRESH_READ_DEADLINE_MS)
-      if (page === 'timeout') sendError(res, 503, 'page_unavailable', 'The session could not be read in time; retry shortly')
+      // The build goes on and is kept for the retry, which joins it (transcript-page-share.ts).
+      const page = await buildTranscriptWithin(() => buildSessionTranscript(sessionId, buildOpts), (await import('../../core/transcript-page-share.js')).pageDeadlineMs(req.query.wait, FRESH_READ_DEADLINE_MS))
+      // retryAfter marks the miss a retry can fix: the build goes on (a failed one is not kept).
+      if (page === 'timeout') res.status(503).json({ error: { code: 'page_unavailable', message: 'The session could not be read in time; retry shortly', retryAfter: 1 } })
       else if (page === 'failed') sendError(res, 503, 'page_unavailable', 'The session could not be read right now')
       else answer(page, wantRich, true)
       return
