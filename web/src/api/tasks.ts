@@ -255,6 +255,8 @@ export interface UpdateTaskInput {
   undo_phase_changed_at?: string;
   /** Threads on for the task (its ⋮ menu; src/core/org/keeps-threads.ts). */
   threads_on?: boolean;
+  /** A Director under its VP (Task.director; src/core/task-director.ts): 'auto' or null clears. */
+  director?: 'auto' | 'yes' | 'no' | null;
 }
 
 /**

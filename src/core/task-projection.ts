@@ -141,6 +141,9 @@ export interface ProjectedTask {
   /** The user turned Threads on (true) or off (false) for this task (Task.threads_on; additive,
    *  2026-11-18, false since 2026-11-19). Omitted when unset. */
   threads_on?: boolean
+  /** The user's Director choice (Task.director; additive, 2026-11-20): 'yes' or 'no'. Omitted =
+   *  auto (a task with an open subtask is a Director); never on an org node. */
+  director?: 'yes' | 'no'
 }
 
 /**
@@ -238,6 +241,7 @@ export function projectTask(t: Task): ProjectedTask {
     ...(t.org_role === 'lead' && t.org_leads?.length ? { org_leads: [...t.org_leads] } : {}),
     ...(t.walnut_agent ? { walnut_agent: true as const } : {}),
     ...(typeof t.threads_on === 'boolean' && !t.org_role ? { threads_on: t.threads_on } : {}),
+    ...((t.director === 'yes' || t.director === 'no') && !t.org_role ? { director: t.director } : {}),
     ...(isPartial(t.result_report) ? { result_report: {
       at: t.result_report!.at, not_done: t.result_report!.not_done!,
       ...(t.result_report!.result ? { result: t.result_report!.result } : {}),

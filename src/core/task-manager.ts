@@ -15,6 +15,7 @@ import { bus, EventNames } from './event-bus.js';
 import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, PIN_TIER_POLICY, RETIRED_PIN_TIERS, migrateFocusTier, defaultWaitUntil, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord, type SyncHold } from './types.js';
 import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES, HELD_PHASES, withCompletion } from './phase.js';
 import { isMainAgentTask } from './org/main-stays-active.js';
+import { applyDirector, directorRefusal, type DirectorInput } from './task-director.js';
 import { returningWaitUntil } from './task-wait-resume.js';
 import { TaskSyncError, TASK_SYNC_PUSH_FAILED_LOG, taskSyncPushRecoveryKey } from './task-sync-error.js';
 import { TEST_RUN_OWNER, TEST_RUN_PROJECT_KEY, ambientTestRun, isTestRunProject, isTestRunTask, testRunProjectMetadata, unmarkForTestViewer } from './test-run.js';
@@ -1181,6 +1182,9 @@ export interface AddTaskInput {
   /** An org node (see Task.org_role): the main agent or a project lead. */
   org_role?: import('./types.js').OrgRole;
   router_area_id?: string;
+  /** Born a Director ('yes') or a leader that is not one ('no'); omitted = auto (Task.director).
+   *  An org node takes none (OrgNodeDirectorError). */
+  director?: import('./types.js').DirectorChoice;
   /** The plugin whose own view is the only place the task shows (see Task.plugin_only). Such a
    *  task never syncs (born local) and is never pinned. */
   plugin_only?: string;
@@ -2936,6 +2940,10 @@ export async function applyPluginTaskDefaults(task: Task, reason: 'created' | 'm
  * Create a new task. Returns the created task.
  */
 export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncResult: SyncResult }> {
+  if (input.org_role) {
+    const refused = directorRefusal({ id: 'new', org_role: input.org_role }, input.director);
+    if (refused) throw refused;
+  }
   // Read-modify-write under lock; sync push happens outside to avoid holding lock during network I/O
   const { task, createdProject } = await withWriteLock(async () => {
     const config = await getConfig();
@@ -3132,6 +3140,7 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       ...(input.walnut_agent && input.agent_id ? { agent_id: input.agent_id } : {}),
       ...(input.org_role ? { org_role: input.org_role } : {}),
       ...(input.router_area_id ? { router_area_id: input.router_area_id } : {}),
+      ...(input.director === 'yes' || input.director === 'no' ? { director: input.director } : {}),
       ...(keptBy ? { plugin_only: keptBy } : {}),
       ...(syncHold ? { sync_hold: syncHold } : {}),
       // Born pinned (interactive/AI creates — newTaskPinDefault), in the tier
@@ -4268,6 +4277,9 @@ export interface UpdateTaskInput {
   pr_wake?: boolean | null;
   /** Threads on for this task (Task.threads_on); false or null turns them off. */
   threads_on?: boolean | null;
+  /** A Director under its VP (Task.director): 'yes' / 'no' stored, 'auto' or null deletes it.
+   *  An org node refuses yes / no (OrgNodeDirectorError, task-director.ts). */
+  director?: DirectorInput;
   /** WAITING only: when the wait ends by itself (ISO datetime; '' clears). Kept
    *  only while the task is WAITING after this update; applyPhase clears it on
    *  every move out. */
@@ -4567,6 +4579,9 @@ export async function updateTask(
   }
 
   const task = matches[0];
+  // Refused before anything changes: an org node takes no Director choice (task-director.ts).
+  const directorRefused = directorRefusal(task, updates.director);
+  if (directorRefused) throw directorRefused;
   const oldPhase = task.phase;
   let migrationResult: MigratedTask[] | undefined;
 
@@ -4777,6 +4792,7 @@ export async function updateTask(
   // Stored as presence-only (true or absent): an older Walnut reads an absent field as off.
   // Kept as said: true on, false off (the experiment task_threads keeps them on unless turned off), null unset.
   if (updates.threads_on !== undefined) { if (updates.threads_on === null) delete task.threads_on; else task.threads_on = updates.threads_on; }
+  applyDirector(task, updates.director);
   // Track parent change for plugin notification (fired after writeStore)
   let parentChangeAction: (() => void) | undefined;
   if (updates.parent_task_id !== undefined) {

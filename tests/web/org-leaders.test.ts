@@ -61,6 +61,24 @@ describe('leaders under a VP', () => {
     expect(groupsOf(all, 'Quiet')).toEqual([])
   })
 
+  it('honours the Director choice: yes lists a task with no team, no passes its sub-leaders up', () => {
+    const lead = t('Choice', { org_role: 'lead', title: 'Choice VP' })
+    const promoted = t('Choice', { title: 'Promoted alone', director: 'yes' })
+    const demoted = t('Choice', { title: 'Demoted leader', director: 'no' })
+    const plain = t('Choice', { parent_task_id: demoted.id, title: 'Plain worker' })
+    const sub = t('Choice', { parent_task_id: demoted.id, title: 'Sub leader' })
+    const subWorker = t('Choice', { parent_task_id: sub.id, title: 'Sub worker' })
+    const pickedWorker = t('Choice', { parent_task_id: sub.id, title: 'Picked worker', director: 'yes' })
+    const groups = groupsOf([lead, promoted, demoted, plain, sub, subWorker, pickedWorker], 'Choice')
+    const leaders = groups[0]!.leaders
+    // The demoted leader is gone; its sub-leader lifts to the top.
+    expect(leaders.map((l) => [l.title, l.leads]).sort()).toEqual([['Promoted alone', 0], ['Sub leader', 2]])
+    const subLeader = leaders.find((l) => l.title === 'Sub leader')!
+    // A worker chosen as a Director shows under its leader, with no team of its own.
+    expect(subLeader.subs.map((s) => [s.title, s.leads])).toEqual([['Picked worker', 0]])
+    expect(leaderTotal(groups)).toBe(2)
+  })
+
   it('counts and search', () => {
     expect(leadersLabel(1)).toBe('1 leader')
     expect(leadersLabel(6)).toBe('6 leaders')

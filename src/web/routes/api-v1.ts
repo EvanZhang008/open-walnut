@@ -2822,8 +2822,9 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
     const { title, project, priority, due_date: dueDate, start_date: startDate,
       end_date: endDate, description, pinned, focus_tier: focusTier, group_id: groupId,
       launch_cwd: launchCwd, launch_host: launchHost, user_words: userWords, idempotency_key: idempotencyKey, tags,
-      confirm_new: confirmNew, new_reason: newReason, local } = (req.body ?? {}) as {
+      confirm_new: confirmNew, new_reason: newReason, local, director: directorRaw } = (req.body ?? {}) as {
       local?: unknown
+      director?: unknown
       title?: unknown
       project?: unknown
       user_words?: unknown
@@ -2850,6 +2851,11 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
     if (local !== undefined && typeof local !== 'boolean') {
       sendError(res, 400, 'bad_request', 'local must be a boolean'); return
     }
+    // director (additive, 2026-11-20): born a Director ('yes') or not ('no'); 'auto' / null store nothing.
+    const { parseDirectorInput } = await import('../../core/task-director.js')
+    const directorParse = parseDirectorInput(directorRaw)
+    if (!directorParse.ok) { sendError(res, 400, 'bad_request', directorParse.error); return }
+    const director = directorParse.value === 'yes' || directorParse.value === 'no' ? directorParse.value : undefined
     const { addTaskIdempotently, validateIdempotencyKey, TaskCreateConflict } = await import('../../core/task-create-idempotency.js')
     if (idempotencyKey !== undefined) {
       try { validateIdempotencyKey(idempotencyKey) }
@@ -3036,6 +3042,7 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
         ...(finalDescription !== undefined ? { description: finalDescription } : {}),
         ...(pluginOnly ? { plugin_only: pluginOnly } : {}),
         ...(local === true ? { source: 'local' as const } : {}),
+        ...(director ? { director } : {}),
         asyncPush: true,
       }
       // Human/AI create surface (phone Quick Add, `walnut add`, the task_create
@@ -3204,7 +3211,8 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
     if (id === 'reorder') { next(); return }
     const { status, phase, wait_until: waitUntilRaw, priority, due_date: dueDate, start_date: startDate, end_date: endDateRaw,
       project, title, description, tags,
-      unread, parent_task_id: parentTaskId, watched_at: watchedAt, background_at: backgroundAt, threads_on: threadsOn } = (req.body ?? {}) as {
+      unread, parent_task_id: parentTaskId, watched_at: watchedAt, background_at: backgroundAt, threads_on: threadsOn,
+      director: directorRaw } = (req.body ?? {}) as {
       status?: unknown
       phase?: unknown
       wait_until?: unknown
@@ -3221,6 +3229,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
       watched_at?: unknown
       background_at?: unknown
       threads_on?: unknown
+      director?: unknown
     }
     // Reassignable: clearing start_date cascades an end_date clear (below).
     let endDate = endDateRaw
@@ -3323,6 +3332,14 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
       sendError(res, 400, 'bad_request', 'threads_on must be a boolean')
       return
     }
+    // Director (additive, 2026-11-20): Task.director, 'auto' / null = the default (core/task-director.ts).
+    const { parseDirectorInput, directorRefusal, OrgNodeDirectorError } = await import('../../core/task-director.js')
+    const directorParse = parseDirectorInput(directorRaw)
+    if (!directorParse.ok) {
+      sendError(res, 400, 'bad_request', directorParse.error)
+      return
+    }
+    const director = directorParse.value
     // Adopt / release (additive, 2026-10): the leader's task id makes this task
     // its worker (subtask); "" releases it. Checked against the board below.
     if (parentTaskId !== undefined && typeof parentTaskId !== 'string') {
@@ -3347,8 +3364,8 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
     if (status === undefined && phase === undefined && waitUntil === undefined && priority === undefined && dueDate === undefined
         && startDate === undefined && endDate === undefined && project === undefined && title === undefined
         && description === undefined && tags === undefined && unread === undefined && parentTaskId === undefined
-        && watchedAt === undefined && backgroundAt === undefined && threadsOn === undefined && !pinPatch) {
-      sendError(res, 400, 'bad_request', 'at least one updatable field is required (status/phase/wait_until/priority/due_date/start_date/end_date/project/title/description/tags/unread/watched_at/background_at/threads_on/parent_task_id/pinned/focus_tier)')
+        && watchedAt === undefined && backgroundAt === undefined && threadsOn === undefined && director === undefined && !pinPatch) {
+      sendError(res, 400, 'bad_request', 'at least one updatable field is required (status/phase/wait_until/priority/due_date/start_date/end_date/project/title/description/tags/unread/watched_at/background_at/threads_on/director/parent_task_id/pinned/focus_tier)')
       return
     }
     if (waitUntil !== undefined && normalizeDateField(waitUntil) && phase === undefined) {
@@ -3454,6 +3471,15 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
           }
         }
         parentLink = { current, leader, previous }
+      }
+    }
+    // An org node takes no Director choice: refused here, before the description write below.
+    if (director === 'yes' || director === 'no') {
+      const current = parentLink?.current ?? await tm.getTask(id).catch(() => undefined)
+      const refusal = current ? directorRefusal(current, director) : undefined
+      if (refusal) {
+        sendError(res, refusal.statusCode, refusal.code, refusal.message)
+        return
       }
     }
     // The pin preconditions are judged here too, before the first write below.
@@ -3586,6 +3612,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         ...(watchedAt !== undefined ? { watched_at: normalizeDateField(watchedAt) } : {}),
         ...(backgroundAt !== undefined ? { background_at: normalizeDateField(backgroundAt) } : {}),
         ...(threadsOn !== undefined ? { threads_on: threadsOn as boolean } : {}),
+        ...(director !== undefined ? { director } : {}),
         // '' = release (updateTask's clear); otherwise the resolved full id.
         ...(parentChanged ? { parent_task_id: parentLink?.leader?.id ?? '' } : {}),
       }
@@ -3712,6 +3739,11 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
       }
       if (err instanceof tm.InvalidProjectNameError) {
         sendError(res, 400, 'bad_request', msg)
+        return
+      }
+      // The org node check under the write lock (a role set since the check above).
+      if (err instanceof OrgNodeDirectorError) {
+        sendError(res, err.statusCode, err.code, msg)
         return
       }
       throw err

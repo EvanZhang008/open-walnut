@@ -52,6 +52,8 @@ export interface OrgPin {
 
 /** A task's place in the org above the work (Task.org_role). */
 export type OrgRole = 'main' | 'lead' | 'router';
+/** The user's choice of whether a task is a Director under its VP on the Org page (Task.director). */
+export type DirectorChoice = 'yes' | 'no';
 /** Canonical list of valid priority values — use for runtime validation. */
 export const VALID_PRIORITIES: readonly TaskPriority[] = ['immediate', 'important', 'backlog', 'none'] as const;
 
@@ -948,6 +950,10 @@ export interface Task {
    *  it are filed one thread per subject, as Main's and a lead's are (core/org/keeps-threads.ts).
    *  Unset = off, or on under the experiment task_threads; Main and the leads always keep Threads. */
   threads_on?: boolean;
+  /** A Director under its VP on the Org page (src/core/org/org-tree.ts isDirector): 'yes' even
+   *  with no team, 'no' for a leader that is not one. Absent = auto: a task with an open subtask
+   *  is a Director. Stored only as yes or no; never on an org node (Main, a VP, a router). */
+  director?: DirectorChoice;
   source: TaskSource;
   external_url?: string;
   created_at: string;

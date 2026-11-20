@@ -6,9 +6,13 @@
  * project 下面"): VP -> project -> leader -> the leaders under it. A project with no leader is left
  * out, and a VP with one project still names it. The Org list and the Org chart draw the same groups
  * (OrgLeaders.tsx), behind the `org_leaders` experiment.
+ *
+ * Who is listed is the shared Director rule (src/core/org/org-directors.ts directorsOf): a leader is a
+ * Director by default, the user may make any task one (Task.director 'yes') or take a leader off
+ * ('no'), and a task that is no Director passes the Directors under it up.
  */
 import type { Task } from '@open-walnut/core';
-import { orgDisplayTitle, projectKey, type OrgTaskNode } from '@open-walnut/org-tree';
+import { directorsOf, orgDisplayTitle, projectKey, type OrgDirector, type OrgTaskNode } from '@open-walnut/org-tree';
 import { stateTab, type OrgStateTab } from './org-task-tabs';
 import type { VpProject } from './org-chart-model';
 
@@ -20,7 +24,7 @@ export interface LeaderNode {
   leads: number;
   /** On the user's Watching list (Task.watched_at): it wears the eye, wherever else it shows. */
   watched: boolean;
-  /** The leaders among the tasks under it, at any depth below (a task that leads none adds none). */
+  /** The leaders among the tasks under it, at any depth below (a task that is none adds none). */
   subs: LeaderNode[];
 }
 
@@ -38,24 +42,23 @@ export type LeaderSource = Pick<VpProject, 'key' | 'project' | 'name'> & { teams
 export const sourcesOf = (projects: readonly VpProject[]): LeaderSource[] =>
   projects.map((p) => ({ key: p.key, project: p.project, name: p.name, teams: p.row.node?.teams ?? [] }));
 
+/** A Director as the Org page draws it: its title as the UI shows it, its state and its eye. */
+function leaderOf(d: OrgDirector, byId: ReadonlyMap<string, Task>): LeaderNode {
+  const task = byId.get(d.id);
+  return {
+    id: d.id,
+    title: task ? orgDisplayTitle(task) : d.title,
+    // The tree is built from these same tasks; one missing reads as waiting.
+    state: task ? stateTab(task) : 'waiting',
+    leads: d.leads,
+    watched: !!task?.watched_at,
+    subs: d.subs.map((s) => leaderOf(s, byId)),
+  };
+}
+
 /** The leaders among `nodes` (the tree's own order: what needs the user first, then the newest). */
 function leadersIn(nodes: readonly OrgTaskNode[], byId: ReadonlyMap<string, Task>, seen: Set<string>): LeaderNode[] {
-  const out: LeaderNode[] = [];
-  for (const n of nodes) {
-    if (!n.workers.length || seen.has(n.id)) continue;
-    seen.add(n.id);
-    const task = byId.get(n.id);
-    out.push({
-      id: n.id,
-      title: task ? orgDisplayTitle(task) : n.title,
-      // The tree is built from these same tasks; one missing reads as waiting.
-      state: task ? stateTab(task) : 'waiting',
-      leads: n.workers.length,
-      watched: !!task?.watched_at,
-      subs: leadersIn(n.workers, byId, seen),
-    });
-  }
-  return out;
+  return directorsOf(nodes, seen).map((d) => leaderOf(d, byId));
 }
 
 /** The VP's leaders, by project, in the order of its projects. Only a project's own teams count

@@ -7,6 +7,7 @@ import { log } from '../../logging/index.js'
 import { registerTaskChangeRoutes } from './task-changes.js'
 import { matchParentRef, refNamesId } from '../../lib/id-ref.js'
 import { VALID_PHASES } from '../../core/phase.js'
+import { OrgNodeDirectorError, parseDirectorInput } from '../../core/task-director.js'
 import {
   addTask,
   listTasks,
@@ -925,6 +926,10 @@ tasksRouter.post('/', async (req: Request, res: Response, next: NextFunction) =>
       res.status(400).json({ error: 'project must be a string ("" = Inbox)' })
       return
     }
+    // Born a Director or not (core/task-director.ts); 'auto' / null are the default, nothing stored.
+    const director = parseDirectorInput(req.body.director)
+    if (!director.ok) { res.status(400).json({ error: director.error }); return }
+    body.director = director.value === 'yes' || director.value === 'no' ? director.value : undefined
     // This is the web console's create, which sends no caller. A session that reaches
     // it anyway (the `api` op, a raw request) meets the same related-open-tasks check
     // as POST /api/v1/tasks (related-open-tasks.ts), and a worker files in another
@@ -998,6 +1003,10 @@ tasksRouter.post('/', async (req: Request, res: Response, next: NextFunction) =>
     }
     if (err instanceof InvalidFocusTierError) {
       res.status(400).json({ error: err.message, focus_tier: err.tier })
+      return
+    }
+    if (err instanceof OrgNodeDirectorError) {
+      res.status(400).json({ error: err.message, code: err.code })
       return
     }
     next(err)
@@ -1577,6 +1586,8 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
         return
       }
     }
+    const directorParse = parseDirectorInput(req.body.director)
+    if (!directorParse.ok) { res.status(400).json({ error: directorParse.error }); return }
     if (req.body.wait_until !== undefined
         && !(typeof req.body.wait_until === 'string' && (req.body.wait_until === '' || Number.isFinite(Date.parse(req.body.wait_until))))) {
       res.status(400).json({ error: 'wait_until must be an ISO-8601 datetime, or "" to clear' })
@@ -1717,6 +1728,10 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
     }
     if (err instanceof CircularDependencyError) {
       res.status(409).json({ error: err.message, task_id: err.taskId, dep_id: err.depId })
+      return
+    }
+    if (err instanceof OrgNodeDirectorError) {
+      res.status(400).json({ error: err.message, code: err.code })
       return
     }
     next(err)

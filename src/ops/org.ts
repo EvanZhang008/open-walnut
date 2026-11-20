@@ -12,19 +12,22 @@ defineOp({
     'The org above the work, one level at a time. For the main agent (or with no task): one row per project, '
     + 'with its counts (open, running, needs_you = waiting on the user, waiting = parked), the few tasks waiting on '
     + 'the user, and its `contact`: the project\'s lead, or its one team, the one to talk to with org_send. '
-    + 'For a project lead: its teams (the project\'s open top-level tasks). For any other task: its workers. '
+    + 'For a project lead: its teams (the project\'s open top-level tasks) and `directors`, the Directors under it. '
+    + 'For any other task: its workers. A row with director: true is a Director. '
     + 'Pass `of` to read another node. Read this before reading tasks one by one.',
   input: {
     of: z.string().min(1).optional().describe('Task id whose reports to list; default: your own task'),
   },
   handler: async ({ of }, call) => {
     const body = await call('GET', `/org/reports${of ? `?of=${encodeURIComponent(String(of))}` : ''}`) as {
-      of?: string; rows?: unknown[];
+      of?: string; rows?: unknown[]; directors?: unknown[];
     };
     const rows = Array.isArray(body?.rows) ? body.rows : [];
+    const directors = Array.isArray(body?.directors) ? body.directors.length : 0;
     return withOutcome(
       { ...body, rows },
-      rows.length ? `${rows.length} report${rows.length === 1 ? '' : 's'}.` : 'Nothing open reports here.',
+      (rows.length ? `${rows.length} report${rows.length === 1 ? '' : 's'}.` : 'Nothing open reports here.')
+        + (directors ? ` ${directors} Director${directors === 1 ? '' : 's'} right under this VP (directors).` : ''),
       'For detail on a project, org_send to it; read one task with task_get.',
     );
   },

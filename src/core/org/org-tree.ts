@@ -21,14 +21,17 @@
  * whom.
  */
 
-import type { OrgRole, TaskPhase } from '../types.js';
+import type { DirectorChoice, OrgRole, TaskPhase } from '../types.js';
 import { askProjectDisplay } from '../sessions/ask-list.js';
 import { fallbackUserState, storedUserState, type UserState, type UserStatus } from '../user-status.js';
+import { isDirector } from './org-directors.js';
 // The team's news (its tasks' own words) rides the same import for the web (@open-walnut/org-tree).
 export * from './team-news.js';
 export * from './instructions-author.js';
 // And the CEO's and a VP's default core instructions, which the editors show.
 export * from './core-instructions.js';
+// And who is a Director under a VP (2026-11-20).
+export * from './org-directors.js';
 
 /** The fields the org reads off a task. */
 export interface OrgTaskLike {
@@ -57,6 +60,8 @@ export interface OrgTaskLike {
   exec_session_id?: string;
   /** The one status the user sees (src/core/user-status.ts); the counts read it. */
   user_status?: Pick<UserStatus, 'state' | 'snoozed' | 'source' | 'transient'>;
+  /** The user's Director choice (Task.director); absent = auto. */
+  director?: DirectorChoice;
 }
 
 /** By the user's status (src/core/user-status.ts), the same numbers every surface shows. */
@@ -82,6 +87,8 @@ export interface OrgTaskNode {
   /** The user's status of this task alone. */
   userState: UserState;
   hasSession: boolean;
+  /** A Director under its VP (isDirector): its choice, else whether it leads open workers. */
+  director: boolean;
   workers: OrgTaskNode[];
   /** Over this task and every worker below it. */
   counts: OrgCounts;
@@ -409,7 +416,7 @@ export function buildOrgTree(all: readonly OrgTaskLike[]): OrgTree {
     workers.sort((a, b) => compareWork(a, b, at));
     return {
       kind: 'task', id: t.id, title: t.title, project: (t.project ?? '').trim(), phase: t.phase,
-      userState, hasSession: hasSession(t), workers, counts,
+      userState, hasSession: hasSession(t), director: isDirector(t.director, workers.length), workers, counts,
     };
   };
 

@@ -19,8 +19,8 @@ import { bus, EventNames } from '../event-bus.js';
 import { ASK_WALNUT_PROJECT } from '../sessions/ask-list.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import {
-  DIGEST_FOLD_MS, DIGEST_MAX_LINES, buildOrgTree, findProjectNode, formatAlertLine, formatDigestLine, isOrgMember, leadsAlso, orgDigest, pickLead,
-  orgNodeNamed, pickMain, pickOwnLead, planOrgNote, projectKey, successorOf, vpTaskTitle, type OrgAlert, type OrgDigestState, type OrgTaskLike, type OrgTree,
+  DIGEST_FOLD_MS, DIGEST_MAX_LINES, buildOrgTree, directorsOf, findProjectNode, formatAlertLine, formatDigestLine, isOrgMember, leadsAlso, orgDigest, pickLead,
+  orgNodeNamed, pickMain, pickOwnLead, planOrgNote, projectKey, successorOf, vpTaskTitle, type OrgAlert, type OrgDigestState, type OrgDirector, type OrgTaskLike, type OrgTree,
 } from './org-tree.js';
 
 export const MAIN_TASK_TITLE = 'CEO';
@@ -558,6 +558,8 @@ export interface OrgReportRow {
   waiting_on_user?: { id: string; title: string }[];
   /** A project with no one contact (the Inbox): its first tasks. */
   teams?: { id: string; title: string }[];
+  /** A team or worker that is a Director under its VP (org-directors.ts); absent = not one. */
+  director?: true;
 }
 
 function waitingOnUser(nodes: import('./org-tree.js').OrgTaskNode[], limit = 3): { id: string; title: string }[] {
@@ -574,7 +576,7 @@ function waitingOnUser(nodes: import('./org-tree.js').OrgTaskNode[], limit = 3):
 }
 
 /** The reports of `of`: the main agent (or nobody) → projects; a lead → its project's teams; a task → its workers. */
-export async function orgReportsOf(of: Task | undefined): Promise<{ of: string; rows: OrgReportRow[] }> {
+export async function orgReportsOf(of: Task | undefined): Promise<{ of: string; rows: OrgReportRow[]; directors?: OrgDirector[] }> {
   const tree = await getOrgTree();
   if (!of || of.org_role === 'main') {
     return {
@@ -603,11 +605,15 @@ export async function orgReportsOf(of: Task | undefined): Promise<{ of: string; 
   const row = (n: import('./org-tree.js').OrgTaskNode, kind: 'team' | 'worker'): OrgReportRow => ({
     id: n.id, title: n.title, kind, project: n.project, phase: n.phase,
     open: n.counts.open, running: n.counts.running, needs_you: n.counts.needsYou, to_read: n.counts.toRead, waiting: n.counts.waiting,
+    ...(n.director ? { director: true as const } : {}),
   });
   if (of.org_role === 'lead') {
     // Its own project's teams, and those of every project put under it.
     const nodes = tree.projects.filter((p) => p.lead?.id === of.id || projectKey(p.project) === projectKey(of.project));
-    return { of: of.id, rows: nodes.flatMap((p) => p.teams).map((n) => row(n, 'team')) };
+    const teams = nodes.flatMap((p) => p.teams);
+    // The Directors under the VP, at any depth (the layer the Org page draws under a VP).
+    const directors = directorsOf(teams);
+    return { of: of.id, rows: teams.map((n) => row(n, 'team')), ...(directors.length ? { directors } : {}) };
   }
   const find = (list: import('./org-tree.js').OrgTaskNode[]): import('./org-tree.js').OrgTaskNode | undefined => {
     for (const n of list) {

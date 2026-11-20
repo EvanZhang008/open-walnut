@@ -137,10 +137,13 @@ const DEFAULT_TASK_LIST_LIMIT = 50
  * result is explainable without a follow-up call; the rest are omitted when
  * absent (an absent key is cheaper to read than a null).
  */
+/** Task.director, as task_update and task_create take it (core/org/org-directors.ts). */
+const DIRECTOR_DESCRIPTION = 'Director under its VP on the Org page: auto (default: a task with open subtasks is one), yes, no'
+
 const TASK_LIST_ALWAYS = ['id', 'title', 'phase', 'project', 'updated_at'] as const
 const TASK_LIST_WHEN_SET = [
   'due_date', 'start_date', 'completed_at', 'focus_tier', 'pin_order',
-  'parent_task_id', 'group_id', 'sprint', 'tags', 'is_blocked', 'watched_at', 'background_at',
+  'parent_task_id', 'group_id', 'sprint', 'tags', 'is_blocked', 'watched_at', 'background_at', 'director',
 ] as const
 
 /** Project ONE REST row onto the lean agent-facing shape. Exported for tests. */
@@ -642,6 +645,7 @@ defineOp({
     end_date: z.string().optional().describe('When the work ends: YYYY-MM-DD or a full ISO-8601 datetime'),
     description: z.string().optional().describe('Longer body text (write-only)'),
     tags: z.array(z.string()).max(LIST_MAX).optional().describe('Initial task tags'),
+    director: z.enum(['yes', 'no']).optional().describe(`${DIRECTOR_DESCRIPTION}; omit for auto`),
     local: z.boolean().optional().describe('true keeps the task out of the outside service its project syncs to (a private matter: the user\'s own promotion or performance, feedback on a colleague, pay, health, immigration, money, family, a job search, a personal side project). Default: the project\'s service, after Walnut checks it is not private'),
     pinned: z.boolean().optional().describe('Join the pinned board. Default: your task\'s (from inside a task), otherwise true. false keeps the task off the board'),
     // Exact ids only — this rides straight to the server, which validates
@@ -878,6 +882,7 @@ defineOp({
     parent_task_id: z.string().optional().describe('Adopt or release: set to your own task id to make an existing task a worker of yours (it keeps its project and folder; its stops, completions, errors and waits then reach you), or "" to release it.'),
     watched_at: z.string().nullable().optional().describe(WATCHED_AT_DESCRIPTION),
     background_at: z.string().nullable().optional().describe(BACKGROUND_AT_DESCRIPTION),
+    director: z.enum(['auto', 'yes', 'no']).optional().describe(DIRECTOR_DESCRIPTION),
     report: REPORT_CHANGE.optional().describe(`What it waits on next (task_report_set): ${REPORT_SET_TEXT}`),
   },
   // The old park receipt's text (removed 2026-10-05). A session started before
@@ -1442,6 +1447,7 @@ defineOp({
       parent_task_id: z.string().optional(),
       watched_at: z.string().nullable().optional().describe(WATCHED_AT_DESCRIPTION),
       background_at: z.string().nullable().optional().describe(BACKGROUND_AT_DESCRIPTION),
+      director: z.enum(['auto', 'yes', 'no']).optional(),
       user_words: z.string().optional().describe('With project, moving your worker out of your project: what the user said, naming that project'),
     }).strict()).min(1).max(MAX_BULK_WRITE)
       .describe(`1 to ${MAX_BULK_WRITE} patches, each { id, ...fields } with at least one field besides id`),

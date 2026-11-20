@@ -1241,6 +1241,14 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   `GET /api/v1/tasks/:id/threads` and its thread routes answer as a lead's do; off, they
   answer `409 not_org_node`. A thread push for such a task carries
   `url: /tasks/<id>?view=threads` instead of `/org?node=...`.
+- Director (additive, 2026-11-20): `PATCH /api/v1/tasks/:id` also accepts `director`:
+  `"yes"` makes the task a Director under its VP even with no team, `"no"` keeps a leader
+  from being one, `"auto"` or `null` goes back to the default (the field is then absent;
+  auto = a task with an open subtask is a Director). Anything else is `400 bad_request`; a
+  `"yes"` or `"no"` on an org node (Main, a VP, a router) is `400 org_node_director` and
+  changes nothing. `POST /api/v1/tasks` takes `director: "yes" | "no"` too. A task row carries
+  `director` only when it is `"yes"` or `"no"`. The web route `PATCH /api/tasks/:id` and
+  `POST /api/tasks` take the same field, and agents set it with `task_update` and `task_create`.
 
 ### Private tasks (additive, 2026-11-01): local tasks in a project that syncs
 
@@ -1576,10 +1584,14 @@ team is talked to through that task; the Inbox never gets a lead.
 - `GET /api/v1/org` → `200 { tree: { main?, projects: [{ project, lead?,
   needsLead, contactId?, vp?, teams, counts }], counts } }`, `counts` = `{ open,
   running, needsYou, waiting }`; `vp` = the project whose lead leads this one,
-  when it is not its own.
+  when it is not its own. Every team and worker node carries `director: boolean`
+  (additive, 2026-11-20): its `director` choice, else whether it has an open worker.
 - `GET /api/v1/org/reports?of=<taskId>` → who reports to `of` (default: the
   caller's task from `x-walnut-caller-sid`): Main or none → one row per project;
-  a lead → its teams; any other task → its workers.
+  a lead → its teams; any other task → its workers. A team or worker row that is a
+  Director carries `director: true`, and a lead's answer adds `directors` (additive,
+  2026-11-20): `[{ id, title, leads, subs }]`, the Directors under it, each with the
+  nearest Directors below it (a task that is no Director in between is skipped).
 - `POST /api/v1/org/main` → `200 { task }`: Main's task, made once (local, filed
   under `Ask Walnut`).
 - `POST /api/v1/org/contact { "to": project name | task id, "task"? }` → `200 { task,
