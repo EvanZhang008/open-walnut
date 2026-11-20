@@ -6,7 +6,7 @@
  *                wears already (it can still be picked).
  *   Ask AI       a line of what to draw; the user's own model draws three (POST /org/avatars/draw)
  *                and one is picked.
- *   Upload       a PNG, JPEG, WebP or SVG; a picture is cut square and made 256 px here.
+ *   Upload       a PNG, JPEG, WebP, GIF or SVG; a picture is cut square and made 128 px here.
  *
  * Save writes the name, then the avatar (PUT /org/avatars/:taskId); Reset to default clears the
  * avatar. An agent does the same with org_avatar_set, so asking the node in its chat works too.
@@ -190,7 +190,7 @@ export function OrgAvatarDialog({ target, onRename, onClose }: Props) {
                 onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); void upload(e.dataTransfer.files[0]); }}>
                 <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" data-testid="org-avatar-file" onChange={(e) => void upload(e.target.files?.[0])} />
                 <span>Drop a PNG, JPEG, WebP or SVG here, or <u>choose a file</u>.</span>
-                <small>A picture is cut square and made 256 px.</small>
+                <small>A picture is cut square and made 128 px.</small>
               </label>
             )}
             {error && <p className="org-avatar-error" role="alert" data-testid="org-avatar-error">{error}</p>}

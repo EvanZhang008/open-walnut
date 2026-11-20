@@ -78,7 +78,7 @@ export function avatarValue(input: AvatarInput, writer: OrgWriter, now = new Dat
   if (!IMAGE_DATA_URL.test(image)) throw new OrgError('bad_avatar', 400, '`image` is a PNG, JPEG or WebP data URL (data:image/png;base64,...).');
   const labelled = IMAGE_DATA_URL.exec(image)?.[1];
   if (imageBytesKind(image) !== labelled) throw new OrgError('bad_avatar', 400, `The image's bytes are not a ${labelled?.toUpperCase()} picture.`);
-  if (image.length > MAX_AVATAR_IMAGE) throw new OrgError('bad_avatar', 413, `The image is ${image.length} characters; at most ${MAX_AVATAR_IMAGE} (make it 256 px or smaller).`);
+  if (image.length > MAX_AVATAR_IMAGE) throw new OrgError('bad_avatar', 413, `The image is ${image.length} characters; at most ${MAX_AVATAR_IMAGE} (make it 128 px or smaller).`);
   return { image, ...stamp };
 }
 
