@@ -3,7 +3,7 @@
  * workspaces/cleanup-notices.ts) and the kept reason's sentence (workspace-text.ts).
  */
 import { describe, expect, it } from 'vitest'
-import { __resetSetupWatch, cleanupNotice, completionNotice, setupNotice, watchSetupRun } from '../../web/src/components/workspaces/cleanup-notices'
+import { __resetSetupWatch, cleanupNotice, setupNotice, watchSetupRun } from '../../web/src/components/workspaces/cleanup-notices'
 import { keptText } from '../../web/src/components/workspaces/workspace-text'
 import type { TaskWorkspace, WorkspaceScriptRun } from '../../src/core/workspaces/types'
 
@@ -12,16 +12,16 @@ const down: WorkspaceScriptRun = { name: 'Stop services', command: 'make down', 
 const ran = { ...down, state: 'done' as const, ended_at: '2026-11-04T10:00:05.000Z' }
 
 describe('cleanup notices', () => {
-  it('a cleanup script starting, then the workspace removed', () => {
+  it('a cleanup that goes well says nothing: its script starting, running, and the workspace removed (2026-11-20)', () => {
     const running = { ...ready, teardown: down }
-    expect(cleanupNotice('t', 'Fix login', ready, running)).toMatchObject({ severity: 'info', title: 'Running cleanup Stop services', body: expect.stringContaining('“Fix login” completed') })
-    // The same run seen again (a progress write) says nothing more.
+    expect(cleanupNotice('t', 'Fix login', ready, running)).toBeNull()
     expect(cleanupNotice('t', 'Fix login', running, { ...running, updated_at: 'x' })).toBeNull()
     const removing = { ...ready, state: 'removing' as const, teardown: ran, removal: { trigger: 'complete' as const, from: 'ready' as const } }
     expect(cleanupNotice('t', 'Fix login', running, removing)).toBeNull()
-    expect(cleanupNotice('t', 'Fix login', removing, { ...removing, state: 'removed' })).toMatchObject({
-      severity: 'success', title: 'Workspace removed', body: 'Cleanup Stop services: Done in 5s. The workspace of “Fix login” was removed.',
-    })
+    expect(cleanupNotice('t', 'Fix login', removing, { ...removing, state: 'removed' })).toBeNull()
+    // Without a script, and with its branch kept (commits found nowhere else are kept, not lost).
+    expect(cleanupNotice('t', 'Fix login', { ...ready, state: 'removing' }, { ...ready, state: 'removed' })).toBeNull()
+    expect(cleanupNotice('t', 'Fix login', { ...ready, state: 'removing' }, { ...ready, state: 'removed', branch_kept: true })).toBeNull()
   })
 
   it('a failed cleanup script, and a workspace kept with its reason', () => {
@@ -49,14 +49,6 @@ describe('cleanup notices', () => {
   it('a kept reason reads as a sentence', () => {
     expect(keptText({ ...ready, state: 'kept', kept_reason: 'web: 2 uncommitted changes; web: has stashed changes' })).toBe('web has 2 uncommitted changes; web has stashed changes.')
     expect(keptText({ ...ready, state: 'kept' })).toBe('it still holds work.')
-  })
-
-  it('a completion says at once that the workspace is checked next', () => {
-    expect(completionNotice('t', 'Fix login', 'IN_PROGRESS', 'COMPLETE', ready)).toMatchObject({ severity: 'info', title: 'Cleaning up the workspace', key: 'cleanup-running:t:check' })
-    expect(completionNotice('t', 'Fix login', 'COMPLETE', 'COMPLETE', ready)).toBeNull()
-    expect(completionNotice('t', 'Fix login', undefined, 'COMPLETE', ready)).toBeNull()
-    expect(completionNotice('t', 'Fix login', 'IN_PROGRESS', 'COMPLETE', { ...ready, state: 'kept' })).toBeNull()
-    expect(completionNotice('t', 'Fix login', 'IN_PROGRESS', 'COMPLETE', undefined)).toBeNull()
   })
 
   it("a setup this page ran again tells its end, once; another task's says nothing", () => {

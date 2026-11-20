@@ -1,8 +1,8 @@
 /**
- * What a completed task's workspace cleanup tells the person as it goes: its
- * cleanup script started, then the workspace was removed or kept (and why).
- * "Task completed" alone said nothing of either, while the script could run for
- * minutes and a kept workspace stays on disk.
+ * What a completed task's workspace cleanup tells the person: only what went
+ * wrong. A workspace kept (and why), or a cleanup script that failed, is told; a
+ * cleanup that went well says nothing (2026-11-20, Evan: the cleanup notification
+ * "其实是不需要的"); the task row and its Workspace row still show it.
  *
  * useCleanupNotices.ts reads it from the task rows the page already has.
  */
@@ -25,14 +25,6 @@ function quoted(title: string | undefined): string {
 export function cleanupNotice(taskId: string, title: string | undefined, prev: TaskWorkspace | undefined, next: TaskWorkspace | undefined): CleanupNotice | null {
   if (!prev || !next) return null;
   const td = next.teardown;
-  const startedNow = td?.state === 'running' && !(prev.teardown?.state === 'running' && prev.teardown.started_at === td.started_at);
-  if (startedNow) {
-    return {
-      severity: 'info', key: `cleanup-running:${taskId}:${td.started_at}`,
-      title: `Running cleanup ${td.name}`,
-      body: `${quoted(title)} completed. Its cleanup script runs in the workspace now; the workspace is checked and removed after it.`,
-    };
-  }
   const ended = (next.state === 'removed' || next.state === 'kept') && prev.state !== next.state && prev.state !== 'removed';
   if (!ended) return null;
   // Only a cleanup of a completion speaks here; a person's own Remove has its own dialog.
@@ -46,31 +38,17 @@ export function cleanupNotice(taskId: string, title: string | undefined, prev: T
   const failed = script?.state === 'failed';
   const outputWhere = failed ? ' Its output is under Workspace in the task\'s menu.' : '';
   if (next.state === 'removed') {
+    if (!failed) return null;
     return {
-      severity: failed ? 'warning' : 'success', key: `cleanup-removed:${taskId}`,
-      title: failed ? `Cleanup ${script!.name} failed; workspace removed` : 'Workspace removed',
-      body: `${scriptLine}The workspace of ${quoted(title)} was removed${failed ? ' anyway, since nothing in it would be lost' : ''}${next.branch_kept ? '; its branch was kept, since it has commits found nowhere else' : ''}.${outputWhere}`,
+      severity: 'warning', key: `cleanup-removed:${taskId}`,
+      title: `Cleanup ${script!.name} failed; workspace removed`,
+      body: `${scriptLine}The workspace of ${quoted(title)} was removed anyway, since nothing in it would be lost${next.branch_kept ? '; its branch was kept, since it has commits found nowhere else' : ''}.${outputWhere}`,
     };
   }
   return {
     severity: 'warning', key: `cleanup-kept:${taskId}`,
     title: failed ? `Cleanup ${script!.name} failed; workspace kept` : 'Workspace kept',
     body: `${scriptLine}The workspace of ${quoted(title)} was kept: ${keptText(next)}${outputWhere}`,
-  };
-}
-
-/**
- * A task that just completed with its workspace in place: the cleanup check
- * starts a few seconds later (its sessions stop first), so say at once that it
- * comes. Its key reads as a running cleanup, so the next notice replaces it.
- */
-export function completionNotice(taskId: string, title: string | undefined, prevPhase: string | undefined, nextPhase: string | undefined, ws: TaskWorkspace | undefined): CleanupNotice | null {
-  if (prevPhase === undefined || prevPhase === 'COMPLETE' || nextPhase !== 'COMPLETE') return null;
-  if (!ws || ws.state !== 'ready' || ws.teardown?.state === 'running') return null;
-  return {
-    severity: 'info', key: `cleanup-running:${taskId}:check`,
-    title: 'Cleaning up the workspace',
-    body: `${quoted(title)} completed. In a few seconds its workspace is checked: the project's cleanup script runs first if it has one, then the workspace is removed unless something in it would be lost.`,
   };
 }
 

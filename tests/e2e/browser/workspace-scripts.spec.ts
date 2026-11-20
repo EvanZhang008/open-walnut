@@ -385,17 +385,14 @@ test("a failed setup holds the person's session until they choose; the Workspace
 
   // ── Complete it: the cleanup script runs, and the session says so while it does ──
   expect((await page.request.post(`/api/tasks/${taskId}/complete`, { data: {} })).ok()).toBe(true)
-  // At once, before the cleanup check starts (the task's sessions stop first).
-  await expect(page.getByText('Cleaning up the workspace', { exact: true }).first()).toBeVisible({ timeout: 5_000 })
   await expect.poll(async () => (await readTask(page, taskId)).workspace?.teardown?.state, { timeout: 30_000 }).toBe('running')
-  // Said outside the session too, beside "Task completed".
-  await expect(page.getByText('Running cleanup Stop services', { exact: true }).first()).toBeVisible({ timeout: 15_000 })
   await expect.poll(async () => (await readTask(page, taskId)).workspace?.teardown?.state, { timeout: 60_000 }).toBe('done')
   // Then how it ended: removed, or kept and why.
   await expect.poll(async () => (await readTask(page, taskId)).workspace?.state, { timeout: 60_000 }).toMatch(/^(removed|kept)$/)
   const ended = (await readTask(page, taskId)).workspace!
-  const endToast = page.getByText(ended.state === 'removed' ? 'Workspace removed' : 'Workspace kept', { exact: true }).first()
-  await expect(endToast).toBeVisible({ timeout: 30_000 })
+  // Kept is told (and why); a cleanup that went well is silent (2026-11-20, Evan: not needed).
+  const endToast = page.getByText('Workspace kept', { exact: true }).first()
+  if (ended.state === 'kept') await expect(endToast).toBeVisible({ timeout: 30_000 })
   // The Workspace row keeps how the cleanup ended (the notices point there for its output).
   const endFlyout = await openWorkspaceFlyout(page, panel)
   await expect(endFlyout.getByTestId('script-run-teardown')).toContainText('Stop services')
@@ -414,10 +411,11 @@ test("a failed setup holds the person's session until they choose; the Workspace
     await shot(page, 'terminal-folder-gone', panel.locator('.session-terminal-panel'), 4)
     await panel.locator('[data-header-id="terminal"]').first().click()
   }
-  // Each notice replaced the one before: no "Running cleanup" left beside the outcome.
+  // No cleanup toast said it was starting, running, or (when removed) that it went well.
   await expect(page.getByText('Running cleanup Stop services', { exact: true })).toHaveCount(0)
   await expect(page.getByText('Cleaning up the workspace', { exact: true })).toHaveCount(0)
-  await shot(page, 'cleanup-toast', endToast.locator('..').locator('..'), 8)
+  await expect(page.getByText('Workspace removed', { exact: true })).toHaveCount(0)
+  if (ended.state === 'kept') await shot(page, 'cleanup-toast', endToast.locator('..').locator('..'), 8)
 
   expect(audit.errors).toEqual([])
   expect(audit.failed).toEqual([])
