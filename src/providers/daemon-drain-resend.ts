@@ -70,7 +70,7 @@ export const RESEND_AFTER_LOST: Readonly<Record<string, string>> = {
   'replica.status': 'read', 'triggers.state.snapshot': 'read', 'taskdir.list': 'read', 'taskdir.sizes': 'read', 'cli.holder': 'read',
   'usage.scan': 'read', 'usage.sessionCost': 'read', 'usage.costState': 'read', 'usage.budget.get': 'read',
   'usage.budget.list': 'read', 'usage.codexOutside': 'read', 'net.identity': 'read', 'jobs.logs': 'read', 'host.preflight': 'read',
-  'triggers.configure': 'the whole rule set, pushed again', 'hooks.configure': 'the whole rule set, pushed again',
+  'triggers.configure': 'the whole rule set, or a delta its daemon checks against the set it holds, pushed again', 'hooks.configure': 'the whole rule set, pushed again',
   'leader.configure': 'the whole setting, pushed again', 'net.configure': 'the whole setting, pushed again',
   'turns.configure': 'the whole setting, pushed again', 'workspace.configure': 'the whole setting, pushed again',
   'jobs.configure': 'the whole job list, pushed again', 'bridge.configure': 'the whole setting, pushed again',

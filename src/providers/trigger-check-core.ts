@@ -1436,6 +1436,51 @@ export function triggersSetHash(defs: TriggerDef[]): string {
 }
 
 /**
+ * The name a server gives the set it pushes (`pushHash`, triggers-probe-v1): the defs as they
+ * go on the wire, sorted by id (trigger-push.ts compileTriggerDefs). A daemon computes it over a
+ * set a delta made to prove it is the set the server named.
+ */
+export function triggerPushHash(defs: readonly unknown[]): string {
+  return createHash('sha256').update(JSON.stringify(defs)).digest('hex').slice(0, 16);
+}
+
+/** At most this many defs in one delta's `put` or `drop`; a larger change goes as the whole set. */
+export const TRIGGERS_DELTA_MAX = 2000;
+
+/**
+ * triggers-delta-v1: `triggers.configure {delta: {base, put, drop}, pushHash}` names the set the
+ * daemon holds (`base`), the defs that are new or changed (`put`, whole defs) and the ids gone
+ * (`drop`). The set it makes, sorted by id, or null when the delta is malformed or does not make
+ * the set named `pushHash` (the daemon then answers `held: false` and the whole set comes).
+ * 2026-11-20: a change of one of 109 triggers sent all of them (about 118 KB) up a link that an
+ * SSH relay ends every few MB carried up.
+ */
+export function applyTriggersDelta(held: readonly unknown[], delta: unknown, pushHash: string): unknown[] | null {
+  if (!delta || typeof delta !== 'object') return null;
+  const { put, drop } = delta as { put?: unknown; drop?: unknown };
+  if (!Array.isArray(put) || !Array.isArray(drop) || put.length > TRIGGERS_DELTA_MAX || drop.length > TRIGGERS_DELTA_MAX) return null;
+  const idOf = (def: unknown): string | null =>
+    def && typeof def === 'object' && typeof (def as { id?: unknown }).id === 'string' ? (def as { id: string }).id : null;
+  const byId = new Map<string, unknown>();
+  for (const def of held) {
+    const id = idOf(def);
+    if (id === null) return null;
+    byId.set(id, def);
+  }
+  for (const id of drop) {
+    if (typeof id !== 'string') return null;
+    byId.delete(id);
+  }
+  for (const def of put) {
+    const id = idOf(def);
+    if (id === null) return null;
+    byId.set(id, def);
+  }
+  const set = [...byId.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([, def]) => def);
+  return triggerPushHash(set) === pushHash ? set : null;
+}
+
+/**
  * The state file name for a trigger id. Ids are server-generated, so a `/` or a
  * `..` in one must never reach the filesystem: unsafe characters collapse to `_`
  * and a hash tail keeps two different ids from colliding on one file.

@@ -192,6 +192,7 @@ import {
   createCheckCallers,
   testCheckCaller,
   withoutTriggerCaller,
+  applyTriggersDelta,
   type CheckCaller,
   type PendingFire,
   type TriggerCheckSpec,
@@ -8699,15 +8700,24 @@ async function configureTriggers(ws: ServerWebSocket<WsData>, id: number, cmd: R
   // triggers-probe-v1: the server names the set it would push. Held (this host kept the set it
   // pushed under that name), that set is configured again as if it had come now, with every
   // effect a push has (this socket gets the fires, unacked fires replay), and nothing crosses.
-  const probe = cmd.probe === true
+  let probe = cmd.probe === true
   let payload = cmd.config as { version?: unknown; triggers?: unknown } | undefined
-  if (probe) {
+  // triggers-delta-v1: only what changed since the set this host holds under `delta.base`
+  // (trigger-check-core.ts applyTriggersDelta). Not that set, or not making the set named
+  // `pushHash`: `held: false`, and the server sends the whole set.
+  const delta = !probe && cmd.delta !== undefined
+  if (probe || delta) {
     const asked = walnutScope.resolve(cmd, gatewayClientHomes.get(ws), 'triggers.configure')
     if (!asked.ok) return sendError(ws, id, asked.error)
     const held = triggerScopes.get(asked.home)
-    const name = typeof cmd.hash === 'string' ? cmd.hash : ''
-    if (!name || !held || held.inherited || !held.push || held.push.hash !== name) return sendOk(ws, id, { held: false })
-    payload = { version: 1, triggers: held.push.raw }
+    const name = typeof (probe ? cmd.hash : cmd.pushHash) === 'string' ? (probe ? cmd.hash : cmd.pushHash) as string : ''
+    if (!name || name.length > 128 || !held || held.inherited || !held.push) return sendOk(ws, id, { held: false })
+    // Another link of this daemon pushed this very set already: configured from the copy.
+    if (held.push.hash === name) probe = true
+    else if (probe || held.push.hash !== (cmd.delta as { base?: unknown } | null)?.base) return sendOk(ws, id, { held: false })
+    const made = probe ? held.push.raw : applyTriggersDelta(held.push.raw, cmd.delta, name)
+    if (!made) return sendOk(ws, id, { held: false })
+    payload = { version: 1, triggers: made }
   }
   if (!payload || typeof payload !== 'object' || payload.version !== 1 || !Array.isArray(payload.triggers)) {
     return sendError(ws, id, 'triggers.configure: invalid config: version must be 1 with a triggers array')
@@ -8757,7 +8767,7 @@ async function configureTriggers(ws: ServerWebSocket<WsData>, id: number, cmd: R
     scope: walnutScope.label(home), hash, count: defs.length, changed, clocks: clocks.length,
     released: released.map((r) => r.id), draining: fireHolders(home).length - armedOf(home).length,
   })
-  sendOk(ws, id, { applied: true, changed, count: defs.length, clocks, released, ...(probe ? { held: true } : {}), ...(refused.length ? { refused } : {}) })
+  sendOk(ws, id, { applied: true, changed, count: defs.length, clocks, released, ...(probe ? { held: true } : delta ? { delta: true } : {}), ...(refused.length ? { refused } : {}) })
 
   // At-least-once replay: a fire the server never acked (Mac asleep, tunnel
   // down) is redelivered now that a trusted client is provably here. The server

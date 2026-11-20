@@ -255,7 +255,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'ports-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'task-dir-sizes-v1', 'transcript-archive-v1', 'host-cache-prune-v1', 'host-exec-v1', 'host-exec-v2', 'host-exec-wait-v1', 'host-exec-group-v1', 'host-script-v1', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'history-ready-v1', 'history-ready-subagent-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'trigger-caller-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'trigger-state-snapshot-v1', 'acp-model-catalog-v1', 'acp-light-bounds-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1', 'pty-stream-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'ports-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'task-dir-sizes-v1', 'transcript-archive-v1', 'host-cache-prune-v1', 'host-exec-v1', 'host-exec-v2', 'host-exec-wait-v1', 'host-exec-group-v1', 'host-script-v1', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'history-ready-v1', 'history-ready-subagent-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'trigger-caller-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'trigger-state-snapshot-v1', 'triggers-delta-v1', 'acp-model-catalog-v1', 'acp-light-bounds-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1', 'pty-stream-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -10170,13 +10170,24 @@ async function configureTriggers(ws, id, cmd) {
   // effect a push has, and nothing crosses. Mirror daemon-standalone.ts.
   var probe = cmd.probe === true;
   var payload = cmd.config;
-  if (probe) {
+  // triggers-delta-v1: only what changed since the set this host holds under delta.base
+  // (trigger-check-core.ts applyTriggersDelta); else held: false and the whole set comes.
+  // Mirror daemon-standalone.ts.
+  var delta = !probe && cmd.delta !== undefined;
+  if (probe || delta) {
     var asked = walnutScope.resolve(cmd, gatewayClientHomes.get(ws), 'triggers.configure');
     if (!asked.ok) return sendError(ws, id, asked.error);
     var heldScope = triggerScopes.get(asked.home);
-    var name = typeof cmd.hash === 'string' ? cmd.hash : '';
-    if (!name || !heldScope || heldScope.inherited || !heldScope.push || heldScope.push.hash !== name) return sendOk(ws, id, { held: false });
-    payload = { version: 1, triggers: heldScope.push.raw };
+    var named = probe ? cmd.hash : cmd.pushHash;
+    var name = typeof named === 'string' ? named : '';
+    if (!name || name.length > 128 || !heldScope || heldScope.inherited || !heldScope.push) return sendOk(ws, id, { held: false });
+    // Another link of this daemon pushed this very set already: configured from the copy.
+    if (heldScope.push.hash === name) probe = true;
+    else if (probe || !cmd.delta || heldScope.push.hash !== cmd.delta.base) return sendOk(ws, id, { held: false });
+    var made = probe ? heldScope.push.raw
+      : (typeof triggerCheckCore.applyTriggersDelta === 'function' ? triggerCheckCore.applyTriggersDelta(heldScope.push.raw, cmd.delta, name) : null);
+    if (!made) return sendOk(ws, id, { held: false });
+    payload = { version: 1, triggers: made };
   }
   if (!payload || typeof payload !== 'object' || payload.version !== 1 || !Array.isArray(payload.triggers)) {
     return sendError(ws, id, 'triggers.configure: invalid config: version must be 1 with a triggers array');
@@ -10229,6 +10240,7 @@ async function configureTriggers(ws, id, cmd) {
   });
   var reply = { applied: true, changed: changed, count: defs.length, clocks: clocks, released: released };
   if (probe) reply.held = true;
+  else if (delta) reply.delta = true;
   if (refused.length) reply.refused = refused;
   sendOk(ws, id, reply);
 
@@ -14826,6 +14838,7 @@ function daemonCapabilities() {
   // A subagent's view ('history-ready-subagent-v1'), only from a sidecar that knows agentId.
   if (historyReadyCore && historyReadyCore.READY_SUBAGENT_V1 === true) caps.push('history-ready-subagent-v1');
   if (triggerCheckCore) caps.push('triggers-v1');
+  if (triggerCheckCore && typeof triggerCheckCore.applyTriggersDelta === 'function') caps.push('triggers-delta-v1');
   // A check's calls act for its trigger's task only with a sidecar that mints their tokens.
   if (checkCallers) caps.push('trigger-caller-v1');
   // Host delivery needs the envelope builder the newer sidecar carries.

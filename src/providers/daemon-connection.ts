@@ -25,6 +25,7 @@ import { HOOK_FILES_CAPABILITY } from './hook-files.js'
 
 /** triggers.configure answers a probe for the set it holds (daemon-capabilities.ts). */
 const TRIGGERS_PROBE_CAPABILITY = 'triggers-probe-v1'
+const TRIGGERS_DELTA_CAPABILITY = 'triggers-delta-v1'
 import { ACP_HOST_FILES } from './acp-host-artifacts.js'
 import { statusReplyAlive } from './daemon-status-reply.js'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -147,6 +148,7 @@ import { companionStreamAcceptor } from '../web/v1-forward/stream-door.js'
 import { acceptHubStream } from '../core/hosts/hub-ports.js'
 // Static: the trigger push asks it on every connect, and a module load there delays the set.
 import * as sameDaemonRecord from '../core/hosts/same-daemon-record.js'
+import { TRIGGERS_DELTA_MAX } from './trigger-check-core.js'
 
 /** `walnut-boot=<epoch s>` in what a host printed, as `{ boot }` (a `started` record's), else {}. */
 function bootOf(said: string): { boot?: number } {
@@ -2126,7 +2128,8 @@ export class DaemonConnection {
           // before its push landed would replace it with an older view.
           const instance = this.liveInstanceId
           const step = await runInTriggerPushGate(instance ? `instance:${instance}` : `host:${this.hostKey}`, () => this.pushTriggersOnce())
-          if (step === 'stop') return
+          // A reconnect while this push was in flight asked for one more (setConnected): it runs.
+          if (step === 'stop' && !(this.triggersPushRerun && this._connected)) return
         } while (this.triggersPushRerun)
       } catch (err) {
         log.session.warn('DaemonConnection: triggers push failed', {
@@ -2183,8 +2186,18 @@ export class DaemonConnection {
       ? await this.send('triggers.configure', { probe: true, hash: compiled.hash, home: WALNUT_HOME, ...(fresh ? { replayChecks: true } : {}) })
       : null
     if (!this._connected || this._connectionEpoch !== epoch) return 'stop'
+    const diff = this.diffTriggerDefs(compiled.payload.triggers)
+    // A change on a connection whose last push the daemon took: only what moved (triggers-delta-v1).
+    // The daemon proves the set it makes is the one named; any doubt and the whole set goes.
+    const base = this.lastTriggersPushHash
+    const delta = probe === null && probes && base !== null && this.hasCapability(TRIGGERS_DELTA_CAPABILITY)
+      && diff.put.length < compiled.payload.triggers.length && diff.put.length <= TRIGGERS_DELTA_MAX && diff.drop.length <= TRIGGERS_DELTA_MAX
+      ? await this.send('triggers.configure', { delta: { base, put: diff.put, drop: diff.drop }, pushHash: compiled.hash, home: WALNUT_HOME })
+      : null
+    if (!this._connected || this._connectionEpoch !== epoch) return 'stop'
+    const took = (r: Record<string, unknown> | null): r is Record<string, unknown> => r?.ok === true && r.held !== false && r.applied === true
     // `home`: the daemon keeps one set per Walnut (walnut-scope-core.ts).
-    const reply = probe?.ok === true && probe.held === true ? probe : await this.send('triggers.configure', {
+    const reply = probe?.ok === true && probe.held === true ? probe : took(delta) ? delta : await this.send('triggers.configure', {
       config: compiled.payload as unknown as Record<string, unknown>,
       home: WALNUT_HOME,
       // Routine edits must not replay status or accelerate an unrelated failed check.
@@ -2206,11 +2219,12 @@ export class DaemonConnection {
     await compiled.applied?.(reply).catch((err: unknown) => log.session.warn('DaemonConnection: clock settle failed', {
       host: this.hostKey, error: err instanceof Error ? err.message : String(err),
     }))
-    const changed = this.changedTriggerIds(compiled.payload.triggers)
+    this.lastTriggerDefHashes = diff.next
+    const changed = diff.changed
     log.session.info('DaemonConnection: triggers pushed', {
-      host: this.hostKey, hash: compiled.hash, triggers: compiled.payload.triggers.length, held: reply === probe,
+      host: this.hostKey, hash: compiled.hash, triggers: compiled.payload.triggers.length, held: reply.held === true,
       ...(sameDaemon.length > 1 ? { sameDaemon } : {}),
-      ...(reply === probe ? {} : { changed: changed.slice(0, 8), changedCount: changed.length }),
+      ...(reply.held === true ? {} : { changed: changed.slice(0, 8), changedCount: changed.length, dropped: diff.drop.length, sent: reply === delta ? 'delta' : 'set' }),
     })
     return 'next'
   }
@@ -2248,21 +2262,23 @@ export class DaemonConnection {
   private lastKeeper: string | null = null
 
   /**
-   * The triggers whose def differs from the set pushed before (new ones included), and keeps this
-   * set's hashes. Each push sends the whole set (about 250 KB for 97 triggers): the ids say what
-   * moved it (2026-11-15: three routines' conversation samples moved it every few seconds).
+   * The defs that differ from the set the daemon took last on this connection (new ones included),
+   * the ids gone from it, and this set's hashes (kept once the daemon takes it). A delta sends only
+   * these (triggers-delta-v1); the ids also say what moved the set (2026-11-15: three routines'
+   * conversation samples moved it every few seconds).
    */
-  private changedTriggerIds(defs: unknown[]): string[] {
+  private diffTriggerDefs(defs: readonly unknown[]): { put: unknown[]; changed: string[]; drop: string[]; next: Map<string, string> } {
     const next = new Map<string, string>()
+    const put: unknown[] = []
     const changed: string[] = []
     defs.forEach((def, i) => {
       const id = def && typeof def === 'object' && typeof (def as { id?: unknown }).id === 'string' ? (def as { id: string }).id : `#${i}`
       const hash = crypto.createHash('sha1').update(JSON.stringify(def) ?? '').digest('hex')
       next.set(id, hash)
-      if (this.lastTriggerDefHashes.get(id) !== hash) changed.push(id)
+      if (this.lastTriggerDefHashes.get(id) !== hash) { put.push(def); changed.push(id) }
     })
-    this.lastTriggerDefHashes = next
-    return changed
+    const drop = [...this.lastTriggerDefHashes.keys()].filter((id) => !next.has(id))
+    return { put, changed, drop, next }
   }
 
   /**

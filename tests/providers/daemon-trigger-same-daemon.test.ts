@@ -131,10 +131,8 @@ describe('two aliases of one daemon push one trigger set', () => {
     return conn
   }
 
-  /** The sets the daemon was sent whole (not a probe), as trigger id lists. */
-  const setsSent = (d: MockDaemon = daemon) => d.getCommandHistoryFor('triggers.configure')
-    .filter((c) => c.payload.probe !== true)
-    .map((c) => ((c.payload.config as { triggers: Array<{ id: string }> }).triggers).map((t) => t.id))
+  /** The sets the daemon took from a push (whole, or made from a delta: triggers-delta-v1), as trigger id lists; a probe it held is none. */
+  const setsSent = (d: MockDaemon = daemon) => d.triggerSets.map((set) => (set as Array<{ id: string }>).map((t) => t.id))
   const probes = (d: MockDaemon = daemon) => d.getCommandHistoryFor('triggers.configure').filter((c) => c.payload.probe === true)
   const recorded = async (host: string) => Object.keys((await readHostProfile(host)).sameDaemon ?? {})
 

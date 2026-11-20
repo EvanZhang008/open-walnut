@@ -3,8 +3,9 @@
  *
  * A daemon holds one authoritative set per Walnut, including every alias that
  * reaches it: it persists it, arms its own timers from it, and keeps polling while the
- * server restarts. So this is a full replacement, not a delta, and it is
- * recomputed from the cron store every time.
+ * server restarts. So this is the full set, recomputed from the cron store every time; a
+ * daemon that holds the set pushed before gets only what changed (triggers-delta-v1,
+ * daemon-connection.ts pushTriggersOnce).
  *
  * Two rules the shape encodes:
  *  - a FIXED key order per def, and defs sorted by id, so the hash is stable
@@ -15,9 +16,8 @@
  *    the next push must actually take it off the daemon's clock.
  */
 
-import { createHash } from 'node:crypto';
 import { WALNUT_HOME } from '../../constants.js';
-import { DELIVER_PROMPT_MAX, FIRE_BUDGET_UNLIMITED, clampTimeoutSeconds } from '../../providers/trigger-check-core.js';
+import { DELIVER_PROMPT_MAX, FIRE_BUDGET_UNLIMITED, clampTimeoutSeconds, triggerPushHash } from '../../providers/trigger-check-core.js';
 import type { TriggerDef, TriggerDeliverSpec, TriggersConfigurePayload } from '../../providers/trigger-check-core.js';
 import { cloudModeSkipsJob } from '../cron/jobs.js';
 import type { CronJob } from '../cron/types.js';
@@ -105,8 +105,7 @@ export function compileTriggerDefs(jobs: CronJob[], hosts: string | readonly str
     .concat(clockDefs)
     .filter((def) => !seen.has(def.id) && !!seen.add(def.id))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  const hash = createHash('sha256').update(JSON.stringify(triggers)).digest('hex').slice(0, 16);
-  return { payload: { version: 1, triggers }, hash };
+  return { payload: { version: 1, triggers }, hash: triggerPushHash(triggers) };
 }
 
 /** `host` first, then the other aliases of its daemon, each once. */

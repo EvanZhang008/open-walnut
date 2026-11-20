@@ -78,9 +78,10 @@ describe('DaemonConnection trigger push with a probe first', () => {
     await waitFor(() => conn.triggersPushed)
     setTriggerPayloadProvider(async () => ({ payload: SET, hash: 'set-h2', applied }))
     await conn.pushTriggersNow()
-    expect(pushes()).toHaveLength(3)
-    expect(pushes()[2].payload).toMatchObject({ pushHash: 'set-h2' })
-    expect(pushes()[2].payload.replayChecks).toBeUndefined()
+    // A name that is not the set's own hash: its delta is refused, and the set follows (triggers-delta-v1).
+    expect(pushes()).toHaveLength(4)
+    expect(pushes()[3].payload).toMatchObject({ pushHash: 'set-h2' })
+    expect(pushes().slice(2).every((c) => c.payload.replayChecks === undefined)).toBe(true)
   })
 
   it('a daemon without triggers-probe-v1 gets the set as before, with no name, on every connection', async () => {

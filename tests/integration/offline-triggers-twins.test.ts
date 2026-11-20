@@ -30,6 +30,7 @@ import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
 import type { HostSlice } from '../../src/providers/offline-host-core.js'
 import { testBun } from '../helpers/bun-runtime.js'
+import { triggerPushHash } from '../../src/providers/trigger-check-core.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const HOME = '/fixture/walnut-home'
@@ -355,6 +356,46 @@ describe.each(twins)('trigger ops on the real %s daemon while its Walnut is away
     expect((await b.cmd({ cmd: 'triggers.configure', config: set, home: HOME, pushHash: 'ph-1' })).ok).toBe(true)
     expect((await b.cmd({ cmd: 'triggers.configure', config: set, home: HOME })).ok).toBe(true)
     expect(await b.cmd({ cmd: 'triggers.configure', probe: true, hash: 'ph-1', home: HOME })).toMatchObject({ ok: true, held: false })
+    await b.close()
+  }, 90_000)
+  it('triggers-delta-v1: a delta from the held set configures the set it names, also after a restart; a stale base or a wrong name is held: false and changes nothing', async () => {
+    // 2026-11-20: a change of one of 109 triggers sent all of them, about 118 KB, up an SSH link.
+    const sorted = (defs: Array<{ id: string }>) => [...defs].sort((x, y) => (x.id < y.id ? -1 : 1))
+    // The ids of this Walnut's set the daemon runs now (`triggers.run` answers "unknown" for a disarmed one).
+    const runs = async (server: FakeServer, ids: string[]) => {
+      const out: string[] = []
+      for (const id of ids) if ((await server.cmd({ cmd: 'triggers.run', triggerId: id, home: HOME })).ok === true) out.push(id)
+      return out
+    }
+    const T_NEW = 'mtrignw0-0005'
+    const v1 = sorted([def(T_PR), def(T_CI)])
+    const a = await FakeServer.connect(d.port)
+    expect((await a.cmd({ cmd: 'hello' })).capabilities as string[]).toContain('triggers-delta-v1')
+    expect((await a.cmd({ cmd: 'triggers.configure', config: { version: 1, triggers: v1 }, home: HOME, pushHash: triggerPushHash(v1) })).ok).toBe(true)
+    const changedPr = { ...def(T_PR), name: 'PR watch \u4f60\u597d' }
+    const v2 = sorted([changedPr, def(T_NEW)])
+    const delta = { base: triggerPushHash(v1), put: [changedPr, def(T_NEW)], drop: [T_CI] }
+    // A wrong name or a stale base changes nothing.
+    expect(await a.cmd({ cmd: 'triggers.configure', delta, pushHash: 'not-this-set', home: HOME })).toMatchObject({ ok: true, held: false })
+    expect(await a.cmd({ cmd: 'triggers.configure', delta: { ...delta, base: 'stale' }, pushHash: triggerPushHash(v2), home: HOME })).toMatchObject({ ok: true, held: false })
+    expect(await a.cmd({ cmd: 'triggers.configure', probe: true, hash: triggerPushHash(v1), home: HOME })).toMatchObject({ ok: true, held: true, count: 2 })
+    const took = await a.cmd({ cmd: 'triggers.configure', delta, pushHash: triggerPushHash(v2), home: HOME })
+    expect(took).toMatchObject({ ok: true, applied: true, delta: true, changed: true, count: 2 })
+    // The same set again from another link of this daemon: configured from the copy.
+    expect(await a.cmd({ cmd: 'triggers.configure', delta: { base: 'any', put: [], drop: [] }, pushHash: triggerPushHash(v2), home: HOME })).toMatchObject({ ok: true, held: true, count: 2 })
+    // What runs is the set the delta made: the dropped one is disarmed, the new one armed.
+    expect(await runs(a, [T_PR, T_CI, T_NEW])).toEqual([T_PR, T_NEW])
+    await a.close()
+    // Kept on disk: after a restart the next delta builds on it (triggers load before spawnDaemon sees the port file).
+    await stopDaemon(d)
+    d = await spawnDaemon(twin, d.dir)
+    const b = await FakeServer.connect(d.port)
+    await b.cmd({ cmd: 'hello' })
+    expect(await b.cmd({ cmd: 'triggers.configure', probe: true, hash: triggerPushHash(v2), home: HOME })).toMatchObject({ ok: true, held: true, count: 2 })
+    const v3 = sorted([changedPr])
+    expect(await b.cmd({ cmd: 'triggers.configure', delta: { base: triggerPushHash(v2), put: [], drop: [T_NEW] }, pushHash: triggerPushHash(v3), home: HOME })).toMatchObject({ ok: true, applied: true, delta: true, count: 1 })
+    expect(await b.cmd({ cmd: 'triggers.configure', probe: true, hash: triggerPushHash(v3), home: HOME })).toMatchObject({ ok: true, held: true, count: 1 })
+    expect(await runs(b, [T_PR, T_CI, T_NEW])).toEqual([T_PR])
     await b.close()
   }, 90_000)
 })

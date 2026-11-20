@@ -30,6 +30,7 @@ import { computeHostLocalChanges } from '../../src/providers/session-changes-cor
 import { scanSessionCost } from '../../src/providers/session-cost-core.js'
 import { createWorkspaceCore, type WorkspaceCoreDeps } from '../../src/providers/workspace-core.js'
 import { createDaemonPorts } from '../../src/providers/port-scan-core.js'
+import { applyTriggersDelta } from '../../src/providers/trigger-check-core.js'
 import { createCliArgvFiles } from '../../src/providers/cli-argv-files-core.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
@@ -158,9 +159,18 @@ export class MockDaemon {
   private _argRefs = new Map<string, string>()
   private _triggersPushHash: string | null = null
   private _triggersCount = 0
+  /** The set as it came under _triggersPushHash (triggers-delta-v1 makes the next set from it). */
+  private _triggersRaw: unknown[] = []
+  /** The sets the daemon holds now, in the order they were taken. */
+  readonly triggerSets: unknown[][] = []
   private _triggersOn = false
   /** Answer triggers.configure (and its probe) instead of "unknown command". */
   enableTriggers(): void { this._triggersOn = true }
+  private _triggersDeltaFails = false
+  /** Refuse every delta with an error, as a daemon that cannot read one would. */
+  failTriggerDeltas(): void { this._triggersDeltaFails = true }
+  /** Another link of this daemon pushed another set: the one this link pushed is no longer held. */
+  replaceHeldTriggers(name: string, set: unknown[]): void { this._triggersPushHash = name; this._triggersRaw = set; this._triggersCount = set.length }
   /** Capabilities `hello` leaves out (a test models an older daemon). */
   private _omitCapabilities = new Set<string>()
   omitCapabilities(caps: string[]): void { this._omitCapabilities = new Set(caps) }
@@ -448,11 +458,23 @@ export class MockDaemon {
           const held = typeof cmd.hash === 'string' && cmd.hash === this._triggersPushHash
           return this.sendOk(ws, id, held ? { held: true, applied: true, changed: false, count: this._triggersCount, clocks: [], released: [] } : { held: false })
         }
-        const triggers = (cmd.config as { triggers?: unknown[] } | undefined)?.triggers
+        // triggers-delta-v1, as the twins answer it: made from the held set, proved by its name.
+        const delta = cmd.delta !== undefined
+        if (delta && typeof cmd.pushHash === 'string' && cmd.pushHash === this._triggersPushHash) {
+          return this.sendOk(ws, id, { held: true, applied: true, changed: false, count: this._triggersCount, clocks: [], released: [] })
+        }
+        if (delta && this._triggersDeltaFails) return this.sendError(ws, id, 'triggers.configure: invalid config')
+        const triggers = delta
+          ? (typeof cmd.pushHash === 'string' && this._triggersPushHash !== null && (cmd.delta as { base?: unknown }).base === this._triggersPushHash
+            ? applyTriggersDelta(this._triggersRaw, cmd.delta, cmd.pushHash) : null)
+          : (cmd.config as { triggers?: unknown[] } | undefined)?.triggers
+        if (delta && !triggers) return this.sendOk(ws, id, { held: false })
         if (!Array.isArray(triggers)) return this.sendError(ws, id, 'triggers.configure: invalid config')
         this._triggersPushHash = typeof cmd.pushHash === 'string' ? cmd.pushHash : null
         this._triggersCount = triggers.length
-        return this.sendOk(ws, id, { applied: true, changed: true, count: triggers.length, clocks: [], released: [] })
+        this._triggersRaw = triggers
+        this.triggerSets.push(triggers)
+        return this.sendOk(ws, id, { applied: true, changed: true, count: triggers.length, clocks: [], released: [], ...(delta ? { delta: true } : {}) })
       }
       case 'hello': return this.sendOk(ws, id, {
         version: 'mock',
@@ -1431,6 +1453,7 @@ export class MockDaemon {
   clearCommandHistory(): void {
     this._commandHistory = []
     this._fifoWrites = []
+    this.triggerSets.length = 0
   }
 
   /** Number of currently-open WS client connections. */

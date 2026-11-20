@@ -358,6 +358,14 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // `pushHash` (2026-11-13: every connection sent the set again, 90 to 350 KB on the session
   // link). Both twins. Optional: without it every connection sends the set.
   'triggers-probe-v1',
+  // 'triggers-delta-v1': `triggers.configure {delta: {base, put, drop}, pushHash, home}` sends only
+  // the defs new or changed since the set the daemon holds under `base` (triggers-probe-v1's
+  // name) and the ids gone; the daemon makes the set, checks it is the one named `pushHash`
+  // (trigger-check-core.ts applyTriggersDelta) and configures it as a push, `delta: true`; else
+  // `{held: false}` and the server sends the whole set (2026-11-20: a change of one of 109
+  // triggers sent all of them, about 118 KB, up newdev's SSH link, which a relay ends every few
+  // MB carried up). Both twins. Optional: without it every change sends the whole set.
+  'triggers-delta-v1',
   // 'host-slice-gz-v1': `host.slice {sliceGz}` carries the copy gzipped, base64 (about a
   // tenth of 1.5 MB). Whole copies were in flight in 74 of 95 deaths of the shared SSH
   // master (2026-10-30/31): a relay on the SSH path drops the link on an upload burst, and
