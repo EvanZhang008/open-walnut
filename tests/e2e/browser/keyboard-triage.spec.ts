@@ -415,9 +415,14 @@ test('pin to a group and snooze each take one Undo, on the toast and on Cmd+Z', 
   await page.keyboard.press('Meta+z')
   await expect(pinned).toHaveCount(0)
   await expect.poll(async () => (await taskRow(page, 'd')).pinned ?? false).toBe(false)
-  // The key has no button to watch go: a short line says what it took back.
+  // The key has no button to watch go: a short line says what it took back, with its Redo and
+  // key while it can be done again. It lasts the redo window, which openColumns stretched, so
+  // it is closed here by hand.
   await expect(toast(page, 'Undone')).toContainText(TITLE('d'))
-  await expect(toast(page, 'Undone')).toHaveCount(0, { timeout: 5_000 })
+  await expect(toast(page, 'Undone').locator('.notification-toast-action', { hasText: 'Redo' })).toBeVisible()
+  await expect(toast(page, 'Undone')).toContainText('\u21e7\u2318Z') // Shift Cmd Z
+  await toast(page, 'Undone').getByRole('button', { name: 'Dismiss' }).click()
+  await expect(toast(page, 'Undone')).toHaveCount(0)
 
   // Pinned to Focus, then moved to Satellite: the Undo of the move puts it back in Focus, pinned.
   await columnKebab(page, 'd', 'Pin to')
