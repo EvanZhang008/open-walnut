@@ -157,10 +157,19 @@ export function forgetTarget(id: string): void {
   }
 }
 
-/** A target that left (unregistered): its states go with it. */
-export function dropTargetsNotIn(ids: readonly string[]): void {
+/**
+ * A target that left one replication (unregistered): that replication's kinds go with it. Only
+ * those: another replication's kinds on the same target are kept (2026-11-20: the task replica's
+ * rounds dropped every host copy's state, the companion's and home-pc's among them, so the half
+ * rule's refusals never counted past one and Settings never offered their confirm).
+ */
+export function dropTargetsNotIn(ids: readonly string[], kinds: readonly string[]): void {
   const keep = new Set(ids)
-  for (const id of [...targets.keys()]) if (!keep.has(id)) targets.delete(id)
+  for (const [id, t] of [...targets]) {
+    if (keep.has(id)) continue
+    for (const k of kinds) t.kinds.delete(k)
+    if (t.kinds.size === 0) targets.delete(id)
+  }
 }
 
 /** A kind with its own protocol (search, devices) reports its rows through this. */

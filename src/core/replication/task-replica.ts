@@ -142,7 +142,7 @@ export async function syncTaskReplica(deps?: TaskReplicaDeps): Promise<TaskRepli
     do {
       me.rerun = false
       const all = servedTargets(d)
-      if (d.targets) dropTargetsNotIn(all.map((s) => s.target.id))
+      if (d.targets) dropTargetsNotIn(all.map((s) => s.target.id), KINDS)
       const ready: Served[] = []
       for (const s of all) {
         if (await s.target.available()) ready.push(s)
