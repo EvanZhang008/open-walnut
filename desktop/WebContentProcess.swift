@@ -67,13 +67,19 @@ enum WebContentProcess {
         old.loadHTMLString("", baseURL: nil)
         whenUnloaded(old, until: Date().addingTimeInterval(10)) {
             close(old)
-            // Holds no reference to the view, so it is freed now.
+            // Holds no reference to the view, so it is freed now; `released` says whether it was.
+            // 2026-11-20: a closed page whose window was on screen still left its graphics to the
+            // kernel once, so whether anything in the app kept the old view is the next fact to read.
+            let view = WeakView(old)
             DispatchQueue.main.asyncAfter(deadline: .now() + 12) {
                 log(["pid": oldPid.map { String($0) } ?? "?", "footprintMB": footprintMB,
-                     "end": endIfStillRunning(oldPid, started: started, newPid: replacement().flatMap(pid))])
+                     "end": endIfStillRunning(oldPid, started: started, newPid: replacement().flatMap(pid)),
+                     "released": view.value == nil ? "yes" : "no"])
             }
         }
     }
+
+    private final class WeakView { weak var value: WKWebView?; init(_ v: WKWebView) { value = v } }
 
     /// Runs `then` once the view shows the blank page its unload navigated to (the old page's
     /// pagehide has run by then), or at `until` for a page too busy to get there.

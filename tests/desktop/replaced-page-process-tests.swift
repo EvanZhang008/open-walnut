@@ -105,6 +105,8 @@ final class Tests: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
             print("     outcomes: \(ends)")
             check(self.pagehides >= 3, "each old page ran its pagehide before it closed (\(self.pagehides) of 3)")
             check(ends.allSatisfy { $0 == "exited" }, "closing the page ends its process by itself (no signal needed)")
+            let released = self.outcomes.map { $0["released"] ?? "?" }
+            check(released.allSatisfy { $0 == "yes" }, "nothing keeps a retired view once it is closed (released: \(released))")
             let still = zip(pids, starts).filter { running($0.0, $0.1) }.map { $0.0 }
             check(still.isEmpty, "no old page process is still running (left: \(still))")
             if let newPid = self.replacement.flatMap(WebContentProcess.pid) {
