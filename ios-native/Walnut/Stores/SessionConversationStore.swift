@@ -1285,7 +1285,8 @@ final class SessionConversationStore {
     /// one and the turn-end duplicate check compares like with like.
     static func provisionalReply(_ liveText: String, truncated: Bool) -> (text: String, about: [String]?) {
         guard !truncated else { return ("", nil) }
-        let reading = MessageAboutTag.read(liveText)
+        // Walnut's own lines leave first, as the history parse drops them before it reads the tag.
+        let reading = MessageAboutTag.read(InternalLines.strip(liveText))
         return (clipProvisional(reading.text), reading.ids.isEmpty ? nil : reading.ids)
     }
 

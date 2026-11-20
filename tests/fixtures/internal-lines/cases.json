@@ -1,0 +1,151 @@
+[
+  {
+    "label": "the status report after the words (the reply of 2026-11-20)",
+    "text": "两个子 agent 还在跑，完成后我核对、评审、上线。\n\nFOR_USER_STATE: working\nFOR_USER_NOW: 两个子 agent 在实现第一阶段收尾\nFOR_USER_NEXT: 核对、评审并上线",
+    "shown": "两个子 agent 还在跑，完成后我核对、评审、上线。"
+  },
+  {
+    "label": "any field, a new one with an id included",
+    "text": "Done.\n\nFOR_USER_THREAD t1: working | still on it\nFOR_USER_THREAD_NEW: working | Title | words",
+    "shown": "Done."
+  },
+  {
+    "label": "bold or listed field names",
+    "text": "Done.\n\n**FOR_USER_STATE:** working\n- FOR_USER_NOW: tests",
+    "shown": "Done."
+  },
+  {
+    "label": "a value that wraps onto the next lines",
+    "text": "Done.\nFOR_USER_ASK: pick one\n  A) keep\n    B) drop\n- C) later",
+    "shown": "Done."
+  },
+  {
+    "label": "a version tag on a report line, a full-width colon, Windows line ends",
+    "text": "Done.\r\n\r\n[v16908844] FOR_USER_STATE: working\r\nFOR_USER_NOW： tests\r\n",
+    "shown": "Done."
+  },
+  {
+    "label": "the Brief block, blank lines and all",
+    "text": "Done.\nFOR_USER_BRIEF\n- one\n\n- two",
+    "shown": "Done."
+  },
+  {
+    "label": "the Brief runs to the end; Walnut's tag lines after it stay",
+    "text": "Done.\nFOR_USER_BRIEF\n- a\n\nMore prose.\n<walnut-turn status=\"agent-ack\"/>",
+    "shown": "Done.\n<walnut-turn status=\"agent-ack\"/>"
+  },
+  {
+    "label": "the turn-end marker right after the report stays",
+    "text": "Nothing for you.\nFOR_USER_STATE: working\n<walnut-turn status=\"agent-ack\"/>",
+    "shown": "Nothing for you.\n<walnut-turn status=\"agent-ack\"/>"
+  },
+  {
+    "label": "a version tag at the start of a line",
+    "text": "[v16908844] **进度**：好了。\n[v16908844] 第二行",
+    "shown": "**进度**：好了。\n第二行"
+  },
+  {
+    "label": "kept: a field line with words after it",
+    "text": "Done.\nFOR_USER_STATE: working\nI also fixed the tests.",
+    "shown": "Done.\nFOR_USER_STATE: working\nI also fixed the tests."
+  },
+  {
+    "label": "kept: a list explaining the fields",
+    "text": "The report has these fields:\n- FOR_USER_STATE: one of working or waiting\n- FOR_USER_NOW: what runs\n- Other fields are optional.",
+    "shown": "The report has these fields:\n- FOR_USER_STATE: one of working or waiting\n- FOR_USER_NOW: what runs\n- Other fields are optional."
+  },
+  {
+    "label": "kept: a wrapped value with words after it",
+    "text": "Done.\nFOR_USER_ASK: pick one\n  A) keep\n\nAfter it.",
+    "shown": "Done.\nFOR_USER_ASK: pick one\n  A) keep\n\nAfter it."
+  },
+  {
+    "label": "kept: a field in a fenced block, Windows line ends",
+    "text": "See:\r\n```\r\nFOR_USER_STATE: working\r\n```\r\nEnd.",
+    "shown": "See:\r\n```\r\nFOR_USER_STATE: working\r\n```\r\nEnd."
+  },
+  {
+    "label": "kept: a field in a fenced block at the end",
+    "text": "See:\n```\nFOR_USER_STATE: working\n```",
+    "shown": "See:\n```\nFOR_USER_STATE: working\n```"
+  },
+  {
+    "label": "kept: a version tag in a fenced block",
+    "text": "See:\n```\n[v16908844] x\n```",
+    "shown": "See:\n```\n[v16908844] x\n```"
+  },
+  {
+    "label": "kept: a version tag in an indented block",
+    "text": "See:\n\n    [v16908844] x",
+    "shown": "See:\n\n    [v16908844] x"
+  },
+  {
+    "label": "kept: a mention in a sentence",
+    "text": "The side question asks the FOR_USER_STATE line, not the reply.",
+    "shown": "The side question asks the FOR_USER_STATE line, not the reply."
+  },
+  {
+    "label": "kept: a text that is only the report (the answer to Walnut's own question)",
+    "text": "FOR_USER_STATE: working\nFOR_USER_NOW: tests",
+    "shown": "FOR_USER_STATE: working\nFOR_USER_NOW: tests"
+  },
+  {
+    "label": "kept: words that only start like a field",
+    "text": "普通的回复。\nFOR the record: fine.",
+    "shown": "普通的回复。\nFOR the record: fine."
+  },
+  {
+    "label": "streaming: the start of a field name is held back",
+    "text": "Done.\n\nFOR_USER_ST",
+    "streaming": true,
+    "shown": "Done."
+  },
+  {
+    "label": "streaming: \"FOR_\" is held back",
+    "text": "Done.\n\nFOR_",
+    "streaming": true,
+    "shown": "Done."
+  },
+  {
+    "label": "not streaming: a stray \"FOR_\" stays",
+    "text": "Done.\n\nFOR_",
+    "streaming": false,
+    "shown": "Done.\n\nFOR_"
+  },
+  {
+    "label": "streaming: a word that is no field start stays",
+    "text": "Done.\n\nFOOD",
+    "streaming": true,
+    "shown": "Done.\n\nFOOD"
+  },
+  {
+    "label": "streaming: fewer than four letters stay",
+    "text": "Done.\nFO",
+    "streaming": true,
+    "shown": "Done.\nFO"
+  },
+  {
+    "label": "streaming: the report while it streams in",
+    "text": "Done.\n\nFOR_USER_STATE: working\nFOR_USER_N",
+    "streaming": true,
+    "shown": "Done."
+  },
+  {
+    "label": "streaming: the next field's first letter after a report line",
+    "text": "Done.\n\nFOR_USER_STATE: working\nF",
+    "streaming": true,
+    "shown": "Done."
+  },
+  {
+    "label": "streaming: the next field's first letters after a report line",
+    "text": "Done.\n\nFOR_USER_STATE: working\nFO",
+    "streaming": true,
+    "shown": "Done."
+  },
+  {
+    "label": "not streaming: a letter after a report line is the session's words",
+    "text": "Done.\n\nFOR_USER_STATE: working\nF",
+    "streaming": false,
+    "shown": "Done.\n\nFOR_USER_STATE: working\nF"
+  }
+]

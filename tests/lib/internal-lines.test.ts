@@ -101,6 +101,17 @@ describe('the text as the screen shows it leaves Walnut\'s lines out', () => {
   })
 })
 
+// The rules as cases both clients run: the phone's port (ios-native/Walnut/Timeline/InternalLines.swift,
+// WalnutTests/InternalLinesTests.swift) reads the same file, so the two never drift apart.
+describe('the shared cases (tests/fixtures/internal-lines/cases.json)', () => {
+  const cases: Array<{ label: string; text: string; streaming?: boolean; shown: string }> =
+    JSON.parse(fs.readFileSync(path.join(__dirname, '../fixtures/internal-lines/cases.json'), 'utf8'))
+  it('has cases', () => expect(cases.length).toBeGreaterThan(20))
+  it.each(cases.map((c) => [c.label, c] as const))('%s', (_label, c) => {
+    expect(stripInternalLines(c.text, c.streaming ?? false)).toBe(c.shown)
+  })
+})
+
 describe('no text Walnut gives a session tells it to write the report in a reply', () => {
   // The status side question and the summary ask the FOR_USER_ lines, and read them back: only
   // their files name the fields in text a session reads. Anything else says STATUS_REPORT_CHANNEL

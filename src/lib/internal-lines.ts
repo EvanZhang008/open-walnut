@@ -94,6 +94,8 @@ export function stripInternalLines(text: string, streaming = false): string {
     const line = bare(out[i]);
     if (!line.trim() || WALNUT_TAG_LINE.test(line)) continue;
     if (isField(i)) { start = i; continue; }
+    // While it streams in, the next field's name as far as it has come ("F", "FOR"): part of the report.
+    if (streaming && i === out.length - 1 && !code[i] && FIELD_START.test(line)) continue;
     // A value carried on, indented four spaces deep too (that is not code inside the report).
     if ((!code[i] || INDENTED_CODE.test(line)) && CONTINUATION.test(line)) continue;
     // The session's own words: the report, if any, started after them.
