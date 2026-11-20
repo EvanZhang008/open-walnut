@@ -37,13 +37,13 @@ beforeEach(async () => {
   main = (await addTask({ title: 'Lagoon errand' })).task
   await put('notes/marina/plan.md', '# Plan\n')
   await put('notes/Projects/Marina/Tracking.md', '# Tracking\n')
-  await put('notes/family/pier.md', 'Pier.\n')
+  await put('notes/tidepool/pier.md', 'Pier.\n')
   await put(`artifacts/nodes/${task.id}/MEMORY.md`, '---\nkind: memory\n---\n\n- the pier opens Friday\n')
   await put(`artifacts/nodes/${task.id}/reflections/2026-11-19.md`, '# Session reflection\n')
   await put(`artifacts/nodes/${task.id}/skills/pier-steps/SKILL.md`, '---\nname: pier-steps\ndescription: Pier steps\n---\nStep one.\n')
   await put(`artifacts/nodes/${main.id}/MEMORY.md`, '---\nkind: memory\n---\n\n- errands\n')
   await put('artifacts/org/skills/proof-video/SKILL.md', '---\nname: proof-video\ndescription: Videos\n---\nSharp.\n')
-  await updateConfig({ favorites: { projects: [], notes: ['marina/plan.md', 'family/pier.md'] } } as never)
+  await updateConfig({ favorites: { projects: [], notes: ['marina/plan.md', 'tidepool/pier.md'] } } as never)
 })
 
 const boot = async (on: boolean) => startUnifiedTree({ on, leader: true, tasks: [task, main], projects: ['Marina', 'Lagoon'] })
@@ -54,7 +54,7 @@ describe('the one tree at boot', () => {
     expect(notesRoot()).toBe(at('artifacts'))
     // An old note path, and the tree's own.
     expect(resolveNotePath('marina/plan.md')).toBe(at('artifacts/projects/Marina/notes/plan.md'))
-    expect(resolveNotePath('notes/family/pier.md')).toBe(at('artifacts/notes/family/pier.md'))
+    expect(resolveNotePath('notes/tidepool/pier.md')).toBe(at('artifacts/notes/tidepool/pier.md'))
     expect(await fs.readFile(resolveNotePath('Projects/Marina/Tracking.md')!, 'utf-8')).toBe('# Tracking\n')
     // A task's memory and skills, under its project; a task with none, at the root.
     expect(nodeArtifactsDir(task.id)).toBe(at(`artifacts/projects/Marina/memory/${task.id}`))
@@ -64,7 +64,7 @@ describe('the one tree at boot', () => {
     expect(memoryCopyOf(main.id)).toBe(at(`artifacts/memory/${main.id}/MEMORY.md`))
     expect(fss.existsSync(at('artifacts/skills/proof-video/SKILL.md'))).toBe(true)
     // The bookmarks follow; the old folders are gone, kept in the backup.
-    expect((await getConfig()).favorites?.notes).toEqual(['projects/Marina/notes/plan.md', 'notes/family/pier.md'])
+    expect((await getConfig()).favorites?.notes).toEqual(['projects/Marina/notes/plan.md', 'notes/tidepool/pier.md'])
     expect(fss.existsSync(at('notes'))).toBe(false)
     // A path a message named under the folder's first name still opens.
     expect(await fs.readFile(at(`knowledge/nodes/${task.id}/reflections/2026-11-19.md`), 'utf-8')).toBe('# Session reflection\n')
@@ -84,7 +84,7 @@ describe('the one tree at boot', () => {
     expect(await fs.readFile(at('notes/marina/plan.md'), 'utf-8')).toBe('# Plan\n')
     expect(await fs.readFile(at(`artifacts/nodes/${task.id}/MEMORY.md`), 'utf-8')).toContain('- a new line')
     expect(nodeArtifactsDir(task.id)).toBe(at(`artifacts/nodes/${task.id}`))
-    expect((await getConfig()).favorites?.notes).toEqual(['marina/plan.md', 'family/pier.md'])
+    expect((await getConfig()).favorites?.notes).toEqual(['marina/plan.md', 'tidepool/pier.md'])
     expect(fss.existsSync(at('knowledge/.walnut-links'))).toBe(false)
     expect(fss.existsSync(at('artifacts/projects'))).toBe(false)
   })
@@ -114,16 +114,16 @@ describe('the one tree at boot', () => {
 
 describe('what names a note follows the tree (review 2026-11-20)', () => {
   it('keeps a private folder out of the replicas and the search, both ways', async () => {
-    await put('notes/Projects/Marina/Health/a.md', 'private\n')
-    await updateConfig({ hosts: { lagoon: { keep: { notes_exclude: ['Projects/Marina', 'family/pier.md'] } } }, search: { excluded_folders: ['family'] } } as never)
+    await put('notes/Projects/Marina/Pilings/a.md', 'private\n')
+    await updateConfig({ hosts: { lagoon: { keep: { notes_exclude: ['Projects/Marina', 'tidepool/pier.md'] } } }, search: { excluded_folders: ['tidepool'] } } as never)
     await boot(true)
     const on = await getConfig() as never as { hosts: { lagoon: { keep: { notes_exclude: string[] } } }; search: { excluded_folders: string[] } }
-    expect(on.hosts.lagoon.keep.notes_exclude).toEqual(['projects/Marina', 'notes/family/pier.md'])
-    expect(on.search.excluded_folders).toEqual(['notes/family'])
+    expect(on.hosts.lagoon.keep.notes_exclude).toEqual(['projects/Marina', 'notes/tidepool/pier.md'])
+    expect(on.search.excluded_folders).toEqual(['notes/tidepool'])
     await boot(false)
     const off = await getConfig() as never as typeof on
-    expect(off.hosts.lagoon.keep.notes_exclude).toEqual(['Projects/Marina', 'family/pier.md'])
-    expect(off.search.excluded_folders).toEqual(['family'])
+    expect(off.hosts.lagoon.keep.notes_exclude).toEqual(['Projects/Marina', 'tidepool/pier.md'])
+    expect(off.search.excluded_folders).toEqual(['tidepool'])
   })
 
   it('moves a renamed project\'s folder, and an old path still lands', async () => {

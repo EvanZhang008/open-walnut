@@ -38,11 +38,11 @@ const input = { projects: ['Marina', 'Lagoon'], nodes: [{ id: 'vp-1', project: '
 beforeEach(async () => {
   home = await fs.mkdtemp(path.join(os.tmpdir(), 'walnut-unify-'))
   dirs = { notes: path.join(home, 'notes'), artifacts: path.join(home, 'artifacts') }
-  await put('notes/marina/plan.md', '# Plan\n\nSee [the pier](../family/pier.md).\n')
+  await put('notes/marina/plan.md', '# Plan\n\nSee [the pier](../tidepool/pier.md).\n')
   await put('notes/Projects/Marina/Tracking.md', '# Marina tracking\n')
   await put('notes/Projects/Marina/Pier review (t-1)/Flow.excalidraw', '{"type":"excalidraw"}')
   await put('notes/Projects/Marina/Pier review (t-1)/Flow.drawing.md', '---\nkind: walnut-drawing\n---\n')
-  await put('notes/family/pier.md', 'The pier opens at noon.\n')
+  await put('notes/tidepool/pier.md', 'The pier opens at noon.\n')
   await put('notes/inbox/Sketch.excalidraw', '{}')
   await put('notes/_attachment/photo.png', '\u0000\u0001binary')
   await put('notes/global-notes.md', 'global\n')
@@ -52,7 +52,7 @@ beforeEach(async () => {
   await put('artifacts/org/skills/proof-video/SKILL.md', 'org skill\n')
   await put('artifacts/shared/notes/skills-index.md', 'index\n')
   await put('artifacts/.moved.json', '{"version":2}')
-  await fs.symlink('/somewhere/else/Archive', path.join(home, 'notes/family/archive-link'))
+  await fs.symlink('/somewhere/else/Archive', path.join(home, 'notes/tidepool/archive-link'))
 })
 
 describe('the move into one tree', () => {
@@ -62,13 +62,13 @@ describe('the move into one tree', () => {
     const r = await unifyTree(dirs, input)
     expect(r.moved).toBe(14)
     // The user's own link comes along as a link, pointing where it did.
-    expect(await fs.readlink(path.join(home, 'artifacts/notes/family/archive-link'))).toBe('/somewhere/else/Archive')
+    expect(await fs.readlink(path.join(home, 'artifacts/notes/tidepool/archive-link'))).toBe('/somewhere/else/Archive')
     expect(await read("artifacts/.moved.json")).toBe('{"version":2}')
     expect(await read('artifacts/projects/Marina/notes/plan.md')).toBe(before['marina/plan.md'])
     expect(await read('artifacts/projects/Marina/notes/Tracking.md')).toBe('# Marina tracking\n')
     expect(await read('artifacts/projects/Marina/drawings/Pier review (t-1)/Flow.excalidraw')).toBe('{"type":"excalidraw"}')
     expect(await read('artifacts/drawings/Sketch.excalidraw')).toBe('{}')
-    expect(await read('artifacts/notes/family/pier.md')).toBe('The pier opens at noon.\n')
+    expect(await read('artifacts/notes/tidepool/pier.md')).toBe('The pier opens at noon.\n')
     expect(await read('artifacts/notes/_attachment/photo.png')).toBe('\u0000\u0001binary')
     expect(await read('artifacts/projects/Marina/memory/vp-1/MEMORY.md')).toContain('- pending')
     expect(await read('artifacts/projects/Marina/skills/pier-steps/SKILL.md')).toContain('Steps.')
@@ -86,7 +86,7 @@ describe('the move into one tree', () => {
     // An old path still finds its file, and a relative link resolves from where its note used to be.
     const map = { exact: rec.vault.exact, rules: rec.vault.rules }
     expect(mapPath('marina/plan.md', map)).toBe('projects/Marina/notes/plan.md')
-    expect(mapPath(path.posix.normalize('marina/../family/pier.md'), map)).toBe('notes/family/pier.md')
+    expect(mapPath(path.posix.normalize('marina/../tidepool/pier.md'), map)).toBe('notes/tidepool/pier.md')
     await expect(unifyTree(dirs, input)).rejects.toThrow(/already/)
   })
 
@@ -99,7 +99,7 @@ describe('the move into one tree', () => {
     await fs.mkdir(stage, { recursive: true })
     await fs.rename(path.join(dirs.artifacts, 'projects'), path.join(stage, 'projects'))
     await fs.mkdir(path.join(stage, 'notes'), { recursive: true })
-    await fs.rename(path.join(dirs.artifacts, 'notes', 'family'), path.join(stage, 'notes', 'family'))
+    await fs.rename(path.join(dirs.artifacts, 'notes', 'tidepool'), path.join(stage, 'notes', 'tidepool'))
     await fs.writeFile(path.join(dirs.artifacts, '.unified.json'), JSON.stringify({ ...rec, state: 'switching' }))
     await finishSwitch(dirs, { ...rec, state: 'switching' })
     expect(await tree(dirs.artifacts)).toEqual({ ...want, '.unified.json': expect.any(String) })
@@ -111,7 +111,7 @@ describe('the move into one tree', () => {
     await unifyTree(dirs, input)
     await put('artifacts/projects/Marina/notes/plan.md', '# Plan, edited after the move\n')
     await put('artifacts/projects/Marina/notes/new-idea.md', 'New.\n')
-    await put('artifacts/notes/family/new.md', 'Family, new.\n')
+    await put('artifacts/notes/tidepool/new.md', 'Tidepool, new.\n')
     await put('artifacts/drawings/Later.excalidraw', '{"later":1}')
     await put('artifacts/projects/Marina/memory/vp-1/notes/later.md', 'later note\n')
     const r = await rollbackUnified(dirs)
@@ -119,7 +119,7 @@ describe('the move into one tree', () => {
     expect(await read('notes/marina/plan.md')).toBe('# Plan, edited after the move\n')
     // A new note in a folder two old ones met in goes to the Projects/ one.
     expect(await read('notes/Projects/Marina/new-idea.md')).toBe('New.\n')
-    expect(await read('notes/family/new.md')).toBe('Family, new.\n')
+    expect(await read('notes/tidepool/new.md')).toBe('Tidepool, new.\n')
     expect(await read('notes/inbox/Later.excalidraw')).toBe('{"later":1}')
     expect(await read('artifacts/nodes/vp-1/notes/later.md')).toBe('later note\n')
     expect(await read('artifacts/org/skills/proof-video/SKILL.md')).toBe('org skill\n')
@@ -145,13 +145,13 @@ describe('the move and the way back, cut short or raced (review 2026-11-20)', ()
     expect(rec.state).toBe('switching')
     // A boot made notes/ again (init), and a writer reached the old vault in the backup late.
     await fs.mkdir(dirs.notes, { recursive: true })
-    await put(path.join('artifacts', rec.backup, 'notes/family/late.md'), 'written late\n')
-    await put(path.join('artifacts', rec.backup, 'notes/family/pier.md'), 'The pier opens at one.\n')
+    await put(path.join('artifacts', rec.backup, 'notes/tidepool/late.md'), 'written late\n')
+    await put(path.join('artifacts', rec.backup, 'notes/tidepool/pier.md'), 'The pier opens at one.\n')
     await finishSwitch(dirs, rec)
     expect((await readUnified(dirs))!.state).toBe('live')
     expect(exists('notes')).toBe(false)
-    expect(await read('artifacts/notes/family/late.md')).toBe('written late\n')
-    expect(await read('artifacts/notes/family/pier.md')).toBe('The pier opens at one.\n')
+    expect(await read('artifacts/notes/tidepool/late.md')).toBe('written late\n')
+    expect(await read('artifacts/notes/tidepool/pier.md')).toBe('The pier opens at one.\n')
   })
 
   it('a way back a stop cut short is finished, and a notes/ something made meanwhile keeps its files', async () => {
@@ -163,7 +163,7 @@ describe('the move and the way back, cut short or raced (review 2026-11-20)', ()
     expect((await readUnified(dirs))!.state).toBe('rolling-back')
     await rollbackUnified(dirs)
     expect(await readUnified(dirs)).toBeNull()
-    expect(await read('notes/family/pier.md')).toBe('The pier opens at noon.\n')
+    expect(await read('notes/tidepool/pier.md')).toBe('The pier opens at noon.\n')
     expect(await read('notes/written-by-old-release.md')).toBe('kept\n')
     // A task made or moved after the switch: its memory goes to its nodes/ folder.
     expect(await read('artifacts/nodes/t-new/MEMORY.md')).toBe('made since under a project\n')
@@ -177,7 +177,7 @@ describe('the move and the way back, cut short or raced (review 2026-11-20)', ()
     await fs.symlink(real, dirs.notes)
     await expect(unifyTree(dirs, input)).rejects.toThrow('is a link')
     expect(await readUnified(dirs)).toBeNull()
-    expect(await read('notes/family/pier.md')).toBe('The pier opens at noon.\n')
+    expect(await read('notes/tidepool/pier.md')).toBe('The pier opens at noon.\n')
   })
 })
 
@@ -232,9 +232,9 @@ describe('a step that cannot finish is undone (review round 2)', () => {
 
   it('takes in a file written to the old vault place while the tree is live', async () => {
     await unifyTree(dirs, input)
-    await put('notes/family/stray.md', 'written to the old place\n')
+    await put('notes/tidepool/stray.md', 'written to the old place\n')
     expect(await adoptStrayVault(dirs, (await readUnified(dirs))!)).toBe(1)
-    expect(await read('artifacts/notes/family/stray.md')).toBe('written to the old place\n')
+    expect(await read('artifacts/notes/tidepool/stray.md')).toBe('written to the old place\n')
     expect(exists('notes')).toBe(false)
   })
 })

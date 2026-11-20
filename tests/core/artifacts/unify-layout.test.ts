@@ -8,14 +8,14 @@ import {
 } from '../../../src/core/artifacts/unify/layout.js'
 
 const projects = ['Marina', 'Lagoon Work', 'Seawall', 'seawall']
-const rules = vaultRules({ topFolders: ['marina', 'family', 'Projects', 'inbox', '.trash'], projectsFolders: ['Marina', 'Seawall', 'Tide'], projects })
+const rules = vaultRules({ topFolders: ['marina', 'tidepool', 'Projects', 'inbox', '.trash'], projectsFolders: ['Marina', 'Seawall', 'Tide'], projects })
 
 describe('the vault', () => {
   it('puts a project\'s folders in its notes and keeps every other path under the root notes', () => {
     const map = { exact: {}, rules }
     expect(mapPath('Projects/Marina/Tracking.md', map)).toBe('projects/Marina/notes/Tracking.md')
     expect(mapPath('marina/plan/a.md', map)).toBe('projects/Marina/notes/plan/a.md')
-    expect(mapPath('family/kids.md', map)).toBe('notes/family/kids.md')
+    expect(mapPath('tidepool/buoys.md', map)).toBe('notes/tidepool/buoys.md')
     expect(mapPath('dd.md', map)).toBe('notes/dd.md')
     // A Projects/ folder no project is named for is still a project folder.
     expect(mapPath('Projects/Tide/x.md', map)).toBe('projects/Tide/notes/x.md')
@@ -92,12 +92,12 @@ describe('the artifacts folder', () => {
 
 describe('the way back', () => {
   it('maps every moved path back to where it was', () => {
-    const files = ['Projects/Marina/Tracking.md', 'marina/Tracking.md', 'marina/a.md', 'family/b.md', 'inbox/Sketch.excalidraw']
+    const files = ['Projects/Marina/Tracking.md', 'marina/Tracking.md', 'marina/a.md', 'tidepool/b.md', 'inbox/Sketch.excalidraw']
     const plan = planVault(files, rules)
     const back = invertMap({ exact: plan.exact, rules }, plan.moves)
     for (const [from, to] of plan.moves) expect(mapPath(to, back), to).toBe(from)
     // A note made after the move, in a folder two old ones met in, goes back to the Projects/ one.
     expect(mapPath('projects/Marina/notes/new.md', back)).toBe('Projects/Marina/new.md')
-    expect(mapPath('notes/family/new.md', back)).toBe('family/new.md')
+    expect(mapPath('notes/tidepool/new.md', back)).toBe('tidepool/new.md')
   })
 })

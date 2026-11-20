@@ -69,23 +69,23 @@ describe('a path-form link from before the move', () => {
     expect(movedPath('Marina/plan', map)).toBe('projects/Marina/notes/plan')
     expect(movedPath('marina/old name.md', map)).toBe('projects/Marina/notes/Old Name 2.md')
     expect(movedPath('projects/Marina/notes/plan', map)).toBe('projects/Marina/notes/plan')
-    expect(movedPath('family/pier', null)).toBe('family/pier')
+    expect(movedPath('tidepool/pier', null)).toBe('tidepool/pier')
   })
 
   it('is a backlink of its note in the index, and stays one after a re-resolve', async () => {
     await writeNote('projects/Marina/notes/plan.md', '# Plan')
     await writeNote('projects/Marina/notes/Old Name 2.md', '# Old')
-    await writeNote('notes/family/pier.md', 'See [[marina/plan|the plan]] and [[Marina/Old Name]].')
-    await writeNote('notes/family/new.md', 'And [[projects/Marina/notes/plan]].')
+    await writeNote('notes/tidepool/pier.md', 'See [[marina/plan|the plan]] and [[Marina/Old Name]].')
+    await writeNote('notes/tidepool/new.md', 'And [[projects/Marina/notes/plan]].')
     await rebuildIndex()
     await stampAllIds()
     const plan = getNoteIdByPath('projects/Marina/notes/plan.md')!
     const old = getNoteIdByPath('projects/Marina/notes/Old Name 2.md')!
     expect(findNoteIdByPathForm('marina/plan')).toBe(plan)
-    expect(backlinksForId(plan).map((b) => b.path).sort()).toEqual(['notes/family/new.md', 'notes/family/pier.md'])
-    expect(backlinksForId(old).map((b) => b.path)).toEqual(['notes/family/pier.md'])
+    expect(backlinksForId(plan).map((b) => b.path).sort()).toEqual(['notes/tidepool/new.md', 'notes/tidepool/pier.md'])
+    expect(backlinksForId(old).map((b) => b.path)).toEqual(['notes/tidepool/pier.md'])
     reresolveAllEdges()
-    expect(backlinksForId(plan).map((b) => b.path).sort()).toEqual(['notes/family/new.md', 'notes/family/pier.md'])
+    expect(backlinksForId(plan).map((b) => b.path).sort()).toEqual(['notes/tidepool/new.md', 'notes/tidepool/pier.md'])
   })
 
   it('never stamps an id into a file Walnut writes itself (a memory folder, a skill)', async () => {
@@ -93,33 +93,33 @@ describe('a path-form link from before the move', () => {
     const skill = '---\nname: "pier-steps"\n---\nStep one.\n'
     await writeNote('projects/Marina/memory/t-1/MEMORY.md', mem)
     await writeNote('skills/pier-steps/SKILL.md', skill)
-    await writeNote('notes/family/pier.md', '# Pier\n')
+    await writeNote('notes/tidepool/pier.md', '# Pier\n')
     await rebuildIndex()
     await stampAllIds()
     expect(await fs.readFile(path.join(tree, 'projects/Marina/memory/t-1/MEMORY.md'), 'utf-8')).toBe(mem)
     expect(await fs.readFile(path.join(tree, 'skills/pier-steps/SKILL.md'), 'utf-8')).toBe(skill)
     expect(getNoteIdByPath('skills/pier-steps/SKILL.md')).toMatch(/^n_w/)
     // The user's own notes still get theirs, in the file.
-    expect(await fs.readFile(path.join(tree, 'notes/family/pier.md'), 'utf-8')).toMatch(/^---\nid: n_/)
+    expect(await fs.readFile(path.join(tree, 'notes/tidepool/pier.md'), 'utf-8')).toMatch(/^---\nid: n_/)
   })
 
   it('an embed of a name several pictures share shows the same one as before the move', async () => {
-    // Before: finance/pic.png (one folder deep) won over b/c/pic.png (two) for a note at the root.
+    // Before: ledger/pic.png (one folder deep) won over b/c/pic.png (two) for a note at the root.
     // After, both are three deep, and by name alone notes/b/c/... would win.
-    setNoteMoves({ exact: {}, rules: [{ from: 'finance/', to: 'projects/Finance/notes/' }, { from: '', to: 'notes/' }] }, [
-      ['finance/pic.png', 'projects/Finance/notes/pic.png'], ['b/c/pic.png', 'notes/b/c/pic.png'], ['n.md', 'notes/n.md'],
+    setNoteMoves({ exact: {}, rules: [{ from: 'ledger/', to: 'projects/Ledger/notes/' }, { from: '', to: 'notes/' }] }, [
+      ['ledger/pic.png', 'projects/Ledger/notes/pic.png'], ['b/c/pic.png', 'notes/b/c/pic.png'], ['n.md', 'notes/n.md'],
     ])
-    await writeNote('projects/Finance/notes/pic.png', 'finance')
+    await writeNote('projects/Ledger/notes/pic.png', 'ledger')
     await writeNote('notes/b/c/pic.png', 'bc')
     await writeNote('notes/n.md', '![[pic.png]]')
     const hit = await resolveAttachmentPath('pic.png', 'notes/n.md')
-    expect(hit).toBe(path.join(tree, 'projects/Finance/notes/pic.png'))
+    expect(hit).toBe(path.join(tree, 'projects/Ledger/notes/pic.png'))
   })
 
   it('opens its note from the web client', () => {
     const notes = [
       { path: 'projects/Marina/notes/plan.md', name: 'plan' },
-      { path: 'notes/family/pier.md', name: 'pier' },
+      { path: 'notes/tidepool/pier.md', name: 'pier' },
     ]
     const hit = resolveWikiLinkTarget('marina/plan', notes, map)
     expect(hit.kind === 'resolved' && hit.note.path).toBe('projects/Marina/notes/plan.md')
