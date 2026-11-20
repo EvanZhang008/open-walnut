@@ -732,6 +732,9 @@ struct LetterReaderView: View {
 
     private func recordedTurnStatus(_ entry: LetterThreadEntry, recipient: String) -> LetterReplyStatus? {
         let when = entry.date ?? entry.delivery?.at.map { Date(timeIntervalSince1970: $0 / 1000) }
+        if replies.isHeldForMac(letterId: letterId, entry: entry) {
+            return .heldForMac(recipient: recipient, at: when)
+        }
         if replies.awaitsDelivery(letterId: letterId, entry: entry) {
             return replies.isDeliveryUnconfirmed(letterId: letterId, entry: entry)
                 ? .unconfirmed(recipient: recipient, canRetry: entry.clientId != nil)
@@ -764,6 +767,7 @@ struct LetterReaderView: View {
         return letter.threadEntries.filter { entry in
             replies.awaitsDelivery(letterId: letterId, entry: entry)
                 && !replies.isDeliveryUnconfirmed(letterId: letterId, entry: entry)
+                && !replies.isHeldForMac(letterId: letterId, entry: entry)
         }
     }
 
@@ -776,9 +780,12 @@ struct LetterReaderView: View {
     /// re-reads slowly for these, so a late outcome still shows on its own.
     private var deliveryLateKey: String {
         guard let letter else { return "" }
+        // Held for the Mac too: it may be hours, so the slow re-read (and one on
+        // returning to the app) is what turns it into "Sent".
         var parts = letter.threadEntries.filter { entry in
-            replies.awaitsDelivery(letterId: letterId, entry: entry)
-                && replies.isDeliveryUnconfirmed(letterId: letterId, entry: entry)
+            (replies.awaitsDelivery(letterId: letterId, entry: entry)
+                && replies.isDeliveryUnconfirmed(letterId: letterId, entry: entry))
+                || replies.isHeldForMac(letterId: letterId, entry: entry)
         }.map { LetterThreadItem.turn($0).id }
         if replies.needsRecheck(letterId: letterId) { parts.append("lost-answer") }
         return parts.joined(separator: ",")

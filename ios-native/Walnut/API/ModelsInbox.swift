@@ -421,6 +421,21 @@ struct LetterDelivery: Codable, Equatable {
     let reason: String?
     let sessionId: String?
     let messageId: String?
+    /// With `pending`: a replica (the cloud companion) took the reply while the
+    /// Mac was away and keeps it for the Mac, which delivers it when it is back.
+    /// nil from a server that predates it.
+    var held: Bool? = nil
+
+    init(status: String?, reason: String?, sessionId: String?, messageId: String?, held: Bool? = nil) {
+        self.status = status
+        self.reason = reason
+        self.sessionId = sessionId
+        self.messageId = messageId
+        self.held = held
+    }
+
+    /// Kept for the Mac on a replica, not handed to it yet.
+    var isHeldForMac: Bool { status == "pending" && held == true }
 
     /// One short line with no recipient and no time. The reader's status line
     /// under a reply is `LetterReplyStatus`, which names both; this is the
@@ -429,6 +444,7 @@ struct LetterDelivery: Codable, Equatable {
     /// `queued` means handed to the session's message queue, which resumes a
     /// session that is not running, so it is honestly "Sent".
     var humanText: String {
+        if isHeldForMac { return "Received. It goes to the agent when your Mac is back." }
         switch status {
         case "queued", "delivered":
             return "Sent to the agent"
@@ -459,10 +475,12 @@ struct LetterTurnDelivery: Codable, Equatable {
     let sessionId: String?
     /// When the attempt finished, epoch ms.
     let at: Double?
+    /// See `LetterDelivery.held`.
+    var held: Bool? = nil
 
     /// The response-shaped delivery this record stands for.
     var asDelivery: LetterDelivery {
-        LetterDelivery(status: status, reason: reason, sessionId: sessionId, messageId: nil)
+        LetterDelivery(status: status, reason: reason, sessionId: sessionId, messageId: nil, held: held)
     }
 }
 

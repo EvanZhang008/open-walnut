@@ -219,6 +219,8 @@ const sb = (s: string): string => JSON.stringify(s)
 export function liveProfile(input: {
   base: string; repo: string; realHome: string; prodDir: string; userTemp: string; runtimes: readonly string[]; writable: readonly string[]; noExec: readonly string[]
   denyPorts: readonly number[]
+  /** Single files under the home a child may read but not run (the manifests beside linked dependencies). */
+  readableFiles?: readonly string[]
 }): string {
   // An exception that holds the whole home (node installed as ~/bin/node) would take both home walls down.
   for (const p of [input.base, input.repo, ...input.runtimes]) {
@@ -227,6 +229,10 @@ export function liveProfile(input: {
   if (!input.denyPorts.length) throw new Error('live walls: no ports to deny')
   const readable = [input.repo, ...input.runtimes].filter((p) => p.startsWith(input.realHome + '/'))
   const inHome = `(require-all (subpath ${sb(input.realHome)}) (require-not (require-any (subpath ${sb(input.base)})${readable.map((p) => ` (subpath ${sb(p)})`).join('')})))`
+  const files = (input.readableFiles ?? []).filter((p) => p.startsWith(input.realHome + '/'))
+  const readInHome = files.length
+    ? `(require-all (subpath ${sb(input.realHome)}) (require-not (require-any (subpath ${sb(input.base)})${readable.map((p) => ` (subpath ${sb(p)})`).join('')}${files.map((p) => ` (literal ${sb(p)})`).join('')})))`
+    : inHome
   return [
     '(version 1)',
     '(allow default)',
@@ -234,7 +240,7 @@ export function liveProfile(input: {
     `(deny network-outbound (require-all (require-not (remote ip "localhost:*")) (require-not (remote unix-socket (subpath ${sb(input.base)})))))`,
     `(deny network-outbound${input.denyPorts.map((p) => ` (remote ip "localhost:${p}")`).join('')})`,
     `(deny file-write* (require-not (require-any (subpath ${sb(input.base)})${input.writable.map((p) => ` (literal ${sb(p)})`).join('')} (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty") (literal "/dev/dtracehelper") (regex #"^/dev/fd/"))))`,
-    `(deny file-read-data ${inHome})`,
+    `(deny file-read-data ${readInHome})`,
     `(deny process-exec ${inHome})`,
     ...(input.noExec.length ? [`(deny process-exec${input.noExec.map((p) => ` (literal ${sb(p)})`).join('')})`] : []),
     `(deny file-read-data (subpath ${sb(input.prodDir)}) (subpath ${sb(input.prodDir + '-streams')}))`,
@@ -270,6 +276,18 @@ function depRoots(repo: string): string[] {
 }
 
 /**
+ * What Bun reads of a checkout a linked node_modules lives in (a clone whose node_modules points at
+ * another checkout): the listing of the dir that holds that node_modules, and the package.json,
+ * bunfig.toml and tsconfig.json beside it. Denied, every import from it failed ("cannot read or
+ * parse", then "Cannot find package" for a dependency's own dependency). Never the rest of it.
+ */
+function depManifests(repo: string): string[] {
+  const own = real(repo)
+  return depRoots(repo).filter((r) => path.basename(r) === 'node_modules' && path.dirname(r) !== own)
+    .flatMap((r) => [path.dirname(r), ...['package.json', 'bunfig.toml', 'tsconfig.json'].map((f) => path.join(path.dirname(r), f))])
+}
+
+/**
  * `[file, args]` that runs `cmd args` inside the walls on macOS (sandbox-exec execs
  * the command, so the spawned pid is the command's own), or as is elsewhere.
  */
@@ -289,7 +307,7 @@ export function walled(cmd: string, args: readonly string[], input: { base: stri
   const noExec = [...new Set(['/opt/homebrew/bin/claude', '/usr/local/bin/claude'].flatMap((p) => (fs.existsSync(p) ? [p, real(p)] : [p])))]
   const profile = liveProfile({
     base: real(input.base), repo: real(input.repo), realHome: real(realHome), prodDir: path.join(real('/tmp'), 'open-walnut'), userTemp: userTempDir(),
-    runtimes, writable, noExec, denyPorts: livePorts(),
+    runtimes, writable, noExec, denyPorts: livePorts(), readableFiles: depManifests(input.repo),
   })
   return ['/usr/bin/sandbox-exec', ['-p', profile, cmd, ...args]]
 }

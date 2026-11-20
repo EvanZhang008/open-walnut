@@ -67,6 +67,19 @@ export function preferredAlias(aliases: readonly string[], rows: TwinRows, net?:
   })[0]
 }
 
+/**
+ * The one name a daemon reached by several aliases goes by toward anything outside this Walnut
+ * (the cloud bridge it dials, the read copy it answers from while the leader is away): this
+ * machine's own key when it is one of them, else the alias the person uses (preferredAlias).
+ * Every link to that daemon must push the same answer: when each pushed its own alias, the
+ * daemon's bridge took the name of whichever pushed last (2026-11-20: `clouddev` and `newdev`
+ * swapped about 230 times a day, and while the Mac was asleep the phone found no `clouddev`).
+ */
+export function daemonKeeperAlias(aliases: readonly string[], rows: TwinRows, net?: NetSwitch): string {
+  if (aliases.includes(LOCAL_HOST_ALIAS)) return LOCAL_HOST_ALIAS
+  return preferredAlias(aliases, rows, net)
+}
+
 /** A row that can carry the machine now: enabled, and a host-network row only while the host network is on (`net` given). */
 function usable(row: TwinRow, net: NetSwitch | undefined): boolean {
   if (row?.enabled === false) return false

@@ -39,6 +39,11 @@ export interface HostServerHost {
    * computer's own daemon is not linked).
    */
   reachesThisComputer?(): Promise<boolean | null>
+  /**
+   * The name this link's daemon goes by when several aliases reach it (daemon-connection.ts
+   * daemonNames): the daemon runs ONE host server per Walnut, so only that name manages it.
+   */
+  daemonKeeper?(): Promise<string>
   /** The daemon process this link reached (its hello instanceId): what it was sent before, it still holds. */
   readonly daemonInstanceId?: string | null
 }

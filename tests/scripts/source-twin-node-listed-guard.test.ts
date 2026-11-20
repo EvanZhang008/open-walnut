@@ -40,6 +40,7 @@ function testSources(): Map<string, string> {
 const TWIN_HELPERS: Record<string, RegExp> = {
   'tests/helpers/daemon-twin.ts': /\bstartDaemonTwin\(/,
   'tests/helpers/host-alone-harness.ts': /\bstartHostAloneHarness\(/,
+  'tests/helpers/live-daemon.ts': /\bspawnLiveDaemon\(/,
   'tests/helpers/replica-cluster.ts': /\bstart(?:ReplicaCluster|HostDaemon)\(/,
   'tests/helpers/startup-failure-twins.ts': /\bstartupFailureTwinsSuite\(/,
 }

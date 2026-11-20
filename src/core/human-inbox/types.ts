@@ -170,6 +170,13 @@ export interface ThreadEntryDelivery {
   sessionId?: string;
   /** When the attempt finished, epoch ms (for `pending`, when the turn was recorded). */
   at: number;
+  /**
+   * Only with `pending`, only on a replica: this box took the turn while the Mac was away and
+   * keeps it for the Mac (its journal), which has not got it yet. The Mac delivers it when it
+   * is back, in order and once; a reader says "received, goes out when the Mac is back"
+   * instead of "sending". Absent everywhere else (an older reader shows `pending` as before).
+   */
+  held?: true;
 }
 
 /** The index record. Bodies live in their own files, never in here. */

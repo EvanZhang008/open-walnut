@@ -385,6 +385,30 @@ final class LetterReplyStoreTests: XCTestCase {
         XCTAssertFalse(store.isDeliveryUnconfirmed(letterId: "lt-a", entry: pending))
     }
 
+    /// 2026-11-20: a reply the cloud companion kept while the Mac slept read
+    /// "Sending to ..." for as long as the Mac was away. A held turn says it was
+    /// received and goes out when the Mac is back; then the Mac's outcome reads Sent.
+    func testATurnHeldForTheMacSaysReceivedAndThenSent() throws {
+        let store = LetterReplyStore(transport: ScriptedReplyTransport())
+        let held = try turn(#"{ "from": "human", "text": "a", "at": 1, "clientId": "rp-1", "delivery": { "status": "pending", "at": 1, "held": true } }"#)
+        let macHasIt = try turn(#"{ "from": "human", "text": "a", "at": 1, "clientId": "rp-1", "delivery": { "status": "pending", "at": 1 } }"#)
+        let sent = try turn(#"{ "from": "human", "text": "a", "at": 1, "clientId": "rp-1", "delivery": { "status": "queued", "sessionId": "s", "at": 9 } }"#)
+        XCTAssertTrue(store.isHeldForMac(letterId: "lt-a", entry: held))
+        XCTAssertTrue(store.awaitsDelivery(letterId: "lt-a", entry: held), "still to come, so the reader keeps reading the letter")
+        XCTAssertFalse(store.isHeldForMac(letterId: "lt-a", entry: macHasIt))
+        XCTAssertFalse(store.isHeldForMac(letterId: "lt-a", entry: sent))
+        let line = LetterReplyStatus.heldForMac(recipient: "Demo campaign", at: nil)
+        XCTAssertEqual(line.text, "Received. It goes to Demo campaign when your Mac is back.")
+        XCTAssertEqual(line.tone, .waiting)
+        XCTAssertFalse(line.offersRetry || line.offersEdit, "nothing failed: no Retry, no Edit")
+        XCTAssertFalse(line.text.contains("Sending"))
+        // A response that carries `held` decodes it too.
+        let response = try JSONDecoder().decode(LetterDelivery.self, from: Data(#"{ "status": "pending", "held": true }"#.utf8))
+        XCTAssertTrue(response.isHeldForMac)
+        XCTAssertEqual(response.humanText, "Received. It goes to the agent when your Mac is back.")
+        XCTAssertFalse(try JSONDecoder().decode(LetterDelivery.self, from: Data(#"{ "status": "pending" }"#.utf8)).isHeldForMac)
+    }
+
     /// r4 P2-4: a turn given up on whose outcome lands later is settled by the
     /// read that brings it: no longer waiting, and its "Not confirmed" mark gone.
     func testALateOutcomeSettlesATurnGivenUpOn() throws {

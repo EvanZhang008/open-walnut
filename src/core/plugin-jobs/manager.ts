@@ -46,6 +46,8 @@ export interface JobsHost {
   hasCapability(cap: string): boolean
   send(cmd: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>
   uploadFile(remotePath: string, data: Buffer, opts?: { sha256?: string }): Promise<unknown>
+  /** Every alias that reaches this link's daemon and the one it goes by (DaemonConnection.daemonNames). */
+  daemonNames?(): Promise<{ keeper: string; aliases: string[] }>
 }
 
 /** A plugin with jobs, as the manager sees it. */
@@ -175,7 +177,7 @@ export function createPluginJobsManager(deps: ManagerDeps) {
   }
 
   /** The specs this computer wants on `hostKey`, given what that daemon runs now. */
-  async function desiredFor(hostKey: string, handle: JobsHost, plugins: JobPlugin[], current: PluginJobStatus[], bundles: string, rec: HostRecord): Promise<PluginJobSpec[]> {
+  async function desiredFor(hostKey: string, handle: JobsHost, plugins: JobPlugin[], current: PluginJobStatus[], bundles: string, rec: HostRecord, runsHere: ReadonlySet<string> = new Set([hostKey])): Promise<PluginJobSpec[]> {
     const out: PluginJobSpec[] = []
     const bundleErrors: Record<string, string> = {}
     const limitErrors: Record<string, string> = {}
@@ -205,7 +207,7 @@ export function createPluginJobsManager(deps: ManagerDeps) {
       }
     }
     for (const p of [...plugins].sort((a, b) => a.id.localeCompare(b.id))) {
-      if (p.runOn !== hostKey) continue
+      if (!p.runOn || !runsHere.has(p.runOn)) continue
       const verdict = jobsVerdict(p.state)
       if (verdict === 'stop') continue
       if (verdict === 'keep') { keepCurrent(p); continue }
@@ -252,6 +254,14 @@ export function createPluginJobsManager(deps: ManagerDeps) {
     // A reconnect while this pass runs swaps the handle and asks for one more pass, whose
     // snapshot is newer: this one sends nothing then (it would land after and win).
     const handle = rec.handle
+    // The daemon holds ONE job set per Walnut: only the name it goes by sends it, or another name's
+    // empty set stops the jobs of a plugin that runs there (daemonKeeperAlias).
+    const names = handle.daemonNames ? await handle.daemonNames().catch(() => null) : null
+    if (names && names.keeper !== hostKey) {
+      rec.phase = 'unsupported'
+      rec.message = 'another name of a host whose jobs are set up under its own name'
+      return
+    }
     if (!handle.hasCapability(PLUGIN_JOBS_CAPABILITY)) {
       rec.phase = 'unsupported'
       rec.message = 'its daemon is older than plugin jobs; it is upgraded on its next connect'
@@ -270,7 +280,9 @@ export function createPluginJobsManager(deps: ManagerDeps) {
     const current = Array.isArray(st.jobs) ? st.jobs as PluginJobStatus[] : []
     // A host taken out of Settings, Hosts runs nothing for this Walnut any more.
     const known = hostKey === LOCAL_HOST || (await deps.hosts()).some((h) => h.key === hostKey)
-    const jobs = await desiredFor(hostKey, handle, known ? plugins : [], current, bundles, rec)
+    // A plugin set to run on another alias of this daemon runs here too: it is the same machine.
+    const runsHere = new Set(names?.aliases ?? [hostKey])
+    const jobs = await desiredFor(hostKey, handle, known ? plugins : [], current, bundles, rec, runsHere)
     const walnutId = await deps.walnutId()
     if (rec.handle !== handle) return
     const r = await handle.send('jobs.configure', { home: deps.home, spec: { v: 1, home: deps.home, walnutId, jobs } }, 30_000)

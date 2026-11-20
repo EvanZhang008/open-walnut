@@ -1903,7 +1903,9 @@ export class DaemonConnection {
     void (async () => {
       try {
         const { getBridgeConfigForHost } = await import('../integrations/cloud-bridge-config.js')
-        const cfg = await getBridgeConfigForHost(this.hostKey)
+        // One bridge per daemon, under one name from every link to it (daemonKeeperAlias).
+        const { keeper } = await this.daemonNames()
+        const cfg = await getBridgeConfigForHost(keeper)
         // Push disabled too — an operator turning the bridge off must reach
         // daemons that already hold a persisted bridge.json.
         // `home` names this Walnut's own link on a daemon several Walnuts share
@@ -1931,16 +1933,17 @@ export class DaemonConnection {
         this._lastBridgeCheckedAt = Date.now()
         if (cfg.enabled && reply.connected !== true) {
           log.session.warn('DaemonConnection: bridge enabled but NOT connected on daemon', {
-            host: this.hostKey,
+            host: this.hostKey, ...(keeper !== this.hostKey ? { bridgeAlias: keeper } : {}),
           })
           // The network, or a machine token the cloud box stopped accepting
           // (401)? Ask it (at most every 10 minutes); a new token is pushed at once.
           void import('../integrations/cloud-bridge-config.js')
-            .then((m) => m.revalidateBridgeToken(this.hostKey))
+            .then((m) => m.revalidateBridgeToken(keeper))
             .then((reminted) => { if (reminted) setTimeout(() => this.pushBridgeConfig(), 0) }, () => { /* next re-push */ })
         } else {
           log.session.info('DaemonConnection: bridge config pushed', {
             host: this.hostKey, enabled: cfg.enabled, bridgeConnected: this._lastBridgeConnected,
+            ...(keeper !== this.hostKey ? { bridgeAlias: keeper } : {}),
           })
         }
       } catch (err) {
@@ -2218,6 +2221,26 @@ export class DaemonConnection {
   }
 
   /**
+   * Every alias that reaches this daemon, and the one it goes by outward (daemonKeeperAlias). The
+   * daemon keeps ONE bridge and ONE read copy per Walnut, so each link must push the same ones.
+   */
+  async daemonNames(): Promise<{ keeper: string; aliases: string[] }> {
+    const aliases = await this.sameDaemonHosts().catch(() => [this.hostKey])
+    if (aliases.length < 2) return { keeper: this.hostKey, aliases: [this.hostKey] }
+    try {
+      const [{ getConfig }, { daemonKeeperAlias }] = await Promise.all([
+        import('../core/config-manager.js'),
+        import('../core/hosts/daemon-twins.js'),
+      ])
+      const cfg = await getConfig()
+      return { keeper: daemonKeeperAlias(aliases, (cfg.hosts ?? {}) as never, cfg.net as never), aliases }
+    } catch {
+      // A config that cannot be read: the name every link computes alike without it.
+      return { keeper: aliases.includes('__local__') ? '__local__' : [...aliases].sort()[0], aliases }
+    }
+  }
+
+  /**
    * The triggers whose def differs from the set pushed before (new ones included), and keeps this
    * set's hashes. Each push sends the whole set (about 250 KB for 97 triggers): the ids say what
    * moved it (2026-11-15: three routines' conversation samples moved it every few seconds).
@@ -2305,7 +2328,8 @@ export class DaemonConnection {
               throw err
             }
           }
-          const slice = await buildHostSlice(this.hostKey)
+          const { keeper, aliases } = await this.daemonNames()
+          const slice = await buildHostSlice([keeper, ...aliases.filter((a) => a !== keeper)])
           if (slice.hash === this.lastHostSlicePushHash) continue
           // A fresh link to a daemon that still holds this very copy (the link dropped,
           // the daemon did not): name it instead of sending it (host-slice-probe-v1).
@@ -3874,6 +3898,8 @@ export class DaemonConnection {
         if ((await conn.sameDaemonHosts()).includes('__local__')) return true
         return pooledFor('__local__')?.liveInstanceId ? false : null
       },
+      daemonKeeper: async (): Promise<string> => (await conn.daemonNames()).keeper,
+      daemonNames: () => conn.daemonNames(),
     }
   }
 
@@ -10167,9 +10193,12 @@ export function pushTriggersToHost(hostKey: string): void {
 
 /** Push one host's bridge config now ('__local__' for this machine): its machine credential was minted anew. */
 export function pushBridgeConfigToHost(hostKey: string): void {
-  for (const conn of connectionPool.values()) {
-    if (conn.connected && conn.host === hostKey) conn.pushBridgeConfig()
-  }
+  // The credential is the one name's (daemonNames): every link to that daemon pushes it.
+  void sameDaemonHosts(hostKey).catch(() => [hostKey]).then((hosts) => {
+    for (const conn of connectionPool.values()) {
+      if (conn.connected && hosts.includes(conn.host)) conn.pushBridgeConfig()
+    }
+  })
 }
 
 /** Re-push every connected host's read copy (host-slice.ts debounces the callers). */
@@ -10181,9 +10210,12 @@ export function pushHostSliceToAllHosts(): void {
 
 /** Push one host's read copy now ('__local__' for this machine): a session is starting there. */
 export function pushHostSliceToHost(hostKey: string): void {
-  for (const conn of connectionPool.values()) {
-    if (conn.connected && conn.host === hostKey) conn.pushHostSlice()
-  }
+  // The copy holds every alias of the daemon (daemonNames), so a link of any of them carries it.
+  void sameDaemonHosts(hostKey).catch(() => [hostKey]).then((hosts) => {
+    for (const conn of connectionPool.values()) {
+      if (conn.connected && hosts.includes(conn.host)) conn.pushHostSlice()
+    }
+  })
 }
 
 /** Whether the copy last pushed to a connected host names this session. */

@@ -530,6 +530,14 @@ export function createHostServerManager(deps: ManagerDeps) {
   async function reconcileOnce(hostKey: string, retry = false, soft = false): Promise<void> {
     let host = hosts.get(hostKey)
     if (await deps.frozen?.()) return
+    // A daemon reached by several aliases keeps ONE server per Walnut: only the name it goes by
+    // (daemonKeeperAlias) sets it up or takes it down. 2026-11-20: the found twin `newdev`, off by
+    // default, took down the server `clouddev` runs on that same machine.
+    const keeper = host?.connected && host.daemonKeeper ? await host.daemonKeeper().catch(() => hostKey) : hostKey
+    if (keeper !== hostKey) {
+      notEligible(hostKey, 'another-name', `This host is another name of ${keeper}: its Walnut server is set up there.`)
+      return
+    }
     const settings = await deps.settingsOf(hostKey)
     // Read while this server began to stop (its plugins going): what they say is not the person's.
     if (await deps.frozen?.()) return

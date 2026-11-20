@@ -85,6 +85,16 @@ struct LetterReplyStatus: Equatable {
         }
     }
 
+    /// On record on a replica (the cloud companion) while the Mac is away: it
+    /// goes to the agent, in order and once, when the Mac is back. Never
+    /// "Sending" (2026-11-20: two replies sat on "Sending to ..." for the whole
+    /// time the Mac slept, read as stuck), never a Retry: nothing failed.
+    static func heldForMac(recipient: String, at: Date?, now: Date = AppClock.now(), calendar: Calendar = .current) -> LetterReplyStatus {
+        let when = at.map { " · " + timeLabel($0, now: now, calendar: calendar) } ?? ""
+        return .init(text: "Received\(when). It goes to \(recipient) when your Mac is back.", tone: .waiting,
+                     sessionId: nil, offersRetry: false, offersEdit: false)
+    }
+
     /// Handed to the server, no answer yet; or on record with its delivery still
     /// running (the phone re-reads the letter until the outcome is in).
     static func sending(recipient: String) -> LetterReplyStatus {

@@ -433,6 +433,14 @@ final class LetterReplyStore {
         return known.status == "pending"
     }
 
+    /// This turn is kept on a replica for the Mac (`LetterDelivery.held`): it
+    /// waits for the Mac, however long that is, so it is never given up on as
+    /// "Not confirmed"; a slow re-read picks up the Mac's outcome.
+    func isHeldForMac(letterId: String, entry: LetterThreadEntry) -> Bool {
+        guard entry.isHuman else { return false }
+        return delivery(letterId: letterId, entry: entry)?.isHeldForMac == true
+    }
+
     nonisolated static func hasOutcome(_ entry: LetterThreadEntry) -> Bool {
         guard let status = entry.delivery?.status else { return false }
         return status != "pending"

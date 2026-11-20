@@ -36,13 +36,11 @@ import fsp from 'node:fs/promises'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { WebSocket } from 'ws'
+import { execFileSync } from 'node:child_process'
 import Database from '../../src/lib/sqlite.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { LiveProcs, realProcTable, type Owned } from '../helpers/live-procs.js'
-import { LIVE_CONNECT_GUARD, LIVE_KEEPER, liveEnv, liveWallsAvailable, walled } from '../helpers/live-isolation.js'
+import { liveEnv, liveWallsAvailable } from '../helpers/live-isolation.js'
+import { ctrlOf, daemonCall, daemonStatus, inboxOf, respOf, spawnLiveDaemon, startLiveMockSession, stopLiveMockSessions, writeLiveMockCli, type LiveCli, type LiveDaemon, type LiveDaemonCtx } from '../helpers/live-daemon.js'
 import { BOOT_HEAD, BOOT_TAIL, blankServer, bootLiveServer, finishLive, guardLogOf, liveBase, prepareServer, resumeOnTerm, type LiveServer } from '../helpers/live-run.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
 import { testBun } from '../helpers/bun-runtime.js'
@@ -59,57 +57,6 @@ const T = 6_000
 // send below lands in that window on every run. With a 2.5 s beat it did only
 // on a fast runner (2026-10-11: the send went to the Mac asleep and waited).
 const BEAT = 4_000
-
-const MOCK_CLI = `
-const fs = require('fs')
-const sid = process.argv[2]
-const inbox = process.argv[3]
-const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
-out({ type: 'system', subtype: 'init', session_id: sid })
-out({ type: 'result', subtype: 'success', is_error: false, result: 'ready', session_id: sid })
-out({ type: 'system', subtype: 'session_state_changed', state: 'idle' })
-let buf = ''
-let asked = 0
-process.stdin.on('data', (chunk) => {
-  buf += chunk.toString('utf8')
-  let nl
-  while ((nl = buf.indexOf('\\n')) !== -1) {
-    const line = buf.slice(0, nl); buf = buf.slice(nl + 1)
-    let msg; try { msg = JSON.parse(line) } catch { continue }
-    // A settings or mode change (leader.settings, leader.control): kept for the
-    // test, answered as the CLI does (set_permission_mode echoes the mode).
-    if (msg.type === 'control_request') {
-      fs.appendFileSync(inbox.replace('.inbox.jsonl', '.ctrl.jsonl'), JSON.stringify(msg) + '\\n')
-      const echo = msg.request && msg.request.subtype === 'set_permission_mode' ? { response: { mode: msg.request.mode } } : {}
-      out({ type: 'control_response', response: Object.assign({ subtype: 'success', request_id: msg.request_id }, echo) })
-      continue
-    }
-    // An answer to a permission prompt this CLI asked.
-    if (msg.type === 'control_response') {
-      fs.appendFileSync(inbox.replace('.inbox.jsonl', '.resp.jsonl'), JSON.stringify(msg) + '\\n')
-      continue
-    }
-    if (msg.type !== 'user') continue
-    fs.appendFileSync(inbox, JSON.stringify({ content: msg.message && msg.message.content }) + '\\n')
-    // "ASK:" in a message: the CLI asks to run a tool, as Claude Code does in default mode.
-    if (JSON.stringify(msg.message && msg.message.content).includes('ASK:')) {
-      out({ type: 'control_request', request_id: 'perm-' + (++asked), request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls docs/' } } })
-    } else {
-      out({ type: 'assistant', message: { content: [{ type: 'text', text: 'The message reached the CLI.' }] } })
-      out({ type: 'result', subtype: 'success', is_error: false, result: 'The message reached the CLI.', session_id: sid })
-    }
-  }
-})
-// Every way it ends leaves a line with its pid: the cleanup fails on a mock that ended without
-// one (a KILL). It ends on the daemon's stop (INT, then TERM) and with its daemon, which holds this
-// stdin open while it runs and is its parent.
-const done = (why) => { try { fs.appendFileSync(inbox.replace('.inbox.jsonl', '.exit'), process.pid + ' ' + why + '\\n') } catch {} process.exit(0) }
-process.on('SIGINT', () => done('SIGINT'))
-process.on('SIGTERM', () => done('SIGTERM'))
-process.stdin.on('end', () => done('stdin-end'))
-const parent = process.ppid
-setInterval(() => { if (process.ppid !== parent) done('parent-gone') }, 2_000)
-`
 
 const sha256 = (t: string): string => crypto.createHash('sha256').update(t, 'utf-8').digest('hex')
 const newToken = (): string => crypto.randomBytes(16).toString('hex')
@@ -145,10 +92,13 @@ let unhookTerm: (() => void) | null = null
 const tokens = { mac: '', local: '', devbox: '', oldbox: '' }
 const companion: LiveServer = blankServer('companion')
 const primary: LiveServer & { ids: { lead: string; worker: string; far: string }; sendPort: number } = { ...blankServer('primary'), ids: { lead: '', worker: '', far: '' }, sendPort: 0 }
-interface Daemon { name: string; twin: 'source' | 'standalone'; proc: ChildProcess; keeper: Owned; owned: Owned; dir: string; port: number; sock: string; pid: number }
+type Daemon = LiveDaemon
 const daemons: Daemon[] = []
 /** The mock CLIs the daemons run, by the pid their daemon reported and the mock's path. */
-const clis: Array<{ d: Daemon; sid: string; o: Owned }> = []
+const clis: LiveCli[] = []
+const daemonCtx = (): LiveDaemonCtx => ({ procs: procs!, base, repo: REPO_ROOT, bun: BUN })
+/** The daemons' timing knobs: the same takeover window and beat as the servers. */
+const DAEMON_ENV = { WALNUT_LEADER_TAKEOVER_MS: String(T), WALNUT_TRUSTED_CLIENT_BEAT_MS: String(BEAT) }
 
 function serverEnv(s: LiveServer, extra: Record<string, string>): NodeJS.ProcessEnv {
   // TMPDIR is the server's own dir, which holds its data dir (see liveEnv).
@@ -196,79 +146,6 @@ const server = await startServer({ port: 0, dev: true, bindAddress: '127.0.0.1' 
 const addr = server.address()
 process.stdout.write('WALNUT_PORT=' + (typeof addr === 'object' && addr ? addr.port : addr) + '\\n')
 ${BOOT_TAIL}`, serverEnv(companion, { WALNUT_CLOUD_MODE: '1', WALNUT_GIT_HUB_DIR: path.join(base, 'hub'), WALNUT_LEADER_TICK_MS: '300' }), false)
-}
-
-async function spawnDaemon(name: string, twin: 'source' | 'standalone'): Promise<Daemon> {
-  const dir = path.join(base, name.slice(0, 2))
-  fs.mkdirSync(dir)
-  const env = liveEnv({ home: path.join(base, `${name}-host`, 'home'), tmp: path.join(base, `${name}-host`), bins: [], guardLog: guardLogOf(base) }, {
-    WALNUT_DAEMON_DIR: dir,
-    WALNUT_STREAMS_DIR: path.join(dir, 'streams'),
-    WALNUT_LEGACY_STREAMS_DIR: path.join(dir, 'no-legacy'),
-    WALNUT_SPAWN_JOURNAL: path.join(dir, 'spawn-journal.jsonl'),
-    WALNUT_GATEWAY_TIMEOUT_MS: '10000',
-    WALNUT_LEADER_TAKEOVER_MS: String(T),
-    WALNUT_TRUSTED_CLIENT_BEAT_MS: String(BEAT),
-    WALNUT_TURN_SNAPSHOTS: '0',
-  })
-  // stderr goes to a file nobody has to drain (a full pipe would block the daemon). Each runs in its
-  // own dir, as the product's local daemon does: behind the walls Bun starts with an EMPTY environment
-  // when its cwd sits under a dir it may not list (the clone under the real home), and a daemon
-  // without its env would fall back to the production daemon dir with no connect guard ports.
-  const stderr = fs.openSync(path.join(dir, 'daemon-stderr.log'), 'a')
-  let daemonArgv: string[]
-  if (twin === 'source') {
-    const script = path.join(dir, 'daemon.cjs')
-    fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    daemonArgv = [SOURCE_TWIN.file, script, '--start']
-  } else {
-    // Bun does not read NODE_OPTIONS: the connect guard is preloaded by name.
-    daemonArgv = [BUN!, '--preload', LIVE_CONNECT_GUARD, path.join(REPO_ROOT, 'src/providers/daemon-standalone.ts'), '--start']
-  }
-  // The daemon runs under a keeper inside the same walls (tests/helpers/live-keeper.cjs): its parent
-  // watchdog asks the keeper, so the daemon stays behind the signal wall. The keeper ends with this
-  // process (its stdin closes); `--start` runs the daemon in the keeper's child itself.
-  const [cmd, args] = walled(process.execPath, [LIVE_KEEPER, ...daemonArgv], { base, repo: REPO_ROOT })
-  const proc = spawn(cmd, args, { env, stdio: ['pipe', 'pipe', stderr], cwd: dir })
-  fs.closeSync(stderr)
-  const keeper = procs!.child(`${name} keeper`, proc)
-  if (!keeper) throw new Error(`${name}: spawn gave no pid`)
-  const reported = await new Promise<number>((resolve, reject) => {
-    let out = ''
-    const t = setTimeout(() => reject(new Error(`${name}: the keeper reported no daemon in 30 s`)), 30_000)
-    proc.stdout!.on('data', (b: Buffer) => {
-      out += b.toString()
-      const line = out.split('\n').find((l) => l.startsWith('{'))
-      if (!line) return
-      clearTimeout(t)
-      try { resolve(Number(JSON.parse(line).daemon)) } catch (err) { reject(err) }
-    })
-    proc.once('exit', (code) => { clearTimeout(t); reject(new Error(`${name}: the keeper exited early (${code})`)) })
-  })
-  const owned = await procs!.childOf(`${name} daemon`, reported, keeper)
-  const portFile = path.join(dir, 'daemon.port')
-  const sock = path.join(dir, 'agent-gateway.sock')
-  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(sock) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, `${name} daemon`)
-  const pid = parseInt(fs.readFileSync(path.join(dir, 'daemon.pid'), 'utf8').trim(), 10)
-  if (pid !== owned.pid) throw new Error(`${name}: daemon.pid says ${pid}, the spawned daemon is ${owned.pid}`)
-  return { name, twin, proc, keeper, owned, dir, sock, pid, port: parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10) }
-}
-
-async function startSession(d: Daemon, sid: string): Promise<void> {
-  const mock = path.join(base, 'mock-cli.cjs')
-  const ws = await openDaemonSocket(d)
-  const reply = await new Promise<Record<string, unknown>>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error('start timed out')), 20_000)
-    ws.on('message', (m) => { const r = JSON.parse(String(m)); if (r.id === 1) { clearTimeout(t); resolve(r) } })
-    ws.send(JSON.stringify({ id: 1, cmd: 'start', sid, cwd: d.dir, message: 'init', args: [process.execPath, mock, sid, path.join(d.dir, `${sid}.inbox.jsonl`)], origin: { home: primary.data } }))
-  })
-  ws.close()
-  expect(reply.ok, JSON.stringify(reply)).toBe(true)
-  await waitFor(() => { try { return fs.readFileSync(path.join(d.dir, 'streams', `${sid}.jsonl`), 'utf8').includes('"state":"idle"') } catch { return false } }, 30_000, `${sid} idle`)
-  // The CLI the daemon runs, once it wrote (so the daemon's shell has exec'd it): its pid from the
-  // daemon, proven by the mock's path in its command line.
-  const st = await daemonStatus(d, sid)
-  clis.push({ d, sid, o: await procs!.command(`mock cli ${sid.slice(0, 8)} on ${d.name}`, Number(st.pid), mock) })
 }
 
 async function startPrimary(dev: Daemon, old: Daemon): Promise<void> {
@@ -399,26 +276,6 @@ function gatewayCall(d: Daemon, sid: string, name: string, args: Record<string, 
   })
 }
 
-function inboxOf(d: Daemon, sid: string): string[] {
-  try {
-    return fs.readFileSync(path.join(d.dir, `${sid}.inbox.jsonl`), 'utf8').trim().split('\n').filter(Boolean).map((l) => String(JSON.parse(l).content))
-  } catch { return [] }
-}
-
-/** The control requests a session's CLI got (the mock keeps them). */
-function ctrlOf(d: Daemon, sid: string): Array<{ request_id: string; request: { subtype: string; settings: Record<string, string> } }> {
-  try {
-    return fs.readFileSync(path.join(d.dir, `${sid}.ctrl.jsonl`), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l))
-  } catch { return [] }
-}
-
-/** The permission answers a session's CLI got (the mock keeps them). */
-function respOf(d: Daemon, sid: string): Array<{ response: { request_id: string; response: Record<string, unknown> } }> {
-  try {
-    return fs.readFileSync(path.join(d.dir, `${sid}.resp.jsonl`), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l))
-  } catch { return [] }
-}
-
 /** A session's record in the primary's own session store, read-only. */
 function primaryRecord(sid: string): Record<string, any> {
   const db = new Database(path.join(primary.data, 'sessions.sqlite'), { readonly: true, fileMustExist: true })
@@ -449,31 +306,6 @@ function macProcs(): Owned[] {
 
 const companionLeads = async () => ((await api(companion, '/api/leader')).json.leading ?? []) as Array<{ host: string; epoch: number }>
 
-/** A host daemon's WebSocket, open within 10 s or an error. */
-function openDaemonSocket(d: Daemon): Promise<WebSocket> {
-  return new Promise<WebSocket>((resolve, reject) => {
-    const s = new WebSocket(`ws://127.0.0.1:${d.port}`)
-    const t = setTimeout(() => { s.terminate(); reject(new Error(`${d.name}: its socket did not open in 10 s`)) }, 10_000)
-    s.once('open', () => { clearTimeout(t); s.on('error', () => { /* a reply wait times out instead */ }); resolve(s) })
-    s.once('error', (err) => { clearTimeout(t); reject(err) })
-  })
-}
-
-/** One command to a host's daemon over its WebSocket, and its reply. */
-async function daemonCall(d: Daemon, payload: Record<string, unknown>, ms = 10_000): Promise<Record<string, any>> {
-  const ws = await openDaemonSocket(d)
-  try {
-    return await new Promise<Record<string, any>>((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error(`${String(payload.cmd)} timed out`)), ms)
-      ws.on('message', (m) => { const r = JSON.parse(String(m)); if (r.id === 1) { clearTimeout(t); resolve(r) } })
-      ws.send(JSON.stringify({ id: 1, ...payload }))
-    })
-  } finally { ws.close() }
-}
-
-/** A session as its host's daemon sees it (status, read-only). */
-const daemonStatus = (d: Daemon, sid: string): Promise<Record<string, any>> => daemonCall(d, { cmd: 'status', sid })
-
 /** What a host's copy of the primary's notes, memory and skills holds (replica.status). */
 async function replicaStatus(d: Daemon): Promise<Record<string, { entries: number; pending: number }>> {
   const reply = await daemonCall(d, { cmd: 'replica.status', home: primary.data })
@@ -491,15 +323,13 @@ describe.skipIf(!liveWallsAvailable())('the Mac is gone and the cloud companion 
     procs = new LiveProcs(realProcTable(), base)
     unhookTerm = resumeOnTerm(procs)
     for (const k of Object.keys(tokens) as Array<keyof typeof tokens>) tokens[k] = newToken()
-    await fsp.writeFile(path.join(base, 'mock-cli.cjs'), MOCK_CLI)
+    writeLiveMockCli(base)
     await startCompanion()
-    devbox = await spawnDaemon('devbox', 'source')
-    oldbox = await spawnDaemon('oldbox', BUN ? 'standalone' : 'source')
+    devbox = await spawnLiveDaemon(daemonCtx(), 'devbox', 'source', DAEMON_ENV)
+    oldbox = await spawnLiveDaemon(daemonCtx(), 'oldbox', BUN ? 'standalone' : 'source', DAEMON_ENV)
     daemons.push(devbox, oldbox)
     primary.data = path.join(base, 'primary', 'data') // the sessions' origin
-    await startSession(devbox, A)
-    await startSession(oldbox, B)
-    await startSession(oldbox, C)
+    for (const [d, sid] of [[devbox, A], [oldbox, B], [oldbox, C]] as const) clis.push(await startLiveMockSession(daemonCtx(), d, sid, primary.data))
     await startPrimary(devbox, oldbox)
     expect(primary.ids.lead).toMatch(/\S/)
     expect(primary.server).not.toBeNull()
@@ -510,32 +340,8 @@ describe.skipIf(!liveWallsAvailable())('the Mac is gone and the cloud companion 
     if (!procs) return
     const p = procs
     try {
-      await finishLive(p, base, [primary, companion], async () => {
-        // The mock CLIs end through their own daemon's stop (SIGINT, then TERM), never a signal from
-        // here; any other session a daemon still runs too, once its pid is proven to run the mock.
-        const mock = path.join(base, 'mock-cli.cjs')
-        for (const d of daemons) {
-          if ((await p.state(d.owned)) !== 'ours') continue
-          const listed = await daemonCall(d, { cmd: 'list' }).catch(() => ({ sessions: [] as Array<{ sid: string; pid: number | null; alive: boolean }> }))
-          for (const row of (listed.sessions ?? []) as Array<{ sid: string; pid: number | null; alive: boolean }>) {
-            if (!row.alive || !row.pid || clis.some((c) => c.d === d && c.sid === row.sid)) continue
-            const o = await p.command(`session ${row.sid.slice(0, 8)} on ${d.name}`, row.pid, mock).catch(() => null)
-            if (o) clis.push({ d, sid: row.sid, o })
-          }
-        }
-        for (const c of clis) {
-          if ((await p.state(c.o)) !== 'ours') continue
-          const r = await daemonCall(c.d, { cmd: 'stop', sid: c.sid, reason: 'user', initiator: 'human', home: primary.data }, 20_000).catch((err) => ({ ok: false, error: String(err) }))
-          if (r.ok !== true || r.stopped !== true) p.fail(`${c.o.label}: the daemon did not stop it: ${JSON.stringify(r).slice(0, 300)}`)
-          await p.waitExit(c.o, 15_000)
-        }
-        // Each mock that ended left its line; one without it was killed.
-        for (const c of clis) {
-          if ((await p.state(c.o)) !== 'gone') continue
-          const marks = (() => { try { return fs.readFileSync(path.join(c.d.dir, `${c.sid}.exit`), 'utf8') } catch { return '' } })()
-          if (!marks.split('\n').some((l) => l.startsWith(`${c.o.pid} `))) p.fail(`${c.o.label} (${c.o.pid}) ended without its exit line: killed?`)
-        }
-      })
+      // The mock CLIs end through their own daemon's stop, never a signal from here.
+      await finishLive(p, base, [primary, companion], () => stopLiveMockSessions(daemonCtx(), daemons, clis, primary.data))
     } finally { unhookTerm?.() }
   }, 600_000)
 

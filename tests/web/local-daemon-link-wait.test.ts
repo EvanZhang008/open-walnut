@@ -145,11 +145,11 @@ describe('failBootLink', () => {
   })
 })
 
-describe('both live boots use them', () => {
+describe('every live boot uses them', () => {
   const runner = read('tests/helpers/live-run.ts')
   const tailAt = runner.indexOf('export const BOOT_TAIL = `')
   const BOOT_TAIL_TEXT = runner.slice(tailAt, runner.indexOf('\n`\n', tailAt) + 3)
-  for (const f of ['tests/e2e/companion-forward-live-e2e.test.ts', 'tests/e2e/leader-takeover-live-e2e.test.ts']) {
+  for (const f of ['tests/e2e/companion-forward-live-e2e.test.ts', 'tests/e2e/leader-takeover-live-e2e.test.ts', 'tests/helpers/live-twin-mac.ts']) {
     it(f, () => {
       const text = read(f)
       const at = text.indexOf('await awaitLocalDaemonLink({\n  wsUrl: localDaemon.wsUrl,\n')

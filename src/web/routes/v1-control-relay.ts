@@ -158,6 +158,12 @@ async function sendControlToPrimary(
   }
 }
 
+/** A relay to the Mac that failed after it was sent, in one plain sentence. */
+async function relayErrorSentence(err: string): Promise<string> {
+  const { relayFailureSentence, MAC_BRIDGE_ALIAS } = await import('./cloud-send-words.js')
+  return relayFailureSentence(err, MAC_BRIDGE_ALIAS, 'your Mac')
+}
+
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
@@ -196,7 +202,9 @@ export async function tryControlRelay(
   // status), and waitedMs is non-zero only when a wait really happened.
   // Sent, then failed (timeout, socket dropped mid-request): ambiguous, so it is
   // reported verbatim and never retried.
-  const message = sent.offline ? bridgeOfflineMessage(sent.lastLossAt, sent.waitedMs) : errorText(sent.error)
+  // The lower layer's words ("bridge request timed out: session.control → __local__") are
+  // not a sentence a person reads: the hop is named in plain words (cloud-send-words.ts).
+  const message = sent.offline ? bridgeOfflineMessage(sent.lastLossAt, sent.waitedMs) : await relayErrorSentence(errorText(sent.error))
   return { ok: false, notSent: sent.offline, answer: (res) => sendV1Error(res, 503, 'bridge_offline', message) }
 }
 

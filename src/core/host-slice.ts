@@ -154,8 +154,14 @@ function inHostCopy(s: SessionRecord, now: number): boolean {
     && now - Date.parse(s.lastActiveAt || s.startedAt || '') < SESSION_RECENCY_MS;
 }
 
-export async function buildHostSlice(hostKey: string, now = Date.now()): Promise<HostSlice> {
-  const key = normalizeHostKey(hostKey);
+/**
+ * `hostKey`: one alias, or every alias of one daemon (daemon-twins.ts), the name it goes by first.
+ * The daemon keeps one copy per Walnut, so the copy of a daemon reached by several aliases holds
+ * all of their sessions, and every link to it sends the same one.
+ */
+export async function buildHostSlice(hostKey: string | readonly string[], now = Date.now()): Promise<HostSlice> {
+  const list = (typeof hostKey === 'string' ? [hostKey] : hostKey).map(normalizeHostKey);
+  const keys = new Set(list);
   const [{ listSessions, isListableSession }, { listTasksByIds }, requests] = await Promise.all([
     import('./session-tracker.js'),
     import('./task-manager.js'),
@@ -167,7 +173,7 @@ export async function buildHostSlice(hostKey: string, now = Date.now()): Promise
   const { getStore } = await import('./session-queue-store.js');
   const queues = (await getStore()).queues;
   const records = allSessions
-    .filter((s) => inHostCopy(s, now) && normalizeHostKey(s.host) === key)
+    .filter((s) => inHostCopy(s, now) && keys.has(normalizeHostKey(s.host)))
     .sort((a, b) => (b.lastActiveAt || '').localeCompare(a.lastActiveAt || ''))
     .slice(0, MAX_SESSIONS);
 
@@ -256,7 +262,7 @@ export async function buildHostSlice(hostKey: string, now = Date.now()): Promise
 
   const body = {
     home: WALNUT_HOME,
-    host: displayHost(key),
+    host: displayHost(list[0] ?? '__local__'),
     sessions: records.map((s) => ({
       sid: s.claudeSessionId,
       ...(() => {

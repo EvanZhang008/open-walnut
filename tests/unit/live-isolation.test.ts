@@ -86,6 +86,22 @@ describe('liveProfile', () => {
     expect(rule).not.toContain('/opt/homebrew')
   })
 
+  it('reads the manifests beside a linked node_modules, and runs nothing there', () => {
+    const linked = liveProfile({
+      base: '/private/tmp/wll-x', repo: '/Users/someone/clone', realHome: '/Users/someone', prodDir: '/private/tmp/open-walnut', userTemp: '/private/var/folders/ab/xyz/T',
+      runtimes: ['/Users/someone/src/walnut/node_modules'], writable: [], noExec: [], denyPorts: [3456],
+      readableFiles: ['/Users/someone/src/walnut/package.json', '/opt/elsewhere/package.json'],
+    })
+    const read = linked.split('\n').find((l) => l.startsWith('(deny file-read-data (require-all'))!
+    expect(read).toContain('(literal "/Users/someone/src/walnut/package.json")')
+    expect(read).not.toContain('/opt/elsewhere')
+    const exec = linked.split('\n').find((l) => l.startsWith('(deny process-exec (require-all'))!
+    expect(exec).not.toContain('package.json')
+    // Without such files the read rule is the exec rule's.
+    expect(profile.split('\n').find((l) => l.startsWith('(deny file-read-data (require-all'))!.replace('file-read-data', 'process-exec'))
+      .toBe(profile.split('\n').find((l) => l.startsWith('(deny process-exec (require-all'))!)
+  })
+
   it('runs nothing under the real home but the repo and the runtimes, and no claude outside it', () => {
     const rule = profile.split('\n').find((l) => l.startsWith('(deny process-exec (require-all'))!
     expect(rule).toContain('(subpath "/Users/someone")')

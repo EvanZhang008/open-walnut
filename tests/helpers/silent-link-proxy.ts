@@ -25,6 +25,10 @@
  * Apart from the mode, `capUpBytes(n)` closes any connection once it has carried
  * more than n bytes toward the target (a proxy that kills large transfers, as some
  * corporate SSH proxies do); `capUpBytes(null)` lifts it.
+ * `exempt` (an option): a connection whose first bytes it accepts is never touched by the mode,
+ * the way one machine's network failing leaves another machine's links to the same server up
+ * (a companion both a Mac and a dev box dial: the Mac's DNS fails, the dev box's bridge stays).
+ * Such a proxy reads each connection's first chunk before it decides.
  * Leaving blackhole or drop-hold for pass closes what was held, the way a
  * recovered network ends the connections that died meanwhile. Leaving severed
  * for pass closes the NEAR ends only and keeps every far end open as an orphan
@@ -53,11 +57,16 @@ export interface SilentLinkProxy {
   close: () => Promise<void>
 }
 
-interface Pair { client: net.Socket; upstream: net.Socket | null; severed: boolean; upBytes: number }
+interface Pair { client: net.Socket; upstream: net.Socket | null; severed: boolean; upBytes: number; exempt: boolean }
+
+export interface SilentLinkOptions {
+  /** A connection whose first chunk this accepts passes in every mode (see the top of the file). */
+  exempt?: (head: Buffer) => boolean
+}
 
 const silent = (mode: LinkMode) => mode === 'blackhole' || mode === 'drop-hold' || mode === 'severed'
 
-export async function startSilentLinkProxy(targetPort: number, targetHost = '127.0.0.1'): Promise<SilentLinkProxy> {
+export async function startSilentLinkProxy(targetPort: number, targetHost = '127.0.0.1', opts: SilentLinkOptions = {}): Promise<SilentLinkProxy> {
   let mode: LinkMode = 'pass'
   let slow: SlowLink = { delayMs: 300, bytesPerSec: 64 * 1024 }
   let accepted = 0
@@ -75,8 +84,8 @@ export async function startSilentLinkProxy(targetPort: number, targetHost = '127
     let tail = Promise.resolve()
     let waiting = 0
     return (chunk: Buffer) => {
-      if (silent(mode) || pair.severed) return
-      if (mode !== 'slow') { tail = tail.then(() => { if (!to.destroyed) to.write(chunk) }); return }
+      if (!pair.exempt && (silent(mode) || pair.severed)) return
+      if (mode !== 'slow' || pair.exempt) { tail = tail.then(() => { if (!to.destroyed) to.write(chunk) }); return }
       const { delayMs, bytesPerSec, shared, queueBytes } = slow
       if (queueBytes !== undefined) {
         waiting += chunk.length
@@ -123,29 +132,40 @@ export async function startSilentLinkProxy(targetPort: number, targetHost = '127
     up.once('close', () => orphaned.delete(up))
   }
 
-  const server = net.createServer((client) => {
-    accepted++
-    client.on('error', () => {})
-    const pair: Pair = { client, upstream: null, severed: false, upBytes: 0 }
-    pairs.add(pair)
-    client.on('close', () => { pairs.delete(pair); orphan(pair) })
-    if (silent(mode)) { client.on('data', () => {}); return }
+  /** Forward a connection (or hold it silent, by the mode); `head`: its first chunk, already read. */
+  const start = (pair: Pair, head: Buffer | null) => {
+    const client = pair.client
+    if (!pair.exempt && silent(mode)) { client.on('data', () => {}); return }
     const up = net.connect(targetPort, targetHost)
     pair.upstream = up
     up.on('error', () => client.destroy())
     up.on('close', () => client.destroy())
     const toUp = writer(up, 'up', client, pair)
     const toClient = writer(client, 'down', up, pair)
-    client.on('data', (b: Buffer) => {
+    const fromClient = (b: Buffer) => {
       pair.upBytes += b.length
       if (cap !== null && pair.upBytes > cap) { capped++; client.destroy(); up.destroy(); return }
       toUp(b)
-    })
+    }
+    if (head) fromClient(head)
+    client.on('data', fromClient)
     up.on('data', (b: Buffer) => toClient(b))
+  }
+
+  const server = net.createServer((client) => {
+    accepted++
+    client.on('error', () => {})
+    const pair: Pair = { client, upstream: null, severed: false, upBytes: 0, exempt: false }
+    pairs.add(pair)
+    client.on('close', () => { pairs.delete(pair); orphan(pair) })
+    const exempt = opts.exempt
+    if (!exempt) { start(pair, null); return }
+    // The first chunk decides; the rest is read by start's own listener, added in the same turn.
+    client.once('data', (head: Buffer) => { pair.exempt = exempt(head); start(pair, head) })
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
 
-  const dropAll = () => { for (const p of pairs) { p.client.destroy(); p.upstream?.destroy() } }
+  const dropAll = () => { for (const p of pairs) { if (p.exempt) continue; p.client.destroy(); p.upstream?.destroy() } }
   const closeOrphans = () => { for (const s of orphaned) s.destroy(); orphaned.clear() }
   return {
     port: (server.address() as net.AddressInfo).port,
@@ -154,11 +174,11 @@ export async function startSilentLinkProxy(targetPort: number, targetHost = '127
       if (nextSlow) slow = nextSlow
       if (next === 'severed') {
         // Nothing crosses any more, in either direction, on what is open now.
-        for (const p of pairs) p.severed = true
+        for (const p of pairs) if (!p.exempt) p.severed = true
       } else if (mode === 'severed' && next === 'pass') {
         // The network is back: the near ends of the dead connections close (the
         // client notices and dials again); their far ends stay as orphans.
-        for (const p of [...pairs]) { p.severed = true; p.client.destroy() }
+        for (const p of [...pairs]) { if (p.exempt) continue; p.severed = true; p.client.destroy() }
       } else if (next === 'drop-hold' || (next === 'pass' && (mode === 'blackhole' || mode === 'drop-hold'))) {
         dropAll()
       }
@@ -170,7 +190,7 @@ export async function startSilentLinkProxy(targetPort: number, targetHost = '127
     capUpBytes: (bytes) => { cap = bytes },
     capped: () => capped,
     close: async () => {
-      dropAll()
+      for (const p of pairs) { p.client.destroy(); p.upstream?.destroy() }
       closeOrphans()
       await new Promise<void>((resolve) => server.close(() => resolve()))
     },

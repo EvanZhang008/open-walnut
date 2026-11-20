@@ -148,6 +148,18 @@ describe('buildHostSlice', () => {
     expect((await buildHostSlice('devbox')).hash).toBe(again.hash)
   })
 
+  it('one daemon reached by several aliases gets one copy of all their sessions, named for the first alias', async () => {
+    // 2026-11-20: `newdev` (found in ~/.ssh/config) and `clouddev` reach one daemon; each link sent a
+    // copy of its own alias's sessions, and the daemon kept whichever came last (newdev: none of them).
+    const both = await buildHostSlice(['devbox', 'otherbox'])
+    expect(both.host).toBe('devbox')
+    expect(both.sessions.map((s) => s.sid).sort()).toEqual([A, B, X].sort())
+    expect(both.tasks.map((t) => t.id)).toEqual(expect.arrayContaining([parent, child, elsewhere]))
+    // Either order of the other aliases builds the same copy, so the daemon is never sent two.
+    expect((await buildHostSlice(['devbox', 'otherbox'])).hash).toBe(both.hash)
+    expect((await buildHostSlice(['devbox'])).sessions.map((s) => s.sid).sort()).toEqual([A, B])
+  })
+
   it('ships every queueable scalar (an unset one as its empty value) and the field times, so an away write has a known base', async () => {
     await api('PATCH', `/api/v1/tasks/${grandchild}`, { priority: 'important' })
     const t = (await buildHostSlice('devbox')).tasks.find((x) => x.id === grandchild)!

@@ -431,7 +431,8 @@ async function liveTurns(letters: ReadonlyArray<LetterRecord> | null): Promise<L
  */
 function overlayTurn<T extends LetterRecord>(letter: T, turn: LetterTurnEntry): T {
   const bound = (text: string): string => (text.length > TURN_TEXT_MAX_CHARS ? text.slice(0, TURN_TEXT_MAX_CHARS) : text);
-  const delivery = { status: 'pending' as const, at: turn.at };
+  // Still in the journal: the Mac has not got it (acked turns it has, and is delivering).
+  const delivery = { status: 'pending' as const, at: turn.at, ...(turn.ackedAt === undefined ? { held: true as const } : {}) };
   let entry: ThreadEntry;
   let answered = letter.answered;
   if (turn.op === 'reply') {

@@ -15,7 +15,11 @@
  *    Mac's ack until the copy holds it (by clientId; an answer by the letter's answer), or
  *    for at most ten minutes;
  *  - a relay that may have reached the Mac (a timeout after the send) journals a reply (the
- *    Mac keeps one turn per clientId) but not an answer;
+ *    Mac keeps one turn per clientId) and an answer (the Mac's drain finds the same answer on
+ *    its letter and does not answer twice);
+ *  - a turn kept here says so: `delivery.held` on the answer and on the turn until the Mac
+ *    takes the record (2026-11-20: replies sat on "Sending" while the Mac slept), and while
+ *    this box knows the Mac is away the relay gets 2 s, not the route's 10;
  *  - pictures (inline from the phone, or uploaded here) go with the turn once the Mac drains
  *    `inbox-reply-pictures`: saved in this box's images folder, shown on the turn at once,
  *    their bytes journal blobs with the words; a Mac that drains only `inbox-reply`, or a
@@ -39,7 +43,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-inbox-compan
 const { mac } = vi.hoisted(() => ({
   mac: {
     mode: 'offline' as 'offline' | 'timeout' | 'old' | 'online',
-    calls: [] as Array<{ action: string; params: Record<string, unknown> }>,
+    calls: [] as Array<{ action: string; params: Record<string, unknown>; timeoutMs?: number }>,
     /** The Mac's own reply while online. */
     answer: null as null | ((action: string, params: Record<string, unknown>) => Record<string, unknown>),
   },
@@ -53,8 +57,8 @@ vi.mock('../../src/web/routes/v1-control-relay.js', async (importOriginal) => {
   })
   return {
     ...actual,
-    tryControlRelay: async (action: string, _sid: string, params: Record<string, unknown> = {}) => {
-      mac.calls.push({ action, params })
+    tryControlRelay: async (action: string, _sid: string, params: Record<string, unknown> = {}, timeoutMs?: number) => {
+      mac.calls.push({ action, params, timeoutMs })
       if (mac.mode === 'offline') return offline(true)
       if (mac.mode === 'timeout') return offline(false)
       if (mac.mode === 'old') return { ok: true as const, reply: { ok: false, error: `Unknown control action: ${action}` } }
@@ -150,12 +154,12 @@ describe('a reply while the Mac is away', () => {
     const before = Date.now()
     const r = await api('POST', `/human-inbox/${id}/human-reply`, { text: 'Layout A, but keep the map', clientId: 'ios-1' })
     expect(r.status).toBe(202)
-    expect(r.json).toMatchObject({ queued: true, delivery: { status: 'pending' }, clientId: 'ios-1' })
+    expect(r.json).toMatchObject({ queued: true, delivery: { status: 'pending', held: true }, clientId: 'ios-1' })
     // The Mac's own answer shape: the body-inlined letter with the turn on it.
     expect(r.json.letter.id).toBe(id)
     expect(r.json.letter.body).toContain('# Two layouts')
     expect(humanTurns(r.json.letter)).toEqual([
-      { from: 'human', text: 'Layout A, but keep the map', at: expect.any(Number), clientId: 'ios-1', delivery: { status: 'pending', at: expect.any(Number) } },
+      { from: 'human', text: 'Layout A, but keep the map', at: expect.any(Number), clientId: 'ios-1', delivery: { status: 'pending', at: expect.any(Number), held: true } },
     ])
     expect(r.json.letter.read).toBe(true)
     const [rec, ...rest] = replyRecords()
@@ -188,6 +192,9 @@ describe('a reply while the Mac is away', () => {
     expect(await macTakes([seq])).toMatchObject({ ok: true, remaining: 0 })
     expect(replyRecords()).toEqual([])
     expect(fs.existsSync(ACKED_FILE())).toBe(true)
+    // The Mac has it now: still pending (it delivers), no longer held here.
+    expect(humanTurns((await api('GET', `/human-inbox/${id}`)).json.letter)).toMatchObject([{ clientId: 'ios-2', delivery: { status: 'pending' } }])
+    expect(humanTurns((await api('GET', `/human-inbox/${id}`)).json.letter)[0].delivery.held).toBeUndefined()
     expect(humanTurns((await api('GET', `/human-inbox/${id}`)).json.letter).map((t) => t.clientId)).toEqual(['ios-2'])
     expect(humanTurns((await api('GET', '/human-inbox')).json.letters.find((l: LetterRecord) => l.id === id)).map((t: ThreadEntry) => t.clientId)).toEqual(['ios-2'])
 
@@ -225,6 +232,18 @@ describe('a reply while the Mac is away', () => {
     const r = await api('POST', `/human-inbox/${id}/human-reply`, { text: 'Layout B', clientId: 'ios-4' })
     expect(r.status).toBe(202)
     expect(replyRecords()).toHaveLength(1)
+  })
+
+  it('a Mac this box knows is away gets a short relay, and one that answers the whole budget', async () => {
+    const { setLeaderPresence } = await import('../../src/core/server-role.js')
+    const id = await seedLetter()
+    setLeaderPresence(false, 'mac-away')
+    await api('POST', `/human-inbox/${id}/human-reply`, { text: 'Layout B', clientId: 'ios-away' })
+    expect(mac.calls.at(-1)!.timeoutMs).toBeLessThanOrEqual(2_000)
+    setLeaderPresence(true, 'answers')
+    await api('POST', `/human-inbox/${id}/human-reply`, { text: 'Layout A', clientId: 'ios-here' })
+    expect(mac.calls.at(-1)!.timeoutMs).toBeGreaterThan(5_000)
+    setLeaderPresence(false, 'mac-away')
   })
 
   it('a Mac too old for the action is not sent to either: journaled', async () => {
@@ -268,13 +287,16 @@ describe('an answer while the Mac is away', () => {
     expect(fs.existsSync(ACKED_FILE())).toBe(false)
   })
 
-  it('an answer whose relay may have reached the Mac keeps the 503', async () => {
+  it('an answer whose relay may have reached the Mac is journaled too: the Mac does not answer twice', async () => {
     const id = await seedLetter()
     mac.mode = 'timeout'
     const r = await api('POST', `/human-inbox/${id}/answer`, { actionId: 'a' })
-    expect(r.status).toBe(503)
-    expect(r.json.error.code).toBe('bridge_offline')
-    expect(replyRecords()).toEqual([])
+    expect(r.status).toBe(202)
+    expect(r.json).toMatchObject({ queued: true, delivery: { status: 'pending', held: true } })
+    expect(replyRecords()).toMatchObject([{ op: 'answer', actionId: 'a' }])
+    // The phone's retry is that record, not a second one.
+    expect((await api('POST', `/human-inbox/${id}/answer`, { actionId: 'a' })).status).toBe(202)
+    expect(replyRecords()).toHaveLength(1)
   })
 
   it('an option the letter does not offer is not kept', async () => {

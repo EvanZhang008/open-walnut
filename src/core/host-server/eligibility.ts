@@ -35,7 +35,7 @@ export interface FollowerFloors { memTotalMb: number; memAvailableMb: number; di
 export const FOLLOWER_FLOORS: Readonly<FollowerFloors> = Object.freeze({ memTotalMb: 2048, memAvailableMb: 1024, diskFreeMb: 2560 })
 
 /** Why a host has no follower by default now (`this-computer`: the host row is the leader's own machine). */
-export type FollowerGateReason = 'no-build' | 'memory' | 'disk' | 'this-computer'
+export type FollowerGateReason = 'no-build' | 'memory' | 'disk' | 'this-computer' | 'another-name'
 
 export interface FollowerGate {
   reason: FollowerGateReason

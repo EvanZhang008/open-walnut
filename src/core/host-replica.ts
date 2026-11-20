@@ -43,6 +43,7 @@ import { cleanKeepEntries, leftOut } from './replication/keep-rule.js'
 import { companionKeepOf } from './replication/companion-keep.js'
 import { noteRefusalEnded, noteRoundFailure, noteRoundReached } from './replication/round-outage.js'
 import { CLOUD_BOX_HOST_ALIAS } from './hosts/cloud-box-host.js'
+import { daemonTwins, type NetSwitch, type TwinRows } from './hosts/daemon-twins.js'
 import { HOST_REPLICA_MOVES, mergeMoves, pairMoves, recordMoves, vaultMoveLookups, type MovePair } from './replication/manifest-moves.js'
 import { noteMoves } from './notes/note-path-moves.js'
 import { walnutOwnedNote } from './notes/vault-files.js'
@@ -84,7 +85,10 @@ export const COMPANION_REPLICA_HOST = 'companion'
  */
 export function keepSettingsOf(config: Config, hostKey: string, opts: { companion?: boolean } = {}): NonNullable<Config['cloud_bridge']>['keep'] {
   if (opts.companion || hostKey === CLOUD_BOX_HOST_ALIAS) return companionKeepOf(config)
-  return config.hosts?.[hostKey]?.keep
+  // Another alias of a daemon keeps what the name it goes by keeps: the daemon holds ONE copy per
+  // Walnut, and a row with no settings would put back what that name's settings leave out.
+  const twin = daemonTwins((config.hosts ?? {}) as TwinRows, (config.net ?? null) as NetSwitch).find((t) => t.alias === hostKey)
+  return config.hosts?.[twin?.joined ?? hostKey]?.keep
 }
 
 /** What `hostKey` keeps (`companion`: the cloud companion's own copy). A replica with no settings keeps everything. */

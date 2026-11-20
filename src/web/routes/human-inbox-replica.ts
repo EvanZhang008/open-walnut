@@ -235,6 +235,17 @@ async function dropPictures(names: string[]): Promise<void> {
   await Promise.all(names.map((n) => fsp.rm(path.join(IMAGES_DIR, n), { force: true }).catch(() => {})))
 }
 
+/**
+ * How long a turn's relay waits when this box already knows the Mac does not answer (its
+ * presence, server-role.ts leaderAnswers): long enough for a Mac that just came back, short
+ * enough that the phone hears "received" at once. 2026-11-20: with the Mac asleep, two replies
+ * sat on "Sending" for the whole 10 s relay and an answer came back as the raw relay timeout.
+ */
+const LEADER_AWAY_RELAY_MS = 2_000
+
+/** The answer for a turn this box keeps for the Mac: pending, and held here (types.ts ThreadEntryDelivery). */
+const HELD_DELIVERY = { status: 'pending', held: true } as const
+
 /** 202 when the turn is on record and its delivery is still running, else 200 (human-inbox-v1.ts). */
 function deliveringStatus(result: Record<string, unknown>): number {
   return (result.delivery as { status?: unknown } | undefined)?.status === 'pending' ? 202 : 200
@@ -254,9 +265,12 @@ function deliveringStatus(result: Record<string, unknown>): number {
  * copy with the turn in its thread (replica-state.ts shows it on every read here until the
  * copy holds it). The Mac records and delivers it when it drains (apply-inbox-reply.ts).
  *
- * A relay that MAY have reached the Mac (a timeout after the send) keeps its 503, except a
- * reply: the Mac keeps one turn per `clientId`, so one is made here when the phone sent
- * none, the relay carries it, and the record replays the same turn at most once.
+ * A relay that MAY have reached the Mac (a timeout after the send) is journaled too: a reply
+ * because the Mac keeps one turn per `clientId` (one is made here when the phone sent none,
+ * and the relay carries it), an answer because the Mac's drain finds the same answer already
+ * on its letter and does not answer twice (apply-inbox-reply.ts). Either way the record
+ * replays the turn at most once. While this box knows the Mac is away the relay gets only
+ * LEADER_AWAY_RELAY_MS, and the answer says the turn is held here (`delivery.held`).
  *
  * Kept as before (the Mac's answer or the 503): an older Mac that does not drain the kind;
  * a session answering for the user (`callerSid`: the Mac resolves the caller and records
@@ -288,7 +302,9 @@ export async function replicaLetterTurn(
   // pictures saved and journaled inside it too (a client that gave up would resend a reply
   // with no clientId as a second turn).
   const margin = hasPictures(body) ? PICTURE_SAVE_MARGIN_MS : 0
-  const out = await tryControlRelay(action, SERVER_RELAY_SID, params, journalable ? Math.max(1_000, opts.answerBy - margin - Date.now()) : undefined)
+  const { leaderAnswers } = await import('../../core/server-role.js')
+  const budget = Math.max(1_000, opts.answerBy - margin - Date.now())
+  const out = await tryControlRelay(action, SERVER_RELAY_SID, params, journalable ? (leaderAnswers() ? budget : Math.min(budget, LEADER_AWAY_RELAY_MS)) : undefined)
   if (out.ok) {
     const reply = out.reply
     if (reply.ok === true && reply.result && typeof reply.result === 'object') {
@@ -302,7 +318,7 @@ export async function replicaLetterTurn(
       sendRelayReplyError(res, reply)
       return
     }
-  } else if (!journalable || !(out.notSent || op === 'reply')) {
+  } else if (!journalable) {
     out.answer(res)
     return
   }
@@ -357,7 +373,7 @@ export async function replicaLetterTurn(
   })
   res.status(202).json({
     letter: (await q.mirrorLetter(id)) ?? (await q.mirrorRecord(id)) ?? record,
-    delivery: { status: 'pending' },
+    delivery: HELD_DELIVERY,
     queued: true,
     ...(input.op === 'reply' ? { clientId: input.clientId } : {}),
   })
