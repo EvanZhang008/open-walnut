@@ -175,8 +175,8 @@ export const LINK_NOTE_OPS: Readonly<Record<string, { fields: readonly string[];
   thread_create: { fields: ['text'], what: 'Your new thread\'s first post (thread_create)', fix: 'Put the links in the thread\'s summary (thread_update with reply).' },
   human_inbox_send: { fields: ['subject', 'markdown', 'html', 'text', 'actions.label', 'actions.description'], what: 'Your letter (human_inbox_send)', fix: 'Do not send the letter again: reply to it with the links (human_inbox_reply with its letter id).' },
   human_inbox_reply: { fields: ['markdown', 'html', 'text'], what: 'Your reply in the letter (human_inbox_reply)', fix: 'Reply once more with the links (human_inbox_reply).' },
-  task_report_set: { fields: ['report.ask', 'report.ask_more', 'report.next'], what: 'The Needs you ask (task_report_set)', fix: 'Set the report again with the links in ask_more (task_report_set).' },
-  task_update: { fields: ['report.ask', 'report.ask_more', 'report.next'], what: 'The Needs you ask (task_update report)', fix: 'Set the report again with the links in ask_more (task_report_set).' },
+  task_report_set: { fields: ['report.ask', 'report.ask_more', 'report.next'], what: 'Your task report (task_report_set)', fix: 'Set the report again with the links (task_report_set; a Needs you ask carries them in ask_more).' },
+  task_update: { fields: ['report.ask', 'report.ask_more', 'report.next'], what: 'Your task report (task_update report)', fix: 'Set the report again with the links (task_report_set; a Needs you ask carries them in ask_more).' },
   brief_write: { fields: ['content', 'edits.new'], what: 'Your Brief (brief_write)', fix: 'Write the Brief again with the links (brief_write).' },
 }
 
