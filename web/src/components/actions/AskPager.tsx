@@ -12,11 +12,13 @@ const Chevron = ({ back }: { back?: boolean }) => (
   </svg>
 );
 
-export function AskPager({ index, count, onGo }: { index: number; count: number; onGo: (delta: number, from: 'prev' | 'next') => void }) {
+/** `unsent`: pages he left whose send failed; the place says so until he goes back to them. */
+export function AskPager({ index, count, unsent = 0, onGo }: { index: number; count: number; unsent?: number; onGo: (delta: number, from: 'prev' | 'next') => void }) {
   return (
     <span className="ask-pager" data-testid="action-pager">
       <button type="button" className="ask-pager-btn" data-testid="action-page-prev" aria-label="Previous decision" disabled={index <= 0} onClick={() => onGo(-1, 'prev')}><Chevron back /></button>
       <span className="ask-pager-at" data-testid="action-page-at" aria-hidden="true">{index + 1}/{count}</span>
+      {unsent > 0 && <span className="ask-pager-unsent" data-testid="action-page-unsent" aria-hidden="true">· {unsent} not sent</span>}
       <button type="button" className="ask-pager-btn" data-testid="action-page-next" aria-label="Next decision" disabled={index >= count - 1} onClick={() => onGo(1, 'next')}><Chevron /></button>
     </span>
   );
@@ -35,13 +37,16 @@ export function usePageGestures(count: number, go: (delta: number) => void) {
     go(e.key === 'ArrowLeft' ? -1 : 1);
   };
   const onPointerDown = (e: PointerEvent<HTMLElement>) => {
-    if (count < 2 || e.pointerType === 'mouse' || (e.target as Element).closest?.(OWN_KEYS)) { start.current = null; return; }
+    // A finger only: a pen selects words, and a mouse drags to select.
+    if (count < 2 || e.pointerType !== 'touch' || (e.target as Element).closest?.(OWN_KEYS)) { start.current = null; return; }
     start.current = { x: e.clientX, y: e.clientY, id: e.pointerId };
   };
   const onPointerUp = (e: PointerEvent<HTMLElement>) => {
     const s = start.current;
     start.current = null;
     if (!s || s.id !== e.pointerId) return;
+    // A stroke that selected words is a selection, not a page turn.
+    if (window.getSelection()?.toString()) return;
     const dx = e.clientX - s.x;
     const dy = e.clientY - s.y;
     // A clear sideways stroke: a scroll or a tap never pages.

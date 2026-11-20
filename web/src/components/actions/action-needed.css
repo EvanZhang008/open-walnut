@@ -13,6 +13,7 @@
 
 .ask-pager { display: inline-flex; align-items: center; gap: 0; color: var(--fg-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .ask-pager-at { min-width: 26px; text-align: center; }
+.ask-pager-unsent { margin: 0 4px 0 2px; color: var(--error, #d70015); white-space: nowrap; }
 .ask-pager-btn {
   all: unset; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center;
   width: 24px; height: 28px; border-radius: 8px; color: var(--fg-muted); cursor: pointer;

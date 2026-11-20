@@ -10,9 +10,12 @@
  *   - each page has its own words, options and box, and is answered on its own
  *   - an answered page stays, marked with what was said; paging away and back finds it so, and the
  *     place still counts every page
- *   - a send that fails opens its page again with the reason
+ *   - after an answer the focus is on an arrow, so the keys go on paging
+ *   - a send that fails late, while he is on another page, leaves him there; the place says
+ *     "1 not sent", and the page shows its reason when he goes back
+ *   - a page the status drops while shown: the next takes its place, the focus stays on an arrow
  *   - with every page answered the block goes
- *   - a sideways swipe on a touch screen pages it
+ *   - a sideways swipe on a touch screen pages it; an upright one does not
  * Real: the fixture server, the mock CLI's session, the inbox and report routes, the status sync.
  */
 import { expect, test, type APIRequestContext, type Browser, type Locator, type Page } from '@playwright/test'
@@ -131,6 +134,30 @@ test('one question at a time, "1/3": the arrows and Left / Right page it, the fo
   await page.keyboard.press('Delete')
 })
 
+test('a page the status drops while shown: the next one takes its place, the focus stays on an arrow', async ({ page, request }) => {
+  const extra = `Order more compost for the beds ${STAMP}?`
+  const sent = await post<{ id: string }>(request, '/api/v1/human-inbox', { subject: extra, type: 'action_required', user_kind: 'user_own', user_kind_why: 'he decides what the garden money buys', markdown: 'Twelve bags.', actions: [{ id: 'yes', label: 'Order' }, { id: 'no', label: 'Wait' }] }, { 'x-walnut-caller-sid': sid })
+  await expect.poll(async () => (await actionsOf(request)).length, { timeout: 60_000 }).toBe(4)
+  const block = await openBlock(page)
+  const at = block.getByTestId('action-page-at')
+  await pageToAsk(block, pageOf(block, extra))
+  const was = Number((await at.textContent())!.split('/')[0])
+  // The focus on an arrow of that page.
+  await block.getByTestId(was > 1 ? 'action-page-prev' : 'action-page-next').click()
+  await block.getByTestId(was > 1 ? 'action-page-next' : 'action-page-prev').click()
+  await expect(pageOf(block, extra)).toBeVisible()
+  // Its task settles it (nobody needs to answer it any more): the status drops it while it is shown.
+  const settled = await request.post(`/api/v1/human-inbox/${sent.id}/settle`, { data: { reason: 'The compost came with the seeds' }, headers: { 'x-walnut-caller-sid': sid } })
+  expect(settled.ok(), await settled.text()).toBe(true)
+  await expect(block).toHaveAttribute('data-pages', '3', { timeout: 30_000 })
+  await expect(pageOf(block, extra)).toHaveCount(0)
+  await expect(at).toHaveText(`${Math.min(was, 3)}/3`)
+  await expect(shown(block).getByTestId('action-summary')).toBeVisible()
+  expect(await page.evaluate(() => document.activeElement?.getAttribute('data-testid') ?? document.activeElement?.tagName)).toMatch(/^action-page-(prev|next)$/)
+  await page.keyboard.press(was > 1 ? 'ArrowLeft' : 'ArrowRight')
+  await expect(at).not.toHaveText(`${Math.min(was, 3)}/3`)
+})
+
 test('each page is answered on its own: an answered page stays marked, paging away and back; a failed send opens it again', async ({ page, request }) => {
   const block = await openBlock(page)
   const at = block.getByTestId('action-page-at')
@@ -152,30 +179,45 @@ test('each page is answered on its own: an answered page stays marked, paging aw
   await expect(at).toHaveText(codeAt!)
   await expect(block).toHaveAttribute('data-pages', '3')
 
-  // The pick of three plans: answered on its own; away and back, it is still marked.
+  // The pick of three plans: its first send fails late, while he is on another page. He stays
+  // there, the place says "1 not sent", and the page shows its reason when he goes back.
   const plan = await pageToAsk(block, pageOf(block, PLAN))
   await expect(plan.getByTestId('org-answer-option')).toHaveCount(3)
-  const planAt = await at.textContent()
-  await plan.getByRole('button', { name: 'Water at dusk', exact: true }).click()
-  await expect(plan.getByTestId('action-answered')).toContainText('Answered: Water at dusk')
+  const planAt = (await at.textContent())!
+  await page.route('**/api/v1/human-inbox/*/answer', async (route) => {
+    await new Promise((r) => setTimeout(r, 1500))
+    await route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"down"}' })
+  })
+  await plan.getByRole('button', { name: 'Water at dawn', exact: true }).click()
+  await expect(pageOf(block, PLAN).getByTestId('action-answered')).toBeVisible()
+  await pageToAsk(block, pageOf(block, PUBLISH))
+  const awayAt = (await at.textContent())!
+  expect(awayAt).not.toBe(planAt)
+  await expect(block.getByTestId('action-page-unsent')).toHaveText('· 1 not sent', { timeout: 15_000 })
+  await expect(block.getByTestId('action-needed-place')).toContainText('1 not sent')
+  await expect(at).toHaveText(awayAt)
+  await expect(pageOf(block, PUBLISH)).toBeVisible()
+  await page.unroute('**/api/v1/human-inbox/*/answer')
+  const again = await pageToAsk(block, pageOf(block, PLAN))
+  await expect(again.getByTestId('org-answer-error')).toContainText('Not sent')
+  await expect(again.getByTestId('action-answered')).toHaveCount(0)
+  await expect(block.getByTestId('action-page-unsent')).toHaveCount(0)
+
+  // Then answered on its own; away and back, it is still marked.
+  await again.getByRole('button', { name: 'Water at dusk', exact: true }).click()
+  await expect(pageOf(block, PLAN).getByTestId('action-answered')).toContainText('Answered: Water at dusk')
+  // Its button went with the answer: the focus is on an arrow, and the keys page on.
+  expect(await page.evaluate(() => document.activeElement?.getAttribute('data-testid'))).toMatch(/^action-page-(prev|next)$/)
   await expect.poll(async () => (await actionsOf(request)).some((a) => a.summary.includes(`watering plan for the summer ${STAMP}`)), { timeout: 30_000 }).toBe(false)
-  await expect(at).toHaveText(planAt!)
+  await expect(at).toHaveText(planAt)
   await expect(block).toHaveAttribute('data-pages', '3')
   await pageToAsk(block, pageOf(block, CODE))
   await expect(pageOf(block, CODE).getByTestId('action-answered')).toContainText(words)
   await pageToAsk(block, pageOf(block, PLAN))
   await expect(pageOf(block, PLAN).getByTestId('action-answered')).toContainText('Water at dusk')
 
-  // The yes / no to publish: its send fails, its page opens again with the reason.
-  const publish = await pageToAsk(block, pageOf(block, PUBLISH))
-  await page.route('**/api/v1/human-inbox/*/answer', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"down"}' }))
-  await publish.getByRole('button', { name: 'Publish', exact: true }).click()
-  await expect(pageOf(block, PUBLISH).getByTestId('org-answer-error')).toContainText('Not sent', { timeout: 15_000 })
-  await expect(pageOf(block, PUBLISH).getByTestId('action-answered')).toHaveCount(0)
-  await expect(pageOf(block, PUBLISH).getByRole('button', { name: 'Publish', exact: true })).toBeVisible()
-  await page.unroute('**/api/v1/human-inbox/*/answer')
-
   // The last open page answered: nothing needs him, the block goes.
+  await pageToAsk(block, pageOf(block, PUBLISH))
   await pageOf(block, PUBLISH).getByRole('button', { name: 'Not yet', exact: true }).click()
   await expect(block).toHaveCount(0, { timeout: 15_000 })
 })
@@ -207,6 +249,13 @@ test('a sideways swipe on a touch screen pages it', async ({ browser, request }:
     await expect(at).toHaveText('1/2')
     // A short or a mostly upright stroke turns no page.
     await swipe(box.x + box.width / 2, -20)
+    await expect(at).toHaveText('1/2')
+    const y0 = box.y + box.height / 2
+    const x0 = box.x + box.width / 2
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: x0, y: y0 }] })
+    for (let i = 1; i <= 6; i++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x0 - i * 8, y: y0 + i * 25 }] })
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+    await page.waitForTimeout(500)
     await expect(at).toHaveText('1/2')
   } finally { await context.close() }
 })

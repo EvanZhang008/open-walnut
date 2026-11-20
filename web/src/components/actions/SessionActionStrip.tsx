@@ -102,7 +102,7 @@ function SessionTop({ task, sessionId, actions }: { task: Task; sessionId: strin
   if (!shown) return null;
   return (
     <div className="session-top" data-testid="session-top" ref={room}>
-      {items.length > 0 && <ActionNeeded task={task} variant="strip" sessionId={sessionId} items={items} />}
+      {items.length > 0 && <ActionNeeded task={task} variant="strip" sessionId={sessionId} accepts={(it) => actionsNotThreads([it], list).length > 0} />}
       {list.length > 0 && <TopThread task={task} sessionId={sessionId} threads={threads} list={list} at={at} />}
     </div>
   );

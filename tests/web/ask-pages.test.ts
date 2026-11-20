@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ActionItem } from '@open-walnut/user-status';
-import { anyOpen, pageIndex, pagesOf, type AnsweredAsk } from '../../web/src/components/actions/ask-pages';
+import { anyOpen, liveMarks, pageIndex, pagesOf, type AnsweredAsk } from '../../web/src/components/actions/ask-pages';
 
 const WEB = join(__dirname, '../../web/src/components/actions');
 const read = (f: string) => readFileSync(join(WEB, f), 'utf8');
@@ -48,6 +48,28 @@ describe('ask pages', () => {
     expect(pageIndex([], { id: 'a', index: 0 })).toBe(0);
   });
 
+  it('a place that leaves some asks out never gets them back as kept pages', () => {
+    // The session's top leaves out the asks that are threads; one answered on the row stays out there.
+    const notThreads = (it: ActionItem) => it.id !== 'a';
+    expect(pagesOf([b, c], { a: answered(a, 0, ['b', 'c'], 'Water at dawn') }, notThreads).map((p) => p.id)).toEqual(['b', 'c']);
+    expect(pagesOf([c], { b: answered(b, 1, ['a', 'c']) }, notThreads).map((p) => p.id)).toEqual(['b', 'c']);
+  });
+
+  it('a mark holds only for the ask it answered: reworded, or asked again after it left, it is open', () => {
+    const mark = answered(a, 0, ['b'], 'Publish');
+    expect(Object.keys(liveMarks([a, b], { a: mark }))).toEqual(['a']);
+    // Still gone from the status: kept.
+    expect(Object.keys(liveMarks([b], { a: { ...mark, gone: true } }))).toEqual(['a']);
+    // The same id with new words.
+    expect(liveMarks([{ ...a, summary: 'Publish it on Monday?' }, b], { a: mark })).toEqual({});
+    expect(liveMarks([{ ...a, detail: 'Now with the photos.' } as ActionItem, b], { a: mark })).toEqual({});
+    // The same id back after the status dropped it.
+    expect(liveMarks([a, b], { a: { ...mark, gone: true } })).toEqual({});
+    // A single ask reworded: the block shows it open, never an all-answered nothing.
+    const reworded = [{ ...a, summary: 'Publish it on Monday?' }];
+    expect(anyOpen(pagesOf(reworded, liveMarks(reworded, { a: mark })), liveMarks(reworded, { a: mark }))).toBe(true);
+  });
+
   it('with every page answered there is nothing to show', () => {
     expect(anyOpen([a, b], { a: answered(a, 0, ['b']) })).toBe(true);
     expect(anyOpen([a, b], { a: answered(a, 0, ['b']), b: answered(b, 1, ['a']) })).toBe(false);
@@ -59,7 +81,7 @@ describe('the block shows one ask at a time', () => {
   const body = /export const ActionNeeded = memo\(function ActionNeeded[\s\S]*$/.exec(block)?.[0] ?? '';
 
   it('draws one AskCard, from its pages, with no list and no "N more"', () => {
-    expect(body).toMatch(/useAskPages\(task\.id, items\)/);
+    expect(body).toMatch(/useAskPages\(task\.id, task\.user_status\?\.actions \?\? \[\], accepts\)/);
     expect(body.match(/<AskCard\b/g)).toHaveLength(1);
     expect(body).not.toMatch(/\.map\([^)]*\)\s*=>\s*\(?\s*<AskCard\b/);
     expect(block).not.toMatch(/action-needed-more|STRIP_LINES|restShown/);
@@ -69,9 +91,24 @@ describe('the block shows one ask at a time', () => {
     const pager = read('AskPager.tsx');
     expect(pager).toMatch(/aria-label="Previous decision"/);
     expect(pager).toMatch(/aria-label="Next decision"/);
-    expect(body).toMatch(/aria-live="polite"[^>]*>\s*\{count > 1 \? `Decision \$\{index \+ 1\} of \$\{count\}`/);
+    expect(body).toMatch(/aria-live="polite"[^>]*>\s*\{count > 1 \? `Decision \$\{index \+ 1\} of \$\{count\}/);
     // The live line is outside the keyed card, so it is not made anew on each page.
     expect(body.indexOf('aria-live="polite"')).toBeLessThan(body.indexOf('<AskCard'));
+  });
+
+  it('a late failure never pulls him off the page he is on, and the place says what was not sent', () => {
+    const pages = read('ask-pages.ts');
+    const reopen = /const reopen = useLeanCallback\([\s\S]*?\}, \[\]\);/.exec(pages)?.[0] ?? '';
+    expect(reopen).toMatch(/write\(\{ \.\.\.now, answered: rest \}\)/);
+    expect(reopen).not.toMatch(/at:/);
+    expect(body).toMatch(/<AskPager index=\{index\} count=\{count\} unsent=\{unsent\}/);
+    expect(read('AskPager.tsx')).toMatch(/not sent/);
+  });
+
+  it('a swipe pages only for a finger, and never over selected words', () => {
+    const pager = read('AskPager.tsx');
+    expect(pager).toMatch(/e\.pointerType !== 'touch'/);
+    expect(pager).toMatch(/window\.getSelection\(\)\?\.toString\(\)/);
   });
 
   it('each page answers on its own: an answer marks its own ask, never several', () => {

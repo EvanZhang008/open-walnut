@@ -168,7 +168,7 @@ export const AskCard = memo(function AskCard({ task, item, onAnswer = () => sett
     : <SnoozeButton label={label} onPick={write} />;
   if (answered) {
     answer = (
-      <div className="ask-card-answered" role="status" data-testid="action-answered">
+      <div className="ask-card-answered" role="status" tabIndex={-1} data-testid="action-answered">
         <span className="ask-card-answered-mark" aria-hidden="true">✓</span>
         {answered.said ? <>Answered: <span className="ask-card-answered-said">{answered.said}</span></> : 'Answered'}
       </div>
@@ -211,19 +211,24 @@ export const AskCard = memo(function AskCard({ task, item, onAnswer = () => sett
  *  click opens the task: a click inside never reaches it), 'card' (a Threads card) or 'strip' (under
  *  a session's title bar, where that session's own live prompt points at its card below). Every
  *  variant shows one ask at a time, the same pages. */
-export const ActionNeeded = memo(function ActionNeeded({ task, variant = 'row', sessionId, items: only }: {
+export const ActionNeeded = memo(function ActionNeeded({ task, variant = 'row', sessionId, accepts }: {
   task: Task; variant?: 'row' | 'strip' | 'card'; sessionId?: string;
-  /** Only these of the task's items (the strip above a top thread leaves out the ones that are threads). */
-  items?: readonly ActionItem[];
+  /** Only the task's items this place shows (the strip above a top thread leaves out the ones that
+   *  are threads); answered pages kept from another place obey it too. */
+  accepts?: (item: ActionItem) => boolean;
 }) {
-  const items = only ?? task.user_status?.actions ?? [];
-  const book = useAskPages(task.id, items);
+  const book = useAskPages(task.id, task.user_status?.actions ?? [], accepts);
   const [failures, setFailures] = useState<Record<string, AnswerFailure>>({});
-  // Paged by its arrows or keys: the focus goes to the new page's arrow, never lost with the old card.
+  // The focus never falls out of the block with a card that goes (a page turned, an answer that
+  // turns its button into the "Answered" line, a page the status dropped): it lands on an arrow,
+  // the one that was pressed when there is one.
   const refocus = useRef<'prev' | 'next' | null>(null);
+  const focusInside = useRef(false);
   const holder = useRef<HTMLDivElement>(null);
   const onAnswer = useLeanCallback((id: string, said?: string): AnswerSettle => {
     const item = book.pages.find((p) => p.id === id);
+    // Its button or box goes with the answer: the focus moves on to an arrow, if it was here.
+    if (holder.current?.contains(document.activeElement)) refocus.current = 'next';
     if (item) book.answer(item, said);
     setFailures((f) => { const { [id]: _gone, ...rest } = f; return rest; });
     return (failure) => {
@@ -239,16 +244,24 @@ export const ActionNeeded = memo(function ActionNeeded({ task, variant = 'row', 
   useLayoutEffect(() => {
     const from = refocus.current;
     refocus.current = null;
-    if (!from || !holder.current) return;
-    const want = holder.current.querySelector<HTMLButtonElement>(`[data-testid="action-page-${from}"]:not(:disabled)`)
-      ?? holder.current.querySelector<HTMLButtonElement>('.ask-pager-btn:not(:disabled)');
+    const el = holder.current;
+    if (!el) return;
+    const active = document.activeElement;
+    const lost = !active || active === document.body || !active.isConnected;
+    if (!from && !(focusInside.current && lost)) return;
+    const want = (from ? el.querySelector<HTMLElement>(`[data-testid="action-page-${from}"]:not(:disabled)`) : null)
+      ?? el.querySelector<HTMLElement>('.ask-pager-btn:not(:disabled)')
+      ?? el.querySelector<HTMLElement>('[data-testid="action-answered"]')
+      ?? el.querySelector<HTMLElement>('button:not(:disabled), textarea');
     want?.focus({ preventScroll: true });
-  }, [index]);
+  });
   if (!count || !anyOpen(pages, book.answered) || task.phase === 'COMPLETE') return null;
   const stop = (e: { stopPropagation: () => void }) => e.stopPropagation();
   const strip = variant === 'strip';
   const item = pages[index]!;
-  const pager = count > 1 ? <AskPager index={index} count={count} onGo={go} /> : undefined;
+  // A send that failed on a page he left: the place says so until he goes back to it.
+  const unsent = pages.filter((p) => p.id !== item.id && failures[p.id] && !book.answered[p.id]).length;
+  const pager = count > 1 ? <AskPager index={index} count={count} unsent={unsent} onGo={go} /> : undefined;
   return (
     // On a row a click, a key or a drag inside answers here: it never opens or drags the row.
     // Escape still goes on, to the file viewer a path in its words opened (keepKeysInside).
@@ -257,9 +270,11 @@ export const ActionNeeded = memo(function ActionNeeded({ task, variant = 'row', 
       {...(variant === 'row' ? { onClick: stop, onKeyDown: keepKeysInside, onPointerDown: stop } : {})}>
       {/* Its card says what it is; the words stay for a screen reader, with the page it is on. */}
       <div className="action-needed-title" aria-live="polite" data-testid="action-needed-place">
-        {count > 1 ? `Decision ${index + 1} of ${count}` : 'Action needed'}
+        {count > 1 ? `Decision ${index + 1} of ${count}${unsent ? `, ${unsent} not sent` : ''}` : 'Action needed'}
       </div>
-      <div ref={holder} className="ask-pages" data-testid="action-pages" {...gestures}>
+      <div ref={holder} className="ask-pages" data-testid="action-pages" {...gestures}
+        onFocus={() => { focusInside.current = true; }}
+        onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) focusInside.current = false; }}>
         <AskCard key={item.id} task={task} item={item} onAnswer={onAnswer} failure={failures[item.id]} pager={pager}
           {...(book.answered[item.id] ? { answered: book.answered[item.id] } : {})}
           below={strip && !!sessionId && item.sessionId === sessionId && ANSWERS[item.kind] === 'prompt'} />

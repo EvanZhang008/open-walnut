@@ -91,12 +91,12 @@
   min-height: 28px; padding: 4px 14px; border: none; border-radius: 8px;
   background: var(--bg-secondary); color: var(--fg); font-size: 13px; font-weight: 400; box-shadow: none;
 }
-.ask-card-answer .btn:not(:is(.org-answer-words, .kanban-prompt, .permission-request-card, .ask-card-tools) *):hover:not(:disabled) { background: var(--bg-tertiary, var(--bg-hover)); }
+.ask-card-answer .btn:not(:is(.org-answer-words, .kanban-prompt, .permission-request-card, .ask-card-tools) *):hover:not(:disabled) { background: color-mix(in srgb, var(--fg) 12%, var(--bg-secondary)); }
 .ask-card-answer .btn:not(:is(.org-answer-words, .kanban-prompt, .permission-request-card, .ask-card-tools) *):disabled { opacity: 0.5; }
 .ask-card-answer .btn[data-recommended] { font-weight: 600; }
 .ask-card-answer .btn[data-recommended]::after { color: var(--fg-muted); opacity: 1; }
 .ask-card .org-answer-check { border-color: transparent; background: var(--bg-secondary); border-radius: 8px; min-height: 28px; font-size: 13px; }
-.ask-card .org-answer-check.is-on { border-color: var(--border-strong); background: var(--bg-tertiary, var(--bg-hover)); }
+.ask-card .org-answer-check.is-on { border-color: var(--border-strong); background: color-mix(in srgb, var(--fg) 12%, var(--bg-secondary)); }
 
 /* The card's own tools at the right (Snooze, a thread's Pin): quiet text. Snooze has a clock. */
 .ask-card-tools .btn {
