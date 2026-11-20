@@ -24,6 +24,7 @@ const otherMainWords = new Map([
   ['web/src/utils/tree-split-state.ts|Main', 'Root conversation, not the CEO'],
   ['web/src/components/sessions/ThreadStackCrumbs.tsx|Main', 'Root conversation, not the CEO'],
   ['web/src/components/sessions/ThreadStackHeader.tsx|Main', 'Root conversation, not the CEO'],
+  ['web/src/components/quickbar/quickbar-people.ts|Main', 'A name the CEO answers to when said first ("to Main, ..."), never shown'],
 ]);
 
 describe('quick question and CEO display names', () => {

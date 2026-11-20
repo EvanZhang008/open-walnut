@@ -6,6 +6,7 @@
 import { createPortal } from 'react-dom';
 import { staysUntilDismissed, type Receipt } from './useQuickReceipts';
 import { PersonAvatar } from './PersonAvatar';
+import { AgentText } from '@/components/common/AgentText';
 
 interface ReceiptsProps {
   receipts: Receipt[];
@@ -68,7 +69,7 @@ export function QuickBarReceipts({ receipts, floating, onOpenChat, onPutBack, on
             </button>
             {r.open && (
               <div className="qb-receipt-more">
-                {r.reply && <div className="qb-receipt-reply">{r.reply}</div>}
+                {r.reply && <AgentText text={r.reply} className="qb-receipt-reply" task={null} compact />}
                 <div className="qb-receipt-actions">
                   {staysUntilDismissed(r) && <button type="button" className="qb-btn qb-btn-primary" onClick={() => onPutBack(r)}>Put it back</button>}
                   {r.taskId && <button type="button" className="qb-btn" onClick={() => onOpenChat(r)}>Open chat</button>}
