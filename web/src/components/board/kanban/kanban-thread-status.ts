@@ -7,16 +7,16 @@
  * A thread state never outranks the card's own status either (a waiting thread does not hide a
  * Needs you), and a task with no open thread keeps its status. Pure.
  */
-import { THREAD_GROUP_LABELS, type TaskThreadState, type ThreadGroup } from '@open-walnut/thread-groups';
+import { THREAD_GROUP_LABELS, type TaskThreadState } from '@open-walnut/thread-groups';
 import type { KanbanStatus, KanbanTone } from './kanban-card-model';
 
-const TONE: Record<ThreadGroup, KanbanTone> = { needs: 'red', read: 'red', working: 'green', waiting: 'grey', done: 'green' };
+const TONE: Record<TaskThreadState['state'], KanbanTone> = { needs: 'red', read: 'red', working: 'green', waiting: 'grey', done: 'green' };
 /** The card's own facts now: they outrank any status, a thread's too. */
 const FACT_KINDS: ReadonlySet<KanbanStatus['kind']> = new Set([
   'question', 'plan', 'permission', 'error', 'handed-back', 'stuck', 'needs', 'running', 'worker-below', 'done',
   'board-signal', 'waiting', 'waiting-until', 'stopped', 'still-open',
 ]);
-const THREAD_RANK: Record<ThreadGroup, number> = { needs: 3, read: 3, working: 2, waiting: 1, done: 0 };
+const THREAD_RANK: Record<TaskThreadState['state'], number> = { needs: 3, read: 3, working: 2, waiting: 1, done: 0 };
 /** How much a card's own status asks of him: red asks, green moves, the rest waits. */
 function ownRank(s: KanbanStatus): number {
   if (s.tone === 'red') return 3;

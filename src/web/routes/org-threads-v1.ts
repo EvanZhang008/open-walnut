@@ -27,7 +27,9 @@
  * is filed there and goes to its owner (core/org/thread-reply.ts), answering `owner` and `delivery`.
  *
  * Every thread read here carries `askedIn` when a task already asks him its decision (projected,
- * never stored: core/org/thread-task-ask.ts), so `shown`, the counts and a client agree.
+ * never stored: core/org/thread-task-ask.ts), so `shown`, the counts and a client agree. A Known
+ * thread (he acknowledged it while its work ran: core/org/thread-known.ts) carries `awaits`, what it
+ * still waits on: { tasks: [{ id, title, what? }], replies, letter } (additive).
  *
  * The caller comes from `x-walnut-caller-sid`: none = the user. Writes answer 501 on every replica.
  * The session that wrote a summary or a first post is the caller's own, read from its session
@@ -50,6 +52,7 @@ import { sendV1Error as sendError } from './v1-control-relay.js'
 import { sendLinkFailure } from '../middleware/link-failure-answer.js'
 import { keepsThreads } from '../../core/org/keeps-threads.js'
 import { elsewhereThread, poppedOne, poppedThreadsFor, threadsPopUpOn } from '../../core/org/thread-popup.js'
+import { withKnownAwaits } from '../../core/org/thread-ack.js'
 
 export const orgThreadsV1Router = Router()
 
@@ -163,7 +166,8 @@ orgThreadsV1Router.get('/tasks/:id/threads', route(async (req, res) => {
   // phone while its header counted four (2026-11-06): it says it cannot answer instead.
   if (isFollower()) throw primaryOnly('get the threads from')
   const file = await readThreads(task.id)
-  const all = await withTaskAsks(task.id, sortedThreads(file.threads))
+  // `awaits` on each Known thread (core/org/thread-known.ts): what it waits on, for its card.
+  const all = await withKnownAwaits(await withTaskAsks(task.id, sortedThreads(file.threads)))
   // `shown`: his view shows it, judged over ALL the node's threads (an answer shared with a closed
   // thread counts), the rule `user_status.threads` counts by, so a client's list and its count agree.
   const shared = sharedAnswers(all)
@@ -250,7 +254,7 @@ orgThreadsV1Router.get('/tasks/:id/threads/:thread', route(async (req, res) => {
     return
   }
   const id = threadIdOf(req)
-  const all = await withTaskAsks(task.id, (await readThreads(task.id)).threads)
+  const all = await withKnownAwaits(await withTaskAsks(task.id, (await readThreads(task.id)).threads))
   const thread = all.find((t) => t.id === id)
   if (!thread || movedAway(thread)) {
     // A task's thread below, or one that moved on (threads_pop_up): the one record, read where it lives.
@@ -333,9 +337,9 @@ orgThreadsV1Router.post('/tasks/:id/threads/open', route(async (req, res) => {
   res.status(201).json({ task_id: task.id, thread: await projected(task.id, thread) })
 }))
 
-/** One thread just written, as the reads return it (with `askedIn`), so a client's copy stays the same. */
+/** One thread just written, as the reads return it (with `askedIn` and `awaits`), so a client's copy stays the same. */
 async function projected(taskId: string, thread: OrgThread): Promise<OrgThread> {
-  return (await withTaskAsks(taskId, [thread]))[0] ?? thread
+  return (await withKnownAwaits(await withTaskAsks(taskId, [thread])))[0] ?? thread
 }
 
 orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) => {

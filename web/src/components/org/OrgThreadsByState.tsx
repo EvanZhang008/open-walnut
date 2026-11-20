@@ -1,15 +1,20 @@
 /**
  * A node's Threads grouped by state (experiment brief_off): the view that replaces the Brief.
- * Needs you and To read are open; Working, Waiting / snoozed and Done fold to one line each until
- * he opens them, and what he opened or folded stays as he left it (utils/view-memory.ts). Each
- * thread is drawn by the same card every Threads surface uses (OrgThreads ThreadItem), passed in.
+ * Needs you, To read and Known are open; Working, Waiting / snoozed and Done fold to one line each
+ * until he opens them, and what he opened or folded stays as he left it (utils/view-memory.ts). A
+ * row of chips over them jumps to a group (ThreadsFilterBar). Each thread is drawn by the same card
+ * every Threads surface uses (OrgThreads ThreadItem), passed in.
  */
-import type { ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import type { OrgThread } from '@/api/org-threads';
 import { THREAD_GROUPS, THREAD_GROUP_LABELS, type ThreadGroup } from '@open-walnut/thread-groups';
+import { ThreadsFilterBar } from './ThreadsFilterBar';
 
-/** Open by default: what is for him. The rest fold to one line until he opens them. */
-export const THREAD_GROUP_OPEN: Record<ThreadGroup, boolean> = { needs: true, read: true, working: false, waiting: false, done: false };
+/**
+ * Open by default: what is for him, and Known (he acknowledged it and must be able to find it, a
+ * few lines a card). The rest fold to one line until he opens them.
+ */
+export const THREAD_GROUP_OPEN: Record<ThreadGroup, boolean> = { needs: true, read: true, known: true, working: false, waiting: false, done: false };
 
 export const isThreadGroups = (v: unknown): v is ThreadGroup[] =>
   Array.isArray(v) && v.every((g) => (THREAD_GROUPS as readonly unknown[]).includes(g));
@@ -27,7 +32,19 @@ export function OrgThreadsByState({ groups, flipped, onFlip, card, name }: {
   card: (t: OrgThread) => ReactNode;
   name: string;
 }) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  /** The chip last clicked: a passing place, not a view choice. */
+  const [at, setAt] = useState<ThreadGroup | null>(null);
   const any = THREAD_GROUPS.some((g) => groups[g].length > 0);
+  const jump = (g: ThreadGroup | null) => {
+    setAt(g);
+    if (g && !groupOpen(g, flipped)) onFlip(g);
+    // After the group has drawn its cards.
+    requestAnimationFrame(() => {
+      const el = g ? rootRef.current?.querySelector(`section[data-group="${g}"]`) : rootRef.current;
+      el?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    });
+  };
   if (!any) {
     return (
       <p className="org-threads-empty" data-testid="org-threads-empty">
@@ -36,7 +53,8 @@ export function OrgThreadsByState({ groups, flipped, onFlip, card, name }: {
     );
   }
   return (
-    <div className="org-thread-groups" data-testid="org-thread-groups">
+    <div ref={rootRef} className="org-thread-groups" data-testid="org-thread-groups">
+      <ThreadsFilterBar counts={THREAD_GROUPS.map((g) => ({ group: g, n: groups[g].length }))} at={at} onJump={jump} />
       {THREAD_GROUPS.map((g) => {
         const list = groups[g];
         if (!list.length) return null;

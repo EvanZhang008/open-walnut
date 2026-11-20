@@ -54,6 +54,15 @@ struct OrgThread: Codable, Equatable, Identifiable {
     /// A choice he taps while it waits on him (additive, 2026-11-20): the one shape of a choice
     /// (the server's core/ask-options.ts). A tap is his answer in words, the label.
     struct Option: Codable, Equatable, Identifiable { let id: String; let label: String; var detail: String? = nil; var recommended: Bool? = nil }
+    /// What a Known thread still waits on (additive, 2026-11-20; server core/org/thread-ack.ts
+    /// withAwaits): its open tasks (`what`: what each is to finish), his reply still on its way,
+    /// a decision letter still open. Empty once its work ended.
+    struct Awaits: Codable, Equatable {
+        struct Waiting: Codable, Equatable, Identifiable { let id: String; let title: String; var what: String? = nil }
+        var tasks: [Waiting]? = nil
+        var replies: Bool? = nil
+        var letter: Bool? = nil
+    }
 
     let id: String
     let title: String
@@ -87,6 +96,11 @@ struct OrgThread: Codable, Equatable, Identifiable {
     /// The server's one-card switch (threads_one_card) is on: its choices are buttons, it has no
     /// Acknowledge while it waits on him, and open and answered it reads To read. Absent: off.
     var one_card: Bool? = nil
+    /// He acknowledged it while its work still ran: Known while it stays pending (additive,
+    /// experiment ack_means_known; server core/org/thread-known.ts). `ackDone`: when its work ended.
+    var ackedAt: String? = nil
+    var ackDone: String? = nil
+    var awaits: Awaits? = nil
 }
 
 /// What one read of a node's threads brought: the threads, and how many his view shows by the

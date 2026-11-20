@@ -165,7 +165,7 @@ export const EXPERIMENTAL_FEATURES = [
   {
     id: 'ack_means_known',
     name: 'Acknowledge means you know',
-    description: 'Acknowledging a thread whose work is still open (a task it went to not done, your reply still on its way, its letter still waiting) no longer closes it: it leaves your sight under "in progress, nothing for you" and stays tracked until it is really over. Its agent hears that you know and tells you the outcome once, or closes it. A thread with nothing open closes as before.',
+    description: 'Acknowledging a card that already holds the result closes it, as before. Acknowledging a thread whose work is still open (a task it went to not done, your reply still on its way, its letter still waiting) no longer closes it: it moves to a Known group that says what it waits on. When that work ends it comes back to To read only if there is something new for you; otherwise it closes (Walnut closes it 10 minutes later if its agent has not). Neither buzzes your phone.',
     default: false,
   },
   {

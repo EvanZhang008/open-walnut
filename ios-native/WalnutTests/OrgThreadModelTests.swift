@@ -225,6 +225,22 @@ final class OrgThreadModelTests: XCTestCase {
         XCTAssertFalse(OrgThreadModel.isBareListMarker("- words"))
     }
 
+    /// Known (server core/org/thread-known.ts): he acknowledged it while its work ran. It has its
+    /// own section with what it waits on, reads "Known", and leaves it once he writes again.
+    func testAThreadHeAcknowledgedWhileItsWorkRanIsKnown() throws {
+        let known = try t("k", state: "pending", messages: answeredOnce, extra: #","shown":false,"ackedAt":"2026-11-04T09:30:00Z","awaits":{"tasks":[{"id":"t-oven","title":"Fix the oven timer","what":"Swap the timer board"}],"replies":false,"letter":false}"#)
+        let busy = try t("busy", state: "pending", extra: #","shown":false"#)
+        let s = OrgThreadModel.sections([known, busy], now: Self.now)
+        XCTAssertEqual(s.known.map(\.id), ["k"])
+        XCTAssertEqual(s.inProgress.map(\.id), ["busy"])
+        XCTAssertEqual(OrgThreadModel.stateLabel(known), "Known")
+        XCTAssertEqual(known.awaits?.tasks?.first?.what, "Swap the timer board")
+        XCTAssertEqual(OrgThreadModel.movedNotice("k", threads: [known], now: Self.now), "Moved to Known")
+        // He wrote after his ack: working again, not Known.
+        let wrote = try t("w", state: "pending", messages: #"[{"id":"m2","at":"2026-11-04T10:00:00Z","text":"and the grill?","via":"follow-up"}]"#, extra: #","shown":false,"ackedAt":"2026-11-04T09:30:00Z""#)
+        XCTAssertFalse(OrgThreadModel.isKnown(wrote))
+    }
+
     // MARK: - The list and the header count agree (2026-11-06: "Threads 4" over an empty page)
 
     func testTheServersShownDecidesTheListWhenSent() throws {

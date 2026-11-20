@@ -273,22 +273,30 @@ function watchSet(nodes: ReadonlyArray<{ threads: readonly OrgThread[] }>, p: Or
   return out;
 }
 
-/** One pass of the state rule over every lead's open threads. Returns how many moved. */
-export async function runThreadFollowPass(): Promise<number> {
+/** When the next Known thread is due to settle (thread-ack.ts settleKnown): the follow loop wakes then. */
+let knownDueAt: number | undefined;
+
+/**
+ * One pass of the state rule over every lead's open threads. Returns how many moved. `now`: the
+ * clock the Known threads are settled by (the test seam).
+ */
+export async function runThreadFollowPass(opts: { now?: number } = {}): Promise<number> {
   const { isFollower } = await import('../server-role.js');
   if (isFollower()) return 0;
   const { orgTasks } = await import('./org-store.js');
   const p = orgPlaces(await orgTasks());
   const nodes = await readAllNodes(p);
-  // Threads he acknowledged while their work ran (thread-ack.ts): their tasks are watched too, and
-  // the node hears once when all of them are done.
+  // Known threads (thread-known.ts): their tasks are watched too; the node hears once when their
+  // waits end, and Walnut settles the ones it left.
   const ack = await import('./thread-ack.js');
   const acked = await ack.ackedThreads();
   watched = watchSet([...nodes, ...acked], p);
   let n = 0;
   for (const move of planThreadFollows(nodes, p)) if (await runMove(move, 'agent', { tellFrom: true }, 'work')) n++;
-  await ack.tellAckedDone(acked, (id) => p.byId.get(id)?.phase)
-    .catch((err) => log.task.warn('org threads: acknowledged done not told', { error: err instanceof Error ? err.message : String(err) }));
+  knownDueAt = undefined;
+  await ack.settleKnown(acked, ack.openTasksOf(p.all), opts.now)
+    .then((r) => { knownDueAt = r.nextAt; })
+    .catch((err) => log.task.warn('org threads: known threads not settled', { error: err instanceof Error ? err.message : String(err) }));
   return n;
 }
 
@@ -416,7 +424,16 @@ export function startThreadFollow(opts: { debounceMs?: number; firstMs?: number 
     } finally {
       running = false;
       if (again && !stopped) { again = false; schedule(); }
+      knownAt();
     }
+  };
+  // A Known thread settles KNOWN_CLOSE_MS after its waits end: a pass then, not up to SCAN_MS later.
+  let knownTimer: ReturnType<typeof setTimeout> | null = null;
+  const knownAt = (): void => {
+    if (knownTimer) { clearTimeout(knownTimer); knownTimer = null; }
+    if (stopped || knownDueAt === undefined) return;
+    knownTimer = setTimeout(() => { knownTimer = null; void pass(); }, Math.min(Math.max(knownDueAt - Date.now(), 0) + 1_000, SCAN_MS));
+    knownTimer.unref?.();
   };
   const schedule = (): void => {
     if (stopped || timer) return;
@@ -454,6 +471,7 @@ export function startThreadFollow(opts: { debounceMs?: number; firstMs?: number 
       clearInterval(scan);
       clearTimeout(first);
       if (timer) clearTimeout(timer);
+      if (knownTimer) clearTimeout(knownTimer);
       void import('../event-bus.js').then(({ bus }) => bus.unsubscribe('org-thread-follow'));
     },
   };

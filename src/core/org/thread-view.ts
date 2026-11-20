@@ -63,6 +63,9 @@ export interface ViewThread<M extends ViewMessage = ViewMessage> {
   letter?: { id: string; done?: true; off?: true };
   /** Projected on read (thread-report-ask.ts): it reads needs because it holds the task's own ask. */
   heldAsk?: ThreadHeldAsk;
+  /** He acknowledged it while its work ran, and when that work ended (thread-known.ts). */
+  ackedAt?: string;
+  ackDone?: string;
 }
 
 /**

@@ -319,10 +319,11 @@ export interface OrgThread {
   choice?: ThreadChoice;
   /**
    * He acknowledged it while its work was still open (experiment ack_means_known, thread-ack.ts):
-   * he knows where it stands, so it went pending instead of closing. An older build keeps it unread.
+   * he knows where it stands, so it went pending instead of closing: Known (thread-known.ts). An
+   * older build keeps it unread.
    */
   ackedAt?: string;
-  /** When the node was told every task of that acknowledged thread is done (thread-ack.ts): once per ack. */
+  /** When nothing was open any more on that acknowledged thread (the node was told then): once per ack; Walnut settles it KNOWN_CLOSE_MS later. */
   ackDone?: string;
   /** The task's own ask (its report's FOR_USER_ASK) lives on this thread: it reads needs while the task asks it (thread-report-ask.ts). */
   reportAsk?: ThreadReportAsk;

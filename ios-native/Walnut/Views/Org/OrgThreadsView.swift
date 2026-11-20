@@ -67,6 +67,12 @@ struct OrgThreadsView: View {
     }
 
     private var showSnoozed: Bool { isOpen("snoozed") }
+    /// Known is open by default (he must be able to find what he acknowledged): what is kept is his fold.
+    private var showKnown: Bool { !isOpen("knownFolded") }
+    private var knownBinding: Binding<Bool> {
+        let folded = foldBinding("knownFolded")
+        return Binding(get: { !folded.wrappedValue }, set: { folded.wrappedValue = !$0 })
+    }
     private var showInProgress: Bool { isOpen("inProgress") }
 
     var body: some View {
@@ -129,6 +135,10 @@ struct OrgThreadsView: View {
                     }
                     ForEach(sections.open) { t in
                         card(t, shared: shared, now: now, snoozed: false).id(t.id)
+                    }
+                    fold("\(sections.known.count) known", count: sections.known.count, open: knownBinding, id: "known")
+                    if showKnown {
+                        ForEach(sections.known) { t in card(t, shared: shared, now: now, snoozed: false).id(t.id) }
                     }
                     fold("\(sections.snoozed.count) snoozed", count: sections.snoozed.count, open: foldBinding("snoozed"), id: "snoozed")
                     if showSnoozed {
@@ -398,6 +408,7 @@ struct OrgThreadsView: View {
             missingShown = false
             uncheckedShown = false
             switch fold {
+            case .known: knownBinding.wrappedValue = true
             case .snoozed: foldBinding("snoozed").wrappedValue = true
             case .inProgress: foldBinding("inProgress").wrappedValue = true
             case .closed: showClosed = true
@@ -469,6 +480,7 @@ struct OrgThreadsView: View {
     /// dozen screens of cards before them).
     private func jumps(_ s: OrgThreadModel.Sections, proxy: ScrollViewProxy) -> some View {
         let items: [(id: String, label: String, count: Int, open: Binding<Bool>)] = [
+            ("known", "Known", s.known.count, knownBinding),
             ("snoozed", "Snoozed", s.snoozed.count, foldBinding("snoozed")),
             ("inProgress", "In progress", s.inProgress.count, foldBinding("inProgress")),
             ("closed", "Closed", max(store.closedCount ?? 0, s.closed.count), foldBinding("closed")),
@@ -551,7 +563,7 @@ struct OrgThreadsView: View {
     }
 
     private func emptyText(_ s: OrgThreadModel.Sections) -> some View {
-        let quiet = !s.inProgress.isEmpty || !s.snoozed.isEmpty
+        let quiet = !s.inProgress.isEmpty || !s.snoozed.isEmpty || !s.known.isEmpty
         return VStack(alignment: .leading, spacing: 6) {
             Text(quiet ? "Nothing for you now" : "No open threads")
                 .font(.headline)
@@ -610,6 +622,7 @@ struct OrgThreadCard: View {
     private var t: OrgThread { thread }
     private var closed: Bool { t.closed != nil }
     private var pinned: Bool { OrgThreadModel.pinnedNow(t) }
+    private var known: Bool { OrgThreadModel.isKnown(t) }
 
     var body: some View {
         if compact && !expanded && !startsOpen {
@@ -675,7 +688,10 @@ struct OrgThreadCard: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-            if let reply = t.reply?.trimmingCharacters(in: .whitespacesAndNewlines), !reply.isEmpty {
+            if known {
+                // He acknowledged it while its work ran: what it waits on, in place of the summary.
+                OrgThreadKnownBlock(thread: t, name: name)
+            } else if let reply = t.reply?.trimmingCharacters(in: .whitespacesAndNewlines), !reply.isEmpty {
                 OrgFoldedMarkdown(markdown: reply, budget: 110, id: "org.thread.summary", source: OrgThreadModel.summarySource(t))
             }
             chips
@@ -1012,7 +1028,8 @@ struct OrgThreadCard: View {
 
     @ViewBuilder
     private func actionButtons(fullWidth: Bool) -> some View {
-        if !waitsOnHim {
+        // Known: he already acknowledged it.
+        if !waitsOnHim && !known {
             Button { onEdit(.acknowledge) } label: { actionLabel("Acknowledge", fullWidth: fullWidth) }
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.tint)

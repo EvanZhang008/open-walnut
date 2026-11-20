@@ -78,7 +78,7 @@ enum OrgNodePageCover: Identifiable, Equatable {
 /// its id before the page says it is no longer open: the list brings only the newest closed ones
 /// (2026-11-08 review: a thread closed earlier was called gone).
 enum OrgThreadRevealModel {
-    enum Fold: String, Equatable { case snoozed, inProgress, closed }
+    enum Fold: String, Equatable { case known, snoozed, inProgress, closed }
 
     enum Outcome: Equatable {
         /// No read since the request yet (or the last one failed and the thread is not known).
@@ -124,6 +124,7 @@ enum OrgThreadRevealModel {
             if probe.result == .failed { return .unchecked }
         }
         if sections.open.contains(where: { $0.id == id }) { return .show(nil) }
+        if sections.known.contains(where: { $0.id == id }) { return .show(.known) }
         if sections.snoozed.contains(where: { $0.id == id }) { return .show(.snoozed) }
         if sections.inProgress.contains(where: { $0.id == id }) { return .show(.inProgress) }
         if sections.closed.contains(where: { $0.id == id }) { return .show(.closed) }

@@ -25,6 +25,8 @@ enum OrgThreadModel {
         var open: [OrgThread] = []
         /// Put aside, soonest back first.
         var snoozed: [OrgThread] = []
+        /// He acknowledged them while their work ran (`isKnown`): each says what it waits on.
+        var known: [OrgThread] = []
         /// Open, but the node's move: nothing for him.
         var inProgress: [OrgThread] = []
         /// Closed this week.
@@ -35,7 +37,7 @@ enum OrgThreadModel {
         /// a read that could not bring the threads its counts name (`unreadable`).
         func showsJumps(unreadable: Bool) -> Bool {
             if open.isEmpty && unreadable { return false }
-            return !open.isEmpty || !snoozed.isEmpty || !inProgress.isEmpty || !closed.isEmpty
+            return !open.isEmpty || !known.isEmpty || !snoozed.isEmpty || !inProgress.isEmpty || !closed.isEmpty
         }
     }
 
@@ -219,7 +221,9 @@ enum OrgThreadModel {
         s.open = pinned + shown.filter { !pinnedNow($0) }
         s.snoozed = threads.filter { !inView($0, shared: shared, now: now) && snoozedNow($0, now: now) }
             .sorted { ($0.snoozed?.until ?? "") < ($1.snoozed?.until ?? "") }
-        s.inProgress = threads.filter { $0.closed == nil && !snoozedNow($0, now: now) && !inView($0, shared: shared, now: now) }
+        let waiting = threads.filter { $0.closed == nil && !snoozedNow($0, now: now) && !inView($0, shared: shared, now: now) }
+        s.known = waiting.filter(isKnown)
+        s.inProgress = waiting.filter { !isKnown($0) }
         // Newest close first, and a closed row's time is its close (`shownAt`), so the list reads in order.
         s.closed = threads.filter { $0.closed != nil }.sorted { shownAt($0) > shownAt($1) }
         return s
@@ -247,6 +251,7 @@ enum OrgThreadModel {
             // The words the snoozed row and the card use, so one moment reads one way.
             return "Snoozed until \(backAt(sn.until, now: now))"
         }
+        if s.known.contains(where: { $0.id == id }) { return "Moved to Known" }
         if s.inProgress.contains(where: { $0.id == id }) { return "Moved to In progress" }
         if s.closed.contains(where: { $0.id == id }) { return "Closed. It is under Closed this week" }
         return nil
@@ -260,8 +265,16 @@ enum OrgThreadModel {
     // MARK: - Words
 
     /// A thread's state as the user reads it: the task-state names where they mean the same.
+    /// He acknowledged it while its work ran and it still waits: pending, open, no word of his since
+    /// (the server's thread-known.ts isKnown).
+    static func isKnown(_ t: OrgThread) -> Bool {
+        guard t.closed == nil, t.state == "pending", let acked = t.ackedAt else { return false }
+        return !t.messages.contains { $0.at > acked }
+    }
+
     static func stateLabel(_ t: OrgThread) -> String {
         if let c = t.closed { return c.how == "acked" ? "Done" : "Dropped" }
+        if isKnown(t) { return "Known" }
         switch t.state {
         case "new": return "New"
         case "working": return "Working"

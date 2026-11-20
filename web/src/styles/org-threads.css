@@ -134,3 +134,23 @@
 
 /* The card a chat message's thread line opened (sessions/reply-thread-line.tsx), marked a moment. */
 .org-thread.is-focused { box-shadow: 0 0 0 2px var(--accent); transition: box-shadow 0.3s ease; }
+
+/* The chips over the groups (ThreadsFilterBar): a click jumps to that group. */
+.org-threads-filter { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+.org-threads-chip {
+  display: inline-flex; align-items: baseline; gap: 5px; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid transparent; background: var(--bg-secondary, #f2f2f7); color: var(--fg, #1d1d1f);
+  font-size: 12px; cursor: pointer;
+}
+.org-threads-chip:hover { border-color: var(--border, #d1d1d6); }
+.org-threads-chip[aria-pressed="true"] { border-color: var(--accent, #0a84ff); color: var(--accent, #0a84ff); }
+.org-threads-chip-count { color: var(--fg-muted, #86868b); font-variant-numeric: tabular-nums; }
+
+/* A Known card (ThreadKnown.tsx): he knows it, what it waits on, how it ends. */
+.org-thread-state i.is-known { background: transparent; border: 1.5px solid var(--accent, #0a84ff); box-sizing: border-box; }
+.org-thread-known { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.org-thread-known p { margin: 0; }
+.org-thread-known-wait .org-thread-task { display: inline-flex; vertical-align: middle; max-width: 100%; }
+.org-thread-known-what { color: var(--fg-secondary, var(--fg)); }
+.org-thread-known-ends { font-size: 11px; color: var(--fg-muted, #86868b); }
+.org-thread-back { color: var(--accent, #0a84ff); }

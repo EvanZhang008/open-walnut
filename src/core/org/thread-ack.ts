@@ -1,15 +1,18 @@
 /**
  * His Acknowledge means he knows, not that it is over (experiment ack_means_known; 2026-11-20, the
  * user: "I acknowledge it, but that does not mean the thread is gone. A human acknowledge means I
- * now know the situation; the thread is truly closed only when the problem is really solved").
+ * now know the situation; the thread is truly closed only when the problem is really solved"; then
+ * "I ack, she sees it herself, nothing else, so it closes, right?").
  *
- * When he acknowledges a thread whose work is still open (a task it went to not COMPLETE, his reply
- * not yet in the node's session, a decision letter on it still waiting), Walnut does not close it:
- * everything on it is known to him, it goes pending (out of his sight, still tracked) and records
- * `ackedAt`. The node hears it once, riding its next message (status-riding.ts), and may close it
- * then without a fresh reaction of his (threads-model.ts checkClose); a later answered on it is
- * news on his card again. When every task it lists is COMPLETE, the node hears that once too
- * (`ackDone`, from the follow pass in thread-follow.ts). A thread with nothing open closes as before.
+ * A card that already holds the result (answered) closes for good at his Acknowledge, whatever is
+ * still open on it. One whose work still runs (a task it went to not COMPLETE, his reply not yet in
+ * the node's session, a decision letter on it still waiting) does not close: everything on it is
+ * known to him, it goes pending and records `ackedAt`, and it is Known (thread-known.ts). The node
+ * hears it once, riding its next message (status-riding.ts), and may close it then without a fresh
+ * reaction of his (threads-model.ts checkClose); a later answered on it is news on his card again.
+ * When nothing is open on it any more, the node hears that once too (`ackDone`, from the follow pass
+ * in thread-follow.ts), and KNOWN_CLOSE_MS later Walnut settles a thread the node left Known: back
+ * to To read with something new, else closed (settleKnown). Neither buzzes his phone.
  *
  * The pure parts take the file or the thread; the async ones read the store and the task list.
  */
@@ -17,20 +20,20 @@ import { log } from '../../logging/index.js';
 import { experimentalEnabled } from '../experimental.js';
 import { deliveryOpen, updateThread, type OrgThread, type ThreadsFile } from './threads-model.js';
 import { liveLetter } from './letter-thread-model.js';
+import { deliverableLine } from '../task-deliverable.js';
+import { isKnown, KNOWN_CLOSE_MS, knownStep, type AckWaits } from './thread-known.js';
 
-export interface AckWaits {
-  /** The tasks it lists that are not COMPLETE: id and title. */
-  tasks: Array<{ id: string; title: string }>;
-  /** His reply on it has not reached the node's session yet. */
-  replies: boolean;
-  /** A decision letter it holds still waits. */
-  letter: boolean;
-}
+export type { AckWaits } from './thread-known.js';
 
 const q = (s: string): string => JSON.stringify(s);
 
-/** What is still open on `t`, given the open tasks (id → title) read from the store; null when nothing is. Pure. */
+/**
+ * What is still open on `t`, given the open tasks (id → title) read from the store; null when
+ * nothing is. A card that holds the result (answered) holds nothing: his Acknowledge closes it
+ * (tests/core/org/thread-ack-answered-guard.test.ts). Pure.
+ */
 export function ackWaitsOf(t: OrgThread, openTasks: ReadonlyMap<string, string>): AckWaits | null {
+  if (t.state === 'answered') return null;
   const tasks = (t.tasks ?? []).filter((id) => openTasks.has(id)).map((id) => ({ id, title: openTasks.get(id)! }));
   const replies = t.messages.some(deliveryOpen);
   const letter = liveLetter(t);
@@ -55,18 +58,15 @@ export function ackLine(t: Pick<OrgThread, 'id' | 'title'>, w: AckWaits): string
     ...(w.letter ? ['the decision its letter asks'] : []),
   ].join(', ');
   return `- He acknowledged thread ${t.id} ${q(t.title)}: he knows where it stands; it waits on ${on}. When it is really over, `
-    + 'set it answered once with the outcome (he closes it), or close it if there is nothing new to tell.';
+    + 'set it answered with the outcome only if there is something he has not seen (he closes it); otherwise close it yourself.';
 }
 
-/** What the node hears once when every task of a thread he acknowledged is done. */
+const CLOSE_MIN = Math.round(KNOWN_CLOSE_MS / 60_000);
+
+/** What the node hears once when nothing is open any more on a thread he acknowledged. */
 export function ackDoneLine(t: Pick<OrgThread, 'id' | 'title'>): string {
-  return `- Thread ${t.id} ${q(t.title)}, which he acknowledged while its work ran: its tasks are done. Tell him the outcome once (answered) or close it.`;
-}
-
-/** A thread he acknowledged while its work ran, whose every task is COMPLETE now, not told yet. Pure. */
-export function ackDoneDue(t: OrgThread, phaseOf: (id: string) => string | undefined): boolean {
-  return !t.closed && t.state === 'pending' && !!t.ackedAt && !t.ackDone && !!t.tasks?.length
-    && t.tasks.every((id) => phaseOf(id) === 'COMPLETE');
+  return `- Thread ${t.id} ${q(t.title)}, which he acknowledged while its work ran: nothing on it is open now. If the outcome holds something `
+    + `he has not seen, set it answered with it once; otherwise close it. Left as it is, Walnut closes it in ${CLOSE_MIN} minutes.`;
 }
 
 export async function ackMeansKnownOn(): Promise<boolean> {
@@ -78,21 +78,63 @@ export async function ackMeansKnownOn(): Promise<boolean> {
   }
 }
 
+/** The tasks that are not COMPLETE, id → title: what a thread's list is judged against. Pure. */
+export function openTasksOf(tasks: Iterable<{ id: string; title: string; phase?: string }>): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const t of tasks) if (t.phase !== 'COMPLETE') out.set(t.id, t.title);
+  return out;
+}
+
 /**
- * Before his Acknowledge of `threadId` is written: the open tasks it lists (id → title), read now;
- * null when the experiment is off or the thread is gone or closed (the ack then closes as before).
+ * Before his Acknowledge of `threadId` is written: the open tasks (id → title), read now; null when
+ * the experiment is off, the thread is gone or closed, or it holds the result (answered): the ack
+ * then closes as before.
  */
 export async function ackOpenTasks(taskId: string, threadId: string): Promise<Map<string, string> | null> {
   if (!(await ackMeansKnownOn())) return null;
   const { readThreads } = await import('./threads-store.js');
   const t = (await readThreads(taskId)).threads.find((x) => x.id === threadId);
-  if (!t || t.closed) return null;
-  const out = new Map<string, string>();
-  if (!t.tasks?.length) return out;
-  const { listTasks } = await import('../task-manager.js');
+  if (!t || t.closed || t.state === 'answered') return null;
+  if (!t.tasks?.length) return new Map();
   const want = new Set(t.tasks);
-  for (const task of await listTasks()) if (want.has(task.id) && task.phase !== 'COMPLETE') out.set(task.id, task.title);
-  return out;
+  const { listTasks } = await import('../task-manager.js');
+  return openTasksOf((await listTasks()).filter((task) => want.has(task.id)));
+}
+
+/**
+ * Each Known thread of a read with what it waits on (`awaits`, projected, never stored), each task
+ * with what it is to finish (its deliverable line): the card says it. Nothing open: empty lists.
+ */
+export function withAwaits<T extends OrgThread>(threads: readonly T[], tasks: readonly { id: string; title: string; phase?: string; description?: string; note?: string }[]): Array<T & { awaits?: AckWaits }> {
+  if (!threads.some(isKnown)) return [...threads];
+  const byId = new Map(tasks.map((t) => [t.id, t] as const));
+  const open = openTasksOf(tasks);
+  return threads.map((t) => {
+    if (!isKnown(t)) return t;
+    const w = ackWaitsOf(t, open) ?? { tasks: [], replies: false, letter: false };
+    return { ...t, awaits: { ...w, tasks: w.tasks.map((x) => withWhat(x, byId.get(x.id))) } };
+  });
+}
+
+/** withAwaits over the task store, read only when a thread is Known; never throws (the read keeps its threads). */
+export async function withKnownAwaits<T extends OrgThread>(threads: readonly T[]): Promise<Array<T & { awaits?: AckWaits }>> {
+  if (!threads.some(isKnown)) return [...threads];
+  try {
+    const { listTasks } = await import('../task-manager.js');
+    return withAwaits(threads, await listTasks());
+  } catch (err) {
+    log.task.warn('org threads: known awaits not read', { error: err instanceof Error ? err.message : String(err) });
+    return [...threads];
+  }
+}
+
+const WHAT_MAX = 160;
+
+/** A task it waits on, with what it is to finish when that says more than its title. */
+function withWhat(x: { id: string; title: string }, task: { title?: string; description?: string; note?: string } | undefined): AckWaits['tasks'][number] {
+  const line = task ? deliverableLine(task) : '';
+  if (!line || line === x.title.trim()) return x;
+  return { ...x, what: line.length <= WHAT_MAX ? line : `${line.slice(0, WHAT_MAX - 1).trimEnd()}\u2026` };
 }
 
 /** One line riding the node's next message (never a wake). One item per thread: a newer line replaces one unread. */
@@ -109,32 +151,78 @@ export async function rideToNode(taskId: string, threadId: string, line: string)
   }
 }
 
-/** Every node's threads he acknowledged while their work ran, not yet told done (the follow pass watches their tasks). */
+/** Every node's Known threads (thread-known.ts): the follow pass watches their tasks and settles them. */
 export async function ackedThreads(): Promise<Array<{ node: string; threads: OrgThread[] }>> {
   if (!(await ackMeansKnownOn())) return [];
   const { listThreadNodes, readThreads } = await import('./threads-store.js');
   const out: Array<{ node: string; threads: OrgThread[] }> = [];
   for (const node of await listThreadNodes()) {
-    const threads = (await readThreads(node)).threads.filter((t) => !t.closed && t.state === 'pending' && t.ackedAt && !t.ackDone && t.tasks?.length);
+    const threads = (await readThreads(node)).threads.filter(isKnown);
     if (threads.length) out.push({ node, threads });
   }
   return out;
 }
 
-/** The ones whose tasks are all done now: the node hears it once (stamped only when it rides). Returns how many. */
-export async function tellAckedDone(acked: ReadonlyArray<{ node: string; threads: readonly OrgThread[] }>, phaseOf: (id: string) => string | undefined): Promise<number> {
-  let n = 0;
+export interface KnownSettled {
+  /** The node heard that nothing is open any more. */
+  told: number;
+  /** Back to To read with what the node wrote and left pending. */
+  shown: number;
+  /** Closed by Walnut, nothing new on them. */
+  closed: number;
+  /** When the next of them is due to settle (ms), for the follow pass's timer. */
+  nextAt?: number;
+}
+
+/**
+ * The Known threads' step now (thread-known.ts knownStep), given the open tasks (id → title):
+ * the node hears once when their waits end (stamped `ackDone`, told or not: nobody to tell is no
+ * reason to keep it), and KNOWN_CLOSE_MS later Walnut shows or closes the ones the node left. Each
+ * write is checked again under the lock against the thread as it is then. Never buzzes: only a
+ * move into needs does (push/thread-push.ts). `now` is the test seam.
+ */
+export async function settleKnown(acked: ReadonlyArray<{ node: string; threads: readonly OrgThread[] }>, openTasks: ReadonlyMap<string, string>, now: number = Date.now()): Promise<KnownSettled> {
+  const out: KnownSettled = { told: 0, shown: 0, closed: 0 };
+  const { writeThreadsFor } = await import('./threads-store.js');
   for (const { node, threads } of acked) {
-    const told: string[] = [];
-    for (const t of threads) if (ackDoneDue(t, phaseOf) && await rideToNode(node, t.id, ackDoneLine(t))) told.push(t.id);
-    if (!told.length) continue;
-    const at = new Date().toISOString();
-    const { writeThreadsFor } = await import('./threads-store.js');
-    // Quiet: nothing he sees changed, so no change event. Only the ack that was told: a newer one of his is told again.
-    const ackOf = new Map(threads.map((t) => [t.id, t.ackedAt] as const));
-    await writeThreadsFor(node, (cur) => ({ file: { ...cur, threads: cur.threads.map((t) => (told.includes(t.id) && !t.closed && t.ackedAt === ackOf.get(t.id) ? { ...t, ackDone: at } : t)) }, out: undefined }));
-    n += told.length;
-    log.task.info('org threads: acknowledged threads told done', { taskId: node, threads: told });
+    const steps = new Map<string, ReturnType<typeof knownStep>>();
+    for (const t of threads) {
+      const step = knownStep(t, !!ackWaitsOf(t, openTasks), now);
+      if (step === 'tell') await rideToNode(node, t.id, ackDoneLine(t));
+      if (step !== 'none' && step !== 'wait') steps.set(t.id, step);
+      const due = step === 'tell' ? now + KNOWN_CLOSE_MS : step === 'wait' && t.ackDone ? Date.parse(t.ackDone) + KNOWN_CLOSE_MS : NaN;
+      if (Number.isFinite(due) && (out.nextAt === undefined || due < out.nextAt)) out.nextAt = due;
+    }
+    if (!steps.size) continue;
+    const at = new Date(now).toISOString();
+    const done = await writeThreadsFor(node, (cur) => {
+      const did: Array<{ id: string; step: string }> = [];
+      const threadsNow = cur.threads.map((t) => {
+        const want = steps.get(t.id);
+        // Only the step still due on the thread as it is now: he or the node may have moved it meanwhile.
+        if (!want || knownStep(t, !!ackWaitsOf(t, openTasks), now) !== want) return t;
+        did.push({ id: t.id, step: want });
+        return settled(t, want, at);
+      });
+      const seen = did.find((d) => d.step === 'show' || d.step === 'close');
+      return { file: { ...cur, threads: threadsNow }, out: did, ...(seen ? { changed: { kind: 'updated' as const, threadId: seen.id } } : {}) };
+    });
+    for (const d of done) {
+      if (d.step === 'tell') out.told++;
+      else if (d.step === 'show') out.shown++;
+      else if (d.step === 'close') out.closed++;
+    }
+    if (done.length) log.task.info('org threads: known threads settled', { taskId: node, threads: done });
   }
-  return n;
+  return out;
+}
+
+/** One Known thread after its step. Quiet for tell and rewait: nothing he sees changed. */
+function settled(t: OrgThread, step: ReturnType<typeof knownStep>, at: string): OrgThread {
+  if (step === 'tell') return { ...t, ackDone: at };
+  if (step === 'rewait') { const { ackDone: _d, ...rest } = t; return rest; }
+  if (step === 'show') return { ...t, state: 'answered', updatedAt: at, by: 'agent' };
+  // Closed as his own Acknowledge already covered it (`reacted`): real news from the node opens it again.
+  const { options: _o, snoozed: _s, pinned: _p, ...rest } = t;
+  return { ...rest, closed: { how: 'acked', at, by: 'agent', reacted: true }, updatedAt: at, by: 'agent' };
 }
