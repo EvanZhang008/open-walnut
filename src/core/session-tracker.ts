@@ -15,7 +15,7 @@ import type {
   StatusTransition,
   SessionStatusSnapshot,
 } from './types.js';
-import { dbGeneration, getDb, rowToSession, sessionToRow, SESSION_COLUMNS, transaction as sessionDbTx } from './session-db.js';
+import { dbGeneration, getDb, rowToSession, sessionToRow, SESSION_COLUMNS, transactionWhenFree } from './session-db.js';
 import { runSessionMigrationIfNeeded } from './session-db-migration.js';
 import { isHostReplica } from './server-role.js';
 import { refuseProcessAction } from './sessions/replica-process-guard.js';
@@ -499,7 +499,11 @@ async function loadStoreRows(): Promise<SessionRecord[]> {
 // ── Write lock: serializes read-modify-write operations in-process ────────
 // Prevents concurrent callers (session runner, health monitor, reconciler,
 // hooks, REST) from overwriting each other's changes via stale snapshots.
-// SQLite's own WAL + busy_timeout handles cross-process serialization.
+// Across processes SQLite's write lock serializes: every section takes it with
+// session-db's transactionWhenFree, which waits for it with the loop free. It
+// answers a value when the lock was free and a promise only when it waited, so a
+// section awaits it only then (`if (lockWait instanceof Promise) await lockWait`)
+// and a free lock keeps the order of events callers had with a plain transaction.
 let writeLock: Promise<void> = Promise.resolve();
 
 function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -1604,9 +1608,10 @@ export async function scrubInheritedSessionPids(
       if (typeof pid === 'number' && isAlive(pid)) alive++;
     }
     if (rows.length > 0) {
-      db.prepare(
+      const lockWait = transactionWhenFree((handle) => handle.prepare(
         `UPDATE sessions SET pid = NULL, payload = CASE WHEN ${payloadPid} IS NOT NULL THEN json_remove(payload, '$.pid') ELSE payload END WHERE ${holdsPid}`,
-      ).run();
+      ).run());
+      if (lockWait instanceof Promise) await lockWait;
     }
     return { scrubbed: rows.length, alive };
   });
@@ -1664,7 +1669,7 @@ export async function createSessionRecord(
     if (!db) {
       throw new Error('createSessionRecord: SQLite handle is null');
     }
-    return sessionDbTx((handle) => {
+    return transactionWhenFree((handle) => {
       const now = new Date().toISOString();
       const row = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?').get(claudeSessionId) as
         | Record<string, any>
@@ -1829,7 +1834,7 @@ export async function acceptAcpPrompt(
   return withWriteLock(async () => {
     const db = getDb();
     if (!db) throw new Error('acceptAcpPrompt: SQLite handle is null');
-    return sessionDbTx((handle) => {
+    return transactionWhenFree((handle) => {
       const row = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?')
         .get(claudeSessionId) as Record<string, any> | undefined;
       if (!row) throw new Error(`Session not found: ${claudeSessionId}`);
@@ -1980,7 +1985,7 @@ export async function importSessionRecord(opts: {
     if (!db) {
       throw new Error('importSessionRecord: SQLite handle is null');
     }
-    return sessionDbTx((handle) => {
+    return transactionWhenFree((handle) => {
       const now = new Date().toISOString();
       const record: SessionRecord = {
         claudeSessionId: opts.claudeSessionId,
@@ -2398,7 +2403,7 @@ export async function updateSessionRecord(
       throw new Error('updateSessionRecord: SQLite handle is null');
     }
 
-    return sessionDbTx((handle) => {
+    return transactionWhenFree((handle) => {
       const row = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?').get(claudeSessionId) as
         | Record<string, any>
         | undefined;
@@ -2467,7 +2472,6 @@ export async function batchUpdateSessionRecords(
     if (!db) {
       throw new Error('batchUpdateSessionRecords: SQLite handle is null');
     }
-    const selectStmt = db.prepare('SELECT * FROM sessions WHERE claude_session_id = ?');
     const insertCols = [...SESSION_COLUMNS, 'payload'];
     const insertSql =
       'INSERT OR REPLACE INTO sessions (' + insertCols.join(', ') + ') VALUES (' +
@@ -2475,7 +2479,8 @@ export async function batchUpdateSessionRecords(
 
     const written: string[] = [];
     // Single transaction for the whole batch — one BEGIN/COMMIT instead of N.
-    sessionDbTx((handle) => {
+    const lockWait = transactionWhenFree((handle) => {
+      const selectStmt = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?');
       const insertStmt = handle.prepare(insertSql);
       for (const id of claudeSessionIds) {
         try {
@@ -2503,6 +2508,7 @@ export async function batchUpdateSessionRecords(
         }
       }
     });
+    if (lockWait instanceof Promise) await lockWait;
     if (written.length > 0) {
       log.session.info('session records batch-updated', { count: written.length, fields: Object.keys(updates) });
     }
@@ -2533,7 +2539,7 @@ export async function updateSessionRecordConditionally(
       throw new Error('updateSessionRecordConditionally: SQLite handle is null');
     }
 
-    return sessionDbTx((handle) => {
+    return transactionWhenFree((handle) => {
       const row = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?').get(claudeSessionId) as
         | Record<string, any>
         | undefined;
@@ -2582,7 +2588,7 @@ export async function renameSessionId(
     if (!db) {
       throw new Error('renameSessionId: SQLite handle is null');
     }
-    return sessionDbTx((handle) => {
+    return transactionWhenFree((handle) => {
       const oldRow = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?').get(oldClaudeSessionId) as
         | Record<string, any> | undefined;
       if (!oldRow) return null;
@@ -2681,7 +2687,7 @@ export async function stageAcpSessionIdMigration(
   return withWriteLock(async () => {
     const db = getDb();
     if (!db) throw new Error('stageAcpSessionIdMigration: SQLite handle is null');
-    return sessionDbTx((handle) => {
+    return transactionWhenFree((handle) => {
       const oldRow = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?')
         .get(oldClaudeSessionId) as Record<string, any> | undefined;
       if (!oldRow) return null;
@@ -2740,7 +2746,7 @@ export async function rollbackAcpSessionIdMigration(
   return withWriteLock(async () => {
     const db = getDb();
     if (!db) throw new Error('rollbackAcpSessionIdMigration: SQLite handle is null');
-    return sessionDbTx((handle) => {
+    return transactionWhenFree((handle) => {
       const oldRow = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?')
         .get(oldClaudeSessionId) as Record<string, any> | undefined;
       const newRow = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?')
@@ -2884,7 +2890,7 @@ async function retaskSessionRows(
         const db = getDb();
         if (!db) return [] as SessionRecord[];
         const now = new Date().toISOString();
-        return sessionDbTx((handle) => {
+        return transactionWhenFree((handle) => {
           if (target && targetExists && !targetExistsNow(targetExists, target)) {
             log.session.warn('merge survivor deleted while its sessions were re-pointed: clearing their links', {
               fromTaskIds: list, toTaskId: target,
@@ -3076,7 +3082,7 @@ export async function completeTaskSessions(
     const ownerUnreachable = (session: SessionRecord) => unreachable.has(session.host || '__local__')
       && !(session.pid == null && liveAcp.has(session.claudeSessionId));
 
-    sessionDbTx((handle) => {
+    const lockWait = transactionWhenFree((handle) => {
       const sel = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?');
       const ins = handle.prepare(insertSql);
       const writeRow = (session: SessionRecord) => {
@@ -3169,6 +3175,7 @@ export async function completeTaskSessions(
         updated++;
       }
     });
+    if (lockWait instanceof Promise) await lockWait;
     for (const session of stoppedRows) emitSessionStatusChanged(session, {}, ['*'], { source: 'session-tracker' });
     // Still under the lock every record write takes: the status write that
     // ends this turn lands after the wait is registered.
@@ -3266,7 +3273,7 @@ export async function deleteSessionRecords(ids: Set<string>, reason = 'unspecifi
       throw new Error('deleteSessionRecords: SQLite handle is null');
     }
     let removed = 0;
-    sessionDbTx((handle) => {
+    const lockWait = transactionWhenFree((handle) => {
       const sel = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?');
       const del = handle.prepare('DELETE FROM sessions WHERE claude_session_id = ?');
       for (const id of ids) {
@@ -3286,6 +3293,7 @@ export async function deleteSessionRecords(ids: Set<string>, reason = 'unspecifi
         }
       }
     });
+    if (lockWait instanceof Promise) await lockWait;
     return removed;
   });
   if (removedIds.length > 0) {

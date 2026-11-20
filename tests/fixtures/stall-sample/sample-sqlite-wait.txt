@@ -1,0 +1,20 @@
+Analysis of sampling walnut-darwin-arm64 (pid 92634) every 1 millisecond
+Process:         walnut-darwin-arm64 [92634]
+Path:            /private/var/folders/x/dist-bin/walnut-darwin-arm64
+
+Call graph:
+    812 Thread_79032584   DispatchQueue_1: com.apple.main-thread  (serial)
+    + 812 start  (in dyld) + 6992  [0x1890f54e4]
+    +   812 ???  (in walnut-darwin-arm64)  load address 0x100bd8000 + 0x474c  [0x100bdc74c]
+    +     800 sqlite3_step  (in libsqlite3.dylib) + 120  [0x19a000000]
+    +     ! 800 sqlite3VdbeExec  (in libsqlite3.dylib) + 4000  [0x19a000100]
+    +     !   790 sqlite3BtreeInsert  (in libsqlite3.dylib) + 40  [0x19a000200]
+    +     !   : 790 pread  (in libsystem_kernel.dylib) + 8  [0x189480000]
+    +     !   10 unixLock  (in libsqlite3.dylib) + 60  [0x19a000300]
+    +     !     10 fcntl  (in libsystem_kernel.dylib) + 8  [0x189480100]
+    +     12 kevent64  (in libsystem_kernel.dylib) + 8  [0x189488ba8]
+    812 Thread_79032585: JIT Worklist Helper Thread
+    + 812 thread_start  (in libsystem_pthread.dylib) + 8  [0x1894bbc1c]
+    +   812 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x18948050c]
+
+Total number in stack (recursive counted multiple times):

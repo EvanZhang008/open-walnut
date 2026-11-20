@@ -99,6 +99,8 @@ export type SessionStatusFacts = StatusFacts['sessions'] extends Map<string, inf
 
 export interface StatusFacts {
   followWorkers?: boolean;
+  /** How long each fact source took to read in this pass (ms; the slow-pass line names the heavy ones). */
+  readMs?: Record<string, number>;
   /** Per session id: what its record says. */
   sessions: Map<string, {
     processStatus?: string; errorMessage?: string; errorReason?: string; statusSince?: string;
@@ -174,6 +176,12 @@ export interface StatusFacts {
 }
 
 const errText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+/** Run and await `work`, adding its wall time to `took[what]` (ms), its synchronous start included. */
+async function timedRead<T>(took: Record<string, number>, what: string, work: () => Promise<T>): Promise<T> {
+  const start = performance.now();
+  try { return await work(); } finally { took[what] = (took[what] ?? 0) + (performance.now() - start); }
+}
 
 async function safely<T>(what: string, fn: () => Promise<T>, fallback: T): Promise<T> {
   try { return await fn(); } catch (err) {
@@ -451,6 +459,7 @@ export function turnWaitFacts(run: import('./sessions/turn-run.js').TurnRun, rec
 /** Read every fact source (the slow ones from the cache). Never throws: a store that cannot be
  *  read contributes nothing. `allIds` resolves a Board choice's task prefix. */
 export async function readStatusFacts(tasks: readonly Task[], allIds: readonly string[] = tasks.map((t) => t.id), followWorkersChoice?: boolean): Promise<StatusFacts> {
+  const took: Record<string, number> = {};
   const taskIds = new Set(tasks.map((t) => t.id));
   const sessionIds = new Set<string>();
   for (const t of tasks) {
@@ -459,7 +468,7 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
   }
 
   const sessions: StatusFacts['sessions'] = new Map();
-  await safely('sessions', async () => {
+  await timedRead(took, 'sessions', () => safely('sessions', async () => {
     const { listSessionsForTasks } = await import('./session-tracker.js');
     const runner = await import('../providers/claude-code-session.js').then((m) => m.sessionRunner).catch(() => null);
     const turns = await import('./sessions/turn-run.js');
@@ -496,10 +505,10 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
         ...(rec.humanInputAt ? { humanInputAt: rec.humanInputAt } : {}),
       });
     }
-  }, undefined);
+  }, undefined));
 
   const undelivered: NonNullable<StatusFacts['undelivered']> = new Map();
-  await safely('undelivered', async () => {
+  await timedRead(took, 'undelivered', () => safely('undelivered', async () => {
     const { getQueue } = await import('./session-message-queue.js');
     const { parkMeansNeverRan } = await import('./sessions/undelivered-requests.js');
     for (const sid of new Set([...sessionIds, ...sessions.keys()])) {
@@ -510,16 +519,16 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
         if (!prev || prev.at < m.parkedAt) undelivered.set(sid, { reason: m.parkedReason || 'it could not be delivered', at: m.parkedAt });
       }
     }
-  }, undefined);
+  }, undefined));
 
-  const letters = await cachedSlow('letters', allIds);
+  const letters = await timedRead(took, 'letters', () => cachedSlow('letters', allIds));
   const reviews = reviewLetters;
   const letterItems = letterItemsNow;
-  const approvals = await cachedSlow('approvals', allIds);
-  const choices = await cachedSlow('choices', allIds);
+  const approvals = await timedRead(took, 'approvals', () => cachedSlow('approvals', allIds));
+  const choices = await timedRead(took, 'choices', () => cachedSlow('choices', allIds));
 
   const requestsFrom: StatusFacts['requestsFrom'] = new Map();
-  await safely('requests', async () => {
+  await timedRead(took, 'requests', () => safely('requests', async () => {
     const { listPendingRequests } = await import('./session-requests.js');
     for (const r of await listPendingRequests()) {
       if (!r.toTaskId) continue;
@@ -527,11 +536,11 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
       list.push(r.toTaskId);
       requestsFrom.set(r.fromSessionId, list);
     }
-  }, undefined);
+  }, undefined));
 
-  const triggers = await cachedSlow('triggers', allIds);
-  const schedules = await cachedSlow('schedules', allIds);
-  const checks = await cachedSlow('checks', allIds);
+  const triggers = await timedRead(took, 'triggers', () => cachedSlow('triggers', allIds));
+  const schedules = await timedRead(took, 'schedules', () => cachedSlow('schedules', allIds));
+  const checks = await timedRead(took, 'checks', () => cachedSlow('checks', allIds));
 
   const titles = new Map(tasks.map((t) => [t.id, t.title] as const));
   const sessionsOf: StatusFacts['sessionsOf'] = new Map();
@@ -545,10 +554,10 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
     for (const sid of t.session_ids ?? []) link(t.id, sid);
   }
   for (const [sid, s] of sessions) if (s.taskId && taskIds.has(s.taskId)) link(s.taskId, sid);
-  const threads = await readNodeThreads(tasks);
+  const threads = await timedRead(took, 'threads', () => readNodeThreads(tasks));
   const { getConfig } = await import('./config-manager.js');
   const followWorkers = followWorkersChoice ?? experimentalEnabled((await getConfig()).experimental, 'leader_status_follows_workers');
-  return { followWorkers, sessions, letters, letterItems, approvals, reviews, choices, requestsFrom, triggers, schedules, checks, titles, sessionsOf, undelivered, threads };
+  return { readMs: took, followWorkers, sessions, letters, letterItems, approvals, reviews, choices, requestsFrom, triggers, schedules, checks, titles, sessionsOf, undelivered, threads };
 }
 
 /**
@@ -770,23 +779,24 @@ async function readSignInCached(): Promise<NonNullable<StatusFacts['signIn']>> {
  * And to each task holding an ask the user withdrew: writing there after it lifts the withdrawal.
  */
 export async function readFoldEvidence(facts: StatusFacts, targets: readonly Task[]): Promise<void> {
+  const took = (facts.readMs ??= {});
   // One sign-in is one ask (sign-in-ask.ts): the user's login command words, every task's sign-in
   // ask shown now, and what Walnut knows of the sign-in itself.
-  facts.loginWords = await safely('login-words', async () => {
+  facts.loginWords = await timedRead(took, 'login-words', () => safely('login-words', async () => {
     const { getConfig } = await import('./config-manager.js');
     return (await import('./sign-in-ask.js')).loginCommandWords((await getConfig()).ssh_login_hint);
-  }, []);
+  }, []));
   facts.signInAsks = [...(facts.tasksById?.values() ?? [])]
     .filter((t) => t.phase !== 'COMPLETE' && t.status !== 'done' && t.user_status?.state === 'needs' && t.user_status.source === 'session'
       && isSignInAsk(t.user_status.ask, facts.loginWords ?? []))
     .map((t) => ({ id: t.id, title: t.title, ask: t.user_status!.ask!, createdAt: t.created_at }));
-  facts.signIn = await safely('sign-in-state', readSignInCached, {});
+  facts.signIn = await timedRead(took, 'sign-in-state', () => safely('sign-in-state', readSignInCached, {}));
   const ids = new Set(targets.map((t) => t.user_status?.sameAsk?.id).filter((id): id is string => !!id));
   // A task holding a withdrawal too: a person writing in it after it lifts it (same-ask.ts answerHolds).
   for (const t of targets) if (answersOf(t).some((a) => a.withdrawn)) ids.add(t.id);
   facts.personInputAt = new Map();
   if (!ids.size) return;
-  await safely('fold-evidence', async () => {
+  await timedRead(took, 'fold-evidence', () => safely('fold-evidence', async () => {
     const { listSessionsForTasks } = await import('./session-tracker.js');
     const sids = new Set<string>();
     for (const id of ids) {
@@ -800,7 +810,7 @@ export async function readFoldEvidence(facts: StatusFacts, targets: readonly Tas
       const cur = facts.personInputAt!.get(tid);
       if (!cur || rec.humanInputAt > cur) facts.personInputAt!.set(tid, rec.humanInputAt);
     }
-  }, undefined);
+  }, undefined));
 }
 
 /** A task's own word on sameness (FOR_USER_ASK_SAME), only while its shown ask is that report's. */
@@ -1112,6 +1122,8 @@ export async function syncUserStatuses(
     log.task.info('user-status: slow pass', {
       scope: ids ? ids.size : 'all', targets: targets.length, changed,
       listMs: t1 - t0, factsMs: t2 - t1, completeMs: t2b - t2, evidenceMs: t3 - t2b, deriveWriteMs: Date.now() - t3, totalMs,
+      // The sources that took 50 ms or more, heaviest first.
+      readMs: Object.fromEntries(Object.entries(facts.readMs ?? {}).filter(([, ms]) => ms >= 50).sort((a, b) => b[1] - a[1]).map(([k, ms]) => [k, Math.round(ms)])),
     });
   }
   return changed;

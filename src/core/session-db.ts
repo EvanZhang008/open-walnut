@@ -23,9 +23,13 @@ import { guardCopyHandle, openApplyConnection } from '../replica/copy-guard.js';
 import { isHostReplica } from './server-role.js';
 import { reopenIfWiped } from '../lib/sqlite-wiped.js';
 import type { SessionRecord } from './types.js';
+import { lookForHolders } from './blocking-calls.js';
 
 /** SQLite file path. Sits next to the legacy sessions.json in WALNUT_HOME. */
 export const SESSION_DB_PATH = path.join(WALNUT_HOME, 'sessions.sqlite');
+
+/** How long a write waits for another connection's write lock in all (ms): the shared connection's busy_timeout. */
+const BUSY_TIMEOUT_MS = 5_000;
 
 /**
  * Columns that map directly onto a `SessionRecord` field.
@@ -451,6 +455,111 @@ export function transaction<T>(fn: (db: DatabaseType) => T): T {
   }
   const tx = handle.transaction(fn);
   return tx(handle);
+}
+
+/** A wait this long or longer is logged (ms). */
+const LOCK_WAIT_LOG_MS = 100;
+const LOCK_RETRY_MAX_MS = 25;
+/** Since boot: sections that waited, their total and longest wait, those that gave up, and every refused try. */
+const lockWaitStats = { waits: 0, waitedMs: 0, maxMs: 0, gaveUp: 0, retries: 0 };
+let lockBudgetMs = BUSY_TIMEOUT_MS;
+/** Tests: a shorter budget than busy_timeout's 5 s (null restores it). */
+export function _setSessionLockBudgetForTesting(ms: number | null): void { lockBudgetMs = ms ?? BUSY_TIMEOUT_MS; }
+/** What the write sections waited for the lock since boot. */
+export function sessionLockWaitStats(): Readonly<typeof lockWaitStats> { return { ...lockWaitStats }; }
+
+function isBusy(err: unknown): boolean {
+  return /^SQLITE_BUSY/.test(String((err as { code?: unknown } | null)?.code ?? ''));
+}
+
+/** BEGIN IMMEDIATE without SQLite's own wait: false when another connection holds the write lock. */
+function tryBeginImmediate(handle: DatabaseType): boolean {
+  handle.pragma('busy_timeout = 0');
+  try {
+    handle.exec('BEGIN IMMEDIATE');
+    return true;
+  } catch (err) {
+    if (isBusy(err)) return false;
+    throw err;
+  } finally {
+    handle.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
+  }
+}
+
+/**
+ * Run `fn` in one IMMEDIATE transaction, waiting for the write lock with the
+ * event loop free. SQLite's own wait (busy_timeout) blocks the calling thread
+ * for as long as another connection holds the lock: on the Mac a 1.5 s hold
+ * kept the server's loop thread 1.5 s inside one INSERT, 0.1 ms of it on the
+ * CPU (2026-11-20). Here a held lock is tried again after 1, 2, 4 ... 25 ms
+ * within the same 5 s budget, then fails with the same SQLITE_BUSY. The lock is
+ * taken before `fn` runs, so a retry never repeats any of its work, and `fn`
+ * stays synchronous: no await inside it.
+ */
+export function transactionWhenFree<T>(fn: (db: DatabaseType) => T): T | Promise<T> {
+  const handle = openForWrite();
+  // Inside a caller's transaction the lock is held already: a savepoint, as transaction() does.
+  // A host replica's copy is query_only (BEGIN IMMEDIATE is refused there): its sections only read.
+  if (handle.inTransaction || isHostReplica()) return handle.transaction(fn)(handle);
+  // Free now (the usual case): it runs and commits before this returns, with no extra turn of
+  // the loop, so a caller's order of events is what it was with transaction().
+  if (tryBeginImmediate(handle)) return runLocked(handle, fn);
+  return waitForLockThenRun(fn);
+}
+
+function openForWrite(): DatabaseType {
+  const handle = getDb();
+  if (!handle) throw new Error('session-db: transactionWhenFree() called before database was successfully opened');
+  return handle;
+}
+
+/** `fn` in the transaction BEGIN IMMEDIATE just opened on `handle`, then COMMIT (ROLLBACK on a throw). */
+function runLocked<T>(handle: DatabaseType, fn: (db: DatabaseType) => T): T {
+  try {
+    const value = handle.transaction(fn)(handle);
+    handle.exec('COMMIT');
+    return value;
+  } catch (err) {
+    if (handle.inTransaction) {
+      try { handle.exec('ROLLBACK'); } catch { /* the error below is the one to report */ }
+    }
+    throw err;
+  }
+}
+
+async function waitForLockThenRun<T>(fn: (db: DatabaseType) => T): Promise<T> {
+  const start = performance.now();
+  let tries = 1;
+  let delay = 1;
+  let looked = false;
+  lockWaitStats.retries += 1;
+  for (;;) {
+    const waited = performance.now() - start;
+    // While the lock is still held: which processes have the store open (at most once a minute).
+    if (!looked && waited >= LOCK_WAIT_LOG_MS) {
+      looked = true;
+      lookForHolders(SESSION_DB_PATH, 'BEGIN IMMEDIATE', waited);
+    }
+    if (waited >= lockBudgetMs) {
+      lockWaitStats.gaveUp += 1;
+      log.session.warn('session-db: write gave up waiting for the lock', { waitedMs: Math.round(waited), tries });
+      throw Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' });
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(delay, lockBudgetMs - waited)));
+    delay = Math.min(delay * 2, LOCK_RETRY_MAX_MS);
+    // A wipe or a close in the wait replaced the connection: try on the one there is now.
+    const handle = openForWrite();
+    if (tryBeginImmediate(handle)) {
+      const total = performance.now() - start;
+      lockWaitStats.waits += 1;
+      lockWaitStats.waitedMs += total;
+      if (total > lockWaitStats.maxMs) lockWaitStats.maxMs = total;
+      if (total >= LOCK_WAIT_LOG_MS) log.session.info('session-db: write waited for the lock', { waitedMs: Math.round(total), tries });
+      return runLocked(handle, fn);
+    }
+    tries += 1;
+    lockWaitStats.retries += 1;
+  }
 }
 
 /**

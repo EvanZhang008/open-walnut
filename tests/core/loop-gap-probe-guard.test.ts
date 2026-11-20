@@ -24,6 +24,7 @@ const ALLOWED: Record<string, string> = {
   'integrations/git-compaction-recovery-async.test.ts': 'its bound is a whole synchronous git call (3 s), with a tick count no load can fake',
   'e2e/browser/code-block-actions-helpers.ts': "a browser page's frame gap while a reply streams (no lag in the page), not a Node loop hold; its bound (400 ms, WebKit 1.5 s) is several busy frames",
   'lib/sqlite.test.ts': 'its bound is half the same backup run inline on the same thread under the same load',
+  'core/session-write-lock-wait.test.ts': "the hold it guards is a wait in the kernel (another process's SQLite lock), off the CPU, so a CPU hold cannot see it; the old code held the loop the whole lock budget (5 s) against a 1 s bound",
 }
 
 function walk(dir: string, out: string[] = []): string[] {

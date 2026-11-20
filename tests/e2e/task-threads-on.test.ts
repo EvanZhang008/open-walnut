@@ -158,6 +158,16 @@ describe('Threads on a leader task', () => {
     return deriveUserStatus(statusInputOf(leader, await readStatusFacts([leader], all.map((t) => t.id))))
   }
 
+  // The slow-pass line names which source a slow pass waited on (user-status-sync.ts readMs).
+  it('says how long each fact source took to read', async () => {
+    const all = await listTasks()
+    const leader = all.find((t) => t.id === leaderId)!
+    const facts = await readStatusFacts([leader], all.map((t) => t.id))
+    for (const source of ['sessions', 'undelivered', 'letters', 'approvals', 'choices', 'requests', 'triggers', 'schedules', 'checks', 'threads']) {
+      expect(facts.readMs?.[source]).toBeGreaterThanOrEqual(0)
+    }
+  })
+
   it('while on, a thread waiting on him reads Needs you, and the away and buzz paths take the task', async () => {
     const s = await statusNow()
     expect(s.state).toBe('needs')

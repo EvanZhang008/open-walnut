@@ -1508,6 +1508,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   if (process.env.WALNUT_BLOCKING_CALLS !== '0') {
     const { installBlockingCallTiming } = await import('../core/blocking-calls.js')
     installBlockingCallTiming()
+    // On macOS a call that holds the loop 250 ms gets one OS stack sample (slow-call-sampler.ts;
+    // WALNUT_STALL_SAMPLE=0 turns it off): what the thread waited on inside it.
+    if (process.env.WALNUT_STALL_SAMPLE !== '0') {
+      try {
+        const { startSlowCallSampler } = await import('../core/slow-call-sampler.js')
+        startSlowCallSampler()
+      } catch (err) {
+        log.web.warn('the stack sampler did not start', { error: String(err) })
+      }
+    }
   }
   startEventLoopMonitor()
   // Stall flight recorder: hold context on long probe-late lines plus a rolling

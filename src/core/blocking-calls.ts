@@ -60,9 +60,37 @@ export interface CallWait { cpuMs: number; voluntary: number; involuntary: numbe
 const ring: Array<Entry | undefined> = new Array(RING_SIZE);
 let nextSlot = 0;
 
+/**
+ * The timed call running on this thread now, for a watcher thread to read
+ * (slow-call-sampler.ts): [0] its start (Date.now(); 0 = none), [1] its kind
+ * (1 sqlite, 2 spawn), [2] its start on this thread's performance clock (what
+ * the ring keeps). Nested calls (a transaction's statements) keep the outer one.
+ */
+const nowCall = new Float64Array(new SharedArrayBuffer(24));
+let callDepth = 0;
+const KIND_CODE: Record<BlockingKind, number> = { sqlite: 1, spawn: 2 };
+
+function callBegins(kind: BlockingKind): void {
+  if (callDepth++ === 0) {
+    nowCall[1] = KIND_CODE[kind];
+    nowCall[2] = performance.now();
+    nowCall[0] = Date.now();
+  }
+}
+
+function callEnds(): void {
+  if (callDepth > 0 && --callDepth === 0) nowCall[0] = 0;
+}
+
+/** The shared buffer that says which timed call runs on this thread now (see nowCall). */
+export function currentCallBuffer(): SharedArrayBuffer {
+  return nowCall.buffer as SharedArrayBuffer;
+}
+
 /** The ledger's own frames and the wrappers it times through, by function name
  *  (a compiled binary has one file, /$bunfs/root/walnut, so names are what tell them apart). */
 const OWN_FRAMES = new Set(['noteTimed', 'timed', 'timedSpawn', 'each', 'guarded', 'transaction', 'run', 'get', 'all', 'exec', 'getNow', 'allNow',
+  'transactionWhenFree', 'tryBeginImmediate', 'pragma', 'pragmaNow',
   'spawn', 'execFile', 'fork', 'Promise', 'new Promise', 'ChildProcess']);
 const OWN_FILES = /node:|bun:|\(native\)|\/lib\/sqlite(?:-guards)?\.[cm]?[jt]s|\/core\/blocking-calls\.[cm]?[jt]s/;
 
@@ -198,7 +226,7 @@ const HOLDERS_MIN_MS = 100;
 const HOLDERS_GAP_MS = 60_000;
 let lastHoldersAt = 0;
 
-function lookForHolders(file: string, what: string, ms: number, wait: CallWait): void {
+export function lookForHolders(file: string, what: string, ms: number, wait?: CallWait): void {
   if (process.platform === 'win32' || file === ':memory:' || file === '') return;
   const now = Date.now();
   if (now - lastHoldersAt < HOLDERS_GAP_MS) return;
@@ -211,7 +239,7 @@ function lookForHolders(file: string, what: string, ms: number, wait: CallWait):
       else if (line.startsWith('c') && pid && pid !== String(process.pid)) others.push(`${pid} ${line.slice(1)}`);
     }
     log.web.warn('sqlite: slow write, the processes that had the database open', {
-      file: path.basename(file), what: sqlLabel(what), ms: Math.round(ms), wait, others: [...new Set(others)],
+      file: path.basename(file), what: sqlLabel(what), ms: Math.round(ms), ...(wait ? { wait } : {}), others: [...new Set(others)],
     });
   });
 }
@@ -227,8 +255,12 @@ export function installBlockingCallTiming(): void {
   if (installed) return;
   installed = true;
   setSqliteCallObserver({
-    begin: (writes): Token => ({ start: performance.now(), before: writes ? sampleNow() : null }),
+    begin: (writes): Token => {
+      callBegins('sqlite');
+      return { start: performance.now(), before: writes ? sampleNow() : null };
+    },
     end: (source, token, _writes, file) => {
+      callEnds();
       const t = token as Token;
       const wait = noteTimed('sqlite', () => sqlLabel(source), t.start, t.before);
       const ms = performance.now() - t.start;
@@ -243,9 +275,11 @@ export function installBlockingCallTiming(): void {
     proto.spawn = function timedSpawn(this: unknown, ...args: unknown[]): unknown {
       const start = performance.now();
       const before = sampleNow();
+      callBegins('spawn');
       try {
         return orig.apply(this, args);
       } finally {
+        callEnds();
         try { noteTimed('spawn', () => spawnLabel(args[0]), start, before); } catch { /* timing never changes the start */ }
       }
     };
@@ -270,6 +304,8 @@ export function _setBlockingThresholdsForTesting(next: { minMs: number; siteMs: 
 export function _resetBlockingCallsForTesting(): void {
   ring.fill(undefined);
   nextSlot = 0;
+  nowCall.fill(0);
+  callDepth = 0;
   lastHoldersAt = 0;
   if (installed) {
     setSqliteCallObserver(null);
