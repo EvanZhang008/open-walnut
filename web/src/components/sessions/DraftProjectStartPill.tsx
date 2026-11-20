@@ -19,7 +19,7 @@ import { ProjectStartFlyout } from './ProjectStartFlyout';
 import { ProjectStartPicker } from './ProjectStartPicker';
 import type { DraftColumn } from './draft-column';
 import {
-  AUTO_PROVIDER, chooseFolderInstead, draftProjectStart, pickProjectForStart, pickStartHost, startSourceOf, type DraftProjectStartState,
+  AUTO_PROVIDER, chooseFolderInstead, draftProjectStart, pickProjectForStart, pickStartHost, sourceChipWords, startSourceOf, type DraftProjectStartState,
 } from './draft-project-start';
 
 /** A write on the draft row (MainPage applies it to the row with this id). */
@@ -142,7 +142,7 @@ export function DraftStartHostPill({ draft, onUpdate }: { draft: DraftColumn; on
 export function DraftSourceChip({ source }: { source: StartSource | null }) {
   const auto = !source || source.provider === AUTO_PROVIDER;
   const git = source?.provider === 'git-worktree';
-  const words = auto ? 'New workspace' : git ? 'New git worktree' : `New ${source.provider_name ?? source.provider} workspace`;
+  const words = sourceChipWords(source);
   const title = source
     ? `Each start makes a fresh ${auto ? 'isolated workspace' : words.replace(/^New /, '')} from ${source.anchor}; it is removed once the task is done and its work is merged`
     : 'Each start makes a fresh workspace from the project\'s code source';

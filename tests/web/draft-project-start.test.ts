@@ -219,6 +219,20 @@ describe('sourceLine', () => {
   });
 });
 
+describe('sourceChipWords', () => {
+  it('names each kind of start once, never "workspace workspace"', () => {
+    expect(ps.sourceChipWords(null)).toBe('New workspace');
+    expect(ps.sourceChipWords({ ...git, provider: 'auto', provider_name: undefined })).toBe('New workspace');
+    expect(ps.sourceChipWords(git)).toBe('New git worktree');
+    expect(ps.sourceChipWords(plugin)).toBe('New Fake multi-repo workspace');
+    // A provider whose own name already ends in workspace / worktree (2026-11-20, real data).
+    for (const name of ['Monorepo workspace', 'Team Workspaces', 'Sparse worktree']) {
+      expect(ps.sourceChipWords({ ...plugin, provider_name: name })).toBe(`New ${name}`);
+    }
+    expect(ps.sourceChipWords({ ...plugin, provider_name: undefined, provider: 'fake-multirepo' })).toBe('New fake-multirepo workspace');
+  });
+});
+
 describe('projectStartRequest', () => {
   const acme = { source: plugin, project: 'Acme' };
 

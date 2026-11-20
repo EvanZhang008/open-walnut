@@ -251,6 +251,15 @@ export function sourceLine(source: StartSource): string {
   return base ? `${name} of ${base}` : name;
 }
 
+/** The source chip's words: what each start makes. A provider whose name already says
+ *  "workspace" or "worktree" is not followed by "workspace" again. */
+export function sourceChipWords(source: StartSource | null): string {
+  if (!source || source.provider === AUTO_PROVIDER) return 'New workspace';
+  if (source.provider === 'git-worktree') return 'New git worktree';
+  const name = (source.provider_name ?? source.provider).trim();
+  return /\b(workspace|worktree)s?$/i.test(name) ? `New ${name}` : `New ${name} workspace`;
+}
+
 function folderName(p: string): string {
   const parts = (p ?? '').replace(/\/+$/, '').split('/');
   return parts[parts.length - 1] ?? '';
