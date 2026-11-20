@@ -28,7 +28,7 @@ import { bootPolicy } from './boot-policy.js';
 import { routineRunToClose } from './routines/run-close.js';
 import { deriveUserStatus, fallbackUserState, reportIsCurrent, rollUpAsks, TURN_TO_READ, type UserStatus, type UserStatusInput } from './user-status.js';
 import { answeredAbove, answerContextOf, answerFor, answersOf, askKey, foldSameAsk, withdrawnAtOf, type RelativeAsk } from './same-ask.js';
-import { isSignInAsk, signInWaitWords, type SignInState } from './sign-in-ask.js';
+import { isSignInAsk, readSignInState, signInStateStamp, signInWaitWords, type SignInState } from './sign-in-ask.js';
 import { relativeAsksIndex, treeAround } from './same-ask-tree.js';
 import { sameTaskArea } from './router/same-area.js';
 import { askMatter, matterIndex, matterNamedIn, sharedMatter, type MatterIndex } from './ask-matter.js';
@@ -812,14 +812,17 @@ export function completeStatusFacts(facts: StatusFacts, everything: readonly Tas
 /**
  * The sign-in state, kept SIGN_IN_KEEP_MS: reading it opens the inbox index and three files, the
  * dearest step of a pass of one task (0.2 to 1.3 s measured), and every pass asked again. Its
- * writers are a checker that runs every few minutes and the sign-in letters, whose events drop it.
+ * writers are the sign-in letters, whose events drop it, and a checker that runs every few minutes
+ * and writes a file no event announces: the kept state is re-read when those files' stamp moved
+ * (signInStateStamp, three stats), so the checker's word counts the moment it is written.
  */
 const SIGN_IN_KEEP_MS = 30_000;
-let signInKept: { at: number; state: NonNullable<StatusFacts['signIn']> } | null = null;
+let signInKept: { at: number; stamp: string; state: NonNullable<StatusFacts['signIn']> } | null = null;
 async function readSignInCached(): Promise<NonNullable<StatusFacts['signIn']>> {
-  if (signInKept && Date.now() - signInKept.at < SIGN_IN_KEEP_MS) return signInKept.state;
-  const state = await (await import('./sign-in-ask.js')).readSignInState();
-  signInKept = { at: Date.now(), state };
+  const stamp = await signInStateStamp();
+  if (signInKept && signInKept.stamp === stamp && Date.now() - signInKept.at < SIGN_IN_KEEP_MS) return signInKept.state;
+  const state = await readSignInState();
+  signInKept = { at: Date.now(), stamp, state };
   return state;
 }
 

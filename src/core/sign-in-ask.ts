@@ -222,6 +222,20 @@ async function letterOpen(id: string, onError: true | 'throw' = true): Promise<b
   }
 }
 
+/** The files under `local/` the sign-in state is read from, beside the inbox. */
+const SIGN_IN_FILES = [SIGN_IN_STATE_FILE, 'host-auth-alert.json', 'ssh-cert-expiry-alert.json'];
+
+/**
+ * A stamp of those files (size and mtime, or absent), three stats: a reader that keeps the state
+ * for a while re-reads it when the stamp moved, so an outside checker's word (which no event
+ * announces) counts the moment it is written (2026-11-20: a status kept "sign in" up to 30 s after
+ * the checker said sign-in works, and a test's next case read the last one's word).
+ */
+export async function signInStateStamp(dir = path.join(WALNUT_HOME, 'local')): Promise<string> {
+  const stamps = await Promise.all(SIGN_IN_FILES.map((f) => fs.stat(path.join(dir, f)).then((st) => `${st.size}@${st.mtimeMs}`, () => '-')));
+  return stamps.join('|');
+}
+
 /**
  * The live sign-in state: Walnut's own sign-in letters still before the user, and an outside
  * checker's word; when both speak, the newer one does (a check that works after the letter went out
