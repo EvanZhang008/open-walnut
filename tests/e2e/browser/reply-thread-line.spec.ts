@@ -5,7 +5,7 @@
  * that thread").
  *
  *  1. On a lead's chat he types a request, then answers a thread the lead opened from that card's
- *     Follow up box: each bubble shows "↳ <its own thread>", no "Delivered" under either; the lead
+ *     Follow up box: each bubble shows a curved arrow and its own thread, no "Delivered" under either; the lead
  *     retitles the first thread and its line reads the new title; the answer under his request
  *     carries the same line on the left.
  *  2. With the side bar on Tasks, a click on the first line brings Threads back with that thread's
@@ -39,7 +39,7 @@ const ASK_WORK = `Please keep the old parser behind a switch ${STAMP}`
 
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(180_000)
-test.use({ video: 'on', viewport: { width: 1280, height: 800 } })
+test.use({ video: 'on', viewport: { width: 1280, height: 800 }, deviceScaleFactor: 3 })
 
 const rowKey = (project: string) => `project:${project.trim().toLowerCase()}`
 
@@ -148,12 +148,12 @@ test('on: each message shows the thread it went to, and a click opens that threa
   const folders = (await threads(request)).find((t) => t.messages.some((m) => m.text === FOLDERS))!.id
   const first = lineUnder(page, FOLDERS)
   await expect(first).toHaveAttribute('data-thread-id', folders, { timeout: 30_000 })
-  await expect(first).toHaveText(`↳${FOLDERS}`)
+  await expect(first).toHaveText(FOLDERS)
 
   // The lead gives it a short title: the line reads it.
   const titled = await request.patch(`/api/v1/tasks/${ids.lead}/threads/${folders}`, { data: { title: `Notes folder names ${STAMP}` }, headers: { 'x-walnut-caller-sid': ids.leadSid } })
   expect(titled.ok(), await titled.text()).toBe(true)
-  await expect(first).toHaveText(`↳Notes folder names ${STAMP}`, { timeout: 15_000 })
+  await expect(first).toHaveText(`Notes folder names ${STAMP}`, { timeout: 15_000 })
 
   // 2. His answer to the lead's own thread, from that card's Follow up box: the line names that thread.
   const opened = card(page, ids.opened)
@@ -163,12 +163,20 @@ test('on: each message shows the thread it went to, and a click opens that threa
   await opened.getByTestId('org-thread-follow-send').click()
   const second = lineUnder(page, SHORTCUT)
   await expect(second).toHaveAttribute('data-thread-id', ids.opened, { timeout: 30_000 })
-  await expect(second).toHaveText(`↳${OPENED}`)
+  await expect(second).toHaveText(OPENED)
+  await expect(second.getByTestId('msg-reply-thread-arc')).toBeVisible()
 
   // Delivered says nothing more: no "Delivered" under either bubble once it arrived.
   await expect(chat(page).locator('.session-msg-delivered-badge')).toHaveCount(0, { timeout: 15_000 })
   await expect(chat(page).getByText('Delivered', { exact: false })).toHaveCount(0)
   await shot(page, '1-lines')
+  // The mark before the title, close up in both themes (2026-11-20: a curve with an arrowhead).
+  for (const theme of ['light', 'dark'] as const) {
+    await page.evaluate((t) => { document.documentElement.dataset.theme = t }, theme)
+    await page.waitForTimeout(150)
+    await second.screenshot({ path: `${SHOTS}/reply-thread-line-mark-${theme}-${test.info().project.name}.png`, scale: 'device' })
+  }
+  await page.evaluate(() => { delete document.documentElement.dataset.theme })
 
   // The lead's answer to his request carries the same line, on the left.
   const answer = chat(page).locator(`[data-testid="msg-reply-thread"][data-side="answer"][data-thread-id="${folders}"]`)

@@ -1,8 +1,8 @@
 /**
  * The thread line under a chat message (experiment reply_thread_line; 2026-11-20, the user,
  * translated: "every time I reply I can't tell which one I replied to ... click it and jump to that
- * thread"): one line of the bubble's own small gray type, "↳ <thread title>" under his message,
- * right-aligned, and "↳ <thread title> · <task>" under the answer, left-aligned, in place of the
+ * thread"): one line of the bubble's own small gray type, a curved arrow and the thread title under his message,
+ * right-aligned, and the same with " · <task>" under the answer, left-aligned, in place of the
  * About pills. One click opens that thread on the Threads of the node that holds it, scrolled to
  * it. The thread is the one the row carries (src/core/org/reply-thread.ts): the one Walnut filed
  * his message under, never a guess here.
@@ -62,6 +62,20 @@ function useOpenReplyThread(): (t: ReplyThread) => void {
   }, [host, store, navigate, openTask]);
 }
 
+/**
+ * The mark in front of the title: one smooth quarter curve from the message down and over to the
+ * thread, ending in a small arrowhead (2026-11-20, the user: "not this stiff 90 degrees: a perfect
+ * curve with an arrow"). Drawn in the text's own color and weight, so both themes read it.
+ */
+function ReplyArc() {
+  return (
+    <svg className="msg-reply-thread-arrow" data-testid="msg-reply-thread-arc" viewBox="0 0 12 12" width="1em" height="1em" aria-hidden="true" focusable="false">
+      <path d="M2.5 1.5 A7 7 0 0 0 9.5 8.5" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <path d="M7.2 6.2 L9.7 8.5 L7.2 10.8" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function TaskPart({ id }: { id: string }) {
   const title = useTaskTitle(id);
   const openTask = useOpenTask();
@@ -96,7 +110,7 @@ export function ReplyThreadLine({ thread, side, tasks }: {
         title={opens ? `Open the thread “${title}”` : 'This thread is no longer kept'}
         onClick={(e) => { e.stopPropagation(); open(thread); }}
       >
-        <span className="msg-reply-thread-arrow" aria-hidden="true">{'↳'}</span>
+        <ReplyArc />
         <span className="msg-reply-thread-title">{title}</span>
       </button>
       {tasks?.map((id) => <TaskPart key={id} id={id} />)}

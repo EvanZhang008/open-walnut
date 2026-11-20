@@ -27,7 +27,7 @@
   text-align: inherit;
   cursor: pointer;
 }
-.msg-reply-thread-arrow { margin-right: 4px; }
+.msg-reply-thread-arrow { display: inline-block; width: 1.05em; height: 1.05em; margin-right: 3px; vertical-align: -0.18em; overflow: visible; }
 .msg-reply-thread-sep { margin: 0 5px; }
 .msg-reply-thread-link:hover:not(:disabled),
 .msg-reply-thread-task:hover,
