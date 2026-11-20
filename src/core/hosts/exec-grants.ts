@@ -73,18 +73,59 @@ function file(): string {
   return fileOverride ?? path.join(WALNUT_HOME, FILE_NAME)
 }
 
-/** Tests: point the store at a temp file (null = back to WALNUT_HOME). */
+/** Tests: point the store at a temp file (null = back to WALNUT_HOME); nothing parsed before is kept. */
 export function setExecGrantsFileForTest(f: string | null): void {
   fileOverride = f
+  keptStore = null
+  keptClosed = null
 }
 
-function read(): Store {
+// Every lookup below runs on the server's loop, several times per command and before every part
+// a copy sends (host-copy.ts gate), so a file is parsed only when it changed: one stat per lookup,
+// the parse kept until the file's identity moves (2026-11-20: re-reading and parsing the 240 KB
+// grants file on every lookup held the loop 250 ms to 1.3 s at a time, 31 stalls in an hour, under
+// load while copies ran). The kept value is frozen so no caller can change it in place; mutate
+// works on a copy. Any writer is seen: ours updates the kept value, another (an older Walnut, a
+// test, the user's editor) changes the stat.
+interface Kept<T> { key: string; value: T }
+let keptStore: Kept<Store> | null = null
+let keptClosed: Kept<string[]> | null = null
+
+/** What identifies the file's current contents without reading it ('' when it is missing). */
+function statKey(f: string): string {
   try {
-    const raw = JSON.parse(fs.readFileSync(file(), 'utf8')) as Partial<Store>
+    const st = fs.statSync(f, { bigint: true })
+    return `${f}\n${st.ino}\n${st.size}\n${st.mtimeNs}\n${st.ctimeNs}`
+  } catch {
+    return `${f}\n`
+  }
+}
+
+function deepFreeze<T>(v: T): T {
+  if (v && typeof v === 'object' && !Object.isFrozen(v)) {
+    Object.freeze(v)
+    for (const k of Object.keys(v)) deepFreeze((v as Record<string, unknown>)[k])
+  }
+  return v
+}
+
+function parseStore(f: string): Store {
+  try {
+    const raw = JSON.parse(fs.readFileSync(f, 'utf8')) as Partial<Store>
     return { grants: Array.isArray(raw.grants) ? raw.grants : [], asks: Array.isArray(raw.asks) ? raw.asks : [] }
   } catch {
     return { grants: [], asks: [] }
   }
+}
+
+/** The store as the file holds it now (frozen: never change it, mutate copies it). */
+function read(): Readonly<Store> {
+  const f = file()
+  const key = statKey(f)
+  if (keptStore?.key === key) return keptStore.value
+  const value = deepFreeze(parseStore(f))
+  keptStore = { key, value }
+  return value
 }
 
 // One writer at a time in this process; the file is the primary's alone.
@@ -133,7 +174,7 @@ function accessChanged(live?: Set<string>): void {
 
 function mutate<T>(fn: (s: Store) => T): Promise<T> {
   const next = chain.then(async () => {
-    const s = read()
+    const s = structuredClone(read()) as Store
     // Taken whether or not anyone listens yet: a read may start listening while this write runs.
     const before = liveKeys(s)
     const out = fn(s)
@@ -142,6 +183,8 @@ function mutate<T>(fn: (s: Store) => T): Promise<T> {
     await fs.promises.mkdir(path.dirname(target), { recursive: true })
     await fs.promises.writeFile(tmp, JSON.stringify(s, null, 2) + '\n', { mode: 0o600 })
     await fs.promises.rename(tmp, target)
+    // What we just wrote is what the file holds: keep it, no parse on the next lookup.
+    keptStore = { key: statKey(target), value: deepFreeze(s) }
     const after = liveKeys(s)
     if (!sameKeys(before, after)) accessChanged(after)
     return out
@@ -180,16 +223,26 @@ function closedFile(): string {
 
 /** The hosts the user closed: no task from another host starts anything there. */
 export function closedHosts(): string[] {
-  try {
-    const raw = JSON.parse(fs.readFileSync(closedFile(), 'utf8')) as { closed?: unknown }
-    return Array.isArray(raw.closed) ? raw.closed.filter((h): h is string => typeof h === 'string') : []
-  } catch {
-    return []
+  return [...closedList()]
+}
+
+/** The kept closed hosts (frozen), parsed again only when their file changed. */
+function closedList(): readonly string[] {
+  const f = closedFile()
+  const key = statKey(f)
+  if (keptClosed?.key !== key) {
+    let value: string[] = []
+    try {
+      const raw = JSON.parse(fs.readFileSync(f, 'utf8')) as { closed?: unknown }
+      if (Array.isArray(raw.closed)) value = raw.closed.filter((h): h is string => typeof h === 'string')
+    } catch { /* missing or unreadable: no host closed */ }
+    keptClosed = { key, value: Object.freeze(value) as string[] }
   }
+  return keptClosed.value
 }
 
 export function isHostClosed(host: string): boolean {
-  return closedHosts().includes(host)
+  return closedList().includes(host)
 }
 
 /** Close or open a host to tasks from other hosts (the user, in Settings). */
