@@ -10,7 +10,7 @@
  * them, from the message's own delivery. They are read from the thread's record (ThreadSentWords),
  * so a reload or a redraw keeps them. A failed send keeps his words in the box, with the reason.
  */
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AskCardFrame } from '@/components/actions/AskCard';
 import { ReplyComposer } from '@/components/chat/ReplyComposer';
 import { draftKey } from '@/utils/drafts';
@@ -34,8 +34,11 @@ export function PoppedThreadCard({ node, t, state }: { node: string; t: OrgThrea
   const owner = t.owner!;
   // A thread holding its task's own ask (core/org/thread-report-ask.ts): its question, then its own summary under it.
   const detail = t.heldAsk ? t.heldAsk.reply : t.reply;
-  // His reply this card sent, from the server's answer: shown at once, until the thread's record holds it.
+  // His reply this card sent, from the server's answer: shown at once, until the thread's record
+  // holds it; then forgotten, so a message split or moved away later never comes back from here.
   const [sent, setSent] = useState<OrgThreadMessage | null>(null);
+  const recorded = !!sent && t.messages.some((m) => m.id === sent.id);
+  useEffect(() => { if (recorded) setSent(null); }, [recorded]);
   // His words (typed, or a choice's label clicked) go to the task that owns the thread. A retry of
   // the same words keeps its key; other words (a click after a failed typed send) take a new one.
   const reply = async (text: string): Promise<boolean> => {

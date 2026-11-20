@@ -182,7 +182,7 @@ async function sendReplies(s: SessionRecord, owner: string, going: Array<{ threa
 async function markWithdrawn(owner: string, qm: string): Promise<void> {
   const store = await import('./threads-store.js');
   const at = new Date().toISOString();
-  await store.updateReplyDeliveries(owner, (_t, m) => (m.delivery?.queued === qm && m.delivery.state === 'claimed' ? { ...m.delivery, state: 'dropped', at } : undefined));
+  await store.updateReplyDeliveries(owner, (_t, m) => (m.delivery?.queued === qm && m.delivery.state === 'claimed' ? { ...m.delivery, state: 'dropped', at, withdrawn: true } : undefined));
   queuedRows.delete(qm);
 }
 

@@ -140,6 +140,8 @@ export interface ThreadDelivery {
   told?: boolean;
   /** Written by an agent, not by him (an agent may do what he does): it goes as that agent's message. */
   by?: ThreadWriter;
+  /** Dropped because he took it back from the queue before the task read it (thread-reply.ts markWithdrawn). */
+  withdrawn?: true;
 }
 
 /** His reply has not reached the owner's session yet. */

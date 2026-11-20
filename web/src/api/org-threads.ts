@@ -18,7 +18,13 @@ export interface OrgThreadMessage {
   answer?: { text: string; at: string; about?: string[]; clipped?: boolean; from?: 'letter'; sid?: string; host?: string };
   readAt?: string;
   /** His reply from a card above the task that owns the thread, on its way there (src/core/org/thread-reply.ts). */
-  delivery?: { state: 'pending' | 'claimed' | 'delivered' | 'dropped'; at: string; via?: string };
+  delivery?: {
+    state: 'pending' | 'claimed' | 'delivered' | 'dropped'; at: string; via?: string
+    /** An agent wrote it for him (the writer), not his own words. */
+    by?: string
+    /** Dropped because he took it back before the task read it. */
+    withdrawn?: true
+  };
   /** The ask it answers; `stale`: the thread asked something else by then. */
   answers?: { ask_id: string; stale?: boolean };
 }

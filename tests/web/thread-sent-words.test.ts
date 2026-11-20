@@ -52,9 +52,26 @@ describe('his words on a card, from the record', () => {
     expect(wordsNotAnswered(after, sent).map((m) => m.delivery?.state)).toEqual(['claimed'])
   })
 
+  it('every reply still on its way shows; only the ones the task already has are capped', () => {
+    const on = (i: number): OrgThreadMessage => ({ id: `tm-60000000000${i}`, at: `2026-11-20T10:2${i}:00.000Z`, text: `Reply ${i}`, via: 'follow-up', delivery: { state: i === 0 ? 'claimed' : 'delivered', at: `2026-11-20T10:2${i}:01.000Z` } })
+    const t = base({ reply: 'Green or white?', replyAt: '2026-11-20T10:10:00.000Z', messages: [answered, ...[0, 1, 2, 3, 4].map(on)] })
+    // The oldest is still on its way: it stays, with the newest three the task has.
+    expect(wordsNotAnswered(t).map((m) => m.text)).toEqual(['Reply 0', 'Reply 2', 'Reply 3', 'Reply 4'])
+  })
+
+  it('a reply he took back, and one an agent wrote for him, say so', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../web/src/components/org/ThreadSentWords.tsx'), 'utf8')
+    expect(src).toMatch(/withdrawn \? `Taken back before/)
+    expect(src).toMatch(/Sent for you by another task/)
+    const server = fs.readFileSync(path.join(__dirname, '../../src/core/org/thread-reply.ts'), 'utf8')
+    expect(server).toMatch(/state: 'dropped', at, withdrawn: true/)
+  })
+
   it('the popped card draws his sent words only through ThreadSentWords', () => {
     const src = fs.readFileSync(path.join(__dirname, '../../web/src/components/org/PoppedThreadCard.tsx'), 'utf8')
     expect(src).toContain('<ThreadSentWords ')
+    // The reply it sent is forgotten once the record holds it (a split or move never brings it back).
+    expect(src).toMatch(/if \(recorded\) setSent\(null\)/)
     expect(src).not.toMatch(/org-thread-popped-sent-words|org-thread-unread-by-task/)
   })
 })

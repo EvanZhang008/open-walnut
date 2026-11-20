@@ -10,8 +10,8 @@
 import { cardView, summaryAt } from '@open-walnut/thread-view';
 import type { OrgThread, OrgThreadMessage } from '@/api/org-threads';
 
-/** At most this many of his newest words on a card; the rest read in the task's own chat. */
-const SHOWN_MAX = 3;
+/** At most this many of his newest words the task already has; every reply still on its way shows. */
+const SETTLED_MAX = 3;
 
 const onItsWay = (m: Pick<OrgThreadMessage, 'delivery'>) => m.delivery?.state === 'pending' || m.delivery?.state === 'claimed';
 
@@ -21,16 +21,20 @@ export function wordsNotAnswered(t: OrgThread, justSent?: OrgThreadMessage | nul
   const waiting = new Set(cardView(t).waiting.flatMap((x) => x.messages.map((m) => m.id)));
   const out = t.messages.filter((m) => onItsWay(m) || (waiting.has(m.id) && (!said || m.at > said)));
   if (justSent && !t.messages.some((m) => m.id === justSent.id)) out.push(justSent);
-  return out.slice(-SHOWN_MAX);
+  const settled = new Set(out.filter((m) => !onItsWay(m)).slice(-SETTLED_MAX));
+  return out.filter((m) => onItsWay(m) || settled.has(m));
 }
 
 function note(m: OrgThreadMessage, owner: string): string {
-  switch (m.delivery?.state) {
-    case 'delivered': return `Sent: ${owner} has read it.`;
-    case 'dropped': return `Not delivered: this thread settled before ${owner} read it.`;
+  const d = m.delivery;
+  // An agent's reply for him is never shown as his own words.
+  const sent = d?.by && d.by !== 'human' ? 'Sent for you by another task' : 'Sent';
+  switch (d?.state) {
+    case 'delivered': return `${sent}: ${owner} has read it.`;
+    case 'dropped': return d.withdrawn ? `Taken back before ${owner} read it.` : `Not delivered: this thread settled before ${owner} read it.`;
     case 'pending':
-    case 'claimed': return `Sent: ${owner} has not read it yet.`;
-    default: return `Sent to ${owner}.`;
+    case 'claimed': return `${sent}: ${owner} has not read it yet.`;
+    default: return `${sent} to ${owner}.`;
   }
 }
 
@@ -39,7 +43,7 @@ export function ThreadSentWords({ t, owner, justSent }: { t: OrgThread; owner: s
   if (!words.length) return null;
   return (<>
     {words.map((m) => (
-      <div key={m.id} className="org-thread-sent" data-testid="org-thread-popped-sent" data-message-id={m.id} data-delivery={m.delivery?.state ?? 'none'}>
+      <div key={m.id} className="org-thread-sent" data-testid="org-thread-popped-sent" data-message-id={m.id} data-delivery={m.delivery?.state ?? 'none'} data-by={m.delivery?.by && m.delivery.by !== 'human' ? 'agent' : 'him'}>
         <p className="org-thread-sent-words" data-testid="org-thread-popped-sent-words">{m.text}</p>
         <p className="org-thread-stand-in-note" data-testid="org-thread-unread-by-task">{note(m, owner)}</p>
       </div>
