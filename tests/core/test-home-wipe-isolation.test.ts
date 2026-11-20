@@ -207,6 +207,7 @@ const KEEPS_A_HANDLE: Record<string, string> = {
   'src/core/notes-index.ts': 'src/core/notes-index.ts',
   'src/core/health/db.ts': 'src/core/health/db.ts',
   'src/core/places/db.ts': 'src/core/places/db.ts',
+  'src/core/org/threads-db.ts': 'src/core/org/threads-db.ts',
   'src/core/companion-bases.ts': 'src/core/companion-bases.ts',
   'src/core/offline-merge/ledger.ts': 'src/core/offline-merge/ledger.ts',
   'src/core/usage/tracker.ts': 'src/core/usage/tracker.ts',

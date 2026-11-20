@@ -1,14 +1,14 @@
 /**
  * Where an Org node's Threads live (threads-model.ts): one JSON file per node task at
  * `WALNUT_HOME/org/threads/<taskId>.json`, written under the file lock (the user's browser and
- * the node's session write at once). Every change emits `org-threads:changed` (envelope only).
+ * the node's session write at once), or, while the experiment `threads_sqlite` is on, the Threads
+ * database with those files kept current beside it (threads-backend.ts, threads-sync.ts). Every
+ * function here reads and writes the same on either. Every change emits `org-threads:changed`
+ * (envelope only).
  *
  * Only the leader keeps them: the companion has no copy, so its reads are empty and its writes
  * refused, the way Board writes are.
  */
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import { WALNUT_HOME } from '../../constants.js';
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
 import { bus, EventNames } from '../event-bus.js';
 import type { OrgThreadsChangedEvent } from '../event-types.js';
@@ -19,17 +19,10 @@ import {
   addMovedMessages, emptyThreads, enteredNeeds, fileMessage, markClosesTold, markRechecked, mergeThreads, movedAway, moveThreadIn, moveThreadOut, normalizeThreads, openThread, patchHandsToUser, setAnswers, splitThreadMessage, stampLegacyReplyAt, sweepClosed, ThreadError, updateThread,
   type FileMessageInput, type FileMessageResult, type MoveEnd, type OpenThreadInput, type ThreadAskOwner, type ThreadMoveKind, type OrgThread, type ThreadAnswer, type ThreadPatch, type ThreadState, type ThreadRecheck, type ThreadsFile, type ThreadTextSource, type ThreadWriter,
 } from './threads-model.js';
+import { threadsDbOnNow, useThreadsDb } from './threads-backend.js';
+import { dbDropExpired, dbMutateThreads, dbReadThreads, dbThreadNodes, flushNodeExport, jsonNodes, threadsJsonFile as threadsFile } from './threads-sync.js';
 import { askOwnerKept, askOwnerOf, pointerTaskIds, withAskPointers } from './thread-task-ask.js';
 import type { ThreadAskedIn } from './thread-view.js';
-
-const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-
-const threadsDir = () => path.join(WALNUT_HOME, 'org', 'threads');
-
-function threadsFile(taskId: string): string {
-  if (!TASK_ID_RE.test(taskId)) throw new ThreadError('bad_input', 400, `Invalid task id: ${taskId}`);
-  return path.join(threadsDir(), `${taskId}.json`);
-}
 
 function emit(event: OrgThreadsChangedEvent): void {
   bus.emit(EventNames.ORG_THREADS_CHANGED, event, ['web-ui'], { source: 'org-threads' });
@@ -42,13 +35,15 @@ function leaderOnly(): void {
 /** The tasks that have a threads file (a reader goes through readThreads for each). */
 export async function threadTaskIds(): Promise<string[]> {
   if (isFollower()) return [];
-  const names = await fs.readdir(threadsDir()).catch(() => [] as string[]);
-  return names.filter((n) => n.endsWith('.json')).map((n) => n.slice(0, -5)).filter((id) => TASK_ID_RE.test(id));
+  return (await useThreadsDb()) ? dbThreadNodes() : jsonNodes();
 }
 
 export async function readThreads(taskId: string): Promise<ThreadsFile> {
   if (isFollower()) return emptyThreads(taskId);
-  return normalizeThreads(await readJsonFile<unknown>(threadsFile(taskId), null), taskId);
+  const file = threadsFile(taskId);
+  if (await useThreadsDb()) return dbReadThreads(taskId);
+  await flushNodeExport(taskId);
+  return normalizeThreads(await readJsonFile<unknown>(file, null), taskId);
 }
 
 /**
@@ -98,9 +93,7 @@ async function personWroteAt(tasks: readonly import('../types.js').Task[]): Prom
 
 /** Every node that has a threads file (the follow rule reads them all: thread-follow.ts). */
 export async function listThreadNodes(): Promise<string[]> {
-  if (isFollower()) return [];
-  const names = await fs.readdir(threadsDir()).catch(() => [] as string[]);
-  return names.map((n) => (n.endsWith('.json') ? n.slice(0, -5) : '')).filter((id) => TASK_ID_RE.test(id));
+  return threadTaskIds();
 }
 
 /**
@@ -112,14 +105,20 @@ async function mutateThreads<R>(taskId: string, mutate: (cur: ThreadsFile) => { 
   leaderOnly();
   let out: R | undefined;
   let entered: OrgThread[] = [];
-  await updateJsonFile<unknown>(threadsFile(taskId), null, (raw) => {
+  const step = (read: ThreadsFile): ThreadsFile => {
     // A summary from before replyAt gets its time before anything else moves (stampLegacyReplyAt).
-    const cur = stampLegacyReplyAt(normalizeThreads(raw, taskId));
+    const cur = stampLegacyReplyAt(read);
     const res = mutate(cur);
     out = res.out;
     entered = enteredNeeds(cur, res.file);
     return res.file;
-  });
+  };
+  const file = threadsFile(taskId);
+  // false: the experiment went off before the database write began, so the file takes it.
+  if (!((await useThreadsDb()) && (await dbMutateThreads(taskId, step, threadsDbOnNow)))) {
+    await flushNodeExport(taskId);
+    await updateJsonFile<unknown>(file, null, (raw) => step(normalizeThreads(raw, taskId)));
+  }
   if (entered.length) {
     const threads = entered;
     // A push must never fail or slow the write that triggered it. A thread whose decision a task
@@ -426,13 +425,13 @@ export async function writeOwnThreads(taskId: string, plan: (cur: ThreadsFile) =
 /** The primary's sweep: every node's closed threads past their week are deleted for good. */
 export async function sweepClosedThreads(now = Date.now()): Promise<number> {
   if (isFollower()) return 0;
-  const names = await fs.readdir(threadsDir()).catch(() => [] as string[]);
+  const db = await useThreadsDb();
   let dropped = 0;
   const at = new Date(now).toISOString();
-  for (const name of names) {
-    const taskId = name.endsWith('.json') ? name.slice(0, -5) : '';
-    if (!TASK_ID_RE.test(taskId)) continue;
-    const n = await mutateThreads(taskId, (cur) => {
+  for (const taskId of await threadTaskIds()) {
+    // The database never loads a closed thread past its week: the sweep deletes those rows itself.
+    const gone = db ? await dbDropExpired(taskId, now) : 0;
+    const n = gone + await mutateThreads(taskId, (cur) => {
       const r = sweepClosed(cur, at);
       return { file: r.file, out: r.dropped };
     });

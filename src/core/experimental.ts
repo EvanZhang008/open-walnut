@@ -85,6 +85,12 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
+    id: 'threads_sqlite',
+    name: 'Threads in a database',
+    description: 'Threads are kept in a database (org/threads.sqlite) instead of one file per task, so reading and changing one stays quick however many threads a task keeps. The first time it is on, the files are copied to a backup and moved in only when every thread reads back the same. Each task\'s threads file is still written within a minute of a change, so turning this off or going back to an older Walnut keeps every thread.',
+    default: false,
+  },
+  {
     id: 'action_needed_everywhere',
     name: 'Action needed in sessions',
     description: 'What a task needs from you (an approval, a question, a letter, a choice) also shows in a strip under its session\'s title bar. It is the same item as on the task\'s row: answer or snooze it in either and it goes from both.',

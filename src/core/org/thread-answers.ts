@@ -392,6 +392,10 @@ export function startThreadAnswers(): { stop: () => void } {
       timer.unref?.();
     }, { global: true, interest: ['session:result'] });
   })();
+  // With the experiment threads_sqlite on, the move into the database (or the check of the files
+  // against it) runs now, at boot, rather than on the first read (threads-backend.ts).
+  // Off, the changes a crash left in the database still go out to their files.
+  void import('./threads-backend.js').then(async (m) => { if (!(await m.useThreadsDb())) await m.writeThreadsLeftovers(); }).catch(() => {});
   const sweep = setInterval(() => { void sweepAll(); }, 6 * 3600_000);
   sweep.unref?.();
   const first = setTimeout(() => { void sweepAll(); }, 60_000);

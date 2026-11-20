@@ -140,13 +140,35 @@ describe('no write of a threads file goes around the push', () => {
     expect(body).toContain('onThreadsEnteredNeeds(taskId')
   })
 
+  // The store, and its database backend (experiment threads_sqlite): the backend writes a file only to
+  // copy the database out (the move in, the write back), never a change of its own.
+  const STORE_FILES = ['threads-store.ts', 'threads-backend.ts', 'threads-sync.ts']
+
+  it('the database backend changes threads only through the store\'s one write', () => {
+    const callers = (call: RegExp) => {
+      const out: string[] = []
+      const walk = (dir: string): void => {
+        for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+          const p = path.join(dir, e.name)
+          if (e.isDirectory()) { walk(p); continue }
+          if (/\.ts$/.test(e.name) && !p.endsWith(path.join('org', 'threads-sync.ts')) && call.test(fs.readFileSync(p, 'utf8'))) out.push(path.relative(path.resolve('src'), p))
+        }
+      }
+      walk(path.resolve('src'))
+      return out
+    }
+    expect(callers(/\bdbMutateThreads\s*\(/)).toEqual([path.join('core', 'org', 'threads-store.ts')])
+    const body = fs.readFileSync(path.resolve('src/core/org/threads-store.ts'), 'utf8')
+    expect(body).toContain('await dbMutateThreads(taskId, step, threadsDbOnNow)')
+  })
+
   it('no other file under src/ touches the threads directory', () => {
     const offenders: string[] = []
     const walk = (dir: string): void => {
       for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
         const p = path.join(dir, e.name)
         if (e.isDirectory()) { if (e.name !== 'node_modules') walk(p); continue }
-        if (!/\.(ts|tsx|mjs|js)$/.test(e.name) || p.endsWith(path.join('org', 'threads-store.ts'))) continue
+        if (!/\.(ts|tsx|mjs|js)$/.test(e.name) || STORE_FILES.some((f) => p.endsWith(path.join('org', f)))) continue
         const text = fs.readFileSync(p, 'utf8')
         if (/['"]org['"]\s*,\s*['"]threads['"]|org\/threads\//.test(text)) offenders.push(path.relative(process.cwd(), p))
       }

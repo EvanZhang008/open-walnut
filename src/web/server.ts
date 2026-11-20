@@ -7304,6 +7304,8 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   ;(await import('../core/push/work-card.js')).stopWorkCard()
   // Visits still in memory (at most FLUSH_MS of them); bounded like every write here.
   await shutdownStep('page visits flush', async () => (await import('../core/page-visits.js')).flushVisitsNow())
+  // Threads changes still waiting to go out to their JSON files (experiment threads_sqlite; a no-op otherwise).
+  await shutdownStep('threads files flush', async () => (await import('../core/org/threads-sync.js')).flushThreadsExports())
   const searchCopy = searchCopyHandle
   await shutdownStep('search copy', () => searchCopy?.stop())
   searchCopyHandle = null
