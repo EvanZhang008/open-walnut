@@ -14,6 +14,7 @@
  */
 import type { StartSource } from '@/api/projects';
 import type { DraftColumn } from './draft-column';
+import { isHomeFolder, tildePath } from '@/utils/home-folder';
 import {
   AUTO_PROVIDER, leaveForFolderPick, projectStartEligible, sourceArrayFields, type ProjectStartMode, type StartSourceRow,
 } from './draft-project-start';
@@ -28,14 +29,14 @@ const LOCAL = '__local__';
 const hostKey = (h: string | null | undefined): string => (!h || h === LOCAL || h === 'local' ? LOCAL : h);
 const trimDir = (p: string): string => (p.length > 1 ? p.replace(/\/+$/, '') : p);
 const under = (dir: string, root: string): boolean => dir === root || dir.startsWith(`${root}/`);
-/** The account-shaped homes and the root: a folder there holds everything, so it names no project. */
-const HOME_ALONE = /^(?:~|\/|\/(?:Users|home)\/[^/]+)$/;
 /** A worktree Walnut made: `<home>/.open-walnut-worktrees/<repo>/<worktree>...` (the `<repo>` folder
  *  itself only holds them, as the phone's twin reads it). */
 const WORKTREES = /^(.*\/\.open-walnut-worktrees\/([^/]+))\/[^/]/;
 
+/** The root or a home folder (the known one, or the account-shaped guess of the one home rule,
+ *  utils/home-folder.ts): a folder there holds everything, so it names no project. */
 function homeAlone(dir: string, home?: string): boolean {
-  return HOME_ALONE.test(dir) || (!!home && dir === trimDir(home));
+  return dir === '/' || isHomeFolder(dir, home) || tildePath(dir) === '~';
 }
 
 function lastName(p: string): string {
