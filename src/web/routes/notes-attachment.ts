@@ -40,7 +40,7 @@
 
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { NOTES_DIR } from '../../constants.js'
+import { normalizeNotePath, resolveNotePath } from '../../core/notes/note-paths.js'
 
 // The attachment-type allowlist lives in notes-v2.ts (ATTACHMENT_MIME) —
 // single source of truth; this module only resolves paths.
@@ -115,22 +115,19 @@ function cleanRawPath(raw: string, { legacyRoot = true, size = true } = {}): str
   // An embed may carry a display size (`![[x.png|300]]`); callers usually strip
   // it, but a raw `![[...]]` inner string reaching here must not be treated as
   // part of the filename.
-  let cleaned = (size ? raw.split('|')[0] : raw).trim().replace(/\\/g, '/').replace(/^\/+/, '')
-  if (!cleaned || cleaned === '.' || cleaned === '..') return null
+  const cleaned = normalizeNotePath(size ? raw.split('|')[0] : raw, { trim: true, refuseDotDot: true })
+  if (!cleaned || cleaned === '.') return null
   // The legacy `Notion/` root is an embed's old spelling only: a markdown image
   // (exact) naming `Notion/x.png` means that folder (2026-11-05 review).
-  if (legacyRoot) cleaned = cleaned.replace(/^Notion\//, '')
-  if (!cleaned) return null
-  if (cleaned.split('/').some((seg) => seg === '..')) return null
-  return cleaned
+  return (legacyRoot ? cleaned.replace(/^Notion\//, '') : cleaned) || null
 }
 
-/** An existing regular file at `relative` under NOTES_DIR, or null. */
+/** An existing regular file at `relative` in the vault, or null. */
 async function statFile(relative: string): Promise<string | null> {
-  const resolved = path.resolve(NOTES_DIR, relative)
   // Containment guard: `path.resolve` collapses any traversal, so this catches
   // an escape even if the segment check above were bypassed.
-  if (resolved !== NOTES_DIR && !resolved.startsWith(NOTES_DIR + path.sep)) return null
+  const resolved = resolveNotePath(relative, { allowRoot: true })
+  if (!resolved) return null
   try {
     const stat = await fsp.stat(resolved)
     return stat.isFile() ? resolved : null

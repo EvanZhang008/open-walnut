@@ -21,6 +21,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import type { ConflictEntry } from './conflict-log.js';
 import type { V2Context, V2Record } from './apply-v2.js';
+import { notesRoot } from '../notes/note-paths.js';
 import { noteRel } from './notes.js';
 import { RefusedWrite } from './patch-check.js';
 import { log } from '../../logging/index.js';
@@ -46,8 +47,7 @@ export async function applyNoteMove(ctx: V2Context, record: V2Record): Promise<v
   const to = typeof record.to === 'string' ? noteRel(record.to) : null;
   if (!from || !to || from === to) throw new RefusedWrite('a note move names no two note paths');
   const noteId = typeof record.noteId === 'string' && record.noteId ? record.noteId : undefined;
-  const constants = await import('../../constants.js');
-  const root = path.resolve(constants.NOTES_DIR);
+  const root = path.resolve(notesRoot());
 
   // Where the note is now: by its id, else at the old path (when that file is not another note).
   let at: string | null = null;

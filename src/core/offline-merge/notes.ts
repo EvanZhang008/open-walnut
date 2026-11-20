@@ -44,6 +44,7 @@
 
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { noteKey, notesRoot } from '../notes/note-paths.js';
 import type { MergeVersion, VersionsResult } from '../../lib/three-way-merge.js';
 import type { ConflictEntry } from './conflict-log.js';
 import {
@@ -70,7 +71,7 @@ export interface NoteRecordLike {
 }
 
 export interface NoteDrainDeps {
-  /** The vault root (NOTES_DIR). */
+  /** The vault root (notesRoot()). */
   root: string;
   /** Where the side table and the merge contexts live (WALNUT_HOME/cache). */
   cacheDir: string;
@@ -118,13 +119,12 @@ function serial<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-/** A vault-relative note path (forward slashes, `.md`), or null when it leaves the vault. */
+/**
+ * A record's vault-relative note path where the note lives now (forward slashes, `.md`),
+ * or null when it leaves the vault (a ".." or empty segment).
+ */
 export function noteRel(raw: string): string | null {
-  let s = String(raw ?? '').split('\\').join('/').replace(/^\.\/+/, '').replace(/^\/+/, '');
-  if (!s) return null;
-  if (!/\.md$/i.test(s)) s += '.md';
-  if (s.split('/').some((seg) => seg === '..' || seg === '')) return null;
-  return s;
+  return noteKey(String(raw ?? ''), { dropDotSlash: true, addMd: true, refuseDotDot: true, refuseEmptySegment: true });
 }
 
 function localStamp(at: number): string {
@@ -492,7 +492,7 @@ export async function macNoteDeps(hostKey: string, conn: { send(cmd: string, par
     import('../../utils/user-file-lock.js'), import('../parse-frontmatter.js'), import('../event-bus.js'),
     import('../notes-indexer.js'), import('../../web/routes/notes-v2.js'), import('../notes-tree.js'),
   ]);
-  const root = path.resolve(constants.NOTES_DIR);
+  const root = path.resolve(notesRoot());
   return {
     root,
     cacheDir: path.join(constants.WALNUT_HOME, 'cache'),

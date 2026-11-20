@@ -13,12 +13,12 @@
 
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { GLOBAL_NOTES_FILE, NOTES_DIR, WALNUT_HOME } from '../constants.js'
+import { GLOBAL_NOTES_FILE, WALNUT_HOME } from '../constants.js'
+import { noteAbs, notesRoot } from './notes/note-paths.js'
 import { log } from '../logging/index.js'
 
 /** Hard-coded legacy paths (no longer referenced by constants) */
 const OLD_ROOT_FILE = path.join(WALNUT_HOME, 'global-notes.md')
-const OLD_NOTES_GLOBAL = path.join(NOTES_DIR, 'global.md')
 
 async function fileExists(p: string): Promise<boolean> {
   try { await fsp.stat(p); return true } catch { return false }
@@ -28,15 +28,16 @@ export async function migrateGlobalNotes(): Promise<void> {
   // Already at target — nothing to do
   if (await fileExists(GLOBAL_NOTES_FILE)) return
 
-  await fsp.mkdir(NOTES_DIR, { recursive: true })
+  await fsp.mkdir(notesRoot(), { recursive: true })
+  const oldNotesGlobal = noteAbs('global.md')
 
   // Pick the best source: prefer root file (most likely to be user-edited),
   // fall back to old notes/global.md from previous migration attempt.
   let source: string | null = null
   if (await fileExists(OLD_ROOT_FILE)) {
     source = OLD_ROOT_FILE
-  } else if (await fileExists(OLD_NOTES_GLOBAL)) {
-    source = OLD_NOTES_GLOBAL
+  } else if (await fileExists(oldNotesGlobal)) {
+    source = oldNotesGlobal
   }
 
   if (!source) return // no legacy files at all
@@ -51,7 +52,7 @@ export async function migrateGlobalNotes(): Promise<void> {
   }
 
   // Clean up old files
-  for (const old of [OLD_ROOT_FILE, OLD_NOTES_GLOBAL]) {
+  for (const old of [OLD_ROOT_FILE, oldNotesGlobal]) {
     try { await fsp.unlink(old) } catch { /* already gone */ }
   }
 }

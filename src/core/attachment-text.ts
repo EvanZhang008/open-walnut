@@ -17,7 +17,7 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { NOTES_DIR } from '../constants.js'
+import { noteAbs, noteRelOf, notesRoot } from './notes/note-paths.js'
 import { ensureHelper, type HelperSpec } from './helper-build.js'
 import { log } from '../logging/index.js'
 import {
@@ -98,7 +98,7 @@ export function scheduleAttachmentExtract(relPath: string): Promise<void> {
 }
 
 async function extractOne(relPath: string): Promise<void> {
-  const abs = path.join(NOTES_DIR, relPath)
+  const abs = noteAbs(relPath)
   let stat: fs.Stats
   try {
     stat = await fsp.stat(abs)
@@ -146,7 +146,7 @@ async function extractOne(relPath: string): Promise<void> {
 
 let backfillStarted = false
 
-/** Recursively collect extractable attachment relpaths under NOTES_DIR. */
+/** Recursively collect extractable attachment relpaths in the vault. */
 async function collectAttachmentPaths(): Promise<string[]> {
   const out: string[] = []
   async function walk(dir: string): Promise<void> {
@@ -159,12 +159,12 @@ async function collectAttachmentPaths(): Promise<string[]> {
       const full = path.join(dir, entry.name)
       if (entry.isDirectory()) await walk(full)
       else {
-        const rel = path.relative(NOTES_DIR, full).replace(/\\/g, '/')
+        const rel = noteRelOf(full)
         if (isExtractableAttachment(rel)) out.push(rel)
       }
     }
   }
-  await walk(NOTES_DIR)
+  await walk(notesRoot())
   return out
 }
 
@@ -184,7 +184,7 @@ export async function backfillAttachments(): Promise<{ queued: number; total: nu
     // missing when it was written — retry now that it may exist).
     if (row && row.status !== 'unavailable') {
       try {
-        const stat = await fsp.stat(path.join(NOTES_DIR, rel))
+        const stat = await fsp.stat(noteAbs(rel))
         if (stat.mtime.toISOString() === row.mtime && stat.size === row.size) continue
       } catch { continue }
     }

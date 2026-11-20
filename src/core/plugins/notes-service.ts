@@ -9,7 +9,7 @@
  */
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { NOTES_DIR } from '../../constants.js'
+import { normalizeNotePath, noteRelOf, notesRoot, resolveNotePath } from '../notes/note-paths.js'
 import { isFollower } from '../server-role.js'
 import { computeContentHash } from '../../utils/file-ops.js'
 
@@ -41,24 +41,18 @@ function routes() {
   return import('../../web/routes/notes-v2.js')
 }
 
+/** A plugin names a note or folder strictly inside the vault: no "." or ".." segment, a trailing "/" allowed. */
+const PLUGIN_PATH_RULES = { dropTrailingSlash: true, refuseDotDot: true, refuseDot: true } as const
+
+/** The plugin's path as the notes routes take it (they resolve and check it again). */
 function clean(rel: string): string {
-  return String(rel ?? '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')
+  return normalizeNotePath(String(rel ?? ''), { dropTrailingSlash: true }) ?? ''
 }
 
 function inside(rel: string): string {
-  const cleaned = clean(rel)
-  if (!cleaned || cleaned.split('/').some((part) => part === '..' || part === '.')) {
-    throw Object.assign(new Error(`Not a path inside the notes vault: ${rel}`), { code: 'invalid_path' })
-  }
-  const full = path.resolve(NOTES_DIR, cleaned)
-  if (!full.startsWith(NOTES_DIR + path.sep)) {
-    throw Object.assign(new Error(`Not a path inside the notes vault: ${rel}`), { code: 'invalid_path' })
-  }
+  const full = resolveNotePath(String(rel ?? ''), PLUGIN_PATH_RULES)
+  if (!full) throw Object.assign(new Error(`Not a path inside the notes vault: ${rel}`), { code: 'invalid_path' })
   return full
-}
-
-function rel(full: string): string {
-  return path.relative(NOTES_DIR, full).replace(/\\/g, '/')
 }
 
 function assertWritable(call: string): void {
@@ -79,12 +73,12 @@ async function walk(dir: string, out: PluginNoteEntry[]): Promise<void> {
     if (entry.name.startsWith('.') || entry.name.startsWith('~$')) continue
     const full = path.join(dir, entry.name)
     if (entry.isDirectory()) {
-      out.push({ path: rel(full), type: 'folder' })
+      out.push({ path: noteRelOf(full), type: 'folder' })
       await walk(full, out)
     } else if (entry.isFile()) {
       const stat = await fsp.stat(full).catch(() => null)
       out.push({
-        path: rel(full),
+        path: noteRelOf(full),
         type: entry.name.endsWith('.md') ? 'note' : 'file',
         ...(stat ? { size: stat.size, modifiedAt: stat.mtime.toISOString() } : {}),
       })
@@ -95,12 +89,12 @@ async function walk(dir: string, out: PluginNoteEntry[]): Promise<void> {
 export function createPluginNotes() {
   return {
     get dir(): string {
-      return NOTES_DIR
+      return notesRoot()
     },
 
     async list(folder?: string): Promise<PluginNoteEntry[]> {
       const out: PluginNoteEntry[] = []
-      await walk(folder ? inside(folder) : NOTES_DIR, out)
+      await walk(folder ? inside(folder) : notesRoot(), out)
       return out
     },
 
@@ -108,7 +102,7 @@ export function createPluginNotes() {
       const full = notePathOf(inside(notePath))
       try {
         const content = await fsp.readFile(full, 'utf8')
-        return { path: rel(full), content, hash: computeContentHash(content) }
+        return { path: noteRelOf(full), content, hash: computeContentHash(content) }
       } catch (error: any) {
         if (error?.code === 'ENOENT' || error?.code === 'EISDIR') return null
         throw error
@@ -117,7 +111,7 @@ export function createPluginNotes() {
 
     async write(notePath: string, content: string, options: { expectedHash?: string; createOnly?: boolean } = {}) {
       assertWritable('write')
-      const target = rel(notePathOf(inside(notePath)))
+      const target = noteRelOf(notePathOf(inside(notePath)))
       const { writeNoteContent } = await routes()
       const result = await writeNoteContent(target, content, options.expectedHash, { createOnly: options.createOnly })
       if (!result.ok) throw new NoteConflictError(target, result.conflict, result.deleted ? 'deleted' : result.exists)
@@ -156,7 +150,7 @@ export function createPluginNotes() {
         const { invalidateAttachmentIndex } = await import('../../web/routes/notes-attachment.js')
         invalidateAttachmentIndex()
       } catch { /* best effort: the resolver rebuilds on its own */ }
-      return { path: rel(full) }
+      return { path: noteRelOf(full) }
     },
 
     async mkdir(folderPath: string): Promise<void> {
@@ -184,9 +178,9 @@ export function createPluginNotes() {
       const { deleteNoteFile, deleteNoteAttachment, deleteNotesFolder } = await routes()
       const stat = await fsp.stat(full).catch(() => null)
       if (!stat) return
-      if (stat.isDirectory()) await deleteNotesFolder(rel(full))
+      if (stat.isDirectory()) await deleteNotesFolder(noteRelOf(full))
       else if (full.endsWith('.md')) await deleteNoteFile(full)
-      else if (stat.isFile()) await deleteNoteAttachment(rel(full))
+      else if (stat.isFile()) await deleteNoteAttachment(noteRelOf(full))
     },
   }
 }

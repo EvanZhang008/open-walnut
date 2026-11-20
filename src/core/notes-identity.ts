@@ -25,7 +25,7 @@
  */
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { NOTES_DIR } from '../constants.js'
+import { noteAbs } from './notes/note-paths.js'
 import { withFileLock } from '../utils/file-lock.js'
 import { withUserFileLock } from '../utils/user-file-lock.js'
 import { computeContentHash } from '../utils/file-ops.js'
@@ -75,7 +75,7 @@ export async function stampAllIds(): Promise<StampAllResult> {
   let stamped = 0
   let skipped = 0
   for (const relPath of relPaths) {
-    const abs = path.join(NOTES_DIR, relPath)
+    const abs = noteAbs(relPath)
     let bytes: string
     try {
       bytes = await withUserFileLock(abs, () => fsp.readFile(abs, 'utf-8'))
@@ -210,7 +210,7 @@ export async function mergeNoteIds(opts: {
   const { loserId, winnerId, loserPath } = opts
   if (loserId === winnerId) return 0
   const rel = loserPath.replace(/\\/g, '/')
-  const abs = path.join(NOTES_DIR, rel)
+  const abs = noteAbs(rel)
   // Re-point inbound edges first (index op — links key on id). repointLinks also
   // drops the loser's own note row + outgoing edges/tags and rewrites ambiguous
   // candidate lists that named the loser.

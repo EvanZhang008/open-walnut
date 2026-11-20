@@ -20,7 +20,7 @@
 import fsp from 'node:fs/promises'
 import fs from 'node:fs'
 import path from 'node:path'
-import { NOTES_DIR } from '../constants.js'
+import { noteAbs, noteRelOf, notesRoot } from './notes/note-paths.js'
 import { bootPolicy } from './boot-policy.js'
 import { withFileLock } from '../utils/file-lock.js'
 import { withUserFileLock } from '../utils/user-file-lock.js'
@@ -197,7 +197,7 @@ async function reconcileSemantic(relPath: string): Promise<void> {
   if (!bootPolicy('notes-semantic')) return
   try {
     const { upsertSearchV2File } = await import('./search/wiring.js')
-    await upsertSearchV2File('note', path.join(NOTES_DIR, relPath))
+    await upsertSearchV2File('note', noteAbs(relPath))
   } catch (err) {
     log.memory.debug('notes-indexer: semantic reconcile failed', {
       path: relPath,
@@ -227,7 +227,7 @@ async function reconcileNoteInternal(
   // event, or a route's reconcileNoteNow, reaches here on the companion too).
   if (!bootPolicy('notes-indexer')) return null
   if (!isIndexableRelPath(relPath)) return null
-  const abs = path.join(NOTES_DIR, relPath)
+  const abs = noteAbs(relPath)
 
   let bytes: string
   let stat: fs.Stats
@@ -459,7 +459,7 @@ export interface RebuildIndexOptions {
   }) => void
 }
 
-/** Recursively collect indexable .md relpaths under NOTES_DIR. Exported for the
+/** Recursively collect indexable .md relpaths in the vault. Exported for the
  * id migration (notes-identity.ts) so it walks the exact same set as a rebuild. */
 export async function collectIndexableNotePaths(): Promise<string[]> {
   const out: string[] = []
@@ -476,12 +476,12 @@ export async function collectIndexableNotePaths(): Promise<string[]> {
       if (entry.isDirectory()) {
         await walk(full)
       } else if (entry.name.endsWith('.md')) {
-        const rel = path.relative(NOTES_DIR, full).replace(/\\/g, '/')
+        const rel = noteRelOf(full)
         if (isIndexableRelPath(rel)) out.push(rel)
       }
     }
   }
-  await walk(NOTES_DIR)
+  await walk(notesRoot())
   return out
 }
 
@@ -610,7 +610,7 @@ export async function scanForDrift(): Promise<{ changed: number; deleted: number
     const row = indexed.get(relPath)
     if (row) {
       try {
-        const stat = await fsp.stat(path.join(NOTES_DIR, relPath))
+        const stat = await fsp.stat(noteAbs(relPath))
         if (stat.mtime.toISOString() === row.modified && stat.size === row.size) continue
       } catch {
         continue // vanished mid-scan — the deletion branch below handles it next boot

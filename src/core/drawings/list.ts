@@ -8,12 +8,11 @@
 
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { NOTES_DIR } from '../../constants.js'
 import { getNotesTree, type TreeNode } from '../notes-tree.js'
 import { isTaskFolder, taskFolderFor, taskIdOfPath, titleOfScenePath, type TaskPlacement } from './paths.js'
 import { isLargeScene, runCodec } from './scene-codec.js'
 import { DrawingInputError, MAX_SCENE_BYTES, SCENE_EXT } from './scene.js'
-import { isInside, vaultReal } from './vault-files.js'
+import { isInside, noteAbs, realNotesRoot } from '../notes/note-paths.js'
 
 export interface DrawingListEntry {
   path: string
@@ -110,9 +109,9 @@ export async function listDrawings(input: { taskId?: unknown; sessionId?: unknow
     if (roots && !roots.some((r) => node.path.startsWith(r))) return
     candidates.push(node.path)
   })
-  const root = await vaultReal()
+  const root = await realNotesRoot()
   const entries = await mapBounded(candidates, LIST_CONCURRENCY, async (rel): Promise<DrawingListEntry | null> => {
-    const abs = path.join(NOTES_DIR, ...rel.split('/'))
+    const abs = noteAbs(rel)
     try {
       const realDir = await fsp.realpath(path.dirname(abs))
       if (realDir !== root && !isInside(realDir, root)) return null

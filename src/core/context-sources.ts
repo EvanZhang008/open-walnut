@@ -165,7 +165,7 @@ async function loadConversationLog(task: Task, budget: number): Promise<string> 
 async function loadJournalRecent(budget: number): Promise<string> {
   const fs = await import('node:fs');
   const path = await import('node:path');
-  const { NOTES_DIR } = await import('../constants.js');
+  const { noteAbs } = await import('./notes/note-paths.js');
 
   // "Dairy" is the actual folder name in the user's Obsidian vault (not a typo for "Diary").
   // Vault went topic-first 2026-08 (PARA retired): journal/ is now top-level.
@@ -180,7 +180,7 @@ async function loadJournalRecent(budget: number): Promise<string> {
   if (copied) {
     for (const e of copied) entries.push(`--- ${e.name.replace('.md', '')} ---\n${e.body.trim()}`);
   } else {
-    const diaryDir = path.join(NOTES_DIR, DIARY);
+    const diaryDir = noteAbs(DIARY);
     let files: string[];
     try {
       files = fs.readdirSync(diaryDir).filter(isEntry).sort().reverse().slice(0, 7);

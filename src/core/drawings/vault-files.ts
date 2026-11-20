@@ -9,28 +9,13 @@ import { constants as fsConstants } from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
-import { NOTES_DIR } from '../../constants.js'
+import { ensureRealNoteDir, realNoteFile, type RealNotePathRefusal } from '../notes/note-paths.js'
 import { DrawingInputError, MAX_SCENE_BYTES } from './scene.js'
 
-export function isInside(child: string, root: string): boolean {
-  const rel = path.relative(root, child)
-  return rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)
-}
-
-export async function vaultReal(): Promise<string> {
-  await fsp.mkdir(NOTES_DIR, { recursive: true })
-  return fsp.realpath(NOTES_DIR)
-}
-
-/** The real path of the nearest existing folder at or above `dir`. */
-async function nearestRealDir(dir: string): Promise<string> {
-  for (let d = dir; ; d = path.dirname(d)) {
-    try {
-      return await fsp.realpath(d)
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT' || path.dirname(d) === d) throw err
-    }
-  }
+const REFUSALS: Record<RealNotePathRefusal, string> = {
+  invalid: 'invalid path',
+  outside: 'path leads outside Notes',
+  linked: 'a linked file is not a drawing Walnut writes',
 }
 
 /**
@@ -38,28 +23,15 @@ async function nearestRealDir(dir: string): Promise<string> {
  * the file itself is a symlink. `rel` is already clean (paths.ts).
  */
 export async function resolveVaultFile(rel: string): Promise<string> {
-  const root = await vaultReal()
-  const abs = path.join(NOTES_DIR, ...rel.split('/'))
-  if (!isInside(abs, NOTES_DIR)) throw new DrawingInputError('invalid path')
-  const realDir = await nearestRealDir(path.dirname(abs))
-  if (realDir !== root && !isInside(realDir, root)) throw new DrawingInputError('path leads outside Notes')
-  try {
-    if ((await fsp.lstat(abs)).isSymbolicLink()) throw new DrawingInputError('a linked file is not a drawing Walnut writes')
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
-  }
-  return abs
+  const placed = await realNoteFile(rel)
+  if (!placed.ok) throw new DrawingInputError(REFUSALS[placed.refused])
+  return placed.abs
 }
 
 /** Make a vault folder, checking that no part of it leads out of the vault. */
 export async function ensureVaultDir(relDir: string): Promise<void> {
-  const root = await vaultReal()
-  const abs = path.join(NOTES_DIR, ...relDir.split('/'))
-  const before = await nearestRealDir(abs)
-  if (before !== root && !isInside(before, root)) throw new DrawingInputError('path leads outside Notes')
-  await fsp.mkdir(abs, { recursive: true })
-  const after = await fsp.realpath(abs)
-  if (!isInside(after, root)) throw new DrawingInputError('path leads outside Notes')
+  const made = await ensureRealNoteDir(relDir)
+  if (!made.ok) throw new DrawingInputError(REFUSALS[made.refused])
 }
 
 export function tempPathFor(abs: string): string {

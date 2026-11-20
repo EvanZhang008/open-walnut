@@ -3,7 +3,7 @@
  * reads, tags, and the two destructive vault deletes. Semantics identical to
  * the internal routes (notes.ts / notes-v2.ts) because both call the SAME
  * extracted operation functions — including the SAME vault-containment guard
- * (resolveSafePath: traversal-rejecting, NOTES_DIR-confined).
+ * (resolveNotePath in core/notes/note-paths.ts: traversal-rejecting, vault-confined).
  *
  *   GET    /notes/global                  → { content, contentHash }
  *   PUT    /notes/global { content, expectedHash? } → { ok, contentHash } (409 + currentHash on conflict)

@@ -27,6 +27,7 @@
  */
 
 import { log } from '../logging/index.js'
+import { noteKey } from './notes/note-paths.js'
 import { COMPANION_REPLICA_HOME, companionCopyHolds, companionHostReplica, setCompanionCopyJournalView } from './companion-host-replica.js'
 import { companionJournalBlobBody, companionJournalRecords, journalNote, macDrains } from './companion-journal.js'
 import type { JournalRecord } from '../providers/offline-journal-core.js'
@@ -43,13 +44,14 @@ type ShownNote = { body: string; h: string; n: number; m?: Record<string, unknow
 const awaited = new Map<string, { ackAt: number; at: number; shown: ShownNote | null }>()
 let memo: { sig: string; view: Map<string, ShownNote | null> } | null = null
 
-/** A vault-relative note key (`x.md`), or null for a path that is not one. */
+/** A companion note key: no hidden, empty or ".." segment, no control character, at most 1024 characters. */
+const COMPANION_NOTE_KEY_RULES = {
+  trim: true, dropDotSlash: true, addMd: true, refuseDotDot: true, refuseEmptySegment: true, refuseHidden: true, refuseControl: true, maxLength: 1024,
+} as const
+
+/** A vault-relative note key (`x.md`) where the note lives now, or null for a path that is not one. */
 export function noteKeyOf(raw: unknown): string | null {
-  let s = typeof raw === 'string' ? raw.trim().split('\\').join('/').replace(/^\.\/+/, '').replace(/^\/+/, '') : ''
-  if (!s || /[\u0000-\u001f\u007f]/.test(s)) return null
-  if (!/\.md$/i.test(s)) s += '.md'
-  if (s.split('/').some((seg) => seg === '..' || seg === '' || seg.startsWith('.'))) return null
-  return s.length > 1024 ? null : s
+  return noteKey(typeof raw === 'string' ? raw : '', COMPANION_NOTE_KEY_RULES)
 }
 
 function frontmatterId(body: string): string | undefined {

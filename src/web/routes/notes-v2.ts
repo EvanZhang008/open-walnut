@@ -15,7 +15,7 @@ import { createHash } from 'node:crypto'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { PARTIAL_SEARCH, replicaNotesReads } from '../../replica/notes-routes.js'
 import { companionNoteWrites } from '../../replica/companion-note-writes.js'
-import { NOTES_DIR } from '../../constants.js'
+import { noteRelOf, notesRoot, resolveNotePath } from '../../core/notes/note-paths.js'
 import { companionSearchReady } from '../../core/search/companion-ready.js'
 import { isFollower } from '../../core/server-role.js'
 import { computeContentHash } from '../../utils/file-ops.js'
@@ -186,24 +186,7 @@ export function scheduleNotesWarmup(delayMs?: number): () => void {
 
 /** Ensure notes dir exists */
 export async function ensureNotesDir(): Promise<void> {
-  await fsp.mkdir(NOTES_DIR, { recursive: true })
-}
-
-/** Resolve and validate a note path — prevent directory traversal */
-export function resolveSafePath(relativePath: string): string | null {
-  const cleaned = relativePath.replace(/\\/g, '/').replace(/^\/+/, '')
-  if (!cleaned || cleaned === '.' || cleaned === '..') return null
-  const resolved = path.resolve(NOTES_DIR, cleaned)
-  // Must be strictly inside NOTES_DIR (not NOTES_DIR itself)
-  if (!resolved.startsWith(NOTES_DIR + path.sep)) {
-    return null
-  }
-  return resolved
-}
-
-/** Vault-relative, forward-slash, .md-suffixed path from an absolute path. */
-export function toRelPath(absPath: string): string {
-  return path.relative(NOTES_DIR, absPath).replace(/\\/g, '/')
+  await fsp.mkdir(notesRoot(), { recursive: true })
 }
 
 /** Extract wildcard path param — Express 5 returns arrays for *name params */
@@ -329,7 +312,7 @@ const MAX_ATTACHMENT_SIZE = MAX_SERVED_ATTACHMENT_BYTES // 50 MB (mirror local-i
  * embedding note) only breaks remaining ties by proximity.
  *
  * resolveAttachmentPath enforces the same traversal/escape guard + NOTES_DIR
- * containment as resolveSafePath, and only returns an existing regular file.
+ * containment as resolveNotePath, and only returns an existing regular file.
  */
 export async function readNoteAttachment(raw: unknown, notePath?: unknown, exactParam?: unknown, decodeParam?: unknown): Promise<{
   buffer: Buffer
@@ -433,7 +416,7 @@ notesV2Router.get('/attachment', async (req: Request, res: Response, next: NextF
 // Walnut's server runs on the SAME Mac as the browser (localhost console), so
 // "Open in Finder / Word / VS Code" is a local `open` spawn. 'path' only
 // resolves and returns the absolute path (for Copy path — clipboard lives in
-// the browser). Path is vault-contained (resolveSafePath /
+// the browser). Path is vault-contained (resolveNotePath /
 // resolveAttachmentPath) — never arbitrary.
 // Local-only: rejected on any replica, where there's no desktop of the person's to open into.
 notesV2Router.post('/reveal', async (req: Request, res: Response, next: NextFunction) => {
@@ -444,10 +427,10 @@ notesV2Router.post('/reveal', async (req: Request, res: Response, next: NextFunc
       res.status(400).json({ error: 'path and mode (finder|app|vscode|path) are required' })
       return
     }
-    // Folders resolve via resolveSafePath; files may also match by basename
+    // Folders resolve via resolveNotePath; files may also match by basename
     // (attachment fallback) — try the strict resolver first.
     let isDir = false
-    let fullPath = resolveSafePath(notePath)
+    let fullPath = resolveNotePath(notePath)
     if (fullPath) {
       try { isDir = (await fsp.stat(fullPath)).isDirectory() } catch { fullPath = null }
     }
@@ -521,7 +504,7 @@ export function planNoteAttachment(
   if (!ext) throw new NotesOpError(`Unsupported media type: ${mediaType}`, 400)
   if (data.length > MAX_UPLOAD_BASE64) throw new NotesOpError('Image too large (max 10MB base64)', 413)
 
-  const fullPath = resolveSafePath(notePath)
+  const fullPath = resolveNotePath(notePath)
   if (!fullPath) throw new NotesOpError('invalid path', 400)
   const noteFile = fullPath.endsWith('.md') ? fullPath : fullPath + '.md'
 
@@ -540,7 +523,7 @@ export function planNoteAttachment(
   const hash = createHash('sha256').update(buffer).digest('hex').slice(0, 6)
   const filename = `pasted-image-${ts}-${hash}.${ext}`
   const filePath = path.join(path.dirname(noteFile), '_attachment', filename)
-  return { filePath, relPath: toRelPath(filePath), filename, buffer }
+  return { filePath, relPath: noteRelOf(filePath), filename, buffer }
 }
 
 /**
@@ -555,7 +538,7 @@ export async function saveNoteAttachment(
   await fsp.mkdir(path.dirname(filePath), { recursive: true })
   await fsp.writeFile(filePath, buffer)
 
-  const relPath = toRelPath(filePath)
+  const relPath = noteRelOf(filePath)
   // The resolver's vault index must see the new file immediately: the editor
   // inserts the embed and fetches it in the same breath.
   invalidateAttachmentIndex()
@@ -591,7 +574,7 @@ notesV2Router.get('/content/*path', async (req: Request, res: Response, next: Ne
     const notePath = getWildcardPath(req)
     if (!notePath) { res.status(400).json({ error: 'path required' }); return }
 
-    const fullPath = resolveSafePath(notePath)
+    const fullPath = resolveNotePath(notePath)
     if (!fullPath) { res.status(400).json({ error: 'invalid path' }); return }
 
     // Ensure .md extension
@@ -618,7 +601,7 @@ notesV2Router.get('/content/*path', async (req: Request, res: Response, next: Ne
     const contentHash = computeContentHash(content)
     // id from frontmatter (authoritative), falling back to the index if known.
     const { data } = parseFrontmatter(content)
-    const relPath = toRelPath(filePath)
+    const relPath = noteRelOf(filePath)
     const id = readId(data) ?? getNoteIdByPath(relPath)
     res.json({ content, updatedAt, contentHash, ...(id ? { id } : {}) })
   } catch (err) {
@@ -646,7 +629,7 @@ export async function writeNoteContent(
   ensureIndexBootstrap()
   if (typeof content !== 'string') throw new NotesOpError('content (string) is required', 400)
   if (content.length > MAX_NOTE_SIZE) throw new NotesOpError(`Content too large (max ${MAX_NOTE_SIZE} bytes)`, 413)
-  const fullPath = resolveSafePath(notePath)
+  const fullPath = resolveNotePath(notePath)
   if (!fullPath) throw new NotesOpError('invalid path', 400)
   const filePath = fullPath.endsWith('.md') ? fullPath : fullPath + '.md'
   const expected = typeof expectedHash === 'string' && expectedHash ? expectedHash : undefined
@@ -720,7 +703,7 @@ export async function writeNoteContent(
   log.memory.info('Note updated', { path: notePath, size: finalContent.length })
   // source format `notes/{path}` is a shared contract with files-tools.ts and useNoteContent.ts
   bus.emit(EventNames.NOTES_UPDATED, { source: `notes/${normalizedPath}`, contentHash }, ['web-ui'])
-  return { ok: true, path: toRelPath(filePath), updatedAt: stat.mtime.toISOString(), contentHash, id: id as string, created }
+  return { ok: true, path: noteRelOf(filePath), updatedAt: stat.mtime.toISOString(), contentHash, id: id as string, created }
 }
 
 // PUT /api/notes-v2/content/*path — create/update note. Stamps id at create time.
@@ -755,7 +738,7 @@ notesV2Router.delete('/content/*path', async (req: Request, res: Response, next:
     const notePath = getWildcardPath(req)
     if (!notePath) { res.status(400).json({ error: 'path required' }); return }
 
-    const fullPath = resolveSafePath(notePath)
+    const fullPath = resolveNotePath(notePath)
     if (!fullPath) { res.status(400).json({ error: 'invalid path' }); return }
 
     const filePath = fullPath.endsWith('.md') ? fullPath : fullPath + '.md'
@@ -777,7 +760,7 @@ notesV2Router.delete('/content/*path', async (req: Request, res: Response, next:
  * away (core/offline-merge/notes.ts). False when the note was not there.
  */
 export async function deleteNoteFile(filePath: string): Promise<boolean> {
-  const relPath = toRelPath(filePath)
+  const relPath = noteRelOf(filePath)
   try {
     await fsp.unlink(filePath)
   } catch (err: any) {
@@ -786,8 +769,9 @@ export async function deleteNoteFile(filePath: string): Promise<boolean> {
   }
   // Try to remove empty parent directories
   try {
+    const root = notesRoot()
     let dir = path.dirname(filePath)
-    while (dir !== NOTES_DIR && dir.startsWith(NOTES_DIR)) {
+    while (dir !== root && dir.startsWith(root)) {
       const entries = await fsp.readdir(dir)
       if (entries.length > 0) break
       await fsp.rmdir(dir)
@@ -809,7 +793,7 @@ export async function deleteNoteFile(filePath: string): Promise<boolean> {
  */
 export async function deleteNoteAttachment(relPath: unknown): Promise<{ ok: true }> {
   if (typeof relPath !== 'string' || !relPath) throw new NotesOpError('path required', 400)
-  const fullPath = resolveSafePath(relPath)
+  const fullPath = resolveNotePath(relPath)
   if (!fullPath || fullPath.endsWith('.md')) throw new NotesOpError('invalid path', 400)
   const drawing = isDrawingScene(fullPath)
   try {
@@ -822,13 +806,13 @@ export async function deleteNoteAttachment(relPath: unknown): Promise<{ ok: true
   // A drawing's companion note (only one Walnut made for it) goes with it.
   if (drawing) {
     const { deleteDrawingCompanion } = await import('../../core/drawings/companion-sync.js')
-    await deleteDrawingCompanion(toRelPath(fullPath), (abs) => deleteNoteFile(abs))
+    await deleteDrawingCompanion(noteRelOf(fullPath), (abs) => deleteNoteFile(abs))
     const { deleteNarration } = await import('../../core/drawings/narration-store.js')
-    await deleteNarration(toRelPath(fullPath))
+    await deleteNarration(noteRelOf(fullPath))
   }
   try {
     const { deleteAttachmentText } = await import('../../core/notes-index.js')
-    deleteAttachmentText(toRelPath(fullPath))
+    deleteAttachmentText(noteRelOf(fullPath))
   } catch { /* best-effort */ }
   // Drop the resolver's index so a deleted file can't keep answering requests
   // (it would then 404 at the stat, but only after picking it over a live copy).
@@ -863,9 +847,9 @@ export async function deleteNotesFolder(folderPath: unknown): Promise<{ ok: true
   ensureIndexBootstrap()
   if (typeof folderPath !== 'string' || !folderPath) throw new NotesOpError('path required', 400)
 
-  const fullPath = resolveSafePath(folderPath)
-  // Root guard: resolveSafePath('') maps to NOTES_DIR itself — never rm that.
-  if (!fullPath || path.resolve(fullPath) === path.resolve(NOTES_DIR)) {
+  const fullPath = resolveNotePath(folderPath)
+  // Root guard: never rm the vault itself (resolveNotePath already refuses it).
+  if (!fullPath || path.resolve(fullPath) === path.resolve(notesRoot())) {
     throw new NotesOpError('invalid path', 400)
   }
 
@@ -880,7 +864,7 @@ export async function deleteNotesFolder(folderPath: unknown): Promise<{ ok: true
 
   // Snapshot contained notes BEFORE rm so we can reconcile their index rows
   // (the post-delete reconcile hits the ENOENT branch per note).
-  const relPrefix = toRelPath(fullPath).replace(/\/+$/, '') + '/'
+  const relPrefix = noteRelOf(fullPath).replace(/\/+$/, '') + '/'
   const containedNotes: string[] = []
   const collect = async (dir: string): Promise<void> => {
     let entries
@@ -888,7 +872,7 @@ export async function deleteNotesFolder(folderPath: unknown): Promise<{ ok: true
     for (const e of entries) {
       const full = path.join(dir, e.name)
       if (e.isDirectory()) await collect(full)
-      else if (e.name.endsWith('.md')) containedNotes.push(toRelPath(full))
+      else if (e.name.endsWith('.md')) containedNotes.push(noteRelOf(full))
     }
   }
   await collect(fullPath)
@@ -942,8 +926,8 @@ export async function moveNote(from: unknown, to: unknown): Promise<{ ok: true }
     throw new NotesOpError('from and to (strings) are required', 400)
   }
 
-  const fromFull = resolveSafePath(from)
-  const toFull = resolveSafePath(to)
+  const fromFull = resolveNotePath(from)
+  const toFull = resolveNotePath(to)
   if (!fromFull || !toFull) throw new NotesOpError('invalid path', 400)
 
   // Attachments (png/pdf/docx/…) move verbatim; only NOTE paths get the
@@ -978,8 +962,8 @@ export async function moveNote(from: unknown, to: unknown): Promise<{ ok: true }
   else await fsp.rename(fromFile, toFile)
   invalidateNotesTree()
 
-  const fromRel = toRelPath(fromFile)
-  const toRel = toRelPath(toFile)
+  const fromRel = noteRelOf(fromFile)
+  const toRel = noteRelOf(toFile)
   if (isDrawingScene(fromFile) && isDrawingScene(toFile)) await followMovedDrawingCompanion(fromRel, toRel)
   // Index bookkeeping is notes-only (attachments aren't in the structural index, and reconciling
   // a binary file would just churn); a bookmark follows its note either way.
@@ -1217,7 +1201,7 @@ export function makeSnippet(
  * Falls back to the relPath as the dedupe key only if the note is unindexed.
  */
 function idFromAbsPath(filepath: string): string {
-  let rel = path.relative(NOTES_DIR, filepath).replace(/\\/g, '/')
+  let rel = noteRelOf(filepath)
   if (rel.startsWith('..')) rel = filepath.replace(/\\/g, '/') // not under vault
   const id = findNoteIdByRelPath(rel)
   return id ?? rel
@@ -1428,7 +1412,7 @@ async function performNotesSearchInner(opts: {
       for (const h of semanticSettled.value) {
         // Folder exclusion for the semantic leg: the index stores absolute
         // paths, so filter on the vault-relative form (JS mirror of the SQL filter).
-        const relForFilter = path.relative(NOTES_DIR, h.filepath).replace(/\\/g, '/')
+        const relForFilter = noteRelOf(h.filepath)
         if (isPathExcluded(relForFilter, excludeFolders)) continue
         // v2 bands from COSINE, not the leg's additive score: the additive mix
         // re-counts keyword evidence the string leg already banded (a body-
@@ -1623,9 +1607,9 @@ interface BacklinkResult {
 export async function getNoteBacklinks(notePath: unknown): Promise<{ backlinks: BacklinkResult[] }> {
   ensureIndexBootstrap()
   if (typeof notePath !== 'string' || !notePath) throw new NotesOpError('path required', 400)
-  const fullPath = resolveSafePath(notePath)
+  const fullPath = resolveNotePath(notePath)
   if (!fullPath) throw new NotesOpError('invalid path', 400)
-  const relPath = toRelPath(fullPath.endsWith('.md') ? fullPath : fullPath + '.md')
+  const relPath = noteRelOf(fullPath.endsWith('.md') ? fullPath : fullPath + '.md')
 
   let dstId = getNoteIdByPath(relPath)
   if (!dstId) {
@@ -1673,9 +1657,9 @@ export function getNoteForwardLinks(notePath: unknown): {
 } {
   ensureIndexBootstrap()
   if (typeof notePath !== 'string' || !notePath) throw new NotesOpError('path required', 400)
-  const fullPath = resolveSafePath(notePath)
+  const fullPath = resolveNotePath(notePath)
   if (!fullPath) throw new NotesOpError('invalid path', 400)
-  const relPath = toRelPath(fullPath.endsWith('.md') ? fullPath : fullPath + '.md')
+  const relPath = noteRelOf(fullPath.endsWith('.md') ? fullPath : fullPath + '.md')
 
   const srcId = getNoteIdByPath(relPath)
   const links = srcId
@@ -1724,7 +1708,7 @@ notesV2Router.get('/links/*path', async (req: Request, res: Response, next: Next
  */
 export async function createNotesFolder(folderPath: unknown): Promise<{ ok: true }> {
   if (typeof folderPath !== 'string') throw new NotesOpError('path (string) is required', 400)
-  const fullPath = resolveSafePath(folderPath)
+  const fullPath = resolveNotePath(folderPath)
   if (!fullPath) throw new NotesOpError('invalid path', 400)
   await fsp.mkdir(fullPath, { recursive: true })
   invalidateNotesTree()
@@ -1766,10 +1750,10 @@ export async function listNotesFlat(): Promise<{ notes: Array<{ id: string; titl
   }
   // Index empty (cold start before first rebuild) — fall back to a file walk so
   // [[ autocomplete works immediately; ids fill in once the index settles.
-  const allFiles = await getAllMdFilesFallback(NOTES_DIR)
+  const allFiles = await getAllMdFilesFallback(notesRoot())
   return {
     notes: allFiles.map((f) => {
-      const relPath = toRelPath(f)
+      const relPath = noteRelOf(f)
       const name = path.basename(relPath, '.md')
       return { id: '', title: name, path: relPath, name }
     }),
@@ -1800,12 +1784,12 @@ export async function resolveNoteRef(
   if (byId) return { id: raw, path: byId, title: null, matchedBy: 'id' }
 
   // 2. A real file at that path (index-independent, so it works cold too).
-  const fullPath = resolveSafePath(raw)
+  const fullPath = resolveNotePath(raw)
   if (!fullPath) throw new NotesOpError('invalid path', 400)
   const filePath = fullPath.endsWith('.md') ? fullPath : fullPath + '.md'
   try {
     await fsp.stat(filePath)
-    const relPath = toRelPath(filePath)
+    const relPath = noteRelOf(filePath)
     return { id: getNoteIdByPath(relPath) ?? null, path: relPath, title: null, matchedBy: 'path' }
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
@@ -1886,7 +1870,7 @@ export async function renameNoteTag(rawFrom: unknown, rawTo: unknown): Promise<{
   const { renameTagInContent } = await import('../../core/note-tag-rename.js')
 
   for (const relPath of paths) {
-    const abs = resolveSafePath(relPath)
+    const abs = resolveNotePath(relPath)
     if (!abs) continue
     const filePath = abs.endsWith('.md') ? abs : abs + '.md'
     const wrote = await withUserFileLock(filePath, async () => {

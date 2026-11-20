@@ -22,6 +22,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import type { ConflictEntry } from './conflict-log.js';
 import type { V2Context, V2Record } from './apply-v2.js';
+import { normalizeNotePath, noteRelOf, resolveNotePath } from '../notes/note-paths.js';
 import { RefusedWrite } from './patch-check.js';
 import { log } from '../../logging/index.js';
 
@@ -79,19 +80,18 @@ export async function place(abs: string, bytes: Buffer): Promise<{ at: string; c
 }
 
 export async function applyNoteAttachment(ctx: V2Context, record: V2Record): Promise<void> {
-  const rel = typeof record.path === 'string' ? record.path.split('\\').join('/').replace(/^\/+/, '') : '';
-  if (!rel || rel.split('/').some((seg) => seg === '' || seg === '.' || seg === '..')) throw new RefusedWrite('a picture saved while away names no vault path');
+  const rel = normalizeNotePath(typeof record.path === 'string' ? record.path : '', { refuseDotDot: true, refuseDot: true, refuseEmptySegment: true });
+  if (!rel) throw new RefusedWrite('a picture saved while away names no vault path');
   const { isAttachmentFile } = await import('../notes-tree.js');
   if (!isAttachmentFile(path.posix.basename(rel))) throw new RefusedWrite(`a picture saved while away is not a picture or file (${rel})`);
   if (typeof record.oursBlob !== 'string' || !record.oursBlob) throw new RefusedWrite('a picture saved while away without its bytes');
   if (!ctx.conn) throw new Error('a picture record needs its host link for the bytes');
-  const notes = await import('../../web/routes/notes-v2.js');
-  const abs = notes.resolveSafePath(rel);
+  const abs = resolveNotePath(rel);
   if (!abs || abs.endsWith('.md')) throw new RefusedWrite(`a picture saved while away has an invalid path (${rel})`);
   const { fetchOfflineBlob } = await import('./blob.js');
   const bytes = await fetchOfflineBlob(ctx.conn, record.oursBlob);
   const placed = await place(abs, bytes);
-  const at = notes.toRelPath(placed.at);
+  const at = noteRelOf(placed.at);
   if (placed.copy) {
     const entry: ConflictEntry = {
       kind: 'note', seq: record.seq, ...(record.opId ? { opId: record.opId } : {}), recordKind: 'note-attachment',

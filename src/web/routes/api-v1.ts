@@ -34,7 +34,7 @@ import { VALID_PRIORITIES, type ChatEntry, type TaskPhase, type TaskPriority } f
 import { focusTierMatches } from '../../core/task-query.js'
 import { parseSearchPromptMessage } from '../../core/task-search-transcript.js'
 import { VALID_PHASES } from '../../core/phase.js'
-import { CLOUD_MODE, LOG_DIR, NOTES_DIR } from '../../constants.js'
+import { CLOUD_MODE, LOG_DIR } from '../../constants.js'
 import * as chatHistory from '../../core/chat-history.js'
 import { answerJoin, closeJoin, joinedReceiptOf, offerJoin, openJoin, type JoinOffer } from './api-v1-join.js'
 import { listConversations, createConversation } from '../../core/conversations.js'
@@ -55,11 +55,10 @@ import { scheduleNotesIndexUpdate } from '../../core/notes-indexer.js'
 import {
   ensureIndexBootstrap,
   ensureNotesDir,
-  resolveSafePath,
-  toRelPath,
   getWildcardPath,
   MAX_NOTE_SIZE,
 } from './notes-v2.js'
+import { noteRelOf, resolveNotePath } from '../../core/notes/note-paths.js'
 import { getNotesTree, invalidateNotesTree } from '../../core/notes-tree.js'
 import { emitSse as emitChannelSse, attachSse, closeAllSseChannels } from '../sse-channels.js'
 import { armLateMirror, mirrorRelayedChatFrame, relayChatTurnToPrimary } from './chat-turn-relay.js'
@@ -4560,7 +4559,7 @@ apiV1Router.get('/notes/content/*path', async (req: Request, res: Response, next
   try {
     const notePath = getWildcardPath(req)
     if (!notePath) { sendError(res, 400, 'bad_request', 'path required'); return }
-    const fullPath = resolveSafePath(notePath)
+    const fullPath = resolveNotePath(notePath)
     if (!fullPath) { sendError(res, 400, 'bad_request', 'invalid path'); return }
     const filePath = fullPath.endsWith('.md') ? fullPath : fullPath + '.md'
 
@@ -4606,7 +4605,7 @@ async function writeNote(filePath: string, notePath: string, content: string): P
   const normalizedPath = notePath.replace(/\.md$/, '')
   // source format `notes/{path}` is a shared contract with files-tools.ts / useNoteContent.ts
   bus.emit(EventNames.NOTES_UPDATED, { source: `notes/${normalizedPath}`, contentHash }, ['web-ui'])
-  scheduleNotesIndexUpdate(toRelPath(filePath))
+  scheduleNotesIndexUpdate(noteRelOf(filePath))
   return { contentHash, updatedAt: stat.mtime.toISOString() }
 }
 
@@ -4625,7 +4624,7 @@ apiV1Router.put('/notes/content/*path', async (req: Request, res: Response, next
       sendError(res, 413, 'too_large', `Content too large (max ${MAX_NOTE_SIZE} bytes)`)
       return
     }
-    const fullPath = resolveSafePath(notePath)
+    const fullPath = resolveNotePath(notePath)
     if (!fullPath) { sendError(res, 400, 'bad_request', 'invalid path'); return }
     const filePath = fullPath.endsWith('.md') ? fullPath : fullPath + '.md'
 
@@ -4687,7 +4686,7 @@ apiV1Router.post('/notes', async (req: Request, res: Response, next: NextFunctio
       sendError(res, 413, 'too_large', `Content too large (max ${MAX_NOTE_SIZE} bytes)`)
       return
     }
-    const fullPath = resolveSafePath(notePath)
+    const fullPath = resolveNotePath(notePath)
     if (!fullPath) { sendError(res, 400, 'bad_request', 'invalid path'); return }
     const filePath = fullPath.endsWith('.md') ? fullPath : fullPath + '.md'
 
@@ -4712,7 +4711,7 @@ apiV1Router.post('/notes', async (req: Request, res: Response, next: NextFunctio
     invalidateNotesTree()
     const { contentHash, updatedAt } = created
     log.memory.info('Note created via api-v1', { path: notePath })
-    res.status(201).json({ path: toRelPath(filePath), contentHash, updatedAt })
+    res.status(201).json({ path: noteRelOf(filePath), contentHash, updatedAt })
   } catch (err) {
     next(err)
   }
@@ -4728,7 +4727,7 @@ apiV1Router.delete('/notes/*path', async (req: Request, res: Response, next: Nex
     if (notePath && /^(attachment|folder)\//.test(notePath)) { next(); return }
     ensureIndexBootstrap()
     if (!notePath) { sendError(res, 400, 'bad_request', 'path required'); return }
-    const fullPath = resolveSafePath(notePath)
+    const fullPath = resolveNotePath(notePath)
     if (!fullPath) { sendError(res, 400, 'bad_request', 'invalid path'); return }
     const filePath = fullPath.endsWith('.md') ? fullPath : fullPath + '.md'
 
@@ -4741,7 +4740,7 @@ apiV1Router.delete('/notes/*path', async (req: Request, res: Response, next: Nex
       }
       throw err
     }
-    scheduleNotesIndexUpdate(toRelPath(filePath))
+    scheduleNotesIndexUpdate(noteRelOf(filePath))
     log.memory.info('Note deleted via api-v1', { path: notePath })
     res.json({ ok: true })
   } catch (err) {
