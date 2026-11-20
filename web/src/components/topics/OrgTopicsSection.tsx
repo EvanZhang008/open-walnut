@@ -7,8 +7,8 @@
  */
 import { shortAgo } from '@/components/org/OrgChannelList';
 import type { TopicSummary } from '@/api/topics';
-import { openTopics, topicKey } from './topic-model';
-import { StackedAvatars } from './TopicAvatars';
+import { openTopics, shortName, topicKey } from './topic-model';
+import { GroupAvatar } from './TopicAvatars';
 import { NewTopicButton } from './topic-entry';
 import { useTopicsOn } from './topics-flag';
 import { useTopicList } from './useTopics';
@@ -41,7 +41,7 @@ export function OrgTopicsSection({ topics, selectedKey, now, onSelect }: {
     <div className="org-topics" role="group" aria-label="Topics" data-testid="org-topics" data-count={rows.length}>
       <div className="org-list-section org-topics-head" role="presentation" data-testid="org-topics-head">
         <span>Topics · {rows.length}</span>
-        <NewTopicButton testId="org-topic-new" className="org-topics-new" />
+        <NewTopicButton testId="org-topic-new" className="topic-ghost-btn org-topics-new" iconOnly />
       </div>
       {error && <p className="org-empty-note" data-testid="org-topics-error">{error}</p>}
       {rows.map((t) => {
@@ -62,14 +62,14 @@ export function OrgTopicsSection({ topics, selectedKey, now, onSelect }: {
               title={t.title}
               onClick={() => onSelect(key)}
             >
-              <StackedAvatars members={t.members} size={20} max={3} />
+              <GroupAvatar members={t.members} size={34} />
               <span className="org-channel-mid">
                 <span className="org-channel-top">
                   <span className="org-channel-name">{t.title}</span>
                   <span className="org-channel-time">{shortAgo(at, now)}</span>
                 </span>
                 <span className="org-channel-latest" data-testid="org-topic-last">
-                  {t.last ? `${t.last.author}: ${t.last.text}` : 'No messages yet'}
+                  {t.last ? `${shortName(t.last.author)}: ${t.last.text}` : 'No messages yet'}
                 </span>
               </span>
             </button>

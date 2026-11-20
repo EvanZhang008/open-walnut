@@ -56,14 +56,39 @@ export function MemberAvatar({ who, size = 30 }: { who: Who; size?: number }) {
   );
 }
 
-/** Up to four members, overlapping, the host first; "+N" for the rest. */
-export function StackedAvatars({ members, size = 22, max = 4, testId = 'topic-stack' }: {
+/**
+ * A topic's own picture in a list row, the size of a node's avatar there: the host's avatar up and
+ * to the left, the next member's down and to the right over it (the way a group chat's row is drawn).
+ */
+export function GroupAvatar({ members, size = 34, testId = 'topic-group-avatar' }: {
+  members: ReadonlyArray<Pick<TopicMember, 'id' | 'name' | 'ref' | 'role' | 'status'>>;
+  size?: number;
+  testId?: string;
+}) {
+  const { shown } = stackedAvatars(members, 2);
+  const inner = Math.round(size * 0.68);
+  return (
+    <span className="topic-group-avatar" data-testid={testId} data-count={shown.length} style={{ width: size, height: size }}
+      title={members.filter((m) => m.status !== 'left').map((m) => m.name).join(', ')}>
+      {shown.map((m, i) => (
+        <span key={m.id} className={`topic-group-avatar-slot is-${i === 0 ? 'back' : 'front'}`}>
+          <MemberAvatar who={{ name: m.name, ref: m.ref }} size={shown.length === 1 ? size : inner} />
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/** Up to four members, overlapping, the host first; "+N" for the rest unless `noMore` (a count is beside it). */
+export function StackedAvatars({ members, size = 22, max = 4, testId = 'topic-stack', noMore = false }: {
   members: ReadonlyArray<Pick<TopicMember, 'id' | 'name' | 'ref' | 'role' | 'status'>>;
   size?: number;
   max?: number;
   testId?: string;
+  noMore?: boolean;
 }) {
-  const { shown, more } = stackedAvatars(members, max);
+  const { shown, more: extra } = stackedAvatars(members, max);
+  const more = noMore ? 0 : extra;
   return (
     <span className="topic-stack" data-testid={testId} data-count={shown.length + more} title={members.filter((m) => m.status !== 'left').map((m) => m.name).join(', ')}>
       {shown.map((m) => <MemberAvatar key={m.id} who={{ name: m.name, ref: m.ref }} size={size} />)}

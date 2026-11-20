@@ -6,6 +6,7 @@
  */
 import { useMemo, useRef, useState } from 'react';
 import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
+import { ICON_PLUS } from '@/components/common/Icons';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import type { PickedMember } from './topic-dialogs';
 import { useMemberCandidates } from './member-candidates';
@@ -108,8 +109,8 @@ export function MemberPicker({ picked, onChange, host, onHost, exclude, autoFocu
           <p className="topic-muted">They get the topic by email and can reply to it. Nothing is mailed until you send a message.</p>
         </div>
       ) : (
-        <button type="button" className="topic-link-btn" data-testid="topic-add-person" onClick={() => setPerson({ name: '', email: query.trim() && isEmail(query) ? query.trim() : '', bot: false })}>
-          + Add a person by email
+        <button type="button" className="topic-add-row" data-testid="topic-add-person" onClick={() => setPerson({ name: '', email: query.trim() && isEmail(query) ? query.trim() : '', bot: false })}>
+          <span className="topic-add-row-icon" aria-hidden="true">{ICON_PLUS}</span>Add a person by email
         </button>
       )}
     </div>

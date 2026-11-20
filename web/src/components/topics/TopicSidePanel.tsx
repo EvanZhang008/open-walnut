@@ -12,14 +12,22 @@ import { useMemo, useState, type RefObject } from 'react';
 import type { Topic } from '@/api/topics';
 import { useConfirm } from '@/hooks/useConfirm';
 import { AgentText } from '@/components/common/AgentText';
+import { ICON_CLOSE, ICON_PLUS } from '@/components/common/Icons';
 import { useOrgThreads } from '@/components/org/useOrgThreads';
 import type { PickedMember } from './topic-dialogs';
 import { MemberPicker } from './MemberPicker';
-import { ROUND_WAKES, activePersonEmails, mailboxConfirm, memberStatusLabel, personEmails, personMailConfirm, refKey } from './topic-model';
+import { nameContext, shortName, ROUND_WAKES, activePersonEmails, mailboxConfirm, memberStatusLabel, personEmails, personMailConfirm, refKey } from './topic-model';
 import { TopicMailFrom } from './TopicMailFrom';
 import { mailboxWords, useMailAccounts } from './useMailAccounts';
 import { MemberAvatar } from './TopicAvatars';
 import type { TopicActions } from './useTopics';
+
+/** Under a member's name: its status when it is news (Host, Replying, Waiting for your yes), then its project, or a person's email. */
+function memberLine(m: Topic['members'][number]): string {
+  const label = memberStatusLabel(m);
+  const parts = [label === 'Member' ? '' : label, nameContext(m.name), m.ref.kind === 'person' ? `${m.ref.email}${m.ref.bot ? ' · bot' : ''}` : ''];
+  return parts.filter(Boolean).join(' · ') || label;
+}
 
 function HostThread({ topic }: { topic: Topic }) {
   const link = topic.thread;
@@ -28,9 +36,9 @@ function HostThread({ topic }: { topic: Topic }) {
   if (!link) return null;
   return (
     <section className="topic-side-block" data-testid="topic-host-thread">
-      <h3 className="topic-side-head">Where it stands (the host writes it)</h3>
+      <h3 className="topic-side-head" title="The host writes it on its thread">Where it stands</h3>
       {t?.reply ? <AgentText text={t.reply} compact unknownSource className="topic-host-summary" /> : <p className="topic-muted">The host has not written a summary yet.</p>}
-      {t && <p className="topic-muted" data-testid="topic-host-thread-state">State: {t.closed ? 'closed' : t.state}</p>}
+      {t && <p className="topic-side-note" data-testid="topic-host-thread-state">State: {t.closed ? 'closed' : t.state}</p>}
     </section>
   );
 }
@@ -83,20 +91,20 @@ export function TopicSidePanel({ topic, actions, sheet }: {
       )}
       <HostThread topic={topic} />
       <section className="topic-side-block">
-        <h3 className="topic-side-head">Members · {live.length}</h3>
+        <h3 className="topic-side-head">Members <span className="topic-side-count">{live.length}</span></h3>
         <ul className="topic-members" data-testid="topic-members">
           {live.map((m) => (
             <li key={m.id} className={`topic-member is-${m.status}`} data-testid="topic-member" data-member-id={m.id} data-status={m.status} data-role={m.role}>
               <MemberAvatar who={{ name: m.name, ref: m.ref }} size={24} />
               <span className="topic-member-mid">
-                <span className="topic-member-name">{m.name}</span>
-                <span className="topic-member-status">{memberStatusLabel(m)}{m.ref.kind === 'person' ? ` · ${m.ref.email}${m.ref.bot ? ' · bot' : ''}` : ''}</span>
+                <span className="topic-member-name" title={m.name}>{shortName(m.name)}</span>
+                <span className="topic-member-status">{memberLine(m)}</span>
               </span>
               {!closed && m.status === 'pending' && (
                 <button type="button" className="btn btn-sm btn-primary" data-testid="topic-member-confirm" title="Let Walnut mail them the topic" onClick={() => void confirmPerson(m.id, m.ref.kind === 'person' ? m.ref.email : m.name)}>Confirm</button>
               )}
               {!closed && m.role !== 'host' && (
-                <button type="button" className="topic-chip-x" data-testid="topic-member-remove" aria-label={`Remove ${m.name}`} title="Remove from the topic" onClick={() => void remove(m.id, m.name)}>×</button>
+                <button type="button" className="topic-member-remove" data-testid="topic-member-remove" aria-label={`Remove ${m.name}`} title="Remove from the topic" onClick={() => void remove(m.id, m.name)}>{ICON_CLOSE}</button>
               )}
             </li>
           ))}
@@ -110,7 +118,9 @@ export function TopicSidePanel({ topic, actions, sheet }: {
             </span>
           </div>
         ) : (
-          <button type="button" className="topic-link-btn" data-testid="topic-member-add" onClick={() => setAdding([])}>+ Add a member</button>
+          <button type="button" className="topic-add-row" data-testid="topic-member-add" onClick={() => setAdding([])}>
+            <span className="topic-add-row-icon" aria-hidden="true">{ICON_PLUS}</span>Add a member
+          </button>
         ))}
       </section>
       {showsMail && (
@@ -119,7 +129,7 @@ export function TopicSidePanel({ topic, actions, sheet }: {
         </section>
       )}
       <section className="topic-side-block">
-        <p className="topic-muted" data-testid="topic-round">Round {topic.round?.n ?? 0} · member wakes used {used}/{ROUND_WAKES}</p>
+        <p className="topic-side-note" data-testid="topic-round" title="A member's post wakes at most this many others a round; your next message starts a new round">Round {topic.round?.n ?? 0} · member wakes used {used}/{ROUND_WAKES}</p>
       </section>
     </aside>
   );

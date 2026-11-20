@@ -4,6 +4,7 @@
  * menu; a "+ New topic" button; and opening a topic, which selects it on the Org page.
  * With the experiment off every one of them renders nothing.
  */
+import { ICON_PLUS } from '@/components/common/Icons';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useNavigate } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
@@ -65,13 +66,18 @@ export function AddToTopicMenuItem({ task, afterAction }: { task: Pick<Task, 'id
   );
 }
 
-/** "+ New topic": opens the dialog with these members already picked. */
-export function NewTopicButton({ members = [], testId = 'topic-new', className = 'btn btn-sm' }: { members?: PickedMember[]; testId?: string; className?: string }) {
+/**
+ * "New topic": opens the dialog with these members already picked. A quiet button (a plus and the
+ * words, no fill), the way the panels around it draw theirs; `iconOnly` for a list's section head.
+ */
+export function NewTopicButton({ members = [], testId = 'topic-new', className = 'topic-ghost-btn', iconOnly = false }: { members?: PickedMember[]; testId?: string; className?: string; iconOnly?: boolean }) {
   const on = useTopicsOn();
   if (!on) return null;
   return (
-    <button type="button" className={className} data-testid={testId} title="Start a group chat with tasks, VPs and people" onClick={() => openNewTopic(members)}>
-      + New topic
+    <button type="button" className={`${className}${iconOnly ? ' is-icon' : ''}`} data-testid={testId} title="New topic: a group chat with tasks, VPs and people"
+      aria-label={iconOnly ? 'New topic' : undefined} onClick={() => openNewTopic(members)}>
+      {ICON_PLUS}
+      {!iconOnly && <span>New topic</span>}
     </button>
   );
 }

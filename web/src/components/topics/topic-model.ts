@@ -124,6 +124,53 @@ export function reachLine(m: Pick<TopicMessage, 'woke' | 'folded' | 'toMail' | '
   return parts.join(' · ');
 }
 
+/**
+ * The same reach in a few words, for the line under a message: one name when it is one member,
+ * else how many ("Woke Walnut VP · 2 read later · Robin by email"); `full` is reachLine, the names
+ * and reasons, for its tooltip.
+ */
+export function reachSummary(m: Pick<TopicMessage, 'woke' | 'folded' | 'toMail' | 'mailed' | 'refused'>, members: readonly MemberLike[]): { line: string; full: string } {
+  const full = reachLine(m, members);
+  if (!full) return { line: '', full };
+  const nameOf = (id: string) => shortName(members.find((x) => x.id === id)?.name ?? '');
+  const names = (ids: readonly string[]) => ids.map(nameOf).filter(Boolean);
+  const say = (ids: readonly string[], one: (n: string) => string, many: (k: number) => string) => {
+    const n = names(ids);
+    return n.length === 0 ? '' : n.length === 1 ? one(n[0]!) : many(n.length);
+  };
+  const refusedIds = (m.refused ?? []).map((r) => r.member);
+  const parts = [
+    say(m.woke ?? [], (n) => `Woke ${n}`, (k) => `Woke ${k}`),
+    say((m.folded ?? []).filter((id) => !refusedIds.includes(id)), (n) => `${n} reads later`, (k) => `${k} read later`),
+    say(m.mailed ?? [], (n) => `Mailed ${n}`, (k) => `Mailed ${k}`),
+    say((m.toMail ?? []).filter((id) => !(m.mailed ?? []).includes(id)), (n) => `${n} by email`, (k) => `${k} by email`),
+    say(refusedIds, (n) => `${n} not woken`, (k) => `${k} not woken`),
+  ].filter(Boolean);
+  return { line: parts.join(' · '), full };
+}
+
+/** A member's name before its " · <project or folder>" part: "Walnut VP", "Release notes". */
+export function shortName(name: string): string {
+  const i = name.indexOf(' · ');
+  return i > 0 ? name.slice(0, i) : name;
+}
+
+/** The part after the first " · ", shown muted beside the name; empty when there is none. */
+export function nameContext(name: string): string {
+  const i = name.indexOf(' · ');
+  return i > 0 ? name.slice(i + 3) : '';
+}
+
+/** Lines by one writer this close together read as one block: the name and avatar once. */
+export const GROUP_MS = 5 * 60_000;
+
+/** Pure: whether message `m` continues the block of `prev` (same writer, close in time, not Walnut's). */
+export function continuesBlock(prev: Pick<TopicMessage, 'author' | 'at'> | undefined, m: Pick<TopicMessage, 'author' | 'at'>): boolean {
+  if (!prev || prev.author !== m.author || m.author === 'walnut') return false;
+  const gap = (Date.parse(m.at) || 0) - (Date.parse(prev.at) || 0);
+  return gap >= 0 && gap <= GROUP_MS;
+}
+
 /** The avatars a topic shows stacked: its live members, the host first, at most `max`, and how many more. */
 export function stackedAvatars<M extends MemberLike>(members: readonly M[], max = 4): { shown: M[]; more: number } {
   const live = members.filter((m) => m.status !== 'left');
@@ -139,7 +186,7 @@ export function hostOf<M extends MemberLike>(t: { members: readonly M[]; host?: 
 export function topicSubtitle(t: Pick<Topic, 'members'> & { host?: string }): string {
   const live = t.members.filter((m) => m.status !== 'left').length;
   const host = hostOf(t);
-  return `topic · ${live} ${live === 1 ? 'member' : 'members'}${host ? ` · host ${host.name}` : ''}`;
+  return `${host ? `Hosted by ${shortName(host.name)} · ` : ''}${live} ${live === 1 ? 'member' : 'members'}`;
 }
 
 /** The server's default host: the first org member, else the first task member (a person never hosts). */

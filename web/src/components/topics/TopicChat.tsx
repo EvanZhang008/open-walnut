@@ -16,6 +16,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import type { Topic, TopicMessage } from '@/api/topics';
+import { ICON_CHEVRON_LEFT } from '@/components/common/Icons';
 import { AgentText } from '@/components/common/AgentText';
 import { useStoreTask } from '@/contexts/TasksContext';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -25,8 +26,8 @@ import { hasActiveModalOverlay } from '@/hooks/useModalOverlay';
 import { hasOpenOverlayLayer } from '@/hooks/useOverlayLayer';
 import { isImeKey } from '@/utils/ime-key';
 import { usePageView, isBoolean } from '@/utils/view-memory';
-import { authorOf, reachLine, topicSubtitle } from './topic-model';
-import { MemberAvatar, StackedAvatars, nameColor } from './TopicAvatars';
+import { authorOf, continuesBlock, nameContext, reachSummary, shortName, topicSubtitle } from './topic-model';
+import { MemberAvatar, StackedAvatars } from './TopicAvatars';
 import { TopicComposer } from './TopicComposer';
 import { TopicSidePanel } from './TopicSidePanel';
 import { useTopicsOn } from './topics-flag';
@@ -72,30 +73,53 @@ function when(at: string): string {
     : d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
-function Message({ m, topic }: { m: LocalMessage; topic: Topic }) {
+function clock(at: string): string {
+  const d = new Date(at);
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+/**
+ * One message as a row, the way a team chat draws it: the avatar and a line with the name, a small
+ * Host or Email mark and the time, then the words on the page itself (no bubble), then a quiet line
+ * of who it reached. A line that continues the writer's block (`cont`) shows only its words, its
+ * time on hover in the avatar's column.
+ */
+function Message({ m, topic, cont }: { m: LocalMessage; topic: Topic; cont: boolean }) {
   const who = authorOf(m, topic.members);
-  const reach = reachLine(m, topic.members);
+  const reach = reachSummary(m, topic.members);
   const ref = who.kind === 'member' ? who.member?.ref : undefined;
   // The writer's own row only: a task write elsewhere never redraws the topic.
   const task = useStoreTask(ref?.kind === 'task' ? ref.taskId : null);
   if (who.kind === 'walnut') {
-    return <li className="topic-msg is-walnut" data-testid="topic-message" data-author="walnut" data-message-id={m.id}>{m.text}</li>;
+    return <li className="topic-msg is-walnut" data-testid="topic-message" data-author="walnut" data-message-id={m.id}><span>{m.text}</span></li>;
   }
   const human = who.kind === 'human';
+  const name = human ? 'You' : who.name;
+  const context = human ? '' : nameContext(name);
   return (
-    <li className={`topic-msg${human ? ' is-human' : ''}${m.local ? ' is-sending' : ''}`} data-testid="topic-message" data-author={m.author} data-message-id={m.id} data-via={m.via}>
-      {!human && <MemberAvatar who={{ name: who.kind === 'member' ? who.name : '', ...(ref ? { ref } : {}) }} size={30} />}
+    <li className={`topic-msg${human ? ' is-human' : ''}${cont ? ' is-cont' : ''}${m.local ? ' is-sending' : ''}`} data-testid="topic-message" data-author={m.author} data-message-id={m.id} data-via={m.via}>
+      <span className="topic-msg-gutter">
+        {cont
+          ? <time className="topic-msg-clock" dateTime={m.at}>{clock(m.at)}</time>
+          : <MemberAvatar who={human ? 'human' : { name: who.kind === 'member' ? who.name : '', ...(ref ? { ref } : {}) }} size={32} />}
+      </span>
       <div className="topic-msg-body">
-        {!human && who.kind === 'member' && (
-          <span className="topic-msg-name" style={{ color: nameColor(who.name) }} data-testid="topic-message-name">
-            {who.name}{who.member?.role === 'host' ? ' · host' : ''}{m.via === 'mail' ? ' · by email' : ''}
+        {!cont && (
+          <span className="topic-msg-head">
+            <span className="topic-msg-name" data-testid="topic-message-name" title={name}>{human ? name : shortName(name)}</span>
+            {context && <span className="topic-msg-context" title={context}>{context}</span>}
+            {!human && who.kind === 'member' && who.member?.role === 'host' && <span className="topic-msg-tag">Host</span>}
+            {m.via === 'mail' && <span className="topic-msg-tag">Email</span>}
+            <time className="topic-msg-time" dateTime={m.at}>{clock(m.at)}</time>
           </span>
         )}
         <div className="topic-msg-bubble" data-testid="topic-message-text">
           {/* A task member's words open its paths on its own machine; anyone else's name none. */}
           <AgentText text={m.text} compact {...(task ? { task } : { unknownSource: true })} />
         </div>
-        {(reach || m.local) && <span className="topic-msg-reach" data-testid="topic-message-reach">{m.local ? 'Sending…' : reach}</span>}
+        {(reach.line || m.local) && (
+          <span className="topic-msg-reach" data-testid="topic-message-reach" title={m.local ? undefined : reach.full}>{m.local ? 'Sending…' : reach.line}</span>
+        )}
       </div>
     </li>
   );
@@ -139,18 +163,23 @@ export function TopicChat({ topicId, onBack }: { topicId: string; onBack?: () =>
     }
   };
   let prevAt = 0;
+  let prev: TopicMessage | undefined;
+  const liveCount = topic.members.filter((mb) => mb.status !== 'left').length;
   return (
     <div className={`topic-chat${shown ? ' shows-side' : ''}`} data-testid="topic-chat" data-topic-id={topic.id} data-closed={topic.closed ? 'true' : undefined}>
       <header className="topic-head">
-        {onBack && <button type="button" className="btn btn-sm" onClick={onBack} aria-label="Back to the list">‹</button>}
-        <StackedAvatars members={topic.members} size={26} testId="topic-head-stack" />
+        {onBack && <button type="button" className="topic-ghost-btn is-icon" onClick={onBack} aria-label="Back to the list">{ICON_CHEVRON_LEFT}</button>}
         <span className="topic-head-mid">
           <span className="topic-head-title" data-testid="topic-title">{topic.title}</span>
-          <span className="topic-muted" data-testid="topic-subtitle">{topicSubtitle(topic)}{topic.closed ? ' · closed' : ''}</span>
+          <span className="topic-head-sub" data-testid="topic-subtitle">{topicSubtitle(topic)}{topic.closed ? ' · closed' : ''}</span>
         </span>
-        <button ref={membersRef} type="button" className="btn btn-sm" data-testid="topic-toggle-side" aria-pressed={shown}
-          onClick={() => (narrow ? setSheetOverlayOpen(!sheetOverlayOpen) : setSide(!side))}>Members</button>
-        {!topic.closed && <button type="button" className="btn btn-sm" data-testid="topic-close" onClick={() => void close()}>Close</button>}
+        <button ref={membersRef} type="button" className="topic-ghost-btn topic-head-members" data-testid="topic-toggle-side" aria-pressed={shown}
+          aria-label="Members" title={shown ? 'Hide members' : 'Show members'}
+          onClick={() => (narrow ? setSheetOverlayOpen(!sheetOverlayOpen) : setSide(!side))}>
+          <StackedAvatars members={topic.members} size={22} max={3} noMore testId="topic-head-stack" />
+          <span className="topic-head-count">{liveCount}</span>
+        </button>
+        {!topic.closed && <button type="button" className="topic-ghost-btn" data-testid="topic-close" onClick={() => void close()}>Close</button>}
       </header>
       {error && <p className="topic-error" data-testid="topic-error">{error}</p>}
       <div className="topic-main">
@@ -163,9 +192,11 @@ export function TopicChat({ topicId, onBack }: { topicId: string; onBack?: () =>
               const at = Date.parse(m.at) || 0;
               const gap = at - prevAt > GAP_MS;
               prevAt = at;
+              const cont = !gap && continuesBlock(prev, m);
+              prev = m;
               return [
-                gap ? <li key={`t-${m.id}`} className="topic-time" aria-hidden="true">{when(m.at)}</li> : null,
-                <Message key={m.id} m={m} topic={topic} />,
+                gap ? <li key={`t-${m.id}`} className="topic-time" aria-hidden="true"><span>{when(m.at)}</span></li> : null,
+                <Message key={m.id} m={m} topic={topic} cont={cont} />,
               ];
             })}
           </ol>

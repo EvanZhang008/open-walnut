@@ -82,7 +82,7 @@ export function TopicComposer({ topic, actions }: { topic: Topic; actions: Pick<
       }}>
       <ChatInput
         light
-        placeholder={topic.closed ? 'This topic is closed' : 'Say something in the topic… @Name wakes only that member'}
+        placeholder={topic.closed ? 'This topic is closed' : 'Message the topic · @Name wakes only that member'}
         draftKey={draftKey('topic', topic.id)}
         onSend={(text, images) => {
           if (images?.length) {
@@ -112,9 +112,9 @@ export function TopicComposer({ topic, actions }: { topic: Topic; actions: Pick<
                 className={`task-kebab-item topic-mention-row${i === hi ? ' task-kebab-item-active' : ''}`}
                 data-testid="topic-mention-row" data-kind={c.kind}
                 onMouseEnter={() => setHi(i)} onClick={() => void pick(c)}>
-                <MemberAvatar who={{ name, ...(c.kind === 'member' ? { ref: c.member.ref } : {}) }} size={18} />
+                <MemberAvatar who={{ name, ref: c.kind === 'member' ? c.member.ref : taskRef(c.taskId) }} size={20} />
                 <span className="topic-mention-name">{name}</span>
-                <span className="topic-mention-hint">{c.kind === 'member' ? (c.member.role === 'host' ? 'Host' : 'In the topic') : 'Not in the topic: add it?'}</span>
+                <span className="topic-mention-hint">{c.kind === 'member' ? (c.member.role === 'host' ? 'Host' : 'In the topic') : 'Add to topic'}</span>
               </button>
             );
           })}

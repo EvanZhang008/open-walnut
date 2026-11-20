@@ -15,7 +15,7 @@ import type { PickedMember } from './topic-dialogs';
 import { orgRef, refKey, taskRef } from './topic-model';
 
 export interface Candidate extends PickedMember {
-  /** A short word under the name: "Org node", the task's project. */
+  /** A short word beside the name: what an Org node leads ("Leads Acme"), or the task's project. */
   hint: string;
 }
 
@@ -24,11 +24,11 @@ const isDone = (t: Pick<Task, 'phase' | 'status'>) => t.phase === 'COMPLETE' || 
 export function memberCandidates(tasks: readonly Task[]): Candidate[] {
   const tree = buildOrgTree(tasks);
   const out: Candidate[] = [];
-  if (tree.main) out.push({ ref: orgRef('main'), name: orgDisplayTitle({ title: tree.main.title, org_role: 'main' }), hint: 'Org node' });
+  if (tree.main) out.push({ ref: orgRef('main'), name: orgDisplayTitle({ title: tree.main.title, org_role: 'main' }), hint: 'Leads every VP' });
   for (const p of tree.projects) {
     if (!p.lead) continue;
     const lead = tasks.find((t) => t.id === p.lead!.id);
-    out.push({ ref: orgRef(orgProjectNode(p.project)), name: lead ? orgDisplayTitle(lead) : `${p.project} VP`, hint: 'Org node' });
+    out.push({ ref: orgRef(orgProjectNode(p.project)), name: lead ? orgDisplayTitle(lead) : `${p.project} VP`, hint: `Leads ${p.project}` });
   }
   for (const t of tasks) {
     if (isDone(t) || t.org_role === 'main' || t.org_role === 'lead') continue;
@@ -57,9 +57,13 @@ export function useMemberCandidates(): Candidate[] {
 
 export interface OpenTaskName { id: string; name: string }
 
-/** The open tasks by their shown name, for the composer's @ list. */
+/**
+ * The open tasks by their shown name, for the composer's @ list. The CEO and the VPs are left out:
+ * they join as Org nodes (the picker's rows), never as a plain task, and one in the topic is listed
+ * as its member already.
+ */
 export function openTaskNames(tasks: readonly Task[]): OpenTaskName[] {
-  return tasks.filter((t) => !isDone(t)).map((t) => ({ id: t.id, name: orgDisplayTitle(t) }));
+  return tasks.filter((t) => !isDone(t) && t.org_role !== 'main' && t.org_role !== 'lead').map((t) => ({ id: t.id, name: orgDisplayTitle(t) }));
 }
 
 export function useOpenTaskNames(): OpenTaskName[] {

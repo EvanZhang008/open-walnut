@@ -294,7 +294,8 @@ export async function closeTopic(topicId: string, by: TopicActor): Promise<{ top
   const { topic, out } = await mutateTopic(topicId, (t) => {
     if (t.closed) throw new TopicError('closed', 409, `Topic ${t.id} is already closed.`);
     const at = new Date().toISOString();
-    const closer = by === 'human' ? name : t.members.find((m) => m.ref.kind === 'task' && m.ref.taskId === by.slice(5))?.name ?? 'a member';
+    // Mid-sentence the fallback name reads "the user", never "The user".
+    const closer = by === 'human' ? (name === USER_FALLBACK_NAME ? name.toLowerCase() : name) : t.members.find((m) => m.ref.kind === 'task' && m.ref.taskId === by.slice(5))?.name ?? 'a member';
     const message = walnutLine(`Closed by ${closer}.`, at);
     t.messages.push(message);
     const plan = planClosing(t);

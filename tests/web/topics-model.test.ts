@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   authorOf, defaultHost, isEmail, mentionCandidates, parseMentions, reachLine, refKey, stackedAvatars, topicKey, topicOfKey,
-  topicOfThread, topicSubtitle, personMailConfirm, personEmails, listWords, NO_MAILBOX_WORDS, mailboxConfirm, activePersonEmails,
+  topicOfThread, topicSubtitle, reachSummary, shortName, nameContext, continuesBlock, personMailConfirm, personEmails, listWords, NO_MAILBOX_WORDS, mailboxConfirm, activePersonEmails,
   mentionKeyAction, mentionShortForms,
 } from '../../web/src/components/topics/topic-model';
 import type { TopicMember, TopicSummary } from '../../web/src/api/topics';
@@ -148,6 +148,40 @@ describe('reachLine', () => {
   });
 });
 
+describe('reachSummary, names and blocks', () => {
+  it('names one member and counts several, with the full line for the tooltip', () => {
+    const r = reachSummary({ woke: ['mb-vp'], folded: ['mb-doc', 'mb-docw'], toMail: ['mb-ann'] }, MEMBERS);
+    expect(r.line).toBe('Woke Walnut VP · 2 read later · Ann by email');
+    expect(r.full).toBe(reachLine({ woke: ['mb-vp'], folded: ['mb-doc', 'mb-docw'], toMail: ['mb-ann'] }, MEMBERS));
+    expect(reachSummary({ woke: ['mb-doc', 'mb-vp'], mailed: ['mb-ann'] }, MEMBERS).line).toBe('Woke 2 · Mailed Ann');
+  });
+
+  it('says a refused wake as not woken, not also as reads later', () => {
+    expect(reachSummary({ folded: ['mb-doc', 'mb-docw'], refused: [{ member: 'mb-doc', why: 'round budget used up' }] }, MEMBERS).line)
+      .toBe('Doc writer reads later · Doc not woken');
+  });
+
+  it('is empty when the message reached no one', () => {
+    expect(reachSummary({}, MEMBERS)).toEqual({ line: '', full: '' });
+  });
+
+  it('splits a member name at its first " · "', () => {
+    expect(shortName('Release notes · Release Pipeline')).toBe('Release notes');
+    expect(nameContext('Release notes · Release Pipeline')).toBe('Release Pipeline');
+    expect(shortName('Walnut VP')).toBe('Walnut VP');
+    expect(nameContext('Walnut VP')).toBe('');
+  });
+
+  it('continues a block only for the same writer within five minutes, never for Walnut', () => {
+    const at = (min: number) => new Date(Date.UTC(2026, 10, 20, 10, min)).toISOString();
+    expect(continuesBlock({ author: 'mb-doc', at: at(0) }, { author: 'mb-doc', at: at(4) })).toBe(true);
+    expect(continuesBlock({ author: 'mb-doc', at: at(0) }, { author: 'mb-doc', at: at(6) })).toBe(false);
+    expect(continuesBlock({ author: 'mb-doc', at: at(0) }, { author: 'mb-vp', at: at(1) })).toBe(false);
+    expect(continuesBlock({ author: 'walnut', at: at(0) }, { author: 'walnut', at: at(1) })).toBe(false);
+    expect(continuesBlock(undefined, { author: 'human', at: at(1) })).toBe(false);
+  });
+});
+
 describe('stackedAvatars and the header', () => {
   it('shows the host first, leaves out who left, at most four, and counts the rest', () => {
     const extra = [m('mb-a', 'A'), m('mb-b', 'B')];
@@ -159,9 +193,9 @@ describe('stackedAvatars and the header', () => {
     expect(stackedAvatars([DOC]).more).toBe(0);
   });
 
-  it('reads "topic · N members · host X"', () => {
-    expect(topicSubtitle({ members: MEMBERS })).toBe('topic · 4 members · host Walnut VP');
-    expect(topicSubtitle({ members: [DOC] })).toBe('topic · 1 member');
+  it('reads "Hosted by X · N members"', () => {
+    expect(topicSubtitle({ members: MEMBERS })).toBe('Hosted by Walnut VP · 4 members');
+    expect(topicSubtitle({ members: [DOC] })).toBe('1 member');
   });
 
   it('names the author of a line', () => {
@@ -249,5 +283,21 @@ describe('a topic member\'s avatar task', () => {
     expect(memberTaskId({ kind: 'org', node: 'project:Acme' }, tasks)).toBe('t-vp')
     expect(memberTaskId({ kind: 'org', node: 'project:Nowhere' }, tasks)).toBeUndefined()
     expect(memberTaskId({ kind: 'person', name: 'Robin', email: 'robin@example.org' }, tasks)).toBeUndefined()
+  })
+})
+
+describe('who the picker and the @ list offer', () => {
+  it('names what each Org node leads, and leaves the CEO and VPs out of the @ list of plain tasks', async () => {
+    const { memberCandidates, openTaskNames } = await import('../../web/src/components/topics/member-candidates.js')
+    const tasks = [
+      { id: 't-ceo', title: 'Main', org_role: 'main', project: '', phase: 'IN_PROGRESS' },
+      { id: 't-vp', title: 'Lead', org_role: 'lead', org_name: 'Acme', project: 'Acme', phase: 'IN_PROGRESS' },
+      { id: 't-work', title: 'Pricing copy', project: 'Acme', phase: 'IN_PROGRESS' },
+    ] as never[]
+    const hints = memberCandidates(tasks).map((c) => c.hint)
+    expect(hints).toContain('Leads every VP')
+    expect(hints).toContain('Leads Acme')
+    expect(hints).not.toContain('Org node')
+    expect(openTaskNames(tasks).map((t) => t.id)).toEqual(['t-work'])
   })
 })
