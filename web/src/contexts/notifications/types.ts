@@ -76,8 +76,9 @@ export interface Notification {
    *  permission: 'allowed'/'denied' (a human answered) or 'expired' = nobody
    *  answered and nobody can (session died, CLI withdrew the ask, superseded).
    *  operation-error: 'recovered' = the failing operation succeeded again, so the
-   *  condition the error described is gone. */
-  resolved?: 'allowed' | 'denied' | 'expired' | 'recovered';
+   *  condition the error described is gone. 'stale' (this browser only, settled-asks.ts):
+   *  the request was already settled elsewhere and this browser never learned which way. */
+  resolved?: 'allowed' | 'denied' | 'expired' | 'recovered' | 'stale';
   /** operation-error only — which recoverable condition the error belongs to
    *  (`plugin:<id>`, 'git', 'backup', 'disk'). Server-owned; the UI renders the
    *  `resolved` stamp, this is carried through for debugging + parity — AND as

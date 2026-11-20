@@ -164,6 +164,21 @@ describe('GET /api/v1/events', () => {
     }
   })
 
+  it('a node\'s Threads change and an inbox change reach the phone as refetch frames', async () => {
+    const sse = await connectSse(apiUrl('/api/v1/events'))
+    try {
+      await sse.waitFor((e) => e.event === 'snapshot')
+      bus.emit('org-threads:changed', { taskId: 'node-1' }, ['*'], { source: 'org-threads' })
+      const threads = await sse.waitFor((e) => e.event === 'threads-changed')
+      expect(threads.data).toEqual({ task_id: 'node-1' })
+      bus.emit('human-inbox:state', { letterId: 'l1', field: 'read', value: true }, [], { source: 'human-inbox' })
+      const inbox = await sse.waitFor((e) => e.event === 'inbox-changed')
+      expect(inbox.data).toEqual({})
+    } finally {
+      sse.close()
+    }
+  })
+
   it('task create / update / delete → task-upsert / task-delete', async () => {
     const sse = await connectSse(apiUrl('/api/v1/events'))
     try {

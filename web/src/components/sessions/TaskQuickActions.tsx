@@ -108,7 +108,8 @@ interface TaskQuickActionsProps {
 export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedTier, onPinTask, onUnpinTask, onSetTier, compact, slot = 'all', phoneMenu = false, watchOutside = false, extraSection, leadingSection, onOpenTaskDetail, contextMenuScope, onCompleted }: TaskQuickActionsProps) {
   // The board's copy first: a caller that passes no task (a bound draft's header) draws its kebab
   // from the store in the first frame instead of after a GET (2026-11-04, "the data is cache").
-  const storeTask = useStoreTask(externalTask === undefined ? taskId : undefined);
+  const storeRow = useStoreTask(taskId);
+  const storeTask = externalTask === undefined ? storeRow : null;
   const [task, setTask] = useState<Task | null>(externalTask ?? storeTask ?? null);
   // Writes go through the shared task store when it carries this row: the
   // optimistic change then reaches the board, the detail pane and the parent
@@ -205,15 +206,17 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
     if (externalTask === undefined && storeTask) setTask(storeTask);
   }, [externalTask, storeTask]);
 
-  // Keep in sync via WS events
-  useEvent('task:updated', (data) => {
+  // Keep a private copy in sync via WS events. Never while the store holds the row (drawn from
+  // it here, or the caller's copy of it: the session header's): the event is the server's raw
+  // row, without the store's held edits and status predictions, so it put the badge back on the
+  // old status until the store's next change (web/src/AGENTS.md).
+  const followsStore = !!storeRow;
+  const fromEvent = (data: unknown) => {
     const d = data as { task?: Task };
-    if (d.task && d.task.id === taskId) setTask(d.task);
-  });
-  useEvent('task:completed', (data) => {
-    const d = data as { task?: Task };
-    if (d.task && d.task.id === taskId) setTask(d.task);
-  });
+    if (!followsStore && d.task && d.task.id === taskId) setTask(d.task);
+  };
+  useEvent('task:updated', fromEvent);
+  useEvent('task:completed', fromEvent);
 
   // Close kebab on outside click, Escape, or once the trigger scrolls away.
   // The menu now scrolls internally, so a scroll event originating INSIDE it

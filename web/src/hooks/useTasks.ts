@@ -17,8 +17,8 @@ import { normalizeTags } from '../../../src/core/tag-model';
 import { deletedTaskId } from '../../../src/core/task-deleted-id';
 import { markFirstScreen } from '@/utils/after-first-screen';
 import { isPluginOnlyTask } from '@open-walnut/org-tree';
-import { snoozedUntil, type UserStatus } from '@open-walnut/user-status';
-import { PREDICTION_MS, overPrediction, predictedForPhase, statusKey, type StatusPrediction } from './status-prediction';
+import type { UserStatus } from '@open-walnut/user-status';
+import { PREDICTION_MS, overPrediction, predictedForPhase, predictedForStart, statusKey, type PredictOptions, type StatusPrediction } from './status-prediction';
 import { forThisWindow } from '@/api/test-run';
 import { randomId } from '@/utils/random-id';
 
@@ -126,11 +126,19 @@ function applyToggleComplete(tasks: Task[], id: string): Task[] {
   });
 }
 
+/** A caller that words a refused write itself (the Board's toast): the store reports nothing. */
+export interface WriteReport {
+  onError?: (err: Error) => void;
+}
+
 /** A prediction as the store keeps it: how to make it again, and when it was made. */
 interface StandingPrediction extends StatusPrediction {
   make: (row: Task) => UserStatus | undefined;
   /** True while more writes behind it are still out: a server status re-bases it. */
   live?: () => boolean;
+  /** True for a server row that has not caught up with the change yet, though its status moved
+   *  (an answer still on its way to the session): the prediction is made again over it. */
+  holds?: (row: Task) => boolean;
   /** performance.now() when made: a list read that left earlier never answers it. */
   madeAt: number;
   timer: ReturnType<typeof setTimeout>;
@@ -360,8 +368,8 @@ interface UseTasksReturn {
   update: (id: string, updates: tasksApi.UpdateTaskInput) => Promise<boolean>;
   toggleComplete: (id: string) => Promise<boolean>;
   /** Close the task (never a toggle: a task already closed stays closed). */
-  complete: (id: string) => Promise<boolean>;
-  setPhase: (id: string, phase: string, opts?: { undoOf?: string; unread?: boolean }) => Promise<boolean>;
+  complete: (id: string, opts?: WriteReport) => Promise<boolean>;
+  setPhase: (id: string, phase: string, opts?: { undoOf?: string; unread?: boolean } & WriteReport) => Promise<boolean>;
   /** Reorder within ONE project group. `project: ''` = Inbox. */
   reorder: (project: string, taskIds: string[]) => void;
   /** Move a task to another project ('' = Inbox), optionally next to a sibling. */
@@ -413,7 +421,7 @@ interface UseTasksReturn {
   /** Show the status a change will derive to, now, on every surface, until the server's own
    *  arrives (status-prediction.ts). `make` gets the row as drawn. Returns the undo for a
    *  write the server refused. */
-  predictStatus: (id: string, make: (row: Task) => UserStatus | undefined, opts?: { live?: () => boolean }) => () => void;
+  predictStatus: (id: string, make: (row: Task) => UserStatus | undefined, opts?: PredictOptions) => () => void;
   /** Suppress the next WS echo for a key (e.g. `update:<id>`) — pair with own API call. */
   guardEcho: (key: string) => void;
   /** Folder name registry: group_id → label. */
@@ -551,9 +559,10 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     if (sentAt !== undefined && sentAt < p.madeAt) return { ...task, user_status: p.predicted } as Task;
     const seen = overPrediction(task, predictions.current);
     if (!seen.answered) return seen.task;
-    // More writes of the same kind are still out (a second thread acted on): the server's
-    // status is the new base, and the prediction is made again over it, not dropped.
-    if (p.live?.()) {
+    // More writes of the same kind are still out (a second thread acted on), or the server's
+    // row has not caught up with the change yet: the server's status is the new base, and the
+    // prediction is made again over it, not dropped.
+    if (p.live?.() || p.holds?.(task)) {
       const again = p.make(task);
       if (statusKey(again) !== statusKey(task.user_status)) {
         p.base = statusKey(task.user_status);
@@ -908,11 +917,9 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
         const mark = (task as { replica_sync?: unknown }).replica_sync ?? null;
         if ((cur.replica_sync ?? null) !== mark) patch.replica_sync = mark;
       }
-      // A status still marked snoozed for a task no longer snoozed (the snooze's Undo put the
-      // status before it back here) is the server's pass not yet run: its next one clears it.
-      const staleSnooze = !!task.user_status?.snoozed && !!cur.user_status && !cur.user_status.snoozed
-        && !snoozedUntil(task, new Map(prev.map((t) => [t.id, t] as const)));
-      if (task.user_status && !staleSnooze && JSON.stringify(task.user_status) !== JSON.stringify(cur.user_status ?? null)) patch.user_status = task.user_status;
+      // A status the server has not derived again since this page changed it reaches here with
+      // the page's prediction laid over it (drawn(): a snooze cleared, a phase set by hand).
+      if (task.user_status && JSON.stringify(task.user_status) !== JSON.stringify(cur.user_status ?? null)) patch.user_status = task.user_status;
       if (Object.keys(patch).length === 0) return prev;
       const next = prev.slice();
       next[idx] = { ...cur, ...patch } as Task;
@@ -1109,6 +1116,13 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     if (ids && ids.length > 0) resyncTasks(ids);
     else refetch();
   }, [showOperationError, refetch, resyncTasks]);
+  /** A refused write of one row: the caller's own report when it gives one (it words the
+   *  reason itself), else the store's; the row is read again either way. */
+  const refused = (err: Error, id: string, opts?: WriteReport) => {
+    if (!opts?.onError) { onOpError(err, [id]); return; }
+    opts.onError(err);
+    resyncTasks([id]);
+  };
 
   const create = useCallback(async (input: tasksApi.CreateTaskInput, hooks?: CreateHooks) => {
     // Optimistic local-first insert: show the task immediately under a temp id,
@@ -1158,7 +1172,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     }
   }, [reconcileCreate, showOperationError]);
 
-  const predictStatus = useLeanCallback((id: string, make: (row: Task) => UserStatus | undefined, opts?: { live?: () => boolean }): (() => void) => {
+  const predictStatus = useLeanCallback((id: string, make: (row: Task) => UserStatus | undefined, opts?: PredictOptions): (() => void) => {
     const row = tasksNow.current.find((t) => t.id === id);
     if (!row) return () => {};
     const prior = predictions.current.get(id);
@@ -1175,11 +1189,11 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, user_status: base ?? undefined } as Task : t)));
     };
     const entry: StandingPrediction = {
-      base: prior?.base ?? statusKey(row.user_status), predicted, make, live: opts?.live, madeAt: performance.now(),
+      base: prior?.base ?? statusKey(row.user_status), predicted, make, live: opts?.live, holds: opts?.holds, madeAt: performance.now(),
       // No answer: the server derived the same status again, so it sent nothing and the
       // prediction was wrong. Its last word goes back; a re-read would also throw away
       // another write's held edit of this row.
-      timer: setTimeout(back, PREDICTION_MS),
+      timer: setTimeout(back, opts?.keepMs ?? PREDICTION_MS),
     };
     predictions.current.set(id, entry);
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, user_status: predicted } as Task : t)));
@@ -1209,11 +1223,16 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       if (!onlyReadMarker) settle = holdOptimistic(id, apply);
       setTasks(apply);
     }
-    const unpredict = typeof updates.phase === 'string' ? predictPhase([id], updates.phase) : () => {};
+    const undoPhase = typeof updates.phase === 'string' ? predictPhase([id], updates.phase) : () => {};
+    // A snooze cleared or moved: the row wakes (or sleeps until the new time) on every surface now.
+    const undoStart = 'start_date' in updates ? predictStatus(id, (row) => {
+      const next = { ...row, start_date: updates.start_date || undefined };
+      return predictedForStart(next, next.start_date ? undefined : new Map(tasksNow.current.map((t) => [t.id, t] as const)));
+    }) : () => {};
     // Resolves whether the server took it (an Undo's toast goes when it did not).
     return withWriteRetry((opId) => tasksApi.updateTask(id, updates, { opId }))
-      .then(() => { settle(); return true; }, (err: Error) => { settle(); unpredict(); onOpError(err, [id]); return false; });
-  }, [guardEcho, onOpError, predictPhase]);
+      .then(() => { settle(); return true; }, (err: Error) => { settle(); undoStart(); undoPhase(); onOpError(err, [id]); return false; });
+  }, [guardEcho, onOpError, predictPhase, predictStatus]);
 
   const toggleComplete = useCallback((id: string) => {
     guardEcho(`complete:${id}`);
@@ -1226,13 +1245,13 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
 
   // Close it, whatever it is now: a Close button on a row another window or the task's own
   // agent just closed must not open it again, as a toggle would.
-  const complete = useLeanCallback((id: string) => {
+  const complete = useLeanCallback((id: string, opts?: WriteReport) => {
     guardEcho(`complete:${id}`);
     const apply = (rows: Task[]) => applyPhaseChange(rows, id, 'COMPLETE');
     const settle = holdOptimistic(id, apply);
     setTasks(apply);
     return tasksApi.completeTask(id)
-      .then(() => { settle(); return true; }, (err: Error) => { settle(); onOpError(err, [id]); return false; });
+      .then(() => { settle(); return true; }, (err: Error) => { settle(); refused(err, id, opts); return false; });
   }, [guardEcho, onOpError]);
 
   // `undoOf`: an Undo of the task's last phase move, with its phase_changed_at before that move
@@ -1240,7 +1259,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   // `unread`: the read marker to keep rather than the one the phase implies (an Undo puts a
   // task the person had read back as read). `row`: the caller's copy of a row the list does
   // not hold yet (holdOptimistic).
-  const setPhase = useCallback((id: string, phase: string, opts?: { undoOf?: string; unread?: boolean; row?: Task }) => {
+  const setPhase = useCallback((id: string, phase: string, opts?: { undoOf?: string; unread?: boolean; row?: Task } & WriteReport) => {
     guardEcho(`phase:${id}`);
     const unread = opts?.unread;
     const apply = (rows: Task[]) => {
@@ -1256,7 +1275,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       ...(opts?.undoOf !== undefined ? { undo_phase_changed_at: opts.undoOf } : {}),
       ...(unread !== undefined ? { unread } : {}),
     }, { opId }))
-      .then(() => { settle(); return true; }, (err: Error) => { settle(); unpredict(); onOpError(err, [id]); return false; });
+      .then(() => { settle(); return true; }, (err: Error) => { settle(); unpredict(); refused(err, id, opts); return false; });
   }, [guardEcho, onOpError, predictPhase]);
 
   const reorder = useCallback((project: string, taskIds: string[]) => {

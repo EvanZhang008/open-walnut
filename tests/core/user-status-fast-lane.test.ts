@@ -14,7 +14,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-user-status-
 import { WALNUT_HOME } from '../../src/constants.js'
 import { addTask, getTask, updateTask } from '../../src/core/task-manager.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
-import { startUserStatusSync, stopUserStatusSync, settleUserStatusSync, syncUserStatuses } from '../../src/core/user-status-sync.js'
+import { sessionMovesNow, startUserStatusSync, stopUserStatusSync, settleUserStatusSync, syncUserStatuses } from '../../src/core/user-status-sync.js'
 
 beforeEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
@@ -69,6 +69,26 @@ describe('the fast lane', () => {
     bus.emit(EventNames.ORG_THREADS_CHANGED, { taskId: t.id }, ['web-ui'], { source: 'org-threads' })
     const took = await readsWithin(t.id, 'needs', 1_000)
     expect(took, `still ${JSON.stringify(before)} after 1 s`).not.toBeNull()
+  })
+
+  it('a turn that starts is derived at once: the answer a page predicts as Working lands in time', async () => {
+    const t = (await addTask({ title: 'Answered', project: 'Acme' })).task
+    startUserStatusSync()
+    await settleUserStatusSync()
+    // A session's own write waits the debounce; its turn starting puts the task on the fast lane.
+    await updateTask(t.id, { phase: 'NEED_ACTION' }, { source: 'session' })
+    bus.emit(EventNames.SESSION_STATUS_CHANGED, { taskId: t.id, sessionId: 's-1', process_status: 'running' }, ['*'])
+    expect(await readsWithin(t.id, 'needs', 1_000), 'the status waited the debounce').not.toBeNull()
+  })
+
+  it('which session events take the fast lane: a turn running, a prompt, a start; a turn ending folds', () => {
+    expect(sessionMovesNow(EventNames.SESSION_STATUS_CHANGED, { process_status: 'running' })).toBe(true)
+    expect(sessionMovesNow(EventNames.SESSION_STATUS_CHANGED, { status: { process_status: 'running' } })).toBe(true)
+    expect(sessionMovesNow(EventNames.SESSION_STATUS_CHANGED, { process_status: 'idle' })).toBe(false)
+    expect(sessionMovesNow(EventNames.SESSION_PERMISSION_REQUEST, {})).toBe(true)
+    expect(sessionMovesNow(EventNames.SESSION_PERMISSION_RESOLVED, {})).toBe(true)
+    expect(sessionMovesNow(EventNames.SESSION_ENDED, {})).toBe(false)
+    expect(sessionMovesNow(EventNames.SESSION_USAGE_LIMIT, {})).toBe(false)
   })
 
   it('a pass never writes a task marked again after it began', async () => {

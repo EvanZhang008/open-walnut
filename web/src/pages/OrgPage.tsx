@@ -27,13 +27,12 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
 import { useKeptLockToggle } from '@/components/org/useKeptLockToggle';
 import { keptByRow, lockedTaskIds, slotTask, slotTaskIds, taskRowKey } from '@/components/org/org-task-tabs';
-import { buildOrgTree, userStateOf } from '@open-walnut/org-tree';
+import { buildOrgTree } from '@open-walnut/org-tree';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { useSessionStatusEpoch } from '@/hooks/useSessionStatus';
 import { homeColumnsField, usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { hydrateTaskSessionStatuses } from '@/api/sessions';
 import { resolveOrgContact, ensureMainTask, startOrgNode } from '@/api/org';
-import { fetchTask } from '@/api/tasks';
 import { sessionStatusStore } from '@/stores/session-status-store';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { createStripWriter, readColumns } from '@/utils/layout-record';
@@ -62,7 +61,7 @@ import {
   MAIN_KEY, buildChannels, filterChannels, flattenNodes, movedProjects, pickChannel, projectRowKey, rowOf, settleDefaultNode, vpCount, type AlertProbe, type ChannelRow,
 } from '@/components/org/org-channels-model';
 import {
-  ANSWERED_HOLD_MS, phaseMark, promptAnswered, promptKey, settleHolds, withAnswered, without, type AnsweredHolds,
+  ANSWERED_HOLD_MS, answerPending, answeredStatus, phaseMark, promptAnswered, promptKey, settleHolds, without, type AnsweredHolds,
 } from '@/components/org/org-answered';
 import { OrgPaneHandle } from '@/components/org/OrgPaneHandle';
 import { OrgRouterSetup } from '@/components/org/OrgRouterSetup';
@@ -151,14 +150,11 @@ export function OrgPage() {
       };
       setAnswered((prev) => new Map(prev).set(taskId, hold));
       setFailedAnswers((prev) => without(prev, taskId));
-      // The same reading for every other surface (Home's Needs you, the board, a count): the
-      // hold above is this page's; the store's prediction is the page-wide one, and it gives
-      // way the moment the server derives the task again.
-      const unpredict = predictStatus(taskId, (row) => {
-        if (userStateOf(row) !== 'needs') return row.user_status;
-        const { ask: _ask, source: _source, ...rest } = row.user_status ?? { state: 'working' as const };
-        return { ...rest, state: 'working' as const };
-      });
+      // Working on every surface (this page, Home's Needs you, the board, a count), held while
+      // the answer is on its way: a server row that still reads Needs you without asking again
+      // has not taken it yet (answerPending). The server's first other status replaces it; a
+      // refused answer undoes it (org-answered.ts).
+      const unpredict = predictStatus(taskId, answeredStatus, { keepMs: ANSWERED_HOLD_MS, holds: (row) => answerPending(hold, row) });
       return (failure) => {
         if (!failure) return;
         unpredict();
@@ -182,7 +178,8 @@ export function OrgPage() {
     const id = window.setTimeout(() => setAnswered((prev) => new Map([...prev].filter(([, a]) => a.until > Date.now()))), Math.max(0, next - Date.now()) + 50);
     return () => window.clearTimeout(id);
   }, [answered]);
-  const shownTasks = useMemo(() => withAnswered(allTasks, answered, Date.now()), [allTasks, answered]);
+  // An answered task's status is the store's prediction (answers.start): the rows as stored.
+  const shownTasks = allTasks;
   // The prompt it answered is gone at once too, until the session's status catches up.
   const answeredProbe = useMemo<AlertProbe>(() => (task) => {
     const p = probe(task);

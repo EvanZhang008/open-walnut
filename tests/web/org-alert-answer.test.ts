@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import type { Task } from '@open-walnut/core'
 import type { LetterEnvelope } from '../../web/src/api/human-inbox'
 import { answerShape, openLetterFor } from '../../web/src/components/org/org-answer-shape'
-import { phaseMark, promptAnswered, settleHolds, withAnswered, without, type AnsweredHold } from '../../web/src/components/org/org-answered'
+import { answerPending, answeredStatus, phaseMark, promptAnswered, settleHolds, without, type AnsweredHold } from '../../web/src/components/org/org-answered'
 import type { OrgAlertView } from '../../web/src/components/org/org-channels-model'
 
 const alert = (over: Partial<OrgAlertView>): OrgAlertView => ({ taskId: 't1', title: 'Lease', kind: 'needs', ...over })
@@ -60,6 +60,10 @@ describe('an answered row stops counting at once', () => {
     created_at: '2026-10-26T00:00:00Z', updated_at: '2026-10-26T00:00:00Z',
     user_status: { state: 'needs', source: 'letter', ask: 'Sign it?', at: '2026-10-26T01:00:00Z' }, ...over,
   } as Task)
+  /** What every surface draws: the store's prediction (answeredStatus, OrgPage answers.start) over
+   *  each row the server has not caught up on (answerPending, its `holds`), until its time is up. */
+  const withAnswered = (list: readonly Task[], holds: ReadonlyMap<string, AnsweredHold>, now: number): readonly Task[] => (!holds.size ? list
+    : list.map((t) => { const h = holds.get(t.id); return h && answerPending(h, t, now) ? { ...t, user_status: answeredStatus(t) } as Task : t }))
   const hold = (t: Task, over: Partial<AnsweredHold> = {}): Map<string, AnsweredHold> =>
     new Map([[t.id, { phase: phaseMark(t), source: t.user_status?.source ?? '', ask: t.user_status?.ask ?? '', probe: '', until: 5000, ...over }]])
 

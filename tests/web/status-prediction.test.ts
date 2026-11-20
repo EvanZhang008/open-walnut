@@ -6,8 +6,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { Task } from '../../src/core/types'
-import type { UserStatus } from '../../src/core/user-status'
-import { overPrediction, predictedForPhase, statusKey, statusWithThreads, type StatusPrediction } from '../../web/src/hooks/status-prediction'
+import { deriveUserStatus, type StatusReport, type UserStatus } from '../../src/core/user-status'
+import { overPrediction, predictedForPhase, predictedForStart, statusKey, statusWithThreads, type StatusPrediction } from '../../web/src/hooks/status-prediction'
 
 const row = (over: Partial<Task>): Task => ({ id: 't1', title: 'T', phase: 'IN_PROGRESS', status: 'in_progress', ...over } as Task)
 const needs: UserStatus = { state: 'needs', ask: 'Pick one', source: 'session' } as UserStatus
@@ -119,5 +119,50 @@ describe('statusWithThreads: the node row counts the list as drawn', () => {
   it('a status that carries no Threads counts is not the page\'s to count', () => {
     expect(statusWithThreads(working, [thread('a')])).toBe(working)
     expect(statusWithThreads(undefined, [thread('a')])).toBeUndefined()
+  })
+})
+
+describe('predictedForStart: what a snooze cleared or moved reads as', () => {
+  const T = Date.parse('2026-11-19T12:00:00.000Z')
+  const later = '2026-11-22T09:00:00.000Z'
+  const sooner = '2026-11-20T09:00:00.000Z'
+  const report: StatusReport = { state: 'needs', ask: 'Pick a venue', at: '2026-11-19T11:00:00.000Z' } as StatusReport
+  // The server's own derive, asleep and awake: the prediction must land where the awake one does.
+  const input = { phase: 'NEED_ACTION' as const, hasSession: true, processStatus: 'idle' as const, report }
+  const asleep = deriveUserStatus({ ...input, snoozedUntil: later }, T)
+  const awake = deriveUserStatus(input, T)
+
+  it('the fixture is a snooze that took a Needs you off the user', () => {
+    expect(asleep).toMatchObject({ state: 'waiting', snoozed: { until: later, ask: 'Pick a venue' } })
+    expect(awake).toMatchObject({ state: 'needs', ask: 'Pick a venue' })
+  })
+
+  it('cleared, or moved into the past: Needs you again with its ask, as the server derives it', () => {
+    for (const start of [undefined, '2026-11-18T09:00:00.000Z']) {
+      const next = predictedForStart(row({ phase: 'NEED_ACTION', start_date: start, user_status: asleep }), undefined, T)
+      expect(next?.state).toBe(awake.state)
+      expect(next?.ask).toBe(awake.ask)
+      expect(next?.snoozed).toBeUndefined()
+    }
+  })
+
+  it('moved to another time to come: still asleep, until the new time', () => {
+    const next = predictedForStart(row({ phase: 'NEED_ACTION', start_date: sooner, user_status: asleep }), undefined, T)
+    const server = deriveUserStatus({ ...input, snoozedUntil: sooner }, T)
+    expect(next).toMatchObject({ state: 'waiting', waitingOn: server.waitingOn, snoozed: { until: sooner } })
+  })
+
+  it('a status the snooze only marked loses the mark, and an inherited snooze counts', () => {
+    const marked = { state: 'working', snoozed: { until: later } } as unknown as UserStatus
+    expect(predictedForStart(row({ start_date: undefined, user_status: marked }), undefined, T)).toEqual({ state: 'working' })
+    // Its parent still sleeps until then: nothing moves.
+    const parent = { id: 'p', start_date: later } as Task
+    const child = row({ parent_task_id: 'p', start_date: undefined, user_status: { ...asleep } })
+    expect(predictedForStart(child, new Map([['p', parent]]), T)).toBe(child.user_status)
+  })
+
+  it('a row that is not snoozed is left alone', () => {
+    expect(predictedForStart(row({ user_status: needs }), undefined, T)).toBe(needs)
+    expect(predictedForStart(row({}), undefined, T)).toBeUndefined()
   })
 })

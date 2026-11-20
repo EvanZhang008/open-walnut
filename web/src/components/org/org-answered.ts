@@ -14,9 +14,17 @@
  * the session took the answer still says Needs you.
  * The status leaving Needs you ends the hold too, as does a minute for an answer that never moved
  * the task.
+ *
+ * The status itself is the task store's prediction (hooks/status-prediction.ts, predictStatus with
+ * `answerPending` as its `holds` and ANSWERED_HOLD_MS as its `keepMs`), so Home, the board and
+ * every count read the answered task as working too, and nothing here lays a second copy over it
+ * (2026-11-19: the page's hold ended the moment the store's prediction read Working, and that
+ * prediction lapsed after 10 s, so the row went back to Needs you until the server derived it).
+ * The hold here keeps what only this page shows: the answered prompt, hidden until it goes.
  */
 import type { Task } from '@open-walnut/core';
 import { userStateOf } from '@open-walnut/org-tree';
+import type { UserStatus } from '@open-walnut/user-status';
 
 export const ANSWERED_HOLD_MS = 60_000;
 
@@ -90,15 +98,17 @@ export function settleHolds(
   return next ?? holds;
 }
 
-/** The tasks as the page shows them: a held one reads as working until it asks again. */
-export function withAnswered(tasks: readonly Task[], holds: AnsweredHolds, nowMs: number): readonly Task[] {
-  if (!holds.size) return tasks;
-  return tasks.map((t) => {
-    const h = holds.get(t.id);
-    if (!h || h.until <= nowMs || !needs(t) || askedAgain(h, t)) return t;
-    const { ask: _ask, source: _source, ...rest } = t.user_status ?? { state: 'working' as const };
-    return { ...t, user_status: { ...rest, state: 'working' as const } };
-  });
+/** Whether a server row has not caught up with the answer yet: it still reads Needs you and does
+ *  not ask again. The store's prediction of Working stays over such a row (PredictOptions.holds). */
+export function answerPending(h: AnsweredHold, t: Task, nowMs = Date.now()): boolean {
+  return h.until > nowMs && needs(t) && !askedAgain(h, t);
+}
+
+/** What an answered task reads as until the server derives it: working, its ask gone. */
+export function answeredStatus(t: Task): UserStatus | undefined {
+  if (!needs(t)) return t.user_status;
+  const { ask: _ask, source: _source, ...rest } = t.user_status ?? { state: 'working' as const };
+  return { ...rest, state: 'working' };
 }
 
 /** Whether the live prompt the page sees for a task is the one it answered (hide it). */

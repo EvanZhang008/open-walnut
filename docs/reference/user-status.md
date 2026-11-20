@@ -17,7 +17,10 @@ The status is derived after a 1.5 s debounce, and a pass of every task (a letter
 thread change is derived 25 ms later for that task alone, while a whole pass may still be
 running, and the hops that follow (the owner's thread counts) stay in the lane. A pass never
 writes a task that was marked after the pass began, so the slower pass cannot put an older
-status back. A session's own writes keep the debounce. A pass over 1 s logs
+status back. A session event that no later write of its turn corrects takes the lane too: a turn
+that starts running, a prompt opened or answered, a session started (`sessionMovesNow`), so an
+answer a page shows as Working is derived as Working at once. A turn that ends and a session's
+own writes keep the debounce, so its report and phase write fold into one pass. A pass over 1 s logs
 `user-status: slow pass` with where the time went. The web page does not wait even for that: it
 predicts the status (`web/src/hooks/status-prediction.ts`) and the server's answer replaces the
 prediction. Tests: `tests/core/user-status-fast-lane.test.ts`.

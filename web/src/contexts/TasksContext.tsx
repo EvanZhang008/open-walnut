@@ -25,10 +25,11 @@ export interface TasksContextValue {
   /** Each resolves whether the server took the write (it is optimistic either way). */
   update: (id: string, updates: UpdateTaskInput) => Promise<boolean>;
   toggleComplete: (id: string) => Promise<boolean>;
-  complete: (id: string) => Promise<boolean>;
+  /** `onError`: the caller words a refusal itself (the Board's toast); the store reports nothing. */
+  complete: (id: string, opts?: { onError?: (err: Error) => void }) => Promise<boolean>;
   /** Resolves true once the server took the write, false when it refused (already reported). */
   /** `row`: the caller's copy of a row the list does not hold yet; its first answer keeps the new phase. */
-  setPhase: (id: string, phase: string, opts?: { undoOf?: string; unread?: boolean; row?: Task }) => Promise<boolean>;
+  setPhase: (id: string, phase: string, opts?: { undoOf?: string; unread?: boolean; row?: Task; onError?: (err: Error) => void }) => Promise<boolean>;
   /** Reorder within ONE project group. `project: ''` = Inbox. */
   reorder: (project: string, taskIds: string[]) => void;
   /** Move a task to another project ('' = Inbox), optionally next to a sibling. */
@@ -59,7 +60,7 @@ export interface TasksContextValue {
   patchTasksLocal: (patches: Record<string, Partial<Task>>, opts?: { pending?: boolean }) => () => void;
   /** Show the status a change will derive to on every surface now, until the server's own
    *  arrives (hooks/status-prediction.ts). Returns the undo for a write the server refused. */
-  predictStatus: (id: string, make: (row: Task) => import('@open-walnut/user-status').UserStatus | undefined, opts?: { live?: () => boolean }) => () => void;
+  predictStatus: (id: string, make: (row: Task) => import('@open-walnut/user-status').UserStatus | undefined, opts?: import('@/hooks/status-prediction').PredictOptions) => () => void;
   /** Suppress the next WS echo for a key (e.g. `update:<id>`) — pair with own API call. */
   guardEcho: (key: string) => void;
   taskGroups: Record<string, string>;

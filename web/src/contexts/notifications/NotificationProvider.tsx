@@ -26,8 +26,9 @@ import {
 } from 'react';
 import { useEvent } from '@/hooks/useWebSocket';
 import {
-  resolvedStatusOf, seedPermissionRequest, settlePermissionRequest, wasAnsweredFromToast,
+  getPermissionRequest, resolvedStatusOf, seedPermissionRequest, settlePermissionRequest, usePermissionRequestsVersion, wasAnsweredFromToast,
 } from '@/stores/permission-request-store';
+import { withSettledAsks } from './settled-asks';
 import { log } from '@/utils/log';
 import { stripEntityRefsToText, extractFirstRefIds } from '@/utils/markdown';
 import {
@@ -694,12 +695,19 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     }).catch(err => log.warn('notifications', 'mark-read by key failed', { error: String(err) }));
   }, [markLocalRead]);
 
+  // An ask answered anywhere in this browser (its timeline card, its toast, the rail) is settled in
+  // the permission store before its request leaves: the bell counts it from there at once. Only
+  // the count reads the overlay; the feed itself stays the server's, so the rail keeps the answered
+  // card where it was (it shows the store's Allowed/Denied stamp on its own).
+  const asksVersion = usePermissionRequestsVersion();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- asksVersion stands for the store
+  const countedFeed = useMemo(() => withSettledAsks(feed, getPermissionRequest), [feed, asksVersion]);
   const unreadCount = useMemo(() => feed.filter(f => !f.read).length, [feed]);
   // An approval a script waits on is something to answer too: the bell counts it, as the
   // notification center's Needs you does (no clock: the server's expiry event takes one off).
   const approvalItems = useApprovals().items;
   const approvalsWaiting = useMemo(() => pendingAt({ items: approvalItems } as ApprovalsState, Date.now()).length, [approvalItems]);
-  const attentionCount = useMemo(() => attentionBadgeCount(feed) + approvalsWaiting, [feed, approvalsWaiting]);
+  const attentionCount = useMemo(() => attentionBadgeCount(countedFeed) + approvalsWaiting, [countedFeed, approvalsWaiting]);
 
   const value = useMemo<NotificationContextValue>(() => ({
     toasts, feed, healthFeed, loaded, unreadCount, attentionCount, notify, dismissToast, pinToast, markAllRead,

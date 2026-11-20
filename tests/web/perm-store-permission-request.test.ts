@@ -23,6 +23,9 @@ vi.mock('@/api/sessions', () => ({ respondToPermission }));
 const buildImageRefsPayload = vi.hoisted(() => vi.fn());
 vi.mock('@/api/image-upload', () => ({ buildImageRefsPayload }));
 
+import { withSettledAsks } from '../../web/src/contexts/notifications/settled-asks';
+import { attentionBadgeCount } from '../../web/src/contexts/notifications/notification-model';
+import type { Notification } from '../../web/src/contexts/notifications/types';
 import {
   getPermissionRequest, isSettledPermission, resetPermissionRequestStore,
   resolvedStatusOf, respondToPermissionRequest, seedPermissionRequest,
@@ -230,5 +233,46 @@ describe('the server event lane', () => {
     expect(seen).toContain('denied');
     // Unsubscribed: the last transition must not reach this listener.
     expect(seen.filter(s => s === 'expired')).toHaveLength(0);
+  });
+});
+
+// 2026-11-19: answered from its timeline card or its toast, the bell kept its number until the
+// server's resolved event came back. The bell counts the feed with the store laid over it.
+describe('the bell counts an ask answered anywhere at once', () => {
+  const ask = (id: string, over: Partial<Notification> = {}): Notification => ({
+    id: `n-${id}`, kind: 'permission', severity: 'warning', title: 'Bash', timestamp: 1, persistent: true, fromServer: true,
+    dedupKey: `perm:${id}`, read: false, ...over,
+  } as Notification);
+
+  it('a settled store entry stamps its feed entry, and the count drops', async () => {
+    resetPermissionRequestStore();
+    const feed = [ask('r1'), ask('r2')];
+    seedPermissionRequest('r1');
+    seedPermissionRequest('r2');
+    expect(withSettledAsks(feed, getPermissionRequest)).toBe(feed);
+    expect(attentionBadgeCount(feed)).toBe(2);
+    let release: () => void = () => {};
+    respondToPermission.mockImplementationOnce(() => new Promise<void>((r) => { release = r; }));
+    const answering = respondToPermissionRequest('s1', 'r1', true);
+    // Still in flight: the store already says allowed, and so does the count.
+    const shown = withSettledAsks(feed, getPermissionRequest);
+    expect(shown[0]).toMatchObject({ resolved: 'allowed', severity: 'success' });
+    expect(shown[1]).toBe(feed[1]);
+    expect(attentionBadgeCount(shown)).toBe(1);
+    release();
+    await answering;
+  });
+
+  it('a refused answer brings the ask back; the server\'s own stamp is never overwritten', async () => {
+    resetPermissionRequestStore();
+    seedPermissionRequest('r3');
+    respondToPermission.mockRejectedValueOnce(Object.assign(new Error('down'), { status: 502 }));
+    await respondToPermissionRequest('s1', 'r3', false);
+    const feed = [ask('r3'), ask('r4', { resolved: 'expired' })];
+    settlePermissionRequest('r4', 'allowed');
+    const shown = withSettledAsks(feed, getPermissionRequest);
+    expect(shown[0]!.resolved).toBeUndefined();
+    expect(shown[1]!.resolved).toBe('expired');
+    expect(attentionBadgeCount(shown)).toBe(1);
   });
 });

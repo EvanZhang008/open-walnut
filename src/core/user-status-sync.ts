@@ -1191,12 +1191,19 @@ async function runFastPass(): Promise<void> {
 }
 
 /** A session event names its session, not its task (the status snapshot has no taskId): look it up. */
-function markSession(sessionId: unknown): void {
+function markSession(sessionId: unknown, lane: (taskId: unknown) => void = mark): void {
   if (typeof sessionId !== 'string' || !sessionId) { markAll(); return; }
   import('./session-tracker.js')
     .then(({ getSessionByClaudeId }) => getSessionByClaudeId(sessionId))
-    .then((rec) => { if (rec?.taskId) mark(rec.taskId); else markAll(); })
+    .then((rec) => { if (rec?.taskId) lane(rec.taskId); else markAll(); })
     .catch(() => markAll());
+}
+
+/** A session event whose status no later write of the turn corrects: a turn that runs now, a
+ *  prompt opened or answered, a session started (onEvent's fast lane). */
+export function sessionMovesNow(name: string, d: Record<string, any>): boolean {
+  if (name === EventNames.SESSION_PERMISSION_REQUEST || name === EventNames.SESSION_PERMISSION_RESOLVED || name === EventNames.SESSION_STARTED) return true;
+  return name === EventNames.SESSION_STATUS_CHANGED && (d.process_status ?? d.status?.process_status) === 'running';
 }
 
 /** Each host's link as the last host:status frame said it (up or not), so only a change re-derives. */
@@ -1261,8 +1268,18 @@ function onEvent(event: { name: string; data: unknown; source?: string }): void 
     case EventNames.SESSION_ENDED:
     case EventNames.SESSION_STARTED:
     case EventNames.SESSION_USAGE_LIMIT:
-      if (d.taskId) mark(d.taskId); else markSession(d.sessionId);
+    {
+      // A turn that starts (an answer the user gave reaching its session) or a prompt that opens or
+      // is answered: the fast lane, for its task alone. A page predicts Working for an answer on its
+      // way and holds that until this lands (OrgPage answers.start); behind the debounce and a pass
+      // of every task it lapsed first (2026-11-19: the row went back to Needs you, then to Working).
+      // A running turn reads Working whatever the phase, so nothing later corrects it. A turn that
+      // ends keeps the debounce: its report and phase write follow it and fold into one pass.
+      // Status events come only on a change, and the lane rests as long as its last pass ran.
+      const lane = sessionMovesNow(event.name, d) ? markNow : mark;
+      if (d.taskId) lane(d.taskId); else markSession(d.sessionId, lane);
       return;
+    }
     case APPROVAL_CHANGED: {
       // Its asking task gains or loses an Action needed item.
       dropSlow('approvals');

@@ -15,7 +15,7 @@
  *            settings section of its own under it, and it has no side bar, so no Tasks (it owns no
  *            team and never sees the Inbox's tasks), no Brief and no Threads. A VP gets none of it.
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { usePendingApprovals } from '@/components/approvals/ApprovalRow';
 import { approvalsForNode } from '@/components/approvals/approvals-store';
 import { readOrgPlace, writeOrgPlace } from './org-place';
@@ -47,7 +47,7 @@ import { OrgAvatar } from './OrgChannelList';
 import { useHasBoard } from './useBoardOwner';
 import { flashProbeEnabled } from '@/utils/flash-probe';
 import { log } from '@/utils/log';
-import { ORG_TOP_DEFAULT, ORG_TOP_VIEWS, briefUnread, markBriefSeen, markThreadsSeen, readBriefFolded, threadsUnread, type OrgTopView } from './org-brief-model';
+import { ORG_TOP_DEFAULT, ORG_TOP_VIEWS, briefUnread, markBriefSeen, markThreadsSeen, readBriefFolded, seenVersion, subscribeSeen, threadsUnread, type OrgTopView } from './org-brief-model';
 import { newsAt, sharedAnswers, threadCountLabel, threadCounts, type ThreadCounts } from '@open-walnut/thread-view';
 import { briefUpdating } from '@open-walnut/brief-fresh';
 import { useBriefRefresh } from './useBriefRefresh';
@@ -266,7 +266,9 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
    *  kept per node (2026-11-02, the user: "it is a panel too, you can at least let me close it"). */
   const [railKeptHidden, setRailHidden] = usePageViewOf<boolean>('org', 'node.railHidden', row.key, false, isBoolean);
   const railHidden = isRouter || railKeptHidden;
-  // Read while shown: the dot on the Brief tab is for a rewrite the user has not seen.
+  // Read while shown: the dot on the Brief tab is for a rewrite the user has not seen. A read in
+  // another window of this browser takes the dot off here too, at once (org-brief-model.ts).
+  useSyncExternalStore(subscribeSeen, seenVersion, seenVersion);
   useEffect(() => { if (!railHidden && topView === 'brief' && contact && brief?.at) markBriefSeen(contact.id, brief.at); }, [railHidden, topView, contact, brief?.at]);
   const briefNew = (railHidden || topView !== 'brief') && !!contact && briefUnread(contact.id, brief?.at);
   // Opening a node whose Brief is stale asks it for one refresh turn (core/sessions/brief-refresh.ts).

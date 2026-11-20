@@ -290,16 +290,24 @@ show inline after the open ones, other completed hits that show the query fold i
   server (`src/core/user-status-sync.ts`), so an optimistic write of a phase or a thread left
   every badge on the old value until the server's pass (2026-11-19: a thread acted on in the Org
   page kept its node's red dot 20 to 35 s). A hand's change now lays a prediction over the row
-  (`hooks/status-prediction.ts`, `predictStatus` / `predictPhase` in `useTasks.ts`): the server's
-  first different status replaces it, a refused write undoes it, and no answer in 10 s reads the
-  row again. A node's threads are one module store per node (`components/org/useOrgThreads.ts`)
+  (`hooks/status-prediction.ts`, `predictStatus` / `predictPhase` in `useTasks.ts`; a start date
+  cleared or moved by `update` predicts the woken status, `predictedForStart`): the server's first
+  different status replaces it, a refused write undoes it, and no answer in 10 s reads the row
+  again. A change that takes longer to reach the derive passes `keepMs` and `holds` (an Org answer
+  on its way to its session: Working for 60 s over a server row still reading Needs you without a
+  new ask, `org-answered.ts answerPending`), never a second copy of the status laid on by a page.
+  A surface that writes a task's phase itself (the Board's cards) calls the store's `setPhase` /
+  `complete` with `onError` to word the refusal itself. A node's threads are one module store per node (`components/org/useOrgThreads.ts`)
   read by the Org page and the session panel. The server derives a hand's change on its fast
   lane (25 ms, not the 1.5 s debounce), so other windows and the phone follow inside a second.
   Ratchets: `tests/e2e/browser/org-thread-dot-same-browser-instant.spec.ts`,
-  `tests/web/status-prediction.test.ts`, `tests/core/user-status-fast-lane.test.ts`, and
-  `tests/web/shared-entity-write-guard.test.ts` (a new file that calls a task, thread or letter
-  write API directly, past the stores, fails it until it goes through the store or is listed
-  with its reason).
+  `snooze-status-same-browser-instant.spec.ts`, `board-kanban-store-instant.spec.ts`,
+  `org-answer-held-no-flicker.spec.ts`, `tests/web/status-prediction.test.ts`,
+  `tests/core/user-status-fast-lane.test.ts`, and `tests/web/shared-entity-write-guard.test.ts`
+  (a new file that calls a task, thread or letter write API directly, past the stores, fails it
+  until it goes through the store or is listed with its reason; a new file that reads a task with
+  `fetchTask` / `fetchTasksBulk` / `fetchTasksByIds` outside the store fails until it is listed
+  with why its copy is never drawn over the store's row).
 - **The same rule holds for every shared entity, not just tasks.** The general shape: ONE
   module store per entity kind (a React context or `useSyncExternalStore` module), optimistic
   mutators that write the store BEFORE the request and roll back on rejection, and WS events
@@ -309,7 +317,11 @@ show inline after the open ones, other completed hits that show the query fold i
   ratchet (`*-same-browser-instant.spec.ts`): project registry (`hooks/useProjectRegistry.ts`,
   `renameProjectLocal` / `removeProjectLocal` / `patchProjectLocal`; also patches the task
   store), permission requests (`stores/permission-request-store.ts`: timeline card, rail card
-  and toast are three readers of one `requestId` row; a settled request is never re-armed),
+  and toast are three readers of one `requestId` row; a settled request is never re-armed; the
+  bell's count reads the feed with that store laid over it, `contexts/notifications/settled-asks.ts`,
+  so an ask answered anywhere leaves the count on the click), the Org Brief and Threads read marks
+  (`components/org/org-brief-model.ts subscribeSeen`: kept per browser, a read in one window takes
+  the dot off the others through the `storage` event, `org-brief-seen-other-window.spec.ts`),
   letters (`components/inbox/letter-store.ts`: rail, session Inbox tab and reader are lenses
   over one list), calendar events / routines / agents (`stores/*-store.ts`), document
   saves (`stores/file-save-signal.ts`: a save in one editor carries its hash AND bytes to every

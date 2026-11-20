@@ -6,6 +6,11 @@
  * stays until a read that started after its response lands (G32); a failure or
  * 15s of silence removes it and says so in a toast. Successful moves, completes
  * and lane drops toast with Undo and Show (G14, G7, G16).
+ *
+ * A phase or a complete is a write of the task itself: it goes through the task store when the
+ * store holds the row (setPhase / complete), so Home, the session header and every count move in
+ * the frame of the click too, not when the task event comes back (web/src/AGENTS.md "One browser,
+ * one task store"). The Board's own overlay is laid all the same: it draws its own payload.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, apiPatch, apiPost, apiPut } from '@/api/client';
@@ -13,6 +18,7 @@ import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { useLeaderPresence } from '@/hooks/useLeaderPresence';
 import { log } from '@/utils/log';
 import { useOpenTask } from '@/hooks/useOpenTask';
+import { useTasksContextSafe, type TasksContextValue } from '@/contexts/TasksContext';
 import { autoLaneKind, firstLaneOfKind, type BoardCard, type BoardLane } from '../../../../../src/core/boards/board-lanes';
 import { boardErrorMessage, boardPath } from '../useTaskBoard';
 import type {
@@ -89,6 +95,22 @@ function withTimeout<T>(p: Promise<T>): Promise<T> {
   });
 }
 
+/**
+ * A task store write as a request that rejects with the store's error when refused, so `run` drops
+ * the overlay and the Board words the toast (the store reports nothing: `onError`).
+ */
+function storeRequest(write: (onError: (err: Error) => void) => Promise<boolean>): () => Promise<true> {
+  return () => new Promise<true>((resolve, reject) => {
+    let failure: Error | undefined;
+    void write((err) => { failure = err; }).then((ok) => (ok ? resolve(true) : reject(failure ?? new Error('Walnut refused the change'))));
+  });
+}
+
+/** The store when it holds the task's row; null for a row it does not carry (or no store: a pop-out). */
+function storeFor(store: TasksContextValue | null, taskId: string): TasksContextValue | null {
+  return store && store.tasks.some((t) => t.id === taskId) ? store : null;
+}
+
 const quote = (title: string) => `"${title.length > 60 ? `${title.slice(0, 59)}…` : title}"`;
 
 export function useKanbanWrites(deps: KanbanWritesDeps): KanbanWrites {
@@ -105,6 +127,9 @@ export function useKanbanWrites(deps: KanbanWritesDeps): KanbanWrites {
   const d = useRef(deps);
   d.current = deps;
   const openTask = useOpenTask();
+  const tasksStore = useTasksContextSafe();
+  const storeNow = useRef(tasksStore);
+  storeNow.current = tasksStore;
   const base = boardPath(ownerId);
   useEffect(() => { setOverlays(new Map()); setPending([]); setRefused(false); }, [ownerId]);
 
@@ -215,8 +240,10 @@ export function useKanbanWrites(deps: KanbanWritesDeps): KanbanWrites {
   }, [run, base, ownerId]);
 
   const setPhase = useCallback(async (taskId: string, phase: string, why: string): Promise<boolean> => {
+    const store = storeFor(storeNow.current, taskId);
     const r = await run(`phase:${taskId}`, { tasks: { [taskId]: { phase, completed_at: phase === 'COMPLETE' ? new Date().toISOString() : null } } },
-      () => apiPatch(`/api/v1/tasks/${encodeURIComponent(taskId)}`, { phase }));
+      store ? storeRequest((onError) => store.setPhase(taskId, phase, { onError }))
+        : () => apiPatch(`/api/v1/tasks/${encodeURIComponent(taskId)}`, { phase }));
     if (!r.ok) {
       log.warn('board', 'kanban task phase failed', { taskId: ownerId, cardTaskId: taskId, phase, why, error: boardErrorMessage(r.err) });
       toastError(`Couldn't change ${quote(titleOf(taskId))}: ${boardErrorMessage(r.err)}`);
@@ -233,8 +260,10 @@ export function useKanbanWrites(deps: KanbanWritesDeps): KanbanWrites {
     const before = d.current.storePhase(taskId) ?? 'IN_PROGRESS';
     const undoLane = card ? { lane: card.lane, index: vm?.lanes.find((l) => l.lane.id === card.lane)?.cardIds.indexOf(taskId) ?? 0, source: card.source } : null;
     const title = card?.title ?? taskId;
+    const store = storeFor(storeNow.current, taskId);
     const r = await run(`phase:${taskId}`, { tasks: { [taskId]: { phase: 'COMPLETE', completed_at: new Date().toISOString() } } },
-      () => apiPost(`/api/v1/tasks/${encodeURIComponent(taskId)}/complete`, {}, { quietStatuses: [409] }));
+      store ? storeRequest((onError) => store.complete(taskId, { onError }))
+        : () => apiPost(`/api/v1/tasks/${encodeURIComponent(taskId)}/complete`, {}, { quietStatuses: [409] }));
     if (!r.ok) {
       const e = errorOf(r.err);
       log.warn('board', 'kanban task complete failed', { taskId: ownerId, cardTaskId: taskId, error: boardErrorMessage(r.err) });

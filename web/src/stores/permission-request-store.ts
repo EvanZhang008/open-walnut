@@ -81,8 +81,11 @@ const MAX_ENTRIES = 300;
 
 const entries = new Map<string, PermissionRequestState>();
 const listeners = new Set<() => void>();
+/** Moves on every write: a reader of many requests at once (the bell's count) re-reads on it. */
+let version = 0;
 
 function emit(): void {
+  version += 1;
   // Copy: a listener that unsubscribes while notifying must not mutate the set
   // being walked.
   for (const fn of [...listeners]) fn();
@@ -262,6 +265,13 @@ export const permissionRequestStore = {
   subscribe,
   get: getPermissionRequest,
 };
+
+const versionNow = () => version;
+
+/** Re-render on any request's change (NotificationProvider's count, settled-asks.ts). */
+export function usePermissionRequestsVersion(): number {
+  return useSyncExternalStore(subscribe, versionNow, versionNow);
+}
 
 /**
  * Subscribe one surface to one request. `undefined` = this browser knows nothing

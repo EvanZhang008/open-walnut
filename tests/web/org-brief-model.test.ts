@@ -6,7 +6,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, it, expect, beforeEach } from 'vitest'
-import { applyBriefDecorations, briefUnread, markBriefSeen, readBriefFolded, writeBriefFolded } from '../../web/src/components/org/org-brief-model'
+import { applyBriefDecorations, briefUnread, markBriefSeen, markThreadsSeen, readBriefFolded, seenVersion, subscribeSeen, writeBriefFolded } from '../../web/src/components/org/org-brief-model'
 import { BRIEF_SECTIONS } from '../../src/core/user-status'
 
 const store = new Map<string, string>()
@@ -91,5 +91,40 @@ describe('the switch\'s memory', () => {
     expect(briefUnread('lead', '2026-10-26T10:00:00Z')).toBe(false)
     expect(briefUnread('lead', '2026-10-26T10:05:00Z')).toBe(true)
     expect(briefUnread('other', '2026-10-26T10:00:00Z')).toBe(true)
+  })
+})
+
+// 2026-11-19: read in one window, the Brief's dot stayed in the other. The marks live in this
+// browser's localStorage: a read here moves the version at once, another window's from its
+// `storage` event, so every dot's reader re-renders (OrgNodeDetail useSyncExternalStore).
+describe('the seen dots follow a read in any window', () => {
+  it('a read here, or a storage event from another window, moves every reader', () => {
+    const listeners = new Map<string, (e: unknown) => void>()
+    ;(globalThis as { window?: unknown }).window = {
+      addEventListener: (n: string, fn: (e: unknown) => void) => { listeners.set(n, fn) },
+      removeEventListener: (n: string) => { listeners.delete(n) },
+    }
+    try {
+      let heard = 0
+      const stop = subscribeSeen(() => { heard++ })
+      const v0 = seenVersion()
+      markBriefSeen('lead', '2026-10-26T10:00:00Z')
+      expect(heard).toBe(1)
+      // The same mark again writes nothing, and moves nothing.
+      markBriefSeen('lead', '2026-10-26T10:00:00Z')
+      expect(heard).toBe(1)
+      markThreadsSeen('lead', '2026-10-26T10:00:00Z')
+      expect(heard).toBe(2)
+      // Another window read it: its write arrives as a storage event for one of the two keys.
+      listeners.get('storage')?.({ key: 'walnut.org.briefSeen' })
+      listeners.get('storage')?.({ key: 'walnut.org.threadsSeen' })
+      listeners.get('storage')?.({ key: 'something.else' })
+      expect(heard).toBe(4)
+      expect(seenVersion()).toBe(v0 + 4)
+      stop()
+      expect(listeners.has('storage')).toBe(false)
+    } finally {
+      delete (globalThis as { window?: unknown }).window
+    }
   })
 })

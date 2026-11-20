@@ -64,18 +64,22 @@ export function AgentSearchResultRows({ rows, className }: {
   /** Extra class on the <ul>, so a surface can scope its own spacing. */
   className?: string;
 }) {
-  // The search answer and the bulk lookup carry no user status; the store row does.
+  // The store's row wins for a task it holds: its phase and status follow every change live (a
+  // task completed in another column reads done here in the same frame). The search answer's or
+  // the bulk lookup's copy is read once and is only the fallback for a task the list lacks.
   const tasks = useTasksContextSafe()?.tasks;
   const openTask = useOpenTask();
-  const statusById = useMemo(() => {
+  const liveById = useMemo(() => {
     const ids = new Set(rows.map((r) => r.taskId));
-    const out = new Map<string, Task['user_status']>();
-    for (const t of tasks ?? []) if (ids.has(t.id) && t.user_status) out.set(t.id, t.user_status);
+    const out = new Map<string, Pick<Task, 'phase' | 'user_status'>>();
+    for (const t of tasks ?? []) if (ids.has(t.id)) out.set(t.id, { phase: t.phase, user_status: t.user_status });
     return out;
   }, [rows, tasks]);
   return (
     <ul className={`agent-search-results${className ? ` ${className}` : ''}`}>
-      {rows.map((row) => {
+      {rows.map((given) => {
+        const live = liveById.get(given.taskId);
+        const row = live ? { ...given, phase: live.phase, user_status: live.user_status ?? given.user_status } : given;
         const isDone = row.phase === 'COMPLETE';
         // An unresolvable id is still worth showing: it is what the search
         // answered, and "the task is gone" is information. It just cannot be a
@@ -102,14 +106,14 @@ export function AgentSearchResultRows({ rows, className }: {
           <li key={row.taskId}>
             <button
               type="button"
-              className={`agent-search-row${isDone ? ' is-done' : ''}${rowNeedsYou({ phase: row.phase, user_status: row.user_status ?? statusById.get(row.taskId) }) ? ' is-needs-action' : ''}`}
+              className={`agent-search-row${isDone ? ' is-done' : ''}${rowNeedsYou(row) ? ' is-needs-action' : ''}`}
               data-peek-row=""
               data-task-id={row.taskId}
               title={rowTooltip(row)}
               onClick={() => openTask(row.taskId)}
             >
               <span className={`task-phase-icon-btn agent-search-row-circle ${circleClassForPhase(row.phase)}`} aria-hidden="true">
-                {binaryPhaseIcon(isDone, row.phase, taskUserState({ phase: row.phase, user_status: row.user_status ?? statusById.get(row.taskId) } as Parameters<typeof taskUserState>[0]))}
+                {binaryPhaseIcon(isDone, row.phase, taskUserState({ phase: row.phase, user_status: row.user_status } as Parameters<typeof taskUserState>[0]))}
               </span>
               <span className="agent-search-row-title">{row.title ?? row.taskId}</span>
               <span className="agent-search-row-project">{projectDisplayName(row.project)}</span>

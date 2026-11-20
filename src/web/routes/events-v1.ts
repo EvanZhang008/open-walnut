@@ -67,7 +67,14 @@ const FEED_INTEREST = [
   // A running task's live action (core/live-activity.ts): already throttled per session at
   // the source, and again per task below (PHONE_ACTIVITY_MS), so it is never per token.
   'session:live-activity',
+  // A node's Threads and the inbox change on a person's tap (or an agent's op): one small frame
+  // each, so the phone reads them again at once instead of on its next reopen.
+  'org-threads:changed', 'human-inbox:letter', 'human-inbox:answered', 'human-inbox:state',
 ]
+
+/** The frames a phone refetches on: `threads-changed` {task_id} and `inbox-changed` {}. Additive
+ *  (2026-11-19): an older phone skips a frame it does not know. */
+const REFETCH_KINDS = new Set(['threads-changed', 'inbox-changed'])
 
 /** The phone hears a task's live action at most this often (a turn's end goes at once). */
 const PHONE_ACTIVITY_MS = 15_000
@@ -248,6 +255,15 @@ async function handleBusEvent(name: string, data: unknown): Promise<void> {
     if (d.taskId) emitTaskActivity(d.taskId, ('taskActivity' in d ? d.taskActivity : d.activity) ?? null)
     return
   }
+  if (name === EventNames.ORG_THREADS_CHANGED) {
+    const taskId = (data as { taskId?: unknown } | null)?.taskId
+    if (typeof taskId === 'string' && taskId) emitFeedEvent('threads-changed', { task_id: taskId })
+    return
+  }
+  if (name.startsWith('human-inbox:')) {
+    emitFeedEvent('inbox-changed', {})
+    return
+  }
   if (name.startsWith('task:')) {
     const d = (data ?? {}) as { task?: Task | null; id?: string }
     if (name === EventNames.TASK_DELETED) {
@@ -363,7 +379,7 @@ export function handleBridgeMobileEvent(kind: unknown, data: unknown): void {
   }
   // Only the three known event kinds — a compromised/buggy sender must not
   // inject arbitrary SSE event names into phones.
-  if (kind !== 'session-upsert' && kind !== 'task-upsert' && kind !== 'task-delete' && kind !== 'task-activity') return
+  if (kind !== 'session-upsert' && kind !== 'task-upsert' && kind !== 'task-delete' && kind !== 'task-activity' && !REFETCH_KINDS.has(kind)) return
   fanOut(kind, data)
   // Echo the authoritative status onto the session's OWN conversation channel
   // (same `status` frame the primary's stream route emits). This is the only

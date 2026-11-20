@@ -4635,6 +4635,11 @@ One long-lived SSE stream that pushes slim updates so the app can keep its task 
    - `event: task-activity` (added 2026-10-28) — `data: { "task_id", "activity" }`: the row's
      `live_activity` changed (`null`: no turn runs). At most one per task every 15 s, a clear at
      once. Set it on the row by `task_id`; an older client ignores the frame.
+   - `event: threads-changed` (added 2026-11-19) — `data: { "task_id" }`: that node's Threads
+     changed (acted on, opened, closed). Read `GET /tasks/:id/threads` again; an older client
+     ignores the frame.
+   - `event: inbox-changed` (added 2026-11-19) — `data: {}`: a letter arrived, was answered, read,
+     pinned or archived. Read the inbox again; an older client ignores the frame.
 3. `: ping` comment every ~25s (heartbeat; ignore).
 
 **Client contract:** on (re)connect, apply the snapshot as a full replace, then apply live events incrementally. This feed keeps **no replay ring** and ignores `Last-Event-ID` — replaying pre-snapshot history would regress the fresh snapshot (a completed task flipping back to todo). Clients need no replay logic; every gap heals on the next snapshot.

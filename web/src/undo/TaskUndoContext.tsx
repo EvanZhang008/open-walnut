@@ -237,13 +237,13 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
       body: t.title,
       undo: () => {
         const written = latest.current.store.update(id, { start_date: before });
-        // Its place before the snooze, at once: the server's status says Snoozed until its next
-        // pass (about 1.5 s), and the row would sit under Waiting that long. Held while the
-        // write is out, so a list read answered before it lands does not draw Snoozed back.
+        // Its status before the snooze, at once and exactly: the store's own guess at a woken
+        // status (predictedForStart) gives way to what this Undo remembers, until the server's
+        // pass derives it again (a refused write puts the server's last word back).
         const was = t.user_status;
         if (was && !was.snoozed && !(startDateMs(before) > Date.now())) {
-          const settle = latest.current.store.patchTasksLocal({ [id]: { user_status: was } }, { pending: true });
-          void Promise.resolve(written).then(settle, settle);
+          const back = latest.current.store.predictStatus(id, () => was);
+          void Promise.resolve(written).then((ok) => { if (!ok) back(); }, back);
         }
       },
       revive: { kind: 'snooze', data: { id, before } },

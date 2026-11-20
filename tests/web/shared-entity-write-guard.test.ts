@@ -64,7 +64,7 @@ const ALLOWED: Record<string, string> = {
   [`${RAW} components/tasks/PrPill.tsx`]: 'the two switches of a pull request card (pr_wake, pr_auto_complete): fields only this card shows, drawn on the press and written in order',
   [`${RAW} components/sessions/session-threads-model.ts`]: FALLBACK,
   [`${RAW} popout/PopoutExtTasks.tsx`]: 'a pop-out window has no task store provider; the main window follows the task:updated event',
-  [`${RAW} components/board/kanban/useKanbanWrites.ts`]: 'KNOWN GAP: a Board draws its own payload and patches it on the click, so the Board itself is instant, and the task store follows the event; moving it onto the store is open work',
+  [`${RAW} components/board/kanban/useKanbanWrites.ts`]: 'a card\'s phase and complete go through the task store\'s setPhase / complete when it holds the row (pinned below); the plain call is the fallback for a card whose task the list does not carry',
   // ── org threads ──
   '@/api/org-threads components/org/useOrgThreads.ts': 'it IS the node threads store',
   // ── letters ──
@@ -171,6 +171,88 @@ describe('shared entity writes go through their store', () => {
 })
 
 /**
+ * A private copy of a task row is the read side of the same class: a component that reads a task
+ * with fetchTask and draws it from its own state shows what the server said once, while every
+ * other surface follows the store (2026-11-19: a search answer's rows kept the phase they were
+ * read with; a session header's kebab took the raw event over the store's prediction). Every
+ * importer of a task READ outside the store is listed with why its copy is not drawn over a store
+ * row: the store's row wins where it holds one, or the copy carries fields the list omits, or it is
+ * read for a step and never drawn.
+ */
+const READS = ['fetchTask', 'fetchTasksBulk', 'fetchTasksByIds']
+const READ_FALLBACK = 'the store\'s row is drawn when it holds one; the read is the fallback for a task the list does not carry'
+const ALLOWED_READS: Record<string, string> = {
+  'hooks/useTasks.ts': 'it IS the task store',
+  'contexts/TasksContext.tsx': 'the store\'s label lookup for ids the list does not hold (pill titles and their status)',
+  'apps/mail/MailRouteLine.tsx': 'reads the task once on a click to find its Org node; nothing is drawn from it',
+  'components/board/kanban/KanbanDetailTask.tsx': 'the description and note only (the list omits them); the task itself is useStoreTask',
+  'components/org/AgentMemoryPanel.tsx': 'the node\'s instructions only, a field the list omits, edited in this panel',
+  'components/org/OrgSidePanel.tsx': READ_FALLBACK,
+  'components/sessions/DraftSessionPanel.tsx': 'the bound task\'s project, once, for a draft column whose task the list may not hold yet',
+  'components/sessions/SessionPanel.tsx': `${READ_FALLBACK} (panelTaskCopy: the store's row, the read's ext only)`,
+  'components/sessions/TaskQuickActions.tsx': `${READ_FALLBACK}; its events never write over the store's row`,
+  'components/sessions/SearchAnswerCard.tsx': 'resolves the ids a search answered (prefixes, gone ones); AgentSearchResultRows draws the store\'s phase and status over it',
+  'components/tasks/QuickSortReply.tsx': 'the last start of a task, read for one step, never drawn',
+  'components/tasks/TaskDetailPane.tsx': 'the fields the list omits (description, notes); the row itself is the store\'s',
+  'components/tasks/useRecentOpenedTasks.ts': 'only the opened tasks the list does not carry',
+  'components/transfer/TransferLinks.tsx': 'a title for a link, read once',
+  'components/workspaces/WorkspacePreparingPanel.tsx': READ_FALLBACK,
+  'pages/MainPage.tsx': 'a task the list does not hold yet (a lead made a moment ago, a located id, a description to launch with)',
+}
+
+function readers(): Map<string, string[]> {
+  const found = new Map<string, string[]>()
+  for (const file of sourceFiles(WEB_SRC)) {
+    const rel = relative(WEB_SRC, file).split('\\').join('/')
+    if (rel.startsWith('api/')) continue
+    const src = readFileSync(file, 'utf8')
+    for (const m of src.matchAll(IMPORT_RE)) {
+      const [, typeOnly, star, braces, module] = m
+      if (typeOnly || module!.replace(/^(?:\.\.?\/)+(?:.*\/)?api\//, '@/api/') !== '@/api/tasks') continue
+      const names = star
+        ? READS.filter((n) => new RegExp(`\\b${star}\\.${n}\\b`).test(src))
+        : braces!.split(',').map((p) => p.trim().split(/\s+as\s+/)[0]!.trim()).filter((n) => READS.includes(n))
+      if (names.length) found.set(rel, [...(found.get(rel) ?? []), ...names])
+    }
+  }
+  return found
+}
+
+describe('a task read outside the store is never drawn over the store\'s row', () => {
+  const found = readers()
+
+  it('the scan sees the store\'s own reads', () => {
+    expect(found.get('hooks/useTasks.ts')).toEqual(expect.arrayContaining(['fetchTasksByIds']))
+  })
+
+  it('no new surface keeps a private copy of a task', () => {
+    const unlisted = [...found.keys()].filter((k) => !(k in ALLOWED_READS)).sort()
+    expect(unlisted, `${unlisted.join(', ')} read a task (${unlisted.map((k) => found.get(k)!.join('/')).join('; ')}) outside the store. Draw the store's row (useStoreTask / useTasksContextSafe), reading only what the list omits, or list it in ALLOWED_READS with why its copy is never drawn over the store's row.`).toEqual([])
+  })
+
+  it('the allowed list names only files that still read a task', () => {
+    const gone = Object.keys(ALLOWED_READS).filter((k) => !found.has(k)).sort()
+    expect(gone, `no longer read a task; remove from ALLOWED_READS:\n${gone.join('\n')}`).toEqual([])
+  })
+
+  it('the search answer rows and the session kebab put the store\'s row first', () => {
+    const rows = readFileSync(join(WEB_SRC, 'components/tasks/AgentSearchResultRows.tsx'), 'utf8')
+    expect(rows).toMatch(/const row = live \? \{ \.\.\.given, phase: live\.phase/)
+    const kebab = readFileSync(join(WEB_SRC, 'components/sessions/TaskQuickActions.tsx'), 'utf8')
+    expect(kebab).toMatch(/if \(!followsStore && d\.task/)
+  })
+})
+
+/** The Board writes a card's task through the task store when it holds the row. */
+describe('the Board\'s phase and complete go through the task store', () => {
+  const src = readFileSync(join(WEB_SRC, 'components/board/kanban/useKanbanWrites.ts'), 'utf8')
+  it('setPhase and complete call the store first', () => {
+    expect(src).toMatch(/store \? storeRequest\(\(onError\) => store\.setPhase\(taskId, phase, \{ onError \}\)\)/)
+    expect(src).toMatch(/store \? storeRequest\(\(onError\) => store\.complete\(taskId, \{ onError \}\)\)/)
+  })
+})
+
+/**
  * The second half of the class: a badge that reads a status the SERVER derives. The derive
  * must be on the fast lane for a change a hand made, or the badge waits a pass (the incident).
  * Pinned on the source, so moving a hand's event back to the debounced lane fails here.
@@ -182,6 +264,10 @@ describe('a hand\'s change is derived on the fast lane', () => {
     expect(sync).toMatch(/case EventNames\.ORG_THREADS_CHANGED:[\s\S]{0,400}markNow\(d\.taskId\)/)
     expect(sync).toMatch(/FAST_SOURCES[^\n]*new Set\(\[[^\]]*'api'[^\]]*'org-threads'/)
     expect(sync).toMatch(/const lane = event\.source && FAST_SOURCES\.has\(event\.source\) \? markNow : mark/)
+  })
+
+  it('a session event that moves its task now is marked on the fast lane', () => {
+    expect(sync).toMatch(/const lane = sessionMovesNow\(event\.name, d\) \? markNow : mark;\s+if \(d\.taskId\) lane\(d\.taskId\); else markSession\(d\.sessionId, lane\)/)
   })
 
   it('the fast lane does not wait the debounce', () => {

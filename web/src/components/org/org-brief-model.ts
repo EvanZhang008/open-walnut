@@ -73,8 +73,33 @@ function markSeen(key: string, taskId: string, at: string): void {
     // The newest 50 owners: there are a handful of leads, never thousands.
     const kept = Object.fromEntries(Object.entries(map).sort((a, b) => Date.parse(b[1]) - Date.parse(a[1])).slice(0, 50));
     localStorage.setItem(key, JSON.stringify(kept));
+    seenMoved();
   } catch { /* as above */ }
 }
+
+/**
+ * The Brief and Threads dots follow a read in any window of this browser at once (2026-11-19: read
+ * in one window, the dot stayed in the other until something else re-rendered it). The marks live
+ * in this browser's localStorage, so another window learns of a write from its `storage` event, and
+ * this one from markSeen; either moves `seenVersion`, which a dot's reader subscribes to
+ * (OrgNodeDetail). Another device keeps its own marks: the read state is not the server's.
+ */
+let seenVersionNow = 0;
+const seenListeners = new Set<() => void>();
+function seenMoved(): void {
+  seenVersionNow += 1;
+  for (const fn of [...seenListeners]) fn();
+}
+const onStorage = (e: StorageEvent) => { if (e.key === null || e.key === SEEN_KEY || e.key === THREADS_SEEN_KEY) seenMoved(); };
+export function subscribeSeen(fn: () => void): () => void {
+  if (!seenListeners.size && typeof window !== 'undefined') window.addEventListener('storage', onStorage);
+  seenListeners.add(fn);
+  return () => {
+    seenListeners.delete(fn);
+    if (!seenListeners.size && typeof window !== 'undefined') window.removeEventListener('storage', onStorage);
+  };
+}
+export const seenVersion = (): number => seenVersionNow;
 /** Whether this Brief was rewritten since the user last read it here. */
 export function briefUnread(taskId: string, at: string | undefined): boolean { return unreadSince(SEEN_KEY, taskId, at); }
 export function markBriefSeen(taskId: string, at: string): void { markSeen(SEEN_KEY, taskId, at); }

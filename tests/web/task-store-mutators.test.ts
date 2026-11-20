@@ -70,6 +70,7 @@ const api = {
   createTask: vi.fn(),
   updateTask: vi.fn(async () => ({}) as Task),
   toggleCompleteTask: vi.fn(async () => ({}) as Task),
+  completeTask: vi.fn(async () => ({}) as Task),
   reorderTasks: vi.fn(async () => {}),
   deleteTask: vi.fn(async (_id: string, _opts?: { force?: boolean }) => {}),
   setPluginFieldValue: vi.fn(async () => {}),
@@ -453,5 +454,75 @@ describe('the optimistic Background', () => {
     store.update('task-1', { background_at: '2026-11-11T19:30:00.000Z' })
     store.update('task-1', { background_at: '' })
     expect('background_at' in rows()[0]).toBe(false)
+  })
+})
+
+// A field only the server derives (user_status) follows a hand's change at once: the store lays a
+// prediction over the row (web/src/hooks/status-prediction.ts) until the server's own status comes.
+const { ApiError } = await import('../../web/src/api/api-error')
+describe('the status a change predicts', () => {
+  const later = new Date(Date.now() + 3 * 86_400_000).toISOString()
+  const asleep = {
+    state: 'waiting', kind: 'time', waitingOn: `Snoozed until ${later}`, until: later, snoozed: { until: later, ask: 'Pick a venue' },
+  } as unknown as Task['user_status']
+  const snoozedRow = () => task({ phase: 'NEED_ACTION', start_date: later, user_status: asleep } as Partial<Task>)
+
+  it('a snooze cleared reads Needs you on the click, over an echo the server has not derived again', () => {
+    const store = mount([snoozedRow()])
+    store.update('task-1', { start_date: '' })
+    expect(rows()[0].user_status).toMatchObject({ state: 'needs', ask: 'Pick a venue' })
+    expect(rows()[0].user_status?.snoozed).toBeUndefined()
+    // The write's own echo still carries the snoozed status: the prediction stays over it.
+    eventHandlers.get('task:updated')?.({ task: task({ phase: 'NEED_ACTION', user_status: asleep } as Partial<Task>) })
+    expect(rows()[0].user_status?.state).toBe('needs')
+    // The server's derived status is the answer, whatever it says.
+    eventHandlers.get('task:updated')?.({ task: task({ phase: 'NEED_ACTION', user_status: { state: 'needs', ask: 'Pick a venue', source: 'report' } } as Partial<Task>) })
+    expect(rows()[0].user_status).toEqual({ state: 'needs', ask: 'Pick a venue', source: 'report' })
+  })
+
+  it('a refused unsnooze puts the snoozed status back', async () => {
+    api.updateTask.mockRejectedValueOnce(new ApiError(409, 'The task is locked'))
+    // The store's re-read of the row stays out: the snoozed status back is the undo's own doing.
+    api.fetchTasksByIds.mockReturnValueOnce(new Promise<Task[]>(() => {}))
+    const store = mount([snoozedRow()])
+    const ok = await store.update('task-1', { start_date: '' })
+    expect(ok).toBe(false)
+    expect(rows()[0].user_status).toEqual(asleep)
+  })
+
+  it('an answer on its way holds Working over a server row that has not taken it yet, for its own time', () => {
+    vi.useFakeTimers()
+    try {
+      const needs = { state: 'needs', ask: 'Sign it?', source: 'letter' } as unknown as Task['user_status']
+      const store = mount([task({ phase: 'NEED_ACTION', user_status: needs } as Partial<Task>)])
+      let pending = true
+      store.predictStatus('task-1', (row) => (row.user_status?.state === 'needs' ? { state: 'working' } as Task['user_status'] : row.user_status),
+        { keepMs: 60_000, holds: (row) => pending && row.user_status?.state === 'needs' })
+      expect(rows()[0].user_status?.state).toBe('working')
+      // Past the default 10 s: still Working (2026-11-19, the Org page's flicker).
+      vi.advanceTimersByTime(12_000)
+      expect(rows()[0].user_status?.state).toBe('working')
+      // The server re-derives a Needs you of its own before the session took the answer: held.
+      eventHandlers.get('task:updated')?.({ task: task({ phase: 'NEED_ACTION', user_status: { state: 'needs', ask: 'Its turn ended', source: 'fallback' } } as Partial<Task>) })
+      expect(rows()[0].user_status?.state).toBe('working')
+      // The server's Working is the answer, and the prediction is gone.
+      pending = false
+      eventHandlers.get('task:updated')?.({ task: task({ phase: 'IN_PROGRESS', user_status: { state: 'working' } } as Partial<Task>) })
+      expect(rows()[0].user_status).toEqual({ state: 'working' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a caller that words a refusal itself hears it, and the store reports nothing', async () => {
+    api.updateTask.mockRejectedValueOnce(new ApiError(400, 'No such phase'))
+    api.completeTask.mockRejectedValueOnce(new ApiError(409, 'Open subtasks'))
+    const store = mount([task({ phase: 'IN_PROGRESS', status: 'in_progress' })])
+    const heard: string[] = []
+    expect(await store.setPhase('task-1', 'NEED_ACTION', { onError: (e) => heard.push(e.message) })).toBe(false)
+    expect(await store.complete('task-1', { onError: (e) => heard.push(e.message) })).toBe(false)
+    expect(heard).toEqual(['No such phase', 'Open subtasks'])
+    // The operation-error banner (the store's own report) stays empty.
+    expect(stateSlots.some((v) => typeof v === 'string' && /No such phase|Open subtasks/.test(v))).toBe(false)
   })
 })
