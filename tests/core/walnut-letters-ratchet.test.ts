@@ -16,7 +16,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { EXEMPT_LETTER_SENDS, WALNUT_LETTER_KINDS } from '../../src/core/human-inbox/walnut-letters/registry.js'
 import { LETTER_LANGUAGES, letterLanguageOf } from '../../src/core/human-inbox/walnut-letters/languages.js'
-import { languageDrift, scriptCounts } from '../../src/core/hints/hint-drift-detect.js'
+import { offLanguage, scriptCounts } from '../helpers/text-script.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 
@@ -72,7 +72,7 @@ describe('(b) every kind renders in every letter language', () => {
         expect(han(enAll), `${kind.id} English has Han text: ${enAll}`).toBe(0)
         expect(en.subject.trim()).not.toBe('')
         expect(han(zh.subject), `${kind.id} Chinese subject: ${zh.subject}`).toBeGreaterThan(0)
-        expect(languageDrift(CHINESE_RULE, `${zh.subject}\n${zh.markdown}`, 8), `${kind.id} Chinese render is not Chinese:\n${zh.subject}\n${zh.markdown}`).toBe(false)
+        expect(offLanguage(CHINESE_RULE, `${zh.subject}\n${zh.markdown}`, 8), `${kind.id} Chinese render is not Chinese:\n${zh.subject}\n${zh.markdown}`).toBe(false)
         if (zh.text !== undefined) expect(han(zh.text), `${kind.id} Chinese preview`).toBeGreaterThan(0)
         // Buttons: the same ids in every language, each label in that language.
         expect((zh.actions ?? []).map((a) => a.id)).toEqual((en.actions ?? []).map((a) => a.id))
@@ -93,6 +93,8 @@ describe('(b) every kind renders in every letter language', () => {
     expect(letterLanguageOf({ session: { reply_language: '用中文回复' } } as never)).toBe('zh')
     expect(letterLanguageOf({ session: { reply_language: 'Answer in English' }, agent: { language: 'zh-CN' } } as never)).toBe('en')
     expect(letterLanguageOf({ session: { reply_language: 'Answer in French' } } as never)).toBe('en')
+    // The first language the rule names decides ("never Chinese" is not a request for it).
+    expect(letterLanguageOf({ session: { reply_language: 'Answer in English, never Chinese' }, agent: { language: 'zh' } } as never)).toBe('en')
     expect(letterLanguageOf({ agent: { language: 'zh-Hans' } } as never)).toBe('zh')
     expect(letterLanguageOf({ agent: { language: 'ja' } } as never)).toBe('en')
     expect(letterLanguageOf({} as never)).toBe('en')
@@ -138,7 +140,7 @@ describe('Walnut\'s own words on a letter\'s record follow the letter language t
     const render = (v: unknown) => typeof v === 'function' ? (v as (a: string) => string)('2026-11-02 05:00') : String(v)
     for (const key of keys) {
       const zh = render((RECEIPT_WORDS.zh as unknown as Record<string, unknown>)[key])
-      expect(languageDrift('Talk to the user in Chinese', zh, 8), `${key}: ${zh}`).not.toBe(true)
+      expect(offLanguage('Talk to the user in Chinese', zh, 8), `${key}: ${zh}`).not.toBe(true)
       expect(han(zh), key).toBeGreaterThan(0)
       expect(han(render((RECEIPT_WORDS.en as unknown as Record<string, unknown>)[key])), key).toBe(0)
     }
@@ -163,7 +165,7 @@ describe('Walnut\'s own words on a letter\'s record follow the letter language t
       const args = ['cloud_delete', '2026-11-02 05:00']
       const zh = table.zh!(...args)
       expect(han(zh), `${name}: ${zh}`).toBeGreaterThan(0)
-      expect(languageDrift('Talk to the user in Chinese', zh, 8), `${name}: ${zh}`).not.toBe(true)
+      expect(offLanguage('Talk to the user in Chinese', zh, 8), `${name}: ${zh}`).not.toBe(true)
       expect(scriptCounts(table.en!(...args)).han, name).toBe(0)
     }
   })
@@ -191,7 +193,7 @@ describe('(d) a kind Walnut stops sending is retired, and its open letters settl
     const walnut = { sessionId: 'external', host: 'local' }
     for (const k of RETIRED_LETTER_KINDS) {
       expect(Object.keys(k.settleReason).sort(), k.id).toEqual([...LETTER_LANGUAGES].sort())
-      expect(languageDrift('Talk to the user in Chinese', k.settleReason.zh, 8), k.id).toBe(false)
+      expect(offLanguage('Talk to the user in Chinese', k.settleReason.zh, 8), k.id).toBe(false)
       expect(han(k.settleReason.en), k.id).toBe(0)
       expect(k.samples.length, k.id).toBeGreaterThan(0)
       for (const subject of k.samples) {

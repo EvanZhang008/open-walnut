@@ -64,12 +64,8 @@ test('Settings: change a built-in, reset it, add and remove a custom hint', asyn
   for (const kind of ['question', 'rich-output', 'voice-reply']) {
     await expect(group.getByTestId(`message-hint-origin-${kind}`)).toHaveText('Built in')
   }
-  // The reply language itself is a line of the system prompt (2026-11-06); its hint row is only
-  // the correction after a reply drifted from it (4f6ac14c2), never on a schedule.
-  const replyLanguage = group.getByTestId('message-hint-reply-language')
-  await expect(replyLanguage).toContainText('When a reply drifts from it')
-  await expect(replyLanguage).not.toContainText(/every message|every \d+ messages|at session start/i)
-  await expect(group.getByTestId('message-hint-origin-reply-language')).toHaveText('Built in')
+  // The reply language is a line of the system prompt; no hint row corrects it (removed 2026-11-20).
+  await expect(group.getByTestId('message-hint-reply-language')).toHaveCount(0)
   await rich.getByRole('button', { name: /Rich output/ }).click()
   // Turn the reminder back on, every 3 messages.
   await page.getByTestId('hint-trigger-rich-output-every_n_turns').check()

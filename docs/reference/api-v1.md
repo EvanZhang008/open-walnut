@@ -3772,9 +3772,9 @@ escape, never matching the person's words.
   description, built_in, enabled, triggers, every_turns?, placement, audience:
   { roles, agents, sessions }, allowed_triggers, text?, overridden }], triggers,
   roles, session? }`. Triggers: `every_turn`, `every_n_turns`, `session_start`,
-  `after_compaction`, `on_change`, `on_drift`, `on_request`; any one that holds
-  sends the hint. `session`: `{ session_id, sends, told, drift?, last_send_by?,
-  compact_uuid?, next_message_carries }`; unknown session `404`.
+  `after_compaction`, `on_change`, `on_request`; any one that holds
+  sends the hint. `session`: `{ session_id, sends, told, compact_uuid?,
+  next_message_carries }`; unknown session `404`.
 - `PUT /api/v1/hints/:kind` body any of `{ enabled, triggers, every_turns,
   placement, audience, text, label }` → `200 { hint }`, merged into the stored
   change (`config.yaml` `session.hints`). A kind that is not built in needs

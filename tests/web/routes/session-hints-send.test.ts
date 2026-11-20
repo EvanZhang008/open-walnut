@@ -128,7 +128,7 @@ describe('session:send through the hint pipeline', () => {
     const sid = await newSession()
     await sendMessageToSession(sid, 'note from a peer', { source: 'peer' })
     expect(kinds(await drain(sid))).toEqual(['rich-output'])
-    expect((await getSessionByClaudeId(sid))?.hintState?.lastSendBy).toBe('agent')
+    expect((await getSessionByClaudeId(sid))?.hintState?.sends).toBe(1)
   })
 
   it('a message the companion composed keeps its voice block where it was', async () => {

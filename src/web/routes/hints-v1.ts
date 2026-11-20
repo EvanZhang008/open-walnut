@@ -49,8 +49,6 @@ async function sessionView(sessionId: string) {
     session_id: sessionId,
     sends: state?.sends ?? 0,
     told: state?.told ?? {},
-    ...(state?.drift ? { drift: state.drift } : {}),
-    ...(state?.lastSendBy ? { last_send_by: state.lastSendBy } : {}),
     ...(record.lastCompactUuid ? { compact_uuid: record.lastCompactUuid } : {}),
     next_message_carries: plan.carried.map((h) => h.kind),
   }
@@ -63,7 +61,7 @@ hintsV1Router.get('/hints', async (req: Request, res: Response, next: NextFuncti
     const session = sid ? await sessionView(sid) : undefined
     if (sid && !session) return sendError(res, 404, 'session_not_found', `No session ${sid}`)
     res.json({
-      hints: effectiveHints(config).map((h) => describeHint(h, config)),
+      hints: effectiveHints(config).map((h) => describeHint(h)),
       triggers: HINT_TRIGGERS,
       roles: HINT_ROLES,
       ...(session ? { session } : {}),
@@ -115,7 +113,7 @@ hintsV1Router.put('/hints/:kind', async (req: Request, res: Response, next: Next
     })
     const after = await getConfig()
     const hint = findHint(after, kind)
-    res.json({ hint: hint ? describeHint(hint, after) : null })
+    res.json({ hint: hint ? describeHint(hint) : null })
   } catch (err) {
     next(err)
   }
@@ -133,7 +131,7 @@ hintsV1Router.delete('/hints/:kind', async (req: Request, res: Response, next: N
     await writeOverride(kind, () => undefined)
     const after = await getConfig()
     const hint = findHint(after, kind)
-    res.json({ hint: hint ? describeHint(hint, after) : null })
+    res.json({ hint: hint ? describeHint(hint) : null })
   } catch (err) {
     next(err)
   }

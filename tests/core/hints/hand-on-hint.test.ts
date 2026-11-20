@@ -21,7 +21,7 @@ const MAIN = task({ id: 'main', org_role: 'main', project: 'Main' })
 function send(rec: Rec, owner: Task, opts: { afterCompaction?: boolean; config?: unknown } = {}): string[] {
   const config = (opts.config ?? { session: {} }) as never
   const plan = planHints({ hints: effectiveHints(config), target: hintTargetOf(rec.claudeSessionId, owner), record: rec, config, ...(opts.afterCompaction ? { afterCompaction: true } : {}) })
-  rec.hintState = advanceHintState(rec.hintState, rec, plan.told, { now: Date.now(), sentBy: 'agent', ...(opts.afterCompaction ? { byHook: true, count: false } : {}) })
+  rec.hintState = advanceHintState(rec.hintState, rec, plan.told, { now: Date.now(), ...(opts.afterCompaction ? { byHook: true, count: false } : {}) })
   return plan.carried.filter((h) => h.kind === 'hand-on').map((h) => h.text)
 }
 

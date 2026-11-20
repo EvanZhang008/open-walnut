@@ -7,7 +7,7 @@ import type { OpCall } from './core.js';
 import { defineOp, getOp } from './registry.js';
 import { startTask, TASK_START_INPUT, THREAD_HANDOFF_ARG } from './task-execution.js';
 import { handOffLine, type HandOffResult } from '../core/org/thread-follow.js';
-import { deliveryWaitLine, NO_REPLY_ASKED, sendBehindSlowHostLine, REPLY_ARRIVES_HINT, withLanguageNote, withOutcome } from './outcome.js';
+import { deliveryWaitLine, NO_REPLY_ASKED, sendBehindSlowHostLine, REPLY_ARRIVES_HINT, withOutcome } from './outcome.js';
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
 import { USER_SPOKE_TEXT, USER_WORDS_BACK, userSaidLine, type UserSaid } from '../core/sessions/user-spoke.js';
 import { WORK_PLACE_RULE } from '../core/work-place.js';
@@ -112,8 +112,7 @@ defineOp({
     thread: THREAD_HANDOFF_ARG,
   },
   bind: { method: 'POST', path: '/messages' },
-  // A message off the user's reply language: the route's note leads `next` (hints/reply-language-drift.ts).
-  mapResult: ({ body, args }) => withLanguageNote(sendOutcome(body, args), body),
+  mapResult: ({ body, args }) => sendOutcome(body, args),
   // Answered a check that is gone (2026-11-17): a session that still passes it, or a queued call replayed, is not refused.
   retiredInput: ['same_deliverable'],
   tags: { readonly: false, remote: 'allow', primaryOnly: true },

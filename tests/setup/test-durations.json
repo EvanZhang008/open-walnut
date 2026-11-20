@@ -239,7 +239,6 @@
   "tests/core/helper-entitlements-ratchet.test.ts": 143,
   "tests/core/hints/brief-hint.test.ts": 346,
   "tests/core/hints/hand-on-hint.test.ts": 587,
-  "tests/core/hints/hint-drift-detect.test.ts": 184,
   "tests/core/hints/hint-empty-body.test.ts": 389,
   "tests/core/hints/hint-format.test.ts": 423,
   "tests/core/hints/hint-origin.test.ts": 370,

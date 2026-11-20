@@ -18,7 +18,7 @@ import { SettingsCheckbox } from '../inputs/SettingsCheckbox';
 import { setShowWalnutAdditions, useShowWalnutAdditions } from '@/hooks/useShowWalnutAdditions';
 import '@/styles/settings-mic.css';
 
-type Trigger = 'every_turn' | 'every_n_turns' | 'session_start' | 'after_compaction' | 'on_change' | 'on_drift' | 'on_request';
+type Trigger = 'every_turn' | 'every_n_turns' | 'session_start' | 'after_compaction' | 'on_change' | 'on_request';
 type Role = 'main' | 'lead' | 'worker' | 'ask' | 'other';
 
 interface HintRow {
@@ -34,15 +34,12 @@ interface HintRow {
   allowed_triggers: Trigger[];
   text?: string;
   overridden: boolean;
-  /** A built-in whose text holds a setting of the user's (hint-origin.ts). */
-  user_setting?: { label: string; anchor: string; value: string | null; walnut_text: string };
 }
 
 const TRIGGER_LABEL: Record<Trigger, string> = {
   session_start: 'At session start',
   after_compaction: 'After a compaction',
   on_change: 'When it changes',
-  on_drift: 'When a reply drifts from it',
   every_n_turns: 'Every few messages',
   every_turn: 'Every message',
   on_request: 'When the sender asks',
@@ -100,22 +97,6 @@ function HintEditor({ hint, onSave, onReset }: {
   return (
     <div className="message-hint-editor" data-testid={`message-hint-editor-${hint.kind}`}>
       <p className="settings-row-help">{hint.description}</p>
-      {hint.user_setting && (
-        // Whose words it sends: the user's setting first, then Walnut's own sentence (2026-11-01).
-        <div className="message-hint-sends" data-testid={`message-hint-sends-${hint.kind}`}>
-          <p className="settings-row-help">What it sends:</p>
-          <p className="message-hint-sends-part">
-            <span className="message-hint-origin-badge message-hint-origin-badge--yours">Yours</span>{' '}
-            {hint.user_setting.value
-              ? <mark className="message-hint-yours">{hint.user_setting.value}</mark>
-              : <em>Your {hint.user_setting.label} setting is empty, so this hint is not sent.</em>}{' '}
-            <a className="message-hint-settings-link" href={`#${hint.user_setting.anchor}`}>Edit your {hint.user_setting.label}</a>
-          </p>
-          <p className="message-hint-sends-part">
-            <span className="message-hint-origin-badge">Built in</span> {hint.user_setting.walnut_text}
-          </p>
-        </div>
-      )}
       {!hint.built_in && (
         <SettingsRow
           indent
@@ -201,8 +182,7 @@ function HintEditor({ hint, onSave, onReset }: {
   );
 }
 
-/** `replyLanguage`: the Reply language row's value on this page, so the correction's "What it sends" follows an edit there. */
-export function MessageHintsGroup({ replyLanguage }: { replyLanguage?: string } = {}) {
+export function MessageHintsGroup() {
   const alwaysShowAdded = useShowWalnutAdditions();
   const [hints, setHints] = useState<HintRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -223,7 +203,7 @@ export function MessageHintsGroup({ replyLanguage }: { replyLanguage?: string } 
       setError(err instanceof Error ? err.message : String(err));
     }
   }, []);
-  useEffect(() => { void load(); }, [load, replyLanguage]);
+  useEffect(() => { void load(); }, [load]);
 
   /** True once stored; a refusal keeps the words in the box (and its draft). */
   const put = async (kind: string, patch: Record<string, unknown>): Promise<boolean> => {

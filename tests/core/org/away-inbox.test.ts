@@ -56,7 +56,7 @@ describe('the user-away hint', () => {
   const config = { session: {} } as never;
   const send = (rec: Rec, role: 'lead' | 'worker', away: { away: boolean; lastSeenAt: number | null } | null, sentBy: 'person' | 'agent' = 'agent') => {
     const p = planHints({ hints: effectiveHints(config), target: { sessionId: rec.claudeSessionId, role }, record: rec as never, config, sentBy, inChat: sentBy === 'person', away });
-    rec.hintState = advanceHintState(rec.hintState, rec as never, p.told, { now: Date.now(), sentBy }) as never;
+    rec.hintState = advanceHintState(rec.hintState, rec as never, p.told, { now: Date.now() }) as never;
     return p.carried.filter((h) => h.kind === 'user-away').map((h) => h.text);
   };
 

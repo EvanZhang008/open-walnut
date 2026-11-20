@@ -6,8 +6,9 @@
  * and for every person's message, so hint_list said one thing and every session got another.
  * On 2026-11-06 the reply-language hint was removed altogether (the user: "just remove reply
  * language"): the setting is a line of every session's system prompt now
- * (sessions/reply-language-context.ts). On 2026-11-14 it came back as a correction only
-(hints/reply-language-drift.ts): `on_drift` is its one trigger, and no other hint may use it.
+ * (sessions/reply-language-context.ts). From 2026-11-14 to 2026-11-20 it came back as a
+ * correction after a drift (trigger `on_drift`); that is gone too
+ * (tests/core/hints/no-reply-language-reminder.test.ts).
  *
  * The class guard, two halves:
  *   - every built-in and a custom hint, planned for every role, both senders, every session state
@@ -47,7 +48,7 @@ function states(): Array<{ hintState?: SessionHintState; lastCompactUuid?: strin
     { hintState: { sends: 1, told: told('same') }, lastCompactUuid: 'c0' },
     { hintState: { sends: 9, told: told('old') }, lastCompactUuid: 'c1' },
     // A drift mark an older Walnut left on the record.
-    { hintState: { sends: 3, told: told('old'), drift: { 'reply-language': '2026-11-05T01:00:00.000Z' } }, lastCompactUuid: 'c0' },
+    { hintState: { sends: 3, told: told('old'), drift: { 'reply-language': '2026-11-05T01:00:00.000Z' } } as SessionHintState, lastCompactUuid: 'c0' },
   ];
 }
 
@@ -97,7 +98,7 @@ describe('a hint goes out only for its own triggers', () => {
     expect(carried).toBeGreaterThan(0);
   });
 
-  it('a reply-language block is never due without a drift, for any role or sender, even on a record told it before', () => {
+  it('a reply-language block is never due, for any role or sender, even on a record told it before', () => {
     const config = { session: { reply_language: RULE } } as never;
     for (const role of HINT_ROLES) {
       for (const sentBy of ['person', 'agent'] as const) {
@@ -117,12 +118,7 @@ describe('a hint goes out only for its own triggers', () => {
     }
   });
 
-  it('reply-language goes out only on a drift, and no other hint may use on_drift', () => {
-    const hints = effectiveHints({ session: { reply_language: RULE } } as never);
-    const lang = hints.find((x) => x.kind === 'reply-language')!;
-    expect(lang.allowedTriggers).toEqual(['on_drift']);
-    expect(lang.triggers).toEqual(['on_drift']);
-    for (const h of hints) if (h.kind !== 'reply-language') expect(h.allowedTriggers, h.kind).not.toContain('on_drift');
+  it('no built-in rides every message by default except threads', () => {
     // No built-in rides every message by default except threads, which says so (one per message the user files).
     const everyTurn = effectiveHints(null).filter((x) => x.triggers.includes('every_turn')).map((x) => x.kind);
     expect(everyTurn).toEqual(['threads']);
@@ -177,8 +173,6 @@ describe('no path sends a hint around the registry', () => {
       'core/sessions/output-mode.ts': 'defines it',
       'core/sessions/reply-language-context.ts': 'the line of every session\'s system prompt',
       'core/human-inbox/walnut-letters/languages.ts': 'the language of Walnut\'s own letters to the user, not a hint',
-      'core/hints/hint-registry.ts': 'the reply-language correction, due only on a drift (on_drift)',
-      'core/hints/reply-language-drift.ts': 'judges a person\'s turn and a session\'s letters against it',
       'core/org/reflection/pipeline.ts': 'the language a reflection writes its correction in, not a hint',
     };
     const users = all.filter((f) => /\breplyLanguageText\s*\(/.test(f.text)).map((f) => f.rel);
@@ -201,8 +195,8 @@ describe('no path sends a hint around the registry', () => {
     // The drift sensor and the mid-turn correction went with the hint.
     expect(fs.existsSync(path.join(SRC, 'core/hints/hint-drift.ts'))).toBe(false);
     expect(fs.existsSync(path.join(SRC, 'core/hints/hint-drift-live.ts'))).toBe(false);
-    // Model-facing hint text in src/core/hints is English; the drift detector's language names are data.
-    const cjk = all.filter((f) => f.rel.startsWith('core/hints/') && f.rel !== 'core/hints/hint-drift-detect.ts'
+    // Model-facing hint text in src/core/hints is English.
+    const cjk = all.filter((f) => f.rel.startsWith('core/hints/')
       // Kana, CJK, Hangul and Cyrillic, escaped (test data stays ASCII here).
       && /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\u0400-\u04ff]/.test(f.text)).map((f) => f.rel);
     expect(cjk).toEqual([]);

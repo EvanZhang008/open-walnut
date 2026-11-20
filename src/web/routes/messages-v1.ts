@@ -101,14 +101,7 @@ messagesV1Router.post('/messages', async (req: Request, res: Response, next: Nex
       const threadHandoff = result.targetTaskId && !result.repliedTo
         ? await handOffThread({ callerSid: header(req, 'x-walnut-caller-sid'), target: result.targetTaskId, threadId: str(b.thread), handsOn: !!result.handedOn?.length })
         : null
-      // A session's message off the user's reply language gets one note in its answer (hints/reply-language-drift.ts).
-      const { messageLanguageNote } = await import('../../core/hints/reply-language-drift.js')
-      const replyLanguage = automationCaller ? null
-        : await messageLanguageNote(header(req, 'x-walnut-caller-sid'), [b.title, b.text, b.result, b.not_done])
-      res.status(202).json({
-        ...result, ...(waiting ? { waiting } : {}), ...(threadHandoff ? { thread_handoff: threadHandoff } : {}),
-        ...(replyLanguage ? { reply_language: replyLanguage } : {}),
-      })
+      res.status(202).json({ ...result, ...(waiting ? { waiting } : {}), ...(threadHandoff ? { thread_handoff: threadHandoff } : {}) })
     } catch (err) {
       if (err instanceof SendError) {
         sendError(res, err.statusCode, err.code, err.message, err.detail)

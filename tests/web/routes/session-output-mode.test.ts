@@ -422,7 +422,7 @@ describe('session:send — rich', () => {
       await sendMessageToSession(sid, `from ${source}`, { source })
       expect(await drain(sid), source).toBe(i + 2 === 6 ? hinted(sent(`from ${source}`, source), REMIND) : sent(`from ${source}`, source))
     }
-    expect((await getSessionByClaudeId(sid))?.hintState?.lastSendBy).toBe('agent')
+    expect((await getSessionByClaudeId(sid))?.hintState?.sends).toBe(sources.length + 1)
   })
 
   it('a peer message keeps its display text clean; the hint rides the text the CLI gets', async () => {

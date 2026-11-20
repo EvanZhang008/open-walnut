@@ -20,7 +20,7 @@ const guidance = (lines: string[]): TeamGuidanceState => ({ node: 'Marina VP', l
 function send(rec: Rec, g: TeamGuidanceState | null, opts: { afterCompaction?: boolean } = {}): string[] {
   const config = { session: {} } as never
   const plan = planHints({ hints: effectiveHints(config), target: hintTargetOf(rec.claudeSessionId, WORKER), record: rec, config, teamGuidance: g, ...(opts.afterCompaction ? { afterCompaction: true } : {}) })
-  rec.hintState = advanceHintState(rec.hintState, rec, plan.told, { now: Date.now(), sentBy: 'agent', ...(opts.afterCompaction ? { byHook: true, count: false } : {}) })
+  rec.hintState = advanceHintState(rec.hintState, rec, plan.told, { now: Date.now(), ...(opts.afterCompaction ? { byHook: true, count: false } : {}) })
   return plan.carried.filter((h) => h.kind === 'team-guidance').map((h) => h.text)
 }
 

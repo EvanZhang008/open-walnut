@@ -36,8 +36,8 @@ export const NOTICE_RIDES: readonly string[] = [
   // The org changed: Main's digest and a lead's team note (org-store.ts, team-note.ts). A note
   // whose task waits on the lead is sent with a wake reason (org/lead-waits.ts), not by its outcome.
   'org-update',
-  // Default instructions or the reply language changed (instruction-notice.ts, reply-language-drift.ts).
-  'task-routing-policy', 'reply-language',
+  // Default instructions or the reply language changed (instruction-notice.ts).
+  'task-routing-policy',
   // The task moved, its folder moved, Walnut restarted, a lead handed its project over.
   'moved', 'folder-moved', 'restarted', 'handed-over',
   // A request past its deadline that stays open, and its reminder (no `request` attribute: held-notices.ts).

@@ -32,7 +32,7 @@ export type UsageSource =
   | 'host-learning' // what a host is used for, learned from its sessions
   | 'privacy-check' // whether a new task is private before its first push to an outside service
   | 'outbound-check' // whether a post or mail about to leave reads as a personal matter (core/outbound)
-  | 'reply-language' // a progress line rewritten in the user's language for a live correction
+  | 'reply-language' // retired: older rows only (a progress line rewritten in the user's language)
   | 'drawing'      // a drawing turned into a clean diagram, or a description drawn as one
   | 'reflection';  // an org node's reflection judging one moment of a session it manages (core/org/reflection)
 

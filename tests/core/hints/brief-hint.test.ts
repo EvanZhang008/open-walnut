@@ -22,7 +22,7 @@ type Rec = { claudeSessionId: string; output_mode: 'markdown'; hintState?: Sessi
 function send(rec: Rec, owner: Task, tasks: Task[]): string[] {
   const config = { session: {} } as never
   const plan = planHints({ hints: effectiveHints(config), target: hintTargetOf(rec.claudeSessionId, owner), record: rec, config, brief: briefHintStateOf(owner, tasks) })
-  rec.hintState = advanceHintState(rec.hintState, rec, plan.told, { now: Date.now(), sentBy: 'agent' })
+  rec.hintState = advanceHintState(rec.hintState, rec, plan.told, { now: Date.now() })
   return plan.carried.filter((h) => h.kind === 'brief').map((h) => h.text)
 }
 

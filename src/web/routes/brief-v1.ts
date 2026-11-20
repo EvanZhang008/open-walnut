@@ -145,8 +145,5 @@ briefV1Router.put('/tasks/:id/brief', route(async (req, res) => {
     ? `${callerSid}#${(await getSessionByClaudeId(callerSid).catch(() => null))?.lastCompactUuid ?? ''}`
     : undefined
   log.task.info('brief written', { taskId: task.id, by: sid ? 'session' : 'human', chars: out.brief.text.length, issues: out.issues.length })
-  // A session's Brief off the user's reply language gets one note in its answer (hints/reply-language-drift.ts).
-  const { letterLanguageNote } = await import('../../core/hints/reply-language-drift.js')
-  const replyLanguage = callerSid ? await letterLanguageNote([content, ...(edits ?? []).map((e) => e?.new)], 'Brief') : null
-  res.json({ task_id: task.id, title: task.title, brief: briefOut(out.brief), issues: formatBriefIssues(out.issues), chars: out.brief.text.length, own_chars: briefOwnChars(out.brief.text, out.brief.added), limit: BRIEF_MAX_CHARS, ...(replyLanguage ? { reply_language: replyLanguage } : {}) })
+  res.json({ task_id: task.id, title: task.title, brief: briefOut(out.brief), issues: formatBriefIssues(out.issues), chars: out.brief.text.length, own_chars: briefOwnChars(out.brief.text, out.brief.added), limit: BRIEF_MAX_CHARS })
 }))

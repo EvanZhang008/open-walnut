@@ -85,7 +85,7 @@ describe('handleMessageRequest', () => {
     expect(queue[0].status).toBe('pending')
     expect(updateSessionMock).toHaveBeenCalledWith(SID, expect.objectContaining({
       output_mode_injected: 'rich',
-      hintState: expect.objectContaining({ sends: 1, lastSendBy: 'person', told: { 'rich-output': expect.objectContaining({ hash: 'rich' }) } }),
+      hintState: expect.objectContaining({ sends: 1, told: { 'rich-output': expect.objectContaining({ hash: 'rich' }) } }),
     }), expect.any(Function), expect.anything())
   })
 

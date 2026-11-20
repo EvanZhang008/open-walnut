@@ -9,7 +9,6 @@
  *                     (`SessionRecord.lastCompactUuid`, the boundary the place and
  *                     instruction notices use: one boundary, not a second tracker)
  *   on_change         what it says now differs from what the session was told
- *   on_drift          a reply since it last went out broke its rule (the reply-language correction alone)
  *   on_request        the sender asked for it on this message (a voice send, a question)
  */
 
@@ -26,8 +25,6 @@ export interface HintDueInput {
   /** What the hint says now. */
   identity: string;
   compactUuid?: string;
-  /** When a reply last drifted off this hint's rule. */
-  driftAt?: string;
   requested: boolean;
 }
 
@@ -53,9 +50,6 @@ export function dueReasons(i: HintDueInput): MessageHintTrigger[] {
         break;
       case 'on_change':
         if (told && told.hash !== i.identity) out.push(t);
-        break;
-      case 'on_drift':
-        if (i.driftAt && (!told || Date.parse(i.driftAt) > Date.parse(told.at))) out.push(t);
         break;
       case 'on_request':
         if (i.requested) out.push(t);

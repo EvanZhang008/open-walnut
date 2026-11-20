@@ -2241,8 +2241,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if (role() === 'leader') void import('../core/org/morning-report.js').then((m) => m.startReportClock()).catch(() => {})
     // A look at Main or a lead whose Brief is stale asks it for one refresh turn (src/core/sessions/brief-refresh.ts).
     if (role() === 'leader') void import('../core/sessions/brief-refresh.js').then((m) => m.startBriefRefreshLooks()).catch(() => {})
-    // The reply language, corrected only when a turn a person started drifts off it (src/core/hints/reply-language-drift.ts).
-    if (role() === 'leader') void import('../core/hints/reply-language-drift.js').then((m) => m.startReplyLanguageDrift()).catch(() => {})
     // What agents read, moved into one knowledge folder and kept in line with the places it came from (src/core/knowledge/migrate.ts).
     if (role() === 'leader') void import('../core/knowledge/migrate.js').then((m) => m.startKnowledge()).catch(() => {})
     // The org nodes' duties (src/core/org/duties/): each runs for the nodes that turned it on.

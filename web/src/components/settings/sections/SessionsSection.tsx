@@ -286,7 +286,7 @@ export function SessionsSection({ config, onSave }: Props) {
         <SettingsRow
           anchor="settings-reply-language"
           label="Reply language"
-          help="One sentence in every session's instructions; a running session hears a change, and a reply that drifts from it gets a short correction. Empty says nothing about language."
+          help="One sentence in every session's instructions; a running session hears a change. Empty says nothing about language."
           htmlFor="session-reply-language"
           error={replyLanguage.error}
           control={
@@ -306,7 +306,7 @@ export function SessionsSection({ config, onSave }: Props) {
         />
       </SettingsGroup>
 
-      <MessageHintsGroup replyLanguage={config.session?.reply_language ?? ''} />
+      <MessageHintsGroup />
 
       <SettingsGroup heading="Files">
         <SettingsRow

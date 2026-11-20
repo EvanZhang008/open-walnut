@@ -4,18 +4,51 @@
  * his lead: in the user's reply language, not hard-coded Chinese, this is a public product).
  *
  * A letter is for the user, so it follows the language he asked to be answered in: the first language
- * his reply-language rule names (config `session.reply_language`, read the way the reply-language
- * hint reads it), else his display language (`config.agent.language`), else English. A language with
- * no text here falls back to English.
+ * his reply-language rule names (config `session.reply_language`, as replyLanguageText reads it), else
+ * his display language (`config.agent.language`), else English. A language with no text here falls
+ * back to English.
  *
  * To add a language: add its code to LETTER_LANGUAGES. Every kind's text table is a
  * `ByLang<...>`, so the compiler then names each template still missing its text, and the ratchet
  * (tests/core/walnut-letters-ratchet.test.ts) renders every kind in it.
  */
-import { expectedScript, ruleLanguage } from '../../hints/hint-drift-detect.js';
 import { replyLanguageText } from '../../sessions/output-mode.js';
 import { normalizeLang } from '../../ui-language.js';
 import type { Config } from '../../types.js';
+
+/** The script a language is written in. */
+export type Script = 'han' | 'kana' | 'hangul' | 'latin' | 'cyrillic';
+
+/** The language names a reply-language sentence may hold, with their script and letter-language code. */
+const NAMED: ReadonlyArray<[RegExp, Script, string | null]> = [
+  [/\b(chinese|mandarin|cantonese)\b|\u4e2d\u6587|\u6c49\u8bed|\u6f22\u8a9e|\u666e\u901a\u8bdd/i, 'han', 'zh'],
+  [/\bjapanese\b|\u65e5\u672c\u8a9e/i, 'kana', 'ja'],
+  [/\bkorean\b|\ud55c\uad6d\uc5b4/i, 'hangul', 'ko'],
+  [/\brussian\b|\u0440\u0443\u0441\u0441\u043a/i, 'cyrillic', 'ru'],
+  [/\b(english|french|german|spanish|portuguese|italian|dutch)\b/i, 'latin', null],
+];
+
+function firstNamed(rule: string): { script: Script; lang: string | null } | null {
+  let best: { at: number; script: Script; lang: string | null } | null = null;
+  for (const [re, script, lang] of NAMED) {
+    const m = re.exec(rule);
+    if (m && (!best || m.index < best.at)) best = { at: m.index, script, lang };
+  }
+  return best;
+}
+
+/**
+ * The script the user's reply-language sentence asks for: the first language it names (the rest is
+ * usually "code stays English"); null when it names none.
+ */
+export function expectedScript(rule: string): Script | null {
+  return firstNamed(rule)?.script ?? null;
+}
+
+/** The language the rule asks for, by its code (null: a Latin-script one, or none). */
+export function ruleLanguage(rule: string): string | null {
+  return firstNamed(rule)?.lang ?? null;
+}
 
 export const LETTER_LANGUAGES = ['en', 'zh'] as const;
 export type LetterLang = (typeof LETTER_LANGUAGES)[number];

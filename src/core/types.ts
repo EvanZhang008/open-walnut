@@ -324,7 +324,7 @@ export const DEFAULT_SESSION_OUTPUT_MODE: SessionOutputMode = 'rich';
 
 /** When a message hint is sent (src/core/hints/hint-schedule.ts). Any one that holds sends it. */
 export type MessageHintTrigger =
-  | 'every_turn' | 'every_n_turns' | 'session_start' | 'after_compaction' | 'on_change' | 'on_drift' | 'on_request';
+  | 'every_turn' | 'every_n_turns' | 'session_start' | 'after_compaction' | 'on_change' | 'on_request';
 
 /** Who a message hint is for, by the session's task. */
 export type MessageHintRole = 'main' | 'lead' | 'worker' | 'ask' | 'other';
@@ -389,10 +389,6 @@ export interface SessionHintState {
   /** Messages that went through the hint pipeline. */
   sends: number;
   told: Record<string, SessionHintTold>;
-  /** A hint kind whose rule the last reply broke, and when (`on_drift`). */
-  drift?: Record<string, string>;
-  /** Who sent the last message: drift is judged only on a reply to a person. */
-  lastSendBy?: 'person' | 'agent';
 }
 
 /**

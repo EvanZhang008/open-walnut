@@ -26,7 +26,7 @@ function run(rec: Rec, config: Pick<Config, 'session'>, n: number, opts: { reque
       ...(opts.requested?.(i) ? { requested: opts.requested(i)! } : {}),
     });
     out.push(plan.carried.map((h) => (h.kind === 'rich-output' ? (h.text.includes('still on') ? 'rich-reminder' : h.text.includes('is off') ? 'rich-off' : 'rich-full') : h.kind)));
-    rec.hintState = advanceHintState(rec.hintState, rec, plan.told, { now: (t += 1000), sentBy: 'person' });
+    rec.hintState = advanceHintState(rec.hintState, rec, plan.told, { now: (t += 1000) });
   }
   return out;
 }
@@ -69,7 +69,7 @@ describe('default schedule', () => {
     run(rec, cfg({ reply_language: 'Answer in Chinese.' }), 1);
     expect(run(rec, cfg({ reply_language: 'Answer in Japanese.' }), 2)).toEqual([[], []]);
     expect(run(rec, cfg({}), 1)).toEqual([[]]);
-    rec.hintState = { ...rec.hintState!, drift: { 'reply-language': '2026-11-06T00:00:00Z' } };
+    rec.hintState = { ...rec.hintState!, drift: { 'reply-language': new Date().toISOString() }, lastSendBy: 'person' } as SessionHintState;
     expect(run(rec, cfg({ reply_language: 'Answer in Chinese.' }), 2)).toEqual([[], []]);
   });
 
@@ -89,9 +89,9 @@ describe('default schedule', () => {
 });
 
 describe('user and agent settings', () => {
-  it('every_turns and triggers override the default; a setting for reply-language is ignored', () => {
+  it('every_turns and triggers override the default; an old setting for reply-language is ignored', () => {
     const rec: Rec = { claudeSessionId: 's8' };
-    const config = cfg({ hints: { 'rich-output': { every_turns: 2, triggers: ['session_start', 'every_n_turns'] }, 'reply-language': { triggers: ['every_turn'] } }, reply_language: 'Chinese.' });
+    const config = cfg({ hints: { 'rich-output': { every_turns: 2, triggers: ['session_start', 'every_n_turns'] }, 'reply-language': { enabled: true, triggers: ['on_drift', 'every_turn'] as never } }, reply_language: 'Chinese.' });
     const sent = run(rec, config, 5);
     expect(sent).toEqual([['rich-full'], [], ['rich-reminder'], [], ['rich-reminder']]);
   });
@@ -124,7 +124,7 @@ describe('user and agent settings', () => {
     const config = cfg({ reply_language: 'Talk to the user in Chinese.' });
     const plan = (role: 'main' | 'lead' | 'worker' | 'ask' | 'other', rec: Rec, sentBy?: 'person' | 'agent') => {
       const p = planHints({ hints: effectiveHints(config), target: { sessionId: rec.claudeSessionId, role }, record: rec, config, ...(sentBy ? { sentBy } : {}) });
-      rec.hintState = advanceHintState(rec.hintState, rec, p.told, { now: Date.now(), ...(sentBy ? { sentBy } : {}) });
+      rec.hintState = advanceHintState(rec.hintState, rec, p.told, { now: Date.now() });
       // hand-on is Main's and a lead's own schedule (tests/core/hints/hand-on-hint.test.ts).
       return { kinds: p.carried.map((h) => h.kind).filter((k) => k !== 'hand-on'), reasons: p.reasons['reply-language'] };
     };
@@ -160,7 +160,7 @@ describe('user and agent settings', () => {
     expect(() => validateHintSettings('rich-output', { every_turns: 0 })).toThrow(HintSettingsError);
     expect(() => validateHintSettings('Bad', {})).toThrow(HintSettingsError);
     expect(validateHintSettings('rich-output', { every_turns: 3, placement: 'before', junk: 1 })).toEqual({ every_turns: 3, placement: 'before' });
-    // on_drift is a trigger no hint may use since the reply-language hint is gone.
+    // on_drift is no trigger since the reply-language correction is gone (2026-11-20).
     expect(() => validateHintSettings('rich-output', { triggers: ['on_drift'] })).toThrow(HintSettingsError);
     expect(() => validateHintSettings('tone', { text: 'Hi.', triggers: ['on_drift'] })).toThrow(HintSettingsError);
   });
@@ -171,11 +171,6 @@ describe('schedule details', () => {
     const told = { send: 3, hash: 'rich', at: '2026-11-01T00:00:00Z' };
     expect(dueReasons({ triggers: ['every_n_turns'], everyTurns: 5, told, send: 7, identity: 'rich', requested: false })).toEqual([]);
     expect(dueReasons({ triggers: ['every_n_turns'], everyTurns: 5, told, send: 8, identity: 'rich', requested: false })).toEqual(['every_n_turns']);
-  });
-
-  it('a drift older than the last telling does not count', () => {
-    const told = { send: 3, hash: 'x', at: '2026-11-02T00:00:00Z' };
-    expect(dueReasons({ triggers: ['on_drift'], told, send: 4, identity: 'x', driftAt: '2026-11-01T00:00:00Z', requested: false })).toEqual([]);
   });
 });
 
@@ -199,19 +194,15 @@ describe('compaction hook and host tail', () => {
     expect(run(rec, config, 1)).toEqual([[]]);
   });
 
-  it('the host tail is empty by default and carries only an owed hint, never the reply-language correction', () => {
+  it('the host tail is empty by default and carries only an owed hint, never anything for an old drift mark', () => {
     const rec: Rec = { claudeSessionId: 's12', output_mode: 'markdown' };
     const config = cfg({ reply_language: 'Chinese.' });
     run(rec, config, 1);
     expect(hostReplyTail(rec, cfg({}))).toBeNull();
     expect(hostReplyTail(rec, config)).toBeNull();
-    // A drift mark an older Walnut left (over a day old) owes nothing now.
-    rec.hintState = { ...rec.hintState!, drift: { 'reply-language': new Date(Date.now() - 2 * 86_400_000).toISOString() } };
+    // A drift mark an older Walnut left owes nothing.
+    rec.hintState = { ...rec.hintState!, drift: { 'reply-language': new Date().toISOString() } } as SessionHintState;
     expect(hostReplyTail(rec, config)).toBeNull();
-    // Nor a fresh one: the host cannot record that it told it, so it waits for the server's next send.
-    rec.hintState = { ...rec.hintState!, drift: { 'reply-language': new Date().toISOString() } };
-    expect(hostReplyTail(rec, config)).toBeNull();
-    delete rec.hintState!.drift;
     expect(hostReplyTail(rec, cfg({ reply_language: 'Chinese.', hints: { tone: { text: 'Hi.', triggers: ['every_turn'] } } }))).toContain('Walnut (tone): Hi.');
   });
 });
@@ -234,7 +225,7 @@ describe('a hand-edited config.yaml', () => {
     expect(rich.everyTurns).toBe(5);
     expect(rich.placement).toBe('after');
     expect(rich.audience.roles).toEqual([]);
-    expect(hints.find((h) => h.kind === 'reply-language')!.triggers).toEqual(['on_drift']);
+    expect(hints.find((h) => h.kind === 'reply-language')).toBeUndefined();
     expect(hints.find((h) => h.kind === 'my-note')).toBeUndefined();
     const ok = hints.find((h) => h.kind === 'ok-note')!;
     expect(ok.triggers).toEqual(['every_turn']);

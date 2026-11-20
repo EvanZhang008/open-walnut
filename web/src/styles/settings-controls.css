@@ -634,15 +634,5 @@ textarea.settings-input {
   background: color-mix(in srgb, var(--accent, #0a84ff) 18%, transparent);
   border-color: color-mix(in srgb, var(--accent, #0a84ff) 40%, transparent);
 }
-.message-hint-sends { margin: 4px 0 8px; }
-.message-hint-sends-part { margin: 2px 0; font-size: 13px; overflow-wrap: anywhere; }
-.message-hint-sends-part .message-hint-origin-badge { margin-left: 0; }
-/* The user's own words in a hint's "What it sends". */
-.message-hint-sends .message-hint-yours {
-  background: color-mix(in srgb, var(--accent, #0a84ff) 22%, transparent);
-  color: inherit;
-  border-radius: 3px;
-  padding: 0 2px;
-}
 
 /* Task providers' "Try a task title": the title field and its Ask AI button on one line. */

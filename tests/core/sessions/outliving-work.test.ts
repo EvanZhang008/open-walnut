@@ -207,7 +207,6 @@ const RAW_READERS: Record<string, string> = {
   'src/core/event-types.ts': 'the session:result payload',
   'src/web/server.ts': 'a session:result: an intermediate result is no turn end',
   'src/core/org/thread-answers.ts': 'a session:result: an intermediate result is no turn end',
-  'src/core/hints/reply-language-drift.ts': 'a session:result: an intermediate result is no turn end',
   'src/core/session-auto-continue.ts': 'a session:result: an intermediate result is no turn end',
   'src/core/session-hooks/derive/session.ts': 'a session:result: an intermediate result is no turn end',
   'src/core/sessions/lane-turn-gate.ts': 'a session:result: an intermediate result is no turn end',

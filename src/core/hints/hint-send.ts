@@ -153,7 +153,7 @@ export function planHints(input: {
       ? (hint.triggers.includes('after_compaction') ? ['after_compaction' as const] : [])
       : dueReasons({
         triggers: hint.triggers, everyTurns: hint.everyTurns, told, send, identity,
-        compactUuid: input.record?.lastCompactUuid, driftAt: state.drift?.[hint.kind], requested: !!request,
+        compactUuid: input.record?.lastCompactUuid, requested: !!request,
       });
     if (input.only) reasons = reasons.filter((r) => input.only!.has(r));
     if (!reasons.length) continue;
@@ -186,23 +186,19 @@ export function advanceHintState(
   cur: SessionHintState | undefined,
   record: HintRecord | null | undefined,
   told: Record<string, string>,
-  opts: { now: number; sentBy?: 'person' | 'agent'; byHook?: boolean; count?: boolean },
+  opts: { now: number; byHook?: boolean; count?: boolean },
 ): SessionHintState {
   const base = cur ?? seededState(record);
   const sends = base.sends + (opts.count === false ? 0 : 1);
   const at = new Date(opts.now).toISOString();
-  const next: SessionHintState = { sends, told: { ...base.told }, ...(base.drift ? { drift: { ...base.drift } } : {}) };
+  const next: SessionHintState = { sends, told: { ...base.told } };
   for (const [kind, hash] of Object.entries(told)) {
     next.told[kind] = {
       send: sends, hash, at,
       ...(record?.lastCompactUuid ? { compact: record.lastCompactUuid } : {}),
       ...(opts.byHook ? { byHookAt: at } : {}),
     };
-    if (next.drift) delete next.drift[kind];
   }
-  if (next.drift && !Object.keys(next.drift).length) delete next.drift;
-  const by = opts.sentBy ?? base.lastSendBy;
-  if (by) next.lastSendBy = by;
   return next;
 }
 
@@ -344,7 +340,7 @@ export interface HintSendOptions {
   requested?: RequestedHints;
   /** Injectable for tests; omitted = the live config. */
   config?: HintConfig;
-  /** A person typed it (drift is judged only on replies to a person). */
+  /** A person typed it. */
   sentBy?: 'person' | 'agent';
   /** Typed into the chat itself; default: sentBy is a person. False for a letter's answer. */
   inChat?: boolean;
@@ -442,7 +438,7 @@ export async function prepareHintedSend(
         const ask = plan.carried.find((h) => h.kind === 'question' && h.arg);
         const askName = ask ? /<walnut-ask thread="[^"]*"(?: name="([^"]*)")?>/.exec(ask.text)?.[1] ?? '' : '';
         await writeHintState(sid, (cur) => ({
-          hintState: advanceHintState(cur.hintState, cur, plan.told, { now: at, ...(opts.sentBy ? { sentBy: opts.sentBy } : {}) }),
+          hintState: advanceHintState(cur.hintState, cur, plan.told, { now: at }),
           ...(ask?.arg ? { asksSent: withAskSent(cur.asksSent, { thread: ask.arg, name: askName, words: body, at }) } : {}),
           // Kept for a rollback: the release before the registry reads its rich edge here.
           ...(plan.told['rich-output'] ? { output_mode_injected: plan.told['rich-output'] === 'rich' ? 'rich' : 'markdown' } : {}),
@@ -496,14 +492,8 @@ export interface StartHintData {
  */
 export async function prepareStartHints<T extends StartHintData>(data: T, opts: { config?: HintConfig; now?: () => number } = {}): Promise<{ data: T; commit(sessionId: string): Promise<void> }> {
   const none = { data, commit: async () => {} };
-  // Who started the conversation is kept even when no hint rides its first message: the reply-language
-  // check judges only a turn a person started (hints/reply-language-drift.ts), the first one included.
   // A start made inside a browser under automation's request is not a person's (sessions/automated-client.ts).
   const personStart = !!data.attributed && !ambientAutomatedClient();
-  const sender = personStart ? 'person' as const : 'agent' as const;
-  const bare = { data, commit: async (sessionId: string) => writeHintState(sessionId, (cur) => (
-    cur.hintState?.lastSendBy === sender ? null
-      : { hintState: advanceHintState(cur.hintState, cur, {}, { now: Date.now(), sentBy: sender, count: false }) })) };
   if (!data.message || data.profile?.areaId || data.message.startsWith('/') || data.forkedFromSessionId || data.resumeFile || data.resumeSessionAtMessageUuid) return none;
   try {
     const config = opts.config !== undefined ? opts.config : await import('../config-manager.js').then((m) => m.getConfig()).catch(() => null);
@@ -518,14 +508,14 @@ export async function prepareStartHints<T extends StartHintData>(data: T, opts: 
       ...(personStart ? { sentBy: 'person' as const, inChat: true } : { sentBy: 'agent' as const }),
       message: parseHinted(data.message).text,
     });
-    if (!plan.carried.length) return bare;
+    if (!plan.carried.length) return none;
     const message = [...(plan.before.length ? [plan.before.join('\n')] : []), data.message, ...(plan.after.length ? [plan.after.join('\n')] : [])].join('\n\n');
     const now = opts.now ?? Date.now;
     return {
       data: { ...data, message },
       async commit(sessionId: string): Promise<void> {
         await writeHintState(sessionId, (cur) => ({
-          hintState: advanceHintState(cur.hintState, cur, plan.told, { now: now(), sentBy: data.attributed ? 'person' : 'agent' }),
+          hintState: advanceHintState(cur.hintState, cur, plan.told, { now: now() }),
           ...(plan.told['rich-output'] ? { output_mode_injected: plan.told['rich-output'] === 'rich' ? 'rich' : 'markdown' } : {}),
         }));
       },
@@ -644,18 +634,15 @@ export function hintStateAtBoundary(
   return changed ? { ...state, told } : undefined;
 }
 
-/**
- * The triggers a host can honour: they need no message count and no request. Not `on_drift`: the host
- * cannot record that it told the correction, so it would ride every peer note until the server's next send.
- */
+/** The triggers a host can honour: they need no message count and no request. */
 const HOST_TRIGGERS: ReadonlySet<string> = new Set(['every_turn', 'session_start', 'after_compaction', 'on_change']);
 
 /**
  * The blocks a session's HOST appends to a message it delivers itself (a peer note
  * between two sessions on that host never reaches the server's queue; host-slice.ts
  * ships this as `replyTail`, offline-host-core.ts appends it): every after-placed
- * hint that is owed right now (one whose triggers say every_turn, a reply that
- * drifted, a change not yet told). The host cannot count messages or record what it told, so
+ * hint that is owed right now (one whose triggers say every_turn, a change not
+ * yet told). The host cannot count messages or record what it told, so
  * `every_n_turns` waits for the server's next send, and an owed hint rides the
  * host's deliveries until the server tells it and the slice moves on. Usually
  * nothing is owed and the field is left out. Null when empty.

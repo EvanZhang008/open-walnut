@@ -74,7 +74,7 @@ describe('a fork\'s compaction tells the main conversation nothing', () => {
       { claudeSessionId: 's-lead', lastCompactUuid: 'c0', lastCompactAt: longBefore }
     const send = (config: Pick<Config, 'session'>, opts: { afterCompaction?: boolean; byHook?: boolean; now: number }) => {
       const plan = planHints({ hints: effectiveHints(config), target: { sessionId: rec.claudeSessionId }, record: rec as never, config, ...(opts.afterCompaction ? { afterCompaction: true } : {}) })
-      rec.hintState = advanceHintState(rec.hintState, rec as never, plan.told, { now: opts.now, ...(opts.byHook ? { byHook: true, count: false } : { sentBy: 'person' }) })
+      rec.hintState = advanceHintState(rec.hintState, rec as never, plan.told, { now: opts.now, ...(opts.byHook ? { byHook: true, count: false } : {}) })
       return plan.carried.map((c) => c.kind)
     }
     expect(send(cfg('markdown'), { now: hookAt - 600_000 })).toEqual([])

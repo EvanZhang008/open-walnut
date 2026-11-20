@@ -2,10 +2,10 @@
  * Settings > Sessions > Reply language, against the fixture's REAL server: the
  * sentence typed in the row is what config.session.reply_language holds, it
  * survives a reload, other session settings are kept, and clearing it removes
- * the key (no line is added for an empty setting). Since 2026-11-06 the setting is
- * a line of every session's instructions, never a message hint: the row's help says
- * so and Message hints has no Reply language row. page.goto is only the first
- * load; the pane switch is a real nav click.
+ * the key (no line is added for an empty setting). The setting is a line of every
+ * session's instructions, never a message hint: the row's help says so and Message
+ * hints has no Reply language row (the correction after a drift was removed
+ * 2026-11-20). page.goto is only the first load; the pane switch is a real nav click.
  */
 import { test, expect, type Page } from '@playwright/test'
 
@@ -31,19 +31,13 @@ test('the reply language saves on blur, reloads, keeps other session settings, a
   await expect(input).toBeVisible()
   await expect(input).toHaveValue(typeof before.reply_language === 'string' ? before.reply_language : '')
   await expect(page.locator('#settings-reply-language .settings-row-help'))
-    .toHaveText("One sentence in every session's instructions; a running session hears a change, and a reply that drifts from it gets a short correction. Empty says nothing about language.")
+    .toHaveText("One sentence in every session's instructions; a running session hears a change. Empty says nothing about language.")
 
   await input.fill(RULE)
   await input.blur()
   await expect.poll(async () => (await readSession(page)).reply_language, { timeout: 10_000 }).toBe(RULE)
-  // The rule is a line of the system prompt; the one message hint with it is the correction after a
-  // drift (hints/reply-language-drift.ts), and its "What it sends" follows the edit.
-  const langHint = page.getByTestId('message-hint-reply-language')
-  await expect(langHint).toHaveCount(1)
-  await langHint.getByRole('button', { name: /Reply language/ }).click()
-  const sends = page.getByTestId('message-hint-sends-reply-language')
-  await expect(sends.locator('mark.message-hint-yours')).toHaveText(RULE, { timeout: 10_000 })
-  await expect(sends).toContainText('Your last reply the user read was not in this language')
+  // The rule is a line of the system prompt: no message hint carries it.
+  await expect(page.getByTestId('message-hint-reply-language')).toHaveCount(0)
   const after = await readSession(page)
   // Saving this row must not drop any other session setting. Presence, not
   // values: parallel specs flip some of them on the same fixture server.

@@ -25,20 +25,19 @@ import type {
   Config, MessageHintRole, MessageHintSettings, MessageHintTrigger, SessionOutputMode,
 } from '../types.js';
 import {
-  RICH_OUTPUT_MODE_OFF_INSTRUCTION, RICH_OUTPUT_MODE_ON_INSTRUCTION, RICH_OUTPUT_MODE_REMINDER, replyLanguageText, resolveEffectiveOutputMode,
+  RICH_OUTPUT_MODE_OFF_INSTRUCTION, RICH_OUTPUT_MODE_ON_INSTRUCTION, RICH_OUTPUT_MODE_REMINDER, resolveEffectiveOutputMode,
 } from '../sessions/output-mode.js';
 import { VOICE_REPLY_TEXT } from '../sessions/voice-reply.js';
 import { getHintContext, hintContextText } from './hint-context.js';
 import { ASK_THREAD_RE, askHintText, askNameOf } from '../sessions/ask-thread.js';
 import { briefHintText, type BriefHintState } from '../sessions/brief-hint.js';
 import { threadHintText, threadsTidyText, type ThreadHintState, type ThreadsTidyState } from '../org/thread-capture.js';
-import { HINT_USER_SETTINGS, REPLY_LANGUAGE_DRIFT_TAIL, WALNUT_ONLY_KINDS } from './hint-origin.js';
+import { WALNUT_ONLY_KINDS } from './hint-origin.js';
 import { orgHandOnHint } from '../org/core-instructions.js';
 import { teamGuidanceIdentity, teamGuidanceText, type TeamGuidanceState } from '../org/reflection/team-guidance-hint.js';
-import { offLineOf } from './reply-language-quote.js';
 
 export const HINT_TRIGGERS: readonly MessageHintTrigger[] = [
-  'every_turn', 'every_n_turns', 'session_start', 'after_compaction', 'on_change', 'on_drift', 'on_request',
+  'every_turn', 'every_n_turns', 'session_start', 'after_compaction', 'on_change', 'on_request',
 ];
 export const HINT_ROLES: readonly MessageHintRole[] = ['main', 'lead', 'worker', 'ask', 'other'];
 export const HINT_KIND_RE = /^[a-z][a-z0-9-]{1,40}$/;
@@ -49,7 +48,7 @@ export const HINT_EVERY_MAX = 1000;
 export interface HintContentInput {
   config: Pick<Config, 'session'> | null;
   record: {
-    output_mode?: SessionOutputMode; hintState?: { drift?: Record<string, string> }; claudeSessionId?: string;
+    output_mode?: SessionOutputMode;
     threadMeta?: ReadonlyArray<{ seq?: number; thread?: string; title?: string; question?: string }>;
     asksSent?: ReadonlyArray<{ thread: string; name: string }>;
   } | null;
@@ -88,10 +87,7 @@ interface HintSpec {
   render(input: HintContentInput, reasons: ReadonlySet<MessageHintTrigger>): HintRender | null;
 }
 
-// on_drift belongs to the reply-language correction alone (hints/reply-language-drift.ts); no other
-// hint, and no custom one, may use it.
-const SCHEDULED: readonly MessageHintTrigger[] = HINT_TRIGGERS.filter((t) => t !== 'on_request' && t !== 'on_drift');
-const REPLY_LANGUAGE_DRIFT_FRESH_MS = 24 * 3600_000;
+const SCHEDULED: readonly MessageHintTrigger[] = HINT_TRIGGERS.filter((t) => t !== 'on_request');
 const periodicOnly = (reasons: ReadonlySet<MessageHintTrigger>) =>
   [...reasons].every((r) => r === 'every_turn' || r === 'every_n_turns');
 
@@ -134,27 +130,6 @@ const BUILT_IN: readonly HintSpec[] = [
         return reasons.has('on_change') && i.toldHash === 'rich' ? { text: RICH_OUTPUT_MODE_OFF_INSTRUCTION } : null;
       }
       return { text: periodicOnly(reasons) ? RICH_OUTPUT_MODE_REMINDER : RICH_OUTPUT_MODE_ON_INSTRUCTION };
-    },
-  },
-  {
-    kind: 'reply-language',
-    label: 'Reply language correction',
-    description: 'Only after a turn you started was read in another language than your Reply language setting (Settings): the next message carries your setting again with a short correction, and a line or letter off it gets one inside the turn. Nothing is sent while replies keep the language or the setting is empty.',
-    allowed: ['on_drift'],
-    // The language itself is a line of every session's prompt (sessions/reply-language-context.ts);
-    // this hint is only the correction (2026-11-14, the org reflection: long sessions drifted to
-    // English with nothing to bring them back). Never on a schedule (2026-11-05, the user: "I said
-    // don't do this every round").
-    defaults: { enabled: true, triggers: ['on_drift'], placement: 'after' },
-    identity: (i) => replyLanguageText(i.config),
-    render: (i, reasons) => {
-      const text = replyLanguageText(i.config);
-      const age = Date.now() - Date.parse(i.record?.hintState?.drift?.['reply-language'] ?? '');
-      // A mark older than a day (one an older Walnut left) is no news about this conversation, nor one dated ahead.
-      if (!text || !reasons.has('on_drift') || !(age > -60_000 && age < REPLY_LANGUAGE_DRIFT_FRESH_MS)) return null;
-      // The line itself, so the session can see it was not in the language (it read a bare correction as a mistake).
-      const said = offLineOf(i.record?.claudeSessionId);
-      return { text: `${text} ${REPLY_LANGUAGE_DRIFT_TAIL}${said ? ` It was: "${said}"` : ''}` };
     },
   },
   {
@@ -453,10 +428,7 @@ export function validateHintSettings(kind: string, input: unknown): MessageHintS
 }
 
 /** A hint as the API and the ops show it (no functions). */
-export function describeHint(h: EffectiveHint, config?: Pick<Config, 'session'> | null) {
-  const setting = h.builtIn ? HINT_USER_SETTINGS[h.kind] : undefined;
-  // As it is sent: whitespace collapsed, a long one cut (output-mode.ts).
-  const value = setting?.key === 'reply_language' ? replyLanguageText(config ?? null) : null;
+export function describeHint(h: EffectiveHint) {
   return {
     kind: h.kind,
     label: h.label,
@@ -470,13 +442,5 @@ export function describeHint(h: EffectiveHint, config?: Pick<Config, 'session'> 
     allowed_triggers: h.allowedTriggers,
     ...(h.text !== undefined ? { text: h.text } : {}),
     overridden: h.overridden,
-    // Whose words it sends: a built-in's are Walnut's, but for a setting of the user's it fills in.
-    ...(setting ? {
-      user_setting: {
-        label: setting.label, anchor: setting.anchor,
-        value,
-        walnut_text: setting.walnutText,
-      },
-    } : {}),
   };
 }
