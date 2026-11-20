@@ -91,26 +91,33 @@ describe('changes close together are one notice', () => {
     expect(await line(sid, 'Next')).toBe('Next');
   });
 
-  it('what the old version tags were never waits: a session that copies them shows them to the user (2026-11-19)', async () => {
+  it('what the old version tags were waits out the gap too, then goes with the rest (2026-11-20)', async () => {
     const { sid } = await seed();
     expect(await line(sid, 'First')).toContain(RELAY);
     // The session's prompt turns out to be in the old tagged form, inside the gap.
     const rec = (await getSessionByClaudeId(sid))!;
     await updateSessionRecord(sid, { appliedAppendSystemPrompt: legacyForm(rec.appliedAppendSystemPrompt!) });
     await updateSessionRecord(sid, { taskRoutingNoted: { ...(await getSessionByClaudeId(sid))!.taskRoutingNoted!, promptHash: createHash('sha256').update(legacyForm(rec.appliedAppendSystemPrompt!)).digest('hex').slice(0, 16) } });
-    const out = await line(sid, 'Inside the gap');
+    expect(await line(sid, 'Inside the gap')).toBe('Inside the gap');
+    await shiftTold(sid, NOTICE_GAP_MS + 60_000);
+    const out = await line(sid, 'After the gap');
     expect(out).toContain(LEGACY_TAGS_NOTE);
     expect(out).not.toContain(RELAY);
     expect(await line(sid, 'Next')).toBe('Next');
   });
 
-  it('the user\'s own words never wait, and take what was waiting with them', async () => {
+  it('a change of the user\'s profile or a role\'s instructions waits out the gap too, and goes with what was waiting (2026-11-20)', async () => {
+    // 2026-11-20: let through at once, the user's profile, the Threads rules and a role's instructions
+    // gave sessions a second notice 0.4 to 2.7 hours after the first, 65 in a night.
     const { sid, task } = await seed();
     expect(await line(sid, 'First')).toContain(RELAY);
     await forget(sid, RELAY);
     expect(await line(sid, 'Soon after')).toBe('Soon after');
     await editOrgNode(task.id, { instructions: 'Ship weekly.' });
-    const out = await line(sid, 'Right after the edit');
+    expect(await line(sid, 'Right after the edit')).toBe('Right after the edit');
+    await shiftTold(sid, NOTICE_GAP_MS + 60_000);
+    const out = await line(sid, 'After the gap');
+    expect(out.split(NOTICE).length - 1).toBe(1);
     expect(out).toContain('Ship weekly.');
     expect(out).toContain(RELAY);
   });

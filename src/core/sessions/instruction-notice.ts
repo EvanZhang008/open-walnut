@@ -30,7 +30,7 @@ import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import { isAcpEngine, resolveEngine } from '../agents/engine-registry.js';
 import { WALNUT_PROMPT_MARK, defaultInstructions, type InstructionTask } from './session-context.js';
 import { currentUserProfile, refreshUserProfile } from './user-profile-context.js';
-import { LEGACY_TAGS_NOTE, dueChanges, hash, parseInstructions, renderDue, viewsAfter, type BlockView, type Due, type Parsed } from './instruction-diff.js';
+import { dueChanges, hash, parseInstructions, renderDue, sameRule, viewsAfter, type BlockView, type Due, type Parsed } from './instruction-diff.js';
 import {
   NOTICE_OPENING, bumpNoticeTold, clearNoticeDelivering, leadsWithNotice, noticeDelivering, noticeInFlight,
   noticeToldGeneration,
@@ -58,11 +58,12 @@ type Noted = Omit<SessionInstructionsNoted, 'prior'>;
 
 /**
  * Changes close together go out as one notice: once a session was told on its
- * current prompt and boundary, the next notice waits this long after that one
- * (2026-11-03: Main and two leads got 4 to 5 notices in 12 hours, each riding
- * its own message). A compaction starts a new boundary, so what it dropped is
- * told at once, and a change to the user's profile or a role's instructions never
- * waits (a newer word from the user wins): it goes at once, with what was waiting.
+ * current prompt and boundary, the next notice waits this long after that one,
+ * whatever changed (2026-11-03: Main and two leads got 4 to 5 notices in 12 hours,
+ * each riding its own message; 2026-11-20: with the user's profile, the Threads
+ * rules and a role's instructions let through at once, sessions got a second one
+ * 0.4 to 2.7 hours after the first, 65 in a night). A compaction starts a new
+ * boundary, so what it dropped is told at once.
  */
 export const NOTICE_GAP_MS = 3 * 60 * 60_000;
 
@@ -82,10 +83,11 @@ function heldNoted(record: NoticeRecord): Noted | undefined {
 /** What the session holds beyond its prompt: told plain lines and block versions (none when `ignoreTold`). */
 function heldBeyondPrompt(record: NoticeRecord, current: Parsed, prompt: Parsed, ignoreTold?: boolean) {
   const noted = heldNoted(record);
-  if (ignoreTold || !noted) return { told: new Set<string>(), views: {} as Record<string, BlockView> };
+  if (ignoreTold || !noted) return { told: new Set<string>(), views: {} as Record<string, BlockView>, texts: [] as string[] };
   const told = new Set(noted.lines ?? []);
   const views: Record<string, BlockView> = { ...(noted.blocks ?? {}) };
-  if (noted.blocks) return { told, views };
+  const texts = noted.texts ?? [];
+  if (noted.blocks) return { told, views, texts };
   // A record from before blocks were kept: it was told every tagged line of a version as plain
   // lines. The current version, when all of it was told; else, when it was told lines of some
   // version in between (neither current nor in the prompt), what it holds is unknown and the
@@ -100,11 +102,13 @@ function heldBeyondPrompt(record: NoticeRecord, current: Parsed, prompt: Parsed,
       views[block.id] = { version: 'unknown', words: [] };
     }
   }
-  return { told, views };
+  return { told, views, texts };
 }
 
+type Found = { due: Due; views: Record<string, BlockView>; texts: string[] };
+
 /** What this session should be told now, or null. */
-function dueFor(record: NoticeRecord, task: InstructionTask, ignoreTold?: boolean, now = Date.now()): { due: Due; views: Record<string, BlockView> } | null {
+function dueFor(record: NoticeRecord, task: InstructionTask, ignoreTold?: boolean, now = Date.now()): Found | null {
   // ACP rebuilds its instructions from buildSessionContext at every establish.
   if (isAcpEngine(resolveEngine(record.engine))) return null;
   const prompt = record.appliedAppendSystemPrompt;
@@ -114,21 +118,41 @@ function dueFor(record: NoticeRecord, task: InstructionTask, ignoreTold?: boolea
   if (!prompt.includes(WALNUT_PROMPT_MARK)) return null;
   const current = parseInstructions(defaultInstructions(task));
   const parsedPrompt = parseInstructions(prompt);
-  const { told, views } = heldBeyondPrompt(record, current, parsedPrompt, ignoreTold);
+  const { told, views, texts } = heldBeyondPrompt(record, current, parsedPrompt, ignoreTold);
   // Lines of USER.md past its budget are still the user's rules: never told as removed.
   const cut = currentUserProfile().cut;
-  const found = dueChanges(current, parsedPrompt, told, views, cut?.length ? { 'user-profile': new Set(cut) } : {});
+  const found = dueChanges(current, parsedPrompt, told, views, cut?.length ? { 'user-profile': new Set(cut) } : {}, texts);
   // A replica's copy of the config has no Reply language (config-allowlist.ts): there it is
   // unknown, not gone, so a session it leads is never told the language rule stopped applying.
   const due = found && isFollower() ? { ...found, gone: found.gone.filter((g) => g.id !== 'reply-language') } : found;
   if (!due || (!due.plain.length && !due.blocks.length && !due.gone.length)) return null;
-  // Walnut's own wording waits out the gap; a change to the user's profile or a role's
-  // instructions (the user's or an agent's words for this session) goes at once, with the rest.
+  // Every change waits out the gap after the last notice on this prompt and boundary.
   const lastAt = heldNoted(record)?.toldAt;
-  // What the old version tags were is told at once too: a session that copies them shows them to the user.
-  const urgent = due.blocks.length || due.gone.length || due.plain.some((c) => c.line === LEGACY_TAGS_NOTE);
-  if (!ignoreTold && lastAt && now - Date.parse(lastAt) < NOTICE_GAP_MS && !urgent) return null;
-  return { due, views };
+  if (!ignoreTold && lastAt && now - Date.parse(lastAt) < NOTICE_GAP_MS) return null;
+  return { due, views, texts };
+}
+
+/** How much of the plain lines it told a record keeps in full words (they are the base of the next rewording). */
+const TEXTS_MAX_CHARS = 30_000;
+/**
+ * The plain lines held in full words once `due` reached the session, newest first: one wording per
+ * rule, so every older wording of a line it was told now goes (`dropped`). Every told line is kept,
+ * so a short one that grows long later still has the wording it was told; one pushed out by the
+ * cap is a told line the record cannot name, and the next rewording of a long line goes whole.
+ */
+function textsAfter(texts: readonly string[], due: Due): { texts: string[]; dropped: string[] } {
+  const fresh = due.plain.map((c) => c.line);
+  const was = new Set(due.plain.map((c) => c.was).filter((w): w is string => !!w));
+  const dropped = texts.filter((t) => !fresh.includes(t) && (was.has(t) || fresh.some((l) => sameRule(t, l))));
+  const gone = new Set(dropped);
+  const out: string[] = [];
+  let size = 0;
+  for (const t of new Set([...fresh, ...texts.filter((x) => !gone.has(x))])) {
+    if (size + t.length > TEXTS_MAX_CHARS) break;
+    out.push(t);
+    size += t.length;
+  }
+  return { texts: out, dropped };
 }
 
 /** The notice's opening; after a compaction, as part `part` of the restatement (instructionRestatementParts). */
@@ -167,17 +191,28 @@ export function instructionRestatementParts(record: NoticeRecord, task: Instruct
   }
 }
 
-/** A notice's told record, and the blocks it told (to merge only those onto a newer record). */
-type Told = { noted: Noted; changed: string[] };
+const capTexts = (texts: string[]) => {
+  let size = 0;
+  return texts.filter((t) => (size += t.length) <= TEXTS_MAX_CHARS);
+};
+
+/** A notice's told record, the blocks it told (to merge only those onto a newer record) and the older wordings it replaced. */
+type Told = { noted: Noted; changed: string[]; replaced?: string[] };
+const replacedOf = (found: Found) => textsAfter(found.texts, found.due).dropped;
 const changedIds = (due: Due) => [...due.blocks.map((c) => c.block.id), ...due.gone.map((g) => g.id)];
 
 /** What counts as told once `due` reached the session: added to what this prompt and boundary were told. */
-function notedOf(record: NoticeRecord, found: { due: Due; views: Record<string, BlockView> }, extra?: Partial<Noted>): Noted {
+function notedOf(record: NoticeRecord, found: Found, extra?: Partial<Noted>): Noted {
   const base = !extra?.byHookAt ? heldNoted(record)?.lines ?? [] : [];
-  const told = [...new Set([...base, ...found.due.plain.map((c) => hash(c.line))])];
+  const { texts, dropped } = textsAfter(found.texts, found.due);
+  // A wording a newer one replaced is no longer what the session holds: told no more, so it is told
+  // again should it come back (a deploy rolled back), and it never reads as a line the record cannot name.
+  const gone = new Set(dropped.map(hash));
+  const told = [...new Set([...base, ...found.due.plain.map((c) => hash(c.line))])].filter((h) => !gone.has(h));
   const blocks = viewsAfter(found.views, found.due);
   return { version: hash(JSON.stringify([told, blocks])), promptHash: hash(record.appliedAppendSystemPrompt ?? ''),
-    ...(record.lastCompactUuid ? { compactUuid: record.lastCompactUuid } : {}), lines: told, blocks, toldAt: new Date().toISOString(), ...extra };
+    ...(record.lastCompactUuid ? { compactUuid: record.lastCompactUuid } : {}), lines: told, blocks,
+    ...(texts.length ? { texts } : {}), toldAt: new Date().toISOString(), ...extra };
 }
 
 /** The notice a session should get, or null. `ignoreTold`: the caller restates it whatever was said before. */
@@ -284,11 +319,15 @@ export function toldOnto(record: NoticeRecord, told: Told): Noted | null {
   if (noted.promptHash !== hash(record.appliedAppendSystemPrompt ?? '')) return null;
   const cur = heldNoted(record);
   if (cur) {
-    const lines = [...new Set([...(cur.lines ?? []), ...(noted.lines ?? [])])];
+    const replaced = new Set((told.replaced ?? []).map(hash));
+    const lines = [...new Set([...(cur.lines ?? []), ...(noted.lines ?? [])])].filter((h) => !replaced.has(h));
     // Only the blocks this notice told: the rest of its snapshot may be older than the record.
     const blocks = { ...(cur.blocks ?? {}) };
     for (const id of changed) if (noted.blocks?.[id]) blocks[id] = noted.blocks[id];
-    return { ...cur, version: hash(JSON.stringify([lines, blocks])), lines, blocks, ...(noted.toldAt ? { toldAt: noted.toldAt } : {}) };
+    const gone = new Set(told.replaced ?? []);
+    const texts = capTexts([...new Set([...(noted.texts ?? []), ...(cur.texts ?? [])])].filter((t) => !gone.has(t)));
+    return { ...cur, version: hash(JSON.stringify([lines, blocks])), lines, blocks, ...(texts.length ? { texts } : {}),
+      ...(noted.toldAt ? { toldAt: noted.toldAt } : {}) };
   }
   return sameBase(noted, record) ? noted : null;
 }
@@ -327,7 +366,7 @@ async function lookup(sessionId: string, now = Date.now()): Promise<{ record: Se
   // The user's profile rides the default instructions: compare against it as on disk now.
   await Promise.all([refreshUserProfile(), import('./reply-language-context.js').then((m) => m.refreshReplyLanguage())]);
   const found = dueFor(record, task, false, now);
-  return found ? { record, text: render(found.due), told: { noted: notedOf(record, found), changed: changedIds(found.due) } } : null;
+  return found ? { record, text: render(found.due), told: { noted: notedOf(record, found), changed: changedIds(found.due), replaced: replacedOf(found) } } : null;
 }
 
 /** The notice the next frozen line into this session should carry, or null. Never throws. */
@@ -393,7 +432,7 @@ export async function noteInstructionNoticeStatedByHook(record: SessionRecord, t
   try {
     const fresh = { ...record, taskRoutingNoted: undefined };
     const found = dueFor(fresh, task, true);
-    const empty = { due: { plain: [], blocks: [], gone: [] }, views: {} };
+    const empty: Found = { due: { plain: [], blocks: [], gone: [] }, views: {}, texts: [] };
     await recordTold(record.claudeSessionId, { noted: notedOf(fresh, found ?? empty, { byHookAt: new Date().toISOString() }), changed: [] }, { base: true });
   } catch { /* told again on the next line */ }
 }
@@ -418,7 +457,7 @@ export function instructionNoticeForHost(
   if (!found) return null;
   const policy = render(found.due);
   const due = hash(JSON.stringify([hash(record.appliedAppendSystemPrompt ?? ''), record.lastCompactUuid ?? '', policy]));
-  remember(due, record.claudeSessionId, { noted: notedOf(record, found), changed: changedIds(found.due) });
+  remember(due, record.claudeSessionId, { noted: notedOf(record, found), changed: changedIds(found.due), replaced: replacedOf(found) });
   return { policy, due };
 }
 

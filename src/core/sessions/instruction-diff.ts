@@ -19,6 +19,9 @@
  * twice, its new wording and again under "Removed"), and a renamed sub-heading
  * leaves the lines under it unchanged (the same night, "## Standing rules (agents
  * keep asking these)" became "## Standing rules" and all its lines went out again).
+ * A long line reworded (LONG_LINE_CHARS), a rule or a block line alike, is told as the
+ * sentences that changed in it, never whole again (2026-11-20: the Threads rules, one
+ * 6 KB line, went whole to every session four times in one night, each for one sentence).
  */
 
 import { createHash } from 'node:crypto';
@@ -97,8 +100,12 @@ const TRUNCATED_RE = /^\(.+ runs past \d+ characters here;.+\)$/;
 /** A sub-heading inside a block (inside an author's part, when it has one). */
 const opensSection = (word: string) => word.startsWith('#');
 
-/** A plain rule line and the heading it sits under (the charter's "## How we work"), shown with it. */
-export interface Changed { line: string; heading?: string }
+/**
+ * A plain rule line and the heading it sits under (the charter's "## How we work"), shown with it.
+ * `was`: the session's older wording of a long line, when one reads as this line reworded: only the
+ * sentences that changed are told (sentenceChange).
+ */
+export interface Changed { line: string; heading?: string; was?: string }
 
 /**
  * A versioned block: its head, its version and its lines (`words`). `tagged`: each line as Walnut
@@ -178,7 +185,7 @@ export function parseInstructions(text: string): Parsed {
  * A line of a block, with the "Added by X:" (`author`) and the sub-heading (`section`) it sits
  * under. `reworded`: a new line that takes the place of a line of the same meaning in older words.
  */
-export interface Line { word: string; author?: string; section?: string; reworded?: true }
+export interface Line { word: string; author?: string; section?: string; reworded?: true; was?: string }
 
 /** One block's change for a session: whole (it never had it, or it changed form), or the new and removed lines. */
 export interface BlockChange { block: Block; whole: boolean; from?: string; added: Line[]; removed: Line[] }
@@ -198,8 +205,17 @@ export function dueChanges(
   current: Parsed, prompt: Parsed, toldPlain: Set<string>, views: Record<string, BlockView>,
   // By block id: lines its source still holds that did not fit in the block (user-profile-context.ts `cut`).
   beyond: Record<string, Set<string>> = {},
+  // The plain lines the session was told, in full words (SessionInstructionsNoted.texts), newest first.
+  heldTexts: readonly string[] = [],
 ): Due | null {
-  const plain = current.plain.filter((c) => !prompt.all.has(c.line) && !toldPlain.has(hash(c.line)));
+  // A told line the record cannot name (a wording told before full words were kept, or one pushed out
+  // of them): what the session holds of a long line is then unknown, and its prompt's wording is no base.
+  const known = knownHashes(current, prompt, heldTexts);
+  const baseKnown = [...toldPlain].every((h) => known.has(h));
+  const plain = withOlderWording(
+    [...current.plain.filter((c) => !prompt.all.has(c.line) && !toldPlain.has(hash(c.line))), ...reverted(current, prompt, heldTexts)],
+    heldTexts, baseKnown ? prompt.plain.filter((c) => !current.all.has(c.line)) : [],
+  );
   // A prompt that still tags block lines: what the tags are, once (they are not the rules' words).
   if (prompt.legacyTags && !current.legacyTags && !toldPlain.has(hash(LEGACY_TAGS_NOTE))) plain.unshift({ line: LEGACY_TAGS_NOTE });
   const held = (id: string): BlockView | undefined => {
@@ -298,7 +314,7 @@ function headingScore(a: string, b: string): number | null {
 
 type Pair = { from: number; to: number; score: number };
 /** One-to-one pairs, the closest first, of the candidates `score` accepts (null: no pair). */
-function pairUp<T>(from: T[], to: T[], score: (a: T, b: T) => number | null): Pair[] {
+function pairUp<A, B = A>(from: A[], to: B[], score: (a: A, b: B) => number | null): Pair[] {
   const all: Pair[] = [];
   from.forEach((a, i) => to.forEach((b, j) => {
     const s = score(a, b);
@@ -370,7 +386,9 @@ function wordChanges(had: string[], now: string[]): { added: Line[]; removed: Li
     if (!samePart(r, x) || opensAuthor(r.word) || opensAuthor(x.word)) return null;
     // A sub-heading renamed (underRenamedHeadings matched it the same way).
     if (opensSection(r.word) || opensSection(x.word)) return headingScore(r.word, x.word);
-    if (polarity(r.word) !== polarity(x.word)) return null;
+    // A long line is told by its sentences, each one's "never" with it: a flip in one sentence is no other rule.
+    const long = r.word.length >= LONG_LINE_CHARS && x.word.length >= LONG_LINE_CHARS;
+    if (!long && polarity(r.word) !== polarity(x.word)) return null;
     const tr = tok(r.word);
     const tx = tok(x.word);
     if (tr.size < REWORD_MIN_WORDS || tx.size < REWORD_MIN_WORDS) return null;
@@ -381,11 +399,105 @@ function wordChanges(had: string[], now: string[]): { added: Line[]; removed: Li
     return score;
   });
   const paired = new Set(pairs.map((p) => p.from));
-  const rewords = new Set(pairs.map((p) => p.to));
+  // A long line keeps the wording it replaces, to be told as the sentences that changed (sentenceText).
+  const was = new Map(pairs.map((p) => [p.to, removed[p.from].word]));
+  const long = (i: number) => added[i].word.length >= LONG_LINE_CHARS;
   return {
-    added: added.map((l, i) => (rewords.has(i) ? { ...l, reworded: true as const } : l)),
+    added: added.map((l, i) => (was.has(i) ? { ...l, reworded: true as const, ...(long(i) ? { was: was.get(i)! } : {}) } : l)),
     removed: removed.filter((_, i) => !paired.has(i)),
   };
+}
+
+/** A line at least this long is told, when reworded, as the sentences that changed in it. */
+export const LONG_LINE_CHARS = 400;
+/** A sentence ends at . ! ? (or their Chinese forms) before a space and what starts the next one. */
+const SENTENCE_END = /(?<=[.!?\u3002\uff01\uff1f])\s+(?=[\p{Lu}\p{N}"'(\[<*`]|\p{Script=Han})/u;
+/** About what the line naming a reworded line costs ("In your line that starts ..."). */
+const SENTENCE_FRAME_CHARS = 140;
+export const sentencesOf = (line: string): string[] => line.split(SENTENCE_END).map((x) => x.trim()).filter(Boolean);
+
+/**
+ * The sentences of `now` that `was` lacks and those of `was` it dropped, or null when the line is
+ * short or telling the changes would take about as long as the line (then it is told whole).
+ */
+export function sentenceChange(was: string, now: string): { added: string[]; removed: string[] } | null {
+  if (now.length < LONG_LINE_CHARS) return null;
+  const had = sentencesOf(was);
+  const has = sentencesOf(now);
+  if (had.length < 2 || has.length < 2) return null;
+  const count = (xs: string[]) => xs.reduce((m, x) => m.set(x, (m.get(x) ?? 0) + 1), new Map<string, number>());
+  const minus = (xs: string[], ys: string[]) => {
+    const left = count(ys);
+    return xs.filter((x) => { const n = left.get(x) ?? 0; if (n) left.set(x, n - 1); return !n; });
+  };
+  const added = minus(has, had);
+  const removed = minus(had, has);
+  if (!added.length && !removed.length) return null;
+  // What telling the changes costs: the line naming where they are, each new sentence, each removed one's name.
+  const told = SENTENCE_FRAME_CHARS + added.reduce((n, x) => n + x.length + 20, 0) + removed.length * (REMOVED_MAX_CHARS + 12);
+  return told < now.length ? { added, removed } : null;
+}
+
+/**
+ * Each long due line with the older wording the session holds of it, when one reads as it reworded
+ * (REWORD_MIN_OVERLAP): a line it was told in full (`heldTexts`, tried first, since that is what it
+ * holds now), else a line of its prompt under the same heading that the current instructions no
+ * longer have. Each older wording serves one line.
+ */
+function withOlderWording(due: Changed[], heldTexts: readonly string[], oldPlain: Changed[]): Changed[] {
+  const was = new Map<number, string>();
+  const used = new Set<string>();
+  const long = due.map((c, i) => ({ c, i })).filter(({ c }) => c.line.length >= LONG_LINE_CHARS);
+  // Told wordings first, newest first: the first one that reads as this line is what the session holds.
+  for (const { c, i } of long) {
+    // The newest that reads as this rule, a rewrite that kept its opening words included: an older one closer in words is no base.
+    const held = heldTexts.find((t) => !used.has(t) && t !== c.line && sameRule(t, c.line));
+    if (held === undefined) continue;
+    used.add(held);
+    // The told wording is the base even when the change is too big to tell by sentences: then it goes whole.
+    if (sentenceChange(held, c.line)) was.set(i, held);
+    else was.set(i, '');
+  }
+  // Its prompt's wording only for a line no told wording matches.
+  const rest = long.filter(({ i }) => !was.has(i));
+  const candidates = oldPlain.filter((c) => c.line.length >= LONG_LINE_CHARS / 2);
+  if (rest.length && candidates.length) {
+    const pairs = pairUp(rest, candidates, ({ c }, o) => {
+      if (o.heading !== c.heading) return null;
+      const score = overlap(tokens(c.line), tokens(o.line));
+      return score >= REWORD_MIN_OVERLAP && sentenceChange(o.line, c.line) ? score : null;
+    });
+    for (const p of pairs) was.set(rest[p.from].i, candidates[p.to].line);
+  }
+  return was.size ? due.map((c, i) => (was.get(i) ? { ...c, was: was.get(i)! } : c)) : due;
+}
+
+/** Two long lines are one rule in two wordings: REWORD_MIN_OVERLAP of their content words, or the same start. */
+export function sameRule(a: string, b: string): boolean {
+  return sameStart(a, b) || overlap(tokens(a), tokens(b)) >= REWORD_MIN_OVERLAP;
+}
+/** The same first 60 characters: a rule rewritten keeps its opening words (its name, "Your Threads (..."). */
+const sameStart = (a: string, b: string) => a.length >= 60 && b.length >= 60 && a.slice(0, 60) === b.slice(0, 60);
+
+/** Every line hash a session's record may name: the current and prompt lines (blocks' as tagged too) and its held texts. */
+function knownHashes(current: Parsed, prompt: Parsed, heldTexts: readonly string[]): Set<string> {
+  const cached = knownCache.get(current)?.get(prompt);
+  const base = cached ?? new Set([...current.all, ...prompt.all, LEGACY_TAGS_NOTE,
+    ...[...current.blocks.values(), ...prompt.blocks.values()].flatMap((b) => b.tagged)].map(hash));
+  if (!cached) knownCache.set(current, (knownCache.get(current) ?? new WeakMap()).set(prompt, base));
+  return heldTexts.length ? new Set([...base, ...heldTexts.map(hash)]) : base;
+}
+const knownCache = new WeakMap<Parsed, WeakMap<Parsed, Set<string>>>();
+
+/**
+ * Current lines its prompt has that the session was told otherwise: a rule changed after the spawn,
+ * was told, then changed back. The prompt says it, but the session holds the told wording.
+ */
+function reverted(current: Parsed, prompt: Parsed, heldTexts: readonly string[]): Changed[] {
+  const stale = heldTexts.filter((t) => !current.all.has(t));
+  if (!stale.length) return [];
+  return current.plain.filter((c) => prompt.all.has(c.line) && c.line.length >= LONG_LINE_CHARS / 2
+    && stale.some((t) => sameRule(t, c.line)));
 }
 
 /**
@@ -422,6 +534,23 @@ const item = (kept: string[], added: string[] = []) => ({ word, author, section 
 };
 
 /**
+ * A reworded long line as the sentences that changed in it (sentenceChange), or null to tell it
+ * whole. A removed sentence is named by its start, in full when a sentence still there starts the same.
+ */
+export function sentenceText(was: string, now: string): string | null {
+  const change = sentenceChange(was, now);
+  if (!change) return null;
+  const kept = sentencesOf(now);
+  const named = (x: string) => {
+    const cut = short(x);
+    return cut !== x && kept.some((k) => k.startsWith(cut.slice(0, -3))) ? x : cut;
+  };
+  return [`In your line that starts "${short(was)}", only these sentences changed:`,
+    ...change.added.map((x) => `Added or reworded: ${x}`),
+    ...change.removed.map((x) => `Taken out: "${named(x)}"`)].join('\n');
+}
+
+/**
  * The head of a block told as changes: it describes the block as before, and
  * says the lines below are only what changed. "They replace every earlier
  * version" is about a whole version; told as changes, the version is the lines
@@ -449,7 +578,7 @@ function withParts(added: Line[]): string {
     if (l.section && l.section !== section) lines.push(l.section);
     author = opensAuthor(l.word) ? l.word : l.author;
     section = opensAuthor(l.word) ? undefined : opensSection(l.word) ? l.word : l.section;
-    lines.push(l.word);
+    lines.push((l.was && sentenceText(l.was, l.word)) || l.word);
   }
   return lines.join('\n');
 }
@@ -492,6 +621,8 @@ export function renderDue(due: Due): string {
   };
   for (const c of due.plain) {
     under(c.heading);
+    const delta = c.was && sentenceText(c.was, c.line);
+    if (delta) { items.push(delta); list = false; continue; }
     const isItem = c.line.startsWith('- ');
     if (isItem && list) items[items.length - 1] += `\n${c.line}`;
     else items.push(c.line);

@@ -380,6 +380,8 @@ export interface SessionInstructionsNoted {
   blocks?: Record<string, { version: string; words: string[]; form?: string }>;
   /** When the last notice reached it: the next waits for NOTICE_GAP_MS, so changes close together go out as one. */
   toldAt?: string;
+  /** The plain lines it was told, in full words, newest first (up to 30K characters): the base when one of them is reworded again (instruction-diff.ts). */
+  texts?: string[];
   /** On a hook statement: what was told before it, which still counts when the statement was a fork's (hook-statement.ts). */
   prior?: Omit<SessionInstructionsNoted, 'prior'>;
 }

@@ -10,7 +10,7 @@ import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '
 import { buildHostSlice } from '../../src/core/host-slice.js';
 import { markNextProcessing, markProcessing, removeProcessed, sendMessageToSession } from '../../src/core/session-message-queue.js';
 import { refreshUserProfile } from '../../src/core/sessions/user-profile-context.js';
-import { instructionNoticeForHost, noteInstructionNoticeToldByHost } from '../../src/core/sessions/instruction-notice.js';
+import { NOTICE_GAP_MS, instructionNoticeForHost, noteInstructionNoticeToldByHost } from '../../src/core/sessions/instruction-notice.js';
 import { notePlaceCompaction } from '../../src/core/sessions/place-notice.js';
 import { TEAM_CHARTER } from '../../src/core/team-charter.js';
 import { buildSessionContext } from '../../src/core/sessions/session-context.js';
@@ -112,7 +112,7 @@ describe('one version of the user\'s profile reaches a remote session once (2026
     const sid = randomUUID()
     await createSessionRecord(sid, task.id, task.project, WALNUT_HOME)
     await updateSessionRecord(sid, { appliedAppendSystemPrompt: await current(task.id), host: 'clouddev', process_status: 'running' })
-    const hostNotice = async () => instructionNoticeForHost((await getSessionByClaudeId(sid))!, task)
+    const hostNotice = async (now?: number) => instructionNoticeForHost((await getSessionByClaudeId(sid))!, task, now)
     const line = async (text: string, pick = markProcessing) => {
       await sendMessageToSession(sid, text)
       const [row] = await pick(sid)
@@ -130,7 +130,9 @@ describe('one version of the user\'s profile reaches a remote session once (2026
     // The next save reaches the session through its host's own delivery: told there once, then by nobody.
     const NEXT = 'Another rule the user gave a little later, also worded like a real one.'
     await user([...BASE, RULE, NEXT])
-    const due = (await hostNotice())!
+    // Within the gap after the last notice it waits (NOTICE_GAP_MS), whatever changed.
+    expect(await hostNotice()).toBeNull()
+    const due = (await hostNotice(Date.now() + NOTICE_GAP_MS + 60_000))!
     expect(due.policy).toContain(NEXT)
     expect(due.policy).not.toContain(RULE)
     await noteInstructionNoticeToldByHost(sid, due.due)
