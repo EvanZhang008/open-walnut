@@ -69,10 +69,11 @@ describe('guard: every text block in OrgThreads.tsx opens from its own writer', 
 
   it('the blocks are the ones listed, each with its source', () => {
     const agentText = elements('AgentText')
-    // The summary (twice: on its own, and under the task's ask a thread holds), Walnut's stand-in
-    // line and his words; a new AgentText must be listed here with its writer.
-    expect(agentText).toHaveLength(4)
-    expect(agentText.filter((a) => /\{\.\.\.threadSummarySource\(t\)\}/.test(a))).toHaveLength(2)
+    // The node's own words, three times (the summary on its own, and the held ask's question and
+    // the summary under it), Walnut's stand-in line and his words; a new AgentText must be listed
+    // here with its writer.
+    expect(agentText).toHaveLength(5)
+    expect(agentText.filter((a) => /\{\.\.\.threadSummarySource\(t\)\}/.test(a))).toHaveLength(3)
     expect(agentText.filter((a) => /\{\.\.\.threadStandInSource\(t, card\.summary\)\}/.test(a))).toHaveLength(1)
     expect(agentText.filter((a) => /\{\.\.\.THREAD_WORDS_SOURCE\}/.test(a))).toHaveLength(1)
     for (const a of agentText) expect(a, 'never the node\'s own task as the writer').not.toMatch(/\btask=|\bowner\b|\bsessionId=/)
