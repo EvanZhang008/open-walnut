@@ -217,6 +217,8 @@ const SELF_GATED: Record<string, Role> = {
   'components/notes/slash-commands/TaskSearchPanel.tsx|MicInput placeholder="Search tasks..."': FILTER,
   'components/org/OrgChannelList.tsx|MicInput data-testid="org-search"': FILTER,
   'components/org/OrgEditableName.tsx|MicInput data-testid=`${testId}-input`': OWN_ENTER,
+  // A New Director's title: only its own Enter makes the task; leaving it empty closes it, sending nothing.
+  'components/org/OrgNewDirector.tsx|MicInput data-testid="org-new-director-input"': OWN_ENTER,
   'components/org/OrgRouterSettings.tsx|MicInput data-testid="org-router-link-filter"': FILTER,
   'components/org/OrgRouterSetup.tsx|MicInput data-testid="router-setup-vp-filter"': FILTER,
   'components/org/RouterFolderPicker.tsx|MicInput data-testid=`${testId}-filter`': FILTER,
