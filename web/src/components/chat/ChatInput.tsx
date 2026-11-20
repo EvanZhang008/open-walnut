@@ -376,9 +376,6 @@ interface ChatInputProps {
    *  composer without writing the quote into it (the quote rides the chip and is
    *  composed at send time), so the prefill path would wipe what they had typed. */
   focusNonce?: number;
-  /** Esc that nothing in the box took (an open @ or / palette, a recalled message closes first):
-   *  a box a click opened (a thread's Follow up) closes on it. Unset: Esc does nothing here. */
-  onEscape?: () => void;
   /** Extra controls rendered in the card's bottom row, between the "+" and the
    *  mic/send cluster (e.g. the session's Bypass / btw / Note text buttons). */
   controlsSlot?: React.ReactNode;
@@ -462,7 +459,7 @@ export function ChatInput(props: ChatInputProps) {
   );
 }
 
-function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSplit, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, light, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, onEscape, controlsSlot, sendSlot, contextPill, noteSlot, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp, fileTarget, drawingTarget, promptRecallKey, inputTestId, sendTestId }: ChatInputProps) {
+function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSplit, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, light, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, noteSlot, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp, fileTarget, drawingTarget, promptRecallKey, inputTestId, sendTestId }: ChatInputProps) {
   // ONE read of the persisted draft, split once for both pieces of state below.
   const [initialDraft] = useState(() => readDraftSplit(draftKey));
   const [value, setValue] = useState(initialDraft.body);
@@ -1614,8 +1611,6 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
         return;
       }
     }
-    // One Esc closes one layer: the box's owner (a Follow up), never also a side bar around it.
-    if (esc && onEscape) { e.preventDefault(); onEscape(); return; }
 
     if (e.key === 'Enter') {
       if (e.shiftKey || e.altKey || returnInsertsNewline()) {

@@ -22,6 +22,9 @@ const ANSWER_FILES = [
   'web/src/components/actions/ActionNeeded.tsx',
   'web/src/components/actions/AskCard.tsx',
   'web/src/components/org/OrgTaskRail.tsx',
+  // A thread's Follow up box is on its card (2026-11-20, the user: "why thead nede to click follow up,
+  // just have. ainbox bar there ok").
+  'web/src/components/org/OrgThreads.tsx',
 ]
 
 describe('an ask card never sits inside a row that is a button', () => {
@@ -50,7 +53,8 @@ describe('an ask shows its words box at once', () => {
       const src = read(file)
       expect(src, `${file}: no OtherWords`).not.toMatch(/\bOtherWords\b/)
       expect(src, `${file}: no org-answer-other`).not.toMatch(/org-answer-other/)
-      expect(src, `${file}: no Reply… / Other… button`).not.toMatch(/>\s*(Reply|Other)…\s*<\/button>/)
+      expect(src, `${file}: no Reply… / Other… / Follow up button`).not.toMatch(/>\s*(Reply|Other|Follow up)…?\s*<\/button>/)
+      expect(src, `${file}: no opener for the follow-up box`).not.toMatch(/org-thread-follow-open/)
       expect(src, `${file}: no words box focuses itself`).not.toMatch(/<(WordsField|ReplyField)\b[^>]*\bautoFocus\b/)
       // A card's box keeps its own draft: words typed in it never also show in the session's composer
       // or the Board's box, to be sent twice (and a failed send keeps them there, never cleared by hand).

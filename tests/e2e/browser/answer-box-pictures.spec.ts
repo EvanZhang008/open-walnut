@@ -178,7 +178,6 @@ test('an Org thread\'s Follow up takes a pasted and an attached screenshot, and 
   await detail.getByTestId('org-top-threads').click()
   const card = page.locator(`[data-testid="org-thread"][data-thread-id="${threadId}"]`)
   await expect(card).toBeVisible({ timeout: 30_000 })
-  await card.getByTestId('org-thread-follow-open').click()
 
   const box = card.getByTestId('org-thread-follow-input')
   await pasteScreenshot(box, `Org header ${NONCE}`)
@@ -192,7 +191,6 @@ test('an Org thread\'s Follow up takes a pasted and an attached screenshot, and 
   await shot(card, 'org-before-send')
   await beat(page)
   await card.getByTestId('org-thread-follow-send').click()
-  await expect(card.getByTestId('org-thread-follow')).toHaveCount(0, { timeout: 20_000 })
 
   await expect.poll(async () => {
     const res = await request.get(`/api/v1/tasks/${lead}/threads`)

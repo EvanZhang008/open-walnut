@@ -191,14 +191,15 @@ test('Follow up files under the thread; Acknowledge closes it, Reopen preserves 
   const t1 = (await threads(request)).find((t) => t.title === `Org: Threads view ${STAMP}`)!
   const c1 = card(page, t1.id)
   await expect(c1).toBeVisible()
-  await c1.getByTestId('org-thread-follow-open').click()
-  // The box names the thread it goes to.
-  await expect(c1.getByTestId('org-thread-follow-to')).toHaveText(`Follow up on \u201cOrg: Threads view ${STAMP}\u201d`)
+  // The box is on the card with no click (the user: "why thead nede to click follow up, just have.
+  // ainbox bar there ok"), named for the thread it goes to.
+  await expect(c1.getByTestId('org-thread-follow-open')).toHaveCount(0)
+  await expect(c1.getByTestId('org-thread-follow')).toHaveAttribute('aria-label', `Follow up on \u201cOrg: Threads view ${STAMP}\u201d`)
   const follow = `also show pictures in the thread ${STAMP}`
   await c1.getByTestId('org-thread-follow-input').fill(follow)
   await shot(page, 'follow-up')
   await c1.getByTestId('org-thread-follow-send').click()
-  await expect(c1.getByTestId('org-thread-follow')).toHaveCount(0)
+  await expect(c1.getByTestId('org-thread-follow-input')).toHaveValue('', { timeout: 20_000 })
   await expect(c1.getByTestId('org-thread-count')).toHaveText(/^3 messages/, { timeout: 30_000 })
   const stored = (await threads(request)).find((t) => t.id === t1.id)!
   expect(stored.messages.map((m) => m.via)).toEqual(['chat', 'chat', 'follow-up'])
@@ -275,7 +276,6 @@ test('a reaction survives split and an answered flip; only new words bring the c
   await page.getByTestId('sidebar-org').click()
   await page.locator(`[data-testid="org-channel"][data-key="${rowKey(LED)}"]`).click()
   await expect(card(page, id)).toBeVisible()
-  await card(page, id).getByTestId('org-thread-follow-open').click()
   await card(page, id).getByTestId('org-thread-follow-input').fill('A different subject: redesign the task detail view.')
   await card(page, id).getByTestId('org-thread-follow-send').click()
   const visible = page.getByTestId('org-thread-list').locator(`[data-thread-id="${id}"]`)
@@ -350,7 +350,6 @@ test('a thread the lead opens itself shows its post as the lead\'s, and his Foll
   await c.getByTestId('org-thread-unread-toggle').click()
   await expect(c.getByTestId('org-thread-opener')).toContainText('opened this · Mail: Talk slot')
   await expect(c.getByTestId('org-thread-opener').locator('strong')).toHaveText('confirm the slot by Friday?')
-  await c.getByTestId('org-thread-follow-open').click()
   await c.getByTestId('org-thread-follow-input').fill(`yes, confirm it ${STAMP}`)
   await c.getByTestId('org-thread-follow-send').click()
   // He wrote after the post: it leaves the card, his message counts in the conversation and is
@@ -856,10 +855,9 @@ test('asks and structured bodies stay whole; plain long answers still expand wit
   await c.getByTestId('org-thread-history').click()
   await expect(c.getByTestId('org-thread-answer-body')).toHaveCSS('max-height', 'none')
   await c.getByTestId('org-thread-history').click()
-  await c.getByTestId('org-thread-follow-open').click()
   await c.getByTestId('org-thread-follow-input').fill('My choice is A')
   await expect(c.locator('pre')).toContainText('choose-a-readable-design.html')
-  await c.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await c.getByTestId('org-thread-follow-input').fill('')
   expect(await page.getByTestId('org-threads').evaluate((e) => e.scrollWidth - e.clientWidth)).toBeLessThanOrEqual(1)
   await shot(page, 'readable')
 })

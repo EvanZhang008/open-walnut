@@ -121,7 +121,6 @@ test('moving the task moves his thread to the other VP, and he follows it up the
   await shot(page, '3-arrived')
 
   // He follows it up from the card: filed under this thread, on this VP.
-  await there.getByTestId('org-thread-follow-open').click()
   const follow = `any results yet? ${STAMP}`
   await there.getByTestId('org-thread-follow-input').fill(follow)
   await there.getByTestId('org-thread-follow-send').click()

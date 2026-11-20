@@ -436,16 +436,16 @@ test('full screen is the pop-up sheet with margins, kept across a reload; close 
   await detail.getByTestId('org-rail-toggle').click()
   await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'threads')
 
-  // In the sheet, Esc in a thread's Follow up closes the Follow up, not the sheet; the next Esc does.
+  // In the sheet, a thread's Follow up box is on its card with no click; Esc there closes the sheet
+  // (the box is no layer of its own) and keeps what was typed.
   await detail.getByTestId('org-rail-fullscreen').click()
   await expect(rail).toHaveAttribute('data-fullscreen', '1')
-  await detail.getByTestId('org-thread-follow-open').first().click()
-  await expect(detail.getByTestId('org-thread-follow-input')).toBeVisible()
-  await detail.getByTestId('org-thread-follow-input').press('Escape')
-  await expect(detail.getByTestId('org-thread-follow-input')).toHaveCount(0)
-  await expect(rail).toHaveAttribute('data-fullscreen', '1')
-  await page.keyboard.press('Escape')
+  await expect(detail.getByTestId('org-thread-follow-input').first()).toBeVisible()
+  await detail.getByTestId('org-thread-follow-input').first().fill('kept words')
+  await detail.getByTestId('org-thread-follow-input').first().press('Escape')
   await expect(rail).not.toHaveAttribute('data-fullscreen', '1')
+  await expect(detail.getByTestId('org-thread-follow-input').first()).toHaveValue('kept words')
+  await detail.getByTestId('org-thread-follow-input').first().fill('')
 
   // A task opened from the sheet opens beside the page with the sheet gone, never under it.
   await detail.getByTestId('org-top-task').click()

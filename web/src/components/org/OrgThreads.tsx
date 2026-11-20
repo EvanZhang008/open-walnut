@@ -171,21 +171,21 @@ function TaskChips({ ids, tasks }: { ids: readonly string[]; tasks: readonly Tas
   );
 }
 
-function FollowUp({ threadId, title, owner, onSend, onDone }: {
+/** The box to follow a thread up in, always on its card: no click opens it (2026-11-20, the user:
+ *  "why thead nede to click follow up, just have. ainbox bar there ok"). The chat's own composer
+ *  (chat/ReplyComposer.tsx): @, /, pictures and the mic as in the chat, its words kept per thread
+ *  until sent, and kept in the box when a send fails. It never takes the focus by itself: a page
+ *  shows many of them. */
+function FollowUp({ threadId, title, owner, onSend }: {
   threadId: string; title: string;
   /** The node's own task: its session's commands on /, where a file goes, and left out of @. */
   owner: Task | undefined;
-  onSend: (text: string, images?: ImageAttachment[]) => Promise<boolean>; onDone: () => void;
+  onSend: (text: string, images?: ImageAttachment[]) => Promise<boolean>;
 }) {
   const [failed, setFailed] = useState(false);
   const sessionId = owner ? resolveTaskSessionId(owner) : null;
   return (
-    <div className="org-thread-follow" data-testid="org-thread-follow">
-      {/* The box names its thread, so a Follow up opened on the wrong card shows before Send
-          (2026-11-10, the user: "I ask follow up of another thread ... not this blue title"). */}
-      <span className="org-thread-follow-to" data-testid="org-thread-follow-to">Follow up on {'\u201c'}{title}{'\u201d'}</span>
-      {/* The chat's own composer (chat/ReplyComposer.tsx): @, /, pictures and the mic as in the chat,
-          its words kept per thread until sent. A click opened it, so it takes the caret; Esc closes it. */}
+    <div className="org-thread-follow" data-testid="org-thread-follow" aria-label={`Follow up on \u201c${title}\u201d`} role="group">
       <ReplyComposer
         placeholder="Follow up on this request"
         draftKey={draftKey('thread-follow', threadId)}
@@ -193,19 +193,14 @@ function FollowUp({ threadId, title, owner, onSend, onDone }: {
         {...(owner ? { taskId: owner.id } : {})}
         testId="org-thread-follow-input"
         sendTestId="org-thread-follow-send"
-        focusOnOpen
-        onEscape={onDone}
         onSend={async (text, images) => {
           setFailed(false);
           const ok = await onSend(text, images).catch(() => false);
-          if (ok) onDone(); else setFailed(true);
+          if (!ok) setFailed(true);
           return ok;
         }}
       />
-      <div className="org-thread-follow-row">
-        {failed && <span className="org-thread-error" data-testid="org-thread-follow-failed">Not sent. Your words and pictures are still here.</span>}
-        <button type="button" className="btn btn-sm" data-testid="org-thread-follow-cancel" onClick={onDone}>Cancel</button>
-      </div>
+      {failed && <span className="org-thread-error" data-testid="org-thread-follow-failed">Not sent. Your words and pictures are still here.</span>}
     </div>
   );
 }
@@ -364,7 +359,6 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
 }) {
   /** The whole conversation shown, in place of what the card keeps. */
   const [open, setOpen] = useState(false);
-  const [following, setFollowing] = useState(false);
   /** The answers he has not seen, unfolded under the summary (folded by default). */
   const [unfolded, setUnfolded] = useState(false);
   const closed = !!t.closed;
@@ -462,33 +456,31 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
           {exchanges.map((x) => <Exchange key={x.messages[0]?.id ?? 'opener'} x={x} t={t} name={name} state={state} now={now} shared={x.messages.some((m) => shared.has(m.id))} />)}
         </ol>
       )}
-      {following && onFollowUp ? (
-        <FollowUp threadId={t.id} title={t.title} owner={owner} onSend={(text, images) => onFollowUp(t.id, text, images)} onDone={() => setFollowing(false)} />
-      ) : (
-        <div className="org-thread-actions">
-          {closed ? (<>
-            <span className="org-thread-closed" data-testid="org-thread-closed">{closedWords(t, now)}</span>
-            <button type="button" className="btn btn-sm" data-testid="org-thread-reopen" onClick={() => void state.update(t.id, { reopen: true })}>Reopen</button>
-          </>) : (<>
-            <button type="button" className="btn btn-sm btn-primary" data-testid="org-thread-ack" onClick={() => void state.update(t.id, { close: 'acked' })}>Acknowledge</button>
-            {onFollowUp && <button type="button" className="btn btn-sm" data-testid="org-thread-follow-open" onClick={() => setFollowing(true)}>Follow up</button>}
-            <OrgThreadSnooze
-              title={t.title}
-              label={snoozed ? 'Snoozed' : 'Snooze'}
-              current={snoozed ? t.snoozed?.until : undefined}
-              onSnooze={(until) => void state.update(t.id, { snooze: until })}
-            />
-            {snoozed && <button type="button" className="btn btn-sm" data-testid="org-thread-unsnooze" onClick={() => void state.update(t.id, { snooze: '' })}>Unsnooze</button>}
-            {/* An icon: the row keeps one line in the side bar (the label is its name and tooltip). */}
-            <button
-              type="button" className="btn btn-sm org-thread-pin-btn" data-testid="org-thread-pin" aria-pressed={pinned}
-              aria-label={pinned ? `Unpin "${t.title}"` : `Pin "${t.title}"`}
-              title={pinned ? 'Unpin: it goes back to its place' : 'Pin: keep it at the top, whatever its state, until you unpin or acknowledge it'}
-              onClick={() => void state.update(t.id, { pin: !pinned })}
-            ><ThreadPinIcon size={14} /></button>
-          </>)}
-        </div>
-      )}
+      {onFollowUp && !closed ? (
+        <FollowUp threadId={t.id} title={t.title} owner={owner} onSend={(text, images) => onFollowUp(t.id, text, images)} />
+      ) : null}
+      <div className="org-thread-actions">
+        {closed ? (<>
+          <span className="org-thread-closed" data-testid="org-thread-closed">{closedWords(t, now)}</span>
+          <button type="button" className="btn btn-sm" data-testid="org-thread-reopen" onClick={() => void state.update(t.id, { reopen: true })}>Reopen</button>
+        </>) : (<>
+          <button type="button" className="btn btn-sm btn-primary" data-testid="org-thread-ack" onClick={() => void state.update(t.id, { close: 'acked' })}>Acknowledge</button>
+          <OrgThreadSnooze
+            title={t.title}
+            label={snoozed ? 'Snoozed' : 'Snooze'}
+            current={snoozed ? t.snoozed?.until : undefined}
+            onSnooze={(until) => void state.update(t.id, { snooze: until })}
+          />
+          {snoozed && <button type="button" className="btn btn-sm" data-testid="org-thread-unsnooze" onClick={() => void state.update(t.id, { snooze: '' })}>Unsnooze</button>}
+          {/* An icon: the row keeps one line in the side bar (the label is its name and tooltip). */}
+          <button
+            type="button" className="btn btn-sm org-thread-pin-btn" data-testid="org-thread-pin" aria-pressed={pinned}
+            aria-label={pinned ? `Unpin "${t.title}"` : `Pin "${t.title}"`}
+            title={pinned ? 'Unpin: it goes back to its place' : 'Pin: keep it at the top, whatever its state, until you unpin or acknowledge it'}
+            onClick={() => void state.update(t.id, { pin: !pinned })}
+          ><ThreadPinIcon size={14} /></button>
+        </>)}
+      </div>
     </li>
   );
 }

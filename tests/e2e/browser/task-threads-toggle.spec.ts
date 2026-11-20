@@ -130,7 +130,6 @@ test('a leader turns Threads on from its menu, files his asks there, and turns t
   await expect(card).toBeVisible({ timeout: 15_000 })
   await expect(card.getByTestId('org-thread-title')).toHaveText('Greenhouse humidity')
   await page.screenshot({ path: `${SHOT_DIR}/${engine}-2-thread-card.png` })
-  await card.getByRole('button', { name: 'Follow up', exact: true }).click()
   const follow = card.getByTestId('org-thread-follow')
   await follow.getByTestId('org-thread-follow-input').fill('snapshot-clean-turn:Noted, checking the vent.')
   await follow.getByTestId('org-thread-follow-send').click()

@@ -97,7 +97,6 @@ interface Follow { card: Locator; box: Locator; input: Locator; mic: Locator; se
 async function openFollowUp(page: Page, threadId: string): Promise<Follow> {
   const card = page.locator(`[data-testid="org-thread"][data-thread-id="${threadId}"]`)
   await expect(card).toBeVisible({ timeout: 30_000 })
-  await card.getByTestId('org-thread-follow-open').click()
   const box = card.getByTestId('org-thread-follow')
   await expect(box).toBeVisible()
   return {

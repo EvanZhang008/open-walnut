@@ -5,10 +5,9 @@
  * names a task or a session, / lists the asking session's commands, a pasted or dropped picture goes
  * with the words, and the mic dictates, as in the chat; what the composer learns next, this box has.
  *
- * It never takes the focus by itself (a page shows many of them), except a box a click just opened
- * (focusOnOpen: a thread's Follow up), which Esc closes again (onEscape). A send that fails keeps its
- * words and pictures in the box (onSend resolves false). Used by the ask cards, a thread's Follow up
- * and a letter's reply.
+ * It never takes the focus by itself (a page shows many of them). A send that fails keeps its words
+ * and pictures in the box (onSend resolves false). Used by the ask cards, a thread's Follow up and a
+ * letter's reply.
  */
 import { useState } from 'react';
 import type { ImageAttachment } from '@/api/chat';
@@ -29,13 +28,9 @@ export interface ReplyComposerProps {
   testId?: string;
   sendTestId?: string;
   sendTitle?: string;
-  /** A box a click opened takes the caret at once; never set on a box a page shows many of. */
-  focusOnOpen?: boolean;
-  /** Esc in the box once no @ or / palette is open: the box's owner closes it. */
-  onEscape?: () => void;
 }
 
-export function ReplyComposer({ placeholder, draftKey, onSend, sessionId, taskId, testId = 'org-answer-input', sendTestId = 'org-answer-send', sendTitle = 'Send', focusOnOpen, onEscape }: ReplyComposerProps) {
+export function ReplyComposer({ placeholder, draftKey, onSend, sessionId, taskId, testId = 'org-answer-input', sendTestId = 'org-answer-send', sendTitle = 'Send' }: ReplyComposerProps) {
   // The session's commands are read once the box is used, never for every card on a page.
   const [used, setUsed] = useState(false);
   const commands = useSlashCommands(undefined, undefined, sessionId ?? undefined, !!sessionId && used);
@@ -61,8 +56,6 @@ export function ReplyComposer({ placeholder, draftKey, onSend, sessionId, taskId
         inputTestId={testId}
         sendTestId={sendTestId}
         sendTitle={sendTitle}
-        {...(focusOnOpen ? { focusNonce: 1 } : {})}
-        {...(onEscape ? { onEscape } : {})}
       />
     </div>
   );
