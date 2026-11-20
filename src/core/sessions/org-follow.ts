@@ -15,7 +15,7 @@
  * task's newest status line inside, kept on disk across a restart, so an idle VP reads every
  * completion at its next turn and no node hears the same change twice. Nothing for a snoozed task
  * (the node brings news to the user, and a snooze says not before its date), a Personal AI ask, a
- * plugin's task, an edge the node's own session made, a node that holds a request to the task (its
+ * plugin's task, an imported program's run (PROGRAM_RUN_TAG), an edge the node's own session made, a node that holds a request to the task (its
  * reply notice speaks), a message the user's open terminal holds, or a stop right after the task
  * answered it.
  */
@@ -23,7 +23,7 @@ import { log } from '../../logging/index.js';
 import { cutEnd } from '../text-cut.js';
 import type { NoticeLastMessage } from '../session-requests.js';
 import type { SubtaskNoticeKind } from '../peers/envelope-kit.js';
-import type { Task } from '../types.js';
+import { isProgramRunTask, type Task } from '../types.js';
 
 /** How much of a stop's last message a follower reads (task_history has the rest). */
 export const STOP_QUOTE_MAX = 1_500;
@@ -48,9 +48,10 @@ export interface OrgEdge {
 /** A worker whose leader completed: its failure goes to the VP or Main above (user-status.ts failureOf). */
 export interface FollowOpts { leaderClosed?: boolean }
 
-/** Whether a task reports to an org node rather than to a leader. Pure. */
-export function reportsToOrgNode(task: Pick<Task, 'parent_task_id' | 'org_role' | 'plugin_only' | 'walnut_agent' | 'user_status'>, opts: FollowOpts = {}): boolean {
-  if (task.org_role === 'main' || task.plugin_only || task.walnut_agent) return false;
+/** Whether a task reports to an org node rather than to a leader. Pure. An imported program's run
+ *  nobody wrote to (PROGRAM_RUN_TAG) reports to no one: it is that program's work, not the team's. */
+export function reportsToOrgNode(task: Pick<Task, 'parent_task_id' | 'org_role' | 'plugin_only' | 'walnut_agent' | 'user_status' | 'tags'>, opts: FollowOpts = {}): boolean {
+  if (task.org_role === 'main' || task.plugin_only || task.walnut_agent || isProgramRunTask(task)) return false;
   if (task.parent_task_id && task.org_role !== 'lead' && !opts.leaderClosed) return false;
   return !task.user_status?.snoozed;
 }

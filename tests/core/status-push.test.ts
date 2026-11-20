@@ -8,6 +8,8 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SessionRecord, Task } from '../../src/core/types.js';
+import { EXTERNAL_SESSION_IMPORT_TAG, PROGRAM_RUN_TAG } from '../../src/core/types.js';
+import { PROGRAM_RUN_WAIT } from '../../src/core/user-status.js';
 
 const tasks = new Map<string, Task>();
 let sessions: SessionRecord[] = [];
@@ -138,6 +140,18 @@ describe('who hears it', () => {
     pendingStatusNote('s-main')!.markTold()
     emit(task('main', { org_role: 'main', phase: 'WAITING', project: 'Org', user_status: { state: 'waiting', kind: 'you', waitingOn: 'Your next message' } }))
     expect(await flushStatusPush(Date.now() + 3 * SETTLE_MS + 3)).toBe(0)
+  });
+
+  it("an imported program's run: neither its VP nor Main hears its moves", async () => {
+    const run = (extra: Partial<Task>) => task('run', { tags: [EXTERNAL_SESSION_IMPORT_TAG, PROGRAM_RUN_TAG], ...extra })
+    tasks.set('run', run({ phase: 'IN_PROGRESS', user_status: { state: 'working' } }))
+    sessions.push(sess('s-run', 'run'))
+    emit(tasks.get('run')!)
+    tasks.set('run', run({ user_status: { state: 'waiting', kind: 'outside', waitingOn: PROGRAM_RUN_WAIT } }))
+    emit(tasks.get('run')!)
+    expect(_pendingStatusPush()).toHaveLength(1)
+    expect(await flushStatusPush(Date.now() + SETTLE_MS + 1)).toBe(0)
+    expect(followers()).toEqual([])
   });
 
   it('with the org off a VP and Main hear nothing; a worker\'s own leader still does', async () => {

@@ -57,6 +57,8 @@ const WAIT_SOURCES: Record<string, Partial<UserStatusInput>> = {
   // A start waiting for a host slot (a wake that could not run yet), or one that did not happen.
   startQueue: { startQueue: { host: 'clouddev', reason: 'no free start slot' } },
   startFailed: { startFailed: 'no host had room' },
+  // An imported program's run (PROGRAM_RUN_TAG): waits on that program, unless it really asks.
+  programRun: { programRun: true },
 }
 
 /** Inputs that are no wait of their own, or read before any ask by design, and why. */

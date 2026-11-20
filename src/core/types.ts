@@ -71,6 +71,22 @@ export const EXTERNAL_SESSION_IMPORT_TAG = 'walnut:external-sessions';
 export function isExternalImportTask(task: { tags?: string[] | undefined }): boolean {
   return (task.tags ?? []).includes(EXTERNAL_SESSION_IMPORT_TAG);
 }
+
+/**
+ * Tag on an imported task whose session a plugin named as a run of its own program (plugin API
+ * `sessionImports.include`), while nobody has written to it. The run is that program's work and
+ * nobody asked for it: with no real ask it reads Waiting on the program, never To read or Needs
+ * you (user-status.ts), and no VP or Main hears its edges (sessions/org-follow.ts). The tag is the
+ * fact, so a claim that ends or a restart changes nothing; the first message anyone sends to the
+ * session removes it with EXTERNAL_SESSION_IMPORT_TAG (adoptImportedTask), and from then on it is
+ * a regular task. A `walnut:*` machine tag: no pill on any client (tag-display-rules.ts).
+ */
+export const PROGRAM_RUN_TAG = 'walnut:program-run';
+
+/** True for an imported program's run nobody has written to (see PROGRAM_RUN_TAG). */
+export function isProgramRunTask(task: { tags?: string[] | undefined }): boolean {
+  return (task.tags ?? []).includes(PROGRAM_RUN_TAG);
+}
 export type TaskSource = string;
 
 /** Outcome of one quick-parse leg: answered, errored or timed out, or not run at all. */

@@ -25,7 +25,7 @@
  */
 import { log } from '../../logging/index.js';
 import { bus, EventNames, type BusEvent } from '../event-bus.js';
-import type { SessionRecord, Task } from '../types.js';
+import { isProgramRunTask, type SessionRecord, type Task } from '../types.js';
 import { fallbackUserState, stateWord, type UserState, type UserStatus } from '../user-status.js';
 import { statusMark } from './brief-fresh.js';
 import { decisionMoved, statusDecision, type StatusDecision } from '../ask-decision.js';
@@ -274,10 +274,12 @@ export async function flushStatusPush(now = Date.now()): Promise<number> {
       // next message whether it runs now or not. Snoozed (snooze.ts): a VP or Main, who bring news
       // to the user, hears nothing of it until the snooze runs out, when the move out of it is the
       // news. A leader still hears (the team's own work goes on), and so does a session waiting on
-      // its reply.
+      // its reply. An imported program's run (PROGRAM_RUN_TAG) is that program's work: no VP or
+      // Main hears its moves, as none hears its edges (org-follow.ts reportsToOrgNode).
       for (const f of statusFollowersOf(task, byId, vpOf, main)) {
         if (!openTask(f)) continue;
         if (c.to.snoozed && f.org_role) break;
+        if (isProgramRunTask(task) && f.org_role) break;
         const rec = await liveSession(f.id);
         if (!rec) continue;
         if (!own.has(rec.claudeSessionId)) add(rec.claudeSessionId, rec, task.id, line, false, c.at, c.to.decision?.key);

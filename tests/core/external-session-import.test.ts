@@ -1485,13 +1485,15 @@ describe('importExternalSessions: an imported session is never Not started', () 
     return deriveUserStatus(statusInputOf(task, facts));
   }
 
-  async function expectStarted(sessionId: string): Promise<void> {
+  async function expectStarted(sessionId: string, programRun = false): Promise<void> {
     const task = await taskForSession(sessionId);
     expect(task.phase).toBe(IMPORTED_PHASE);
-    expect(task.unread).toBe(true);
+    // A plugin's claimed run is its program's work: filed read, it waits on that program
+    // (tests/core/program-run-imports.test.ts).
+    expect(task.unread).toBe(!programRun);
     const status = await statusOfStored(task.id, sessionId);
     expect(status.kind).not.toBe('not-started');
-    expect(status.state).toBe('read');
+    expect(status.state).toBe(programRun ? 'waiting' : 'read');
   }
 
   it('files every path that mints an import as started', async () => {
@@ -1506,7 +1508,8 @@ describe('importExternalSessions: an imported session is never Not started', () 
     claimSessionImports('plugin:test:1', '__local__', ['claim-1']);
     expect((await importExternalSessions()).imported).toBe(2);
     expect((await importSessionsById('__local__', ['ask-1'])).imported).toEqual(['ask-1']);
-    for (const id of ['scan-1', 'claim-1', 'ask-1']) await expectStarted(id);
+    for (const id of ['scan-1', 'ask-1']) await expectStarted(id);
+    await expectStarted('claim-1', true);
   });
 
   it('moves an import minted as Not started once, and leaves a reopened one and a task of the person alone', async () => {

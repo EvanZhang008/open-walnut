@@ -36,6 +36,9 @@ const WAIT_SOURCES: Record<string, { input: Partial<UserStatusInput>; reads: 'ta
   endpointWait: { input: {}, reads: 'not a wait of a hand-back' },
   // Main's and a lead's own wait (the user's next message), never a worker's.
   isMain: { input: {}, reads: 'not a wait of a hand-back' },
+  // An imported program's run waits on its program only when no leader looks at it first: one a
+  // person filed under a leader is that leader's (tests/core/program-run-imports.test.ts).
+  programRun: { input: {}, reads: 'not a wait of a hand-back' },
 }
 
 const handedBack = (over: Partial<UserStatusInput>, processStatus: 'idle' | 'stopped'): UserStatusInput => ({

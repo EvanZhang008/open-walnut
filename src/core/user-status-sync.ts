@@ -34,7 +34,7 @@ import { sameTaskArea } from './router/same-area.js';
 import { askMatter, matterIndex, matterNamedIn, sharedMatter, type MatterIndex } from './ask-matter.js';
 import { resolveDecisionOwner } from './decision-owner.js';
 import { isReportPending, onReportPendingChange } from './sessions/report-pending.js';
-import type { Task } from './types.js';
+import { isProgramRunTask, type Task } from './types.js';
 import type { ThreadCounts } from './org/thread-view.js';
 import type { OutlivingSource } from './sessions/outliving-work.js';
 import { snoozedUntil } from './snooze.js';
@@ -736,6 +736,7 @@ export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()
     report: task.status_report ?? null,
     lastWords: currentLastWords(task),
     markedByPerson: personMarkedNeeds(task),
+    ...(isProgramRunTask(task) ? { programRun: true } : {}),
     personSpokeAt: own.map(([, s]) => s.humanInputAt).filter((at): at is string => !!at).sort().pop() ?? null,
     // The task's own session when it has one: an older session's pending report says nothing of this turn.
     reportPending: task.session_id ? isReportPending(task.session_id) : own.some(([sid]) => isReportPending(sid)),

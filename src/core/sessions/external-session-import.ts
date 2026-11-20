@@ -29,7 +29,10 @@
  * Lifecycle of an imported task (all of it runs inside the SAME 10-minute tick;
  * there is no second timer and no model call anywhere in this file):
  *   - Type: every minted task carries EXTERNAL_SESSION_IMPORT_TAG. The web shows
- *     it as an "Imported" pill; the tag is what the rules below key on.
+ *     it as an "Imported" pill; the tag is what the rules below key on. A run a
+ *     plugin claimed for its program (sessionImports.include) carries
+ *     PROGRAM_RUN_TAG too and is filed read: it waits on that program, and no VP
+ *     or Main hears it (stampProgramRuns gives older ones the tag).
  *   - Folder: inside "Imported from <host>" the task sits in a sub-folder per
  *     working directory (label = the cwd's last two segments). Identity is the
  *     members' cwd, never the label. Old imports without a folder are backfilled
@@ -59,7 +62,7 @@ import { log } from '../../logging/index.js';
 import { bus, EventNames } from '../event-bus.js';
 import { isExcludedExternalCwd, isSyntheticUserText, type ExternalSessionCandidate } from '../../providers/external-session-scan-core.js';
 import { ENGINE_REGISTRY, engineCaps, normalizeEngine } from '../agents/engine-registry.js';
-import { EXTERNAL_SESSION_IMPORT_TAG, isExternalImportTask, type Task } from '../types.js';
+import { EXTERNAL_SESSION_IMPORT_TAG, PROGRAM_RUN_TAG, isExternalImportTask, isProgramRunTask, type Task } from '../types.js';
 import { readMarkerForPhase } from '../phase.js';
 import type { DirectoryUse } from '../frequent-dirs.js';
 import { placeNewImportProject, projectRegistered } from './import-project-vp.js';
@@ -94,6 +97,8 @@ const STARTED_BACKFILL_LIMIT_PER_RUN = 100;
 const AUDIT_LIMIT_PER_RUN = 100;
 /** Claimed sessions looked up per host per run (sessionImports.include). */
 const CLAIM_DESCRIBE_LIMIT = 100;
+/** Claimed runs already on the board stamped with PROGRAM_RUN_TAG per run (stampProgramRuns). */
+const PROGRAM_RUN_STAMP_LIMIT_PER_RUN = 100;
 /** Most session ids one claimant may claim on one host. */
 const CLAIM_MAX_IDS = 50_000;
 /** Idle window before an imported task is auto-completed (config override:
@@ -193,6 +198,8 @@ export interface ExternalImportResult {
   cleanedLegacyBuckets: number;
   /** Older imports still filed as Not started, moved to IMPORTED_PHASE this run. */
   started: number;
+  /** Claimed runs already on the board that gained PROGRAM_RUN_TAG this run (stampProgramRuns). */
+  programRuns: number;
 }
 
 /**
@@ -207,11 +214,15 @@ export const IMPORTED_PHASE = 'NEED_ACTION' as const;
 /**
  * File one imported task as started: TODO to IMPORTED_PHASE, only while it is
  * still the TODO the importer minted (no phase move since, which a person's
- * reopen or a turn would be). Raw write, like the sweep's.
+ * reopen or a turn would be). Raw write, like the sweep's. A program's run
+ * (PROGRAM_RUN_TAG) is filed read: nobody asked for what it left.
  */
 async function fileAsStarted(taskId: string, emitEvent: boolean): Promise<boolean> {
   const { updateTaskRaw } = await import('../task-manager.js');
-  const res = await updateTaskRaw(taskId, { phase: IMPORTED_PHASE, ...readMarkerForPhase(IMPORTED_PHASE) }, {
+  const res = await updateTaskRaw(taskId, (current) => ({
+    phase: IMPORTED_PHASE,
+    ...(isProgramRunTask(current) ? { unread: false } : readMarkerForPhase(IMPORTED_PHASE)),
+  }), {
     // shouldUpdate writes only over the minted TODO, never a WAITING task: leaveHeld changes nothing here.
     emitEvent, push: false, source: EXTERNAL_IMPORT_EVENT_SOURCE, leaveHeld: true,
     shouldUpdate: (current) => current.phase === 'TODO' && !current.phase_changed_at && !!current.session_id,
@@ -737,6 +748,46 @@ export function isClaimedImport(host: string, sessionId: string): boolean {
   return false;
 }
 
+/** Does any claimant name this session id on any host? (stampProgramRuns' cheap first look.) */
+function claimedOnAnyHost(sessionId: string): boolean {
+  for (const byHost of importClaims.values()) for (const ids of byHost.values()) if (ids.has(sessionId)) return true;
+  return false;
+}
+
+/**
+ * Claimed runs an older build filed as plain imports (before PROGRAM_RUN_TAG): each gains the
+ * tag and loses the read marker, so it reads as its program's work (user-status.ts) and no VP
+ * or Main hears it (org-follow.ts). Only an open task the importer still owns (nobody wrote to
+ * it) whose own session in the slot is claimed on its host; never a phase move. Bounded per run,
+ * and finds nothing once an install has converged. The write announces the row (task:updated),
+ * which is what derives its status again (user-status-sync.ts).
+ */
+async function stampProgramRuns(imports: Task[], limit: number): Promise<number> {
+  const { getSessionByClaudeId } = await import('../session-tracker.js');
+  const { updateTaskRaw } = await import('../task-manager.js');
+  let stamped = 0;
+  for (const task of imports) {
+    if (stamped >= limit) break;
+    const sid = task.session_id;
+    if (!sid || task.phase === 'COMPLETE' || isProgramRunTask(task) || isLegacyBucket(task) || !claimedOnAnyHost(sid)) continue;
+    try {
+      const rec = await getSessionByClaudeId(sid);
+      if (!rec || rec.taskId !== task.id || !isClaimedImport(rec.host ?? '', sid)) continue;
+      const res = await updateTaskRaw(task.id, (current) => (
+        isExternalImportTask(current) && !isProgramRunTask(current) && current.phase !== 'COMPLETE'
+          ? { tags: [...(current.tags ?? []), PROGRAM_RUN_TAG], unread: false }
+          : null
+      ), { emitEvent: true, push: false, source: EXTERNAL_IMPORT_EVENT_SOURCE });
+      if (res.changed) stamped++;
+    } catch (err) {
+      log.session.warn('external import could not mark a claimed run as a program run', {
+        taskId: task.id, sessionId: sid, error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return stamped;
+}
+
 /** Test seam: forget every claim and what was learned about claimed ids. */
 export function _resetImportClaimsForTesting(): void {
   importClaims.clear();
@@ -902,8 +953,10 @@ async function auditImports(imports: Task[], limit: number): Promise<number> {
 
 /**
  * Someone sent the session a message: the task is adopted and leaves the
- * imported type. Idempotent; a no-op for anything the importer never owned.
- * Called from the session send handlers next to the session:input phase hook.
+ * imported type, and a program's run stops being one (PROGRAM_RUN_TAG): from
+ * then on it reads and reports like any task. Idempotent; a no-op for anything
+ * the importer never owned. Called from the session send handlers next to the
+ * session:input phase hook.
  */
 export async function adoptImportedTask(taskId: string, via: string): Promise<boolean> {
   const { getTask, updateTask } = await import('../task-manager.js');
@@ -912,7 +965,7 @@ export async function adoptImportedTask(taskId: string, via: string): Promise<bo
   // remove_tags is applied inside the task write lock against the row as it is
   // then, so a tag someone adds meanwhile survives; updateTask announces the
   // change as task:updated whatever the phase (never a second "completed").
-  await updateTask(taskId, { remove_tags: [HOLDER_TAG] }, { source: 'external-session-import' });
+  await updateTask(taskId, { remove_tags: [HOLDER_TAG, PROGRAM_RUN_TAG] }, { source: 'external-session-import' });
   log.session.info('imported session adopted; task leaves the imported type', { taskId, via });
   return true;
 }
@@ -981,7 +1034,8 @@ async function importCandidate(
     project,
     source: 'local',
     priority: 'none',
-    tags: opts.onRequest ? [] : [HOLDER_TAG],
+    // A plugin's claimed run is its program's work, not a person's (PROGRAM_RUN_TAG).
+    tags: opts.onRequest ? [] : isClaimedImport(host, candidate.sessionId) ? [HOLDER_TAG, PROGRAM_RUN_TAG] : [HOLDER_TAG],
     ...(candidate.cwd ? { cwd: candidate.cwd } : {}),
     ...(groupId ? { group_id: groupId } : {}),
     description: opts.onRequest
@@ -1048,7 +1102,7 @@ export interface ImportExternalSessionsOptions {
   /** Clock for the idle sweep (tests advance it; production leaves it unset). */
   now?: number;
   /** Per-run caps (test seam; production uses the module constants). */
-  limits?: { sweep?: number; folderBackfill?: number; retitle?: number; audit?: number; started?: number };
+  limits?: { sweep?: number; folderBackfill?: number; retitle?: number; audit?: number; started?: number; programRuns?: number };
   /**
    * Ends the pass at its next row: the server's shutdown aborts it, so a stop never
    * waits on a whole pass (2026-11-12: a deploy's smoke boot bailed waiting on one).
@@ -1067,7 +1121,7 @@ async function runImport(options: ImportExternalSessionsOptions): Promise<Extern
   const now = options.now ?? Date.now();
   const result: ExternalImportResult = {
     imported: 0, retitled: 0, completed: 0, foldered: 0, removed: 0, skipped: 0, hostsScanned: [], hostsSkipped: [],
-    truncated: false, projectByHost: {}, cleanedLegacyBuckets: 0, started: 0,
+    truncated: false, projectByHost: {}, cleanedLegacyBuckets: 0, started: 0, programRuns: 0,
   };
 
   const { getConfig } = await import('../config-manager.js');
@@ -1100,12 +1154,15 @@ async function runImport(options: ImportExternalSessionsOptions): Promise<Extern
   if (stopped('folders')) return result;
   const kept = result.removed > 0 ? await queryTasks({ tagsAll: [HOLDER_TAG] }) : imports;
   result.foldered = await backfillImportFolders(folders, kept, options.limits?.folderBackfill ?? FOLDER_BACKFILL_LIMIT_PER_RUN);
+  if (stopped('program-runs')) return result;
+  // Before the started backfill, which then files a stamped TODO as read.
+  result.programRuns = await stampProgramRuns(kept, options.limits?.programRuns ?? PROGRAM_RUN_STAMP_LIMIT_PER_RUN);
   if (stopped('started')) return result;
   result.started = await fileOlderImportsAsStarted(kept, options.limits?.started ?? STARTED_BACKFILL_LIMIT_PER_RUN);
   if (stopped('sweep')) return result;
   result.completed = await sweepIdleImports(kept, idleMs, now, options.limits?.sweep ?? SWEEP_LIMIT_PER_RUN);
 
-  if (result.imported > 0 || result.retitled > 0 || result.completed > 0 || result.foldered > 0 || result.removed > 0 || result.started > 0) {
+  if (result.imported > 0 || result.retitled > 0 || result.completed > 0 || result.foldered > 0 || result.removed > 0 || result.started > 0 || result.programRuns > 0) {
     // One coarse refresh — addTask already emitted per-task events; this nudges
     // list surfaces that coalesce on task:updated (and is the ONLY signal for the
     // sweep/backfill writes, which deliberately emit nothing per row).
@@ -1113,7 +1170,7 @@ async function runImport(options: ImportExternalSessionsOptions): Promise<Extern
     log.session.info('imported external sessions', {
       imported: result.imported, retitled: result.retitled, completed: result.completed,
       foldered: result.foldered, removed: result.removed, skipped: result.skipped, started: result.started,
-      hosts: result.hostsScanned.join(','),
+      programRuns: result.programRuns, hosts: result.hostsScanned.join(','),
       projects: Object.values(result.projectByHost).join(','),
     });
   }

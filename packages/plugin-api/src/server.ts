@@ -286,7 +286,10 @@ export interface SessionImportsService {
    *  `projectFor(host)` with `tag`, on the importer's next run. Each call replaces your earlier
    *  list for that host, so pass every run you still want on the board; ids already on the board
    *  are skipped. Answers how many ids it kept (malformed ones are dropped). An older Walnut has
-   *  no `include` and imports program runs itself. Released when your plugin stops. */
+   *  no `include` and imports program runs itself. Released when your plugin stops. Such a task also
+   *  carries `walnut:program-run`: it is your program's work, so with nothing really asked it reads
+   *  Waiting on that program (never "to read" or Needs you), filed read, and no VP or Main hears its
+   *  turns; the first message anyone sends into the session removes both tags. */
   include(host: string, sessionIds: string[]): number
 }
 
