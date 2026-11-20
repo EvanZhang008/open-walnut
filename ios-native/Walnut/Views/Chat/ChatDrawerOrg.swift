@@ -17,6 +17,10 @@ enum ChatDrawerView: String, CaseIterable, Identifiable {
 
 /// The drawer's org view: the CEO on top, then one row per VP, each with its live status the
 /// way the web Org page shows it (`ChatOrgModel`). A tap opens that node's chat.
+///
+/// With Directors on (`DirectorsSettings.enabled`), each VP's Directors show in the layout the
+/// user picked (`ChatDirectorsModel`): folded under the VP, or in a section after the VPs. A long
+/// press on a VP offers New Director, on a Director Remove from Directors.
 struct ChatDrawerOrgList: View {
     let rows: [ChatOrgModel.Row]
     /// nil while the first load runs; set when it failed and nothing is shown yet.
@@ -24,33 +28,71 @@ struct ChatDrawerOrgList: View {
     let loading: Bool
     let retry: () -> Void
     let open: (ChatOrgModel.Row) -> Void
+    /// The org tree and the task list the Directors are read from (nil tree: none shown).
+    var tree: OrgTreeWire? = nil
+    var tasks: [WalnutTask] = []
+    var directors: DirectorsSettings = DirectorsSettings()
+    /// nil: no Director actions here (Directors off, or a host without them).
+    var actions: ChatDirectorActions? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if rows.isEmpty {
                 placeholder
             } else {
+                let shown = showsDirectors ? tree : nil
+                let folds: [String: ChatDirectorsModel.Fold] = shown.map { directors.layout == .fold
+                    ? ChatDirectorsModel.folds(rows: rows, tree: $0, tasks: tasks, showProjects: directors.showProjects) : [:] } ?? [:]
                 ForEach(rows) { row in
                     if row.kind == .vp, row.id == rows.first(where: { $0.kind == .vp })?.id {
-                        Text("VPs")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 20)
-                            .padding(.top, 14)
-                            .padding(.bottom, 4)
-                            .accessibilityAddTraits(.isHeader)
+                        heading("VPs")
                     }
                     Button { open(row) } label: { ChatOrgRowView(row: row) }
                         .buttonStyle(.plain)
+                        .modifier(VPRowMenu(row: row, actions: showsDirectors ? actions : nil))
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(Self.accessibilityText(row))
                         .accessibilityAddTraits(.isButton)
                         .accessibilityIdentifier("chat.drawer.org.\(row.id)")
+                    if let fold = folds[row.id], let actions {
+                        ChatDirectorFold(row: row, fold: fold, actions: actions)
+                    }
+                }
+                if let shown, directors.layout == .sections, let actions {
+                    let list = ChatDirectorsModel.sections(rows: rows, tree: shown, tasks: tasks)
+                    if !list.isEmpty {
+                        heading("Directors")
+                            .accessibilityIdentifier("chat.drawer.directors.header")
+                        ForEach(list) { d in
+                            Button {
+                                guard !actions.suppressed() else { return }
+                                actions.open(d)
+                            } label: { ChatDirectorSectionRow(director: d) }
+                                .buttonStyle(.plain)
+                                .contextMenu { ChatDirectorMenu(director: d, actions: actions) }
+                                .accessibilityElement(children: .ignore)
+                                .accessibilityLabel("\(d.title), Director, \(ChatDirectorsModel.sectionLine(d))")
+                                .accessibilityAddTraits(.isButton)
+                                .accessibilityIdentifier("chat.drawer.director.\(d.id)")
+                        }
+                    }
                 }
             }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chat.drawer.orgList")
+    }
+
+    private var showsDirectors: Bool { directors.enabled && actions != nil }
+
+    private func heading(_ text: String) -> some View {
+        Text(text)
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 20)
+            .padding(.top, 14)
+            .padding(.bottom, 4)
+            .accessibilityAddTraits(.isHeader)
     }
 
     @ViewBuilder
@@ -98,6 +140,27 @@ struct ChatDrawerOrgList: View {
             parts.append("\(row.needs) \(row.needs == 1 ? "needs" : "need") you")
         }
         return parts.joined(separator: ", ")
+    }
+}
+
+/// A VP row's long press while Directors are on: New Director. No menu at all otherwise.
+private struct VPRowMenu: ViewModifier {
+    let row: ChatOrgModel.Row
+    let actions: ChatDirectorActions?
+
+    func body(content: Content) -> some View {
+        if let actions, row.kind == .vp {
+            content.contextMenu {
+                Button {
+                    actions.newDirector(row)
+                } label: {
+                    Label("New Director…", systemImage: "person.badge.plus")
+                }
+                .accessibilityIdentifier("chat.drawer.org.newDirector")
+            }
+        } else {
+            content
+        }
     }
 }
 

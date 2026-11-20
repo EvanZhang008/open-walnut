@@ -26,13 +26,38 @@ struct AgentMemoryView: Codable {
 }
 
 /// The org's settings (`GET /api/v1/org/settings`), only the part this app reads: Walnut's default
-/// core instructions for the CEO and a VP. nil from a server older than them.
+/// core instructions for the CEO and a VP (nil from a server older than them), and how Directors
+/// show (additive, 2026-11-20; absent = off, `DirectorsSettings`).
 struct OrgSettingsView: Codable {
     struct Defaults: Codable {
         let main: String
         let lead: String
     }
     let defaultInstructions: Defaults?
+    var directorsEnabled: Bool? = nil
+    /// `fold` or `sections`; an unknown word reads as `fold`.
+    var directorsLayout: String? = nil
+    var directorsShowProjects: Bool? = nil
+
+    init(defaultInstructions: Defaults?, directorsEnabled: Bool? = nil, directorsLayout: String? = nil, directorsShowProjects: Bool? = nil) {
+        self.defaultInstructions = defaultInstructions
+        self.directorsEnabled = directorsEnabled
+        self.directorsLayout = directorsLayout
+        self.directorsShowProjects = directorsShowProjects
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case defaultInstructions, directorsEnabled, directorsLayout, directorsShowProjects
+    }
+
+    /// Lenient: a field of another type (a newer server) reads as absent, never a failed read.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        defaultInstructions = try c.decodeIfPresent(Defaults.self, forKey: .defaultInstructions)
+        directorsEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .directorsEnabled)) ?? nil
+        directorsLayout = (try? c.decodeIfPresent(String.self, forKey: .directorsLayout)) ?? nil
+        directorsShowProjects = (try? c.decodeIfPresent(Bool.self, forKey: .directorsShowProjects)) ?? nil
+    }
 }
 
 extension WalnutAPI {
@@ -54,8 +79,8 @@ extension WalnutAPI {
 }
 
 /// `GET /api/v1/org` (additive, 2026-10): the org above the work, the CEO (Main) and one node per
-/// project with its VP (lead). Only what the Chat drawer's org view reads; the teams under each
-/// project are not decoded (their counts already are).
+/// project with its VP (lead). Only what the Chat drawer's org view reads: the counts, and of the
+/// teams under each project their ids and what its Directors show.
 struct OrgTreeResponse: Decodable {
     let tree: OrgTreeWire
 }
@@ -138,6 +163,41 @@ struct OrgProjectWire: Decodable, Equatable {
 struct OrgTeamNodeWire: Decodable, Equatable {
     let id: String
     var workers: [OrgTeamNodeWire]? = nil
+    /// What a Director row shows (additive; absent from an older server).
+    var title: String? = nil
+    var project: String? = nil
+    var phase: String? = nil
+    /// The server's user state word (`needs`, `read`, `working`, `waiting`, `done`).
+    var userState: String? = nil
+    /// A Director under its VP (additive, 2026-11-20; `DirectorRule`). Absent = not one.
+    var director: Bool? = nil
+
+    init(id: String, workers: [OrgTeamNodeWire]? = nil, title: String? = nil, project: String? = nil,
+         phase: String? = nil, userState: String? = nil, director: Bool? = nil) {
+        self.id = id
+        self.workers = workers
+        self.title = title
+        self.project = project
+        self.phase = phase
+        self.userState = userState
+        self.director = director
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, workers, title, project, phase, userState, director
+    }
+
+    /// Lenient past the id: a field of another type reads as absent, so the org still loads.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        workers = try c.decodeIfPresent([OrgTeamNodeWire].self, forKey: .workers)
+        title = (try? c.decodeIfPresent(String.self, forKey: .title)) ?? nil
+        project = (try? c.decodeIfPresent(String.self, forKey: .project)) ?? nil
+        phase = (try? c.decodeIfPresent(String.self, forKey: .phase)) ?? nil
+        userState = (try? c.decodeIfPresent(String.self, forKey: .userState)) ?? nil
+        director = (try? c.decodeIfPresent(Bool.self, forKey: .director)) ?? nil
+    }
 
     /// This node and every worker under it.
     var allIds: [String] { [id] + (workers ?? []).flatMap(\.allIds) }

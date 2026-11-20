@@ -24,6 +24,8 @@ struct DictatedTextPrompt: View {
     /// A first message wraps over lines; a title stays on one, and Return confirms it.
     var multiline = false
     var autocorrect = true
+    /// A second section under the field (a picker the answer needs, e.g. a New Director's project).
+    var accessory: AnyView? = nil
     let onCancel: () -> Void
     /// The trimmed words, never empty. The presenter closes the sheet.
     let onConfirm: (String) -> Void
@@ -50,6 +52,9 @@ struct DictatedTextPrompt: View {
                     }
                 } footer: {
                     if let message { Text(message) }
+                }
+                if let accessory {
+                    Section { accessory }
                 }
             }
             .dictationSendGate(sendGate)

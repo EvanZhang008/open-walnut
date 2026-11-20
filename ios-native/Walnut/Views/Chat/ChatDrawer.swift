@@ -65,6 +65,12 @@ struct ChatDrawer: View {
     /// the opening starts (and a status that moved just before) lands within it, before the
     /// user reaches for a row. After that the order holds still under the finger.
     @State private var orgSettleUntil = Date.distantPast
+    /// How Directors show (the org's settings, shared with the task page and Settings).
+    @State private var directors = DirectorsSettingsStore.shared
+    /// A VP's New Director sheet, raised from the root (a sheet raised in the scroll content is
+    /// rebuilt when its field takes focus).
+    @State private var newDirectorFor: NewDirectorTarget?
+    @State private var directorError: String?
 
     @State private var renameTarget: ConversationSummary?
     /// His rename words per chat (`PromptDrafts`): a rename a push closed opens on them again, and
@@ -181,6 +187,27 @@ struct ChatDrawer: View {
         } message: {
             Text(verbatim: "This permanently deletes \"\(deleteAskTarget?.title ?? "this conversation")\" and its history, on this phone and on the Mac.")
         }
+        .sheet(item: $newDirectorFor) { target in
+            NewDirectorPrompt(
+                target: target,
+                onCancel: {
+                    newDirectorFor = nil
+                    ComposerDrafts.shared.setDraft("", key: target.draftKey)
+                },
+                onConfirm: { title, project in
+                    newDirectorFor = nil
+                    Task { await createDirector(title, project: project, draftKey: target.draftKey) }
+                }
+            )
+        }
+        .alert("Couldn't change Directors", isPresented: Binding(
+            get: { directorError != nil },
+            set: { if !$0 { directorError = nil } }
+        )) {
+            Button("OK", role: .cancel) { directorError = nil }
+        } message: {
+            Text(verbatim: directorError ?? "")
+        }
         .alert("Couldn't update conversation", isPresented: Binding(
             get: { actionError != nil },
             set: { if !$0 { actionError = nil } }
@@ -215,7 +242,9 @@ struct ChatDrawer: View {
                         open: { row in
                             guard !suppressTaps else { return }
                             openOrgNode(row)
-                        }
+                        },
+                        tree: orgTree, tasks: tasks?.tasks ?? [], directors: directors.value,
+                        actions: directorActions
                     )
                 } else {
                     // Only when there is a choice: on a server with one agent an
@@ -302,6 +331,7 @@ struct ChatDrawer: View {
     }
 
     private func loadOrg() async {
+        Task { await directors.refresh() }
         orgLoadGen &+= 1
         let gen = orgLoadGen
         orgLoading = true
@@ -322,6 +352,44 @@ struct ChatDrawer: View {
             // A failed reload keeps what was shown; only an empty view says so.
             if orgTree == nil { orgError = error.localizedDescription }
             AppLog.info("chat", "org load failed", ["error": error.localizedDescription])
+        }
+    }
+
+    // MARK: - Directors
+
+    private var directorActions: ChatDirectorActions {
+        ChatDirectorActions(
+            open: { openOrgNode(ChatDirectorsModel.openRow($0)) },
+            remove: removeDirector,
+            newDirector: { newDirectorFor = NewDirectorTarget(row: $0) },
+            suppressed: { suppressTaps }
+        )
+    }
+
+    /// Remove from Directors: gone from the list at once, then the server's tree.
+    private func removeDirector(_ d: ChatDirectorsModel.Director) {
+        if let orgTree { self.orgTree = ChatDirectorsModel.marking(orgTree, id: d.id, director: false) }
+        Task {
+            do {
+                tasks?.adoptRow(try await WalnutAPI().setDirector(taskId: d.id, .no))
+            } catch {
+                directorError = "\(d.title) is still a Director: \(error.localizedDescription)"
+            }
+            await loadOrg()
+        }
+    }
+
+    /// Make the task, refresh the list, and open it: its first message starts it. His words stay
+    /// in the prompt's draft until the task is made.
+    private func createDirector(_ title: String, project: String, draftKey: String) async {
+        do {
+            let task = try await WalnutAPI().createDirector(title: title, project: project)
+            ComposerDrafts.shared.setDraft("", key: draftKey)
+            if let tasks { Task { await tasks.loadTasks() } }
+            await loadOrg()
+            openOrgNode(ChatDirectorsModel.openRow(created: task))
+        } catch {
+            directorError = "Couldn't create \"\(title)\": \(error.localizedDescription)"
         }
     }
 

@@ -113,6 +113,7 @@ struct TaskDetailSheet: View {
             .environment(\.composerCovered, coveredByHost || !navPath.isEmpty)
             .accessibilityIdentifier("task.detail.scroll")
             .task {
+                Task { await DirectorsSettingsStore.shared.refresh() }
                 if detailController.detail == nil || usedInitialDetail { await detailController.load() }
                 usedInitialDetail = true
                 if let detail = detailController.detail {
@@ -132,6 +133,13 @@ struct TaskDetailSheet: View {
             .navigationTitle("Task")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                // Make it a Director / Remove from Directors (only while Directors are on: an empty
+                // item would still draw its glass).
+                if DirectorsSettingsStore.shared.value.enabled, DirectorRule.canChoose(current) {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        TaskDirectorMenu(task: current, children: detailController.detail?.children)
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
                 }

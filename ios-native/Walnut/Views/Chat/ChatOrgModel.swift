@@ -22,8 +22,10 @@ import Foundation
 /// (`source: "thread"`) counts as those threads, never once more as an ask of its own.
 enum ChatOrgModel {
     struct Row: Identifiable, Equatable {
-        enum Kind: Equatable { case ceo, vp }
-        /// "ceo", or `project:<key>`.
+        /// `director`: a Director's row a tap opens like a node's (`ChatDirectorsModel.openRow`);
+        /// `rows` never lists one.
+        enum Kind: Equatable { case ceo, vp, director }
+        /// "ceo", `project:<key>`, or `director:<task id>`.
         let id: String
         let kind: Kind
         let name: String

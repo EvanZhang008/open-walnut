@@ -47,6 +47,9 @@ struct SettingsView: View {
                 }
                 serverInfoSection
                 automationSection
+                if !inDemo {
+                    DirectorsSettingsSection()
+                }
                 // Focus music streams from the paired Mac; the demo has none.
                 if !inDemo {
                     focusSection
@@ -437,6 +440,8 @@ struct SettingsView: View {
     // MARK: - Server info helpers
 
     private func loadServerInfo() async {
+        // The Org section shows only while Directors are on (DirectorsSettingsSection).
+        if !inDemo { Task { await DirectorsSettingsStore.shared.refresh() } }
         // Best-effort, independently: chat stats failing must not hide config.
         if let info = try? await WalnutAPI().serverConfig() {
             serverInfo = info

@@ -533,6 +533,9 @@ struct WalnutTask: Codable, Identifiable, Equatable {
     /// `src/core/org/keeps-threads.ts`): its session menu opens them. nil when off, on Main and
     /// the leads (they always keep Threads), and from an older server.
     var threadsOn: Bool? = nil
+    /// The user's Director choice (additive, 2026-11-20; `DirectorRule`): `yes` or `no`, nil = auto
+    /// and from an older server. Every copy of a row (`applyEdit`, `withPinned`) carries it.
+    var director: DirectorChoice? = nil
     /// What its running session does now (additive, 2026-10; server `src/core/live-activity.ts`):
     /// the tool, since when, the turn's length and cost. Running rows only; nil from an older
     /// server. The feed's `task-activity` frame keeps it current (TasksStore).
@@ -585,6 +588,7 @@ struct WalnutTask: Codable, Identifiable, Equatable {
         case userStatus = "user_status"
         case orgRole = "org_role"
         case threadsOn = "threads_on"
+        case director
         case liveActivity = "live_activity"
         case resultReport = "result_report"
         case teamStop = "team_stop"
