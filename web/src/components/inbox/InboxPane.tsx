@@ -21,8 +21,10 @@ const isInboxDensity = (v: unknown): v is InboxDensity => v === 'compact' || v =
 export function InboxPane({
   letters, loaded, error, showArchived, onToggleArchived, unreadOnly, onToggleUnreadOnly,
   onOpen, onNavigate, onTogglePin, onToggleArchive, onToggleRead,
-  layout, onLayoutChange, selectedId, reader,
+  layout, onLayoutChange, selectedId, reader, needs,
 }: {
+  /** The threads that need him, above the letters (experiment inbox_needs_threads: InboxNeedsThreads). */
+  needs?: ReactNode;
   layout: InboxLayout;
   onLayoutChange: (layout: InboxLayout) => void;
   selectedId: string | null;
@@ -75,6 +77,7 @@ export function InboxPane({
         </button>
       </div>
       {error && <div className="hib-note hib-note-error">{error}</div>}
+      {needs}
       <div className="hib-inbox-columns">
         <div className="hib-inbox-index" aria-label="Letters">
       {letters.length === 0 ? (

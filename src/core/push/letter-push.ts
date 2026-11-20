@@ -312,6 +312,9 @@ export function initLetterPush(): void {
         log.notif.info('letter push', { letterId: data.letterId, kind: data.kind, outcome: 'quiet', reason: 'away thread unread' })
         return
       }
+      // inbox_needs_threads: a decision that waits on him as a thread buzzes as that thread (needs-push.ts).
+      const { pushedAsThread } = await import('./needs-push.js')
+      if (await pushedAsThread(data)) return
       // Envelope only. `textPreview` is capped at 300 chars at write time; the
       // document body never rides a push (it stays behind
       // GET /api/v1/human-inbox/:id).

@@ -1,0 +1,52 @@
+/* The inbox's threads that need him (components/inbox/InboxNeedsThreads.tsx), above the letters. */
+.hib-needs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 2px 12px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.hib-needs-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+}
+.hib-needs-count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: 11px;
+  text-align: center;
+}
+.hib-needs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.hib-needs-item .org-thread-list { margin: 0; }
+.hib-needs-from {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px 4px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.hib-needs-node { font-weight: 600; color: var(--fg-secondary); overflow-wrap: anywhere; }
+.hib-needs-urgency {
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+}
+.hib-needs-urgency.is-pinned,
+.hib-needs-urgency.is-due,
+.hib-needs-urgency.is-immediate { background: var(--accent-subtle); color: var(--warning); }

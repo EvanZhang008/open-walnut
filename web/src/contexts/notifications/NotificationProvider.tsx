@@ -36,6 +36,9 @@ import {
   TOAST_DURATION_MS, toastLifetimeMs, IS_PERSISTENT, MAX_FEED_BODY_CHARS, SHOULD_TOAST,
 } from './types';
 import { attentionBadgeCount, actionOf, mergeLoadedFeed } from './notification-model';
+import { attentionWithNeeds } from './needs-count';
+import { useInboxNeeds } from '@/stores/inbox-needs-store';
+import { useExperimental } from '@/hooks/useExperimental';
 import { wireActionsOf } from './notification-actions';
 import { useQuietState } from './quiet';
 import { quietAllowsToast, reminderSoundMuted, type QuietState } from './quiet-model';
@@ -707,7 +710,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   // notification center's Needs you does (no clock: the server's expiry event takes one off).
   const approvalItems = useApprovals().items;
   const approvalsWaiting = useMemo(() => pendingAt({ items: approvalItems } as ApprovalsState, Date.now()).length, [approvalItems]);
-  const attentionCount = useMemo(() => attentionBadgeCount(countedFeed) + approvalsWaiting, [countedFeed, approvalsWaiting]);
+  // inbox_needs_threads: the threads that need him count too, a letter one of them holds once, as the thread.
+  const needsOn = useExperimental('inbox_needs_threads');
+  const needs = useInboxNeeds(needsOn).threads;
+  const attentionCount = useMemo(() => (needsOn ? attentionWithNeeds(countedFeed, needs) : attentionBadgeCount(countedFeed)) + approvalsWaiting, [countedFeed, approvalsWaiting, needsOn, needs]);
 
   const value = useMemo<NotificationContextValue>(() => ({
     toasts, feed, healthFeed, loaded, unreadCount, attentionCount, notify, dismissToast, pinToast, markAllRead,

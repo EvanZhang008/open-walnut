@@ -62,6 +62,8 @@ export default defineConfig({
       '@open-walnut/message-about': path.resolve(__dirname, '../src/core/org/message-about.ts'),
       '@open-walnut/reply-thread': path.resolve(__dirname, '../src/core/org/reply-thread.ts'),
       '@open-walnut/thread-view': path.resolve(__dirname, '../src/core/org/thread-view.ts'),
+      // The inbox's threads that need him: their order and the counts, as GET /api/v1/inbox/needs reads them.
+      '@open-walnut/inbox-needs': path.resolve(__dirname, '../src/core/human-inbox/needs-model.ts'),
       '@open-walnut/live-activity': path.resolve(__dirname, '../src/core/live-activity.ts'),
       '@open-walnut/terminal-key': path.resolve(__dirname, '../src/core/terminal-key.ts'),
       // The Brief's three sections: the server stores the letter in them, the page keeps them live.

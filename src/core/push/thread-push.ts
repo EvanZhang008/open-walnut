@@ -149,9 +149,34 @@ async function buzzOne(taskId: string, thread: OrgThread, now: number): Promise<
     threadId: thread.id, away, threads: (await readThreads(taskId)).threads, letters: await awayLettersOf(taskId), now,
   })
   if (!plan.buzz) return done(0, plan.reason, { outcome: 'quiet' })
+  const d = await deliverThreadPush(thread, node, now)
+  // Recorded once it was handed to a device service: the absence's buzz, whatever the service said.
+  if (d.attempted) await markNeedsBuzzed(taskId, thread.id, new Date(now).toISOString()).catch(() => {})
+  return done(d.sent, d.reason, d.fields)
+}
 
+export interface ThreadPushDelivery {
+  attempted: boolean
+  sent: number
+  reason?: string
+  /** What the `thread push` / `letter push` line adds (devices, targeted, failed). */
+  fields: Record<string, unknown>
+}
+
+/**
+ * Hand a thread's notification to the devices that take a decision now (his device settings for
+ * a decision letter decide a decision thread too), unless quiet mode holds it. Never throws for a
+ * device service's refusal; says what happened.
+ */
+export async function deliverThreadPush(
+  thread: Pick<OrgThread, 'id' | 'title' | 'ask' | 'reply'>,
+  node: Pick<Task, 'id' | 'org_role' | 'project'>,
+  now: number,
+  /** What the banner says (needs-push.ts: a decision letter's words, the thread's tap); default the thread's own. */
+  content: PushContent = threadPushContent(thread, node),
+): Promise<ThreadPushDelivery> {
   const tokens: PushTokenEntry[] = (await getConfig()).push_tokens ?? []
-  if (!tokens.length) return done(0, 'no device registered for push', { devices: 0 })
+  if (!tokens.length) return { attempted: false, sent: 0, reason: 'no device registered for push', fields: { devices: 0 } }
   const chosen = selectDevices(
     tokens.map((t) => ({
       entry: t, mode: parseMode(t.mode),
@@ -159,16 +184,13 @@ async function buzzOne(taskId: string, thread: OrgThread, now: number): Promise<
       ...(typeof t.active_at === 'number' ? { activeAt: t.active_at } : {}),
       ...(t.letter_types ? { types: t.letter_types } : {}),
     })),
-    // His device settings for a decision letter decide a decision thread too.
     'action_required', now, ACTIVE_LEASE_MS,
   )
-  if (!chosen.length) return done(0, 'all devices are foreground-active or muted decisions', { devices: tokens.length, targeted: 0 })
+  if (!chosen.length) return { attempted: false, sent: 0, reason: 'all devices are foreground-active or muted decisions', fields: { devices: tokens.length, targeted: 0 } }
   // Quiet holds it (quiet-hold.ts), asked once a device would take it.
   if (await holdPushForQuiet('thread-push', { key: `thread:${thread.id}`, title: thread.title })) {
-    return done(0, 'quiet mode is on')
+    return { attempted: false, sent: 0, reason: 'quiet mode is on', fields: {} }
   }
-  const res = await deliverPush(chosen.map(({ device }) => device.entry), threadPushContent(thread, node))
-  // Recorded once it was handed to a device service: the absence's buzz, whatever the service said.
-  if (res.attempted) await markNeedsBuzzed(taskId, thread.id, new Date(now).toISOString()).catch(() => {})
-  return done(res.sent, res.reason, { devices: tokens.length, targeted: chosen.length, failed: res.failed })
+  const res = await deliverPush(chosen.map(({ device }) => device.entry), content)
+  return { attempted: res.attempted, sent: res.sent, ...(res.reason ? { reason: res.reason } : {}), fields: { devices: tokens.length, targeted: chosen.length, failed: res.failed } }
 }

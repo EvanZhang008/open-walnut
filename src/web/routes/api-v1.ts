@@ -4759,6 +4759,10 @@ import { humanInboxItemsV1Router } from './human-inbox-items-v1.js'
 apiV1Router.use(humanInboxItemsV1Router)
 apiV1Router.use(humanInboxV1Router)
 
+// The inbox as the threads that need him (experiment inbox_needs_threads).
+import { inboxNeedsV1Router } from './inbox-needs-v1.js'
+apiV1Router.use(inboxNeedsV1Router)
+
 import { routerV1Router } from './router-v1.js'
 apiV1Router.use(routerV1Router)
 

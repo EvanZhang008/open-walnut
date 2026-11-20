@@ -82,6 +82,34 @@ export function letterOutcome(l: LetterRecord, withdrawnId: string): LetterOutco
   return null;
 }
 
+/**
+ * The task whose Threads this decision letter waits on, or null when it stays a letter only: a
+ * letter that never does (letterThreadSkip), or a sender that keeps no Threads, files no updates
+ * there or completed. `tasks`: the task list when the caller read it already.
+ */
+export async function letterThreadTask(l: LetterRecord, tasks?: readonly Task[]): Promise<Task | null> {
+  const taskId = l.sender?.taskId;
+  if (!taskId || letterThreadSkip(l)) return null;
+  const task = tasks ? tasks.find((t) => t.id === taskId) : (await (await import('../task-manager.js')).listTasksByIds([taskId]).catch(() => []))[0];
+  const { keepsThreads } = await import('../org/keeps-threads.js');
+  const { isTriageLetterSender } = await import('./letter-origin.js');
+  if (!task || task.phase === 'COMPLETE' || !filesUpdatesAsThreads(task, isTriageLetterSender(l.sender), keepsThreads)) return null;
+  return task;
+}
+
+/**
+ * This letter, as it is now, waits on him as a thread (the experiment on, the leader, a decision
+ * still waiting on him, a task whose Threads take it): that task and the thread's id. The phone
+ * buzzes for the thread instead of the letter (push/needs-push.ts). Null otherwise.
+ */
+export async function letterWaitsOnThread(l: LetterRecord): Promise<{ task: Task; threadId: string } | null> {
+  if (l.type !== 'action_required' || !(await lettersAsThreadsOn())) return null;
+  const { isFollower } = await import('../server-role.js');
+  if (isFollower() || !awaitsUserDecision(l)) return null;
+  const task = await letterThreadTask(l);
+  return task ? { task, threadId: letterThreadId(l.id) } : null;
+}
+
 type Done = 'opened' | 'reopened' | 'settled' | 'off' | null;
 
 /**
@@ -114,11 +142,7 @@ async function syncNow(seen: LetterRecord, taskId: string, tasks?: readonly Task
   const at = new Date().toISOString();
   const aside = !!holder?.thread.letter?.off && !holder.thread.letter.done && (!!holder.thread.closed || holder.thread.state === 'needs');
   if (waits && on && (!holder || aside)) {
-    if (letterThreadSkip(l)) return null;
-    const task = tasks ? tasks.find((t) => t.id === taskId) : (await (await import('../task-manager.js')).listTasksByIds([taskId]).catch(() => []))[0];
-    const { keepsThreads } = await import('../org/keeps-threads.js');
-    const { isTriageLetterSender } = await import('./letter-origin.js');
-    if (!task || task.phase === 'COMPLETE' || !filesUpdatesAsThreads(task, isTriageLetterSender(l.sender), keepsThreads)) return null;
+    if (!(await letterThreadTask(l, tasks))) return null;
     const { letterItem } = await import('../action-needed-facts.js');
     const item = letterItem(l);
     const input = {
