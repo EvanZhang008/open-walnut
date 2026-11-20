@@ -109,6 +109,8 @@ describe('no text Walnut gives a session tells it to write the report in a reply
   const ASKS_THE_REPORT = new Set([
     'src/core/session-hooks/builtins.ts',
     'src/core/sessions/status-question.ts',
+    // The status side question's per-thread lines (2026-11-20): it asks them and reads them back.
+    'src/core/sessions/status-threads.ts',
     'src/core/ask-decision.ts',
     'src/core/same-ask-tree.ts',
     'src/core/sessions/user-asks-model.ts',
