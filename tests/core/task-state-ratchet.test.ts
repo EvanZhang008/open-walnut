@@ -209,6 +209,7 @@ const OLD_WORD_OK: Record<string, string> = {
   'src/core/human-inbox/walnut-letters/mail-digest.ts': 'counts mail messages that need the user, not tasks (the digest letter\'s text, moved from mail/digest.ts)',
   'web/src/components/sessions/TriggerPickerPopover.tsx': 'an example prompt the user may type, not a state',
   'src/core/user-status.ts': 'its doc names the retired words',
+  'web/src/components/org/top-thread-model.ts': 'counts threads waiting on him ("16 threads (1 needs you)"), not tasks',
 }
 const OWN_MAP_OK: Record<string, string> = {
   'src/core/user-status.ts': 'the names themselves',

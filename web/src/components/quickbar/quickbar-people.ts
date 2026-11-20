@@ -4,6 +4,8 @@
  * Pure functions, so tests/web/quickbar-people.test.ts pins every rule.
  */
 
+import { stateCountLabel } from '@open-walnut/user-status';
+
 export interface QuickPerson {
   id: string;
   title: string;
@@ -186,6 +188,6 @@ export function hueOf(id: string): number {
 
 /** The line under a name: how many threads of a CEO or VP wait on the user, then what it does now. */
 export function personLine(p: Pick<QuickPerson, 'kind' | 'needs' | 'line' | 'stateLabel'>): string {
-  if (p.kind !== 'task' && p.needs > 0) return `${p.needs} ${p.needs === 1 ? 'needs' : 'need'} you${p.line ? ` \u00b7 ${p.line}` : ''}`;
+  if (p.kind !== 'task' && p.needs > 0) return `${stateCountLabel('needs', p.needs)}${p.line ? ` \u00b7 ${p.line}` : ''}`;
   return p.line || p.stateLabel;
 }
