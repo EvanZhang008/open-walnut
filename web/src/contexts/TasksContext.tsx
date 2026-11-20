@@ -114,6 +114,8 @@ interface TaskRows {
  */
 export interface TaskStoreActions {
   has: (taskId: string) => boolean;
+  /** The row now, for an event handler: reading it subscribes to nothing. */
+  get: (taskId: string) => Task | null;
   /** Rejects when there is no store (and, as the store's own create, when the server refuses). */
   create: TasksContextValue['create'];
   update: TasksContextValue['update'];
@@ -129,6 +131,7 @@ function makeTaskRows(tasks: readonly Task[], loading: boolean, error: string | 
     subscribe: (listener) => { rows.listeners.add(listener); return () => { rows.listeners.delete(listener); }; },
     actions: {
       has: (taskId) => rowOf(rows, taskId) !== null,
+      get: (taskId) => rowOf(rows, taskId),
       create: (input, hooks) => (rows.store ? rows.store.create(input, hooks) : Promise.reject(new Error('No task list here'))),
       update: (id, updates) => (rows.store ? rows.store.update(id, updates) : Promise.resolve(false)),
       setPhase: (id, phase, opts) => (rows.store ? rows.store.setPhase(id, phase, opts) : Promise.resolve(false)),

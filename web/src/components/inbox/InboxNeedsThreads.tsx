@@ -17,7 +17,8 @@ import { needsThreadsOf } from '@open-walnut/inbox-needs';
 import type { ImageAttachment } from '@/api/chat';
 import type { InboxNeedsThread } from '@/api/inbox-needs';
 import type { OrgThread } from '@/api/org-threads';
-import { useTasksContext } from '@/contexts/TasksContext';
+import { useStoreTask } from '@/contexts/TasksContext';
+import { useNamedTasks } from '@/components/org/useNamedTasks';
 import { useSessionSend } from '@/hooks/useSessionSend';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { resolveTaskSessionId } from '@/utils/session-status';
@@ -42,15 +43,17 @@ const URGENCY_WORDS: Record<InboxNeedsThread['urgency']['why'], string | null> =
   pinned: 'Pinned', due: 'Due soon', immediate: 'Immediate', waiting: null,
 };
 
-function NeedsCard({ row, tasks, now }: { row: InboxNeedsThread; tasks: readonly Task[]; now: number }) {
+function NeedsCard({ row, now }: { row: InboxNeedsThread; now: number }) {
   const nodeId = row.node.task_id;
   const state = useOrgThreads(nodeId, true);
-  const owner = useMemo(() => tasks.find((t) => t.id === nodeId), [tasks, nodeId]);
+  const owner = useStoreTask(nodeId) ?? undefined;
   const sessionId = owner ? resolveTaskSessionId(owner) : null;
   const { send } = useSessionSend(sessionId);
   const all = state.threads;
   const fresh = all?.find((t) => t.id === row.id);
   const t = fresh ?? asNodeThread(row);
+  // Only the rows this card names: the whole list changes on every task write.
+  const tasks = useNamedTasks(t.tasks);
   const shared = useMemo(() => sharedAnswers(all ?? [t]), [all, t]);
   const followUp = useLeanCallback(async (threadId: string, text: string, images?: ImageAttachment[]) => {
     if (!sessionId) return false;
@@ -78,7 +81,6 @@ function NeedsCard({ row, tasks, now }: { row: InboxNeedsThread; tasks: readonly
 }
 
 export function InboxNeedsThreads({ needs }: { needs: InboxNeedsState }) {
-  const { tasks } = useTasksContext();
   const [now, setNow] = useState(() => Date.now());
   // "3 min ago" on the cards stays true while the inbox is open.
   useEffect(() => { const id = setInterval(() => setNow(Date.now()), 30_000); return () => clearInterval(id); }, []);
@@ -88,7 +90,7 @@ export function InboxNeedsThreads({ needs }: { needs: InboxNeedsState }) {
       <h3 className="hib-needs-head">Threads that need you <span className="hib-needs-count" data-testid="inbox-needs-count">{needs.threads.length}</span></h3>
       {needs.error && <p className="org-thread-error" role="alert">{needs.error}</p>}
       <div className="hib-needs-list" data-testid="inbox-needs-list">
-        {needs.threads.map((row) => <NeedsCard key={`${row.node.task_id}:${row.id}`} row={row} tasks={tasks} now={Math.max(now, Date.now())} />)}
+        {needs.threads.map((row) => <NeedsCard key={`${row.node.task_id}:${row.id}`} row={row} now={Math.max(now, Date.now())} />)}
       </div>
     </section>
   );

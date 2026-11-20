@@ -15,34 +15,17 @@ import type { Task } from '@open-walnut/core';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { sharedAnswers } from '@open-walnut/thread-view';
 import type { ImageAttachment } from '@/api/chat';
-import { useTaskListSelect } from '@/contexts/TasksContext';
 import { useSessionSend } from '@/hooks/useSessionSend';
 import { isBoolean, usePageView } from '@/utils/view-memory';
 import { ThreadItem } from './OrgThreads';
+import { useNamedTasks } from './useNamedTasks';
 import { setTopThreads, useFocusedThread } from './thread-focus';
 import type { OrgThreadsState } from './useOrgThreads';
 import { TOP_HIDDEN_VIEW, hiddenLine, topIndex, topThreads } from './top-thread-model';
 import type { OrgThread } from '@/api/org-threads';
 import '@/styles/top-thread.css';
 
-const NO_IDS: readonly string[] = [];
-const NO_TASKS: readonly Task[] = [];
 
-/**
- * The rows of the tasks a thread names (its chips, its deadline), re-rendering only when one of
- * them changes: the card above a chat never reads the whole list, which changes on every task write.
- */
-function useNamedTasks(ids: readonly string[] | undefined): readonly Task[] {
-  const want = ids ?? NO_IDS;
-  const kept = useRef<readonly Task[]>(NO_TASKS);
-  return useTaskListSelect(({ tasks }) => {
-    const next = want.length ? tasks.filter((x) => want.includes(x.id)) : NO_TASKS;
-    const prev = kept.current;
-    if (prev.length === next.length && prev.every((x, j) => x === next[j])) return prev;
-    kept.current = next;
-    return next;
-  }) ?? NO_TASKS;
-}
 
 /** The list the top steps through and the clock it was read at, ticking while the chat is open. */
 export function useTopThreads(threads: OrgThreadsState): { at: number; list: OrgThread[] } {

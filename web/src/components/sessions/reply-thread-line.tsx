@@ -14,7 +14,7 @@ import { createContext, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { keepsThreads } from '@open-walnut/keeps-threads';
 import type { ReplyThread } from '@open-walnut/reply-thread';
-import { useTasksContext } from '@/contexts/TasksContext';
+import { useTaskStoreActions } from '@/contexts/TasksContext';
 import { useExperimental } from '@/hooks/useExperimental';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useOpenTask } from '@/hooks/useOpenTask';
@@ -44,7 +44,7 @@ export function useReplyThreadLineOn(): boolean {
 /** Open a thread where it is kept: this chat's own Threads, or the node or task that holds it now. */
 function useOpenReplyThread(): (t: ReplyThread) => void {
   const host = useContext(ReplyThreadContext);
-  const { tasks } = useTasksContext();
+  const store = useTaskStoreActions();
   const navigate = useNavigate();
   const openTask = useOpenTask();
   return useLeanCallback((t: ReplyThread) => {
@@ -54,12 +54,12 @@ function useOpenReplyThread(): (t: ReplyThread) => void {
     log.info('reply-thread', 'thread line opened', { taskId: host.chat, node, threadId: t.id });
     // The thread on show above this chat (TopThread) steps to it there; any other opens its Threads.
     if (node === host.chat) { if (!topShows(node, t.id)) host.showOwn(); return; }
-    const task = tasks.find((x) => x.id === node);
+    const task = store?.get(node) ?? null;
     // Main and a lead keep their Threads on the Org page; any other task beside its chat.
     if (task?.org_role && keepsThreads(task)) { navigate(orgNodePath(task)); return; }
     askThreadsView(node);
     openTask(node);
-  }, [host, tasks, navigate, openTask]);
+  }, [host, store, navigate, openTask]);
 }
 
 function TaskPart({ id }: { id: string }) {
