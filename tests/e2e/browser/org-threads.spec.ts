@@ -607,7 +607,8 @@ test('his view shows only threads with something for him; his reply sends one ou
   await expect(card(page, 'th-0000000000a9').getByTestId('org-thread-summary-stale')).toHaveCount(0)
   await patch('th-0000000000a1', { reply: 'Built; it is live' })
   await expect(open.locator('[data-thread-id="th-0000000000a1"]')).toBeVisible()
-  await expect(card(page, 'th-0000000000a1').getByTestId('org-thread-state')).toHaveText('Done')
+  // An open answered thread waits for his look: To read, never Done (Done is a thread he closed).
+  await expect(card(page, 'th-0000000000a1').getByTestId('org-thread-state')).toHaveText('To read')
   await patch('th-0000000000a6', { state: 'needs', reply: 'Mail page: keep the old list or the new one?' })
   await expect(open.locator('[data-thread-id="th-0000000000a6"]')).toBeVisible()
   // A quiet update (a state named) keeps one out of sight.

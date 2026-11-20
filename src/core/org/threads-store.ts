@@ -472,7 +472,7 @@ export interface OwnThreadOpen { title: string; text: string; state: ThreadState
  */
 export async function writeOwnThreads(
   taskId: string, plan: (cur: ThreadsFile) => { writes: OwnThreadWrite[]; opens: OwnThreadOpen[] }, by: ThreadWriter,
-  ask?: { ask: TaskAsk; named?: string },
+  ask?: { ask: TaskAsk | null; named?: string },
 ): Promise<string[]> {
   const at = new Date().toISOString();
   const handsToUser = (p: ThreadPatch) => p.state === 'needs' || !!p.reopen;
@@ -512,16 +512,16 @@ export async function writeOwnThreads(
   return changed;
 }
 
-/** The task's ask placed on its thread on its own (thread-report-ask.ts keepAskOnThread); true when it moved. */
-export async function placeTaskAsk(taskId: string, ask: TaskAsk): Promise<boolean> {
+/** The task's ask placed on its thread on its own, or (null) its places taken off (thread-report-ask.ts keepAskOnThread); true when it wrote. */
+export async function placeTaskAsk(taskId: string, ask: TaskAsk | null): Promise<boolean> {
   if (isFollower()) return false;
   const at = new Date().toISOString();
-  const id = await mutateThreads(taskId, (cur) => {
+  const moved = await mutateThreads(taskId, (cur) => {
     const placed = placeAsk(cur, ask, at);
-    return { file: placed, out: placed === cur ? null : placed.threads.find((t) => t.reportAsk?.id === ask.id)?.id ?? null };
+    return { file: placed, out: placed === cur ? [] : placed.threads.filter((t, i) => t.reportAsk?.id !== cur.threads[i]?.reportAsk?.id).map((t) => t.id) };
   });
-  if (id) emit({ taskId, kind: 'updated', threadId: id });
-  return !!id;
+  if (moved.length) emit({ taskId, kind: 'updated', ...(moved.length === 1 ? { threadId: moved[0] } : {}) });
+  return moved.length > 0;
 }
 
 /** The primary's sweep: every node's closed threads past their week are deleted for good. */

@@ -79,6 +79,8 @@ import { PoppedThreadCard } from './PoppedThreadCard';
 import { ThreadLetterAnswer, answersLetter } from './ThreadLetterAnswer';
 import { useFocusedThread } from './thread-focus';
 import { AskCard } from '@/components/actions/ActionNeeded';
+import { AskCardFrame } from '@/components/actions/AskCard';
+import { ThreadOptions } from './OrgInlineAnswer';
 import '@/styles/org-threads.css';
 
 /** A task's live status dot, the colours of the Task view's tabs (OrgTaskRail TAB_DOT). */
@@ -361,6 +363,59 @@ function AskedIn({ a }: { a: NonNullable<OrgThread['askedIn']> }) {
   );
 }
 
+/** A card's Snooze (Unsnooze while put aside) and its pin. */
+function ThreadTools({ t, snoozed, state, pinned }: { t: OrgThread; snoozed: boolean; state: OrgThreadsState; pinned: boolean }) {
+  return (<>
+    <OrgThreadSnooze
+      title={t.title}
+      label={snoozed ? 'Snoozed' : 'Snooze'}
+      current={snoozed ? t.snoozed?.until : undefined}
+      onSnooze={(until) => void state.update(t.id, { snooze: until })}
+    />
+    {snoozed && <button type="button" className="btn btn-sm" data-testid="org-thread-unsnooze" onClick={() => void state.update(t.id, { snooze: '' })}>Unsnooze</button>}
+    {/* An icon: the row keeps one line in the side bar (the label is its name and tooltip). */}
+    <button
+      type="button" className="btn btn-sm org-thread-pin-btn" data-testid="org-thread-pin" aria-pressed={pinned}
+      aria-label={pinned ? `Unpin "${t.title}"` : `Pin "${t.title}"`}
+      title={pinned ? 'Unpin: it goes back to its place' : 'Pin: keep it at the top, whatever its state, until you unpin or acknowledge it'}
+      onClick={() => void state.update(t.id, { pin: !pinned })}
+    ><ThreadPinIcon size={14} /></button>
+  </>);
+}
+
+/**
+ * A thread waiting on him, answered in the one ask card's row (actions/AskCard.tsx): its choices
+ * as buttons (OrgInlineAnswer AskOptions, the recommended one first), the box, always shown, then
+ * Snooze. A click is his answer in words (the label), filed under the thread like a typed reply.
+ */
+function NeedsAnswer({ t, owner, onFollowUp, snoozed, state, pinned }: {
+  t: OrgThread; owner: Task | undefined; onFollowUp: Props['onFollowUp']; snoozed: boolean; state: OrgThreadsState; pinned: boolean;
+}) {
+  /** A click that did not go (a typed reply's failure is the box's own). */
+  const [failed, setFailed] = useState(false);
+  const answer = async (label: string): Promise<boolean> => {
+    if (!onFollowUp) return false;
+    setFailed(false);
+    const ok = await onFollowUp(t.id, label).catch(() => false);
+    if (!ok) setFailed(true);
+    return ok;
+  };
+  return (
+    <AskCardFrame
+      testId="org-thread-ask"
+      className="org-thread-ask"
+      data={{ 'data-thread-id': t.id }}
+      status={failed ? <p className="org-thread-error" role="alert" data-testid="org-thread-ask-failed">Not sent. Try again.</p> : undefined}
+      answer={onFollowUp ? (<>
+        <ThreadOptions thread={t} onAnswer={answer} />
+        {/* The thread's one box, the same on every open card. */}
+        <FollowUp threadId={t.id} title={t.title} owner={owner} onSend={(text, images) => onFollowUp(t.id, text, images)} />
+      </>) : undefined}
+      tools={<ThreadTools t={t} snoozed={snoozed} state={state} pinned={pinned} />}
+    />
+  );
+}
+
 function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed, owner, focused }: {
   t: OrgThread; all: readonly OrgThread[]; shared: ReadonlySet<string>; tasks: readonly Task[];
   owner: Task | undefined;
@@ -381,7 +436,12 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   const letter = answersLetter(t);
   // It holds the task's own ask (core/org/thread-report-ask.ts): the card IS that ask, with its box.
   const held = !closed && !asked ? t.heldAsk : undefined;
-  const heldItem = held ? owner?.user_status?.actions?.find((i) => i.id === held.id && i.kind === 'ask' && !i.snoozedUntil) : undefined;
+  // Any kind of item: the task's ask, a question or a prompt its session waits on (taskAskNow).
+  const heldItem = held ? owner?.user_status?.actions?.find((i) => i.id === held.id && !i.snoozedUntil) : undefined;
+  // It waits on him: the one ask card's answer row (its choices, the box, Snooze), never Acknowledge,
+  // which is for a card that asks no choice (2026-11-20, the user: "Acknowledge is for when I do not
+  // need to make any choice").
+  const needs = !closed && !asked && t.state === 'needs';
   const card = useMemo(() => cardView(t, shared), [t, shared]);
   // It sat too long with nothing from the node: the card says so (core/org/thread-view.ts threadOverdue).
   const overdue = closed || snoozed ? null : overdueLine(t, name, now, (iso) => timeAgo(iso, { now }), threadDeadline(t, tasks, now));
@@ -451,6 +511,10 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
             {card.summary.from !== 'none' && <span className="org-thread-stand-in-note" data-testid="org-thread-stand-in">{STAND_IN_NOTE[card.summary.from ?? 'answer'](name)}</span>}
           </div>
         ))}
+      {/* It holds a decision letter: the letter's buttons and box answer it, here and in the inbox at
+          once, in the one ask card's row. */}
+      {letter && !heldItem && <AskCardFrame testId="org-thread-letter-card" className="org-thread-ask" answer={<ThreadLetterAnswer t={t} />} tools={<ThreadTools t={t} snoozed={snoozed} state={state} pinned={pinned} />} />}
+      {needs && !heldItem && !letter && <NeedsAnswer t={t} owner={owner} onFollowUp={onFollowUp} snoozed={snoozed} state={state} pinned={pinned} />}
       {chips.length > 0 && <TaskChips ids={chips} tasks={tasks} />}
       {/* The card is its title and summary: the new answers fold behind one line until a click
           (2026-11-08, the user: "the history should all be collapsed unless I click to expand"). */}
@@ -482,34 +546,22 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
           {exchanges.map((x) => <Exchange key={x.messages[0]?.id ?? 'opener'} x={x} t={t} name={name} state={state} now={now} shared={x.messages.some((m) => shared.has(m.id))} />)}
         </ol>
       )}
-      {/* It holds a decision letter: the letter's buttons and box answer it, here and in the inbox at once. */}
-      {letter && <ThreadLetterAnswer t={t} />}
-      {/* The ask's own card has the box and the Snooze: none of them twice. */}
-      {onFollowUp && !closed && !letter && !heldItem ? (
-        <FollowUp threadId={t.id} title={t.title} owner={owner} onSend={(text, images) => onFollowUp(t.id, text, images)} />
-      ) : null}
-      <div className="org-thread-actions">
-        {closed ? (<>
-          <span className="org-thread-closed" data-testid="org-thread-closed">{closedWords(t, now)}</span>
-          <button type="button" className="btn btn-sm" data-testid="org-thread-reopen" onClick={() => void state.update(t.id, { reopen: true })}>Reopen</button>
-        </>) : (<>
-          {!letter && <button type="button" className="btn btn-sm btn-primary" data-testid="org-thread-ack" onClick={() => void state.update(t.id, { close: 'acked' })}>Acknowledge</button>}
-          {!heldItem && <OrgThreadSnooze
-            title={t.title}
-            label={snoozed ? 'Snoozed' : 'Snooze'}
-            current={snoozed ? t.snoozed?.until : undefined}
-            onSnooze={(until) => void state.update(t.id, { snooze: until })}
-          />}
-          {snoozed && <button type="button" className="btn btn-sm" data-testid="org-thread-unsnooze" onClick={() => void state.update(t.id, { snooze: '' })}>Unsnooze</button>}
-          {/* An icon: the row keeps one line in the side bar (the label is its name and tooltip). */}
-          <button
-            type="button" className="btn btn-sm org-thread-pin-btn" data-testid="org-thread-pin" aria-pressed={pinned}
-            aria-label={pinned ? `Unpin "${t.title}"` : `Pin "${t.title}"`}
-            title={pinned ? 'Unpin: it goes back to its place' : 'Pin: keep it at the top, whatever its state, until you unpin or acknowledge it'}
-            onClick={() => void state.update(t.id, { pin: !pinned })}
-          ><ThreadPinIcon size={14} /></button>
-        </>)}
-      </div>
+      {/* A card waiting on him answers in the ask card's row above (its own box and Snooze, or the
+          held ask's): none of them twice, and no Acknowledge. */}
+      {needs ? null : (<>
+        {onFollowUp && !closed ? (
+          <FollowUp threadId={t.id} title={t.title} owner={owner} onSend={(text, images) => onFollowUp(t.id, text, images)} />
+        ) : null}
+        <div className="org-thread-actions">
+          {closed ? (<>
+            <span className="org-thread-closed" data-testid="org-thread-closed">{closedWords(t, now)}</span>
+            <button type="button" className="btn btn-sm" data-testid="org-thread-reopen" onClick={() => void state.update(t.id, { reopen: true })}>Reopen</button>
+          </>) : (<>
+            <button type="button" className="btn btn-sm btn-primary" data-testid="org-thread-ack" onClick={() => void state.update(t.id, { close: 'acked' })}>Acknowledge</button>
+            <ThreadTools t={t} snoozed={snoozed} state={state} pinned={pinned} />
+          </>)}
+        </div>
+      </>)}
     </li>
   );
 }

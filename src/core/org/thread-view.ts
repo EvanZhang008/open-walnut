@@ -354,6 +354,11 @@ export function snoozedNow(t: ViewThread, now: number = Date.now()): boolean {
   return !newsSince(t, s.at);
 }
 
+/** Open here and not waiting on him already: a thread the task's own ask can go on (thread-report-ask.ts), or the status question asks about (status-threads.ts). */
+export function openNotWaiting(t: { closed?: unknown; movedTo?: unknown; state: string }): boolean {
+  return !t.closed && !t.movedTo && t.state !== 'needs';
+}
+
 /** Pinned to the top of his view now (2026-11-03, the user: "have a pin thread feature"): open and pinned. */
 export function pinnedNow(t: Pick<ViewThread, 'pinned' | 'closed'>): boolean {
   return !!t.pinned && !t.closed;
@@ -566,6 +571,8 @@ function replyOnItsWay(t: ViewThread): boolean {
 /** A thread of a task below is listed above it while it waits on him, or while his reply on it is on its way (thread-popup.ts). */
 export function listedAbove<M extends ViewMessage>(t: ViewThread<M> & { state: string }, shared: ReadonlySet<string> = NONE, now: number = Date.now()): boolean {
   if (t.closed) return false;
+  // Its owner's own ask (thread-report-ask.ts) reaches the leaders through that task's status: never a second card above.
+  if (t.heldAsk) return replyOnItsWay(t);
   return (t.state === 'needs' && shownToHim(t, shared, now)) || replyOnItsWay(t);
 }
 

@@ -79,6 +79,9 @@ export interface OrgThread {
   /** Projected on read: it reads needs because it holds the task's own ask now; `id` is that ask's
    *  Action needed item, `reply` the thread's own summary under the question, `was` its stored state. */
   heldAsk?: { id: string; ask: string; reply?: string; was: string };
+  /** While it waits on him (needs): the choices he clicks, one shape wherever a choice shows
+   *  (core/ask-options.ts); a click is his answer in words, the label. */
+  options?: Array<{ id: string; label: string; detail?: string; recommended?: boolean }>;
 }
 
 const base = (taskId: string) => `/api/v1/tasks/${encodeURIComponent(taskId)}/threads`;

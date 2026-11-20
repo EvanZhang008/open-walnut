@@ -97,6 +97,14 @@ describe('the place, once per decision', () => {
     expect(next.threads.map((t) => t.reportAsk?.id)).toEqual(['ask-bbbb02', undefined])
   })
 
+  it('a report that asks nothing takes every place off; asked again, the rule places it again', () => {
+    const f = placeAsk(file(thread('th-aaaaaa01')), ask, T(10))
+    const cleared = placeAsk(f, null, T(20))
+    expect(cleared.threads[0].reportAsk).toBeUndefined()
+    expect(placeAsk(cleared, null, T(21))).toBe(cleared)
+    expect(placeAsk(cleared, ask, T(30)).threads[0].reportAsk).toMatchObject({ id: 'ask-aaaa01', at: T(30) })
+  })
+
   it('the task naming another thread moves it there', () => {
     const f = placeAsk(file(thread('th-aaaaaa01'), thread('th-aaaaaa02')), ask, T(10), 'th-aaaaaa01')
     const moved = placeAsk(f, ask, T(11), 'th-aaaaaa02')
@@ -130,6 +138,8 @@ describe('the read: needs while the task asks it', () => {
     // The task's status counts it: the thread's needs count leaves it out, and it keeps no overdue clock of its own.
     expect(threadCounts([t], NOW)).toMatchObject({ shown: 1, needs: 0 })
     expect(threadOverdue(t, NOW + 3 * 24 * 3600_000)).toBeNull()
+    // Read above its owner (threads_pop_up), it is no thread waiting below: the owner's status carries it up.
+    expect(threadCounts([{ ...t, owner: { task_id: 'task-a', title: 'A' } }], NOW).below).toBeUndefined()
   })
 
   it('the next report without the ask: the thread reads its stored state again', () => {
@@ -149,6 +159,11 @@ describe('the read: needs while the task asks it', () => {
     expect(withHeldAsk(snoozed, placed)[0].state).toBe('answered')
     expect(withHeldAsk(asking('ask-aaaa01', 'Pick', { sameAsk: { id: 'task-b' } as never }), placed)[0].state).toBe('answered')
     expect(withHeldAsk(asking('ask-aaaa01', 'Pick', { answeredFor: { by: 'x', byTitle: 'Lead', at: T(5), ask: 'Pick' } }), placed)[0].state).toBe('answered')
+  })
+
+  it('a thread he snoozed reads as stored, in its Snoozed section', () => {
+    const snoozed = [{ ...placed[0], snoozed: { until: new Date(Date.now() + 3600_000).toISOString(), at: new Date().toISOString(), by: 'human' as const } }]
+    expect(withHeldAsk(asking('ask-aaaa01'), snoozed)[0].state).toBe('answered')
   })
 
   it('a closed thread, a finished task, or a task without Threads: not held', () => {
@@ -177,6 +192,9 @@ describe('the question names the thread its ask is about', () => {
     expect(readStatusReport(answer)?.ask).toBe('Pick the seed tray size?')
     expect(readThreadLines('FOR_USER_ASK_THREAD: t9', refs).ask_thread).toBeUndefined()
     expect(readThreadLines('FOR_USER_ASK_THREAD: none', refs).ask_thread).toBeUndefined()
+    // The ref with its title after it, as a session may write it.
+    expect(readThreadLines('FOR_USER_ASK_THREAD: t1 "Seed trays"', refs).ask_thread).toBe('th-aaaaaa01')
+    expect(readThreadLines('FOR_USER_ASK_THREAD: **t2** (Compost)', refs).ask_thread).toBe('th-aaaaaa02')
   })
 })
 

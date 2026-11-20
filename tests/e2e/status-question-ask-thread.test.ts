@@ -150,14 +150,13 @@ describe('the task\'s ask lives on its thread', () => {
     expect(was.state).toBe('working')
     expect(was.heldAsk).toBeUndefined()
     expect(threads.filter((t) => t.state === 'needs')).toEqual([])
+    // It asks nothing now: the place is taken off (asked again later, the rule places it again).
+    expect((await readThreads(taskId)).threads.filter((t) => t.reportAsk)).toEqual([])
   })
 
   it('an ask an older build stored with no place is placed at its next derive, once', async () => {
     // An older build's report: the ask with its id, and nothing on the threads for it.
     const file = path.join(WALNUT_HOME, 'org', 'threads', `${taskId}.json`)
-    const raw = JSON.parse(await fs.readFile(file, 'utf8')) as { threads: OrgThread[] }
-    for (const t of raw.threads) delete t.reportAsk
-    await fs.writeFile(file, JSON.stringify(raw))
     const at = new Date().toISOString()
     await updateTaskRaw(taskId, {
       phase: 'NEED_ACTION', phase_changed_at: at,

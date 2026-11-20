@@ -10,8 +10,10 @@
  *                                                          `shown` is his view's rule over all of them; 503 primary_only on every replica)
  *   GET   /api/v1/tasks/:id/threads/:thread                { task_id, thread }  (one thread whole, its `shown` as above)
  *   POST  /api/v1/tasks/:id/threads                        { text, images?, thread? } -> file one of his messages
- *   PATCH /api/v1/tasks/:id/threads/:thread                { title?, ask?, state?, user_kind?, user_kind_why?, same_ask_reason?, ask_owner?, reply?, tasks?, add_tasks?, known?, close?, user_words?, reopen?, snooze?, pin?, merge_into? }
- *   POST  /api/v1/tasks/:id/threads/open                   { title, text, from, ref?, state?, user_kind?, user_kind_why?, same_ask_reason?, tasks? } -> the node opens one itself
+ *   PATCH /api/v1/tasks/:id/threads/:thread                { title?, ask?, state?, user_kind?, user_kind_why?, same_ask_reason?, ask_owner?, reply?, options?, tasks?, add_tasks?, known?, close?, user_words?, reopen?, snooze?, pin?, merge_into? }
+ *   POST  /api/v1/tasks/:id/threads/open                   { title, text, from, ref?, state?, options?, user_kind?, user_kind_why?, same_ask_reason?, tasks? } -> the node opens one itself
+ *                                                          (`options`: with needs, the choices he clicks, [{ id?, label, detail?, recommended? }], 2 to 5;
+ *                                                          a needs write whose words list A:/B: or 1./2. choices with none answers 409 needs_options)
  *   POST  /api/v1/tasks/:id/threads/:thread/split          { message } -> that message becomes its own thread
  *   POST  /api/v1/tasks/:id/threads/:thread/move           { to, why? } -> it goes to another node's Threads with its work
  *                                                          (core/org/thread-follow.ts): `to` a node, a task in its team, a project or a VP's name
@@ -209,7 +211,7 @@ orgThreadsV1Router.get('/tasks/:id/threads/:thread', route(async (req, res) => {
   if (isFollower()) throw primaryOnly('get the threads from')
   const raw = param(req.params.thread)
   if (isLineThreadId(raw)) {
-    const line = ownLineThreads(task).find((t) => t.id === raw)
+    const line = ownLineThreads(task, await withTaskAsks(task.id, (await readThreads(task.id)).threads)).find((t) => t.id === raw)
     if (!line) throw new RouteError(404, 'no_thread', `No line ${raw} on this task now.`)
     res.json({ task_id: task.id, thread: { ...line, shown: true } })
     return
@@ -285,6 +287,7 @@ orgThreadsV1Router.post('/tasks/:id/threads/open', route(async (req, res) => {
     ...(str(b, 'ref') ? { ref: str(b, 'ref') } : {}),
     ...(str(b, 'state') ? { state: str(b, 'state') as ThreadState } : {}),
     ...(ids(b, 'tasks') ? { tasks: ids(b, 'tasks') } : {}),
+    ...(b.options !== undefined ? { options: b.options } : {}),
     ...(str(b, 'user_kind') ? { user_kind: str(b, 'user_kind') } : {}),
     ...(str(b, 'user_kind_why') ? { user_kind_why: str(b, 'user_kind_why') } : {}),
     ...(str(b, 'same_ask_reason') ? { same_ask_reason: str(b, 'same_ask_reason') } : {}),
@@ -314,6 +317,8 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
   if (tasks) patch.tasks = tasks
   if (addTasks) patch.add_tasks = addTasks
   if (b.reopen === true) patch.reopen = true
+  // Checked by the one reader of a choice's options (core/org/thread-options.ts).
+  if (b.options !== undefined) patch.options = b.options
   if (typeof b.pin === 'boolean') patch.pin = b.pin
   else if (b.pin !== undefined) throw new RouteError(400, 'bad_request', 'pin must be true or false.')
   // A merge removes this thread: anything else asked of it would be written and then lost.
@@ -334,7 +339,7 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
     if (!THREAD_ID_RE.test(mergeInto)) throw new RouteError(400, 'bad_request', `Not a thread id: ${mergeInto}`)
     thread = await mergeThread(task.id, id, mergeInto, by)
   }
-  if (!thread) throw new RouteError(400, 'bad_request', 'Nothing to change: pass title, ask, ask_owner, state, reply, tasks, add_tasks, known, close, reopen, snooze, pin or merge_into.')
+  if (!thread) throw new RouteError(400, 'bad_request', 'Nothing to change: pass title, ask, ask_owner, state, reply, options, tasks, add_tasks, known, close, reopen, snooze, pin or merge_into.')
   log.task.info('org thread updated', { taskId: task.id, threadId: id, by, fields: Object.keys(patch), mergeInto })
   res.json({ task_id: task.id, thread: await projected(task.id, thread), ...(mergeInto ? { merged: id } : {}) })
 }))

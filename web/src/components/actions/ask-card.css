@@ -21,6 +21,9 @@
 .ask-card-answer :is(.org-answer-inline, .action-needed-approval, .org-answer-options, .org-answer-multi) { display: contents; }
 .ask-card-answer .org-answer-inline > * { flex-basis: auto; }
 .ask-card-answer .org-answer-words { order: 1; flex: 1 1 100%; min-width: 0; }
+/* A thread's follow-up box (org/OrgThreads.tsx FollowUp) takes the words box's place in the row. */
+.ask-card-answer :is(.org-thread-follow, .org-thread-letter) { display: contents; }
+.ask-card-answer .org-thread-follow > .org-thread-error { order: 4; flex: 1 1 100%; }
 .ask-card-answer :is(.kanban-prompt, .permission-request-card) { order: 0; flex: 1 1 100%; min-width: 0; }
 /* Only the card's own buttons: never those inside the composer or a prompt's card, which keep their own order. */
 .ask-card-answer :is(.btn, .org-answer-check, .approval-actions):not(:is(.org-answer-words, .kanban-prompt, .permission-request-card) *) { order: 2; flex: none; }

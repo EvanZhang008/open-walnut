@@ -41,22 +41,35 @@ export interface AnswerFailure { message: string; /** What failed: an answer (de
 /** Settles an answer sent from a row: no argument once it was taken, a failure to bring the row back. */
 export type AnswerSettle = (failure?: AnswerFailure) => void;
 
-function Options({ options, recommended, onPick, testId }: {
+/**
+ * A choice's buttons, the one rendering wherever a choice is answered (2026-11-20, the user: "it has
+ * to be unified ... it can always give an option"): an ask's options, a letter's actions, a Board
+ * choice, a thread's options. The recommended one first, marked "Recommended" (a CSS mark on
+ * data-recommended, so the label stays the button's text); a line of detail on hover. Its click is
+ * the answer.
+ */
+export function AskOptions({ options, recommended, onPick, testId, disabled }: {
   options: ReadonlyArray<{ value: string; label: string; title?: string }>;
   recommended?: string;
   onPick: (value: string) => void;
   testId: string;
+  /** Its answer is on its way, or went: no second one. */
+  disabled?: boolean;
 }) {
+  const ordered = recommended ? [...options.filter((o) => o.value === recommended), ...options.filter((o) => o.value !== recommended)] : options;
   return (
     <div className="org-answer-options" data-testid={testId}>
-      {options.map((o) => (
+      {ordered.map((o) => (
         <button
           key={o.value}
           type="button"
           className={`btn btn-sm${o.value === recommended ? ' btn-primary' : ''}`}
           data-testid="org-answer-option"
           data-value={o.value}
+          {...(o.value === recommended ? { 'data-recommended': 'true' } : {})}
           {...(o.title || o.value === recommended ? { 'aria-description': o.title ?? 'Recommended' } : {})}
+          {...(o.title ? { title: o.title } : {})}
+          {...(disabled ? { disabled: true } : {})}
           onClick={() => onPick(o.value)}
         >{o.label}</button>
       ))}
@@ -67,6 +80,37 @@ function Options({ options, recommended, onPick, testId }: {
 /** Sends words from a box: true once taken, false keeps them (and their pictures) in it. */
 type WordsSend = (text: string, images?: ImageAttachment[]) => Promise<boolean>;
 const kept = Promise.resolve(false);
+
+/**
+ * A thread's own choices (OrgThread.options, core/org/thread-options.ts), on its card and on the card
+ * of a thread below: AskOptions, and a click is his answer in words, the label. Once one went the
+ * buttons stay off until the thread's choices change (its answer is in, its card is about to read
+ * working), so a second click never answers twice; a failed send turns them on again.
+ */
+export function ThreadOptions({ thread, onAnswer }: {
+  thread: { id: string; state: string; options?: ReadonlyArray<AskOption> };
+  onAnswer: (label: string) => Promise<boolean>;
+}) {
+  const options = thread.state === 'needs' ? thread.options ?? [] : [];
+  const sig = `${thread.id}:${options.map((o) => `${o.id}=${o.label}`).join('|')}`;
+  const [busy, setBusy] = useState<string | null>(null);
+  if (!options.length) return null;
+  const recommended = options.find((o) => o.recommended)?.id;
+  return (
+    <AskOptions
+      testId="org-thread-options"
+      options={options.map((o) => ({ value: o.id, label: o.label, ...(o.detail ? { title: o.detail } : {}) }))}
+      {...(recommended ? { recommended } : {})}
+      disabled={busy === sig}
+      onPick={(id) => {
+        const o = options.find((x) => x.id === id);
+        if (!o || busy === sig) return;
+        setBusy(sig);
+        void onAnswer(o.label).catch(() => false).then((ok) => { if (!ok) setBusy(null); });
+      }}
+    />
+  );
+}
 
 /** A line in the user's own words: the chat's own composer (ReplyComposer), so @, / and pictures
  *  work as in the chat. Kept under `draftKey`, this box's own, until the answer is taken. */
@@ -138,7 +182,7 @@ function LetterAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords
   };
   return (
     <>
-      <Options
+      <AskOptions
         testId="org-answer-letter"
         options={letter.actions!.map((a) => ({ value: a.id, label: a.label, ...(a.description ? { title: a.description } : {}) }))}
         onPick={pick}
@@ -226,7 +270,7 @@ function ChoiceAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords
   return (
     <>
       {found.options.length > 0 && (
-        <Options testId="org-answer-choice" options={found.options} {...(found.recommended ? { recommended: found.recommended } : {})} onPick={(v) => answer({ option: v })} />
+        <AskOptions testId="org-answer-choice" options={found.options} {...(found.recommended ? { recommended: found.recommended } : {})} onPick={(v) => answer({ option: v })} />
       )}
       {/* A choice with no options is answered in words, on its Board all the same. */}
       {words}
@@ -281,9 +325,9 @@ function SessionAnswer({ alert, failure, onSend, sessionId, summary, shape, thre
   );
   return (
     <>
-      {failed && <Options testId="org-answer-retry" options={[{ value: 'retry', label: 'Retry', title: 'Start the failed session again' }]} onPick={retry} />}
+      {failed && <AskOptions testId="org-answer-retry" options={[{ value: 'retry', label: 'Retry', title: 'Start the failed session again' }]} onPick={retry} />}
       {(shape === 'yes_no' || shape === 'single') && options.length > 0 && (
-        <Options testId="org-answer-form" options={options.map((o) => ({ value: o.id, label: o.label }))} {...(recommended ? { recommended } : {})} onPick={(id) => reply(answerMessage(alert.form, summary, { picked: [id] }))} />
+        <AskOptions testId="org-answer-form" options={options.map((o) => ({ value: o.id, label: o.label, ...(o.detail ? { title: o.detail } : {}) }))} {...(recommended ? { recommended } : {})} onPick={(id) => reply(answerMessage(alert.form, summary, { picked: [id] }))} />
       )}
       {shape === 'multi' && options.length > 0 && (
         <div className="org-answer-multi" data-testid="org-answer-multi">

@@ -6,7 +6,8 @@ import { z } from 'zod'
 import { defineOp } from './registry.js'
 import { withOutcome } from './outcome.js'
 import type { OpCall } from './core.js'
-import { PROOF_IN_PLACE_RULE, WORD_TO_USER_RULE, THREAD_ONE_PLACE_RULE, THREADS_MOVE_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from '../core/org/thread-rules.js'
+import { PROOF_IN_PLACE_RULE, WORD_TO_USER_RULE, THREAD_ONE_PLACE_RULE, THREADS_MOVE_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_OPTIONS_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from '../core/org/thread-rules.js'
+import { ASK_OPTIONS_MAX } from '../core/user-status.js'
 import { THREAD_STATES } from '../core/org/threads-model.js'
 import { USER_KINDS, USER_KIND_PARAM, USER_KIND_WHY_PARAM } from '../core/org/user-kind.js'
 
@@ -16,7 +17,7 @@ const THREADS_SCOPE = 'Your Threads are the user\'s own requests to you, one thr
   + 'its state (working: you are on it; needs: waiting on him; answered: you answered and he may close it; pending: nothing new for him), the summary (reply) and '
   + 'the tasks you handed it to. Several asks about one subject are ONE thread: put a new one under the open thread it belongs to '
   + '(merge_into). Walnut puts your chat reply under each of his messages by itself (answer). He closes a thread with Acknowledge; a '
-  + 'closed one is kept a week, then deleted; a new ask about a closed subject is a new thread. ' + THREADS_MOVE_RULE + ' ' + THREADS_SUMMARY_RULE + ' ' + PROOF_IN_PLACE_RULE + ' ' + THREADS_PENDING_RULE + ' ' + THREADS_KNOWN_RULE + ' ' + THREADS_OPEN_RULE + ' ' + THREAD_ONE_PLACE_RULE
+  + 'closed one is kept a week, then deleted; a new ask about a closed subject is a new thread. ' + THREADS_MOVE_RULE + ' ' + THREADS_SUMMARY_RULE + ' ' + PROOF_IN_PLACE_RULE + ' ' + THREADS_PENDING_RULE + ' ' + THREADS_OPTIONS_RULE + ' ' + THREADS_KNOWN_RULE + ' ' + THREADS_OPEN_RULE + ' ' + THREAD_ONE_PLACE_RULE
 
 async function ownTask(args: { task?: unknown }, call: OpCall): Promise<string> {
   const id = typeof args.task === 'string' && args.task.trim()
@@ -25,6 +26,15 @@ async function ownTask(args: { task?: unknown }, call: OpCall): Promise<string> 
   if (!id) throw new Error('No task of your own: pass task.')
   return id
 }
+
+/** A choice he clicks (core/ask-options.ts reads it, the report's ask_options too). */
+const OPTION_ARG = z.object({
+  id: z.string().regex(/^[\w-]{1,40}$/).optional().describe('A short id; default o1, o2...'),
+  label: z.string().min(1).max(80).describe('What he clicks, a few words'),
+  detail: z.string().max(200).optional().describe('One line of what it leads to'),
+  recommended: z.boolean().optional().describe('The one you recommend: put it first'),
+})
+const OPTIONS_WHY = `With state needs: the choices he picks from, 2 to ${ASK_OPTIONS_MAX}, the recommended one first; his click is his answer, filed in the thread. [] takes them off. Required when the summary lists choices (A:, B:, 1., 2.): Walnut refuses that write without them (409 needs_options)`
 
 const TASK_ARG = z.string().min(1).optional().describe('Task id or unique prefix of Main, a lead or a task with Threads on; default: your own task')
 
@@ -71,6 +81,7 @@ defineOp({
     same_ask_reason: z.string().max(300).optional().describe(SAME_ASK_REASON_PARAM),
     ask_owner: z.string().max(128).optional().describe('The id of the task in your team whose Needs you already asks him this thread\'s decision: the thread then points at that ask (read as pending with askedIn, its conversation kept) and waits on him again by itself once that task stops asking it or asks another decision. Refused (409) when that task asks him nothing now. "" takes it off'),
     reply: z.string().max(2000).optional().describe('The summary the card shows: the latest first (the open question or what he must decide), then one or two sentences of background; Markdown ("" clears it)'),
+    options: z.array(OPTION_ARG).max(ASK_OPTIONS_MAX).optional().describe(OPTIONS_WHY),
     tasks: z.array(z.string().min(1)).max(12).optional().describe('Every task it went to (replaces the list)'),
     add_tasks: z.array(z.string().min(1)).max(12).optional().describe('Tasks to add to it'),
     known: z.string().regex(/^(tm-[a-f0-9]{6,32}|all)$/).optional().describe('He reacted to your answers through this message (tm-...), or "all": they leave the card. Refused before he reacted'),
@@ -109,6 +120,7 @@ defineOp({
     from: z.enum(['mail', 'task', 'letter', 'trigger', 'node']).describe('Where it came from: mail, task (a team\'s work), letter (your letter to him), trigger, node (your own finding)'),
     ref: z.string().max(120).optional().describe('What it points at: a task id, a letter id (lt-...), a mail subject'),
     state: z.enum(['needs', 'answered']).optional().describe('Default needs (it waits on him)'),
+    options: z.array(OPTION_ARG).max(ASK_OPTIONS_MAX).optional().describe(OPTIONS_WHY),
     user_kind: z.enum(USER_KINDS).optional().describe(USER_KIND_PARAM),
     user_kind_why: z.string().max(300).optional().describe(USER_KIND_WHY_PARAM),
     same_ask_reason: z.string().max(300).optional().describe(SAME_ASK_REASON_PARAM),

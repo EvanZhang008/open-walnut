@@ -45,10 +45,16 @@
  * snooze or close a thread he pinned. A pin moves no clock (`updatedAt`), so an unpinned thread goes
  * back to where it was.
  *
+ * A thread waiting on him to pick among choices carries them (`options`, thread-options.ts): his
+ * card offers them as buttons, the recommended one first; they go when it leaves needs.
+ *
  * Pure: every function takes the file and returns the next one, or throws ThreadError. The
  * store (threads-store.ts) runs them under the file lock.
  */
 import { userKindVerdict } from './user-kind.js';
+import type { AskOption } from '../user-status.js';
+import { AskOptionsError, checkNeedsOptions, threadOptionsOf } from './thread-options.js';
+import { storedOptions } from '../ask-options.js';
 import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
 import { PICTURE_TITLE_WORDS } from '../human-inbox/walnut-letters/receipt-words.js';
 import { pinnedFirst, hasThreadNews, threadReactionAt } from './thread-view.js';
@@ -316,6 +322,8 @@ export interface OrgThread {
   ackDone?: string;
   /** The task's own ask (its report's FOR_USER_ASK) lives on this thread: it reads needs while the task asks it (thread-report-ask.ts). */
   reportAsk?: ThreadReportAsk;
+  /** In needs: the choices he picks from with one click, 2 to ASK_OPTIONS_MAX (thread-options.ts); gone when it leaves needs. */
+  options?: AskOption[];
 }
 
 /**
@@ -359,7 +367,7 @@ export interface ThreadsFile {
   threads: OrgThread[];
 }
 
-export type ThreadErrorCode = 'no_thread' | 'no_message' | 'bad_input' | 'thread_closed' | 'last_message' | 'same_thread' | 'not_reacted' | 'user_kind' | 'pinned_by_user' | 'same_ask' | 'same_node' | 'reply_pending';
+export type ThreadErrorCode = 'no_thread' | 'no_message' | 'bad_input' | 'thread_closed' | 'last_message' | 'same_thread' | 'not_reacted' | 'user_kind' | 'pinned_by_user' | 'same_ask' | 'same_node' | 'reply_pending' | 'needs_options';
 
 export class ThreadError extends Error {
   constructor(public code: ThreadErrorCode, public status: number, message: string) {
@@ -491,6 +499,7 @@ function normalizeThread(t: unknown): OrgThread | null {
   const letter = next.letter !== undefined ? normalizeThreadLetter(next.letter) : undefined;
   if (letter) next.letter = letter; else delete next.letter;
   if (next.reportAsk && !(typeof next.reportAsk === 'object' && isStr(next.reportAsk.id) && next.reportAsk.id && isStr(next.reportAsk.at))) delete next.reportAsk;
+  if (next.options !== undefined) { const o = next.state === 'needs' && !next.closed ? storedOptions(next.options) : undefined; if (o) next.options = o; else delete next.options; }
   return next;
 }
 
@@ -689,7 +698,8 @@ export function fileMessage(file: ThreadsFile, input: FileMessageInput): FileMes
   const target = named ?? recent;
   if (target && (isOpen(target) || reopened)) {
     // His own message in a snoozed thread brings it back; one he closed minutes ago opens again.
-    const { snoozed: _s, closed: _c, pinned: _p, ...rest } = target;
+    // His answer ends its needs, and its options with it (a choice clicked is filed as his words).
+    const { snoozed: _s, closed: _c, pinned: _p, options: _o, ...rest } = target;
     const reacted = recordReaction(rest, input.at);
     const next: OrgThread = {
       ...reacted, messages: [...reacted.messages, message], updatedAt: input.at, by: 'human',
@@ -766,6 +776,8 @@ export interface ThreadPatch {
   user_words?: string;
   /** The task that already asks the user this thread's decision ("" clears it): stored as `askOwner` by threads-store.ts, never by updateThread. */
   ask_owner?: string;
+  /** With state needs: the choices he picks from (thread-options.ts); [] clears them. */
+  options?: unknown;
 }
 
 /**
@@ -1004,6 +1016,18 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
       delete next.pinned;
     }
   }
+  if (patch.options !== undefined) {
+    const options = optionsOf(patch.options);
+    if (options.length && next.state !== 'needs') throw new ThreadError('bad_input', 400, 'options go with state needs: he picks one while it waits on him.');
+    if (options.length) next.options = options; else delete next.options;
+  }
+  // Its options are its needs: a thread that leaves needs keeps none.
+  if (next.state !== 'needs') delete next.options;
+  // A needs write whose summary lists choices in words carries them as options (his own request,
+  // `ask`, is his words: never judged).
+  if (next.state === 'needs' && (patch.state !== undefined || patch.reply !== undefined || patch.options !== undefined)) {
+    checkChoicesAsOptions(by, [next.reply], next.options);
+  }
   if (patch.tasks !== undefined) { const l = taskList(patch.tasks); if (l.length) next.tasks = l; else delete next.tasks; }
   if (patch.add_tasks?.length) next.tasks = taskList([...(next.tasks ?? []), ...patch.add_tasks]);
   // Closing a closed thread again changes nothing (the node is not told twice).
@@ -1031,6 +1055,7 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   if (patch.reopen) { delete next.closed; if (HIDDEN_STATES.has(next.state) && patch.state === undefined) next.state = 'answered'; }
   // Only a system reaction-close may reopen on actual news, never an explicit user close.
   if (!patch.close && next.closed?.reacted && (next.state === 'needs' || hasThreadNews(next))) delete next.closed;
+  if (next.closed) delete next.options;
   if (patch.pin !== undefined) applyPin(next, cur, patch.pin, by, at);
   // Only its ask in other words: the thread is the decision, so nothing moved (no news, no new
   // change time, no overdue clock reset; 2026-11-09, ask-decision.ts).
@@ -1236,6 +1261,25 @@ export interface OpenThreadInput {
   user_kind_why?: string;
   /** With state needs: why it asks what a task in the node's team already asks (same-ask.ts). Never stored. */
   same_ask_reason?: string;
+  /** With state needs: the choices he picks from (thread-options.ts). */
+  options?: unknown;
+}
+
+/** A thread's options from a write, or a ThreadError naming what is wrong with them. */
+function optionsOf(raw: unknown): AskOption[] {
+  try { return threadOptionsOf(raw); } catch (err) {
+    if (err instanceof AskOptionsError) throw new ThreadError('bad_input', 400, err.message);
+    throw err;
+  }
+}
+
+/** An agent's needs write whose words list choices with no options is refused (thread-options.ts). */
+function checkChoicesAsOptions(by: ThreadWriter, words: readonly (string | undefined)[], options: readonly AskOption[] | undefined): void {
+  if (by === 'human') return;
+  try { checkNeedsOptions(words, options); } catch (err) {
+    if (err instanceof AskOptionsError) throw new ThreadError('needs_options', 409, err.message);
+    throw err;
+  }
 }
 
 /** The node opens a thread itself: its first post is what reached it (thread_create). */
@@ -1247,6 +1291,9 @@ export function openThread(file: ThreadsFile, input: OpenThreadInput, by: Thread
   // A thread the node opens is for him to act on or follow: never hidden from the start.
   if (input.state !== undefined && HIDDEN_STATES.has(input.state)) throw new ThreadError('bad_input', 400, 'A thread you open is for him to see: open it as needs or answered.');
   if (waitsOnUser(input.state ?? 'needs')) checkHandedToUser(by, input);
+  const options = optionsOf(input.options);
+  if (options.length && !waitsOnUser(input.state ?? 'needs')) throw new ThreadError('bad_input', 400, 'options go with state needs: he picks one while it waits on him.');
+  if (waitsOnUser(input.state ?? 'needs')) checkChoicesAsOptions(by, [input.text], options);
   const tasks = taskList(input.tasks ?? []);
   // The first post's writer: its verified session (never one the input names), none for the user.
   const s = by === 'human' ? undefined : verifiedSource(source);
@@ -1258,7 +1305,7 @@ export function openThread(file: ThreadsFile, input: OpenThreadInput, by: Thread
       ...(input.ref?.trim() ? { ref: clip(input.ref, THREAD_TITLE_MAX) } : {}),
       ...(s ? { sid: s.sid, ...(s.host ? { host: s.host } : {}) } : {}),
     },
-    createdAt: at, updatedAt: at, by, ...(tasks.length ? { tasks } : {}),
+    createdAt: at, updatedAt: at, by, ...(tasks.length ? { tasks } : {}), ...(options.length ? { options } : {}),
   };
   return { file: { ...file, threads: prune([...file.threads, thread], at) }, thread };
 }

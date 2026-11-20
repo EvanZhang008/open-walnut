@@ -10,6 +10,9 @@
  *     words reach the subtask's own chat (its session runs a turn on them), and the subtask's
  *     thread holds his message.
  *  3. Off (the flag's default), the lead lists only its own threads.
+ *  4. A thread below asking him to pick carries its options: the card shows them as buttons (the
+ *     recommended one first, marked), no Acknowledge; a click sends its label to the subtask's
+ *     thread as his reply (2026-11-20, the user: "if you recommend this, why can I not just click it?").
  * The fixture is shared: this file makes its own project and tasks, and puts the flag back.
  */
 import fs from 'node:fs'
@@ -160,5 +163,36 @@ test('on: the subtask\'s thread shows on its lead, and his reply there wakes the
   await expect(chat).toBeVisible({ timeout: 30_000 })
   await page.waitForTimeout(1_500)
   await page.screenshot({ path: `${SHOTS}/threads-pop-up-3-woken-${test.info().project.name}.png` })
+  expect(pageErrors).toEqual([])
+})
+
+test('on: a choice on a thread below is clicked on the lead, and goes to the subtask as his reply', async ({ page, request }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (err) => pageErrors.push(err.message))
+  const PICK = `Keep the old store ${STAMP}`
+  const opened = await post<{ thread: { id: string } }>(request, `/api/v1/tasks/${ids.owner}/threads/open`, {
+    title: `Store migration ${STAMP}`, text: `Move the thread store this week or keep the old one? ${STAMP}`, state: 'needs', from: 'node',
+    user_kind: 'user_own', user_kind_why: 'It changes his own data store.',
+    options: [{ id: 'move', label: `Move it this week ${STAMP}` }, { id: 'keep', label: PICK, detail: 'Nothing to migrate now', recommended: true }],
+  }, ids.ownerSid)
+  const choice = opened.thread.id
+  await flag(request, true)
+  await isolateUiPrefs(page)
+  await loadHome(page)
+  await openLead(page)
+  const popped = page.locator(`[data-testid="org-thread"][data-thread-id="${choice}"]`)
+  await expect(popped).toBeVisible({ timeout: 20_000 })
+  const buttons = popped.getByTestId('org-thread-options').getByTestId('org-answer-option')
+  await expect(buttons).toHaveText([PICK, `Move it this week ${STAMP}`])
+  await expect(buttons.first()).toHaveAttribute('data-recommended', 'true')
+  await expect(popped.getByTestId('org-thread-popped-input')).toBeVisible()
+  await expect(popped.getByTestId('org-thread-ack')).toHaveCount(0)
+  await shot(page, '4-options')
+  await buttons.first().click()
+  await expect.poll(async () => {
+    const file = await (await request.get(`/api/v1/tasks/${ids.owner}/threads`)).json() as { threads: Array<{ id: string; messages: Array<{ text: string; delivery?: { state: string } }> }> }
+    return file.threads.find((t) => t.id === choice)?.messages.find((m) => m.text === PICK)?.delivery?.state ?? 'none'
+  }, { timeout: 60_000 }).toBe('delivered')
+  await expect(popped).toHaveCount(0, { timeout: 20_000 })
   expect(pageErrors).toEqual([])
 })

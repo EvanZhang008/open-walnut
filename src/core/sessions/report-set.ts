@@ -11,6 +11,7 @@
 import type { Task } from '../types.js';
 import { userKindVerdict } from '../org/user-kind.js';
 import { ASK_KINDS, ASK_MORE_MAX, ASK_OPTIONS_MAX, type AskKind, type AskOption, type StatusLineBy, type StatusReport, type WaitKind } from '../user-status.js';
+import { AskOptionsError, readAskOptions } from '../ask-options.js';
 import { askSinceStamp, needsSinceOf, settleCheck, type UserSaid } from './user-spoke.js';
 import { stampSaidDecision } from '../ask-decision.js';
 import { withFileLock } from '../../utils/file-lock.js';
@@ -119,21 +120,17 @@ function askShapeOf(c: Record<string, unknown>): Pick<StatusReport, 'ask_kind' |
   if (kind !== undefined && !(typeof kind === 'string' && (ASK_KINDS as readonly string[]).includes(kind))) {
     throw new ReportChangeError(`report.ask_kind must be one of: ${ASK_KINDS.join(', ')}`);
   }
-  const raw = c.ask_options;
-  if (raw !== undefined && !Array.isArray(raw)) throw new ReportChangeError('report.ask_options is a list of options');
-  const options: AskOption[] = (raw ?? []).map((o: unknown, i: number) => {
-    const obj = typeof o === 'string' ? { label: o } : (o ?? {}) as Record<string, unknown>;
-    const label = typeof obj.label === 'string' ? obj.label.replace(/\s+/g, ' ').trim() : '';
-    if (!label || label.length > 80) throw new ReportChangeError('each report.ask_options entry has a label of 1 to 80 characters');
-    const id = typeof obj.id === 'string' && /^[\w-]{1,40}$/.test(obj.id) ? obj.id : `o${i + 1}`;
-    return { id, label, ...(obj.recommended === true ? { recommended: true } : {}) };
-  });
+  let options: AskOption[];
+  // The one reader of a choice's options (ask-options.ts), the thread's too.
+  try { options = readAskOptions(c.ask_options, 'report.ask_options'); } catch (err) {
+    if (err instanceof AskOptionsError) throw new ReportChangeError(err.message);
+    throw err;
+  }
   const choice = kind === 'single' || kind === 'multi';
   if (choice && (options.length < 2 || options.length > ASK_OPTIONS_MAX)) {
     throw new ReportChangeError(`report.ask_kind ${kind} takes 2 to ${ASK_OPTIONS_MAX} ask_options`);
   }
   if (!choice && options.length) throw new ReportChangeError('report.ask_options go only with ask_kind single or multi');
-  if (new Set(options.map((o) => o.id)).size !== options.length) throw new ReportChangeError('report.ask_options ids are unique');
   const more = c.ask_more;
   if (more !== undefined && more !== null && typeof more !== 'string') throw new ReportChangeError('report.ask_more is a string');
   const detail = typeof more === 'string' ? more.trim() : '';

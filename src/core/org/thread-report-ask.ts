@@ -18,11 +18,12 @@
  * leaves it out (thread-view.ts threadCounts): the task's status already counts it once.
  *
  * Data an older build wrote: a task whose current report asks and whose threads hold no place for
- * that decision gets one at its next status derive (keepAskOnThread, user-status-sync.ts), once.
+ * that decision gets one at its next status derive (keepAskOnThread, user-status-sync.ts), once. A
+ * report that asks nothing any more takes the places off (here at its answer, or at that derive).
  */
-import type { StatusReport, UserStatus } from '../user-status.js';
+import type { AskOption, StatusReport, UserStatus } from '../user-status.js';
 import type { Task } from '../types.js';
-import type { ThreadHeldAsk } from './thread-view.js';
+import { openNotWaiting, snoozedNow, type ThreadHeldAsk } from './thread-view.js';
 import type { OrgThread, ThreadsFile } from './threads-model.js';
 import { reportDecision } from '../ask-decision.js';
 import { ownItemOf } from '../action-needed.js';
@@ -31,7 +32,7 @@ import { asksThreads } from '../sessions/status-threads.js';
 /** The question kept on the place, for the record. */
 const ASK_KEPT_MAX = 400;
 
-export interface TaskAsk { id: string; ask: string }
+export interface TaskAsk { id: string; ask: string; options?: AskOption[] }
 
 type AskingTask = Pick<Task, 'id' | 'phase' | 'status' | 'user_status' | 'org_role' | 'threads_on'> & Partial<Pick<Task, 'status_report'>>;
 
@@ -44,10 +45,11 @@ export function taskAskNow(t: Pick<Task, 'phase' | 'status' | 'user_status'> | n
   if (!t || t.phase === 'COMPLETE' || t.status === 'done') return null;
   const s: UserStatus | undefined = t.user_status ?? undefined;
   if (!s || s.sameAsk || s.answeredFor || s.snoozed) return null;
-  const item = (s.actions ?? []).find((i) => i.kind === 'ask');
-  if (item) return item.snoozedUntil ? null : { id: item.id, ask: item.summary };
-  const own = s.state === 'needs' && s.source === 'session' ? ownItemOf(s) : null;
-  return own ? { id: own.id, ask: own.summary } : null;
+  const item = (s.actions ?? []).find((i) => i.kind === 'ask') ?? (s.state === 'needs' && s.source === 'session' ? ownItemOf(s) : null);
+  if (!item || item.snoozedUntil) return null;
+  // Its choices are the thread's (ask-options.ts: one shape wherever a choice is shown).
+  const options = item.options ?? item.form?.options;
+  return { id: item.id, ask: item.summary, ...(options?.length ? { options } : {}) };
 }
 
 /** The decision a stored report asks him: its id and words; null for none, or one another task holds. Pure. */
@@ -57,17 +59,12 @@ export function reportAskOf(r: StatusReport | null | undefined): TaskAsk | null 
   return { id: d.id, ask: r.ask.trim() };
 }
 
-/** A thread that can take the ask: open, here, and not already waiting on him for another one. */
-function canHold(t: OrgThread): boolean {
-  return !t.closed && !t.movedTo && t.state !== 'needs';
-}
-
 /**
  * The thread an ask goes on, or null: the one named (if it can take it), else the open thread his
  * newest message was filed to, else the only open thread. Pure.
  */
 export function askThreadFor(threads: readonly OrgThread[], named?: string): string | null {
-  const open = threads.filter(canHold);
+  const open = threads.filter(openNotWaiting);
   if (named && open.some((t) => t.id === named)) return named;
   let newest: { id: string; at: string } | null = null;
   for (const t of threads) {
@@ -81,24 +78,33 @@ export function askThreadFor(threads: readonly OrgThread[], named?: string): str
 /**
  * The file with `ask` placed on its thread: once per decision (a thread that already holds it keeps
  * it, unless the task now names another), and one decision per task (an older one's place goes).
- * The same file when nothing changes. The place moves no clock: nothing he reads changed yet. Pure.
+ * `ask` null: the report asks nothing now, so every place goes (asked again later, it is placed
+ * again by the rule). The same file when nothing changes. The place moves no clock: nothing he
+ * reads changed yet. Pure.
  */
-export function placeAsk(file: ThreadsFile, ask: TaskAsk, at: string, named?: string): ThreadsFile {
-  const held = file.threads.find((t) => t.reportAsk?.id === ask.id);
-  const namedOk = !!named && file.threads.some((t) => t.id === named && canHold(t));
-  const target = namedOk ? named! : held ? held.id : askThreadFor(file.threads);
-  const stale = file.threads.some((t) => t.reportAsk && t.reportAsk.id !== ask.id);
-  if (!target || (held?.id === target && !stale)) return file;
+export function placeAsk(file: ThreadsFile, ask: TaskAsk | null, at: string, named?: string): ThreadsFile {
+  const held = ask ? file.threads.find((t) => t.reportAsk?.id === ask.id) : undefined;
+  const namedOk = !!ask && !!named && file.threads.some((t) => t.id === named && openNotWaiting(t));
+  const target = !ask ? null : namedOk ? named! : held ? held.id : askThreadFor(file.threads);
+  const stale = file.threads.some((t) => t.reportAsk && t.reportAsk.id !== ask?.id);
+  if (!stale && (!target || held?.id === target)) return file;
+  if (!ask) return { ...file, threads: file.threads.map(withoutPlace) };
   const words = ask.ask.replace(/\s+/g, ' ').trim().slice(0, ASK_KEPT_MAX);
   return {
     ...file,
     threads: file.threads.map((t) => {
       if (t.id === target) return held?.id === target ? t : { ...t, reportAsk: { id: ask.id, at, ...(words ? { ask: words } : {}) } };
-      if (!t.reportAsk) return t;
-      const { reportAsk: _gone, ...rest } = t;
-      return rest as OrgThread;
+      // A thread that holds it and cannot be moved from (no other one takes it) keeps it.
+      if (!target && t.reportAsk?.id === ask.id) return t;
+      return withoutPlace(t);
     }),
   };
+}
+
+function withoutPlace(t: OrgThread): OrgThread {
+  if (!t.reportAsk) return t;
+  const { reportAsk: _gone, ...rest } = t;
+  return rest as OrgThread;
 }
 
 /**
@@ -109,28 +115,32 @@ export function withHeldAsk<T extends OrgThread>(task: AskingTask | null | undef
   const ask = asksThreads(task) ? taskAskNow(task) : null;
   if (!ask) return [...threads];
   return threads.map((t) => {
-    if (t.closed || t.movedTo || t.state === 'needs' || t.reportAsk?.id !== ask.id) return t;
+    // Put aside by him (its Snoozed section), it reads as stored: the task's own ask still shows where it lives.
+    if (!openNotWaiting(t) || t.reportAsk?.id !== ask.id || snoozedNow(t)) return t;
     const reply = t.reply?.trim() ? t.reply : undefined;
     const heldAsk: ThreadHeldAsk = { id: ask.id, ask: ask.ask, ...(reply ? { reply } : {}), was: t.state };
-    return { ...t, state: 'needs' as const, askId: ask.id, reply: reply ? `${ask.ask}\n\n${reply}` : ask.ask, heldAsk };
+    return { ...t, state: 'needs' as const, askId: ask.id, reply: reply ? `${ask.ask}\n\n${reply}` : ask.ask, heldAsk, ...(ask.options ? { options: ask.options } : {}) };
   });
 }
 
 /**
  * Today's data brought in line (at boot, and when its status is next derived): a task whose shown
  * ask is its current report's, and whose threads hold no place for it, gets the place by the same
- * rule. Once per decision: idempotent. Never throws; true when it placed one.
+ * rule, once per decision; a task whose report asks nothing any more loses its places. Idempotent.
+ * Never throws; true when it wrote.
  */
 export async function keepAskOnThread(task: AskingTask, threads?: readonly OrgThread[]): Promise<boolean> {
   if (!asksThreads(task)) return false;
   const now = taskAskNow(task);
-  // Only when the shown ask is the report's: a status a step behind its report never places an older decision.
-  if (!now || reportAskOf(task.status_report)?.id !== now.id) return false;
+  const reported = reportAskOf(task.status_report);
+  // A status a step behind its report never places an older decision; none at all clears the places.
+  const ask = !reported ? null : now?.id === reported.id ? now : undefined;
+  if (ask === undefined) return false;
   try {
     const store = await import('./threads-store.js');
     const list = threads ?? (await store.readThreads(task.id)).threads;
-    if (list.some((t) => t.reportAsk?.id === now.id) || !askThreadFor(list)) return false;
-    return await store.placeTaskAsk(task.id, now);
+    if (ask ? list.some((t) => t.reportAsk?.id === ask.id) || !askThreadFor(list) : !list.some((t) => t.reportAsk)) return false;
+    return await store.placeTaskAsk(task.id, ask);
   } catch {
     return false;
   }

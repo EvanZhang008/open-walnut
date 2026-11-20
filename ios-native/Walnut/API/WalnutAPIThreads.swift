@@ -51,6 +51,9 @@ struct OrgThread: Codable, Equatable, Identifiable {
     }
     struct Snoozed: Codable, Equatable { let until: String; let at: String }
     struct Pinned: Codable, Equatable { let at: String; var by: String? = nil }
+    /// A choice he taps while it waits on him (additive, 2026-11-20): the one shape of a choice
+    /// (the server's core/ask-options.ts). A tap is his answer in words, the label.
+    struct Option: Codable, Equatable, Identifiable { let id: String; let label: String; var detail: String? = nil; var recommended: Bool? = nil }
 
     let id: String
     let title: String
@@ -79,6 +82,8 @@ struct OrgThread: Codable, Equatable, Identifiable {
     var reply_by: String? = nil
     var reply_sid: String? = nil
     var reply_host: String? = nil
+    /// While it is in needs: the choices he taps, 2 to 5. Absent from an older server.
+    var options: [Option]? = nil
 }
 
 /// What one read of a node's threads brought: the threads, and how many his view shows by the

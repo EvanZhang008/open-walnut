@@ -22,6 +22,8 @@ import { READ_ONLY_TITLE, type KanbanMode, type KanbanWriteApi } from './kanban-
 import type { KanbanCardVM } from './kanban-card-model';
 import { KanbanCardMenu, type CardMenuAnchor } from './KanbanCardMenu';
 import { KanbanCardPrompt } from './KanbanCardPrompt';
+// The one ask card's frame (actions/AskCard.tsx): a prompt here reads as it does everywhere.
+import { AskCardFrame } from '@/components/actions/AskCard';
 import { KanbanCardEditor } from './KanbanCardEditor';
 import { KanbanCardComposer } from './KanbanCardComposer';
 import { KanbanCardStart } from './KanbanCardStart';
@@ -328,7 +330,7 @@ function KanbanCardInner({ vm, laneName, tabStop, handled, moved, flash, overlay
       )}
       {promptOpen && status.prompt && (
         <div className="kanban-card-prompt" data-kanban-zone onPointerDown={(e) => e.stopPropagation()}>
-          <KanbanCardPrompt request={status.prompt} onAnswered={() => ctx.markSeen(vm.taskId)} />
+          <AskCardFrame testId="kanban-card-ask" answer={<KanbanCardPrompt request={status.prompt} onAnswered={() => ctx.markSeen(vm.taskId)} />} />
         </div>
       )}
       {editor?.field === 'summary' ? (

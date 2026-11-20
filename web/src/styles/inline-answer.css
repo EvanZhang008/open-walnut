@@ -6,6 +6,7 @@
 .org-answer-inline > .org-answer-options, .org-answer-inline > .org-answer-multi { display: contents; }
 .org-answer-inline:empty { display: none; }
 .org-answer-options .btn { max-width: 100%; white-space: normal; text-align: left; }
+.org-answer-options .btn[data-recommended]::after { content: 'Recommended'; margin-left: 6px; font-size: 0.75em; opacity: 0.8; font-weight: 500; }
 .org-answer-check { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; cursor: pointer; }
 .org-answer-check.is-on { border-color: var(--accent); background: color-mix(in srgb, var(--accent, #0a84ff) 8%, var(--bg)); }
 .org-answer-check input { margin: 0; }

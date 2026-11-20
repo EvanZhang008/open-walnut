@@ -18,16 +18,32 @@ import { threadSummarySource } from './thread-text-source';
 import type { OrgThreadsState } from './useOrgThreads';
 import { OrgThreadSnooze } from './OrgThreadSnooze';
 import { ThreadLetterAnswer, answersLetter } from './ThreadLetterAnswer';
+import { ThreadOptions } from './OrgInlineAnswer';
 
 export function PoppedThreadCard({ node, t, state }: { node: string; t: OrgThread; state: OrgThreadsState }) {
   const openTask = useOpenTask();
   const [failed, setFailed] = useState<string | null>(null);
   // One key per reply: a retry of the same send is filed once (threads-model.ts fileMessage).
-  const key = useRef<string | null>(null);
+  const key = useRef<{ text: string; key: string } | null>(null);
   const owner = t.owner!;
   // A thread holding its task's own ask (core/org/thread-report-ask.ts): its question, then its own summary under it.
   const detail = t.heldAsk ? t.heldAsk.reply : t.reply;
   const unread = t.messages.some((m) => m.delivery?.state === 'pending' || m.delivery?.state === 'claimed');
+  // His words (typed, or a choice's label clicked) go to the task that owns the thread. A retry of
+  // the same words keeps its key; other words (a click after a failed typed send) take a new one.
+  const reply = async (text: string): Promise<boolean> => {
+    setFailed(null);
+    try {
+      if (key.current?.text !== text) key.current = { text, key: `pr-${randomId().replace(/-/g, '').slice(0, 24)}` };
+      await replyOnOrgThread(node, t.id, text, t.ask_id, key.current.key);
+      key.current = null;
+      return true;
+    } catch (err) {
+      log.warn('org-threads', 'reply below not sent', { taskId: node, threadId: t.id, owner: owner.task_id, error: err instanceof Error ? err.message : String(err) });
+      setFailed('Not sent. Your words are still here.');
+      return false;
+    }
+  };
   return (
     <li className="org-thread is-popped" data-testid="org-thread" data-thread-id={t.id} data-state={t.state} data-owner={owner.task_id}>
       <AskCardFrame
@@ -42,7 +58,8 @@ export function PoppedThreadCard({ node, t, state }: { node: string; t: OrgThrea
           {failed && <p className="org-thread-error" role="alert" data-testid="org-thread-popped-failed">{failed}</p>}
         </>)}
         // A thread holding a decision letter is answered by the letter (its buttons, its box).
-        answer={answersLetter(t) ? <ThreadLetterAnswer t={t} /> : (
+        answer={answersLetter(t) ? <ThreadLetterAnswer t={t} /> : (<>
+          <ThreadOptions thread={t} onAnswer={reply} />
           <ReplyComposer
             placeholder={`Answer ${owner.title}`}
             draftKey={draftKey('thread-follow', t.id)}
@@ -54,19 +71,10 @@ export function PoppedThreadCard({ node, t, state }: { node: string; t: OrgThrea
               setFailed(null);
               // The reply goes as words: pictures belong in the task's own chat for now.
               if (images?.length) { setFailed(`Pictures go in ${owner.title}'s own chat: open it to send them.`); return false; }
-              try {
-                key.current ??= `pr-${randomId().replace(/-/g, '').slice(0, 24)}`;
-                await replyOnOrgThread(node, t.id, text, t.ask_id, key.current);
-                key.current = null;
-                return true;
-              } catch (err) {
-                log.warn('org-threads', 'reply below not sent', { taskId: node, threadId: t.id, owner: owner.task_id, error: err instanceof Error ? err.message : String(err) });
-                setFailed('Not sent. Your words are still here.');
-                return false;
-              }
+              return reply(text);
             }}
           />
-        )}
+        </>)}
         tools={<OrgThreadSnooze title={t.title} current={undefined} onSnooze={(until) => void state.update(t.id, { snooze: until })} />}
       />
     </li>

@@ -349,8 +349,9 @@ test('a Board choice: its options, the recommended one marked; a pick answers it
   await openTeam(page)
   const menu = await openAnswer(page, ids.choice, 'choice')
   const options = menu.getByTestId('org-answer-choice')
-  await expect(options.getByTestId('org-answer-option')).toHaveText(['Plan A', 'Plan B', 'Plan C'], { timeout: 30_000 })
+  await expect(options.getByTestId('org-answer-option')).toHaveText(['Plan B', 'Plan A', 'Plan C'], { timeout: 30_000 })
   await expect(options.locator('[data-value="b"]')).toHaveClass(/btn-primary/)
+  await expect(options.locator('[data-value="b"]')).toHaveAttribute('data-recommended', 'true')
   // The question is the row's summary (a clamped line once collapsed to nothing in WebKit), and
   // the words box is shown with the options, no click opens it (2026-11-20, the user: "Why the fuck
   // i need to clcik reply").

@@ -242,7 +242,8 @@ export const STATUS_RULE_VERSION = 2;
 
 /** How the user answers an ask: yes or no, one of a few options, several of them, or their own words. */
 export type AskKind = 'yes_no' | 'single' | 'multi' | 'text';
-export interface AskOption { id: string; label: string; recommended?: boolean }
+/** One choice: its label, a line of why (`detail`), and whether the asker recommends it (ask-options.ts reads them). */
+export interface AskOption { id: string; label: string; detail?: string; recommended?: boolean }
 export const ASK_KINDS: readonly AskKind[] = ['yes_no', 'single', 'multi', 'text'];
 export const ASK_SUMMARY_MAX = 120;
 export const ASK_MORE_MAX = 2000;
@@ -1014,7 +1015,8 @@ export function askFormFrom(ask: string, kind?: string, options?: ReadonlyArray<
     let recommended = typeof o !== 'string' && !!o.recommended;
     if (recommended && k === 'single' && seenRecommended) recommended = false;
     if (recommended) seenRecommended = true;
-    return label ? strip<AskOption>({ id, label, recommended: recommended || undefined }) : null;
+    const why = typeof o === 'string' ? '' : clean(o.detail);
+    return label ? strip<AskOption>({ id, label, detail: why ? why.slice(0, cutEnd(why, 200)) : undefined, recommended: recommended || undefined }) : null;
   }).filter((o): o is AskOption => !!o).slice(0, ASK_OPTIONS_MAX);
   const choice = k === 'single' || k === 'multi';
   const finalKind: AskKind = choice && opts.length < 2 ? 'text' : k;

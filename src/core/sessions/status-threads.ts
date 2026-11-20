@@ -25,7 +25,7 @@ import { cutEnd } from '../text-cut.js';
 import { keepsThreads } from '../org/keeps-threads.js';
 import { sortedThreads, THREAD_TITLE_MAX, type OrgThread, type ThreadPatch, type ThreadsFile } from '../org/threads-model.js';
 import type { OwnThreadOpen, OwnThreadWrite } from '../org/threads-store.js';
-import { hasThreadNews } from '../org/thread-view.js';
+import { hasThreadNews, openNotWaiting } from '../org/thread-view.js';
 
 export type ThreadLineState = 'working' | 'waiting' | 'answered' | 'done';
 /** One FOR_USER_THREAD line, its ref resolved to the thread it names. */
@@ -73,7 +73,7 @@ export async function threadQuestionFor(task: Pick<Task, 'id' | 'org_role' | 'th
     const { readThreads } = await import('../org/threads-store.js');
     // A thread waiting on him (needs) is his to move, by his answer or the task's own thread_update:
     // it is not asked, so no line can take it out of his sight (review round 1).
-    const open = sortedThreads((await readThreads(task.id)).threads).filter((t) => !t.closed && t.state !== 'needs');
+    const open = sortedThreads((await readThreads(task.id)).threads).filter(openNotWaiting);
     return threadQuestionBlock(open, langName);
   } catch {
     return { block: '', refs: new Map() };
@@ -96,7 +96,7 @@ function stateWord(raw: string): ThreadLineState | null {
 
 /** The thread lines of an answer, by the refs the question listed. Unknown refs and state words are dropped. Pure. */
 export function readThreadLines(answer: string, refs: ThreadRefs): Pick<StatusReport, 'threads' | 'threads_new' | 'ask_thread'> {
-  const named = refs.get((ASK_THREAD_RE.exec(answer)?.[1] ?? '').split(/[|\uff5c]/)[0].trim().toLowerCase().replace(/[^a-z0-9]/g, ''));
+  const named = refs.get(/^[*_`"'\s]*(t\d+)\b/i.exec(ASK_THREAD_RE.exec(answer)?.[1] ?? '')?.[1].toLowerCase() ?? '');
   const threads = new Map<string, StatusThreadLine>();
   const opened: StatusThreadNew[] = [];
   const known = new Set([...refs.values()].map((r) => r.title.trim().toLowerCase()));
@@ -210,17 +210,18 @@ export async function applyThreadLines(taskId: string, report: Pick<StatusReport
   const lines = report.threads ?? [];
   const opened = report.threads_new ?? [];
   const { reportAskOf, placeAsk } = await import('../org/thread-report-ask.js');
-  const ask = reportAskOf(asks);
-  if (!lines.length && !opened.length && !ask) return [];
+  // `asks` given: the task places its ask (or, asking nothing now, takes its places off).
+  const ask = asks ? reportAskOf(asks) : undefined;
+  if (!lines.length && !opened.length && ask === undefined) return [];
   try {
     const { writeOwnThreads, readThreads } = await import('../org/threads-store.js');
-    // Only the ask, and its place would not move (none can take it, or it is there already): no write.
-    if (!lines.length && !opened.length && ask) {
+    // Only the ask, and its place would not move: no write.
+    if (!lines.length && !opened.length) {
       const cur = await readThreads(taskId);
-      if (placeAsk(cur, ask, new Date().toISOString(), report.ask_thread) === cur) return [];
+      if (placeAsk(cur, ask ?? null, new Date().toISOString(), report.ask_thread) === cur) return [];
     }
     const changed = await writeOwnThreads(taskId, (cur) => planThreadWrites(cur, lines, opened), `task:${taskId}`,
-      ask ? { ask, ...(report.ask_thread ? { named: report.ask_thread } : {}) } : undefined);
+      ask !== undefined ? { ask, ...(report.ask_thread ? { named: report.ask_thread } : {}) } : undefined);
     if (changed.length) log.session.info('status question: threads kept current', { taskId, changed });
     return changed;
   } catch (err) {

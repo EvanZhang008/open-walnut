@@ -257,6 +257,11 @@ struct OrgThreadsView: View {
             onEdit: { edit in Task { await store.edit(t.id, edit) } },
             onOpenTask: { cover.wrappedValue = .task($0) },
             onFollowUpOpen: { cover.wrappedValue = .followUp(threadId: t.id, title: t.title) },
+            onPick: { label in
+                // A choice tapped is his answer in words, filed under the thread like a Follow up.
+                guard let sid = sessionId else { return }
+                Task { _ = await store.followUp(t.id, sessionId: sid, text: label) }
+            },
             onWhole: { await store.loadWhole(t.id) }
         )
         // The requested card's place in the viewport, for the reveal to check its jump.
@@ -591,6 +596,8 @@ struct OrgThreadCard: View {
     let onOpenTask: (TaskOpenTarget) -> Void
     /// Follow up was tapped: the node's page opens the composer over itself.
     let onFollowUpOpen: () -> Void
+    /// A choice of a thread waiting on him was tapped: its label goes as his answer.
+    var onPick: (String) -> Void = { _ in }
     /// Read this thread whole: its list read cut answers he already reacted to (`clipped`).
     var onWhole: () async -> Void = {}
 
@@ -598,6 +605,7 @@ struct OrgThreadCard: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var conversation = false
     @State private var expanded = false
+    @State private var pickedKey: String? = nil
 
     private var t: OrgThread { thread }
     private var closed: Bool { t.closed != nil }
@@ -915,8 +923,45 @@ struct OrgThreadCard: View {
         }
     }
 
+    /// It waits on him: its choices, the recommended one first, and no Acknowledge, which is for a
+    /// card that asks no choice (2026-11-20, the user: "Acknowledge is for when I do not need to
+    /// make any choice").
+    private var waitsOnHim: Bool { t.state == "needs" && !closed }
+    private var choices: [OrgThread.Option] {
+        let all = t.options ?? []
+        return all.filter { $0.recommended == true } + all.filter { $0.recommended != true }
+    }
+    /// The choices one tap answered: off until they change, so a second tap never answers twice.
+    private var choicesKey: String { t.id + "|" + (t.options ?? []).map { "\($0.id)=\($0.label)" }.joined(separator: "|") }
+
+    @ViewBuilder
+    private var optionButtons: some View {
+        if waitsOnHim, canFollowUp, !choices.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(choices) { o in
+                    Button { pickedKey = choicesKey; onPick(o.label) } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(o.recommended == true ? "\(o.label) \u{00B7} Recommended" : o.label)
+                                .multilineTextAlignment(.leading)
+                            if let d = o.detail, !d.isEmpty {
+                                Text(d).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.leading)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(o.recommended == true ? Theme.tint : nil)
+                    .controlSize(.small)
+                    .disabled(busy || pickedKey == choicesKey)
+                    .accessibilityIdentifier("org.thread.option.\(o.id)")
+                }
+            }
+        }
+    }
+
     @ViewBuilder
     private var actions: some View {
+        optionButtons
         if let c = t.closed {
             HStack {
                 Text("\(c.how == "acked" ? "Acknowledged" : "Dropped")\(c.by == "human" ? "" : " by \(name)") \(WalnutTask.parseISO(c.at).map { RelativeTime.short(date: $0, relativeTo: now) } ?? "")")
@@ -967,10 +1012,12 @@ struct OrgThreadCard: View {
 
     @ViewBuilder
     private func actionButtons(fullWidth: Bool) -> some View {
-        Button { onEdit(.acknowledge) } label: { actionLabel("Acknowledge", fullWidth: fullWidth) }
-            .buttonStyle(.borderedProminent)
-            .tint(Theme.tint)
-            .accessibilityIdentifier("org.thread.ack")
+        if !waitsOnHim {
+            Button { onEdit(.acknowledge) } label: { actionLabel("Acknowledge", fullWidth: fullWidth) }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.tint)
+                .accessibilityIdentifier("org.thread.ack")
+        }
         if canFollowUp {
             Button { onFollowUpOpen() } label: { actionLabel("Follow up", fullWidth: fullWidth) }
                 .buttonStyle(.bordered)

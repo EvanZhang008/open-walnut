@@ -24,6 +24,8 @@ import { KanbanCardContext } from './KanbanCard';
 import { KanbanCardEditor } from './KanbanCardEditor';
 import { KanbanCardMenu } from './KanbanCardMenu';
 import { KanbanCardPrompt } from './KanbanCardPrompt';
+// The one ask card's frame (actions/AskCard.tsx): a prompt here reads as it does everywhere.
+import { AskCardFrame } from '@/components/actions/AskCard';
 import { KanbanDetailTask } from './KanbanDetailTask';
 
 /** The host's real session chat for a card opened in place (SessionPanel's inset mode). */
@@ -88,7 +90,7 @@ export function KanbanCardDetail({ card, laneName, readOnly, onBack, onOpenSessi
       <div className={`kanban-card-status kanban-tone-${card.status.tone} kanban-detail-status`} data-tone={card.status.tone} title={card.status.tooltip}>
         <span className="kanban-card-dot" aria-hidden="true" /><AgentText compact inline {...(card.status.textSource ?? { unknownSource: true })} className="kanban-card-status-text" text={card.status.text} />
       </div>
-      {card.status.prompt && <div className="kanban-card-prompt"><KanbanCardPrompt request={card.status.prompt} onAnswered={() => onSeen(card.taskId)} /></div>}
+      {card.status.prompt && <div className="kanban-card-prompt"><AskCardFrame testId="kanban-card-ask" answer={<KanbanCardPrompt request={card.status.prompt} onAnswered={() => onSeen(card.taskId)} />} /></div>}
       {editor ? (
         <div className="kanban-card-editor">
           <KanbanCardEditor field={editor.field} card={card} openedAt={editor.openedAt} api={ctx!.api} onClose={() => { setEditor(null); moreRef.current?.focus(); }} />
