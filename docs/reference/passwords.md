@@ -313,7 +313,13 @@ loading it from Walnut second. A store copy reports `install: store` and updates
 store, so it can trail the build Walnut ships until a new version is uploaded. The submission
 lives in `packages/browser-extension/store/` (listing text, permission reasons, privacy policy);
 `bun scripts/extension-store-package.mjs` builds the upload into `dist/extension-store`.
-Publishing goes out under the maintainer's developer account, so it is the maintainer's step.
+Publishing goes out under the maintainer's developer account. A new version goes there through the
+Chrome Web Store API (V2) with a service account that the publisher added in the Developer
+Dashboard (Settings, Service account): `bun scripts/extension-store-publish.mjs` (with
+`WALNUT_CWS_KEY_FILE`, `WALNUT_CWS_PUBLISHER`, `WALNUT_CWS_ITEM`; `--dry-run` stops before the
+upload) builds the package, submits only a version newer than the store's while no review is
+pending, scans the zip with the leak scan first, and submits it for review. The store takes a new
+version number only, so a store copy moves with Walnut's releases, not with every build.
 
 **Setting it up from Walnut, and keeping it current.** A browser loads an extension that is not
 from its store only on the person's own two clicks (Chrome: Developer mode, then Load unpacked),
