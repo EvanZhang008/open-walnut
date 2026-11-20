@@ -73,7 +73,7 @@ export function mentionCandidates(
   members: readonly MemberLike[],
   tasks: ReadonlyArray<{ id: string; name: string }>,
   limit = 8,
-  nodes: ReadonlyArray<{ node: string; name: string }> = [],
+  nodes: ReadonlyArray<{ node: string; name: string; aliases?: readonly string[] }> = [],
 ): MentionCandidate[] {
   const q = query.trim().toLowerCase();
   const rank = <T,>(rows: T[], nameOf: (r: T) => string) => rankByName(rows, nameOf, q);
@@ -83,7 +83,8 @@ export function mentionCandidates(
   // Tasks only once something is typed: a bare "@" lists the members.
   if (q) {
     const nodesIn = new Set(live.flatMap((m) => (m.ref.kind === 'org' ? [m.ref.node] : [])));
-    for (const n of rank(nodes.filter((x) => !nodesIn.has(x.node)), (x) => x.name)) out.push({ kind: 'org', node: n.node, name: n.name });
+    const isIn = (x: (typeof nodes)[number]) => nodesIn.has(x.node) || (x.aliases ?? []).some((k) => nodesIn.has(k.replace(/^org:/, '')));
+    for (const n of rank(nodes.filter((x) => !isIn(x)), (x) => x.name)) out.push({ kind: 'org', node: n.node, name: n.name });
     const others = rank(tasks.filter((t) => !inTopic.has(t.id)), (t) => t.name);
     for (const t of others) out.push({ kind: 'task', taskId: t.id, name: t.name });
   }

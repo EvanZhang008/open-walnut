@@ -187,7 +187,7 @@
 .topic-candidate:hover:not(:disabled) { background: color-mix(in srgb, var(--fg) 6%, transparent); }
 .topic-candidate:disabled { opacity: 0.55; cursor: default; }
 .topic-candidate-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.topic-candidate-hint { flex: none; color: var(--fg-muted); font-size: 11.5px; }
+.topic-candidate-hint { flex: 0 1 auto; max-width: 55%; color: var(--fg-muted); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .topic-add-list { margin-top: 12px; }
 .topic-person { display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px dashed var(--border); border-radius: 8px; }
 .topic-person .app-modal-input { margin-top: 0; }

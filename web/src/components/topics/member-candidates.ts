@@ -17,6 +17,8 @@ import { orgRef, refKey, taskRef } from './topic-model';
 export interface Candidate extends PickedMember {
   /** A short word beside the name: what an Org node leads ("Leads Acme"), or the task's project. */
   hint: string;
+  /** The same member's other keys: a VP that leads several projects is one row, under one node. */
+  aliases?: string[];
 }
 
 const isDone = (t: Pick<Task, 'phase' | 'status'>) => t.phase === 'COMPLETE' || t.status === 'done';
@@ -25,10 +27,23 @@ export function memberCandidates(tasks: readonly Task[]): Candidate[] {
   const tree = buildOrgTree(tasks);
   const out: Candidate[] = [];
   if (tree.main) out.push({ ref: orgRef('main'), name: orgDisplayTitle({ title: tree.main.title, org_role: 'main' }), hint: 'Leads every VP' });
+  // One row per VP, never one per project it leads: its own project's node is the member (the
+  // first one when it leads none of its own), the others are its aliases, and the hint names them all.
+  const byLead = new Map<string, string[]>();
   for (const p of tree.projects) {
     if (!p.lead) continue;
-    const lead = tasks.find((t) => t.id === p.lead!.id);
-    out.push({ ref: orgRef(orgProjectNode(p.project)), name: lead ? orgDisplayTitle(lead) : `${p.project} VP`, hint: `Leads ${p.project}` });
+    byLead.set(p.lead.id, [...(byLead.get(p.lead.id) ?? []), p.project]);
+  }
+  for (const [leadId, projects] of byLead) {
+    const lead = tasks.find((t) => t.id === leadId);
+    const home = projects.find((p) => p === lead?.project) ?? projects[0]!;
+    const others = projects.filter((p) => p !== home);
+    out.push({
+      ref: orgRef(orgProjectNode(home)),
+      name: lead ? orgDisplayTitle(lead) : `${home} VP`,
+      hint: `Leads ${[home, ...others].join(', ')}`,
+      ...(others.length ? { aliases: others.map((p) => refKey(orgRef(orgProjectNode(p)))) } : {}),
+    });
   }
   for (const t of tasks) {
     if (isDone(t) || t.org_role === 'main' || t.org_role === 'lead') continue;
@@ -49,7 +64,7 @@ function useKeptList<T>(derive: (tasks: readonly Task[]) => T[], same: (a: T, b:
   }) ?? kept.current;
 }
 
-const sameCandidate = (a: Candidate, b: Candidate) => a.name === b.name && a.hint === b.hint && refKey(a.ref) === refKey(b.ref);
+const sameCandidate = (a: Candidate, b: Candidate) => a.name === b.name && a.hint === b.hint && refKey(a.ref) === refKey(b.ref) && (a.aliases ?? []).join() === (b.aliases ?? []).join();
 
 export function useMemberCandidates(): Candidate[] {
   return useKeptList(memberCandidates, sameCandidate);
@@ -66,15 +81,15 @@ export function openTaskNames(tasks: readonly Task[]): OpenTaskName[] {
   return tasks.filter((t) => !isDone(t) && t.org_role !== 'main' && t.org_role !== 'lead').map((t) => ({ id: t.id, name: orgDisplayTitle(t) }));
 }
 
-export interface OrgNodeName { node: string; name: string }
+export interface OrgNodeName { node: string; name: string; aliases?: string[] }
 
-/** The CEO and the VPs as Org nodes, for the composer's @ list (the picker's first rows). */
+/** The CEO and the VPs as Org nodes, for the composer's @ list (the picker's first rows, one per VP). */
 export function orgNodeNames(tasks: readonly Task[]): OrgNodeName[] {
-  return memberCandidates(tasks).flatMap((c) => (c.ref.kind === 'org' ? [{ node: c.ref.node, name: c.name }] : []));
+  return memberCandidates(tasks).flatMap((c) => (c.ref.kind === 'org' ? [{ node: c.ref.node, name: c.name, ...(c.aliases ? { aliases: c.aliases } : {}) }] : []));
 }
 
 export function useOrgNodeNames(): OrgNodeName[] {
-  return useKeptList(orgNodeNames, (a, b) => a.node === b.node && a.name === b.name);
+  return useKeptList(orgNodeNames, (a, b) => a.node === b.node && a.name === b.name && (a.aliases ?? []).join() === (b.aliases ?? []).join());
 }
 
 export function useOpenTaskNames(): OpenTaskName[] {

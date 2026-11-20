@@ -29,7 +29,7 @@ import {
 } from './topic-mail-port.js'
 import { createTopicMailState, lineKey, memberKey, pruneState, type TopicMailState } from './topic-mail-state.js'
 import { claimTopicMail, postClaimedMails, releaseTopicMailClaims, type TopicMailClaim } from './topic-mail-inbound.js'
-import { canonicalMessageId, topicMailBody, topicMailSubject } from './topic-mail-text.js'
+import { canonicalMessageId, INVITE_CONTEXT_LINES, topicMailBody, topicMailSubject } from './topic-mail-text.js'
 import { authorName, MAIL_EVERY_MINUTES_DEFAULT, USER_FALLBACK_NAME, midSentenceName, type Topic, type TopicMember, type TopicMessage } from './topics-model.js'
 
 export const TOPIC_MAIL_PASS_MS = 60_000
@@ -244,7 +244,11 @@ export function createTopicMailBridge(deps: TopicMailBridgeDeps): TopicMailBridg
       if (outcome.state !== 'waiting') await settleOutcome(topic, member, pending.upto, outcome, t)
       return
     }
-    const after = unsentFor(topic, member)
+    // A person's first mail is the invite: it goes out at the next pass even with nothing new since
+    // they joined, carrying the topic's latest few lines (a topic with no lines yet waits for one).
+    const first = !member.mail?.lastSentAt && !member.mail?.lastSentMessageId
+    let after = unsentFor(topic, member)
+    if (first && mailLines(member, after).length === 0) after = mailLines(member, topic.messages).slice(-INVITE_CONTEXT_LINES)
     const lines = mailLines(member, after)
     if (lines.length === 0) return
     // At once only what the plan said (mailNow); the rest waits for the schedule.
@@ -282,7 +286,10 @@ export function createTopicMailBridge(deps: TopicMailBridgeDeps): TopicMailBridg
         accountId,
         to: { name: member.name, address: emailOf(member) },
         subject: topicMailSubject(topic.title, topic.id),
-        text: topicMailBody(lines.map((one) => ({ name: authorName(topic, one.author, owner), text: one.text }))),
+        text: topicMailBody(
+          lines.map((one) => ({ name: authorName(topic, one.author, owner), text: one.text })),
+          first ? { owner, title: topic.title, others: topic.members.filter((m) => m.id !== member.id && m.status === 'active').map((m) => m.name) } : undefined,
+        ),
         ...(thread ? { inReplyTo: thread, references } : {}),
       })
     } catch (error) {
@@ -326,9 +333,11 @@ export function createTopicMailBridge(deps: TopicMailBridgeDeps): TopicMailBridg
         continue
       }
       owner ??= await deps.ownerName().catch(() => USER_FALLBACK_NAME)
+      // Someone outside Walnut cannot tell who "The user" is: with no name set, the mailbox's address speaks.
+      const sender = owner === USER_FALLBACK_NAME && account.address ? account.address : owner
       for (const member of persons) {
         try {
-          await mailMember(topic, member, accountId, t, owner)
+          await mailMember(topic, member, accountId, t, sender)
         } catch (error) {
           log.warn('topic mail pass could not finish a member', { topicId: topic.id, memberId: member.id, error: reason(error) })
         }

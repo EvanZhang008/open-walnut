@@ -119,7 +119,8 @@ describe('subject, body and threading', () => {
     const first = s.mail.sent[0]!
     expect(first.subject).toBe('Launch plan [topic tp-0123456789ab]')
     expect(first.accountId).toBe(ACCOUNT)
-    expect(first.text).toBe(`Owner: Kickoff\n\nPlanner: Plan is drafted\n\n${TOPIC_MAIL_FOOTER}\n`)
+    // The first mail is the invite: its opening line, then the lines and the footer.
+    expect(first.text).toBe(`Owner added you to the topic “Launch plan” in Walnut, with Planner.\n\nThe latest in the topic:\n\nOwner: Kickoff\n\nPlanner: Plan is drafted\n\n${TOPIC_MAIL_FOOTER}\n`)
     expect(first.inReplyTo).toBeUndefined()
     expect(ada(s.topic).mail).toEqual({
       lastSentAt: iso(env.clock),
@@ -407,5 +408,66 @@ describe('a test or ephemeral server sends no mail (A2)', () => {
     } finally {
       process.argv = argv
     }
+  })
+})
+
+describe('the invite: a person\'s first mail', () => {
+  it('opens with who added them, to what, with whom, then the new lines', async () => {
+    const s = setup()
+    s.add('human', 'Kickoff: who takes the API?')
+    await s.bridge.pass()
+    const text = s.mail.sent[0]!.text
+    expect(text.startsWith('Owner added you to the topic “Launch plan” in Walnut, with Planner.')).toBe(true)
+    expect(text).toContain('Owner: Kickoff: who takes the API?')
+    expect(text).toContain(TOPIC_MAIL_FOOTER)
+    // Only the first mail is the invite.
+    env.clock += 60 * 60_000
+    s.add('human', 'Second line')
+    await s.bridge.pass()
+    expect(s.mail.sent[1]!.text).not.toContain('added you to the topic')
+  })
+
+  it('goes out at the next pass to a person who joins after the talk began, with the latest lines', async () => {
+    const s = setup()
+    s.add('human', 'Kickoff')
+    s.add(AGENT, 'Plan is ready')
+    // Ada joins later: nothing new since, yet the invite goes out with the topic's latest lines.
+    ada(s.topic).joinedAt = iso(env.clock + 60_000)
+    env.clock += 2 * 60_000
+    await s.bridge.pass()
+    expect(s.mail.sent).toHaveLength(1)
+    const text = s.mail.sent[0]!.text
+    expect(text).toContain('added you to the topic')
+    expect(text).toContain('Owner: Kickoff')
+    expect(text).toContain('Planner: Plan is ready')
+    // Once sent, the next pass sends nothing more.
+    env.clock += 60 * 60_000
+    await s.bridge.pass()
+    expect(s.mail.sent).toHaveLength(1)
+  })
+
+  it('waits for a first line when the topic has none yet', async () => {
+    const s = setup()
+    await s.bridge.pass()
+    expect(s.mail.sent).toHaveLength(0)
+  })
+})
+
+describe('the sender\'s name in a mail', () => {
+  it('is the mailbox address when the user set no name of his own', async () => {
+    const { USER_FALLBACK_NAME } = await import('../../../src/core/topics/topics-model.js')
+    const s = setup()
+    const bridge = createTopicMailBridge({
+      core: s.core, transport: () => s.mail.transport, state: createTopicMailState(env.stateFile),
+      isOn: async () => true, ownerName: async () => USER_FALLBACK_NAME, now: () => env.clock,
+      log: { info: () => undefined, warn: () => undefined },
+    })
+    s.add('human', 'Kickoff')
+    await bridge.pass()
+    const text = s.mail.sent[0]!.text
+    expect(text).not.toContain(USER_FALLBACK_NAME)
+    const address = (await s.mail.transport.accounts())[0]!.address
+    expect(text.startsWith(`${address} added you`)).toBe(true)
+    expect(text).toContain(`${address}: Kickoff`)
   })
 })

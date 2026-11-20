@@ -13,11 +13,33 @@ export function topicMailSubject(title: string, topicId: string): string {
   return `${clean} [topic ${topicId}]`
 }
 
-/** The body of one outbound mail: each new message as "Name: text", then the footer. */
-export function topicMailBody(lines: ReadonlyArray<{ name: string; text: string }>): string {
+/** The few messages before a person joined that their first mail (the invite) carries. */
+export const INVITE_CONTEXT_LINES = 5
+
+/** What a person's first mail opens with: who added them, to what, with whom. */
+export interface TopicMailInvite { owner: string; title: string; others: readonly string[] }
+
+function listNames(names: readonly string[]): string {
+  if (names.length <= 1) return names[0] ?? ''
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+}
+
+/** The invite's opening line: "Evan added you to the topic “Launch plan” in Walnut, with Planner and Ada." */
+export function topicInviteLine(invite: TopicMailInvite): string {
+  const title = invite.title.replace(/[\r\n]+/g, ' ').trim() || 'a topic'
+  const others = invite.others.length ? `, with ${listNames(invite.others)}` : ''
+  return `${invite.owner} added you to the topic “${title}” in Walnut${others}.`
+}
+
+/**
+ * The body of one outbound mail: each new message as "Name: text", then the footer. A person's
+ * first mail (`invite`) opens with who added them, and its lines are the latest of the topic.
+ */
+export function topicMailBody(lines: ReadonlyArray<{ name: string; text: string }>, invite?: TopicMailInvite): string {
   // A blank line between messages, so the html half (rendered from this text) keeps them apart.
   const blocks = lines.map((line) => `${line.name}: ${line.text.trim()}`)
-  return `${blocks.join('\n\n')}\n\n${TOPIC_MAIL_FOOTER}\n`
+  const head = invite ? `${topicInviteLine(invite)}\n\n${blocks.length ? 'The latest in the topic:\n\n' : ''}` : ''
+  return `${head}${blocks.join('\n\n')}\n\n${TOPIC_MAIL_FOOTER}\n`
 }
 
 /** The bare address of "Name <a@example.com>" or "a@example.com", lower case. */

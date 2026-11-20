@@ -30,7 +30,8 @@ export function MemberPicker({ picked, onChange, host, onHost, exclude, autoFocu
   const [person, setPerson] = useState<{ name: string; email: string; bot: boolean } | null>(null);
   const taken = useMemo(() => new Set([...(exclude ?? []), ...picked.map((p) => refKey(p.ref))]), [exclude, picked]);
   const rows = useMemo(() => {
-    const free = all.filter((c) => !taken.has(refKey(c.ref)));
+    // A VP already in (under any project it leads) is not offered again.
+    const free = all.filter((c) => !taken.has(refKey(c.ref)) && !(c.aliases ?? []).some((k) => taken.has(k)));
     return (query.trim() ? rankByName(free, (c) => c.name, query) : free.filter((c) => c.ref.kind === 'org')).slice(0, LIMIT);
   }, [all, taken, query]);
 
@@ -86,7 +87,7 @@ export function MemberPicker({ picked, onChange, host, onHost, exclude, autoFocu
               <button type="button" role="option" aria-selected={false} className="topic-candidate" data-testid="topic-candidate" data-ref={refKey(c.ref)} onClick={() => add(c)}>
                 <MemberAvatar who={{ name: c.name, ref: c.ref }} size={20} />
                 <span className="topic-candidate-name">{c.name}</span>
-                <span className="topic-candidate-hint">{c.hint}</span>
+                <span className="topic-candidate-hint" title={c.hint}>{c.hint}</span>
               </button>
             </li>
           ))}

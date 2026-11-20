@@ -326,3 +326,40 @@ describe('the @ list offers Org nodes', () => {
     expect(mentionCandidates('', MEMBERS, [], 8, nodes).some((r) => r.kind === 'org')).toBe(false)
   })
 })
+
+describe('one row per member in every org list', () => {
+  const tasks = [
+    { id: 't-ceo', title: 'Main', org_role: 'main', project: '', phase: 'IN_PROGRESS' },
+    { id: 't-vp', title: 'Lead', org_role: 'lead', org_name: 'Acme', project: 'Acme', org_leads: ['Beta', 'Gamma'], phase: 'IN_PROGRESS' },
+    { id: 't-vp2', title: 'Other lead', org_role: 'lead', org_name: 'Delta', project: 'Delta', phase: 'IN_PROGRESS' },
+    { id: 't-a', title: 'Pricing copy', project: 'Acme', phase: 'IN_PROGRESS' },
+    { id: 't-b', title: 'Beta work', project: 'Beta', phase: 'IN_PROGRESS' },
+    { id: 't-g', title: 'Gamma work', project: 'Gamma', phase: 'IN_PROGRESS' },
+    { id: 't-d', title: 'Delta work', project: 'Delta', phase: 'IN_PROGRESS' },
+  ] as never[]
+
+  it('lists a VP that leads three projects once, under its own project, naming all three', async () => {
+    const { memberCandidates } = await import('../../web/src/components/topics/member-candidates.js')
+    const vps = memberCandidates(tasks).filter((c) => c.ref.kind === 'org' && c.ref.node !== 'main')
+    // Two VPs: t-vp once (not once per project it leads) and t-vp2.
+    expect(vps).toHaveLength(2)
+    const acme = vps.find((c) => c.ref.kind === 'org' && c.ref.node === 'project:acme')!
+    expect(acme.hint).toMatch(/^Leads Acme, (Beta, Gamma|Gamma, Beta)$/)
+    expect([...(acme.aliases ?? [])].sort()).toEqual(['org:project:beta', 'org:project:gamma'])
+  })
+
+  it('never lists two rows that are the same task (the picker, and the @ list built from it)', async () => {
+    const { memberCandidates, orgNodeNames } = await import('../../web/src/components/topics/member-candidates.js')
+    const { memberTaskId } = await import('../../web/src/components/topics/TopicAvatars.js')
+    const ids = memberCandidates(tasks).map((c) => memberTaskId(c.ref, tasks) ?? JSON.stringify(c.ref))
+    expect(ids.length).toBe(new Set(ids).size)
+    const nodes = orgNodeNames(tasks).map((n) => memberTaskId({ kind: 'org', node: n.node }, tasks))
+    expect(nodes.length).toBe(new Set(nodes).size)
+  })
+
+  it('does not offer a VP in the @ list when it is in the topic under another of its projects', () => {
+    const vpAsBeta = { id: 'mb-b', name: 'Lead', role: 'member', status: 'active', ref: { kind: 'org', node: 'project:beta' } } as never
+    const nodes = [{ node: 'project:acme', name: 'Lead', aliases: ['org:project:beta', 'org:project:gamma'] }]
+    expect(mentionCandidates('lead', [vpAsBeta], [], 8, nodes).filter((r) => r.kind === 'org')).toEqual([])
+  })
+})
