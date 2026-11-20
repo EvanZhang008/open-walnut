@@ -2983,6 +2983,11 @@ primary box the same endpoints serve directly — no bridge involved.
     words without it, so a client announces the thread first with `PUT
     /tasks/:id/threads/:thread/follow-ups/:messageId` (below) and sends with that
     `messageId`.
+  - `answeredChoice` (additive, 2026-11; experiment `brief_off`): `{ board, id, threadId }`
+    when the named thread holds a Board choice still waiting on him and his words answered it
+    on its Board (a bare yes picks the recommended option, words naming an option pick it,
+    other words go as his note). The words reach the Board's task as that answer, not as a
+    chat message. Absent otherwise; an older client reads an ordinary 202.
   - `voice` (additive, 2026-10) — `true` when the person SPOKE this message and
     will hear the answer read aloud (the phone's voice mode). The CLI also
     receives the `voice-reply` message hint after the text (a

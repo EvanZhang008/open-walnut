@@ -477,6 +477,12 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         setOptimisticMsgs((prev) => prev.filter((m) => m.queueId !== tempId));
         return true;
       }
+      if (res?.answeredChoice) {
+        // His words answered the Board choice its thread holds: the Board's task gets them as that answer.
+        log.info('send', 'words answered a choice', { sessionId, board: res.answeredChoice.board, choiceId: res.answeredChoice.id, threadId: res.answeredChoice.threadId });
+        setOptimisticMsgs((prev) => prev.filter((m) => m.queueId !== tempId));
+        return true;
+      }
       if (res?.engineSwitch) {
         // The message starts the task's new session: its bubble shows there, not in this one.
         log.info('send', 'engine switch accepted', { sessionId, state: res.engineSwitch.state });
@@ -606,8 +612,8 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         // alreadyDelivered: the first send's acknowledgement was lost, not the send: its
         // line already ran (the server sent nothing again). History holds it and its answer.
         if (res?.alreadyDelivered) log.info('send', 'retry: the message was already delivered', { sessionId, queueId });
-        if (res?.answeredLetter) {
-          // The retry delivered the letter answer his words are: the session gets them as that answer.
+        if (res?.answeredLetter || res?.answeredChoice) {
+          // The retry delivered the letter or choice answer his words are: the session gets them as that answer.
           setOptimisticMsgs((prev) => prev.filter((m) => m.queueId !== queueId));
           return;
         }

@@ -21,12 +21,17 @@
  */
 import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
+import type { BoardFile } from './board-store.js';
 import { choiceOutcome, choiceThreadId, holdsChoice, openChoiceThread, settleChoiceThread, type ChoiceOutcome } from '../org/choice-thread-model.js';
+import { heldAside } from '../org/held-thread-model.js';
 import { briefOffOn, briefOffFlag } from '../org/brief-off.js';
-import { forgetHeld, heldSeen, noteHeld, oneAtATime, startHeldThreads } from '../org/held-threads.js';
+import { forgetHeld, heldHolders, heldSeen, noteHeld, noteHolder, oneAtATime, startHeldThreads, writeHeldThread } from '../org/held-threads.js';
 
-/** The ids of choices' threads seen here: a change of one of them may change which choices count. */
+/** The ids of choices' threads found or opened here: a change of one of them may change which choices count. */
 const choiceThreads = new Set<string>();
+/** The Boards those threads belong to: with the experiment off, only these have anything to settle. */
+const choiceBoards = new Set<string>();
+const seenThread = (board: string, threadId: string): void => { choiceThreads.add(threadId); choiceBoards.add(board); };
 export function isChoiceThread(threadId: string): boolean { return choiceThreads.has(threadId); }
 
 const openTask = (t: Task | undefined): t is Task => !!t && t.phase !== 'COMPLETE' && t.status !== 'done';
@@ -47,13 +52,29 @@ export async function syncBoardChoiceThreads(owner: string, tasks?: readonly Tas
   });
 }
 
+/**
+ * The Board as it is, or null when it is known gone; undefined when Walnut cannot tell (a read
+ * that failed, a file it cannot parse): then nothing is settled or opened from it.
+ */
+async function readBoardNow(owner: string): Promise<BoardFile | null | undefined> {
+  const { getBoard, hasBoard } = await import('./board-store.js');
+  try {
+    const board = await getBoard(owner);
+    if (board) return board;
+    return (await hasBoard(owner)) ? undefined : null;
+  } catch (err) {
+    log.task.warn('choice threads: a Board not read, its choice threads left as they are', { taskId: owner, error: err instanceof Error ? err.message : String(err) });
+    return undefined;
+  }
+}
+
 async function syncNow(owner: string, given?: readonly Task[]): Promise<ChoiceSyncResult> {
   const out = NONE();
   const on = await briefOffOn();
   const store = await import('../org/threads-store.js');
-  const { getBoard } = await import('./board-store.js');
+  const board = await readBoardNow(owner);
+  if (board === undefined) return out;
   const { choiceSpecs } = await import('./board-html.js');
-  const board = await getBoard(owner).catch(() => null);
   const specs = board?.html ? choiceSpecs(board.html) : {};
   const tasks = given ?? await (await import('../task-manager.js')).listTasks();
   const task = tasks.find((t) => t.id === owner);
@@ -61,9 +82,9 @@ async function syncNow(owner: string, given?: readonly Task[]): Promise<ChoiceSy
   const keeps = on && openTask(task) && keepsThreads(task);
   const at = new Date().toISOString();
   const settle = async (node: string, threadId: string, outcome: ChoiceOutcome): Promise<void> => {
-    const done = await store.writeThreadsFor(node, (cur) => {
+    const done = await writeHeldThread(node, threadId, (cur) => {
       const r = settleChoiceThread(cur, threadId, outcome, at);
-      return r ? { file: r.file, out: true, changed: { kind: 'updated' as const, threadId } } : { file: cur, out: false };
+      return r && { file: r.file, changed: 'settled' as const };
     });
     if (!done) return;
     out.settled++;
@@ -73,7 +94,7 @@ async function syncNow(owner: string, given?: readonly Task[]): Promise<ChoiceSy
   // nothing left to answer.
   for (const t of (await store.readThreads(owner)).threads) {
     if (t.choice?.board !== owner) continue;
-    choiceThreads.add(t.id);
+    seenThread(owner, t.id);
     if (Object.hasOwn(specs, t.choice.id)) continue;
     const where = t.movedTo ? await store.threadHolder(owner, t.id).catch(() => null) : { node: owner, thread: t };
     if (where && holdsChoice(where.thread)) await settle(where.node, t.id, { kind: 'moot', words: 'It is no longer on the Board: nothing to decide here.' });
@@ -83,10 +104,12 @@ async function syncNow(owner: string, given?: readonly Task[]): Promise<ChoiceSy
   const ended: string[] = [];
   for (const [id, spec] of Object.entries(specs)) {
     const threadId = choiceThreadId(owner, id);
-    choiceThreads.add(threadId);
     const holder = await store.threadHolder(owner, threadId).catch(() => null);
+    if (holder) seenThread(owner, threadId);
     const answer = board?.choices?.[id];
     if (answer) ended.push(threadId);
+    // A thread that holds it, closed or not: never a second one after it is deleted.
+    else if (holder) await noteHolder(holder.thread);
     if (answer || !keeps) {
       if (!holder || !holdsChoice(holder.thread)) continue;
       // Answered on the Board or on the card (either one is the Board's record), or the experiment went off.
@@ -95,8 +118,7 @@ async function syncNow(owner: string, given?: readonly Task[]): Promise<ChoiceSy
       if (outcome.kind === 'off') await noteHeld(threadId, 'choice', `${owner}/${id}`, 'off');
       continue;
     }
-    const aside = !!holder?.thread.choice?.off && !holder.thread.choice.done && (!!holder.thread.closed || holder.thread.state === 'needs');
-    if (holder && !aside) continue;
+    if (holder && !heldAside(holder.thread, 'choice')) continue;
     // It had a thread here that was deleted a week after it closed (held-threads.ts): never a second one.
     if (!holder && (await heldSeen(threadId)) === 'open') continue;
     const ref = spec.task?.trim();
@@ -109,10 +131,9 @@ async function syncNow(owner: string, given?: readonly Task[]): Promise<ChoiceSy
       by: `task:${owner}` as const, at,
     };
     const node = holder?.node ?? owner;
-    const changed = await store.writeThreadsFor(node, (cur) => {
-      const r = openChoiceThread(cur, input);
-      return { file: r.file, out: r.changed, ...(r.changed ? { changed: { kind: r.changed === 'opened' ? 'opened' as const : 'updated' as const, threadId } } : {}) };
-    });
+    // Known before the write, so the status pass hears the thread's change event as a choice's.
+    seenThread(owner, threadId);
+    const changed = await writeHeldThread(node, threadId, (cur) => openChoiceThread(cur, input));
     if (!changed) continue;
     out.opened++;
     await noteHeld(threadId, 'choice', `${owner}/${id}`, 'open');
@@ -127,23 +148,30 @@ async function syncNow(owner: string, given?: readonly Task[]): Promise<ChoiceSy
 
 /**
  * Every Board's choice threads made to match, then every thread still holding a choice of a Board
- * that is gone (boot, on or off, and every switch). Idempotent.
+ * that is gone (boot, on or off, and every switch). Off, only the Boards whose choices have a
+ * thread. Idempotent.
  */
 export async function syncAllChoiceThreads(): Promise<ChoiceSyncResult> {
   const out = NONE();
   const { isFollower } = await import('../server-role.js');
   if (isFollower()) return out;
-  const { listBoardTaskIds } = await import('./board-store.js');
-  const tasks = await (await import('../task-manager.js')).listTasks();
-  const boards = new Set(await listBoardTaskIds());
-  const add = (r: ChoiceSyncResult) => { out.opened += r.opened; out.settled += r.settled; };
-  for (const owner of boards) add(await syncBoardChoiceThreads(owner, tasks));
+  const on = await briefOffOn();
   const store = await import('../org/threads-store.js');
-  const gone = new Set<string>();
+  // Every Board a thread names, by any state of it: off, these are the only ones to settle.
+  const named = new Set<string>();
   for (const node of await store.threadTaskIds()) {
-    for (const t of (await store.readThreads(node)).threads) if (holdsChoice(t) && !boards.has(t.choice!.board)) gone.add(t.choice!.board);
+    for (const t of (await store.readThreads(node)).threads) {
+      if (t.choice && !t.movedTo) { named.add(t.choice.board); seenThread(t.choice.board, t.id); }
+    }
   }
-  for (const owner of gone) add(await syncBoardChoiceThreads(owner, tasks));
+  const { listBoardTaskIds } = await import('./board-store.js');
+  const owners = on ? new Set([...await listBoardTaskIds(), ...named]) : named;
+  if (!owners.size) return out;
+  const tasks = await (await import('../task-manager.js')).listTasks();
+  for (const owner of owners) {
+    const r = await syncBoardChoiceThreads(owner, tasks);
+    out.opened += r.opened; out.settled += r.settled;
+  }
   if (out.opened || out.settled) log.task.info('choice threads: synced', { ...out });
   return out;
 }
@@ -155,35 +183,13 @@ export async function syncAllChoiceThreads(): Promise<ChoiceSyncResult> {
  * miss shows a choice twice, never hides one.
  */
 export async function heldChoiceKeys(choices: ReadonlyArray<{ board: string; id: string }>): Promise<Set<string>> {
-  const held = new Set<string>();
-  if (!choices.length || !(await briefOffOn())) return held;
+  if (!choices.length || !(await briefOffOn())) return new Set();
   try {
-    const store = await import('../org/threads-store.js');
-    const { keepsThreads } = await import('../org/keeps-threads.js');
-    const { listTasksByIds } = await import('../task-manager.js');
-    const owners = new Map((await listTasksByIds([...new Set(choices.map((c) => c.board))])).map((t) => [t.id, t] as const));
-    const files = new Map<string, Awaited<ReturnType<typeof store.readThreads>>>();
-    const holders = new Map<string, string>();
-    for (const c of choices) {
-      const owner = owners.get(c.board);
-      if (!openTask(owner) || !keepsThreads(owner)) continue;
-      if (!files.has(c.board)) files.set(c.board, await store.readThreads(c.board));
-      const id = choiceThreadId(c.board, c.id);
-      const here = files.get(c.board)!.threads.find((t) => t.id === id);
-      if (!here) continue;
-      choiceThreads.add(id);
-      // It moved on with its work: where it lives now, on a node still open that keeps Threads.
-      const where = here.movedTo ? await store.threadHolder(c.board, id).catch(() => null) : { node: c.board, thread: here };
-      if (where && holdsChoice(where.thread)) holders.set(`${c.board}/${c.id}`, where.node);
-    }
-    const moved = [...new Set(holders.values())].filter((n) => !owners.has(n));
-    const nodes = new Map([...owners, ...(await listTasksByIds(moved)).map((t) => [t.id, t] as const)]);
-    for (const [key, node] of holders) {
-      const t = nodes.get(node);
-      if (openTask(t) && keepsThreads(t)) held.add(key);
-    }
-  } catch { held.clear(); }
-  return held;
+    const items = choices.map((c) => ({ key: `${c.board}/${c.id}`, node: c.board, threadId: choiceThreadId(c.board, c.id) }));
+    const { holders, counted } = await heldHolders(items, holdsChoice);
+    for (const [key] of holders) { const at = key.indexOf('/'); seenThread(key.slice(0, at), choiceThreadId(key.slice(0, at), key.slice(at + 1))); }
+    return counted;
+  } catch { return new Set(); }
 }
 
 /** Follow the Boards and the experiment switch (server boot, leader only). */
@@ -195,8 +201,8 @@ export function startChoiceThreads(opts: { firstMs?: number } = {}): { stop: () 
       const d = (event.data ?? {}) as { taskId?: unknown; kind?: unknown };
       // Only a page write, an answer or a delete moves a choice (user-status-sync.ts reads the same kinds).
       if (typeof d.taskId !== 'string' || !['html', 'choice', 'deleted'].includes(String(d.kind))) return;
-      // Off, only a Board whose threads Walnut opened has something to settle.
-      if (!on && !choiceThreads.size) return;
+      // Off, only a Board with a choice's thread has something to settle.
+      if (!on && !choiceBoards.has(d.taskId)) return;
       void syncBoardChoiceThreads(d.taskId);
     },
   });

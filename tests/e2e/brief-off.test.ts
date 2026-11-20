@@ -23,6 +23,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { WebSocket } from 'ws'
 import type { Server } from 'node:http'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
@@ -37,7 +38,7 @@ import { getSessionByClaudeId } from '../../src/core/session-tracker.js'
 import { ensureMainTask, ensureProjectLead } from '../../src/core/org/org-store.js'
 import { readThreads, writeThreadsFor } from '../../src/core/org/threads-store.js'
 import { syncAllChoiceThreads, syncBoardChoiceThreads } from '../../src/core/boards/choice-threads.js'
-import { setBoardHtml } from '../../src/core/boards/board-store.js'
+import { getBoard, setBoardHtml } from '../../src/core/boards/board-store.js'
 import { choiceThreadId } from '../../src/core/org/choice-thread-model.js'
 import { briefOffNow } from '../../src/core/org/brief-off.js'
 import { orgRoleLine } from '../../src/core/sessions/session-context.js'
@@ -84,6 +85,31 @@ async function statusOf(taskId: string) {
   await settleUserStatusSync()
   await syncUserStatuses(new Set([taskId]))
   return (await getTask(taskId)).user_status
+}
+
+function rpc(method: string, payload: unknown): Promise<{ ok: boolean; result?: Record<string, any>; error?: string }> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`)
+    const id = `t-${Math.random().toString(36).slice(2)}`
+    const timer = setTimeout(() => { ws.close(); reject(new Error(`rpc ${method} timed out`)) }, 20_000)
+    ws.once('error', reject)
+    ws.on('message', (raw: Buffer | string) => {
+      const frame = JSON.parse(raw.toString()) as { type: string; id?: string; ok?: boolean; error?: string; payload?: Record<string, any>; result?: Record<string, any> }
+      if (frame.type !== 'res' || frame.id !== id) return
+      clearTimeout(timer)
+      ws.close()
+      resolve({ ok: !!frame.ok, result: frame.payload ?? frame.result, error: frame.error })
+    })
+    ws.once('open', () => ws.send(JSON.stringify({ type: 'req', id, method, payload })))
+  })
+}
+
+/** The lead's Board file on disk (board-store.ts keeps one JSON per task). */
+async function boardPath(): Promise<string> {
+  const names = await fs.readdir(WALNUT_HOME, { recursive: true }) as string[]
+  const hit = names.find((n) => n.endsWith(`${path.sep}${leadId}.json`) && n.includes('board'))
+  if (!hit) throw new Error('no board file')
+  return path.join(WALNUT_HOME, hit)
 }
 
 const choiceHtml = (...choices: string[]) => `<html><body><h1>Garden</h1>${choices.join('')}</body></html>`
@@ -222,5 +248,49 @@ describe('the Brief off', () => {
     expect(await syncAllChoiceThreads()).toMatchObject({ opened: 0 })
     expect(await syncBoardChoiceThreads(leadId)).toMatchObject({ opened: 0 })
     expect(await threadOn('fence-wood')).toBeUndefined()
+  }, 60_000)
+
+  it('his words typed on a choice thread answer the choice, on the console and the phone; a bare yes picks only the recommended one', async () => {
+    const pathStone = '<walnut-choice id="path-stone" title="Gravel or flagstone for the path?" options="gravel:Gravel,flag:Flagstone" recommended="flag"></walnut-choice>'
+    const gateColor = '<walnut-choice id="gate-color" title="Paint the gate green or blue?" options="green:Green,blue:Blue"></walnut-choice>'
+    const benchWood = '<walnut-choice id="bench-wood" title="Oak or teak for the bench?" options="oak:Oak,teak:Teak"></walnut-choice>'
+    await setBoardHtml(leadId, choiceHtml(plantWhen(), waterHow(), pathStone, gateColor, benchWood), { by: `task:${leadId}` })
+    for (const c of ['path-stone', 'gate-color', 'bench-wood']) await vi.waitFor(async () => expect((await threadOn(c))?.state).toBe('needs'), { timeout: 20_000 })
+    // The console (session:send naming the thread): "K" picks the recommended option.
+    const k = await rpc('session:send', { sessionId: leadSid, message: 'K', threadId: choiceThreadId(leadId, 'path-stone'), userUuid: randomUUID() })
+    expect(k.ok).toBe(true)
+    expect(k.result?.answeredChoice).toMatchObject({ board: leadId, id: 'path-stone', threadId: choiceThreadId(leadId, 'path-stone') })
+    expect((await getBoard(leadId))?.choices?.['path-stone']).toMatchObject({ option: 'flag' })
+    expect(await threadOn('path-stone')).toMatchObject({ closed: { how: 'acked', by: 'human' }, choice: { done: true } })
+    // The phone (POST /sessions/:id/messages with threadId): the words name an option.
+    const phone = await api('POST', `/sessions/${leadSid}/messages`, { text: 'Blue', threadId: choiceThreadId(leadId, 'gate-color'), messageId: 'qm-choice-gate-1' })
+    expect(phone.status).toBe(202)
+    expect(phone.json.answeredChoice).toMatchObject({ id: 'gate-color' })
+    expect((await getBoard(leadId))?.choices?.['gate-color']).toMatchObject({ option: 'blue' })
+    // A bare yes on a choice that recommends nothing answers nothing: it stays a follow-up.
+    const yes = await rpc('session:send', { sessionId: leadSid, message: 'ok', threadId: choiceThreadId(leadId, 'bench-wood'), userUuid: randomUUID() })
+    expect(yes.ok).toBe(true)
+    expect(yes.result?.answeredChoice).toBeUndefined()
+    expect((await getBoard(leadId))?.choices?.['bench-wood']).toBeUndefined()
+    expect((await threadOn('bench-wood'))?.choice?.done).toBeUndefined()
+  }, 60_000)
+
+  it('a Board Walnut cannot read settles none of its choice threads', async () => {
+    const hedge = '<walnut-choice id="hedge-trim" title="Trim the hedge in spring or in fall?" options="spring:Spring,fall:Fall"></walnut-choice>'
+    await setBoardHtml(leadId, choiceHtml(plantWhen(), waterHow(), hedge), { by: `task:${leadId}` })
+    await vi.waitFor(async () => expect((await threadOn('hedge-trim'))?.state).toBe('needs'), { timeout: 20_000 })
+    const file = await boardPath()
+    const good = await fs.readFile(file, 'utf8')
+    await fs.writeFile(file, '{ "html": "<walnut-cho')
+    try {
+      expect(await syncBoardChoiceThreads(leadId)).toEqual({ opened: 0, settled: 0 })
+      expect(await threadOn('hedge-trim')).toMatchObject({ state: 'needs' })
+      expect((await threadOn('hedge-trim'))?.closed).toBeUndefined()
+    } finally {
+      await fs.writeFile(file, good)
+    }
+    // Read again, the Board still asks it: the thread still waits.
+    await syncBoardChoiceThreads(leadId)
+    expect(await threadOn('hedge-trim')).toMatchObject({ state: 'needs' })
   }, 60_000)
 })

@@ -200,6 +200,13 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
         res.status(202).json({ messageId: clientMessageId ?? `letter-${answered.letterId}`, answeredLetter: { id: answered.letterId, threadId: answered.threadId } })
         return
       }
+      // A thread holding a live Board choice: his words answer the choice on its Board (core/boards/choice-follow-up.ts).
+      const { answerChoiceOnThread } = await import('../../core/boards/choice-follow-up.js')
+      const chose = await answerChoiceOnThread({ taskId: record.taskId, threadId: sentThread, text, ...(savedPaths.length ? { images: savedPaths } : {}) })
+      if (chose) {
+        res.status(202).json({ messageId: clientMessageId ?? `choice-${chose.threadId}`, answeredChoice: { board: chose.board, id: chose.choiceId, threadId: chose.threadId } })
+        return
+      }
     }
     const outputMode = await prepareHintedSend(sessionId, record, enqueueText ?? text, {
       sentBy: routeSource('mobile', req.headers) === 'mobile' ? 'person' : 'agent', ...(voice ? { requested: { 'voice-reply': {} } } : {}),

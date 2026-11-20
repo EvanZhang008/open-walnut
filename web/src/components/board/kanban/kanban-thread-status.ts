@@ -3,7 +3,7 @@
  * state (needs > read > working > waiting, core/org/thread-groups.ts threadStateOf) in place of a
  * quieter status of the card's own. What the card knows for a fact now stays: a live prompt, a
  * failed session, a hand back, a stuck task, its own ask, a running turn, a worker below asking,
- * a completed task.
+ * a completed task, a red signal on its Board, its own wait (and until when), a stop, an open turn.
  * A thread state never outranks the card's own status either (a waiting thread does not hide a
  * Needs you), and a task with no open thread keeps its status. Pure.
  */
@@ -14,6 +14,7 @@ const TONE: Record<ThreadGroup, KanbanTone> = { needs: 'red', read: 'red', worki
 /** The card's own facts now: they outrank any status, a thread's too. */
 const FACT_KINDS: ReadonlySet<KanbanStatus['kind']> = new Set([
   'question', 'plan', 'permission', 'error', 'handed-back', 'stuck', 'needs', 'running', 'worker-below', 'done',
+  'board-signal', 'waiting', 'waiting-until', 'stopped', 'still-open',
 ]);
 const THREAD_RANK: Record<ThreadGroup, number> = { needs: 3, read: 3, working: 2, waiting: 1, done: 0 };
 /** How much a card's own status asks of him: red asks, green moves, the rest waits. */

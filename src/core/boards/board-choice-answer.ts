@@ -11,6 +11,9 @@ import { buildChoicePrompt, deliverBoardText, type BoardDelivery } from './board
 import { boardWriterStamp, type BoardCaller } from './board-team.js'
 import { briefOffNow } from '../org/brief-off.js'
 
+/** How long an answer waits for its choice's thread to settle (brief_off). */
+export const CHOICE_THREAD_WAIT_MS = 2_000
+
 export type ChoiceDelivery = BoardDelivery | { state: 'skipped'; reason: 'unchanged' | 'cleared' | 'self' }
 
 export async function answerBoardChoice(
@@ -37,7 +40,13 @@ export async function answerBoardChoice(
       caller.kind === 'human' ? undefined : { callerSid: caller.sessionId })
     result.choice = await markChoiceDelivery(boardTaskId, choiceId, result.choice, delivery.state !== 'stored')
   }
-  // brief_off: the choice's thread settles before the answer returns, so the card a click came from reads it at once.
-  if (briefOffNow()) await (await import('./choice-threads.js')).syncBoardChoiceThreads(boardTaskId)
+  // brief_off: the choice's thread settles before the answer returns, so the card a click came from
+  // reads it at once; a slow store never holds the answer past CHOICE_THREAD_WAIT_MS (the sync goes on).
+  if (briefOffNow()) {
+    const sync = import('./choice-threads.js').then((m) => m.syncBoardChoiceThreads(boardTaskId)).catch(() => undefined)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([sync, new Promise<void>((resolve) => { timer = setTimeout(resolve, CHOICE_THREAD_WAIT_MS); timer.unref?.() })])
+    clearTimeout(timer)
+  }
   return { choice: result.choice, delivery }
 }

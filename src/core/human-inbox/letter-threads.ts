@@ -22,8 +22,9 @@
 import { log } from '../../logging/index.js';
 import { experimentCache } from '../experimental-cache.js';
 import type { Task } from '../types.js';
-import { holdsLetter, letterThreadId, openLetterThread, settleLetterThread, type LetterOutcome } from '../org/letter-thread-model.js';
-import { forgetHeld, heldSeen, noteHeld, startHeldThreads } from '../org/held-threads.js';
+import { holdsLetter, letterThreadId, liveLetter, openLetterThread, settleLetterThread, type LetterOutcome } from '../org/letter-thread-model.js';
+import { heldAside } from '../org/held-thread-model.js';
+import { forgetHeld, heldHolders, heldSeen, noteHeld, noteHolder, startHeldThreads, writeHeldThread } from '../org/held-threads.js';
 import { awaitsUserDecision, userAnsweredInThread } from './open-decision.js';
 import { LETTER_TYPE_ROUTES, filesUpdatesAsThreads } from './letter-to-thread.js';
 import type { LetterRecord, LetterType } from './types.js';
@@ -135,8 +136,10 @@ async function syncNow(seen: LetterRecord, taskId: string, tasks?: readonly Task
   if (!l) return holder && holdsLetter(holder.thread) && (await settleGone(holder.node, id)) ? 'settled' : null;
   const waits = awaitsUserDecision(l);
   const at = new Date().toISOString();
-  const aside = !!holder?.thread.letter?.off && !holder.thread.letter.done && (!!holder.thread.closed || holder.thread.state === 'needs');
+  const aside = !!holder && heldAside(holder.thread, 'letter');
   const on = flag.now();
+  // A thread that holds it, closed or not (one written before the ledger was): never a second one after it is deleted.
+  if (waits && holder) await noteHolder(holder.thread);
   if (waits && on && (!holder || aside)) {
     if (!(await letterThreadTask(l, tasks))) return null;
     // It had a thread here that was deleted a week after it closed (held-threads.ts): never a second one.
@@ -151,10 +154,7 @@ async function syncNow(seen: LetterRecord, taskId: string, tasks?: readonly Task
       by: `task:${taskId}` as const, at,
     };
     const node = holder?.node ?? taskId;
-    const changed = await store.writeThreadsFor(node, (cur) => {
-      const r = openLetterThread(cur, input);
-      return { file: r.file, out: r.changed, ...(r.changed ? { changed: { kind: r.changed === 'opened' ? 'opened' as const : 'updated' as const, threadId: id } } : {}) };
-    });
+    const changed = await writeHeldThread(node, id, (cur) => openLetterThread(cur, input));
     if (changed) {
       await noteHeld(id, 'letter', l.id, 'open');
       log.notif.info('letter threads: a decision letter waits on its thread', { letterId: l.id, taskId: node, threadId: id, how: changed });
@@ -167,9 +167,9 @@ async function syncNow(seen: LetterRecord, taskId: string, tasks?: readonly Task
   const { WITHDRAWN_ACTION_ID } = await import('./store.js');
   const outcome: LetterOutcome | null = waits ? (on ? null : { kind: 'off' }) : letterOutcome(l, WITHDRAWN_ACTION_ID);
   if (!outcome) return null;
-  const done = await store.writeThreadsFor(holder.node, (cur) => {
+  const done = await writeHeldThread(holder.node, id, (cur) => {
     const r = settleLetterThread(cur, id, outcome, at);
-    return r ? { file: r.file, out: true, changed: { kind: 'updated' as const, threadId: id } } : { file: cur, out: false };
+    return r && { file: r.file, changed: 'settled' as const };
   });
   if (!done) return null;
   if (outcome.kind === 'off') await noteHeld(id, 'letter', l.id, 'off');
@@ -179,43 +179,48 @@ async function syncNow(seen: LetterRecord, taskId: string, tasks?: readonly Task
 
 /**
  * Every letter's thread made to match (the migration; run at boot, on or off, and on every
- * switch of it): each decision letter in the inbox, then each open thread still holding a
- * letter that left the inbox since. Idempotent: run twice, the second run changes nothing.
+ * switch of it). On: each decision letter in the inbox, then each thread still holding a letter
+ * that left the inbox since, closed ones included (the ledger records each). Off: only the threads
+ * still holding a live letter, to set them aside. Idempotent: run twice, the second run changes
+ * nothing.
  */
 export async function syncAllLetterThreads(): Promise<{ opened: number; settled: number }> {
   const out = { opened: 0, settled: 0 };
   const { isFollower } = await import('../server-role.js');
   if (isFollower()) return out;
-  await flag.on();
+  const started = new Date().toISOString();
+  const on = await flag.on();
   const inbox = await import('./store.js');
   const tasks = await (await import('../task-manager.js')).listTasks();
   const count = (d: Done) => { if (d === 'opened' || d === 'reopened') out.opened++; else if (d) out.settled++; };
-  const open = (await inbox.listLetters({ archived: false })).letters.filter((l) => l.type === 'action_required' && l.sender?.taskId);
-  for (const l of open) count(await syncLetterThread(l, tasks));
-  const seen = new Set(open.map((l) => l.id));
+  const seen = new Set<string>();
+  if (on) {
+    const open = (await inbox.listLetters({ archived: false })).letters.filter((l) => l.type === 'action_required' && l.sender?.taskId);
+    for (const l of open) { seen.add(l.id); count(await syncLetterThread(l, tasks)); }
+  }
   const store = await import('../org/threads-store.js');
   for (const node of await store.threadTaskIds()) {
     for (const t of (await store.readThreads(node)).threads) {
-      if (!holdsLetter(t) || seen.has(t.letter!.id)) continue;
-      seen.add(t.letter!.id);
-      const l = await inbox.getLetter(t.letter!.id, { deferBodies: true }).catch(() => null);
+      if (!t.letter || t.movedTo || seen.has(t.letter.id) || (on ? t.letter.done : !liveLetter(t))) continue;
+      seen.add(t.letter.id);
+      const l = await inbox.getLetter(t.letter.id, { deferBodies: true }).catch(() => null);
       if (l) count(await syncLetterThread(l, tasks));
       else if (await settleGone(node, t.id)) out.settled++;
     }
   }
-  // A letter that left the inbox since needs no record of its thread.
-  await forgetHeld((e) => e.kind === 'letter' && !seen.has(e.key));
+  // A letter that left the inbox since needs no record of its thread. Off, the sweep saw only some
+  // letters, so it forgets none; an entry written since the sweep began is a letter it never saw.
+  if (on) await forgetHeld((e) => e.kind === 'letter' && !seen.has(e.key) && e.at < started);
   if (out.opened || out.settled) log.notif.info('letter threads: synced', out);
   return out;
 }
 
 /** The letter is gone from the store (deleted by hand): its thread has nothing left to answer. */
 async function settleGone(node: string, threadId: string): Promise<boolean> {
-  const store = await import('../org/threads-store.js');
-  return store.writeThreadsFor(node, (cur) => {
+  return !!(await writeHeldThread(node, threadId, (cur) => {
     const r = settleLetterThread(cur, threadId, { kind: 'moot', words: 'Its letter is no longer in the inbox: nothing to decide here.' }, new Date().toISOString());
-    return r ? { file: r.file, out: true, changed: { kind: 'updated' as const, threadId } } : { file: cur, out: false };
-  });
+    return r && { file: r.file, changed: 'settled' as const };
+  }));
 }
 
 /**
@@ -228,30 +233,13 @@ export async function heldLetterIds(letters: readonly Pick<LetterRecord, 'id' | 
   const held = new Set<string>();
   if (!letters.length || !(await lettersAsThreadsOn())) return held;
   try {
-    const store = await import('../org/threads-store.js');
-    const files = new Map<string, Awaited<ReturnType<typeof store.readThreads>>>();
-    /** Letter id -> the node its thread waits on him from. */
-    const holders = new Map<string, string>();
-    for (const l of letters) {
-      const taskId = l.sender?.taskId;
-      if (!taskId) continue;
-      if (!files.has(taskId)) files.set(taskId, await store.readThreads(taskId));
-      const id = letterThreadId(l.id);
-      const here = files.get(taskId)!.threads.find((x) => x.id === id);
-      if (!here) continue;
-      // It moved on with its work: where it lives now.
-      const where = here.movedTo ? await store.threadHolder(taskId, id).catch(() => null) : { node: taskId, thread: here };
-      if (where && holdsLetter(where.thread) && where.thread.letter!.id === l.id) { holders.set(l.id, where.node); letterThreads.add(id); }
-    }
+    const items = letters.flatMap((l) => (l.sender?.taskId ? [{ key: l.id, node: l.sender.taskId, threadId: letterThreadId(l.id) }] : []));
+    const { holders, counted } = await heldHolders(items, (t) => holdsLetter(t) && items.some((i) => i.key === t.letter!.id && i.threadId === t.id));
+    for (const letterId of holders.keys()) letterThreads.add(letterThreadId(letterId));
     holderTasks = new Set(holders.values());
-    if (!holders.size) return held;
-    const { listTasksByIds } = await import('../task-manager.js');
-    const { keepsThreads } = await import('../org/keeps-threads.js');
     // Counted only where its node's threads are counted (user-status-sync.ts readNodeThreads):
     // a task that stopped keeping Threads, or completed, shows the letter again.
-    const open = new Set((await listTasksByIds([...new Set(holders.values())]))
-      .filter((t) => keepsThreads(t) && t.phase !== 'COMPLETE' && t.status !== 'done').map((t) => t.id));
-    for (const [letterId, node] of holders) if (open.has(node)) held.add(letterId);
+    for (const letterId of counted) held.add(letterId);
   } catch { held.clear(); }
   return held;
 }

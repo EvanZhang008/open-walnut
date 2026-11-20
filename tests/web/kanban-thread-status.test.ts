@@ -23,7 +23,7 @@ describe('the chip from the task\'s threads', () => {
   });
 
   it('the card\'s own facts stay, a thread never outranks its status, and a closed thread is no status', () => {
-    for (const kind of ['question', 'plan', 'permission', 'error', 'handed-back', 'stuck', 'needs', 'running', 'worker-below', 'done'] as const) {
+    for (const kind of ['question', 'plan', 'permission', 'error', 'handed-back', 'stuck', 'needs', 'running', 'worker-below', 'done', 'board-signal', 'waiting', 'waiting-until', 'stopped', 'still-open'] as const) {
       const own: KanbanStatus = { text: 'Own', tone: kind === 'running' ? 'green' : 'red', kind, tooltip: '' };
       expect(threadCardStatus(own, thread('needs')), kind).toBe(own);
     }

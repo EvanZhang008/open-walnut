@@ -280,4 +280,23 @@ describe('decision letters wait on the thread', () => {
     expect(await syncAllLetterThreads()).toMatchObject({ opened: 0 })
     expect(await threadsOfLetter(late)).toHaveLength(1)
   })
+
+  it('a closed thread written before the ledger existed is recorded by the boot sweep, so it is never opened again', async () => {
+    const prune = (node: string, id: string) => writeThreadsFor(node, (cur) => ({ file: { ...cur, threads: cur.threads.filter((t) => t.id !== id) }, out: true }))
+    const old = await decide(trees, 'Prune the plums in winter or in summer?', ['Winter', 'Summer'])
+    await vi.waitFor(async () => expect(await threadOf(old)).toMatchObject({ state: 'needs' }), { timeout: 10_000, interval: 200 })
+    expect((await api('PATCH', `/tasks/${trees.taskId}/threads/${letterThreadId(old)}`, { close: 'dropped' })).status).toBe(200)
+    // An older build wrote this thread and kept no ledger: no record of it.
+    const ledgerPath = path.join(WALNUT_HOME, 'org', 'held-threads.json')
+    const before = JSON.parse(await fs.readFile(ledgerPath, 'utf8')) as { version: 1; entries: Record<string, unknown> }
+    delete before.entries[letterThreadId(old)]
+    await fs.writeFile(ledgerPath, JSON.stringify(before))
+    expect(await syncAllLetterThreads()).toMatchObject({ opened: 0 })
+    const ledger = JSON.parse(await fs.readFile(ledgerPath, 'utf8')) as { entries: Record<string, { key: string; state: string }> }
+    expect(ledger.entries[letterThreadId(old)]).toMatchObject({ key: old, state: 'open' })
+    await prune(trees.taskId, letterThreadId(old))
+    expect(await syncAllLetterThreads()).toMatchObject({ opened: 0 })
+    expect(await syncLetterThread((await getLetter(old))!)).toBeNull()
+    expect(await threadsOfLetter(old)).toEqual([])
+  })
 })

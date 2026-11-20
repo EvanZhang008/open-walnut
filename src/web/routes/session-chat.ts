@@ -266,6 +266,13 @@ export function registerSessionChatRpc(): void {
         throw new Error(`Your answer is on the letter but did not reach the task${answered.delivery.reason ? ` (${answered.delivery.reason})` : ''}. Retry to send it again.`)
       }
       if (answered) return { messageId: `letter-${answered.letterId}`, answeredLetter: { id: answered.letterId, threadId: answered.threadId } }
+      // A thread holding a live Board choice: his words answer the choice on its Board (core/boards/choice-follow-up.ts).
+      const { answerChoiceOnThread } = await import('../../core/boards/choice-follow-up.js')
+      const chose = await answerChoiceOnThread({
+        taskId: record.taskId, threadId: sentThread, text: data.message as string,
+        ...(savedPaths.length ? { images: savedPaths } : {}), ...(confirmOnly ? { confirmOnly } : {}),
+      })
+      if (chose) return { messageId: `choice-${chose.threadId}`, answeredChoice: { board: chose.board, id: chose.choiceId, threadId: chose.threadId } }
     }
     // A client asking whether a lost send answered a letter never enqueues anything.
     if (data.confirmLetterAnswer === true) return { notKept: true }

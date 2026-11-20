@@ -55,6 +55,8 @@ export interface SendAck {
   /** His words answered the decision letter the named thread holds (core/org/letter-follow-up.ts):
    *  they reach the session as that letter's answer, never as this chat message. */
   answeredLetter?: { id: string; threadId: string };
+  /** His words answered the Board choice the named thread holds (core/boards/choice-follow-up.ts). */
+  answeredChoice?: { board: string; id: string; threadId: string };
 }
 
 const KEPT_MAX = 200;
