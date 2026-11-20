@@ -5,9 +5,11 @@
    or a half"): --session-top-room, a third of the body measured as it resizes (SessionActionStrip
    useTopRoom), the body's own share before the first measure. It never scrolls as a whole
    (the reply box's @ and / lists open over the chat below it): what gives way is the card's long
-   words (its summary, its unread answers, its open conversation), each scrolling in its own block,
-   while the strip's items keep at most about 30% of the room (they scroll as one block beyond
-   it), and the stepper, the card's head, its choices, its box and its buttons stay in sight. */
+   words (its summary, its unread answers, its open conversation), each scrolling in its own block
+   down to a floor of about three lines (SessionActionStrip floorWords, set inline as min-height),
+   the top growing from a third to a half when the floors need it, while the strip's items keep at
+   most about 30% of the room (they scroll as one block beyond it), and the stepper, the card's
+   head, its choices, its box and its buttons stay in sight. */
 .session-top {
   flex: none; display: flex; flex-direction: column; gap: 4px; margin: 0 8px; min-width: 0;
   max-height: var(--session-top-room, calc(100% / 3)); min-height: 0;
@@ -27,19 +29,19 @@
 .top-thread-list > .org-thread > :is(.org-thread-summary, .org-thread-unread, .org-thread-conversation),
 .top-thread-list .org-thread-held-ask > .org-thread-summary { flex: 0 1 auto; min-height: 1.25em; overflow-y: auto; overscroll-behavior: contain; }
 .top-thread-list .org-thread-held-ask { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
-/* Too little room for all of it (SessionActionStrip ROOM_LEVELS, data-room), each level folding
-   more away. Tight: the card's long words (the strip keeps its row or so and scrolls). Lean (a
-   phone's short body): the strip too, its letters still in Needs you and the inbox, and the card
-   keeps its title on one line, its choices and its box. Min (a phone with its keyboard up): only
+/* Too little room for all of it even in a half (SessionActionStrip ROOM_LEVELS, data-room), each
+   level folding more away. Snug: the strip (its letters still in Needs you and the inbox), the
+   card's words keeping two lines each. Lean (a phone's short body): the card's words too; the
+   card keeps its title on one line, its choices and its box. Min (a phone with its keyboard up): only
    that title line and the box, taking what they need even past the share, so the words he types
    stay in sight, under the question they answer, and nothing runs over the chat. Box: the box
    alone, when even that is too much. */
-.session-top:is([data-room="tight"], [data-room="lean"], [data-room="min"], [data-room="box"]) .top-thread-list :is(.org-thread-summary, .org-thread-unread, .org-thread-conversation),
+.session-top:is([data-room="lean"], [data-room="min"], [data-room="box"]) .top-thread-list :is(.org-thread-summary, .org-thread-unread, .org-thread-conversation),
 .session-top:is([data-room="lean"], [data-room="min"], [data-room="box"]) .top-thread-list > .org-thread > :not(.ask-card, .org-thread-follow, .org-thread-held-ask, .org-thread-head),
 .session-top:is([data-room="lean"], [data-room="min"], [data-room="box"]) .top-thread-list .org-thread-head > :not(.org-thread-title),
 .session-top:is([data-room="lean"], [data-room="min"], [data-room="box"]) .top-thread-list .ask-card > :not(.ask-card-answer),
 .session-top:is([data-room="lean"], [data-room="min"], [data-room="box"]) .top-thread-list :is(.ask-card-tools, .org-thread-held-ask > :not(.ask-card)),
-.session-top:is([data-room="lean"], [data-room="min"], [data-room="box"]) > .action-needed.is-strip,
+.session-top:is([data-room="snug"], [data-room="lean"], [data-room="min"], [data-room="box"]) > .action-needed.is-strip,
 .session-top:is([data-room="min"], [data-room="box"]) :is(.top-thread-bar, .top-thread-list .org-answer-options),
 .session-top[data-room="box"] .top-thread-list .org-thread-head { display: none; }
 .session-top:is([data-room="lean"], [data-room="min"]) .top-thread-list .org-thread-title { grid-row: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

@@ -143,10 +143,28 @@ test('on: the subtask\'s thread shows on its lead, and his reply there wakes the
   expect(own.threads.filter((t) => t.id === ids.thread).map((t) => t.owner?.task_id)).toEqual([ids.owner])
   await shot(page, '1-popped')
 
-  // 2. He answers in the card, typing as a person does.
-  await popped.getByTestId('org-thread-popped-input').click()
+  // 2. He answers in the card, typing as a person does. A send the server refuses keeps his words
+  //    in the box with the reason, and reads nothing as sent.
+  const input = popped.getByTestId('org-thread-popped-input')
+  await input.click()
   await page.keyboard.type(REPLY, { delay: 20 })
+  const replies = `**/api/v1/tasks/${ids.lead}/threads`
+  await page.route(replies, (route) => route.request().method() === 'POST'
+    ? route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: 'test: refused once' }) })
+    : route.fallback())
   await popped.getByTestId('org-thread-popped-send').click()
+  await expect(popped.getByTestId('org-thread-popped-failed')).toBeVisible({ timeout: 5_000 })
+  await expect(input).toHaveValue(REPLY)
+  await expect(popped.getByTestId('org-thread-popped-sent')).toHaveCount(0)
+  await page.unroute(replies)
+  // Sent again: the card says at once (within a second of the click) that his words went, echoing
+  // them, and that the task has not read them yet; the box is clear.
+  await popped.getByTestId('org-thread-popped-send').click()
+  const sent = popped.getByTestId('org-thread-popped-sent')
+  await expect(sent).toBeVisible({ timeout: 1_000 })
+  await expect(sent.getByTestId('org-thread-popped-sent-words')).toHaveText(REPLY)
+  await expect(sent.getByTestId('org-thread-unread-by-task')).toHaveText(new RegExp(`^Sent: Task status foundation ${STAMP} has (not read it yet|read it)\\.$`))
+  await expect(popped.getByTestId('org-thread-popped-failed')).toHaveCount(0)
   await shot(page, '2-sent')
 
   // The words land in the subtask's own thread and reach its session, which reads them.

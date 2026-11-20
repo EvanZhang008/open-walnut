@@ -13,6 +13,10 @@
  *   2. The long summary scrolls inside the card (its own scroll, not the page's).
  *   3. A shorter window: still a third of the new height (a share of the body, never a fixed size).
  *   4. Hide makes the top one line; Show brings the card back, held to the same third.
+ *   6. A 1280 x 800 window (2026-11-20, the proof recording: the stepper, head, box and buttons
+ *      filled the third and the summary got 0 px): the summary keeps at least two lines, the top
+ *      growing to at most a half for it; "Conversation" opens a list that shows and scrolls inside
+ *      the card, the top still within a half.
  *   5. A phone with its keyboard up (2026-11-20 review: the body shrinks to a few lines while the
  *      stepper, the choices and the box kept their size and ran over the chat): the strip and the
  *      card's words fold away, the box he types in stays in sight, and nothing runs over the chat.
@@ -62,14 +66,32 @@ const LONG = Array.from({ length: 14 }, (_, i) => `Step ${i + 1}: the release no
 
 const box = async (l: Locator) => (await l.boundingBox())!
 
-/** The top block's height against its panel body's, and what must stay in sight. */
-async function measure(page: Page, panel: Locator): Promise<void> {
+/** How much of a block shows, in lines of its own text, and whether it scrolls inside itself. */
+async function linesShown(l: Locator): Promise<{ lines: number; scrolls: boolean; overflow: string }> {
+  return l.evaluate((el) => {
+    const cs = getComputedStyle(el)
+    const line = parseFloat(cs.lineHeight) || (parseFloat(cs.fontSize) || 13) * 1.45
+    const pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0)
+    return { lines: (el.clientHeight - pad) / line, scrolls: el.scrollHeight > el.clientHeight + 1, overflow: cs.overflowY }
+  })
+}
+
+/** The top block's height against its panel body's (a third, or a half when the summary's floor
+ *  needs it), the summary's lines, and what must stay in sight. */
+async function measure(page: Page, panel: Locator, share: 3 | 2 = 3): Promise<void> {
   const top = panel.getByTestId('session-top')
   const body = panel.locator('.session-panel-body')
   await expect(top).toBeVisible()
   await page.waitForTimeout(300)
+  await expect(top).toHaveAttribute('data-room', 'full')
   const [t, b] = [await box(top), await box(body)]
-  expect(t.height, `top ${t.height} of body ${b.height}`).toBeLessThanOrEqual(b.height / 3 + 1)
+  expect(t.height, `top ${t.height} of body ${b.height}`).toBeLessThanOrEqual(b.height / share + 1)
+  // The words he must read: at least two lines of the summary, inside the top block.
+  const summary = panel.getByTestId('top-thread').locator('.org-thread-summary').first()
+  await expect(summary).toBeVisible()
+  expect((await linesShown(summary)).lines, 'the summary shows at least two lines').toBeGreaterThanOrEqual(2)
+  const s = await box(summary)
+  expect(s.y + s.height).toBeLessThanOrEqual(t.y + t.height + 1)
   // The chat keeps the rest of the body, in sight.
   const history = panel.locator('.session-history').first()
   await expect(history).toBeVisible()
@@ -109,7 +131,7 @@ test.beforeAll(async ({ request }) => {
     const { thread } = await call<{ thread: { id: string } }>(request, 'post', `/api/v1/tasks/${ids.task}/threads`, { text: `${title} ${STAMP}, how does it stand?` })
     await call(request, 'patch', `/api/v1/tasks/${ids.task}/threads/${thread.id}`, { title: `${title} ${STAMP}`, reply: `${title}: done, the notes are in.`, state: 'answered' })
   }
-  const { thread } = await call<{ thread: { id: string } }>(request, 'post', `/api/v1/tasks/${ids.task}/threads`, { text: `Release the Mac app ${STAMP}?` })
+  const { thread } = await call<{ thread: { id: string } }>(request, 'post', `/api/v1/tasks/${ids.task}/threads`, { text: `Release the Mac app ${STAMP}? ${LONG.slice(0, 700)}` })
   ids.thread = thread.id
   await call(request, 'patch', `/api/v1/tasks/${ids.task}/threads/${thread.id}`, {
     title: `Release the Mac app ${STAMP}`, reply: `Release the new Mac app now? I recommend it.\n\n${LONG}`, state: 'needs', ...WHY,
@@ -164,10 +186,10 @@ test('the top keeps to a third of the panel: the long summary scrolls in its car
   await measure(page, panel)
   await video.hold(1000)
 
-  // 3. A shorter window: a third of the new height.
+  // 3. A shorter window: a share of the new height (a half at most, for the summary's lines).
   await page.setViewportSize({ width: 1280, height: 1000 })
-  await video.caption('A shorter window: still a third')
-  await measure(page, panel)
+  await video.caption('A shorter window: a third, or a half so the summary keeps its lines')
+  await measure(page, panel, 2)
   await page.screenshot({ path: `${SHOTS}/2-shorter.png` })
   await video.hold(1000)
   await page.setViewportSize({ width: 1280, height: 1550 })
@@ -186,6 +208,45 @@ test('the top keeps to a third of the panel: the long summary scrolls in its car
   await measure(page, panel)
   await video.hold(1200)
   await video.stop('top-thread-room')
+  expect(errors).toEqual([])
+})
+
+test('a 1280 x 800 window: the summary keeps its lines within a half, and the conversation opens and scrolls inside the card', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(e.message))
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await isolateUiPrefs(page)
+  await seedColumns(page, [ids.sid])
+  await loadHome(page)
+  const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${ids.sid}"]`)
+  await expect(panel).toBeVisible({ timeout: 30_000 })
+  const card = panel.getByTestId('top-thread')
+  await expect(card).toHaveAttribute('data-thread-id', ids.thread, { timeout: 30_000 })
+  // 6. The summary keeps at least two lines, the top within a half, the choices and the box in sight.
+  await measure(page, panel, 2)
+  await page.screenshot({ path: `${SHOTS}/4-800-summary.png` })
+  // "Conversation" opens a list that shows and scrolls inside the card, the top still within a half.
+  await card.getByTestId('org-thread-history').click()
+  const list = card.getByTestId('org-thread-messages')
+  await expect(list).toBeVisible()
+  await page.waitForTimeout(400)
+  const top = panel.getByTestId('session-top')
+  const [t, b, l] = [await box(top), await box(panel.locator('.session-panel-body')), await box(list)]
+  expect(t.height, `top ${t.height} of body ${b.height}`).toBeLessThanOrEqual(b.height / 2 + 1)
+  const shown = await linesShown(list)
+  expect(shown.overflow).toBe('auto')
+  expect(l.height, 'the conversation shows at least two lines').toBeGreaterThanOrEqual(36)
+  expect(l.y + l.height).toBeLessThanOrEqual(t.y + t.height + 1)
+  expect(shown.scrolls, 'the long request scrolls inside the list').toBe(true)
+  await list.hover()
+  for (let i = 0; i < 4; i++) { await page.mouse.wheel(0, 160); await page.waitForTimeout(120) }
+  expect(await list.evaluate((el) => el.scrollTop)).toBeGreaterThan(0)
+  // The box he answers in is still in sight.
+  await expect(card.getByTestId('org-thread-follow-input')).toBeVisible()
+  const i = await box(card.getByTestId('org-thread-follow-input'))
+  expect(i.y + i.height).toBeLessThanOrEqual(t.y + t.height + 1)
+  await page.screenshot({ path: `${SHOTS}/5-800-conversation.png` })
+  await card.getByTestId('org-thread-history').click()
   expect(errors).toEqual([])
 })
 
@@ -219,7 +280,7 @@ test.describe('a phone with its keyboard up', () => {
       expect(h.height, 'the chat keeps a line or two').toBeGreaterThan(40)
     }
     // No keyboard: the card keeps its choices, in at most half the body.
-    await expect(top).toHaveAttribute('data-room', /full|tight|lean/)
+    await expect(top).toHaveAttribute('data-room', /full|lean/)
     await expect(card.getByTestId('org-answer-option').first()).toBeVisible()
     expect((await box(top)).height).toBeLessThanOrEqual((await box(body)).height / 2 + 1)
     await fits()
@@ -244,7 +305,7 @@ test.describe('a phone with its keyboard up', () => {
     await fits()
     // The keyboard goes down: everything again.
     await setKeyboardInset(page, 0)
-    await expect(top).toHaveAttribute('data-room', /full|tight|lean/)
+    await expect(top).toHaveAttribute('data-room', /full|lean/)
     await expect(input).toHaveValue('Hold it')
     await video.caption('Keyboard down: everything again, his words still in the box')
     await video.hold(1200)

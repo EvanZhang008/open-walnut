@@ -28,26 +28,38 @@ export const SessionActionStrip = memo(function SessionActionStrip({ task, sessi
 
 /**
  * How much of the top still shows, tried in order until it fits: everything in a third of the
- * body; then the strip and the card's long words fold away, in a third, then in a half (a phone's
- * body is short: "at most a third or a half"); then the card keeps only its title line, its
- * choices and its box (lean); then only that title line and the box (min); then the box alone (a
- * phone with its keyboard up leaves a body of a few lines: the box he is typing in stays in sight,
- * the chat keeps the rest). Read by top-thread.css as data-room.
+ * body, then in a half (2026-11-20, the user: "at most a third or a half"), the card's words (its
+ * summary, its unread answers, its open conversation) each keeping a floor of WORDS_FLOOR_LINES
+ * lines and scrolling inside it: the text he must read is never the part that folds to nothing
+ * while the rest of the card shows (2026-11-20, a 1280 x 800 window read a needs card with no
+ * summary at all). Then, in a half, the strip folds away (its letters still in Needs you and the
+inbox) and each block keeps two lines (snug: an open conversation beside the summary, at 800 px
+tall). Then the card keeps only its title line, its choices and its box (lean); then
+ * only that title line and the box (min); then the box alone (a phone with its keyboard up leaves a
+ * body of a few lines: the box he is typing in stays in sight, the chat keeps the rest). Read by
+ * top-thread.css as data-room.
  */
 const ROOM_LEVELS = [
-  { room: 'full', share: 3 }, { room: 'tight', share: 3 }, { room: 'tight', share: 2 }, { room: 'lean', share: 2 },
-  { room: 'min', share: 3 }, { room: 'box', share: 3 },
+  { room: 'full', share: 3, floor: 3 }, { room: 'full', share: 2, floor: 3 }, { room: 'snug', share: 2, floor: 2 },
+  { room: 'lean', share: 2, floor: 0 }, { room: 'min', share: 3, floor: 0 }, { room: 'box', share: 3, floor: 0 },
 ] as const;
 /** The most a level with no cap (min) may take of the body before the next one is tried. */
 const MIN_SHARE = 0.6;
+/** The card's words that give way, each down to its level's floor of lines (top-thread.css scrolls them). */
+const WORDS = '.top-thread-list :is(.org-thread-summary, .org-thread-unread, .org-thread-conversation)';
 
-/**
- * The room the top may take: a share of the panel's body it sits in, kept as --session-top-room
- * while the body resizes (2026-11-20, the user: "one thing takes up all of my space ... at most a
- * third or a half"), and the level of ROOM_LEVELS that fits it. Never a fixed size; top-thread.css
- * splits it. Re-fitted on the next frame when the body resizes or the top's own content changes
- * (never inside the observer, which would loop on its own change).
- */
+/** Each block of the card's words keeps `lines` lines, or all of it when shorter (0: no floor, the level hides them). */
+function floorWords(top: HTMLElement, lines: number): void {
+  for (const w of top.querySelectorAll<HTMLElement>(WORDS)) {
+    w.style.minHeight = '';
+    if (!lines) continue;
+    const cs = getComputedStyle(w);
+    const line = parseFloat(cs.lineHeight) || (parseFloat(cs.fontSize) || 13) * 1.45;
+    const pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+    w.style.minHeight = `${Math.ceil(Math.min(w.scrollHeight, lines * line + pad))}px`;
+  }
+}
+
 function useTopRoom(shown: boolean) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -59,6 +71,9 @@ function useTopRoom(shown: boolean) {
       for (const [i, level] of ROOM_LEVELS.entries()) {
         el.style.setProperty('--session-top-room', `${Math.floor(h / level.share)}px`);
         el.dataset.room = level.room;
+        // Measured while the level shows them (full and snug show every block).
+        floorWords(el, level.floor);
+        el.dataset.share = String(level.share);
         if (i === ROOM_LEVELS.length - 1) break;
         if (level.room === 'min' ? el.offsetHeight <= h * MIN_SHARE : el.scrollHeight <= el.clientHeight + 1) break;
       }

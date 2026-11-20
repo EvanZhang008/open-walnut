@@ -108,10 +108,11 @@ export async function patchOrgThread(taskId: string, threadId: string, patch: Or
   return res.thread;
 }
 
-/** His reply on a thread of a task below this node: filed on that task's thread and sent to it. */
-export async function replyOnOrgThread(taskId: string, threadId: string, text: string, askId?: string, key?: string): Promise<OrgThread> {
-  const res = await apiPost<{ thread: OrgThread }>(base(taskId), { text, thread: threadId, ...(askId ? { ask_id: askId } : {}), ...(key ? { key } : {}) });
-  return res.thread;
+/** His reply on a thread of a task below this node: filed on that task's thread and sent to it.
+ *  Answers the thread and his message as filed (its id and its delivery so far). */
+export async function replyOnOrgThread(taskId: string, threadId: string, text: string, askId?: string, key?: string): Promise<{ thread: OrgThread; message?: OrgThreadMessage }> {
+  const res = await apiPost<{ thread: OrgThread; message?: OrgThreadMessage }>(base(taskId), { text, thread: threadId, ...(askId ? { ask_id: askId } : {}), ...(key ? { key } : {}) });
+  return { thread: res.thread, ...(res.message ? { message: res.message } : {}) };
 }
 
 export async function splitOrgThread(taskId: string, threadId: string, messageId: string): Promise<OrgThread> {
