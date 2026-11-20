@@ -250,6 +250,9 @@ async function readNodeThreads(tasks: readonly Task[]): Promise<Map<string, Thre
   if (!nodes.length) return out;
   const { readThreads, withTaskAsks } = await import('./org/threads-store.js');
   const { threadCounts } = await import('./org/thread-view.js');
+  const { poppedIndex, threadsPopUpNow } = await import('./org/thread-popup.js');
+  // threads_pop_up: one read of every owner for the whole pass, never one per node (org/thread-popup.ts).
+  let below: ReturnType<typeof poppedIndex> | undefined;
   // A targeted status pass may contain only the lead. Its linked owners still belong in the read.
   let all: readonly Task[] | undefined;
   const now = Date.now();
@@ -272,7 +275,14 @@ async function readNodeThreads(tasks: readonly Task[]): Promise<Map<string, Thre
     const counts = await safely('threads', async () => {
       // The tasks as they are now: one read a pass, shared by every node.
       all ??= await (await import('./task-manager.js')).listTasks();
-      return threadCounts(await withTaskAsks(t.id, threads, all), now);
+      const own = await withTaskAsks(t.id, threads, all);
+      if (!threadsPopUpNow()) return threadCounts(own, now);
+      // What waits on him below counts here too, never as this task's Needs you (thread-view.ts threadCounts).
+      const listed = (await (below ??= poppedIndex({ all }))).byViewer.get(t.id) ?? [];
+      const owners = threadOwners.get(t.id) ?? new Set<string>();
+      for (const p of listed) owners.add(p.owner.task_id);
+      threadOwners.set(t.id, owners);
+      return threadCounts([...own, ...listed], now);
     }, null);
     if (counts && counts.shown > 0) out.set(t.id, counts);
   }
@@ -1261,6 +1271,7 @@ function markAll(): void {
 
 /** The experiment's value as of the last config change seen (undefined: none seen yet). */
 let followWorkersSeen: boolean | undefined;
+let popUpSeen: boolean | undefined;
 
 async function experimentSwitched(): Promise<boolean> {
   const { getConfig } = await import('./config-manager.js');
@@ -1273,7 +1284,15 @@ async function experimentSwitched(): Promise<boolean> {
   const every = experimentalEnabled(flags, 'task_threads');
   const threadsMoved = threadsForEveryTask() !== every;
   setThreadsForEveryTask(every);
-  return moved || threadsMoved;
+  // Threads pop up (org/thread-popup.ts): a switch moves every node's counts. Its own record of
+  // the value, since a route's read of the config sets the shared one too.
+  const { setThreadsPopUp } = await import('./org/thread-popup.js');
+  const popUp = experimentalEnabled(flags, 'threads_pop_up');
+  const popMoved = popUpSeen !== undefined && popUpSeen !== popUp;
+  popUpSeen = popUp;
+  setThreadsPopUp(popUp);
+  if (popMoved) threadsChanged();
+  return moved || threadsMoved || popMoved;
 }
 
 function onEvent(event: { name: string; data: unknown; source?: string }): void {
@@ -1359,6 +1378,7 @@ function onEvent(event: { name: string; data: unknown; source?: string }): void 
     // A node's Threads moved: its own status (a thread waiting on the user is its Needs you).
     case EventNames.ORG_THREADS_CHANGED:
       // Acted on by hand (the Org page, the phone, a node's own op): the fast lane, its dot moves now.
+      // (threads_pop_up: the nodes above a task hear its change as their own: org/thread-reply.ts.)
       if (typeof d.taskId === 'string') { threadsChanged(d.taskId); markNow(d.taskId); } else { threadsChanged(); markAll(); }
       return;
   }

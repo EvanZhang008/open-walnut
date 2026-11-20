@@ -424,7 +424,7 @@ export function startThreadFollow(opts: { debounceMs?: number; firstMs?: number 
       const d = event.data as { task?: FollowTask | null; taskIds?: string[]; kind?: string } | undefined;
       if (event.name === EventNames.ORG_THREADS_CHANGED) {
         // Its own moves and answers read from a chat change no task list.
-        if (d?.kind !== 'moved' && d?.kind !== 'answered') schedule();
+        if (d?.kind !== 'moved' && d?.kind !== 'answered' && d?.kind !== 'below') schedule();
         return;
       }
       const task = d?.task;

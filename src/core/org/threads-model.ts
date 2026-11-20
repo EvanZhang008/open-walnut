@@ -53,6 +53,7 @@ import { PICTURE_TITLE_WORDS } from '../human-inbox/walnut-letters/receipt-words
 import { pinnedFirst, hasThreadNews, threadReactionAt } from './thread-view.js';
 import { sameDecisionWords } from '../ask-decision.js';
 import crypto from 'node:crypto';
+import { threadsPopUpNow } from './thread-popup-rules.js';
 
 export const THREAD_STATES = ['new', 'working', 'needs', 'answered', 'pending'] as const;
 export type ThreadState = typeof THREAD_STATES[number];
@@ -105,6 +106,35 @@ export interface ThreadMessage {
   answer?: ThreadAnswer;
   /** What was visible when the user reacted; kept through split, merge and move. */
   readAt?: string;
+  /** His reply from a card above the task that owns the thread, on its way to that task's session (thread-reply.ts). */
+  delivery?: ThreadDelivery;
+  /** The ask this reply answers (OrgThread.askId as his card showed it); `stale`: the thread asked something else by then. */
+  answers?: { ask_id: string; stale?: boolean };
+}
+
+/**
+ * A reply's way to the owner's session (experiment threads_pop_up): `pending` (filed, not sent
+ * yet: the session is gone or the wake is still gathering), `claimed` (in the session's queue as
+ * `queued`), `delivered` (the session read it), `dropped` (the thread settled before it went).
+ */
+export const DELIVERY_STATES = ['pending', 'claimed', 'delivered', 'dropped'] as const;
+export type ThreadDeliveryState = typeof DELIVERY_STATES[number];
+export interface ThreadDelivery {
+  state: ThreadDeliveryState;
+  at: string;
+  /** The node whose card he answered on. */
+  via?: string;
+  /** The queue row (qm-) that carries it, once claimed. */
+  queued?: string;
+  /** The leaders above were told it arrived (once). */
+  told?: boolean;
+  /** Written by an agent, not by him (an agent may do what he does): it goes as that agent's message. */
+  by?: ThreadWriter;
+}
+
+/** His reply has not reached the owner's session yet. */
+export function deliveryOpen(m: Pick<ThreadMessage, 'delivery'>): boolean {
+  return m.delivery?.state === 'pending' || m.delivery?.state === 'claimed';
 }
 
 export interface ThreadAnswer {
@@ -271,6 +301,8 @@ export interface OrgThread {
   movedFrom?: ThreadMove;
   /** The node said this thread's ask is the decision a task of its team already asks (thread-task-ask.ts). */
   askOwner?: ThreadAskOwner;
+  /** The decision it waits on him for: minted each time it enters needs, kept while only its words change (thread-popup.ts stampAskIds). */
+  askId?: string;
 }
 
 /**
@@ -302,7 +334,7 @@ export interface ThreadsFile {
   threads: OrgThread[];
 }
 
-export type ThreadErrorCode = 'no_thread' | 'no_message' | 'bad_input' | 'thread_closed' | 'last_message' | 'same_thread' | 'not_reacted' | 'user_kind' | 'pinned_by_user' | 'same_ask' | 'same_node';
+export type ThreadErrorCode = 'no_thread' | 'no_message' | 'bad_input' | 'thread_closed' | 'last_message' | 'same_thread' | 'not_reacted' | 'user_kind' | 'pinned_by_user' | 'same_ask' | 'same_node' | 'reply_pending';
 
 export class ThreadError extends Error {
   constructor(public code: ThreadErrorCode, public status: number, message: string) {
@@ -395,6 +427,10 @@ function normalizeThread(t: unknown): OrgThread | null {
   const x = t as Partial<OrgThread>;
   if (!isStr(x.id) || !Array.isArray(x.messages)) return null;
   const messages = x.messages.map(normalizeMessage).filter((m): m is ThreadMessage => !!m);
+  // A moved thread's pointer (relocateThreadOut): only where it lives now.
+  if (!messages.length && !x.opener && validMove(x.movedTo) && x.closed && isStr(x.title) && isStr(x.updatedAt)) {
+    return { ...x, id: x.id, title: x.title, state: THREAD_STATES.includes(x.state as ThreadState) ? x.state as ThreadState : 'new', messages: [], createdAt: isStr(x.createdAt) ? x.createdAt : x.updatedAt, updatedAt: x.updatedAt, closed: { ...x.closed, by: isStr(x.closed.by) ? x.closed.by : 'human', at: isStr(x.closed.at) ? x.closed.at : x.updatedAt } } as OrgThread;
+  }
   const o = x.opener;
   const opener = o && typeof o === 'object' && isStr(o.text) && isStr(o.at)
     ? withSource({ ...o, from: THREAD_SOURCES.includes(o.from) ? o.from : 'node' } as ThreadOpener, o.by === 'human')
@@ -526,6 +562,9 @@ export interface FileMessageInput {
   key?: string;
   /** The node session it goes to (its answer is read there). */
   sid?: string;
+  /** His reply from a card above the owner: its way there (thread-reply.ts). */
+  delivery?: ThreadDelivery;
+  answers?: ThreadMessage['answers'];
   at: string;
   /** The letter language, for Walnut's stand-in title (threads-store fills it). */
   lang?: LetterLang;
@@ -602,6 +641,8 @@ export function fileMessage(file: ThreadsFile, input: FileMessageInput): FileMes
     ...(input.letter ? { letter: input.letter.slice(0, 80) } : {}),
     ...(input.key ? { key: input.key.slice(0, 80) } : {}),
     ...(input.sid ? { sid: input.sid.slice(0, 80) } : {}),
+    ...(input.delivery ? { delivery: input.delivery } : {}),
+    ...(input.answers ? { answers: input.answers } : {}),
   };
   const named = input.threadId ? file.threads.find((t) => t.id === input.threadId) : undefined;
   const reopened = !!named && closedByHimJustNow(named, input.at, input.reopenWithin ?? FOLLOW_UP_REOPENS_MS);
@@ -883,6 +924,10 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   if (patch.pin === false && cur.pinned) checkHisPin(cur, by, 'unpinned');
   if (patch.snooze?.trim() && cur.pinned) checkHisPin(cur, by, 'snoozed');
   if (patch.close && !cur.closed) checkHisPin(cur, by, 'closed');
+  // His reply from a card above has not reached the task yet: it is not done with it (thread-reply.ts).
+  if (threadsPopUpNow() && by !== 'human' && !cur.closed && (patch.close || patch.state === 'answered') && cur.messages.some(deliveryOpen)) {
+    throw new ThreadError('reply_pending', 409, `Thread ${id} holds his reply that has not reached you yet: read it first (it comes with your next message).`);
+  }
   if (onlyPin(patch)) return pinOnly(file, cur, patch.pin!, by, at);
   const next: OrgThread = { ...cur, updatedAt: at, by };
   if (patch.title !== undefined) { next.title = clip(patch.title, THREAD_TITLE_MAX); next.titled = true; }
@@ -1015,21 +1060,35 @@ export interface MoveEnd { task: string; title: string }
  * the node it went to, and the node is counted as told (the move tells it itself). Returns the thread
  * as it was the moment it left, the copy the other node gets. Refuses a closed thread.
  */
-export function moveThreadOut(file: ThreadsFile, id: string, to: MoveEnd, by: ThreadWriter, at: string, why?: string, kind: ThreadMoveKind = 'work'): { file: ThreadsFile; thread: OrgThread } {
+/** Only an open thread moves (moveThreadOut, relocateThreadOut). */
+export function checkMovable(t: OrgThread): void {
+  if (!t.closed) return;
+  throw new ThreadError('thread_closed', 409, t.movedTo
+    ? `Thread ${t.id} already moved to ${t.movedTo.title} (${t.movedTo.task}).`
+    : `Thread ${t.id} is closed: only an open thread moves with its work.`);
+}
+
+export function moveThreadOut(file: ThreadsFile, id: string, to: MoveEnd, by: ThreadWriter, at: string, why?: string, kind: ThreadMoveKind = 'work', pointerOnly = false): { file: ThreadsFile; thread: OrgThread } {
   file = stampLegacyReplyAt(file);
   const cur = preserveReaction(find(file, id));
-  if (cur.closed) {
-    throw new ThreadError('thread_closed', 409, cur.movedTo
-      ? `Thread ${id} already moved to ${cur.movedTo.title} (${cur.movedTo.task}).`
-      : `Thread ${id} is closed: only an open thread moves with its work.`);
-  }
+  checkMovable(cur);
   const { pinned: _p, snoozed: _s, recheck: _r, ...rest } = cur;
-  const gone: OrgThread = {
-    ...rest, updatedAt: at, by,
-    closed: { how: 'dropped', at, by, told: true },
-    movedTo: { task: to.task, title: to.title, at, by, kind, ...(why ? { why: clip(why, THREAD_ASK_MAX) } : {}) },
-  };
+  const movedTo: ThreadMove = { task: to.task, title: to.title, at, by, kind, ...(why ? { why: clip(why, THREAD_ASK_MAX) } : {}) };
+  const closed: ThreadClosed = { how: 'dropped', at, by, told: true };
+  // threads_pop_up: what stays is a pointer, never a copy: no message, no summary (relocateThreadOut).
+  const gone: OrgThread = pointerOnly
+    ? { id: cur.id, title: cur.title, state: cur.state, messages: [], createdAt: cur.createdAt, updatedAt: at, by, closed, movedTo }
+    : { ...rest, updatedAt: at, by, closed, movedTo };
   return { file: replace(file, gone, at), thread: cur };
+}
+
+/**
+ * threads_pop_up: the thread leaves this node whole and keeps no copy here, only a pointer to
+ * where it lives now (a closed `movedTo` with no message), so an old link and an older client's
+ * Follow up still find it (threads-store.ts threadHolder). moveThreadIn put it on the other node first.
+ */
+export function relocateThreadOut(file: ThreadsFile, id: string, to: MoveEnd, by: ThreadWriter, at: string, why?: string, kind: ThreadMoveKind = 'work'): { file: ThreadsFile; thread: OrgThread } {
+  return moveThreadOut(file, id, to, by, at, why, kind, true);
 }
 
 /**

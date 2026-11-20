@@ -91,6 +91,12 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
+    id: 'threads_pop_up',
+    name: 'Threads pop up to the leaders',
+    description: 'A thread of a task that waits on you also shows on the Threads of the tasks above it, its VP and Main: the same card, kept once by the task doing the work. Your reply on it at any level goes straight to that task, and the ones above get one line with their next message instead of a wake. Handing a thread over moves it instead of copying it.',
+    default: false,
+  },
+  {
     id: 'action_needed_everywhere',
     name: 'Action needed in sessions',
     description: 'What a task needs from you (an approval, a question, a letter, a choice) also shows in a strip under its session\'s title bar. It is the same item as on the task\'s row: answer or snooze it in either and it goes from both.',

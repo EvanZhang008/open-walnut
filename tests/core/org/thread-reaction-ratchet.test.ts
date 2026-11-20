@@ -186,7 +186,7 @@ describe('a reaction is durable news provenance, not a state', () => {
     expect(writes.sort()).toEqual([
       'addMovedMessages', 'emptyThreads', 'enteredNeeds', 'fileMessage', 'lastUserAt', 'markClosesTold',
       'markRechecked', 'mergeThreads', 'moveThreadIn', 'moveThreadOut', 'normalizeThreads', 'openThread',
-      'reactedSince', 'recentConversation', 'setAnswers', 'sortedThreads', 'splitThreadMessage',
+      'reactedSince', 'recentConversation', 'relocateThreadOut', 'setAnswers', 'sortedThreads', 'splitThreadMessage',
       'stampLegacyReplyAt', 'sweepClosed', 'updateThread',
     ].sort());
   });

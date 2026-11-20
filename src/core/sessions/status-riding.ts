@@ -317,3 +317,8 @@ export async function flushRidingForTest(): Promise<void> {
 export function ridingKeys(sessionId: string): string[] {
   return [...(riding.get(sessionId)?.keys() ?? [])];
 }
+
+/** The status line riding a session's next message under `key`, if any (a writer that folds its lines reads what it wrote). */
+export function ridingLine(sessionId: string, key: string): string | undefined {
+  return riding.get(sessionId)?.get(key)?.line?.text;
+}

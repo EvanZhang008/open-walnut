@@ -94,6 +94,8 @@ export interface ThreadHintState {
   closed: Array<{ id: string; title: string; how: ThreadCloseHow; by: ThreadWriter }>;
   /** The Follow up named a thread that moved to another node with its work: filed there (thread-follow.ts). */
   movedTo?: { task: string; title: string };
+  /** `movedTo` is the task below that owns it (threads_pop_up): it gets his words (thread-reply.ts). */
+  popped?: boolean;
   /** It went to a thread it did not name (threads-model.ts FileMessageResult.joined). */
   joined?: 'reopened' | 'recent';
 }
@@ -162,6 +164,21 @@ export async function prepareThreadCapture(input: {
       },
     };
   }
+  // threads_pop_up: a Follow up on a task's thread below it (an older client sends it to this
+  // node's chat): his words go to that one record and its owner; this node is told it is not its own.
+  const below = input.threadId && !cur.threads.some((t) => t.id === input.threadId)
+    ? await (await import('./thread-popup.js')).elsewhereThread(task.id, input.threadId).catch(() => null) : null;
+  if (below) {
+    const { title } = (await (await import('./thread-popup.js')).poppedOne(below)).owner;
+    return {
+      hint: { threadId: below.thread.id, title: below.thread.title, created: false, duplicate: false, followUp: true, open: [], closed: [], movedTo: { task: below.node, title }, popped: true },
+      async commit() {
+        const { replyOnThread } = await import('./thread-reply.js');
+        await replyOnThread({ viewer: task.id, node: below.node, threadId: below.thread.id, text: words.text, images: words.images, by: 'human', at, key: draft.key! })
+          .catch((err) => log.session.warn('org threads: reply below not filed', { taskId: task.id, error: err instanceof Error ? err.message : String(err) }));
+      },
+    };
+  }
   // The same pure step the store runs, on the copy read now: the node is told what will be.
   const planned = fileMessage(cur, draft);
   const nowMs = Date.parse(at);
@@ -220,6 +237,7 @@ function windowMs(name: string, fallback: number): number {
  */
 export function threadHintText(s: ThreadHintState): string {
   let text: string;
+  if (s.movedTo && s.popped) return `his reply in thread ${s.threadId} ${q(s.title)} of ${s.movedTo.title} (${s.movedTo.task}), a task below you: filed there, and it goes to that task. Not yours to act on.`;
   if (s.movedTo) return `a follow-up in thread ${s.threadId} ${q(s.title)}, which moved to ${s.movedTo.title} (${s.movedTo.task}) with its work: filed there, and ${s.movedTo.title} reads it. Not yours to act on; at most tell him it is with ${s.movedTo.title} now.`;
   if (s.duplicate) text = `already filed under thread ${s.threadId} ${q(s.title)}.`;
   else if (s.followUp) {

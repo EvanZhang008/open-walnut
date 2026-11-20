@@ -1430,8 +1430,10 @@ export interface VaultChangedEvent {
 /** An Org node's Threads changed (core/org/threads-store.ts): re-read them. */
 export interface OrgThreadsChangedEvent {
   taskId: string;
-  kind: 'filed' | 'opened' | 'updated' | 'merged' | 'split' | 'answered' | 'swept' | 'moved';
+  kind: 'filed' | 'opened' | 'updated' | 'merged' | 'split' | 'answered' | 'swept' | 'moved' | 'below';
   threadId?: string;
+  /** kind `below`: the task below whose thread changed, listed on this node (org/thread-reply.ts). */
+  owner?: string;
 }
 
 /** A task's agent tabs in the person's browser came or went (routes/browser-v1.ts): re-read the Browser view. */

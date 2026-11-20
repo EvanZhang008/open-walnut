@@ -55,6 +55,8 @@ export interface ViewThread<M extends ViewMessage = ViewMessage> {
   recheck?: { since: string; at: string; pending?: boolean };
   /** Projected on read, never stored (thread-task-ask.ts): a task asks him this thread's decision now. */
   askedIn?: ThreadAskedIn;
+  /** Projected on read (thread-popup.ts): a thread of a task below, listed on this node's Threads. */
+  owner?: { task_id: string; title: string };
 }
 
 /**
@@ -508,19 +510,29 @@ export interface ThreadCounts {
   id?: string;
   /** The thread `title` names is pinned (a surface marks it). */
   titlePinned?: boolean;
+  /** Of `shown`, the threads of tasks below that wait on him (thread-popup.ts): never in `needs`. Absent when none. */
+  below?: number;
 }
 
-/** The counts of one node's Threads. Pure; the web's header and the server's status read the same. */
+/**
+ * The counts of one node's Threads. Pure; the web's header and the server's status read the same.
+ * A thread of a task below (`owner`, thread-popup.ts) counts in `shown` and `below` while it waits
+ * on him, never in `needs`: only its owner reads Needs you for it. The title is the node's own
+ * unless it has none.
+ */
 export function threadCounts<M extends ViewMessage>(threads: ReadonlyArray<ViewThread<M> & { id: string; title: string; state: string; updatedAt: string }>, now: number = Date.now()): ThreadCounts {
-  const shared = sharedAnswers(threads);
-  const shown = threads.filter((t) => shownToHim(t, shared, now));
+  const mine = threads.filter((t) => !t.owner);
+  const shared = sharedAnswers(mine);
+  const shown = mine.filter((t) => shownToHim(t, shared, now));
+  const below = threads.filter((t) => t.owner && !t.closed && t.state === 'needs');
   const needs = shown.filter((t) => t.state === 'needs');
   const pinned = pinnedFirst(shown.filter(pinnedNow));
-  const newest = (list: typeof shown) => list.reduce<(typeof shown)[number] | undefined>((a, t) => (!a || t.updatedAt > a.updatedAt ? t : a), undefined);
-  const top = newest(needs) ?? pinned[0] ?? newest(shown);
+  const newest = (list: readonly (typeof threads)[number][]) => list.reduce<(typeof threads)[number] | undefined>((a, t) => (!a || t.updatedAt > a.updatedAt ? t : a), undefined);
+  const top = newest(needs) ?? pinned[0] ?? newest(shown) ?? newest(below);
   return {
-    shown: shown.length, needs: needs.length, ...(pinned.length ? { pinned: pinned.length } : {}),
+    shown: shown.length + below.length, needs: needs.length, ...(pinned.length ? { pinned: pinned.length } : {}),
     ...(top ? { title: top.title, id: top.id, ...(pinnedNow(top) ? { titlePinned: true } : {}) } : {}),
+    ...(below.length ? { below: below.length } : {}),
   };
 }
 

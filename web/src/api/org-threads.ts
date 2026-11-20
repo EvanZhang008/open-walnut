@@ -16,6 +16,10 @@ export interface OrgThreadMessage {
    */
   answer?: { text: string; at: string; about?: string[]; clipped?: boolean; from?: 'letter'; sid?: string; host?: string };
   readAt?: string;
+  /** His reply from a card above the task that owns the thread, on its way there (src/core/org/thread-reply.ts). */
+  delivery?: { state: 'pending' | 'claimed' | 'delivered' | 'dropped'; at: string; via?: string };
+  /** The ask it answers; `stale`: the thread asked something else by then. */
+  answers?: { ask_id: string; stale?: boolean };
 }
 
 export interface OrgThreadMove { task: string; title: string; at: string; by: string; why?: string; kind?: 'work' | 'hand' }
@@ -60,6 +64,12 @@ export interface OrgThread {
   /** Projected by the server on every read, never stored: a task asks him this decision now, so the
    *  thread points there instead of asking twice (core/org/thread-task-ask.ts). */
   askedIn?: { task: string; title: string; ask: string; via: 'owner' | 'words'; decision?: string; answered?: true };
+  /** A thread of a task below this node, listed here while it waits on him (experiment threads_pop_up, src/core/org/thread-popup.ts). */
+  owner?: { task_id: string; title: string };
+  /** Its owner takes a reply now; false: the reply is kept and goes when the task is back. */
+  can_answer_now?: boolean;
+  /** The decision it asks: a reply names it. */
+  ask_id?: string;
 }
 
 const base = (taskId: string) => `/api/v1/tasks/${encodeURIComponent(taskId)}/threads`;
@@ -83,6 +93,12 @@ export interface OrgThreadPatch {
 
 export async function patchOrgThread(taskId: string, threadId: string, patch: OrgThreadPatch): Promise<OrgThread> {
   const res = await apiPatch<{ thread: OrgThread }>(`${base(taskId)}/${encodeURIComponent(threadId)}`, patch);
+  return res.thread;
+}
+
+/** His reply on a thread of a task below this node: filed on that task's thread and sent to it. */
+export async function replyOnOrgThread(taskId: string, threadId: string, text: string, askId?: string, key?: string): Promise<OrgThread> {
+  const res = await apiPost<{ thread: OrgThread }>(base(taskId), { text, thread: threadId, ...(askId ? { ask_id: askId } : {}), ...(key ? { key } : {}) });
   return res.thread;
 }
 

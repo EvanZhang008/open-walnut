@@ -71,6 +71,7 @@ import { isBoolean, usePageView } from '@/utils/view-memory';
 import type { OrgThread, OrgThreadMessage, OrgThreadState } from '@/api/org-threads';
 import type { OrgThreadsState } from './useOrgThreads';
 import { OrgThreadSnooze } from './OrgThreadSnooze';
+import { PoppedThreadCard } from './PoppedThreadCard';
 import '@/styles/org-threads.css';
 
 /** A task's live status dot, the colours of the Task view's tabs (OrgTaskRail TAB_DOT). */
@@ -492,6 +493,11 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   );
 }
 
+/** A thread of a task below (threads_pop_up) stays in sight while his reply to it is on its way. */
+function shownHere(t: OrgThread, shared: ReadonlySet<string>, at: number): boolean {
+  return shownToHim(t, shared, at) || (!!t.owner && !t.closed && t.messages.some((m) => m.delivery?.state === 'pending' || m.delivery?.state === 'claimed'));
+}
+
 export function OrgThreads({ name, owner, state, tasks, onFollowUp, now }: Props) {
   // Whether the week's closed threads are open stays as it was left (utils/view-memory.ts).
   const [showClosed, setShowClosed] = usePageView('org', 'threads.showClosed', false, isBoolean);
@@ -507,8 +513,8 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now }: Props
       clock: at,
       // Pinned ones lead, newest pin first; the rest newest change first (as the server sorts
       // them), so one just unpinned goes back to its place before the server answers.
-      open: pinnedFirst(list.filter((t) => shownToHim(t, shared, at)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))),
-      hidden: list.filter((t) => !t.closed && !snoozedNow(t, at) && !shownToHim(t, shared, at)),
+      open: pinnedFirst(list.filter((t) => shownHere(t, shared, at)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))),
+      hidden: list.filter((t) => !t.closed && !snoozedNow(t, at) && !shownHere(t, shared, at)),
       snoozed: list.filter((t) => snoozedNow(t, at)).sort((a, b) => a.snoozed!.until.localeCompare(b.snoozed!.until)),
     };
   }, [all, shared, now]);
@@ -519,7 +525,7 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now }: Props
   const listFile = useAgentFileOpener(THREAD_LIST_SOURCE);
   const onEntityClick = useEntityClickHandler(undefined, listFile.onFileOpen, listFile.fileHost, listFile.fileSessionId, listFile.refusesAll);
   const snoozedIds = useMemo(() => new Set(snoozed.map((t) => t.id)), [snoozed]);
-  const card = (t: OrgThread) => <ThreadCard key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={clock} snoozed={snoozedIds.has(t.id)} owner={owner} />;
+  const card = (t: OrgThread) => t.owner && owner ? <PoppedThreadCard key={t.id} node={owner.id} t={t} state={state} /> : <ThreadCard key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={clock} snoozed={snoozedIds.has(t.id)} owner={owner} />;
   return (
     <div className="org-threads" data-testid="org-threads" onClick={onEntityClick}>
       {state.error && <p className="org-thread-error" data-testid="org-threads-error">{state.error}</p>}

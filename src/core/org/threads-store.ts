@@ -16,13 +16,14 @@ import type { OrgThreadsChangedEvent } from '../event-types.js';
 import { isFollower } from '../server-role.js';
 import { walnutLetterLanguage as letterLang } from '../human-inbox/walnut-letters/languages.js';
 import {
-  addMovedMessages, emptyThreads, enteredNeeds, fileMessage, markClosesTold, markRechecked, mergeThreads, movedAway, moveThreadIn, moveThreadOut, normalizeThreads, openThread, patchHandsToUser, setAnswers, splitThreadMessage, stampLegacyReplyAt, sweepClosed, ThreadError, updateThread,
-  type FileMessageInput, type FileMessageResult, type MoveEnd, type OpenThreadInput, type ThreadAskOwner, type ThreadMoveKind, type OrgThread, type ThreadAnswer, type ThreadPatch, type ThreadState, type ThreadRecheck, type ThreadsFile, type ThreadTextSource, type ThreadWriter,
+  addMovedMessages, deliveryOpen, emptyThreads, enteredNeeds, fileMessage, markClosesTold, markRechecked, mergeThreads, movedAway, moveThreadIn, moveThreadOut, normalizeThreads, openThread, patchHandsToUser, relocateThreadOut, setAnswers, splitThreadMessage, stampLegacyReplyAt, sweepClosed, ThreadError, updateThread,
+  type FileMessageInput, type FileMessageResult, type MoveEnd, type OpenThreadInput, type ThreadAskOwner, type ThreadMoveKind, type OrgThread, type ThreadAnswer, type ThreadDelivery, type ThreadMessage, type ThreadPatch, type ThreadState, type ThreadRecheck, type ThreadsFile, type ThreadTextSource, type ThreadWriter,
 } from './threads-model.js';
 import { threadsDbOnNow, useThreadsDb, writeThreadsLeftovers } from './threads-backend.js';
 import { dbDropExpired, dbMutateThreads, dbReadThreads, dbThreadNodes, flushNodeExport, jsonNodes, threadsJsonFile as threadsFile } from './threads-sync.js';
 import { askOwnerKept, askOwnerOf, pointerTaskIds, withAskPointers } from './thread-task-ask.js';
 import type { ThreadAskedIn } from './thread-view.js';
+import { stampAskIds, threadsPopUpNow } from './thread-popup-rules.js';
 
 function emit(event: OrgThreadsChangedEvent): void {
   bus.emit(EventNames.ORG_THREADS_CHANGED, event, ['web-ui'], { source: 'org-threads' });
@@ -120,7 +121,8 @@ async function mutateThreads<R>(taskId: string, mutate: (cur: ThreadsFile) => { 
     const res = mutate(cur);
     out = res.out;
     entered = enteredNeeds(cur, res.file);
-    return res.file;
+    // A decision waiting on him gets its id, so a reply names the ask it answers (thread-popup.ts).
+    return threadsPopUpNow() ? stampAskIds(cur, res.file) : res.file;
   };
   const file = threadsFile(taskId);
   // false: the experiment went off before the database write began, so the file takes it.
@@ -335,9 +337,11 @@ async function moveThreadNow(input: MoveThreadInput): Promise<OrgThread> {
     return { file: r.file, out: r.thread };
   });
   let left: OrgThread;
+  // threads_pop_up: the move changes the owner; only a pointer stays behind (threadHolder follows it).
+  const relocate = threadsPopUpNow();
   try {
     left = await mutateThreads(from.task, (f) => {
-      const r = moveThreadOut(f, threadId, to, by, at, why, kind);
+      const r = (relocate ? relocateThreadOut : moveThreadOut)(f, threadId, to, by, at, why, kind);
       return { file: r.file, out: r.thread };
     });
   } catch (err) {
@@ -363,6 +367,40 @@ async function moveThreadNow(input: MoveThreadInput): Promise<OrgThread> {
   emit({ taskId: to.task, kind: 'moved', threadId });
   emit({ taskId: from.task, kind: 'moved', threadId });
   return moved;
+}
+
+/**
+ * His replies from a card above, on their way to this task's session (thread-reply.ts): `step`
+ * returns a message's next delivery, or undefined to leave it. Only messages that carry one are
+ * asked. Returns the changed messages with their threads, as they are now.
+ */
+export async function updateReplyDeliveries(taskId: string, step: (t: OrgThread, m: ThreadMessage) => ThreadDelivery | undefined): Promise<Array<{ thread: OrgThread; message: ThreadMessage }>> {
+  if (isFollower()) return [];
+  const changed = await mutateThreads(taskId, (cur) => {
+    const out: Array<{ thread: OrgThread; message: ThreadMessage }> = [];
+    const threads = cur.threads.map((t) => {
+      if (!t.messages.some((m) => m.delivery)) return t;
+      let touched = false;
+      const messages = t.messages.map((m) => {
+        const next = m.delivery ? step(t, m) : undefined;
+        if (!next) return m;
+        touched = true;
+        return { ...m, delivery: next };
+      });
+      if (!touched) return t;
+      const thread = { ...t, messages };
+      for (const m of messages) if (m !== t.messages.find((x) => x.id === m.id)) out.push({ thread, message: m });
+      return thread;
+    });
+    return { file: out.length ? { ...cur, threads } : cur, out };
+  });
+  if (changed.length) emit({ taskId, kind: 'updated', ...(new Set(changed.map((c) => c.thread.id)).size === 1 ? { threadId: changed[0].thread.id } : {}) });
+  return changed;
+}
+
+/** Whether any of this task's threads holds a reply not yet in its session. */
+export async function hasOpenDeliveries(taskId: string): Promise<boolean> {
+  return (await readThreads(taskId)).threads.some((t) => t.messages.some(deliveryOpen));
 }
 
 /** The node was told these threads closed. Quiet: nothing the user sees changed. */

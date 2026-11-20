@@ -744,6 +744,7 @@ let foreignWriterWatchdog: { stop: () => void } | null = null
 let sessionProjectionHandle: { stop: () => void } | null = null
 let threadAnswersHandle: { stop: () => void } | null = null
 let threadFollowHandle: { stop: () => void } | null = null
+let threadRepliesHandle: { stop: () => void } | null = null
 let projectionSelfHealHandle: { stop: () => void } | null = null
 /** Cloud box only: 60s drain of cache/task-queue/ (see core/task-queue.ts). */
 let taskQueueFlushHandle: { stop: () => void } | null = null
@@ -2237,6 +2238,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     void import('../core/sessions/status-push.js').then((m) => m.startStatusPush()).catch(() => {})
     // A thread goes with its work to the node whose team does it (src/core/org/thread-follow.ts).
     if (role() === 'leader') void import('../core/org/thread-follow.js').then((m) => { threadFollowHandle?.stop(); threadFollowHandle = m.startThreadFollow() }).catch(() => {})
+    // His reply on a thread that popped up goes to the task that owns it (src/core/org/thread-reply.ts).
+    if (role() === 'leader') void import('../core/org/thread-reply.js').then((m) => { threadRepliesHandle?.stop(); threadRepliesHandle = m.startThreadReplies() }).catch(() => {})
     // Whether the user is in Main's or a lead's chat (src/core/org/user-away.ts), and the reports he asked for.
     void import('../core/org/user-away.js').then((m) => m.startUserAway()).catch(() => {})
     if (role() === 'leader') void import('../core/org/morning-report.js').then((m) => m.startReportClock()).catch(() => {})
@@ -7616,6 +7619,10 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   if (threadFollowHandle) {
     threadFollowHandle.stop()
     threadFollowHandle = null
+  }
+  if (threadRepliesHandle) {
+    threadRepliesHandle.stop()
+    threadRepliesHandle = null
   }
   if (threadAnswersHandle) {
     threadAnswersHandle.stop()

@@ -18,6 +18,12 @@
  *   PUT   /api/v1/tasks/:id/threads/:thread/follow-ups/:messageId -> the message with that id, relayed
  *                                                          by the companion, is his Follow up in this thread
  *
+ * Under the experiment threads_pop_up (core/org/thread-popup.ts) a node's list also holds the threads
+ * of tasks below it that wait on him, after its own, each with `owner`, `can_answer_now` and
+ * `ask_id`, and counted in `shown_count`; a thread read, written or answered here that lives on a
+ * task below (or moved on) is that one record: his reply (POST with `thread`, optional `ask_id`)
+ * is filed there and goes to its owner (core/org/thread-reply.ts), answering `owner` and `delivery`.
+ *
  * Every thread read here carries `askedIn` when a task already asks him its decision (projected,
  * never stored: core/org/thread-task-ask.ts), so `shown`, the counts and a client agree.
  *
@@ -29,7 +35,7 @@ import { Router, type Request, type Response } from 'express'
 import type { Task } from '../../core/types.js'
 import { log } from '../../logging/index.js'
 import { resolveThreadCaller, type ThreadCaller } from '../../core/org/thread-caller.js'
-import { ThreadError, THREAD_ID_RE, THREAD_MESSAGE_ID_RE, sortedThreads, type OrgThread, type ThreadPatch, type ThreadSource, type ThreadState, type ThreadWriter } from '../../core/org/threads-model.js'
+import { movedAway, ThreadError, THREAD_ID_RE, THREAD_MESSAGE_ID_RE, sortedThreads, type OrgThread, type ThreadPatch, type ThreadSource, type ThreadState, type ThreadWriter } from '../../core/org/threads-model.js'
 import { isLineThreadId, lineThreads } from '../../core/org/line-threads.js'
 import { threadsForEveryTask } from '../../core/org/keeps-threads.js'
 import { fileThreadMessage, mergeThread, openNodeThread, patchThread, readThreads, splitThread, withTaskAsks } from '../../core/org/threads-store.js'
@@ -40,6 +46,7 @@ import { body, header, param, resolveTask, RouteError } from './board-v1.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { sendLinkFailure } from '../middleware/link-failure-answer.js'
 import { keepsThreads } from '../../core/org/keeps-threads.js'
+import { elsewhereThread, poppedOne, poppedThreadsFor, threadsPopUpOn } from '../../core/org/thread-popup.js'
 
 export const orgThreadsV1Router = Router()
 
@@ -135,6 +142,7 @@ orgThreadsV1Router.get('/tasks/:id/threads', route(async (req, res) => {
   // phone's read fits what the companion carries back from the Mac; an answer his card shows (not
   // reacted to yet) stays whole, and `GET .../threads/:thread` gives one thread whole.
   const answerMax = positive(req.query.answer_max)
+  const below = closedOnly || !(await threadsPopUpOn()) ? [] : await poppedThreadsFor(task.id, { answerable: true })
   const out = [
     ...threads.map((t) => ({
       ...markShared(answerMax === undefined ? t : clipAnswers(t, shared, answerMax), shared),
@@ -144,6 +152,8 @@ orgThreadsV1Router.get('/tasks/:id/threads', route(async (req, res) => {
     // stored ones and outside `limit`. Only a client that renders them asks (an older one would
     // offer a stored thread's buttons on them); counted where they already are (its status and
     // Action needed), never in shown_count.
+    // threads_pop_up: what waits on him below this node, the owner's own records, outside `limit`.
+    ...below.map((t) => ({ ...t, shown: true })),
     ...(closedOnly || !flag(req.query.lines) ? [] : ownLineThreads(task)).map((t) => ({ ...t, shown: true })),
   ]
   // Answers still missing are read from the node's chat meanwhile; a kept one says so (org-threads:changed).
@@ -151,7 +161,7 @@ orgThreadsV1Router.get('/tasks/:id/threads', route(async (req, res) => {
   res.json({
     task_id: task.id, title: task.title, threads: out,
     closed_count: file.threads.filter((t) => !!t.closed).length,
-    shown_count: threadCounts(all, now).shown,
+    shown_count: threadCounts([...all, ...below], now).shown,
   })
 }))
 
@@ -203,7 +213,16 @@ orgThreadsV1Router.get('/tasks/:id/threads/:thread', route(async (req, res) => {
   const id = threadIdOf(req)
   const all = await withTaskAsks(task.id, (await readThreads(task.id)).threads)
   const thread = all.find((t) => t.id === id)
-  if (!thread) throw new RouteError(404, 'no_thread', `No thread ${id} on this node.`)
+  if (!thread || movedAway(thread)) {
+    // A task's thread below, or one that moved on (threads_pop_up): the one record, read where it lives.
+    const there = await elsewhereThread(task.id, id)
+    if (there) {
+      const one = await poppedOne(there)
+      res.json({ task_id: task.id, thread: { ...one, shown: shownToHim(one, sharedAnswers([one]), Date.now()) } })
+      return
+    }
+    if (!thread) throw new RouteError(404, 'no_thread', `No thread ${id} on this node.`)
+  }
   const shared = sharedAnswers(all)
   res.json({ task_id: task.id, thread: { ...markShared(thread, shared), shown: shownToHim(thread, shared, Date.now()) } })
 }))
@@ -218,6 +237,16 @@ orgThreadsV1Router.post('/tasks/:id/threads', route(async (req, res) => {
   if (thread && !THREAD_ID_RE.test(thread)) throw new RouteError(400, 'bad_request', `Not a thread id: ${thread}`)
   const at = str(b, 'at')
   const atIso = at && !Number.isNaN(Date.parse(at)) ? new Date(at).toISOString() : new Date().toISOString()
+  // His reply on a task's thread below: filed on that one record and sent to its owner (core/org/thread-reply.ts).
+  const there = thread ? await elsewhereThread(task.id, thread) : null
+  if (there) {
+    const { replyOnThread } = await import('../../core/org/thread-reply.js')
+    const by = await writerOf(req)
+    const r = await replyOnThread({ viewer: task.id, node: there.node, threadId: thread!, text, images, by, at: atIso, ...(str(b, 'ask_id') ? { askId: str(b, 'ask_id') } : {}), ...(str(b, 'key') ? { key: str(b, 'key') } : {}) })
+    const owner = (await poppedOne({ node: r.node, thread: r.thread })).owner
+    res.status(r.created ? 201 : 200).json({ task_id: task.id, thread: r.thread, message: r.message, created: r.created, duplicate: r.duplicate, owner, delivery: r.message.delivery })
+    return
+  }
   const out = await fileThreadMessage(task.id, {
     text, images, via: 'import', at: atIso, ...(thread ? { threadId: thread } : {}),
   })
@@ -288,6 +317,14 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
     throw new RouteError(400, 'bad_request', 'merge_into goes alone: change the target thread with its own update.')
   }
   let thread
+  // A task's thread below: changed on its one record, where it lives.
+  const there = Object.keys(patch).length && !mergeInto ? await elsewhereThread(task.id, id) : null
+  if (there) {
+    thread = await patchThread(there.node, id, patch, by, source)
+    log.task.info('org thread updated on its owner', { taskId: task.id, owner: there.node, threadId: id, by, fields: Object.keys(patch) })
+    res.json({ task_id: task.id, thread: await poppedOne({ node: there.node, thread: await projected(there.node, thread) }) })
+    return
+  }
   if (Object.keys(patch).length) thread = await patchThread(task.id, id, patch, by, source)
   if (mergeInto) {
     if (!THREAD_ID_RE.test(mergeInto)) throw new RouteError(400, 'bad_request', `Not a thread id: ${mergeInto}`)
