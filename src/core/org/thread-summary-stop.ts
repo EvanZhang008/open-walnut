@@ -13,11 +13,12 @@
  * in the chat: the model has to know how to keep its threads itself): his words may build on its
  * answer, and only the node can tell. It checks each against what he said since: marks the read
  * one known, closes the one that is done, and leaves a thread waiting on him with only the
- * question still open. Named once per answer of the node.
+ * question still open. Named once per message of his (thread-checks.ts keeps it across restarts).
  */
 import { hasThreadNews, snoozedNow, summaryAt, summaryBehindHim } from './thread-view.js';
 import type { OrgThread } from './threads-model.js';
 import { keepsThreads } from './keeps-threads.js';
+import { checkedFor, markChecked } from './thread-checks.js';
 
 export const MAX_SUMMARY_NUDGES = 2;
 const nudged = new Map<string, number>();
@@ -105,10 +106,15 @@ export async function staleSummariesAtStop(callerSid: string | undefined, nowMs 
       nudged.set(key, (nudged.get(key) ?? 0) + 1);
     }
     const his = newestOfHis(threads);
-    // Once per answer: a node that checked it and left it is not asked again at his next message.
-    const afterKey = (t: OrgThread) => `${taskId}:${t.id}:after:${nodeTouchAt(t)}`;
-    const before = his ? answeredBeforeHim(threads, nowMs).filter((t) => !nudged.has(afterKey(t))).slice(0, 8) : [];
-    for (const t of before) nudged.set(afterKey(t), 1);
+    // Once per message of his: a node that checked a thread and left it is not asked again until
+    // he writes again. Kept on disk (thread-checks.ts): the server restarts at every deploy.
+    let before: OrgThread[] = [];
+    if (his) {
+      const named = answeredBeforeHim(threads, nowMs);
+      const checked = named.length ? await checkedFor(taskId, his.at) : new Set<string>();
+      before = named.filter((t) => !checked.has(t.id)).slice(0, 8);
+      await markChecked(taskId, before.map((t) => t.id), his.at);
+    }
     // A long-running server: forget the oldest names.
     while (nudged.size > 2000) nudged.delete(nudged.keys().next().value as string);
     if (!stale.length && !before.length) return null;

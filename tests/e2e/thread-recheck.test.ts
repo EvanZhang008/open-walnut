@@ -227,6 +227,37 @@ describe('his message outdates a thread summary', () => {
     expect(cardView(t).summary).toMatchObject({ stale: true })
   })
 
+  it('an answered thread he wrote after is named once per message of his, across a restart', async () => {
+    // 2026-11-20, Main: the same 7 threads named at every turn end for his one message at 08:09Z
+    // that touched none of them; the memory of having named them lived in the process, and the
+    // server restarts at every deploy.
+    const { resetSummaryNudges } = await import('../../src/core/org/thread-summary-stop.js')
+    resetSummaryNudges()
+    const lead = await newLead()
+    const a = (await fileThreadMessage(lead.id, { text: 'what does the nightly job start?', via: 'chat', at: ago(30) })).thread.id
+    await run(lead, 'thread_update', { id: a, title: 'Nightly job', reply: 'Each run starts fresh.', state: 'answered' })
+    const later = async () => {
+      const c = (await fileThreadMessage(lead.id, { text: 'the red Not delivered line again', via: 'chat', at: new Date().toISOString() })).thread
+      return c.id
+    }
+    const c = await later()
+    const first = await stopHook(lead)
+    expect(first?.threads).toContain(a)
+    expect(first?.reason).toContain('the user wrote to you after these answers')
+    // The node answers his new message and leaves the nightly thread as it is.
+    await run(lead, 'thread_update', { id: c, title: 'Not delivered line', reply: 'Looking at why it reads red.', state: 'answered' })
+    // The next turn end, after a restart, with no new message of his: not held.
+    resetSummaryNudges()
+    expect(await stopHook(lead)).toBeNull()
+    resetSummaryNudges()
+    expect(await stopHook(lead)).toBeNull()
+    // His next message names it again.
+    await new Promise((r) => setTimeout(r, 5))
+    const c2 = await later()
+    expect((await stopHook(lead))?.threads).toContain(a)
+    expect(c2).toBeTruthy()
+  })
+
   it('a worker is never held for threads', async () => {
     const worker = (await addTask({ title: 'Worker', project: 'RcWorker', source: 'local' } as never)).task
     await createSessionRecord('trc-worker', worker.id, 'RcWorker')
