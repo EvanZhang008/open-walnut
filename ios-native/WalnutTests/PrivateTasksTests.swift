@@ -218,7 +218,7 @@ final class PrivateTasksTests: XCTestCase {
          "due_date":"2026-11-02","created_at":"2026-11-01T00:00:00Z","updated_at":"2026-11-01T00:00:00Z",
          "completed_at":"2026-11-01T00:00:00Z","starred":true,"pinned":true,"tags":["a"],"summary":"s",
          "start_date":"2026-11-01","end_date":"2026-11-02","unread":true,"parent_task_id":"p1",
-         "user_status":{"state":"working"},"org_role":"lead",
+         "user_status":{"state":"working"},"org_role":"lead","threads_on":true,
          "live_activity":{"kind":"tool","since":"2026-11-01T00:00:00Z"},
          "result_report":{"result":"r"},"team_stop":{"at":"2026-11-01T00:00:00Z"},
          "wait_until":"2026-11-03T00:00:00Z","watched_at":"2026-11-01T00:00:00Z",
