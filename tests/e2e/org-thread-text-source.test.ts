@@ -99,8 +99,10 @@ describe('who wrote an Org thread\'s words', () => {
     const closed = await thread(t.id)
     expect(closed.closed?.how).toBe('acked')
     expect(replySource(closed)).toEqual(written)
-    // New words take their new writer, on this machine.
-    await call('PATCH', `/${t.id}`, { reopen: true, reply: 'Moved the notes to /Users/me/notes.txt' }, NEW_LOCAL_SID)
+    // He opens it again (a thread he acknowledged stays closed until he does); new words take their
+    // new writer, on this machine.
+    await call('PATCH', `/${t.id}`, { reopen: true })
+    await call('PATCH', `/${t.id}`, { reply: 'Moved the notes to /Users/me/notes.txt' }, NEW_LOCAL_SID)
     expect(replySource(await thread(t.id))).toEqual({ reply: 'Moved the notes to /Users/me/notes.txt', reply_by: `task:${leadId}`, reply_sid: NEW_LOCAL_SID, reply_host: '__local__' })
   })
 

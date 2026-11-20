@@ -505,10 +505,10 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
       {asked && <AskedIn a={t.askedIn!} />}
       {held && (
         <div className="org-thread-held-ask" data-testid="org-thread-held-ask" data-ask-id={held.id}>
-          {/* Its status a step behind (no item yet): the question as plain words until it comes. */}
+          {/* Its status a step behind (no item yet): the question in the agent's own rendering until it comes. */}
           {heldItem && owner
             ? <AskCard task={owner} item={heldItem} threadId={t.id} />
-            : <p className="org-thread-summary" data-testid="org-thread-held-question">{held.ask}</p>}
+            : <AgentText text={held.ask} compact className="org-thread-summary" testId="org-thread-held-question" {...threadSummarySource(t)} />}
           {held.reply && <AgentText text={held.reply} compact className="org-thread-summary" testId="org-thread-reply" {...threadSummarySource(t)} />}
         </div>
       )}
