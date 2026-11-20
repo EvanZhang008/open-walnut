@@ -6,10 +6,12 @@
  * place that draws reasoning its own way fails here; the browser side is
  * tests/e2e/browser/session-thinking-once.spec.ts.
  *
- * And the row on its own is the word alone: a thought's first line shows only inside a
- * list of steps the reader opened (2026-11-20, the user, of one live thought drawn with
- * its first line between two of his messages: "even if only one thining shoud also
- * collapes"). The row reads that from InStepList, off by default, which only an opened
+ * And a thought on its own is the line every fold is, "> Thinking": the chevron and the
+ * word, with its step row (the icon, the first line) inside, shown once the line is opened
+ * (2026-11-20, the user, of one live thought drawn with its first line between two of his
+ * messages: "even if only one thining shoud also collapes", then of the icon row: "collpe
+ * like > Thinking ... just liek all other not even icon icon isinside te collpes").
+ * SessionThinking reads where it is from InStepList, off by default, which only an opened
  * fold's body and an opened run's body turn on.
  */
 import { describe, expect, it } from 'vitest';
@@ -57,12 +59,24 @@ describe('one thinking row', () => {
     const msg = files.find((f) => f.rel === 'components/sessions/SessionMessage.tsx')!.text;
     const calls = [...msg.matchAll(/^.*thinkingFirstLine\(.*$/gm)].map((m) => m[0].trim()).filter((l) => !l.startsWith('export function'));
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toContain('!inStepList');
+    // The step row (its icon, its first line) is drawn only past the early return that
+    // draws a thought outside an opened list as the fold line.
+    const fn = msg.slice(msg.indexOf('export function SessionThinking'), msg.indexOf('export function thinkingFirstLine'));
+    const foldLine = fn.indexOf('if (!inStepList) {');
+    expect(foldLine).toBeGreaterThan(-1);
+    const foldLineEnd = fn.indexOf('\n  }\n', foldLine);
+    const line = fn.slice(foldLine, foldLineEnd);
+    expect(line).toContain('process-fold-chevron');
+    expect(line).not.toContain('name="thought"');
+    expect(line).not.toContain('thinkingFirstLine(');
+    expect(line.indexOf('process-fold-chevron')).toBeLessThan(line.indexOf('>Thinking<'));
+    expect(fn.indexOf('name="thought"')).toBeGreaterThan(foldLineEnd);
+    expect(fn.indexOf('thinkingFirstLine(')).toBeGreaterThan(foldLineEnd);
     // The context is off unless a body of opened steps turns it on: a fold's, a run's.
     const ctx = files.find((f) => f.rel === 'components/sessions/fold-body-context.ts')!.text;
     expect(ctx).toMatch(/export const InStepList = createContext\(false\)/);
     const providers = files.flatMap(({ rel, text }) => [...text.matchAll(/<InStepList\.Provider/g)].map(() => rel)).sort();
-    expect(providers).toEqual(['components/sessions/SessionMessage.tsx', 'components/sessions/TurnFolds.tsx']);
+    expect([...new Set(providers)]).toEqual(['components/sessions/SessionMessage.tsx', 'components/sessions/TurnFolds.tsx']);
     const providerLines = files.flatMap(({ text }) => [...text.matchAll(/^.*<InStepList\.Provider.*$/gm)].map((m) => m[0]));
     for (const line of providerLines) expect(line).toMatch(/\{open && <div className="(process-fold-body|tool-run-body)">/);
   });

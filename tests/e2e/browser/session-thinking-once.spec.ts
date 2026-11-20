@@ -10,12 +10,14 @@
  * Each thought's words must be on screen at most once, and no line but the thinking
  * row itself may say "Thinking".
  *
- * A thinking row on its own in the timeline is the word alone: its first line shows
- * only inside a list of steps the reader opened (a fold's body, a run's body), in
- * every one of those ways (2026-11-20, the user, of one live thought drawn with its
- * first line between two of his messages: "even if only one thining shoud also
- * collapes"). `barePreviews` is that guard: it reads the screen, so a new way of
- * drawing a thought that shows its words unopened fails here too.
+ * A thought on its own in the timeline is the line every fold is, "> Thinking": the
+ * chevron, the word, nothing else. Its step row (the icon, its first line) is inside and
+ * shows once the line is opened, in every one of those ways (2026-11-20, the user, of
+ * one live thought drawn with its first line between two of his messages: "even if only
+ * one thining shoud also collapes", then of the icon row: "collpe like > Thinking ...
+ * just liek all other not even icon icon isinside te collpes"). `bareRows` is that
+ * guard: it reads the screen, so a new way of drawing a thought that shows its icon or
+ * its words outside an opened list fails here too.
  *
  * History and the WS are mocked (mock-session-harness.ts).
  */
@@ -44,17 +46,25 @@ async function thinkingOnScreen(hist: Locator, markers: string[]) {
     }
     // A line reading "Thinking" that is not the thinking row's own label.
     const otherLines = Array.from(h.querySelectorAll('.tool-run-label, .process-fold-label, .tool-run-toggle'))
-      .filter((el) => visible(el) && (el.textContent ?? '').trim() === 'Thinking' && !el.closest('.tool-run-row--step'))
+      .filter((el) => visible(el) && (el.textContent ?? '').trim() === 'Thinking' && !el.closest('.tool-run-row--step')
+        // A thought on its own: its fold line is the word, the one row inside it the thought.
+        && !(el.closest('.tool-run-row')?.matches('[data-testid="thought-fold"]')))
       .map((el) => (el as HTMLElement).outerHTML.slice(0, 120));
     const rows = Array.from(h.querySelectorAll('.tool-run-row--step')).filter(visible).length;
-    // A thinking row that says its thought's words without having been opened, outside
-    // any list of steps the reader opened.
-    const barePreviews = Array.from(h.querySelectorAll('.tool-run-row--step'))
-      .filter((row) => visible(row) && (row.querySelector(':scope > .tool-run-toggle > .tool-run-label')?.textContent ?? '').trim() === 'Thinking'
-        && !row.closest('.process-fold-body, .tool-run-body'))
-      .map((row) => (row.querySelector(':scope > .tool-run-toggle')?.textContent ?? '').trim())
-      .filter((line) => line !== 'Thinking');
-    return { shown, otherLines, rows, barePreviews };
+    // A thinking step row (the icon, the first line) outside any list the reader opened,
+    // and a thought's fold line that reads anything but "Thinking" behind its chevron.
+    const bareRows = [
+      ...Array.from(h.querySelectorAll('.tool-run-row--step'))
+        .filter((row) => visible(row) && !!row.querySelector(':scope > .tool-run-toggle [data-step-icon="thought"]')
+          && !row.closest('.process-fold-body, .tool-run-body'))
+        .map((row) => `step row: ${(row.querySelector(':scope > .tool-run-toggle')?.textContent ?? '').trim()}`),
+      ...Array.from(h.querySelectorAll('[data-testid="thought-fold"] > .tool-run-toggle'))
+        .filter((line) => visible(line) && ((line.textContent ?? '').trim() !== 'Thinking'
+          || !line.firstElementChild?.classList.contains('process-fold-chevron')
+          || !!line.querySelector('[data-step-icon]:not([data-step-icon="chevron"])')))
+        .map((line) => `fold line: ${(line as HTMLElement).outerHTML.slice(0, 160)}`),
+    ];
+    return { shown, otherLines, rows, bareRows };
   }, markers);
 }
 
@@ -62,7 +72,7 @@ async function expectOnce(hist: Locator, markers: string[], where: string) {
   const r = await thinkingOnScreen(hist, markers);
   for (const m of markers) expect(r.shown[m], `${where}: "${m}" is drawn ${r.shown[m]} times`).toBeLessThanOrEqual(1);
   expect(r.otherLines, `${where}: a line besides the thinking row says "Thinking"`).toEqual([]);
-  expect(r.barePreviews, `${where}: a thinking row on its own shows its thought's words`).toEqual([]);
+  expect(r.bareRows, `${where}: a thought outside an opened list is not the one line "> Thinking"`).toEqual([]);
   return r;
 }
 
@@ -131,7 +141,7 @@ for (const withId of [true, false]) {
   });
 }
 
-test('one live thought on its own is the word alone; opened it shows the thought, shut it hides it again', async ({ page }) => {
+test('one live thought on its own is the one line "> Thinking": opened it shows its row and the thought, shut it is the line again', async ({ page }) => {
   await mockSession(page, LIVE_BASE, 'running');
   const hist = await open(page);
   await waitForWs(page);
@@ -141,20 +151,36 @@ test('one live thought on its own is the word alone; opened it shows the thought
   await injectEvent(page, 'session:text-delta', { sessionId: SID, delta: 'TH_SOFAR here is the table\n\n| a | b |\n|---|---|\n| 1 | 2 |\n', msgId: 'th-s1' });
   await injectEvent(page, 'session:thinking-delta', { sessionId: SID, delta: 'TH_SOLO_FIRST tally the closed ones\nTH_SOLO_REST then check each cause', msgId: 'th-s2' });
   await expect(hist).toContainText('TH_SOFAR', { timeout: 30000 });
-  const row = hist.locator('.tool-run-row--step', { has: page.locator(':scope > .tool-run-toggle > .tool-run-label', { hasText: /^Thinking$/ }) })
-    .filter({ hasNot: page.locator('.process-fold-body') });
-  await expect(row).toHaveCount(1);
-  // Its own row in the timeline, in no fold and no run.
-  expect(await row.evaluate((el) => !!el.closest('.process-fold-body, .tool-run-body'))).toBe(false);
-  await expect(row.locator(':scope > .tool-run-toggle .tool-run-detail')).toHaveCount(0);
-  await expect(hist).not.toContainText('TH_SOLO_FIRST');
-  await expectOnce(hist, ['TH_SOLO_FIRST', 'TH_SOLO_REST'], 'one live thought, shut');
+  const fold = hist.locator('[data-testid="thought-fold"]');
+  await expect(fold).toHaveCount(1);
+  const line = fold.locator(':scope > .tool-run-toggle');
 
+  // Shut: the chevron, then the word; no icon, no row, none of the thought's words.
+  const shut = async (where: string) => {
+    await expect(fold).toHaveAttribute('data-open', 'false');
+    await expect(line).toHaveText('Thinking');
+    expect(await line.evaluate((el) => el.firstElementChild?.classList.contains('process-fold-chevron'))).toBe(true);
+    await expect(fold.locator('[data-step-icon="thought"]')).toHaveCount(0);
+    await expect(fold.locator('.tool-run-row--step')).toHaveCount(0);
+    await expect(hist).not.toContainText('TH_SOLO_FIRST');
+    // The same line every other fold is: its box and its chevron's place match a turn fold's.
+    await expectOnce(hist, ['TH_SOLO_FIRST', 'TH_SOLO_REST'], where);
+  };
+  await shut('one live thought, shut');
+
+  // Opened: the thinking row is inside, with its icon and the thought's first line.
+  await line.click();
+  await expect(fold).toHaveAttribute('data-open', 'true');
+  const row = fold.locator('.process-fold-body .tool-run-row--step');
+  await expect(row).toHaveCount(1);
+  await expect(row.locator('[data-step-icon="thought"]')).toHaveCount(1);
+  await expect(row.locator('.tool-run-detail')).toContainText('TH_SOLO_FIRST');
+  await expectOnce(hist, ['TH_SOLO_FIRST', 'TH_SOLO_REST'], 'one live thought, opened');
+  // The row opens the whole thought.
   await row.locator(':scope > .tool-run-toggle').click();
   await expect(row.locator('.chat-thinking-content')).toContainText('TH_SOLO_REST');
-  await expectOnce(hist, ['TH_SOLO_FIRST', 'TH_SOLO_REST'], 'one live thought, opened');
+  await expectOnce(hist, ['TH_SOLO_FIRST', 'TH_SOLO_REST'], 'one live thought, read');
 
-  await row.locator(':scope > .tool-run-toggle').click();
-  await expect(hist).not.toContainText('TH_SOLO_FIRST');
-  await expectOnce(hist, ['TH_SOLO_FIRST', 'TH_SOLO_REST'], 'one live thought, shut again');
+  await line.click();
+  await shut('one live thought, shut again');
 });

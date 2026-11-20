@@ -29,7 +29,7 @@ import { SuggestSegments, useSuggestSegments } from '@/components/chat/SuggestSe
 import { RichMarkdown } from '@/components/chat/RichBlocks';
 import { disclosureIds, useRowDisclosure } from './row-disclosure';
 import { StepIcon, toolDisplayName, toolStepIcon } from './StepIcon';
-import { InStepList, RunLive, useInFoldBody, useInStepList, useRunLive } from './fold-body-context';
+import { InFoldBody, InStepList, RunLive, useInFoldBody, useInStepList, useRunLive } from './fold-body-context';
 
 /** The most calls a run lays out as rows of an opened fold (ToolRunShell `flat`). */
 const FLAT_RUN_MAX = 40;
@@ -288,11 +288,26 @@ export function SessionThinking({ text, live, disclosureId }: { text: string; li
   // Signature-only thinking has no displayable text — render nothing rather
   // than an expandable-but-blank row.
   if (!text.trim()) return null;
-  // A step row like every other (step-rows.css): the icon, the word, and, inside a list
-  // of steps the reader opened, the thought's first line, muted, so a reader scanning an
-  // opened turn reads what it was thinking. On its own in the timeline it is the word
-  // alone (fold-body-context.ts InStepList): the thought is one click away.
-  const firstLine = open || !inStepList ? '' : thinkingFirstLine(text);
+  // On its own in the timeline a thought is the line every fold is: the chevron, then the
+  // word, nothing else; its step row (the icon, the first line) is inside, shown once the
+  // line is opened (2026-11-20, the user, of one thought drawn as an icon row: "collpe
+  // like > Thinking ... just liek all other not even icon icon isinside te collpes").
+  if (!inStepList) {
+    return (
+      <div className="tool-run-row process-fold" data-testid="thought-fold" data-open={open ? 'true' : 'false'} {...(live ? { 'data-running': 'true' } : {})}>
+        <button type="button" className="tool-run-toggle" aria-expanded={open} onClick={() => setOpen((p) => !p)}>
+          <span className={`tool-run-chevron process-fold-chevron${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
+          <span className="tool-run-label">Thinking</span>
+          {live && <span className="tool-run-live-dot" />}
+        </button>
+        {open && <div className="process-fold-body"><InFoldBody.Provider value><InStepList.Provider value><SessionThinking text={text} live={live} /></InStepList.Provider></InFoldBody.Provider></div>}
+      </div>
+    );
+  }
+  // Inside a list of steps the reader opened, a step row like every other (step-rows.css):
+  // the icon, the word, and the thought's first line, muted, so a reader scanning an
+  // opened turn reads what it was thinking.
+  const firstLine = open ? '' : thinkingFirstLine(text);
   return (
     <div className="tool-run-row tool-run-row--step">
       <button className="tool-run-toggle" aria-expanded={open} onClick={() => setOpen((p) => !p)}>

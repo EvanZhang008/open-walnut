@@ -136,15 +136,22 @@ describe('every kind of step is one row with its own line icon', () => {
     const bash = html(createElement(GenericToolCall, { tool: { name: 'Bash', toolUseId: 'b1', input: { command: 'ls -la' }, result: 'ok' } as never, status: 'done' }))
     expect(firstIcon(bash)).toBe('terminal')
     expect(bash).toContain('chat-tool-block-command')
-    // Inside a list of steps the reader opened, the thought's first line; on its own, the
-    // word alone (2026-11-20, the user: "even if only one thining shoud also collapes").
+    // Inside a list of steps the reader opened, a thought is its step row: the icon, the
+    // word, its first line. On its own it is the line every fold is, "> Thinking": the
+    // chevron and the word, no icon, no words of the thought (2026-11-20, the user:
+    // "collpe like > Thinking ... not even icon icon isinside te collpes").
     const thought = html(createElement(InStepList.Provider, { value: true }, createElement(SessionThinking, { text: '**Checking** the fold\nsecond line' })))
     expect(firstIcon(thought)).toBe('thought')
     expect(thought).toContain('Checking the fold')
     const alone = html(createElement(SessionThinking, { text: '**Checking** the fold\nsecond line' }))
-    expect(firstIcon(alone)).toBe('thought')
-    expect(alone).toContain('>Thinking<')
-    expect(alone).not.toContain('Checking')
+    const aloneDoc = parseHTML(`<html><body>${alone}</body></html>`).document
+    const fold = aloneDoc.querySelector('.process-fold[data-testid="thought-fold"]')!
+    expect(fold.getAttribute('data-open')).toBe('false')
+    expect(fold.textContent).toBe('Thinking')
+    expect(fold.querySelector('.tool-run-toggle')!.firstElementChild!.className).toContain('process-fold-chevron')
+    expect(firstIcon(alone)).toBe('chevron')
+    expect(alone).not.toContain('data-step-icon="thought"')
+    expect(alone).not.toContain('tool-run-row--step')
     expect(alone).not.toContain('tool-run-detail')
     const tool = { name: 'Bash', toolUseId: 's1', input: { command: `walnut tools call task_send '{"to":"mw1","title":"Ready","text":"All done."}'` }, result: '{"ok":true}' }
     const calls = detectOutboundCalls(tool as never, tool.result)
