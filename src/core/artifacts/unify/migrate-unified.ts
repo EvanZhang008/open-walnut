@@ -387,7 +387,12 @@ export async function adoptStrayVault(dirs: UnifyDirs, record: UnifiedRecord): P
   const replaced = path.join(dirs.artifacts, '.backup', `stray-replaced-${at}`);
   let n = 0;
   // Hidden files (an editor's own settings it made again) are not notes: they stay where they are.
-  const files = await filesUnder(dirs.notes, (r) => r.endsWith('.lock') || r.split('/').some((s) => s.startsWith('.')));
+  // Nor is a link into the tree (a later release links the old places to it): taking one in would
+  // put a link where the note is.
+  const files: string[] = [];
+  for (const rel of await filesUnder(dirs.notes, (r) => r.endsWith('.lock') || r.split('/').some((s) => s.startsWith('.')))) {
+    if (!(await linksIntoTree(dirs, path.join(dirs.notes, rel)))) files.push(rel);
+  }
   if (!files.length) return 0;
   for (const rel of files) {
     const from = path.join(dirs.notes, rel);
@@ -403,6 +408,14 @@ export async function adoptStrayVault(dirs: UnifyDirs, record: UnifiedRecord): P
   await fsp.rename(dirs.notes, path.join(dirs.artifacts, '.backup', `notes-stray-${at}`));
   if (n) log.memory.info('one tree: took in files written to the old vault place', { files: n });
   return n;
+}
+
+/** `file` is a link whose target is the tree or inside it (a link into the tree is never a note to take in). */
+export async function linksIntoTree(dirs: UnifyDirs, file: string): Promise<boolean> {
+  const st = await fsp.lstat(file).catch(() => null);
+  if (!st?.isSymbolicLink()) return false;
+  const rel = path.relative(dirs.artifacts, path.resolve(path.dirname(file), await fsp.readlink(file)));
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
 /** Merge the files of `from` that `into` lacks (an undo's late writes); the rest stay where they are. */
