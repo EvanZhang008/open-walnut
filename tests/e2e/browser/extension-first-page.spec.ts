@@ -37,6 +37,7 @@ import { askView, openPanel, selectText, startPanelLab, sw, type PanelLab } from
 import { holdVaultLock } from './vault-lock'
 import { ensureVaultSetUp } from './vault-session-helper'
 import { pickMode } from './permission-mode-helpers'
+import { asksOf } from './status-section-helpers'
 
 test.describe.configure({ mode: 'serial' })
 // The key reads the fixture's vault; nothing here locks it or ends an unlock.
@@ -257,8 +258,9 @@ test('the side panel opens on Chat: the side bar, the list filling the page, New
   for (const n of NEEDS) {
     const card = v.locator('.todo-pinned-card.todo-pinned-card-needs-action').filter({ hasText: n.title })
     await expect(card).toBeVisible({ timeout: 30_000 })
-    // Its status line, as Home draws it (review round 5, Sol #3): the ask, in words.
-    await expect(card).toContainText(n.ask, { timeout: 30_000 })
+    // Its ask, in words, as Home draws it (review round 5, Sol #3): the ask card sits right under
+    // the row, never inside it (a row is a button; tests/web/ask-card-words-guard.test.ts).
+    await expect(asksOf(card)).toContainText(n.ask, { timeout: 30_000 })
   }
   // A click grows it into the whole composer: the page chip with ×, Act in this tab, Save as todo.
   await box.click()
