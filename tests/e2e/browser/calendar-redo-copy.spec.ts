@@ -94,8 +94,16 @@ async function hourPxOf(scope: Locator): Promise<number> {
  *  Alt when `alt`; returns before the release. Measured from the chip itself, so a scroll the
  *  chip needed cannot move the target. */
 async function dragChip(page: Page, scope: Locator, chip: Locator, move: { hours: number; day?: string }, opts: { alt?: boolean } = {}) {
-  await chip.scrollIntoViewIfNeeded()
-  const box = (await chip.boundingBox())!
+  // After an Undo the chip is drawn again where it went back to: wait until it holds still there.
+  let box = { x: 0, y: 0, width: 0, height: 0 }
+  await expect(async () => {
+    await chip.scrollIntoViewIfNeeded({ timeout: 2_000 })
+    const a = (await chip.boundingBox())!
+    await page.waitForTimeout(150)
+    const b = (await chip.boundingBox())!
+    expect(b).toEqual(a)
+    box = b
+  }).toPass({ timeout: 10_000 })
   const hourPx = await hourPxOf(scope)
   let x = box.x + box.width / 2
   if (move.day) {
