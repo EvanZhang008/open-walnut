@@ -20,7 +20,8 @@ import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 import { drawOrgAvatars, setOrgAvatar, type OrgAvatarSet } from '@/api/org';
 import { log } from '@/utils/log';
-import { MicInput } from '@/components/common/BoxMic';
+import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { useOrgAvatars } from './useOrgAvatars';
 import { useStoreTask } from '@/contexts/TasksContext';
 import { avatarFileValue } from './avatar-upload';
@@ -122,6 +123,14 @@ export function OrgAvatarDialog({ target, onRename, onClose }: Props) {
     }
   };
 
+  // Save, Reset and Draw take the words of their box once its mic has written them in.
+  const nameMic = useRef<BoxMicHandle | null>(null);
+  const promptMic = useRef<BoxMicHandle | null>(null);
+  const saving = useRef<OrgAvatarSet | null>(null);
+  const saveGate = useSendAfterDictation([nameMic], () => void save(saving.current), target.taskId);
+  const saveAs = (value: OrgAvatarSet | null) => { saving.current = value; saveGate.send(); };
+  const drawGate = useSendAfterDictation([promptMic], () => void draw(), target.taskId);
+
   const titleId = `org-avatar-title-${target.taskId}`;
   return createPortal(
     <ModalOverlayOwner.Provider value={modalOwner}>
@@ -137,7 +146,7 @@ export function OrgAvatarDialog({ target, onRename, onClose }: Props) {
             <label className="org-avatar-name">
               <span>Name</span>
               <MicInput value={name} setText={setName} disabled={!renameKind} maxLength={renameKind === 'vp' ? 60 : 200} fieldClassName="mic-field-compact"
-                data-testid="org-avatar-name" data-no-draft="rename" onEnter={() => void save(picked)} />
+                data-testid="org-avatar-name" data-no-draft="rename" micRef={nameMic} onEnter={() => saveAs(picked)} />
               <small>{renameKind === 'vp' ? 'Blank gives it its project’s name.' : renameKind ? 'The task’s title.' : 'The CEO keeps its name.'}</small>
             </label>
           </div>
@@ -176,8 +185,8 @@ export function OrgAvatarDialog({ target, onRename, onClose }: Props) {
             {tab === 'ai' && (<>
               <div className="org-avatar-ask">
                 <MicInput value={prompt} setText={setPrompt} placeholder={`What should ${target.name} look like? (blank: one that fits its name)`} fieldClassName="mic-field-compact mic-field-grow"
-                  maxLength={400} data-testid="org-avatar-prompt" data-draft-key={promptDraft.key ?? undefined} onEnter={() => { if (!drawing) void draw(); }} />
-                <button type="button" className="org-avatar-btn is-primary" disabled={drawing} data-testid="org-avatar-draw" onClick={() => void draw()}>{drawing ? 'Drawing…' : drawn.length ? 'Draw again' : 'Draw'}</button>
+                  maxLength={400} data-testid="org-avatar-prompt" data-draft-key={promptDraft.key ?? undefined} micRef={promptMic} onEnter={() => { if (!drawing) drawGate.send(); }} />
+                <button type="button" className="org-avatar-btn is-primary" disabled={drawing} data-testid="org-avatar-draw" onClick={() => drawGate.send()} {...dictationWaitProps(drawGate)}>{drawing ? 'Drawing…' : drawn.length ? 'Draw again' : 'Draw'}</button>
               </div>
               {drawing && <p className="org-avatar-note" data-testid="org-avatar-drawing">Your AI is drawing three; this takes up to a minute.</p>}
               {drawn.length > 0 && (
@@ -205,10 +214,10 @@ export function OrgAvatarDialog({ target, onRename, onClose }: Props) {
             {error && <p className="org-avatar-error" role="alert" data-testid="org-avatar-error">{error}</p>}
           </div>
           <footer className="org-avatar-foot">
-            <button type="button" className="org-avatar-btn" disabled={busy || !current.custom} data-testid="org-avatar-reset" onClick={() => void save({ reset: true })}>Reset to default</button>
+            <button type="button" className="org-avatar-btn" disabled={busy || !current.custom} data-testid="org-avatar-reset" onClick={() => saveAs({ reset: true })}>Reset to default</button>
             <span className="org-avatar-gap" />
             <button type="button" className="org-avatar-btn" onClick={onClose}>Cancel</button>
-            <button type="button" className="org-avatar-btn is-primary" disabled={busy || blankTitle || (!picked && name.trim() === target.name.trim())} data-testid="org-avatar-save" onClick={() => void save(picked)}>{busy ? 'Saving…' : 'Save'}</button>
+            <button type="button" className="org-avatar-btn is-primary" disabled={busy || ((blankTitle || (!picked && name.trim() === target.name.trim())) && !saveGate.micBusy && !saveGate.waiting)} data-testid="org-avatar-save" onClick={() => saveAs(picked)} {...dictationWaitProps(saveGate)}>{busy ? 'Saving…' : 'Save'}</button>
           </footer>
         </div>
       </div>
