@@ -19,15 +19,17 @@ export interface ModeSpec {
   keywords: readonly string[];
   /** The chip's name while in it. */
   chip: string;
-  /** What Tab does, said in the hint. */
+  /** What Tab does, said in the hint, and the mode's name in the Tab list. */
   action: string;
+  /** One line under its name in the Tab list: what it gives. */
+  about: string;
   placeholder: string;
 }
 
 export const MODES: readonly ModeSpec[] = [
-  { id: 'tasks', keywords: ['task', 'tasks'], chip: 'Tasks', action: 'Search tasks', placeholder: 'Search tasks…' },
-  { id: 'notes', keywords: ['note', 'notes'], chip: 'Notes', action: 'Search notes', placeholder: 'Search notes…' },
-  { id: 'ask', keywords: ['?', 'ask'], chip: 'Ask', action: 'Ask a quick question', placeholder: 'Ask anything…' },
+  { id: 'tasks', keywords: ['task', 'tasks'], chip: 'Tasks', action: 'Search tasks', about: 'Find a task by its words and open its chat', placeholder: 'Search tasks…' },
+  { id: 'notes', keywords: ['note', 'notes'], chip: 'Notes', action: 'Search notes', about: 'Find a note by its title or text and open it', placeholder: 'Search notes…' },
+  { id: 'ask', keywords: ['?', 'ask'], chip: 'Ask', action: 'Ask a quick question', about: 'An answer right here, with no task made', placeholder: 'Ask anything…' },
 ];
 
 export function modeSpec(id: QuickMode): ModeSpec | null {

@@ -232,11 +232,15 @@ test('Tab lists who to talk to: Cmd-number and typed words pick', async ({ page 
   await page.keyboard.press(KEY)
   await expect(bar(page)).toBeVisible()
   await expect(bar(page)).toHaveAttribute('data-recording', 'false')
-  await expect(box(page)).toHaveAttribute('placeholder', 'Type a message…')
+  // The box says Tab is there.
+  await expect(box(page)).toHaveAttribute('placeholder', 'Type a message, or Tab to see what you can do')
+  await expect(page.locator('.qb-keys')).toContainText('more')
   await box(page).press('Tab')
   const picker = page.locator('.qb-picker')
   await expect(picker).toBeVisible()
-  await expect(picker.locator('.qb-section-label')).toHaveText(['Pinned', 'VPs', 'Tasks'])
+  // First what else the bar does, then who to talk to.
+  await expect(picker.locator('.qb-section-label')).toHaveText(['Search and ask', 'Pinned', 'VPs', 'Tasks'])
+  await expect(picker.locator('.qb-mode-row-name')).toHaveText(['Search tasks', 'Search notes', 'Ask a quick question'])
   await expect(picker.locator('.qb-person-name')).toHaveText(['CEO', 'Walnut VP', 'Garden VP', 'Pick the tile color'])
   await expect(picker.locator('.qb-person').nth(1).locator('.qb-person-line')).toHaveText('3 Needs you · Pick the artifacts layout')
   await shot(page, '4-picker')

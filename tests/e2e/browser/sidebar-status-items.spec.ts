@@ -159,10 +159,12 @@ test('an item shows up above the bell, ticks from its timer, and leaves no gap w
   await expect(item(page)).toHaveAttribute('aria-label', 'Probe ready')
   // Above the bell, inside the notification area.
   const order = await page.locator('.sidebar-notification-area > .sidebar-link').evaluateAll((els) => els.map((el) => el.className))
-  // Every item (the probe, and Rhythm's ring, which the fixture also loads) sits right above the bell.
+  // Every item (the probe, and Rhythm's ring, which the fixture also loads) sits right above the bell,
+  // or above the quick bar's magnifier, which is the bell's own neighbour while its experiment is on.
   const last = order.map((name) => name.includes('sidebar-status-item')).lastIndexOf(true)
   expect(last).toBeGreaterThanOrEqual(0)
-  expect(order[last + 1]).toContain('sidebar-notification-btn')
+  const next = order[last + 1]?.includes('sidebar-quickbar-link') ? last + 2 : last + 1
+  expect(order[next]).toContain('sidebar-notification-btn')
   const railBox = await page.locator('.sidebar-notification-btn').boundingBox()
   const itemBox = await item(page).boundingBox()
   expect(Math.round(itemBox!.height)).toBe(Math.round(railBox!.height))

@@ -296,6 +296,31 @@
 }
 
 .qb-person-on { background: var(--accent-subtle); }
+/* The Tab list's first part: what else the bar does, one row each (icon, name, what it gives). */
+.qb-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 46px;
+  padding: 0 10px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.qb-mode-row.qb-person-on { background: var(--accent-subtle); }
+.qb-mode-row-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  color: var(--accent);
+  background: var(--accent-subtle);
+}
+.qb-mode-row-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.qb-mode-row-name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qb-mode-row-about { font-size: 12px; color: var(--qb-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qb-mode-row-hint { flex: none; font-size: 11px; color: var(--qb-muted); white-space: nowrap; }
 .qb-person-main { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 0 1 auto; max-width: 52%; }
 .qb-person-name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .qb-person-current .qb-person-name::after { content: ' \2713'; color: var(--accent); font-weight: 700; }

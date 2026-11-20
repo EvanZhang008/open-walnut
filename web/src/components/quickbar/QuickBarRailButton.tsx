@@ -1,5 +1,5 @@
 /**
- * The rail's magnifier (Sidebar.tsx, right under Org): a click opens the quick bar as
+ * The rail's magnifier (Sidebar.tsx, right above the bell: a tool, not a page): a click opens the quick bar as
  * Control-Option-Command-Space does, for a person who does not remember the key. Shown only while
  * the experiment `quick_bar` is on, as the bar itself.
  */

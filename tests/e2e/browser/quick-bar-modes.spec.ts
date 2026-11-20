@@ -136,6 +136,57 @@ test('task + Tab searches tasks; the arrows choose, Enter opens it; Backspace on
   await expect(box(page)).toHaveValue('')
 })
 
+test('Tab lists what the bar does: the arrows pick Search notes, its words search, Enter opens the note', async ({ page }) => {
+  await pinFlag(page, true)
+  const sends = await stubAll(page)
+  await voiceOff(page)
+  const seen = await stubSearches(page)
+  await openApp(page)
+  await page.getByTestId('sidebar-quick-bar').click()
+  await expect(box(page)).toHaveAttribute('placeholder', 'Type a message, or Tab to see what you can do')
+  await box(page).press('Tab')
+  const rows = page.locator('.qb-mode-row')
+  await expect(rows.locator('.qb-mode-row-name')).toHaveText(['Search tasks', 'Search notes', 'Ask a quick question'])
+  await expect(rows.locator('.qb-mode-row-about')).toHaveText([
+    'Find a task by its words and open its chat', 'Find a note by its title or text and open it', 'An answer right here, with no task made',
+  ])
+  await expect(rows.first()).toHaveAttribute('aria-selected', 'true')
+  await shot(page, 'm5-tab-list')
+  await page.keyboard.press('ArrowDown')
+  await expect(rows.nth(1)).toHaveAttribute('aria-selected', 'true')
+  await page.keyboard.press('Enter')
+  await expect(bar(page)).toHaveAttribute('data-mode', 'notes')
+  await expect(page.locator('.qb-picker')).toHaveCount(0)
+  await expect(box(page)).toBeFocused()
+  await box(page).pressSequentially('sand')
+  await expect(results(page).locator('.qb-result-title')).toHaveText(['Spring beds', 'Tile samples'])
+  expect(seen.notes.at(-1)).toContain('q=sand')
+  await box(page).press('Enter')
+  await expect(bar(page)).toBeHidden()
+  await expect(page).toHaveURL(/\/notes\?path=Garden%2FSpring(%20|\+)beds\.md$/)
+
+  // Words typed first become the search; the list's own box narrows it ("no" keeps Search notes).
+  await page.getByTestId('sidebar-quick-bar').click()
+  await box(page).pressSequentially('tile')
+  await box(page).press('Tab')
+  await page.keyboard.type('no')
+  await expect(rows.locator('.qb-mode-row-name')).toHaveText(['Search notes'])
+  await page.keyboard.press('Enter')
+  await expect(bar(page)).toHaveAttribute('data-mode', 'notes')
+  await expect(box(page)).toHaveValue('tile')
+  await expect.poll(() => seen.notes.at(-1)).toContain('q=tile')
+  await expect(results(page).locator('.qb-result-title')).toHaveText(['Spring beds', 'Tile samples'])
+  // Esc goes back to the message as it was.
+  await box(page).press('Escape')
+  await expect(bar(page)).toHaveAttribute('data-mode', 'send')
+  await expect(box(page)).toHaveValue('tile')
+  // A click on a row does the same as Enter.
+  await box(page).press('Tab')
+  await rows.filter({ hasText: 'Ask a quick question' }).click()
+  await expect(bar(page)).toHaveAttribute('data-mode', 'ask')
+  expect(sends.bodies).toHaveLength(0)
+})
+
 test('a message that only starts like a keyword still sends on Enter', async ({ page }) => {
   await pinFlag(page, true)
   const sends = await stubAll(page)

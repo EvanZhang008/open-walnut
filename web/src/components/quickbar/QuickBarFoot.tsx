@@ -62,7 +62,7 @@ export function QuickBarFoot({
   else if (recording) keys = <><Key k="esc" />stop listening <Key k="↵" />send</>;
   else if (mode === 'tasks' || mode === 'notes') keys = <><Key k="↑↓" />choose <Key k="↵" />open <Key k="esc" />back</>;
   else if (mode === 'ask') keys = <><Key k="↵" />ask <Key k="esc" />back</>;
-  else keys = <>{!typedMode && <><Key k="tab" />who </>}<Key k="↵" />send{canCapture && <> <Key k="⇧⌘S" />screenshot</>} <Key k="esc" />close</>;
+  else keys = <>{!typedMode && <><Key k="tab" />more </>}<Key k="↵" />send{canCapture && <> <Key k="⇧⌘S" />screenshot</>} <Key k="esc" />close</>;
 
   return (
     <div className="qb-foot">

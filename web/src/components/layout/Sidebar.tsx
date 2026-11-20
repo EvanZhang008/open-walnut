@@ -415,7 +415,6 @@ export function Sidebar({
             (declared by its plugin, or chosen in an older build) has no row here;
             it opens from the Apps page until the user switches it on there. */}
         {railShown.org && orgEntry}
-        <QuickBarRailButton />
         {apps.sidebar.filter((app) => !(phone && isDesktopOnlyApp(app))).map((app) => {
           const link = appLink(app);
           return app.path === '/' ? (
@@ -466,6 +465,8 @@ export function Sidebar({
         {/* Plugin status items (a live ring each), above the bell; nothing when none is live.
             Voice lives in Settings > Voice (its recordings included) since 2026-10-26. */}
         <SidebarStatusItems onOpenChange={setStatusOpen} />
+        {/* A tool, not a page: with the bell, right above it (2026-11-20, the user), never at the top. */}
+        <QuickBarRailButton />
         <button
           className="sidebar-link sidebar-notification-btn"
           onClick={() => setNotifOpen(!notifOpen)}

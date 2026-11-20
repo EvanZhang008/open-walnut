@@ -21,7 +21,7 @@ import { draftKey } from '@/utils/drafts';
 import { fetchQuickPeople, type QuickImage } from '@/api/quick';
 import { log } from '@/utils/log';
 import { addresseeOf, personOfRecent, readRecents, sectionPeople, startingPerson, type QuickPerson } from './quickbar-people';
-import { matchMode, modeSpec, type QuickMode } from './quickbar-modes';
+import { MODES, matchMode, modeSpec, type QuickMode } from './quickbar-modes';
 import { QuickBarResults, type QuickBarResultsHandle, type QuickResult } from './QuickBarResults';
 import { QuickBarAsk, useQuickAsk } from './QuickBarAsk';
 import { QuickBarFoot, MicGlyph, Waveform } from './QuickBarFoot';
@@ -439,7 +439,8 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
   const shown = preview.to ?? person;
   const spec = modeSpec(mode);
   const value = mode === 'send' ? text : query;
-  const placeholder = spec ? spec.placeholder : recording ? 'Speak now…' : voiceOff ? 'Type a message…' : 'Speak or type…';
+  // Idle, the box says Tab is there: what else the bar does is never a hidden key (2026-11-20).
+  const placeholder = spec ? spec.placeholder : recording ? 'Speak now…' : voiceOff ? 'Type a message, or Tab to see what you can do' : 'Speak or type, or Tab to see what you can do';
 
   return (
     <div
@@ -501,7 +502,18 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
       </div>
       {mode === 'send' && <PictureStrip pictures={pictures} className="qb-shots" testId="qb-pictures" />}
       {countdownAt !== null && <div key={countdownAt} className="qb-count" style={{ animationDuration: `${SEND_COUNTDOWN_MS}ms` }} />}
-      {picking && <QuickBarPicker sections={sections} current={shown} onPick={pick} onClose={() => { setPicking(false); boxRef.current?.focus(); }} />}
+      {picking && (
+        <QuickBarPicker
+          sections={sections}
+          current={shown}
+          onPick={pick}
+          onClose={() => { setPicking(false); boxRef.current?.focus(); }}
+          // During a take the words are a message: Tab then only picks who gets them.
+          modes={recording || stt.isTranscribing ? [] : MODES}
+          // The words in the box become the search or the question; Esc brings them back.
+          onMode={(next) => { const words = text.trim(); enterMode(next, words, words.length > 0); }}
+        />
+      )}
       {(mode === 'tasks' || mode === 'notes') && <QuickBarResults ref={resultsRef} mode={mode} query={query} onOpen={openResult} />}
       {mode === 'ask' && <QuickBarAsk turns={asking.turns} onTask={(taskId) => openResult({ key: taskId, title: '', sub: '', to: taskPath(taskId) })} />}
       <QuickBarFoot
