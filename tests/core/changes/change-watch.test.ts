@@ -334,6 +334,30 @@ describe('the same state read again is no news', () => {
     expect(snap()!.told).toEqual({ 'stage@?:prod': ['prod blocked (approval failed)'] })
   })
 
+  it('a read that leaves the commit out, or shows the stage waiting, does not make the same block news again', async () => {
+    const withCommit = (stage: ChangeStage, commit?: string): ChangeReadResult => ({
+      ok: true, snapshot: { label: 'CR-1001', review: { state: 'merged' }, deploy: { pipeline: 'app', stages: [stage], done: false, ...(commit ? { commit } : {}) } },
+    })
+    task('t1', [`cr:${CR1}`])
+    answers.set(CR1, withCommit({ name: 'prod', status: 'running' }, 'c1'))
+    await tick()
+    for (const answer of [
+      withCommit(blocked('needs approval'), 'c1'), withCommit(blocked('needs approval')),
+      withCommit({ name: 'prod', status: 'waiting', blocker: { kind: 'window', text: 'outside the window' } }, 'c1'),
+      withCommit(blocked('needs approval'), 'c1'), withCommit(noData), withCommit(blocked('needs approval'), 'c1'),
+    ]) {
+      answers.set(CR1, answer)
+      await tick({ force: true })
+    }
+    expect(sent).toHaveLength(1)
+    // A new commit is a new run: the same block is news again.
+    answers.set(CR1, withCommit(noData, 'c2'))
+    await tick({ force: true })
+    answers.set(CR1, withCommit(blocked('needs approval'), 'c2'))
+    await tick({ force: true })
+    expect(sent).toHaveLength(2)
+  })
+
   it('a review state read again after a flicker is told once; a new revision is news again', async () => {
     task('t1', [`cr:${CR1}`])
     answers.set(CR1, open({ revision: 1 }))
