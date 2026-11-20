@@ -20,7 +20,7 @@ import { assertVoiceHere } from './voice-here.js';
 const execFileAsync = promisify(execFile);
 
 // Auto-stop guard: a forgotten hotkey must not record the room for hours.
-const MAX_RECORD_MS = 5 * 60 * 1000;
+export const MAX_RECORD_MS = 5 * 60 * 1000;
 
 let current: { proc: ChildProcess; wavPath: string; startedAt: number; killTimer: NodeJS.Timeout } | null = null;
 

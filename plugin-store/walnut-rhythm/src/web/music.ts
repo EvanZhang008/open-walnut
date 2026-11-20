@@ -193,6 +193,8 @@ export function createMusicPlayer(walnut: WalnutWebApi, store: RhythmStore): Mus
   let playNumber = 0
   // Set right before a pause this player makes itself, so the pause listener can tell it from one the system made.
   let ownPause = false
+  // Paused for voice input (below); any play clears it, so the person's own choice wins.
+  let heldForVoice = false
   const listeners = new Set<() => void>()
   const audio = new Audio()
   audio.preload = 'none'
@@ -286,6 +288,7 @@ export function createMusicPlayer(walnut: WalnutWebApi, store: RhythmStore): Mus
   }
 
   const play = (options: { trackId?: string; withFocus?: boolean } = {}) => {
+    heldForVoice = false
     const list = tracks()
     const wanted = options.trackId ?? view.trackId
     const track = list.find((one) => one.id === wanted) ?? list[0]
@@ -401,6 +404,22 @@ export function createMusicPlayer(walnut: WalnutWebApi, store: RhythmStore): Mus
     }
   }
   mediaActions(true)
+
+  // Voice input on this machine holds the music off (Walnut's `stt:media-hold`): what plays
+  // here pauses, and plays again when it ends, unless the person played, stopped or
+  // switched it meanwhile. A window on another computer keeps its own music.
+  const onThisMachine = typeof location !== 'undefined' && ['localhost', '127.0.0.1', '[::1]', '::1'].includes(location.hostname)
+  if (onThisMachine) walnut.events.on('stt:media-hold', (event) => {
+    if (event.name !== 'stt:media-hold') return
+    const active = (event.data as { active?: unknown } | null)?.active === true
+    if (active) {
+      if (view.playing || view.starting) { pause(); heldForVoice = true }
+      return
+    }
+    if (!heldForVoice) return
+    heldForVoice = false
+    if (view.paused && !view.playing && !view.starting) play()
+  })
 
   // The block owns music started with it: when it ends, stops or turns into its break, so does the music.
   const offStore = store.subscribe(() => {

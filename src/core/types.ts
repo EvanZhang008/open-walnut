@@ -2230,6 +2230,12 @@ export interface Config {
      * the correction list's terms.
      */
     auto_context?: boolean;
+    /**
+     * Pause what plays on this Mac (Spotify, Music, a video in a browser, Rhythm's focus
+     * music) while voice input listens, and play it again after (src/core/stt/media-hold.ts).
+     * Default: true (unset = on).
+     */
+    pause_media?: boolean;
     // sherpa-onnx — local (SenseVoice / Whisper / Paraformer / other ONNX models)
     sherpa_model_dir?: string;
     sherpa_model_type?: 'sense_voice' | 'whisper' | 'paraformer';

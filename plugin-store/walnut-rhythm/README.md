@@ -44,6 +44,7 @@ How it plays:
 - The tracks stream through Walnut's raw file route, which answers byte ranges, so an 8 hour file starts at once and is never copied. On a cloud companion the phone reads them from the Mac through the bridge.
 - One track on repeat loops on its own (the phone uses a gapless looper). The console's player is one audio element for the whole page, so moving to another screen never stops it. Track, order and volume are kept per device.
 - On the phone, a call or an alarm pauses the music and it comes back when iOS allows.
+- Voice input on the Mac (a mic button, the quick bar, the Mac app's dictation key) pauses the music playing in a window on the Mac and plays it again when you stop, unless you played, paused or stopped it yourself meanwhile. Walnut's setting **Pause music while you dictate** (Settings, Voice) turns this off; a Spotify playlist pauses the same way, through the Mac's Now Playing.
 
 ### Spotify
 

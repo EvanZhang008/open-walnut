@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Config } from '@open-walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
-import { SettingsGroup } from '../SettingsSection';
+import { SettingsGroup, SettingsRow } from '../SettingsSection';
+import { ToggleSwitch } from '../inputs/ToggleSwitch';
+import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
 import { SttDetectionPanel, sttDraftOf, type SttDraft } from './SttDetectionPanel';
 import { useSerialSave, type OnSave } from './GeneralSection';
 import { invalidateSttStatusCache } from '@/hooks/useSttStatus';
@@ -16,6 +18,17 @@ interface Props {
 type VoiceDraft = SttDraft;
 
 const draftOf = sttDraftOf;
+
+/** stt.pause_media: on unless turned off (src/core/stt/media-hold.ts). Saves at once. */
+function PauseMusicRow({ config, onSave }: { config: Config; onSave: OnSave }) {
+  const save = useSerialSave(config, onSave);
+  const setting = useOptimisticSetting(config.stt?.pause_media !== false,
+    (on: boolean) => save((c) => ({ stt: { ...c.stt, pause_media: on } as Config['stt'] }), { rowKey: 'stt.pause_media' }),
+    { rowKey: 'stt.pause_media' });
+  return <SettingsRow label="Pause music while you dictate" htmlFor="stt-pause-media" error={setting.error}
+    help="When voice input starts, Walnut pauses what plays on this Mac (Spotify, Apple Music, a video in the browser, Rhythm's focus music) and plays it again when you stop. Only what Walnut paused plays again."
+    control={<ToggleSwitch id="stt-pause-media" data-testid="stt-pause-media" checked={setting.value} busy={setting.busy} onChange={setting.set} />} />;
+}
 
 /**
  * Voice: the recent recordings (every take, to copy or redo) and Dictation
@@ -85,6 +98,9 @@ export function SttSection({ config, onSave, onReload }: Props) {
       </SettingsGroup>
       <SettingsGroup heading="Dictation" data-testid="stt-dictation">
         <SttDetectionPanel config={config} onSave={onSave} onConfigured={handleConfigured} draft={draft} onDraft={onDraft} />
+      </SettingsGroup>
+      <SettingsGroup heading="While you dictate" data-testid="stt-while-dictating">
+        <PauseMusicRow config={config} onSave={onSave} />
       </SettingsGroup>
     </SectionCard>
   );

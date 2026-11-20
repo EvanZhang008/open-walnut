@@ -206,6 +206,7 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
     prewarm_on_start: 'a speech server of the Mac', qwen_size: 'a speech model of the Mac',
     keep_recordings: 'each server sizes its own recordings to its own disk',
     auto_context: 'each server reads its own task titles (and an older replica would refuse an stt row naming it)',
+    pause_media: 'each server pauses the music of its own machine (and an older replica would refuse an stt row naming it)',
   },
 })
 

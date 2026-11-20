@@ -132,6 +132,7 @@ import { mentionSourcesRouter } from './routes/mention-sources.js'
 import { repositoriesRouter } from './routes/repositories.js'
 import { audioRouter } from './routes/audio.js'
 import { sttRouter } from './routes/stt.js'
+import { sttMediaHoldRouter } from './routes/stt-media-hold.js'
 import { subscriptionLimitsRouter } from './routes/subscription-limits.js'
 import { migrateGlobalNotes } from '../core/notes-migration.js'
 import { authMiddleware } from './middleware/auth.js'
@@ -2944,6 +2945,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/history-remote', (await import('./routes/history-remote.js')).historyRemoteRouter)
   // A session of this machine kept only in remote storage comes back when this server reads it (core/history-remote/).
   void import('../core/history-remote/service.js').then((m) => m.installServerFetcher()).catch(() => { /* restores read as missing */ })
+  // Voice input holds the music off while it listens (core/stt/media-hold.ts).
+  app.use('/api/stt/media-hold', sttMediaHoldRouter)
   app.use('/api/stt', sttRouter)
   app.use('/api/incidents', incidentsRouter)
   app.use('/api/metrics', metricsRouter)
@@ -3370,6 +3373,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   //    the expiry timer, so quiet:changed fires when a hold ends. Fire-and-forget:
   //    the push gates await the same load on their own. --
   void initQuiet()
+  // -- Voice input's media hold: music an earlier run paused mid-dictation plays again
+  //    once its holds go unrenewed (core/stt/media-hold.ts). --
+  void import('../core/stt/media-hold-runtime.js').then((m) => m.mediaHold().restore()).catch(() => { /* nothing to play again */ })
 
   // -- Push notification service --
   initPushNotifications()

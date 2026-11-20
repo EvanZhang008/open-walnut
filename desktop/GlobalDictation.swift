@@ -58,6 +58,12 @@ final class GlobalDictation: NSObject {
     private static let doubleTapFnKey = "dictationDoubleTapFn"
     /// Drives the HUD waveform from the recorder's live metering.
     private var meterTimer: Timer?
+    /// While the mic records, the server keeps this Mac's music paused (POST
+    /// /api/stt/media-hold, src/core/stt/media-hold.ts): it pauses what plays and
+    /// plays again only what it paused. Renewed every 15 s; a hold the app stops
+    /// renewing (a crash, a quit) ends on its own on the server.
+    private var mediaHoldID: String?
+    private var mediaHoldTimer: Timer?
 
     var isRecording: Bool { recorder?.isRecording ?? false }
 
@@ -132,6 +138,7 @@ final class GlobalDictation: NSObject {
         if let ref = hotKeyRef { UnregisterEventHotKey(ref); hotKeyRef = nil }
         if let handler = eventHandler { RemoveEventHandler(handler); eventHandler = nil }
         stopFnMonitor()
+        releaseMedia()
         activeDictation = nil
     }
 
@@ -234,10 +241,13 @@ final class GlobalDictation: NSObject {
             AVNumberOfChannelsKey: 1,
             AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
         ]
+        // Music off before the mic opens, so it is not under the first words.
+        holdMedia()
         do {
             let rec = try AVAudioRecorder(url: url, settings: settings)
             rec.isMeteringEnabled = true
             guard rec.record() else {
+                releaseMedia()
                 showHUD("Could not start recording", style: .error, autoHide: 3)
                 return
             }
@@ -256,8 +266,42 @@ final class GlobalDictation: NSObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + maxRecordingSeconds, execute: work)
             DesktopLogger.shared.log("dictation_started", fields: [:])
         } catch {
+            releaseMedia()
             showHUD("Could not start recording: \(error.localizedDescription)", style: .error, autoHide: 4)
         }
+    }
+
+    // MARK: - Music while dictating
+
+    private func holdMedia() {
+        releaseMedia()
+        let id = "mac-dictation-" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        mediaHoldID = id
+        postMediaHold(id: id, action: "hold")
+        mediaHoldTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+            guard let self = self, let id = self.mediaHoldID else { return }
+            self.postMediaHold(id: id, action: "hold")
+        }
+    }
+
+    /// Safe to call when nothing is held. The server ignores a renew that lands after it.
+    func releaseMedia() {
+        mediaHoldTimer?.invalidate()
+        mediaHoldTimer = nil
+        guard let id = mediaHoldID else { return }
+        mediaHoldID = nil
+        postMediaHold(id: id, action: "release")
+    }
+
+    private func postMediaHold(id: String, action: String) {
+        guard let port = portProvider(),
+              let url = URL(string: "http://127.0.0.1:\(port)/api/stt/media-hold") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 5
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["id": id, "action": action, "source": "mac-dictation"])
+        URLSession.shared.dataTask(with: req).resume()
     }
 
     private func startMeterTimer() {
@@ -292,6 +336,7 @@ final class GlobalDictation: NSObject {
         autoStopWork?.cancel()
         autoStopWork = nil
         stopMeterTimer()
+        releaseMedia()
         guard let rec = recorder, let url = recordingURL else { return }
         rec.stop()
         recorder = nil

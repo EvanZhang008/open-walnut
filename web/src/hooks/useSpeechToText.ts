@@ -20,6 +20,7 @@ import { captureSeconds, describeShortSeconds, type CaptureSample } from '@/util
 import { DICTATION_AUDIO_CONSTRAINTS } from '@/utils/mic-constraints';
 import { initialMicHealth, micHealthTick, micHealthTrackEnded, byteFrameRms, classifyTake, TAKE_ERRORS, DEAD_STREAM_RMS, SAMPLE_INTERVAL_MS, type MicHealthState } from '@/utils/mic-health';
 import { log } from '@/utils/log';
+import { acquireMediaHold, type MediaHoldHandle } from '@/api/media-hold';
 
 export interface UseSpeechToTextOptions {
   /** Called with transcribed text when transcription completes */
@@ -274,6 +275,13 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
     isMountedRef.current = true;
     return () => { isMountedRef.current = false; };
   }, []);
+  // While this hook's microphone is open (or opening), the music of this machine is
+  // paused (api/media-hold.ts); an unmount gives it back like a stop.
+  const mediaHoldRef = useRef<MediaHoldHandle | null>(null);
+  useEffect(() => () => {
+    mediaHoldRef.current?.release();
+    mediaHoldRef.current = null;
+  }, []);
 
   /**
    * Final pass failed or came back empty, but the user already watched a draft
@@ -312,6 +320,9 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
   }, []);
 
   const stopStream = useCallback(() => {
+    // The mic is closed: the music Walnut paused for it may play again.
+    mediaHoldRef.current?.release();
+    mediaHoldRef.current = null;
     if (draftTimerRef.current !== undefined) {
       clearInterval(draftTimerRef.current);
       draftTimerRef.current = undefined;
@@ -360,6 +371,9 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
       openingRef.current = true;
       cancelOpenRef.current = false;
       setMicOpening(true);
+      // Music off before the mic opens, so it is not under the first words.
+      mediaHoldRef.current?.release();
+      mediaHoldRef.current = acquireMediaHold('mic');
       let stream: MediaStream;
       try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: DICTATION_AUDIO_CONSTRAINTS });
@@ -369,6 +383,8 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
       if (cancelOpenRef.current || !isMountedRef.current) {
         cancelOpenRef.current = false;
         for (const track of stream.getTracks()) track.stop();
+        mediaHoldRef.current?.release();
+        mediaHoldRef.current = null;
         setMicOpening(false);
         return;
       }

@@ -1360,6 +1360,11 @@ export interface QuietState {
   holds: QuietHold[];
 }
 
+/** `stt:media-hold`: voice input on this machine holds the music off (active) or let it go. */
+export interface SttMediaHoldEvent {
+  active: boolean;
+}
+
 // ── Presence (time tracking → in-process subscribers) ──
 
 /**
@@ -1600,6 +1605,7 @@ export interface EventPayloadMap {
 
   'notification:removed': NotificationRemovedEvent;
   'quiet:changed': QuietState;
+  'stt:media-hold': SttMediaHoldEvent;
   'time:banked': TimeBankedEvent;
   'time:outside': TimeOutsideEvent;
   'health:ingested': HealthIngestedEvent;

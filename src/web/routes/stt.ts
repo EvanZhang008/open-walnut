@@ -10,7 +10,8 @@ import { getConfig, updateConfig } from '../../core/config-manager.js';
 import { transcribeAudio, runShadowTranscription, createEngine, getOrCreateEngine, ensureSttVocabMigrated, prewarmSttEngines, type SttEngine, type SttResult } from '../../core/stt/index.js';
 import { saveRecordingAudio, writeRecordingResult, listRecordings, readRecordingAudio } from '../../core/stt/recordings.js';
 import { createWhisperCppEngine } from '../../core/stt/engine-whisper-cpp.js';
-import { startMicRecording, stopMicRecording, isMicRecording } from '../../core/stt/mic-record.js';
+import { startMicRecording, stopMicRecording, isMicRecording, MAX_RECORD_MS } from '../../core/stt/mic-record.js';
+import { mediaHold } from '../../core/stt/media-hold-runtime.js';
 import { cleanupTranscript, warmupCleanup, isCleanupAvailable } from '../../core/stt/cleanup-mlx.js';
 import { detectSystem } from '../../core/stt/detect.js';
 import { installViaBrew, downloadGgmlModel, MODEL_CATALOG, VAD_MODEL, getModelDir, SHERPA_MODEL_CATALOG, downloadSherpaModel, getSherpaModelDir, findSherpaModels, BREW_PACKAGES, type SetupEvent } from '../../core/stt/setup.js';
@@ -308,6 +309,10 @@ sttRouter.post('/cleanup/warmup', async (_req: Request, res: Response) => {
  * POST /api/stt/dictation/stop  → { text, durationMs, recordingId? } (transcribed like /transcribe)
  * GET  /api/stt/dictation       → { recording: boolean }
  */
+/** The server recorder's hold: no renewals, so it lasts as long as a recording may. */
+const SERVER_MIC_HOLD = 'server-mic-dictation';
+const SERVER_MIC_HOLD_MS = MAX_RECORD_MS + 30_000;
+
 sttRouter.get('/dictation', (_req: Request, res: Response) => {
   res.json({ recording: isMicRecording() });
 });
@@ -315,6 +320,8 @@ sttRouter.get('/dictation', (_req: Request, res: Response) => {
 sttRouter.post('/dictation/start', async (_req: Request, res: Response) => {
   try {
     await startMicRecording();
+    // This machine's own microphone listens: its music holds off until the stop.
+    void mediaHold().hold(SERVER_MIC_HOLD, 'server-mic', SERVER_MIC_HOLD_MS).catch(() => {});
     res.json({ recording: true });
   } catch (err) {
     res.status(409).json({ error: err instanceof Error ? err.message : String(err) });
@@ -323,7 +330,7 @@ sttRouter.post('/dictation/start', async (_req: Request, res: Response) => {
 
 sttRouter.post('/dictation/stop', express.json(), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { audioBase64 } = await stopMicRecording();
+    const { audioBase64 } = await stopMicRecording().finally(() => { void mediaHold().release(SERVER_MIC_HOLD).catch(() => {}); });
     const config = await getConfig();
     const language = (req.body?.language as string | undefined) || config.stt?.language;
     const sttReq = { audio: audioBase64, format: 'wav', language };
