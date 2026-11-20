@@ -22,6 +22,9 @@ export const ICON_PHASE_COMPLETE = <svg width="14" height="14" viewBox="0 0 16 1
 export const ICON_ATTENTION = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6"/><path d="M8 4.8v3.7"/><circle cx="8" cy="11" r=".5" fill="currentColor"/></svg>;
 /** Eye: Watch (keep this task on top of the task panel, whatever its state). */
 export const ICON_EYE = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></svg>;
+/** Filled eye: Watching (the task is watched). Its shape tells the state in any palette, the
+ *  accent colour alone does not (a grey accent, 2026-11-20). */
+export const ICON_EYE_FILLED = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" data-eye="filled"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z" fill="currentColor" fillOpacity=".28"/><circle cx="8" cy="8" r="2.2" fill="currentColor"/></svg>;
 /** Two stacked layers: Background, the task list's group for long-running work. */
 export const ICON_BACKGROUND = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 2 1.5 5.5 8 9l6.5-3.5L8 2z"/><path d="M1.5 9 8 12.5 14.5 9"/></svg>;
 /** Crossed eye: Stop watching. */

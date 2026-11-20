@@ -6,7 +6,13 @@
   transition: opacity .15s, background .15s, color .15s;
 }
 .task-watch-btn:hover { opacity: 1; background: var(--bg-hover); }
-.task-watch-btn.is-watched { color: var(--accent); opacity: 1; }
+.task-watch-btn.is-watched {
+  color: var(--accent); opacity: 1;
+  /* On, like Lock when locked (.session-panel-lock.is-locked): a tint behind the filled eye, so
+     the state shows even where the accent is grey (2026-11-20, the user: "选了之后是高亮的"). */
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.task-watch-btn.is-watched:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); }
 /* In the detail header it sits at the right, just before the close button. */
 .tdp-head-top .tdp-watch { margin-left: auto; }
 .tdp-head-top .tdp-watch + .todo-detail-close { margin-left: 0; }
@@ -18,4 +24,7 @@
 /* Among a session header's window buttons (SessionPanel): the row's button size at full
    strength, the eye in the accent while the task is watched. */
 .task-watch-btn.task-action-btn { width: auto; height: 20px; padding: 0 5px; opacity: 1; }
-.task-watch-btn.task-action-btn.is-watched { color: var(--accent); }
+/* (Named by its header class: a selector ending in .task-action-btn reads as an overlay to
+   tests/web/overlays-opaque.test.ts.) */
+.session-panel-watch.is-watched { color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.session-panel-watch.is-watched:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); }

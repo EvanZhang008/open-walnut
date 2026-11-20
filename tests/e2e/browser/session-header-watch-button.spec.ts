@@ -106,6 +106,17 @@ async function expectWatchState(watch: Locator, on: boolean): Promise<void> {
   await expect(watch).toHaveAccessibleName(on ? 'Stop watching' : 'Watch')
   if (on) await expect(watch).toHaveClass(/\bis-watched\b/)
   else await expect(watch).not.toHaveClass(/\bis-watched\b/)
+  // It looks on, not only says so (2026-11-20, the user: "选了之后是高亮的"): a filled eye and a
+  // tint behind it while watched, none while not. Shape and tint both hold in a grey palette.
+  await expect(watch).toHaveAttribute('title', on ? 'Watching \u00b7 click to stop' : 'Watch')
+  await expect(watch.locator('svg[data-eye="filled"]')).toHaveCount(on ? 1 : 0)
+  // Its background against a neighbour on the row that is never on (Locate), with the pointer
+  // off the row (a hovered eye has a background of its own).
+  await watch.page().mouse.move(1, 1)
+  await expect.poll(() => watch.evaluate((el) => {
+    const plain = el.parentElement?.querySelector('[data-header-id="locate"]')
+    return !!plain && getComputedStyle(el).backgroundColor !== getComputedStyle(plain).backgroundColor
+  })).toBe(on)
 }
 const watchingSection = (page: Page) => page.locator('#home-task-navigation').getByRole('region', { name: 'Watching' })
 

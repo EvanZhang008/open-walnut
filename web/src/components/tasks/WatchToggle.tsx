@@ -187,10 +187,10 @@ export function WatchButton({ task, className = '', headerId, testId = 'task-wat
       data-header-id={headerId}
       aria-pressed={watched}
       aria-label={watched ? 'Stop watching' : 'Watch'}
-      title={watched ? 'Watching: kept at the top of the task panel. Click to stop.' : 'Watch: keep it at the top of the task panel, whatever its state'}
+      title={watched ? 'Watching \u00b7 click to stop' : 'Watch'}
       onClick={(e) => { e.stopPropagation(); toggle(); }}
     >
-      {ICONS.ICON_EYE}
+      {watched ? ICONS.ICON_EYE_FILLED : ICONS.ICON_EYE}
     </button>
   );
 }
