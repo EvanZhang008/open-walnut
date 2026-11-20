@@ -130,6 +130,37 @@ enum ActionNeededModel {
         ]
     }
 
+    /// One ask answered from here: the item as it was, what was said, its place among the pages,
+    /// and the asks shown with it (it stays only beside one of them; a later ask starts afresh).
+    struct Answered: Equatable {
+        var item: WalnutActionItem
+        var said: String?
+        var index: Int
+        var peers: [String]
+    }
+
+    /// The pages (the web's ask-pages.ts pagesOf): the task's asks in their order, one shown at a
+    /// time, with the ones answered here kept at their place while an ask shown with them is open.
+    static func pages(_ items: [WalnutActionItem], answered: [String: Answered]) -> [WalnutActionItem] {
+        let open = Set(items.map(\.id))
+        var pages = items
+        let gone = answered.values
+            .filter { a in !open.contains(a.item.id) && a.peers.contains { open.contains($0) } }
+            .sorted { $0.index < $1.index }
+        for a in gone { pages.insert(a.item, at: min(max(a.index, 0), pages.count)) }
+        return pages
+    }
+
+    /// The page to show (pageIndex): the kept one, else the one now at its place, never past the end.
+    static func pageIndex(_ ids: [String], at: (id: String, index: Int)?) -> Int {
+        guard !ids.isEmpty, let at else { return 0 }
+        if let i = ids.firstIndex(of: at.id) { return i }
+        return min(max(at.index, 0), ids.count - 1)
+    }
+
+    /// The words a screen reader hears for the page shown.
+    static func placeText(_ index: Int, of count: Int) -> String { "Decision \(index + 1) of \(count)" }
+
     static let iso: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -145,15 +176,24 @@ enum ActionNeededModel {
 private struct SnoozeBody: Encodable { let until: String? }
 private struct SnoozeAnswer: Decodable { let task_id: String? }
 
+/// The card (2026-11-20, the user, of the ten designs: "I mean 1 is good let's do it", the web's
+/// ask-card.css): the frosted material, 18pt continuous corners with a hairline and a white top
+/// edge, the only colour a 7pt orange dot for "needs you" and the links; quiet grey keys, Snooze as
+/// quiet text with a clock at the right. One ask at a time ("max shoudl 1 decision, and can left and
+/// right"): each ask is its own page with its own words, options and box, "‹ 1/3 ›" beside Snooze
+/// and a sideways swipe page through them, and an answered page stays, marked with what was said.
 struct ActionNeededView: View {
     let task: WalnutTask
     let items: [WalnutActionItem]
     var onOpenSession: () -> Void = {}
 
     @Environment(TasksStore.self) private var store: TasksStore?
+    @Environment(\.colorScheme) private var scheme
 
-    /// Answered or snoozed from here before the server's next status: kept off or marked here.
-    @State private var sent = Set<String>()
+    /// Answered from here: kept, marked with what was said, until no open ask is left.
+    @State private var answered: [String: ActionNeededModel.Answered] = [:]
+    /// The page shown: its ask, and its place (a page that left gives its place to the next).
+    @State private var at: (id: String, index: Int)?
     @State private var snoozed: [String: Date?] = [:]
     @State private var error: String?
     /// A line under an item its words reached without answering it (an approval's note).
@@ -161,23 +201,72 @@ struct ActionNeededView: View {
     /// One id per letter reply until it is taken, so a retry after a lost answer is the same reply.
     @State private var replyIDs: [String: String] = [:]
 
+    private static let corner: CGFloat = 18
+
+    private var pages: [WalnutActionItem] { ActionNeededModel.pages(items, answered: answered) }
+
     var body: some View {
-        let shown = items.filter { !sent.contains($0.id) }
-        if !shown.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Action needed")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(Theme.warning)
-                ForEach(shown) { item in line(item) }
+        let pages = self.pages
+        let index = ActionNeededModel.pageIndex(pages.map(\.id), at: at)
+        if pages.contains(where: { answered[$0.id] == nil }) {
+            let item = pages[index]
+            VStack(alignment: .leading, spacing: 8) {
+                line(item, index: index, count: pages.count)
                 if let error {
                     Text(error).font(.caption2).foregroundStyle(Theme.decideText)
                 }
             }
-            .padding(8)
-            .background(Theme.warning.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+            .padding(EdgeInsets(top: 12, leading: 12, bottom: 8, trailing: 12))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
+            .overlay {
+                // A hairline all round, and the white top edge of the notices' glass.
+                RoundedRectangle(cornerRadius: Self.corner, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(scheme == .dark ? 0.16 : 0.1), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: Self.corner, style: .continuous)
+                    .strokeBorder(LinearGradient(colors: [.white.opacity(scheme == .dark ? 0.14 : 0.8), .clear], startPoint: .top, endPoint: .center), lineWidth: 1)
+                    .blendMode(.plusLighter)
+            }
+            .shadow(color: .black.opacity(0.06), radius: 12, y: 6)
+            // A clear sideways stroke pages it; an upright one scrolls the list as before.
+            .gesture(
+                DragGesture(minimumDistance: 24)
+                    .onEnded { value in
+                        guard pages.count > 1,
+                              abs(value.translation.width) > abs(value.translation.height) * 1.5,
+                              abs(value.translation.width) > 44 else { return }
+                        go(value.translation.width < 0 ? 1 : -1, pages: pages, from: index)
+                    }
+            )
             .accessibilityElement(children: .contain)
+            .accessibilityLabel(pages.count > 1 ? ActionNeededModel.placeText(index, of: pages.count) : "Action needed")
             .accessibilityIdentifier("board.row.actions.\(task.id)")
         }
+    }
+
+    /// One page on (+1) or back (-1), said to a screen reader.
+    private func go(_ delta: Int, pages: [WalnutActionItem], from index: Int) {
+        let to = min(max(index + delta, 0), pages.count - 1)
+        guard to != index else { return }
+        at = (pages[to].id, to)
+        AccessibilityNotification.Announcement(ActionNeededModel.placeText(to, of: pages.count)).post()
+    }
+
+    /// Answered from here: its page stays, marked with what was said.
+    private func markAnswered(_ item: WalnutActionItem, said: String?) {
+        let pages = self.pages
+        let i = pages.firstIndex { $0.id == item.id } ?? 0
+        let words = said?.trimmingCharacters(in: .whitespacesAndNewlines)
+        answered[item.id] = .init(item: item, said: (words?.isEmpty ?? true) ? nil : words, index: i,
+                                  peers: pages.map(\.id).filter { $0 != item.id })
+        at = (item.id, i)
+    }
+
+    /// Its send failed: open again, and shown.
+    private func reopen(_ item: WalnutActionItem) {
+        let i = pages.firstIndex { $0.id == item.id } ?? 0
+        answered.removeValue(forKey: item.id)
+        at = (item.id, i)
     }
 
     private func until(_ item: WalnutActionItem) -> Date? {
@@ -187,44 +276,79 @@ struct ActionNeededView: View {
     }
 
     @ViewBuilder
-    private func line(_ item: WalnutActionItem) -> some View {
+    private func line(_ item: WalnutActionItem, index: Int, count: Int) -> some View {
         let later = until(item)
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Text(ActionNeededModel.label(item.kind).uppercased())
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(later == nil ? Theme.warning : .secondary)
-                // The agent's own words: markdown and file links as everywhere else (LetterAgentTextTests).
-                Text(MarkdownParser.inline(item.summary))
-                    .font(.caption)
-                    .foregroundStyle(later == nil ? .primary : .secondary)
-                    .lineLimit(2)
-                    .handlingFilePathLinks(task: task, field: .needs)
+        let done = answered[item.id]
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                // "Needs you": the card's one colour. Grey while put aside, a ring once answered.
+                Circle()
+                    .fill(done != nil ? Color.clear : later == nil ? Theme.warning : Color.secondary)
+                    .overlay { if done != nil { Circle().strokeBorder(Color.secondary, lineWidth: 1.2) } }
+                    .frame(width: 7, height: 7)
+                    .padding(.top, 6)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(ActionNeededModel.label(item.kind))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    // The agent's own words: markdown and file links as everywhere else (LetterAgentTextTests).
+                    Text(MarkdownParser.inline(item.summary))
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(later == nil && done == nil ? .primary : .secondary)
+                        .lineLimit(3)
+                        .handlingFilePathLinks(task: task, field: .needs)
+                }
                 Spacer(minLength: 0)
             }
-            if let later {
+            if let done {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: "checkmark").font(.caption.weight(.semibold))
+                    if let said = done.said {
+                        Text("Answered: ").foregroundStyle(.secondary) + Text(said).foregroundStyle(.primary)
+                    } else {
+                        Text("Answered")
+                    }
+                    Spacer(minLength: 0)
+                    pager(index: index, count: count)
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("action.answered.\(item.id)")
+            } else if let later {
                 HStack(spacing: 8) {
                     Text("Snoozed until \(later.formatted(date: .abbreviated, time: .shortened))\(item.blocking == true ? " · its session waits on it" : "")")
                         .font(.caption2).foregroundStyle(.secondary)
-                    Button("Unsnooze") { Task { await snooze(item, nil) } }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(Theme.warning)
-                        .font(.caption2)
-                        .accessibilityIdentifier("action.unsnooze.\(item.id)")
+                    Spacer(minLength: 0)
+                    pager(index: index, count: count)
+                    Button {
+                        Task { await snooze(item, nil) }
+                    } label: {
+                        Label("Unsnooze", systemImage: "clock").font(.footnote)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("action.unsnooze.\(item.id)")
                 }
             } else {
-                HStack(spacing: 6) {
-                    answer(item)
-                    Menu {
-                        ForEach(ActionNeededModel.presets(), id: \.id) { p in
-                            Button(p.label) { Task { await snooze(item, p.until) } }
-                        }
-                    } label: {
-                        Text("Snooze").font(.caption)
-                    }
-                    .accessibilityIdentifier("action.snooze.\(item.id)")
-                }
                 wordsBox(item)
+                // Its keys on the left, the pager and Snooze on the right; on a narrow row the keys
+                // take a line of their own, and stack when even that is too narrow.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        answer(item)
+                        Spacer(minLength: 0)
+                        tools(item, index: index, count: count)
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) { answer(item) }
+                        HStack(spacing: 8) { Spacer(minLength: 0); tools(item, index: index, count: count) }
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 6) { answer(item) }
+                        HStack(spacing: 8) { Spacer(minLength: 0); tools(item, index: index, count: count) }
+                    }
+                }
                 if let note = notes[item.id] {
                     Text(note).font(.caption2).foregroundStyle(.secondary)
                         .accessibilityIdentifier("action.note.\(item.id)")
@@ -235,25 +359,69 @@ struct ActionNeededView: View {
         .accessibilityIdentifier("action.item.\(item.kind).\(item.id)")
     }
 
+    /// The pager and Snooze, at the right of the card's last line.
+    @ViewBuilder
+    private func tools(_ item: WalnutActionItem, index: Int, count: Int) -> some View {
+        pager(index: index, count: count)
+        Menu {
+            ForEach(ActionNeededModel.presets(), id: \.id) { p in
+                Button(p.label) { Task { await snooze(item, p.until) } }
+            }
+        } label: {
+            Label("Snooze", systemImage: "clock").font(.footnote)
+        }
+        .foregroundStyle(.secondary)
+        .accessibilityIdentifier("action.snooze.\(item.id)")
+    }
+
+    /// "‹ 1/3 ›" beside Snooze, when the task asks more than one thing.
+    @ViewBuilder
+    private func pager(index: Int, count: Int) -> some View {
+        if count > 1 {
+            let pages = self.pages
+            HStack(spacing: 0) {
+                Button { go(-1, pages: pages, from: index) } label: {
+                    Image(systemName: "chevron.left").frame(width: 28, height: 28).contentShape(Rectangle())
+                }
+                .disabled(index == 0)
+                .accessibilityLabel("Previous decision")
+                .accessibilityIdentifier("action.page.prev.\(task.id)")
+                Text("\(index + 1)/\(count)")
+                    .font(.caption.monospacedDigit())
+                    .accessibilityHidden(true)
+                    .accessibilityIdentifier("action.page.at.\(task.id)")
+                Button { go(1, pages: pages, from: index) } label: {
+                    Image(systemName: "chevron.right").frame(width: 28, height: 28).contentShape(Rectangle())
+                }
+                .disabled(index >= count - 1)
+                .accessibilityLabel("Next decision")
+                .accessibilityIdentifier("action.page.next.\(task.id)")
+            }
+            .buttonStyle(.plain)
+            .font(.footnote.weight(.medium))
+            .foregroundStyle(.secondary)
+        }
+    }
+
     @ViewBuilder
     private func answer(_ item: WalnutActionItem) -> some View {
         switch ActionNeededModel.answer(item) {
         case .approvalSheet:
             Button("Review") { Task { await ApprovalCenter.shared.open(id: item.id) } }
-                .buttonStyle(.walnut(.primary, size: .small)).controlSize(.mini).tint(Theme.accent)
+                .buttonStyle(AskChipStyle())
         case .letterOptions:
             ForEach(item.options ?? []) { o in
                 Button(o.label) { Task { await answerLetter(item, o) } }
-                    .buttonStyle(.walnut(.secondary, size: .small)).controlSize(.mini)
+                    .buttonStyle(AskChipStyle())
             }
         case .promptOptions:
             ForEach(item.options ?? []) { o in
                 Button(o.label) { Task { await answerQuestion(item, o) } }
-                    .buttonStyle(.walnut(.secondary, size: .small)).controlSize(.mini)
+                    .buttonStyle(AskChipStyle())
             }
         case .openSession:
             Button("Open") { onOpenSession() }
-                .buttonStyle(.walnut(.secondary, size: .small)).controlSize(.mini)
+                .buttonStyle(AskChipStyle())
         }
     }
 
@@ -310,7 +478,7 @@ struct ActionNeededView: View {
                 replyIDs[item.id] = clientId
                 _ = try await api.replyToLetter(id: item.id, text: text, clientId: clientId, images: payloads)
                 replyIDs[item.id] = nil
-                sent.insert(item.id)
+                markAnswered(item, said: text)
             case .approvalNote:
                 guard let sid else { return false }
                 _ = try await api.sendSessionMessage(id: sid, text: ActionNeededModel.sessionMessage(words, summary: item.summary, text: text), images: payloads)
@@ -318,15 +486,15 @@ struct ActionNeededView: View {
             case .declineStep:
                 guard let sid else { return false }
                 _ = try await api.respondSessionPermission(id: sid, requestId: item.id, allow: false, message: text, images: payloads)
-                sent.insert(item.id)
+                markAnswered(item, said: text)
             case .questionAnswer:
                 guard let sid, let question = item.question else { return false }
                 _ = try await api.respondSessionPermission(id: sid, requestId: item.id, allow: true, answers: [question: text], images: payloads)
-                sent.insert(item.id)
+                markAnswered(item, said: text)
             case .sessionAnswer:
                 guard let sid else { return false }
                 _ = try await api.sendSessionMessage(id: sid, text: ActionNeededModel.sessionMessage(words, summary: item.summary, text: text), images: payloads)
-                sent.insert(item.id)
+                markAnswered(item, said: text)
             }
             AppLog.info("action-needed", "answered in words", [
                 "taskId": task.id, "itemId": item.id, "kind": item.kind, "images": String(images.count),
@@ -340,25 +508,25 @@ struct ActionNeededView: View {
     }
 
     private func answerLetter(_ item: WalnutActionItem, _ o: WalnutAskOption) async {
-        sent.insert(item.id)
+        markAnswered(item, said: o.label)
         do {
             _ = try await WalnutAPI().answerLetter(id: item.id, actionId: o.id, freeText: nil)
             AppLog.info("action-needed", "letter answered", ["taskId": task.id, "letterId": item.id, "actionId": o.id])
         } catch {
-            sent.remove(item.id)
+            reopen(item)
             self.error = "Not sent. Try again."
         }
     }
 
     private func answerQuestion(_ item: WalnutActionItem, _ o: WalnutAskOption) async {
         guard let sid = item.sessionId, let question = item.question else { onOpenSession(); return }
-        sent.insert(item.id)
+        markAnswered(item, said: o.label)
         do {
             // The question's own words are its answer's key, as the session card sends them.
             _ = try await WalnutAPI().respondSessionPermission(id: sid, requestId: item.id, allow: true, answers: [question: o.label])
             AppLog.info("action-needed", "question answered", ["taskId": task.id, "requestId": item.id])
         } catch {
-            sent.remove(item.id)
+            reopen(item)
             self.error = "Not sent. Try again."
         }
     }
@@ -377,5 +545,18 @@ struct ActionNeededView: View {
             if let before { snoozed[item.id] = before } else { snoozed.removeValue(forKey: item.id) }
             self.error = "\(at == nil ? "Unsnooze" : "Snooze") failed. Try again."
         }
+    }
+}
+
+/// The card's choices: quiet grey keys with 8pt corners (the web's ask-card.css).
+struct AskChipStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.footnote)
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
+            .background(Color(uiColor: configuration.isPressed ? .secondarySystemFill : .tertiarySystemFill),
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }

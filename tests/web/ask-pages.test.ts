@@ -131,3 +131,34 @@ describe('a card\'s buttons come before its box', () => {
     expect(tools).toBeGreaterThan(words);
   });
 });
+
+describe('the phone draws the same card, one page at a time', () => {
+  const swift = readFileSync(join(__dirname, '../../ios-native/Walnut/Views/Tasks/ActionNeededView.swift'), 'utf8');
+
+  it('one page from ActionNeededModel.pages, never a list of every ask', () => {
+    expect(swift).toMatch(/ActionNeededModel\.pages\(items, answered: answered\)/);
+    expect(swift).not.toMatch(/ForEach\(shown\)/);
+    expect(swift).toMatch(/line\(item, index: index, count: pages\.count\)/);
+  });
+
+  it('its arrows have names and the place is said', () => {
+    expect(swift).toMatch(/accessibilityLabel\("Previous decision"\)/);
+    expect(swift).toMatch(/accessibilityLabel\("Next decision"\)/);
+    expect(swift).toMatch(/AccessibilityNotification\.Announcement\(ActionNeededModel\.placeText/);
+  });
+
+  it('the look: frosted, 18pt continuous corners, a hairline, the dot, quiet keys', () => {
+    expect(swift).toMatch(/\.background\(\.ultraThinMaterial, in: RoundedRectangle\(cornerRadius: Self\.corner, style: \.continuous\)\)/);
+    expect(swift).toMatch(/private static let corner: CGFloat = 18/);
+    expect(swift).toMatch(/\.strokeBorder\(Color\.primary\.opacity/);
+    expect(swift).toMatch(/Circle\(\)[\s\S]{0,200}Theme\.warning[\s\S]{0,200}\.frame\(width: 7, height: 7\)/);
+    expect(swift).toMatch(/struct AskChipStyle: ButtonStyle/);
+    expect(swift).not.toMatch(/\.buttonStyle\(\.bordered(Prominent)?\)/);
+  });
+
+  it('an answered page stays marked; a failed one opens again', () => {
+    expect(swift).not.toMatch(/sent\.insert|sent\.remove/);
+    expect(swift).toMatch(/markAnswered\(item, said: o\.label\)/);
+    expect(swift).toMatch(/reopen\(item\)/);
+  });
+});

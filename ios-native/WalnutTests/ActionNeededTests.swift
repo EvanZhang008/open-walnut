@@ -56,4 +56,27 @@ final class ActionNeededTests: XCTestCase {
         XCTAssertEqual(p[0].until.timeIntervalSince(now), 3600, accuracy: 0.5)
         XCTAssertTrue(p.allSatisfy { $0.until > now })
     }
+
+    /// One ask at a time (the web's tests/web/ask-pages.test.ts): an answered page keeps its place
+    /// while an ask shown with it is open; a later ask starts afresh.
+    func testAnsweredPagesKeepTheirPlace() {
+        let a = WalnutActionItem(kind: "letter", id: "a", summary: "Publish?")
+        let b = WalnutActionItem(kind: "letter", id: "b", summary: "Which plan?")
+        let c = WalnutActionItem(kind: "ask", id: "c", summary: "Which code?")
+        let marked = ["a": ActionNeededModel.Answered(item: a, said: "Publish", index: 0, peers: ["b", "c"])]
+        XCTAssertEqual(ActionNeededModel.pages([b, c], answered: marked).map(\.id), ["a", "b", "c"])
+        XCTAssertEqual(ActionNeededModel.pages([a, b, c], answered: marked).map(\.id), ["a", "b", "c"])
+        let mid = ["b": ActionNeededModel.Answered(item: b, said: nil, index: 1, peers: ["a", "c"])]
+        XCTAssertEqual(ActionNeededModel.pages([a, c], answered: mid).map(\.id), ["a", "b", "c"])
+        let later = WalnutActionItem(kind: "ask", id: "d", summary: "New?")
+        XCTAssertEqual(ActionNeededModel.pages([later], answered: marked).map(\.id), ["d"])
+    }
+
+    func testThePageShownFollowsItsAsk() {
+        XCTAssertEqual(ActionNeededModel.pageIndex(["a", "b", "c"], at: nil), 0)
+        XCTAssertEqual(ActionNeededModel.pageIndex(["c", "a", "b"], at: (id: "b", index: 1)), 2)
+        XCTAssertEqual(ActionNeededModel.pageIndex(["a", "c"], at: (id: "b", index: 1)), 1)
+        XCTAssertEqual(ActionNeededModel.pageIndex(["a"], at: (id: "c", index: 2)), 0)
+        XCTAssertEqual(ActionNeededModel.placeText(1, of: 3), "Decision 2 of 3")
+    }
 }
