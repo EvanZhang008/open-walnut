@@ -39,7 +39,9 @@ function print(s: Status): void {
   for (const p of s.problems) process.stdout.write(`  left out: ${p}\n`)
   if (s.forwards.length === 0) { process.stdout.write('No hub forwards on this machine.\n'); return }
   for (const f of s.forwards) {
-    const state = f.listening ? 'listening' : `not listening${f.error ? ` (${f.error})` : ''}`
+    const state = f.listening ? 'listening'
+      : f.waiting ? `not listening until a primary link takes it (${f.waiting}); a connection is refused until then`
+      : `not listening${f.error ? ` (${f.error})` : ''}`
     process.stdout.write(`  127.0.0.1:${f.local_port} -> the primary's 127.0.0.1:${f.port}${f.walnut ? ` (Walnut ${f.walnut})` : ''}: ${state}\n`)
     process.stdout.write(`    open now ${f.active}, opened ${f.opened}, last ${when(f.lastOpenedAt)}; refused ${f.refused}${f.lastRefusal ? `, last: ${f.lastRefusal}` : ''}\n`)
   }
@@ -103,7 +105,7 @@ export async function runNetHubForward(action: string | undefined, args: string[
       if ('error' in now) break
       after = now
       const f = now.forwards.find((x) => x.local_port === local)
-      if (action === 'remove' ? !f : f && (f.listening || f.error)) break
+      if (action === 'remove' ? !f : f && (f.listening || f.error || f.waiting)) break
     }
     print(after)
     if (action === 'add') process.stdout.write("The primary takes it only once its config lists this port for this machine (net.hub_ports).\n")

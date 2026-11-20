@@ -601,12 +601,17 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
     const parseHub = reconstructed['__PARSE_HUB_FORWARDS__'] as typeof parseHubForwards | undefined
     if (createHub && parseHub) {
       const listened: string[] = []
+      let links: Array<{ link: string; home: string; heardAt: number }> = []
       const hub = createHub<string, { destroy(): void }>({
         file: '/f', read: () => '{"forwards":[{"local_port":1,"port":2}]}', parse: parseHub,
         listen: (port, host) => { listened.push(`${host}:${port}`); return { close: () => {} } },
-        links: () => [], openOut: () => {}, log: () => {}, now: () => 0, every: () => () => {},
+        links: () => links, openOut: () => {}, log: () => {}, now: () => 0, every: () => () => {},
       })
+      // No primary link: nothing listens (its port refuses); one binds: it listens.
       hub.start()
+      if (listened.length !== 0 || hub.status().forwards[0]?.waiting == null) throw new Error('hub forwards did not build')
+      links = [{ link: 'p', home: '/h', heardAt: 0 }]
+      hub.linksChanged()
       if (listened.join(',') !== '127.0.0.1:1' || hub.status().forwards.length !== 1) throw new Error('hub forwards did not build')
     }
     const stateDirOf = reconstructed['__NET_STATE_DIR_OF__'] as typeof netStateDirOf | undefined
@@ -5517,6 +5522,8 @@ function bindGatewayClientHome(ws, home) {
   }
   // This Walnut's primary is here: its calls waiting for one go now.
   if (fresh) setTimeout(wakeGatewayCalls, 0);
+  // And a hub forward waiting for a primary link listens now (hub-forward-v1).
+  if (fresh) setTimeout(hubLinksChanged, 0);
 }
 // A command that names another Walnut than the one its socket speaks for is refused
 // (walnut-scope-core.ts). An unbound socket may name any. Mirror daemon-standalone.ts.
@@ -14642,6 +14649,11 @@ var hubForwards = (__CREATE_HUB_FORWARDS__)({
   now: function () { return Date.now(); },
   every: function (ms, fn) { var t = setInterval(fn, ms); if (t.unref) t.unref(); return function () { clearInterval(t); }; },
 });
+// A leader link bound or closed: each forward listens only while one would take it. Deferred
+// by its callers (after start-up). Twin of daemon-standalone.ts.
+function hubLinksChanged() {
+  hubForwards.linksChanged();
+}
 // hub.status: this machine's forwards and how each is doing. Its primary and its own local
 // clients (the CLI); never the bridge, a follower, a lane or a probe.
 function cmdHubStatus(ws, id) {
@@ -17296,6 +17308,8 @@ async function startDaemon() {
       clearInterval(pingTimer);
       if (acp) acp.removeSubscriber(ws);
       streamRelay.dropLink(ws);
+      // A hub forward no primary link takes any more stops listening, so its port refuses.
+      if (gatewayClientHomes.has(ws)) setTimeout(hubLinksChanged, 0);
       // Nobody reads a one-shot whose socket closed: end it.
       const droppedOneShots = oneShot.dropClient(ws);
       if (droppedOneShots > 0) logMsg('info', 'oneshot runs ended with their socket', { runs: droppedOneShots });

@@ -249,8 +249,12 @@ export interface HubPortStatus {
   port: number
   /** This server's link to the host is up. */
   linked: boolean
-  /** The host's own forward to this port, from its daemon's `hub.status`; null while not known. */
-  forward: { localPort: number; listening: boolean; error: string | null } | null
+  /**
+   * The host's own forward to this port, from its daemon's `hub.status`; null while not known.
+   * `waiting`: why it does not listen although nothing is wrong (no primary link would take its
+   * connections, so its port refuses them); null from a daemon older than that.
+   */
+  forward: { localPort: number; listening: boolean; error: string | null; waiting: string | null } | null
   /** The host's daemon is older than hub forwards ('hub-forward-v1'): it needs an update first. */
   needsUpdate: boolean
   /** Linked, and the host's forward listens: a connection there reaches this port now. */
@@ -271,7 +275,7 @@ export interface HubStatusLink {
   send(cmd: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<unknown>
 }
 
-type DaemonForward = { local_port?: unknown; port?: unknown; listening?: unknown; error?: unknown }
+type DaemonForward = { local_port?: unknown; port?: unknown; listening?: unknown; error?: unknown; waiting?: unknown }
 const VIEW_TTL_MS = 15_000
 const VIEW_WAIT_MS = 1_500
 const views = new Map<string, { at: number; forwards: DaemonForward[] | null; asking: Promise<void> | null }>()
@@ -309,7 +313,7 @@ export async function hubPortStatus(host: string, opts: { config?: { net?: { hub
     const r = records.get(host)?.get(port)
     const f = forwards?.find((x) => x.port === port) ?? null
     const forward = f && typeof f.local_port === 'number'
-      ? { localPort: f.local_port, listening: f.listening === true, error: typeof f.error === 'string' ? f.error : null }
+      ? { localPort: f.local_port, listening: f.listening === true, error: typeof f.error === 'string' ? f.error : null, waiting: typeof f.waiting === 'string' ? f.waiting : null }
       : null
     return {
       port, linked, forward, needsUpdate,

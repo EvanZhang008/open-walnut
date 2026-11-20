@@ -238,8 +238,10 @@ export interface HostHubPort {
   port: number
   /** Walnut's link to the host is up. */
   linked: boolean
-  /** The host's own forward to this port, as its daemon says; null while not known. */
-  forward: { localPort: number; listening: boolean; error: string | null } | null
+  /** The host's own forward to this port, as its daemon says; null while not known. `waiting`
+   *  says why it does not listen although nothing is wrong (no link of Walnut's would take its
+   *  connections, so its port refuses them); null from an older daemon. */
+  forward: { localPort: number; listening: boolean; error: string | null; waiting: string | null } | null
   /** The host's Walnut daemon is older than hub forwards: it needs an update first. */
   needsUpdate: boolean
   /** Linked and the host's forward listens: a connection there reaches this port now. */

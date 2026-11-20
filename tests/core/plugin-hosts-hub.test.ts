@@ -18,7 +18,7 @@ vi.mock('../../src/core/hosts/hub-ports.js', async (importOriginal) => {
     ...original,
     hubPortStatus: vi.fn(async (host: string) => {
       asked.push(host)
-      return [{ port: 18403, linked: true, forward: { localPort: 18403, listening: true, error: null }, needsUpdate: false, up: true, active: 0, opened: 3, refused: 0, lastConnectedAt: 1, lastRefusedAt: null, lastError: null }]
+      return [{ port: 18403, linked: true, forward: { localPort: 18403, listening: true, error: null, waiting: null }, needsUpdate: false, up: true, active: 0, opened: 3, refused: 0, lastConnectedAt: 1, lastRefusedAt: null, lastError: null }]
     }),
   }
 })

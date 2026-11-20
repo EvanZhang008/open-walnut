@@ -372,7 +372,7 @@ suite(`host network with no companion: a ticket joins a machine (relay: ${RELAY}
       expect((await get('/bin')).body.equals(body)).toBe(true)
       expect(macConns).toBe(2)
       const row = (await listPluginHosts()).find((h) => h.alias === machine)
-      expect(row?.hub).toEqual([expect.objectContaining({ port: svc, linked: true, up: true, needsUpdate: false, forward: { localPort: local, listening: true, error: null }, opened: 2 })])
+      expect(row?.hub).toEqual([expect.objectContaining({ port: svc, linked: true, up: true, needsUpdate: false, forward: { localPort: local, listening: true, error: null, waiting: null }, opened: 2 })])
       expect(row!.hub![0].lastConnectedAt).toBeGreaterThan(Date.now() - 60_000)
       // Listed for another machine only: refused again.
       await migrateStoredConfig((doc) => { (doc.net as Record<string, unknown>).hub_ports = [{ port: svc, hosts: ['some-other-machine'] }]; return true })

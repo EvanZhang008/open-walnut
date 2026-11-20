@@ -93,6 +93,16 @@ The daemon reads the file every 5 seconds: a change applies then, and a port it 
 (another program has it) is tried again then. At most 16 forwards; an entry it cannot use is left
 out and logged.
 
+**A forward listens only while a primary link would take its connections.** With none (the Mac
+asleep or off, no Walnut leading the machine, or two leading it and the forward naming neither)
+its port is not bound, so a connection there is refused by TCP (`ECONNREFUSED`), never accepted
+and then closed. A client that falls back to another hub (coderelay) then knows for sure the
+request was never sent, and moves it at once; a connection that was accepted may have reached
+the hub, so it cannot. The forward binds the moment a primary's link names its Walnut on the
+daemon and unbinds the moment that link closes; a link that goes quiet with its socket still
+open (the Mac asleep) or is heard again is found within a second. The status says why it waits
+(`waiting`), which is not an error.
+
 **On the primary**, `config.yaml` lists which of its own loopback ports each machine may reach:
 
     net:
@@ -119,15 +129,18 @@ FINs both ways, a reset on a cut.
 
 - **Bounded**: at most 32 hub streams at once on the machine, and 32 per host on the primary;
   the next is refused until one ends. An open waits at most 8 s for the primary's answer.
-- **A dropped link** cuts its forwarded connections (a reset, never a clean end). The listener
-  stays: while no primary is linked a connection is closed at once, and once the link is back
-  the next one goes through.
+- **A dropped link** cuts its forwarded connections (a reset, never a clean end), and the port
+  stops listening until a link is back (above); then the next connection goes through. A
+  connection accepted just as the link went is closed at once, and the port unbinds then.
 - **Logged**, with the host and port and never a byte of what they carry: on the machine
-  `hub forward: listening`, `opened`, `refused` (with why) and `cannot listen`; on the primary
+  `hub forward: listening`, `not listening until a primary link takes it` (with why, once per
+  change), `opened`, `refused` (with why) and `cannot listen`; on the primary
   `hub port: opened` and `hub port: refused`. The same refusal again is one line per 5 s per
   port, with the count it held back (`alsoRefused`); a new reason always gets its line.
 - **Older versions**: a primary older than hub forwards answers `stream.close` ("this server
-  does not take that stream"), and the machine closes the connection and keeps listening. The
+  does not take that stream"), and the machine closes the connection and keeps listening (its
+  link is up). A daemon from before the wait accepted and closed while no primary was linked;
+  its status has no `waiting`, read as null. The
   primary asks a machine's daemon only `hub.status`, and only when it has `hub-forward-v1`; an
   older daemon reads as needing an update.
 
@@ -138,7 +151,7 @@ App's Hosts tab reads it) carry `hub` on a host `net.hub_ports` names, one entry
 |---|---|
 | `port` | The port on the primary's loopback |
 | `linked` | The primary's link to the host is up |
-| `forward` | The host's own forward to it (`localPort`, `listening`, `error`), from its daemon's `hub.status` (asked at most every 15 s, waited for at most 1.5 s); null while not known |
+| `forward` | The host's own forward to it (`localPort`, `listening`, `error`, `waiting`), from its daemon's `hub.status` (asked at most every 15 s, waited for at most 1.5 s); null while not known. `waiting` is why it does not listen although nothing is wrong (no link of this Walnut's would take it, say two Walnuts lead the host), null otherwise |
 | `needsUpdate` | The host's daemon has no `hub-forward-v1` yet |
 | `up` | Linked and the host's forward listens |
 | `active`, `opened`, `refused` | Streams open now, opened and refused since this server started |

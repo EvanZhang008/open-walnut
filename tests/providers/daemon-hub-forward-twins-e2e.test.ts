@@ -14,8 +14,11 @@
  * requests); an unlisted port, an unlisted host, a primary with nothing listed and a stream naming
  * another address are refused and never reach a service; with no file the machine listens
  * nowhere; the listener is on 127.0.0.1 only; an older primary (no acceptor) refuses cleanly and
- * the listener stays; a link drop cuts the forwarded connections, the listener survives, and the
- * next link carries again; a file written later is taken up; the status a plugin reads says up.
+ * the listener stays; with no primary link the forward's port is not bound, so a connection is
+ * refused by TCP (ECONNREFUSED: a client falling back to another hub knows nothing was sent);
+ * a link drop cuts the forwarded connections and the port refuses until the next link, which
+ * carries again (a flapping link too); a file written later is taken up; the status a plugin
+ * reads says up, and the machine's own says why it waits.
  *
  * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths; the only process ended
  * is the daemon this test spawned, through its own handle (SIGTERM, then SIGKILL after a deadline).
@@ -211,6 +214,11 @@ function request(port: number, p = '/', body?: Buffer): Promise<{ status: number
   })
 }
 
+/** An HTTP request (what coderelay sends) that must be refused by TCP: the error's code. */
+function refusedCode(port: number): Promise<string> {
+  return request(port, '/v1/messages').then(() => 'answered', (err: Error & { code?: string }) => err.code ?? err.message)
+}
+
 /** A raw connection to `port`: what it reads until the far side closes it, and whether it was refused. */
 function rawTry(port: number, host = '127.0.0.1'): Promise<{ refused: boolean; got: string }> {
   return new Promise((resolve) => {
@@ -304,7 +312,7 @@ for (const twin of TWINS) {
       expect(Number(s.opened)).toBeGreaterThanOrEqual(9)
       // The status a plugin reads (walnut.hosts.list): up, with the machine's local port and the last connection.
       const status = await hubPortStatus('home-pc', { link: { connected: true, hasCapability: (c) => caps.includes(c), send: (cmd) => rpc(ws, { cmd }) } })
-      expect(status).toEqual([expect.objectContaining({ port: mac.port, linked: true, up: true, needsUpdate: false, forward: { localPort: local, listening: true, error: null } })])
+      expect(status).toEqual([expect.objectContaining({ port: mac.port, linked: true, up: true, needsUpdate: false, forward: { localPort: local, listening: true, error: null, waiting: null } })])
       expect(status[0].lastConnectedAt).toBeGreaterThan(Date.now() - 60_000)
       expect(status[0].opened).toBeGreaterThanOrEqual(9)
     }, 120_000)
@@ -402,15 +410,40 @@ for (const twin of TWINS) {
       expect(await rpc(second, { cmd: 'leader.configure', home: '/walnut/other-home', walnutId: 'w-other', backup: false })).toMatchObject({ ok: true })
       let secondOpens = 0
       second.on('message', (d: Buffer) => { try { if ((JSON.parse(d.toString()) as { ev?: string }).ev === 'stream-open') secondOpens++ } catch { /* not a frame */ } })
-      expect((await rawTry(local)).got).toBe('')
-      expect((await hubStatus(ws)).forwards[0].lastRefusal).toBe('more than one Walnut leads this host: name one with "walnut" in the forward')
+      // Neither Walnut can take it: the port stops listening (refused by TCP) and says why.
+      const AMBIGUOUS = 'more than one Walnut leads this host: name one with "walnut" in the forward'
+      expect(await waitFor(async () => (await hubStatus(ws)).forwards[0].waiting === AMBIGUOUS)).toBe(true)
+      expect((await rawTry(local)).refused).toBe(true)
+      expect((await hubStatus(ws)).forwards[0]).toMatchObject({ listening: false, error: null })
       writeForwards([{ local_port: local, port: mac.port, walnut: 'w-primary' }])
       expect(await waitFor(async () => (await hubStatus(ws)).forwards[0]?.walnut === 'w-primary' && listening(ws, local), 12_000)).toBe(true)
       expect((await request(local, '/named')).body.toString()).toBe('mac /named')
       expect(secondOpens).toBe(0)
     }, 120_000)
 
-    it('a dropped link cuts the forwarded connections; the listener survives, refuses while no primary is linked, and carries again on the next link', async () => {
+    it('with no primary link up the forward port refuses (ECONNREFUSED) and says it waits; once the link is up it carries end to end', async () => {
+      const mac = await macService()
+      await updateConfig({ net: { hub_ports: [{ port: mac.port, hosts: ['home-pc'] }] } } as never)
+      const local = await freePort()
+      const port = await boot(twin, [{ local_port: local, port: mac.port }])
+      const probe = await leaderlessProbe(port)
+      // The daemon read its file: the forward is there, waiting, and not an error.
+      expect(await waitFor(async () => (await hubStatus(probe)).forwards[0]?.waiting === 'the primary is not linked to this host')).toBe(true)
+      expect((await hubStatus(probe)).forwards[0]).toMatchObject({ local_port: local, listening: false, error: null, refused: 0 })
+      // Refused by TCP: never accepted, so the client knows nothing was sent.
+      expect(await refusedCode(local)).toBe('ECONNREFUSED')
+      expect((await rawTry(local)).refused).toBe(true)
+      expect(mac.conns()).toBe(0)
+      // The link comes up: the forward listens at once (well before the 5 s file read) and carries as before.
+      const { ws } = await primary(port)
+      expect(await waitFor(() => listening(ws, local), 1_500)).toBe(true)
+      expect((await hubStatus(ws)).forwards[0]).toMatchObject({ waiting: null, error: null })
+      expect((await request(local, '/v1/messages')).body.toString()).toBe('mac /v1/messages')
+      const up = big(256 * 1024 + 5)
+      expect((await request(local, '/echo', up)).body.equals(Buffer.from(up).reverse())).toBe(true)
+    }, 120_000)
+
+    it('a dropped link cuts the forwarded connections and the port refuses until the next link, which carries again; a flapping link ends listening', async () => {
       const mac = await macService()
       await updateConfig({ net: { hub_ports: [{ port: mac.port, hosts: ['home-pc'] }] } } as never)
       const local = await freePort()
@@ -419,17 +452,35 @@ for (const twin of TWINS) {
       expect(await waitFor(() => listening(first.ws, local))).toBe(true)
       const cut = request(local, '/hold')
       expect(await waitFor(() => mac.held() !== null)).toBe(true)
+      const refusedBefore = Number((await hubStatus(first.ws)).forwards[0].refused)
       first.ws.close()
       await expect(cut).rejects.toThrow()
-      // No primary now: closed at once, never queued.
+      // No primary now: the port stops listening on its own (no connection needed to find out),
+      // so a connection is refused (never accepted and closed), and the status says why.
       const probe = await leaderlessProbe(port)
-      expect(await waitFor(async () => (await rawTry(local)).got === '' && (await hubStatus(probe)).forwards[0].lastRefusal === 'the primary is not linked to this host')).toBe(true)
-      expect(await listening(probe, local)).toBe(true)
+      expect(await waitFor(async () => (await hubStatus(probe)).forwards[0].waiting === 'the primary is not linked to this host', 1_500)).toBe(true)
+      expect((await rawTry(local)).refused).toBe(true)
+      expect(await refusedCode(local)).toBe('ECONNREFUSED')
+      expect((await hubStatus(probe)).forwards[0]).toMatchObject({ listening: false, error: null, refused: refusedBefore })
       const again = await primary(port, first.conn)
+      expect(await waitFor(() => listening(again.ws, local), 1_500)).toBe(true)
+      expect((await request(local, '/again')).body.toString()).toBe('mac /again')
+      // Flapping: links close and come back at once, several times; it ends listening and carries.
+      let last = again
+      for (let i = 0; i < 4; i++) {
+        last.ws.close()
+        last = await primary(port, first.conn)
+      }
       expect(await waitFor(async () => {
-        try { return (await request(local, '/again')).body.toString() === 'mac /again' } catch { return false }
+        try { return (await request(local, '/flapped')).body.toString() === 'mac /flapped' } catch { return false }
       })).toBe(true)
-      expect(await listening(again.ws, local)).toBe(true)
+      expect((await hubStatus(last.ws)).forwards[0]).toMatchObject({ listening: true, error: null, waiting: null })
+      // And down once more: refused again, with no connection accepted and closed on the way.
+      const refusedLast = Number((await hubStatus(last.ws)).forwards[0].refused)
+      last.ws.close()
+      expect(await waitFor(async () => (await hubStatus(probe)).forwards[0].waiting !== null, 1_500)).toBe(true)
+      expect((await rawTry(local)).refused).toBe(true)
+      expect((await hubStatus(probe)).forwards[0].refused).toBe(refusedLast)
     }, 120_000)
   })
 }

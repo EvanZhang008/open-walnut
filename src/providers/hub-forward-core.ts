@@ -15,11 +15,18 @@
  * Every listener binds 127.0.0.1 (never another address: `listen` is always handed it), so
  * nothing new is reachable from the network. A connection becomes a stream this daemon opens to
  * the primary's session link (stream-relay-core.ts openOut), with the window and FINs every port
- * stream has; at most MAX_STREAMS at once. No primary linked, two Walnuts leading here without the
- * forward naming one, or the primary refusing: the connection is closed and the refusal logged.
- * A listener outlives the link: once the primary is back, the next connection goes through.
- * The file is read again every RELOAD_MS (a change applies then), and a port that could not be
- * bound is tried again then.
+ * stream has; at most MAX_STREAMS at once; the primary refusing one: it is closed and the refusal
+ * logged.
+ *
+ * A forward listens only while a primary link would take its connections (`pick`). With none (the
+ * Mac asleep, no Walnut leading here, two leading here and the forward naming neither) its port is
+ * not bound, so a connection there is REFUSED by TCP, never accepted and then closed: a client
+ * that falls back to another hub (coderelay) knows for sure nothing was sent, and moves at once.
+ * The status says why (`waiting`). The twins call `linksChanged()` when a leader link binds or
+ * closes; the links are checked again every LINK_CHECK_MS (a link that went quiet with its socket
+ * open, a Mac asleep; one heard again), and the file every RELOAD_MS (a change, a port that could
+ * not be bound, which is tried again then). A connection accepted just as the link went is closed
+ * at once and unbinds the port then.
  *
  * Shared by both daemon twins: daemon-standalone.ts imports it, daemon-source.ts inlines its
  * `toString()` through `__CREATE_HUB_FORWARDS__` / `__PARSE_HUB_FORWARDS__`. So neither body
@@ -123,8 +130,14 @@ export interface HubForwardState {
   walnut?: string
   /** Its 127.0.0.1 listener is up. */
   listening: boolean
-  /** Why it is not (a port in use, say). */
+  /** Why it could not listen (a port in use, say): tried again on the next read. */
   error: string | null
+  /**
+   * Why it does not listen now although nothing is wrong: no primary link would take a
+   * connection (the primary is not linked, say). It listens once one would; until then a
+   * connection to its port is refused. null while it listens or tries to.
+   */
+  waiting: string | null
   active: number
   opened: number
   refused: number
@@ -137,23 +150,30 @@ export function createHubForwards<L, S extends HubSocket>(deps: HubForwardDeps<L
   const HOST = '127.0.0.1'
   const MAX_STREAMS = 32
   const RELOAD_MS = 5_000
+  /** How often the links are checked with no event: a link going quiet or heard again has none. */
+  const LINK_CHECK_MS = 1_000
   /** The same refusal is logged at most this often per listener; the rest are counted into the next line. */
   const REFUSAL_LOG_MS = 5_000
 
   interface Listener {
     entry: { local_port: number; to: 'primary'; port: number; walnut?: string }
     handle: { close(): void } | null
+    /** Bumped by every bind and unbind: a late `ready` of an older listen is ignored. */
+    gen: number
     state: HubForwardState
     refusalLoggedAt: number
     refusalsUnlogged: number
     /** The reason of the last refusal line: a new one always gets its line. */
     refusalLogged: string | null
+    /** The bind error last logged: the same one again (a retry, a flapping link) is not. */
+    errorLogged: string | null
   }
   const listeners = new Map<number, Listener>()
   let lastText: string | null | undefined
   let problems: string[] = []
   let active = 0
   let stopTimer: (() => void) | null = null
+  let stopLinkTimer: (() => void) | null = null
 
   const same = (a: Listener['entry'], b: Listener['entry']) => a.local_port === b.local_port && a.port === b.port && a.to === b.to && a.walnut === b.walnut
 
@@ -192,8 +212,10 @@ export function createHubForwards<L, S extends HubSocket>(deps: HubForwardDeps<L
     }
     const target = pick(l)
     if ('why' in target) {
+      // Accepted just as the link went: closed at once, and the port stops listening now.
       try { sock.destroy() } catch { /* gone */ }
       refusal(l, target.why)
+      apply(l)
       return
     }
     active += 1
@@ -218,35 +240,64 @@ export function createHubForwards<L, S extends HubSocket>(deps: HubForwardDeps<L
 
   function bind(l: Listener): void {
     const s = l.state
+    const gen = ++l.gen
+    let failed = false
+    const cannot = (err: unknown) => {
+      failed = true
+      s.listening = false
+      s.error = String((err as Error)?.message || err).slice(0, 200)
+      l.handle = null
+      if (l.errorLogged !== s.error) deps.log('warn', 'hub forward: cannot listen', { localPort: s.local_port, port: s.port, error: s.error })
+      l.errorLogged = s.error
+    }
     try {
-      l.handle = deps.listen(s.local_port, HOST, (sock) => onConnection(l, sock), (err) => {
-        if (listeners.get(s.local_port) !== l) return
-        if (err) {
-          s.listening = false
-          const was = s.error
-          s.error = String(err.message || err).slice(0, 200)
-          l.handle = null
-          if (was !== s.error) deps.log('warn', 'hub forward: cannot listen', { localPort: s.local_port, port: s.port, error: s.error })
-          return
-        }
+      const handle = deps.listen(s.local_port, HOST, (sock) => onConnection(l, sock), (err) => {
+        if (listeners.get(s.local_port) !== l || l.gen !== gen) return
+        if (err) { cannot(err); return }
         s.listening = true
         s.error = null
+        l.errorLogged = null
         deps.log('info', 'hub forward: listening', { localPort: s.local_port, host: HOST, port: s.port })
       })
+      // A listen that failed at once (its `ready` already ran) leaves nothing to hold.
+      if (failed || l.gen !== gen) { try { handle.close() } catch { /* not listening */ } return }
+      l.handle = handle
     } catch (err) {
-      s.listening = false
-      s.error = String((err as Error).message || err).slice(0, 200)
-      l.handle = null
+      if (l.gen === gen) cannot(err)
     }
   }
 
   function unbind(l: Listener): void {
+    l.gen += 1
     try { l.handle?.close() } catch { /* already closed */ }
     l.handle = null
     l.state.listening = false
   }
 
-  /** Read the file and make the listeners match it; try again a port that could not be bound. */
+  /**
+   * Make `l` listen exactly while a primary link would take its connections: bind it (again,
+   * after a failed bind) when one would, unbind it when none would, so its port refuses.
+   */
+  function apply(l: Listener): void {
+    const s = l.state
+    const target = pick(l)
+    if ('why' in target) {
+      const was = s.waiting
+      s.waiting = target.why
+      // Not trying to listen now: an old bind error says nothing any more.
+      s.error = null
+      unbind(l)
+      if (was !== s.waiting) deps.log('info', 'hub forward: not listening until a primary link takes it', { localPort: s.local_port, port: s.port, why: s.waiting })
+      return
+    }
+    s.waiting = null
+    if (!l.handle && !s.listening) bind(l)
+  }
+
+  /**
+   * Read the file and make the listeners match it, each listening only while a primary link
+   * would take it (apply); try again a port that could not be bound.
+   */
   function reconcile(): void {
     let text: string | null = null
     try { text = deps.read() } catch { text = null }
@@ -269,27 +320,34 @@ export function createHubForwards<L, S extends HubSocket>(deps: HubForwardDeps<L
         if (listeners.has(f.local_port)) continue
         const entry = { local_port: f.local_port, to: 'primary' as const, port: f.port, ...(f.walnut ? { walnut: f.walnut } : {}) }
         const l: Listener = {
-          entry, handle: null, refusalLoggedAt: -Infinity, refusalsUnlogged: 0, refusalLogged: null,
-          state: { ...entry, listening: false, error: null, active: 0, opened: 0, refused: 0, lastOpenedAt: null, lastRefusedAt: null, lastRefusal: null },
+          entry, handle: null, gen: 0, refusalLoggedAt: -Infinity, refusalsUnlogged: 0, refusalLogged: null, errorLogged: null,
+          state: { ...entry, listening: false, error: null, waiting: null, active: 0, opened: 0, refused: 0, lastOpenedAt: null, lastRefusedAt: null, lastRefusal: null },
         }
         listeners.set(f.local_port, l)
-        bind(l)
       }
-      return
     }
-    for (const l of listeners.values()) if (!l.handle && !l.state.listening) bind(l)
+    for (const l of listeners.values()) apply(l)
+  }
+
+  function linksChanged(): void {
+    for (const l of listeners.values()) apply(l)
   }
 
   return {
-    /** Apply the file now, then every RELOAD_MS. */
+    /** Apply the file now, then every RELOAD_MS; check the links every LINK_CHECK_MS. */
     start(): void {
       reconcile()
       if (!stopTimer) stopTimer = deps.every(RELOAD_MS, reconcile)
+      if (!stopLinkTimer) stopLinkTimer = deps.every(LINK_CHECK_MS, linksChanged)
     },
     reconcile,
+    /** A leader link bound or closed here: each forward listens or stops now, not on the next check. */
+    linksChanged,
     stop(): void {
       stopTimer?.()
       stopTimer = null
+      stopLinkTimer?.()
+      stopLinkTimer = null
       for (const l of listeners.values()) unbind(l)
       listeners.clear()
       lastText = undefined

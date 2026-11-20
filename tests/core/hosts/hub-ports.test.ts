@@ -240,4 +240,14 @@ describe('hubPortStatus', () => {
     const s = await hubPortStatus('home-pc', { config, link: l })
     expect(s[0]).toMatchObject({ up: false, forward: { localPort: 18403, listening: false, error: 'listen EADDRINUSE' } })
   })
+
+  it("a forward waiting for a link of its own says why; an older daemon's word reads as no wait", async () => {
+    const waiting = 'more than one Walnut leads this host: name one with "walnut" in the forward'
+    const { l } = fakeLink(['hub-forward-v1'], { ok: true, forwards: [{ local_port: 18403, port: 18403, listening: false, error: null, waiting }] })
+    const s = await hubPortStatus('home-pc', { config, link: l })
+    expect(s[0]).toMatchObject({ up: false, forward: { localPort: 18403, listening: false, error: null, waiting } })
+    resetHubPortsForTest()
+    const older = fakeLink(['hub-forward-v1'])
+    expect((await hubPortStatus('home-pc', { config, link: older.l }))[0].forward).toEqual({ localPort: 18500, listening: true, error: null, waiting: null })
+  })
 })

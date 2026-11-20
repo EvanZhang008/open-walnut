@@ -4092,6 +4092,8 @@ function bindGatewayClientHome(ws: ServerWebSocket<WsData>, home: string): void 
   }
   // This Walnut's primary is here: its calls waiting for one go now.
   if (fresh) setTimeout(wakeGatewayCalls, 0)
+  // And a hub forward waiting for a primary link listens now (hub-forward-v1).
+  if (fresh) setTimeout(hubLinksChanged, 0)
 }
 /**
  * A command that names another Walnut than the one its socket speaks for is refused:
@@ -12828,6 +12830,10 @@ const hubForwards = createHubForwards<ServerWebSocket<WsData>, net.Socket>({
   now: () => Date.now(),
   every: (ms, fn) => { const t = setInterval(fn, ms); t.unref?.(); return () => clearInterval(t) },
 })
+/** A leader link bound or closed: each forward listens only while one would take it. Deferred by its callers (after start-up). */
+function hubLinksChanged(): void {
+  hubForwards.linksChanged()
+}
 /** `hub.status`: this machine's forwards and how each is doing. Its primary and its own local clients (the CLI); never the bridge, a follower, a lane or a probe. */
 function cmdHubStatus(ws: ServerWebSocket<WsData>, id: number) {
   if (!isServerClient(ws)) return sendError(ws, id, 'hub.status: not for this socket')
@@ -13726,6 +13732,8 @@ function handleDisconnect(ws: ServerWebSocket<WsData>) {
   wsClients.delete(ws)
   acp.removeSubscriber(ws)
   streamRelay.dropLink(ws)
+  // A hub forward no primary link takes any more stops listening, so its port refuses.
+  if (gatewayClientHomes.has(ws)) setTimeout(hubLinksChanged, 0)
   // Nobody reads a one-shot whose socket closed: end it.
   const droppedOneShots = oneShot.dropClient(ws)
   if (droppedOneShots > 0) logMsg('info', 'oneshot runs ended with their socket', { wsId: wsId(ws), runs: droppedOneShots })
