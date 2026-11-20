@@ -249,10 +249,22 @@ function refreshSpend(): Promise<void> {
   return spendRun
 }
 
+/** When the spend known now was read: this process's report, else the one the cache file kept.
+ *  A restart keeps its age: every deploy started a cold cost report 8 s into boot, 260 to 570 ms
+ *  of SQLite page reads on the loop thread each (Mac, 2026-11-20, 7 of 17 stack samples). */
+function spendReadAt(): number | null {
+  return spendCache?.at ?? cachedSpend()?.at ?? null
+}
+
+function spendIsOld(now: number): boolean {
+  const at = spendReadAt()
+  return at === null || now - at > SPEND_TTL_MS
+}
+
 async function spend(now: number): Promise<{ byHost: Map<string, number>; from: string } | null> {
-  if (!spendCache || now - spendCache.at > SPEND_TTL_MS) {
+  if (spendIsOld(now)) {
     const run = refreshSpend()
-    if (!spendCache) await within(run, SPEND_FIRST_WAIT_MS, undefined)
+    if (!spendSnapshot()) await within(run, SPEND_FIRST_WAIT_MS, undefined)
   }
   return spendSnapshot()
 }
@@ -268,7 +280,7 @@ export function spendSnapshot(): FleetSpendNow {
 
 /** Read the spend again in the background when it is older than its TTL (a person asked). */
 export function refreshSpendIfOld(now = Date.now()): void {
-  if (!spendCache || now - spendCache.at > SPEND_TTL_MS) void refreshSpend()
+  if (spendIsOld(now)) void refreshSpend()
 }
 
 export interface HostEntry { host: string; def: HostDef | null; label: string; local: boolean; kind: FleetConnectionKind; declared?: unknown }

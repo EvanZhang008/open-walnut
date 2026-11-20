@@ -55,7 +55,7 @@ import { __setFleetConnectionsForTesting, __setFleetLoadsForTesting, BootStartCh
 import { judgeHost, type HostLoadView } from '../../../src/core/hosts/placement.js'
 import { readHostProfile } from '../../../src/core/hosts/host-profile.js'
 import { cachedFleet, fleetRefreshIdle, readHostsOnConnect, startFleetRefresh, __setFleetRefreshDeadlinesForTesting } from '../../../src/core/hosts/fleet-refresh.js'
-import { flushFleetCacheNow } from '../../../src/core/hosts/fleet-cache.js'
+import { flushFleetCacheNow, __resetFleetCacheForTesting } from '../../../src/core/hosts/fleet-cache.js'
 
 const NOW = Date.now()
 function vitalsReply(running: number) {
@@ -250,6 +250,31 @@ describe('placement', () => {
 })
 
 describe('the spend', () => {
+  // 2026-11-20: every deploy started a cold cost report 8 s into boot (260 to 570 ms of SQLite
+  // page reads on the loop thread each); the spend the cache file kept is fresh enough.
+  it('a restart within the TTL shows the kept spend and starts no cost report; past it, one', async () => {
+    const restart = async () => {
+      await flushFleetCacheNow()
+      __resetFleetCacheForTesting()
+      __setFleetConnectionsForTesting(() => new Map([['__local__', [local.conn]], ['devbox', [dev.conn]]]) as never)
+      await cachedFleet()
+    }
+    await listFleet()
+    expect(costCalls).toHaveLength(1)
+    await restart()
+    const after = await listFleet()
+    expect(after.find((h) => h.host === 'devbox')?.spend?.last30dUsd).toBeCloseTo(1234.2)
+    expect(costCalls).toHaveLength(1)
+    // The positive control: the kept spend past its TTL is read again.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(Date.now() + 31 * 60_000)
+      await restart()
+      await listFleet()
+      await vi.waitFor(() => expect(costCalls).toHaveLength(2))
+    } finally { vi.useRealTimers() }
+  }, 20_000)
+
   it('a failing cost report reads as unknown, and is not asked again on every read', async () => {
     cost.fail = true
     try {
