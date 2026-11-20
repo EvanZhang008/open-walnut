@@ -249,7 +249,7 @@ const threadsLine = (where: string, last: string): string =>
   + 'subject: Walnut files every message he sends you and says in it which thread it went to. Keep them current with '
   + 'thread_update: a short title, what he wants, its state (working: you are on it, needs: waiting on him, answered, pending: nothing new for him), the summary (reply) '
   + 'and the tasks you handed it to. Several asks about the same thing are one thread: put a new one under the open thread '
-  + 'it belongs to (merge_into). Walnut puts your chat reply under each of his messages by itself. He closes a thread with Acknowledge; a new ask about a closed subject is a new thread. '
+  + 'it belongs to (merge_into). Walnut puts your chat reply under each of his messages by itself. A new ask about a closed subject is a new thread. '
   + THREADS_SUMMARY_RULE + ' ' + PROOF_IN_PLACE_RULE + ' ' + THREADS_PENDING_RULE + ' ' + THREADS_KNOWN_RULE + ' ' + THREADS_OPEN_RULE + ' ' + last + '\n\n'
 
 /** Main's and every lead's Threads. */

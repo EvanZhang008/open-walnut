@@ -150,6 +150,12 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'Every node on the Org page (the CEO, each VP, router and leader, and their tasks) wears a small round character instead of two letters, each its own. Right-click a VP or a router for "Edit name and avatar…": pick a preset, upload a picture, or let the AI draw three to choose from. The phone shows the same avatars.',
     default: false,
   },
+  {
+    id: 'ack_means_known',
+    name: 'Acknowledge means you know',
+    description: 'Acknowledging a thread whose work is still open (a task it went to not done, your reply still on its way, its letter still waiting) no longer closes it: it leaves your sight under "in progress, nothing for you" and stays tracked until it is really over. Its agent hears that you know and tells you the outcome once, or closes it. A thread with nothing open closes as before.',
+    default: false,
+  },
 ] as const;
 
 export type ExperimentalFeatureId = typeof EXPERIMENTAL_FEATURES[number]['id'];

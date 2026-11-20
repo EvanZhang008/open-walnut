@@ -37,6 +37,12 @@ function optimistic(t: OrgThread, patch: OrgThreadPatch): OrgThread {
   return t;
 }
 
+/** The server's answer to an Acknowledge it kept open, over the listed row: no pin or snooze of his holds it any more. */
+function keptOpen(t: OrgThread, saved: OrgThread): OrgThread {
+  const { pinned: _p, snoozed: _s, ...rest } = t;
+  return { ...rest, ...saved };
+}
+
 /** The soonest snooze still to end (ms), so the view reads again when that thread comes back. */
 function nextSnoozeEnd(list: readonly OrgThread[] | null, now: number): number | null {
   let soonest: number | null = null;
@@ -196,9 +202,11 @@ export function useOrgThreads(taskId: string | undefined, enabled: boolean): Org
     const unpredict = drawn ? predict() : undefined;
     const done = () => { node.settledAt = performance.now(); if (node.pending.get(threadId) === patch) node.pending.delete(threadId); };
     try {
-      await patchOrgThread(taskId, threadId, patch);
-      // Saved: the change is part of the list now, so nothing draws back while the read is out.
-      if (node.pending.get(threadId) === patch && node.read) node.read = node.read.map((t) => (t.id === threadId ? optimistic(t, patch) : t));
+      const saved = await patchOrgThread(taskId, threadId, patch);
+      // Saved: the change is part of the list now, so nothing draws back while the read is out. An
+      // Acknowledge the server kept open (its work still runs: pending, experiment ack_means_known) is drawn as it answered.
+      const kept = patch.close && saved && !saved.closed && saved.id === threadId ? saved : null;
+      if (node.pending.get(threadId) === patch && node.read) node.read = node.read.map((t) => (t.id === threadId ? (kept ? keptOpen(t, kept) : optimistic(t, patch)) : t));
       done();
       redraw(taskId);
       setWriteError(null);

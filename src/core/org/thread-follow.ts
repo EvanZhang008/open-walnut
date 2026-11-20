@@ -280,9 +280,15 @@ export async function runThreadFollowPass(): Promise<number> {
   const { orgTasks } = await import('./org-store.js');
   const p = orgPlaces(await orgTasks());
   const nodes = await readAllNodes(p);
-  watched = watchSet(nodes, p);
+  // Threads he acknowledged while their work ran (thread-ack.ts): their tasks are watched too, and
+  // the node hears once when all of them are done.
+  const ack = await import('./thread-ack.js');
+  const acked = await ack.ackedThreads();
+  watched = watchSet([...nodes, ...acked], p);
   let n = 0;
   for (const move of planThreadFollows(nodes, p)) if (await runMove(move, 'agent', { tellFrom: true }, 'work')) n++;
+  await ack.tellAckedDone(acked, (id) => p.byId.get(id)?.phase)
+    .catch((err) => log.task.warn('org threads: acknowledged done not told', { error: err instanceof Error ? err.message : String(err) }));
   return n;
 }
 

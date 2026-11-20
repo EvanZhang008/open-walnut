@@ -54,7 +54,9 @@ export const THREAD_ONE_PLACE_RULE =
  * pending, which is auto hide like closed"; then "if i reply to a thread, it shoud go out of the
  * thread immediately instead of just show working"; 2026-11-07: a working thread with only the
  * node's handoff answer on it showed too, "before it replies, what is the use?"). thread-view.ts
- * shownToHim holds it, and threadOverdue / thread-recheck.ts the reminder.
+ * shownToHim holds it, and threadOverdue / thread-recheck.ts the reminder. 2026-11-20, the user: "a
+ * human acknowledge means I now know the situation; the thread is truly closed only when the problem
+ * is really solved" (experiment ack_means_known, thread-ack.ts).
  */
 export const THREADS_PENDING_RULE =
   'His Threads view shows a thread only when it has something for him: needs (he must decide) or answered (the result he asked '
@@ -64,7 +66,8 @@ export const THREADS_PENDING_RULE =
   + 'reply. A new summary written without a state is news and shows it '
   + '(Walnut sets answered); to update it quietly, name working or pending in the same write. Never write a summary that only '
   + 'says who took it or that it is being done (its task chip says that). When your answer to him only says that, set pending '
-  + 'in the same turn: pending stays hidden even with that answer on it. Setting needs (he must decide) names user_kind and '
+  + 'in the same turn: pending stays hidden even with that answer on it. His Acknowledge means he knows: it closes, or stays '
+  + 'pending while its work runs. Setting needs (he must decide) names user_kind and '
   + 'user_kind_why: Walnut refuses it unless it says which of his kinds it is.';
 
 /**

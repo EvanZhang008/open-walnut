@@ -72,6 +72,8 @@ export interface OrgThread {
   ask_id?: string;
   /** The decision letter it holds (experiment letters_as_threads, core/org/letter-thread-model.ts): its card answers the letter. */
   letter?: { id: string; task: string; options: Array<{ id: string; label: string; description?: string }>; off?: true; done?: true };
+  /** He acknowledged it while its work still ran, so it went pending instead of closing (experiment ack_means_known, core/org/thread-ack.ts). */
+  ackedAt?: string;
 }
 
 const base = (taskId: string) => `/api/v1/tasks/${encodeURIComponent(taskId)}/threads`;

@@ -9,7 +9,8 @@
  * (`thread_update`: a short title, its state, a one-line reply, the tasks it went to) and puts
  * a message about an open subject under that thread (`merge_into`). A wrong merge is split back
  * out (`splitThreadMessage`). The user closes a thread with Acknowledge; asking again about a
- * closed subject opens a new thread that `follows` the old one.
+ * closed subject opens a new thread that `follows` the old one. Under ack_means_known his
+ * Acknowledge on a thread whose work is still open means he knows: it goes pending (thread-ack.ts).
  *
  * Each message carries the node's answer to it (`answer`), which Walnut reads from the node's own
  * chat (thread-answers.ts), so a thread reads as its conversation (2026-11-01, the user: "do it
@@ -306,6 +307,13 @@ export interface OrgThread {
   askId?: string;
   /** The decision letter this thread holds (experiment letters_as_threads, letter-thread-model.ts). */
   letter?: ThreadLetter;
+  /**
+   * He acknowledged it while its work was still open (experiment ack_means_known, thread-ack.ts):
+   * he knows where it stands, so it went pending instead of closing. An older build keeps it unread.
+   */
+  ackedAt?: string;
+  /** When the node was told every task of that acknowledged thread is done (thread-ack.ts): once per ack. */
+  ackDone?: string;
 }
 
 /**
@@ -465,6 +473,7 @@ function normalizeThread(t: unknown): OrgThread | null {
   if (!validMove(next.movedTo)) delete next.movedTo;
   if (!validMove(next.movedFrom)) delete next.movedFrom;
   if (next.askOwner && !(typeof next.askOwner === 'object' && isStr(next.askOwner.task) && next.askOwner.task && isStr(next.askOwner.at))) delete next.askOwner;
+  for (const k of ['ackedAt', 'ackDone'] as const) if (next[k] !== undefined && !(isStr(next[k]) && Number.isFinite(Date.parse(next[k]!)))) delete next[k];
   const letter = next.letter !== undefined ? normalizeThreadLetter(next.letter) : undefined;
   if (letter) next.letter = letter; else delete next.letter;
   return next;
@@ -833,6 +842,8 @@ function checkClose(file: ThreadsFile, t: OrgThread, by: ThreadWriter, words?: s
   if (closeAskOf(t, words)) return;
   const lastIdx = t.messages.length - 1;
   const last = t.messages[lastIdx];
+  // His Acknowledge kept it pending while its work ran (thread-ack.ts): his reaction to all said before it, until either wrote again.
+  if (t.ackedAt && t.state === 'pending' && (!last || last.at <= t.ackedAt) && nodeWordAt(t, lastIdx) <= t.ackedAt && (!t.replyAt || t.replyAt <= t.ackedAt)) return;
   if (!last) {
     // Only the node's own post: closed once he wrote to it after it (anywhere, the node's judgment).
     if (t.opener && reactedSince(file, t.opener.at)) return;

@@ -268,9 +268,16 @@ export async function patchThread(taskId: string, id: string, patch: ThreadPatch
     const cur = (await readThreads(taskId)).threads.find((t) => t.id === id);
     if (cur && patchHandsToUser(cur, rest)) await refuseSameAskThread(taskId, rest.ask?.trim() || cur.ask || rest.title?.trim() || cur.title, by, rest);
   }
+  // His Acknowledge alone (experiment ack_means_known): read the open tasks it lists before the lock.
+  const ack = by === 'human' && rest.close === 'acked' && Object.keys(rest).length === 1 ? await import('./thread-ack.js') : null;
+  const ackOpen = ack ? await ack.ackOpenTasks(taskId, id) : null;
+  const held: { waits?: import('./thread-ack.js').AckWaits | null } = {};
   const thread = await mutateThreads(taskId, (cur) => {
     const before = cur.threads.find((t) => t.id === id);
-    const r = Object.keys(rest).length || !before ? updateThread(cur, id, rest, by, at, source) : { file: cur, thread: before };
+    // Its work still runs: he knows, it stays pending (thread-ack.ts); nothing open closes it as before.
+    const waits = held.waits = ack && ackOpen && before && !before.closed ? ack.ackWaitsOf(before, ackOpen) : null;
+    const r = waits ? ack!.ackKnown(cur, id, at)
+      : Object.keys(rest).length || !before ? updateThread(cur, id, rest, by, at, source) : { file: cur, thread: before };
     let next = r.thread;
     if (owner) next = { ...next, askOwner: owner };
     else if (next.askOwner && (owner === null || !before || !askOwnerKept(before, next))) {
@@ -281,6 +288,7 @@ export async function patchThread(taskId: string, id: string, patch: ThreadPatch
     return { file: { ...r.file, threads: r.file.threads.map((t) => (t.id === id ? next : t)) }, out: next };
   });
   emit({ taskId, kind: 'updated', threadId: id });
+  if (ack && held.waits) await ack.rideToNode(taskId, id, ack.ackLine(thread, held.waits));
   return thread;
 }
 
