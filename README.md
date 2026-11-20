@@ -1,5 +1,7 @@
 # Open Walnut
 
+[English](./README.md) | [简体中文](./README.zh-CN.md)
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/EvanZhang008/open-walnut?style=social)](https://github.com/EvanZhang008/open-walnut)
 
