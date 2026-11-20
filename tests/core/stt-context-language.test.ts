@@ -1,0 +1,138 @@
+/**
+ * A take a Chinese speaker gave comes back in Chinese, even when the context's
+ * English terms tipped the engine into English (2026-11-20, the user's own
+ * recordings: 2 of 171 takes in a day were written as English translations; one
+ * learned phrase or one word of the 40-term context was enough to tip them).
+ * The engine hears the clip again with the language set to Chinese; a take
+ * really spoken in English stays English and keeps its first answer.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// "I'm not blaming you, but this thing is called answered" in Chinese, with its English words.
+const ZH = '哦，不是我错怪你了，但是这有一个东西叫做 answered，为什么有两个呀'
+const EN = 'Oh, not me. I blame you. But the problem is, this has a thing called answered.'
+const EN_REAL = 'So the interview is about payments, and the system design round comes after lunch.'
+
+const calls: string[] = []
+let withContext = EN
+let asChinese = ZH // the answer heard as Chinese
+let slowMs = 0
+let plainFails = false
+vi.mock('../../src/core/stt/engine-mlx.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  createMlxEngine: () => ({
+    name: 'mlx',
+    isAvailable: async () => ({ available: true }),
+    transcribe: async (req: { language?: string }) => {
+      const asZh = req.language === 'zh'
+      calls.push(req.language ?? 'auto')
+      if (asZh && plainFails) throw new Error('engine timed out')
+      return { text: asZh ? asChinese : withContext, durationMs: asZh ? 30 : slowMs || 40 }
+    },
+  }),
+}))
+
+import { transcribeAudio } from '../../src/core/stt/index.js'
+import { cjkShare, readAsChinese, readAsEnglish } from '../../src/core/stt/context-language.js'
+import { _setTitleTermsForTest } from '../../src/core/stt/user-terms.js'
+import { editPairs, termShaped } from '../../src/core/stt/learn-from-sends.js'
+import type { Config } from '../../src/core/types.js'
+
+const CONTEXT = 'Marina, Acme, Walnut, cloud companion, daemon, bun, custom, UI, AI'
+const config = { stt: { engine: 'mlx', mlx_python_path: '/nonexistent/python' } } as unknown as Config
+
+describe('reading the language of a transcription', () => {
+  it('counts a Chinese character and an English word as one unit each', () => {
+    expect(cjkShare(ZH).share).toBeGreaterThan(0.9)
+    expect(cjkShare(EN).share).toBe(0)
+    expect(cjkShare('').units).toBe(0)
+  })
+
+  it('mixed Chinese speech with English terms is Chinese, never English', () => {
+    // "Every day look at our voice and text once, then monitor these things" in Chinese.
+    const mixed = '每天看一遍我们的这个 voice，然后 text，就首先你要 monitor 这些东西'
+    expect(readAsEnglish(mixed)).toBe(false)
+    expect(readAsChinese(mixed)).toBe(true)
+  })
+
+  it('a sentence of English reads as English; a word or two does not decide', () => {
+    expect(readAsEnglish(EN)).toBe(true)
+    expect(readAsEnglish('ok thanks')).toBe(false)
+    expect(readAsChinese('ok thanks')).toBe(false)
+  })
+})
+
+describe('transcribeAudio for a speaker who writes Chinese', () => {
+  beforeEach(() => {
+    calls.length = 0
+    withContext = EN
+    asChinese = ZH
+    slowMs = 0
+    plainFails = false
+    _setTitleTermsForTest(['Walnut'], Date.now(), true)
+  })
+
+  it('an English answer is heard again as Chinese, and its Chinese answer is the text', async () => {
+    const r = await transcribeAudio(config, { audio: 'AAAA', format: 'wav', prompt: CONTEXT })
+    expect(calls).toEqual(['auto', 'zh'])
+    expect(r.text).toBe(ZH)
+    expect(r.durationMs).toBe(70)
+  })
+
+  it('a take really spoken in English keeps its first answer', async () => {
+    withContext = EN_REAL
+    asChinese = 'So the interview is about payment and the system design round comes after lunch.'
+    const r = await transcribeAudio(config, { audio: 'AAAA', format: 'wav', prompt: CONTEXT })
+    expect(calls).toEqual(['auto', 'zh'])
+    expect(r.text).toBe(EN_REAL)
+    expect(r.durationMs).toBe(70)
+  })
+
+  it('a long take whose first pass was slow is not heard twice', async () => {
+    slowMs = 6000
+    const r = await transcribeAudio(config, { audio: 'AAAA', format: 'wav', prompt: CONTEXT })
+    expect(calls).toEqual(['auto'])
+    expect(r.text).toBe(EN)
+  })
+
+  it('a failed second hearing keeps the first answer', async () => {
+    plainFails = true
+    const r = await transcribeAudio(config, { audio: 'AAAA', format: 'wav', prompt: CONTEXT })
+    expect(calls).toEqual(['auto', 'zh'])
+    expect(r.text).toBe(EN)
+  })
+
+  it('a Chinese answer costs one engine call', async () => {
+    withContext = ZH
+    const r = await transcribeAudio(config, { audio: 'AAAA', format: 'wav', prompt: CONTEXT })
+    expect(calls).toEqual(['auto'])
+    expect(r.text).toBe(ZH)
+  })
+
+  it('a language the caller chose is left alone', async () => {
+    const r = await transcribeAudio(config, { audio: 'AAAA', format: 'wav', prompt: CONTEXT, language: 'en' })
+    expect(calls).toEqual(['en'])
+    expect(r.text).toBe(EN)
+  })
+
+  it('a speaker who writes no Chinese is never heard twice', async () => {
+    _setTitleTermsForTest(['Walnut'], Date.now(), false)
+    const r = await transcribeAudio(config, { audio: 'AAAA', format: 'wav', prompt: CONTEXT })
+    expect(calls).toEqual(['auto'])
+    expect(r.text).toBe(EN)
+  })
+})
+
+describe('learned terms are words, never rewritten phrases', () => {
+  it('termShaped keeps words and short names and drops phrases of common words', () => {
+    for (const t of ['typo', 'cloud companion', 'T3 Code', 'Tailscale', 'Go']) expect(termShaped(t), t).toBe(true)
+    for (const t of ['gor go it has to', 'it has to', 'one two three four']) expect(termShaped(t), t).toBe(false)
+  })
+
+  it('an edit that rewrote a span into a phrase teaches nothing', () => {
+    // "slightly enough" in Chinese, rewritten by hand into an English phrase.
+    const heard = '我们这个稍微够一下就好了吧'
+    const sent = '我们这个 gor go it has to 一下就好了吧'
+    expect(editPairs(heard, sent)).toEqual([])
+  })
+})

@@ -68,6 +68,17 @@ function isWordEdit(heard: string, term: string): boolean {
   return STOP.has(h) || STOP.has(t) || t.startsWith(h) || h.startsWith(t)
 }
 
+/**
+ * A term is a word or a short name ("typo", "cloud companion"), never a phrase
+ * rewritten by hand: 2026-11-05 an edit of "稍微够" to "gor go it has to" was
+ * learned, and with it in the context Qwen3-ASR wrote a Chinese take in English.
+ */
+export function termShaped(term: string): boolean {
+  const words = term.trim().split(/\s+/)
+  if (words.length === 1) return true // "Go", "Notes": a single word is a term
+  return words.length <= 3 && !words.some((w) => STOP.has(w.toLowerCase().replace(/[^a-z0-9]/g, '')))
+}
+
 /** The spans a send changed in a dictation, when the send is that dictation edited by hand. */
 export function editPairs(dictated: string, sent: string): EditPair[] | null {
   const a = tokens(dictated)
@@ -101,7 +112,7 @@ export function editPairs(dictated: string, sent: string): EditPair[] | null {
     const term = sent.slice(r.b[0]!.from, r.b[r.b.length - 1]!.to).trim()
     if (!/[A-Za-z]{2,}/.test(term) || term.length > 40 || heard.length < 2 || heard.length > 12) continue
     if (heard.replace(/\s+/g, '').toLowerCase() === term.replace(/\s+/g, '').toLowerCase()) continue
-    if (isWordEdit(heard, term)) continue
+    if (isWordEdit(heard, term) || !termShaped(term)) continue
     pairs.push({ heard, term })
   }
   return pairs.length <= MAX_PAIRS ? pairs : null
@@ -156,7 +167,8 @@ function save(pairs: Learned[]): Promise<void> {
 /** Terms learned from the user's edits, newest first, for the speech context (empty until the store is read). */
 export function learnedTerms(): string[] {
   if (!learned) void load().catch(() => {})
-  return [...new Set((learned ?? []).map((p) => p.term))]
+  // A phrase learned before termShaped existed stays in the store but not in the context.
+  return [...new Set((learned ?? []).map((p) => p.term).filter(termShaped))]
 }
 
 const day = (ms: number) => new Date(ms).toISOString().slice(0, 10)

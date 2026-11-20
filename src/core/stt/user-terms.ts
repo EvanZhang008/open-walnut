@@ -26,6 +26,9 @@ export const TITLE_TERMS = 30
 const LEARNED_TERMS = 10
 const REFRESH_MS = 60 * 60_000
 const MIN_USES = 3
+// A user who writes at least this share of their titles in Chinese speaks it too
+// (2026-11-20: the maintainer writes 24% of 7,883 titles in Chinese; agents write the rest).
+const CJK_TITLE_SHARE = 0.1
 
 const CJK = /[一-鿿]/
 const WORD = /[A-Za-z][A-Za-z0-9.+-]*[A-Za-z0-9]/g
@@ -78,13 +81,17 @@ export function mergeTerms(lists: Iterable<string>[], max = MAX_TERMS): string[]
 }
 
 let titleTerms: string[] = []
+let writesCjk = false
 let refreshedAt = 0
 let refreshing: Promise<void> | null = null
 
 async function refreshTitleTerms(): Promise<void> {
   try {
     const { listTaskTitles } = await import('../task-manager.js')
-    titleTerms = termsFromTitles(await listTaskTitles())
+    const titles = await listTaskTitles()
+    titleTerms = termsFromTitles(titles)
+    const cjk = titles.filter((t) => CJK.test(t)).length
+    writesCjk = cjk >= MIN_USES && cjk >= CJK_TITLE_SHARE * titles.length
   } catch (err) {
     log.stt.warn(`speech context: task titles not read (${err instanceof Error ? err.message : String(err)})`)
   } finally {
@@ -109,9 +116,16 @@ export function speechContext(config: Pick<Config, 'stt' | 'stt_corrections'>, v
   return mergeTerms([vocabWords, corrections, learnedTerms().slice(0, LEARNED_TERMS), titles]).join(', ')
 }
 
+/** True when the user writes their own task titles in Chinese, so their speech is Chinese too (cached like the title words). */
+export function userWritesCjk(now = Date.now()): boolean {
+  cachedTitleTerms(now)
+  return writesCjk
+}
+
 /** Test hook. */
-export function _setTitleTermsForTest(terms: string[], at = Date.now()): void {
+export function _setTitleTermsForTest(terms: string[], at = Date.now(), cjk = terms.length > 0): void {
   titleTerms = terms
+  writesCjk = cjk
   refreshedAt = at
   refreshing = null
 }

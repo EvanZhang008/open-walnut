@@ -82,7 +82,8 @@ describe('transcribeAudio with a context that is read back', () => {
 })
 
 // Every place that calls an engine directly, so one that sends the speech context
-// without going through transcribeAudio (and its echo check) cannot appear unseen.
+// without going through transcribeAudio (its echo check and its language check,
+// tests/core/stt-context-language.test.ts) cannot appear unseen.
 describe('engine calls outside transcribeAudio', () => {
   it('are only the known ones', async () => {
     const { readdirSync, readFileSync, statSync } = await import('node:fs')
@@ -101,8 +102,9 @@ describe('engine calls outside transcribeAudio', () => {
     }
     walk(root)
     expect(found.sort()).toEqual([
-      // transcribeAudio itself (the call and its plain retry) and the shadow engine (the vocab file only, never the Qwen context).
-      'core/stt/index.ts:3',
+      // transcribeAudio itself (the call, its plain retry after a read-back, its retry as Chinese after an
+      // English answer) and the shadow engine (the vocab file only, never the Qwen context).
+      'core/stt/index.ts:4',
       // A retry with a chosen whisper model: whisper's own prompt, not the Qwen context.
       'web/routes/stt.ts:1',
     ])
