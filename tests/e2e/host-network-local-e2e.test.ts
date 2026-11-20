@@ -363,7 +363,7 @@ suite(`host network with no companion: a ticket joins a machine (relay: ${RELAY}
       await expect(get('/before')).rejects.toThrow()
       expect(macConns).toBe(0)
       const refusedThere = ((await hostRpc('hub.status')).forwards as Array<Record<string, unknown>>)[0]
-      expect(refusedThere).toMatchObject({ refused: 1, opened: 0, lastRefusal: `port ${svc} on this Walnut is not open to hub forwards (net.hub_ports)` })
+      expect(refusedThere).toMatchObject({ refused: 1, opened: 0, lastRefusal: `port ${svc} on this Walnut is not open to hub forwards (net.hub_ports, or a plugin grant)` })
       expect((await listPluginHosts()).find((h) => h.alias === machine)?.hub).toBeUndefined()
 
       // The Mac lists the port for this machine: the bytes go over the host network link.

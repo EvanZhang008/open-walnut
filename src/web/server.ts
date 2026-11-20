@@ -104,7 +104,7 @@ import { usageTracker } from '../core/usage/index.js'
 import * as chatHistory from '../core/chat-history.js'
 import { gitPullWalnut, ensureRepo, commitIfDirty, autoSync, isGitAvailable, isLockContention, checkRepoSize, getSyncGuardState, REPO_SIZE_RECOVERY_KEY } from '../integrations/git-sync.js'
 import { registry } from '../core/integration-registry.js'
-import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, forgetBundledPlugin, isStoreSourcePlugin, getPluginJobSources, getPluginLifecycleRecords, getPluginReloadIds, isPluginCatalogueLoading, loadNewPlugins, loadPlugins, migrateConfigToPlugins, pluginsKeepingTasks, reloadLoadedPlugin, reloadLoadedPlugins, runPluginMigrations, getUnconfiguredPlugins, pluginStarting } from '../core/integration-loader.js'
+import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, forgetBundledPlugin, isStoreSourcePlugin, getPluginJobSources, getPluginLifecycleRecords, getPluginReloadIds, isPluginCatalogueLoading, loadNewPlugins, loadPlugins, migrateConfigToPlugins, pluginsDeclaringHubPorts, pluginsKeepingTasks, reloadLoadedPlugin, reloadLoadedPlugins, runPluginMigrations, getUnconfiguredPlugins, pluginStarting } from '../core/integration-loader.js'
 import { disposeCoreServices, publishCalendarSource, publishFeatureNodes } from '../core/platform-services.js'
 import type { SyncPollContext } from '../core/integration-types.js'
 import { recordSyncSuccess, recordSyncFailure, decideSyncFailureNotice, decideConnectionNotice, getSyncHealth, reconcileCardWanted, StreakWarnings, type ConnectionWatch } from '../core/plugin-sync-health.js'
@@ -6345,6 +6345,20 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         release('boot')
         bus.subscribe('plugin-task-visibility:release', (event) => {
           if ((event.data as { action?: string } | undefined)?.action === 'removed') release('removed')
+        }, { global: true, interest: ['plugin:runtime-changed'] })
+      }
+      // Hub port grants of a plugin that is gone, or no longer declares the port, are dropped
+      // (core/hosts/hub-port-grants.ts): after the complete walk, and when a plugin is removed.
+      if (bootPolicy('hub-port-door')) {
+        const [{ dropHubGrantsNotDeclared }, { getConfig, isFallbackConfig }] = await Promise.all([import('../core/hosts/hub-port-grants.js'), import('../core/config-manager.js')])
+        // A config.yaml it could not read names no host: then only the plugins are checked.
+        const prune = (why: string) => void getConfig()
+          .then((config) => dropHubGrantsNotDeclared(pluginsDeclaringHubPorts(registry), isFallbackConfig(config) ? undefined : new Set(Object.keys(config.hosts ?? {}))))
+          .then((n) => { if (n > 0) log.web.info('hub port grants of removed plugins dropped', { why, count: n }) })
+          .catch((err) => log.web.warn('dropping hub port grants failed', { why, error: err instanceof Error ? err.message : String(err) }))
+        prune('boot')
+        bus.subscribe('hub-port-grants:prune', (event) => {
+          if ((event.data as { action?: string } | undefined)?.action === 'removed') prune('removed')
         }, { global: true, interest: ['plugin:runtime-changed'] })
       }
     }

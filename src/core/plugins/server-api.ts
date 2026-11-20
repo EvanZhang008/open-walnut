@@ -48,6 +48,8 @@ import { emitConfigChanged } from '../config-broadcast.js'
 import { getVersion } from '../version.js'
 import { WALNUT_HOME } from '../../constants.js'
 import { isFollower } from '../server-role.js'
+import { declareHubPorts } from '../hosts/hub-port-grants.js'
+import type { HubPortDeclaration } from '../hosts/hub-port-manifest.js'
 import { createPluginMacos } from './plugin-macos.js'
 import { createPluginMcp } from './plugin-mcp.js'
 import { createPluginExpose } from './plugin-expose.js'
@@ -126,6 +128,8 @@ export interface CreateServerPluginApiOptions {
   storage?: PluginStorageDeclaration
   /** The manifest's `taskVisibility`: `'plugin'` keeps this plugin's tasks to its own view. */
   taskVisibility?: 'plugin'
+  /** The manifest's `hubPorts`: the ports its `hosts.allowHubPort` grants may open (hub-port-grants.ts). */
+  hubPorts?: HubPortDeclaration[]
 }
 
 interface PluginAgentSpec extends Omit<AgentDefinition, 'id' | 'source' | 'overrides_builtin'> {
@@ -595,6 +599,8 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
     return { items: keep, refused }
   }
   if (keepsTasks) context.own(toDisposable(registerPluginKeepsTasks(pluginId)))
+  // Its hub port grants are in force while this generation lives (hub-port-grants.ts).
+  if (options.hubPorts?.length) context.own(toDisposable(declareHubPorts(pluginId, options.hubPorts)))
   const contextSnippets: string[] = contributions.agentContext ? [contributions.agentContext] : []
   let unsafeWarned = false
 
@@ -894,6 +900,48 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         if (isFollower()) throw new Error('hosts.run is not available on a replica.')
         const { runOnPluginHost } = await import('./plugin-hosts.js')
         return runOnPluginHost(alias, input)
+      },
+      async push(alias: string, input: { file?: string; bytes?: Uint8Array; to: string; mode?: number; timeoutMs?: number }) {
+        if (isFollower()) throw new Error('hosts.push is not available on a replica.')
+        assertLive('hosts.push')
+        const { pushToPluginHost } = await import('./plugin-host-push.js')
+        // Stopped with the plugin: a push of a generation being replaced writes nothing more.
+        return pushToPluginHost(pluginId, context.dataDir, alias, input, context.signal)
+      },
+      async allowHubPort(alias: string, port: number) {
+        if (isFollower()) throw new Error('hosts.allowHubPort is not available on a replica; the primary takes hub streams.')
+        assertLive('hosts.allowHubPort')
+        const { allowPluginHubPort } = await import('./plugin-hosts.js')
+        const result = await allowPluginHubPort(pluginId, alias, port)
+        if (result.added) context.logger.info('Plugin allowed a host on a hub port', { host: alias, port })
+        return result
+      },
+      async revokeHubPort(alias: string, port: number) {
+        if (isFollower()) throw new Error('hosts.revokeHubPort is not available on a replica; the primary takes hub streams.')
+        const { revokePluginHubPort } = await import('./plugin-hosts.js')
+        const result = await revokePluginHubPort(pluginId, alias, port)
+        if (result.removed) context.logger.info('Plugin revoked a host on a hub port', { host: alias, port })
+        return result
+      },
+      onConnect(handler: (host: { alias: string }) => void | Promise<void>) {
+        assertLive('hosts.onConnect')
+        if (typeof handler !== 'function') throw new Error('hosts.onConnect needs a handler')
+        let off: (() => void) | null = null
+        let disposed = false
+        const deliver = (alias: string) => {
+          if (disposed || context.signal.aborted) return
+          void Promise.resolve().then(() => handler({ alias })).catch((error) => {
+            context.logger.error('Plugin host connect handler failed', { host: alias, error: error instanceof Error ? error.message : String(error) })
+          })
+        }
+        // A replica's links are not the primary's: its plugins hear nothing here.
+        if (!isFollower()) {
+          void import('./plugin-hosts.js').then(({ onPluginHostConnect }) => onPluginHostConnect(deliver)).then((unsubscribe) => {
+            if (disposed) unsubscribe()
+            else off = unsubscribe
+          }).catch((error) => context.logger.warn('hosts.onConnect could not subscribe', { error: String(error) }))
+        }
+        return own(toDisposable(() => { disposed = true; off?.(); off = null }))
       },
     },
 

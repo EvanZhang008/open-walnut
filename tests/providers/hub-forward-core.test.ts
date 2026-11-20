@@ -139,8 +139,8 @@ describe('createHubForwards', () => {
     const h = harness({ file: file({ local_port: 18403, port: 18500 }) })
     h.hub.start()
     h.listens[0].conn(sock())
-    h.opened[0].hooks.gone(false, 'port 18500 on this Walnut is not open to home-pc (net.hub_ports)')
-    expect(h.hub.status().forwards[0]).toMatchObject({ refused: 1, active: 0, lastRefusal: 'port 18500 on this Walnut is not open to home-pc (net.hub_ports)' })
+    h.opened[0].hooks.gone(false, 'port 18500 on this Walnut is not open to home-pc (net.hub_ports, or a plugin grant)')
+    expect(h.hub.status().forwards[0]).toMatchObject({ refused: 1, active: 0, lastRefusal: 'port 18500 on this Walnut is not open to home-pc (net.hub_ports, or a plugin grant)' })
     expect(h.logs.find((l) => l.msg === 'hub forward: refused')?.data).toMatchObject({ localPort: 18403, port: 18500 })
   })
 
@@ -357,7 +357,7 @@ describe('createHubForwards', () => {
   it('the same refusal is logged at most once per 5 s, with the count it held back; a new reason at once', () => {
     const h = harness({ file: file({ local_port: 18403, port: 18403 }) })
     h.hub.start()
-    const NOT_OPEN = 'port 18403 on this Walnut is not open to hub forwards (net.hub_ports)'
+    const NOT_OPEN = 'port 18403 on this Walnut is not open to hub forwards (net.hub_ports, or a plugin grant)'
     const refuse = (why: string) => { h.listens[0].conn(sock()); h.opened[h.opened.length - 1].hooks.gone(false, why) }
     for (let i = 0; i < 10; i++) refuse(NOT_OPEN)
     expect(h.logs.filter((l) => l.msg === 'hub forward: refused')).toHaveLength(1)

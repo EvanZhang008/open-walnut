@@ -226,11 +226,30 @@ export interface HostInfo {
   hostname?: string
   user?: string
   port?: number
-  /** The ports of this Walnut's own loopback that `net.hub_ports` opens to this host (hub
-   *  forwards), each with whether the host's forward is up and when it last connected. Absent
-   *  when none is listed for the host. */
+  /** What the host runs, in the names release builds use, so a plugin picks the right binary
+   *  without running uname: from what Walnut already knows (this machine's own, the host's last
+   *  probe or preflight). `get` asks a connected host Walnut has not heard yet (at most 5 s);
+   *  null while unknown (a host that never connected). Absent on a Walnut older than 2026-11-20. */
+  platform?: HostPlatform | null
+  /** The ports of this Walnut's own loopback that `net.hub_ports` or a plugin's grant
+   *  (`allowHubPort`) opens to this host (hub forwards), each with whether the host's forward is
+   *  up, when it last connected and who allowed it. Absent when none is open to the host. */
   hub?: HostHubPort[]
+  /** The host's own hub forwards file, as its daemon named it (with `hub`, once its daemon
+   *  answered): the file a plugin writes there with `run` to name the host's forwards. */
+  hubForwardsFile?: string
 }
+
+/** A host's operating system and processor, as Go and most release builds name them. */
+export interface HostPlatform {
+  /** `darwin`, `linux`, `windows`, or the host's own word for another. */
+  os: 'darwin' | 'linux' | 'windows' | (string & {})
+  /** `arm64`, `amd64`, `386`, `arm`, or the host's own word for another. */
+  arch: 'arm64' | 'amd64' | '386' | 'arm' | (string & {})
+}
+
+/** Who allowed a host on a hub port: config.yaml (`net.hub_ports`) or a plugin's grant. */
+export type HubPortAllowance = { kind: 'config' } | { kind: 'plugin'; pluginId: string }
 
 /** One port of this Walnut's loopback a host reaches through its hub forward. */
 export interface HostHubPort {
@@ -244,6 +263,9 @@ export interface HostHubPort {
   forward: { localPort: number; listening: boolean; error: string | null; waiting: string | null } | null
   /** The host's Walnut daemon is older than hub forwards: it needs an update first. */
   needsUpdate: boolean
+  /** Who allowed the host on this port (both when config.yaml lists it and a plugin granted it).
+   *  Absent on a Walnut older than 2026-11-20, where only config.yaml could. */
+  allowedBy?: HubPortAllowance[]
   /** Linked and the host's forward listens: a connection there reaches this port now. */
   up: boolean
   /** Streams of the host open to the port now, opened and refused since this server started. */
@@ -277,6 +299,32 @@ export interface HostRunResult {
   truncated: boolean
 }
 
+export interface HostPushInput {
+  /** A file in your plugin's own data dir (`walnut.storage.dataDir`): a path relative to it, or
+   *  an absolute one inside it. A path that leads out of it (`..`, a link) is refused. */
+  file?: string
+  /** The file's bytes instead of `file` (give exactly one). */
+  bytes?: Uint8Array
+  /** Where it lands on the host: a file path (not a folder), absolute or `~/...`. Missing
+   *  folders are made. */
+  to: string
+  /** Its permission bits, 0 to 0o777: 0o755 for a program. Default 0o644. */
+  mode?: number
+  /** Default 10 minutes, at most an hour. */
+  timeoutMs?: number
+}
+
+export interface HostPushResult {
+  /** Where it landed, as the host resolves it (the real paths of its folders). */
+  path: string
+  bytes: number
+  /** The sha256 of what landed, checked by the host before it replaced anything. */
+  sha256: string
+  mode: number
+  /** A file was there and was replaced. */
+  replaced: boolean
+}
+
 export interface HostService {
   /** This machine first, then every host in Settings, Hosts. */
   list(): Promise<HostInfo[]>
@@ -288,6 +336,36 @@ export interface HostService {
    *  on another host stdout is kept up to 12 MB.
    *  Throws for a host Walnut does not know. Not available on a replica. */
   run(alias: string, input: HostRunInput): Promise<HostRunResult>
+  /** Put one file (at most 256 MB) onto a host, through Walnut's link to its daemon as host_copy
+   *  does (no port, no ssh of yours): in parts, its size and sha256 checked there, then given
+   *  `mode` and renamed over `to` in one step, so `to` is the old file or the whole new one,
+   *  never a part. `__local__` works too. Never writes credentials (~/.ssh, ~/.aws, ...), Walnut's
+   *  own data, a host's hub forwards file, or a place macOS guards on a Mac (Desktop, Documents,
+   *  Downloads, ...); a Windows host is refused (`unsupported_platform`). Rejects
+   *  with an Error whose `code` says why (`host_offline` for a host Walnut cannot reach now, at
+   *  most 15 s after the call; `protected_path`, `may_prompt`, `outside_data_dir`,
+   *  `is_directory`, `too_large`, `checksum_mismatch`, `busy`, ...); a failure leaves `to` as it
+   *  was. At most 2 pushes of a plugin at once; stopped when your plugin stops. Not available on
+   *  a replica. Absent on a Walnut older than 2026-11-20: check it exists. */
+  push?(alias: string, input: HostPushInput): Promise<HostPushResult>
+  /** Let `alias`'s hub forward reach `port` on this Walnut's 127.0.0.1, as your plugin's grant
+   *  (docs/reference/host-network.md, "Reaching a port on the primary"), with no edit of
+   *  config.yaml. Only a port your manifest declares in `hubPorts`; never Walnut's own ports;
+   *  never this machine (`__local__`). In force while your plugin runs (switched off, its grants
+   *  stop letting streams in; removed, they are dropped). Resolves whether the grant is new.
+   *  The host still names its own forward in its own file (`hubForwardsFile`): write it there with
+   *  `run`. Absent on a Walnut older than 2026-11-20. */
+  allowHubPort?(alias: string, port: number): Promise<{ added: boolean }>
+  /** Take your grant back: the host's next stream to the port is refused (one open now runs to
+   *  its end). Resolves whether there was one. */
+  revokeHubPort?(alias: string, port: number): Promise<{ removed: boolean }>
+  /** Hear each time Walnut's link to a host in Settings, Hosts comes up: its first connect after it
+   *  was added, and every reconnect (a restart of either side, a sleep, a network change), so a
+   *  plugin sets up a new machine without polling. May fire more than once for one connect: make
+   *  the handler idempotent. Only links that come up after the call: at activation, go through
+   *  `list()` once for the hosts already connected. Never for this machine; only on the primary.
+   *  Released when your plugin stops. Absent on a Walnut older than 2026-11-20. */
+  onConnect?(handler: (host: { alias: string }) => void | Promise<void>): Disposable
 }
 
 /** Walnut's importer, which files every outside session (one started in a terminal, or by

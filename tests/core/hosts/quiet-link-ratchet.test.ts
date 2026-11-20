@@ -70,6 +70,7 @@ const SENDERS: Record<string, { calls: number; kind: Kind; why: string }> = {
   'src/core/net/net-mac.ts': { calls: 5, kind: 'wake-recheck', why: 'best-effort host network config pushes and status reads; a lost push is logged' },
   'src/core/net/net-adopt.ts': { calls: 2, kind: 'wake-recheck', why: 'a read-only net.identity proof on an existing link under 5 s; a lost read refuses adoption, with no config write or new dial' },
   'src/core/net/net-seen.ts': { calls: 2, kind: 'wake-recheck', why: 'status reads under 10 s; a lost one reads as no answer' },
+  'src/core/plugins/plugin-hosts.ts': { calls: 2, kind: 'wake-recheck', why: 'a host.facts read (a plugin\'s get of a host whose platform Walnut has not heard) only on a link already connected, under 5 s; a lost one reads as platform unknown. And the connected-edge listener of hosts.onConnect, which sends nothing' },
   'src/core/hosts/hub-ports.ts': { calls: 1, kind: 'wake-recheck', why: 'a hub.status read on a link already connected, never dialled, waited for at most 1.5 s; a lost one keeps the last answer, or none' },
   'src/core/offline-handover.ts': { calls: 1, kind: 'wake-recheck', why: 'a copy pushed after a drain, fire and forget; a lost one only delays it' },
   'src/core/remote-image-mirror.ts': { calls: 1, kind: 'wake-recheck', why: 'image reads under boundHostRead; a lost read answers degraded' },

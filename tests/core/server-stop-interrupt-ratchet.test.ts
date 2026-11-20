@@ -242,6 +242,7 @@ describe('a long transfer waits out a dropped link', () => {
       'src/core/transfer/daemon-transfer-client.ts': { count: 2, way: 'relayFile and writeFileInParts, each part through partRetry (part-retry.ts)' },
       'src/core/transfer/transfer.ts': { count: 3, way: 'writeTargetFile: in parts that wait inside a wait; task_transfer writes its transcript under withLinkWait' },
       'src/core/sessions/engine-switch-io.ts': { count: 1, way: 'the switch\'s transcript, in prepare: a move runs it under withLinkWait (runEngineSwitch), a plain switch keeps one try' },
+      'src/core/plugins/plugin-host-push.ts': { count: 1, way: 'a plugin\'s hosts.push, its own deadline; no wait: a dropped link fails the push and the target stays as it was' },
       'src/core/hosts/host-mcp-images.ts': { count: 1, way: 'one picture for a tool\'s answer, its own deadline; no wait' },
       'src/providers/daemon-connection.ts': { count: 1, way: 'joined-host server upload: checked parts with three attempts per part; a dropped link fails the install and the existing manager retries on reconnect' },
       'src/web/terminal/host-shell.ts': { count: 1, way: 'a terminal script over 1 MB (dtach install with a large prebuilt), its own deadline; no wait: a dropped link fails the provision and the next open probes again' },

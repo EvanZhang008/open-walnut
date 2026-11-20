@@ -304,19 +304,58 @@ export async function writePart(host: string, opts: WritePartOptions, gate?: Sen
 }
 
 /**
- * A whole file this server holds, written onto `host` in parts, size and sha256 checked on the
- * last one. A failed part goes again as the relay's does (part-retry.ts): inside a link wait, a
- * dropped link is waited out and the write goes on from the receiver's bytes.
+ * A file this server reads itself, part by part (an open file of its own: a plugin's push,
+ * core/plugins/plugin-host-push.ts). `sha256` is of the whole file, known before the first part,
+ * so the receiver checks what it got against what was meant; a file that changed under the read
+ * fails that check and lands nowhere.
  */
-export async function writeFileInParts(host: string, path: string, bytes: Buffer, opts: { partBytes?: number; retries?: number; retryDelayMs?: number } = {}): Promise<WritePartReply> {
-  const sha256 = crypto.createHash('sha256').update(bytes).digest('hex')
+export interface PartSource {
+  size: number
+  sha256: string
+  read(offset: number, length: number): Promise<Buffer>
+}
+
+export interface WriteInPartsOptions {
+  partBytes?: number
+  retries?: number
+  retryDelayMs?: number
+  /** Stops before the next part (its reason is thrown when it is an Error). */
+  signal?: AbortSignal
+  /** How long the final part may take (the receiver hashes and syncs the whole file then); default 60 s. */
+  finalPartTimeoutMs?: number
+  /** Called after each part the receiver acknowledged. */
+  onProgress?: (p: { sent: number; total: number }) => void
+}
+
+/**
+ * A whole file this server holds (bytes, or a PartSource it reads), written onto `host` in parts,
+ * size and sha256 checked on the last one. A failed part goes again as the relay's does
+ * (part-retry.ts): inside a link wait, a dropped link is waited out and the write goes on from the
+ * receiver's bytes.
+ */
+export async function writeFileInParts(host: string, path: string, data: Buffer | PartSource, opts: WriteInPartsOptions = {}): Promise<WritePartReply> {
+  const source: PartSource = Buffer.isBuffer(data)
+    ? { size: data.length, sha256: crypto.createHash('sha256').update(data).digest('hex'), read: async (at, n) => data.subarray(at, at + n) }
+    : data
+  const { size, sha256 } = source
   const retry = partRetry({ host, path, size: Math.min(opts.partBytes ?? MAX_UPLOAD_FRAME_BYTES, MAX_UPLOAD_FRAME_BYTES), tries: opts.retries ?? 3, delayMs: opts.retryDelayMs ?? 500 })
   let offset = 0
   for (;;) {
-    const end = Math.min(bytes.length, offset + retry.size)
-    const final = end >= bytes.length
+    // Outside the try: a stop is final, never a part to retry.
+    if (opts.signal?.aborted) {
+      const reason: unknown = opts.signal.reason
+      throw reason instanceof Error ? reason : new TransferCommandError('the write was stopped', host, 'fs.writePart', 'aborted')
+    }
+    const end = Math.min(size, offset + retry.size)
+    const final = end >= size
+    const bytes = await source.read(offset, end - offset)
+    if (bytes.length !== end - offset) throw new TransferCommandError(`${path}: read ${bytes.length} of ${end - offset} bytes at ${offset} here`, '__local__', 'read', 'source_changed')
     try {
-      const reply = await writePart(host, { path, offset, data: bytes.subarray(offset, end), ...(final ? { final: true, size: bytes.length, sha256 } : {}) })
+      const reply = await writePart(host, {
+        path, offset, data: bytes,
+        ...(final ? { final: true, size, sha256, ...(opts.finalPartTimeoutMs !== undefined ? { timeoutMs: opts.finalPartTimeoutMs } : {}) } : {}),
+      })
+      opts.onProgress?.({ sent: end, total: size })
       retry.ok()
       if (final) return reply
       offset = end

@@ -19,6 +19,8 @@ import type {
   FullDiskAccessUse,
   HostRunInput,
   HostRunResult,
+  HostPushInput,
+  HostPushResult,
   McpCallResult,
   McpServerDefinition,
   McpServerStatus,
@@ -81,6 +83,10 @@ export interface FakeWalnutOptions {
   hosts?: HostInfo[]
   /** Answers `hosts.run`. Without one, a run throws: a test must never reach a real host. */
   runOnHost?: (alias: string, input: HostRunInput) => HostRunResult | Promise<HostRunResult>
+  /** Answers `hosts.push`. Without one, a push throws: a test must never reach a real host. */
+  pushToHost?: (alias: string, input: HostPushInput) => HostPushResult | Promise<HostPushResult>
+  /** The ports your manifest declares in `hubPorts`: `hosts.allowHubPort` refuses any other. */
+  hubPorts?: number[]
   /** Answers `macos.readProtectedFile` (after the plugin's `useFullDiskAccess`). Without one, a
    *  read rejects with ENOTSUP, as on a host that cannot read protected files. Throw an error
    *  with `code: 'EPERM'` to stand in for a refused read. */
@@ -149,6 +155,12 @@ export interface FakeWalnutResult {
   statusItems: Map<string, StatusItemState>
   /** Every `hosts.run` call, in order. */
   hostRuns: Array<{ alias: string; input: HostRunInput }>
+  /** Every `hosts.push` call, in order (`bytes` kept as given). */
+  hostPushes: Array<{ alias: string; input: HostPushInput }>
+  /** The plugin's hub port grants now (`hosts.allowHubPort` / `revokeHubPort`). */
+  hubGrants: Array<{ alias: string; port: number }>
+  /** Stand in for Walnut's link to `alias` coming up: fires every live `hosts.onConnect` handler and waits for them. */
+  connectHost(alias: string): Promise<void>
   /**
    * What the plugin shares through `appState`, latest per task: the state, its options and
    * how many times it was published. A `clear` removes the task.
@@ -339,6 +351,12 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
   const statusItems = new Map<string, StatusItemState>()
   const hostList: HostInfo[] = [{ alias: '__local__', local: true, enabled: true }, ...(options.hosts ?? []).map((host) => structuredClone(host))]
   const hostRuns: Array<{ alias: string; input: HostRunInput }> = []
+  const hostPushes: Array<{ alias: string; input: HostPushInput }> = []
+  const hubGrants: Array<{ alias: string; port: number }> = []
+  const connectWatchers = new Set<(host: { alias: string }) => void | Promise<void>>()
+  const connectHost = async (alias: string): Promise<void> => {
+    for (const handler of [...connectWatchers]) await handler({ alias })
+  }
   const fullDiskAccessUses: FullDiskAccessUse[] = []
   const protectedReads: string[] = []
   const mcpRegistrations: McpServerDefinition[] = []
@@ -679,6 +697,31 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
         if (!hostList.some((host) => host.alias === alias)) throw new Error(`Walnut has no host named "${alias}" (Settings, Hosts).`)
         if (!options.runOnHost) throw new Error('hosts.run is not available in the fake plugin api without runOnHost')
         return await options.runOnHost(alias, input)
+      },
+      async push(alias, input) {
+        hostPushes.push({ alias, input: { ...input } })
+        if (!hostList.some((host) => host.alias === alias)) throw Object.assign(new Error(`Walnut has no host named "${alias}" (Settings, Hosts).`), { code: 'unknown_host' })
+        if ((input.file === undefined) === (input.bytes === undefined)) throw Object.assign(new Error('hosts.push: give exactly one of `file` or `bytes`'), { code: 'bad_request' })
+        if (!options.pushToHost) throw new Error('hosts.push is not available in the fake plugin api without pushToHost')
+        return await options.pushToHost(alias, input)
+      },
+      async allowHubPort(alias, port) {
+        if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) throw Object.assign(new Error('hosts.allowHubPort: port must be a TCP port (1 to 65535).'), { code: 'bad_request' })
+        if (alias === '__local__' || !hostList.some((host) => host.alias === alias)) throw Object.assign(new Error(`hosts.allowHubPort: no host named "${alias}" (Settings, Hosts).`), { code: alias === '__local__' ? 'bad_request' : 'unknown_host' })
+        if (!(options.hubPorts ?? []).includes(port)) throw Object.assign(new Error(`hosts.allowHubPort: port ${port} is not in this plugin's manifest "hubPorts".`), { code: 'undeclared_port' })
+        if (hubGrants.some((g) => g.alias === alias && g.port === port)) return { added: false }
+        hubGrants.push({ alias, port })
+        return { added: true }
+      },
+      async revokeHubPort(alias, port) {
+        const at = hubGrants.findIndex((g) => g.alias === alias && g.port === port)
+        if (at < 0) return { removed: false }
+        hubGrants.splice(at, 1)
+        return { removed: true }
+      },
+      onConnect(handler) {
+        connectWatchers.add(handler)
+        return disposable(() => connectWatchers.delete(handler))
       },
     },
     macos: {
@@ -1051,5 +1094,5 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
     ...options.overrides,
   }
 
-  return { api, notices, errors, emitted, registeredOps, services, letters, approvals, answerLetter, statusItems, hostRuns, appStates, appBriefs, fullDiskAccessUses, protectedReads, importRun, importLifecycleProjects, importClaims, tagDisplayDefaults, tagLinkDefaults, pinGroups, mcpRegistrations, exposeRegistrations, mcpCalls, notes: notes.entries }
+  return { api, notices, errors, emitted, registeredOps, services, letters, approvals, answerLetter, statusItems, hostRuns, hostPushes, hubGrants, connectHost, appStates, appBriefs, fullDiskAccessUses, protectedReads, importRun, importLifecycleProjects, importClaims, tagDisplayDefaults, tagLinkDefaults, pinGroups, mcpRegistrations, exposeRegistrations, mcpCalls, notes: notes.entries }
 }

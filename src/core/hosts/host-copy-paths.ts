@@ -43,12 +43,14 @@ const WALNUT_PARENTS = new Set(['tmp', 'T', '.cache', 'state'])
  * daemon's state, a host's secrets and network keys). A task's directory
  * (`.../state/open-walnut/tasks/<task>/...`) is the one Walnut place it may use.
  */
-export function protectedPath(p: string): string | null {
-  const segs = p.split('/').filter(Boolean)
+export function protectedPath(p: string, opts: { foldCase?: boolean } = {}): string | null {
+  // `foldCase`: names compared as a Mac's disk does (~/.SSH is ~/.ssh there).
+  const segs = p.split('/').filter(Boolean).map((x) => (opts.foldCase ? x.toLowerCase() : x))
+  const parents = opts.foldCase ? new Set([...WALNUT_PARENTS].map((x) => x.toLowerCase())) : WALNUT_PARENTS
   if (segs.some((s) => CREDENTIAL_SEGMENTS.has(s)) || CREDENTIAL_FILES.has(segs[segs.length - 1] ?? '')) return 'credentials'
   for (let i = 0; i < segs.length; i++) {
     if (segs[i] === '.open-walnut' || segs[i] === 'open-walnut-streams') return 'Walnut\'s own data'
-    if (segs[i] !== 'open-walnut' || i === 0 || !WALNUT_PARENTS.has(segs[i - 1])) continue
+    if (segs[i] !== 'open-walnut' || i === 0 || !parents.has(segs[i - 1])) continue
     if (segs[i - 1] === 'state' && segs[i + 1] === 'tasks' && segs.length > i + 2) continue
     return 'Walnut\'s own data'
   }

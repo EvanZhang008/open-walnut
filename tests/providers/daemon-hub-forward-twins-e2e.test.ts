@@ -337,8 +337,8 @@ for (const twin of TWINS) {
       expect(mac.conns()).toBe(0)
       expect(other.conns()).toBe(0)
       const st = (await hubStatus(ws)).forwards
-      expect(st.find((f) => f.local_port === local)).toMatchObject({ opened: 0, refused: 2, lastRefusal: `port ${mac.port} on this Walnut is not open to hub forwards (net.hub_ports)` })
-      expect(st.find((f) => f.local_port === local2)).toMatchObject({ opened: 0, refused: 1, lastRefusal: `port ${other.port} on this Walnut is not open to hub forwards (net.hub_ports)` })
+      expect(st.find((f) => f.local_port === local)).toMatchObject({ opened: 0, refused: 2, lastRefusal: `port ${mac.port} on this Walnut is not open to hub forwards (net.hub_ports, or a plugin grant)` })
+      expect(st.find((f) => f.local_port === local2)).toMatchObject({ opened: 0, refused: 1, lastRefusal: `port ${other.port} on this Walnut is not open to hub forwards (net.hub_ports, or a plugin grant)` })
 
       // A hub stream that names an address (no daemon of ours sends one) is refused by the
       // primary's own DaemonConnection, even for a listed port, and nothing is dialled.

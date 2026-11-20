@@ -10,7 +10,9 @@
  *       - port: 18403
  *         hosts: [home-pc]
  *
- * and then the stream is plugged into a connection to that port on THIS machine's 127.0.0.1. The
+ * or a plugin running here allowed that host on a port its manifest declares (`hubPorts`, granted
+ * with `walnut.hosts.allowHubPort`, core/hosts/hub-port-grants.ts), and then the stream is plugged
+ * into a connection to that port on THIS machine's 127.0.0.1. The
  * address is always 127.0.0.1: a stream that names any other is refused, and nothing a machine
  * sends picks one. The host is the link's own (the daemon this server dialled, its network key
  * proven by walnut-net), never a name the stream carries. Nothing listed: every hub stream is
@@ -18,8 +20,9 @@
  * open and refusal is logged with its host and port (a refusal storm at most once per 5 s, with
  * the count; a new reason always gets its line). Only the primary takes them (boot policy `hub-port-door`).
  *
- * `hubPortStatus(host)` says, per listed port, whether the machine's forward is up and when it
- * last connected; `walnut.hosts.list()` / `get()` carry it as `hub` (core/plugins/plugin-hosts.ts).
+ * `hubPortStatus(host)` says, per listed port, whether the machine's forward is up, when it last
+ * connected and who allowed it (config.yaml or a plugin); `walnut.hosts.list()` / `get()` carry it
+ * as `hub` (core/plugins/plugin-hosts.ts).
  */
 import net from 'node:net'
 import type { Duplex } from 'node:stream'
@@ -29,6 +32,34 @@ export interface HubPortRule {
   port: number
   /** The host aliases (config.yaml `hosts`) whose machines may reach it. */
   hosts: string[]
+  /** A plugin's grant (hub-port-grants.ts); absent: `net.hub_ports` in config.yaml. */
+  pluginId?: string
+}
+
+/** Where a host's allowance on a port came from. */
+export type HubPortAllowance = { kind: 'config' } | { kind: 'plugin'; pluginId: string }
+
+/** The plugins' grants in force now (hub-port-grants.ts), never a reason to refuse every stream. */
+async function grantRules(): Promise<HubPortRule[]> {
+  try {
+    return await (await import('./hub-port-grants.js')).hubPortGrantRules()
+  } catch {
+    return []
+  }
+}
+
+/**
+ * A plugin's grant counts only for a host still in Settings: one removed and added back under its
+ * name is a new row the plugin has not allowed (the boot prune drops the stale grant).
+ */
+function forConfiguredHosts(rules: HubPortRule[], config: { hosts?: unknown } | null | undefined): HubPortRule[] {
+  const hosts = (config?.hosts && typeof config.hosts === 'object' ? config.hosts : {}) as Record<string, unknown>
+  return rules.map((r) => ({ ...r, hosts: r.hosts.filter((h) => Object.hasOwn(hosts, h)) })).filter((r) => r.hosts.length > 0)
+}
+
+/** `net.hub_ports` and the plugins' grants in force, together: what a stream is checked against. */
+export async function allHubPortRules(config: { net?: { hub_ports?: unknown }; hosts?: unknown } | null | undefined): Promise<HubPortRule[]> {
+  return [...hubPortRules(config).rules, ...forConfiguredHosts(await grantRules(), config)]
 }
 
 /** `net.hub_ports` as written, the entries it cannot use left out with why. */
@@ -63,8 +94,8 @@ export function hubStreamRefusal(rules: readonly HubPortRule[], host: string, in
     return `a hub stream reaches only this Walnut's own 127.0.0.1, never ${info.host.slice(0, 80)}`
   }
   const forPort = rules.filter((r) => r.port === port)
-  if (forPort.length === 0) return `port ${port} on this Walnut is not open to hub forwards (net.hub_ports)`
-  if (!forPort.some((r) => r.hosts.includes(host))) return `port ${port} on this Walnut is not open to ${host} (net.hub_ports)`
+  if (forPort.length === 0) return `port ${port} on this Walnut is not open to hub forwards (net.hub_ports, or a plugin grant)`
+  if (!forPort.some((r) => r.hosts.includes(host))) return `port ${port} on this Walnut is not open to ${host} (net.hub_ports, or a plugin grant)`
   return null
 }
 
@@ -101,7 +132,7 @@ function recordOf(host: string, port: number): HubPortRecord {
 
 export interface HubDoorDeps {
   /** This server's config (getConfig). */
-  config: () => Promise<{ net?: { hub_ports?: unknown } }>
+  config: () => Promise<{ net?: { hub_ports?: unknown }; hosts?: unknown }>
   /** Whether this server takes hub streams at all (the primary only). */
   takes: () => boolean
   /** A connection to `port` on this machine's 127.0.0.1 (node:net, allowHalfOpen). */
@@ -116,9 +147,12 @@ export interface HubDoorDeps {
   walnutPorts: () => Promise<number[]>
   /** How long a connected port waits for its stream to be plugged in (the link may drop first). Default 10 s. */
   plugWaitMs?: number
+  /** The plugins' grants in force (hub-port-grants.ts); default: the running plugins'. */
+  pluginRules?: () => Promise<HubPortRule[]>
 }
 
-async function ownWalnutPorts(): Promise<number[]> {
+/** Walnut's own ports on this machine, which a hub stream never reaches (nor a plugin grants). */
+export async function ownWalnutPorts(): Promise<number[]> {
   const [{ getSelfApiRoot }, { getExposeRuntime }, dirs, fsp, path] = await Promise.all([
     import('../../lib/self-api-root.js'), import('../../web/expose-runtime.js'), import('../../lib/daemon-dir.js'),
     import('node:fs/promises'), import('node:path'),
@@ -146,6 +180,7 @@ async function defaultDeps(): Promise<HubDoorDeps> {
     log: (level, msg, data) => log.session[level](msg, data),
     now: () => Date.now(),
     walnutPorts: ownWalnutPorts,
+    pluginRules: grantRules,
   }
 }
 
@@ -200,11 +235,16 @@ export async function acceptHubStream(host: string, info: IncomingStreamInfo, gi
   const deps = given ?? await defaultDeps()
   if (!deps.takes()) throw refused(deps, host, info.port, 'this Walnut server takes no hub streams (only the primary does)')
   let rules: HubPortRule[]
+  let config: Awaited<ReturnType<HubDoorDeps['config']>> | null = null
   try {
-    rules = hubPortRules(await deps.config()).rules
+    config = await deps.config()
+    rules = hubPortRules(config).rules
   } catch {
     rules = []
   }
+  // A config it cannot read lets no plugin grant in either.
+  const granted = config ? await (deps.pluginRules ?? (async () => []))().catch(() => [] as HubPortRule[]) : []
+  rules = [...rules, ...forConfiguredHosts(granted, config)]
   const why = hubStreamRefusal(rules, host, info)
   if (why) throw refused(deps, host, info.port, why)
   const port = info.port as number
@@ -257,6 +297,8 @@ export interface HubPortStatus {
   forward: { localPort: number; listening: boolean; error: string | null; waiting: string | null } | null
   /** The host's daemon is older than hub forwards ('hub-forward-v1'): it needs an update first. */
   needsUpdate: boolean
+  /** Who allowed the host on this port: config.yaml (`net.hub_ports`), a plugin's grant, or both. */
+  allowedBy: HubPortAllowance[]
   /** Linked, and the host's forward listens: a connection there reaches this port now. */
   up: boolean
   active: number
@@ -278,17 +320,19 @@ export interface HubStatusLink {
 type DaemonForward = { local_port?: unknown; port?: unknown; listening?: unknown; error?: unknown; waiting?: unknown }
 const VIEW_TTL_MS = 15_000
 const VIEW_WAIT_MS = 1_500
-const views = new Map<string, { at: number; forwards: DaemonForward[] | null; asking: Promise<void> | null }>()
+const views = new Map<string, { at: number; forwards: DaemonForward[] | null; file: string | null; asking: Promise<void> | null }>()
 
 /** The host daemon's forwards, asked at most every VIEW_TTL_MS, waited for at most VIEW_WAIT_MS. */
 async function daemonForwards(host: string, link: HubStatusLink, now: number): Promise<DaemonForward[] | null> {
   let v = views.get(host)
-  if (!v) { v = { at: -Infinity, forwards: null, asking: null }; views.set(host, v) }
+  if (!v) { v = { at: -Infinity, forwards: null, file: null, asking: null }; views.set(host, v) }
   const view = v
   if (now - view.at >= VIEW_TTL_MS && !view.asking) {
     view.asking = link.send('hub.status', {}, 5_000).then((res) => {
       const list = (res as { forwards?: unknown } | null)?.forwards
       view.forwards = Array.isArray(list) ? list as DaemonForward[] : []
+      const file = (res as { file?: unknown } | null)?.file
+      view.file = typeof file === 'string' && file.startsWith('/') ? file : null
       view.at = Date.now()
     }, () => { view.at = Date.now() }).finally(() => { view.asking = null })
   }
@@ -297,13 +341,24 @@ async function daemonForwards(host: string, link: HubStatusLink, now: number): P
 }
 
 /**
- * Per port `net.hub_ports` lists for `host`: whether its forward is up, and its last connection.
- * Reads no daemon that lacks 'hub-forward-v1' (an older one says it needs an update), dials
- * nothing, and waits at most VIEW_WAIT_MS for the daemon's own word (the last one it had after).
+ * The host's own forwards file, as its daemon named it in its last `hub.status` (asked by
+ * hubPortStatus for a host with a port open to it); null before that, or from a daemon that did
+ * not say. A plugin that sets the host up writes this file there with `walnut.hosts.run`.
  */
-export async function hubPortStatus(host: string, opts: { config?: { net?: { hub_ports?: unknown } }; link?: HubStatusLink | null; now?: number } = {}): Promise<HubPortStatus[]> {
-  const config = opts.config ?? await (await import('../config-manager.js')).getConfig()
-  const ports = hubPortRules(config).rules.filter((r) => r.hosts.includes(host)).map((r) => r.port)
+export function hubForwardsFileOf(host: string): string | null {
+  return views.get(host)?.file ?? null
+}
+
+/**
+ * Per port `net.hub_ports` or a plugin's grant opens to `host`: whether its forward is up, its
+ * last connection, and who allowed it. Reads no daemon that lacks 'hub-forward-v1' (an older one
+ * says it needs an update), dials nothing, and waits at most VIEW_WAIT_MS for the daemon's own
+ * word (the last one it had after).
+ */
+export async function hubPortStatus(host: string, opts: { config?: { net?: { hub_ports?: unknown } }; rules?: HubPortRule[]; link?: HubStatusLink | null; now?: number } = {}): Promise<HubPortStatus[]> {
+  const rules = opts.rules ?? await allHubPortRules(opts.config ?? await (await import('../config-manager.js')).getConfig())
+  const mine = rules.filter((r) => r.hosts.includes(host))
+  const ports = mine.map((r) => r.port)
   if (ports.length === 0) return []
   const link = opts.link !== undefined ? opts.link : (await import('../../providers/daemon-connection.js')).getConnectedDaemonConnection(host)
   const linked = !!link?.connected
@@ -315,8 +370,13 @@ export async function hubPortStatus(host: string, opts: { config?: { net?: { hub
     const forward = f && typeof f.local_port === 'number'
       ? { localPort: f.local_port, listening: f.listening === true, error: typeof f.error === 'string' ? f.error : null, waiting: typeof f.waiting === 'string' ? f.waiting : null }
       : null
+    const allowedBy: HubPortAllowance[] = []
+    for (const rule of mine.filter((x) => x.port === port)) {
+      const a: HubPortAllowance = rule.pluginId ? { kind: 'plugin', pluginId: rule.pluginId } : { kind: 'config' }
+      if (!allowedBy.some((b) => b.kind === a.kind && (b.kind === 'config' || b.pluginId === (a as { pluginId: string }).pluginId))) allowedBy.push(a)
+    }
     return {
-      port, linked, forward, needsUpdate,
+      port, linked, forward, needsUpdate, allowedBy,
       up: linked && forward?.listening === true,
       active: r?.active ?? 0, opened: r?.opened ?? 0, refused: r?.refused ?? 0,
       lastConnectedAt: r?.lastConnectedAt ?? null, lastRefusedAt: r?.lastRefusedAt ?? null, lastError: r?.lastError ?? null,

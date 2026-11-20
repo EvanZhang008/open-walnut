@@ -71,14 +71,21 @@ reach the Mac's coderelay, which listens on the Mac's 127.0.0.1 only. No port op
 network: the machine listens on 127.0.0.1, the Mac connects its own 127.0.0.1, and the bytes ride
 the link that is already there (capability `hub-forward-v1`, both daemon twins).
 
-It takes two keys, and both are off until set. With neither, nothing listens and every such
-stream is refused, as before.
+It takes two keys, and both are off until set: the machine names its forward, and the primary
+allows that machine on that port. With neither, nothing listens and every such stream is
+refused, as before.
 
 **On the machine**, its own file names each forward: `hub-forwards.json` in its net state dir
-(`~/.local/state/open-walnut/net/` for the user's own daemon, beside its key). Nothing the
-primary sends writes it. `walnut net hub-forward add 18403` writes it (`add <local_port> [port]`,
-the primary's port defaulting to the same; `remove <local_port>`; no argument lists the forwards
-and how each is doing). By hand:
+(`~/.local/state/open-walnut/net/` for the user's own daemon, beside its key; the daemon names it
+in `hub.status`, and a plugin reads it as `hubForwardsFile` on `walnut.hosts.get`). No command of
+the primary's writes it: the daemon only reads it, a plugin's `hosts.push` refuses any
+`net/hub-forwards.json` and the file the daemon names, and host_copy refuses Walnut's state
+folders it sits in. It is written in three ways only, each by the machine's own user:
+`walnut net hub-forward add 18403` (`add <local_port> [port]`, the primary's port defaulting to
+the same; `remove <local_port>`; no argument lists the forwards and how each is doing); a hand
+edit; or a script that user runs, which is how a plugin sets up a new machine: its
+`walnut.hosts.run` script there reads the file, adds or updates its own entry, and writes it back
+(to a temporary file beside it, then a rename), leaving every other entry as it was. By hand:
 
     { "forwards": [{ "local_port": 18403, "to": "primary", "port": 18403 }] }
 
@@ -110,19 +117,27 @@ open (the Mac asleep) or is heard again is found within a second. The status say
         - port: 18403
           hosts: [home-pc]
 
-`hosts` are host aliases (the rows in Settings > Remote Hosts). A stream is taken only for a
-listed port from a listed host; the host is the link's own (the daemon this Mac dialled, whose
+`hosts` are host aliases (the rows in Settings > Remote Hosts). A plugin may allow a host too,
+with no edit of config.yaml: its manifest declares the ports it may open (`"hubPorts": [{ "port":
+18403, "why": "..." }]`, docs/reference/plugin-development.md), and `walnut.hosts.allowHubPort(alias,
+port)` allows one host on one of them. Walnut keeps that grant in its own state
+(`local/hub-port-grants.json` in its data dir, never config.yaml); it counts while the plugin runs
+and still declares the port, stops counting the moment the plugin is switched off, and is
+dropped when the plugin is removed (or no longer declares the port). A port that is Walnut's own,
+or not declared, is refused when the plugin asks. `walnut.hosts.list()` says per port who allowed
+it (`allowedBy`: config.yaml, a plugin, or both). A stream is taken only for a
+listed or granted port from a host listed or granted for it; the host is the link's own (the daemon this Mac dialled, whose
 key walnut-net proved), never a name the stream carries. The Mac then connects 127.0.0.1 on that
 port. It is always 127.0.0.1: a stream that names any other address (or anything that is not
 an address) is refused.
 Only the primary takes them (boot policy `hub-port-door`); a replica refuses. A port that is
 Walnut's own on the Mac (its server, its door for host servers, its session daemon's socket,
-which all trust a caller on loopback) is refused even when listed.
+which all trust a caller on loopback) is refused even when listed or granted.
 
 How a connection goes: the machine's daemon accepts it on 127.0.0.1, holds it paused, and sends
 `stream-open {sid, from: 'hub', port}` to the primary's session link (the server socket that
 named its Walnut there and was heard last; never a lane, a follower, the companion or a probe).
-The primary checks `net.hub_ports`, connects its port, and answers `stream.accept`; or it
+The primary checks `net.hub_ports` and the plugins' grants, connects its port, and answers `stream.accept`; or it
 answers `stream.close` with why, and the daemon closes the connection. From then on it is a port
 stream like the ones above: the same 256 KiB window each way (a slow reader slows the sender),
 FINs both ways, a reset on a cut.

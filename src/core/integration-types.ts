@@ -5,6 +5,7 @@
  * Core never references specific integrations — only talks through the registry.
  */
 
+import type { HubPortDeclaration } from './hosts/hub-port-manifest.js';
 import type { PluginJobDeclaration } from './plugin-jobs/manifest.js';
 import type { Task, TaskPhase, TaskPriority } from './types.js';
 import type { SubsystemLogger } from '../logging/index.js';
@@ -624,6 +625,10 @@ export interface PluginManifest {
    *  on the board. `"plugin"`: only in the plugin's own view; every task the plugin creates is
    *  stamped `plugin_only` (src/core/plugins/plugin-task-visibility.ts). */
   taskVisibility?: 'plugin';
+  /** Ports of this Walnut's own loopback the plugin may open to a host's hub forward, with why
+   *  (src/core/hosts/hub-port-manifest.ts). Declaring grants nothing: the plugin allows one
+   *  host at a time (`walnut.hosts.allowHubPort`, src/core/hosts/hub-port-grants.ts). */
+  hubPorts?: HubPortDeclaration[];
   /** Relative path of an `.svg` inside the plugin folder, drawn as the plugin's tile in
    *  Apps (src/core/plugins/plugin-icon.ts). An unusable value is dropped
    *  with a warning; the row then shows a monogram. */

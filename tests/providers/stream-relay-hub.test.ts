@@ -140,7 +140,7 @@ describe('a hub stream through the daemon', () => {
   it('a refusal (null, a rejected acceptor, an older primary with no acceptor) closes the connection and says why', async () => {
     const cases: Array<[((info: IncomingStreamInfo) => StreamPlug | Promise<StreamPlug>) | undefined, RegExp]> = [
       [() => null, /this server does not take that stream/],
-      [async () => { throw new Error('port 4242 on this Walnut is not open to home-pc (net.hub_ports)') }, /not open to home-pc/],
+      [async () => { throw new Error('port 4242 on this Walnut is not open to home-pc (net.hub_ports, or a plugin grant)') }, /not open to home-pc/],
       // An older primary: its endpoint has no acceptor for a hub stream.
       [undefined, /this server does not take that stream/],
     ]

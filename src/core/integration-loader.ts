@@ -28,6 +28,7 @@ import { PluginRestartRequiredError } from './plugins/restart-pending.js';
 import { BUILTIN_HOST_MODULES } from '../integrations/host-modules.js';
 import { bundleEsm } from '../lib/transpile.js';
 import { parseManifestJobs } from './plugin-jobs/manifest.js';
+import { parseManifestHubPorts } from './hosts/hub-port-manifest.js';
 import { bunGlobal } from '../lib/runtime.js';
 import { readPluginWebModule, retainPluginWebModule, type PluginWebModule } from './plugins/plugin-web-module.js';
 import { WALNUT_HOME, IS_EPHEMERAL, PLUGIN_STORES_DIR } from '../constants.js';
@@ -985,6 +986,13 @@ export function pluginsKeepingTasks(registry: IntegrationRegistry): Set<string> 
   return ids;
 }
 
+/** Every discovered plugin (enabled or not) with the hub ports its manifest declares (core/hosts/hub-port-grants.ts). */
+export function pluginsDeclaringHubPorts(registry: IntegrationRegistry): Map<string, Set<number>> {
+  const out = new Map<string, Set<number>>();
+  for (const [id, manifest] of manifestMap(registry)) if (manifest.hubPorts?.length) out.set(id, new Set(manifest.hubPorts.map((p) => p.port)));
+  return out;
+}
+
 export function getPluginSourceDir(registry: IntegrationRegistry, pluginId: string): string | undefined {
   return pluginSources.get(registry)?.get(pluginId)?.dir;
 }
@@ -1541,6 +1549,9 @@ export function validateManifest(raw: unknown, filePath: string): PluginManifest
   const storageParsed = parseStorageDeclaration(obj.storage);
   for (const reason of storageParsed.dropped) log.warn('Manifest storage entry dropped', { filePath, reason });
   // Jobs live in the unified server module: elsewhere they are dropped, never the load.
+  // Lenient like storage: a bad entry costs that port, never the load.
+  const hubPortsParsed = parseManifestHubPorts(obj.hubPorts);
+  for (const reason of hubPortsParsed.dropped) log.warn('Manifest hubPorts entry dropped', { filePath, reason });
   const jobsParsed = parseManifestJobs(obj.jobs);
   for (const reason of jobsParsed.dropped) log.warn('Manifest job dropped', { filePath, reason });
   const jobs = jobsParsed.jobs && (obj.apiVersion !== 1 || !server) ? undefined : jobsParsed.jobs;
@@ -1584,6 +1595,7 @@ export function validateManifest(raw: unknown, filePath: string): PluginManifest
     // Closed set: only `"plugin"` changes anything; junk reads as the default.
     ...(parseTaskVisibility(obj.taskVisibility) ? { taskVisibility: 'plugin' as const } : {}),
     ...(jobs ? { jobs } : {}),
+    ...(hubPortsParsed.hubPorts ? { hubPorts: hubPortsParsed.hubPorts } : {}),
   };
 }
 
@@ -1967,6 +1979,7 @@ async function loadPlugin(
             lookupPluginState: (id) => manager.get(id)?.state,
             storage: manifest.storage,
             taskVisibility: manifest.taskVisibility,
+            hubPorts: manifest.hubPorts,
           })
         : builder.api;
       if (deactivateFn) context.onDispose(deactivateFn);

@@ -73,9 +73,9 @@ describe('net.hub_ports', () => {
     const rules = [{ port: 18403, hosts: ['home-pc'] }, { port: 9000, hosts: ['lab'] }]
     expect(hubStreamRefusal(rules, 'home-pc', { port: 18403 })).toBeNull()
     expect(hubStreamRefusal(rules, 'home-pc', { port: 18403, host: '127.0.0.1' })).toBeNull()
-    expect(hubStreamRefusal(rules, 'home-pc', { port: 18404 })).toBe('port 18404 on this Walnut is not open to hub forwards (net.hub_ports)')
-    expect(hubStreamRefusal(rules, 'home-pc', { port: 9000 })).toBe('port 9000 on this Walnut is not open to home-pc (net.hub_ports)')
-    expect(hubStreamRefusal(rules, 'stranger', { port: 18403 })).toBe('port 18403 on this Walnut is not open to stranger (net.hub_ports)')
+    expect(hubStreamRefusal(rules, 'home-pc', { port: 18404 })).toBe('port 18404 on this Walnut is not open to hub forwards (net.hub_ports, or a plugin grant)')
+    expect(hubStreamRefusal(rules, 'home-pc', { port: 9000 })).toBe('port 9000 on this Walnut is not open to home-pc (net.hub_ports, or a plugin grant)')
+    expect(hubStreamRefusal(rules, 'stranger', { port: 18403 })).toBe('port 18403 on this Walnut is not open to stranger (net.hub_ports, or a plugin grant)')
     for (const host of ['10.1.2.3', '0.0.0.0', '169.254.169.254', 'localhost', '::1', 'example.test', 'home-pc']) {
       expect(hubStreamRefusal(rules, 'home-pc', { port: 18403, host })).toMatch(/reaches only this Walnut's own 127\.0\.0\.1, never/)
     }
@@ -110,7 +110,7 @@ describe('acceptHubStream through a server endpoint', () => {
     const { ep, frames } = link('home-pc', d)
     ep.handle({ ev: 'stream-open', sid: 'r1', from: 'hub', port: svc })
     const a = await answered(frames, 'r1')
-    expect(a).toMatchObject({ cmd: 'stream.close', error: `port ${svc} on this Walnut is not open to hub forwards (net.hub_ports)` })
+    expect(a).toMatchObject({ cmd: 'stream.close', error: `port ${svc} on this Walnut is not open to hub forwards (net.hub_ports, or a plugin grant)` })
     expect(connects).toEqual([])
     expect(logs.find((l) => l.msg === 'hub port: refused')?.data).toMatchObject({ host: 'home-pc', port: svc })
     // The same refusal again within 5 s is counted, not logged; a new reason is logged at once.
@@ -119,7 +119,7 @@ describe('acceptHubStream through a server endpoint', () => {
     ep.handle({ ev: 'stream-open', sid: 'r3', from: 'hub', port: svc, host: '10.0.0.9' })
     await answered(frames, 'r3')
     expect(logs.filter((l) => l.msg === 'hub port: refused').map((l) => l.data.error)).toEqual([
-      `port ${svc} on this Walnut is not open to hub forwards (net.hub_ports)`,
+      `port ${svc} on this Walnut is not open to hub forwards (net.hub_ports, or a plugin grant)`,
       "a hub stream reaches only this Walnut's own 127.0.0.1, never 10.0.0.9",
     ])
   })
@@ -129,7 +129,7 @@ describe('acceptHubStream through a server endpoint', () => {
     const { d, connects } = deps([{ port: svc, hosts: ['lab'] }])
     const { ep, frames } = link('home-pc', d)
     ep.handle({ ev: 'stream-open', sid: 'r1', from: 'hub', port: svc })
-    expect((await answered(frames, 'r1')).error).toBe(`port ${svc} on this Walnut is not open to home-pc (net.hub_ports)`)
+    expect((await answered(frames, 'r1')).error).toBe(`port ${svc} on this Walnut is not open to home-pc (net.hub_ports, or a plugin grant)`)
     const other = link('lab', d)
     other.ep.handle({ ev: 'stream-open', sid: 'r2', from: 'hub', port: svc + 1 })
     expect((await answered(other.frames, 'r2')).error).toMatch(/not open to hub forwards/)

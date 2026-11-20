@@ -3,6 +3,7 @@ import path from 'node:path'
 import { draftsOffDevice, viewStatesInMemory, type DraftHome } from './view-state-scan.js'
 import { contentTaskCalls, contentTaskWarning } from './content-task-scan.js'
 import { parseManifestJobs } from '../../../src/core/plugin-jobs/manifest.js'
+import { parseManifestHubPorts } from '../../../src/core/hosts/hub-port-manifest.js'
 
 export interface PluginBuildConfig {
   server?: string
@@ -41,6 +42,11 @@ export interface PluginManifest {
    * and answer the plugin's HTTP routes the server half does not.
    */
   jobs?: Record<string, { every?: string; kind?: 'every' | 'long-running'; serves?: boolean }>
+  /**
+   * Ports of the primary Walnut's own loopback this plugin may open to a host's hub forward
+   * (`walnut.hosts.allowHubPort`), each with why: `[{ "port": 18403, "why": "..." }]`.
+   */
+  hubPorts?: Array<{ port: number; why: string }>
 }
 
 export interface ValidationResult {
@@ -115,6 +121,8 @@ export async function validatePlugin(root = process.cwd()): Promise<ValidationRe
     errors.push("manifest.install must be 'auto' or 'optional'")
   }
   if (manifest.jobs !== undefined) errors.push(...jobErrors(manifest))
+  // The host's own rules: validate reports exactly the entries the host would drop.
+  if (manifest.hubPorts !== undefined) errors.push(...parseManifestHubPorts(manifest.hubPorts).dropped.map((reason) => `manifest.${reason}`))
   if (manifest.category !== undefined && !(PLUGIN_CATEGORIES as readonly unknown[]).includes(manifest.category)) {
     errors.push(`manifest.category must be one of ${PLUGIN_CATEGORIES.map((c) => `'${c}'`).join(', ')}`)
   }
