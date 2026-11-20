@@ -33,7 +33,10 @@ export interface WorkerFoldCtl {
   foldBackOf(task: Task): { leader: Task; team: boolean } | null;
 }
 
-/** One control's words: its accessible name and the hint shown at once on hover or focus. */
+/** One control's words: its accessible name and the hint shown at once on hover or focus. Taking a
+    worker out only changes the view, so its words say it stays in the team: "Take out" read as
+    removing it from its leader (2026-11-20: "it means just monitor the status seperately not remove
+    it from the parent"). */
 function tipProps(words: string) {
   return { 'aria-label': words, 'data-fold-tip': words };
 }
@@ -107,7 +110,7 @@ export function FoldTree({ host, entries, ctl, focusedTaskId, onOpen, twoLine }:
                 type="button"
                 className="worker-fold-action"
                 data-testid={back ? 'worker-fold-back' : 'worker-fold-separate'}
-                {...tipProps(back ? `Put back into ${orgDisplayTitle(back.leader)}` : 'Take out: show as its own row in the list')}
+                {...tipProps(back ? `Put back into ${orgDisplayTitle(back.leader)}` : 'Show on its own row (stays in this team)')}
                 onClick={(e) => {
                   e.stopPropagation();
                   if (!back) ctl.separate(task.id, true);
@@ -126,7 +129,7 @@ export function FoldTree({ host, entries, ctl, focusedTaskId, onOpen, twoLine }:
             type="button"
             className="worker-fold-all"
             data-testid={folded > 0 ? 'worker-fold-show-all' : 'worker-fold-all-back'}
-            {...tipProps(folded > 0 ? `Take out all ${entries.length}: each its own row in the list` : 'Put all back into the team')}
+            {...tipProps(folded > 0 ? `Show all ${entries.length} on their own rows (they stay in this team)` : 'Put all back into the team')}
             onClick={(e) => { e.stopPropagation(); ctl.showTeam(host.id, folded > 0); }}
             onKeyDown={(e) => e.stopPropagation()}
           >{folded > 0 ? ICONS.ICON_FOLD_TAKE_OUT : ICONS.ICON_FOLD_PUT_BACK}<span>All</span></button>

@@ -79,12 +79,12 @@ test.describe('worker fold', () => {
     // it does as soon as the pointer is on it (no native title delay).
     await item1.hover()
     const takeOut = item1.getByTestId('worker-fold-separate')
-    await expect(takeOut).toHaveAttribute('data-fold-tip', /Take out/)
+    await expect(takeOut).toHaveAttribute('data-fold-tip', /^Show on its own row \(stays in this team\)$/)
     await expect(takeOut).not.toHaveAttribute('title', /./)
     await takeOut.hover()
     const tip = page.getByTestId('worker-fold-tip')
     await expect(tip).toBeVisible({ timeout: 500 })
-    await expect(tip).toHaveText('Take out: show as its own row in the list')
+    await expect(tip).toHaveText('Show on its own row (stays in this team)')
     await takeOut.click()
     // The new row pushes the line down, out from under the pointer: no hint stays behind.
     await expect(tip).toBeHidden()
@@ -254,7 +254,7 @@ test.describe('worker fold', () => {
     await page.keyboard.press('Shift+Tab')
     await page.keyboard.press('Tab')
     const tip = page.getByTestId('worker-fold-tip')
-    await expect(tip).toHaveText('Take out: show as its own row in the list')
+    await expect(tip).toHaveText('Show on its own row (stays in this team)')
     await page.mouse.move(view.width - 2, view.height - 2)
     await page.mouse.move(view.width - 40, view.height - 40)
     await expect(tip).toBeVisible()
