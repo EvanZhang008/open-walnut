@@ -38,15 +38,29 @@ const NETWORK: string[] = [
   fetch('connect: network is unreachable'),
   'Failed to refresh credentials: could not resolve host: sign-in.example.test',
   'Authentication failed: connection timed out while reaching the token service',
+  // 2026-11-19 07:59, reported again on 11-20: the whole text as the session showed it (names neutral).
+  'API Error: 502 could not fetch AWS credentials for prod-1: CredentialRetrievalError: Error when retrieving credentials from custom-process: 2026/11/19 07:59:22 Failed to force refresh the credentials: unable to retrieve credentials: unable to assume credentials for account "000000000000" and role "ModelAccess": Get "https://sign-in.example.test": dial tcp: lookup sign-in.example.test: no such host. This is a server-side issue, usually temporary \u2014 try again in a moment. If it persists, check your provider service status.',
+  // A hung credential process under the same gateway answer.
+  'API Error: 502 could not fetch AWS credentials for prod-1: credential process timed out after 30s',
+  fetch('credential process timed out after 30s'),
+  // A gateway's 503 or 504 for a credential source it could not reach, no cause named.
+  'API Error: 503 could not fetch credentials for prod-1',
+  'API Error: 504 Gateway Timeout while refreshing credentials',
+  'Failed to refresh credentials: status code: 503, service unavailable',
 ]
 
 const THE_USERS: Array<[string, string]> = [
   [fetch('token expired, sign in again'), 'sign-in'],
-  [fetch('401 Unauthorized'), 'sign-in'],
+  [fetch('401 Unauthorized'), 'credentials'],
   ['API Error: 401 Unauthorized (fetch failed)', 'credentials'],
   ['API Error: invalid api key (connection reset after the answer)', 'credentials'],
   [fetch('credentials revoked'), 'credentials'],
   ['API Error: 403 Forbidden: dns error ignored', 'permissions'],
+  // A gateway's 503 when every account's login lapsed: his to sign in again.
+  ['API Error: 503 no account has working AWS credentials (prod-1: token expired); if the login expired, sign in again', 'sign-in'],
+  ['API Error: 502 could not fetch credentials: 401 Unauthorized', 'credentials'],
+  // A spend refused under a gateway status is his too.
+  ['API Error: 503 credential check: usage limit reached', 'spending'],
 ]
 
 describe('a credential fetch the network broke', () => {
@@ -56,10 +70,10 @@ describe('a credential fetch the network broke', () => {
     expect(usersErrorKind(text)).toBeNull()
   })
 
-  it.each(THE_USERS)('%s stays the user\'s', (text) => {
+  it.each(THE_USERS)('%s stays the user\'s (%s)', (text, kind) => {
     expect(networkCausedAuthError(text)).toBe(false)
     expect(classifyTurnError(text)).toBe('terminal')
-    expect(usersErrorKind(text)).not.toBeNull()
+    expect(usersErrorKind(text)).toBe(kind)
   })
 })
 

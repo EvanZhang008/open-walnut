@@ -8,8 +8,13 @@
  * through once the network is back. So such a text is a transient failure (the daemon's turn retry,
  * then session-auto-continue, then the task's lead), never the user's kind.
  *
+ * The same goes for a credential fetch that hung (a timeout) or that a gateway answered with a 502,
+ * 503 or 504 (2026-11-20: the same 07:59 text reported again; a hung credential process answers
+ * "credential process timed out after 30s" under the same 502).
+ *
  * A rejection the service gave (a 401 or 403, an expired, revoked or invalid credential, a sign-in
- * asked for) keeps the text the user's, whatever network words ride beside it.
+ * asked for) keeps the text the user's, whatever network words ride beside it: a gateway's 503
+ * "no account has working credentials ... if the login expired, sign in again" stays his.
  *
  * One self-contained function: daemon-source.ts embeds it by toString (no outside reference), and
  * user-status.ts (browser-safe) reads it through sessions/session-error-owner.ts.
@@ -26,8 +31,13 @@ export function networkCausedAuthError(text: string | null | undefined): boolean
     /connection (?:refused|reset|timed out)|error trying to connect|unable to connect|network is unreachable|no route to host|operation timed out|i\/o timeout/i,
     // The client's words for a connection that failed or dropped (the endpoint wait's own classes).
     /fetch failed|socket hang up|\bconnection error\b|connection dropped|connection (?:was )?closed unexpectedly|\bEPIPE\b/i,
+    // The credential source hung ("credential process timed out after 30s").
+    /\btimed out\b|\btime-?out\b/i,
+    // A gateway answered for a source it could not reach (the 502 "could not fetch credentials"
+    // above, a 503 or 504 the same way): a status, never a port or an account number.
+    /\b(?:API Error|status(?: code)?|HTTP(?:\/\d(?:\.\d)?)?)[: ]+50[234]\b|bad gateway|service unavailable|gateway time-?out|server-side issue|temporarily unavailable/i,
   ]
-  // The service answered and said no: that stays the user's.
-  const rejected = /\b401\b|\b403\b|unauthori[sz]ed|forbidden|expired|revoked|denied|invalid (?:api[_ ]?)?key|invalid (?:access )?token|invalid credentials|reauthenticate|re-authenticate|not logged in|(?:log|sign) ?in again/i
+  // The service answered and said no, or the spend is refused: that stays the user's.
+  const rejected = /\b401\b|\b403\b|unauthori[sz]ed|forbidden|expired|revoked|denied|invalid (?:api[_ ]?)?key|invalid (?:access )?token|invalid credentials|reauthenticate|re-authenticate|not logged in|(?:log|sign) ?in again|budget|quota|bil{2}ing|payment|credit balance|spend(?:ing)? limit|usage limit|\b402\b/i
   return !rejected.test(text) && network.some((re) => re.test(text))
 }
