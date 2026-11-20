@@ -20,6 +20,7 @@ import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 import { drawOrgAvatars, setOrgAvatar, type OrgAvatarSet } from '@/api/org';
 import { log } from '@/utils/log';
+import { MicInput } from '@/components/common/BoxMic';
 import { useOrgAvatars } from './useOrgAvatars';
 import { useStoreTask } from '@/contexts/TasksContext';
 import { avatarFileValue } from './avatar-upload';
@@ -135,8 +136,8 @@ export function OrgAvatarDialog({ target, onRename, onClose }: Props) {
             <img className="org-avatar-now" src={shown} width={64} height={64} alt="" data-testid="org-avatar-current" />
             <label className="org-avatar-name">
               <span>Name</span>
-              <input value={name} onChange={(e) => setName(e.target.value)} disabled={!renameKind} maxLength={renameKind === 'vp' ? 60 : 200}
-                data-testid="org-avatar-name" data-no-draft="rename" onKeyDown={(e) => { if (e.key === 'Enter') void save(picked); }} />
+              <MicInput value={name} setText={setName} disabled={!renameKind} maxLength={renameKind === 'vp' ? 60 : 200} fieldClassName="mic-field-compact"
+                data-testid="org-avatar-name" data-no-draft="rename" onEnter={() => void save(picked)} />
               <small>{renameKind === 'vp' ? 'Blank gives it its project’s name.' : renameKind ? 'The task’s title.' : 'The CEO keeps its name.'}</small>
             </label>
           </div>
@@ -174,8 +175,8 @@ export function OrgAvatarDialog({ target, onRename, onClose }: Props) {
             </>)}
             {tab === 'ai' && (<>
               <div className="org-avatar-ask">
-                <input value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder={`What should ${target.name} look like? (blank: one that fits its name)`}
-                  maxLength={400} data-testid="org-avatar-prompt" data-draft-key={promptDraft.key ?? undefined} onKeyDown={(e) => { if (e.key === 'Enter' && !drawing) void draw(); }} />
+                <MicInput value={prompt} setText={setPrompt} placeholder={`What should ${target.name} look like? (blank: one that fits its name)`} fieldClassName="mic-field-compact mic-field-grow"
+                  maxLength={400} data-testid="org-avatar-prompt" data-draft-key={promptDraft.key ?? undefined} onEnter={() => { if (!drawing) void draw(); }} />
                 <button type="button" className="org-avatar-btn is-primary" disabled={drawing} data-testid="org-avatar-draw" onClick={() => void draw()}>{drawing ? 'Drawing…' : drawn.length ? 'Draw again' : 'Draw'}</button>
               </div>
               {drawing && <p className="org-avatar-note" data-testid="org-avatar-drawing">Your AI is drawing three; this takes up to a minute.</p>}
