@@ -182,6 +182,15 @@ test('the notices he sees every day are one card at the bottom left; a click on 
     await expect(receipt.locator('.wn-notice-who')).toHaveText('Walnut VP')
   }
 
+  if (!BEFORE) {
+    // A click on what it asks, under its head (a question form's words, the gaps between its
+    // choices), stays: it is answered there (review 2026-11-20: a picked answer was lost).
+    await ask.locator('.wn-notice-body').getByText('Needs permission approval').click()
+    await page.waitForTimeout(500)
+    await expect(ask).toBeVisible()
+    await expect(page.locator(`.main-page-session-column .session-panel[data-session-id="${SESSION_ID}"]`)).toHaveCount(0)
+  }
+
   await video.caption('A click on the ask\'s words opens the session it came from')
   const words = ask.locator('.notification-toast-title')
   await words.hover()

@@ -195,7 +195,7 @@ export const TOAST_DURATION_MS: Record<NotificationKind, number> = {
 };
 
 /** An error never leaves before this (2026-11-20: an error toast must not slip away before it is
- *  read). Pointing at it or opening its Details keeps it up longer still (pinToast). */
+ *  read). Opening its Details or pressing one of its buttons keeps it up until closed (pinToast). */
 export const ERROR_TOAST_MIN_MS = 15_000;
 
 /** How long a toast stays: its own clock, else its kind's, and an error at least ERROR_TOAST_MIN_MS. */

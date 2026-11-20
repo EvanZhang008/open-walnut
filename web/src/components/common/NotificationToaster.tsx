@@ -51,7 +51,7 @@ import { isPhoneOverlayOpen, usePhoneOverlayDepth } from '@/hooks/usePhoneOverla
 import type { ImageAttachment } from '@/api/chat';
 import { CORNER_ORDER, CornerSlot, useCornerState } from './corner-stack';
 import { NoticeCard } from './NoticeCard';
-import { keepInSight, noticeSource, noticeStatus, noticeTarget } from '@/contexts/notifications/notice-face';
+import { keepInSight, noticeSource, noticeStatus } from '@/contexts/notifications/notice-face';
 import { CopyCommandButton, NoticeDetailsToggle, NoticeWords, noticeCommands, prettyDetail, useCutOff, wholeTitle } from './NoticeText';
 import { pendingAt, useApprovals } from '@/components/approvals/approvals-store';
 import { sessionsWithPromptCard, usePromptCardsChanged } from '@/components/sessions/prompt-keys';
@@ -377,8 +377,11 @@ function MessageToast({ toast, phone, more, onDismiss, onPin, onRead, navigate, 
   const opensCenter = toast.persistent || toast.kind === 'host';
   // A click goes to the session or task the notice is about; one about nothing of its own opens
   // the notification center when it is listed there (see opensCenter).
-  const target = noticeTarget(toast);
+  const target = linkTargetOf(toast);
   const clickable = !!target || opensCenter;
+  // On a phone a closed toast shows only its head, so a tap on one with buttons opens the
+  // notification center, where its whole text and those buttons are (Done, Snooze, Retry).
+  const tapOpensCenter = phone && !open && !!(toast.action || toast.actions?.length) && opensCenter;
   const status = noticeStatus(toast);
   return (
     <NoticeCard
@@ -389,7 +392,7 @@ function MessageToast({ toast, phone, more, onDismiss, onPin, onRead, navigate, 
         // Selecting words to copy them is not a click on the toast, nor is a click on its controls.
         if (window.getSelection()?.toString()) return;
         if ((e.target as Element).closest('.notice-cmd, button, a')) return;
-        if (target) navigateToTarget(target, navigate);
+        if (target && !tapOpensCenter) navigateToTarget(target, navigate);
         else window.dispatchEvent(new CustomEvent('notification:open-center'));
         onDismiss();
       } : undefined}
@@ -622,9 +625,14 @@ function PermissionToast({ n, onDismiss, onPin, onRead, onLeave, navigate, phone
         onKeyDownCapture: pinOnce,
         ...swipe,
       }}
-      // A tap on the toast's head or words (not on one of its controls) opens the session it came from.
+      // A tap on the toast's head (who asks and what), not on one of its controls, opens the session
+      // it came from. The question form and the command under it are answered and read in place:
+      // a click there never leaves (review 2026-11-20: a click on a question's words dropped the
+      // picked answer).
       onClick={target ? (e) => {
-        if ((e.target as Element).closest('button, a, input, textarea, select, label, [role="button"], pre, .nfc-perm-actions')) return;
+        const el = e.target as Element;
+        if (!el.closest('.wn-notice-head') || el.closest('.wn-notice-end')) return;
+        if (el.closest('button, a, input, textarea, select, label, [role="button"], pre, .nfc-perm-actions')) return;
         if (window.getSelection()?.toString()) return;
         openSession();
       } : undefined}

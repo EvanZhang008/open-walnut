@@ -1,6 +1,6 @@
 /**
  * How a notification reads on its card (common/NoticeCard.tsx): who it is from (the bold title),
- * its status as a dot and a word, and where a click on it goes. Pure, so every kind is checked in
+ * its status as a dot and a word (a click on it goes where linkTargetOf, notification-model.ts, says). Pure, so every kind is checked in
  * tests/web/notice-face.test.ts, which also fails when a new kind has no face here.
  */
 import type { NoticeTone } from '@/components/common/NoticeCard';
@@ -53,13 +53,6 @@ export function noticeStatus(n: Pick<Notification, 'kind' | 'severity' | 'resolv
 /** The tone of the avatar's tile when no session names the notice. */
 export function noticeTone(n: Pick<Notification, 'kind' | 'severity' | 'resolved'>): NoticeTone {
   return noticeStatus(n).tone;
-}
-
-/** Where a click on the card goes: the session or task it is about, else nowhere of its own. */
-export function noticeTarget(n: Pick<Notification, 'taskId' | 'sessionId'>): string | null {
-  if (n.taskId) return `/tasks/${n.taskId}`;
-  if (n.sessionId) return `/sessions?id=${encodeURIComponent(n.sessionId)}`;
-  return null;
 }
 
 /**

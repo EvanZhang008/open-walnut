@@ -4,7 +4,8 @@
  * folded away or gone before it is read; a click on a notice opens what it is about).
  */
 import { describe, expect, it } from 'vitest';
-import { KIND_SOURCE, keepInSight, noticeSource, noticeStatus, noticeTarget } from '../../web/src/contexts/notifications/notice-face';
+import { KIND_SOURCE, keepInSight, noticeSource, noticeStatus } from '../../web/src/contexts/notifications/notice-face';
+import { linkTargetOf } from '../../web/src/contexts/notifications/notification-model';
 import { ERROR_TOAST_MIN_MS, TOAST_DURATION_MS, toastLifetimeMs, type NotificationKind } from '../../web/src/contexts/notifications/types';
 
 describe('a toast\'s face', () => {
@@ -28,10 +29,11 @@ describe('a toast\'s face', () => {
     expect(noticeStatus({ kind: 'reminder', severity: 'info' })).toEqual({ tone: 'muted' });
   });
 
-  it('a click goes to the task, else the session, else nowhere of its own', () => {
-    expect(noticeTarget({ taskId: 't-1', sessionId: 's-1' })).toBe('/tasks/t-1');
-    expect(noticeTarget({ sessionId: 's 1' })).toBe('/sessions?id=s%201');
-    expect(noticeTarget({})).toBeNull();
+  it('a click on any notice goes where linkTargetOf says: the session first, then the task', () => {
+    const n = (extra: object) => ({ id: 'x', kind: 'permission', severity: 'warning', title: 't', timestamp: 0, read: false, ...extra }) as Parameters<typeof linkTargetOf>[0];
+    expect(linkTargetOf(n({ taskId: 't-1', sessionId: 's-1' }))).toBe('/sessions?id=s-1');
+    expect(linkTargetOf(n({ taskId: 't-1' }))).toMatch(/t-1/);
+    expect(linkTargetOf(n({}))).toBeNull();
   });
 });
 

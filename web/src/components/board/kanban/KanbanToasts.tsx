@@ -10,7 +10,7 @@
  */
 import '@/styles/board-kanban-controls.css';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ICON_CHECK, ICON_CLOSE } from '@/components/common/Icons';
+import { ICON_CLOSE, ICON_INFO } from '@/components/common/Icons';
 import { NoticeCard } from '@/components/common/NoticeCard';
 import { NoticeDetailsToggle, NoticeWords, useCutOff } from '@/components/common/NoticeText';
 import { log } from '@/utils/log';
@@ -126,9 +126,11 @@ export function KanbanToasts({ toasts: fromProps, onDismiss: dismissProp }: Kanb
           className={`kanban-toast${t.tone === 'error' ? ' is-error' : ''}`}
           testId="kanban-toast"
           data={{ 'toast-id': t.id }}
-          avatar={{ glyph: t.tone === 'error' ? ICON_CLOSE : ICON_CHECK, tone: t.tone === 'error' ? 'error' : 'ok' }}
+          // An error says it did not save; any other board toast is news ("moved to Done", "was
+          // deleted while you were renaming it"), so it claims no outcome of its own.
+          avatar={{ glyph: t.tone === 'error' ? ICON_CLOSE : ICON_INFO, tone: t.tone === 'error' ? 'error' : 'muted' }}
           who="Board"
-          status={t.tone === 'error' ? { tone: 'error', text: 'Not saved' } : { tone: 'ok', text: 'Saved' }}
+          status={t.tone === 'error' ? { tone: 'error', text: 'Not saved' } : undefined}
           end={(
             <button
               type="button"

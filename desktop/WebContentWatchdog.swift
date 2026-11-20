@@ -122,8 +122,7 @@ final class WebContentWatchdog {
         lastSample = nil
         lastFields = [:]
         notice.reset()
-        noticeView?.removeFromSuperview()
-        noticeView = nil
+        removeNotice()
         breakdowns = BreakdownCadence()
         unsavedHoldUntil = nil
     }
@@ -292,8 +291,7 @@ final class WebContentWatchdog {
         let show = notice.update(level: level, verdict: verdict, now: now)
         guard let webView else { return }
         if !show {
-            noticeView?.removeFromSuperview()
-            noticeView = nil
+            removeNotice()
             return
         }
         let mb = lastSample.map { megabytes($0.footprintBytes) } ?? 0
@@ -306,6 +304,7 @@ final class WebContentWatchdog {
                                     onDismiss: { [weak self] in self?.dismissNotice() })
         view.place(in: webView)
         noticeView = view
+        makeRoomInPage(for: view)
         // WALNUT_DESKTOP_E2E_NOTICE_CLICK=1,3 (a test knob, README.md; only with
         // WALNUT_DESKTOP_E2E_BACKGROUND): the notices of this run with those numbers
         // press their own Reload Page three seconds after they show, so a test copy
@@ -325,10 +324,36 @@ final class WebContentWatchdog {
         postToServer(level: "warn", message: "page memory notice shown (\(mb)MB)", fields: fields)
     }
 
-    private func dismissNotice() {
-        notice.dismiss(at: Date())
+    private func removeNotice() {
+        guard noticeView != nil else { return }
         noticeView?.removeFromSuperview()
         noticeView = nil
+        makeRoomInPage(for: nil)
+    }
+
+    /// The page's own notices sit in its corner stack at the bottom left, just right of its icon
+    /// rail; this card is drawn over the page, so it takes the stack's place and the stack stands
+    /// on it (a margin under the stack) until it goes, leaving every card of the page in reach.
+    private func makeRoomInPage(for view: MemoryNoticeView?) {
+        guard let webView else { return }
+        let lift = view.map { Int(ceil($0.fittingSize.height)) + 8 } ?? 0
+        let js = """
+        (() => {
+          const stack = document.querySelector('[data-testid="corner-stack"]');
+          if (stack) stack.style.marginBottom = \(lift) > 0 ? '\(lift)px' : '';
+          const rail = document.querySelector('.app-shell > .sidebar');
+          return rail ? Math.round(rail.getBoundingClientRect().right) : 0;
+        })()
+        """
+        webView.evaluateJavaScript(js) { [weak view] result, _ in
+            guard let right = (result as? NSNumber)?.doubleValue, right > 0 else { return }
+            view?.setLeading(CGFloat(right) + 16)
+        }
+    }
+
+    private func dismissNotice() {
+        notice.dismiss(at: Date())
+        removeNotice()
         DesktopLogger.shared.log("webcontent_notice_dismissed", fields: lastFields)
     }
 
@@ -619,18 +644,25 @@ final class MemoryNoticeView: NoticeCardView {
             line: "This page may stop drawing. Reloading keeps your place and saved drafts.", symbol: "memorychip")
     }
 
+    private var leading: NSLayoutConstraint?
+
     /// The bottom left of the page, where every notice shows, never wider than the window.
     func place(in host: NSView) {
         host.addSubview(self)
         let width = widthAnchor.constraint(equalToConstant: 440)
         width.priority = .defaultHigh
+        let leading = leadingAnchor.constraint(equalTo: host.leadingAnchor, constant: 16)
+        self.leading = leading
         NSLayoutConstraint.activate([
-            leadingAnchor.constraint(equalTo: host.leadingAnchor, constant: 16),
+            leading,
             bottomAnchor.constraint(equalTo: host.bottomAnchor, constant: -16),
             width,
             widthAnchor.constraint(lessThanOrEqualTo: host.widthAnchor, constant: -32),
         ])
     }
+
+    /// Where the page's corner stack starts (16pt right of its icon rail), read from the page.
+    func setLeading(_ x: CGFloat) { leading?.constant = x }
 
     @objc private func reloadPressed() { onReload() }
     func pressReload() { onReload() }
