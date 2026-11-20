@@ -276,6 +276,13 @@ struct WebContentPolicyTests {
         precondition(calls == 2, "WebContentWatchdog.swift has \(calls) evaluateJavaScript calls: a new one goes through askPage")
         precondition(source.contains("private func askPage("), "askPage is the one way to ask the page")
 
+        // A deploy reloads the page in its own process; only memory pressure swaps the process,
+        // whose death while on screen left its graphics to kernel_task (2026-11-20).
+        precondition(!RecycleReason.staleBundle.replacesProcess)
+        precondition(RecycleReason.footprint.replacesProcess && RecycleReason.footprintForced.replacesProcess)
+        precondition(source.contains("if reason.replacesProcess { self.recycle(reason, sample) } else { self.reloadInPlace(webView) }"),
+                     "the watchdog swaps the process only for a reason that needs it")
+
         print("WebContent policy tests passed")
     }
 }

@@ -245,13 +245,28 @@ final class WebContentWatchdog {
                 self.updateNotice(level: level, verdict: held, now: Date())
                 return
             }
-            if origin == "watchdog" { self.state.recordRecycle(at: Date()) }
+            // A reload in place is cheap: only a process swap spends the hourly budget.
+            if origin == "watchdog" && reason.replacesProcess { self.state.recordRecycle(at: Date()) }
             fields["reason"] = reason.rawValue
             fields["origin"] = origin
+            fields["how"] = reason.replacesProcess ? "new_process" : "reload"
             DesktopLogger.shared.log("webcontent_recycled", fields: fields)
             self.postToServer(level: "warn", message: "page process recycled (\(reason.rawValue), \(megabytes(sample.footprintBytes))MB)", fields: fields)
-            self.recycle(reason, sample)
+            if reason.replacesProcess { self.recycle(reason, sample) } else { self.reloadInPlace(webView) }
         }
+    }
+
+    /// A newer bundle, same process (RecycleReason.replacesProcess): the page loads again from the
+    /// server, its pagehide writing drafts on the way out as on any reload.
+    /// The loaded bundle is kept: the finished load records the new one, and a reload that fails
+    /// leaves the page stale, so the next tick tries again.
+    private func reloadInPlace(_ webView: WKWebView) {
+        recycleInFlight = false
+        // A sheet on the window (a file or print panel, a close being confirmed): not under it.
+        guard let window = webView.window, window.attachedSheet == nil else { return }
+        notice.reset()
+        removeNotice()
+        webView.reloadFromOrigin()
     }
 
     // MARK: Waiting for a pause

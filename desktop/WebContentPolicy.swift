@@ -35,6 +35,22 @@ enum RecycleReason: String {
     case staleBundle = "stale_bundle"
 }
 
+extension RecycleReason {
+    /// Whether this recycle needs a new page process, or only the page loaded again.
+    ///
+    /// 2026-11-19/20: each swap's old process died while the window still showed its page, and
+    /// macOS charged that page's graphics (0.6 to 1 GB) to kernel_task until the app quit, even
+    /// with the page closed first. Most swaps were for a deploy (53 of 58 on the person's Mac),
+    /// which needs only the new bundle: that page reloads in its own process, which then frees
+    /// its old graphics itself. Only memory pressure still swaps the process.
+    var replacesProcess: Bool {
+        switch self {
+        case .footprint, .footprintForced: return true
+        case .staleBundle: return false
+        }
+    }
+}
+
 enum WatchdogVerdict: Equatable {
     case hold
     case recycle(RecycleReason)
