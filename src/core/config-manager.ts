@@ -19,6 +19,7 @@ import { keepNotOfferedRows } from './hosts/found-host-offer.js';
 import { noteRequestTagConfig } from './sessions/request-tag.js';
 import { firstRunStampAllowed, homeHoldsWork, stampFirstRun } from './first-run.js';
 import { writeConfigSection, type ConfigWriteOptions } from './config-section-write.js';
+import { setExperimentConfigReader } from './experimental-cache.js';
 import {
   dumpConfig,
   modifyConfigDoc,
@@ -284,6 +285,9 @@ export async function getConfig(): Promise<Config> {
     return fallback;
   }
 }
+
+// The experiment switches server code reads through experimental-cache.ts read this config.
+setExperimentConfigReader(getConfig);
 
 /**
  * Merge the ~/.ssh/config hosts into config.hosts (core/hosts/found-hosts.ts): a
