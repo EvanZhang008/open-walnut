@@ -94,7 +94,7 @@
   },
   "rawAccent": {
     "components/actions/action-needed.css": 2,
-    "components/apps-page/builtin-apps.ts": 3,
+    "components/apps-page/builtin-apps.ts": 2,
     "components/board/board-runtime.css.ts": 5,
     "components/org/ThreadTaskChips.tsx": 1,
     "components/org/org-task-tabs.ts": 1,

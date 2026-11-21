@@ -2,14 +2,23 @@
  * One card on the Apps page, the same for a built-in app, an installed plugin and one you
  * can get: icon, name, one line, and a footer with its one status and where it comes from.
  * The whole card opens the detail page. Its other controls are Open (something with an
- * App) and, on a built-in app that can leave the sidebar, that one switch; never an
- * inline form.
+ * App) and the sidebar switch of each of its parts (one part: in the footer; several: one
+ * row each, `parts`); never an inline form.
  *
  * The card's main button is stretched over the card (`.apps-card-main::after`), and Open
  * and the switch sit above it, so there is no button inside a button.
  */
 import type { ReactNode } from 'react'
 import type { CardTone } from './plugin-store-model'
+
+/** One part of an app on its card: its name, what kind it is, and its switch (or lock). */
+export interface StoreCardPart {
+  id: string
+  title: string
+  kind: string
+  shown: boolean
+  control: ReactNode
+}
 
 export interface StoreCardProps {
   testId: string
@@ -20,6 +29,8 @@ export interface StoreCardProps {
   line: string
   /** A second, quieter line: the parts a plugin includes. */
   note?: string
+  /** An app of several parts lists them, each with its own switch. */
+  parts?: readonly StoreCardPart[]
   status: { text: string; tone: CardTone }
   /** Drawn in place of the status dot (a lock for what cannot change). */
   statusGlyph?: ReactNode
@@ -34,7 +45,7 @@ export interface StoreCardProps {
   data?: Record<`data-${string}`, string | boolean | undefined>
 }
 
-export function StoreCard({ testId, icon, name, badge, line, note, status, statusGlyph, control, kind, onSelect, open, dim, data }: StoreCardProps) {
+export function StoreCard({ testId, icon, name, badge, line, note, parts, status, statusGlyph, control, kind, onSelect, open, dim, data }: StoreCardProps) {
   return (
     <div className={`apps-card${dim ? ' apps-card-dim' : ''}`} data-testid={testId} data-card-tone={status.tone} {...data}>
       <div className="apps-card-top">
@@ -48,6 +59,17 @@ export function StoreCard({ testId, icon, name, badge, line, note, status, statu
           {note && <div className="apps-card-note">{note}</div>}
         </div>
       </div>
+      {parts && parts.length > 0 && (
+        <ul className="apps-card-parts" aria-label={`${name} parts`}>
+          {parts.map((part) => (
+            <li key={part.id} className="apps-card-part" data-testid={`${testId}-part-${part.id}`} data-shown={part.shown}>
+              <span className="apps-card-part-name">{part.title}</span>
+              <span className="apps-card-part-kind">{part.kind}</span>
+              <span className="apps-card-part-control">{part.control}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       <div className="apps-card-foot">
         <span className={`apps-card-status apps-card-status--${status.tone}`} data-testid={`${testId}-status`}>
           {statusGlyph ?? <i aria-hidden="true" />}{status.text}

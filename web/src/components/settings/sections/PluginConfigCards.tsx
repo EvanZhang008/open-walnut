@@ -70,6 +70,8 @@ interface Props {
    * the fields continue that row's group (no nested box).
    */
   bare?: boolean;
+  /** The pane that owns some keys is drawn on this same page (Calendar's accounts): no link row to it. */
+  ownerShownHere?: boolean;
   /**
    * What to draw while there are no fields yet: still loading, the fetch failed, or no
    * matching plugin has a form. Absent draws nothing, which suits a list; a form standing
@@ -137,7 +139,7 @@ function HelpText({ text }: { text: string }) {
   );
 }
 
-export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, bare = false, renderEmpty }: Props) {
+export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, bare = false, ownerShownHere = false, renderEmpty }: Props) {
   const [plugins, setPlugins] = useState<PluginSettingsMeta[]>([]);
   const [phase, setPhase] = useState<'loading' | 'ready' | 'failed'>('loading');
   const [drafts, setDrafts] = useState<Record<string, Record<string, unknown>>>({});
@@ -307,7 +309,7 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
               // Owned by another pane: one link row in place of its keys (N3-04).
               const owner = fieldOwnerFor(plugin.id, key);
               if (owner) {
-                if (owner.keys.find((k) => k in props) !== key) return null;
+                if (ownerShownHere || owner.keys.find((k) => k in props) !== key) return null;
                 // A route link: this form renders on the Apps page, where a bare `#pane` names no Settings pane.
                 return (
                   <SettingsRow

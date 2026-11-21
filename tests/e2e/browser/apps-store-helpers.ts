@@ -17,7 +17,9 @@ export async function openApps(page: Page, timeout = 30_000): Promise<void> {
 
 /** Click a plugin's card on the Apps page (already open) and wait for its detail page. */
 export async function openPluginDetail(page: Page, pluginId: string): Promise<void> {
+  // A plugin a built-in app's card holds (Calendar, Mail) is opened from that card.
   const open = page.getByTestId(`plugin-card-${pluginId}-details`)
+    .or(page.locator(`[data-plugin="${pluginId}"] > .apps-card-top .apps-card-main`))
   await expect(open).toBeVisible({ timeout: 60_000 })
   await open.scrollIntoViewIfNeeded()
   await open.click()

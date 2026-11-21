@@ -30,15 +30,16 @@ import { BUNDLED_AVAILABLE_TITLE, STORE_OPTIONAL_TITLE } from '@/components/sett
 import { firstSentence, needsSetupHelp, rowTags } from '@/components/settings/sections/plugin-row-view'
 import { RESTART_PENDING_STATE } from '@/components/settings/plugin-update-types'
 import { plainText } from '@/components/settings/plugin-update-view'
-import { AppBadge, AppGlyph } from './app-bits'
+import { AppBadge, AppGlyph, SidebarSwitch } from './app-bits'
 import { appsOfPlugin, StoreNotices } from './PluginStoreGrid'
+import { AppPartsGroup, EntryIcon, entryHoldingPlugin, useBuiltinEntries } from './BuiltinAppsGrid'
 import { PartsSection, SourceSection, VersionSection } from './plugin-detail-sections'
 import { isRunning, originKind, partParents, type RegistryRow } from './plugin-store-model'
 import type { PluginStore } from './usePluginStore'
 import { ExposeGuide } from './ExposeGuide'
 import { TaskProviderRulesGroup } from '@/components/settings/sections/TaskProviderRulesGroup'
 import { PluginSettingsPanels, usePluginSettingsPanels } from './PluginSettingsPanels'
-import { CorePluginPanel, hasCorePluginPanel } from './core-plugin-panels'
+import { CorePluginPanel, CorePluginSections, hasCorePluginPanel, hasCorePluginSections } from './core-plugin-panels'
 
 export function PluginDetail({ store, pluginId, config, onSave, onBack, onOpen, focusPanel, onConfigureWithAi, askOpen = false }: {
   store: PluginStore
@@ -102,6 +103,9 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, fo
   const parentId = parentOf.get(row.id)
   const parts = store.installed.filter((other) => parentOf.get(other.id) === row.id)
   const apps = row.installed ? appsOfPlugin(catalog.all, row.id) : []
+  // A built-in app whose data and settings are this plugin's (Calendar, Mail): one page for both,
+  // its parts in place of the App list.
+  const held = entryHoldingPlugin(useBuiltinEntries(), row)
   const restartPending = row.state === RESTART_PENDING_STATE
   const on = isRunning(row)
   const asking = store.cascadeAsk?.target.id === row.id
@@ -118,6 +122,8 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, fo
   // since what it reads is that plugin's.
   const corePanel = row.installed && on && hasCorePluginPanel(row.id)
   const ownPanels = row.installed && (panels.length > 0 || corePanel)
+  // Groups core code draws for this plugin (Calendar's accounts), shown while it runs.
+  const coreSections = row.installed && on && hasCorePluginSections(row.id)
   // The manifest's form, unless the App holds it, or the plugin's own panels are all it has.
   const showForm = !settingsApp && (row.configurable || !ownPanels)
   const connection = store.connections[row.id]
@@ -150,6 +156,7 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, fo
             onSave={onSave}
             onlyIds={[row.id]}
             bare
+            ownerShownHere={coreSections}
             renderEmpty={(why) => (why === 'loading'
               ? <SettingsLoadingRow>Loading settings...</SettingsLoadingRow>
               : ownPanels ? null
@@ -178,7 +185,7 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, fo
     </SettingsGroup>
   )
 
-  const appsSection = apps.length > 0 ? (
+  const appsSection = held ? <AppPartsGroup entry={held} /> : apps.length > 0 ? (
     <SettingsGroup heading={apps.length === 1 ? 'App' : 'Apps'} className="apps-detail-group" data-testid={`plugin-apps-${row.id}`}>
       {apps.map((app) => {
         const shown = onSidebar.has(app.key)
@@ -199,7 +206,7 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, fo
             control={
               <>
                 <span className="apps-app-switch-label">Show on the sidebar</span>
-                <ToggleSwitch checked={shown} onChange={(next) => updateAppOnSidebar(app, next)} aria-label={`Show ${app.title} on the sidebar`} data-testid={`apps-app-toggle-${app.key}`} />
+                <SidebarSwitch name={app.title} shown={shown} onChange={(next) => updateAppOnSidebar(app, next)} testId={`apps-app-toggle-${app.key}`} />
                 {/* Experiment apps_stay_open: the Apps page's own Pinned list, a way back before the App was ever opened. */}
                 {pagePins && (
                   <SettingsButton onClick={() => updateAppPinned(app.key, !pagePins.includes(app.key))} aria-pressed={pagePins.includes(app.key)} data-testid={`apps-app-pin-${app.key}`}>
@@ -300,7 +307,7 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, fo
       {back}
       <StoreNotices store={store} />
       <header className="apps-detail-head plugin-store-row" data-testid={`plugin-row-${row.id}`} data-plugin-status={row.status}>
-        <PluginIcon name={row.name} iconUrl={row.iconUrl} tint={tints.get(row.id) ?? 'var(--fg-muted)'} size="xl" />
+        {held ? <EntryIcon entry={held} size={72} /> : <PluginIcon name={row.name} iconUrl={row.iconUrl} tint={tints.get(row.id) ?? 'var(--fg-muted)'} size="xl" />}
         <div className="apps-detail-title">
           {parentId && (
             <button type="button" className="apps-detail-parent" onClick={() => onOpen(parentId)} data-testid="plugin-detail-parent">
@@ -323,7 +330,9 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, fo
                 />
               </label>
             ) : null)}
-            {apps[0] && <SettingsButton variant="primary" onClick={() => navigate(apps[0].path)} data-testid={`plugin-open-app-${row.id}`}>Open App</SettingsButton>}
+            {held
+              ? !held.pluginOff && <SettingsButton variant="primary" onClick={() => navigate(held.openPath)} data-testid={`apps-builtin-open-${held.id}`}>Open</SettingsButton>
+              : apps[0] && <SettingsButton variant="primary" onClick={() => navigate(apps[0].path)} data-testid={`plugin-open-app-${row.id}`}>Open App</SettingsButton>}
             {/* Only a plugin that runs, or waits for its settings, has settings an AI can change. */}
             {row.installed && (on || needsSetup) && onConfigureWithAi && (
               <SettingsButton onClick={onConfigureWithAi} aria-pressed={askOpen} data-testid={`plugin-configure-ai-${row.id}`} title={`Tell Walnut what to change in ${row.name}'s settings`}>
@@ -406,8 +415,11 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, fo
       <div className="settings-group apps-detail-group apps-detail-box"><PluginAppFailure pluginId={row.id} /></div>
       {/* A plugin that cannot start until it is set up leads with what it needs. */}
       {needsSetup && settings}
+      {/* An app's parts lead its page; a plugin's own Apps follow what it is. */}
+      {held && appsSection}
+      {coreSections && <CorePluginSections pluginId={row.id} />}
       {about}
-      {appsSection}
+      {!held && appsSection}
       {!needsSetup && settings}
       {/* Only a loaded plugin that syncs tasks shows it (the group asks the provider list). */}
       <TaskProviderRulesGroup pluginId={row.id} className="apps-detail-group" />

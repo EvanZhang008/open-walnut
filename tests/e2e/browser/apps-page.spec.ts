@@ -1,7 +1,5 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import net from 'node:net'
 import { expect, test, type Page } from '@playwright/test'
-import { bunRuntime } from '../../helpers/bun-runtime.js'
+import { appsHome, openAppsPage, serverHoldsAppPreferences as holdsAppPreferences, useAppsFixture } from './apps-page-fixture'
 import { backToApps, openApp, openBuiltinDetail, openPluginDetail } from './apps-store-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 
@@ -37,11 +35,7 @@ import { isolateUiPrefs } from './todo-panel-helpers'
  * changes here never reach another spec.
  */
 
-interface Fixture { port: number; home: string }
-
-let child: ChildProcessWithoutNullStreams | null = null
-let fixture: Fixture | null = null
-let output = ''
+const fixture = useAppsFixture()
 
 test.setTimeout(240_000)
 test.describe.configure({ mode: 'serial' })
@@ -49,94 +43,9 @@ test.use({ viewport: { width: 1280, height: 900 } })
 
 const TIME_APP = 'walnut-time:main'
 
-async function reservePort(): Promise<number> {
-  const server = net.createServer()
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', resolve)
-  })
-  const address = server.address()
-  if (!address || typeof address === 'string') throw new Error('Could not reserve an apps-page fixture port')
-  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
-  return address.port
-}
-
-test.beforeAll(async ({ browser }) => {
-  // A hook does not inherit the file's timeout, and a server plus Vite boots slowly on a busy machine.
-  test.setTimeout(420_000)
-  const port = await reservePort()
-  child = spawn(bunRuntime(), ['tests/e2e/browser/plugin-store-server.ts'], {
-    cwd: process.cwd(),
-    env: { ...process.env, PW_PLUGIN_STORE_PORT: String(port) },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  child.stdout.on('data', (chunk) => { output = `${output}${String(chunk)}`.slice(-20_000) })
-  child.stderr.on('data', (chunk) => { output = `${output}${String(chunk)}`.slice(-20_000) })
-  fixture = await new Promise<Fixture>((resolve, reject) => {
-    const deadline = setTimeout(() => reject(new Error(`fixture did not start\n${output.slice(-8000)}`)), 180_000)
-    const timer = setInterval(() => {
-      const match = /PLUGIN_STORE_READY (\{.*\})/.exec(output)
-      if (match) {
-        clearInterval(timer)
-        clearTimeout(deadline)
-        resolve(JSON.parse(match[1]!) as Fixture)
-      } else if (child?.exitCode !== null && child?.exitCode !== undefined) {
-        clearInterval(timer)
-        clearTimeout(deadline)
-        reject(new Error(`fixture exited early (${child.exitCode})\n${output.slice(-8000)}`))
-      }
-    }, 250)
-  })
-  // A cold Vite compiles the whole SPA on the first visit, which on a busy machine outlasts a
-  // per-test budget. Pay it once here, so each test times only what it tests.
-  const warm = await browser.newPage()
-  await warm.goto(`http://127.0.0.1:${fixture.port}/`)
-  await expect(warm.getByTestId('sidebar-core-app-home')).toBeVisible({ timeout: 180_000 })
-  await warm.close()
-})
-
-test.afterAll(async () => {
-  if (!child) return
-  child.kill('SIGTERM')
-  await new Promise((resolve) => setTimeout(resolve, 2000))
-  if (child.exitCode === null) child.kill('SIGKILL')
-})
-
-async function home(page: Page): Promise<void> {
-  await page.goto(`http://127.0.0.1:${fixture!.port}/`)
-  await page.waitForLoadState('domcontentloaded')
-  await expect(page.locator('.sidebar')).toBeVisible({ timeout: 60_000 })
-  if (await page.locator('.sidebar.collapsed').count()) {
-    await page.locator('.sidebar-collapse-btn').click()
-    await expect(page.locator('.sidebar.collapsed')).toHaveCount(0)
-  }
-}
-
-/**
- * Waits until the fixture server holds the page's own Apps preferences. The page mirrors them
- * to ui-prefs after an 800 ms debounce (ui-prefs-sync.ts), and a test that ends on a switch
- * click closes its page before that write leaves: the next test's page then boots from the
- * older value (here, Tasks still off the sidebar). A test that ends on a preference change
- * calls this last.
- */
-async function serverHoldsAppPreferences(page: Page): Promise<void> {
-  const key = 'open-walnut-app-preferences-v1'
-  await expect.poll(async () => {
-    const local = await page.evaluate((k) => localStorage.getItem(k), key)
-    const res = await page.request.get(`http://127.0.0.1:${fixture!.port}/api/ui-prefs`)
-    const body = await res.json() as { prefs?: Record<string, { v?: string | null }> }
-    return body.prefs?.[key]?.v === local
-  }, { timeout: 15_000 }).toBe(true)
-}
-
-/** The Apps page, the way a user opens it: the sidebar's Apps entry. */
-async function openApps(page: Page): Promise<void> {
-  await page.getByTestId('sidebar-core-app-apps').click()
-  await expect(page).toHaveURL(/\/apps$/)
-  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 60_000 })
-  // The plugin list has answered (its chips and counts come from the registry).
-  await expect(page.locator('[data-testid^="plugin-card-"]').first()).toBeVisible({ timeout: 60_000 })
-}
+const home = (page: Page) => appsHome(page, fixture.port)
+const serverHoldsAppPreferences = (page: Page) => holdsAppPreferences(page, fixture.port)
+const openApps = openAppsPage
 
 test('the sidebar opens Apps, and its entry is active there but not on a plugin App page', async ({ page }) => {
   const pageErrors: string[] = []
@@ -183,7 +92,7 @@ test('the sidebar opens Apps, and its entry is active there but not on a plugin 
  * old address still opens it, and its own switch puts it back. Org stays the rail's first row.
  */
 async function setQuietRail(page: Page, on: boolean): Promise<void> {
-  const res = await page.request.put(`http://127.0.0.1:${fixture!.port}/api/config`, { data: { experimental: { quiet_rail: on } } })
+  const res = await page.request.put(`http://127.0.0.1:${fixture.port}/api/config`, { data: { experimental: { quiet_rail: on } } })
   expect(res.ok()).toBe(true)
 }
 
@@ -228,8 +137,15 @@ test('quiet_rail: the apps used now and then open from Apps, their old links sti
     // Each moved app opens from its card on the Apps page.
     for (const id of QUIET) {
       await openApps(page)
-      await expect(page.getByTestId(`apps-builtin-${id}`)).toHaveAttribute('data-shown', 'false')
-      await expect(page.getByTestId(`apps-builtin-${id}-status`)).toHaveText('Only in Apps')
+      // Calendar's page is one part of Calendar; its Agenda side bar stays on the rail.
+      const page_ = page.getByTestId(`apps-builtin-${id}-part-${id}`)
+      if (await page_.count()) {
+        await expect(page_).toHaveAttribute('data-shown', 'false')
+        await expect(page.getByTestId(`apps-builtin-${id}-status`)).toHaveText('1 of 2 on the sidebar')
+      } else {
+        await expect(page.getByTestId(`apps-builtin-${id}`)).toHaveAttribute('data-shown', 'false')
+        await expect(page.getByTestId(`apps-builtin-${id}-status`)).toHaveText('Only in Apps')
+      }
       const open = page.getByTestId(`apps-builtin-card-open-${id}`)
       await open.scrollIntoViewIfNeeded()
       await open.click()
@@ -241,7 +157,7 @@ test('quiet_rail: the apps used now and then open from Apps, their old links sti
     // An old address (a bookmark, a link in a chat) still opens each one: a hard load of the
     // URL is the point here, so this is the one place this spec uses page.goto.
     for (const id of QUIET) {
-      await page.goto(`http://127.0.0.1:${fixture!.port}/${id}`)
+      await page.goto(`http://127.0.0.1:${fixture.port}/${id}`)
       await expect(page.locator(`main[data-app-path="/${id}"]`)).toHaveCount(1, { timeout: 60_000 })
       await expect(page.getByTestId(`sidebar-core-app-${id}`)).toHaveCount(0)
     }
@@ -256,11 +172,18 @@ test('quiet_rail: the apps used now and then open from Apps, their old links sti
     await tasksSwitch.click()
     await expect(page.getByTestId('sidebar-core-app-tasks')).toHaveCount(0)
     await expect(page.getByTestId('apps-builtin-tasks')).toHaveAttribute('data-shown', 'false')
-    // The page's own count agrees with the cards: the four moved apps are not counted.
+    // The page's own count agrees with the cards' parts: the four moved apps are not counted.
     const grid = page.getByTestId('apps-builtin-grid')
-    const [shown, total] = [await grid.locator('[data-shown="true"]').count(), await grid.locator('[data-shown]').count()]
+    const [shown, total] = await grid.evaluate((el) => {
+      // A card of several parts counts each part row; a card of one part counts itself.
+      const parts = [...el.querySelectorAll<HTMLElement>('.apps-card')].flatMap((card) => {
+        const rows = [...card.querySelectorAll<HTMLElement>('.apps-card-part')]
+        return rows.length > 0 ? rows : [card]
+      })
+      return [parts.filter((part) => part.dataset.shown === 'true').length, parts.length]
+    })
     expect(total - shown).toBeGreaterThanOrEqual(QUIET.length)
-    await expect(page.locator('#apps-builtin-title .apps-section-count')).toHaveText(`${shown} of ${total} on the sidebar`)
+    await expect(page.locator('#apps-builtin-title .apps-section-count')).toHaveText(`${shown} of ${total} parts on the sidebar`)
     await serverHoldsAppPreferences(page)
     expect(pageErrors).toEqual([])
   } finally {
@@ -281,9 +204,9 @@ test('a built-in card switch takes it off the sidebar, a reload keeps it off, an
   await expect(tasksCard).toHaveAttribute('data-shown', 'true')
   await expect(page.getByTestId('apps-builtin-tasks-status')).toHaveText('On the sidebar')
   await expect(tasksEntry).toBeVisible()
-  // The switch is on the card itself; on the sidebar there is no Open (the sidebar opens it).
+  // The switch is on the card itself, and so is Open, on the sidebar or not (Evan 2026-11-21).
   await expect(cardSwitch).toHaveAttribute('aria-checked', 'true')
-  await expect(page.getByTestId('apps-builtin-card-open-tasks')).toHaveCount(0)
+  await expect(page.getByTestId('apps-builtin-card-open-tasks')).toBeVisible()
 
   // Off from the card: gone from the sidebar at once, the card stays on the grid (no detail page).
   await cardSwitch.click()
@@ -292,7 +215,6 @@ test('a built-in card switch takes it off the sidebar, a reload keeps it off, an
   await expect(page.getByTestId('builtin-detail')).toHaveCount(0)
   await expect(tasksCard).toHaveAttribute('data-shown', 'false')
   await expect(page.getByTestId('apps-builtin-tasks-status')).toHaveText('Only in Apps')
-  // Off the sidebar, the card is the way in: it gets Open.
   await expect(page.getByTestId('apps-builtin-card-open-tasks')).toBeVisible()
 
   // A reload keeps the choice, and the card's detail page agrees.
@@ -328,31 +250,37 @@ test('a built-in card switch takes it off the sidebar, a reload keeps it off, an
   await serverHoldsAppPreferences(page)
 })
 
-test('Home, Apps and Settings always stay on the sidebar: a lock, never a switch', async ({ page }) => {
+test('the pages of Home, Apps and Settings always stay on the sidebar: a lock, never a switch', async ({ page }) => {
   await home(page)
   await openApps(page)
   for (const id of ['home', 'apps', 'settings']) {
     const card = page.getByTestId(`apps-builtin-${id}`)
     await expect(card, id).toBeVisible()
     await expect(card, id).toHaveAttribute('data-shown', 'true')
-    await expect(page.getByTestId(`apps-builtin-${id}-status`), id).toHaveText('Always on the sidebar')
-    await expect(card.locator('.apps-card-lock'), id).toHaveCount(1)
-    // Nothing on the card that looks pressable: no switch, no Open.
-    await expect(card.locator('[role="switch"]'), id).toHaveCount(0)
-    await expect(card.locator('.apps-card-open'), id).toHaveCount(0)
+    // Home's panels can go, so only Apps and Settings read fixed.
+    await expect(page.getByTestId(`apps-builtin-${id}-status`), id).toHaveText(id === 'home' ? 'On the sidebar' : 'Always on the sidebar')
     await openBuiltinDetail(page, id)
     const detail = page.getByTestId('builtin-detail')
     await expect(page.getByTestId(`apps-builtin-toggle-${id}`), id).toHaveCount(0)
-    await expect(detail.locator('[role="switch"]'), id).toHaveCount(0)
-    await expect(detail.getByRole('img', { name: /always stays on the sidebar/ }), id).toBeVisible()
+    await expect(detail.getByRole('img', { name: /always stays on the sidebar/ }).first(), id).toBeVisible()
     await backToApps(page)
   }
-  // Every other built-in has one on its card and one on its page.
-  for (const id of ['tasks', 'routines', 'notes', 'org']) {
-    await expect(page.getByTestId(`apps-builtin-${id}`).locator('[role="switch"]'), id).toHaveCount(1)
-    await expect(page.getByTestId(`apps-builtin-card-toggle-${id}`), id).toHaveAttribute('aria-label', /^Show .+ on the sidebar$/)
+  // Apps and Settings are one locked part: nothing on the card that looks like a switch.
+  for (const id of ['apps', 'settings']) {
+    await expect(page.getByTestId(`apps-builtin-${id}`).locator('[role="switch"]'), id).toHaveCount(0)
+  }
+  // Home's page is locked, its two panels are parts with their own switch.
+  const homeCard = page.getByTestId('apps-builtin-home')
+  await expect(homeCard.getByTestId('apps-builtin-home-part-home').getByRole('img', { name: /always stays on the sidebar/ })).toBeVisible()
+  await expect(homeCard.locator('[role="switch"]')).toHaveCount(2)
+  await expect(page.getByTestId('apps-builtin-card-toggle-home-todo')).toHaveAttribute('aria-label', 'Show Task panel on the sidebar')
+  // Every other built-in has one switch per part on its card and on its page.
+  for (const [id, parts] of [['tasks', ['tasks']], ['routines', ['routines']], ['org', ['org']], ['notes', ['notes', 'home-scratchpad']], ['calendar', ['calendar', 'home-agenda']]] as const) {
+    await expect(page.getByTestId(`apps-builtin-${id}`).locator('[role="switch"]'), id).toHaveCount(parts.length)
+    for (const part of parts) await expect(page.getByTestId(`apps-builtin-card-toggle-${part}`), part).toHaveAttribute('aria-label', /^Show .+ on the sidebar$/)
+    if (id === 'calendar') continue // Calendar's card opens its plugin's page (its own test).
     await openBuiltinDetail(page, id)
-    await expect(page.getByTestId(`apps-builtin-toggle-${id}`), id).toHaveCount(1)
+    for (const part of parts) await expect(page.getByTestId(`apps-builtin-toggle-${part}`), part).toHaveCount(1)
     await backToApps(page)
   }
 })
@@ -425,7 +353,8 @@ test('a category chip narrows the plugins and stays picked; a search with no mat
   await expect(chip).toHaveAttribute('aria-pressed', 'true')
   await expect.poll(() => cards.count()).toBeGreaterThan(0)
   expect(await cards.count()).toBeLessThan(total)
-  await expect(page.getByTestId('apps-builtin')).toHaveCount(0)
+  // Built-in apps shows only a card whose plugin is in the category (Calendar under Time & focus).
+  expect(await page.getByTestId('apps-builtin').locator('.apps-card:not([data-plugin])').count()).toBe(0)
   await expect(page.getByTestId('apps-get-more')).toHaveCount(0)
   await expect(page.getByTestId('apps-make')).toHaveCount(0)
 
@@ -493,8 +422,8 @@ test('Make your own: Build it waits for a description, and the by-hand command r
 
 test('the old Settings deep link to Plugins forwards to the Apps page', async ({ page }) => {
   // A cold deep link IS the thing under test (a notification, a bookmark, an old install link).
-  await page.goto(`http://127.0.0.1:${fixture!.port}/settings#plugin-store`)
-  await expect(page).toHaveURL(new RegExp(`^http://127\\.0\\.0\\.1:${fixture!.port}/apps$`), { timeout: 60_000 })
+  await page.goto(`http://127.0.0.1:${fixture.port}/settings#plugin-store`)
+  await expect(page).toHaveURL(new RegExp(`^http://127\\.0\\.0\\.1:${fixture.port}/apps$`), { timeout: 60_000 })
   await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 60_000 })
   await expect(page.locator('#plugin-store')).toBeVisible({ timeout: 30_000 })
   await expect(page.getByTestId('sidebar-core-app-apps')).toHaveClass(/\bactive\b/)
@@ -548,7 +477,7 @@ test("a plugin's settings panels are on its page in Apps, and an old Settings li
   // only after the page loaded (a plugin's web part starts late), is scrolled to and flashed.
   // A fresh document (a bookmark opened cold), not a hash change on the open Settings page.
   await page.goto('about:blank')
-  await page.goto(`http://127.0.0.1:${fixture!.port}/settings#walnut-time:tracking`)
+  await page.goto(`http://127.0.0.1:${fixture.port}/settings#walnut-time:tracking`)
   await expect(page).toHaveURL(/\/apps\?plugin=walnut-time&panel=tracking$/, { timeout: 60_000 })
   await expect(page.getByTestId('plugin-detail')).toHaveAttribute('data-plugin-id', 'walnut-time', { timeout: 60_000 })
   await registerTimePanels(page)
@@ -585,7 +514,7 @@ test("a plugin panel that throws stays inside its own box; the rest of the plugi
  * The Time App declares `placement: 'settings'`, so it has no Sidebar row of its own.
  */
 async function setAppsStayOpen(page: Page, on: boolean): Promise<void> {
-  const res = await page.request.put(`http://127.0.0.1:${fixture!.port}/api/config`, { data: { experimental: { apps_stay_open: on } } })
+  const res = await page.request.put(`http://127.0.0.1:${fixture.port}/api/config`, { data: { experimental: { apps_stay_open: on } } })
   expect(res.ok()).toBe(true)
 }
 

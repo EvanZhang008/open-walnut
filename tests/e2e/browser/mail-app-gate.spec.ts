@@ -156,8 +156,10 @@ test('the Mail row opens an empty console, and the plugin switch takes it away a
 
   // 2. Off, and the row goes away without a reload.
   await openPlugins(page)
-  // The part has no card: Mail's card names it, and Mail's page holds it.
-  await expect(page.getByTestId('plugin-card-mail')).toContainText('IMAP Mail', { timeout: 30_000 })
+  // The part has no card: Mail's card names it, and Mail's page holds it. While the plugin runs,
+  // Mail is one built-in card with its plugin, so the plugin list has no card of its own.
+  await expect(page.getByTestId('apps-builtin-mail')).toContainText('IMAP Mail', { timeout: 30_000 })
+  await expect(page.getByTestId('plugin-card-mail')).toHaveCount(0)
   await expect(page.getByTestId('plugin-card-mail-imap')).toHaveCount(0)
   await openPluginDetail(page, 'mail')
   const row = page.getByTestId('plugin-row-mail')
@@ -184,6 +186,14 @@ test('the Mail row opens an empty console, and the plugin switch takes it away a
   await expect(imapRow).toHaveAttribute('data-plugin-status', 'needs-dependency', { timeout: 60_000 })
   await expect(page.getByTestId('sidebar-core-app-mail')).toHaveCount(0, { timeout: 60_000 })
   await page.locator('.sidebar').screenshot({ path: `${SCREENSHOT_DIR}/mail-sidebar-without-row.png` })
+  // Mail's page stays one page with its parts (its plugin is only off), and its card stays a
+  // built-in card, Off, never moving to the plugin list.
+  await expect(page.getByTestId('apps-parts-mail')).toBeVisible()
+  await page.getByTestId('plugin-detail-back').click()
+  await expect(page.getByTestId('apps-builtin-mail-status')).toHaveText('Off', { timeout: 30_000 })
+  await expect(page.getByTestId('plugin-card-mail')).toHaveCount(0)
+  await expect(page.getByTestId('apps-builtin-card-open-mail')).toHaveCount(0)
+  await openPluginDetail(page, 'mail')
 
   // 3. On again, and both come back.
   await page.locator('#plugin-toggle-mail').click()

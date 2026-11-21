@@ -6,7 +6,9 @@
  * what it is and its one status; everything else (settings, the switch, where it comes
  * from, Update) lives on its detail page. A plugin that is a part of another (`slack-mcp`
  * of Slack, a mail account of Mail) has no card of its own: its parent's card names it,
- * and its parent's detail page holds it.
+ * and its parent's detail page holds it. A plugin a built-in app carries (Calendar, Mail) is
+ * that app's card in Built-in apps, never a second card here. A plugin with an App has Open and
+ * that App's sidebar switch on its card, as a built-in app has.
  */
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -15,7 +17,6 @@ import type { RegisteredApp } from '@/apps/registry'
 import { SettingsGroup, SettingsLoadingRow, SettingsNotice, SettingsRow } from '@/components/settings/SettingsSection'
 import { SettingsButton } from '@/components/settings/inputs/SettingsButton'
 import { PluginIcon, pluginTileTints } from '@/components/settings/PluginIcon'
-import { CONNECTION_BADGE } from '@/components/settings/PluginConnectionPanel'
 import { PluginPendingDependencies } from '@/components/settings/sections/PluginDependencyRows'
 import { PluginSourceHead, UpdatesHead } from '@/components/settings/sections/PluginSourcesGroup'
 import { sourceRowKey } from '@/components/settings/plugin-update-types'
@@ -26,9 +27,11 @@ import { peekPendingInstall, settlePendingInstall, subscribeOpenLinks } from '@/
 import { useDraft } from '@/hooks/useDraft'
 import { draftKey } from '@/utils/drafts'
 import { PLUGIN_CATEGORY_ORDER, categoryOf, pluginMatches, type AppsFilter, type PluginCategoryId } from './categories'
-import { AppBadge } from './app-bits'
-import { StoreCard } from './StoreCard'
-import { cardStatus, originKind, partParents, type RegistryRow } from './plugin-store-model'
+import { AppBadge, SidebarSwitch } from './app-bits'
+import { StoreCard, type StoreCardPart } from './StoreCard'
+import { originKind, partParents, type RegistryRow } from './plugin-store-model'
+import { pluginCardFacts } from './plugin-card-facts'
+import { updateAppOnSidebar } from '@/apps/store'
 import type { PluginStore } from './usePluginStore'
 import { ExposeGuide } from './ExposeGuide'
 import { installedSourceFor, sourceDisplayName, sourceSections, type SourceSection } from './source-sections'
@@ -89,8 +92,12 @@ export function StoreNotices({ store }: { store: PluginStore }) {
   )
 }
 
-export function PluginStoreGrid({ store, filter, query, onSummary, onOpen }: {
+export function PluginStoreGrid({ store, filter, query, onSummary, onOpen, folded, heldInFilter = 0 }: {
   store: PluginStore
+  /** Built-in cards the picked chip shows (Calendar under Time): an empty plugin group says nothing. */
+  heldInFilter?: number
+  /** Plugins a built-in app's card holds (Calendar, Mail): they have no card here. */
+  folded?: ReadonlySet<string>
   filter: AppsFilter
   query: string
   onSummary?: (summary: PluginStoreSummary) => void
@@ -169,7 +176,9 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen }: {
   const tints = pluginTileTints(store.rows)
   const parentOf = partParents(installed)
   const partsOf = (id: string) => installed.filter((row) => parentOf.get(row.id) === id)
-  const topLevel = installed.filter((row) => !parentOf.has(row.id))
+  const topLevel = installed.filter((row) => !parentOf.has(row.id) && !folded?.has(row.id))
+  // A held plugin (Calendar, Mail) is a built-in app's card, not a part.
+  const partCount = installed.filter((row) => parentOf.has(row.id)).length
   // An optional plugin of an installed source waits under that source, not under Get more.
   const waiting = available.filter((row) => !!row.sourceSlug)
   // A search finds a plugin by its parts too: "MCP" finds Slack, which holds its MCP server.
@@ -201,21 +210,19 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen }: {
     onSummary?.({ loaded, categories: presentKey ? presentKey.split(',') as PluginCategoryId[] : [], matches: matchCount })
   }, [onSummary, loaded, presentKey, matchCount])
 
+  const onSidebar = new Set(catalog.sidebar.map((app) => app.key))
   const card = (row: RegistryRow) => {
-    const parts = partsOf(row.id)
     const apps = row.installed ? appsOfPlugin(catalog.all, row.id) : []
     const app = apps[0]
-    const connection = store.connections[row.id]
-    const connectionAlert = connection && connection.state !== 'connected' && connection.state !== 'signing-in'
-      ? CONNECTION_BADGE[connection.state]?.label
+    const { status, note } = pluginCardFacts(store, row)
+    // Every App of a plugin has its sidebar switch on the card, as a built-in app has (one App:
+    // in the footer; several: a row each).
+    const appSwitch = (target: RegisteredApp) => (
+      <SidebarSwitch name={target.title} shown={onSidebar.has(target.key)} onChange={(next) => updateAppOnSidebar(target, next)} testId={`plugin-card-toggle-${target.key}`} />
+    )
+    const parts: StoreCardPart[] | undefined = apps.length > 1
+      ? apps.map((target) => ({ id: target.key, title: target.title, kind: 'App', shown: onSidebar.has(target.key), control: appSwitch(target) }))
       : undefined
-    const own = cardStatus(row, { update: store.stateFor(row), connectionAlert })
-    // A part has no card, so a part that fails or needs setup speaks on its parent's card.
-    const partAlert = own.tone === 'on' || own.tone === 'update'
-      ? parts.map((part) => ({ part, status: cardStatus(part) })).find(({ status }) => status.tone === 'bad')
-        ?? parts.map((part) => ({ part, status: cardStatus(part) })).find(({ status }) => status.tone === 'warn')
-      : undefined
-    const status = partAlert ? { text: `${partAlert.part.name}: ${partAlert.status.text}`, tone: partAlert.status.tone } : own
     return (
       <StoreCard
         key={row.id}
@@ -225,7 +232,8 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen }: {
         name={row.name}
         badge={app ? <AppBadge app={app} /> : undefined}
         line={firstSentence(row.description) || fallbackLine(row)}
-        note={parts.length > 0 ? `Includes ${parts.map((part) => part.name).join(', ')}` : undefined}
+        note={note}
+        parts={parts}
         status={status}
         kind={originKind(row)}
         dim={row.installed && (row.status === 'disabled' || row.status === 'unsupported')}
@@ -241,7 +249,7 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen }: {
           >
             {store.busy === row.id ? 'Installing...' : 'Install'}
           </button>
-        ) : undefined}
+        ) : apps.length === 1 ? appSwitch(apps[0]) : undefined}
         // An App is registered only while its plugin runs, so Open is never a dead button.
         open={app ? { label: 'Open', onClick: () => navigate(app.path), testId: `plugin-card-open-${row.id}` } : undefined}
       />
@@ -330,7 +338,7 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen }: {
         <div className="apps-plugin-groups plugin-store-installed" data-testid="plugin-store-installed">
           <div className="apps-plugins-bar">
             <span className="apps-plugins-count" data-testid="apps-plugins-count">
-              {!registry ? '' : `${topLevel.length} plugin${topLevel.length === 1 ? '' : 's'} installed${installed.length > topLevel.length ? `, plus ${installed.length - topLevel.length} part${installed.length - topLevel.length === 1 ? '' : 's'}` : ''}`}
+              {!registry ? '' : `${topLevel.length} plugin${topLevel.length === 1 ? '' : 's'} installed${partCount > 0 ? `, plus ${partCount} part${partCount === 1 ? '' : 's'}` : ''}`}
             </span>
             {store.updatable.length > 0 && <UpdatesHead updates={store.updates} slowLoad={store.slowLoad} onCheckAll={store.checkAll} />}
           </div>
@@ -339,7 +347,7 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen }: {
           ) : installed.length === 0 ? (
             <SettingsGroup className="plugin-store-group"><SettingsRow label="No plugins yet." /></SettingsGroup>
           ) : groups.length === 0 ? (
-            searching ? null : <SettingsGroup className="plugin-store-group"><SettingsRow label="No plugins in this group yet." /></SettingsGroup>
+            searching || heldInFilter > 0 ? null : <SettingsGroup className="plugin-store-group"><SettingsRow label="No plugins in this group yet." /></SettingsGroup>
           ) : (
             groups.map((section) => (
               <SourceSectionView key={section.id} section={section} store={store} card={card} />

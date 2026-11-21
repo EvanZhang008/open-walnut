@@ -118,21 +118,27 @@ test('N3-03: the placeholder-shaped name "Test phone" pairs as Test-phone, no ru
   await expect(section).not.toContainText('Invalid device name')
 })
 
-test('N3-04: Calendar plugin settings link to Calendar Accounts instead of a second id editor', async ({ page }) => {
+test('N3-04: the Calendar app page holds its accounts, so the plugin form has no second id editor and no link away', async ({ page }) => {
   await recordWrites(page)
   await openSettings(page)
   await openApps(page)
   // Its settings are on its own page, always shown: no Configure to press.
   await openPluginDetail(page, 'calendar')
   await expect(page.getByTestId('plugin-configure-calendar')).toHaveCount(0)
+  // The accounts (what Settings › Calendar Accounts shows) are groups of this page.
+  const accounts = page.getByTestId('plugin-core-sections-calendar')
+  await expect(accounts).toContainText('Show external calendar events', { timeout: 30_000 })
   const form = page.getByTestId('plugin-config-calendar')
   await expect(form).toBeVisible({ timeout: 30_000 })
-  await expect(form.getByTestId('plugin-config-owned-calendar')).toBeVisible()
+  await expect(form.getByTestId('plugin-config-owned-calendar')).toHaveCount(0)
   await expect(form.locator('#plugin-calendar-hidden_calendar_ids, #plugin-calendar-visible_calendar_ids, textarea')).toHaveCount(0)
-  await form.scrollIntoViewIfNeeded()
+  await accounts.scrollIntoViewIfNeeded()
   await page.screenshot({ path: `${SHOTS}/${ENGINE}-plugin-configure.png` })
-  await form.getByRole('link', { name: 'Open Calendar Accounts' }).click()
+  // Settings › Calendar Accounts stays where it was.
+  await openSettings(page)
+  await clickNav(page, 'calendar')
   await expect(page.getByTestId(NAV('calendar'))).toHaveAttribute('aria-current', 'page')
+  await expect(page.getByTestId('calendar-enabled-switch')).toBeVisible({ timeout: 30_000 })
 })
 
 test('N3-05: the Voice scan line is replaced in place; nothing below it moves', async ({ page }) => {
@@ -432,8 +438,11 @@ test('evidence: 660px panes keep controls inside their groups with no horizontal
   }
   // The plugin cards and the plugin pages hold what the list rows used to: the same rule there.
   // Calendar has a settings form; a parent (its card says "Includes ...") has its parts.
-  const parent = await page.locator('[data-testid="plugin-store-installed"] .apps-card:has(.apps-card-note)').first().getAttribute('data-testid')
-  const pages = ['calendar', ...(parent ? [parent.replace(/^plugin-card-/, '')] : [])]
+  // A parent is a plugin card, or a built-in app's card that holds its plugin (Mail).
+  const parent = await page.locator('[data-testid="apps-page"] .apps-card:has(.apps-card-note)').evaluateAll((cards) => cards
+    .map((card) => card.getAttribute('data-plugin') || (card.getAttribute('data-testid') ?? '').replace(/^plugin-card-/, ''))
+    .find((id) => id && !id.startsWith('apps-builtin-')) ?? null)
+  const pages = ['calendar', ...(parent && parent !== 'calendar' ? [parent] : [])]
   for (const pluginId of pages) {
     await openPluginDetail(page, pluginId)
     await page.waitForTimeout(600)

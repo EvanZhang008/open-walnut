@@ -17,11 +17,11 @@ import { useAppActivity, useAppCatalog } from '@/apps/hooks'
 import { AppsIcon } from '@/apps/icons'
 import { useSettingsConfig } from '@/hooks/useSettingsConfig'
 import { peekPendingInstall, subscribeOpenLinks } from '@/utils/open-link'
-import { BuiltinAppsGrid, BuiltinDetail, useBuiltinEntries } from '@/components/apps-page/BuiltinAppsGrid'
+import { BuiltinAppsGrid, BuiltinDetail, foldedPluginRows, heldPlugins, useBuiltinEntries } from '@/components/apps-page/BuiltinAppsGrid'
 import { MakeAppCard } from '@/components/apps-page/MakeAppCard'
 import { AppQuickOpen } from '@/components/apps-page/AppQuickOpen'
-import { builtinMatches } from '@/components/apps-page/builtin-apps'
-import { PLUGIN_CATEGORY_LABELS, isAppsFilter, type AppsFilter } from '@/components/apps-page/categories'
+import { builtinParts, builtinsMatching, builtinsShown } from '@/components/apps-page/builtin-apps'
+import { PLUGIN_CATEGORY_LABELS, PLUGIN_CATEGORY_ORDER, isAppsFilter, type AppsFilter } from '@/components/apps-page/categories'
 import { usePageView } from '@/utils/view-memory'
 import { PluginStoreGrid, type PluginStoreSummary } from '@/components/apps-page/PluginStoreGrid'
 import { PluginDetail } from '@/components/apps-page/PluginDetail'
@@ -74,9 +74,20 @@ function AppsPageBody() {
   const [kept, setFilter] = usePageView<AppsFilter>('apps', 'filter', 'all', isAppsFilter)
   const [query, setQuery] = useState('')
   const [summary, setSummary] = useState<PluginStoreSummary>({ loaded: false, categories: [], matches: 0 })
+  const store = usePluginStore()
+  const builtins = useBuiltinEntries()
+  // Calendar and Mail are one card with their plugin: the plugin list leaves those plugins out.
+  const folded = foldedPluginRows(builtins, store.installed)
+  const foldedIds = new Set([...folded.values()].map((row) => row.id))
+  const { facts: heldFacts, held } = heldPlugins(folded, store)
+  const shownBuiltins = builtinsShown(builtins, held)
+  const allParts = builtinParts(shownBuiltins)
+  const onRail = allParts.filter((part) => part.shown).length
+  // The categories with a chip: the plugin list's, and those of a plugin a built-in card holds.
+  const chipCategories = PLUGIN_CATEGORY_ORDER.filter((category) => summary.categories.includes(category) || [...held.values()].some((plugin) => plugin.category === category))
   // A kept category with no plugins now (a list still loading, another device's plugins) has no
   // chip: the page shows All, and the kept choice stays for when it is back.
-  const filter: AppsFilter = summary.loaded && kept !== 'all' && kept !== 'get' && kept !== 'builtin' && !summary.categories.includes(kept) ? 'all' : kept
+  const filter: AppsFilter = summary.loaded && kept !== 'all' && kept !== 'get' && kept !== 'builtin' && !(chipCategories as readonly string[]).includes(kept) ? 'all' : kept
   const onSummary = useCallback((next: PluginStoreSummary) => setSummary(next), [])
   // An install link lands here (App.tsx); its card lives in the plugin part, so a
   // filter or a search that hides that part gives way.
@@ -85,7 +96,6 @@ function AppsPageBody() {
     show()
     return subscribeOpenLinks(show)
   }, [])
-  const store = usePluginStore()
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
   const pluginId = params.get('plugin')
@@ -125,10 +135,24 @@ function AppsPageBody() {
     el.scrollTop = detailOpen ? 0 : gridScroll.current
   }, [detailOpen, pluginId, appKey])
 
-  const builtins = useBuiltinEntries()
-  const onRail = builtins.filter((entry) => entry.shown).length
-  const builtinHits = builtins.filter((entry) => builtinMatches(entry, query)).length
-  const showBuiltin = filter === 'all' || filter === 'builtin'
+  // An app's old address (`?app=core:calendar`) opens its plugin's page, which holds its parts.
+  const heldPlugin = appKey ? folded.get(builtins.find((entry) => entry.key === appKey || entry.parts.some((part) => part.key === appKey))?.key ?? '') : undefined
+  const detailPlugin = pluginId ?? heldPlugin?.id ?? null
+  // ...and the address follows, so Back, `panel` and `ask` all read the one `?plugin=`.
+  const heldPluginId = !pluginId ? heldPlugin?.id : undefined
+  useEffect(() => {
+    if (!heldPluginId) return
+    const next = new URLSearchParams(window.location.search)
+    next.delete('app')
+    next.set('plugin', heldPluginId)
+    setParams(next, { replace: true, state: window.history.state?.usr })
+  }, [heldPluginId, setParams])
+  // A plugin category chip also shows the built-in cards that hold a plugin of it (Calendar under Time).
+  const pluginCategory = filter !== 'all' && filter !== 'builtin' && filter !== 'get' ? filter : undefined
+  const visibleBuiltins = builtinsMatching(shownBuiltins, held, query, pluginCategory)
+  const builtinHits = visibleBuiltins.length
+  const categoryHits = pluginCategory ? builtinsMatching(shownBuiltins, held, '', pluginCategory).length : 0
+  const showBuiltin = filter === 'all' || filter === 'builtin' || categoryHits > 0
   const showPlugins = filter !== 'builtin'
   const showMake = filter === 'all'
   const searching = query.trim() !== ''
@@ -136,7 +160,7 @@ function AppsPageBody() {
 
   const chips: { id: AppsFilter; label: string }[] = [
     { id: 'all', label: 'All' },
-    ...summary.categories.map((category) => ({ id: category, label: PLUGIN_CATEGORY_LABELS[category] })),
+    ...chipCategories.map((category) => ({ id: category, label: PLUGIN_CATEGORY_LABELS[category] })),
     { id: 'get', label: 'Get more' },
     { id: 'builtin', label: 'Built-in apps' },
   ]
@@ -147,9 +171,9 @@ function AppsPageBody() {
       {detailOpen && (
         <div className="apps-page-inner apps-page-inner--detail">
           <div className="apps-detail-saved"><SettingsSavedIndicator placement="header" /></div>
-          {pluginId && config ? (
-            <PluginDetail store={store} pluginId={pluginId} config={config} onSave={paneSave} onBack={closeDetail} onOpen={openPlugin} focusPanel={params.get('panel')} onConfigureWithAi={aiConfigure ? () => setAsk(!askRow) : undefined} askOpen={!!askRow} />
-          ) : pluginId ? (
+          {detailPlugin && config ? (
+            <PluginDetail store={store} pluginId={detailPlugin} config={config} onSave={paneSave} onBack={closeDetail} onOpen={openPlugin} focusPanel={params.get('panel')} onConfigureWithAi={aiConfigure ? () => setAsk(!askRow) : undefined} askOpen={!!askRow} />
+          ) : detailPlugin ? (
             <SettingsLoadingRow>Loading plugin...</SettingsLoadingRow>
           ) : (
             <BuiltinDetail entryKey={appKey!} onBack={closeDetail} />
@@ -203,7 +227,7 @@ function AppsPageBody() {
 
         {filter === 'all' && !searching && <AppQuickOpen activity={activity} />}
 
-        {showPlugins && <PluginStoreGrid store={store} filter={filter} query={query} onSummary={onSummary} onOpen={openPlugin} />}
+        {showPlugins && <PluginStoreGrid store={store} filter={filter} query={query} onSummary={onSummary} onOpen={openPlugin} folded={foldedIds} heldInFilter={categoryHits} />}
 
         {showMake && !searching && (
           <section className="apps-section" data-testid="apps-make" aria-labelledby="apps-make-title">
@@ -218,9 +242,9 @@ function AppsPageBody() {
           <section className="apps-section" data-testid="apps-builtin" aria-labelledby="apps-builtin-title">
             <h2 className="apps-section-title" id="apps-builtin-title">
               Built-in apps
-              <span className="apps-section-count">{`${onRail} of ${builtins.length} on the sidebar`}</span>
+              <span className="apps-section-count">{`${onRail} of ${allParts.length} parts on the sidebar`}</span>
             </h2>
-            <BuiltinAppsGrid query={query} onOpen={openApp} />
+            <BuiltinAppsGrid entries={visibleBuiltins} folded={folded} facts={heldFacts} onOpen={openApp} onOpenPlugin={openPlugin} />
           </section>
         )}
       </div>

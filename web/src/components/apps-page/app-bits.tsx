@@ -6,6 +6,15 @@
 import { PuzzleIcon } from '@/apps/icons'
 import type { RegisteredApp } from '@/apps/registry'
 import { PluginBoundary } from '@/components/common/PluginBoundary'
+import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch'
+
+/**
+ * The one "Show <name> on the sidebar" switch every Apps page view draws: a built-in part on
+ * its card and its page, a plugin App on its card and its plugin's page.
+ */
+export function SidebarSwitch({ name, shown, onChange, testId }: { name: string; shown: boolean; onChange: (next: boolean) => void; testId: string }) {
+  return <ToggleSwitch checked={shown} onChange={onChange} aria-label={`Show ${name} on the sidebar`} data-testid={testId} />
+}
 
 export function AppBadge({ app }: { app: RegisteredApp }) {
   const badge = app.badge

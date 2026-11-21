@@ -32,12 +32,26 @@ import {
   hiddenAfterToggle,
   shownCount,
 } from './addons-format';
+import { CalendarMailAccounts } from './CalendarMailAccounts';
 import '@/styles/settings-sections-addons.css';
 
 /** Row error for one calendar (`cal:<id>`) or one account (`acct:<name>`). */
 interface WriteError { key: string; message: string }
 
+/** Settings › Calendar Accounts: the accounts in their own Settings section. */
 export function CalendarSection() {
+  return (
+    <SectionCard id="calendar" title="Calendar Accounts">
+      <CalendarAccounts />
+    </SectionCard>
+  );
+}
+
+/**
+ * The accounts themselves, as plain groups: Settings' section wraps them, and the Calendar
+ * app's page on Apps shows them as its own groups.
+ */
+export function CalendarAccounts({ heading }: { heading?: string } = {}) {
   const [status, setStatus] = useState<CalendarSourceStatus | null>(null);
   const [calendars, setCalendars] = useState<CalendarInfo[]>([]);
   const [defaultCal, setDefaultCal] = useState<CalendarDefault | null>(null);
@@ -176,9 +190,9 @@ export function CalendarSection() {
   const rowError = (key: string) => (writeError?.key === key ? couldntSave(writeError.message) : undefined);
 
   return (
-    <SectionCard id="calendar" title="Calendar Accounts">
+    <>
       {!status ? (
-        <SettingsGroup>
+        <SettingsGroup heading={heading}>
           {loadError ? (
             <SettingsNotice
               kind="error"
@@ -193,7 +207,7 @@ export function CalendarSection() {
         </SettingsGroup>
       ) : (
         <>
-          <SettingsGroup>
+          <SettingsGroup heading={heading}>
             <SettingsRow
               label="Show external calendar events"
               htmlFor="calendar-enabled"
@@ -354,6 +368,9 @@ export function CalendarSection() {
               </SettingsGroup>
             );
           })}
+          {/* Only on a list the server read with the calendars on (its answer, never the switch's
+              optimistic value) and no failed reload since: an empty list would call every account missing. */}
+          {status.available && status.enabled && !loadError && <CalendarMailAccounts calendars={calendars} />}
         </>
       )}
       {fixReport && (() => {
@@ -373,6 +390,6 @@ export function CalendarSection() {
           />
         );
       })()}
-    </SectionCard>
+    </>
   );
 }

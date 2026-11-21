@@ -259,6 +259,28 @@
   line-height: 15px;
   color: var(--fg-muted);
 }
+/* An app of several parts (Calendar and its Agenda side bar): one row each, with its own
+   switch, above the footer. The rows sit over the card's stretched button (z-index), so a
+   switch never opens the detail page. */
+.apps-card-parts {
+  position: relative;
+  z-index: 1;
+  list-style: none;
+  margin: 0;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--settings-group-border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: none;
+}
+.apps-card-part { display: flex; align-items: center; gap: 8px; min-height: 24px; font-size: 12px; color: var(--fg); }
+/* A long part name wraps; its switch keeps its own column. */
+.apps-card-part-name { min-width: 0; overflow-wrap: anywhere; }
+.apps-card-part-kind { flex: none; font-size: 11px; color: var(--fg-muted); }
+.apps-card-part-control { margin-left: auto; display: inline-flex; align-items: center; pointer-events: auto; }
+.apps-card-part-lock { display: inline-flex; color: var(--fg-muted); padding: 0 4px; }
+.apps-part-kind { font-size: 11px; color: var(--fg-muted); }
 .apps-card-foot {
   display: flex;
   align-items: center;
@@ -370,6 +392,8 @@
 }
 .apps-install-consent { color: var(--fg-muted); font-size: 12.5px; max-width: 360px; }
 .apps-detail-group { margin-bottom: 14px; }
+/* Groups core code draws on a plugin's page (Calendar's accounts) space like the page's own. */
+.apps-detail-core-sections > .settings-group, .apps-detail-core-sections > .settings-notice { margin-bottom: 14px; }
 .apps-detail-box:empty { display: none; }
 /* A long fact (a remote path) drops under its label at any width instead of squeezing the
    label to one letter a line, and its Copy stays on screen; a short one stays beside it. */

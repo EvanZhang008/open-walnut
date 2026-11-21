@@ -6,6 +6,7 @@
  */
 import type { ComponentType } from 'react'
 import { MailRouterSettings } from '@/apps/mail/MailRouterSettings'
+import { CalendarAccounts } from '@/components/settings/sections/CalendarSection'
 import { pluginPanelDomId } from './PluginSettingsPanels'
 
 interface CorePanel { id: string; label: string; component: ComponentType }
@@ -27,4 +28,22 @@ export function CorePluginPanel({ pluginId }: { pluginId: string }) {
       <Panel />
     </div>
   )
+}
+
+/**
+ * Whole groups of a built-in plugin's page that core code draws, beside its Settings group
+ * rather than inside it (they are groups of their own): Calendar's accounts. The keys they
+ * edit get no link row in the plugin's form, since they are on the same page.
+ */
+const CalendarAppAccounts = () => <CalendarAccounts heading="Accounts" />
+
+const CORE_PLUGIN_SECTIONS: Readonly<Record<string, ComponentType>> = {
+  calendar: CalendarAppAccounts,
+}
+
+export const hasCorePluginSections = (pluginId: string): boolean => pluginId in CORE_PLUGIN_SECTIONS
+
+export function CorePluginSections({ pluginId }: { pluginId: string }) {
+  const Sections = CORE_PLUGIN_SECTIONS[pluginId]
+  return Sections ? <div className="apps-detail-core-sections" data-testid={`plugin-core-sections-${pluginId}`}><Sections /></div> : null
 }
