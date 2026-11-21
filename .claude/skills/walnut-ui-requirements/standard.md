@@ -59,10 +59,10 @@ beside `btn` carries only layout (margin, flex, width).
 
 | Class | Use | Look |
 |---|---|---|
-| `.btn` | any action (Save draft, Edit, Retry) | the text colour at 6 % (13 % in dark) as fill, no border, corner `--radius-sm` (8 px), min-height 34 px, padding 4 px 12 px, 13 px weight 500; hover +4 %, pressed +8 %; disabled 0.5 opacity (a disabled main action loses its blue); `aria-pressed="true"` is the on state (`--accent-subtle`, `--accent-text`) |
-| `.btn-sm` | rows, toolbars, settings (`SettingsButton` is this) | min-height 28 px, padding 2 px 10 px, 12 px |
-| `.btn-primary` | the one main action of a view | `--accent` fill, `--on-accent` text, hover `--accent-hover` |
-| `.btn-danger` | a destructive action | `--error` label on the plain key; with `.btn-primary` the solid red confirm (Yes, delete) |
+| `.btn` | any action (Save draft, Edit, Retry) | the text colour mixed into the page colour, 8 % (18 % in dark), as a solid fill (never see-through), no border, corner `--radius-sm` (8 px), min-height 34 px, padding 4 px 12 px, 13 px weight 500; hover +4 %, pressed +8 %; disabled 0.5 opacity (a disabled main action loses its blue); `aria-pressed="true"` is the on state (`--accent-subtle`, `--accent-text`) |
+| `.btn-sm` | rows, toolbars, settings (`SettingsButton` is this; a settings page's header action too) | min-height 28 px, padding 2 px 10 px, 12 px |
+| `.btn-primary` | the one main action of a view | `--btn-primary-fill` (the accent 86 % toward black, so white reads at 4.5:1 in both themes), `--on-accent` text, hover `--btn-primary-fill-hover` (74 %) |
+| `.btn-danger` | a destructive action | `--btn-danger-text` label (the error red 70 % toward the text colour, 4.5:1 on the grey key) on the plain key; with `.btn-primary` the solid red confirm (Yes, delete, `--btn-danger-fill`) |
 | `.btn-ghost` | a quiet tool: Cancel beside a main action, Snooze, a row's tools | no fill until hover, `--fg-secondary` (never `--fg-muted`: a quiet key still reads at a glance); with `.btn-danger` a red label |
 | `.btn-icon` | an icon alone | the quiet tool, square: 28 px (24 px with `.btn-sm`), its svg 16 px (14 px) |
 | `.btn-link` | an action inside text or at a row's end | `--accent-text`, no box, underline on hover |

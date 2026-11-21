@@ -71,34 +71,9 @@
   vertical-align: middle;
 }
 
-/* "Copy diagnostics" on the build line: the line's own muted text, underlined on hover. */
-.settings-build-line-action {
-  margin: 0;
-  padding: 0;
-  border: 0;
-  background: none;
-  font: inherit;
-  color: inherit;
-  cursor: pointer;
-  text-decoration: underline;
-  text-decoration-color: transparent;
-  text-underline-offset: 2px;
-}
-
-.settings-build-line-action:hover:not(:disabled) {
-  text-decoration-color: currentColor;
-}
-
-.settings-build-line-action:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 2px;
-}
-
-.settings-build-line-action:disabled,
-.settings-build-line-action[aria-disabled='true'] {
-  cursor: progress;
-}
+/* "Copy diagnostics" on the build line is the family's link key (.btn-link): an action that reads as one.
+   It stays focusable while busy (aria-disabled), so the wait shows as the progress cursor. */
+.settings-build-line-action[aria-disabled='true'] { cursor: progress; }
 
 /* A failed copy says why without adding a row: one clipped line, full text on hover. */
 .settings-build-line-error {

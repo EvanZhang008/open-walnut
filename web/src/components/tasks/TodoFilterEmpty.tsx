@@ -94,10 +94,10 @@ export const OffViewNote = memo(function OffViewNote({ title, here, there, onSho
         <span className="todo-offview-where">{` is not in ${here}.`}</span>
       </span>
       <span className="todo-offview-actions">
-        <button type="button" className="todo-offview-show" data-testid="todo-offview-show" onPointerDown={stop} onClick={(e) => { stop(e); onShow(); }}>
+        <button type="button" className="btn btn-sm todo-offview-show" data-testid="todo-offview-show" onPointerDown={stop} onClick={(e) => { stop(e); onShow(); }}>
           Show in {there}
         </button>
-        <button type="button" className="todo-offview-dismiss" aria-label="Dismiss" title="Dismiss" onPointerDown={stop} onClick={(e) => { stop(e); onDismiss(); }}>
+        <button type="button" className="btn btn-icon btn-sm todo-offview-dismiss" aria-label="Dismiss" title="Dismiss" onPointerDown={stop} onClick={(e) => { stop(e); onDismiss(); }}>
           {ICON_CLOSE}
         </button>
       </span>

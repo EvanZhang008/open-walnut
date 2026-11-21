@@ -31,6 +31,9 @@ export interface CopyButtonProps {
   small?: boolean;
   /** The copy and check glyphs before the label. Always on for kind "icon". */
   icon?: boolean;
+  /** With `icon`: the label never changes, only the glyph turns into a check (a dense row such as a
+   *  message's MD / Rich, where a reserved "Copied" width would push the label away from its glyph). */
+  keepLabel?: boolean;
   /** How the text reaches the clipboard (the vault's own, which clears it later). Resolves when copied. */
   write?: (text: string) => Promise<unknown>;
   /** A press does not reach the row or card under the button (a notice that opens on click). */
@@ -48,7 +51,7 @@ async function writeDefault(text: string): Promise<void> {
 }
 
 export function CopyButton({
-  text, label = 'Copy', kind = 'default', small = true, icon = false, write = writeDefault, isolate = false, onFailed,
+  text, label = 'Copy', kind = 'default', small = true, icon = false, keepLabel = false, write = writeDefault, isolate = false, onFailed,
   className, title, 'aria-label': ariaLabel, 'data-testid': testId,
 }: CopyButtonProps) {
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
@@ -85,7 +88,8 @@ export function CopyButton({
       }}
     >
       {glyph}
-      {!onlyIcon && (
+      {!onlyIcon && keepLabel && glyph && <span className="btn-label">{state === 'failed' ? 'Copy failed' : label}</span>}
+      {!onlyIcon && !(keepLabel && glyph) && (
         <span className="btn-reserve" data-r1={onFailed && label.length < 11 ? 'Copy failed' : label} data-r2="Copied">
           <span className="btn-label">{shown}</span>
         </span>

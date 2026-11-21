@@ -516,18 +516,8 @@
 .todo-offview-title { min-width: 2em; overflow: hidden; text-overflow: ellipsis; color: var(--fg); }
 .todo-offview-where { flex-shrink: 0; white-space: pre; }
 .todo-offview-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
-.todo-offview-show {
-  font: inherit; flex-shrink: 0; padding: 2px 8px; border-radius: var(--radius-xs); cursor: pointer;
-  border: 1px solid var(--border); background: var(--bg); color: var(--accent-text);
-}
-.todo-offview-show:hover { border-color: var(--accent); }
-.todo-offview-dismiss {
-  display: inline-flex; align-items: center; justify-content: center;
-  font: inherit; flex-shrink: 0; width: 22px; height: 22px; padding: 0; border: 0; border-radius: var(--radius-xs);
-  background: transparent; color: var(--fg-muted); cursor: pointer; line-height: 1;
-}
-.todo-offview-dismiss:hover { background: var(--bg-hover); color: var(--fg); }
-.todo-offview-show:focus-visible, .todo-offview-dismiss:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Its keys are the family's (.btn-sm, the × .btn-icon.btn-sm). */
+.todo-offview-show, .todo-offview-dismiss { flex-shrink: 0; }
 .task-filter-outside-pill {
   display: inline-flex; align-items: center; font-size: var(--font-size-xs); padding: 1px 6px; border-radius: var(--radius-sm);
   background: var(--bg-hover); color: var(--fg-muted); white-space: nowrap;

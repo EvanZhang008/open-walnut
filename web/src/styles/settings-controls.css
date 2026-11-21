@@ -314,9 +314,13 @@
   outline-offset: -2px;
 }
 
-/* A text button's or quiet key's label hugs the right edge of its reserved width, so it lines
-   up with the other controls in the column (F26; Remove reserves its "Click again" width). */
-:is(.btn-link, .btn-ghost) .btn-reserve > * { text-align: right; }
+/* A text button's label hugs the right edge of its reserved width, so it lines up with the other
+   controls in the column (F26). A quiet key ending a row's controls (Remove, which reserves its
+   "Click again" width) does too, and its padding hangs past the edge, so its word ends where the
+   inputs and filled keys end. */
+.btn-link .btn-reserve > *,
+.settings-control-cluster > .btn-ghost:last-child .btn-reserve > * { text-align: right; }
+.settings-control-cluster > .btn-ghost:last-child { margin-right: -10px; }
 
 /* ── Text inputs, numbers, selects ── */
 .settings-input {
