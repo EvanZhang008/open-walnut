@@ -9,6 +9,7 @@ import path from 'node:path';
 import {
   registerMemoryHolder, readMemoryHolders, memoryReport, sampleMemory, stringCharsOf,
   memoryHolderNames, SAMPLE_EVERY_MS, sampledStringChars, nudgeGcUnderPressure, GC_NUDGE_RSS_MB, GC_NUDGE_EVERY_MS, _resetMemoryLedgerForTesting,
+  writeHeapSnapshot, SNAPSHOT_EVERY_MS,
 } from '../../../src/core/observability/memory-ledger.js';
 import { log } from '../../../src/logging/index.js';
 
@@ -109,6 +110,30 @@ describe('nudgeGcUnderPressure', () => {
     process.env.WALNUT_GC_NUDGE = '0';
     try { nudgeGcUnderPressure(1, gc, 99_999); } finally { delete process.env.WALNUT_GC_NUDGE; }
     expect(gc).not.toHaveBeenCalled();
+  });
+});
+
+describe('writeHeapSnapshot', () => {
+  it('writes the snapshot into the folder, then refuses another inside SNAPSHOT_EVERY_MS', async () => {
+    const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'heap-snap-'));
+    const snap = vi.fn(() => '{"snapshot":{}}');
+    const first = await writeHeapSnapshot(dir, 1_000_000, snap);
+    expect(first.ok).toBe(true);
+    if (first.ok) {
+      expect(path.dirname(first.path)).toBe(dir);
+      expect(fs.readFileSync(first.path, 'utf8')).toBe('{"snapshot":{}}');
+    }
+    const again = await writeHeapSnapshot(dir, 1_000_000 + SNAPSHOT_EVERY_MS - 1, snap);
+    expect(again.ok).toBe(false);
+    expect(snap).toHaveBeenCalledTimes(1);
+    const later = await writeHeapSnapshot(dir, 1_000_000 + SNAPSHOT_EVERY_MS, snap);
+    expect(later.ok).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('says so when the runtime has no snapshot', async () => {
+    const r = await writeHeapSnapshot('/nonexistent', 0, null);
+    expect(r).toEqual({ ok: false, reason: expect.stringContaining('cannot') });
   });
 });
 

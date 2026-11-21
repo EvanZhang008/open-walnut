@@ -240,6 +240,48 @@ export function nudgeGcUnderPressure(now = Date.now(), gc: GcFn | null = bunGc()
   gc(false);
 }
 
+// ── A heap snapshot on request ───────────────────────────────────────────
+//
+// The ledger names what each registered cache holds; a heap snapshot names everything
+// else. On 2026-11-21 the live server held about 1.5 GB of live objects right after a
+// collection (1.2 GB of it strings) while its registered caches came to about 200 MB,
+// and a copy of the same data held about 340 MB: what the rest is can only be read from
+// a snapshot of the live process. Writing one stops the event loop for a few seconds
+// (about 1.3 s per million objects measured on a copy) and needs memory of the size of
+// the file, so it runs only when asked from this machine, at most every SNAPSHOT_EVERY_MS.
+// The file holds the user's own data and stays in this machine's Walnut folder.
+export const SNAPSHOT_EVERY_MS = 30 * 60_000;
+let lastSnapshotAt = -Infinity;
+
+type SnapshotFn = () => string;
+function bunSnapshot(): SnapshotFn | null {
+  const b = (globalThis as { Bun?: { generateHeapSnapshot?: (format: 'v8') => unknown } }).Bun;
+  return typeof b?.generateHeapSnapshot === 'function' ? () => b.generateHeapSnapshot!('v8') as string : null;
+}
+
+export type HeapSnapshotResult =
+  | { ok: true; path: string; bytes: number; ms: number }
+  | { ok: false; reason: string };
+
+/** Write a V8-format heap snapshot of this process into `dir`. One per SNAPSHOT_EVERY_MS. */
+export async function writeHeapSnapshot(dir: string, now = Date.now(), snap: SnapshotFn | null = bunSnapshot()): Promise<HeapSnapshotResult> {
+  if (!snap) return { ok: false, reason: 'this runtime cannot write a heap snapshot' };
+  if (now - lastSnapshotAt < SNAPSHOT_EVERY_MS) {
+    return { ok: false, reason: `a snapshot was written ${Math.round((now - lastSnapshotAt) / 60_000)} min ago; one every ${SNAPSHOT_EVERY_MS / 60_000} min` };
+  }
+  lastSnapshotAt = now;
+  const [{ default: fsp }, { default: path }] = await Promise.all([import('node:fs/promises'), import('node:path')]);
+  await fsp.mkdir(dir, { recursive: true });
+  const before = processMemoryMb();
+  const t0 = Date.now();
+  const text = snap();
+  const ms = Date.now() - t0;
+  const file = path.join(dir, `heap-${new Date(now).toISOString().replace(/[:.]/g, '-')}-${process.pid}.heapsnapshot`);
+  await fsp.writeFile(file, text);
+  log.obs.warn('heap snapshot written', { path: file, bytes: text.length, ms, rssMb: before.rssMb, heapUsedMb: before.heapUsedMb });
+  return { ok: true, path: file, bytes: text.length, ms };
+}
+
 /** Reset sampler state (tests only). */
 export function _resetMemoryLedgerForTesting(): void {
   lastSampleAt = 0;
@@ -247,4 +289,5 @@ export function _resetMemoryLedgerForTesting(): void {
   lastNudgeAt = -Infinity;
   nudgedFromMb = null;
   overWarnedAt.clear();
+  lastSnapshotAt = -Infinity;
 }
