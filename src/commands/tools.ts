@@ -332,6 +332,15 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
       const code = await callThroughCheckDaemon(name, { ...parsed, ...(callId ? { _call_id: callId } : {}) }, process.env, { json: output.json })
       if (code !== null) { answered(); process.exitCode = code; return }
     }
+    // A session its Walnut named no address for reaches that Walnut through its host daemon, never
+    // over HTTP to the default port, where another Walnut may answer (tools-daemon-fallback.ts).
+    // So the daemon's answer is final here, hub_unreachable included: unlike task_send above, which
+    // has an address to try over HTTP next, this call has none.
+    const { callThroughHostDaemon, sessionWithoutAddress } = await import('./tools-daemon-fallback.js')
+    if (sessionWithoutAddress(process.env)) {
+      const code = await callThroughHostDaemon(name, { ...parsed, ...(callId ? { _call_id: callId } : {}) }, process.env, { json: output.json, first: true })
+      if (code !== null) { answered(); process.exitCode = code; return }
+    }
     // A separate process: the server re-judges its socket, and can only lower this.
     const { LOCAL_ORIGIN } = await import('../lib/caller-origin.js')
     // Outside every session and with no terminal, the call is a script's, never the user's.
@@ -350,7 +359,6 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
       r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN, callId, ...caller })
     }
     if (!r.ok && r.unreachable) {
-      const { callThroughHostDaemon } = await import('./tools-daemon-fallback.js')
       // The same call id: a write the server took before its connection reset runs once.
       const code = await callThroughHostDaemon(name, { ...parsed, _call_id: callId }, process.env, { json: output.json })
       if (code !== null) { process.exitCode = code; return }

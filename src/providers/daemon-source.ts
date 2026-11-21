@@ -6238,8 +6238,13 @@ function pluginJobBaseEnv() {
 // Walnut gave no OPEN_WALNUT_API_URL reaches that Walnut only through this daemon, and another
 // Walnut installed on this machine would otherwise answer it. Keep in sync with daemon-standalone.ts.
 function walnutThroughGateway(env) {
+  return sessionWalnutApiUrl(env) === undefined;
+}
+// The OPEN_WALNUT_API_URL a session's process env carries: exactly the one its Walnut named, else
+// none, never this daemon's own. Keep in sync with daemon-standalone.ts.
+function sessionWalnutApiUrl(env) {
   var url = env && env.OPEN_WALNUT_API_URL;
-  return !(typeof url === 'string' && url.trim());
+  return typeof url === 'string' && url.trim() ? url.trim() : undefined;
 }
 // The env of a CLI's inline --settings (claude-code-session.ts sends it inline), if any.
 function settingsEnvOf(args) {
@@ -7821,6 +7826,8 @@ async function cmdAcpStart(ws, id, cmd) {
   params.env = Object.assign({}, secretsSessionEnv(), params.env, {
     WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH,
     PATH: sessionPathWithShim(process.env.PATH || '', walnutThroughGateway(params.env)),
+    // The address its Walnut named, or none ('' unsets this daemon's own). Keep in sync with the twin.
+    OPEN_WALNUT_API_URL: sessionWalnutApiUrl(params.env) || '',
   }, { WALNUT_TASK_DIR: acpTaskDir || '', WALNUT_SECRETS_DIR: SECRETS_ROOT || '', ...pwSilenceAcpOptions(params.env) });
   return sessionStartGate.run(params.sid, async function () {
     if (!params.providerSessionId && fs.existsSync(cancelledStartPath(params.sid))) throw new Error('Initial start was cancelled; retry task_start on the same task');
@@ -8294,6 +8301,9 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
       // task's directory. Keep in sync with daemon-standalone.ts.
       WALNUT_TASK_DIR: taskDir || undefined,
       WALNUT_SECRETS_DIR: SECRETS_ROOT || undefined,
+      // The address its Walnut named in its settings, or none (never this daemon's own).
+      // Keep in sync with daemon-standalone.ts.
+      OPEN_WALNUT_API_URL: sessionWalnutApiUrl(settingsEnvOf(launch.args)),
       // The page silencer, first in NODE_OPTIONS. Keep in sync with daemon-standalone.ts.
       ...pwSilenceOptions(process.env.NODE_OPTIONS, process.env.BUN_OPTIONS),
       PATH: sessionPathWithShim((launch.nodeDir ? launch.nodeDir + ':' : '') + (process.env.PATH || ''), walnutThroughGateway(settingsEnvOf(launch.args))),

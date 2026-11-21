@@ -21,13 +21,10 @@ import {
   type TemplateCheckInput,
 } from '../providers/trigger-check-core.js'
 
-import { demoApiHeaders } from '../lib/self-api-root.js'
-
-const DEFAULT_BASE_URL = 'http://127.0.0.1:3456'
+import { demoApiHeaders, walnutApiTarget } from '../lib/self-api-root.js'
 
 export function triggerCheckBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
-  const raw = env.OPEN_WALNUT_API_URL?.trim() || env.WALNUT_SERVER_URL?.trim() || DEFAULT_BASE_URL
-  return raw.replace(/\/+$/, '').replace(/\/api\/v1$/, '')
+  return walnutApiTarget({ env, alsoEnv: ['WALNUT_SERVER_URL'], ownServer: false }).root
 }
 
 async function readStdin(): Promise<string> {

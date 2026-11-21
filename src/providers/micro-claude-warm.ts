@@ -31,6 +31,7 @@ import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { log } from '../logging/index.js';
+import { walnutApiEnvForSession } from '../lib/self-api-root.js';
 import { requestTagOn, withOneShotRequestTag } from '../core/sessions/request-tag.js';
 import { resolveClaudeCliExecutable } from '../core/claude-cli-detect.js';
 import {
@@ -106,6 +107,8 @@ function buildChildEnv(): NodeJS.ProcessEnv {
   // import-scan marker, thinking off (utility children answer contracts).
   const { CLAUDECODE: _drop, ...env } = process.env;
   Object.assign(env, readUserSettingsEnv());
+  // The Walnut this child's `walnut` calls reach: this server's own (self-api-root.ts).
+  Object.assign(env, walnutApiEnvForSession('__local__'));
   env.CLAUDE_CODE_ENTRYPOINT = WALNUT_UTILITY_ENTRYPOINT;
   env.MAX_THINKING_TOKENS = '0';
   return env;
@@ -150,8 +153,10 @@ function buildSpawn(spec: WarmSpec): { command: string; args: string[]; cwd: str
   // restart, so a rotated token must not reach a child booted on the old one.
   // Not the whole env: the server sets variables of its own at runtime, and a
   // key that moved with them would never find its child.
+  // And the Walnut it reaches: a child booted before this server listened named none, and must
+  // not answer a call made after.
   const auth = Object.entries(env)
-    .filter(([k]) => AUTH_ENV.test(k))
+    .filter(([k]) => AUTH_ENV.test(k) || k === 'OPEN_WALNUT_API_URL')
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   const warmKey = createHash('sha256').update(JSON.stringify([cli, args, cwd, auth])).digest('hex');
   return { command: cli, args, cwd, env, warmKey };

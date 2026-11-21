@@ -1480,8 +1480,19 @@ function buildSpawnPreamble(nodeDir?: string, gatewayFirst = false): string {
  * Walnut's server. Keep in sync with daemon-source.ts.
  */
 function walnutThroughGateway(env: Record<string, unknown> | undefined): boolean {
+  return sessionWalnutApiUrl(env) === undefined
+}
+
+/**
+ * The OPEN_WALNUT_API_URL a session's process env carries: exactly the one its Walnut named
+ * (its `--settings` env, or an ACP worker's env), else none. Never this daemon's own: a
+ * daemon started before its server listened has none, one started later has whichever server
+ * started it, so the CLI process saw an address its settings did not name, or none where they
+ * named one (a VP of a Walnut on another port, 2026-11-20). Keep in sync with daemon-source.ts.
+ */
+function sessionWalnutApiUrl(env: Record<string, unknown> | undefined): string | undefined {
   const url = env?.OPEN_WALNUT_API_URL
-  return !(typeof url === 'string' && url.trim())
+  return typeof url === 'string' && url.trim() ? url.trim() : undefined
 }
 
 /** A session PATH with the shim dir first or, for a session that reaches its Walnut over HTTP, last. */
@@ -6834,6 +6845,8 @@ async function cmdAcpStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
     // '' unsets one this daemon inherited (mergeAcpSpawnEnv drops empty values).
     WALNUT_TASK_DIR: taskDir ?? '',
     WALNUT_SECRETS_DIR: SECRETS_ROOT,
+    // The address its Walnut named, or none ('' unsets this daemon's own): sessionWalnutApiUrl.
+    OPEN_WALNUT_API_URL: sessionWalnutApiUrl(params.env) ?? '',
     // The page silencer, as for the native spawn (pw-silence-core.ts).
     // An engine's env that names NODE_OPTIONS or BUN_OPTIONS (null or '' = cleared) wins over the daemon's own.
     ...pwSilenceAcpOptions(params.env),
@@ -7339,6 +7352,9 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
       WALNUT_TASK_DIR: taskDir ?? undefined,
       // Where the secrets the user shared with this host are, one file each.
       WALNUT_SECRETS_DIR: SECRETS_ROOT,
+      // The address its Walnut named in its settings, or none (never this daemon's own):
+      // sessionWalnutApiUrl. Keep in sync with daemon-source.ts.
+      OPEN_WALNUT_API_URL: sessionWalnutApiUrl(settingsEnvOf(launch.args)),
       // The page silencer, first in NODE_OPTIONS (pw-silence-core.ts). Keep in sync with daemon-source.ts.
       ...pwSilenceOptions(process.env.NODE_OPTIONS, process.env.BUN_OPTIONS),
       // Never let OUR watchdog pid leak into the CLI's env. A CLI session that

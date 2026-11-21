@@ -45,6 +45,7 @@ import { startOneShot, type OneShotHandle } from '../../providers/oneshot-client
 import { streamJsonUserLine } from '../../providers/stream-json-input.js';
 import { abortedResult } from './retry.js';
 import { log } from '../../logging/index.js';
+import { walnutApiEnvForSession } from '../../lib/self-api-root.js';
 import { resolveClaudeCliExecutable } from '../../core/claude-cli-detect.js';
 import { claudeFallbackCommand } from '../../core/test-claude-guard.js';
 import { withUtilityQosClamp } from '../../lib/background-qos.js';
@@ -584,6 +585,8 @@ export function buildSpawnEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.Pro
   // sessions — the marker keeps their transcripts out of the session-import
   // scan (which otherwise lists every sdk-cli transcript in a real cwd).
   env.CLAUDE_CODE_ENTRYPOINT = WALNUT_UTILITY_ENTRYPOINT;
+  // The Walnut this child's `walnut` calls reach: this server's own (self-api-root.ts).
+  Object.assign(env, walnutApiEnvForSession('__local__'));
   return env;
 }
 

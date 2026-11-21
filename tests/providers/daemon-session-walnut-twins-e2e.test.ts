@@ -44,7 +44,7 @@ const fs = require('fs')
 const { spawnSync } = require('child_process')
 const out = process.argv[2]
 const walnut = spawnSync('/bin/sh', ['-c', 'command -v walnut'], { env: process.env, encoding: 'utf8' }).stdout.trim()
-fs.appendFileSync(out, JSON.stringify({ pid: process.pid, path: process.env.PATH, walnut }) + '\\n')
+fs.appendFileSync(out, JSON.stringify({ pid: process.pid, path: process.env.PATH, walnut, apiUrl: process.env.OPEN_WALNUT_API_URL ?? null }) + '\\n')
 process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'fake' }) + '\\n')
 setTimeout(() => process.exit(0), 60000).unref()
 process.on('SIGTERM', () => process.exit(0))
@@ -53,6 +53,7 @@ setInterval(() => {}, 1000)
 `
 
 interface Daemon { proc: ChildProcess; ws: WebSocket; dir: string }
+const DAEMON_OWN_URL = 'http://127.0.0.1:9'
 const daemons: Daemon[] = []
 const spawnedPids = new Set<number>()
 let rpcId = 1
@@ -66,7 +67,8 @@ async function boot(twin: Twin, otherBin: string): Promise<Daemon> {
     PATH: guardedPath([otherBin], '/usr/bin:/bin'),
     HOME: path.join(root, 'home'),
     CLAUDE_CONFIG_DIR: undefined,
-    OPEN_WALNUT_API_URL: undefined,
+    // The daemon's own address (whatever server started it): never one a session may see.
+    OPEN_WALNUT_API_URL: DAEMON_OWN_URL,
     WALNUT_DAEMON_DIR: daemonDir,
     WALNUT_STREAMS_DIR: path.join(root, 'streams'),
     WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams'),
@@ -116,7 +118,7 @@ async function waitFor(check: () => boolean, ms = 15_000): Promise<boolean> {
   return check()
 }
 
-const recorded = (out: string): Array<{ pid: number; path: string; walnut: string }> =>
+const recorded = (out: string): Array<{ pid: number; path: string; walnut: string; apiUrl: string | null }> =>
   fs.existsSync(out) ? fs.readFileSync(out, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []
 
 beforeAll(() => {
@@ -168,11 +170,16 @@ describe.each(TWINS)('session walnut: $name', (twin) => {
     const remote = await start('aaaaaaaa-0000-4000-8000-00000000000a', { env: { WALNUT_X: '1' }, hooks: {} })
     expect(remote.walnut).toBe(shim)
     expect(remote.path.split(':')[0]).toBe(path.dirname(shim))
+    // Its process env names no Walnut either: not the daemon's own, which is another server's.
+    expect(remote.apiUrl).toBeNull()
 
     // A local server's session (its API URL): the installed CLI first, as on the Mac.
     const local = await start('bbbbbbbb-0000-4000-8000-00000000000b', { env: { OPEN_WALNUT_API_URL: 'http://127.0.0.1:1' } })
     expect(local.walnut).toBe(path.join(otherBin, 'walnut'))
     expect(local.path.split(':').at(-1)).toBe(path.dirname(shim))
+    // Its process env names the same Walnut its settings do (a mock CLI, a hook, a child that
+    // reads the process env sees what Claude Code applies from the settings).
+    expect(local.apiUrl).toBe('http://127.0.0.1:1')
   }, 180_000)
 })
 
@@ -211,6 +218,18 @@ describe('every use of the shim dir in a twin is a known one', () => {
     const text = fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
     expect(text).toMatch(/buildSpawnPreamble\(launch\.nodeDir, walnutThroughGateway\(settingsEnvOf\(launch\.args\)\)\)/)
     expect(text).toMatch(/PATH: sessionPathWithShim\(process\.env\.PATH \|\| '', throughGateway\),/)
+  })
+  it('every session spawn of both twins takes its OPEN_WALNUT_API_URL from what its Walnut named', () => {
+    // The native spawn reads it from the CLI's settings, an ACP worker from its env; a spawn that
+    // left it out would hand the session the daemon's own address (or none) again.
+    for (const rel of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
+      const text = fs.readFileSync(path.resolve(__dirname, '../..', rel), 'utf8')
+      const sets = text.split('\n').map((l) => l.trim()).filter((l) => /^OPEN_WALNUT_API_URL:/.test(l))
+      expect(sets, rel).toEqual([
+        expect.stringMatching(/^OPEN_WALNUT_API_URL: sessionWalnutApiUrl\(params\.env\) (\?\?|\|\|) '',$/),
+        expect.stringMatching(/^OPEN_WALNUT_API_URL: sessionWalnutApiUrl\(settingsEnvOf\(launch\.args\)\),$/),
+      ])
+    }
   })
   it('both spawn paths of the source twin ask the rule', () => {
     const text = fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-source.ts'), 'utf8')

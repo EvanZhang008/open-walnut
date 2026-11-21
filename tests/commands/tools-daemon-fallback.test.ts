@@ -105,6 +105,71 @@ describe('walnut tools call with the server down', () => {
     expect(process.exitCode ?? 0).toBe(0)
   })
 
+  it('a handler op (task_create) falls back too: a refused self-call reads unreachable, not a plain error', async () => {
+    // 2026-11-20: task_get went through the daemon while task_create failed with
+    // "Walnut server not running at :3456" in the same VP session.
+    process.env.WALNUT_AGENT_SOCKET = sock
+    process.env.WALNUT_SESSION_ID = 'aaaaaaaa-1111-4111-8111-111111111111'
+    answer = { ok: true, result: { task: { id: 'mtask-9', title: 'Made through the daemon' } } }
+    await runTools(['call', 'task_create', '{"title":"Made through the daemon","record_only":true}'], {})
+    expect(received.filter((r) => (r.args as { name?: string })?.name === 'task_create')).toHaveLength(1)
+    expect(JSON.parse(out)).toEqual(answer.result)
+    expect(process.exitCode ?? 0).toBe(0)
+  })
+
+  it('a session its Walnut named no address for asks its daemon first, never the default port', async () => {
+    // With no OPEN_WALNUT_API_URL the HTTP try would go to :3456, where another Walnut (the
+    // user's real one) may answer: the daemon is the one way to this session's own Walnut.
+    delete process.env.OPEN_WALNUT_API_URL
+    process.env.WALNUT_AGENT_SOCKET = sock
+    process.env.WALNUT_SESSION_ID = 'aaaaaaaa-1111-4111-8111-111111111111'
+    const fetches: string[] = []
+    const realFetch = globalThis.fetch
+    vi.spyOn(globalThis, 'fetch').mockImplementation(((url: string | URL | Request, init?: RequestInit) => {
+      fetches.push(String(url))
+      return realFetch(url, init)
+    }) as typeof fetch)
+    answer = { ok: true, result: { task: { id: 'mtask-1' } } }
+    await runTools(['call', 'task_get', '{"id":"mtask-1"}'], {})
+    expect(fetches.filter((u) => u.includes(':3456'))).toEqual([])
+    expect(received).toHaveLength(1)
+    expect(received[0]).toMatchObject({ args: { name: 'task_get', args: { id: 'mtask-1' } } })
+    expect(JSON.parse(out)).toEqual(answer.result)
+    // Asked first by design, so no "the server is not reachable" notice.
+    expect(err).toBe('')
+  })
+
+  it('a session with no address: the HTTP subcommands send nothing to the default port and say why', async () => {
+    delete process.env.OPEN_WALNUT_API_URL
+    process.env.WALNUT_AGENT_SOCKET = sock
+    process.env.WALNUT_SESSION_ID = 'aaaaaaaa-1111-4111-8111-111111111111'
+    const fetches: string[] = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation((async (url: string | URL | Request) => {
+      fetches.push(String(url))
+      throw new Error('no fetch expected')
+    }) as typeof fetch)
+    const { runTasks } = await import('../../src/commands/tasks.js')
+    await runTasks({}, { json: true })
+    expect(fetches).toEqual([])
+    expect(process.exitCode).toBe(1)
+    expect((JSON.parse(out) as { error: string }).error).toContain('no OPEN_WALNUT_API_URL')
+  })
+
+  it('outside a session, a failure at the default address says it is only the default', async () => {
+    delete process.env.OPEN_WALNUT_API_URL
+    delete process.env.WALNUT_AGENT_SOCKET
+    delete process.env.WALNUT_SESSION_ID
+    vi.spyOn(globalThis, 'fetch').mockImplementation((async () => {
+      throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } })
+    }) as typeof fetch)
+    await runTools(['call', 'task_get', '{"id":"mtask-1"}'], { json: true })
+    expect(received).toHaveLength(0)
+    const body = JSON.parse(out) as { error: { code: string; message: string } }
+    expect(body.error.code).toBe('hub_unreachable')
+    expect(body.error.message).toContain('http://127.0.0.1:3456/api/v1')
+    expect(body.error.message).toContain('no OPEN_WALNUT_API_URL in this process')
+  })
+
   it('--json reaches the daemon CLI too: its failure is one object on stdout, stderr empty', async () => {
     process.env.WALNUT_AGENT_SOCKET = sock
     process.env.WALNUT_SESSION_ID = 'aaaaaaaa-1111-4111-8111-111111111111'

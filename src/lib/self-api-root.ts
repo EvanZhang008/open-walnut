@@ -80,3 +80,40 @@ export function walnutApiEnvForSession(host: string | null | undefined): Record<
   if (host && host !== '__local__') return {}
   return selfApiRoot ? { OPEN_WALNUT_API_URL: selfApiRoot } : {}
 }
+
+/** Where an op client sends its calls when nothing names a server: production's port. */
+export const DEFAULT_WALNUT_API_ROOT = 'http://127.0.0.1:3456'
+
+/** How the address was found: this server's own, the caller's, the env's, or the default. */
+export type WalnutApiSource = 'self' | 'given' | 'env' | 'default'
+
+/**
+ * The ONE answer to "which Walnut does this process talk to" (the CLI's HTTP client, the op
+ * executor, the MCP tools, a trigger check). In order: an address the caller names, a listening
+ * server's own root (`ownServer: false` skips it: a check reads only the env it was given),
+ * OPEN_WALNUT_API_URL (then `alsoEnv`, e.g. WALNUT_SERVER_URL for a trigger check), and only
+ * then the default. The root carries no trailing slash and no `/api/v1` (OPEN_WALNUT_API_URL
+ * may name either form).
+ */
+export function walnutApiTarget(opts: { given?: string; env?: NodeJS.ProcessEnv; alsoEnv?: readonly string[]; ownServer?: boolean } = {}): { root: string; source: WalnutApiSource } {
+  const env = opts.env ?? process.env
+  const clean = (raw: string) => raw.trim().replace(/\/+$/, '').replace(/\/api\/v1$/, '')
+  if (opts.given?.trim()) return { root: clean(opts.given), source: 'given' }
+  if (selfApiRoot && opts.ownServer !== false) return { root: clean(selfApiRoot), source: 'self' }
+  for (const key of ['OPEN_WALNUT_API_URL', ...(opts.alsoEnv ?? [])]) {
+    const v = env[key]?.trim()
+    if (v) return { root: clean(v), source: 'env' }
+  }
+  return { root: DEFAULT_WALNUT_API_ROOT, source: 'default' }
+}
+
+/**
+ * The words an "unreachable" error adds when the address it tried is only the default, so a
+ * caller never mistakes it for its own server's (a session of a Walnut on another port that
+ * was told no address read "server not running at :3456" and nothing more, 2026-11-20).
+ */
+export function defaultAddressNote(base: string, env: NodeJS.ProcessEnv = process.env): string {
+  if (selfApiRoot || env.OPEN_WALNUT_API_URL?.trim()) return ''
+  if (base.replace(/\/+$/, '').replace(/\/api\/v1$/, '') !== DEFAULT_WALNUT_API_ROOT) return ''
+  return ' (no OPEN_WALNUT_API_URL in this process, so this is only the default address; a Walnut on another port must be named with OPEN_WALNUT_API_URL)'
+}

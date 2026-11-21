@@ -64,6 +64,25 @@ async function until<T>(what: string, probe: () => Promise<T>, ok: (v: T) => boo
   return v
 }
 
+/**
+ * The Walnut address every CLI this server spawned was handed in its `--settings` env, one per
+ * spawn. The server listens on a random port, never :3456: each must name exactly that port
+ * (2026-11-20: a VP of a Walnut on another port called :3456).
+ */
+async function spawnedApiUrls(): Promise<Array<string | null>> {
+  const files = await fs.readdir(ARGV_DIR).catch(() => [] as string[])
+  const urls: Array<string | null> = []
+  for (const f of files) {
+    const argv = JSON.parse(await fs.readFile(path.join(ARGV_DIR, f), 'utf8')) as string[]
+    const i = argv.indexOf('--settings')
+    if (i < 0) { urls.push(null); continue }
+    let raw = argv[i + 1]
+    if (!raw.trimStart().startsWith('{')) raw = await fs.readFile(raw, 'utf8')
+    urls.push((JSON.parse(raw) as { env?: { OPEN_WALNUT_API_URL?: string } }).env?.OPEN_WALNUT_API_URL ?? null)
+  }
+  return urls
+}
+
 const sessionsOf = async (taskId: string) => (await getSessionsForTask(taskId)).filter((s) => !s.archived)
 const hasSession = async (taskId: string) => (await sessionsOf(taskId)).length > 0
 
@@ -126,6 +145,10 @@ describe('a VP starts by itself', () => {
     expect(lines).toContain('Walnut started your session')
     // Framed as Walnut's own note: the transcript never reads it as the user's words.
     expect(lines).toContain('<walnut-message')
+    // Its `walnut` calls reach this server, on its own port.
+    const urls = await spawnedApiUrls()
+    expect(urls.length).toBeGreaterThan(0)
+    expect(new Set(urls)).toEqual(new Set([`http://127.0.0.1:${port}`]))
     expect(lines).toContain('org_get')
     expect(lines).toContain('brief_write')
     // Walnut's own note, never the user's words.
@@ -148,6 +171,8 @@ describe('a VP starts by itself', () => {
     const shown = await req('POST', `/api/v1/org/nodes/${mainId}/start`, { auto: true })
     expect(shown.status).toBe(202)
     await until('Main has a session', () => hasSession(mainId), Boolean)
+    // Main (an ask, launched another way than a VP) names this server too.
+    expect(new Set(await spawnedApiUrls())).toEqual(new Set([`http://127.0.0.1:${port}`]))
     const welcome = orgStartMessage(await getTask(mainId), 'CEO')
     expect(welcome).toContain('the CEO of the org.')
     expect(welcome).not.toContain('Main')

@@ -22,6 +22,7 @@ import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { bus, EventNames } from '../core/event-bus.js';
 import { log } from '../logging/index.js';
+import { walnutApiEnvForSession } from '../lib/self-api-root.js';
 import { resolveClaudeCliExecutable } from '../core/claude-cli-detect.js';
 import { claudeFallbackCommand } from '../core/test-claude-guard.js';
 import {
@@ -242,6 +243,8 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
   if (settingSources === '') {
     Object.assign(cleanEnv, readUserSettingsEnv());
   }
+  // The Walnut this child's `walnut` calls reach: this server's own (self-api-root.ts).
+  Object.assign(cleanEnv, walnutApiEnvForSession('__local__'));
   // Mark the transcript so the session-import scan never lists this child as
   // an importable session (we spawn MANY of these; they are not user work).
   cleanEnv.CLAUDE_CODE_ENTRYPOINT = WALNUT_UTILITY_ENTRYPOINT;

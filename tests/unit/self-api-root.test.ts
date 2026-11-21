@@ -106,3 +106,23 @@ describe('resolveApiBase precedence', () => {
     expect(resolveApiBase('http://127.0.0.1:9/')).toBe('http://127.0.0.1:9/api/v1')
   })
 })
+
+describe('walnutApiTarget: one answer to which Walnut a process talks to', () => {
+  it('names the caller\'s address, then this server\'s, then the env\'s, then the default', async () => {
+    const { walnutApiTarget, DEFAULT_WALNUT_API_ROOT } = await import('../../src/lib/self-api-root.js')
+    expect(walnutApiTarget({ env: {} })).toEqual({ root: DEFAULT_WALNUT_API_ROOT, source: 'default' })
+    expect(walnutApiTarget({ env: { OPEN_WALNUT_API_URL: 'http://127.0.0.1:4100/api/v1/' } })).toEqual({ root: 'http://127.0.0.1:4100', source: 'env' })
+    expect(walnutApiTarget({ env: { WALNUT_SERVER_URL: 'http://localhost:4200' }, alsoEnv: ['WALNUT_SERVER_URL'] })).toEqual({ root: 'http://localhost:4200', source: 'env' })
+    setSelfApiRoot('http://127.0.0.1:4300')
+    expect(walnutApiTarget({ env: { OPEN_WALNUT_API_URL: 'http://127.0.0.1:4100' } })).toEqual({ root: 'http://127.0.0.1:4300', source: 'self' })
+    expect(walnutApiTarget({ env: { OPEN_WALNUT_API_URL: 'http://127.0.0.1:4100' }, ownServer: false }).root).toBe('http://127.0.0.1:4100')
+    expect(walnutApiTarget({ given: 'http://127.0.0.1:4400/' })).toEqual({ root: 'http://127.0.0.1:4400', source: 'given' })
+  })
+
+  it('an unreachable default address says it is only the default; a named one does not', async () => {
+    const { defaultAddressNote } = await import('../../src/lib/self-api-root.js')
+    expect(defaultAddressNote('http://127.0.0.1:3456/api/v1', {})).toContain('no OPEN_WALNUT_API_URL')
+    expect(defaultAddressNote('http://127.0.0.1:3456/api/v1', { OPEN_WALNUT_API_URL: 'http://127.0.0.1:3456' })).toBe('')
+    expect(defaultAddressNote('http://127.0.0.1:4100/api/v1', {})).toBe('')
+  })
+})

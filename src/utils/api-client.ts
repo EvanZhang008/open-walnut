@@ -14,9 +14,7 @@
  */
 
 import { TEST_RUN_HEADER, parseTestRunLabel } from '../core/test-run.js';
-
-/** Server the CLI talks to. Override with OPEN_WALNUT_API_URL (tests, alt port). */
-const DEFAULT_BASE_URL = 'http://127.0.0.1:3456';
+import { defaultAddressNote, walnutApiTarget } from '../lib/self-api-root.js';
 
 /** A CLI command must never hang on a wedged server — fail fast and say why. */
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -28,10 +26,13 @@ export interface ApiRequestOptions {
   timeoutMs?: number;
 }
 
+/** Server the CLI talks to: OPEN_WALNUT_API_URL, else the default (self-api-root.ts walnutApiTarget). */
 export function apiBaseUrl(): string {
-  const raw = process.env.OPEN_WALNUT_API_URL?.trim();
-  return (raw || DEFAULT_BASE_URL).replace(/\/+$/, '');
+  return walnutApiTarget({ ownServer: false }).root;
 }
+
+/** Why a session with no address sends these commands nowhere (request() below). */
+const NO_ADDRESS_REASON = 'this session was given no OPEN_WALNUT_API_URL, so nothing was sent to the default address; use `walnut tools call <op>`, which goes through this host\'s daemon';
 
 /** The server answered, but with an error status. Carries its message verbatim. */
 export class ApiClientError extends Error {
@@ -51,13 +52,20 @@ export class ApiUnreachableError extends Error {
     public readonly baseUrl: string,
     public readonly reason: string,
   ) {
-    super(`Cannot reach the Open Walnut server at ${baseUrl} (${reason})`);
+    super(`Cannot reach the Open Walnut server at ${baseUrl}${defaultAddressNote(baseUrl)} (${reason})`);
     this.name = 'ApiUnreachableError';
   }
 }
 
 async function request<T>(method: string, path: string, body?: unknown, opts?: ApiRequestOptions): Promise<T> {
   const base = apiBaseUrl();
+  // A session its Walnut named no address for (tools-daemon-fallback.ts sessionWithoutAddress):
+  // the default port may be another Walnut, so these commands send nothing there. `walnut tools
+  // call` reaches the session's own Walnut through its host daemon.
+  const { sessionWithoutAddress } = await import('../commands/tools-daemon-fallback.js');
+  if (sessionWithoutAddress(process.env)) {
+    throw new ApiUnreachableError(base, NO_ADDRESS_REASON);
+  }
   const timeoutMs = opts?.timeoutMs ?? REQUEST_TIMEOUT_MS;
   // `WALNUT_TEST_RUN=<label>` makes this CLI's writes test objects (src/core/test-run.ts).
   const testRun = parseTestRunLabel(process.env.WALNUT_TEST_RUN);
@@ -132,7 +140,9 @@ export function apiDelete<T>(path: string): Promise<T> {
  */
 export function reportApiError(err: unknown, globals: { json?: boolean }): void {
   const message = err instanceof ApiUnreachableError
-    ? `Open Walnut server is not running at ${err.baseUrl} — start it with: open-walnut web`
+    ? err.reason === NO_ADDRESS_REASON
+      ? `Open Walnut: ${NO_ADDRESS_REASON}.`
+      : `Open Walnut server is not running at ${err.baseUrl}${defaultAddressNote(err.baseUrl)} — start it with: open-walnut web`
     : err instanceof Error ? err.message : String(err);
 
   if (globals.json) {

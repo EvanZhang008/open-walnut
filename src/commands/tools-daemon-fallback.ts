@@ -10,13 +10,16 @@
  * call goes through that socket, exactly as the shim would send it.
  *
  * Only on an unreachable server: a server that answered (even with an error) is
- * the authority, and a call from outside a session has no daemon to ask.
+ * the authority, and a call from outside a session has no daemon to ask. And
+ * first, before any HTTP try, in a session its Walnut named no address for
+ * (sessionWithoutAddress): the default port may be another Walnut's.
  *
  * The same socket is also how a Mac session reaches a PLUGIN op at all: this
  * process loads core ops only, and a plugin declares its ops inside the server.
  */
 
 import { newCallId } from '../lib/op-call-id.js'
+import { walnutApiTarget } from '../lib/self-api-root.js'
 import fs from 'node:fs'
 import net from 'node:net'
 
@@ -56,19 +59,31 @@ export async function callThroughCheckDaemon(
 }
 
 /**
+ * A session whose Walnut named no address for it (no OPEN_WALNUT_API_URL: a session on a host
+ * other than its server's, or one spawned before its server listened). Its host daemon is then
+ * the one way to ITS Walnut, as the gateway shim is first on such a session's PATH
+ * (daemon-standalone.ts walnutThroughGateway): over HTTP the default address reaches whatever
+ * Walnut listens on :3456 there, or none (2026-11-20, a VP of a Walnut on another port).
+ */
+export function sessionWithoutAddress(env: NodeJS.ProcessEnv = process.env): boolean {
+  return hasHostDaemon(env) && walnutApiTarget({ env, ownServer: false }).source === 'default'
+}
+
+/**
  * Hand the call to this session's host daemon. Returns the exit code, or null
  * when there is no daemon to ask (then the caller reports its own error).
+ * `first`: asked before any HTTP try (sessionWithoutAddress), so no "not reachable" notice.
  */
 export async function callThroughHostDaemon(
   name: string,
   args: unknown,
   env: NodeJS.ProcessEnv = process.env,
-  opts: { json?: boolean } = {},
+  opts: { json?: boolean; first?: boolean } = {},
 ): Promise<number | null> {
   if (!hasHostDaemon(env)) return null
   // A notice for a person at a terminal only: a caller reading stderr as JSON
   // (`2>&1`, tool-call-output.ts) would read this line into the answer.
-  if (!opts.json && process.stderr.isTTY === true) {
+  if (!opts.json && !opts.first && process.stderr.isTTY === true) {
     process.stderr.write('walnut: the Walnut server is not reachable; asking this host\'s daemon instead.\n')
   }
   const { runWalnutCli } = await import('../providers/wn-cli.js')

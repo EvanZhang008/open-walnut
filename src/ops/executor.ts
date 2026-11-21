@@ -24,7 +24,7 @@ import { answerByHeader } from '../lib/answer-by.js'
 const humanCallerScope = new AsyncLocalStorage<boolean>()
 const explicitCallerScope = new AsyncLocalStorage<{ sid?: string; kind: 'person' | 'agent'; pluginId?: string }>()
 import { getOp, type HttpBinding, type WalnutOp } from './registry.js'
-import { demoApiHeaders, getSelfApiRoot, getSelfCallToken } from '../lib/self-api-root.js'
+import { defaultAddressNote, demoApiHeaders, getSelfApiRoot, getSelfCallToken, walnutApiTarget } from '../lib/self-api-root.js'
 import { fetchErrorCode } from '../lib/fetch-error.js'
 import {
   LOCAL_ORIGIN, ORIGIN_HEADER, UNKNOWN_ORIGIN, ambientCallerOrigin, isLocalOrigin, isRemoteHostOrigin, lowerOrigin, withCallerOrigin,
@@ -37,7 +37,6 @@ import { COLLECTION_MAX, oversizedCollection } from '../lib/zod-rules.js'
 import { TASK_DIR_VAR, opTmpPathNote } from '../lib/tmp-draft-path.js'
 import { opLinkNotes } from '../lib/missing-links.js'
 
-const DEFAULT_API_ROOT = 'http://127.0.0.1:3456'
 const REQUEST_TIMEOUT_MS = 10_000
 
 /**
@@ -47,9 +46,7 @@ const REQUEST_TIMEOUT_MS = 10_000
  * never land on another Walnut (see src/lib/self-api-root.ts).
  */
 export function resolveApiBase(override?: string): string {
-  const raw = (override ?? getSelfApiRoot() ?? process.env.OPEN_WALNUT_API_URL ?? DEFAULT_API_ROOT).trim()
-  const root = raw.replace(/\/+$/, '')
-  return root.endsWith('/api/v1') ? root : `${root}/api/v1`
+  return `${walnutApiTarget({ given: override }).root}/api/v1`
 }
 
 export type OpOutcome =
@@ -104,6 +101,10 @@ interface CallerProvenance {
   lostAny?: boolean
   /** Set when a self-call was answered with a status a retry may change (the ledger's `settles`), or reached no server. */
   unsettled?: boolean
+  /** Set when a self-call got no answer from any server: refused, no such host, or reset before one (then lost too). */
+  unreachedAny?: boolean
+  /** Set when any self-call got an answer from a server, whatever its status. */
+  answeredAny?: boolean
 }
 
 /** The op id of the next write of this call to `method path` (src/lib/op-call-id.ts writeOpId). */
@@ -145,6 +146,11 @@ export const DISK_FULL_HINT = ' This is the machine, not your work: do not ask t
 function testRunHeader(): Record<string, string> {
   const label = parseTestRunLabel(ambientTestRun() ?? process.env.WALNUT_TEST_RUN)
   return label ? { [TEST_RUN_HEADER]: label } : {}
+}
+
+/** "No server here", naming the address and, when it is only the default, that nothing named one. */
+function notRunningMessage(base: string): string {
+  return `Walnut server not running at ${base}${defaultAddressNote(base)} — start with \`open-walnut web\``
 }
 
 /**
@@ -203,11 +209,13 @@ async function rawRequest(
     // the call still runs again. A reset may come after the server took the request: lost.
     if (code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
       prov.unsettled = true
-      return { ok: false, unreachable: true, message: `Walnut server not running at ${base} — start with \`open-walnut web\`` }
+      prov.unreachedAny = true
+      return { ok: false, unreachable: true, message: notRunningMessage(base) }
     }
     prov.lostAny = true
     if (code === 'ECONNRESET') {
-      return { ok: false, unreachable: true, lost: true, message: `Walnut server not running at ${base} — start with \`open-walnut web\`` }
+      prov.unreachedAny = true
+      return { ok: false, unreachable: true, lost: true, message: notRunningMessage(base) }
     }
     if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
       return { ok: false, lost: true, message: `Walnut request timed out after ${timeoutMs}ms: ${method} ${path}` }
@@ -215,6 +223,7 @@ async function rawRequest(
     return { ok: false, lost: true, message: `Walnut request failed: ${err instanceof Error ? err.message : String(err)}` }
   }
 
+  prov.answeredAny = true
   // The headers came, the body did not (a reset, a timeout mid-answer): the answer was lost.
   let text = ''
   try {
@@ -553,6 +562,16 @@ async function withEarlierWrites(outcome: Extract<OpOutcome, { ok: false }>, bas
   }
 }
 
+/**
+ * A handler op's run whose self-calls got no answer from any server (refused, or reset, which is
+ * also `lost`): it failed for want of one, as a bound op's call does, so a session's CLI asks its host daemon instead (tools.ts). The
+ * handler's own error (or its result's) used to hide that: task_create from a session of a
+ * Walnut on another port failed while task_get went through (2026-11-20).
+ */
+function reachedNoServer(prov: CallerProvenance): boolean {
+  return prov.unreachedAny === true && prov.answeredAny !== true
+}
+
 async function runOp(
   op: WalnutOp,
   args: Record<string, unknown>,
@@ -573,15 +592,17 @@ async function runOp(
       // acts for the same caller: the nested call cannot climb above this origin.
       const result = await withCallerOrigin(prov.origin, () => op.handler!(args, call, { sid: prov.explicitSid, kind: prov.callerKind }))
       const message = op.resultError?.(result)
-      return message ? { ok: false, message, result } : { ok: true, result }
+      return message ? { ok: false, message, result, ...(reachedNoServer(prov) ? { unreachable: true as const } : {}) } : { ok: true, result }
     } catch (err) {
       // A write of this call whose answer was lost (also inside a handler) may have applied.
       const lost = err instanceof SelfCallError && err.lost
       const status = err instanceof SelfCallError ? err.status : undefined
       const code = err instanceof SelfCallError ? err.code : undefined
       const retryAfterMs = err instanceof SelfCallError ? err.retryAfterMs : undefined
+      const unreachable = reachedNoServer(prov)
       return {
         ok: false, message: err instanceof Error ? err.message : String(err), ...(lost ? { lost: true as const } : {}),
+        ...(unreachable ? { unreachable: true as const } : {}),
         ...(status !== undefined ? { status } : {}), ...(code !== undefined ? { code } : {}), ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
       }
     }
