@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import { parseHTML } from 'linkedom';
 import { DRAFT_FLUSH_EVENT, listUnsavedWork, type DraftFlushDetail } from '../../web/src/utils/unsaved-work';
+import { holdLiveTake } from '../../web/src/utils/dictation-live';
 
 function page(html: string) {
   const { window, document } = parseHTML(`<!DOCTYPE html><html><body>${html}</body></html>`);
@@ -147,3 +148,17 @@ describe('unsaved work: a saved composer draft is not lost', () => {
     expect(listUnsavedWork(document, null)).toMatchObject([{ kind: 'attachment', sessionId: 's-3', where: 'a session' }]);
   });
 });
+
+describe('a voice take this page still holds', () => {
+  // 2026-11-20: the Mac app recycled the page under an 11-minute take; the take was lost.
+  it('counts while it records or is heard, and no longer once delivered', () => {
+    const { document } = page('<div></div>');
+    const release = holdLiveTake();
+    const items = listUnsavedWork(document, null, 'reload');
+    expect(items.map((i) => i.kind)).toEqual(['recording']);
+    expect(items[0]!.what).toBe('A voice recording in progress');
+    release();
+    expect(listUnsavedWork(document, null, 'reload')).toEqual([]);
+  });
+});
+

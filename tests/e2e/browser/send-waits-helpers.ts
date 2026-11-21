@@ -78,7 +78,7 @@ export async function stubEngine(page: Page): Promise<Lane> {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: FULL, durationMs: 60 }) })
   }
   await page.route('**/api/stt/draft', (route) => answer(route, true))
-  await page.route('**/api/stt/transcribe', (route) => answer(route, false))
+  await page.route('**/api/stt/transcribe**', (route) => answer(route, false))
   await page.route('**/api/stt/save', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ recordingId: 'rec-sendwait-1', debugAudioPath: '/tmp/rec-sendwait-1.webm' }) }))
   return lane
 }

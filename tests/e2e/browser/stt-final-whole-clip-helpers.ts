@@ -81,7 +81,7 @@ async function stubLanes(page: Page): Promise<Lanes> {
     seen.transcribe++
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: seen.emptyWhole ? '' : WHOLE, durationMs: 60 }) })
   }
-  await page.route('**/api/stt/transcribe', whole)
+  await page.route('**/api/stt/transcribe**', whole)
   // Retry re-runs the stored recording.
   await page.route('**/api/stt/recordings/*/transcribe', whole)
   await page.route('**/api/stt/save', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"recordingId":"rec-whole-1"}' }))

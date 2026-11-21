@@ -20,6 +20,11 @@ function tempPath(ext: string): string {
 }
 
 /** Every GET /api/stt/status and POST /api/stt/draft asks, and each probe is a spawn. */
+/** ffmpeg's time to decode a clip of `bytes`: 30 s, plus 10 s per 10 MB (about six minutes of the web recorder). */
+export function convertTimeoutMs(bytes: number): number {
+  return 30_000 + Math.ceil(Math.max(0, bytes) / (10 * 1024 * 1024)) * 10_000;
+}
+
 const FFMPEG_FOUND_TTL_MS = 10 * 60_000;
 const FFMPEG_MISSING_TTL_MS = 30_000;
 
@@ -157,7 +162,8 @@ async function toHeardWav(audioBase64: string, inputFormat: string): Promise<{ p
       '-ac', '1',         // mono
       '-c:a', 'pcm_s16le', // 16-bit PCM
       outputPath,
-    ], { timeout: 30_000, env: sttSpawnEnv() }).catch((err: NodeJS.ErrnoException) => {
+    // A take has no time limit: an hour of audio decodes in seconds, and a loaded machine gets room.
+    ], { timeout: convertTimeoutMs(audioBase64.length * 0.75), env: sttSpawnEnv() }).catch((err: NodeJS.ErrnoException) => {
       if (err.code === 'ENOENT') throw new Error(`Reading ${inputFormat} audio needs ffmpeg, which is not installed`);
       throw err;
     });

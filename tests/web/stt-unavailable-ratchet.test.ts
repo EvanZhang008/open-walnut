@@ -44,7 +44,8 @@ describe('voice unavailable: one rule per decision', () => {
   // had heard. The stop had its own two rules beside the live warning's 3 s one.
   it('the stop decides what a take holds through classifyTake only, never its own size or silence check', () => {
     const hook = files.find((f) => f.rel === 'hooks/useSpeechToText.ts')!.text;
-    const onstop = hook.slice(hook.indexOf('recorder.onstop'), hook.indexOf('recorder.onerror'));
+    const onstop = hook.slice(hook.indexOf('const handleStop = async'), hook.indexOf('recorder.onerror'));
+    expect(onstop.length).toBeGreaterThan(1000);
     expect(onstop).toMatch(/classifyTake\(blob\.size, health\)/);
     expect(onstop).toMatch(/TAKE_ERRORS\[verdict\]/);
     expect(onstop).not.toMatch(/blob\.size\s*(===|<=|<|==)\s*0/);

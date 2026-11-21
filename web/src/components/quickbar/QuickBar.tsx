@@ -524,7 +524,7 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
         micLive={stt.micLive}
         counting={countdownAt !== null}
         to={shown}
-        note={notice ?? stt.error ?? stt.silenceWarning ?? null}
+        note={notice ?? stt.error ?? stt.silenceWarning ?? (stt.isRecording ? stt.draftNotice : null) ?? null}
         peopleFailed={peopleFailed}
         onRetryPeople={loadPeople}
         typedMode={typedMode}

@@ -65,7 +65,7 @@ describe('ratchet: Web Audio taps of the mic', () => {
     // send it, without modify". The drafts are a preview; the text the stop
     // delivers is /transcribe's answer for the whole clip, as it came.
     const hook = readFileSync(join(ROOT, 'web/src/hooks/useSpeechToText.ts'), 'utf8');
-    const stop = hook.slice(hook.indexOf('recorder.onstop = async'), hook.indexOf('recorder.onerror ='));
+    const stop = hook.slice(hook.indexOf('const handleStop = async'), hook.indexOf('recorder.onerror ='));
     expect((stop.match(/await transcribeAudio\(/g) ?? []).length).toBe(1);
     expect(stop).toMatch(/const finalText = result\.text;/);
     // No other pass or join makes the final text.
@@ -78,10 +78,11 @@ describe('ratchet: Web Audio taps of the mic', () => {
     // 2026-11-20, the user: "I talk and it just doesn't show anything for long
     // time". A headset take doubled its bytes (src/lib/audio-block-repeat.ts) and
     // hit the 4 MB cap 76 s in: no drafts for the rest of the take. The recorder's
-    // path uploads only its open window, so only its time cap stays.
+    // path uploads only its open window, and moves onto a fresh draft recorder
+    // instead of a time cap (the test below).
     const hook = readFileSync(join(ROOT, 'web/src/hooks/useSpeechToText.ts'), 'utf8');
     const rec = hook.slice(hook.indexOf('const liveDraftSource = async'), hook.indexOf('const webmDraftTick = async'));
-    expect(rec).toMatch(/RECORDER_DRAFT_MAX_MS/);
+    expect(rec).toMatch(/lanes\.advance\(/);
     expect(rec).not.toMatch(/blob\.size\s*>\s*DRAFT_MAX_BYTES/);
     expect(rec).toMatch(/takeRebase\(\)/);
     const first = Number(/const FIRST_DRAFT_MS = (\d+);/.exec(hook)?.[1]);
@@ -117,11 +118,35 @@ describe('ratchet: Web Audio taps of the mic', () => {
     // 2026-11-20, the user asked for two weeks of daily checks on accuracy and
     // time; the review reads this line from the forwarded browser log.
     const hook = readFileSync(join(ROOT, 'web/src/hooks/useSpeechToText.ts'), 'utf8');
-    const stop = hook.slice(hook.indexOf('recorder.onstop = async'), hook.indexOf('recorder.onerror ='));
+    const stop = hook.slice(hook.indexOf('const handleStop = async'), hook.indexOf('recorder.onerror ='));
     expect(stop).toMatch(/log\.info\('stt', 'take timing', \{/);
     for (const field of ['recordMs', 'firstWordsMs', 'stopToTextMs', 'engineMs', 'repeatFactor']) expect(stop).toContain(field);
     // Logged after the text, whether or not it came back empty.
     expect((stop.match(/logTiming\(/g) ?? []).length).toBeGreaterThanOrEqual(2);
   });
-});
 
+  it('a take has no time limit and never stops silently', () => {
+    // 2026-11-20, the user's mock interview: the live text froze at 5 minutes with
+    // nothing on screen, and the page was recycled under the recording at 11.
+    const hook = readFileSync(join(ROOT, 'web/src/hooks/useSpeechToText.ts'), 'utf8');
+    // No time cap ends the draft: a long take moves onto a fresh draft recorder,
+    // and only a browser that refuses one pauses it.
+    expect(hook).not.toMatch(/RECORDER_DRAFT_MAX_MS|_MAX_MS \* 16/);
+    const rec = hook.slice(hook.indexOf('const liveDraftSource = async'), hook.indexOf('const webmDraftTick = async'));
+    expect(rec).toMatch(/lanes\.advance\(windowStartRef\.current/);
+    expect(rec).toMatch(/lanes\.exhausted[\s\S]{0,40}retireDraftLane\(/);
+    // Every pause of the live text is said on screen, with what the user reads.
+    const retire = hook.slice(hook.indexOf('const retireDraftLane = useCallback'), hook.indexOf('const stopStream = useCallback'));
+    expect(retire).toMatch(/setDraftNotice\(`Live text paused: \$\{shown\}/);
+    for (const call of hook.match(/retireDraftLane\([^;]*\);/g) ?? []) expect(call, call).toMatch(/,\s*'[^']+'\);$/);
+    const button = readFileSync(join(ROOT, 'web/src/components/common/MicButton.tsx'), 'utf8');
+    expect(button).toMatch(/isRecording && !silenceWarning && draftNotice/);
+    // The stop sends the whole clip as raw bytes: no size cap a take reaches.
+    const stop = hook.slice(hook.indexOf('const handleStop = async'), hook.indexOf('recorder.onerror ='));
+    expect(stop).toMatch(/await transcribeAudio\(blob, format/);
+    // The page holds the take from the recorder's start until its stop is done,
+    // so no reload or page recycle runs over it (unsaved-work.ts).
+    expect(hook).toMatch(/recorder\.start\(CHUNK_MS\);\s*releaseTake = holdLiveTake\(\);/);
+    expect(hook).toMatch(/recorder\.onstop = \(\) => \{ void handleStop\(\)\.finally\(\(\) => releaseTake\(\)\); \};/);
+  });
+});

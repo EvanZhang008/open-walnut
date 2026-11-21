@@ -92,7 +92,7 @@ async function stubEngine(page: Page): Promise<Engine> {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: engine.stopped ? FULL : DRAFTED, durationMs: 40 }) })
   }
   await page.route('**/api/stt/draft', answer)
-  await page.route('**/api/stt/transcribe', answer)
+  await page.route('**/api/stt/transcribe**', answer)
   await page.route('**/api/stt/save', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"recordingId":"rec-plugin-mic"}' }))
   return engine
 }

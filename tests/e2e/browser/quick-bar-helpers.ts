@@ -65,7 +65,7 @@ export async function stubAll(page: Page, said: { draft?: string; final?: string
   // first, never land beside it (2026-11-20: "to Walnut VP to Walnut VP, ..." in the proof video).
   let drafts = 0
   await page.route('**/api/stt/draft', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: said.draft ?? (drafts++ === 0 ? 'to Walnut VP' : DRAFT), durationMs: 30 }) }))
-  await page.route('**/api/stt/transcribe', async (r) => {
+  await page.route('**/api/stt/transcribe**', async (r) => {
     sends.takes++
     // A slow engine: the last words come in well after the key that ended the take.
     if (said.finalDelayMs) await new Promise((done) => setTimeout(done, said.finalDelayMs))

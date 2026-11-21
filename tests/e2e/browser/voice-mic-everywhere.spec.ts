@@ -247,7 +247,7 @@ async function openLetter(page: Page, subject: string): Promise<Locator> {
  *  a test can prove the recorder really sent audio (and later that it stopped). */
 async function stubDictation(page: Page): Promise<{ transcribe: string[]; draft: string[] }> {
   const seen = { transcribe: [] as string[], draft: [] as string[] }
-  await page.route('**/api/stt/transcribe', async (route) => {
+  await page.route('**/api/stt/transcribe**', async (route) => {
     seen.transcribe.push(route.request().url())
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: DICTATED, durationMs: 120 }) })
   })

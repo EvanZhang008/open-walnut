@@ -60,7 +60,7 @@ export function registerLiveDraftRecorderScenarios(): void {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: DRAFT_TEXT, durationMs: 30 }) })
     })
     let transcribes = 0
-    await page.route('**/api/stt/transcribe', (route) => {
+    await page.route('**/api/stt/transcribe**', (route) => {
       transcribes++
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: DRAFT_TEXT, durationMs: 60 }) })
     })
@@ -121,7 +121,7 @@ export function registerLiveDraftRecorderScenarios(): void {
     await page.route('**/api/stt/warmup', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }))
     await page.route('**/api/stt/draft', (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: DRAFT_TEXT, durationMs: 30 }) }))
-    await page.route('**/api/stt/transcribe', (route) =>
+    await page.route('**/api/stt/transcribe**', (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: DRAFT_TEXT, durationMs: 60 }) }))
     await page.route('**/api/stt/save', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"recordingId":"rec-live-2"}' }))
     const d = await openComposer(page)
@@ -166,7 +166,7 @@ export function registerLiveDraftRecorderScenarios(): void {
       const text = body.format === 'wav' && wavRms(body.audio) > 0.02 ? DRAFT_TEXT : ''
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text, durationMs: 30 }) })
     })
-    await page.route('**/api/stt/transcribe', (route) =>
+    await page.route('**/api/stt/transcribe**', (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: DRAFT_TEXT, durationMs: 60 }) }))
     await page.route('**/api/stt/save', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"recordingId":"rec-live-3"}' }))
     const d = await openComposer(page)

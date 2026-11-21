@@ -133,9 +133,19 @@ export interface AutoConfigResult {
  */
 export const FINAL_PASS_TIMEOUT_MS = 120_000;
 
+/**
+ * The deadline for a clip of `bytes`: a long take takes longer to hear (24 min of
+ * speech took the local engine 60 s on 2026-11-20). FINAL_PASS_TIMEOUT_MS, plus
+ * 10 s per MB, which is about a minute of the web recorder's audio.
+ */
+export function finalPassTimeoutMs(bytes: number): number {
+  return FINAL_PASS_TIMEOUT_MS + Math.ceil(Math.max(0, bytes) / (1024 * 1024)) * 10_000;
+}
+
 /** Transcribe audio via server STT engine (authoritative, stored server-side). */
 export async function transcribeAudio(
-  audioBase64: string,
+  /** The clip: base64, or the recorder's own Blob, sent as raw bytes (any length). */
+  audio: string | Blob,
   format: string,
   language?: string,
   /** Optional model override — retry with a specific ggml model via whisper-cli */
@@ -143,23 +153,42 @@ export async function transcribeAudio(
   /** A caller's own cancel, and where it was said when not the page (a plugin: `plugin:<id>`). */
   opts: { signal?: AbortSignal; surface?: string } = {},
 ): Promise<TranscribeResult> {
-  const deadline = AbortSignal.timeout(FINAL_PASS_TIMEOUT_MS);
-  const res = await sttFetch('/api/stt/transcribe', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    // The page it was said on (a session, a plugin's composer), kept with the recording.
-    body: JSON.stringify({ audio: audioBase64, format, language, model, surface: (opts.surface ?? location.pathname).slice(0, 100) }),
-    signal: opts.signal ? AbortSignal.any([opts.signal, deadline]) : deadline,
-  });
+  const deadline = AbortSignal.timeout(finalPassTimeoutMs(typeof audio === 'string' ? audio.length * 0.75 : audio.size));
+  // The page it was said on (a session, a plugin's composer), kept with the recording.
+  const surface = (opts.surface ?? location.pathname).slice(0, 100);
+  const signal = opts.signal ? AbortSignal.any([opts.signal, deadline]) : deadline;
+  const res = typeof audio === 'string'
+    ? await sttFetch('/api/stt/transcribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ audio, format, language, model, surface }),
+      signal,
+    })
+    : await sttFetch(`/api/stt/transcribe?${new URLSearchParams({ format, surface, ...(language ? { language } : {}), ...(model ? { model } : {}) })}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: audio,
+      signal,
+    });
   if (!res.ok) {
     let message = res.statusText;
+    let recordingId: string | undefined;
     try {
       const data = await res.json();
       if (data.error) message = data.error;
+      if (typeof data.recordingId === 'string') recordingId = data.recordingId;
     } catch { /* use statusText */ }
-    throw new Error(message);
+    throw new SttTranscribeError(message, recordingId);
   }
   return res.json();
+}
+
+/** A failed final pass; `recordingId` when the server kept the clip, so Retry hears it again in place. */
+export class SttTranscribeError extends Error {
+  constructor(message: string, readonly recordingId?: string) {
+    super(message);
+    this.name = 'SttTranscribeError';
+  }
 }
 
 /**

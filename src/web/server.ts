@@ -131,7 +131,7 @@ import { notesV2Router } from './routes/notes-v2.js'
 import { mentionSourcesRouter } from './routes/mention-sources.js'
 import { repositoriesRouter } from './routes/repositories.js'
 import { audioRouter } from './routes/audio.js'
-import { sttRouter } from './routes/stt.js'
+import { sttRouter, STT_CLIP_RAW_LIMIT } from './routes/stt.js'
 import { sttMediaHoldRouter } from './routes/stt-media-hold.js'
 import { subscriptionLimitsRouter } from './routes/subscription-limits.js'
 import { migrateGlobalNotes } from '../core/notes-migration.js'
@@ -1842,6 +1842,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // audio cap (~100min) plus JSON envelope headroom; past that the routes
   // return a contract-shaped 413 themselves.
   app.use(['/api/v1/stt/transcribe', '/api/stt/transcribe'], express.json({ limit: '35mb' }))
+  // The web recorder sends its whole clip as raw bytes, no base64 JSON to parse:
+  // a take has no time limit (2026-11-20: the 25MB-base64 cap ended a Mac app take
+  // at about 11 minutes). STT_CLIP_RAW_LIMIT is hours of audio.
+  app.use('/api/stt/transcribe', express.raw({ type: 'application/octet-stream', limit: STT_CLIP_RAW_LIMIT }))
   // Overflow (>35mb) → contract-shaped 413 (the phone keys preserve/retry UX
   // off error.code). Must sit at app level right here: the parser above
   // raises before any router runs, and Express skips routers in error mode.

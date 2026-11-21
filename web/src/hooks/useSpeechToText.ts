@@ -5,11 +5,13 @@
  * for transcription via the configured STT engine.
  */
 
+import { DraftLanes, LANE_MAX_MS, openRecorderLane, testLaneMaxMs } from '@/utils/recorder-draft-lanes';
+import { holdLiveTake } from '@/utils/dictation-live';
 import { blobToBase64 } from '@/utils/blob-base64';
 import { useState, useRef, useCallback, useEffect } from 'react';
 import {
   transcribeAudio, draftTranscribe, saveRecording, retranscribeRecording, warmupStt,
-  isRetryableDraftFailure, sttFailureMessage,
+  isRetryableDraftFailure, sttFailureMessage, SttTranscribeError,
 } from '@/api/stt';
 import { setVoiceStatus } from '@/utils/voice-status';
 import { joinSegments } from '@/utils/stt-segments';
@@ -87,6 +89,8 @@ export interface UseSpeechToTextReturn {
    * mic. Auto-clears as soon as sound is detected. null = no warning.
    */
   silenceWarning: string | null;
+  /** While recording: the live text stopped updating, why, and that the take records on. */
+  draftNotice: string | null;
   /** True while a live draft is being streamed into the consumer's text. */
   isDrafting: boolean;
   /**
@@ -139,10 +143,10 @@ const DRAFT_MAX_BYTES = 4 * 1024 * 1024; // upload cap per draft request, EVERY 
 // This bound needs no cooperation from the audio: past it, the window is clamped
 // forward on the clock alone.
 const DRAFT_MAX_WINDOW_MS = 20000;
-// Past this much audio the recorder's WebM is no longer decoded every tick:
-// each decode reads the whole take again, so its cost grows with the take.
-// The draft stops and the stop hears the whole clip instead.
-const RECORDER_DRAFT_MAX_MS = 5 * 60_000;
+// A take has no time limit. The draft decodes a recorder from its start every
+// tick, so it moves onto a fresh draft recorder every few minutes
+// (recorder-draft-lanes.ts); only a browser that refuses a second recorder
+// pauses the live text, and says so.
 // A pause this long is a safe place to cut a segment: no word straddles it,
 // and it is comfortably longer than an intra-sentence breath.
 const COMMIT_SILENCE_MS = 800;
@@ -184,6 +188,8 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
   const [micLive, setMicLive] = useState(false);
   const [micOpening, setMicOpening] = useState(false);
   const [silenceWarning, setSilenceWarning] = useState<string | null>(null);
+  // The live text stopped updating while the take records on: said where the user looks.
+  const [draftNotice, setDraftNotice] = useState<string | null>(null);
   const [isDrafting, setIsDrafting] = useState(false);
   // Live-draft machinery: interval timer + in-flight guard (drop ticks while a
   // draft request is still running instead of queuing behind it).
@@ -198,6 +204,9 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
   // The recorder's own audio, decoded as it grows: what the live draft reads
   // whenever the browser can decode it (recorder-pcm.ts says why).
   const recPcmRef = useRef<RecorderPcm | null>(null);
+  // The take's own recorder's repeat, kept once the draft moves onto another lane.
+  const takeRepeatRef = useRef(0);
+  const lanesRef = useRef<DraftLanes<RecorderPcm> | null>(null);
   // Which audio this recording's drafts read, fixed at its first decodable
   // tick so sample positions never switch timelines mid-recording.
   const liveSourceRef = useRef<'recorder' | 'side' | 'webm' | null>(null);
@@ -238,7 +247,8 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
   // guard in onstop only applies when we actually had working level data).
   const analyserAttachedRef = useRef(false);
   // Keep last audio for retry
-  const lastAudioRef = useRef<{ base64: string; format: string } | null>(null);
+  // The clip itself rides along: Retry sends it as raw bytes, whatever its length.
+  const lastAudioRef = useRef<{ base64: string; format: string; blob?: Blob } | null>(null);
   // The history row this hook stored the last clip under (null: none, or
   // /transcribe stored it server-side). A Retry re-runs that row in place.
   const savedRecordingRef = useRef<Promise<string | null> | null>(null);
@@ -309,7 +319,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
    * authoritative text still comes from the pass on mic release, so retiring the
    * lane degrades the live preview and nothing else.
    */
-  const retireDraftLane = useCallback((reason: string) => {
+  const retireDraftLane = useCallback((reason: string, shown: string) => {
     if (draftTimerRef.current !== undefined) {
       clearInterval(draftTimerRef.current);
       draftTimerRef.current = undefined;
@@ -317,6 +327,9 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
     if (draftRetiredRef.current) return;
     draftRetiredRef.current = true;
     log.warn('stt', `live draft stopped for this recording — ${reason}. Recording continues; the text you get on stop is unaffected.`);
+    // Never a silent stop (2026-11-20): the words stop moving, so the user is told why
+    // and that the recording goes on.
+    if (isMountedRef.current) setDraftNotice(`Live text paused: ${shown}. Still recording; the full text comes when you stop.`);
   }, []);
 
   const stopStream = useCallback(() => {
@@ -339,8 +352,11 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     mediaRecorderRef.current = null;
+    lanesRef.current?.stopAll();
+    lanesRef.current = null;
     setLevel(0);
     setSilenceWarning(null);
+    setDraftNotice(null);
     setIsDrafting(false);
   }, []);
 
@@ -522,12 +538,15 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
         recBytesRef.current += e.data.size;
       };
 
-      recorder.onstop = async () => {
+      // The take is this page's alone until its whole clip reaches the server:
+      // a reload or a page recycle waits for it (dictation-live.ts).
+      let releaseTake: () => void = () => {};
+      const handleStop = async () => {
         // Recording is only ever stopped by the user (or unmount) — we never auto-stop.
         const stoppedAt = Date.now();
         const startedAt = recordStartedAtRef.current;
         const firstWordsAt = firstWordsAtRef.current;
-        const repeatFactor = recPcmRef.current?.repeatFactor ?? 0;
+        const repeatFactor = takeRepeatRef.current || (recPcmRef.current?.repeatFactor ?? 0);
         // One line per take that the daily voice review reads: how long the
         // live words took to show, and the whole-clip text after the stop.
         const logTiming = (chars: number, engineMs: number | null) => log.info('stt', 'take timing', {
@@ -595,7 +614,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
         // user's hands by the time this runs, history must not delay it.
         const keepForRetry = async (): Promise<string> => {
           const base64 = await readBlobBase64();
-          lastAudioRef.current = { base64, format };
+          lastAudioRef.current = { base64, format, blob };
           savedRecordingRef.current = null;
           retryReplacesRef.current = null;
           if (isMountedRef.current) setHasLastRecording(true);
@@ -627,7 +646,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
           const sent = lastDraftRef.current ?? '';
           lastDraftRef.current = null;
           log.info('stt', `recording kept but not delivered — the text was already sent (${sent.length} chars)`);
-          void persistRecording(sent);
+          await persistRecording(sent);
           return;
         }
 
@@ -656,14 +675,15 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
         try {
           const base64 = await readBlobBase64();
           log.info('stt', `Sending ${(blob.size / 1024).toFixed(1)}KB ${format} for transcription`);
-          lastAudioRef.current = { base64, format };
+          lastAudioRef.current = { base64, format, blob };
           savedRecordingRef.current = null;
           retryReplacesRef.current = null;
           if (isMountedRef.current) setHasLastRecording(true);
           unstoredClip = base64;
           // /transcribe stores this clip and its text server-side, so history
           // is not written again here.
-          const result = await transcribeAudio(base64, format, languageRef.current);
+          // The clip itself, as raw bytes: no length a take reaches is refused.
+          const result = await transcribeAudio(blob, format, languageRef.current);
           unstoredClip = null;
           if (isMountedRef.current && result.debugAudioPath) setLastDebugPath(result.debugAudioPath);
           const finalText = result.text;
@@ -721,7 +741,11 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
           // gone with no Retry and no history row (2026-09-28).
           const partial = provisional ?? (isMountedRef.current ? keepLastDraft() : null);
           const reason = sttFailureMessage(err);
-          if (unstoredClip) persistHistory(unstoredClip, partial ?? '', reason);
+          // The server kept the clip before its pass failed: Retry hears that
+          // copy. Otherwise the clip is stored here (a network failure).
+          const storedId = err instanceof SttTranscribeError ? err.recordingId : undefined;
+          if (storedId) savedRecordingRef.current = Promise.resolve(storedId);
+          else if (unstoredClip) persistHistory(unstoredClip, partial ?? '', reason);
           if (!isMountedRef.current) return;
           retryReplacesRef.current = partial;
           setError(partial ? `Only part was transcribed. ${reason}` : reason);
@@ -729,8 +753,12 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
           if (isMountedRef.current) setIsTranscribing(false);
         }
       };
+      recorder.onstop = () => { void handleStop().finally(() => releaseTake()); };
 
       recorder.onerror = (e: Event) => {
+        // A stop follows the error and its handler releases the take; this only
+        // keeps a browser that never sends one from holding reloads off for good.
+        window.setTimeout(() => releaseTake(), 5 * 60_000);
         stopStream();
         setIsRecording(false);
         const recorderError = 'error' in e ? e.error : undefined;
@@ -741,8 +769,15 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
       // Timeslice so chunks accumulate during recording — the live draft below
       // needs decodable audio-so-far (a from-the-start concat of webm chunks).
       recorder.start(CHUNK_MS);
+      releaseTake = holdLiveTake();
       const decode = browserDecoder();
       recPcmRef.current = decode ? new RecorderPcm(decode) : null;
+      takeRepeatRef.current = 0;
+      lanesRef.current = decode && recPcmRef.current ? new DraftLanes<RecorderPcm>(
+        { pcm: recPcmRef.current, chunks: () => chunksRef.current, startedAt: performance.now(), stop: () => {} },
+        () => openRecorderLane(stream, mimeType, () => new RecorderPcm(decode), CHUNK_MS),
+        testLaneMaxMs() ?? LANE_MAX_MS,
+      ) : null;
       recordStartedAtRef.current = Date.now();
       firstWordsAtRef.current = 0;
       setIsRecording(true);
@@ -831,7 +866,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
               // is what made every following tick bigger than the last until
               // the request could not possibly succeed.
               noteAbandonedSpan(pcm, windowStart, decision.nextWindowStart, `commit transcribe failed (${msg})`);
-              if (!isRetryableDraftFailure(err)) retireDraftLane(msg);
+              if (!isRetryableDraftFailure(err)) retireDraftLane(msg, 'the live preview failed');
             }
             windowStartRef.current = decision.nextWindowStart;
             // Leave the visible draft alone: it still shows this segment's text
@@ -860,7 +895,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
               // open window and the next tick re-reads it.
               if (abort.signal.aborted) return;
               if (!isRetryableDraftFailure(err)) {
-                retireDraftLane(err instanceof Error ? err.message : String(err));
+                retireDraftLane(err instanceof Error ? err.message : String(err), 'the live preview failed');
               }
             }
             return;
@@ -885,13 +920,14 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
       let recDecodeFailures = 0;
       let slowDecodeLogged = false;
       const liveDraftSource = async (): Promise<PcmSource | 'webm' | null> => {
-        const rec = recPcmRef.current;
-        if (rec && liveSourceRef.current !== 'side' && liveSourceRef.current !== 'webm') {
-          // Decoded here, never uploaded: only its length in time bounds it
-          // (RECORDER_DRAFT_MAX_MS). An upload cap here ended the draft of every
-          // take past 2.5 minutes, and at 76 s for a take whose recorder wrote
-          // each 10 ms twice (2026-11-20).
-          const blob = new Blob(chunksRef.current, { type: recorder.mimeType });
+        const lanes = lanesRef.current;
+        let rec = lanes?.pcm ?? null;
+        if (lanes && rec && liveSourceRef.current !== 'side' && liveSourceRef.current !== 'webm') {
+          // Decoded here, never uploaded: only its length in time bounds it, and
+          // past a lane's length the draft moves onto a fresh recorder. An upload
+          // cap here ended the draft of every take past 2.5 minutes, and at 76 s
+          // for a take whose recorder wrote each 10 ms twice (2026-11-20).
+          const blob = lanes.blob(recorder.mimeType);
           if (blob.size === 0) return null;                      // no chunk yet
           try {
             const t0 = Date.now();
@@ -911,9 +947,16 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
               slowDecodeLogged = true;
               log.warn('stt', `decoding the recorder's audio took ${decodeMs}ms for ${Math.round(rec.totalSamples / 16)}ms of audio`);
             }
-            // What a tick costs is the audio decoded, repeats included.
-            if (rec.decodedSamples > RECORDER_DRAFT_MAX_MS * 16) {
-              retireDraftLane(`take past ${RECORDER_DRAFT_MAX_MS / 60_000} minutes, the recorder's audio is no longer decoded every tick`);
+            const moved = await lanes.advance(windowStartRef.current, recorder.mimeType);
+            if (mediaRecorderRef.current !== recorder) return null;
+            if (moved !== null) {
+              windowStartRef.current = moved;
+              takeRepeatRef.current ||= recPcmRef.current?.repeatFactor ?? 0;
+              rec = lanes.pcm;
+              recPcmRef.current = rec;
+              log.info('stt', `live draft moved onto a fresh draft recorder (${Math.round((Date.now() - recordStartedAtRef.current) / 1000)} s into the take); the take's own recording goes on`);
+            } else if (lanes.exhausted) {
+              retireDraftLane('take past the draft length and the browser refused a second recorder', 'this take is too long for the live preview here');
               return null;
             }
             if (!liveSourceRef.current) {
@@ -941,7 +984,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
         if (chunks.length === 0) return;
         const blob = new Blob(chunks, { type: recorder.mimeType });
         if (blob.size > DRAFT_MAX_BYTES) {                      // very long clip — stop drafting
-          retireDraftLane(`clip past the ${DRAFT_MAX_BYTES} byte draft cap`);
+          retireDraftLane(`clip past the ${DRAFT_MAX_BYTES} byte draft cap`, 'this take is too long for the live preview here');
           return;
         }
         const base64 = await blobToBase64(blob, 'draft audio');
@@ -962,7 +1005,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
           // re-sends the whole clip, which only grows — retrying it is the
           // worst version of the loop.
           if (!abort.signal.aborted && !isRetryableDraftFailure(err)) {
-            retireDraftLane(err instanceof Error ? err.message : String(err));
+            retireDraftLane(err instanceof Error ? err.message : String(err), 'the live preview failed');
           }
         } finally {
           draftAbortRef.current = null;
@@ -1035,7 +1078,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
       log.info('stt', `Retrying transcription${model ? ` with model: ${model}` : ' (configured engine)'}${savedId ? ` from stored recording ${savedId}` : ''}`);
       const result = savedId
         ? await retranscribeRecording(savedId, languageRef.current)
-        : await transcribeAudio(last.base64, last.format, languageRef.current, model);
+        : await transcribeAudio(last.blob ?? last.base64, last.format, languageRef.current, model);
 
       if (isMountedRef.current && result.debugAudioPath) {
         setLastDebugPath(result.debugAudioPath);
@@ -1134,6 +1177,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
     micLive,
     micOpening,
     silenceWarning,
+    draftNotice,
     isDrafting,
     discardRecording,
     finishRecording,

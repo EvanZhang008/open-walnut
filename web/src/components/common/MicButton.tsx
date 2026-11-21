@@ -117,7 +117,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
       : {}),
     ...(language ? { language } : {}),
   };
-  const { isSupported, isRecording, isTranscribing, error, toggleRecording, retryWithModel, retryLast, lastDebugPath, hasLastRecording, level, micLive, micOpening, silenceWarning, discardRecording, finishRecording, isBusy } = useSpeechToText(sttOptions);
+  const { isSupported, isRecording, isTranscribing, error, toggleRecording, retryWithModel, retryLast, lastDebugPath, hasLastRecording, level, micLive, micOpening, silenceWarning, draftNotice, discardRecording, finishRecording, isBusy } = useSpeechToText(sttOptions);
   // The final words (if any) are delivered before transcribing turns false, so a
   // box that listens here knows no more text is coming for this recording.
   const busyNow = isRecording || isTranscribing;
@@ -549,6 +549,12 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
             <line x1="12" y1="17" x2="12.01" y2="17" />
           </svg>
           <span>{silenceWarning}</span>
+        </MicPopover>
+      )}
+      {/* The live text stopped moving while the take records on: never a silent stop. */}
+      {isRecording && !silenceWarning && draftNotice && (
+        <MicPopover anchor={wrapperRef} owner={popupOwner} aboveField className="mic-silence-warning mic-draft-notice" role="status">
+          <span>{draftNotice}</span>
         </MicPopover>
       )}
       {/* Transcription failure — visible bubble (title-attr tooltips are undiscoverable).

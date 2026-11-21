@@ -5,10 +5,9 @@
  * plugin is named as where it was said.
  */
 import { transcribeAudio } from '@/api/stt'
-import { blobToBase64 } from '@/utils/blob-base64'
 import type { SttService, SttTranscript } from '../../../packages/plugin-api/src/web'
 
-/** The route takes 25 MB of base64: about 18 MB of audio. */
+/** One piece a plugin sends: older hosts take 25 MB of base64, about 18 MB of audio. */
 const MAX_AUDIO_BYTES = 18 * 1024 * 1024
 const FORMATS = ['webm', 'wav', 'mp3', 'ogg', 'mp4', 'm4a', 'flac'] as const
 
@@ -28,7 +27,7 @@ export function createWebStt(pluginId: string, pluginSignal: AbortSignal): SttSe
       if (!format || !(FORMATS as readonly string[]).includes(format)) throw new Error(`walnut.stt.transcribe: unsupported audio format ${options.format ?? audio.type ?? ''}`)
       const signal = options.signal ? AbortSignal.any([pluginSignal, options.signal]) : pluginSignal
       signal.throwIfAborted()
-      const result = await transcribeAudio(await blobToBase64(audio), format, options.language, undefined, { signal, surface: `plugin:${pluginId}` })
+      const result = await transcribeAudio(audio, format, options.language, undefined, { signal, surface: `plugin:${pluginId}` })
       return { text: result.text ?? '', durationMs: result.durationMs ?? 0, ...(result.recordingId ? { recordingId: result.recordingId } : {}) }
     },
   }

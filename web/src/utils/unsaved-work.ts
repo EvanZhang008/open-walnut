@@ -15,8 +15,11 @@
  *    file with unsaved edits, a note still saving or failing to save, and the
  *    text of the field being edited right now ARE lost, and each one is reported
  *    with the place it sits in, so the notice can take the user there.
+ *  - A voice take still recording or still being heard is lost too: its audio is
+ *    only in this page (dictation-live.ts).
  */
 import { log } from '@/utils/log';
+import { liveTakeCount } from '@/utils/dictation-live';
 
 export const DRAFT_FLUSH_EVENT = 'walnut:flush-drafts';
 
@@ -50,7 +53,7 @@ export function draftsSettled(ms = 1_500, always = false): Promise<void> {
   return left > 0 ? new Promise((resolve) => { window.setTimeout(resolve, left); }) : Promise.resolve();
 }
 
-export type UnsavedKind = 'message' | 'attachment' | 'file' | 'note' | 'field';
+export type UnsavedKind = 'message' | 'attachment' | 'file' | 'note' | 'field' | 'recording';
 
 export interface UnsavedItem {
   kind: UnsavedKind;
@@ -127,6 +130,8 @@ function item(kind: UnsavedKind, what: string, element: Element, where?: string)
 export function listUnsavedWork(doc: Document = document, active: Element | null = doc.activeElement, scope: UnsavedScope = 'leave'): UnsavedItem[] {
   const saved = flushDrafts(doc, scope);
   const items: UnsavedItem[] = [];
+  const takes = liveTakeCount();
+  if (takes > 0) items.push({ kind: 'recording', what: takes === 1 ? 'A voice recording in progress' : `${takes} voice recordings in progress`, where: '', element: null });
   for (const el of Array.from(doc.querySelectorAll('textarea'))) {
     const value = (el as HTMLTextAreaElement).value ?? '';
     if (value.trim() && !saved.has(el)) items.push(item('message', 'Unsent text', el));

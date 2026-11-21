@@ -147,7 +147,7 @@ export function registerNarrationLayoutScenario(): void {
     await useSyntheticMic(page, { speech: { leadMs: 600, onMs: 1_800, offMs: 2_600 } })
     const video = await startProofVideo(page)
     let heard = 0
-    await page.route('**/api/stt/transcribe', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: SAID[heard++ % SAID.length], durationMs: 30, recordingId: `rec-${heard}` }) }))
+    await page.route('**/api/stt/transcribe**', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: SAID[heard++ % SAID.length], durationMs: 30, recordingId: `rec-${heard}` }) }))
 
     await setNarration(page, true)
     const title = SCENE ? 'Walkthrough of my drawing' : 'Shop design'

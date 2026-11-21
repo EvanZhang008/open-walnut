@@ -119,7 +119,7 @@ test('a walkthrough: Record, point at a table while saying it is the core table,
 
   const sttRequests: Request[] = []
   let heard = 0
-  await page.route('**/api/stt/transcribe', async (route) => {
+  await page.route('**/api/stt/transcribe**', async (route) => {
     sttRequests.push(route.request())
     const text = SAID[heard++] ?? ''
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text, durationMs: 30, recordingId: `rec-${heard}` }) })

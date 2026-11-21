@@ -67,7 +67,7 @@ export async function stubEngine(page: Page, previewText = DRAFTED): Promise<Eng
     const text = lane.phase === 'recovered' ? FULL : lane.previewText
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text, durationMs: 40 }) })
   })
-  await page.route('**/api/stt/transcribe', async (route) => {
+  await page.route('**/api/stt/transcribe**', async (route) => {
     lane.finalPosts.push('transcribe')
     if (lane.phase !== 'recovered') {
       await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'fetch failed' }) })

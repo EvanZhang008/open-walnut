@@ -124,7 +124,7 @@ test.use({
  *  seen on each lane, so a test can prove the recorder really posted audio. */
 async function stubDictation(page: Page): Promise<{ transcribe: string[]; draft: string[] }> {
   const seen = { transcribe: [] as string[], draft: [] as string[] }
-  await page.route('**/api/stt/transcribe', async (route) => {
+  await page.route('**/api/stt/transcribe**', async (route) => {
     seen.transcribe.push(route.request().url())
     await route.fulfill({
       status: 200, contentType: 'application/json',
@@ -492,7 +492,7 @@ test.describe('Voice input keeps the selected passage', () => {
       // writes into the composer — so nothing focuses it, and nothing would collapse
       // the selection. The mic has to release it itself, because a selection left
       // inside a streaming reply freezes that reply and pauses auto-scroll.
-      for (const path of ['**/api/stt/transcribe', '**/api/stt/draft']) {
+      for (const path of ['**/api/stt/transcribe**', '**/api/stt/draft']) {
         await page.route(path, (route) => route.fulfill({
           status: 200, contentType: 'application/json',
           body: JSON.stringify({ text: '', durationMs: 90 }),

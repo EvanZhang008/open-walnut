@@ -26,19 +26,35 @@ export const sttRouter = Router();
 
 const ALLOWED_FORMATS = new Set(['webm', 'wav', 'mp3', 'ogg', 'mp4', 'm4a', 'flac']);
 
+/** The largest whole clip sent as raw bytes: about two hours of the Mac app recorder (1.7 MB a minute). */
+export const STT_CLIP_RAW_LIMIT = '200mb';
+
+/** The fields of a raw-bytes clip, from its query string (the body is the audio). */
+function fieldsOfRawClip(query: Request['query']): { format?: string; language?: string; model?: string; surface?: string } {
+  const one = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
+  return { format: one(query.format), language: one(query.language), model: one(query.model), surface: one(query.surface) };
+}
+
 /**
  * POST /api/stt/transcribe
  * Body: { audio: string (base64), format: string, language?: string, model?: string }
+ *   or the clip itself as application/octet-stream, with format, language, model
+ *   and surface in the query (the web recorder: no base64, no size cap that a take reaches)
  *   model — optional: ggml model filename to use for a one-shot whisper-cli retry
  *           (bypasses the configured engine, useful for comparing models)
  * Response: { text: string, durationMs: number, debugAudioPath?: string }
  */
 sttRouter.post('/transcribe', express.json({ limit: '35mb' }), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { audio, format, language, model } = req.body;
+    // Raw bytes (the web recorder's whole clip, any length) carry their fields in
+    // the query; JSON carries them with the base64 audio.
+    const raw = Buffer.isBuffer(req.body) ? req.body : null;
+    const fields = raw ? fieldsOfRawClip(req.query) : req.body;
+    const { format, language, model } = fields;
+    const audio: unknown = raw ? (raw.length ? raw.toString('base64') : '') : fields.audio;
     // Where the dictation came from, kept with the recording for accuracy work.
     const origin = {
-      ...(typeof req.body.surface === 'string' && req.body.surface ? { surface: req.body.surface.slice(0, 100) } : {}),
+      ...(typeof fields.surface === 'string' && fields.surface ? { surface: fields.surface.slice(0, 100) } : {}),
       ...(req.get('user-agent') ? { userAgent: String(req.get('user-agent')).slice(0, 200) } : {}),
     };
     if (!audio || typeof audio !== 'string') {
@@ -54,8 +70,8 @@ sttRouter.post('/transcribe', express.json({ limit: '35mb' }), async (req: Reque
       return;
     }
 
-    // Limit size: ~25MB base64 ≈ ~18MB raw
-    if (audio.length > 25 * 1024 * 1024) {
+    // Limit size of the JSON lane: ~25MB base64 ≈ ~18MB raw (raw bytes are bounded by their parser)
+    if (!raw && audio.length > 25 * 1024 * 1024) {
       res.status(413).json({ error: 'Audio too large (max 25MB base64)' });
       return;
     }
@@ -114,6 +130,12 @@ sttRouter.post('/transcribe', express.json({ limit: '35mb' }), async (req: Reque
         ...origin,
             error: engineErr instanceof Error ? engineErr.message : String(engineErr),
           }).catch(() => {});
+          // The clip is stored: its id lets Retry hear it again in place, with no
+          // upload (a long take's base64 does not fit /save).
+          const message = engineErr instanceof Error ? engineErr.message : String(engineErr);
+          log.stt.error(`Transcription failed, recording ${saved.id} kept for retry: ${message}`);
+          res.status(500).json({ error: message, recordingId: saved.id });
+          return;
         }
         throw engineErr;
       }
