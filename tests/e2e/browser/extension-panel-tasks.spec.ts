@@ -155,14 +155,15 @@ test('Ask and Tasks: approvals that read the same say which of them each is and 
 test('Ask: an answer that fails says why in the strip, and the card\'s notes show as on Home (review round 2, finding 3)', async () => {
   test.setTimeout(120_000)
   const v = askView(panel)
-  // A Face ID ask on a server with no signing device is answered by tap, and the card says so.
+  // An older script's Face ID ask: a tap here, like every approval.
   const what = `Publish build ${Date.now().toString(36)}`
   const made = await lab.doc.request.post(`${lab.base}/api/v1/approvals`, { data: { what, mode: 'biometric', timeout_ms: 300_000 } })
   expect(made.ok(), await made.text()).toBe(true)
-  const a = ((await made.json()) as { approval: { id: string; downgraded?: string } }).approval
+  const a = ((await made.json()) as { approval: { id: string; mode: string } }).approval
+  expect(a.mode).toBe('tap')
   const row = v.locator(`[data-testid="ext-ask-approval"][data-approval-id="${a.id}"]`)
   await expect(row).toBeVisible({ timeout: 20_000 })
-  if (a.downgraded) await expect(row.locator('.approval-note').first()).toHaveText(a.downgraded)
+  await expect(row.getByRole('button', { name: 'Approve', exact: true })).toBeEnabled()
   // The server refuses the answer: the strip says why, under buttons that came back.
   const answer = new RegExp(`/api/v1/approvals/${a.id}/answer`)
   const refusal = 'This request was already answered on another device.'
@@ -193,7 +194,7 @@ test('Ask: an answer that fails says why in the strip, and the card\'s notes sho
   await expect(row).toHaveCount(0, { timeout: 15_000 })
 })
 
-test('Ask: an agent\'s browser step reads whole (what, the site, why it waits), and unlocking in place has no empty band (review round 3)', async () => {
+test('Ask: an agent\'s browser step reads whole (what, the site, why it waits), with Approve beside Deny (review round 3)', async () => {
   test.setTimeout(120_000)
   await panel.setViewportSize({ width: 400, height: 760 })
   const v = askView(panel)
@@ -222,20 +223,10 @@ test('Ask: an agent\'s browser step reads whole (what, the site, why it waits), 
     const rb = (await row.boundingBox())!
     expect(tb.width).toBeGreaterThan(rb.width * 0.8)
     await shot(panel, 'r3-ask-approval-whole')
-    const unlock = row.getByTestId('approval-unlock-to-approve')
-    if (await unlock.isVisible({ timeout: 10_000 }).catch(() => false)) {
-      await unlock.click()
-      const label = row.locator('.approval-unlock-label')
-      await expect(label).toBeVisible()
-      const who = (await row.locator('.ext-ask-approval-who').boundingBox())!
-      const lb = (await label.boundingBox())!
-      // Right under who asks: the row's own gap, no band (it was about 24 px of nothing).
-      expect(lb.y - (who.y + who.height)).toBeLessThanOrEqual(10)
-      await shot(panel, 'r3-ask-approval-unlock')
-      await row.getByRole('button', { name: 'Cancel' }).click()
-    } else {
-      test.info().annotations.push({ type: 'note', description: 'Passwords shared an unlock here: no unlock form to measure' })
-    }
+    // An older Walnut's guarded ask: Approve beside Deny, both enabled, never an unlock in place.
+    await expect(row.getByRole('button', { name: 'Approve', exact: true })).toBeEnabled()
+    await expect(row.getByRole('button', { name: 'Deny', exact: true })).toBeEnabled()
+    await expect(row.getByTestId('approval-unlock-to-approve')).toHaveCount(0)
   } finally {
     await lab.ctx.unroute(list)
     // The made-up request leaves the view with the real list.

@@ -1,7 +1,7 @@
 /**
- * The Approvals switch fails closed (src/core/approvals/ask-me.ts): a switch file or a keys file
- * that is there but does not read never reads as "off" or "no device", and a phone key added while
- * approvals are on cannot turn them off for its first day.
+ * The Approvals switch fails closed (src/core/approvals/ask-me.ts): a switch file that is there but
+ * does not read never reads as "off", and config.yaml can turn it on but never off. No device key
+ * takes part (2026-11-21: a person turns it off from any device they are signed in on).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -11,7 +11,7 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-ask-me-latch'))
 
 import { WALNUT_HOME } from '../../../src/constants.js'
-import { _resetAskMeLatchForTesting, askMeOf, keyMayTurnOff, loadAskMeLatch, offNeedsSignature, PHONE_KEY_SETTLE_MS, setAskMe } from '../../../src/core/approvals/ask-me.js'
+import { _resetAskMeLatchForTesting, askMeOf, loadAskMeLatch, setAskMe } from '../../../src/core/approvals/ask-me.js'
 
 const dir = () => path.join(WALNUT_HOME, 'approvals')
 const OFF = { approvals: { ask_me: false } }
@@ -46,39 +46,18 @@ describe('the switch file', () => {
   })
 })
 
-describe('the keys file', () => {
-  it('none at all: no device signs', async () => {
-    expect(await offNeedsSignature()).toBe(false)
-  })
-  it('there but unreadable or broken: a signature is needed', async () => {
-    await fs.writeFile(path.join(dir(), 'keys.json'), '{"keys": [')
-    expect(await offNeedsSignature()).toBe(true)
-    await fs.writeFile(path.join(dir(), 'keys.json'), '{}')
-    expect(await offNeedsSignature()).toBe(true)
-    await fs.rm(path.join(dir(), 'keys.json'))
-    await fs.mkdir(path.join(dir(), 'keys.json'))
-    expect(await offNeedsSignature()).toBe(true)
-  })
-  it('only pending keys: no device signs yet', async () => {
-    await fs.writeFile(path.join(dir(), 'keys.json'), JSON.stringify({ version: 1, keys: [{ id: 'ak-1', status: 'pending' }] }))
-    expect(await offNeedsSignature()).toBe(false)
-  })
-})
-
-describe('which key may turn approvals off', () => {
-  it('the Mac app any time; a phone from before approvals went on, or after a day', async () => {
-    const before = new Date(Date.now() - 60_000).toISOString()
+describe('a person turns it off and on', () => {
+  it('an off the person set holds across a restart, and a keys.json an older Walnut left changes nothing', async () => {
+    // An older Walnut's device keys, active: they once made an off need a signature.
+    await fs.writeFile(path.join(dir(), 'keys.json'), JSON.stringify({ version: 1, keys: [{ id: 'ak-1', status: 'active', kind: 'iphone' }] }))
     await setAskMe(true, { person: true })
-    const now = Date.now()
-    const after = new Date(now + 1000).toISOString()
-    expect(keyMayTurnOff({ kind: 'mac-app', createdAt: after, activatedAt: after }, now)).toBe(true)
-    expect(keyMayTurnOff({ kind: 'iphone', createdAt: before, activatedAt: before }, now)).toBe(true)
-    expect(keyMayTurnOff({ kind: 'iphone', createdAt: after, activatedAt: after }, now + 2000)).toBe(false)
-    expect(keyMayTurnOff({ kind: 'iphone', createdAt: after, activatedAt: after }, now + 1000 + PHONE_KEY_SETTLE_MS)).toBe(true)
-    expect(keyMayTurnOff({ kind: 'iphone', createdAt: 'not a date' }, now)).toBe(false)
-    expect(keyMayTurnOff(undefined, now)).toBe(false)
-    // Saving on again keeps when approvals went on, so a later key never becomes "from before".
+    expect(askMeOf(OFF, {})).toBe(true)
+    await setAskMe(false, { person: true })
+    expect(askMeOf(OFF, {})).toBe(false)
+    _resetAskMeLatchForTesting()
+    await loadAskMeLatch()
+    expect(askMeOf(OFF, {})).toBe(false)
     await setAskMe(true, { person: true })
-    expect(keyMayTurnOff({ kind: 'iphone', createdAt: after, activatedAt: after }, now + 2000)).toBe(false)
+    expect(askMeOf(OFF, {})).toBe(true)
   })
 })

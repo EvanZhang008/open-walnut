@@ -26,8 +26,6 @@ import { startServer, stopServer } from '../../src/web/server.js'
 import * as hub from '../../src/core/browser-control/hub.js'
 import { createSessionRecord } from '../../src/core/session-tracker.js'
 import { _resetFreshSignInForTesting } from '../../src/core/browser-control/fresh-sign-in.js'
-import { answerMessage, keyIdOf } from '../../src/core/approvals/digest.js'
-import crypto from 'node:crypto'
 
 let base = ''
 
@@ -253,7 +251,7 @@ describe('a session in the person\'s browser', () => {
     ext.persons.unshift({ id: 11, url: 'https://www.bank.example.test/accounts', title: 'Accounts', active: true })
   })
 
-  it('a session\'s fresh_sign_in only asks the person: nothing fills until they approve with proof, and the yes is for that tab alone', async () => {
+  it('a session\'s fresh_sign_in only asks the person: nothing fills until they tap Approve, and the yes is for that tab alone', async () => {
     _resetFreshSignInForTesting()
     const ask = await http('POST', '/browser/act', { action: 'fill_login', tab: agentTab, fresh_sign_in: true }, SESSION())
     expect(ask.status, JSON.stringify(ask.body)).toBe(202)
@@ -264,17 +262,13 @@ describe('a session in the person\'s browser', () => {
     // The approval names the site and the person's tab.
     const approval = (await http('GET', `/approvals/${ask.body.request}`)).body.approval
     expect(approval.what).toMatch(/sign in again on example\.test\? You already have it open \(tab 11 \("Accounts"\)\)/)
-    // A plain approve from this machine (what the agent itself could send) is no proof.
-    expect((await http('POST', `/approvals/${ask.body.request}/answer`, { decision: 'approve' })).status).toBe(403)
+    // The agent cannot answer its own ask: its session's call is refused, and nothing fills.
+    expect((await http('POST', `/approvals/${ask.body.request}/answer`, { decision: 'approve' }, SESSION())).status).toBe(403)
     expect((await http('POST', '/browser/act', { action: 'fill_login', tab: agentTab, request: ask.body.request }, SESSION())).status).toBe(202)
-    // The person's phone signs a yes.
-    const { privateKey, publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
-    const spki = publicKey.export({ format: 'der', type: 'spki' }).toString('base64')
+    // The person taps Approve on their paired phone.
     const phone = await http('POST', '/api/devices', { name: 'browser-view-e2e-phone' })
-    expect((await http('POST', '/approvals/keys', { publicKey: spki, name: 'Test iPhone', kind: 'iphone' }, { authorization: `Bearer ${phone.body.token}` })).status).toBe(200)
     const digest = approval.digest as string
-    const signature = crypto.sign('sha256', Buffer.from(answerMessage(digest, 'approve')), { key: privateKey, dsaEncoding: 'der' }).toString('base64')
-    expect((await http('POST', `/approvals/${ask.body.request}/answer`, { decision: 'approve', keyId: keyIdOf(spki), signature })).status).toBe(200)
+    expect((await http('POST', `/approvals/${ask.body.request}/answer`, { decision: 'approve', digest, device: { name: 'Test iPhone', kind: 'iphone' } }, { authorization: `Bearer ${phone.body.token}` })).status).toBe(200)
     // Through to the vault now (nothing set up here, so the vault answers), past this rule.
     const through = await http('POST', '/browser/act', { action: 'fill_login', tab: agentTab, request: ask.body.request }, SESSION())
     expect(['site_open_in_person_tab', 'fresh_sign_in_needs_ok', 'same_site_unchecked', 'no_such_request']).not.toContain(through.body.code)

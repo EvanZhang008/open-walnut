@@ -36,7 +36,7 @@ extension's Settings, reached from the key's popover in the side panel or the to
 - **Any site, or only sites you allowed.** Turning agents on in the extension is the permission:
   by default agents may open any web page (Settings, Browser extension, "Allow any site"). Pick
   "Ask me first" there and the first time an agent opens a site Walnut asks you (a notification
-  in Walnut, and on your iPhone when it signs approvals, like any Walnut approval). Approve, and agents may use that site until
+  in Walnut, and on your iPhone, like any Walnut approval). Approve, and agents may use that site until
   you remove it; deny, and that task is refused there and not asked again for an hour. A page
   that moves to another site (a link, a redirect) asks the same way, and so does taking one of
   your tabs on a new site. A tab you hand over from the
@@ -50,12 +50,9 @@ extension's Settings, reached from the key's popover in the side panel or the to
   holds a newline counts as Enter. Walnut asks you as for a site (open 10 minutes); the card says
   who asks (the task's name, else "a Walnut agent"), the button, the site, for a send the message
   it sends and for an order the total the page shows, and the step runs once you approve, only
-  that step on that page with that message or total. An agent cannot answer for you: approving
-  needs Face ID on your iPhone or Touch ID in the Mac app when you have one that signs approvals,
-  or Passwords unlocked in the window you approve from (a plain Approve from this machine is
-  refused, `proof_needed`). With Passwords locked there, the card offers **Unlock to approve**:
-  your master password in place, then Approve (also on a Needs you row and in the side panel).
-  The card and the words an agent reads name only the devices you have. Opening, reading, typing, searching, filtering, Next, signing in and Add to cart
+  that step on that page with that message or total. An agent cannot answer for you: only a
+  person's tap on a device they are signed in on approves it (the web console, the Mac app, the
+  side panel, the iPhone app), never a session's call (`docs/reference/approvals.md`). Opening, reading, typing, searching, filtering, Next, signing in and Add to cart
   never ask (Add to cart: nothing leaves your hands until the order is placed, and that step asks).
   The rules are in `packages/browser-extension/src/page-agent-outward.ts`.
   **What this does not cover:** the ask judges only an agent's own click, key or typed text. It

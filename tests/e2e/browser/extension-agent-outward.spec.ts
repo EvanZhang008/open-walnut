@@ -4,8 +4,8 @@
  *    switch stays off, an agent cannot open or take another tab, and giving the tab back ends it;
  *  - a click, Enter or other key that places an order, sends a message or presses Enter in a chat
  *    box waits for the person's yes through Walnut's approvals (also with "Allow any site"), and
- *    runs only once they approved with a proof (a plain Approve from this machine is refused, and
- *    the step still waits); a no stops it; Add to cart, search and sign in never ask;
+ *    runs only once they tapped Approve (the agent's own Approve is refused, and the step still
+ *    waits); a no stops it; Add to cart, search and sign in never ask;
  *  - keys are judged where the focus is: Enter or Space on a focused "Place order" button,
  *    Control+Enter in a message box, Enter in a chat box with no form, typing into a button with
  *    submit; real input's own check (locate) holds Meta+Enter and typed text with a newline;
@@ -23,7 +23,6 @@ import os from 'node:os'
 import path from 'node:path'
 import { bunRuntime } from '../../helpers/bun-runtime'
 import { holdApprovalsLock } from './approvals-lock'
-import { vaultSession as openVaultSession } from './vault-session-helper'
 import { holdVaultLock } from './vault-lock'
 
 test.describe.configure({ mode: 'serial' })
@@ -122,15 +121,9 @@ async function act(page: Page, body: Record<string, unknown>): Promise<{ status:
   const r = await page.request.post(`${base}/api/v1/browser/act`, { data: body, headers: { 'x-walnut-caller-kind': 'automation' }, timeout: 80_000 })
   return { status: r.status(), body: await r.json() }
 }
-const MASTER = 'Correct Horse Battery Staple 42'
-/** The person's proof in this window: Passwords unlocked (set up first on a fresh server). */
-async function vaultSession(page: Page): Promise<string> {
-  return openVaultSession(page, base, { password: MASTER })
-}
-/** The person answers: an Approve carries their proof (an unlocked Passwords session); a no needs none. */
+/** The person answers with a tap in their window. */
 async function answer(page: Page, id: string, decision: 'approve' | 'deny'): Promise<void> {
-  const headers = decision === 'approve' ? { 'x-walnut-vault-session': await vaultSession(page) } : undefined
-  const r = await page.request.post(`${base}/api/v1/approvals/${id}/answer`, { data: { decision }, ...(headers ? { headers } : {}) })
+  const r = await page.request.post(`${base}/api/v1/approvals/${id}/answer`, { data: { decision, device: { name: 'Web console', kind: 'web' } } })
   expect(r.ok(), await r.text()).toBe(true)
 }
 const refOf = (snapshot: string, re: RegExp): string => {
@@ -279,30 +272,23 @@ test('Place order waits for the person, and runs only after they approve', async
   // The ask names this step only: another step with it is refused.
   const other = await act(page, { action: 'click', tab, ref: refOf(s, /button "Add to cart"/), request: ask.body.request })
   expect(other.body.code).toBe('no_such_request')
-  // A plain Approve from this machine, with no signature and no Passwords session, is what any
-  // local process (the asking agent too) could send: refused, and the step still waits.
-  const forged = await page.request.post(`${base}/api/v1/approvals/${ask.body.request}/answer`, { data: { decision: 'approve' } })
+  // The asking agent's own Approve: refused, and the step still waits.
+  const forged = await page.request.post(`${base}/api/v1/approvals/${ask.body.request}/answer`, { data: { decision: 'approve' }, headers: { 'x-walnut-caller-kind': 'automation' } })
   expect(forged.status(), await forged.text()).toBe(403)
-  expect((await forged.json()).code).toBe('proof_needed')
+  expect((await forged.json()).code).toBe('human_only')
   const still = await act(page, { action: 'click', tab, ref: place, request: ask.body.request })
   expect(still.status, JSON.stringify(still.body)).toBe(202)
   await expect(shop.locator('#out')).toHaveText('')
-  // The person approves on Walnut's card. Passwords is locked in that window, so the card offers
-  // "Unlock to approve" in place: the master password, then Approve.
-  // Passwords set up (a fresh fixture server has none); that window holds no unlock of its own.
-  await vaultSession(page)
+  // The person approves on Walnut's card with one tap, Passwords locked or not.
   const con = await ctx.newPage()
   await con.goto(`${base}/`)
   const card = con.locator(`[data-testid="approval-card"][data-approval-id="${ask.body.request}"]`)
   await expect(card).toBeVisible({ timeout: 30_000 })
   // On Home the card is one line: who asks sits beside the buttons, its full words in the title.
   await expect(card.locator('.approval-line-who')).toHaveAttribute('title', /on this computer/)
-  await expect(card.getByRole('button', { name: 'Approve', exact: true })).toHaveCount(0)
-  await card.getByTestId('approval-unlock-to-approve').click()
-  await card.getByLabel('Master password').fill(MASTER)
-  await card.getByRole('button', { name: 'Unlock', exact: true }).click()
-  await expect.poll(async () => (await card.getByRole('button', { name: 'Approve', exact: true }).count()) || await card.innerText(), { timeout: 20_000 }).toBe(1)
-  await card.screenshot({ path: path.join(shots, 'card-unlocked-approve.png') })
+  await expect(card.getByRole('button', { name: 'Approve', exact: true })).toBeEnabled()
+  await expect(card.getByTestId('approval-unlock-to-approve')).toHaveCount(0)
+  await card.screenshot({ path: path.join(shots, 'card-approve.png') })
   await card.getByRole('button', { name: 'Approve', exact: true }).click()
   await expect.poll(async () => ((await (await page.request.get(`${base}/api/v1/approvals/${ask.body.request}`)).json()).approval ?? {}).status, { timeout: 15_000 }).toBe('approved')
   await con.close()

@@ -1,11 +1,10 @@
 /**
  * Every signature the Mac app's build scripts put on Walnut.app with a real identity keeps the
- * hardened runtime and the app's entitlements. Walnut takes the Mac app's Touch ID key only from a
- * process running the signed app under the hardened runtime (src/core/approvals/mac-app-proof.ts).
- * 2026-11-08 desktop/build.sh began signing the app a second time, after embedding Demo, with a plain
- * `codesign --force --sign`, which drops both; every app it built since ran without the runtime and
- * read as "not the Mac app" (found 2026-11-18). Enumerated from the scripts: every codesign that signs
- * the app bundle with an identity, a new one included.
+ * hardened runtime and the app's entitlements: no other program may load code into the app or attach
+ * a debugger to it, and a local build runs as the released one does. 2026-11-08 desktop/build.sh began
+ * signing the app a second time, after embedding Demo, with a plain `codesign --force --sign`, which
+ * drops both; every app it built since ran without the runtime (found 2026-11-18). Enumerated from the
+ * scripts: every codesign that signs the app bundle with an identity, a new one included.
  */
 import fs from 'node:fs'
 import path from 'node:path'

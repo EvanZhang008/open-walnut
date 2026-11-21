@@ -39,8 +39,8 @@ final class ApprovalSummaryTests: XCTestCase {
         XCTAssertFalse(a.awaitsSummary)
     }
 
-    /// A Git push's signed envelope (2026-11-14: the phone showed it whole, as raw JSON, above the buttons).
-    private func decodeSigned() throws -> Approval {
+    /// A Git push's single-use envelope (2026-11-14: the phone showed it whole, as raw JSON, above the buttons).
+    private func decodeSingleUse() throws -> Approval {
         let ctx = #"{"commitSha":"770164961fc7c5491a827f1047c45c94989b8071","operation":"push","remote":"origin","remoteRef":"refs/heads/mainline","repository":"/local/home/dev/.local/state/open-walnut/tasks/t-8252/meta-fresh","version":"walnut-git-operation-v1"}"#
         let env: [String: Any] = ["version": "walnut-single-use-v1", "nonce": "ab", "context": ctx, "why": "x"]
         let detail = String(data: try JSONSerialization.data(withJSONObject: env), encoding: .utf8)!
@@ -53,14 +53,14 @@ final class ApprovalSummaryTests: XCTestCase {
         return try JSONDecoder().decode(Approval.self, from: try JSONSerialization.data(withJSONObject: obj))
     }
 
-    func testASignedEnvelopeFoldsUnderDetailsAndTheRepoLineLeads() throws {
-        let a = try decodeSigned()
+    func testASingleUseEnvelopeFoldsUnderDetailsAndTheRepoLineLeads() throws {
+        let a = try decodeSingleUse()
         XCTAssertEqual(a.lead.text, "Pushes the two tracking commits to the shared repo.")
-        XCTAssertNil(a.words, "a signed envelope is never shown as the request in words")
+        XCTAssertNil(a.words, "a single-use envelope is never shown as the request in words")
         let tech = try XCTUnwrap(a.technicalDetail)
-        XCTAssertTrue(tech.signed)
+        XCTAssertTrue(tech.bound)
         XCTAssertTrue(tech.text.contains("\"remoteRef\" : \"refs/heads/mainline\""), tech.text)
-        XCTAssertFalse(tech.text.contains("walnut-single-use-v1"), "Details holds the signed context, not the envelope around it")
+        XCTAssertFalse(tech.text.contains("walnut-single-use-v1"), "Details holds the exact context, not the envelope around it")
         XCTAssertEqual(a.repoLine, "~/.local/state/open-walnut/tasks/t-8252/meta-fresh \u{2192} mainline")
     }
 

@@ -7,9 +7,9 @@
  *    every item meanwhile);
  *  - R2-3: an unlock made elsewhere on this computer reaches an open Settings â†’ Passwords with no
  *    reload (it stayed "Unlock Passwords in this window to change this" until one);
- *  - R2-2: a guarded approval card reads Approve at once while Passwords is unlocked on this
- *    computer, and never "Unlock to approve" for an unlock it can share; with nothing to share it
- *    reads "Unlock to approve", and becomes Approve by itself when an unlock is made elsewhere.
+ *  - R2-2: an approval card never waits on Passwords (2026-11-21: a tap on any device the person is
+ *    signed in on approves): an older guarded ask reads Approve with Passwords locked here, and no
+ *    "Unlock to approve" ever shows.
  *
  * "Elsewhere on this computer" is a second browser (its own storage) on the same Walnut, which is
  * what the extension is to the server. Only this spec's window shares an unlock in the fixture
@@ -159,15 +159,15 @@ test('R2-3: an unlock made elsewhere on this computer reaches an open Settings â
   await p2.close()
 })
 
-test('R2-2: a guarded approval card reads the live vault: Approve while it can share an unlock, else Unlock to approve until one is made', async ({ browser }) => {
-  test.setTimeout(120_000)
+test('R2-2: an older guarded approval card offers Approve with Passwords locked here, never Unlock to approve', async () => {
+  test.setTimeout(60_000)
   const now = Date.now()
   const approval = {
-    id: `apr-live-${stamp()}`, what: 'Let a Walnut agent click button "Place order" on shop.example.test', digest: 'd', mode: 'tap', guard: 'person',
+    id: `apr-live-${stamp()}`, what: 'Let a Walnut agent click button "Place order" on shop.example.test', digest: 'd', mode: 'biometric', guard: 'person',
     requester: { host: '__local__', command: 'walnut browser click', local: true },
     createdAt: new Date(now).toISOString(), expiresAt: new Date(now + 600_000).toISOString(), status: 'pending',
   }
-  // This window's list holds the one guarded ask (a real one comes only from an agent's browser step).
+  // This window's list holds one ask as an older Walnut wrote it (Face ID, guarded by the person's Passwords).
   await page.route(/\/api\/v1\/approvals(\?.*)?$/, (route) => route.request().method() === 'GET'
     ? route.fulfill({ json: { approvals: [approval], keys: [] } })
     : route.continue())
@@ -178,60 +178,17 @@ test('R2-2: a guarded approval card reads the live vault: Approve while it can s
       .observe(document, { subtree: true, childList: true })
   })
   const card = page.locator(`[data-testid="corner-stack"] [data-testid="approval-card"][data-approval-id="${approval.id}"]`)
-
-  // Its own start, whatever specs beside it did to the shared vault (a Lock all, a recovery that
-  // ends every browser key): this window types the master password once (its browser key), locks
-  // only itself, and then the other browser unlocks, so there is exactly one unlock to share.
+  // Passwords locked in this window.
   await openPasswords(page)
   if (await page.getByTestId('pw-unlock').isVisible()) await unlockHere(page)
-  await nameThisWindow()
   await lockThisBrowserBehindItsBack(page)
   await expect(page.getByTestId('pw-unlock')).toBeVisible({ timeout: 10_000 })
-  const first = await unlockInAnotherBrowser(browser)
-  await first.close()
-  // The open page shared it at once (vault:changed), as R2-1 and R2-3 show.
-  await expect(page.getByTestId('pw-app')).toBeVisible({ timeout: 5_000 })
-
-  // Unlocked on this computer and this window holds no unlock of its own (a new window of this
-  // browser, say): it shares that one, and the card reads Approve from the start.
   await page.evaluate(() => localStorage.removeItem('walnut.vault.session'))
   await page.reload()
   await expect(card).toBeVisible({ timeout: 20_000 })
   await expect(card.getByRole('button', { name: 'Approve', exact: true })).toBeEnabled({ timeout: 5_000 })
+  await expect(card.getByRole('button', { name: 'Deny', exact: true })).toBeEnabled()
   expect(await page.evaluate(() => (window as unknown as { __sawUnlockToApprove?: boolean }).__sawUnlockToApprove ?? false)).toBe(false)
-  expect(await page.evaluate(() => !!localStorage.getItem('walnut.vault.session'))).toBe(true)
-  await card.screenshot({ path: `${SHOTS}/r2-2-card-approve.png` })
-
-  // Locked here, nothing newer to share: "Unlock to approve", which asks for the master password.
-  await lockThisBrowserBehindItsBack(page)
-  await expect(card.getByTestId('approval-unlock-to-approve')).toBeVisible({ timeout: 5_000 })
-  await card.getByTestId('approval-unlock-to-approve').click()
-  await expect(card.getByTestId('approval-unlock')).toBeVisible()
-  await expect(card.getByLabel('Master password')).toBeVisible()
-  await card.screenshot({ path: `${SHOTS}/r2-2-card-unlock-form.png` })
-  await card.getByRole('button', { name: 'Cancel' }).click()
-  await expect(card.getByTestId('approval-unlock-to-approve')).toBeVisible()
-
-  // A token left in storage from an unlock that ended while no page was open (review R1): the
-  // card reads it live first, never offers an Approve the server would refuse, and drops it.
-  await page.addInitScript(() => {
-    const w = window as unknown as { __sawEnabledApprove?: boolean }
-    new MutationObserver(() => {
-      for (const b of document.querySelectorAll<HTMLButtonElement>('[data-testid="approval-card"] .approval-btn-approve')) {
-        if (b.textContent?.trim() === 'Approve' && !b.disabled) w.__sawEnabledApprove = true
-      }
-    }).observe(document, { subtree: true, childList: true, attributes: true })
-  })
-  await page.evaluate(() => localStorage.setItem('walnut.vault.session', 'an-unlock-that-ended-while-no-page-was-open'))
-  await page.reload()
-  await expect(card.getByTestId('approval-unlock-to-approve')).toBeVisible({ timeout: 20_000 })
-  expect(await page.evaluate(() => (window as unknown as { __sawEnabledApprove?: boolean }).__sawEnabledApprove ?? false)).toBe(false)
-  await expect.poll(() => page.evaluate(() => localStorage.getItem('walnut.vault.session'))).toBeNull()
-
-  // An unlock made elsewhere on this computer: the card becomes Approve by itself, no click here.
-  const p2 = await unlockInAnotherBrowser(browser)
-  await expect(card.getByRole('button', { name: 'Approve', exact: true })).toBeEnabled({ timeout: 5_000 })
-  await expect(card.getByTestId('approval-unlock-to-approve')).toHaveCount(0)
-  await p2.close()
+  await card.screenshot({ path: `${SHOTS}/r2-2-card-approve-locked.png` })
   await page.unroute(/\/api\/v1\/approvals(\?.*)?$/)
 })

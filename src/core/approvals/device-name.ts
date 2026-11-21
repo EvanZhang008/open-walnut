@@ -1,13 +1,12 @@
 /**
- * The name a person reads for a device that signs or answers approvals.
+ * The name a person reads for a device that answers approvals.
  *
  * A device names itself: the Mac app sends the Mac's computer name, the iPhone app the phone's.
  * Some Macs are named by whoever set them up with a generated id (2026-11-18: the person's work
  * Mac has a name like "a1b2c3d4e5f6"), which read as an internal number on the approval card and in "approved
  * on …" (the user: "why ask me? what?"). A name like that reads as the kind of device instead.
- * keys.json and the approval records keep the name the device sent (keys.ts matches one Mac's keys
- * by it); every view a person or an agent reads goes through deviceLabel (store.ts viewOf and the
- * answer it writes, routes/approvals-v1.ts keyView). Pure.
+ * The approval records keep the name the device sent; every view a person or an agent reads goes
+ * through deviceLabel (store.ts viewOf and the answer it writes). Pure.
  */
 
 /**

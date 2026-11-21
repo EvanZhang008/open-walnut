@@ -7,23 +7,20 @@
  * ApprovalPrompts, mounted once in App, feeds it (the first read, `approval:changed`, a
  * reconnect); everything else only reads it and calls the actions here, so an answer given
  * in a row takes the card, the row and the notification off together.
+ *
+ * Every approval is answered with one tap here, as on every device the person is signed in on
+ * (src/core/approvals/types.ts; 2026-11-21, the user: no signing key, a signed-in device approves).
  */
 import { useSyncExternalStore } from 'react';
-import { answerApproval, enrollApprovalKey, listApprovals, setApprovalsAskMe, turnApprovalsOff, type Approval, type ApprovalKey } from '@/api/approvals';
-import { onVaultSessionChange, vaultSession } from '@/api/vault';
-import { checkVault, vaultLive } from '@/api/vault-live';
-import { howToApprove, onlyDevice, signerKinds } from '../../../../src/core/approvals/signer-words';
-import { hasTouchIdBridge, touchIdEnroll, touchIdSign, touchIdStatus, type TouchIdStatus } from './touch-id-bridge';
+import { answerApproval, listApprovals, setApprovalsAskMe, type Approval } from '@/api/approvals';
 import { clearApprovalNotice, keepApprovalNotices, setApprovalOpener, showApprovalNotice } from './approval-notify';
 import { testRunLabel } from '@/api/test-run';
+import { inMacApp } from '@/utils/mac-app';
 import { log } from '@/utils/log';
 
 export interface ApprovalsState {
   /** Pending, by id, as the server last said (expiry is judged at render time). */
   items: ReadonlyMap<string, Approval>;
-  keys: readonly ApprovalKey[];
-  /** The Mac app's Touch ID signer, once asked; null in a browser or before the answer. */
-  touchId: TouchIdStatus | null;
   /** An answer on its way, by id: which decision. */
   busy: Readonly<Record<string, 'approve' | 'deny'>>;
   errors: Readonly<Record<string, string>>;
@@ -31,14 +28,6 @@ export interface ApprovalsState {
   done: Readonly<Record<string, Approval>>;
   /** The approval the dialog shows (a row's click, a notification's click), or null. */
   openId: string | null;
-  /** The approval whose card shows its "Unlock to approve" form (ApprovalUnlock.tsx), or null. */
-  unlockId: string | null;
-  /**
-   * This window is reading whether Passwords is unlocked for it (it may share an unlock made on
-   * this computer): a guarded card shows a waiting Approve meanwhile, never "Unlock to approve"
-   * for an unlock it is about to share.
-   */
-  vaultLooking: boolean;
   /**
    * The person just turned approvals off from a card ("Approve, and stop asking me"), on the
    * approval it was clicked on: the corner says so with Undo for a while. `undone` once Undo ran.
@@ -48,7 +37,7 @@ export interface ApprovalsState {
   stoppingId: string | null;
 }
 
-const EMPTY: ApprovalsState = { items: new Map(), keys: [], touchId: null, busy: {}, errors: {}, done: {}, openId: null, unlockId: null, vaultLooking: false, stoppedAsking: null, stoppingId: null };
+const EMPTY: ApprovalsState = { items: new Map(), busy: {}, errors: {}, done: {}, openId: null, stoppedAsking: null, stoppingId: null };
 let state: ApprovalsState = EMPTY;
 const subs = new Set<() => void>();
 /** Approvals this page has raised a system notification for, so a re-read never repeats one. */
@@ -56,42 +45,12 @@ const noticed = new Set<string>();
 /** Answered here or heard settled, with when: a list read that started before must not bring one back. */
 const settledAt = new Map<string, number>();
 const SETTLED_MEMORY_MS = 120_000;
-/** Only the newest list read lands (several can be in flight: mount, reconnect, a key change). */
+/** Only the newest list read lands (several can be in flight: mount, reconnect, an answer). */
 let readSeq = 0;
 
 function set(next: Partial<ApprovalsState>): void {
   state = { ...state, ...next };
   for (const fn of subs) fn();
-}
-
-// This window unlocked or locked Passwords: what each card offers changes (Approve, or Unlock to approve).
-// An unlock or a Lock elsewhere on this computer reaches it too (api/vault-live.ts, `vault:changed`).
-if (typeof window !== 'undefined') onVaultSessionChange(() => set(state.unlockId && vaultSession() ? { unlockId: null } : {}));
-
-/** A guarded ask this window approves only with Passwords unlocked here (not one Face ID or Touch ID signs). */
-function wantsUnlock(a: Approval): boolean {
-  return !!a.guard && a.status === 'pending' && !(a.guard === 'vault-sensitive' && a.mode === 'biometric');
-}
-
-/**
- * A guarded ask is waiting and this window holds no unlock it knows is live: read the vault now
- * (api/vault-live.ts checkVault). That shares an unlock made on this computer (the extension's,
- * another window's) when there is one, so the card reads Approve at once instead of "Unlock to
- * approve" (review 2026-11-06: it said "Unlock to approve" while Passwords was unlocked, and a click
- * just turned it into Approve); and it drops a token left in storage whose unlock ended while no
- * page was open, so the card never offers an Approve the server refuses. The read answers within
- * two reads of at most READ_TIMEOUT_MS each; no answer leaves "Unlock to approve". Returns the patch
- * that marks the look, to go out with the items it is for.
- */
-function lookForUnlock(items: ReadonlyMap<string, Approval>): Partial<ApprovalsState> {
-  if (state.vaultLooking || vaultLive() || ![...items.values()].some(wantsUnlock)) return {};
-  void checkVault().finally(() => set({ vaultLooking: false }));
-  return { vaultLooking: true };
-}
-
-/** Show the unlock form on an approval's card or row (null: close it). */
-export function openUnlock(id: string | null): void {
-  set({ unlockId: id });
 }
 
 function subscribe(fn: () => void): () => void {
@@ -120,68 +79,6 @@ export function pendingAt(s: ApprovalsState, now: number): Approval[] {
 export function approvalsForNode(list: readonly Approval[], kind: string, taskIds: ReadonlySet<string>): Approval[] {
   if (kind === 'main') return [...list];
   return list.filter((a) => !!a.requester.taskId && taskIds.has(a.requester.taskId));
-}
-
-/** The Mac app's own key, when it has one on the server. */
-export function myKeyOf(s: ApprovalsState): ApprovalKey | undefined {
-  return s.keys.find((k) => k.id === s.touchId?.keyId);
-}
-
-/** This window signs a biometric approval itself (the Mac app with an active Touch ID key). */
-export function canSignHere(s: ApprovalsState): boolean {
-  return !!s.touchId?.available && myKeyOf(s)?.status === 'active';
-}
-
-/** The keys a single-use approval takes a signature from (store.ts allowedSigners); none = any signer. */
-function boundTo(a: Approval): string[] {
-  return a.signingKeyIds?.length ? a.signingKeyIds : a.signingKeyId ? [a.signingKeyId] : [];
-}
-
-/** Bound to keys this Mac does not hold: its Touch ID cannot approve it. */
-function boundElsewhere(s: ApprovalsState, a: Approval): boolean {
-  const keys = boundTo(a);
-  return keys.length > 0 && !keys.includes(s.touchId?.keyId ?? '');
-}
-
-/** The Approve this window offers: a tap, Touch ID, or none (approve it on the phone). */
-export function approveKind(s: ApprovalsState, a: Approval): 'tap' | 'touch-id' | null {
-  if (a.guard) {
-    // A vault ask: signed here when this Mac signs, else a tap only with Passwords unlocked here.
-    if (canSignHere(s)) return 'touch-id';
-    const sensitiveSigned = a.guard === 'vault-sensitive' && a.mode === 'biometric';
-    // A token only left in storage is no unlock until read live (lookForUnlock).
-    return !sensitiveSigned && vaultLive() ? 'tap' : null;
-  }
-  if (a.mode !== 'biometric') return 'tap';
-  // Bound to one device's key (or a set): only those devices approve it, never another signer.
-  if (boundElsewhere(s, a)) return null;
-  return canSignHere(s) ? 'touch-id' : null;
-}
-
-/** Why a biometric approval has no Approve here, in the words the person reads. */
-export function noApproveReason(s: ApprovalsState, a: Approval): string {
-  // Only the devices the person really has (their signing keys), and this window's unlock.
-  const kinds = signerKinds(s.keys);
-  if (a.guard === 'vault' || a.guard === 'person') return howToApprove(kinds, { unlock: true });
-  if (a.guard === 'vault-sensitive' && a.mode !== 'biometric') return 'Unlock Passwords in this window to approve.';
-  if (boundElsewhere(s, a)) return onlyDevice(s.keys.find((k) => boundTo(a).includes(k.id)));
-  if (s.touchId && !s.touchId.available && s.touchId.reason) return `${s.touchId.reason} Approve it on your iPhone with Face ID.`;
-  return kinds.length ? howToApprove(kinds, { unlock: false }) : 'Approve it on your iPhone with Face ID (or in the Walnut Mac app with Touch ID).';
-}
-
-/**
- * A guarded ask (`vault`, `person`) this window cannot approve yet but could after Passwords is
- * unlocked here: the card offers "Unlock to approve" (ApprovalUnlock.tsx). Not an item that needs
- * Face ID or Touch ID itself (vault-sensitive, biometric).
- */
-export function unlockApproves(s: ApprovalsState, a: Approval): boolean {
-  if (!a.guard || approveKind(s, a)) return false;
-  return !(a.guard === 'vault-sensitive' && a.mode === 'biometric');
-}
-
-/** Still reading whether this window may approve it (lookForUnlock): neither Approve nor "Unlock to approve" yet. */
-export function unlockUndecided(s: ApprovalsState, a: Approval): boolean {
-  return s.vaultLooking && unlockApproves(s, a);
 }
 
 function notice(a: Approval): void {
@@ -215,11 +112,7 @@ export async function refreshApprovals(): Promise<void> {
     const items = new Map(fresh.map((a) => [a.id, a]));
     // One that left the list while this window was away was answered elsewhere: its notice goes too.
     for (const id of state.items.keys()) if (!items.has(id)) clearApprovalNotice(id);
-    set({ items, keys: r.keys, ...lookForUnlock(items) });
-    // The Mac app whose key did not get in at start (Walnut was away): it tries again while no
-    // device signs, so the person's next approval here is still one touch.
-    if (state.touchId?.available && myKeyOf(state)?.status !== 'active' && !r.keys.some((k) => k.status === 'active')
-      && !enrollRefused && Date.now() - lastEnrollTry > ENROLL_RETRY_MS) void startTouchId();
+    set({ items });
     // The Mac app also takes back notices from before it started whose approval is gone now.
     keepApprovalNotices([...items.keys()]);
     for (const a of fresh) notice(a);
@@ -242,7 +135,7 @@ export function applyApprovalEvent(a: Approval): void {
     if (settledAt.has(a.id)) return;
     const items = new Map(state.items);
     items.set(a.id, a);
-    set({ items, ...lookForUnlock(items) });
+    set({ items });
     notice(a);
   } else if (state.items.has(a.id) || state.openId === a.id) {
     settle(a);
@@ -251,82 +144,26 @@ export function applyApprovalEvent(a: Approval): void {
   }
 }
 
-let enrolling = false;
-let lastEnrollTry = 0;
-const ENROLL_RETRY_MS = 60_000;
-/** The server did not take this app's key (core/approvals/keys.ts): retried only when the page loads again. */
-let enrollRefused = false;
+/** Which device this window is, for the record of who answered. */
+function thisDevice(): { name: string; kind: 'mac-app' | 'web' } {
+  return inMacApp() ? { name: 'Mac app', kind: 'mac-app' } : { name: 'Web console', kind: 'web' };
+}
+
 /**
- * The Mac app: learn whether Touch ID signs here, and enroll its key once. Never in a test window
- * (automation, a test-run label): a test's copy of the app is not the person's Mac, and its key once
- * reached the person's screen as "Let … sign your approvals" (2026-11-18). The app itself refuses a
- * copy started with another home folder too (desktop/ApprovalHome.swift); this keeps a test window
- * off the bridge altogether, so it neither makes a key nor signs.
+ * Answer one with a tap. The answer names the digest of the request this window shows, so a
+ * request that changed since is refused (409) and read again rather than approved unseen.
  */
-export async function startTouchId(): Promise<void> {
-  if (!hasTouchIdBridge() || testRunLabel()) return;
-  lastEnrollTry = Date.now();
-  const touchId = await touchIdStatus();
-  set({ touchId });
-  if (!touchId.available || !touchId.publicKey || enrolling) return;
-  await refreshApprovals();
-  // Known and signing already: nothing to do. Otherwise the app sends its key from its own
-  // process, which signs now, and the server retires this Mac's earlier keys (core/approvals/keys.ts);
-  // a key the server does not take is refused, and nothing is asked of the person.
-  const known = state.keys.find((k) => k.id === touchId.keyId);
-  if (known?.status === 'active') return;
-  enrolling = true;
-  try {
-    // The app sends it from its own process, which may be the first device (no setup step for
-    // the person); an older app has no such op, and the page's own request joins as before.
-    const native = await touchIdEnroll();
-    if (native && native.status >= 400) {
-      if (native.body.code === 'first_key_from_phone') enrollRefused = true;
-      throw new Error(`HTTP ${native.status}: ${String(native.body.error ?? '')}`);
-    }
-    // The app made a new key for this (never one it found on disk), so read its id again.
-    if (native) set({ touchId: await touchIdStatus() });
-    const r = native
-      ? native.body as { key: ApprovalKey }
-      : await enrollApprovalKey({ publicKey: touchId.publicKey, name: touchId.name ?? 'Mac', kind: 'mac-app' });
-    log.info('approvals', 'Mac app key enrolled', { keyId: r.key?.id, status: r.key?.status, native: !!native });
-    await refreshApprovals();
-  } catch (err) {
-    log.warn('approvals', 'Mac app key enroll failed', { error: String(err) });
-  } finally {
-    enrolling = false;
-  }
-}
-
-/** The answer route refused an unsigned Approve for want of a live Passwords unlock here. */
-function proofRefused(err: unknown): boolean {
-  const e = err as { status?: unknown; body?: { code?: unknown } };
-  return e?.status === 403 && (e.body?.code === 'proof_needed' || e.body?.code === 'vault_unlock_needed');
-}
-
-/** Answer one: a tap, or Touch ID first when `signed`. */
-export async function decideApproval(a: Approval, decision: 'approve' | 'deny', signed: boolean): Promise<void> {
+export async function decideApproval(a: Approval, decision: 'approve' | 'deny'): Promise<void> {
   if (state.busy[a.id]) return;
   const { [a.id]: _old, ...errors } = state.errors;
   set({ busy: { ...state.busy, [a.id]: decision }, errors });
   try {
-    const sig = signed ? await touchIdSign(a, decision) : undefined;
-    const mac = hasTouchIdBridge();
-    const r = await answerApproval(a.id, {
-      decision,
-      ...(sig ? { keyId: sig.keyId, signature: sig.signature } : {}),
-      device: { name: mac ? (state.touchId?.name ?? 'Mac app') : 'Web console', kind: mac ? 'mac-app' : 'web' },
-      ...(a.guard && decision === 'approve' && !sig && vaultSession() ? { vaultSession: vaultSession()! } : {}),
-    });
+    const r = await answerApproval(a.id, { decision, digest: a.digest, device: thisDevice() });
     settle(r.approval);
   } catch (err) {
     set({ errors: { ...state.errors, [a.id]: err instanceof Error ? err.message : String(err) } });
-    // Walnut wanted proof this window could not give (its unlock ended meanwhile): read the vault,
-    // which drops the dead token, and offer the unlock form in place of an Approve that fails again.
-    if (a.guard && decision === 'approve' && !signed && proofRefused(err)) {
-      await checkVault();
-      if (!vaultLive() && unlockApproves(state, a)) set({ unlockId: a.id });
-    }
+    // Changed, answered elsewhere or gone meanwhile: read the list so the card shows what is true now.
+    if ((err as { status?: unknown })?.status === 409) void refreshApprovals();
   } finally {
     const { [a.id]: _done, ...busy } = state.busy;
     set({ busy });
@@ -335,45 +172,22 @@ export async function decideApproval(a: Approval, decision: 'approve' | 'deny', 
 
 /**
  * "Approve, and stop asking me": the person turns the Approvals switch off from the card, and this
- * request is approved the way its Approve would (2026-11-12, the user: "don't need my approval for
- * anything"). Only for a request the switch covers (not a signed single-use one) that this window
- * can approve.
+ * request is approved (2026-11-12, the user: "don't need my approval for anything"). Only for a
+ * request the switch covers (not a single-use one, not an explicit `walnut approve`).
  */
 export async function approveAndStopAsking(a: Approval): Promise<void> {
-  const kind = approveKind(state, a);
-  if (!kind || a.singleUse || a.outsideSwitch || state.busy[a.id]) return;
-  // This one first: a cancelled Touch ID leaves the switch as it was.
+  if (a.singleUse || a.outsideSwitch || state.busy[a.id]) return;
   set({ stoppingId: a.id });
-  await decideApproval(a, 'approve', kind === 'touch-id');
+  await decideApproval(a, 'approve');
   if (state.done[a.id]?.status !== 'approved') { set({ stoppingId: null }); return; }
   try {
-    const off = await askApprovalsOff();
-    if ('approvalId' in off) {
-      // A device signs approvals: the off is its own Face ID / Touch ID approval, open now.
-      set({ stoppingId: null });
-      return;
-    }
+    await setApprovalsAskMe(false);
     log.info('approvals', 'the person turned approvals off from a card', { approvalId: a.id });
     showStopped({ id: a.id, at: Date.now() });
   } catch (err) {
     log.warn('approvals', 'turning approvals off from a card failed', { approvalId: a.id, error: err instanceof Error ? err.message : String(err) });
     set({ stoppingId: null, errors: { ...state.errors, [a.id]: 'Approved, but approvals could not be turned off. Try again in Settings › General.' } });
   }
-}
-
-/**
- * Turn approvals off, from Settings or a card. While a device signs approvals the server opens a
- * "Turn approvals off" approval instead (core/approvals/ask-me.ts): it is read in and opened here,
- * so its Approve with Touch ID (or the iPhone's Face ID) is the next thing the person sees.
- */
-export async function askApprovalsOff(): Promise<{ off: true } | { approvalId: string }> {
-  const out = await turnApprovalsOff();
-  if ('approvalId' in out) {
-    log.info('approvals', 'turning approvals off asks for a device signature', { approvalId: out.approvalId });
-    await refreshApprovals();
-    openApproval(out.approvalId);
-  }
-  return out;
 }
 
 /** How long the "won't ask you any more" note stays in the corner. */
@@ -420,8 +234,5 @@ export function resetApprovalsForTest(): void {
   noticed.clear();
   settledAt.clear();
   readSeq = 0;
-  enrolling = false;
-  lastEnrollTry = 0;
-  enrollRefused = false;
   for (const fn of subs) fn();
 }

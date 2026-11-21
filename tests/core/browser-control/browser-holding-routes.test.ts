@@ -15,7 +15,6 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vites
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import crypto from 'node:crypto'
 import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
 import { createMockConstants } from '../../helpers/mock-constants.js'
@@ -28,7 +27,6 @@ import { approvalsV1Router } from '../../../src/web/routes/approvals-v1.js'
 import * as h from '../../../src/core/browser-control/hub.js'
 import * as fresh from '../../../src/core/browser-control/fresh-sign-in.js'
 import * as store from '../../../src/core/approvals/store.js'
-import { answerMessage } from '../../../src/core/approvals/digest.js'
 import { withTestRun } from '../../../src/core/test-run.js'
 import { createItems, resetVaultForTest, setupVault } from '../../../src/core/vault/store.js'
 import { randomBytes, toB64 } from '../../../src/core/vault/crypto.js'
@@ -61,13 +59,10 @@ const fills = () => seen.filter((c) => c.action === 'fill_login').length
 const code = (extra: Record<string, unknown> = {}) => request('POST', '/browser/act', { action: 'fill_code', device: A.device, tab: 43, ...extra }, AGENT)
 const codes = () => seen.filter((c) => c.action === 'fill_code').length
 
-/** The person's phone signs a yes. */
+/** The person taps Approve on their phone. */
 async function approve(id: string) {
   const approval = await store.getApproval(id)
-  const { privateKey, publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
-  const key = { id: 'test-key', name: 'Test iPhone', kind: 'iphone' as const, publicKey: publicKey.export({ format: 'der', type: 'spki' }).toString('base64') }
-  const signature = crypto.sign('sha256', Buffer.from(answerMessage(approval!.digest, 'approve')), { key: privateKey, dsaEncoding: 'der' }).toString('base64')
-  await store.answerApproval(id, { decision: 'approve', keyId: key.id, signature, device: { kind: 'iphone', name: 'Test iPhone' } }, async () => key as never)
+  await store.answerApproval(id, { decision: 'approve', digest: approval!.digest, device: { kind: 'iphone', name: 'Test iPhone' } })
 }
 
 async function freshYes(): Promise<string> {

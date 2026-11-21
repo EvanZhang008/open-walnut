@@ -221,7 +221,7 @@ export function ItemEditor({ type, item, onSaved, onCancel }: {
         </div>
         <label className="pw-form-row pw-check-row">
           <span>Sensitive</span>
-          <span className="pw-check-text"><input type="checkbox" checked={f.sensitive} onChange={(e) => set('sensitive', e.target.checked)} /> An agent's use needs Face ID or Touch ID, not a tap</span>
+          <span className="pw-check-text"><input type="checkbox" checked={f.sensitive} onChange={(e) => set('sensitive', e.target.checked)} /> An agent's use always asks you, whatever the switch says</span>
         </label>
       </div>
 

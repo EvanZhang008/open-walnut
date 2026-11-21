@@ -22,7 +22,6 @@
   "tests/core/answered-turn-stays-needs.test.ts": 1128,
   "tests/core/apns-wire.test.ts": 519,
   "tests/core/approval-prompts-ratchet.test.ts": 380,
-  "tests/core/approvals/approval-signing-parity.test.ts": 152,
   "tests/core/approvals/approvals-store.test.ts": 1418,
   "tests/core/approvals/approve-cli-core.test.ts": 603,
   "tests/core/approvals/asker-context.test.ts": 203,

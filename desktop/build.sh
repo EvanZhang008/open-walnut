@@ -25,7 +25,7 @@ SOURCES=(
     "$SCRIPT_DIR/WebContentPolicy.swift" "$SCRIPT_DIR/WebContentWatchdog.swift" "$SCRIPT_DIR/WebContentProcess.swift" "$SCRIPT_DIR/QuietKeyWindow.swift" "$SCRIPT_DIR/LinkPolicy.swift" \
     "$SCRIPT_DIR/SessionHost.swift" "$SCRIPT_DIR/CalendarBridge.swift" "$SCRIPT_DIR/ReaderBridge.swift" "$SCRIPT_DIR/ClaudeSignInBridge.swift" \
     "$SCRIPT_DIR/BundledRuntime.swift" "$SCRIPT_DIR/AppBuiltCheckout.swift" "$SCRIPT_DIR/AppUpdateMachine.swift" "$SCRIPT_DIR/AppUpdater.swift" \
-    "$SCRIPT_DIR/AppUpdateBridge.swift" "$SCRIPT_DIR/ApprovalBridge.swift" "$SCRIPT_DIR/ApprovalHome.swift" "$SCRIPT_DIR/NotificationBridge.swift" "$SCRIPT_DIR/DesktopUpdateBridge.swift" "$SCRIPT_DIR/AppLink.swift" "$SCRIPT_DIR/CommandLineTool.swift" \
+    "$SCRIPT_DIR/AppUpdateBridge.swift" "$SCRIPT_DIR/NotificationBridge.swift" "$SCRIPT_DIR/DesktopUpdateBridge.swift" "$SCRIPT_DIR/AppLink.swift" "$SCRIPT_DIR/CommandLineTool.swift" \
     "$SCRIPT_DIR/../src/data/walnut-calendar.swift" "$SCRIPT_DIR/../src/data/walnut-reader.swift" "$SCRIPT_DIR/WalnutIntents.swift"
 )
 source "$SCRIPT_DIR/app-intents.sh"
@@ -171,9 +171,8 @@ if [ -n "$INSTALLED_ID" ] && printf '%s\n' "$CANDIDATES" | grep -qxF "$INSTALLED
 fi
 
 # The hardened runtime, as release builds have it (build-release.sh): no other program
-# may load code into the app (DYLD_INSERT_LIBRARIES) or attach a debugger to it. Walnut
-# trusts the app's own process to add the first approval signing key
-# (src/core/approvals/mac-app-proof.ts), and refuses an app without it.
+# may load code into the app (DYLD_INSERT_LIBRARIES) or attach a debugger to it, so a
+# local build runs as the released app does.
 SIGNED_WITH=""
 while IFS= read -r ID; do
     [ -n "$ID" ] || continue

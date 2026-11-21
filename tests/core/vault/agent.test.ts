@@ -24,11 +24,11 @@ const script: AgentRequester = { host: 'devbox', command: 'deploy.sh' }
 
 type Answer = 'approved' | 'denied' | 'pending' | 'expired'
 let nextAnswer: Answer = 'approved'
-let asked: Array<{ what: string; detail: string; biometric: boolean }> = []
+let asked: Array<{ what: string; detail: string }> = []
 let consumed = new Set<string>()
 const create: ApprovalCreator = async (input) => {
-  asked.push({ what: input.what, detail: input.detail, biometric: input.biometric })
-  return { id: `apr-${asked.length}`, waitToken: 'tok', mode: input.biometric ? 'biometric' : 'tap', expiresAt: new Date(Date.now() + 600_000).toISOString() }
+  asked.push({ what: input.what, detail: input.detail })
+  return { id: `apr-${asked.length}`, waitToken: 'tok', expiresAt: new Date(Date.now() + 600_000).toISOString() }
 }
 const waiter: ApprovalWaiter = async (id) => {
   const used = !consumed.has(id)
@@ -259,10 +259,11 @@ describe('the policy', () => {
     expect(await code(use('Bank', 'allow'))).toBe('agent_never')
   })
 
-  it('a sensitive item always asks, with Face ID or Touch ID, even when it allows agents', async () => {
+  it('a sensitive item always asks, even when it allows agents, and the ask is a plain tap', async () => {
     const r = await use('Payroll', 'allow')
     expect(r.status).toBe('pending')
-    expect(asked[0].biometric).toBe(true)
+    expect(asked).toHaveLength(1)
+    expect((r as { mode?: string }).mode).toBe('tap')
   })
 
   it('the switch: off asks for each item (even one that allows agents), allow releases items set to ask', async () => {

@@ -4,7 +4,7 @@
  * confuing"; 2026-11-14: "Broi..... I need the summary AI write"). The summary on top, in full (the
  * asker's own words, else the one Walnut wrote); then two lines, the task that asked and where it
  * acts (repo and branch, or folder, and the machine); the request's sentence when it says more; the
- * command and the signed detail in one Details fold, closed. Never the session's raw last words, the
+ * command and the exact detail it is bound to in one Details fold, closed. Never the session's raw last words, the
  * task's goal, its last steps or the hook that ran the command.
  */
 import { describe, expect, it, vi } from 'vitest';
@@ -21,7 +21,7 @@ const { ApprovalDetail } = await import('../../web/src/components/approvals/Appr
 
 function approval(over: Partial<Approval> = {}, requester: Partial<Approval['requester']> = {}): Approval {
   return {
-    id: 'apr-1', what: 'Push commit 0fa0f76 to origin cd-3-timeout?', mode: 'biometric', status: 'pending', singleUse: true,
+    id: 'apr-1', what: 'Push commit 0fa0f76 to origin cd-3-timeout?', mode: 'tap', status: 'pending', singleUse: true,
     createdAt: '2026-11-11T00:00:00.000Z', expiresAt: '2026-11-11T00:05:00.000Z',
     requester: {
       host: 'clouddev', taskId: 't-1', taskTitle: 'Git approval live test', sessionId: 's-1',
@@ -41,7 +41,7 @@ function render(a: Approval): string {
   return renderToStaticMarkup(createElement(MemoryRouter, null, createElement(ApprovalContextRows, { a, hostName: 'New big clouddev' })));
 }
 
-// The Git gate's signed context, as the push of 2026-11-12 carried it (names neutral).
+// The Git gate's context, as the push of 2026-11-12 carried it (names neutral).
 const GIT_CONTEXT = JSON.stringify({
   argv: ['git', '-C', '/home/u/.local/state/open-walnut/tasks/t-9/meta-fresh', 'push', 'origin', 'HEAD:refs/heads/mainline'],
   command: 'git -C /home/u/.local/state/open-walnut/tasks/t-9/meta-fresh push origin HEAD:refs/heads/mainline',
@@ -66,7 +66,7 @@ describe('the approval dialog leads with the task and the path', () => {
     // The summary comes first, in full, and says who wrote it.
     expect(top.indexOf('data-testid="approval-ai-summary"')).toBeLessThan(top.indexOf('data-testid="approval-task"'));
     expect(top).toContain(`>${SUMMARY.replace("'", '&#x27;')}<`);
-    expect(top).toContain('Walnut’s summary of the task’s session, not signed');
+    expect(top).toContain('Walnut’s summary of the task’s session: the lines below are what you approve');
     expect(top).toContain('data-testid="approval-task-link"');
     expect(top).toContain('Platform Lead');
     expect(top).toContain('>Repo<');
@@ -78,7 +78,7 @@ describe('the approval dialog leads with the task and the path', () => {
     expect(html).toMatch(/<details class="approval-detail approval-details" data-testid="approval-detail"><summary>Details<\/summary>/);
     expect(html).not.toMatch(/<details[^>]* open/);
     expect(html).toContain('data-testid="approval-command">git -C /home/u/.local/state/open-walnut/tasks/t-9/meta-fresh push');
-    expect(html).toContain('Signed detail');
+    expect(html).toContain('Exact detail (used once)');
     expect(html.match(/<details/g)).toHaveLength(1);
   });
 
@@ -150,15 +150,11 @@ describe('the approval dialog leads with the task and the path', () => {
     expect(forced).toContain('>Repo<');
   });
 
-  it('shows what really started it beside a command the asker named, above the fold, unless the detail is signed', () => {
+  it('shows what really started it beside a command the asker named, above the fold, unless it is single-use', () => {
     const plain = render(approval({ singleUse: false }, { command: 'git status' }));
     expect(glance(plain)).toContain('data-testid="approval-ran-by"');
     expect(plain).toContain('gate_hook.py');
     expect(render(approval({}, { command: 'git status' }))).not.toContain('approval-ran-by');
-  });
-
-  it('a downgraded request says so in the dialog', () => {
-    expect(glance(render(approval({ downgraded: 'No device signs approvals yet, so this one is a tap.' })))).toContain('data-testid="approval-downgraded"');
   });
 
   it('this computer is said as such, and a request with no folder names only the machine', () => {
@@ -169,7 +165,7 @@ describe('the approval dialog leads with the task and the path', () => {
   });
 });
 
-describe('the paths read short and the Git fields come only from a signed Git context', () => {
+describe('the paths read short and the Git fields come only from the Git gate\'s single-use context', () => {
   it('says each home folder as ~', () => {
     expect(shortPath('/Users/u/work/x')).toBe('~/work/x');
     expect(shortPath('/home/u/x')).toBe('~/x');
@@ -185,28 +181,28 @@ describe('the paths read short and the Git fields come only from a signed Git co
 
   it('reads repository, branch and commit from the Git gate\'s context, nothing from plain text', () => {
     expect(gitOperation(gitPush())).toEqual({ repository: '/local/home/u/.local/state/open-walnut/tasks/t-9/meta-fresh', operation: 'push', remote: 'origin', branch: 'mainline', commitSha: 'da21d9c6ebf95b2d1003c6af76bb17894603c207' });
-    // Unsigned, or not the Git gate's version: no Repo line.
+    // Not single-use, or not the Git gate's version: no Repo line.
     expect(gitOperation(gitPush({ singleUse: false }))).toBeNull();
     expect(gitOperation(approval({ detail: JSON.stringify({ version: 'walnut-single-use-v1', context: '{"repository":"/x"}' }) }))).toBeNull();
   });
 });
 
-describe('the signed detail reads one field per line', () => {
+describe('the exact detail reads one field per line', () => {
   it('opens the envelope and lays its JSON context out', () => {
     const context = JSON.stringify({ command: 'git push origin main', commitSha: 'abc', remote: 'origin' });
     const a = approval({ singleUse: true, detail: JSON.stringify({ version: 'walnut-single-use-v1', context, nonce: 'n' }) });
     const d = detailText(a);
-    expect(d.signed).toBe(true);
+    expect(d.bound).toBe(true);
     expect(d.text).toBe(JSON.stringify(JSON.parse(context), null, 2));
   });
 
   it('leaves plain text and broken JSON as they are', () => {
     expect(prettyJson('web: 3 files changed\nmigrations: none')).toBe('web: 3 files changed\nmigrations: none');
     expect(prettyJson('{not json}')).toBe('{not json}');
-    // Nothing the signer saw is hidden: a repeated key or a big number stays as signed.
+    // Nothing the person approves is hidden: a repeated key or a big number stays as sent.
     expect(prettyJson('{"branch":"main","branch":"x"}')).toBe('{"branch":"main","branch":"x"}');
     expect(prettyJson('{"n":12345678901234567890}')).toBe('{"n":12345678901234567890}');
-    expect(detailText(approval({ detail: 'notes: 4 lines' }))).toEqual({ text: 'notes: 4 lines', signed: false });
+    expect(detailText(approval({ detail: 'notes: 4 lines' }))).toEqual({ text: 'notes: 4 lines', bound: false });
   });
 });
 
@@ -223,7 +219,6 @@ describe('the summary never lands inside Details', () => {
     ['a script that said why', approval({ what: 'Publish?', singleUse: false, detail: 'diff: 3 files', context: { why: 'The launch links to it.', whyFrom: 'asker' } }), ['Publish?', 'The launch links to it.']],
     ['an agent\'s browser step', approval({ what: 'Let "Notes" click "Send" on mail.example.test?', singleUse: false, detail: browserStep, detailRole: 'summary', context: undefined }, { command: undefined }), ['Let "Notes" click "Send" on mail.example.test?', 'Message it sends: Thanks, see you Friday.']],
     ['a password an agent asks for', approval({ what: 'Give "Notes" the password "Mail"?', singleUse: false, detail: 'Fields: password\nWhy: send the reply\nFor: this one use', detailRole: 'summary', context: undefined }), ['Why: send the reply']],
-    ['a new signing device', approval({ what: 'Let "Phone" sign your approvals', singleUse: false, detail: 'A new device asked to sign Walnut approvals with Face ID or Touch ID.', detailRole: 'summary', context: undefined }, { taskId: undefined, taskTitle: undefined }), ['A new device asked to sign Walnut approvals']],
   ];
   const plain = (html: string) => html.replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&amp;/g, '&');
   for (const [name, a, mustRead] of CASES) {

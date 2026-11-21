@@ -5,7 +5,7 @@
  *   - the item's agent access is `never`                → refused, agent_never (any mode)
  *   - this task holds a grant covering the fields       → released (via grant)
  *   - the switch is `off`                               → a person approves it (the only way in)
- *   - the item is sensitive                             → a person approves it, Face ID or Touch ID
+ *   - the item is sensitive                             → a person approves it, approvals off or not
  *   - the switch is `allow` ("Any"), or the item allows → released (via allow)
  *   - otherwise (`ask`)                                 → a person approves it
  *
@@ -93,14 +93,15 @@ export interface UseInput {
 
 export type UseResult =
   | { status: 'released'; item: AgentItemView; values: Record<string, string>; via: 'allow' | 'grant' | 'approval' | 'approvals-off'; grantedUntil?: string | null }
-  | { status: 'pending'; requestId: string; waitToken: string; item: AgentItemView; mode: 'tap' | 'biometric'; expiresAt: string; downgraded?: string }
+  /** `mode` is always `tap` (a person's tap on any device they are signed in on); older clients read it. */
+  | { status: 'pending'; requestId: string; waitToken: string; item: AgentItemView; mode: 'tap'; expiresAt: string }
 
 // ── the decision, pure ──
 
 export type AgentDecision =
   | { kind: 'refuse'; status: number; code: 'agent_never'; message: string }
   | { kind: 'release'; via: 'allow' | 'grant' | 'approvals-off' }
-  | { kind: 'ask'; biometric: boolean }
+  | { kind: 'ask' }
 
 export interface DecisionInput {
   mode: AgentsSwitch
@@ -121,8 +122,8 @@ export interface DecisionInput {
 
 /**
  * What Walnut does with one agent use, from the switch, the item's access, sensitive and a live
- * grant: refuse, release now, or ask a person (with Face ID or Touch ID when `biometric`). The
- * same answer for password_use, `walnut pass run` and browser fill_login.
+ * grant: refuse, release now, or ask a person. The same answer for password_use, `walnut pass run`
+ * and browser fill_login.
  */
 export function decideAgentUse(d: DecisionInput): AgentDecision {
   const access = d.access ?? 'ask'
@@ -132,11 +133,10 @@ export function decideAgentUse(d: DecisionInput): AgentDecision {
     const held = new Set(d.grant.fields)
     if (d.fields.every((f) => held.has(f))) return { kind: 'release', via: 'grant' }
   }
-  if (d.mode === 'off') return { kind: 'ask', biometric: d.sensitive }
-  if (d.sensitive) return { kind: 'ask', biometric: true }
+  if (d.mode === 'off' || d.sensitive) return { kind: 'ask' }
   if (d.mode === 'allow' || access === 'allow') return { kind: 'release', via: 'allow' }
   if (d.askMe === false) return { kind: 'release', via: 'approvals-off' }
-  return { kind: 'ask', biometric: false }
+  return { kind: 'ask' }
 }
 
 /** How a grant of `grantMs` reads to the person ("for 12 hours"). */
@@ -428,9 +428,9 @@ function approvalText(item: VaultItem, ask: { fields: string[]; purpose: string;
   return { what: head.length > 300 ? head.slice(0, 297) + '...' : head, detail: lines.join('\n') }
 }
 
-/** The approval mode an item needs, given whether any device can sign. */
-export type ApprovalCreator = (input: { what: string; detail: string; biometric: boolean; timeoutMs: number; requester: AgentRequester; testRun?: string }) =>
-  Promise<{ id: string; waitToken: string; mode: 'tap' | 'biometric'; expiresAt: string; downgraded?: string; cancel?: () => Promise<void> }>
+/** Asks the person (routes/vault-agent-v1.ts): a Walnut approval. */
+export type ApprovalCreator = (input: { what: string; detail: string; timeoutMs: number; requester: AgentRequester; testRun?: string }) =>
+  Promise<{ id: string; waitToken: string; expiresAt: string; cancel?: () => Promise<void> }>
 
 export async function agentUse(input: UseInput, createApproval: ApprovalCreator): Promise<UseResult> {
   const since = epoch
@@ -482,7 +482,7 @@ export async function agentUse(input: UseInput, createApproval: ApprovalCreator)
   // A grant needs a task (a bare script on a host gets one use), and the agent may ask for less.
   const scope: AgentScope = input.scope !== 'once' && r.taskId && grantMs !== 0 ? 'task' : 'once'
   const text = approvalText(item, { fields, purpose, grants: scope === 'task', grantMs, use, requester: r, off: input.agents === 'off' })
-  const a = await createApproval({ ...text, biometric: decision.biometric, timeoutMs: APPROVAL_TIMEOUT_MS, requester: r, testRun: input.testRun })
+  const a = await createApproval({ ...text, timeoutMs: APPROVAL_TIMEOUT_MS, requester: r, testRun: input.testRun })
   // Lock all or the switch moved while the card was being made: no ask is kept, so nothing is released from it.
   if (since !== epoch) {
     await a.cancel?.()
@@ -490,7 +490,7 @@ export async function agentUse(input: UseInput, createApproval: ApprovalCreator)
   }
   pending.set(a.id, { itemId: item.id, fields, purpose, scope, grantMs, use, asker, holder, requester: r, expiresAt: Date.parse(a.expiresAt) || Date.now() + APPROVAL_TIMEOUT_MS })
   await appendAgentLog({ kind: 'asked', approvalId: a.id, use, ...logBase(item, fields, purpose, r) })
-  return { status: 'pending', requestId: a.id, waitToken: a.waitToken, item: view, mode: a.mode, expiresAt: a.expiresAt, ...(a.downgraded ? { downgraded: a.downgraded } : {}) }
+  return { status: 'pending', requestId: a.id, waitToken: a.waitToken, item: view, mode: 'tap', expiresAt: a.expiresAt }
 }
 
 export type ApprovalWaiter = (id: string, token: string, waitMs: number) =>

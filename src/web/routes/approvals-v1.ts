@@ -6,10 +6,12 @@
  *   GET    /api/v1/approvals/:id             → { approval }
  *   POST   /api/v1/approvals/:id/wait        { token, wait_ms? } → { approval, used } (the asker; holds ≤ 12 s)
  *   POST   /api/v1/approvals/:id/cancel      { token, reason? } → { approval } (the asker)
- *   POST   /api/v1/approvals/:id/answer      { decision, keyId?, signature?, device? } → { approval } (a person only)
- *   GET    /api/v1/approvals/keys            → { keys } (public halves only)
- *   POST   /api/v1/approvals/keys            { publicKey, name, kind, accountHome? } → { key } (a device app only)
- *   DELETE /api/v1/approvals/keys/:id        → { ok } (a person only)
+ *   POST   /api/v1/approvals/:id/answer      { decision, digest?, device? } → { approval } (a person only)
+ *
+ * Any device the person is signed in on answers, with one tap (core/approvals/types.ts): no device
+ * key, no device an approval is bound to. An older client's `keyId`/`signature` on an answer, and an
+ * older asker's `mode: 'biometric'` or `signing_key_id(s)`, are taken and ignored; `keys` in the list
+ * stays, always empty, for the iPhone apps that still read it.
  *
  * Who is a person here: a request with no session id, no automation mark from the CLI
  * (`x-walnut-caller-kind`), and an origin that is this computer or a paired device (the
@@ -17,20 +19,17 @@
  * team charter's approval gates, so an agent is refused (tests/core/agent-parity-ratchet.test.ts).
  * Known limit, the same as every person-only route: a process on this computer that leaves
  * those headers off passes as the person, and so does a holder of a paired device's token (the
- * companion forwards with the caller headers dropped). So a tap guards against an agent working
- * through Walnut's tools, not against a hostile process here. A biometric approval does not rest
- * on it: its Approve needs a device key's signature that only Face ID or Touch ID unlocks, and the
- * first key comes only from the paired iPhone app or the Mac app's own signed process (keys.ts).
+ * companion forwards with the caller headers dropped). So it guards against an agent working
+ * through Walnut's tools and its own session, not against a hostile process here.
  */
 import os from 'node:os'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { isFollower } from '../../core/server-role.js'
 import { requestOrigin } from '../middleware/request-origin.js'
 import { LOCAL_ORIGIN, hostOrigin } from '../../lib/caller-origin.js'
-import { isPersonCaller } from './person-caller.js'
-import { APPROVAL_WAIT_MAX_MS, type ApprovalDeviceKind, type ApprovalMode, type ApprovalRequester } from '../../core/approvals/types.js'
+import { isPersonNotAutomation } from './person-caller.js'
+import { APPROVAL_WAIT_MAX_MS, type ApprovalDeviceKind, type ApprovalRequester } from '../../core/approvals/types.js'
 import { ambientTestRun } from '../../core/test-run.js'
-import { log } from '../../logging/index.js'
 import type { SessionProc } from '../../core/approvals/caller-proof.js'
 
 export const approvalsV1Router = Router()
@@ -45,15 +44,9 @@ function header(req: Request, name: string): string | undefined {
 
 /** A person: see the header. Answers the refusal itself and returns false otherwise. */
 function personOnly(req: Request, res: Response, what: string): boolean {
-  if (isPersonCaller(req)) return true
+  // A browser under automation on the person's own install (Playwright, headless Chromium) is not them.
+  if (isPersonNotAutomation(req)) return true
   res.status(403).json({ error: `Only a person ${what}: an agent, a session or a script cannot.`, code: HUMAN_ONLY })
-  return false
-}
-
-/** A test run never changes which devices sign the person's approvals. */
-function notInTestRun(res: Response): boolean {
-  if (!ambientTestRun()) return true
-  res.status(403).json({ error: 'A test run cannot add or remove a device that signs approvals.', code: 'test_run' })
   return false
 }
 
@@ -259,23 +252,11 @@ approvalsV1Router.post('/approvals', (req: Request, res: Response, next: NextFun
     const body = (req.body ?? {}) as Record<string, unknown>
     const { createApproval, ApprovalError } = await import('../../core/approvals/store.js')
     const singleUse = body.single_use === true
-    const origin = requestOrigin(req)
     const requester = await requesterOf(req, body)
-    const { activeKeys } = await import('../../core/approvals/keys.js')
-    const wanted: ApprovalMode = body.mode === 'biometric' ? 'biometric' : 'tap'
-    let mode = wanted
-    let downgraded: string | undefined
-    const keys = await activeKeys()
-    // One pinned key (signing_key_id), or a set the person may approve from (signing_key_ids:
-    // the Mac and the iPhone): every key named must be an active one.
-    const keyIds = Array.isArray(body.signing_key_ids) ? body.signing_key_ids.map(String) : body.signing_key_id !== undefined ? [String(body.signing_key_id)] : []
-    if (singleUse && (wanted !== 'biometric' || !requester.sessionId || !requester.taskId || !keyIds.length || keyIds.length > 8
-      || !keyIds.every((k) => keys.some((key) => key.id === k)))) {
-      throw new ApprovalError(403, 'strict_approval_required', 'A single-use approval needs a task session and its enrolled signing device; it never falls back to a tap.')
-    }
-    if (wanted === 'biometric' && keys.length === 0) {
-      mode = 'tap'
-      downgraded = 'No device signs approvals yet (the Walnut iPhone app, or the Mac app on a Mac with Touch ID, sets one up), so this asks for a tap.'
+    // `mode` and `signing_key_id(s)` from an older asker are ignored: every approval is answered
+    // with a tap on any device the person is signed in on (core/approvals/types.ts).
+    if (singleUse && (!requester.sessionId || !requester.taskId)) {
+      throw new ApprovalError(403, 'strict_approval_required', 'A single-use approval needs the task session that asks it.')
     }
     // A single-use approval is the session's own step: Walnut must have seen the asking process
     // inside it, never only its name, and a check it could not make refuses too (fail closed).
@@ -297,9 +278,9 @@ approvalsV1Router.post('/approvals', (req: Request, res: Response, next: NextFun
       detail: typeof body.detail === 'string' ? body.detail : undefined,
       // What a script attaches (`--detail`): a diff, a command's context. Its words are `what` and `--why`.
       detailRole: 'technical',
-      mode, timeoutMs, downgraded,
+      timeoutMs,
       requester,
-      ...(singleUse ? { singleUse: true, ...(Array.isArray(body.signing_key_ids) ? { signingKeyIds: keyIds } : { signingKeyId: keyIds[0] }) } : {}),
+      ...(singleUse ? { singleUse: true } : {}),
       context,
       ...(body.request_only === true ? { requestOnly: true } : {}),
       testRun: ambientTestRun(),
@@ -307,7 +288,7 @@ approvalsV1Router.post('/approvals', (req: Request, res: Response, next: NextFun
     // An asker that said no why gets a summary Walnut writes, in the background (summary.ts).
     const { scheduleApprovalSummary } = await import('../../core/approvals/summary.js')
     scheduleApprovalSummary(approval)
-    return { approval, waitToken, ...(downgraded ? { downgraded } : {}) }
+    return { approval, waitToken }
   })
 })
 
@@ -315,67 +296,12 @@ approvalsV1Router.get('/approvals', (req: Request, res: Response, next: NextFunc
   if (leaderOnly(res)) return
   void answer(res, next, async () => {
     const { listApprovals } = await import('../../core/approvals/store.js')
-    const { listKeys, keyView } = await import('../../core/approvals/keys.js')
     const status = req.query.status === 'all' ? 'all' : 'pending'
-    // Public halves only. A retired row stays, with what replaced it, so a verifier that pinned a key
-    // (the Git gate) can follow it; it signs nothing.
-    const keys = (await listKeys()).map(keyView).map(({ id, name, kind, status: s, createdAt, activatedAt, lastUsedAt, publicKey, retiredAt, replacedBy, endorsement }) => ({
-      id, name, kind, status: s, createdAt, activatedAt, lastUsedAt, publicKey,
-      ...(retiredAt ? { retiredAt } : {}), ...(replacedBy ? { replacedBy } : {}), ...(endorsement ? { endorsement } : {}),
-    }))
     // `askMe`: the person's Approvals switch (ask-me.ts), so a script that asks with --single-use
-    // (always asked) can read it and skip its own ask while approvals are off.
+    // (always asked) can read it and skip its own ask while approvals are off. `keys` is always
+    // empty: no device key exists any more, and an iPhone app built before that still decodes it.
     const { asksPerson } = await import('../../core/approvals/ask-me.js')
-    return { approvals: await listApprovals({ status, viewer: ambientTestRun() }), keys, askMe: await asksPerson() }
-  })
-})
-
-approvalsV1Router.get('/approvals/keys', (_req: Request, res: Response, next: NextFunction) => {
-  if (leaderOnly(res)) return
-  void answer(res, next, async () => {
-    const { listKeys, keyView } = await import('../../core/approvals/keys.js')
-    return { keys: (await listKeys()).map(keyView) }
-  })
-})
-
-approvalsV1Router.post('/approvals/keys', (req: Request, res: Response, next: NextFunction) => {
-  if (leaderOnly(res)) return
-  if (!personOnly(req, res, 'adds a device that signs approvals')) return
-  if (!notInTestRun(res)) return
-  void answer(res, next, async () => {
-    const body = (req.body ?? {}) as Record<string, unknown>
-    const { enrollKey, keyView } = await import('../../core/approvals/keys.js')
-    const kind = body.kind === 'mac-app' ? 'mac-app' : body.kind === 'iphone' ? 'iphone' : ''
-    // A key is added only when its device app sends it, and then signs at once; anything else adds
-    // none and asks nothing (core/approvals/keys.ts). The iPhone app: its paired device token, here,
-    // or checked by the cloud companion, which names that phone (v1-forward/forwarded-device.ts).
-    // The Mac app: its own signed process (mac-app-proof.ts), started in the account's own home
-    // folder: a copy a test started with another HOME has no key of the person's, and says so
-    // (ApprovalBridge.swift sends accountHome only from the account's home; 2026-11-18 such a copy's
-    // fresh key came here and became "Let … sign your approvals" on the person's screen).
-    const { isPairedPhoneApp } = await import('../../core/approvals/phone-app.js')
-    const { forwardedPhoneOf } = await import('../v1-forward/forwarded-device.js')
-    const deviceName = (req as Request & { deviceName?: string }).deviceName
-    let fromDeviceApp = kind === 'iphone' && (deviceName ? await isPairedPhoneApp(deviceName) : forwardedPhoneOf(req) !== null)
-    if (kind === 'mac-app') {
-      const { requestFromMacApp } = await import('../../core/approvals/mac-app-proof.js')
-      const proof = await requestFromMacApp(connOf(req))
-      fromDeviceApp = proof.ok && body.accountHome === true
-      if (!fromDeviceApp) log.web.info('approval key not from the Mac app', { kind, why: proof.ok ? 'the app runs with another home folder' : proof.why })
-    }
-    const out = await enrollKey({ publicKey: String(body.publicKey ?? ''), name: String(body.name ?? ''), kind: kind as 'iphone', fromDeviceApp })
-    return { key: keyView(out.key) }
-  })
-})
-
-approvalsV1Router.delete('/approvals/keys/:id', (req: Request, res: Response, next: NextFunction) => {
-  if (leaderOnly(res)) return
-  if (!personOnly(req, res, 'removes a device that signs approvals')) return
-  if (!notInTestRun(res)) return
-  void answer(res, next, async () => {
-    const { removeKey } = await import('../../core/approvals/keys.js')
-    await removeKey(param(req.params.id))
-    return { ok: true }
+    return { approvals: await listApprovals({ status, viewer: ambientTestRun() }), keys: [], askMe: await asksPerson() }
   })
 })
 
@@ -404,7 +330,6 @@ approvalsV1Router.post('/approvals/:id/consume', (req: Request, res: Response, n
   void answer(res, next, async () => {
     const body = (req.body ?? {}) as Record<string, unknown>
     const { consumeApproval } = await import('../../core/approvals/store.js')
-    const { activeKey } = await import('../../core/approvals/keys.js')
     // The step is spent by the same session's own process, checked again here: a token another
     // process of this machine took cannot be spent by naming the asking session.
     const requester = await requesterOf(req, body)
@@ -415,7 +340,7 @@ approvalsV1Router.post('/approvals/:id/consume', (req: Request, res: Response, n
       digest: typeof body.digest === 'string' ? body.digest : '',
       detail: typeof body.detail === 'string' ? body.detail : '',
       requester,
-    }, activeKey)
+    })
   })
 })
 
@@ -429,69 +354,26 @@ approvalsV1Router.post('/approvals/:id/cancel', (req: Request, res: Response, ne
   })
 })
 
-/**
- * An unsigned Approve of giving an agent a vault item. A tap from this machine is not enough:
- * any process here can send one (see the header), and an agent holds its own ask's id; a device
- * token is not enough either, since a process here can make one (devices.ts). The proof is a
- * device key's signature (answerApproval checks it) or a live Passwords unlock in this window (a
- * vault session, which only the master password buys). A sensitive item takes only a signature
- * while some device can sign.
- */
-async function vaultApprover(req: Request, body: Record<string, unknown>, target: { mode: string; guard?: string }): Promise<boolean> {
-  if (target.guard === 'vault-sensitive' && target.mode === 'biometric') return false
-  const { useSession, SESSION_HEADER } = await import('../../core/vault/sessions.js')
-  const { deviceOf } = await import('./vault-v1.js')
-  await (await import('../../core/vault/session-store.js')).sessionsRestored()
-  const token = header(req, SESSION_HEADER) ?? (typeof body.vaultSession === 'string' ? body.vaultSession : undefined)
-  return !!useSession(token, true, deviceOf(req))
-}
-
 approvalsV1Router.post('/approvals/:id/answer', (req: Request, res: Response, next: NextFunction) => {
   if (leaderOnly(res)) return
+  // The one condition: a person, on any device they are signed in on (see the header).
   if (!personOnly(req, res, 'answers an approval')) return
   void answer(res, next, async () => {
     const body = (req.body ?? {}) as Record<string, unknown>
     const { answerApproval, getApproval, visibleTo, ApprovalError } = await import('../../core/approvals/store.js')
-    const keys = await import('../../core/approvals/keys.js')
     // A test run answers only its own approvals, and the person never answers a test run's by accident.
     const target = await getApproval(param(req.params.id))
     if (!target || !visibleTo(target, ambientTestRun())) throw new ApprovalError(404, 'not_found', 'No such approval.')
-    // A turn-off takes only a key that may sign one (ask-me.ts keyMayTurnOff); it stays open for another.
-    if (target.turnsAskMeOff && body.decision === 'approve') {
-      const askMe = await import('../../core/approvals/ask-me.js')
-      const signer = typeof body.keyId === 'string' ? await keys.activeKey(body.keyId) : undefined
-      if (signer && !askMe.keyMayTurnOff(signer)) throw new ApprovalError(403, 'signer_too_new', askMe.TURN_OFF_SIGNER_WORDS)
-    }
-    let proven = false
-    if (target.guard && body.decision === 'approve' && !body.signature) {
-      // Unsigned: only a Passwords unlock in this window proves it is the person (vaultApprover).
-      // The same for an agent's buy, send or delete in the browser (`person`).
-      if (!(await vaultApprover(req, body, target))) {
-        if (target.guard === 'person') {
-          const { howToApprove, signerKinds } = await import('../../core/approvals/signer-words.js')
-          throw new ApprovalError(403, 'proof_needed', `${howToApprove(signerKinds(await keys.activeKeys()), { unlock: true }).replace(/\.$/, '')}: `
-            + 'an agent\'s step that buys, sends or deletes needs proof that it is you saying yes.')
-        }
-        throw new ApprovalError(403, 'vault_unlock_needed', target.guard === 'vault-sensitive' && target.mode === 'biometric'
-          ? 'This item needs Face ID or Touch ID: approve it on your iPhone or in the Walnut Mac app.'
-          : 'Unlock Passwords in this window to approve, or approve on your iPhone with Face ID: giving an agent a password needs the master password or a device that signs.')
-      }
-      proven = true
-    }
     const device = (body.device ?? {}) as Record<string, unknown>
     const deviceName = (req as Request & { deviceName?: string }).deviceName
     const kinds: ApprovalDeviceKind[] = ['iphone', 'mac-app', 'web']
     const kind = kinds.includes(device.kind as ApprovalDeviceKind) ? device.kind as ApprovalDeviceKind : deviceName ? 'iphone' : 'web'
+    // An older iPhone app's keyId and signature are not read: its tap counts like any other.
     const approval = await answerApproval(param(req.params.id), {
       decision: body.decision === 'approve' ? 'approve' : body.decision === 'deny' ? 'deny' : (String(body.decision ?? '') as 'approve'),
-      keyId: str(body.keyId, 80),
-      signature: str(body.signature, 400),
+      ...(typeof body.digest === 'string' ? { digest: body.digest } : {}),
       device: { name: deviceName ?? str(device.name, 80) ?? (kind === 'web' ? 'Web console' : kind), kind },
-      proven,
-    }, async (id) => keys.activeKey(id))
-    if (approval.answer?.keyId) await keys.touchKey(approval.answer.keyId)
-    if (approval.enrollsKey) await keys.applyKeyApproval(approval)
-    if (approval.turnsAskMeOff) await (await import('../../core/approvals/ask-me.js')).applyAskMeOff(approval)
+    })
     return { approval }
   })
 })

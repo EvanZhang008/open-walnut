@@ -17,7 +17,8 @@ final class ActionNeededTests: XCTestCase {
         let s = try JSONDecoder().decode(WalnutUserStatus.self, from: Data(json.utf8))
         XCTAssertEqual(s.working, true)
         XCTAssertEqual(s.actions?.count, 5)
-        XCTAssertEqual(s.actions?[0].proof, true)
+        // An older server's `proof` on an approval is read past: every approval is a tap now.
+        XCTAssertEqual(s.actions?[0].kind, "approval")
         XCTAssertEqual(s.actions?[1].options?.map(\.label), ["Staging", "Local"])
         XCTAssertEqual(s.actions?[2].snoozedUntil, "2026-11-19T21:00:00.000Z")
         // An odd item reads as an unknown kind with no words, never a failed task list.

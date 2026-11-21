@@ -90,7 +90,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/secrets/` | leader-data | yes | Credentials: plugin secrets, provider keys, sign-in tokens |
 | `~/.open-walnut/vault/` | leader-data | yes | Password vault of a throwaway or fake-HOME server (the real one is outside the home) |
 | `~/.open-walnut/router/` | leader-data | yes | Router areas, routing ledgers, approval tokens and frozen incoming content |
-| `~/.open-walnut/approvals/` | leader-data | yes | Approval requests, signing keys and the approvals switch |
+| `~/.open-walnut/approvals/` | leader-data | yes | Approval requests and the approvals switch (a `keys.json` an older Walnut left is no longer read) |
 | `~/.open-walnut/host-exec-grants.json` | leader-data | no | The user's grants for running commands on hosts |
 | `~/.open-walnut/browser-control.json` | leader-data | no | Sites the user approved for agents in the browser |
 | `~/.open-walnut/workspaces/` | leader-data | no | Which workspace scripts the user trusts |

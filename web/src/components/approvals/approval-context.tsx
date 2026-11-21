@@ -2,7 +2,7 @@
  * The request in the few parts the person decides on (2026-11-11, the user: "summary, say clearly,
  * one sentence ... then is command to run ... 然后那个是哪一个 task 来的 ... 其他的就没必要吧"):
  * the asker's sentence on top (the dialog's body, ApprovalPrompts), then the command that runs,
- * the task that asked as a link, and the signed detail folded under them. What the session said
+ * the task that asked as a link, and the exact detail folded under them. What the session said
  * before it asked, its goal, its last steps and the folder are left out: they read as noise, and
  * the task link opens all of it.
  */
@@ -29,18 +29,18 @@ export function AskerLink({ a, label }: { a: Approval; label: string }) {
   );
 }
 
-/** A signed approval's detail is its envelope: the person reads the context it carries, laid out when it is JSON. */
-export function detailText(a: Approval): { text?: string; signed: boolean } {
-  if (!a.detail) return { signed: false };
+/** A single-use approval's detail is its envelope: the person reads the exact context it carries (`bound`), laid out when it is JSON. */
+export function detailText(a: Approval): { text?: string; bound: boolean } {
+  if (!a.detail) return { bound: false };
   let text = a.detail;
-  let signed = false;
+  let bound = false;
   if (a.singleUse) {
     try {
       const env = JSON.parse(a.detail) as { version?: string; context?: unknown };
-      if (env.version === 'walnut-single-use-v1' && typeof env.context === 'string') { text = env.context; signed = true; }
+      if (env.version === 'walnut-single-use-v1' && typeof env.context === 'string') { text = env.context; bound = true; }
     } catch { /* shown as it is */ }
   }
-  return { text: prettyJson(text), signed };
+  return { text: prettyJson(text), bound };
 }
 
 /** A one-line JSON object or list, indented so its fields read one per line; any other text as it is. */
@@ -49,18 +49,18 @@ export function prettyJson(text: string): string {
   if (!(t.startsWith('{') && t.endsWith('}')) && !(t.startsWith('[') && t.endsWith(']'))) return text;
   try {
     const value = JSON.parse(t);
-    // Laid out only when nothing is lost: a repeated key or a number past 2^53 shows as signed.
+    // Laid out only when nothing is lost: a repeated key or a number past 2^53 shows as it was sent.
     return JSON.stringify(value) === t ? JSON.stringify(value, null, 2) : text;
   } catch { return text; }
 }
 
 
-/** A signed Git operation's own fields (the Git gate's context, `walnut-git-operation-v1`), when the request carries one. */
+/** A Git operation's own fields (the Git gate's context, `walnut-git-operation-v1`), when the request carries one. */
 export interface GitOperation { repository: string; operation?: string; remote?: string; branch?: string; commitSha?: string }
 
 export function gitOperation(a: Approval): GitOperation | null {
-  const { text, signed } = detailText(a);
-  if (!signed || !text) return null;
+  const { text, bound } = detailText(a);
+  if (!bound || !text) return null;
   try {
     const c = JSON.parse(text) as Record<string, unknown>;
     if (c.version !== 'walnut-git-operation-v1' || typeof c.repository !== 'string' || !c.repository) return null;
@@ -119,19 +119,19 @@ export function wordsOf(a: Approval): string | undefined {
 }
 
 /**
- * The detail that waits in Details: only a technical one (a command's context, a diff, a signed
+ * The detail that waits in Details: only a technical one (a command's context, a diff, a single-use
  * envelope), never the request in words (2026-11-14, the user: "summayr一直都显示不需要点detail
  * detail只是xommend detail啥的").
  */
-export function technicalDetail(a: Approval): { text?: string; signed: boolean } {
-  return wordsOf(a) ? { signed: false } : detailText(a);
+export function technicalDetail(a: Approval): { text?: string; bound: boolean } {
+  return wordsOf(a) ? { bound: false } : detailText(a);
 }
 
 /**
  * The dialog's body (2026-11-12, the user on a Git push dialog: "I just need to know which task and
  * which path right.. this si confuing"): the summary on top, then two lines read at a glance, the
  * task that asked (a link) and where it acts (the repo and branch, or the folder, and the machine),
- * a warning only when one is due, and everything else (the command, what started it, the signed
+ * a warning only when one is due, and everything else (the command, what started it, the exact
  * detail) in one Details fold, closed. One layout for every kind of approval.
  */
 export function ApprovalContextRows({ a, hostName }: { a: Approval; hostName: string }) {
@@ -148,7 +148,7 @@ export function ApprovalContextRows({ a, hostName }: { a: Approval; hostName: st
   const asks = summary.by === 'walnut' && a.what !== summary.text
     && !(git && git.operation === 'push' && git.branch && a.what === gatePushSentence(git)) ? a.what : '';
   // What Walnut read from the process table, when it differs from the command the asker named: a sign
-  // of who really asks, so it stays above the fold (a signed approval binds the real operation instead).
+  // of who really asks, so it stays above the fold (a single-use approval binds the real operation instead).
   const ranByDiffers = !a.singleUse && !!r.command && !!r.ranBy && r.ranBy !== r.command;
   return (
     <div className="approval-context" data-testid="approval-context">
@@ -157,7 +157,7 @@ export function ApprovalContextRows({ a, hostName }: { a: Approval; hostName: st
         <p className={`approval-summary-text${summary.by === 'asker' ? ' approval-asks' : ''}`} data-testid={summary.by === 'asker' ? 'approval-asks' : 'approval-ai-summary'}>{summary.text}</p>
         {summary.why ? <p className="approval-summary-why" data-testid="approval-why">{summary.why}</p> : null}
         {summary.words ? <p className="approval-summary-words" data-testid="approval-summary-words">{summary.words}</p> : null}
-        {summary.by === 'walnut' ? <span className="approval-summary-by" data-testid="approval-summary-by">Walnut’s summary of the task’s session, not signed: the lines below are what you approve</span> : null}
+        {summary.by === 'walnut' ? <span className="approval-summary-by" data-testid="approval-summary-by">Walnut’s summary of the task’s session: the lines below are what you approve</span> : null}
       </div>
       <div className="approval-field" data-testid="approval-task">
         <span className="approval-field-label">Task</span>
@@ -191,7 +191,6 @@ export function ApprovalContextRows({ a, hostName }: { a: Approval; hostName: st
           Started by <code>{r.ranBy}</code>, not by the command it names.
         </div>
       ) : null}
-      {a.downgraded ? <div className="approval-note" data-testid="approval-downgraded">{a.downgraded}</div> : null}
       {command || detail.text ? (
         <details className="approval-detail approval-details" data-testid="approval-detail">
           <summary>Details</summary>
@@ -204,7 +203,7 @@ export function ApprovalContextRows({ a, hostName }: { a: Approval; hostName: st
             ) : null}
             {detail.text ? (
               <div className="approval-part">
-                <div className="approval-part-label">{detail.signed ? 'Signed detail' : 'Detail'}</div>
+                <div className="approval-part-label">{detail.bound ? 'Exact detail (used once)' : 'Detail'}</div>
                 <pre className="approval-detail-text">{detail.text}</pre>
               </div>
             ) : null}

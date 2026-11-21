@@ -19,7 +19,7 @@ never open the vault yourself: you name an item and say why, and Walnut decides.
   sends the user a notification on their Mac and phone to approve or deny) or **Off** (you list
   nothing; an ask that names one item still reaches the user). An item set to **without asking**
   is given under Ask too.
-- A **sensitive** item always asks, with Face ID or Touch ID.
+- A **sensitive** item always asks, whatever the switch says.
 - An item set to **never** is never given: ask the user to do that step themselves.
 - A yes lasts as long as the user picked (48 hours by default, or once, or until they revoke
   it), for this task and session and the fields you asked for.

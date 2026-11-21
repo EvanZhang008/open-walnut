@@ -24,8 +24,8 @@ const GRANTS = {
 function expected(mode: AgentsSwitch, access: AgentAccess | undefined, sensitive: boolean, grant: keyof typeof GRANTS): string {
   if (access === 'never') return 'refuse'
   if (grant === 'covering' || grant === 'forever') return 'release:grant'
-  if (mode === 'off') return sensitive ? 'ask:bio' : 'ask'
-  if (sensitive) return 'ask:bio'
+  // A sensitive item always asks (a tap, like every approval: no Face ID step of its own).
+  if (mode === 'off' || sensitive) return 'ask'
   if (mode === 'allow' || access === 'allow') return 'release:allow'
   return 'ask'
 }
@@ -36,7 +36,7 @@ describe('decideAgentUse: the whole matrix', () => {
   for (const mode of modes) for (const access of accesses) for (const sensitive of [false, true]) for (const grant of Object.keys(GRANTS) as Array<keyof typeof GRANTS>) {
     it(`${mode} x ${access ?? 'unset'} x ${sensitive ? 'sensitive' : 'plain'} x grant ${grant}`, () => {
       const d = decideAgentUse({ mode, access, sensitive, fields: ['password'], grant: GRANTS[grant], now: NOW })
-      const got = d.kind === 'refuse' ? 'refuse' : d.kind === 'release' ? `release:${d.via}` : d.biometric ? 'ask:bio' : 'ask'
+      const got = d.kind === 'refuse' ? 'refuse' : d.kind === 'release' ? `release:${d.via}` : 'ask'
       expect(got).toBe(expected(mode, access, sensitive, grant))
       if (d.kind === 'refuse') expect(d.code).toBe('agent_never')
     })

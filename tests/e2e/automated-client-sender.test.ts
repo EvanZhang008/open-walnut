@@ -179,3 +179,24 @@ describe('HTTP (the web app\'s fetch carries x-walnut-automated)', () => {
     await expectNoStampAfterControl(sid);
   }, 30_000);
 });
+
+// Approvals are a tap on any device the person is signed in on (2026-11-21): a window under
+// automation (an agent's Playwright, headless Chromium) is not one of them.
+describe('the person-only doors of approvals (routes/approvals-v1.ts, routes/config.ts)', () => {
+  const headersOf = (ua: string, automated = false) => ({ 'content-type': 'application/json', 'user-agent': ua, ...(automated ? { 'x-walnut-automated': 'webdriver' } : {}) });
+  it('a window under automation can neither answer an approval nor move the switch; the person\'s window answers', async () => {
+    const base = `http://localhost:${port}`;
+    const made = await (await fetch(`${base}/api/v1/approvals`, { method: 'POST', headers: headersOf(SAFARI_UA), body: JSON.stringify({ what: 'Automated probe: approve me' }) })).json() as { approval: { id: string; digest: string } };
+    const askMe = ((await (await fetch(`${base}/api/v1/approvals`, { headers: headersOf(SAFARI_UA) })).json()) as { askMe: boolean }).askMe;
+    for (const headers of [headersOf(SAFARI_UA, true), headersOf(HEADLESS_UA)]) {
+      const r = await fetch(`${base}/api/v1/approvals/${made.approval.id}/answer`, { method: 'POST', headers, body: JSON.stringify({ decision: 'approve', digest: made.approval.digest }) });
+      expect(r.status).toBe(403);
+      expect(((await r.json()) as { code: string }).code).toBe('human_only');
+      const flip = await fetch(`${base}/api/config`, { method: 'PUT', headers, body: JSON.stringify({ approvals: { ask_me: !askMe } }) });
+      expect(flip.status).toBe(403);
+    }
+    expect(((await (await fetch(`${base}/api/v1/approvals`, { headers: headersOf(SAFARI_UA) })).json()) as { askMe: boolean }).askMe).toBe(askMe);
+    const tap = await fetch(`${base}/api/v1/approvals/${made.approval.id}/answer`, { method: 'POST', headers: headersOf(SAFARI_UA), body: JSON.stringify({ decision: 'approve', digest: made.approval.digest }) });
+    expect(tap.status).toBe(200);
+  }, 30_000);
+});

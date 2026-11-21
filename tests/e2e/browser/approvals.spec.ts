@@ -4,8 +4,8 @@
  * page that is already open, the person clicks, and the asker's wait reads that decision.
  *
  *  - tap: Approve and Deny each reach the asker, used once;
- *  - biometric with no signing device: the card asks for a tap and says why;
- *  - biometric with a device: a browser's Approve is dimmed beside Deny, the card says to use Face ID, and Deny works;
+ *  - an older script's Face ID ask (2026-11-21: every approval is a tap on any device the person is
+ *    signed in on): one enabled Approve beside Deny, no Face ID words, and a tap reaches the asker;
  *  - Needs you: one line on Home (counted there, no title or buttons of its own) whose click
  *    opens the dialog in the order the requests came, the corner card on every page holding the
  *    buttons and staying until it is answered, and
@@ -17,20 +17,13 @@
  * Run on the Mac app's engine: PW_WEBKIT=1 bun x playwright test approvals --project webkit
  */
 import { expect, test, type APIRequestContext, type Page, type WebSocketRoute } from '@playwright/test'
-import crypto from 'node:crypto'
-import fs from 'node:fs/promises'
-import path from 'node:path'
-import { fixtureHome } from './engine-settings-helpers'
 import { holdApprovalsLock } from './approvals-lock'
-import { holdVaultLock } from './vault-lock'
 import { isolateUiPrefsContext } from './status-section-helpers'
 import { openSection, openTasksBy, sectionCount, taskSection } from './org-view-helpers'
 import { BOTTOM_LEFT, stackPlace, taskbarLift } from './corner-stack-place'
 
 test.use({ video: process.env.APR_VIDEO || process.env.PW_VIDEO ? 'on' : 'off' })
 test.describe.configure({ mode: 'serial' })
-// Its cards unlock the shared fixture vault; the vault lock comes before the approvals lock.
-holdVaultLock('shared', 'file')
 // It opens the sidebar, a synced layout pref: kept off the shared fixture, so no later spec
 // starts with it open (2026-11-06: notice-full-text measured its toast beside an open sidebar).
 test.beforeEach(async ({ context }) => { await isolateUiPrefsContext(context) })
@@ -117,11 +110,8 @@ test('a tap approval shows up live, and Approve and Deny each reach the asker', 
   expect((await waitFor(request, deny.approval.id, deny.waitToken)).approval.status).toBe('denied')
 })
 
-// With no device that signs: the card's "stop asking" turns approvals off at once. Before the
-// biometric test, which enrolls one (a fixture that already has one skips it).
+// The card's "stop asking" turns approvals off at once, with no approval of its own.
 test('stop asking from the card, see it in Settings, and turn it back on there', async ({ page, request }) => {
-  const signers = await (await request.get('/api/v1/approvals/keys')).json() as { keys: Array<{ status: string }> }
-  test.skip(signers.keys.some((k) => k.status === 'active'), 'a signing device is enrolled on this fixture server: the next tests cover that path')
   const setAskMe = (v: boolean) => request.put('/api/config', { data: { approvals: { ask_me: v } } })
   expect((await setAskMe(true)).ok()).toBe(true)
   try {
@@ -200,42 +190,22 @@ test('stop asking from the card, see it in Settings, and turn it back on there',
   }
 })
 
-test('biometric: a tap with a reason when no device signs, then Face ID only once one does', async ({ page, request }) => {
-  const keys = await (await request.get('/api/v1/approvals/keys')).json() as { keys: Array<{ status: string }> }
-  test.skip(keys.keys.some((k) => k.status === 'active'), 'a signing device is already enrolled on this fixture server')
-
+test('an older script\'s Face ID ask is a tap here: Approve beside Deny, enabled, and it reaches the asker', async ({ page, request }) => {
   await page.goto('/')
   await offHome(page)
-  const tap = await ask(request, { what: `Publish v1 ${stamp()}`, mode: 'biometric' })
-  expect(tap.approval.mode).toBe('tap')
-  const tapCard = page.locator(`[data-testid="approval-card"][data-approval-id="${tap.approval.id}"]`)
-  await expect(tapCard).toBeVisible({ timeout: 15_000 })
-  await expect(tapCard.locator('.approval-note')).toContainText('No device signs approvals yet')
-  await tapCard.getByRole('button', { name: 'Approve', exact: true }).click()
-  expect((await waitFor(request, tap.approval.id, tap.waitToken)).approval.status).toBe('approved')
-
-  const { publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
-  const spki = publicKey.export({ format: 'der', type: 'spki' }).toString('base64')
-  // The first signing device is the paired iPhone app, so the key rides a device token.
-  const paired = await request.post('/api/devices', { data: { name: `approvals-spec-${stamp()}` } })
-  expect(paired.status()).toBe(201)
-  const token = (await paired.json() as { token: string }).token
-  const enrolled = await request.post('/api/v1/approvals/keys', {
-    data: { publicKey: spki, name: 'Spec iPhone', kind: 'iphone' }, headers: { authorization: `Bearer ${token}` },
-  })
-  expect(enrolled.status()).toBe(200)
-
-  const bio = await ask(request, { what: `Rotate signing key ${stamp()}`, mode: 'biometric' })
-  expect(bio.approval.mode).toBe('biometric')
-  const bioCard = page.locator(`[data-testid="approval-card"][data-approval-id="${bio.approval.id}"]`)
-  await expect(bioCard).toBeVisible({ timeout: 15_000 })
-  await expect(bioCard.locator('.approval-kicker')).toContainText('Face ID')
-  await expect(bioCard.locator('.approval-note')).toContainText('Approve it on your iPhone with Face ID')
-  // Approve stays beside Deny, dimmed: never Deny alone (2026-11-15).
-  await expect(bioCard.getByTestId('approval-approve-elsewhere')).toBeDisabled()
-  await expect(bioCard.locator('.approval-btn-approve:not([disabled])')).toHaveCount(0)
-  await bioCard.getByRole('button', { name: 'Deny' }).click()
-  expect((await waitFor(request, bio.approval.id, bio.waitToken)).approval.status).toBe('denied')
+  // What an older script sends: Face ID, pinned to two devices. Walnut takes both and asks for a tap.
+  const old = await ask(request, { what: `Publish v1 ${stamp()}`, mode: 'biometric', signing_key_ids: ['ak-dcb776df2641b2ff', 'ak-e71d5e306b094f97'] })
+  expect(old.approval.mode).toBe('tap')
+  const card = page.locator(`[data-testid="approval-card"][data-approval-id="${old.approval.id}"]`)
+  await expect(card).toBeVisible({ timeout: 15_000 })
+  await expect(card).not.toContainText(/Face ID|Touch ID|No device signs|another device/)
+  await expect(card.getByTestId('approval-approve-elsewhere')).toHaveCount(0)
+  await expect(card.getByRole('button', { name: 'Deny', exact: true })).toBeEnabled()
+  await expect(card.getByRole('button', { name: 'Approve', exact: true })).toBeEnabled()
+  if (process.env.APR_SHOTS) await card.screenshot({ path: `${process.env.APR_SHOTS}/older-face-id-ask-is-a-tap.png` })
+  await card.getByRole('button', { name: 'Approve', exact: true }).click()
+  const got = await waitFor(request, old.approval.id, old.waitToken)
+  expect(got).toMatchObject({ used: true, approval: { status: 'approved', answer: { mode: 'tap', device: { kind: 'web' } } } })
 })
 
 test('Needs you: approvals are one line on Home, a click opens the request, and Main on the Org page lists them', async ({ page, request }) => {
@@ -645,93 +615,11 @@ test('an agent\'s browser step on the corner card reads whole, the site and why 
 // it back on in Settings brings the cards back. The fixture starts asking (test setup default), and
 // the test leaves it on for the other files.
 
-// While a device signs approvals, turning them off is its own approval (core/approvals/ask-me.ts):
-// from a card's "stop asking" and from the Settings switch, the switch stays on until the device's
-// Face ID signs, and a browser that cannot sign says to use the iPhone (2026-11-12, a review of the
-// Git gate: an unsigned PUT used to turn every approval off).
-test('with a device that signs, turning approvals off waits for its Face ID, from a card and from Settings', async ({ page, request }) => {
-  const setAskMe = (v: boolean) => request.put('/api/config', { data: { approvals: { ask_me: v } } })
-  const askMeNow = async () => ((await (await request.get('/api/v1/approvals')).json()) as { askMe: boolean }).askMe
-  // This test's own iPhone: its key signs the turn-off as the phone would.
-  const { privateKey, publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
-  const spki = publicKey.export({ format: 'der', type: 'spki' }).toString('base64')
-  const paired = await request.post('/api/devices', { data: { name: `approvals-off-spec-${stamp()}` } })
-  const token = (await paired.json() as { token: string }).token
-  const enrolled = await request.post('/api/v1/approvals/keys', { data: { publicKey: spki, name: 'Spec iPhone', kind: 'iphone' }, headers: { authorization: `Bearer ${token}` } })
-  expect(enrolled.status()).toBe(200)
-  const keyId = (await enrolled.json() as { key: { id: string } }).key.id
-  // A phone paired a while ago: one added while approvals are on cannot turn them off at once (ask-me.ts
-  // keyMayTurnOff). The fixture's keys file is the server's own record, read at every answer.
-  const keysFile = path.join(await fixtureHome(request), 'approvals', 'keys.json')
-  const keys = JSON.parse(await fs.readFile(keysFile, 'utf8')) as { keys: Array<{ id: string; createdAt: string; activatedAt?: string }> }
-  const long = new Date(Date.now() - 2 * 24 * 60 * 60_000).toISOString()
-  for (const k of keys.keys) if (k.id === keyId) { k.createdAt = long; k.activatedAt = long }
-  await fs.writeFile(keysFile, JSON.stringify(keys, null, 2))
-  const signTurnOff = async (id: string) => {
-    const a = (await (await request.get(`/api/v1/approvals/${id}`)).json() as { approval: { digest: string; what: string } }).approval
-    expect(a.what).toContain('Turn approvals off')
-    const signature = crypto.sign('sha256', Buffer.from(`walnut-approval-answer-v1\n${a.digest}\napprove`), { key: privateKey, dsaEncoding: 'der' }).toString('base64')
-    expect((await request.post(`/api/v1/approvals/${id}/answer`, { data: { decision: 'approve', keyId, signature } })).ok()).toBe(true)
-  }
-  expect((await setAskMe(true)).ok()).toBe(true)
-  try {
-    await page.goto('/')
-    await expect(page.locator('.app-layout, #root').first()).toBeVisible()
-    await offHome(page)
-
-    // From a card: this request is approved, and the turn-off opens as its own Face ID approval.
-    const first = await builtin(request, `Post the release notes ${stamp()}`)
-    const firstCard = page.locator(`[data-testid="approval-card"][data-approval-id="${first.approval.id}"]`)
-    await expect(firstCard).toBeVisible({ timeout: 15_000 })
-    await firstCard.getByTestId('approval-stop-asking').click()
-    await expect.poll(async () => (await (await request.get(`/api/v1/approvals/${first.approval.id}`)).json()).approval.status).toBe('approved')
-    const dialog = page.getByTestId('approval-dialog')
-    await expect(dialog).toContainText('Turn approvals off', { timeout: 15_000 })
-    await expect(dialog.getByTestId('approval-approve-elsewhere')).toBeDisabled()
-    await expect(dialog.locator('.approval-btn-approve:not([disabled])')).toHaveCount(0)
-    await expect(page.getByTestId('approval-stopped-asking')).toHaveCount(0)
-    expect(await askMeNow()).toBe(true)
-    if (process.env.APR_SHOTS) await dialog.screenshot({ path: `${process.env.APR_SHOTS}/turn-off-dialog.png` })
-    const turnOffId = await page.locator('.approval-dialog').getAttribute('data-approval-id')
-    await signTurnOff(turnOffId!)
-    await expect.poll(askMeNow).toBe(false)
-    await page.keyboard.press('Escape')
-    const quiet = await builtin(request, `Post the changelog ${stamp()}`)
-    expect(quiet.approval).toMatchObject({ status: 'approved', unasked: 'browserOutward' })
-
-    // From Settings: on needs nothing; off keeps the switch on until the phone signs.
-    if ((await page.locator('.sidebar.collapsed').count()) > 0) await page.locator('.sidebar-collapse-btn').click()
-    await page.locator('.sidebar-nav a[href="/settings"]').click()
-    const toggle = page.locator('#settings-approvals-ask-me')
-    await expect(toggle).toHaveAttribute('aria-checked', 'false', { timeout: 15_000 })
-    await toggle.click()
-    await expect(toggle).toHaveAttribute('aria-checked', 'true')
-    await expect.poll(askMeNow).toBe(true)
-    await toggle.click()
-    await expect(dialog).toContainText('Turn approvals off', { timeout: 15_000 })
-    const settingsOffId = await page.locator('.approval-dialog').getAttribute('data-approval-id')
-    expect(settingsOffId).not.toBe(turnOffId)
-    await page.keyboard.press('Escape')
-    const row = page.getByTestId('settings-approvals-ask-me-row')
-    await expect(row).toContainText('Approve “Turn approvals off” with Face ID or Touch ID to finish')
-    await expect(toggle).toHaveAttribute('aria-checked', 'true')
-    expect(await askMeNow()).toBe(true)
-    if (process.env.APR_SHOTS) await row.screenshot({ path: `${process.env.APR_SHOTS}/settings-turn-off-waiting.png` })
-    await signTurnOff(settingsOffId!)
-    // The phone's yes reaches this window by itself: the switch reads off, the note goes.
-    await expect(toggle).toHaveAttribute('aria-checked', 'false', { timeout: 15_000 })
-    await expect(row).not.toContainText('Turn approvals off')
-    expect(await askMeNow()).toBe(false)
-  } finally {
-    await setAskMe(true)
-  }
-})
-
 // A Git push from the Git gate (2026-11-12, the user on its dialog: "I just need to know which task
 // and which path right.. this si confuing"): the request's line on top until Walnut's summary
 // arrives, then two lines, Task (a link) and Repo (path, branch, machine); the command and the
-// signed JSON are in Details, closed.
-test('a Git push approval reads as Task and Repo, with the command and the signed detail folded', async ({ page, request }, info) => {
+// exact JSON it is bound to are in Details, closed.
+test('a Git push approval reads as Task and Repo, with the command and the exact detail folded', async ({ page, request }, info) => {
   await page.goto('/')
   await expect(page.locator('.app-layout, #root').first()).toBeVisible()
   await offHome(page)
@@ -758,12 +646,12 @@ test('a Git push approval reads as Task and Repo, with the command and the signe
   await expect(dialog.locator('.approval-clock')).toHaveText(/^\d+:\d\d left$/)
   await expect(dialog.getByRole('button', { name: 'Deny' })).toBeVisible()
   if (process.env.APR_SHOTS) await page.locator('.approval-dialog').screenshot({ path: `${process.env.APR_SHOTS}/${info.project.name}-git-closed.png` })
-  // Details opens the command and the signed detail, and closes again.
+  // Details opens the command and the exact detail, and closes again.
   await dialog.locator('.approval-detail summary').click()
   await expect(dialog.getByTestId('approval-command')).toBeVisible()
   await expect(dialog.getByTestId('approval-command')).toContainText('meta-fresh')
   await expect(dialog.locator('.approval-detail-text')).toContainText('"remoteRef": "refs/heads/mainline"')
-  await expect(dialog.locator('.approval-details')).toContainText('Signed detail')
+  await expect(dialog.locator('.approval-details')).toContainText('Exact detail (used once)')
   if (process.env.APR_SHOTS) await page.locator('.approval-dialog').screenshot({ path: `${process.env.APR_SHOTS}/${info.project.name}-git-open.png` })
   await dialog.locator('.approval-detail summary').click()
   await expect(dialog.getByTestId('approval-command')).toBeHidden()
@@ -796,7 +684,7 @@ test('a Git push approval shows the summary Walnut wrote on top, in full, once i
   await expect(dialog.getByTestId('approval-asks')).toHaveText('Push commit da21d9c to origin mainline in meta-fresh')
   await expect(dialog.getByTestId('approval-ai-summary')).toHaveText(summary, { timeout: 15_000 })
   await expect(dialog.getByTestId('approval-asks')).toHaveCount(0)
-  await expect(dialog.getByTestId('approval-dialog-summary')).toContainText('Walnut’s summary of the task’s session, not signed')
+  await expect(dialog.getByTestId('approval-dialog-summary')).toContainText('Walnut’s summary of the task’s session: the lines below are what you approve')
   // Shown whole: no clamp, no ellipsis, nothing hidden inside its box.
   expect(await dialog.getByTestId('approval-ai-summary').evaluate((n) => n.scrollHeight <= n.clientHeight + 1 && getComputedStyle(n).webkitLineClamp !== '2')).toBe(true)
   // The summary comes first, then Task and Repo.
@@ -840,7 +728,7 @@ test('every kind of approval shows its summary whole, with Details holding only 
   // Each: what the dialog reads with no click, its technical part, and what the corner card leads with.
   const cases: Array<[string, string[], string | null, string[]]> = [
     [own.approval.id, ['Message it sends: Thanks for the invite, I will bring the projector on Friday.', 'Approve to let it take this one step'], null, [`Let "Notes" click "Send" on mail.example.test? (${s})`]],
-    [git.approval.id, [summary, 'Walnut’s summary of the task’s session, not signed'], 'git -C', [summary, 'Push commit']],
+    [git.approval.id, [summary, 'Walnut’s summary of the task’s session: the lines below are what you approve'], 'git -C', [summary, 'Push commit']],
     [script.approval.id, [why], 'site/notes.md', [`Publish the release notes? (${s})`, why]],
   ]
   // The corner shows the oldest first; each Deny brings the next one up.

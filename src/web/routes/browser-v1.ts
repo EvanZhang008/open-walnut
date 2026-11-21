@@ -18,6 +18,7 @@
  */
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { isPersonCaller } from './person-caller.js'
+import { WHERE_ASKED } from '../../core/approvals/types.js'
 import { fromThisMachine } from '../middleware/local-trust.js'
 import { ambientTestRun } from '../../core/test-run.js'
 import { log } from '../../logging/index.js'
@@ -400,7 +401,7 @@ async function siteGate(req: Request, owner: string, url: string, holdMs: number
       detail: `${requester.taskTitle ? `"${requester.taskTitle}" wants to open ${url}` : `An agent wants to open ${url}`} in the Walnut agent window of your browser. `
         + `Approve once and agents may use ${site} until you remove it in Settings, Browser extension.`,
       detailRole: 'summary',
-      mode: 'tap', outsideSwitch: true, timeoutMs: SITE_ASK_MS, requester, testRun: ambientTestRun(),
+      outsideSwitch: true, timeoutMs: SITE_ASK_MS, requester, testRun: ambientTestRun(),
     })
     id = made.approval.id
     siteAsks.set(key, { id, at: Date.now() })
@@ -800,7 +801,7 @@ async function uploadGate(req: Request, res: Response, b: Record<string, unknown
   return false
   async function waitBody(id: string): Promise<Record<string, unknown>> {
     return { status: 'needs_ok', code: 'upload_needs_ok', request: id, waitsMinutes: ug.ASK_MS / 60_000,
-      error: `Waiting for the person to let this task upload the file from their computer into ${site || 'this page'}. ${await ug.whereAskedNow()}; the ask stays open ${ug.ASK_MS / 60_000} minutes.` }
+      error: `Waiting for the person to let this task upload the file from their computer into ${site || 'this page'}. ${WHERE_ASKED}; the ask stays open ${ug.ASK_MS / 60_000} minutes.` }
   }
 }
 

@@ -5,7 +5,7 @@ yes on your Mac or your phone:
 
 ```bash
 walnut approve "Deploy web to prod" --detail release-notes.md && ./deploy.sh
-walnut approve "Publish v2.3.0 to npm" --biometric --timeout 30m || exit 1
+walnut approve "Publish v2.3.0 to npm" --timeout 30m || exit 1
 ```
 
 | Exit code | Meaning |
@@ -17,10 +17,11 @@ walnut approve "Publish v2.3.0 to npm" --biometric --timeout 30m || exit 1
 | 4 | `--request-only`: asked, not answered yet (below) |
 | 130 | the script was stopped (Ctrl-C); the request is withdrawn on every device |
 
-Options: `--biometric` (Approve needs Face ID or Touch ID, below), `--timeout 90s|10m|2h`
-(10 seconds to 24 hours), `--detail <file>` (`-` reads stdin; up to 32,000 characters),
-`--from <label>` (a short name for the asking script), `--json` (prints the decided record on
-stdout). It works on every machine with the `walnut` CLI: on a remote host the call goes through
+Options: `--timeout 90s|10m|2h` (10 seconds to 24 hours), `--detail <file>` (`-` reads stdin; up
+to 32,000 characters), `--from <label>` (a short name for the asking script), `--json` (prints the
+decided record on stdout). An older script's `--biometric`, `--face-id`, `--touch-id` and
+`--signing-key` are taken and have no effect: every approval is one tap on any device you are
+signed in on (below). It works on every machine with the `walnut` CLI: on a remote host the call goes through
 that host's daemon to your Mac, so the request shows which host asked. `--why "<one line>"` is the
 sentence the person reads first (without it, the asking session's last words before it asked).
 
@@ -37,8 +38,8 @@ approval is in `approvals.json`, and a poll that gets no answer is made again wi
 waiting". A definite refusal (used, unknown id, bad token) still ends it at once. The same helper
 waits for `walnut pass`, `walnut browser` and `walnut wait` (`src/lib/wait-through-restart.ts`).
 
-`--request-only` saves what it asked (the wait token, the detail, for a single-use one the signed
-envelope) in `${XDG_STATE_HOME:-~/.local/state}/open-walnut/approvals/<id>.json` (mode 0600).
+`--request-only` saves what it asked (the wait token, the detail, for a single-use one the
+envelope Walnut built) in `${XDG_STATE_HOME:-~/.local/state}/open-walnut/approvals/<id>.json` (mode 0600).
 The rerun refuses when `what`, the detail or the mode changed since: ask again.
 
 From Python, one line in each mode:
@@ -142,15 +143,15 @@ marked `unasked` with its gate, or the plugin's own sent log, or a host grant `v
 | A task's first command on another host | `src/core/hosts/host-exec-grant.ts` |
 | A plugin's own ask (a Slack post) | the plugin reads `walnut.letters.asksPerson()` |
 
-What the switch never turns off: a signed single-use approval (only its device can sign it; a script
-that wants one reads the switch itself), a new signing device without its app's proof, a password the
-person marked never or sensitive, the Browser extension's approved-sites list when the person chose it,
+What the switch never turns off: a single-use approval (a script that wants one reads the switch
+itself), a password the person marked never or sensitive, the Browser extension's approved-sites list when the person chose it,
 a change to a calendar event other people are in (the native helper's own confirmation), an OS dialog,
 the person's own doors (Settings, answering), and an engine's own tool permission prompts (a session's
 permission mode, which is not a Walnut approval). A draft whose last send may have landed (`unknown`)
 is still shown to the person before another try. A host grant the switch made counts only while it
-stays off, and a Passwords use it released is logged `via: approvals-off`. Only a person moves the switch: a session gets
-`403 human_only` and a test run `409 test_run`. On, every gate asks as before.
+stays off, and a Passwords use it released is logged `via: approvals-off`. Only a person moves the switch, on any device they are
+signed in on (the same check as answering, `src/web/routes/person-caller.ts`): a session or a
+`walnut tools call` gets `403 human_only` and a test run `409 test_run`. On, every gate asks as before.
 `tests/core/approvals/ask-me-gates-guard.test.ts` lists every ask from the source and fails on a new one
 that does not read the switch or say why it stays.
 
@@ -184,22 +185,26 @@ that does not read the switch or say why it stays.
     the whole stack does.
   The web side is `web/src/components/approvals/` (one store, `approvals-store.ts`, for all of
   them); the Mac app's notification is `desktop/NotificationBridge.swift`.
-- **The iPhone app**: a push with Approve and Deny on the banner for a plain
-  approval; a tap opens the full request. The app also opens it when you bring it forward.
+- **The iPhone app**: a push with Approve and Deny on the banner, for every
+  approval; a tap opens the full request, with Approve and Deny live at its foot. The app also opens it when you bring it forward.
   Pushes need an APNs key on your Mac (see [iOS push notifications](ios-push-notifications.md)).
 
-## Two strengths
+## One tap, on any device you are signed in on
 
-- **Tap** (default): any Approve from a device you use.
-- **Biometric** (`--biometric`): Approve needs a signature from a device key that signs only after
-  Face ID or Touch ID. The iPhone app makes its key in the phone's Secure Enclave, the Mac app in
-  the Mac's; Walnut keeps only the public half. The device rebuilds the request's digest from
-  what it shows you and signs that, so a signature fits one request and only what you read.
-  Deny never needs a signature.
+Every approval is answered the same way: Approve or Deny, one tap, on any device you are signed in
+on (the web console, the Mac app, the iPhone app, through the cloud companion too). There is no
+device key, no device an approval is bound to, and Approve is never greyed out for want of one
+(2026-11-21, the user: "只要我这个手机连到了这里面，或者其他的 device ... 就可以签"). The phone's
+banner asks for its own passcode or Face ID before it answers, as iOS does for any banner action;
+Walnut asks for nothing more.
 
-If no device can sign yet, a `--biometric` request asks for a tap and says why, on the card and
-on the script's stderr. A Mac without Touch ID, or without the Mac app, answers biometric
-requests on the phone; a user without the phone app gets tap approvals.
+Until 2026-11-21 a `--biometric` or single-use approval needed a signature from a device key
+(Secure Enclave on the phone, Touch ID in the Mac app), and the Git gate pinned the keys it took.
+A phone re-paired after its key was pinned could then never approve again: its new key was not the
+pinned one, and its Approve stayed grey. All of that is gone: on upgrade, an ask still waiting to
+add or remove a device key, or to turn approvals off with a signature, is withdrawn
+(`store.ts withdrawDeviceKeyAsks`), and `approvals/keys.json` is no longer read. A record an older
+Walnut wrote with `mode: "biometric"` or pinned keys is answered with a tap like any other.
 
 ## Rules
 
@@ -209,113 +214,83 @@ requests on the phone; a user without the phone app gets tap approvals.
   (`tests/core/agent-parity-ratchet.test.ts`).
 - **At most 20 waiting at once.** A script in a loop cannot flood your phone: past 20 pending
   approvals a new ask is refused (`429 too_many_pending`) until some are answered or withdrawn.
-- **Bound and used once.** A request's digest covers its id, strength, times, host, task, what and
-  detail. The first answer wins; the asking process (holding the wait token only it got) reads
-  the decision once, and a second read is refused.
-- **Recorded.** Every decision keeps who asked, who answered, when, on which device and how
+- **An agent never approves itself.** The session or script that asks holds only the wait token;
+  it can read the answer, never give it. Its own calls carry its session (or the CLI's automation
+  mark), and the answer route refuses them, as it refuses a browser under automation on the
+  person's own install (Playwright, headless Chromium: routes/person-caller.ts
+  `isPersonNotAutomation`). The Approvals switch takes the same check. A session's Bash that sends
+  an answer or the switch through a web client (curl, a script's HTTP call) is refused by the
+  sessions' hook (`providers/approvals-guard-hook.ts`).
+- **Bound and used once.** A request's digest covers its id, mode, times, host, task, what and
+  detail. An answer names the digest of the request its screen showed (the web console, the Mac app
+  and the current iPhone app always do; an older iPhone app sends none, and a record never changes
+  after it is made), and one that does not match is refused (`409 changed`), so a request changed
+  after you read it is never approved unseen. The
+  first answer wins; the asking process (holding the wait token only it got) reads the decision
+  once, and a second read is refused.
+- **Expired is not approved.** An answer after the deadline is refused (`409 already_expired`), and a
+  single-use approval spent after it is refused too.
+- **Recorded.** Every decision keeps who asked, who answered, when and on which device
   (`walnut approvals list --all`, kept 30 days).
 
-## Signing devices
-
-Every device you set up signs at once, with nothing for you to do and nothing to approve on
-another device: the Walnut Mac app adds its Touch ID key when it opens, and the iPhone app its Face
-ID key the first time it opens, directly or through the cloud companion (which checks the phone's
-sign-in and names the phone to your computer). Face ID or Touch ID is still asked at every
-approval, by the device itself. So your first approval of an agent's step on the Mac is one touch,
-never the Passwords master password. The Mac app's key counts only when the app's own process
-sends it: Walnut checks that the process holding the request runs the signed Mac app's code: its
-bundle identifier, a certificate Apple issued to a team (never ad-hoc, which anyone can make), the
-hardened runtime with no entitlement that lets another program load code into it or attach a
-debugger, and the same code hash as the signed bundle on disk. The app keeps its key while the key
-on disk still needs Touch ID, so whatever pinned it keeps trusting it. A Mac app built without a
-developer certificate, or without the hardened runtime, adds no key; its approvals then take the
-iPhone's Face ID, or an unlock in Passwords as before.
-
-Nothing else adds a device, and Walnut never asks you to let one sign. A key from any other
-request (no paired phone's sign-in, no Mac app proof) is refused, because any program on the
-computer can call the console's routes. So is a copy of the Mac app started with another home
-folder (a test that gives the app a fresh `HOME` or `CFFIXED_USER_HOME` so it touches nothing of
-yours): it makes no key, signs nothing and asks nothing, and the server adds a Mac key only when
-the app says it runs in your account's own home. A test window (a browser under automation, or a
-page with a test-run label) never touches the Touch ID bridge. Before 2026-11-18 Walnut asked
-"Let <device> sign your approvals" for such a key; on upgrade those asks are withdrawn and their
-pending keys dropped, with nothing for you to answer. Where one such ask was approved and the key it
-let in took the place of the Mac app's own key (the Mac kept signing with its own key after the
-newer one came, and the newer one never signed), the Mac's own key signs again and the other goes. A device shows by its own name, or by its
-kind ("Mac", "iPhone") when its name is a generated id (a work Mac named like `a1b2c3d4e5f6`).
-Known limit: a program running as you can make a device sign-in, and so add a key of its own. A
-single-use approval bound to pinned keys (below) still takes only those keys' signatures.
-`walnut approvals list` shows the devices. Removing one is done from a device while another
-remains. Walnut never removes the last one, since the next device would then be trusted on first
-use; if that phone is lost, delete `approvals/keys.json` in the Walnut data folder by hand.
-
-What each strength guards:
-
-- **Tap** guards against an agent or a script answering through Walnut's tools (sessions and
-  `walnut tools call` are refused) and against an answer you did not give. It is a click in
-  Walnut's own screens, so a program running as you on this computer that calls the console's
-  route directly can answer it too.
-- **Biometric** also holds against that program: Approve needs a signature that only Face ID or
-  Touch ID on an enrolled device unlocks, and a device comes only from the paired phone or the
-  signed Mac app's own process in your own home folder. The Mac app signs only for the console page
-  itself, never for a frame inside it. What no check on this computer can stop is a program that
-  rewrites Walnut's own files or code on disk, or that builds and signs a look-alike Mac app with
-  your own developer certificate before the first device exists; Walnut's data lives in your home
-  directory, like every tool you run. Nor can it stop your cloud companion, or a program that reaches
-  your Mac's own daemon, from adding an iPhone key: the companion names the paired phone whose sign-in
-  it checked, on that one call only, and your Mac takes its word, as it takes the companion's word for
-  every call it carries. Such a key shows in the device list like any other.
+What this guards: an agent or a script answering through Walnut's tools (its sessions and
+`walnut tools call` are refused), and an answer you did not give. Known limit, the same as every
+person-only route: an answer is a click in Walnut's own screens, so a program running as you on
+this computer that calls the console's route directly without Walnut's session headers can answer
+too, and so can a holder of a paired device's token. A Git gate that runs a `walnut` found on
+`PATH` trusts that program.
 
 ## API
 
 | Route | Who | |
 |---|---|---|
-| `POST /api/v1/approvals` | anyone | `{ what, detail?, mode?, timeout_ms?, cwd?, command? }` → `{ approval, waitToken, downgraded? }` |
-| `GET /api/v1/approvals[?status=all]` | anyone | pending (or all) approvals and the signing devices |
+| `POST /api/v1/approvals` | anyone | `{ what, detail?, timeout_ms?, cwd?, command?, why?, single_use?, request_only? }` → `{ approval, waitToken }` (an older asker's `mode` and `signing_key_id(s)` are ignored) |
+| `GET /api/v1/approvals[?status=all]` | anyone | `{ approvals, keys: [], askMe }`: `keys` is always empty, kept for older iPhone apps that read it |
 | `GET /api/v1/approvals/:id` | anyone | one approval |
 | `POST /api/v1/approvals/:id/wait` | the asker | `{ token, wait_ms? }` → `{ approval, used }`, holds at most 12 s |
+| `POST /api/v1/approvals/:id/consume` | the asker's session | `{ token, digest, detail }` → `{ approval, used: true }` (single-use, below) |
 | `POST /api/v1/approvals/:id/cancel` | the asker | `{ token, reason? }` |
-| `POST /api/v1/approvals/:id/answer` | a person | `{ decision, keyId?, signature?, device? }` |
-| `GET /api/v1/approvals/keys` | anyone | the signing devices (public halves) |
-| `POST /api/v1/approvals/keys` | a device app | `{ publicKey, name, kind, accountHome? }` (base64 DER P-256 SPKI) → `{ key }`; anything else is `403 first_key_from_phone` |
-| `DELETE /api/v1/approvals/keys/:id` | a person | removes one (never the last) |
+| `POST /api/v1/approvals/:id/answer` | a person | `{ decision, digest?, device? }` (an older app's `keyId` and `signature` are ignored) |
+
+The routes `/api/v1/approvals/keys` are gone: an older iPhone app that still sends its key there
+gets a 404 it ignores, and its Approve works as a tap.
 
 Ops for agents: `approval_request`, `approval_wait`, `approval_consume`, `approval_cancel`, `approval_list`.
 
 ### Strict single-use steps
 
-`approval_request` also accepts `single_use: true` and `signing_key_id` (or `signing_key_ids`, two
-or more keys any one of which may sign; `walnut approve --signing-key` given more than once), with biometric mode,
-operation context in `detail`, and a timeout of at most five minutes. It requires a task session
-and an active signing device. No device means refusal, never a tap fallback. The server wraps the
-context in a signed JSON detail: `{version:"walnut-single-use-v1", sessionId, taskId, host,
-signingKeyId, nonce, context}`, or with a set `signingKeyIds` (sorted, distinct) in place of
-`signingKeyId`, so the set is signed and cannot be widened later; the answer's `keyId` names the
-key that signed. Identity comes from the caller, nonce is 32 random bytes, and the
-existing approval digest signs the entire envelope and its expiry. Existing clients can still
-show and sign the detail without a new digest format.
+`approval_request` also accepts `single_use: true`, with the operation context in `detail` and a
+timeout of at most five minutes. It requires a task session, with the asking process seen inside
+it. The server wraps the context in a JSON detail: `{version:"walnut-single-use-v1", sessionId,
+taskId, host, nonce, context}` (and `why`, `context_summary` when given). Identity comes from the
+caller, the nonce is 32 random bytes, and the approval digest covers the entire envelope and its
+expiry. The person answers it with a tap like any other.
 
 For these requests, `approval_wait` reads the answer without spending it (`used: false`). The
-asker rebuilds the original operation context from the current state and verifies the record's
-digest and signature against its pinned public key. Then `approval_consume` calls
-`POST /api/v1/approvals/:id/consume` with `{token, digest, detail}`, where `detail` is that rebuilt
-context, not the envelope. The store checks the same task session and host, context, signature,
-required signing device and expiry under its file lock. Success returns `{approval, used:true}`
-and durably spends the nonce. Every later consume is `409 approval_used`, including a retry
-within a second. A lost response is not permission to run: ask again. Deny, timeout, unsigned or
-forged answers, removed signing devices and mismatches never grant a use.
+asker rebuilds the original operation context from the current state and checks the record: its
+digest, the envelope's fields, that a person approved it (`decision: approve`, not marked
+`unasked`), and its expiry. Then `approval_consume` calls `POST /api/v1/approvals/:id/consume`
+with `{token, digest, detail}`, where `detail` is that rebuilt context, not the envelope. The
+store checks the same task session and host, the context, that it was approved by a person and its
+expiry under its file lock. Success returns `{approval, used:true}` and durably spends the nonce.
+Every later consume is `409 approval_used`, including a retry within a second. A lost response is
+not permission to run: ask again. Deny, timeout, an answer the switch gave instead of a person, and
+mismatches never grant a use.
 
 This step guards scripts that call it. It does not prevent a process from deleting the call,
 rewriting user-owned code or using credentials it already holds. Strong enforcement of a Git
 push additionally needs credentials isolated from the agent and an executor that verifies and
 pushes only the approved SHA to the approved remote and ref.
 
-The asking session hears the answer (`src/core/approvals/tell-asker.ts`). A `walnut approve` still waiting reads the decision itself; when nothing of the asker read it within 15 seconds of an Approve, a Deny or the deadline (a session that asked with `approval_request` and ended its turn, a command stopped meanwhile), Walnut sends that session one Walnut note with the decision, which wakes it when idle. Every way of answering ends in the store's `announce()`, so the web notice, the phone, Touch ID, Face ID and expiry all tell it; a withdrawal tells no one. `tests/core/approvals/tell-asker.test.ts` fails on a store path that ends an approval without announcing it.
+The asking session hears the answer (`src/core/approvals/tell-asker.ts`). A `walnut approve` still waiting reads the decision itself; when nothing of the asker read it within 15 seconds of an Approve, a Deny or the deadline (a session that asked with `approval_request` and ended its turn, a command stopped meanwhile), Walnut sends that session one Walnut note with the decision, which wakes it when idle. Every way of answering ends in the store's `announce()`, so the web notice, the Mac app, the phone and expiry all tell it; a withdrawal tells no one. `tests/core/approvals/tell-asker.test.ts` fails on a store path that ends an approval without announcing it.
 
 The digest is the SHA-256 hex of these lines joined with `\n` (base64 of UTF-8 where marked):
 `walnut-approval-v1`, `id=<id>`, `mode=<tap|biometric>`, `created=<iso>`, `expires=<iso>`,
-`host=<b64>`, `task=<task id or empty>`, `what=<b64>`, `detail=<b64 or empty>`. A device signs
-`walnut-approval-answer-v1\n<digest>\n<approve|deny>` with ECDSA P-256 / SHA-256, DER encoded.
-Implementations: `src/core/approvals/digest.ts`, `desktop/ApprovalBridge.swift`,
-`ios-native/Walnut/Core/ApprovalSigning.swift` (kept equal by
-`tests/core/approvals/approval-signing-parity.test.ts`).
+`host=<b64>`, `task=<task id or empty>`, `what=<b64>`, `detail=<b64 or empty>`
+(`src/core/approvals/digest.ts`). Every new approval is `mode=tap`; a record an older Walnut wrote
+keeps the mode it was made with, so its digest still matches. A device's answer names the digest it
+read from the record it showed; it never computes one.
+
+`tests/core/approvals/no-device-keys-ratchet.test.ts` fails when a device key, a signature check or
+an Approve that a signed-in device cannot press comes back anywhere in the server, the web console,
+the Mac app or the iPhone app.

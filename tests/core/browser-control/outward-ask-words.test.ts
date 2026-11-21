@@ -1,14 +1,14 @@
 /**
  * What the person reads on the approval card for an agent's buy, send or delete
- * (src/core/browser-control/outward-asks.ts askWords), and where they are told to approve
- * (src/core/approvals/signer-words.ts): who asks (the task's name, else "a Walnut agent"),
+ * (src/core/browser-control/outward-asks.ts askWords), and where they are asked
+ * (src/core/approvals/types.ts WHERE_ASKED): who asks (the task's name, else "a Walnut agent"),
  * exactly what (the button, the site; for a send its message, for an order its total), why it
- * waits (the reason the agent is told, said once), plain grammar, and only the devices the person
- * really has.
+ * waits (the reason the agent is told, said once), plain grammar, and any device the person is
+ * signed in on.
  */
 import { describe, expect, it } from 'vitest'
 import { askWords, type Hold } from '../../../src/core/browser-control/outward-asks'
-import { howToApprove, signerKinds, whereAsked } from '../../../src/core/approvals/signer-words'
+import { WHERE_ASKED } from '../../../src/core/approvals/types'
 import { orderTotal } from '../../../packages/browser-extension/src/page-agent-outward'
 
 const hold = (h: Partial<Hold>): Hold => ({ kind: 'buy', why: '"Place order" buys or pays', what: 'click button "Place order"', url: 'https://shop.example.test/checkout', sig: 's', ...h })
@@ -59,20 +59,9 @@ describe('the order total a page shows', () => {
   })
 })
 
-describe('where to approve names only the devices the person has', () => {
-  const key = (kind: string, status = 'active') => ({ kind, status })
-  it('no signing device: Passwords unlock in this window, no iPhone, no Mac app', () => {
-    const t = howToApprove(signerKinds([]), { unlock: true })
-    expect(t).toBe('Unlock Passwords in this window to approve.')
-    expect(whereAsked([])).toBe('They are asked in Walnut (a notification wherever it is open)')
-  })
-  it('an iPhone only', () => {
-    expect(howToApprove(signerKinds([key('iphone')]), { unlock: true })).toBe('Approve it on your iPhone with Face ID, or unlock Passwords in this window.')
-    expect(whereAsked(['iphone'])).toContain('and on their iPhone')
-  })
-  it('both, and a pending key does not count', () => {
-    expect(signerKinds([key('mac-app'), key('iphone'), key('iphone', 'pending')])).toEqual(['iphone', 'mac-app'])
-    expect(signerKinds([key('mac-app', 'pending')])).toEqual([])
-    expect(howToApprove(['iphone', 'mac-app'], { unlock: false })).toBe('Approve it on your iPhone with Face ID, or in the Walnut Mac app with Touch ID.')
+describe('where the person is asked', () => {
+  it('the agent is told the person answers on any device they are signed in on, with no device or Face ID named', () => {
+    expect(WHERE_ASKED).toBe('They are asked in Walnut, on any device they are signed in on (a notification wherever it is open)')
+    expect(WHERE_ASKED).not.toMatch(/Face ID|Touch ID|iPhone|Mac app|unlock/i)
   })
 })

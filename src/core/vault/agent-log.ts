@@ -42,7 +42,7 @@ export interface AgentLogEntry {
   host?: string
   command?: string
   use?: AgentUseKind
-  /** Who approved it (the device, with Face ID or Touch ID when it signed). */
+  /** Who approved it (the device the person tapped Approve on). */
   approvedBy?: string
   /** A listing: how many items it showed. A sync: what it changed. */
   count?: number

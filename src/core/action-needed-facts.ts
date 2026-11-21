@@ -14,14 +14,13 @@ import { USER_KIND_LEAD_WORDS } from './human-inbox/walnut-letters/thread-words.
 const one = (s: unknown, max = 200): string => (typeof s === 'string' ? s : '').replace(/\s+/g, ' ').trim().slice(0, max);
 
 /** A pending approval's item. */
-export function approvalItem(a: Pick<ApprovalView, 'id' | 'what' | 'createdAt' | 'mode' | 'guard' | 'requester' | 'detail' | 'detailRole'>): ActionItem {
+export function approvalItem(a: Pick<ApprovalView, 'id' | 'what' | 'createdAt' | 'requester' | 'detail' | 'detailRole'>): ActionItem {
   const summary = one(a.what) || 'Approve a step';
   return {
     kind: 'approval', id: a.id, summary, at: a.createdAt,
     // Only a detail said for the person; a technical one (a command's context, a diff) stays in Details.
     ...(a.detailRole === 'summary' ? detailOf(a.detail, summary) : {}),
     ...(a.requester?.sessionId ? { sessionId: a.requester.sessionId } : {}),
-    ...(a.mode === 'biometric' || a.guard ? { proof: true as const } : {}),
   };
 }
 

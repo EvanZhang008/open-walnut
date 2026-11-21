@@ -41,7 +41,7 @@ const GATES: Record<string, Gate> = {
   'src/core/hosts/host-exec-grant.ts': { asks: 1, reads: 'self' },
   'src/integrations/mail/approvals.ts': { asks: 1, reads: 'self' },
   'src/integrations/mail/unsubscribe.ts': { asks: 1, reads: 'self' },
-  'src/core/approvals/ask-me.ts': { asks: 2, kept: 'the off path itself (records an approved approval nobody was asked), and turning approvals off, which a device signs' },
+  'src/core/approvals/ask-me.ts': { asks: 1, kept: 'the off path itself (records an approved approval nobody was asked)' },
   'src/core/plugins/plugin-letters.ts': { asks: 1, kept: 'a plugin\'s letters.send; the plugin reads letters.asksPerson() itself' },
   'src/integrations/mail/digest.ts': { asks: 1, kept: 'the mail digest the person set up: a report, not an ask' },
   'src/core/offline-merge/letter.ts': { asks: 1, kept: 'a review of what two Walnuts wrote while apart: a report, not an ask' },
@@ -109,10 +109,9 @@ describe('every approval wait reads the Approvals switch', () => {
  */
 describe('with approvals off, only a payment asks', () => {
   const OUTSIDE: Record<string, string> = {
-    'src/core/approvals/ask-me.ts': 'turning approvals off, which a device signs: the person\'s own switch',
     'src/web/routes/approvals-v1.ts': 'an explicit walnut approve or approval_request the person put in a script to be asked',
     'src/web/routes/browser-v1.ts': 'a new site, only when the person chose Ask me first for sites in Settings (their own list)',
-    'src/web/routes/test-host-fixture.ts': 'the test fixture\'s signed single-use approval',
+    'src/web/routes/test-host-fixture.ts': 'the test fixture\'s single-use approval',
   };
 
   it('the steps that ask with approvals off are payments, and nothing else', () => {

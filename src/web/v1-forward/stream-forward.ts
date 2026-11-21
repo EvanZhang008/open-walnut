@@ -18,7 +18,6 @@ import type { Duplex } from 'node:stream'
 import type { Request, Response } from 'express'
 import { forwardRequestHeaders, forwardResponseHeaders } from './policy.js'
 import { FORWARD_FAILED_HEADER, FORWARD_REFUSED_HEADER } from './stream-door.js'
-import { COMPANION_PHONE_HEADER } from './forwarded-device.js'
 
 export type StreamOutcome =
   /** The Mac's answer was passed on (status, headers, body as it streams). */
@@ -43,8 +42,6 @@ export interface StreamForwardInput {
   body: Buffer | null
   timeoutMs: number
   open: () => Promise<Duplex>
-  /** The paired iPhone app the call came from (forwarded-device.ts companionPhoneOf). */
-  phone?: string
 }
 
 /** Forward one call; resolves once the answer started (or the call is known not answered). */
@@ -85,7 +82,6 @@ export function forwardOnStream(input: StreamForwardInput): Promise<StreamOutcom
       stream = s
       if (settled) { s.destroy(); return }
       const headers: http.OutgoingHttpHeaders = { ...forwardRequestHeaders(req.headers), host: 'primary' }
-      if (input.phone) headers[COMPANION_PHONE_HEADER] = input.phone
       if (body) headers['content-length'] = String(body.byteLength)
       up = http.request({ method, path: req.originalUrl, headers, createConnection: () => s } as http.RequestOptions)
       up.on('response', (answer) => {

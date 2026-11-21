@@ -9,9 +9,16 @@ import { APPROVE_EXIT, parseApproveArgv, parseApproveDuration, runApprove, type 
 
 describe('parseApproveArgv', () => {
   it('reads the words, the flags and the durations', () => {
-    expect(parseApproveArgv(['Deploy', 'to', 'prod', '--biometric', '--timeout', '90s', '--detail=notes.md', '--json'])).toEqual({
-      ok: true, what: 'Deploy to prod', biometric: true, timeoutMs: 90_000, detailFrom: 'notes.md', json: true,
-    })
+    // An older script's --biometric (and --face-id, --touch-id) is taken and changes nothing: every approval is a tap.
+    for (const old of ['--biometric', '--face-id', '--touch-id']) {
+      expect(parseApproveArgv(['Deploy', 'to', 'prod', old, '--timeout', '90s', '--detail=notes.md', '--json'])).toEqual({
+        ok: true, what: 'Deploy to prod', timeoutMs: 90_000, detailFrom: 'notes.md', json: true,
+      })
+    }
+    // --signing-key is read past with its file, and only goes with --single-use.
+    expect(parseApproveArgv(['x', '--single-use', '--detail', 'ctx.json', '--signing-key', 'mac.pem', '--signing-key=phone.pem']))
+      .toEqual({ ok: true, what: 'x', singleUse: true, detailFrom: 'ctx.json', json: false, timeoutMs: 300_000 })
+    expect(parseApproveArgv(['x', '--signing-key', 'mac.pem'])).toMatchObject({ ok: false })
     expect(parseApproveArgv(['x', '--timeout=2h', '--from', 'release.sh'])).toMatchObject({ timeoutMs: 7_200_000, command: 'release.sh' })
     expect(parseApproveArgv(['--', '--not-a-flag'])).toMatchObject({ ok: true, what: '--not-a-flag' })
     expect(parseApproveDuration('10m')).toBe(600_000)
@@ -46,7 +53,7 @@ function script(answers: Array<OpCallResult | (() => OpCallResult)>) {
   }
 }
 
-const args = { what: 'Deploy', biometric: false, timeoutMs: 60_000, json: false }
+const args = { what: 'Deploy', timeoutMs: 60_000, json: false }
 const io = (call: (n: string, a: Record<string, unknown>) => Promise<OpCallResult>, extra: Record<string, unknown> = {}) =>
   ({ call, say: () => undefined, out: () => undefined, sleep: async () => undefined, ...extra })
 
@@ -60,7 +67,9 @@ describe('runApprove', () => {
     expect(await runApprove(args, io(s.call))).toBe(APPROVE_EXIT.approved)
     expect(s.calls.map((c) => c.name)).toEqual(['approval_request', 'approval_wait', 'approval_wait', 'approval_wait'])
     expect(s.calls[1].args).toMatchObject({ id: 'apr-1', token: 'tok', wait_ms: 12_000 })
-    expect(s.calls[0].args).toMatchObject({ what: 'Deploy', mode: 'tap', timeout_ms: 60_000 })
+    expect(s.calls[0].args).toMatchObject({ what: 'Deploy', timeout_ms: 60_000 })
+    // No mode and no device key go with the ask: any signed-in device answers it with a tap.
+    for (const k of ['mode', 'signing_key_id', 'signing_key_ids']) expect(s.calls[0].args).not.toHaveProperty(k)
   })
 
   it('denied is 1, expired and withdrawn are 2, a used answer is 1, a refusal is 3', async () => {

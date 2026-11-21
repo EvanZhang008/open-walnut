@@ -71,8 +71,6 @@ export interface ActionItem {
   form?: AskForm;
   /** A Board choice: the Board (its owner task) it is on. */
   board?: string;
-  /** An approval whose Approve needs a device's proof (Touch ID, a Passwords unlock): answered in its dialog. */
-  proof?: true;
   /** Snoozed by the user until this time (ISO); absent when it is not. */
   snoozedUntil?: string;
 }

@@ -14,9 +14,6 @@
 #                       passkey page checks the signature; the vault and site/ come from
 #                       seed-vault.sh and site/ in this folder
 #   WALNUT_E2E_FLOWS    which flows to run (default: all, in order)
-#   WALNUT_E2E_SERVER_HOME  that server's data folder, when it is on this Mac: its approval keys
-#                       are removed first, so the fresh install is the first device that signs and
-#                       no "let this iPhone sign approvals" sheet covers the app
 set -uo pipefail
 cd "$(dirname "$0")/../.." || exit 1
 ROOT=$PWD
@@ -47,12 +44,6 @@ xcrun simctl install "$U" "$APP" || exit 1
 xcrun simctl spawn "$U" defaults write "$APP_ID" walnut.serverUrl "$SERVER"
 xcrun simctl spawn "$U" defaults write "$APP_ID" walnut.deviceToken "$TOKEN"
 xcrun simctl spawn "$U" defaults write "$APP_ID" walnut.deviceName "Passwords E2E"
-if [ -n "${WALNUT_E2E_SERVER_HOME:-}" ]; then
-  case $(cd "$WALNUT_E2E_SERVER_HOME" 2>/dev/null && pwd) in
-    "$HOME/.open-walnut"|"") echo "autofill-e2e: refusing WALNUT_E2E_SERVER_HOME=$WALNUT_E2E_SERVER_HOME"; exit 64 ;;
-  esac
-  rm -f "$WALNUT_E2E_SERVER_HOME/approvals/keys.json"
-fi
 # Face ID enrolled; a match is sent every 2 s while the flows run (a match with no prompt does nothing).
 xcrun simctl spawn "$U" notifyutil -s com.apple.BiometricKit.enrollmentChanged 1
 xcrun simctl spawn "$U" notifyutil -p com.apple.BiometricKit.enrollmentChanged

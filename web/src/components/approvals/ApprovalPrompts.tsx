@@ -12,13 +12,9 @@
  *    asking task's name, a link on the card and in the dialog, opens that task;
  *  - the system notification itself, raised by the store when a new approval arrives.
  *
- *  - tap: Approve / Deny;
- *  - biometric: Approve needs a device signature. In the Mac app that is Touch ID here
- *    (touch-id-bridge.ts); in a browser the card says to approve on the phone (Face ID),
- *    and Deny still works.
- *
- * In the Mac app the page also has the app enroll its Touch ID key once, never in a test window
- * (approvals-store.ts startTouchId; keys.ts: the app's own key signs at once, nothing is asked).
+ * Every request is Approve / Deny with one tap, in a browser and in the Mac app alike, as on
+ * every device the person is signed in on (2026-11-21, the user: no signing key; a signed-in
+ * device approves). Approve is never greyed out for want of a device.
  * Live through the `approval:changed` event; a reconnect re-reads the list.
  */
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
@@ -33,10 +29,9 @@ import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import type { Approval } from '@/api/approvals';
 import {
-  applyApprovalEvent, approveAndStopAsking, dismissStoppedAsking, undoStopAsking, approveKind, closeApproval, decideApproval, noApproveReason, openApproval, pendingAt, refreshApprovals,
-  openUnlock, startTouchId, unlockApproves, unlockUndecided, useApprovals, type ApprovalsState,
+  applyApprovalEvent, approveAndStopAsking, dismissStoppedAsking, undoStopAsking, closeApproval, decideApproval, openApproval, pendingAt, refreshApprovals,
+  useApprovals, type ApprovalsState,
 } from './approvals-store';
-import { ApprovalUnlock } from './ApprovalUnlock';
 import { askNoticePermission, nativeNoticeStatus, noticeAccess, openNoticeSettings, OPEN_APPROVAL_EVENT, takeClickedApproval, type NoticeAccess } from './approval-notify';
 import { ApprovalContextRows, AskerLink, hostWords, summaryOf, technicalDetail, wordsOf } from './approval-context';
 import { useYieldsToTaskOpen } from '@/hooks/useOpenTask';
@@ -88,45 +83,22 @@ export function settledWord(a: Approval): string {
   return a.status === 'approved' ? 'Approved' : a.status === 'denied' ? 'Denied' : a.status === 'expired' ? 'Expired' : 'Withdrawn';
 }
 
-/** Deny and the Approve this window offers, with their busy words. */
+/**
+ * Deny and Approve, always both and always live (2026-11-15, the user: "你那个到底在哪里"; 2026-11-21:
+ * a signed-in device approves): disabled only while this window's own answer is on its way.
+ */
 export function ApprovalButtons({ a, s }: { a: Approval; s: ApprovalsState }) {
   const working = s.busy[a.id];
-  const kind = approveKind(s, a);
-  // Locked here: unlock in place, then Approve shows.
-  if (s.unlockId === a.id && unlockApproves(s, a)) return <ApprovalUnlock onCancel={() => openUnlock(null)} />;
   return (
     <div className="approval-actions">
       <button type="button" className="approval-btn approval-btn-deny" disabled={!!working}
-        onClick={(e) => { e.stopPropagation(); void decideApproval(a, 'deny', false); }}>
+        onClick={(e) => { e.stopPropagation(); void decideApproval(a, 'deny'); }}>
         {working === 'deny' ? 'Denying…' : 'Deny'}
       </button>
-      {!kind && unlockUndecided(s, a) && (
-        <button type="button" className="approval-btn approval-btn-approve" data-testid="approval-approve-checking" disabled aria-busy="true"
-          title="Checking whether Passwords is unlocked on this computer">
-          Approve
-        </button>
-      )}
-      {!kind && unlockApproves(s, a) && !unlockUndecided(s, a) && (
-        <button type="button" className="approval-btn approval-btn-approve" data-testid="approval-unlock-to-approve" disabled={!!working}
-          onClick={(e) => { e.stopPropagation(); openUnlock(a.id); }}>
-          Unlock to approve
-        </button>
-      )}
-      {/* Approve and Deny always come together (2026-11-15, the user, on a sheet that showed Deny
-          alone: "你那个到底在哪里"): one this window cannot approve keeps its Approve, dimmed, and the
-          note above says where to approve it. */}
-      {!kind && !unlockUndecided(s, a) && !unlockApproves(s, a) && (
-        <button type="button" className="approval-btn approval-btn-approve" data-testid="approval-approve-elsewhere" disabled
-          title={noApproveReason(s, a)}>
-          Approve
-        </button>
-      )}
-      {kind && (
-        <button type="button" className="approval-btn approval-btn-approve" disabled={!!working}
-          onClick={(e) => { e.stopPropagation(); void decideApproval(a, 'approve', kind === 'touch-id'); }}>
-          {working === 'approve' ? (kind === 'touch-id' ? 'Touch ID…' : 'Approving…') : kind === 'touch-id' ? 'Approve with Touch ID' : 'Approve'}
-        </button>
-      )}
+      <button type="button" className="approval-btn approval-btn-approve" data-testid="approval-approve" disabled={!!working}
+        onClick={(e) => { e.stopPropagation(); void decideApproval(a, 'approve'); }}>
+        {working === 'approve' ? 'Approving…' : 'Approve'}
+      </button>
     </div>
   );
 }
@@ -150,31 +122,24 @@ export function ApprovalDetail({ a, open = false }: { a: Approval; open?: boolea
   if (!detail.text) return null;
   return (
     <details className="approval-detail" open={open} data-testid="approval-detail">
-      <summary>{detail.signed ? 'Detail (signed)' : 'Detail'}</summary>
+      <summary>{detail.bound ? 'Detail (used once)' : 'Detail'}</summary>
       <pre>{detail.text}</pre>
     </details>
   );
 }
 
-/** The card's name in its corner: the one way it is approved here, short enough for a narrow corner. */
-function kicker(biometric: boolean, kind: ReturnType<typeof approveKind>): string {
-  if (!biometric || kind === 'tap') return 'Approve?';
-  return kind === 'touch-id' ? 'Approve with Touch ID' : 'Needs Face ID or Touch ID';
-}
-
 /** What the request is, who asks, the detail, and the answer: the card's and the dialog's body. */
 function ApprovalBody({ a, s, now, onOpen, onMinimize, total = 0 }: { a: Approval; s: ApprovalsState; now: number; onOpen?: () => void; onMinimize?: () => void; total?: number }) {
-  const biometric = a.mode === 'biometric';
   const hostName = useHostDisplayLabel(a.requester.host);
   const asker = a.requester.taskId;
   // The card leads with what the step does and why, whole, as the dialog does (2026-11-14, the user:
-  // "summayr一直都显示不需要点detail"); under Walnut's summary, the request's own (signed) line.
+  // "summayr一直都显示不需要点detail"); under Walnut's summary, the request's own line.
   const lead = summaryOf(a);
   return (
     <>
       <div className="approval-head">
         {/* The card names itself in the corner; the dialog has no title of its own: its sentence is the request. */}
-        {onOpen ? <NoticeStatus tone="ask" className="approval-kicker">{kicker(biometric, approveKind(s, a))}</NoticeStatus> : <span />}
+        {onOpen ? <NoticeStatus tone="ask" className="approval-kicker">Approve?</NoticeStatus> : <span />}
         {onOpen && total > 1 && (
           <button type="button" className="approval-count" data-testid="approval-count" title={`See all ${total} approvals waiting`} onClick={onOpen}>
             {total} waiting
@@ -202,11 +167,7 @@ function ApprovalBody({ a, s, now, onOpen, onMinimize, total = 0 }: { a: Approva
         </div>
         <ApprovalDetail a={a} />
       </>) : <ApprovalContextRows a={a} hostName={hostName} />}
-      {onOpen && a.downgraded ? <div className="approval-note">{a.downgraded}</div> : null}
       {s.errors[a.id] ? <div className="approval-error" role="alert">{s.errors[a.id]}</div> : null}
-      {/* The unlock form open on it says "Unlock Passwords in this window" in its own label. */}
-      {(biometric || a.guard) && !approveKind(s, a) && !unlockUndecided(s, a)
-        && !(s.unlockId === a.id && noApproveReason(s, a).startsWith('Unlock Passwords in this window')) ? <div className="approval-note">{noApproveReason(s, a)}</div> : null}
       <ApprovalButtons a={a} s={s} />
       <StopAsking a={a} s={s} />
     </>
@@ -215,7 +176,7 @@ function ApprovalBody({ a, s, now, onOpen, onMinimize, total = 0 }: { a: Approva
 
 /** "Approve, and stop asking me": this one, then the Approvals switch off (Settings, General). */
 function StopAsking({ a, s }: { a: Approval; s: ApprovalsState }) {
-  if (a.singleUse || a.outsideSwitch || !approveKind(s, a) || s.busy[a.id]) return null;
+  if (a.singleUse || a.outsideSwitch || s.busy[a.id]) return null;
   return (
     <button type="button" className="approval-link approval-stop-asking" data-testid="approval-stop-asking"
       title="Approve this one and turn approvals off (Settings › General › Ask me before agents act). Each step then goes ahead and is listed there."
@@ -328,7 +289,7 @@ function ApprovalDialog({ s, now }: { s: ApprovalsState; now: number }) {
   const at = live ? list.findIndex((x) => x.id === id) : -1;
   return createPortal(
     <div className="app-modal-overlay approval-dialog-overlay" role="dialog" aria-modal="true" aria-label="Approval" data-testid="approval-dialog" onMouseDown={closeApproval}>
-      <div ref={boxRef} className={`app-modal approval-dialog${live?.mode === 'biometric' ? ' approval-card-biometric' : ''}`} data-approval-id={id} onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={boxRef} className="app-modal approval-dialog" data-approval-id={id} onMouseDown={(e) => e.stopPropagation()}>
         <button type="button" className="approval-dialog-close" aria-label="Close" onClick={closeApproval}>×</button>
         {live ? (
           <ApprovalBody a={live} s={s} now={now} />
@@ -388,13 +349,10 @@ export function ApprovalPrompts() {
 
   useEffect(() => { void refreshApprovals(); }, []);
   useEvent('_ws:reconnected', () => { void refreshApprovals(); });
-  useEvent('approval-keys:changed', () => { void refreshApprovals(); });
   useEvent('approval:changed', (data) => {
     const a = (data as { approval?: Approval }).approval;
     if (a) applyApprovalEvent(a);
   });
-  // The Mac app: learn whether Touch ID can sign here, and enroll its key once.
-  useEffect(() => { void startTouchId(); }, []);
   // A click on the Mac app's system notification (desktop/NotificationBridge.swift), also one
   // made before this page was listening (the app opened from it, or the page was reloading).
   useEffect(() => {
@@ -537,7 +495,7 @@ export function ApprovalPrompts() {
                   {s.errors[card.id] ? <div className="approval-error" role="alert">{s.errors[card.id]}</div> : null}
                 </NoticeCard>
               ) : (
-                <NoticeCard key={card.id} className={`approval-card${card.mode === 'biometric' ? ' approval-card-biometric' : ''}${armedId === card.id ? '' : ' approval-card-arming'}`} data={{ 'approval-id': card.id }} testId="approval-card">
+                <NoticeCard key={card.id} className={`approval-card${armedId === card.id ? '' : ' approval-card-arming'}`} data={{ 'approval-id': card.id }} testId="approval-card">
                   <ApprovalBody a={card} s={s} now={now} onOpen={() => openApproval(card.id)} onMinimize={() => setLineFor({ id: card.id, n: waiting.length })} total={waiting.length} />
                   <NoticeOffer />
                 </NoticeCard>

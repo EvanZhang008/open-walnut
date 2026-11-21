@@ -3,16 +3,15 @@
  * their yes (the page judges the step, the extension's page-agent-outward.ts; routes/browser-v1.ts
  * asks here). Only the agent's own click, Enter or typed text is judged: `evaluate`, the page's own
  * scripts and a link that acts on a plain GET are not. The ask is a Walnut approval like the
- * vault's (a notification on their Mac and phone), open for ASK_MS, and like the vault's it needs
- * a person's proof to approve (guard `person`: a device signature, or a Passwords unlock in the
- * window). The act answers 202 `needs_ok` with `request`; the agent calls the same action again
+ * vault's (a notification on their Mac and phone), open for ASK_MS, answered with a tap on any device
+ * they are signed in on. The act answers 202 `needs_ok` with `request`; the agent calls the same action again
  * with it (and `wait_ms`), and once the person approved, the step goes to the page with the
  * approval's signature of exactly that step (`outward_ok`), which the page checks against the
  * element it would act on. One use.
  */
 import { BrowserError } from './hub.js'
 import { keptMap } from '../kept-asks.js'
-import { signerKinds, whereAsked, type SignerKind } from '../approvals/signer-words.js'
+import { WHERE_ASKED } from '../approvals/types.js'
 import type { AgentRequester } from '../vault/agent.js'
 
 export const ASK_MS = 10 * 60_000
@@ -45,15 +44,10 @@ export function holdOf(extra: Record<string, unknown>): Hold | null {
 const hostOf = (u: string) => { try { return new URL(u).host } catch { return 'the page' } }
 const MINUTES = Math.round(ASK_MS / 60_000)
 
-async function signers(): Promise<SignerKind[]> {
-  const { activeKeys } = await import('../approvals/keys.js')
-  return signerKinds(await activeKeys())
-}
-
-async function waiting(id: string, hold: Hold): Promise<Record<string, unknown>> {
+function waiting(id: string, hold: Hold): Record<string, unknown> {
   return {
     status: 'needs_ok', code: 'outward_needs_ok', request: id, approvalId: id, kind: hold.kind, what: hold.what, url: hold.url, waitsMinutes: MINUTES,
-    error: `Waiting for the person to approve: ${hold.what} on ${hostOf(hold.url)} (${hold.why}). ${whereAsked(await signers())}; the ask stays open ${MINUTES} minutes.`,
+    error: `Waiting for the person to approve: ${hold.what} on ${hostOf(hold.url)} (${hold.why}). ${WHERE_ASKED}; the ask stays open ${MINUTES} minutes.`,
   }
 }
 
@@ -106,9 +100,6 @@ export async function askOutward(input: { owner: string; tab: number; action: st
   const made = await store.createApproval({
     what: words.what,
     detail: words.detail, detailRole: 'summary',
-    // A plain tap from this machine is not proof (any process here can send one, the asking agent
-    // too): Face ID or Touch ID where a device signs, else this window's Passwords unlock (`person`).
-    mode: (await signers()).length ? 'biometric' : 'tap', guard: 'person',
     timeoutMs: ASK_MS, requester: input.requester, ...(input.testRun ? { testRun: input.testRun } : {}),
   })
   const id = made.approval.id

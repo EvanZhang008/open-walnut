@@ -276,8 +276,8 @@ in the data home (a throwaway server), git sync never carries it (`/vault/` in i
 Types: login, secure note, card, API key (with the env var a command gets it as), identity
 (later). Every item has favorites, tags, custom fields (hidden or not), notes, password
 history (the last 20 passwords with when each was replaced), trash (purged after 30 days),
-`agentAccess` (`never`, `ask`, `allow`) and `sensitive` (an agent's use needs Face ID or
-Touch ID). Sites are normalized at save (`github.com` becomes `https://github.com`) and
+`agentAccess` (`never`, `ask`, `allow`) and `sensitive` (an agent's use always asks the
+person, whatever the switch says). Sites are normalized at save (`github.com` becomes `https://github.com`) and
 matched by registrable domain with the public suffix list, private suffixes included, so two
 `github.io` sites never match each other and an https login never fills an http page.
 
@@ -391,7 +391,7 @@ no window and shares nothing), marked `here` on the session and kept by `session
 phone, a browser elsewhere, the companion and an unlock made through Walnut's tunnel share nothing.
 
 The other way round works too: a locked Walnut window on this computer (the `/passwords` page,
-Settings, an approval's "Unlock to approve", the Mac app's page) shares an unlock the person made in
+Settings, the Mac app's page) shares an unlock the person made in
 the extension or in another window, with no password, by the same rules. A page and a local process
 (an agent's `curl` with Walnut's Origin) look the same to Walnut, so a window needs a secret of its
 own, as the extension has its device token: its browser key. When the person types the master
@@ -441,12 +441,10 @@ expiry, a self-lock, a new master password; never a mere use) is announced to ev
 window as `vault:changed` (`sessions.ts`, one event per burst, carrying nothing of the vault), and
 each window then reads its own status quietly (`web/src/api/vault-live.ts`; a reconnect reads it
 once too). So a Lock in the extension or another window locks an open Passwords page within about
-a second, its items gone at once, and an unlock there opens a locked Passwords page, Settings →
-Passwords and a guarded approval card with no reload. An approval card that needs an unlock reads
-the vault the moment it arrives, so it says Approve while it can share one and "Unlock to approve"
-(which asks for the master password) only when there is none. Every web file that reads the vault
-state imports the follower (`tests/web/vault-live-guard.test.ts`); a locked Passwords page and an
-open "Unlock to approve" form still look every 3 s behind it, in case the socket is down. A window that locked only itself (its own idle
+a second, its items gone at once, and an unlock there opens a locked Passwords page and Settings →
+Passwords with no reload. Every web file that reads the vault state imports the follower
+(`tests/web/vault-live-guard.test.ts`); a locked Passwords page still looks every 3 s behind it,
+in case the socket is down. A window that locked only itself (its own idle
 lock, `POST /vault/lock` with no body) is recorded under its key's id (`window:<id>`) and shares
 nothing until the person unlocks again; a person's Lock ends every shared window with the rest.
 A new master password or a recovery ends every browser key (the window making the change gets a
@@ -697,9 +695,9 @@ command; a fill into a page from the browser extension), and Walnut decides:
 
 | Switch | Item set to never | Sensitive item | Any other item |
 | --- | --- | --- | --- |
-| Any (a new vault) | refused | the person approves, with Face ID or Touch ID | given at once |
-| Ask | refused | the person approves, with Face ID or Touch ID | the person approves (an item set to "without asking" is given) |
-| Off | refused | the person approves, with Face ID or Touch ID | the person approves; agents list nothing |
+| Any (a new vault) | refused | the person approves | given at once |
+| Ask | refused | the person approves | the person approves (an item set to "without asking" is given) |
+| Off | refused | the person approves | the person approves; agents list nothing |
 
 A grant the person gave earlier (below) lets the use through without asking, except for an item set
 to never. The switch is one line in Settings → Passwords and in Agent Activity: "When an agent
@@ -713,8 +711,7 @@ without an approval too: that is the person's choice of switch. Under Off an age
 apply. Setup asks only for the master password; "Agents can ask while Passwords is locked" (the
 machine key) is under Recovery and advanced in Settings.
 
-A **sensitive** item always asks, with Face ID or Touch ID on a device that signs approvals (a
-tap when none is set up yet, and the ask says so). The ask is an approval (`core/approvals/`): a
+A **sensitive** item always asks, whatever the switch says. The ask is an approval (`core/approvals/`): a
 card on every console window, a system notification, and a push to the phone with Approve and
 Deny, naming the item, its sites, the fields, how it will be used, the purpose, the task, the
 host, the directory, the command, and how long the yes lasts.
@@ -730,15 +727,12 @@ with its task, session, item, fields, use, who approved it and when it ends, eac
 every grant. Grants live in memory, and in `agent-grants.json` (sealed) only while the machine key
 is on, so with it on they last across a restart and with it off a restart ends them.
 
-**Approving needs proof only the person has.** A plain tap from this machine is something any
-process here could send, an agent knows its own ask's id, and a process here can even make
-itself a device token. So an approval that gives an agent a vault item (`guard` on the
-approval) is asked with Face ID or Touch ID wherever a device can sign (the iPhone app, the Mac
-app), and takes Approve only with that device key's signature, or, for an item that is not
-sensitive (and for a sensitive one while no device can sign), from a window that has Passwords
-unlocked (its vault session, which only the master password buys). Anything else gets
-`403 vault_unlock_needed`, and the card says to unlock Passwords or use the phone. Deny is open
-to any answer.
+**Only the person approves.** An approval that gives an agent a vault item is answered like every
+approval (`docs/reference/approvals.md`): a person's tap on any device they are signed in on, never
+a session's call. Before 2026-11-21 it also needed a device key's signature or Passwords unlocked
+in the window that approved; the user asked for one tap on any signed-in device, so both are gone.
+Known limit, as for every approval: a process on this computer that calls the answer route
+without Walnut's session headers passes as the person.
 
 Who asked: a session id counts only from the host that session runs on (`requesterOf` in
 `approvals-v1.ts`), so a script on a dev box cannot name another host's session to borrow its

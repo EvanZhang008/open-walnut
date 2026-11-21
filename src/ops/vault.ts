@@ -12,7 +12,7 @@ interface ItemView { id: string; title: string; type: string; sites?: string[]; 
 
 function itemLine(i: ItemView): string {
   const where = [i.sites?.join(', '), i.envName ? `$${i.envName}` : ''].filter(Boolean).join(', ')
-  return `${i.title}${where ? ` (${where})` : ''} [${i.id}]: ${i.fields.join(', ') || 'no field'}; ${i.access === 'allow' && !i.sensitive ? 'given without asking' : i.sensitive ? 'asks the person, with Face ID or Touch ID' : 'asks the person'}`
+  return `${i.title}${where ? ` (${where})` : ''} [${i.id}]: ${i.fields.join(', ') || 'no field'}; ${i.access === 'allow' && !i.sensitive ? 'given without asking' : i.sensitive ? 'always asks the person' : 'asks the person'}`
 }
 
 const LEAST_SEEN = 'Prefer a way that uses the secret without showing it to you: `walnut browser fill_login` for a sign-in page, '
@@ -21,14 +21,14 @@ const LEAST_SEEN = 'Prefer a way that uses the secret without showing it to you:
 const USE_RULE = 'Use the values only for the purpose you gave. Never repeat them in a reply, a file, a commit, a log or another message.'
 
 function useOutcome(body: unknown) {
-  const b = (body ?? {}) as { status?: string; item?: ItemView; values?: Record<string, string>; via?: string; grantedUntil?: string; requestId?: string; mode?: string; downgraded?: string }
+  const b = (body ?? {}) as { status?: string; item?: ItemView; values?: Record<string, string>; via?: string; grantedUntil?: string; requestId?: string }
   if (b.status === 'released') {
     const how = b.via === 'allow' ? 'the item allows agents' : b.via === 'grant' ? `this task holds a grant until ${b.grantedUntil}` : `the person approved${b.grantedUntil ? `, for this task until ${b.grantedUntil}` : ''}`
     return withOutcome(b as Record<string, unknown>, `Released ${Object.keys(b.values ?? {}).join(', ')} of ${b.item?.title} (${how}).`, USE_RULE)
   }
   if (b.status === 'pending') {
     return withOutcome(b as Record<string, unknown>,
-      `Waiting for the person to approve ${b.item?.title} on their Mac or phone${b.mode === 'biometric' ? ' with Face ID or Touch ID' : ''}.${b.downgraded ? ` ${b.downgraded}` : ''}`,
+      `Waiting for the person to approve ${b.item?.title} on their Mac or phone.`,
       'Call password_wait with id (requestId) and token (waitToken) until it is released, then go on. Do not ask again meanwhile.')
   }
   if (b.status === 'expired' || b.status === 'canceled') {
@@ -68,7 +68,7 @@ defineOp({
     'Get fields of one vault item for a step you are doing now. Name the item (its id from password_list, its name, a site, or an env var name) '
     + 'and say why in `purpose`, in words the user reads on their phone ("sign in to git.example.com to merge PR 12"). '
     + 'What happens follows the user\'s setting: Any (the default) releases it at once, Ask sends the user an approval for each use, '
-    + 'Off sends an approval for the one item you name; a sensitive item always asks (Face ID or Touch ID). Pending: you get `status: "pending"` '
+    + 'Off sends an approval for the one item you name; a sensitive item always asks. Pending: you get `status: "pending"` '
     + 'with requestId and waitToken, then call password_wait. An approval lets this task use the item again for the user\'s grant length '
     + '(48 hours by default) without asking; `scope: "once"` asks for this use only. `use: "reveal"` (the default) is explicit: the plaintext '
     + 'comes back to you and Agent Activity records it as shown. ' + LEAST_SEEN + ' Fields: password (default), username, totp '

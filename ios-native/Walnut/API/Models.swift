@@ -770,13 +770,12 @@ struct WalnutActionItem: Codable, Equatable, Identifiable {
     /// A one-question prompt's question word for word: the key its answer goes under.
     var question: String? = nil
     var board: String? = nil
-    var proof: Bool? = nil
     var snoozedUntil: String? = nil
 
     init(kind: String, id: String, summary: String, at: String? = nil, sessionId: String? = nil, blocking: Bool? = nil,
-         options: [WalnutAskOption]? = nil, multi: Bool? = nil, board: String? = nil, proof: Bool? = nil, snoozedUntil: String? = nil) {
+         options: [WalnutAskOption]? = nil, multi: Bool? = nil, board: String? = nil, snoozedUntil: String? = nil) {
         self.kind = kind; self.id = id; self.summary = summary; self.at = at; self.sessionId = sessionId
-        self.blocking = blocking; self.options = options; self.multi = multi; self.board = board; self.proof = proof
+        self.blocking = blocking; self.options = options; self.multi = multi; self.board = board
         self.snoozedUntil = snoozedUntil
     }
 
@@ -792,7 +791,6 @@ struct WalnutActionItem: Codable, Equatable, Identifiable {
         multi = (try? c?.decodeIfPresent(Bool.self, forKey: .multi)) ?? nil
         question = (try? c?.decodeIfPresent(String.self, forKey: .question)) ?? nil
         board = (try? c?.decodeIfPresent(String.self, forKey: .board)) ?? nil
-        proof = (try? c?.decodeIfPresent(Bool.self, forKey: .proof)) ?? nil
         snoozedUntil = (try? c?.decodeIfPresent(String.self, forKey: .snoozedUntil)) ?? nil
     }
 }

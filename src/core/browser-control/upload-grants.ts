@@ -13,13 +13,11 @@
  * same ask is refused at once, never put to them again and again.
  *
  * Why an ask and not the person's chat: a session's transcript lives on the session's host, where
- * the agent can write it, so a "person" row there proves nothing (review 2026-11-16). A plain tap
- * from this machine is no proof (any process here can send one, the asking agent too): Face ID or
- * Touch ID where a device signs, else the window's Passwords unlock (`guard: 'person'`).
+ * the agent can write it, so a "person" row there proves nothing (review 2026-11-16). The ask is
+ * answered like every approval: a tap on any device the person is signed in on.
  */
 import type { ApprovalRequester } from '../approvals/types.js'
 import { keptMap } from '../kept-asks.js'
-import { signerKinds, whereAsked } from '../approvals/signer-words.js'
 
 /** How long a yes lets the task send the same file again. */
 export const GRANT_MS = 24 * 3600_000
@@ -88,12 +86,6 @@ export function askWords(paths: string[], site: string, taskTitle: string | unde
   }
 }
 
-/** Where the person answers, in words for the agent. */
-export async function whereAskedNow(): Promise<string> {
-  const { activeKeys } = await import('../approvals/keys.js')
-  return whereAsked(signerKinds(await activeKeys()))
-}
-
 /** Ask the person, or the open ask for the same task and files. */
 export async function askUpload(input: { taskId: string; paths: string[]; site: string; requester: ApprovalRequester; testRun?: string; now?: number }): Promise<{ id: string; reused: boolean }> {
   const now = input.now ?? Date.now()
@@ -104,10 +96,8 @@ export async function askUpload(input: { taskId: string; paths: string[]; site: 
     if (a.taskId === input.taskId && a.site === input.site && [...a.paths].sort().join('\n') === want && (await getApproval(id))?.status === 'pending') return { id, reused: true }
   }
   const words = askWords(input.paths, input.site, input.requester.taskTitle)
-  const { activeKeys } = await import('../approvals/keys.js')
   const { approval } = await createApproval({
-    what: words.what, detail: words.detail, detailRole: 'summary',
-    mode: signerKinds(await activeKeys()).length ? 'biometric' : 'tap', guard: 'person', timeoutMs: ASK_MS,
+    what: words.what, detail: words.detail, detailRole: 'summary', timeoutMs: ASK_MS,
     requester: input.requester, ...(input.testRun ? { testRun: input.testRun } : {}),
   })
   asks.set(approval.id, { taskId: input.taskId, site: input.site, paths: [...input.paths], at: now })

@@ -18,15 +18,15 @@ import { WALNUT_HOME } from '../../constants.js'
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js'
 import { bus } from '../event-bus.js'
 import { tellAskerLater } from './tell-asker.js'
-import { fenceRefusal, fenceSkipped, fenced, readActivity, type FenceRefusal, type FenceSubject, type UserActivity } from './biometric-fence.js'
+import { fenceRefusal, fenceSkipped, fenced, readActivity, type FenceRefusal, type FenceSubject, type UserActivity } from './single-use-fence.js'
 import { log } from '../../logging/index.js'
-import { answerMessage, approvalDigest, verifySignature } from './digest.js'
+import { approvalDigest } from './digest.js'
 import { deviceLabel } from './device-name.js'
 import {
   APPROVAL_DEFAULT_TIMEOUT_MS, APPROVAL_DETAIL_MAX, APPROVAL_KEEP_MAX, APPROVAL_KEEP_MS, APPROVAL_MAX_TIMEOUT_MS,
   APPROVAL_MIN_TIMEOUT_MS, APPROVAL_WAIT_MAX_MS, APPROVAL_WHAT_MAX, isTerminal,
-  type ApprovalAnswer, type ApprovalDecision, type ApprovalDeviceKind, type ApprovalMode, type ApprovalRecord,
-  type ApprovalGuard, type ApprovalRequester, type ApprovalsFile, type ApprovalView,
+  type ApprovalDecision, type ApprovalDeviceKind, type ApprovalRecord,
+  type ApprovalRequester, type ApprovalsFile, type ApprovalView,
 } from './types.js'
 
 export const APPROVAL_CHANGED = 'approval:changed'
@@ -58,7 +58,7 @@ export function viewOf(rec: ApprovalRecord): ApprovalView {
   const { waitTokenHash: _hidden, ...view } = rec
   // What an older Walnut wrote may name a device by a generated id (device-name.ts): the answer's
   // device, and the title of its "Let … sign your approvals" asks, still in the history (a decided
-  // one only: the title is in the digest a device signs, and none of them stays pending past boot).
+  // one only: the title is in the record's digest, and none of them stays pending past boot).
   const asked = view.enrollsKey && view.status !== 'pending' ? /^Let "(.+)" \((Mac app|iPhone)\) sign your approvals$/.exec(view.what) : null
   const what = asked ? `Let "${deviceLabel(asked[1], asked[2] === 'iPhone' ? 'iphone' : 'mac-app')}" (${asked[2]}) sign your approvals` : view.what
   const device = view.answer?.device
@@ -133,18 +133,11 @@ export async function sweepExpired(): Promise<number> {
 
 /** On boot: arm the clock of every pending approval and expire the overdue ones. */
 export async function initApprovals(): Promise<void> {
-  // The switch Walnut set last (ask-me.ts): an off it did not sign never reads as off.
+  // The switch Walnut set last (ask-me.ts): an off written by any other path never reads as off.
   const { loadAskMeLatch } = await import('./ask-me.js')
   await loadAskMeLatch().catch((err) => log.web.warn('approvals: reading the switch failed', { error: String(err) }))
   await sweepExpired()
-  const { restoreMacKeysTakenByAsks, retireReplacedMacKeys, withdrawPendingEnrollments } = await import('./keys.js')
-  // Keys an older Walnut kept for a Mac that has since enrolled a newer one (keys.ts).
-  await retireReplacedMacKeys().catch((err) => log.web.warn('approvals: retiring replaced Mac keys failed', { error: String(err) }))
-  // Then a Mac's own key that a key an old ask let in took the place of signs again (keys.ts), the
-  // one the rule above retired in this same boot included.
-  await restoreMacKeysTakenByAsks().catch((err) => log.web.warn('approvals: giving back the Mac\'s own key failed', { error: String(err) }))
-  // An older Walnut's "Let … sign your approvals" asks, and the keys they were for (keys.ts).
-  await withdrawPendingEnrollments().catch((err) => log.web.warn('approvals: withdrawing the device asks failed', { error: String(err) }))
+  await withdrawDeviceKeyAsks().catch((err) => log.web.warn('approvals: withdrawing the device-key asks failed', { error: String(err) }))
   const file = await readJsonFile<ApprovalsFile>(approvalsFile(), EMPTY)
   // A decision made just before a restart, inside the asker's grace, is still told.
   const { rearmAskerNotices } = await import('./tell-asker.js')
@@ -152,32 +145,39 @@ export async function initApprovals(): Promise<void> {
   for (const a of file.approvals) armExpiry(a)
 }
 
+/**
+ * On boot: an older Walnut's asks about device keys that are still open (to let a device sign, to
+ * remove one, to turn approvals off with a signature) are withdrawn. No device key exists any more
+ * (types.ts), so approving one would do nothing.
+ */
+export async function withdrawDeviceKeyAsks(): Promise<number> {
+  const file = await readJsonFile<ApprovalsFile>(approvalsFile(), EMPTY)
+  const legacy = file.approvals.filter((a) => {
+    const old = a as ApprovalRecord & { removesKey?: string; turnsAskMeOff?: true }
+    return a.status === 'pending' && (!!old.enrollsKey || !!old.removesKey || !!old.turnsAskMeOff)
+  })
+  for (const a of legacy) {
+    await cancelInternal(a.id, 'Walnut no longer keeps device keys: any device you are signed in on approves').catch(() => undefined)
+  }
+  if (legacy.length) log.web.info('approvals: withdrew the asks about device keys', { asks: legacy.map((a) => a.id) })
+  return legacy.length
+}
+
 export interface CreateInput {
   what: string
   detail?: string
   /** Whether `detail` is the request in words (shown whole) or technical (in Details): every creator says (approval-detail-role-ratchet). */
   detailRole?: 'summary' | 'technical'
-  mode: ApprovalMode
   timeoutMs?: number
   requester: ApprovalRequester
-  /** Set when `biometric` was asked but cannot be honored, with why (the caller decides). */
-  downgraded?: string
-  // No `enrollsKey`: Walnut never asks the person to let a device sign (keys.ts); only an older
-  // Walnut's records carry one, and they are withdrawn on boot (withdrawPendingEnrollments).
-  removesKey?: string
-  turnsAskMeOff?: true
   testRun?: string
-  guard?: ApprovalGuard
   singleUse?: boolean
-  signingKeyId?: string
-  /** Any one of these keys may sign it (two or more; one key is `signingKeyId`). */
-  signingKeyIds?: string[]
-  /** Why it asks and where the task stands (asker-context.ts); signed in a single-use envelope. */
+  /** Why it asks and where the task stands (asker-context.ts); kept in a single-use envelope. */
   context?: AskerContext
   requestOnly?: boolean
   /** Record it as done without asking (approvals off, ask-me.ts): the gate's name. */
   unasked?: string
-  /** An ask the Approvals switch never answers (a new signing device, the person's site list). */
+  /** An ask the Approvals switch never answers (an explicit `walnut approve`, the person's site list). */
   outsideSwitch?: boolean
 }
 
@@ -207,36 +207,13 @@ export function cleanWhat(raw: unknown): string {
   return what
 }
 
-/**
- * The keys a single-use approval takes a signature from: one (`signingKeyId`), or a set of two or
- * more (`signingKeyIds`, sorted: a Git push the person may approve on the Mac or the iPhone). The
- * set rides in the signed envelope, so no one can widen it after it was asked.
- */
-export function allowedSigners(rec: { signingKeyId?: string; signingKeyIds?: string[] }): string[] {
-  return rec.signingKeyIds?.length ? rec.signingKeyIds : rec.signingKeyId ? [rec.signingKeyId] : []
-}
-
-/** Two or more distinct key ids, sorted; one id stays `signingKeyId`. Undefined when not that. */
-export function signerSet(ids: readonly string[] | undefined): string[] | undefined {
-  if (!ids) return undefined
-  const set = [...new Set(ids)].sort()
-  return set.length >= 2 ? set : undefined
-}
-
-function sameIds(a: unknown, b: readonly string[]): boolean {
-  return Array.isArray(a) && a.length === b.length && a.every((x, i) => x === b[i])
-}
-
-function singleUseDetailMatches(detail: string | undefined, requester: ApprovalRequester, signers: { signingKeyId?: string; signingKeyIds?: string[] }): boolean {
-  const allowed = allowedSigners(signers)
-  if (!detail || !allowed.length || !requester.sessionId || !requester.taskId) return false
+/** A single-use envelope (createApproval) for this asker: its session, task and host, a nonce, the context. */
+function singleUseDetailMatches(detail: string | undefined, requester: ApprovalRequester): boolean {
+  if (!detail || !requester.sessionId || !requester.taskId) return false
   try {
     const value = JSON.parse(detail)
-    const keysMatch = allowed.length === 1
-      ? value?.signingKeyId === allowed[0] && value.signingKeyIds === undefined
-      : value?.signingKeyId === undefined && sameIds(value?.signingKeyIds, allowed)
     return value?.version === 'walnut-single-use-v1' && value.sessionId === requester.sessionId
-      && value.taskId === requester.taskId && value.host === requester.host && keysMatch
+      && value.taskId === requester.taskId && value.host === requester.host
       && typeof value.nonce === 'string' && /^[0-9a-f]{64}$/.test(value.nonce)
       && typeof value.context === 'string' && value.context.length > 0
   } catch { return false }
@@ -248,28 +225,25 @@ export async function createApproval(input: CreateInput): Promise<{ approval: Ap
     throw new ApprovalError(400, 'bad_request', 'Single-use operation context must be well-formed Unicode; it is never normalized.')
   }
   let detail = typeof input.detail === 'string' && input.detail.trim() ? wellFormed(input.detail) : undefined
-  if (input.unasked && input.singleUse) throw new ApprovalError(400, 'bad_request', 'A signed single-use approval is always asked: only its device can sign it.')
-  const keySet = signerSet(input.signingKeyIds)
-  if (input.signingKeyIds && !keySet) throw new ApprovalError(400, 'bad_request', 'signing_key_ids names two or more different keys; one key is signing_key_id.')
-  const signers = keySet ? { signingKeyIds: keySet } : { signingKeyId: input.signingKeyId }
+  if (input.unasked && input.singleUse) throw new ApprovalError(400, 'bad_request', 'A single-use approval is always asked.')
   if (input.singleUse && detail) {
     detail = JSON.stringify({ version: 'walnut-single-use-v1', sessionId: input.requester.sessionId,
-      taskId: input.requester.taskId, host: input.requester.host, ...signers,
+      taskId: input.requester.taskId, host: input.requester.host,
       nonce: crypto.randomBytes(32).toString('hex'), context: detail,
-      // What the person read to decide is signed with it, never only an unsigned requester.
+      // What the person read to decide rides in the envelope the digest covers, never only an unbound requester.
       ...(input.context?.why ? { why: input.context.why } : {}),
       ...(input.context && contextSummary(input.context) ? { context_summary: contextSummary(input.context) } : {}) })
   }
   if (detail && detail.length > APPROVAL_DETAIL_MAX) {
-    throw new ApprovalError(400, 'bad_request', input.singleUse ? `The signed context envelope exceeds ${APPROVAL_DETAIL_MAX} characters; shorten the operation context.` : `detail is at most ${APPROVAL_DETAIL_MAX} characters.`)
+    throw new ApprovalError(400, 'bad_request', input.singleUse ? `The single-use context envelope exceeds ${APPROVAL_DETAIL_MAX} characters; shorten the operation context.` : `detail is at most ${APPROVAL_DETAIL_MAX} characters.`)
   }
   const timeout = Math.min(APPROVAL_MAX_TIMEOUT_MS, Math.max(APPROVAL_MIN_TIMEOUT_MS, input.timeoutMs ?? (input.singleUse ? 300_000 : APPROVAL_DEFAULT_TIMEOUT_MS)))
-  if (input.singleUse && (input.mode !== 'biometric' || input.downgraded || !input.requester.sessionId
-    || !singleUseDetailMatches(detail, input.requester, signers) || !Number.isFinite(timeout) || timeout > 300_000)) {
-    throw new ApprovalError(400, 'strict_approval_required', 'Single-use approvals need a task session, a signing key, detail and biometric mode, with at most five minutes to use them.')
+  if (input.singleUse && (!input.requester.sessionId
+    || !singleUseDetailMatches(detail, input.requester) || !Number.isFinite(timeout) || timeout > 300_000)) {
+    throw new ApprovalError(400, 'strict_approval_required', 'Single-use approvals need a task session and detail, with at most five minutes to use them.')
   }
-  // One Face ID / Touch ID ask per account, only to a person who is there (biometric-fence.ts).
-  const subject: FenceSubject & { detail?: string } = { singleUse: input.singleUse, mode: input.mode, unasked: input.unasked, requester: input.requester, testRun: input.testRun, ...signers, detail }
+  // One single-use ask per account at a time, only to a person who is there (single-use-fence.ts).
+  const subject: FenceSubject & { detail?: string } = { singleUse: input.singleUse, unasked: input.unasked, requester: input.requester, testRun: input.testRun, detail }
   const fence = fenced(subject) && !fenceSkipped()
   const activity: UserActivity | null = fence ? await readActivity() : null
   const now = Date.now()
@@ -281,17 +255,13 @@ export async function createApproval(input: CreateInput): Promise<{ approval: Ap
     .map(([k, v]) => [k, typeof v === 'string' ? wellFormed(v) : v])) as unknown as ApprovalRequester
   const rec: ApprovalRecord = {
     id, what, ...(detail ? { detail } : {}),
-    // A signed envelope's detail is the operation's context: technical, whatever the creator said.
+    // A single-use envelope's detail is the operation's context: technical, whatever the creator said.
     ...(detail && input.detailRole === 'summary' && !input.singleUse ? { detailRole: 'summary' as const } : {}),
-    digest: approvalDigest({ id, mode: input.mode, createdAt, expiresAt, host: requester.host, taskId: requester.taskId, what, detail }),
-    mode: input.mode,
-    ...(input.downgraded ? { downgraded: input.downgraded } : {}),
+    digest: approvalDigest({ id, mode: 'tap', createdAt, expiresAt, host: requester.host, taskId: requester.taskId, what, detail }),
+    mode: 'tap',
     requester, createdAt, expiresAt, status: 'pending', waitTokenHash: sha(waitToken),
-    ...(input.removesKey ? { removesKey: input.removesKey } : {}),
-    ...(input.turnsAskMeOff ? { turnsAskMeOff: true as const } : {}),
     ...(input.testRun ? { testRun: input.testRun } : {}),
-    ...(input.guard ? { guard: input.guard } : {}),
-    ...(input.singleUse ? { singleUse: true, ...signers } : {}),
+    ...(input.singleUse ? { singleUse: true } : {}),
     ...(input.context && Object.keys(input.context).length ? { context: input.context } : {}),
     ...(input.requestOnly ? { requestOnly: true } : {}),
     ...(input.outsideSwitch ? { outsideSwitch: true } : {}),
@@ -342,43 +312,21 @@ export async function listApprovals(opts: { status?: 'pending' | 'all'; limit?: 
 
 export interface AnswerInput {
   decision: ApprovalDecision
-  /** For a biometric approve: the active device key and its signature over answerMessage(). */
-  keyId?: string
-  signature?: string
+  /** The digest of the request the answering device showed: another one is refused (it changed). */
+  digest?: string
   device: { name: string; kind: ApprovalDeviceKind }
-  /**
-   * The route checked another proof only the person has (a Passwords unlock, for a vault ask:
-   * approvals-v1.ts vaultApprover), so an unsigned Approve of a biometric approval is let through.
-   */
-  proven?: boolean
 }
 
-/** A key the answer check may use: active, with its SPKI. Injected so the store never imports keys.ts' file. */
-export type KeyLookup = (keyId: string) => Promise<{ id: string; name: string; kind: 'iphone' | 'mac-app'; publicKey: string } | undefined>
-
 /**
- * Record a person's answer. A biometric approval's Approve must carry a signature by an
- * active device key over this approval's digest; Deny never needs one, and a tap approval
- * takes a signed answer too (it is only stronger). The first answer wins.
+ * Record a person's answer: the route let only a person through (routes/approvals-v1.ts), from any
+ * device they are signed in on, and one tap is enough for every approval. The first answer wins.
  */
-export async function answerApproval(id: string, input: AnswerInput, lookupKey: KeyLookup): Promise<ApprovalView> {
+export async function answerApproval(id: string, input: AnswerInput): Promise<ApprovalView> {
   if (input.decision !== 'approve' && input.decision !== 'deny') throw new ApprovalError(400, 'bad_request', 'decision is approve or deny.')
   const current = await getApproval(id)
   if (!current) throw new ApprovalError(404, 'not_found', 'No such approval.')
-  let signed: ApprovalAnswer['device'] | undefined
-  if (input.signature || input.keyId) {
-    const key = input.keyId ? await lookupKey(input.keyId) : undefined
-    if (!key || !input.signature) throw new ApprovalError(403, 'bad_signature', 'This device is not one that can sign approvals (enroll it first).')
-    if (!verifySignature(key.publicKey, answerMessage(current.digest, input.decision), input.signature)) {
-      throw new ApprovalError(403, 'bad_signature', 'The signature does not match this approval.')
-    }
-    signed = { id: key.id, name: deviceLabel(key.name, key.kind), kind: key.kind }
-  }
-  if (current.singleUse && input.decision === 'approve' && (!signed?.id || !allowedSigners(current).includes(signed.id))) {
-    throw new ApprovalError(403, 'biometric_required', 'This approval needs a signature from its required signing device; an unsigned answer or another device cannot approve it.')
-  }
-  if (current.mode === 'biometric' && input.decision === 'approve' && !signed && !input.proven) {
-    throw new ApprovalError(403, 'biometric_required', 'This approval needs Face ID or Touch ID on a device that signs approvals.')
+  if (input.digest !== undefined && input.digest !== current.digest) {
+    throw new ApprovalError(409, 'changed', 'This approval is not the one your device showed; reload it.')
   }
   let out: ApprovalRecord | undefined
   let conflict: ApprovalError | undefined
@@ -396,9 +344,8 @@ export async function answerApproval(id: string, input: AnswerInput, lookupKey: 
     rec.answer = {
       decision: input.decision,
       at: new Date().toISOString(),
-      mode: signed ? 'biometric' : 'tap',
-      device: signed ?? { name: deviceLabel(input.device.name.slice(0, 80), input.device.kind), kind: input.device.kind },
-      ...(signed ? { keyId: signed.id, signature: input.signature } : {}),
+      mode: 'tap',
+      device: { name: deviceLabel(input.device.name.slice(0, 80), input.device.kind), kind: input.device.kind },
     }
     out = rec
     return file
@@ -495,7 +442,11 @@ export interface ConsumeInput {
   requester: ApprovalRequester
 }
 
-export async function consumeApproval(id: string, input: ConsumeInput, lookupKey: KeyLookup): Promise<WaitResult> {
+/**
+ * The asker spends a single-use approval, once: the same session's own process (the route checked
+ * it), with the context it rebuilt from what it is about to run, inside the five-minute life.
+ */
+export async function consumeApproval(id: string, input: ConsumeInput): Promise<WaitResult> {
   let out: ApprovalRecord | undefined
   await serial(() => updateJsonFile<ApprovalsFile>(approvalsFile(), EMPTY, async (file) => {
     const rec = file.approvals.find((a) => a.id === id)
@@ -507,10 +458,10 @@ export async function consumeApproval(id: string, input: ConsumeInput, lookupKey
       throw new ApprovalError(403, 'wrong_asker', 'This approval belongs to another task session or host.')
     }
     const digest = approvalDigest({ ...rec, host: owner.host, taskId: owner.taskId })
-    if (!rec.singleUse || rec.mode !== 'biometric' || rec.downgraded || rec.digest !== digest
-      || input.digest !== digest || !singleUseDetailMatches(rec.detail, owner, rec)
+    if (!rec.singleUse || rec.digest !== digest
+      || input.digest !== digest || !singleUseDetailMatches(rec.detail, owner)
       || JSON.parse(rec.detail!).context !== input.detail) {
-      throw new ApprovalError(409, 'changed', 'The signed approval does not match this operation.')
+      throw new ApprovalError(409, 'changed', 'The approval does not match this operation.')
     }
     const created = Date.parse(rec.createdAt), expires = Date.parse(rec.expiresAt), now = Date.now()
     if (!Number.isFinite(created) || !Number.isFinite(expires) || created > now || expires <= now
@@ -518,13 +469,8 @@ export async function consumeApproval(id: string, input: ConsumeInput, lookupKey
       throw new ApprovalError(409, 'approval_expired', 'The approval expired; ask again.')
     }
     if (rec.consumedAt) throw new ApprovalError(409, 'approval_used', 'This approval was already used; ask again.')
-    if (rec.status !== 'approved' || rec.answer?.decision !== 'approve' || rec.answer.mode !== 'biometric'
-      || !rec.answer.keyId || !rec.answer.signature || !allowedSigners(rec).includes(rec.answer.keyId)) {
-      throw new ApprovalError(403, 'not_approved', 'There is no signed approval for this operation.')
-    }
-    const key = await lookupKey(rec.answer.keyId)
-    if (!key || !verifySignature(key.publicKey, answerMessage(digest, 'approve'), rec.answer.signature)) {
-      throw new ApprovalError(403, 'bad_signature', 'The approval signature is invalid or its signing device was removed.')
+    if (rec.status !== 'approved' || rec.answer?.decision !== 'approve' || rec.answer.device.kind === 'setting') {
+      throw new ApprovalError(403, 'not_approved', 'Nobody approved this operation.')
     }
     const spentAt = Date.now()
     if (expires <= spentAt) throw new ApprovalError(409, 'approval_expired', 'The approval expired; ask again.')
@@ -587,7 +533,7 @@ export async function cancelApproval(id: string, token: string | undefined, reas
   return cancelInternal(id, reason)
 }
 
-/** Cancel without the asker's token: for Walnut's own approvals (a key enrollment that ended). */
+/** Cancel without the asker's token: for Walnut's own approvals (one whose step ended, an old device-key ask). */
 export async function cancelInternal(id: string, reason: string): Promise<ApprovalView> {
   let out: ApprovalRecord | undefined
   let settled: ApprovalRecord[] = []

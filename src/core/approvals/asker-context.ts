@@ -160,7 +160,7 @@ export async function readAskerContext(input: { sessionId?: string; taskId?: str
   return ctx
 }
 
-/** The context as plain lines, for a signed envelope's context_summary and a notice. Pure. */
+/** The context as plain lines, for a single-use envelope's context_summary and a notice. Pure. */
 export function contextSummary(ctx: AskerContext): string {
   const lines: string[] = []
   if (ctx.why) lines.push(`Why (${ctx.whyFrom === 'asker' ? 'given' : 'its last words'}): ${ctx.why}`)

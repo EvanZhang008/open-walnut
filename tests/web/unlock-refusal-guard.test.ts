@@ -91,7 +91,7 @@ describe('unlock refusals', () => {
     walk('web/src')
     expect(webFiles.filter((f) => /['`]\/vault\/unlock['`]/.test(read(f)))).toEqual(['web/src/api/vault.ts'])
     const forms = webFiles.filter((f) => /vaultApi\.unlock\(/.test(read(f)))
-    expect(forms).toEqual(expect.arrayContaining(['web/src/components/passwords/LockScreens.tsx', 'web/src/components/approvals/ApprovalUnlock.tsx']))
+    expect(forms).toEqual(expect.arrayContaining(['web/src/components/passwords/LockScreens.tsx']))
     for (const f of forms) {
       const src = read(f)
       for (const call of src.match(/vaultApi\.unlock\([^\n]*/g) ?? []) expect(call, f).toMatch(/onWait/)

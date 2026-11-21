@@ -1,25 +1,17 @@
 /**
  * `walnut approve --single-use` and the ask-then-resume flow (--request-only / --approval):
- * the CLI checks the signed record itself with the key the script pinned, spends it once with
- * approval_consume, and never exits 0 on a record it cannot prove. A real P-256 key signs the
- * answers; the server is a scripted io.call.
+ * the CLI checks the record itself (its digest, the envelope, that a person approved it, its
+ * expiry), spends it once with approval_consume, and never exits 0 on a record it cannot check.
+ * The person's answer is a tap on any device they are signed in on (2026-11-21): no key, no
+ * signature. The server is a scripted io.call.
  */
-import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { APPROVE_EXIT, parseApproveArgv, runApprove, spkiFromKeyText, type ApproveArgs, type OpCallResult } from '../../../src/core/approvals/cli-core.js'
+import { APPROVE_EXIT, parseApproveArgv, runApprove, type ApproveArgs, type OpCallResult } from '../../../src/core/approvals/cli-core.js'
 import { loadToken, removeToken, saveToken, sha256Hex, sweepTokens } from '../../../src/core/approvals/cli-token.js'
-import { answerMessage, approvalDigest, keyIdOf } from '../../../src/core/approvals/digest.js'
-
-const pair = () => {
-  const { publicKey, privateKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
-  const spki = (publicKey.export({ type: 'spki', format: 'der' }) as Buffer).toString('base64')
-  return { privateKey, spki, pem: publicKey.export({ type: 'spki', format: 'pem' }) as string, keyId: keyIdOf(spki) }
-}
-const key = pair()
-const otherKey = pair()
+import { approvalDigest } from '../../../src/core/approvals/digest.js'
 
 const DETAIL = 'kubectl apply -f prod.yaml\ncluster: prod-1\n'
 const requester = { host: 'devbox', taskId: 't-1', sessionId: 's-1' }
@@ -30,7 +22,7 @@ type Rec = Record<string, any>
 
 function envelope(over: Rec = {}): string {
   return JSON.stringify({ version: 'walnut-single-use-v1', sessionId: requester.sessionId, taskId: requester.taskId,
-    host: requester.host, signingKeyId: key.keyId, nonce: nonceA, context: DETAIL, ...over })
+    host: requester.host, nonce: nonceA, context: DETAIL, ...over })
 }
 
 function withDigest(rec: Rec): Rec {
@@ -41,15 +33,13 @@ function withDigest(rec: Rec): Rec {
 function pendingRec(over: Rec = {}): Rec {
   const createdAt = new Date().toISOString()
   const expiresAt = new Date(Date.now() + 5 * 60_000).toISOString()
-  return withDigest({ id: 'apr-abc_1', what: 'Deploy prod', detail: envelope(), mode: 'biometric', createdAt, expiresAt,
-    requester, status: 'pending', singleUse: true, signingKeyId: key.keyId, ...over })
+  return withDigest({ id: 'apr-abc_1', what: 'Deploy prod', detail: envelope(), mode: 'tap', createdAt, expiresAt,
+    requester, status: 'pending', singleUse: true, ...over })
 }
 
-function signed(rec: Rec, opts: { signer?: crypto.KeyObject; keyId?: string; mode?: string } = {}): Rec {
-  const signature = crypto.sign('sha256', Buffer.from(answerMessage(rec.digest, 'approve'), 'utf8'),
-    { key: opts.signer ?? key.privateKey, dsaEncoding: 'der' }).toString('base64')
-  return { ...rec, status: 'approved', answer: { decision: 'approve', at: new Date().toISOString(), mode: opts.mode ?? 'biometric',
-    device: { id: opts.keyId ?? key.keyId, name: 'iPhone', kind: 'iphone' }, keyId: opts.keyId ?? key.keyId, signature } }
+/** A person's tap, on the phone unless said otherwise. */
+function approved(rec: Rec, device: Rec = { name: 'iPhone', kind: 'iphone' }): Rec {
+  return { ...rec, status: 'approved', answer: { decision: 'approve', at: new Date().toISOString(), mode: 'tap', device } }
 }
 
 interface Fake { asked?: Rec; answered: Rec | (() => Rec); consume?: OpCallResult }
@@ -82,69 +72,73 @@ afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }) })
 const io = (call: (n: string, a: Record<string, unknown>) => Promise<OpCallResult>, extra: Rec = {}) =>
   ({ call, say: (l: string) => { says.push(l) }, out: (l: string) => { outs.push(l) }, sleep: async () => undefined, tokenDir: dir, ...extra })
 
-const strict: ApproveArgs = { what: 'Deploy prod', detail: DETAIL, biometric: true, timeoutMs: 300_000, json: true, singleUse: true, signingKey: key.pem, signingKeyPath: '/keys/phone.pem' }
+const strict: ApproveArgs = { what: 'Deploy prod', detail: DETAIL, timeoutMs: 300_000, json: true, singleUse: true }
 
 describe('parsing the strict flags', () => {
-  it('reads them, and --single-use implies biometric with a 5 minute default', () => {
-    expect(parseApproveArgv(['Deploy', '--single-use', '--signing-key', 'k.pem', '--detail', 'd.txt', '--why', 'ship the fix'])).toEqual({
-      ok: true, what: 'Deploy', biometric: true, timeoutMs: 300_000, detailFrom: 'd.txt', json: false, why: 'ship the fix', singleUse: true, signingKeyFrom: 'k.pem',
+  it('reads them, with a 5 minute default; an older script\'s --signing-key and --biometric change nothing', () => {
+    expect(parseApproveArgv(['Deploy', '--single-use', '--detail', 'd.txt', '--why', 'ship the fix'])).toEqual({
+      ok: true, what: 'Deploy', timeoutMs: 300_000, detailFrom: 'd.txt', json: false, why: 'ship the fix', singleUse: true,
     })
+    expect(parseApproveArgv(['Deploy', '--single-use', '--biometric', '--signing-key', 'k.pem', '--signing-key=b.pem', '--detail', 'd.txt', '--why', 'ship the fix']))
+      .toEqual(parseApproveArgv(['Deploy', '--single-use', '--detail', 'd.txt', '--why', 'ship the fix']))
     expect(parseApproveArgv(['x', '--request-only'])).toMatchObject({ ok: true, requestOnly: true })
     expect(parseApproveArgv(['x', '--approval=apr-Ab3_x-9'])).toMatchObject({ ok: true, approvalId: 'apr-Ab3_x-9' })
   })
 
   it('refuses a strict ask it cannot honour', () => {
-    expect(parseApproveArgv(['x', '--single-use', '--detail', 'd'])).toMatchObject({ ok: false, error: expect.stringContaining('--signing-key') })
-    expect(parseApproveArgv(['x', '--single-use', '--signing-key', 'k'])).toMatchObject({ ok: false, error: expect.stringContaining('--detail') })
-    expect(parseApproveArgv(['x', '--single-use', '--signing-key', 'k', '--detail', 'd', '--timeout', '10m'])).toMatchObject({ ok: false })
+    expect(parseApproveArgv(['x', '--single-use'])).toMatchObject({ ok: false, error: expect.stringContaining('--detail') })
+    expect(parseApproveArgv(['x', '--single-use', '--detail', 'd', '--timeout', '10m'])).toMatchObject({ ok: false })
     expect(parseApproveArgv(['x', '--signing-key', 'k'])).toMatchObject({ ok: false })
+    expect(parseApproveArgv(['x', '--single-use', '--detail', 'd', '--signing-key'])).toMatchObject({ ok: false })
     expect(parseApproveArgv(['x', '--request-only', '--approval', 'apr-1'])).toMatchObject({ ok: false })
     expect(parseApproveArgv(['x', '--approval', '../apr-1'])).toMatchObject({ ok: false })
     expect(parseApproveArgv(['x', '--approval', 'apr-../x'])).toMatchObject({ ok: false })
     expect(parseApproveArgv(['x', '--why', 'two\nlines'])).toMatchObject({ ok: false })
   })
-
-  it('takes a PEM or a base64 DER public key, and nothing else', () => {
-    expect(spkiFromKeyText(key.pem)).toBe(key.spki)
-    expect(spkiFromKeyText(`${key.spki}\n`)).toBe(key.spki)
-    expect(spkiFromKeyText('not a key')).toBeUndefined()
-    const rsa = crypto.generateKeyPairSync('rsa', { modulusLength: 1024 }).publicKey.export({ type: 'spki', format: 'pem' }) as string
-    expect(spkiFromKeyText(rsa)).toBeUndefined()
-  })
 })
 
 describe('single-use: wait, check, consume', () => {
-  it('a signed answer that checks out is consumed once and prints {approval, used:true}', async () => {
-    const rec = pendingRec()
-    const s = server({ asked: rec, answered: signed(rec) })
+  it('a tap from any signed-in device is consumed once and prints {approval, used:true}', async () => {
+    for (const device of [{ name: 'iPhone', kind: 'iphone' }, { name: 'Mac', kind: 'mac-app' }, { name: 'Web console', kind: 'web' }]) {
+      outs = []
+      const rec = pendingRec()
+      const s = server({ asked: rec, answered: approved(rec, device) })
+      expect(await runApprove(strict, io(s.call))).toBe(APPROVE_EXIT.approved)
+      expect(s.names()).toEqual(['approval_request', 'approval_wait', 'approval_consume'])
+      expect(s.calls[0].args).toMatchObject({ single_use: true, detail: DETAIL })
+      for (const k of ['mode', 'signing_key_id', 'signing_key_ids']) expect(s.calls[0].args).not.toHaveProperty(k)
+      expect(s.calls[2].args).toEqual({ id: 'apr-abc_1', token: 'tok-secret', digest: rec.digest, detail: DETAIL })
+      expect(outs).toHaveLength(1)
+      const printed = JSON.parse(outs[0])
+      expect(Object.keys(printed).sort()).toEqual(['approval', 'used'])
+      expect(printed.used).toBe(true)
+      expect(printed.approval.id).toBe('apr-abc_1')
+    }
+  })
+
+  it('an older Walnut\'s record (Face ID, pinned keys) approved with a tap is checked by its own digest and consumed', async () => {
+    const rec = pendingRec({ mode: 'biometric', signingKeyIds: ['ak-dcb776df2641b2ff', 'ak-e71d5e306b094f97'] })
+    const s = server({ asked: rec, answered: approved(rec) })
     expect(await runApprove(strict, io(s.call))).toBe(APPROVE_EXIT.approved)
     expect(s.names()).toEqual(['approval_request', 'approval_wait', 'approval_consume'])
-    expect(s.calls[0].args).toMatchObject({ single_use: true, signing_key_id: key.keyId, mode: 'biometric', detail: DETAIL })
-    expect(s.calls[2].args).toEqual({ id: 'apr-abc_1', token: 'tok-secret', digest: rec.digest, detail: DETAIL })
-    expect(outs).toHaveLength(1)
-    const printed = JSON.parse(outs[0])
-    expect(Object.keys(printed).sort()).toEqual(['approval', 'used'])
-    expect(printed.used).toBe(true)
-    expect(printed.approval.id).toBe('apr-abc_1')
   })
 
   it('passes --why only when given', async () => {
-    const s = server({ answered: signed(pendingRec()) })
+    const s = server({ answered: approved(pendingRec()) })
     await runApprove({ ...strict, why: 'hotfix' }, io(s.call))
     expect(s.calls[0].args.why).toBe('hotfix')
-    const t = server({ answered: signed(pendingRec()) })
+    const t = server({ answered: approved(pendingRec()) })
     await runApprove(strict, io(t.call))
     expect('why' in t.calls[0].args).toBe(false)
   })
 
-  const refused: Array<[string, () => Rec, Rec?]> = [
-    ['an answer signed by another key id', () => signed(pendingRec(), { signer: otherKey.privateKey, keyId: otherKey.keyId })],
-    ['a bad signature', () => signed(pendingRec(), { signer: otherKey.privateKey })],
-    ['a tampered what (digest mismatch)', () => ({ ...signed(pendingRec()), what: 'Deploy staging' })],
-    ['an envelope around other detail', () => signed(withDigest({ ...pendingRec(), detail: envelope({ context: 'rm -rf /' }) }))],
-    ['a downgraded approval', () => signed(pendingRec({ downgraded: 'no device signs' }))],
-    ['a tap answer', () => signed(pendingRec(), { mode: 'tap' })],
-    ['a record that is not single-use', () => signed(pendingRec({ singleUse: false }))],
+  const refused: Array<[string, () => Rec]> = [
+    ['a tampered what (digest mismatch)', () => ({ ...approved(pendingRec()), what: 'Deploy staging' })],
+    ['an envelope around other detail', () => approved(withDigest({ ...pendingRec(), detail: envelope({ context: 'rm -rf /' }) }))],
+    ['an envelope that names another session', () => approved(withDigest({ ...pendingRec(), detail: envelope({ sessionId: 's-other' }) }))],
+    ['a record that is not single-use', () => approved(pendingRec({ singleUse: false }))],
+    ['the switch\'s own go-ahead, not a person', () => approved(pendingRec(), { name: 'Approvals off', kind: 'setting' })],
+    ['an approved status with a deny answer', () => ({ ...approved(pendingRec()), answer: { decision: 'deny', at: 'now', mode: 'tap', device: { name: 'x', kind: 'web' } } })],
   ]
   for (const [name, answered] of refused) {
     it(`exits 3 and never consumes on ${name}`, async () => {
@@ -156,7 +150,7 @@ describe('single-use: wait, check, consume', () => {
   }
 
   it('exits 3 on an answer that expired by the time it is checked', async () => {
-    const rec = signed(pendingRec())
+    const rec = approved(pendingRec())
     const s = server({ answered: rec })
     const late = Date.parse(rec.expiresAt) + 1
     expect(await runApprove(strict, io(s.call, { now: () => late }))).toBe(APPROVE_EXIT.error)
@@ -164,13 +158,13 @@ describe('single-use: wait, check, consume', () => {
   })
 
   it('a consume refused with 409 is exit 3, not 2', async () => {
-    const s = server({ answered: signed(pendingRec()), consume: { ok: false, status: 409, code: 'approval_used', message: 'used' } })
+    const s = server({ answered: approved(pendingRec()), consume: { ok: false, status: 409, code: 'approval_used', message: 'used' } })
     expect(await runApprove(strict, io(s.call))).toBe(APPROVE_EXIT.error)
     expect(outs).toEqual([])
   })
 
   it('a consume whose answer was lost is exit 3, with no retry', async () => {
-    const s = server({ answered: signed(pendingRec()), consume: { ok: false, message: 'hub_timeout' } })
+    const s = server({ answered: approved(pendingRec()), consume: { ok: false, message: 'hub_timeout' } })
     expect(await runApprove(strict, io(s.call))).toBe(APPROVE_EXIT.error)
     expect(s.names().filter((n) => n === 'approval_consume')).toHaveLength(1)
   })
@@ -183,61 +177,10 @@ describe('single-use: wait, check, consume', () => {
     expect(await runApprove(strict, io(e.call))).toBe(APPROVE_EXIT.timeout)
   })
 
-  it('without a signing key, or with a bad one, it never asks', async () => {
-    const s = server({ answered: signed(pendingRec()) })
-    expect(await runApprove({ ...strict, signingKey: undefined }, io(s.call))).toBe(APPROVE_EXIT.error)
-    expect(await runApprove({ ...strict, signingKey: 'junk' }, io(s.call))).toBe(APPROVE_EXIT.error)
-    expect(s.calls).toEqual([])
-  })
-
   it('a Walnut that did not make it single-use is withdrawn and exits 3', async () => {
-    const plain = withDigest({ ...pendingRec(), singleUse: undefined, signingKeyId: undefined, detail: DETAIL })
+    const plain = withDigest({ ...pendingRec(), singleUse: undefined, detail: DETAIL })
     const s = server({ asked: plain, answered: plain })
     expect(await runApprove(strict, io(s.call))).toBe(APPROVE_EXIT.error)
-    expect(s.names()).toEqual(['approval_request', 'approval_cancel'])
-  })
-})
-
-describe('single-use with several pinned keys (--signing-key twice)', () => {
-  const ids = [key.keyId, otherKey.keyId].sort()
-  const setEnvelope = () => envelope({ signingKeyId: undefined, signingKeyIds: ids })
-  const setRec = (over: Rec = {}) => pendingRec({ detail: setEnvelope(), signingKeyId: undefined, signingKeyIds: ids, ...over })
-  const both: ApproveArgs = { ...strict, signingKeys: [otherKey.pem, key.pem] }
-
-  it('parses every --signing-key in order', () => {
-    expect(parseApproveArgv(['x', '--single-use', '--signing-key', 'a.pem', '--signing-key=b.pem', '--detail', 'd'])).toMatchObject({
-      ok: true, signingKeyFrom: 'a.pem', signingKeysFrom: ['a.pem', 'b.pem'],
-    })
-    expect(parseApproveArgv(['x', '--single-use', '--signing-key', 'a.pem', '--detail', 'd'])).not.toHaveProperty('signingKeysFrom')
-  })
-
-  it('asks for the sorted set, and takes a signature from either key', async () => {
-    for (const [signer, id] of [[key.privateKey, key.keyId], [otherKey.privateKey, otherKey.keyId]] as const) {
-      outs = []
-      const rec = setRec()
-      const s = server({ asked: rec, answered: signed(rec, { signer, keyId: id }) })
-      expect(await runApprove(both, io(s.call))).toBe(APPROVE_EXIT.approved)
-      expect(s.calls[0].args).toMatchObject({ single_use: true, signing_key_ids: ids })
-      expect('signing_key_id' in s.calls[0].args).toBe(false)
-    }
-  })
-
-  it('refuses a key outside the set, a widened or narrowed set, and a single-key record', async () => {
-    const stranger = pair()
-    const cases: Array<[string, Rec, Rec]> = [
-      ['signed by a key not pinned', setRec(), { signer: stranger.privateKey, keyId: stranger.keyId }],
-      ['the record widened the set', setRec({ signingKeyIds: [...ids, stranger.keyId].sort() }), {}],
-      ['the envelope widened the set', setRec({ detail: envelope({ signingKeyId: undefined, signingKeyIds: [...ids, stranger.keyId].sort() }) }), {}],
-      ['the record names one key', pendingRec(), {}],
-    ]
-    for (const [, rec, opts] of cases) {
-      const s = server({ asked: setRec(), answered: signed(withDigest(rec), opts) })
-      expect(await runApprove(both, io(s.call))).toBe(APPROVE_EXIT.error)
-      expect(s.names()).not.toContain('approval_consume')
-    }
-    // Asked with one key back, when two were pinned: withdrawn, never waited on.
-    const s = server({ asked: pendingRec(), answered: signed(pendingRec()) })
-    expect(await runApprove(both, io(s.call))).toBe(APPROVE_EXIT.error)
     expect(s.names()).toEqual(['approval_request', 'approval_cancel'])
   })
 })
@@ -254,7 +197,8 @@ describe('ask now, wait later', () => {
     expect(fs.statSync(dir).mode & 0o777).toBe(0o700)
     const saved = JSON.parse(fs.readFileSync(file, 'utf8'))
     expect(saved).toMatchObject({ id: 'apr-abc_1', waitToken: 'tok-secret', what: 'Deploy prod', detail: DETAIL,
-      detailSha256: sha256Hex(DETAIL), singleUse: true, signingKeyId: key.keyId, signingKeyPath: '/keys/phone.pem', envelope: envelope() })
+      detailSha256: sha256Hex(DETAIL), singleUse: true, envelope: envelope() })
+    expect(saved).not.toHaveProperty('signingKeyId')
     expect(fs.readdirSync(dir)).toEqual(['apr-abc_1.json'])
   })
 
@@ -268,7 +212,7 @@ describe('ask now, wait later', () => {
     const ask = server({ answered: pendingRec() })
     await runApprove({ ...strict, requestOnly: true }, io(ask.call))
     outs = []
-    const s = server({ answered: signed(pendingRec()) })
+    const s = server({ answered: approved(pendingRec()) })
     expect(await runApprove({ ...strict, approvalId: 'apr-abc_1' }, io(s.call))).toBe(APPROVE_EXIT.approved)
     expect(s.names()).toEqual(['approval_wait', 'approval_consume'])
     expect(s.calls[0].args).toMatchObject({ id: 'apr-abc_1', token: 'tok-secret' })
@@ -281,14 +225,14 @@ describe('ask now, wait later', () => {
     const call = async (name: string): Promise<OpCallResult> => name === 'approval_request'
       ? { ok: true, result: { approval: plain, waitToken: 't' } }
       : { ok: true, result: { approval: { ...plain, status: 'denied', answer: { decision: 'deny', mode: 'tap', at: 'now' } } } }
-    const base: ApproveArgs = { what: 'Restart', biometric: false, timeoutMs: 60_000, json: false }
+    const base: ApproveArgs = { what: 'Restart', timeoutMs: 60_000, json: false }
     expect(await runApprove({ ...base, requestOnly: true }, io(call))).toBe(APPROVE_EXIT.pending)
     expect(await runApprove({ ...base, approvalId: 'apr-p1' }, io(call))).toBe(APPROVE_EXIT.denied)
     expect(fs.existsSync(path.join(dir, 'apr-p1.json'))).toBe(false)
   })
 
   it('--approval with no saved file is exit 3 and asks nothing', async () => {
-    const s = server({ answered: signed(pendingRec()) })
+    const s = server({ answered: approved(pendingRec()) })
     expect(await runApprove({ ...strict, approvalId: 'apr-none' }, io(s.call))).toBe(APPROVE_EXIT.error)
     expect(s.calls).toEqual([])
     expect(says.join('\n')).toContain('no saved request apr-none on this machine')
@@ -296,20 +240,28 @@ describe('ask now, wait later', () => {
 
   it('--approval with a changed detail or what is exit 3', async () => {
     await runApprove({ ...strict, requestOnly: true }, io(server({ answered: pendingRec() }).call))
-    const s = server({ answered: signed(pendingRec()) })
+    const s = server({ answered: approved(pendingRec()) })
     expect(await runApprove({ ...strict, detail: DETAIL + ' ', approvalId: 'apr-abc_1' }, io(s.call))).toBe(APPROVE_EXIT.error)
     expect(await runApprove({ ...strict, what: 'Deploy staging', approvalId: 'apr-abc_1' }, io(s.call))).toBe(APPROVE_EXIT.error)
-    expect(await runApprove({ ...strict, signingKey: otherKey.pem, approvalId: 'apr-abc_1' }, io(s.call))).toBe(APPROVE_EXIT.error)
     expect(s.calls).toEqual([])
     expect(says.join('\n')).toContain('the request changed since it was asked')
   })
 
   it('--approval refuses a record whose nonce is not the saved one', async () => {
     await runApprove({ ...strict, requestOnly: true }, io(server({ answered: pendingRec() }).call))
-    const swapped = signed(withDigest({ ...pendingRec(), detail: envelope({ nonce: nonceB }) }))
+    const swapped = approved(withDigest({ ...pendingRec(), detail: envelope({ nonce: nonceB }) }))
     const s = server({ answered: swapped })
     expect(await runApprove({ ...strict, approvalId: 'apr-abc_1' }, io(s.call))).toBe(APPROVE_EXIT.error)
     expect(s.names()).not.toContain('approval_consume')
+  })
+
+  it('a token file an older CLI saved (with its pinned key) still resumes', async () => {
+    await runApprove({ ...strict, requestOnly: true }, io(server({ answered: pendingRec() }).call))
+    const file = path.join(dir, 'apr-abc_1.json')
+    const old = JSON.parse(fs.readFileSync(file, 'utf8'))
+    fs.writeFileSync(file, JSON.stringify({ ...old, signingKeyId: 'ak-dcb776df2641b2ff', signingKeyPath: '/keys/phone.pem' }), { mode: 0o600 })
+    const s = server({ answered: approved(pendingRec()) })
+    expect(await runApprove({ ...strict, approvalId: 'apr-abc_1' }, io(s.call))).toBe(APPROVE_EXIT.approved)
   })
 })
 

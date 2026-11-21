@@ -12,7 +12,7 @@ import { useEffect, useMemo } from 'react';
 import type { Approval } from '@/api/approvals';
 import { usePendingApprovals } from '@/components/approvals/ApprovalRow';
 import { ApprovalButtons, ApprovalDetail, requesterText } from '@/components/approvals/ApprovalPrompts';
-import { applyApprovalEvent, approveKind, noApproveReason, refreshApprovals, unlockUndecided, useApprovals, type ApprovalsState } from '@/components/approvals/approvals-store';
+import { applyApprovalEvent, refreshApprovals, useApprovals, type ApprovalsState } from '@/components/approvals/approvals-store';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 
@@ -20,7 +20,6 @@ import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 export function useExtApprovals(): Approval[] {
   useEffect(() => { void refreshApprovals(); }, []);
   useEvent('_ws:reconnected', () => { void refreshApprovals(); });
-  useEvent('approval-keys:changed', () => { void refreshApprovals(); });
   useEvent('approval:changed', (data) => {
     const a = (data as { approval?: Approval }).approval;
     if (a) applyApprovalEvent(a);
@@ -109,24 +108,16 @@ function AskApproval({ a, mine, alike }: { a: Approval; mine: boolean; alike?: s
 }
 
 /**
- * What Home's card says under a request (ApprovalPrompts' ApprovalBody), with the same rules and
- * classes: why it was answered on a weaker device, why Approve is not offered here (Face ID or
- * Touch ID on another device, Passwords locked here), and an answer that failed (refused, already
- * answered, expired, the network). Without these, a failed Approve or Deny only brought the
- * buttons back (code review of round 2, finding 3).
+ * What Home's card says under a request (ApprovalPrompts' ApprovalBody), with the same class: an
+ * answer that failed (refused, already answered, expired, the network). Without it, a failed
+ * Approve or Deny only brought the buttons back (code review of round 2, finding 3).
  */
 export function ApprovalLines({ a, s }: { a: Approval; s: ApprovalsState }) {
   const error = s.errors[a.id];
-  // The unlock form open on it says "Unlock Passwords in this window" in its own label.
-  const reason = (a.mode === 'biometric' || a.guard) && !approveKind(s, a) && !unlockUndecided(s, a)
-    && !(s.unlockId === a.id && noApproveReason(s, a).startsWith('Unlock Passwords in this window'))
-    ? noApproveReason(s, a) : '';
-  if (!a.downgraded && !error && !reason) return null;
+  if (!error) return null;
   return (
     <div className="ext-approval-lines">
-      {a.downgraded ? <div className="approval-note">{a.downgraded}</div> : null}
-      {reason ? <div className="approval-note" data-testid="ext-approval-reason">{reason}</div> : null}
-      {error ? <div className="approval-error" role="alert" data-testid="ext-approval-error">{error}</div> : null}
+      <div className="approval-error" role="alert" data-testid="ext-approval-error">{error}</div>
     </div>
   );
 }

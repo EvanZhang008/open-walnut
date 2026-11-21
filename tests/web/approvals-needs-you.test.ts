@@ -17,7 +17,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Approval } from '../../web/src/api/approvals';
 
 const api = vi.hoisted(() => ({
-  list: vi.fn(async () => ({ approvals: [] as Approval[], keys: [] })),
+  list: vi.fn(async () => ({ approvals: [] as Approval[] })),
   answer: vi.fn(),
   label: null as string | null,
   quiet: { active: false, allowPermissions: true, holds: [] } as Record<string, unknown>,
@@ -29,22 +29,19 @@ const api = vi.hoisted(() => ({
 vi.mock('@/api/approvals', () => ({
   listApprovals: api.list,
   answerApproval: api.answer,
-  enrollApprovalKey: vi.fn(),
 }));
 vi.mock('@/api/test-run', () => ({ testRunLabel: () => api.label }));
-// The live vault follower (its event socket) is covered by tests/web/approvals-vault-look.test.ts.
-vi.mock('@/api/vault-live', () => ({ checkVault: vi.fn(async () => null), vaultLive: () => false }));
 vi.mock('@/utils/log', () => ({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock('@/contexts/notifications/quiet', () => ({
   currentQuiet: () => api.quiet,
   onQuietState: (fn: (q: Record<string, unknown>) => void) => { api.quietListener = fn; return () => undefined; },
 }));
-vi.mock('@/contexts/notifications/quiet-model', () => ({ quietAllowsToast: api.allows, effectiveQuiet: (q: unknown) => q }));
+// No focus block lets a task's notice through quiet here (quiet-model.ts quietLetsTaskThrough).
+vi.mock('@/contexts/notifications/quiet-model', () => ({ quietAllowsToast: api.allows, effectiveQuiet: (q: unknown) => q, quietLetsTaskThrough: () => false }));
 vi.mock('@/hooks/useHostStatus', () => ({ getHostStatus: () => (api.hostLabel ? { label: api.hostLabel } : undefined) }));
 
 const posts: Array<Record<string, unknown>> = [];
 (globalThis as unknown as { window: unknown }).window = {
-  // The vault client follows other tabs' unlocks through `storage` events (web/src/api/vault.ts).
   addEventListener: () => undefined,
   webkit: { messageHandlers: { walnutNotify: { postMessage: async (b: Record<string, unknown>) => { posts.push(b); return { posted: true }; } } } },
 };
@@ -52,6 +49,7 @@ const posts: Array<Record<string, unknown>> = [];
 const store = await import('../../web/src/components/approvals/approvals-store');
 const notify = await import('../../web/src/components/approvals/approval-notify');
 const { approvalsForNode } = store;
+const snapshot = () => store.approvalsSnapshot();
 
 function approval(over: Partial<Approval> = {}): Approval {
   const now = Date.now();
@@ -75,7 +73,7 @@ beforeEach(() => {
   posts.length = 0;
   api.label = null;
   api.allows.mockReturnValue(true);
-  api.list.mockResolvedValue({ approvals: [], keys: [] });
+  api.list.mockResolvedValue({ approvals: [] });
   api.hostLabel = undefined;
 });
 
@@ -84,7 +82,7 @@ describe('approvals store: one list for the cards, the rows and the dialog', () 
     const a = approval();
     store.applyApprovalEvent(a);
     store.applyApprovalEvent(a);
-    api.list.mockResolvedValue({ approvals: [a], keys: [] });
+    api.list.mockResolvedValue({ approvals: [a] });
     await store.refreshApprovals();
     await Promise.resolve();
     expect([...snapshot().items.keys()]).toEqual([a.id]);
@@ -108,7 +106,7 @@ describe('approvals store: one list for the cards, the rows and the dialog', () 
   it('answered elsewhere while away: a re-read without it takes its notice back', async () => {
     const a = approval();
     store.applyApprovalEvent(a);
-    api.list.mockResolvedValue({ approvals: [], keys: [] });
+    api.list.mockResolvedValue({ approvals: [] });
     await store.refreshApprovals();
     expect(snapshot().items.size).toBe(0);
     expect(postsOf('clear').map((p) => p.id)).toEqual([a.id]);
@@ -129,7 +127,7 @@ describe('approvals store: one list for the cards, the rows and the dialog', () 
 
   it('a notice clicked for an approval this window has not read re-reads the list', async () => {
     const a = approval();
-    api.list.mockResolvedValue({ approvals: [a], keys: [] });
+    api.list.mockResolvedValue({ approvals: [a] });
     store.openApproval(a.id);
     await vi.waitFor(() => expect(snapshot().items.has(a.id)).toBe(true));
     expect(snapshot().openId).toBe(a.id);
@@ -138,11 +136,11 @@ describe('approvals store: one list for the cards, the rows and the dialog', () 
   it('a list read that started before an answer never brings the answered one back', async () => {
     const a = approval();
     store.applyApprovalEvent(a);
-    let release!: (v: { approvals: Approval[]; keys: [] }) => void;
+    let release!: (v: { approvals: Approval[] }) => void;
     api.list.mockImplementationOnce(() => new Promise((r) => { release = r; }));
     const read = store.refreshApprovals();
     store.applyApprovalEvent({ ...a, status: 'approved' });
-    release({ approvals: [a], keys: [] });
+    release({ approvals: [a] });
     await read;
     expect(snapshot().items.has(a.id)).toBe(false);
     // A late pending event for it is ignored too.
@@ -153,12 +151,12 @@ describe('approvals store: one list for the cards, the rows and the dialog', () 
   it('only the newest of several reads lands', async () => {
     const a = approval();
     const b = approval();
-    let releaseOld!: (v: { approvals: Approval[]; keys: [] }) => void;
+    let releaseOld!: (v: { approvals: Approval[] }) => void;
     api.list.mockImplementationOnce(() => new Promise((r) => { releaseOld = r; }));
     const older = store.refreshApprovals();
-    api.list.mockResolvedValueOnce({ approvals: [b], keys: [] });
+    api.list.mockResolvedValueOnce({ approvals: [b] });
     await store.refreshApprovals();
-    releaseOld({ approvals: [a], keys: [] });
+    releaseOld({ approvals: [a] });
     await older;
     expect([...snapshot().items.keys()]).toEqual([b.id]);
   });
@@ -177,7 +175,7 @@ describe('approvals store: one list for the cards, the rows and the dialog', () 
 
   it('the Mac app is told which notices are still current after every read', async () => {
     const a = approval();
-    api.list.mockResolvedValue({ approvals: [a], keys: [] });
+    api.list.mockResolvedValue({ approvals: [a] });
     await store.refreshApprovals();
     // The reminder after quiet shares the app's approval notices and is kept with them.
     expect(postsOf('keep').at(-1)).toMatchObject({ ids: [a.id, 'quiet-catchup'] });
@@ -190,24 +188,27 @@ describe('approvals store: one list for the cards, the rows and the dialog', () 
     expect(postsOf('post')).toHaveLength(0);
   });
 
-  it('a tap approval offers Approve, a biometric one without a signer offers none and says why', () => {
-    const s = snapshot();
-    expect(store.approveKind(s, approval())).toBe('tap');
-    expect(store.approveKind(s, approval({ mode: 'biometric' }))).toBeNull();
-    expect(store.noApproveReason(s, approval({ mode: 'biometric' }))).toContain('iPhone with Face ID');
+  it('Approve here is a tap bound to the digest this window showed, naming the window (an older Face ID ask pinned to the phone too)', async () => {
+    const a = approval({ mode: 'biometric', singleUse: true, signingKeyIds: ['ak-f9ca'] } as Partial<Approval>);
+    store.applyApprovalEvent(a);
+    api.answer.mockResolvedValueOnce({ approval: { ...a, status: 'approved' } });
+    await store.decideApproval(a, 'approve');
+    expect(api.answer).toHaveBeenLastCalledWith(a.id, { decision: 'approve', digest: 'd', device: { name: 'Web console', kind: 'web' } });
+    expect(snapshot().items.has(a.id)).toBe(false);
+    expect(snapshot().done[a.id]?.status).toBe('approved');
+    expect(snapshot().busy[a.id]).toBeUndefined();
   });
 
-  it('one bound to another device\'s key offers no Approve here and names that device (2026-11-12: a bare Deny on the phone)', () => {
-    const base = snapshot();
-    const s = { ...base, touchId: { available: true, keyId: 'ak-mac' } as never,
-      keys: [{ id: 'ak-mac', name: 'Mac', kind: 'mac-app', status: 'active', createdAt: '' }, { id: 'ak-phone', name: 'iPhone', kind: 'iphone', status: 'active', createdAt: '' }] as never };
-    const onPhone = approval({ mode: 'biometric', singleUse: true, signingKeyId: 'ak-phone' });
-    expect(store.approveKind(s, onPhone)).toBeNull();
-    expect(store.noApproveReason(s, onPhone)).toBe('Approve it on your iPhone with Face ID: only that device can sign this one.');
-    // Bound to this Mac's key, or to a set holding it: Touch ID here.
-    expect(store.approveKind(s, approval({ mode: 'biometric', singleUse: true, signingKeyId: 'ak-mac' }))).toBe('touch-id');
-    expect(store.approveKind(s, approval({ mode: 'biometric', singleUse: true, signingKeyIds: ['ak-mac', 'ak-phone'] }))).toBe('touch-id');
-    expect(store.approveKind(s, approval({ mode: 'biometric', singleUse: true, signingKeyIds: ['ak-other', 'ak-phone'] }))).toBeNull();
+  it('a request that changed or was answered elsewhere meanwhile (409): the error shows and the list is read again', async () => {
+    const a = approval();
+    store.applyApprovalEvent(a);
+    api.answer.mockRejectedValueOnce(Object.assign(new Error('This request changed since it was shown.'), { status: 409 }));
+    api.list.mockClear();
+    api.list.mockResolvedValue({ approvals: [] });
+    await store.decideApproval(a, 'approve');
+    expect(snapshot().errors[a.id]).toBe('This request changed since it was shown.');
+    await vi.waitFor(() => expect(api.list).toHaveBeenCalled());
+    await vi.waitFor(() => expect(snapshot().items.has(a.id)).toBe(false));
   });
 });
 
@@ -236,35 +237,10 @@ describe('the system notice', () => {
     expect(text.body).toBe('Task "Ship it" on Dev box is waiting for you. Click to approve or deny.');
     api.hostLabel = undefined;
     expect(notify.approvalNoticeText(approval({ requester: { host: '__cloudbox__' } })).body).toContain('on Cloud ');
-    expect(notify.approvalNoticeText(approval({ mode: 'biometric' })).body).toContain('Touch ID or Face ID');
-  });
-});
-
-const snapshot = () => store.approvalsSnapshot();
-
-describe('a guarded approval while Passwords is locked here: Unlock to approve, words for the devices the person has', () => {
-  const guarded = (over: Partial<Approval> = {}) => approval({ guard: 'person', what: 'Let a Walnut agent click button "Place order" on shop.example.test?', ...over } as Partial<Approval>);
-  it('no Approve, but an unlock in place; the reason names no device the person lacks', () => {
-    const s = snapshot();
-    const a = guarded();
-    expect(store.approveKind(s, a)).toBeNull();
-    expect(store.unlockApproves(s, a)).toBe(true);
-    expect(store.noApproveReason(s, a)).toBe('Unlock Passwords in this window to approve.');
-    store.openUnlock(a.id);
-    expect(snapshot().unlockId).toBe(a.id);
-    store.openUnlock(null);
-    expect(snapshot().unlockId).toBeNull();
-  });
-
-  it('with an iPhone that signs, the reason names it too', () => {
-    const s = { ...snapshot(), keys: [{ id: 'k1', name: 'iPhone', kind: 'iphone', status: 'active' }] } as unknown as ReturnType<typeof snapshot>;
-    expect(store.noApproveReason(s, guarded({ mode: 'biometric' }))).toBe('Approve it on your iPhone with Face ID, or unlock Passwords in this window.');
-  });
-
-  it('an item that needs Face ID itself offers no unlock; a plain tap approval needs none', () => {
-    const s = snapshot();
-    expect(store.unlockApproves(s, approval({ guard: 'vault-sensitive', mode: 'biometric' } as Partial<Approval>))).toBe(false);
-    expect(store.unlockApproves(s, approval())).toBe(false);
+    // An older Face ID ask reads the same: a click here approves it.
+    const older = notify.approvalNoticeText(approval({ mode: 'biometric' })).body;
+    expect(older).toContain('Click to approve or deny.');
+    expect(older).not.toMatch(/Face ID|Touch ID/);
   });
 
   it('an ask from this computer says "this computer", never its host name', () => {

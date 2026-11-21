@@ -35,7 +35,9 @@ describe('upload grants', () => {
     expect(askWords(['/1', '/2', '/3', '/4'], 's.test', undefined).what).toBe('Upload 4 files from this computer into s.test')
     const { id } = await askUpload({ taskId: 't1', paths: [REC], site: 'example.test', requester })
     const rec = await getApproval(id)
-    expect(rec).toMatchObject({ status: 'pending', mode: 'tap', guard: 'person', detailRole: 'summary' })
+    expect(rec).toMatchObject({ status: 'pending', mode: 'tap', detailRole: 'summary' })
+    // No extra proof rides on it: any device the person is signed in on approves it with a tap.
+    expect(rec).not.toHaveProperty('guard')
     expect(rec?.outsideSwitch).toBeUndefined()
     expect(rec?.unasked).toBeUndefined()
     // The same task and files again: the same ask.

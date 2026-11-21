@@ -3,8 +3,8 @@ import Foundation
 // MARK: - Approvals (additive /api/v1/approvals, src/web/routes/approvals-v1.ts)
 //
 // A script on one of the user's machines runs `walnut approve "<what>"` and waits until
-// the person says yes. The phone shows the ask and answers it: a tap, or for a biometric
-// one a signature by this phone's Face ID key (ApprovalSigning.swift).
+// the person says yes. The phone shows the ask and answers it with one tap, like every device
+// the person is signed in on.
 
 struct ApprovalRequester: Codable, Equatable, Hashable {
     let host: String
@@ -44,22 +44,17 @@ struct Approval: Codable, Identifiable, Equatable, Hashable {
     let what: String
     let detail: String?
     let digest: String
+    /// Always "tap" from a current server ("biometric" only in an older record): shown the same.
     let mode: String
-    let downgraded: String?
     let requester: ApprovalRequester
     let createdAt: String
     let expiresAt: String
     let status: String
     let answer: ApprovalAnswerRecord?
-    let enrollsKey: String?
-    /// A single-use approval only this device key may sign (a Git push pins the Mac's key).
-    var signingKeyId: String? = nil
-    /// Or any one of these keys (the Mac and the iPhone).
-    var signingKeyIds: [String]? = nil
     var context: ApprovalContext? = nil
     /// "summary": the detail is the request in words, read whole; else it is technical (folded).
     var detailRole: String? = nil
-    /// A single-use ask's detail is a signed envelope: always technical.
+    /// A single-use ask's detail is its envelope (the exact step, used once): always technical.
     var singleUse: Bool? = nil
 
     /// The words on top of the sheet, as the web dialog leads with them (approval-context.tsx
@@ -75,9 +70,6 @@ struct Approval: Codable, Identifiable, Equatable, Hashable {
     /// Walnut writes a summary for it, not yet arrived: the sheet reads it again shortly.
     var awaitsSummary: Bool { isPending && context?.whyFrom != "asker" && (context?.summary ?? "").isEmpty }
 
-    /// The keys that may sign it; empty = any device that signs.
-    var boundTo: [String] { signingKeyIds ?? signingKeyId.map { [$0] } ?? [] }
-
     /// The request in words, shown whole under the lead (Walnut's own asks), else nil.
     /// Twin of web/src/components/approvals/approval-context.tsx wordsOf.
     var words: String? {
@@ -85,9 +77,9 @@ struct Approval: Codable, Identifiable, Equatable, Hashable {
         return detail
     }
 
-    /// The technical detail folded under Details: a signed envelope's context laid out, or the
-    /// detail as it is (detailText). Nil when there is none or the detail is the words.
-    var technicalDetail: (text: String, signed: Bool)? {
+    /// The technical detail folded under Details: a single-use envelope's context laid out (`bound`),
+    /// or the detail as it is (detailText). Nil when there is none or the detail is the words.
+    var technicalDetail: (text: String, bound: Bool)? {
         guard words == nil, let d = detail, !d.isEmpty else { return nil }
         if singleUse == true, let env = Self.envelope(d), let ctx = env["context"] as? String {
             return (Self.prettyJSON(ctx), true)
@@ -95,7 +87,7 @@ struct Approval: Codable, Identifiable, Equatable, Hashable {
         return (Self.prettyJSON(d), false)
     }
 
-    /// Where a signed Git operation acts: "~/…/meta-fresh → mainline", from its signed context.
+    /// Where a Git operation acts: "~/…/meta-fresh → mainline", from its single-use context.
     /// Twin of approval-context.tsx gitOperation + whereLine.
     var repoLine: String? {
         guard singleUse == true, let d = detail, let env = Self.envelope(d), let ctx = env["context"] as? String,
@@ -129,7 +121,6 @@ struct Approval: Codable, Identifiable, Equatable, Hashable {
         p.replacingOccurrences(of: #"^(?:/local)?/home/(?!linuxbrew(?:/|$))[^/]+(?=/|$)|^/Users/(?!(?:Shared|Guest)(?:/|$))[^/]+(?=/|$)|^/root(?=/|$)"#, with: "~", options: .regularExpression)
     }
 
-    var isBiometric: Bool { mode == "biometric" }
     var isPending: Bool { status == "pending" }
 
     /// "Task "Ship v2" on clouddev" / "deploy.sh on build-box" / "A script on mac".
@@ -155,25 +146,12 @@ enum ApprovalDates {
     }
 }
 
-struct ApprovalKeyInfo: Codable, Equatable, Hashable {
-    let id: String
-    let name: String
-    let kind: String
-    let status: String
-}
-
 struct ApprovalListResponse: Codable {
     let approvals: [Approval]
-    let keys: [ApprovalKeyInfo]
 }
 
 struct ApprovalResponse: Codable {
     let approval: Approval
-}
-
-struct ApprovalEnrollResponse: Codable {
-    let key: ApprovalKeyInfo
-    let enrollment: Approval?
 }
 
 struct ApprovalAnswerBody: Encodable {
@@ -182,13 +160,7 @@ struct ApprovalAnswerBody: Encodable {
         let kind: String
     }
     let decision: String
-    let keyId: String?
-    let signature: String?
+    /// The digest of the request the sheet showed: the server refuses the answer if it changed.
+    let digest: String
     let device: Device
-}
-
-struct ApprovalEnrollBody: Encodable {
-    let publicKey: String
-    let name: String
-    let kind: String
 }

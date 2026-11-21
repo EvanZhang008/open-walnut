@@ -1,16 +1,20 @@
 /**
- * The PreToolUse hook that refuses a session's own write to Walnut's approval records: the device
- * keys, the approvals and the switch under WALNUT_HOME/approvals/ (keys.json, approvals.json,
- * switch.json), and the Approvals switch in config.yaml (core/approvals/ask-me.ts).
+ * The PreToolUse hook that refuses a session's own write to Walnut's approval records: the
+ * approvals and the switch under WALNUT_HOME/approvals/ (approvals.json, switch.json), and the
+ * Approvals switch in config.yaml (core/approvals/ask-me.ts).
  *
  * Why (2026-11-12, a review of the Git gate): with approvals on, any agent here could turn every
- * approval off with one unsigned PUT /api/config, or by editing the files Walnut reads. The server
- * now takes an off only with a device's signature and holds the switch it set last; what is left
+ * approval off with one PUT /api/config, or by editing the files Walnut reads. The server now
+ * takes an off only from a person's own screen (no session caller) and holds the switch it set last; what is left
  * is a process of this account writing those files itself, before a restart reads them. This hook
  * refuses that for every session Walnut runs: Write, Edit, MultiEdit and NotebookEdit inside
  * approvals/ (and on config.yaml while it holds the switch), and a Bash command that names the
- * approvals folder of Walnut's data folder and writes. Reading them stays open. It raises the bar for an agent; it is no wall against a hostile program of this
- * account, which the server's own checks are for.
+ * approvals folder of Walnut's data folder and writes. Since approvals are a tap on any device the
+ * person is signed in on (2026-11-21), it also refuses a Bash command that sends an answer to an
+ * approval or the switch through a web client (curl, a script's HTTP call): a session's own call
+ * there carries no session header, which is the server's known limit. Reading them stays open. It
+ * raises the bar for an agent; it is no wall against a hostile program of this account, which the
+ * server's own checks are for.
  *
  * POSIX sh + awk like the other guards (git-tmp-guard-hook.ts): a `case` bails out at once on a
  * payload that names none of the files. Paths are taken as written (the Write tools take absolute
@@ -28,7 +32,9 @@ import { shQuoteAwk } from './tmp-path-awk.js'
 const GUARD_AWK = String.raw`BEGIN{RS="\001"}
 {H=ENVIRON["OPEN_WALNUT_HOME"];if(H=="")H=ENVIRON["HOME"]"/.open-walnut"
 H=tolower(H);c=tolower($0)
-if(c~/"tool_name":"bash"/){gsub(/[0-9]?>(&[0-9]|\/dev\/null)/,"",c)
+if(c~/"tool_name":"bash"/){if(c~/curl|wget|fetch|request|urllib|http/){if(c~/\/approvals\/[^\/" ]+\/answer/)d("answer an approval itself")
+if(c~/\/api\/config/&&c~/ask_me/)d("turn the Approvals switch")}
+gsub(/[0-9]?>(&[0-9]|\/dev\/null)/,"",c)
 if(c!~/>|(sed|perl|ruby|yq)[^;&|]* -[a-z]*i|[ ;&|(":](tee|mv|cp|rm|truncate|dd|ln|install|rsync|chmod|chown|python3?|node|bun|deno|osascript) /)exit
 if(c~/open-walnut\/approvals([\/" ;&|)\\]|$)/||index(c,H"/approvals")||(c~/cd [^;&|]*open-walnut/&&c~/[ "]approvals([\/" ;&|)\\]|$)/))d("write Walnut's approval records")
 if(c~/config\.yaml/&&c~/ask_me/)d("change the Approvals switch in config.yaml")
@@ -37,7 +43,7 @@ if(c!~/"tool_name":"(write|edit|multiedit|notebookedit)"/||!match($0,/"(file|not
 p=substr($0,RSTART,RLENGTH);sub(/^"[a-z_]*":"/,"",p);sub(/"$/,"",p);m=tolower(p)
 if(index(m,H"/approvals/")==1||m~/\/\.open-walnut\/approvals\//)d("write "p", one of Walnut's approval records")
 if(m==H"/config.yaml"||m~/\/\.open-walnut\/config\.yaml$/)while((getline l<p)>0)if(l~/ask_me/)d("change config.yaml, which holds the Approvals switch")}
-function d(x){printf "Walnut refused this: it would %s. Only the person changes approvals, in Settings (an off asks for Face ID or Touch ID). Read them with walnut tools call approval_list.",x;exit}`
+function d(x){printf "Walnut refused this: it would %s. Only the person changes approvals, in Settings on a device they are signed in on. Read them with walnut tools call approval_list.",x;exit}`
 
 /** The hook command: a `case` on the payload, then the awk check. */
 export const APPROVALS_GUARD_COMMAND = [

@@ -143,14 +143,13 @@ async function useItem(io: PassIo, args: { item: string; fields: string[]; purpo
     io.say(`walnut pass: ${errLine(first)}`)
     return { exit: exitFor(first.code) }
   }
-  const b = (first.result ?? {}) as { status?: string; requestId?: string; waitToken?: string; mode?: string; downgraded?: string; item?: { title?: string } }
+  const b = (first.result ?? {}) as { status?: string; requestId?: string; waitToken?: string; item?: { title?: string } }
   if (b.status === 'released') return { released: first.result as Released }
   if (b.status !== 'pending' || !b.requestId || !b.waitToken) {
     io.say('walnut pass: unexpected answer from Walnut')
     return { exit: PASS_EXIT.error }
   }
-  io.say(`Waiting for approval to use ${b.item?.title ?? args.item}${b.mode === 'biometric' ? ' (Face ID or Touch ID)' : ''}: answer it on your Mac or phone.`)
-  if (b.downgraded) io.say(`  ${b.downgraded}`)
+  io.say(`Waiting for approval to use ${b.item?.title ?? args.item}: answer it on your Mac or phone.`)
   // Walnut away for a moment (a deploy restarts it): the same ask is waited on again; the
   // approval's own expiry ends the wait.
   const away = waitThroughRestart({ who: 'walnut pass', say: io.say, sleep, stop: stop.wake })

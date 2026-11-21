@@ -150,11 +150,13 @@ describe('the items, from their facts', () => {
       { ...base, id: 'apr-b', status: 'approved', requester: { host: 'h', taskId: 't1' } },
       { ...base, id: 'apr-c', status: 'pending', requester: { host: 'h' } },
       { ...base, id: 'apr-d', status: 'pending', requester: { host: 'h', taskId: 't2' }, testRun: 'tr' },
+      // An older Walnut's Face ID record is an approval like any other: no proof flag rides on it.
       { ...base, id: 'apr-e', status: 'pending', mode: 'biometric', requester: { host: 'h', taskId: 't1' } },
     ] as unknown as ApprovalView[]
     const by = approvalItemsByTask(list)
     expect([...by.keys()]).toEqual(['t1'])
-    expect(by.get('t1')!.map((i) => `${i.id}${i.proof ? '!' : ''}`)).toEqual(['apr-a', 'apr-e!'])
+    expect(by.get('t1')!.map((i) => i.id)).toEqual(['apr-a', 'apr-e'])
+    for (const i of by.get('t1')!) expect(i).not.toHaveProperty('proof')
   })
 })
 

@@ -6,7 +6,6 @@
  * reads the sealed log. Fake data only; the vault lives in the test's own data home.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
-import crypto from 'node:crypto'
 import fsp from 'node:fs/promises'
 import type { AddressInfo } from 'node:net'
 import { createMockConstants } from '../helpers/mock-constants.js'
@@ -19,7 +18,6 @@ import { derivePasswordKey, randomBytes, toB64, type KdfParams } from '../../src
 import { resetVaultForTest } from '../../src/core/vault/store.js'
 import { resetSessionsForTest } from '../../src/core/vault/sessions.js'
 import { resetAgentStateForTest } from '../../src/core/vault/agent.js'
-import { answerMessage, keyIdOf } from '../../src/core/approvals/digest.js'
 
 let base = ''
 let session = ''
@@ -93,16 +91,13 @@ describe('an agent and the vault', () => {
     expect(card.detail).toContain('Why: merge the test pull request')
     expect(card.detail).toContain('Command: git push')
     expect((await agent('POST', `/vault/agent/use/${p.requestId}/wait`, { token: p.waitToken, wait_ms: 0 })).body.status).toBe('pending')
-    expect(card.guard).toBe('vault')
-    // An agent cannot answer its own ask: not through Walnut's tools, and not with a bare tap
-    // from this machine either (any process here could send one), only with Passwords unlocked.
+    expect(card.mode).toBe('tap')
+    // An agent cannot answer its own ask: not as an automation, not from its session.
     expect((await agent('POST', `/approvals/${p.requestId}/answer`, { decision: 'approve' })).body.code).toBe('human_only')
-    const bare = await http('POST', `/approvals/${p.requestId}/answer`, { decision: 'approve' })
-    expect(bare.status).toBe(403)
-    expect(bare.body.code).toBe('vault_unlock_needed')
-    expect((await http('POST', `/approvals/${p.requestId}/answer`, { decision: 'approve', vaultSession: 'not-a-session' })).body.code).toBe('vault_unlock_needed')
+    expect((await http('POST', `/approvals/${p.requestId}/answer`, { decision: 'approve' }, { 'x-walnut-caller-sid': 'sess-vault-agent' })).body.code).toBe('human_only')
     expect((await agent('POST', `/vault/agent/use/${p.requestId}/wait`, { token: p.waitToken, wait_ms: 0 })).body.status).toBe('pending')
-    expect((await person('POST', `/approvals/${p.requestId}/answer`, { decision: 'approve' })).status).toBe(200)
+    // The person's tap in their window, Passwords unlocked there or not.
+    expect((await http('POST', `/approvals/${p.requestId}/answer`, { decision: 'approve', digest: card.digest, device: { name: 'Web console', kind: 'web' } })).status).toBe(200)
     const w = await agent('POST', `/vault/agent/use/${p.requestId}/wait`, { token: p.waitToken, wait_ms: 0 })
     expect(w.body).toMatchObject({ status: 'released', via: 'approval', values: { password: 'git-fake-Pass-1' } })
     expect((await agent('POST', `/vault/agent/use/${p.requestId}/wait`, { token: p.waitToken, wait_ms: 0 })).body.status).toBe('released')
@@ -174,39 +169,17 @@ describe('an agent and the vault', () => {
     expect(JSON.stringify(log)).not.toMatch(/sk_test_fake|git-fake-Pass/)
   })
 
-  it('a device token a process here made itself does not approve an ask', async () => {
-    const p = await ask()
-    const made = await http('POST', '/api/devices', { name: 'vault-agent-e2e-fake-phone' }, {})
-    expect(made.status).toBe(201)
-    const r = await http('POST', `/approvals/${p.requestId}/answer`, { decision: 'approve' }, { authorization: `Bearer ${made.body.token}` })
-    expect(r.status).toBe(403)
-    expect(r.body.code).toBe('vault_unlock_needed')
-    await agent('POST', `/vault/agent/use/${p.requestId}/cancel`, { token: p.waitToken })
-  })
-
-  it('with a device that signs, an ask is Face ID or Touch ID; an unlocked window approves only one that is not sensitive', async () => {
-    const { privateKey, publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
-    const spki = publicKey.export({ format: 'der', type: 'spki' }).toString('base64')
-    const paired = await http('POST', '/api/devices', { name: 'vault-agent-e2e-phone' }, {})
-    const enrolled = await http('POST', '/approvals/keys', { publicKey: spki, name: 'Test iPhone', kind: 'iphone' }, { authorization: `Bearer ${paired.body.token}` })
-    expect(enrolled.status).toBe(200)
-    const sign = (digest: string) => crypto.sign('sha256', Buffer.from(answerMessage(digest, 'approve')), { key: privateKey, dsaEncoding: 'der' }).toString('base64')
-    const digestOf = async (id: string) => (await http('GET', `/approvals/${id}`)).body.approval.digest as string
-
-    const p = await ask()
-    expect((await http('GET', `/approvals/${p.requestId}`)).body.approval.mode).toBe('biometric')
-    expect((await person('POST', `/approvals/${p.requestId}/answer`, { decision: 'approve' })).status).toBe(200)
-    expect((await agent('POST', `/vault/agent/use/${p.requestId}/wait`, { token: p.waitToken, wait_ms: 0 })).body.status).toBe('released')
-
-    const q = await ask()
-    expect((await http('POST', `/approvals/${q.requestId}/answer`, { decision: 'approve', keyId: keyIdOf(spki), signature: sign(await digestOf(q.requestId)) })).status).toBe(200)
-    expect((await agent('POST', `/vault/agent/use/${q.requestId}/wait`, { token: q.waitToken, wait_ms: 0 })).body.status).toBe('released')
-
+  it('a sensitive item too: a tap on any device the person is signed in on releases it, never the agent\'s own call', async () => {
     const s = await ask('Payroll')
-    const unlocked = await person('POST', `/approvals/${s.requestId}/answer`, { decision: 'approve' })
-    expect(unlocked.status).toBe(403)
-    expect(unlocked.body.code).toBe('vault_unlock_needed')
-    expect((await http('POST', `/approvals/${s.requestId}/answer`, { decision: 'approve', keyId: keyIdOf(spki), signature: sign(await digestOf(s.requestId)) })).status).toBe(200)
+    const rec = (await http('GET', `/approvals/${s.requestId}`)).body.approval
+    expect(rec.mode).toBe('tap')
+    expect((await agent('POST', `/approvals/${s.requestId}/answer`, { decision: 'approve' })).body.code).toBe('human_only')
+    expect((await agent('POST', `/vault/agent/use/${s.requestId}/wait`, { token: s.waitToken, wait_ms: 0 })).body.status).toBe('pending')
+    const paired = await http('POST', '/api/devices', { name: 'vault-agent-e2e-phone' }, {})
+    expect(paired.status).toBe(201)
+    const tap = await http('POST', `/approvals/${s.requestId}/answer`, { decision: 'approve', digest: rec.digest, device: { name: 'Test iPhone', kind: 'iphone' } }, { authorization: `Bearer ${paired.body.token}` })
+    expect(tap.status).toBe(200)
+    expect(tap.body.approval.answer).toMatchObject({ decision: 'approve', mode: 'tap', device: { kind: 'iphone' } })
     expect((await agent('POST', `/vault/agent/use/${s.requestId}/wait`, { token: s.waitToken, wait_ms: 0 })).body.values).toEqual({ password: 'pay-fake-Pass' })
   })
 })

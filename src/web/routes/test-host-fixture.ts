@@ -253,10 +253,10 @@ async function runAction(action: string, body: Body): Promise<Record<string, unk
       // Its explanation in words, as every Walnut ask writes one (store.ts detailRole 'summary').
       const detail = str(body.detail)
       if (!(await asksPerson())) return { approval: await goAheadUnasked('browserOutward', { what, requester, ...(detail ? { detail } : {}) }) }
-      return await createApproval({ what, mode: 'tap', requester, ...(detail ? { detail, detailRole: 'summary' as const } : {}) })
+      return await createApproval({ what, requester, ...(detail ? { detail, detailRole: 'summary' as const } : {}) })
     }
     case 'git-push-approval': {
-      // A signed Git push as the Git gate asks it (a walnut-git-operation-v1 context in a single-use
+      // A Git push as the Git gate asks it (a walnut-git-operation-v1 context in a single-use
       // envelope), so a spec can check the dialog's Task and Repo lines on the real shape.
       const { createApproval } = await import('../../core/approvals/store.js')
       const repository = str(body.repository) ?? '/home/dev/.local/state/open-walnut/tasks/t-fixture/meta-fresh'
@@ -267,11 +267,11 @@ async function runAction(action: string, body: Body): Promise<Record<string, unk
         argv, command, commitSha: 'da21d9c6ebf95b2d1003c6af76bb17894603c207', cwd: repository, localRef: `refs/heads/${branch}`,
         operation: 'push', remote: 'origin', remoteRef: `refs/heads/${branch}`, repository, version: 'walnut-git-operation-v1',
       })
-      // A dialog fixture: its specs show several at once with nobody in a chat (biometric-fence.ts).
-      const { _unfencedForFixture } = await import('../../core/approvals/biometric-fence.js')
+      // A dialog fixture: its specs show several at once with nobody in a chat (single-use-fence.ts).
+      const { _unfencedForFixture } = await import('../../core/approvals/single-use-fence.js')
       const made = await _unfencedForFixture(() => createApproval({
         what: `Push commit da21d9c to origin ${branch} in ${repository.split('/').pop()}`, detail: context, detailRole: 'technical',
-        mode: 'biometric', singleUse: true, signingKeyId: 'ak-fixture-signer', outsideSwitch: true,
+        singleUse: true, outsideSwitch: true,
         requester: {
           host: str(body.host) ?? 'this computer', local: !str(body.host), taskId: str(body.taskId) ?? 't-fixture',
           taskTitle: str(body.taskTitle) ?? 'Platform Lead', sessionId: 's-fixture', cwd: repository, command, identity: 'verified',

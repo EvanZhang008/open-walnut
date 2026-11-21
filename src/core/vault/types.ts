@@ -47,7 +47,7 @@ export interface VaultItem {
   passkeys?: Array<Record<string, unknown>>
   tags?: string[]
   favorite?: boolean
-  /** A sensitive item needs Face ID / Touch ID when an agent asks for it. */
+  /** A sensitive item always asks the person when an agent asks for it, whatever the switch says. */
   sensitive?: boolean
   agentAccess?: AgentAccess
   passwordHistory?: PasswordHistoryEntry[]

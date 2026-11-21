@@ -3,13 +3,12 @@
  * user: "I approved the approval request but the source session didn't get notified, it should
  * get notified"). His case: a session asked with the approval_request op, ended its turn, and
  * nothing told it when he tapped Approve 76 minutes later. Every way a decision is made (Approve
- * or Deny in the web notice, a Touch ID or Face ID signature, the clock running out) tells the
+ * or Deny in the web notice, the Mac app or the phone, the clock running out) tells the
  * asking session once, unless a waiting `walnut approve` read the decision itself; a withdrawal
  * tells no one. The ratchet at the end fails on a new place in the store that ends an approval
  * without announcing it, since announce() is where the asker is told.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
 import { createMockConstants } from '../../helpers/mock-constants.js'
@@ -31,12 +30,9 @@ vi.mock('../../../src/core/session-tracker.js', () => ({
 
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { answerApproval, cancelApproval, createApproval, getApproval, noteAskerRead, sweepExpired, waitApproval, _resetApprovalTimersForTesting } from '../../../src/core/approvals/store.js'
-import { answerMessage, keyIdOf } from '../../../src/core/approvals/digest.js'
-import { activeKey, enrollKey } from '../../../src/core/approvals/keys.js'
 import { _resetToldForTesting, askerNoticeFor, rearmAskerNotices, tellAsker } from '../../../src/core/approvals/tell-asker.js'
 
 const requester = { host: 'clouddev', sessionId: 'sess-asker', taskId: 'task-asker', command: 'git push origin main' }
-const lookup = (id: string) => activeKey(id)
 
 beforeEach(async () => {
   _resetApprovalTimersForTesting()
@@ -61,8 +57,8 @@ async function toldOnce(sid: string, outcome: string): Promise<string> {
 
 describe('the asking session hears the decision', () => {
   it('a tap Approve in the web notice or on the phone', async () => {
-    const { approval } = await createApproval({ what: 'Push the release', mode: 'tap', requester })
-    await answerApproval(approval.id, { decision: 'approve', device: { name: 'MacBook', kind: 'mac-app' } }, lookup)
+    const { approval } = await createApproval({ what: 'Push the release', requester })
+    await answerApproval(approval.id, { decision: 'approve', device: { name: 'MacBook', kind: 'mac-app' } })
     const text = await toldOnce('sess-asker', 'approved')
     expect(text).toContain(approval.id)
     // The result and what was asked lead the note, so its folded preview reads as the answer.
@@ -70,16 +66,16 @@ describe('the asking session hears the decision', () => {
     expect(text).toContain('git push origin main')
   })
 
-  it('a strict signed decision tells the session to consume before running', () => {
+  it('a single-use decision tells the session to consume before running', () => {
     const notice = askerNoticeFor({ id: 'apr-strict', what: 'One push', status: 'approved', requester,
-      singleUse: true, answer: { decision: 'approve', at: new Date().toISOString(), mode: 'biometric', device: { name: 'Mac', kind: 'mac-app' } } })
+      singleUse: true, answer: { decision: 'approve', at: new Date().toISOString(), mode: 'tap', device: { name: 'Mac', kind: 'mac-app' } } })
     expect(notice?.body).toContain('Do not run yet')
     expect(notice?.body).toContain('approval_consume')
     expect(notice?.body).not.toContain('Go ahead')
   })
 
   it('a request-only ask (its command ended) is told to rerun with --approval, strict or not', () => {
-    const answer = { decision: 'approve' as const, at: new Date().toISOString(), mode: 'biometric' as const, device: { name: 'Mac', kind: 'mac-app' as const } }
+    const answer = { decision: 'approve' as const, at: new Date().toISOString(), mode: 'tap' as const, device: { name: 'Mac', kind: 'mac-app' as const } }
     const plain = askerNoticeFor({ id: 'apr-later', what: 'Publish', status: 'approved', requester, requestOnly: true, answer })
     expect(plain?.body).toContain('--approval apr-later')
     expect(plain?.body).toContain('has not run')
@@ -87,35 +83,33 @@ describe('the asking session hears the decision', () => {
     const strict = askerNoticeFor({ id: 'apr-later2', what: 'Push', status: 'approved', requester, requestOnly: true, singleUse: true, answer })
     expect(strict?.body).toContain('--approval apr-later2')
     expect(strict?.body).toContain('Do not run yet')
-    expect(strict?.body).toContain('consumed once')
+    expect(strict?.body).toContain('used once')
   })
 
   it('a Deny', async () => {
-    const { approval } = await createApproval({ what: 'Push the release', mode: 'tap', requester })
-    await answerApproval(approval.id, { decision: 'deny', device: { name: 'iPhone', kind: 'iphone' } }, lookup)
+    const { approval } = await createApproval({ what: 'Push the release', requester })
+    await answerApproval(approval.id, { decision: 'deny', device: { name: 'iPhone', kind: 'iphone' } })
     expect(await toldOnce('sess-asker', 'denied')).toContain('Do not take that step')
   })
 
-  it('a Touch ID or Face ID signature', async () => {
-    const { privateKey, publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
-    const spki = publicKey.export({ format: 'der', type: 'spki' }).toString('base64')
-    await enrollKey({ publicKey: spki, name: 'Mac', kind: 'mac-app', fromDeviceApp: true })
-    const { approval } = await createApproval({ what: 'Publish', mode: 'biometric', requester })
-    const signature = crypto.sign('sha256', Buffer.from(answerMessage(approval.digest, 'approve'), 'utf8'), { key: privateKey, dsaEncoding: 'der' }).toString('base64')
-    await answerApproval(approval.id, { decision: 'approve', keyId: keyIdOf(spki), signature, device: { name: 'Mac', kind: 'mac-app' } }, lookup)
-    expect(await toldOnce('sess-asker', 'approved')).toContain('Touch ID')
+  it('a tap on the phone, named in the note', async () => {
+    const { approval } = await createApproval({ what: 'Publish', requester })
+    await answerApproval(approval.id, { decision: 'approve', device: { name: 'Test’s iPhone', kind: 'iphone' } })
+    const text = await toldOnce('sess-asker', 'approved')
+    expect(text).toContain('with a tap on Test’s iPhone')
+    expect(text).not.toMatch(/Face ID|Touch ID|signed/)
   })
 
   it('the clock running out', async () => {
-    const { approval } = await createApproval({ what: 'Push', mode: 'tap', requester, timeoutMs: 10_000 })
+    const { approval } = await createApproval({ what: 'Push', requester, timeoutMs: 10_000 })
     vi.useFakeTimers({ now: Date.now() + 11_000, toFake: ['Date'] })
     try { expect(await sweepExpired()).toBe(1) } finally { vi.useRealTimers() }
     expect(await toldOnce('sess-asker', 'expired')).toContain(approval.id)
   })
 
   it('the task\'s live session when the asking one is gone', async () => {
-    const { approval } = await createApproval({ what: 'Push', mode: 'tap', requester: { host: 'h', sessionId: 'sess-gone', taskId: 'task-replaced' } })
-    await answerApproval(approval.id, { decision: 'approve', device: { name: 'Mac', kind: 'mac-app' } }, lookup)
+    const { approval } = await createApproval({ what: 'Push', requester: { host: 'h', sessionId: 'sess-gone', taskId: 'task-replaced' } })
+    await answerApproval(approval.id, { decision: 'approve', device: { name: 'Mac', kind: 'mac-app' } })
     await toldOnce('sess-new', 'approved')
   })
 })
@@ -123,9 +117,9 @@ describe('the asking session hears the decision', () => {
 describe('nobody is told twice, or about their own withdrawal', () => {
   it('a waiting `walnut approve` that read the decision itself', async () => {
     _resetToldForTesting(300)
-    const { approval, waitToken } = await createApproval({ what: 'Push', mode: 'tap', requester })
+    const { approval, waitToken } = await createApproval({ what: 'Push', requester })
     const waiting = waitApproval(approval.id, waitToken, 5_000)
-    await answerApproval(approval.id, { decision: 'approve', device: { name: 'Mac', kind: 'mac-app' } }, lookup)
+    await answerApproval(approval.id, { decision: 'approve', device: { name: 'Mac', kind: 'mac-app' } })
     expect((await waiting).approval.status).toBe('approved')
     await new Promise((r) => setTimeout(r, 600))
     expect(sent).toHaveLength(0)
@@ -133,7 +127,7 @@ describe('nobody is told twice, or about their own withdrawal', () => {
 
   it('an expiry the waiting command read itself', async () => {
     _resetToldForTesting(300)
-    const { approval, waitToken } = await createApproval({ what: 'Push', mode: 'tap', requester, timeoutMs: 10_000 })
+    const { approval, waitToken } = await createApproval({ what: 'Push', requester, timeoutMs: 10_000 })
     vi.useFakeTimers({ now: Date.now() + 11_000, toFake: ['Date'] })
     try {
       expect(await sweepExpired()).toBe(1)
@@ -145,8 +139,8 @@ describe('nobody is told twice, or about their own withdrawal', () => {
 
   it('a browser step that held for its answer and got it in the same call', async () => {
     _resetToldForTesting(300)
-    const { approval } = await createApproval({ what: 'Buy it', mode: 'tap', requester })
-    await answerApproval(approval.id, { decision: 'approve', device: { name: 'Mac', kind: 'mac-app' } }, lookup)
+    const { approval } = await createApproval({ what: 'Buy it', requester })
+    await answerApproval(approval.id, { decision: 'approve', device: { name: 'Mac', kind: 'mac-app' } })
     await noteAskerRead(approval.id) // outward-asks.ts answerOutward / browser-v1.ts siteGate
     await new Promise((r) => setTimeout(r, 600))
     expect(sent).toHaveLength(0)
@@ -155,16 +149,16 @@ describe('nobody is told twice, or about their own withdrawal', () => {
   it('a closed task: its session is not woken', async () => {
     phases['task-asker'] = 'COMPLETE'
     _resetToldForTesting(60_000)
-    const { approval } = await createApproval({ what: 'Push', mode: 'tap', requester })
-    await answerApproval(approval.id, { decision: 'deny', device: { name: 'Mac', kind: 'mac-app' } }, lookup)
+    const { approval } = await createApproval({ what: 'Push', requester })
+    await answerApproval(approval.id, { decision: 'deny', device: { name: 'Mac', kind: 'mac-app' } })
     expect(await tellAsker(approval.id)).toBe('none')
     expect(sent).toHaveLength(0)
   })
 
   it('once: a second attempt finds it told', async () => {
     _resetToldForTesting(60_000)
-    const { approval } = await createApproval({ what: 'Push', mode: 'tap', requester })
-    await answerApproval(approval.id, { decision: 'approve', device: { name: 'Mac', kind: 'mac-app' } }, lookup)
+    const { approval } = await createApproval({ what: 'Push', requester })
+    await answerApproval(approval.id, { decision: 'approve', device: { name: 'Mac', kind: 'mac-app' } })
     expect(await tellAsker(approval.id)).toBe('told')
     expect(await tellAsker(approval.id)).toBe('read')
     expect(sent).toHaveLength(1)
@@ -173,15 +167,15 @@ describe('nobody is told twice, or about their own withdrawal', () => {
 
   it('a restart inside the grace: the boot re-arms it', async () => {
     _resetToldForTesting(60_000)
-    const { approval } = await createApproval({ what: 'Push', mode: 'tap', requester })
-    await answerApproval(approval.id, { decision: 'approve', device: { name: 'Mac', kind: 'mac-app' } }, lookup)
+    const { approval } = await createApproval({ what: 'Push', requester })
+    await answerApproval(approval.id, { decision: 'approve', device: { name: 'Mac', kind: 'mac-app' } })
     _resetToldForTesting(0) // the restart: the timer is gone
     rearmAskerNotices([(await getApproval(approval.id))!])
     await toldOnce('sess-asker', 'approved')
   })
 
   it('a withdrawal by the asker', async () => {
-    const { approval, waitToken } = await createApproval({ what: 'Push', mode: 'tap', requester })
+    const { approval, waitToken } = await createApproval({ what: 'Push', requester })
     await cancelApproval(approval.id, waitToken, 'the script was stopped')
     await new Promise((r) => setTimeout(r, 200))
     expect(sent).toHaveLength(0)

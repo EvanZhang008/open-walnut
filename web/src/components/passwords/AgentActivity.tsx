@@ -15,7 +15,7 @@ import { ago } from './passwords-model'
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel'
 
 export const SWITCH: Array<{ value: AgentsSwitch; label: string; help: string }> = [
-  { value: 'allow', label: 'Any', help: 'Agents see the list and use what they need. Items marked sensitive still ask for Face ID or Touch ID; items set to never stay never.' },
+  { value: 'allow', label: 'Any', help: 'Agents see the list and use what they need. Items marked sensitive still ask you; items set to never stay never.' },
   { value: 'ask', label: 'Ask', help: 'Agents see the list; each use asks you on your Mac or phone, and an approval lasts the grant length.' },
   { value: 'off', label: 'Off', help: 'Agents see nothing. One may only ask you for one item it names; if you approve, it gets it for the grant length.' },
 ]

@@ -33,7 +33,6 @@ import { ORIGIN_HEADER, REMOTE_HTTP_ORIGIN, lowerOrigin } from '../../lib/caller
 import { controlRefusedForHost, controlRelayOrigin } from '../../core/sessions/control-host-policy.js'
 import { bootPolicy } from '../../core/boot-policy.js'
 import { forwardRequestHeaders, forwardResponseHeaders, noteForwardedTaskWrite } from './policy.js'
-import { COMPANION_PHONE_HEADER, forwardedPhoneHeaders } from './forwarded-device.js'
 import { checkForwardCall, settleKeptCall, type Checked } from './target.js'
 
 /** Set on an answer the door gave itself: nothing ran here, the companion may answer the call. */
@@ -84,12 +83,9 @@ function originOf(socket: object): string {
   return lowerOrigin(REMOTE_HTTP_ORIGIN, streamOrigin.get(socket))
 }
 
-/** The request headers that cross, the caller's class, the phone the companion named, and the body's framing. */
-function crossingHeaders(req: IncomingMessage, method: string, path: string): http.OutgoingHttpHeaders {
-  const out: http.OutgoingHttpHeaders = {
-    ...forwardRequestHeaders(req.headers), ...forwardedPhoneHeaders(req.headers[COMPANION_PHONE_HEADER], method, path),
-    [ORIGIN_HEADER]: originOf(req.socket),
-  }
+/** The request headers that cross, the caller's class, and the body's framing. */
+function crossingHeaders(req: IncomingMessage): http.OutgoingHttpHeaders {
+  const out: http.OutgoingHttpHeaders = { ...forwardRequestHeaders(req.headers), [ORIGIN_HEADER]: originOf(req.socket) }
   const len = req.headers['content-length']
   if (typeof len === 'string' && /^\d+$/.test(len)) out['content-length'] = len
   else if (req.headers['transfer-encoding'] !== undefined) out['transfer-encoding'] = 'chunked'
@@ -154,7 +150,7 @@ export function createCompanionDoor(opts: CompanionDoorOptions = {}): CompanionD
       return
     }
     counts.served++
-    const up = http.request({ host: '127.0.0.1', port, method, path: c.path, headers: crossingHeaders(req, method, c.path) })
+    const up = http.request({ host: '127.0.0.1', port, method, path: c.path, headers: crossingHeaders(req) })
     up.on('response', (answer) => {
       const headers: http.OutgoingHttpHeaders = { ...forwardResponseHeaders(answer.headers) }
       const len = answer.headers['content-length']

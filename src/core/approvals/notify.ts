@@ -1,10 +1,8 @@
 /**
- * What follows an approval's change, on the leader:
- *  - a new pending approval pushes to every paired phone like a permission prompt: a script
- *    is blocked on it, so it passes quiet mode while quiet allows permissions
- *    (allowPermissions), with the category that gives the banner its Approve / Deny actions
- *    (tap) or only Open (biometric: Face ID in the app);
- *  - a decided key enrollment activates or drops its key (keys.ts).
+ * What follows an approval's change, on the leader: a new pending approval pushes to every paired
+ * phone like a permission prompt: a script is blocked on it, so it passes quiet mode while quiet
+ * allows permissions (allowPermissions), with the category that gives the banner its Approve /
+ * Deny actions (every approval is a tap on any device the person is signed in on: types.ts).
  * The web console hears the same change on the `approval:changed` event (store.ts).
  */
 
@@ -16,7 +14,6 @@ import type { ApprovalView } from './types.js'
 
 export const APPROVAL_PUSH_TYPE = 'approval_request'
 export const APPROVAL_CATEGORY_TAP = 'WALNUT_APPROVAL'
-export const APPROVAL_CATEGORY_BIOMETRIC = 'WALNUT_APPROVAL_BIOMETRIC'
 
 /** Who asks, on which host: `hostName` is the host's display name (never a raw alias such as `__cloudbox__`). */
 export function requesterLine(a: Pick<ApprovalView, 'requester'>, hostName: string = a.requester.host): string {
@@ -34,17 +31,17 @@ export const PUSH_SUMMARY_WAIT_MS = 6_000
  * the summary the dialog leads with). The app reads only `data`, so an older app is unaffected.
  */
 export function approvalPushContent(a: ApprovalView, hostName?: string, summary?: string) {
-  const biometric = a.mode === 'biometric'
   const own = a.context?.whyFrom === 'asker' ? a.context.why : undefined
   const lead = own || summary || (a.context?.whyFrom !== 'asker' ? a.context?.summary : undefined)
-  const who = `${requesterLine(a, hostName)}${biometric ? ' · Face ID needed' : ''}`
+  const who = requesterLine(a, hostName)
   return {
     title: `Approve? ${a.what}`.slice(0, 120),
     body: (lead ? `${firstSentence(lead)}\n${who}` : who).slice(0, 240),
-    data: { type: APPROVAL_PUSH_TYPE, approvalId: a.id, mode: a.mode },
+    // `mode: 'tap'`: an iPhone app built before approvals took a tap everywhere reads it.
+    data: { type: APPROVAL_PUSH_TYPE, approvalId: a.id, mode: 'tap' },
     priority: 10,
     collapseId: a.id,
-    category: biometric ? APPROVAL_CATEGORY_BIOMETRIC : APPROVAL_CATEGORY_TAP,
+    category: APPROVAL_CATEGORY_TAP,
     interruptionLevel: 'time-sensitive' as const,
   }
 }
@@ -83,14 +80,7 @@ export function initApprovalNotify(): void {
   bus.subscribe('approvals', (event) => {
     if (event.name !== APPROVAL_CHANGED) return
     const a = (event.data as { approval?: ApprovalView }).approval
-    if (!a) return
-    if (a.status === 'pending') {
-      void pushNew(a).catch((err) => log.notif.warn('approval push failed', { approvalId: a.id, error: String(err) }))
-      return
-    }
-    if (a.enrollsKey) {
-      void import('./keys.js').then((k) => k.applyKeyApproval(a))
-        .catch((err) => log.web.warn('approval key update failed', { approvalId: a.id, error: String(err) }))
-    }
+    if (!a || a.status !== 'pending') return
+    void pushNew(a).catch((err) => log.notif.warn('approval push failed', { approvalId: a.id, error: String(err) }))
   })
 }

@@ -71,6 +71,14 @@ const CASES: Array<[string, () => Record<string, unknown>, boolean]> = [
   ['Bash', () => ({ command: 'echo [] > /tmp/fx/approvals/keys.json' }), false],
   // A read of the approvals route that names the data folder elsewhere in the line (2026-11-12, a false refusal).
   ['Bash', () => ({ command: 'curl -s localhost:3456/api/v1/approvals | python3 -c "print(1)"; ls ~/.open-walnut/../x/dist 2>/dev/null' }), false],
+  // A session's own answer to an approval, or its own move of the switch, through a web client
+  // (2026-11-21: a tap answers, so a bare local call with no session header would pass as the person).
+  ['Bash', () => ({ command: `curl -s -X POST localhost:3456/api/v1/approvals/apr-1/answer -H 'content-type: application/json' -d '{"decision":"approve"}'` }), true],
+  ['Bash', () => ({ command: `python3 -c "import urllib.request as u; u.urlopen(u.Request('http://127.0.0.1:3456/api/v1/approvals/apr-1/answer', b'{}', method='POST'))"` }), true],
+  ['Bash', () => ({ command: `curl -s -X PUT localhost:3456/api/config -d '{"approvals":{"ask_me":false}}'` }), true],
+  // Reading one, and naming the route in a search, stay open.
+  ['Bash', () => ({ command: 'curl -s localhost:3456/api/v1/approvals/apr-1' }), false],
+  ['Bash', () => ({ command: 'grep -n "approvals/:id/answer" src/web/routes/approvals-v1.ts' }), false],
   ['Write', () => ({ file_path: `${home}/other/config.yaml`, content: 'x: 1\n' }), false],
   ['Write', () => ({ file_path: `${home}/repo/src/core/approvals/keys.ts`, content: 'export {}' }), false],
   ['Read', () => ({ file_path: `${W()}/approvals/keys.json` }), false],

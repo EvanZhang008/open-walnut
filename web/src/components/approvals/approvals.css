@@ -42,7 +42,6 @@
 /* A card that just took another's place: its buttons wait a moment (ApprovalPrompts ARM_MS). */
 .approval-card-arming .approval-actions { pointer-events: none; opacity: 0.55; transition: opacity 0.2s ease; }
 
-.approval-card-biometric .approval-kicker { color: var(--accent-text, var(--accent)); }
 
 .approval-head-end { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
 
@@ -208,7 +207,7 @@
 .corner-stack .approval-card:not(.approval-card-line) .approval-head { flex: 1 0 100%; margin: 0; align-items: center; }
 /* The kicker takes a row of its own before it is squeezed to a word a line beside the count and clock. */
 .corner-stack .approval-card:not(.approval-card-line) .approval-head { flex-wrap: wrap; row-gap: 2px; }
-/* Under the summary: the asker's own why, then (under Walnut's summary) the request's signed line. */
+/* Under the summary: the asker's own why, then (under Walnut's summary) the request's own line. */
 .corner-stack .approval-card-why { flex: 1 0 100%; margin: 0; font-size: 13px; line-height: 1.4; color: var(--fg-secondary); overflow-wrap: anywhere; }
 .corner-stack .approval-card-request { flex: 1 0 100%; margin: 0; font-size: 12px; line-height: 1.35; color: var(--fg-muted); overflow-wrap: anywhere; }
 .corner-stack .approval-what-open { flex: 1 0 100%; min-width: 0; font-size: 14px; line-height: 1.35; }
@@ -233,8 +232,6 @@
 .corner-stack .approval-card .approval-detail { display: none; }
 .corner-stack .approval-card .approval-note,
 .corner-stack .approval-card .approval-error { flex: 1 0 100%; margin: 0; font-size: 12px; }
-/* Unlocking in place: the card's width, right under who asks (no empty band above its label). */
-.corner-stack .approval-card .approval-unlock { flex: 1 0 100%; margin-top: 2px; }
 
 .approval-settled-line {
   display: flex;
@@ -506,7 +503,7 @@ button.approval-line-more { border: 0; cursor: pointer; font: inherit; font-size
 .approval-line-who .approval-task-link { display: flex; align-items: baseline; min-width: 0; white-space: nowrap; }
 
 /* The dialog's body (approval-context.tsx): the summary, Task and Repo (or Folder) as two label/value
-   lines, the request's sentence when it says more, then one Details fold (command, signed detail). */
+   lines, the request's sentence when it says more, then one Details fold (command, exact detail). */
 .approval-field { display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: baseline; gap: 10px; font-size: 14px; line-height: 1.45; }
 .approval-field-label { color: var(--fg-muted); font-size: 12px; font-weight: 600; }
 .approval-field-value { min-width: 0; overflow-wrap: anywhere; color: var(--fg); }
@@ -543,21 +540,6 @@ button.approval-line-more { border: 0; cursor: pointer; font: inherit; font-size
 .approval-unchecked { font-size: 12px; }
 .approval-warn { color: var(--warning); font-size: 12px; line-height: 1.4; }
 .approval-dialog .approval-detail { margin-top: 6px; }
-/* "Unlock to approve" inside a card: the master password, then Approve (ApprovalUnlock.tsx). */
-.approval-unlock { display: grid; gap: 8px; margin-top: 12px; }
-.approval-unlock-label { font-size: 12px; color: var(--fg-secondary); }
-.approval-unlock-input {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 7px 10px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong);
-  background: var(--bg);
-  color: var(--fg);
-  font: inherit;
-  font-size: 13px;
-}
-.approval-unlock .approval-actions { margin-top: 0; }
 
 /* A narrow corner (a page's left column, ~190px: the Passwords rail): the whole card reads the
    action and who asks at first sight, never cut to "Let a Walnut agent cli…" and "A.." (review

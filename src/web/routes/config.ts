@@ -689,14 +689,17 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
         res.status(400).json({ error: a?.ask_me === null ? 'approvals.ask_me cannot be removed: send true or false' : 'approvals must be { ask_me: boolean }' })
         return
       }
-      // Written only through setAskMe (ask-me.ts), never by the generic merge below; turning it
-      // off while a device signs approvals is an approval of its own, whatever the headers say.
+      // Written only through setAskMe (ask-me.ts), never by the generic merge below, and only by a person.
       const askMe = await import('../../core/approvals/ask-me.js')
       const current = await getConfig()
       const want = askMe.storedAskMe({ approvals: a as { ask_me?: boolean } })
       const changes = a.ask_me !== undefined && (want !== askMe.askMeOf(current) || (want && askMe.storedAskMe(current) !== true))
       if (changes) {
-        if (req.get('x-walnut-caller-sid')) {
+        // The same person check as answering an approval (person-caller.ts): no session, no CLI
+        // automation mark, no browser under automation on the person's own install, and this
+        // computer or a paired device, never a session on another host.
+        const { isPersonNotAutomation } = await import('./person-caller.js')
+        if (!isPersonNotAutomation(req)) {
           res.status(403).json({ error: 'Only the person turns approvals on or off (Settings, Approvals).', code: 'human_only' })
           return
         }
@@ -705,17 +708,7 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
           res.status(409).json({ error: 'A test run does not change the person\'s Approvals switch.', code: 'test_run' })
           return
         }
-        if (want) await askMe.setAskMe(true, { person: true })
-        else if (await askMe.offNeedsSignature()) {
-          const os = await import('node:os')
-          // Who asked is not known here (any process on this computer can send this), so it says none.
-          const approval = await askMe.requestAskMeOff({ host: os.hostname() || 'this computer', local: true })
-          res.status(409).json({
-            error: 'Turning approvals off needs Face ID or Touch ID: approve it in the Walnut Mac app or on your iPhone.',
-            code: 'signature_needed', approvalId: approval.id,
-          })
-          return
-        } else await askMe.setAskMe(false, { unsigned: 'no device signs approvals yet' })
+        await askMe.setAskMe(want, { person: true })
       }
       delete body.approvals
     }

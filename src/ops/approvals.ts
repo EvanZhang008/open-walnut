@@ -26,11 +26,10 @@ defineOp({
   title: 'Ask a person to approve a step',
   description:
     'Ask the user to approve one step before it goes on: a notification reaches their Mac and their phone with `what` (one line) '
-    + 'and `detail`, and they Approve or Deny. `mode: "biometric"` needs Face ID or Touch ID on a device that signs approvals, '
-    + 'so no agent and no click-through can say yes (with no such device yet it asks for a tap and says why in `downgraded`). '
+    + 'and `detail`, and they Approve or Deny with one tap on any device they are signed in on (the web console, the Mac app, the iPhone app). '
     + 'Returns the approval and a `waitToken`; then call approval_wait with both until it is decided, or ' + OWN_WAIT_TURN_END + '. Once it is '
     + 'approved, denied or expired, Walnut tells your session (a Walnut note that wakes it), so no trigger is needed to watch it. In a shell script use '
-    + '`walnut approve "<what>" [--why <sentence>] [--biometric] [--timeout 10m] [--detail <file>]` instead: it waits and exits 0 only on Approve '
+    + '`walnut approve "<what>" [--why <sentence>] [--timeout 10m] [--detail <file>]` instead: it waits and exits 0 only on Approve '
     + '(`--request-only` asks and exits 4, then `walnut approve --approval <id>` runs it once approved). The person sees why, the task, its last steps '
     + 'and whether Walnut saw the asking process inside this session. '
     + 'It always asks the person, whatever their Approvals switch says: that switch covers only Walnut\'s own asks (posts, mail, '
@@ -40,10 +39,11 @@ defineOp({
   input: {
     what: z.string().min(1).max(300).describe('What is to be approved, one line (shown as the title)'),
     detail: z.string().max(32_000).optional().describe('The detail the person reads before answering (a diff summary, the command, the target)'),
-    mode: z.enum(['tap', 'biometric']).optional().describe('tap (default): a plain Approve; biometric: Face ID / Touch ID on a device that signs'),
-    single_use: z.boolean().optional().describe('Strict signed approval: no tap fallback; wait only reads, approval_consume spends it once before expiry (at most 5 minutes). Requires a task session.'),
-    signing_key_id: z.string().min(1).max(80).optional().describe('The enrolled signing device required for a single-use approval'),
-    signing_key_ids: z.array(z.string().min(1).max(80)).min(2).max(8).optional().describe('Instead of signing_key_id: two or more enrolled devices, any one of which may sign it (the set is signed in the envelope as signingKeyIds, sorted)'),
+    // Taken from an older caller and ignored: every approval is a tap on any device the person is signed in on.
+    mode: z.enum(['tap', 'biometric']).optional().describe('Ignored (an older caller\'s field): every approval is a tap on any device the person is signed in on'),
+    single_use: z.boolean().optional().describe('Strict: bound to this detail; wait only reads, approval_consume spends it once before expiry (at most 5 minutes). Requires a task session.'),
+    signing_key_id: z.string().min(1).max(80).optional().describe('Ignored (an older caller\'s pinned device)'),
+    signing_key_ids: z.array(z.string().min(1).max(80)).min(2).max(8).optional().describe('Ignored (an older caller\'s pinned devices)'),
     timeout_ms: z.number().int().min(10_000).max(86_400_000).optional().describe('Unanswered after this long = expired (default 10 minutes, or 5 minutes for single_use)'),
     cwd: z.string().optional().describe('The asking process\'s working directory, shown to the person'),
     command: z.string().optional().describe('A short name for the asking script or command, shown to the person'),
@@ -71,23 +71,23 @@ defineOp({
   bind: { method: 'POST', path: '/approvals/:id/wait' },
   timeoutMs: 20_000,
   mapResult: ({ body }) => withOutcome(body as Record<string, unknown>, stateLine(body), (body as { approval?: { singleUse?: boolean } }).approval?.singleUse
-    ? 'Do not run yet. Verify the signed record, rebuild the current operation context, then approval_consume; run only after used:true.'
+    ? 'Do not run yet. Check the record, rebuild the current operation context, then approval_consume; run only after used:true.'
     : 'Go on only when status is approved.'),
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 
 defineOp({
   name: 'approval_consume',
-  title: 'Use one signed approval',
-  description: 'Use a single_use approval exactly once, after checking its signature and rebuilding detail from the operation about to run. Requires the same task session and host, an unexpired signature and matching digest and detail. No retry grace: a lost response means ask again, never run.',
+  title: 'Use one single-use approval',
+  description: 'Use a single_use approval exactly once, after checking the record and rebuilding detail from the operation about to run. Requires the same task session and host, an unexpired approval and matching digest and detail. No retry grace: a lost response means ask again, never run.',
   input: {
     id: z.string().min(1).describe('The approval id'),
     token: z.string().min(1).describe('The waitToken returned to the asker'),
-    digest: z.string().regex(/^[0-9a-f]{64}$/).describe('The verified approval digest'),
-    detail: z.string().min(1).max(32_000).describe('The original operation context rebuilt from its current state, without the server-generated signed envelope'),
+    digest: z.string().regex(/^[0-9a-f]{64}$/).describe('The approval digest the asker checked'),
+    detail: z.string().min(1).max(32_000).describe('The original operation context rebuilt from its current state, without the server-generated envelope'),
   },
   bind: { method: 'POST', path: '/approvals/:id/consume' },
-  mapResult: ({ body }) => withOutcome(body as Record<string, unknown>, 'The signed approval was used once.', 'Run only this approved operation; a retry needs a new approval.'),
+  mapResult: ({ body }) => withOutcome(body as Record<string, unknown>, 'The approval was used once.', 'Run only this approved operation; a retry needs a new approval.'),
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 
@@ -109,7 +109,7 @@ defineOp({
   name: 'approval_list',
   title: 'List approvals',
   description: 'The approvals waiting for the user (`status: "all"` adds the decided ones of the last 30 days, with who answered, '
-    + 'when, on which device and how), the devices that sign approvals, and `askMe`: whether the user\'s Approvals switch is on.',
+    + 'when and on which device), and `askMe`: whether the user\'s Approvals switch is on.',
   input: {
     status: z.enum(['pending', 'all']).optional().describe('pending (default) or all'),
   },

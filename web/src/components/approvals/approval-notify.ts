@@ -27,8 +27,7 @@ export const OPEN_APPROVAL_EVENT = 'walnut:open-approval';
 export function approvalNoticeText(a: Approval, hostName: string = hostDisplayLabel(a.requester.host, getHostStatus(a.requester.host)?.label)): { title: string; body: string } {
   const r = a.requester;
   const who = r.taskTitle ? `Task "${r.taskTitle}"` : r.command ? r.command : 'A script';
-  const how = a.mode === 'biometric' ? 'Click to review it, then approve with Touch ID or Face ID.' : 'Click to approve or deny.';
-  return { title: `Approve? ${a.what}`, body: `${who} on ${r.local ? 'this computer' : hostName} is waiting for you. ${how}` };
+  return { title: `Approve? ${a.what}`, body: `${who} on ${r.local ? 'this computer' : hostName} is waiting for you. Click to approve or deny.` };
 }
 
 /** Whether this window can raise a system notice now, and what to offer when it cannot. */

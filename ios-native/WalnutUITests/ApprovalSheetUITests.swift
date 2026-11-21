@@ -3,16 +3,20 @@ import XCTest
 /// The approval sheet, read and answered the way the person does, against a fixture that serves one
 /// approval the way the server does.
 ///
-/// 2026-11-14, the user: "这个手机上没办法approve啊", with a sheet that showed the whole signed envelope
+/// 2026-11-14, the user: "这个手机上没办法approve啊", with a sheet that showed the whole single-use envelope
 /// as raw JSON above its buttons: it leads with the summary, names the repository and branch, and folds
-/// the signed context under Details.
+/// the exact context under Details.
 /// 2026-11-15, the user, on the video of that sheet: "你那个到底在哪里？而且为什么到最后它的 UI 还 flicky 了？
 /// 就显示了一个 small box of deny": a phone that could not sign showed Deny alone, and after Deny the bar
 /// shrank to a small "Denied on a device" box. Approve and Deny now always come together, the end state
 /// fills the bar and says who answered, and a request whose time runs out says so.
+/// 2026-11-21, the user, on a Git push whose Approve was grey: "这个 button 在手机上一直不工作". Any device
+/// he is signed in on approves with a tap: no key, no device an approval is bound to, never a dimmed Approve.
 final class ApprovalSheetUITests: XCTestCase {
     private var fixture: ChatPlaceFixtureServer?
     private var answered: [String] = []
+    /// The last answer body the app sent.
+    private var lastBody: [String: Any] = [:]
     /// The approval this test serves.
     private var served: [String: Any] = [:]
     /// Set: the served approval's time runs out this long after the app first reads it (a slow launch never eats it).
@@ -35,7 +39,7 @@ final class ApprovalSheetUITests: XCTestCase {
         String(data: try! JSONSerialization.data(withJSONObject: o, options: [.sortedKeys]), encoding: .utf8)!
     }
 
-    /// A signed single-use Git push, as the private Git gate asks it (Walnut wrote the summary).
+    /// A single-use Git push, as the Git gate asks it now (Walnut wrote the summary): a tap approval.
     static func gitPush(expiresIn: TimeInterval = 600) -> [String: Any] {
         let gitContext: [String: Any] = [
             "version": "walnut-git-operation-v1", "operation": "push", "remote": "origin",
@@ -50,17 +54,17 @@ final class ApprovalSheetUITests: XCTestCase {
         let now = Date()
         return [
             "id": approvalID, "what": "Push commit 7701649 to origin mainline in meta-fresh", "detail": json(envelope),
-            "digest": String(repeating: "0", count: 64), "mode": "biometric", "status": "pending", "singleUse": true,
+            "digest": String(repeating: "0", count: 64), "mode": "tap", "status": "pending", "singleUse": true,
             "requester": ["host": "clouddev", "taskId": "task-fixture-main", "taskTitle": "Platform Lead",
                           "cwd": "/local/home/dev/.local/state/open-walnut/tasks/t-8252/meta-fresh"],
             "createdAt": iso(now), "expiresAt": iso(now.addingTimeInterval(expiresIn)),
-            "signingKeyIds": ["ak-0000000000000001", "ak-0000000000000002"],
             "context": ["summary": summary, "whyFrom": "session"],
         ]
     }
 
     /// The request the user answered at 23:08Z on 2026-11-15, as the server holds it: the leak gate asks,
-    /// on the Mac (its host name a container's hash), with its own why, bound to the Mac's and the phone's keys.
+    /// on the Mac (its host name a container's hash), with its own why. `biometric` is the record an older
+    /// server wrote, pinned to two device keys, neither this phone's: the phone approves it with a tap all the same.
     static func leakGate(mode: String = "biometric", expiresIn: TimeInterval = 300) -> [String: Any] {
         let gate: [String: Any] = [
             "version": "walnut-leak-gate-approval-v1",
@@ -115,6 +119,7 @@ final class ApprovalSheetUITests: XCTestCase {
                 return (200, ["approval": decision.map(self.settled) ?? self.served])
             case ("POST", "/api/v1/approvals/\(Self.approvalID)/answer"):
                 let sent = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+                self.lastBody = sent ?? [:]
                 let d = sent?["decision"] as? String ?? "?"
                 self.answered.append(d)
                 return (200, ["approval": self.settled(d)])
@@ -155,14 +160,16 @@ final class ApprovalSheetUITests: XCTestCase {
         add(a)
     }
 
-    /// Deny and Approve side by side on one row, both on screen; Approve dimmed when `approveEnabled` is false.
-    private func assertBothButtons(_ app: XCUIApplication, approveEnabled: Bool, file: StaticString = #filePath, line: UInt = #line) {
+    /// Deny and Approve side by side on one row, both on screen and both live.
+    private func assertBothButtons(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
         let deny = app.buttons["approval.deny"]
         let approve = app.buttons["approval.approve"]
         XCTAssertTrue(deny.waitForExistence(timeout: 10), "no Deny", file: file, line: line)
         XCTAssertTrue(approve.exists, "Deny showed without Approve", file: file, line: line)
         XCTAssertTrue(deny.isHittable && approve.isHittable, "a button was out of sight", file: file, line: line)
-        XCTAssertEqual(approve.isEnabled, approveEnabled, file: file, line: line)
+        XCTAssertTrue(approve.isEnabled, "Approve was greyed out", file: file, line: line)
+        XCTAssertTrue(deny.isEnabled, file: file, line: line)
+        XCTAssertFalse(app.staticTexts["approval.blocked"].exists, "the sheet said this phone cannot approve", file: file, line: line)
         XCTAssertEqual(deny.frame.midY, approve.frame.midY, accuracy: 2, "Deny and Approve are not on one row", file: file, line: line)
     }
 
@@ -180,10 +187,12 @@ final class ApprovalSheetUITests: XCTestCase {
         XCTAssertGreaterThan(done.frame.width, app.windows.firstMatch.frame.width * 0.75, "Done is a small box", file: file, line: line)
     }
 
-    func testASignedPushLeadsWithItsSummaryAndFoldsTheEnvelope() throws {
+    /// A Git push, the request of 2026-11-21: the summary leads, the envelope folds, and Approve answers it
+    /// with one tap that carries the request's digest and no key or signature.
+    func testAPushLeadsWithItsSummaryAndApprovesWithATap() throws {
         let app = try openSheet(serving: Self.gitPush())
 
-        // The summary leads, whole; the request's signed line and the Repo line sit under it.
+        // The summary leads, whole; the request's own line and the Repo line sit under it.
         let lead = app.staticTexts["approval.summary"]
         XCTAssertTrue(lead.waitForExistence(timeout: 10))
         XCTAssertEqual(lead.label, Self.summary)
@@ -192,40 +201,42 @@ final class ApprovalSheetUITests: XCTestCase {
         XCTAssertTrue(repo.exists)
         XCTAssertTrue(repo.label.contains("meta-fresh \u{2192} mainline"), repo.label)
         // The envelope is folded: none of its JSON is on screen until Details opens.
-        XCTAssertFalse(app.descendants(matching: .any)["approval.detail"].exists, "the signed context showed before Details opened")
+        XCTAssertFalse(app.descendants(matching: .any)["approval.detail"].exists, "the exact context showed before Details opened")
         XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "walnut-single-use-v1")).firstMatch.exists)
-        // This simulator has no Face ID: Approve stays beside Deny, dimmed, under where to approve it.
-        assertBothButtons(app, approveEnabled: false)
-        let blocked = app.staticTexts["approval.blocked"]
-        XCTAssertTrue(blocked.exists)
-        XCTAssertTrue(blocked.label.contains("Walnut Mac app with Touch ID"), blocked.label)
+        // This simulator has no Face ID, and needs none: Approve is live beside Deny.
+        assertBothButtons(app)
         shot(app, "push-1-waiting")
         Thread.sleep(forTimeInterval: 2)
 
-        var details = app.buttons["Details (signed)"]
-        if !details.waitForExistence(timeout: 5) { details = app.staticTexts["Details (signed)"] }
-        XCTAssertTrue(details.exists, "no Details (signed) row")
+        var details = app.buttons["Details (used once)"]
+        if !details.waitForExistence(timeout: 5) { details = app.staticTexts["Details (used once)"] }
+        XCTAssertTrue(details.exists, "no Details (used once) row")
         details.tap()
         let detail = app.descendants(matching: .any)["approval.detail"].firstMatch
         XCTAssertTrue(detail.waitForExistence(timeout: 5))
         XCTAssertTrue(detail.label.contains("refs/heads/mainline"), detail.label)
-        XCTAssertFalse(detail.label.contains("walnut-single-use-v1"), "Details holds the signed context, not its envelope")
+        XCTAssertFalse(detail.label.contains("walnut-single-use-v1"), "Details holds the exact context, not its envelope")
         shot(app, "push-2-details-open")
         Thread.sleep(forTimeInterval: 2)
         details.tap()
         XCTAssertTrue(detail.waitForNonExistence(timeout: 5))
         Thread.sleep(forTimeInterval: 1)
 
-        // Deny answers it and the sheet shows the end, across the bar.
-        app.buttons["approval.deny"].tap()
-        assertEnded(app, saying: "Denied on iPhone 17 Pro")
-        shot(app, "push-3-denied")
-        XCTAssertEqual(lock.withLock { answered }, ["deny"])
+        // Approve answers it with a tap and the sheet shows the end, across the bar.
+        app.buttons["approval.approve"].tap()
+        assertEnded(app, saying: "Approved on iPhone 17 Pro")
+        shot(app, "push-3-approved")
+        XCTAssertEqual(lock.withLock { answered }, ["approve"])
+        let body = lock.withLock { lastBody }
+        XCTAssertEqual(body["digest"] as? String, String(repeating: "0", count: 64), "the answer named the request it showed")
+        XCTAssertNil(body["keyId"], "the answer carried a device key")
+        XCTAssertNil(body["signature"], "the answer carried a signature")
         Thread.sleep(forTimeInterval: 2)
     }
 
-    /// The leak gate's request as the user got it: what, why, who and where, Approve and Deny together.
-    func testTheLeakGateRequestShowsWhatWhyAndWhoWithBothButtons() throws {
+    /// The leak gate's request as an older server wrote it (Face ID, pinned to two keys, neither this
+    /// phone's): what, why, who and where, and Approve live beside Deny all the same.
+    func testAnOlderPinnedRequestIsStillApprovedHereWithATap() throws {
         let app = try openSheet(serving: Self.leakGate())
         let what = app.staticTexts["approval.what"]
         XCTAssertTrue(what.waitForExistence(timeout: 10))
@@ -234,26 +245,27 @@ final class ApprovalSheetUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "on the computer Walnut runs on")).firstMatch.exists,
                       "the asker's computer was named by its hash")
         XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "842f578d365e")).firstMatch.exists)
-        assertBothButtons(app, approveEnabled: false)
+        XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Face ID")).firstMatch.exists, "the sheet still asked for Face ID")
+        assertBothButtons(app)
         shot(app, "leak-1-waiting")
         Thread.sleep(forTimeInterval: 3)
-        app.buttons["approval.deny"].tap()
-        assertEnded(app, saying: "Denied on iPhone 17 Pro")
-        shot(app, "leak-2-denied")
+        app.buttons["approval.approve"].tap()
+        assertEnded(app, saying: "Approved on iPhone 17 Pro")
+        shot(app, "leak-2-approved")
+        XCTAssertEqual(lock.withLock { answered }, ["approve"])
         Thread.sleep(forTimeInterval: 2)
     }
 
-    /// A tap approval: Approve answers it, and the end says who approved, how.
-    func testATapApprovalApprovesAndSaysWhere() throws {
+    /// Deny answers it, and the end says who denied it.
+    func testDenyDeniesAndSaysWhere() throws {
         let app = try openSheet(serving: Self.leakGate(mode: "tap"))
-        assertBothButtons(app, approveEnabled: true)
-        XCTAssertFalse(app.staticTexts["approval.blocked"].exists, "a tap approval said this phone cannot approve it")
-        shot(app, "tap-1-waiting")
+        assertBothButtons(app)
+        shot(app, "deny-1-waiting")
         Thread.sleep(forTimeInterval: 2)
-        app.buttons["approval.approve"].tap()
-        assertEnded(app, saying: "Approved on iPhone 17 Pro with a tap")
-        shot(app, "tap-2-approved")
-        XCTAssertEqual(lock.withLock { answered }, ["approve"])
+        app.buttons["approval.deny"].tap()
+        assertEnded(app, saying: "Denied on iPhone 17 Pro")
+        shot(app, "deny-2-denied")
+        XCTAssertEqual(lock.withLock { answered }, ["deny"])
         Thread.sleep(forTimeInterval: 2)
     }
 
@@ -261,7 +273,7 @@ final class ApprovalSheetUITests: XCTestCase {
     func testARequestThatRunsOutOfTimeWhileOpenSaysSo() throws {
         expiresAfterFirstRead = 35
         let app = try openSheet(serving: Self.leakGate(mode: "tap"))
-        assertBothButtons(app, approveEnabled: true)
+        assertBothButtons(app)
         // Its time runs out 35 s after the app first read it: wait past that, not the default 15 s.
         shot(app, "expiry-1-waiting")
         assertEnded(app, saying: "Expired: nobody answered in time", within: 60)

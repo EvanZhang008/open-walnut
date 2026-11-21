@@ -8,7 +8,7 @@
  * fast model from what Walnut read when it asked: the request's line, the command, the task and the
  * asking session's last words and steps. Written after the request is made, so asking never waits on
  * a model; the dialog shows the request's own line until it arrives, and keeps it if writing fails.
- * Display only: what is signed (the request's line and detail) never changes.
+ * Display only: what is approved (the request's line and detail, in its digest) never changes.
  */
 import { EventEmitter } from 'node:events'
 import { log } from '../../logging/index.js'

@@ -33,8 +33,6 @@ const WRAPPER: Exact = { kind: 'wrapper', why: 'a shared box whose uses are list
 
 /** Exact values a person types character by character, never dictated: each field by its key. */
 const EXACT: Record<string, Exact> = {
-  'components/approvals/ApprovalUnlock.tsx|input id="approval-unlock-pw"': SECRET,
-  'components/approvals/ApprovalUnlock.tsx|input placeholder="Secret Key (W1-…)"': SECRET,
   'components/common/PdfPreview.tsx|input aria-label="PDF password"': SECRET,
   'components/common/UnpairedCodeField.tsx|input data-testid="unpaired-code-input"': SECRET,
   'components/passwords/HintField.tsx|input data-testid=id': SECRET,

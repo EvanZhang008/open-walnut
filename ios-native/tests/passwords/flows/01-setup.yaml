@@ -3,11 +3,6 @@ name: Set up Passwords with the master password
 ---
 - launchApp:
     stopApp: true
-# A fresh install asks to let this iPhone sign approvals unless the server has no signing key
-# (autofill-e2e.sh clears them with WALNUT_E2E_SERVER_HOME); deny it if it still shows.
-- tapOn:
-    id: "approval.deny"
-    optional: true
 - extendedWaitUntil:
     visible: "Settings"
     timeout: 30000

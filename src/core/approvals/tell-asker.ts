@@ -6,7 +6,7 @@
  * approval_request op and ended its turn, or whose command was stopped meanwhile, has nothing
  * reading it, so Walnut tells it: one Walnut note into the asking session, which wakes it when
  * idle (it waits on exactly this). Every way of answering ends here, because every decision goes
- * through the store's announce(): Approve or Deny in the web notice, the phone, Touch ID, the
+ * through the store's announce(): Approve or Deny in the web notice, the Mac app, the phone, the
  * clock running out. A withdrawal is the asker's own (or its script's) and tells no one. The note
  * goes once (`askerToldAt`), survives a restart inside the grace (rearmAskerNotices), and skips a
  * task that is closed.
@@ -34,16 +34,17 @@ export function askerNoticeFor(rec: NoticeInput): { outcome: 'approved' | 'denie
   // the session must not take the step a second time.
   const once = ' If a command of yours is still waiting on this approval (walnut approve), it goes on by itself: never take the step twice.'
   if (rec.status === 'approved' || rec.status === 'denied') {
-    const by = rec.answer?.mode === 'biometric' ? (rec.answer.device.kind === 'iphone' ? 'Face ID' : 'Touch ID') : 'a tap'
+    // Every answer is a person's tap on a device they are signed in on (types.ts).
+    const by = 'a tap'
     const where = rec.answer?.device.name ? ` on ${rec.answer.device.name}` : ''
     const at = rec.answer?.at ? ` at ${rec.answer.at}` : ''
     if (rec.status === 'approved') {
       // Asked with --request-only: the command ended, so the session runs it again to go on.
       const rerun = rec.requestOnly
-        ? `Run the same command again with \`--approval ${rec.id}\` added${step}: it re-reads what it is about to do and goes on only if nothing changed${rec.singleUse ? ' and its signed approval is consumed once' : ''}. Never take the step any other way; a changed or expired operation needs a new approval.`
+        ? `Run the same command again with \`--approval ${rec.id}\` added${step}: it re-reads what it is about to do and goes on only if nothing changed${rec.singleUse ? ' and its approval is used once' : ''}. Never take the step any other way; a changed or expired operation needs a new approval.`
         : undefined
       if (rerun) return { outcome: 'approved', body: `Approved: "${what}". Your approval request ${rec.id} was approved by the person, with ${by}${where}${at}. The command that asked has ended, so the step has not run.${rec.singleUse ? " Do not run yet by hand." : ""} ${rerun}` }
-      if (rec.singleUse) return { outcome: 'approved', body: `Approved: "${what}". Request ${rec.id} was signed with ${by}${where}${at}. Do not run yet: verify the signed record, rebuild the current operation context and call approval_consume. Run only after used:true; a changed or expired operation needs a new approval.${once}` }
+      if (rec.singleUse) return { outcome: 'approved', body: `Approved: "${what}". Request ${rec.id} was approved by the person, with ${by}${where}${at}. Do not run yet: check the record, rebuild the current operation context and call approval_consume. Run only after used:true; a changed or expired operation needs a new approval.${once}` }
       return { outcome: 'approved', body: `Approved: "${what}". Your approval request ${rec.id} was approved by the person, with ${by}${where}${at}. Go ahead with that step now${step}, then report the result where you planned to.${once}` }
     }
     return { outcome: 'denied', body: `Denied: "${what}". Your approval request ${rec.id} was denied by the person, with ${by}${where}${at}. Do not take that step${step}; carry on without it, or ask again only if something changed.` }

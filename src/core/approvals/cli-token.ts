@@ -3,7 +3,7 @@
  *
  * One file per approval, `<id>.json` in `${XDG_STATE_HOME:-~/.local/state}/open-walnut/approvals/`
  * (dir 0700, file 0600, written atomically): it holds the wait token, which only the asker may
- * hold, and what was asked (the what, the raw detail and its sha256, the signed envelope), so a
+ * hold, and what was asked (the what, the raw detail and its sha256, the single-use envelope), so a
  * resumed run can prove it is the same request. Files older than a day are swept on each run.
  * Node builtins only: the daemon bundles it (cli-core.ts).
  */
@@ -20,10 +20,6 @@ export interface SavedApproval {
   detail?: string
   detailSha256: string
   singleUse: boolean
-  signingKeyId?: string
-  /** Two or more pinned keys, sorted, when any one of them may sign. */
-  signingKeyIds?: string[]
-  signingKeyPath?: string
   createdAt: string
   expiresAt: string
   /** rec.detail as the server stored it, for a single-use ask: the envelope with its nonce. */
@@ -84,8 +80,6 @@ export function loadToken(id: string, dir: string = tokenDir()): SavedApproval |
       || typeof v.createdAt !== 'string' || typeof v.expiresAt !== 'string') return undefined
     if (v.detail !== undefined && typeof v.detail !== 'string') return undefined
     if (v.envelope !== undefined && typeof v.envelope !== 'string') return undefined
-    if (v.signingKeyId !== undefined && typeof v.signingKeyId !== 'string') return undefined
-    if (v.signingKeyIds !== undefined && !(Array.isArray(v.signingKeyIds) && v.signingKeyIds.every((x) => typeof x === 'string'))) return undefined
     return v as SavedApproval
   } catch {
     return undefined

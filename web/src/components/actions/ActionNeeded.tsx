@@ -6,7 +6,7 @@
  * to type the answer in (always shown), its buttons and its own Snooze.
  *
  * Every answer is the one that thing already has, never a new one: an approval's Approve / Deny
- * (ApprovalButtons, Touch ID and Passwords included), a session prompt's own controls
+ * (ApprovalButtons), a session prompt's own controls
  * (KanbanCardPrompt), a letter's actions, a Board choice, or the ask's form sent to its session
  * (OrgInlineAnswer, the Org page's). ANSWERS below names the surface of each kind;
  * tests/core/action-needed-ratchet.test.ts fails on a kind with none.

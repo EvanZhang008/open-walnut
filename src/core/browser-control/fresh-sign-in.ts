@@ -4,7 +4,8 @@
  * request (no session behind it), or their yes on a Walnut approval this module asks for. An
  * agent's own `fresh_sign_in: true` only starts that ask (review 2026-11-07: the flag alone was
  * the agent vouching for the person). The ask is like an outward step's (outward-asks.ts): a
- * notification on their Mac and phone that needs a person's proof, open ASK_MS. A yes is bound to
+ * notification on their Mac and phone, a person's tap on any device they are signed in on, open
+ * ASK_MS. A yes is bound to
  * the task, the browser, the tab and the site it was asked for, and lets one fill through within
  * GRANT_MS of the person's answer (an ask read late gets no fresh window: review 2026-11-07); a
  * tab gone to another site, another tab or another task finds no grant. A fill claims the yes
@@ -14,7 +15,7 @@
 import { BrowserError } from './hub.js'
 import { keptMap } from '../kept-asks.js'
 import { ASK_MS } from './outward-asks.js'
-import { signerKinds, whereAsked, type SignerKind } from '../approvals/signer-words.js'
+import { WHERE_ASKED } from '../approvals/types.js'
 import type { AgentRequester } from '../vault/agent.js'
 
 /** How long a yes waits for its fill (the vault may still ask about the login itself meanwhile). */
@@ -29,11 +30,6 @@ const grants = keptMap<Scope & { at: number }>('browser-fresh-sign-in-grants')
 const same = (a: Scope, b: Scope) => a.owner === b.owner && a.device === b.device && a.tab === b.tab && a.site === b.site
 
 export function _resetFreshSignInForTesting(): void { asks.clear(); grants.clear(); codeSteps.clear() }
-
-async function signers(): Promise<SignerKind[]> {
-  const { activeKeys } = await import('../approvals/keys.js')
-  return signerKinds(await activeKeys())
-}
 
 function sweep(now = Date.now()): void {
   // An ask is answered within ASK_MS; its yes may be taken up to GRANT_MS after that answer.
@@ -105,7 +101,7 @@ export const isFreshAsk = (id: unknown): boolean => { sweep(); return typeof id 
 async function waiting(id: string, site: string): Promise<Record<string, unknown>> {
   return {
     status: 'needs_ok', code: 'fresh_sign_in_needs_ok', request: id, approvalId: id, site, waitsMinutes: MINUTES,
-    error: `Waiting for the person to approve a new sign-in on ${site}, which they already have open in a tab of their own. ${whereAsked(await signers())}; the ask stays open ${MINUTES} minutes.`,
+    error: `Waiting for the person to approve a new sign-in on ${site}, which they already have open in a tab of their own. ${WHERE_ASKED}; the ask stays open ${MINUTES} minutes.`,
   }
 }
 
@@ -125,7 +121,7 @@ export async function askFreshSignIn(input: Scope & { theirs: Array<{ id: number
     ].join('\n'),
     detailRole: 'summary',
     // Approvals off (approvals/ask-me.ts): recorded as yes, nobody asked; the caller takes it at once.
-    ...(input.unasked ? { mode: 'tap' as const, unasked: 'browserSignIn' } : { mode: (await signers()).length ? 'biometric' as const : 'tap' as const, guard: 'person' as const }),
+    ...(input.unasked ? { unasked: 'browserSignIn' } : {}),
     timeoutMs: ASK_MS, requester: input.requester, ...(input.testRun ? { testRun: input.testRun } : {}),
   })
   asks.set(made.approval.id, { ...scope, at: Date.now() })

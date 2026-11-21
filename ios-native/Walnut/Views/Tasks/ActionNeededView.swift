@@ -5,7 +5,7 @@ import SwiftUI
 /// asks of the user, its kind and what it asks, its answer right there, and its own Snooze.
 ///
 /// Each kind is answered the way the phone already answers it (`ActionNeededModel.answer`): an
-/// approval in its sheet (Face ID and the device key there), a letter's actions, a one-question
+/// approval in its sheet (one tap), a letter's actions, a one-question
 /// prompt's options; the rest open the task's session, where its own card answers it.
 /// tests/core/action-needed-ratchet.test.ts reads `ActionNeededModel.answer` for every kind.
 enum ActionNeededModel {

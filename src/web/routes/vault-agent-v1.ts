@@ -93,18 +93,11 @@ export async function agentsSwitch() {
 
 export const createApproval: ApprovalCreator = async (input) => {
   const { createApproval: create } = await import('../../core/approvals/store.js')
-  const { activeKeys } = await import('../../core/approvals/keys.js')
-  // Every vault ask is signed with Face ID or Touch ID wherever a device can sign (the phone,
-  // the Mac app); a window with Passwords unlocked may also approve one that is not sensitive.
-  const signs = (await activeKeys()).length > 0
-  const mode: 'tap' | 'biometric' = signs ? 'biometric' : 'tap'
-  const downgraded = input.biometric && !signs
-    ? 'This item asks for Face ID or Touch ID, but no device signs approvals yet (the Walnut iPhone app sets one up), so a window with Passwords unlocked approves it.'
-    : undefined
-  const { approval, waitToken } = await create({ what: input.what, detail: input.detail, detailRole: 'summary', mode, timeoutMs: input.timeoutMs, requester: input.requester, downgraded, testRun: input.testRun, guard: input.biometric ? 'vault-sensitive' : 'vault' })
+  // A tap on any device the person is signed in on approves it, like every approval.
+  const { approval, waitToken } = await create({ what: input.what, detail: input.detail, detailRole: 'summary', timeoutMs: input.timeoutMs, requester: input.requester, testRun: input.testRun })
   const { cancelInternal } = await import('../../core/approvals/store.js')
   return {
-    id: approval.id, waitToken, mode, expiresAt: approval.expiresAt, ...(downgraded ? { downgraded } : {}),
+    id: approval.id, waitToken, expiresAt: approval.expiresAt,
     cancel: () => cancelInternal(approval.id, 'agent access changed while asking').then(() => undefined, () => undefined),
   }
 }
@@ -122,7 +115,7 @@ export const waitApprovalByHash: ApprovalWaiter = async (id, tokenHash, waitMs) 
 
 function waiterAnswer(r: Awaited<ReturnType<typeof import('../../core/approvals/store.js').waitApproval>>): Awaited<ReturnType<ApprovalWaiter>> {
   const a = r.approval
-  const by = a.answer ? `${a.answer.device.name}${a.answer.mode === 'biometric' ? ', with Face ID or Touch ID' : ''}` : undefined
+  const by = a.answer?.device.name
   return { status: a.status, used: r.used, ...(by ? { answeredBy: by } : {}) }
 }
 
