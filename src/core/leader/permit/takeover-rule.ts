@@ -9,13 +9,15 @@
  *      no stamp for the copy's own newest write, means no proof: refuse.
  */
 import type { PermitParams, PermitReply } from './types.js'
-import { majorityOf } from './types.js'
+import { genesisConfigId, majorityOf, sameList } from './types.js'
 import { holderLeaseMs } from './rules.js'
 
 export interface TakeoverRuleInput {
   self: string
   /** The configured witness list. */
   list: string[]
+  /** Its configuration id (PermitClient.config().cfg); default: the first configuration. */
+  cfg?: string
   /** Answers of one fresh read round. */
   reads: PermitReply[]
   /** The newest write in this machine's standby copy, with the holder's stamp for it. */
@@ -29,7 +31,13 @@ export type TakeoverRuleAnswer = { ok: true; behindAtMostMs: number; reason: str
 
 export function mayAskForTakeover(input: TakeoverRuleInput): TakeoverRuleAnswer {
   const byWitness = new Map<string, PermitReply>()
-  for (const r of input.reads) if (input.list.includes(r.witness) && r.list) byWitness.set(r.witness, r)
+  // Only a witness that serves this very list counts: one that moved to another list
+  // would refuse the grant anyway.
+  // (A witness in the middle of a list change does not count either.)
+  const cfg = input.cfg ?? genesisConfigId(input.list)
+  for (const r of input.reads) {
+    if (input.list.includes(r.witness) && r.cfg === cfg && sameList(r.list, input.list) && !r.joint) byWitness.set(r.witness, r)
+  }
   const need = majorityOf(input.list)
   const ranOut = [...byWitness.values()].filter((r) => r.grantable).length
   if (ranOut < need) {

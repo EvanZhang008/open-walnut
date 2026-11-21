@@ -25,11 +25,11 @@ export class PermitWitness {
 
   constructor(private readonly opts: WitnessOptions) {
     this.id = opts.id
-    this.state = { held: null, acceptedAt: opts.clock.now(), list: null }
+    this.state = { held: null, acceptedAt: opts.clock.now(), list: null, joint: null, cfg: null }
     try {
       const stored = opts.store.load()
       // No file: never set up (bootstrapWitnessStore), or lost: wait to join.
-      if (stored) this.state = { held: stored.held, list: stored.list, acceptedAt: opts.clock.now() }
+      if (stored) this.state = { held: stored.held, list: stored.list, joint: stored.joint, cfg: stored.cfg, acceptedAt: opts.clock.now() }
     } catch (err) {
       this.broken = err instanceof PermitStoreCorrupt ? err.message : `permit store unreadable: ${(err as Error).message}`
       opts.log?.('error', 'permit witness: refusing every request, its record file is not readable', { witness: this.id, error: this.broken })
@@ -49,7 +49,7 @@ export class PermitWitness {
     const j = judge(this.state, this.id, req.record, now, this.opts.params)
     if (!j.ok) return this.reply(re, false, now, j.reason)
     try {
-      this.opts.store.save({ held: j.next.held, list: j.next.list })
+      this.opts.store.save({ held: j.next.held, list: j.next.list, joint: j.next.joint, cfg: j.next.cfg })
     } catch (err) {
       // Not durable, so not accepted; the file may now be anything, so stop answering yes.
       this.broken = `save failed: ${(err as Error).message}`
@@ -69,6 +69,8 @@ export class PermitWitness {
       // A broken witness reports nothing it holds: a caller must not count it either way.
       held: hide ? null : this.state.held,
       list: hide ? null : this.state.list,
+      joint: hide ? null : this.state.joint,
+      cfg: hide ? null : this.state.cfg,
       grantable: hide ? false : grantable(this.state, this.id, now, this.opts.params),
     }
   }

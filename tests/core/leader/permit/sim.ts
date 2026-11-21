@@ -5,7 +5,7 @@
  * from their stored file, and machines whose mayAct() is checked after every event.
  */
 import {
-  mayAskForTakeover, PermitClient, PermitWitness, createHolderClock, createWitnessClock, decodeStored, encodeStored,
+  bootstrapWitnessStore, mayAskForTakeover, PermitClient, PermitWitness, createHolderClock, createWitnessClock, decodeStored, encodeStored,
   type ElapsedClock, type PermitParams, type PermitReply, type PermitRequest, type PermitStore, type StoredWitness,
 } from '../../../../src/core/leader/permit/index.js'
 
@@ -103,6 +103,8 @@ export class World {
   activeMs = new Map<string, number>()
   private lastCheck = 0
   rand: () => number
+  /** Set to an array to record every record a witness takes. */
+  trace: string[] | null = null
   /** Stops every pilot (a test then reads back a still world). */
   pilotsStopped = false
 
@@ -148,7 +150,7 @@ export class World {
   addWitness(id: string, opts: { drift?: number; offset?: number; store?: SimStore; bootstrap?: string[] } = {}): WitnessNode {
     const store = opts.store ?? new SimStore()
     if (opts.bootstrap) {
-      store.save({ held: null, list: [...opts.bootstrap].sort() })
+      bootstrapWitnessStore(store, opts.bootstrap)
       store.flush()
     }
     const node: WitnessNode = { id, store, clock: new NodeClock(this, opts.drift ?? 0, 0, opts.offset ?? 0), w: null, downUntil: 0 }
@@ -235,6 +237,10 @@ export class World {
     const n = this.witnesses.get(to)
     if (!n || !n.w || n.clock.asleep()) return
     const reply = n.w.handle(req)
+    if (this.trace && req.type === 'propose' && reply.ok) {
+      const r = req.record
+      this.trace.push(`${(this.now / 1000).toFixed(3)} ${to} took #${r.number} ${r.kind} by ${r.by} -> ${r.holder} list=${r.list.join(',')}${r.joint ? ' pair=' + r.joint.join(',') : ''}${r.stage ? ' ' + r.stage : ''}`)
+    }
     if (this.crashBeforeAnswer?.(to, req, reply)) {
       this.crashWitness(to, 1_000 + this.rand() * 10_000)
       return
@@ -337,7 +343,7 @@ export function pilot(world: World, id: string, opts: PilotOptions): void {
       lastRenew = world.now
     } else if (opts.wantsLead && reads.length > 0) {
       const ans = mayAskForTakeover({
-        self: id, list: c.witnessList(), reads, standby: { seq: Number.MAX_SAFE_INTEGER },
+        self: id, list: c.witnessList(), cfg: c.config().cfg, reads, standby: { seq: Number.MAX_SAFE_INTEGER },
         params: world.params, maxBehindMs: 5 * 60_000,
       })
       if (ans.ok) {

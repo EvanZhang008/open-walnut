@@ -4,7 +4,7 @@
  * safety part removed and must go red.
  */
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_PERMIT_PARAMS, maxSafeDrift, sameRecord, type PermitParams, type PermitReply } from '../../../../src/core/leader/permit/index.js'
+import { DEFAULT_PERMIT_PARAMS, genesisConfigId, maxSafeDrift, sameRecord, type PermitParams, type PermitReply } from '../../../../src/core/leader/permit/index.js'
 import { CALM, SimStore, World, firstStart, lastStop, pilot, sample } from './sim.js'
 
 const W = ['w1', 'w2', 'w3']
@@ -339,7 +339,7 @@ describe('changing the witness list', () => {
     expect(b.c.witnessList()).toEqual(['w1', 'w2', 'w4'])
     expect(b.c.mayAct()).toBe(true)
     // w3 is out: it refuses everything now.
-    const r3 = w.witnesses.get('w3')!.w!.handle({ type: 'propose', record: { number: 999, kind: 'grant', holder: 'C', by: 'C', validMs: w.params.validMs, list: W } })
+    const r3 = w.witnesses.get('w3')!.w!.handle({ type: 'propose', record: { number: 999, kind: 'grant', holder: 'C', by: 'C', validMs: w.params.validMs, list: W, cfg: genesisConfigId(W) } })
     expect(r3.ok).toBe(false)
   })
 
@@ -361,5 +361,28 @@ describe('changing the witness list', () => {
     w.run(11_000)
     expect(a.c.witnessList()).toEqual(['w1', 'w2', 'w4'])
     expect(a.c.mayAct()).toBe(true)
+  })
+
+  it('a change that reached one majority, then lost its holder, is finished by another machine once the permission ran out', () => {
+    const w = world()
+    w.addWitness('w4')
+    const a = aHolds(w)
+    w.partition('A', 'w4')
+    w.partition('A', 'w2')
+    a.c.changeWitnesses(['w1', 'w2', 'w4'])
+    w.run(10_000)
+    // A is gone for good. Before the permission runs out, nobody may finish it.
+    for (const id of ['w1', 'w2', 'w3', 'w4']) w.partition('A', id)
+    const b = w.addMachine('B', W)
+    b.c.changeWitnesses(['w1', 'w2', 'w4'], { list: W, cfg: genesisConfigId(W) })
+    w.run(20_000)
+    expect(b.c.mayAct()).toBe(false)
+    expect(b.c.witnessList()).toEqual(W)
+    w.run(100_000)
+    b.c.changeWitnesses(['w1', 'w2', 'w4'], { list: W, cfg: genesisConfigId(W) })
+    w.run(101_000)
+    expect(b.c.witnessList()).toEqual(['w1', 'w2', 'w4'])
+    expect(b.c.mayAct()).toBe(true)
+    expect(w.violations).toEqual([])
   })
 })

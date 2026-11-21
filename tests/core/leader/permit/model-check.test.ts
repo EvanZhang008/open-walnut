@@ -27,6 +27,8 @@ interface Variant {
   splitsOnly?: boolean
   /** Share of accepted records after which the witness dies before answering. */
   crashRate?: number
+  /** A fourth witness waits to join; holders now and then swap one witness of the list for it. */
+  members?: boolean
 }
 
 function schedule(seed: number, v: Variant = {}): { world: World; totalMs: number } {
@@ -35,6 +37,8 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
   const r = world.rand
   const bound = (v.params?.maxDriftRate === 0 ? DEFAULT_PERMIT_PARAMS.maxDriftRate : params.maxDriftRate) * (v.driftShare ?? 0.99)
   const drift = (side: 1 | -1) => (v.worstDrift ? side : r() * 2 - 1) * bound
+  const pool = v.members ? [...W, 'w4'] : W
+  if (v.members) world.addWitness('w4', { drift: drift(1) })
   for (const id of W) {
     const n = world.addWitness(id, { drift: drift(1), store: new SimStore(v.lazyStore ? 'lazy' : 'durable'), bootstrap: W })
     if (v.lazyStore) {
@@ -53,6 +57,19 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
       cancelChance: 0.3,
       onTick: (m) => {
         // About one manual switch per machine-held 3 minutes, whatever the tick.
+        // A change left between its two steps is finished first.
+        const pairTo = m.c.jointList()
+        if (pairTo && r() < 0.5) {
+          m.c.changeWitnesses(pairTo)
+          return
+        }
+        if (v.members && r() < (v.tickMs ?? 5_000) / 240_000) {
+          const list = m.c.witnessList()
+          const out = list[Math.floor(r() * list.length)]
+          const inn = pool.find((x) => !list.includes(x))!
+          m.c.changeWitnesses([...list.filter((x) => x !== out), inn])
+          return
+        }
         if (r() < (v.tickMs ?? 5_000) / 180_000) m.c.handover(M.filter((x) => x !== m.id)[Math.floor(r() * 2)])
       },
     })
@@ -64,25 +81,26 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
     const at = r() * totalMs
     const kind = v.splitsOnly ? 5 : Math.floor(r() * 7)
     world.at(at, () => {
-      if (kind === 0) world.crashWitness(W[Math.floor(r() * 3)], 1_000 + r() * 60_000)
+      if (kind === 0) world.crashWitness(pool[Math.floor(r() * pool.length)], 1_000 + r() * 60_000)
       else if (kind === 1) {
         const m = world.machines.get(M[Math.floor(r() * 3)])!
         m.clock.sleeps.push([world.now, world.now + 10_000 + r() * 110_000])
       } else if (kind === 2) {
-        const a = M[Math.floor(r() * 3)], b = W[Math.floor(r() * 3)]
+        const a = M[Math.floor(r() * 3)], b = pool[Math.floor(r() * pool.length)]
         world.partition(a, b, true)
         world.after(20_000 + r() * 120_000, () => world.partition(a, b, false))
       } else if (kind === 3) {
         const m = world.machines.get(M[Math.floor(r() * 3)])!
         m.clock.wallJumps.push([world.now, (r() * 2 - 1) * 120_000])
       } else if (kind === 4) {
-        const w = world.witnesses.get(W[Math.floor(r() * 3)])!
+        const w = world.witnesses.get(pool[Math.floor(r() * pool.length)])!
         w.clock.sleeps.push([world.now, world.now + 5_000 + r() * 60_000])
       } else if (kind === 5) {
         // A machine cut from two of the three witnesses: the split of the design.
         const a = M[Math.floor(r() * 3)]
-        const keep = W[Math.floor(r() * 3)]
-        const cut = W.filter((w) => w !== keep)
+        const list = world.machines.get(a)!.c.witnessList()
+        const keep = list[Math.floor(r() * list.length)]
+        const cut = list.filter((w) => w !== keep)
         for (const w of cut) world.partition(a, w, true)
         world.after(30_000 + r() * 120_000, () => { for (const w of cut) world.partition(a, w, false) })
       } else {
@@ -96,7 +114,13 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
   // accepted record: per message would restart the witnesses every few seconds, and each
   // restart counts their record afresh, which hides a timing bug instead of finding one.)
   world.crashBeforeAnswer = (_w, req, reply) => req.type === 'propose' && reply.ok && r() < (v.crashRate ?? 0.01)
+  if (process.env.PERMIT_TRACE_SEED === String(seed)) world.trace = []
   world.run(totalMs)
+  if (world.trace) {
+    const v0 = world.violations[0]
+    // eslint-disable-next-line no-console
+    console.log(JSON.stringify(v0), '\n' + world.trace.filter((l) => !v0 || parseFloat(l) * 1000 < v0.at + 1000).join('\n'), '\n', JSON.stringify(world.timeline.filter(([t]) => !v0 || Math.abs(t - v0.at) < 200_000)))
+  }
   return { world, totalMs }
 }
 
@@ -142,6 +166,15 @@ describe('write permission: random schedules', () => {
 
   it('never lets two machines act at once when witnesses die after one in ten records they accept (100 seeds)', () => {
     const r = sweep(100, { crashRate: 0.1 })
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+    expect(r.activeShare).toBeGreaterThan(0.3)
+  }, 60_000)
+
+  // Seed 12 here found the bug of a one-step list change (a witness that took a change no
+  // majority of the old list had confirmed served the new list at once): two disjoint
+  // majorities. The change is two steps now (rules.ts judge).
+  it('never lets two machines act at once while holders swap witnesses in and out (200 seeds)', () => {
+    const r = sweep(200, { members: true })
     expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
     expect(r.activeShare).toBeGreaterThan(0.3)
   }, 60_000)

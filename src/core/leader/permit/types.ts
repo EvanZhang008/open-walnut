@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 /**
  * The leader's write permission (docs/reference/leader-write-permission.md): one
  * numbered record per Walnut, kept by a fixed list of witnesses. Wired to nothing yet.
@@ -28,8 +30,21 @@ export interface PermitRecord {
   validMs: number
   /** The witness list this record is judged by (sorted ids). */
   list: string[]
-  /** members: the list that replaces `list` once a majority of both accepted it. */
+  /**
+   * Which configuration of that list: an id chained from the first list through every
+   * change (configId, nextConfigId). The same list can come back after changes; only the
+   * id tells a witness that never followed them from one that did.
+   */
+  cfg: string
+  /**
+   * During a witness list change: the new list. The record is then judged by both lists
+   * and counts only with a majority of each.
+   */
+  joint?: string[]
+  /** members: the list that replaces `list` (equal to `joint`). */
   newList?: string[]
+  /** members: 'joint' enters the pair (list, newList); 'final' leaves it for newList alone. */
+  stage?: 'joint' | 'final'
   /**
    * The holder's write progress as of this record (design section 7: the leader reports
    * how far it wrote on every renew; a standby compares its saved copy against it).
@@ -80,6 +95,10 @@ export interface PermitReply {
   held: PermitRecord | null
   /** The witness list this witness holds (null: it is waiting to join). */
   list: string[] | null
+  /** During a list change: the new list it judges by too. */
+  joint: string[] | null
+  /** The id of the configuration it serves (null: waiting to join). */
+  cfg: string | null
   /** Whether this witness would grant the permission to another machine now. */
   grantable: boolean
 }
@@ -92,6 +111,20 @@ export interface PermitTransport {
 /** A clock that only measures elapsed time (milliseconds); its zero means nothing. */
 export interface ElapsedClock {
   now(): number
+}
+
+/** The id of the first configuration: the list alone. */
+export function genesisConfigId(list: readonly string[]): string {
+  return hashId(`genesis|${[...list].sort().join(',')}`)
+}
+
+/** The id of the list a change from configuration `from` leads to. */
+export function nextConfigId(from: string, newList: readonly string[]): string {
+  return hashId(`${from}|${[...newList].sort().join(',')}`)
+}
+
+function hashId(text: string): string {
+  return createHash('sha256').update(text).digest('hex').slice(0, 16)
 }
 
 export function sameList(a: readonly string[] | null | undefined, b: readonly string[] | null | undefined): boolean {
@@ -109,7 +142,7 @@ export function majorityOf(list: readonly string[]): number {
 export function recordKey(r: PermitRecord): string {
   return JSON.stringify([
     r.number, r.kind, r.holder, r.by, r.from ?? null, r.to ?? null, r.validMs,
-    [...r.list].sort(), r.newList ? [...r.newList].sort() : null,
+    r.cfg, [...r.list].sort(), r.joint ? [...r.joint].sort() : null, r.newList ? [...r.newList].sort() : null, r.stage ?? null,
     r.progress ? [r.progress.seq, r.progress.writtenAt] : null,
   ])
 }

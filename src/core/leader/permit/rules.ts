@@ -3,7 +3,7 @@
  * whether a set of timing parameters is safe for the assumed clock drift.
  */
 import type { PermitParams, PermitRecord } from './types.js'
-import { sameList } from './types.js'
+import { nextConfigId, sameList } from './types.js'
 
 /** What one witness holds. `acceptedAt` is on the witness's own elapsed clock. */
 export interface WitnessState {
@@ -11,6 +11,10 @@ export interface WitnessState {
   acceptedAt: number
   /** The witness list it serves; null while it waits to join through a members record. */
   list: string[] | null
+  /** During a list change: the new list, judged together with `list`. */
+  joint: string[] | null
+  /** The id of the configuration of `list` (kept through the pair step); null while joining. */
+  cfg: string | null
 }
 
 /** How long the holder counts one record: from when it SENT it, on its own clock. */
@@ -54,15 +58,20 @@ export function holdsForHolder(s: WitnessState, now: number, p: PermitParams): b
 
 /** The witness would accept a grant to another machine now. */
 export function grantable(s: WitnessState, self: string, now: number, p: PermitParams): boolean {
-  return !!s.list && s.list.includes(self) && !holdsForHolder(s, now, p)
+  return isMember(s, self) && !holdsForHolder(s, now, p)
 }
 
 export type Judgement = { ok: true; next: WitnessState } | { ok: false; reason: string }
 
+function uniqueList(l: unknown): l is string[] {
+  return Array.isArray(l) && l.length > 0 && l.every((x) => typeof x === 'string') && new Set(l).size === l.length
+}
+
 function shapeError(r: PermitRecord, p: PermitParams): string | null {
   if (!Number.isSafeInteger(r.number) || r.number < 1) return 'bad-number'
   if (r.validMs !== p.validMs) return 'bad-validity'
-  if (!Array.isArray(r.list) || r.list.length === 0 || new Set(r.list).size !== r.list.length) return 'bad-list'
+  if (!uniqueList(r.list) || typeof r.cfg !== 'string' || r.cfg.length === 0) return 'bad-list'
+  if (r.joint !== undefined && (!uniqueList(r.joint) || sameList(r.joint, r.list))) return 'bad-list'
   switch (r.kind) {
     case 'grant':
     case 'renew':
@@ -72,12 +81,17 @@ function shapeError(r: PermitRecord, p: PermitParams): string | null {
     case 'cancel':
       return r.from === r.by && r.holder === r.by ? null : 'bad-cancel'
     case 'members':
-      if (r.holder !== r.by || !Array.isArray(r.newList) || r.newList.length === 0) return 'bad-members'
-      if (new Set(r.newList).size !== r.newList.length || sameList(r.newList, r.list)) return 'bad-members'
-      return null
+      // Both steps of a change are judged by both lists: `joint` is the new list.
+      if (r.holder !== r.by || !uniqueList(r.newList) || !sameList(r.joint, r.newList)) return 'bad-members'
+      return r.stage === 'joint' || r.stage === 'final' ? null : 'bad-members'
     default:
       return 'bad-kind'
   }
+}
+
+/** The witness serves a list it is on (in either half of a change). */
+export function isMember(s: WitnessState, self: string): boolean {
+  return !!s.list && (s.list.includes(self) || !!s.joint?.includes(self))
 }
 
 /**
@@ -86,23 +100,47 @@ function shapeError(r: PermitRecord, p: PermitParams): string | null {
  * the permission changes hands only by a grant once the old record ran out here
  * (plus margin), or by a handover its holder wrote; a cancel stands only on its own
  * handover or on its writer's live record.
+ *
+ * The witness list changes in two steps (joint consensus). A `members` record of stage
+ * `joint` moves a witness from the old list to the pair (old, new): from then on it
+ * takes only records judged by both lists, which count only with a majority of each.
+ * Stage `final`, sent only once a joint record reached both majorities, moves it to the
+ * new list alone. A witness never goes back from the pair to the old list, so once a
+ * pair record counted, no majority of the old list alone can form again.
  */
 export function judge(s: WitnessState, self: string, r: PermitRecord, now: number, p: PermitParams): Judgement {
   const bad = shapeError(r, p)
   if (bad) return { ok: false, reason: bad }
-  const accept = (list: string[] | null = s.list): Judgement => ({ ok: true, next: { held: r, acceptedAt: now, list } })
+  const accept = (list: string[] | null = s.list, joint: string[] | null = s.joint, cfg: string | null = s.cfg): Judgement =>
+    ({ ok: true, next: { held: r, acceptedAt: now, list, joint, cfg } })
+  const joining = !isMember(s, self)
 
-  if (!s.list || !s.list.includes(self)) {
-    // Waiting to join (new, or removed earlier): only a members record that names it,
-    // which counts only with a majority of the old list behind it.
-    if (r.kind === 'members' && r.newList!.includes(self) && (!s.held || r.number > s.held.number)) return accept([...r.newList!])
-    return { ok: false, reason: 'not-a-member' }
+  if (r.kind === 'members') {
+    const target = nextConfigId(r.cfg, r.newList!)
+    const base = s.cfg === r.cfg && sameList(s.list, r.list)
+    const pair = base && sameList(s.joint, r.newList)
+    // A joining witness takes a change only into the new list, never as a member of the
+    // old one: a witness that left a list (or lost its disk) must not count for it again,
+    // or a list already replaced could gather a majority from it (stress seed 1309).
+    const from = joining
+      ? r.newList!.includes(self) && !r.list.includes(self)
+      : r.stage === 'joint'
+        ? base && (!s.joint || pair) // from the old configuration, or the same step again
+        : pair || (!s.joint && s.cfg === target && sameList(s.list, r.newList)) // from the pair, or the same step again
+    if (!from) return { ok: false, reason: joining ? 'not-a-member' : 'wrong-list' }
+    if (s.held && r.number <= s.held.number) return { ok: false, reason: 'stale-number' }
+    // From the live holder, or once the record here ran out, from anyone (as a grant): a
+    // change its holder left half done must not stay stuck. A joining witness holds no
+    // record that counts, so it has nothing to protect.
+    const h = s.held
+    const live = holdsForHolder(s, now, p)
+    if (!joining && !((h && live && h.holder === r.by && h.kind !== 'handover') || !live)) return { ok: false, reason: 'not-holder' }
+    return r.stage === 'joint' ? accept([...r.list], [...r.newList!], r.cfg) : accept([...r.newList!], null, target)
   }
-  // A members record may come again to a witness that already moved to its new list (the
-  // first attempt reached one majority but not the other): the holder retries the same
-  // change, or takes it back with the reverse one, and only both majorities count.
-  const retry = r.kind === 'members' && sameList(r.newList, s.list)
-  if (!sameList(r.list, s.list) && !retry) return { ok: false, reason: 'wrong-list' }
+
+  if (joining) return { ok: false, reason: 'not-a-member' }
+  const sameJoint = r.joint ? sameList(r.joint, s.joint) : s.joint === null
+  if (r.cfg !== s.cfg || !sameList(r.list, s.list) || !sameJoint) return { ok: false, reason: 'wrong-list' }
   if (s.held && r.number <= s.held.number) return { ok: false, reason: 'stale-number' }
 
   const live = holdsForHolder(s, now, p)
@@ -119,7 +157,5 @@ export function judge(s: WitnessState, self: string, r: PermitRecord, now: numbe
       const onOwnLive = !!h && live && h.holder === r.by && h.kind !== 'handover'
       return onOwnHandover || onOwnLive ? accept() : { ok: false, reason: 'nothing-to-cancel' }
     }
-    case 'members':
-      return h && live && h.holder === r.by && h.kind !== 'handover' ? accept([...r.newList!]) : { ok: false, reason: 'not-holder' }
   }
 }
