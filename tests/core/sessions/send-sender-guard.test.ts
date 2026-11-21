@@ -125,6 +125,8 @@ const CALL_SITES: Record<string, number> = {
   'src/core/status-consistency.ts': 1,
   // A light subagent's end: a Walnut notice (walnut-notify) into the session that ran it.
   'src/core/subagents/registry.ts': 1,
+  // A loop reading a host job that can no longer change: one Walnut notice (walnut-notify) into the reading session.
+  'src/core/hosts/host-exec-stale-reads.ts': 1,
   // A low disk: one Walnut notice (walnut-notify) asking an open task to clear its own folder.
   'src/core/task-dir-size-notice.ts': 1,
   // A link watcher's news (pull requests: source pr-watch; changes: source change-watch), a Walnut envelope.

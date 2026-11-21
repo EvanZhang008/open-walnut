@@ -697,6 +697,10 @@ async function sameJob(caller: Caller, host: string, jobId: string, t0: number, 
   const conn = await dial(host, budgetLeft(caller, t0) - 2_000)
   const waits = await import('./host-exec-wait.js')
   const { reply, waitedFor } = await waits.readAgain(conn, host, caller, jobId, t0, o)
+  // A loop that calls host_exec again with the same job_id reads it too (host-exec-stale-reads.ts).
+  const { noteJobRead, readStateOf } = await import('./host-exec-stale-reads.js')
+  const state = readStateOf(reply)
+  if (state) noteJobRead({ sid: caller.sid, taskId: caller.taskId, host, jobId, state, readTo: typeof reply.nextOffset === 'number' ? reply.nextOffset : null, exitCode: typeof reply.exitCode === 'number' ? reply.exitCode : null })
   if (!reply.ok) {
     if (reply.code === 'unknown_job' && ranAt !== undefined) {
       throw new HostExecError(`Job ${jobId} already ran for this task on ${await hostName(host)} (started ${new Date(ranAt).toISOString()}), and that host no longer holds it `

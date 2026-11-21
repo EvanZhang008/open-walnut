@@ -17,6 +17,9 @@ import {
 } from './host-exec.js'
 import { mayTendRuns } from './host-exec-grant.js'
 import { noteFinalAnswer } from './repeat-answers.js'
+import { noteJobRead, readStateOf } from './host-exec-stale-reads.js'
+
+const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 
 /** What this server knows of a run it started (the host may know more). */
 interface StartedRun { jobId: string; taskId: string; host: string; command: string; startedAt: number }
@@ -111,7 +114,13 @@ export async function readHostJob(params: { host: string; job_id: string; offset
   const caller = await callerOf(callerSid)
   const host = await targetHost(String(params.host ?? ''), caller)
   await grantFor(caller, host, null)
-  return finalIfUnknown(caller, host, String(params.job_id), () => readOnceKnown(params, caller, callerSid, host, waitFor, t0))
+  // One caller read of a job the host does not hold is one record for the stale-read watch, however
+  // often the hold looked again (host-exec-stale-reads.ts).
+  const gone = (err: unknown): never => {
+    if (err instanceof HostExecError && err.code === 'unknown_job') noteJobRead({ sid: caller.sid, taskId: caller.taskId, host, jobId: String(params.job_id), state: 'gone' })
+    throw err
+  }
+  return finalIfUnknown(caller, host, String(params.job_id), () => readOnceKnown(params, caller, callerSid, host, waitFor, t0).catch(gone))
 }
 
 /** How often a read that waits looks again for a job the host does not hold yet, and for how long at most. */
@@ -157,15 +166,23 @@ async function readOn(params: { job_id: string; offset?: number; wait_ms?: numbe
   const cut = asked > 0 && wait < Math.min(asked, most)
   // Only when the hold is what ended the wait: not a match, a pattern stopped as too slow, an error.
   const held = (out: Record<string, unknown>, w?: import('./host-exec-wait.js').WaitedFor) => (cut && out.running === true && waits.ranOut(w) ? { heldMs: Date.now() - t0 } : {})
+  // Each answer is told to the stale-read watch: a loop that never sees the job's end is told (host-exec-stale-reads.ts).
+  // A job the host does not hold is noted once per caller read, by readHostJob.
+  const seen = (reply: Record<string, unknown>) => {
+    const state = readStateOf(reply)
+    if (state && state !== 'gone') noteJobRead({ sid: caller.sid, taskId: caller.taskId, host, jobId: params.job_id, state, offset: fromOffset ? params.offset : null, readTo: num(reply.nextOffset), exitCode: num(reply.exitCode) })
+  }
   if (waitFor) {
     await waits.assertWaitSupported(conn, host, waitFor)
     const { reply, waitedFor } = await waits.waitOnJob(conn, host, caller, params.job_id, waitFor, { since: t0, within: wait, ...(fromOffset ? { offset: params.offset } : {}) })
+    seen(reply)
     const out = await jobAnswer(host, params.job_id, reply, { fromOffset })
     return { ...out, ...held(out, waitedFor), waitedFor: await waits.shownWait(reply, out, waitedFor, waits.readAtOf(conn, host, caller, params.job_id, t0)) }
   }
   const reply = await readJob(conn, host, caller.taskId, {
     jobId: params.job_id, taskId: caller.taskId, ...(fromOffset ? { offset: params.offset } : {}), ...(wait ? { wait } : {}),
   }, wait + Math.min(REPLY_MARGIN_MS, Math.max(2_000, budgetLeft(caller, t0) - wait)))
+  seen(reply)
   if (!reply.ok) throw daemonError(reply, 'the host could not read the job')
   const out = await jobAnswer(host, params.job_id, reply, { fromOffset })
   // A read without wait_for waits a minute at most (2026-11-04 review: a refusal of a longer one cost a call).

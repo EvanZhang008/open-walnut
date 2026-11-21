@@ -96,6 +96,7 @@ const NO_OUTCOME_WAKES: Record<string, string> = {
   'src/core/usage-watch/runtime.ts': 'a real-use alarm on a change the task shipped or leads, or its watch\'s verdict: the task fixes it there',
   'src/core/offline-handover.ts': 'changes the session made while the server was away were not applied: it must redo them',
   'src/core/session-requests.ts': 'a fork is handed the requests its parent still owes: the new session answers them',
+  'src/core/hosts/host-exec-stale-reads.ts': 'the session\'s own loop keeps reading a host job that ended or is gone: it stops the loop and goes on',
   'src/core/sessions/missing-walnut-tool.ts': 'a tool the session just called is not offered: it is told what to use and goes on',
   'src/core/sessions/ask-answer.ts': 'the session\'s ask of the user was answered in a teammate: it carries on with that answer',
   'src/core/sessions/background-work-wake.ts': 'a command the session left running ended: it reads the result and goes on',

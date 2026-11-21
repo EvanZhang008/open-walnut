@@ -120,7 +120,8 @@ defineOp({
   description:
     'The output of a host_exec job, from `offset` (bytes into its log; `nextOffset` goes on) or, with no offset, its tail: the answer '
     + 'shows the first lines and the last 6,000 characters, and `outputShown` names the read for the rest. `running` false means it '
-    + 'ended, with `exitCode`. Do not poll: `wait_ms` holds the answer until the job ends (60000 at most), and `wait_for` (as '
+    + 'ended, with `exitCode` (a shell script tests it with jq or python: the CLI prints indented JSON, "running": false). '
+    + 'Do not poll: `wait_ms` holds the answer until the job ends (60000 at most), and `wait_for` (as '
     + 'host_exec\'s) until a line of the output matches (from offset, else from the start), the port listens, the '
     + 'file exists or the job ends (wait_ms up to 600000); through a host\'s gateway (a session on another host) about 10000, then call '
     + 'again (heldMs says so). A read that finds nothing new says so in a sentence. To go on after a match or a miss, pass the '
