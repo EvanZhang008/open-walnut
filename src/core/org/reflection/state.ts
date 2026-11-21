@@ -44,6 +44,12 @@ export interface ReflectionState {
   mergedLessons?: Array<{ lesson: string; line: string }>;
   /** Failed tries of a dropped lesson the backfill has not settled yet (normalized lesson: count). */
   backfillTries?: Record<string, number>;
+  /** The user's standing rules (USER.md) the guidance was last checked against, line by line (guidance-align.ts). */
+  aligned?: { rules: string[]; short?: number };
+  /** Today's align calls: at most ALIGN_CALLS_PER_DAY_MAX. */
+  aligns?: { date: string; count: number };
+  /** Guidance lines named to the node as going against a changed rule of his, newest last. */
+  alignLog?: Array<{ at: string; line: string; rule: string }>;
 }
 
 /** Longer than the user's messages are kept (user-asks: open 7 days, then closed 30), so one is never judged twice. */
@@ -84,6 +90,9 @@ function normalize(raw: unknown, nowMs: number): ReflectionState {
     ...(Array.isArray(r.backfilled) ? { backfilled: r.backfilled.filter((s): s is string => typeof s === 'string').slice(-500) } : {}),
     ...(r.merges?.date === today && Number.isFinite(r.merges.count) ? { merges: r.merges } : {}),
     ...(Array.isArray(r.mergedLessons) ? { mergedLessons: r.mergedLessons.filter((m): m is { lesson: string; line: string } => !!m && typeof m.lesson === 'string' && typeof m.line === 'string').slice(-500) } : {}),
+    ...(r.aligned && Array.isArray(r.aligned.rules) ? { aligned: { rules: r.aligned.rules.filter((k): k is string => typeof k === 'string').slice(0, 1000), ...(Number.isFinite(r.aligned.short) ? { short: r.aligned.short } : {}) } } : {}),
+    ...(r.aligns?.date === today && Number.isFinite(r.aligns.count) ? { aligns: r.aligns } : {}),
+    ...(Array.isArray(r.alignLog) ? { alignLog: r.alignLog.filter((x) => !!x && typeof x.line === 'string').slice(-50) } : {}),
     ...(r.backfillTries && typeof r.backfillTries === 'object' ? { backfillTries: Object.fromEntries(Object.entries(r.backfillTries).filter(([, n]) => Number.isFinite(n))) } : {}),
   };
 }

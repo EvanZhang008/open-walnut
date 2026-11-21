@@ -25,6 +25,7 @@ import { messagesFromAsks, rulesTextOf, threadsFromRecords } from './inputs.js';
 import { PAIN_TITLES_FOR_JUDGE } from './pains.js';
 import { readPains } from './pains-store.js';
 import { backfillDropped, mergeGuidance, type MergeDeps } from './guidance-merge.js';
+import { alignGuidance } from './guidance-align.js';
 import { recordPain } from './pain-record.js';
 
 export { ANSWER_GRACE_MS, MOMENT_MAX_AGE_MS, type Candidate } from './candidates.js';
@@ -44,6 +45,8 @@ export interface ReflectDeps extends CandidateDeps {
   send: SendCorrection;
   confirmSend: ConfirmSend;
   rulesText: (node: Task) => Promise<string>;
+  /** The user's standing rules alone (USER.md): the guidance is kept in line with them (guidance-align.ts). */
+  userRules?: () => Promise<string>;
 }
 
 export interface ReflectResult {
@@ -257,6 +260,8 @@ export async function reflectForNode(node: Task, nodeName: string, all: readonly
   }
   // Lessons a full day dropped are taken up again, a few a pass, after this pass's own findings had their places.
   await backfillDropped(node, nodeName, deps, now).catch((err) => log.task.warn('reflection: dropped lessons not taken up', { nodeId: node.id, error: err instanceof Error ? err.message : String(err) }));
+  // Last: every line, new ones included, agrees with the user's standing rules as they are now.
+  await alignGuidance(node, nodeName, deps, now).catch((err) => log.task.warn('reflection: guidance not aligned with the user\'s rules', { nodeId: node.id, error: err instanceof Error ? err.message : String(err) }));
   return result;
 }
 
@@ -322,6 +327,10 @@ export function defaultDeps(): ReflectDeps {
       const { USER_FILE } = await import('../../../constants.js');
       const { readNodeMemory } = await import('../../artifacts/node-memory.js');
       return rulesTextOf(await fsp.readFile(USER_FILE, 'utf-8').catch(() => ''), (await readNodeMemory(node.id).catch(() => undefined))?.text ?? '');
+    },
+    userRules: async () => {
+      const { USER_FILE } = await import('../../../constants.js');
+      return fsp.readFile(USER_FILE, 'utf-8').catch(() => '');
     },
     replyLanguage: async () => {
       const [{ getConfig }, { replyLanguageText }] = await Promise.all([import('../../config-manager.js'), import('../../sessions/output-mode.js')]);
