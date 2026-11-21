@@ -459,6 +459,28 @@ describe('daemon send with dedupe (send-dedupe-v1)', () => {
       expect(drain(s.readerFd)).toHaveLength(2)
     } finally { fs.closeSync(s.readerFd) }
   })
+
+  it('trigger-resume-once: a fire written into a process that is gone reached the session, for a core that never held it (a restart)', async () => {
+    const s = session('resumed', 919)
+    try {
+      expect(await createDaemonCore(ctx.deps).handleSendCommand('sid', 'hello', 'u-1', batch)).toEqual({ ok: true })
+    } finally { fs.closeSync(s.readerFd) }
+    // The next daemon: no session in its map, only the files on disk.
+    ctx.sessions.delete('sid')
+    const next = createDaemonCore(ctx.deps)
+    expect(await next.lineReachedBefore(s.jsonlPath, 'u-1', ['qm-1'])).toEqual({ by: 'record', pid: 919, at: expect.any(Number) })
+    expect(await next.lineReachedBefore(s.jsonlPath, 'u-1', ['qm-2'])).toBeNull()
+    // A write that only began (the daemon killed inside it) proves nothing: the fire goes again.
+    const cut = path.join(ctx.tmpDir, 'cut.jsonl')
+    fs.writeFileSync(cut, marker('qm-1', 920) + '\n')
+    fs.writeFileSync(`${cut}.lines`, JSON.stringify({ pid: 920, uuid: 'u-1', begin: ['qm-1'], at: 1 }) + '\n')
+    expect(await next.lineReachedBefore(cut, 'u-1', ['qm-1'])).toBeNull()
+    // The CLI's own word, from any process: it took the line.
+    fs.appendFileSync(cut, lifecycle('u-1', 'completed') + '\n')
+    expect(await next.lineReachedBefore(cut, 'u-1', ['qm-1'])).toEqual({ by: 'cli', state: 'completed' })
+    // No files at all (a session never written to): null, never a throw.
+    expect(await next.lineReachedBefore(path.join(ctx.tmpDir, 'none.jsonl'), 'u-1', ['qm-1'])).toBeNull()
+  })
 })
 
 describe('send-dedupe-v1 twins', () => {

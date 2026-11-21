@@ -408,4 +408,107 @@ describe.skipIf(!BUN).each(TWINS)('a trigger across a daemon restart (%s twin)',
     expect(b.fires(NOW_ID)).toEqual([])
     expect(h.state(NOW_ID).seq).toBe(0)
   }, 150_000)
+
+  it('5. a fire that resumed a stopped session before the daemon died is not resumed again by the next daemon: the session keeps one', async () => {
+    const h = host(twin, 'resume', { WALNUT_TRIGGER_HOST_GRACE_MS: '1500' })
+    const ID = 'review-watch'
+    const WALNUT = '/fixture/walnut-home'
+    const TASK = 'mrevw000-5e1a'
+    const SID = 'ffffffff-7777-4777-8777-777777777777'
+    const items = h.dir('items.json')
+    const inbox = h.dir('inbox.jsonl')
+    const spawnLog = h.dir('spawns.jsonl')
+    const cli = h.dir('mock-cli.cjs')
+    // A stand-in CLI that takes the flags a resume adds: it notes each spawn (pid, argv) and every user line it reads.
+    fs.writeFileSync(cli, [
+      "const fs = require('fs')",
+      'const argv = process.argv.slice(2)',
+      'const opt = (n) => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : "" }',
+      "const sid = opt('--mock-sid'), inbox = opt('--mock-inbox')",
+      "fs.appendFileSync(opt('--mock-spawns'), JSON.stringify({ pid: process.pid, argv }) + '\\n')",
+      "const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n')",
+      "out({ type: 'system', subtype: 'init', session_id: sid })",
+      "out({ type: 'result', subtype: 'success', is_error: false, result: 'ready', session_id: sid })",
+      "out({ type: 'system', subtype: 'session_state_changed', state: 'idle' })",
+      "let buf = ''",
+      "process.stdin.on('data', (chunk) => {",
+      "  buf += chunk.toString('utf8')",
+      '  let nl',
+      "  while ((nl = buf.indexOf('\\n')) !== -1) {",
+      '    const line = buf.slice(0, nl); buf = buf.slice(nl + 1)',
+      '    let msg; try { msg = JSON.parse(line) } catch { continue }',
+      "    if (msg.type === 'user') fs.appendFileSync(inbox, JSON.stringify({ pid: process.pid, uuid: msg.uuid, content: msg.message && msg.message.content }) + '\\n')",
+      '  }',
+      '})',
+      'setInterval(() => {}, 1 << 30)',
+    ].join('\n') + '\n')
+    // Stands where `claude` stands in a real command: the first word, then flags (a resume adds some).
+    const wrapper = h.dir('claude-mock')
+    fs.writeFileSync(wrapper, `#!/bin/sh\nexec "${process.execPath}" "${cli}" "$@"\n`, { mode: 0o755 })
+    fs.writeFileSync(items, JSON.stringify({ fire: true, items: [{ id: 'r1', text: 'review r1' }] }) + '\n')
+    const lines = (file: string): Array<Record<string, unknown>> => {
+      try { return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>) } catch { return [] }
+    }
+    const fireLines = () => lines(inbox).filter((l) => String(l.content).includes('<walnut-message kind="trigger"') && String(l.content).includes('"r1"'))
+    const spawns = () => lines(spawnLog)
+    const gone = (pid: number) => { try { process.kill(pid, 0); return false } catch { return true } }
+    const slice = {
+      v: 1, home: WALNUT, hash: 'h1', asOf: Date.now(), host: 'devbox',
+      sessions: [{ sid: SID, taskId: TASK, title: 'Review loop' }],
+      tasks: [{ id: TASK, title: 'Watch the review', phase: 'IN_PROGRESS', project: 'Ops' }],
+      requests: [],
+    }
+    const def = {
+      id: ID, name: 'Review watch', everyMs: 3_600_000,
+      check: { run: `cat ${JSON.stringify(items)}`, timeoutSeconds: 10 },
+      deliver: { home: WALNUT, taskId: TASK, prompt: 'New review comments are in this fire.' },
+    }
+
+    const a = await h.start()
+    const started = await a.rpc({
+      cmd: 'start', sid: SID, cwd: h.dir('h'), message: 'init', mode: 'default', origin: { home: WALNUT, task: TASK },
+      args: [wrapper, '-p', '--session-id', SID, '--mock-sid', SID, '--mock-inbox', inbox, '--mock-spawns', spawnLog],
+    })
+    expect(started.ok, JSON.stringify(started)).toBe(true)
+    if (typeof started.pid === 'number') orphans.add(started.pid)
+    await waitFor(() => (spawns().length === 1 ? true : undefined), 20_000, 'the first spawn')
+    // The session stops (the idle reaper's stop is the same stop): the fire has to start it again.
+    expect((await a.rpc({ cmd: 'stop', sid: SID, reason: 'user', home: WALNUT })).ok).toBe(true)
+    await waitFor(() => (gone(spawns()[0].pid as number) ? true : undefined), 20_000, 'the session stopped')
+    expect((await a.rpc({ cmd: 'host.slice', slice })).ok).toBe(true)
+    expect(await configure(a, [def])).toMatchObject({ ok: true })
+    // The server never claims: the host resumes the session with the fire as its first line.
+    await a.runOnce(ID)
+    await waitFor(() => (fireLines().length > 0 ? true : undefined), 30_000, 'the fire in the resumed session')
+    const mark = await waitFor(() => h.state(ID).pendingFires.find((f) => f.seq === 1 && f.host)?.host, 10_000, 'the host delivery recorded')
+    expect(mark).toMatchObject({ sessionId: SID, resumed: true })
+    expect(mark.messageId).toBe(fireMessageId(ID, h.state(ID).epoch, [1]))
+    expect(spawns()).toHaveLength(2)
+    const resumedPid = spawns()[1].pid as number
+    orphans.add(resumedPid)
+
+    // The daemon dies before the mark was saved, and the resumed CLI ends too (it exited, or
+    // crashed), so the next daemon finds the session stopped again and the fire unmarked.
+    await a.kill()
+    process.kill(resumedPid, 'SIGKILL')
+    await waitFor(() => (gone(resumedPid) ? true : undefined), 10_000, 'the resumed CLI gone')
+    const raw = JSON.parse(fs.readFileSync(h.statePath(ID), 'utf8')) as TriggerHostState
+    for (const f of raw.pendingFires) { delete f.host; delete f.hostTriedAt }
+    fs.writeFileSync(h.statePath(ID), JSON.stringify(raw))
+
+    const b = await h.start()
+    await b.rpc({ cmd: 'host.slice', slice: { ...slice, asOf: Date.now() } })
+    const again = await waitFor(() => h.state(ID).pendingFires.find((f) => f.seq === 1 && f.host)?.host, 90_000, 'the delivery again')
+    expect(again.messageId, 'the same id on the second try').toBe(mark.messageId)
+    expect(again.sessionId).toBe(SID)
+    // The mark is saved once the try returned, and a resume returns only after its spawn and
+    // its write: a third spawn (and with it a second copy) would be in the log by now.
+    expect(spawns(), 'the session was not started a third time').toHaveLength(2)
+    expect(fireLines(), 'the session got the fire once').toHaveLength(1)
+    // The fire's line carries the uuid every try of it gets (trigger-resume-once).
+    expect(fireLines()[0].uuid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    // And it is the session's own records that kept it out, read by the new daemon.
+    const logs = fs.readdirSync(h.dir('run')).filter((f) => f.endsWith('.log')).map((f) => fs.readFileSync(path.join(h.dir('run'), f), 'utf8')).join('\n')
+    expect(logs.split('\n').some((l) => l.includes('it is not resumed again') && l.includes(mark.messageId))).toBe(true)
+  }, 200_000)
 })

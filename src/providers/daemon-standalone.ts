@@ -111,6 +111,7 @@ import { createStreamRelay, type PortSocket } from './stream-relay-core.js'
 import { createHubForwards, parseHubForwards } from './hub-forward-core.js'
 import { createPtyStreams, type PtyChild, type PtySpawnOptions } from './pty-stream-core.js'
 import { createHostResume } from './host-resume-core.js'
+import { lineUuidOf } from './line-fate-core.js'
 import { createCliOwner } from './cli-owner-core.js'
 import { createCliArgvFiles } from './cli-argv-files-core.js'
 import { createHostStart, type HostStartAnswer, type HostStartPlan, type TaskStartFields } from './host-start-core.js'
@@ -3175,8 +3176,11 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       ...(ISOLATED_FOR ? { isolatedFor: ISOLATED_FOR } : {}),
       // host_exec runs a stop would end: every update path waits for them (exec-runs-hold.ts).
       execRunning: hostExec.running(),
-      // Of those, the ones an update waits for: a resumable run does not hold it.
-      execHolding: hostExec.holding(),
+      // Of those, the ones an update waits for: a resumable run does not hold it. An older server
+      // reads `execHolding` and puts a daemon here that cannot follow a detached run, so for it the
+      // detached runs count too; a server that knows them reads `execHoldsUpdate` (local-daemon.ts).
+      execHolding: hostExec.holdingForOlder(),
+      execHoldsUpdate: hostExec.holding(),
       })
       // A server is here: the calls waiting for one go now.
       if (isServerClient(ws)) setTimeout(wakeGatewayCalls, 0)
@@ -3621,6 +3625,15 @@ async function resumeForTrigger(home: string, sid: string, text: string, message
   if (!livedHere(sid)) return { ok: false, reason: 'no transcript of that session on this host' }
   const journaled = journaledHome(sid)
   if (journaled !== undefined && journaled !== home) return { ok: false, reason: 'that session was started on this host for another Walnut' }
+  // trigger-resume-once: a try of a fire that already reached the session (a daemon killed
+  // after the write, before the ack mark) starts nothing: the stream and its write records
+  // are on disk, so they say so across a restart (core.lineReachedBefore).
+  const uuid = fireLineUuid(messageId)
+  const went = await core.lineReachedBefore(path.join(STREAMS_DIR, sid + '.jsonl'), uuid, [messageId])
+  if (went) {
+    logMsg('info', 'trigger: the fire already reached that session; it is not resumed again', { sid, taskId, messageId, ...went })
+    return { ok: true }
+  }
   const now = Date.now()
   for (const [k, at] of hostResumedAt) if (now - at >= HOST_RESUME_COOLDOWN_MS) hostResumedAt.delete(k)
   if (hostResumedAt.has(sid)) return { ok: false, reason: 'this host resumed that session moments ago' }
@@ -3639,19 +3652,19 @@ async function resumeForTrigger(home: string, sid: string, text: string, message
   const current = () => (sessionStopVersions.get(sid) ?? 0) === stopVersion
     && (!cronRuntime || cronRuntime.deliveryAllowed(sid, undefined))
   try {
-    await sessionStartGate.run(sid, () => {
+    await sessionStartGate.run(sid, async () => {
       if (!current()) throw new Error('a stop request superseded this start')
-      return startSessionProcess({ cmd: 'start', sid, args, cwd: spawn.cwd, message: text, resume: true, mode: spawn.mode, origin: { home, task: taskId } }, undefined, current)
+      // Started with no line, then the fire as one delivery, as the server's own resume
+      // sends a marked message (deferMessage): its write record goes on disk before the
+      // line's first byte and after its newline, and its turn-start marker (the CLI never
+      // echoes stdin, so without one the fire never shows in the chat) sits before that
+      // newline. So no crash point leaves a line the CLI can run with no record of it.
+      await startSessionProcess({ cmd: 'start', sid, args, cwd: spawn.cwd, message: '', deferMessage: true, resume: true, mode: spawn.mode, origin: { home, task: taskId } }, undefined, current)
+      const sent = await core.handleSendCommand(sid, text, uuid, [{ message: text, messageId }], { fromHost: true, bootWait: true })
+      if (!('ok' in sent) || !sent.ok) {
+        throw new Error('the fire did not go into the resumed session (' + String('reason' in sent ? sent.reason : (sent as { error?: string }).error) + ')')
+      }
     })
-    // The turn-start marker the server writes after its own resume start
-    // (writeSyntheticUserEvent): the CLI never echoes its stdin, so without it
-    // the stream shows no turn start and the fire never appears in the chat.
-    try {
-      const marked = core.handleAppendUserMarker(sid, text, messageId)
-      if (!('ok' in marked) || !marked.ok) logMsg('warn', 'trigger: no turn-start marker for a host resume', { sid, messageId })
-    } catch (err) {
-      logMsg('warn', 'trigger: no turn-start marker for a host resume', { sid, messageId, error: (err as Error).message })
-    }
     logMsg('info', 'trigger: resumed a stopped session on this host', { sid, taskId, messageId, mode: spawn.mode })
     return { ok: true }
   } catch (err) {
@@ -4323,14 +4336,25 @@ function offlineSweepTick(): void {
   void offlineHost.sweep()
 }
 
+/**
+ * trigger-resume-once: the one line uuid of a message delivered under one id on every try (a
+ * trigger fire), whether it goes into a live CLI or starts a stopped one (line-fate-core.ts
+ * lineUuidOf). Mirror daemon-source.ts.
+ */
+function fireLineUuid(messageId: string): string {
+  return lineUuidOf(crypto.createHash('sha256').update('walnut-line:' + messageId).digest('hex'))
+}
+
 // A host delivery is a send outside the command drain: a Demo admits it (quiesce waits for it) and refuses it once fenced, also after it queued at the gate.
 function deliverFromOfflineHost(sid: string, text: string, messageId: string, o: { resend?: boolean } = {}): Promise<{ ok: true; noticeLeftOut?: true } | { ok: false; reason: string }> {
   if (demoQuiesce.fenced) return Promise.resolve({ ok: false as const, reason: 'demo_stopping' })
   const work = () => sessionStartGate.run(sid, async () => {
     if (demoQuiesce.fenced) return { ok: false as const, reason: 'demo_stopping' }
     cancelTurnRetry(sid, 'superseded-by-send')
-    // A resend (a trigger fire again) writes nothing when the line record says it went (send-dedupe-v1).
-    const r = await core.handleSendCommand(sid, text, undefined, [{ message: text, messageId }], { fromHost: true, dedupe: o.resend === true })
+    // A resend (a trigger fire again) writes nothing when the line record says it went (send-dedupe-v1),
+    // and goes under the fire's own uuid, the one a host resume gives it too (trigger-resume-once).
+    const uuid = o.resend === true ? fireLineUuid(messageId) : undefined
+    const r = await core.handleSendCommand(sid, text, uuid, [{ message: text, messageId }], { fromHost: true, dedupe: o.resend === true })
     if ('ok' in r && r.ok) return r.noticeLeftOut ? { ok: true as const, noticeLeftOut: true as const } : { ok: true as const }
     return { ok: false as const, reason: 'reason' in r ? String(r.reason) : String((r as { error?: string }).error) }
   })
@@ -12932,6 +12956,14 @@ const hostExec = createHostExec({
   // wait_for's matcher: this program again (the stable copy once the shim made one), as --wait-matcher.
   matcher: () => ({ command: walnutCliArgv[0]!, args: [...walnutCliArgv.slice(1), '--wait-matcher'] }),
 })
+// Which kinds of listed detached work this service adopts, for the launcher (detached-registry.ts
+// `adopts`); any other kind is ended now. PARITY: daemon-source.ts.
+// The launcher's ready mark waits for it: a launcher reads a ready service with no `adopts` as one
+// older than this file and ends the work (service-launcher-script.ts).
+const adoptionSettled: Promise<void> = hostExec.settleAdoption({ acp: typeof acp.endForRollback === 'function' }).then(({ wrote, said }) => {
+  if (!wrote) logMsg('warn', 'detached/adopts not written: a launcher will end the detached work as a rollback')
+  if (said) logMsg('info', 'detached work this service cannot adopt was ended', { said: said.trim().slice(0, 2000) })
+}, () => {})
 // A task on another host calling this host's MCP servers ('host-mcp-v1', host-mcp-core.ts)
 // and its web services ('host-http-v1', host-http-core.ts). PARITY: keep in sync with daemon-source.ts.
 /**
@@ -15053,8 +15085,8 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
   // Ready only once the core flow answers over its own port: hello as itself, status of a session it adopted.
   if (launcherBeat && listeningPort) {
     const ask = askOwnPort(listeningPort, WebSocket as unknown as Parameters<typeof askOwnPort>[1])
-    void launcherBeat.ready({ exe: process.execPath, instance: DAEMON_INSTANCE_ID },
-      () => daemonServesCheck(ask, { instanceId: DAEMON_INSTANCE_ID, version: DAEMON_VERSION, sid: sessions.keys().next().value })).then(() => launcherBeat?.idle())
+    void adoptionSettled.then(() => launcherBeat?.ready({ exe: process.execPath, instance: DAEMON_INSTANCE_ID },
+      () => daemonServesCheck(ask, { instanceId: DAEMON_INSTANCE_ID, version: DAEMON_VERSION, sid: sessions.keys().next().value }))).then(() => launcherBeat?.idle())
   }
   // The servers an earlier daemon kept running here: adopt or start them, now
   // that the port file they connect through is written.

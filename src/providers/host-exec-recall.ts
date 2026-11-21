@@ -222,19 +222,24 @@ export function createRecall(d: RecallDeps) {
       const j = r ? jobFor(jobId, r) : null
       return kept(j) ? j : undefined
     },
-    /** Every such run but the ones `skip` names (the daemon's own), for a list. */
+    /** Whether the audit's tail names the run `jobId` (its start line is there). */
+    knows(jobId: string): boolean {
+      take()
+      return runs.has(jobId)
+    },
     /**
      * Detached runs with no end line that no live daemon follows (its owner is gone, or is this
      * process: a daemon made again in it), but the ones `skip` names. A run a rollback or a forced
      * update stopped is not one: it is ending, or ended.
      */
-    orphans(skip: (jobId: string) => boolean): Orphan[] {
+    orphans(skip: (jobId: string) => boolean, ownerGone: (jobId: string) => boolean = () => false): Orphan[] {
       take()
       const out: Orphan[] = []
       for (const [id, r] of runs) {
         if (r.end || r.byUpdate || r.start.detach !== true || r.pid === undefined || skip(id)) continue
         const owner = r.owner ?? num(r.start.daemonPid)
-        if (owner !== null && owner !== d.selfPid && d.alive(owner)) continue
+        // `ownerGone`: the registry says another program holds that pid now (its start differs).
+        if (owner !== null && owner !== d.selfPid && d.alive(owner) && !ownerGone(id)) continue
         out.push({ jobId: id, start: r.start, pid: r.pid, lstart: r.lstart ?? null, stopping: r.stopping ?? null, blocked: r.blocked })
       }
       return out

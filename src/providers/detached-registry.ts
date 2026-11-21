@@ -17,6 +17,13 @@
  *   note       one line saying why it ended
  *   line_file  a file a stop appends `line` to (the host_exec audit, an ACP journal), may be empty
  *   line       one line written as is (JSON the older version reads)
+ * and, for a host_exec run, what a later daemon of this version adopts it from (the stop script
+ * ignores them; the audit only records, so a run whose start line left the audit's tail is still
+ * adopted, host-exec-core.ts):
+ *   start      the run's start line (JSON)
+ *   owner      the daemon that follows it now, and owner_start when it started (a reused pid is no owner)
+ *   stopping   why a stop of it began (timeout, asked, blocked, daemon), if one did
+ * An entry is written at the spawn (lstart empty until ps named it: a stop then leaves it alone).
  * A run's file is removed when its run ends (by the daemon that follows it), and by the stop script
  * once it handled it or found its process gone. Writes are whole (a temp file renamed) and async.
  */
@@ -36,6 +43,12 @@ export interface RegistryEntry {
   note?: string
   lineFile?: string
   line?: string
+  /** host_exec only: the run's start line (JSON), the daemon following it, why a stop of it began. */
+  start?: string
+  owner?: number
+  /** When `owner` started (processStart): a pid another program holds since is no owner. */
+  ownerStart?: string
+  stopping?: string
 }
 
 const ID_RE = /^[A-Za-z0-9_.-]{1,128}$/
@@ -65,7 +78,34 @@ export function registryText(e: RegistryEntry): string {
   return [
     `kind=${e.kind}`, `id=${e.id}`, `pid=${e.pid}`, `pgid=${e.pgid}`, `lstart=${oneLine(e.lstart)}`,
     `note_file=${oneLine(e.noteFile)}`, `note=${oneLine(e.note)}`, `line_file=${oneLine(e.lineFile)}`, `line=${oneLine(e.line)}`,
+    ...(e.start ? [`start=${oneLine(e.start)}`] : []), ...(e.owner ? [`owner=${e.owner}`] : []), ...(e.ownerStart ? [`owner_start=${oneLine(e.ownerStart)}`] : []), ...(e.stopping ? [`stopping=${oneLine(e.stopping)}`] : []),
   ].join('\n') + '\n'
+}
+
+/** Every entry of `kind` in the registry, as written (async; an unreadable one is left out). */
+export async function readRegistry(dir: string, kind: DetachedKind): Promise<Array<RegistryEntry & { file: string }>> {
+  let names: string[] = []
+  try { names = await fs.promises.readdir(dir) } catch { return [] }
+  const out: Array<RegistryEntry & { file: string }> = []
+  for (const name of names) {
+    if (!name.startsWith(`${kind}-`) || !name.endsWith('.run')) continue
+    const file = path.join(dir, name)
+    let text: string
+    try { text = await fs.promises.readFile(file, 'utf8') } catch { continue }
+    const kv = new Map<string, string>()
+    for (const line of text.split('\n')) { const i = line.indexOf('='); if (i > 0) kv.set(line.slice(0, i), line.slice(i + 1)) }
+    const id = kv.get('id') ?? ''
+    const pid = Number(kv.get('pid'))
+    if (kv.get('kind') !== kind || !ID_RE.test(id) || !Number.isInteger(pid) || pid <= 1) continue
+    const owner = Number(kv.get('owner'))
+    out.push({
+      file, kind, id, pid, pgid: Number(kv.get('pgid')) || pid, lstart: kv.get('lstart') ?? '',
+      ...(kv.get('start') ? { start: kv.get('start') } : {}), ...(Number.isInteger(owner) && owner > 0 ? { owner } : {}),
+      ...(kv.get('owner_start') ? { ownerStart: kv.get('owner_start') } : {}),
+      ...(kv.get('stopping') ? { stopping: kv.get('stopping') } : {}),
+    })
+  }
+  return out
 }
 
 // Writes of one entry go one after another (the last one asked wins); each through its own temp file.
@@ -104,14 +144,20 @@ export async function unregisterRun(dir: string, kind: DetachedKind, id: string)
 
 /**
  * Ends every listed run whose process still is the one listed (same pid, same start): SIGTERM to
- * its group, up to 5 s for it to go, then SIGKILL; appends its note and line; removes its file.
- * Usage: stop-detached.sh <registry dir>. Prints one `stopped <kind> <id> <pid>` line per run it
- * ended and `gone <kind> <id>` for one whose process had already gone (or was another process).
+ * its group, up to 5 s for it to go, then SIGKILL; appends its note and line (its `at` set to the
+ * time it ended); removes its file.
+ * Usage: stop-detached.sh <registry dir> [kind ...]: with kinds, only the runs of those kinds (a
+ * service that cannot adopt one kind ends just that one); without, every run. Prints one
+ * `stopped <kind> <id> <pid>` line per run it ended, `gone <kind> <id>` for one whose process had
+ * already gone (or was another process), and `unchecked <kind> <id>` for one listed before ps named
+ * its start (left alone, its entry kept).
  */
 export const STOP_SCRIPT = `#!/bin/sh
 # Ends the work a newer Walnut started that an older one cannot adopt (detached-registry.ts).
 dir=$1
-[ -n "$dir" ] && [ -d "$dir" ] || { echo "usage: $0 <registry dir>" >&2; exit 2; }
+[ -n "$dir" ] && [ -d "$dir" ] || { echo "usage: $0 <registry dir> [kind ...]" >&2; exit 2; }
+shift
+kinds=" $* "
 for f in "$dir"/*.run; do
   [ -f "$f" ] || continue
   kind= id= pid= pgid= lstart= note_file= note= line_file= line=
@@ -128,9 +174,13 @@ for f in "$dir"/*.run; do
       line=*) line=\${kv#line=} ;;
     esac
   done < "$f"
+  if [ "$kinds" != "  " ]; then case $kinds in *" $kind "*) ;; *) continue ;; esac; fi
   case $pid in ''|*[!0-9]*) rm -f "$f"; continue ;; esac
   case $pgid in ''|*[!0-9]*) pgid=$pid ;; esac
   if [ "$pid" -le 1 ] || [ "$pgid" -le 1 ]; then rm -f "$f"; continue; fi
+  # No start time yet (listed at the spawn, before ps named it): never signalled, and its entry stays
+  # (a later daemon of the version that wrote it adopts the run from it).
+  if [ -z "$lstart" ]; then echo "unchecked $kind $id"; continue; fi
   now=$(LC_ALL=C TZ=UTC PATH=/bin:/usr/bin ps -ww -o lstart= -p "$pid" 2>/dev/null | sed 's/^ *//;s/ *$//')
   if [ -n "$now" ] && [ "$now" = "$lstart" ]; then
     kill -TERM -"$pgid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
@@ -138,6 +188,10 @@ for f in "$dir"/*.run; do
     while kill -0 "$pid" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
     kill -KILL -"$pgid" 2>/dev/null
     [ -n "$note_file" ] && [ -n "$note" ] && printf '\\n%s\\n' "$note" >> "$note_file"
+    # The line was written when the run was listed: its time is now, when it ended.
+    case $line in
+      '{"at":"'*) rest=\${line#'{"at":"'}; rest=\${rest#*'"'}; line="{\\"at\\":\\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\\"$rest" ;;
+    esac
     [ -n "$line_file" ] && [ -n "$line" ] && printf '%s\\n' "$line" >> "$line_file"
     echo "stopped $kind $id $pid"
   else
@@ -175,3 +229,60 @@ export const ADOPTED_WORK_CAPABILITIES = ['host-exec-detach-v1', 'host-script-de
 
 /** The note every rollback stop leaves, for each kind's own record. */
 export const ROLLBACK_NOTE = 'Walnut on this host was put back to an older version (a rollback), which cannot follow this run, so it was stopped. Run it again if it is still needed.'
+
+/**
+ * `<dir>/adopts`: the kinds of listed work the running service really adopts, one per line, written
+ * by every service of this version once its modules loaded and before it says it is ready (the
+ * launcher's `launcher/ready`). The launcher removes it before it starts any version and, once that
+ * version is ready, runs the stop script when it is missing (a version older than this file cannot
+ * adopt any of it). A service that adopts only some kinds ends the others itself (`stop-detached.sh
+ * <dir> <kind>...`).
+ */
+export const ADOPTS_FILE = 'adopts'
+
+export async function writeAdopts(dir: string, kinds: readonly DetachedKind[]): Promise<boolean> {
+  const file = path.join(dir, ADOPTS_FILE)
+  const tmp = `${file}.${process.pid}.${++tmpSeq}.t`
+  try {
+    await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 })
+    await fs.promises.writeFile(tmp, kinds.map((k) => `${k}\n`).join(''), { mode: 0o600 })
+    await fs.promises.rename(tmp, file)
+    return true
+  } catch {
+    try { await fs.promises.unlink(tmp) } catch { /* gone */ }
+    return false
+  }
+}
+
+export const DETACHED_KINDS: readonly DetachedKind[] = ['host-exec', 'host-script', 'acp']
+
+type SpawnLike = (cmd: string, args: string[], opts: { stdio: ['ignore', 'pipe', 'ignore'] }) => import('node:child_process').ChildProcess
+
+/**
+ * A service's startup: says which kinds of listed work it adopts (`adopts`, for the launcher), and
+ * ends the listed runs of every other kind itself (its stop script, those kinds only), since no one
+ * will follow them. Resolves with whether `adopts` was written and the script's output (empty when
+ * nothing was left to end); never throws. The service tells the launcher it is ready only after this.
+ */
+export async function settleAdoption(dir: string, adopted: readonly DetachedKind[], spawn: SpawnLike, timeoutMs = 60_000): Promise<{ wrote: boolean; said: string }> {
+  const wrote = await writeAdopts(dir, adopted)
+  const missing = DETACHED_KINDS.filter((k) => !adopted.includes(k))
+  if (!missing.length) return { wrote, said: '' }
+  let names: string[] = []
+  try { names = await fs.promises.readdir(dir) } catch { return { wrote, said: '' } }
+  if (!names.some((n) => missing.some((k) => n.startsWith(`${k}-`) && n.endsWith('.run')))) return { wrote, said: '' }
+  const script = await installStopScript(dir)
+  if (!script) return { wrote, said: '' }
+  const said = await new Promise<string>((resolve) => {
+    let out = ''
+    try {
+      const child = spawn('/bin/sh', [script, dir, ...missing], { stdio: ['ignore', 'pipe', 'ignore'] })
+      const t = setTimeout(() => { try { child.kill('SIGKILL') } catch { /* gone */ } }, timeoutMs)
+      t.unref?.()
+      child.stdout?.on('data', (b: Buffer) => { out += b.toString('utf8') })
+      child.once('error', () => { clearTimeout(t); resolve(out) })
+      child.once('close', () => { clearTimeout(t); resolve(out) })
+    } catch { resolve(out) }
+  })
+  return { wrote, said }
+}

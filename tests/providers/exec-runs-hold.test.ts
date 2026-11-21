@@ -183,6 +183,10 @@ describe('LocalDaemon upgrade', () => {
       expect(await ping(port)).toMatchObject({ alive: true, execHolding: 0 })
       hello = { execRunning: 2 }
       expect(await ping(port)).toMatchObject({ alive: true, execHolding: 2 })
+      // A daemon with detached runs: execHolding counts them for an older server (its daemon cannot
+      // follow them); this server reads execHoldsUpdate, which they do not hold (2026-11-21 rollback rehearsal).
+      hello = { execRunning: 3, execHolding: 2, execHoldsUpdate: 0 }
+      expect(await ping(port)).toMatchObject({ alive: true, execHolding: 0 })
     } finally {
       await new Promise<void>((r) => wss.close(() => r()))
     }
@@ -257,7 +261,9 @@ describe('the daemon twins', () => {
   it.each(twins)('%s: hello says how many host_exec runs go on, and a service handover refuses while one runs', (file) => {
     const src = fs.readFileSync(path.join(__dirname, '../..', file), 'utf8')
     expect(src).toMatch(/execRunning: hostExec\.running\(\)/)
-    expect(src).toMatch(/execHolding: hostExec\.holding\(\)/)
+    // An older server waits for the detached runs too; a newer one reads what holds an update.
+    expect(src).toMatch(/execHolding: (typeof hostExec\.holdingForOlder === 'function' \? )?hostExec\.holdingForOlder\(\)/)
+    expect(src).toMatch(/execHoldsUpdate: hostExec\.holding\(\)/)
     const handover = src.slice(src.search(/function cmdServiceHandover\(/))
     const refusal = handover.search(/running host_exec jobs must finish first/)
     expect(refusal).toBeGreaterThan(0)

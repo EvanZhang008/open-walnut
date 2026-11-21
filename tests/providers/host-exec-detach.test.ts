@@ -227,6 +227,47 @@ describe('a detached host_exec run across daemon restarts', () => {
     expect(fs.existsSync(exitFile)).toBe(false)
   }, 30_000)
 
+  it('is adopted from its registry entry once its start line left the audit\'s tail (a busy host, a long run)', async () => {
+    const stateDir = path.join(root, 's16')
+    const a = await daemonProc(stateDir)
+    await a.ask('run', detachReq('hx-tail-gone-01', 'sleep 3; exit 9'))
+    const wrapper = await wrapperPid(stateDir, 'hx-tail-gone-01')
+    groups.add(wrapper)
+    const file = registryFile(path.join(stateDir, 'detached'), 'host-exec', 'hx-tail-gone-01')
+    const entry = await until(() => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''), (t) => /^lstart=.+$/m.test(t), 5_000)
+    expect(entry).toMatch(/^start=\{.*"event":"start","jobId":"hx-tail-gone-01"/m)
+    await a.kill()
+    // Over a megabyte of other runs' lines since: the run's start, spawn and listing are out of the tail.
+    const filler = Array.from({ length: 6_000 }, (_, i) => JSON.stringify({ at: new Date().toISOString(), event: 'end', jobId: `hx-filler-${i}`, exitCode: 0, pad: 'x'.repeat(160) })).join('\n') + '\n'
+    fs.appendFileSync(path.join(stateDir, 'host-exec-audit.jsonl'), filler)
+    expect(fs.statSync(path.join(stateDir, 'host-exec-audit.jsonl')).size).toBeGreaterThan(1024 * 1024 + 100_000)
+    const b = core(stateDir)
+    expect(await b.read({ jobId: 'hx-tail-gone-01', taskId: TASK })).toMatchObject({ running: true })
+    const end = await until(() => b.read({ jobId: 'hx-tail-gone-01', taskId: TASK, wait: 3_000 }), (j) => !j.running, 15_000)
+    expect(end).toMatchObject({ running: false, exitCode: 9, signal: null })
+    await until(() => fs.existsSync(file), (v) => !v, 5_000)
+  }, 40_000)
+
+  it('is adopted when the daemon its entry names as owner is gone and its pid is another program\'s now (review F2)', async () => {
+    const stateDir = path.join(root, 's18')
+    const a = await daemonProc(stateDir)
+    await a.ask('run', detachReq('hx-owner-reused-01', 'sleep 2; exit 4'))
+    groups.add(await wrapperPid(stateDir, 'hx-owner-reused-01'))
+    const file = registryFile(path.join(stateDir, 'detached'), 'host-exec', 'hx-owner-reused-01')
+    await until(() => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''), (t) => /^lstart=.+$/m.test(t) && /^owner_start=.+$/m.test(t), 5_000)
+    await a.kill()
+    // The pid of the daemon that followed it is another program's now: a live process whose start is
+    // not the owner's. ps names a start to the second, so it is one that started long before the owner
+    // (this test's parent), never one spawned now, which may share the owner's second.
+    const other = process.ppid
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/^owner=\d+$/m, `owner=${other}`))
+    fs.appendFileSync(path.join(stateDir, 'host-exec-audit.jsonl'), JSON.stringify({ at: new Date().toISOString(), event: 'adopted', jobId: 'hx-owner-reused-01', daemonPid: other }) + '\n')
+    const b = core(stateDir)
+    const end = await until(() => b.read({ jobId: 'hx-owner-reused-01', taskId: TASK, wait: 2_000 }), (j) => !j.running, 15_000)
+    expect(end).toMatchObject({ running: false, exitCode: 4 })
+    expect(fs.readFileSync(path.join(stateDir, 'host-exec-audit.jsonl'), 'utf8')).toMatch(new RegExp(`"event":"adopted","jobId":"hx-owner-reused-01","daemonPid":${process.pid}`))
+  }, 30_000)
+
   it('is stopped by host_exec_stop after a restart, and its deadline still holds', async () => {
     const stateDir = path.join(root, 's2')
     const a = await daemonProc(stateDir)
@@ -298,7 +339,8 @@ describe('the stop script a launcher runs before a rollback ends listed work (ST
     await a.ask('run', detachReq('hx-stop-script-01', 'sleep 60'))
     const regDir = path.join(stateDir, 'detached')
     const file = registryFile(regDir, 'host-exec', 'hx-stop-script-01')
-    await until(() => fs.existsSync(file), (v) => v, 5_000)
+    // Listed at the spawn; signalled by the script only once ps named its start.
+    await until(() => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''), (t) => /^lstart=.+$/m.test(t), 5_000)
     const pid = Number(/^pid=(\d+)$/m.exec(fs.readFileSync(file, 'utf8'))![1])
     groups.add(pid)
     await a.kill()
@@ -313,9 +355,18 @@ describe('the stop script a launcher runs before a rollback ends listed work (ST
 
     const scriptFile = path.join(root, 'stop-detached.sh')
     fs.writeFileSync(scriptFile, STOP_SCRIPT, { mode: 0o700 })
+    // Listed long ago (a run of hours): the line its entry holds is dated then.
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/^(line=\{"at":")[^"]*/m, (_m, head: string) => `${head}2001-01-01T00:00:00.000Z`))
+    const stoppedFrom = Math.floor(Date.now() / 1000) * 1000
     const r = spawnSync('/bin/sh', [scriptFile, regDir], { encoding: 'utf8', env: { PATH }, timeout: 20_000 })
     expect(r.status).toBe(0)
     expect(r.stdout).toContain(`stopped host-exec hx-stop-script-01 ${pid}`)
+    // Its audit line is dated when it was stopped, not when it was listed (2026-11-21 joint test).
+    const endLines = fs.readFileSync(path.join(stateDir, 'host-exec-audit.jsonl'), 'utf8').split('\n').filter((l) => l.includes('"ended-by-update"'))
+    expect(endLines).toHaveLength(1)
+    const endLine = JSON.parse(endLines[0]) as { at: string; jobId: string; reason: string }
+    expect(endLine).toMatchObject({ jobId: 'hx-stop-script-01', reason: 'rollback' })
+    expect(Date.parse(endLine.at)).toBeGreaterThanOrEqual(stoppedFrom)
     expect(r.stdout).toContain('gone host-exec hx-reused-01')
     await until(() => groupAlive(pid), (v) => !v, 5_000)
     expect(groupAlive(pid)).toBe(false)
@@ -329,6 +380,64 @@ describe('the stop script a launcher runs before a rollback ends listed work (ST
     expect(fs.readFileSync(end.logFile, 'utf8')).toContain('rollback')
     other.kill('SIGKILL')
   }, 40_000)
+
+  it('with kinds, ends only the runs of those kinds (a service that cannot adopt one kind)', async () => {
+    const regDir = path.join(root, 's14-reg')
+    const a = spawn('sleep', ['30'], { detached: true, stdio: 'ignore', env: { PATH } })
+    const b = spawn('sleep', ['30'], { detached: true, stdio: 'ignore', env: { PATH } })
+    groups.add(a.pid!); groups.add(b.pid!)
+    await registerRun(regDir, { kind: 'acp', id: 'acp-kind-01', pid: a.pid!, pgid: a.pid!, lstart: (await processStart(a.pid!))! })
+    await registerRun(regDir, { kind: 'host-exec', id: 'hx-kind-01', pid: b.pid!, pgid: b.pid!, lstart: (await processStart(b.pid!))! })
+    const scriptFile = path.join(root, 'stop-detached-kinds.sh')
+    fs.writeFileSync(scriptFile, STOP_SCRIPT, { mode: 0o700 })
+    const r = spawnSync('/bin/sh', [scriptFile, regDir, 'acp'], { encoding: 'utf8', env: { PATH }, timeout: 20_000 })
+    expect(r.status).toBe(0)
+    expect(r.stdout.trim()).toBe(`stopped acp acp-kind-01 ${a.pid}`)
+    await until(() => groupAlive(a.pid!), (v) => !v, 5_000)
+    expect(groupAlive(b.pid!)).toBe(true)
+    expect(fs.readdirSync(regDir).filter((f) => f.endsWith('.run'))).toEqual(['host-exec-hx-kind-01.run'])
+    b.kill('SIGKILL')
+  }, 30_000)
+
+  it('leaves an entry listed before ps named its start alone, and keeps it (2026-11-21 review F3)', async () => {
+    const regDir = path.join(root, 's17-reg')
+    const w = spawn('sleep', ['30'], { detached: true, stdio: 'ignore', env: { PATH } })
+    groups.add(w.pid!)
+    await registerRun(regDir, { kind: 'host-exec', id: 'hx-unchecked-01', pid: w.pid!, pgid: w.pid!, lstart: '' })
+    const scriptFile = path.join(root, 'stop-detached-unchecked.sh')
+    fs.writeFileSync(scriptFile, STOP_SCRIPT, { mode: 0o700 })
+    const r = spawnSync('/bin/sh', [scriptFile, regDir], { encoding: 'utf8', env: { PATH }, timeout: 20_000 })
+    expect(r.stdout.trim()).toBe('unchecked host-exec hx-unchecked-01')
+    expect(groupAlive(w.pid!)).toBe(true)
+    expect(fs.existsSync(registryFile(regDir, 'host-exec', 'hx-unchecked-01'))).toBe(true)
+    w.kill('SIGKILL')
+  }, 30_000)
+
+  it('the service tells the launcher it is ready only once it said what it adopts (both twins; review F1)', () => {
+    for (const file of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
+      const src = fs.readFileSync(path.join(fileURLToPath(new URL('../..', import.meta.url)), file), 'utf8')
+      expect(src, file).toMatch(/adoptionSettled\.then\([^\n]*launcherBeat[^\n]*\.ready\(/)
+      expect(src, file).not.toMatch(/void launcherBeat\.ready\(/)
+    }
+  })
+
+  it('a service says what it adopts, and ends listed work of a kind it cannot adopt (settleAdoption)', async () => {
+    const stateDir = path.join(root, 's15')
+    const regDir = path.join(stateDir, 'detached')
+    const w = spawn('sleep', ['30'], { detached: true, stdio: 'ignore', env: { PATH } })
+    groups.add(w.pid!)
+    await registerRun(regDir, { kind: 'acp', id: 'acp-settle-01', pid: w.pid!, pgid: w.pid!, lstart: (await processStart(w.pid!))! })
+    const c = core(stateDir)
+    // A service whose ACP module cannot adopt surviving workers.
+    const settled = await c.settleAdoption({ acp: false })
+    expect(settled.wrote).toBe(true)
+    expect(settled.said).toContain(`stopped acp acp-settle-01 ${w.pid}`)
+    expect(fs.readFileSync(path.join(regDir, 'adopts'), 'utf8')).toBe('host-exec\nhost-script\n')
+    await until(() => groupAlive(w.pid!), (v) => !v, 5_000)
+    // One that adopts every kind ends nothing.
+    expect(await c.settleAdoption({ acp: true })).toEqual({ wrote: true, said: '' })
+    expect(fs.readFileSync(path.join(regDir, 'adopts'), 'utf8')).toBe('host-exec\nhost-script\nacp\n')
+  }, 30_000)
 })
 
 describe('a detached plugin script across a daemon restart', () => {

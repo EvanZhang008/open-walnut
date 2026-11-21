@@ -4,8 +4,9 @@
  * every rule is pinned here; the twins run the same function text.
  */
 import { describe, it, expect } from 'vitest'
+import { createHash } from 'node:crypto'
 import {
-  lineAnswerFrame, lineFate, lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut, lineWrittenPart,
+  lineAnswerFrame, lineFate, lineFateScan, lineFateVerdict, lineReachedSession, lineTornEnd, lineUuidOf, lineWriteBegun, lineWriteCut, lineWrittenPart,
   transcriptLineScan, transcriptLineVerdict,
 } from '../../src/providers/line-fate-core.js'
 
@@ -382,8 +383,8 @@ describe('the inlined text survives a bundler that keeps names', () => {
     const out = transformSync(src, { loader: 'ts', keepNames: true, format: 'esm' }).code
     const wrapped = [...out.matchAll(/__name\(([^,]+),/g)].map((m) => m[1].trim())
     expect(wrapped.filter((name) => !['lineFateScan', 'lineFateVerdict', 'lineTornEnd', 'lineWriteBegun', 'lineWriteCut', 'lineWrittenPart', 'lineFate', 'lineAnswerFrame',
-      'transcriptLineScan', 'transcriptLineVerdict'].includes(name))).toEqual([])
-    for (const fn of [lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut, lineWrittenPart, transcriptLineScan, transcriptLineVerdict]) {
+      'transcriptLineScan', 'transcriptLineVerdict', 'lineUuidOf', 'lineReachedSession'].includes(name))).toEqual([])
+    for (const fn of [lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut, lineWrittenPart, transcriptLineScan, transcriptLineVerdict, lineUuidOf, lineReachedSession]) {
       expect(fn.toString()).not.toContain('__name(')
     }
   })
@@ -439,5 +440,55 @@ describe('transcriptLineScan: the CLI\'s transcript says whether it took and ans
     const cut = whole.indexOf('\n') + 1
     expect(transcriptLineVerdict(transcriptLineScan(whole.slice(cut), 'u-1', transcriptLineScan(whole.slice(0, cut), 'u-1', null))))
       .toEqual({ fate: 'ran', state: 'started', answer: 'yes' })
+  })
+})
+
+describe('lineReachedSession (trigger-resume-once): a host resume asks whether a fire already reached the session, in any of its processes', () => {
+  const rq = { uuid: 'u-1', messageIds: ['qm-1'] }
+  const reached = (stream: string, writes: string, query: { uuid: string; messageIds: string[] } = rq) =>
+    lineReachedSession(lineFateScan(stream, { ...query, pid: null }, null), writes, query)
+
+  it('nothing on disk, a bare marker, or a write that only began: null (the resume writes the fire)', () => {
+    expect(reached('', '')).toBeNull()
+    // The marker sits before the newline: a write cut there leaves it for a line the CLI never got.
+    expect(reached(lines(marker('qm-1', 41)), '')).toBeNull()
+    // The daemon was killed inside the write: its begin record proves no whole line.
+    expect(reached('', lines(JSON.stringify({ pid: 41, uuid: 'u-1', begin: ['qm-1'], at: 5 })))).toBeNull()
+  })
+
+  it('a whole write into ANY process of the session (one that is gone too): reached by record', () => {
+    expect(reached('', lines(rec(40, ['qm-1'])))).toEqual({ by: 'record', pid: 40, at: 1 })
+    // A batch that carried it counts; a record of another line does not.
+    expect(reached('', lines(rec(40, ['qm-0', 'qm-1'])))).toMatchObject({ by: 'record', pid: 40 })
+    expect(reached('', lines(rec(40, ['qm-2'])))).toBeNull()
+    // A record under another uuid is another line; one with no uuid (an older daemon) still counts.
+    expect(reached('', lines(JSON.stringify({ pid: 40, uuid: 'u-2', ids: ['qm-1'], at: 1 })))).toBeNull()
+    expect(reached('', lines(rec(40, ['qm-1'])), { uuid: '', messageIds: ['qm-1'] })).toMatchObject({ by: 'record' })
+    // Damaged lines are skipped, never thrown on.
+    expect(reached('', '{not json\n' + lines(rec(40, ['qm-1'])))).toMatchObject({ by: 'record' })
+  })
+
+  it("the CLI's own word wins: taken (completed, started, cancelled) is reached, never run (discarded, refused) is not", () => {
+    for (const state of ['completed', 'started', 'cancelled']) {
+      expect(reached(lines(lc('u-1', state)), '')).toEqual({ by: 'cli', state })
+    }
+    for (const state of ['discarded', 'refused']) {
+      expect(reached(lines(lc('u-1', state)), lines(rec(40, ['qm-1'])))).toBeNull()
+    }
+    // Another line's frames say nothing of this one; queued alone is no proof.
+    expect(reached(lines(lc('u-2', 'completed'), lc('u-1', 'queued')), '')).toBeNull()
+  })
+})
+
+describe('lineUuidOf (trigger-resume-once): one uuid per message id, on every try', () => {
+  const of = (id: string) => lineUuidOf(createHash('sha256').update('walnut-line:' + id).digest('hex'))
+  it('is a v4-shaped uuid, the same for the same id and different for another', () => {
+    const u = of('qm-trigger-f0123456789abcdef0123')
+    expect(u).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(of('qm-trigger-f0123456789abcdef0123')).toBe(u)
+    expect(of('qm-trigger-f0123456789abcdef0124')).not.toBe(u)
+    // Any digest input still gives a well-formed uuid.
+    expect(lineUuidOf('')).toMatch(/^0{8}-0{4}-40{3}-80{3}-0{12}$/)
+    expect(lineUuidOf('F'.repeat(64))).toBe('ffffffff-ffff-4fff-bfff-ffffffffffff')
   })
 })

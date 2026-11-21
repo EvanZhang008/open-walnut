@@ -306,6 +306,67 @@ file, with its way out); live: `tests/fleet/host-lost.fleet.ts`.
 
 **Daemon restart:** old `cleanup()` leaves CLI alive. New daemon reconciles sessions.json then scans `.pgid` files: scan MUST skip sids already adopted (`if (sessions.has(sid)) continue`). All death paths funnel into `reapSession()` in `daemon-core.ts`; it calls `isTurnCompleteExit()` to normalize code to 0 when JSONL tail shows clean turn completion (otherwise every turn-end shows "exit -1" in UI).
 
+## Work survives a daemon restart (experiment `work_survives_restart`)
+
+With the experiment on and a daemon that names the capability, work started on a host outlives the
+daemon that started it, and the next daemon follows it. The known exceptions, where the code picks
+the safer side or says it does not know:
+
+- A run adopted with no start time recorded (its daemon died a few ms after the spawn) is followed
+  but never signalled, and let go at its deadline plus 60 s (`endedBy: 'let-go'`); it may still run.
+- An ACP command whose daemon never answered reads `result_unknown`, never a guessed success.
+- A trigger fire whose whole line went into the pipe of a CLI that died before reading it counts as
+  delivered (no second copy; that fire is lost). A fire being delivered at the moment of an upgrade
+  from an older daemon, which wrote it under another uuid, may be delivered again once.
+
+- **host_exec** (`host-exec-detach-v1`): the command runs under a `/bin/sh` wrapper that writes its exit
+  status to a file (`detached-run.ts`); the output goes straight to its log. The next daemon adopts it
+  from its registry entry (`host-exec-adopt.ts`), so deadline, stop, `wait_for` and the exit code work as
+  before. The audit only records: a run whose start line left the audit's 1 MB tail is still adopted.
+- **Plugin scripts** (`host-script-detach-v1`): the server asks again with the same `scriptId` after a
+  lost link and gets that run's result (`host-script-detached.ts`, `src/core/hosts/host-script.ts`).
+- **ACP workers** (`acp-survive-v1`): stdin is a FIFO, stdout and stderr are files, request ids never
+  repeat and the read offset is saved (`acp-survive.ts`). A lost command is asked again with the same
+  command id, which the worker answers once; when no daemon answers in time the caller gets
+  `result_unknown`, never a guessed success (`acp-ask-once.ts`).
+- **Trigger fires**: every fire has a persistent id (`fireMessageId` in `trigger-check-core.ts`), saved
+  with its batch before the write; a retry sends that same batch and the receiver keeps it once. A fire
+  that resumes a stopped session is checked against that session's own records first and written as
+  one marked line under a uuid derived from its id (`lineReachedSession`, `lineUuidOf` in
+  `line-fate-core.ts`). This part is not behind the experiment (with it off, ids only stop being random
+  and a resume is not repeated).
+
+**Rollback.** New-way work is listed in `<state>/detached/` (`detached-registry.ts`), one shell-readable
+file per run. `stop-detached.sh <dir> [kind ...]` ends the listed runs whose process still started when
+the listed one did, and records why. Every service of this version writes `<dir>/adopts` (the kinds it
+adopts) before it tells the launcher it is ready, and ends listed runs of any kind it cannot adopt. The
+launcher removes `adopts` before it starts any version and runs the stop script when a ready version
+did not write it (a version older than this file adopts nothing). A handover from an older CLI names
+no `adopts`, and the outgoing daemon ends that work itself. A server older than detached runs reads
+hello `execHolding`, which counts them, so it waits for them to end before it puts its own daemon in
+place; a newer server reads `execHoldsUpdate`, which does not.
+
+**Trigger checks that cannot catch up.** A check interrupted by a restart runs again, and a fire is
+delivered once. What a check missed while no daemon ran is caught up only when the check can see it
+afterwards:
+
+| Kind of check | What happens across a restart |
+|---|---|
+| Compares the current value with the last one | A change that came and went while no daemon ran is never seen |
+| Reads a source that keeps data for a limited time | Data that expired during the gap is gone |
+| Consumes what it reads at the source | A restart after the check consumed items but before its state was saved loses them |
+| Fires (`fire: true`) without items | Whether it fires again depends only on the script's own state |
+| First run, or its state was lost | Unreadable state is replaced by empty state; state unused for 30 days is deleted; a failed save is only logged; nothing is fsynced |
+| Clock routines | Missed runs catch up once, merged into one run |
+| Ids pushed out of the `seen` list | Fire again (a duplicate, never a loss) |
+| More than 50 undelivered fires (`PENDING_FIRES_MAX`) | The oldest are dropped |
+| Throttled checks | Keep the cursor they had |
+| Check state over 16 KB (`CHECK_STATE_CAP`) | The run is refused as an error; the last saved state stays |
+
+Tests: `tests/providers/host-exec-detach.test.ts`, `tests/providers/acp-survive.test.ts`,
+`tests/providers/acp-ask-once.test.ts`, `tests/providers/trigger-restart-once.test.ts`,
+`tests/providers/oneshot-mcp-restart.test.ts`, `tests/core/hosts/host-script-reask.test.ts`.
+
 ## A session's stdin FIFO is write-only (mode 0200), and nothing but its CLI may read it
 
 **A session's stdin FIFO is write-only (mode 0200), and nothing but its CLI may read it.** A FIFO

@@ -1454,7 +1454,7 @@ export class LocalDaemon {
           socket.send(JSON.stringify({ id: 1, cmd: 'hello' }))
         })
         socket.on('message', (data) => {
-          let msg: { id?: unknown; ok?: boolean; version?: string; capabilities?: string[]; instanceId?: string; execRunning?: number; execHolding?: number; jobs?: unknown; served?: { twin?: unknown; walnuts?: unknown; pty?: unknown } } | null = null
+          let msg: { id?: unknown; ok?: boolean; version?: string; capabilities?: string[]; instanceId?: string; execRunning?: number; execHolding?: number; execHoldsUpdate?: number; jobs?: unknown; served?: { twin?: unknown; walnuts?: unknown; pty?: unknown } } | null = null
           try { msg = JSON.parse(data.toString()) } catch { /* not JSON: a bad reply */ }
           if (hello && msg && msg.id === 2) {
             clearTimeout(timeout)
@@ -1477,7 +1477,9 @@ export class LocalDaemon {
             ...(msg.served && typeof msg.served === 'object'
               ? { served: parseServes({ version: msg.version ?? '', twin: msg.served.twin, capabilities: msg.capabilities ?? [], walnuts: msg.served.walnuts, pty: msg.served.pty }) }
               : {}),
-            ...(typeof msg.execHolding === 'number' ? { execHolding: msg.execHolding } : typeof msg.execRunning === 'number' ? { execHolding: msg.execRunning } : {}),
+            // execHoldsUpdate: what holds an update for a server that knows detached runs (they do not);
+            // execHolding counts them too, for an older server, whose daemon cannot follow them.
+            ...(typeof msg.execHoldsUpdate === 'number' ? { execHolding: msg.execHoldsUpdate } : typeof msg.execHolding === 'number' ? { execHolding: msg.execHolding } : typeof msg.execRunning === 'number' ? { execHolding: msg.execRunning } : {}),
             ...(msg.ok === true ? {} : { failure: 'bad-reply' as const }),
           }
           // A daemon older than the count in its hello still lists its host_exec runs (exec-runs-hold.ts).

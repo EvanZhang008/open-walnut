@@ -471,3 +471,66 @@ export function lineWrittenPart(offset: number, length: number, lead: number): L
 export function lineFate(streamText: string, writesText: string, q: LineFateQuery): LineFate | null {
   return lineFateVerdict(lineFateScan(streamText, q, null), writesText, q)
 }
+
+/**
+ * trigger-resume-once: the line uuid of a message that may be written more than
+ * once under one id (a trigger fire: trigger-check-core.ts fireMessageId is the
+ * same on every try). v4-shaped from a hex digest of that id (the twins take
+ * sha256 of it), so every write of the message, into whichever process, carries
+ * ONE uuid: the CLI's lifecycle frames name it across processes, and the CLI
+ * drops a copy whose uuid it already holds (its transcript check on a resume).
+ */
+export function lineUuidOf(hex: string): string {
+  const h = ((hex || '').toLowerCase().replace(/[^0-9a-f]/g, '') + '0'.repeat(32)).slice(0, 32)
+  const variant = ((parseInt(h.charAt(16), 16) & 0x3) | 0x8).toString(16)
+  return h.slice(0, 8) + '-' + h.slice(8, 12) + '-4' + h.slice(13, 16) + '-' + variant + h.slice(17, 20) + '-' + h.slice(20, 32)
+}
+
+/** How a session's own files show that a line already reached it (lineReachedSession). */
+export interface LineReached {
+  /** cli: the CLI's own lifecycle word for the uuid; record: a whole write of the ids went into a process of the session. */
+  by: 'cli' | 'record'
+  /** The lifecycle word (by cli). */
+  state?: string
+  /** The process the whole write went into (by record). */
+  pid?: number
+  /** When that whole write went in, ms (by record). */
+  at?: number
+}
+
+/**
+ * trigger-resume-once: did this line already reach the session, in ANY of its
+ * processes? A host resume asks before it starts a stopped session again for a
+ * message that may have gone before (a fire whose ack mark a killed daemon never
+ * saved, so the next daemon tries it again). Unlike lineFateVerdict, which asks
+ * about the process running now, no process runs here, so every process counts.
+ * Evidence: the CLI's own lifecycle word for the uuid (completed, started or
+ * cancelled: it took the line; discarded or refused: it never ran, so it may go
+ * again, whatever record says it was written), else a whole-write record of the
+ * ids into any process of the session (the line went into its pipe whole). A
+ * `begin` with no whole write after it is a write that died part way: it proves
+ * nothing, so the line goes again (under the same uuid, which the CLI drops if
+ * it took it after all). `scan` is lineFateScan's with `pid` null (only
+ * lifecycle frames count). Null: nothing says it went.
+ */
+export function lineReachedSession(scan: LineFateScan | null, writesText: string, q: { uuid: string; messageIds: string[] }): LineReached | null {
+  const ids = q.messageIds || []
+  const best = scan ? scan.best : null
+  if (best === 'completed' || best === 'started' || best === 'cancelled') return { by: 'cli', state: best }
+  if (best === 'discarded' || best === 'refused') return null
+  if (ids.length === 0 || !writesText) return null
+  const records = writesText.split('\n')
+  for (let i = records.length - 1; i >= 0; i--) {
+    if (!records[i]) continue
+    let rec: { pid?: number; uuid?: string; ids?: unknown; at?: unknown } | null = null
+    try { rec = JSON.parse(records[i]) } catch { rec = null }
+    if (!rec || typeof rec.pid !== 'number' || !Array.isArray(rec.ids)) continue
+    if (q.uuid && rec.uuid && rec.uuid !== q.uuid) continue
+    const got = rec.ids as unknown[]
+    if (!ids.every((id) => got.indexOf(id) !== -1)) continue
+    const reached: LineReached = { by: 'record', pid: rec.pid }
+    if (typeof rec.at === 'number' && Number.isFinite(rec.at)) reached.at = rec.at
+    return reached
+  }
+  return null
+}

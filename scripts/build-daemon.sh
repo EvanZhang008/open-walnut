@@ -139,6 +139,7 @@ SOURCES=(
   src/providers/host-script-core.ts
   src/providers/host-exec-script.ts
   src/providers/host-exec-recall.ts
+  src/providers/host-exec-adopt.ts
   src/providers/detached-run.ts
   src/providers/detached-registry.ts
   src/providers/host-script-detached.ts

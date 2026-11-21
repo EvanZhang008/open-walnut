@@ -45,13 +45,13 @@ import { createMatcher, type MatcherStart } from './host-exec-matcher.js'
 import { stuckFileLooks } from './host-exec-probe.js'
 import { watchShellEnd } from './host-exec-group.js'
 import { jobView, untilEndedByDaemon, type Job, type JobView, type RunReply, type RunRequest } from './host-exec-job.js'
-import { createRecall, jobFromAudit, type Orphan } from './host-exec-recall.js'
-import { registryFile } from './detached-registry.js'
+import { createRecall } from './host-exec-recall.js'
+import { createAdopter } from './host-exec-adopt.js'
 import type { ScriptResult } from './host-script-core.js'
 import { createScriptRunner } from './host-exec-script.js'
 import { createDetachedScripts } from './host-script-detached.js'
 import { detachedChild, exitFileOf, removeExitFile, wrapperArgv } from './detached-run.js'
-import { ROLLBACK_NOTE, installStopScript, processStart as psStart, registerRun, unregisterRun } from './detached-registry.js'
+import { ROLLBACK_NOTE, processStart as psStart, settleAdoption, type DetachedKind } from './detached-registry.js'
 
 export type { JobView, RunReply, RunRequest } from './host-exec-job.js'
 
@@ -163,7 +163,6 @@ export function createHostExec(deps: HostExecDeps) {
   })))()
 
   const auditFile = path.join(deps.stateDir, 'host-exec-audit.jsonl')
-  let stopScriptPut = false
   function audit(line: Record<string, unknown>): void {
     try {
       fs.mkdirSync(deps.stateDir, { recursive: true, mode: 0o700 })
@@ -180,117 +179,13 @@ export function createHostExec(deps: HostExecDeps) {
     forgetEnded: (j) => { if (j.detached && !jobs.has(j.id)) void removeExitFile(j.detached.exitFile) },
   })
   /** A job this daemon runs or ran, else one an earlier daemon here ran (a detached one it still runs is followed from here: adopt). */
-  const jobOf = (id: string): Job | undefined => { adoptOrphans(); return jobs.get(id) ?? recall.get(id) }
-
-  // Detached runs an earlier daemon here started, followed from here once it is gone: their
-  // deadline, a stop, a wait_for and their end line work as if this daemon had started them.
-  const adopting = new Map<string, Promise<void>>()
-  const deferred = new Set<string>()
-  /**
-   * Starts the adoption of every orphan not yet followed. One whose adoption ps left for later
-   * (`deferred`) is asked again only from the timer (`retry`), never on a caller's path: a slow ps
-   * must not slow every read on the host (2026-11-21 review R2-1).
-   */
-  function adoptOrphans(retry = false): void {
-    let found: Orphan[] = []
-    try { found = recall.orphans((id) => jobs.has(id) || adopting.has(id) || starting.has(id) || (!retry && deferred.has(id))) } catch { /* the audit is unreadable: none */ }
-    for (const o of found) {
-      // In the map before it runs (an adoption that never awaits settles inside the call), and it
-      // never rejects: the daemon holds every session on the host.
-      const p: Promise<void> = Promise.resolve().then(() => adopt(o)).catch((err) => {
-        audit({ event: 'adopt-failed', jobId: o.jobId, error: (err as Error)?.message ?? String(err) })
-      }).finally(() => { if (adopting.get(o.jobId) === p) adopting.delete(o.jobId) })
-      adopting.set(o.jobId, p)
-    }
-  }
-  /** Adopts what is left, then waits for the adoption of `jobId` alone, at most until `by` (an epoch ms). */
-  async function adoptedFirst(jobId: unknown, by?: number): Promise<void> {
-    adoptOrphans()
-    const p = typeof jobId === 'string' ? adopting.get(jobId) : undefined
-    if (!p) return
-    const left = by === undefined ? ADOPT_WAIT_MS : Math.min(ADOPT_WAIT_MS, by - now())
-    if (left <= 0) return
-    await new Promise<void>((resolve) => {
-      const t = setTimeout(resolve, left)
-      t.unref?.()
-      void p.then(() => { clearTimeout(t); resolve() })
-    })
-  }
-
-  async function listedStart(jobId: string): Promise<string | null> {
-    try {
-      const text = await fs.promises.readFile(registryFile(registryDir, 'host-exec', jobId), 'utf8')
-      const m = /^lstart=(.*)$/m.exec(text)
-      return m && m[1] ? m[1] : null
-    } catch { return null }
-  }
-
-  async function adopt(o: Orphan): Promise<void> {
-    // Reads and stops of it wait for this (as for a run still starting), never answering it ended.
-    let settle = () => {}
-    const held = new Promise<void>((resolve) => { settle = resolve })
-    starting.set(o.jobId, held)
-    try {
-      const base = jobFromAudit(o.jobId, o.start, null, o.blocked, false, { stateDir: deps.stateDir, taskDirRoot: deps.taskDirRoot, defaultTimeoutMs: BACKGROUND_MAX_MS })
-      if (!base?.detached) return
-      const exitFile = base.detached.exitFile
-      // Its wrapper still holds its pid when the process there started when the listed one did (the
-      // audit's `listed` line, else the registry). ps with no answer is unknown: left for the next
-      // look, never taken as killed (the run reads running meanwhile, host-exec-recall.ts).
-      const listed = o.lstart ?? await listedStart(o.jobId)
-      let wrapperHere = pidAlive(o.pid)
-      let verified = false
-      if (wrapperHere && listed) {
-        const nowStart = await processStart(o.pid)
-        if (nowStart === null) {
-          if (pidAlive(o.pid)) {
-            // Said once in the audit (the reason it is not followed yet), then asked again every look.
-            if (!deferred.has(o.jobId)) { deferred.add(o.jobId); audit({ event: 'adopt-deferred', jobId: o.jobId, pid: o.pid, why: 'ps gave no start' }) }
-            return
-          }
-          wrapperHere = false
-        } else {
-          deferred.delete(o.jobId)
-          verified = nowStart === listed
-          wrapperHere = verified
-        }
-      }
-      // No start was ever recorded (its daemon died right after the spawn): followed, never signalled,
-      // since that pid may be another program's by now; past its deadline it is let go.
-      const deadline = base.startedAt + base.timeoutMs + 60_000
-      const job: Job = {
-        ...base, pid: verified ? o.pid : null, endedAt: null, shellExitedAt: null, exitCode: null, signal: null,
-        bytes: logSize(base.logFile), tailMax: OUTPUT_MAX_BYTES,
-        timedOut: o.stopping === 'timeout', killed: o.stopping === 'asked', ...(o.stopping ? { signalled: true as const } : {}),
-      }
-      delete job.daemonEnded
-      // Followed but never signalled: its reads say a stop cannot reach it.
-      if (wrapperHere && !verified) job.unverified = true
-      jobs.set(o.jobId, job)
-      deferred.delete(o.jobId)
-      audit({ event: 'adopted', jobId: o.jobId, daemonPid: process.pid, ...(job.unverified ? { unverified: true } : {}) })
-      const str = (v: unknown) => (typeof v === 'string' ? v : null)
-      const wrapperAlive = () => {
-        if (!wrapperHere || !pidAlive(o.pid)) return false
-        if (verified || now() < deadline) return true
-        // Past its deadline an unverified run is let go: nothing signalled it, and it may still run.
-        job.endedBy = 'let-go'
-        return false
-      }
-      const child = detachedChild({ exitFile, wrapperAlive, killedBy: () => (job.endedBy === 'let-go' ? null : 'SIGKILL'), signalled: () => job.signalled === true })
-      void follow(job, child, { task: str(o.start.task), host: str(o.start.host) }, true, String(o.start.command ?? ''), null, o.start.allowPrompts === true)
-      // A stop the last daemon began goes on (its SIGKILL may never have gone out).
-      if (verified && (o.stopping === 'timeout' || o.stopping === 'asked' || o.stopping === 'blocked')) stop(job, o.stopping)
-    } finally {
-      if (starting.get(o.jobId) === held) starting.delete(o.jobId)
-      settle()
-    }
-  }
-  adoptOrphans(true)
-  // A handover overlaps two daemons for a moment: what the other still followed is taken once it is
-  // gone; and what ps left for later is asked again here.
-  const adoptTimer = setInterval(() => { adoptOrphans(true) }, 2_000)
-  adoptTimer.unref?.()
+  const jobOf = (id: string): Job | undefined => { adopter.adoptOrphans(); return jobs.get(id) ?? recall.get(id) }
+  // Detached runs an earlier daemon here started, adopted from the registry (host-exec-adopt.ts).
+  const adopter = createAdopter({
+    recall, jobs, starting, audit, follow, stop, processStart, pidAlive, now, logSize,
+    registryDir, auditFile, stateDir: deps.stateDir, taskDirRoot: deps.taskDirRoot,
+    defaultTimeoutMs: BACKGROUND_MAX_MS, outputMaxBytes: OUTPUT_MAX_BYTES, adoptWaitMs: ADOPT_WAIT_MS, selfPid: process.pid,
+  })
 
   function prune(): void {
     const t = now()
@@ -321,7 +216,7 @@ export function createHostExec(deps: HostExecDeps) {
     else if (why === 'daemon') j.endedByDaemon = true
     j.signalled = true
     // A daemon that follows the run after this one knows why it was signalled (host-exec-recall.ts).
-    if (j.detached) audit({ event: 'stopping', jobId: j.id, why })
+    if (j.detached) { audit({ event: 'stopping', jobId: j.id, why }); adopter.stopping(j.id, why) }
     const pid = j.pid
     // The fallback below dies with a daemon that exits first: one that must end now gets SIGKILL.
     if (atOnce) { try { deps.killGroup(pid, 'SIGKILL') } catch { /* gone */ } return }
@@ -412,11 +307,12 @@ export function createHostExec(deps: HostExecDeps) {
     const caller = req.caller ?? {}
     const who = { task: typeof caller.task === 'string' ? caller.task.slice(0, 128) : null, host: typeof caller.host === 'string' ? caller.host.slice(0, 200) : null }
     // What a later daemon needs to answer for this run (host-exec-recall.ts): whose it is and where its log is.
-    audit({
-      event: 'start', jobId: id, ...who, taskId: job.taskId, startedAt: job.startedAt, daemonPid: process.pid, cwd, command: line.slice(0, 2000), background, timeoutMs,
+    const startLine = {
+      at: new Date(now()).toISOString(), event: 'start', jobId: id, ...who, taskId: job.taskId, startedAt: job.startedAt, daemonPid: process.pid, cwd, command: line.slice(0, 2000), background, timeoutMs,
       shell: plan.shell, loginShell: plan.loginShell, taskDir, logFile, ...(job.resumable ? { resumable: true } : {}),
       ...(job.detached ? { detach: true, exitFile: job.detached.exitFile, ...(allowPrompts ? { allowPrompts: true } : {}) } : {}),
-    })
+    }
+    audit(startLine)
 
     let child: ChildProcess
     try {
@@ -445,7 +341,7 @@ export function createHostExec(deps: HostExecDeps) {
       child.once('error', closeLog)
       if (job.pid !== null) {
         audit({ event: 'spawned', jobId: id, pid: job.pid, daemonPid: process.pid })
-        void listDetached(job)
+        adopter.track(job, startLine)
       }
       finished = follow(job, detachedChild({ exitFile: job.detached.exitFile, wrapper: child, signalled: () => job.signalled === true }), who, true, line, null, allowPrompts)
     } else {
@@ -512,7 +408,7 @@ export function createHostExec(deps: HostExecDeps) {
           audit({ event: 'end', jobId: id, ...who, exitCode: code, signal, timedOut: job.timedOut, killed: job.killed, ...(job.blocked ? { blocked: job.blocked.reason } : {}), ms: job.endedAt - job.startedAt, bytes: job.bytes, ...(leftBehind ? { leftBehind: leftCommands ?? true } : {}), ...(outputCut ? { outputCut } : {}), ...(error ? { error } : {}), ...(job.endedBy ? { endedBy: job.endedBy } : {}) })
           // Its end is in the audit now: its registry entry has done its work. The exit file stays while the
           // job is kept (another daemon following it too reads the same status, never "killed"); prune removes it.
-          if (job.detached) void unregisterRun(registryDir, 'host-exec', id)
+          if (job.detached) adopter.ended(id)
           for (const w of job.waiters.splice(0)) w()
           resolve()
         },
@@ -534,23 +430,6 @@ export function createHostExec(deps: HostExecDeps) {
       })
     }
     return finished
-  }
-
-  /** Lists a detached run for a launcher's rollback stop (detached-registry.ts), once ps named its start. */
-  async function listDetached(job: Job): Promise<void> {
-    if (job.pid === null) return
-    if (!stopScriptPut) { stopScriptPut = true; void installStopScript(registryDir) }
-    const lstart = await processStart(job.pid)
-    if (!lstart || job.endedAt !== null) return
-    // The start a later daemon checks before it adopts or signals this pid (host-exec-recall.ts `listed`).
-    audit({ event: 'listed', jobId: job.id, pid: job.pid, lstart })
-    await registerRun(registryDir, {
-      kind: 'host-exec', id: job.id, pid: job.pid, pgid: job.pid, lstart,
-      noteFile: job.logFile, note: `[walnut] ${ROLLBACK_NOTE}`,
-      lineFile: auditFile, line: JSON.stringify({ at: new Date(now()).toISOString(), event: 'ended-by-update', jobId: job.id, taskId: job.taskId, reason: 'rollback' }),
-    })
-    // It may have ended while the entry was written: the end removes it, but only once.
-    if (job.endedAt !== null) await unregisterRun(registryDir, 'host-exec', job.id)
   }
 
   function logSize(file: string): number {
@@ -577,7 +456,7 @@ export function createHostExec(deps: HostExecDeps) {
   async function read(req: { jobId?: unknown; taskId?: unknown; offset?: unknown; maxBytes?: unknown; wait?: unknown; until?: unknown; scanFrom?: unknown; by?: unknown }): Promise<(JobView & { output: string; offset: number; nextOffset: number; waitedFor?: WaitedFor }) | ExecError> {
     // A run of this id still starting (a same-id call refused job_exists reads it next): it, once recorded.
     // A detached run an earlier daemon left is adopted first, so it never reads as ended meanwhile.
-    await adoptedFirst(req.jobId, typeof req.by === 'number' && Number.isFinite(req.by) ? req.by : undefined)
+    await adopter.adoptedFirst(req.jobId, typeof req.by === 'number' && Number.isFinite(req.by) ? req.by : undefined)
     await started(req.jobId)
     const j = own(req.jobId, req.taskId)
     if (!j) return bad(`no job ${String(req.jobId)} on this host (finished jobs are kept for an hour; the log file stays)`, 'unknown_job')
@@ -622,7 +501,7 @@ export function createHostExec(deps: HostExecDeps) {
   }
 
   async function stopJob(req: { jobId?: unknown; taskId?: unknown }): Promise<JobView | ExecError> {
-    await adoptedFirst(req.jobId)
+    await adopter.adoptedFirst(req.jobId)
     await started(req.jobId)
     const j = own(req.jobId, req.taskId)
     if (!j) return bad(`no job ${String(req.jobId)} on this host`, 'unknown_job')
@@ -633,7 +512,7 @@ export function createHostExec(deps: HostExecDeps) {
   /** Every job here, or one task's (`taskId`), newest first. */
   function list(req: { taskId?: unknown } = {}): JobView[] {
     prune()
-    adoptOrphans()
+    adopter.adoptOrphans()
     const task = typeof req.taskId === 'string' && req.taskId ? req.taskId : null
     const earlier = recall.list((id) => jobs.has(id))
     return [...jobs.values(), ...earlier].filter((j) => task === null || j.taskId === task).sort((a, b) => b.startedAt - a.startedAt).map(view)
@@ -725,6 +604,12 @@ export function createHostExec(deps: HostExecDeps) {
     list: async (req: { taskId?: unknown } = {}) => ({ jobs: list(req) }),
     running,
     holding,
+    /**
+     * What a server older than detached runs must wait for before it puts another daemon here: the
+     * runs that hold an update, and the detached runs and scripts too, since the daemon such a server
+     * starts cannot follow them (hello `execHolding`; a newer server reads `execHoldsUpdate`, holding()).
+     */
+    holdingForOlder: (): number => holding() + detachedRunning() + scripts.detachedCount(),
     /** A run marked resumable that this daemon runs: a read of it holds no handover (the twins' dispatch). */
     resumableJob: (jobId: unknown): boolean => typeof jobId === 'string' && jobs.get(jobId)?.resumable === true,
     /** The running jobs' task and folder, read at once (task directory cleanup keeps what they work in). */
@@ -735,12 +620,21 @@ export function createHostExec(deps: HostExecDeps) {
     detachedRunning,
     /** Where detached runs are listed for a rollback's stop (detached-registry.ts). */
     registryDir,
+    /**
+     * The service's startup: writes which kinds of listed work it adopts (host_exec runs and plugin
+     * scripts here, ACP workers when its ACP module can) for the launcher, and ends the listed runs of
+     * any other kind (detached-registry.ts settleAdoption). The service says it is ready only after it.
+     */
+    settleAdoption: (o: { acp: boolean }): Promise<{ wrote: boolean; said: string }> => {
+      const kinds: DetachedKind[] = ['host-exec', 'host-script', ...(o.acp ? ['acp' as const] : [])]
+      return settleAdoption(registryDir, kinds, (cmd, args, opts) => deps.spawn(cmd, args, opts))
+    },
     /** The runs endForUpdate stopped have ended (their reads answered), or `ms` passed: the twins' stopDaemon drains it. */
     untilEnded: (ms: number) => untilEndedByDaemon(jobs.values(), ms),
     /** File looks in flight `minAgeMs` or more (default STUCK_LOOK_MS; 0: any) in the thread pool: node's exit would wait on them (daemon-source.ts). */
     stuck: (minAgeMs?: number) => stuckFileLooks(Date.now(), minAgeMs) > 0,
     /** End the matcher process (the daemon's shutdown, tests). */
-    close: () => { clearInterval(adoptTimer); scripts.stopAll(); matcher?.close() },
+    close: () => { adopter.close(); scripts.stopAll(); matcher?.close() },
   }
 }
 

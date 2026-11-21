@@ -110,7 +110,7 @@ import { createClaudeCheck } from './claude-check-core.js'
 import { createBridgeUplink, createLoopDriftProbe } from './bridge-uplink-core.js'
 import { createWorkspaceCore } from './workspace-core.js'
 import { networkCausedAuthError } from './network-cause-core.js'
-import { lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut, lineWrittenPart, transcriptLineScan, transcriptLineVerdict } from './line-fate-core.js'
+import { lineFateScan, lineFateVerdict, lineReachedSession, lineTornEnd, lineUuidOf, lineWriteBegun, lineWriteCut, lineWrittenPart, transcriptLineScan, transcriptLineVerdict } from './line-fate-core.js'
 import { createBudgetPersistence } from './usage-budget-persistence.js'
 
 /**
@@ -367,6 +367,8 @@ export function getDaemonSource(): string {
     ['__CREATE_BUDGET_PERSISTENCE__', createBudgetPersistence.toString()],
     ['__LINE_FATE_SCAN__', lineFateScan.toString()],
     ['__LINE_FATE_VERDICT__', lineFateVerdict.toString()],
+    ['__LINE_REACHED_SESSION__', lineReachedSession.toString()],
+    ['__LINE_UUID_OF__', lineUuidOf.toString()],
     ['__LINE_TORN_END__', lineTornEnd.toString()],
     ['__LINE_WRITE_BEGUN__', lineWriteBegun.toString()],
     ['__LINE_WRITE_CUT__', lineWriteCut.toString()],
@@ -4842,7 +4844,10 @@ function dispatchCommand(ws, id, cmd) {
       // host_exec runs a stop would end: every update path waits for them (exec-runs-hold.ts).
       ...(hostExec ? { execRunning: hostExec.running() } : {}),
       // Of those, the ones an update waits for: a resumable run does not hold it (an older sidecar has no holding).
-      ...(hostExec && typeof hostExec.holding === 'function' ? { execHolding: hostExec.holding() } : {}),
+      // An older server reads execHolding and puts a daemon here that cannot follow a detached run, so for it
+      // the detached runs count too; a server that knows them reads execHoldsUpdate (local-daemon.ts).
+      ...(hostExec && typeof hostExec.holding === 'function' ? { execHolding: typeof hostExec.holdingForOlder === 'function' ? hostExec.holdingForOlder() : hostExec.holding() } : {}),
+      ...(hostExec && typeof hostExec.holdingForOlder === 'function' ? { execHoldsUpdate: hostExec.holding() } : {}),
       });
       // A server is here: the calls waiting for one go now.
       if (isServerClient(ws)) setTimeout(wakeGatewayCalls, 0);
@@ -5009,6 +5014,15 @@ async function resumeForTrigger(home, sid, text, messageId, taskId) {
   if (!livedHere(sid)) return { ok: false, reason: 'no transcript of that session on this host' };
   var journaled = journaledHome(sid);
   if (journaled !== undefined && journaled !== home) return { ok: false, reason: 'that session was started on this host for another Walnut' };
+  // trigger-resume-once: a try of a fire that already reached the session (a daemon killed
+  // after the write, before the ack mark) starts nothing: the stream and its write records
+  // are on disk, so they say so across a restart (lineReachedBefore).
+  var uuid = fireLineUuid(messageId);
+  var went = await lineReachedBefore(path.join(STREAMS_DIR, sid + '.jsonl'), uuid, [messageId]);
+  if (went) {
+    logMsg('info', 'trigger: the fire already reached that session; it is not resumed again', Object.assign({ sid: sid, taskId: taskId, messageId: messageId }, went));
+    return { ok: true };
+  }
   var now = Date.now();
   for (const [k, at] of hostResumedAt) if (now - at >= HOST_RESUME_COOLDOWN_MS) hostResumedAt.delete(k);
   if (hostResumedAt.has(sid)) return { ok: false, reason: 'this host resumed that session moments ago' };
@@ -5029,20 +5043,15 @@ async function resumeForTrigger(home, sid, text, messageId, taskId) {
       && (!cronRuntime || cronRuntime.deliveryAllowed(sid, undefined));
   };
   try {
-    await sessionStartGate.run(sid, function () {
+    await sessionStartGate.run(sid, async function () {
       if (!current()) throw new Error('a stop request superseded this start');
-      return startSessionProcess({ cmd: 'start', sid: sid, args: args, cwd: spawn.cwd, message: text, resume: true, mode: spawn.mode, origin: { home: home, task: taskId } }, undefined, current);
+      // Started with no line, then the fire as one delivery (twin of daemon-standalone.ts):
+      // its write record goes on disk before the line's first byte and after its newline,
+      // and its turn-start marker sits before that newline.
+      await startSessionProcess({ cmd: 'start', sid: sid, args: args, cwd: spawn.cwd, message: '', deferMessage: true, resume: true, mode: spawn.mode, origin: { home: home, task: taskId } }, undefined, current);
+      var sent = await handleSendCommand(sid, text, uuid, [{ message: text, messageId: messageId }], { fromHost: true, bootWait: true });
+      if (!sent || sent.ok !== true) throw new Error('the fire did not go into the resumed session (' + String((sent && (sent.reason || sent.error)) || 'send failed') + ')');
     });
-    // The turn-start marker the server writes after its own resume start
-    // (writeSyntheticUserEvent): the CLI never echoes its stdin, so without it
-    // the stream shows no turn start and the fire never appears in the chat.
-    try {
-      var started = sessions.get(sid);
-      if (started) appendUserMarkerLine(sid, started, text, messageId, false);
-      else logMsg('warn', 'trigger: no turn-start marker for a host resume', { sid: sid, messageId: messageId });
-    } catch (err) {
-      logMsg('warn', 'trigger: no turn-start marker for a host resume', { sid: sid, messageId: messageId, error: err && err.message });
-    }
     logMsg('info', 'trigger: resumed a stopped session on this host', { sid: sid, taskId: taskId, messageId: messageId, mode: spawn.mode });
     return { ok: true };
   } catch (err) {
@@ -5679,6 +5688,13 @@ function offlineSweepTick() {
   offlineHost.sweep().catch(function () {});
 }
 
+// trigger-resume-once: the one line uuid of a message delivered under one id on every try (a
+// trigger fire), whether it goes into a live CLI or starts a stopped one (line-fate-core.ts
+// lineUuidOf). Mirror daemon-standalone.ts.
+function fireLineUuid(messageId) {
+  return lineUuidOf(crypto.createHash('sha256').update('walnut-line:' + messageId).digest('hex'));
+}
+
 // A host delivery is a send outside the command drain: a Demo admits it (quiesce waits for it) and refuses it once fenced, also after it queued at the gate.
 function deliverFromOfflineHost(sid, text, messageId, o) {
   if (demoQuiesce.fenced) return Promise.resolve({ ok: false, reason: 'demo_stopping' });
@@ -5686,8 +5702,10 @@ function deliverFromOfflineHost(sid, text, messageId, o) {
     return sessionStartGate.run(sid, async function () {
       if (demoQuiesce.fenced) return { ok: false, reason: 'demo_stopping' };
       cancelTurnRetry(sid, 'superseded-by-send');
-      // A resend (a trigger fire again) writes nothing when the line record says it went (send-dedupe-v1).
-      var r = await handleSendCommand(sid, text, undefined, [{ message: text, messageId: messageId }], { fromHost: true, dedupe: !!(o && o.resend === true) });
+      // A resend (a trigger fire again) writes nothing when the line record says it went (send-dedupe-v1),
+      // and goes under the fire's own uuid, the one a host resume gives it too (trigger-resume-once).
+      var resend = !!(o && o.resend === true);
+      var r = await handleSendCommand(sid, text, resend ? fireLineUuid(messageId) : undefined, [{ message: text, messageId: messageId }], { fromHost: true, dedupe: resend });
       if (!r || r.ok !== true) return { ok: false, reason: String((r && (r.reason || r.error)) || 'send failed') };
       return r.noticeLeftOut ? { ok: true, noticeLeftOut: true } : { ok: true };
     });
@@ -12023,6 +12041,8 @@ const DEDUPE_SCAN_CHUNK_BYTES = 256 * 1024;
 const LINE_RECORD_SCAN_BYTES = 256 * 1024;
 const lineFateScan = (__LINE_FATE_SCAN__);
 const lineFateVerdict = (__LINE_FATE_VERDICT__);
+const lineReachedSession = (__LINE_REACHED_SESSION__);
+const lineUuidOf = (__LINE_UUID_OF__);
 const lineTornEnd = (__LINE_TORN_END__);
 const lineWriteBegun = (__LINE_WRITE_BEGUN__);
 const lineWriteCut = (__LINE_WRITE_CUT__);
@@ -12100,6 +12120,17 @@ async function lineFateInProcess(session, uuid, messageIds, lostPid, torn, answe
     torn.cut = lineWriteCut(verdict, q, scan, begunAt);
   }
   return verdict;
+}
+// trigger-resume-once: did a line with these ids (and this uuid) already reach the session
+// whose stream file is jsonlPath, in ANY of its processes (lineReachedSession)? Asked before a
+// host resume for a fire. Keep in sync with daemon-core.ts lineReachedBefore.
+async function lineReachedBefore(jsonlPath, uuid, messageIds) {
+  const q = { uuid: uuid, messageIds: messageIds, pid: null };
+  let scan = null;
+  if (uuid) await scanTail(jsonlPath, DEDUPE_SCAN_BYTES, (text) => { scan = lineFateScan(text, q, scan); });
+  let records = '';
+  await scanTail(jsonlPath + '.lines', LINE_RECORD_SCAN_BYTES, (text) => { records += text; });
+  return lineReachedSession(scan, records, q);
 }
 // The line's first byte is about to go in: noted first, so a daemon killed inside the
 // write leaves this as the newest record of the line. Its ids go under 'begin', never
@@ -14836,6 +14867,18 @@ try {
   acp = null;
   if (!err || err.code !== 'MODULE_NOT_FOUND') logMsg('error', 'acp sidecar failed to load', { error: err && err.message });
 }
+// Which kinds of listed detached work this service adopts, for the launcher (detached-registry.ts
+// "adopts"); any other kind is ended now. An older host-exec sidecar writes nothing: the launcher then
+// ends it all. PARITY: daemon-standalone.ts.
+// The launcher's ready mark waits for it: a launcher reads a ready service with no "adopts" as one
+// older than this file and ends the work (service-launcher-script.ts).
+let adoptionSettled = Promise.resolve();
+if (hostExec && typeof hostExec.settleAdoption === 'function') {
+  adoptionSettled = hostExec.settleAdoption({ acp: !!(acp && typeof acp.endForRollback === 'function') }).then(function (r) {
+    if (!r || !r.wrote) logMsg('warn', 'detached/adopts not written: a launcher will end the detached work as a rollback');
+    if (r && r.said) logMsg('info', 'detached work this service cannot adopt was ended', { said: r.said.trim().slice(0, 2000) });
+  }, function () {});
+}
 
 // Cron supervision + kernel instance lock sidecars. --service REFUSES to start
 // without them (below); a plain --start without them keeps the legacy pid-file
@@ -17474,17 +17517,18 @@ async function startDaemon() {
     if (SERVICE_MODE) fs.writeFileSync(SERVICE_FILE, DAEMON_INSTANCE_ID);
     else { try { fs.unlinkSync(SERVICE_FILE); } catch {} }
     // Sessions adopted and the port listening: the launcher may commit this version.
-    // Ready only once the core flow answers over its own port (twin of daemon-standalone.ts).
+    // Ready only once it said what it adopts (detached/adopts) and the core flow answers over its own
+    // port (twin of daemon-standalone.ts).
     if (launcherBeat && listeningPort) {
       let WSClient = null;
       try { WSClient = require('ws'); } catch { WSClient = globalThis.WebSocket || null; }
       if (WSClient) {
         const ask = cronRuntimeCore.askOwnPort(listeningPort, WSClient);
-        void launcherBeat.ready({ exe: process.execPath, instance: DAEMON_INSTANCE_ID },
-          () => cronRuntimeCore.daemonServesCheck(ask, { instanceId: DAEMON_INSTANCE_ID, version: DAEMON_VERSION, sid: sessions.keys().next().value })).then(() => { if (launcherBeat) launcherBeat.idle(); });
+        void adoptionSettled.then(function () { return launcherBeat ? launcherBeat.ready({ exe: process.execPath, instance: DAEMON_INSTANCE_ID },
+          () => cronRuntimeCore.daemonServesCheck(ask, { instanceId: DAEMON_INSTANCE_ID, version: DAEMON_VERSION, sid: sessions.keys().next().value })) : undefined; }).then(() => { if (launcherBeat) launcherBeat.idle(); });
       } else {
         logMsg('warn', 'no WebSocket client for the ready check: ready without it');
-        void launcherBeat.ready({ exe: process.execPath, instance: DAEMON_INSTANCE_ID }).then(() => { if (launcherBeat) launcherBeat.idle(); });
+        void adoptionSettled.then(function () { return launcherBeat ? launcherBeat.ready({ exe: process.execPath, instance: DAEMON_INSTANCE_ID }) : undefined; }).then(() => { if (launcherBeat) launcherBeat.idle(); });
       }
     }
     fs.writeFileSync(VERSION_FILE, DAEMON_VERSION);

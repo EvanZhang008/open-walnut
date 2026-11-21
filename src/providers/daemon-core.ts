@@ -19,7 +19,7 @@ import { execFileSync, execSync } from 'node:child_process'
 import { dirname, join as pathJoin } from 'node:path'
 import { userLineContent } from './user-line-images-core.js'
 import { networkCausedAuthError } from './network-cause-core.js'
-import { lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut, lineWrittenPart, transcriptLineScan, transcriptLineVerdict, type LineFate, type LineFateKind, type LineFateScan, type LineWritten, type TranscriptLineScan } from './line-fate-core.js'
+import { lineFateScan, lineFateVerdict, lineReachedSession, lineTornEnd, lineWriteBegun, lineWriteCut, lineWrittenPart, transcriptLineScan, transcriptLineVerdict, type LineFate, type LineFateKind, type LineFateScan, type LineReached, type LineWritten, type TranscriptLineScan } from './line-fate-core.js'
 
 // ── Shared types ──
 
@@ -410,6 +410,13 @@ export interface DaemonCore<S extends CoreSessionData = CoreSessionData> {
   handleSendRawCommand: (sid: string | undefined, raw: string | undefined) => Promise<SendResult>
   /** Read existing evidence, including dead sessions. Never writes, signals, reaps or starts a CLI. */
   handleLineFateQuery: (sid: unknown, uuid: unknown, messageIds: unknown) => Promise<LineFateQueryResult>
+  /**
+   * trigger-resume-once: did a line with these ids (and this uuid) already reach
+   * the session whose stream file is `jsonlPath`, in ANY of its processes
+   * (lineReachedSession)? A host resume asks before it starts a stopped session
+   * again for a fire. Reads the stream's tail and the write records, async.
+   */
+  lineReachedBefore: (jsonlPath: string, uuid: string, messageIds: string[]) => Promise<LineReached | null>
   /**
    * Append a walnut-injected user marker line to the session's stream file.
    * The CLI never echoes stdin user messages to its stream-json stdout, so
@@ -1435,6 +1442,16 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     return verdict
   }
 
+  /** trigger-resume-once (see the interface). Keep in sync with daemon-source.ts lineReachedBefore. */
+  async function lineReachedBefore(jsonlPath: string, uuid: string, messageIds: string[]): Promise<LineReached | null> {
+    const q = { uuid, messageIds, pid: null }
+    let scan: LineFateScan | null = null
+    if (uuid) await scanTail(jsonlPath, DEDUPE_SCAN_BYTES, (text) => { scan = lineFateScan(text, q, scan) })
+    let records = ''
+    await scanTail(lineRecordPath(jsonlPath), LINE_RECORD_SCAN_BYTES, (text) => { records += text })
+    return lineReachedSession(scan, records, q)
+  }
+
   /**
    * The line's first byte is about to go into the pipe of process `session.pid`.
    * Written before the write, so a daemon killed inside it leaves this as the
@@ -1732,6 +1749,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     handleSendCommand,
     handleSendRawCommand,
     handleLineFateQuery,
+    lineReachedBefore,
     handleAppendUserMarker,
   }
 }

@@ -92,11 +92,24 @@ export class TriggerDaemon {
     await waitFor(() => {
       try { return Number(fs.readFileSync(pidFile, 'utf8').trim()) === child.pid && fs.existsSync(portFile) ? true : undefined } catch { return undefined }
     }, 60_000, `the ${twin} daemon to serve`)
-    const ws = await waitFor(() => fs.readFileSync(portFile, 'utf8').trim() || undefined, 10_000, 'its port')
-      .then((port) => new Promise<WebSocket>((res, rej) => {
-        const s = new WebSocket(`ws://127.0.0.1:${parseInt(port, 10)}`)
-        s.on('open', () => res(s)); s.on('error', rej)
-      }))
+    // The daemon writes daemon.pid before daemon.port, so the port file seen next to its pid can
+    // still be the last daemon's (killed in the restart under test): a refused connect reads the
+    // port again until this daemon's own one answers.
+    const connect = (port: number) => new Promise<WebSocket | null>((res, rej) => {
+      const s = new WebSocket(`ws://127.0.0.1:${port}`)
+      s.on('open', () => res(s))
+      s.on('error', (err) => ((err as NodeJS.ErrnoException).code === 'ECONNREFUSED' ? res(null) : rej(err)))
+    })
+    const ws = await waitFor(() => fs.readFileSync(portFile, 'utf8').trim() || undefined, 10_000, 'its port').then(async (first) => {
+      const by = Date.now() + 10_000
+      for (let port = first; ; port = fs.readFileSync(portFile, 'utf8').trim() || port) {
+        const s = await connect(parseInt(port, 10))
+        if (s) return s
+        if (Date.now() > by) throw new Error(`the ${twin} daemon refused its port ${port}`)
+        if (child.exitCode !== null || child.signalCode !== null) throw new Error(`the ${twin} daemon exited`)
+        await sleep(50)
+      }
+    })
     return new TriggerDaemon(child, ws)
   }
 

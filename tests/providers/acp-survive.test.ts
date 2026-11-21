@@ -168,6 +168,20 @@ describe('a surviving ACP worker across a daemon kill', () => {
   }, 40_000)
 })
 
+describe('a write to a surviving worker that died', () => {
+  // The adopter's end of the pipe is O_WRONLY: with no reader left a write gets EPIPE, and SIGPIPE
+  // unless the runtime ignores it (2026-11-21 review R2-7). Bun here; the compiled daemon is the same
+  // runtime (evidence/e-sigpipe.log ran it as a `bun build --compile` binary too).
+  it('fails with EPIPE and the daemon process lives on', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-epipe-'))
+    const helper = fileURLToPath(new URL('../helpers/fifo-epipe-proc.ts', import.meta.url))
+    const r = spawnSync(process.execPath, [helper, dir], { encoding: 'utf8', timeout: 20_000 })
+    expect(r.signal).toBeNull()
+    expect(r.status).toBe(0)
+    expect(JSON.parse(r.stdout.trim())).toEqual({ survived: true, error: 'EPIPE' })
+  }, 30_000)
+})
+
 describe('a rollback ends a surviving worker', () => {
   it('by the daemon (endForRollback): its open turn reads interrupted by the rollback', async () => {
     const d = dirs('c')

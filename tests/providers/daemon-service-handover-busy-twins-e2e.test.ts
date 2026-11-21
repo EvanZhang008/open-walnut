@@ -199,6 +199,18 @@ describe.each(TWINS)('$name', (twin) => {
     expect(fs.readFileSync(logFile, 'utf8')).toContain(RESUMABLE_NOTE)
   }, 90_000)
 
+  it('a detached run holds no update for a server that knows it, but an older server waits for it (its daemon cannot follow it: 2026-11-21 rollback rehearsal)', async () => {
+    const dir = path.join(root, twin.name.replace(/\W+/g, '-') + '-detached')
+    const { home } = await boot(twin, dir)
+    prepState(home)
+    const taskId = 'handover-detached-task'
+    const started = await rpc({ cmd: 'exec.run', jobId: 'hx-handover-det', taskId, command: 'sleep 60', cwd: '~', background: true, endGroup: true, detach: true, caller: { task: taskId, host: 'devbox' } })
+    expect(started).toMatchObject({ ok: true, running: true, detached: true })
+    // execHolding is what an older server reads before it replaces this daemon; execHoldsUpdate, a newer one.
+    expect(await rpc({ cmd: 'hello' })).toMatchObject({ ok: true, execRunning: 1, execHolding: 1, execHoldsUpdate: 0 })
+    expect(await rpc({ cmd: 'exec.kill', jobId: 'hx-handover-det', taskId })).toMatchObject({ ok: true })
+  }, 90_000)
+
   it('a resumable run beside one that is not: the handover is refused, and the resumable one is not ended', async () => {
     const dir = path.join(root, twin.name.replace(/\W+/g, '-') + '-mixed')
     const { home } = await boot(twin, dir)

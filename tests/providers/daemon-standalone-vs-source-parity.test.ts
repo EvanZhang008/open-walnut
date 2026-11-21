@@ -333,7 +333,8 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     expect(await run('sid', `${notice}\n\nHost`, undefined, undefined, { fromHost: true })).toEqual({ ok: true, noticeLeftOut: true })
     expect(fifo.mock.calls.map((c) => JSON.parse(c[2].toString()).message.content)).toEqual([`${notice}\n\nServer`, `${notice}\n\nServer again`, 'Host'])
     // The host's own deliveries say they are the host's, and a resend (a trigger fire again) dedupes by its line record.
-    expect(templateSrc).toContain("[{ message: text, messageId: messageId }], { fromHost: true, dedupe: !!(o && o.resend === true) })")
+    expect(templateSrc).toContain("var resend = !!(o && o.resend === true);")
+    expect(templateSrc).toContain("[{ message: text, messageId: messageId }], { fromHost: true, dedupe: resend })")
     expect(readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))).toContain('[{ message: text, messageId }], { fromHost: true, dedupe: o.resend === true })')
   })
 
@@ -3143,6 +3144,30 @@ describe('read-only ACP model catalog daemon parity', () => {
 describe('walnut-trigger daemon parity', () => {
   const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
   const templateSrc = readFile(sourcePath)
+
+  it('trigger-resume-once: both host resumes ask the session\'s records first, then start with no line and send the fire as one marked delivery under its uuid', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      const start = src.indexOf('async function resumeForTrigger(')
+      const body = src.slice(start, src.indexOf('function cmdBridgeResume(', start))
+      expect(body.length).toBeGreaterThan(200)
+      // The check reads the files on disk (it holds across a restart), before the in-memory cooldown.
+      const asked = body.search(/lineReachedBefore\(path\.join\(STREAMS_DIR, sid \+ '\.jsonl'\), uuid, \[messageId\]\)/)
+      expect(asked).toBeGreaterThan(-1)
+      expect(asked).toBeLessThan(body.indexOf('hostResumedAt.has(sid)'))
+      expect(body).toContain("it is not resumed again")
+      expect(body).toMatch(/uuid = fireLineUuid\(messageId\)/)
+      // No line rides the start; the fire goes as a marked send (records before the first byte, marker before the newline).
+      expect(body).toMatch(/message: '', deferMessage: true, resume: true/)
+      expect(body).toMatch(/handleSendCommand\(sid, text, uuid, \[\{ message: text, messageId(: messageId)? \}\], \{ fromHost: true, bootWait: true \}\)/)
+      // The old after-the-fact marker is gone: it left a window with no record at all.
+      expect(body).not.toMatch(/handleAppendUserMarker\(sid, text, messageId\)|appendUserMarkerLine\(sid, started/)
+      // A live resend of a fire carries the same uuid.
+      expect(src).toMatch(/function fireLineUuid\(messageId(: string)?\)/)
+      expect(src).toContain("update('walnut-line:' + messageId)")
+    }
+    expect(templateSrc).toContain("resend ? fireLineUuid(messageId) : undefined")
+    expect(standaloneSrc).toContain("o.resend === true ? fireLineUuid(messageId) : undefined")
+  })
 
   it('both reload the armed set at boot and dispatch the four triggers.* commands', () => {
     for (const src of [standaloneSrc, templateSrc]) {

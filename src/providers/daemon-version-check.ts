@@ -186,6 +186,7 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/host-exec-script.ts',
   // A job an earlier daemon here ran, read back from the audit.
   'src/providers/host-exec-recall.ts',
+  'src/providers/host-exec-adopt.ts',
   // Work that outlives the daemon (a run, a script): its wrapper, its listing for a launcher, and the runner of detached scripts.
   'src/providers/detached-run.ts',
   'src/providers/detached-registry.ts',
