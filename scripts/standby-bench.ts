@@ -1,7 +1,9 @@
 /**
  * Measure the standby copy on a synthetic home of realistic size (docs/reference/standby-copy.md):
  * the scan, the first full batch, the write hold under steady writes, incremental batches,
- * and verify passes. Synthetic data only: it never reads a real home.
+ * and verify passes; then the same batches again while a writer outside the write gate appends
+ * to a log every 20 ms, as many of Walnut's own logs do, to measure how often a batch is void.
+ * Synthetic data only: it never reads a real home.
  *
  *   bun scripts/standby-bench.ts <work dir> [--gb 20] [--files 100000] [--batches 20] [--keep]
  *
@@ -120,32 +122,52 @@ async function main(): Promise<void> {
       await new Promise((r) => setTimeout(r, 50))
     }
   })()
-  const holds: number[] = []
-  const totals: number[] = []
-  const scansInc: number[] = []
-  const sent: number[] = []
-  let voids = 0
-  const reasons: string[] = []
-  for (let b = 0; b < BATCHES; b++) {
-    const out = await snapshotTo(home, target)
-    holds.push(out.stats.holdMs)
-    scansInc.push(out.stats.scanMs)
-    if (!out.ok) { voids++; reasons.push(out.reason.slice(0, 120)); continue }
-    totals.push(out.stats.totalMs)
-    sent.push(out.stats.sentBytes)
+  const run = async (label: string) => {
+    const holds: number[] = []
+    const names: number[] = []
+    const totals: number[] = []
+    const scansInc: number[] = []
+    const sent: number[] = []
+    let voids = 0
+    const reasons: string[] = []
+    for (let b = 0; b < BATCHES; b++) {
+      const out = await snapshotTo(home, target)
+      holds.push(out.stats.holdMs)
+      names.push(out.stats.namesMs ?? 0)
+      scansInc.push(out.stats.scanMs)
+      if (!out.ok) { voids++; reasons.push(out.reason.slice(0, 120)); continue }
+      totals.push(out.stats.totalMs)
+      sent.push(out.stats.sentBytes)
+    }
+    const r = {
+      batches: BATCHES, void: voids, voidReasons: [...new Set(reasons)].slice(0, 5), writesDuring: writes,
+      holdMs: { p50: q(holds, 0.5), p95: q(holds, 0.95), max: Math.round(Math.max(...holds)) },
+      namesInHoldMs: { p50: q(names, 0.5), max: Math.round(Math.max(...names)) },
+      scanMs: { p50: q(scansInc, 0.5), max: Math.round(Math.max(...scansInc)) },
+      totalMs: totals.length ? { p50: q(totals, 0.5), p95: q(totals, 0.95), max: Math.round(Math.max(...totals)) } : null,
+      sentMB: sent.length ? { p50: +(q(sent, 0.5) / 1024 ** 2).toFixed(1), max: +(Math.max(...sent) / 1024 ** 2).toFixed(1) } : null,
+    }
+    log(label, r)
+    return r
   }
+  result.incremental = await run('incremental (gated writes)')
+
+  // A writer the gate does not hold: appends, as the time-tracking and audit logs do.
+  let appending = true
+  let appends = 0
+  const appender = (async () => {
+    while (appending) {
+      await fsp.appendFile(path.join(home, 'time-tracking.jsonl'), `{"at":${Date.now()},"n":${appends++}}\n`)
+      await new Promise((r) => setTimeout(r, 20))
+    }
+  })()
+  result.withUngatedAppends = { ...(await run('incremental (plus an ungated append every 20 ms)')), appends }
+  appending = false
+  await appender
   writing = false
   await writer
   sessions.close(); tasks.close()
   setWriteGateEnabled(false)
-  result.incremental = {
-    batches: BATCHES, void: voids, voidReasons: reasons, writesDuring: writes,
-    holdMs: { p50: q(holds, 0.5), p95: q(holds, 0.95), max: Math.round(Math.max(...holds)) },
-    scanMs: { p50: q(scansInc, 0.5), max: Math.round(Math.max(...scansInc)) },
-    totalMs: totals.length ? { p50: q(totals, 0.5), p95: q(totals, 0.95), max: Math.round(Math.max(...totals)) } : null,
-    sentMB: sent.length ? { p50: +(q(sent, 0.5) / 1024 ** 2).toFixed(1), max: +(Math.max(...sent) / 1024 ** 2).toFixed(1) } : null,
-  }
-  log('incremental', result.incremental)
 
   let t = performance.now()
   const v = await verifyStandby(target)

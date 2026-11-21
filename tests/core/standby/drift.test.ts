@@ -177,6 +177,25 @@ describe('drift a commit or verify meets on its way', () => {
     expect((await verifyStandby(sb.target)).drift).toEqual([])
   })
 
+  it('verify alone meets a dir swapped for a link: it moves the link and never follows it', async () => {
+    sb = await sandbox('link-verify')
+    await oneBatch()
+    const outside = path.join(sb.root, 'outside')
+    fs.mkdirSync(outside, { mode: 0o755 })
+    fs.writeFileSync(path.join(outside, 'plan.md'), 'not the copy\n')
+    fs.chmodSync(copy(''), 0o700)
+    fs.chmodSync(copy('user-own-folder'), 0o700)
+    fs.rmSync(copy('user-own-folder'), { recursive: true })
+    fs.symlinkSync(outside, copy('user-own-folder'))
+    const v = await verifyStandby(sb.target)
+    expect(v.drift.filter((d) => d.kind === 'unrepaired')).toEqual([])
+    expect(v.drift).toMatchObject([{ p: 'user-own-folder', kind: 'added' }, { p: 'user-own-folder/plan.md', kind: 'deleted' }])
+    expect(fs.readFileSync(path.join(outside, 'plan.md'), 'utf8')).toBe('not the copy\n')
+    expect(fs.statSync(outside).mode & 0o777).toBe(0o755)
+    expect(fs.readFileSync(copy('user-own-folder/plan.md'), 'utf8')).toBe('unknown names are leader-data\n')
+    expect((await verifyStandby(sb.target)).drift).toEqual([])
+  })
+
   it('a file and a dir nobody can read: verify still repairs everything, and an added empty dir is found', async () => {
     sb = await sandbox('unreadable')
     await oneBatch()
