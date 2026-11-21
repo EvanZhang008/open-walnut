@@ -535,7 +535,7 @@ export interface PluginFocus {
   spaceId?: string
   name: string
   /** What the focus shows: project names and task ids (their subtasks too). */
-  scope: { projects?: string[]; tasks?: string[] }
+  scope: { projects?: readonly string[]; tasks?: readonly string[] }
   /**
    * How your App works in it: `isolated` (fresh: keep your own state under `spaceId`), `inherit`
    * (the same data and sessions as Main), `off` (your App is hidden there). From the space's own
