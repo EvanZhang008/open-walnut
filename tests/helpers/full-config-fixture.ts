@@ -45,6 +45,7 @@ export function fullConfigFixture(): Record<string, unknown> {
     providers: { acme: { type: 'openai', api_key: provKey, headers: { Authorization: `Bearer ${header}` } }, marina: { type: 'bedrock', credential_process: credProc } },
     engines: { alt: { command: 'claude', env: { ANTHROPIC_API_KEY: engineKey } } },
     usage: { proxy_log_dirs: { acme: '/Users/marina/proxy-logs' } },
+    standby: { dir: '/Volumes/standby/walnut', interval_seconds: 30 },
     agent: { main_model: 'acme-model-large', fast_model: 'acme-model-small', available_models: ['acme-model-large', 'acme-model-small'], session_effort: 'high', quick_parse: true, agents: [{ id: 'mentor', mcp: { env: { TOKEN: engineKey } } }] },
     plugins: { mailbox: { enabled: true, password: pluginPass, client_secret: pluginSecret } },
     calendar: { accounts: [{ user: 'marina', password: calPass }] },
