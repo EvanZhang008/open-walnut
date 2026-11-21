@@ -13,8 +13,12 @@
  *                           except a same-host send the daemon handed over marked `online`
  *                           (follower-peer-v1): away-sends.ts takes it as handleLocal would, and
  *                           whatever it does not deliver goes to the Mac (onlineReply)
- *   a route that needs the Mac   its 503 `needs_leader` goes back with that code, so a
- *                                session's call gets the daemon's own away answer instead
+ *   a route that needs the Mac   its 503 `needs_leader` goes back with that code, marked
+ *                                `detail.final`: this server's decision is the caller's answer,
+ *                                never the daemon's own away answer (awayReply; the daemon still
+ *                                sends it on while the Mac or the companion answers again,
+ *                                follower-gateway-core.ts). Only the refusals in AWAY_NOT_FINAL
+ *                                go on to the daemon: they are meant to be answered elsewhere
  *   a full journal, the brake    `queue_full` / `throttled` with the route's wait: retryable
  *   no host key yet             every call refused: an empty key would take the Mac's own origin
  *   a task the Mac keeps local  (core/replication/host-private.ts: this host's copies hold none of it)
@@ -78,6 +82,29 @@ export function onlineReply(reply: Record<string, unknown>): Record<string, unkn
   return { relayId: reply.relayId, errorCode: 'needs_leader', error: `${why}; your Mac delivers it`, detail: { why: 'server_delivers' } }
 }
 
+/**
+ * The `needs_leader` refusals of an away call that are not this server's last word, by `detail.why`:
+ * each is meant to be answered elsewhere, so the daemon takes the call on. Every other away
+ * `needs_leader` (a route's, a write port's, a kept-local task's) is final.
+ */
+export const AWAY_NOT_FINAL: Readonly<Record<string, string>> = {
+  leader_answers: 'the Mac answers again: the daemon relays the call to it',
+  no_host_key: 'this server cannot act for its host yet: the daemon answers the call as before',
+}
+
+/**
+ * An away call's answer: a `needs_leader` is final (the caller's answer, nothing ran) unless its
+ * why is in AWAY_NOT_FINAL. The route's own why does not come through the op's executor, only its
+ * code and words, which the caller hears as they are.
+ */
+export function awayReply(reply: Record<string, unknown>): Record<string, unknown> {
+  if (reply.errorCode !== 'needs_leader') return reply
+  const detail = reply.detail && typeof reply.detail === 'object' && !Array.isArray(reply.detail) ? reply.detail as Record<string, unknown> : {}
+  if (typeof detail.why === 'string' && Object.prototype.hasOwnProperty.call(AWAY_NOT_FINAL, detail.why)) return reply
+  if (detail.final === true) return reply
+  return { ...reply, detail: { ...detail, final: true } }
+}
+
 /** How long the daemon may take to ack a result on the loopback link. */
 const RESULT_ACK_MS = 10_000
 
@@ -137,9 +164,9 @@ export function createLocalCalls(deps: LocalCallsDeps): (event: Record<string, u
       deadlineMs: Math.max(0, left),
       liftCodes: LIFTED,
       refuse: (c) => !hostKey
-        ? { relayId: c.relayId, error: 'this host\'s Walnut server does not know its host name yet, so it cannot answer for it', errorCode: 'needs_leader' }
+        ? { relayId: c.relayId, error: 'this host\'s Walnut server does not know its host name yet, so it cannot answer for it', errorCode: 'needs_leader', detail: { why: 'no_host_key' } }
         : deps.leaderAnswers() && !online
-          ? { relayId: c.relayId, error: 'your Mac answers again; the call goes to it', errorCode: 'needs_leader' }
+          ? { relayId: c.relayId, error: 'your Mac answers again; the call goes to it', errorCode: 'needs_leader', detail: { why: 'leader_answers' } }
           // Never below a call handed over with its whole time (a short hub timeout set on purpose).
           : left < Math.min(neededMs(c), gatewayHubTimeoutMs() - ANSWER_MARGIN_MS)
             ? {
@@ -148,7 +175,7 @@ export function createLocalCalls(deps: LocalCallsDeps): (event: Record<string, u
                 detail: { why: 'too_little_time', retryAfterMs: 1_000 },
               }
             : keptLocalRefusal(c, here, online, { triggerKept }),
-      send: (reply, kept) => send(online ? onlineReply(reply) : reply, kept),
+      send: (reply, kept) => send(online ? onlineReply(reply) : awayReply(reply), kept),
     }))
   }
 }

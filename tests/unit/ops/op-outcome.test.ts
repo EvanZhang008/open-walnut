@@ -505,6 +505,26 @@ describe('a failed launch keeps the task and the id', () => {
   })
 
 
+  it('a start its server refused as needing the Mac (a host while the Mac is away) says the task was made, its id, kept for the Mac', async () => {
+    const needsMac = () => Object.assign(new Error('Walnut API error (needs_leader): This task\'s project runs its sessions on another machine; starting it needs your Mac.'), { code: 'needs_leader' })
+    // The host's own server made it: its create answer says it is kept for the Mac (write-port.ts taskCreate).
+    const r = createRunner({ created: { task: TASK, queued: true, offline: true }, start: async () => { throw needsMac() } })
+    const created = await r.speak({ title: TASK.title, message: 'Reproduce, then fix.' })
+    expect(rec(created.task).id).toBe(TASK.id)
+    expect(created.queued).toBe(true)
+    expect(rec(created.execution).state).toBe('not_started')
+    // The call's error (start_error) names the task and that the start needs the Mac: a plugin job reads only it.
+    expect(created.start_error).toBe(`Task ${TASK.id} was created and is kept on this host for your Mac, but it did not start: This task's project runs its sessions on another machine; starting it needs your Mac.`)
+    expect(created.outcome).toContain(String(created.start_error))
+    expect(created.next).toContain(`Do not create another task: it exists as ${TASK.id}.`)
+    expect(created.next).toContain(`task_start '{"id":"${TASK.id}"}'`)
+    expect(r.paths()).toEqual(['POST /tasks', `POST /tasks/${TASK.id}/start`])
+    // A create the server made itself (no `queued`): the same, without the host's words.
+    const plain = await createRunner({ start: async () => { throw needsMac() } }).speak({ title: TASK.title })
+    expect(String(plain.start_error)).toMatch(new RegExp(`^Task ${TASK.id} was created, but it did not start: `))
+    expect(plain).not.toHaveProperty('queued')
+  })
+
   // Handler contract only: the handler RETURNS the payload (task + start_error)
   // instead of throwing, so the created task is never hidden from the caller.
   // Turning that payload into a failed call ({ ok: false, message, result }) for

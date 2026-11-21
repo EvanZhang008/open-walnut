@@ -6,9 +6,11 @@
  *   host    answered here: a read from this replica's copies (with this host's journal folded
  *           over them), or a write journaled for the leader with its answer given now
  *   held    kept whole and run by the leader on its return (the caller hears it was held)
- *   leader  `needs_leader` with a reason: a session's call then falls back to the daemon's own
- *           offline answer (offline-host-core.ts handle) while that still exists; a plugin
- *           job's answer is final
+ *   leader  `needs_leader` with a reason, the caller's final answer (local-calls.ts awayReply marks
+ *           it `detail.final`): the daemon never answers it with its own offline code, which did
+ *           no more for any of these ops. It goes on only while the Mac answers again or the
+ *           companion leads (follower-gateway-core.ts), and tests/replica/away-final.test.ts
+ *           holds every `leader` row to it
  *
  * `by` names the module that answers a write here (or refuses it with its own reason) when the
  * route's row alone does not say it. One row per op in the registry (src/ops), checked by

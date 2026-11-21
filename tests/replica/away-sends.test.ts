@@ -110,12 +110,19 @@ describe('a message from this host, the follower\'s own rules', () => {
     expect(h.calls).toEqual([expect.objectContaining({ kind: 'send', online: true, toSessionId: C, ask: expect.objectContaining({ secs: 6 * 3600 }) })])
   })
 
-  it('an ambiguous prefix is refused; an answer for the user is the Mac\'s', async () => {
+  it('an ambiguous prefix is refused; an answer for the user is held whole for the Mac, as the daemon holds it', async () => {
     const h = harness()
     expect((await h.post({ to: 'tamb', text: 'x' })).body.error).toMatchObject({ code: 'ambiguous_peer' })
-    expect((await h.post({ to: 'tc', text: 'x', answers_ask: true })).body.error).toMatchObject({ code: 'needs_leader', why: 'server_delivers' })
     expect((await h.post({ to: 'tc', text: 'x', withdraw_ask: true })).body.error).toMatchObject({ code: 'bad_request' })
     expect(h.calls).toEqual([])
+    const r = await h.post({ to: 'tc', text: 'x', answers_ask: true })
+    expect(r.status, JSON.stringify(r.body)).toBe(202)
+    expect(r.body).toMatchObject({ delivery: 'queued', targetSessionId: null })
+    expect(h.calls).toEqual([expect.objectContaining({ kind: 'hold', fromSessionId: B, callId: 'oc-feedfacefeedface', args: { to: 'tc', text: 'x', answers_ask: true, messageId: 'qm-host-feedfacefeedface' } })])
+    // While the Mac answers, it is the Mac's (the daemon relays it there).
+    const online = harness({ leaderAnswers: () => true })
+    expect((await online.post({ to: 'tc', text: 'x', answers_ask: true })).body.error).toMatchObject({ code: 'needs_leader', why: 'server_delivers' })
+    expect(online.calls).toEqual([])
   })
 
   it('a daemon without follower.peer: the call goes back, the daemon answers it itself as before', async () => {

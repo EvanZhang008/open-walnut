@@ -10,7 +10,7 @@ import { defineOp } from './registry.js'
 import { materializeBinding } from './executor.js'
 import { taskRefTag } from '../utils/entity-refs.js'
 import { awayAnswer, dispatchHint, withOutcome } from './outcome.js'
-import { startTask, TASK_START_INPUT, taskView } from './task-execution.js'
+import { startNeedsLeaderWords, startTask, TASK_START_INPUT, taskView } from './task-execution.js'
 import { PHASE_ORDER } from '../core/phase.js'
 import { isInboxProject } from '../core/inbox-project.js'
 import { agentStatusView, summaryAt, SUMMARY_IS_HISTORY } from '../core/user-status.js'
@@ -740,6 +740,20 @@ defineOp({
           `${where}Task ${id} was created but did not start: no host that can run it has room.${await cardLine(false)}`,
           `This start is not queued. Check host_load and retry walnut tools call task_start '{"id":"${id}"}' when a suitable host has room, or arm a trigger on host_load (full=false) to retry (walnut-trigger). When the user asked for it now, `
             + 'pass their words as user_request, which starts it at once. Do not create another task, and do not do its work yourself.',
+        )
+      }
+      // Refused before anything ran because the start needs the leader (a host's own server while
+      // the Mac is away): a definite "no" for a task that exists, kept for the Mac when it was made here.
+      const needsMac = startNeedsLeaderWords(err)
+      if (needsMac !== null) {
+        const kept = (created as { queued?: unknown }).queued === true
+        const said = `Task ${id} was created${kept ? ' and is kept on this host for your Mac' : ''}, but it did not start: ${needsMac}`
+        return withOutcome(
+          withRef({ ...view, execution: { state: 'not_started', error } }, {
+            ...extra, ...(kept ? { queued: true } : {}), execution: { state: 'not_started', error }, start_error: said,
+          }),
+          `${where}${said}${await cardLine(false)}`,
+          `Do not create another task: it exists as ${id}. Start it with task_start '{"id":"${id}"}' once your Mac answers.`,
         )
       }
       // An older server's running-subtask cap (subtask-limits.ts), before the start queue: a

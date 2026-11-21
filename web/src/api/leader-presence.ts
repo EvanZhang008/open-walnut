@@ -337,6 +337,7 @@ export const NEEDS_LEADER_REASONS: Readonly<Record<string, string>> = {
   chat_history_needs_mac: 'This chat\'s messages are on your Mac.',
   // A host's own walnut calls while the Mac is away (host-local-calls: dispatch.ts, away-starts.ts).
   leader_answers: 'Your Mac answers again; this goes through it.',
+  no_host_key: 'This host\'s Walnut server does not know its host name yet, so it cannot answer for it.',
   task_runs_elsewhere: 'This task runs its sessions on another machine, so it starts through your Mac.',
   session_resume_needs_mac: 'This task already has its session here; starting it again needs your Mac.',
   start_needs_mac: 'Starting with these options needs your Mac.',

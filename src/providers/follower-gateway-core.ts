@@ -13,8 +13,11 @@
  *                      an unsupported code, the daemon's own away answer as before
  *                      (offlineHost.handle). A read with no answer in time goes there too;
  *                      a write with none is `hub_timeout` (it may have run: never twice).
- *                      A refusal the follower marks `detail.final` (a task the Mac keeps
- *                      local, which this host holds none of) is the caller's answer
+ *                      A refusal the follower marks `detail.final` (its own `needs_leader`:
+ *                      a route of the leader's, a write it cannot keep, a task the Mac keeps
+ *                      local) is the caller's answer, while the follower may still write and
+ *                      no companion leads; else it goes on as before, to the leader that
+ *                      answers now (nothing ran)
  *   a plugin job's     the follower's answer is final; no follower: `hub_unreachable`
  *   a same-host send   while the leader answers (`online`, 'follower-peer-v1'): handed to a
  *                      follower that said `answersOnline`, in place of the daemon's own
@@ -66,6 +69,8 @@ export interface FollowerGatewayDeps<S> {
   follower(home: string): S | null
   /** Whether that follower may write now (the twin's followerMayWrite: no leader answers it). */
   mayWrite(home: string): boolean
+  /** Another leader takes what the follower cannot (the cloud companion leads `home`): its refusals are never final then. */
+  leaderElsewhere?(home: string): boolean
   /** Whether that follower takes a same-host send while the leader answers (its hello's `answersOnline`). */
   answersOnline?(ws: S): boolean
   now(): number
@@ -227,8 +232,10 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
     deps.clearTimer(e.timer)
     const code = !resp.ok && resp.error ? resp.error.code : ''
     // `final`: the follower's word stands (a same-host send while the leader answers still goes on).
+    // Only while no leader answers: the Mac back, or the companion leading, takes what it refused.
     const detail = !resp.ok && resp.error ? resp.error.detail as { final?: unknown } | undefined : undefined
     const final = !e.call.online && !!detail && typeof detail === 'object' && detail.final === true
+      && deps.mayWrite(e.call.home) && deps.leaderElsewhere?.(e.call.home) !== true
     if (e.call.fallback && FALLS_BACK.indexOf(code) !== -1 && !final) {
       deps.log('info', 'gateway: this host\'s Walnut server handed the call back', { relayId, code, op: e.call.payload.name })
       e.call.fallback()

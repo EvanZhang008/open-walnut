@@ -5959,6 +5959,8 @@ var followerGateway = (__CREATE_FOLLOWER_GATEWAY__)({
   answersOnline: function (ws) { return ws.answersOnline === true; },
   // One rule for "the leader is away": the test follower.op applies (followerMayWrite).
   mayWrite: function (home) { return followerMayWrite(home); },
+  // The companion leading takes what the follower refuses (forwardToBackup on the daemon's path).
+  leaderElsewhere: function (home) { return leaderBook.backupLead(home) !== null; },
   now: function () { return Date.now(); },
   send: function (ws, ev, data) { try { sendEvent(ws, ev, data); return true; } catch (e) { return false; } },
   nextRelayId: function () { return ++gatewayRelayCounter; },

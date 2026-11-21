@@ -15,10 +15,11 @@ function setup(o: { linked?: Sock | null } = {}) {
   const timers: Array<{ fn: () => void; ms: number; cleared: boolean }> = []
   let id = 100
   /** Whether the follower may write (the twin's followerMayWrite), and the clock. */
-  const state = { mayWrite: true, now: 1_000 }
+  const state = { mayWrite: true, now: 1_000, companion: false }
   const g = createFollowerGateway<Sock>({
     follower: () => (linked && linked.answersLocal ? linked : null),
     mayWrite: () => state.mayWrite,
+    leaderElsewhere: () => state.companion,
     answersOnline: (ws) => ws.answersOnline === true,
     now: () => state.now,
     send: (ws, ev, data) => { if (ws.broken) return false; ws.sent.push({ ev, data }); return true },
@@ -106,6 +107,22 @@ describe('follower gateway', () => {
     s.g.handOff(call({ payload: { name: 'task_send', args: { to: 't2', text: 'hi' } }, online: true, fallback: relay }), vi.fn())
     s.g.settle(s.sock, 103, kept)
     expect(relay).toHaveBeenCalledOnce()
+  })
+
+  it('a final refusal goes on to the leader that answers again: the Mac back (no write allowed), or the companion leading', () => {
+    const kept: FollowerGatewayResponse = { ok: false, error: { code: 'needs_leader', message: 'needs the Mac', detail: { final: true } } }
+    for (const turn of ['mac', 'companion'] as const) {
+      const s = setup()
+      const respond = vi.fn()
+      const fallback = vi.fn()
+      s.g.handOff(call({ fallback }), respond)
+      // Handed while away; by its answer the Mac answers again, or the companion took the lead.
+      if (turn === 'mac') s.state.mayWrite = false
+      else s.state.companion = true
+      s.g.settle(s.sock, 101, kept)
+      expect(fallback).toHaveBeenCalledOnce()
+      expect(respond).not.toHaveBeenCalled()
+    }
   })
 
   it('an error that is no hand-back goes to the caller as it is, never to the daemon\'s path', () => {

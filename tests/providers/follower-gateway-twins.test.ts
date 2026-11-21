@@ -50,6 +50,8 @@ describe('follower gateway twin wiring', () => {
       expect(src).toContain('followerGateway.dropSocket(ws)')
       // One rule for "away": the hand-off asks the same test follower.op applies.
       expect(src).toMatch(/mayWrite: (\(home\) => |function \(home\) \{ return )followerMayWrite\(home\)/)
+      // A final refusal goes on to the companion while it leads (its forward is on the daemon's path).
+      expect(src).toMatch(/leaderElsewhere: (\(home\) => |function \(home\) \{ return )leaderBook\.backupLead\(home\) !== null/)
       // A plugin job's call in the window waits for its leader or the follower, within its own deadline.
       expect(src).toContain('followerGateway.routeJob(')
       // To the leader it names the same job, in the same `caller` frame field, on every attempt.

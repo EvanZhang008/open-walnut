@@ -276,11 +276,16 @@ permission prompts still name Walnut.
   (`src/core/peers/gateway-answer.ts`), acting as the session or the plugin job through a credential that
   exists only in its own process (`src/replica/write-actor.ts`, `local-calls.ts`). A request that carries it
   is never forwarded.
-- **A session that the follower cannot serve keeps today's answer.** If the follower is not linked, is late,
-  or says the leader is needed, a session's call falls back to the daemon's old offline answers. A plugin
-  job's answer is final. Every such fallback is counted (`offlineAnswers` in the daemon's status, and the
-  log line `gateway: daemon offline answer used`), so a run can show that none happened while a follower was
-  there; step D deletes that code once the count stays at zero.
+- **The follower's "needs the leader" is the caller's answer.** While the leader is away, a `needs_leader`
+  the follower answers itself (a route of the leader's, a write it cannot keep, a task kept local) is final
+  (`detail.final`, `awayReply` in `src/replica/local-calls.ts`): the daemon never answers that call with its
+  old offline code, which for every such op did nothing more than say so. Only refusals meant for someone
+  else go on: "the Mac answers again" and "this server does not know its host name yet" (`AWAY_NOT_FINAL`),
+  and any refusal while the Mac answers again or the companion leads (the daemon then relays it there). A
+  session's call still takes the old path when the follower is not linked or a read is late. A plugin job's
+  answer is final. Every fallback is counted (`offlineAnswers` in the daemon's status, and the log line
+  `gateway: daemon offline answer used`), so a run can show that none happened while a follower was there;
+  step D deletes that code once the count stays at zero.
 - **Starts made alone** (`src/replica/away-starts.ts`): only for a task this host's journal made, with a
   session id derived from the op id so a retry starts nothing twice, one start of a task at a time (a second
   hears the leader's 409 `session_exists`), and at most as many live sessions as this machine's memory allows.

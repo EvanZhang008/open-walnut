@@ -239,6 +239,8 @@ export function awaySends(deps: AwaySendsDeps): RequestHandler {
     const text = str(b.text)
     // What the Mac alone decides: an answer for the user, and online a hand-off, a structured reply, or no words.
     if (b.withdraw_ask === true && b.answers_ask !== true) return refusalAnswer('bad_request', 'withdraw_ask requires answers_ask: true')
+    // Away, an answer for the user is held whole for the Mac, as the daemon's own away answer holds it (holdWrite).
+    if (b.answers_ask === true && !online) return hold(w, sid, b, sendMessageIdOf(b.messageId, w.opId), 'answering a task\'s ask of the user is recorded by your Mac')
     if (b.answers_ask === true || (online && (b.answers_ask !== undefined || b.withdraw_ask !== undefined))) return serverDelivers('Answering a task\'s ask of the user in their place needs your Mac.')
     if (online && (b.hands_on !== undefined || b.result !== undefined || b.evidence !== undefined || b.not_done !== undefined || b.score !== undefined || !text)) {
       return serverDelivers('Your Mac delivers this one.')

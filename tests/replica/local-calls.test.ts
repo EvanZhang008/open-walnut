@@ -64,12 +64,18 @@ describe('local calls', () => {
     expect(s.sent).toHaveLength(2)
   })
 
-  it('a route\'s needs_leader goes back with that code, so a session\'s call gets the daemon\'s own answer', async () => {
+  it('a route\'s needs_leader goes back with that code, final: the caller\'s answer, never the daemon\'s own away answer', async () => {
     router.outcome = { ok: false, error: { code: 'internal', message: 'This needs your Mac', api: { status: 503, code: 'needs_leader' }, detail: { error: { why: 'fields' } } }, opStatus: 503 }
     const s = setup()
     s.handle(event())
     await s.settled()
-    expect(s.sent[0]).toMatchObject({ cmd: 'gateway-result', relayId: 7, errorCode: 'needs_leader', error: 'This needs your Mac' })
+    expect(s.sent[0]).toMatchObject({ cmd: 'gateway-result', relayId: 7, errorCode: 'needs_leader', error: 'This needs your Mac', detail: { final: true } })
+    // A plugin job's answer is final too (the daemon never hands it back).
+    resetRelayedCallsForTest()
+    const job = setup()
+    job.handle(event({ callerSid: 'external', caller: { kind: 'plugin-job', plugin: 'acme', job: 'sync' } }))
+    await job.settled()
+    expect(job.sent[0]).toMatchObject({ errorCode: 'needs_leader', detail: { final: true } })
   })
 
   it('while the Mac answers, a same-host send the daemon marked online runs (follower-peer-v1); nothing else does', async () => {
@@ -128,7 +134,9 @@ describe('local calls', () => {
     s.handle(event())
     await s.settled()
     expect(router.calls).toEqual([])
-    expect(s.sent[0]).toMatchObject({ relayId: 7, errorCode: 'needs_leader' })
+    // Meant for the Mac: not final, so the daemon relays it there.
+    expect(s.sent[0]).toMatchObject({ relayId: 7, errorCode: 'needs_leader', detail: { why: 'leader_answers' } })
+    expect((s.sent[0]!.detail as { final?: unknown }).final).toBeUndefined()
   })
 
   it('a full journal and the live session brake go back as their own codes, with the route\'s wait', async () => {
@@ -164,7 +172,8 @@ describe('local calls', () => {
       s.handle(event())
       await s.settled()
       expect(router.calls).toEqual([])
-      expect(s.sent[0]).toMatchObject({ relayId: 7, errorCode: 'needs_leader' })
+      expect(s.sent[0]).toMatchObject({ relayId: 7, errorCode: 'needs_leader', detail: { why: 'no_host_key' } })
+      expect((s.sent[0]!.detail as { final?: unknown }).final).toBeUndefined()
     }
   })
 

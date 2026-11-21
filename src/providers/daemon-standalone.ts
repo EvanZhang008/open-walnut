@@ -4617,6 +4617,8 @@ const followerGateway = createFollowerGateway<ServerWebSocket<WsData>>({
   answersOnline: (ws) => ws.data?.answersOnline === true,
   // One rule for "the leader is away": the test follower.op applies (followerMayWrite).
   mayWrite: (home) => followerMayWrite(home),
+  // The companion leading takes what the follower refuses (forwardToBackup on the daemon's path).
+  leaderElsewhere: (home) => leaderBook.backupLead(home) !== null,
   now: () => Date.now(),
   send: (ws, ev, data) => { try { sendEvent(ws, ev, data); return true } catch { return false } },
   nextRelayId: () => ++gatewayRelayCounter,

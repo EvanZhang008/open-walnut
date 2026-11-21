@@ -194,3 +194,13 @@ export async function startTask(id: string, body: Record<string, unknown>, call:
       : `Read task_get for its execution state. Add context with task_send using task id ${started.taskId}.`,
   )
 }
+
+/**
+ * The words of a start its server refused with `needs_leader` before anything ran (a host's own
+ * server while the Mac is away: the start needs the Mac), or null for any other failure.
+ */
+export function startNeedsLeaderWords(err: unknown): string | null {
+  if (!err || typeof err !== 'object' || (err as { code?: unknown }).code !== 'needs_leader') return null
+  const message = err instanceof Error ? err.message.replace(/^Walnut API error \(needs_leader\):\s*/, '').trim() : ''
+  return message || 'starting it needs your Mac.'
+}
