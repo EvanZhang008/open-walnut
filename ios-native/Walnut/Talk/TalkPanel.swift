@@ -43,7 +43,9 @@ final class TalkPanel {
         previousKey?.endEditing(true)
         let window = UIWindow(windowScene: scene)
         window.windowLevel = .alert
-        let host = UIHostingController(rootView: TalkPanelView(talk: .shared, model: model) { [weak self] in self?.hide() })
+        // Its own window: the hold on sideways drags is installed here too (`ReadingPageSwipe.swift`).
+        let host = UIHostingController(rootView: TalkPanelView(talk: .shared, model: model) { [weak self] in self?.hide() }
+            .noContentSwipeBack())
         host.view.backgroundColor = .clear
         // VoiceOver stays on the panel, not the screen under it.
         host.view.accessibilityViewIsModal = true

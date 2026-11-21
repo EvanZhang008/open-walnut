@@ -99,8 +99,6 @@ struct LetterReaderView: View {
 
     var body: some View {
         panes
-        // A sideways drag over the letter is reading, never Back (`ReadingPageSwipe.swift`).
-        .noContentSwipeBack()
         // A reply on record whose delivery is still running: re-read the letter
         // until the outcome is in, so "Sending" turns into what happened.
         .modifier(LetterDeliveryWatch(

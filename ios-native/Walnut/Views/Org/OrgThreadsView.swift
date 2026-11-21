@@ -1356,9 +1356,6 @@ struct OrgThreadFollowUpSheet: View {
             .onAppear { focused = true }
         }
         .dictationSendGate(sendGate)
-        #if DEBUG && targetEnvironment(simulator)
-        .background(DebugUITestTouches().frame(width: 0, height: 0))
-        #endif
     }
 
     private func sendNow() {

@@ -9,6 +9,8 @@ struct OrgNodeTasksView: View {
     /// A row was tapped: the node's page opens the task's session over itself (it owns what is
     /// over it, so a request it takes can take it down).
     let onOpenTask: (TaskOpenTarget) -> Void
+    /// The org tree to show instead of reading it (a test's own); nil reads `GET /org` as always.
+    var givenTree: OrgTreeWire? = nil
 
     @Environment(TasksStore.self) private var tasks
     @AppStorage("org.node.tasksMode", store: AppPrefs.defaults) private var modeRaw = OrgNodeTasksModel.Mode.status.rawValue
@@ -127,6 +129,11 @@ struct OrgNodeTasksView: View {
     }
 
     private func load() async {
+        if let givenTree {
+            tree = givenTree
+            loaded = true
+            return
+        }
         do {
             tree = try await WalnutAPI().orgTree()
             error = nil

@@ -34,7 +34,7 @@ const NOT_A_LETTER: Record<string, string> = {
 const PHONE_NOT_A_LETTER: Record<string, string> = {
   'ios-native/Walnut/Views/Org/OrgNodePage.swift': 'names the Brief page and its icon ("doc.text"); OrgBriefView draws the letter',
   'ios-native/WalnutUITests/OrgThreadsFixture.swift': 'the UI tests\' fixture server answers a Brief read; OrgBriefView draws the letter',
-  'ios-native/WalnutUITests/OrgThreadsSidewaysDragUITests.swift': 'a UI test\'s fixture answers a Brief read with long text; OrgBriefView draws the letter',
+  'ios-native/WalnutUITests/VerticalPagesSidewaysDragUITests.swift': 'a UI test drags the Brief page sideways; its fixture serves the letter with its freshness, OrgBriefView draws it',
 }
 
 describe('every surface that shows a Brief reads its freshness', () => {

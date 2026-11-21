@@ -97,6 +97,13 @@ struct WalnutApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                // No page moves sideways under a drag on its content; Back is the button and the
+                // swipe from the left edge (`ReadingPageSwipe.swift`).
+                .noContentSwipeBack()
+                #if DEBUG && targetEnvironment(simulator)
+                // A UI test's proof video shows each touch and drag on every screen.
+                .background(DebugUITestTouches().frame(width: 0, height: 0))
+                #endif
                 .environment(connection)
                 .environment(chat)
                 .environment(notes)

@@ -10,6 +10,8 @@ import SwiftUI
 struct OrgBriefView: View {
     let taskId: String
     let name: String
+    /// The brief to show instead of reading it (a test's own); nil reads `GET /tasks/:id/brief` as always.
+    var givenReply: OrgBriefReply? = nil
 
     @State private var reply: OrgBriefReply?
     /// The node `reply` was read for: the view's state outlives a switch to another node.
@@ -138,6 +140,12 @@ struct OrgBriefView: View {
     private func load() async {
         // A reply for the node shown before must not fill this one's Brief (.task(id:) cancels it).
         let asked = taskId
+        if let givenReply {
+            reply = givenReply
+            replyFor = asked
+            loaded = true
+            return
+        }
         do {
             let fetched = try await WalnutAPI().orgBrief(taskId: asked)
             guard !Task.isCancelled else { return }

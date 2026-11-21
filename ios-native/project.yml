@@ -304,6 +304,8 @@ targets:
     platform: iOS
     sources:
       - WalnutUITests
+      # The long texts the vertical-page width tests and their sideways-drag UI test share.
+      - path: WalnutTests/WideTextFixture.swift
     dependencies:
       - target: Walnut
     settings:

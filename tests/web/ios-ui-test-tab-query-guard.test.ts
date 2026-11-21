@@ -23,6 +23,7 @@ const HELPER = 'AppTabs.swift'
 const ALLOWED_SCOPES: Record<string, string> = {
   navigationBars: 'a page\'s Back button, named after the page it returns to',
   picker: 'QuickQuestionRenameUITests: the project picker\'s Inbox row',
+  orgTabs: 'VerticalPagesSidewaysDragUITests: the Org page\'s Threads | Tasks | Brief segmented switch, never the tab bar',
 }
 
 function code(src: string): string {
