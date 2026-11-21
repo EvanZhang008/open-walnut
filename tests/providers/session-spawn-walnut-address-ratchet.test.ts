@@ -72,9 +72,9 @@ describe('in-server launch builders carry the server root', () => {
 
   it('the Personal AI turn engine (adapter-claude-cli)', () => {
     setSelfApiRoot(ROOT)
-    expect(buildSpawnEnv({ PATH: '/usr/bin' }).OPEN_WALNUT_API_URL).toBe(ROOT)
+    expect(buildSpawnEnv({ HOME: '/h' }).OPEN_WALNUT_API_URL).toBe(ROOT)
     setSelfApiRoot(null)
-    expect(buildSpawnEnv({ PATH: '/usr/bin' }).OPEN_WALNUT_API_URL).toBeUndefined()
+    expect(buildSpawnEnv({ HOME: '/h' }).OPEN_WALNUT_API_URL).toBeUndefined()
   })
 
   it('a host spawn template: a local host gets the root, a remote one none', () => {
