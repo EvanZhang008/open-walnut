@@ -159,6 +159,7 @@ final class ChatDirectorsModelTests: XCTestCase {
     }
 
     /// The task row's choice decodes leniently: an unknown word is auto, and it survives a copy.
+    @MainActor
     func testTheTaskRowCarriesTheChoice() throws {
         func decode(_ director: String) throws -> WalnutTask {
             let json = #"{"id":"t","title":"t","status":"todo","phase":"TODO","priority":"none","project":"Walnut","due_date":null,"#

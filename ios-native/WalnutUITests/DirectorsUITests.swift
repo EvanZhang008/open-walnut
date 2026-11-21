@@ -121,9 +121,10 @@ final class DirectorsUITests: XCTestCase {
         let settings = app.tab(.settings)
         XCTAssertTrue(settings.waitForExistence(timeout: 60))
         settings.tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 20), "Settings did not open")
+        // The Org section sits below the first screen: scroll it in (a List builds rows as they come).
         let sections = element(app, "settings.directors.layout.sections")
-        XCTAssertTrue(sections.waitForExistence(timeout: 20), "no Org section in Settings")
-        XCTAssertTrue(revealInList(app, sections), "the Org section never came on screen")
+        XCTAssertTrue(revealInList(app, sections), "no Org section in Settings")
         XCTAssertTrue(element(app, "settings.directors.showProjects").exists)
         attach(app, "ios-directors-settings")
         sections.tap()

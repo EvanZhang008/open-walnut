@@ -56,7 +56,7 @@ struct DirectorsSettingsSection: View {
                     Text("How the Chat drawer shows the Directors under each VP.")
                 }
             }
-            .accessibilityIdentifier("settings.directors")
+            // No identifier on the Section itself: it would stand in for its rows' own.
         }
     }
 
