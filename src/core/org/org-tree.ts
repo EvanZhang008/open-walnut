@@ -25,7 +25,7 @@ import type { DirectorChoice, OrgRole, TaskPhase } from '../types.js';
 import { askProjectDisplay } from '../sessions/ask-list.js';
 import { fallbackUserState, storedUserState, type UserState, type UserStatus } from '../user-status.js';
 import { isDirector } from './org-directors.js';
-import { isInboxProject } from '../inbox-project.js';
+import { isInboxProject, projectOrInbox } from '../inbox-project.js';
 // The team's news (its tasks' own words) rides the same import for the web (@open-walnut/org-tree).
 export * from './team-news.js';
 export * from './instructions-author.js';
@@ -371,8 +371,8 @@ export function pickLead<T extends OrgTaskLike>(tasks: readonly T[], project: st
  * way out. Undefined while it still leads its project or another one.
  */
 export function successorOf<T extends OrgTaskLike>(tasks: readonly T[], lead: OrgTaskLike): T | undefined {
-  const project = orgProjectName(lead.project);
-  if (lead.org_role !== 'lead' || !project || lead.org_leads?.length) return undefined;
+  if (lead.org_role !== 'lead' || lead.org_leads?.length) return undefined;
+  const project = projectOrInbox(lead.project);
   const now = pickLead(tasks, project);
   return now && now.id !== lead.id && leadsAlso(now, project) ? now : undefined;
 }
@@ -383,10 +383,9 @@ function better(a: OrgTaskLike, b: OrgTaskLike): boolean {
   return (a.created_at ?? '') > (b.created_at ?? '');
 }
 
-/** The project whose lead leads `project`, when that is another project's lead. */
+/** The project whose lead leads `project`, when that is another project's lead (the Inbox's as `Inbox`). */
 function vpOf(lead: OrgTaskLike, project: string): string | undefined {
-  const own = orgProjectName(lead.project);
-  return own && projectKey(own) !== projectKey(project) ? own : undefined;
+  return projectKey(lead.project) !== projectKey(project) ? projectOrInbox(lead.project) : undefined;
 }
 
 /** Build the whole org from the task list. */
@@ -448,11 +447,11 @@ export function buildOrgTree(all: readonly OrgTaskLike[]): OrgTree {
     const counts: OrgCounts = { ...ZERO };
     for (const team of teams) add(counts, team.counts);
     add(total, counts);
-    const picked = project ? pickLead(tasks, project) : undefined;
+    const picked = pickLead(tasks, project);
     // A completed lead talks to no one; the next contact reopens it.
     const lead = picked && picked.phase !== 'COMPLETE' ? picked : undefined;
-    // The Inbox is not a project: no lead, its tasks are talked to one by one.
-    const needsLead = !!project && teams.length > 1;
+    // The Inbox is a project like any other (2026-11-21): its lead, the Inbox VP, is made on first contact too.
+    const needsLead = teams.length > 1;
     const contactId = lead ? lead.id : teams.length === 1 ? teams[0]?.id : undefined;
     const vp = lead ? vpOf(lead, project) : undefined;
     projects.push({
@@ -465,13 +464,13 @@ export function buildOrgTree(all: readonly OrgTaskLike[]): OrgTree {
   // A lead whose project has no open work right now still leads it, and so does
   // every project put under it.
   for (const t of tasks) {
-    if (t.org_role !== 'lead' || t.phase === 'COMPLETE' || !orgProjectName(t.project)) continue;
-    for (const name of [t.project!, ...(t.org_leads ?? [])]) {
+    if (t.org_role !== 'lead' || t.phase === 'COMPLETE') continue;
+    for (const name of [t.project ?? '', ...(t.org_leads ?? [])]) {
       const key = projectKey(name);
-      if (!key || teamsByProject.has(key) || projects.some((p) => projectKey(p.project) === key)) continue;
+      if (teamsByProject.has(key) || projects.some((p) => projectKey(p.project) === key)) continue;
       const lead = pickLead(tasks, name);
       if (!lead || lead.phase === 'COMPLETE') continue;
-      const project = projectKey(lead.project) === key ? orgProjectName(lead.project) : name.trim();
+      const project = projectKey(lead.project) === key ? orgProjectName(lead.project) : orgProjectName(name);
       const vp = vpOf(lead, project);
       projects.push({
         kind: 'project', project, needsLead: false, teams: [], counts: { ...ZERO }, lead: refOf(lead), contactId: lead.id,

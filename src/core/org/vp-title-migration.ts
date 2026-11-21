@@ -20,7 +20,7 @@ export function legacyVpTitleFix(task: VpTitleLike): string | null {
   if (task.org_role === 'main') return task.title === 'Main' ? CEO_LABEL : null;
   if (task.org_role !== 'lead') return null;
   const m = /^(.*\S) lead$/.exec(task.title ?? '');
-  if (!m || !projectKey(m[1]) || projectKey(m[1]) !== projectKey(task.project)) return null;
+  if (!m || projectKey(m[1]) !== projectKey(task.project)) return null;
   return vpTaskTitle(m[1]);
 }
 

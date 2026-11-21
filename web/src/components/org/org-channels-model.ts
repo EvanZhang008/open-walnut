@@ -1,7 +1,7 @@
 /**
  * The Org page's rows, pure (pages/OrgPage.tsx). One row per org node the user
  * talks to, like channels in a chat app: Main pinned on top, then one row per
- * project (its lead, else its one task, else the Inbox's tasks).
+ * project, the Inbox's too (its lead, else its one task).
  *
  *   state   alert   a task in the project needs the user: its session waits on an answer
  *                   or approval or failed, or its status (src/core/user-status.ts) says so,
@@ -375,16 +375,18 @@ function addCounts(a: OrgCounts, b: OrgCounts): OrgCounts {
 /** The projects a VP leads, folded into its own: the VP's row covers all their teams. A project
  *  whose VP's own project is not in the tree (nothing open there) keeps a row of its own. */
 function vpNodes(projects: readonly OrgProjectNode[]): { node: OrgProjectNode; led: OrgProjectNode[] }[] {
-  const own = new Map(projects.filter((p) => p.project && !p.vp).map((p) => [projectKey(p.project), p] as const));
+  // Every project may be a VP's, the Inbox's too: `vp` names it `Inbox`, whose key is ''.
+  const own = new Map(projects.filter((p) => !p.vp).map((p) => [projectKey(p.project), p] as const));
   const led = new Map<string, OrgProjectNode[]>();
   for (const p of projects) {
-    const vp = p.vp ? projectKey(p.vp) : '';
-    if (vp && own.has(vp)) led.set(vp, [...(led.get(vp) ?? []), p]);
+    if (!p.vp) continue;
+    const vp = projectKey(p.vp);
+    if (own.has(vp)) led.set(vp, [...(led.get(vp) ?? []), p]);
   }
   return projects
     .filter((p) => !(p.vp && own.has(projectKey(p.vp))))
     .map((p) => {
-      const under = p.project && !p.vp ? led.get(projectKey(p.project)) ?? [] : [];
+      const under = !p.vp ? led.get(projectKey(p.project)) ?? [] : [];
       if (!under.length) return { node: p, led: [] };
       return {
         node: { ...p, teams: [...p.teams, ...under.flatMap((u) => u.teams)], counts: under.reduce((c, u) => addCounts(c, u.counts), p.counts) },
@@ -394,12 +396,11 @@ function vpNodes(projects: readonly OrgProjectNode[]): { node: OrgProjectNode; l
 }
 
 /**
- * How many VPs the rows are: every project's row. The Inbox row (tasks in no project) has no VP, so
- * it is never counted (review 2026-11-08: "VPs · 6" with five VPs); the chart and the phone count the
- * same way (`ceoLine`, `ChatOrgModel`).
+ * How many VPs the rows are: every project's row, the Inbox's too (2026-11-21: the Inbox is a project
+ * with its VP like any other); the chart counts the same way (`ceoLine`).
  */
 export function vpCount(rows: readonly ChannelRow[]): number {
-  return rows.filter((row) => row.kind === 'project' && row.project !== '').length;
+  return rows.filter((row) => row.kind === 'project').length;
 }
 
 export function buildChannels(tree: OrgTree, tasks: readonly Task[], probe: AlertProbe, areaNames: Readonly<Record<string, string>> = {}): OrgChannels {

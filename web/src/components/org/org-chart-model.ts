@@ -14,7 +14,7 @@
  */
 import type { ChannelRow } from './org-channels-model';
 import { projectKey, teamNews, type OrgTaskNode, type TeamNewsTask } from '@open-walnut/org-tree';
-import type { Task } from '@open-walnut/core';
+import { projectOrInbox, type Task } from '@open-walnut/core';
 import { stateCountLabel } from '@open-walnut/user-status';
 import { projectDisplayName } from '../../utils/project-display';
 
@@ -45,8 +45,6 @@ export interface VpCard {
   /** Its lead (the CEO's VP), when it has one: the one whose name and instructions the user sets. */
   leadId?: string;
   vpOnly: boolean;
-  /** 'VP' for a project; the Inbox is no one's team. */
-  role: 'VP' | 'Inbox';
   line: string;
   /** The card's news: its most urgent project's, else its newest. */
   news: string;
@@ -76,32 +74,31 @@ function projectOf(row: ChannelRow): VpProject {
 
 /** A VP's name as the chart says it: what the user named its lead, else its project's name. */
 export function vpNameOf(row: ChannelRow): string {
-  if (!row.project) return 'Inbox';
   return (!row.vp && row.vpName) || projectDisplayName(row.project);
 }
 
 /** The VP cards, in the rows' order: a project under another VP joins that VP's card. */
 export function vpCards(rows: readonly ChannelRow[]): VpCard[] {
-  const home = new Map(rows.filter((r) => r.project).map((r) => [projectKey(r.project), r] as const));
+  const home = new Map(rows.map((r) => [projectKey(r.project), r] as const));
   // A project whose VP's own row is missing (that VP has nothing open) stands alone.
-  const vpOf = (r: ChannelRow) => (r.vp && home.has(projectKey(r.vp)) ? projectKey(r.vp) : '');
+  // `vp` names the Inbox `Inbox` (its key is ''), so a row is under a VP when it has `vp` at all.
+  const vpOf = (r: ChannelRow) => (r.vp && home.has(projectKey(r.vp)) ? projectKey(r.vp) : undefined);
   const cards: VpCard[] = [];
   const byKey = new Map<string, VpCard>();
   for (const row of rows) {
-    if (vpOf(row)) continue;
+    if (vpOf(row) !== undefined) continue;
     const home = projectOf(row);
     const vpOnly = !!row.vpOnly;
     const card: VpCard = {
       key: row.key, project: row.project, name: vpNameOf(row), home, vpOnly, ...(row.leadId ? { leadId: row.leadId } : {}),
-      role: row.project ? 'VP' : 'Inbox',
       line: '', news: '', newsAt: 0, needsYou: 0, projects: vpOnly && row.counts.open === 0 ? [] : [home], row,
     };
     cards.push(card);
-    if (row.project) byKey.set(projectKey(row.project), card);
+    byKey.set(projectKey(row.project), card);
   }
   for (const row of rows) {
     const vp = vpOf(row);
-    if (vp) byKey.get(vp)?.projects.push(projectOf(row));
+    if (vp !== undefined) byKey.get(vp)?.projects.push(projectOf(row));
   }
   for (const card of cards) {
     // A hidden home still speaks for the VP itself: its own ask of the user is on that row.
@@ -131,7 +128,8 @@ function groupLine(projects: readonly VpProject[]): string {
 
 /** The CEO card's line: how many VPs, and how many of them have work moving. */
 export function ceoLine(cards: readonly VpCard[]): string {
-  const vps = cards.filter((c) => c.role === 'VP').length;
+  // Every card is a VP's, the Inbox's too (2026-11-21: the Inbox is a project like any other).
+  const vps = cards.length;
   const working = cards.filter((c) => c.projects.some((p) => p.row.counts.running > 0)).length;
   return `${vps} ${vps === 1 ? 'VP' : 'VPs'}${working ? ` · ${stateCountLabel('working', working)}` : ''}`;
 }
@@ -143,7 +141,8 @@ export function cardOf(cards: readonly VpCard[], projectKeyValue: string): VpCar
 
 /** What a drop would do, said before it happens; null = nothing would change. */
 export interface DropPlan {
-  /** The project that moves, and the project whose VP leads it after ('' = its own). */
+  /** The project that moves, and the project whose VP leads it after ('' = its own), as the server
+   *  takes them: the Inbox by its name, since '' as `vp` means its own. */
   project: string;
   vp: string;
   /** One line under the card while dragging. */
@@ -159,14 +158,13 @@ const TheVp = (name: string): string => `The ${name} VP`;
 
 /** Drop `project` (a project on some card) onto `target` (a VP card, or null = a dedicated VP of its own). */
 export function dropPlan(cards: readonly VpCard[], project: VpProject, target: VpCard | null): DropPlan | null {
-  if (!project.project) return null; // the Inbox has no VP
   const from = cardOf(cards, project.key);
   if (!from) return null;
   const isHome = from.key === project.key;
   if (target === null) {
     if (isHome) return null; // already its own
     return {
-      project: project.project,
+      project: projectOrInbox(project.project),
       vp: '',
       hint: `Drop: ${project.name} gets a dedicated VP`,
       title: `Create a dedicated VP for ${project.name}?`,
@@ -178,7 +176,7 @@ export function dropPlan(cards: readonly VpCard[], project: VpProject, target: V
       confirm: 'Create a dedicated VP',
     };
   }
-  if (target.role !== 'VP' || target.key === from.key) return null;
+  if (target.key === from.key) return null;
   const carried = isHome ? from.projects.filter((p) => p !== from.home).map((p) => p.name) : [];
   const names = [project.name, ...carried];
   // Who lets go: the project's own lead (it steps down), or the VP it is under now (it stays).
@@ -192,8 +190,8 @@ export function dropPlan(cards: readonly VpCard[], project: VpProject, target: V
         ? `${TheVp(leaving)} sums up its work for ${theVp(target.name)}, then steps down.`
         : `${TheVp(leaving)} steps down; it never started, so there is nothing to hand over.`;
   return {
-    project: project.project,
-    vp: target.project,
+    project: projectOrInbox(project.project),
+    vp: projectOrInbox(target.project),
     hint: `Drop: ${theVp(target.name)} takes over ${project.name}`,
     title: `Put ${project.name} under ${theVp(target.name)}?`,
     lines: [

@@ -62,7 +62,7 @@ export function orgRowMenu({ target, cards, select, openChart, pick, newDirector
   ];
   if (r.kind === 'main') return [...items, { key: 'sep', divider: true }, { key: 'chart', label: 'Open the org chart', onSelect: () => openChart() }];
 
-  const vp = newDirector ? cards.find((c) => c.key === r.key && c.role === 'VP' && c.projects.length > 0) : undefined;
+  const vp = newDirector ? cards.find((c) => c.key === r.key && c.projects.length > 0) : undefined;
   if (vp && newDirector) items.push({ key: 'sep-director', divider: true }, { key: 'director', label: 'New Director…', onSelect: () => newDirector(vp.key) });
   const own = projectOf(r.key);
   const under = own ? cards.filter((c) => c.key !== r.key && dropPlan(cards, own, c)) : [];

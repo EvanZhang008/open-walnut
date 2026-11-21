@@ -21,7 +21,9 @@
 import { useMemo, useRef, useState, type DragEvent } from 'react';
 import { createPortal } from 'react-dom';
 import type { Task } from '@open-walnut/core';
+import { projectKey } from '@open-walnut/org-tree';
 import { setProjectVp } from '@/api/org';
+import { projectDisplayName, projectGroupKey } from '@/utils/project-display';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { useDialogFocus } from '@/hooks/useDialogFocus';
 import { log } from '@/utils/log';
@@ -138,7 +140,7 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
     const about = pending?.project;
     setPending(null);
     if (about === undefined) return;
-    panel?.querySelector<HTMLElement>(`[data-testid="org-chart-project"][data-project="${CSS.escape(about)}"] [data-testid="org-chart-project-toggle"]`)?.focus();
+    panel?.querySelector<HTMLElement>(`[data-testid="org-chart-project"][data-project="${CSS.escape(projectGroupKey(about))}"] [data-testid="org-chart-project-toggle"]`)?.focus();
   };
 
   const apply = async () => {
@@ -149,8 +151,10 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
       const res = await setProjectVp(pending.project, pending.vp);
       log.info('org-chart', 'project vp changed', { project: res.project, vp: res.vp, leadTaskId: res.lead?.id, moved: res.moved.length, handover: res.handover.length });
       // The VP as its card names it (the user may have named it), else its project.
-      const to = cards.find((c) => c.project && c.project === res.vp)?.name ?? res.vp;
-      setDone(res.vp ? `${res.project} is now under ${theVp(to)}.` : `${res.project} has a dedicated VP again.`);
+      const to = cards.find((c) => projectKey(c.project) === projectKey(res.vp))?.name ?? res.vp;
+      // The answer says '' for the Inbox (the /api/v1 wire): shown by its name.
+      const moved = projectDisplayName(res.project);
+      setDone(res.vp ? `${moved} is now under ${theVp(to)}.` : `${moved} has a dedicated VP again.`);
       setPending(null);
     } catch (err) {
       // The server's own words when it answered; a dropped connection is just "try again".
@@ -250,12 +254,12 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
     return [
       { key: 'open', label: 'Open chat', onSelect: () => pick(card.key) },
       // Its Directors' fold opens on a name input (director-actions.ts), for a VP with none yet too.
-      ...(leadersOn && card.role === 'VP' && card.projects.length ? [{ key: 'director', label: 'New Director…', onSelect: () => askNewDirector(card.key, 'chart') }] : []),
+      ...(leadersOn && card.projects.length ? [{ key: 'director', label: 'New Director…', onSelect: () => askNewDirector(card.key, 'chart') }] : []),
       ...topicMenuItems(orgNodeMember(card.row)),
-      ...(card.project ? [{
-      key: 'edit', label: 'Edit name and instructions…',
-      onSelect: () => openEditor({ kind: 'edit', ...(lead ? { task: lead } : {}), project: card.project, name: card.name }, from),
-    }] : []),
+      {
+        key: 'edit', label: 'Edit name and instructions…',
+        onSelect: () => openEditor({ kind: 'edit', ...(lead ? { task: lead } : {}), project: card.project, name: card.name }, from),
+      },
     ];
   };
   const nodeMore = (card: VpCard | null, label: string) => (
@@ -362,15 +366,15 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
                   key={c.key}
                   card={c}
                   className={`oc-vp${over ? ' is-over' : ''}${dragged && plan ? ' can-drop' : ''}${dragKey === c.key && single ? ' is-dragging' : ''}`}
-                  zone={c.role === 'VP' ? dropZone(c.key, c) : {}}
-                  draggable={!!c.project && !c.vpOnly}
+                  zone={dropZone(c.key, c)}
+                  draggable={!c.vpOnly}
                   onDragStart={(e) => onDragStart(e, home)}
                   onDragEnd={endDrag}
                   onContextMenu={(from, point) => openNodeMenu(c, from, point)}
                   onOpenChat={() => pick(c.key)}
                   line={nowLine(c.projects, byId)}
-                  more={c.role === 'VP' ? nodeMore(c, `More for ${theVp(c.name)}`) : null}
-                  {...(leadersOn && c.role === 'VP' ? { leaders: <OrgLeaders groups={leaderGroups(sourcesOf(c.projects), byId)} projects={c.projects} showProjects={settings.directorsShowProjects !== false} surface="chart" vpKey={c.key} vpName={c.name} onLeave={onClose} /> } : {})}
+                  more={nodeMore(c, `More for ${theVp(c.name)}`)}
+                  {...(leadersOn ? { leaders: <OrgLeaders groups={leaderGroups(sourcesOf(c.projects), byId)} projects={c.projects} showProjects={settings.directorsShowProjects !== false} surface="chart" vpKey={c.key} vpName={c.name} onLeave={onClose} /> } : {})}
                 >
                   <ul className="oc-projects" data-testid="org-chart-projects" aria-label={`Projects ${theVp(c.name)} leads`} hidden={c.projects.length === 0}>
                     {c.projects.map((p) => (
@@ -382,7 +386,7 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
                         onDragStart={onDragStart}
                         onDragEnd={endDrag}
                         onLeave={onClose}
-                        {...(p.project ? { onMove: (from: HTMLElement, point?: { x: number; y: number }) => openMenu(p, from, point) } : {})}
+                        onMove={(from: HTMLElement, point?: { x: number; y: number }) => openMenu(p, from, point)}
                       />
                     ))}
                   </ul>

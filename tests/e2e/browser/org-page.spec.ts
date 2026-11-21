@@ -498,3 +498,45 @@ test('the org\'s name and the user\'s role are renamed in place, kept, and the C
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('org-name')).toHaveText('Org', { timeout: 20_000 })
 })
+
+test('the Inbox is a VP like any project: its row offers its VP, and once contacted it is the Inbox VP', async ({ page, request }) => {
+  // 2026-11-21, the user: the Inbox is a project now, so it is a VP like the others. Two Inbox
+  // tasks (no project): two teams and no lead, so the row offers the VP its first chat makes.
+  await createTask(request, `Inbox one ${STAMP}`, '')
+  await createTask(request, `Inbox two ${STAMP}`, '')
+  const tree = async () => (await (await request.get('/api/v1/org')).json()).tree as { projects: { project: string; lead?: { id: string }; needsLead: boolean }[] }
+  const inboxNode = async () => (await tree()).projects.find((p) => p.project === '')
+  expect(await inboxNode(), 'the shared fixture has no Inbox VP yet').toMatchObject({ needsLead: true })
+  expect((await inboxNode())!.lead).toBeUndefined()
+
+  await openOrg(page)
+  const inbox = row(page, '')
+  await expect(inbox).toHaveCount(1)
+  await expect(inbox.locator('.org-channel-name')).toHaveText('Inbox')
+  // Among the VPs: listed under the VPs heading, and counted in it and on the CEO's line alike
+  // (vpCount counts every project row, the Inbox's too: tests/web/org-channels-model.test.ts).
+  const head = page.getByTestId('org-vps-head')
+  await expect(head).toHaveText(/^VPs · \d+$/)
+  expect(await head.evaluate((h, el) => !!el && !!(h.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING), await inbox.elementHandle())).toBe(true)
+  const vps = Number((await head.innerText()).replace(/\D+/g, ''))
+  await expect(page.getByTestId('org-channel-main').getByTestId('org-channel-latest')).toContainText(`${vps} VPs`)
+  await inbox.click()
+  await expect(inbox).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByTestId('org-detail-title')).toHaveText('Inbox VP')
+  // The start a lead-less project offers (no Inbox-only note any more).
+  await expect(page.getByTestId('org-chat-start')).toHaveAttribute('data-state', 'no-vp')
+  await expect(page.getByTestId('org-start-chat')).toHaveText('Make a VP')
+  await expect(page.getByTestId('org-no-contact')).toHaveCount(0)
+
+  // Contacted (as Main's org_send would): its lead is made, filed in the Inbox, and the row is that VP's.
+  const contact = await post<{ task: { id: string; title: string }; kind: string; project: string }>(request, '/api/v1/org/contact', { to: 'Inbox' })
+  made.push(contact.task.id)
+  expect(contact).toMatchObject({ kind: 'lead', project: '', task: { title: 'Inbox VP' } })
+  await expect.poll(async () => (await inboxNode())?.lead?.id).toBe(contact.task.id)
+  // The row now has its VP to talk to: no more Make a VP (its chat starts, or waits for a click).
+  await expect(page.locator('[data-testid="org-chat-start"][data-state="no-vp"]')).toHaveCount(0, { timeout: 30_000 })
+  await expect(page.getByTestId('org-detail-title')).toHaveText('Inbox VP')
+  // A VP's own row counts its threads, as every VP's does.
+  await expect(inbox.getByTestId('org-channel-badge')).toHaveAttribute('title', /^\d+ threads?$/, { timeout: 30_000 })
+  await expect(page.getByTestId('org-no-contact')).toHaveCount(0)
+})

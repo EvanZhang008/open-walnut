@@ -68,7 +68,8 @@ function oneLine(raw: unknown, what: string): string {
   const name = raw.replace(/\s+/g, ' ').trim();
   if (!name) throw new OrgError('bad_name', 400, `${what} must not be empty.`);
   if (name.length > ORG_NAME_MAX) throw new OrgError('bad_name', 400, `${what} is at most ${ORG_NAME_MAX} characters.`);
-  if (projectKey(name) === projectKey('Inbox')) throw new OrgError('bad_name', 400, 'The Inbox has no VP: pick another name.');
+  // The Inbox is always a project (inbox-project.ts), with or without open work: a new name is never it.
+  if (projectKey(name) === projectKey('Inbox')) throw new OrgError('bad_name', 400, '"Inbox" is the Inbox\'s name: pick another name.');
   // "Ask …" is where the console's agents keep their asks (sessions/ask-agent.ts).
   if (/^ask\s/i.test(name)) throw new OrgError('bad_name', 400, 'Names starting with "Ask" belong to the chat\'s agents: pick another.');
   return name;
@@ -325,8 +326,8 @@ export async function editOrgNode(taskId: string, edit: OrgNodeEdit, writer: Org
  * no lead behind; a closed lead brought back for it starts clean, as one a new project reopens.
  */
 export async function editProjectVp(project: string, edit: OrgNodeEdit, writer: OrgWriter = USER): Promise<Task> {
+  // '' or `Inbox` is the Inbox, whose VP is edited like any project's.
   const name = project.trim();
-  if (!name || projectKey(name) === projectKey('Inbox')) throw new OrgError('no_lead_for_inbox', 400, 'The Inbox has no VP.');
   const clean = cleanEdit(edit, 'lead');
   const edited = await withOrgLock(async () => {
     const tm = await import('../task-manager.js');

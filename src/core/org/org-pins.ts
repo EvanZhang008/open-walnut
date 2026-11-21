@@ -16,6 +16,7 @@ import type { Task } from '../types.js';
 import { log } from '../../logging/index.js';
 import { OrgError, orgTasks } from './org-store.js';
 import { ORG_MAIN_NODE, orgProjectNode, projectKey } from './org-tree.js';
+import { projectOrInbox } from '../inbox-project.js';
 import type { OrgWriter } from './org-node-edit.js';
 
 type NodeTask = Pick<Task, 'project' | 'org_role' | 'org_name' | 'org_leads' | 'phase'>;
@@ -58,9 +59,9 @@ export function resolvePinNode(raw: string, tasks: readonly NodeTask[]): string 
 export function pinNodeName(node: string, tasks: readonly NodeTask[]): string {
   if (node === ORG_MAIN_NODE) return 'the CEO';
   const key = node.slice('project:'.length);
-  if (!key) return 'the Inbox';
   const lead = tasks.find((t) => t.org_role === 'lead' && t.phase !== 'COMPLETE' && projectKey(t.project) === key);
-  const name = lead?.org_name?.trim() || tasks.find((t) => projectKey(t.project) === key)?.project?.trim() || key;
+  // The Inbox's node ('' key) is the Inbox VP's, as any project's is its VP's.
+  const name = lead?.org_name?.trim() || projectOrInbox(tasks.find((t) => projectKey(t.project) === key)?.project?.trim() || key);
   return `the ${name} VP`;
 }
 

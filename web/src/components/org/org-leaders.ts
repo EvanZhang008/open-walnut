@@ -11,7 +11,7 @@
  * Director by default, the user may make any task one (Task.director 'yes') or take a leader off
  * ('no'), and a task that is no Director passes the Directors under it up.
  */
-import type { Task } from '@open-walnut/core';
+import { projectOrInbox, type Task } from '@open-walnut/core';
 import { directorsOf, orgDisplayTitle, projectKey, type OrgDirector, type OrgTaskNode } from '@open-walnut/org-tree';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { stateWord, type UserState } from '@open-walnut/user-status';
@@ -140,9 +140,8 @@ export function directorRows(vps: readonly ChannelRow[], groupsOf: (row: Channel
   });
 }
 
-/** The projects a New Director may go to, per VP card: only a VP's own projects. The Inbox is no
- *  one's team: a Director made there would show in no Directors list (2026-11-20 review). */
-export function directorProjectsByVp(cards: readonly Pick<VpCard, 'key' | 'role' | 'projects'>[]): Map<string, { project: string; name: string }[]> {
-  return new Map(cards.filter((c) => c.role === 'VP').map((c) => [c.key, c.projects
-    .filter((p) => !!p.project.trim()).map((p) => ({ project: p.project, name: p.name }))] as const));
+/** The projects a New Director may go to, per VP card: the projects that VP leads, the Inbox by its
+ *  name (a row says '' for it; the Inbox has its VP like any project since 2026-11-21). */
+export function directorProjectsByVp(cards: readonly Pick<VpCard, 'key' | 'projects'>[]): Map<string, { project: string; name: string }[]> {
+  return new Map(cards.map((c) => [c.key, c.projects.map((p) => ({ project: projectOrInbox(p.project), name: p.name }))] as const));
 }

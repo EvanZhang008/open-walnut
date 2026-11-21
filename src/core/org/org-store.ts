@@ -17,7 +17,7 @@ import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
 import { bus, EventNames } from '../event-bus.js';
 import { ASK_WALNUT_PROJECT } from '../sessions/ask-list.js';
-import { isInboxProject } from '../inbox-project.js';
+import { INBOX_PROJECT, projectOrInbox } from '../inbox-project.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import {
   DIGEST_FOLD_MS, DIGEST_MAX_LINES, buildOrgTree, directorsOf, findProjectNode, formatAlertLine, formatDigestLine, isOrgMember, leadsAlso, orgDigest, pickLead,
@@ -102,9 +102,8 @@ export function ensureMainTask(): Promise<Task> {
 
 /** A project's lead, made on first contact. Local: a lead is never pushed to a sync backend. */
 export function ensureProjectLead(project: string): Promise<Task> {
+  // The Inbox ('' or `Inbox`) is a project like any other: its lead is the Inbox VP (2026-11-21).
   const name = project.trim();
-  // The Inbox is the CEO's own project (inbox-project.ts): it never gets a lead of its own.
-  if (isInboxProject(name)) return Promise.reject(new OrgError('no_lead_for_inbox', 400, 'The Inbox has no lead: talk to its tasks directly.'));
   return serial(() => ensureLeadNow(name));
 }
 
@@ -136,10 +135,11 @@ export async function ensureLeadNow(name: string): Promise<Task> {
   return task;
 }
 
+/** A project's name as its tasks spell it; the Inbox always as `Inbox` (an older row says ''). */
 function canonicalProject(tasks: readonly OrgTaskLike[], name: string): string {
-  return tasks.find((t) => isOrgMember(t) && projectKey(t.project) === projectKey(name))?.project?.trim()
+  return projectOrInbox(tasks.find((t) => isOrgMember(t) && projectKey(t.project) === projectKey(name))?.project?.trim()
     || pickOwnLead(tasks, name)?.project?.trim()
-    || name.trim();
+    || name.trim());
 }
 
 const LEAD_DESCRIPTION_HEAD = 'Leads the work in project';
@@ -226,7 +226,7 @@ async function writeLeads(lead: Task, list: readonly string[]): Promise<void> {
 
 function uniqueProjects(list: readonly string[]): string[] {
   const seen = new Set<string>();
-  return list.filter((p) => { const k = projectKey(p); if (!k || seen.has(k)) return false; seen.add(k); return true; });
+  return list.map(projectOrInbox).filter((p) => { const k = projectKey(p); if (seen.has(k)) return false; seen.add(k); return true; });
 }
 
 /** Move the open direct subtasks of `from` (in `project`, or any) to `to`. */
@@ -356,10 +356,9 @@ async function tellTakeOver(lead: Task, project: string): Promise<void> {
  * move is refused, logged, and nothing changes (`refused` says why).
  */
 export async function setProjectVp(project: string, vp: string, guard: ProjectVpGuard = {}): Promise<ProjectVpResult> {
+  // '' or `Inbox` names the Inbox as `project`; as `vp`, '' means the project's own, so the Inbox's VP is `Inbox`.
   const name = project.trim();
   const target = vp.trim();
-  if (isInboxProject(name)) throw new OrgError('no_vp_for_inbox', 400, 'The Inbox has no VP: it is the CEO\'s own project, and its tasks are talked to one by one.');
-  if (isInboxProject(target) && target) throw new OrgError('no_vp_for_inbox', 400, 'The Inbox is not a VP.');
   const { result, handovers, newLead } = await serial(() => moveProjectNow(name, target, guard));
   const { closeAfterHandover } = await import('./handover-close.js');
   for (const h of handovers) {
@@ -558,8 +557,6 @@ export interface OrgReportRow {
   contact?: { id?: string; title: string; kind: 'lead' | 'team' };
   /** The few that wait on the user, by title, so the main agent can name them. */
   waiting_on_user?: { id: string; title: string }[];
-  /** A project with no one contact (the Inbox): its first tasks. */
-  teams?: { id: string; title: string }[];
   /** A team or worker that is a Director under its VP (org-directors.ts); absent = not one. */
   director?: true;
 }
@@ -590,15 +587,13 @@ export async function orgReportsOf(of: Task | undefined): Promise<{ of: string; 
             title: (p.lead?.name ? `${p.lead.name} VP` : p.lead?.title) ?? p.teams.find((t) => t.id === p.contactId)?.title ?? p.contactId,
             kind: p.lead ? 'lead' : 'team',
           }
-          : p.needsLead ? { title: `${p.project} lead (made on first contact)`, kind: 'lead' } : undefined;
+          : p.needsLead ? { title: `${p.project || INBOX_PROJECT} lead (made on first contact)`, kind: 'lead' } : undefined;
         return {
-          title: p.project || 'Inbox',
+          title: p.project || INBOX_PROJECT,
           kind: 'project' as const,
           project: p.project,
           open: p.counts.open, running: p.counts.running, needs_you: p.counts.needsYou, to_read: p.counts.toRead, waiting: p.counts.waiting,
           ...(contact ? { contact } : {}),
-          // The Inbox has no lead: name its first few tasks so they can be talked to directly.
-          ...(!contact ? { teams: p.teams.slice(0, 5).map((t) => ({ id: t.id, title: t.title })) } : {}),
           ...(p.counts.needsYou ? { waiting_on_user: waitingOnUser(p.teams) } : {}),
         };
       }),

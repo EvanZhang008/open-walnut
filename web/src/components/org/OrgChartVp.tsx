@@ -12,6 +12,7 @@
 import type { DragEvent, KeyboardEvent, ReactNode } from 'react';
 import { isBoolean, usePageViewOf } from '@/utils/view-memory';
 import { OrgAvatar } from './OrgAvatar';
+import { VP_LABEL } from '@open-walnut/org-tree';
 import { theVp, type NowLine, type VpCard } from './org-chart-model';
 import type { ChannelRow } from './org-channels-model';
 
@@ -82,7 +83,7 @@ interface VpProps {
   onOpenChat: () => void;
   /** Its open tasks and what it is doing now, after its name. */
   line: NowLine;
-  /** Its ⋯ menu, for a VP (the Inbox has none). */
+  /** Its ⋯ menu. */
   more: ReactNode;
   /** The leaders under it (OrgLeaders), between its head and its projects; absent while the experiment is off. */
   leaders?: ReactNode;
@@ -123,7 +124,7 @@ export function OrgChartVp({ card: c, line, className, zone, draggable, onDragSt
           <span className="oc-card-main">
             <span className="oc-card-headline">
               <span className="oc-card-title" data-testid="org-chart-vp-name">{c.name}</span>
-              <span className="oc-role">{c.role}</span>
+              <span className="oc-role">{VP_LABEL}</span>
               <span className="oc-now" data-testid="org-chart-vp-now">{line.open} open</span>
             </span>
             {/* What it is doing now: its newest task at work, one line the card's width. */}

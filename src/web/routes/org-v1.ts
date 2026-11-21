@@ -206,13 +206,15 @@ async function teamTaskOf(contact: { task: Task; kind: string; project?: string 
   const { teamOf } = await import('../../core/org/team-asks.js')
   if (contact.task.org_role === 'lead' && teamOf(tasks, target)?.lead.id === contact.task.id) return target
   throw new OrgError('task_outside_contact', 400,
-    `"${target.title}" (${target.id}) is not in ${contact.project ? `the ${contact.project} team` : 'that team'}: send it there yourself with task_send, or leave out \`task\`.`)
+    `"${target.title}" (${target.id}) is not in the ${contact.project || 'Inbox'} team: send it there yourself with task_send, or leave out \`task\`.`)
 }
 
 orgV1Router.post('/org/vp', async (req: Request, res: Response, next: NextFunction) => {
   try {
     primaryOnly('A project\'s VP is changed')
-    const project = typeof req.body?.project === 'string' ? req.body.project : ''
+    // '' is the Inbox here, as everywhere in /api/v1: a missing project is refused, never read as it.
+    if (typeof req.body?.project !== 'string') throw new OrgError('missing_project', 400, '`project` is required: a project name ("" or "Inbox" for the Inbox).')
+    const project: string = req.body.project
     const vp = req.body?.vp
     if (vp !== undefined && typeof vp !== 'string') throw new OrgError('bad_vp', 400, '`vp` is a project name, or "" for the project\'s own.')
     res.json(await setProjectVp(project, vp ?? ''))

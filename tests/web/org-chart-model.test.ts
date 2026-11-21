@@ -71,11 +71,12 @@ describe('org chart cards', () => {
     expect(stateIcon({ state: 'waiting', snoozed: true })).toBe(ICONS.ICON_SNOOZE)
   })
 
-  it('one card per project, named after it, the Inbox last and no one\'s VP', () => {
+  it('one card per project, named after it, the Inbox last and a VP like any other', () => {
     const cards = cardsOf([...garden, ...seeds, ...inbox, gardenLead, seedsLead])
-    expect(cards.map((c) => [c.name, c.role, c.projects.length])).toEqual([['Garden', 'VP', 1], ['Seeds', 'VP', 1], ['Inbox', 'Inbox', 1]])
+    expect(cards.map((c) => [c.name, c.projects.length])).toEqual([['Garden', 1], ['Seeds', 1], ['Inbox', 1]])
     expect(cards.find((c) => c.name === 'Garden')!.line).toBe('1 Working · 1 Waiting / snoozed')
-    expect(ceoLine(cards)).toBe('2 VPs · 2 Working')
+    // The Inbox is a project with its VP since 2026-11-21: counted with the others.
+    expect(ceoLine(cards)).toBe('3 VPs · 2 Working')
   })
 
   it('a project under another VP joins that VP\'s card and keeps its own line', () => {
@@ -86,7 +87,7 @@ describe('org chart cards', () => {
     expect(g.projects.map((p) => [p.name, p.line])).toEqual([['Garden', '1 Working · 1 Waiting / snoozed'], ['Seeds', '1 Working · 1 Waiting / snoozed']])
     expect(g.line).toBe('2 projects · 2 Working · 2 Waiting / snoozed')
     expect(cards.some((c) => c.name === 'Seeds')).toBe(false)
-    expect(ceoLine(cards)).toBe('1 VP · 1 Working')
+    expect(ceoLine(cards)).toBe('2 VPs · 1 Working')
   })
 
   it('a card says its team\'s news in the tasks\' own words with its time, the counts under it', () => {
@@ -146,7 +147,7 @@ describe('org chart cards', () => {
     let cards = cardsOf([...garden, ...seeds, named, seedsLead, growth])
     expect(cards.find((c) => c.project === 'Garden')!.name).toBe('Green Thumb')
     const g = cards.find((c) => c.project === 'Growth')!
-    expect([g.name, g.role, g.vpOnly, g.projects.length, g.line, g.news]).toEqual(['Growth', 'VP', true, 0, 'No projects yet: drag one here', ''])
+    expect([g.name, g.vpOnly, g.projects.length, g.line, g.news]).toEqual(['Growth', true, 0, 'No projects yet: drag one here', ''])
     expect(g.leadId).toBe(growth.id)
     // A project dragged under it is its only one; the VP's own ask of the user still counts.
     cards = cardsOf([...garden, ...seeds, named, { ...seedsLead, phase: 'COMPLETE' as const }, { ...growth, org_leads: ['Seeds'], phase: 'NEED_ACTION' as const }])
@@ -197,15 +198,25 @@ describe('org chart drops', () => {
       .toHaveLength(2)
   })
 
-  it('nothing happens onto its own card, onto the Inbox, or for the Inbox itself', () => {
+  it('nothing happens onto its own card; the Inbox drops like any project, sent by its name', () => {
     const cards = plain()
     const g = cards.find((c) => c.name === 'Garden')!
-    const i = cards.find((c) => c.role === 'Inbox')!
+    const i = cards.find((c) => c.project === '')!
+    expect(i.name).toBe('Inbox')
     expect(dropPlan(cards, g.projects[0]!, g)).toBeNull()
-    expect(dropPlan(cards, g.projects[0]!, i)).toBeNull()
-    expect(dropPlan(cards, i.projects[0]!, g)).toBeNull()
+    expect(dropPlan(cards, i.projects[0]!, i)).toBeNull()
     // Its own VP already.
     expect(dropPlan(cards, g.projects[0]!, null)).toBeNull()
+    expect(dropPlan(cards, i.projects[0]!, null)).toBeNull()
+    // '' as `vp` means "its own" to the server, so the Inbox is named Inbox on both sides.
+    expect(dropPlan(cards, g.projects[0]!, i)).toMatchObject({ project: 'Garden', vp: 'Inbox', title: 'Put Garden under the Inbox VP?' })
+    expect(dropPlan(cards, i.projects[0]!, g)).toMatchObject({ project: 'Inbox', vp: 'Garden', title: 'Put Inbox under the Garden VP?' })
+    // Under Garden, the Inbox can go back to its own VP.
+    const under = cardsOf([...garden, ...inbox, { ...gardenLead, org_leads: ['Inbox'] }])
+    expect(under.map((c) => c.name)).toEqual(['Garden'])
+    const inboxOnG = under[0]!.projects.find((p) => p.project === '')!
+    expect(inboxOnG.name).toBe('Inbox')
+    expect(dropPlan(under, inboxOnG, null)).toMatchObject({ project: 'Inbox', vp: '', title: 'Create a dedicated VP for Inbox?' })
   })
 
   it('a project under a VP can go back to its own, or on to a third VP', () => {

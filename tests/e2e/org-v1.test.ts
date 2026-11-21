@@ -256,12 +256,17 @@ describe('/api/v1/org', () => {
     expect(unknown.json.error).toContain('"Main" (or "CEO")')
   })
 
-  it('the Inbox has no lead; an unknown contact is a 404 that names it', async () => {
+  it('the Inbox gets its VP on first contact like any project (the wire says \'\'); an unknown contact is a 404 that names it', async () => {
     await addTask({ title: 'inbox one', project: '' })
-    await addTask({ title: 'inbox two', project: '' })
-    const inbox = await api<{ code?: string }>('POST', '/org/contact', { to: 'Inbox' })
-    expect(inbox.status).toBe(400)
-    expect(inbox.json.code).toBe('no_lead_for_inbox')
+    await addTask({ title: 'inbox two', project: 'Inbox' })
+    const inbox = await api<{ task: { id: string; title: string; project: string }; kind: string; project: string }>('POST', '/org/contact', { to: 'Inbox' })
+    expect(inbox.status).toBe(200)
+    // The frozen /api/v1 says '' for the Inbox; the lead's own task is filed in the Inbox.
+    expect(inbox.json).toMatchObject({ kind: 'lead', project: '', task: { title: 'Inbox VP', project: '' } })
+    expect((await getTask(inbox.json.task.id)).project).toBe('Inbox')
+    const again = await api<{ task: { id: string } }>('POST', '/org/contact', { to: 'inbox' })
+    expect(again.json.task.id).toBe(inbox.json.task.id)
+    expect((await listTasks()).filter((x) => x.org_role === 'lead' && x.project === 'Inbox')).toHaveLength(1)
     const unknown = await api<{ code?: string; error?: string }>('POST', '/org/contact', { to: 'no-such-project' })
     expect(unknown.status).toBe(404)
     expect(unknown.json.error).toContain('no-such-project')
@@ -279,8 +284,9 @@ describe('/api/v1/org', () => {
     expect(titles.at(-1)).toBe('Inbox')
     expect(main.json.rows.find((r) => r.title === 'Walnut')?.contact).toMatchObject({ kind: 'lead' })
     expect(main.json.rows.find((r) => r.title === 'Tickets')?.contact).toMatchObject({ kind: 'team', id: leader.id })
-    expect(main.json.rows.find((r) => r.title === 'Inbox')?.contact).toBeUndefined()
-    expect(main.json.rows.find((r) => r.title === 'Inbox')?.teams).toHaveLength(2)
+    // The Inbox's VP, made on first contact above, is its contact like any project's lead.
+    expect(main.json.rows.find((r) => r.title === 'Inbox')?.contact).toMatchObject({ kind: 'lead', title: 'Inbox VP' })
+    expect(main.json.rows.find((r) => r.title === 'Inbox')?.teams).toBeUndefined()
 
     const leadId = (await listTasks()).find((x) => x.org_role === 'lead')!.id
     const lead = await api<{ rows: { title: string; kind: string }[] }>('GET', `/org/reports?of=${leadId}`)
@@ -710,9 +716,16 @@ describe('/api/v1/org', () => {
       expect(arg.split("'\\''").join("'")).toBe(JSON.stringify({ to: 'b', title: "Handover: Bob's garden", text: '<your summary>', expect_reply: false }))
     })
 
-    it('refuses the Inbox, an unknown project and a bad body', async () => {
-      expect((await api('POST', '/org/vp', { project: '', vp: 'Seeds' })).status).toBe(400)
-      expect((await api('POST', '/org/vp', { project: 'Seeds', vp: 'Inbox' })).status).toBe(400)
+    it('the Inbox goes under another VP and back like any project; a missing project, an unknown one and a bad body are refused', async () => {
+      // '' (the wire's Inbox) or Inbox as `project`; as `vp` the Inbox is Inbox, since '' means its own.
+      const under = await api<VpAnswer>('POST', '/org/vp', { project: '', vp: 'Seeds' })
+      expect(under.status).toBe(200)
+      expect(under.json).toMatchObject({ project: '', vp: 'Seeds' })
+      expect(await node('')).toMatchObject({ vp: 'Seeds' })
+      const back = await api<VpAnswer>('POST', '/org/vp', { project: 'Inbox', vp: '' })
+      expect(back.json).toMatchObject({ project: '', vp: '' })
+      expect((await node(''))?.vp).toBeUndefined()
+      expect((await api<{ code?: string }>('POST', '/org/vp', { vp: 'Seeds' })).json.code).toBe('missing_project')
       expect((await api('POST', '/org/vp', { project: 'No such project', vp: 'Seeds' })).status).toBe(404)
       expect((await api('POST', '/org/vp', { project: 'Seeds', vp: 'No such project' })).status).toBe(404)
       expect((await api('POST', '/org/vp', { project: 'Seeds', vp: 7 })).status).toBe(400)

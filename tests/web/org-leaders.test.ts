@@ -138,13 +138,14 @@ describe('leaders under a VP', () => {
 })
 
 describe('the projects a New Director may go to', () => {
-  it('lists only a VP\'s own projects: never the Inbox row, never a blank project', () => {
+  it('lists the projects each VP leads, the Inbox VP\'s too, the Inbox by its name', () => {
+    // 2026-11-21: the Inbox is a project with its VP, so a Director may go there like anywhere.
     const cards = [
-      { key: 'project:', role: 'Inbox' as const, projects: [{ project: '', name: 'Inbox' }] },
-      { key: 'project:growth', role: 'VP' as const, projects: [{ project: 'Growth', name: 'Growth' }, { project: ' ', name: 'blank' }, { project: 'Ads', name: 'Ads' }] },
+      { key: 'project:', projects: [{ project: '', name: 'Inbox' }] },
+      { key: 'project:growth', projects: [{ project: 'Growth', name: 'Growth' }, { project: 'Ads', name: 'Ads' }] },
     ] as unknown as Parameters<typeof directorProjectsByVp>[0]
     const by = directorProjectsByVp(cards)
-    expect(by.has('project:')).toBe(false)
+    expect(by.get('project:')).toEqual([{ project: 'Inbox', name: 'Inbox' }])
     expect(by.get('project:growth')).toEqual([{ project: 'Growth', name: 'Growth' }, { project: 'Ads', name: 'Ads' }])
   })
 })

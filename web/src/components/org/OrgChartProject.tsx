@@ -86,7 +86,7 @@ export function OrgChartProject({ project: p, tasks, dragging, onDragStart, onDr
       data-testid="org-chart-project"
       data-key={p.key}
       data-project={p.project}
-      draggable={!!p.project}
+      draggable
       // mousedown too: WebKit sends no pointerdown for the first press after a drag.
       onPointerDownCapture={(e) => { onTask.current = !!(e.target as Element).closest('.oc-tasks'); }}
       onMouseDownCapture={(e) => { onTask.current = !!(e.target as Element).closest('.oc-tasks'); }}

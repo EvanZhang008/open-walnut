@@ -27,8 +27,7 @@ export function useOrgLeaders(cards: readonly VpCard[], tasks: readonly Task[]) 
   const byKey = useMemo(() => {
     if (!on) return null;
     const byId = new Map(tasks.map((t) => [t.id, t] as const));
-    // The Inbox is no one's team: no leaders line there.
-    return new Map(cards.filter((c) => c.role === 'VP').map((c) => [c.key, leaderGroups(sourcesOf(c.projects), byId)] as const));
+    return new Map(cards.map((c) => [c.key, leaderGroups(sourcesOf(c.projects), byId)] as const));
   }, [on, cards, tasks]);
   const projects = useMemo(() => directorProjectsByVp(cards), [cards]);
   const groupsOf = useLeanCallback((row: ChannelRow) => byKey?.get(row.key) ?? NONE, [byKey]);

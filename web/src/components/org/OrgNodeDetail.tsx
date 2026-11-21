@@ -10,7 +10,8 @@
  *   side bar beside the chat on a wide page, above it on a narrow one (OrgTaskRail): Tasks (by status,
  *            by team, or as the Board its lead keeps), Brief and Threads; it widens beside the chat
  *            and closes, and never takes the chat's place
- *   A node no one answers for (the Inbox) has no chat: its teams fill the page instead.
+ *   A row no one answers for yet (none on a current server: a project of one team talks to it,
+ *            one of more makes its VP on first contact, the Inbox too) shows its teams instead.
  *   A router (row kind 'router', OrgRouterSettings) is its own node, not a VP: its header has a folded
  *            settings section of its own under it, and it has no side bar, so no Tasks (it owns no
  *            team and never sees the Inbox's tasks), no Brief and no Threads. A VP gets none of it.
@@ -291,9 +292,9 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   // Main is always someone to talk to: its task is made by the first chat.
   const canTalk = row.kind === 'main' || !!row.contactId || !!row.node?.needsLead;
   // The chat is always there (2026-11-02, the user: the side bar "can expand to more but not like a
-  // individual page"); a node no one answers for (the Inbox) shows its teams instead.
+  // individual page"); a row no one answers for shows its teams instead.
   const shown: 'chat' | 'team' = canTalk ? 'chat' : 'team';
-  // The Inbox's teams (its page has no chat) come back scrolled where they were (org-place.ts).
+  // Those teams come back scrolled where they were (org-place.ts).
   const bodyRef = useRef<HTMLDivElement>(null);
   const teamShown = shown === 'team';
   useLayoutEffect(() => {
@@ -442,7 +443,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
     return approvalsForNode(pendingApprovals, row.kind, ids);
   }, [pendingApprovals, row.kind, row.contactId, tabs]);
 
-  /** The Inbox's teams by the user's status, each with its line (its page has no chat). */
+  /** A row's teams by the user's status, each with its line (a row with no chat). */
   const renderTeam = () => (
     <TeamBoard
       columns={columns}
@@ -544,7 +545,6 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
           <OrgNodeStart row={row} contact={contact} title={title} onStart={onStartChat} loading={!!tasksLoading} starting={!!launch} />
         ))}
       </div>
-      {!canTalk && <p className="org-composer org-composer-note" data-testid="org-no-contact">The Inbox has no VP: open a task to talk to it.</p>}
       </div>
       {!isRouter && railSide && !railHidden && (
         <OrgPaneHandle

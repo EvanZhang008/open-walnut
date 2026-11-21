@@ -1589,7 +1589,10 @@ project's top-level open tasks) → workers (`parent_task_id`). The stored facts
 are `org_role: "main" | "lead"` on a task (both kinds are hidden from the board)
 and, on a lead, `org_leads`: the other projects the user put under it.
 A project with two or more teams gets a lead on first contact; a project with one
-team is talked to through that task; the Inbox never gets a lead.
+team is talked to through that task. The Inbox (`project: ""`) is a project like any other
+(2026-11-21): its lead, the Inbox VP, is made on first contact the same way, and it can be put
+under another VP or lead other projects; a `vp` that names it says `"Inbox"`, since `""` there
+means a project's own.
 
 - `GET /api/v1/org` → `200 { tree: { main?, projects: [{ project, lead?,
   needsLead, contactId?, vp?, teams, counts }], counts } }`, `counts` = `{ open,
@@ -1607,8 +1610,8 @@ team is talked to through that task; the Inbox never gets a lead.
 - `POST /api/v1/org/contact { "to": project name | task id, "task"? }` → `200 { task,
   kind: "lead" | "team" | "task", project, started, launch? }`; `launch`
   (`{ cwd, host }`, host `null` = the primary) is where a lead with no session
-  would start, read only and absent when it has no place yet; `400 no_lead_for_inbox`,
-  `404 unknown_contact`. With `task` (additive, 2026-10-27; `org_send`'s): that task when it
+  would start, read only and absent when it has no place yet; `404 unknown_contact`
+  (`400 no_lead_for_inbox` only from a server before 2026-11-21). With `task` (additive, 2026-10-27; `org_send`'s): that task when it
   is the contact or works under it (its team, its subtasks), as `{ task, kind: "task", via }`
   (`via` = the contact), so a follow-up goes to it directly and the contact reads it in its
   next team note; `400 task_outside_contact`, `404 task_not_found`.
@@ -1618,7 +1621,8 @@ team is talked to through that task; the Inbox never gets a lead.
   that takes over (`moved`); the lead that lets go gets a handover notice in its
   session (`handover`), and on a take-over Walnut closes it once the turn that
   read the notice ends, or at once when it has no session (`closed`).
-  `400 no_vp_for_inbox | bad_vp`, `404 unknown_project`.
+  `project` `""` or `"Inbox"` is the Inbox; as `vp` the Inbox is `"Inbox"`. `400 missing_project | bad_vp`
+  (`no_vp_for_inbox` only from a server before 2026-11-21), `404 unknown_project`.
 - `GET /api/v1/org/settings` → `200 { name, founderTitle, defaultInstructions, enabled, directorsLayout, directorsShowProjects, directorsEnabled }`: the org's name (the
   Org page's title, default `"Org"`) and the user's role at the top of the org
   chart (default `"Founder"`), kept in config.yaml under `org`. `defaultInstructions
@@ -1694,7 +1698,7 @@ team is talked to through that task; the Inbox never gets a lead.
   Unchanged fields write nothing. `PUT /api/v1/org/projects/:project/vp` does the
   same for a project's VP, making its lead first when it has none (after every
   check, so a refused edit makes none). `404 not_org_node | unknown_project`,
-  `400 bad_name` (the CEO keeps its name) `| bad_instructions | no_lead_for_inbox`,
+  `400 bad_name` (the CEO keeps its name) `| bad_instructions` (`:project` `Inbox` is the Inbox's VP),
   `409 name_taken` (another VP's name, or a project it does not lead) `| user_wrote` (an agent
   replacing or clearing instructions the user wrote, without `override_user: true`, which it
   passes only when the user asked for the change). An agent's

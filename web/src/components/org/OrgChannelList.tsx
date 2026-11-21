@@ -212,7 +212,7 @@ interface Props {
   /** `origin`: the row right-clicked, for a picker the menu opens (focus goes back to it). */
   rowMenu?: (target: ChannelMenuTarget, point: { x: number; y: number }, origin: HTMLElement | null) => ContextMenuItem[];
   total: number;
-  /** The header's VP count (vpCount): every project row but the Inbox's. */
+  /** The header's VP count (vpCount): every project row. */
   vps: number;
   selectedKey: string | null;
   query: string;

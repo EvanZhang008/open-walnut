@@ -3,7 +3,7 @@
  * do reorg, if they select close we keep remind each one more vp created, like remind in 6, 7, 8
  * but if they close, we at least don't remind in current load, they can also choose never remind").
  *
- *   - From REORG_REMIND_AT VPs (vpCount: every project row but the Inbox's), one line suggests
+ *   - From REORG_REMIND_AT VPs (vpCount: every project row), one line suggests
  *     merging some.
  *   - Close hides it for this page load, until the count passes the one it was closed at: one more
  *     VP brings it back, in the same load too. A reload shows it again.

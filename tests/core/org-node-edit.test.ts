@@ -238,7 +238,7 @@ describe('the user\'s own instructions for the CEO or a VP', () => {
     expect((await editOrgNode(a.id, { name: '' })).org_name).toBeUndefined();
   });
 
-  it('a project\'s VP: refused edits leave no lead behind, a closed lead comes back clean, the Inbox has none', async () => {
+  it('a project\'s VP: refused edits leave no lead behind, a closed lead comes back clean, the Inbox\'s too', async () => {
     await addTask({ title: 'Paint the fence', project: 'Yard' });
     await createOrgNode({ name: 'Porch', vpName: 'Taken' }, false);
     await expect(editProjectVp('Yard', { name: 'Taken' })).rejects.toMatchObject({ code: 'name_taken' });
@@ -250,7 +250,10 @@ describe('the user\'s own instructions for the CEO or a VP', () => {
     expect(back.id).toBe(made.id);
     expect(back.org_name).toBeUndefined();
     expect(back.org_instructions?.text).toBe('Daily.');
-    await expect(editProjectVp('Inbox', { name: 'x' })).rejects.toMatchObject({ code: 'no_lead_for_inbox', status: 400 });
+    // The Inbox's VP is edited as any project's (2026-11-21): with no open work there is none to make.
+    await expect(editProjectVp('Inbox', { name: 'x' })).rejects.toMatchObject({ code: 'unknown_project', status: 404 });
+    await addTask({ title: 'Mail the letter', project: '' });
+    expect(await editProjectVp('Inbox', { name: 'Post' })).toMatchObject({ org_role: 'lead', project: 'Inbox', org_name: 'Post' });
     await expect(editProjectVp('Nowhere', { name: 'x' })).rejects.toMatchObject({ code: 'unknown_project', status: 404 });
   });
 

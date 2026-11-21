@@ -1,4 +1,4 @@
-import type { Task } from '@open-walnut/core';
+import { projectOrInbox, type Task } from '@open-walnut/core';
 import { apiGet, apiPost, apiPut } from './client';
 
 /**
@@ -112,7 +112,8 @@ export async function editOrgNode(taskId: string, edit: { name?: string; instruc
 
 /** A project's VP: its name and instructions, its lead made first when the project has none yet. */
 export async function editProjectVp(project: string, edit: { name?: string; instructions?: string }): Promise<OrgNodeBrief> {
-  const res = await apiPut<{ task: OrgNodeBrief }>(`/api/v1/org/projects/${encodeURIComponent(project)}/vp`, edit);
+  // The Inbox's row says '' for it, which a path cannot carry: it goes by its name.
+  const res = await apiPut<{ task: OrgNodeBrief }>(`/api/v1/org/projects/${encodeURIComponent(projectOrInbox(project))}/vp`, edit);
   return res.task;
 }
 

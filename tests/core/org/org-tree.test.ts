@@ -41,7 +41,8 @@ describe('org-tree', () => {
     expect(inbox[0]!.teams).toHaveLength(3)
     expect(inbox[0]!.teams.every((team) => team.project === '')).toBe(true)
     expect(inbox[0]!.lead).toBeUndefined()
-    expect(inbox[0]!.needsLead).toBe(false)
+    // Three teams and no lead: its VP is made on first contact, as any project's.
+    expect(inbox[0]!.needsLead).toBe(true)
     expect(tree.projects.map((p) => p.project)).toEqual(['Walnut', ''])
     expect(findProjectNode(tree, 'Inbox')).toBe(inbox[0])
     expect(findProjectNode(tree, '')).toBe(inbox[0])
@@ -113,12 +114,42 @@ describe('org-tree', () => {
     expect(buildOrgTree([a, lead]).projects[0]!.contactId).toBe(lead.id)
   })
 
-  it('the Inbox never gets a lead: Main talks to its tasks one by one', () => {
-    const tree = buildOrgTree([t({ project: '' }), t({})])
-    const inbox = findProjectNode(tree, 'Inbox')!
-    expect(inbox.project).toBe('')
-    expect(inbox.needsLead).toBe(false)
-    expect(inbox.contactId).toBeUndefined()
+  it('the Inbox is a project like any other: a lead of its own (the Inbox VP), keyed as before', () => {
+    // 2026-11-21, the user: the Inbox is a project now, so it is a VP like every other project.
+    const one = findProjectNode(buildOrgTree([t({ project: '' })]), 'Inbox')!
+    expect(one).toMatchObject({ project: '', needsLead: false })
+    expect(one.contactId).toBe(one.teams[0]!.id)
+    const two = findProjectNode(buildOrgTree([t({ project: '' }), t({})]), 'Inbox')!
+    expect(two).toMatchObject({ project: '', needsLead: true })
+    expect(two.contactId).toBeUndefined()
+
+    const a = t({ project: '' })
+    const b = t({ project: 'Inbox' })
+    const lead = t({ project: 'Inbox', org_role: 'lead', title: 'Inbox VP' })
+    const tasks = [a, b, lead]
+    expect(pickLead(tasks, '')).toBe(lead)
+    expect(pickLead(tasks, 'Inbox')).toBe(lead)
+    const inbox = findProjectNode(buildOrgTree(tasks), '')!
+    expect(inbox).toMatchObject({ project: '', lead: { id: lead.id }, contactId: lead.id, needsLead: true })
+    expect(inbox.vp).toBeUndefined()
+    // With nothing open there, its VP still keeps the node, at the same key.
+    expect(buildOrgTree([lead]).projects).toEqual([expect.objectContaining({ project: '', contactId: lead.id, teams: [] })])
+  })
+
+  it('the Inbox VP can lead another project, and the Inbox can go under another VP', () => {
+    const inboxLead = t({ project: 'Inbox', org_role: 'lead', org_leads: ['Seeds'] })
+    const seeds = t({ project: 'Seeds' })
+    const tree = buildOrgTree([inboxLead, seeds, t({ project: '' })])
+    // `vp` names the Inbox by its name: '' there would read as "its own".
+    expect(findProjectNode(tree, 'Seeds')).toMatchObject({ vp: 'Inbox', contactId: inboxLead.id })
+    expect(findProjectNode(tree, '')!.vp).toBeUndefined()
+
+    const garden = t({ project: 'Garden', org_role: 'lead', org_leads: ['Inbox'] })
+    const under = buildOrgTree([garden, t({ project: 'Garden' }), t({ project: '' }), t({ project: 'Inbox' })])
+    expect(findProjectNode(under, 'Inbox')).toMatchObject({ project: '', vp: 'Garden', contactId: garden.id, lead: { id: garden.id } })
+    // The Inbox's own VP, once the Inbox went under Garden, leads nothing: Garden took over.
+    const old = t({ project: 'Inbox', org_role: 'lead' })
+    expect(successorOf([garden, old, t({ project: '' })], old)).toBe(garden)
   })
 
   it('nests workers by parent link, across projects too, and counts the whole subtree', () => {

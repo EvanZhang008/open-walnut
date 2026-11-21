@@ -71,14 +71,27 @@ describe('org channels', () => {
     expect(main.latest).toBe('0 threads · 4 VPs · 1 Working')
   })
 
-  it('counts VPs without the Inbox row: tasks in no project have no VP', () => {
-    const withInbox = [...tasks, t('i1', '', 'TODO', { updated_at: at(3) }), t('i2', '', 'NEED_ACTION', { updated_at: at(4) })]
+  it('counts the Inbox row as a VP: the Inbox is a project like any other (2026-11-21)', () => {
+    const withInbox = [...tasks, t('i1', '', 'TODO', { updated_at: at(3) }), t('i2', 'Inbox', 'NEED_ACTION', { updated_at: at(4) })]
     const { main, rows } = buildChannels(buildOrgTree(withInbox), withInbox, noAlerts)
-    // The Inbox still has its row (its tasks are reachable), but it is no VP.
-    expect(rows.some((r) => r.project === '' && r.name === 'Inbox')).toBe(true)
+    const inbox = rows.find((r) => r.project === '')!
+    // Two teams and no lead yet: the row names the VP its first chat makes, as Personal's does.
+    expect(inbox).toMatchObject({ key: 'project:', name: 'Inbox', contactTitle: 'Inbox VP', isLead: false })
+    expect(inbox.contactId).toBeUndefined()
+    expect(inbox.node?.needsLead).toBe(true)
     expect(rows.length).toBe(5)
-    expect(vpCount(rows)).toBe(4)
-    expect(main.latest).toBe('0 threads · 4 VPs · 1 Working')
+    expect(vpCount(rows)).toBe(5)
+    expect(main.latest).toBe('0 threads · 5 VPs · 1 Working')
+  })
+
+  it('the Inbox VP is a row like any VP\'s: its own, and a project put under it folds into it', () => {
+    const lead = t('il', 'Inbox', 'TODO', { org_role: 'lead', title: 'Inbox VP', org_leads: ['Travel'], updated_at: at(5) })
+    const list = [...tasks, t('i1', '', 'TODO', { updated_at: at(3) }), lead]
+    const { rows } = buildChannels(buildOrgTree(list), list, noAlerts)
+    const inbox = rows.find((r) => r.project === '')!
+    expect(inbox).toMatchObject({ name: 'Inbox', contactId: 'il', contactTitle: 'Inbox VP', isLead: true, leadId: 'il' })
+    expect(inbox.led?.map((r) => r.name)).toEqual(['Travel'])
+    expect(rows.some((r) => r.name === 'Travel')).toBe(false)
   })
 
   it('the Org list header reads its VP count from vpCount, never from the row total', async () => {

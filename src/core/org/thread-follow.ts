@@ -28,6 +28,7 @@
  */
 import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
+import { sameProject } from '../inbox-project.js';
 import { leadsAlso, orgDisplayTitle, pickLead, pickMain, successorOf } from './org-tree.js';
 import { isOpen, type MoveEnd, type OrgThread, type ThreadMoveKind, type ThreadWriter } from './threads-model.js';
 import { keepsThreads } from './keeps-threads.js';
@@ -81,8 +82,7 @@ export function ownerNodeOf(task: FollowTask, p: OrgPlaces): FollowTask | undefi
       if (parent.org_role === 'lead') {
         const there = p.leadOf(top.project);
         if (there && there.id !== parent.id && (leadsAlso(there, top.project ?? '')
-          || ![parent.project, ...(parent.org_leads ?? [])].some((project) =>
-            (project ?? '').trim().toLowerCase() === (top.project ?? '').trim().toLowerCase()))) return there;
+          || ![parent.project, ...(parent.org_leads ?? [])].some((project) => sameProject(project, top.project)))) return there;
       }
       return parent;
     }

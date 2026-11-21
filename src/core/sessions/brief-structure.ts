@@ -18,7 +18,6 @@
 import { ABOUT_TAG_NAME } from '../org/message-about.js';
 import { ANSWER_TO_READ, BRIEF_SECTIONS, MARKED_ASK, NEEDS_CATEGORY_LABELS, RESULT_TO_READ, TURN_TO_READ, briefTeam, fallbackUserState, lastWordsOfStatus, needsLineOf, shownState, storedUserState, type BriefSectionTask, type BriefTask, type NeedsCategory, type UserState } from '../user-status.js';
 import { pickLead } from '../org/org-tree.js';
-import { isInboxProject } from '../inbox-project.js';
 import { sameAreaTasks } from '../router/same-area.js';
 import { askLineWriter, sourcesOfPieces, type BriefPiece, type BriefTextSource } from './brief-source.js';
 
@@ -82,8 +81,9 @@ export const briefToRead = (task: BriefSectionTask): boolean => briefStateOf(tas
 
 /** The VP who leads a task's project, named after it on Main's lines; none for a lead or Main itself. */
 export function briefVpOf(task: BriefTask, tasks: readonly BriefTask[]): BriefTask | undefined {
-  if (isInboxProject(task.project) || task.org_role === 'lead' || task.org_role === 'main') return undefined;
-  const vp = pickLead(tasks as never[], task.project!) as BriefTask | undefined;
+  if (task.org_role === 'lead' || task.org_role === 'main') return undefined;
+  // The Inbox's VP too ('' from an older row is the Inbox, as pickLead reads it).
+  const vp = pickLead(tasks as never[], task.project ?? '') as BriefTask | undefined;
   return vp && vp.id !== task.id && vp.phase !== 'COMPLETE' ? vp : undefined;
 }
 
