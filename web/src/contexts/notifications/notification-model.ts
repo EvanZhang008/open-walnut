@@ -465,7 +465,7 @@ export function categoryOf(n: Notification): string {
       const id = key.slice('plugin:'.length).trim();
       if (id) return titleizeId(id);
     }
-    if (key.startsWith('session:') || key.startsWith('task:')) return 'Sessions';
+    if (key.startsWith('session:') || key.startsWith('task:') || key.startsWith('host:')) return 'Sessions';
     if (key.startsWith('route:')) return 'API';
     if (key.startsWith('bus:')) return 'Internal';
     if (key === 'git' || key === 'git:compaction' || key === 'git:repo-size' || key === 'backup' || key === 'disk') {

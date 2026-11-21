@@ -4,8 +4,8 @@
  * A queued write the server refuses (validation, a guard) is the answer the same
  * call gets online: the caller is told and redoes it, so it is a warning. A write
  * the server never answered, or a record Walnut could not apply, is Walnut's own
- * failure: an error that names the session it concerns, so its card retires on
- * that session's next clean turn instead of never (2026-10-05 21:40Z).
+ * failure: an error that names the session it concerns (2026-10-05 21:40Z), retired
+ * by the drain once no record waits (2026-11-21, drain-recovery.ts).
  *
  * The op executor and the task store are stubbed: this pins the classification,
  * tests/integration/offline-handover.test.ts runs the real replay.
@@ -26,6 +26,7 @@ vi.mock('../../src/core/sessions/session-send-core.js', () => ({ deliverToSessio
 import { log } from '../../src/logging/index.js'
 import { runOfflineHandover } from '../../src/core/offline-handover.js'
 import { recoveryKeyOf } from '../../src/core/notifications/log-error-bridge.js'
+import { drainRecoveryKey } from '../../src/core/offline-merge/drain-recovery.js'
 import type { OfflineRecord } from '../../src/providers/offline-host-core.js'
 
 const SID = 'eeeeeeee-5555-4555-8555-555555555555'
@@ -73,7 +74,8 @@ describe('offline handover failure level', () => {
       expect(lines).toHaveLength(1)
       const meta = lines[0][1] as Record<string, unknown>
       expect(meta).toMatchObject({ kind: 'op', sessionId: SID, taskId: 't-parked', error: 'fetch failed' })
-      expect(recoveryKeyOf({ subsystem: 'session', message: 'offline handover: record failed', meta })).toBe(`session:${SID}`)
+      // Retired by the drain once nothing waits (drain-recovery.ts): the session may never run a clean turn again.
+      expect(recoveryKeyOf({ subsystem: 'session', message: 'offline handover: record failed', meta })).toBe(drainRecoveryKey('devbox'))
     } finally { errors.mockRestore() }
   })
 })

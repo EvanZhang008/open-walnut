@@ -365,11 +365,12 @@ describe('runOfflineHandover', () => {
         host: 'devbox', op: 'task_update', taskId: refused, callerSid: B, error: expect.stringContaining('self_parent'),
       })])
       expect(handoverErrors.map(([, meta]) => (meta as { seq: number }).seq)).toEqual([3])
-      // Walnut's own failure names its session, so the card has a lifecycle
-      // (that session's next clean turn retires it, its death expires it).
+      // Walnut's own failure names its session (the card's deep link), and its
+      // lifecycle is the drain's: the host's next drain with nothing waiting
+      // retires it (src/core/offline-merge/drain-recovery.ts).
       const [msg, meta] = handoverErrors[0]
       expect(meta).toMatchObject({ host: 'devbox', kind: 'op', sessionId: A })
-      expect(recoveryKeyOf({ subsystem: 'session', message: String(msg), meta: meta as Record<string, unknown> })).toBe(`session:${A}`)
+      expect(recoveryKeyOf({ subsystem: 'session', message: String(msg), meta: meta as Record<string, unknown> })).toBe('host:devbox:offline-drain')
     } finally {
       errors.mockRestore()
       warns.mockRestore()

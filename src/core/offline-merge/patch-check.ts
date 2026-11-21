@@ -18,6 +18,19 @@ import type { FieldWrite } from './task-fields.js';
 /** A queued write the server answered with a refusal (validation, a guard), not a Walnut failure. */
 export class RefusedWrite extends Error {}
 
+/**
+ * What a replayed op's failed answer throws, in one place for every replay of the drain. Only the
+ * server's own answer is a refusal (lettered, acked, the writer told it did not land). No answer
+ * (`unreachable`), an answer that was lost (`lost`: a timeout, so the write may have run), or one a
+ * retry may change (`retry`: a 5xx, 408, 429) is Walnut failing its own write: it is tried again
+ * under the record's own call id, which meets an earlier try's writes instead of running them twice.
+ * 2026-11-21: a held task_send that timed out on a busy server was lettered "refused" and its
+ * session told the message did not land, though a timed-out send may have been delivered.
+ */
+export function replayFailure(r: { message: string; unreachable?: true; lost?: true; retry?: true }): Error {
+  return r.unreachable || r.lost || r.retry ? new Error(r.message) : new RefusedWrite(r.message);
+}
+
 const STATUSES = new Set(['todo', 'in_progress', 'done']);
 const DURATION_RE = /^\d+(?:\.\d+)?\s*(ms|s|m|h|d)$/i;
 /** The tiers every board has (custom ones come from the registry). */

@@ -22,14 +22,14 @@ import { log } from '../../logging/index.js';
 import { WALNUT_HOME } from '../../constants.js';
 import type { ConflictEntry, ConflictLog } from './conflict-log.js';
 import { unqueueableFields, type FieldWrite } from './task-fields.js';
-import { RefusedWrite } from './patch-check.js';
+import { RefusedWrite, replayFailure } from './patch-check.js';
 import { frozenFieldTimes } from '../task-field-times.js';
 import { recordRemap } from './ledger.js';
 import { journalCallId } from '../../lib/op-call-id.js';
 import { applyFields, entryBase, exactTask, opKeyOf, pairValidator, resolveTaskId } from './apply-fields.js';
 import { actorOptions, actorRules, createCaller, opWriteFields, type JournalActorLike } from './journal-actor.js';
 
-export { RefusedWrite };
+export { RefusedWrite, replayFailure };
 
 /**
  * The v2 kinds this Mac applies (`offline.drain {kinds}`); `note` since WP11 (offline-merge/notes.ts);
@@ -369,7 +369,7 @@ async function applyBoard(ctx: V2Context, record: V2Record): Promise<void> {
   // A try after one whose answer was lost meets that try's writes (src/lib/op-call-id.ts).
   const callId = record.opId ? journalCallId(ctx.hostKey, record.opId, record.rev ?? 1) : undefined;
   const r = await executeOp(op, args, { ...(await actorOptions(ctx.hostKey, record.actor)), ...(callId ? { callId } : {}) });
-  if (!r.ok) throw r.unreachable ? new Error(r.message) : new RefusedWrite(r.message);
+  if (!r.ok) throw replayFailure(r);
   ctx.result.replayed++;
   log.session.info('offline handover: board write applied', { host: ctx.hostKey, op, boardTaskId: args.task, seq: record.seq, opId: record.opId });
 }

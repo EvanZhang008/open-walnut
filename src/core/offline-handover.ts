@@ -25,11 +25,12 @@ import { log } from '../logging/index.js';
 import type { OfflineRecord } from '../providers/offline-host-core.js';
 import type { SessionRequest } from './session-requests.js';
 import { VALID_SESSION_EFFORT_IDS, VALID_SESSION_MODE_IDS, type SessionEffort, type SessionMode } from './types.js';
-import { APPLIED_V2_KINDS, RefusedWrite, applyV2, devicePaired, v2TaskIdOf, type V2Record } from './offline-merge/apply-v2.js';
+import { APPLIED_V2_KINDS, RefusedWrite, replayFailure, applyV2, devicePaired, v2TaskIdOf, type V2Record } from './offline-merge/apply-v2.js';
 import { recordRemap } from './offline-merge/ledger.js';
 import { endRefusedRun, refusedRunWords } from './offline-merge/apply-session.js';
 import { isCallId, journalCallId } from '../lib/op-call-id.js';
 import { mergeJournalFill, noteJournalFill, readJournalFill, type JournalFill } from './offline-merge/journal-fill.js';
+import { drainRecoveryKey, noteDrainErrorRaised, noteDrainSettled } from './offline-merge/drain-recovery.js';
 
 /** What the handover needs from a daemon connection. */
 export interface HandoverConnection {
@@ -214,6 +215,8 @@ async function handover(conn: HandoverConnection): Promise<HandoverResult> {
     }
   }
   if (batch.retryIn !== null) scheduleRetry(conn, batch.retryIn);
+  // No record waits: every error this host's retries raised has healed (drain-recovery.ts).
+  else void noteDrainSettled(conn.hostKey);
   if (stopsToRun.delete(conn.hostKey)) {
     try {
       await (await import('./sessions/session-stop.js')).sessionStops.flush(conn.hostKey);
@@ -622,7 +625,8 @@ function letterNotWritten(
   batch.retryIn = Math.min(batch.retryIn ?? Infinity, wait);
   if (!logDiskErrorHosts.has(host)) {
     logDiskErrorHosts.add(host);
-    log.session.error('offline handover: the conflict log could not be written; the record waits', { host, seq: record.seq, opId: entry.opId, attempt: count, retryInMs: wait, error });
+    noteDrainErrorRaised(host);
+    log.session.error('offline handover: the conflict log could not be written; the record waits', { host, seq: record.seq, opId: entry.opId, attempt: count, retryInMs: wait, error, recoveryKey: drainRecoveryKey(host) });
   } else {
     log.session.warn('offline handover: the conflict log still cannot be written', { host, seq: record.seq, attempt: count, retryInMs: wait });
   }
@@ -858,11 +862,13 @@ async function applyTaken(
       failing.set(retryKey, { count, nextAt: Date.now() + wait, reason });
       batch.retryIn = wait;
       batch.result.failed++;
-      // Walnut could not apply its own record: an error named by the session it concerns,
-      // so the card retires on that session's next clean turn. Later records wait.
-      // Section 13 observability (a warn: the error line below is the notification center's, unchanged).
+      // Walnut could not apply its own record: an error that names the session it concerns,
+      // retired by the drain itself once no record waits (drain-recovery.ts), since that
+      // session may never run a clean turn again. Later records wait.
+      // Section 13 observability (a warn: the error line below is the notification center's).
       log.session.warn('drain record failed', { host, seq: record.seq, kind: record.kind, opId, attempt: count, nextRetryMs: wait, error: reason });
-      log.session.error('offline handover: record failed', { host, seq: record.seq, kind: record.kind, opId, attempt: count, retryInMs: wait, error: reason, ...await recordScope(record) });
+      noteDrainErrorRaised(host);
+      log.session.error('offline handover: record failed', { host, seq: record.seq, kind: record.kind, opId, attempt: count, retryInMs: wait, error: reason, ...await recordScope(record), recoveryKey: drainRecoveryKey(host) });
       return 'stop';
     }
     // Retries spent: given up into the letter with the change attached (a note's texts in
@@ -1047,7 +1053,7 @@ async function applyRecord(
         // A create needs the host's daemon and the routines engine right now: an answer that
         // says either is away (a 5xx, a timeout) is tried again, never taken as a refusal that
         // would lift the hold of a trigger the host has run for hours.
-        if (!r.ok) throw r.unreachable || (record.op === 'trigger_create' && !isRefusal(r.message)) ? new Error(r.message) : new RefusedWrite(r.message);
+        if (!r.ok) throw record.op === 'trigger_create' && !isRefusal(r.message) ? new Error(r.message) : replayFailure(r);
         result.replayed++;
         if (record.op.startsWith('board_')) {
           log.session.info('offline handover: board write applied', { host, op: record.op, boardTaskId: String(record.args.task ?? ''), callerSid: record.callerSid });
@@ -1086,9 +1092,9 @@ async function applyRecord(
       const { hostOrigin } = await import('../lib/caller-origin.js');
       const r = await executeOp(record.op, record.args, { callerSid: record.callerSid, callerHost: host, origin: hostOrigin(host), ...recordCall(host, record) });
       // The server's own words; the log line and the caller's notice name the op.
-      // A refusal is the server's answer (a 5xx is carded by its route); no
-      // answer at all is Walnut failing its own write.
-      if (!r.ok) throw r.unreachable ? new Error(r.message) : new RefusedWrite(r.message);
+      // A refusal is the server's answer; no answer, a lost one or a 5xx is
+      // Walnut failing its own write, tried again (replayFailure).
+      if (!r.ok) throw replayFailure(r);
       result.replayed++;
       log.session.info('offline handover: queued write applied', { host, op: record.op, taskId: task.id, callerSid: record.callerSid });
       return;
