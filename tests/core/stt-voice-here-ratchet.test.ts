@@ -69,6 +69,7 @@ const EXEMPT: Record<string, { calls: number; why: string }> = {
   'src/core/stt/setup-mlx.ts#appleShimUsable': { calls: 1, why: 'detection: xcode-select -p' },
   'src/core/stt/setup-mlx.ts#pythonVersion': { calls: 1, why: 'detection: python --version' },
   'src/core/stt/setup-mlx.ts#setupMlxEnvInner': { calls: 2, why: 'installer: makes the Python env (the auto-setup decision or a person\'s Install press)' },
+  'src/core/stt/media-control.ts#osascriptRunner': { calls: 1, why: 'osascript reads or pauses the Mac\'s Now Playing: no model, no microphone; only the user\'s own server builds this controller (media-hold-runtime.ts asks isolatedHere)' },
   'src/core/stt/setup-mlx.ts#downloadMlxModelInner': { calls: 1, why: 'installer: downloads the model files, loads none (the auto-setup decision or a person\'s Install press)' },
 };
 
