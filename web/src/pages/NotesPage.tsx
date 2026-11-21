@@ -1242,7 +1242,7 @@ export function NotesPage() {
                     <div className="notes-chat">
                       <div className="notes-chat-header">{tabs}</div>
                       <div className="notes-chat-empty">
-                        <p style={{ color: 'var(--color-error, #ff3b30)' }}>Failed to start session: {activeCcTab.error}</p>
+                        <p style={{ color: 'var(--error)' }}>Failed to start session: {activeCcTab.error}</p>
                         <p>Close this tab, fix the issue, then retry from the notes tree's context menu.</p>
                       </div>
                     </div>

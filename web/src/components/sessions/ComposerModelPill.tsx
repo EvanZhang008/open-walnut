@@ -419,7 +419,7 @@ export function ComposerModelPill({
             className="session-detail-context-pct"
             data-condensed-detail
             style={{
-              color: contextPercent > 80 ? 'var(--danger, #ff3b30)'
+              color: contextPercent > 80 ? 'var(--error)'
                 : contextPercent > 50 ? 'var(--warning, #ff9500)'
                 : 'var(--fg-muted)',
             }}

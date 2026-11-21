@@ -136,7 +136,7 @@ export function PendingSessionPanel({ cwd, host, hostLabel, label, message, real
                   {hostDisplayLabel(host, undefined, hostLabel)}
                 </span>
               )}
-              <span className="session-panel-badge" style={{ color: 'var(--color-error, #ff3b30)' }}>Failed</span>
+              <span className="session-panel-badge" style={{ color: 'var(--error)' }}>Failed</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
               <button className="session-panel-close" onClick={onClose} title="Close panel">&times;</button>
@@ -148,7 +148,7 @@ export function PendingSessionPanel({ cwd, host, hostLabel, label, message, real
         <div className="pending-session-body">
           <div className="pending-session-error-icon">!</div>
           <div className="pending-session-info">
-            <span className="pending-session-label" style={{ color: 'var(--color-error, #ff3b30)' }}>
+            <span className="pending-session-label" style={{ color: 'var(--error)' }}>
               {errorMessage}
             </span>
             <span className="pending-session-path" style={{ marginTop: 4 }}>

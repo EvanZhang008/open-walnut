@@ -18,7 +18,7 @@
   border-bottom: 1px solid var(--border);
   background: var(--bg-secondary);
   flex-shrink: 0;
-  min-height: var(--split-bar-h, 43px);
+  min-height: var(--split-bar-h);
 }
 
 .session-threads-bar-title {
@@ -47,7 +47,7 @@
 
 .session-threads-error {
   font-size: 11px;
-  color: var(--danger, #d14343);
+  color: var(--error);
 }
 
 .session-threads-body {

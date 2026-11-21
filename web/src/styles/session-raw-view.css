@@ -68,7 +68,7 @@
 }
 
 .raw-view-error {
-  color: var(--danger, #c0392b);
+  color: var(--error);
 }
 
 .raw-turn {

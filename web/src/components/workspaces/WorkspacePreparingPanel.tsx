@@ -222,7 +222,7 @@ export function WorkspacePreparingPanel({ taskId, initialTask, message, launchEr
             {ws && ws.host !== '__local__' && (
               <span className="session-panel-badge" style={{ color: 'var(--fg-muted)', fontSize: '10px' }}>{hostName(ws.host)}</span>
             )}
-            <span className="session-panel-badge" style={{ color: failed ? 'var(--color-error, #ff3b30)' : 'var(--fg-muted)' }}>
+            <span className="session-panel-badge" style={{ color: failed ? 'var(--error)' : 'var(--fg-muted)' }}>
               {failed ? 'Failed' : asksOk ? 'Waiting for you' : 'Preparing…'}
             </span>
           </div>
@@ -244,7 +244,7 @@ export function WorkspacePreparingPanel({ taskId, initialTask, message, launchEr
           : idle || asksOk ? null
           : <div className="pending-session-spinner-wrap"><span className="spinner" style={{ width: 20, height: 20, borderWidth: 2, display: 'inline-block' }} /></div>}
         <div className="pending-session-info">
-          <span className="pending-session-label" data-testid="workspace-preparing-label" style={failed ? { color: 'var(--color-error, #ff3b30)' } : undefined}>{label}</span>
+          <span className="pending-session-label" data-testid="workspace-preparing-label" style={failed ? { color: 'var(--error)' } : undefined}>{label}</span>
           {ws && <span className="pending-session-path">{ws.provider_name ?? ws.provider} on {hostName(ws.host)}</span>}
           {!failed && ws?.progress && <span className="pending-session-path workspace-preparing-progress" data-testid="workspace-preparing-progress">{ws.progress}</span>}
           {failed && errorText && <span className="pending-session-path workspace-preparing-error" data-testid="workspace-preparing-error">{errorText}</span>}

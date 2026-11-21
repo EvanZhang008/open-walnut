@@ -143,8 +143,8 @@
 }
 .draft-workspace-input:focus { outline: none; border-color: var(--accent); }
 .draft-workspace-note { font-size: 11px; color: var(--fg-muted); }
-.draft-workspace-note.is-warn { color: var(--color-warning, #b26a00); }
-.draft-workspace-note.is-error { color: var(--color-error, #ff3b30); }
+.draft-workspace-note.is-warn { color: var(--warning); }
+.draft-workspace-note.is-error { color: var(--error); }
 
 /* ── Task row pill ── */
 .workspace-pill {
@@ -161,8 +161,8 @@
 /* Two classes: the shared .todo-item-due-pill (globals.css, loaded later) would grey them out. */
 .workspace-pill.workspace-pill-ok { color: var(--accent); }
 .workspace-pill.workspace-pill-busy { color: var(--fg-muted); }
-.workspace-pill.workspace-pill-warn { color: var(--color-warning, #b26a00); }
-.workspace-pill.workspace-pill-error { color: var(--color-error, #ff3b30); }
+.workspace-pill.workspace-pill-warn { color: var(--warning); }
+.workspace-pill.workspace-pill-error { color: var(--error); }
 .workspace-pill-spin {
   width: 8px;
   height: 8px;
@@ -192,14 +192,14 @@
 }
 .workspace-flyout-title { font-size: 12px; font-weight: 600; color: var(--fg); }
 .workspace-flyout-state { font-size: 11px; color: var(--fg-muted); white-space: nowrap; }
-.workspace-flyout-state.is-failed { color: var(--color-error, #ff3b30); }
-.workspace-flyout-state.is-kept { color: var(--color-warning, #b26a00); }
+.workspace-flyout-state.is-failed { color: var(--error); }
+.workspace-flyout-state.is-kept { color: var(--warning); }
 .workspace-flyout-state.is-ready { color: var(--accent); }
 .workspace-flyout-state.tone-busy { color: var(--fg-muted); }
-.workspace-flyout-state.tone-warn { color: var(--color-warning, #b26a00); }
-.workspace-flyout-state.tone-error { color: var(--color-error, #ff3b30); }
-.task-kebab-project-current-name.tone-error { color: var(--color-error, #ff3b30); }
-.task-kebab-project-current-name.tone-warn { color: var(--color-warning, #b26a00); }
+.workspace-flyout-state.tone-warn { color: var(--warning); }
+.workspace-flyout-state.tone-error { color: var(--error); }
+.task-kebab-project-current-name.tone-error { color: var(--error); }
+.task-kebab-project-current-name.tone-warn { color: var(--warning); }
 .workspace-flyout-note {
   margin: 0 12px 6px;
   font-size: 11px;
@@ -207,8 +207,8 @@
   color: var(--fg-secondary);
   overflow-wrap: anywhere;
 }
-.workspace-flyout-note.is-error { color: var(--color-error, #ff3b30); }
-.workspace-flyout-note.is-warn { color: var(--color-warning, #b26a00); }
+.workspace-flyout-note.is-error { color: var(--error); }
+.workspace-flyout-note.is-warn { color: var(--warning); }
 .workspace-fact {
   display: grid;
   grid-template-columns: 78px minmax(0, 1fr);
@@ -246,7 +246,7 @@
   font-family: inherit; font-size: 12px; word-break: normal; overflow-wrap: anywhere; max-width: 420px;
 }
 .workspace-preparing-panel .workspace-preparing-progress { color: var(--fg-secondary); }
-.workspace-preparing-panel .workspace-preparing-error { color: var(--color-error, #ff3b30); white-space: pre-wrap; }
+.workspace-preparing-panel .workspace-preparing-error { color: var(--error); white-space: pre-wrap; }
 
 /* ── Project scripts: a setup / teardown run (flyout, preparing column) ── */
 .script-run-card {
@@ -272,14 +272,14 @@
 .script-run-role { color: var(--fg-muted); font-size: 10.5px; white-space: nowrap; }
 .script-run-name { font-weight: 600; color: var(--fg); flex: 0 0 auto; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .script-run-status { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; color: var(--fg-muted); white-space: nowrap; max-width: 100%; }
-.script-run-card.is-done .script-run-status { color: var(--color-success, #1f9d55); }
+.script-run-card.is-done .script-run-status { color: var(--success); }
 .script-run-card.is-failed .script-run-status,
-.script-run-card.is-skipped .script-run-status { color: var(--color-error, #ff3b30); white-space: normal; text-align: right; }
+.script-run-card.is-skipped .script-run-status { color: var(--error); white-space: normal; text-align: right; }
 /* A long failure stays on the name's line and wraps there, not alone on a line of its own. */
 .script-run-card.is-failed .script-run-status,
 .script-run-card.is-skipped .script-run-status { flex: 1 1 10em; min-width: 0; justify-content: flex-end; }
 /* Waiting for the user's OK is no failure: amber, not red. */
-.script-run-card[data-untrusted] .script-run-status { color: var(--color-warning, #b7791f); }
+.script-run-card[data-untrusted] .script-run-status { color: var(--warning); }
 .script-run-reason { color: var(--fg-secondary); font-size: 11px; line-height: 1.4; }
 .script-run-command,
 .script-run-progress {
@@ -334,7 +334,7 @@
   width: min(600px, calc(100vw - 48px));
   max-height: calc(100vh - min(10vh, 80px) - 40px);
   overflow: auto;
-  background: var(--bg-primary, var(--card-bg, #1c1f26));
+  background: var(--card-bg);
 }
 /* The title and its close stay in view while a long list scrolls under them. */
 .project-scripts-head {
@@ -388,7 +388,7 @@
   cursor: pointer;
 }
 .project-scripts-link:hover:not(:disabled) { background: var(--bg-hover, rgba(127, 127, 127, 0.12)); color: var(--fg); }
-.project-scripts-link.is-danger:hover:not(:disabled) { color: var(--color-error, #ff3b30); }
+.project-scripts-link.is-danger:hover:not(:disabled) { color: var(--error); }
 .project-scripts-link:disabled { opacity: 0.5; cursor: default; }
 .project-scripts-add {
   margin-top: 8px;
@@ -424,15 +424,15 @@
 .project-scripts-check span { display: flex; flex-direction: column; gap: 1px; }
 .project-scripts-check small { font-size: 11.5px; color: var(--fg-muted); }
 .project-scripts-check.is-nested { margin-left: 22px; margin-top: -4px; }
-.project-scripts-error { margin-top: 8px; font-size: 12px; color: var(--color-error, #ff3b30); overflow-wrap: anywhere; }
+.project-scripts-error { margin-top: 8px; font-size: 12px; color: var(--error); overflow-wrap: anywhere; }
 .project-scripts-form .project-scripts-error { margin-top: 0; }
 .project-scripts-file { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
 .project-scripts-file-head { font-size: 12px; font-weight: 600; color: var(--fg-secondary); }
 .project-scripts-file-head code { font-weight: 500; }
 .project-scripts-field-hint { margin-top: 4px; font-size: 11px; color: var(--fg-muted); line-height: 1.4; }
-.project-scripts-field-hint.is-warn { color: var(--color-warning, #b26a00); font-size: 12px; overflow-wrap: anywhere; }
+.project-scripts-field-hint.is-warn { color: var(--warning); font-size: 12px; overflow-wrap: anywhere; }
 .project-scripts-note { font-size: 12px; color: var(--fg-muted); line-height: 1.5; overflow-wrap: anywhere; }
-.project-scripts-note.is-warn { color: var(--color-warning, #b26a00); }
+.project-scripts-note.is-warn { color: var(--warning); }
 .project-scripts-note code, .project-scripts-file-head code {
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 0.92em;
@@ -491,7 +491,7 @@
 .project-scripts-allow-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 
 .project-scripts-role.is-replaced { color: var(--fg-secondary, var(--fg-muted)); background: var(--bg-secondary, transparent); }
-.project-scripts-form .app-modal-input[aria-invalid] { border-color: var(--color-error, #ff3b30); box-shadow: 0 0 0 1px var(--color-error, #ff3b30); }
+.project-scripts-form .app-modal-input[aria-invalid] { border-color: var(--error); box-shadow: 0 0 0 1px var(--error); }
 .workspace-preparing-fix .project-scripts-link { color: var(--accent); }
 .workspace-preparing-fix { margin-top: 10px; font-size: 12px; color: var(--fg-muted); text-align: center; max-width: 420px; }
 

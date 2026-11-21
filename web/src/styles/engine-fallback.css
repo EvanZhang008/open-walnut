@@ -35,7 +35,7 @@
    hanging at a line's end or a "· resets 4:38 PM" starting one (2026-11-09 reviews). */
 .engine-fallback-why { display: block; color: var(--fg); font-weight: 500; }
 .engine-fallback-detail { margin-top: 2px; color: var(--fg-secondary, var(--fg-muted)); }
-.engine-fallback-failure { margin-top: 4px; color: var(--danger, #ff3b30); }
+.engine-fallback-failure { margin-top: 4px; color: var(--error); }
 /* On their own line under the words, lined up with them (icon 16px + gap 10px). */
 .engine-fallback-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: 1 0 100%; padding-left: 26px; }
 .engine-fallback-btn {

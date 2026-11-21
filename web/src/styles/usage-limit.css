@@ -50,7 +50,7 @@
   background: color-mix(in srgb, var(--warning, #f59e0b) 18%, transparent);
 }
 .usage-limit-banner-detail { margin-top: 2px; color: var(--fg-secondary, var(--fg-muted)); }
-.usage-limit-banner-failure { margin-top: 4px; color: var(--danger, #ff3b30); }
+.usage-limit-banner-failure { margin-top: 4px; color: var(--error); }
 /* Always on their own line under the words, lined up with them (icon 16px + gap 10px), so they
    sit in one place at every column width. */
 .usage-limit-banner-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: 1 0 100%; padding-left: 26px; }

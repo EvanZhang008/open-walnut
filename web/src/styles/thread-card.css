@@ -213,7 +213,7 @@
   border: 0;
   border-radius: 50%;
   background: var(--accent);
-  color: var(--accent-fg, #fff);
+  color: var(--on-accent);
   cursor: pointer;
 }
 .thread-card-send:disabled { background: var(--bg-tertiary); color: var(--fg-muted); cursor: default; }

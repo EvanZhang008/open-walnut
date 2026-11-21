@@ -95,7 +95,7 @@
 /* Stop as quiet as the servers' Stop: red only under the pointer. */
 .session-browser-btn--stop { color: var(--fg-secondary, var(--fg)); }
 .session-browser-btn--stop:hover:not(:disabled) { color: var(--error, #c0392b); border-color: color-mix(in srgb, var(--error, #c0392b) 45%, var(--border)); }
-.session-browser-btn--primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg, #fff); }
+.session-browser-btn--primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .session-browser-btn--primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 86%, #000); }
 
 .session-browser-tabs {
@@ -206,7 +206,7 @@
 .session-browser-replay-film { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
 .session-browser-replay-play {
   flex: 0 0 auto; width: 28px; height: 28px; border: 0; border-radius: 50%; padding: 8px 7.5px 8px 8.5px;
-  background: var(--accent); color: var(--accent-fg, #fff); cursor: pointer;
+  background: var(--accent); color: var(--on-accent); cursor: pointer;
 }
 .session-browser-replay-play[aria-pressed="true"] { padding: 8px; }
 .session-browser-replay-play svg { width: 100%; height: 100%; display: block; }

@@ -13,11 +13,11 @@
 /* "Open in new tab" link in the preview header. */
 .notes-attachment-open {
   font-size: 12px;
-  color: var(--text-muted, #8a8f98);
+  color: var(--fg-muted);
   text-decoration: none;
 }
 .notes-attachment-open:hover {
-  color: var(--text, #e6e6e6);
+  color: var(--fg);
   text-decoration: underline;
 }
 
@@ -55,7 +55,7 @@
   padding: 12px 18px;
   border: 1px solid var(--border, #2a2c31);
   border-radius: 8px;
-  color: var(--text, #e6e6e6);
+  color: var(--fg);
   text-decoration: none;
   background: var(--bg, #121316);
   font: inherit;

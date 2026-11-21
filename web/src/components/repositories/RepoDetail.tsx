@@ -72,7 +72,7 @@ export function RepoDetail({ repo, onBack, onEdit, onDelete }: RepoDetailProps) 
         {loading ? (
           <p className="text-muted">Loading...</p>
         ) : error ? (
-          <p className="text-muted" style={{ color: 'var(--color-error, #ff3b30)' }}>Failed to load: {error}</p>
+          <p className="text-muted" style={{ color: 'var(--error)' }}>Failed to load: {error}</p>
         ) : (
           <pre className="repo-yaml-content">{content}</pre>
         )}

@@ -9,7 +9,7 @@
 .status-section { display: block; }
 .status-section-heading-icon { display: inline-flex; flex: none; margin-right: -2px; }
 .status-section-heading-icon svg { width: 12px; height: 12px; display: block; }
-.status-section-needs .status-section-heading-icon { color: var(--red, #e5484d); }
+.status-section-needs .status-section-heading-icon { color: var(--error); }
 /* The divider heading (NavigationHeading `divider`): a status section's, and a tier's
    in By project (the user, 2026-10-31: the regular Focus too, "the same pattern with a
    line"). Past home-navigation.css's .navigation-heading.todo-pinned-header and
@@ -94,7 +94,7 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
 .project-status-count { display: inline-flex; align-items: center; gap: 2px; }
 .project-status-count-icon { display: inline-flex; }
 .project-status-count-icon svg { width: 10px; height: 10px; display: block; }
-.project-status-count-needs { color: var(--red, #e5484d); }
+.project-status-count-needs { color: var(--error); }
 
 /* By project: a project's folded Waiting / snoozed and Completed lines. */
 .project-status-folds { margin: 2px 0 4px; }
@@ -172,7 +172,7 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
 /* A count in words beside the heading's own count, not a pill: it filters nothing. */
 .status-section-limited { flex: none; margin-left: 4px; font-size: 12px; font-weight: 500; color: var(--accent, #0a84ff); }
 /* Background: a dot after the count while one of its tasks asks the user something (the task stays in Background). */
-.status-section-asks-dot { flex: none; width: 7px; height: 7px; margin-left: 6px; border-radius: 50%; background: var(--red, #e5484d); }
+.status-section-asks-dot { flex: none; width: 7px; height: 7px; margin-left: 6px; border-radius: 50%; background: var(--error); }
 /* While a usage limit holds sessions: one line over the sections, a way to their rows. */
 .status-limit-summary {
   display: flex; align-items: center; gap: 8px; width: calc(100% - 16px); margin: 6px 8px 2px; padding: 6px 10px;

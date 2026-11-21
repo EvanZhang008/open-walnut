@@ -197,7 +197,7 @@ export function NotesSessionChat({ taskId, sessionId: knownSessionId, onResolved
       <div className="notes-session-chat-body">
         {error ? (
           <div className="notes-chat-empty">
-            <p style={{ color: 'var(--color-error, #ff3b30)' }}>{error}</p>
+            <p style={{ color: 'var(--error)' }}>{error}</p>
             <p>Verify that the Claude CLI is installed, then start a new session from the notes tree.</p>
           </div>
         ) : pending ? (

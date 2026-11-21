@@ -89,7 +89,7 @@
     height: 22px;
     padding: 0 8px;
     border-radius: 11px;
-    background: var(--error-subtle, rgb(220 38 38 / 12%));
+    background: var(--error-subtle);
     color: var(--error);
     font-size: 12px;
     font-weight: 600;

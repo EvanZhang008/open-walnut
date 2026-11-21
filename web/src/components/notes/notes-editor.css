@@ -222,7 +222,7 @@
   display: inline;
   padding: 1px 6px;
   margin: 0 1px;
-  border-radius: var(--radius-full, 999px);
+  border-radius: 999px;
   background: var(--accent-subtle, rgba(99, 102, 241, 0.16));
   color: var(--accent, #6366f1);
   font-size: 0.88em;
@@ -483,7 +483,7 @@
   color: var(--fg-muted, #8a8f98);
   background: var(--bg-secondary, #1a1c20);
   padding: 0 6px;
-  border-radius: var(--radius-full, 999px);
+  border-radius: 999px;
 }
 .notes-tag-create .notes-tag-item-name { color: var(--accent, #6366f1); }
 
@@ -507,7 +507,7 @@
   background: var(--bg-elevated, #23262d);
   border: 1px solid var(--border, #2a2d34);
   border-radius: var(--radius-lg, 12px);
-  box-shadow: var(--modal-shadow, 0 16px 48px rgba(0, 0, 0, 0.45));
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
   overflow: hidden;
 }
 .notes-cmdk-input-row {
@@ -545,7 +545,7 @@
   padding: 6px 14px;
   font-size: 12px;
   color: var(--warning, #f59e0b);
-  background: var(--warning-subtle, rgba(245, 158, 11, 0.1));
+  background: var(--warning-subtle);
   border-bottom: 1px solid var(--border, #2a2d34);
 }
 /* The tree's search: a replica whose copy leaves notes out says so above the results. */
@@ -555,7 +555,7 @@
   font-size: 12px;
   border-radius: 6px;
   color: var(--warning, #f59e0b);
-  background: var(--warning-subtle, rgba(245, 158, 11, 0.1));
+  background: var(--warning-subtle);
 }
 .notes-cmdk-list {
   flex: 1;
@@ -651,7 +651,7 @@ mark.notes-search-mark {
   text-transform: uppercase;
   letter-spacing: 0.03em;
   padding: 1px 6px;
-  border-radius: var(--radius-full, 999px);
+  border-radius: 999px;
 }
 .notes-cmdk-badge-glyph { font-size: 9px; }
 .notes-cmdk-badge-exact { color: var(--success, #22c55e); background: rgba(34, 197, 94, 0.14); }
@@ -755,7 +755,7 @@ mark.notes-search-mark {
 }
 .notes-reload-banner.conflict {
   border-color: var(--warning, #f59e0b);
-  background: var(--warning-subtle, rgba(245, 158, 11, 0.12));
+  background: var(--warning-subtle);
 }
 .notes-reload-banner-text { flex: 1; min-width: 200px; }
 .notes-reload-banner-actions { display: flex; gap: 6px; }
@@ -788,8 +788,8 @@ mark.notes-search-mark {
   text-transform: uppercase;
   letter-spacing: 0.03em;
   color: var(--warning, #f59e0b);
-  background: var(--warning-subtle, rgba(245, 158, 11, 0.12));
-  border-radius: var(--radius-full, 999px);
+  background: var(--warning-subtle);
+  border-radius: 999px;
   padding: 0 6px;
 }
 
@@ -858,8 +858,8 @@ mark.notes-search-mark {
   padding: 6px 8px 6px 12px;
   border: 1px solid transparent;
   border-bottom: none;
-  border-top-left-radius: var(--radius, 6px);
-  border-top-right-radius: var(--radius, 6px);
+  border-top-left-radius: var(--radius-sm);
+  border-top-right-radius: var(--radius-sm);
   font-size: 13px;
   color: var(--fg-secondary, #c4c7cc);
   cursor: pointer;

@@ -167,7 +167,7 @@
 /* ── Engine settings help match (from engine-settings-popover-rows.css) ── */
 /* The in-place mark for a help-only filter hit (CSS Custom Highlight API). */
 ::highlight(engine-settings-help-match) {
-  background-color: var(--accent-soft, rgba(99, 102, 241, 0.25));
+  background-color: color-mix(in srgb, var(--accent) 25%, transparent);
   color: var(--fg);
 }
 

@@ -64,7 +64,7 @@
     height: var(--md-code-stick-cover, 0px);
     /* What the glass shows where nothing is under it: the timeline's own
        background, so the block reads as cut at the glass's edge. */
-    background: var(--md-code-cover-bg, var(--bg));
+    background: var(--bg);
     pointer-events: none;
   }
 }
@@ -195,8 +195,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--md-code-warn, var(--warning, #ff9500));
-  font: 500 12px/1 var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+  color: var(--warning, #ff9500);
+  font: 500 12px/1 var(--font-sans);
 }
 .md-code-status:not([data-visible]) {
   position: absolute;
@@ -257,7 +257,7 @@
 .markdown-body .md-code.md-code > pre:focus { outline: none; }
 .md-code:has(> pre:focus-visible),
 .md-code[data-kbd-focus]:has(> pre:focus) {
-  outline: 2px solid var(--md-code-focus, var(--accent));
+  outline: 2px solid var(--accent);
   outline-offset: 1px;
   border-radius: 8px;
 }
@@ -274,7 +274,7 @@
   border-radius: 6px;
   background: transparent;
   color: var(--md-code-ink);
-  font: 500 12px/1 var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+  font: 500 12px/1 var(--font-sans);
   cursor: pointer;
   transition: background-color 0.12s, color 0.12s;
 }
@@ -288,7 +288,7 @@
 }
 .md-code-btn:active { background: var(--md-code-hover); }
 .md-code-btn:focus-visible {
-  outline: 2px solid var(--md-code-focus, var(--accent));
+  outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 .md-code-icon {
@@ -301,8 +301,8 @@
 .md-code-icon-done { display: none; }
 .md-code-copy[data-state="copied"] .md-code-icon-copy { display: none; }
 .md-code-copy[data-state="copied"] .md-code-icon-done { display: block; }
-.md-code-copy[data-state="copied"] { color: var(--md-code-ok, var(--success, #34c759)); }
-.md-code-copy[data-state="failed"] { color: var(--md-code-warn, var(--warning, #ff9500)); }
+.md-code-copy[data-state="copied"] { color: var(--success, #34c759); }
+.md-code-copy[data-state="failed"] { color: var(--warning, #ff9500); }
 
 /* Wrap: per block, `data-wrap` on the frame (code-block-actions.ts). A block
    with no line too long for it has nothing to wrap: no Wrap button.
@@ -348,13 +348,13 @@
   border-radius: 15px;
   background: var(--md-code-bg);
   color: var(--md-code-ink-strong);
-  font: 500 12px/1 var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+  font: 500 12px/1 var(--font-sans);
   cursor: pointer;
 }
 @media (hover: hover) {
   .md-code[data-collapsed] .md-code-more:hover { background: color-mix(in srgb, var(--md-code-bg) 85%, #fff); }
 }
-.md-code-more:focus-visible { outline: 2px solid var(--md-code-focus, var(--accent)); outline-offset: 2px; }
+.md-code-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* One selection color in code, on text and on the room a wrapped line leaves. */
 .md-code pre::selection,
@@ -371,7 +371,7 @@
   border-radius: 4px;
   background: var(--md-code-hover);
   color: var(--md-code-ink);
-  font: 500 11px/1 var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+  font: 500 11px/1 var(--font-sans);
 }
 @media (max-width: 640px) {
   .md-code-note { display: none; }
@@ -526,4 +526,4 @@
 .md-code [data-hl="bash"] .token.builtin { color: inherit; }
 .md-code .language-diff .token.inserted,
 .md-code [data-hl="diff"] .token.inserted { color: var(--tk-tag); }
-.md-code [data-hl="diff"] .token.deleted { color: var(--tk-deleted, var(--tk-keyword)); }
+.md-code [data-hl="diff"] .token.deleted { color: var(--tk-keyword); }

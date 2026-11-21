@@ -66,8 +66,8 @@
   margin-right: -8px;
   padding-right: 8px;
   /* The first row's headline and buttons always fit (--hpb-first, measured). */
-  min-height: var(--hpb-first, 0px);
-  max-height: var(--hpb-max, none);
+  min-height: 0px;
+  max-height: none;
   overflow-y: auto;
   overflow-x: hidden;
   /* A row changing in place (a result line, a success line) never scrolls the list. */

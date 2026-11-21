@@ -183,7 +183,7 @@ function tierChipValue(draft: DraftColumn, ctx: DraftDecisionCtx): DraftDecision
   if (custom === undefined) {
     const title = 'This tier no longer exists, so the task will land in Focus. Click to change.';
     return {
-      ...chipOf(draft, 'pinTier', 'Removed tier', { kind: 'tier', tier, color: 'var(--danger, var(--error))' }, 'Pinned tier', ''),
+      ...chipOf(draft, 'pinTier', 'Removed tier', { kind: 'tier', tier, color: 'var(--error)' }, 'Pinned tier', ''),
       title, ariaLabel: title, removedTier: true,
     };
   }

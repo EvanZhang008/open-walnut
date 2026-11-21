@@ -611,7 +611,7 @@
 .ask-walnut-drawer-item-text .ask-walnut-drawer-item-title { flex: none; font-size: 13.5px; }
 .ask-walnut-drawer-item-line { font-size: 12px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ask-walnut-drawer-needs { flex: none; width: 7px; height: 7px; margin-top: 6px; border-radius: 50%; }
-.ask-walnut-drawer-needs.is-on { background: var(--danger, #d64545); }
+.ask-walnut-drawer-needs.is-on { background: var(--error); }
 .ask-walnut-drawer-logo { flex: none; width: 18px; height: 18px; margin-top: 1px; border-radius: 5px; display: grid; place-items: center; background: linear-gradient(145deg, #c58a4f, #8a5a2b); color: #fff; font-size: 10px; font-weight: 700; }
 .ask-walnut-drawer-pin { flex: none; color: var(--fg-muted); margin-top: 2px; display: inline-flex; }
 .ask-walnut-drawer-label { margin: 10px 12px 4px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
@@ -681,7 +681,7 @@
 }
 .ask-walnut-pending-error {
   margin: 0;
-  color: var(--color-error, #ff3b30);
+  color: var(--error);
 }
 .ask-walnut-pending-actions {
   display: flex;

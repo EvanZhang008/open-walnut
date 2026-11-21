@@ -20,7 +20,7 @@
    border, not padding, because the frame is its own scroller: padding would
    scroll away with the text. */
 .page-find-strip {
-  border-top: var(--page-find-strip, 46px) solid transparent !important;
+  border-top: 46px solid transparent !important;
 }
 
 /* Its ::highlight paint lives in highlights.css (utils/highlight-rules.ts). */

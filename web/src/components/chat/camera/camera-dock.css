@@ -84,7 +84,7 @@
   color: #aeaeb2;
   border-radius: 999px;
   padding: 3px 11px;
-  font: 500 12px/1.4 var(--font-sans, -apple-system, system-ui, sans-serif);
+  font: 500 12px/1.4 var(--font-sans);
   cursor: pointer;
 }
 .camera-seg button.is-on { background: #fff; color: #111; }

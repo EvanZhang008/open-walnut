@@ -134,7 +134,7 @@
   padding: 4px;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
-  background: var(--bg-elevated, var(--bg-primary));
+  background: var(--bg-elevated, var(--bg));
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
   overflow-y: auto;
 }
@@ -205,7 +205,7 @@
 /* Keyboard focus is a ring, never the selected colour. */
 .model-picker-row:focus-visible,
 .session-control-option:focus-visible {
-  outline: 2px solid var(--fg-primary);
+  outline: 2px solid var(--fg);
   outline-offset: -2px;
 }
 

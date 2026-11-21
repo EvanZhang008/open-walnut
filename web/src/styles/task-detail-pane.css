@@ -37,7 +37,7 @@
   font-size: 28px;
   font-weight: 500;
   line-height: 1.3;
-  color: var(--fg-primary, var(--fg));
+  color: var(--fg);
   overflow-wrap: anywhere;
   user-select: text;
 }
@@ -119,7 +119,7 @@
   text-overflow: ellipsis;
   white-space: normal;
   overflow-wrap: anywhere;
-  color: var(--fg-primary, var(--fg));
+  color: var(--fg);
 }
 .tdp-row-title.is-loading { color: var(--fg-muted); }
 .tdp-row-end {

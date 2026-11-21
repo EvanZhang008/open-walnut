@@ -21,7 +21,7 @@
   overflow-wrap: anywhere;
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 11px;
-  color: var(--fg-subtle, var(--fg-muted));
+  color: var(--fg-muted);
 }
 
 .region-error-actions {

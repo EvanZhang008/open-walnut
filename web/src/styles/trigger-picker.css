@@ -186,7 +186,7 @@
 
 .trigger-picker-chip.is-on {
   border-color: var(--accent);
-  background: var(--accent-soft, var(--bg-hover));
+  background: var(--bg-hover);
   color: var(--accent-text, var(--fg));
   font-weight: 600;
 }
@@ -305,7 +305,7 @@
 .trigger-picker-primary {
   border: 1px solid var(--accent);
   background: var(--accent);
-  color: var(--accent-fg, #fff);
+  color: var(--on-accent);
 }
 
 .trigger-picker-primary:disabled {

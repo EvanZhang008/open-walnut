@@ -7,7 +7,7 @@
   margin: 0 0 8px;
   padding: 6px 10px;
   border-radius: 6px;
-  background: var(--bg-subtle, rgba(128, 128, 128, 0.08));
+  background: var(--bg-secondary);
   color: var(--fg-muted);
   font-size: 12px;
   line-height: 17px;
@@ -65,7 +65,7 @@
 
 .subscription-limit-row.is-rejected .subscription-limit-value,
 .subscription-limit-overage.is-rejected {
-  color: var(--danger, #ff3b30);
+  color: var(--error);
 }
 
 .subscription-limit-overage.is-warning {
@@ -92,5 +92,5 @@
 }
 
 .composer-limit-hint.is-rejected {
-  background: var(--danger, #ff3b30);
+  background: var(--error);
 }

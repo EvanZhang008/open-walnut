@@ -47,7 +47,7 @@
   padding: 4px 8px;
   border-radius: 6px;
   background: var(--bg-secondary);
-  color: var(--danger, #c0392b);
+  color: var(--error);
   font-size: 12px;
 }
 

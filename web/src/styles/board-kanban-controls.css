@@ -108,7 +108,7 @@
 /* N14: one count badge for every chip. */
 .kanban-chip-count {
   display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; padding: 0 4px;
-  border-radius: 8px; background: var(--kc-count-bg, rgba(127, 127, 127, 0.16)); font-weight: 600; font-size: 11px;
+  border-radius: 8px; background: rgba(127, 127, 127, 0.16); font-weight: 600; font-size: 11px;
 }
 .kanban-chip.is-alert { border-color: var(--kc-red); color: var(--kc-red); }
 .kanban-chip.is-zero { color: var(--fg-muted); border-color: var(--border); background: transparent; cursor: default; }

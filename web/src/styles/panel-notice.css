@@ -29,7 +29,7 @@
   color: var(--fg-secondary);
 }
 .panel-notice-glyph { display: inline-flex; font-size: 14px; line-height: 1; }
-.session-error-banner:not(.session-error-banner--idle):not(.session-error-banner--reconnecting):not(.session-error-banner--warning) > .panel-notice-body > .panel-notice-icon { color: var(--danger, #ff3b30); }
+.session-error-banner:not(.session-error-banner--idle):not(.session-error-banner--reconnecting):not(.session-error-banner--warning) > .panel-notice-body > .panel-notice-icon { color: var(--error); }
 .session-error-banner--warning > .panel-notice-body > .panel-notice-icon { color: var(--warning); }
 .session-error-banner--reconnecting .panel-notice-icon { animation: spin 1.5s linear infinite; }
 /* The words read as prose at any width: break between words, a long token only when it

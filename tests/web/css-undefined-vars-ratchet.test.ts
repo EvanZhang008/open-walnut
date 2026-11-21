@@ -1,95 +1,101 @@
 /**
  * A colour or size the CSS reads from a custom property nobody defines.
  *
- * `var(--x)` with no fallback, where no stylesheet and no inline style in the
- * app ever sets `--x`, is not an error to the browser: the declaration falls
- * back to the inherited value. So a rule meant to grey a control kept the
- * text colour instead: 2026-11-11, the mic's "starting" look read
- * `var(--text-muted)` (the app's muted grey is `--fg-muted`) and drew a black
- * ring in light mode and a white one in dark, which a reviewer caught by eye.
+ * `var(--x)` with no fallback, where no stylesheet and no script ever sets `--x`, is not an error
+ * to the browser: the declaration falls back to the inherited value (or the property's initial
+ * value). 2026-11-11, the mic's "starting" look read `var(--text-muted)` (the app's muted grey is
+ * `--fg-muted`) and drew a black ring in light mode and a white one in dark.
  *
- * Every such use is either named here with its current count (older rules,
- * counts may only go down) or fails. Use a defined variable, or give the
- * `var()` a fallback.
+ * A fallback does not make it right either. 2026-11-21, the UI audit: `var(--radius)` left three
+ * cards square (`.notification-card`, `.setup-banner`, `.repo-card`), `var(--text, #e6e6e6)` drew
+ * notes text near-white on the light theme, and `--danger` alone had nine different fallback reds.
+ * This test once allowed 13 such names by count and every use that had a fallback, so 91 names
+ * got in. Now every `var(--x)`, fallback or not, in every stylesheet and every inline style, must
+ * name a property something defines: a stylesheet declaration (`--x: ...`), or a script that names
+ * it (`'--x'` in a style object or a `setProperty`, or `` `--x-${side}` `` for a family).
+ * No baseline: there are none today.
  */
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { walk } from './css-scan';
 
 const WEB_SRC = path.join(__dirname, '../../web/src');
 
-/** Undefined variables already in the CSS, with how many bare uses each has. */
-const KNOWN: Record<string, number> = {
-  '--bg-primary': 5,
-  '--color-bg': 4,
-  '--color-border': 8,
-  '--fg-primary': 49,
-  '--fg-tertiary': 4,
-  '--radius': 3,
-  '--secondary-text': 1,
-  '--text': 4,
-  '--text-muted': 21,
-  '--text-primary': 4,
-  '--text-quaternary': 4,
-  '--text-secondary': 20,
-  '--text-tertiary': 1,
-};
+/**
+ * Files whose CSS runs in another document, where the variables are that document's inputs.
+ * board-runtime.css.ts is injected into a Board's own frame (it cannot load the app's CSS); its
+ * `--wn-*` variables are the palette a Board's author sets in one `:root` rule (see its header).
+ */
+const OTHER_DOCUMENT = new Set(['components/board/board-runtime.css.ts']);
 
-function files(dir: string, exts: string[]): string[] {
-  const out: string[] = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === 'node_modules') continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...files(full, exts));
-    else if (exts.some((e) => entry.name.endsWith(e))) out.push(full);
+/** Comments out (keeping newlines), so a `var(--x)` in prose is neither a use nor a definition. */
+export function stripComments(text: string, css: boolean): string {
+  const blank = (c: string) => c.replace(/[^\n]/g, ' ');
+  const out = text.replace(/\/\*[\s\S]*?\*\//g, blank);
+  return css ? out : out.replace(/^\s*\/\/.*$/gm, blank);
+}
+
+export interface Definitions { names: Set<string>; prefixes: string[] }
+
+export function definitionsIn(text: string, css: boolean, into: Definitions = { names: new Set(), prefixes: [] }): Definitions {
+  for (const m of text.matchAll(/(?<![\w-])(--[A-Za-z0-9_-]+)\s*:/g)) into.names.add(m[1]);
+  if (!css) {
+    for (const m of text.matchAll(/['"`](--[A-Za-z0-9_-]+)['"`]/g)) into.names.add(m[1]);
+    for (const m of text.matchAll(/`(--[A-Za-z0-9_-]+)\$\{/g)) into.prefixes.push(m[1]);
+  }
+  return into;
+}
+
+export function usesIn(text: string): Array<{ name: string; line: number }> {
+  const out: Array<{ name: string; line: number }> = [];
+  for (const m of text.matchAll(/var\(\s*(--[A-Za-z0-9_-]+)\s*[,)]/g)) {
+    out.push({ name: m[1], line: text.slice(0, m.index).split('\n').length });
   }
   return out;
 }
 
-function definedVars(): Set<string> {
-  const defs = new Set<string>();
-  for (const file of files(WEB_SRC, ['.css', '.ts', '.tsx'])) {
-    const text = fs.readFileSync(file, 'utf8');
-    for (const m of text.matchAll(/(--[A-Za-z0-9_-]+)\s*:/g)) defs.add(m[1]);
-    for (const m of text.matchAll(/setProperty\(\s*['"`](--[A-Za-z0-9_-]+)/g)) defs.add(m[1]);
-    for (const m of text.matchAll(/['"`](--[A-Za-z0-9_-]+)['"`]\s*[:\]]/g)) defs.add(m[1]);
-  }
-  return defs;
-}
+const isDefined = (defs: Definitions, name: string) => defs.names.has(name) || defs.prefixes.some((p) => name.startsWith(p));
 
-function bareUses(): Map<string, string[]> {
-  const uses = new Map<string, string[]>();
-  for (const file of files(WEB_SRC, ['.css'])) {
-    const lines = fs.readFileSync(file, 'utf8').split('\n');
-    lines.forEach((line, i) => {
-      for (const m of line.matchAll(/var\(\s*(--[A-Za-z0-9_-]+)\s*\)/g)) {
-        const at = `${path.relative(WEB_SRC, file)}:${i + 1}`;
-        uses.set(m[1], [...(uses.get(m[1]) ?? []), at]);
-      }
-    });
+function scan() {
+  const defs: Definitions = { names: new Set(), prefixes: [] };
+  const texts: Array<{ rel: string; text: string }> = [];
+  for (const file of walk(WEB_SRC, ['.css', '.ts', '.tsx']).sort()) {
+    const rel = path.relative(WEB_SRC, file);
+    if (OTHER_DOCUMENT.has(rel)) continue;
+    const css = file.endsWith('.css');
+    const text = stripComments(fs.readFileSync(file, 'utf8'), css);
+    definitionsIn(text, css, defs);
+    texts.push({ rel, text });
   }
-  return uses;
+  return { defs, texts };
 }
 
 describe('CSS reads only custom properties the app defines', () => {
-  it('no new bare var() of an undefined property', () => {
-    const defs = definedVars();
+  it('every var(--x), with a fallback or without, names a defined property', () => {
+    const { defs, texts } = scan();
     const problems: string[] = [];
-    for (const [name, at] of bareUses()) {
-      if (defs.has(name)) continue;
-      const allowed = KNOWN[name] ?? 0;
-      if (at.length > allowed) {
-        problems.push(`${name}: ${at.length} bare uses (allowed ${allowed}), defined nowhere. First at ${at[0]}`);
+    for (const { rel, text } of texts) {
+      for (const use of usesIn(text)) {
+        if (!isDefined(defs, use.name)) problems.push(`web/src/${rel}:${use.line} reads ${use.name}, which nothing defines`);
       }
     }
-    expect(problems, 'use a defined variable (e.g. --fg-muted) or add a fallback').toEqual([]);
+    expect(problems, 'Use the token in globals.css :root (--fg, --fg-muted, --error, --radius-md ...), or define the new one there once').toEqual([]);
   });
 
-  it('catches the case it was written for', () => {
-    // The scanner must see a bare use of an undefined property in real CSS.
-    const defs = definedVars();
-    expect(defs.has('--fg-muted')).toBe(true);
-    expect(defs.has('--text-muted')).toBe(false);
-    expect(bareUses().get('--fg-muted')?.length ?? 0).toBeGreaterThan(0);
+  it('catches each shape it was written for', () => {
+    const css = stripComments('.a { border-radius: var(--radius); color: var(--text, #e6e6e6); }\n/* var(--in-a-comment) */', true);
+    expect(usesIn(css).map((u) => u.name)).toEqual(['--radius', '--text']);
+    const defs = definitionsIn(stripComments(":root { --fg: #000; }", true), true);
+    definitionsIn("el.style.setProperty(`--plugin-box-${side}`, v); const s = { ['--menu-max-height' as string]: h };", false, defs);
+    expect(isDefined(defs, '--fg')).toBe(true);
+    expect(isDefined(defs, '--plugin-box-top')).toBe(true);
+    expect(isDefined(defs, '--menu-max-height')).toBe(true);
+    expect(isDefined(defs, '--radius')).toBe(false);
+    expect(isDefined(defs, '--text')).toBe(false);
+    // The real tree: the app's muted grey is defined, the old wrong name is not.
+    const real = scan().defs;
+    expect(isDefined(real, '--fg-muted')).toBe(true);
+    expect(isDefined(real, '--text-muted')).toBe(false);
   });
 });

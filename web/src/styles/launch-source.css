@@ -119,7 +119,7 @@
 .project-launch-defaults-error {
   margin: 4px 0 0;
   font-size: 11px;
-  color: var(--danger, #ff3b30);
+  color: var(--error);
 }
 
 .launch-source-tag.is-placeholder { visibility: hidden; min-width: 44px; }

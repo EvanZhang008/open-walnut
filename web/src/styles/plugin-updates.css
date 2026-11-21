@@ -25,12 +25,12 @@
 }
 
 :root[data-theme='dark'] .plugin-update-chip {
-  --plugin-update-chip-quiet: var(--fg-muted, var(--text-muted));
+  --plugin-update-chip-quiet: var(--fg-muted);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) .plugin-update-chip {
-    --plugin-update-chip-quiet: var(--fg-muted, var(--text-muted));
+    --plugin-update-chip-quiet: var(--fg-muted);
   }
 }
 
@@ -211,7 +211,7 @@ button.plugin-update-chip--current:hover {
 .plugin-update-disabled .btn[disabled],
 .plugin-update-disabled .btn[disabled]:hover {
   opacity: 1;
-  color: var(--fg-muted, var(--text-muted));
+  color: var(--fg-muted);
   background: color-mix(in srgb, var(--fg) 6%, transparent);
   border-color: transparent;
   cursor: not-allowed;
@@ -323,7 +323,7 @@ button.plugin-update-chip--current:hover {
   border: 0;
   border-radius: 50%;
   background: none;
-  color: var(--fg-muted, var(--text-muted));
+  color: var(--fg-muted);
   cursor: pointer;
   vertical-align: middle;
 }
@@ -366,7 +366,7 @@ button.plugin-update-chip--current:hover {
 }
 
 .plugin-provenance-list dt {
-  color: var(--fg-muted, var(--text-muted));
+  color: var(--fg-muted);
   font-weight: 500;
 }
 
@@ -389,7 +389,7 @@ button.plugin-update-chip--current:hover {
 }
 
 .plugin-provenance-muted {
-  color: var(--fg-muted, var(--text-muted));
+  color: var(--fg-muted);
 }
 
 .plugin-provenance-copy {
@@ -410,7 +410,7 @@ button.plugin-update-chip--current:hover {
   margin-top: 8px;
   padding-top: 8px;
   border-top: 1px solid var(--border);
-  color: var(--fg-muted, var(--text-muted));
+  color: var(--fg-muted);
   font-size: 11px;
 }
 
@@ -447,7 +447,7 @@ button.plugin-update-chip--current:hover {
 /* While a check runs the verb is dead and must not read as the tail of the status sentence
    next to it (N2-11): muted, not the same secondary grey as the text. */
 .plugin-store-updates-head .btn-link:disabled {
-  color: var(--fg-muted, var(--text-muted));
+  color: var(--fg-muted);
   cursor: default;
 }
 

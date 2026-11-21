@@ -477,13 +477,13 @@ span.plugin-store-why {
   cursor: pointer;
   padding: 10px 16px;
   font-size: 13px;
-  color: var(--text-secondary, var(--fg-muted));
+  color: var(--fg-muted);
 }
 .usage-how > summary {
   cursor: pointer;
   padding: 10px 4px;
   font-size: 13px;
-  color: var(--text-secondary, var(--fg-muted));
+  color: var(--fg-muted);
 }
 
 /* Settings, Sessions, "Share new tasks" (EngineSplitRow): the state word beside its off switch, and the add row. */

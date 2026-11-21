@@ -574,7 +574,7 @@
   background: var(--bg-secondary);
   flex-shrink: 0;
   /* Shared bar height (see .session-code-header / the file explorer toolbar). */
-  min-height: var(--split-bar-h, 43px);
+  min-height: var(--split-bar-h);
 }
 
 .session-inbox-bar-title {

@@ -31,7 +31,7 @@
 .org-avatar-drop { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 26px 12px; border: 2px dashed var(--border); border-radius: 12px; color: var(--fg); font-size: 13px; text-align: center; cursor: pointer; }
 .org-avatar-drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .org-avatar-drop small { color: var(--fg-secondary); font-size: 12px; }
-.org-avatar-error { margin: 8px 0 0; font-size: 13px; color: var(--danger, #ff453a); }
+.org-avatar-error { margin: 8px 0 0; font-size: 13px; color: var(--error); }
 .org-avatar-foot { display: flex; gap: 8px; align-items: center; padding: 12px 18px 16px; border-top: 1px solid var(--border); }
 .org-avatar-gap { flex: 1; }
 .org-avatar-btn { padding: 5px 13px; border: 1px solid var(--border); border-radius: 8px; background: none; color: var(--fg); font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; }

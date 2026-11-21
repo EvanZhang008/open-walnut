@@ -8,7 +8,7 @@
 .answer-box.is-disabled { opacity: 0.6; }
 .answer-box-input {
   flex: 1; min-width: 0; align-self: center; margin: 0; padding: 4px 0;
-  border: none; outline: none; background: transparent; color: var(--fg, var(--fg-primary));
+  border: none; outline: none; background: transparent; color: var(--fg);
   font: inherit; font-size: 13px; line-height: 18px; resize: none; overflow-y: auto;
   field-sizing: content; box-sizing: border-box;
 }

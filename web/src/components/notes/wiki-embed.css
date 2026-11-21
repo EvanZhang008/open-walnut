@@ -103,7 +103,7 @@
   border: 1px solid var(--border, #2a2d34);
   border-radius: var(--radius-sm, 6px);
   background: var(--bg-secondary, #1a1c20);
-  color: var(--text, #e6e6e6);
+  color: var(--fg);
   text-decoration: none;
   max-width: 100%;
 }
@@ -124,7 +124,7 @@
 .notes-wikiembed-card-raw {
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 11px;
-  color: var(--text-tertiary, #8a8f98);
+  color: var(--fg-muted);
   opacity: 0.7;
 }
 

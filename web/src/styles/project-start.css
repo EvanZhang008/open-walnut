@@ -318,14 +318,14 @@
 .pcs-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .pcs-chips .pcs-input { width: 140px; }
 .pcs-note { font-size: 11px; color: var(--fg-muted); line-height: 1.4; }
-.pcs-note.is-error { color: var(--danger, #c0392b); }
+.pcs-note.is-error { color: var(--error); }
 .pcs-actions { display: flex; gap: 6px; align-items: center; }
 .pcs-save {
   padding: 3px 12px;
   border: 1px solid var(--accent);
   border-radius: 7px;
   background: var(--accent);
-  color: var(--accent-fg, #fff);
+  color: var(--on-accent);
   font: inherit;
   font-size: 12px;
   cursor: pointer;

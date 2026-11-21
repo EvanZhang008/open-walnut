@@ -166,7 +166,7 @@
    6px corners and the same 2px inset from the track edge. */
 .task-kebab-panels-opt:hover { background: color-mix(in srgb, var(--fg) 12%, transparent); }
 /* Auto's count, muted until Auto is pressed (then it takes the pressed accent). */
-.task-kebab-panels-auto-n { color: var(--fg-tertiary, var(--fg-secondary)); }
+.task-kebab-panels-auto-n { color: var(--fg-secondary); }
 .task-kebab-panels-opt.active .task-kebab-panels-auto-n { color: inherit; }
 /* Pressed: a raised white chip in the accent. Every choice keeps one weight pressed or not
    (the chip and the accent say which), so the track keeps one width: pressing Auto moves

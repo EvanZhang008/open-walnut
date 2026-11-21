@@ -20,7 +20,7 @@
   gap: 8px;
   /* The shared bar height, so the bar lines up with the tree head beside it and
      the chat segment at its end. */
-  min-height: var(--split-bar-h, 43px);
+  min-height: var(--split-bar-h);
   padding: 0 8px 0 12px;
   border-bottom: none;
   background: var(--bg);
@@ -292,7 +292,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  min-height: var(--split-bar-h, 43px);
+  min-height: var(--split-bar-h);
   margin-top: -4px; /* the tree's own top padding */
   padding: 0 6px 0 8px;
   background: var(--bg);
@@ -322,7 +322,7 @@
 .sfe-tree-head .sfe-hidden-toggle.active:hover { color: var(--accent-text); background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .sfe-tree-head .sfe-path-edit { flex: 1 1 auto; }
 /* The multi-root section headers stick below the head, not under it. */
-.session-file-explorer-tree:has(> .sfe-tree-head) .sfe-root-header { top: var(--split-bar-h, 43px); }
+.session-file-explorer-tree:has(> .sfe-tree-head) .sfe-root-header { top: var(--split-bar-h); }
 
 /* ── Explorer: nothing open ───────────────────────────────────────────────── */
 .sfe-preview-empty-wrap {

@@ -6,7 +6,7 @@
   display: flex;
   flex-direction: column;
   /* var(--card-bg) is glass in some themes; a form over a busy board must stay readable. */
-  background: var(--bg-primary, var(--card-bg, #1c1f26));
+  background: var(--card-bg);
 }
 .xfer-head { display: flex; align-items: center; gap: 8px; }
 .xfer-head .app-modal-title { flex: 1; min-width: 0; }
@@ -67,7 +67,7 @@
 
 /* "Moved from <task>" / "Moved to <task>": one quiet line. */
 .xfer-links { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--fg-muted); }
-.xfer-links-panel { padding: 4px 14px; border-bottom: 1px solid var(--border-subtle, var(--border)); }
+.xfer-links-panel { padding: 4px 14px; border-bottom: 1px solid var(--border); }
 .xfer-link-item { display: inline-flex; align-items: baseline; gap: 5px; min-width: 0; max-width: 100%; }
 .xfer-link-item .task-link { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
 

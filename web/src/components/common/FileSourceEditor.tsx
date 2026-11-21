@@ -186,7 +186,7 @@ const editorTheme = EditorView.theme({
   '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--fg)' },
   '.cm-cursor': { borderLeftColor: 'var(--fg)' },
   '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': {
-    backgroundColor: 'var(--accent-soft, rgba(80, 140, 255, 0.25))',
+    backgroundColor: 'color-mix(in srgb, var(--accent) 25%, transparent)',
   },
 });
 

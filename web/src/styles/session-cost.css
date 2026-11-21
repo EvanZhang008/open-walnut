@@ -69,7 +69,7 @@
 }
 
 .session-cost-model-row:hover {
-  background: var(--bg-subtle, rgba(128, 128, 128, 0.12));
+  background: var(--bg-secondary);
 }
 
 .session-cost-model-name {

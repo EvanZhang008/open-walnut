@@ -194,7 +194,7 @@
 }
 
 .engine-setting-help-match mark {
-  background: var(--accent-soft, var(--bg-hover));
+  background: var(--bg-hover);
   color: var(--fg);
   border-radius: 2px;
   padding: 0 1px;

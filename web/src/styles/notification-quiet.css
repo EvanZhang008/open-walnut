@@ -13,7 +13,7 @@
 .nfc-quiet-chip {
   font-size: 11px;
   font-weight: 600;
-  color: var(--text-secondary, #8e8e93);
+  color: var(--fg-secondary);
   cursor: default;
 }
 
@@ -25,7 +25,7 @@
   bottom: 4px;
   font-size: 10px;
   line-height: 1;
-  color: var(--text-secondary, #8e8e93);
+  color: var(--fg-secondary);
   pointer-events: none;
 }
 .sidebar.collapsed .sidebar-notification-btn .quiet-moon { left: 22px; }

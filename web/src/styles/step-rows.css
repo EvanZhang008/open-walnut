@@ -52,7 +52,7 @@
   border-radius: 6px;
   color: var(--fg-secondary);
 }
-:root .session-history .chat-tool-block > .chat-tool-block-header:hover { background: var(--hover, color-mix(in srgb, var(--fg) 5%, transparent)); }
+:root .session-history .chat-tool-block > .chat-tool-block-header:hover { background: var(--bg-hover); }
 :root .session-history .chat-tool-block .chat-tool-block-icon { display: inline-flex; width: 16px; font-size: inherit; color: var(--fg-muted); }
 :root .session-history .chat-tool-block-error .chat-tool-block-icon .step-icon { color: var(--error); }
 :root .session-history .chat-tool-block-waiting .chat-tool-block-icon .step-icon { color: var(--warning); }
@@ -121,7 +121,7 @@
   font-size: 14px;
   line-height: 1.45;
 }
-:root .session-history .provenance-card.provenance-card:hover { background: var(--hover, color-mix(in srgb, var(--fg) 5%, transparent)); }
+:root .session-history .provenance-card.provenance-card:hover { background: var(--bg-hover); }
 :root .session-history .provenance-card .op-card-to { flex: 0 1 auto; flex-wrap: nowrap; gap: 6px; font-size: 14px; color: var(--fg-secondary); max-width: 55%; overflow: hidden; white-space: nowrap; }
 :root .session-history .provenance-card .provenance-glyph { display: inline-flex; font-size: inherit; color: var(--fg-muted); }
 :root .session-history .provenance-card[data-envelope-kind="outbound"] .provenance-glyph .step-icon { color: var(--accent); }

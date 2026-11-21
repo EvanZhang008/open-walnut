@@ -180,7 +180,7 @@ button.task-status-badge:hover { filter: brightness(0.96); }
   border-radius: 8px;
   background: var(--bg-elevated);
   color: var(--fg-secondary);
-  box-shadow: var(--shadow-md, 0 4px 16px rgba(0, 0, 0, 0.12));
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
   font-size: 12px;
   line-height: 1.45;
 }

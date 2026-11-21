@@ -85,7 +85,7 @@
   min-width: 22px;
   height: 22px;
   padding: 0 6px;
-  font: 500 12px/1 var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+  font: 500 12px/1 var(--font-sans);
   color: var(--fg);
   background: var(--bg-secondary);
   border: 1px solid var(--border-strong);
@@ -182,7 +182,7 @@ button:has(> .shortcut-hint) { position: relative; overflow: visible; }
   min-width: 22px;
   height: 22px;
   padding: 0 6px;
-  font: 600 12px/1 var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+  font: 600 12px/1 var(--font-sans);
   letter-spacing: 0.02em;
   white-space: nowrap;
   color: var(--fg);

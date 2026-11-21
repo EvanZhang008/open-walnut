@@ -78,7 +78,7 @@
 .drawing-pad-text:focus { border-color: transparent; box-shadow: none; }
 .drawing-pad-footer { margin-top: 12px; justify-content: space-between; }
 .drawing-pad-footer span { font-size: 12px; color: var(--fg-secondary); }
-.drawing-pad-footer [role="alert"] { color: var(--danger, #c73333); }
+.drawing-pad-footer [role="alert"] { color: var(--error); }
 .drawing-pad button.drawing-pad-attach { background: var(--accent); color: white; border-color: var(--accent); }
 @media (max-width: 600px) {
   .drawing-pad-overlay { padding: 12px; }

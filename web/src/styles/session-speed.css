@@ -34,7 +34,7 @@
   padding: 6px 10px;
   font-size: 12px;
   line-height: 16px;
-  background: var(--bg-subtle, rgba(128, 128, 128, 0.08));
+  background: var(--bg-secondary);
 }
 
 .session-speed-kicker {

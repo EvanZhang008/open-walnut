@@ -117,7 +117,7 @@ describe('custom tier chip', () => {
     const c = chip(draft({ pinTier: 'ct_gone' }, { owner: { pinTier: 'user' } }), 'pinTier')!;
     expect(c.label).toBe('Removed tier');
     expect(c.removedTier).toBe(true);
-    expect(c.glyph).toEqual({ kind: 'tier', tier: 'ct_gone', color: 'var(--danger, var(--error))' });
+    expect(c.glyph).toEqual({ kind: 'tier', tier: 'ct_gone', color: 'var(--error)' });
     expect(c.title).toBe('This tier no longer exists, so the task will land in Focus. Click to change.');
   });
 });
