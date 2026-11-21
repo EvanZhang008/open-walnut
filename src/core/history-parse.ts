@@ -17,7 +17,7 @@
 
 import { redactAiOnly } from '../lib/ai-only-envelope.js';
 import { hookContextText } from '../lib/walnut-added.js';
-import { NATIVE_PEER_TAGS, nonHumanOrigin, opensTurnLine } from '../lib/history-session-envelope.js';
+import { NATIVE_PEER_TAGS, nonHumanOrigin, opensTurnLine, parseSessionEnvelopes } from '../lib/history-session-envelope.js';
 import type { InPlaceRewindCut } from './types.js';
 import { VALID_SESSION_EFFORT_IDS } from './session-effort.js';
 import { projectUserText } from './sessions/user-text-projection.js';
@@ -40,7 +40,7 @@ import { SIDE_THREAD_DIGEST_TAG, stripSideThreadDigestRequest } from './sessions
  * view, a daemon's ready view) written under another number is dropped, never served. The bump
  * log lives beside HISTORY_CACHE_SCHEMA's re-export in history-disk-cache.ts.
  */
-export const HISTORY_CACHE_SCHEMA = 15;
+export const HISTORY_CACHE_SCHEMA = 16;
 
 /** The other sends' uuids on a user line Claude Code merged from several queued sends. */
 function mergedSendUuidsOf(raw: { mergedSendUuids?: unknown }): string[] | undefined {
@@ -48,6 +48,31 @@ function mergedSendUuidsOf(raw: { mergedSendUuids?: unknown }): string[] | undef
   if (!Array.isArray(list)) return undefined;
   const ids = list.filter((u): u is string => typeof u === 'string' && u.length > 0);
   return ids.length > 0 ? ids : undefined;
+}
+
+/** One block of a transcript line's content array. */
+type ContentBlock = Extract<NonNullable<NonNullable<RawJsonlLine['message']>['content']>, unknown[]>[number];
+
+/**
+ * The sends of a user line of blocks Claude Code merged from several queued sends, one group
+ * per send, or undefined. Walnut writes a send with pictures as its images, then ONE text block
+ * (providers/user-line-images-core.ts), and a plain send joins a line of blocks as one text
+ * block, so every send ends at a text block: the line splits after each one. Only when that
+ * count is exactly the line's sends (its own plus `mergedSendUuids`) and nothing but images and
+ * text is in it; anything else stays the one row it was.
+ */
+function joinedSendGroups(raw: RawJsonlLine): ContentBlock[][] | undefined {
+  const others = mergedSendUuidsOf(raw);
+  const c = raw.message?.content;
+  if (!others || !Array.isArray(c) || c.length === 0) return undefined;
+  if (!c.every((b) => b?.type === 'image' || (b?.type === 'text' && typeof b.text === 'string'))) return undefined;
+  if (c[c.length - 1]?.type !== 'text' || c.filter((b) => b.type === 'text').length !== others.length + 1) return undefined;
+  const groups: ContentBlock[][] = [[]];
+  for (const b of c) {
+    groups[groups.length - 1]!.push(b);
+    if (b.type === 'text' && groups.length <= others.length) groups.push([]);
+  }
+  return groups;
 }
 
 /** The reasoning effort the CLI recorded on an assistant line, when it is a known one. */
@@ -236,6 +261,10 @@ export interface SessionHistoryMessage {
    *  sends besides its own (`msgId`), from the line's `mergedSendUuids`. Each one
    *  proves its send reached the CLI (web/src/utils/send-uuids.ts). */
   mergedUuids?: string[];
+  /** A send Claude Code drained into one line with the sends after it, shown as its own row:
+   *  the uuid of that line (written under the last send's uuid). Its `msgId` is its own
+   *  send's uuid, which is no line of the transcript; a rewind resumes to this one. */
+  lineUuid?: string;
   /** This row's CONTENT can still change: the ACP fold marks its active text/thinking
    *  segment; the /history route also marks an Agent/Task row awaiting its late
    *  `bgTaskFinished`, or a tool row awaiting its result. The client re-asks for these ids on its next delta, which
@@ -670,6 +699,7 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
     walnutMessageId?: string;
     sourceUuid?: string;
     mergedUuids?: string[];
+    lineUuid?: string;
     unsettled?: boolean;
     queued?: boolean;
     injected?: boolean;
@@ -727,7 +757,7 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
   // twins were string, 7 were array — the array ones carry image refs / long text like
   // "[Image #2] looks the side…"). Missing the array shape leaves those 7 enqueues un-skipped,
   // so the message renders twice. Extract the first text block for the array case.
-  const userTwinTexts: Array<{ index: number; content: string; claimed: boolean; injected: boolean }> = [];
+  const userTwinTexts: Array<{ index: number; content: string; claimed: boolean; injected: boolean; sends?: number }> = [];
   for (let i = 0; i < rawMessages.length; i++) {
     const raw = rawMessages[i];
     if (raw.type !== 'user') continue;
@@ -736,15 +766,24 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
     if (typeof c === 'string') {
       text = c;
     } else if (Array.isArray(c)) {
-      const tb = c.find((b): b is { type: 'text'; text: string } =>
+      const texts = c.filter((b): b is { type: 'text'; text: string } =>
         (b as { type?: string })?.type === 'text' && typeof (b as { text?: unknown }).text === 'string');
-      if (tb) text = tb.text;
+      if (texts[0]) text = texts[0].text;
+      // A line of blocks merged from several sends holds one text block per send
+      // (joinedSendGroups): each is its own send's twin, so none re-emits at its enqueue.
+      if (mergedSendUuidsOf(raw)) {
+        for (const tb of texts.slice(1)) userTwinTexts.push({ index: i, content: tb.text, claimed: false, injected: isInjectedLine(raw) });
+      }
     }
     if (typeof text === 'string') {
       // A slash command's line is the CLI's tags around what was sent: its twin enqueue holds the
       // command as typed ("/compact <args>"), so the two are matched by the shown form.
       const shown = /^<command-(name|message|args)>/.test(text) ? transformInjectedUserText(text) : undefined;
-      userTwinTexts.push({ index: i, content: typeof shown === 'string' ? shown : text, claimed: false, injected: isInjectedLine(raw) });
+      const others = typeof c === 'string' ? mergedSendUuidsOf(raw) : undefined;
+      userTwinTexts.push({
+        index: i, content: typeof shown === 'string' ? shown : text, claimed: false, injected: isInjectedLine(raw),
+        ...(others ? { sends: others.length + 1 } : {}),
+      });
     }
   }
   const skipEnqueueIndices = new Set<number>();
@@ -982,6 +1021,11 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
   // synthetic AND the merged line renders → every message in the batch shows TWICE.
   // Claim the merged line as the twin of the whole run and skip its enqueues. A failed
   // match degrades to today's duplicate — a message can never be lost here.
+  // The sends of each joined line, in queue order (line index → each enqueue's text): the
+  // line is emitted as one row per send below, so each keeps its own author (a person's
+  // words drained with a peer's reply read as the reply's card and lost their bubble,
+  // 2026-11-21) and its own uuid.
+  const sendsOfJoinedLine = new Map<number, string[]>();
   const pendingEnqueues: Array<{ index: number; content: string }> = [];
   for (let i = 0; i < rawMessages.length; i++) {
     const raw = rawMessages[i];
@@ -996,17 +1040,22 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
       // Unclaimed enqueues before this user line, within the same lookahead window,
       // in queue (line) order. The CLI drains contiguously, so only contiguous runs
       // of length ≥2 can form the merged prompt (length 1 = the exact pass above).
+      // A line that names its sends (`mergedSendUuids`) says how many it joined: that run
+      // is looked for however far back it was queued (a long turn writes many lines between).
       const cands = pendingEnqueues.filter(
-        e => !skipEnqueueIndices.has(e.index) && e.index < twin.index && twin.index - e.index <= PATTERN_A_LOOKAHEAD,
+        e => !skipEnqueueIndices.has(e.index) && e.index < twin.index
+          && (twin.sends !== undefined || twin.index - e.index <= PATTERN_A_LOOKAHEAD),
       );
       let matched = false;
       for (let s = 0; s < cands.length - 1 && !matched; s++) {
         let joined = cands[s].content;
         for (let e = s + 1; e < cands.length; e++) {
+          if (twin.sends !== undefined && e - s + 1 > twin.sends) break;
           joined += '\n' + cands[e].content;
-          if (joined.trim() === wanted) {
+          if (joined.trim() === wanted && (twin.sends === undefined || e - s + 1 === twin.sends)) {
             twin.claimed = true;
             for (let k = s; k <= e; k++) skipEnqueueIndices.add(cands[k].index);
+            sendsOfJoinedLine.set(twin.index, cands.slice(s, e + 1).map((c) => c.content));
             matched = true;
             break;
           }
@@ -1061,6 +1110,43 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
       ...(sourceUuid ? { sourceUuid } : {}),
       ...(stillQueued.has(j) ? { unsettled: true, ...(logsTakes ? { queued: true } : {}) } : {}),
       contentBlocks: [{ type: 'text' as const, text }],
+    });
+  };
+
+  /**
+   * A line Claude Code drained from several queued sends, as one row per send (batched-twin
+   * pass above), in queue order at the line's place: each send is its own message, and the
+   * CLI joining them with '\n' says nothing about who wrote each. The line is written under
+   * its LAST send's uuid and names the others in `mergedSendUuids`, in queue order; each
+   * earlier row takes its send's uuid and keeps the line's (`lineUuid`), the only id a
+   * rewind can resume to. When the list does not name every other send, the earlier rows get
+   * ids of their own and the last row keeps the list as before. A string line needs its enqueues in
+   * the same parse: a tail window that starts between them and the line keeps the joined row.
+   */
+  /** Lines already emitted as one row per send: the same line again (a stream replay) adds nothing. */
+  const joinedLineIds = new Set<string>();
+  const emitJoinedSends = (raw: RawJsonlLine, lineId: string, sends: ReadonlyArray<ReadonlyArray<ContentBlock>>): void => {
+    const others = raw.message?.role === 'user' ? mergedSendUuidsOf(raw) : undefined;
+    const named = others && others.length === sends.length - 1 ? others : undefined;
+    const timestamp = raw.timestamp ?? new Date().toISOString();
+    joinedLineIds.add(lineId);
+    sends.forEach((blocks, k) => {
+      const last = k === sends.length - 1;
+      const id = last ? lineId : named ? named[k] : `${lineId}~send${k}`;
+      // The line has ONE origin for all its sends: it says who wrote a send only for one that is
+      // another session's mail by its own words (an envelope); a person's words are theirs.
+      const words = blocks.flatMap((b) => (b.type === 'text' && typeof b.text === 'string' ? [b.text] : [])).join('\n');
+      messageMap.set(id, {
+        role: 'user',
+        timestamp,
+        walnutMessageId: raw.walnutMessageId ?? undefined,
+        injected: isInjectedLine(raw) || undefined,
+        agentOrigin: (nonHumanOrigin(raw.origin) && parseSessionEnvelopes(words) !== null) || undefined,
+        ...(last ? {} : { lineUuid: lineId }),
+        ...(last && !named && others ? { mergedUuids: others } : {}),
+        ...(k === 0 && opensTurnLine(raw) ? { startsTurn: true as const } : {}),
+        contentBlocks: [...blocks],
+      });
     });
   };
 
@@ -1256,6 +1342,15 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
 
     const msgId = raw.message.id ?? raw.uuid ?? `${raw.timestamp}-${rawMessages.indexOf(raw)}`;
     const existing = messageMap.get(msgId);
+    if (existing && joinedLineIds.has(msgId)) continue;
+    const joinedSends = existing || raw.message.role !== 'user' ? undefined
+      : typeof raw.message.content === 'string'
+        ? sendsOfJoinedLine.get(i)?.map((text) => [{ type: 'text' as const, text }])
+        : joinedSendGroups(raw);
+    if (joinedSends) {
+      emitJoinedSends(raw, msgId, joinedSends);
+      continue;
+    }
 
     if (existing) {
       // Merge content blocks from duplicate lines (with deduplication).
@@ -1588,6 +1683,7 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
       ...(msg.walnutMessageId ? { walnutMessageId: msg.walnutMessageId } : {}),
       ...(msg.sourceUuid ? { sourceUuid: msg.sourceUuid } : {}),
       ...(msg.mergedUuids ? { mergedUuids: msg.mergedUuids } : {}),
+      ...(msg.lineUuid ? { lineUuid: msg.lineUuid } : {}),
       ...(msg.unsettled ? { unsettled: true } : {}),
       ...(msg.queued ? { queued: true } : {}),
       ...(msg.injected && msg.role === 'user' ? { injected: true } : {}),

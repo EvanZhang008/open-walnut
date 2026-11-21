@@ -1492,6 +1492,8 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
   const rewind = useSessionRewindApi();
   const reader = useSessionReader();
   const msgId = message.msgId ?? message.walnutMessageId;
+  // A send drained into one line with later sends resumes to that line (history-parse.ts).
+  const rewindId = message.lineUuid ?? msgId;
   const rowMenuItems = (): ContextMenuItem[] => {
     // bodyText, not text: copying/pinning a turn must yield what the human typed,
     // never the machine block Walnut prepended to it.
@@ -1521,8 +1523,8 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
         // Same predicate as the hover strip: only the user's own messages, and
         // only CLI transcript uuids, are rewindable.
         key: 'rewind', label: 'Rewind to here',
-        when: rewind.available && isUser && !!msgId && UUID_RE.test(msgId),
-        onSelect: () => rewind.request(msgId!, pinLabelFor(bodyText, 'this message')),
+        when: rewind.available && isUser && !!rewindId && UUID_RE.test(rewindId),
+        onSelect: () => rewind.request(rewindId!, pinLabelFor(bodyText, 'this message')),
       },
       { divider: true },
       {
@@ -1653,6 +1655,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
             timestamp={timestamp}
             alwaysVisible={showCopyActions}
             walnutAdded={walnutAdded}
+            {...(message.lineUuid ? { rewindId: message.lineUuid } : {})}
           />
         )}
       </div>

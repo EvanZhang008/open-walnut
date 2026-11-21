@@ -45,6 +45,9 @@ export interface MessageMetaRowProps {
   /** What Walnut added to this message while the chat hides it (ui.show_walnut_additions
    *  off): a "Walnut added" control that shows it for this message. */
   walnutAdded?: { count: number; open: boolean; onToggle: () => void };
+  /** The transcript line a rewind resumes to, when it is not `msgId` (a send Claude Code
+   *  drained into one line with later sends: its row's `lineUuid`). */
+  rewindId?: string;
 }
 
 /**
@@ -57,13 +60,14 @@ export interface MessageMetaRowProps {
  * until hover so a long transcript stays a conversation, not a log file.
  */
 export const MessageMetaRow = memo(function MessageMetaRow({
-  msgId, role, text, timestamp, alwaysVisible, walnutAdded,
+  msgId, role, text, timestamp, alwaysVisible, walnutAdded, rewindId: lineId,
 }: MessageMetaRowProps) {
   const { isPinned, toggle } = useSessionPinsApi();
   const rewind = useSessionRewindApi();
   const reader = useSessionReader();
   const pinned = isPinned(msgId);
-  const canRewind = rewind.available && role === 'user' && !!msgId && UUID_RE.test(msgId);
+  const rewindId = lineId ?? msgId;
+  const canRewind = rewind.available && role === 'user' && !!rewindId && UUID_RE.test(rewindId);
 
   const onPin = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -77,8 +81,8 @@ export const MessageMetaRow = memo(function MessageMetaRow({
 
   const onRewind = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    if (msgId) rewind.request(msgId, pinLabelFor(text, 'this message'));
-  }, [rewind, msgId, text]);
+    if (rewindId) rewind.request(rewindId, pinLabelFor(text, 'this message'));
+  }, [rewind, rewindId, text]);
 
   const hasText = !!text && !!text.trim();
   const abs = timestamp ? absoluteTime(timestamp) : '';

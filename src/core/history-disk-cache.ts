@@ -76,6 +76,10 @@ import { HISTORY_CACHE_SCHEMA } from './history-parse.js';
  * 15 (2026-11-16): the line the CLI files for a model change (`/model <model>`, sessions/walnut-commands.ts
  * settingChangeNotice) is a notice row ("Walnut asked Claude Code to use ..."), no longer a user row read as the person's.
  *
+ * 16 (2026-11-21): a line Claude Code drained from several queued sends is one row per send (a
+ * person's words drained with a peer's reply had read as the reply's card), the earlier ones under
+ * their own send's uuid with the line's as `lineUuid`.
+ *
  * The number itself lives in history-parse.ts, beside the parser it versions: the session
  * daemon's ready views (src/providers/history-ready-core.ts) carry it too.
  */

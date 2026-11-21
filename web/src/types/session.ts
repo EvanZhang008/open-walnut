@@ -340,6 +340,9 @@ export interface SessionHistoryMessage {
   /** A user line Claude Code merged from several queued sends: the other sends'
    *  uuids (`mergedSendUuids`). Read through utils/send-uuids.ts. */
   mergedUuids?: string[];
+  /** A send Claude Code drained into one line with later sends, as its own row: that
+   *  line's uuid (`msgId` is the send's own, no transcript line). The rewind target. */
+  lineUuid?: string;
   /** Server-stamped: this row's content can still change (an Agent row awaiting its
    *  late `bgTaskFinished`, a tool row awaiting its result). We re-ask for these ids
    *  on the next delta — otherwise a prefix synced mid-flight stays frozen and that

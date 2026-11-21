@@ -282,7 +282,7 @@ describe('parseSessionMessages — Pattern A/B mid-turn dedup', () => {
   // so without the merged pass each enqueue re-emits as Pattern B AND the joined
   // line renders → everything in the batch shows twice.
   describe('batched twin (queue drained into one prompt)', () => {
-    it('two queued sends drained into one joined user line → each shows ONCE (as the merged line)', () => {
+    it('two queued sends drained into one joined user line → each shows ONCE, as its own row', () => {
       const msgA = '我想的有两个方法第一个是能在Plugin里面paste一个configuration';
       const msgB = '而且我们可以借鉴Cloud Code的Plugin他们是怎么做的呢';
       const jsonl = build(
@@ -296,8 +296,8 @@ describe('parseSessionMessages — Pattern A/B mid-turn dedup', () => {
         assistantText('answering both', 'a2'),
       );
       const texts = userTexts(jsonl);
-      // The joined line renders once; the individual enqueues must NOT re-emit.
-      expect(texts).toEqual(['start', `${msgA}\n${msgB}`]);
+      // One row per send at the line's place; the enqueues must NOT re-emit.
+      expect(texts).toEqual(['start', msgA, msgB]);
     });
 
     it('three queued sends drained into one joined line (corpus max run) → no duplicates', () => {
@@ -311,7 +311,7 @@ describe('parseSessionMessages — Pattern A/B mid-turn dedup', () => {
         userStr(parts.join('\n')),
         assistantText('done', 'a2'),
       );
-      expect(userTexts(jsonl)).toEqual(['start', parts.join('\n')]);
+      expect(userTexts(jsonl)).toEqual(['start', ...parts]);
     });
 
     it('exact twins still win over the merged pass (mixed batch + solo send)', () => {
@@ -328,7 +328,7 @@ describe('parseSessionMessages — Pattern A/B mid-turn dedup', () => {
         userStr('batch one\nbatch two'),
         assistantText('turn 3', 'a3'),
       );
-      expect(userTexts(jsonl)).toEqual(['start', 'solo message', 'batch one\nbatch two']);
+      expect(userTexts(jsonl)).toEqual(['start', 'solo message', 'batch one', 'batch two']);
     });
 
     it('a genuine Pattern B enqueue near a batch is NOT eaten by the merged pass', () => {
@@ -345,7 +345,7 @@ describe('parseSessionMessages — Pattern A/B mid-turn dedup', () => {
       );
       const texts = userTexts(jsonl);
       expect(texts).toContain('cancelled mid-stream'); // synthetic survives
-      expect(texts.filter(t => t.includes('batch one'))).toHaveLength(1); // merged line only
+      expect(texts.filter(t => t.includes('batch one'))).toHaveLength(1); // its own row, once
     });
 
     it('joined-looking user line with NO matching enqueues is untouched', () => {
