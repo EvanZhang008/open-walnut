@@ -173,6 +173,9 @@ import {
   getOpenTurnPromise,
 } from './turn-ledger.js'
 
+/** stale-notice.ts, loaded when a line is written (its imports reach most of the core). */
+const dropStaleNotices: typeof import('../core/sessions/stale-notice.js').dropStaleNotices = async (...args) =>
+  (await import('../core/sessions/stale-notice.js')).dropStaleNotices(...args)
 
 /**
  * The walnut MCP mount for an ACP session, resolved to THIS install's CLI entry.
@@ -15270,6 +15273,11 @@ export class SessionRunner {
       // The rest go back to pending and ride the turn's end (its processNext).
       if (await this.parkIfRedeliveryLoop(sessionId, newMsgs)) return
       releaseHeld(sessionId, newMsgs.map((m) => m.id))
+      // Into the running CLI, which runs on the stored prompt: a notice only when it needs it (stale-notice.ts).
+      await dropStaleNotices(sessionId, newMsgs, async () => {
+        const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+        return (await getSessionByClaudeId(sessionId).catch(() => null))?.appliedAppendSystemPrompt
+      })
       // A Stop before the write parks the rows unwritten; a delegated resend would deliver them after it.
       let stoppedFirst: boolean
       try { stoppedFirst = await this.stopFenceMoved(sessionId, stopFence) || targetSession.stopEpoch !== stops }
@@ -16908,6 +16916,8 @@ export class SessionRunner {
         appendSystemPrompt: resolvedResumePrompt,
         mode: recordMode,
       } = await this.resolveResumeArgs(sessionId)
+      // A notice rides the line only when the CLI taking it needs it: a live CLI runs on the stored prompt (stale-notice.ts).
+      if (await dropStaleNotices(sessionId, msgs, resolvedResumePrompt)) combined = joinQueuedRows(msgs.map((m) => m.message))
 
       // Rehydrate: if this.sessions lost the entry (e.g. reconciler didn't flag the
       // record as reconnectable on startup, so init() never populated the map), try
@@ -17167,6 +17177,8 @@ export class SessionRunner {
           // that confirmation is what silently lost messages. See onSpawnSettled doc.
           const endsBefore = session.processEndCount
           const spawnPrompt = await this.resumeSpawnPrompt(sessionId, resolvedResumePrompt)
+          // Resumed on a rebuilt prompt: a notice looked up against the stored one says what it holds.
+          if (spawnPrompt !== resolvedResumePrompt && await dropStaleNotices(sessionId, msgs, spawnPrompt)) combined = joinQueuedRows(msgs.map((m) => m.message))
           const spawnProfile = await this.resumeSpawnProfile(sessionId, resolvedProfile)
           // Last check before the send, with no await between them.
           const claimedFenceMoved = await this.stopFenceMoved(sessionId, stopFence)
@@ -17230,6 +17242,7 @@ export class SessionRunner {
       const settleTarget = targetSession
       const endsBefore = targetSession.processEndCount
       const spawnPrompt = await this.resumeSpawnPrompt(sessionId, resolvedResumePrompt)
+      if (spawnPrompt !== resolvedResumePrompt && await dropStaleNotices(sessionId, msgs, spawnPrompt)) combined = joinQueuedRows(msgs.map((m) => m.message))
       const spawnProfile = await this.resumeSpawnProfile(sessionId, resolvedProfile)
       // Last check before the send, with no await between them.
       const fenceMoved = await this.stopFenceMoved(sessionId, stopFence)

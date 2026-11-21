@@ -7,6 +7,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { EventNames } from '../../../src/core/event-bus.js'
 import { PromptRefreshRespawn, respawnSkipReason, type PromptRefreshRespawnDeps } from '../../../src/core/sessions/prompt-refresh-respawn.js'
+import { MIN_REFRESH_DEBT_BYTES } from '../../../src/core/sessions/prompt-refresh.js'
 import { beginQuietTurn, noteQuietTurnSettled, resetQuietTurnsForTest } from '../../../src/core/sessions/quiet-turn.js'
 import type { SessionRecord, Task } from '../../../src/core/types.js'
 
@@ -23,6 +24,7 @@ function record(over: Partial<SessionRecord> = {}): SessionRecord {
   } as SessionRecord
 }
 const vpTask = { id: 'mvm0n3bu-6910', title: 'Walnut VP', phase: 'IN_PROGRESS', org_role: 'lead' } as unknown as Task
+const workerTask = { id: 'mvm0n3bu-6910', title: 'A worker', phase: 'IN_PROGRESS' } as unknown as Task
 
 function harness(over: Partial<PromptRefreshRespawnDeps> = {}, rec: SessionRecord = record()) {
   let current: SessionRecord | null = rec
@@ -102,7 +104,8 @@ describe('a clean turn end after a compaction', () => {
   })
 
   it('a rewrite that would cost more than the restatements it saves is recorded as not worth it, and not asked again', async () => {
-    const h = harness()
+    debt = 6_000
+    const h = harness({ getTask: async () => workerTask })
     h.live.promptCache = { ...h.live.promptCache!, tokens: 300_000 }
     await h.pr.onTurnEnd(SID)
     await h.fireAll()
@@ -110,6 +113,32 @@ describe('a clean turn end after a compaction', () => {
     expect(h.get()!.promptRefresh).toMatchObject({ outcome: 'not-worth', compactUuid: 'boundary-1' })
     await h.pr.onTurnEnd(SID)
     expect(h.timers).toEqual([])
+  })
+
+  it('an org node restated 8 KB or more after a compaction respawns whatever the rewrite costs (2026-11-21, the Walnut VP)', async () => {
+    // 11-21: the Walnut VP 11,797 and 12,927 bytes behind with about 118K tokens to write again; judged
+    // not worth it, it was restated 14 KB and 17 KB in front of its next message, 98 minutes apart.
+    for (const [task, bytes, tokens] of [[vpTask, 11_797, 118_731], [vpTask, 12_927, 116_640], [vpTask, MIN_REFRESH_DEBT_BYTES, 400_000]] as const) {
+      debt = bytes
+      const h = harness({ getTask: async () => task })
+      h.live.promptCache = { ...h.live.promptCache!, tokens }
+      await h.pr.onTurnEnd(SID)
+      await h.fireAll()
+      expect(h.deps.respawn, `${bytes} bytes behind`).toHaveBeenCalledTimes(1)
+      expect(h.get()!.promptRefresh).toMatchObject({ outcome: 'respawned', debtBytes: bytes })
+    }
+  })
+
+  it('below that, and for a session outside the org, the cost rule still decides', async () => {
+    for (const [task, bytes] of [[vpTask, MIN_REFRESH_DEBT_BYTES - 1], [workerTask, 17_850]] as const) {
+      debt = bytes
+      const h = harness({ getTask: async () => task })
+      h.live.promptCache = { ...h.live.promptCache!, tokens: 118_731 }
+      await h.pr.onTurnEnd(SID)
+      await h.fireAll()
+      expect(h.deps.respawn).not.toHaveBeenCalled()
+      expect(h.get()!.promptRefresh).toMatchObject({ outcome: 'not-worth' })
+    }
   })
 
   it('a prompt that lacks nothing is recorded as current, so later turn ends cost nothing', async () => {

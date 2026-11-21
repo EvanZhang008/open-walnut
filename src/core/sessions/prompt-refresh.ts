@@ -105,6 +105,21 @@ export function refreshPays(input: {
   return rewritten * (write - CACHE_READ) <= input.horizon * (debtBytes / BYTES_PER_TOKEN) * write;
 }
 
+/**
+ * After a compaction, Main, a VP or a lead whose prompt lacks MIN_REFRESH_DEBT_BYTES or more of its
+ * current instructions is moved onto the current prompt whatever the rewrite costs (2026-11-21, the
+ * org reflection): judged not worth it (about 120K tokens to write again, counted against 30
+ * compactions, for 12 KB), the Walnut VP was restated in full after each compaction, 14 KB at 08:26
+ * and 17 KB at 10:04, 98 minutes apart. The user asked for at most one notice in three hours, under
+ * half of it what the session already read; such a node lives for weeks and compacts several times a
+ * day, so the restatement would come back at every one. Once on the current prompt it hears only
+ * what changes from then on: it respawns once, not at every compaction. Any other session keeps the
+ * cost rule: its rewrite costs 50 to 100 times one restatement, and it lives a few compactions.
+ */
+export function restatementTooLarge(task: { org_role?: string } | null | undefined, debtBytes: number): boolean {
+  return isOrgNode(task) && debtBytes >= MIN_REFRESH_DEBT_BYTES;
+}
+
 /** How many compactions this session's refresh may take to pay back (`refreshPays`). */
 export function refreshHorizon(task: { org_role?: string } | null | undefined): number {
   return isOrgNode(task) ? ORG_NODE_REFRESH_HORIZON : OTHER_REFRESH_HORIZON;

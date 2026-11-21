@@ -107,6 +107,30 @@ function heldBeyondPrompt(record: NoticeRecord, current: Parsed, prompt: Parsed,
 
 type Found = { due: Due; views: Record<string, BlockView>; texts: string[] };
 
+/**
+ * When the last notice reached this session, for the gap: one on its current prompt and boundary,
+ * or one on an older prompt when the current one holds every line it told (a resume or a respawn
+ * rebuilt it on the current instructions, so its gap goes on: 2026-11-21, sessions resumed on a
+ * rebuilt prompt at 08:00 got their next notice 49 minutes and 2 hours later). Nothing after a
+ * compaction on the prompt it was told on: that dropped what it said, and what it dropped is told at
+ * once; nothing either when the prompt lacks a line or block version it told that is still current
+ * (a record backfilled with an older prompt).
+ */
+function gapClock(record: NoticeRecord, current: Parsed, prompt: Parsed): string | undefined {
+  const held = heldNoted(record);
+  if (held) return held.toldAt;
+  const noted = heldStatement(record.taskRoutingNoted, record);
+  if (!noted?.toldAt || noted.promptHash === hash(record.appliedAppendSystemPrompt ?? '')) return undefined;
+  // What it was told that the instructions still say (a wording reworded or a rule dropped since is
+  // in no rebuilt prompt), and the block versions it was told that are still current.
+  const live = new Set([...current.all].map(hash));
+  const holds = new Set([...prompt.all].map(hash));
+  const lines = (noted.lines ?? []).filter((h) => live.has(h)).every((h) => holds.has(h));
+  const blocks = Object.entries(noted.blocks ?? {}).every(([id, view]) => current.blocks.get(id)?.version !== view.version
+    || prompt.blocks.get(id)?.version === view.version);
+  return lines && blocks ? noted.toldAt : undefined;
+}
+
 /** What this session should be told now, or null. */
 function dueFor(record: NoticeRecord, task: InstructionTask, ignoreTold?: boolean, now = Date.now()): Found | null {
   // ACP rebuilds its instructions from buildSessionContext at every establish.
@@ -126,8 +150,8 @@ function dueFor(record: NoticeRecord, task: InstructionTask, ignoreTold?: boolea
   // unknown, not gone, so a session it leads is never told the language rule stopped applying.
   const due = found && isFollower() ? { ...found, gone: found.gone.filter((g) => g.id !== 'reply-language') } : found;
   if (!due || (!due.plain.length && !due.blocks.length && !due.gone.length)) return null;
-  // Every change waits out the gap after the last notice on this prompt and boundary.
-  const lastAt = heldNoted(record)?.toldAt;
+  // Every change waits out the gap after the last notice (gapClock).
+  const lastAt = gapClock(record, current, parsedPrompt);
   if (!ignoreTold && lastAt && now - Date.parse(lastAt) < NOTICE_GAP_MS) return null;
   return { due, views, texts };
 }
@@ -255,7 +279,7 @@ export function withInstructionNotice(text: string, notice: string | null): stri
 }
 
 /** The notice envelope leading a line, or null. */
-function leadingNotice(text: string): string | null {
+export function leadingNotice(text: string): string | null {
   if (!leadsWithNotice(text)) return null;
   const rest = text.trimStart();
   const end = rest.indexOf('</walnut-message>');
@@ -337,11 +361,11 @@ export function toldOnto(record: NoticeRecord, told: Told): Noted | null {
  * record holds now and keeping what was told before it (heldStatement), else onto the record as
  * it is now.
  */
-async function recordTold(sessionId: string, told: Told, opts?: { base?: boolean }): Promise<void> {
+async function recordTold(sessionId: string, told: Told, opts?: { base?: boolean }): Promise<boolean> {
   const { updateSessionRecordConditionally } = await import('../session-tracker.js');
   // Filled in under the record's lock, from the row as it is then.
   const patch: { taskRoutingNoted?: SessionInstructionsNoted } = {};
-  await updateSessionRecordConditionally(sessionId, patch, (current) => {
+  const written = await updateSessionRecordConditionally(sessionId, patch, (current) => {
     let next: SessionInstructionsNoted | null;
     if (opts?.base) {
       const { compactUuid: _read, ...stated } = told.noted;
@@ -352,9 +376,16 @@ async function recordTold(sessionId: string, told: Told, opts?: { base?: boolean
     patch.taskRoutingNoted = next;
     return true;
   }, { preserveLastActiveAt: true })
-    .catch((error) => log.session.warn('Instruction notice: could not record it as told', { sessionId, error: String(error) }));
+    .then(() => true, (error) => {
+      log.session.warn('Instruction notice: could not record it as told', { sessionId, error: String(error) });
+      return false;
+    });
   bumpNoticeTold(sessionId);
+  return written && !!patch.taskRoutingNoted;
 }
+
+/** The user's profile and Reply language ride the default instructions: compare against them as on disk now. */
+const readInputs = () => Promise.all([refreshUserProfile(), import('./reply-language-context.js').then((m) => m.refreshReplyLanguage())]);
 
 async function lookup(sessionId: string, now = Date.now()): Promise<{ record: SessionRecord; text: string; told: Told } | null> {
   const { getSessionByClaudeId } = await import('../session-tracker.js');
@@ -363,8 +394,7 @@ async function lookup(sessionId: string, now = Date.now()): Promise<{ record: Se
   const { listTasksByIds } = await import('../task-manager.js');
   const [task] = await listTasksByIds([record.taskId]);
   if (!task) return null;
-  // The user's profile rides the default instructions: compare against it as on disk now.
-  await Promise.all([refreshUserProfile(), import('./reply-language-context.js').then((m) => m.refreshReplyLanguage())]);
+  await readInputs();
   const found = dueFor(record, task, false, now);
   return found ? { record, text: render(found.due), told: { noted: notedOf(record, found), changed: changedIds(found.due), replaced: replacedOf(found) } } : null;
 }
@@ -396,6 +426,37 @@ export async function instructionNoticeForSession(sessionId: string): Promise<Pe
 }
 
 /**
+ * Whether `notice`, leading a line about to reach a CLI that runs on `prompt`, is still what that CLI
+ * must hear: it was looked up against that prompt (as attached), or, attached elsewhere (by the host,
+ * or before a restart), it is what is due against that prompt now. An unknown prompt (the record could
+ * not be read, or the prompt was too large to store) keeps it: the CLI still runs on its stored one.
+ * Never throws (true when unsure).
+ */
+export async function noticeStillDue(sessionId: string, notice: string, prompt: string | undefined): Promise<boolean> {
+  if (prompt === undefined) return true;
+  try {
+    const kept = attached.get(attachedKey(sessionId, hash(notice)))?.told;
+    if (kept) return kept.noted.promptHash === hash(prompt);
+    const { getSessionByClaudeId } = await import('../session-tracker.js');
+    const record = await getSessionByClaudeId(sessionId);
+    if (!record?.taskId) return true;
+    const { listTasksByIds } = await import('../task-manager.js');
+    const [task] = await listTasksByIds([record.taskId]);
+    if (!task) return true;
+    await readInputs();
+    const found = dueFor({ ...record, appliedAppendSystemPrompt: prompt }, task);
+    return !!found && render(found.due) === notice;
+  } catch {
+    return true;
+  }
+}
+
+/** A notice dropped from its line before it went out (stale-notice.ts): nothing of it is told. */
+export function forgetAttachedNotice(sessionId: string, notice: string): void {
+  attached.delete(attachedKey(sessionId, hash(notice)));
+}
+
+/**
  * Lines that reached the CLI (session-message-queue.ts removeProcessed, session-queue-lines.ts
  * removeTaken, which marked them delivering inside their lock): the notice leading one is
  * recorded as told, as it was attached. Never throws; always clears the mark.
@@ -406,8 +467,8 @@ export async function noteInstructionNoticeDelivered(sessionId: string, messages
     if (!notices.length) return;
     const kept = notices.map((n) => takeAttached(sessionId, hash(n))).find((n) => !!n);
     if (kept) {
-      await recordTold(sessionId, kept);
-      log.session.info('Instruction notice delivered', { sessionId, lines: kept.noted.lines?.length ?? 0, blocks: kept.changed });
+      const recorded = await recordTold(sessionId, kept);
+      log.session.info('Instruction notice delivered', { sessionId, lines: kept.noted.lines?.length ?? 0, blocks: kept.changed, ...(recorded ? {} : { recorded }) });
       return;
     }
     // Attached before a restart: record it only if it is still what is due.

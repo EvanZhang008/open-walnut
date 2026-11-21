@@ -81,6 +81,16 @@ function startsFor(sid: string): Array<{ args: string[]; resume: boolean }> {
     .map((c) => ({ args: (c.payload.args as string[]) ?? [], resume: c.payload.resume === true }))
 }
 
+const NOTICE = 'Walnut changed your default instructions'
+/** What reached the CLI a resume of `sid` started: its start's line, or the lines written to it after. */
+async function resumedLine(sid: string): Promise<string> {
+  const start = daemon.getCommandHistoryFor('start').find((c) => c.payload.sid === sid && c.payload.resume === true)
+  if (!start) return ''
+  const lines = () => [start, ...daemon.getCommandHistoryFor('send').filter((c) => c.payload.sid === sid && c.timestamp >= start.timestamp)]
+    .map((c) => String(c.payload.message ?? '')).filter(Boolean).join('\n\n')
+  return waitFor(() => lines(), 'the resumed line', 30_000)
+}
+
 /** Start a session on a task the way the UI's session:start does, and return its argv. */
 async function startOn(role: OrgRole | undefined, title: string): Promise<{ sid: string; args: string[] }> {
   // Main is made the way the org makes it (an ask-like task in "Ask Walnut").
@@ -178,6 +188,8 @@ describe('the prompt each role is spawned with (Claude Code)', () => {
     const { append } = promptsOf(resumed.args)
     expect(append).toBe(old)
     keep('claude-worker-resumed-old.txt', append!)
+    // Its prompt still lacks the rule: the resumed line tells it.
+    expect(await resumedLine(worker.sid)).toContain(NOTICE)
   }, 60_000)
 
   it('...unless its cache expired and the stored prompt is far behind: then the current prompt, stored (prompt-refresh.ts)', async () => {
@@ -200,6 +212,11 @@ describe('the prompt each role is spawned with (Claude Code)', () => {
     const { append } = promptsOf(resumed.args)
     expect(append).toContain(TEAM_CHARTER)
     expect(append).not.toBe(old)
+    // The line was frozen against the old prompt, with a notice of the charter; the new CLI holds it
+    // all, so the line reaches it without (2026-11-21: 43 of 78 notices in 12 hours were that).
+    const line = await resumedLine(own.sid)
+    expect(line).toContain('continue')
+    expect(line).not.toContain(NOTICE)
     await waitFor(async () => (await getSessionByClaudeId(own.sid))?.appliedAppendSystemPrompt === append, 'refreshed prompt stored')
   }, 90_000)
 })

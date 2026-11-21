@@ -703,6 +703,23 @@ function handOnBrief(queue: QueuedMessage[], from: QueuedMessage, fromAt: number
 }
 
 /**
+ * Frozen rows' words as they go out after a stale instruction notice left them (sessions/stale-notice.ts),
+ * so the queue holds what the CLI is given: a delivery records nothing of a notice it never sent, and
+ * no other row waits behind one in flight. Only a row that still holds the words it was frozen with.
+ */
+export async function rewriteFrozenRows(sessionId: string, rows: ReadonlyArray<{ id: string; from: string; to: string }>): Promise<void> {
+  if (!rows.length) return;
+  await mutateStore((s) => {
+    let changed = false;
+    for (const r of rows) {
+      const msg = s.queues[sessionId]?.find((m) => m.id === r.id);
+      if (msg && msg.message === r.from) { msg.message = r.to; changed = true; }
+    }
+    return changed;
+  });
+}
+
+/**
  * Edit a pending or parked message's text (a parked one is waiting for its owner to send
  * it, so its words are his to change). Returns true on success.
  * Returns false if message not found or already processing.

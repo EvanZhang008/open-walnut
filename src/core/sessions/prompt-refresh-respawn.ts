@@ -16,6 +16,8 @@
  * moves it to its own folder (org-own-folder.ts), which takes the repository's instruction files,
  * tens of thousands of tokens, off every later request (2026-11-12: the Walnut VP was judged
  * not worth it twice, at 429K and 286K of context, while each request carried about 62K of them).
+ * So does Main, a VP or a lead 8 KB or more behind (`restatementTooLarge`, 2026-11-21: judged not
+ * worth it, the Walnut VP was restated 14 KB and 17 KB 98 minutes apart).
  *
  * Decided once per compaction boundary (`SessionRecord.promptRefresh`). Never while anything could
  * be cut: only a live idle CLI on a clean turn end, quiet for QUIET_MS, with no prompt open, no
@@ -33,7 +35,7 @@ import type { PromptCacheFacts } from './prompt-cache.js';
 import { quietTurnRunning } from './quiet-turn.js';
 import { statusQuestionPending } from './status-question.js';
 import {
-  nothingReadSinceCompaction, promptDebtBytes, promptRefreshable, refreshHorizon, refreshPays,
+  nothingReadSinceCompaction, promptDebtBytes, promptRefreshable, refreshHorizon, refreshPays, restatementTooLarge,
 } from './prompt-refresh.js';
 
 /** How long a session stays quiet after its turn end before it is respawned. */
@@ -233,7 +235,7 @@ export class PromptRefreshRespawn {
     const facts = this.deps.live(rec.claudeSessionId).promptCache ?? rec.promptCache;
     const debtBytes = this.deps.debtBytes(rec, task);
     // The folder move takes the repository's instruction files off every later request: it pays.
-    const pays = folder || refreshPays({
+    const pays = folder || restatementTooLarge(task, debtBytes) || refreshPays({
       facts, debtBytes, storedPromptBytes: Buffer.byteLength(rec.appliedAppendSystemPrompt ?? '', 'utf8'),
       horizon: refreshHorizon(task), now: this.deps.now(),
     });
