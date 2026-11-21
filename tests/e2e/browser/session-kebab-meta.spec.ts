@@ -226,7 +226,10 @@ test('sending a message moves Updated; Created stays; every reopening agrees', a
   expect(menuBox.width, 'menu width').toBeLessThan(420)
   expect(valueBox.x + valueBox.width).toBeLessThanOrEqual(menuBox.x + menuBox.width)
   // Selecting the folder gives the path exactly, whatever segments it wraps into (a WebKit
-  // selection could add line breaks around inline blocks), and the menu stays open.
+  // selection could add line breaks around inline blocks), and the menu stays open. A user's
+  // selection starts with a press into the text, so the test presses it first.
+  await folder.locator('.task-kebab-meta-value').click()
+  await expect(menu).toBeVisible()
   const selected = await folder.locator('.task-kebab-meta-value').evaluate((el) => {
     const range = document.createRange()
     range.selectNodeContents(el)
