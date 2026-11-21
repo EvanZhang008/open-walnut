@@ -153,7 +153,7 @@ describe('dev-prod.sh: the server runs under the session host', () => {
         'sleep() { :; }', 'seq() { echo 1 2 3 4 5 6; }',
         'remove_launchd_job() { echo REMOVED; }',
         'wait_for_config_ready() { echo WAITED; return 0; }',
-        fn('rollback_to_lkg'), 'rollback_to_lkg',
+        fn('restore_serving_dist'), fn('rollback_to_lkg'), 'rollback_to_lkg',
       ].join('\n')], { encoding: 'utf8' })
       const lines = (r: ReturnType<typeof go>) => { expect(r.status, r.stderr).toBe(0); return r.stdout.trim().split('\n') }
       const toPlain = ['LAUNCH:plain=0', 'REMOVED', 'LAUNCH:plain=1', 'WAITED']

@@ -1368,8 +1368,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   {
     const {
       acquireInstanceLock, assertNoForeignDbHolders, startForeignWriterWatchdog, releaseInstanceLock,
-      TASK_DB_WRITERS_RECOVERY_KEY, InstanceLockError,
+      TASK_DB_WRITERS_RECOVERY_KEY, InstanceLockError, instanceLockFile,
     } = await import('../core/instance-lock.js')
+    // A server the Mac app restarted while a deploy switches the server lets the deploy's take
+    // the lock, and the app then attaches to it (core/deploy-switch.ts).
+    const { waitOutDeploySwitch } = await import('../core/deploy-switch.js')
+    const switchWait = await waitOutDeploySwitch({
+      home: WALNUT_HOME, lockFile: instanceLockFile(),
+      onWait: (deployPid) => log.web.info('a deploy is switching the server: waiting for its server to take the lock', { deployPid }),
+    })
+    if (switchWait !== 'none') log.web.info('deploy switch wait over', { outcome: switchWait })
     try {
       acquireInstanceLock(port)
     } catch (err) {

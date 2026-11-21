@@ -37,6 +37,7 @@ import { fileURLToPath } from 'node:url'
 import { log } from '../logging/index.js'
 import { DAEMON_BINARIES_DIR } from '../constants.js'
 import { isFollower } from '../core/server-role.js'
+import { BUILD_INFO_FILE, readBuildInfoFile } from '../lib/build-info.js'
 
 export const DAEMON_SOURCE_FILES = [
   'src/providers/daemon-standalone.ts',
@@ -448,6 +449,51 @@ export function computeExpectedDaemonVersion(): string | null {
   return 'walnut-daemon-' + hash.digest('hex').slice(0, 12)
 }
 
+/**
+ * The commit of the build in the dist beside the daemon binaries, when it was made from a clean
+ * tree at a commit that is not the checkout's HEAD; else null (also when HEAD cannot be read).
+ */
+function builtFromCleanCommitNotHead(): string | null {
+  const info = readBuildInfoFile(path.join(path.dirname(DAEMON_BINARIES_DIR), BUILD_INFO_FILE), '')
+  if (!info.commit || info.dirty || !/^[0-9a-f]{7,40}$/.test(info.commit)) return null
+  const root = findRepoRoot()
+  const head = root ? readHeadCommit(root) : null
+  return head && !head.startsWith(info.commit) ? info.commit : null
+}
+
+/** The commit HEAD names in a checkout, read from its git files (a worktree's `.git` file included). */
+export function readHeadCommit(root: string): string | null {
+  try {
+    let gitDir = path.join(root, '.git')
+    if (fs.statSync(gitDir).isFile()) {
+      const m = /^gitdir:\s*(.+)$/m.exec(fs.readFileSync(gitDir, 'utf8'))
+      if (!m) return null
+      gitDir = path.resolve(root, m[1].trim())
+    }
+    const head = fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8').trim()
+    if (/^[0-9a-f]{40}$/.test(head)) return head
+    const ref = /^ref:\s*(\S+)$/.exec(head)?.[1]
+    if (!ref) return null
+    // A worktree keeps its refs in the main repository (commondir).
+    let common = gitDir
+    try { common = path.resolve(gitDir, fs.readFileSync(path.join(gitDir, 'commondir'), 'utf8').trim()) } catch { /* not a worktree */ }
+    for (const dir of [gitDir, common]) {
+      try {
+        const v = fs.readFileSync(path.join(dir, ref), 'utf8').trim()
+        if (/^[0-9a-f]{40}$/.test(v)) return v
+      } catch { /* packed */ }
+    }
+    const packed = fs.readFileSync(path.join(common, 'packed-refs'), 'utf8')
+    for (const line of packed.split('\n')) {
+      const [sha, name] = line.split(' ')
+      if (name === ref && /^[0-9a-f]{40}$/.test(sha)) return sha
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
 function findRepoRoot(): string | null {
   // dist/providers/daemon-version-check.js → ../../
   // Dual marker: package.json alone matches installed npm packages which MUST
@@ -569,6 +615,23 @@ export function verifyDaemonBinaryVersion(): boolean {
 
   if (mismatched.length === 0) {
     log.session.info('daemon binary version check OK', { expected })
+    return true
+  }
+
+  // `expected` is hashed from the checkout's working tree, which is this build's source only
+  // when the build was made from it. A dist that records a clean build of ANOTHER commit than the
+  // checkout's HEAD was not (a deploy's, built in a clean clone and published into the checkout
+  // by scripts/publish-serve-root-dist.mjs, with its own daemon binaries): judged by the tree,
+  // which lands move ahead of the deploys, it reads as drift, and the rebuild from the tree then
+  // shipped every remote host a daemon of code this server does not run (2026-11-21: a server
+  // the Mac app started from the published dist rebuilt the daemons from the tree and updated
+  // three hosts with one that lacked acp-host-v1). A build of the checkout's own HEAD (a
+  // developer's build, then a daemon edit; a watch build after a pull) is judged as before.
+  const build = builtFromCleanCommitNotHead()
+  if (build) {
+    log.session.info('daemon binaries came with a clean build of another tree; not judged by this checkout', {
+      expected, got: mismatched.map(m => `${m.arch}=${m.got}`).join(', '), buildCommit: build,
+    })
     return true
   }
 

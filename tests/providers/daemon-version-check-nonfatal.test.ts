@@ -58,7 +58,9 @@ let consoleErrorSpy: ReturnType<typeof vi.spyOn>
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-dvc-'))
-  state.binariesDir = tmpDir
+  // dist/daemon-binaries inside a dist of its own, so the build-info.json beside it is this test's.
+  state.binariesDir = path.join(tmpDir, 'daemon-binaries')
+  fs.mkdirSync(state.binariesDir)
   state.cloudMode = false
   logged.length = 0
   spawnCalls.length = 0
@@ -73,7 +75,7 @@ afterEach(() => {
 
 /** Write a `.version` sidecar for a fake arch into the mocked binaries dir. */
 function writeVersion(arch: string, version: string): void {
-  fs.writeFileSync(path.join(tmpDir, `${arch}.version`), version + '\n')
+  fs.writeFileSync(path.join(state.binariesDir, `${arch}.version`), version + '\n')
 }
 
 async function loadGuard() {
@@ -147,6 +149,44 @@ describe('daemon version guard: non-convergence is never fatal', () => {
     expect(verifyDaemonBinaryVersion()).toBe(true)
     expect(spawnCalls).toHaveLength(0)
     expect(logged.filter(l => l.level === 'error')).toHaveLength(0)
+  })
+})
+
+// 2026-11-21: a server the Mac app started from the dist a deploy had published judged that
+// build's daemon binaries by the checkout's working tree (main had moved on), rebuilt them from
+// the tree and updated three hosts with a daemon of code the server did not run.
+describe('daemon version guard: a clean build is judged by its own commit, not the working tree', () => {
+  function writeBuildInfo(info: Record<string, unknown>): void {
+    fs.writeFileSync(path.join(tmpDir, 'build-info.json'), JSON.stringify(info))
+  }
+
+  it('trusts the binaries a clean build of another commit brought and rebuilds nothing from the tree', async () => {
+    const { verifyDaemonBinaryVersion, readHeadCommit } = await loadGuard()
+    const head = readHeadCommit(path.resolve(import.meta.dirname, '../..'))
+    expect(head).toMatch(/^[0-9a-f]{40}$/)
+    // A commit that is not this checkout's HEAD (a deploy built it in a clean clone).
+    const other = head!.startsWith('0') ? '1234567ab' : '0123456ab'
+    writeBuildInfo({ version: '0.0.0', commit: other, branch: 'main', builtAt: '2026-11-21T02:54:19.720Z', dirty: false })
+    writeVersion('daemon-linux-x64', 'walnut-daemon-28a6d01a92ea')
+
+    expect(verifyDaemonBinaryVersion()).toBe(true)
+    expect(spawnCalls).toHaveLength(0)
+    expect(logged.filter(l => l.level === 'error')).toHaveLength(0)
+    expect(logged.some(l => /clean build of another tree/.test(l.msg))).toBe(true)
+  })
+
+  it('still rebuilds for a build of this HEAD (a stale watch build), of a dirty tree, or with no record', async () => {
+    const { verifyDaemonBinaryVersion, readHeadCommit } = await loadGuard()
+    const head = readHeadCommit(path.resolve(import.meta.dirname, '../..'))!
+    writeVersion('daemon-linux-x64', 'walnut-daemon-111111111111')
+    for (const info of [{ commit: head.slice(0, 9), dirty: false }, { commit: 'c48f8040a', dirty: true }, { dirty: false }, null]) {
+      spawnCalls.length = 0
+      fs.rmSync(path.join(tmpDir, 'build-info.json'), { force: true })
+      fs.rmSync(path.join(state.binariesDir, '.version-guard-gave-up'), { force: true })
+      if (info) writeBuildInfo(info)
+      verifyDaemonBinaryVersion()
+      expect(spawnCalls.some(c => c.join(' ').includes('scripts/build-daemon.sh')), JSON.stringify(info)).toBe(true)
+    }
   })
 })
 

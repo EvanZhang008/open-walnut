@@ -31,6 +31,8 @@ import { log, redactSensitiveText } from '../logging/index.js'
 const execFileAsync = promisify(execFile)
 
 const LOCK_FILE = path.join(WALNUT_HOME, 'server.lock.json')
+/** The lock file, for a reader that waits on who holds it (core/deploy-switch.ts). */
+export function instanceLockFile(): string { return LOCK_FILE }
 /** Same value as task-db.ts TASK_DB_PATH — computed here to avoid importing the DB module. */
 const TASK_DB_FILE = path.join(TASKS_DIR, 'tasks.sqlite')
 

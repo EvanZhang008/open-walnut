@@ -225,11 +225,13 @@ describe('dev-prod.sh publishes the serving build', () => {
   const at = (s: string) => DEV_PROD.indexOf(s)
   const call = '"$JS_BIN" "$REPO_ROOT/scripts/publish-serve-root-dist.mjs" "$publish_from" "$publish_to"'
 
-  it('only for a deploy from a clone, from the build that passed every check, before the success stamp', () => {
+  // Before the old server stops (2026-11-21: published last, a server the Mac app restarted
+  // from this dist a second after the stop ran the build before; tests/scripts/dev-prod-early-publish.test.ts).
+  it('only for a deploy from a clone, from the build that passed every pre-stop check, before the stop', () => {
     expect(at(call)).toBeGreaterThan(0)
     const guard = DEV_PROD.lastIndexOf('if [[ "$SERVE_ROOT" != "$REPO_ROOT" ]]; then', at(call))
     expect(guard).toBeGreaterThan(0)
-    expect(at(call) - guard).toBeLessThan(700)
+    expect(at(call) - guard).toBeLessThan(1000)
     // The compiled file is all a deploy serves: it publishes the dist it was built from.
     const pick = DEV_PROD.slice(guard, at(call))
     expect(pick).toContain('publish_from="$REPO_ROOT/dist"')
@@ -237,14 +239,15 @@ describe('dev-prod.sh publishes the serving build', () => {
     // Into this checkout, except in a rehearsal, which writes only into its own dirs.
     expect(pick).toContain('publish_to="$SERVE_ROOT/dist"')
     expect(pick).toMatch(/if \[\[ "\$REHEARSAL" == "1" \]\]; then[\s\S]*publish_to="\$TMPDIR\/rehearsal-serve-root\/dist"/)
-    expect(at(call)).toBeGreaterThan(at('if ! snapshot_lkg; then'))
-    expect(at(call)).toBeGreaterThan(at('Live render FAILED'))
-    expect(at(call)).toBeLessThan(at('date +%s > "$SUCCESS_STAMP"'))
+    expect(at(call)).toBeGreaterThan(at('Plugin check: loading the plugins in'))
+    expect(at(call)).toBeGreaterThan(at('Smoke boot OK'))
+    expect(at(call)).toBeLessThan(DEV_PROD.search(/^drain_active_turns$/m))
+    expect(at(call)).toBeLessThan(at('kill -15 $existing_pids'))
   })
 
   it('never fails the deploy', () => {
     expect(DEV_PROD).toContain(`if ! ${call}; then`)
-    const after = DEV_PROD.slice(at(call), at('date +%s > "$SUCCESS_STAMP"'))
+    const after = DEV_PROD.slice(at(call), at('serve_dist_prev_cleanup() {'))
     expect(after).not.toMatch(/\bexit\b|rollback_to_lkg|stop_new_server/)
   })
 
@@ -258,12 +261,16 @@ describe('dev-prod.sh publishes the serving build', () => {
       write(path.join(clone, 'scripts', f), read(path.join(import.meta.dirname, '..', '..', 'scripts', f)))
     }
     fs.writeFileSync(path.join(from, 'cli-fast.js'), newFast)
-    const tail = DEV_PROD.slice(at('CLI_NOT_PUBLISHED=""'))
-    expect(tail.length).toBeLessThan(3000)
-    const r = spawnSync('bash', ['-c', `set -euo pipefail\nlistener_pids() { echo 4242; }\n${tail}`], {
+    // The publish block, then the deploy's last lines (everything between is the stop and the new server).
+    const publish = DEV_PROD.slice(at('CLI_NOT_PUBLISHED=""'), at('serve_dist_prev_cleanup() {'))
+    const tail = DEV_PROD.slice(at('pid="$(listener_pids | sed -n 1p)"\ndate +%s > "$SUCCESS_STAMP"'))
+    expect(publish.length).toBeLessThan(3000)
+    expect(tail.length).toBeLessThan(1000)
+    const cloneCopy = /^clone_copy\(\) \{\n[\s\S]*?^\}\n/m.exec(DEV_PROD)![0]
+    const r = spawnSync('bash', ['-c', `set -euo pipefail\nlistener_pids() { echo 4242; }\n${cloneCopy}\n${publish}\n${tail}`], {
       encoding: 'utf-8',
       env: {
-        PATH: process.env.PATH, SERVE_ROOT: checkout, REPO_ROOT: clone, REHEARSAL: '0', TMPDIR: root,
+        PATH: process.env.PATH, SERVE_ROOT: checkout, REPO_ROOT: clone, REHEARSAL: '0', TMPDIR: root, STAGE_ROOT: root,
         JS_BIN: process.execPath, SUCCESS_STAMP: path.join(root, 'stamp'), RUNTIME_DESC: 'test',
       },
     })

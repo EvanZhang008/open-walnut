@@ -1421,11 +1421,160 @@ fi
 . "$REPO_ROOT/scripts/lib/deploy-queue.sh"
 if [[ "${WALNUT_DEVPROD_FORCE:-0}" != "1" ]]; then dq_hold_moves; fi
 
+# ── Only an awake Mac stops its server ───────────────────────────────────────
+# 2026-11-21: a deploy that began before the lid closed went on in a dark wake (the few seconds
+# a sleeping Mac wakes for maintenance, display and sound off), stopped the server at 07:40:45Z,
+# and the Mac slept again before the new one was up: :3456 stayed dark until the lid opened at
+# 08:00:22Z. `pmset -g systemstate` lists Graphics only in a full wake. An unreadable answer (no
+# pmset, another system) counts as awake, so nothing waits on a probe that cannot answer.
+full_wake() {
+  local st
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
+  st="$(pmset -g systemstate 2>/dev/null || true)"
+  [[ "$st" == *"Capabilities are:"* ]] || return 0
+  [[ "$st" == *"Capabilities are:"*Graphics* ]]
+}
+wait_for_full_wake() {
+  local max="${WALNUT_DEVPROD_WAKE_WAIT_SECS:-43200}" start=$SECONDS
+  full_wake && return 0
+  echo "The Mac is asleep (a dark wake): the running server keeps serving until it is awake." >&2
+  until full_wake; do
+    if (( SECONDS - start >= max )); then
+      echo "The Mac was not awake within ${max}s: this deploy ends here and the running server keeps serving." >&2
+      exit 1
+    fi
+    sleep "${WALNUT_DEVPROD_WAKE_POLL_SECS:-10}"
+  done
+  echo "The Mac is awake: the deploy goes on." >&2
+}
+wait_for_full_wake
+
+# ── The checkout's dist is the new build BEFORE the stop ─────────────────────
+# The `walnut` CLI here runs $SERVE_ROOT/dist and its op registry in process, so
+# op descriptions, schemas and outcomes come from that bundle, not the server. A
+# deploy from a clean clone (deploy-committed.sh) never built there, so the
+# serving build is published there: the dist of the same build the compiled file
+# was made from (the publish leaves build-binary's staging dir out).
+#
+# It goes BEFORE the stop because the Mac app runs a server of its own from that
+# same dist (`bun $SERVE_ROOT/dist/cli.js web`) and restarts it one second after
+# it exits. 2026-11-21: the app was relaunched inside a deploy's stop window,
+# started its own server from dist, and from then on brought it back after every
+# deploy's stop, a second before this deploy's server could take the instance
+# lock. Published last, the dist still held the build before, so each deploy
+# left production one build behind ("production serves <the build before>").
+# With the dist new before the stop, whoever starts the next server starts this
+# build. The dist it replaces is kept for the rollback (restore_serving_dist).
+#
+# A failed publish fails nothing (the server comes up either way): it ends the
+# deploy's output instead, because a CLI left on the old build answers with
+# older op text than the server's, and a server the Mac app restarts runs it.
+CLI_NOT_PUBLISHED=""
+SERVE_DIST_PREV=""
+if [[ "$SERVE_ROOT" != "$REPO_ROOT" ]]; then
+  publish_from="$REPO_ROOT/dist"
+  publish_to="$SERVE_ROOT/dist"
+  # A rehearsal writes only into its own dirs: the checkout's CLI keeps its build,
+  # and the publish goes to a stand-in checkout (the script wants a package.json).
+  if [[ "$REHEARSAL" == "1" ]]; then
+    mkdir -p "$TMPDIR/rehearsal-serve-root"
+    cp "$SERVE_ROOT/package.json" "$TMPDIR/rehearsal-serve-root/package.json" || true
+    publish_to="$TMPDIR/rehearsal-serve-root/dist"
+  fi
+  if [[ -f "$publish_to/cli.js" ]]; then
+    SERVE_DIST_PREV="$STAGE_ROOT/open-walnut-prev-dist.$(date +%s).$$"
+    clone_copy "$publish_to" "$SERVE_DIST_PREV" 2>/dev/null || { rm -rf "$SERVE_DIST_PREV" 2>/dev/null || true; SERVE_DIST_PREV=""; }
+  fi
+  if ! "$JS_BIN" "$REPO_ROOT/scripts/publish-serve-root-dist.mjs" "$publish_from" "$publish_to"; then
+    CLI_NOT_PUBLISHED="$publish_to"
+    echo "Warning: could not publish the serving build to $publish_to; the walnut CLI there keeps its last build." >&2
+  fi
+fi
+serve_dist_prev_cleanup() {
+  if [[ -n "${SERVE_DIST_PREV:-}" ]]; then rm -rf "$SERVE_DIST_PREV" 2>/dev/null || true; fi
+}
+
+# While this deploy switches the server, a server Walnut.app starts on its own (it restarts the
+# one it started a second after it exits, and starts one when it opens to a dark port) waits for
+# this deploy's server to take the instance lock, then attaches to it (src/core/deploy-switch.ts).
+# Without it the app's restart won the lock on every deploy, and production stayed the app's
+# `bun dist/cli.js` server instead of the compiled file under the session host (2026-11-21).
+DEPLOY_SWITCH_FILE="${REHEARSAL_HOME:-$HOME/.open-walnut}/local/deploy-switch.json"
+write_deploy_switch() {
+  local tmp="$DEPLOY_SWITCH_FILE.$$.tmp"
+  [[ -d "$(dirname "$(dirname "$DEPLOY_SWITCH_FILE")")" ]] || return 0
+  mkdir -p "$(dirname "$DEPLOY_SWITCH_FILE")" 2>/dev/null || return 0
+  if printf '{"pid":%s,"at":"%s"}\n' "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp" 2>/dev/null \
+    && mv -f "$tmp" "$DEPLOY_SWITCH_FILE" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$tmp" 2>/dev/null || true
+  return 0
+}
+deploy_switch_cleanup() {
+  # Only this deploy's: a later deploy's marker names its own pid.
+  if [[ -f "$DEPLOY_SWITCH_FILE" ]] && grep -q "\"pid\":$$," "$DEPLOY_SWITCH_FILE" 2>/dev/null; then
+    rm -f "$DEPLOY_SWITCH_FILE" 2>/dev/null || true
+  fi
+}
+# An exit before the stop (a failed step, a signal, the queue's time limit) leaves the old server
+# serving: the dist it serves from goes back too, or a server the app restarts later would run a
+# build that never deployed. Past the stop, the rollback (restore_serving_dist) decides.
+STOP_STARTED=0
+serve_dist_exit() {
+  if (( ! STOP_STARTED )) && [[ -n "${SERVE_DIST_PREV:-}" && -f "$SERVE_DIST_PREV/cli.js" && -n "${publish_to:-}" ]]; then
+    "$JS_BIN" "$REPO_ROOT/scripts/publish-serve-root-dist.mjs" "$SERVE_DIST_PREV" "$publish_to" >/dev/null 2>&1 \
+      && echo "Put the previous build back in $publish_to (the deploy ended before the stop)." >&2 || true
+  fi
+  serve_dist_prev_cleanup
+}
+trap 'deploy_switch_cleanup; serve_dist_exit; plugin_check_cleanup; smoke_cleanup; scratch_cleanup; stage_cleanup; release_lock' EXIT
+
+# The server Walnut.app started itself from the checkout's dist, if that is what
+# listens on :$PORT: its parent is the app's own process (not the session host,
+# which runs only what a deploy hands it) and it runs $SERVE_ROOT/dist/cli.js.
+# The app restarts such a server a second after it exits, from that dist.
+app_spawned_listener() {
+  local l parent pcmd lcmd
+  l="$(listener_pids | sed -n 1p)"
+  [[ "$l" =~ ^[0-9]+$ ]] || return 1
+  parent="$(ps -o ppid= -p "$l" 2>/dev/null | tr -d '[:space:]' || true)"
+  [[ "$parent" =~ ^[0-9]+$ ]] && (( parent > 1 )) || return 1
+  pcmd="$(ps -o command= -p "$parent" 2>/dev/null || true)"
+  lcmd="$(ps -o command= -p "$l" 2>/dev/null || true)"
+  [[ "$pcmd" == *"/Walnut.app/Contents/MacOS/Walnut" ]] || return 1
+  [[ "$lcmd" == *"$SERVE_ROOT/dist/cli.js web"* ]] || return 1
+  printf '%s' "$l"
+}
+
+# Undo the early publish for a rollback: the dist the deploy replaced goes back,
+# and a server the Mac app restarted from the new one is stopped, so the app
+# brings back the old build (and the last-known-good launch below may win the
+# lock first: either way an old build serves).
+restore_serving_dist() {
+  local apid
+  [[ -n "${SERVE_DIST_PREV:-}" && -f "$SERVE_DIST_PREV/cli.js" && -n "${publish_to:-}" ]] || return 0
+  if "$JS_BIN" "$REPO_ROOT/scripts/publish-serve-root-dist.mjs" "$SERVE_DIST_PREV" "$publish_to" >/dev/null; then
+    echo "Put the previous build back in $publish_to." >&2
+  else
+    echo "Warning: could not put the previous build back in $publish_to; it keeps this deploy's." >&2
+    return 0
+  fi
+  apid="$(app_spawned_listener || true)"
+  if [[ -n "$apid" ]]; then
+    echo "The Mac app's own server (PID $apid) runs this deploy's build: stopping it, so the app restarts the previous one." >&2
+    kill -15 "$apid" 2>/dev/null || true
+    local waited=0
+    while kill -0 "$apid" 2>/dev/null && (( waited < 20 )); do sleep 0.5; waited=$(( waited + 1 )); done
+  fi
+}
+
 # LAST thing before the outgoing server is stopped. Deliberately after the build
 # and the smoke boot (those take minutes — draining first would just let new turns
 # start), and before `launchctl remove`, which is itself a kill.
 drain_active_turns
 write_planned_restart
+write_deploy_switch
 
 # ── One launchd domain for the job's whole life ─────────────────────────────
 # The job is loaded with `launchctl bootstrap <domain>`, and every later look at
@@ -1535,6 +1684,8 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   preapproved_why="$host_why"
 fi
 
+# From here the old server is stopped (the bootout below is itself a stop): an exit leaves the dist to the rollback.
+STOP_STARTED=1
 use_launchd=0
 if [[ "$(uname -s)" == "Darwin" ]] && command -v launchctl >/dev/null 2>&1; then
   use_launchd=1
@@ -1586,6 +1737,7 @@ fi
 
 if [[ -n "$(listener_pids)" ]]; then
   echo "Existing server did not stop; refusing to start a competing process." >&2
+  restore_serving_dist
   # It still runs: the marker must not name its next, unrelated stop a deploy.
   if [[ -n "${PLANNED_RESTART_FILE:-}" ]]; then rm -f "$PLANNED_RESTART_FILE" 2>/dev/null || true; fi
   exit 1
@@ -1599,6 +1751,15 @@ fi
 # command line, exclude ourselves and any --ephemeral/test server, and reap.
 # macOS ships bash 3.2 — no `mapfile`/`readarray`. Plain word-splitting on a
 # newline-separated pgrep result is the portable form.
+# A server Walnut.app started itself (its parent is the app's own process), restarted from the
+# dist published above: it waits for this deploy's server to take the lock and then leaves on its
+# own (write_deploy_switch). Reaped, the app would only start another one.
+started_by_mac_app() {
+  local parent
+  parent="$(ps -o ppid= -p "$1" 2>/dev/null | tr -d '[:space:]' || true)"
+  [[ "$parent" =~ ^[0-9]+$ ]] && (( parent > 1 )) || return 1
+  [[ "$(ps -o command= -p "$parent" 2>/dev/null || true)" == *"/Walnut.app/Contents/MacOS/Walnut" ]]
+}
 self_pid=$$
 stray_pids="$(pgrep -f 'dist/cli\.js web|dist-bin/walnut-[a-z0-9-]+ web' 2>/dev/null || true)"
 for spid in $stray_pids; do
@@ -1623,6 +1784,7 @@ for spid in $stray_pids; do
   if [[ "$cmd" == *"--_ephemeral-child"* || "$cmd" == *"--ephemeral"* ]]; then
     continue
   fi
+  if started_by_mac_app "$spid"; then continue; fi
   # A server started with an explicit NON-prod --port is a test instance
   # (provider-matrix harness, ad-hoc dev), not a stray prod boot — never reap
   # it. 2026-08-12: a concurrent deploy's sweep SIGKILLed the live-matrix
@@ -1842,6 +2004,7 @@ launchd_job_argv() {
     -u VITEST
     -u WALNUT_RUNTIME_DIR
     -u BUN_BE_BUN
+    -u WALNUT_LAUNCHER
     PATH="$PATH"
     WALNUT_LAUNCHD_LABEL="$LAUNCH_LABEL"
     "${server_argv[@]:0:$last}"
@@ -2025,6 +2188,7 @@ launch_server() {
       -u VITEST \
       -u WALNUT_RUNTIME_DIR \
       -u BUN_BE_BUN \
+      -u WALNUT_LAUNCHER \
       "${server_argv[@]}" web --port "$PORT" \
       </dev/null >>"$SERVER_LOG" 2>&1 &
     pid=$!
@@ -2157,6 +2321,7 @@ stage_lkg_for_rollback() {
 
 rollback_to_lkg() {
   local lkg_path lkg from=""
+  restore_serving_dist
   lkg_path="$(lkg_file)"
   if [[ -z "$lkg_path" ]]; then
     if [[ -f "$LKG_DIR/dist/cli.js" ]]; then
@@ -2395,32 +2560,6 @@ fi
 # The new server has replaced the old daemon by now: the stage it ran from goes, and any a session's
 # child held until now.
 sweep_old_stages
-
-# The `walnut` CLI here runs $SERVE_ROOT/dist and its op registry in process, so
-# op descriptions, schemas and outcomes come from that bundle, not the server. A
-# deploy from a clean clone (deploy-committed.sh) never built there, and the CLI
-# kept the last working-tree build (2026-10-05). Publish the build now serving:
-# the dist of the same build the compiled file was made from (the publish
-# leaves build-binary's staging dir out).
-# The server is up either way, so a failure does not fail the deploy; it ends the
-# deploy's output instead (the queue repeats that line to its caller), because a
-# CLI left on the old build answers with older op text than the server's.
-CLI_NOT_PUBLISHED=""
-if [[ "$SERVE_ROOT" != "$REPO_ROOT" ]]; then
-  publish_from="$REPO_ROOT/dist"
-  publish_to="$SERVE_ROOT/dist"
-  # A rehearsal writes only into its own dirs: the checkout's CLI keeps its build,
-  # and the publish goes to a stand-in checkout (the script wants a package.json).
-  if [[ "$REHEARSAL" == "1" ]]; then
-    mkdir -p "$TMPDIR/rehearsal-serve-root"
-    cp "$SERVE_ROOT/package.json" "$TMPDIR/rehearsal-serve-root/package.json" || true
-    publish_to="$TMPDIR/rehearsal-serve-root/dist"
-  fi
-  if ! "$JS_BIN" "$REPO_ROOT/scripts/publish-serve-root-dist.mjs" "$publish_from" "$publish_to"; then
-    CLI_NOT_PUBLISHED="$publish_to"
-    echo "Warning: could not publish the serving build to $publish_to; the walnut CLI there keeps its last build." >&2
-  fi
-fi
 
 pid="$(listener_pids | sed -n 1p)"
 date +%s > "$SUCCESS_STAMP"

@@ -386,7 +386,7 @@ describe('stage_plugin_source', () => {
 describe('rollback_to_lkg', () => {
   function harness(root: string, lkg: string): string {
     const checker = program(path.join(root, 'check-runtime'), 'printf "CHECK %s\\n" "$*"; exit "${ROLLBACK_CHECK_EXIT:-0}"')
-    return [fn('clone_copy'), depsFns(), fn('carry_plugin_source'), fn('stage_lkg_for_rollback'), fn('lkg_file'), fn('rollback_to_lkg'),
+    return [fn('clone_copy'), depsFns(), fn('carry_plugin_source'), fn('stage_lkg_for_rollback'), fn('lkg_file'), fn('restore_serving_dist'), fn('rollback_to_lkg'),
       'launch_server() { printf "LAUNCH %s\\n" "$*"; }',
       'wait_for_config_ready() { return 0; }',
       `BUN_BIN='${checker}'`, `REPO_ROOT='${root}/repo'`, `REHEARSAL_HOME='${root}/data'`,
