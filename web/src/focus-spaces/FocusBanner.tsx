@@ -7,7 +7,9 @@ import type { Task } from '@open-walnut/core'
 import { useTaskListSelect } from '@/contexts/TasksContext'
 import { leaveFocus } from './focus-store'
 import { useFocusView } from './useFocusView'
-import { outsideCounts, untilWords } from './focus-model'
+import { outsideCounts, outsideWords, untilWords } from './focus-model'
+import '@/components/actions/ask-card.css'
+import '@/styles/focus-spaces.css'
 
 const NO_TASKS: readonly Task[] = []
 
@@ -26,16 +28,18 @@ export function FocusBanner() {
     <div className="focus-banner" role="status" data-testid="focus-banner">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
         <circle cx="12" cy="12" r="8" />
-        <circle cx="12" cy="12" r="3.5" />
+        <circle cx="12" cy="12" r="3.5" fill="currentColor" />
       </svg>
       <span className="focus-banner-text">
         <span className="focus-banner-name">{view.active.name}</span>
         <span className="focus-banner-detail">
           {view.active.until ? ` · ${untilWords(view.active.until)}` : ''}
-          {` · ${outside.open} outside`}
+          {` · ${outsideWords(outside.open)}`}
         </span>
       </span>
-      <button type="button" className="btn btn-sm" disabled={busy} onClick={leave} data-testid="focus-banner-leave">Leave</button>
+      <div className="ask-card-answer focus-banner-actions">
+        <button type="button" className="btn btn-sm" disabled={busy} onClick={leave} data-testid="focus-banner-leave">Leave</button>
+      </div>
     </div>
   )
 }

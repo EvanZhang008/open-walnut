@@ -31,6 +31,8 @@ interface TasksPageRailProps {
   projects: RailProjectItem[];
   allOpenCount: number;
   inboxOpenCount: number;
+  /** False hides the Inbox row (a focus space without the Inbox in it). Default shown. */
+  showInbox?: boolean;
   /** null = All Tasks, '' = Inbox, otherwise a project name. */
   activeKey: string | null;
   onSelect: (key: string | null) => void;
@@ -113,6 +115,7 @@ export function TasksPageRail({
   projects,
   allOpenCount,
   inboxOpenCount,
+  showInbox = true,
   activeKey,
   onSelect,
   onCreateProject,
@@ -266,11 +269,13 @@ export function TasksPageRail({
             ))}
           </SortableContext>
         </DndContext>
-        <button type="button" className={itemClass('')} onClick={() => onSelect('')}>
-          <span className="tp-ri-icon">📥</span>
-          <span className="tp-ri-name">Inbox</span>
-          <span className="tp-ri-count">{inboxOpenCount}</span>
-        </button>
+        {showInbox && (
+          <button type="button" className={itemClass('')} onClick={() => onSelect('')}>
+            <span className="tp-ri-icon">📥</span>
+            <span className="tp-ri-name">Inbox</span>
+            <span className="tp-ri-count">{inboxOpenCount}</span>
+          </button>
+        )}
       </div>
 
       {/* resize handle — right edge of the rail */}

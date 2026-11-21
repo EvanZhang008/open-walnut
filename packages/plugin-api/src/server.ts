@@ -529,6 +529,27 @@ export interface QuietInput {
   showOnly?: boolean
 }
 
+/** The focus space the person is in, as your App should treat it. */
+export interface PluginFocus {
+  /** The saved space, when the focus is one: key your own per-space state by it. */
+  spaceId?: string
+  name: string
+  /** What the focus shows: project names and task ids (their subtasks too). */
+  scope: { projects?: string[]; tasks?: string[] }
+  /**
+   * How your App works in it: `isolated` (fresh: keep your own state under `spaceId`), `inherit`
+   * (the same data and sessions as Main), `off` (your App is hidden there). From the space's own
+   * choice, else your manifest's `focusSpaces` (`scoped` reads `isolated`, `shared` reads
+   * `inherit`, none reads `off`).
+   */
+  mode: 'inherit' | 'isolated' | 'off'
+}
+
+export interface FocusService {
+  /** null when the person is in no focus space, or focus spaces are off. */
+  current(): Promise<PluginFocus | null>
+}
+
 /** Your plugin's ONE quiet hold (source `plugin:<pluginId>`). `set` replaces it. */
 export interface QuietService {
   get(): Promise<QuietState>
@@ -2164,6 +2185,8 @@ export interface WalnutServerApi {
   readonly tags: TagService
   readonly config: ConfigService
   readonly notifications: NotificationService
+  /** The focus space the person is in (experiment focus_workspace). Absent on an older Walnut. */
+  readonly focus?: FocusService
   readonly ui: UiService
   readonly appState: AppStateService
   readonly letters: LettersService

@@ -2,7 +2,8 @@
  * /api/v1/focus-spaces: the person's focus spaces (src/core/focus-spaces/), the same for a
  * person in the console and the phone and for an agent through the `api` op.
  *
- *   GET    /focus-spaces                 → { spaces, active }
+ *   GET    /focus-spaces                 → { spaces, active, apps } (apps: the plugins with an App,
+ *                                          and what each declares for spaces: focus-spaces/apps.ts)
  *   POST   /focus-spaces                 { name, projects?, tasks?, apps? } → { space }
  *   PATCH  /focus-spaces/:id             { name?, projects?, tasks?, apps? } → { space }
  *   DELETE /focus-spaces/:id             → { removed } (a focus in it ends)
@@ -77,7 +78,8 @@ focusSpacesV1Router.get('/focus-spaces', async (_req: Request, res: Response, ne
     const own = testRunPrefsRead<RunFocus>('focus-spaces')
     const spaces = own?.spaces ?? await listFocusSpaces()
     const active = own && own.active !== undefined ? await runActive(own) : await getActiveFocus()
-    res.json({ spaces, active })
+    const { focusApps } = await import('../../core/focus-spaces/apps.js')
+    res.json({ spaces, active, apps: await focusApps().catch(() => []) })
   } catch (err) { next(err) }
 })
 

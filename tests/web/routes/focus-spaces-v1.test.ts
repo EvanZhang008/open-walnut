@@ -49,7 +49,7 @@ afterEach(async () => {
 describe('/api/v1/focus-spaces', () => {
   it('creates, renames and deletes a space; the file keeps it', async () => {
     const app = createApp()
-    expect((await request(app).get('/api/v1/focus-spaces')).body).toEqual({ spaces: [], active: null })
+    expect((await request(app).get('/api/v1/focus-spaces')).body).toEqual({ spaces: [], active: null, apps: [] })
     const made = await request(app).post('/api/v1/focus-spaces').send({ name: '  Interview  prep ', projects: ['Walnut', 'Walnut'], tasks: ['t1'] })
     expect(made.status).toBe(201)
     expect(made.body.space).toMatchObject({ name: 'Interview prep', projects: ['Walnut'], tasks: ['t1'], apps: {} })
@@ -136,7 +136,7 @@ describe('/api/v1/focus-spaces', () => {
     expect(on.body.active).toMatchObject({ spaceId: space.id })
     expect((await request(run).get('/api/v1/focus-spaces')).body).toMatchObject({ spaces: [{ id: space.id }], active: { spaceId: space.id } })
     // Nothing reached the user: no file, no space, no hold.
-    expect((await request(user).get('/api/v1/focus-spaces')).body).toEqual({ spaces: [], active: null })
+    expect((await request(user).get('/api/v1/focus-spaces')).body).toEqual({ spaces: [], active: null, apps: [] })
     expect((await getQuiet()).holds).toEqual([])
     await expect(fs.stat(path.join(WALNUT_HOME, 'focus-spaces.json'))).rejects.toThrow()
     expect((await request(run).delete('/api/v1/focus-spaces/active')).body.ended).toMatchObject({ spaceId: space.id })

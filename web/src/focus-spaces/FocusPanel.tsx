@@ -1,17 +1,21 @@
 /**
  * What the focus popover shows (FocusRail.tsx): the focus the person is in, the saved spaces to
  * enter, a space being made or changed, and, right after leaving, what waited outside.
+ *
+ * Its controls are the card family's (standard.md): option rows (`.org-answer-options .btn` with
+ * its line of why in data-detail), ticks (`.org-answer-check`), and the 34 px buttons of
+ * `.ask-card-answer`, one of them blue.
  */
 import { useMemo, useState } from 'react'
 import type { Task } from '@open-walnut/core'
 import { taskInScope } from '@open-walnut/focus-scope'
 import { useTaskListSelect } from '@/contexts/TasksContext'
 import { useOpenTask } from '@/hooks/useOpenTask'
-import {
-  enterFocus, leaveFocus, useFocusSnapshot, type ActiveFocus, type FocusSpace,
-} from './focus-store'
-import { FOCUS_LENGTHS, durationWords, outsideCounts, scopeLine, summarize, untilWords, type FocusSummary } from './focus-model'
+import { enterFocus, leaveFocus, useFocusSnapshot, type ActiveFocus, type FocusSpace } from './focus-store'
+import { FOCUS_LENGTHS, durationWords, outsideCounts, outsideWords, scopeLine, summarize, untilWords, type FocusSummary } from './focus-model'
 import { SpaceForm } from './SpaceForm'
+import '@/components/actions/ask-card.css'
+import '@/styles/inline-answer.css'
 
 const NO_TASKS: readonly Task[] = []
 
@@ -63,59 +67,58 @@ export function FocusPanel({ ended, onClose }: { ended: ActiveFocus | null; onCl
   }
   if (summary && !active) return <SummaryView summary={summary} onClose={onClose} />
 
+  const others = spaces.filter((s) => s.id !== active?.spaceId)
+  const activeSpace = active?.spaceId ? spaces.find((s) => s.id === active.spaceId) : undefined
   return (
     <div className="focus-panel" data-testid="focus-panel">
       {active
-        ? <ActiveView active={active} tasks={tasks} byId={byId} titleOf={titleOf} busy={busy} onLeave={leave}
-            onEdit={active.spaceId ? () => setMode({ kind: 'form', space: spaces.find((s) => s.id === active.spaceId) }) : undefined} />
+        ? <ActiveHead active={active} tasks={tasks} byId={byId} titleOf={titleOf} />
         : (
           <div className="focus-panel-head">
             <div className="focus-panel-title">Focus</div>
             <div className="focus-panel-detail">Show only the projects or tasks you pick. Everything else waits, quietly, until you leave.</div>
           </div>
         )}
-      {(!active || spaces.some((s) => s.id !== active.spaceId)) && (
+      {others.length > 0 && (
         <>
           <div className="focus-panel-caption">{active ? 'Switch to' : 'Your spaces'}</div>
-          {spaces.length === 0 && <div className="focus-panel-empty">No spaces yet. Make one with the projects or tasks you want in front of you.</div>}
-          <div className="focus-space-list" role="list">
-            {spaces.filter((s) => s.id !== active?.spaceId).map((s) => (
-              <div key={s.id} className="focus-space-row" role="listitem">
-                <button type="button" className="focus-space-enter" disabled={busy} onClick={() => enter(s.id)} data-testid={`focus-space-${s.id}`}>
-                  <span className="focus-space-name">{s.name}</span>
-                  <span className="focus-space-scope">{scopeLine(s, titleOf)}</span>
-                </button>
-                <button type="button" className="btn btn-sm" onClick={() => setMode({ kind: 'form', space: s })} aria-label={`Edit ${s.name}`}>Edit</button>
-              </div>
-            ))}
-          </div>
-          {!active && spaces.length > 0 && (
-            <div className="focus-length" role="radiogroup" aria-label="How long">
-              <span className="focus-panel-caption">For</span>
-              {FOCUS_LENGTHS.map((l) => (
-                <button key={l.label} type="button" role="radio" aria-checked={length === l.minutes}
-                  className={`btn btn-sm${length === l.minutes ? ' btn-primary' : ''}`} onClick={() => setLength(l.minutes)}>{l.label}</button>
+          <div className="ask-card-answer focus-options">
+            <div className="org-answer-options" role="list">
+              {others.map((s) => (
+                <button key={s.id} type="button" role="listitem" className="btn btn-sm" disabled={busy}
+                  data-detail={scopeLine(s, titleOf)} title={scopeLine(s, titleOf)}
+                  onClick={() => enter(s.id)} data-testid={`focus-space-${s.id}`}>{s.name}</button>
               ))}
             </div>
-          )}
+          </div>
         </>
       )}
+      {!active && spaces.length === 0 && <div className="focus-panel-empty">No spaces yet. Make one with the projects or tasks you want in front of you.</div>}
+      {!active && others.length > 0 && (
+        <div className="ask-card"><div className="ask-card-answer focus-length" role="radiogroup" aria-label="How long">
+          {FOCUS_LENGTHS.map((l) => (
+            <label key={l.label} className={`org-answer-check${length === l.minutes ? ' is-on' : ''}`}>
+              <input type="radio" name="focus-length" checked={length === l.minutes} onChange={() => setLength(l.minutes)} />{l.label}
+            </label>
+          ))}
+        </div></div>
+      )}
       {error && <div className="focus-panel-error" role="alert">{error}</div>}
-      <div className="focus-panel-actions">
-        <button type="button" className="btn btn-sm" onClick={() => setMode({ kind: 'form' })} data-testid="focus-new-space">New space</button>
+      <div className="ask-card-answer focus-actions">
+        {active && <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={leave} data-testid="focus-leave">Leave focus</button>}
+        {activeSpace && <button type="button" className="btn btn-sm" onClick={() => setMode({ kind: 'form', space: activeSpace })}>Edit space</button>}
+        {/* In a focus: leave it or change it; a new space is made from outside one. */}
+        {!active && <button type="button" className={`btn btn-sm${spaces.length === 0 ? ' btn-primary' : ''}`} onClick={() => setMode({ kind: 'form' })} data-testid="focus-new-space">New space</button>}
       </div>
     </div>
   )
 }
 
-function ActiveView({ active, tasks, byId, titleOf, busy, onLeave, onEdit }: {
+function ActiveHead({ active, tasks, byId, titleOf }: {
   active: ActiveFocus
   tasks: readonly Task[]
   byId: ReadonlyMap<string, Task>
   titleOf(id: string): string | undefined
-  busy: boolean
-  onLeave(): void
-  onEdit?: () => void
 }) {
   const lookup = (id: string) => byId.get(id) ?? null
   const outside = outsideCounts(tasks, (id) => taskInScope(active.scope, id, lookup))
@@ -128,11 +131,7 @@ function ActiveView({ active, tasks, byId, titleOf, busy, onLeave, onEdit }: {
         {active.by === 'block' ? ' · from your focus block' : ''}
       </div>
       <div className="focus-panel-outside" data-testid="focus-outside">
-        {outside.open === 0 ? 'Nothing open outside.' : `${outside.open} open ${outside.open === 1 ? 'task waits' : 'tasks wait'} outside. You see them when you leave.`}
-      </div>
-      <div className="focus-panel-actions">
-        <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={onLeave} data-testid="focus-leave">Leave focus</button>
-        {onEdit && <button type="button" className="btn btn-sm" onClick={onEdit}>Edit space</button>}
+        {outside.open === 0 ? 'Nothing open outside.' : `${outsideWords(outside.open)}. You see them when you leave.`}
       </div>
     </div>
   )
@@ -152,19 +151,17 @@ function SummaryView({ summary, onClose }: { summary: FocusSummary; onClose(): v
       {summary.needs.length > 0 && (
         <>
           <div className="focus-panel-caption">Need you now</div>
-          <div className="focus-space-list" role="list">
-            {summary.needs.slice(0, 6).map((t) => (
-              <div key={t.id} className="focus-space-row" role="listitem">
-                <button type="button" className="focus-space-enter" onClick={() => { onClose(); openTask(t.id) }}>
-                  <span className="focus-space-name">{t.title}</span>
-                </button>
-              </div>
-            ))}
+          <div className="ask-card-answer focus-options">
+            <div className="org-answer-options" role="list">
+              {summary.needs.slice(0, 6).map((t) => (
+                <button key={t.id} type="button" role="listitem" className="btn btn-sm" onClick={() => { onClose(); openTask(t.id) }}>{t.title}</button>
+              ))}
+            </div>
           </div>
           {summary.needs.length > 6 && <div className="focus-panel-empty">{`and ${summary.needs.length - 6} more on Home.`}</div>}
         </>
       )}
-      <div className="focus-panel-actions">
+      <div className="ask-card-answer focus-actions">
         <button type="button" className="btn btn-sm btn-primary" onClick={onClose}>Done</button>
       </div>
     </div>

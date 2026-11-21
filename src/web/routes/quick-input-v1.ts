@@ -25,11 +25,14 @@
  *        clipboard; saved here and named by path in the message, the phone's way
  *        (session-send-v1.ts). With an image the text may be empty.
  *        Both are the one send below.
- *   POST /quick/send { to?, text, images?, follow? }     → as /quick/main
+ *   POST /quick/send { to?, text, images?, follow?, from_workspace? } → as /quick/main
  *        The quick bar's send (web/src/components/quickbar/): `to` is the task id the people list
  *        named (a VP, any task), Main when absent or `ceo`; `follow` streams that task's reply.
- *   GET  /quick/people?limit=                            → { people: [{ id, title, kind, state, line, needs, ... }] }
+ *        In a focus space (`from_workspace`: the bar was opened in one) a line to anyone outside it
+ *        is dropped out and left: no reply streams back into the focus (`followed: false`).
+ *   GET  /quick/people?limit=                            → { people: [{ id, title, kind, state, line, needs, ... }], focus? }
  *        Who the bar can talk to: CEO, every VP, then open tasks, needing the user first (quick-people.ts).
+ *        In a focus space, only its tasks, and `focus: { name, outside }` counts the rest.
  *   POST /quick/session { text, taskId?, images? }       → NDJSON stream, as /quick/main with follow
  *        A normal Claude Code session in Walnut, the Ask Walnut chat's own kind: with no `taskId` a
  *        new ask is started with the text (the phone's New chat, mobile-launch.ts), with the
@@ -215,11 +218,27 @@ quickInputV1Router.post('/quick/send', async (req: Request, res: Response, next:
     if (!primaryOnly(res)) return
     const to = typeof req.body?.to === 'string' ? req.body.to.trim() : ''
     const toMain = !to || to.toLowerCase() === 'ceo' || to.toLowerCase() === 'main'
+    // A line dropped out of a focus space never brings its reply back into it.
+    if (req.body?.follow === true && await leavesFocus(req.body?.from_workspace, toMain ? null : to)) req.body.follow = false
     await quickSend(req, res, toMain ? null : to, `text must be 1-${MAX_TEXT_CHARS} characters`, { testRunGuard: true })
   } catch (err) {
     next(err)
   }
 })
+
+/** The bar was opened in a focus space and this line goes outside it (Main included). */
+async function leavesFocus(fromWorkspace: unknown, taskId: string | null): Promise<boolean> {
+  if (typeof fromWorkspace !== 'string' || !fromWorkspace) return false
+  const { getActiveFocus } = await import('../../core/focus-spaces/active.js')
+  const active = await getActiveFocus().catch(() => null)
+  if (!active) return false
+  if (taskId === null) return true
+  const [{ taskInScope }, { scopeTaskLookup }] = await Promise.all([
+    import('../../core/focus-spaces/scope.js'),
+    import('../../core/task-manager.js'),
+  ])
+  return !taskInScope(active.scope, taskId, await scopeTaskLookup())
+}
 
 /**
  * One send for every quick box: the text (and screenshots) into Main's chat (`taskId` null) or one
@@ -466,8 +485,9 @@ quickInputV1Router.get('/quick/people', async (req: Request, res: Response, next
     if (!primaryOnly(res)) return
     const asked = Number(req.query.limit)
     const limit = Number.isFinite(asked) ? Math.max(0, Math.min(30, Math.floor(asked))) : 12
-    const { quickPeople } = await import('./quick-people.js')
-    res.json({ people: await quickPeople(limit) })
+    const { quickPeople, focusPeople } = await import('./quick-people.js')
+    // In a focus space: its tasks only, the rest counted (`focus: { name, outside }`).
+    res.json(await focusPeople(await quickPeople(limit)))
   } catch (err) {
     next(err)
   }

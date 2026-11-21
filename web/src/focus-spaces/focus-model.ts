@@ -31,6 +31,11 @@ export function outsideCounts(tasks: readonly Task[], inScope: (id: string) => b
   return { open, needs }
 }
 
+/** "14 waiting outside": the one way every view says it. */
+export function outsideWords(open: number): string {
+  return `${open} waiting outside`
+}
+
 /** What waited outside while the person focused: tasks that came to need them since it began. */
 export interface FocusSummary {
   name: string

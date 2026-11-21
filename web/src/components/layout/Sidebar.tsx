@@ -10,6 +10,7 @@ import { appPathMatches } from '@/apps/registry';
 import { useRailItemsShown } from '@/apps/rail-items';
 import { QuickBarRailButton } from '@/components/quickbar/QuickBarRailButton';
 import { FocusRailButton } from '@/focus-spaces/FocusRail';
+import { useFocusAppModes } from '@/focus-spaces/useFocusApps';
 import { AgendaIcon, ChatBubbleIcon, OrgChartIcon, PuzzleIcon, ScratchpadIcon, TaskPanelIcon } from '@/apps/icons';
 import {
   hideApp,
@@ -82,6 +83,8 @@ export function Sidebar({
 }: SidebarProps) {
   const { hasIssues, health, loading: healthLoading } = useSystemHealth();
   const apps = useAppCatalog();
+  // In a focus space: a plugin App hidden there leaves the rail (focus-spaces/useFocusApps.ts).
+  const focusAppModes = useFocusAppModes();
   // Experiment apps_stay_open: apps opened from anywhere, kept here until closed (empty when off).
   const activity = useAppActivity(apps);
   const appsStayOpen = useExperimental('apps_stay_open');
@@ -416,7 +419,7 @@ export function Sidebar({
             (declared by its plugin, or chosen in an older build) has no row here;
             it opens from the Apps page until the user switches it on there. */}
         {railShown.org && orgEntry}
-        {apps.sidebar.filter((app) => !(phone && isDesktopOnlyApp(app))).map((app) => {
+        {apps.sidebar.filter((app) => !(phone && isDesktopOnlyApp(app)) && !(focusAppModes && app.pluginId && focusAppModes(app.pluginId) === 'off')).map((app) => {
           const link = appLink(app);
           return app.path === '/' ? (
             <Fragment key={`${app.key}:${app.generation}`}>

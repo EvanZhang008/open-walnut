@@ -5,6 +5,7 @@
  */
 import { useState } from 'react'
 import type { ActiveFocus } from './focus-store'
+import '@/styles/focus-spaces.css'
 
 export function FocusColumnCover({ active, title }: { active: ActiveFocus; title?: string }) {
   const [shownFor, setShownFor] = useState<number | null>(null)

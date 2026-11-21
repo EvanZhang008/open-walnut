@@ -36,14 +36,22 @@ export interface ActiveFocus {
   by: FocusBy
 }
 
+/** A plugin with an App, and what its manifest declares for spaces (`focusSpaces`). */
+export interface FocusApp {
+  pluginId: string
+  name: string
+  declared?: 'scoped' | 'shared'
+}
+
 export interface FocusSnapshot {
   loaded: boolean
   spaces: readonly FocusSpace[]
   active: ActiveFocus | null
+  apps: readonly FocusApp[]
 }
 
 const BASE = '/api/v1/focus-spaces'
-let state: FocusSnapshot = { loaded: false, spaces: [], active: null }
+let state: FocusSnapshot = { loaded: false, spaces: [], active: null, apps: [] }
 const listeners = new Set<() => void>()
 let bound = false
 let reads = 0
@@ -68,14 +76,14 @@ function live(active: ActiveFocus | null | undefined): ActiveFocus | null {
 export async function loadFocus(): Promise<void> {
   const seq = ++reads
   try {
-    const body = await apiGet<{ spaces?: FocusSpace[]; active?: ActiveFocus | null }>(BASE, undefined, { quietStatuses: [404], timeoutMs: 10_000 })
+    const body = await apiGet<{ spaces?: FocusSpace[]; active?: ActiveFocus | null; apps?: FocusApp[] }>(BASE, undefined, { quietStatuses: [404], timeoutMs: 10_000 })
     if (seq !== reads) return
-    emit({ loaded: true, spaces: body.spaces ?? [], active: live(body.active) })
+    emit({ loaded: true, spaces: body.spaces ?? [], active: live(body.active), apps: body.apps ?? [] })
   } catch (err) {
     if (seq !== reads) return
     const status = (err as { status?: number }).status
     if (status !== 404) log.warn('focus-spaces', 'focus state load failed', { error: String(err) })
-    emit({ loaded: true, spaces: status === 404 ? [] : state.spaces, active: status === 404 ? null : state.active })
+    emit({ loaded: true, spaces: status === 404 ? [] : state.spaces, active: status === 404 ? null : state.active, apps: status === 404 ? [] : state.apps })
   }
 }
 
@@ -117,7 +125,7 @@ function withSpace(space: FocusSpace): readonly FocusSpace[] {
   return at < 0 ? [...state.spaces, space] : state.spaces.map((s, i) => (i === at ? space : s))
 }
 
-export async function createFocusSpace(input: { name: string; projects?: string[]; tasks?: string[] }): Promise<FocusSpace> {
+export async function createFocusSpace(input: { name: string; projects?: string[]; tasks?: string[]; apps?: Record<string, FocusAppMode> }): Promise<FocusSpace> {
   const { space } = await apiPost<{ space: FocusSpace }>(BASE, input)
   emit({ ...state, spaces: withSpace(space) })
   return space
@@ -162,7 +170,7 @@ export async function leaveFocus(onlyBy?: FocusBy): Promise<ActiveFocus | null> 
 
 /** Tests: start over. */
 export function _resetFocusStoreForTest(): void {
-  state = { loaded: false, spaces: [], active: null }
+  state = { loaded: false, spaces: [], active: null, apps: [] }
   reads = 0
   if (expiry) { clearTimeout(expiry); expiry = null }
 }

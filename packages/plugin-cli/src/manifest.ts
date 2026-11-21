@@ -28,6 +28,11 @@ export interface PluginManifest {
   icon?: string
   build?: PluginBuildConfig
   settingsIn?: 'plugins' | 'app'
+  /** How the plugin's App works inside a focus space (experiment focus_workspace): `'scoped'` keeps
+   *  its own state per space (the host keeps its views and drafts per space; its server reads
+   *  `walnut.focus.current()` for the rest), `'shared'` is the same everywhere. Absent: the App is
+   *  hidden inside a space until the person shows it there (then it reads as Main's). */
+  focusSpaces?: 'scoped' | 'shared'
   /** The Apps page group the plugin is listed under; omitted = derived from what it does. */
   category?: PluginCategory
   /** File areas beyond plugin-data: `files` (synced text, in git) and `tmp` (scratch with a TTL). */
@@ -113,6 +118,9 @@ export async function validatePlugin(root = process.cwd()): Promise<ValidationRe
   }
   if (manifest.settingsIn !== undefined && manifest.settingsIn !== 'plugins' && manifest.settingsIn !== 'app') {
     errors.push("manifest.settingsIn must be 'plugins' or 'app'")
+  }
+  if (manifest.focusSpaces !== undefined && manifest.focusSpaces !== 'scoped' && manifest.focusSpaces !== 'shared') {
+    errors.push("manifest.focusSpaces must be 'scoped' or 'shared'")
   }
   if (manifest.taskVisibility !== undefined && manifest.taskVisibility !== 'everywhere' && manifest.taskVisibility !== 'plugin') {
     errors.push("manifest.taskVisibility must be 'everywhere' or 'plugin'")

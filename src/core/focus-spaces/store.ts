@@ -4,7 +4,7 @@
  * A space is a list read beside the board, never a move: it names project names and task ids,
  * and every task stays where it lives, so Main and every lead still see it. Which tasks a
  * space holds is the scope rule (scope.ts). Each app in a space either inherits Main's (the
- * same data, the same session) or starts fresh; fresh is the default (`appMode`).
+ * same data, the same session), starts fresh, or is hidden there (`focusAppMode` in scope.ts).
  *
  * Stored in <WALNUT_HOME>/focus-spaces.json, which rides the data folder's git sync, so every
  * box of the person reads the same spaces; the phone reads them through /api/v1. Which space
@@ -14,10 +14,9 @@ import crypto from 'node:crypto'
 import path from 'node:path'
 import { WALNUT_HOME } from '../../constants.js'
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js'
-import { normalizeScope, scopeIsEmpty, type FocusScope } from './scope.js'
+import { normalizeScope, scopeIsEmpty, type FocusAppMode, type FocusScope } from './scope.js'
 
-/** How an app (a plugin with a page) works inside a space. */
-export type FocusAppMode = 'inherit' | 'isolated' | 'off'
+export type { FocusAppMode }
 
 export interface FocusSpace {
   /** `fs-` and 8 hex digits: never a dot, so it can prefix a plugin's view keys safely. */
@@ -25,7 +24,7 @@ export interface FocusSpace {
   name: string
   projects: string[]
   tasks: string[]
-  /** Per app (plugin id): absent = the default, a fresh session (`isolated`). */
+  /** Per app (plugin id): absent = what its manifest declares (`focusAppMode`). */
   apps: Record<string, FocusAppMode>
   createdAt: string
   updatedAt: string
@@ -58,11 +57,6 @@ function spacesFile(): string {
 
 export function isFocusSpaceId(id: unknown): id is string {
   return typeof id === 'string' && ID_RE.test(id)
-}
-
-/** The app mode a space gives `pluginId`: what it set, else a fresh session. */
-export function appMode(space: Pick<FocusSpace, 'apps'>, pluginId: string): FocusAppMode {
-  return space.apps[pluginId] ?? 'isolated'
 }
 
 function cleanApps(raw: unknown): Record<string, FocusAppMode> {

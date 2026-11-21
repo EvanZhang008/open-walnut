@@ -51,6 +51,7 @@ import { useUndoableTaskActions } from '@/undo/TaskUndoContext';
 import '@/styles/tasks-page.css';
 import { MicInput } from '@/components/common/BoxMic';
 import { useFocusView } from '@/focus-spaces/useFocusView';
+import { FocusBanner } from '@/focus-spaces/FocusBanner';
 
 const LS_GROUPED = 'walnut-tasks-page-grouped';
 const LS_COLLAPSED = 'walnut-tasks-page-collapsed';
@@ -380,6 +381,8 @@ export function DashboardPage() {
         projects={railProjects}
         allOpenCount={allOpenCount}
         inboxOpenCount={openCountByProject.get('') ?? 0}
+        // In a focus the rail lists only what it shows: the Inbox only when it holds Inbox tasks.
+        showInbox={!focusView || (openCountByProject.get('') ?? 0) > 0 || (focusView.active.scope.projects ?? []).some((p) => !p || p.toLowerCase() === 'inbox')}
         activeKey={activeProject}
         onSelect={setActiveProject}
         onCreateProject={handleCreateProject}
@@ -392,6 +395,8 @@ export function DashboardPage() {
       />
 
       <main className="tp-board">
+        {/* In a focus: its name, what waits outside, and Leave (the list shows only the focus). */}
+        <FocusBanner />
         <div className="tp-toolbar">
           <span className="tp-title">{boardTitle}</span>
           <span className="tp-stats">{stats.todo} open · {stats.done} complete</span>

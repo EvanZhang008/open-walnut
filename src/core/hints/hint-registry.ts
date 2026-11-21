@@ -60,6 +60,8 @@ export interface HintContentInput {
   message?: string;
   /** Main's or a lead's chat: is the user away from it (org/user-away.ts)? Absent elsewhere. */
   away?: { away: boolean; lastSeenAt: number | null } | null;
+  /** Main's or a lead's chat: the focus space the user is in (focus-spaces/active.ts), null = none. Absent elsewhere. */
+  focus?: { name: string; until?: number } | null;
   /** Main's or a lead's Brief: how old, what moved since (sessions/brief-hint.ts). Absent elsewhere. */
   brief?: BriefHintState | null;
   /** Main's or a lead's chat: the user's message was filed as this thread (org/thread-capture.ts). */
@@ -171,6 +173,21 @@ const BUILT_IN: readonly HintSpec[] = [
     },
   },
   {
+    kind: 'user-focus',
+    label: 'User focusing',
+    description: 'Main and the leads hear one line when the user enters a focus space (experiment focus_workspace), and one when he leaves it: while he focuses, only what is about his focus or cannot wait should reach him.',
+    allowed: SCHEDULED,
+    defaults: { enabled: true, triggers: ['session_start', 'on_change', 'after_compaction'], placement: 'after' },
+    // 2026-11-21, the user: a focus workspace where nothing else reaches him; Main still sees all.
+    identity: (i) => (i.focus === undefined ? null : i.focus ? `focus ${i.focus.name}|${i.focus.until ?? ''}` : 'none'),
+    render: (i) => {
+      if (i.focus === undefined) return null;
+      if (i.focus) return { text: userFocusText(i.focus) };
+      // Left: said once, after a focus note.
+      return i.toldHash?.startsWith('focus ') ? { text: USER_FOCUS_ENDED_TEXT } : null;
+    },
+  },
+  {
     kind: 'brief',
     label: 'Brief reminder',
     description: 'Main and the leads: keep the Brief (the letter above their chat) current, written by the node itself with brief_write. Every 3 messages, and when its team moved since it was written.',
@@ -236,6 +253,14 @@ export function userAwayText(lastSeenAt: number | null): string {
   const when = lastSeenAt ? `since ${new Date(lastSeenAt).toISOString().slice(0, 16)}Z` : 'for a while';
   return `the user has been away from this chat ${when}: what needs his decision or review and is on none of his threads goes to his inbox.`;
 }
+
+/** What Main and a lead hear while the user is in a focus space (focus-spaces/active.ts). */
+export function userFocusText(focus: { name: string; until?: number }): string {
+  const until = focus.until ? ` until ${new Date(focus.until).toISOString().slice(11, 16)}Z` : ''
+  return `the user is focusing on "${focus.name}"${until}: his windows show only that and hold everything else back. Bring him only what is about it or cannot wait; the rest keeps for when he leaves.`;
+}
+
+export const USER_FOCUS_ENDED_TEXT = 'the user left his focus space: everything reaches him again as usual.';
 
 export const USER_BACK_TEXT = 'the user is back in this chat: updates go here again, not to his inbox.';
 
@@ -357,7 +382,7 @@ export function hintApplies(hint: EffectiveHint, target: HintTarget): boolean {
 /** Does any enabled hint restrict by role or agent (so the send must read the task)? */
 export function needsTaskForAudience(hints: readonly EffectiveHint[]): boolean {
   // user-away reads the task to know it is Main or a lead (org/user-away.ts).
-  return hints.some((h) => h.enabled && (h.audience.roles.length > 0 || h.audience.agents.length > 0 || h.kind === 'user-away' || h.kind === 'brief' || h.kind === 'threads' || h.kind === 'threads-tidy' || h.kind === 'hand-on' || h.kind === 'team-guidance'));
+  return hints.some((h) => h.enabled && (h.audience.roles.length > 0 || h.audience.agents.length > 0 || h.kind === 'user-away' || h.kind === 'user-focus' || h.kind === 'brief' || h.kind === 'threads' || h.kind === 'threads-tidy' || h.kind === 'hand-on' || h.kind === 'team-guidance'));
 }
 
 export class HintSettingsError extends Error {

@@ -11,11 +11,13 @@
  * Kept under `draft:plugin:<plugin id>:<name>[:<id>]`. Another window's change to the same draft
  * shows when the box mounts again, never while it is on screen (`followElsewhere: false`), since
  * Walnut cannot see whether a plugin's editor has the focus. `clear()` after a send or a save:
- * the draft goes, everywhere.
+ * the draft goes, everywhere. In a focus space where the plugin's App is fresh (focus-spaces/
+ * useFocusApps.ts) its drafts are that space's own: `<name>` reads `ws.<space id>.<name>`.
  */
 import { useDraft } from '@/hooks/useDraft'
 import { draftKey } from '@/utils/drafts'
 import type { PluginUseDraft } from './types'
+import { useFocusKeyPrefix } from '@/focus-spaces/useFocusApps'
 
 const NAME = /^[A-Za-z0-9][\w-]{0,63}$/
 
@@ -23,7 +25,8 @@ export function createPluginUseDraft(pluginId: string): PluginUseDraft {
   return function useDraftOfPlugin(name: string, options?: { id?: string }) {
     if (!NAME.test(name)) throw new Error('walnut.ui.useDraft name must be 1-64 letters, digits, "_" or "-"')
     const id = options?.id
-    const key = id === undefined ? draftKey('plugin', pluginId, name) : draftKey('plugin', pluginId, name, id)
+    const own = `${useFocusKeyPrefix(pluginId)}${name}`
+    const key = id === undefined ? draftKey('plugin', pluginId, own) : draftKey('plugin', pluginId, own, id)
     const draft = useDraft(key, { followElsewhere: false })
     return [draft.text, draft.setText, () => draft.clear()]
   }

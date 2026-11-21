@@ -34,6 +34,33 @@ export interface QuickPerson {
   needs: number
 }
 
+/**
+ * The people list while the user is in a focus space (experiment focus_workspace): the CEO and
+ * the VPs stay (Main always sees all, and a line to a VP is how he drops a thought out), the
+ * tasks inside the focus follow, and the tasks outside it are left out, only counted.
+ * No focus (or the experiment off): the list as it is.
+ */
+export async function focusPeople(people: QuickPerson[]): Promise<{ people: QuickPerson[]; focus?: { name: string; outside: number } }> {
+  const { experimentCache } = await import('../../core/experimental-cache.js')
+  if (!(await (focusFlag ??= experimentCache('focus_workspace')).on())) return { people }
+  const { getActiveFocus } = await import('../../core/focus-spaces/active.js')
+  const active = await getActiveFocus()
+  if (!active) return { people }
+  const [{ taskInScope }, { scopeTaskLookup }] = await Promise.all([
+    import('../../core/focus-spaces/scope.js'),
+    import('../../core/task-manager.js'),
+  ])
+  const lookup = await scopeTaskLookup()
+  const kept: QuickPerson[] = []
+  let outside = 0
+  for (const p of people) {
+    if (p.kind !== 'task' || taskInScope(active.scope, p.id, lookup)) kept.push(p)
+    else outside++
+  }
+  return { people: kept, focus: { name: active.name, outside } }
+}
+let focusFlag: import('../../core/experimental-cache.js').ExperimentCache | undefined
+
 /** Tasks matching the words, best first, open ones before finished ones. */
 const STATE_RANK: Record<string, number> = { needs: 0, read: 1, working: 2, waiting: 3, done: 4 }
 const LINE_CHARS = 140

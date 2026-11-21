@@ -114,6 +114,8 @@ export function planHints(input: {
   message?: string;
   /** Main's or a lead's chat: the user's presence there (org/user-away.ts). */
   away?: { away: boolean; lastSeenAt: number | null } | null;
+  /** Main's or a lead's chat: the focus space the user is in (focus-spaces/active.ts). */
+  focus?: { name: string; until?: number } | null;
   /** Main's or a lead's Brief (sessions/brief-hint.ts). */
   brief?: BriefHintState | null;
   /** A person typed this message into the chat (not a letter's answer): he is in it. */
@@ -138,7 +140,7 @@ export function planHints(input: {
       config: input.config, record: input.record ?? null, ...(request ? { request } : {}), ...(told ? { toldHash: told.hash } : {}),
       // The message's own words, never the cards Walnut adds to them.
       ...(input.message !== undefined ? { message: input.message.split(REFERENCE_CARDS_OPEN)[0] } : {}),
-      ...(away ? { away } : {}), ...(input.brief ? { brief: input.brief } : {}),
+      ...(away ? { away } : {}), ...(input.focus !== undefined ? { focus: input.focus } : {}), ...(input.brief ? { brief: input.brief } : {}),
       ...(input.thread ? { thread: input.thread } : {}),
       ...(input.threadsTidy ? { threadsTidy: input.threadsTidy } : {}),
       ...(input.teamGuidance ? { teamGuidance: input.teamGuidance } : {}),
@@ -224,7 +226,7 @@ export async function writeHintState(
   }
 }
 
-async function targetFor(sessionId: string, record: HintRecord | null | undefined, hints: readonly EffectiveHint[]): Promise<{ target: HintTarget; away: AwayState | null; brief?: BriefHintState | null; threadsTidy?: ThreadsTidyState | null; teamGuidance?: TeamGuidanceState | null; task?: Task }> {
+async function targetFor(sessionId: string, record: HintRecord | null | undefined, hints: readonly EffectiveHint[]): Promise<{ target: HintTarget; away: AwayState | null; focus?: { name: string; until?: number } | null; brief?: BriefHintState | null; threadsTidy?: ThreadsTidyState | null; teamGuidance?: TeamGuidanceState | null; task?: Task }> {
   if (!record?.taskId || !needsTaskForAudience(hints)) return { target: { sessionId }, away: null };
   try {
     const { listTasksByIds } = await import('../task-manager.js');
@@ -239,13 +241,37 @@ async function targetFor(sessionId: string, record: HintRecord | null | undefine
     // Only a task that keeps Threads (Main, a lead, one with Threads on) hears whether the user is in its chat (hint user-away).
     const wantsAway = keepsThreads(task) && hints.some((h) => h.kind === 'user-away' && h.enabled);
     const away = wantsAway ? await import('../org/user-away.js').then((m) => m.userAwayFrom(task)).catch(() => null) : null;
+    const focus = await userFocusFor(target, hints);
     const brief = await briefFor(task, target, hints);
     const threadsTidy = await threadsTidyFor(task, target, hints);
     const teamGuidance = await teamGuidanceOf(task, hints);
-    return { target, away, brief, threadsTidy, teamGuidance, ...(task ? { task } : {}) };
+    return { target, away, ...(focus !== undefined ? { focus } : {}), brief, threadsTidy, teamGuidance, ...(task ? { task } : {}) };
   } catch {
     return { target: { sessionId }, away: null };
   }
+}
+
+/**
+ * Main's and a lead's: the focus space the user is in (null = none), while focus spaces are on
+ * and the hint is; undefined (no line at all) for every other session. Never throws.
+ */
+async function userFocusFor(target: HintTarget, hints: readonly EffectiveHint[]): Promise<{ name: string; until?: number } | null | undefined> {
+  if (target.role !== 'main' && target.role !== 'lead') return undefined;
+  if (!hints.some((h) => h.kind === 'user-focus' && h.enabled)) return undefined;
+  try {
+    const { experimentCache } = await import('../experimental-cache.js');
+    if (!(await focusFlag(experimentCache).on())) return undefined;
+    const { getActiveFocus } = await import('../focus-spaces/active.js');
+    const active = await getActiveFocus();
+    return active ? { name: active.name, ...(active.until !== undefined ? { until: active.until } : {}) } : null;
+  } catch {
+    return undefined;
+  }
+}
+
+let focusFlagCache: import('../experimental-cache.js').ExperimentCache | null = null;
+function focusFlag(make: typeof import('../experimental-cache.js').experimentCache) {
+  return (focusFlagCache ??= make('focus_workspace'));
 }
 
 /** The thread this person's message files under, when the session is an Org node's. Never throws. */
@@ -400,7 +426,7 @@ export async function prepareHintedSend(
   try {
     const config = opts.config !== undefined ? opts.config : await import('../config-manager.js').then((m) => m.getConfig()).catch(() => null);
     const hints = effectiveHints(config);
-    const { target, away, brief, threadsTidy, teamGuidance, task } = await targetFor(sessionId, record, hints);
+    const { target, away, focus, brief, threadsTidy, teamGuidance, task } = await targetFor(sessionId, record, hints);
     // A message composed upstream (the companion's voice hint) keeps those blocks.
     const upstream = opts.upstreamBlocks?.length ? splitHinted(message, opts.upstreamBlocks) : null;
     const words = upstream ? upstream.text : message;
@@ -413,6 +439,7 @@ export async function prepareHintedSend(
     const userAsk = usersWords ? await captureUserAsk(record, task, words, opts) : null;
     const plan = planHints({
       hints, target, record, config, away, brief, threadsTidy, teamGuidance, inChat: opts.inChat ?? opts.sentBy === 'person', message: words,
+      ...(focus !== undefined ? { focus } : {}),
       ...(opts.requested ? { requested: opts.requested } : {}),
       ...(upstream ? { skip: new Set(upstream.kinds) } : {}),
       ...(opts.sentBy ? { sentBy: opts.sentBy } : {}),
@@ -504,9 +531,10 @@ export async function prepareStartHints<T extends StartHintData>(data: T, opts: 
     // A new conversation was told nothing, whatever a pre-seeded record holds.
     const record: HintRecord = { ...(data.taskId ? { taskId: data.taskId } : {}) } as HintRecord;
     const sid = data.preassignedSessionId ?? '';
-    const { target, away, brief, threadsTidy, teamGuidance } = await targetFor(sid, record, hints);
+    const { target, away, focus, brief, threadsTidy, teamGuidance } = await targetFor(sid, record, hints);
     const plan = planHints({
       hints, target, record, config, away, brief, threadsTidy, teamGuidance, skip: carried,
+      ...(focus !== undefined ? { focus } : {}),
       ...(personStart ? { sentBy: 'person' as const, inChat: true } : { sentBy: 'agent' as const }),
       message: parseHinted(data.message).text,
     });

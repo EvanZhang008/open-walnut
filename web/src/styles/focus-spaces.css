@@ -1,11 +1,9 @@
 /* Focus spaces (web/src/focus-spaces/): the rail entry, its popover, and the cover of a chat
    column outside the focus. The popover frame is the status items' (.status-item-popover). */
 
-.sidebar-focus-link[data-active="true"] {
-  color: var(--accent);
-  background: var(--accent-subtle);
-  font-weight: 600;
-}
+/* In a focus: the accent glyph with its centre filled, never the tint of the page you are on. */
+.sidebar-focus-link[data-active="true"] { color: var(--accent); font-weight: 600; }
+.sidebar-focus-link[data-active="true"] .focus-glyph-core { fill: currentColor; }
 .sidebar-focus-link.is-open { color: var(--fg); background: var(--accent-subtle); }
 .sidebar-focus-link .sidebar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -21,47 +19,19 @@
 .focus-panel-error { font-size: 12px; line-height: 16px; color: var(--error); }
 .focus-panel-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
 
-.focus-space-list { display: flex; flex-direction: column; gap: 4px; }
-.focus-space-row { display: flex; align-items: center; gap: 8px; }
-.focus-space-enter {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--fg);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-}
-.focus-space-enter:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--border-strong); }
-.focus-space-enter:disabled { opacity: 0.55; cursor: default; }
-.focus-space-enter:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.focus-space-name { font-size: 13px; font-weight: 500; line-height: 18px; overflow-wrap: anywhere; }
-.focus-space-scope { font-size: 12px; line-height: 16px; color: var(--fg-muted); overflow-wrap: anywhere; }
-.focus-space-picked { flex: 1; min-width: 0; font-size: 13px; line-height: 18px; overflow-wrap: anywhere; }
-
-.focus-length { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
-.focus-length .focus-panel-caption { margin: 0 4px 0 0; }
+/* Layout only: the option rows, ticks and buttons are the card family's (ask-card.css). */
+.focus-options, .focus-ticks, .focus-actions { margin-block: 0; }
+.focus-actions { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.focus-panel-head + .focus-actions { border-top: none; padding-top: 0; }
+.focus-ticks { flex-direction: column; align-items: stretch; flex-wrap: nowrap; }
+.focus-ticks .focus-tick-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding-block: 4px; }
+.focus-ticks .focus-tick-label { overflow-wrap: anywhere; }
+.focus-ticks .focus-tick-detail { font-size: 12px; font-weight: 400; color: var(--fg-muted); overflow-wrap: anywhere; }
+.focus-length { margin-block: 0; flex-wrap: nowrap; }
+.focus-length .org-answer-check { flex: 1 1 0; justify-content: center; }
 
 .focus-form-field { display: flex; flex-direction: column; gap: 4px; }
-.focus-form-projects {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  max-height: 160px;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 4px 0;
-}
-.focus-form-check { display: flex; align-items: center; gap: 8px; font-size: 13px; line-height: 18px; cursor: pointer; }
-.focus-form-check span { overflow-wrap: anywhere; }
+.focus-form-projects { max-height: 172px; overflow-y: auto; overflow-x: hidden; }
 .focus-form-delete { margin-left: auto; }
 
 /* A chat column whose task is outside the focus: covered, never closed or moved, so the
@@ -92,7 +62,9 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 0 12px;
+  min-height: 44px;
+  box-sizing: border-box;
   border-bottom: 1px solid var(--border);
   font-size: 13px;
   line-height: 18px;
@@ -101,3 +73,6 @@
 .focus-banner-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .focus-banner-name { font-weight: 600; color: var(--accent); }
 .focus-banner-detail { color: var(--fg-muted); font-size: 12px; }
+/* A caption sits as close to its list as to its input (the rows bring their own 4 px). */
+.focus-panel-caption + .focus-form-projects { margin-top: -4px; }
+.focus-banner-actions { margin-block: 0; flex: none; }

@@ -9,7 +9,7 @@
  */
 
 /** Every hint kind the registry defines (hint-registry.ts BUILT_IN), in its order. */
-export const BUILT_IN_HINT_KINDS = ['question', 'rich-output', 'voice-reply', 'object-context', 'user-away', 'brief', 'threads', 'threads-tidy', 'hand-on', 'team-guidance'] as const;
+export const BUILT_IN_HINT_KINDS = ['question', 'rich-output', 'voice-reply', 'object-context', 'user-away', 'user-focus', 'brief', 'threads', 'threads-tidy', 'hand-on', 'team-guidance'] as const;
 
 /**
  * Walnut text that rides a message outside the registry (no switch in Settings). `reply-language`

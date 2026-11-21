@@ -12,9 +12,12 @@
  * (another type than `initial`'s, or one `options.accept` refuses) reads as `initial`; `accept` is
  * asked when the stored value changes, so keep it a check of the value's shape.
  * `walnut-plugin validate` warns on a view choice a plugin's web code keeps in plain `useState`.
+ * In a focus space where the plugin's App is fresh (focus-spaces/useFocusApps.ts) its choices are
+ * that space's own, under `ws.<space id>.plugin.<plugin id>.<name>`.
  */
 import { usePageView, usePageViewOf } from '@/utils/view-memory'
 import type { PluginUseView } from './types'
+import { useFocusKeyPrefix } from '@/focus-spaces/useFocusApps'
 
 // No dot: the key is `plugin.<id>.<name>` and a plugin id may hold dots, so a dot here could
 // land on another plugin's key (`acme` + `notes.tab` against `acme.notes` + `tab`).
@@ -27,9 +30,9 @@ function sameKind(initial: unknown, v: unknown): boolean {
 }
 
 export function createPluginUseView(pluginId: string): PluginUseView {
-  const page = `plugin.${pluginId}`
   return function useView<T>(name: string, initial: T | (() => T), options?: { id?: string; accept?: (value: unknown) => boolean }) {
     if (!NAME.test(name)) throw new Error('walnut.ui.useView name must be 1-64 letters, digits, "_" or "-"')
+    const page = `${useFocusKeyPrefix(pluginId)}plugin.${pluginId}`
     const start = typeof initial === 'function' ? (initial as () => T)() : initial
     const accept = (v: unknown): v is T => sameKind(start, v) && (options?.accept ? options.accept(v) : true)
     // One hook either way, so a plugin may pass an id on one render and not on the next.

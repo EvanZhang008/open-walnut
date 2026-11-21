@@ -81,3 +81,17 @@ export function normalizeScope(raw: unknown): FocusScope {
   const tasks = list(r.tasks, SCOPE_MAX_TASKS, false)
   return { ...(projects.length ? { projects } : {}), ...(tasks.length ? { tasks } : {}) }
 }
+
+/** How an app (a plugin with a page) works inside a focus space. */
+export type FocusAppMode = 'inherit' | 'isolated' | 'off'
+
+/**
+ * The mode a plugin's App has in a space: what the person set for it there, else what its
+ * manifest declares (`focusSpaces`): `scoped` starts fresh in each space, `shared` is the same as
+ * Main's, and a plugin that declares nothing is hidden until the person shows it. One that
+ * declares nothing cannot keep a state per space, so showing it reads as Main's.
+ */
+export function focusAppMode(explicit: FocusAppMode | undefined, declared: 'scoped' | 'shared' | undefined): FocusAppMode {
+  if (explicit) return explicit === 'isolated' && declared === undefined ? 'inherit' : explicit
+  return declared === 'scoped' ? 'isolated' : declared === 'shared' ? 'inherit' : 'off'
+}

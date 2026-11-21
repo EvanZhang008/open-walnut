@@ -1581,6 +1581,8 @@ export function validateManifest(raw: unknown, filePath: string): PluginManifest
       : undefined,
     // Only the one value that changes anything survives; `'plugins'` and junk both read as the default.
     ...(obj.settingsIn === 'app' ? { settingsIn: 'app' as const } : {}),
+    // How its App works in a focus space (focus-spaces/apps.ts); junk reads as undeclared.
+    ...(obj.focusSpaces === 'scoped' || obj.focusSpaces === 'shared' ? { focusSpaces: obj.focusSpaces } : {}),
     ...(category ? { category } : {}),
     taskFields,
     // Phases the plugin declares it understands (legacy-phase-sync.ts); junk entries are dropped.
@@ -2099,6 +2101,7 @@ async function loadPlugin(
     configSchema: manifest.configSchema,
     uiHints: manifest.uiHints,
     ...(manifest.settingsIn ? { settingsIn: manifest.settingsIn } : {}),
+    ...(manifest.focusSpaces ? { focusSpaces: manifest.focusSpaces } : {}),
     ...(manifest.category ? { category: manifest.category } : {}),
     ...(manifest.syncAudience === 'self' || manifest.syncAudience === 'shared' ? { syncAudience: manifest.syncAudience } : {}),
     taskFields: manifest.taskFields,

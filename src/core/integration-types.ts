@@ -514,6 +514,8 @@ export interface RegisteredPlugin {
   uiHints?: Record<string, { label?: string; help?: string }>;
   /** Manifest settingsIn: `'app'` when the plugin's own App draws the generated form. */
   settingsIn?: PluginSettingsHome;
+  /** Manifest focusSpaces, when valid: how its App works inside a focus space. */
+  focusSpaces?: 'scoped' | 'shared';
   /** Manifest category: the Apps page group (absent = derived from what it does). */
   category?: PluginCategory;
   /** Manifest syncAudience, when valid: who reads what this plugin syncs. */
@@ -599,6 +601,11 @@ export interface PluginManifest {
    *  that App instead of drawing the form, so a plugin whose page IS its settings has one
    *  home, not two. */
   settingsIn?: PluginSettingsHome;
+  /** How the plugin's App works inside a focus space (experiment focus_workspace): `'scoped'` keeps
+   *  its own state per space (the host keeps its views and drafts per space; its server reads
+   *  `walnut.focus.current()` for the rest), `'shared'` is the same everywhere. Absent: the App is
+   *  hidden inside a space until the person shows it there (then it reads as Main's). */
+  focusSpaces?: 'scoped' | 'shared';
   /** Which Apps page group the plugin is listed under; omitted = derived from what it does.
    *  One of PLUGIN_CATEGORIES (src/core/plugins/plugin-category.ts); junk is dropped. */
   category?: PluginCategory;

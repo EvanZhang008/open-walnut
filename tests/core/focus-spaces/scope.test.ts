@@ -70,3 +70,16 @@ describe('quietSuppresses with a scope', () => {
     expect(quietSuppresses({ active: true, allowPermissions: true, holds: [] }, {})).toBe(true)
   })
 })
+
+describe('focusAppMode: how a plugin App works in a space', () => {
+  it('follows the space\'s own choice, else the manifest; undeclared is hidden until shown, then Main\'s', async () => {
+    const { focusAppMode } = await import('../../../src/core/focus-spaces/scope.js')
+    expect(focusAppMode(undefined, 'scoped')).toBe('isolated')
+    expect(focusAppMode(undefined, 'shared')).toBe('inherit')
+    expect(focusAppMode(undefined, undefined)).toBe('off')
+    expect(focusAppMode('off', 'scoped')).toBe('off')
+    expect(focusAppMode('inherit', 'scoped')).toBe('inherit')
+    // A plugin that keeps no state per space cannot start fresh in one.
+    expect(focusAppMode('isolated', undefined)).toBe('inherit')
+  })
+})
