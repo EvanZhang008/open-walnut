@@ -322,6 +322,21 @@ export function contextEchoed(text: string, prompt: string): boolean {
  */
 const LANGUAGE_RECHECK_MAX_MS = 5000;
 
+/**
+ * After a preview's second hearing stayed English, the speaker is talking
+ * English: previews skip that hearing for a minute (2026-11-20, a 7.8 min mock
+ * interview in English: 78 of its 117 previews were heard twice for nothing).
+ * The final whole-clip text is always checked; a hearing that came back
+ * Chinese ends the pause.
+ */
+const ENGLISH_PREVIEW_PAUSE_MS = 60_000;
+let englishPreviewsUntil = 0;
+
+/** Tests start from a speaker nobody has heard yet. */
+export function _resetLanguageMemoryForTest(): void {
+  englishPreviewsUntil = 0;
+}
+
 /** Engines that run Qwen3-ASR, whose context is the vocabulary prompt. */
 const QWEN_ENGINES = new Set(['qwen', 'mlx']);
 
@@ -363,6 +378,7 @@ export async function transcribeAudio(config: Config, req: SttRequest): Promise<
       result = { ...plain, durationMs: result.durationMs + plain.durationMs };
     } else if (QWEN_ENGINES.has(engine.name) && (!req.language || req.language === 'auto')
       && result.durationMs <= LANGUAGE_RECHECK_MAX_MS && mayBeTranslated(result.text)
+      && !(req.preview && Date.now() < englishPreviewsUntil)
       && (await import('./user-terms.js')).userWritesCjk()) {
       // Qwen3-ASR can write a Chinese speaker's take, or a stretch of it, as an
       // English translation (context-language.ts). Heard again as Chinese it
@@ -372,6 +388,7 @@ export async function transcribeAudio(config: Config, req: SttRequest): Promise<
         req.signal?.throwIfAborted();
         const zh = await engine.transcribe({ ...req, language: 'zh' });
         const chinese = chineseHearingWins(result.text, zh.text);
+        englishPreviewsUntil = chinese ? 0 : req.preview ? Date.now() + ENGLISH_PREVIEW_PAUSE_MS : englishPreviewsUntil;
         log.stt.warn(`Transcription came back (partly) in English for a speaker who writes Chinese; heard as Chinese it ${chinese ? 'came back in Chinese, kept that' : 'stayed English, kept the first'}`);
         result = chinese
           ? { ...zh, durationMs: result.durationMs + zh.durationMs }

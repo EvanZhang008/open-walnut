@@ -38,7 +38,7 @@ vi.mock('../../src/core/stt/engine-mlx.js', async (importOriginal) => ({
   }),
 }))
 
-import { transcribeAudio } from '../../src/core/stt/index.js'
+import { _resetLanguageMemoryForTest, transcribeAudio } from '../../src/core/stt/index.js'
 import { chineseHearingWins, cjkShare, longestEnglishRun, mayBeTranslated, readAsChinese, readAsEnglish, TRANSLATED_RUN_WORDS } from '../../src/core/stt/context-language.js'
 import { _setTitleTermsForTest } from '../../src/core/stt/user-terms.js'
 import { editPairs, termShaped } from '../../src/core/stt/learn-from-sends.js'
@@ -99,6 +99,7 @@ describe('transcribeAudio for a speaker who writes Chinese', () => {
     asChinese = ZH
     slowMs = 0
     plainFails = false
+    _resetLanguageMemoryForTest()
     _setTitleTermsForTest(['Walnut'], Date.now(), true)
   })
 
@@ -123,6 +124,34 @@ describe('transcribeAudio for a speaker who writes Chinese', () => {
     const r = await transcribeAudio(config, { audio: 'AAAA', format: 'wav', prompt: CONTEXT })
     expect(calls).toEqual(['auto', 'zh'])
     expect(r.text).toBe(ZH)
+  })
+
+  it('previews of English speech are heard twice once a minute, never every tick; the final always is', async () => {
+    withContext = EN_REAL
+    asChinese = EN_REAL
+    const preview = { audio: 'AAAA', format: 'wav', prompt: CONTEXT, preview: true }
+    await transcribeAudio(config, preview)
+    await transcribeAudio(config, preview)
+    await transcribeAudio(config, preview)
+    expect(calls).toEqual(['auto', 'zh', 'auto', 'auto'])
+    calls.length = 0
+    await transcribeAudio(config, { audio: 'AAAA', format: 'wav', prompt: CONTEXT })
+    expect(calls).toEqual(['auto', 'zh'])
+    calls.length = 0
+    const later = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000)
+    try {
+      await transcribeAudio(config, preview)
+      expect(calls).toEqual(['auto', 'zh'])
+    } finally {
+      later.mockRestore()
+    }
+  })
+
+  it('a preview heard back as Chinese keeps every next preview checked', async () => {
+    const preview = { audio: 'AAAA', format: 'wav', prompt: CONTEXT, preview: true }
+    await transcribeAudio(config, preview)
+    await transcribeAudio(config, preview)
+    expect(calls).toEqual(['auto', 'zh', 'auto', 'zh'])
   })
 
   it('a long take whose first pass was slow is not heard twice', async () => {
@@ -171,5 +200,15 @@ describe('learned terms are words, never rewritten phrases', () => {
     const heard = '我们这个稍微够一下就好了吧'
     const sent = '我们这个 gor go it has to 一下就好了吧'
     expect(editPairs(heard, sent)).toEqual([])
+  })
+})
+
+describe('which requests are previews', () => {
+  it('the live draft route marks its requests as previews, and no other route does', async () => {
+    const { readFileSync } = await import('node:fs')
+    const src = readFileSync(new URL('../../src/web/routes/stt.ts', import.meta.url), 'utf8')
+    const routes = src.split(/\nsttRouter\.(?=post|get)/).slice(1)
+    const marked = routes.filter((r) => r.includes('preview: true')).map((r) => r.slice(0, r.indexOf(',')))
+    expect(marked).toEqual(["post('/draft'"])
   })
 })

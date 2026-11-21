@@ -218,7 +218,7 @@ sttRouter.post('/draft', express.json({ limit: DRAFT_BODY_LIMIT }), async (req: 
     }
     const config = await getConfig();
     const result = await transcribeAudio(config, {
-      audio, format, language: language || config.stt?.language, signal: gone.signal,
+      audio, format, language: language || config.stt?.language, signal: gone.signal, preview: true,
     });
     res.json({ text: result.text, durationMs: result.durationMs });
   } catch (err) {

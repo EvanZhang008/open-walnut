@@ -15,6 +15,8 @@ export interface SttRequest {
    * audio to the model and while waiting on it; one-shot engines ignore it.
    */
   signal?: AbortSignal;
+  /** A live preview the final whole-clip text replaces: it may skip a second hearing. */
+  preview?: boolean;
 }
 
 export interface SttResult {
