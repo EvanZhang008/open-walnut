@@ -143,8 +143,8 @@ describe('the 2026-11-21 VP: a withdrawn letter, the same thread asked again, hi
   it('the task\'s decision letter waits on him on its thread: 1 on every node above, in Needs you', async () => {
     const sent = await op('human_inbox_send', {
       subject: 'Wi-Fi sign-in button: All devices?', type: 'action_required',
-      markdown: 'Done, not shipped: a browser on the same Wi-Fi can sign in without a tunnel. Put the button here?',
-      actions: [{ id: 'ship', label: 'Put it here, ship', recommended: true }, { id: 'tunnel', label: 'Tunnel tab instead' }, { id: 'hold', label: 'Not yet' }],
+      markdown: 'Done, not shipped: a browser on the same Wi-Fi can sign in without a tunnel. Ship its sign-in button under All devices in Phones & Cloud?',
+      actions: [{ id: 'ship', label: 'Ship it under All devices', recommended: true }, { id: 'tunnel', label: 'Show it on the Tunnel tab instead' }, { id: 'hold', label: 'Keep it unshipped for now' }],
       user_kind: 'user_own', user_kind_why: 'It places a button on his own settings page',
     }, ids.ownerSid)
     const letter = sent.letterId as string

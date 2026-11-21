@@ -171,14 +171,14 @@ describe('an ask to do what another team reported on (2026-11-18, the switch bac
     for (const t of await listTasks()) await updateTaskRaw(t.id, { phase: 'COMPLETE' } as never, { source: 'test' })
     lead = await making('Ticket triage lead (2)', 'Platform Team')
     alarm = await making('Alarm: traffic moved off zone one - switch back', 'teammate-import',
-      ['ticket:ALM-2201', 'ticket:https://tickets.example.com/EVT-2202', 'ticket:https://tickets.example.com/ALM-2203'])
+      ['ticket:TKT-2201', 'ticket:https://tickets.example.com/TKT-2202', 'ticket:https://tickets.example.com/TKT-2203'])
   })
 
   it("the letter is held until the asker reads the other team's latest word; with a reason it goes", async () => {
     await reported(alarm.id, { state: 'working', now: 'The automatic switch back is on by default and is in its 15-minute wait window' })
     await settle()
     expect((await getTask(alarm.id)).user_status?.now).toContain('automatic switch back')
-    const body = { type: 'action_required', subject: 'The zone has recovered: you need to run the switch back by hand', markdown: 'Wait for event EVT-2202 to end, then run the steps; the alarm is ALM-2203.', actions: [{ id: 'ok', label: 'OK' }], user_kind: 'irreversible', user_kind_why: 'A production write that is hard to undo' }
+    const body = { type: 'action_required', subject: 'The zone has recovered: you need to run the switch back by hand', markdown: 'Wait for ticket TKT-2202 to close, then follow its steps; the alarm ticket is TKT-2203.', actions: [{ id: 'ok', label: 'I run the switch back by hand' }], user_kind: 'irreversible', user_kind_why: 'A production write that is hard to undo' }
     const held = await call('POST', '/api/v1/human-inbox', body, lead.sid)
     expect(held.status).toBe(409)
     const why = JSON.stringify(await held.json())
