@@ -1,6 +1,6 @@
 /**
  * Pairing a new phone on a Phones & Cloud tab (DeviceList.tsx): the name, and Pair. Each way's
- * own tab pairs through its own address ("Pair a phone this way"); All devices pairs on this
+ * own tab pairs through its own address ("Pair the Walnut app this way"); All devices pairs on this
  * Wi-Fi only when no way tab can (device-scope.ts pairTargetForScope).
  *
  * A phone paired once works over every way it can reach; the QR only picks the address it
@@ -19,9 +19,9 @@ import type { DeviceScope } from './device-scope';
 
 /** What a tab's Pair row says: where its code points the phone. */
 const PAIR_HELP: Record<PairTargetKind, string> = {
-  cloud: 'The QR code points the phone at your companion, so it works away from home and while this Mac sleeps. At home it also reaches this Mac over Wi-Fi.',
+  cloud: 'The QR points the phone at your companion: it works away from home and while this Mac sleeps.',
   tailnet: "The QR code points the phone at this Mac's Tailscale address: it works wherever both run Tailscale, so the phone needs Tailscale on to connect the first time.",
-  lan: 'The QR code points the phone at this Mac on this Wi-Fi: it works while the phone is on the same Wi-Fi. For away from home, set up the cloud companion or Tailscale.',
+  lan: "The app tries this Mac's Wi-Fi address first; the same pairing works over the companion or Tailscale too.",
 };
 
 /** On the companion's own console its address is this server's. */
@@ -30,7 +30,6 @@ const PAIR_HELP_HERE = 'The QR code points the phone at this server, so it works
 /** Why a tab cannot pair its way right now (Wi-Fi always can: the QR then carries only the token). */
 const PAIR_UNOFFERED: Partial<Record<PairTargetKind, string>> = {
   cloud: "The companion's address isn't available right now, so a code can't point at it yet. Phones paired with this Mac can still use it once it is back.",
-  tailnet: "Set up Tailscale on this Mac first (step 1 above); then the code can point at this Mac's Tailscale address.",
   lan: "No address for this Mac can be detected, so the QR carries only the token and you type the server address in the app.",
 };
 
@@ -69,18 +68,21 @@ export function PairPhoneGroup({ scope, fixedTarget, targets, listState, busy, o
   // Pair (the button, or Enter in the name) waits for a name still being dictated.
   const addGate = useSendAfterDictation([nameMic], () => void addDevice());
 
+  // Tailscale not set up yet: its steps above say what to do, so no pairing box waits here.
+  if (fixedTarget === 'tailnet' && !hasTarget && listState === 'ready') return null;
   return (
     <SettingsGroup
-      heading={fixedTarget === 'lan' ? 'Pair a phone on this Wi-Fi' : scope === 'all' ? 'Pair a phone' : 'Pair a phone this way'}
+      heading={fixedTarget === 'lan' ? 'Walnut app: pair a phone over Wi-Fi' : 'Walnut app: pair a new phone'}
       id={`way-pair-${scope}`}
       data-testid={`way-pair-${scope}`}
     >
       {!hasTarget && listState === 'ready' && <SettingsNotice kind="info">{PAIR_UNOFFERED[fixedTarget]}</SettingsNotice>}
-      <SettingsRow
+      {/* A way that cannot pair yet shows only what is missing, not a form that cannot be used. */}
+      {(offered || listState !== 'ready') && <SettingsRow
         label="Device name"
         htmlFor="devices-new-name"
         wide
-        help={scope === 'all' && fixedTarget === 'cloud' ? PAIR_HELP_HERE : PAIR_HELP[fixedTarget]}
+        help={`Name the phone, then get its QR code. ${scope === 'all' && fixedTarget === 'cloud' ? PAIR_HELP_HERE : PAIR_HELP[fixedTarget]}`}
         error={nameError ?? undefined}
         control={
           <span className="settings-addons-inline devices-add-row">
@@ -90,7 +92,7 @@ export function PairPhoneGroup({ scope, fixedTarget, targets, listState, busy, o
               data-draft-key={nameDraft.key ?? undefined}
               className="settings-input settings-input--short"
               value={newName}
-              placeholder="My iPhone"
+              placeholder="Name it, e.g. My iPhone"
               setText={(text) => { setNewName(text); setNameError(null); }}
               micRef={nameMic}
               onEnter={addGate.send}
@@ -105,11 +107,11 @@ export function PairPhoneGroup({ scope, fixedTarget, targets, listState, busy, o
               data-testid="devices-pair-new"
               {...dictationWaitProps(addGate)}
             >
-              Pair phone
+              Get QR for a new phone
             </SettingsButton>
           </span>
         }
-      />
+      />}
     </SettingsGroup>
   );
 }

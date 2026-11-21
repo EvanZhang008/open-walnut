@@ -13,6 +13,7 @@
 import { devices, test, expect, type Page, type Route } from '@playwright/test'
 import { backToApps, openApps, openPluginDetail } from './apps-store-helpers'
 import { dropFakes } from './route-teardown'
+import { backToDevices, openWay } from './devices-ways-helpers'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(120_000)
@@ -398,10 +399,14 @@ test('C54 C79: removing a phone and showing a new QR are two-step, and the butto
   await expect(row.getByTestId('devices-remove-confirm')).toHaveCount(0)
   await expect(remove).toBeFocused()
   expect(deletes).toEqual([])
+  // All devices on this Mac offers no new QR (which way would it carry?): the phone's way tab does.
+  await expect(row.getByTestId('devices-show-qr')).toHaveCount(0)
 
-  // Show QR (a new token for the same phone): a dialog says what a new code does
-  // and asks; Cancel leaves everything as it was.
-  const showQr = row.getByTestId('devices-show-qr')
+  // Show QR on the Same Wi-Fi tab (a new token for the same phone): a dialog says what a new
+  // code does and asks; Cancel leaves everything as it was.
+  const wifi = await openWay(page, 'wifi')
+  const wifiRow = wifi.locator('.devices-row', { hasText: 'Test phone' })
+  const showQr = wifiRow.getByTestId('devices-show-qr')
   const dlg = page.locator('.devices-qr-dialog')
   await showQr.click()
   await expect(dlg.getByTestId('devices-show-qr-warning')).toContainText('This replaces the code Test phone signed in with')
@@ -412,7 +417,7 @@ test('C54 C79: removing a phone and showing a new QR are two-step, and the butto
   await showQr.click()
   await dlg.getByTestId('devices-show-qr-confirm').click()
   await expect.poll(() => mints.length).toBe(1)
-  expect(mints[0]).toMatchObject({ name: 'Test phone', replace: true })
+  expect(mints[0]).toMatchObject({ name: 'Test phone', target: 'lan', replace: true })
   const qr = dlg.locator('img')
   await expect(qr).toBeVisible()
   await expect(qr).toBeInViewport()
@@ -423,12 +428,16 @@ test('C54 C79: removing a phone and showing a new QR are two-step, and the butto
   await dlg.getByTestId('devices-qr-done').click()
   await expect(dlg).toHaveCount(0)
 
-  await remove.click()
-  await row.getByTestId('devices-remove-confirm').click()
+  // Removed from the way's tab: its list is empty, its pairing right above it.
+  await wifiRow.getByTestId('devices-remove').click()
+  await wifiRow.getByTestId('devices-remove-confirm').click()
   await expect.poll(() => deletes).toEqual(['DELETE /api/devices/Test%20phone'])
-  // Wi-Fi only (no companion, no Tailscale): the empty list points at the pairing on this tab.
-  await expect(page.locator('#devices-phones')).toContainText('No phone has the Walnut app signed in yet. Pair one below.')
-  await expect(page.getByTestId('way-pair-all')).toBeVisible()
+  await expect(wifi.getByTestId('way-devices-wifi')).toContainText('No phone is paired with this Mac yet.')
+  await expect(wifi.getByTestId('way-pair-wifi')).toBeVisible()
+  // All devices pairs nothing on this Mac: its empty list points at the way tabs.
+  const all = await backToDevices(page)
+  await expect(all).toContainText('No phone has the Walnut app signed in yet. Pair one on the tab of the way it will use.')
+  await expect(all.getByTestId('way-pair-all')).toHaveCount(0)
 })
 
 test('Remote Hosts: Add host lives in the header, the empty state says so', async ({ page }) => {

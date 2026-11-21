@@ -8,10 +8,10 @@
  * address the QR carries is never loopback.
  */
 import { test, expect } from '@playwright/test'
-import { backToDevices, qrDialog } from './devices-ways-helpers'
+import { backToDevices, openWay, qrDialog } from './devices-ways-helpers'
 
 test.describe('Settings → Phones & Cloud pairing', () => {
-  test('All devices tab is reachable and its QR never points at loopback', async ({ page }) => {
+  test('the Same Wi-Fi tab is reachable and its QR never points at loopback', async ({ page }) => {
     await page.goto('/')
     await page.waitForLoadState('domcontentloaded')
 
@@ -20,24 +20,27 @@ test.describe('Settings → Phones & Cloud pairing', () => {
     await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
 
     // The nav entry the user remembered must exist; clicking it opens Phones &
-    // Cloud. Its All devices tab holds the phones and, with no companion and no
-    // Tailscale address (the fixture server), the pairing on this Wi-Fi.
+    // Cloud. Its All devices tab holds the phones and pairs nothing on this Mac;
+    // the Same Wi-Fi tab pairs on this Wi-Fi.
     const devicesNav = page.getByTestId('settings-nav-devices')
     await expect(devicesNav).toHaveCount(1)
     await expect(devicesNav).toContainText('Phones & Cloud')
     await devicesNav.click()
     await expect(devicesNav).toHaveAttribute('aria-current', 'page')
 
-    const section = await backToDevices(page)
+    const all = await backToDevices(page)
     await expect(page.getByTestId('pc-tab-devices-phones')).toHaveAttribute('aria-current', 'page')
     await expect(devicesNav).toHaveAttribute('aria-current', 'page')
-    const pairGroup = section.getByTestId('way-pair-all')
-    await expect(pairGroup).toContainText('Pair a phone on this Wi-Fi')
+    await expect(all.getByTestId('way-pair-all')).toHaveCount(0)
+    const section = await openWay(page, 'wifi')
+    await expect(page.getByTestId('pc-tab-devices-wifi')).toHaveAttribute('aria-current', 'page')
+    const pairGroup = section.getByTestId('way-pair-wifi')
+    await expect(pairGroup).toContainText('Walnut app: pair a phone over Wi-Fi')
 
     // Pair a device through the UI exactly as a user would.
     const name = `pw-iphone-${Date.now()}`
     await pairGroup.locator('#devices-new-name').fill(name) // N25: the placeholder is an example, not the label
-    const pairBtn = pairGroup.getByRole('button', { name: 'Pair phone' })
+    const pairBtn = pairGroup.getByRole('button', { name: 'Get QR for a new phone' })
     await expect(pairBtn).toBeEnabled()
     await pairBtn.click()
 

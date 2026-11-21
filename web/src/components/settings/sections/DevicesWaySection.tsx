@@ -1,6 +1,6 @@
 /**
- * Settings > Phones & Cloud > Tailscale, and > the tunnel's tab: one way of reaching
- * Walnut away from home, as a tab (PhonesCloudTabs.tsx). The Cloud companion tab
+ * Settings > Phones & Cloud > Tailscale, > the tunnel's tab and > Same Wi-Fi: one way of
+ * reaching Walnut, as a tab (PhonesCloudTabs.tsx). The Cloud companion tab
  * is CloudSection itself, and the Devices tab DevicesSection.
  * Tailscale's steps need the device list (which phones are on the tailnet, and
  * whether this Mac has a tailnet address to pair with). Under the way's own
@@ -16,11 +16,11 @@ import { WAY_PANES } from '../settings-way-panes';
 import { DeviceList } from './cloud/DeviceList';
 import '@/styles/settings-sections-addons.css';
 
-type SubWay = 'tailscale' | 'browser';
+type SubWay = 'tailscale' | 'browser' | 'wifi';
 
 function TailscaleSteps() {
   const { devices, cloudDevices, targets, listState, refresh } = useDevicesData({ replica: false });
-  // Step 3: this tab's own Pair a phone this way, below the steps.
+  // Step 3: this tab's own Pair the Walnut app this way, below the steps.
   const chooseTailnet = () => {
     const field = document.getElementById('devices-new-name');
     field?.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -48,7 +48,8 @@ export function DevicesWaySection({ way }: { way: SubWay }) {
         </SettingsGroup>
       ) : (
         <div className="devices-way-panel" id={`devices-way-panel-${way}`} data-testid={`devices-way-panel-${way}`}>
-          {way === 'tailscale' ? <TailscaleSteps /> : <BrowserAccessGroup />}
+          {/* Same Wi-Fi has nothing to set up: its list pairs a phone and signs a browser in. */}
+          {way === 'tailscale' ? <TailscaleSteps /> : way === 'browser' ? <BrowserAccessGroup heading="Web browser: sign in" /> : null}
           <DeviceList scope={way} />
         </div>
       )}

@@ -263,8 +263,8 @@ test('C74: Phones & Cloud claims nothing before the devices list answers', async
   const gate = new Promise<void>((r) => { release = r })
   await page.route((url) => url.pathname === '/api/devices', async (route) => {
     await gate
-    // Pin what depends on the machine's Tailscale: a tailnet address moves pairing off All
-    // devices (to the Tailscale tab) and a missing Tailscale adds a hint line. Both appear
+    // Pin what depends on the machine's Tailscale: a tailnet address lets the Tailscale tab
+    // pair and a missing Tailscale adds a hint line. Both appear
     // only once the list answers, by design; a deep link holds its target through them
     // (settings-panes.spec.ts C74).
     const res = await route.fetch()
@@ -286,16 +286,21 @@ test('C74: Phones & Cloud claims nothing before the devices list answers', async
   // The Devices tab, opened while the list is out, claims nothing either.
   const devices = await backToDevices(page)
   await expect(devices).toContainText('Loading paired phones...')
-  // No "no address" notice, no "no phone" claim and no pairing while the list is unknown
-  // (All devices pairs only once the list says no way tab can).
+  // No "no address" notice, no "no phone" claim and no pairing (All devices on this Mac
+  // never pairs: each way's tab does).
   await expect(devices).not.toContainText('No address for this machine')
   await expect(devices).not.toContainText('No phone has the Walnut app signed in yet.')
   await expect(devices.getByTestId('way-pair-all')).toHaveCount(0)
   release()
   await expect(devices).not.toContainText('Loading paired phones...', { timeout: 20_000 })
   // The Cloud companion it once guarded is its own tab now, so nothing deep-linked sits
-  // below this list; the pane's own row link (#devices-new-name) is held by holdAnchor while
-  // content above it grows (settings-panes.spec.ts C74). With no companion and no Tailscale
-  // address, the Wi-Fi pairing shows once the list has answered.
-  await expect(devices.getByTestId('way-pair-all')).toBeVisible()
+  // below this list (settings-panes.spec.ts C74 holds a deep link through content that grows).
+  // Once the list has answered, All devices still pairs nothing: the Same Wi-Fi tab does.
+  await expect(devices).not.toContainText('No phone has the Walnut app signed in yet. Pair one below.')
+  await expect(devices.getByTestId('way-pair-all')).toHaveCount(0)
+  await expect(devices.getByTestId('devices-show-qr')).toHaveCount(0)
+  const wifi = await openWay(page, 'wifi')
+  await expect(wifi.getByTestId('way-pair-wifi')).toBeVisible()
+  // A list read still in flight through the fake as the test ends must not fail it.
+  await page.unrouteAll({ behavior: 'ignoreErrors' })
 })

@@ -1,8 +1,8 @@
 /**
  * Settings › Phones & Cloud, top of the pane: how the phone reaches Walnut right
- * now, and the three ways it can reach it away from home (cloud companion,
- * Tailscale, a tunnel that gives it an HTTPS address), each with what it is, when to use
- * it, whether it is on, and how to turn it on. Pure, so every state is
+ * now, and the four ways a device can reach it: three from away (cloud companion,
+ * Tailscale, a tunnel that gives it an HTTPS address) and this Mac's own address on the
+ * same Wi-Fi, each with what it is, when to use it, whether it is on, and how to turn it on. Pure, so every state is
  * unit-tested (tests/web/devices-ways-model.test.ts) apart from the React pane.
  *
  * The server knows which credential a phone last used (this Mac's own, or the
@@ -14,7 +14,7 @@ import type { ExposeStatus } from './browser-access-status';
 import type { PairTargetKind } from './usePairDevice';
 import { TUNNEL_TITLE, tunnelSubtitle, type TunnelName } from './tunnel-name';
 
-export type WayId = 'cloud' | 'tailscale' | 'browser';
+export type WayId = 'cloud' | 'tailscale' | 'browser' | 'wifi';
 export type WayDot = 'on' | 'off' | 'warn';
 
 /** One credential of a phone: this Mac's (`lan`) or the companion's (`cloud`). */
@@ -56,7 +56,6 @@ export interface Way {
   id: WayId;
   title: string;
   what: string;
-  useWhen: string;
   dot: WayDot;
   /** Short state word on the card's corner. */
   tag: string;
@@ -86,7 +85,6 @@ function cloudWay(i: WaysInput, inUse: boolean): Way {
     id: 'cloud' as const,
     title: 'Cloud companion',
     what: 'A small server of yours in the cloud. Your phone talks to it, and it talks to this Mac.',
-    useWhen: 'You want Walnut on the go, on any network, even while this Mac sleeps.',
     inUse,
   };
   if (i.cloudError) {
@@ -117,7 +115,6 @@ function tailscaleWayNow(i: WaysInput): Way {
     id: 'tailscale' as const,
     title: 'Tailscale',
     what: 'A private network between this Mac and your phone. The phone talks to this Mac directly.',
-    useWhen: 'You want a direct link from anywhere; this Mac must be awake.',
     inUse: false,
   };
   const ts = i.tailscale;
@@ -144,7 +141,6 @@ function browserWay(i: WaysInput): Way {
     what: i.linkName === null
       ? 'An HTTPS address that opens this Walnut in any browser, from anywhere, after you sign in.'
       : tunnelSubtitle(i.linkName ?? { title: TUNNEL_TITLE, plugin: null }),
-    useWhen: 'You are on a computer or phone without the Walnut app.',
     inUse: false,
   };
   const s = i.expose;
@@ -170,15 +166,34 @@ function browserWay(i: WaysInput): Way {
   }
 }
 
+/**
+ * This Mac on the same Wi-Fi: its own address on the network, nothing to set up. A phone
+ * paired here, or a browser signed in with a code, opens Walnut straight from this Mac
+ * (plain http, so only on a network the user trusts).
+ */
+function wifiWay(i: WaysInput): Way {
+  const lan = i.targets.find((t) => t.kind === 'lan');
+  const base = {
+    id: 'wifi' as const,
+    title: 'Same Wi-Fi',
+    what: "This Mac's own address on your home network. A phone or computer on the same Wi-Fi opens Walnut straight from this Mac.",
+    inUse: false,
+    action: { label: 'Settings', primary: false },
+  };
+  if (i.listState === 'loading') return { ...base, dot: 'off', tag: '', status: 'Checking...' };
+  if (lan) return { ...base, dot: 'on', tag: 'On', status: `This Mac is at ${host(lan.origin)} on this network.` };
+  return { ...base, dot: 'warn', tag: 'No address', status: "This Mac's address on the network can't be detected right now." };
+}
+
 function nowLine(i: WaysInput, cloud: Way, tailscale: Way): NowLine {
   if (i.listState === 'loading') return { tone: 'none', title: 'Checking how your phone reaches Walnut...', detail: '' };
   if (i.listState === 'failed') return { tone: 'warn', title: "Couldn't load your phones", detail: 'The list of paired phones did not load; reopen this page to try again.' };
   if (i.phoneUses.length === 0) {
-    // Pairing lives in each way's tab; All devices pairs on Wi-Fi while there is no companion (device-scope.ts).
+    // Pairing lives in each way's tab (device-scope.ts): the companion's when there is one, else Wi-Fi's.
     const awayTab = i.targets.some((t) => t.kind === 'cloud');
     return {
       tone: 'none', title: 'No phone is paired yet',
-      detail: awayTab ? 'Pair one on the Cloud companion tab: scan its QR code with the Walnut app.' : 'Pair one below: scan the QR code with the Walnut app.',
+      detail: awayTab ? 'Pair one on the Cloud companion tab: scan its QR code with the Walnut app.' : 'Pair one on the Same Wi-Fi tab: scan its QR code with the Walnut app.',
     };
   }
   // The companion's half of the list is missing (it did not answer, or it is shown
@@ -224,26 +239,26 @@ export function deriveWays(i: WaysInput): { now: NowLine; ways: Way[] } {
   const last = latestUse(i.phoneUses);
   const cloud = cloudWay(i, last?.via === 'cloud' && !i.cloudError);
   const tailscale = tailscaleWay(i);
-  return { now: nowLine(i, cloud, tailscale), ways: [cloud, tailscale, browserWay(i)] };
+  return { now: nowLine(i, cloud, tailscale), ways: [cloud, tailscale, browserWay(i), wifiWay(i)] };
 }
 
-/** The Devices tab's own two lines, in the shape of a way's (what it is, when to use it). */
+/** The Devices tab's own line, in the shape of a way's (what it is; when to use each tab is its hint, PhonesCloudTabs TAB_HINT). */
 export const DEVICES_INTRO = {
-  what: 'Every phone, browser and Mac that can open Walnut, each with the ways it uses. Each way\'s own tab lists only the devices that use it.',
-  useWhen: 'You look for a phone, a browser or the Walnut extension, whichever way it uses.',
+  what: 'Every phone, browser and Walnut extension that can open Walnut (and other Macs, when there are any): remove a phone or sign a browser out here.',
 } as const;
 
 /**
  * Which tab Phones & Cloud opens on: the way the phone last came in through, else
  * a way for the phone that is on, else a companion that is set up but not answering
  * (its tab says so), else Devices (nothing set up for away: the phone reaches this
- * Mac on Wi-Fi, or none is paired yet). Null while the list loads. The tunnel
- * is for browsers, not the phone, so it is never the landing.
+ * Mac on Wi-Fi, or none is paired yet; its list links each way's pairing). Null while the list loads. The tunnel
+ * is for browsers, not the phone, so it is never the landing; nor is Same Wi-Fi, which is
+ * on whenever this Mac has an address and says nothing about how the phone gets in from away.
  */
 export function landingWay(i: Pick<WaysInput, 'listState' | 'cloudError'>, ways: readonly Way[]): WayId | 'devices' | null {
   if (i.listState === 'loading') return null;
   if (i.listState === 'failed') return 'devices';
-  const phoneWays = ways.filter((w) => w.id !== 'browser');
+  const phoneWays = ways.filter((w) => w.id !== 'browser' && w.id !== 'wifi');
   const pick = phoneWays.find((w) => w.inUse) ?? phoneWays.find((w) => w.dot === 'on');
   if (pick) return pick.id;
   return i.cloudError ? 'cloud' : 'devices';

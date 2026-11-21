@@ -5,7 +5,7 @@
  *
  *   1. Tailscale on this Mac   install (the Mac App Store, or Homebrew), open and sign in
  *   2. Tailscale on your phone the App Store QR, until a phone peer is online
- *   3. Pair the phone          already paired, or pair it below (this tab's Pair a phone this way)
+ *   3. Use it on your phone    already paired, or pair it below (this tab's Pair the Walnut app this way)
  *
  * The state comes from GET /api/devices/tailscale, polled every 5s while step 1
  * or 2 is open and every 60s once both are done, never while the tab is
@@ -209,7 +209,9 @@ export function RemoteAccessCard({ devices, tailnetOffered, onChooseTailnet, onT
     switch (mac.kind) {
       case 'checking': return `Checking Tailscale on ${machine}...`;
       case 'unknown': return `Couldn't check Tailscale on ${machine}; trying again.`;
-      case 'not-installed': return mac.macOS ? 'Get Tailscale from the App Store, then come back here.' : `Install Tailscale on ${machine}.`;
+      case 'not-installed': return mac.macOS
+        ? (mac.canBrew ? 'Install it either way (App Store or Homebrew), then come back here.' : 'Get Tailscale from the App Store, then come back here.')
+        : `Install Tailscale on ${machine}.`;
       // The cask is a .pkg: Homebrew's sudo shows the Touch ID sheet where sudo is set up for it.
       case 'installing': return 'Installing with Homebrew... If macOS asks for Touch ID, approve it.';
       case 'not-running': return mac.macOS
@@ -258,9 +260,12 @@ export function RemoteAccessCard({ devices, tailnetOffered, onChooseTailnet, onT
 
   const pairHelp = pair.paired
     ? pair.dot === 'done'
-      ? 'Already paired: open Walnut on the phone once and it learns the Tailscale route by itself.'
-      : 'Already paired: once Tailscale runs on this Mac and the phone, the phone learns the route by itself.'
-    : 'Pair the phone below, with a code that points at the Tailscale address.';
+      ? 'A phone already paired: open Walnut on it once and it learns the Tailscale route by itself. A new phone: pair it below.'
+      : 'A phone already paired: once Tailscale runs on this Mac and the phone, it learns the route by itself. A new phone pairs here once Tailscale runs on this Mac.'
+    // No pairing box shows until Tailscale runs on this Mac (DeviceList hides it).
+    : mac.dot === 'done'
+      ? 'Pair the phone below, with a code that points at the Tailscale address.'
+      : 'Once Tailscale runs on this Mac, pair the phone here.';
 
   return (
     <SettingsGroup heading={heading} className="remote-access-card" data-testid="remote-access-card">
@@ -325,7 +330,7 @@ export function RemoteAccessCard({ devices, tailnetOffered, onChooseTailnet, onT
         className={`remote-access-step${pair.canChooseTailnet ? ' remote-access-step--choice' : ''}`}
         data-step="pair"
         data-dot={pair.dot}
-        label={<StepTitle n={3} dot={pair.dot} title="Pair the phone" />}
+        label={<StepTitle n={3} dot={pair.dot} title="Pair or use your phone" />}
         help={pairHelp}
         // The whole row picks the address; the button is its keyboard and screen-reader handle.
         onClick={pair.canChooseTailnet ? onChooseTailnet : undefined}

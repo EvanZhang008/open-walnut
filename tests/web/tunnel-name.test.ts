@@ -39,7 +39,7 @@ describe('tunnelName', () => {
   })
 
   it('the line under it says which plugin added it, and never "browser link"', () => {
-    expect(tunnelSubtitle({ title: 'Acme Tunnel', plugin: 'Acme Tunnel' })).toMatch(/^Added by the Acme Tunnel plugin/)
+    expect(tunnelSubtitle({ title: 'Acme Tunnel', plugin: 'Acme Tunnel' })).toMatch(/\(from the Acme Tunnel plugin\)\.$/)
     expect(tunnelSubtitle({ title: TUNNEL_TITLE, plugin: null })).not.toMatch(/plugin/)
     for (const name of [{ title: 'Acme Tunnel', plugin: 'Acme Tunnel' }, { title: TUNNEL_TITLE, plugin: null }]) {
       expect(tunnelSubtitle(name)).not.toMatch(/browser link/i)

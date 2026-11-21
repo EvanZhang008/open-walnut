@@ -8,7 +8,7 @@ import { devices, test, expect, type Page, type Request } from '@playwright/test
 import { openApps } from './apps-store-helpers'
 import { routeCosts } from './usage-costs-fixture'
 import { cssColorToRgba, withCssColor } from './css-color'
-import { backToDevices } from './devices-ways-helpers'
+import { openWay } from './devices-ways-helpers'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(120_000)
@@ -232,9 +232,10 @@ test('F10 F24: a paired phone is a plain row with a neutral Show QR and a human 
   }))
   await openSettings(page)
   await clickNav(page, 'devices')
-  // The phone rows are on the All devices tab of Phones & Cloud.
-  await backToDevices(page)
-  const row = page.locator('.devices-row[data-device-name="Test phone"]')
+  // A phone row with its Show QR: the Same Wi-Fi tab of Phones & Cloud (All devices on this
+  // Mac offers no new QR).
+  const wifi = await openWay(page, 'wifi')
+  const row = wifi.locator('.devices-row[data-device-name="Test phone"]')
   await expect(row).toBeVisible()
   await expect(row).toContainText('iPhone, iOS 26.1')
   await expect(row).not.toContainText('iPhone18,2')

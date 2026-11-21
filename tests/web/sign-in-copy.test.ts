@@ -10,9 +10,9 @@ import {
 } from '../../web/src/components/common/sign-in-copy'
 
 const STEP1 = "On your computer, open Walnut and go to Settings > Phones & Cloud, then the tunnel's tab."
-const STEP2_TOUCH = 'On this phone, open the link shown under Open on your phone.'
-const STEP2_DESK = 'Open the link shown under Open on your phone in this browser, or paste it below.'
-const STEP2_HOME = 'Paste the link shown under Open on your phone into the field above. Opening the link opens Safari, not this app.'
+const STEP2_TOUCH = 'On this phone, scan the QR code shown under On a phone, or open the sign-in link.'
+const STEP2_DESK = 'Open the sign-in link in this browser, or paste it below.'
+const STEP2_HOME = 'Paste the sign-in link (Copy sign-in link copies it) into the field above. Opening the link opens Safari, not this app.'
 const TAGLINE = 'Your tasks, AI sessions and notes, from the computer Walnut runs on.'
 const REVOKED_PHONE = 'Removed on your computer, or its sign-in ended. Sign in again with a new link.'
 const REVOKED_DESK = REVOKED_PHONE

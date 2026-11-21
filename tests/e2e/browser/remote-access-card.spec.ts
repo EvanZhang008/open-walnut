@@ -119,7 +119,7 @@ test.describe('Settings → Phones & Cloud: Reach Walnut from anywhere', () => {
     const mac = step(card, 'mac')
     await expect(mac).toHaveAttribute('data-dot', 'action')
     await expect(mac).toContainText('1. Tailscale on this Mac')
-    await expect(mac).toContainText('Get Tailscale from the App Store, then come back here.')
+    await expect(mac).toContainText('Install it either way (App Store or Homebrew), then come back here.')
     const install = card.getByTestId('remote-access-install')
     await expect(install).toHaveText('Install with Homebrew')
     // The password-free install is the primary: the Mac App Store, not a .pkg or Homebrew.
@@ -131,12 +131,9 @@ test.describe('Settings → Phones & Cloud: Reach Walnut from anywhere', () => {
     await expect(step(card, 'pair')).toHaveAttribute('data-dot', 'pending')
     // The App Store QR waits until the Mac is on the tailnet.
     await expect(card.getByTestId('remote-access-stores')).toHaveCount(0)
-    // No Tailscale address yet: the tab's own pairing says why it cannot pair, and its button stays off.
-    const pairGroup = section.getByTestId('way-pair-tailscale')
-    const unoffered = "Set up Tailscale on this Mac first (step 1 above); then the code can point at this Mac's Tailscale address."
-    await expect(pairGroup).toContainText(unoffered)
-    await pairGroup.locator('#devices-new-name').fill('Travel phone')
-    await expect(pairGroup.getByTestId('devices-pair-new')).toBeDisabled()
+    // No Tailscale address yet: no pairing box at all (the steps say what to do first).
+    await expect(section.getByTestId('way-pair-tailscale')).toHaveCount(0)
+    await expect(section.locator('#devices-new-name')).toHaveCount(0)
     await shot(page, 'a1-not-installed', card)
 
     await install.click()
@@ -172,9 +169,11 @@ test.describe('Settings → Phones & Cloud: Reach Walnut from anywhere', () => {
     await expect(mac).toContainText('Connected as studio-mac.tail1234.ts.net')
     await expect.poll(() => calls.listGets).toBeGreaterThan(listReadsBefore)
     await expect(step(card, 'phone')).toHaveAttribute('data-dot', 'action')
-    // The tab's own pairing now points at it: the notice is gone and the named phone can pair.
-    await expect(pairGroup).not.toContainText(unoffered)
+    // The tab's own pairing shows now and points at it: the form is there and a named phone can pair.
+    const pairGroup = section.getByTestId('way-pair-tailscale')
+    await expect(pairGroup).toBeVisible({ timeout: 30_000 })
     await expect(pairGroup).toContainText("The QR code points the phone at this Mac's Tailscale address")
+    await pairGroup.locator('#devices-new-name').fill('Travel phone')
     await expect(pairGroup.getByTestId('devices-pair-new')).toBeEnabled()
   })
 
@@ -245,7 +244,7 @@ test.describe('Settings → Phones & Cloud: Reach Walnut from anywhere', () => {
     for (const id of ['mac', 'phone', 'pair'] as const) await expect(step(card, id)).toHaveAttribute('data-dot', 'done')
     await expect(step(card, 'mac')).toContainText('Connected as studio-mac.tail1234.ts.net')
     await expect(step(card, 'phone')).toContainText('Your phone is on the tailnet (pocket-phone)')
-    await expect(step(card, 'pair')).toContainText('Already paired: open Walnut on the phone once and it learns the Tailscale route by itself.')
+    await expect(step(card, 'pair')).toContainText('A phone already paired: open Walnut on it once and it learns the Tailscale route by itself. A new phone: pair it below.')
     await expect(card.getByTestId('remote-access-stores')).toHaveCount(0)
     await expect(card.getByTestId('remote-access-use-tailnet')).toHaveCount(0)
     // Green dots are the success colour (globals.css --success), never amber.
@@ -296,7 +295,7 @@ test.describe('Settings → Phones & Cloud: Reach Walnut from anywhere', () => {
     const tsPane = page.locator('#devices-tailscale')
     const pairGroup = tsPane.getByTestId('way-pair-tailscale')
     await expect(pairGroup).toContainText("The QR code points the phone at this Mac's Tailscale address")
-    await expect(pairGroup.getByTestId('devices-pair-new')).toHaveText('Pair phone')
+    await expect(pairGroup.getByTestId('devices-pair-new')).toHaveText('Get QR for a new phone')
     await expect(tsPane.locator('#devices-new-name')).toBeFocused()
     await expect(tsPane.getByRole('radiogroup', { name: 'Pairing target' })).toHaveCount(0)
     // The button does the same by keyboard.

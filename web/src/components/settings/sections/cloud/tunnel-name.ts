@@ -52,7 +52,7 @@ export function tunnelName(resp: Pick<ExposeResponse, 'providers' | 'settings'> 
 /** The line under the way's title: what it is, and who added it. */
 export function tunnelSubtitle(name: TunnelName): string {
   return name.plugin
-    ? `Added by the ${name.plugin} plugin: an HTTPS address that opens this Walnut in any browser, from anywhere, after you sign in.`
+    ? `An HTTPS address that opens this Walnut in any browser, from anywhere, after you sign in (from the ${name.plugin} plugin).`
     : 'A tunnel command you set up gives this Walnut an HTTPS address that opens it in any browser, from anywhere, after you sign in.';
 }
 

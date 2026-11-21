@@ -35,7 +35,7 @@ describe('the now line', () => {
     expect(now).toMatchObject({ tone: 'ok', title: 'pocket-phone reaches Walnut through the cloud companion' })
     expect(now.hops).toEqual(['pocket-phone', 'Cloud companion', 'This Mac'])
     expect(now.detail).toBe('Last seen 2 min ago. Works anywhere, even while this Mac sleeps.')
-    expect(ways.map((w) => [w.id, w.inUse, w.tag])).toEqual([['cloud', true, 'In use'], ['tailscale', false, 'Off'], ['browser', false, 'Off']])
+    expect(ways.map((w) => [w.id, w.inUse, w.tag])).toEqual([['cloud', true, 'In use'], ['tailscale', false, 'Off'], ['browser', false, 'Off'], ['wifi', false, 'On']])
   })
 
   it('direct with nothing for away: says plainly that away from home it cannot reach Walnut', () => {

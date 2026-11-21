@@ -3,7 +3,8 @@
  * `cloud_bridge.copies`; 4f of docs/plan/walnut-companion-unified-replica.md). The same
  * rows and defaults as a host's (Remote Hosts), reused.
  *
- *   defaults    every switch and box on, nothing written
+ *   defaults    folded under "Manage cloud companion", closed, with what it holds; a click
+ *               opens it; every switch and box on, nothing written
  *   left out    "Leave out folders or notes" saves on Enter and on blur, as a list
  *               (a folder, or one note with or without .md); the bridge url survives
  *   off         a kind turned off is written as false; the chat list off turns the
@@ -27,7 +28,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import yaml from 'js-yaml'
 import { test, expect, type Page, type Route } from '@playwright/test'
-import { backToDevices, openWay } from './devices-ways-helpers'
+import { backToDevices, openCloudManage, openWay } from './devices-ways-helpers'
 import { fixtureHome } from './engine-settings-helpers'
 import { dropFakes } from './route-teardown'
 import { putExactSection } from './config-section-helpers'
@@ -76,6 +77,7 @@ async function openGroup(page: Page) {
   await nav.click()
   await expect(nav).toHaveAttribute('aria-current', 'page')
   await openWay(page, 'cloud')
+  await openCloudManage(page)
   const group = page.getByTestId('companion-keep')
   await expect(group).toBeVisible({ timeout: 30_000 })
   return group
@@ -118,6 +120,17 @@ test.describe('Settings → Phones & Cloud: what the cloud companion keeps', () 
     const errors: string[] = []
     page.on('pageerror', (e) => errors.push(String(e)))
     await mockDevices(page, [LAN, CLOUD])
+    // Folded, closed, saying what it holds; a click opens it (openGroup).
+    await page.goto('/')
+    await page.waitForLoadState('domcontentloaded')
+    await page.getByRole('link', { name: /settings/i }).first().click()
+    await page.getByTestId('settings-nav-devices').click()
+    await openWay(page, 'cloud')
+    const toggle = page.getByTestId('cloud-manage-toggle')
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false', { timeout: 30_000 })
+    await expect(toggle).toContainText('Manage cloud companion')
+    await expect(toggle).toContainText('Sync, updates, while this Mac is away, what it keeps')
+    await expect(sw(page, 'notes')).toBeHidden()
     const group = await openGroup(page)
 
     // Defaults: the same rows as a host's, every one on, nothing written.
