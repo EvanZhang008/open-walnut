@@ -8,8 +8,7 @@ import { getDaemonPoolStatus, getConnectedDaemonConnection } from '../../provide
 import { isOnThisMachine } from './expose.js'
 import { log } from '../../logging/index.js'
 import { getConfig } from '../../core/config-manager.js'
-import path from 'node:path'
-import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
+import { CLOUD_MODE } from '../../constants.js'
 import { isFollower } from '../../core/server-role.js'
 import { validateBearerCredential } from '../middleware/auth.js'
 import { createDesktopUpdateCache, EMPTY_DESKTOP_UPDATE, type DesktopUpdateAnswer } from './desktop-update-cache.js'
@@ -107,14 +106,14 @@ systemRouter.get('/memory', async (req, res) => {
   res.json(await memoryReport({ heap }))
 })
 
-// POST /api/system/memory/heap-snapshot: write a heap snapshot of this process into
-// <WALNUT_HOME>/diagnostics (memory-ledger.ts says why and what it costs). The event loop
+// POST /api/system/memory/heap-snapshot: write a heap snapshot of this process into the
+// runtime dir, outside the data folder (memory-ledger.ts says why, where and what it costs). The event loop
 // stops while it is written, so only a caller on this machine may ask, at most every 30 min.
 systemRouter.post('/memory/heap-snapshot', async (req, res) => {
   if (!(await maySeeHealthDetail(req.headers.authorization)) || !isOnThisMachine(req)) {
     res.status(403).json({ error: 'A heap snapshot is written only for a caller on this machine.' }); return
   }
-  const result = await writeHeapSnapshot(path.join(WALNUT_HOME, 'diagnostics'))
+  const result = await writeHeapSnapshot()
   res.status(result.ok ? 200 : 429).json(result)
 })
 

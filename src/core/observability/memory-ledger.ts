@@ -13,7 +13,9 @@
  * few thousand rows): it runs on the event loop at every sample.
  */
 
+import path from 'node:path';
 import { log } from '../../logging/index.js';
+import { LOG_DIR } from '../../constants.js';
 
 export interface MemoryHolderReading {
   /** Entries held (rows, sessions, nodes). */
@@ -249,8 +251,12 @@ export function nudgeGcUnderPressure(now = Date.now(), gc: GcFn | null = bunGc()
 // a snapshot of the live process. Writing one stops the event loop for a few seconds
 // (about 1.3 s per million objects measured on a copy) and needs memory of the size of
 // the file, so it runs only when asked from this machine, at most every SNAPSHOT_EVERY_MS.
-// The file holds the user's own data and stays in this machine's Walnut folder.
+// The file holds everything the process holds, tokens included, and can be hundreds of MB:
+// it goes to the runtime dir beside the stall recorder's CPU profiles, outside the data
+// folder that backups and git sync copy, readable by this account only
+// (tests/core/observability/process-dumps-stay-out-of-data.test.ts).
 export const SNAPSHOT_EVERY_MS = 30 * 60_000;
+export const HEAP_SNAPSHOT_DIR = path.join(LOG_DIR, 'heap-snapshots');
 let lastSnapshotAt = -Infinity;
 
 type SnapshotFn = () => string;
@@ -264,20 +270,20 @@ export type HeapSnapshotResult =
   | { ok: false; reason: string };
 
 /** Write a V8-format heap snapshot of this process into `dir`. One per SNAPSHOT_EVERY_MS. */
-export async function writeHeapSnapshot(dir: string, now = Date.now(), snap: SnapshotFn | null = bunSnapshot()): Promise<HeapSnapshotResult> {
+export async function writeHeapSnapshot(dir: string = HEAP_SNAPSHOT_DIR, now = Date.now(), snap: SnapshotFn | null = bunSnapshot()): Promise<HeapSnapshotResult> {
   if (!snap) return { ok: false, reason: 'this runtime cannot write a heap snapshot' };
   if (now - lastSnapshotAt < SNAPSHOT_EVERY_MS) {
     return { ok: false, reason: `a snapshot was written ${Math.round((now - lastSnapshotAt) / 60_000)} min ago; one every ${SNAPSHOT_EVERY_MS / 60_000} min` };
   }
   lastSnapshotAt = now;
-  const [{ default: fsp }, { default: path }] = await Promise.all([import('node:fs/promises'), import('node:path')]);
-  await fsp.mkdir(dir, { recursive: true });
+  const { default: fsp } = await import('node:fs/promises');
+  await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
   const before = processMemoryMb();
   const t0 = Date.now();
   const text = snap();
   const ms = Date.now() - t0;
   const file = path.join(dir, `heap-${new Date(now).toISOString().replace(/[:.]/g, '-')}-${process.pid}.heapsnapshot`);
-  await fsp.writeFile(file, text);
+  await fsp.writeFile(file, text, { mode: 0o600 });
   log.obs.warn('heap snapshot written', { path: file, bytes: text.length, ms, rssMb: before.rssMb, heapUsedMb: before.heapUsedMb });
   return { ok: true, path: file, bytes: text.length, ms };
 }
