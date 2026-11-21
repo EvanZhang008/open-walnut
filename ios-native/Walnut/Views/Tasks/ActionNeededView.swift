@@ -342,24 +342,15 @@ struct ActionNeededView: View {
                     .accessibilityIdentifier("action.unsnooze.\(item.id)")
                 }
             } else {
-                wordsBox(item)
-                // Its keys on the left, the pager and Snooze on the right; on a narrow row the keys
-                // take a line of their own, and stack when even that is too narrow.
+                // Its keys first, the words box under them (2026-11-20, the user: "butotn shoudl be
+                // before inbox"), then the pager and Snooze at the right of the last line. The keys
+                // stack when one line is too narrow for them.
                 ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) {
-                        answer(item)
-                        Spacer(minLength: 0)
-                        tools(item, index: index, count: count)
-                    }
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) { answer(item) }
-                        HStack(spacing: 8) { Spacer(minLength: 0); tools(item, index: index, count: count) }
-                    }
-                    VStack(alignment: .leading, spacing: 8) {
-                        VStack(alignment: .leading, spacing: 6) { answer(item) }
-                        HStack(spacing: 8) { Spacer(minLength: 0); tools(item, index: index, count: count) }
-                    }
+                    HStack(spacing: 8) { answer(item) }
+                    VStack(alignment: .leading, spacing: 6) { answer(item) }
                 }
+                wordsBox(item)
+                HStack(spacing: 8) { Spacer(minLength: 0); tools(item, index: index, count: count) }
                 if let note = notes[item.id] {
                     Text(note).font(.caption2).foregroundStyle(.secondary)
                         .accessibilityIdentifier("action.note.\(item.id)")

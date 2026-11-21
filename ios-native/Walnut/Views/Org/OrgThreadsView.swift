@@ -725,6 +725,8 @@ struct OrgThreadCard: View {
                 // A conversation that runs screens long closes from its end too.
                 if OrgThreadCardLayout.closesFromEnd(t) { conversationToggle(atEnd: true) }
             }
+            // Its choices first, the box under them (2026-11-20, the user: "butotn shoudl be before inbox").
+            optionButtons
             if canFollowUp, !closed { followUpBox }
             actions
         }
@@ -973,7 +975,6 @@ struct OrgThreadCard: View {
 
     @ViewBuilder
     private var actions: some View {
-        optionButtons
         if let c = t.closed {
             HStack {
                 Text("\(c.how == "acked" ? OrgThreadModel.Group.done.label : "Dropped")\(c.by == "human" ? "" : " by \(name)") \(WalnutTask.parseISO(c.at).map { RelativeTime.short(date: $0, relativeTo: now) } ?? "")")
