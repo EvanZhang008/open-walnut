@@ -95,9 +95,9 @@ Several hosts:
 |---|---|---|
 | language | TypeScript on bun, one compiled file | a rewrite, or a second language for the backend: 750k lines, and no kept stall profile shows slow computation |
 | who answers on a host | the service, on every host | the daemon answering sessions on a host while the server answers on the Mac: two answerers, task logic written twice |
-| the process manager | an internal part of the service, inside the service's own process: first on a thread of its own (today's daemon code, with no entry, version, boot start or outside port of its own), later its modules on the main thread where a measurement says it pays | a separate daemon process started by the service (the first text's first step): the owner asked for no daemon process. The first text turned the thread down because the request format between the two stays; that is accepted for the first step |
-| what keeps the service alive | the boot start script hosts already have | a new launcher program |
-| upgrade | stop, then start, with proof boot, probation and rollback | a new version taking over beside the old one: two processes on one data directory, to save a pause that agents do not feel and clients retry through |
+| the process manager | ordinary modules of the service, on its main thread, called as functions by the task and session code; no process, thread, socket or request format between them. Kept apart is only what must be: the agents and other child processes themselves (they are other people's programs and must outlive a restart), pure heavy computation on workers, and a plugin's own job | a separate daemon process started by the service (the first text's first step), and a worker thread for today's daemon code: both keep a boundary that every start and every output line must cross, which is where the 225 commands and the repeated parse of a line come from. The owner (2026-11-21): no daemon process, and no thread chosen to save the work of making the code non-blocking |
+| what keeps the service alive | a small launcher: the shell script hosts already have, started by systemd, cron or launchd. It runs the service, restarts it when it exits or stops touching its heartbeat file, and is the only writer of which version is current | a launcher inside the program itself (another product's choice): it could not start or take back a version that does not load |
+| upgrade | the new version is staged and proof-booted, then started as a trial; it says it is ready once it adopted its processes and listens; the launcher records it; 15 minutes without a crash make it the last good version; a trial that does not get ready, or crashes in probation, is replaced by the last good version | a new version taking over beside the old one: two processes on one data directory, to save a pause that agents do not feel and clients retry through |
 | data across machines | one leader; followers that work alone and hand over a journal, as today | every machine writing everything and merging, or one owner per task: both spread the board's and the org's rules across machines |
 | protocol between machines | the API | process-level commands with a capability list per command |
 | plugins | a plugin's host work runs in its own job process, beside the service of its host | plugin work inside the service |
@@ -200,17 +200,19 @@ own registry there and ends its agents on exit, as a non-production daemon does 
 | workers | pure heavy work: parse of a large payload, a merge, redaction, a heavy query on a second SQLite connection | data in, a result out; a worker holds no state another part needs |
 | separate processes | agents, plugin jobs, terminals, check scripts | what must outlive a restart, and plugins |
 
-- The process manager begins as today's daemon code on a thread inside the service's process, always the
-  service's version. Its code may block today (12 synchronous process calls and about 490 synchronous file
-  calls), and on a thread that never holds the main thread (measured on bun 1.4: a 1.5 s busy loop on the
-  thread held the main thread 22 ms at most; an error or an exit on the thread ends only the thread, which
-  the service starts again and which adopts its processes). The code stops changing the process's working
-  directory and file mode mask, which are shared by every thread. Moving its modules onto the main thread is
-  a later, internal step, taken module by module where it pays: a module moves only once its process calls
-  are async and the file calls on its hot paths are async or bounded.
+- Process management is ordinary modules on the main thread. Today's daemon is a 15k line top-level script
+  over 88 modules that are already plain functions; the script becomes a module the service creates (it stops
+  changing the process's working directory and file mode mask, exiting the process and handling its
+  signals), and the service calls it directly. For a session on the service's own machine a line of output
+  goes from the file to the session's handler by a function call and is parsed once.
+- Its blocking calls are made async where they are hot (the read of every session's output file every
+  100 ms, `mkfifo`, `ps`, a history read of up to 32 MB), and the files join the blocking ratchet. The
+  longest hold of the main thread with ten sessions writing is measured before and after and may not grow.
+- An error in one request or one timer is contained there. A crash or a hang of the whole service is the
+  launcher's: it runs the service again, which adopts every live process from the registry.
 - What a restart of the service must not lose is detached and recorded, as agents are: a remote command
   (`host_exec`), an ACP agent and a plugin script get an input FIFO, an output file and a registry entry, and
-  are adopted. A check script runs again at its next tick, and one fire is delivered once.
+  are adopted. A check script runs again at its next tick, and one fire carries an id its receiver dedupes.
 - A worker is not a place for a subsystem. It has its own memory and cannot use the main thread's objects, so
   anything that talks to the rest often would need a message for every interaction.
 - A move of work to a worker follows a measurement: a stall profile that names it. Each move adds its guard to
@@ -392,13 +394,13 @@ acceptance and its proof on real machines before the next starts:
 
 | Step | Phase | What |
 |---|---|---|
-| A1 | 3 | `walnut serve`; the process manager runs on a thread inside the service, behind an experiment |
+| A1 | 3, 4 | `walnut serve`; today's daemon script becomes a module the service creates and calls directly, behind an experiment; hot blocking calls made async |
 | A2 | 3 | a restart of the service loses no work: remote commands, ACP agents and plugin scripts are adopted, a fire is delivered once |
-| A3 | 3 | hosts: the boot start keeps the service, the follower is the service, one version, a heartbeat file, the upgrade from a separate daemon and the way back |
-| A4 | 3 | the Mac: production runs the merged service, and a boot start |
+| A3 | 3 | the launcher (trial, ready, probation, rollback, heartbeat); on hosts the follower is the service, one version; the upgrade from a separate daemon and the way back |
+| A4 | 3 | the Mac: production runs the merged service under the same launcher, started at login |
 | B | 1 | local callers use their host's API; the follower answers what it does not yet; a service on every host by default |
 | C | 2 | the leader calls a host's service only; a session is assembled, run and judged by its host's service |
-| D | 4 | the deletions; no task logic in the process manager; its modules move to the main thread where measured |
+| D | 4 | the deletions; no task logic in the process modules; one launch path for a session on any machine |
 
 Beside the phases, the main thread is cleared one measured item at a time (its own task): spawns through a
 pool, heavy statements and large parses to workers, the remaining synchronous file reads to async.
@@ -423,10 +425,12 @@ pool, heavy statements and large parses to workers, the remaining synchronous fi
 - **Two answerers remain until phase 4** for a session while the leader is away (the follower first, the
   daemon's old code as the fallback). They share one journal, so their writes cannot diverge; the fallback is
   deleted once the follower covers every op it has.
-- **A restart of the service is a restart of the process manager**, and the Mac's service restarts often.
-  What a daemon restart interrupts today is made adoptable first (step A2), before production is merged.
-- **A crash of the whole process takes the thread with it.** The boot start runs the service again and it
-  adopts every live process, the same path as an upgrade.
+- **A restart of the service restarts process management**, and the Mac's service restarts often. What a
+  daemon restart interrupts today is made adoptable first (step A2), before production is merged.
+- **Process code on the main thread can hold it.** The hot blocking calls are made async, the ratchet covers
+  the files, and the measured longest hold is a gate, not a note.
+- **A crash takes the whole service.** The launcher runs it again and it adopts every live process, the same
+  path as an upgrade.
 - **A follower's memory** on a small host: measured (above), and a host below the floors runs the service
   without a data copy.
 - **Hosts the file cannot run on**: count them before phase 4 deletes the source twin.
