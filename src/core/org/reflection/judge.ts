@@ -7,6 +7,7 @@
  * real bad decisions, with evidence: quote the session and the rule").
  */
 import type { ReflectionSignal } from './signals.js';
+import { screenTitle } from '../../title-answer.js';
 
 /** Every kind a finding can be. A new kind needs its replay case (tests/core/org/reflection-categories.test.ts). */
 export const FINDING_KINDS = [
@@ -183,10 +184,12 @@ export function verifyFinding(raw: string, input: Pick<JudgeInput, 'signal' | 's
     skill: null,
   };
   const pn = f.pain as Record<string, unknown> | null | undefined;
-  if (pn && typeof pn === 'object' && str(pn.title, 160)) {
+  // A pain's title is a model's title answer: it goes through the title rule (title-answer.ts), and one it refuses names no pain.
+  const painTitle = pn && typeof pn === 'object' ? screenTitle(str(pn.title, 160)) : null;
+  if (pn && painTitle) {
     // An id the judge was not shown is a new pain, never a guess at one.
     const same = str(pn.same_as, 40);
-    finding.pain = { same_as: input.pains?.some((p) => p.id === same) ? same : '', title: str(pn.title, 160), scope: pn.scope === 'only_him' ? 'only_him' : 'all_users' };
+    finding.pain = { same_as: input.pains?.some((p) => p.id === same) ? same : '', title: painTitle, scope: pn.scope === 'only_him' ? 'only_him' : 'all_users' };
   }
   const sk = f.skill as Record<string, unknown> | null | undefined;
   if (sk && typeof sk === 'object' && /^[a-z0-9][a-z0-9-]{0,47}$/.test(str(sk.name, 48)) && str(sk.text, 8000)) {

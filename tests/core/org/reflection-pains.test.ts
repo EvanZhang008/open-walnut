@@ -236,11 +236,11 @@ describe('a finding with his words goes to the registry', () => {
   })
 
   it('a pain id the judge was not shown opens a new pain, never a guess', () => {
-    const v = verifyFinding(verdict({ same_as: 'pn-made-up', title: 'X', scope: 'only_him' }), {
+    const v = verifyFinding(verdict({ same_as: 'pn-made-up', title: 'Cards lose their reply', scope: 'only_him' }), {
       signal: 'regression', sessionText: BEFORE, userText: 'it used to show', rulesText: '', guidance: [], pains: [{ id: 'pn-real', title: 'Y' }],
     })
     expect(v.verdict).toBe('bad_decision')
-    expect(v.verdict === 'bad_decision' && v.finding.pain).toEqual({ same_as: '', title: 'X', scope: 'only_him' })
+    expect(v.verdict === 'bad_decision' && v.finding.pain).toEqual({ same_as: '', title: 'Cards lose their reply', scope: 'only_him' })
   })
 })
 

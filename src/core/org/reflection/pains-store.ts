@@ -1,6 +1,7 @@
 /**
  * Reading and writing a node's pain registry files (pains.ts holds the model). Every write runs under
- * pains.json's lock, and a registry is never written over what it could not read:
+ * the registry's lock (a user-file lock, kept under WALNUT_HOME/locks: the files sit in his notes),
+ * and a registry is never written over what it could not read:
  *  - a pains.json that does not parse (a stray comma in a hand edit, a half-written file) is never
  *    rewritten: the write is refused (PainsUnwritable) until someone fixes the file, so his words in
  *    it are never lost;
@@ -13,7 +14,7 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { withFileLock } from '../../../utils/file-lock.js';
+import { withUserFileLock } from '../../../utils/user-file-lock.js';
 import {
   guardRunFileOf, guardRunOf, normalizePain, painsFileOf, painsMarkdownOf, renderPains, resolvePainPath,
   PAIN_KNOWN_KEYS, PAIN_SCHEMA_VERSION, type GuardRun, type PainEntry,
@@ -97,7 +98,7 @@ async function writeRegistry(nodeId: string, nodeName: string, read: Extract<Pai
 export async function updatePains(nodeId: string, nodeName: string, change: (entries: PainEntry[]) => PainEntry[], nowMs: number): Promise<PainEntry[]> {
   const file = painsFileOf(nodeId);
   let out: PainEntry[] = [];
-  await withFileLock(file, async () => {
+  await withUserFileLock(file, async () => {
     const read = await readPainsFile(nodeId);
     if (read.state === 'bad') throw new PainsUnwritable(file, read.why);
     out = change(read.state === 'ok' ? [...read.entries] : []);
@@ -109,7 +110,7 @@ export async function updatePains(nodeId: string, nodeName: string, change: (ent
 /** Keep a guard run's results and show them in pains.md, under the registry's lock. */
 export async function writeGuardRun(nodeId: string, nodeName: string, run: GuardRun, nowMs: number): Promise<void> {
   const file = painsFileOf(nodeId);
-  await withFileLock(file, async () => {
+  await withUserFileLock(file, async () => {
     await fsp.mkdir(path.dirname(file), { recursive: true });
     await writeAtomic(guardRunFileOf(nodeId), `${JSON.stringify(run, null, 2)}\n`);
     const read = await readPainsFile(nodeId);
