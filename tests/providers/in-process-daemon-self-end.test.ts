@@ -44,6 +44,6 @@ describe.skipIf(!BUN)('an in-process runtime that ends itself', () => {
     // The process ended by itself: no listener, thread or clock of the runtime was left.
     expect(code, stderr.slice(-2000)).toBe(0)
     const out = JSON.parse(stdout.trim().split('\n').pop()!)
-    expect(out).toEqual({ started: 'started', hello: true, gatewayBefore: true, closed: true, running: false, gatewayAnswers: false })
+    expect(out).toEqual({ started: 'started', hello: true, gatewayBefore: true, lockHeldBefore: true, closed: true, lockHeldAtClose: false, running: false, gatewayAnswers: false })
   }, 60_000)
 })

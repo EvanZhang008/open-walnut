@@ -37,7 +37,10 @@ export interface DaemonChildDefaults {
   contain?: <A extends unknown[]>(what: string, fn: (...args: A) => unknown) => (...args: A) => void
 }
 
-const LISTENER_ADDERS = ['on', 'once', 'addListener', 'prependListener', 'prependOnceListener'] as const
+// `once` and `prependOnceListener` are left as they are: they add their own one-time wrapper through
+// `on`/`prependListener`, which guard it here. Each guard carries `.listener` (the caller's function),
+// so a removal by that function finds it the way node's own once-wrappers are found.
+const LISTENER_ADDERS = ['on', 'addListener', 'prependListener'] as const
 const LISTENER_REMOVERS = ['off', 'removeListener'] as const
 
 /**
@@ -51,7 +54,11 @@ export function containListeners<T>(emitter: T, contain: NonNullable<DaemonChild
   const guardOf = (event: unknown, fn: unknown) => {
     if (typeof fn !== 'function') return fn
     let g = guards.get(fn)
-    if (!g) { g = contain(`child ${String(event)} listener`, fn as (...a: unknown[]) => unknown); guards.set(fn, g) }
+    if (!g) {
+      g = contain(`child ${String(event)} listener`, fn as (...a: unknown[]) => unknown)
+      ;(g as unknown as { listener: unknown }).listener = (fn as { listener?: unknown }).listener ?? fn
+      guards.set(fn, g)
+    }
     return g
   }
   for (const name of LISTENER_ADDERS) {

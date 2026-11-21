@@ -260,6 +260,7 @@ import { createRuntimeTimers } from './daemon-runtime-timers.js'
 import { createInProcessClient } from './daemon-in-process-client.js'
 import { createSessionTailer, type SessionTailer } from './session-tailer.js'
 import { prepareSpawnFiles } from './session-spawn-files.js'
+import { agentReadSize, takeAgentLines, type AgentFileState } from './agent-file-chunk.js'
 import { createSpawnPool } from './spawn-pool.js'
 import { containListeners, createDaemonChildSpawn, type ChildProcessUse } from './daemon-child-spawn.js'
 import { DaemonSessionGate, createDaemonCronRuntime, persistCronHooks, processStartedAtMs, readCronCliConfig, cliOneShotTime, nextCliCronMinute, CRON_PROMPT_LIMIT } from './daemon-cron-runtime.js'
@@ -617,6 +618,8 @@ const AGENT_POLL_INTERVAL_MS = 2000
 const AGENT_REDISCOVER_INTERVAL_MS = 10000
 // Env override exists so tests can exercise heartbeat-driven behavior (the
 // parent-liveness watchdog) without waiting 30s. Production leaves it unset.
+/** In process: the longest endSelf waits for the lock's release before it closes its clients. */
+const END_SELF_LOCK_RELEASE_MS = 2_000
 const HEARTBEAT_INTERVAL_MS = (() => {
   const ms = parseInt(daemonEnv.WALNUT_DAEMON_HEARTBEAT_MS || '', 10)
   return Number.isFinite(ms) && ms > 0 ? ms : 30_000
@@ -946,7 +949,7 @@ interface SessionData {
 }
 
 interface AgentSub {
-  files: Map<string, { offset: number }>
+  files: Map<string, AgentFileState>
   timer: ReturnType<typeof setInterval> | null
   rediscoverTimer: ReturnType<typeof setInterval> | null
   ws: ServerWebSocket<WsData>
@@ -11359,21 +11362,16 @@ function cmdSubscribeAgent(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
     for (const [filePath, fileState] of sub.files) {
       try {
         const stat = fs.statSync(filePath)
-        if (stat.size > fileState.offset) {
+        // Inside a server's process one tick reads at most AGENT_POLL_MAX_BYTES, whole lines only
+        // (agent-file-chunk.ts): a large backlog never holds every route at once. A daemon program
+        // reads it all, as it always did.
+        const bytes = agentReadSize(fileState, stat.size, LISTEN ? null : AGENT_POLL_MAX_BYTES)
+        if (bytes > 0) {
           const fd = fs.openSync(filePath, 'r')
-          // Inside a server's process one tick reads at most AGENT_POLL_MAX_BYTES, up to its last
-          // complete line (the rest comes on the next ticks): a large backlog never holds every
-          // route at once. A daemon program reads it all, as it always did.
-          const backlog = stat.size - fileState.offset
-          const bytes = LISTEN ? backlog : Math.min(backlog, AGENT_POLL_MAX_BYTES)
           const buf = Buffer.alloc(bytes)
           fs.readSync(fd, buf, 0, bytes, fileState.offset)
           fs.closeSync(fd)
-          const lastNl = bytes < backlog ? buf.lastIndexOf(0x0a) : -1
-          const used = bytes < backlog && lastNl >= 0 ? lastNl + 1 : bytes
-          fileState.offset += used
-
-          const lines = buf.subarray(0, used).toString('utf-8').split('\n').filter((l: string) => l.trim())
+          const lines = takeAgentLines(fileState, buf, stat.size)
           if (lines.length > 0) {
             sendEvent(ws, 'agent', {
               sid,
@@ -14934,6 +14932,8 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
   else childCwd = DAEMON_DIR
   const acquire = () => acquireDaemonInstanceLock({
     runtimeDir: DAEMON_DIR, uid: os.userInfo().uid, pid: process.pid, instanceId: DAEMON_INSTANCE_ID,
+    // A service install reads it to refuse a dir a server holds (refuseInProcessOwner).
+    inProcess: !LISTEN,
   })
   let lock = await acquire()
   // A stand-in an update's tail started outside launchd (daemon-update-standin.ts, its pid in
@@ -15365,9 +15365,15 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
   // Its socket closes and its timers end with it; the process entry then exits.
   function endSelf(code: number): void {
     try { server?.stop(true) } catch {}
-    void daemonInstanceLock?.release().catch(() => {})
+    const released = daemonInstanceLock?.release().catch(() => {})
     clearRuntimeTimers()
-    exitRuntime(code)
+    if (LISTEN) { exitRuntime(code); return }
+    // Inside a server's process its clients close only once the lock is free (review R2-N4): a
+    // client that dials again at once starts the next runtime, which must find the dir unheld.
+    // Bounded: a release that never settles does not keep the clients open.
+    let bound: ReturnType<typeof setTimeout> | undefined
+    void Promise.race([released, new Promise<void>((resolve) => { bound = setTimeout(resolve, END_SELF_LOCK_RELEASE_MS) })])
+      .finally(() => { clearTimeout(bound); exitRuntime(code) })
   }
   let shutdown: Promise<number> | null = null
   const stopDaemon = (): Promise<number> => {

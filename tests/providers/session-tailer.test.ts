@@ -598,36 +598,76 @@ describe('createSessionTailer: slices under the loop budget', () => {
 describe('createSessionTailer: a file call that never settles', () => {
   const never = <T>() => new Promise<T>(() => {})
 
-  it('a read that hangs fails through onError after readTimeoutMs, and the next tick reads again', async () => {
+  it('a read that hangs fails through onError after readTimeoutMs; until it settles ticks start nothing, then read again', async () => {
     const t = makeTailer({ readTimeoutMs: 30 })
     t.file.append('a\n')
     const realRead = t.file.fs.read
-    t.file.fs.read = () => never()
+    const hung = deferred<Buffer>()
+    let outstanding = 0
+    let calls = 0
+    t.file.fs.read = () => { calls++; outstanding++; return hung.promise.finally(() => { outstanding-- }) }
     await t.tailer.tick()
     expect(t.errors).toHaveLength(1)
     expect(t.errors[0]).toMatchObject({ consecutive: 1, err: { code: 'ETIMEDOUT' } })
     expect(t.batches).toEqual([])
     expect(t.tailer.cursor).toBe(0)
 
-    // Still hung: counted as consecutive, like any failing read.
-    await t.tailer.tick()
-    expect(t.errors.map((e) => e.consecutive)).toEqual([1, 2])
+    // Still hung: each tick reports the stall (counted as consecutive, like any failing read) and
+    // starts no second call, neither a read nor a stat.
+    const statsBefore = t.file.calls.stat
+    for (let i = 0; i < 5; i++) await t.tailer.tick()
+    expect(t.errors.map((e) => e.consecutive)).toEqual([1, 2, 3, 4, 5, 6])
+    expect(String((t.errors[5].err as Error).message)).toContain('read of this file still has not settled')
+    expect(calls).toBe(1)
+    expect(outstanding).toBe(1)
+    expect(t.file.calls.stat).toBe(statsBefore)
 
-    // The disk answers again: the same range is read and handed over.
+    // The hung call settles at last: its late bytes are dropped, and the next tick reads again.
     t.file.fs.read = realRead
+    hung.resolve(Buffer.from('a\n'))
+    await new Promise((r) => setTimeout(r, 0))
+    expect(outstanding).toBe(0)
+    expect(t.batches).toEqual([])
     await t.tailer.tick()
     expect(t.delivered()).toEqual([{ line: 'a', v: 2 }])
-    expect(t.errors).toHaveLength(2)
+    expect(t.errors).toHaveLength(6)
   })
 
-  it('a stat that hangs times out the same way', async () => {
+  it('a stat that hangs times out the same way, and holds a rebuilt tailer of the same path too', async () => {
     const t = makeTailer({ readTimeoutMs: 30 })
-    t.file.fs.stat = () => never()
+    let outstanding = 0
+    t.file.fs.stat = () => { outstanding++; return never() }
     const started = Date.now()
     await t.tailer.tick()
     expect(Date.now() - started).toBeLessThan(5_000)
     expect(t.errors).toHaveLength(1)
     expect(String((t.errors[0].err as Error).message)).toContain('stat did not settle within 30ms')
+    const errors: unknown[] = []
+    const rebuilt = createSessionTailer({
+      path: '/fake/session.jsonl', startOffset: 0, maxReadBytes: 1024, carryMaxBytes: 1024, readTimeoutMs: 30,
+      fs: t.file.fs, timers: fakeTimers().timers, active: () => true,
+      onLines: () => {}, onBoundary: () => {}, onError: (err) => { errors.push(err) },
+    })
+    await rebuilt.tick()
+    await t.tailer.tick()
+    expect(errors).toHaveLength(1)
+    expect(outstanding).toBe(1)
+  })
+
+  it('at most one fs call stays outstanding on a hung file system, however long the clock runs', async () => {
+    let outstanding = 0
+    const hungFs: TailerFs = { stat: () => { outstanding++; return never() }, read: () => { outstanding++; return never() } }
+    const errors: number[] = []
+    const tailer = createSessionTailer({
+      path: '/fake/hung.jsonl', startOffset: 0, maxReadBytes: 1024, carryMaxBytes: 1024, readTimeoutMs: 20, intervalMs: 5,
+      fs: hungFs, timers: { setInterval, clearInterval }, active: () => true,
+      onLines: () => {}, onBoundary: () => {}, onError: (_err, consecutive) => { errors.push(consecutive) },
+    })
+    try {
+      await new Promise((r) => setTimeout(r, 300))
+      expect(outstanding).toBe(1)
+      expect(errors.length).toBeGreaterThan(5)
+    } finally { tailer.stop() }
   })
 
   it('a hung read that answers after its timeout hands nothing over twice', async () => {
@@ -640,8 +680,12 @@ describe('createSessionTailer: a file call that never settles', () => {
     expect(t.errors).toHaveLength(1)
     t.file.fs.read = realRead
     await t.tailer.tick()
+    expect(t.errors).toHaveLength(2)
     late.resolve(Buffer.from('a\n'))
     await new Promise((r) => setTimeout(r, 10))
+    expect(t.batches).toEqual([])
+    await t.tailer.tick()
+    await t.tailer.tick()
     expect(t.delivered()).toEqual([{ line: 'a', v: 2 }])
   })
 

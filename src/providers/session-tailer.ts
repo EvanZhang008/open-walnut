@@ -29,7 +29,11 @@
  * first line, which is no JSON: its parse() throws, as for any line that is no JSON.
  *
  * A file call that never settles (a hung network file system) fails after `readTimeoutMs`
- * through `onError`, like any failed read, and the next tick reads again from the same cursor.
+ * through `onError`, like any failed read. It cannot be cancelled and holds a thread of the pool
+ * every fs call shares, so it stays the one call in flight for its path: until it settles, each tick
+ * reports the stall through `onError` and starts nothing (a rebuilt tailer of the same path on the
+ * same fs too). Once it settles (its late result is dropped) the next tick reads again from the
+ * same cursor.
  *
  * Each line comes with `parse()`: the line's JSON, parsed at the first call and kept (a line that
  * is no JSON throws the same error each call). Every consumer of a line asks it, so a line is
@@ -165,14 +169,32 @@ export interface SessionTailerOptions {
 
 export const TAILER_READ_TIMEOUT_MS = 30_000
 
+/** A call that timed out and has not settled yet. */
+interface HungCall { what: string; since: number }
+/** Per file system, per path: the timed-out call still holding it (every tailer of the path waits on it). */
+const hungCalls = new WeakMap<TailerFs, Map<string, HungCall>>()
+const hungOn = (io: TailerFs): Map<string, HungCall> => {
+  let byPath = hungCalls.get(io)
+  if (!byPath) { byPath = new Map(); hungCalls.set(io, byPath) }
+  return byPath
+}
+
 /**
  * `call`, or an ETIMEDOUT error once `ms` passed without it settling. The call itself cannot be
- * cancelled: a late result is dropped (the next tick reads that range again).
+ * cancelled: it is kept as the path's hung call until it settles, and its late result is dropped
+ * (the next tick reads that range again).
  */
-function withDeadline<T>(call: Promise<T>, ms: number, what: string): Promise<T> {
+function withDeadline<T>(io: TailerFs, file: string, call: Promise<T>, ms: number, what: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(Object.assign(new Error(`session tailer: ${what} did not settle within ${ms}ms`), { code: 'ETIMEDOUT' })), ms)
+    timer = setTimeout(() => {
+      const byPath = hungOn(io)
+      const hung: HungCall = { what, since: Date.now() }
+      byPath.set(file, hung)
+      const settled = () => { if (byPath.get(file) === hung) byPath.delete(file) }
+      call.then(settled, settled)
+      reject(Object.assign(new Error(`session tailer: ${what} did not settle within ${ms}ms`), { code: 'ETIMEDOUT' }))
+    }, ms)
     timer.unref?.()
   })
   return Promise.race([call, timeout]).finally(() => clearTimeout(timer))
@@ -198,9 +220,13 @@ export function createSessionTailer(opts: SessionTailerOptions): SessionTailer {
   const readOnce = async (): Promise<void> => {
     if (stopped || !opts.active()) return
     try {
-      const { size } = await withDeadline(io.stat(opts.path), readTimeoutMs, 'stat')
+      const hung = hungOn(io).get(opts.path)
+      if (hung) {
+        throw Object.assign(new Error(`session tailer: a ${hung.what} of this file still has not settled after ${Date.now() - hung.since + readTimeoutMs}ms; nothing new starts until it does`), { code: 'ETIMEDOUT' })
+      }
+      const { size } = await withDeadline(io, opts.path, io.stat(opts.path), readTimeoutMs, 'stat')
       if (stopped || size <= lines.cursor) { consecutiveErrors = 0; return }
-      const buf = await withDeadline(io.read(opts.path, lines.cursor, Math.min(size - lines.cursor, opts.maxReadBytes)), readTimeoutMs, 'read')
+      const buf = await withDeadline(io, opts.path, io.read(opts.path, lines.cursor, Math.min(size - lines.cursor, opts.maxReadBytes)), readTimeoutMs, 'read')
       if (stopped || !opts.active()) return
       consecutiveErrors = 0
       if (!buf.length) return

@@ -292,6 +292,7 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/loop-budget.ts',
   'src/providers/spawn-pool.ts',
   'src/providers/session-spawn-files.ts',
+  'src/providers/agent-file-chunk.ts',
   'src/providers/daemon-service-config.ts',
   'src/providers/daemon-service-manager.ts',
   // launchd and systemd steps the manager takes (bootout settled, bootstrap retried, the unit kept active).

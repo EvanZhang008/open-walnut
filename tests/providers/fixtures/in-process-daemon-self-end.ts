@@ -8,14 +8,24 @@
  */
 import fs from 'node:fs'
 import net from 'node:net'
+import os from 'node:os'
 import path from 'node:path'
 
 const DIR = process.env.WALNUT_DAEMON_DIR!
 const { startInProcessDaemon, inProcessDaemonConnect, inProcessDaemonRunning } = await import('../../../src/providers/in-process-daemon.ts')
+const { readDaemonInstanceOwner } = await import('../../../src/providers/daemon-instance-lock.ts')
 const started = await startInProcessDaemon({ dir: DIR, env: { ...process.env } })
 let closed = false
+// Review R2-N4: when a client hears close, the dir's lock is already free, so the runtime its server
+// starts next is not turned away by the one that just ended. (Bun stops listening as close() is
+// called, so this holds without the awaited release too: it states the contract, it is no guard.)
+let lockHeldAtClose: Promise<boolean> | null = null
 const connect = inProcessDaemonConnect()!
-const client = connect(() => {}, () => { closed = true })
+const client = connect(() => {}, () => {
+  closed = true
+  lockHeldAtClose = readDaemonInstanceOwner({ runtimeDir: DIR, uid: os.userInfo().uid }).then((owner) => owner !== null)
+})
+const lockHeldBefore = (await readDaemonInstanceOwner({ runtimeDir: DIR, uid: os.userInfo().uid }))?.inProcess === true
 const hello = await client.request('status', { cmd: 'status' }).then(() => true, () => false)
 const sock = path.join(DIR, 'agent-gateway.sock')
 const gatewayBefore = fs.existsSync(sock)
@@ -28,4 +38,4 @@ const gatewayAnswers = await new Promise<boolean>((resolve) => {
   s.once('connect', () => { s.destroy(); resolve(true) })
   s.once('error', () => resolve(false))
 })
-console.log(JSON.stringify({ started: started.kind, hello, gatewayBefore, closed, running: inProcessDaemonRunning(), gatewayAnswers }))
+console.log(JSON.stringify({ started: started.kind, hello, gatewayBefore, lockHeldBefore, closed, lockHeldAtClose: await lockHeldAtClose, running: inProcessDaemonRunning(), gatewayAnswers }))

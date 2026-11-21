@@ -84,6 +84,16 @@ interface Held { runtime: DaemonRuntime; dir: string; ended: boolean }
 let held: Held | null = null
 let starting: Promise<InProcessStart> | null = null
 let startingDir: string | null = null
+/** Set by the server's own stop (stopServer): no runtime starts in this process until it boots again. */
+let closedForGood = false
+
+/** A start asked for while the server stops: it never runs (and never falls back to a daemon program). */
+export class InProcessDaemonClosedError extends Error {
+  constructor() { super('the server is stopping: no in-process daemon starts now'); this.name = 'InProcessDaemonClosedError' }
+}
+
+/** startServer: the in-process daemon may start again (a server restarted in the same process, tests). */
+export function reopenInProcessDaemon(): void { closedForGood = false }
 
 export type InProcessStart = { kind: 'started'; dir: string } | { kind: 'existing'; port: string }
 
@@ -93,6 +103,7 @@ export type InProcessStart = { kind: 'started'; dir: string } | { kind: 'existin
  * and nothing was started.
  */
 export function startInProcessDaemon(opts: { dir: string; env: NodeJS.ProcessEnv }): Promise<InProcessStart> {
+  if (closedForGood) return Promise.reject(new InProcessDaemonClosedError())
   if (held && !held.ended) {
     if (held.dir !== opts.dir) return Promise.reject(new Error(`an in-process daemon already serves ${held.dir}`))
     return Promise.resolve({ kind: 'started', dir: held.dir })
@@ -162,7 +173,9 @@ export async function inProcessDaemonServesCheck(): Promise<string | null> {
  * lock; an isolated dir's agents are ended, the production dir's keep running for the next start.
  * Returns the exit code a program would use (null when none ran).
  */
-export async function stopInProcessDaemon(reason: string, budgetMs?: number): Promise<number | null> {
+export async function stopInProcessDaemon(reason: string, budgetMs?: number, opts: { forGood?: boolean } = {}): Promise<number | null> {
+  // The server's own stop: a request still served meanwhile (its ensureRunning) starts no new runtime.
+  if (opts.forGood) closedForGood = true
   if (starting) await starting.catch(() => {})
   const entry = held
   if (!entry || entry.ended) return null
@@ -202,6 +215,7 @@ export async function ensureInProcessDaemon(deps: {
   env: () => Promise<NodeJS.ProcessEnv>
 }): Promise<InProcessVerdict> {
   if (inProcessDaemonRunning()) return { kind: 'in-process', url: IN_PROCESS_DAEMON_URL }
+  if (closedForGood) throw new InProcessDaemonClosedError()
   const port = deps.readPort()
   if (port && await deps.alive(port)) {
     try {
@@ -215,6 +229,8 @@ export async function ensureInProcessDaemon(deps: {
   try {
     started = await startInProcessDaemon({ dir: deps.dir, env: await deps.env() })
   } catch (err) {
+    // While the server stops nothing starts, a daemon program in its place neither.
+    if (err instanceof InProcessDaemonClosedError) throw err
     return { kind: 'declined', why: err instanceof Error ? err.message : String(err) }
   }
   if (started.kind === 'existing') return { kind: 'declined', why: `another daemon holds the dir (port ${started.port || 'none'})` }

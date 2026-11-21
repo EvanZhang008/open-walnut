@@ -12,9 +12,10 @@
  *   - the stream is opened O_APPEND: the daemon appends its own marker lines to it as well;
  *   - a resume touches the stream, so health checks see a fresh mtime;
  *   - the stream and the stderr log are 0600 (STREAM_FILE_MODE) whatever the process's umask
- *     (inside a server's process it is the server's, usually 022): every open that can create one
- *     passes the mode, and a fresh start sets it on both (the stream was just made anew, a
- *     stderr log left by an older run may be wider).
+ *     (inside a server's process it is the server's, usually 022): every call that can create one
+ *     (the fresh stream's writeFile too) passes the mode, so a new file is private from its first
+ *     byte, and a fresh start also sets it on both (a stream the unlink could not remove, a stderr
+ *     log left by an older run, may be wider).
  * A step that fails gives back what the steps before it opened.
  */
 import type fsType from 'node:fs'
@@ -85,7 +86,7 @@ export async function prepareSpawnFiles(deps: SpawnFilesDeps, req: SpawnFilesReq
     if (!req.resume) {
       await fs.promises.unlink(req.jsonlPath).catch(() => {})
       deps.discardCheckpoint(req.jsonlPath)
-      await fs.promises.writeFile(req.jsonlPath, '').catch(() => {})
+      await fs.promises.writeFile(req.jsonlPath, '', { mode: STREAM_FILE_MODE }).catch(() => {})
     }
     const outputFd = await open(req.jsonlPath, 'a')
     opened.push(outputFd)

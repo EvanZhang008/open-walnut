@@ -139,6 +139,18 @@ describe('prepareSpawnFiles', () => {
     expect(umaskWide).toBe(true) // else this test proves nothing on this machine
   })
 
+  it('creates a fresh start\'s stream private from its first byte, before any fchmod', async () => {
+    const { deps, fs } = makeDeps()
+    // An fchmod that does nothing: only the mode the stream was created with is left.
+    fs.fchmod = ((_fd: number, _mode: number, cb: (err: null) => void) => cb(null)) as unknown as typeof nodeFs.fchmod
+    const req = request()
+    nodeFs.writeFileSync(req.jsonlPath, 'old line\n', { mode: 0o644 })
+    nodeFs.chmodSync(req.jsonlPath, 0o644)
+    await prepare(deps, req)
+    expect(modeOf(req.jsonlPath)).toBe(STREAM_FILE_MODE)
+    expect(modeOf(req.stderrPath)).toBe(STREAM_FILE_MODE)
+  })
+
   it('closes what it opened when a later step fails', async () => {
     const { deps, fs } = makeDeps()
     // The stderr log's folder is missing: its open fails after the FIFO and the stream opened.

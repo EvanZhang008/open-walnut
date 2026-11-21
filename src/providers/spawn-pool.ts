@@ -20,11 +20,13 @@
  * The pool's thread survives its children: a child's EPIPE goes to the caller's `stdin.on('error')`
  * (dropped when none, never thrown), any other stray throw to onError. Should the thread end anyway,
  * what still waits is answered POOL_WORKER_DIED (see giveUp), onError hears it, and the next call
- * starts a new thread.
+ * starts a new thread; a detached child that runs on is followed by its pid until it ends (see
+ * followLost). A message of the thread that cannot be read is told to onError; the thread runs on.
  *
  * The Worker's code is the text below, loaded from a blob: no build entry of its own.
  */
 import { EventEmitter } from 'node:events'
+import fsp from 'node:fs/promises'
 
 type Signal = NodeJS.Signals | number
 type Callback = (error: Error | null, stdout: unknown, stderr: unknown) => void
@@ -83,23 +85,35 @@ const errorOf = (err) => err && ({ message: err.message, code: err.code, killed:
 process.on('uncaughtException', (err) => postMessage({ op: 'fault', error: errorOf(err) }))
 process.on('unhandledRejection', (err) => postMessage({ op: 'fault', error: errorOf(err instanceof Error ? err : new Error(String(err))) }))
 // The program as the shell will exec it: a missing one is ENOENT, as node's own spawn says, never
-// the shell's exit 127. A relative path (and a relative PATH entry) is the child's cwd's, as for exec.
+// the shell's exit 127; one that is there but cannot run (no execute bit, a directory) is EACCES, as
+// node says too (a PATH search goes on past it, and says EACCES only when nothing later runs). A
+// relative path (and a relative PATH entry) is the child's cwd's, as for exec.
 const resolveExe = (file, env, cwd) => {
-  const ok = (p) => { try { fs.accessSync(p, fs.constants.X_OK); return fs.statSync(p).isFile() } catch { return false } }
+  const check = (p) => {
+    let st
+    try { st = fs.statSync(p) } catch { return 'ENOENT' }
+    if (!st.isFile()) return 'EACCES'
+    try { fs.accessSync(p, fs.constants.X_OK); return 'ok' } catch { return 'EACCES' }
+  }
   const base = cwd || process.cwd()
-  if (file.includes('/')) { const p = path.resolve(base, file); return ok(p) ? p : null }
+  if (file.includes('/')) { const p = path.resolve(base, file); const r = check(p); return r === 'ok' ? { exe: p } : { code: r } }
+  let code = 'ENOENT'
   for (const dir of String((env && env.PATH) || process.env.PATH || '').split(':')) {
     const p = dir && path.resolve(base, dir, file)
-    if (p && ok(p)) return p
+    if (!p) continue
+    const r = check(p)
+    if (r === 'ok') return { exe: p }
+    if (r === 'EACCES') code = 'EACCES'
   }
-  return null
+  return { code }
 }
-const enoent = (file) => Object.assign(new Error('spawn ' + file + ' ENOENT'), { code: 'ENOENT', errno: -2, syscall: 'spawn ' + file, path: file })
+const ERRNO = { ENOENT: -2, EACCES: -13 }
+const spawnError = (file, code) => Object.assign(new Error('spawn ' + file + ' ' + code), { code, errno: ERRNO[code], syscall: 'spawn ' + file, path: file })
 const umasked = (umask, file, args, options) => {
   if (umask == null) return [file, args]
-  const exe = resolveExe(file, options && options.env, options && options.cwd)
-  if (!exe) throw enoent(file)
-  return ['/bin/sh', ['-c', 'umask ' + umask.toString(8).padStart(3, '0') + ' && exec "$0" "$@"', exe, ...args]]
+  const found = resolveExe(file, options && options.env, options && options.cwd)
+  if (!found.exe) throw spawnError(file, found.code)
+  return ['/bin/sh', ['-c', 'umask ' + umask.toString(8).padStart(3, '0') + ' && exec "$0" "$@"', found.exe, ...args]]
 }
 // Every stream of a child has a listener: an EPIPE is that child's matter, never this thread's end.
 const guard = (id, child) => {
@@ -178,6 +192,28 @@ const abortError = (signal: AbortSignal) =>
 const asBuffer = (v: unknown) => (v instanceof Uint8Array && !Buffer.isBuffer(v) ? Buffer.from(v.buffer, v.byteOffset, v.byteLength) : v)
 const emitError = (target: EventEmitter, error: Error) => { if (target.listenerCount('error') > 0) target.emit('error', error) }
 
+/** How often a lost child (see followLost) is checked for its end. */
+export const LOST_POLL_MS = 1000
+
+/**
+ * Linux: has `pid` ended? Its /proc stat says Z (a zombie: ended, not reaped) or X, or is gone; a
+ * different start time than first seen is a new process under a reused pid. `null`: unknown.
+ */
+async function procEnded(pid: number, seen: { start?: string }): Promise<boolean | null> {
+  let stat: string
+  try { stat = await fsp.readFile(`/proc/${pid}/stat`, 'utf8') } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    return code === 'ENOENT' || code === 'ESRCH' ? true : null
+  }
+  // "pid (comm) state ppid ...": comm may hold spaces and parens, so fields count from the last ')'.
+  const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
+  const state = fields[0]
+  const start = fields[19] // field 22, starttime
+  if (state === 'Z' || state === 'X') return true
+  if (seen.start === undefined) seen.start = start
+  return seen.start !== start
+}
+
 export interface SpawnPool {
   /** node's execFile, started on the pool's thread. */
   execFile(file: string, args: string[], options: Record<string, unknown> | undefined, callback?: Callback): PooledChild
@@ -185,18 +221,79 @@ export interface SpawnPool {
   spawnDetached(command: string, args: string[], options: Record<string, unknown>): Promise<PooledChild>
   /** Children still followed. */
   readonly pending: number
-  /** Ends the pool's thread: what still waits is answered POOL_CLOSED, helpers are killed, detached children run on. */
+  /** Ends the pool's thread: what still waits is answered POOL_CLOSED, helpers are killed, detached children run on (no longer followed). */
   close(): void
   /** @internal Tests only: ends the pool's thread as a crash would. */
   __terminateWorkerForTest(): void
 }
 
-export function createSpawnPool(opts: { umask: number | null; onError?: (err: unknown) => void } = { umask: null }): SpawnPool {
+export interface SpawnPoolOptions {
+  umask: number | null
+  onError?: (err: unknown) => void
+  /** @internal How a lost child's end is checked (default: 'proc' on Linux, 'ps' elsewhere); tests pick one. */
+  endCheck?: 'proc' | 'ps'
+}
+
+export function createSpawnPool(opts: SpawnPoolOptions = { umask: null }): SpawnPool {
   let worker: Worker | null = null
   let nextId = 0
   const pending = new Map<number, Pending>()
   const send: Send = (msg) => { worker?.postMessage(msg) }
   const report = (err: unknown) => { try { opts.onError?.(err) } catch { /* the reporter's own */ } }
+  const endCheck = opts.endCheck ?? (process.platform === 'linux' ? 'proc' : 'ps')
+
+  /**
+   * Detached children whose pool thread died while they ran. Only that thread could reap one, so
+   * when it ends it stays a zombie of this process, and kill(pid, 0) (the daemon's own check of a
+   * pid) still says it lives. So the pool watches them itself, every LOST_POLL_MS while there are
+   * any (an unref'd clock), with a check that counts a zombie as ended (Linux: /proc/<pid>/stat;
+   * elsewhere `ps -o stat=`, run through this pool, never on this thread), and tells 'exit' then
+   * 'close' (code and signal null: unknown). Nothing here can reap the zombie (JS has no waitpid):
+   * its process-table entry stays until this process exits, holding nothing but its pid.
+   */
+  const lost = new Map<PooledChild, { start?: string }>()
+  let lostClock: ReturnType<typeof setInterval> | null = null
+  let checking = false
+  let checkFailureTold = false
+  const unfollow = (child: PooledChild) => {
+    lost.delete(child)
+    if (!lost.size && lostClock) { clearInterval(lostClock); lostClock = null }
+  }
+  const psEnded = (pid: number) => new Promise<boolean | null>((resolve) => {
+    pool.execFile('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8', timeout: 5000 }, (error, stdout) => {
+      const out = String(stdout ?? '').trim()
+      // ps exits 1 with nothing printed for a pid that is not there.
+      if (error) resolve((error as { code?: unknown }).code === 1 && !out ? true : null)
+      else resolve(out.startsWith('Z'))
+    })
+  })
+  const checkLost = async () => {
+    if (checking) return
+    checking = true
+    try {
+      await Promise.all([...lost].map(async ([child, seen]) => {
+        const ended = endCheck === 'proc' ? await procEnded(child.pid!, seen) : await psEnded(child.pid!)
+        if (!lost.has(child)) return // closed meanwhile
+        if (ended === null) {
+          if (!checkFailureTold) { checkFailureTold = true; report(poolError(`the spawn pool could not check whether lost child ${child.pid} ended; it checks again`, 'POOL_LOST_CHECK_FAILED')) }
+          return
+        }
+        if (!ended) return
+        unfollow(child)
+        child.ended = true
+        try {
+          child.emit('exit', null, null)
+          child.emit('close', null, null)
+        } catch (err) { report(err) }
+      }))
+    } catch (err) { report(err) } finally { checking = false }
+  }
+  const followLost = (child: PooledChild) => {
+    lost.set(child, {})
+    if (lostClock) return
+    lostClock = setInterval(() => { void checkLost() }, LOST_POLL_MS)
+    ;(lostClock as { unref?: () => void }).unref?.()
+  }
   /** The call is no longer followed (`ended`: its end is known, or it never started). */
   const settle = (id: number, p: Pending, ended: boolean) => {
     pending.delete(id)
@@ -207,9 +304,10 @@ export function createSpawnPool(opts: { umask: number | null; onError?: (err: un
   /**
    * Answers a call the pool's thread will not answer (the pool closed, the thread died, a throw
    * there). A helper (execFile) still running is killed and its callback gets the error. A detached
-   * child not yet started rejects. One already started runs on: its end can no longer be told, so
-   * it gets 'error' (unless `quiet`) and never 'exit' (an 'exit' would say a live CLI ended; the
-   * daemon's own check of the pid finds its end), and kill() then signals its pid directly.
+   * child not yet started rejects. One already started runs on: the thread can no longer tell its
+   * end, so it gets 'error' (unless `quiet`), kill() then signals its pid directly, and the pool
+   * follows the pid itself (followLost) to tell its 'exit' when it ends. Not after close() (`quiet`):
+   * a closed pool follows nothing, and its detached children run on for the next runtime to adopt.
    */
   const giveUp = (id: number, p: Pending, error: Error, quiet = false) => {
     const { child } = p
@@ -217,7 +315,7 @@ export function createSpawnPool(opts: { umask: number | null; onError?: (err: un
     settle(id, p, !(p.failed && running))
     if (p.failed && running) {
       child.lost = true
-      if (!quiet) emitError(child, error)
+      if (!quiet) { followLost(child); emitError(child, error) }
       return
     }
     if (running && (child.pid ?? 0) > 1) { try { process.kill(child.pid!, 'SIGTERM') } catch { /* gone */ } }
@@ -296,7 +394,8 @@ export function createSpawnPool(opts: { umask: number | null; onError?: (err: un
     ;(w as unknown as { unref?: () => void }).unref?.()
     w.onmessage = onMessage
     w.addEventListener('error', (e) => { e.preventDefault(); died(w, `error: ${(e as ErrorEvent).message}`) })
-    w.addEventListener('messageerror', () => died(w, 'a message could not be read'))
+    // One unreadable message is told, never the end of a thread every child depends on.
+    w.addEventListener('messageerror', () => report(poolError("a message of the spawn pool's thread could not be read; the call it answered may wait on", 'POOL_MESSAGE_UNREADABLE')))
     w.addEventListener('close', () => died(w, 'it closed'))
     worker = w
   }
@@ -316,7 +415,7 @@ export function createSpawnPool(opts: { umask: number | null; onError?: (err: un
     return () => signal.removeEventListener('abort', onAbort)
   }
 
-  return {
+  const pool: SpawnPool = {
     execFile(file, args, options, callback) {
       const id = ++nextId
       const child = new PooledChild(send, id)
@@ -349,8 +448,10 @@ export function createSpawnPool(opts: { umask: number | null; onError?: (err: un
       worker = null
       const error = poolError('the spawn pool closed', 'POOL_CLOSED')
       for (const [id, p] of [...pending]) { try { giveUp(id, p, error, true) } catch { /* the caller's own */ } }
+      for (const child of [...lost.keys()]) unfollow(child)
       w?.terminate()
     },
     __terminateWorkerForTest() { worker?.terminate() },
   }
+  return pool
 }

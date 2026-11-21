@@ -11,6 +11,7 @@ import { beginShutdownSteps, shutdownStep } from './shutdown-steps.js'
 // The bail's line names the step it caught (commands/web.ts).
 export { shutdownStepSuffix } from './shutdown-steps.js'
 import { closeDaemonDials, reopenDaemonDials } from '../providers/daemon-dial-gate.js'
+import { reopenInProcessDaemon } from '../providers/in-process-daemon.js'
 import { serverBindAddress } from './bind-address.js'
 import { createServer, type Server as HttpServer } from 'node:http'
 import { attachClientErrorAnswer } from './client-error-answer.js'
@@ -1189,8 +1190,8 @@ async function portInUseError(port: number): Promise<Error> {
 
 /** The server's port, held from before the local daemon starts until listen (port-hold.ts). */
 let serverPortHold: import('./port-hold.js').PortHold | null = null
-/** What stopServer gives an in-process daemon's stop, out of the 7 s signal bail (commands/web.ts). */
-const IN_PROCESS_DAEMON_STOP_BUDGET_MS = 5_000
+/** How long an in-process daemon's drain runs beside stopServer's other steps (the 7 s signal bail, commands/web.ts). */
+const IN_PROCESS_DAEMON_STOP_BUDGET_MS = 4_000
 
 /**
  * Create and start the server.
@@ -1205,6 +1206,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   const laneOwner = ++localDaemonLaneOwner
   localDaemonLane?.stop()
   localDaemonLane = null
+  // The in-process daemon a previous stop in this process closed may start again (in-process-daemon.ts).
+  reopenInProcessDaemon()
   bootCompleted = false // boot in progress → unhandled rejections are fatal again
   const bootStartedAt = Date.now()
   // Until the plugin walk below ends, a task push that finds no plugin waits for
@@ -7450,13 +7453,14 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   // Before the first await: every awaited step below runs through shutdownStep (shutdown-steps.ts),
   // named for the bail and bounded to fit inside the caller's bail when it has one.
   beginShutdownSteps({ bailMs: opts.bailMs })
-  // First: a daemon run in this process (experiment in_process_daemon) stops as a daemon program does
-  // on SIGTERM: drained, its registry saved, its dir's lock released. The production dir's sessions
-  // keep running for the next start; an isolated dir's agents end with it. A program had 45 s for
-  // its drain; here most of the bail, and what it saves last is saved at the budget either way.
-  await shutdownStep('in-process daemon', async () => {
-    await (await import('../providers/in-process-daemon.js')).stopInProcessDaemon(opts.reason ?? 'server stop', IN_PROCESS_DAEMON_STOP_BUDGET_MS - 500)
-  }, { budgetMs: IN_PROCESS_DAEMON_STOP_BUDGET_MS })
+  // A daemon run in this process (experiment in_process_daemon) stops as a daemon program does on
+  // SIGTERM: drained, its registry saved, its dir's lock released. The production dir's sessions keep
+  // running for the next start; an isolated dir's agents end with it. Its drain starts now and runs
+  // beside the steps below (a program had 45 s; here what it saves last is saved at its budget either
+  // way), and it is awaited before the HTTP server closes. No runtime starts again after it.
+  const inProcessStop = import('../providers/in-process-daemon.js')
+    .then((m) => m.stopInProcessDaemon(opts.reason ?? 'server stop', IN_PROCESS_DAEMON_STOP_BUDGET_MS, { forGood: true }))
+    .catch((err: unknown) => { log.web.warn('in-process daemon stop failed', { error: err instanceof Error ? err.message : String(err) }) })
   // While every socket still stands: each feature node gets a 1012 close and the connection
   // journal says why this server stops (a deploy, an update, a signal). Bounded under a second.
   await shutdownStep('feature nodes', async () => (await import('./ws/feature-node-runtime.js')).stopFeatureNodes(opts.reason))
@@ -7720,6 +7724,7 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   await shutdownStep('launcher leaving mark', async () => {
     (await import('./serve-launcher-beat.js')).serveLauncherLeaving(opts.reason ?? 'server stop')
   }, { budgetMs: 1_000 })
+  await shutdownStep('in-process daemon', () => inProcessStop, { budgetMs: IN_PROCESS_DAEMON_STOP_BUDGET_MS })
   if (searchV2WiringHandle) {
     const wiring = searchV2WiringHandle
     await shutdownStep('search index', () => wiring.stop(), { budgetMs: 2_500 })

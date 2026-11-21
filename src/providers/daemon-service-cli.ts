@@ -173,7 +173,7 @@ export async function requestDaemonServiceUpdate(
 /** Refuses when the dir's lock is held by a daemon with no door: one inside a Walnut server's process. */
 export async function refuseInProcessOwner(runtimeDir: string, read = readDaemonInstanceOwner): Promise<void> {
   const owner = await read({ runtimeDir, uid: os.userInfo().uid }).catch(() => null)
-  if (owner && owner.wsPort === null && !(await fs.stat(path.join(runtimeDir, 'daemon.pid')).then(() => true, () => false))) {
+  if (owner?.inProcess) {
     throw new Error('A Walnut server runs the session daemon inside its own process for this dir (experiment in_process_daemon, pid '
       + `${owner.pid}). Turn the experiment off in Settings and restart Walnut, then install the service.`)
   }

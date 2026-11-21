@@ -6,7 +6,7 @@
  * A fake runtime module stands in (provideDaemonRuntime); nothing is spawned.
  */
 import { afterEach, describe, expect, it } from 'vitest'
-import { provideDaemonRuntime, startInProcessDaemon, stopInProcessDaemon } from '../../src/providers/in-process-daemon.js'
+import { ensureInProcessDaemon, InProcessDaemonClosedError, provideDaemonRuntime, reopenInProcessDaemon, startInProcessDaemon, stopInProcessDaemon } from '../../src/providers/in-process-daemon.js'
 
 function fakeRuntime(stopMs: number) {
   const calls: string[] = []
@@ -39,5 +39,23 @@ describe('stopInProcessDaemon with a budget', () => {
     expect(await stopInProcessDaemon('test', 100)).toBeNull()
     expect(Date.now() - t0).toBeLessThan(1_000)
     expect(calls).toEqual(['stop', 'saveNow'])
+  })
+
+  // Review R2-S4 (2026-11-21): a request still served while the server stops must not start a new
+  // runtime (never stopped again, its isolated agents leaked), nor a daemon program in its place.
+  it('after the server stop, nothing starts until the server boots again', async () => {
+    fakeRuntime(1)
+    await startInProcessDaemon({ dir: '/fixture/d', env: {} })
+    await stopInProcessDaemon('server stop', 500, { forGood: true })
+    await expect(startInProcessDaemon({ dir: '/fixture/d', env: {} })).rejects.toBeInstanceOf(InProcessDaemonClosedError)
+    let programStopped = false
+    await expect(ensureInProcessDaemon({
+      dir: '/fixture/d', readPort: () => null, alive: async () => false,
+      stopProgram: async () => { programStopped = true }, env: async () => ({}),
+    })).rejects.toBeInstanceOf(InProcessDaemonClosedError)
+    expect(programStopped).toBe(false)
+    reopenInProcessDaemon()
+    await expect(startInProcessDaemon({ dir: '/fixture/d', env: {} })).resolves.toEqual({ kind: 'started', dir: '/fixture/d' })
+    await stopInProcessDaemon('test')
   })
 })

@@ -128,6 +128,23 @@ describe('createDaemonChildSpawn with contain', () => {
     expect(errors.some((e) => e.includes('removed one ran'))).toBe(false)
   })
 
+  it('a listener added with once is removed by its own function, and a contained once still runs once', async () => {
+    const { child, errors } = makeContained()
+    const proc = child.spawn('sh', ['-c', 'exit 0'], { stdio: 'ignore' })
+    let removedRan = 0
+    let onceRan = 0
+    const removed = () => { removedRan++ }
+    proc.once('exit', removed)
+    proc.removeListener('exit', removed)
+    proc.once('exit', () => { onceRan++; throw new Error('once boom') })
+    await new Promise<void>((resolve) => proc.on('close', () => resolve()))
+    proc.emit('exit', 0, null)
+    expect(removedRan).toBe(0)
+    expect(onceRan).toBe(1)
+    expect(errors.filter((e) => e.includes('once boom'))).toHaveLength(1)
+    expect(proc.listenerCount('exit')).toBe(0)
+  })
+
   it('a throwing execFile callback is reported', async () => {
     const { child, errors } = makeContained()
     await new Promise<void>((resolve) => {

@@ -506,7 +506,7 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     expect(templateSrc).toMatch(/fs\.writeFileSync\(jsonlPath, ''\)/)
     // The standalone twin: session-spawn-files.ts, on a fresh start only.
     expect(standaloneSrc).toMatch(/await prepareSpawnFiles\(/)
-    expect(spawnFilesSrc).toMatch(/if \(!req\.resume\) \{\s*await fs\.promises\.unlink\(req\.jsonlPath\)[\s\S]{0,120}await fs\.promises\.writeFile\(req\.jsonlPath, ''\)/)
+    expect(spawnFilesSrc).toMatch(/if \(!req\.resume\) \{\s*await fs\.promises\.unlink\(req\.jsonlPath\)[\s\S]{0,120}await fs\.promises\.writeFile\(req\.jsonlPath, '', \{ mode: STREAM_FILE_MODE \}\)/)
   })
   it('both twins sweep dead-session streams after the 90-day retention window', () => {
     const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))

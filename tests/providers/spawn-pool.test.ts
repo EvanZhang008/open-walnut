@@ -9,7 +9,7 @@ import cp from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSpawnPool, type SpawnPool } from '../../src/providers/spawn-pool.js'
 
 const isBun = !!process.versions.bun
@@ -39,6 +39,28 @@ describe.skipIf(!isBun)('createSpawnPool', () => {
     pool = createSpawnPool({ umask: 0o077 })
     const missing = await run(pool, 'walnut-no-such-program-x', [])
     expect(missing.error?.code).toBe('ENOENT')
+  })
+
+  it('a program that is there but cannot run is EACCES, as from node', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'spawn-pool-'))
+    try {
+      const file = path.join(dir, 'noexec')
+      fs.writeFileSync(file, '#!/bin/sh\necho ran\n', { mode: 0o644 })
+      for (const umask of [0o077, null]) {
+        pool = createSpawnPool({ umask })
+        for (const target of [file, dir]) {
+          const out = await run(pool, target, [])
+          expect(out.error).toMatchObject({ code: 'EACCES', errno: -13 })
+        }
+        pool.close()
+      }
+      // A PATH search goes on past it and says EACCES when nothing later runs (node's rule; Bun's own
+      // spawn says ENOENT here, so only the umask shell's resolver is held to it).
+      pool = createSpawnPool({ umask: 0o077 })
+      const searched = await run(pool, 'noexec', [], { env: { PATH: `/walnut-no-such-dir:${dir}` } })
+      expect(searched.error).toMatchObject({ code: 'EACCES', errno: -13 })
+      await expect(pool.spawnDetached(file, [], { stdio: 'ignore', detached: true })).rejects.toMatchObject({ code: 'EACCES' })
+    } finally { fs.rmSync(dir, { recursive: true, force: true }) }
   })
 
   it('a timeout kills the child, and kill() reaches it', async () => {
@@ -147,12 +169,53 @@ describe.skipIf(!isBun)('createSpawnPool', () => {
     expect((await told).code).toBe('POOL_WORKER_DIED')
     expect(errors.some((e) => (e as Record<string, unknown>).code === 'POOL_WORKER_DIED')).toBe(true)
     expect(pool.pending).toBe(0)
-    // Its end can no longer be told, so no 'exit' says it ended; kill() reaches it by its pid.
+    // It still runs, so no 'exit' says it ended; kill() reaches it by its pid.
     expect(exited).toBe(false)
     expect(detached.kill('SIGKILL')).toBe(true)
     const next = await run(pool, 'echo', ['ok'], { encoding: 'utf8' })
     expect(next.error).toBeNull()
     expect(String(next.stdout).trim()).toBe('ok')
+    // Killed, it is a zombie nobody reaps; the pool still sees its end.
+    await vi.waitFor(() => expect(exited).toBe(true), { timeout: 5000, interval: 50 })
+  })
+
+  for (const endCheck of ['proc', 'ps'] as const) {
+    it(`a detached child that runs on after its pool thread died tells its end (zombie or not), checked by ${endCheck}`, async () => {
+      if (endCheck === 'proc' && process.platform !== 'linux') return
+      const errors: unknown[] = []
+      pool = createSpawnPool({ umask: null, endCheck, onError: (e) => errors.push(e) })
+      const child = await pool.spawnDetached('sh', ['-c', 'sleep 1'], { stdio: 'ignore', detached: true })
+      child.on('error', () => {})
+      const events: Array<[string, unknown, unknown]> = []
+      for (const ev of ['exit', 'close']) child.on(ev, (code, signal) => events.push([ev, code, signal]))
+      await new Promise((r) => setTimeout(r, 50))
+      pool.__terminateWorkerForTest()
+      await vi.waitFor(() => expect(child.lost).toBe(true), { timeout: 2000, interval: 20 })
+      const lostAt = Date.now()
+      expect(events).toEqual([])
+      // Its end is told within about a second of the sleep's end (LOST_POLL_MS 1000).
+      await vi.waitFor(() => expect(events).toEqual([['exit', null, null], ['close', null, null]]), { timeout: 5000, interval: 50 })
+      expect(Date.now() - lostAt).toBeLessThan(4000)
+      expect(child.ended).toBe(true)
+      expect(child.kill()).toBe(false)
+      // Told once: later checks no longer follow it.
+      await new Promise((r) => setTimeout(r, 1200))
+      expect(events).toHaveLength(2)
+      expect(errors.filter((e) => (e as Record<string, unknown>).code === 'POOL_LOST_CHECK_FAILED')).toEqual([])
+    })
+  }
+
+  it('close() stops following lost children', async () => {
+    pool = createSpawnPool({ umask: null })
+    const child = await pool.spawnDetached('sh', ['-c', 'sleep 1'], { stdio: 'ignore', detached: true })
+    child.on('error', () => {})
+    let exited = false
+    child.once('exit', () => { exited = true })
+    pool.__terminateWorkerForTest()
+    await vi.waitFor(() => expect(child.lost).toBe(true), { timeout: 2000, interval: 20 })
+    pool.close()
+    await new Promise((r) => setTimeout(r, 2500))
+    expect(exited).toBe(false)
   })
 
   it('signal: an abort kills the child and answers AbortError; one aborted already never starts', async () => {

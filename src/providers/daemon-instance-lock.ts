@@ -21,6 +21,8 @@ export interface DaemonLockBanner {
   pid: number
   instanceId: string
   wsPort: number | null
+  /** The runtime runs inside a Walnut server's process (experiment in_process_daemon): no door. */
+  inProcess?: true
 }
 
 export interface DaemonLockOwnerInfo {
@@ -29,6 +31,7 @@ export interface DaemonLockOwnerInfo {
   pid: number
   instanceId: string
   wsPort: number | null
+  inProcess?: true
 }
 
 export type DaemonLockConflictReason = 'foreign' | 'timeout' | 'malformed' | 'oversize' | 'unreachable' | 'listen'
@@ -91,6 +94,8 @@ export interface AcquireDaemonInstanceLockOptions {
   deadlineMs?: number
   net?: LockNetLike
   fs?: LockFsLike
+  /** Says in the banner that the runtime runs inside a server's process (DaemonLockBanner.inProcess). */
+  inProcess?: boolean
 }
 
 export interface DaemonInstanceLockOwner {
@@ -145,6 +150,7 @@ export function buildDaemonLockBanner(info: DaemonLockOwnerInfo): DaemonLockBann
     pid: info.pid,
     instanceId: info.instanceId,
     wsPort: normalizeWsPort(info.wsPort),
+    ...(info.inProcess ? { inProcess: true as const } : {}),
   }
 }
 
@@ -167,6 +173,7 @@ export function parseDaemonLockBanner(line: string): DaemonLockBanner | null {
     pid: candidate.pid,
     instanceId: candidate.instanceId,
     wsPort: normalizeWsPort(candidate.wsPort),
+    ...(candidate.inProcess === true ? { inProcess: true as const } : {}),
   }
 }
 
@@ -227,7 +234,10 @@ async function probeExistingOwner(
   if (banner.uid !== uid || banner.dir !== dir) {
     throw new DaemonLockConflictError('foreign', port, `holder uid=${banner.uid} dir=${banner.dir}`)
   }
-  return { uid: banner.uid, dir: banner.dir, pid: banner.pid, instanceId: banner.instanceId, wsPort: banner.wsPort }
+  return {
+    uid: banner.uid, dir: banner.dir, pid: banner.pid, instanceId: banner.instanceId, wsPort: banner.wsPort,
+    ...(banner.inProcess ? { inProcess: true as const } : {}),
+  }
 }
 
 /**
@@ -275,7 +285,7 @@ export async function acquireDaemonInstanceLock(
     const clear = () => clearTimeout(timer)
     socket.on('error', clear)
     socket.on('close', clear)
-    const banner = buildDaemonLockBanner({ uid: options.uid, dir, pid: options.pid, instanceId: options.instanceId, wsPort })
+    const banner = buildDaemonLockBanner({ uid: options.uid, dir, pid: options.pid, instanceId: options.instanceId, wsPort, inProcess: options.inProcess ? true : undefined })
     try { socket.end(JSON.stringify(banner) + '\n') } catch { clear() }
   })
 
