@@ -88,7 +88,9 @@ function SnoozeButton({ label, onPick }: { label: string; onPick: (until: string
 
 function ApprovalAnswer({ item, task, onDone }: { item: ActionItem; task: Task; onDone?: (said: string) => void }) {
   const s = useApprovals();
-  const a = s.items.get(item.id);
+  // A decided approval leaves `items` for `done` (approvals-store.ts settle): read both, or the
+  // decision is never seen here and its page goes unmarked with the next status push.
+  const a = s.items.get(item.id) ?? s.done[item.id];
   // Approved or denied while shown here: its page stays, marked with that word.
   const was = useRef(a?.status);
   useEffect(() => {

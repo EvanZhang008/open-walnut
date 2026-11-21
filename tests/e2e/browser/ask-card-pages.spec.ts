@@ -16,12 +16,15 @@
  *   - a page the status drops while shown: the next takes its place, the focus stays on an arrow
  *   - with every page answered the block goes
  *   - a sideways swipe on a touch screen pages it; an upright one does not
+ *   - an approval approved on its page stays, marked "Approved" (the approvals store moves a decided
+ *     one from its pending list, so the page must read it there too)
  * Real: the fixture server, the mock CLI's session, the inbox and report routes, the status sync.
  */
 import { expect, test, type APIRequestContext, type Browser, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { holdApprovalsLock } from './approvals-lock'
 import { asksOf, pageToAsk, presetPanelDesign, setStatusSectionOpen, showSectionCard } from './status-section-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -34,6 +37,7 @@ const made: string[] = []
 let taskId = ''
 let sid = ''
 
+holdApprovalsLock('file')
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(240_000)
 test.use({ viewport: { width: 1280, height: 900 } })
@@ -258,4 +262,24 @@ test('a sideways swipe on a touch screen pages it', async ({ browser, request }:
     await page.waitForTimeout(500)
     await expect(at).toHaveText('1/2')
   } finally { await context.close() }
+})
+
+test('an approval approved on its own page stays marked "Approved" and the place keeps counting it', async ({ page, request }) => {
+  expect((await request.put(`/api/v1/tasks/${taskId}/report`, { data: { state: 'needs', ask: `Paint the shed door green ${STAMP}?`, ask_kind: 'yes_no' } })).ok()).toBe(true)
+  const what = `Run the sprinkler test on the lawn ${STAMP}`
+  await post(request, '/api/v1/approvals', { what, cwd: '/tmp', command: 'sprinkler-test.sh' }, { 'x-walnut-caller-sid': sid })
+  expect((await request.patch(`/api/tasks/${taskId}`, { data: { phase: 'NEED_ACTION' } })).ok()).toBe(true)
+  await expect.poll(async () => (await actionsOf(request)).map((a) => a.kind).sort().join(','), { timeout: 60_000 }).toContain('approval')
+  const block = await openBlock(page)
+  const at = block.getByTestId('action-page-at')
+  const count = await block.getAttribute('data-pages')
+  const asked = await pageToAsk(block, pageOf(block, what))
+  const place = await at.textContent()
+  await asked.getByRole('button', { name: /^Approve/ }).click()
+  await expect(pageOf(block, what).getByTestId('action-answered')).toContainText('Approved', { timeout: 15_000 })
+  // The server drops it from the task's asks; its page stays where it was.
+  await expect.poll(async () => (await actionsOf(request)).some((a) => a.kind === 'approval'), { timeout: 60_000 }).toBe(false)
+  await expect(block).toHaveAttribute('data-pages', count!)
+  await expect(at).toHaveText(place!)
+  await expect(pageOf(block, what).getByTestId('action-answered')).toContainText('Approved')
 })
