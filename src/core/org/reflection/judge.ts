@@ -12,7 +12,7 @@ import type { ReflectionSignal } from './signals.js';
 export const FINDING_KINDS = [
   'hack_to_avoid_change', 'change_too_big_excuse', 'broke_user_rule', 'question_not_for_user', 'unchecked_claim',
   'decided_differently', 'too_many_rounds', 'risky_retry', 'regression', 'built_different', 'approved_for_user',
-  'duplicate_display', 'wrong_language', 'other',
+  'duplicate_display', 'wrong_language', 'unclear_ask', 'unreviewed_design', 'other',
 ] as const;
 export type FindingKind = typeof FINDING_KINDS[number];
 
@@ -76,12 +76,14 @@ const SIGNAL_LINE: Record<ReflectionSignal, string> = {
   frustration: 'The user\'s message reads frustrated or angry. Find what the agents did that earned it, and the rule that prevents it.',
   overruled: 'The user\'s message turns down what the session recommended or decided. Find out whether the session judged wrongly, and what rule or fact it missed.',
   many_rounds: 'The user sent many messages in a short time, several of them follow-up questions. Find out whether one clear answer could have settled it, and what made the extra rounds.',
-  needs_ask: 'The task put an ask to the user (Needs you, shown below as THE ASK). Find out whether it was his to answer at all: asking the user to decide or approve something he should never have seen is the bad decision here; a bad recommendation in it is one too.',
+  needs_ask: 'The task put an ask to the user (Needs you, shown below as THE ASK). Find out whether it was his to answer at all: asking the user to decide or approve something he should never have seen is the bad decision here; a bad recommendation in it is one too. Then whether a reader who never saw the task understands it from the ask alone (unclear_ask).',
   not_for_user: 'The user\'s words say the question put to him was not his (already done or answered, his approval already given, the agent\'s own call). Find why it reached him, and the rule that keeps such asks off his list.',
   regression: 'The user\'s message says something that worked is broken, gone or changed. Find the change that broke it.',
   built_different: 'The user\'s message says what was built or decided is not what he said, or that an agent said yes for him. Find where his words were changed.',
   duplicate_display: 'The user\'s message says the same thing shows more than once. Find what shows it twice.',
   wrong_language: 'An answer to the user was not in the language his reply-language setting names.',
+  unclear_ask: 'The user\'s words say he could not tell what a question or card put to him meant. Find what made it unreadable on its own, and the rule that makes every ask self-explaining.',
+  unreviewed_design: 'The user\'s words say a design, picture or screenshot shown to him had visible faults or was never reviewed. Find whether anyone who did not make it looked at every picture before he saw it.',
 };
 
 export const JUDGE_SYSTEM = [
@@ -99,6 +101,8 @@ export const JUDGE_SYSTEM = [
   '- built_different: what was built is not what the user said (he asked for one simple thing, it shipped something else or more).',
   '- approved_for_user: an agent said yes in the user\'s name, or shipped a design he never saw, where the choice was his.',
   '- duplicate_display: the same thing is shown to him more than once (one item listed several times).',
+  '- unclear_ask: a question, card or letter put to him that a reader who never saw the task cannot understand from it alone: it does not say what the feature or thing is, it points with words like "here", "this place", "it" with nothing they point at, an ask about where something goes or how it looks has no screenshot or design page, or a button does not say what choosing it does ("OK", "put it here").',
+  '- unreviewed_design: a design page, picture or screenshot reached him without one review by someone who did not make it, looking at every picture (overlap, cut-off text, misalignment, spacing, overflow, match with the real screen), or the report does not say what the review looked at and changed. Text-only or small colour changes do not count.',
   'A message that starts `Answer to "<ask>": ` is his answer from a card: the quoted ask is the agent\'s words, the rest is his.',
   'For a frustrated message, find the cause in the agents\' work and give the rule that prevents it; answer no_issue only when the anger is at something outside the agents (a vendor, a colleague, himself).',
   'Judge what the user\'s message is ABOUT: the session actions it reacts to (usually the last SESSION turn before it, sometimes the run of turns that led to it; for an ask, THE ASK and the last SESSION turn; for many rounds, the rounds listed). A problem in an older turn the message is not about is no_issue here.',
@@ -106,7 +110,7 @@ export const JUDGE_SYSTEM = [
   'Evidence: session_quote is a short passage copied EXACTLY from a SESSION turn\'s text (not from a tool line); user_quote one copied exactly from a USER turn or his recent messages ("" only for an ask he has not answered); rule_quote one copied exactly from RULES, or "" when no listed rule covers it and the lesson is a missing fact. Copy, never paraphrase: the quotes are checked word for word and a finding with a quote that does not match is thrown away.',
   'already_fixed: true when the session\'s turns after the user\'s message already took up the right way in full (it agreed and is doing all of it, or did it).',
   'correction: 2 to 5 sentences to the session itself, in the language the reply-language line names: what was wrong, the right way, and what to do now. When the session already took up part of the right way, name only what it still misses; "" when nothing is missing. Write it only for the session to act on; never ask it to contact anyone.',
-  'guidance: one or two sentences, a general rule that would have prevented this in any session (no names from this case: no package, project or person names). "" when a GUIDANCE line already says it; then same_as is that line\'s number.',
+  'guidance: one or two sentences, in the language the reply-language line names, a general rule that would have prevented this in any session (no names from this case: no package, project or person names). "" when a GUIDANCE line already says it; then same_as is that line\'s number.',
   'skill: null, unless the right way needs several steps a session would follow again; then {"name": lowercase-with-dashes, "description": "when to use it", "text": the steps}.',
   'Answer with ONE JSON object and nothing else: {"verdict":"bad_decision"|"no_issue","why":"...","finding":{"kind","session_quote","user_quote","rule_quote","what_went_wrong","correct_action","already_fixed","correction","guidance","same_as","skill"}} (finding only with bad_decision).',
 ].join('\n');

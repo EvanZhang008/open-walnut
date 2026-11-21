@@ -27,7 +27,7 @@ export { ANSWER_GRACE_MS, MOMENT_MAX_AGE_MS, type Candidate } from './candidates
 
 /** The session's text turns read before the moment: anger is often about a run of turns, not the last one. */
 const TURNS_BEFORE: Record<ReflectionSignal, number> = {
-  frustration: 10, overruled: 4, many_rounds: 3, needs_ask: 4, not_for_user: 4, regression: 6, built_different: 6, duplicate_display: 4, wrong_language: 0,
+  frustration: 10, overruled: 4, many_rounds: 3, needs_ask: 4, not_for_user: 4, unclear_ask: 2, unreviewed_design: 4, regression: 6, built_different: 6, duplicate_display: 4, wrong_language: 0,
 };
 
 export type SendCorrection = (task: Task, text: string, title: string) => Promise<boolean>;

@@ -130,6 +130,7 @@ const SIGNAL_LABEL: Record<ReflectionSignal, string> = {
   frustration: 'the user was frustrated', overruled: 'the user overruled the session',
   many_rounds: 'many rounds for one answer', needs_ask: 'an ask that reached Needs you',
   not_for_user: 'the user said the ask was not his to answer',
+  unclear_ask: 'the user could not tell what an ask meant', unreviewed_design: 'the user said a design shown to him was not reviewed',
   regression: 'the user said something broke', built_different: 'the user said it is not what he asked for',
   duplicate_display: 'the user said something shows more than once', wrong_language: 'an answer in another language than his setting',
 };

@@ -128,3 +128,15 @@ describe('reflection signals', () => {
   })
 })
 
+describe('unclear asks and unreviewed designs (2026-11-21)', () => {
+  it('reads his "what are you talking about" and a call for a review', () => {
+    expect(messageSignals('what are u talk about')).toContain('unclear_ask')
+    expect(messageSignals('\u770b\u4e0d\u61c2\u4f60\u5728\u8bf4\u4ec0\u4e48')).toContain('unclear_ask')
+    expect(messageSignals('The design need ot be at least reviewed once')).toContain('unreviewed_design')
+    expect(messageSignals('\u6309\u94ae\u538b\u5728\u83dc\u5355\u56fe\u6807\u4e0a')).toContain('unreviewed_design')
+  })
+  it('leaves plain messages alone', () => {
+    expect(messageSignals('please review the pull request when it is ready')).not.toContain('unreviewed_design')
+    expect(messageSignals('what is the plan for tomorrow')).not.toContain('unclear_ask')
+  })
+})

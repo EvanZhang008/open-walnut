@@ -20,7 +20,7 @@
  */
 
 export const REFLECTION_SIGNALS = [
-  'frustration', 'overruled', 'many_rounds', 'needs_ask', 'not_for_user', 'regression', 'built_different', 'duplicate_display', 'wrong_language',
+  'frustration', 'overruled', 'many_rounds', 'needs_ask', 'not_for_user', 'unclear_ask', 'unreviewed_design', 'regression', 'built_different', 'duplicate_display', 'wrong_language',
 ] as const;
 export type ReflectionSignal = typeof REFLECTION_SIGNALS[number];
 
@@ -117,6 +117,29 @@ const NOT_FOR_USER_RE = new RegExp([
   '\\u5df2\\u7ecf(?:\\u505a|\\u8bf4|\\u56de|\\u540c\\u610f)', // yi jing zuo / shuo / hui / tong yi (already did / said / answered / agreed)
 ].join('|'), 'i');
 
+/** He cannot tell what a question put to him means (2026-11-21: "what are u talk about", a card that said only "put it here?"). */
+const UNCLEAR_ASK_RE = new RegExp([
+  'what (?:are|r) (?:u|you) talk', 'what (?:do|does) (?:u|you|this|it) mean', 'what is (?:here|this|that) ?\\?', 'what (?:here|place|position)\\b',
+  'no idea what', 'don\'?t understand (?:the|this|what)', 'can\'?t understand',
+  '\\u770b\\u4e0d\\u61c2', // kan bu dong (cannot understand it)
+  '\\u5728\\u8bf4\\u4ec0\\u4e48', // zai shuo shen me (what are you talking about)
+  '\\u4ec0\\u4e48\\u610f\\u601d', // shen me yi si (what does it mean)
+  '\\u54ea\\u91cc\\u554a', // na li a (where?)
+].join('|'), 'i');
+
+/** A design or picture shown to him with visible faults, or never reviewed (2026-11-21: "The design need to be at least reviewed once"). */
+const UNREVIEWED_DESIGN_RE = new RegExp([
+  'reviewed? (?:at least )?once', '(?:need|needs|should) (?:to |ot )?be (?:at least )?reviewed', 'did (?:anyone|anybody|u|you) (?:even )?(?:review|look|check)',
+  '\\boverlap', 'cut off', 'misalign', 'covers? the', 'on top of the (?:menu|icon|button)',
+  '\\u6ca1\\u5ba1', // mei shen (not reviewed)
+  '\\u5ba1\\u4e00\\u4e0b', // shen yi xia (review it)
+  '\\u91cd\\u53e0', // chong die (overlap)
+  '\\u538b\\u5728', // ya zai (pressed on top of)
+  '\\u6321\\u4f4f', // dang zhu (covers)
+  '\\u9519\\u4f4d', // cuo wei (misaligned)
+  '\\u622a\\u65ad', // jie duan (cut off)
+].join('|'), 'i');
+
 /** An opening that turns down what came before. */
 const OVERRULE_OPEN_RE = new RegExp('^\\s*(?:' + [
   'no\\b(?![ -]?(?:problem|worries|rush))', 'nope', 'wrong', 'not this', 'actually,? no', 'instead', 'rather', 'don\'t', 'do not',
@@ -168,6 +191,8 @@ export function saysRegression(text: string): boolean { return REGRESSION_RE.tes
 export function saysBuiltDifferent(text: string): boolean { return BUILT_DIFFERENT_RE.test(text); }
 export function saysDuplicate(text: string): boolean { return DUPLICATE_RE.test(text); }
 export function saysNotForUser(text: string): boolean { return NOT_FOR_USER_RE.test(text); }
+export function saysUnclearAsk(text: string): boolean { return UNCLEAR_ASK_RE.test(text); }
+export function saysUnreviewedDesign(text: string): boolean { return UNREVIEWED_DESIGN_RE.test(text); }
 
 /** His answer from a card (user-status.ts askAnswerText): `Answer to "<ask>": <words>`. */
 export interface CardAnswer { ask: string; words: string }
@@ -194,6 +219,8 @@ export function messageSignals(text: string, before?: string): ReflectionSignal[
   if (saysBuiltDifferent(text)) out.push('built_different');
   if (saysDuplicate(text)) out.push('duplicate_display');
   if (saysNotForUser(text)) out.push('not_for_user');
+  if (saysUnclearAsk(text)) out.push('unclear_ask');
+  if (saysUnreviewedDesign(text)) out.push('unreviewed_design');
   if (isFrustrated(text)) out.push('frustration');
   if (opensWithOverrule(text) && (before === undefined || recommends(before))) out.push('overruled');
   return out;
