@@ -873,7 +873,7 @@ describe('standalone ACP command lifetime', () => {
   it.each(['cmdAcpStart', 'cmdAcpOp', 'cmdAcpStop'])('%s returns the operation promise to the dispatcher', async (name) => {
     const operation = deferred<Record<string, unknown>>()
     // acpStart puts the walnut shim on the worker's PATH by the one rule (walnutThroughGateway).
-    const rule = ['walnutThroughGateway', 'sessionPathWithShim'].map((f) => extract(standalone, f)).join('\n')
+    const rule = ['walnutThroughGateway', 'sessionWalnutApiUrl', 'sessionPathWithShim'].map((f) => extract(standalone, f)).join('\n')
     const handle = compile<(ws: unknown, id: number, cmd: unknown, op?: string) => Promise<unknown>>(`${rule}\n${extract(standalone, name)}\nreturn ${name};`, {
       acp: { acpStart: () => operation.promise, acpOp: () => operation.promise, acpStop: () => operation.promise },
       sendOk: vi.fn(), sendError: vi.fn(), safeSend: vi.fn(), GATEWAY_SOCK_PATH: '/fixture/gateway',
