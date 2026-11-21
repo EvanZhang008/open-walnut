@@ -51,8 +51,8 @@ Check each item and say pass or fail with the evidence (picture and spot, or fil
    ellipsis where the requirements say to show it in full; nothing scrolls sideways; an expanded
    card stays inside its column and at most about 1.5 times its size.
 6. Look: modern and calm. Soft rounded corners, the shared frosted glass for cards and notices, no
-   solid highlight blocks, no hard square corners, at most one main action per card (in a
-   card: the grey button at weight 600, never a filled blue button).
+   solid highlight blocks, no hard square corners, at most one main action per card (solid blue;
+   every other option is the grey rounded button of the same size).
 7. Nothing lost: every button, text, link, reply, state, input and shortcut the view had before is
    still there (compare with the pictures of the old view and the diff).
 8. Words: labels are short, in the user's words, and say what happens; no internal jargon.

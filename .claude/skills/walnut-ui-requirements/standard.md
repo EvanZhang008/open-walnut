@@ -35,8 +35,8 @@ card's answer row and tool row in `web/src/components/actions/ask-card.css`, use
 
 | Role | Where | Use | Look |
 |---|---|---|---|
-| Option / action | `.ask-card-answer .btn` | every option and action (Acknowledge, Close, Reopen, choices) | grey rounded: `--bg-secondary`, no border, corner 8 px, height 28 px, padding 4 px 14 px, 13 px weight 400; hover mixes 12% `--fg` into the fill; disabled at 0.5 opacity |
-| Main action | the same, marked `data-primary` / `data-recommended` | the one main action of a card (at most one) | the same grey button at weight 600 (a recommended option keeps its grey "Recommended" word); never the filled blue `.btn-primary` inside a card |
+| Option / action | `.ask-card-answer .btn` | every option and other action (Close, Reopen, choices that are not the recommended one) | grey rounded: `--bg-secondary`, no border, corner 8 px, height 28 px, padding 4 px 14 px, 13 px weight 400; hover mixes 12% `--fg` into the fill; disabled at 0.5 opacity |
+| Main action | `.ask-card-answer .btn.btn-primary` | the one main action of a card, at most one: Acknowledge, or the recommended option when there is one | solid blue: `--accent` fill, white text, same height, corner, padding and font size as the grey buttons (a recommended option keeps its "Recommended" word) |
 | Tool | `.ask-card-tools .btn` | Snooze, pin, paging arrows, Quote, Close tools | transparent, no border, `--fg-muted`, corner 8 px, height 28 px, padding 0 6 px, 13 px; hover `--bg-hover` and `--fg`; Snooze has a 15 px clock icon and no "▾"; an on pin turns `--accent` |
 | Send | inside the answer box | send a reply | 28 px circle, `var(--chat-hue-accent, var(--accent))`, white arrow; grey while the box is empty |
 
@@ -49,8 +49,10 @@ its own fill and corner. `.btn-ghost` and `.btn-icon` are used in 12 places but 
 the first change that touches them gives them the tool look above.
 
 Source: the button set task 971551ee settled on 2026-11-21 for the cards, from the button in the
-user's own Needs you card screenshot that he named ("I like P1 button"). It goes live once he
-has seen the before and after.
+user's own Needs you card screenshot that he named ("I like P1 button"), and his word on its before
+and after picture: "Ack button should be blue, or recommended option should be blue also". He is
+picking the whole card's design from 10 options next; exact sizes may change with it, and this
+table follows that pick.
 
 ## Inputs
 
