@@ -160,7 +160,6 @@ describe('the phone draws the same card, one page at a time', () => {
     expect(swift).toMatch(/private static let corner: CGFloat = 18/);
     expect(swift).toMatch(/\.strokeBorder\(Color\.primary\.opacity/);
     expect(swift).toMatch(/Circle\(\)[\s\S]{0,200}Theme\.warning[\s\S]{0,200}\.frame\(width: 7, height: 7\)/);
-    expect(swift).toMatch(/struct AskChipStyle: ButtonStyle/);
     expect(swift).not.toMatch(/\.buttonStyle\(\.bordered(Prominent)?\)/);
   });
 
@@ -168,5 +167,55 @@ describe('the phone draws the same card, one page at a time', () => {
     expect(swift).not.toMatch(/sent\.insert|sent\.remove/);
     expect(swift).toMatch(/markAnswered\(item, said: o\.label\)/);
     expect(swift).toMatch(/reopen\(item\)/);
+  });
+});
+
+describe('the phone\'s cards take the button family (2026-11-21, the user: "2 is good")', () => {
+  // The web's ask-card.css and "The button family" in walnut-ui-requirements/standard.md: options
+  // as full-width rows, the recommended one blue, at most one blue key a card, every other key
+  // grey, the box under the keys, then the tools (pager, Snooze, pin) at the right.
+  const IOS = join(__dirname, '../../ios-native/Walnut');
+  const family = readFileSync(join(IOS, 'Views/Shared/AskCardKeys.swift'), 'utf8');
+  const ask = readFileSync(join(IOS, 'Views/Tasks/ActionNeededView.swift'), 'utf8');
+  const threads = readFileSync(join(IOS, 'Views/Org/OrgThreadsView.swift'), 'utf8');
+  const card = /struct OrgThreadCard: View \{[\s\S]*?\n\}\n/.exec(threads)?.[0] ?? '';
+
+  it('one home for the look: the keys, the option rows, Snooze', () => {
+    expect(family).toMatch(/struct AskChipStyle: ButtonStyle \{\s*var main = false/);
+    expect(family).toMatch(/struct AskOptionStyle: ButtonStyle \{\s*var recommended = false/);
+    expect(family).toMatch(/\.frame\(maxWidth: \.infinity, minHeight: AskCardKeys\.height, alignment: \.leading\)/);
+    expect(family).toMatch(/strokeBorder\(Color\(uiColor: \.separator\)/);
+    expect(family).toMatch(/static let corner: CGFloat = 8/);
+    expect(family).toMatch(/main \? Theme\.askAccent/);
+    expect(family).toMatch(/recommended \? Theme\.askAccent/);
+    expect(family).toMatch(/\.lineLimit\(1\)\s*\.truncationMode\(\.tail\)/);
+    expect(family).toMatch(/Image\(systemName: "chevron\.down"\)/);
+    expect(readFileSync(join(IOS, 'Views/Shared/ReplyBox.swift'), 'utf8')).toMatch(/cornerRadius: AskCardKeys\.corner/);
+    for (const src of [ask, card]) expect(src).not.toMatch(/struct Ask\w+Style: ButtonStyle/);
+  });
+
+  it('options are rows, and each card has at most one blue key', () => {
+    expect(ask).toMatch(/\.buttonStyle\(AskOptionStyle\(recommended: o\.recommended == true\)\)/);
+    expect(card).toMatch(/\.buttonStyle\(AskOptionStyle\(recommended: o\.recommended == true\)\)/);
+    expect(ask.match(/AskChipStyle\(main: true\)/g)).toHaveLength(1);
+    expect(card.match(/AskChipStyle\(main: true\)/g)).toHaveLength(1);
+    expect(card).toMatch(/onEdit\(\.acknowledge\)[^\n]*\n\s*\.buttonStyle\(AskChipStyle\(main: true\)\)/);
+    expect(card).not.toMatch(/\.buttonStyle\(\.bordered(Prominent)?\)/);
+  });
+
+  it('the order: options and keys, then the box, then the tools', () => {
+    const body = /private var card: some View \{[\s\S]*?\n {8}\}\n/.exec(card)?.[0] ?? '';
+    const at = (s: string) => body.indexOf(s);
+    expect(at('optionButtons')).toBeGreaterThan(-1);
+    expect(at('optionButtons')).toBeLessThan(at('\n            keys\n'));
+    expect(at('\n            keys\n')).toBeLessThan(at('followUpBox'));
+    expect(at('followUpBox')).toBeLessThan(at('\n            tools\n'));
+    // The pin is a tool on the last line, never in the header.
+    const header = /private var headerButtons: some View \{[\s\S]*?\n {4}\}\n/.exec(card)?.[0] ?? '';
+    expect(header).not.toMatch(/org\.thread\.pin/);
+    expect(card).toMatch(/snoozeMenu\s*\n\s*pinButton/);
+    const line = /\} else \{\s*\/\/ Its options or key first[\s\S]*?tools\(item, index: index, count: count\)/.exec(ask)?.[0] ?? '';
+    expect(line.indexOf('answer(item)')).toBeGreaterThan(-1);
+    expect(line.indexOf('answer(item)')).toBeLessThan(line.indexOf('wordsBox(item)'));
   });
 });

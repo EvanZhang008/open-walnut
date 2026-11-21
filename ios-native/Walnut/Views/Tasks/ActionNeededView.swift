@@ -193,8 +193,9 @@ private struct SnoozeAnswer: Decodable { let task_id: String? }
 
 /// The card (2026-11-20, the user, of the ten designs: "I mean 1 is good let's do it", the web's
 /// ask-card.css): the frosted material, 18pt continuous corners with a hairline and a white top
-/// edge, the only colour a 7pt orange dot for "needs you" and the links; quiet grey keys, Snooze as
-/// quiet text with a clock at the right. One ask at a time ("max shoudl 1 decision, and can left and
+/// edge, a 7pt orange dot for "needs you". Its answer (2026-11-21, of ten whole-card designs: "2 is
+/// good", `AskCardKeys`): the options as a list of rows, the one main action blue, the box under
+/// them, "Snooze ▾" as quiet text at the right of the last line. One ask at a time ("max shoudl 1 decision, and can left and
 /// right"): each ask is its own page with its own words, options and box, "‹ 1/3 ›" beside Snooze
 /// pages through them, and an answered page stays, marked with what was said.
 struct ActionNeededView: View {
@@ -342,13 +343,9 @@ struct ActionNeededView: View {
                     .accessibilityIdentifier("action.unsnooze.\(item.id)")
                 }
             } else {
-                // Its keys first, the words box under them (2026-11-20, the user: "butotn shoudl be
-                // before inbox"), then the pager and Snooze at the right of the last line. The keys
-                // stack when one line is too narrow for them.
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { answer(item) }
-                    VStack(alignment: .leading, spacing: 6) { answer(item) }
-                }
+                // Its options or key first, the words box under them (2026-11-20, the user: "butotn
+                // shoudl be before inbox"), then the pager and Snooze at the right of the last line.
+                answer(item)
                 wordsBox(item)
                 HStack(spacing: 8) { Spacer(minLength: 0); tools(item, index: index, count: count) }
                 if let note = notes[item.id] {
@@ -370,7 +367,7 @@ struct ActionNeededView: View {
                 Button(p.label) { Task { await snooze(item, p.until) } }
             }
         } label: {
-            Label("Snooze", systemImage: "clock").font(.footnote)
+            AskSnoozeLabel()
         }
         .foregroundStyle(.secondary)
         .accessibilityIdentifier("action.snooze.\(item.id)")
@@ -405,25 +402,33 @@ struct ActionNeededView: View {
         }
     }
 
+    /// Its answer: the options as rows, or one key. An approval's Review (where Approve is) is the
+    /// card's one blue key; Open stays grey.
     @ViewBuilder
     private func answer(_ item: WalnutActionItem) -> some View {
         switch ActionNeededModel.answer(item) {
         case .approvalSheet:
             Button("Review") { Task { await ApprovalCenter.shared.open(id: item.id) } }
-                .buttonStyle(AskChipStyle())
+                .buttonStyle(AskChipStyle(main: true))
         case .letterOptions:
-            ForEach(item.options ?? []) { o in
-                Button(o.label) { Task { await answerLetter(item, o) } }
-                    .buttonStyle(AskChipStyle())
-            }
+            optionRows(item.options ?? []) { o in await answerLetter(item, o) }
         case .promptOptions:
-            ForEach(item.options ?? []) { o in
-                Button(o.label) { Task { await answerQuestion(item, o) } }
-                    .buttonStyle(AskChipStyle())
-            }
+            optionRows(item.options ?? []) { o in await answerQuestion(item, o) }
         case .openSession:
             Button("Open") { onOpenSession() }
                 .buttonStyle(AskChipStyle())
+        }
+    }
+
+    /// Each option a row of its own, full width; the recommended one blue.
+    private func optionRows(_ options: [WalnutAskOption], pick: @escaping @MainActor (WalnutAskOption) async -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(options) { o in
+                Button { Task { await pick(o) } } label: {
+                    AskOptionLabel(label: o.label, detail: o.detail, recommended: o.recommended == true)
+                }
+                .buttonStyle(AskOptionStyle(recommended: o.recommended == true))
+            }
         }
     }
 
@@ -547,18 +552,5 @@ struct ActionNeededView: View {
             if let before { snoozed[item.id] = before } else { snoozed.removeValue(forKey: item.id) }
             self.error = "\(at == nil ? "Unsnooze" : "Snooze") failed. Try again."
         }
-    }
-}
-
-/// The card's choices: quiet grey keys with 8pt corners (the web's ask-card.css).
-struct AskChipStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.footnote)
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 6)
-            .background(Color(uiColor: configuration.isPressed ? .secondarySystemFill : .tertiarySystemFill),
-                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }

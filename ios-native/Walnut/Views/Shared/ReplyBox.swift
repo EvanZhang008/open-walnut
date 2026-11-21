@@ -170,7 +170,8 @@ struct ReplyBox: View {
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
         }
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        // The card's words box: the keys' corner and height (`AskCardKeys`, the web's ask-card.css).
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: AskCardKeys.corner, style: .continuous))
     }
 
     private func pick(_ suggestion: ComposerSuggestion) {

@@ -804,6 +804,8 @@ struct WalnutAskOption: Codable, Equatable, Identifiable {
     var id: String
     var label: String
     var recommended: Bool? = nil
+    /// Its line of why (the server's `AskOption.detail`), shown beside the label on its row.
+    var detail: String? = nil
 }
 
 /// `user_status.line` (server `StatusLine`). Decoded leniently: an odd shape reads as no writer

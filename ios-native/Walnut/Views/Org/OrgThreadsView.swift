@@ -725,10 +725,13 @@ struct OrgThreadCard: View {
                 // A conversation that runs screens long closes from its end too.
                 if OrgThreadCardLayout.closesFromEnd(t) { conversationToggle(atEnd: true) }
             }
-            // Its choices first, the box under them (2026-11-20, the user: "butotn shoudl be before inbox").
+            // Its choices and keys first, the box under them (2026-11-20, the user: "butotn shoudl be
+            // before inbox"), then Snooze and the watch eye at the right of the last line (2026-11-21, the
+            // user's pick of ten whole-card designs: "2 is good", `AskCardKeys`).
             optionButtons
+            keys
             if canFollowUp, !closed { followUpBox }
-            actions
+            tools
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -857,19 +860,6 @@ struct OrgThreadCard: View {
             .accessibilityLabel("Fold this thread")
             .accessibilityIdentifier("org.thread.fold")
         }
-        if !closed {
-            Button { onEdit(.watch(!watched)) } label: {
-                Image(systemName: watched ? "eye.fill" : "eye")
-                    .font(.footnote)
-                    .foregroundStyle(watched ? Theme.tint : .secondary)
-                    .frame(width: 36, height: 28)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(busy)
-            .accessibilityLabel(watched ? "Stop watching" : "Watch")
-            .accessibilityIdentifier("org.thread.watch")
-        }
     }
 
     /// The group's dot, as the web's GROUP_DOT (thread-badge.ts): only Needs you asks for him.
@@ -960,12 +950,13 @@ struct OrgThreadCard: View {
     @ViewBuilder
     private var optionButtons: some View {
         if waitsOnHim, canFollowUp, !choices.isEmpty {
+            // Each a row of its own, full width; the recommended one blue (`AskOptionStyle`).
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(choices) { o in
                     Button { pickedKey = choicesKey; onPick(o.label) } label: {
-                        WalnutOptionLabel(label: o.label, detail: o.detail, recommended: o.recommended == true)
+                        AskOptionLabel(label: o.label, detail: o.detail, recommended: o.recommended == true)
                     }
-                    .buttonStyle(.walnut(.option(recommended: o.recommended == true)))
+                    .buttonStyle(AskOptionStyle(recommended: o.recommended == true))
                     .disabled(busy || pickedKey == choicesKey)
                     .accessibilityIdentifier("org.thread.option.\(o.id)")
                 }
@@ -973,45 +964,57 @@ struct OrgThreadCard: View {
         }
     }
 
+    /// Its keys: Reopen on a closed card (grey), else Acknowledge, the card's one blue key, on a
+    /// card that asks no choice. From XXXL up a key takes the whole line, so no label is squeezed
+    /// into its letters.
     @ViewBuilder
-    private var actions: some View {
+    private var keys: some View {
+        let wide = OrgThreadCardLayout.actionsStack(typeSize)
         if let c = t.closed {
             HStack {
                 Text("\(c.how == "acked" ? OrgThreadModel.Group.done.label : "Dropped")\(c.by == "human" ? "" : " by \(name)") \(WalnutTask.parseISO(c.at).map { RelativeTime.short(date: $0, relativeTo: now) } ?? "")")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("Reopen") { onEdit(.reopen) }
-                    .buttonStyle(.walnut(.secondary, size: .small))
-                    .controlSize(.small)
+                Button { onEdit(.reopen) } label: { actionLabel("Reopen", fullWidth: false) }
+                    .buttonStyle(AskChipStyle())
                     .disabled(busy)
                     .accessibilityIdentifier("org.thread.reopen")
             }
-        } else if OrgThreadCardLayout.actionsStack(typeSize) {
-            // Large text: one full-width button a row, so no label is squeezed into its letters.
-            VStack(alignment: .leading, spacing: 8) {
-                actionButtons(fullWidth: true)
+        } else if !known && !waitsOnHim {
+            // Acknowledged already: the AI places it (server thread-known.ts), no second button.
+            Button { onEdit(.acknowledge) } label: { actionLabel("Acknowledge", fullWidth: wide) }
+                .buttonStyle(AskChipStyle(main: true))
+                .disabled(busy)
+                .accessibilityIdentifier("org.thread.ack")
+        }
+    }
+
+    /// The last line of an open card: Snooze and the watch eye, quiet, at the right (under the box).
+    @ViewBuilder
+    private var tools: some View {
+        if !closed {
+            HStack(spacing: 4) {
                 if busy { ProgressView().controlSize(.small) }
+                Spacer(minLength: 0)
+                snoozeMenu
+                watchButton
             }
-            .controlSize(.small)
-            .disabled(busy)
-        } else {
-            // In a row while the labels fit whole, else the stacked form (a long name in another
-            // language, a narrow screen), never a label broken inside its word.
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) {
-                    actionButtons(fullWidth: false)
-                    Spacer(minLength: 0)
-                    if busy { ProgressView().controlSize(.small) }
-                }
-                VStack(alignment: .leading, spacing: 8) {
-                    actionButtons(fullWidth: true)
-                    if busy { ProgressView().controlSize(.small) }
-                }
-            }
-            .controlSize(.small)
             .disabled(busy)
         }
+    }
+
+    private var watchButton: some View {
+        Button { onEdit(.watch(!watched)) } label: {
+            Image(systemName: watched ? "eye.fill" : "eye")
+                .font(.footnote)
+                .foregroundStyle(watched ? Theme.tint : .secondary)
+                .frame(width: 36, height: AskCardKeys.toolHeight)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(watched ? "Stop watching" : "Watch")
+        .accessibilityIdentifier("org.thread.watch")
     }
 
     /// An action's label: on one line, its word whole (`OrgThreadCardLayout.actionLabel`).
@@ -1052,19 +1055,8 @@ struct OrgThreadCard: View {
         }
     }
 
-    @ViewBuilder
-    private func actionButtons(fullWidth: Bool) -> some View {
-        // Acknowledged already: the AI places it (server thread-known.ts), no second button.
-        if !known && !waitsOnHim {
-            Button { onEdit(.acknowledge) } label: { actionLabel("Acknowledge", fullWidth: fullWidth) }
-                .buttonStyle(.walnut(.primary, size: .small))
-                .tint(Theme.accent)
-                .accessibilityIdentifier("org.thread.ack")
-        }
-        snoozeMenu(fullWidth: fullWidth)
-    }
-
-    private func snoozeMenu(fullWidth: Bool) -> some View {
+    /// "Snooze ▾" (or "Snoozed ▾"), quiet text like the ask card's.
+    private var snoozeMenu: some View {
         Menu {
             snoozeChoices
             if snoozed {
@@ -1072,9 +1064,9 @@ struct OrgThreadCard: View {
                 Button("Unsnooze") { onEdit(.snooze("")) }
             }
         } label: {
-            actionLabel(snoozed ? "Snoozed" : "Snooze", fullWidth: fullWidth)
+            AskSnoozeLabel(text: snoozed ? "Snoozed" : "Snooze")
         }
-        .buttonStyle(.walnut(.secondary, size: .small))
+        .foregroundStyle(.secondary)
         .accessibilityIdentifier("org.thread.snooze")
     }
 
