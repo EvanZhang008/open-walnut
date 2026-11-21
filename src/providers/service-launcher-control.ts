@@ -16,7 +16,7 @@ import {
 } from './service-launcher-script.js'
 import { readLauncherFacts, type LauncherFacts } from './service-launcher-beat.js'
 
-export type LauncherOutcome = 'committed' | 'rolledback' | 'refused' | 'failed' | 'current'
+export type LauncherOutcome = 'committed' | 'rolledback' | 'interrupted' | 'refused' | 'failed' | 'current'
 export interface LauncherResult { id: string; outcome: LauncherOutcome; exe: string; reason: string }
 
 /** How long a switch may take the launcher: the old service's stop, the new one's trial, a put-back's stop. */

@@ -22,7 +22,7 @@ let home: string
 let L: string
 const children: ChildProcess[] = []
 
-/** A stub service: its mode file (good, noready, fail, crash:N, leave:N, hang, hangterm) is read on every loop. */
+/** A stub service: its mode file (good, noready, fail, crash:N, quit:N, leave:N, beat:S, hang, hangterm) is read on every loop. */
 function stub(name: string, mode = 'good'): string {
   const exe = path.join(dir, name)
   fs.writeFileSync(path.join(dir, `${name}.mode`), `${mode}\n`)
@@ -37,10 +37,10 @@ function stub(name: string, mode = 'good'): string {
     '  m=$(cat "$d/$n.mode"); now=$(date +%s); [ "$m" = hangterm ] && trap "" TERM',
     '  case $m in hang|hangterm) ;; *) b=$(cat "$d/$n.busy" 2>/dev/null || echo 0); echo "$now $b $$" > "$WALNUT_LAUNCHER_DIR/hb.$$" && mv -f "$WALNUT_LAUNCHER_DIR/hb.$$" "$WALNUT_LAUNCHER_DIR/heartbeat";; esac',
     '  if [ $r = 0 ] && [ "$m" != noready ]; then printf "pid=%s\\n" $$ > "$WALNUT_LAUNCHER_DIR/ready"; r=1; tr=$now; fi',
-    '  case $m in crash:*) [ $((now - tr)) -ge ${m#crash:} ] && exit 3;; esac',
+    '  case $m in crash:*) [ $((now - tr)) -ge ${m#crash:} ] && exit 3;; quit:*) [ $((now - tr)) -ge ${m#quit:} ] && exit 0;; esac',
     // leave:N: a planned exit N s after ready (it prepared for an update an older Walnut runs), said first.
     '  case $m in leave:*) if [ $((now - tr)) -ge ${m#leave:} ]; then printf "pid=%s\\nreason=update\\n" $$ > "$WALNUT_LAUNCHER_DIR/leaving"; exit 1; fi;; esac',
-    '  /bin/sleep 0.2',
+    '  case $m in beat:*) /bin/sleep ${m#beat:};; *) /bin/sleep 0.2;; esac',
     'done',
     '',
   ].join('\n'), { mode: 0o700 })
@@ -56,10 +56,22 @@ function writeLauncher(seed: string, file = path.join(state, 'walnut-launcher.sh
   return file
 }
 
+/** A `date` on PATH whose epoch runs `offset` seconds ahead (a wake from sleep, a clock jump) for the launcher and its service. */
+function clockShim(): { path: string; jump: (seconds: number) => void } {
+  const shim = path.join(dir, 'shim')
+  fs.mkdirSync(shim)
+  const offset = path.join(dir, 'offset')
+  fs.writeFileSync(path.join(shim, 'date'), [
+    '#!/bin/sh', `off=$(cat '${offset}' 2>/dev/null || echo 0)`,
+    'if [ "$1" = "+%s" ]; then echo $(( $(/bin/date +%s) + off )); else exec /bin/date "$@"; fi', '',
+  ].join('\n'), { mode: 0o700 })
+  return { path: `${shim}:/usr/bin:/bin`, jump: (seconds) => fs.writeFileSync(offset, `${seconds}\n`) }
+}
+
 let shell = '/bin/dash'
 let shellArgs: string[] = []
-function launch(script: string): ChildProcess {
-  const child = spawn(shell, [...shellArgs, script], { stdio: 'ignore', detached: true, env: { HOME: home, PATH: guardedPath([], '/usr/bin:/bin') } })
+function launch(script: string, env: Record<string, string> = {}): ChildProcess {
+  const child = spawn(shell, [...shellArgs, script], { stdio: 'ignore', detached: true, env: { HOME: home, PATH: guardedPath([], '/usr/bin:/bin'), ...env } })
   children.push(child)
   return child
 }
@@ -244,6 +256,97 @@ describe.each(SHELLS)('the service launcher under %s', (_label, bin) => {
     expect(read(path.join(L, 'launcher.log'))).toMatch(/left on purpose \(update\)/)
   })
 
+  it('any exit in the probation it did not announce counts, a clean one included', async () => {
+    const v1 = stub('v1'); const v2 = stub('v2', 'quit:1')
+    launch(writeLauncher(v1))
+    await until(() => live('v1').length === 1, 5_000, 'first start')
+    request(v2)
+    await until(() => kv(path.join(L, 'rollback')).from === v2, 12_000, 'rollback in probation')
+    expect(kv(path.join(L, 'rollback')).reason).toMatch(/failed 2 times .*exited with 0/)
+  })
+
+  it('a switch cut off by SIGTERM (the unit restarted right after the update asked) is tried again by the next launcher', async () => {
+    const v1 = stub('v1'); const v2 = stub('v2', 'noready')
+    const script = writeLauncher(v1)
+    const first = launch(script)
+    await until(() => live('v1').length === 1, 5_000, 'first start')
+    const id = request(v2)
+    await until(() => live('v2').length === 1 && launcherState().phase === 'trial', 5_000, 'trial running')
+    process.kill(first.pid!, 'SIGTERM')
+    await until(() => !alive(first.pid!) && live().length === 0, 8_000, 'stopped')
+    // Back to the old version, the switch left for the next launcher: no put-back, no refusal.
+    expect(launcherState()).toMatchObject({ current: v1, phase: 'committed' })
+    expect(kv(path.join(L, 'request'))).toMatchObject({ id, exe: v2, prepared: '1' })
+    expect(result().id).not.toBe(id)
+    fs.writeFileSync(path.join(dir, 'v2.mode'), 'good\n')
+    launch(script)
+    await until(() => result().id === id, 10_000, 'the switch answered')
+    expect(result().outcome).toBe('committed')
+    expect(launcherState().current).toBe(v2)
+    expect(read(path.join(L, 'bad'))).toBe('')
+  })
+
+  it('a wake from sleep or a clock jump kills nothing and moves the probation clock', async () => {
+    const clock = clockShim()
+    const v1 = stub('v1', 'beat:1'); const v2 = stub('v2', 'beat:1')
+    launch(writeLauncher(v1, undefined, clock.path))
+    await until(() => live('v1').length === 1, 5_000, 'first start')
+    const id = request(v2)
+    await until(() => result().id === id && result().outcome === 'committed', 8_000, 'commit')
+    const pid = live('v2')[0]!.pid
+    const since = Number(launcherState().since)
+    clock.jump(120)
+    await sleep(3_000)
+    expect(live('v2').map((r) => r.pid)).toEqual([pid])
+    expect(read(path.join(L, 'launcher.log'))).toMatch(/the clock moved 1[12]\d s in one tick/)
+    expect(read(path.join(L, 'launcher.log'))).not.toMatch(/no heartbeat/)
+    // The 120 s asleep are no probation time: still watched, its clock moved by the gap.
+    expect(launcherState().phase).toBe('probation')
+    expect(Number(launcherState().since)).toBeGreaterThanOrEqual(since + 110)
+  })
+
+  it('a trial that beats and says it is busy (a long adoption) gets longer than the trial time', async () => {
+    const v1 = stub('v1'); const v2 = stub('v2', 'noready')
+    fs.writeFileSync(path.join(dir, 'v2.busy'), `${Math.floor(Date.now() / 1000) + 100}\n`)
+    launch(writeLauncher(v1))
+    await until(() => live('v1').length === 1, 5_000, 'first start')
+    const id = request(v2)
+    await sleep((CLOCKS.trial + 2) * 1000)
+    expect(launcherState()).toMatchObject({ current: v2, phase: 'trial' })
+    fs.writeFileSync(path.join(dir, 'v2.mode'), 'good\n')
+    await until(() => result().id === id, 5_000, 'commit')
+    expect(result().outcome).toBe('committed')
+  })
+
+  it('a current version that is gone: the launcher runs the good one, else its seed', async () => {
+    const v1 = stub('v1'); const v2 = stub('v2')
+    const script = writeLauncher(v1)
+    const first = launch(script)
+    await until(() => live('v1').length === 1, 5_000, 'first start')
+    const id = request(v2)
+    await until(() => result().id === id && result().outcome === 'committed', 8_000, 'commit')
+    process.kill(first.pid!, 'SIGKILL')
+    for (const r of live('v2')) process.kill(r.pid, 'SIGKILL')
+    fs.rmSync(v2)
+    await sleep(300)
+    launch(script)
+    await until(() => live('v1').length === 1, 6_000, 'v1 again')
+    expect(launcherState()).toMatchObject({ current: v1, phase: 'committed' })
+    expect(read(path.join(L, 'launcher.log'))).toMatch(/is not there any more: running/)
+  })
+
+  it('a put-back asked by the update keeps the reason it gave', async () => {
+    const v1 = stub('v1'); const v2 = stub('v2')
+    launch(writeLauncher(v1))
+    await until(() => live('v1').length === 1, 5_000, 'first start')
+    const id = request(v2)
+    await until(() => result().id === id && result().outcome === 'committed', 8_000, 'commit')
+    const back = request(v2, { op: 'rollback', reason: 'the new daemon did not answer as walnut-daemon-v2' })
+    await until(() => result().id === back, 8_000, 'rollback answered')
+    expect(kv(path.join(L, 'rollback')).reason).toBe('the new daemon did not answer as walnut-daemon-v2')
+    await until(() => live('v1').length === 1, 5_000, 'v1 back')
+  })
+
   it('a launcher and its trial killed mid-switch (a power loss): the next launcher runs the old version', async () => {
     const v1 = stub('v1'); const v2 = stub('v2', 'noready')
     const script = writeLauncher(v1)
@@ -297,6 +400,20 @@ describe.each(SHELLS)('the service launcher under %s', (_label, bin) => {
     await until(() => read(path.join(L, 'launcher.log')).includes(`watching the service already running (pid ${pid}`), 5_000, 'adoption')
     await sleep(1_500)
     expect(live('v1').map((r) => r.pid)).toEqual([pid])
+  })
+
+  it('a descendant that inherited L_LOCKED still takes the lock: no second launcher', async () => {
+    const v1 = stub('v1')
+    const script = writeLauncher(v1)
+    const first = launch(script)
+    await until(() => live('v1').length === 1, 5_000, 'first start')
+    const second = launch(script, { L_LOCKED: String(first.pid) })
+    await until(() => second.exitCode !== null, 5_000, 'second launcher gone')
+    expect(second.exitCode).toBe(0)
+    expect(live('v1')).toHaveLength(1)
+    // The service never inherits the launcher's lock marker.
+    const environ = `/proc/${live('v1')[0]!.pid}/environ`
+    if (fs.existsSync(environ)) expect(fs.readFileSync(environ, 'utf8')).not.toMatch(/(^|\0)L_LOCKED=/)
   })
 
   it('two launchers on one state dir: only one runs the service', async () => {

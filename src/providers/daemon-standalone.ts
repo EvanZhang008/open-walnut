@@ -15092,11 +15092,11 @@ if (action === '--start' || SERVICE_MODE) {
       await daemonInstanceLock?.release()
       // Work still stuck in a file call (a FIFO no one reads) holds a pool thread, and a normal
       // exit joins those threads: it would never return (twin of daemon-source.ts). Its state is saved; end hard.
+      // Under the launcher, the update exit is no crash, the hard end at the drain cap included (service-launcher-beat.ts).
+      if (serviceUpdateRequested) launcherBeat?.leaving('prepared for a service update')
       if (settled === 'cap') process.kill(process.pid, 'SIGKILL')
       // PARITY: daemon-source.ts ends itself hard here (exitDaemon) when a host_exec file look is
       // stuck in node's thread pool, whose exit waits for it; bun's exit does not, so this one exits as is.
-      // Under the launcher, the update exit is no crash (service-launcher-beat.ts).
-      if (serviceUpdateRequested) launcherBeat?.leaving('prepared for a service update')
       process.exit(failed || serviceUpdateRequested ? 1 : 0)
     })().catch((error) => { logMsg('error', 'daemon shutdown failed', { error: String(error) }); process.exit(1) })
   }

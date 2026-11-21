@@ -112,7 +112,14 @@ stop script (`detached/stop-detached.sh`, `src/providers/detached-registry.ts`) 
 version started that an older one cannot follow, refuses that version for a day (and writes
 `update-probation.failed`, which the update runner already reads), and the daemon's hello carries
 the put-back to Walnut Health and to the host's Session helper row in Settings. A trial found at
-start (the machine lost power mid-switch) is the old version again, without refusing the new one.
+start (the machine lost power mid-switch) is the old version again, without refusing the new one; a
+trial cut off by a stop (SIGTERM) is the old version again too, its request left for the next
+launcher, which tries it again. A trial that still beats and says it is busy (a long adoption) gets
+up to 15 minutes instead of 90 s, and any exit in the probation the daemon did not announce counts.
+A tick 10 s or more off the one before (a sleep, a paused VM, a clock change) moves the trial and
+probation clocks by the gap and gives the heartbeat 60 s more, so a wake ends nothing. A current
+version that is gone from disk is replaced by the good one, else the seed. An update whose unit or
+job restarts marks its switch prepared only after the restart.
 
 One launcher per install root: an flock (perl's flock on a Mac, which has no flock(1)), never
 handed to the daemon. A launcher that comes back while its daemon runs (pid and start time match)

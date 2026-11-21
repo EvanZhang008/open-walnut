@@ -16,7 +16,7 @@ import {
 import { performance } from 'node:perf_hooks'
 import { createLaunchAgentControl, LAUNCHD_NOT_SPAWNING, launchdLoadedFrom, parseLaunchdOverride, type LaunchdOverride, type LaunchdShortfall, type LaunchdSpawn } from './daemon-service-launchd.js'
 import { keepUnitActive } from './daemon-service-systemd.js'
-import type { LauncherControl } from './service-launcher-control.js'
+import type { LauncherControl, LauncherResult } from './service-launcher-control.js'
 import { LAUNCHER_SCRIPT_NAME } from './service-launcher-script.js'
 
 export type { LaunchdOverride } from './daemon-service-launchd.js'
@@ -138,6 +138,16 @@ export interface DaemonServiceFailure {
 export type DaemonServiceResult =
   | { ok: true; status: DaemonServiceStatus }
   | { ok: false; failure: DaemonServiceFailure }
+
+/** The launcher's answer to a switch as a failure, or null when it committed (systemd, launchd and cron alike). */
+export function launcherSwitchFailure(answer: LauncherResult | null, exe: string, running: string | null): DaemonServiceFailure | null {
+  if (!answer) return { code: 'notReady', message: `the launcher did not answer the switch to ${exe} in time` }
+  if (answer.outcome === 'committed') return null
+  if (answer.outcome === 'refused') return { code: 'launcherRefused', message: `the launcher refused ${exe}: ${answer.reason}` }
+  // Cut off by a power loss or a stop, not the build's fault: retried as any unfinished update is.
+  if (answer.outcome === 'interrupted') return { code: 'notReady', message: `the switch to ${exe} was cut off: ${answer.reason}` }
+  return { code: 'launcherRolledBack', message: `the new daemon did not start: ${answer.reason}`, rollback: `the launcher put ${running} back` }
+}
 
 export interface DaemonServiceOptions {
   scope?: DaemonServiceScope
@@ -760,22 +770,8 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
         throw error
       }
     } else undo.handedOver = await deps.handover?.() ?? false
-    if (deps.platform === 'darwin') {
-      const stuck = await reloadAgent(before.registered)
-      if (stuck) return stuck
-    } else {
-      const reload = await step('systemctl', scoped(scope, ['daemon-reload']))
-      if (reload) return reload
-      if (!updateOnly) {
-        const enable = await step('systemctl', scoped(scope, ['enable', '--now', DAEMON_SERVICE_UNIT_NAME]))
-        if (enable) return enable
-      }
-      // enable --now does not replace an old binary that is already running.
-      if (ours) {
-        const again = await step('systemctl', scoped(scope, ['restart', DAEMON_SERVICE_UNIT_NAME]))
-        if (again) return again
-      }
-    }
+    const stuck = await reloadAndRestart(scope, updateOnly, ours, before)
+    if (stuck) return stuck
 
     return confirm(scope, 'install', prepared.executable, updateOnly)
   }
@@ -795,6 +791,23 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
   function daemonOf(text: string): string | undefined {
     if (launcherConfig(text)) return undefined
     try { return readDaemonServiceExecutable(deps.platform, text) } catch { return undefined }
+  }
+
+  /** Load the unit or job again and (re)start it; a failure result, or null. */
+  async function reloadAndRestart(scope: DaemonServiceScope, updateOnly: boolean, ours: boolean, before: Probe): Promise<DaemonServiceResult | null> {
+    if (deps.platform === 'darwin') return reloadAgent(before.registered)
+    const reload = await step('systemctl', scoped(scope, ['daemon-reload']))
+    if (reload) return reload
+    if (!updateOnly) {
+      const enable = await step('systemctl', scoped(scope, ['enable', '--now', DAEMON_SERVICE_UNIT_NAME]))
+      if (enable) return enable
+    }
+    // enable --now does not replace an old binary that is already running.
+    if (ours) {
+      const again = await step('systemctl', scoped(scope, ['restart', DAEMON_SERVICE_UNIT_NAME]))
+      if (again) return again
+    }
+    return null
   }
 
   /**
@@ -835,6 +848,7 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
       if (!latest.active || !latest.enabled) return fail('serviceInactive', 'The service was stopped or disabled during staging; nothing was changed')
     }
     const unitChanged = undo.previous !== text
+    const restarts = unitChanged || !before.active
     // A switch only when a daemon runs and it is another version; else the launcher starts its seed.
     const id = before.active && running && running !== prepared.executable ? await L.request(prepared.executable, false) : null
     try {
@@ -861,36 +875,25 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
           throw error
         }
       } else undo.handedOver = await deps.handover?.() ?? false
-      if (id) await L.prepared(id)
+      // A unit that restarts next: the request stays unprepared until the new launcher runs, so the old
+      // launcher never begins a switch the restart's SIGTERM would cut off (review 2026-11-21).
+      if (id && !restarts) await L.prepared(id)
     } catch (error) {
       if (id) await L.withdraw(id).catch(() => {})
       throw error
     }
     // A launcher already running this unit takes the request itself; a new or changed unit is (re)started.
-    if (unitChanged || !before.active) {
-      if (deps.platform === 'darwin') {
-        const stuck = await reloadAgent(before.registered)
-        if (stuck) return stuck
-      } else {
-        const reload = await step('systemctl', scoped(scope, ['daemon-reload']))
-        if (reload) return reload
-        if (!updateOnly) {
-          const enable = await step('systemctl', scoped(scope, ['enable', '--now', DAEMON_SERVICE_UNIT_NAME]))
-          if (enable) return enable
-        }
-        if (ours) {
-          const again = await step('systemctl', scoped(scope, ['restart', DAEMON_SERVICE_UNIT_NAME]))
-          if (again) return again
-        }
+    if (restarts) {
+      const stuck = await reloadAndRestart(scope, updateOnly, ours, before)
+      if (stuck) {
+        if (id) await L.withdraw(id).catch(() => {})
+        return stuck
       }
+      if (id) await L.prepared(id)
     }
     if (id) {
-      const answer = await L.wait(id)
-      if (!answer) return fail('notReady', `the launcher did not answer the switch to ${prepared.executable} in time`)
-      if (answer.outcome === 'refused') return fail('launcherRefused', `the launcher refused ${prepared.executable}: ${answer.reason}`)
-      if (answer.outcome !== 'committed') {
-        return { ok: false, failure: { code: 'launcherRolledBack', message: `the new daemon did not start: ${answer.reason}`, rollback: `the launcher put ${running} back` } }
-      }
+      const failure = launcherSwitchFailure(await L.wait(id), prepared.executable, running)
+      if (failure) return { ok: false, failure }
     }
     const confirmed = await confirm(scope, 'install', prepared.executable, updateOnly)
     // It became ready, then did not answer or stay: the launcher puts the version before it back.

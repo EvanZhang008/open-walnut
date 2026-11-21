@@ -17598,9 +17598,9 @@ async function startDaemon() {
       if (daemonInstanceLock) await daemonInstanceLock.release();
       // Work still stuck in a file call (a FIFO no one reads) holds a libuv pool thread, and a
       // normal exit joins those threads: it would never return. Its state is saved; end hard.
-      if (settled === 'cap') process.kill(process.pid, 'SIGKILL');
-      // Under the launcher, the update exit is no crash (service-launcher-beat.ts).
+      // Under the launcher, the update exit is no crash, the hard end at the drain cap included (service-launcher-beat.ts).
       if (serviceUpdateRequested && launcherBeat) launcherBeat.leaving('prepared for a service update');
+      if (settled === 'cap') process.kill(process.pid, 'SIGKILL');
       exitDaemon(failed || serviceUpdateRequested ? 1 : 0);
     })().catch(function (err) {
       logMsg('error', 'daemon shutdown failed', { error: String(err) });

@@ -15,12 +15,18 @@
  *    version as a trial first, stops the old one, starts the new one, and commits it only when the
  *    service wrote `launcher/ready` (its sessions adopted, its port listening). For PROBATION_SECONDS
  *    after that, a second failure puts the previous good version back; past them, it is the good one.
- *    A trial that exits or is not ready in TRIAL_SECONDS is put back at once. A put-back ends the work
+ *    A trial that exits or is not ready in TRIAL_SECONDS (TRIAL_BUSY_MAX_SECONDS while it beats and says
+ *    it is busy) is put back at once; any exit in the probation the service did not announce
+ *    (`launcher/leaving`, a planned update exit) counts as a failure. A put-back ends the work
  *    the new version started that an older one cannot follow (`detached/stop-detached.sh`, written by
  *    that work's registry, src/providers/detached-registry.ts), refuses that version for a day, and
  *    leaves `launcher/rollback`, which the service reports to Walnut Health when it is up.
- *  - A trial found at start (the launcher or the machine stopped mid-switch) is the old version again
- *    unless the trial process still runs and had become ready.
+ *  - A trial cut off by a stop (SIGTERM) goes back to the old version and leaves its request for the
+ *    next launcher, which tries it again. A trial found at start (the machine stopped mid-switch) is
+ *    the old version again unless the trial process still runs and had become ready; neither is the
+ *    version's fault, so neither refuses it.
+ *  - A machine asleep, a paused VM or a clock jump (a tick JUMP_SECONDS or more off) moves the trial
+ *    and probation clocks by the gap and gives the heartbeat STALL_SECONDS more, so a wake kills nothing.
  *
  * One launcher per state dir: an flock on `launcher/lock` (flock(1), else perl's flock, else a pid
  * dir), never handed to the service. A launcher that comes back while its service still runs (the
@@ -45,6 +51,10 @@ export const LAUNCHER_DIR_NAME = 'launcher'
 export const STALL_SECONDS = 60
 export const BUSY_MAX_SECONDS = 3600
 export const TRIAL_SECONDS = 90
+/** A trial that beats and says it is busy (a long adoption) gets up to this long before it must be ready. */
+export const TRIAL_BUSY_MAX_SECONDS = 900
+/** A tick this much later than the one before is a sleep, a pause or a clock jump, not a stall. */
+export const JUMP_SECONDS = 10
 export const PROBATION_SECONDS = 15 * 60
 export const PROBATION_CRASHES = 2
 export const BAD_SECONDS = 24 * 60 * 60
@@ -105,7 +115,7 @@ const BODY: string[] = String.raw`
 LOG="$L/launcher.log"
 l_now() { date +%s; }
 l_log() { printf '%s [%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$$" "$*" >> "$LOG" 2>/dev/null; }
-l_rotate() { lo_s=$(wc -c < "$LOG" 2>/dev/null); lo_s=$((lo_s + 0)); [ "$lo_s" -gt ${LOG_MAX_BYTES} ] && mv -f "$LOG" "$LOG.1"; :; }
+l_rotate() { lo_s=$(wc -c 2>/dev/null < "$LOG"); lo_s=$((lo_s + 0)); [ "$lo_s" -gt ${LOG_MAX_BYTES} ] && mv -f "$LOG" "$LOG.1"; :; }
 l_num() { case $1 in ''|*[!0-9]*) return 1;; esac; return 0; }
 # A live process, not a zombie: kill -0 alone answers yes for a child nobody waited for.
 l_alive() {
@@ -132,11 +142,13 @@ l_lock() {
   l_alive "$ll_p" && return 1
   rm -rf "$L/lock.d"; mkdir "$L/lock.d" 2>/dev/null && echo $$ > "$L/lock.d/pid"
 }
-if [ -z "${"$"}{L_LOCKED:-}" ]; then
+# L_LOCKED is trusted only when it names this process (a re-exec keeps the pid); a descendant that runs
+# the script has another pid, so it takes the lock like anyone else.
+if [ "${"$"}{L_LOCKED:-}" != "$$" ]; then
   exec 9>>"$L/lock" || exit 1
   l_lock || exit 0
 fi
-export L_LOCKED=1
+export L_LOCKED=$$
 echo $$ > "$STATE/${DAEMON_BOOT_PID_NAME}"
 l_rotate
 
@@ -175,7 +187,7 @@ l_bad() { # exe: refused when it failed here in the last day
 c_pid=; c_last=; c_own=0; c_at=0; c_exe=; c_code=; fails=0; next_start=0
 l_spawn() {
   rm -f "$L/ready" "$L/leaving"
-  "$1" $ARGS 9>&- </dev/null >>"$STATE/daemon-service.out.log" 2>>"$STATE/daemon-service.err.log" &
+  ( unset L_LOCKED; exec "$1" $ARGS ) 9>&- </dev/null >>"$STATE/daemon-service.out.log" 2>>"$STATE/daemon-service.err.log" &
   c_pid=$!; c_own=1; c_at=$(l_now); c_exe=$1; c_code=
   printf '%s\n%s\n%s\n' "$c_pid" "$1" "$(l_start_of "$c_pid")" > "$L/service.pid.tmp" && mv -f "$L/service.pid.tmp" "$L/service.pid"
   l_log "started $1 (pid $c_pid, phase $s_phase)"
@@ -225,7 +237,7 @@ l_rollback() {
   [ -z "$lr_keep" ] && [ -n "$s_build" ] && printf '%s\n%s\n%s\n' "$s_build" "$lr_n" "$lr_why" > "$STATE/update-probation.failed.tmp" \
     && mv -f "$STATE/update-probation.failed.tmp" "$STATE/update-probation.failed"
   printf 'at=%s\nfrom=%s\nto=%s\nbuild=%s\nreason=%s\n' "$lr_n" "$lr_bad" "$s_good" "$s_build" "$lr_why" > "$L/rollback.tmp" && mv -f "$L/rollback.tmp" "$L/rollback"
-  [ -n "$s_req" ] && l_result "$s_req" rolledback "$lr_bad" "$lr_why"
+  [ -n "$s_req" ] && l_result "$s_req" "$([ -n "$lr_keep" ] && echo interrupted || echo rolledback)" "$lr_bad" "$lr_why"
   s_cur=$s_good; s_build=$s_gbuild; s_phase=committed; s_since=$lr_n; s_crash=0; s_req=; l_write
   fails=0; next_start=0
 }
@@ -242,10 +254,9 @@ l_exited() {
   case $s_phase in
     trial) l_rollback "the new version $le_why, before it was ready"; return;;
     probation)
-      if [ "$1" != 0 ]; then
-        s_crash=$((s_crash + 1)); l_write
-        if [ "$s_crash" -ge ${PROBATION_CRASHES} ]; then l_rollback "the new version failed $s_crash times in its first $((K_PROB / 60)) minutes (last: $le_why)"; return; fi
-      fi;;
+      # Any exit it did not announce: a build that quits with 0 again and again is no better.
+      s_crash=$((s_crash + 1)); l_write
+      if [ "$s_crash" -ge ${PROBATION_CRASHES} ]; then l_rollback "the new version failed $s_crash times in its first $((K_PROB / 60)) minutes (last: $le_why)"; return; fi;;
   esac
   if [ "$1" = 0 ] || [ "$le_up" -ge 60 ]; then fails=0; else fails=$((fails + 1)); fi
   le_d=1; le_i=1; while [ "$le_i" -lt "$fails" ] && [ "$le_d" -lt ${BACKOFF_MAX_SECONDS} ]; do le_d=$((le_d * 2)); le_i=$((le_i + 1)); done
@@ -258,8 +269,8 @@ l_request() {
   lq_b=$(l_get "$L/request" build); lq_p=$(l_get "$L/request" prepared); lq_at=$(l_get "$L/request" at)
   [ "$lq_id" = "$s_req" ] && [ "$s_phase" = trial ] && { rm -f "$L/request"; return 0; }
   if [ "$lq_op" = rollback ]; then
-    rm -f "$L/request"; s_req=$lq_id
     lq_why=$(l_get "$L/request" reason)
+    rm -f "$L/request"; s_req=$lq_id
     if [ "$lq_exe" = "$s_cur" ] && [ "$s_good" != "$s_cur" ]; then l_rollback "${"$"}{lq_why:-asked to put the previous version back}"
     else l_result "$lq_id" current "$s_cur" "nothing to put back"; s_req=; fi
     return 0
@@ -278,7 +289,20 @@ l_request() {
   s_cur=$lq_exe; s_build=$lq_b; s_phase=trial; s_since=$(l_now); s_crash=0; s_req=$lq_id; l_write
   rm -f "$L/request"
   l_stop "$K_STOP"
-  fails=0; l_spawn "$s_cur"
+  # The trial's clock starts with the new version, not with the old one's stop.
+  fails=0; l_spawn "$s_cur"; s_since=$(l_now); l_write
+}
+# The version to start is gone (pruned by an older Walnut, cleaned by hand): the good one, else the seed.
+l_runnable() {
+  [ -x "$s_cur" ] && return 0
+  for lu_e in "$s_good" "$EXEC"; do
+    if [ -n "$lu_e" ] && [ "$lu_e" != "$s_cur" ] && [ -x "$lu_e" ]; then
+      l_log "$s_cur is not there any more: running $lu_e"
+      [ "$lu_e" = "$s_good" ] && s_build=$s_gbuild || { s_build=; s_good=$lu_e; s_gbuild=; }
+      s_cur=$lu_e; s_phase=committed; s_since=$(l_now); s_crash=0; l_write; return 0
+    fi
+  done
+  return 0
 }
 # The script was rewritten: a newer launcher runs on in place (its service watched on by pid); a script
 # that is no launcher any more (the experiment turned off: the classic boot script) gets a stopped service.
@@ -286,10 +310,21 @@ l_selfcheck() {
   [ "$s_phase" = trial ] && return 0; [ -f "$L/request" ] && return 0
   lc_sum=$(cksum < "$SELF" 2>/dev/null); [ -n "$lc_sum" ] && [ "$lc_sum" != "$l_sum" ] || return 0
   if [ "$(sed -n 3p "$SELF")" = '${LAUNCHER_MARK}' ]; then l_log "the launcher script changed: running the new one"
-  else l_log "the script is no launcher any more: stopping the service and running it"; l_stop "$K_STOP"; fi
+  else l_log "the script is no launcher any more: stopping the service and running it"; l_stop "$K_STOP"; unset L_LOCKED; exec 9>&-; fi
   exec /bin/sh "$SELF"
 }
-l_term() { l_log "stopping (signal): the service first"; l_stop "$K_STOP"; rm -f "$STATE/${DAEMON_BOOT_PID_NAME}"; exit 0; }
+l_term() {
+  l_log "stopping (signal): the service first"; l_stop "$K_STOP"
+  if [ "$s_phase" = trial ] && [ -n "$s_req" ]; then
+    # A switch cut off by the stop (a restart of the unit right after the update asked for it): the old
+    # version again, and the request back for the next launcher. Not the new version's fault.
+    l_log "the switch to $s_cur was cut off by the stop: $s_good again, the switch left for the next launcher"
+    printf 'id=%s\nop=switch\nexe=%s\nbuild=%s\nprepared=1\nat=%s\n' "$s_req" "$s_cur" "$s_build" "$(l_now)" > "$L/request.tmp.$$" \
+      && mv -f "$L/request.tmp.$$" "$L/request"
+    s_cur=$s_good; s_build=$s_gbuild; s_phase=committed; s_since=$(l_now); s_crash=0; s_req=; l_write
+  fi
+  rm -f "$STATE/${DAEMON_BOOT_PID_NAME}"; exit 0
+}
 trap 'l_term' TERM INT
 
 # Start-up: state, a version someone else chose, the service still running, a switch left unconfirmed.
@@ -314,7 +349,7 @@ if [ "$s_phase" = trial ]; then
   fi
 fi
 if [ -n "$c_pid" ] && [ "$c_exe" != "$s_cur" ]; then l_log "pid $c_pid runs $c_exe, not $s_cur: replacing it"; l_stop "$K_STOP"; fi
-l_sum=$(cksum < "$SELF" 2>/dev/null); l_tick=0
+l_sum=$(cksum < "$SELF" 2>/dev/null); l_tick=0; w_p=$(l_now); hb_grace=0
 l_log "launcher up (current $s_cur, phase $s_phase)"
 
 while :; do
@@ -328,15 +363,28 @@ while :; do
     [ "$l_hold" = 1 ] || l_exited "$c_code"
   fi
   w_n=$(l_now)
+  w_gap=$((w_n - w_p)); w_p=$w_n
+  if [ "$w_gap" -ge ${JUMP_SECONDS} ] || [ "$w_gap" -lt 0 ]; then
+    # Asleep, paused or the clock moved: the gap is no time the service ran, and its next beat is due.
+    l_log "the clock moved $w_gap s in one tick (a sleep, a pause or a clock change): the clocks follow"
+    s_since=$((s_since + w_gap)); c_at=$((c_at + w_gap)); next_start=$((next_start + w_gap)); l_write
+    hb_grace=$((w_n + K_STALL))
+  fi
   if [ -z "$c_pid" ]; then
-    [ "$l_hold" = 0 ] && [ "$w_n" -ge "$next_start" ] && l_spawn "$s_cur"
+    [ "$l_hold" = 0 ] && [ "$w_n" -ge "$next_start" ] && l_runnable && l_spawn "$s_cur"
   else
     if [ "$s_phase" = trial ]; then
       if [ "$(l_get "$L/ready" pid)" = "$c_pid" ]; then
         s_phase=probation; s_since=$w_n; s_crash=0; l_write; l_result "$s_req" committed "$s_cur" ""; s_req=; l_write
         l_log "$s_cur is ready: committed, watched for $K_PROB s"
       elif [ $((w_n - s_since)) -gt "$K_TRIAL" ]; then
-        l_rollback "the new version was not ready within $K_TRIAL s"; continue
+        # Still beating and saying it is busy (a long adoption): it gets up to TRIAL_BUSY_MAX_SECONDS.
+        tb_t=; tb_b=; tb_p=; read -r tb_t tb_b tb_p < "$L/heartbeat" 2>/dev/null
+        if [ "$tb_p" = "$c_pid" ] && l_num "$tb_t" && l_num "$tb_b" && [ $((w_n - tb_t)) -le "$K_STALL" ] && [ "$tb_b" -gt "$w_n" ] \
+          && [ $((w_n - s_since)) -le ${TRIAL_BUSY_MAX_SECONDS} ]; then :
+        else
+          l_rollback "the new version was not ready within $K_TRIAL s (it ran $((w_n - s_since)) s)"; continue
+        fi
       fi
     elif [ "$s_phase" = probation ] && [ $((w_n - s_since)) -ge "$K_PROB" ]; then
       s_good=$s_cur; s_gbuild=$s_build; s_phase=committed; s_since=$w_n; s_crash=0; l_write
@@ -346,7 +394,7 @@ while :; do
       hb_t=; hb_b=; hb_p=; read -r hb_t hb_b hb_p < "$L/heartbeat" 2>/dev/null
       if [ "$hb_p" = "$c_pid" ] && l_num "$hb_t"; then
         l_num "$hb_b" || hb_b=0; [ "$hb_b" -gt $((hb_t + ${BUSY_MAX_SECONDS})) ] && hb_b=$((hb_t + ${BUSY_MAX_SECONDS}))
-        if [ $((w_n - hb_t)) -gt "$K_STALL" ] && [ "$w_n" -ge "$hb_b" ]; then
+        if [ $((w_n - hb_t)) -gt "$K_STALL" ] && [ "$w_n" -ge "$hb_b" ] && [ "$w_n" -ge "$hb_grace" ]; then
           l_log "no heartbeat from pid $c_pid for $((w_n - hb_t)) s: ending it"
           l_stop 10; l_exited stalled
         fi

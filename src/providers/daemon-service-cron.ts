@@ -40,6 +40,7 @@ import {
   type DaemonServiceManager,
   type DaemonServiceResult,
   type DaemonServiceStatus,
+  launcherSwitchFailure,
 } from './daemon-service-manager.js'
 import { isLauncherScript } from './service-launcher-script.js'
 
@@ -466,12 +467,8 @@ export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonSer
     }
     if (!(await deps.supervisor())) await deps.spawnDetached('/bin/sh', [script])
     if (id) {
-      const answer = await L.wait(id)
-      if (!answer) return fail('notReady', `the launcher did not answer the switch to ${prepared.executable} in time`)
-      if (answer.outcome === 'refused') return fail('launcherRefused', `the launcher refused ${prepared.executable}: ${answer.reason}`)
-      if (answer.outcome !== 'committed') {
-        return { ok: false, failure: { code: 'launcherRolledBack', message: `the new daemon did not start: ${answer.reason}`, rollback: `the launcher put ${running} back` } }
-      }
+      const failure = launcherSwitchFailure(await L.wait(id), prepared.executable, running)
+      if (failure) return { ok: false, failure }
     }
     const confirmed = await confirm(updateOnly ? 'update' : 'install', prepared.executable)
     if (!confirmed.ok && id) {
