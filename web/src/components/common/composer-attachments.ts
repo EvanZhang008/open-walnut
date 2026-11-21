@@ -13,6 +13,7 @@
  * - A box that takes pictures only (an answer box) ignores other files as before.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import type { ImageAttachment } from '@/api/chat';
 import { uploadImageWithProgress } from '@/api/image-upload';
 import {
@@ -315,7 +316,7 @@ export function useComposerAttachments(target: UploadTarget | null): ComposerAtt
     return turn;
   }, [addNow]);
 
-  const addClip = useCallback((video: File, stills: readonly File[], clip: Omit<ClipInfo, 'stills'>): Promise<string | null> => {
+  const addClip = useLeanCallback((video: File, stills: readonly File[], clip: Omit<ClipInfo, 'stills'>): Promise<string | null> => {
     const gen = generation.current;
     const turn = adding.current.then((): string | null => {
       if (gen !== generation.current) return null;

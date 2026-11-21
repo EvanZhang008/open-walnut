@@ -7,6 +7,7 @@
  * remembered for the browser session.
  */
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { useLeanCallback } from '@/hooks/useLeanCallback'
 import { useInRouterContext } from 'react-router-dom'
 import { hashTargetId, readDisclosureOpen, RouterHashWatcher, sessionStore, SettingsGroup, writeDisclosureOpen } from './SettingsSection'
 import { ChevronGlyph } from './settings-glyphs'
@@ -31,7 +32,7 @@ export function SettingsFoldGroup({ id, heading, summary, footer, children, 'dat
   }, [id])
 
   const inRouter = useInRouterContext()
-  const openForHash = useCallback(() => {
+  const openForHash = useLeanCallback(() => {
     const target = hashTargetId(window.location.hash)
     const el = target ? document.getElementById(target) : null
     if (el && bodyRef.current?.contains(el)) setAndStore(true)

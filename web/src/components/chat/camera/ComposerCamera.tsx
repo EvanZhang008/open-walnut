@@ -5,7 +5,8 @@
  * a file input with `capture`. ChatInput holds one of these and stays unaware of
  * what the camera does.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useExperimental } from '@/hooks/useExperimental';
 import type { ComposerAttachments } from '@/components/common/composer-attachments';
 import { CameraDock } from './CameraDock';
@@ -83,11 +84,11 @@ export function CameraMenuRow({ camera, disabled }: { camera: ComposerCameraStat
 /** The panel above the box, and the hidden input the phone's camera app answers. */
 export function ComposerCamera({ camera }: { camera: ComposerCameraState }) {
   const { attachments, processFiles, setNotice, acceptsFiles } = camera;
-  const addClip = useCallback((video: File, stills: File[], clip: Parameters<ComposerAttachments['addClip']>[2]) => (
+  const addClip = useLeanCallback((video: File, stills: File[], clip: Parameters<ComposerAttachments['addClip']>[2]) => (
     attachments.addClip(video, stills, clip).then((notice) => { if (notice) setNotice(notice); return !notice; })
   ), [attachments, setNotice]);
   // processFiles shows its own notice.
-  const addPhoto = useCallback((file: File) => processFiles([file]).then((notice) => !notice), [processFiles]);
+  const addPhoto = useLeanCallback((file: File) => processFiles([file]).then((notice) => !notice), [processFiles]);
 
   const onCaptured = async () => {
     const input = camera.captureRef.current;

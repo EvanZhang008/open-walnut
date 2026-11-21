@@ -9,7 +9,8 @@
  * "Send" sends it with the box's words. A photo taken while recording goes to
  * the attachments at once and the recording goes on.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { transcribeAudio } from '@/api/stt';
 import type { ClipInfo } from '@/components/common/composer-clip';
 import { log } from '@/utils/log';
@@ -79,7 +80,7 @@ export function CameraDock({ onClose, onPhoto, onClip, onSend, onPickFile, micBu
   const posterUrl = capture?.kind === 'video' ? capture.poster : undefined;
   useEffect(() => () => { if (captureUrl) URL.revokeObjectURL(captureUrl); if (posterUrl) URL.revokeObjectURL(posterUrl); }, [captureUrl, posterUrl]);
 
-  const transcribe = useCallback(async (clip: RecordedClip, url: string) => {
+  const transcribe = useLeanCallback(async (clip: RecordedClip, url: string) => {
     if (!clip.sound || clip.sound.size === 0) return;
     try {
       const base64 = await blobToBase64(clip.sound);

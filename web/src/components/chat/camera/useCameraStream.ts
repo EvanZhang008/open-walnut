@@ -4,7 +4,8 @@
  * was done in the panel for IDLE_OFF_MS. Nothing here starts on its own: the
  * panel exists only after the person picked Camera in the + menu.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { log } from '@/utils/log';
 import { IDLE_OFF_MS, cameraErrorKind, cameraVideoConstraints } from './camera-model';
 import { stopStream } from './camera-frames';
@@ -51,14 +52,14 @@ export function useCameraStream(active: boolean, opts: { busy: boolean; onIdle: 
   optsRef.current = opts;
   const lastTouch = useRef(Date.now());
 
-  const attach = useCallback((s: MediaStream | null) => {
+  const attach = useLeanCallback((s: MediaStream | null) => {
     const el = videoEl.current;
     if (!el) return;
     if (el.srcObject !== s) el.srcObject = s;
     if (s) void el.play().catch(() => { /* a muted inline video plays; a refusal shows a still frame */ });
   }, []);
 
-  const videoRef = useCallback((el: HTMLVideoElement | null) => {
+  const videoRef = useLeanCallback((el: HTMLVideoElement | null) => {
     videoEl.current = el;
     if (el) {
       el.muted = true;
@@ -67,7 +68,7 @@ export function useCameraStream(active: boolean, opts: { busy: boolean; onIdle: 
     }
   }, [attach]);
 
-  const stop = useCallback(() => {
+  const stop = useLeanCallback(() => {
     stopStream(streamRef.current);
     streamRef.current = null;
     setStream(null);

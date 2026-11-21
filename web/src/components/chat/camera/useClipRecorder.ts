@@ -4,7 +4,8 @@
  * on, a separate small sound-only recording that the speech-to-text route turns
  * into words. The microphone is open only while it records.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { log } from '@/utils/log';
 import { DICTATION_AUDIO_CONSTRAINTS } from '@/utils/mic-constraints';
 import {
@@ -85,7 +86,7 @@ export function useClipRecorder(onLimit: () => void): ClipRecorder {
     r.samples.push({ atMs, score, still: grabStill(r.video, stillName(r.base, atMs)) });
   };
 
-  const start = useCallback(async (video: HTMLVideoElement, stream: MediaStream, opts: { sound: boolean; base: string }) => {
+  const start = useLeanCallback(async (video: HTMLVideoElement, stream: MediaStream, opts: { sound: boolean; base: string }) => {
     if (run.current || startingRef.current || typeof MediaRecorder === 'undefined') return false;
     const attempt = { cancelled: false };
     startingRef.current = attempt;
@@ -149,14 +150,14 @@ export function useClipRecorder(onLimit: () => void): ClipRecorder {
     return true;
   }, []);
 
-  const finish = useCallback((r: Running) => {
+  const finish = useLeanCallback((r: Running) => {
     clearInterval(r.timer);
     stopStream(r.mic);
     run.current = null;
     setRecording(false);
   }, []);
 
-  const stop = useCallback(async (): Promise<RecordedClip | null> => {
+  const stop = useLeanCallback(async (): Promise<RecordedClip | null> => {
     const r = run.current;
     // One stop per recording: the minute's end and a click on Stop can come together.
     if (!r || stopping.current === r) return null;
@@ -176,7 +177,7 @@ export function useClipRecorder(onLimit: () => void): ClipRecorder {
     return { file, durationMs: Math.min(durationMs, MAX_CLIP_MS + 1000), stills, sound, soundType: r.soundType };
   }, [finish]);
 
-  const cancel = useCallback(() => {
+  const cancel = useLeanCallback(() => {
     if (startingRef.current) startingRef.current.cancelled = true;
     const r = run.current;
     if (!r) return;
