@@ -43,10 +43,11 @@ function OrbIcon({ phase }: { phase: VoicePhase }) {
 }
 
 export function VoiceTalkButton({ onClick, disabled }: { onClick: () => void; disabled?: boolean }) {
+  // The mic's twin beside it in the composer: an input-box tool, drawn by .mic-btn, not the button family.
   return (
     <button
       type="button"
-      className="btn mic-btn voice-talk-entry"
+      className="mic-btn voice-talk-entry"
       onClick={onClick}
       disabled={disabled}
       title="Talk: a pause sends, the answer is read aloud"

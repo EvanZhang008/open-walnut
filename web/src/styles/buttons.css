@@ -13,7 +13,7 @@
    (default: forms, dialogs, cards) and 28 px (.btn-sm: rows, toolbars, settings). */
 
 /* How strong the key's fill is: a dark page is black, so it needs more of the text colour. */
-:root { --btn-strength: 8%; }
+:root { --btn-strength: 8%; --btn-shade: #000; }
 :root[data-theme='dark'] { --btn-strength: 18%; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) { --btn-strength: 18%; }
@@ -26,10 +26,10 @@
   --btn-fill-press: color-mix(in srgb, var(--fg) calc(var(--btn-strength) + 8%), var(--bg));
   /* Labels on a solid key read at 4.5:1 or more in both themes: the accent and the error red are
      taken a little darker for a fill, and the red a little toward the text colour for a label. */
-  --btn-primary-fill: color-mix(in srgb, var(--accent) 86%, black);
-  --btn-primary-fill-hover: color-mix(in srgb, var(--accent) 74%, black);
-  --btn-danger-fill: color-mix(in srgb, var(--error) 84%, black);
-  --btn-danger-fill-hover: color-mix(in srgb, var(--error) 72%, black);
+  --btn-primary-fill: color-mix(in srgb, var(--accent) 86%, var(--btn-shade));
+  --btn-primary-fill-hover: color-mix(in srgb, var(--accent) 74%, var(--btn-shade));
+  --btn-danger-fill: color-mix(in srgb, var(--error) 84%, var(--btn-shade));
+  --btn-danger-fill-hover: color-mix(in srgb, var(--error) 72%, var(--btn-shade));
   --btn-danger-text: color-mix(in srgb, var(--error) 80%, var(--fg));
   box-sizing: border-box;
   /* WebKit keeps its native push-button look under a custom background (Mac app). */
@@ -46,7 +46,7 @@
   background: var(--btn-fill);
   color: var(--fg);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 500;
   line-height: 18px;
   white-space: nowrap;
@@ -83,7 +83,7 @@
   min-height: 28px;
   padding: 2px 10px;
   gap: 4px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 16px;
 }
 
@@ -135,10 +135,10 @@
   padding: 0;
   background: transparent;
   color: var(--fg-secondary);
-  font-size: 14px;
+  font-size: var(--font-size-md);
   line-height: 1;
 }
-.btn-icon.btn-sm { width: 24px; min-width: 24px; min-height: 24px; font-size: 12px; }
+.btn-icon.btn-sm { width: 24px; min-width: 24px; min-height: 24px; font-size: var(--font-size-sm); }
 .btn-icon svg { width: 16px; height: 16px; flex: none; }
 .btn-icon.btn-sm svg { width: 14px; height: 14px; }
 .btn-icon.btn-danger { color: var(--fg-secondary); }
@@ -185,7 +185,7 @@
 }
 .btn .btn-caret {
   color: var(--fg-muted);
-  font-size: 10px;
+  font-size: var(--font-size-xs);
   line-height: 1;
   transition: transform 0.12s;
 }
