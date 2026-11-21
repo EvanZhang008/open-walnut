@@ -9112,7 +9112,7 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
   max-height: 340px;
   overflow-y: auto;
 }
-:root[data-theme="dark"] .stt-dropdown-menu { background: var(--bg); }
+:root[data-theme="dark"] .stt-dropdown-menu { background: var(--bg-elevated); }
 .stt-dropdown-group-label {
   padding: 6px 8px 4px;
   font-size: 0.75rem;

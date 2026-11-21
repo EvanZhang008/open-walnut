@@ -206,6 +206,7 @@
     "styles/unpaired-notice.css": 11,
     "styles/usage-breakdown.css": 24,
     "styles/usage-limit.css": 1,
+    "styles/voice-conversation.css": 1,
     "styles/walnut-agent.css": 10,
     "styles/worker-fold.css": 2,
     "styles/workspaces.css": 2
@@ -612,6 +613,7 @@
     "styles/usage-breakdown.css": 20,
     "styles/usage-limit.css": 3,
     "styles/view-menu-choices.css": 1,
+    "styles/voice-conversation.css": 6,
     "styles/walnut-agent.css": 22,
     "styles/worker-fold.css": 5,
     "styles/workspaces.css": 50
