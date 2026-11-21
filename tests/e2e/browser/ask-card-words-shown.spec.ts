@@ -6,8 +6,8 @@
  * spec plays; tests/web/ask-card-words-guard.test.ts fails on a kind it does not.
  *
  * No card sits inside an element that is a button (a row is one).
- * The card's layout is checked here too: a wide column keeps the buttons and Snooze beside the box;
- * a narrow one puts them on the line below (the user: "最后一行就显示……snooze……或者说那个可以和
+ * The card's layout is checked here too: its buttons come first and the box under them ("butotn
+ * shoudl be before inbox"), and Snooze stays on the box's line, the last one (the user: "最后一行就显示……snooze……或者说那个可以和
  * input box 放一行也可以，就说不要显得那么的拥挤").
  * Real: the fixture server, the mock CLI's prompts, the approvals, inbox, Board and report routes.
  */
@@ -16,6 +16,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { holdApprovalsLock } from './approvals-lock'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { expectFamily } from './ask-card-family'
 import { asksOf, endRunningTurn, presetPanelDesign, setStatusSectionOpen, showSectionCard, startRunningTurn } from './status-section-helpers'
 
 /** The kinds this spec plays: every ActionKind (the guard test reads this list). */
@@ -144,6 +145,16 @@ test('every kind shows its box to type in, with no click and no "Reply…"', asy
   await expect(approval.getByTestId('org-answer-input')).toHaveAttribute('placeholder', /Approve still needed/)
 })
 
+test('every kind draws the one card look: one blue key at most, keys and box 34 px, options as rows', async ({ page }) => {
+  await openNeeds(page)
+  for (const kind of GUARDED) {
+    const item = itemOf(await showSectionCard(page, 'needs', ids[kind]), kind)
+    const look = await expectFamily(item, kind)
+    // Its main action is blue: an approval's Approve.
+    if (kind === 'approval') expect(look.blue, `${kind}: its Approve is blue`).toBe(1)
+  }
+})
+
 test('a reply that fails keeps its words in the box, and the box is its own', async ({ page }) => {
   await openNeeds(page)
   // The server refuses the letter's reply once: the row comes back with the reason and the words.
@@ -166,7 +177,7 @@ test('a reply that fails keeps its words in the box, and the box is its own', as
   await box().fill('')
 })
 
-test('wide: the buttons and Snooze beside the box; narrow: on the line under it', async ({ page }) => {
+test('the buttons first, the box under them, Snooze on the box\'s line; the same when narrow', async ({ page }) => {
   await openNeeds(page)
   const item = itemOf(await showSectionCard(page, 'needs', ids.ask), 'ask')
   const box = () => item.locator('.org-answer-words').first()
@@ -175,10 +186,9 @@ test('wide: the buttons and Snooze beside the box; narrow: on the line under it'
   const mid = async (l: Locator) => { const b = (await l.boundingBox())!; return b.y + b.height / 2 }
   await expect(box()).toBeVisible({ timeout: 30_000 })
   const wide = (await item.boundingBox())!.width
-  if (wide >= 600) {
-    expect(Math.abs((await mid(yes())) - (await mid(box()))), 'Yes beside the box').toBeLessThan(10)
-    expect(Math.abs((await mid(snooze())) - (await mid(box()))), 'Snooze beside the box').toBeLessThan(10)
-  }
+  const above = async () => { const y = (await yes().boundingBox())!; expect(y.y + y.height, 'Yes above the box').toBeLessThanOrEqual((await box().boundingBox())!.y + 1) }
+  await above()
+  if (wide >= 600) expect(Math.abs((await mid(snooze())) - (await mid(box()))), 'Snooze on the box\'s line').toBeLessThan(10)
   await page.screenshot({ path: `test-results/ask-card-wide-${test.info().project.name}.png`, clip: (await item.boundingBox())! })
   // The row and its asks under it, as the list draws them.
   const row = (await (await showSectionCard(page, 'needs', ids.ask)).boundingBox())!
@@ -188,7 +198,7 @@ test('wide: the buttons and Snooze beside the box; narrow: on the line under it'
   await page.setViewportSize({ width: 820, height: 900 })
   await expect.poll(async () => (await item.boundingBox())?.width ?? 0).toBeLessThan(600)
   const b = (await box().boundingBox())!
-  expect((await yes().boundingBox())!.y, 'Yes under the box').toBeGreaterThanOrEqual(b.y + b.height - 1)
-  expect((await snooze().boundingBox())!.y, 'Snooze under the box').toBeGreaterThanOrEqual(b.y + b.height - 1)
+  await above()
+  expect((await snooze().boundingBox())!.y, 'Snooze on the box\'s line or under it').toBeGreaterThanOrEqual(b.y - 1)
   await page.screenshot({ path: `test-results/ask-card-narrow-${test.info().project.name}.png`, clip: (await item.boundingBox())! })
 })

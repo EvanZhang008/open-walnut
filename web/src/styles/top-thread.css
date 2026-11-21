@@ -39,7 +39,10 @@
    stay in sight, under the question they answer, and nothing runs over the chat. Box: the box
    alone, when even that is too much. */
 .session-top:is([data-room="lean"], [data-room="min"], [data-room="box"]) .top-thread-list :is(.org-thread-summary, .org-thread-unread, .org-thread-conversation),
-.session-top:is([data-room="lean"], [data-room="min"], [data-room="box"]) .top-thread-list > .org-thread > :not(.ask-card, .org-thread-follow, .org-thread-held-ask, .org-thread-head),
+.session-top:is([data-room="lean"], [data-room="min"], [data-room="box"]) .top-thread-list > .org-thread > :not(.ask-card, .org-thread-follow, .org-thread-held-ask, .org-thread-head, .org-thread-actions),
+/* A thread card's answer row (ask-card.css) keeps only its box there: not its Acknowledge or Reopen. */
+.session-top:is([data-room="lean"], [data-room="min"], [data-room="box"]) .top-thread-list .org-thread-actions > :is(.btn, .org-thread-closed),
+.session-top:is([data-room="lean"], [data-room="min"], [data-room="box"]) .top-thread-list .ask-card-answer::before,
 .session-top:is([data-room="lean"], [data-room="min"], [data-room="box"]) .top-thread-list .org-thread-head > :not(.org-thread-title),
 .session-top:is([data-room="lean"], [data-room="min"], [data-room="box"]) .top-thread-list .ask-card > :not(.ask-card-answer),
 .session-top:is([data-room="lean"], [data-room="min"], [data-room="box"]) .top-thread-list :is(.ask-card-tools, .org-thread-held-ask > :not(.ask-card)),

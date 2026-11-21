@@ -8,7 +8,8 @@
  * Three ways a second style gets in, counted per file (ui-standard-scan.ts):
  *   - restyledBtn: a rule that changes how `.btn` looks for one place (`.scope .btn`,
  *     `.btn.extra`, or a class the TSX writes beside `btn`). The card family's one home,
- *     components/actions/ask-card.css, is exempt.
+ *     components/actions/ask-card.css, is exempt (from ownControl too: it maps an approval's own
+ *     buttons onto the family inside a card).
  *   - ownControl: a `*-btn` / `*-button` / `*-pill` / `*-chip` class with its own fill and corner.
  *   - rawAccent: a literal #007aff / #0a84ff where var(--accent) belongs.
  * The counts that exist today are in ui-standard-baseline.json and may only go down. A new file or
@@ -27,7 +28,9 @@ const STANDARD = '.claude/skills/walnut-ui-requirements/standard.md';
 
 function current(): Counts {
   const c = countAll();
+  // The family's home gives every card control the family's look, an approval's own buttons included.
   delete c.restyledBtn[FAMILY_HOME];
+  delete c.ownControl[FAMILY_HOME];
   return c;
 }
 

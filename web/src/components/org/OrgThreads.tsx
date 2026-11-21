@@ -403,11 +403,6 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
             {card.summary.from !== 'none' && <span className="org-thread-stand-in-note" data-testid="org-thread-stand-in">{STAND_IN_NOTE[card.summary.from ?? 'answer'](name)}</span>}
           </div>
         ))}
-      {/* It holds a decision letter: the letter's buttons and box answer it, here and in the inbox at
-          once, in the one ask card's row. */}
-      {oneCard && letter && !heldItem && <AskCardFrame testId="org-thread-letter-card" className="org-thread-ask" answer={<ThreadLetterAnswer t={t} />} tools={<ThreadTools t={t} snoozed={snoozed} state={state} pinned={pinned} />} />}
-      {choice && !letter && <AskCardFrame testId="org-thread-choice-card" className="org-thread-ask" answer={<ThreadChoiceAnswer t={t} />} tools={<ThreadTools t={t} snoozed={snoozed} state={state} pinned={pinned} />} />}
-      {needs && !heldItem && !letter && !choice && <NeedsAnswer t={t} owner={owner} onFollowUp={onFollowUp} snoozed={snoozed} state={state} pinned={pinned} />}
       {chips.length > 0 && !known && <TaskChips ids={chips} tasks={tasks} />}
       {/* The card is its title and summary: the new answers fold behind one line until a click
           (2026-11-08, the user: "the history should all be collapsed unless I click to expand"). */}
@@ -441,23 +436,34 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
       )}
       {/* Off (threads_one_card): the letter's buttons and box below the conversation, as before. */}
       {!oneCard && letter && <ThreadLetterAnswer t={t} />}
-      {/* A card waiting on him answers in the ask card's row above (its own box and Snooze, or the
+      {/* Its answer comes last, after its tasks and its conversation, as on every card (2026-11-21, the
+          user's pick of ten whole-card designs: "2 is good").
+          It holds a decision letter: the letter's buttons and box answer it, here and in the inbox at
+          once, in the one ask card's row. */}
+      {oneCard && letter && !heldItem && <AskCardFrame testId="org-thread-letter-card" className="org-thread-ask" answer={<ThreadLetterAnswer t={t} />} tools={<ThreadTools t={t} snoozed={snoozed} state={state} pinned={pinned} />} />}
+      {choice && !letter && <AskCardFrame testId="org-thread-choice-card" className="org-thread-ask" answer={<ThreadChoiceAnswer t={t} />} tools={<ThreadTools t={t} snoozed={snoozed} state={state} pinned={pinned} />} />}
+      {needs && !heldItem && !letter && !choice && <NeedsAnswer t={t} owner={owner} onFollowUp={onFollowUp} snoozed={snoozed} state={state} pinned={pinned} />}
+      {/* A card waiting on him answers in the ask card's row just above (its own box and Snooze, or the
           held ask's): none of them twice, and no Acknowledge. */}
-      {needs || choice ? null : (<>
-        {onFollowUp && !closed && !letter ? (
-          <FollowUp threadId={t.id} title={t.title} owner={owner} onSend={(text, images) => onFollowUp(t.id, text, images)} />
-        ) : null}
-        <div className="org-thread-actions">
+      {/* The ask card's own answer row (actions/ask-card.css), so every card's buttons, box, Snooze
+          and pin look and sit the same (2026-11-21, the user: "I lkike P1 button, not the stupid ugly
+          current snooze or ack, also why they arenot even con sistent"): its buttons first, the box
+          under them, Snooze and the pin at the right of the box's line. */}
+      {needs || choice ? null : (
+        <div className="ask-card-answer org-thread-actions">
           {closed ? (<>
             <span className="org-thread-closed" data-testid="org-thread-closed">{closedWords(t, now)}</span>
             <button type="button" className="btn btn-sm" data-testid="org-thread-reopen" onClick={() => void state.update(t.id, { reopen: true })}>Reopen</button>
           </>) : (<>
             {/* Acknowledged already: the AI places it (core/org/thread-known.ts), no second button. */}
-            {!letter && !known && <button type="button" className="btn btn-sm btn-primary" data-testid="org-thread-ack" onClick={() => void state.update(t.id, { close: 'acked' })}>Acknowledge</button>}
-            <ThreadTools t={t} snoozed={snoozed} state={state} pinned={pinned} />
+            {!letter && !known && <button type="button" className="btn btn-sm btn-primary" data-primary="" data-testid="org-thread-ack" onClick={() => void state.update(t.id, { close: 'acked' })}>Acknowledge</button>}
+            {onFollowUp && !letter ? (
+              <FollowUp threadId={t.id} title={t.title} owner={owner} onSend={(text, images) => onFollowUp(t.id, text, images)} />
+            ) : null}
+            <span className="ask-card-tools"><ThreadTools t={t} snoozed={snoozed} state={state} pinned={pinned} /></span>
           </>)}
         </div>
-      </>)}
+      )}
     </li>
   );
 }

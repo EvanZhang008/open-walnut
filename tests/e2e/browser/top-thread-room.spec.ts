@@ -83,7 +83,9 @@ async function measure(page: Page, panel: Locator, share: 3 | 2 = 3): Promise<vo
   const body = panel.locator('.session-panel-body')
   await expect(top).toBeVisible()
   await page.waitForTimeout(300)
-  await expect(top).toHaveAttribute('data-room', 'full')
+  // The choices are a list of rows (the user's card pick, 2026-11-21: "2 is good"), so in a window
+  // 800 px tall the top may take its snug room: the summary's floor drops to two lines, within a half.
+  await expect(top).toHaveAttribute('data-room', share === 2 ? /full|snug/ : 'full')
   const [t, b] = [await box(top), await box(body)]
   expect(t.height, `top ${t.height} of body ${b.height}`).toBeLessThanOrEqual(b.height / share + 1)
   // The words he must read: at least two lines of the summary, inside the top block.

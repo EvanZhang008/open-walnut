@@ -18,6 +18,7 @@
 import fs from 'node:fs'
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
+import { expectFamily } from './ask-card-family'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 
@@ -181,6 +182,9 @@ test('Acknowledge: the card waits in Acknowledged while the AI decides, then sho
 
   // 4. The result card: Acknowledged too; the AI closes it, and the Closed card says why.
   await chip(page, 'read').click()
+  // A To read card is the one card look: its Acknowledge the one blue key, before its box.
+  const look = await expectFamily(card(page, 'read', ids.result), 'To read card')
+  expect(look.blue, 'its Acknowledge is blue').toBe(1)
   await card(page, 'read', ids.result).getByTestId('org-thread-ack').click()
   await chip(page, 'known').click()
   await expect(card(page, 'known', ids.result).getByTestId('org-thread-ack-line')).toHaveText('AI is deciding where this goes.', { timeout: 15_000 })

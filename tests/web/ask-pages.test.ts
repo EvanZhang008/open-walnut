@@ -117,3 +117,17 @@ describe('the block shows one ask at a time', () => {
     expect(read('ask-pages.ts')).toMatch(/answered: \{ \.\.\.now\.answered, \[item\.id\]:/);
   });
 });
+
+describe('a card\'s buttons come before its box', () => {
+  // 2026-11-20, the user: "butotn shoudl be before inbox". Every place draws its ask in
+  // .ask-card-answer (ask-card.css), so one order rule holds for all of them.
+  const css = readFileSync(join(WEB, 'ask-card.css'), 'utf8');
+  const orderOf = (sel: RegExp) => Number((css.match(sel) ?? [])[1]);
+  it('the buttons\' order is below the box\'s, and the pager and Snooze come after the box', () => {
+    const words = orderOf(/\.ask-card-answer \.org-answer-words \{ order: (\d+);/);
+    const buttons = orderOf(/\.ask-card-answer :is\(\.btn, \.org-answer-check, \.approval-actions\):not\([^)]*\)[^{]*\{ order: (\d+);/);
+    const tools = orderOf(/\.ask-card-answer \.ask-card-tools \{ order: (\d+);/);
+    expect(buttons).toBeLessThan(words);
+    expect(tools).toBeGreaterThan(words);
+  });
+});

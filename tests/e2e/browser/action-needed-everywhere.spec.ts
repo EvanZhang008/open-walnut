@@ -12,10 +12,11 @@
  *     the others, and an unsnooze elsewhere is not held back by a place's own earlier snooze
  *   - a reply typed on the row (the thread card's own words box) answers a letter: its task gets
  *     the words, and its page stays marked answered on the row and in the strip
- *   - each card stays short: its buttons beside its box in a wide column, under it in a narrow one
+ *   - a card's buttons come first and its box under them, in a wide column and a narrow one
  *   - the switch off: no strip
  * Real: the fixture server, the mock CLI's prompt, the approvals and inbox routes, the status sync.
  */
+import { expectFamily } from './ask-card-family'
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { holdApprovalsLock } from './approvals-lock'
@@ -259,17 +260,18 @@ test('a reply typed on the row answers the letter: its task gets the words, and 
   await expect.poll(async () => ((await statusOf(request, ids.letter)).actions ?? []).some((a) => a.id === itemId), { timeout: 30_000 }).toBe(false)
 })
 
-test('the strip keeps each card short: its buttons beside the box when wide, under it when narrow', async ({ page }) => {
+// 2026-11-20, the user: "butotn shoudl be before inbox": a card's buttons come first, its box under them.
+test('a card\'s buttons come before its box: above it, wide or narrow', async ({ page }) => {
   // Wide: one session column beside the task list.
   await openHome(page, ids.letterSid)
   let strip = stripOf(page, ids.letterSid)
   let items = strip.getByTestId('action-item')
   await expect(items.first()).toBeVisible({ timeout: 30_000 })
-  const mid = (b: { y: number; height: number }) => b.y + b.height / 2
   for (const item of await items.all()) {
     const box = (await item.locator('.org-answer-words').boundingBox())!
     const button = (await item.getByTestId('org-answer-option').first().boundingBox())!
-    expect(Math.abs(mid(button) - mid(box)), 'its buttons beside its box').toBeLessThan(12)
+    expect(button.y + button.height, 'its buttons above its box').toBeLessThanOrEqual(box.y + 1)
+    await expectFamily(item, 'wide strip card')
     // No heading, kind or age: what it asks, a line of why, the box and its buttons.
     await expect(item.getByTestId('action-kind')).toHaveCount(0)
   }
@@ -283,7 +285,8 @@ test('the strip keeps each card short: its buttons beside the box when wide, und
   for (const item of await items.all()) {
     const box = (await item.locator('.org-answer-words').boundingBox())!
     const button = (await item.getByTestId('org-answer-option').first().boundingBox())!
-    expect(button.y, 'its buttons on the line under its box').toBeGreaterThanOrEqual(box.y + box.height - 1)
+    expect(button.y + button.height, 'its buttons above its box').toBeLessThanOrEqual(box.y + 1)
+    await expectFamily(item, 'narrow strip card')
   }
   await page.screenshot({ path: `test-results/strip-narrow-${test.info().project.name}.png`, clip: (await strip.boundingBox())! })
   await page.setViewportSize({ width: 1280, height: 900 })

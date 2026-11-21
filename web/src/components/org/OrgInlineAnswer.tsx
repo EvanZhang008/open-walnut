@@ -46,7 +46,8 @@ export type AnswerSettle = (failure?: AnswerFailure) => void;
  * A choice's buttons, the one rendering wherever a choice is answered (2026-11-20, the user: "it has
  * to be unified ... it can always give an option"): an ask's options, a letter's actions, a Board
  * choice, a thread's options. The recommended one first, marked "Recommended" (a CSS mark on
- * data-recommended, so the label stays the button's text); a line of detail on hover. Its click is
+ * data-recommended, so the label stays the button's text); its line of detail beside the label in the
+ * card (data-detail, ask-card.css) and whole on hover. Its click is
  * the answer. With threads_one_card off (core/org/one-card.ts) the buttons read as before it: in
  * their own order, the recommended one only highlighted.
  */
@@ -71,7 +72,7 @@ export function AskOptions({ options, recommended, onPick, testId, disabled }: {
           data-value={o.value}
           {...(oneCard && o.value === recommended ? { 'data-recommended': 'true' } : {})}
           {...(o.title || o.value === recommended ? { 'aria-description': o.title ?? 'Recommended' } : {})}
-          {...(oneCard && o.title ? { title: o.title } : {})}
+          {...(oneCard && o.title ? { title: o.title, 'data-detail': o.title } : {})}
           {...(disabled ? { disabled: true } : {})}
           onClick={() => onPick(o.value)}
         >{o.label}</button>

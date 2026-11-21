@@ -35,28 +35,32 @@ card's answer row and tool row in `web/src/components/actions/ask-card.css`, use
 
 | Role | Where | Use | Look |
 |---|---|---|---|
-| Option / action | `.ask-card-answer .btn` | every option and other action (Close, Reopen, choices that are not the recommended one) | grey rounded: `--bg-secondary`, no border, corner 8 px, height 28 px, padding 4 px 14 px, 13 px weight 400; hover mixes 12% `--fg` into the fill; disabled at 0.5 opacity |
-| Main action | `.ask-card-answer .btn.btn-primary` | the one main action of a card, at most one: Acknowledge, or the recommended option when there is one | solid blue: `--accent` fill, white text, same height, corner, padding and font size as the grey buttons (a recommended option keeps its "Recommended" word) |
-| Tool | `.ask-card-tools .btn` | Snooze, pin, paging arrows, Quote, Close tools | transparent, no border, `--fg-muted`, corner 8 px, height 28 px, padding 0 6 px, 13 px; hover `--bg-hover` and `--fg`; Snooze has a 15 px clock icon and no "▾"; an on pin turns `--accent` |
+| Option | `.ask-card-answer .org-answer-options .btn` (`AskOptions`) | each choice of a question, a letter's actions, a Board choice | a row of its own, full width: `--bg` fill, 1 px `--border` hairline, corner 8 px, height 34 px, padding 4 px 12 px, 13 px weight 500 label, then its line of why (`data-detail`) in 12 px `--fg-muted`, cut to the row; a multi choice's ticks are the same rows (`.org-answer-check`), edged in `--accent` when ticked |
+| Main action | `.ask-card-answer .btn.btn-primary` | the one main action of a card, at most one: Acknowledge, or the recommended option | solid blue: `--accent` fill, white text, the same size as its neighbours; a recommended option row keeps its "Recommended" word at the right |
+| Action | `.ask-card-answer .btn` | any other button on the card (Close, Reopen, Retry) | grey: `--bg-secondary`, no border, corner 8 px, height 34 px, padding 4 px 12 px, 13 px weight 500; hover mixes 8% `--fg` into the fill; disabled at 0.5 opacity |
+| Tool | `.ask-card-tools .btn` | Snooze, pin, paging arrows | transparent, no border, `--fg-muted`, corner 8 px, height 28 px, padding 0 6 px, 13 px; hover `--bg-hover` and `--fg`; Snooze reads "Snooze ▾"; an on pin turns `--accent` |
 | Send | inside the answer box | send a reply | 28 px circle, `var(--chat-hue-accent, var(--accent))`, white arrow; grey while the box is empty |
 
-Order in every card: the buttons first, then the answer box, with the tools on the box's row at
-its right. A card with no buttons is the box and its tools.
+Order in every card: the options or buttons first, then the answer box (34 px, corner 8 px,
+`--bg-secondary`), with the tools on the box's line at its right; where the card is narrow (a
+Home row, a phone) the box takes the whole line and the tools the line under it, at the right. A
+card with no buttons is the box and its tools. Lines in the answer row are 8 px apart.
 
 Outside cards (pages, settings, dialogs) a button is `.btn` with `.btn-sm` for small and
 `.btn-primary` for the page's one main action, from `globals.css`; never a new `*-btn` class with
 its own fill and corner. `.btn-ghost` and `.btn-icon` are used in 12 places but have no CSS yet:
 the first change that touches them gives them the tool look above.
 
-Source: the button set task 971551ee settled on 2026-11-21 for the cards, from the button in the
-user's own Needs you card screenshot that he named ("I like P1 button"), and his word on its before
-and after picture: "Ack button should be blue, or recommended option should be blue also". He is
-picking the whole card's design from 10 options next; exact sizes may change with it, and this
-table follows that pick.
+Source: the whole-card design the user picked on 2026-11-21 from ten drawn on his own data ("2 is
+good": the options as a list of rows), after "Ack button should be blue, or recommended option
+should be blue also" and "I like P1 button" (the quiet grey keys and "Snooze ▾" of his Needs you
+card). `tests/e2e/browser/ask-card-family.ts` measures it on the page: `ask-card-words-shown.spec.ts`
+runs it on every kind of ask (a new kind fails `ask-card-words-guard.test.ts` until that spec plays
+it), and the strip and To read specs run it on theirs.
 
 ## Inputs
 
-- In a card, the answer box is the chat input in the answer row: `--bg-secondary`, corner 10 px,
+- In a card, the answer box is the chat input in the answer row: `--bg-secondary`, corner 8 px,
   no border until focus (then `--border-strong`), no shadow (`ask-card.css`).
 - Elsewhere a reply or answer box is `AnswerBox` (`components/common/AnswerBox.tsx`): corner `--radius-md`
   (12 px), `--bg-secondary`, 1 px `--border`, accent border on focus, 13 px text, a round send
