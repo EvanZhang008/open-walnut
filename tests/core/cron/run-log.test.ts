@@ -391,7 +391,8 @@ describe('review findings', () => {
     expect(message.startsWith(catchUpNote(SLOT1, SLOT1 + 3 * HOUR))).toBe(true)
     expect(message).toContain('2026-11-08T08:00:00.000Z')
     expect(message.endsWith('Reflect.')).toBe(true)
-    expect(ctx).toEqual({ runForMs: SLOT1 })
+    // Run now stands for no slot: its message gets no slot id, only the sent mark (cron/sent-run.ts).
+    expect(ctx).toEqual({ runForMs: SLOT1, markSent: expect.any(Function) })
     expect(catchUpTitle('Org reflection', new Date(2026, 10, 8, 8, 0).getTime())).toBe('Org reflection (catch-up for 2026-11-08 08:00)')
     expect(catchUpTitle('Org reflection', undefined)).toBe('Org reflection')
   })

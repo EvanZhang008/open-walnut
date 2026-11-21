@@ -8,11 +8,11 @@
  * validate/configSchema drive the REST API and UI form.
  */
 
-import type { CronJob } from '../../cron/types.js';
+import type { CronJob, ExecutorRunContext } from '../../cron/types.js';
 import type { ExecutorDefinition } from '../types.js';
 
 export type WalnutAgentExecutorDeps = {
-  runIsolatedAgentJob: (params: { job: CronJob; message: string }) => Promise<{
+  runIsolatedAgentJob: (params: { job: CronJob; message: string; markSent?: ExecutorRunContext['markSent'] }) => Promise<{
     status: 'ok' | 'error';
     summary?: string;
     error?: string;
@@ -59,8 +59,9 @@ export function createWalnutAgentExecutor(deps: WalnutAgentExecutorDeps): Execut
       }
       return { ok: true, config: out };
     },
-    async run(job, _executor, message) {
-      return await deps.runIsolatedAgentJob({ job, message });
+    async run(job, _executor, message, ctx) {
+      // The session's launch marks the run sent (cron/sent-run.ts markSent).
+      return await deps.runIsolatedAgentJob({ job, message, ...(ctx?.markSent ? { markSent: ctx.markSent } : {}) });
     },
   };
 }

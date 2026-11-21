@@ -44,6 +44,7 @@
 import type { RoutineLaunch, RoutineStart, SessionRecord, Task } from '../types.js';
 import { log } from '../../logging/index.js';
 import type { RunStartDeps } from './run-start-deps.js';
+import type { SentInfo } from '../cron/types.js';
 
 export type { RoutineLaunch, RoutineStart };
 
@@ -134,6 +135,11 @@ export interface RoutineRunInput {
   /** The run's dispatch time (the routine's `runningAtMs`), which keys its result. */
   runAtMs: number;
   launch: RoutineLaunch;
+  /**
+   * Called once the launch is accepted (its task exists, its session is starting or queued): the
+   * run's work is out, whatever its start watch decides later (cron/sent-run.ts markSent).
+   */
+  onLaunched?: (info: SentInfo) => unknown;
 }
 
 export interface RoutineRunStarted {
@@ -156,6 +162,15 @@ export function _runStartWatchesForTesting(): Map<string, Promise<void>> {
   return watches;
 }
 
+/** Tell the run its launch is accepted. Never throws: the mark is the cron engine's to keep. */
+function launched(input: RoutineRunInput, taskId: string, sessionId: string | undefined): void {
+  try {
+    void input.onLaunched?.({ ...(sessionId ? { sessionId } : {}), summary: `Started a session for task ${taskId}` });
+  } catch (err) {
+    log.cron.warn('routine run: onLaunched threw', { jobId: input.job.id, taskId, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
 export class RoutineRunStarter {
   constructor(private readonly deps: RunStartDeps, private readonly t: RunStartTimings = DEFAULT_RUN_START_TIMINGS) {}
 
@@ -176,6 +191,7 @@ export class RoutineRunStarter {
   private async startOnce(input: RoutineRunInput): Promise<RoutineRunStarted> {
     const prior = await this.deps.findRun?.(input.job.id, new Date(input.runAtMs).toISOString());
     if (prior?.routine_start?.state === 'failed') throw new Error(prior.routine_start.error || 'This dispatched run did not start');
+    if (prior?.routine_start) launched(input, prior.id, prior.routine_start.session_id);
     if (prior?.routine_start) return { task: prior, confirmed: prior.routine_start.state === 'started',
       launch: prior.start_queue?.routine ?? prior.routine_start.launch ?? input.launch,
       ...(prior.start_queue?.routine ? { queued: true as const } : {}),
@@ -207,6 +223,7 @@ export class RoutineRunStarter {
       throw err;
     }
     if (!queued) await this.deps.writeStart(task.id, record);
+    launched(input, task.id, queued ? undefined : sid);
     if (queued) {
       tap.stop();
       return { task, confirmed: false, queued: true, launch: record.launch };

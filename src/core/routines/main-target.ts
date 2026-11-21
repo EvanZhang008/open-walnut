@@ -16,7 +16,7 @@
  * task never receives a routine.
  */
 
-import type { CronJob } from '../cron/types.js';
+import type { CronJob, ExecutorRunContext } from '../cron/types.js';
 import type { ExecutorRunResult } from './types.js';
 
 let sessionExecutor: import('./types.js').ExecutorDefinition | null = null;
@@ -31,7 +31,8 @@ async function executor(): Promise<import('./types.js').ExecutorDefinition> {
 
 export interface MainTargetDeps {
   mainTaskId(): Promise<string>;
-  deliver(job: CronJob, taskId: string, text: string): Promise<ExecutorRunResult>;
+  /** `ctx`: a scheduled run's slot and sent mark, handed to the session delivery (cron/sent-run.ts). */
+  deliver(job: CronJob, taskId: string, text: string, ctx?: ExecutorRunContext): Promise<ExecutorRunResult>;
 }
 
 const defaultDeps: MainTargetDeps = {
@@ -39,8 +40,8 @@ const defaultDeps: MainTargetDeps = {
     const { ensureMainTask } = await import('../org/org-store.js');
     return (await ensureMainTask()).id;
   },
-  async deliver(job, taskId, text) {
-    return await (await executor()).run(job, { type: 'session', config: { target: taskId, prompt: text, instructions: text } }, text);
+  async deliver(job, taskId, text, ctx) {
+    return await (await executor()).run(job, { type: 'session', config: { target: taskId, prompt: text, instructions: text } }, text, ctx);
   },
 };
 
@@ -49,10 +50,11 @@ export async function deliverToMainAgent(
   text: string,
   job: Pick<CronJob, 'id' | 'name'> & Partial<CronJob>,
   deps: MainTargetDeps = defaultDeps,
+  ctx?: ExecutorRunContext,
 ): Promise<ExecutorRunResult & { taskId: string }> {
   const taskId = await deps.mainTaskId();
   // The run is the routine's, not a check's: no host hint rides along.
   const asJob = { ...job, check: undefined, state: { ...(job.state ?? {}), clockHost: undefined } } as CronJob;
-  const res = await deps.deliver(asJob, taskId, text);
+  const res = await deps.deliver(asJob, taskId, text, ctx);
   return { ...res, taskId };
 }

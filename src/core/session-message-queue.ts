@@ -116,7 +116,9 @@ export async function enqueueMessage(
     /** With heldReason: the readiness kind the row waits on (QueuedMessage.waitsFor). */
     waitsFor?: string;
     /** With heldReason: a cold hold's send (QueuedMessage.coldSend). */
-    coldSend?: { source: string; endsWait?: true } },
+    coldSend?: { source: string; endsWait?: true };
+    /** Written to disk before this returns, or throws (QueueNotStoredError): never a row only the cache holds. */
+    strict?: boolean },
 ): Promise<QueuedMessage> {
   // A stopping Demo queues nothing more (sessions/demo-admission.ts); checked again inside the write.
   assertDemoAdmission();
@@ -152,6 +154,8 @@ export async function enqueueMessage(
   // (QueueNotStoredError) instead of the row living in this process alone.
   const itemAction = opts?.id?.startsWith('qm-inbox-') === true || opts?.id?.startsWith('qm-route-') === true;
   const relayed = opts?.relayTaken === true;
+  // Also a row whose sender acts on its being stored (a routine's sent mark, cron/sent-run.ts).
+  const strict = relayed || itemAction || opts?.strict === true;
   const outcome = await mutateStore((s): { queueDepth: number; existing: QueuedMessage | null; refused?: true } => {
     if (demoAdmissionClosed()) return { queueDepth: 0, existing: null, refused: true };
     if (!s.queues[sessionId]) {
@@ -165,7 +169,7 @@ export async function enqueueMessage(
     }
     s.queues[sessionId].push(msg);
     return { queueDepth: s.queues[sessionId].length, existing: null };
-  }, relayed || itemAction, relayed || itemAction).catch((err: unknown) => { throw relayed || itemAction ? new QueueNotStoredError(err) : err; });
+  }, strict, strict).catch((err: unknown) => { throw strict ? new QueueNotStoredError(err) : err; });
   if (outcome.refused) throw new DemoAdmissionClosedError();
   if (outcome.existing) {
     log.session.info('message enqueue deduped by id (already queued)', {
@@ -240,6 +244,14 @@ export async function sendMessageToSession(
     hinted?: boolean;
     /** Asked right before the row is stored: false drops the send (SendNoLongerWantedError). */
     stillWanted?: () => boolean;
+    /**
+     * Told the moment the row is on disk (or met the same id already queued), before anything else
+     * this send waits for: the send is durable from here. A scheduled routine marks its run sent
+     * here (cron/sent-run.ts). With it the row is stored strictly: a disk failure throws instead
+     * of leaving the row in the cache for a later flush, which a kill would lose. Never called for
+     * a notice that rides the next message (held in memory). Called, never awaited; a throw is only logged.
+     */
+    onStored?: (msg: QueuedMessage) => void;
     /** Line it up for after the running turn instead of writing it into the live CLI: it can be edited or withdrawn until then (sessions/queue-after-turn.ts). */
     afterTurn?: boolean;
     /**
@@ -388,6 +400,7 @@ export async function sendMessageToSession(
       ...(opts?.stopFence !== undefined ? { stopFence: opts.stopFence } : {}),
       ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
       ...(opts?.relayTaken ? { relayTaken: true } : {}),
+      ...(opts?.onStored ? { strict: true } : {}),
       ...(opts?.lineUuid ? { lineUuid: opts.lineUuid } : {}),
       ...(opts?.closesPrompt || isPersonSendSource(opts?.source) ? { closesPrompt: true } : {}),
       ...(queueSentBy(opts?.source) ? { sentBy: queueSentBy(opts?.source) } : {}),
@@ -400,6 +413,9 @@ export async function sendMessageToSession(
     // Held rows this send put back in line go out on their own.
     if (released?.count) coldHold.sendReleased(sessionId, released);
     throw err;
+  }
+  if (opts?.onStored) {
+    try { opts.onStored(msg); } catch (err) { log.session.warn('onStored hook threw', { sessionId, messageId: msg.id, error: err instanceof Error ? err.message : String(err) }); }
   }
   const source = opts?.source ?? 'unknown';
   // An ask into a lead's team from outside it (the user, the main agent, another team) is the

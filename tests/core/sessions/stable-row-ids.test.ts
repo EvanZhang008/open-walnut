@@ -150,6 +150,7 @@ const CALLERS: Record<string, { kind: 'resend' | 'unique' | 'event' | 'forward';
   'src/core/router/service.ts': { kind: 'resend', why: 'qm-route-<hash of area, item and task>: one external item to one task, once' },
   'src/web/routes/messages-v1.ts': { kind: 'forward', why: "task_send's own messageId, for its retry" },
   'src/core/subagents/registry.ts': { kind: 'resend', why: 'one id per turn of a run; told again only after a restart' },
+  'src/core/routines/executors/session.ts': { kind: 'resend', why: 'qm-routine-<hash of job and slot>: one scheduled slot to its session, once (a rerun of the same slot after a restart meets the stored row)' },
   'src/core/human-inbox/letter-ops.ts': { kind: 'resend', why: "an inbox item's action, run once by the item ledger" },
   'src/core/org/lead-waits.ts': { kind: 'resend', why: 'one id per set of waits (task and phase time), told once' },
   'src/core/sessions/reply-outbox.ts': { kind: 'resend', why: 'an owed reply replayed after a restart' },

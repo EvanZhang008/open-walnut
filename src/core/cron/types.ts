@@ -176,7 +176,40 @@ export type ExecutorRunResult = {
 export interface ExecutorRunContext {
   runForMs?: number;
   parts?: { lead: string; initOutput: string; instructions: string };
+  /** The scheduled slot this run stands for (absent for Run now): keys the run's one message (routine-run-ids.ts). */
+  slotMs?: number;
+  /**
+   * Call the moment the run's work is durable: its message stored in a session's queue, its session
+   * or task launched. The run is then recorded as run even when its record cannot be written when
+   * the executor returns (a restart, a sleep through its timeout, a throw after the send): the
+   * cron engine settles it instead of running the slot again (cron/sent-run.ts). Only the first call
+   * counts. The promise is the mark's write; an executor never needs to wait for it.
+   */
+  markSent?: (info?: SentInfo) => Promise<void>;
 }
+
+/** What an executor knows when its work went out. */
+export type SentInfo = { sessionId?: string; summary?: string };
+
+/**
+ * A run whose work went out before its record was written (ExecutorRunContext.markSent). Cleared
+ * when the run is recorded; one still here when no run is in flight is settled as run
+ * (cron/sent-run.ts). Additive: an older server keeps it as it is and ignores it.
+ */
+export type SentRun = {
+  /** The run's start: its record's lastRunAtMs. */
+  startedAtMs: number;
+  /** When its work went out. */
+  atMs: number;
+  slotMs?: number;
+  firstSlotMs?: number;
+  catchUpMs?: number;
+  manual?: true;
+  /** A wake routine's counter as the run read it (applyJobResult subtracts it). */
+  wakeObserved?: number;
+  sessionId?: string;
+  summary?: string;
+};
 
 /** Injected by the server: dispatches a due job to its executor implementation. */
 export type RunExecutorFn = (
@@ -272,6 +305,8 @@ export type CronJobState = {
   lastError?: string;
   lastDurationMs?: number;
   consecutiveErrors?: number;
+  /** A run whose work went out before its record was written (cron/sent-run.ts). */
+  sentRun?: SentRun;
   /**
    * When a person or an agent switched the routine off (Pause), cleared when it
    * is switched back on. Absent on a routine that is off for another reason: a
@@ -537,8 +572,9 @@ export type CronServiceDeps = {
   broadcastCronNotification: (text: string, jobName: string, opts?: { agentWillRespond?: boolean }) => Promise<void>;
   queueCronNotificationForAgent?: (text: string, jobName: string) => void;
   /** Deliver to the main agent: the CURRENT Main task (routines/main-target.ts). `job` names the run. */
-  runMainAgentWithPrompt: (prompt: string, jobName: string, job?: CronJob) => Promise<void>;
-  runIsolatedAgentJob: (params: { job: CronJob; message: string }) => Promise<{
+  runMainAgentWithPrompt: (prompt: string, jobName: string, job?: CronJob, ctx?: ExecutorRunContext) => Promise<void>;
+  /** `markSent`: called when the run's session is launched (ExecutorRunContext.markSent). */
+  runIsolatedAgentJob: (params: { job: CronJob; message: string; markSent?: ExecutorRunContext['markSent'] }) => Promise<{
     status: 'ok' | 'error';
     summary?: string;
     error?: string;
@@ -599,6 +635,12 @@ export type CronServiceState = {
    * Optional so hand-built test states don't break; access via replayGuardOf().
    */
   replayGuard?: Map<string, number | null>;
+  /**
+   * The runs executing in this process: job id → the run's start. A sent mark of one of them is
+   * its own run's to record, never settled as left behind (sent-run.ts), even when a pause or the
+   * stuck-marker sweep cleared its running marker. Optional, like replayGuard.
+   */
+  runsInFlight?: Map<string, number>;
 };
 
 // ── Result types ──

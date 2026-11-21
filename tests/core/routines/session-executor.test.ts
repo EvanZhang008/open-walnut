@@ -437,3 +437,33 @@ describe('session executor: a Start the host gate refuses', () => {
     await expect(createSessionExecutor({ delivery, launchVisibleWaitMs }).run(remoteJob(), REF as never, FIRE)).rejects.toThrow('disk full');
   });
 });
+
+describe('session executor: the run is marked sent only by a real store', () => {
+  const live = [{ claudeSessionId: 'live-1', process_status: 'running', lastActiveAt: '2026-11-21T00:00:00Z' }] as Sessions;
+
+  it('marks the run when the row is stored, with the slot\'s fixed message id', async () => {
+    const markSent = vi.fn(async () => {});
+    let seen: { messageId?: string } | undefined;
+    const f = fakeDelivery({
+      sessionsForTask: async () => live,
+      getTask: async () => ({ id: 'task-1', phase: 'IN_PROGRESS' }),
+      sendToSession: async (_sid, _msg, _task, opts) => { seen = opts; opts?.onStored?.(); },
+    });
+    await createSessionExecutor(f).run(job({ check: undefined }), REF, 'read them', { slotMs: 1_000, markSent });
+    expect(markSent).toHaveBeenCalledTimes(1);
+    expect(markSent).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'live-1' }));
+    expect(seen?.messageId).toMatch(/^qm-routine-[0-9a-f]{16}$/);
+  });
+
+  it('marks nothing when the send returned without storing a row (a notice held in memory)', async () => {
+    const markSent = vi.fn(async () => {});
+    const f = fakeDelivery({
+      sessionsForTask: async () => live,
+      getTask: async () => ({ id: 'task-1', phase: 'IN_PROGRESS' }),
+      sendToSession: async () => {},
+    });
+    const result = await createSessionExecutor(f).run(job({ check: undefined }), REF, 'read them', { slotMs: 1_000, markSent });
+    expect(result.status).toBe('ok');
+    expect(markSent).not.toHaveBeenCalled();
+  });
+});

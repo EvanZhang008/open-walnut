@@ -597,7 +597,7 @@ describe('service with executors', () => {
 
     expect(broadcast).toHaveBeenCalled();
     // The job rides along: the main agent's target is resolved from it at run time (main-target.ts).
-    expect(runMain).toHaveBeenCalledWith('ping me', 'Main', expect.objectContaining({ id: job.id, name: 'Main' }));
+    expect(runMain).toHaveBeenCalledWith('ping me', 'Main', expect.objectContaining({ id: job.id, name: 'Main' }), expect.objectContaining({ markSent: expect.any(Function) }));
     expect(broadcast).toHaveBeenCalledWith('ping me', 'Main', { agentWillRespond: false });
     expect(runExecutorMock).not.toHaveBeenCalled();
   });

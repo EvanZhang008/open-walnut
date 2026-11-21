@@ -332,7 +332,8 @@ describe('slots that came due while the server was down (deliverable 4)', () => 
     }
     // It knows it is late and which runs it stands for.
     expect(executed[2].message.startsWith(catchUpNote(D1 + DAY, up, D1 + 2 * DAY))).toBe(true)
-    expect(executed[2].ctx).toEqual({ runForMs: D1 + DAY })
+    // Its message is keyed by the newest slot it stands for (routine-run-ids.ts), beside the sent mark.
+    expect(executed[2].ctx).toEqual({ runForMs: D1 + DAY, slotMs: D1 + 2 * DAY, markSent: expect.any(Function) })
     // The start is keyed by its dispatch time, not the slot 26 h back: run-start.ts's 6 h stale
     // rule (a start picked up long after it was made) never fails a catch-up as stale.
     expect(executed[2].runningAtMs).toBe(up)

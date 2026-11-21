@@ -371,6 +371,34 @@ inside the hour a fall daylight saving change repeats it looks for the next slot
 hour later, as the daemon's `afterRun` does, so a routine finer than an hour never
 stops there.
 
+A run counts from the moment its work goes out, not from when its executor returns
+(`src/core/cron/sent-run.ts`). The executor calls `markSent` from its run context the
+moment the work is durable: the session executor when its message row is stored in the
+session's queue (`sendMessageToSession`'s `onStored`) or its session launch is accepted,
+`claude-code` and `walnut-agent` when their start is launched (`RoutineRunStarter`'s
+`onLaunched`), and a main-agent routine through the session delivery it uses. The timer
+then writes `state.sentRun` (the run's start, slot, and session) at once, under the store's
+lock. A run that throws or times out after that is recorded ok, with the error as a note
+in its summary: no backoff, no retry, no missed run. A mark that comes after the timeout
+already recorded the run failed (a process that slept through the run wakes with both
+due at once) turns that record into ok. A mark left with no run in flight (the process
+stopped before the record) is recorded as that run at the next boot, tick, or Run, and
+the slot is not run again; a run with a running marker and no mark did nothing durable
+and runs again. The mark is a write of its own, so a stop can fall between the work and
+the mark. That window is closed only for a session run's send into an existing session:
+its message has one id per routine and slot (`routineRunIdsOf(...).messageId`), so a rerun
+meets the row still queued, and a resend of a row already delivered keeps its line id. It
+stays open for a launch (a `claude-code` or `walnut-agent` start, keyed by its dispatch
+time, and the session executor's start of a new session on its task): a stop there starts
+the run again. A session send is marked only once its row is on disk (`onStored` stores the
+row strictly), never for a notice held in memory. The watcher has nothing to mark: each of its outcomes is deduped by its own key in
+the trigger state. A main-agent routine with wake mode `next-cycle` hands its text on
+without waiting, so it returns at once and is recorded right away. Ratchet:
+`tests/core/routines/executor-sent-mark-ratchet.test.ts`. (2026-11-21: a daily
+reflection sent its message during a short macOS DarkWake, the Mac slept, the server was
+stopped before the run's record, and the restart sent it again; another was recorded
+"timed out", then missed, although its message had gone out.)
+
 UI: the Routines card shows `clock @ <host>` under the timing, the label a trigger
 uses for its check's host; for a `claude-code` routine the hover says a run that comes
 due while the Mac sleeps waits on the host, and a slot that has passed reads "Due 2h

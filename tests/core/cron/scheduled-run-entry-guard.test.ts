@@ -67,7 +67,9 @@ describe('one entry for every scheduled run (source)', () => {
   it('a run is recorded only by the timer (executeJob) and by a host clock’s report (clock-fire)', () => {
     expect(callSites('runEntry')).toEqual({ 'core/cron/timer.ts': 1, 'core/cron/clock-fire.ts': 1 })
     // trigger-apply.ts records a check's run: a trigger stands for no slot (it has no run log).
-    expect(callSites('applyJobResult')).toEqual({ 'core/cron/timer.ts': 1, 'core/cron/trigger-apply.ts': 2 })
+    // timer.ts: executeJob, and settleSentRuns, which records a run executeJob made whose process
+    // stopped after its work went out (sent-run.ts): the same run, never a second one.
+    expect(callSites('applyJobResult')).toEqual({ 'core/cron/timer.ts': 2, 'core/cron/trigger-apply.ts': 2 })
   })
 
   it('the wiring carries the held signal and a catch-up’s slot from the action and to the executor', () => {

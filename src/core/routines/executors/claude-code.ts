@@ -278,6 +278,8 @@ export function createClaudeCodeExecutor(opts: { notify?: RoutineGateNotify; sta
             // Whether it may start elsewhere when its host is full, and the instructions its needs are read from.
             ...routineLaunchPlacement(config, stripTriageCountHint(message)),
           },
+          // Its task made and its session starting: the run's work is out (cron/sent-run.ts markSent).
+          ...(ctx?.markSent ? { onLaunched: ctx.markSent } : {}),
         });
       } catch (err) {
         // The host gate refused (host-start-gate.ts): the run fails with the

@@ -2070,18 +2070,19 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         .then((res) => log.cron.info('cron notification delivered to the Main task', { jobName, taskId: res.taskId, status: res.status, error: res.error }))
         .catch((err) => log.cron.warn('cron notification not delivered to the Main task', { jobName, error: err instanceof Error ? err.message : String(err) }))
     },
-    runMainAgentWithPrompt: async (prompt, jobName, job) => {
+    runMainAgentWithPrompt: async (prompt, jobName, job, ctx) => {
       // The CURRENT Main task, resolved now; never the home chat's taskless lane
       // session, which is what kept receiving routines after Main became a task.
+      // `ctx` carries a scheduled run's slot and sent mark (core/cron/sent-run.ts).
       const { deliverToMainAgent } = await import('../core/routines/main-target.js')
-      const res = await deliverToMainAgent(prompt, job ?? { id: `cron:${jobName}`, name: jobName })
+      const res = await deliverToMainAgent(prompt, job ?? { id: `cron:${jobName}`, name: jobName }, undefined, ctx)
       if (res.status === 'error') {
         log.cron.error('cron delivery to the Main task failed', { jobName, taskId: res.taskId, error: res.error })
         throw new Error(res.error ?? 'delivery to the Main task failed')
       }
       log.cron.info('cron delivered to the Main task', { jobName, taskId: res.taskId, summary: res.summary })
     },
-    runIsolatedAgentJob: async ({ job, message }) => {
+    runIsolatedAgentJob: async ({ job, message, markSent }) => {
       // An isolated job runs as its own Personal AI session (the same launch path
       // as Ask Walnut and the claude-code executor), so the work is watchable and
       // resumable in the SessionPanel instead of living inside the server process.
@@ -2107,6 +2108,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
             source: `automation:routine:${job.id}:${job.name}`,
             ...routineLaunchPlacement(job.executor?.config ?? {}, message),
           },
+          // The session is launched: the run's work is out (core/cron/sent-run.ts).
+          ...(markSent ? { onLaunched: markSent } : {}),
         })
         return {
           status: 'ok',

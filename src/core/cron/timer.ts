@@ -8,7 +8,7 @@
  * - Simple promise-chain locking (no store-level lock map).
  */
 
-import type { CronJob, CronServiceState, CronEvent } from './types.js';
+import type { CronJob, CronServiceState, CronEvent, ExecutorRunContext, SentInfo, SentRun } from './types.js';
 import { cloudModeSkipsJob, computeJobNextRunAtMs, isClockOwned, nextWakeAtMs, recomputeNextRuns, scheduleNextRunAtMs } from './jobs.js';
 import { ensureLoaded, persist } from './store.js';
 import { withFileLock } from '../../utils/file-lock.js';
@@ -18,6 +18,7 @@ import {
 import {
   appendRun, catchUpNote, HELD_RECHECK_MS, judgesSlots, runEntry, runFailed, runSlots, SLOT_RETRIES,
 } from './run-log.js';
+import { amendAsSent, asSentResult, sentRunOutcome, unrecordedSentRun } from './sent-run.js';
 
 const MAX_TIMER_DELAY_MS = 60_000;
 
@@ -234,6 +235,8 @@ export function applyJobResult(
   result: JobRunOutcome,
 ): boolean {
   job.state.runningAtMs = undefined;
+  // This run is recorded now: its sent mark (sent-run.ts), and an older run's, have done their part.
+  if (job.state.sentRun && job.state.sentRun.startedAtMs <= result.startedAt) delete job.state.sentRun;
   job.state.lastRunAtMs = result.startedAt;
   job.state.lastStatus = result.status;
   job.state.lastDurationMs = Math.max(0, result.endedAt - result.startedAt);
@@ -518,6 +521,9 @@ export interface JobExecution {
 /** A catch-up run: the slot it stands for, or every slot from `fromMs` to `toMs` (run-log.ts). */
 type CatchUp = { fromMs: number; toMs?: number };
 
+/** What executeJob hands every delivery of the run (ExecutorRunContext). */
+type RunCtx = Pick<ExecutorRunContext, 'slotMs' | 'markSent'>;
+
 async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
@@ -525,6 +531,8 @@ async function executeJobCore(
   forced = false,
   /** A catch-up run: the executor is told which runs it stands for (run-log.ts). */
   catchUp?: CatchUp,
+  /** The run's slot and its sent mark (sent-run.ts), handed to whatever delivers its work. */
+  runCtx: RunCtx = {},
 ): Promise<JobExecution> {
   // ── Wake: nothing new, nothing to do ──
   // Here rather than in findDueJobs: a job filtered out THERE keeps a past-due
@@ -614,11 +622,12 @@ async function executeJobCore(
       return { status: 'skipped', error: `executor '${executor.type}' requires non-empty instructions` };
     }
     const message = lead + (initOutput ? `${initOutput}\n\n${instructions}` : instructions);
-    const ctx = {
+    const ctx: ExecutorRunContext = {
+      ...runCtx,
       ...(catchUp ? { runForMs: catchUp.fromMs } : {}),
       ...(initOutput ? { parts: { lead, initOutput, instructions } } : {}),
     };
-    const res = await state.deps.runExecutor(job, executor, message, Object.keys(ctx).length > 0 ? ctx : undefined);
+    const res = await state.deps.runExecutor(job, executor, message, ctx);
     // `delivered.text` is the exact text a session received when the executor
     // knows it (the session executor does); otherwise the message we dispatched
     // is the honest answer to "what did this run inject".
@@ -643,7 +652,7 @@ async function executeJobCore(
 
     if (job.wakeMode === 'now') {
       try {
-        await state.deps.runMainAgentWithPrompt(text, job.name, job);
+        await state.deps.runMainAgentWithPrompt(text, job.name, job, runCtx);
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         state.deps.log.warn('runMainAgentWithPrompt failed', {
@@ -671,6 +680,7 @@ async function executeJobCore(
   const res = await state.deps.runIsolatedAgentJob({
     job,
     message,
+    ...(runCtx.markSent ? { markSent: runCtx.markSent } : {}),
   });
 
   // Post a short summary back to the main session if delivery mode is 'announce'.
@@ -736,19 +746,59 @@ export async function executeJob(
   const wakeObserved = job.wake ? job.state.wakeCount ?? 0 : 0;
   emit(state, { jobId: job.id, action: 'started', runAtMs: startedAt });
 
+  // The run's sent mark (sent-run.ts): written the moment its work is durable, not when the
+  // executor returns, so a restart, a sleep through the timeout or a throw after the send
+  // never repeats the slot or calls it failed.
+  const sent = sentMarker(state, job.id, () => ({
+    startedAtMs: startedAt,
+    ...(slots ? { slotMs: slots.slotMs } : {}),
+    ...(slots?.firstSlotMs !== undefined ? { firstSlotMs: slots.firstSlotMs } : {}),
+    ...(options.catchUpMs !== undefined ? { catchUpMs: options.catchUpMs } : {}),
+    ...(options.forced ? { manual: true as const } : {}),
+    ...(job.wake ? { wakeObserved } : {}),
+  }));
+  const runCtx: RunCtx = { markSent: sent.mark, ...(slots ? { slotMs: slots.slotMs } : {}) };
+  const inFlight = runsInFlightOf(state);
+  inFlight.set(job.id, startedAt);
+  try {
+    return await runAndRecord(state, job, options, startedAt, slots, catchUp, wakeObserved, sent, runCtx);
+  } finally {
+    if (inFlight.get(job.id) === startedAt) inFlight.delete(job.id);
+  }
+}
+
+/** Lazy accessor, like replayGuardOf: the runs executing in this process. */
+function runsInFlightOf(state: CronServiceState): Map<string, number> {
+  if (!state.runsInFlight) state.runsInFlight = new Map();
+  return state.runsInFlight;
+}
+
+/** executeJob's run and its record, while the run is counted in flight. */
+async function runAndRecord(
+  state: CronServiceState,
+  job: CronJob,
+  options: { forced?: boolean; catchUpMs?: number },
+  startedAt: number,
+  slots: ReturnType<typeof runSlots>,
+  catchUp: CatchUp | undefined,
+  wakeObserved: number,
+  sent: ReturnType<typeof sentMarker>,
+  runCtx: RunCtx,
+): Promise<JobExecution> {
   // Outer timeout wraps the entire job (init processor + payload execution);
   // the init processor's own timeout bounds only the action (jobTimeoutMs).
   let coreResult: JobExecution;
 
   try {
     coreResult = await withTimeout(
-      executeJobCore(state, job, options.forced === true, catchUp),
+      executeJobCore(state, job, options.forced === true, catchUp, runCtx),
       jobTimeoutMs(job),
       'cron: job execution timed out',
     );
   } catch (err) {
     coreResult = { status: 'error', error: String(err) };
   }
+  coreResult = asSentResult(coreResult, sent.recording());
 
   const endedAt = state.deps.nowMs();
 
@@ -759,6 +809,8 @@ export async function executeJob(
   await locked(state, async () => {
     await ensureLoaded(state, { forceReload: true, skipRecompute: true });
     const target = state.store?.jobs.find((j) => j.id === job.id) ?? job;
+    // Settled from its sent mark while it ran (a marker cleared as stuck): recorded already.
+    if (!target.state.sentRun && sent.recording() && (target.state.lastRunAtMs ?? -1) >= startedAt) return;
     const shouldDelete = applyJobResult(state, target, {
       status: coreResult.status,
       error: coreResult.error,
@@ -787,13 +839,103 @@ export async function executeJob(
       nextRunAtMs: target.state.nextRunAtMs,
     });
 
-    if (shouldDelete && state.store) {
-      state.store.jobs = state.store.jobs.filter((j) => j.id !== target.id);
-      emit(state, { jobId: target.id, action: 'removed' });
-    }
+    if (shouldDelete) removeJob(state, target.id);
     await persist(state);
   });
   return coreResult;
+}
+
+/**
+ * The run's sent mark: `mark` is what executors call (ExecutorRunContext.markSent), the first call
+ * only. Before the run is recorded it writes `state.sentRun`; after (the timeout recorded it failed
+ * first) it corrects that record (sent-run.ts amendAsSent). `recording()` is the mark as the
+ * record must use it, and from then on a mark corrects the record instead.
+ */
+function sentMarker(state: CronServiceState, jobId: string, base: () => Omit<SentRun, 'atMs'>): {
+  mark: (info?: SentInfo) => Promise<void>;
+  recording: () => SentRun | undefined;
+} {
+  let sent: SentRun | undefined;
+  let recorded = false;
+  let write: Promise<void> | undefined;
+  const mark = (info: SentInfo = {}): Promise<void> => {
+    if (write) return write;
+    sent = { ...base(), atMs: state.deps.nowMs(), ...(info.sessionId ? { sessionId: info.sessionId } : {}), ...(info.summary ? { summary: info.summary } : {}) };
+    const mine = sent;
+    write = (recorded ? amendRecorded(state, jobId, mine) : writeSentMark(state, jobId, mine)).catch((err) => {
+      state.deps.log.warn('routine run: its sent mark was not written', { jobId, error: err instanceof Error ? err.message : String(err) });
+    });
+    return write;
+  };
+  return { mark, recording: () => { recorded = true; return sent; } };
+}
+
+async function writeSentMark(state: CronServiceState, jobId: string, sent: SentRun): Promise<void> {
+  await locked(state, async () => {
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    const target = state.store?.jobs.find((j) => j.id === jobId);
+    // Gone, or this run is recorded already: nothing to mark.
+    if (!target || (target.state.lastRunAtMs ?? -1) >= sent.startedAtMs) return;
+    target.state.sentRun = sent;
+    state.deps.log.info('routine run: its work went out', { jobId, slotMs: sent.slotMs, sessionId: sent.sessionId });
+    await persist(state);
+  });
+}
+
+async function amendRecorded(state: CronServiceState, jobId: string, sent: SentRun): Promise<void> {
+  await locked(state, async () => {
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    const target = state.store?.jobs.find((j) => j.id === jobId);
+    if (!target || !amendAsSent(target, sent)) return;
+    replayGuardOf(state).set(target.id, target.state.nextRunAtMs ?? null);
+    state.deps.log.warn('routine run recorded failed, then its work went out: recorded ok', { jobId, slotMs: sent.slotMs });
+    emit(state, { jobId, action: 'finished', status: 'ok', summary: target.state.runLog?.[0]?.summary, runAtMs: sent.startedAtMs, nextRunAtMs: target.state.nextRunAtMs });
+    // A one-shot that did its work goes, as one that ran ok does (applyJobResult's deleteAfterRun).
+    if (target.schedule.kind === 'at' && target.deleteAfterRun === true) removeJob(state, target.id);
+    await persist(state);
+  });
+}
+
+/**
+ * Runs whose work went out and whose process stopped before their record was written: recorded
+ * as run (sent-run.ts), so the slot is never run again. Only a job with no run in flight (at boot
+ * every marker is stale; at a tick, one cleared as stuck). Call under the lock on a fresh load;
+ * the caller persists when this returns true.
+ */
+export function settleSentRuns(state: CronServiceState): boolean {
+  let changed = false;
+  for (const job of state.store?.jobs ?? []) {
+    if (!job.state) continue;
+    const had = job.state.sentRun !== undefined;
+    const sent = unrecordedSentRun(job);
+    if (!sent) {
+      changed ||= had;
+      continue;
+    }
+    // Its run is still going: a run in another process keeps its marker, one here is counted in
+    // flight (a pause or the stuck-marker sweep may have cleared its marker): it records itself.
+    if (typeof job.state.runningAtMs === 'number' || runsInFlightOf(state).get(job.id) === sent.startedAtMs) continue;
+    const outcome = sentRunOutcome(sent);
+    const shouldDelete = applyJobResult(state, job, outcome);
+    changed = true;
+    state.deps.log.warn('routine run had sent before the server stopped: recorded, not run again', {
+      jobId: job.id, jobName: job.name, slotMs: sent.slotMs, sentAtMs: sent.atMs, nextRunAtMs: job.state.nextRunAtMs,
+    });
+    emit(state, {
+      jobId: job.id, action: 'finished', status: 'ok', summary: outcome.summary,
+      runAtMs: outcome.startedAt, durationMs: job.state.lastDurationMs, nextRunAtMs: job.state.nextRunAtMs,
+    });
+    if (shouldDelete) removeJob(state, job.id);
+  }
+  return changed;
+}
+
+/** A one-shot that ran is removed, as executeJob removes it (deleteAfterRun). */
+function removeJob(state: CronServiceState, jobId: string): void {
+  if (!state.store) return;
+  state.store.jobs = state.store.jobs.filter((j) => j.id !== jobId);
+  replayGuardOf(state).delete(jobId);
+  emit(state, { jobId, action: 'removed' });
 }
 
 /**
@@ -865,11 +1007,13 @@ export async function onTimer(state: CronServiceState): Promise<void> {
     // Phase 1: find due jobs under lock, mark them running
     const dueJobs = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      // A run that sent and was cut off before its record (its marker cleared as stuck) is recorded, not run again.
+      const settled = settleSentRuns(state);
       const due = findDueJobs(state);
 
       if (due.length === 0) {
         const changed = recomputeNextRuns(state);
-        if (changed) await persist(state);
+        if (changed || settled) await persist(state);
         return [];
       }
 

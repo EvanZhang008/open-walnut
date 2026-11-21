@@ -20,7 +20,7 @@ import {
   scheduleNextRunAtMs,
 } from './jobs.js';
 import { ensureLoaded, persist, warnIfDisabled } from './store.js';
-import { armTimer, emit, executeJob, findDueJobs, locked, replayGuardOf, stopTimer } from './timer.js';
+import { armTimer, emit, executeJob, findDueJobs, locked, replayGuardOf, settleSentRuns, stopTimer } from './timer.js';
 import { WALNUT_HOME } from '../../constants.js';
 import { CronJobChangedError, cronJobRevision } from './job-revision.js';
 
@@ -48,6 +48,9 @@ export async function start(state: CronServiceState): Promise<void> {
         job.state.runningAtMs = undefined;
       }
     }
+    // A run that sent before the previous process stopped is recorded now, never run again
+    // (sent-run.ts). One with a running marker and no sent mark did nothing durable: it runs below.
+    settleSentRuns(state);
 
     const missedJobs = findDueJobs(state);
 
@@ -318,6 +321,8 @@ export async function run(state: CronServiceState, id: string, mode?: 'due' | 'f
     await ensureLoaded(state, { forceReload: true, skipRecompute: true });
     const job = findJobOrThrow(state, id);
     if (job.check) return { relay: job };
+    // A run that already sent is recorded first (sent-run.ts): a due run then finds its slot done.
+    if (settleSentRuns(state)) await persist(state);
     if (typeof job.state.runningAtMs === 'number') {
       return { ok: true, ran: false, reason: 'already-running' as const };
     }

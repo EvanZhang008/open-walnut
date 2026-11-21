@@ -22,7 +22,8 @@ import { randomUUID } from 'node:crypto';
 import { WALNUT_HOME } from '../../../constants.js';
 import { log } from '../../../logging/index.js';
 import type { ExecutorDefinition, ExecutorRunResult } from '../types.js';
-import type { CronJob } from '../../cron/types.js';
+import type { CronJob, ExecutorRunContext } from '../../cron/types.js';
+import { routineRunIdsOf } from '../routine-run-ids.js';
 import { parseWalnutMessage, sessionHandle } from '../../peers/walnut-message-tag.js';
 import { buildScheduledSessionMessage } from '../trigger-envelope.js';
 import {
@@ -51,7 +52,11 @@ export interface SessionDelivery {
     title?: string;
     host?: string;
   }>>;
-  sendToSession(sessionId: string, message: string, taskId: string): Promise<void>;
+  /**
+   * `messageId`: the run's one message id (one per routine and slot), so a run of the same slot
+   * again meets the row still queued. `onStored`: called the moment the row is stored.
+   */
+  sendToSession(sessionId: string, message: string, taskId: string, opts?: { messageId?: string; onStored?: () => void }): Promise<void>;
   getTask(taskId: string): Promise<{ id: string; cwd?: string; phase?: string; transferred_to?: string; org_role?: string } | null>;
   /**
    * When `id` is a session id rather than a task id: its task ('' = a session
@@ -100,9 +105,13 @@ function defaultDelivery(): SessionDelivery {
       const { getSessionsForTask } = await import('../../session-tracker.js');
       return await getSessionsForTask(taskId).catch(() => []);
     },
-    async sendToSession(sessionId, message, taskId) {
+    async sendToSession(sessionId, message, taskId, opts) {
       const { sendMessageToSession } = await import('../../session-message-queue.js');
-      await sendMessageToSession(sessionId, message, { source: 'routine-trigger', taskId });
+      await sendMessageToSession(sessionId, message, {
+        source: 'routine-trigger', taskId,
+        ...(opts?.messageId ? { messageId: opts.messageId } : {}),
+        ...(opts?.onStored ? { onStored: opts.onStored } : {}),
+      });
     },
     async getTask(taskId) {
       const { getTask } = await import('../../task-manager.js');
@@ -265,13 +274,13 @@ export function createSessionExecutor(deps: SessionExecutorDeps = {}): ExecutorD
       return { ok: true, config: { target, prompt, instructions: prompt, ...(placement.placement ? { placement: placement.placement } : {}) } };
     },
 
-    async run(job: CronJob, executor, message: string) {
+    async run(job: CronJob, executor, message: string, ctx?: ExecutorRunContext) {
       const config = executor.config as unknown as SessionExecutorConfig;
-      return await oneAtATime(config.target, () => deliver(job, config, message));
+      return await oneAtATime(config.target, () => deliver(job, config, message, ctx));
     },
   };
 
-  async function deliver(job: CronJob, config: SessionExecutorConfig, message: string): Promise<ExecutorRunResult> {
+  async function deliver(job: CronJob, config: SessionExecutorConfig, message: string, ctx?: ExecutorRunContext): Promise<ExecutorRunResult> {
     // A task moved to another engine or host (task_transfer) completes and points
     // at the task that took the work over: the fire follows it there.
     let taskId = config.target;
@@ -316,13 +325,21 @@ export function createSessionExecutor(deps: SessionExecutorDeps = {}): ExecutorD
     const pickOpts: DeliveryPickOptions = firedFrom ? { reachableHost: firedFrom } : {};
     const target = pickDeliverySession(sessions, pickOpts);
     if (target) {
-      await delivery.sendToSession(target.claudeSessionId, envelope, taskId);
       // A stopped session is resumed cold (7-14s before the CLI reads it); the
       // run history says so, so a slow landing is not mistaken for a lost one.
       const verb = isLiveSessionStatus(target.process_status) ? 'sent to' : 'resumed';
+      const summary = `${verb} session ${sessionHandle(target.title, target.claudeSessionId)}`;
+      // The run is sent the moment the row is on disk (cron/sent-run.ts): a restart or a sleep
+      // after that records it instead of sending it again. Only the store says so: a send that
+      // returned without storing a row (a notice held in memory) marks nothing. A scheduled run's
+      // message has one id per slot, so a run of that slot again collapses onto the row while it
+      // is still queued.
+      const onStored = () => { void ctx?.markSent?.({ sessionId: target.claudeSessionId, summary }); };
+      const messageId = ctx?.slotMs !== undefined ? routineRunIdsOf(job.id, ctx.slotMs).messageId : undefined;
+      await delivery.sendToSession(target.claudeSessionId, envelope, taskId, { ...(messageId ? { messageId } : {}), onStored });
       return {
         status: 'ok',
-        summary: `${verb} session ${sessionHandle(target.title, target.claudeSessionId)}`,
+        summary,
         // The audit trail's answer to "what got injected, and where":
         // the exact envelope, and the session that received it.
         delivered: { sessionId: target.claudeSessionId, text: envelope },
@@ -373,6 +390,11 @@ export function createSessionExecutor(deps: SessionExecutorDeps = {}): ExecutorD
       return { status: 'error', error: refused };
     }
     clearHostGateNotices(job.id);
+    // The launch is accepted (queued or starting): the run's work is out (cron/sent-run.ts).
+    void ctx?.markSent?.({
+      ...(started && started.sessionId ? { sessionId: started.sessionId } : {}),
+      summary: started?.queued ? `task ${taskId} queued to start with the message` : `restarted session on task ${taskId}`,
+    });
     if (started?.queued) return { status: 'ok', summary: `Task ${taskId} is waiting for a free slot; Walnut starts the original trigger message automatically when there is room` };
     // Held until the new session is visible on the task, so the delivery queued
     // behind this one sends to it instead of starting another.

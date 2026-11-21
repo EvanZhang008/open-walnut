@@ -15,7 +15,7 @@ import type { ExecutorDefinition } from '../types.js';
 
 export type MainAgentExecutorDeps = {
   broadcastCronNotification: (text: string, jobName: string, opts?: { agentWillRespond?: boolean }) => Promise<void>;
-  runMainAgentWithPrompt: (prompt: string, jobName: string, job?: import('../../cron/types.js').CronJob) => Promise<void>;
+  runMainAgentWithPrompt: (prompt: string, jobName: string, job?: import('../../cron/types.js').CronJob, ctx?: import('../../cron/types.js').ExecutorRunContext) => Promise<void>;
   queueCronNotificationForAgent?: (text: string, jobName: string) => void;
 };
 
@@ -43,10 +43,11 @@ export function createMainAgentExecutor(deps: MainAgentExecutorDeps): ExecutorDe
       }
       return { ok: true, config: { instructions: c.instructions.trim() } };
     },
-    async run(job, _executor, message) {
+    async run(job, _executor, message, ctx) {
       await deps.broadcastCronNotification(message, job.name, { agentWillRespond: false });
       if (job.wakeMode === 'now') {
-        await deps.runMainAgentWithPrompt(message, job.name, job);
+        // Delivered through the session executor, which marks the run sent when the row is stored (ctx.markSent).
+        await deps.runMainAgentWithPrompt(message, job.name, job, ctx && { slotMs: ctx.slotMs, markSent: ctx.markSent });
       } else {
         deps.queueCronNotificationForAgent?.(message, job.name);
       }

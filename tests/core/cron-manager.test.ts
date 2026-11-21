@@ -1285,7 +1285,8 @@ describe('executeJob — execution flow', () => {
     });
 
     await service.run(job.id, 'force');
-    expect(runMainFn).toHaveBeenCalledWith('periodic check', 'Every Job', expect.objectContaining({ id: job.id }));
+    // The run's sent mark rides along to the Main task's delivery (cron/sent-run.ts).
+    expect(runMainFn).toHaveBeenCalledWith('periodic check', 'Every Job', expect.objectContaining({ id: job.id }), expect.objectContaining({ markSent: expect.any(Function) }));
   });
 
   it('main session job with wakeMode=next-cycle does NOT call runMainAgentWithPrompt', async () => {
