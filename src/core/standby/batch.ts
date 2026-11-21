@@ -42,6 +42,8 @@ export interface BatchOptions {
   drainMs?: number
   /** Changed plain files are copied inside the hold while they total at most this (default 8 MB). */
   holdCopyBytes?: number
+  /** Stop reading files in the hold once it has lasted this long (ms); the rest are read after it. */
+  holdReadMs?: number
   /** Test hooks. */
   hooks?: {
     afterScan?: () => Promise<void> | void
@@ -181,6 +183,8 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
     let fsMoment = 0
     let names: MomentNames | null = null
     const hold = await holdWrites(async () => {
+      const holdStart = performance.now()
+      const timeLeft = () => performance.now() - holdStart < (opts.holdReadMs ?? 200)
       // Gated writes that ended just now should land in an earlier tick than the moment.
       await new Promise((r) => setTimeout(r, settleMs))
       fsMoment = await fsClock(stagingDir, opts.home)
@@ -208,7 +212,7 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
       // read now is one no write after the moment can void. The rest are read after it.
       let room = opts.holdCopyBytes ?? 8 * 1024 * 1024
       for (const e of [...changed].sort((a, b) => a.st.s - b.st.s)) {
-        if (e.st.s > room) break
+        if (e.st.s > room || !timeLeft()) break
         room -= e.st.s
         await stage(e.p, keep)
       }
@@ -216,7 +220,7 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
       const made = names.listed.filter((rel) => !s1.files.has(rel) && !staged.has(rel) && !DB_NAME.test(rel) && names!.existed(rel) === true)
       for (const rel of made) {
         const size = await fs.lstat(path.join(opts.home, rel)).then((st) => st.size).catch(() => 0)
-        if (size > room) break
+        if (size > room || !timeLeft()) break
         room -= size
         await stage(rel, keep)
       }

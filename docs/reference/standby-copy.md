@@ -39,7 +39,7 @@ A batch runs in six steps (`batch.ts`):
    it does not move a coarse ctime), is listed again, so a file made after the scan is known to
    have existed at the moment even if it is replaced or removed right after. A dir listed again
    that changed after the moment too voids the batch: a name made and removed around the moment
-   is in neither listing. Changed plain files and such new files, up to 8 MB in total, are read
+   is in neither listing. Changed plain files and such new files, smallest first, up to 8 MB and 200 ms, are read
    into memory (the staging area) while the hold is on. Then writes go on.
 3. **Stage.** Read the changed files the hold did not.
 4. **Re-scan.** Walk again and place every path of either scan or of the moment's names: a
@@ -173,6 +173,12 @@ home with 99,896 leader files and four WAL databases of 1.8 GB together:
 | Verify / deep verify | 1.1 s / 77 s, no drift |
 | Target size | 27.2 GB (the copy plus its chunks) |
 | An ungated writer appending to one file every 20 ms | 20 of 20 void ("late"): see below |
+
+A smaller home (1.85 GB, 4,897 files, the same four databases), 10 batches each, after the
+hold learnt to read stats in changed dirs (`heldStats`) and to read small files first: gated
+writes 0 of 10 void, hold p50 39 ms, p95 50 ms; with an ungated append every second 0 of 10
+void; every 200 ms, 2 of 10 void. The real server test (`tests/e2e/standby-real-server.test.ts`)
+gives 0 of 8 void, hold p50 28 ms, p95 61 ms.
 
 **Writes the gate does not hold** void a batch when they land on a file between the moment
 and its read. Walnut still has about forty such appenders (`appendFile` in time tracking,
