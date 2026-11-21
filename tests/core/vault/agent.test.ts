@@ -117,6 +117,46 @@ describe('the policy', () => {
     expect((await use('GitHub', 'ask', { fields: ['password'] })).status).toBe('pending')
   })
 
+  it('a pending ask survives a Walnut restart: the same request id releases after it, and Lock all before it still ends it', async () => {
+    // 2026-11-20: a deploy restarted Walnut while a wait was open; the ask lived in memory only.
+    const { flushKept, forgetKeptForRestart } = await import('../../../src/core/kept-asks.js')
+    const r = await use('github.com', 'ask', { fields: ['username'], scope: 'once' })
+    if (r.status !== 'pending') throw new Error('expected pending')
+    nextAnswer = 'pending'
+    expect(await agentWait(r.requestId, r.waitToken, 0, 'ask', waiter)).toEqual({ status: 'pending' })
+    await flushKept()
+    forgetKeptForRestart()
+    nextAnswer = 'approved'
+    expect(await agentWait(r.requestId, r.waitToken, 0, 'ask', waiter)).toMatchObject({ status: 'released', values: { username: 'bot@example.test' } })
+    // Lock all, then a restart: the ask stays ended.
+    const r2 = await use('github.com', 'ask', { fields: ['username'], scope: 'once' })
+    if (r2.status !== 'pending') throw new Error('expected pending')
+    endAllGrants()
+    await flushKept()
+    forgetKeptForRestart()
+    expect(await code(agentWait(r2.requestId, r2.waitToken, 0, 'ask', waiter))).toBe('not_found')
+  })
+
+  it('an ask a kill cut off mid-release is released again in full after the restart, with its audit entry', async () => {
+    const { flushKept, forgetKeptForRestart, keptDir } = await import('../../../src/core/kept-asks.js')
+    const r = await use('github.com', 'ask', { fields: ['username'], scope: 'once' })
+    if (r.status !== 'pending') throw new Error('expected pending')
+    await flushKept()
+    // The file as a kill between "releasing" and the release's end would leave it (an older build wrote this).
+    const file = path.join(keptDir(), 'vault-agent-asks.json')
+    const kept = JSON.parse(fs.readFileSync(file, 'utf8')) as { entries: Array<[string, Record<string, unknown>]> }
+    for (const e of kept.entries) if (e[0] === r.requestId) e[1].releasedAt = Date.now()
+    fs.writeFileSync(file, JSON.stringify(kept))
+    forgetKeptForRestart()
+    const releasedOf = async () => (await readAgentLog(200)).filter((e) => e.kind === 'released' && e.approvalId === r.requestId).length
+    const before = await releasedOf()
+    expect(await agentWait(r.requestId, r.waitToken, 0, 'ask', waiter)).toMatchObject({ status: 'released', values: { username: 'bot@example.test' } })
+    expect(await releasedOf()).toBe(before + 1)
+    // A release that finished is kept with its releasedAt: a re-read after a restart logs nothing more.
+    await flushKept()
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).entries.find((e: [string, { released?: boolean }]) => e[0] === r.requestId)?.[1].released).toBe(true)
+  })
+
   it('a task grant lets this task use the item without asking, and Lock all ends it', async () => {
     const r = await use('GitHub', 'ask', { scope: 'task', grantMs: 3_600_000 })
     if (r.status !== 'pending') throw new Error('expected pending')

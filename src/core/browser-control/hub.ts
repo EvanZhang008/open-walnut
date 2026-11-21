@@ -155,6 +155,30 @@ export function onTabsChanged(fn: (owner: string) => void): () => void {
   return () => { tabListeners.delete(fn) }
 }
 
+/**
+ * Told after a browser's poll carried its tab report. After a restart the hub knows no tab until
+ * the first report, which rebuilds the holdings; what was kept across the restart (a sign-in ask,
+ * core/kept-asks.ts) checks its tab against it then.
+ */
+const reportListeners = new Set<(device: string) => void>()
+export function onTabsReported(fn: (device: string) => void): () => void {
+  reportListeners.add(fn)
+  return () => { reportListeners.delete(fn) }
+}
+/** When this process's hub started, and the browsers that polled since (each poll reports its tabs). */
+let bootAt = Date.now()
+const polledDevices = new Set<string>()
+/** How long after a restart a call that names an ask waits for the browser to report again, instead of being refused. */
+export const RECONNECT_GRACE_MS = 2 * 60_000
+
+/**
+ * Walnut started a moment ago and no browser has polled (and so reported its tabs) yet: no tab an
+ * ask was made on is known again so far. A call that names a kept ask waits (routes/browser-v1.ts).
+ */
+export function awaitingFirstReport(now = Date.now()): boolean {
+  return now - bootAt < RECONNECT_GRACE_MS && polledDevices.size === 0 && tabOwners.size === 0
+}
+
 /** Something the owner's Browser view shows changed besides its tabs (a sign-in ask): its viewers redraw. */
 export function ownerChanged(owner: string): void { tabsChanged(owner) }
 
@@ -228,6 +252,7 @@ export function poll(info: ControllerInfo, waitMs = POLL_MAX_MS): Promise<WireCo
   Object.assign(c, rest, { lastSeen: Date.now(), polledAt: Date.now() })
   controllers.set(info.device, c)
   gone.delete(info.device)
+  polledDevices.add(info.device)
   if (info.tabs) {
     // The report was read before the request left: a tab an open just gave (its result may
     // arrive first) is kept until a report a while later still lacks it.
@@ -250,6 +275,7 @@ export function poll(info: ControllerInfo, waitMs = POLL_MAX_MS): Promise<WireCo
       if (!k.startsWith(`${info.device}:`) || reported.has(k)) continue
       if (tabReported.has(k) || Date.now() - (tabSetAt.get(k) ?? 0) > TAB_REPORT_GRACE_MS) forgetTab(k, 'gone')
     }
+    for (const fn of reportListeners) { try { fn(info.device) } catch { /* a listener's own trouble */ } }
   }
   // A second poll (the background restarted) takes over: the first one gets nothing.
   if (c.waiter) { clearTimeout(c.waiter.timer); c.waiter.resolve([]); c.waiter = undefined }
@@ -582,4 +608,11 @@ export function _resetBrowserHubForTesting(): void {
   tabEnds.clear()
   ending.clear()
   gone.clear()
+  polledDevices.clear()
+}
+
+/** Tests: what a restart does to the hub (no browser, no tab known, a fresh boot), its listeners kept. */
+export function _forgetBrowserHubForRestart(): void {
+  _resetBrowserHubForTesting()
+  bootAt = Date.now()
 }

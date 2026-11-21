@@ -21,7 +21,8 @@ export async function runBrowserCommand(argv: string[]): Promise<void> {
   process.exitCode = await runBrowser(parsed, {
     call: async (name, args) => {
       const r = await executeOp(name, args, { origin: LOCAL_ORIGIN, ...caller })
-      return r.ok ? { ok: true, result: r.result } : opFailure(r.message)
+      // Refused or not found (never a reset): the call reached no server and ran nothing.
+      return r.ok ? { ok: true, result: r.result } : { ...opFailure(r.message), ...(r.unreachable && !r.lost ? { unreachable: true } : {}) }
     },
     say: (line) => console.error(line),
     out: (text) => { process.stdout.write(text) },

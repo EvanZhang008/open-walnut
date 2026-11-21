@@ -18,6 +18,7 @@
  * Touch ID where a device signs, else the window's Passwords unlock (`guard: 'person'`).
  */
 import type { ApprovalRequester } from '../approvals/types.js'
+import { keptMap } from '../kept-asks.js'
 import { signerKinds, whereAsked } from '../approvals/signer-words.js'
 
 /** How long a yes lets the task send the same file again. */
@@ -31,12 +32,20 @@ export const UPLOAD_GRANTED = 'upload-granted'
 /** The extension's cap: Chrome lets it hand a page a file from disk ("Allow access to file URLs"). */
 export const FILE_ACCESS = 'file-access'
 
+// Kept across a restart (core/kept-asks.ts): the agent's next call after a deploy finds its ask,
+// and a yes or a no the person gave still holds.
 /** `${taskId}\0${site}\0${path}` → until when the person's yes holds. */
-const grants = new Map<string, number>()
+const grants = keptMap<number>('browser-upload-grants')
 /** The same key → until when their no holds. */
-const denials = new Map<string, number>()
+const denials = keptMap<number>('browser-upload-denials')
 /** An ask's id → whose, into which site and for which files. */
-const asks = new Map<string, { taskId: string; site: string; paths: string[]; at: number }>()
+const asks = keptMap<{ taskId: string; site: string; paths: string[]; at: number }>('browser-upload-asks')
+
+/** A yes or a no whose time is over is dropped (the files keep only what still holds). */
+function hold(map: Map<string, number>, k: string, until: number, now = Date.now()): void {
+  for (const [x, u] of map) if (u <= now) map.delete(x)
+  map.set(k, until)
+}
 
 const key = (taskId: string, site: string, p: string) => `${taskId}\0${site}\0${p}`
 
@@ -122,12 +131,12 @@ export async function answerUpload(input: { id: string; taskId: string; site: st
     if (rec.status === 'approved') {
       asks.delete(input.id)
       const at = Date.now()
-      for (const p of a.paths) grants.set(key(a.taskId, a.site, p), at + GRANT_MS)
+      for (const p of a.paths) hold(grants, key(a.taskId, a.site, p), at + GRANT_MS, at)
       return 'approved'
     }
     if (rec.status === 'denied') {
       asks.delete(input.id)
-      for (const p of a.paths) denials.set(key(a.taskId, a.site, p), Date.now() + DENIED_MS)
+      for (const p of a.paths) hold(denials, key(a.taskId, a.site, p), Date.now() + DENIED_MS)
       return 'denied'
     }
     if (rec.status !== 'pending') { asks.delete(input.id); return 'unknown' }
@@ -152,7 +161,7 @@ export async function settledAsk(taskId: string, site: string, paths: string[]):
 
 /** Approvals off: these files went ahead unasked (recorded by the caller), and hold as a yes would. */
 export function grantUnasked(taskId: string, site: string, paths: string[], now = Date.now()): void {
-  for (const p of paths) grants.set(key(taskId, site, p), now + GRANT_MS)
+  for (const p of paths) hold(grants, key(taskId, site, p), now + GRANT_MS, now)
 }
 
 /** Tests: forget every ask and grant. */

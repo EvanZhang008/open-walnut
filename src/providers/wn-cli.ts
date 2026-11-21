@@ -28,6 +28,7 @@ import path from 'node:path'
 import type { GatewayError, GatewayErrorCode, GatewayOp, GatewayRequest, GatewayResponse } from './gateway-core.js'
 import { EXTERNAL_CALLER_SID, wellKnownGatewaySocketPaths } from './gateway-core.js'
 import { withFileLock } from '../utils/file-lock.js'
+import { waitThroughRestart } from '../lib/wait-through-restart.js'
 import { GATEWAY_INLINE_ARGS_MAX_BYTES, classifyArgsSource, parseToolArgs, strippedShellText, strippedShellTextMessage, trailingArgsMessage } from './tool-args-source.js'
 import {
   classifyTemplateGateway, templateCheckGap, templateCheckInput, templateCheckReplyMs, templateCheckRequestInput,
@@ -1345,7 +1346,7 @@ export function testRunArg(env: NodeJS.ProcessEnv = process.env): { testRun?: st
  * its code; anything else is the link, which the loops wait out.
  */
 function gatewayOpCall(socketPath: string, sid: string) {
-  return async (name: string, args: Record<string, unknown>): Promise<{ ok: boolean; result?: unknown; message?: string; status?: number; code?: string }> => {
+  return async (name: string, args: Record<string, unknown>): Promise<{ ok: boolean; result?: unknown; message?: string; status?: number; code?: string; unreachable?: boolean }> => {
     // A new id per call, never per arguments: the loops poll waits that are writes
     // (approval_wait, password_wait), and each poll must run. The id lets the daemon's own
     // resend of this one call run it at most once (src/lib/op-call-id.ts).
@@ -1362,7 +1363,8 @@ function gatewayOpCall(socketPath: string, sid: string) {
     }
     if (resp.ok) return { ok: true, result: resp.result }
     const transient = resp.error.code === 'hub_timeout' || resp.error.code === 'hub_unreachable' || resp.error.code === 'throttled'
-    if (transient) return { ok: false, message: resp.error.message }
+    // hub_unreachable: no server took it, nothing was sent; a timeout may have run it.
+    if (transient) return { ok: false, message: resp.error.message, ...(resp.error.code === 'hub_unreachable' ? { unreachable: true } : {}) }
     const api = /Walnut API error \(([a-z][a-z0-9_]*)\)/.exec(resp.error.message)
     if (api && api[1] !== 'leader_only' && api[1] !== 'vault_not_here') return { ok: false, message: resp.error.message, status: 400, code: api[1] }
     if (resp.error.code === 'bad_request') return { ok: false, message: resp.error.message, status: 400, code: 'bad_request' }
@@ -1467,6 +1469,7 @@ async function runWait(
   const opName = parsed.id.startsWith('rq-') ? 'request_get' : 'task_get'
   const deadline = Date.now() + parsed.timeoutSecs * 1000
   let last: Record<string, unknown> = {}
+  const away = waitThroughRestart({ who: 'walnut wait', say: (line) => { process.stderr.write(line + '\n') }, deadline })
   for (;;) {
     let resp: GatewayResponse
     try {
@@ -1478,15 +1481,16 @@ async function runWait(
       // until the budget runs out; only report the transport error at the end.
       last = { transportError: err instanceof Error ? err.message : String(err) }
       if (Date.now() >= deadline) break
-      await sleep(WAIT_POLL_INTERVAL_MS)
+      await away.lost(String(last.transportError))
       continue
     }
     if (!resp.ok && waitAnswerTransient(resp)) {
       last = { transportError: resp.error.message }
       if (Date.now() >= deadline) break
-      await sleep(WAIT_POLL_INTERVAL_MS)
+      await away.lost(resp.error.message)
       continue
     }
+    away.answered()
     if (!resp.ok) {
       // A definite answer (unknown id, bad request) — stop immediately.
       process.stderr.write(formatErrorLines(resp.error).join('\n') + '\n')
@@ -1523,7 +1527,10 @@ async function runWaitMany(
   const deadline = Date.now() + parsed.timeoutSecs * 1000
   const latest = new Map<string, Record<string, unknown>>()
   const settled = new Set<string>()
+  const away = waitThroughRestart({ who: 'walnut wait', say: (line) => { process.stderr.write(line + '\n') }, deadline })
   for (;;) {
+    // No answer this round (the hub away): the pause was its backoff.
+    let gap = false
     for (const id of parsed.ids) {
       if (settled.has(id)) continue
       let resp: GatewayResponse
@@ -1534,12 +1541,17 @@ async function runWaitMany(
       } catch (err) {
         // Transient, as in the one-id wait: keep polling until the budget runs out.
         latest.set(id, { ...(latest.get(id) ?? {}), transportError: err instanceof Error ? err.message : String(err) })
-        continue
+        await away.lost(err instanceof Error ? err.message : String(err))
+        gap = true
+        break
       }
       if (!resp.ok && waitAnswerTransient(resp)) {
         latest.set(id, { ...(latest.get(id) ?? {}), transportError: resp.error.message })
-        continue
+        await away.lost(resp.error.message)
+        gap = true
+        break
       }
+      away.answered()
       if (!resp.ok) {
         process.stderr.write(`walnut: wait ${id}:\n` + formatErrorLines(resp.error).join('\n') + '\n')
         return errorToExitCode(resp.error.code)
@@ -1557,7 +1569,7 @@ async function runWaitMany(
       await writeStdout(JSON.stringify({ ...verdict.body, timeout: true, waitedSecs: parsed.timeoutSecs }, null, parsed.json ? 0 : 2) + '\n')
       return 7
     }
-    await sleep(WAIT_POLL_INTERVAL_MS)
+    if (!gap) await sleep(WAIT_POLL_INTERVAL_MS)
   }
 }
 

@@ -33,7 +33,8 @@ function dialogLine(body: Record<string, unknown>): string {
 
 function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>): { outcome: string; next: string } {
   if (body.status === 'needs_ok') {
-    if (body.code === 'outward_needs_ok' || body.code === 'upload_needs_ok') {
+    // browser_reconnecting: Walnut restarted during the wait and the browser has not connected again yet.
+    if (body.code === 'outward_needs_ok' || body.code === 'upload_needs_ok' || body.code === 'browser_reconnecting') {
       return {
         outcome: String(body.error ?? 'Waiting for the person to approve this step (a notification on their Mac and phone).'),
         next: `Call ${String(args.action)} again with the same arguments, request "${String(body.request ?? '')}" and wait_ms up to 25000 until it goes through (the ask stays open ${String(body.waitsMinutes ?? 10)} minutes). Do not ask them in chat as well.`,

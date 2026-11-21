@@ -170,6 +170,73 @@ describe('the newer actions', () => {
     expect(out).toContain('tab 4')
   })
 
+  it('a sign-in wait keeps waiting while Walnut restarts, with the same request, and ends done', async () => {
+    // 2026-11-20: a deploy restarted Walnut during request-sign-in; the first refused call ended the command.
+    const calls: Array<Record<string, unknown>> = []
+    const said: string[] = []
+    const pauses: number[] = []
+    let clock = 0
+    const down = { ok: false, message: 'Walnut server not running at http://127.0.0.1:3456/api/v1' }
+    const waiting = { ok: true, result: { status: 'needs_ok', code: 'sign_in_waiting', request: 'si-1', tab: 4, error: 'Waiting for the person to sign in themselves' } }
+    const answers = [waiting, down, down, down, waiting, { ok: true, result: { tab: 4, signIn: 'done', done: true } }]
+    const p = parseBrowserArgv(['request-sign-in', '--tab', '4'])
+    if (!p.ok) throw new Error('parse')
+    const code = await runBrowser(p, {
+      call: async (_n, args) => { calls.push(args); clock += 1000; return answers.shift()! },
+      say: (l) => said.push(l), out: () => undefined, cwd: os.tmpdir(),
+      now: () => clock, sleep: async (ms) => { pauses.push(ms); clock += ms },
+    })
+    expect(code).toBe(BROWSER_EXIT.ok)
+    expect(calls).toHaveLength(6)
+    // Every call after the first names the same ask.
+    expect(calls.slice(1).every((c) => c.request === 'si-1')).toBe(true)
+    // Said once per outage, and the pauses grow.
+    expect(said.filter((l) => l.includes('lost Walnut for a moment'))).toHaveLength(1)
+    expect(pauses).toEqual([1000, 2000, 3000])
+  })
+
+  it('Walnut away past the deadline ends the wait as a timeout; a first call that finds no Walnut fails at once', async () => {
+    const p = parseBrowserArgv(['request-sign-in', '--tab', '4'])
+    if (!p.ok) throw new Error('parse')
+    let clock = 0
+    let n = 0
+    const said: string[] = []
+    const code = await runBrowser(p, {
+      call: async () => (n++ === 0 ? { ok: true, result: { status: 'needs_ok', code: 'sign_in_waiting', request: 'si-2' } } : { ok: false, message: 'Walnut server not running' }),
+      say: (l) => said.push(l), out: () => undefined, cwd: os.tmpdir(),
+      now: () => clock, sleep: async (ms) => { clock += ms },
+    })
+    expect(code).toBe(BROWSER_EXIT.timeout)
+    expect(said.at(-1)).toContain('no answer in 10 minutes')
+    // Not waiting yet: nothing to wait on, so no Walnut is a plain failure.
+    const first = await runBrowser(p, { call: async () => ({ ok: false, message: 'Walnut server not running' }), say: () => undefined, out: () => undefined, cwd: os.tmpdir(), sleep: async () => { throw new Error('no pause') } })
+    expect(first).toBe(BROWSER_EXIT.error)
+    // A definite refusal mid-wait still ends it at once.
+    let m = 0
+    const refused = await runBrowser(p, {
+      call: async () => (m++ === 0 ? { ok: true, result: { status: 'needs_ok', code: 'sign_in_waiting', request: 'si-3' } } : { ok: false, status: 403, code: 'not_your_tab', message: 'gone' }),
+      say: () => undefined, out: () => undefined, cwd: os.tmpdir(), sleep: async () => { throw new Error('no pause') },
+    })
+    expect(refused).toBe(BROWSER_EXIT.refused)
+  })
+
+  it('an act waiting on the person is sent again only when it reached no Walnut, never after a lost or timed-out answer', async () => {
+    const ask = { ok: true, result: { status: 'needs_ok', code: 'outward_needs_ok', request: 'apr-9', error: 'Waiting for the person to approve' } }
+    const p = parseBrowserArgv(['click', 'e11'])
+    if (!p.ok) throw new Error('parse')
+    const run = async (failure: Record<string, unknown>) => {
+      const calls: Array<Record<string, unknown>> = []
+      const answers: Array<Record<string, unknown>> = [ask, failure, { ok: true, result: { tab: 4, clicked: 'button "Place order"' } }]
+      const code = await runBrowser(p, { call: async (_n, a) => { calls.push(a); return answers.shift() as never }, say: () => undefined, out: () => undefined, cwd: os.tmpdir(), sleep: async () => undefined })
+      return { code, calls: calls.length }
+    }
+    // Refused or not found: the click never ran, so it goes again with its request.
+    expect(await run({ ok: false, unreachable: true, message: 'Walnut server not running' })).toEqual({ code: BROWSER_EXIT.ok, calls: 3 })
+    // The browser took longer than the call (it may still have clicked), or the answer was lost: final.
+    expect(await run({ ok: false, status: 504, code: 'browser_timeout', message: 'It may still have done it' })).toEqual({ code: BROWSER_EXIT.timeout, calls: 2 })
+    expect(await run({ ok: false, message: 'Walnut request failed: socket hang up' })).toEqual({ code: BROWSER_EXIT.error, calls: 2 })
+  })
+
   it('a no or no answer in time ends it', async () => {
     const p = parseBrowserArgv(['click', 'e11'])
     if (!p.ok) throw new Error('parse')

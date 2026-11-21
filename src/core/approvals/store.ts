@@ -424,9 +424,29 @@ export interface WaitResult {
  * approval lets one run through, while a retry of a lost response still gets its answer.
  */
 export async function waitApproval(id: string, token: string | undefined, waitMs: number): Promise<WaitResult> {
+  return waitFor(id, (rec) => tokenMatches(rec, token), waitMs)
+}
+
+/**
+ * waitApproval for this server's own ask that a restart carried over (core/kept-asks.ts keeps only
+ * the wait token's hash, never the token): the hash must be the one the approval holds. Server
+ * code only; no route takes a hash.
+ */
+export async function waitApprovalByTokenHash(id: string, tokenHash: string, waitMs: number): Promise<WaitResult> {
+  return waitFor(id, (rec) => {
+    const a = Buffer.from(tokenHash, 'hex')
+    const b = Buffer.from(rec.waitTokenHash, 'hex')
+    return a.length === 32 && a.length === b.length && crypto.timingSafeEqual(a, b)
+  }, waitMs)
+}
+
+/** The sha256 a wait token is kept as. */
+export const waitTokenHashOf = (token: string): string => sha(token)
+
+async function waitFor(id: string, matches: (rec: ApprovalRecord) => boolean, waitMs: number): Promise<WaitResult> {
   const first = await getApproval(id)
   if (!first) throw new ApprovalError(404, 'not_found', 'No such approval.')
-  if (!tokenMatches(first, token)) throw new ApprovalError(403, 'bad_token', 'Only the process that asked reads this approval\'s answer.')
+  if (!matches(first)) throw new ApprovalError(403, 'bad_token', 'Only the process that asked reads this approval\'s answer.')
   if (first.status === 'pending' && waitMs > 0) {
     await new Promise<void>((resolve) => {
       const ms = Math.min(APPROVAL_WAIT_MAX_MS, waitMs)

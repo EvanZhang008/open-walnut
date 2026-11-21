@@ -18,6 +18,7 @@
  * terminal or an agent's context. An item asks the person unless it allows agents; the wait
  * shows on stderr, and Ctrl-C withdraws the ask.
  */
+import { definiteRefusal, waitThroughRestart } from '../../lib/wait-through-restart.js'
 import { spawn } from 'node:child_process'
 import os from 'node:os'
 
@@ -150,12 +151,14 @@ async function useItem(io: PassIo, args: { item: string; fields: string[]; purpo
   }
   io.say(`Waiting for approval to use ${b.item?.title ?? args.item}${b.mode === 'biometric' ? ' (Face ID or Touch ID)' : ''}: answer it on your Mac or phone.`)
   if (b.downgraded) io.say(`  ${b.downgraded}`)
-  let failures = 0
+  // Walnut away for a moment (a deploy restarts it): the same ask is waited on again; the
+  // approval's own expiry ends the wait.
+  const away = waitThroughRestart({ who: 'walnut pass', say: io.say, sleep, stop: stop.wake })
   while (!stop.interrupted) {
     const r = await Promise.race([io.call('password_wait', { id: b.requestId, token: b.waitToken, wait_ms: 12_000 }), stop.wake])
     if (r === null || stop.interrupted) break
     if (r.ok) {
-      failures = 0
+      away.answered()
       const w = (r.result ?? {}) as { status?: string; answeredBy?: string }
       if (w.status === 'released') {
         io.say(`Approved${w.answeredBy ? ` on ${w.answeredBy}` : ''}.`)
@@ -167,13 +170,11 @@ async function useItem(io: PassIo, args: { item: string; fields: string[]; purpo
       }
       continue
     }
-    if (r.status !== undefined && r.status >= 400 && r.status < 500) {
+    if (definiteRefusal(r)) {
       io.say(`walnut pass: ${errLine(r)}`)
       return { exit: exitFor(r.code) }
     }
-    failures++
-    if (failures === 1) io.say(`walnut pass: lost Walnut for a moment (${errLine(r)}); still waiting.`)
-    await Promise.race([sleep(Math.min(10_000, 1_000 * failures)), stop.wake])
+    await away.lost(errLine(r))
   }
   await io.call('password_cancel', { id: b.requestId, token: b.waitToken }).catch(() => undefined)
   io.say('Stopped: the ask was withdrawn.')

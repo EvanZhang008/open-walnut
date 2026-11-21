@@ -708,7 +708,10 @@ secret printed by accident reaches neither the terminal, an agent's context nor 
 guards against accidents, not against a command set on printing a secret in some other shape.
 `password_use` and `pass get` return the value itself, which stays in the session's transcript:
 they are for a value the agent must type. While an ask waits `run` says so on stderr; Ctrl-C
-withdraws the ask. Exit codes before the command runs: 1 denied or refused, 2 nobody answered,
+withdraws the ask. The ask is kept across a Walnut restart (`WALNUT_HOME/kept-asks/`, only which
+item and fields were asked, why and by whom, never a value), so the same request id waits on the
+same approval after one, and the command waits through the restart (`src/lib/wait-through-restart.ts`);
+a value is still released only while the vault is open, and Lock all still ends every ask. Exit codes before the command runs: 1 denied or refused, 2 nobody answered,
 3 error, 130 stopped; once it runs, the command's own code (128+n for signal n).
 
 ## Sync from Bitwarden

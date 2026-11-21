@@ -31,6 +31,12 @@ sentence the person reads first (without it, the asking session's last words bef
 | Wait in place (the default, and the better one) | `walnut approve "<what>" && ./step.sh`: the script pauses until a person answers | as above |
 | Ask and end | `walnut approve "<what>" --request-only` asks, prints the approval id and exits **4**; the session ends its turn; once it is answered, Walnut tells the session to run the same command again with `--approval <id>` added, which waits for (or reads) that answer and goes on only on Approve | 4 = asked, not answered yet; then as above |
 
+Waiting in place survives a Walnut restart (a deploy restarts it many times a day): the
+approval is in `approvals.json`, and a poll that gets no answer is made again with a growing pause
+(1 s up to 10 s) until the deadline, with one line on stderr, "lost Walnut for a moment; still
+waiting". A definite refusal (used, unknown id, bad token) still ends it at once. The same helper
+waits for `walnut pass`, `walnut browser` and `walnut wait` (`src/lib/wait-through-restart.ts`).
+
 `--request-only` saves what it asked (the wait token, the detail, for a single-use one the signed
 envelope) in `${XDG_STATE_HOME:-~/.local/state}/open-walnut/approvals/<id>.json` (mode 0600).
 The rerun refuses when `what`, the detail or the mode changed since: ask again.

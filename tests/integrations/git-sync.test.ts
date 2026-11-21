@@ -304,6 +304,26 @@ describe('auth.json is never synced (data-repo gitignore)', () => {
     expect(execSync('git check-ignore router/handoffs/another.json', { cwd: tmpDir, encoding: 'utf-8' }).trim()).toBe('router/handoffs/another.json');
   });
 
+  it('keeps the asks kept across a restart (kept-asks/) out of sync, fresh and on an older install that committed one', async () => {
+    initSync();
+    expect((await fsp.readFile(path.join(tmpDir, '.gitignore'), 'utf-8')).split('\n')).toContain('/kept-asks/');
+    await fsp.writeFile(path.join(tmpDir, '.gitignore'), 'images/\n');
+    const kept = path.join(tmpDir, 'kept-asks', 'browser-pending-fills.json');
+    const note = path.join(tmpDir, 'notes', 'kept-asks', 'idea.md');
+    await fsp.mkdir(path.dirname(kept), { recursive: true });
+    await fsp.mkdir(path.dirname(note), { recursive: true });
+    await fsp.writeFile(kept, '{"version":1,"entries":[]}\n');
+    await fsp.writeFile(note, 'A note about kept asks\n');
+    execSync('git add -f kept-asks/browser-pending-fills.json notes/kept-asks/idea.md && git commit -q -m "older build"', { cwd: tmpDir });
+    ensureCriticalIgnores();
+    expect(ensureMachineLocalUntracked()).toContain('kept-asks/browser-pending-fills.json');
+    const tracked = execSync('git ls-files', { cwd: tmpDir, encoding: 'utf-8' }).split('\n');
+    expect(tracked).not.toContain('kept-asks/browser-pending-fills.json');
+    expect(tracked).toContain('notes/kept-asks/idea.md');
+    expect(fs.existsSync(kept)).toBe(true);
+    expect(execSync('git check-ignore kept-asks/vault-agent-asks.json', { cwd: tmpDir, encoding: 'utf-8' }).trim()).toBe('kept-asks/vault-agent-asks.json');
+  });
+
   it('repairs and untracks private Plugin paths on an older install', async () => {
     initSync();
     await fsp.writeFile(path.join(tmpDir, '.gitignore'), 'images/\n', 'utf-8');

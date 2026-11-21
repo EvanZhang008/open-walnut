@@ -10,6 +10,7 @@ import { executeOp } from '../ops/index.js';
 import { LOCAL_ORIGIN } from '../lib/caller-origin.js';
 import { cliOpCaller } from '../lib/cli-sender.js';
 import { outputJson } from '../utils/json-output.js';
+import { waitThroughRestart } from '../lib/wait-through-restart.js';
 import { WAIT_MAX_IDS, evaluateWaitResult, waitManyVerdict } from '../providers/wn-cli.js';
 import type { GlobalOptions } from '../core/types.js';
 
@@ -39,13 +40,23 @@ export async function runWait(idArg: string | string[], options: WaitOptions, gl
   const latest = new Map<string, Record<string, unknown>>();
   const settled = new Set<string>();
   const caller = cliOpCaller();
+  // Walnut away for a moment (a deploy restarts it): keep waiting, as the in-session twin does.
+  const away = waitThroughRestart({ who: 'open-walnut wait', say: (line) => console.error(line), deadline });
 
   for (;;) {
+    // No answer this round (Walnut away): its pause was the backoff, the deadline still ends it.
+    let gap = false;
     for (const id of ids) {
       if (settled.has(id)) continue;
       const r = await executeOp(id.startsWith('rq-') ? 'request_get' : 'task_get', { id }, { origin: LOCAL_ORIGIN, ...caller });
+      if (!r.ok && (r.unreachable || r.lost)) {
+        await away.lost(r.message);
+        gap = true;
+        break;
+      }
+      if (r.ok) away.answered();
       if (!r.ok) {
-        // A definite answer (unknown id, server down) — stop, don't spin.
+        // A definite answer (unknown id, bad request): stop, don't spin.
         const message = ids.length > 1 ? `${id}: ${r.message}` : r.message;
         if (globals.json) outputJson({ error: message });
         else console.error(message);
@@ -73,6 +84,6 @@ export async function runWait(idArg: string | string[], options: WaitOptions, gl
         return;
       }
     }
-    await sleep(POLL_INTERVAL_MS);
+    if (!gap) await sleep(POLL_INTERVAL_MS);
   }
 }

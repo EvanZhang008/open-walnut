@@ -22,6 +22,7 @@
  * text too; the code is one-time and lasts about 30 seconds, and the setup key never leaves Walnut.
  */
 import { BrowserError } from './hub.js'
+import { keptMap } from '../kept-asks.js'
 import type { AgentItemView, AgentRequester, AgentsSwitch, ApprovalCreator, ApprovalWaiter } from '../vault/agent.js'
 
 export interface FillDeps {
@@ -30,6 +31,8 @@ export interface FillDeps {
   agents: () => Promise<AgentsSwitch>
   createApproval: ApprovalCreator
   waitApproval: ApprovalWaiter
+  /** The same, by the wait token's hash: a fill a restart carried over has no token any more. */
+  waitApprovalByHash?: ApprovalWaiter
 }
 
 export interface FillInput {
@@ -53,11 +56,21 @@ export interface FillInput {
 
 export type FillOutcome = { status: 200 | 202; body: Record<string, unknown> }
 
-interface PendingFill { owner: string; tab: number; token: string; url: string; item: { id: string; title: string }; fields: string[]; what: 'login' | 'code'; at: number }
-const pendingFills = new Map<string, PendingFill>()
+interface PendingFill { owner: string; tab: number; tokenHash: string; url: string; item: { id: string; title: string }; fields: string[]; what: 'login' | 'code'; at: number }
+/** Kept across a restart (core/kept-asks.ts): the agent's call after a deploy finds its fill. */
+const pendingFills = keptMap<PendingFill>('browser-pending-fills', {
+  unpack: (v) => (v && typeof (v as PendingFill).tokenHash === 'string' ? v as PendingFill : undefined),
+})
+/**
+ * The approval's wait token itself, in memory only (never on disk): after a restart the fill
+ * waits by the token's hash, which the approval holds anyway (approvals/store.ts).
+ */
+const fillTokens = new Map<string, string>()
 const PENDING_MS = 15 * 60_000
 
-export function _resetFillLoginForTesting(): void { pendingFills.clear() }
+export function _resetFillLoginForTesting(): void { pendingFills.clear(); fillTokens.clear() }
+/** Tests: what a restart drops here besides the kept maps (core/kept-asks.ts forgetKeptForRestart). */
+export function _forgetFillTokensForRestart(): void { fillTokens.clear() }
 
 function needsOk(id: string, p: Pick<PendingFill, 'item' | 'what'>): FillOutcome {
   return {
@@ -174,14 +187,17 @@ async function fill(deps: FillDeps, tab: number, url: string, item: { id: string
 export async function fillLogin(input: FillInput, deps: FillDeps): Promise<FillOutcome> {
   const agents = await deps.agents()
   const now = Date.now()
-  for (const [id, p] of pendingFills) if (now - p.at > PENDING_MS) pendingFills.delete(id)
+  for (const [id, p] of pendingFills) if (now - p.at > PENDING_MS) { pendingFills.delete(id); fillTokens.delete(id) }
   if (input.request) {
     const p = pendingFills.get(input.request)
-    if (!p || p.owner !== input.owner || p.tab !== input.tab || p.what !== (input.what ?? 'login')) throw new BrowserError(`No such sign-in ask for this tab: call ${input.what === 'code' ? 'fill_code' : 'fill_login'} again without request.`, 404, 'no_such_request')
+    const token = fillTokens.get(input.request)
+    const waiter = token ? deps.waitApproval : deps.waitApprovalByHash
+    if (!p || !waiter || p.owner !== input.owner || p.tab !== input.tab || p.what !== (input.what ?? 'login')) throw new BrowserError(`No such sign-in ask for this tab: call ${input.what === 'code' ? 'fill_code' : 'fill_login'} again without request.`, 404, 'no_such_request')
     const { agentWait } = await import('../vault/agent.js')
-    const w = await agentWait(input.request, p.token, input.waitMs, agents, deps.waitApproval)
+    const w = await agentWait(input.request, token ?? p.tokenHash, input.waitMs, agents, waiter)
     if (w.status === 'pending') return needsOk(input.request, p)
     pendingFills.delete(input.request)
+    fillTokens.delete(input.request)
     if (w.status !== 'released') throw new BrowserError(`Nobody answered the ask in time: call ${p.what === 'code' ? 'fill_code' : 'fill_login'} again to ask anew.`, 409, 'login_expired')
     // The page must still be where the person approved it for.
     const url = await tabUrl(deps, input.owner, input.tab)
@@ -202,7 +218,9 @@ export async function fillLogin(input: FillInput, deps: FillDeps): Promise<FillO
   const purpose = (input.purpose?.trim() || `${what === 'code' ? 'enter the one-time code' : 'sign in'} on ${siteKey(url)?.domain ?? 'a site'} in the browser`).slice(0, 200)
   const u = await agentUse({ item: view.id, fields, purpose, requester: input.requester, agents, testRun: input.testRun, use: 'fill' }, deps.createApproval)
   if (u.status === 'pending') {
-    pendingFills.set(u.requestId, { owner: input.owner, tab: input.tab, token: u.waitToken, url, item, fields, what, at: now })
+    const { waitTokenHashOf } = await import('../approvals/store.js')
+    fillTokens.set(u.requestId, u.waitToken)
+    pendingFills.set(u.requestId, { owner: input.owner, tab: input.tab, tokenHash: waitTokenHashOf(u.waitToken), url, item, fields, what, at: now })
     return needsOk(u.requestId, { item, what })
   }
   const result = await fill(deps, input.tab, url, item, u.values, what)

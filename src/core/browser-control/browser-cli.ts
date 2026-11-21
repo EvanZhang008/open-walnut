@@ -3,6 +3,7 @@
  * (commands/browser.ts) and the hosts' CLI (providers/wn-cli.ts), which differ only in how they
  * call an op. Every action is the `browser` op (ops/browser.ts); a screenshot is saved as a file.
  */
+import { definiteRefusal, waitThroughRestart } from '../../lib/wait-through-restart.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { noBrowserLine, type GoneBrowser } from './gone-words.js'
@@ -54,7 +55,11 @@ export function guideText(body: unknown): string | undefined {
   return `${content.replace(/^---\n[\s\S]*?\n---\n+/, '').trim()}\n`
 }
 
-export interface OpResult { ok: boolean; result?: unknown; message?: string; status?: number; code?: string }
+/** `unreachable`: no server answered at all (refused, not found): the call never ran, so it may be made again. */
+export interface OpResult { ok: boolean; result?: unknown; message?: string; status?: number; code?: string; unreachable?: boolean }
+
+/** Actions whose call only waits on the person's answer and does nothing in the page. */
+const PURE_WAITS = new Set(['request_sign_in'])
 export interface BrowserIo {
   call: (name: string, args: Record<string, unknown>) => Promise<OpResult>
   say: (line: string) => void
@@ -62,6 +67,8 @@ export interface BrowserIo {
   cwd: string
   env?: Record<string, string | undefined>
   now?: () => number
+  /** The pause between calls while Walnut is away (tests); default a timer. */
+  sleep?: (ms: number) => Promise<void>
 }
 
 export type ParsedBrowser =
@@ -321,7 +328,17 @@ function defaultShot(io: BrowserIo): string {
 }
 
 export async function runBrowser(p: Extract<ParsedBrowser, { ok: true }>, io: BrowserIo): Promise<number> {
-  const deadline = (io.now?.() ?? Date.now()) + 10 * 60_000
+  const now = io.now ?? Date.now
+  const deadline = now() + 10 * 60_000
+  // While it waits on the person (2026-11-20: a restart ended a sign-in wait). Every ask is kept
+  // across a restart (core/kept-asks.ts). For an upload, a step that buys or sends, a site, a new
+  // sign-in or a fill, this command resumes only when the restart falls between polls or the call
+  // never reached the server (refused, not found): it is made again with the same request until
+  // the deadline. A call cut mid-poll (a reset, a timeout, 504 browser_timeout) may have acted
+  // already, so it ends the command, and the agent's next call with the same request id picks up
+  // the same ask. request_sign_in does nothing in the page and waits through either.
+  const pureWait = PURE_WAITS.has(String(p.args.action))
+  const away = waitThroughRestart({ who: 'walnut browser', say: io.say, now, deadline, ...(io.sleep ? { sleep: io.sleep } : {}) })
   let told = false
   let request: string | undefined
   let upload: Record<string, unknown> = {}
@@ -332,10 +349,17 @@ export async function runBrowser(p: Extract<ParsedBrowser, { ok: true }>, io: Br
   }
   for (;;) {
     const r = await io.call(p.op, { ...p.args, ...upload, ...(told ? { wait_ms: 25_000 } : {}), ...(request ? { request } : {}) })
+    if (!r.ok && told && (r.unreachable === true || (pureWait && !definiteRefusal(r)))) {
+      await away.lost(r.message)
+      // The pause stops at the deadline, so the deadline itself ends the wait.
+      if (now() >= deadline) { io.say('walnut browser: no answer in 10 minutes'); return BROWSER_EXIT.timeout }
+      continue
+    }
     if (!r.ok) {
       io.say(`walnut browser: ${r.message ?? 'failed'}`)
       return exitOf(r.code)
     }
+    away.answered()
     const body = (r.result ?? {}) as Record<string, unknown>
     if (p.guide) {
       if (p.json) { io.out(JSON.stringify(body, null, 2) + '\n'); return BROWSER_EXIT.ok }
@@ -345,7 +369,7 @@ export async function runBrowser(p: Extract<ParsedBrowser, { ok: true }>, io: Br
       return BROWSER_EXIT.ok
     }
     if (body.status === 'needs_ok') {
-      // A sign-in waits on its own ask: the next calls name it.
+      // Every wait names its ask: the next calls name it too (after a restart as well).
       if (typeof body.request === 'string') request = body.request
       // What it waits for, in the server's words, and how long this command waits.
       if (!told) {
@@ -354,7 +378,7 @@ export async function runBrowser(p: Extract<ParsedBrowser, { ok: true }>, io: Br
         io.say(`${why}. This command waits up to 10 minutes for their answer...`)
       }
       told = true
-      if ((io.now?.() ?? Date.now()) > deadline) { io.say('walnut browser: no answer in 10 minutes'); return BROWSER_EXIT.timeout }
+      if (now() > deadline) { io.say('walnut browser: no answer in 10 minutes'); return BROWSER_EXIT.timeout }
       continue
     }
     if ((p.args.action === 'screenshot' || p.args.action === 'zoom') && typeof body.image === 'string') {

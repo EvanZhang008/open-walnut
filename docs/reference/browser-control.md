@@ -187,6 +187,25 @@ extension's Settings, reached from the key's popover in the side panel or the to
   ask lives on the tab's holding: it ends (`gone`) when the tab is closed, released or given to
   another task, and only its own task's view shows or answers it. An extension older than Take
   over answers `request_sign_in` with `old_extension`, and the agent asks you in its chat instead.
+- **A wait crosses a Walnut restart.** A deploy restarts Walnut many times a day, so every ask that
+  waits on you (a sign-in, a trusted upload, a step that buys, sends or deletes, a new site, a new
+  sign-in on a site you have open, a saved login's fill) is kept in `WALNUT_HOME/kept-asks/`
+  (`src/core/kept-asks.ts`, one small file per kind, 0600; never git-synced, and an approval's
+  wait token only as its hash). After the restart the agent's next
+  call with the same `request` is the same ask: no second card, and your Take over and Done after
+  the restart still end it. The tabs themselves come back from the extension's own report when it
+  reconnects; an ask whose tab that report no longer gives to its task ends as `gone`. Until a
+  browser reports again (at most two minutes after the start), a call that names its ask answers
+  `needs_ok` with code `browser_reconnecting` instead of a refusal. `walnut browser` waits through
+  the gap itself, with a growing pause, until its 10 minutes are up. Those asks (an upload, a step
+  that buys, sends or deletes, a new site, a new sign-in, a fill) are kept across a restart, and
+  the command resumes only when the restart falls between polls or the call never reached the
+  server; a call cut mid-poll ends the command, and the agent's next call with the same request id
+  picks up the same ask. Only `request-sign-in`, which does nothing in the page, waits through a
+  call cut mid-poll too. It says once on stderr that it lost
+  Walnut for a moment (`src/lib/wait-through-restart.ts`, shared with `walnut approve`, `walnut
+  pass` and `walnut wait`). Expiry, owner checks and refusals are as before: an ask still ends
+  when its tab closes or another task takes it, still runs out, and another task's id is refused.
 - **One tab group per task, folded.** The tabs a task opens in Walnut's agent window sit in one
   Chrome tab group named `walnut-<task name>` (`agent-groups.ts`). A tab you hand over with Act in
   tab joins that task's group of your window once, when you hand it over (never folded, and never

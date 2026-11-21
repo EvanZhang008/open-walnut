@@ -11,7 +11,9 @@ import path from 'node:path'
 import { derivePasswordKey, randomBytes, toB64 } from '../../../src/core/vault/crypto.js'
 import { createItems, getItem, resetVaultForTest, setupVault, updateItem } from '../../../src/core/vault/store.js'
 import { resetAgentStateForTest, type ApprovalCreator, type ApprovalWaiter } from '../../../src/core/vault/agent.js'
-import { _resetFillLoginForTesting, fillLogin, type FillDeps } from '../../../src/core/browser-control/fill-login.js'
+import { _forgetFillTokensForRestart, _resetFillLoginForTesting, fillLogin, type FillDeps } from '../../../src/core/browser-control/fill-login.js'
+import { flushKept, forgetKeptForRestart, keptDir } from '../../../src/core/kept-asks.js'
+import crypto from 'node:crypto'
 import { vi } from 'vitest'
 const attribution = vi.hoisted(() => ({ note: vi.fn() }))
 vi.mock('../../../src/core/browser-control/agent-actions.js', () => ({ noteAgentAction: attribution.note }))
@@ -70,6 +72,29 @@ describe('fill_login after an approval', () => {
     expect(r).toMatchObject({ status: 200, body: { filled: true, item: { id: shopId } } })
     expect(fills).toHaveLength(1)
     expect(attribution.note).toHaveBeenCalledWith('t-fill', tabUrl, 'fill_login', expect.any(Number), 'a@example.test')
+  })
+
+  it('a fill waiting across a restart keeps only the wait token\'s hash on disk, and waits by it after the restart', async () => {
+    const request = await askAndApprove()
+    await flushKept()
+    const kept = fs.readFileSync(path.join(keptDir(), 'browser-pending-fills.json'), 'utf8')
+    expect(kept).not.toContain('"tok"')
+    const hash = crypto.createHash('sha256').update('tok').digest('hex')
+    expect(kept).toContain(hash)
+    forgetKeptForRestart()
+    _forgetFillTokensForRestart()
+    const byHash: string[] = []
+    const r = await fillLogin(input({ request }), { ...deps, waitApproval: async () => { throw new Error('no token after a restart') }, waitApprovalByHash: async (_id, h) => { byHash.push(h); return { status: 'approved', used: true } } })
+    expect(r).toMatchObject({ status: 200, body: { filled: true } })
+    expect(byHash).toEqual([hash])
+    // Without a way to wait by hash, a restored fill is refused, never filled.
+    resetAgentStateForTest()
+    _resetFillLoginForTesting()
+    const again = await askAndApprove()
+    await flushKept()
+    forgetKeptForRestart()
+    _forgetFillTokensForRestart()
+    await expect(fillLogin(input({ request: again }), deps)).rejects.toMatchObject({ code: 'no_such_request' })
   })
 
   it('refuses a tab now on another origin of the same site (another host, or plain http)', async () => {

@@ -23,6 +23,7 @@ import { ambientTestRun } from '../../core/test-run.js'
 import { log } from '../../logging/index.js'
 import { startTabTidy, _stopTabTidyForTesting, type TidyDeps } from './browser-tab-tidy.js'
 import { openAsk } from '../../core/browser-control/sign-in-ask.js'
+import { keptMap } from '../../core/kept-asks.js'
 import { onCredentialsRevoked } from '../../core/device-auth.js'
 import { mountBrowserView, _resetBrowserViewForTesting } from './browser-view-v1.js'
 import { missingIsNull } from '../../lib/id-ref.js'
@@ -363,10 +364,16 @@ const lastTab = new Map<string, { device: string; tab: number }>()
  */
 const handed = new Map<string, { owner: string; site: string }>()
 const tabKey = (device: string, tab: number) => `${device}\0${tab}`
-/** A site an owner asked the person for, until it is decided. */
-const siteAsks = new Map<string, string>()
+/** A site an owner asked the person for, until it is decided (kept across a restart: core/kept-asks.ts). */
+const siteAsks = keptMap<{ id: string; at: number }>('browser-site-asks')
 /** A site the person refused an owner, until when. */
-const siteDenied = new Map<string, number>()
+const siteDenied = keptMap<number>('browser-site-denied')
+/** A site ask is open 10 minutes (its approval's timeout), and its answer is kept an hour for the agent's next call. */
+const SITE_ASK_MS = 10 * 60_000
+function sweepSites(now = Date.now()): void {
+  for (const [k, a] of siteAsks) if (now - a.at > 6 * SITE_ASK_MS) siteAsks.delete(k)
+  for (const [k, until] of siteDenied) if (until <= now) siteDenied.delete(k)
+}
 
 /**
  * The site is allowed, or the person is asked: approved → allowed from now on (and this act
@@ -380,9 +387,10 @@ async function siteGate(req: Request, owner: string, url: string, holdMs: number
   if (s.isAllowed(await s.readSites(), url)) return { ok: true }
   const key = `${owner}\0${site}`
   const denied = { ok: false as const, status: 403, body: { error: `The person did not let agents use ${site}. Do not ask again unless they say so.`, code: 'site_denied', site } }
+  sweepSites()
   if ((siteDenied.get(key) ?? 0) > Date.now()) return denied
   const store = await import('../../core/approvals/store.js')
-  let id = siteAsks.get(key)
+  let id = siteAsks.get(key)?.id
   let a = id ? await store.getApproval(id) : undefined
   if (!a || (a.status !== 'pending' && a.status !== 'approved' && a.status !== 'denied')) {
     const { requesterOf } = await import('./approvals-v1.js')
@@ -392,10 +400,10 @@ async function siteGate(req: Request, owner: string, url: string, holdMs: number
       detail: `${requester.taskTitle ? `"${requester.taskTitle}" wants to open ${url}` : `An agent wants to open ${url}`} in the Walnut agent window of your browser. `
         + `Approve once and agents may use ${site} until you remove it in Settings, Browser extension.`,
       detailRole: 'summary',
-      mode: 'tap', outsideSwitch: true, timeoutMs: 10 * 60_000, requester, testRun: ambientTestRun(),
+      mode: 'tap', outsideSwitch: true, timeoutMs: SITE_ASK_MS, requester, testRun: ambientTestRun(),
     })
     id = made.approval.id
-    siteAsks.set(key, id)
+    siteAsks.set(key, { id, at: Date.now() })
     a = await store.getApproval(id)
   }
   // The asker may hold for the answer (wait_ms), a second at a time.
@@ -421,7 +429,8 @@ async function siteGate(req: Request, owner: string, url: string, holdMs: number
 
 function needsOk(site: string, approvalId: string): Record<string, unknown> {
   return {
-    status: 'needs_ok', site, approvalId,
+    // `request` as every other wait answers it: the next call names the ask it waits on.
+    status: 'needs_ok', site, approvalId, request: approvalId,
     error: `Waiting for the person to let agents use ${site} (a notification on their Mac and phone).`,
     code: 'site_needs_ok',
   }
@@ -462,6 +471,19 @@ browserV1Router.post('/browser/act', (req, res, next) => {
     const held = typeof b.device === 'string' ? undefined
       : lastHolds ? last!.device
         : ON_TAB.has(action) || action === 'tabs' || action === 'downloads' ? h.deviceForTab(owner, action === 'downloads' ? undefined : tab) : undefined
+    // Walnut restarted a moment ago (a deploy) and no browser has reported its tabs again: a call
+    // that names its ask waits for the browser instead of being refused (core/kept-asks.ts).
+    if (typeof b.request === 'string' && b.request && h.awaitingFirstReport()) {
+      const until = Date.now() + Math.max(0, Math.min(25_000, Number(b.wait_ms) || 0, left() - 5000))
+      while (h.awaitingFirstReport() && Date.now() < until) await new Promise((r) => setTimeout(r, 200))
+      if (h.awaitingFirstReport()) {
+        res.status(202).json({
+          status: 'needs_ok', code: 'browser_reconnecting', request: b.request.slice(0, 100),
+          error: 'Walnut restarted a moment ago and waits for the browser to connect again; the ask still stands',
+        })
+        return undefined
+      }
+    }
     if (!h.connected().length) await h.waitConnected(3000)
     const c = h.pickController(typeof b.device === 'string' ? b.device : held)
     if (ON_TAB.has(action)) {
@@ -887,7 +909,7 @@ async function fillLoginAct(req: Request, res: Response, b: Record<string, unkno
       ...(at.site ? { site: at.site } : {}),
     }, {
       send: (action, args, ms) => h.send(at.device, action, args, at.allow, ms),
-      agents: v.agentsSwitch, createApproval: v.createApproval, waitApproval: v.waitApproval,
+      agents: v.agentsSwitch, createApproval: v.createApproval, waitApproval: v.waitApproval, waitApprovalByHash: v.waitApprovalByHash,
     })
     log.web.info('browser act', { action: at.what === 'code' ? 'fill_code' : 'fill_login', device: at.device, owner: at.owner, tab: at.tab, status: out.status })
     lastTab.set(at.owner, { device: at.device, tab: at.tab })

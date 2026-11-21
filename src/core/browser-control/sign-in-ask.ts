@@ -6,12 +6,18 @@
  * with their own hands, and presses Done (Hand back), and the agent's waiting call answers `done`.
  * The sign-in stays in the person's own browser profile, so later runs of the task are signed in.
  *
- * One ask per tab at a time, in memory (a restart forgets it: the agent's next call makes a new
- * one). The agent holds its call up to `wait_ms` at a time and calls again with the ask's id, as
- * for an approval; the shell command waits by itself.
+ * One ask per tab at a time. The agent holds its call up to `wait_ms` at a time and calls again
+ * with the ask's id, as for an approval; the shell command waits by itself, through a Walnut
+ * restart too (src/lib/wait-through-restart.ts). The asks are kept across a restart
+ * (core/kept-asks.ts; 2026-11-20: a deploy during the wait made a second card): the same id is the
+ * same ask after boot, and the person's Done after the restart ends it. The tab's holding is the
+ * hub's, in memory: the extension reports its tabs again when it reconnects, and an ask whose tab
+ * that report does not give to its owner ends as gone (onTabsReported), as it would have had the
+ * hub seen the tab go.
  */
 import crypto from 'node:crypto'
-import { onHoldingEnded } from './hub.js'
+import { keptMap } from '../kept-asks.js'
+import { onHoldingEnded, onTabsReported, tabOwner } from './hub.js'
 
 export type SignInEnd = 'done' | 'stopped' | 'gone'
 
@@ -33,7 +39,7 @@ export const ASK_MS = 60 * 60_000
 /** An answered ask stays readable this long, for the agent's next call. */
 const ENDED_KEEP_MS = 10 * 60_000
 
-const asks = new Map<string, SignInAsk>()
+const asks = keptMap<SignInAsk>('browser-sign-in')
 const waiters = new Map<string, Set<() => void>>()
 
 function sweep(now = Date.now()): void {
@@ -59,6 +65,7 @@ export function askSignIn(o: { owner: string; device: string; tab: number; site?
   if (had && had.owner === o.owner) {
     if (o.note) had.note = o.note
     if (o.site) had.site = o.site
+    if (o.note || o.site) asks.changed()
     return had
   }
   // Another owner's ask on a tab that changed hands is over.
@@ -78,6 +85,7 @@ export function endSignIn(device: string, tab: number, why: SignInEnd, owner?: s
   const a = openAsk(device, tab, owner)
   if (!a) return undefined
   a.end = { why, at: Date.now() }
+  asks.changed()
   for (const fn of waiters.get(a.id) ?? []) fn()
   waiters.delete(a.id)
   return a
@@ -105,6 +113,11 @@ export async function waitSignIn(id: string, ms: number): Promise<SignInAsk | un
 
 // The tab's holding ended (closed, Stop on the page, given to another task): its ask is over.
 onHoldingEnded((device, tab) => { endSignIn(device, tab, 'gone') })
+// The browser reported its tabs (after a restart, the first report rebuilds the holdings): an
+// open ask on a tab it no longer gives to the ask's owner is over (closed, or handed on, meanwhile).
+onTabsReported((device) => {
+  for (const a of [...asks.values()]) if (a.device === device && !a.end && tabOwner(device, a.tab) !== a.owner) endSignIn(device, a.tab, 'gone', a.owner)
+})
 
 export function _resetSignInAsksForTesting(): void {
   asks.clear()

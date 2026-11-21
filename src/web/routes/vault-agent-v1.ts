@@ -111,7 +111,16 @@ export const createApproval: ApprovalCreator = async (input) => {
 
 export const waitApproval: ApprovalWaiter = async (id, token, waitMs) => {
   const { waitApproval: wait } = await import('../../core/approvals/store.js')
-  const r = await wait(id, token, waitMs)
+  return waiterAnswer(await wait(id, token, waitMs))
+}
+
+/** waitApproval for a fill a restart carried over: its second argument is the wait token's hash (fill-login.ts). */
+export const waitApprovalByHash: ApprovalWaiter = async (id, tokenHash, waitMs) => {
+  const { waitApprovalByTokenHash } = await import('../../core/approvals/store.js')
+  return waiterAnswer(await waitApprovalByTokenHash(id, tokenHash, waitMs))
+}
+
+function waiterAnswer(r: Awaited<ReturnType<typeof import('../../core/approvals/store.js').waitApproval>>): Awaited<ReturnType<ApprovalWaiter>> {
   const a = r.approval
   const by = a.answer ? `${a.answer.device.name}${a.answer.mode === 'biometric' ? ', with Face ID or Touch ID' : ''}` : undefined
   return { status: a.status, used: r.used, ...(by ? { answeredBy: by } : {}) }

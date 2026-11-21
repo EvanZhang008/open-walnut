@@ -12,6 +12,7 @@
  * and gives it back only when nothing was filled (restoreGrant).
  */
 import { BrowserError } from './hub.js'
+import { keptMap } from '../kept-asks.js'
 import { ASK_MS } from './outward-asks.js'
 import { signerKinds, whereAsked, type SignerKind } from '../approvals/signer-words.js'
 import type { AgentRequester } from '../vault/agent.js'
@@ -21,8 +22,10 @@ export const GRANT_MS = 10 * 60_000
 const MINUTES = Math.round(ASK_MS / 60_000)
 
 interface Scope { owner: string; device: string; tab: number; site: string }
-const asks = new Map<string, Scope & { at: number }>()
-const grants = new Map<string, Scope & { at: number }>()
+// Kept across a restart (core/kept-asks.ts): the agent's call after a deploy finds its ask, and a
+// yes the person gave still lets its one fill through.
+const asks = keptMap<Scope & { at: number }>('browser-fresh-sign-in-asks')
+const grants = keptMap<Scope & { at: number }>('browser-fresh-sign-in-grants')
 const same = (a: Scope, b: Scope) => a.owner === b.owner && a.device === b.device && a.tab === b.tab && a.site === b.site
 
 export function _resetFreshSignInForTesting(): void { asks.clear(); grants.clear(); codeSteps.clear() }
@@ -72,7 +75,7 @@ export function restoreGrant(c: Claim): void {
  * it, one fill_code in the same task, browser, tab and site may follow within the yes's time
  * (codeStepAfter), without asking the person a second time.
  */
-const codeSteps = new Map<string, Scope & { at: number; item?: string }>()
+const codeSteps = keptMap<Scope & { at: number; item?: string }>('browser-fresh-sign-in-code-steps')
 
 /** fill_login filled the login `item` with this claim: that login's code step may follow. */
 export function codeStepAfter(c: Claim, item?: string): void {

@@ -11,6 +11,7 @@
  * element it would act on. One use.
  */
 import { BrowserError } from './hub.js'
+import { keptMap } from '../kept-asks.js'
 import { signerKinds, whereAsked, type SignerKind } from '../approvals/signer-words.js'
 import type { AgentRequester } from '../vault/agent.js'
 
@@ -20,7 +21,8 @@ export const ASK_MS = 10 * 60_000
 export interface Hold { kind: 'buy' | 'send' | 'delete'; why: string; what: string; url: string; sig: string; message?: string; total?: string }
 
 interface Ask { owner: string; tab: number; action: string; key: string; hold: Hold; at: number }
-const asks = new Map<string, Ask>()
+/** Kept across a restart (core/kept-asks.ts): the agent's call after a deploy finds its ask. */
+const asks = keptMap<Ask>('browser-outward-asks')
 
 export function _resetOutwardAsksForTesting(): void { asks.clear() }
 

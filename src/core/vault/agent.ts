@@ -17,9 +17,12 @@
  * Brakes, per asker (its task, else its host): at most ASK_MAX asks waiting at once, at most
  * RELEASE_MAX releases in RELEASE_WINDOW_MS, and after DENY_MAX denials in DENY_WINDOW_MS its
  * asks pause for DENY_WINDOW_MS. Every outcome goes to the agent log, sealed (agent-log.ts),
- * with how the value was used (reveal, env, fill). Grants: agent-grants.ts. Pending asks live
- * in memory: a restart ends them, and Lock all ends every grant and ask.
+ * with how the value was used (reveal, env, fill). Grants: agent-grants.ts. Pending asks (and the
+ * brakes' counts) are kept across a restart (core/kept-asks.ts; 2026-11-20, a deploy during a wait
+ * asked the person again): the same request id waits on the same approval after boot, and a value
+ * is released only while the vault is open, as before. Lock all ends every grant and ask.
  */
+import { keptMap } from '../kept-asks.js'
 import { appendAgentLog, type AgentLogEntry, type AgentUseKind } from './agent-log.js'
 import {
   clearGrants, getGrant, grantCovers, grantUseOf, listGrantViews, loadGrants, putGrant, revokeGrantById, resetGrantsForTest,
@@ -158,13 +161,28 @@ interface PendingAsk {
   /** When the approval runs out: an ask nobody waits on any more is swept after it. */
   expiresAt: number
   releasedAt?: number
+  /**
+   * The release finished (logged, counted, marked used, the grant made): only then is releasedAt
+   * kept on disk, so an ask a kill cut off mid-release is released again in full after the
+   * restart, never re-read without its audit entry.
+   */
+  released?: boolean
   releasing?: Promise<Record<string, string>>
   grantedUntil?: string | null
 }
 
-const pending = new Map<string, PendingAsk>()
-const releases = new Map<string, number[]>()
-const denials = new Map<string, number[]>()
+// The values themselves are never kept: only which item and fields were asked, why, and by whom.
+const pending = keptMap<PendingAsk>('vault-agent-asks', {
+  pack: ({ releasing: _promise, released, releasedAt, grantedUntil, ...kept }) => (released ? { ...kept, released, releasedAt, grantedUntil } : kept),
+  // An older entry with releasedAt but not released (its release may not have finished) is released again.
+  unpack: (raw) => {
+    if (!raw || typeof raw !== 'object') return undefined
+    const { releasedAt, released, grantedUntil, ...rest } = raw as PendingAsk
+    return (released === true ? { ...rest, released, releasedAt, grantedUntil } : rest) as PendingAsk
+  },
+})
+const releases = keptMap<number[]>('vault-agent-releases')
+const denials = keptMap<number[]>('vault-agent-denials')
 /**
  * Bumped by Lock all and by every move of the switch: an ask or a release that began before
  * gives nothing after it, even when its approval comes back approved.
@@ -191,12 +209,17 @@ function sweepPending(now: number): void {
   for (const [id, p] of pending) {
     if (p.releasedAt === undefined ? now > p.expiresAt + 60_000 : now - p.releasedAt > REREAD_MS) pending.delete(id)
   }
+  // The brakes' counts of askers gone quiet: kept on disk, so dropped once their window passed.
+  for (const [k, ts] of [...releases]) if (!ts.some((t) => now - t < RELEASE_WINDOW_MS)) releases.delete(k)
+  for (const [k, ts] of [...denials]) if (!ts.some((t) => now - t < DENY_WINDOW_MS)) denials.delete(k)
 }
 
 function recent(map: Map<string, number[]>, key: string, windowMs: number, now: number): number[] {
-  const kept = (map.get(key) ?? []).filter((t) => now - t < windowMs)
-  if (kept.length) map.set(key, kept)
-  else map.delete(key)
+  const had = map.get(key) ?? []
+  const kept = had.filter((t) => now - t < windowMs)
+  // Written only when it changed (the map is kept on disk).
+  if (!kept.length) map.delete(key)
+  else if (kept.length !== had.length) map.set(key, kept)
   return kept
 }
 
@@ -481,7 +504,7 @@ export type WaitResult =
 export async function agentWait(requestId: string, token: string, waitMs: number, agents: AgentsSwitch, waitApproval: ApprovalWaiter): Promise<WaitResult> {
   const since = epoch
   const ask = pending.get(requestId)
-  if (!ask) refuse(404, 'not_found', 'No such ask (Walnut restarted, or it was used): ask again.')
+  if (!ask) refuse(404, 'not_found', 'No such ask (it was used, withdrawn or ran out): ask again.')
   if (ask.releasedAt !== undefined && Date.now() - ask.releasedAt > REREAD_MS) {
     pending.delete(requestId)
     refuse(409, 'approval_used', 'This approval was already used; ask again.')
@@ -525,6 +548,11 @@ export async function agentWait(requestId: string, token: string, waitMs: number
     }
     putGrant(g)
     ask.grantedUntil = Number.isFinite(until) ? new Date(until).toISOString() : null
+  }
+  if (first) {
+    // On purpose: a kill between the values going out and this write landing makes the restart log the release again (an extra entry, never a missing one).
+    ask.released = true
+    pending.changed()
   }
   return {
     status: 'released', item: viewOf(item, agents), values, via: 'approval',

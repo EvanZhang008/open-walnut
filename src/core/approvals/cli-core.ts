@@ -26,6 +26,7 @@
  * not prove the approval (bad usage, Walnut unreachable, a check failed); 4 asked with
  * --request-only, answer pending. So `walnut approve "…" && deploy` runs only on a yes.
  */
+import { definiteRefusal, waitThroughRestart } from '../../lib/wait-through-restart.js'
 import { answerMessage, approvalDigest, keyIdOf, parsePublicKey, verifySignature } from './digest.js'
 import { isApprovalId, loadToken, removeToken, saveToken, sha256Hex, sweepTokens, tokenDir, type SavedApproval } from './cli-token.js'
 
@@ -442,14 +443,15 @@ export async function runApprove(args: ApproveArgs, io: ApproveIo): Promise<numb
     const interruptedP = new Promise<null>((resolve) => { wake = () => resolve(null) })
     const stop = io.onInterrupt?.(() => { interrupted = true; wake() })
     let last: ApprovalLite = first
-    let failures = 0
+    // Walnut away for a moment (a deploy restarts it): the same approval is waited on again.
+    const away = waitThroughRestart({ who: 'walnut approve', say: io.say, sleep, now, deadline, stop: interruptedP })
     try {
       while (!interrupted) {
         const r = await Promise.race([io.call('approval_wait', { id, token, wait_ms: 12_000 }), interruptedP])
         if (interrupted || r === null) break
         const a = approvalOf(r)
         if (r.ok && a) {
-          failures = 0
+          away.answered()
           last = a
           if (a.status === 'approved') {
             if (singleUse) return await finishSingleUse(a)
@@ -467,18 +469,16 @@ export async function runApprove(args: ApproveArgs, io: ApproveIo): Promise<numb
             if (args.json) io.out(record(a))
             return APPROVE_EXIT.timeout
           }
-        } else if (r.status !== undefined && r.status >= 400 && r.status < 500) {
+        } else if (definiteRefusal(r)) {
           // A definite refusal (used already, unknown id, bad token): never approved.
           io.say(`walnut approve: ${r.message ?? 'refused'}; not approved.`)
           return r.code === 'approval_used' ? APPROVE_EXIT.denied : APPROVE_EXIT.error
         } else {
-          failures++
-          if (failures === 1) io.say(`walnut approve: lost Walnut for a moment (${r.message ?? 'no answer'}); still waiting.`)
           // Ctrl-C during the pause withdraws at once, as it does mid-wait.
-          await Promise.race([sleep(Math.min(10_000, 1_000 * failures)), interruptedP])
+          await away.lost(r.message)
           if (interrupted) break
         }
-        if (now() > deadline) {
+        if (now() >= deadline) {
           io.say('No answer in time: not approved.')
           if (args.json) io.out(record({ ...last, status: 'expired' }))
           return APPROVE_EXIT.timeout
