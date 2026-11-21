@@ -20,13 +20,19 @@ export async function fromHost(host: string | undefined, origin: string): Promis
 
 /**
  * Whether host alias `via` (the link a call came in over) and host alias `host` are one host: the
- * same alias, or two aliases of one daemon process. This Mac is only itself.
+ * same alias, or two aliases of one daemon process. This Mac is only itself. `onLate`: told when
+ * the answer is no only because it took too long (a caller that logs why it dropped something).
  */
-export async function oneHost(via: string, host: string): Promise<boolean> {
+export async function oneHost(via: string, host: string, onLate?: () => void): Promise<boolean> {
   if (via === host) return true
   if (!via || !host || via === LOCAL_ORIGIN || host === LOCAL_ORIGIN) return false
   const { oneDaemon } = await import('../../providers/daemon-connection.js')
   // The recorded pair (a link down) may resolve ssh names: never longer than this, then no.
-  const late = new Promise<false>((r) => { const t = setTimeout(() => r(false), 3000); t.unref?.() })
-  return Promise.race([oneDaemon(via, host).catch(() => false), late])
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<false>((r) => { timer = setTimeout(() => { onLate?.(); r(false) }, 3000); timer.unref?.() })
+  try {
+    return await Promise.race([oneDaemon(via, host).catch(() => false), late])
+  } finally {
+    clearTimeout(timer)
+  }
 }

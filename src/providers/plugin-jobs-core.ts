@@ -185,6 +185,8 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
   /** Requests one serving run takes at once (plugin-job-door.ts serves at most 16 connections). */
   const MAX_FORWARDS = 8
   const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
+  /** The longest plugin or job id a run's `caller` names: the leader keeps an id up to this whole (gateway-answer.ts relayedCallOf). */
+  const CALLER_ID_MAX = 120
   const JOB_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/
   const SHA = /^[0-9a-f]{64}$/
 
@@ -1088,16 +1090,35 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
    * Who a call made by a live run acts as: the `caller` frame field (follower-gateway-core.ts
    * GatewayCaller) its relays carry, to the leader and to this host's own Walnut server alike, or
    * null when no live run holds the id. Read from this supervisor's own record of the run it
-   * started, so a caller can claim a job only by holding that run's secret id.
+   * started. The id alone is no proof (it is in the run's environment and its state file): it
+   * names the job for the record, and only the standalone daemon's check of the socket's process
+   * (`vouched`, runProcOf) says the call came from inside that run. A plugin or job id longer than
+   * the leader keeps whole (CALLER_ID_MAX, gateway-answer.ts relayedCallOf cuts it there) is not
+   * named at all, so the leader never takes a cut one for another job.
    */
   function callerOfRun(sid: unknown): GatewayCaller | null {
+    const named = (plugin: string, job: string): GatewayCaller | null =>
+      plugin.length <= CALLER_ID_MAX && job.length <= CALLER_ID_MAX ? { kind: 'plugin-job', plugin, job } : null
     if (typeof sid !== 'string' || !sid.startsWith(RUN_SID_PREFIX)) return null
     for (const m of homes.values()) {
-      for (const e of m.values()) if (e.proc && e.proc.sid === sid) return { kind: 'plugin-job', plugin: e.spec.plugin, job: e.spec.job }
+      for (const e of m.values()) if (e.proc && e.proc.sid === sid) return named(e.spec.plugin, e.spec.job)
     }
     for (const list of draining.values()) {
-      for (const d of list) if (d.proc.sid === sid) { const i = d.key.indexOf('/'); return i > 0 ? { kind: 'plugin-job', plugin: d.key.slice(0, i), job: d.key.slice(i + 1) } : null }
+      for (const d of list) if (d.proc.sid === sid) { const i = d.key.indexOf('/'); return i > 0 ? named(d.key.slice(0, i), d.key.slice(i + 1)) : null }
     }
+    return null
+  }
+
+  /**
+   * The process of the live run that holds caller id `sid` (its pid, the start time recorded for
+   * it, whether it is this daemon's own child not yet seen to exit), or null: what a check of the
+   * process on the gateway socket compares with (daemon-standalone.ts jobCallerVouched).
+   */
+  function runProcOf(sid: unknown): { pid: number; startTime: string | null; spawned: boolean } | null {
+    if (typeof sid !== 'string' || !sid.startsWith(RUN_SID_PREFIX)) return null
+    const of = (p: Proc) => (p.exited ? null : { pid: p.pid, startTime: p.startTime, spawned: p.spawned })
+    for (const m of homes.values()) for (const e of m.values()) if (e.proc && e.proc.sid === sid) return of(e.proc)
+    for (const list of draining.values()) for (const d of list) if (d.proc.sid === sid) return of(d.proc)
     return null
   }
 
@@ -1110,6 +1131,7 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
     prune,
     homeOfRun,
     callerOfRun,
+    runProcOf,
     quiesce,
     pending,
     /** Whether a gateway caller id is a plugin job's (live or not). */

@@ -139,7 +139,7 @@ export function stillTheirs(table: Map<number, ProcRow>, procs: ReadonlyArray<{ 
  * apart from `readTicks`.
  */
 export function proofFor(table: Map<number, ProcRow>, peer: number, at: number,
-  procs: ReadonlyArray<{ pid: number; start?: string | null }>, readTicks: (pid: number) => string | null | undefined): { verified: boolean; unchecked?: true } {
+  procs: ReadonlyArray<{ pid: number; start?: string | null; before?: number }>, readTicks: (pid: number) => string | null | undefined): { verified: boolean; unchecked?: true } {
   if (!startedBy(table.get(peer)?.start, at)) return { verified: false, unchecked: true }
   const own = stillTheirs(table, procs, readTicks)
   if (!own.length) return { verified: false, unchecked: true }

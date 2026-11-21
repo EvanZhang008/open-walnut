@@ -392,6 +392,37 @@ describe('which process is a run', () => {
     expect(sup.homeOfRun(sid)).toBeNull()
   })
 
+  it('callerOfRun names the job of a live run; runProcOf gives the run\'s process, its own child or adopted', () => {
+    let sup = createPluginJobSupervisor(deps())
+    sup.configure('/h', spec([job()]))
+    const sid = JSON.parse(spawned[0]!.env.WALNUT_PLUGIN_JOB!).sid as string
+    expect(sup.callerOfRun(sid)).toEqual({ kind: 'plugin-job', plugin: 'acme-jobs', job: 'worker' })
+    // Never vouched here: only the daemon's check of the socket's process adds it.
+    expect(sup.callerOfRun(sid)).not.toHaveProperty('vouched')
+    expect(sup.runProcOf(sid)).toEqual({ pid: 1000, startTime: 'st-1000', spawned: true })
+    expect(sup.callerOfRun('plugin-job:' + 'f'.repeat(64))).toBeNull()
+    expect(sup.runProcOf('plugin-job:' + 'f'.repeat(64))).toBeNull()
+    expect(sup.runProcOf('external')).toBeNull()
+    // Adopted by a new daemon: the saved pid and start time, not its own child.
+    sup = createPluginJobSupervisor(deps())
+    timers = []
+    sup.boot()
+    expect(sup.runProcOf(sid)).toEqual({ pid: 1000, startTime: 'st-1000', spawned: false })
+    expect(sup.callerOfRun(sid)).toEqual({ kind: 'plugin-job', plugin: 'acme-jobs', job: 'worker' })
+  })
+
+  it('callerOfRun names no plugin id longer than the 120 characters the leader keeps whole', () => {
+    const sup = createPluginJobSupervisor(deps())
+    sup.configure('/h', spec([job({ plugin: 'p'.repeat(121) }), job({ plugin: 'q'.repeat(120) })]))
+    const sids = spawned.map((x) => JSON.parse(x.env.WALNUT_PLUGIN_JOB!) as { plugin: string; sid: string })
+    const long = sids.find((x) => x.plugin.length === 121)!
+    const ok = sids.find((x) => x.plugin.length === 120)!
+    // Its run still runs and calls (as plain external); it is only not named.
+    expect(sup.homeOfRun(long.sid)).toBe('/h')
+    expect(sup.callerOfRun(long.sid)).toBeNull()
+    expect(sup.callerOfRun(ok.sid)).toEqual({ kind: 'plugin-job', plugin: 'q'.repeat(120), job: 'worker' })
+  })
+
   it('a run it cannot tell (ps failing) is neither replaced nor signalled until it can', () => {
     let sup = createPluginJobSupervisor(deps())
     sup.configure('/h', spec([job()]))

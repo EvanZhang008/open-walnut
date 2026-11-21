@@ -7496,6 +7496,9 @@ function handleGatewayLine(line, respond) {
   if (pluginJobs.isRunSid(req.sid)) {
     var jobHome = pluginJobs.homeOfRun(req.sid);
     if (!jobHome) return respond(gatewayError('unknown_caller', 'no plugin job of this daemon runs under this id'));
+    // The run's id names the job, never vouched: the standalone twin vouches only for a socket whose
+    // process it saw inside the run (jobCallerVouched), and this twin cannot read a socket's process,
+    // as it sends no callerProof. Named, the job is told for the record and gains nothing.
     return sendPluginJobGatewayRequest(jobHome, req.op, req.args, respond, pluginJobs.callerOfRun(req.sid) || undefined);
   }
   // ACP sessions live in the acp worker map, not in sessions; their sid is the

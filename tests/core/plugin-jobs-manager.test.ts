@@ -318,6 +318,39 @@ describe('plugin jobs manager: what each daemon is told', () => {
     expect(devbox.running().map((r) => r.job)).toEqual(['poll', 'worker'])
   })
 
+  it('assignedHosts: the hosts whose daemon last took a job, moved and turned off with the set', async () => {
+    const h = harness()
+    const local = fakeDaemon(LOCAL_HOST)
+    const devbox = fakeDaemon('devbox')
+    const mgr = h.manager()
+    // Before any configure: no host is given any job.
+    expect(mgr.assignedHosts('acme-jobs', 'worker')).toEqual([])
+    await mgr.connected(local.link)
+    await mgr.connected(devbox.link)
+    expect(mgr.assignedHosts('acme-jobs', 'worker')).toEqual([LOCAL_HOST])
+    expect(mgr.assignedHosts('acme-jobs', 'poll')).toEqual([LOCAL_HOST])
+    // A job the plugin does not declare, or another plugin: nowhere.
+    expect(mgr.assignedHosts('acme-jobs', 'other')).toEqual([])
+    expect(mgr.assignedHosts('acme-mirror', 'worker')).toEqual([])
+
+    h.update({ runOn: 'devbox' })
+    await mgr.reconcileAll()
+    expect(mgr.assignedHosts('acme-jobs', 'worker')).toEqual(['devbox'])
+
+    // Turned off: its jobs leave every set, so no host is given them.
+    h.update({ state: 'disabled' })
+    await mgr.reconcileAll()
+    expect(mgr.assignedHosts('acme-jobs', 'worker')).toEqual([])
+  })
+
+  it('assignedHosts: a daemon older than plugin jobs is given none', async () => {
+    const h = harness({ plugins: [acmePlugin({ runOn: 'devbox' })] })
+    const devbox = fakeDaemon('devbox', { caps: ['snapshot-v1'] })
+    const mgr = h.manager()
+    await mgr.connected(devbox.link)
+    expect(mgr.assignedHosts('acme-jobs', 'worker')).toEqual([])
+  })
+
   it('a daemon older than plugin jobs is sent nothing, and both views say why', async () => {
     const h = harness({ plugins: [acmePlugin({ runOn: 'devbox' })] })
     const devbox = fakeDaemon('devbox', { caps: ['snapshot-v1'] })

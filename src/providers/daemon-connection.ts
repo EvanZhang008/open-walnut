@@ -3507,8 +3507,9 @@ export class DaemonConnection {
     if (!call) return
     // A plugin job's identity: the host's daemon names it in the frame's own `caller`, from its record
     // of the run it started; a caller's words ride in the payload and never become it. Kept only for an
-    // anonymous call whose plugin this server's config runs on this very host (relayedJobOf), so a host
-    // vouches for its own jobs alone; else the call is plain `external`, as from an older daemon.
+    // anonymous call naming a job this server gives this very host now (relayedJobOf), so a host names
+    // its own jobs alone; else the call is plain `external`, as from an older daemon. Its `vouched`
+    // (the daemon saw the call's process inside the run) is kept exactly as sent.
     const { relayedJobOf } = await import('../core/plugin-jobs/index.js')
     const job = await relayedJobOf(call, this.hostKey).catch(() => undefined)
     if (job) call.pluginJob = job

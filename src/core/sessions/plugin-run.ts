@@ -9,8 +9,9 @@
  *   - a call that names its plugin: its server half's (server-api.ts callPluginOp: `plugin:<id>`) or a
  *     job's (an outside caller with `x-walnut-plugin-id`), on the leader and on its host's own replica
  *     alike. The host's daemon names the job from its own record of the run (the relay's `caller`); its
- *     replica takes it (journal-actor.ts), the leader only for an anonymous call from the host its
- *     config runs that plugin's jobs on (daemon-connection.ts handleGatewayRequest, plugin-jobs relayedJobOf);
+ *     replica takes it (journal-actor.ts), the leader only for an anonymous call naming a job it gives
+ *     that host now (daemon-connection.ts handleGatewayRequest, plugin-jobs relayedJobOf). A name is for
+ *     the record: only `vouched` (the standalone daemon saw the call's process inside the run) proves it;
  *   - the daemon gateway's anonymous caller, the literal sid `external` with no sender label: a job's
  *     call from a daemon older than that, or one the leader did not keep the job of.
  * Not the program: an unknown sid or a session an engine switch replaced (they resolve to an outside

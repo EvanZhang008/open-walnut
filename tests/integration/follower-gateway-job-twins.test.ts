@@ -17,7 +17,10 @@
  * Either way the call names its job in the frame's `caller`, built from the daemon's own record
  * of the run (plugin-jobs-core.ts callerOfRun): to the Mac and to the follower alike. What a
  * caller writes (a `caller` or `pluginJob` in its request, its payload or its arguments) never
- * names one, and a run id no live run holds is refused before anyone is asked.
+ * names one, and a run id no live run holds is refused before anyone is asked. The standalone
+ * twin adds `vouched: true` only when the process on the gateway socket is the run or one of its
+ * descendants (the job's own walnut.ops.call, a child it starts); this test process holding the
+ * run's id is outside the run, so its call names the job unvouched. The JS twin never vouches.
  *
  * Hygiene: every dir is a temp dir (short: socket paths); each daemon is stopped by the pid
  * it wrote into its own dir, the fake host server and the job run by the pids they logged.
@@ -51,16 +54,47 @@ process.on('SIGTERM', () => process.exit(0))
 setInterval(() => {}, 1 << 30)
 `
 
-/** The plugin's job, as the Mac bundles it: tells the test its run id and waits. */
+/**
+ * The plugin's job, as the Mac bundles it: tells the test its run id and waits. Each line the test
+ * writes to `<JOB_OUT>.go` asks it to call: an op name through its own walnut.ops.call, or `child`
+ * through a child process it starts (JOB_CHILD), which calls under the run's id on its own socket.
+ */
 const BUNDLE = `
 import fs from 'node:fs'
+import { spawn } from 'node:child_process'
 export const jobs = {
   worker: async (walnut, signal) => {
     const info = JSON.parse(process.env.WALNUT_PLUGIN_JOB)
-    fs.appendFileSync(process.env.JOB_OUT, JSON.stringify({ pid: process.pid, sid: info.sid }) + '\\n')
+    const out = process.env.JOB_OUT
+    fs.appendFileSync(out, JSON.stringify({ pid: process.pid, sid: info.sid }) + '\\n')
+    let done = 0
+    const poll = setInterval(() => {
+      let asks = []
+      try { asks = fs.readFileSync(out + '.go', 'utf8').split('\\n').filter(Boolean) } catch {}
+      for (const name of asks.slice(done)) {
+        done++
+        if (name === 'child') { spawn(process.execPath, [process.env.JOB_CHILD], { env: process.env, stdio: 'ignore' }); continue }
+        walnut.ops.call(name, {}).then(
+          (r) => fs.appendFileSync(out, JSON.stringify({ called: name, result: r }) + '\\n'),
+          (e) => fs.appendFileSync(out, JSON.stringify({ called: name, error: String(e) }) + '\\n'))
+      }
+    }, 100)
     await new Promise((resolve) => signal.addEventListener('abort', resolve))
+    clearInterval(poll)
   },
 }
+`
+
+/** The job's child: one call under the run's id on the gateway socket, its answer to JOB_OUT. */
+const CHILD = `
+const fs = require('fs'), net = require('net')
+const info = JSON.parse(process.env.WALNUT_PLUGIN_JOB)
+const note = (o) => fs.appendFileSync(process.env.JOB_OUT, JSON.stringify({ child: process.pid, ...o }) + '\\n')
+const c = net.connect(process.env.WALNUT_AGENT_SOCKET)
+let buf = ''
+c.on('connect', () => c.write(JSON.stringify({ v: 1, op: 'tools.call', sid: info.sid, args: { name: 'task_get', args: {} } }) + '\\n'))
+c.on('data', (d) => { buf += d; if (buf.includes('\\n')) { note({ reply: JSON.parse(buf.slice(0, buf.indexOf('\\n'))) }); c.destroy(); process.exit(0) } })
+c.on('error', (e) => { note({ error: String(e) }); process.exit(1) })
 `
 
 type Twin = 'source' | 'standalone'
@@ -97,6 +131,7 @@ async function spawnDaemon(name: string, twin: Twin, jobOut: string): Promise<Da
     WALNUT_LEADER_QUIET_MS: String(QUIET_MS),
     WALNUT_GATEWAY_TIMEOUT_MS: '20000',
     JOB_OUT: jobOut,
+    JOB_CHILD: path.join(base, 'job-child.cjs'),
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
   delete env.WALNUT_DAEMON_STATE_DIR
@@ -186,7 +221,7 @@ function rawGatewayCall(sock: string, request: Record<string, unknown>): Promise
 
 const JOB = { kind: 'plugin-job', plugin: 'acme-sync', job: 'worker' }
 
-interface Rig { d: Daemon; mac: WebSocket; follower: WebSocket; macAsked: Array<Record<string, any>>; followerAsked: Array<Record<string, any>>; jobSid: string; awake: (on: boolean) => void }
+interface Rig { d: Daemon; mac: WebSocket; follower: WebSocket; macAsked: Array<Record<string, any>>; followerAsked: Array<Record<string, any>>; jobSid: string; jobOut: string; awake: (on: boolean) => void }
 
 async function rig(twin: Twin, name: string): Promise<Rig> {
   const jobOut = path.join(base, `${name}-job.jsonl`)
@@ -224,7 +259,7 @@ async function rig(twin: Twin, name: string): Promise<Rig> {
   expect((await cmd(mac, { cmd: 'jobs.configure', home: HOME, spec: { v: 1, home: HOME, walnutId: WALNUT, jobs } })).ok).toBe(true)
   await waitFor(() => lines(jobOut).some((l) => typeof l.sid === 'string'), 30_000, 'the job run')
   const jobSid = String(lines(jobOut).find((l) => typeof l.sid === 'string')!.sid)
-  return { d, mac, follower, macAsked, followerAsked, jobSid, awake }
+  return { d, mac, follower, macAsked, followerAsked, jobSid, jobOut, awake }
 }
 
 /**
@@ -244,6 +279,7 @@ async function leaderPassedOver(r: Rig): Promise<void> {
 
 beforeAll(() => {
   base = fs.mkdtempSync(path.join(os.tmpdir(), 'fgj-'))
+  fs.writeFileSync(path.join(base, 'job-child.cjs'), CHILD)
 })
 
 afterAll(() => {
@@ -277,6 +313,36 @@ for (const twin of ['source', 'standalone'] as const) {
         expect(r.followerAsked[0]).toMatchObject({ callerSid: 'external', caller: { kind: 'plugin-job', plugin: 'acme-sync', job: 'worker' } })
         expect(r.macAsked.map((m) => m.payload?.name)).toEqual(['task_list'])
         expect(r.followerAsked[0]!.caller).toEqual(r.macAsked[0]!.caller)
+      } finally {
+        r.awake(false)
+        r.mac.close(); r.follower.close()
+      }
+    }, 120_000)
+
+    it('awake: only a call from inside the run is vouched (the standalone twin); one from outside holding its id is not', async () => {
+      const r = await rig(twin, `${twin.slice(0, 2)}v`)
+      try {
+        // Outside the run: this test process, holding the run's id (a same-user process can read it
+        // from the run's environment or its state file). The job is named, never vouched.
+        const outside = await rawGatewayCall(r.d.sock, { v: 1, op: 'tools.call', sid: r.jobSid, args: { name: 'task_list', args: {} } })
+        expect(outside, JSON.stringify(outside)).toMatchObject({ ok: true, result: { who: 'mac' } })
+        expect(r.macAsked).toHaveLength(1)
+        expect(r.macAsked[0]!.caller).toEqual(JOB)
+        // The job's own walnut.ops.call, then a child process the job starts: inside the run.
+        const go = `${r.jobOut}.go`
+        fs.appendFileSync(go, 'task_update\n')
+        await waitFor(() => lines(r.jobOut).some((l) => l.called === 'task_update'), 30_000, 'the job\'s own call')
+        fs.appendFileSync(go, 'child\n')
+        await waitFor(() => lines(r.jobOut).some((l) => typeof l.child === 'number'), 30_000, 'the job child\'s call')
+        const child = lines(r.jobOut).find((l) => typeof l.child === 'number')!
+        expect(child.reply, JSON.stringify(child)).toMatchObject({ ok: true, result: { who: 'mac', op: 'task_get' } })
+        expect(lines(r.jobOut).find((l) => l.called === 'task_update')).toMatchObject({ result: { who: 'mac', op: 'task_update' } })
+        expect(r.macAsked.map((m) => m.payload?.name)).toEqual(['task_list', 'task_update', 'task_get'])
+        // The standalone twin read each socket's process; the JS twin cannot, so it never vouches.
+        const inside = twin === 'standalone' ? { ...JOB, vouched: true } : JOB
+        expect(r.macAsked[1]!.caller).toEqual(inside)
+        expect(r.macAsked[2]!.caller).toEqual(inside)
+        expect(r.followerAsked).toEqual([])
       } finally {
         r.awake(false)
         r.mac.close(); r.follower.close()

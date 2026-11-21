@@ -78,7 +78,7 @@ import {
   type BudgetGate,
 } from './daemon-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
-import { PS_TREE_ARGS, parentName, parseProcessTree, proofFor, shortProgram } from './caller-proof-core.js'
+import { PS_TREE_ARGS, parentName, parseProcessTree, proofFor, shortProgram, type ProcRow } from './caller-proof-core.js'
 import { socketPeerPid, socketPeerPidReady } from './socket-peer-pid.js'
 import { findDeliveryMarkers, validMarkerIds } from './marker-find-core.js'
 import { createHostRuntime, NODE_DISCOVERY_SHELL } from './host-runtime-core.js'
@@ -6232,7 +6232,22 @@ function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => voi
   if (pluginJobs.isRunSid(req.sid)) {
     const home = pluginJobs.homeOfRun(req.sid)
     if (!home) return respond(gatewayError('unknown_caller', 'no plugin job of this daemon runs under this id'))
-    return sendPluginJobGatewayRequest(home, req.op, req.args, respond, pluginJobs.callerOfRun(req.sid) ?? undefined)
+    const caller = pluginJobs.callerOfRun(req.sid)
+    if (!caller) return sendPluginJobGatewayRequest(home, req.op, req.args, respond)
+    // The run's id names the job; `vouched` says the process on the socket is that run or one of its
+    // descendants (keep in sync with daemon-source.ts, which cannot read a socket's process and so
+    // never vouches). A process outside the run that holds its id still goes, unvouched: a job's own
+    // helpers can fall out of its tree (a child whose parent exited is the init process's), and
+    // refusing them would break calls that work today; unvouched it is told nothing the anonymous
+    // caller is not.
+    const sid = req.sid
+    void jobCallerVouched(socketPeerPid(fd), pluginJobs.runProcOf(sid), openedAt).then((seen) => {
+      // Gone while its process was read: asked of no one (its next run would retry it: applied twice).
+      if (gatewayCallerLeft.get(respond)?.()) return logMsg('info', 'gateway: a plugin job\'s call ends before it is sent, its caller left', { op: req.op })
+      if (seen === 'outside') warnJobCallerOutside(sid, caller)
+      sendPluginJobGatewayRequest(home, req.op, req.args, respond, seen === 'inside' ? { ...caller, vouched: true } : caller)
+    })
+    return
   }
   // ACP sessions (engine=codex) live in the acp worker map, not `sessions` —
   // their WALNUT_SESSION_ID is the runtimeId, stable for the worker's life.
@@ -6281,13 +6296,7 @@ async function proofSlot<T>(fn: () => Promise<T>): Promise<T> {
  */
 async function gatewayCallerProof(peer: number | undefined, sid: string, openedAt: number): Promise<CallerProof> {
   if (!peer) return { v: 1, verified: false, unchecked: true }
-  // One snapshot names every process with its parent and its start time, so each pid below is
-  // checked as the process it was then, never only as a number.
-  const ps = await proofSlot(() => new Promise<string | null>((resolve) => {
-    execFile('ps', PS_TREE_ARGS, { timeout: 2_000, maxBuffer: 8 * 1024 * 1024, env: { ...daemonEnv, LC_ALL: 'C', LANG: 'C' } },
-      (err, stdout) => resolve(err && !stdout ? null : String(stdout ?? '')))
-  }))
-  const table = ps ? parseProcessTree(ps) : null
+  const table = await processTreeSnapshot()
   if (!table?.size) return { v: 1, verified: false, pid: peer, unchecked: true }
   // Only a process this daemon holds alive for the session, and still the one it started: its CLI
   // with the start time recorded at spawn (and this boot's, for a system service), or its ACP
@@ -6319,6 +6328,51 @@ async function gatewayCallerProof(peer: number | undefined, sid: string, openedA
     ...(proc ? { process: proc } : {}),
     ...(args ? { ranBy: shortProgram(args.split('\n')[0]!).slice(0, 300) } : {}),
   }
+}
+
+/**
+ * One `ps` snapshot of every process with its parent and its start time, so each pid a check reads
+ * in it is the process it was then, never only a number; null when `ps` could not tell.
+ */
+async function processTreeSnapshot(): Promise<Map<number, ProcRow> | null> {
+  const ps = await proofSlot(() => new Promise<string | null>((resolve) => {
+    execFile('ps', PS_TREE_ARGS, { timeout: 2_000, maxBuffer: 8 * 1024 * 1024, env: { ...daemonEnv, LC_ALL: 'C', LANG: 'C' } },
+      (err, stdout) => resolve(err && !stdout ? null : String(stdout ?? '')))
+  }))
+  return ps ? parseProcessTree(ps) : null
+}
+
+/**
+ * Whether the process on the gateway socket (`peer`) is a plugin job's run (`proc`, runProcOf) or
+ * one of its descendants: `inside`, `outside` (seen, and not), or `unknown` (no peer read, no run,
+ * no snapshot, a run whose process it cannot tell). This daemon's own child not yet seen to exit
+ * holds its pid, so the peer that is that pid is the run with no read at all; any other check reads
+ * the run's start time again the way it was recorded (/proc ticks on Linux, else the snapshot's
+ * lstart), so a pid handed to another process never passes. Never throws.
+ */
+async function jobCallerVouched(peer: number | undefined, proc: { pid: number; startTime: string | null; spawned: boolean } | null, openedAt: number): Promise<'inside' | 'outside' | 'unknown'> {
+  try {
+    if (!peer || !proc || proc.pid <= 1) return 'unknown'
+    if (proc.spawned && peer === proc.pid) return 'inside'
+    const run = proc.startTime ? { pid: proc.pid, start: proc.startTime } : proc.spawned ? { pid: proc.pid, before: Date.now() } : null
+    if (!run) return 'unknown'
+    const table = await processTreeSnapshot()
+    if (!table?.size) return 'unknown'
+    const procFs = fs.existsSync('/proc/self/stat')
+    const verdict = proofFor(table, peer, openedAt, [run], (pid) => (procFs ? hostServerStartTime(pid) : undefined))
+    return verdict.unchecked ? 'unknown' : verdict.verified ? 'inside' : 'outside'
+  } catch {
+    return 'unknown'
+  }
+}
+
+/** Run ids already warned about a caller outside their run: one line per run, never one per call. */
+const jobCallersOutside = new Set<string>()
+function warnJobCallerOutside(sid: string, caller: GatewayCaller): void {
+  if (jobCallersOutside.has(sid)) return
+  if (jobCallersOutside.size >= 256) jobCallersOutside.clear()
+  jobCallersOutside.add(sid)
+  logMsg('warn', 'gateway: a call under a plugin job\'s run id came from a process outside that run; its job is named unvouched', { plugin: caller.plugin, job: caller.job })
 }
 
 const proofStartTime = createAsyncStartTimeReader({

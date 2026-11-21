@@ -126,6 +126,8 @@ interface HostRecord {
   running: boolean
   again: boolean
   waiters: Array<() => void>
+  /** `plugin/job` of every spec the daemon last took from this computer: the jobs it gives that host. */
+  assigned?: ReadonlySet<string>
   /** Something this pass could not finish (a failure, an upload, a refused job): tried again after `retryMs`. */
   retryWanted: boolean
   retryMs: number
@@ -258,11 +260,13 @@ export function createPluginJobsManager(deps: ManagerDeps) {
     // empty set stops the jobs of a plugin that runs there (daemonKeeperAlias).
     const names = handle.daemonNames ? await handle.daemonNames().catch(() => null) : null
     if (names && names.keeper !== hostKey) {
+      rec.assigned = undefined
       rec.phase = 'unsupported'
       rec.message = 'another name of a host whose jobs are set up under its own name'
       return
     }
     if (!handle.hasCapability(PLUGIN_JOBS_CAPABILITY)) {
+      rec.assigned = undefined
       rec.phase = 'unsupported'
       rec.message = 'its daemon is older than plugin jobs; it is upgraded on its next connect'
       return
@@ -288,6 +292,7 @@ export function createPluginJobsManager(deps: ManagerDeps) {
     const r = await handle.send('jobs.configure', { home: deps.home, spec: { v: 1, home: deps.home, walnutId, jobs } }, 30_000)
     if (r.ok !== true) throw new Error(`jobs.configure refused: ${String(r.error ?? 'no answer')}`)
     rec.jobs = Array.isArray(r.jobs) ? r.jobs as PluginJobStatus[] : []
+    rec.assigned = new Set(jobs.map((j) => `${j.plugin}/${j.job}`))
     rec.checkedAt = deps.now()
     rec.phase = 'ready'
     rec.message = undefined
@@ -468,6 +473,9 @@ export function createPluginJobsManager(deps: ManagerDeps) {
     status,
     logs,
     serveTarget,
+    /** The hosts this computer gives job `job` of `plugin` now (the set each daemon last took; a turned-off plugin's is none). */
+    assignedHosts: (plugin: string, job: string): string[] =>
+      [...hosts.entries()].filter(([, r]) => r.assigned?.has(`${plugin}/${job}`)).map(([key]) => key),
     /** Per host: its phase and its jobs (tests, diagnostics). */
     views: () => [...hosts.entries()].map(([key, r]) => ({ key, phase: r.phase, message: r.message, jobs: r.jobs, bundleErrors: r.bundleErrors })),
   }

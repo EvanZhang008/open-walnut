@@ -3719,3 +3719,37 @@ describe('claude outside usage parity (claude-outside-v1)', () => {
     expect(core).toMatch(/writeFile\(tmp, JSON\.stringify\(cache\)\)/)
   })
 })
+
+// A plugin job's `caller.vouched` (follower-gateway-core.ts GatewayCaller): the one place the twins
+// differ on purpose. Both name the job from the run's own record (callerOfRun); only the standalone
+// twin reads the process on the gateway socket (socket-peer-pid.ts, bun:ffi), so only it can say the
+// call came from inside the run. The JS twin names the job unvouched, as it sends no callerProof.
+describe('plugin job caller vouching parity (the twins differ on purpose)', () => {
+  const standalone = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf8')
+  const template = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-source.ts'), 'utf8')
+  const jobBranch = (src: string) => {
+    const at = src.indexOf('if (pluginJobs.isRunSid(req.sid)) {')
+    expect(at, 'the plugin job branch of handleGatewayLine').toBeGreaterThan(-1)
+    return src.slice(at, src.indexOf('\n  }\n', at))
+  }
+
+  it('both name the job from the run record alone; a run id no live run holds is refused in both', () => {
+    for (const src of [standalone, template]) {
+      const branch = jobBranch(src)
+      expect(branch).toMatch(/pluginJobs\.callerOfRun\(req\.sid\)/)
+      expect(branch).toContain("gatewayError('unknown_caller', 'no plugin job of this daemon runs under this id')")
+    }
+  })
+
+  it('the standalone twin vouches only on its check of the socket\'s process; the JS twin never vouches', () => {
+    const own = jobBranch(standalone)
+    expect(own).toMatch(/jobCallerVouched\(socketPeerPid\(fd\), pluginJobs\.runProcOf\(sid\), openedAt\)/)
+    expect(own).toMatch(/seen === 'inside' \? \{ \.\.\.caller, vouched: true \} : caller/)
+    // A process outside the run that holds its id still goes, unvouched: never refused for it.
+    expect(own).not.toMatch(/seen === 'outside'[^\n]*unknown_caller/)
+    expect(standalone.match(/vouched: true/g)).toHaveLength(1)
+    // The JS twin: no vouched anywhere, and it says why.
+    expect(template.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n')).not.toMatch(/vouched/)
+    expect(jobBranch(template)).toMatch(/never vouched: [\s\S]*cannot read a socket's process/)
+  })
+})

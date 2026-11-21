@@ -38,10 +38,17 @@ export interface FollowerGatewayResponse {
  * Who made the call, beside its session id: a plugin job, named by the daemon from its own record
  * of the run it started (plugin-jobs-core.ts callerOfRun), never from the caller's words. The same
  * `caller` frame field goes to the leader (relayToPrimary) and to this host's own Walnut server
- * (handOff): the leader keeps it only from the host its config runs the plugin's jobs on
- * (core/plugin-jobs/index.ts relayedJobOf), the follower records the job as its write's maker.
+ * (handOff): the leader keeps it only for a job it gives that host (core/plugin-jobs/index.ts
+ * relayedJobOf), the follower records the job as its write's maker.
+ *
+ * `vouched: true`: the daemon saw that the process on the gateway socket IS that run or one of its
+ * descendants (the standalone daemon's process-tree check, daemon-standalone.ts jobCallerVouched).
+ * Absent: the job is named for the record only. The run's id is no secret from another process of
+ * the same user (it is in the run's environment and its state file), so anything that lets a job do
+ * more than an anonymous caller reads `vouched`, never the name alone. The JS fallback twin
+ * (daemon-source.ts) cannot read a socket's process, so its callers are never vouched.
  */
-export type GatewayCaller = { kind: 'plugin-job'; plugin: string; job: string }
+export type GatewayCaller = { kind: 'plugin-job'; plugin: string; job: string; vouched?: true }
 
 export interface FollowerGatewayDeps<S> {
   /** The follower of `home` linked now that answers local calls, or null. */
