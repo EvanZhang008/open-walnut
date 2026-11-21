@@ -123,9 +123,9 @@ export const PROMPT_BLOCKS: readonly PromptBlockDef[] = [
   { id: 'fleet', title: 'Your machines', part: 'context', kind: 'list', cap: 2_000, state: true,
     holds: 'the rest of the machines you can use',
     why: 'One line per host; a big fleet keeps the first hosts and reads the rest on demand.' },
-  { id: 'how-we-work', title: 'How we work', part: 'context', kind: 'rules', cap: 7_500,
+  { id: 'how-we-work', title: 'How we work', part: 'context', kind: 'rules', cap: 7_800,
     holds: '',
-    why: 'The team charter measured 7.4 K with the user\'s-own-yes rule (2026-11-17: anything involving other people, his name or no undo waits for his yes) and the ask-once rule (2026-11-20: finish what he agreed to, read where the answer would be before an ask); every bullet is a rule the same for every role.' },
+    why: 'The team charter measured 7.6 K with the user\'s-own-yes rule (2026-11-17: anything involving other people, his name or no undo waits for his yes) and the ask-once rule (2026-11-20: finish what he agreed to, read where the answer would be before an ask); every bullet is a rule the same for every role.' },
   { id: 'user-profile', title: 'Your user', part: 'context', kind: 'user', cap: 6_000,
     holds: '',
     why: 'Versioned. USER.md capped at USER_CHAR_BUDGET (4,000 characters), its version named once in its head; measured 4.6 K.' },
@@ -199,13 +199,13 @@ export function walnutFileKey(name: string): { block: PromptBlockId; scope: stri
  * anywhere fails its block's cap first, and this whole-prompt ceiling after.
  * 2026-11-17: each budget +600 for the charter's user's-own-yes rule (approval-kinds.ts), the same in every role.
  * 2026-11-20: each budget +700 for the charter's ask-once rule (answered-there.ts).
- * 2026-11-21: each budget +600 for its sentences on a question that reads on its own and a design reviewed before he sees it (ask-clarity.ts).
+ * 2026-11-21: each budget +850 for its sentences on a question that reads on its own, a design reviewed before he sees it and a card that carries its summary and buttons (ask-clarity.ts).
  */
 export const PROMPT_BUDGETS = {
-  main: 54_400,
-  lead: 41_700,
-  worker: 20_400,
-  ask: 33_500,
+  main: 54_650,
+  lead: 41_950,
+  worker: 20_650,
+  ask: 33_750,
 } as const
 
 export interface PromptOverflow {

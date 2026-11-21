@@ -28,6 +28,9 @@ describe('the answered-there rule', () => {
     }
     expect(ANSWERED_THERE_RULE).toMatch(/drop the ask/)
     expect(ANSWERED_THERE_RULE).toMatch(/Ask the user each thing once/)
+    expect(ANSWERED_THERE_RULE).toMatch(/A question reads on its own/)
+    expect(ANSWERED_THERE_RULE).toMatch(/reviewer subagent on another model/)
+    expect(ANSWERED_THERE_RULE).toMatch(/first sentence says what they decide and what you recommend/)
     expect(ANSWERED_THERE_RULE).toMatch(/follows from what they already agreed to .* is yours: do it, then tell them/)
     expect(ANSWERED_THERE_RECHECK).toMatch(/close the thread or set it answered/)
   })

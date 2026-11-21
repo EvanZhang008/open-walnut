@@ -400,7 +400,8 @@ describe('buildSessionContext (identity note)', () => {
     // own messages included) before asking (a task asked him for two hours what he had answered in the DM). 12,910.
     // 13000 → 13600 (2026-11-21) for its sentences on a question that reads on its own and a design
     // reviewed on another model before he sees it (ask-clarity.ts).
-    expect(systemPrompt.length).toBeLessThan(13600)
+    // 13600 → 13900 (2026-11-21) for a needs card that carries its summary and buttons.
+    expect(systemPrompt.length).toBeLessThan(13900)
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {

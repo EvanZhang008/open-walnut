@@ -104,7 +104,7 @@ describe('a thread\'s options', () => {
     const { file, id } = base()
     const reply = 'Notes and artifacts: pick A or B.\nA (recommended): the vault.\nB: beside the code.'
     expect(updateThread(file, id, { state: 'needs', reply, ...KIND }, 'task:lead-1', at(1)).thread.state).toBe('needs')
-    const input = { title: 'Notes and artifacts', text: 'Pick one.\nA: the vault\nB: the repo', from: 'node' as const, ...KIND }
+    const input = { title: 'Notes and artifacts', text: 'Pick one.\nA: the vault\nB: the repo', reply: 'Where should notes and artifacts live? Pick A or B.\nA: the vault\nB: the repo', from: 'node' as const, ...KIND }
     expect(openThread(emptyThreads('lead-1'), input, 'task:lead-1', at(0)).thread.state).toBe('needs')
     // Options a node passes are still stored (additive), whatever the setting.
     expect(updateThread(file, id, { state: 'needs', reply, options: AB, ...KIND }, 'task:lead-1', at(1)).thread.options).toHaveLength(2)
@@ -130,7 +130,7 @@ describe('a thread\'s options', () => {
   })
 
   it('a thread the node opens in needs is held to the same rule', () => {
-    const input = { title: 'Notes and artifacts', text: 'Pick one.\nA: the vault\nB: the repo', from: 'node' as const, ...KIND }
+    const input = { title: 'Notes and artifacts', text: 'Pick one.\nA: the vault\nB: the repo', reply: 'Where should notes and artifacts live? Pick A or B.\nA: the vault\nB: the repo', from: 'node' as const, ...KIND }
     expect(refused(() => openThread(emptyThreads('lead-1'), input, 'task:lead-1', at(0))).code).toBe('needs_options')
     const t = openThread(emptyThreads('lead-1'), { ...input, options: AB }, 'task:lead-1', at(0)).thread
     expect(t.options).toHaveLength(2)

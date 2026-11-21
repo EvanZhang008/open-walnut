@@ -52,7 +52,7 @@
  * store (threads-store.ts) runs them under the file lock.
  */
 import { userKindVerdict, type UserKindInput } from './user-kind.js';
-import { askClarityRefusal, choiceLabels, showsDesign } from './ask-clarity.js';
+import { askClarityRefusal, choiceLabels, needsCardRefusal, showsDesign } from './ask-clarity.js';
 import type { AskOption } from '../user-status.js';
 import { AskOptionsError, checkNeedsOptions, threadOptionsOf } from './thread-options.js';
 import { oneCardNow } from './one-card.js';
@@ -1011,6 +1011,11 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   if (patchHandsToUser(cur, patch)) {
     // The ask's own words only: never older context, where a sender names its source (user-kind.ts).
     checkHandedToUser(by, { ...patch, options: patch.options ?? cur.options }, [patch.title ?? cur.title, patch.ask, patch.reply].filter(isStr).join('\n'), cur.reply);
+    if (by !== 'human') {
+      const own = (isStr(patch.reply) ? patch.reply : cur.reply) || '';
+      const card = needsCardRefusal({ title: patch.title ?? cur.title, summary: own || cur.opener?.text || '', hasSummary: !!own.trim(), opener: cur.opener?.text, options: choiceLabels(patch.options ?? cur.options) });
+      if (card) throw new ThreadError('user_kind', 409, card);
+    }
   } else if (by !== 'human' && cur.state === 'needs' && !cur.closed && (patch.title !== undefined || patch.ask !== undefined || patch.reply !== undefined || patch.options !== undefined)) {
     // A question already waiting on him, reworded: it must still read on its own (ask-clarity.ts).
     const unclear = askClarityRefusal([patch.title ?? cur.title, patch.ask ?? cur.ask, patch.reply ?? cur.reply].filter(isStr).join('\n'), '',
@@ -1306,6 +1311,8 @@ export interface OpenThreadInput {
   same_ask_reason?: string;
   /** With state needs: the choices he picks from (thread-options.ts). */
   options?: unknown;
+  /** The card's summary (as thread_update's reply); with none, a needs thread opened by an agent shows its opener as the summary. */
+  reply?: string;
   /**
    * Walnut's own, never a route's: a thread whose conversation lives elsewhere (a topic's host
    * thread, topics/topic-post.ts) opens `pending` with this summary, out of his sight until the
@@ -1345,6 +1352,10 @@ export function openThread(file: ThreadsFile, input: OpenThreadInput, by: Thread
   const options = optionsOf(input.options);
   if (options.length && !waitsOnUser(input.state ?? 'needs')) throw new ThreadError('bad_input', 400, 'options go with state needs: he picks one while it waits on him.');
   if (waitsOnUser(input.state ?? 'needs')) checkChoicesAsOptions(by, [input.text], options);
+  if (!quiet && by !== 'human' && waitsOnUser(input.state ?? 'needs')) {
+    const card = needsCardRefusal({ title: input.title, summary: isStr(input.reply) && input.reply.trim() ? input.reply : input.text, hasSummary: isStr(input.reply) && !!input.reply.trim(), opener: input.text, options: options.map((o) => o.label) });
+    if (card) throw new ThreadError('user_kind', 409, card);
+  }
   const tasks = taskList(input.tasks ?? []);
   // The first post's writer: its verified session (never one the input names), none for the user.
   const s = by === 'human' ? undefined : verifiedSource(source);
@@ -1359,6 +1370,7 @@ export function openThread(file: ThreadsFile, input: OpenThreadInput, by: Thread
     createdAt: at, updatedAt: at, by, ...(tasks.length ? { tasks } : {}), ...(options.length ? { options } : {}),
   };
   if (quiet) { setReply(thread, quiet, by, source); thread.replyAt = at; }
+  else if (isStr(input.reply) && input.reply.trim()) { setReply(thread, clip(input.reply, THREAD_REPLY_MAX), by, source); thread.replyAt = at; }
   return { file: { ...file, threads: prune([...file.threads, thread], at) }, thread };
 }
 

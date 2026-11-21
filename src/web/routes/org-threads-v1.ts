@@ -11,7 +11,7 @@
  *   GET   /api/v1/tasks/:id/threads/:thread                { task_id, thread }  (one thread whole, its `shown` as above)
  *   POST  /api/v1/tasks/:id/threads                        { text, images?, thread? } -> file one of his messages
  *   PATCH /api/v1/tasks/:id/threads/:thread                { title?, ask?, state?, user_kind?, user_kind_why?, user_kind_words?, user_kind_about?, design_review?, same_ask_reason?, ask_owner?, reply?, options?, tasks?, add_tasks?, known?, close?, user_words?, reopen?, snooze?, pin?, merge_into? }
- *   POST  /api/v1/tasks/:id/threads/open                   { title, text, from, ref?, state?, options?, user_kind?, user_kind_why?, user_kind_words?, user_kind_about?, design_review?, same_ask_reason?, tasks? } -> the node opens one itself
+ *   POST  /api/v1/tasks/:id/threads/open                   { title, text, from, ref?, state?, reply?, options?, user_kind?, user_kind_why?, user_kind_words?, user_kind_about?, design_review?, same_ask_reason?, tasks? } -> the node opens one itself
  *                                                          (`options`: with needs, the choices he clicks, [{ id?, label, detail?, recommended? }], 2 to 5;
  *                                                          a needs write whose words list A:/B: or 1./2. choices with none answers 409 needs_options)
  *   POST  /api/v1/tasks/:id/threads/:thread/split          { message } -> that message becomes its own thread
@@ -346,6 +346,7 @@ orgThreadsV1Router.post('/tasks/:id/threads/open', route(async (req, res) => {
     ...(str(b, 'user_kind_words') ? { user_kind_words: str(b, 'user_kind_words') } : {}),
     ...(str(b, 'user_kind_about') ? { user_kind_about: str(b, 'user_kind_about') } : {}),
     ...(str(b, 'design_review') ? { design_review: str(b, 'design_review') } : {}),
+    ...(str(b, 'reply') ? { reply: str(b, 'reply') } : {}),
     ...(str(b, 'same_ask_reason') ? { same_ask_reason: str(b, 'same_ask_reason') } : {}),
   }, by, source)
   log.task.info('org thread opened by the node', { taskId: task.id, threadId: thread.id, by, from: thread.opener?.from })

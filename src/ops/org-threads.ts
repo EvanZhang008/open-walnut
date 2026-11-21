@@ -123,6 +123,7 @@ defineOp({
   input: {
     title: z.string().min(1).max(120).describe('A few words, in the language you write to the user'),
     text: z.string().min(1).max(16000).describe('The first post: what reached you and what he needs to know or decide, Markdown'),
+    reply: z.string().max(2000).optional().describe('The card\'s summary, as thread_update\'s reply: its first sentence says what he decides and what you recommend, then the key points and evidence paths. Left out, a needs thread shows the first post as its summary'),
     from: z.enum(['mail', 'task', 'letter', 'trigger', 'node']).describe('Where it came from: mail, task (a team\'s work), letter (your letter to him), trigger, node (your own finding)'),
     ref: z.string().max(120).optional().describe('What it points at: a task id, a letter id (lt-...), a mail subject'),
     state: z.enum(['needs', 'answered']).optional().describe('Default needs (it waits on him)'),

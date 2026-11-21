@@ -31,7 +31,9 @@ export const ANSWERED_THERE_RULE = 'Ask the user each thing once. A step that fo
   + '"this position", a screenshot or design page for where or how something looks, and each choice names its result. '
   + 'A design or picture reaches them only after your own reviewer subagent on another model (Sol, where your Agent tool has it) checked each '
   + 'image (overlaps, cut-off text, alignment, spacing, match with the real screen) and scored function, experience and '
-  + 'interface out of 10; put the scores and what changed in the page and your reply. Text-only or colour-only changes skip it.'
+  + 'interface out of 10; put the scores and what changed in the page and your reply. Text-only or colour-only changes skip it. '
+  + 'A thread waiting on them has a summary whose first sentence says what they decide and what you recommend, with evidence '
+  + 'paths, and its choices as buttons, your pick first and marked recommended.'
 
 /** The line a re-check of an open ask carries. */
 export const ANSWERED_THERE_RECHECK = 'When the ask is about a conversation or item outside Walnut (a Slack DM or channel, a mail '

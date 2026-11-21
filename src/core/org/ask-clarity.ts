@@ -106,3 +106,53 @@ export function askClarityRefusal(question: string, detail = '', labels: readonl
   }
   return null;
 }
+
+/** A first sentence with no subject: "Go ahead with this plan? I recommend it." names nothing. */
+const BARE_OPENING = /^(?:(?:\u8981\u4e0d\u8981|\u662f\u5426|\u8981|\u53ef\u4ee5)(?:\u6309|\u7167)?(?:\u8fd9\u4e2a|\u90a3\u4e2a|\u8fd9\u6837|\u6b64)?(?:\u65b9\u6848|\u8ba1\u5212|\u505a\u6cd5)?(?:\u505a|\u6765|\u529e|\u5f04|\u6539)?|(?:should|shall|can) (?:i|we) (?:do|go ahead with|proceed with|ship|start) (?:it|this|that|the plan)|go ahead(?: with (?:it|this|the plan))?|proceed|do it|ok|okay|\u884c\u4e0d\u884c|\u53ef\u4ee5\u5417|\u597d\u5417)\s*[?\uff1f.!\u3002\uff01]*$/i;
+
+/** A plan or design named as a page or document, which then needs its path or link. */
+const PLAN_PAGE = /\u65b9\u6848\u9875|\u8bbe\u8ba1\u9875|\u65b9\u6848(?:\u56fe|\u6587\u6863|\u7a3f)|\b(?:plan|design|proposal|mockup) (?:page|doc(?:ument)?)\b/i;
+const PATH_OR_LINK = /https?:\/\/[^\s"'<>)]{1,300}|(?:^|[^\w/.~-])~?\/[^\s"'<>)]{1,300}/;
+
+/** A yes or no question, which then needs its choices as buttons. */
+const YES_NO = /\u8981\u4e0d\u8981|\u662f\u5426|\u505a\u4e0d\u505a|\u884c\u4e0d\u884c|\u53ef\u4ee5\u5417|\u597d\u5417|^(?:should|shall|do|can|may) (?:i|we|you)\b|\bok to\b/i;
+
+function firstSentence(text: string): string {
+  const t = text.trim().split('\n').find((l) => l.trim()) ?? '';
+  const m = /^.*?[?\uff1f.!\u3002\uff01](?=\s|$|[^?\uff1f.!\u3002\uff01])/u.exec(t.trim());
+  return (m ? m[0] : t).trim().replace(/^[#>*\-\s]+/, '');
+}
+
+/**
+ * A thread card that waits on him reads alone (2026-11-21, the user, of a card that showed only
+ * "Go ahead with this plan? I recommend it." and "has not written a summary yet": "what the fucking
+ * is the plan"): its summary's first sentence says what he decides and the recommendation, a plan or
+ * design page is named by its path, and a yes or no question carries its choices as buttons.
+ * `summary`: the card's summary (`reply`), or the opener when it has none. Null when it passes. Pure.
+ */
+export function needsCardRefusal(card: { title: string; summary: string; hasSummary: boolean; opener?: string; options: readonly string[] }): string | null {
+  const summary = card.summary.slice(0, SCAN_MAX);
+  const all = `${card.title}\n${summary}\n${(card.opener ?? '').slice(0, SCAN_MAX)}`;
+  // With no summary the card shows the opener's first line only: what is below it is hidden from him.
+  const opener = (card.opener ?? '').trim();
+  if (!card.hasSummary && opener.split('\n').filter((l) => l.trim()).length > 1) {
+    return 'Not handed to the user: the card has no summary, so it shows only the first line of your post. Write it (reply): the first '
+      + 'sentence says what they decide and what you recommend, then the key points and the evidence by absolute path.';
+  }
+  for (const text of [summary, card.opener ?? '']) {
+    const first = firstSentence(text);
+    if (first && BARE_OPENING.test(first)) {
+      return `Not handed to the user: "${first}" names nothing. The card shows its first sentence: say what they decide and what you `
+        + 'recommend in it ("Store passkeys in the Walnut password extension? I recommend yes: ..."), then the key points and evidence paths.';
+    }
+  }
+  if (PLAN_PAGE.test(all) && !PATH_OR_LINK.test(all)) {
+    return 'Not handed to the user: it names a plan or design page with no path to it. Put its absolute path (or link) in the summary.';
+  }
+  // The node's own words only: a thread he opened carries his question as its title.
+  if (YES_NO.test(firstSentence(summary)) && card.options.length === 0) {
+    return 'Not handed to the user: it asks a yes or no question with no buttons. Pass options, each naming its result, your pick first '
+      + 'and marked recommended, so they answer in one tap instead of typing.';
+  }
+  return null;
+}

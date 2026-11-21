@@ -203,3 +203,34 @@ describe('the clarity check stays narrow and fast (review of 2026-11-21)', () =>
     expect(updateThread(file, thread.id, { reply: 'Ship the sign-in entry as a row under All devices?' }, 'task:wifi', AT).thread.reply).toMatch(/All devices/)
   })
 })
+
+describe('a thread card waiting on him reads alone (2026-11-21: "what the fucking is the plan")', () => {
+  const kind = { user_kind: 'user_own', user_kind_why: 'He decides what Walnut builds next' }
+  const open = (over: Record<string, unknown>) => openThread(emptyThreads('vp'), {
+    title: 'Walnut 密码扩展存 passkey：看方案页，要不要做', from: 'node', ...kind, ...over,
+  } as Parameters<typeof openThread>[1], 'task:vp', AT)
+
+  it('refuses the card as it was: a bare first line, no summary, no buttons, the plan page with no path', () => {
+    // The opener's real first line ("Go ahead with this plan? I recommend it."), the plan below it, hidden.
+    const text = '要不要按这个方案做？我建议做。\nThe plan: the extension stores passkeys next to passwords.'
+    expect(() => open({ text })).toThrow(/no summary, so it shows only the first line/)
+    expect(() => open({ text, reply: '要不要按这个方案做？我建议做。' })).toThrow(/names nothing/)
+  })
+
+  it('refuses the same shapes in English', () => {
+    expect(() => open({ title: 'Passkeys', text: 'Should we do this?\nDetails below.', reply: 'Should we do this? I recommend yes.' })).toThrow(/names nothing/)
+    expect(() => open({ title: 'Passkeys', text: 'See the plan page.', reply: 'Store passkeys in the password extension? See the plan page.', options: [{ label: 'Build it' }, { label: 'Skip it' }] })).toThrow(/plan or design page with no path/)
+    expect(() => open({ title: 'Passkeys', text: 'Store passkeys in the extension?', reply: 'Should we store passkeys in the password extension? I recommend yes.' })).toThrow(/yes or no question with no buttons/)
+  })
+
+  it('passes the card rewritten: a summary that says the decision and the pick, the page path, and buttons', () => {
+    const r = open({
+      title: 'Store passkeys in the Walnut password extension?',
+      text: 'Plan page: /home/user/.local/state/walnut/tasks/t3/passkeys-plan.html\nIt keeps passkeys beside passwords.',
+      reply: 'Should the Walnut password extension store passkeys too? I recommend yes: one place for every login. Plan: /home/user/.local/state/walnut/tasks/t3/passkeys-plan.html',
+      options: [{ label: 'Build passkey storage (recommended)' }, { label: 'Keep passwords only' }],
+      design_review: 'sol: function 8/10, experience 8/10, interface 7/10; fixed the cut-off table',
+    })
+    expect(r.thread.reply).toMatch(/store passkeys too/)
+  })
+})
