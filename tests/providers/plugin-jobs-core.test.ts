@@ -133,6 +133,24 @@ describe('long-running jobs', () => {
     expect(files.some((f) => /^jobs-[0-9a-f]+\.state\.json$/.test(f))).toBe(true)
   })
 
+  it('a run gets the host call entry for its own run id when the daemon has one, and none otherwise', () => {
+    const asked: Array<{ home: string; sid: string }> = []
+    const sup = createPluginJobSupervisor(deps({
+      callEnv: (home, sid) => { asked.push({ home, sid }); return home === '/h' ? { WALNUT_CALL_URL: 'http://127.0.0.1:4100/api/host/call', WALNUT_CALL_TOKEN: 'a'.repeat(64) } : {} },
+    }))
+    sup.configure('/h', spec([job()]))
+    const info = JSON.parse(spawned[0]!.env.WALNUT_PLUGIN_JOB!)
+    expect(asked).toEqual([{ home: '/h', sid: info.sid }])
+    expect(spawned[0]!.env.WALNUT_CALL_URL).toBe('http://127.0.0.1:4100/api/host/call')
+    expect(spawned[0]!.env.WALNUT_CALL_TOKEN).toBe('a'.repeat(64))
+    // The socket stays beside it, the way the call falls back to.
+    expect(spawned[0]!.env.WALNUT_AGENT_SOCKET).toBe('/tmp/d/agent-gateway.sock')
+    sup.configure('/other', { ...spec([job({ job: 'other' })]), home: '/other' })
+    expect(spawned).toHaveLength(2)
+    expect(spawned[1]!.env.WALNUT_CALL_URL).toBeUndefined()
+    expect(spawned[1]!.env.WALNUT_CALL_TOKEN).toBeUndefined()
+  })
+
   it('starts a crashed job again after 5 s, doubling to 5 min, and a steady run resets the count', () => {
     const sup = createPluginJobSupervisor(deps())
     sup.configure('/h', spec([job()]))

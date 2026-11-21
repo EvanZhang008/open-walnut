@@ -403,6 +403,20 @@ async function updateRequests(fn: (store: RequestStore) => RequestStore | Promis
   }
 }
 
+// ── Requests a host replica's journal holds while the Mac is away ──
+// Folded over the copy by the readers a session's calls reach (request_get, open_items), so
+// they show the requests this host opened or answered alone (replica/away-requests.ts). Only
+// a host replica installs it (replica/away-wiring.ts); writes never see it.
+let awayRequests: ((rows: SessionRequest[]) => Promise<SessionRequest[]>) | null = null;
+export function installAwayRequests(fn: ((rows: SessionRequest[]) => Promise<SessionRequest[]>) | null): void {
+  awayRequests = fn;
+}
+async function readRows(): Promise<SessionRequest[]> {
+  const rows = (await readJsonFile<RequestStore>(REQUESTS_FILE, EMPTY)).requests ?? [];
+  if (!awayRequests) return rows;
+  try { return await awayRequests(rows); } catch { return rows; }
+}
+
 /**
  * Every request as stored (the requests copy's leader rows). A read that
  * failed throws rather than answering no requests (utils/fs.ts readErrors), so
@@ -492,8 +506,7 @@ export async function createSessionRequest(input: {
 }
 
 export async function getSessionRequest(id: string): Promise<SessionRequest | undefined> {
-  const store = await readJsonFile<RequestStore>(REQUESTS_FILE, EMPTY);
-  return (store.requests ?? []).find((r) => r.id === id);
+  return (await readRows()).find((r) => r.id === id);
 }
 
 /**
@@ -635,8 +648,7 @@ export const OVERDUE_OPEN_MS = SETTLED_RETENTION_MS;
 
 /** Every overdue request still open: expired, unanswered, younger than OVERDUE_OPEN_MS. */
 export async function overdueOpenRequests(now = Date.now()): Promise<SessionRequest[]> {
-  const store = await readJsonFile<RequestStore>(REQUESTS_FILE, EMPTY);
-  return (store.requests ?? []).filter((r) => r.status === 'expired' && now - Date.parse(r.createdAt) <= OVERDUE_OPEN_MS);
+  return (await readRows()).filter((r) => r.status === 'expired' && now - Date.parse(r.createdAt) <= OVERDUE_OPEN_MS);
 }
 
 /** When an overdue request's one reminder is due: twice its own wait, counted from the ask. */
@@ -821,8 +833,7 @@ export async function pendingRequestsForTarget(
   target: { sessionId?: string; taskId?: string },
 ): Promise<SessionRequest[]> {
   if (!target.sessionId && !target.taskId) return [];
-  const store = await readJsonFile<RequestStore>(REQUESTS_FILE, EMPTY);
-  return (store.requests ?? []).filter(
+  return (await readRows()).filter(
     (r) => r.status === 'pending' && (
       (!!target.sessionId && r.toSessionId === target.sessionId)
       || (!!target.taskId && r.toTaskId === target.taskId)
@@ -847,8 +858,7 @@ export async function pendingRequestsFromSession(sessionId: string): Promise<Ses
 export async function requestsFromSession(sessionId: string, status: SessionRequestStatus): Promise<SessionRequest[]> {
   const sid = (sessionId ?? '').trim();
   if (!sid) return [];
-  const store = await readJsonFile<RequestStore>(REQUESTS_FILE, EMPTY);
-  return (store.requests ?? [])
+  return (await readRows())
     .filter((r) => r.status === status && r.fromSessionId === sid)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }

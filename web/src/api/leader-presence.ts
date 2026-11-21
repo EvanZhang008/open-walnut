@@ -347,6 +347,13 @@ export const NEEDS_LEADER_REASONS: Readonly<Record<string, string>> = {
   message_needs_mac: 'Sending with these options needs your Mac.',
   reply_needs_mac: 'Asking for a reply needs your Mac.',
   target_needs_mac: 'This host does not know that task.',
+  // A message between this host's sessions (away-sends.ts, away-replies.ts, offline-host-core.ts follower.peer).
+  server_delivers: 'Your Mac delivers this message.',
+  sessions_unread: 'This host could not read its sessions just now; try again in a moment.',
+  not_held: 'This host cannot keep this message for your Mac.',
+  no_copy: 'This host keeps no copy of this Walnut yet.',
+  not_running_here: 'That session is not running on this host.',
+  companion_leads: 'The cloud companion leads now and routes this message.',
   // A read of a task made on this host while the Mac is away that only the Mac's store answers (away-reads.ts).
   task_made_here_needs_mac: 'This task was made here while your Mac is away; this part of it shows once your Mac has it.',
 }

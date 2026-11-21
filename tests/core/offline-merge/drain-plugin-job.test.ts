@@ -176,6 +176,39 @@ describe('a task a plugin job created on its host, and the session the host star
     expect(getSessionsForTaskSync(id).filter((x) => x.claudeSessionId === s)).toHaveLength(1)
   })
 
+  it('the task reads the phase its start gives online (In Progress), set before its session\'s record so the rescue can hand an ended turn back; a redrain moves nothing', async () => {
+    const id = mintedId()
+    const s = sid()
+    const create = createRec(id, { fields: { title: 'Started alone on the host' } })
+    const session = sessionRec(s, id, create.opId, { title: 'Started alone on the host' })
+    await runOfflineHandover(journal([create, session]).conn as never)
+    const task = await getTask(id)
+    expect(task.phase).toBe('IN_PROGRESS')
+    // The reconnect's hand-back (session-snapshot-apply.ts reconcileSettledPhase) keeps a phase
+    // written after the record's last status as a person's choice: this one is written before.
+    const rec = await getSessionByClaudeId(s)
+    expect(Date.parse(task.phase_changed_at!)).toBeLessThanOrEqual(Date.parse(rec!.last_status_change!))
+    await runOfflineHandover(journal([create, session]).conn as never)
+    expect((await getTask(id)).phase_changed_at).toBe(task.phase_changed_at)
+  })
+
+  it('a phase the host wrote after the start wins: the start\'s phase is only for a task still TODO', async () => {
+    const id = mintedId()
+    const s = sid()
+    const create = createRec(id, { fields: { title: 'Handed back on the host' } })
+    const session = sessionRec(s, id, create.opId, { title: 'Handed back on the host' })
+    const handed = fieldsRec(id, { phase: { base: 'TODO', value: 'NEED_ACTION' } }, { at: Date.now() - 50_000 })
+    await runOfflineHandover(journal([create, session, handed]).conn as never)
+    expect((await getTask(id)).phase).toBe('NEED_ACTION')
+    // A task the host already moved before its session record drained keeps that phase.
+    const id2 = mintedId()
+    const s2 = sid()
+    const create2 = createRec(id2, { fields: { title: 'Waiting before its start drained' } })
+    const parked = fieldsRec(id2, { phase: { base: 'TODO', value: 'WAITING' } }, { at: Date.now() - 115_000 })
+    await runOfflineHandover(journal([create2, parked, sessionRec(s2, id2, create2.opId)]).conn as never)
+    expect((await getTask(id2)).phase).toBe('WAITING')
+  })
+
   it('a run:\'task\' session for a task the host\'s journal did not create, or an unknown run, is refused and never an ask', async () => {
     const mine = (await addTask({ title: 'A Mac task', project: 'Marina' } as never)).task
     const s1 = sid()

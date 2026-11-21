@@ -1,6 +1,6 @@
 /**
- * A task's start and a message to a task, made by this host's own `walnut` calls while the
- * Mac is away (the `host-local-calls` capability; local-calls.ts runs the calls). Only
+ * A task's start, made by this host's own `walnut` calls while the Mac is away (the
+ * `host-local-calls` capability; local-calls.ts runs the calls; a message is away-sends.ts's). Only
  * those callers reach here: the route table answers a phone or a browser `needs_leader` on
  * these routes as before (route-table.ts `localAway`).
  *
@@ -20,10 +20,6 @@
  *     starts one session per id. The session shows here at once (ask-launch.ts noteStarted).
  *     One start of a task at a time, as the Mac's pending starts: a second under another op id
  *     while one runs hears the Mac's 409 session_exists, and starts nothing.
- *   POST /v1/messages          (task_send)
- *     to a task whose session runs on this host: delivered by the daemon (follower.send),
- *     framed as the caller's, as the Mac frames it; anything else (a reply, a hand-on, a
- *     session elsewhere) needs the Mac.
  */
 
 import { projectOrInbox } from '../core/inbox-project.js'
@@ -44,8 +40,6 @@ const START_TIMEOUT_MS = 45_000
 const SESSIONS_TIMEOUT_MS = 3_000
 /** The start inputs a start here takes; any other needs the Mac. */
 const START_KEYS = new Set(['message', 'cwd', 'cwd_chosen', 'host', 'mode', 'model', 'effort', 'engine', 'no_workspace'])
-/** The message inputs a send here takes; any other (a reply, a hand-on, an ask's answer) needs the Mac. */
-const SEND_KEYS = new Set(['to', 'text', 'title', 'wake', 'expect_reply'])
 
 export interface TaskSession { sid: string; host?: string | null; startedAt?: string }
 
@@ -233,28 +227,12 @@ export function awayStarts(deps: AwayStartsDeps): RequestHandler {
     return { answered: false, status: 200, body: { taskId, sessionId: startedSid, started: true, offline: true } }
   }
 
-  async function message(req: Request, w: ReplicaWrite, actor: WriteActor): Promise<PortAnswer> {
-    const b = bodyOf(req)
-    const extra = Object.keys(b).filter((k) => !SEND_KEYS.has(k) && b[k] !== undefined)
-    if (extra.length) return needsLeaderAnswer('message_needs_mac', `${extra.join(', ')} can only be used while your Mac answers; nothing was sent.`, { fields: extra })
-    if (b.expect_reply === true) return needsLeaderAnswer('reply_needs_mac', 'Asking for a reply needs your Mac; nothing was sent.')
-    const to = str(b.to)
-    const text = [str(b.title), str(b.text)].filter(Boolean).join('\n\n')
-    if (!to || !text) return refusalAnswer('bad_request', 'to and text must be non-empty strings')
-    const task = await deps.task(to)
-    if (!task) return needsLeaderAnswer('target_needs_mac', 'This host does not know that task; sending to it needs your Mac.')
-    const own = (await deps.sessionsOfTask(to)).filter(here)
-    const s = latest(own)
-    if (!s) return needsLeaderAnswer('session_on_mac', 'That task has no session on this host; sending to it needs your Mac.')
-    return sendTo(w, actor, s.sid, to, text)
-  }
-
   return (req: Request, res: Response, next: NextFunction): void => {
     const w = req.replicaWrite
     if (!w || req.method.toUpperCase() !== 'POST') { next(); return }
     const path = req.path.replace(/\/+$/, '')
     const startHit = /^\/v1\/tasks\/([^/]+)\/start$/.exec(path)
-    if (!startHit && path !== '/v1/messages') { next(); return }
+    if (!startHit) { next(); return }
     const actor = deps.actorOf(req)
     const answer = (a: PortAnswer) => {
       if (a.answered || res.headersSent) return
@@ -265,14 +243,36 @@ export function awayStarts(deps: AwayStartsDeps): RequestHandler {
       res.status(a.status).json(a.body)
     }
     if (!actor || actor.kind === 'device') { answer(needsLeaderAnswer('needs_mac', 'This needs your Mac, which is not answering right now.')); return }
-    let id = ''
-    if (startHit) { try { id = decodeURIComponent(startHit[1]!) } catch { id = startHit[1]! } }
-    const run = startHit ? start(req, w, actor, id) : message(req, w, actor)
+    let id: string
+    try { id = decodeURIComponent(startHit[1]!) } catch { id = startHit[1]! }
+    const run = start(req, w, actor, id)
     run.then(answer, (err: unknown) => {
       deps.log('warn', 'replica: a local call failed here', { path, opId: w.opId, error: err instanceof Error ? err.message : String(err) })
       if (!res.headersSent) answer(refusalAnswer('internal', 'This host could not do it.'))
     })
   }
+}
+
+/** A task's sessions as this replica holds them (the copy, and the ones this host started that it does not list yet). */
+export async function taskSessions(taskId: string): Promise<TaskSession[]> {
+  const { getSessionsForTask } = await import('../core/session-tracker.js')
+  return (await getSessionsForTask(taskId)).map((r) => ({ sid: r.claudeSessionId, host: r.host ?? null, startedAt: r.startedAt }))
+}
+
+/** Words delivered here as the caller's (send-frame.ts), never as a person's: a job's automation, a session's peer note. */
+export async function frameAsCaller(text: string, actor: WriteActor, task: (id: string) => Promise<TaskRow | null>): Promise<string> {
+  const { frameStartText } = await import('../core/sessions/send-frame.js')
+  if (actor.kind === 'plugin-job') return frameStartText(text, { source: `automation:plugin job ${actor.plugin}/${actor.job}` })
+  // A device never starts here (needs_leader first); named all the same, as the console's start names it.
+  if (actor.kind !== 'session') {
+    const { startRouteSource } = await import('../core/sessions/send-sent-by.js')
+    return frameStartText(text, { source: startRouteSource('quick-start', {}) })
+  }
+  const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+  const rec = await getSessionByClaudeId(actor.sid).catch(() => null)
+  if (!rec) return frameStartText(text, { source: 'api-agent', callerSid: actor.sid })
+  const title = rec.taskId ? String((await task(rec.taskId))?.title ?? '') : ''
+  return frameStartText(text, { source: 'api-agent', caller: { title, claudeSessionId: actor.sid, ...(rec.taskId ? { taskId: rec.taskId } : {}), ...(rec.host ? { host: rec.host } : {}) } })
 }
 
 /** The real dependencies on a host replica (server.ts mounts the handler before away.writes). */
@@ -291,10 +291,7 @@ export function wireAwayStarts(o: {
     hostKey: o.hostKey,
     capabilities: o.capabilities,
     request: o.request,
-    sessionsOfTask: async (taskId) => {
-      const { getSessionsForTask } = await import('../core/session-tracker.js')
-      return (await getSessionsForTask(taskId)).map((r) => ({ sid: r.claudeSessionId, host: r.host ?? null, startedAt: r.startedAt }))
-    },
+    sessionsOfTask: taskSessions,
     projectMeta: async (project) => (await import('../core/task-manager.js')).getProjectMetadata(project),
     sessionExists: (task) => sessionExistsWords(task).message,
     // The overlay's creates: pending in this host's journal, or taken by the Mac and not in the copy yet.
@@ -313,20 +310,7 @@ export function wireAwayStarts(o: {
         defaults: readProjectLaunchDefaults(meta),
       })
     },
-    frame: async (text, actor) => {
-      const { frameStartText } = await import('../core/sessions/send-frame.js')
-      if (actor.kind === 'plugin-job') return frameStartText(text, { source: `automation:plugin job ${actor.plugin}/${actor.job}` })
-      // A device never starts here (needs_leader first); named all the same, as the console's start names it.
-      if (actor.kind !== 'session') {
-        const { startRouteSource } = await import('../core/sessions/send-sent-by.js')
-        return frameStartText(text, { source: startRouteSource('quick-start', {}) })
-      }
-      const { getSessionByClaudeId } = await import('../core/session-tracker.js')
-      const rec = await getSessionByClaudeId(actor.sid).catch(() => null)
-      if (!rec) return frameStartText(text, { source: 'api-agent', callerSid: actor.sid })
-      const title = rec.taskId ? String((await o.away.task(rec.taskId))?.title ?? '') : ''
-      return frameStartText(text, { source: 'api-agent', caller: { title, claudeSessionId: actor.sid, ...(rec.taskId ? { taskId: rec.taskId } : {}), ...(rec.host ? { host: rec.host } : {}) } })
-    },
+    frame: (text, actor) => frameAsCaller(text, actor, (id) => o.away.task(id)),
     started: (row) => o.started(row),
     continued: (sid) => o.continued?.(sid),
     log: (level, msg, data) => log.web[level](msg, data),

@@ -62,6 +62,16 @@ export function withOutcome<T extends Record<string, unknown>>(
 }
 
 /**
+ * An answer this host's own server gave while the Walnut server is away (a host's follower:
+ * replica/away-calls.ts, away-triggers.ts): it says itself what it saved and what comes next
+ * (the host daemon's words), so the op passes it on as it came. Null for any other answer.
+ */
+export function awayAnswer(body: unknown): Record<string, unknown> | null {
+  const b = body as Record<string, unknown> | null | undefined;
+  return b && typeof b === 'object' && b.offline === true && typeof b.outcome === 'string' && typeof b.next === 'string' ? b : null;
+}
+
+/**
  * What a message still waits on, for the agent that sent it: the words the user's bubble
  * shows, the next try Walnut makes by itself, and how to send it now. '' when nothing holds it.
  * (request_get and message_send_now; a fresh send says it in sendBehindSlowHostLine.)

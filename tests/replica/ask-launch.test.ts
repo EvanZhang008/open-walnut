@@ -192,6 +192,37 @@ describe('a new ask while the Mac is away', () => {
     }
   })
 
+  it('a session started here counts its messages as the Mac does: one at its start, one more for each turn that ended', async () => {
+    vi.useFakeTimers()
+    try {
+      const h = harness()
+      const launch = createAskLaunch(h.deps)
+      await send(h, launch, '/sessions/quick-start', ASK)
+      expect(launch.rows()[0]).toMatchObject({ messageCount: 1 })
+      // The first look finds the start's turn already over.
+      h.sessions.push({ sid: SID, state: 'idle', lastActiveAt: '2026-10-17T07:00:00.000Z' })
+      await vi.advanceTimersByTimeAsync(1_100)
+      expect(launch.rows()[0]).toMatchObject({ messageCount: 2 })
+      // Nothing new: the count stands.
+      await vi.advanceTimersByTimeAsync(1_100)
+      expect(launch.rows()[0]).toMatchObject({ messageCount: 2 })
+      // A message (a turn seen working, then over), and one whose whole turn fell between two looks.
+      launch.watch(SID)
+      h.sessions[0] = { sid: SID, state: 'working', lastActiveAt: '2026-10-17T07:01:00.000Z' }
+      await vi.advanceTimersByTimeAsync(1_100)
+      expect(launch.rows()[0]).toMatchObject({ messageCount: 2, process_status: 'running' })
+      h.sessions[0] = { sid: SID, state: 'idle', lastActiveAt: '2026-10-17T07:02:00.000Z' }
+      await vi.advanceTimersByTimeAsync(1_100)
+      expect(launch.rows()[0]).toMatchObject({ messageCount: 3 })
+      h.sessions[0] = { sid: SID, state: 'idle', lastActiveAt: '2026-10-17T07:05:00.000Z' }
+      await vi.advanceTimersByTimeAsync(1_100)
+      expect(launch.rows()[0]).toMatchObject({ messageCount: 4 })
+      launch.stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('the caller\'s project is kept, as the Mac keeps it (askLaunchProject)', async () => {
     const h = harness()
     const launch = createAskLaunch(h.deps)

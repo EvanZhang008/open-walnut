@@ -24,6 +24,12 @@
  *       /sessions/task/:taskId                      here is read first; the route answers
  *   GET /tasks/:id/<any other>, /v1/...             a task made here that the route cannot
  *                                                   find: 503 needs_leader, never "not found"
+ *   GET /v1/sessions                                this host's sessions with their live state
+ *                                                   (follower.sessions), a task made here named
+ *   GET /v1/search                                  the tasks made here that match, first
+ *   GET /v1/status, from this host's own call       walnut_status with `away`: the leader is away,
+ *                                                   what waits for it, the ops answered here
+ *                                                   (away-op-decisions.ts)
  *
  * A task whose session this host started alone (away-starts.ts, ask-launch.ts) carries that
  * session as the Mac will link it (overlay.ts folds it: task-row-fold.ts foldAwayStart), with
@@ -44,6 +50,7 @@ import { createBoardOffline, type OfflineSliceBoard } from '../providers/offline
 import type { Overlay } from './overlay.js'
 import { createdRow } from './write-port.js'
 import { NEEDS_LEADER_HEADERS, needsLeaderBody } from '../core/replication/needs-leader.js'
+import { awayStatus, withHostSessions, withTasksMadeHere } from './away-read-folds.js'
 
 export const SYNC_FIELD = 'replica_sync'
 
@@ -61,6 +68,10 @@ export interface AwayReadsDeps {
   enrich?(rows: Row[]): Promise<Row[]>
   /** The sessions a task held, as the Mac's route answers them (engine-switch-v1.ts taskSessionsAnswer). */
   taskSessions?(task: Row): Promise<Record<string, unknown>>
+  /** The Mac's name for this host: walnut_status says who answers, the session list whose live state is read here. */
+  hostKey?: string | null
+  /** The live state of every session of this Walnut on this host (follower.sessions), by id; null: not known now. */
+  hostSessions?(): Promise<ReadonlyMap<string, { state: string; lastActiveAt?: string }> | null>
 }
 
 type Row = Record<string, unknown> & { id: string }
@@ -259,6 +270,10 @@ export function overlayBulk(body: Record<string, unknown>, overlay: Overlay, pro
   return { ...body, tasks, ...(typeof body.errors === 'number' ? { errors } : {}) }
 }
 
+const STATUS_PATH = '/v1/status'
+const SESSIONS_LIST_PATH = '/v1/sessions'
+const SEARCH_PATH = '/v1/search'
+
 const FOCUS_PATHS = new Set(['/focus/tasks', '/v1/focus/tasks'])
 const LIST_PATHS = new Set(['/tasks', '/tasks/enriched', '/v1/tasks'])
 const ONE_RE = /^\/(?:v1\/)?tasks\/([^/]+)$/
@@ -305,6 +320,40 @@ export function awayReads(deps: AwayReadsDeps): RequestHandler {
       if (!ours || !deps.fresh) { next(); return }
       const t = new Promise<void>((r) => { const h = setTimeout(r, waitMs); h.unref?.() })
       void Promise.race([deps.fresh().catch(() => {}), t]).then(() => next(), () => next())
+      return
+    }
+    // walnut_status from this host's own call (a session's or a plugin job's): it says the leader is
+    // away, what waits for it, and what answers here (the daemon's own away status said as much).
+    if (path === STATUS_PATH && (req.get?.('x-walnut-caller-sid') || req.get?.('x-walnut-plugin-id'))) {
+      const t = new Promise<void>((r) => { const h = setTimeout(r, waitMs); h.unref?.() })
+      void Promise.race([deps.overlay.refresh(1_000), t]).then(() => {
+        const json = res.json.bind(res)
+        res.json = ((b: unknown) => (b && typeof b === 'object' && !Array.isArray(b) && res.statusCode < 300
+          ? json({ ...(b as Record<string, unknown>), away: awayStatus(deps) })
+          : json(b))) as Response['json']
+        next()
+      }, () => next())
+      return
+    }
+    // The session list (session_list, the phone's list): this host's sessions say what they do now.
+    if (path === SESSIONS_LIST_PATH && deps.hostSessions) {
+      const t = new Promise<null>((r) => { const h = setTimeout(() => r(null), waitMs); h.unref?.() })
+      const live = deps.hostSessions().catch(() => null)
+      void Promise.race([Promise.all([live, deps.overlay.refresh(1_000)]).then(([m]) => m), t]).then((m) => {
+        const json = res.json.bind(res)
+        res.json = ((b: unknown) => json(res.statusCode < 300 ? withHostSessions(b, m, deps) : b)) as Response['json']
+        next()
+      }, () => next())
+      return
+    }
+    // search: the tasks made here that the search copy does not hold yet.
+    if (path === SEARCH_PATH) {
+      const t = new Promise<void>((r) => { const h = setTimeout(r, waitMs); h.unref?.() })
+      void Promise.race([deps.overlay.refresh(1_000), t]).then(() => {
+        const json = res.json.bind(res)
+        res.json = ((b: unknown) => json(res.statusCode < 300 ? withTasksMadeHere(b, req.query, deps.overlay) : b)) as Response['json']
+        next()
+      }, () => next())
       return
     }
     const bulk = path === BULK_PATH
@@ -377,6 +426,8 @@ export function awayReads(deps: AwayReadsDeps): RequestHandler {
             const tasks = overlayList(req, out.tasks as Row[], deps.overlay)
             out.tasks = tasks
             const added = tasks.filter((r) => r && !fromCopy.has(r.id))
+            // The route counted the copy's matches (`total`, before its limit): this host's own rows count too.
+            if (added.length && typeof out.total === 'number') out.total += added.length
             return sendEnriched(added, (e) => {
               const byId = new Map(e.map((r) => [r.id, r]))
               return { ...out, tasks: tasks.map((r) => (r && byId.get(r.id)) || r) }

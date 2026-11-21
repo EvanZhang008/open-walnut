@@ -25,7 +25,8 @@
  *
  * Kinds and keys: task-fields, task-create, task-move and the v1 gateway `op`
  * records key the task (`tasks`); board records key the Board's task
- * (`boards`); device-revoke keys the device (`devices`). Awaiting entries are
+ * (`boards`); device-revoke keys the device (`devices`); a request's `row` and
+ * `settle` records key the request (`requests`). Awaiting entries are
  * kept in `cache/replica-overlay.json` (0600), so a restart keeps the marks.
  */
 
@@ -51,7 +52,7 @@ export function watchMaxAgeMs(entries: ReadonlyArray<Pick<OverlayEntry, 'state'>
 }
 
 export type SyncMark = 'pending' | 'awaiting'
-export type OverlayKind = 'tasks' | 'boards' | 'devices' | 'sessions'
+export type OverlayKind = 'tasks' | 'boards' | 'devices' | 'sessions' | 'requests'
 
 export interface OverlayEntry {
   opId: string
@@ -100,6 +101,12 @@ export function keyOfRecord(r: Record<string, unknown>): { kind: OverlayKind; id
   if (kind === 'device-revoke') return typeof r.deviceId === 'string' && r.deviceId ? { kind: 'devices', id: r.deviceId } : null
   // A new ask started on this host while the Mac is away (WP12, replica/ask-launch.ts).
   if (kind === 'session') return typeof r.sid === 'string' && r.sid ? { kind: 'sessions', id: r.sid } : null
+  // A reply request this host opened or settled while the Mac is away (away-requests.ts shows them).
+  if (kind === 'row') {
+    const id = (r.row as Record<string, unknown> | undefined)?.id
+    return typeof id === 'string' && id ? { kind: 'requests', id } : null
+  }
+  if (kind === 'settle') return typeof r.requestId === 'string' && r.requestId ? { kind: 'requests', id: r.requestId } : null
   if (kind === 'op') {
     // A v1 gateway write (a session's task_update / task_complete while the Mac was away).
     const op = String(r.op ?? '')

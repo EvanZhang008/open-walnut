@@ -107,6 +107,37 @@ describe('walnut.ops', () => {
     expect(gw.seen.map((r) => r.sid)).toEqual([SID, SID])
     expect(gw.seen[0]).toMatchObject({ v: 1, op: 'tools.call', args: { name: 'task_list', args: { limit: 1 } } })
   })
+
+  it('with a host call entry: its answer first, the socket (same line) when it did not take it, and a lost answer is never sent again', async () => {
+    const gw = await gateway(() => ({ ok: true, result: { via: 'socket' } }))
+    const posted: Array<Record<string, any>> = []
+    const outcomes = [
+      { kind: 'answer', resp: { ok: true, result: { via: 'entry' } } },
+      { kind: 'not_taken', why: 'no entry listening' },
+      { kind: 'lost', timeout: true, message: 'no answer' },
+    ] as const
+    const results: unknown[] = []
+    let lost: (Error & { code?: string; callId?: string }) | null = null
+    const h = createPluginJobHarness(deps({
+      jobs: {
+        worker: async (walnut: any) => {
+          results.push(await walnut.ops.call('task_list', {}))
+          results.push(await walnut.ops.call('task_list', {}))
+          try { await walnut.ops.call('task_create', { title: 'x' }) } catch (e) { lost = e as Error & { code?: string } }
+        },
+      },
+    }, { hostCall: { post: async (req) => { posted.push(req as Record<string, any>); return outcomes[posted.length - 1]! } } }))
+    expect(await h.run(['/b.mjs', 'worker'])).toBe(0)
+    gw.server.close()
+    expect(results).toEqual([{ via: 'entry' }, { via: 'socket' }])
+    // The socket got only the one the entry did not take, with the very call id the entry was sent.
+    expect(gw.seen).toHaveLength(1)
+    expect(gw.seen[0]!.args.callId).toBe(posted[1]!.args.callId)
+    expect(posted.map((r) => r.sid)).toEqual([SID, SID, SID])
+    expect(lost!.code).toBe('hub_timeout')
+    expect(lost!.callId).toBe(posted[2]!.args.callId)
+    expect(lost!.message).toContain('op_result')
+  })
 })
 
 describe('walnut.http', () => {

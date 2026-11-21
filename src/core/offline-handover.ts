@@ -23,7 +23,7 @@ import type { RetiredLead } from './org/retired-lead.js';
 import { WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
 import type { OfflineRecord } from '../providers/offline-host-core.js';
-import type { SessionRequest } from './session-requests.js';
+import { requestOfRow } from './offline-merge/request-row.js';
 import { VALID_SESSION_EFFORT_IDS, VALID_SESSION_MODE_IDS, type SessionEffort, type SessionMode } from './types.js';
 import { APPLIED_V2_KINDS, RefusedWrite, replayFailure, applyV2, devicePaired, v2TaskIdOf, type V2Record } from './offline-merge/apply-v2.js';
 import { recordRemap } from './offline-merge/ledger.js';
@@ -973,23 +973,6 @@ async function keepOfflineScore(s: import('../providers/offline-host-core.js').O
   await noteReviewScore(s.taskId, score, 'reply', { at: typeof s.at === 'string' ? s.at : undefined, requestId });
 }
 
-function toRequest(row: Extract<OfflineRecord, { kind: 'row' }>['row']): SessionRequest {
-  return {
-    id: row.id,
-    fromSessionId: row.fromSessionId,
-    toSessionId: row.toSessionId,
-    ...(row.toTaskId ? { toTaskId: row.toTaskId } : {}),
-    preview: row.preview,
-    status: row.status,
-    createdAt: row.createdAt,
-    deadlineAt: row.deadlineAt,
-    ...(row.settledAt ? { settledAt: row.settledAt } : {}),
-    ...(row.outcome ? { outcome: row.outcome } : {}),
-    ...(typeof row.messageId === 'string' ? { messageId: row.messageId } : {}),
-    ...(typeof row.reachedAt === 'string' ? { reachedAt: row.reachedAt } : {}),
-  };
-}
-
 async function applyRecord(
   host: string,
   record: OfflineRecord,
@@ -1000,7 +983,7 @@ async function applyRecord(
   switch (record.kind) {
     case 'row': {
       const { importOfflineRequest } = await import('./session-requests.js');
-      if (await importOfflineRequest(toRequest(record.row))) result.imported++;
+      if (await importOfflineRequest(requestOfRow(record.row))) result.imported++;
       if (record.score && record.row.status === 'replied') await keepOfflineScore(record.score, record.row.id);
       return;
     }

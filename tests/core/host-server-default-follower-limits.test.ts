@@ -74,6 +74,43 @@ describe('the experiment turned off again', () => {
   })
 })
 
+describe('the person\'s own choice over the default', () => {
+  it('a follower running by default stops when the person turns it off, and stays off with the experiment still on', async () => {
+    const m = createHostServerManager(b.deps())
+    const h = b.host()
+    await m.connected(h)
+    expect(m.view('devbox').phase).toBe('running')
+    // The switch flipped off stores false (PUT /api/host-servers/:hostKey): the person's, not the default's.
+    b.settings = OFF
+    await m.reconcile('devbox')
+    expect(m.view('devbox')).toMatchObject({ enabled: false, phase: 'off' })
+    expect(h.specs.at(-1)).toBeNull()
+    // A reconnect with the experiment on does not bring it back.
+    const calls = h.calls.length
+    await m.connected(h)
+    expect(m.view('devbox')).toMatchObject({ enabled: false, phase: 'off' })
+    expect(h.calls.slice(calls).filter((c) => c === 'room' || c === 'launch')).toEqual([])
+    m.stop()
+  })
+
+  it('Retry on a host short of memory looks again at once, and starts once the memory is there', async () => {
+    const m = createHostServerManager(b.deps({ tryLaterMs: { gate: [3_600_000] } }))
+    const h = b.host()
+    h.room = 'mem_total_kb=8388608\nmem_avail_kb=262144\ndisk_free_kb=41943040\n'
+    await m.connected(h)
+    expect(m.view('devbox')).toMatchObject({ phase: 'not-eligible', gate: { reason: 'memory' } })
+    // Still short: Retry probes again and says so; the hour-long wait is not what decides.
+    await m.reconcile('devbox', { retry: true })
+    expect(m.view('devbox')).toMatchObject({ phase: 'not-eligible', gate: { reason: 'memory' } })
+    expect(h.calls.filter((c) => c === 'room')).toHaveLength(2)
+    h.room = ROOMY
+    await m.reconcile('devbox', { retry: true })
+    expect(m.view('devbox').phase).toBe('running')
+    expect(m.view('devbox').gate).toBeUndefined()
+    m.stop()
+  })
+})
+
 describe('installs for the default, one host at a time', () => {
   it('a second host on by default waits for the first one\'s install; a host the person turned on never waits', async () => {
     const m = createHostServerManager(b.deps({ settingsOf: async (key) => (key === 'minebox' ? TURNED_ON : ON_BY_DEFAULT) }))

@@ -9,7 +9,9 @@
  * credential and the caller's identity (write-actor.ts): reads answer from the copies, and
  * writes go to the write port and this host's journal, as a person's away write does.
  *
- *   the Mac answers again   `needs_leader` before anything runs: the daemon relays it there
+ *   the Mac answers again   `needs_leader` before anything runs: the daemon relays it there,
+ *                           except a same-host send the daemon handed over marked `online`
+ *                           (follower-peer-v1): away-sends.ts takes it as handleLocal would
  *   a route that needs the Mac   its 503 `needs_leader` goes back with that code, so a
  *                                session's call gets the daemon's own away answer instead
  *   a full journal, the brake    `queue_full` / `throttled` with the route's wait: retryable
@@ -38,6 +40,15 @@ export function neededMs(call: RelayedCall): number {
   const p = call.payload as { name?: unknown; args?: { record_only?: unknown } } | null
   const name = call.capability === 'tools.call' && p && typeof p.name === 'string' ? p.name : ''
   return name === 'task_start' || (name === 'task_create' && p?.args?.record_only !== true) ? START_LEFT_MS : CALL_LEFT_MS
+}
+
+/** The ops a same-host send is (offline-host-core.ts LOCAL_SEND_OPS): the one call taken while the Mac answers. */
+const ONLINE_OPS = ['task_send', 'session_send']
+
+/** A same-host send the daemon handed over while the Mac answers ('follower-peer-v1'). */
+export function isOnlineSend(event: Record<string, unknown>, call: RelayedCall): boolean {
+  const p = call.payload as { name?: unknown } | null
+  return event.online === true && call.capability === 'tools.call' && !!p && typeof p.name === 'string' && ONLINE_OPS.includes(p.name)
 }
 
 /** How long the daemon may take to ack a result on the loopback link. */
@@ -79,6 +90,7 @@ export function createLocalCalls(deps: LocalCallsDeps): (event: Record<string, u
     const receivedAt = Date.now()
     const call = relayedCallOf(event)
     if (!call) return
+    const online = isOnlineSend(event, call)
     // Within what the daemon still waits for (an older daemon names none: the hub timeout).
     const left = call.answerInMs === undefined ? gatewayHubTimeoutMs() : Math.min(gatewayHubTimeoutMs(), call.answerInMs - ANSWER_MARGIN_MS)
     void serveRelayedCall(call, {
@@ -90,7 +102,7 @@ export function createLocalCalls(deps: LocalCallsDeps): (event: Record<string, u
       liftCodes: LIFTED,
       refuse: (c) => !hostKey
         ? { relayId: c.relayId, error: 'this host\'s Walnut server does not know its host name yet, so it cannot answer for it', errorCode: 'needs_leader' }
-        : deps.leaderAnswers()
+        : deps.leaderAnswers() && !online
           ? { relayId: c.relayId, error: 'your Mac answers again; the call goes to it', errorCode: 'needs_leader' }
           // Never below a call handed over with its whole time (a short hub timeout set on purpose).
           : left < Math.min(neededMs(c), gatewayHubTimeoutMs() - ANSWER_MARGIN_MS)

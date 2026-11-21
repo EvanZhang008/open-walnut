@@ -37,6 +37,11 @@ export interface FollowerView {
   quietMs?: number
   /** This home's journal records the current leader's drain can take (a drain still to run). */
   drainablePending?: number
+  /**
+   * The calls the daemon answered with its own away code while this server was linked to answer
+   * them (follower-gateway-core.ts ownAnswers): the count task B drives to zero.
+   */
+  offlineAnswers?: { total: number; byOp: Record<string, number>; byWhy: Record<string, number> }
 }
 
 export type DaemonLinkState = 'connecting' | 'following' | 'unknown-walnut' | 'not-started-here' | 'no-daemon'
@@ -55,6 +60,18 @@ export interface DaemonLinkOptions {
    * away ('follower-gateway-v1'). The daemon then sends their `gateway-request` events here.
    */
   answersLocal?: boolean
+  /**
+   * Said at follower.hello: this server picks the session for this host's unclaimed trigger
+   * fires while its leader is away ('follower-trigger-delivery-v1'): `trigger-delivery` events.
+   */
+  deliversTriggers?: boolean
+  /**
+   * Said at follower.hello: this server also takes a same-host message while its leader answers
+   * ('follower-peer-v1', replica/away-sends.ts), in place of the daemon's own handleLocal.
+   */
+  answersOnline?: boolean
+  /** More of follower.hello, read at each hello (the host call entry's address, host-call-entry.ts). */
+  helloExtra?: () => Record<string, unknown>
   /** A daemon event on the link (`{ev, ...}`, never an answer): a `gateway-request`, say. */
   onEvent?: (event: Record<string, unknown>) => void
   /** How long an open waits for the other server to accept. */
@@ -108,6 +125,18 @@ class LinkClosed extends Error {
   constructor(readonly reply: Record<string, unknown>) { super('the link to the daemon closed') }
 }
 
+/** A view's `offlineAnswers`, kept only when it has the shape the daemon sends. */
+function offlineAnswersOf(raw: unknown): Pick<FollowerView, 'offlineAnswers'> {
+  if (!raw || typeof raw !== 'object') return {}
+  const r = raw as { total?: unknown; byOp?: unknown; byWhy?: unknown }
+  const counts = (v: unknown): Record<string, number> => {
+    const out: Record<string, number> = {}
+    if (v && typeof v === 'object') for (const [k, n] of Object.entries(v)) if (typeof n === 'number' && Number.isFinite(n)) out[k] = n
+    return out
+  }
+  return typeof r.total === 'number' && Number.isFinite(r.total) ? { offlineAnswers: { total: r.total, byOp: counts(r.byOp), byWhy: counts(r.byWhy) } } : {}
+}
+
 export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
   const now = opts.now ?? Date.now
   const linkKey = `host-server-link:${++linkSeq}`
@@ -128,6 +157,9 @@ export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
   let frameAt: number | null = null
   // Kept across a redial: a link blip is no downgrade, the next hello says.
   let caps: readonly string[] | null = null
+  const helloExtra = (): Record<string, unknown> => {
+    try { return opts.helloExtra?.() ?? {} } catch { return {} }
+  }
 
   function setState(next: DaemonLinkState, why?: string): void {
     if (why !== undefined) error = why
@@ -169,6 +201,7 @@ export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
         settings: v.settings && typeof v.settings === 'object' && !Array.isArray(v.settings) ? v.settings : {},
         ...(Number(v.quietMs) > 0 ? { quietMs: Number(v.quietMs) } : {}),
         ...(Number.isFinite(drainable) && drainable > 0 ? { drainablePending: drainable } : {}),
+        ...offlineAnswersOf((m as { offlineAnswers?: unknown }).offlineAnswers),
       },
     }
     try { opts.onView?.(last.view) } catch { /* a listener never breaks the link */ }
@@ -237,7 +270,7 @@ export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
     })
     socket.on('open', () => {
       void (async () => {
-        const hello: Record<string, unknown> = await call(socket, 'follower.hello', { walnutId: opts.walnutId, home: opts.home, token: opts.token, ...(opts.answersLocal ? { answersLocal: true } : {}) })
+        const hello: Record<string, unknown> = await call(socket, 'follower.hello', { ...helloExtra(), walnutId: opts.walnutId, home: opts.home, token: opts.token, ...(opts.answersLocal ? { answersLocal: true } : {}), ...(opts.deliversTriggers ? { deliversTriggers: true } : {}), ...(opts.answersOnline ? { answersOnline: true } : {}) })
           .catch((err: Error) => ({ ok: false, error: err.message }))
         if (ws !== socket) return
         if (hello.ok !== true) {

@@ -14,6 +14,11 @@
  *                      (offlineHost.handle). A read with no answer in time goes there too;
  *                      a write with none is `hub_timeout` (it may have run: never twice)
  *   a plugin job's     the follower's answer is final; no follower: `hub_unreachable`
+ *   a same-host send   while the leader answers (`online`, 'follower-peer-v1'): handed to a
+ *                      follower that said `answersOnline`, in place of the daemon's own
+ *                      handleLocal; what it leaves (`needs_leader`), or does not answer in
+ *                      time, goes to the leader, carrying the message id the daemon set, so a
+ *                      delivery made twice is written once
  *
  * ONE rule for "the leader is away": a call goes to the follower only while the follower
  * may write (`mayWrite`, the test `follower.op` applies: the leader quiet for its whole
@@ -24,6 +29,10 @@
  *
  * One attempt per call, timed as a relay to the leader is (relayAttemptMs). A follower
  * socket answers only the relays it was sent.
+ *
+ * `noteOwnAnswer` counts each call the daemon then answers with its own away code while a
+ * follower was there to answer it (a hand-back, or a call while it is linked and may write),
+ * per op: the number task B drives to zero, read in follower.status and server.status.
  */
 
 export const FOLLOWER_GATEWAY_CAPABILITY = 'follower-gateway-v1'
@@ -55,6 +64,8 @@ export interface FollowerGatewayDeps<S> {
   follower(home: string): S | null
   /** Whether that follower may write now (the twin's followerMayWrite: no leader answers it). */
   mayWrite(home: string): boolean
+  /** Whether that follower takes a same-host send while the leader answers (its hello's `answersOnline`). */
+  answersOnline?(ws: S): boolean
   now(): number
   /** Send an event on a socket; false when it could not be written. */
   send(ws: S, ev: string, data: Record<string, unknown>): boolean
@@ -78,6 +89,11 @@ export interface HandOff {
   readable?: boolean
   /** The daemon's own path (a session's call); absent: the follower's answer is final. */
   fallback?: () => void
+  /**
+   * A same-host send while the leader answers: no write gate (its records are `online`), and with
+   * no answer in time `fallback` relays it to the leader (the payload's message id makes it once).
+   */
+  online?: boolean
 }
 
 export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
@@ -94,10 +110,17 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
     return !!home && deps.follower(home) !== null && deps.mayWrite(home)
   }
 
+  /** A follower of `home` takes a same-host send while the leader answers ('follower-peer-v1'). */
+  function answersOnline(home: string | undefined): boolean {
+    const ws = home ? deps.follower(home) : null
+    return ws !== null && deps.answersOnline?.(ws) === true
+  }
+
   /** Hand `call` to the follower. False: nothing was sent (none answers now, or the write failed); the caller goes on. */
   function handOff(call: HandOff, respond: (r: FollowerGatewayResponse) => void): boolean {
     const ws = deps.follower(call.home)
-    if (!ws || !deps.mayWrite(call.home)) return false
+    if (!ws) return false
+    if (call.online ? deps.answersOnline?.(ws) !== true : !deps.mayWrite(call.home)) return false
     const relayId = deps.nextRelayId()
     const entry: Pending = { ws, call, respond, timer: null }
     pending.set(relayId, entry)
@@ -106,7 +129,7 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
     const answerInMs = deps.attemptMs(call.deadline)
     const sent = deps.send(ws, 'gateway-request', {
       relayId, instanceId: deps.instanceId, capability: call.capability, callerSid: call.callerSid, payload: call.payload,
-      ...(call.caller ? { caller: call.caller } : {}), answerInMs,
+      ...(call.caller ? { caller: call.caller } : {}), ...(call.online ? { online: true } : {}), answerInMs,
     })
     if (!sent) {
       pending.delete(relayId)
@@ -126,8 +149,8 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
     pending.delete(relayId)
     deps.clearTimer(e.timer)
     const op = typeof e.call.payload.name === 'string' ? e.call.payload.name : undefined
-    if (e.call.fallback && e.call.readable) {
-      deps.log('info', 'gateway: this host\'s Walnut server did not answer a read, answered here', { relayId, why, op })
+    if (e.call.fallback && (e.call.readable || e.call.online)) {
+      deps.log('info', e.call.online ? 'gateway: this host\'s Walnut server did not answer a same-host send, relayed to the leader' : 'gateway: this host\'s Walnut server did not answer a read, answered here', { relayId, why, op })
       e.call.fallback()
       return
     }
@@ -152,6 +175,31 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
     }
     deps.setTimer(again, JOB_WAIT_STEP_MS)
     return 'waiting'
+  }
+
+  /** Op names counted one by one; past this many, the rest share one row. */
+  const OWN_OPS_MAX = 200
+  const own = { total: 0, byOp: {} as Record<string, number>, byWhy: {} as Record<string, number>, last: null as null | { op: string; why: string; at: number } }
+
+  /**
+   * The daemon answers a call with its own away code (offlineHost.handle) although a follower was
+   * there: `handed_back` (the follower answered needs_leader or an unsupported code, or a read it
+   * did not answer in time) or `follower_linked` (it is linked and may write, and the call was not
+   * handed to it: an outside caller's read, say). One log line each.
+   */
+  function noteOwnAnswer(op: unknown, why: 'handed_back' | 'follower_linked', callerSid?: string): void {
+    const name = typeof op === 'string' && op ? op : '(none)'
+    const key = Object.prototype.hasOwnProperty.call(own.byOp, name) || Object.keys(own.byOp).length < OWN_OPS_MAX ? name : '(other)'
+    own.total++
+    own.byOp[key] = (own.byOp[key] ?? 0) + 1
+    own.byWhy[why] = (own.byWhy[why] ?? 0) + 1
+    own.last = { op: name, why, at: deps.now() }
+    deps.log('info', 'gateway: daemon offline answer used', { op: name, why, ...(callerSid ? { callerSid } : {}), total: own.total })
+  }
+
+  /** What noteOwnAnswer counted since this daemon started. */
+  function ownAnswers(): { total: number; byOp: Record<string, number>; byWhy: Record<string, number>; last: null | { op: string; why: string; at: number } } {
+    return { total: own.total, byOp: { ...own.byOp }, byWhy: { ...own.byWhy }, last: own.last ? { ...own.last } : null }
   }
 
   function holds(relayId: unknown): boolean {
@@ -196,5 +244,5 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
     return { ok: false, error }
   }
 
-  return { answers, handOff, routeJob, holds, settle, dropSocket, responseOf, pendingCount: () => pending.size }
+  return { answers, answersOnline, handOff, routeJob, holds, settle, dropSocket, responseOf, noteOwnAnswer, ownAnswers, pendingCount: () => pending.size }
 }

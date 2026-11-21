@@ -19,6 +19,7 @@ export const hostLocalCalls = defineCapability({
   doors: [],
   routes: [],
   reads: [
+    'src/core/peers/capability-router.ts',
     'src/web/server.ts',
   ],
 })

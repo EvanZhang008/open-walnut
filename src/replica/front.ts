@@ -72,6 +72,10 @@ import { rpcAway } from './ws-rpc-table.js'
 import { replicaRefusal, verifyReplicaToken } from './auth.js'
 import { localCallerOf } from './write-actor.js'
 import { copiesAsOf } from '../core/replication/kind-follower.js'
+import { createHostCallEntry, type HostCallEntry } from './host-call-entry.js'
+import { HOST_CALL_PATH } from '../providers/host-call-client-core.js'
+import { getSelfApiRoot } from '../lib/self-api-root.js'
+import { experimentalEnabled } from '../core/experimental.js'
 
 /** The /_alone/ path the alone page of the plain host server polls (host-server/alone-api.ts). */
 const ALONE_STATE_PATH = '/_alone/state'
@@ -142,6 +146,8 @@ export interface ReplicaFront {
   dispatcher: Dispatcher
   /** Where the daemon's `gateway-request` events go (local-calls.ts); only with `localCalls`. */
   answerLocalCalls(handler: ((event: Record<string, unknown>) => void) | null): void
+  /** Where the daemon's `trigger-delivery` events go (away-trigger-delivery.ts); only with `localCalls`. */
+  answerTriggerDeliveries(handler: ((event: Record<string, unknown>) => void) | null): void
   stop(): Promise<void>
 }
 
@@ -166,6 +172,21 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
   let reported = false
   const boot = crypto.randomBytes(8).toString('hex')
   let localCallHandler: ((event: Record<string, unknown>) => void) | null = null
+  let triggerDeliveryHandler: ((event: Record<string, unknown>) => void) | null = null
+  // The host call entry (host-call-entry.ts), behind the `host_call_entry` experiment read from
+  // this server's copy of the settings: off, the daemon is told no address and gives sessions none.
+  let callEntryOn = false
+  const refreshCallEntry = (): void => {
+    if (!opts.localCalls) return
+    void import('../core/config-manager.js').then((m) => m.getConfig()).then((c) => {
+      callEntryOn = experimentalEnabled(c.experimental, 'host_call_entry')
+    }, () => { /* the next tick reads it again */ })
+  }
+  /** The entry's address the daemon gives new sessions and plugin jobs, or null. */
+  const callUrl = (): string | null => {
+    const root = getSelfApiRoot()
+    return opts.localCalls && callEntryOn && root ? root + HOST_CALL_PATH : null
+  }
 
   const expose: HostExpose = createHostExpose({
     port: env.publicPort,
@@ -181,7 +202,15 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
     accept: (info) => (info.from === 'primary' ? (stream: Duplex) => opts.acceptFromLeader(stream) : null),
     ...(opts.localCalls ? {
       answersLocal: true,
-      onEvent: (event: Record<string, unknown>) => { if (event.ev === 'gateway-request') localCallHandler?.(event) },
+      // The host's unclaimed trigger fires too (away-trigger-delivery.ts): the same capability.
+      deliversTriggers: true,
+      // A same-host message while the leader answers too (away-sends.ts): the same capability.
+      answersOnline: true,
+      onEvent: (event: Record<string, unknown>) => {
+        if (event.ev === 'gateway-request') localCallHandler?.(event)
+        else if (event.ev === 'trigger-delivery') triggerDeliveryHandler?.(event)
+      },
+      helloExtra: (): Record<string, unknown> => { const u = callUrl(); return u ? { callUrl: u } : {} },
     } : {}),
     log: (level, msg, data) => log.web[level](msg, data),
   })
@@ -298,6 +327,21 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
     ...(opts.writeBudgetMs ? { writeBudgetMs: opts.writeBudgetMs } : {}),
   })
 
+  const hostCall: HostCallEntry | null = opts.localCalls ? createHostCallEntry({
+    request: (cmd, params, timeoutMs) => link.request(cmd, params, timeoutMs),
+    capabilities: () => link.capabilities(),
+    linked: () => link.linkState() === 'following',
+    enabled: () => callEntryOn,
+    // An approval's caller proof: the one process holding this connection's client end, as the Mac finds an HTTP caller's.
+    peerPid: async (req) => {
+      const s = req.socket
+      const { clientPidsOf } = await import('../core/approvals/caller-proof.js')
+      const pids = await clientPidsOf({ remoteAddress: s.remoteAddress ?? '', remotePort: s.remotePort ?? 0, localAddress: s.localAddress ?? '', localPort: s.localPort ?? 0 })
+      return pids && pids.length === 1 && pids[0] !== process.pid ? pids[0] : undefined
+    },
+    log: (level, msg, data) => log.web[level](msg, { host: env.label, ...data }),
+  }) : null
+
   function presenceEventOf(t: ToldPresence): PresenceEvent {
     return { answers: t.answers, asOf: copiesAsOf(), host: env.label, hostKey: opts.hostKey?.trim() || null, why: t.why, seq: t.seq, boot }
   }
@@ -323,11 +367,14 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
       forwards: dispatcher.counts(),
       // The host's journal as its daemon says it (follower.status): the Mac's /api/replicas/status shows it.
       journal: (view?.view as { journal?: unknown } | undefined)?.journal ?? null,
+      // This host's call entry: the daemon reads the address from here too (a change of the experiment).
+      ...(opts.localCalls ? { callUrl: callUrl(), offlineAnswers: view?.view.offlineAnswers ?? null } : {}),
     }
   }
 
+  refreshCallEntry()
   link.start()
-  const reportTimer = setInterval(() => { link.report(status()) }, REPORT_MS)
+  const reportTimer = setInterval(() => { refreshCallEntry(); link.report(status()) }, REPORT_MS)
   reportTimer.unref?.()
   const tick = setInterval(() => { look() }, PRESENCE_TICK_MS)
   tick.unref?.()
@@ -337,6 +384,8 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
     middleware(req, res, next) {
       // Which machine its tunnel reaches: answered here, never spliced to the Mac (core/expose/probe.ts).
       if (answerTunnelProbe(req, res, expose.probeToken)) return
+      // This host's own sessions' `walnut` calls (host-call-entry.ts): answered here, whoever leads.
+      if (hostCall?.takes(req)) { void hostCall.handle(req, res); return }
       // No alone page here (WP7): away, a page is the console, served from this
       // replica's copies; the alone page stays the plain host server's. One left
       // open from before the host switched program polls /_alone/state forever
@@ -374,6 +423,7 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
     link,
     dispatcher,
     answerLocalCalls(handler) { localCallHandler = opts.localCalls ? handler : null },
+    answerTriggerDeliveries(handler) { triggerDeliveryHandler = opts.localCalls ? handler : null },
     async stop() {
       clearInterval(reportTimer)
       clearInterval(tick)

@@ -140,6 +140,11 @@ export interface PluginJobDeps {
   baseEnv: () => Record<string, string>
   /** This daemon's agent gateway socket: the job's walnut.ops reach Walnut through it. */
   gatewaySocket: () => string
+  /**
+   * More env for a run (host-call-entry-v1): this host's call entry and a token for the run's id,
+   * when its Walnut's follower said an address; empty otherwise. Absent: none.
+   */
+  callEnv?: (home: string, sid: string) => Record<string, string>
   /** sha256 (hex) of a file's bytes, or null when it cannot be read. */
   sha256File: (file: string) => string | null
   /** The job log's size cap (default 10 MB). */
@@ -631,6 +636,7 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
       const env: Record<string, string> = {
         ...deps.baseEnv(),
         WALNUT_AGENT_SOCKET: deps.gatewaySocket(),
+        ...(deps.callEnv ? deps.callEnv(e.home, sid) : {}),
         WALNUT_PLUGIN_JOB: JSON.stringify({
           plugin: e.spec.plugin, version: e.spec.version, job: e.spec.job, kind: e.spec.kind,
           ...(e.spec.everyMs ? { everyMs: e.spec.everyMs } : {}),

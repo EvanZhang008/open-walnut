@@ -30,7 +30,7 @@ import { defineOp } from './registry.js'
 import { inboxItemsSchema } from '../core/human-inbox/item-schema.js'
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js'
 import { USER_KINDS, USER_KIND_ABOUT_PARAM, USER_KIND_PARAM, USER_KIND_WHY_PARAM, USER_KIND_WORDS_PARAM, DESIGN_REVIEW_PARAM } from '../core/org/user-kind.js'
-import { withOutcome } from './outcome.js'
+import { awayAnswer, withOutcome } from './outcome.js'
 import { PROOF_IN_PLACE_RULE, WORD_TO_USER_RULE } from '../core/org/thread-rules.js'
 import { LIST_MAX } from '../lib/zod-rules.js'
 
@@ -149,6 +149,9 @@ defineOp({
   },
   bind: { method: 'POST', path: '/human-inbox' },
   mapResult: ({ body }) => {
+    // Saved on this host while the server is away (a host's follower): its own words.
+    const away = awayAnswer(body)
+    if (away) return away
     const notice = (body as { outcome?: unknown; notice?: unknown; message?: unknown } | undefined)
     // A caller with no session sent an info letter nobody asked for (core/human-inbox/info-letter-rule.ts).
     if (notice?.outcome === 'notice') return { outcome: 'notice', notice: notice.notice, instruction: String(notice.message ?? '') }

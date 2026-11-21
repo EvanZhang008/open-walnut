@@ -40,6 +40,7 @@ import type { OpenAsk, OpenItemsInput, OpenItemsText, OpenWait } from '../core/s
 import type { LetterCheck } from '../core/human-inbox/letter-check.js'
 import { createTriggerLabel, type TriggerLabels } from '../core/routines/trigger-label.js'
 import { createTriggerWatches, type TriggerWatches } from '../core/routines/trigger-watches.js'
+import { pickHostTriggerTarget, type HostTriggerSession, type HostTriggerTarget } from '../core/routines/host-trigger-target.js'
 
 /**
  * Pending records per Walnut a host keeps for its Mac before it refuses a write: a busy day of
@@ -386,6 +387,8 @@ export interface OfflineHostDeps {
   labels?: TriggerLabels
   /** How a trigger's `watches` reads (trigger-watches.ts): the source twin passes its inlined copy. */
   watches?: TriggerWatches
+  /** Which session here takes a trigger fire (host-trigger-target.ts): the source twin passes its inlined copy. */
+  triggerTarget?: typeof pickHostTriggerTarget
   /**
    * The journal store (offline-journal-core.ts, journal v2). The twins build it (it also
    * migrates v1 journals and answers offline.blob); createOfflineHost builds one in `dir`
@@ -1098,6 +1101,12 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return deps.isLive(sid) && !sessionOf(home, sid)?.acp
   }
 
+  /** This Walnut's sessions whose CLI this host delivers into now (liveHere): a trigger fire's candidates for the host's own server. */
+  function liveSessionsOf(home: string): string[] {
+    const all = (slices.get(home)?.sessions ?? []).concat(startedOf(home))
+    return [...new Set(all.map((s) => s.sid))].filter((sid) => liveHere(home, sid))
+  }
+
   /** The session a gateway caller sid names: an ACP session's runtime id becomes its record id. */
   function callerSidOf(home: string, sid: string): string {
     try {
@@ -1495,20 +1504,89 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return { text: check.text(text) }
   }
 
-  /** A request this host answered: settled in its copy and journaled, with the reply's score (the server keeps it on the replier's task). */
-  function settleHere(home: string, id: string, own: OfflineRequestRow | undefined, replierTaskId: string | undefined, rawScore: unknown): void {
+  /**
+   * A request this host answered: settled in its copy and journaled, with the reply's score (the
+   * server keeps it on the replier's task). `online`: answered while the server answers (handleLocal).
+   */
+  function settleHere(home: string, id: string, own: OfflineRequestRow | undefined, replierTaskId: string | undefined, rawScore: unknown, online = false): void {
     const given = offlineScoreOf(rawScore)
     const score: OfflineReplyScore | undefined = given && replierTaskId ? { ...given, at: new Date(deps.now()).toISOString(), taskId: replierTaskId } : undefined
     if (own) {
       if (own.status === 'pending') {
         own.status = 'replied'
         own.settledAt = new Date(deps.now()).toISOString()
-        append(home, { kind: 'row', row: { ...own }, ...(score ? { score } : {}) })
+        append(home, { kind: 'row', row: { ...own }, ...(score ? { score } : {}) }, online)
       }
     } else if (!journalOf(home).settledCopies.includes(id)) {
       journalOf(home).settledCopies.push(id)
-      append(home, { kind: 'settle', requestId: id, status: 'replied', ...(score ? { score } : {}) })
+      append(home, { kind: 'settle', requestId: id, status: 'replied', ...(score ? { score } : {}) }, online)
     }
+  }
+
+  // ── the mechanics of a peer message this host writes (opTaskSend, localSend, follower.peer) ──
+
+  /**
+   * The request row of a message this host delivers, with what only this host knows at the moment
+   * it is made: a turn under way (the CLI may take the message into it or queue it for the next, so
+   * only the NEXT turn end proves it went unanswered), and the stream offset before the write (the
+   * tailer may still be catching up on older lines, a startup result or a finished turn, while the
+   * delivery is in flight, and none of those answers this message).
+   */
+  function requestRow(o: { id: string; fromSessionId: string; toSessionId: string; toTaskId?: string; preview: string; secs: number; online: boolean }): OfflineRequestRow {
+    const row: OfflineRequestRow = {
+      id: o.id,
+      fromSessionId: o.fromSessionId,
+      toSessionId: o.toSessionId,
+      ...(o.toTaskId ? { toTaskId: o.toTaskId } : {}),
+      preview: o.preview,
+      status: 'pending',
+      createdAt: new Date(deps.now()).toISOString(),
+      deadlineAt: deps.now() + o.secs * 1000,
+      ...(deps.turnActive(o.toSessionId) ? { skipTurnEnds: 1 } : {}),
+      ...(o.online ? { online: true as const } : {}),
+    }
+    const offset = deps.streamOffset(o.toSessionId)
+    if (typeof offset === 'number') row.afterV = offset
+    return row
+  }
+
+  /**
+   * The tail of every peer message this host writes: the reply line under an ask (naming the same
+   * asker's other open requests to this target), the row registered BEFORE the write (the envelope
+   * that names it can be read at once), the write, the row dropped again when nothing was written,
+   * then `row` and `delivery` journaled. `opId`: the delivery record's (a follower's retry key).
+   */
+  async function deliverPeer(home: string, p: { fromSessionId: string; toSessionId: string; toTaskId?: string; envelope: string; messageId: string; row?: OfflineRequestRow; online: boolean; opId?: string }): Promise<DeliverResult> {
+    const row = p.row
+    const text = row ? `${p.envelope}\n${replyTrailer(home, row)}` : p.envelope
+    if (row) journalOf(home).rows[row.id] = row
+    const delivered = await deliverWithTaskRouting(home, p.toSessionId, text, p.messageId)
+    if (!delivered.ok) {
+      if (row) { delete journalOf(home).rows[row.id]; persistJournal(home) }
+      return delivered
+    }
+    // Written into its live CLI: the target has the ask (a silent target's notice reads it).
+    if (row) { row.messageId = p.messageId; row.reachedAt = new Date(deps.now()).toISOString() }
+    if (row) append(home, { kind: 'row', row: { ...row } }, p.online)
+    append(home, {
+      kind: 'delivery', fromSessionId: p.fromSessionId, toSessionId: p.toSessionId, ...(p.toTaskId ? { toTaskId: p.toTaskId } : {}),
+      messageId: p.messageId, ...(row ? { requestId: row.id } : {}),
+    }, p.online, p.opId ? { opId: p.opId } : {})
+    return delivered
+  }
+
+  /**
+   * The tail of every answer this host writes into its asker's session: the write, then the request
+   * settled here (this host's own row, or the copy's) with the reply's score, and the delivery
+   * journaled. Nothing written: nothing settled.
+   */
+  async function deliverReply(home: string, p: { fromSessionId: string; toSessionId: string; requestId: string; text: string; messageId: string; replierTaskId?: string; score?: unknown; online: boolean; opId?: string }): Promise<DeliverResult> {
+    const own = journalOf(home).rows[p.requestId]
+    const delivered = await deliverWithTaskRouting(home, p.toSessionId, p.text, p.messageId)
+    if (!delivered.ok) return delivered
+    settleHere(home, p.requestId, own, p.replierTaskId, p.score, p.online)
+    append(home, { kind: 'delivery', fromSessionId: p.fromSessionId, toSessionId: p.toSessionId, messageId: p.messageId, requestId: p.requestId, reply: true }, p.online, p.opId ? { opId: p.opId } : {})
+    return delivered
   }
 
   /**
@@ -1583,16 +1661,15 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       title: me.title, shortId: callerSid.slice(0, 8), host: slice.host, sessionId: callerSid, taskId: me.taskId,
     }, escapeSenderWords(admitted.text), { title: typeof args.title === 'string' ? args.title : undefined })
     const mid = messageId(args.messageId)
-    const delivered = remoteHost
-      ? await deps.relay!(home, { toHost: remoteHost, toSid: row.fromSessionId, text: wrapped, messageId: mid, requestId: id, reply: true, fromSessionId: callerSid })
-      : await deliverWithTaskRouting(home, row.fromSessionId, wrapped, mid)
-    if (!delivered.ok) {
-      if (remoteHost) return needsServer(`The asking session runs on ${remoteHost} and the answer could not be routed there (${delivered.reason}); answering it`)
-      return fail('internal', `delivery to the asking session failed: ${delivered.reason}`)
+    if (remoteHost) {
+      const relayed = await deps.relay!(home, { toHost: remoteHost, toSid: row.fromSessionId, text: wrapped, messageId: mid, requestId: id, reply: true, fromSessionId: callerSid })
+      if (!relayed.ok) return needsServer(`The asking session runs on ${remoteHost} and the answer could not be routed there (${relayed.reason}); answering it`)
+      // The host that writes the text into the asker's session journals the delivery: not this one.
+      settleHere(home, id, own, me.taskId, args.score)
+    } else {
+      const delivered = await deliverReply(home, { fromSessionId: callerSid, toSessionId: row.fromSessionId, requestId: id, text: wrapped, messageId: mid, replierTaskId: me.taskId, score: args.score, online: false })
+      if (!delivered.ok) return fail('internal', `delivery to the asking session failed: ${delivered.reason}`)
     }
-    settleHere(home, id, own, me.taskId, args.score)
-    // The host that wrote the text into the asker's session journals the delivery.
-    if (!remoteHost) append(home, { kind: 'delivery', fromSessionId: callerSid, toSessionId: row.fromSessionId, messageId: mid, requestId: id, reply: true })
     deps.log('info', 'offline host: reply delivered', { home, requestId: id, from: callerSid, to: row.fromSessionId, viaLeader: !!remoteHost })
     return ok({
       delivery: 'queued', offline: true, targetSessionId: row.fromSessionId, repliedTo: id, messageId: mid,
@@ -1680,44 +1757,16 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const me = callerIdentity(home, callerSid)
     // Same default as the server: a session asking another session wants the answer, except a
     // note up to its own leader, which reports.
-    let row: OfflineRequestRow | undefined
-    if (args.expect_reply !== false && !(args.expect_reply === undefined && !args.hands_on && reportsUp(home, me.taskId, target.taskId))) {
-      const implicit = args.expect_reply === undefined
-      row = {
-        id: `rq-${deps.randomHex(6)}`,
-        fromSessionId: callerSid,
-        toSessionId: targetSid,
-        ...(target.taskId ? { toTaskId: target.taskId } : {}),
-        preview: kit.requestPreview(text),
-        status: 'pending',
-        createdAt: new Date(deps.now()).toISOString(),
-        deadlineAt: deps.now() + clampSecs(args.reply_timeout, implicit) * 1000,
-        // Written mid-turn, the CLI may take the message into the running turn or
-        // queue it for the next: only the NEXT turn end proves it went unanswered.
-        ...(deps.turnActive(targetSid) ? { skipTurnEnds: 1 } : {}),
-      }
-      // Taken BEFORE the write: the tailer may still be catching up on older
-      // lines (a startup result, a finished turn) while the delivery is in
-      // flight, and none of those answers this message.
-      const offset = deps.streamOffset(targetSid)
-      if (typeof offset === 'number') row.afterV = offset
-    }
-    let envelope = kit.buildPeerWrapper(escapeSenderWords(admitted.text), {
+    const row = args.expect_reply !== false && !(args.expect_reply === undefined && !args.hands_on && reportsUp(home, me.taskId, target.taskId))
+      ? requestRow({ id: `rq-${deps.randomHex(6)}`, fromSessionId: callerSid, toSessionId: targetSid, toTaskId: target.taskId, preview: kit.requestPreview(text), secs: clampSecs(args.reply_timeout, args.expect_reply === undefined), online: false })
+      : undefined
+    const envelope = kit.buildPeerWrapper(escapeSenderWords(admitted.text), {
       title: me.title, shortId: callerSid.slice(0, 8), sessionId: callerSid, taskId: me.taskId,
       host: slice.host, ...(row ? { requestId: row.id } : {}),
     }, { title: typeof args.title === 'string' ? args.title : undefined })
-    if (row) envelope = `${envelope}\n${replyTrailer(home, row)}`
     const mid = messageId(args.messageId)
-    // The row exists before the envelope that names it can be read.
-    if (row) journalOf(home).rows[row.id] = row
-    const delivered = await deliverWithTaskRouting(home, targetSid, envelope, mid)
-    if (!delivered.ok) {
-      if (row) { delete journalOf(home).rows[row.id]; persistJournal(home) }
-      return fail('internal', `delivery failed: ${delivered.reason}`)
-    }
-    if (row) { row.messageId = mid; row.reachedAt = new Date(deps.now()).toISOString() }
-    if (row) append(home, { kind: 'row', row: { ...row } })
-    append(home, { kind: 'delivery', fromSessionId: callerSid, toSessionId: targetSid, ...(target.taskId ? { toTaskId: target.taskId } : {}), messageId: mid, ...(row ? { requestId: row.id } : {}) })
+    const delivered = await deliverPeer(home, { fromSessionId: callerSid, toSessionId: targetSid, toTaskId: target.taskId, envelope, messageId: mid, row, online: false })
+    if (!delivered.ok) return fail('internal', `delivery failed: ${delivered.reason}`)
     deps.log('info', 'offline host: message delivered', { home, from: callerSid, to: targetSid, requestId: row?.id, messageId: mid })
     return ok({
       delivery: 'queued', offline: true, targetSessionId: targetSid, targetTitle: target.title ?? null,
@@ -1836,40 +1885,16 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (denied) return denied
     const slice = slices.get(home)!
     const me = callerIdentity(home, callerSid)
-    let row: OfflineRequestRow | undefined
-    if (args.expect_reply !== false && !(args.expect_reply === undefined && !args.hands_on && reportsUp(home, me.taskId, target.taskId))) {
-      const implicit = args.expect_reply === undefined
-      row = {
-        id: `rq-${deps.randomHex(6)}`,
-        fromSessionId: callerSid,
-        toSessionId: target.sid,
-        ...(target.taskId ? { toTaskId: target.taskId } : {}),
-        preview: kit.requestPreview(text),
-        status: 'pending',
-        createdAt: new Date(deps.now()).toISOString(),
-        deadlineAt: deps.now() + clampSecs(args.reply_timeout, implicit) * 1000,
-        ...(deps.turnActive(target.sid) ? { skipTurnEnds: 1 } : {}),
-        online: true,
-      }
-      const offset = deps.streamOffset(target.sid)
-      if (typeof offset === 'number') row.afterV = offset
-    }
-    let envelope = kit.buildPeerWrapper(escapeSenderWords(text), {
+    const row = args.expect_reply !== false && !(args.expect_reply === undefined && !args.hands_on && reportsUp(home, me.taskId, target.taskId))
+      ? requestRow({ id: `rq-${deps.randomHex(6)}`, fromSessionId: callerSid, toSessionId: target.sid, toTaskId: target.taskId, preview: kit.requestPreview(text), secs: clampSecs(args.reply_timeout, args.expect_reply === undefined), online: true })
+      : undefined
+    const envelope = kit.buildPeerWrapper(escapeSenderWords(text), {
       title: me.title, shortId: callerSid.slice(0, 8), sessionId: callerSid, taskId: me.taskId,
       host: slice.host, ...(row ? { requestId: row.id } : {}),
     }, { title: typeof args.title === 'string' ? args.title : undefined })
-    if (row) envelope = `${envelope}\n${replyTrailer(home, row)}`
-    if (row) journalOf(home).rows[row.id] = row
-    const delivered = await deliverWithTaskRouting(home, target.sid, envelope, mid)
-    if (!delivered.ok) {
-      // Nothing was written: the server may still reach it (it resumes a stopped CLI).
-      if (row) { delete journalOf(home).rows[row.id]; persistJournal(home) }
-      return null
-    }
-    // Written into its live CLI: the target has the ask (the server's silent-target notice reads it).
-    if (row) { row.messageId = mid; row.reachedAt = new Date(deps.now()).toISOString() }
-    if (row) append(home, { kind: 'row', row: { ...row } }, true)
-    append(home, { kind: 'delivery', fromSessionId: callerSid, toSessionId: target.sid, ...(target.taskId ? { toTaskId: target.taskId } : {}), messageId: mid, ...(row ? { requestId: row.id } : {}) }, true)
+    // Nothing written: the server may still reach it (it resumes a stopped CLI).
+    const delivered = await deliverPeer(home, { fromSessionId: callerSid, toSessionId: target.sid, toTaskId: target.taskId, envelope, messageId: mid, row, online: true })
+    if (!delivered.ok) return null
     deps.log('info', 'host: message delivered on this host', { home, from: callerSid, to: target.sid, requestId: row?.id, messageId: mid })
     return sentResult(home, target, { requestId: row?.id, messageId: mid })
   }
@@ -1899,19 +1924,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const wrapped = kit.buildReplyDeliveryText(row, {
       title: me.title, shortId: callerSid.slice(0, 8), host: slice.host, sessionId: callerSid, taskId: me.taskId,
     }, escapeSenderWords(text), { title: typeof args.title === 'string' ? args.title : undefined })
-    const delivered = await deliverWithTaskRouting(home, asker, wrapped, mid)
+    const delivered = await deliverReply(home, { fromSessionId: callerSid, toSessionId: asker, requestId: id, text: wrapped, messageId: mid, replierTaskId: me.taskId, online: true })
     if (!delivered.ok) return null
-    if (own) {
-      if (own.status === 'pending') {
-        own.status = 'replied'
-        own.settledAt = new Date(deps.now()).toISOString()
-        append(home, { kind: 'row', row: { ...own } }, true)
-      }
-    } else {
-      journalOf(home).settledCopies.push(id)
-      append(home, { kind: 'settle', requestId: id, status: 'replied' }, true)
-    }
-    append(home, { kind: 'delivery', fromSessionId: callerSid, toSessionId: asker, messageId: mid, requestId: id, reply: true }, true)
     deps.log('info', 'host: reply delivered on this host', { home, requestId: id, from: callerSid, to: asker, messageId: mid })
     return sentResult(home, { sid: asker, taskId: askerRow?.taskId, title: askerRow?.title }, { repliedTo: id, messageId: mid })
   }
@@ -1923,6 +1937,25 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
    * this host picked, so a delivery the server makes again is written once.
    */
   async function handleLocal(home: string, rawCallerSid: string, capability: string, payload: Record<string, unknown>): Promise<GatewayResult | null> {
+    const call = localCall(home, rawCallerSid, capability, payload)
+    if (!call) return null
+    try {
+      return call.args.in_reply_to !== undefined
+        ? await localReply(home, call.callerSid, call.args, call.text, call.mid)
+        : await localSend(home, call.callerSid, call.args, call.text, call.mid)
+    } catch (err) {
+      deps.log('warn', 'host: same-host delivery failed, leaving it to the server', { home, error: (err as Error).message })
+      return null
+    }
+  }
+
+  /**
+   * The plain same-host send handleLocal may take, judged on its arguments (the shape the server
+   * alone answers is left out), with the message id it goes as set on the payload; null: the
+   * server's. The gateway asks it first for a host's own Walnut server too, which then decides the
+   * rest (replica/away-sends.ts): the payload carries the same message id either way.
+   */
+  function localCall(home: string, rawCallerSid: string, capability: string, payload: Record<string, unknown>): { callerSid: string; args: Record<string, unknown>; text: string; mid: string } | null {
     if (!deps.pendingPrompt || capability !== 'tools.call') return null
     const callerSid = callerSidOf(home, rawCallerSid)
     const name = typeof payload.name === 'string' ? payload.name : ''
@@ -1947,15 +1980,115 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       const stable = callId ? callId.slice(3).split('_').join('-') : ''
       payload.args = { ...args, messageId: stable ? `qm-host-${stable}` : `qm-host-${deps.randomHex(8)}` }
     }
-    const mid = String((payload.args as Record<string, unknown>).messageId)
-    try {
-      return args.in_reply_to !== undefined
-        ? await localReply(home, callerSid, args, text, mid)
-        : await localSend(home, callerSid, args, text, mid)
-    } catch (err) {
-      deps.log('warn', 'host: same-host delivery failed, leaving it to the server', { home, error: (err as Error).message })
-      return null
+    return { callerSid, args, text, mid: String((payload.args as Record<string, unknown>).messageId) }
+  }
+
+  // ── a peer message the host's own Walnut server decided (`follower.peer`, follower-peer-v1) ──
+  // The follower (replica/away-sends.ts) resolved the target from its copies, ran the server's
+  // refusals and the reply rule, and wrote the words and their envelope. This host does what only
+  // it can, with the same tails as its own answers: the row's turn and stream facts, the reply
+  // line, the write into the live CLI, the journal. `online`: the server answers (handleLocal's
+  // case): whatever this host cannot be sure of (a prompt pending, a copy it answered once, a
+  // failed write) is left to the server, `needs_leader {why: 'server_delivers'}`.
+
+  const peerInFlight = new Map<string, Promise<GatewayResult>>()
+
+  /** What a saved peer message answers its retry (its delivery record, keyed by the follower's op id). */
+  function peerAnswerOf(first: Record<string, unknown>): Record<string, unknown> {
+    const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined)
+    const requestId = str(first.requestId)
+    return {
+      delivered: true, targetSessionId: str(first.toSessionId) ?? null, messageId: str(first.messageId) ?? null,
+      ...(str(first.toTaskId) ? { targetTaskId: first.toTaskId } : {}),
+      ...(requestId ? (first.reply === true ? { repliedTo: requestId } : { requestId }) : {}),
+      seq: first.seq, opId: first.opId,
     }
+  }
+
+  async function handleFollowerPeer(home: string, req: Record<string, unknown>): Promise<GatewayResult> {
+    try {
+      const base = typeof req.opId === 'string' && OP_ID_RE.test(req.opId) ? req.opId : ''
+      if (!base) return fail('bad_request', 'follower.peer needs the op id of the call')
+      // One call answering several askers writes one message per asker: each its own key.
+      const part = typeof req.part === 'number' && Number.isInteger(req.part) && req.part > 0 && req.part < 100 ? req.part : 0
+      const opId = part ? `${base.slice(0, 72)}-p${part}` : base
+      const key = `${home}\n${opId}`
+      // A retry while the first still writes (its answer late) waits for that one: written once.
+      const running = peerInFlight.get(key)
+      if (running) {
+        const first = await running
+        return first.ok ? ok({ ...first.result, duplicate: true }) : first
+      }
+      const saved = journal.byOpId(home, opId)
+      if (saved) {
+        deps.log('info', 'offline host: a follower\'s peer message asked again, written once', { home, opId, seq: saved.seq })
+        return ok({ ...peerAnswerOf(saved as unknown as Record<string, unknown>), duplicate: true })
+      }
+      const run = followerPeer(home, req, opId).catch((err: Error) => fail('internal', `offline host error: ${err.message}`))
+      peerInFlight.set(key, run)
+      try { return await run } finally { if (peerInFlight.get(key) === run) peerInFlight.delete(key) }
+    } catch (err) {
+      deps.log('error', 'offline host: a follower\'s peer message failed', { home, error: (err as Error).message })
+      return fail('internal', `offline host error: ${(err as Error).message}`)
+    }
+  }
+
+  async function followerPeer(home: string, req: Record<string, unknown>, opId: string): Promise<GatewayResult> {
+    const str = (v: unknown) => (typeof v === 'string' ? v : '')
+    const online = req.online === true
+    const from = str(req.fromSessionId)
+    if (req.kind === 'hold') {
+      // Its target runs nowhere here: held for the server as this host's own answer holds it (holdWrite).
+      if (online) return fail('bad_request', 'follower.peer: a message is held only while the server is away')
+      const args = req.args && typeof req.args === 'object' && !Array.isArray(req.args) ? req.args as Record<string, unknown> : null
+      if (!args) return fail('bad_request', 'follower.peer: a held message needs its arguments')
+      const held = holdWrite(home, from, 'tools.call', { name: 'task_send', args, ...(typeof req.callId === 'string' ? { callId: req.callId } : {}) })
+      return held ?? fail('needs_leader', 'this host cannot hold that message for the server', { detail: { why: 'not_held' } })
+    }
+    const to = str(req.toSessionId)
+    const text = str(req.text)
+    const mid = /^qm-[A-Za-z0-9-]{1,64}$/.test(str(req.messageId)) ? str(req.messageId) : ''
+    if (!from || !to || !text.trim() || !mid) return fail('bad_request', 'follower.peer needs fromSessionId, toSessionId, text and a qm-… messageId')
+    const leave = (why: string) => fail('needs_leader', `${why}; the Walnut server delivers it`, { detail: { why: 'server_delivers' } })
+    if (!slices.has(home)) return fail('needs_leader', 'this host holds no copy for that Walnut', { detail: { why: 'no_copy' } })
+    if (!sessionOf(home, from)) return fail('bad_request', 'the sender is not a session of that Walnut on this host')
+    if (!sessionOf(home, to) || !liveHere(home, to)) return fail('needs_leader', 'that session of this Walnut is not running on this host', { detail: { why: 'not_running_here' } })
+    if (online && deps.pendingPrompt?.(to)) return leave('the session waits on a permission prompt')
+    if (req.kind === 'send') {
+      const ask = req.ask && typeof req.ask === 'object' && !Array.isArray(req.ask) ? req.ask as Record<string, unknown> : null
+      const rqId = ask ? str(ask.id) : ''
+      if (ask && (!/^rq-[a-f0-9]{6,}$/.test(rqId) || journalOf(home).rows[rqId])) return fail('bad_request', 'follower.peer: the request needs a new rq-… id')
+      // The brakes the same message meets on this host's own path: the server's peer throttle while
+      // it answers (handleLocal), the away write budget otherwise (opTaskSend); a full journal either way.
+      const denied = (online ? admitPeerSend(from, to, str(req.dupText) || text) : admitWrite(from)) ?? roomFor(home)
+      if (denied) return denied
+      const toTaskId = str(req.toTaskId) || undefined
+      const secs = typeof ask?.secs === 'number' && Number.isFinite(ask.secs) ? Math.min(86_400, Math.max(60, Math.floor(ask.secs))) : DEFAULT_REPLY_SECS
+      const row = ask ? requestRow({ id: rqId, fromSessionId: from, toSessionId: to, toTaskId, preview: str(ask.preview), secs, online }) : undefined
+      const delivered = await deliverPeer(home, { fromSessionId: from, toSessionId: to, toTaskId, envelope: text, messageId: mid, row, online, opId })
+      if (!delivered.ok) return online ? leave(`this host could not write it (${delivered.reason})`) : fail('internal', `delivery failed: ${delivered.reason}`)
+      deps.log('info', 'offline host: a follower\'s message delivered', { home, from, to, requestId: row?.id, messageId: mid, online })
+      return ok({ delivered: true, targetSessionId: to, ...(toTaskId ? { targetTaskId: toTaskId } : {}), messageId: mid, ...(row ? { requestId: row.id } : {}) })
+    }
+    if (req.kind === 'reply') {
+      const requestId = str(req.requestId)
+      if (!/^rq-[a-f0-9]{6,}$/.test(requestId)) return fail('bad_request', 'follower.peer: a reply needs its rq-… id')
+      // A copy this host already answered once: a second answer is the server's (it says "late").
+      if (online && !journalOf(home).rows[requestId] && journalOf(home).settledCopies.includes(requestId)) return leave('this host answered that request once already')
+      const denied = (online ? null : admitWrite(from)) ?? roomFor(home)
+      if (denied) return denied
+      const delivered = await deliverReply(home, {
+        fromSessionId: from, toSessionId: to, requestId, text, messageId: mid,
+        replierTaskId: str(req.replierTaskId) || undefined, score: req.score, online, opId,
+      })
+      if (!delivered.ok) return online ? leave(`this host could not write it (${delivered.reason})`) : fail('internal', `delivery to the asking session failed: ${delivered.reason}`)
+      // The asker's other requests this one answer settles (in_reply_to as a list): it reads it once.
+      const also = Array.isArray(req.alsoSettle) ? req.alsoSettle.filter((x): x is string => typeof x === 'string' && /^rq-[a-f0-9]{6,}$/.test(x)) : []
+      for (const id of also) settleHere(home, id, journalOf(home).rows[id], str(req.replierTaskId) || undefined, req.score, online)
+      deps.log('info', 'offline host: a follower\'s reply delivered', { home, requestId, from, to, messageId: mid, online })
+      return ok({ delivered: true, targetSessionId: to, messageId: mid, repliedTo: requestId, ...(also.length ? { alsoSettled: also } : {}) })
+    }
+    return fail('bad_request', 'follower.peer: kind is send or reply')
   }
 
   function opQueued(home: string, callerSid: string, name: string, rawArgs: Record<string, unknown>): GatewayResult {
@@ -2034,9 +2167,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (mode === 'replace') {
       return fail('needs_leader', 'A replace of MEMORY.md can only be made while the Walnut server answers (this host does not hold the file it would replace); nothing was saved. An append is saved here.', { detail: { why: 'agent-memory-replace' } })
     }
-    const content = typeof args.content === 'string' ? args.content : null
-    if (content === null || !content.trim()) return fail('bad_request', 'content must be a non-empty string')
-    if (content.length > AGENT_MEMORY_MAX) return fail('agent_memory_too_long', `the entry is ${content.length} characters, over the ${AGENT_MEMORY_MAX}-character limit of MEMORY.md; nothing was saved`)
+    const bad = memoryContentError(args.content)
+    if (bad) return bad
     const named = typeof args.task === 'string' && args.task.trim() ? args.task.trim() : ''
     const ref = named || (sessionOf(home, callerSid)?.taskId ?? '')
     if (!ref) return fail('bad_request', 'task is required (this session has no task here)')
@@ -2045,17 +2177,37 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const taskId = task ? task.id : TASK_ID_RE.test(ref) ? ref : ''
     if (!taskId) return needsServer(`Task ${ref} is not in this host's offline copy; writing its MEMORY.md`, home)
     if (task && task.phase === 'COMPLETE') return fail('task_complete', `"${task.title}" is complete: its MEMORY.md is kept as it was.`)
-    const record: OfflineRecordV2 & Record<string, unknown> = { kind: 'agent-memory', taskId, mode: 'append', content }
     // Under the op id the Mac's route gives the same call (memoryWriteOpId): a retry of it is this
     // record here, and one entry at the Mac whether the record drains first or the retry reaches
     // the Mac first. Two calls with the same words are two entries.
     const opId = typeof callId === 'string' && /^oc-[A-Za-z0-9_-]{8,48}$/.test(callId) ? memoryWriteOpId(callId, ref) : undefined
-    const saved = append(home, record, false, { actor: { kind: 'session', sid: callerSid }, ...(opId ? { opId } : {}), coalesce: false, admit: () => admitWrite(callerSid) ?? roomFor(home) })
+    return appendAgentMemory(home, { kind: 'session', sid: callerSid }, callerSid, taskId, args.content, opId)
+  }
+
+  function memoryContentError(content: unknown): GatewayResult | null {
+    if (typeof content !== 'string' || !content.trim()) return fail('bad_request', 'content must be a non-empty string')
+    if (content.length > AGENT_MEMORY_MAX) return fail('agent_memory_too_long', `the entry is ${content.length} characters, over the ${AGENT_MEMORY_MAX}-character limit of MEMORY.md; nothing was saved`)
+    return null
+  }
+
+  /**
+   * The `agent-memory` append record, the one way in for a session's call answered here
+   * (opAgentMemoryWrite) and the follower's (followerCall): the task already decided.
+   */
+  function appendAgentMemory(home: string, actor: import('./offline-journal-core.js').JournalActor, budgetKey: string, taskId: string, content: unknown, opId?: string): GatewayResult {
+    const bad = memoryContentError(content)
+    if (bad) return bad
+    const record: OfflineRecordV2 & Record<string, unknown> = { kind: 'agent-memory', taskId, mode: 'append', content: content as string }
+    const saved = append(home, record, false, { actor, ...(opId ? { opId } : {}), coalesce: false, admit: () => admitWrite(budgetKey) ?? roomFor(home) })
     const no = refusal(saved)
     if (no) return no
-    deps.log('info', 'offline host: write queued', { home, op: 'agent_memory_write', taskId, callerSid, kind: 'agent-memory', seq: saved.ok ? saved.seq : undefined })
+    deps.log('info', 'offline host: write queued', { home, op: 'agent_memory_write', taskId, actor: budgetKey, kind: 'agent-memory', seq: saved.ok ? saved.seq : undefined })
+    return memoryAnswer(taskId, saved.ok && saved.duplicate === true, saved.ok ? saved.seq : undefined)
+  }
+
+  function memoryAnswer(taskId: string, duplicate: boolean, seq?: number): GatewayResult {
     return ok({
-      queued: true, offline: true, task_id: taskId, mode: 'append', ...(saved.ok && saved.duplicate ? { duplicate: true } : {}),
+      queued: true, offline: true, task_id: taskId, mode: 'append', ...(duplicate ? { duplicate: true } : {}), ...(seq !== undefined ? { seq } : {}),
       outcome: 'Saved on this host; Walnut adds this entry to the task\'s MEMORY.md, after what it holds then, when the server reconnects.',
       next: 'Nothing else is required. Do not repeat the call.',
     })
@@ -2144,12 +2296,18 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
           // A note save's retry hands the editor its lock again (WP11): the hash it saved.
           const n = first as unknown as { oursHash?: unknown; noteId?: unknown }
           const noteBits = first.kind === 'note' ? { ...(typeof n.oursHash === 'string' ? { contentHash: n.oursHash } : {}), ...(typeof n.noteId === 'string' ? { noteId: n.noteId } : {}) } : {}
+          // A call the follower answers (followerCall) is answered again as its first attempt was.
+          const again = followerCallAgain(home, first as unknown as Record<string, unknown>)
+          if (again) return again
           return ok({ queued: true, offline: true, kind: first.kind, seq: first.seq, opId: String(first.opId), rev: first.rev ?? 1, duplicate: true, ...(typeof firstTask === 'string' ? { taskId: firstTask } : {}), ...noteBits })
         }
       }
       const opId = typeof req.opId === 'string' ? req.opId : `op-${deps.randomHex(8)}`
       // WP11: a note save (cap note-journal-v1); its own checks and lock.
       if (name === 'note_put' || name === 'note_delete') return followerNote(home, name, args, actor, opId)
+      // Task B: a session's or plugin job's call the follower decided (follower-calls).
+      const call = followerCall(home, name, args, actor, opId, req.base && typeof req.base === 'object' && !Array.isArray(req.base) ? req.base as Record<string, unknown> : null)
+      if (call) return call
       const kind = FOLLOWER_OP_KINDS[name] ?? (deps.boards && deps.boards.WRITE_OPS.indexOf(name) !== -1 ? 'board' : '')
       if (!kind) return fail('needs_leader', `${name || 'that write'} needs your Mac`, { detail: { why: 'not_queueable' } })
       if (!drainsKind(home, kind) || (actor.kind === 'device' && !drainsKind(home, 'device-actor'))) {
@@ -2228,6 +2386,94 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       deps.log('error', 'offline host: follower write failed', { home, error: (err as Error).message })
       return fail('internal', `offline host error: ${(err as Error).message}`)
     }
+  }
+
+  // ── follower-calls: a session's or plugin job's call its follower decided (task B) ──
+  // The follower resolved the task, the target and the rules with its copies (replica/away-calls.ts,
+  // away-triggers.ts); here only the mechanics, through the very record builders this host's own
+  // answers use, so the Mac drains the same records. Plain follower.op kinds: an older daemon
+  // answers them `not_queueable`, and its follower hands the call back as before.
+
+  function followerCall(
+    home: string, name: string, args: Record<string, unknown>, actor: import('./offline-journal-core.js').JournalActor, opId: string, given: Record<string, unknown> | null,
+  ): GatewayResult | null {
+    const budgetKey = budgetOfActor(actor)
+    const sid = actor.kind === 'session' ? actor.sid : ''
+    const tooOld = () => fail('needs_leader', 'your Mac runs an older Walnut that cannot take this change later; it needs your Mac', { detail: { why: 'mac_too_old' } })
+    const needsMac = (what: string) => fail('needs_leader', `${what} needs your Mac`, { detail: { why: 'routine_writes_need_mac' } })
+    switch (name) {
+      case 'agent_memory_write': {
+        const task = typeof args.task === 'string' ? args.task.trim() : ''
+        if (!task) return fail('bad_request', 'agent_memory_write needs "task"')
+        // MEMORY.md as its own kind when the Mac drains it; a memory folder note, a task the follower
+        // could not name (`held`), or an older Mac: the held op the Mac replays under the call's own
+        // id (holdWrite's record), as this host's own answer holds it.
+        if (args.file === undefined && args.held !== true && drainsKind(home, 'agent-memory')) return appendAgentMemory(home, actor, budgetKey, task, args.content, opId)
+        if (!sid || !drainsKind(home, 'held-op')) return tooOld()
+        const held: Record<string, unknown> = { content: args.content, task, ...(typeof args.file === 'string' ? { file: args.file } : {}) }
+        return appendHeld(home, sid, 'agent_memory_write', held, args.callId, opId)
+      }
+      case 'human_inbox_send':
+        if (!deps.letters || !drainsKind(home, 'letter')) return tooOld()
+        return appendLetter(home, actor, budgetKey, args, opId)
+      case 'trigger_create': {
+        if (!createsTriggers(home)) return tooOld()
+        if (!sid) return needsMac('A trigger a plugin job makes')
+        const p = triggerPlanOf(args)
+        if (!p) return fail('bad_request', 'trigger_create: the follower sent an incomplete trigger')
+        const armed = armTrigger(home, sid, p, opId)
+        if ('error' in armed) return armed.error
+        const w = args.park as { wait_until?: unknown } | undefined
+        const waitUntil = w && typeof w.wait_until === 'string' ? w.wait_until : undefined
+        const park = w && typeof w === 'object' ? followerPark(home, actor, budgetKey, p.taskId, waitUntil, opId, given) : null
+        return triggerArmedAnswer(home, armed.id, p, parkWords(p, park, waitUntil))
+      }
+      case 'trigger_pause': case 'trigger_resume': case 'trigger_delete':
+        if (!deps.triggers || !sid) return needsMac(`${name} here`)
+        return opTriggerWrite(home, sid, name, args, needsMac, opId)
+    }
+    return null
+  }
+
+  /** A trigger the follower decided, as armTrigger takes it (null: not whole). */
+  function triggerPlanOf(a: Record<string, unknown>): TriggerPlan | null {
+    const str = (v: unknown) => (typeof v === 'string' ? v : null)
+    const run = str(a.run); const prompt = str(a.prompt); const description = str(a.description); const name = str(a.name); const taskId = str(a.taskId)
+    const everyMs = a.everyMs; const timeoutSeconds = a.timeoutSeconds
+    if (!run || !prompt || !description || !name || !taskId || typeof everyMs !== 'number' || !(everyMs >= 10_000)) return null
+    if (typeof timeoutSeconds !== 'number' || !Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 300) return null
+    if (a.max !== undefined && (typeof a.max !== 'number' || !Number.isInteger(a.max) || a.max < 0)) return null
+    return {
+      run, prompt, description, name, everyMs: Math.floor(everyMs), taskId, cwd: str(a.cwd) ?? '', timeoutSeconds,
+      ...(typeof a.max === 'number' ? { max: a.max } : {}), watches: str(a.watches), own: a.own === true,
+    }
+  }
+
+  /** The park a follower's trigger_create asked for (wait:true): a task-fields record on the base the follower showed. */
+  function followerPark(
+    home: string, actor: import('./offline-journal-core.js').JournalActor, budgetKey: string, taskId: string, waitUntil: string | undefined, opId: string, given: Record<string, unknown> | null,
+  ): GatewayResult {
+    if (!drainsKind(home, 'task-fields')) return fail('needs_leader', 'your Mac runs an older Walnut that cannot take a park later')
+    const wait_until = waitUntil ?? new Date(deps.now() + 4 * 3_600_000).toISOString()
+    const built = taskFieldsRecord(home, null, 'task_update', { id: taskId, phase: 'WAITING', wait_until }, given)
+    if ('error' in built) return built.error
+    const saved = refusal(append(home, built.record, false, { actor, opId: `${opId.slice(0, 74)}-park`, coalesce: true, limit: true, admit: () => admitWrite(budgetKey) ?? roomFor(home) }))
+    return saved ?? ok({ queued: true })
+  }
+
+  /** The answer a retried follower call gets: the one its first attempt got (null: not such a record). */
+  function followerCallAgain(home: string, r: Record<string, unknown>): GatewayResult | null {
+    const seq = typeof r.seq === 'number' ? r.seq : 0
+    if (r.kind === 'agent-memory' && typeof r.taskId === 'string') return memoryAnswer(r.taskId, true, seq)
+    if (r.kind === 'letter' && typeof r.letterId === 'string') return letterAnswer(home, r.letterId, seq, true)
+    if (r.kind !== 'op' || typeof r.op !== 'string') return null
+    const a = (r.args ?? {}) as Record<string, unknown>
+    if (r.op === 'trigger_create' && typeof a.id === 'string') {
+      const plan = { name: String(a.name ?? ''), description: String(a.description ?? ''), everyMs: Number(a.every) || 0, run: String(a.run ?? ''), cwd: typeof a.cwd === 'string' ? a.cwd : '', taskId: String(a.session ?? '') }
+      return triggerArmedAnswer(home, a.id, plan, '', true)
+    }
+    if (TRIGGER_WRITE_OPS.indexOf(r.op) !== -1 && r.trigger && typeof r.trigger === 'object') return triggerChangedAnswer(r.op, r.trigger as OfflineTrigger, true)
+    return null
   }
 
   /** The Board a follower write names as its base (the replica's copy plus overlay), or undefined. */
@@ -2330,6 +2576,15 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
    * session can name the letter now and reply in its thread once the server is back.
    */
   function opLetter(home: string, callerSid: string, args: Record<string, unknown>): GatewayResult {
+    return appendLetter(home, { kind: 'session', sid: callerSid }, callerSid, args)
+  }
+
+  /**
+   * A letter's checks, blob and `letter` record: a session's call answered here (opLetter) and
+   * the follower's (followerCall) alike. `opId`: the follower's (a retry of its write is the first
+   * record); this host's own call mints one.
+   */
+  function appendLetter(home: string, actor: import('./offline-journal-core.js').JournalActor, budgetKey: string, args: Record<string, unknown>, opId?: string): GatewayResult {
     const letters = deps.letters!
     const badArgs = letters.opArgs(args)
     if (badArgs) return fail('bad_request', badArgs)
@@ -2342,17 +2597,24 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const rest: Record<string, unknown> = {}
     for (const k of Object.keys(args)) if (k !== 'markdown' && k !== 'html') rest[k] = args[k]
     if (JSON.stringify(rest).length > MAX_ARGS_BYTES) return fail('bad_request', `the letter's fields are too large to save on this host (limit ${MAX_ARGS_BYTES} bytes besides the body)`)
-    const letterId = `lt-${deps.now().toString(36)}-${deps.randomHex(3)}`
-    const saved = journal.appendBlobs(home, { kind: 'letter', letterId, format, args: rest }, { bodyBlob: Buffer.from(body, 'utf8') }, {
-      actor: { kind: 'session', sid: callerSid }, limit: true,
-      admit: (() => admitWrite(callerSid) ?? roomFor(home)) as unknown as () => { ok: false; error: { code: string; message: string; retryAfterMs?: number } } | null,
+    const minted = `lt-${deps.now().toString(36)}-${deps.randomHex(3)}`
+    const saved = journal.appendBlobs(home, { kind: 'letter', letterId: minted, format, args: rest }, { bodyBlob: Buffer.from(body, 'utf8') }, {
+      actor, limit: true, ...(opId ? { opId } : {}),
+      admit: (() => admitWrite(budgetKey) ?? roomFor(home)) as unknown as () => { ok: false; error: { code: string; message: string; retryAfterMs?: number } } | null,
     })
     const no = refusal(saved)
     if (no || !saved.ok) return no ?? fail('internal', 'not saved')
-    try { deps.onJournal?.(home) } catch { /* a notify failure never loses the record */ }
-    deps.log('info', 'offline host: letter queued', { home, letterId, callerSid, type: args.type, format, bytes: Buffer.byteLength(body), seq: saved.seq, opId: saved.opId })
+    if (!saved.duplicate) { try { deps.onJournal?.(home) } catch { /* a notify failure never loses the record */ } }
+    // A retry of a saved letter names the letter its first attempt saved.
+    const first = saved.duplicate ? (journal.byOpId(home, saved.opId) as { letterId?: unknown } | undefined)?.letterId : undefined
+    const letterId = typeof first === 'string' ? first : minted
+    deps.log('info', 'offline host: letter queued', { home, letterId, actor: budgetKey, type: args.type, format, bytes: Buffer.byteLength(body), seq: saved.seq, opId: saved.opId, ...(saved.duplicate ? { duplicate: true } : {}) })
+    return letterAnswer(home, letterId, saved.seq, saved.duplicate === true)
+  }
+
+  function letterAnswer(home: string, letterId: string, seq: number, duplicate = false): GatewayResult {
     return ok({
-      letterId, queued: true, offline: true, kind: 'letter', seq: saved.seq,
+      letterId, queued: true, offline: true, kind: 'letter', seq, ...(duplicate ? { duplicate: true } : {}),
       outcome: `Saved on this host, not in the user's inbox yet: Walnut sends letter ${letterId} when the server is back, at the time you sent it. ${offlineNote(home)}`,
       next: 'Do not send it again. If the user answers, the answer arrives as a message in this session; reply in the thread with human_inbox_reply and this letterId once the server is back.',
     })
@@ -2389,38 +2651,47 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
           args.task = me.taskId
         }
       }
-      // The caller's call id (src/lib/op-call-id.ts) keys the record: a retry of the same call is
-      // answered from the first one, never written twice. Without one, each call is its own.
-      const callId = typeof payload.callId === 'string' && /^oc-[A-Za-z0-9_-]{8,48}$/.test(payload.callId) ? payload.callId : ''
-      const stable = callId ? callId.slice(3).split('_').join('-') : ''
-      if (name !== 'agent_memory_write' && (typeof args.messageId !== 'string' || !/^qm-[A-Za-z0-9-]{1,64}$/.test(args.messageId))) {
-        // The server's own retry fence for a message (send-queue.ts), from the call id when given.
-        args.messageId = stable ? `qm-host-${stable}` : messageId(undefined)
-      }
-      let size = 0
-      try { size = JSON.stringify(args).length } catch { return fail('bad_request', 'arguments are not JSON') }
-      if (size > MAX_ARGS_BYTES) return fail('bad_request', `arguments are too large to hold on this host (${size} bytes, limit ${MAX_ARGS_BYTES})`)
-      // The caller's own call id rides along, verbatim: the Mac replays under it, so the caller's
-      // retry of the same call after the server is back meets the replay instead of running again.
-      const saved = append(home, { kind: 'op', op: name, args, callerSid, ...(callId ? { callId } : {}) }, false, {
-        ...(stable ? { opId: `held-${stable}` } : {}), limit: true, admit: () => admitWrite(callerSid) ?? roomFor(home),
-      })
-      const no = refusal(saved)
-      if (no || !saved.ok) return no ?? fail('internal', 'not saved')
-      deps.log('info', 'offline host: write held for the server', { home, op: name, callerSid, seq: saved.seq, opId: saved.opId, duplicate: saved.duplicate === true })
-      const message = name !== 'agent_memory_write'
-      return ok({
-        queued: true, offline: true, held: true, op: name, seq: saved.seq,
-        ...(message ? { messageId: args.messageId } : {}),
-        outcome: `Queued on this host: the Walnut server is away, and when it is back it ${message ? 'delivers this message' : 'makes this write'}, once. ${offlineNote(home)} Do NOT resend.`,
-        next: message
-          ? (raw.in_reply_to !== undefined ? 'Nothing else is required.' : 'A reply you asked for arrives in your session once it is delivered; do not poll.')
-          : 'Nothing else is required.',
-      })
+      return appendHeld(home, callerSid, name, args, payload.callId)
     } catch (err) {
       deps.log('warn', 'offline host: a write could not be held', { home, error: (err as Error).message })
       return null
     }
+  }
+
+  /**
+   * The held `op` record of a call whose target is already decided (holdWrite, and the
+   * follower's memory folder note: followerCall). Needs a Mac that drains `held-op`.
+   */
+  function appendHeld(home: string, callerSid: string, name: string, args: Record<string, unknown>, rawCallId: unknown, opIdWithoutCall?: string): GatewayResult {
+    // The caller's call id (src/lib/op-call-id.ts) keys the record: a retry of the same call is
+    // answered from the first one, never written twice. Without one, each call is its own.
+    const callId = typeof rawCallId === 'string' && /^oc-[A-Za-z0-9_-]{8,48}$/.test(rawCallId) ? rawCallId : ''
+    const stable = callId ? callId.slice(3).split('_').join('-') : ''
+    const message = name !== 'agent_memory_write'
+    const inReplyTo = args.in_reply_to !== undefined
+    if (message && (typeof args.messageId !== 'string' || !/^qm-[A-Za-z0-9-]{1,64}$/.test(args.messageId))) {
+      // The server's own retry fence for a message (send-queue.ts), from the call id when given.
+      args.messageId = stable ? `qm-host-${stable}` : messageId(undefined)
+    }
+    let size = 0
+    try { size = JSON.stringify(args).length } catch { return fail('bad_request', 'arguments are not JSON') }
+    if (size > MAX_ARGS_BYTES) return fail('bad_request', `arguments are too large to hold on this host (${size} bytes, limit ${MAX_ARGS_BYTES})`)
+    // The caller's own call id rides along, verbatim: the Mac replays under it, so the caller's
+    // retry of the same call after the server is back meets the replay instead of running again.
+    const saved = append(home, { kind: 'op', op: name, args, callerSid, ...(callId ? { callId } : {}) }, false, {
+      ...(stable ? { opId: `held-${stable}` } : opIdWithoutCall ? { opId: opIdWithoutCall } : {}), limit: true, admit: () => admitWrite(callerSid) ?? roomFor(home),
+    })
+    const no = refusal(saved)
+    if (no || !saved.ok) return no ?? fail('internal', 'not saved')
+    deps.log('info', 'offline host: write held for the server', { home, op: name, callerSid, seq: saved.seq, opId: saved.opId, duplicate: saved.duplicate === true })
+    return ok({
+      queued: true, offline: true, held: true, op: name, seq: saved.seq,
+      ...(message ? { messageId: args.messageId } : {}), ...(saved.duplicate ? { duplicate: true } : {}),
+      outcome: `Queued on this host: the Walnut server is away, and when it is back it ${message ? 'delivers this message' : 'makes this write'}, once. ${offlineNote(home)} Do NOT resend.`,
+      next: message
+        ? (inReplyTo ? 'Nothing else is required.' : 'A reply you asked for arrives in your session once it is delivered; do not poll.')
+        : 'Nothing else is required.',
+    })
   }
 
   // ── triggers: the checks this host runs (walnut-trigger) ──
@@ -2487,8 +2758,41 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return undefined
   }
 
+  /**
+   * This Walnut's triggers on this host: armed now, or paused or deleted here (with the def a
+   * change here kept). trigger_list here and the follower's (follower.triggers) read it.
+   */
+  function hereTriggers(home: string): Array<{ def: OfflineTrigger; state: 'armed' | 'paused' | 'deleted'; status?: OfflineTriggerStatus; hold?: TriggerHold }> {
+    const holds = holdsOf(home)
+    const out: Array<{ def: OfflineTrigger; state: 'armed' | 'paused' | 'deleted'; status?: OfflineTriggerStatus; hold?: TriggerHold }> = (deps.triggers?.armed() ?? [])
+      .filter((t) => armedHome(t) === home)
+      .map((t) => ({ def: t.def, state: 'armed' as const, ...(t.status ? { status: t.status } : {}), ...(holds.get(t.def.id) ? { hold: holds.get(t.def.id) } : {}) }))
+    for (const [id, hold] of holds) {
+      if (hold.home !== home || hold.on || !hold.def || out.some((t) => t.def.id === id)) continue
+      out.push({ def: hold.def, state: hold.deleted ? 'deleted' : 'paused', hold })
+    }
+    return out
+  }
+
+  /**
+   * This Walnut's triggers here as the follower merges them into its routines copy: each one's
+   * def, state and status, and for one created here the description its record keeps.
+   */
+  function followerTriggers(home: string, id?: unknown): Record<string, unknown> {
+    const described = new Map<string, string>()
+    for (const r of recordsOf(home)) {
+      if (r.kind === 'op' && r.op === 'trigger_create' && typeof r.args.id === 'string' && typeof r.args.description === 'string') described.set(r.args.id, r.args.description)
+    }
+    const triggers = hereTriggers(home)
+      .filter((t) => typeof id !== 'string' || t.def.id === id)
+      .map((t) => ({
+        id: t.def.id, state: t.state, def: t.def, ...(t.status ? { status: t.status } : {}),
+        ...(t.hold?.created ? { created: true } : {}), ...(described.has(t.def.id) ? { description: described.get(t.def.id) } : {}),
+      }))
+    return { host: slices.get(home)?.host ?? '', runsTriggers: !!deps.triggers, triggers }
+  }
+
   function opTriggerList(home: string, args: Record<string, unknown> = {}): GatewayResult {
-    const table = deps.triggers!
     const host = slices.get(home)?.host ?? ''
     const holds = holdsOf(home)
     const row = (def: OfflineTrigger, state: 'armed' | 'paused', status?: OfflineTriggerStatus) => ({
@@ -2503,13 +2807,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       // Created here: the server has no routine of this id until it reconnects.
       ...(holds.get(def.id)?.created ? { queued: true } : {}),
     })
-    const triggers: Array<Record<string, unknown>> = table.armed()
-      .filter((t) => armedHome(t) === home)
-      .map((t) => row(t.def, 'armed', t.status))
-    for (const [id, hold] of holds) {
-      if (hold.home !== home || hold.on || hold.deleted || !hold.def || triggers.some((t) => t.id === id)) continue
-      triggers.push(row(hold.def, 'paused'))
-    }
+    const triggers: Array<Record<string, unknown>> = hereTriggers(home)
+      .filter((t) => t.state !== 'deleted')
+      .map((t) => row(t.def, t.state === 'armed' ? 'armed' : 'paused', t.status))
     // The server's filters (src/ops/triggers.ts), honored here rather than ignored: a caller that
     // asked for one trigger must not read every one as its answer. This host's rows stay whole.
     const needle = typeof args.name === 'string' ? args.name.trim().toLowerCase() : ''
@@ -2567,7 +2867,11 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     })
   }
 
-  function opTriggerWrite(home: string, callerSid: string, name: string, args: Record<string, unknown>): GatewayResult {
+  /**
+   * A pause, resume or delete of a trigger this host runs: a session's call answered here, and
+   * the follower's (followerCall), which names its own answer for a trigger not run here (`notHere`).
+   */
+  function opTriggerWrite(home: string, callerSid: string, name: string, args: Record<string, unknown>, notHere: (what: string) => GatewayResult = needsServer, opId?: string): GatewayResult {
     const id = typeof args.id === 'string' ? args.id.trim() : ''
     if (!id) return fail('bad_request', `${name} needs "id"`)
     const t = triggerOf(home, id)
@@ -2577,28 +2881,32 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       if (t && !(hold && !hold.on)) {
         return ok({ id, name: t.def.name, state: 'armed', changed: false, offline: true, outcome: `"${t.def.name}" is running on this host; nothing changed.`, next: 'Nothing else is required.' })
       }
-      if (!t) return needsServer(`Resuming trigger ${id}, which was not paused on this host`)
+      if (!t) return notHere(`Resuming trigger ${id}, which was not paused on this host`)
     } else {
-      if (!t) return needsServer(`Trigger ${id} is not one this host runs for this Walnut; changing it`)
+      if (!t) return notHere(`Trigger ${id} is not one this host runs for this Walnut; changing it`)
       if (hold && !hold.on && (name === 'trigger_pause' || hold.deleted)) {
         return ok({ id, name: t.def.name, state: 'paused', changed: false, offline: true, outcome: `"${t.def.name}" is already ${hold.deleted ? 'deleted' : 'paused'} on this host; nothing changed.`, next: 'Nothing else is required.' })
       }
     }
     const denied = admitWrite(callerSid) ?? roomFor(home)
     if (denied) return denied
-    const saved = refusal(append(home, { kind: 'op', op: name, args: { id }, callerSid, trigger: t!.def }))
+    const saved = refusal(append(home, { kind: 'op', op: name, args: { id }, callerSid, trigger: t!.def }, false, opId ? { opId } : {}))
     if (saved) return saved
     try { deps.triggers!.changed() } catch (err) { deps.log('warn', 'offline host: triggers did not follow a change here', { id, error: (err as Error).message }) }
     deps.log('info', 'offline host: trigger change queued', { home, op: name, id, callerSid })
-    const label = `"${t!.def.name}"`
+    return triggerChangedAnswer(name, t!.def)
+  }
+
+  function triggerChangedAnswer(name: string, def: OfflineTrigger, duplicate = false): GatewayResult {
+    const label = `"${def.name}"`
     const outcome = name === 'trigger_pause'
       ? `Paused ${label} on this host: it is not checked from now on; Walnut records the pause when the server reconnects.`
       : name === 'trigger_resume'
-        ? `Resumed ${label} on this host: the first check runs within seconds, every ${everyLabel(t!.def.everyMs)} after that; Walnut records it when the server reconnects.`
+        ? `Resumed ${label} on this host: the first check runs within seconds, every ${everyLabel(def.everyMs)} after that; Walnut records it when the server reconnects.`
         : `Deleted ${label} on this host: nothing checks it any more; Walnut deletes the trigger when the server reconnects. Its check script file is untouched.`
     return ok({
-      id, name: t!.def.name, state: name === 'trigger_resume' ? 'armed' : name === 'trigger_pause' ? 'paused' : 'deleted',
-      changed: true, queued: true, offline: true, outcome, next: 'Nothing else is required. Do not repeat the call.',
+      id: def.id, name: def.name, state: name === 'trigger_resume' ? 'armed' : name === 'trigger_pause' ? 'paused' : 'deleted',
+      changed: true, queued: true, offline: true, ...(duplicate ? { duplicate: true } : {}), outcome, next: 'Nothing else is required. Do not repeat the call.',
     })
   }
 
@@ -2702,44 +3010,75 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const name = deps.labels
       ? deps.labels.label({ name: args.name, description, prompt, run })
       : text(args.name) || description.slice(0, 48)
+    const plan: TriggerPlan = { run, prompt, description, name, everyMs, taskId: target.id, cwd, timeoutSeconds, ...(typeof max === 'number' ? { max } : {}), watches, own }
+    const armed = armTrigger(home, callerSid, plan)
+    if ('error' in armed) return armed.error
+    // A park is the session's call, as online: only with wait:true, never for a watch of the user.
+    const park = args.wait === true && !watches
+      ? opQueued(home, callerSid, 'task_update', { id: target.id, phase: 'WAITING', wait_until: waitUntil ?? new Date(deps.now() + 4 * 3_600_000).toISOString() })
+      : null
+    return triggerArmedAnswer(home, armed.id, plan, parkWords(plan, park, waitUntil))
+  }
+
+  /** What a trigger made here is armed with: every input decided (by this host's call, or the follower's). */
+  interface TriggerPlan {
+    run: string; prompt: string; description: string; name: string; everyMs: number; taskId: string; cwd: string
+    timeoutSeconds: number; max?: number; watches: string | null; own: boolean
+  }
+
+  /**
+   * Arm a trigger here under an id this host gives: its def checked by this daemon, the
+   * `trigger_create` record (a hold that is on, with its def) the server replays under the same
+   * id, and the check armed at once. The one way in for this host's call and the follower's.
+   */
+  function armTrigger(home: string, callerSid: string, p: TriggerPlan, opId?: string): { id: string } | { error: GatewayResult } {
+    const table = deps.triggers!
+    const here = slices.get(home)?.host ?? ''
     // The server's routine id shape (cron/jobs.ts generateId) with a longer random part, so
     // an id this host gives can never be one the server gave (trigger-api.ts HOST_TRIGGER_ID_RE).
     const id = `${deps.now().toString(36)}-${deps.randomHex(4)}`
     const def: OfflineTrigger = {
-      id, name, everyMs,
-      check: { run, ...(cwd ? { cwd } : {}), timeoutSeconds },
+      id, name: p.name, everyMs: p.everyMs,
+      check: { run: p.run, ...(p.cwd ? { cwd: p.cwd } : {}), timeoutSeconds: p.timeoutSeconds },
       // wireFireCap (trigger-push.ts): a stored 0 ("no limit") goes out as a cap nothing reaches.
-      ...(typeof max === 'number' ? { limits: { maxFiresPerDay: max > 0 ? max : 1_000_000 } } : {}),
-      deliver: { home, taskId: target.id, prompt },
+      ...(typeof p.max === 'number' ? { limits: { maxFiresPerDay: p.max > 0 ? p.max : 1_000_000 } } : {}),
+      deliver: { home, taskId: p.taskId, prompt: p.prompt },
     }
-    const checked = table.validate!(def)
-    if (!checked.ok) return fail('bad_request', checked.error)
+    const checked = table.validate ? table.validate(def) : { ok: false as const, error: 'this daemon cannot check a trigger' }
+    if (!checked.ok) return { error: fail('bad_request', checked.error) }
     // What the server is asked to store, all of it decided here: the same id, the task (not
     // "this": the session could be replaced by then), this host, the cwd it runs in.
     const replayArgs: Record<string, unknown> = {
-      id, run, prompt, description, name, every: everyMs, session: target.id, host: here === 'local' ? '__local__' : here,
-      ...(cwd ? { cwd } : {}), timeoutSeconds, ...(typeof max === 'number' ? { maxFiresPerDay: max } : {}), ...(watches ? { watches } : {}),
+      id, run: p.run, prompt: p.prompt, description: p.description, name: p.name, every: p.everyMs, session: p.taskId, host: here === 'local' ? '__local__' : here,
+      ...(p.cwd ? { cwd: p.cwd } : {}), timeoutSeconds: p.timeoutSeconds, ...(typeof p.max === 'number' ? { maxFiresPerDay: p.max } : {}), ...(p.watches ? { watches: p.watches } : {}),
     }
     // The budget is charged under the journal lock, so a locked try costs none (opQueued).
-    const saved = refusal(append(home, { kind: 'op', op: 'trigger_create', args: replayArgs, callerSid, trigger: def }, false, { admit: () => admitWrite(callerSid) ?? roomFor(home) }))
-    if (saved) return saved
+    const saved = refusal(append(home, { kind: 'op', op: 'trigger_create', args: replayArgs, callerSid, trigger: def }, false, { ...(opId ? { opId } : {}), admit: () => admitWrite(callerSid) ?? roomFor(home) }))
+    if (saved) return { error: saved }
     try { table.changed() } catch (err) { deps.log('warn', 'offline host: triggers did not follow a change here', { id, error: (err as Error).message }) }
-    deps.log('info', 'offline host: trigger created here', { home, id, taskId: target.id, everyMs, callerSid })
+    deps.log('info', 'offline host: trigger created here', { home, id, taskId: p.taskId, everyMs: p.everyMs, callerSid })
+    return { id }
+  }
 
-    // A park is the session's call, as online: only with wait:true, never for a watch of the user.
-    let parked = ''
-    if (args.wait === true && !watches) {
-      const park = opQueued(home, callerSid, 'task_update', { id: target.id, phase: 'WAITING', wait_until: waitUntil ?? new Date(deps.now() + 4 * 3_600_000).toISOString() })
-      parked = park.ok
+  /** What the answer says the trigger did to its task (`park`: the queued park's answer, null for none). */
+  function parkWords(p: TriggerPlan, park: GatewayResult | null, waitUntil?: string): string {
+    const own = deps.watches ? deps.watches.own : 'own'
+    if (park) {
+      return park.ok
         ? ` The task is queued to wait (Waiting) until it fires${waitUntil ? ` or ${waitUntil}` : ''}; Walnut applies that when the server is back.`
         : ` The task could not be parked here (${park.error.message}); park it with task_update phase=WAITING.`
-    } else if (watches === watchKit.own) parked = ' The task was not parked: this trigger watches your own work (watches:"own"), which is work going on, so the task reads Working, never Waiting.'
-    else if (watches) parked = ' The task was not parked: this trigger watches the user\'s ask, and a wait on the user stays Needs you.'
-    else parked = own ? '' : ' The task it delivers into was left as it is (not your task; pass wait:true to park it).'
+    }
+    if (p.watches === own) return ' The task was not parked: this trigger watches your own work (watches:"own"), which is work going on, so the task reads Working, never Waiting.'
+    if (p.watches) return ' The task was not parked: this trigger watches the user\'s ask, and a wait on the user stays Needs you.'
+    return p.own ? '' : ' The task it delivers into was left as it is (not your task; pass wait:true to park it).'
+  }
+
+  function triggerArmedAnswer(home: string, id: string, p: Pick<TriggerPlan, 'name' | 'description' | 'everyMs' | 'run' | 'cwd' | 'taskId'>, parked: string, duplicate = false): GatewayResult {
+    const here = slices.get(home)?.host ?? ''
     return ok({
-      id, name, host: here, queued: true, offline: true,
-      job: { id, name, description, schedule: { kind: 'every', everyMs }, check: { run, ...(cwd ? { cwd } : {}), host: here }, executor: { type: 'session', config: { target: target.id } } },
-      outcome: `Trigger armed on this host: the daemon here runs the check every ${everyLabel(everyMs)} from now on and delivers the prompt into the task's session when it fires, while the Walnut server is away too. Walnut records trigger ${id} under this id when the server is back.${parked}`,
+      id, name: p.name, host: here, queued: true, offline: true, ...(duplicate ? { duplicate: true } : {}),
+      job: { id, name: p.name, description: p.description, schedule: { kind: 'every', everyMs: p.everyMs }, check: { run: p.run, ...(p.cwd ? { cwd: p.cwd } : {}), host: here }, executor: { type: 'session', config: { target: p.taskId } } },
+      outcome: `Trigger armed on this host: the daemon here runs the check every ${everyLabel(p.everyMs)} from now on and delivers the prompt into the task's session when it fires, while the Walnut server is away too. Walnut records trigger ${id} under this id when the server is back.${parked}`,
       next: `Do not create it again. Tell the user in one line what is watched and how often. Turn it off with trigger_delete '{"id":"${id}"}' once it has done its job.`,
     })
   }
@@ -2893,16 +3232,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
 
   /**
    * A trigger fire no server claimed, written into the target task's session on
-   * this host (the walnut-trigger daemon builds the envelope). The session pick
-   * the server makes: the newest live session of the task, as this copy lists
-   * them; else the stopped one, resumed with the fire as its first message (the
-   * idle reaper stops a quiet CLI after two hours, so an overnight fire finds it
-   * stopped). The stopped one is the task's own session when that runs here
-   * (its slot), else the newest here; a slot on another host is the server's to
-   * wake. A COMPLETE task is the server's call (it refuses and tells the user),
-   * as is a task with no session here (the server starts one). The fire's own
-   * queue tells the server what happened, on its replay; a resume is journaled
-   * too, because the server's record of that session still says stopped.
+   * this host (the walnut-trigger daemon builds the envelope), the target picked by
+   * this host's copy (triggerTargetOf). The fire's own queue tells the server what
+   * happened, on its replay.
    */
   async function deliverTrigger(
     home: string,
@@ -2910,15 +3242,53 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     text: string,
     messageId: string,
   ): Promise<{ ok: true; sid: string; resumed?: true } | { ok: false; reason: string }> {
+    const target = triggerTargetOf(home, taskId)
+    if (!target.ok) return target
+    return deliverTriggerTo(home, taskId, { sid: target.sid, resume: target.resume }, text, messageId)
+  }
+
+  /**
+   * Which session of the task on this host takes a fire, by this host's copy: the
+   * rule the host's own Walnut server applies over its copies too (host-trigger-target.ts).
+   * The pick the server makes: the newest live session of the task, as this copy lists
+   * them; else the stopped one, resumed with the fire as its first message (the idle
+   * reaper stops a quiet CLI after two hours, so an overnight fire finds it stopped).
+   * A COMPLETE task is the server's call (it refuses and tells the user), as is a task
+   * with no session here (the server starts one).
+   */
+  function triggerTargetOf(home: string, taskId: string): HostTriggerTarget {
     const slice = slices.get(home)
     if (!slice) return { ok: false, reason: 'no host copy for this Walnut' }
+    if (!deps.triggerTarget) return { ok: false, reason: 'this daemon has no rule for a trigger fire\'s session' }
     const task = tasksWithOverlay(home).find((t) => t.id === taskId)
-    if (task?.phase === 'COMPLETE') return { ok: false, reason: 'target task is complete' }
-    // A task whose current session runs on an ACP engine: the server's ACP worker takes it, never an older CLI here.
-    if (slice.sessions.some((s) => s.acp && s.sid === task?.session_id)) return { ok: false, reason: 'the target task runs on an ACP engine; the Walnut server delivers it' }
-    const live = slice.sessions.filter((s) => s.taskId === taskId && liveHere(home, s.sid))
-    if (live.length > 0) {
-      const sid = (task?.session_id && live.find((s) => s.sid === task.session_id)?.sid) || live[0].sid
+    const slot = task?.session_id
+    const here: HostTriggerSession[] = slice.sessions
+      .filter((s) => s.taskId === taskId || (!!slot && s.sid === slot))
+      .map((s) => ({ sid: s.sid, live: liveHere(home, s.sid), ...(s.aside ? { aside: true } : {}), ...(s.noResume ? { noResume: true } : {}), ...(s.acp ? { acp: true } : {}) }))
+    return deps.triggerTarget(task, here, { resume: !!deps.resume })
+  }
+
+  /**
+   * The mechanics of a fire's delivery to a session picked already (by this host's copy,
+   * or by the host's own Walnut server over its copies: follower.trigger.deliver): a live
+   * one gets it in its FIFO (no record: the fire's queue is the record); a stopped one is
+   * resumed with it as its first message and journaled `resume`, because the server's
+   * record of that session still says stopped.
+   */
+  async function deliverTriggerTo(
+    home: string,
+    taskId: string,
+    target: { sid: string; resume: boolean },
+    text: string,
+    messageId: string,
+  ): Promise<{ ok: true; sid: string; resumed?: true } | { ok: false; reason: string }> {
+    const sid = target.sid
+    const row = sessionOf(home, sid)
+    if (!row) return { ok: false, reason: 'not a session of this Walnut on this host' }
+    if (row.taskId && row.taskId !== taskId) return { ok: false, reason: 'that session belongs to another task' }
+    if (row.acp) return { ok: false, reason: 'the target task runs on an ACP engine; the Walnut server delivers it' }
+    if (!target.resume) {
+      if (!liveHere(home, sid)) return { ok: false, reason: 'that session is not running on this host' }
       try {
         // A fire's id is the same on every try (trigger-check-core.ts fireMessageId): one that went
         // before a restart lost its mark is not written again.
@@ -2929,22 +3299,17 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       }
     }
     if (!deps.resume) return { ok: false, reason: 'no live session of the target task on this host' }
-    const here = slice.sessions.filter((s) => s.taskId === taskId)
-    const slot = task?.session_id
-    if (slot && !here.some((s) => s.sid === slot)) return { ok: false, reason: 'the target task\'s session is not on this host' }
-    const pick = (slot ? here.filter((s) => s.sid === slot) : here).find((s) => !s.aside && !s.noResume)
-    if (!pick) return { ok: false, reason: 'no session of the target task on this host to resume' }
     if (roomFor(home)) return { ok: false, reason: 'this host\'s journal for the Walnut server is full' }
     let resumed: DeliverResult
     try {
-      resumed = await resumeWithTaskRouting(home, pick.sid, text, messageId, taskId)
+      resumed = await resumeWithTaskRouting(home, sid, text, messageId, taskId)
     } catch (err) {
       return { ok: false, reason: (err as Error).message }
     }
     if (!resumed.ok) return { ok: false, reason: resumed.reason }
-    append(home, { kind: 'resume', sid: pick.sid, taskId, messageId })
-    deps.log('info', 'offline host: resumed a stopped session for a trigger fire', { home, sid: pick.sid, taskId, messageId })
-    return { ok: true, sid: pick.sid, resumed: true }
+    append(home, { kind: 'resume', sid, taskId, messageId })
+    deps.log('info', 'offline host: resumed a stopped session for a trigger fire', { home, sid, taskId, messageId })
+    return { ok: true, sid, resumed: true }
   }
 
   /**
@@ -3382,6 +3747,10 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     /** The slices on disk again (the boot migration copied some here). */
     reloadSlices: load,
     configure, holdsSlice, hasHome, ownerOf, pendingHandover, hasRecords, drain, ack, noteSettings, noteStop, handle, handleLocal, handleFollower, holdWrite,
+    /** A same-host send handleLocal may take (its message id set on the payload): the gateway hands it to a follower that answers it. */
+    localCandidate: (home: string, rawCallerSid: string, capability: string, payload: Record<string, unknown>): boolean => localCall(home, rawCallerSid, capability, payload) !== null,
+    /** A follower's peer message (`follower.peer`): the write into the live CLI and its records. */
+    handleFollowerPeer,
     /** handleFollower, waiting out another process's journal lock (whenUnlocked): the twins' follower.op. */
     handleFollowerWaiting: (home: string, req: Parameters<typeof handleFollower>[1]) => whenUnlocked(home, String(req.op ?? ''), () => handleFollower(home, req)),
     /** noteSession, waiting out another process's journal lock (whenUnlocked): the twins' host ask. */
@@ -3389,8 +3758,18 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     /** noteRoutineTask, waiting out another process's journal lock: a routine run's task (clock-host-start-v1). */
     noteRoutineTaskWaiting: (home: string, rec: Parameters<typeof noteRoutineTask>[1], opId: string, jobId: string) => whenUnlocked(home, 'task-create', () => noteRoutineTask(home, rec, opId, jobId)),
     noteRoutineTask, checkRoutineRun, knowsSession,
-    pendingFor, journalStats, onResult, sweep, deliverTrigger, deliverFromLeader, deliverHuman, callerOf, answersRead, sessionsOf, noteSession, checkSession, checkTaskStart,
+    pendingFor, journalStats, onResult, sweep, deliverTrigger, deliverTriggerTo, liveSessionsOf, deliverFromLeader, deliverHuman, callerOf, answersRead, sessionsOf, noteSession, checkSession, checkTaskStart,
     triggerHolds, triggerHoldsByHome, homes: () => [...slices.keys()], freshHomes, journal, QUEUEABLE, RETIRED_TASK_INPUTS,
+    /** The follower's read of this Walnut's triggers here (follower.triggers, follower-triggers-v1). */
+    followerTriggers,
+    /** The follower's trigger_test (follower.trigger.test): the check run once here, as this host's own trigger_test runs it. */
+    followerTriggerTest: (home: string, req: { actor?: unknown; args?: unknown }): Promise<GatewayResult> => {
+      const actor = actorOf(req.actor, home)
+      if (actor === 'older' || !actor) return Promise.resolve(fail('bad_request', 'follower.trigger.test needs a session or a plugin job'))
+      if (!deps.triggers) return Promise.resolve(fail('needs_leader', 'this host runs no trigger checks', { detail: { why: 'routine_writes_need_mac' } }))
+      const args = (req.args && typeof req.args === 'object' && !Array.isArray(req.args) ? req.args : {}) as Record<string, unknown>
+      return opTriggerTest(home, budgetOfActor(actor), args)
+    },
   }
 }
 
@@ -3403,6 +3782,7 @@ export function createOfflineHost(deps: OfflineHostDeps) {
     ...deps,
     labels: deps.labels ?? createTriggerLabel(),
     watches: deps.watches ?? createTriggerWatches(),
+    triggerTarget: deps.triggerTarget ?? pickHostTriggerTarget,
     journal: deps.journal ?? createOfflineJournal({
       fs: deps.fs, path: deps.path, dir: deps.dir, now: deps.now, randomHex: deps.randomHex, keyOf: deps.keyOf, log: deps.log,
       sha256: (body) => createHash('sha256').update(body).digest('hex'), maxRecords: deps.maxRecords ?? OFFLINE_MAX_RECORDS,

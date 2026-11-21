@@ -364,6 +364,12 @@ export const DAEMON_SOURCE_FILES = [
   // Owner-scoped follower reads (replica-reads-v1): same import-or-inline rule.
   'src/providers/follower-reads-core.ts',
   'src/providers/follower-gateway-core.ts',
+  // The tokens of the host call entry (host-call-entry-v1) and its client (wn-cli.ts, the plugin
+  // job harness; the JS twin inlines both): same rule.
+  'src/providers/host-call-token-core.ts',
+  'src/providers/host-call-client-core.ts',
+  // Trigger fires delivered by the server on the host (follower-trigger-delivery-v1): same rule.
+  'src/providers/follower-trigger-delivery-core.ts',
   // The host server the daemon keeps running (host-server-v1): same rule.
   'src/providers/host-server-core.ts',
   // The plugin jobs the daemon keeps running (plugin-jobs-v1) and the harness each job
@@ -392,6 +398,8 @@ export const DAEMON_SOURCE_FILES = [
   'src/core/routines/trigger-label.ts',
   // How a trigger watches field reads, shared with the server (offline-host-core.ts imports it).
   'src/core/routines/trigger-watches.ts',
+  // Which session on a host takes a trigger fire, shared with the server on the host: same rule.
+  'src/core/routines/host-trigger-target.ts',
   // git.diff, run host-side: imported by the standalone twin.
   'src/providers/git-diff-core.ts',
   'src/providers/caller-proof-core.ts',

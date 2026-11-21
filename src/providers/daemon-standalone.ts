@@ -104,6 +104,9 @@ import { createHostReplica } from './host-replica-core.js'
 import { createAttachmentCopy } from './attachment-copy-core.js'
 import { createFollowerReads } from './follower-reads-core.js'
 import { createFollowerGateway, type FollowerGatewayResponse, type GatewayCaller } from './follower-gateway-core.js'
+import { createHostCallTokens } from './host-call-token-core.js'
+import { createFollowerTriggerDelivery } from './follower-trigger-delivery-core.js'
+import { pickHostTriggerTarget } from '../core/routines/host-trigger-target.js'
 import { createHostServerSupervisor } from './host-server-core.js'
 import { createPluginJobSupervisor } from './plugin-jobs-core.js'
 import { createPluginJobDoor } from './plugin-job-door.js'
@@ -1031,6 +1034,12 @@ interface WsData {
   followerHome?: string
   /** That follower answers this host's `walnut` calls while its leader is away ('follower-gateway-v1'). */
   answersLocal?: boolean
+  /** That follower also takes a same-host message while its leader answers (replica/away-sends.ts; 'follower-peer-v1'). */
+  answersOnline?: boolean
+  /** That follower delivers this host's unclaimed trigger fires while its leader is away ('follower-trigger-delivery-v1'). */
+  deliversTriggers?: boolean
+  /** That follower's host call entry ('host-call-entry-v1'), given to the sessions and jobs this daemon starts. */
+  callUrl?: string
   /** A lane's Walnut, set by stream.lane. */
   laneHome?: string
   /** The Walnut this socket configured triggers for ('' = a push that named none); its fires go here. */
@@ -1160,12 +1169,22 @@ const FOLLOWER_ALLOWED_COMMANDS = new Set([
   // away, and its read of what is pending (its overlay). Each is scoped to the follower's
   // own Walnut and checks the leader itself.
   'follower.op', 'follower.pending',
+  // This Walnut's triggers here, and a check run once, for the follower's trigger_list and
+  // trigger_test ('follower-triggers-v1'): reads only, own Walnut only.
+  'follower.triggers', 'follower.trigger.test',
+  // A line of its host call entry ('host-call-entry-v1'): checked for the caller's token here.
+  'follower.gateway',
+  // A message between this Walnut's sessions here that the follower decided ('follower-peer-v1').
+  'follower.peer',
   // A new ask while the Mac is away ('replica-start-v1'): the Mac's template, filled
   // from the follower's validated fields only (host-start-core.ts).
   'follower.start',
   // The answer to a `walnut` call handed to it while its leader is away
   // ('follower-gateway-v1'): taken only for a relay sent to that socket.
   'gateway-result',
+  // Its pick of the session for a trigger fire it was offered ('follower-trigger-delivery-v1'):
+  // taken only for the live attempt sent to that socket.
+  'follower.trigger.deliver',
   // Streams to the leader or the companion ('stream-relay-v1'): the frames of a
   // stream on this socket only; where an open may go is checked in streamTarget.
   'stream.open', 'stream.accept', 'stream.data', 'stream.ack', 'stream.end', 'stream.close',
@@ -3049,7 +3068,14 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'follower.send': return daemonCommands.run(() => cmdFollowerSend(ws, id as number, cmd))
     case 'follower.permission': return daemonCommands.run(() => cmdFollowerPermission(ws, id as number, cmd))
     case 'follower.op': return daemonCommands.run(() => cmdFollowerOp(ws, id as number, cmd))
+    case 'follower.peer': return daemonCommands.run(() => cmdFollowerPeer(ws, id as number, cmd))
     case 'follower.pending': return cmdFollowerPending(ws, id as number, cmd)
+    // The follower's trigger_list and trigger_test ('follower-triggers-v1'). Keep in sync with daemon-source.ts.
+    case 'follower.triggers': return cmdFollowerTriggers(ws, id as number, cmd)
+    case 'follower.trigger.test': return cmdFollowerTriggerTest(ws, id as number, cmd)
+    // Not serialized: a call may wait minutes (its waitMs), as a socket line does. Keep in sync with daemon-source.ts.
+    case 'follower.gateway': return cmdFollowerGateway(ws, id as number, cmd)
+    case 'follower.trigger.deliver': return daemonCommands.run(() => cmdFollowerTriggerDeliver(ws, id as number, cmd))
     // A new ask while the Mac is away ('replica-start-v1', WP12). Keep in sync with daemon-source.ts.
     case 'follower.start': return daemonCommands.run(() => cmdFollowerStart(ws, id as number, cmd))
     case 'leader.spawnTemplate': return cmdLeaderSpawnTemplate(ws, id as number, cmd)
@@ -4381,6 +4407,8 @@ const offlineHost = createOfflineHostCore({
   labels: createTriggerLabel(),
   // How a trigger's `watches` reads, the server's own rule. Twin of daemon-source.ts.
   watches: createTriggerWatches(),
+  // Which session here takes a trigger fire: the rule the host's own server applies too.
+  triggerTarget: pickHostTriggerTarget,
   // The checks run here: their ops answer here while the Walnut is away (walnut-trigger).
   triggers: {
     // Clock routines are not triggers a session lists, pauses or tests here.
@@ -4584,6 +4612,7 @@ const followerGateway = createFollowerGateway<ServerWebSocket<WsData>>({
     const ws = followerSockets.get(home)
     return ws && ws.data?.answersLocal === true ? ws : null
   },
+  answersOnline: (ws) => ws.data?.answersOnline === true,
   // One rule for "the leader is away": the test follower.op applies (followerMayWrite).
   mayWrite: (home) => followerMayWrite(home),
   now: () => Date.now(),
@@ -4591,6 +4620,30 @@ const followerGateway = createFollowerGateway<ServerWebSocket<WsData>>({
   nextRelayId: () => ++gatewayRelayCounter,
   instanceId: DAEMON_INSTANCE_ID,
   attemptMs: (deadline) => relayAttemptMs(deadline, Date.now(), gatewayHubTimeoutMs()),
+  setTimer: (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t },
+  clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
+  log: (level, msg, data) => logMsg(level, msg, data),
+})
+
+// Trigger fires no server claimed, delivered by this host's own Walnut server while its
+// leader is away ('follower-trigger-delivery-v1', follower-trigger-delivery-core.ts): it picks
+// the session with its copies, this daemon writes it. Keep in sync with daemon-source.ts.
+const FOLLOWER_TRIGGER_ANSWER_MS = 15_000
+let followerTriggerCounter = 0
+const followerTriggers = createFollowerTriggerDelivery<ServerWebSocket<WsData>>({
+  follower: (home) => {
+    const ws = followerSockets.get(home)
+    return ws && ws.data?.deliversTriggers === true ? ws : null
+  },
+  mayWrite: (home) => followerMayWrite(home),
+  send: (ws, ev, data) => { try { sendEvent(ws, ev, data); return true } catch { return false } },
+  liveSids: (home) => offlineHost.liveSessionsOf(home),
+  own: (fire) => offlineHost.deliverTrigger(fire.home, fire.taskId, fire.text, fire.messageId),
+  deliverTo: (fire, target) => offlineHost.deliverTriggerTo(fire.home, fire.taskId, target, fire.text, fire.messageId),
+  nextId: () => `td-${DAEMON_INSTANCE_ID}-${++followerTriggerCounter}`,
+  answerMs: FOLLOWER_TRIGGER_ANSWER_MS,
+  // Counted with the gateway's own answers (the count task B drives to zero).
+  ownAnswerUsed: () => followerGateway.noteOwnAnswer('trigger_delivery', 'handed_back'),
   setTimer: (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t },
   clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
   log: (level, msg, data) => logMsg(level, msg, data),
@@ -4621,6 +4674,8 @@ function followerView(home: string): Record<string, unknown> | null {
     bridge: { connected: link?.adapter != null, companion },
     settings: hostServers.settingsOf(home),
     ...followerJournalView(home),
+    // The calls this daemon still answered itself while the follower was there (noteOwnOfflineAnswer).
+    offlineAnswers: followerGateway.ownAnswers(),
   }
 }
 
@@ -4642,16 +4697,78 @@ function cmdFollowerHello(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
   if (!hostServers.tokenMatches(home, cmd.token)) {
     return safeSend(ws, JSON.stringify({ id, ok: false, error: 'this daemon did not start that server', errorKind: 'not_started_here' }))
   }
-  if (ws.data) { ws.data.origin = 'follower'; ws.data.followerHome = home; ws.data.answersLocal = cmd.answersLocal === true }
+  if (ws.data) { ws.data.origin = 'follower'; ws.data.followerHome = home; ws.data.answersLocal = cmd.answersLocal === true; ws.data.deliversTriggers = cmd.deliversTriggers === true; ws.data.answersOnline = cmd.answersOnline === true }
+  if (ws.data) ws.data.callUrl = cmd.answersLocal === true ? hostCallUrlOf(cmd.callUrl) : undefined
   followerSockets.set(home, ws)
-  logMsg('info', 'follower: a server on this host follows its leader', { wsId: wsId(ws), home, answersLocal: cmd.answersLocal === true })
+  logMsg('info', 'follower: a server on this host follows its leader', { wsId: wsId(ws), home, answersLocal: cmd.answersLocal === true, deliversTriggers: cmd.deliversTriggers === true })
   sendOk(ws, id, view)
 }
 
 /** The follower says how it is; the leader reads it with server.status. Not answered. */
 function cmdFollowerReport(ws: ServerWebSocket<WsData>, cmd: Record<string, unknown>) {
   const home = ws.data?.followerHome
-  if (home && followerSockets.get(home) === ws) hostServers.report(home, cmd.report)
+  if (!home || followerSockets.get(home) !== ws) return
+  hostServers.report(home, cmd.report)
+  // The entry's address as the follower says it now (its experiment turned on or off).
+  const report = cmd.report as { callUrl?: unknown } | null | undefined
+  if (ws.data && report && typeof report === 'object' && 'callUrl' in report) {
+    const next = ws.data.answersLocal === true ? hostCallUrlOf(report.callUrl) : undefined
+    if (next !== ws.data.callUrl) logMsg('info', 'host call entry: follower address', { home, callUrl: next ?? null })
+    ws.data.callUrl = next
+  }
+}
+
+// ── The host call entry ('host-call-entry-v1', host-call-token-core.ts) ──
+// A session or plugin job this daemon starts while a follower that answers local calls said its
+// entry's address gets WALNUT_CALL_URL and a token of its own (WALNUT_CALL_TOKEN, HMAC of its sid),
+// and posts its calls there; the follower hands each line back here (`follower.gateway`), checked
+// for that token, and it runs as a socket line does (handleGatewayLine). Keep in sync with daemon-source.ts.
+const hostCallTokens = createHostCallTokens({
+  fs, path, crypto, dir: DAEMON_DIR,
+  uid: typeof process.getuid === 'function' ? process.getuid() : null,
+  log: (level, msg, data) => logMsg(level, msg, data),
+})
+
+/** A follower's entry address, kept only as an http URL on this machine's loopback. */
+function hostCallUrlOf(raw: unknown): string | undefined {
+  if (typeof raw !== 'string' || !raw || raw.length > 200) return undefined
+  try {
+    const u = new URL(raw)
+    return u.protocol === 'http:' && (u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '[::1]') && !u.username && !u.password ? u.href : undefined
+  } catch { return undefined }
+}
+
+/** The entry's env for caller `sid` of Walnut `home`, or none (no follower said an address). */
+function hostCallEnv(home: unknown, sid: unknown): Record<string, string> {
+  if (typeof home !== 'string' || !home || typeof sid !== 'string' || !sid) return {}
+  const ws = followerSockets.get(home)
+  const url = ws?.data?.answersLocal === true ? ws.data.callUrl : undefined
+  const token = url ? hostCallTokens.tokenFor(sid) : null
+  return url && token ? { WALNUT_CALL_URL: url, WALNUT_CALL_TOKEN: token } : {}
+}
+
+/**
+ * `follower.gateway {request, token, openedAt, peerPid?}`: a line its entry took. The token must be
+ * the one this daemon gave the line's sid; then the line goes the socket's way. The answer is
+ * `{response}`, whatever the call said; a refusal here means nothing of it ran.
+ */
+function cmdFollowerGateway(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const home = ws.data?.origin === 'follower' ? ws.data.followerHome : undefined
+  if (!home || followerSockets.get(home) !== ws) return sendError(ws, id, 'follower.gateway: send follower.hello first')
+  const request = cmd.request
+  const sid = request && typeof request === 'object' ? (request as { sid?: unknown }).sid : undefined
+  if (!hostCallTokens.verify(sid, cmd.token)) {
+    logMsg('warn', 'host call entry: token refused', { home, sid: typeof sid === 'string' ? sid : null })
+    return safeSend(ws, JSON.stringify({ id, ok: false, error: 'follower.gateway: this token is not the caller\'s', errorKind: 'bad_token' }))
+  }
+  let line: string
+  try { line = JSON.stringify(request) } catch { return sendError(ws, id, 'follower.gateway: the request does not serialize') }
+  const openedAt = typeof cmd.openedAt === 'number' && Number.isFinite(cmd.openedAt) ? cmd.openedAt : Date.now()
+  const peerPid = Number.isSafeInteger(cmd.peerPid) && (cmd.peerPid as number) > 1 ? cmd.peerPid as number : undefined
+  const respond = (resp: GatewayResponse) => sendOk(ws, id, { response: resp })
+  // The caller "left" once this follower's link is gone (a waiting call ends, as on the socket).
+  gatewayCallerLeft.set(respond, () => followerSockets.get(home) !== ws)
+  handleGatewayLine(line, respond, undefined, openedAt, peerPid)
 }
 
 // ── Streams between servers ('stream-relay-v1', stream-relay-core.ts) ──
@@ -4922,7 +5039,8 @@ function cmdServerStatus(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   const home = ws.data?.origin === 'follower' ? ws.data.followerHome : typeof cmd.home === 'string' ? cmd.home : ''
   if (!home) return sendError(ws, id, 'server.status: missing home')
   if (ws.data?.origin !== 'follower' && refuseForeignHome(ws, id, cmd, 'server.status')) return
-  sendOk(ws, id, { status: hostServers.status(home) })
+  // The daemon's own away answers given while a follower was there for them (noteOwnOfflineAnswer).
+  sendOk(ws, id, { status: hostServers.status(home), offlineAnswers: followerGateway.ownAnswers() })
 }
 
 // ── Plugin jobs ('plugin-jobs-v1', plugin-jobs-core.ts) ──
@@ -4960,6 +5078,8 @@ const pluginJobs = createPluginJobSupervisor({
   program: () => ({ command: walnutCliArgv[0]!, args: [...walnutCliArgv.slice(1), 'walnut', 'plugin-job'] }),
   baseEnv: pluginJobBaseEnv,
   gatewaySocket: () => GATEWAY_SOCK_PATH,
+  // host-call-entry-v1: the job's run id gets a token of its own (hostCallEnv).
+  callEnv: (home, sid) => hostCallEnv(home, sid),
   sha256File: (file) => { try { return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') } catch { return null } },
   maxLogBytes: Number(daemonEnv.WALNUT_PLUGIN_JOB_LOG_MAX_BYTES) || undefined,
   // A test knob: never on the production daemon dir.
@@ -5257,6 +5377,14 @@ async function cmdFollowerSend(ws: ServerWebSocket<WsData>, id: number, cmd: Rec
   sendError(ws, id, 'follower.send: ' + r.error.message, { errorKind: r.error.code })
 }
 
+/** The follower's pick for a trigger fire it was offered (follower-trigger-delivery-core.ts). Keep in sync with daemon-source.ts. */
+async function cmdFollowerTriggerDeliver(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  if (!followerHomeOf(ws)) return sendError(ws, id, 'follower.trigger.deliver: send follower.hello first')
+  const r = await followerTriggers.answer(ws, cmd)
+  if (r.ok) return sendOk(ws, id, r.result)
+  sendError(ws, id, 'follower.trigger.deliver: ' + r.message, { errorKind: r.code })
+}
+
 async function cmdFollowerPermission(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const t = followerWriteTarget(ws, id, cmd, 'follower.permission')
   if (!t) return
@@ -5272,6 +5400,27 @@ async function cmdFollowerPermission(ws: ServerWebSocket<WsData>, id: number, cm
  * quiet window unless the Mac is still taking the journal, and the daemon dir's owner.
  * Keep in sync with daemon-source.ts.
  */
+/**
+ * A message between two of this Walnut's sessions here that the follower decided
+ * ('follower-peer-v1', replica/away-sends.ts): this daemon writes it into the live CLI and
+ * journals it (offline-host-core.ts handleFollowerPeer). `online` (made while the server
+ * answers, handleLocal's records) passes whoever leads; anything else only while the
+ * follower may write. Keep in sync with daemon-source.ts.
+ */
+async function cmdFollowerPeer(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const home = followerHomeOf(ws)
+  if (!home) return sendError(ws, id, 'follower.peer: send follower.hello first')
+  if (cmd.online !== true && !followerMayWrite(home)) return sendError(ws, id, 'follower.peer: your Mac answers again; write through it', { errorKind: 'leader_answers' })
+  // The companion leads: it delivers a message to another host now, so nothing is held for later.
+  if (cmd.kind === 'hold' && leaderBook.backupLead(home)) return sendError(ws, id, 'follower.peer: the cloud companion leads; it routes this message', { errorKind: 'needs_leader', detail: { why: 'companion_leads' } })
+  if (!ownsDaemonDir()) {
+    return sendError(ws, id, 'follower.peer: this daemon no longer owns its directory', { errorKind: 'journal_unwritable', detail: { why: 'not_owner' } })
+  }
+  const r = await offlineHost.handleFollowerPeer(home, cmd)
+  if (r.ok) return sendOk(ws, id, r.result)
+  sendError(ws, id, 'follower.peer: ' + r.error.message, { errorKind: r.error.code, ...(r.error.detail !== undefined ? { detail: r.error.detail } : {}), ...(r.error.retryAfterMs !== undefined ? { retryAfterMs: r.error.retryAfterMs } : {}) })
+}
+
 async function cmdFollowerOp(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const home = followerHomeOf(ws)
   if (!home) return sendError(ws, id, 'follower.op: send follower.hello first')
@@ -5283,6 +5432,25 @@ async function cmdFollowerOp(ws: ServerWebSocket<WsData>, id: number, cmd: Recor
   const r = await offlineHost.handleFollowerWaiting(home, { op: cmd.op, args: cmd.args, actor: cmd.actor, opId: cmd.opId, base: cmd.base })
   if (r.ok) return sendOk(ws, id, r.result)
   sendError(ws, id, 'follower.op: ' + r.error.message, { errorKind: r.error.code, ...(r.error.detail !== undefined ? { detail: r.error.detail } : {}), ...(r.error.retryAfterMs !== undefined ? { retryAfterMs: r.error.retryAfterMs } : {}) })
+}
+
+/**
+ * The follower's read of its Walnut's triggers here, and its trigger_test ('follower-triggers-v1'):
+ * reads only (a test writes no trigger state), own Walnut only, never in the serial command lane
+ * (a check may run for minutes). Keep in sync with daemon-source.ts.
+ */
+function cmdFollowerTriggers(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const home = followerHomeOf(ws)
+  if (!home) return sendError(ws, id, 'follower.triggers: send follower.hello first')
+  sendOk(ws, id, offlineHost.followerTriggers(home, cmd.id))
+}
+
+async function cmdFollowerTriggerTest(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const home = followerHomeOf(ws)
+  if (!home) return sendError(ws, id, 'follower.trigger.test: send follower.hello first')
+  const r = await offlineHost.followerTriggerTest(home, { actor: cmd.actor, args: cmd.args })
+  if (r.ok) return sendOk(ws, id, r.result)
+  sendError(ws, id, 'follower.trigger.test: ' + r.error.message, { errorKind: r.error.code, ...(r.error.detail !== undefined ? { detail: r.error.detail } : {}), ...(r.error.retryAfterMs !== undefined ? { retryAfterMs: r.error.retryAfterMs } : {}) })
 }
 
 /** What is pending for the follower's Walnut (its overlay; read only, own Walnut only). */
@@ -5808,7 +5976,10 @@ function sendGatewayRequest(
     // A search goes to the companion first while it leads: its copy holds every
     // task, this host's only its own. Answered here when the companion cannot.
     if (!target && capability === 'tools.call' && payload.name === 'search') {
-      const here = () => { void offlineHost.handle(home, callerSid, capability, payload).then((r) => respond(r as GatewayResponse)) }
+      const here = () => {
+        noteOwnOfflineAnswer(home, capability, callerSid, payload, plan.ownServerAsked)
+        void offlineHost.handle(home, callerSid, capability, payload).then((r) => respond(r as GatewayResponse))
+      }
       if (forwardToBackup(home, capability, callerSid, payload, (resp) => { if (resp.ok) respond(resp); else here() })) return
       logMsg('info', 'gateway: answered offline', { capability, callerSid, op: 'search', serverConnected: false })
       here()
@@ -5820,6 +5991,7 @@ function sendGatewayRequest(
     // (offline-host-core.ts holdWrite). Any other answer goes back as it is.
     const unreachable = (r: GatewayResponse) => !r.ok && r.error.code === 'hub_unreachable' && !target
     const heldOr = (r: GatewayResponse) => respond(unreachable(r) ? (offlineHost.holdWrite(home, callerSid, capability, payload) as GatewayResponse | null) ?? r : r)
+    noteOwnOfflineAnswer(home, capability, callerSid, payload, plan.ownServerAsked)
     void offlineHost.handle(home, callerSid, capability, payload).then((r) => {
       // What this host cannot answer itself goes to the companion while it
       // leads (a message to another host, a task outside the copy).
@@ -5844,9 +6016,17 @@ function sendGatewayRequest(
   // this daemon. What this host cannot take for sure goes to the server as before.
   if (home && !external && offlineHost.hasHome(home)) {
     const primary = target
+    // This host's own Walnut server takes it when it answers same-host sends (replica/away-sends.ts),
+    // with the message id set here; whatever it leaves goes to the server, never to handleLocal.
+    if (followerGateway.answersOnline(home) && offlineHost.localCandidate(home, callerSid, capability, payload)) {
+      const relay = () => relayToPrimary(primary, home, capability, callerSid, payload, respond, readable, deadline)
+      if (followerGateway.handOff({ home, capability, callerSid, payload, deadline, online: true, fallback: relay }, (r) => respond(r as GatewayResponse))) return
+    }
     void offlineHost.handleLocal(home, callerSid, capability, payload).then((r) => {
       if (r) {
         logMsg('info', 'gateway: delivered on this host', { capability, callerSid, op: payload.name, ok: r.ok })
+        // The daemon's own same-host delivery although a follower that takes these was linked (noteOwnAnswer).
+        if (followerGateway.answersOnline(home)) followerGateway.noteOwnAnswer(payload.name, 'follower_linked', callerSid)
         return respond(r as GatewayResponse)
       }
       relayToPrimary(primary, home, capability, callerSid, payload, respond, readable, deadline)
@@ -5857,6 +6037,16 @@ function sendGatewayRequest(
     return
   }
   relayToPrimary(target, home, capability, callerSid, payload, respond, readable, deadline)
+}
+
+/**
+ * A call this daemon answers with its own away code (offlineHost.handle) while this host's follower
+ * was there for it: handed back by it, or linked and allowed to write (follower-gateway-core.ts
+ * noteOwnAnswer). The count task B drives to zero. Keep in sync with daemon-source.ts.
+ */
+function noteOwnOfflineAnswer(home: string, capability: string, callerSid: string, payload: Record<string, unknown>, handedBack?: boolean): void {
+  const why = handedBack ? 'handed_back' : followerGateway.answers(home) ? 'follower_linked' : null
+  if (why) followerGateway.noteOwnAnswer(capability === 'tools.call' ? payload.name : capability, why, callerSid)
 }
 
 /** Calls waiting for a server of their Walnut (nothing of them was sent yet). */
@@ -6230,7 +6420,7 @@ function sendPluginJobGatewayRequest(home: string, capability: string, payload: 
 }
 
 /** One parsed NDJSON line from the agent socket → local reject or hub relay. */
-function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => void, fd?: number, openedAt = Date.now()) {
+function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => void, fd?: number, openedAt = Date.now(), peerPid?: number) {
   if (daemonCommands.closed) return respond(gatewayError('hub_unreachable', 'daemon is shutting down; retry after reconnecting', { stopping: true }))
   const parsed = parseGatewayLine(line)
   if (!parsed.ok) return respond({ ok: false, error: parsed.error })
@@ -6296,7 +6486,8 @@ function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => voi
   // the session it names (keep in sync with daemon-source.ts, which sends none).
   const args = req.args
   if (!isExternalCallerSid(callerSid) && wantsCallerProof(req.op, args)) {
-    const peer = socketPeerPid(fd)
+    // The socket's peer, or the process the host call entry found on its connection (follower.gateway).
+    const peer = fd !== undefined ? socketPeerPid(fd) : peerPid
     void gatewayCallerProof(peer, callerSid, openedAt).then((callerProof) =>
       sendGatewayRequest(req.op, callerSid, { ...args, callerProof }, respond, plan))
     return
@@ -7013,6 +7204,10 @@ async function cmdAcpStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
     WALNUT_SECRETS_DIR: SECRETS_ROOT,
     // The address its Walnut named, or none ('' unsets this daemon's own): sessionWalnutApiUrl.
     OPEN_WALNUT_API_URL: sessionWalnutApiUrl(params.env) ?? '',
+    // host-call-entry-v1, as for the native spawn ('' unsets): the worker's own WALNUT_SESSION_ID is the caller.
+    WALNUT_CALL_URL: '',
+    WALNUT_CALL_TOKEN: '',
+    ...hostCallEnv((cmd as { home?: unknown }).home, typeof params.env?.WALNUT_SESSION_ID === 'string' && params.env.WALNUT_SESSION_ID ? params.env.WALNUT_SESSION_ID : params.sid),
     // The page silencer, as for the native spawn (pw-silence-core.ts).
     // An engine's env that names NODE_OPTIONS or BUN_OPTIONS (null or '' = cleared) wins over the daemon's own.
     ...pwSilenceAcpOptions(params.env),
@@ -7513,6 +7708,11 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
       // current sid on every request. Keep in sync with daemon-source.ts.
       WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH,
       WALNUT_SESSION_ID: sid,
+      // host-call-entry-v1: this host's own Walnut server's call entry and this session's token, when
+      // its follower said an address (hostCallEnv); unset otherwise, never one this daemon inherited.
+      WALNUT_CALL_URL: undefined,
+      WALNUT_CALL_TOKEN: undefined,
+      ...hostCallEnv(spawnInfo.home ?? resumeRec?.home, sid),
       // Unset when the task has none, so a value this daemon inherited (it was
       // started from inside a session) never names another task's directory.
       WALNUT_TASK_DIR: taskDir ?? undefined,
@@ -8602,7 +8802,8 @@ function deliverUnclaimedFires(now: number): void {
       ? buildScheduledMessage(entry.def.name, spec.prompt, { dueAtMs: Math.min(...batch.fires.map((f) => f.clock?.slotMs ?? f.atMs)), deliveredAtMs: now })
       : buildTriggerMessage({ name: entry.def.name }, batch.fires, spec.prompt, { deliveredAtMs: now })
     hostDeliveriesInFlight.set(key, new Set(seqs))
-    void offlineHost.deliverTrigger(spec.home, spec.taskId, text, messageId).then((r) => {
+    // The host's own Walnut server picks the session while its leader is away; else this daemon's copy does.
+    void followerTriggers.deliver({ home: spec.home, triggerId: id, taskId: spec.taskId, text, messageId }).then((r) => {
       // Recorded on whatever holds this trigger's state NOW: a configure may have
       // re-armed it, released it into the draining set, or disarmed it.
       const current = heldTrigger(home, id)
@@ -13957,7 +14158,7 @@ function handleDisconnect(ws: ServerWebSocket<WsData>) {
   if (ws.data?.origin === 'lane' && ws.data.laneHome) laneClosedAt.set(ws.data.laneHome, Date.now())
   const followed = ws.data?.followerHome
   if (followed && followerSockets.get(followed) === ws) followerSockets.delete(followed)
-  if (ws.data?.origin === 'follower') followerGateway.dropSocket(ws)
+  if (ws.data?.origin === 'follower') { followerGateway.dropSocket(ws); followerTriggers.dropSocket(ws) }
   // Phone sends handed to it and not answered move to the next client now.
   rerouteMessageRelays(ws)
   // So do `walnut` calls relayed on it, where they may go (gatewayRelaysSocketGone).

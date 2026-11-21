@@ -26,7 +26,13 @@ export interface FollowerLinkOptions {
   log: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
   /** This server answers the host's `walnut` calls while its leader is away (daemon-link.ts). */
   answersLocal?: boolean
-  /** A daemon event on the link (a `gateway-request`). */
+  /** This server picks the session for the host's unclaimed trigger fires while its leader is away (daemon-link.ts). */
+  deliversTriggers?: boolean
+  /** This server takes a same-host message while its leader answers too (daemon-link.ts). */
+  answersOnline?: boolean
+  /** More of follower.hello, read at each hello (daemon-link.ts). */
+  helloExtra?: () => Record<string, unknown>
+  /** A daemon event on the link (a `gateway-request`, a `trigger-delivery`). */
   onEvent?: (event: Record<string, unknown>) => void
   /** Tests: a daemon link of their own. */
   daemonLink?: DaemonLink
@@ -54,6 +60,9 @@ export function createFollowerLink(opts: FollowerLinkOptions): FollowerLink {
     daemonDir: opts.daemonDir, walnutId: opts.walnutId, home: opts.home, token: opts.token,
     accept: opts.accept,
     ...(opts.answersLocal ? { answersLocal: true } : {}),
+    ...(opts.deliversTriggers ? { deliversTriggers: true } : {}),
+    ...(opts.answersOnline ? { answersOnline: true } : {}),
+    ...(opts.helloExtra ? { helloExtra: opts.helloExtra } : {}),
     ...(opts.onEvent ? { onEvent: opts.onEvent } : {}),
     openTimeoutMs: opts.openTimeoutMs,
     pollMs: opts.pollMs,

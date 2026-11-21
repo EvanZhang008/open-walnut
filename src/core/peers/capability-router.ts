@@ -192,6 +192,7 @@ async function handleToolsList(payload: Record<string, unknown>, host: string, c
   }
   const ops = (wanted ? listOps({ includeDeprecated: true }).filter((o) => o.name === wanted) : listOps())
     .filter((o) => !areaOps || areaOps.has(o.name));
+  const away = await awayCatalog();
   return {
     ok: true,
     result: {
@@ -205,9 +206,27 @@ async function handleToolsList(payload: Record<string, unknown>, host: string, c
           remote: o.tags.remote,
           signature: formatParamSignature(params),
           ...(wanted ? { params } : {}),
+          ...(away ? { away: away.of(o.name) } : {}),
         };
       }),
+      ...(away ? { hint: away.hint } : {}),
     },
+  };
+}
+
+/**
+ * A host's follower answering its host's own calls while the leader is away: each op says what
+ * it gets here (src/replica/away-op-decisions.ts), as the daemon's own away catalog listed only
+ * what it answered. The whole catalog stays listed (a session keeps the tools it read once the
+ * leader is back). Null on the leader, on a companion, and while the leader answers.
+ */
+async function awayCatalog(): Promise<{ of(name: string): 'host' | 'held' | 'leader'; hint: string } | null> {
+  const [{ hasCapability }, { leaderAnswers }] = await Promise.all([import('../capabilities.js'), import('../server-role.js')]);
+  if (!hasCapability('host-local-calls') || leaderAnswers()) return null;
+  const { AWAY_OP_DECISIONS } = await import('../../replica/away-op-decisions.js');
+  return {
+    of: (name) => AWAY_OP_DECISIONS[name]?.answer ?? 'leader',
+    hint: 'Your Mac is away: this host\'s Walnut answers the ops marked away:"host" (writes are kept and reach the Mac when it is back); an op marked away:"leader" answers needs_leader until the Mac is back.',
   };
 }
 

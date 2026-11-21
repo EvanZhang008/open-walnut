@@ -34,6 +34,7 @@
  * NOTHING at module scope; every side effect arrives through deps.
  */
 
+import type { HostCallClient } from './host-call-client-core.js'
 import type { DoorRouteHandler, PluginJobDoor } from './plugin-job-door.js'
 
 
@@ -74,6 +75,11 @@ export interface PluginJobHarnessDeps {
   lock?: <T>(file: string, fn: () => Promise<T>) => Promise<T>
   /** The routes' door (plugin-job-door.ts); absent: a serving job's http.route throws. */
   door?: Pick<PluginJobDoor, 'serve'>
+  /**
+   * This host's call entry (host-call-client-core.ts, host-call-entry-v1): a run its daemon gave
+   * WALNUT_CALL_URL and WALNUT_CALL_TOKEN posts its calls there first, the socket when it is not taken.
+   */
+  hostCall?: Pick<HostCallClient, 'post'>
   home: string
 }
 
@@ -134,7 +140,23 @@ export function createPluginJobHarness(deps: PluginJobHarnessDeps) {
       ? `oc-${deps.now().toString(36)}${Math.random().toString(36).slice(2, 12).padEnd(10, '0')}` : ''
     if (callId) args = { ...args, callId }
     const lostLine = callId ? ` (call ${callId}: it may have run; read it with op_result {"call_id":"${callId}"} before calling it again)` : ''
-    return new Promise((resolve, reject) => {
+    /** A gateway answer as the job sees it: its result, or an Error with the answer's code. */
+    const fromReply = (reply: { ok?: boolean; result?: Record<string, unknown>; error?: { code?: string; message?: string; detail?: unknown } }): Record<string, unknown> => {
+      if (reply.ok === true) return reply.result ?? {}
+      const e = reply.error ?? {}
+      const err = new Error((e.message || 'the Walnut op failed') + (e.code === 'hub_timeout' ? lostLine : '')) as Error & { code?: string; detail?: unknown; callId?: string }
+      err.code = e.code || 'internal'
+      if (callId) err.callId = callId
+      if (e.detail !== undefined) err.detail = e.detail
+      throw err
+    }
+    const lost = (message: string): Error => {
+      const err = new Error(message + lostLine) as Error & { code?: string; callId?: string }
+      err.code = 'hub_timeout'
+      if (callId) err.callId = callId
+      return err
+    }
+    const viaSocket = (): Promise<Record<string, unknown>> => new Promise((resolve, reject) => {
       const sock = deps.net.connect(socketPath)
       const chunks: Buffer[] = []
       let done = false
@@ -145,12 +167,7 @@ export function createPluginJobHarness(deps: PluginJobHarnessDeps) {
         try { sock.destroy() } catch { /* closed */ }
         fn()
       }
-      const timer = deps.setTimer(() => finish(() => {
-        const err = new Error(`no answer from Walnut within ${OP_TIMEOUT_MS / 1000} s${lostLine}`) as Error & { code?: string; callId?: string }
-        err.code = 'hub_timeout'
-        if (callId) err.callId = callId
-        reject(err)
-      }), OP_TIMEOUT_MS)
+      const timer = deps.setTimer(() => finish(() => reject(lost(`no answer from Walnut within ${OP_TIMEOUT_MS / 1000} s`))), OP_TIMEOUT_MS)
       sock.on('connect', () => { sock.write(JSON.stringify({ v: 1, op, sid, args }) + '\n') })
       sock.on('data', (chunk: Buffer) => {
         const nl = chunk.indexOf(0x0a)
@@ -158,15 +175,9 @@ export function createPluginJobHarness(deps: PluginJobHarnessDeps) {
         if (nl === -1) return
         const text = Buffer.concat(chunks).toString('utf8')
         finish(() => {
-          let reply: { ok?: boolean; result?: Record<string, unknown>; error?: { code?: string; message?: string; detail?: unknown } }
+          let reply: Parameters<typeof fromReply>[0]
           try { reply = JSON.parse(text) } catch { reject(new Error('malformed answer from the Walnut daemon')); return }
-          if (reply.ok === true) { resolve(reply.result ?? {}); return }
-          const e = reply.error ?? {}
-          const err = new Error((e.message || 'the Walnut op failed') + (e.code === 'hub_timeout' ? lostLine : '')) as Error & { code?: string; detail?: unknown; callId?: string }
-          err.code = e.code || 'internal'
-          if (callId) err.callId = callId
-          if (e.detail !== undefined) err.detail = e.detail
-          reject(err)
+          try { resolve(fromReply(reply)) } catch (err) { reject(err) }
         })
       })
       sock.on('error', (err: Error) => finish(() => {
@@ -175,6 +186,13 @@ export function createPluginJobHarness(deps: PluginJobHarnessDeps) {
         reject(e)
       }))
       sock.on('close', () => finish(() => reject(new Error('the Walnut daemon closed the connection without an answer'))))
+    })
+    if (!deps.hostCall) return viaSocket()
+    // The entry first; nothing ran there unless it answered, or the line left and no answer came (lost).
+    return deps.hostCall.post({ v: 1, op, sid, args }, OP_TIMEOUT_MS).then((o) => {
+      if (o.kind === 'answer') return fromReply(o.resp)
+      if (o.kind === 'lost') throw lost(o.message)
+      return viaSocket()
     })
   }
 

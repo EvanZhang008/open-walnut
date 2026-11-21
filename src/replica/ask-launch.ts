@@ -196,6 +196,8 @@ export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
   let lookedAt = 0
   /** The last look failed (its warn is said once per outage). */
   let lookFailing = false
+  /** Each started session's state and last write at the last look: a turn that ended since counts a message. */
+  const turns = new Map<string, { state?: string; at?: string }>()
 
   function startPoll(): void {
     if (timer) return
@@ -205,6 +207,8 @@ export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
 
   /** A person started a turn of `sid` (its launch, a message): its end is told even when the first look already finds it over. */
   function watch(sid: string): void {
+    // A message starts a turn: its end counts, whether a look sees it working or not.
+    if (started.has(sid)) turns.set(sid, { ...turns.get(sid), state: 'working' })
     const w = watched.get(sid)
     watched.set(sid, { ...(w ?? {}), state: 'working', until: now() + WATCH_IDLE_MS })
     startPoll()
@@ -244,6 +248,12 @@ export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
         const state = typeof s.state === 'string' ? s.state : 'stopped'
         const at = typeof s.lastActiveAt === 'string' ? s.lastActiveAt : undefined
         if (row) {
+          // The Mac counts one more message each time a turn's result is kept (session-tracker.ts
+          // persistSessionRecord): a turn that ended since the last look, seen working then or
+          // with a later write now, counts here the same way.
+          const prev = turns.get(sid)
+          if (prev && state !== 'working' && (prev.state === 'working' || (!!at && !!prev.at && at !== prev.at))) row.messageCount = (row.messageCount ?? 1) + 1
+          turns.set(sid, { state, at: at ?? prev?.at })
           row.process_status = hostSessionStatus(state)
           if (at) row.lastActiveAt = at
           // A permission prompt waiting for a person: the Mac's record shape (its enrichment reads the tool).
@@ -396,6 +406,8 @@ export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
 
   function noteStarted(o: { sid: string; taskId: string; cwd: string; mode: string; title: string; project: string }): void {
     started.set(o.sid, rowOf({ ...o, at: now(), status: 'running' }))
+    // Its first turn runs now (the start's message): its end is its second message, as on the Mac.
+    turns.set(o.sid, { state: 'working' })
     watch(o.sid)
     deps.broadcast('session:status-changed', { sessionId: o.sid, status: 'running', process_status: 'running', taskId: o.taskId })
   }

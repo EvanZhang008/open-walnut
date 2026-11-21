@@ -1,8 +1,8 @@
 /**
- * A task's start and a message to a task by this host's own `walnut` calls while the Mac is
- * away (replica/away-starts.ts): the start only where the task would run (its project's
- * default host is this host, or it has a session here), the live session brake, a daemon
- * that cannot start it, and a message only to a task whose session runs here. A device never
+ * A task's start by this host's own `walnut` calls while the Mac is away
+ * (replica/away-starts.ts; a message is away-sends.ts's, tests/replica/away-sends*.test.ts):
+ * the start only where the task would run (its project's default host is this host, or it has
+ * a session here), the live session brake, and a daemon that cannot start it. A device never
  * gets these answers: its row answers needs_leader before the handler (route-table.ts).
  * Only a task this host's journal made starts here alone (the Mac adopts no other's session),
  * a start's session id comes from its op id (a retry is the same start), concurrent starts
@@ -215,8 +215,6 @@ describe('away starts', () => {
     expect(h.calls).toEqual([])
     // Its turn reaches the console and its task's readers, however long it sat idle.
     expect(continued).toHaveBeenCalledWith('sid-3')
-    await h.post('/v1/messages', { to: 't3', text: 'and these' }, 'op-2')
-    expect(continued).toHaveBeenCalledTimes(2)
   })
 
   it('the brake: this host runs its live session limit, so the start is refused for now and says why', async () => {
@@ -234,22 +232,6 @@ describe('away starts', () => {
     const r = await olderMac.post('/v1/tasks/t1/start', { message: 'go' })
     expect(r.status).toBe(503)
     expect(r.body.error).toMatchObject({ code: 'needs_leader', why: 'mac_too_old' })
-  })
-
-  it('a message to a task whose session runs here is delivered, framed as its sender\'s', async () => {
-    const h = harness()
-    const r = await h.post('/v1/messages', { to: 't3', text: 'tags changed' })
-    expect(r.status).toBe(200)
-    expect(r.body).toMatchObject({ delivered: true, targetTaskId: 't3', targetSessionId: 'sid-3' })
-    expect(h.sends).toEqual([{ sid: 'sid-3', text: '[framed] tags changed', framed: true }])
-  })
-
-  it('a message to a task with no session here, or one that asks for a reply, needs the Mac', async () => {
-    const h = harness()
-    expect((await h.post('/v1/messages', { to: 't1', text: 'hi' })).body.error).toMatchObject({ code: 'needs_leader', why: 'session_on_mac' })
-    expect((await h.post('/v1/messages', { to: 't3', text: 'hi', expect_reply: true })).body.error).toMatchObject({ why: 'reply_needs_mac' })
-    expect((await h.post('/v1/messages', { to: 't3', text: 'hi', in_reply_to: 'rq-abcdef' })).body.error).toMatchObject({ why: 'message_needs_mac' })
-    expect(h.sends).toEqual([])
   })
 
   it('a device never starts or sends here', async () => {

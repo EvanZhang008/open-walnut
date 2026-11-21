@@ -6,7 +6,8 @@
  *     linkSessionSlot and the drain's linkAdopted use): session_id, session_ids, the slot by mode;
  *     only while its create is still in this host's journal and the row names no session, and
  *     only for readers: a write's base is the journal's row (its phase TODO, no session field);
- *   - the phase stays the journal's (the Mac's drain does not replay a start's phase);
+ *   - the phase stays the journal's on this host (the Mac's drain writes the start's phase when it
+ *     adopts the session: offline-merge/apply-session.ts);
  *   - a row only the overlay holds gets the Mac's session enrichment where the Mac's route gives
  *     it (GET /tasks/:id, GET /tasks), so task_get's execution reads running / idle;
  *   - task_get_bulk projects a task made here instead of "not found".
@@ -145,7 +146,7 @@ describe('the journal read behind the overlay', () => {
 
 describe('the session fold is for readers only', () => {
   // Enumerated from the source: a new caller of taskForReaders must be a read, and is named here.
-  const READERS = ['away-reads.ts', 'away-wiring.ts', 'overlay.ts']
+  const READERS = ['away-read-folds.ts', 'away-reads.ts', 'away-wiring.ts', 'overlay.ts']
   const dir = path.join(__dirname, '../../src/replica')
 
   it('only the reads call taskForReaders', () => {
@@ -158,8 +159,10 @@ describe('the session fold is for readers only', () => {
     const body = /const shownTask = async[\s\S]*?\n  }\n/.exec(src)?.[0] ?? ''
     expect(body).toContain('overlay.task(')
     expect(body).not.toContain('taskForReaders(')
-    // The one reader call of the wiring is the broadcast of a changed row.
-    expect(src.match(/\btaskForReaders\(/g)).toHaveLength(1)
+    // The wiring's reader calls: the broadcast of a changed row, and a write's answer as a read
+    // shows it (forReaders; the write's base above is still overlay.task).
+    expect(src.match(/\btaskForReaders\(/g)).toHaveLength(2)
+    expect(/forReaders: async[\s\S]*?taskForReaders\(/.test(src)).toBe(true)
   })
 })
 
@@ -338,6 +341,17 @@ describe('the reads of a task made here', () => {
       expect.objectContaining({ id: TASK, session_status: { process_status: 'idle' } }),
       { id: 'mtask-copy', title: 'From the Mac', session_status: { process_status: 'stopped' } },
     ])
+  })
+
+  it('a list\'s total counts the rows this host added (the route counted only the copy\'s)', async () => {
+    const r = await read('/tasks', 200, { tasks: [{ id: 'mtask-copy', title: 'From the Mac' }], total: 1, truncated: false })
+    expect(r.body.tasks.map((t: { id: string }) => t.id)).toEqual([TASK, 'mtask-copy'])
+    expect(r.body).toMatchObject({ total: 2, truncated: false })
+    // Nothing added: the route's own count stands; an answer without a total gets none.
+    const none = await read('/tasks', 200, { tasks: [{ id: TASK, title: 'Import the venue rows' }], total: 1, truncated: false })
+    expect(none.body.total).toBe(1)
+    const old = await read('/tasks', 200, { tasks: [] })
+    expect(old.body.total).toBeUndefined()
   })
 
   it('the sessions a task made here held answer from this host; its other reads need the Mac, never "not found"', async () => {

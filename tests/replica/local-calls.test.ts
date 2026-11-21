@@ -72,6 +72,21 @@ describe('local calls', () => {
     expect(s.sent[0]).toMatchObject({ cmd: 'gateway-result', relayId: 7, errorCode: 'needs_leader', error: 'This needs your Mac' })
   })
 
+  it('while the Mac answers, a same-host send the daemon marked online runs (follower-peer-v1); nothing else does', async () => {
+    const s = setup({ leader: true })
+    const send = { name: 'task_send', args: { to: 't2', text: 'hi', messageId: 'qm-host-x' } }
+    s.handle(event({ online: true, payload: send }))
+    await s.settled()
+    expect(router.calls).toHaveLength(1)
+    expect(s.sent[0]).toEqual({ cmd: 'gateway-result', relayId: 7, result: { done: 1 } })
+    // Another op marked online, or a send not marked: refused before anything runs.
+    s.handle(event({ relayId: 8, online: true }))
+    s.handle(event({ relayId: 9, payload: send }))
+    await s.settled()
+    expect(router.calls).toHaveLength(1)
+    expect(s.sent.slice(1)).toEqual([expect.objectContaining({ relayId: 8, errorCode: 'needs_leader' }), expect.objectContaining({ relayId: 9, errorCode: 'needs_leader' })])
+  })
+
   it('while the Mac answers nothing runs: needs_leader', async () => {
     const s = setup({ leader: true })
     s.handle(event())

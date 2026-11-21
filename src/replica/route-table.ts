@@ -226,6 +226,13 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   // task's start and a message to a task. A phone or a browser hears needs_leader, as before.
   { method: 'POST', pattern: '/api/v1/tasks/:id/start', away: 'needs-leader', localAway: 'host-write' },
   { method: 'POST', pattern: '/api/v1/messages', away: 'needs-leader', localAway: 'host-write' },
+  // And (away-calls.ts, away-triggers.ts) a MEMORY.md append or memory folder note, a letter to
+  // the user, and a trigger's create and test (its pause, resume and delete: the routine rows below).
+  { method: 'PUT', pattern: '/api/v1/tasks/:id/agent-memory', away: 'needs-leader', localAway: 'host-write' },
+  { method: 'PUT', pattern: '/api/v1/tasks/:id/memory-files/:name', away: 'needs-leader', localAway: 'host-write' },
+  { method: 'POST', pattern: '/api/v1/human-inbox', away: 'needs-leader', localAway: 'host-write' },
+  { method: 'POST', pattern: '/api/v1/routines/trigger', away: 'needs-leader', localAway: 'host-write' },
+  { method: 'POST', pattern: '/api/v1/routines/check-test', away: 'needs-leader', localAway: 'host-write' },
   { method: W, pattern: '/api/tasks/*', away: 'needs-leader', why: 'task_writes_need_mac' },
   { method: W, pattern: '/api/sessions/*', away: 'needs-leader', why: 'session_writes_need_mac' },
   // WP5 copies: the conversation lists, routines, prefs, favorites and the config
@@ -244,10 +251,12 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   // methods: a routine's `:id` would also take /draft, /check-test and /trigger,
   // which change no routine and keep the plain away answer.
   { method: 'PUT', pattern: '/api/config', away: 'needs-leader', why: 'config_writes_need_mac' },
+  // A trigger's pause, resume and delete by this host's own calls (away-triggers.ts): the phone's
+  // routes, which the ops call.
   ...['/api/routines', '/api/cron', '/api/v1/routines'].flatMap((base): RouteRow[] => [
     { method: 'POST', pattern: base, away: 'needs-leader', why: 'routine_writes_need_mac' },
-    { method: 'PATCH', pattern: `${base}/:id`, away: 'needs-leader', why: 'routine_writes_need_mac' },
-    { method: 'DELETE', pattern: `${base}/:id`, away: 'needs-leader', why: 'routine_writes_need_mac' },
+    { method: 'PATCH', pattern: `${base}/:id`, away: 'needs-leader', why: 'routine_writes_need_mac', ...(base === '/api/v1/routines' ? { localAway: 'host-write' as const } : {}) },
+    { method: 'DELETE', pattern: `${base}/:id`, away: 'needs-leader', why: 'routine_writes_need_mac', ...(base === '/api/v1/routines' ? { localAway: 'host-write' as const } : {}) },
     { method: 'POST', pattern: `${base}/:id/toggle`, away: 'needs-leader', why: 'routine_writes_need_mac' },
   ]),
   { method: 'PUT', pattern: '/api/ui-prefs', away: 'needs-leader', why: 'prefs_writes_need_mac' },

@@ -260,6 +260,9 @@ SOURCES=(
   src/providers/attachment-copy-core.ts
   src/providers/follower-reads-core.ts
   src/providers/follower-gateway-core.ts
+  src/providers/host-call-token-core.ts
+  src/providers/host-call-client-core.ts
+  src/providers/follower-trigger-delivery-core.ts
   src/providers/host-server-core.ts
   src/providers/plugin-jobs-core.ts
   src/providers/plugin-job-harness.ts
@@ -277,6 +280,7 @@ SOURCES=(
   src/core/human-inbox/letter-check.ts
   src/core/routines/trigger-label.ts
   src/core/routines/trigger-watches.ts
+  src/core/routines/host-trigger-target.ts
   src/providers/git-diff-core.ts
   src/providers/caller-proof-core.ts
   src/providers/socket-peer-pid.ts

@@ -91,6 +91,12 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
+    id: 'host_call_entry',
+    name: 'Host sessions call their own host\'s Walnut',
+    description: 'On a host that runs its own copy of Walnut, a session or plugin job started there from now on sends its Walnut calls to that copy over the host\'s own network port, whether or not this computer is there, instead of through the host\'s daemon socket. Sessions already running keep the socket, and a call falls back to it whenever the host\'s copy cannot be reached. The answers are the same either way.',
+    default: false,
+  },
+  {
     id: 'change_status',
     name: 'Change status in link tags',
     description: 'A task\'s change links (pull requests, code reviews, commits) show how far each got inside its link pill: in review, approved, merged, deploying, deployed or blocked. Click the pill for the review and every deploy stage; Walnut tells the task\'s session when a change is approved, fails, is blocked or finishes deploying.',

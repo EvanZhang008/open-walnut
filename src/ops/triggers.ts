@@ -10,7 +10,7 @@
 
 import { z } from 'zod'
 import { defineOp, type HttpBinding } from './registry.js'
-import { withOutcome } from './outcome.js'
+import { awayAnswer, withOutcome } from './outcome.js'
 import { triggerRunState } from '../core/cron/trigger-run-state.js'
 import { TIME_LIMIT_DEFAULT_S, TIME_LIMIT_MAX_S, testCallTimeoutMs } from '../core/cron/trigger-time-limit.js'
 import { TRIGGER_DESCRIPTION_MAX, parseEveryMs } from '../core/routines/trigger-fields.js'
@@ -57,13 +57,17 @@ async function setTriggerEnabled(
   id: string,
   enabled: boolean,
   call: (method: HttpBinding['method'], path: string, body?: unknown) => Promise<unknown>,
-): Promise<{ job: NonNullable<RoutineJobBody['job']>; changed: boolean }> {
+): Promise<{ job: NonNullable<RoutineJobBody['job']>; changed: boolean; away?: Record<string, unknown> }> {
   const path = `/routines/${encodeURIComponent(id)}`
   const current = (await call('GET', path) as RoutineJobBody | undefined)?.job
   if (!current) throw new Error(`no trigger ${id}; trigger_list shows the ids`)
   if (!current.check) throw new Error(`${id} ("${current.name ?? ''}") is a scheduled routine, not a trigger`)
   if (current.enabled === enabled) return { job: current, changed: false }
-  const updated = (await call('PATCH', path, { enabled }) as RoutineJobBody | undefined)?.job ?? current
+  const answer = await call('PATCH', path, { enabled })
+  // Saved on this host while the server is away (a host's follower): its own words.
+  const away = awayAnswer(answer)
+  if (away) return { job: current, changed: true, away }
+  const updated = (answer as RoutineJobBody | undefined)?.job ?? current
   return { job: updated, changed: true }
 }
 
@@ -153,6 +157,9 @@ defineOp({
   retiredInput: ['wait_report'],
   bind: { method: 'POST', path: '/routines/trigger' },
   mapResult: ({ body, args }) => {
+    // Armed on this host while the server is away (a host's follower): its own words.
+    const away = awayAnswer(body)
+    if (away) return away
     const b = (body ?? {}) as {
       job?: { id?: string; name?: string; schedule?: { everyMs?: number } }; host?: string
       wait?: { parked?: boolean; reason?: string; wait_until?: string | null; error?: string }
@@ -405,6 +412,9 @@ defineOp({
       result?: Record<string, unknown>; timeLimit?: { seconds?: number; line?: string; warning?: string }
       pending?: { testId: string; host?: string; limitSeconds?: number; runningForMs?: number }
     } | undefined
+    // Run on this host while the server is away (a host's follower): its own words.
+    const away = awayAnswer(body)
+    if (away) return away
     // A run longer than the call may wait (a session on another host gets about 20 s) goes on there.
     if (body?.pending) {
       const p = body.pending
@@ -467,7 +477,8 @@ defineOp({
     id: z.string().min(1).describe('Trigger (routine) id, as returned by trigger_create / trigger_list'),
   },
   handler: async (args, call) => {
-    const { job, changed } = await setTriggerEnabled(String(args.id), false, call)
+    const { job, changed, away } = await setTriggerEnabled(String(args.id), false, call)
+    if (away) return away
     const state = triggerRunState(job)
     return withOutcome(
       { id: job.id ?? args.id, name: job.name, state, changed },
@@ -493,7 +504,8 @@ defineOp({
     id: z.string().min(1).describe('Trigger (routine) id, as returned by trigger_create / trigger_list'),
   },
   handler: async (args, call) => {
-    const { job, changed } = await setTriggerEnabled(String(args.id), true, call)
+    const { job, changed, away } = await setTriggerEnabled(String(args.id), true, call)
+    if (away) return away
     return withOutcome(
       { id: job.id ?? args.id, name: job.name, state: 'armed', changed },
       changed
@@ -661,7 +673,8 @@ defineOp({
     id: z.string().min(1).describe('Trigger (routine) id, as returned by trigger_create / trigger_list'),
   },
   bind: { method: 'DELETE', path: '/routines/:id' },
-  mapResult: ({ args }) => withOutcome(
+  // Deleted on this host while the server is away (a host's follower): its own words.
+  mapResult: ({ body, args }) => awayAnswer(body) ?? withOutcome(
     { deleted: true, id: args.id },
     'Trigger deleted. Nothing polls for it any more, and its check script file is untouched.',
     'Nothing else is required.',

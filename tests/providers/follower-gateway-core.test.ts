@@ -7,7 +7,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createFollowerGateway, type FollowerGatewayResponse } from '../../src/providers/follower-gateway-core.js'
 
-interface Sock { name: string; answersLocal: boolean; sent: Array<{ ev: string; data: Record<string, unknown> }>; broken?: boolean }
+interface Sock { name: string; answersLocal: boolean; answersOnline?: boolean; sent: Array<{ ev: string; data: Record<string, unknown> }>; broken?: boolean }
 
 function setup(o: { linked?: Sock | null } = {}) {
   const sock: Sock = { name: 'follower', answersLocal: true, sent: [] }
@@ -19,6 +19,7 @@ function setup(o: { linked?: Sock | null } = {}) {
   const g = createFollowerGateway<Sock>({
     follower: () => (linked && linked.answersLocal ? linked : null),
     mayWrite: () => state.mayWrite,
+    answersOnline: (ws) => ws.answersOnline === true,
     now: () => state.now,
     send: (ws, ev, data) => { if (ws.broken) return false; ws.sent.push({ ev, data }); return true },
     nextRelayId: () => ++id,
@@ -174,5 +175,40 @@ describe('follower gateway', () => {
     s.state.now = job.deadline - 1_000
     expect(s.g.routeJob(job, vi.fn(), () => {})).toBe('none')
     expect(setup({ linked: null }).g.routeJob(job, vi.fn(), () => {})).toBe('none')
+  })
+
+  describe('a same-host send while the leader answers (online, follower-peer-v1)', () => {
+    const send = (over: Record<string, unknown> = {}) => call({ payload: { name: 'task_send', args: { to: 't2', text: 'hi', messageId: 'qm-host-x' } }, online: true, ...over })
+
+    it('goes only to a follower that said answersOnline, whatever the write gate says, marked online', () => {
+      const s = setup()
+      s.state.mayWrite = false
+      expect(s.g.answersOnline('/h')).toBe(false)
+      expect(s.g.handOff(send({ fallback: vi.fn() }), vi.fn())).toBe(false)
+      s.sock.answersOnline = true
+      expect(s.g.answersOnline('/h')).toBe(true)
+      expect(s.g.handOff(send({ fallback: vi.fn() }), vi.fn())).toBe(true)
+      expect(s.sock.sent[0]!.data).toMatchObject({ online: true, payload: { args: { messageId: 'qm-host-x' } } })
+      // An away call still keeps the write gate.
+      expect(s.g.handOff(call({ fallback: vi.fn() }), vi.fn())).toBe(false)
+    })
+
+    it('what the follower leaves (needs_leader), and no answer in time, go to the leader: never a hub_timeout', () => {
+      const s = setup()
+      s.sock.answersOnline = true
+      const relay = vi.fn()
+      const respond = vi.fn()
+      s.g.handOff(send({ fallback: relay }), respond)
+      s.g.settle(s.sock, 101, { ok: false, error: { code: 'needs_leader', message: 'your Mac delivers it' } })
+      expect(relay).toHaveBeenCalledTimes(1)
+      s.g.handOff(send({ fallback: relay }), respond)
+      s.fire()
+      expect(relay).toHaveBeenCalledTimes(2)
+      expect(respond).not.toHaveBeenCalled()
+      // Its answer is the caller's otherwise.
+      s.g.handOff(send({ fallback: relay }), respond)
+      s.g.settle(s.sock, 103, { ok: true, result: { delivery: 'queued', via: 'host' } })
+      expect(respond).toHaveBeenCalledWith({ ok: true, result: { delivery: 'queued', via: 'host' } })
+    })
   })
 })

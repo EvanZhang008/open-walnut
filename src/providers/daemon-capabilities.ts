@@ -1223,6 +1223,38 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // `task-start`. Both twins. Optional: the Mac pushes the routine template to it, and the host
   // server manager turns on the replica's `host-local-calls` capability only with it.
   'follower-gateway-v1',
+  // 'host-call-entry-v1' (host-call-token-core.ts, replica/host-call-entry.ts): a follower that
+  // answers local calls may say its call entry's address (`callUrl` at follower.hello and in its
+  // report); a session, ACP worker or plugin job this daemon starts then gets WALNUT_CALL_URL and
+  // WALNUT_CALL_TOKEN (HMAC-SHA256 of its caller sid under a key in the daemon dir) beside
+  // WALNUT_AGENT_SOCKET, and posts its request lines there. The follower hands each back with
+  // `follower.gateway {request, token, openedAt, peerPid?}`: the token is checked for the line's
+  // sid, then the line runs as a socket line does (handleGatewayLine). Both twins. Optional: the
+  // follower answers `entry_unavailable` without it, and the caller uses the socket.
+  'host-call-entry-v1',
+  // 'follower-peer-v1' (offline-host-core.ts handleFollowerPeer, replica/away-sends.ts): a message
+  // between two of this Walnut's sessions here, or an answer to a request, that the host's own
+  // server decided (target, refusals, the reply rule, the envelope) is written by `follower.peer
+  // {kind: send|reply, ...}`: the daemon registers the row, writes the live CLI and journals
+  // `row`/`settle`/`delivery` as its own offline answer does; a retry under the same op id is
+  // written once. `online` (the leader answers): a follower that said `answersOnline: true` at
+  // follower.hello gets the same-host sends handleLocal would take, and what it leaves is relayed
+  // to the leader. Both twins. Optional: without it the follower hands a reply-asking send back.
+  'follower-peer-v1',
+  // 'follower-trigger-delivery-v1' (follower-trigger-delivery-core.ts): while no leader claims a
+  // trigger fire, a follower that said `deliversTriggers: true` at follower.hello gets a
+  // `trigger-delivery` event, picks the session with its copies, and answers
+  // `follower.trigger.deliver {deliveryId, sid, resume}`; the daemon writes it (the FIFO, or a
+  // resume journaled `resume`) and marks the fire host-delivered as before. A follower that
+  // keeps failing gets the daemon's own delivery. Both twins. Optional: a follower that never
+  // said it is never offered one, and a daemon without it delivers on its own as before.
+  'follower-trigger-delivery-v1',
+  // 'follower-triggers-v1' (offline-host-core.ts followerTriggers / followerTriggerTest,
+  // replica/away-triggers.ts): `follower.triggers {id?}` lists that Walnut's triggers here (armed,
+  // paused or deleted here, each with its def) for the follower's trigger_list and the read before a
+  // pause, and `follower.trigger.test {args, actor}` runs a check once, writing no state. Both twins.
+  // Optional: without it the follower reads its routines copy alone and hands trigger_test back.
+  'follower-triggers-v1',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

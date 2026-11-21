@@ -17,6 +17,7 @@ import { JHOME, TASK_A, journalTmpDir, cleanupJournalDirs, journalHost, jslice, 
 import { createWritePort, createdRow, mintTaskId, refusalAnswer, type TaskRow, type WriteActor } from '../../src/replica/write-port.js'
 import { createOverlay } from '../../src/replica/overlay.js'
 import { linkWrite } from '../../src/replica/ws-writes.js'
+import { taskExecution } from '../../src/ops/task-execution.js'
 
 const T0 = Date.parse('2026-10-14T12:00:00Z')
 const PHONE: WriteActor = { kind: 'device', deviceId: 'dev-marina-phone', name: 'Marina phone' }
@@ -26,7 +27,7 @@ const COPY_ONLY: TaskRow = { id: 'mtaskccc-0003', title: 'Release plan', phase: 
 
 afterEach(() => cleanupJournalDirs())
 
-function rig(opts: { lose?: (n: number) => boolean } = {}) {
+function rig(opts: { lose?: (n: number) => boolean; forReaders?: (row: TaskRow) => Promise<TaskRow> } = {}) {
   const dir = journalTmpDir()
   const clock = { now: T0 }
   const { host } = journalHost(dir, clock, { boards: true })
@@ -53,6 +54,7 @@ function rig(opts: { lose?: (n: number) => boolean } = {}) {
     createdHere: (id) => overlay.createPending(id),
     board: async () => null,
     noteWritten: (e) => { written.push(e); overlay.noteWritten(e) },
+    ...(opts.forReaders ? { forReaders: opts.forReaders } : {}),
     now: () => clock.now,
     randomHex: (n) => (++hexN).toString(16).padStart(n * 2, '0'),
   })
@@ -173,6 +175,24 @@ describe('write port: what follower.op journals', () => {
 })
 
 describe('write port: refusals and retries', () => {
+  it('a write\'s answer row is the one a read shows right after: its session\'s state, so its execution is not unknown', async () => {
+    const SID = 'eeeeeeee-5555-4555-8555-00000000000a'
+    const seen: TaskRow[] = []
+    const r = rig({ forReaders: async (row) => { seen.push(row); return { ...row, session_id: SID, session_ids: [SID], session_status: { process_status: 'idle' } } } })
+    const a = await r.port.taskUpdate(r.write(), PHONE, TASK_A, { tags: ['team:acme'] })
+    expect(a).toMatchObject({ answered: false, status: 200, body: { queued: true, task: { id: TASK_A, tags: ['team:acme'], session_id: SID, replica_sync: 'pending' } } })
+    expect(taskExecution((a as { body: { task: Record<string, unknown> } }).body.task).state).toBe('idle')
+    expect(seen).toEqual([expect.objectContaining({ id: TASK_A, tags: ['team:acme'] })])
+    // A failed enrichment answers the journal's row; a refused write is never enriched.
+    const failing = rig({ forReaders: async () => { throw new Error('store busy') } })
+    const b = await failing.port.taskComplete(failing.write(), PHONE, TASK_A)
+    expect(b).toMatchObject({ status: 200, body: { task: { id: TASK_A, phase: 'COMPLETE', replica_sync: 'pending' } } })
+    seen.length = 0
+    const refused = await r.port.taskUpdate(r.write(), PHONE, 'mtask-none', { tags: ['x'] })
+    expect(refused).toMatchObject({ status: 404 })
+    expect(seen).toEqual([])
+  })
+
   it('one non-queueable field refuses the whole write: needs_leader {fields}, nothing sent, nothing journaled', async () => {
     const r = rig()
     const a = await r.port.taskUpdate(r.write(), PHONE, TASK_A, { title: 'Renamed', session_id: 'x', walnut_agent: true })

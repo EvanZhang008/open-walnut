@@ -127,6 +127,24 @@ function resumableForTrigger(s: SessionRecord): boolean {
   return true;
 }
 
+/**
+ * What a host's copy says of a session beside its id, ONE rule for the copy this server sends
+ * the host (below) and the host's own server reading its copies (replica/away-trigger-delivery.ts).
+ * `listable` is session-tracker.ts isListableSession(s).
+ */
+export function hostSessionFlags(s: SessionRecord, listable: boolean): { aside?: boolean; noResume?: boolean; acp?: boolean } {
+  return {
+    // An environment or lane session: never a message's address by name, nor a
+    // reply's (session-send-core.ts, reply-routing.ts), so the host leaves those to us.
+    ...(listable ? {} : { aside: true }),
+    // The host resumes a stopped session for a trigger fire only where we would.
+    ...(resumableForTrigger(s) ? {} : { noResume: true }),
+    // An ACP session runs in the server's ACP worker, never a CLI of this host's registry: a
+    // message to it is the server's to deliver (2026-11-10: a stray Claude CLI on a Codex id took one).
+    ...(engineCaps(s.engine).runtimeKind === 'native' ? {} : { acp: true }),
+  };
+}
+
 /** The queueable scalar fields a host copy carries. */
 const SLICE_SCALARS = ['status', 'priority', 'due_date', 'start_date', 'end_date', 'sprint', 'focus_tier', 'wait_until'] as const;
 
@@ -148,7 +166,7 @@ function sliceFields(t: Task): Partial<OfflineSliceTask> {
 }
 
 /** Whether its host's copy lists this session (before the MAX_SESSIONS cap). */
-function inHostCopy(s: SessionRecord, now: number): boolean {
+export function inHostCopy(s: SessionRecord, now: number): boolean {
   return !s.archived
     && s.provider !== 'embedded' && s.provider !== 'sdk'
     && now - Date.parse(s.lastActiveAt || s.startedAt || '') < SESSION_RECENCY_MS;
@@ -283,14 +301,7 @@ export async function buildHostSlice(hostKey: string | readonly string[], now = 
       ...(s.title ? { title: s.title } : {}),
       // An ACP session's `walnut` names itself by its worker's runtime id (acp-caller-sid.ts).
       ...(s.acpRuntimeId && s.acpRuntimeId !== s.claudeSessionId ? { runtimeId: s.acpRuntimeId } : {}),
-      // An environment or lane session: never a message's address by name, nor a
-      // reply's (session-send-core.ts, reply-routing.ts), so the host leaves those to us.
-      ...(isListableSession(s) ? {} : { aside: true }),
-      // The host resumes a stopped session for a trigger fire only where we would.
-      ...(resumableForTrigger(s) ? {} : { noResume: true }),
-      // An ACP session runs in the server's ACP worker, never a CLI of this host's registry: a
-      // message to it is the server's to deliver (2026-11-10: a stray Claude CLI on a Codex id took one).
-      ...(engineCaps(s.engine).runtimeKind === 'native' ? {} : { acp: true }),
+      ...hostSessionFlags(s, isListableSession(s)),
     })),
     tasks: [...picked.values()],
     requests: pending,

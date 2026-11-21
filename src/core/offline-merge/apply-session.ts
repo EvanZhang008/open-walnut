@@ -40,7 +40,9 @@
  * was away (a plugin job's task_create, started from its project's session defaults and the
  * routine template: host-start-core.ts planTask). It is adopted the same way as a
  * routine's run (adoptRun), without the routine: never an ask, the task's folder set, the
- * session context this Mac appends. Any other `run` is refused, never taken for an ask.
+ * session context this Mac appends, and the phase its start gives a TODO task online (In
+ * Progress; the rescue's look at the CLI then hands a turn that already ended back, as a
+ * reconnect does). Any other `run` is refused, never taken for an ask.
  *
  * A session record no rule takes is a RefusedWrite, the stores' own refusals included (one
  * session per task, a session of one task): never an error the drain retries, which would hold
@@ -231,20 +233,62 @@ async function adoptRun(
     appendPrompt = (await buildSessionContext(taskId, cwd, ctx.hostKey)).systemPrompt;
   } catch { /* the context is additive: a resume without it still answers */ }
   const title = typeof record.title === 'string' && record.title.trim() ? record.title.slice(0, 500) : task.title ?? '';
-  await adoptOutsideRecord({ claudeSessionId: sid, taskId }, () => createSessionRecord(sid, taskId, task.project ?? '', cwd, {
-    host: ctx.hostKey,
-    ...(title ? { title } : {}),
-    ...(mode ? { mode } : {}),
-    ...(model ? { cliModel: model } : {}),
-    ...(effort ? { effort } : {}),
-    appliedAppendSystemPrompt: appendPrompt,
-    initialProcessStatus: 'stopped',
-  }));
+  // A task's start sent its first message (`run: 'task'`): the phase that input gives online, written
+  // BEFORE the session record, so the reconnect's look at the CLI (the rescue) hands a turn that
+  // already ended back exactly as online (session-snapshot-apply.ts: a phase set after the record's
+  // status would read as a person's later choice and be kept).
+  const started = routine ? null : await startPhase(taskId, sid, ctx.at);
+  try {
+    await adoptOutsideRecord({ claudeSessionId: sid, taskId }, () => createSessionRecord(sid, taskId, task.project ?? '', cwd, {
+      host: ctx.hostKey,
+      ...(title ? { title } : {}),
+      ...(mode ? { mode } : {}),
+      ...(model ? { cliModel: model } : {}),
+      ...(effort ? { effort } : {}),
+      appliedAppendSystemPrompt: appendPrompt,
+      initialProcessStatus: 'stopped',
+    }));
+  } catch (err) {
+    // No session was adopted: the task reads as it did (a retry writes the phase again).
+    if (started) await undoStartPhase(taskId, started);
+    throw err;
+  }
   rescueAfterBatch(ctx.hostKey, sid);
   await linkAdopted(taskId, sid, mode === 'plan' ? 'plan' : 'exec');
   ctx.result.replayed++;
   if (routine) log.session.info('offline handover: adopted a routine run the host started while this Mac was away', { host: ctx.hostKey, sessionId: sid, taskId, jobId: routine.id, slotMs: routine.slotMs, mode, model });
   else log.session.info('offline handover: adopted the session of a task a plugin job created while this Mac was away', { host: ctx.hostKey, sessionId: sid, taskId, mode, model });
+}
+
+/**
+ * The phase a task's start gives it online, for a task still TODO: the start's message is the
+ * session's input. Its field time is the start's own (`startedAt`, this server's clock), not the
+ * drain's, so a phase the host wrote after the start (drained next, judged newer by time:
+ * task-fields.ts) still wins over it. Returns when it was written (`phase_changed_at`), or null
+ * when nothing moved.
+ */
+async function startPhase(taskId: string, sid: string, startedAt: number): Promise<string | null> {
+  const { applySessionPhase } = await import('../phase.js');
+  const moved = await applySessionPhase(taskId, 'session:input', 'offline-handover', {
+    sessionId: sid, shouldApply: (current) => current.phase === 'TODO',
+  });
+  if (!moved.changed) return null;
+  const { getTask, updateTaskRaw } = await import('../task-manager.js');
+  const written = (await getTask(taskId)).phase_changed_at ?? null;
+  const at = new Date(startedAt).toISOString();
+  await updateTaskRaw(taskId, (t) => ({ field_at: { ...(t.field_at ?? {}), phase: at } }), {
+    source: 'offline-handover',
+    shouldUpdate: (t) => t.phase === 'IN_PROGRESS' && t.phase_changed_at === written && Number.isFinite(startedAt) && (t.field_at?.phase ?? '') > at,
+  }).catch((err: unknown) => log.session.warn('offline handover: a start\'s phase kept the drain\'s time', { taskId, error: err instanceof Error ? err.message : String(err) }));
+  return written;
+}
+
+/** The start's phase taken back, only while nothing moved it since. */
+async function undoStartPhase(taskId: string, writtenAt: string): Promise<void> {
+  const { updateTaskRaw } = await import('../task-manager.js');
+  await updateTaskRaw(taskId, { phase: 'TODO' }, {
+    source: 'offline-handover', shouldUpdate: (current) => current.phase === 'IN_PROGRESS' && current.phase_changed_at === writtenAt,
+  }).catch((err: unknown) => log.session.warn('offline handover: a refused run\'s start phase was not taken back', { taskId, error: err instanceof Error ? err.message : String(err) }));
 }
 
 /**

@@ -109,6 +109,12 @@ export interface WritePortDeps {
   board(taskId: string): Promise<BoardBase | null>
   /** A write the daemon took: the overlay holds it from now on (and asks the daemon again soon). */
   noteWritten(entry: WrittenEntry): void
+  /**
+   * A task write's answer row as a read shows it right after (the reader fold, the Mac's session
+   * enrichment: away-wiring.ts), so its `execution` is the one task_get reads; absent or failing:
+   * the journal's row as it is.
+   */
+  forReaders?(row: TaskRow): Promise<TaskRow>
   randomHex?(bytes: number): string
   now?(): number
   log?(level: 'info' | 'warn', msg: string, data?: Record<string, unknown>): void
@@ -289,10 +295,14 @@ export function createWritePort(deps: WritePortDeps): WritePort {
     const r = await w.submit(op, args, base, actor)
     const fields: Record<string, { base: unknown; value: unknown }> = {}
     for (const [k, v] of Object.entries(values)) fields[k] = { base: base[k], value: v }
-    return settle(r, actor, { kind: 'task-fields', op, taskId, fields }, (reply) => ({
+    const answer = settle(r, actor, { kind: 'task-fields', op, taskId, fields }, (reply) => ({
       answered: false, status: 200,
       body: { task: { ...withValues(row, values, new Date(now()).toISOString()), replica_sync: 'pending' }, queued: true, offline: true, opId: reply.opId },
     }))
+    if (answer.answered || answer.status !== 200 || !deps.forReaders) return answer
+    const task = answer.body.task as TaskRow
+    const shown = await deps.forReaders(task).catch(() => task)
+    return { ...answer, body: { ...answer.body, task: { ...shown, replica_sync: 'pending' } } }
   }
 
   return {

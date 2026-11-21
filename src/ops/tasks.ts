@@ -9,7 +9,7 @@ import { handOffLine, type HandOffResult } from '../core/org/thread-follow.js'
 import { defineOp } from './registry.js'
 import { materializeBinding } from './executor.js'
 import { taskRefTag } from '../utils/entity-refs.js'
-import { dispatchHint, withOutcome } from './outcome.js'
+import { awayAnswer, dispatchHint, withOutcome } from './outcome.js'
 import { startTask, TASK_START_INPUT, taskView } from './task-execution.js'
 import { PHASE_ORDER } from '../core/phase.js'
 import { isInboxProject } from '../core/inbox-project.js'
@@ -1171,11 +1171,16 @@ defineOp({
     if (typeof args.file === 'string' && args.file.trim()) {
       const body = await call('PUT', `/tasks/${encodeURIComponent(id)}/memory-files/${encodeURIComponent(args.file.trim())}`, { content: args.content }) as
         { name?: string; removed?: boolean; bytes?: number; count?: number }
+      // Saved on this host while the server is away: its own words (ops/outcome.ts awayAnswer).
+      const away = awayAnswer(body)
+      if (away) return away
       return withOutcome(body, body.removed ? `Note ${body.name} removed.` : `Note ${body.name} written: ${body.bytes} bytes, ${body.count} of 20 notes.`,
         body.removed ? 'No further action is required.' : 'Your prompt lists it from your next session start; name it in your MEMORY.md so you find it after a compaction.')
     }
     const body = await call('PUT', `/tasks/${encodeURIComponent(id)}/agent-memory`, { content: args.content, mode: args.mode ?? 'append' }) as
       { title?: string; chars?: number; soft_limit?: number }
+    const away = awayAnswer(body)
+    if (away) return away
     const over = (body.chars ?? 0) > (body.soft_limit ?? Infinity)
     return withOutcome(
       body,

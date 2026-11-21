@@ -19,7 +19,7 @@ import { SegmentedControl } from '../inputs/SegmentedControl';
 import { CopyButton } from '../inputs/CopyButton';
 import { apiPost } from '@/api/client';
 import { describeExpose, optionFits } from './cloud/browser-access-status';
-import { copiesSummary, describeHostServer } from './host-servers-status';
+import { copiesSummary, describeHostServer, hostServerSwitchWords } from './host-servers-status';
 import { ReplicaCopyRows } from './ReplicaCopyRows';
 import { useHostSettings } from './host-settings-data';
 import '@/styles/browser-access.css';
@@ -39,6 +39,7 @@ export function HostServerPart({ hostKey }: { hostKey: string }) {
   const providers = s.data.providers;
   const line = describeHostServer(host);
   const on = host.settings.enabled;
+  const byDefault = hostServerSwitchWords(host);
   const exposeSettings = host.settings.expose;
   const providerId = exposeSettings.provider ?? providers[0]?.id ?? null;
   const provider = providers.find((p) => p.id === providerId) ?? null;
@@ -108,6 +109,11 @@ export function HostServerPart({ hostKey }: { hostKey: string }) {
               >
                 {update ? 'Update to this build' : 'Start it again'}
               </SettingsButton>
+            )}
+            {byDefault && (
+              <span className="settings-addons-muted" data-testid={`host-server-by-default-${host.hostKey}`} title="Every host runs one by default; turning it off keeps it off.">
+                {byDefault}
+              </span>
             )}
             <ToggleSwitch
               id={`host-server-enabled-${host.hostKey}`}

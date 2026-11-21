@@ -2006,6 +2006,26 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           capabilities: () => front.link.capabilities(),
           request: (cmd, params, timeoutMs) => front.link.request(cmd, params, timeoutMs),
         }))
+        // A message from this host's own calls, and a same-host one while the Mac answers (away-sends.ts).
+        app.use('/api', (await import('../replica/away-sends.js')).wireAwaySends({
+          away, hostKey, continued: (sid) => asks.watch(sid),
+          capabilities: () => front.link.capabilities(),
+          request: (cmd, params, timeoutMs) => front.link.request(cmd, params, timeoutMs),
+        }))
+        // The rest of them (away-calls.ts, away-triggers.ts): a MEMORY.md write, a letter, a trigger.
+        app.use('/api', await (await import('../replica/away-calls.js')).wireAwayCalls({ away }))
+        app.use('/api', await (await import('../replica/away-triggers.js')).wireAwayTriggers({
+          away, hostKey,
+          capabilities: () => front.link.capabilities(),
+          request: (cmd, params, timeoutMs) => front.link.request(cmd, params, timeoutMs),
+        }))
+        // A trigger fire no server claimed: this server picks its session (away-trigger-delivery.ts).
+        const triggers = (await import('../replica/away-trigger-delivery.js')).wireAwayTriggerDelivery({
+          task: (id) => away.task(id), hostKey,
+          request: (cmd, params, timeoutMs) => front.link.request(cmd, params, timeoutMs),
+          log: (level, msg, data) => log.web[level](msg, data),
+        })
+        front.answerTriggerDeliveries((event) => { void triggers.handle(event) })
       }
     }
     app.use('/api', away.writes)

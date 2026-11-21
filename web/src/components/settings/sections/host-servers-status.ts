@@ -151,6 +151,15 @@ export function lastReportText(v: HostServerView, now = Date.now()): string {
   return `Last answered ${timeAgo(new Date(v.lastReportAt).toISOString(), { long: true, now })}${what ? `: ${what}` : ''}.`;
 }
 
+/**
+ * The words beside the host's switch when it is on only because every host runs one by default
+ * (the experiment follower_on_every_host, `chosenBy: 'default'`), so the switch says it follows
+ * the default; null when the person set it, it is off, or an older server says nothing.
+ */
+export function hostServerSwitchWords(entry: HostServerEntry): string | null {
+  return entry.settings.enabled && entry.settings.chosenBy === 'default' ? 'On (default)' : null
+}
+
 export function describeHostServer(entry: HostServerEntry, now = Date.now()): HostServerLine {
   const line = describeHostServerNow(entry);
   const kept = entry.settings.enabled && entry.view ? lastReportText(entry.view, now) : '';

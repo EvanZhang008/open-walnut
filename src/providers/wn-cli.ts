@@ -22,6 +22,7 @@
  * separate, mechanical commit.
  */
 import fs from 'node:fs'
+import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -29,6 +30,7 @@ import type { GatewayError, GatewayErrorCode, GatewayOp, GatewayRequest, Gateway
 import { EXTERNAL_CALLER_SID, wellKnownGatewaySocketPaths } from './gateway-core.js'
 import { withFileLock } from '../utils/file-lock.js'
 import { waitThroughRestart } from '../lib/wait-through-restart.js'
+import { createHostCallClient } from './host-call-client-core.js'
 import { GATEWAY_INLINE_ARGS_MAX_BYTES, classifyArgsSource, parseToolArgs, strippedShellText, strippedShellTextMessage, trailingArgsMessage } from './tool-args-source.js'
 import {
   classifyTemplateGateway, templateCheckGap, templateCheckInput, templateCheckReplyMs, templateCheckRequestInput,
@@ -475,8 +477,35 @@ export function probeSocket(socketPath: string): WalnutSocketInfo | null {
 // ── socket transport ──
 
 class WalnutCliTimeoutError extends Error {}
+/** The code of a line the host call entry took whose answer was lost: it was sent (neverSent says no). */
+const ENTRY_LOST = 'ENTRY_LOST'
 
+/**
+ * One request line to this host's Walnut: the host call entry first when the daemon gave this
+ * process one (WALNUT_CALL_URL + WALNUT_CALL_TOKEN, host-call-client-core.ts), else, or when the
+ * entry did not take it (nothing ran), the gateway socket with the very same line (same call id).
+ * A line the entry took whose answer was lost fails as a socket call whose answer was lost does
+ * (a timeout, or a link that broke after the line left), never sent again. Same answers either way.
+ */
 function requestOverSocket(
+  socketPath: string,
+  req: GatewayRequest,
+  timeoutMs = WALNUT_CLI_TIMEOUT_MS,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<GatewayResponse> {
+  const entry = createHostCallClient({ http, env })
+  if (!entry.entry()) return requestOverSocketOnly(socketPath, req, timeoutMs)
+  return entry.post(req as unknown as Record<string, unknown>, timeoutMs).then((o) => {
+    if (o.kind === 'answer') return o.resp as GatewayResponse
+    if (o.kind === 'lost') {
+      if (o.timeout) throw new WalnutCliTimeoutError(o.message)
+      throw Object.assign(new Error(o.message), { code: ENTRY_LOST, answerStarted: true })
+    }
+    return requestOverSocketOnly(socketPath, req, timeoutMs)
+  })
+}
+
+function requestOverSocketOnly(
   socketPath: string,
   req: GatewayRequest,
   timeoutMs = WALNUT_CLI_TIMEOUT_MS,
@@ -662,6 +691,7 @@ export async function fetchHubOps(
       socket,
       { v: 1, op: 'tools.list', sid, args: name ? { name } : {} },
       HUB_CATALOG_TIMEOUT_MS,
+      env,
     )
     if (!resp.ok) return null
     const ops = resp.result.ops
@@ -687,10 +717,13 @@ export async function callHostDaemonTool(
   if (!socket || !sid || !probeSocket(socket)?.isSocket) return null
   try {
     // The call's id (src/lib/op-call-id.ts): a resend runs it at most once.
-    return await requestOverSocket(socket, { v: 1, op: 'tools.call', sid, args: { name, args, ...(callId ? { callId } : {}) } })
+    return await requestOverSocket(socket, { v: 1, op: 'tools.call', sid, args: { name, args, ...(callId ? { callId } : {}) } }, WALNUT_CLI_TIMEOUT_MS, env)
   } catch (err) {
-    // A timeout is no proof nothing was delivered: it is the answer, not a miss.
-    if (err instanceof WalnutCliTimeoutError) return { ok: false, error: { code: 'hub_timeout', message: err.message } }
+    // A timeout is no proof nothing was delivered: it is the answer, not a miss. Nor is a line
+    // the host call entry took whose answer broke off.
+    if (err instanceof WalnutCliTimeoutError || (err as { code?: unknown } | null)?.code === ENTRY_LOST) {
+      return { ok: false, error: { code: 'hub_timeout', message: (err as Error).message } }
+    }
     return null
   }
 }
@@ -722,6 +755,8 @@ async function runPluginJobProcess(argv: string[]): Promise<number> {
       clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
     }),
     home: os.homedir(),
+    // host-call-entry-v1: the run's calls go to this host's call entry first (host-call-client-core.ts).
+    hostCall: createHostCallClient({ http, env: process.env }),
   })
   return harness.run(argv)
 }
