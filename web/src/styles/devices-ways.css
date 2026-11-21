@@ -205,3 +205,6 @@ a.pc-server:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 .devices-qr-dialog-token { display: flex; align-items: flex-start; gap: 8px; margin-top: 6px; }
 .devices-qr-dialog-token .devices-token { flex: 1; min-width: 0; margin-top: 0; }
 .app-modal.devices-qr-dialog:focus { outline: none; }
+
+/* "Sign in a browser on this Wi-Fi" (cloud/WifiSignIn.tsx): what to do, above the fine print. */
+.devices-wifi-steps { display: block; margin-bottom: 6px; color: var(--fg); }

@@ -24,6 +24,7 @@ import { formatAbsoluteTime } from '../addons-format';
 import { apiDelete } from '@/api/client';
 import { ApiError } from '@/api/api-error';
 import { BROWSER_SIGNED_IN_EVENT, devicesListChanged } from './devices-list';
+import { WifiSignInRow } from './WifiSignIn';
 import { useEvent } from '@/hooks/useWebSocket';
 import { PairQrDialog, type PairQrPhase } from './PairQrDialog';
 import { requestFailureText } from '@/utils/request-failure';
@@ -74,6 +75,10 @@ export function DeviceList({ scope }: { scope: DeviceScope }) {
   const fixedTarget = scope === 'all' && listState !== 'ready'
     ? null
     : pairTargetForScope(scope, targets.map((t) => t.kind), { replica, deviceCaller: caller.isDevice });
+  // Signing a browser in on this Wi-Fi: on this Mac, by the person at it, once the list names its address.
+  const wifiOrigin = scope === 'all' && !replica && !caller.isDevice && listState === 'ready'
+    ? targets.find((t) => t.kind === 'lan')?.origin ?? null
+    : null;
   const { created, qrDataURL, busy, mint, dismiss } = usePairDevice();
   const [rowError, setRowError] = useState<RowError | null>(null);
   // "Signed out 4 browsers.", after Sign out (the rows it names are gone), until the pane closes.
@@ -384,10 +389,12 @@ export function DeviceList({ scope }: { scope: DeviceScope }) {
     <div className="devices-section" data-testid={`devices-list-${scope}`}>
       {phonesGroup}
 
-      {linkBrowsers.length > 0 && (
+      {(linkBrowsers.length > 0 || wifiOrigin) && (
         // Browsers signed in with a code (a phone's Safari, another computer): their own group,
-        // so a signed-in phone never reads "No phones paired yet".
-        <SettingsGroup heading="Signed-in browsers" headingTrailing={String(linkBrowsers.length)} data-testid="devices-browsers-group">
+        // so a signed-in phone never reads "No phones paired yet". On All devices it also signs
+        // one more in on this Wi-Fi, with no tunnel (WifiSignIn.tsx).
+        <SettingsGroup heading="Signed-in browsers" headingTrailing={linkBrowsers.length > 0 ? String(linkBrowsers.length) : undefined} data-testid="devices-browsers-group">
+          {wifiOrigin && <WifiSignInRow origin={wifiOrigin} />}
           {/* First, so it stays in reach above a long list; with one browser, its own row's
               Sign out is the same action. */}
           {!caller.isDevice && signedInBrowsers.length >= 2 && (
