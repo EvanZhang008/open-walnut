@@ -203,7 +203,9 @@ describe('launch-mode ceiling on every start path', () => {
     const starts: Record<string, number> = {}
     // The daemon twins answer the command; they do not send it.
     for (const { file, src } of files.filter(f => !f.file.startsWith('src/providers/'))) {
-      const n = (src.match(/\.call\(\s*'follower\.start'/g) ?? []).length
+      // Any quoted name of the command in code (a link's call or request, any quote), comments aside.
+      const code = src.split('\n').filter(l => !/^\s*(?:\*|\/\/|\/\*)/.test(l)).join('\n')
+      const n = (code.match(/['"`]follower\.start['"`]/g) ?? []).length
       if (n) starts[file] = n
     }
     expect(starts).toEqual(Object.fromEntries(Object.entries(FOLLOWER_STARTS).map(([f, v]) => [f, v.count])))
@@ -211,8 +213,9 @@ describe('launch-mode ceiling on every start path', () => {
       const src = files.find(f => f.file === file)!.src
       const caps = callsIn(src, ['capAwayStart'], 0).map(c => c.call)
       expect(caps.length, `${file} caps no start mode`).toBeGreaterThan(0)
-      // A mode read off the body (b.mode, bodyOf(req).mode) only inside the cap's call.
-      const outside = caps.reduce((rest, call) => rest.split(call).join(''), src).match(/\b(?:b|body|bodyOf\(req\))\.mode\b/g) ?? []
+      // A mode read off the body (b.mode, b['mode'], req.body.mode, bodyOf(req).mode, { mode } = b) only inside the cap's call.
+      const rest = caps.reduce((left, call) => left.split(call).join(''), src)
+      const outside = rest.match(/\b(?:b|body|req\.body|bodyOf\(req\))(?:\.mode\b|\[\s*['"`]mode['"`]\s*\])|\{[^}]*\bmode\b[^}]*\}\s*=\s*(?:b|body|req\.body|bodyOf\(req\))\b/g) ?? []
       expect(outside, `${file} reads a mode off the body outside capAwayStart`).toEqual([])
     }
   })
