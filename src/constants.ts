@@ -181,6 +181,12 @@ export const LEADER_STATE_DIR = path.join(WALNUT_HOME, 'cache', 'leader');
 /** When each host's link was down (NON-git, per box): read back at boot so a wait across a
  *  restart leaves out the host's outage. See providers/host-link-ledger.ts. */
 export const HOST_LINK_LEDGER_FILE = path.join(WALNUT_HOME, 'cache', 'host-link-ledger.json');
+/** When this machine slept and when no server ran (NON-git, per box): read back at boot so a
+ *  wait across a restart leaves both out. See lib/sleep-ledger.ts. */
+export const SLEEP_LEDGER_FILE = path.join(WALNUT_HOME, 'cache', 'sleep-ledger.json');
+/** The running server's last alive stamp (NON-git, per box), rewritten every few seconds:
+ *  the next server's start minus it is time no server ran. See lib/sleep-ledger.ts. */
+export const SERVER_ALIVE_FILE = path.join(WALNUT_HOME, 'cache', 'server-alive.json');
 /** Letter read/pin/archive changes a cloud box took for the primary (NON-git,
  *  cloud box only): queued while the primary was unreachable, and kept after
  *  delivery until the git-synced inbox shows them. See core/human-inbox/replica-state.ts. */

@@ -129,6 +129,8 @@ export function createMockConstants(prefix = 'walnut-test', overrides: Record<st
     SEND_QUEUE_DIR: path.join(tmpBase, 'cache', 'send-queue'),
     LEADER_STATE_DIR: path.join(tmpBase, 'cache', 'leader'),
     HOST_LINK_LEDGER_FILE: path.join(tmpBase, 'cache', 'host-link-ledger.json'),
+    SLEEP_LEDGER_FILE: path.join(tmpBase, 'cache', 'sleep-ledger.json'),
+    SERVER_ALIVE_FILE: path.join(tmpBase, 'cache', 'server-alive.json'),
     HUMAN_INBOX_QUEUE_DIR: path.join(tmpBase, 'cache', 'human-inbox-queue'),
     NOTES_DIR: path.join(tmpBase, 'notes'),
     REPOSITORIES_DIR: path.join(tmpBase, 'repositories'),

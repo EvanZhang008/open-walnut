@@ -12408,6 +12408,7 @@ export class SessionRunner {
     const startupRecovery = async () => {
       // What earlier servers saw of each host's link, before any queued row is delivered
       // (host-link-ledger.ts): a row that waited across a restart for its host leaves that out.
+      // The sleep ledger is the server's own (web/server.ts, after the instance lock).
       await loadHostLinkLedger().catch(() => {})
       // Read durable rows and cancellation evidence before attaching to a stream.
       await loadQueue()
@@ -15428,6 +15429,7 @@ export class SessionRunner {
       messageId: lat.messageId ?? msgs[0]?.id,
       ...(lat.wallMs !== undefined ? { wallMs: lat.wallMs } : {}),
       ...(lat.sleptMs !== undefined ? { sleptMs: lat.sleptMs } : {}),
+      ...(lat.serverDownMs !== undefined ? { serverDownMs: lat.serverDownMs } : {}),
       ...(lat.linkDownMs !== undefined ? { linkDownMs: lat.linkDownMs } : {}),
       ...(lat.heldMs !== undefined ? { heldMs: lat.heldMs } : {}),
       ...(machineMs > 0 ? { machineMs } : {}),

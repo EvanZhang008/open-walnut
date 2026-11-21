@@ -1392,6 +1392,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     }
     // Capture for the fatal-signal path (which cannot await an import).
     releaseInstanceLockSync = releaseInstanceLock
+    // This process owns the data folder now: read back what earlier servers saw of this
+    // machine's sleep and when no server ran, and stamp from now on that this one is alive
+    // (lib/sleep-ledger.ts), before any queued row is delivered. Only the server keeps it: a
+    // CLI that runs sessions (walnut session start) would read as a server beside it.
+    await import('../lib/sleep-ledger.js')
+      .then((m) => m.loadSleepLedger(undefined, { onWriteError: (error) => log.web.warn('sleep ledger: write failed', { error }) }))
+      .catch(() => {})
     if (bootPolicy('foreign-db-guard')) {
       await assertNoForeignDbHolders()
       // The all-clear (the user killed the rogue writer) retires the SECOND

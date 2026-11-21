@@ -13,7 +13,10 @@
  *    it again from the row's enqueue time read 43 ms as 403 s. When the daemon
  *    says when it wrote the line (`writtenAt`), that is the wait; else the wait
  *    is unknown and nothing is counted.
- *  - Time this machine slept (sleep-ledger.ts).
+ *  - Time this machine slept (sleep-ledger.ts), as far as any server of this
+ *    Walnut saw it, and time no server ran at all (a restart, a deploy that
+ *    stopped it in a dark wake and started the next one at the lid's opening:
+ *    2026-11-21, 1,633 s "slow to wake" of which about 1,600 s were that).
  *  - Time the session's host link was down (host-link-ledger.ts): the rows wait
  *    for the host, which the host link's own alarm and banner report.
  *  - Time the row was held where no delivery could take it (its `heldSpans`,
@@ -27,7 +30,7 @@
  *    metric, as the event loop's starved stalls are (stall-cause.ts).
  */
 
-import { sleepIntervals } from '../lib/sleep-ledger.js'
+import { serverDownIntervals, sleepIntervals } from '../lib/sleep-ledger.js'
 
 export interface DeliveredRow { id: string; enqueuedAt: string; heldSpans?: Interval[] }
 
@@ -39,10 +42,12 @@ export interface Interval { start: number; end: number }
 /** The parts of a wait that are not the delivery path's, each clipped to `[from, to]`. */
 export interface OutOfPathWaits {
   slept: (from: number, to: number) => Interval[]
+  /** No server of this Walnut ran (sleep-ledger.ts serverDownIntervals). */
+  serverDown?: (from: number, to: number) => Interval[]
   linkDown?: (from: number, to: number) => Interval[]
 }
 
-export const REAL_WAITS: OutOfPathWaits = { slept: sleepIntervals }
+export const REAL_WAITS: OutOfPathWaits = { slept: sleepIntervals, serverDown: serverDownIntervals }
 
 export interface DeliveryLatency {
   /** The longest wait among the rows that was the delivery path's, absent when no row's wait is known. */
@@ -53,6 +58,8 @@ export interface DeliveryLatency {
   wallMs?: number
   /** The sleep left out of it. */
   sleptMs?: number
+  /** The time no server ran left out of it (none of it asleep). */
+  serverDownMs?: number
   /** The host link's downtime left out of it (none of it asleep). */
   linkDownMs?: number
   /** The row's time held out of delivery left out of it (none of it asleep or link down). */
@@ -61,10 +68,14 @@ export interface DeliveryLatency {
   writtenEarlier?: true
 }
 
-/** Milliseconds of `[from, to]` that were not the delivery path's (sleep and a down link, counted once). */
+/** Milliseconds of `[from, to]` that were not the delivery path's (sleep, no server, a down link, counted once). */
 export function outOfPathBetween(waits: OutOfPathWaits, from: number, to: number): number {
   if (!(to > from)) return 0
-  return Math.min(to - from, unionMs([...waits.slept(from, to), ...(waits.linkDown ? waits.linkDown(from, to) : [])]))
+  return Math.min(to - from, unionMs([
+    ...waits.slept(from, to),
+    ...(waits.serverDown ? waits.serverDown(from, to) : []),
+    ...(waits.linkDown ? waits.linkDown(from, to) : []),
+  ]))
 }
 
 /** The well-formed parts of `list` inside `[from, to]`. */
@@ -113,14 +124,18 @@ export function deliveryLatency(
     const wall = Math.max(0, end - enq)
     const to = Math.max(enq, end)
     const sleep = wall > 0 ? waits.slept(enq, to) : []
+    const noServer = wall > 0 && waits.serverDown ? waits.serverDown(enq, to) : []
     const down = wall > 0 && waits.linkDown ? waits.linkDown(enq, to) : []
     const held = wall > 0 ? clip(r.heldSpans, enq, to) : []
+    // Sleep, no server, a down link and a hold overlap (a Mac asleep drops its links, a
+    // restart drops them all, a move waits for its host): the union is left out once,
+    // each part named for the time the ones before it did not cover.
     const slept = Math.min(wall, unionMs(sleep))
-    // Sleep, a down link and a hold overlap (a Mac asleep drops its links, a move waits for
-    // its host): the union is left out once.
-    const sleptOrDown = Math.min(wall, unionMs([...sleep, ...down]))
-    const out = Math.min(wall, unionMs([...sleep, ...down, ...held]))
-    const linkDown = sleptOrDown - slept
+    const sleptOrNoServer = Math.min(wall, unionMs([...sleep, ...noServer]))
+    const sleptOrDown = Math.min(wall, unionMs([...sleep, ...noServer, ...down]))
+    const out = Math.min(wall, unionMs([...sleep, ...noServer, ...down, ...held]))
+    const serverDown = sleptOrNoServer - slept
+    const linkDown = sleptOrDown - sleptOrNoServer
     const heldOut = out - sleptOrDown
     const ms = Math.max(0, wall - out)
     if (!best || ms >= best.deliveryMs!) {
@@ -129,6 +144,7 @@ export function deliveryLatency(
         messageId: r.id,
         ...(out > 0 ? { wallMs: wall } : {}),
         ...(slept > 0 ? { sleptMs: Math.round(slept) } : {}),
+        ...(serverDown > 0 ? { serverDownMs: Math.round(serverDown) } : {}),
         ...(linkDown > 0 ? { linkDownMs: Math.round(linkDown) } : {}),
         ...(heldOut > 0 ? { heldMs: Math.round(heldOut) } : {}),
       }
