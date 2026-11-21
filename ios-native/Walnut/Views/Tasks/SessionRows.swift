@@ -111,6 +111,11 @@ struct SessionInfoSheet: View {
                 Section("Details") {
                     row("Status", processStatus.capitalized)
                     row("Machine", session.isLocal ? "Mac (primary)" : session.host)
+                    // The working folder, whole and selectable, right under the machine it
+                    // is on: the fact people open this sheet for (2026-11-21).
+                    if let cwd = session.cwd, !cwd.isEmpty {
+                        folderRow(cwd)
+                    }
                     if let model = session.model { row("Model", model) }
                     if let mode = session.mode { row("Mode", mode.capitalized) }
                     row("Messages", "\(session.messageCount)")
@@ -119,9 +124,6 @@ struct SessionInfoSheet: View {
                     }
                     if let active = session.lastActiveValue {
                         row("Last active", active.formatted(date: .abbreviated, time: .shortened))
-                    }
-                    if let cwd = session.cwd {
-                        row("Directory", cwd)
                     }
                 }
 
@@ -163,6 +165,19 @@ struct SessionInfoSheet: View {
             .navigationTitle("Session")
             .navigationBarTitleDisplayMode(.inline)
         }
+    }
+
+    /// The folder never truncates: a long worktree path wraps, and a long press selects it
+    /// for Copy (text selection owns the long press, so no context menu competes with it).
+    private func folderRow(_ path: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Folder").foregroundStyle(.secondary)
+            Text(path)
+                .font(.footnote.monospaced())
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
+        .accessibilityIdentifier("session-info-folder")
     }
 
     private func row(_ label: String, _ value: String) -> some View {

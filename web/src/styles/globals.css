@@ -15609,6 +15609,30 @@ body.walnut-dragging {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The folder is shown whole and can be selected; the menu's other rows stay one line.
+   `contain: inline-size` keeps the path out of the shrink-to-fit menu's width (it would
+   otherwise widen the menu to the whole path), so it wraps inside the width the other
+   rows give the menu. */
+.task-kebab-meta-row[data-meta="folder"] .task-kebab-meta-value {
+  flex: 1 1 0;
+  contain: inline-size;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+.task-kebab-meta-seg {
+  display: inline-block;
+  max-width: 100%;
+}
+.task-kebab-meta-gone {
+  font-family: inherit;
+  color: var(--error);
+}
 
 /* Element-type specificity trick:
    div.task-kebab-info = non-interactive source display (no external URL)

@@ -3121,6 +3121,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           sessionId={sessionId}
           taskId={session?.taskId}
           cwd={session?.cwd}
+          cwdGone={!!session?.cwdGone}
           host={session?.host}
           hostname={session?.hostname}
           archived={session?.archived}

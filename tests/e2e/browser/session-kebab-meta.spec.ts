@@ -82,19 +82,22 @@ function exactOf(page: Page, iso: string): Promise<string> {
 async function readSession(request: APIRequestContext, sid: string) {
   const res = await request.get(`/api/sessions/${sid}`)
   expect(res.ok(), await res.text()).toBeTruthy()
-  return (await res.json() as { session: { taskId: string; startedAt: string; lastActiveAt: string } }).session
+  return (await res.json() as { session: { taskId: string; startedAt: string; lastActiveAt: string; cwd?: string } }).session
 }
 
 const RELATIVE = /^(just now|\d+(m|h|d|w|mo|y) ago)$/
 
-test('the menu ends with Created, Updated and Host from the session record', async ({ page, request }) => {
+test('the menu ends with Host, Created and Updated from the session record', async ({ page, request }) => {
   const panel = await openColumn(page, FIXTURE_SID)
   const session = await readSession(request, FIXTURE_SID)
 
   const menu = await openMenu(page, panel)
   const meta = menu.getByTestId('session-kebab-meta')
   await expect(meta).toBeVisible()
-  await expect(meta.locator('.task-kebab-meta-label')).toHaveText(['Created', 'Updated', 'Host'])
+  // This fixture session records no folder, so it has no Folder row (a started session
+  // has one: the next tests check it against the record).
+  expect(session.cwd).toBeFalsy()
+  await expect(meta.locator('.task-kebab-meta-label')).toHaveText(['Host', 'Created', 'Updated'])
 
   for (const [key, iso] of [['created', session.startedAt], ['updated', session.lastActiveAt]] as const) {
     const row = meta.locator(`[data-meta="${key}"]`)
@@ -139,7 +142,7 @@ test('the menu ends with Created, Updated and Host from the session record', asy
   // Closed by default (inside the Session group), the Session info row says what it holds;
   // open, the rows are there.
   await openKebabGroup(ctxMenu, 'session-kebab-session')
-  await expect(ctxMenu.getByTestId('session-kebab-details').locator('.task-kebab-group-hint')).toHaveText('time · created · updated · host')
+  await expect(ctxMenu.getByTestId('session-kebab-details').locator('.task-kebab-group-hint')).toHaveText('folder · host · time · dates')
   await expect(ctxMenu.getByTestId('session-kebab-meta')).toHaveCount(0)
   await openKebabGroup(ctxMenu, 'session-kebab-details')
   await expect(ctxMenu.getByTestId('session-kebab-meta')).toBeVisible()
@@ -206,6 +209,36 @@ test('sending a message moves Updated; Created stays; every reopening agrees', a
 
   const before = await expectMatchesServer('the new session')
 
+  // 2026-11-21, the user: "Session info should have right amount of field, like paht where
+  // is the fucking path". Session info leads with the session's folder, whole, as recorded.
+  expect(before.cwd, 'a started session records its folder').toBeTruthy()
+  menu = await openMenu(page, panel)
+  const metaRows = menu.getByTestId('session-kebab-meta')
+  await expect(metaRows.locator('.task-kebab-meta-label')).toHaveText(['Folder', 'Host', 'Created', 'Updated'])
+  const folder = metaRows.locator('[data-meta="folder"]')
+  await expect(folder.locator('.task-kebab-meta-value')).toHaveText(before.cwd!)
+  await expect(folder).toHaveAttribute('title', before.cwd!)
+  // Shown whole: the value is not cut with an ellipsis and stays inside the menu.
+  expect(await folder.locator('.task-kebab-meta-value').evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
+  // A long path wraps inside the menu; it never widens the menu to its own length.
+  const menuBox = (await menu.boundingBox())!
+  const valueBox = (await folder.locator('.task-kebab-meta-value').boundingBox())!
+  expect(menuBox.width, 'menu width').toBeLessThan(420)
+  expect(valueBox.x + valueBox.width).toBeLessThanOrEqual(menuBox.x + menuBox.width)
+  // Selecting the folder gives the path exactly, whatever segments it wraps into (a WebKit
+  // selection could add line breaks around inline blocks), and the menu stays open.
+  const selected = await folder.locator('.task-kebab-meta-value').evaluate((el) => {
+    const range = document.createRange()
+    range.selectNodeContents(el)
+    const sel = window.getSelection()!
+    sel.removeAllRanges()
+    sel.addRange(range)
+    return sel.toString()
+  })
+  expect(selected).toBe(before.cwd!)
+  await expect(menu).toBeVisible()
+  await closeMenu(page)
+
   // Second-resolution hover times: let the clock tick so the send is distinguishable.
   await page.waitForTimeout(1_100)
   const composer = panel.locator('textarea.chat-input-textarea')
@@ -249,10 +282,10 @@ test('a live session shows no memory or CPU anywhere, and nothing samples it', a
   const panel = await openColumn(page, sessionId)
   const menu = await openMenu(page, panel)
   const meta = menu.getByTestId('session-kebab-meta')
-  await expect(meta.locator('.task-kebab-meta-label')).toHaveText(['Created', 'Updated', 'Host'])
+  await expect(meta.locator('.task-kebab-meta-label')).toHaveText(['Folder', 'Host', 'Created', 'Updated'])
   // The old rows landed within a few seconds of the menu opening; give them that long.
   await page.waitForTimeout(3_000)
-  await expect(meta.locator('.task-kebab-meta-label')).toHaveText(['Created', 'Updated', 'Host'])
+  await expect(meta.locator('.task-kebab-meta-label')).toHaveText(['Folder', 'Host', 'Created', 'Updated'])
   await expect(menu.locator('[data-meta="memory"], [data-meta="cpu"]')).toHaveCount(0)
   await meta.evaluate((el) => el.scrollIntoView({ block: 'end' }))
   await menu.screenshot({ path: shot('05-live-no-readout') })

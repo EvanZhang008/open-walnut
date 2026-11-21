@@ -4,7 +4,7 @@
  * Rendered as the `extraSection` of <TaskQuickActions slot="kebab">, below a
  * divider, so a single dropdown holds the surface's rows (top: Open, Window, Columns),
  * the task's rows, then this: ONE Session group (KebabGroup) holding Copy & open, Debug,
- * Restart / Terminate and Session info (the time it took, Created, Updated, Host).
+ * Restart / Terminate and Session info (Folder, Host, the time it took, Created, Updated).
  * `SessionViewItems` is the Open group's second half (Inbox, Code, Web, Notes, Msgs,
  * Usage, Background). Presentational only: the session panel owns the handlers.
  */
@@ -156,7 +156,10 @@ interface SessionKebabSectionProps {
   sessionId: string;
   /** The session's task: its plugin facts (the time it took) sit in Session info. */
   taskId?: string;
+  /** The session's working folder: the Folder row of Session info, and Copy & open's copies. */
   cwd?: string;
+  /** Its folder was gone at its last start or resume (the Folder row says so). */
+  cwdGone?: boolean;
   /** SSH host alias for remote sessions (absent = this machine) — the Host row. */
   host?: string;
   hostname?: string;
@@ -179,6 +182,15 @@ interface SessionKebabSectionProps {
   onOpenCodeView?: () => void;
   /** Called after any item runs so the parent can close the dropdown. */
   onAfterAction?: () => void;
+}
+
+/**
+ * A path that wraps at its "/" boundaries: each segment (its slash included) is an inline
+ * block, kept whole on a line when it fits and broken inside only when it alone is wider.
+ * Its text is the path itself, so selecting and copying it gives the path unchanged.
+ */
+function PathSegments({ path }: { path: string }) {
+  return <>{(path.match(/[^/]*\/|[^/]+$/g) ?? [path]).map((seg, i) => <span key={i} className="task-kebab-meta-seg">{seg}</span>)}</>;
 }
 
 /** A single copy-to-clipboard kebab item with a transient "Copied!" label. */
@@ -364,7 +376,7 @@ export function ViewsBadge({ sessionId, unreadCount, decisionCount, attentionCou
 }
 
 export function SessionKebabSection({
-  sessionId, cwd, host, hostname, archived, startedAt, lastActiveAt,
+  sessionId, cwd, cwdGone, host, hostname, archived, startedAt, lastActiveAt,
   onRestart, restartBusy,
   onTerminate, terminateBusy,
   onInvestigate, investigating, investigateResult,
@@ -377,7 +389,7 @@ export function SessionKebabSection({
   const hostName = useHostDisplayLabel(host);
   const noSshRoute = route === 'host-network' || route === 'cloud';
   // Computed per render: the menu mounts when opened, so "2m ago" is fresh each time.
-  const metaRows = sessionKebabMetaRows({ startedAt, lastActiveAt, host, hostname });
+  const metaRows = sessionKebabMetaRows({ cwd, cwdGone, startedAt, lastActiveAt, host, hostname });
   const cdPrefix = cwd ? `cd ${shellWord(cwd)} && ` : '';
   const cwdLabel = cwd ? (cwd.split('/').filter(Boolean).pop() || 'CWD') : null;
 
@@ -487,17 +499,21 @@ export function SessionKebabSection({
         </>
       )}
 
-      {/* Details: the session's created / updated time and its host, read-only, at the
-          foot of the menu where they always were; closed, the row says what it holds. */}
+      {/* Session info: where the session works (its folder, whole and selectable, and its
+          host) and its times, read-only, at the foot of the menu; closed, the row says what
+          it holds. Copying or opening the folder stays in Copy & open. */}
       <div className="task-kebab-divider" />
-      <KebabGroup label="Session info" hint="time · created · updated · host" icon={DETAILS_ICON} testId="session-kebab-details">
+      <KebabGroup label="Session info" hint="folder · host · time · dates" icon={DETAILS_ICON} testId="session-kebab-details">
         {/* Plugin facts about the session (the time it took), with their Header toggle. */}
         <SessionMetaFacts sessionId={sessionId} taskId={taskId} onAfterAction={onAfterAction} />
         <div className="task-kebab-meta" data-testid="session-kebab-meta">
           {metaRows.map((row) => (
-            <div key={row.key} className="task-kebab-meta-row" data-meta={row.key} title={row.title}>
+            <div key={row.key} className="task-kebab-meta-row" data-meta={row.key} data-gone={row.gone ? 'true' : undefined} title={row.title}>
               <span className="task-kebab-meta-label">{row.label}</span>
-              <span className="task-kebab-meta-value">{row.value}</span>
+              <span className="task-kebab-meta-value">
+                {row.key === 'folder' ? <PathSegments path={row.value} /> : row.value}
+                {row.gone && <span className="task-kebab-meta-gone"> (gone)</span>}
+              </span>
             </div>
           ))}
         </div>
