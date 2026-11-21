@@ -29,7 +29,9 @@ const files = sources(ROOT).map((p) => ({ rel: relative(ROOT, p), text: readFile
 describe('voice unavailable: one rule per decision', () => {
   it('every mic level sampler takes its no-sound decision from mic-health.ts', () => {
     const samplers = files.filter((f) => /get(Byte|Float)TimeDomainData\(/.test(f.text));
-    expect(samplers.map((f) => f.rel)).toEqual(['hooks/useSpeechToText.ts']);
+    // Voice conversation's mic (voice/voice-mic.ts) samples for voice activity too; its
+    // no-sound warning is mic-health.ts's, the same as dictation's.
+    expect(samplers.map((f) => f.rel).sort()).toEqual(['hooks/useSpeechToText.ts', 'voice/voice-mic.ts']);
     for (const f of samplers) expect(f.text).toMatch(/from '@\/utils\/mic-health'/);
   });
 

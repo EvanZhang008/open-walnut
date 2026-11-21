@@ -105,6 +105,35 @@ describe('voice conversation', () => {
     expect(speakFailed.error).toBe('no voice')
   })
 
+  it('paused stays paused: an answer is kept for Replay, never read on its own', () => {
+    const paused = run([{ type: 'tap' }]).state
+    const { state, effects } = run([{ type: 'reply', spoken: 'Typed turn done.' }], paused)
+    expect(state.phase).toBe('paused')
+    expect(state.lastSpoken).toBe('Typed turn done.')
+    expect(effects).toEqual([])
+    // Replay is the person's own ask: it reads, then listens.
+    const replayed = run([{ type: 'replay', spoken: 'Typed turn done.' }], state)
+    expect(replayed.state.phase).toBe('speaking')
+    expect(replayed.effects).toEqual(['speak'])
+    expect(run([{ type: 'speech-done' }], replayed.state).state.phase).toBe('listening')
+    // Never over the person's words.
+    const talking = run([{ type: 'speech-start' }]).state
+    expect(run([{ type: 'replay', spoken: 'x' }], talking).state.phase).toBe('listening')
+  })
+
+  it('a stopped turn (nothing to say) goes back to listening from waiting only', () => {
+    const waiting = run([{ type: 'speech-start' }, { type: 'end-of-speech' }, { type: 'transcribed', take: 1, text: 'hi' }]).state
+    expect(run([{ type: 'reply', spoken: null }], waiting).state.phase).toBe('listening')
+    const listening = run([]).state
+    expect(run([{ type: 'reply', spoken: null }], listening).effects).toEqual([])
+  })
+
+  it('a mic that does not open again pauses with its sentence', () => {
+    const { state } = run([{ type: 'mic-failed', error: 'The microphone did not open: gone' }])
+    expect(state.phase).toBe('paused')
+    expect(state.error).toContain('did not open')
+  })
+
   it('a minute of silence turns the mic off', () => {
     const { state, effects } = run([{ type: 'idle-timeout' }])
     expect(state.phase).toBe('paused')
@@ -117,7 +146,7 @@ describe('voice conversation', () => {
       { type: 'speech-start' }, { type: 'end-of-speech' }, { type: 'transcribed', take: 1, text: 'x' },
       { type: 'transcribe-failed', take: 1, error: 'e' }, { type: 'send-failed', error: 'e' }, { type: 'reply', spoken: 'x' },
       { type: 'reply', spoken: null }, { type: 'barge-in' }, { type: 'speech-done' }, { type: 'speak-failed', error: 'e' },
-      { type: 'tap' }, { type: 'idle-timeout' },
+      { type: 'tap' }, { type: 'idle-timeout' }, { type: 'replay', spoken: 'x' }, { type: 'mic-failed', error: 'e' },
     ]
     const base = openVoice().state
     for (const phase of ['listening', 'transcribing', 'waiting', 'speaking', 'paused'] as const) {

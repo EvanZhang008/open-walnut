@@ -38,6 +38,8 @@ export interface VoiceConversation {
   engineNote: string | null;
   /** The mic could not open (permission, no device). */
   micError: string | null;
+  /** The open mic delivers no sound, or its device went away (mic-health.ts). */
+  micWarning: string | null;
   start: () => void;
   stop: () => void;
   tap: () => void;
@@ -61,6 +63,7 @@ export function useVoiceConversation(
   const [engine, setEngine] = useState<TtsEngineId | null>(null);
   const [engineNote, setEngineNote] = useState<string | null>(null);
   const [micError, setMicError] = useState<string | null>(null);
+  const [micWarning, setMicWarning] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
 
   const stateRef = useRef<VoiceState | null>(null);
@@ -73,6 +76,10 @@ export function useVoiceConversation(
   sendRef.current = send;
   const listenSinceRef = useRef(0);
   const sessionRef = useRef(sessionId);
+  /** Bumps on every open and close: anything an older conversation started finds it changed and drops its result. */
+  const genRef = useRef(0);
+  /** The mic is off while paused, so the browser's recording mark goes out too; a tap opens it again. */
+  const micOpeningRef = useRef<Promise<VoiceMic | null> | null>(null);
 
   // One place every event goes through: reduce, keep, run the effects.
   const dispatch = useCallback((event: VoiceEvent) => {
@@ -82,17 +89,49 @@ export function useVoiceConversation(
     stateRef.current = step.state;
     setState(step.state);
     if (step.state.phase !== current.phase) log.info('voice', `${current.phase} -> ${step.state.phase}`, { sessionId: sessionRef.current, event: event.type });
+    if (step.state.phase === 'paused' && current.phase !== 'paused') closeMic();
     for (const effect of step.effects) runEffect(effect);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const closeMic = () => {
+    micRef.current?.close();
+    micRef.current = null;
+    setLevel(0);
+  };
+
+  /** The mic of the conversation `gen`, opened again after a pause; null when that conversation ended. */
+  const reopenMic = (gen: number): Promise<VoiceMic | null> => {
+    const ctx = ctxRef.current;
+    if (!ctx) return Promise.resolve(null);
+    micOpeningRef.current ??= VoiceMic.open(ctx).then((mic) => {
+      micOpeningRef.current = null;
+      if (genRef.current !== gen) { mic.close(); return null; }
+      micRef.current = mic;
+      return mic;
+    }, (err) => {
+      micOpeningRef.current = null;
+      if (genRef.current === gen) dispatch({ type: 'mic-failed', error: `The microphone did not open: ${err instanceof Error ? err.message : String(err)}` });
+      return null;
+    });
+    return micOpeningRef.current;
+  };
+
   const runEffect = (effect: VoiceEffect) => {
     const mic = micRef.current;
+    const gen = genRef.current;
     switch (effect.type) {
       case 'start-take':
         activityRef.current.reset(LISTEN_OPTIONS);
         listenSinceRef.current = performance.now();
-        mic?.startTake();
+        if (mic) mic.startTake();
+        else void reopenMic(gen).then((m) => {
+          // Still this take: a tap or a pause in between started another one or none.
+          if (m && genRef.current === gen && stateRef.current?.phase === 'listening' && stateRef.current.take === effect.take) {
+            listenSinceRef.current = performance.now();
+            m.startTake();
+          }
+        });
         return;
       case 'discard-take':
         mic?.discardTake();
@@ -102,10 +141,13 @@ export function useVoiceConversation(
         void (async () => {
           try {
             const clip = await mic?.finishTake();
+            if (genRef.current !== gen) return;
             if (!clip) { dispatch({ type: 'transcribed', take, text: '' }); return; }
             const result = await transcribeAudio(clip.blob, clip.format, undefined, undefined, { surface: 'voice-conversation' });
+            if (genRef.current !== gen) return;
             dispatch({ type: 'transcribed', take, text: result.text ?? '' });
           } catch (err) {
+            if (genRef.current !== gen) return;
             dispatch({ type: 'transcribe-failed', take, error: `Could not hear that: ${err instanceof Error ? err.message : String(err)}` });
           }
         })();
@@ -113,8 +155,8 @@ export function useVoiceConversation(
       }
       case 'send':
         void sendRef.current(effect.text).then((ok) => {
-          if (!ok) dispatch({ type: 'send-failed', error: 'The message did not go out. Tap to try again.' });
-        }, (err) => dispatch({ type: 'send-failed', error: err instanceof Error ? err.message : String(err) }));
+          if (!ok && genRef.current === gen) dispatch({ type: 'send-failed', error: 'The message did not go out. Tap and say it again.' });
+        }, (err) => { if (genRef.current === gen) dispatch({ type: 'send-failed', error: err instanceof Error ? err.message : String(err) }); });
         return;
       case 'speak': {
         const reply = lastReplyRef.current;
@@ -122,8 +164,8 @@ export function useVoiceConversation(
         if (!reply || !speaker) { dispatch({ type: 'speech-done' }); return; }
         activityRef.current.reset(BARGE_IN_OPTIONS);
         void speaker.say(reply).then(
-          (outcome) => { if (outcome === 'done') dispatch({ type: 'speech-done' }); },
-          (err) => dispatch({ type: 'speak-failed', error: `Could not read the answer: ${err instanceof Error ? err.message : String(err)}` }),
+          (outcome) => { if (outcome === 'done' && genRef.current === gen) dispatch({ type: 'speech-done' }); },
+          (err) => { if (genRef.current === gen) dispatch({ type: 'speak-failed', error: `Could not read the answer: ${err instanceof Error ? err.message : String(err)}` }); },
         );
         return;
       }
@@ -134,44 +176,57 @@ export function useVoiceConversation(
   };
 
   const stop = useCallback(() => {
+    genRef.current++;
     speakerRef.current?.stop();
     speakerRef.current = null;
     micRef.current?.close();
     micRef.current = null;
+    micOpeningRef.current = null;
     void ctxRef.current?.close().catch(() => {});
     ctxRef.current = null;
     stateRef.current = null;
     setState(null);
     setOpening(false);
     setLevel(0);
+    setMicWarning(null);
   }, []);
 
   const start = useCallback(() => {
     if (stateRef.current || ctxRef.current) return;
+    const gen = ++genRef.current;
     setOpening(true);
     setMicError(null);
     setEngineNote(null);
     // Made inside the click, so the browser lets it play the answers.
     const ctx = new AudioContext();
     ctxRef.current = ctx;
+    // Each await may outlive this open (Keyboard, then Talk again while the browser
+    // asks for the mic): nothing is kept, and nothing is closed, unless it is still this one.
+    const current = () => genRef.current === gen && ctxRef.current === ctx;
     void (async () => {
       let tts: TtsEngineId = 'device';
       try { tts = (await voiceStatus()).engine; } catch { /* the device's own voice */ }
+      if (!current()) return;
       setEngine(tts);
-      speakerRef.current = new VoiceSpeaker(ctx, tts, (next, why) => {
+      const speaker = new VoiceSpeaker(ctx, tts, (next, why) => {
+        if (genRef.current !== gen) return;
         setEngine(next);
         setEngineNote(`Using this device's voice: ${why}`);
       });
+      let mic: VoiceMic;
       try {
-        micRef.current = await VoiceMic.open(ctx);
+        mic = await VoiceMic.open(ctx);
       } catch (err) {
+        if (!current()) return;
         setMicError(err instanceof Error && err.name === 'NotAllowedError'
           ? 'Walnut may not use the microphone. Allow it in the browser, then try again.'
           : `The microphone did not open: ${err instanceof Error ? err.message : String(err)}`);
         stop();
         return;
       }
-      if (ctxRef.current !== ctx) { micRef.current?.close(); return; }
+      if (!current()) { mic.close(); return; }
+      speakerRef.current = speaker;
+      micRef.current = mic;
       const step = openVoice();
       stateRef.current = step.state;
       setState(step.state);
@@ -185,10 +240,7 @@ export function useVoiceConversation(
   const tap = useCallback(() => dispatch({ type: 'tap' }), [dispatch]);
 
   const replay = useCallback(() => {
-    const s = stateRef.current;
-    if (!s || !lastReplyRef.current || s.phase === 'speaking' || s.phase === 'transcribing') return;
-    if (s.phase === 'listening' && s.heard) return;
-    dispatch({ type: 'reply', spoken: lastReplyRef.current.text });
+    if (lastReplyRef.current) dispatch({ type: 'replay', spoken: lastReplyRef.current.text });
   }, [dispatch]);
 
   // The mic's loudness drives voice activity while listening and barge-in while speaking.
@@ -198,7 +250,8 @@ export function useVoiceConversation(
       const mic = micRef.current;
       const s = stateRef.current;
       if (!mic || !s) return;
-      const rms = mic.rms();
+      const { rms, warning } = mic.sample();
+      setMicWarning((prev) => (prev === warning ? prev : warning));
       setLevel((prev) => prev * 0.6 + Math.min(1, rms * 4) * 0.4);
       const now = performance.now();
       if (s.phase === 'listening') {
@@ -207,7 +260,8 @@ export function useVoiceConversation(
         else if (ev === 'end-of-speech') dispatch({ type: 'end-of-speech' });
         else if (!s.heard && now - listenSinceRef.current > IDLE_MS) dispatch({ type: 'idle-timeout' });
       } else if (s.phase === 'speaking') {
-        if (activityRef.current.push(rms, now) === 'speech-start') dispatch({ type: 'barge-in' });
+        const echo = speakerRef.current ? speakerRef.current.outputLevel() : 0;
+        if (activityRef.current.push(rms, now, echo) === 'speech-start') dispatch({ type: 'barge-in' });
       }
     }, SAMPLE_MS);
     return () => clearInterval(timer);
@@ -217,9 +271,13 @@ export function useVoiceConversation(
   // The session's answer: what to say comes from the server (the same words on every client).
   useEvent('session:result', (data) => {
     const ev = data as SessionResultLike;
-    if (!stateRef.current || ev.sessionId !== sessionRef.current || ev.interrupted) return;
+    if (!stateRef.current || ev.sessionId !== sessionRef.current) return;
+    // A stopped turn has nothing to say: back to listening (a later turn's answer is still read).
+    if (ev.interrupted) { dispatch({ type: 'reply', spoken: null }); return; }
     const text = ev.isError ? 'Something went wrong. The details are on screen.' : (ev.result ?? '');
+    const gen = genRef.current;
     void spokenReply(text).then((reply) => {
+      if (genRef.current !== gen) return;
       if (reply) lastReplyRef.current = reply;
       dispatch({ type: 'reply', spoken: reply?.text ?? null });
     }, (err) => {
@@ -234,5 +292,5 @@ export function useVoiceConversation(
     return () => stop();
   }, [sessionId, stop]);
 
-  return { open: state !== null || opening, state, level, engine, engineNote, micError, start, stop, tap, replay };
+  return { open: state !== null || opening, state, level, engine, engineNote, micError, micWarning, start, stop, tap, replay };
 }

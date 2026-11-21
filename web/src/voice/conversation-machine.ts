@@ -6,6 +6,7 @@
  *       │  └───────────────────────────────────┘                       ▼
  *       └──────(done speaking, or the person talks over it)──── speaking
  *   paused: the mic is off (a tap, nothing said for a while, an error); a tap listens again.
+ *   An answer that ends while paused is kept for Replay, never read on its own: paused stays paused.
  *
  * The reducer returns the next state and the effects to run (open a take, send,
  * speak, stop speaking); useVoiceConversation runs them. Keeping the decisions
@@ -44,12 +45,16 @@ export type VoiceEvent =
   | { type: 'transcribed'; take: number; text: string }
   | { type: 'transcribe-failed'; take: number; error: string }
   | { type: 'send-failed'; error: string }
-  /** The session's turn ended; `spoken` is what to say (null: nothing speakable). */
+  /** The session's turn ended; `spoken` is what to say (null: nothing speakable, or the turn was stopped). */
   | { type: 'reply'; spoken: string | null }
+  /** Read the last answer again (the Replay button). */
+  | { type: 'replay'; spoken: string }
   /** The person talked while the answer was being read. */
   | { type: 'barge-in' }
   | { type: 'speech-done' }
   | { type: 'speak-failed'; error: string }
+  /** The mic did not open again (after a pause). */
+  | { type: 'mic-failed'; error: string }
   /** The big button. */
   | { type: 'tap' }
   /** Listening with nothing heard for a long while: stop listening. */
@@ -64,6 +69,12 @@ export interface Step {
 export function openVoice(): Step {
   const state: VoiceState = { phase: 'listening', heard: false, lastHeard: null, lastSpoken: null, error: null, take: 1 };
   return { state, effects: [{ type: 'start-take', take: 1 }] };
+}
+
+function speak(state: VoiceState, spoken: string): Step {
+  const effects: VoiceEffect[] = state.phase === 'listening' ? [{ type: 'discard-take' }] : [];
+  effects.push({ type: 'speak', text: spoken });
+  return { state: { ...state, phase: 'speaking', heard: false, lastSpoken: spoken, error: null }, effects };
 }
 
 function listen(state: VoiceState, extra: VoiceEffect[] = [], patch: Partial<VoiceState> = {}): Step {
@@ -105,14 +116,19 @@ export function reduceVoice(state: VoiceState, event: VoiceEvent): Step {
       return { state: { ...state, phase: 'paused', error: event.error }, effects: [] };
 
     case 'reply': {
+      // Paused means the mic and the voice are off until a tap: keep it for Replay only.
+      if (state.phase === 'paused') return event.spoken ? same({ ...state, lastSpoken: event.spoken }) : same(state);
       // An answer arrives for a turn we were waiting on, or one the session started
       // itself while the person was quiet; never over what they are saying.
-      const quiet = state.phase === 'waiting' || state.phase === 'paused' || (state.phase === 'listening' && !state.heard);
+      const quiet = state.phase === 'waiting' || (state.phase === 'listening' && !state.heard);
       if (!quiet) return same(state);
-      if (!event.spoken) return state.phase === 'paused' ? same(state) : listen(state, state.phase === 'listening' ? [{ type: 'discard-take' }] : []);
-      const effects: VoiceEffect[] = state.phase === 'listening' ? [{ type: 'discard-take' }] : [];
-      effects.push({ type: 'speak', text: event.spoken });
-      return { state: { ...state, phase: 'speaking', heard: false, lastSpoken: event.spoken, error: null }, effects };
+      if (!event.spoken) return state.phase === 'waiting' ? listen(state) : same(state);
+      return speak(state, event.spoken);
+    }
+
+    case 'replay': {
+      const idle = state.phase === 'waiting' || state.phase === 'paused' || (state.phase === 'listening' && !state.heard);
+      return idle ? speak(state, event.spoken) : same(state);
     }
 
     case 'barge-in':
@@ -126,6 +142,9 @@ export function reduceVoice(state: VoiceState, event: VoiceEvent): Step {
     case 'speak-failed':
       if (state.phase !== 'speaking') return same(state);
       return listen(state, [], { error: event.error });
+
+    case 'mic-failed':
+      return { state: { ...state, phase: 'paused', heard: false, error: event.error }, effects: [] };
 
     case 'idle-timeout':
       if (state.phase === 'listening' && !state.heard) return { state: { ...state, phase: 'paused' }, effects: [{ type: 'discard-take' }] };

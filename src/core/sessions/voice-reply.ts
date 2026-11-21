@@ -28,7 +28,7 @@ export const VOICE_REPLY_TEXT =
   + 'to them in a conversation: one to three short plain sentences in the language they spoke, saying what you did '
   + 'or found and what you need from them next. '
   + 'No markdown, code, tables, links, file paths or ids in that answer. '
-  + 'Put any detail after it, below a line that holds only ---, and when there is detail, end the spoken answer by saying the details are on screen. '
+  + 'Put any detail after it, below a line that holds only ---. '
   + 'When you hand work to another task, ask it for a reply so you can tell them when it is done. '
   + 'This overrides the output style for this reply.';
 

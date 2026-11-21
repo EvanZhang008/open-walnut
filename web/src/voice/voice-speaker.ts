@@ -11,6 +11,7 @@
 
 import { speakPiece, SpeakError, type SpokenReply, type TtsEngineId } from '../api/voice';
 import { log } from '../utils/log';
+import { analyserRms } from './voice-mic';
 
 export type SpeakOutcome = 'done' | 'stopped';
 
@@ -28,9 +29,24 @@ export class VoiceSpeaker {
   private wake: (() => void) | null = null;
   /** The engine for the rest of this conversation: a server voice that failed is not tried again. */
   private engine: TtsEngineId;
+  /** Everything played goes through it, so barge-in can tell the leak from the person. */
+  private readonly out: AnalyserNode;
+  private readonly outBuf: Float32Array<ArrayBuffer>;
+  private deviceSpeaking = false;
 
   constructor(private readonly ctx: AudioContext, engine: TtsEngineId, private readonly onEngineChange?: (engine: TtsEngineId, why: string) => void) {
     this.engine = engine;
+    this.out = ctx.createAnalyser();
+    this.out.fftSize = 2048;
+    this.out.connect(ctx.destination);
+    this.outBuf = new Float32Array(new ArrayBuffer(this.out.fftSize * 4));
+  }
+
+  /** The output's loudness now: 0 when silent, null while the device's voice speaks (not measurable). */
+  outputLevel(): number | null {
+    if (this.deviceSpeaking) return null;
+    if (!this.source) return 0;
+    return analyserRms(this.out, this.outBuf);
   }
 
   get currentEngine(): TtsEngineId {
@@ -85,6 +101,7 @@ export class VoiceSpeaker {
     try { this.source?.stop(); } catch { /* already stopped */ }
     this.source = null;
     if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel();
+    this.deviceSpeaking = false;
     this.wake?.();
     this.wake = null;
   }
@@ -95,7 +112,7 @@ export class VoiceSpeaker {
     if (this.ctx.state === 'suspended') await this.ctx.resume().catch(() => {});
     const source = this.ctx.createBufferSource();
     source.buffer = buffer;
-    source.connect(this.ctx.destination);
+    source.connect(this.out);
     this.source = source;
     await new Promise<void>((resolve) => {
       const done = () => { clearTimeout(watchdog); if (this.wake === done) this.wake = null; resolve(); };
@@ -114,12 +131,13 @@ export class VoiceSpeaker {
       utterance.lang = language;
       const voice = pickVoice(language);
       if (voice) utterance.voice = voice;
-      const done = () => { clearTimeout(watchdog); if (this.wake === done) this.wake = null; resolve(); };
+      const done = () => { clearTimeout(watchdog); this.deviceSpeaking = false; if (this.wake === done) this.wake = null; resolve(); };
       // Chrome drops long utterances without an end event, and a muted test page never speaks.
       const watchdog = setTimeout(done, estimateMs(text) * 1.6 + 2000);
       this.wake = done;
       utterance.onend = done;
       utterance.onerror = done;
+      this.deviceSpeaking = true;
       speechSynthesis.speak(utterance);
     });
   }

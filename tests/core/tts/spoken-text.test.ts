@@ -13,9 +13,16 @@ const ZH_DETAIL = '\u8be6\u60c5\u5728\u5c4f\u5e55\u4e0a\u3002'
 describe('spoken part', () => {
   it('reads only what comes before a line holding only ---', () => {
     const r = prepareSpokenText(`I fixed the login bug and the tests pass.\n\n---\n\n## Detail\n\n\`\`\`ts\nconst x = 1\n\`\`\``)!
-    // The spoken answer is whole: the session itself says the details are on screen.
-    expect(r.text).toBe('I fixed the login bug and the tests pass.')
+    // Walnut says the rest is on screen, never the session (the phone adds its own line too).
+    expect(r.text).toBe('I fixed the login bug and the tests pass. The rest is on screen.')
     expect(r.truncated).toBe(true)
+  })
+
+  it('says it in the answer\'s language, and never after an answer with no detail', () => {
+    const zh = prepareSpokenText(`${ZH_DONE}\n\n---\n\n| a | b |`)!
+    expect(zh.text).toBe(`${ZH_DONE}${ZH_DETAIL}`)
+    expect(zh.language.startsWith('zh')).toBe(true)
+    expect(prepareSpokenText(ZH_DONE)!.text).toBe(ZH_DONE)
   })
 
   it('a reply that opens with a rule is read whole, never silent', () => {

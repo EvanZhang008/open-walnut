@@ -59,17 +59,19 @@ export function VoiceTalkButton({ onClick, disabled }: { onClick: () => void; di
   );
 }
 
-export function VoiceConversationBar({ voice }: { voice: VoiceConversation }) {
+/** `onStopRun` stops the session's turn (the composer's ■), shown while it works. */
+export function VoiceConversationBar({ voice, onStopRun }: { voice: VoiceConversation; onStopRun?: () => void }) {
   const state = voice.state;
   const phase: VoicePhase = state?.phase ?? 'paused';
   const status = STATUS[phase];
   const ring = phase === 'listening' || phase === 'speaking' ? Math.min(1, voice.level) : 0;
-  const engineLabel = voice.engine === 'elevenlabs' ? 'Voice: ElevenLabs' : voice.engine === 'device' ? "Voice: this device's" : '';
+  const engineLabel = voice.engine === 'elevenlabs' ? 'Voice: ElevenLabs' : voice.engine === 'device' ? 'Voice: built-in' : '';
   return (
-    <div className={`voice-bar is-${phase}`} data-testid="voice-bar" data-phase={phase} role="group" aria-label="Voice conversation">
+    <div className={`voice-bar wn-glass-frost is-${phase}`} data-testid="voice-bar" data-phase={phase} role="group" aria-label="Voice conversation">
+      <div className="voice-bar-inner">
       <button
         type="button"
-        className="voice-orb"
+        className="btn btn-primary voice-orb"
         onClick={voice.tap}
         disabled={!state || phase === 'transcribing'}
         aria-label={status.button}
@@ -84,10 +86,15 @@ export function VoiceConversationBar({ voice }: { voice: VoiceConversation }) {
       </div>
       <div className="voice-bar-tools">
         {engineLabel && <span className="voice-bar-engine" data-testid="voice-engine">{engineLabel}</span>}
-        <button type="button" className="btn btn-sm" onClick={voice.replay} disabled={!state?.lastSpoken || phase === 'speaking'} data-testid="voice-replay">
+        {phase === 'waiting' && onStopRun && (
+          <button type="button" className="btn btn-ghost" onClick={onStopRun} data-testid="voice-stop-run" title="Stop the agent's turn">
+            Stop
+          </button>
+        )}
+        <button type="button" className="btn btn-ghost" onClick={voice.replay} disabled={!state?.lastSpoken || phase === 'speaking'} data-testid="voice-replay" title="Read the last answer again">
           Replay
         </button>
-        <button type="button" className="btn btn-sm" onClick={voice.stop} data-testid="voice-close" title="Back to the keyboard">
+        <button type="button" className="btn btn-ghost" onClick={voice.stop} data-testid="voice-close" title="Back to the keyboard">
           Keyboard
         </button>
       </div>
@@ -98,9 +105,10 @@ export function VoiceConversationBar({ voice }: { voice: VoiceConversation }) {
         {state?.lastSpoken && (phase === 'speaking' || phase === 'listening' || phase === 'paused') && (
           <div className="voice-bar-line" data-testid="voice-spoken"><span className="voice-bar-who">Walnut</span>{state.lastSpoken}</div>
         )}
-        {(state?.error || voice.engineNote) && (
-          <div className="voice-bar-error" role="status" data-testid="voice-error">{state?.error ?? voice.engineNote}</div>
+        {(state?.error || voice.micWarning || voice.engineNote) && (
+          <div className="voice-bar-error" role="status" data-testid="voice-error">{state?.error ?? voice.micWarning ?? voice.engineNote}</div>
         )}
+      </div>
       </div>
     </div>
   );

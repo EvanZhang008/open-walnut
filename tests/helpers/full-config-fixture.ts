@@ -28,11 +28,12 @@ export const PLANTED_SECRETS = [
   'cloudDeviceTokenPlanted0123456789abQ',
   'triagePlantedImapPassword-8812',
   'backupPlantedS3SecretKey0123456789abQ',
+  'elevenLabsKeyPlanted0123456789abcdefQ',
 ] as const
 
 const [bearer, provKey, header, credProc, engineKey, pluginPass, pluginSecret, toolsKey, sttKey, jevKey,
   pairKey, pushToken, keyPath, syncPass, exposeAuth, npmToken, hookSecret, calPass, bridgeToken, cloudToken,
-  triagePass, backupKey] = PLANTED_SECRETS
+  triagePass, backupKey, ttsKey] = PLANTED_SECRETS
 
 export function fullConfigFixture(): Record<string, unknown> {
   return {
@@ -94,6 +95,7 @@ export function fullConfigFixture(): Record<string, unknown> {
     audio: { retention_days: 7 },
     stt: { engine: 'openai', language: 'en', openai_api_key: sttKey, openai_model: 'acme-stt' },
     stt_corrections: { clouddev: ['Cloud Deep'], token: ['toe ken'] },
+    tts: { engine: 'elevenlabs', elevenlabs_api_key: ttsKey, elevenlabs_model: 'eleven_flash_v2_5' },
     jev: { api_key: jevKey },
     api_keys: [{ name: 'phone', key: pairKey, created_at: '2026-10-01T00:00:00.000Z' }],
     push_tokens: [{ token: pushToken, platform: 'ios' }],

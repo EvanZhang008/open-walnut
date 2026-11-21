@@ -30,8 +30,14 @@ export interface SpokenText {
 /** About how long one answer may take to say. */
 export const SPOKEN_BUDGET_SECONDS = 40;
 
-/** Said after a cut by the length budget. English like the rest of the app's words; a Chinese voice reads it fine. */
+/** Said after a cut (at the `---` rule or by the length budget), in the answer's own language. */
 export const REST_ON_SCREEN = 'The rest is on screen.';
+/** The same in Chinese: "the details are on screen." */
+const REST_ON_SCREEN_ZH = '\u8be6\u60c5\u5728\u5c4f\u5e55\u4e0a\u3002';
+
+export function restOnScreen(language: string): string {
+  return language.toLowerCase().startsWith('zh') ? REST_ON_SCREEN_ZH : REST_ON_SCREEN;
+}
 
 /** The longest chunk, in estimated seconds of speech, before it is cut at a clause. */
 const CHUNK_SECONDS = 8;
@@ -43,11 +49,12 @@ export function prepareSpokenText(raw: string, budgetSeconds = SPOKEN_BUDGET_SEC
   if (!plainText) return null;
   const language = languageOf(plainText);
   const { text: capped, cut } = cap(plainText, budgetSeconds);
-  // Cut at the rule: the spoken answer is whole, and the voice hint asks the session to
-  // say in it, in the person's language, that the details are on screen. Cut by the
-  // budget: the sentence stops early, so say so.
-  const text = cut ? `${capped} ${REST_ON_SCREEN}` : capped;
-  return { text, language, truncated: cutAtRule || cut, chunks: chunksOf(text) };
+  // Any cut says the rest is on screen, here and not in the session's words: the phone
+  // (ios-native SpokenText) adds its own line at a cut, so a session that said it too
+  // would be heard saying it twice there.
+  const truncated = cutAtRule || cut;
+  const text = truncated ? `${capped}${language.toLowerCase().startsWith('zh') ? '' : ' '}${restOnScreen(language)}` : capped;
+  return { text, language, truncated, chunks: chunksOf(text) };
 }
 
 /** The text before the first line that holds only `---`, when there is any. */

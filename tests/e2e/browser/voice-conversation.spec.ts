@@ -153,7 +153,7 @@ test('talking over the answer stops it and listens', async ({ page }) => {
 test('a server with no voice: the device speaks, and the bar says which voice', async ({ page }) => {
   const captured = await setup(page, { serverVoice: false })
   await openVoice(page)
-  await expect(page.getByTestId('voice-engine')).toHaveText("Voice: this device's")
+  await expect(page.getByTestId('voice-engine')).toHaveText('Voice: built-in')
   await talkAndPause(page)
   await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'waiting', { timeout: 20_000 })
   await answer(page, 'Done.')

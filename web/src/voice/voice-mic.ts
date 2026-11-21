@@ -1,21 +1,21 @@
 /**
  * Voice mode's microphone: one stream for the whole conversation, its loudness
- * (for voice activity) and a recorder per take.
+ * (for voice activity), whether it delivers sound at all (mic-health.ts, the same
+ * rule dictation uses) and a recorder per take.
  *
- * Unlike dictation (utils/mic-constraints.ts turns echo cancellation off for the
- * cleanest words), voice mode plays answers through the speaker while it listens,
- * so it asks the browser for echo cancellation and noise suppression: without
- * them the answer read aloud would count as the person talking over it.
+ * It asks for dictation's constraints (utils/mic-constraints.ts), echo
+ * cancellation off: in WebKit it rebuilds the audio device whenever the output
+ * changes, and voice mode changes the output on every answer, so the mic would
+ * stall mid-sentence. The answer that leaks from the speaker into the mic is
+ * told apart from the person by voice-activity.ts instead (it hears the output
+ * level too). While the mic is open the music of this machine stays paused
+ * (api/media-hold.ts), as it does for dictation.
  */
 
+import { acquireMediaHold, type MediaHoldHandle } from '@/api/media-hold';
+import { DICTATION_AUDIO_CONSTRAINTS } from '@/utils/mic-constraints';
+import { byteFrameRms, initialMicHealth, micHealthTick, micHealthTrackEnded, SAMPLE_INTERVAL_MS, type MicHealthState } from '@/utils/mic-health';
 import { floatRms } from './voice-activity';
-
-const CONVERSATION_CONSTRAINTS: MediaTrackConstraints = {
-  channelCount: 1,
-  echoCancellation: true,
-  noiseSuppression: true,
-  autoGainControl: true,
-};
 
 /** The recorder's format and the name the transcribe route takes for it. */
 function recorderFormat(): { mimeType?: string; format: string } {
@@ -32,33 +32,74 @@ export interface Take {
   ms: number;
 }
 
+export interface MicSample {
+  /** Loudness now (RMS of the float frame, 0..1): voice activity reads it. */
+  rms: number;
+  /** The mic warning now (mic-health.ts): no sound at all, or the device went away. */
+  warning: string | null;
+}
+
+/** The loudness an analyser carries now (RMS of its float frame); `buf` is the analyser's own size. */
+export function analyserRms(analyser: AnalyserNode, buf: Float32Array<ArrayBuffer>): number {
+  analyser.getFloatTimeDomainData(buf);
+  return floatRms(buf);
+}
+
 export class VoiceMic {
   private recorder: MediaRecorder | null = null;
   private parts: Blob[] = [];
   private startedAt = 0;
   private readonly buf: Float32Array<ArrayBuffer>;
+  private readonly bytes: Uint8Array<ArrayBuffer>;
+  private health: MicHealthState = initialMicHealth();
+  private warning: string | null = null;
+  private lastHealthAt = 0;
 
   private constructor(
     private readonly stream: MediaStream,
     private readonly analyser: AnalyserNode,
     private readonly source: MediaStreamAudioSourceNode,
+    private readonly hold: MediaHoldHandle,
   ) {
     this.buf = new Float32Array(new ArrayBuffer(analyser.fftSize * 4));
+    this.bytes = new Uint8Array(new ArrayBuffer(analyser.fftSize));
+    for (const track of stream.getAudioTracks()) {
+      track.addEventListener('ended', () => {
+        const tick = micHealthTrackEnded(this.health);
+        this.health = tick.state;
+        this.warning = tick.warning;
+      });
+    }
   }
 
   static async open(ctx: AudioContext): Promise<VoiceMic> {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: CONVERSATION_CONSTRAINTS });
-    const source = ctx.createMediaStreamSource(stream);
-    const analyser = ctx.createAnalyser();
-    analyser.fftSize = 1024;
-    source.connect(analyser);
-    return new VoiceMic(stream, analyser, source);
+    // Asked at once, so the music is already off when the first words come.
+    const hold = acquireMediaHold('voice-conversation');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: DICTATION_AUDIO_CONSTRAINTS });
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      source.connect(analyser);
+      return new VoiceMic(stream, analyser, source, hold);
+    } catch (err) {
+      hold.release();
+      throw err;
+    }
   }
 
-  /** Loudness now (RMS, 0..1). */
-  rms(): number {
-    this.analyser.getFloatTimeDomainData(this.buf);
-    return floatRms(this.buf);
+  /** One reading. The health rule counts its own ticks, so it is fed at its own pace. */
+  sample(now = performance.now()): MicSample {
+    const rms = analyserRms(this.analyser, this.buf);
+    if (now - this.lastHealthAt >= SAMPLE_INTERVAL_MS) {
+      this.lastHealthAt = now;
+      // Bytes on purpose: DEAD_STREAM_RMS is measured on the byte frame (see byteFrameRms).
+      this.analyser.getByteTimeDomainData(this.bytes);
+      const tick = micHealthTick(this.health, byteFrameRms(this.bytes));
+      this.health = tick.state;
+      this.warning = tick.warning;
+    }
+    return { rms, warning: this.warning };
   }
 
   get recording(): boolean {
@@ -107,5 +148,6 @@ export class VoiceMic {
     this.discardTake();
     this.source.disconnect();
     for (const t of this.stream.getTracks()) t.stop();
+    this.hold.release();
   }
 }
