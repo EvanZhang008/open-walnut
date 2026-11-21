@@ -2060,8 +2060,12 @@ export interface Config {
   backup?: import('./backup/types.js').BackupConfig;
   /** The standby copy of this Walnut's data folder (experiment `switchable_leader`): src/core/standby/. */
   standby?: {
-    /** The target folder on this machine. Required: with none set, nothing runs. */
+    /** The target folder (on `host` when set, else on this machine). Required: with none set, nothing runs. */
     dir?: string;
+    /** A host Walnut knows to keep the standby on, reached through its daemon (src/core/standby/remote-transport.ts). */
+    host?: string;
+    /** The walnut program on that host: a path, or a program and its arguments (default `walnut`). */
+    walnut?: string | string[];
     /** Seconds between batches (default 30, at least 5). */
     interval_seconds?: number;
   };

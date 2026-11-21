@@ -10,6 +10,7 @@ import { startStandbyRunner, type StandbySettings, type StandbyRunner } from '..
 import { standbyStatus } from '../../../src/core/standby/index.js'
 import { writeGateEnabled } from '../../../src/utils/write-gate.js'
 import { sandbox, seedHome, walk, type Sandbox } from './helpers.js'
+import { fakeStandbyHost } from './fake-standby-host.js'
 
 let sb: Sandbox
 let runner: StandbyRunner | null = null
@@ -77,5 +78,35 @@ describe('standby runner', () => {
     await runner.reconcile()
     expect(runner.running()).toBe(false)
     expect(writeGateEnabled()).toBe(false)
+  }, 60_000)
+
+  it('on with a standby host: batches go there through its link, its drift goes to Health once', async () => {
+    sb = await sandbox('on-remote')
+    dbs.push(...seedHome(sb.home).dbs)
+    const host = fakeStandbyHost(sb.root)
+    const hosts: string[] = []
+    const notices: Array<{ title: string; body: string }> = []
+    runner = startStandbyRunner({
+      settings: async () => ({ on: true, home: sb.home, dir: sb.target, host: 'standby-box', intervalSeconds: 3600 }),
+      notify: async (n) => { notices.push(n); return true },
+      connect: async (h) => { hosts.push(h); return host.link },
+    })
+    await runner.reconcile()
+    const first = await runner.runOnce()
+    expect(first?.ok, first && !first.ok ? first.reason : '').toBe(true)
+    expect(hosts[0]).toBe('standby-box')
+    expect((await standbyStatus(sb.target)).batch).toBeGreaterThanOrEqual(1)
+    expect(host.log.some((e) => e.cmd === 'receive apply')).toBe(true)
+
+    const file = path.join(sb.target, 'copy', 'memory/MEMORY.md')
+    fs.chmodSync(path.dirname(file), 0o755)
+    fs.chmodSync(file, 0o644)
+    fs.writeFileSync(file, 'edited on the standby\n')
+    await runner.runOnce()
+    await runner.runOnce()
+    const drift = notices.filter((n) => n.title.includes('changed there directly'))
+    expect(drift).toHaveLength(1)
+    expect(drift[0].body).toContain(`standby-box:${sb.target}`)
+    expect(fs.readFileSync(file, 'utf8')).toBe('# Memory\n')
   }, 60_000)
 })
