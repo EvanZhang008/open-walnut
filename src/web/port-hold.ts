@@ -21,11 +21,14 @@ export async function holdPort(port: number, host?: string): Promise<PortHold | 
   // A client that connects meanwhile (a browser reconnecting during a restart, a deploy's
   // readiness poll) is cut at once, as a closed port would refuse it, never left hanging.
   const holder = net.createServer({ pauseOnConnect: true }, (socket) => socket.destroy())
-  await new Promise<void>((resolve, reject) => {
-    holder.once('error', reject)
-    if (host) holder.listen(port, host, () => resolve())
-    else holder.listen(port, () => resolve())
-  })
+  // A port this process let go of a moment ago is retried briefly (listenAfterHold, below).
+  await listenAfterHold(() => new Promise<void>((resolve, reject) => {
+    const onError = (err: Error) => reject(err)
+    holder.once('error', onError)
+    const done = () => { holder.off('error', onError); resolve() }
+    if (host) holder.listen(port, host, done)
+    else holder.listen(port, done)
+  }), { budgetMs: HOLD_RELISTEN_BUDGET_MS })
   holder.unref()
   let released: Promise<void> | null = null
   return {
@@ -33,5 +36,39 @@ export async function holdPort(port: number, host?: string): Promise<PortHold | 
       released ??= new Promise<void>((resolve) => holder.close(() => resolve()))
       return released
     },
+  }
+}
+
+/** How long the real listen retries a port this process just released (ms). */
+export const RELISTEN_BUDGET_MS = 2_000
+const RELISTEN_STEP_MS = 25
+/** The hold's own listen: shorter, so a port really taken (Walnut already running) is said soon. */
+const HOLD_RELISTEN_BUDGET_MS = 500
+
+/**
+ * The real listen, right after the hold is released. A port this process held a moment ago can
+ * still be taken for a few milliseconds: a child that another thread is starting holds a copy of
+ * every descriptor of this process until it has exec'd (Bun closes them in the child one by one,
+ * about 30 ms at an open-file limit of 32768), the released hold among them, still listening. The
+ * spawn pool starts children on its own thread while this one runs (spawn-pool.ts, experiment
+ * in_process_daemon), so a listen at that moment met EADDRINUSE and the server died on its own
+ * port (2026-11-21, two of a dozen restarts with a session alive). EADDRINUSE is retried until
+ * `budgetMs`; any other error, or a port still taken after it, is the caller's as before.
+ * `listen` must be callable again after it rejected (node's and Bun's servers are).
+ */
+export async function listenAfterHold(
+  listen: () => Promise<void>,
+  opts: { budgetMs?: number; stepMs?: number; onRetry?: (attempt: number) => void } = {},
+): Promise<void> {
+  const deadline = Date.now() + (opts.budgetMs ?? RELISTEN_BUDGET_MS)
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await listen()
+      return
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== 'EADDRINUSE' || Date.now() >= deadline) throw err
+      opts.onRetry?.(attempt)
+      await new Promise((r) => setTimeout(r, opts.stepMs ?? RELISTEN_STEP_MS))
+    }
   }
 }

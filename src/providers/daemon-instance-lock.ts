@@ -8,6 +8,9 @@ export const DAEMON_LOCK_HOST = '127.0.0.1'
 export const DAEMON_LOCK_PORT_BASE = 17000
 export const DAEMON_LOCK_PORT_SPAN = 12000
 export const DAEMON_LOCK_DEADLINE_MS = 2000
+/** How long a lock port held by no answering owner is retried (acquireDaemonInstanceLock). */
+export const DAEMON_LOCK_LINGER_BUDGET_MS = 1000
+const HOLDER_CLOSED_UNANSWERED = 'holder closed without a complete banner line'
 export const DAEMON_LOCK_MAX_BANNER_BYTES = 4096
 export const DAEMON_LOCK_MAX_PORT = 65535
 
@@ -191,7 +194,7 @@ function readBannerLine(netApi: LockNetLike, port: number, deadlineMs: number): 
     )
     timer.unref?.()
     const closedEarly = () => settle(
-      new DaemonLockConflictError('malformed', port, 'holder closed without a complete banner line'),
+      new DaemonLockConflictError('malformed', port, HOLDER_CLOSED_UNANSWERED),
     )
     socket.on('data', (chunk: unknown) => {
       accumulated = Buffer.concat([accumulated, toBuffer(chunk)])
@@ -276,23 +279,36 @@ export async function acquireDaemonInstanceLock(
     try { socket.end(JSON.stringify(banner) + '\n') } catch { clear() }
   })
 
-  const listenError = await new Promise<NodeJS.ErrnoException | null>((resolve) => {
+  const listenOnce = () => new Promise<NodeJS.ErrnoException | null>((resolve) => {
     let settled = false
     const settle = (err: NodeJS.ErrnoException | null) => {
       if (settled) return
       settled = true
       resolve(err)
     }
+    // Each attempt's listeners stay (the lock's net surface has no off); a settled one ignores later events.
     server.on('error', (err: unknown) => settle(err as NodeJS.ErrnoException))
     server.on('listening', () => settle(null))
     server.listen({ port: requestedPort, host: DAEMON_LOCK_HOST, exclusive: true })
   })
 
-  if (listenError) {
-    if (listenError.code === 'EADDRINUSE') {
+  // A holder that answers no banner and then is gone (it refused the connection, or closed it
+  // unanswered) was no owner: a child another thread of this process was starting held a copy of
+  // a lock this process released, until it exec'd (spawn-pool.ts; listenAfterHold in
+  // src/web/port-hold.ts is the same case for the server's port). Retried for LINGER_BUDGET_MS;
+  // a holder that answers anything else, or is still there after it, decides as before.
+  const lingerUntil = Date.now() + DAEMON_LOCK_LINGER_BUDGET_MS
+  for (;;) {
+    const listenError = await listenOnce()
+    if (!listenError) break
+    if (listenError.code !== 'EADDRINUSE') throw new DaemonLockConflictError('listen', requestedPort, listenError.message)
+    try {
       return { kind: 'existing', owner: await probeExistingOwner(netApi, requestedPort, options.uid, dir, deadlineMs) }
+    } catch (err) {
+      const gone = err instanceof DaemonLockConflictError && (err.reason === 'unreachable' || (err.reason === 'malformed' && err.detail === HOLDER_CLOSED_UNANSWERED))
+      if (!gone || Date.now() >= lingerUntil) throw err
+      await new Promise((r) => setTimeout(r, 25))
     }
-    throw new DaemonLockConflictError('listen', requestedPort, listenError.message)
   }
 
   const address = server.address()

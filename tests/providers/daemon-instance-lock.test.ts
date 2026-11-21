@@ -308,6 +308,29 @@ describe('real loopback contention', () => {
     }
   })
 
+  // A released lock can still be held for a few ms by a child another thread of this process is
+  // starting (spawn-pool.ts): it answers nothing and then is gone. That is no owner: retried.
+  it('takes the lock once a holder that answers nothing lets go, and refuses one that stays', async () => {
+    const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-lock-'))
+    const lingering = net.createServer((socket) => socket.destroy())
+    await new Promise<void>((resolve) => lingering.listen({ port: 0, host: '127.0.0.1' }, () => resolve()))
+    const port = (lingering.address() as net.AddressInfo).port
+    try {
+      setTimeout(() => lingering.close(), 150)
+      const got = await acquireDaemonInstanceLock({ ...identity(runtimeDir, 'd-after-linger', port), deadlineMs: 500 })
+      expect(got.kind).toBe('owner')
+      if (got.kind === 'owner') await got.release()
+      const stays = net.createServer((socket) => socket.destroy())
+      await new Promise<void>((resolve) => stays.listen({ port, host: '127.0.0.1' }, () => resolve()))
+      try {
+        await expect(acquireDaemonInstanceLock({ ...identity(runtimeDir, 'd-blocked', port), deadlineMs: 500 }))
+          .rejects.toMatchObject({ name: 'DaemonLockConflictError', reason: 'malformed' })
+      } finally { await new Promise<void>((resolve) => stays.close(() => resolve())) }
+    } finally {
+      fs.rmSync(runtimeDir, { recursive: true, force: true })
+    }
+  })
+
   it('refuses a foreign listener squatting the port', async () => {
     const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-lock-'))
     const squatter = net.createServer((socket) => socket.end('OpenSSH_9.0\n'))

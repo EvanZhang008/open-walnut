@@ -8,7 +8,9 @@ import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { holdPort } from '../../src/web/port-hold.js'
+import http from 'node:http'
+import { holdPort, listenAfterHold } from '../../src/web/port-hold.js'
+import { createSpawnPool } from '../../src/providers/spawn-pool.js'
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -97,3 +99,67 @@ describe('the boot order', () => {
     expect(listenAt).toBeGreaterThan(release)
   })
 })
+
+describe('listenAfterHold', () => {
+  const httpListen = (srv: http.Server, port: number) => () => new Promise<void>((resolve, reject) => {
+    const onError = (err: Error) => reject(err)
+    srv.once('error', onError)
+    srv.listen(port, '127.0.0.1', () => { srv.off('error', onError); resolve() })
+  })
+  const close = (s: net.Server | http.Server) => new Promise<void>((r) => s.close(() => r()))
+
+  it('takes the port once a brief holder lets go, on the same server object', async () => {
+    const port = await freePort()
+    const holder = await listen(port)
+    setTimeout(() => { void close(holder) }, 150)
+    const srv = http.createServer()
+    let retries = 0
+    await listenAfterHold(httpListen(srv, port), { onRetry: (n) => { retries = n } })
+    expect(retries).toBeGreaterThan(0)
+    expect((srv.address() as net.AddressInfo).port).toBe(port)
+    await close(srv)
+  })
+
+  it('a port still taken after the budget rejects with EADDRINUSE, as before', async () => {
+    const port = await freePort()
+    const holder = await listen(port)
+    try {
+      const t0 = Date.now()
+      await expect(listenAfterHold(httpListen(http.createServer(), port), { budgetMs: 200 })).rejects.toMatchObject({ code: 'EADDRINUSE' })
+      expect(Date.now() - t0).toBeGreaterThanOrEqual(190)
+    } finally { await close(holder) }
+  })
+
+  it('any other error is not retried', async () => {
+    let calls = 0
+    await expect(listenAfterHold(async () => { calls++; throw Object.assign(new Error('nope'), { code: 'EACCES' }) })).rejects.toMatchObject({ code: 'EACCES' })
+    expect(calls).toBe(1)
+  })
+
+  // The case it is for: children started on another thread (the spawn pool) while this one releases
+  // the hold and listens. A child mid-start holds a copy of the released hold, still listening.
+  it('hold, release and listen while the spawn pool starts children: never EADDRINUSE', async () => {
+    const pool = createSpawnPool({ umask: null })
+    let stop = false
+    const spawner = async () => {
+      while (!stop) await new Promise<void>((r) => { pool.execFile('true', [], {}, () => r()) })
+    }
+    const spawners = [spawner(), spawner()]
+    try {
+      for (let i = 0; i < 60; i++) {
+        const port = await freePort()
+        const hold = (await holdPort(port, '127.0.0.1'))!
+        await new Promise((r) => setTimeout(r, 2))
+        await hold.release()
+        const srv = http.createServer()
+        await listenAfterHold(httpListen(srv, port))
+        await close(srv)
+      }
+    } finally {
+      stop = true
+      await Promise.all(spawners)
+      pool.close()
+    }
+  }, 60_000)
+})
+

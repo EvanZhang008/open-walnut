@@ -213,6 +213,7 @@ SOURCES=(
   src/providers/daemon-runtime-types.ts
   src/providers/loop-budget.ts
   src/providers/spawn-pool.ts
+  src/providers/session-spawn-files.ts
   src/providers/daemon-service-config.ts
   src/providers/daemon-service-manager.ts
   src/providers/daemon-service-launchd.ts

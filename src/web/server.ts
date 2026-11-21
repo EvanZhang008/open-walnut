@@ -3239,13 +3239,19 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   await serverPortHold?.release()
   serverPortHold = null
   try {
-    await new Promise<void>((resolve, reject) => {
-      httpServer!.once('error', reject)
+    // A port this process held a moment ago is retried briefly on EADDRINUSE (listenAfterHold).
+    const { listenAfterHold } = await import('./port-hold.js')
+    let retries = 0
+    await listenAfterHold(() => new Promise<void>((resolve, reject) => {
+      const onError = (err: Error) => reject(err)
+      httpServer!.once('error', onError)
       // A host replica listens on loopback only; the companion's unit asks for loopback too (bind-address.ts).
       const bindAddress = serverBindAddress({ replica: isHostReplica(), requested: options.bindAddress })
-      if (bindAddress) httpServer!.listen(port, bindAddress, () => resolve())
-      else httpServer!.listen(port, () => resolve())
-    })
+      const done = () => { httpServer!.off('error', onError); resolve() }
+      if (bindAddress) httpServer!.listen(port, bindAddress, done)
+      else httpServer!.listen(port, done)
+    }), { onRetry: (n) => { retries = n } })
+    if (retries) log.web.info('listen: the port came free after a brief hold', { port, retries })
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code !== 'EADDRINUSE') throw err
     throw await portInUseError(port)
