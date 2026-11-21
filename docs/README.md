@@ -58,6 +58,9 @@ must live under one of these top-level categories instead of directly under
 - [Standby copy of the data folder](reference/standby-copy.md): whole-folder batches of one
   moment to a standby folder (experiment `switchable_leader`), complete batches only, and how
   a direct edit of the copy is found, saved and repaired.
+- [The leader's write permission](reference/leader-write-permission.md): one numbered record kept
+  by a fixed majority of witnesses, leases counted on each machine's own clock, handover and
+  cancel that cannot both stand (core only, not wired yet).
 - [Releasing](reference/releasing.md): the stable and nightly channels, `bun run release`,
   the GitHub Actions publish through npm trusted publishing, and how installs learn about and
   apply updates.

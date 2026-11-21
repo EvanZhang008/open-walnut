@@ -69,6 +69,7 @@ export const SLOW_TEST_FILES = [
   'tests/integration/replica-local-routes-twins.test.ts', // both daemon twins as processes, the real startServer as their host replica, a 13 MB copy
   'tests/integration/note-journal-twins.test.ts', // both daemon twins as processes, a follower and a session saving one note, 120 autosaves, a drain (WP11)
   'tests/core/offline-merge/notes-property.test.ts', // ~90s: 1,000 seeded runs, three drain orders each, every one in a fresh temp vault (WP11)
+  'tests/core/leader/permit/model-check.test.ts', // ~30s: about 900 seeded 15-minute schedules of the write permission, safe and with each safety part removed
   'tests/core/offline-merge/notes.test.ts', // ~3s: two 1 MB merges in a worker thread under the stall recorder, one waits out the 2 s deadline (WP11)
   'tests/integration/replica-ask-twins.test.ts', // both daemon twins as processes, mock CLIs spawned from the spawn template, a resume, ten asks an hour
   'tests/providers/follower-owner-scope-twins.test.ts', // both daemon twins as processes, two Walnuts and mock CLIs (WP6 owner scope)
