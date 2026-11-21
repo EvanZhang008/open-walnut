@@ -79,6 +79,7 @@ const endsSeen = new Map<string, { sessionId?: string; turn: number }>();
  *  subtask's completion rides 'peer' / 'walnut-notify' with endsWait. */
 const INTERRUPTING_SEND_SOURCES: ReadonlySet<string> = new Set([
   'peer',          // another task's task_send
+  'program-run',   // phase.ts PROGRAM_RUN_SEND_SOURCE: a plugin job's own task_send, as an outside caller's plain one ('peer')
   'walnut-notify', // a subtask's status notice, a trigger-health note
   'auto-continue', // session-auto-continue.ts AUTO_CONTINUE_SOURCE
   'auto-recover',  // sessions/auto-recover-env.ts AUTO_RECOVER_SOURCE

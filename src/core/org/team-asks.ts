@@ -198,6 +198,8 @@ export async function noteTeamAsk(
     if (!(await isOrgEnabled())) return;
     const { isPersonSendSource } = await import('../sessions/send-sent-by.js');
     const person = isPersonSendSource(source);
+    // Only another task's send ('peer'): a plugin's own message into its run ('program-run',
+    // sessions/plugin-run.ts) is no ask of the team's, so it never reaches the VP's list.
     const peer = source === 'peer' ? peerNoteSender(enqueued) : null;
     if (!person && !peer) return;
     // The leader keeps the notes (pendingOrgDigest's rule): a replica's file nobody reads.

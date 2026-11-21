@@ -18,7 +18,7 @@ import { isPersonSendSource, REOPENING_SEND_SOURCES } from '../../src/core/phase
 
 describe('waitExitCause', () => {
   it('a peer, a status notice or a nudge only interrupts', () => {
-    for (const source of ['peer', 'walnut-notify', 'auto-continue', 'auto-recover']) {
+    for (const source of ['peer', 'program-run', 'walnut-notify', 'auto-continue', 'auto-recover']) {
       expect(waitExitCause('session:input', source), source).toBe('message')
     }
   })
@@ -57,8 +57,8 @@ describe('waitExitCause', () => {
 })
 
 describe('isPersonSendSource', () => {
-  it('is every reopening source but a peer task\'s or a task calling a person\'s route', () => {
-    for (const source of REOPENING_SEND_SOURCES) expect(isPersonSendSource(source), source).toBe(source !== 'peer' && source !== 'api-agent')
+  it('is every reopening source but a peer task\'s, a task calling a person\'s route, or a program\'s own message', () => {
+    for (const source of REOPENING_SEND_SOURCES) expect(isPersonSendSource(source), source).toBe(source !== 'peer' && source !== 'api-agent' && source !== 'program-run')
     expect(isPersonSendSource('browser-automation')).toBe(false)
     expect(isPersonSendSource(undefined)).toBe(false)
     expect(isPersonSendSource('walnut-notify')).toBe(false)

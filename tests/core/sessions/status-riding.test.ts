@@ -15,7 +15,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-status-ri
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { clearRiding, flushRidingForTest, loadRiding, noticeKeysSince, noticeToldSince, pendingRiding, rideLine, rideNotice, ridingKeys, stopRiding } from '../../../src/core/sessions/status-riding.js'
 import { orgNoticeText, reportsToOrgNode, STOP_QUOTE_MAX } from '../../../src/core/sessions/org-follow.js'
-import { EXTERNAL_SESSION_IMPORT_TAG, PROGRAM_RUN_TAG } from '../../../src/core/types.js'
+import { EXTERNAL_SESSION_IMPORT_TAG, PLUGIN_RUN_TAG, PROGRAM_RUN_TAG } from '../../../src/core/types.js'
 
 const notice = (word: string) => `<walnut-message kind="notification">${word}\n\nNext:\n  walnut tools call task_get</walnut-message>`
 
@@ -143,6 +143,8 @@ describe('who reports to an org node, and in what words', () => {
     // An imported program's run nobody wrote to (PROGRAM_RUN_TAG): that program's work, followed by no node.
     expect(reportsToOrgNode({ tags: [EXTERNAL_SESSION_IMPORT_TAG, PROGRAM_RUN_TAG] })).toBe(false)
     expect(reportsToOrgNode({ tags: [EXTERNAL_SESSION_IMPORT_TAG] })).toBe(true)
+    // A program's run a plugin's job runs in Walnut (PLUGIN_RUN_TAG), with no import tag: the same.
+    expect(reportsToOrgNode({ tags: [PLUGIN_RUN_TAG] })).toBe(false)
     expect(reportsToOrgNode({ user_status: { state: 'waiting', snoozed: { until: '2026-12-01' } } as never })).toBe(false)
     expect(orgNoticeText('Your subtask "X" (t) stopped.')).toBe('A task you follow, "X" (t) stopped.')
     expect(STOP_QUOTE_MAX).toBeLessThan(4_000)

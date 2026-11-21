@@ -1031,9 +1031,18 @@ async function applyRecord(
         await tellRetiredLead(retired, record.toSessionId, record.fromSessionId);
         return;
       }
-      if (task.phase !== 'COMPLETE') return;
-      const { applySessionPhase } = await import('./phase.js');
-      await applySessionPhase(taskId, 'session:input', 'offline-handover', { sessionId: record.toSessionId, reopenTerminal: true });
+      // A plugin's own message into a program run (sessions/plugin-run.ts) is the program's, as online:
+      // it never makes the run a regular task. Any other delivery is a person's or a task's.
+      const { adoptOnInput, applySessionPhase, PROGRAM_RUN_SEND_SOURCE } = await import('./phase.js');
+      const { programRunDelivery } = await import('./sessions/plugin-run.js');
+      const programs = await programRunDelivery(record.fromSessionId, task);
+      // A task that is not complete keeps its phase (its session's own turn moved it on the host), but
+      // whose task it is changes as online (adoptOnInput, phase.ts).
+      if (task.phase !== 'COMPLETE') {
+        await adoptOnInput(taskId, programs ? PROGRAM_RUN_SEND_SOURCE : 'offline-handover', 'offline-handover', task);
+        return;
+      }
+      await applySessionPhase(taskId, 'session:input', programs ? PROGRAM_RUN_SEND_SOURCE : 'offline-handover', { sessionId: record.toSessionId, reopenTerminal: true });
       return;
     }
     case 'op': {

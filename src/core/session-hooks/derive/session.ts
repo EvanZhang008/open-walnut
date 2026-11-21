@@ -113,8 +113,9 @@ export function deriveSessionHookPoints(
       const state = getOrCreateSessionState(states, sessionId);
       state.awaitingFirstResponse = true;
       // Skip onMessageSend for automated sources (triage session_send, subagent-runner,
-      // peer-session gateway sends). User-initiated sources (web-ui, cli, web-api) fire hooks normally.
-      if (event.source !== 'agent' && event.source !== 'subagent-runner' && event.source !== 'peer' && !isQuietTurn(sessionId)) {
+      // peer-session gateway sends, a program's own message into its run). User-initiated sources
+      // (web-ui, cli, web-api) fire hooks normally.
+      if (event.source !== 'agent' && event.source !== 'subagent-runner' && event.source !== 'peer' && event.source !== 'program-run' && !isQuietTurn(sessionId)) {
         results.push({
           hookPoint: 'onMessageSend',
           extraPayload: {

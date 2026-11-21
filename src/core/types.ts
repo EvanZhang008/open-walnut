@@ -86,11 +86,42 @@ export function isExternalImportTask(task: { tags?: string[] | undefined }): boo
  */
 export const PROGRAM_RUN_TAG = 'walnut:program-run';
 
-/** True for an imported program's run nobody has written to (see PROGRAM_RUN_TAG): it carries both
- *  PROGRAM_RUN_TAG and EXTERNAL_SESSION_IMPORT_TAG. Every reader asks this one helper. */
+/**
+ * Tag on a task a plugin's job runs as its own program's run inside Walnut, while nobody but that
+ * program has written to it: the job creates the task with it in `tags` (a caller that is not a
+ * session; sessions/plugin-run.ts). It reads and reports exactly like an imported program run
+ * (isProgramRunTask). A message from a person or another task removes it (phase.ts
+ * inputAdoptsPluginRun); Walnut's own sends and the program's own sends do not. Only the create and
+ * those paths change it: every other tag write (task_update tags, a set_tags replay) keeps it as it
+ * was (keepPluginRunMarker). A `walnut:*` machine tag: no pill on any client (tag-display-rules.ts).
+ */
+export const PLUGIN_RUN_TAG = 'walnut:plugin-run';
+
+/** True for a program's run nobody else has written to: an imported one (PROGRAM_RUN_TAG beside
+ *  EXTERNAL_SESSION_IMPORT_TAG) or one a plugin's job runs in Walnut (PLUGIN_RUN_TAG). Every reader
+ *  asks this one helper. */
 export function isProgramRunTask(task: { tags?: string[] | undefined }): boolean {
   const tags = task.tags ?? [];
-  return tags.includes(PROGRAM_RUN_TAG) && tags.includes(EXTERNAL_SESSION_IMPORT_TAG);
+  return tags.includes(PLUGIN_RUN_TAG) || (tags.includes(PROGRAM_RUN_TAG) && tags.includes(EXTERNAL_SESSION_IMPORT_TAG));
+}
+
+/** True for a task that carries PLUGIN_RUN_TAG (a program run a plugin's job runs in Walnut). */
+export function isPluginRunTask(task: { tags?: string[] | undefined }): boolean {
+  return (task.tags ?? []).includes(PLUGIN_RUN_TAG);
+}
+
+/**
+ * `after` (a tag write's result) with PLUGIN_RUN_TAG as it was in `before`: a tag write never puts
+ * the marker on or takes it off (only a program's create, its takeover and adoption do, with their own permit).
+ */
+export function keepPluginRunMarker(before: readonly string[] | undefined, after: readonly string[] | undefined): string[] {
+  return withPluginRunMarker(after, (before ?? []).includes(PLUGIN_RUN_TAG));
+}
+
+/** `tags` with PLUGIN_RUN_TAG present exactly when `on`. */
+export function withPluginRunMarker(tags: readonly string[] | undefined, on: boolean): string[] {
+  const rest = (tags ?? []).filter((t) => t !== PLUGIN_RUN_TAG);
+  return on ? [...rest, PLUGIN_RUN_TAG] : rest;
 }
 export type TaskSource = string;
 

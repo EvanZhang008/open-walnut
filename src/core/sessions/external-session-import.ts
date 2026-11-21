@@ -62,7 +62,7 @@ import { log } from '../../logging/index.js';
 import { bus, EventNames } from '../event-bus.js';
 import { isExcludedExternalCwd, isSyntheticUserText, type ExternalSessionCandidate } from '../../providers/external-session-scan-core.js';
 import { ENGINE_REGISTRY, engineCaps, normalizeEngine } from '../agents/engine-registry.js';
-import { EXTERNAL_SESSION_IMPORT_TAG, PROGRAM_RUN_TAG, isExternalImportTask, isProgramRunTask, type Task } from '../types.js';
+import { EXTERNAL_SESSION_IMPORT_TAG, PLUGIN_RUN_TAG, PROGRAM_RUN_TAG, isExternalImportTask, isProgramRunTask, withPluginRunMarker, type Task } from '../types.js';
 import { readMarkerForPhase } from '../phase.js';
 import type { DirectoryUse } from '../frequent-dirs.js';
 import { placeNewImportProject, projectRegistered } from './import-project-vp.js';
@@ -221,7 +221,7 @@ async function fileAsStarted(taskId: string, emitEvent: boolean): Promise<boolea
   const { updateTaskRaw } = await import('../task-manager.js');
   const res = await updateTaskRaw(taskId, (current) => ({
     phase: IMPORTED_PHASE,
-    ...(isProgramRunTask(current) ? { unread: false } : readMarkerForPhase(IMPORTED_PHASE)),
+    ...readMarkerForPhase(IMPORTED_PHASE, current),
   }), {
     // shouldUpdate writes only over the minted TODO, never a WAITING task: leaveHeld changes nothing here.
     emitEvent, push: false, source: EXTERNAL_IMPORT_EVENT_SOURCE, leaveHeld: true,
@@ -962,15 +962,29 @@ async function auditImports(imports: Task[], limit: number): Promise<number> {
  * the importer never owned. Called from one place only, applySessionPhase's
  * session:input (phase.ts), which every path that puts a message into a session
  * passes (ratchet: tests/core/import-adoption-one-place.test.ts).
+ *
+ * `asProgramRun`: the message is the program's own (phase.ts PROGRAM_RUN_SEND_SOURCE) into
+ * its imported run. The importer's tags still come off (Walnut runs the session now), and
+ * the run stays its program's: PLUGIN_RUN_TAG goes on in the same write (types.ts).
  */
-export async function adoptImportedTask(taskId: string, via: string): Promise<boolean> {
-  const { getTask, updateTask } = await import('../task-manager.js');
+export async function adoptImportedTask(taskId: string, via: string, opts: { asProgramRun?: boolean } = {}): Promise<boolean> {
+  const { getTask, updateTask, updateTaskRaw } = await import('../task-manager.js');
   const task = await getTask(taskId).catch(() => null);
   if (!task || !isExternalImportTask(task)) return false;
+  if (opts.asProgramRun === true && isProgramRunTask(task)) {
+    // Inside the write, against the row as it is then: only a run still the importer's program run
+    // is taken over, so a person's adoption that landed first is never marked the program's again.
+    const res = await updateTaskRaw(taskId, (cur) => isExternalImportTask(cur) && isProgramRunTask(cur)
+      ? { tags: withPluginRunMarker((cur.tags ?? []).filter((t) => t !== HOLDER_TAG && t !== PROGRAM_RUN_TAG), true) }
+      : null, { emitEvent: true, push: true, source: 'external-session-import', pluginRunMarker: true });
+    if (!res.changed) return false;
+    log.session.info('imported program run taken over by its program; it stays a program run', { taskId, via });
+    return true;
+  }
   // remove_tags is applied inside the task write lock against the row as it is
   // then, so a tag someone adds meanwhile survives; updateTask announces the
   // change as task:updated whatever the phase (never a second "completed").
-  await updateTask(taskId, { remove_tags: [HOLDER_TAG, PROGRAM_RUN_TAG] }, { source: 'external-session-import' });
+  await updateTask(taskId, { remove_tags: [HOLDER_TAG, PROGRAM_RUN_TAG, PLUGIN_RUN_TAG] }, { source: 'external-session-import', pluginRunMarker: true });
   log.session.info('imported session adopted; task leaves the imported type', { taskId, via });
   return true;
 }

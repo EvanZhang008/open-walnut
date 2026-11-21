@@ -551,6 +551,10 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
     const noWorkspace = b.workspace === false || b.no_workspace === true
     const rawSid = req.headers['x-walnut-caller-sid']
     const callerSid = (Array.isArray(rawSid) ? rawSid[0] : rawSid ?? '').trim() || undefined
+    // A program's own start of a program run is the program's (core/sessions/plugin-run.ts).
+    const rawPlugin = req.headers['x-walnut-plugin-id']
+    const { programStartSource } = await import('../../core/sessions/plugin-run.js')
+    const programSource = await programStartSource({ sid: callerSid, pluginId: (Array.isArray(rawPlugin) ? rawPlugin[0] : rawPlugin)?.trim() || undefined }, id)
     const { startSessionForTask, SessionExistsError } = await import('../../core/sessions/task-start.js')
     const { QuickStartError } = await import('../../core/sessions/quick-start.js')
     const { SubtaskLimitError } = await import('../../core/sessions/subtask-limits.js')
@@ -579,7 +583,7 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
         handsOn: str('hands_on'),
         callerSid,
         startAttemptId: str('start_attempt_id'),
-        source: startRouteSource('api-v1', req.headers),
+        source: programSource ?? startRouteSource('api-v1', req.headers),
         // An agent's start answers once its session is up or the start failed (a sync call,
         // 2026-11-06, the user): never a start left to come up later unseen.
         ...(callerSid ? { answerWithinMs: AGENT_START_ANSWER_MS } : {}),

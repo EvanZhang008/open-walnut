@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SessionRecord, Task } from '../../src/core/types.js';
-import { EXTERNAL_SESSION_IMPORT_TAG, PROGRAM_RUN_TAG } from '../../src/core/types.js';
+import { EXTERNAL_SESSION_IMPORT_TAG, PLUGIN_RUN_TAG, PROGRAM_RUN_TAG } from '../../src/core/types.js';
 import { PROGRAM_RUN_WAIT } from '../../src/core/user-status.js';
 
 const tasks = new Map<string, Task>();
@@ -142,8 +142,11 @@ describe('who hears it', () => {
     expect(await flushStatusPush(Date.now() + 3 * SETTLE_MS + 3)).toBe(0)
   });
 
-  it("an imported program's run: neither its VP nor Main hears its moves", async () => {
-    const run = (extra: Partial<Task>) => task('run', { tags: [EXTERNAL_SESSION_IMPORT_TAG, PROGRAM_RUN_TAG], ...extra })
+  it.each([
+    ['an imported program\'s run', [EXTERNAL_SESSION_IMPORT_TAG, PROGRAM_RUN_TAG]],
+    ['a program\'s run a plugin\'s job runs in Walnut', [PLUGIN_RUN_TAG]],
+  ])('%s: neither its VP nor Main hears its moves', async (_shape, tags) => {
+    const run = (extra: Partial<Task>) => task('run', { tags, ...extra })
     tasks.set('run', run({ phase: 'IN_PROGRESS', user_status: { state: 'working' } }))
     sessions.push(sess('s-run', 'run'))
     emit(tasks.get('run')!)

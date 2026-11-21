@@ -274,7 +274,7 @@ export async function flushStatusPush(now = Date.now()): Promise<number> {
       // next message whether it runs now or not. Snoozed (snooze.ts): a VP or Main, who bring news
       // to the user, hears nothing of it until the snooze runs out, when the move out of it is the
       // news. A leader still hears (the team's own work goes on), and so does a session waiting on
-      // its reply. An imported program's run (PROGRAM_RUN_TAG) is that program's work: no VP or
+      // its reply. A program's run (types.ts isProgramRunTask: imported, or a plugin's job's) is that program's work: no VP or
       // Main hears its moves, as none hears its edges (org-follow.ts reportsToOrgNode).
       for (const f of statusFollowersOf(task, byId, vpOf, main)) {
         if (!openTask(f)) continue;

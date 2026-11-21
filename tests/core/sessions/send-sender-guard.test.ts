@@ -26,42 +26,7 @@ import { AREA_DELIVERY_REFUSED, ROUTER_RUNTIME_SOURCE } from '../../../src/core/
 import { transcriptSentBy } from '../../../src/core/sessions/transcript-sent-by.js';
 import { resetCache, sendMessageToSession, getQueue } from '../../../src/core/session-message-queue.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
-
-const ROOT = path.resolve(__dirname, '../../..');
-const SRC = path.join(ROOT, 'src');
-
-function walk(dir: string, out: string[] = []): string[] {
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    const p = path.join(dir, e.name);
-    if (e.isDirectory()) walk(p, out);
-    else if (p.endsWith('.ts')) out.push(p);
-  }
-  return out;
-}
-
-const CALL = /\b(sendMessageToSession|deliverToSession|enqueueMessage|startSessionForTask|quickStartSession|continueTaskConversation|performSessionSend|performMobileLaunch|getOrCreateLaneSession)\(|sessionRunner\.startSession\(/g;
-
-interface Site { file: string; fn: string; line: number; sources: string[] }
-
-/** Every call that puts a line into a session, with the `source:` literals named in the call. */
-function callSites(): Site[] {
-  const sites: Site[] = [];
-  for (const f of walk(SRC)) {
-    const text = fs.readFileSync(f, 'utf8');
-    const lines = text.split('\n');
-    CALL.lastIndex = 0;
-    for (let m = CALL.exec(text); m; m = CALL.exec(text)) {
-      if (/function\s+$/.test(text.slice(Math.max(0, m.index - 12), m.index))) continue;
-      const line = text.slice(0, m.index).split('\n').length;
-      if (/^\s*(\/\/|\*|\/\*)/.test(lines[line - 1])) continue;
-      const window = text.slice(m.index, m.index + 900);
-      const sources = [...window.matchAll(/source:\s*(?:'([^']+)'|`([^`]+)`|([A-Za-z_][\w.]*))/g)].slice(0, 3)
-        .map((x) => x[1] ?? x[2] ?? `<${x[3]}>`);
-      sites.push({ file: path.relative(ROOT, f), fn: m[1] ?? 'startSession', line, sources });
-    }
-  }
-  return sites;
-}
+import { ROOT, SRC, callSites, walk } from '../../helpers/send-call-sites.js';
 
 /**
  * Every file that puts a line into a session, with how many calls it makes. A new file or a new

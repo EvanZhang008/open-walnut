@@ -315,6 +315,49 @@ describe('runOfflineHandover', () => {
     expect(delivered.slice(again)).toHaveLength(0)
   })
 
+  it("a host's replayed delivery is the program's by the sender it recorded, complete or not", async () => {
+    // core/sessions/plugin-run.ts programRunDelivery: `external` (a job online) is the program's in any
+    // program run; no sender ('', follower.send) is the program's in a plugin's run only; a session's is not.
+    const res = await fetch(`${root()}/api/v1/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-walnut-caller-sid': 'external' },
+      body: JSON.stringify({ title: 'Ticket 7', project: 'Acme', tags: ['walnut:plugin-run'] }),
+    })
+    expect(res.status).toBe(201)
+    const run = ((await res.json()) as { task: { id: string } }).task.id
+    const imported = await newTask('Imported run 8', { tags: ['walnut:external-sessions', 'walnut:program-run'] })
+    const R = '0ff1ce00-0007-4007-8007-000000000007'
+    const I = '0ff1ce00-0008-4008-8008-000000000008'
+    await createSessionRecord(R, run, 'Acme', '/work', { host: 'devbox', title: 'Ticket 7' })
+    await createSessionRecord(I, imported, 'Acme', '/work', { host: 'devbox', title: 'Imported run 8' })
+    let seq = 0
+    const drainOnce = (messageId: string, from: string, to: string, toTaskId: string) => {
+      let drained = false
+      return async (cmd: string) => {
+        if (cmd !== 'offline.drain') return { ok: true, remaining: 0 }
+        if (drained) return { ok: true, records: [] }
+        drained = true
+        return { ok: true, records: [{ seq: ++seq, at: Date.now(), kind: 'delivery', fromSessionId: from, toSessionId: to, toTaskId, messageId }], more: false }
+      }
+    }
+    const tags = async (id: string) => ((await task(id)).tags as string[] | undefined) ?? []
+    // Complete, a job's message online-shaped (`external`): reopened, still the program's.
+    await api('POST', `/api/v1/tasks/${run}/complete`)
+    await runOfflineHandover({ hostKey: 'devbox', send: drainOnce('qm-offline-job', 'external', R, run) as never })
+    expect((await task(run)).phase).toBe('IN_PROGRESS')
+    expect(await tags(run)).toEqual(['walnut:plugin-run'])
+    // Not complete, no sender into the plugin's run: the phase stays, and it is still the program's.
+    await runOfflineHandover({ hostKey: 'devbox', send: drainOnce('qm-offline-follower', '', R, run) as never })
+    expect(await tags(run)).toEqual(['walnut:plugin-run'])
+    // No sender into an imported program run: someone else's, adopted as on main.
+    await runOfflineHandover({ hostKey: 'devbox', send: drainOnce('qm-offline-follower-2', '', I, imported) as never })
+    expect(await tags(imported)).toEqual([])
+    // A session's message into the plugin's run: someone else's, adopted; the phase stays.
+    await runOfflineHandover({ hostKey: 'devbox', send: drainOnce('qm-offline-peer', A, R, run) as never })
+    expect((await task(run)).phase).toBe('IN_PROGRESS')
+    expect(await tags(run)).not.toContain('walnut:plugin-run')
+  })
+
   it('a queued park carrying the retired wait_report lands; a refusal is the caller\'s, a Walnut failure carries its session', async () => {
     // 2026-10-05 21:40Z: a session started before wait_report was retired parked
     // its task while the server was away; the replay refused the whole write for

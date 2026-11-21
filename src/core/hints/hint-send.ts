@@ -537,7 +537,8 @@ export async function prepareStartHints<T extends StartHintData>(data: T, opts: 
  * relay, a side thread's question) pass `hinted` and are left alone.
  */
 export const QUEUE_HINT_SOURCES: ReadonlySet<string> = new Set([
-  'routine-trigger', 'routine-watcher', 'wait-until', 'peer', 'walnut-notify',
+  // 'program-run': a plugin's own send into its run (sessions/plugin-run.ts), a 'peer' send before it was told apart.
+  'routine-trigger', 'routine-watcher', 'wait-until', 'peer', 'program-run', 'walnut-notify',
   'human-inbox', 'auto-continue', 'auto-recover', 'app-state', 'cli', 'brief-refresh', 'choice-recheck', 'pr-watch', 'change-watch',
   'context-recovery', 'safeguard-switch', 'thread-recheck', 'topic',
 ]);

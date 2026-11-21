@@ -86,6 +86,8 @@ messagesV1Router.post('/messages', async (req: Request, res: Response, next: Nex
           ? { callerSid: 'external', callerLabel: senderLabel(header(req, SENDER_LABEL_HEADER)) }
           : { callerSid: header(req, 'x-walnut-caller-sid') }),
         callerHost: header(req, 'x-walnut-caller-host'),
+        // The plugin the call was made through, for a program's own message into its run (core/sessions/plugin-run.ts).
+        callerPluginId: header(req, 'x-walnut-plugin-id'),
       })
       // The sender reads what its message waits on the way the bubble does
       // (core/sessions/send-now.ts): the request keeps the row it went out as, and a

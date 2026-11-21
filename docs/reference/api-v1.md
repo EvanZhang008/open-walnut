@@ -1022,6 +1022,15 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   "open_subtasks"?, "more_open_subtasks"?, "warning"? } }`.
   Same creation semantics as the web quick-add: omitted/empty `project` =
   config default → Inbox; a new project name auto-creates its registry row;
+  **A program's run (additive, 2026-11-21):** `tags` holding `walnut:plugin-run`
+  from a program's own call files the task as its program's own run
+  (`src/core/sessions/plugin-run.ts` isProgramCall): the plugin's `plugin:<id>`
+  caller sid, an outside caller naming its plugin in `x-walnut-plugin-id`, or
+  the daemon gateway's anonymous caller sid `external` (how a plugin job's call
+  reaches the leader). From anyone else (a session, a person, an unknown sid, a
+  script naming itself) it is `400 bad_request` and nothing is created. Later
+  `POST /messages` and `POST /tasks/:id/start` from such a call into that task
+  are the program's own and keep it its run; no field of theirs changes;
   **Caller placement (additive, 2026-09-23):** when the `x-walnut-caller-sid`
   header names a session running a regular task (a "worker", not a Personal AI
   ask), an omitted `project` means THAT task's project, and a task landing in

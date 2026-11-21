@@ -3,9 +3,10 @@
  * session takes the importer's tags off its task, whoever sent it. 2026-11-19: only the two send
  * handlers adopted, so a run a trigger, the router or a drained message wrote to stayed "the
  * program's" for good. Every path that puts a message into a session calls
- * applySessionPhase(..., 'session:input', ...), and that is where adoption lives; a new call site of
- * adoptImportedTask anywhere else fails here, and so does a session:input edge that skips
- * applySessionPhase. The behaviour is in tests/core/program-run-imports.test.ts.
+ * applySessionPhase(..., 'session:input', ...), which calls phase.ts adoptOnInput, where adoption
+ * lives (a host's replayed delivery into a task that is not complete calls it alone: it moves no
+ * phase); a new call site of adoptImportedTask anywhere else fails here, and so does a session:input
+ * edge that skips applySessionPhase. The behaviour is in tests/core/program-run-imports.test.ts.
  */
 import { describe, it, expect, beforeAll } from 'vitest'
 import path from 'node:path'
@@ -17,13 +18,31 @@ let src: SourceSet
 beforeAll(async () => { src = await loadSources(ROOT, ['src']) })
 
 describe('adoption of an imported task happens in one place', () => {
-  it('adoptImportedTask is called only by applySessionPhase, for a session:input', () => {
+  /** phase.ts adoptOnInput, the one place a message decides whose task it is. */
+  const adoptOnInputBody = (): string => {
+    const phase = src.code('src/core/phase.ts')
+    return phase.slice(phase.indexOf('export async function adoptOnInput('), phase.indexOf('async function movePhase('))
+  }
+
+  it('adoptImportedTask is called only by adoptOnInput, which applySessionPhase calls for a session:input', () => {
     const callers = src.filesWith(/(?<!function )\badoptImportedTask\(/)
     expect(callers).toEqual(['src/core/phase.ts'])
     const phase = src.code('src/core/phase.ts')
     expect(phase.match(/\badoptImportedTask\(/g)).toHaveLength(1)
-    const entry = phase.slice(phase.indexOf('export async function applySessionPhase('), phase.indexOf('async function movePhase('))
-    expect(entry).toMatch(/if \(trigger === 'session:input' && imported\) \{[\s\S]*adoptImportedTask\(taskId, source\)/)
+    expect(adoptOnInputBody()).toMatch(/if \(isExternalImportTask\(task\)\) \{[\s\S]*adoptImportedTask\(taskId, via, /)
+    const entry = phase.slice(phase.indexOf('export async function applySessionPhase('), phase.indexOf('export async function adoptOnInput('))
+    expect(entry).toMatch(/if \(trigger === 'session:input' && seen\) await adoptOnInput\(taskId, opts\?\.sendSource \?\? source, source, seen\)/)
+    // Its callers: applySessionPhase, and a host's replayed delivery into a task that is not complete.
+    expect(src.filesWith(/(?<!function )\badoptOnInput\(/)).toEqual(['src/core/offline-handover.ts', 'src/core/phase.ts'])
+    expect(src.code('src/core/offline-handover.ts')).toMatch(/if \(task\.phase !== 'COMPLETE'\) \{\s*await adoptOnInput\(/)
+  })
+
+  it('a plugin\'s program run is adopted in the same place, and only there', () => {
+    const callers = src.filesWith(/(?<!function )\badoptPluginRun\(/)
+    expect(callers).toEqual(['src/core/phase.ts'])
+    const phase = src.code('src/core/phase.ts')
+    expect(phase.match(/\badoptPluginRun\(/g)).toHaveLength(1)
+    expect(adoptOnInputBody()).toMatch(/let adoptsPluginRun(?:: boolean)? = isPluginRunTask\(task\) && inputAdoptsPluginRun\(input\)[\s\S]*if \(adoptsPluginRun\) \{[\s\S]*adoptPluginRun\(taskId, /)
   })
 
   it('every session:input edge goes through applySessionPhase, which only phase.ts can bypass', () => {

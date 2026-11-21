@@ -57,6 +57,7 @@ import { createPluginExpose } from './plugin-expose.js'
 import { createPluginNotes } from './notes-service.js'
 import { getDb } from '../task-db.js'
 import type { AgentDefinition, Task, TaskPhase, TaskPriority } from '../types.js'
+import { PLUGIN_RUN_TAG } from '../types.js'
 import type { SlimTask } from '../task-manager.js'
 import type { TaskQuery } from '../task-query.js'
 import { registerOwnedAction, type ActionResult } from '../cron/actions.js'
@@ -667,6 +668,9 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
           parent_task_id: input.parentTaskId,
           depends_on: input.dependsOn,
           tags: input.tags,
+          // The plugin's own call: the walnut:plugin-run tag files the task as its program's run
+          // (core/sessions/plugin-run.ts), as POST /api/v1/tasks does for its job.
+          ...(input.tags?.some((t) => t.trim() === PLUGIN_RUN_TAG) ? { program_run: true } : {}),
           due_date: input.dueDate,
           start_date: input.startDate,
           end_date: input.endDate,

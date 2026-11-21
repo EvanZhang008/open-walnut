@@ -24,6 +24,7 @@ import type { ConflictEntry, ConflictLog } from './conflict-log.js';
 import { unqueueableFields, type FieldWrite } from './task-fields.js';
 import { RefusedWrite, replayFailure } from './patch-check.js';
 import { frozenFieldTimes } from '../task-field-times.js';
+import { isPluginRunTask } from '../types.js';
 import { recordRemap } from './ledger.js';
 import { journalCallId } from '../../lib/op-call-id.js';
 import { applyFields, entryBase, exactTask, opKeyOf, pairValidator, resolveTaskId } from './apply-fields.js';
@@ -286,6 +287,9 @@ async function createTask(
     ...(str(fields.start_date) ? { start_date: String(fields.start_date) } : {}),
     ...(str(fields.end_date) ? { end_date: String(fields.end_date) } : {}),
     ...(Array.isArray(fields.tags) ? { tags: fields.tags.map(String) } : {}),
+    // A program's run (types.ts PLUGIN_RUN_TAG) a plugin's job created while away keeps its marker, as
+    // the online create keeps it for a plugin's own call (sessions/plugin-run.ts); anyone else's is dropped.
+    ...(Array.isArray(fields.tags) && isPluginRunTask({ tags: fields.tags.map(String) }) && kind === 'plugin-job' ? { program_run: true } : {}),
     ...(str(fields.sprint) ? { sprint: String(fields.sprint) } : {}),
     ...(stampedCwd ? { cwd: stampedCwd } : {}),
     ...(pluginOnly ? { plugin_only: pluginOnly } : {}),

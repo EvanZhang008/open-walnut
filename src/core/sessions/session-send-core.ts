@@ -112,6 +112,9 @@ export interface SessionSendInput {
   reason?: string;
   /** Idempotency id (qm-…) forwarded to the durable queue. */
   messageId?: string;
+  /** The plugin the call was made through (`x-walnut-plugin-id`, ops/executor.ts CALLER_PLUGIN_HEADER):
+   *  with an outside caller it is a program's own message (sessions/plugin-run.ts isProgramCall). */
+  callerPluginId?: string;
   /** A reply's structured fields (peers/structured-reply.ts): `inReplyTo` sends only. The asker
    *  reads them as sections of the text; a non-empty `not_done` marks the reply Partial. */
   reply?: { result?: unknown; evidence?: unknown; not_done?: unknown; score?: unknown };
@@ -1119,8 +1122,12 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
   // The asker's other open requests to this target ride the same line: one answer settles all.
   if (request) enqueueText = `${enqueueText}\n${buildReplyTrailer(request, await sameAskerOpen(request))}`;
 
-  const source = caller.kind === 'human' && !walnutSends ? 'cli' : 'peer';
   const taskId = target.taskId ?? target.session.taskId;
+  // A program's own plain send into a program run is the program's (sessions/plugin-run.ts isProgramCall):
+  // it never makes the run a regular task, as another task's or a person's message does.
+  const { programSendSource } = await import('./plugin-run.js');
+  const source = await programSendSource(caller, { sid: input.callerSid, pluginId: input.callerPluginId, label: input.callerLabel }, input.source, taskId)
+    ?? (caller.kind === 'human' && !walnutSends ? 'cli' : 'peer');
   let delivery: 'queued' | 'deferred';
   let messageId: string | undefined;
   try {

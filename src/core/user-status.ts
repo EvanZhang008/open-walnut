@@ -370,8 +370,8 @@ export interface UserStatusInput {
   lastWords?: string | null;
   /** A person set its current NEED_ACTION themself (sessions/person-needs.ts): their own ask. */
   markedByPerson?: boolean;
-  /** An imported program's run nobody has written to (types.ts PROGRAM_RUN_TAG): its turns end
-   *  outside Walnut and nobody asked for them, so with no real ask it waits on that program. */
+  /** A program's run nobody else has written to (types.ts isProgramRunTask: an imported one, or one
+   *  a plugin's job runs in Walnut): nobody asked for its turns, so with no real ask it waits on that program. */
   programRun?: boolean;
   /** When a person last sent one of its sessions a message (ISO): an ask older than that was answered. */
   personSpokeAt?: string | null;
@@ -432,8 +432,9 @@ export function lastWordsOfStatus(s: Pick<UserStatus, 'toRead' | 'waitingOn'> | 
   const w = s?.toRead === 'turn' ? s.waitingOn ?? '' : '';
   return w.startsWith(LAST_WORDS_LEAD) && w.endsWith('"') ? w.slice(LAST_WORDS_LEAD.length, -1).trim() : '';
 }
-/** The wait of an imported program's run whose turn ended with no real ask (UserStatusInput.programRun). */
-export const PROGRAM_RUN_WAIT = 'The program that runs it outside Walnut: its turn ended without asking you anything';
+/** The wait of a program's run whose turn ended with no real ask (UserStatusInput.programRun): an
+ *  imported one or one a plugin's job runs in Walnut, so it names no place. */
+export const PROGRAM_RUN_WAIT = 'The program that runs it: its turn ended without asking you anything';
 /** A task with no session that a person or a lead set to NEED_ACTION by hand. */
 export const MARKED_ASK = 'It was set to need you by hand: open it.';
 /** A worker that reported its work finished, for its lead to check and close. */
@@ -1410,7 +1411,8 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     // next message (or their teams' news), and their node lists its tasks' asks, not itself.
     if (input.isMain || input.isLead) return strip({ state: 'waiting', kind: 'you', waitingOn: 'Your next message, or news from its teams', ...w });
     if (input.hasLeader) return strip({ state: 'waiting', kind: 'lead', waitingOn: 'Its lead, to look at it: its turn ended without asking you anything', ...w });
-    // A program's run a plugin put on the board (PROGRAM_RUN_TAG): nobody asked for it, so what
+    // A program's run a plugin put on the board (types.ts isProgramRunTask: imported, or run in
+    // Walnut by its job): nobody asked for it, so what
     // its turn left is no one's to read; it waits on the program that runs it (2026-11-19: 89 such
     // runs sat in one user's Needs you). Every real ask above still wins.
     if (input.programRun) return strip({ state: 'waiting', kind: 'outside', waitingOn: PROGRAM_RUN_WAIT, ...w });

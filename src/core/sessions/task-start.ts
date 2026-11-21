@@ -16,6 +16,7 @@ import { inheritedEnginePick, projectLaunchDefaultsOf, type LaunchSourceRecord, 
 import { engineCaps, isAcpEngine, normalizeEngine, resolveEngine } from '../agents/engine-registry.js';
 import { isDaemonCommandOutcomeUnknown } from '../../providers/delivery-failure.js';
 import { log } from '../../logging/index.js';
+import { PROGRAM_RUN_SEND_SOURCE } from '../phase.js';
 import { withInboxStartAuthorization } from '../human-inbox/item-ledger.js';
 import { deferTaskStart, requestTaskStartWorkspace, willDeferStart, workspaceCwdOf } from '../workspaces/launch.js';
 import { isLaunchReady } from '../workspaces/decisions.js';
@@ -188,6 +189,15 @@ async function refuseStartOfRetiredLead(task: Task, callerSid: string | undefine
   const { retiredLeadRefusal } = await import('../org/retired-lead.js');
   const refusal = await retiredLeadRefusal(caller.record.taskId, task.id);
   if (refusal) throw new QuickStartError(refusal.message, 409, { code: 'lead_handed_over', ...refusal.detail });
+}
+
+/**
+ * The source a start's continued conversation goes with: the start's own when it names a message,
+ * else 'task-description' (Walnut sends the task's text). The program's own start of its run
+ * (sessions/plugin-run.ts programStartSource) keeps its source either way, so it never adopts the run.
+ */
+function keptStartSource(params: { message?: string; source: string }): string {
+  return params.message?.trim() || params.source === PROGRAM_RUN_SEND_SOURCE ? params.source : 'task-description';
 }
 
 /**
@@ -559,7 +569,7 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
       }
       const sent = await continueTaskConversation(conversation, {
         text: params.message?.trim() || task.description || `Working on task: ${task.title}`,
-        callerSid: params.callerSid, source: params.message?.trim() ? params.source : 'task-description', expectReply: params.expectReply, replyTimeoutSecs: params.replyTimeoutSecs,
+        callerSid: params.callerSid, source: keptStartSource(params), expectReply: params.expectReply, replyTimeoutSecs: params.replyTimeoutSecs,
         ...(params.handsOn ? { handsOn: params.handsOn } : {}),
       }).then((r) => { resumeSlot?.(SLOT_HOLD_MS); return r; }, (e: unknown) => { resumeSlot?.(0); throw e; });
       return {
@@ -888,7 +898,7 @@ export async function moveFromLostHost(task: Task, params: SessionStartParams): 
   }
   const sent = await continueTaskConversation(record, {
     text: params.message?.trim() || task.description || `Working on task: ${task.title}`,
-    callerSid: params.callerSid, source: params.message?.trim() ? params.source : 'task-description', expectReply: params.expectReply, replyTimeoutSecs: params.replyTimeoutSecs,
+    callerSid: params.callerSid, source: keptStartSource(params), expectReply: params.expectReply, replyTimeoutSecs: params.replyTimeoutSecs,
     ...(params.handsOn ? { handsOn: params.handsOn } : {}),
   });
   return {

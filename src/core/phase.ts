@@ -97,7 +97,7 @@
  */
 
 import { log } from '../logging/index.js'
-import { isExternalImportTask, type TaskPhase, type TaskStatus, type Task, type TurnRetryReason } from './types.js';
+import { isExternalImportTask, isPluginRunTask, isProgramRunTask, type TaskPhase, type TaskStatus, type Task, type TurnRetryReason } from './types.js';
 import { isQuietTurn } from './sessions/quiet-turn.js'
 import { queueSentBy } from './sessions/send-sent-by.js'
 import { isMainAgentTask } from './org/main-stays-active.js'
@@ -198,9 +198,15 @@ export function phaseFromStatus(status: TaskStatus): TaskPhase {
  *
  * TODO leaves the marker untouched: it says nothing about whether the last
  * output was seen, so neither setting nor clearing is implied.
+ *
+ * `task`, given only for a turn END (applySessionPhase's session:result and a reconciler turn end, the importer's
+ * filing): a program's run (types.ts isProgramRunTask) hands back READ, because nobody asked for it;
+ * its status reads Waiting on the program unless it really asks (user-status.ts). A prompt for the
+ * human, an error, a report's ask or a person's own NEED_ACTION still mark it unread.
  */
-export function readMarkerForPhase(phase: TaskPhase): Partial<Task> {
-  if (phase === 'NEED_ACTION') return { unread: true }
+export function readMarkerForPhase(phase: TaskPhase, task?: { tags?: string[] | undefined }): Partial<Task> {
+  // A program's run (types.ts isProgramRunTask): nobody asked for it, so its hand-back is filed read.
+  if (phase === 'NEED_ACTION') return task && isProgramRunTask(task) ? { unread: false } : { unread: true }
   if (phase === 'IN_PROGRESS' || phase === 'WAITING' || phase === 'COMPLETE') return { unread: false }
   return {}
 }
@@ -371,7 +377,32 @@ export const REOPENING_SEND_SOURCES: ReadonlySet<string> = new Set([
   // stay out, so they never reopen a finished ask.
   'api-v1',
   'chat',
+  // The program's own send into its run (PROGRAM_RUN_SEND_SOURCE): deliberate, as the outside
+  // caller's plain send ('peer') is, so a forced one reopens a finished run. It never adopts.
+  'program-run',
 ])
+
+/**
+ * The send source of a program's own message into its run: an outside caller's task_send or
+ * task_start (a plugin's job) into a task that is a program run (sessions/plugin-run.ts
+ * programSendSource), live or replayed after the Mac was away. It never adopts the task
+ * (inputAdoptsPluginRun), and into an imported program run it keeps it a program's run.
+ */
+export const PROGRAM_RUN_SEND_SOURCE = 'program-run'
+
+/**
+ * Whether a message into a plugin's program run (types.ts PLUGIN_RUN_TAG) makes it a regular task:
+ * a person's or another task's message does, read off `sendSourceReopensTerminal` (the "a human or
+ * a peer" allowlist, so a new automated source stays on the safe side), and so does the replay of a
+ * peer's delivery a host made while the Mac was away ('offline-handover'). Never the program's own
+ * send, and nothing Walnut sends by itself: notices ('walnut-notify'), the restart, retry and
+ * recovery kicks, a compaction, a trigger's or a routine's delivery, the router's reopen.
+ * tests/core/program-run-adoption-sources.test.ts enumerates every source and pins its side.
+ */
+export function inputAdoptsPluginRun(source: string | undefined): boolean {
+  if (source === 'offline-handover') return true
+  return sendSourceReopensTerminal(source) && source !== PROGRAM_RUN_SEND_SOURCE
+}
 
 export function sendSourceReopensTerminal(source: string | undefined): boolean {
   return source !== undefined && REOPENING_SEND_SOURCES.has(source)
@@ -515,6 +546,9 @@ interface ApplySessionPhaseOpts {
   heldFrom?: ApplySessionPhaseOpts
   /** Internal: the second pass after the task moved under a planned return. */
   noResume?: boolean
+  /** For 'session:result': a death whose result may have been lost (the health monitor's remote dead
+   *  recovery), no clean turn end: a program's run is not filed read for it (readMarkerForPhase). */
+  resultLost?: boolean
 }
 
 /** The edges of a turn a quiet turn never moves a phase on. */
@@ -573,23 +607,57 @@ export async function applySessionPhase(
   source: string,
   opts?: ApplySessionPhaseOpts,
 ): Promise<{ changed: boolean; oldPhase?: TaskPhase; newPhase?: TaskPhase }> {
-  let imported = false
-  const result = await movePhase(taskId, trigger, source, opts, (task) => { imported = isExternalImportTask(task) })
-  // A message into a session adopts its imported task, whoever sent it (a person, a peer, a
-  // trigger, the router, a drained message): the importer's tags come off and it is a regular
-  // task (sessions/external-session-import.ts adoptImportedTask). The one place that adopts, so
-  // no send path can miss it (2026-11-19: three of five did). After the phase write, outside its
-  // task lock, whatever the phase did; a failure never fails the send. Only a task the importer
-  // owns pays for it: every other send goes on at once.
-  if (trigger === 'session:input' && imported) {
+  let seen = undefined as Task | undefined
+  const result = await movePhase(taskId, trigger, source, opts, (task) => { seen = task })
+  // A message into a session decides whose task it is (adoptOnInput), whatever the phase did. A quiet
+  // turn's edge (movePhase read nothing) is no message of anyone's.
+  if (trigger === 'session:input' && seen) await adoptOnInput(taskId, opts?.sendSource ?? source, source, seen)
+  return result
+}
+
+/**
+ * What a message into a task's session does to whose task it is, in ONE place (2026-11-19: three
+ * of five send paths missed the importer's adoption). An imported task is adopted, whoever sent it (a
+ * person, a peer, a trigger, the router, a drained message): the importer's tags come off and it is
+ * a regular task (sessions/external-session-import.ts adoptImportedTask). The program's own message
+ * (PROGRAM_RUN_SEND_SOURCE) into its imported run takes it over instead: Walnut runs that session from
+ * now on, and it stays the program's run (PLUGIN_RUN_TAG). A plugin's program run is adopted by a
+ * person's or another task's message only (inputAdoptsPluginRun; sessions/plugin-run.ts adoptPluginRun).
+ *
+ * Called by applySessionPhase for every session:input, after its phase write and outside its task
+ * lock, and by the replay of a host's delivery into a task that is not complete (offline-handover.ts),
+ * which moves no phase. `input`: the message's send source; `via`: the edge's own source, for the log.
+ * `seen`: the task as the caller read it (else read here). A failure never fails the send. Only a task
+ * the importer or a plugin's job owns pays for it: every other send goes on at once.
+ */
+export async function adoptOnInput(taskId: string, input: string | undefined, via: string, seen?: Task): Promise<void> {
+  let task = seen
+  if (!task) {
+    const { getTask } = await import('./task-manager.js')
+    task = await getTask(taskId).catch(() => undefined)
+    if (!task) return
+  }
+  let adoptsPluginRun: boolean = isPluginRunTask(task) && inputAdoptsPluginRun(input)
+  if (isExternalImportTask(task)) {
     try {
       const { adoptImportedTask } = await import('./sessions/external-session-import.js')
-      await adoptImportedTask(taskId, source)
+      const adopted = await adoptImportedTask(taskId, via, { asProgramRun: isProgramRunTask(task) && input === PROGRAM_RUN_SEND_SOURCE })
+      // The program took the run over between this read and the adoption (it is a plugin's run now):
+      // a person's or a peer's message still makes it theirs.
+      if (!adopted && inputAdoptsPluginRun(input)) adoptsPluginRun = true
     } catch (err) {
-      log.session.warn('adoptImportedTask failed', { taskId, source, error: err instanceof Error ? err.message : String(err) })
+      log.session.warn('adoptImportedTask failed', { taskId, source: via, error: err instanceof Error ? err.message : String(err) })
     }
   }
-  return result
+  if (adoptsPluginRun) {
+    // A plugin's program run a person or another task wrote to is theirs from now on.
+    try {
+      const { adoptPluginRun } = await import('./sessions/plugin-run.js')
+      await adoptPluginRun(taskId, input ?? via)
+    } catch (err) {
+      log.session.warn('adoptPluginRun failed', { taskId, source: input, error: err instanceof Error ? err.message : String(err) })
+    }
+  }
 }
 
 async function movePhase(
@@ -752,16 +820,19 @@ async function movePhase(
       // must not hold the global task write-lock for O(taskCount) time.
       // emitEvent/push keep UI + external-sync parity with updateTask.
       let skipReason: string | undefined
-      const updated = await updateTaskRaw(taskId, {
-        phase: newPhase,
-        ...readMarkerForPhase(newPhase),
+      // A function of the row as it is inside the write: whether it is a program's run is read there.
+      const updated = await updateTaskRaw(taskId, (current) => ({
+        phase: newPhase!,
+        // A program's run's turn end is filed read (readMarkerForPhase); a prompt, an error or a
+        // death whose result may be lost (opts.resultLost) is not.
+        ...readMarkerForPhase(newPhase!, (trigger === 'session:result' && !opts?.resultLost) || (trigger === 'reconciler' && opts?.turnEnd) ? current : undefined),
         ...restoreSlot,
         // null keeps a wait that had no clock clock-free (prepareRawUpdate).
         ...(resume ? { wait_until: (resume.waitUntil ?? null) as never } : {}),
         // undefined = the default clock (prepareRawUpdate), never none: a routine whose trigger
         // went quiet still comes back to someone.
         ...(routine?.waitUntil ? { wait_until: routine.waitUntil } : {}),
-      }, {
+      }), {
         emitEvent: true, push: true, source,
         // A reopen must also get past updateTaskRaw's own terminal guard (the
         // sync-pull one) and drop completed_at, which only that layer can do

@@ -2222,7 +2222,8 @@ export class SessionHealthMonitor {
                   const { applySessionPhase } = await import('./phase.js')
                   await applySessionPhase(
                     s.taskId, 'session:result', 'health-monitor:remote-dead-recovery',
-                    { sessionId: s.claudeSessionId, processAlive: false },
+                    // No clean turn end: its result may be lost, so even a program's run is the user's to read.
+                    { sessionId: s.claudeSessionId, processAlive: false, resultLost: true },
                   )
                 } catch (err) {
                   log.session.warn('health monitor: phase sync failed on remote dead recovery', {

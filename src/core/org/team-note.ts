@@ -567,7 +567,7 @@ async function owedOfTeam(open: readonly Task[], nowMs: number): Promise<TeamOwe
 /**
  * The projects a lead leads, each team task's project, and the team tasks a note reads: its
  * projects' tasks and its own workers, wherever they live (what waits on it is its to hear).
- * An imported program's run (PROGRAM_RUN_TAG) is that program's work: no note lists it, open or
+ * A program's run (types.ts isProgramRunTask: imported, or a plugin's job's) is that program's work: no note lists it, open or
  * done (2026-11-19: the idle sweep closes them in bulk, and a VP's note read "Done: ..." for
  * them). The Org page still counts it (org-tree.ts).
  */

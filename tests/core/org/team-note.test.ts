@@ -1,7 +1,7 @@
 /** What a lead hears about its teams before its next message (src/core/org/team-note.ts), pure part. */
 import { describe, it, expect } from 'vitest'
 import { buildTeamNoteText, groupTeamAsks, noteDue, OWED_TOLD_MAX, planTeamNote, teamFingerprint, teamOf, TEAM_NOTE_FORM, TEAM_NOTE_GAP_MS, TEAM_NOTE_MAX } from '../../../src/core/org/team-note.js'
-import { EXTERNAL_SESSION_IMPORT_TAG, PROGRAM_RUN_TAG, type Task } from '../../../src/core/types.js'
+import { EXTERNAL_SESSION_IMPORT_TAG, PLUGIN_RUN_TAG, PROGRAM_RUN_TAG, type Task } from '../../../src/core/types.js'
 import type { TeamNewsTask } from '../../../src/core/org/team-news.js'
 
 const at = (min: number) => new Date(Date.UTC(2026, 9, 26, 12, min)).toISOString()
@@ -396,6 +396,9 @@ describe("team note: an imported program's run is no one's team work", () => {
       task('mine-open', { tags: [EXTERNAL_SESSION_IMPORT_TAG] }),
       task('leftover-open', { tags: [PROGRAM_RUN_TAG] }),
       task('run-done', { tags: run, phase: 'COMPLETE' }),
+      // A program's run a plugin's job runs in Walnut (PLUGIN_RUN_TAG alone): listed by no note either.
+      task('plugin-run-open', { tags: [PLUGIN_RUN_TAG] }),
+      task('plugin-run-done', { tags: [PLUGIN_RUN_TAG], phase: 'COMPLETE' }),
       task('mine-done', { tags: [EXTERNAL_SESSION_IMPORT_TAG], phase: 'COMPLETE' }),
     ]
     const seen = Object.fromEntries(tasks.map((x) => [x.id, 'seen']))
@@ -403,10 +406,12 @@ describe("team note: an imported program's run is no one's team work", () => {
     const openIds = team.open.map((x) => x.id)
     expect(openIds).toEqual(expect.arrayContaining(['mine-open', 'leftover-open']))
     expect(openIds).not.toContain('run-open')
+    expect(openIds).not.toContain('plugin-run-open')
     expect(team.completed.map((x) => x.id)).toEqual(['mine-done'])
     // The plan built from them never names a run, however many the idle sweep closed.
     const plan = planTeamNote(undefined, team.open as TeamNewsTask[], team.completed as TeamNewsTask[], NOW, { leadId: 'vp', led: [project] })
     expect(JSON.stringify(plan)).not.toContain('run-open')
     expect(JSON.stringify(plan)).not.toContain('run-done')
+    expect(JSON.stringify(plan)).not.toContain('plugin-run')
   })
 })

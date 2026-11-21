@@ -15,7 +15,7 @@ import { dependsOnThrough } from '../lib/dependency-loop.js';
 import { initDirectories } from './init.js';
 import { getConfig, updateConfig } from './config-manager.js';
 import { bus, EventNames } from './event-bus.js';
-import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, PIN_TIER_POLICY, RETIRED_PIN_TIERS, migrateFocusTier, defaultWaitUntil, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord, type SyncHold } from './types.js';
+import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, PIN_TIER_POLICY, RETIRED_PIN_TIERS, migrateFocusTier, defaultWaitUntil, keepPluginRunMarker, withPluginRunMarker, PLUGIN_RUN_TAG, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord, type SyncHold } from './types.js';
 import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES, HELD_PHASES, withCompletion } from './phase.js';
 import { isMainAgentTask } from './org/main-stays-active.js';
 import { applyDirector, directorRefusal, type DirectorInput } from './task-director.js';
@@ -1206,6 +1206,10 @@ export interface AddTaskInput {
   walnut_agent?: boolean;
   /** Which console agent a walnut_agent task speaks to (see Task.agent_id). */
   agent_id?: string;
+  /** A program's run a plugin's job runs in Walnut (types.ts PLUGIN_RUN_TAG): the only way the
+   *  marker goes on at create. The route decides it (POST /api/v1/tasks: the tag in `tags` from a
+   *  caller that is not a session); a PLUGIN_RUN_TAG in `tags` is dropped without it. */
+  program_run?: boolean;
   /** An org node (see Task.org_role): the main agent or a project lead. */
   org_role?: import('./types.js').OrgRole;
   router_area_id?: string;
@@ -3175,7 +3179,8 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       ...(input.start_date ? { start_date: input.start_date } : {}),
       ...(input.end_date ? { end_date: input.end_date } : {}),
       ...(parentTask ? { parent_task_id: parentTask.id } : {}),
-      ...(input.tags?.length && normalizeTags(input.tags).length ? { tags: normalizeTags(input.tags) } : {}),
+      // A program's run (types.ts PLUGIN_RUN_TAG) is marked only by `program_run`, which the route sets.
+      ...(() => { const tags = withPluginRunMarker(normalizeTags(input.tags), input.program_run === true); return tags.length ? { tags } : {} })(),
       ...(input.cwd ? { cwd: input.cwd } : {}),
       ...(input.group_id ? { group_id: input.group_id } : {}),
       ...(input.sprint ? { sprint: input.sprint } : {}),
@@ -4610,6 +4615,9 @@ export async function updateTask(
      *  `actorSid`, which means the same): the link tags this write adds are an agent's, never the
      *  user's own, so they join Task.auto_links and a later LINKS list may drop them. */
     tagsByAgent?: boolean
+    /** INTERNAL: this write may put on or take off PLUGIN_RUN_TAG (types.ts): only a program's
+     *  takeover of its imported run and adoption pass it. Without it every tag write keeps the marker as it was. */
+    pluginRunMarker?: boolean
   },
 ): Promise<{ task: Task }> {
   // Lock-internal phase: validate + mutate + persist. Returns enough state for
@@ -4957,6 +4965,7 @@ export async function updateTask(
   // `label:oncall`.
   const byAgent = !!(eventOptions?.tagsByAgent || eventOptions?.actorSid);
   const linkTargetsBefore = updates.add_tags?.length || updates.set_tags !== undefined ? new Set(linkTargetsOf(task.tags)) : null;
+  const tagsBefore = task.tags ? [...task.tags] : undefined;
   if (updates.set_tags !== undefined) {
     // Replace all
     const deduped = normalizeTags(updates.set_tags);
@@ -4980,6 +4989,11 @@ export async function updateTask(
         delete task.tags;
       }
     }
+  }
+  // No tag write puts a program run's marker on or takes it off (types.ts PLUGIN_RUN_TAG).
+  if (!eventOptions?.pluginRunMarker && (updates.set_tags !== undefined || updates.add_tags?.length || updates.remove_tags?.length)) {
+    const kept = keepPluginRunMarker(tagsBefore, task.tags);
+    if (kept.length) task.tags = kept; else delete task.tags;
   }
   if (linkTargetsBefore) {
     // An agent's new link is Walnut's to keep or drop (link-tags.ts droppedLinkTags), like one a
@@ -6744,8 +6758,9 @@ function fileTasksLocked(
     const moving = !sameProject(task.project, place.project);
     const unfiling = !place.groupId && item.top_level === true && !!task.group_id;
     // Tags in stored form (tag-model.ts), so a plain word names the label it is stored as.
-    const removes = new Set(normalizeTags(item.remove_tags).filter((tag) => (task.tags ?? []).includes(tag)));
-    const adds = normalizeTags(item.add_tags).filter((tag) => removes.has(tag) || !(task.tags ?? []).includes(tag));
+    // A program run's marker is no tag a filing changes (types.ts PLUGIN_RUN_TAG).
+    const removes = new Set(normalizeTags(item.remove_tags).filter((tag) => tag !== PLUGIN_RUN_TAG && (task.tags ?? []).includes(tag)));
+    const adds = normalizeTags(item.add_tags).filter((tag) => tag !== PLUGIN_RUN_TAG && (removes.has(tag) || !(task.tags ?? []).includes(tag)));
     for (const tag of adds) removes.delete(tag);
     const asked = typeof item.title === 'string' ? item.title.trim() : '';
     const title = asked && asked !== task.title
@@ -8713,7 +8728,7 @@ function isDayPrecisionEcho(existing: string | undefined, incoming: unknown): bo
 function prepareRawUpdate(
   task: Task,
   updates: Partial<Task>,
-  opts?: { reopenTerminal?: boolean; leaveHeld?: boolean; pulledTags?: boolean },
+  opts?: { reopenTerminal?: boolean; leaveHeld?: boolean; pulledTags?: boolean; pluginRunMarker?: boolean },
 ): Partial<Task> | null {
   const { id: _ignoreId, ...safeUpdates } = updates as Record<string, unknown>;
   // A raw write never gives a task an outside service it was not on (2026-11-01: a move pushed
@@ -8732,6 +8747,13 @@ function prepareRawUpdate(
     const sync = opts?.pulledTags ? registry.get(task.source)?.sync : undefined;
     if (sync?.mergePulledTags) safeUpdates.tags = sync.mergePulledTags(task, safeUpdates.tags as string[]);
     safeUpdates.tags = normalizeTags(safeUpdates.tags as string[]);
+  }
+  // No raw tag write (a sync pull, the outbox, the offline merge) puts a program run's marker on or
+  // takes it off (types.ts PLUGIN_RUN_TAG): kept as it is on the row this write is applied to, inside
+  // its write lock. Only a program's takeover of its imported run passes `pluginRunMarker`.
+  if (!opts?.pluginRunMarker && (Array.isArray(safeUpdates.tags) || safeUpdates.tags === null)) {
+    const kept = keepPluginRunMarker(task.tags, (safeUpdates.tags ?? []) as string[]);
+    if (kept.length || safeUpdates.tags !== null) safeUpdates.tags = kept;
   }
   // A watch stopped on any raw path (the offline merge, the outbox) takes the Org pins it was
   // carried over from too (org-pins.ts), as updateTask does, or the next boot watches it again.
@@ -8911,6 +8933,9 @@ export async function updateTaskRaw(
      *  offline drain replays a session's away task_complete through here. */
     completeSessions?: boolean;
     pulledTags?: boolean;
+    /** INTERNAL: this write may put on or take off PLUGIN_RUN_TAG (prepareRawUpdate): only a
+     *  program's takeover of its imported run (external-session-import.ts adoptImportedTask). */
+    pluginRunMarker?: boolean;
   },
 ): Promise<{ changed: boolean; task?: Task }> {
   await ensureInit();
@@ -8925,7 +8950,7 @@ export async function updateTaskRaw(
 
     const patch = typeof updates === 'function' ? updates(task) : updates;
     if (!patch) return undefined;
-    const prepared = prepareRawUpdate(task, patch, { reopenTerminal: opts?.reopenTerminal, leaveHeld: opts?.leaveHeld, pulledTags: opts?.pulledTags });
+    const prepared = prepareRawUpdate(task, patch, { reopenTerminal: opts?.reopenTerminal, leaveHeld: opts?.leaveHeld, pulledTags: opts?.pulledTags, pluginRunMarker: opts?.pluginRunMarker });
     if (!prepared) return undefined;
     // Per-field change times (task-field-times.ts), from the row as stored.
     const stamped = stampedFieldTimes(task, { ...task, ...prepared }, opts?.fieldTimes);

@@ -2847,6 +2847,18 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
     if (tags !== undefined && (!Array.isArray(tags) || tags.some(value => typeof value !== 'string'))) {
       sendError(res, 400, 'bad_request', 'tags must be an array of strings'); return
     }
+    // A program's run a plugin runs (2026-11-21; core/sessions/plugin-run.ts): the walnut:plugin-run
+    // tag in `tags`. Only a program's own call (isProgramCall: a plugin's job or its server half) may put
+    // it on; a server or a host from before it stores it as a plain tag, and a host's away create journals it too.
+    const { PLUGIN_RUN_TAG } = await import('../../core/types.js')
+    const programRun = Array.isArray(tags) && (tags as string[]).some((t) => t.trim() === PLUGIN_RUN_TAG)
+    if (programRun) {
+      const rawCaller = req.headers['x-walnut-caller-sid']
+      const rawPluginId = req.headers['x-walnut-plugin-id']
+      const { programRunRefusal } = await import('../../core/sessions/plugin-run.js')
+      const refused = await programRunRefusal({ sid: Array.isArray(rawCaller) ? rawCaller[0] : rawCaller, pluginId: Array.isArray(rawPluginId) ? rawPluginId[0] : rawPluginId })
+      if (refused) { sendError(res, 400, 'bad_request', refused); return }
+    }
     // local (additive, 2026-11-01): true keeps the task out of the outside service its project
     // syncs to (core/private-tasks/); false or absent = the project's source, after its check.
     if (local !== undefined && typeof local !== 'boolean') {
@@ -3032,6 +3044,7 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       const createInput = {
         title: finalTitle,
         ...(Array.isArray(tags) ? { tags: tags as string[] } : {}),
+        ...(programRun ? { program_run: true } : {}),
         ...(decision.project !== undefined ? { project: decision.project } : {}),
         ...(stampedCwd ? { cwd: stampedCwd } : {}),
         ...(priority !== undefined ? { priority: priority as TaskPriority } : {}),
