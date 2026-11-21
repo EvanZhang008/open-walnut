@@ -43,7 +43,7 @@ export interface HereTrigger {
   id: string
   state: 'armed' | 'paused' | 'deleted'
   def: { id: string; name: string; everyMs: number; check: { run: string; cwd?: string; timeoutSeconds?: number }; deliver?: { taskId?: string; prompt?: string } }
-  status?: { nextRunAtMs?: number; lastRunAtMs?: number; consecutiveErrors?: number }
+  status?: { nextRunAtMs?: number; lastRunAtMs?: number; consecutiveErrors?: number; pendingFires?: number }
   created?: boolean
   description?: string
 }
@@ -83,6 +83,8 @@ export function withHere(job: Job | null, t: HereTrigger, host: string, now: num
   if (typeof s?.nextRunAtMs === 'number') state.nextRunAtMs = s.nextRunAtMs
   if (typeof s?.lastRunAtMs === 'number') state.lastRunAtMs = s.lastRunAtMs
   if (typeof s?.consecutiveErrors === 'number') state.consecutiveErrors = s.consecutiveErrors
+  // Fires this host delivered that the Mac has not counted yet (2026-11-21 real host run: `fires: 0` after one).
+  if (typeof s?.pendingFires === 'number' && s.pendingFires > 0) state.fireCount = (typeof state.fireCount === 'number' ? state.fireCount : 0) + s.pendingFires
   // Paused here: read as paused (never "stopped"), from when this host says so.
   if (t.state === 'paused' && typeof state.pausedAtMs !== 'number') state.pausedAtMs = now
   return { ...base, enabled: t.state === 'armed', state, ...(t.created ? { queued: true } : {}) }

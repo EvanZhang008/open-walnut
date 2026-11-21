@@ -229,6 +229,13 @@ describe('triggers here', () => {
     expect(mergeHereTriggers(COPY, HERE, 'devbox', false, 5_000).map((j) => j.id)).toEqual(['mcopy-other-1', 'mhere-made-01'])
   })
 
+  it('fires this host delivered that the Mac has not counted yet are counted in the list', () => {
+    const fired: HereTrigger = { ...HERE[0]!, status: { nextRunAtMs: 1_000, pendingFires: 1 } }
+    const counted = { id: fired.id, name: 'Made here', state: { fireCount: 2 } }
+    expect(((mergeHereTriggers([], [fired], 'devbox', true, 5_000)[0]!.state) as { fireCount?: number }).fireCount).toBe(1)
+    expect(((mergeHereTriggers([counted], [fired], 'devbox', true, 5_000)[0]!.state) as { fireCount?: number }).fireCount).toBe(3)
+  })
+
   it('GET /v1/routines and /v1/routines/:id answer merged only for this host\'s own call routed away', async () => {
     const { h } = triggers()
     const away = { [OFFLINE_HEADER]: '1' }
