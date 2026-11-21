@@ -38,9 +38,17 @@ export const EVIDENCE_MAX = 30;
 export const EVIDENCE_TEXT_MAX = 600;
 
 /** A thread message as the reflection reads it (threads-model.ts ThreadMessage, the fields it needs). */
-export interface ReflectionThreadMessage { id: string; at: string; text: string; sid?: string; answer?: { text: string; at: string; sid?: string } }
-/** `tasks`: the tasks the thread went to (OrgThread.tasks). */
-export interface ReflectionThread { id: string; title: string; messages: ReflectionThreadMessage[]; tasks?: string[] }
+export interface ReflectionThreadMessage { id: string; at: string; text: string; sid?: string; images?: string[]; answer?: { text: string; at: string; sid?: string } }
+/** One choice on a card (user-status.ts AskOption, the fields the reflection reads). */
+export interface CardOption { label: string; recommended?: boolean }
+/**
+ * `tasks`: the tasks the thread went to (OrgThread.tasks). In needs (`state`), the card he reads:
+ * its summary (`reply`, written by `replySid`) and its buttons (`options`).
+ */
+export interface ReflectionThread {
+  id: string; title: string; messages: ReflectionThreadMessage[]; tasks?: string[];
+  state?: string; closed?: boolean; reply?: string; replyAt?: string; replySid?: string; updatedAt?: string; options?: CardOption[];
+}
 
 export interface Candidate {
   key: string;
@@ -211,6 +219,40 @@ async function threadCandidates(owner: Task, p: Pass): Promise<void> {
   }
 }
 
+/** A card as he reads it: its words, then its buttons or that it has none. Pure. */
+export function cardText(head: string, words: string, options: readonly CardOption[] | undefined, kind?: string): string {
+  const buttons = options?.length
+    ? `Buttons: ${options.map((o) => `[${o.label}${o.recommended ? ' (recommended)' : ''}]`).join(' ')}`
+    : kind === 'yes_no' ? 'Buttons: [Yes] [No]' : 'Buttons: none (he answers in his own words)';
+  return [head, words.trim() || '(no summary: the card shows only Walnut\'s line that none is written yet)', buttons].filter(Boolean).join('\n');
+}
+
+/**
+ * A thread card of the node or a lead in its team waiting on his decision (state needs): judged once
+ * per version of the card (its summary and buttons), for whether a reader who never saw the work
+ * knows from it what he decides, what is recommended, where the plan is, and can answer with one
+ * click (2026-11-21, the user: "what the fucking is the plan"; the card showed one line and no buttons).
+ */
+async function threadCardCandidates(owner: Task, p: Pass): Promise<void> {
+  for (const th of await p.threadsOf(owner.id)) {
+    if (th.state !== 'needs' || th.closed) continue;
+    const at = th.replyAt ?? th.updatedAt ?? th.messages[th.messages.length - 1]?.at;
+    if (!at || at <= p.floor || p.now - Date.parse(at) < ANSWER_GRACE_MS) continue;
+    const text = cardText(`Thread card: ${th.title}`, th.reply ?? '', th.options);
+    const key = `card:${th.id}:${sha12(text)}`;
+    if (has(p, key)) continue;
+    const since = new Date(p.now - EVIDENCE_MS).toISOString();
+    const evidence = th.messages.filter((m) => m.at > since).slice(-EVIDENCE_MAX)
+      .map((m) => ({ id: m.id, at: m.at, text: m.text.length > EVIDENCE_TEXT_MAX ? `${m.text.slice(0, EVIDENCE_TEXT_MAX)} [...]` : m.text }));
+    const sessionId = th.replySid ?? '';
+    p.out.push({
+      key, signal: 'needs_ask', task: owner, sessionId, ...(sessionId ? {} : { hold: 'no_asking_session' as const }), messages: [], from: at, to: at,
+      thread: { id: th.id, title: th.title }, context: threadTurns([...th.messages].sort((a, b) => a.at.localeCompare(b.at)), th.messages.length - 1, 4),
+      ask: { text }, evidence, why: 'needs_ask (a thread card waiting on him)',
+    });
+  }
+}
+
 /**
  * An ask of the team in Needs you, once per decision (its id, or, with none, the ask's source and
  * words: never its time, which every report moves). Its evidence is his recent messages in the
@@ -221,12 +263,15 @@ async function needsAskCandidate(task: Task, node: Task, all: readonly Task[], p
   // Only the session's own ask: an error, a prompt, an approval, a letter or a choice is Walnut's
   // record of something else, never a question the session chose to put to him.
   if (r?.state !== 'needs' || r.source !== 'session') return null;
-  const text = (r.ask ?? '').trim();
+  const words = (r.ask ?? '').trim();
   const decisionId = r.decision?.id;
-  if (!text && !decisionId) return null;
+  if (!words && !decisionId) return null;
+  // The card as he reads it, buttons included; keyed by its words alone, so a key never moves.
+  const form = r.askForm;
+  const text = form ? cardText('', [form.summary, form.more ?? ''].filter(Boolean).join('\n\n'), form.options, form.kind) : cardText('', words, undefined);
   const askAt = r.at ?? r.checkedAt;
   if (askAt && askAt <= p.floor) return null;
-  const key = decisionId ? `ask:${task.id}:${decisionId}` : `ask:${task.id}:${r.source}:${sha12(text)}`;
+  const key = decisionId ? `ask:${task.id}:${decisionId}` : `ask:${task.id}:${r.source}:${sha12(words)}`;
   if (p.seen.has(key)) return null;
   const since = new Date(p.now - EVIDENCE_MS).toISOString();
   const own = (await p.deps.readMessages(task.id)).filter((m) => m.at > since);
@@ -276,7 +321,10 @@ export async function collectCandidates(
   for (const t of mine) await guarded(t.id, () => taskCandidates(t, p));
   // The same for Threads: a lead whose own reflection is on reads its Threads itself.
   const owners = [node, ...mine.filter((t) => (t.org_role === 'main' || t.org_role === 'lead') && !reflects(t))];
-  for (const o of owners.filter((t, i) => owners.findIndex((x) => x.id === t.id) === i)) await guarded(o.id, () => threadCandidates(o, p));
+  for (const o of owners.filter((t, i) => owners.findIndex((x) => x.id === t.id) === i)) {
+    await guarded(o.id, () => threadCandidates(o, p));
+    await guarded(o.id, () => threadCardCandidates(o, p));
+  }
   for (const t of mine) await guarded(t.id, async () => { const c = await needsAskCandidate(t, node, all, p); if (c) p.out.push(c); });
   return { candidates: p.out, quiet: p.quiet };
 }

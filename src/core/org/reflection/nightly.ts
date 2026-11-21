@@ -10,6 +10,7 @@ import fsp from 'node:fs/promises';
 import type { Task } from '../../types.js';
 import { handedToLine, readDayEntries, reflectionDayFileOf, ruleLine, type DayEntry } from './records.js';
 import { localDate, readReflectionState, updateReflectionState } from './state.js';
+import { painsFileOf, painsNightlyText, painsReport, readGuardRun, readPains } from './pains.js';
 
 /** Minutes after local midnight: before the VPs' 20:00 reflection routines. */
 export const NIGHTLY_AT_MIN = 19 * 60 + 45;
@@ -69,6 +70,20 @@ export function nightlyText(nodeName: string, file: string, record: string | rea
   ].join('\n');
 }
 
+/** The pain registry's lines for tonight: its unowned pains and the guard tests not known to pass ('' for none). */
+export async function painsNightly(nodeId: string, nowMs: number): Promise<string> {
+  const entries = await readPains(nodeId);
+  if (!entries.length) return '';
+  const run = await readGuardRun(nodeId);
+  return painsNightlyText(painsFileOf(nodeId), painsReport(entries, run, nowMs), run);
+}
+
+/** The day's note with the registry's part after it; a day with no finding has only the registry's. Pure. */
+export function withPains(day: string, pains: string, nodeName: string): string {
+  if (!pains) return day;
+  return day ? `${day}\n\n${pains}` : `${nodeName}'s reflection found no new decision to fix today, but its pain registry needs you.\n\n${pains}\n\nNo reply is needed.`;
+}
+
 /** Send today's record to the node once, after NIGHTLY_AT_MIN. Answers what it did. */
 export async function nightlyNote(node: Task, nodeName: string, nowMs: number, send: NightlySend): Promise<'sent' | 'early' | 'done' | 'none' | 'failed'> {
   const d = new Date(nowMs);
@@ -79,7 +94,10 @@ export async function nightlyNote(node: Task, nodeName: string, nowMs: number, s
   const record = { markdown: await fsp.readFile(file, 'utf-8').catch(() => ''), entries: (await readDayEntries(node.id, date)) ?? [] };
   // Marked first: a send that fails is not sent again tonight (the record stays for tomorrow's reading).
   await updateReflectionState(node.id, (s) => { s.nightly = date; }, nowMs);
-  if (!dayLines(record.markdown, record.entries).length) return 'none';
-  const ok = await send(node, nightlyText(nodeName, file, record), `${nodeName}'s reflection: today's record`).catch(() => false);
+  const pains = await painsNightly(node.id, nowMs).catch(() => '');
+  const found = dayLines(record.markdown, record.entries).length > 0;
+  if (!found && !pains) return 'none';
+  const text = withPains(found ? nightlyText(nodeName, file, record) : '', pains, nodeName);
+  const ok = await send(node, text, `${nodeName}'s reflection: today's record`).catch(() => false);
   return ok ? 'sent' : 'failed';
 }

@@ -35,6 +35,8 @@ export interface Finding {
   /** The number of the listed guidance line it repeats, 0 for none. */
   same_as: number;
   skill: { name: string; description: string; text: string } | null;
+  /** His complaint as the pain registry files it (pains.ts): an existing pain's id or '' for a new one, its title, who meets it. */
+  pain?: { same_as: string; title: string; scope: 'all_users' | 'only_him' };
 }
 
 export type Verdict =
@@ -67,6 +69,8 @@ export interface JudgeInput {
   guidance: readonly string[];
   /** The user's reply-language setting, which the correction is written in. */
   replyLanguage: string | null;
+  /** The pains already in the node's registry (pains.ts), newest first: a complaint is matched against them. */
+  pains?: ReadonlyArray<{ id: string; title: string }>;
 }
 
 /** One model call; `nodeId` is the node whose reflection pays for it (Usage). */
@@ -101,7 +105,7 @@ export const JUDGE_SYSTEM = [
   '- built_different: what was built is not what the user said (he asked for one simple thing, it shipped something else or more).',
   '- approved_for_user: an agent said yes in the user\'s name, or shipped a design he never saw, where the choice was his.',
   '- duplicate_display: the same thing is shown to him more than once (one item listed several times).',
-  '- unclear_ask: a question, card or letter put to him that a reader who never saw the task cannot understand from it alone: it does not say what the feature or thing is, it points with words like "here", "this place", "it" with nothing they point at, an ask about where something goes or how it looks has no screenshot or design page, or a button does not say what choosing it does ("OK", "put it here").',
+  '- unclear_ask: a question, card or letter put to him that a reader who never saw the task cannot understand from it alone: it does not say what the feature or thing is, it points with words like "here", "this place", "it" with nothing they point at, an ask about where something goes or how it looks has no screenshot or design page, or a button does not say what choosing it does ("OK", "put it here"). A card waiting on his decision is unclear too when its summary is missing or its first sentence does not say what he decides and what the agent recommends, when it names a plan or design page without its path or link, or when it offers a choice with no buttons (the recommended one first and marked).',
   '- unreviewed_design: a design page, picture or screenshot reached him without one review by someone who did not make it, looking at every picture (overlap, cut-off text, misalignment, spacing, overflow, match with the real screen), or the report does not say what the review looked at and changed. Text-only or small colour changes do not count.',
   'A message that starts `Answer to "<ask>": ` is his answer from a card: the quoted ask is the agent\'s words, the rest is his.',
   'For a frustrated message, find the cause in the agents\' work and give the rule that prevents it; answer no_issue only when the anger is at something outside the agents (a vendor, a colleague, himself).',
@@ -111,8 +115,9 @@ export const JUDGE_SYSTEM = [
   'already_fixed: true when the session\'s turns after the user\'s message already took up the right way in full (it agreed and is doing all of it, or did it).',
   'correction: 2 to 5 sentences to the session itself, in the language the reply-language line names: what was wrong, the right way, and what to do now. When the session already took up part of the right way, name only what it still misses; "" when nothing is missing. Write it only for the session to act on; never ask it to contact anyone.',
   'guidance: one or two sentences, in the language the reply-language line names, a general rule that would have prevented this in any session (no names from this case: no package, project or person names). "" when a GUIDANCE line already says it; then same_as is that line\'s number.',
+  'pain: only when the user\'s words complain about something (not for an ask he has not answered): {"same_as": the id of the PAINS line that is the same problem (one fix would end both) or "", "title": a few words naming the problem in general terms, in the language the reply-language line names, "scope": "all_users" when any user of the product would meet it (a product defect, a default, an agent habit), "only_him" when it depends on his own account, machine, setup or habits}; otherwise null.',
   'skill: null, unless the right way needs several steps a session would follow again; then {"name": lowercase-with-dashes, "description": "when to use it", "text": the steps}.',
-  'Answer with ONE JSON object and nothing else: {"verdict":"bad_decision"|"no_issue","why":"...","finding":{"kind","session_quote","user_quote","rule_quote","what_went_wrong","correct_action","already_fixed","correction","guidance","same_as","skill"}} (finding only with bad_decision).',
+  'Answer with ONE JSON object and nothing else: {"verdict":"bad_decision"|"no_issue","why":"...","finding":{"kind","session_quote","user_quote","rule_quote","what_went_wrong","correct_action","already_fixed","correction","guidance","same_as","skill","pain"}} (finding only with bad_decision).',
 ].join('\n');
 
 export function judgePrompt(input: JudgeInput): string {
@@ -127,6 +132,7 @@ export function judgePrompt(input: JudgeInput): string {
     `REPLY LANGUAGE: ${input.replyLanguage ?? 'the language the user writes in'}`,
     '', 'RULES:', input.rulesText || '(none)',
     '', 'GUIDANCE (already written for this team):', guidance,
+    ...(input.pains?.length ? ['', 'PAINS (his complaints already in the registry, id then title):', ...input.pains.map((p) => `${p.id} ${p.title}`)] : []),
     ...(input.askText ? ['', 'THE ASK (what Needs you showed him, in the task\'s own words):', input.askText] : []),
     ...(input.evidenceText !== undefined
       ? ['', 'THE USER\'S MESSAGES OF THE LAST 48 HOURS (in this task and its lead\'s threads: what he already said yes to or answered):', input.evidenceText || '(none)']
@@ -161,7 +167,7 @@ export function quoteHolds(quote: string, source: string): boolean {
 const str = (v: unknown, max = 2000): string => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 
 /** The judge's answer read and checked. Pure. */
-export function verifyFinding(raw: string, input: Pick<JudgeInput, 'signal' | 'sessionText' | 'userText' | 'rulesText' | 'guidance'>): Verdict {
+export function verifyFinding(raw: string, input: Pick<JudgeInput, 'signal' | 'sessionText' | 'userText' | 'rulesText' | 'guidance' | 'pains'>): Verdict {
   const json = raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1);
   let parsed: { verdict?: unknown; why?: unknown; finding?: Record<string, unknown> };
   try { parsed = JSON.parse(json); } catch { return { verdict: 'unverified', why: 'the judge did not answer JSON' }; }
@@ -176,6 +182,12 @@ export function verifyFinding(raw: string, input: Pick<JudgeInput, 'signal' | 's
     same_as: Number.isInteger(f.same_as) && (f.same_as as number) > 0 && (f.same_as as number) <= input.guidance.length ? f.same_as as number : 0,
     skill: null,
   };
+  const pn = f.pain as Record<string, unknown> | null | undefined;
+  if (pn && typeof pn === 'object' && str(pn.title, 160)) {
+    // An id the judge was not shown is a new pain, never a guess at one.
+    const same = str(pn.same_as, 40);
+    finding.pain = { same_as: input.pains?.some((p) => p.id === same) ? same : '', title: str(pn.title, 160), scope: pn.scope === 'only_him' ? 'only_him' : 'all_users' };
+  }
   const sk = f.skill as Record<string, unknown> | null | undefined;
   if (sk && typeof sk === 'object' && /^[a-z0-9][a-z0-9-]{0,47}$/.test(str(sk.name, 48)) && str(sk.text, 8000)) {
     finding.skill = { name: str(sk.name, 48), description: str(sk.description, 200), text: str(sk.text, 8000) };

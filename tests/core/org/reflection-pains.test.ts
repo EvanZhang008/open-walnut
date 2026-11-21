@@ -1,0 +1,242 @@
+/**
+ * The pain registry (src/core/org/reflection/pains.ts, pain-record.ts): a complaint the reflection
+ * found is filed under the pain the judge matched or opens a new unowned one, his picture is kept
+ * next to the registry, and the nightly note lists what has no rule or test and every guard test
+ * not known to pass. And the thread card check (candidates.ts): a card waiting on his decision is
+ * judged once per version, with its summary and buttons as he reads them.
+ */
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import { createMockConstants } from '../../helpers/mock-constants.js'
+
+vi.mock('../../../src/constants.js', () => createMockConstants('walnut-reflection-pains'))
+
+import { WALNUT_HOME } from '../../../src/constants.js'
+import type { Task } from '../../../src/core/types.js'
+import {
+  addComplaint, guardRunOf, lacksGenericDefault, normalizePain, painsFileOf, painsMarkdownOf, painsNightlyText, painsReport, readPains, renderPains, statusOf,
+  guardRunFileOf, GUARD_RUN_STALE_MS, PAIN_QUOTES_MAX, type PainEntry, type PainReport,
+} from '../../../src/core/org/reflection/pains.js'
+import { reflectForNode, type ReflectDeps } from '../../../src/core/org/reflection/pipeline.js'
+import { cardText, collectCandidates, type ReflectionThread } from '../../../src/core/org/reflection/candidates.js'
+import { verifyFinding } from '../../../src/core/org/reflection/judge.js'
+import { nightlyNote } from '../../../src/core/org/reflection/nightly.js'
+import { readDayEntries } from '../../../src/core/org/reflection/records.js'
+import { localDate, updateReflectionState } from '../../../src/core/org/reflection/state.js'
+import { threadsFromRecords } from '../../../src/core/org/reflection/inputs.js'
+
+const NOW = Date.parse('2026-11-19T20:00:00Z')
+const iso = (minAgo: number) => new Date(NOW - minAgo * 60_000).toISOString()
+const vp = { id: 'vp-marina', title: 'Marina VP', project: 'Marina', org_role: 'lead', phase: 'IN_PROGRESS', session_id: 'sess-vp' } as Task
+const worker = { id: 'w-1', title: 'Upgrade the dock page', project: 'Marina', phase: 'IN_PROGRESS', session_id: 'sess-1' } as Task
+const BEFORE = 'Shipped the new card layout.'
+
+const report = (over: Partial<PainReport> = {}): PainReport => ({
+  sameAs: '', title: 'Cards lose their reply', scope: 'all_users', kind: 'regression',
+  quote: { at: iso(10), text: 'the reply under the card used to show', taskId: worker.id }, rootCause: 'The layout change dropped it.',
+  owner: { taskId: worker.id, title: worker.title }, ...over,
+})
+
+const verdict = (pain: unknown, over: Record<string, unknown> = {}) => JSON.stringify({ verdict: 'bad_decision', why: 'x', finding: {
+  kind: 'regression', session_quote: BEFORE, user_quote: 'used to show', rule_quote: '', what_went_wrong: 'The card lost its reply.',
+  correct_action: 'Bring the reply back.', already_fixed: false, correction: 'Bring the reply back under the card.',
+  guidance: 'Keep what a card showed when its layout changes.', same_as: 0, skill: null, pain, ...over,
+} })
+
+function deps(over: Partial<ReflectDeps> & { threads?: ReflectionThread[]; messages?: Array<{ id: string; at: string; text: string; images?: string[] }>; answers?: string[] } = {}) {
+  const prompts: string[] = []
+  const answers = [...(over.answers ?? [])]
+  const d: ReflectDeps = {
+    readTranscript: async () => [
+      { role: 'assistant', text: BEFORE, timestamp: iso(200) },
+      ...(over.messages ?? []).map((m) => ({ role: 'user', text: m.text, timestamp: m.at, sentBy: 'person' })),
+    ] as never,
+    readMessages: async (id) => (id === worker.id ? over.messages ?? [] : []),
+    readThreads: async (id) => (id === vp.id ? over.threads ?? [] : []),
+    callModel: async (_s, user) => { prompts.push(user); return answers.shift() ?? verdict(null) },
+    send: async () => true,
+    confirmSend: async () => true,
+    rulesText: async () => '',
+    replyLanguage: async () => null,
+    nowMs: () => NOW,
+    ...over,
+  }
+  return { d, prompts }
+}
+
+beforeEach(async () => {
+  await fs.rm(WALNUT_HOME, { recursive: true, force: true })
+  await fs.mkdir(WALNUT_HOME, { recursive: true })
+  await updateReflectionState(vp.id, (s) => { s.since = iso(23 * 60) }, NOW)
+})
+
+describe('the registry', () => {
+  it('a complaint opens a new unowned pain, and one the judge matched is added to it', () => {
+    const first = addComplaint([], report())
+    expect(first.isNew).toBe(true)
+    expect(first.entries[0]).toMatchObject({ title: 'Cards lose their reply', status: 'unowned', count: 1, owner: { taskId: worker.id } })
+    const again = addComplaint(first.entries, report({ sameAs: first.id, quote: { at: iso(5), text: 'it is gone again' } }))
+    expect(again).toMatchObject({ isNew: false, id: first.id })
+    expect(again.entries).toHaveLength(1)
+    expect(again.entries[0]).toMatchObject({ count: 2, lastAt: iso(5) })
+  })
+
+  it('the same words twice (a thread message and its task) count once, and only the newest quotes are kept', () => {
+    let { entries, id } = addComplaint([], report())
+    entries = addComplaint(entries, report({ sameAs: id })).entries
+    expect(entries[0].count).toBe(1)
+    for (let i = 0; i < PAIN_QUOTES_MAX + 3; i++) entries = addComplaint(entries, report({ sameAs: id, quote: { at: iso(9 - i), text: `again ${i}` } })).entries
+    expect(entries[0].quotes).toHaveLength(PAIN_QUOTES_MAX)
+    expect(entries[0].quotes.at(-1)!.text).toBe(`again ${PAIN_QUOTES_MAX + 2}`)
+  })
+
+  it('no rule or no test reads unowned whatever status was written', () => {
+    const base = { status: 'live' as const }
+    expect(statusOf({ ...base })).toBe('unowned')
+    expect(statusOf({ ...base, rule: { where: 'docs/x.md', text: '' } })).toBe('unowned')
+    expect(statusOf({ ...base, rule: { where: 'docs/x.md', text: '' }, test: { file: 'tests/x.test.ts', name: 'x' } })).toBe('live')
+  })
+
+  it('a hand-edited entry reads back with what is malformed left out', () => {
+    expect(normalizePain({ title: 'no id' })).toBeNull()
+    const e = normalizePain({ id: 'pn-1', title: 'T', status: 'done', scope: 'everyone', test: { file: 'tests/x.ts' }, quotes: [{ at: iso(1), text: 'w' }, { text: 'no time' }] })!
+    expect(e).toMatchObject({ status: 'unowned', scope: 'all_users', count: 1 })
+    expect(e.test).toBeUndefined()
+    expect(e.quotes).toHaveLength(1)
+  })
+
+  it('the Markdown lists unowned pains first, with his words, the rule, the test and the owner', () => {
+    const owned: PainEntry = { ...addComplaint([], report({ title: 'Owned pain' })).entries[0], id: 'pn-owned', status: 'live', rule: { where: 'docs/a.md', text: 'Keep it.' }, test: { file: 'tests/a.test.ts', name: 'keeps it' } }
+    const open = addComplaint([], report()).entries[0]
+    const md = renderPains('Marina VP', [owned, open], { schemaVersion: 1, at: iso(1), results: { 'pn-owned': { result: 'passed' } } })
+    expect(md.indexOf('## Unowned')).toBeLessThan(md.indexOf('## Live'))
+    expect(md).toContain('His words')
+    expect(md).toContain('tests/a.test.ts "keeps it" (last run: passed)')
+    expect(md).toContain(`Owner: ${worker.title} (${worker.id})`)
+  })
+})
+
+describe('what the registry flags', () => {
+  it('a pain every user meets lacks a generic default unless its rule is in the product\'s own code', () => {
+    const all = { scope: 'all_users' as const }
+    expect(lacksGenericDefault({ ...all, rule: { where: 'USER.md: How to respond', text: '' } })).toBe(true)
+    expect(lacksGenericDefault({ ...all, rule: { where: '/x/guidance.md line 3', text: '' } })).toBe(true)
+    expect(lacksGenericDefault({ ...all, rule: { where: '.claude/skills/ui/SKILL.md rule 4', text: '' } })).toBe(true)
+    expect(lacksGenericDefault({ ...all, rule: { where: 'src/core/team-charter.ts line 58; USER.md', text: '' } })).toBe(false)
+    expect(lacksGenericDefault({ scope: 'only_him', rule: { where: 'USER.md', text: '' } })).toBe(false)
+    expect(lacksGenericDefault({ ...all })).toBe(false)
+  })
+
+  it('a guard run with no time, or a result it does not know, is read as nothing', () => {
+    expect(guardRunOf({ results: {} })).toBeNull()
+    expect(guardRunOf({ at: 'soon', results: {} })).toBeNull()
+    expect(guardRunOf({ at: iso(1), results: { a: { result: 'passed' }, b: { result: 'great' } } })!.results).toEqual({ a: { result: 'passed' } })
+  })
+})
+
+describe('the nightly report of the registry', () => {
+  const guarded = (id: string): PainEntry => ({ ...addComplaint([], report({ title: id })).entries[0], id, status: 'live', rule: { where: 'docs/a.md', text: '' }, test: { file: `tests/${id}.test.ts`, name: id } })
+
+  it('every guard test is reported when no run is known, or the last one is stale', () => {
+    const e = [guarded('pn-a'), guarded('pn-b')]
+    expect(painsReport(e, null, NOW).guards.map((g) => g.result)).toEqual(['stale', 'stale'])
+    const old = { schemaVersion: 1 as const, at: new Date(NOW - GUARD_RUN_STALE_MS - 1).toISOString(), results: { 'pn-a': { result: 'passed' as const }, 'pn-b': { result: 'passed' as const } } }
+    expect(painsReport(e, old, NOW).guards).toHaveLength(2)
+  })
+
+  it('a fresh run reports only the tests that did not pass (a browser spec CI runs is fine)', () => {
+    const e = [guarded('pn-a'), guarded('pn-b'), guarded('pn-c'), guarded('pn-d')]
+    const run = { schemaVersion: 1 as const, at: iso(60), results: { 'pn-a': { result: 'passed' as const }, 'pn-b': { result: 'failed' as const, detail: 'expected 1' }, 'pn-c': { result: 'ci_only' as const } } }
+    const r = painsReport(e, run, NOW)
+    expect(r.guards.map((g) => [g.entry.id, g.result])).toEqual([['pn-b', 'failed'], ['pn-d', 'not_run']])
+    const text = painsNightlyText('/x/pains.json', r, run)
+    expect(text).toContain('Guard test failed for pn-b')
+    expect(text).toContain('Guard test not run for pn-d')
+  })
+
+  it('nothing to report is no text', () => {
+    expect(painsNightlyText('/x', painsReport([], null, NOW), null)).toBe('')
+  })
+
+  it('the nightly note goes out for the registry alone on a day with no finding', async () => {
+    const node = { ...vp }
+    await fs.mkdir(path.dirname(painsFileOf(node.id)), { recursive: true })
+    await fs.writeFile(painsFileOf(node.id), JSON.stringify({ schemaVersion: 1, entries: [addComplaint([], report()).entries[0]] }))
+    const sent: string[] = []
+    const evening = new Date(NOW); evening.setHours(21, 0, 0, 0)
+    expect(await nightlyNote(node, 'Marina VP', evening.getTime(), async (_n, text) => { sent.push(text); return true })).toBe('sent')
+    expect(sent[0]).toContain('no rule or no guard test yet')
+    expect(sent[0]).toContain('Cards lose their reply')
+  })
+})
+
+describe('a finding with his words goes to the registry', () => {
+  it('a new pain from the judge, his picture kept next to it, then a second complaint the judge matched', async () => {
+    const pic = path.join(WALNUT_HOME, 'tmp-images', '1795-card.png')
+    await fs.mkdir(path.dirname(pic), { recursive: true })
+    await fs.writeFile(pic, 'png')
+    const first = { id: 'u1', at: iso(100), text: 'The reply under the card used to show.', images: [pic] }
+    const { d } = deps({ messages: [first], answers: [verdict({ same_as: '', title: 'Cards lose their reply', scope: 'all_users' })] })
+    await reflectForNode(vp, 'Marina VP', [vp, worker], d)
+    const [pain] = await readPains(vp.id)
+    expect(pain).toMatchObject({ title: 'Cards lose their reply', scope: 'all_users', status: 'unowned', count: 1, owner: { taskId: worker.id } })
+    expect(pain.rule?.where).toContain('guidance.md line 1')
+    const kept = pain.quotes[0].images![0]
+    expect(kept).not.toBe(pic)
+    expect(await fs.readFile(kept, 'utf-8')).toBe('png')
+    expect(await fs.readFile(painsMarkdownOf(vp.id), 'utf-8')).toContain('Cards lose their reply')
+    const day = await readDayEntries(vp.id, localDate(NOW))
+    expect(day![0].pain).toMatchObject({ id: pain.id, isNew: true })
+
+    // The next pass shows the judge the registry and files the new complaint under the pain it names.
+    const second = { id: 'u2', at: iso(50), text: 'The reply under the card used to show, gone again.' }
+    const { d: d2, prompts } = deps({ messages: [first, second], answers: [verdict({ same_as: pain.id, title: 'Replies gone', scope: 'all_users' }, { user_quote: 'gone again' })] })
+    await reflectForNode(vp, 'Marina VP', [vp, worker], d2)
+    expect(prompts.at(-1)).toContain(`${pain.id} Cards lose their reply`)
+    const after = await readPains(vp.id)
+    expect(after).toHaveLength(1)
+    expect(after[0].count).toBe(2)
+  })
+
+  it('a pain id the judge was not shown opens a new pain, never a guess', () => {
+    const v = verifyFinding(verdict({ same_as: 'pn-made-up', title: 'X', scope: 'only_him' }), {
+      signal: 'regression', sessionText: BEFORE, userText: 'it used to show', rulesText: '', guidance: [], pains: [{ id: 'pn-real', title: 'Y' }],
+    })
+    expect(v.verdict).toBe('bad_decision')
+    expect(v.verdict === 'bad_decision' && v.finding.pain).toEqual({ same_as: '', title: 'X', scope: 'only_him' })
+  })
+})
+
+describe('a thread card waiting on his decision', () => {
+  const card = (over: Partial<ReflectionThread> = {}): ReflectionThread => ({
+    id: 'th-pk01', title: 'Store passkeys in the password extension', state: 'needs', replyAt: iso(30), replySid: 'sess-vp', messages: [], ...over,
+  })
+  const cands = async (threads: ReflectionThread[], seen = new Set<string>()) =>
+    (await collectCandidates(vp, [vp, worker], iso(600), seen, deps({ threads }).d)).candidates.filter((c) => c.key.startsWith('card:'))
+
+  it('is judged with its summary and buttons as he reads them, and only once per version', async () => {
+    const [c] = await cands([card({ reply: 'Build it this way? I recommend it.' })])
+    expect(c).toMatchObject({ signal: 'needs_ask', sessionId: 'sess-vp', task: { id: vp.id } })
+    expect(c.ask!.text).toContain('Buttons: none (he answers in his own words)')
+    expect(await cands([card({ reply: 'Build it this way? I recommend it.' })], new Set([c.key]))).toHaveLength(0)
+    expect(await cands([card({ reply: 'New summary.' })], new Set([c.key]))).toHaveLength(1)
+  })
+
+  it('a card with no summary says so; one not waiting on him, or closed, is not looked at', async () => {
+    const [c] = await cands([card()])
+    expect(c.ask!.text).toContain('(no summary')
+    expect(await cands([card({ state: 'answered' })])).toHaveLength(0)
+    expect(await cands([card({ closed: true })])).toHaveLength(0)
+  })
+
+  it('its buttons show which one is recommended', () => {
+    expect(cardText('', 'Pick one', [{ label: 'Build it', recommended: true }, { label: 'Skip' }])).toContain('Buttons: [Build it (recommended)] [Skip]')
+  })
+
+  it('reads state, summary, writer and buttons from the stored thread', () => {
+    const [t] = threadsFromRecords([{ id: 'th-1', title: 'T', state: 'needs', reply: 'R', replyAt: iso(1), reply_sid: 'sess-vp', options: [{ id: 'a', label: 'A', recommended: true }, { id: 'b' }], messages: [{ id: 'tm-1', at: iso(2), text: 'x', images: ['/p/a.png', 3] }] }])
+    expect(t).toMatchObject({ state: 'needs', reply: 'R', replySid: 'sess-vp', options: [{ label: 'A', recommended: true }] })
+    expect(t.messages[0].images).toEqual(['/p/a.png'])
+  })
+})

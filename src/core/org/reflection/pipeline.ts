@@ -22,6 +22,8 @@ import { managedTasks } from './team.js';
 import { collectCandidates, type Candidate, type CandidateDeps } from './candidates.js';
 import { LANGUAGE_GUIDANCE, measureLanguage } from './language.js';
 import { messagesFromAsks, rulesTextOf, threadsFromRecords } from './inputs.js';
+import { readPains, PAIN_TITLES_FOR_JUDGE } from './pains.js';
+import { recordPain } from './pain-record.js';
 
 export { ANSWER_GRACE_MS, MOMENT_MAX_AGE_MS, type Candidate } from './candidates.js';
 
@@ -95,6 +97,8 @@ export async function judgeInputOf(node: Task, c: Candidate, deps: Pick<ReflectD
     ...(c.ask?.text ? { askText: c.ask.text } : {}),
     ...(c.evidence ? { evidenceText: c.evidence.map((m: SpokenMessage) => `[${m.at}] ${m.text}`).join('\n\n') } : {}),
     rulesText: await deps.rulesText(node), guidance, replyLanguage: await deps.replyLanguage(),
+    // His complaints already filed, newest first: the judge names the one this is, or a new one.
+    pains: (await readPains(node.id)).sort((a, b) => b.lastAt.localeCompare(a.lastAt)).slice(0, PAIN_TITLES_FOR_JUDGE).map((e) => ({ id: e.id, title: e.title })),
   };
 }
 
@@ -177,6 +181,14 @@ export async function reflectOnCandidate(
     at: new Date(now).toISOString(), signal: c.signal, task: { id: c.task.id, title: c.task.title }, ...(c.thread ? { thread: c.thread } : {}),
     finding: f, corrected, ...(held ? { held } : {}), rule, ...(corrected === 'sent' ? { handedTo: { taskId: c.task.id, title: c.task.title } } : {}),
   };
+  // His complaint goes to the pain registry too (pains.ts): never for an ask he has not answered.
+  if (f.user_quote && c.messages.length) {
+    const pain = await recordPain(node, nodeName, c, f, rule, now).catch((err) => {
+      log.task.warn('reflection: pain not recorded', { nodeId: node.id, taskId: c.task.id, error: err instanceof Error ? err.message : String(err) });
+      return undefined;
+    });
+    if (pain) entry.pain = pain;
+  }
   await appendDayEntry(node.id, nodeName, localDate(now), entry);
   return { verdict, entry };
 }

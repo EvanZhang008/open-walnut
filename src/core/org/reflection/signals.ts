@@ -24,7 +24,8 @@ export const REFLECTION_SIGNALS = [
 ] as const;
 export type ReflectionSignal = typeof REFLECTION_SIGNALS[number];
 
-export interface SpokenMessage { id: string; at: string; text: string }
+/** One of his messages; `images` are the paths of the pictures it carried. */
+export interface SpokenMessage { id: string; at: string; text: string; images?: string[] }
 
 /** Words aimed at a session's work when he is angry or fed up (English and Chinese, escaped). */
 const FRUSTRATION_RE = new RegExp([
