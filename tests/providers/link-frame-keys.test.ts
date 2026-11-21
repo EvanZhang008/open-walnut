@@ -22,10 +22,15 @@ function fnBody(src: string, name: string): string {
 
 describe('link frames: a field never takes a frame key', () => {
   for (const twin of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
-    it(`${twin}: an answer's frame keys come after its data`, () => {
+    it(`${twin}: an answer's id comes after its data, and a refusal's ok:false in its data survives`, () => {
       const src = read(twin)
-      expect(fnBody(src, 'sendOk')).toMatch(/\{\s*\.\.\.data,\s*id,\s*ok:\s*true\s*\}/)
+      // ok first (a refusal sent through sendOk with ok:false keeps it: 2026-11-21 review, R2-1), id last.
+      expect(fnBody(src, 'sendOk')).toMatch(/\{\s*ok:\s*true,\s*\.\.\.data,\s*id\s*\}/)
       expect(fnBody(src, 'sendError')).toMatch(/\{\s*\.\.\.data,\s*id,\s*ok:\s*false/)
+      // The same object built the way the twin builds it.
+      const data: Record<string, unknown> = { ok: false, error: 'session_stopped', id: 'trigger-1' }
+      const frame = { ok: true, ...data, id: 7 }
+      expect(frame).toMatchObject({ ok: false, error: 'session_stopped', id: 7 })
     })
   }
 

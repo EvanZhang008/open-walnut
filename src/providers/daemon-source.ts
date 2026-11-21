@@ -16014,8 +16014,9 @@ function cmdList(ws, id) {
 // ever changes.
 function sendOk(ws, id, data) {
   if (ws && ws.origin === 'follower') data = followerReads.settle(ws, id, data) || data;
-  // The frame's own keys win: an answer field named id or ok never re-addresses it.
-  try { ws.send(JSON.stringify({ ...data, id, ok: true })); } catch {}
+  // The frame's id wins (a trigger's id never re-addresses the answer); a refusal sent here with
+  // ok: false in its data keeps it (ARG_REFS_MISSING, session_stopped, session_dead).
+  try { ws.send(JSON.stringify({ ok: true, ...data, id })); } catch {}
 }
 
 // level: an expected refusal (a job restarting) is logged below error.

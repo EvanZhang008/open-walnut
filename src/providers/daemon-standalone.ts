@@ -13651,8 +13651,9 @@ function flushSendQueue(ws: ServerWebSocket<WsData>) {
 
 function sendOk(ws: ServerWebSocket<WsData>, id: number | null, data: Record<string, unknown>) {
   if (ws?.data?.origin === 'follower') data = followerReads.settle(ws, id, data) ?? data
-  // The frame's own keys win: an answer field named `id` or `ok` (a trigger's id) never re-addresses it.
-  safeSend(ws, JSON.stringify({ ...data, id, ok: true }))
+  // The frame's id wins (a trigger's `id` never re-addresses the answer); a refusal sent here with
+  // `ok: false` in its data keeps it (ARG_REFS_MISSING, session_stopped, session_dead).
+  safeSend(ws, JSON.stringify({ ok: true, ...data, id }))
 }
 
 /** `level`: an expected refusal (a job restarting) is logged below error. */
