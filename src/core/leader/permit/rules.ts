@@ -3,7 +3,8 @@
  * whether a set of timing parameters is safe for the assumed clock drift.
  */
 import type { PermitParams, PermitProgress, PermitRecord } from './types.js'
-import { nextConfigId, sameList } from './types.js'
+import { HOLDER_CLOCK_KINDS, majorityOf, nextConfigId, sameList } from './types.js'
+import { applyOps, ledgerError, opChangesError, registrationConflict, type HeldOp } from './ops.js'
 
 /** What one witness holds. `acceptedAt` is on the witness's own elapsed clock. */
 export interface WitnessState {
@@ -27,6 +28,8 @@ export interface WitnessState {
    * last real holder wrote (review round 1, S-2).
    */
   progress: PermitProgress | null
+  /** The op ids registered before outward sends, with their outcomes (ops.ts). */
+  ops: HeldOp[]
 }
 
 function higher(a: PermitProgress | null, b: PermitProgress | undefined): PermitProgress | null {
@@ -66,6 +69,8 @@ export function checkTiming(p: PermitParams): void {
     throw new Error(`permit timing: margins cover a drift rate below ${maxSafeDrift(p).toFixed(4)}, assumed ${p.maxDriftRate}`)
   }
   if (p.minSendRemainingMs < 0 || p.minSendRemainingMs >= L) throw new Error('permit timing: minSendRemainingMs must be under the holder lease')
+  if (!(p.opRetainMs >= 10 * p.validMs)) throw new Error('permit timing: opRetainMs must cover several permissions (10 x validMs at least)')
+  if (!(p.backoffBaseMs > 0) || p.backoffMaxMs < p.backoffBaseMs) throw new Error('permit timing: backoffBaseMs must be positive and at most backoffMaxMs')
 }
 
 /** The witness still keeps its record for that record's holder. */
@@ -94,6 +99,10 @@ function shapeError(r: PermitRecord, p: PermitParams): string | null {
     return 'bad-progress'
   }
   if (r.joint !== undefined && (!uniqueList(r.joint) || sameList(r.joint, r.list))) return 'bad-list'
+  if (r.clock !== undefined && !HOLDER_CLOCK_KINDS.includes(r.clock)) return 'bad-clock'
+  if (r.ops !== undefined && (r.kind !== 'renew' || opChangesError(r.ops))) return 'bad-ops'
+  if (r.ledger !== undefined && (r.kind !== 'members' || ledgerError(r.ledger))) return 'bad-ledger'
+  if (r.pairBy !== undefined && (r.kind !== 'members' || r.stage !== 'final' || !uniqueList(r.pairBy))) return 'bad-evidence'
   switch (r.kind) {
     case 'grant':
     case 'renew':
@@ -105,6 +114,7 @@ function shapeError(r: PermitRecord, p: PermitParams): string | null {
     case 'members':
       // Both steps of a change are judged by both lists: `joint` is the new list.
       if (r.holder !== r.by || !uniqueList(r.newList) || !sameList(r.joint, r.newList)) return 'bad-members'
+      if (r.stage === 'final' && r.pairBy === undefined) return 'bad-evidence'
       return r.stage === 'joint' || r.stage === 'final' ? null : 'bad-members'
     default:
       return 'bad-kind'
@@ -124,17 +134,36 @@ export function isMember(s: WitnessState, self: string): boolean {
  * - the final step: from the pair, or the configuration it leads to again (by id: the same
  *   list from an earlier configuration is not it, stress seed 1754).
  */
-function changeStartsHere(s: WitnessState, self: string, r: PermitRecord, joining: boolean): boolean {
+function changeStartsHere(s: WitnessState, self: string, r: PermitRecord, joining: boolean): 'joining' | 'pair' | 'past' | null {
   // ...and only from its own generation or a later one: a witness that left at generation g
   // never took part in anything after g, so it cannot be one of the majority that left a
   // later configuration; a late step of an older change could put it back into a list
   // that majority already left, beside a straggler (stress seed 8618).
-  if (joining) return s.epoch !== null && r.epoch >= s.epoch && r.newList!.includes(self) && !r.list.includes(self)
+  if (joining) return s.epoch !== null && r.epoch >= s.epoch && r.newList!.includes(self) && !r.list.includes(self) ? 'joining' : null
   const fromOld = s.cfg === r.cfg && sameList(s.list, r.list)
   const inPair = fromOld && sameList(s.joint, r.newList)
-  if (r.stage === 'joint') return fromOld && (!s.joint || inPair)
+  if (r.stage === 'joint') return fromOld && (!s.joint || inPair) ? 'pair' : null
   const finalAgain = !s.joint && s.cfg === nextConfigId(r.cfg, r.newList!) && sameList(s.list, r.newList)
-  return inPair || finalAgain
+  return inPair ? 'pair' : finalAgain ? 'past' : null
+}
+
+/**
+ * The evidence a final step carries that its pair stood: the witnesses its writer saw hold the
+ * pair, a majority of each list. A witness cannot ask the others, so it checks what it can: the
+ * evidence names a majority of each list and only their members, and it names this witness only
+ * if this witness did take the pair (it stands in the pair or past it). Each name comes from an
+ * answer to the pair record itself or a state at or past the pair, and a witness's configuration
+ * only moves forward, so the named witnesses took the pair and refuse the old list alone from
+ * then on: no majority of the old list alone can form beside the new list.
+ */
+function pairEvidenceError(r: PermitRecord, self: string, path: 'joining' | 'pair' | 'past'): string | null {
+  const by = r.pairBy!
+  const next = r.newList!
+  if (by.some((w) => !r.list.includes(w) && !next.includes(w))) return 'bad-evidence'
+  const count = (l: string[]) => l.filter((w) => by.includes(w)).length
+  if (count(r.list) < majorityOf(r.list) || count(next) < majorityOf(next)) return 'pair-not-shown'
+  if (by.includes(self) && path === 'joining') return 'bad-evidence'
+  return null
 }
 
 /**
@@ -145,7 +174,17 @@ function changeStartsHere(s: WitnessState, self: string, r: PermitRecord, joinin
 function mayRewrite(s: WitnessState, r: PermitRecord, now: number, p: PermitParams): boolean {
   const h = s.held
   const live = holdsForHolder(s, now, p)
-  return (!!h && live && h.holder === r.by && h.kind !== 'handover') || !live
+  return (!!h && live && ownLive(h, r)) || !live
+}
+
+/**
+ * The held record is `r`'s writer's own permission: same machine AND same incarnation. Another
+ * process of the same machine is another holder (a second server started beside the first, or
+ * one restarted while the old one still runs): it waits for the permission to run out like any
+ * other machine, so two processes of one machine can never both hold it.
+ */
+function ownLive(h: PermitRecord, r: PermitRecord): boolean {
+  return h.holder === r.by && h.kind !== 'handover' && h.nonce === r.nonce
 }
 
 /**
@@ -166,12 +205,15 @@ export function judge(s: WitnessState, self: string, r: PermitRecord, now: numbe
   const bad = shapeError(r, p)
   if (bad) return { ok: false, reason: bad }
   const accept = (list: string[] | null = s.list, joint: string[] | null = s.joint, cfg: string | null = s.cfg, epoch: number | null = s.epoch): Judgement =>
-    ({ ok: true, next: { held: r, acceptedAt: now, list, joint, cfg, epoch, progress: higher(s.progress, r.progress) } })
+    ({ ok: true, next: { held: r, acceptedAt: now, list, joint, cfg, epoch, progress: higher(s.progress, r.progress), ops: applyOps(s.ops, r, now, p.opRetainMs) } })
   const joining = !isMember(s, self)
 
   if (r.kind === 'members') {
-    if (!changeStartsHere(s, self, r, joining)) return { ok: false, reason: joining ? (s.epoch === null ? 'not-set-up' : 'not-a-member') : 'wrong-list' }
+    const path = changeStartsHere(s, self, r, joining)
+    if (!path) return { ok: false, reason: joining ? (s.epoch === null ? 'not-set-up' : 'not-a-member') : 'wrong-list' }
     if (s.held && r.number <= s.held.number) return { ok: false, reason: 'stale-number' }
+    const evidence = r.stage === 'final' ? pairEvidenceError(r, self, path) : null
+    if (evidence) return { ok: false, reason: evidence }
     if (!joining && !mayRewrite(s, r, now, p)) return { ok: false, reason: 'not-holder' }
     return r.stage === 'joint'
       ? accept([...r.list], [...r.newList!], r.cfg, r.epoch)
@@ -188,14 +230,32 @@ export function judge(s: WitnessState, self: string, r: PermitRecord, now: numbe
   switch (r.kind) {
     case 'grant':
       return live ? { ok: false, reason: 'held' } : accept()
-    case 'renew':
-      return h && live && h.holder === r.by ? accept() : { ok: false, reason: 'not-holder' }
+    case 'renew': {
+      // On a handover to it (written by the old holder), any incarnation of the new holder; the
+      // first renew a witness takes then fixes which one (ownLive).
+      const mine = !!h && live && (ownLive(h, r) || (h.kind === 'handover' && h.holder === r.by))
+      if (!mine) return { ok: false, reason: 'not-holder' }
+      const conflict = registrationConflict(s.ops, r.ops, r.by, r.nonce)
+      return conflict ? { ok: false, reason: conflict } : accept()
+    }
     case 'handover':
-      return h && live && h.holder === r.by && h.kind !== 'handover' ? accept() : { ok: false, reason: 'not-holder' }
+      return h && live && ownLive(h, r) ? accept() : { ok: false, reason: 'not-holder' }
     case 'cancel': {
-      const onOwnHandover = !!h && h.kind === 'handover' && h.from === r.by
-      const onOwnLive = !!h && live && h.holder === r.by && h.kind !== 'handover'
+      const onOwnHandover = !!h && h.kind === 'handover' && h.from === r.by && h.nonce === r.nonce
+      const onOwnLive = !!h && live && ownLive(h, r)
       return onOwnHandover || onOwnLive ? accept() : { ok: false, reason: 'nothing-to-cancel' }
     }
   }
+}
+
+/**
+ * A candidate's random wait before its next grant (full jitter): up to backoffBaseMs before the
+ * first, doubling with each grant that did not stand, to backoffMaxMs. Candidates that see the
+ * permission free at the same instant then ask one after the other, and the first to ask
+ * reaches every witness before the others: no split where each witness took another
+ * candidate's grant and nobody holds a majority until all of them run out.
+ */
+export function backoffDelayMs(tries: number, random: () => number, p: PermitParams): number {
+  const cap = Math.min(p.backoffMaxMs, p.backoffBaseMs * 2 ** Math.min(Math.max(0, tries), 30))
+  return random() * cap
 }

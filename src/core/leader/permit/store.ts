@@ -8,7 +8,8 @@
 import * as nodeFs from 'node:fs'
 import * as nodePath from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
-import { genesisConfigId, type PermitProgress, type PermitRecord } from './types.js'
+import { genesisConfigId, type OpEntry, type PermitProgress, type PermitRecord } from './types.js'
+import { ledgerError } from './ops.js'
 
 export interface StoredWitness {
   held: PermitRecord | null
@@ -21,6 +22,8 @@ export interface StoredWitness {
   epoch: number | null
   /** The highest progress stamp it has seen (rules.ts WitnessState.progress). */
   progress: PermitProgress | null
+  /** Its op entries (ops.ts), without times: a restart counts them as changed at the restart. */
+  ops: OpEntry[]
 }
 
 export interface PermitStore {
@@ -44,7 +47,7 @@ function checksum(body: StoredWitness): string {
 }
 
 export function encodeStored(s: StoredWitness): string {
-  const body: StoredWitness = { held: s.held, list: s.list, joint: s.joint, cfg: s.cfg, epoch: s.epoch, progress: s.progress }
+  const body: StoredWitness = { held: s.held, list: s.list, joint: s.joint, cfg: s.cfg, epoch: s.epoch, progress: s.progress, ops: s.ops }
   return JSON.stringify({ v: 1, ...body, sum: checksum(body) })
 }
 
@@ -55,7 +58,7 @@ export function decodeStored(text: string, where: string): StoredWitness {
   } catch {
     throw new PermitStoreCorrupt(`permit store ${where}: not whole JSON (torn write?)`)
   }
-  const o = raw as { v?: unknown; held?: unknown; list?: unknown; joint?: unknown; cfg?: unknown; epoch?: unknown; progress?: unknown; sum?: unknown }
+  const o = raw as { v?: unknown; held?: unknown; list?: unknown; joint?: unknown; cfg?: unknown; epoch?: unknown; progress?: unknown; ops?: unknown; sum?: unknown }
   if (!o || typeof o !== 'object' || o.v !== 1 || typeof o.sum !== 'string') {
     throw new PermitStoreCorrupt(`permit store ${where}: unknown format`)
   }
@@ -66,6 +69,7 @@ export function decodeStored(text: string, where: string): StoredWitness {
     cfg: (o.cfg ?? null) as string | null,
     epoch: (o.epoch ?? null) as number | null,
     progress: (o.progress ?? null) as PermitProgress | null,
+    ops: (o.ops ?? []) as OpEntry[],
   }
   if (checksum(body) !== o.sum) throw new PermitStoreCorrupt(`permit store ${where}: checksum mismatch`)
   if (body.held !== null && (typeof body.held !== 'object' || !Number.isSafeInteger(body.held.number))) {
@@ -83,6 +87,7 @@ export function decodeStored(text: string, where: string): StoredWitness {
   if (body.progress !== null && (typeof body.progress !== 'object' || !Number.isSafeInteger(body.progress.seq))) {
     throw new PermitStoreCorrupt(`permit store ${where}: bad progress`)
   }
+  if (ledgerError(body.ops)) throw new PermitStoreCorrupt(`permit store ${where}: bad op entries`)
   return body
 }
 
@@ -134,7 +139,7 @@ export function createFilePermitStore(file: string, fs: Fs = nodeFs): PermitStor
  */
 export function bootstrapWitnessStore(store: PermitStore, list: string[]): void {
   if (store.load() !== null) throw new Error('permit store: already set up; a witness that lost its record rejoins through a members record')
-  store.save({ held: null, list: [...list].sort(), joint: null, cfg: genesisConfigId(list), epoch: 0, progress: null })
+  store.save({ held: null, list: [...list].sort(), joint: null, cfg: genesisConfigId(list), epoch: 0, progress: null, ops: [] })
 }
 
 /**
@@ -146,5 +151,5 @@ export function bootstrapWitnessStore(store: PermitStore, list: string[]): void 
 export function prepareJoiningWitness(store: PermitStore, epoch: number): void {
   if (!Number.isSafeInteger(epoch) || epoch < 0) throw new Error('permit store: a generation is a whole number from 0')
   if (store.load() !== null) throw new Error('permit store: already set up')
-  store.save({ held: null, list: null, joint: null, cfg: null, epoch, progress: null })
+  store.save({ held: null, list: null, joint: null, cfg: null, epoch, progress: null, ops: [] })
 }

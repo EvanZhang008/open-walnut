@@ -17,6 +17,12 @@ export interface TakeoverRuleInput {
   list: string[]
   /** Its configuration id (PermitClient.config().cfg); default: the first configuration. */
   cfg?: string
+  /**
+   * A change left between its steps (PermitClient.config().joint, or a repair plan's pair):
+   * the witnesses in that pair count, and the old permission must have run out on a majority
+   * of each list. The candidate then finishes the change (repairChange) instead of a grant.
+   */
+  joint?: string[] | null
   /** Answers of one fresh read round. */
   reads: PermitReply[]
   /**
@@ -36,13 +42,18 @@ export function mayAskForTakeover(input: TakeoverRuleInput): TakeoverRuleAnswer 
   // Only a witness that serves this very configuration counts: one that moved to another
   // list, or stands in the middle of a change, would refuse the grant anyway.
   const cfg = input.cfg ?? genesisConfigId(input.list)
+  const joint = input.joint ?? null
+  const lists = joint ? [input.list, joint] : [input.list]
   for (const r of input.reads) {
-    if (input.list.includes(r.witness) && r.cfg === cfg && sameList(r.list, input.list) && !r.joint) byWitness.set(r.witness, r)
+    const sameJoint = joint ? sameList(r.joint, joint) : !r.joint
+    if (lists.some((l) => l.includes(r.witness)) && r.cfg === cfg && sameList(r.list, input.list) && sameJoint) byWitness.set(r.witness, r)
   }
-  const need = majorityOf(input.list)
-  const ranOut = [...byWitness.values()].filter((r) => r.grantable).length
-  if (ranOut < need) {
-    return { ok: false, reason: `the old permission ran out on ${ranOut} of ${input.list.length} witnesses, ${need} needed` }
+  for (const l of lists) {
+    const need = majorityOf(l)
+    const ranOut = l.filter((w) => byWitness.get(w)?.grantable).length
+    if (ranOut < need) {
+      return { ok: false, reason: `the old permission ran out on ${ranOut} of ${l.length} witnesses (${l.join(', ')}), ${need} needed` }
+    }
   }
   // Any record a majority accepted is held (or a later one) by one of these answers, and each
   // witness keeps the highest stamp it ever took, so the highest stamp here is at least the

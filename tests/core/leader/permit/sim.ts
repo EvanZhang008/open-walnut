@@ -38,6 +38,8 @@ export class NodeClock {
     return s ? s[1] : t
   }
   monotonic = (): number => this.monoOffset + (1 + this.drift) * this.active(this.world.now)
+  /** The machine's clock that counts sleep (CLOCK_BOOTTIME): never set, never stopped. */
+  boot = (): number => this.monoOffset + (1 + this.drift) * this.world.now
   wall = (): number => {
     let j = 0
     for (const [at, by] of this.wallJumps) if (this.world.now >= at) j += by
@@ -87,7 +89,8 @@ interface Ev { at: number; seq: number; run: () => void }
 const before = (a: Ev, b: Ev): boolean => a.at < b.at || (a.at === b.at && a.seq < b.seq)
 
 export interface WitnessNode { id: string; store: SimStore; clock: NodeClock; w: PermitWitness | null; downUntil: number }
-export interface MachineNode { id: string; clock: NodeClock; c: PermitClient; pureMonotonic: boolean; downUntil: number }
+/** `key` names the process (the network and the checks use it); `id` is its machine's id. Two processes of one machine share an id. */
+export interface MachineNode { key: string; id: string; clock: NodeClock; c: PermitClient; pureMonotonic: boolean; bootClock: boolean; downUntil: number }
 
 export class World {
   now = 0
@@ -109,6 +112,11 @@ export class World {
   writeSeq = 0
   /** Stops every pilot (a test then reads back a still world). */
   pilotsStopped = false
+  /** Outward sends (pilot ops): the ids to send, those the data marks done, every send made, ids seen as unknown. */
+  outbox: string[] = []
+  done = new Set<string>()
+  sends = new Map<string, Array<{ by: string; nonce: string; at: number }>>()
+  unknownSeen = new Set<string>()
 
   constructor(public params: PermitParams, public net: NetOptions = CALM, seed = 1) {
     this.rand = rng(seed)
@@ -178,22 +186,25 @@ export class World {
     this.at(n.downUntil, () => this.startWitness(n))
   }
 
-  addMachine(id: string, list: string[], opts: { drift?: number; wallOffset?: number; pureMonotonic?: boolean; nonce?: string } = {}): MachineNode {
-    const clock = new NodeClock(this, opts.drift ?? 0, opts.wallOffset ?? 0)
-    const node = { id, clock, pureMonotonic: !!opts.pureMonotonic, downUntil: 0 } as MachineNode
-    node.c = this.newClient(node, list, opts.nonce)
-    this.machines.set(id, node)
-    this.activeMs.set(id, 0)
+  /** `key`: a second process of machine `id` (default: the id itself). */
+  addMachine(id: string, list: string[], opts: { drift?: number; wallOffset?: number; pureMonotonic?: boolean; bootClock?: boolean; nonce?: string; key?: string; clockOf?: string; cfg?: string; epoch?: number } = {}): MachineNode {
+    const key = opts.key ?? id
+    // A second process of a machine reads that machine's clocks.
+    const clock = opts.clockOf ? this.machines.get(opts.clockOf)!.clock : new NodeClock(this, opts.drift ?? 0, opts.wallOffset ?? 0)
+    const node = { key, id, clock, pureMonotonic: !!opts.pureMonotonic, bootClock: !!opts.bootClock, downUntil: 0 } as MachineNode
+    node.c = this.newClient(node, list, opts.nonce, opts.cfg, opts.epoch)
+    this.machines.set(key, node)
+    this.activeMs.set(key, 0)
     return node
   }
 
-  private newClient(node: MachineNode, list: string[], nonce?: string): PermitClient {
+  private newClient(node: MachineNode, list: string[], nonce?: string, cfg?: string, epoch?: number): PermitClient {
     const clock: ElapsedClock = node.pureMonotonic
       ? createWitnessClock({ monotonic: node.clock.monotonic })
-      : createHolderClock({ monotonic: node.clock.monotonic, wall: node.clock.wall })
+      : createHolderClock({ monotonic: node.clock.monotonic, wall: node.clock.wall, ...(node.bootClock ? { boot: { kind: 'boottime' as const, now: node.clock.boot } } : {}) })
     return new PermitClient({
-      id: node.id, list, clock, params: this.params, ...(nonce ? { testNonce: nonce } : {}),
-      transport: { send: (w, req) => this.send(node.id, w, req) },
+      id: node.id, list, clock, params: this.params, ...(nonce ? { testNonce: nonce } : {}), ...(cfg ? { cfg } : {}), ...(epoch !== undefined ? { epoch } : {}),
+      transport: { send: (w, req) => this.send(node.key, w, req) },
     })
   }
 
@@ -201,10 +212,12 @@ export class World {
    * The machine restarts: a new client that remembers nothing (as after a process restart).
    * `nonce` (a negative control only) makes it reuse an incarnation.
    */
-  restartMachine(id: string, list: string[], downMs: number, nonce?: string): void {
-    const n = this.machines.get(id)!
+  restartMachine(key: string, list: string[], downMs: number, nonce?: string, keepConfig = false): void {
+    const n = this.machines.get(key)!
     n.downUntil = this.now + downMs
-    n.c = this.newClient(n, list, nonce)
+    // keepConfig: the process starts from the witness list it last knew (kept on its disk).
+    const known = keepConfig ? n.c.config() : null
+    n.c = known && !known.joint ? this.newClient(n, known.list, nonce, known.cfg, known.epoch) : this.newClient(n, list, nonce)
   }
 
   partition(a: string, b: string, on = true): void {
@@ -268,9 +281,13 @@ export class World {
     m.c.receive(reply)
   }
 
-  /** Who may act right now. */
+  /**
+   * Who may act right now. A machine that sleeps runs nothing, so it is not asked (asking would
+   * read its clocks in the middle of its sleep, which no real machine does: it would see a
+   * wall clock set back during the sleep apart from the sleep itself).
+   */
   acting(): string[] {
-    return [...this.machines.values()].filter((m) => m.c.mayAct()).map((m) => m.id)
+    return [...this.machines.values()].filter((m) => !m.clock.asleep() && m.c.mayAct()).map((m) => m.key)
   }
 
   check(): void {
@@ -304,26 +321,49 @@ export interface PilotOptions {
   wantsLead: boolean
   /** How often the pilot looks, in ms (renews happen every params.renewEveryMs). */
   tickMs?: number
+  /** Look at exactly tickMs, starting at tickMs (no random phase or jitter). */
+  exactTicks?: boolean
   /** Called on every tick that it may act; a test can hand over or change witnesses here. */
   onTick?: (m: MachineNode) => void
   /** Chance per tick that a machine with an open handover takes it back. */
   cancelChance?: number
   /** Advance the progress stamp only every fourth renew, so records repeat across restarts. */
   sparseStamps?: boolean
+  /** Wait PermitClient.grantDelayMs() and read again before a grant (default true); false asks at once. */
+  backoff?: boolean
+  /** Send outward ops from world.outbox while it holds the permission (ops.ts). */
+  ops?: OpsDriver
+}
+
+/**
+ * The outward sends of the Walnut: world.outbox lists op ids to send; the holder registers
+ * each, sends it once assertMaySend passes, and reports it. world.sends records every send.
+ * `markDoneShare`: the share of sends whose "done" mark reaches the copy a later holder starts
+ * from (the rest it does not know about, as with a copy a few minutes behind).
+ */
+export interface OpsDriver {
+  markDoneShare: number
+  /** A negative control: send as soon as the registration is proposed, without waiting for a majority. */
+  sendUnregistered?: boolean
 }
 
 /**
  * Drives one machine the way the wiring will: renew while it holds the permission, read
- * back when unsure, ask for it when a majority says the old one ran out, take a
- * handover addressed to it by renewing.
+ * back when unsure, ask for it when a majority says the old one ran out (after a random
+ * back-off), take a handover addressed to it by renewing, and finish a list change left
+ * between its steps.
  */
-export function pilot(world: World, id: string, opts: PilotOptions): void {
+export function pilot(world: World, key: string, opts: PilotOptions): void {
   const tick = opts.tickMs ?? 5_000
+  const backoff = opts.backoff ?? true
   let lastRenew = -Infinity
+  let asking = false
+  let lastLook = -Infinity
+  const stamp = (m: MachineNode) => ({ seq: world.writeSeq, writtenAt: opts.sparseStamps ? world.writeSeq : m.clock.wall() })
   const step = (): void => {
-    const m = world.machines.get(id)!
+    const m = world.machines.get(key)!
     if (world.pilotsStopped) return
-    world.after(tick * (0.8 + 0.4 * world.rand()), step)
+    world.after(opts.exactTicks ? tick : tick * (0.8 + 0.4 * world.rand()), step)
     if (m.clock.asleep() || world.now < m.downUntil) return
     const c = m.c
     if (c.isFrozen()) {
@@ -336,35 +376,97 @@ export function pilot(world: World, id: string, opts: PilotOptions): void {
       // One write sequence for the Walnut: whoever acts continues it.
       if (!opts.sparseStamps || world.rand() < 0.25) world.writeSeq++
       if (world.now - lastRenew >= world.params.renewEveryMs) {
-        c.renew({ seq: world.writeSeq, writtenAt: opts.sparseStamps ? world.writeSeq : m.clock.wall() })
+        c.renew(stamp(m))
         lastRenew = world.now
       }
-      opts.onTick?.(m)
+      if (opts.ops) driveOps(world, m, opts.ops)
+      // A change between its steps is finished first; now and then look for one left half done.
+      const plan = c.changePlan()
+      if ((plan.kind === 'final' || plan.kind === 'pair') && world.rand() < 0.5) c.repairChange()
+      else opts.onTick?.(m)
+      if (c.jointList() || world.now - lastLook >= world.params.renewEveryMs) {
+        c.read()
+        lastLook = world.now
+      }
       return
     }
     const reads = c.readBack()
     const s = c.standing()
-    // Renew without a live permission only on a record a majority still holds for us (after
-    // a restart, or answers lost): renewing a minority's record would keep it alive forever
-    // and block every grant.
-    const mine = reads.filter((r) => r.held?.holder === id && !r.grantable).length
+    // Renew without a live permission only on a record a majority still holds for this very
+    // process (after answers were lost): renewing a minority's record would keep it alive
+    // forever and block every grant.
+    const mine = reads.filter((r) => r.held?.holder === m.id && r.held.kind !== 'handover' && r.held.nonce === c.incarnation() && !r.grantable).length
     const mineHeld = mine >= Math.floor(c.witnessList().length / 2) + 1
-    if ((s && s.kind === 'handover' && s.holder === id) || mineHeld) {
-      c.renew({ seq: world.writeSeq, writtenAt: opts.sparseStamps ? world.writeSeq : m.clock.wall() })
+    if ((s && s.kind === 'handover' && s.holder === m.id) || mineHeld) {
+      c.renew(stamp(m))
       lastRenew = world.now
-    } else if (opts.wantsLead && reads.length > 0) {
-      const ans = mayAskForTakeover({
-        list: c.witnessList(), cfg: c.config().cfg, reads, standby: { seq: Number.MAX_SAFE_INTEGER },
+    } else if (opts.wantsLead && reads.length > 0 && !asking) {
+      const plan = c.changePlan()
+      const joint = plan.kind === 'final' || plan.kind === 'pair' ? plan.pair.next : null
+      const may = (j: string[] | null) => mayAskForTakeover({
+        list: c.witnessList(), cfg: c.config().cfg, joint: j, reads: c.readBack(), standby: { seq: Number.MAX_SAFE_INTEGER },
         params: world.params, maxBehindMs: 5 * 60_000,
-      })
-      if (ans.ok) {
-        c.requestGrant()
-        lastRenew = world.now
+      }).ok
+      const use = joint && may(joint) ? joint : may(null) ? null : undefined
+      if (use !== undefined) {
+        const ask = () => {
+          lastRenew = world.now
+          if (use) c.repairChange()
+          else c.requestGrant()
+        }
+        if (!backoff) ask()
+        else {
+          // Wait a random while, read again, and ask only if it is still free.
+          asking = true
+          world.after(c.grantDelayMs(world.rand), () => {
+            if (m.c !== c || world.pilotsStopped) { asking = false; return }
+            c.read()
+            world.after(400, () => {
+              asking = false
+              if (m.c !== c || c.mayAct() || world.now < m.downUntil || m.clock.asleep()) return
+              if (use ? may(use) : may(null)) ask()
+            })
+          })
+        }
       }
     }
     c.read()
   }
-  world.after(world.rand() * tick, step)
+  world.after(opts.exactTicks ? tick : world.rand() * tick, step)
+}
+
+/** One holder tick of outward sends (OpsDriver). */
+function driveOps(world: World, m: MachineNode, d: OpsDriver): void {
+  const c = m.c
+  for (const id of world.outbox) {
+    if (world.done.has(id)) continue
+    const st = c.opStatus(id)
+    if (st === 'unknown') world.unknownSeen.add(id)
+    if (st === 'registered' || (d.sendUnregistered && st === 'pending')) {
+      try {
+        if (!d.sendUnregistered) c.assertMaySend(id)
+        else c.assertMayAct(id)
+      } catch {
+        continue
+      }
+      const sends = world.sends.get(id) ?? []
+      // Sent once per process: a process knows what it sent itself.
+      if (sends.some((x) => x.nonce === c.incarnation())) continue
+      sends.push({ by: m.key, nonce: c.incarnation(), at: world.now })
+      world.sends.set(id, sends)
+      // The send takes a while; the report goes with the next renew, if this process lives.
+      world.after(world.rand() * 3_000, () => {
+        if (m.c !== c) return
+        c.reportOutcome(id, true)
+        if (world.rand() < d.markDoneShare) world.done.add(id)
+      })
+      continue
+    }
+    if (st === 'free') {
+      try { c.registerOps([id]) } catch { /* not holding: next tick */ }
+      return
+    }
+  }
 }
 
 /** When `id` last stopped, and first started, acting within the timeline. */

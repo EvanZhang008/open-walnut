@@ -202,7 +202,7 @@ describe('clocks: a witness 30 s off, a holder 1% fast or slow', () => {
     aHolds(w, { drift: holderDrift })
     w.addMachine('B', W)
     pilot(w, 'A', { wantsLead: true, tickMs: 1_000 })
-    pilot(w, 'B', { wantsLead: true, tickMs: 50 })
+    pilot(w, 'B', { wantsLead: true, tickMs: 50, backoff: false })
     w.run(31_000)
     for (const id of W) w.partition('A', id)
     w.run(200_000)

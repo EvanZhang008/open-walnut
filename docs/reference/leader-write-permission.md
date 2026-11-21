@@ -10,15 +10,16 @@ merge.
 ## The record
 
 One numbered record per Walnut, kept by a fixed list of witnesses (three always-on machines,
-a majority of two). A record is `{ number, kind, holder, by, nonce, from, to, validMs, list, cfg, epoch, progress }`
-(`cfg`: which configuration of the witness list, below; `nonce`: the writer's incarnation):
+a majority of two). A record is `{ number, kind, holder, by, nonce, from, to, validMs, list, cfg, epoch, progress, clock }`
+(`cfg`: which configuration of the witness list, below; `nonce`: the writer's incarnation;
+`clock`: which clock the writer counts its lease on), and a renew may carry op ids (`ops`, below):
 
 | kind | written by | gives the permission to | a witness takes it when |
 |---|---|---|---|
 | `grant` | the asker | the asker | the record it holds ran out on its own clock, plus `witnessMarginMs` |
-| `renew` | the holder | the holder | it still holds the holder's record |
-| `handover` | the holder | `to` | it still holds the holder's record (not a handover) |
-| `cancel` | the old holder | the old holder | it holds that holder's handover, or the holder's live record |
+| `renew` | the holder | the holder | it still holds the holder's record, written by the same incarnation (or a handover to it) |
+| `handover` | the holder | `to` | it still holds the holder's record of the same incarnation (not a handover) |
+| `cancel` | the old holder | the old holder | it holds that incarnation's handover, or its live record |
 | `members` | the holder (or anyone, as a grant) | the writer | as a renew, or as a grant once the record ran out; it changes the witness list in two steps (below) |
 
 Every witness takes only a number above the one it holds, so a duplicate, a replay or a late
@@ -37,6 +38,14 @@ machine counts a witness's yes only when that witness holds this very record, no
 A process that restarted proposes numbers it may have used before; without the nonce a yes a
 witness gave the old record (or a late `ok` answering the old number) would be counted from the
 new send, and the lease would outlive the witness's hold (review round 1 found it).
+
+A witness also takes a renew, handover, cancel or list change from the holder only when its
+**incarnation** matches the record it holds: another process of the same machine (a second
+server started beside the first, or one restarted while the old one still runs) is another
+holder, and waits for the permission to run out like any other machine. So two processes of one
+machine can never both hold it (the random schedules run two processes per machine; with one
+shared incarnation they go red). A restarted process therefore waits out its old permission
+before it holds again.
 
 A machine acts only on a record of its **own** that a majority of the **fixed** list accepted,
 never a majority of whoever answered. It counts that record for `validMs - holderMarginMs` from
@@ -57,21 +66,31 @@ or an hour off changes nothing.
 
 The holder's clock must never run slow, a witness's never fast:
 
-- **Holder**: each step counts the larger of the monotonic and the wall-clock time passed
-  (`createHolderClock`). A plain monotonic clock stops while the machine sleeps (macOS and
-  Linux leave suspend out of it): a laptop waking from a 90 s sleep would otherwise act on a
-  permission that ran out on the witnesses. With the wall clock in, it wakes with `mayAct()`
-  false at once. A wall clock set forward ends the permission early. A wall clock set back
-  by more than 1 s in one step ends the permission held now, since it may hide a sleep (the
-  random schedules found a sleep of 88 s under a set-back of 100 s, stress seed 3564).
+- **Holder**: a plain monotonic clock stops while the machine sleeps (macOS and Linux leave
+  suspend out of it): a laptop waking from a 90 s sleep would otherwise act on a permission
+  that ran out on the witnesses. `createHolderClock()` counts on the machine's clock that
+  includes sleep: Linux `CLOCK_BOOTTIME`, macOS `mach_continuous_time`, read through libc with
+  bun:ffi (`system-clock.ts`, about 0.4 us a read on Linux and 0.03 us on an Apple silicon Mac,
+  no I/O, so it never blocks the event loop). Each step counts the larger of its advance and the
+  monotonic clock's; the wall clock is not read, so setting it changes nothing. Where that clock
+  cannot be read (Node, Windows, a 32-bit build) it falls back to the larger of the monotonic and
+  the wall-clock time passed, and every record says so: `clock: 'mono-wall'` (else `'boottime'`
+  or `'continuous'`). On the fallback a wall clock set forward ends the permission early, and one
+  set back by more than 1 s in one step ends the permission held now, since it may hide a sleep
+  (the random schedules found a sleep of 88 s under a set-back of 100 s, stress seed 3564).
 - **Witness**: the monotonic clock alone (`createWitnessClock`); a pause only makes it wait
   longer. After a restart it counts the record it holds as accepted at the restart.
 
 **Assumptions.** (1) No clock's rate is off by more than `maxDriftRate` (2% by default).
-(2) While a holder sleeps, its wall clock is not set back by nearly as long as the sleep lasted
-(within 1 s): such a step hides the sleep from both clocks. The wiring should pass a clock that
-counts suspend where the platform has one (Linux `CLOCK_BOOTTIME`, macOS
-`mach_continuous_time`) as the monotonic source, which removes (2).
+(2) Only on the fallback clock: while a holder sleeps, its wall clock is not set back by nearly
+as long as the sleep lasted (within 1 s), since such a step hides the sleep from both clocks.
+The sleep-counting clock removes (2): a named case sleeps 90 s with the wall set back 90 s, and
+only the fallback wakes still acting. What was checked where: on Linux the tests read
+`CLOCK_BOOTTIME` for real (it matches `/proc/uptime`); this host never suspends, so a real
+sleep is not tested there, only simulated. On macOS the binding was run once on an Apple
+silicon Mac (it loads, the timebase is 125/3, and continuous time ran 1253 minutes ahead of
+absolute time: the Mac's sleep since boot); the module's own macOS tests use a stand-in
+libSystem, and no test makes a Mac sleep.
 For (1): With a
 holder lease `L = validMs - holderMarginMs` and a witness hold `W = validMs + witnessMarginMs`,
 it is safe while `L/(1-r) < W/(1+r)`, that is `r < (W-L)/(W+L)` (`maxSafeDrift`: 3.3% for the
@@ -121,13 +140,34 @@ that (seed 12 of the list-change sweep) before the second step existed. Once a p
 counted, a majority of the old list sits in the pair, so no old-list majority can form again.
 
 `changeWitnesses(newList)` sends the pair step and then the final step by itself; called again
-while the pair stands, it sends the final step again. A machine sends the final step only when it
-knows the pair stands: its own pair record reached both majorities, or a read showed a majority of
-each list in that pair (or past it, by id). A pair it only learned of from a read may still be
-held by a minority of the old list. A change its holder left half done is
-finished by any machine once the permission ran out (`changeWitnesses(newList, { list, cfg })`). Two
-different changes started from the same list at once leave the witnesses of the one that did not
-count stuck in its pair; that is safe but needs a repair step (not built).
+while the pair stands, it sends the final step again.
+
+**The witnesses check that a final step's pair stood.** A final step carries `pairBy`: the
+witnesses its writer saw hold the pair, from an answer to the pair record itself or any answer
+showing that witness in the pair or past it (a witness's configuration only moves forward, so
+what it once showed stays true). A witness refuses a final whose `pairBy` names no majority of
+the old list, or none of the new one, or names a witness of neither, or names the witness
+itself when it never took the pair. Witnesses cannot ask each other, so this is what they can
+check: a client that sends the final too early (a bug) is refused, and a named case shows the
+harm when it is not (the new witnesses take it, and one machine holds under the old list while
+another holds under the new one). It does not stop a client that writes false names; the
+names come only from answers the client received.
+
+**A change left between its steps** (its writer stopped, or the pair reached only some
+witnesses) is finished by `repairChange()`, from the latest read (`changePlan()` says what it
+would do): the final step when the pair is known to stand; else the pair step again, but only
+when a majority of each list answers and can take it; else nothing, and the plan names the
+witnesses it waits for (`blocked`). It never pushes a pair whose new witnesses are gone: a
+witness in a pair takes nothing the new list does not take too, so that would stop the
+witnesses that still work. A change only goes forward: a pair is never turned toward another
+new list, because once a pair stood its new witnesses may take its final step at any later
+time, and a second pair beside it could end in two lists that do not overlap. The witnesses
+take a repair from the live holder, or from anyone once the permission ran out;
+`mayAskForTakeover({ joint })` decides when a candidate may (the witnesses in that pair count,
+by both lists). A read also asks the new witnesses of a change in flight, so the plan knows
+whether they answer. Two different changes started from the same list at once leave the
+witnesses of the one that lost in its pair for good: set such a witness up again
+(`prepareJoiningWitness` at the current generation) and bring it back through a later change.
 
 ## Automatic takeover (rule only)
 
@@ -147,18 +187,82 @@ candidates. No stamp means no proof: it refuses. Two requirements on the stamp:
   refused unless it already has the last `seq`, since minutes of clock offset would hide minutes
   of writes.
 
+## Outward sends: op ids registered first (design section 6)
+
+A mail or chat server does not know the permission's numbers, so a send that leaves after the
+permission moved cannot be refused on the other side; 15 s of permission left does not promise
+the send ends in time either. So before a send the holder registers its op id with the witnesses
+(`registerOps(ids)`: a renew carrying `ops.register`; ids only, never content) and sends only
+once `assertMaySend(opId)` passes: the permission as `assertMayAct`, and the registration taken
+by a majority. Afterwards it reports the outcome (`reportOutcome(opId, sent)`, carried on the
+next renew); `sent: false` only when the send surely never left.
+
+Each witness keeps the entries (`registered`, `sent`, `not-sent`, with the registering
+machine and incarnation) beside its record, on disk, and answers every request with them. It
+takes a registration only from the live holder of the same incarnation, and refuses an id it
+already holds unless it is that same incarnation sending it again with no outcome yet. Why a
+registration that counted is never lost: every witness that took it took it before any later
+holder's record (it refuses the registration once another machine's record is there), and any
+majority of a later holder shares a witness with the registering majority. So a later holder's
+answers carry the entry, and its own registration of the id is refused there. A list change
+carries every entry its writer knows (`ledger` on the members records) to the witnesses that
+join, so this holds across changes (a named case and a random sweep go red without it). An id
+whose outcome is known is kept `opRetainMs` (1 hour, counted again from a witness restart),
+longer than any standby copy may lag; one with no outcome stays until a holder reports it.
+
+A new holder reads the entries: `opStatus(id)` is `unknown` for an id registered by another
+machine or an earlier process with no outcome: it is never sent again, and `unresolvedOps()`
+lists them for the user to check. Once the user says what happened, `reportOutcome` records it.
+An id is registered once: a retry after `not-sent` uses a new id.
+
+## One process per machine
+
+The witnesses already keep two processes of one machine apart (incarnations, above). The
+**instance lock** (`acquireInstanceLock`) keeps a second process from even asking, frees itself
+at once when its owner crashed, and stops an owner that comes back after another took over.
+Each taking links a new generation file (`<path>.g<n>`) into place, complete: a link fails when
+the name exists, so of all processes that try generation n, exactly one gets it, and the newest
+generation never goes away (giving it up links a newer one that names no process), so no number
+is taken twice. A generation is stale when its process is gone (a crash: taken at once; a pid is
+only trusted inside its own pid namespace, so a process in a container is judged by its beats), or when
+its owner has not beaten (`<path>.g<n>.<token>.beat`, every 5 s) for `staleAfterMs` (20 s) on the
+machine's monotonic clock: a stopped or hung process. The machine's own sleep does not count, so
+a laptop that slept keeps it. The owner checks every beat; one that finds a newer generation
+calls `onLost`, and the wiring stops its `PermitClient` (`stop()`; the client also takes
+`guard: () => lock.held()`, so `mayAct()` is false from that moment). Every step is asynchronous
+file work. Tested with real processes: a crash, a process stopped with SIGSTOP and continued, and
+eight takers at once in 40 random interleavings (exactly one wins; a single file removed by
+whoever judged it stale lets two win).
+
+## Back-off when candidates ask at once
+
+Candidates that see the permission free at the same instant could split the witnesses (each
+takes another candidate's grant first), and then all wait a whole hold before the next try,
+again and again. `grantDelayMs()` is a random wait before a grant (full jitter): under
+`backoffBaseMs` (2 s) before the first, doubling with each grant of this process that did not
+stand, to `backoffMaxMs` (30 s); the candidate reads again after it and asks only if the
+permission is still free. A named case puts three candidates each next to one witness, all
+looking at the same instants: without the back-off no one holds in ten minutes, with it one
+holds within a minute in each of 30 runs.
+
 ## How it is tested
 
 `tests/core/leader/permit/`: a simulated world (one real timeline; each node its own clock with
 drift, offset, wall jumps and sleeps; a network that delays, drops, duplicates and reorders;
-witnesses that crash and restart from their file). `model-check.test.ts` runs about 700 seeded
-15-minute schedules (some with witnesses swapped in and out of the list, some with the holder restarting mid-renew, some with five witnesses and change steps arriving minutes late) against one invariant (at no real instant do two machines both have
-`mayAct()` true), plus negative controls that each remove one safety part (the margins, the
-fsync before the answer, the wall clock in the holder's clock, the fixed-list majority) and
-must find a violation. `named-cases.test.ts` holds the named schedules (the split, the 90 s
-sleep, a witness killed between accepting and answering, clocks 30 s off and 1% fast or slow,
-the drift bound's edge, late renews, a holder restarting mid-renew, the handover and cancel race, one witness reachable, the
-list change).
+witnesses that crash and restart from their file). `model-check.test.ts` (slow tier) runs about
+1,300 seeded 15-minute schedules (some with witnesses swapped in and out of the list, some with
+the holder restarting mid-renew or mid-change, some with five witnesses and change steps arriving
+minutes late, some with two processes per machine, some sending outward ops) against two
+invariants: at no real instant do two processes both have `mayAct()` true, and no op id is sent
+by two processes. Negative controls each remove one safety part (the margins, the fsync before
+the answer, the wall clock in the holder's clock, the fixed-list majority, waiting for the
+registration, the ledger on list changes, the incarnation) and must find a violation.
+`named-cases.test.ts` holds the named schedules of the first brief (the split, the 90 s sleep, a
+witness killed between accepting and answering, clocks 30 s off and 1% fast or slow, the drift
+bound's edge, late renews, a holder restarting mid-renew, the handover and cancel race, one
+witness reachable, the list change). `ops.test.ts`, `change-repair.test.ts`, `instance.test.ts`
+and `system-clock.test.ts` hold the op ids, the final-step evidence and the repair, the back-off,
+the two processes and the instance lock, and the clocks.
 
 ## Not built yet
 
@@ -169,17 +273,13 @@ list change).
   majority) and the `primary | backup` holder of the daemon's leader book
   (`src/providers/leader-core.ts`); the book's epoch stays as the fence a host checks on each
   command.
-- **Registering an outward send's operation id with the witnesses** before it goes out, so a
-  new holder lists "registered, no result" sends as unknown instead of sending them again
-  (design section 6).
-- **One process per machine id** is a precondition of the wiring: the witnesses tell holders
-  apart by machine id, so two live processes with one id (a deploy that boots the new server
-  before the old one exits) would share one permission. The wiring takes an OS-level
-  single-instance lock before it makes a `PermitClient`.
+- **Wiring the op ids to the real send paths** (mail, chat, push): each send calls
+  `registerOps`, waits, `assertMaySend`, sends, `reportOutcome`; and the list of unknown ops
+  goes to the user's inbox. The core and its simulated sends are built; no send path calls it.
+- **Wiring the instance lock** at the server's boot (its path under the Walnut's local data)
+  and its `onLost` to the client's `stop()` and the process's exit.
 - The old holder's handover flag survives only in memory: a restarted process comes back with
-  no permission and must renew, which is safe (its records carry a new incarnation), but the
+  no permission and waits it out, which is safe (its records carry a new incarnation), but the
   manual-switch flow must keep its own "switch in progress" state on disk.
-- Repairing witnesses left in the pair of a list change that never counted (two changes
-  started at once): safe, but they stay out of service until a repair step exists.
-- Liveness under contention: candidates that ask at the same instant can split the witnesses
-  and wait a whole hold for the next try; the wiring needs a random back-off.
+- A witness left in the pair of a change that lost to another change started at once stays out
+  of service until its operator sets it up again (above); no automatic step for that.

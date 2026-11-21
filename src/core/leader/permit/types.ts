@@ -63,6 +63,48 @@ export interface PermitRecord {
    * `writtenAt` is the holder's own wall clock, comparable only with other stamps it made.
    */
   progress?: PermitProgress
+  /** renew: op ids registered before an outward send, and outcomes reported after it (ops.ts). */
+  ops?: OpChanges
+  /**
+   * members: every op entry the writer knows. A witness joining the new list takes them, so an
+   * op registered under the old list is still refused under the new one (ops.ts).
+   */
+  ledger?: OpEntry[]
+  /**
+   * members, stage 'final': the witnesses the writer saw hold the pair step (an answer to the
+   * pair record itself, or a state at or past the pair). A witness refuses a final whose list
+   * names no majority of each list, or names itself when it never took the pair.
+   */
+  pairBy?: string[]
+  /** Which clock the writer counts its lease on (clock.ts HolderClockKind). */
+  clock?: HolderClockKind
+}
+
+/**
+ * The holder's clock: 'boottime' (Linux CLOCK_BOOTTIME) and 'continuous' (macOS
+ * mach_continuous_time) count a sleep at once; 'mono-wall' (no system clock reachable) takes the
+ * larger of the monotonic and the wall clock, which misses a sleep the wall clock was set back by.
+ */
+export type HolderClockKind = 'boottime' | 'continuous' | 'mono-wall'
+export const HOLDER_CLOCK_KINDS: readonly HolderClockKind[] = ['boottime', 'continuous', 'mono-wall']
+
+/**
+ * One outward send's op id, as the witnesses keep it (design section 6). 'registered': the
+ * holder may send it, or did, with no outcome reported: its outcome is unknown, and no one
+ * sends it again. 'sent' and 'not-sent': its outcome, reported by a holder.
+ */
+export type OpState = 'registered' | 'sent' | 'not-sent'
+export interface OpEntry {
+  id: string
+  state: OpState
+  /** The machine and incarnation that registered it. */
+  by: string
+  nonce: string
+}
+export interface OpChanges {
+  register?: string[]
+  sent?: string[]
+  notSent?: string[]
 }
 
 /**
@@ -94,6 +136,14 @@ export interface PermitParams {
   maxDriftRate: number
   /** assertMayAct refuses an outward send with less than this left (design: 15 s). */
   minSendRemainingMs: number
+  /**
+   * How long a witness keeps an op entry once its outcome is known, on its own clock (an
+   * unknown one stays until a holder reports it). Longer than any standby copy may lag.
+   */
+  opRetainMs: number
+  /** A candidate's random wait before a grant: up to backoffBaseMs, doubling per failed try to backoffMaxMs. */
+  backoffBaseMs: number
+  backoffMaxMs: number
 }
 
 export const DEFAULT_PERMIT_PARAMS: PermitParams = {
@@ -103,6 +153,9 @@ export const DEFAULT_PERMIT_PARAMS: PermitParams = {
   witnessMarginMs: 2_000,
   maxDriftRate: 0.02,
   minSendRemainingMs: 15_000,
+  opRetainMs: 3_600_000,
+  backoffBaseMs: 2_000,
+  backoffMaxMs: 30_000,
 }
 
 /** A machine to a witness. */
@@ -128,6 +181,8 @@ export interface PermitReply {
   epoch: number | null
   /** The highest progress stamp (by seq) any record it accepted carried. */
   progress: PermitProgress | null
+  /** Its op entries (ops.ts); null when it reports nothing (a broken witness). */
+  ops: OpEntry[] | null
   /** Whether this witness would grant the permission to another machine now. */
   grantable: boolean
 }
@@ -140,6 +195,8 @@ export interface PermitTransport {
 /** A clock that only measures elapsed time (milliseconds); its zero means nothing. */
 export interface ElapsedClock {
   now(): number
+  /** A holder clock says which source it counts on; the client marks its records with it. */
+  kind?: HolderClockKind
 }
 
 /** The id of the first configuration: the list alone. */
@@ -173,6 +230,9 @@ export function recordKey(r: PermitRecord): string {
     r.number, r.kind, r.holder, r.by, r.from ?? null, r.to ?? null, r.validMs,
     r.nonce, r.cfg, r.epoch, [...r.list].sort(), r.joint ? [...r.joint].sort() : null, r.newList ? [...r.newList].sort() : null, r.stage ?? null,
     r.progress ? [r.progress.seq, r.progress.writtenAt] : null,
+    r.ops ? [r.ops.register ?? [], r.ops.sent ?? [], r.ops.notSent ?? []] : null,
+    r.ledger ? r.ledger.map((e) => [e.id, e.state, e.by, e.nonce]) : null,
+    r.pairBy ? [...r.pairBy].sort() : null, r.clock ?? null,
   ])
 }
 

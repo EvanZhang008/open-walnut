@@ -7,6 +7,7 @@
 import type { ElapsedClock, PermitParams, PermitReply, PermitRequest } from './types.js'
 import { judge, grantable, type WitnessState } from './rules.js'
 import { PermitStoreCorrupt, type PermitStore } from './store.js'
+import { plainEntry } from './ops.js'
 
 export interface WitnessOptions {
   id: string
@@ -25,12 +26,17 @@ export class PermitWitness {
 
   constructor(private readonly opts: WitnessOptions) {
     this.id = opts.id
-    this.state = { held: null, acceptedAt: opts.clock.now(), list: null, joint: null, cfg: null, epoch: null, progress: null }
+    this.state = { held: null, acceptedAt: opts.clock.now(), list: null, joint: null, cfg: null, epoch: null, progress: null, ops: [] }
     try {
       const stored = opts.store.load()
       // No file: never set up (bootstrapWitnessStore, prepareJoiningWitness), or lost: it
       // takes nothing until its operator sets it up again.
-      if (stored) this.state = { held: stored.held, list: stored.list, joint: stored.joint, cfg: stored.cfg, epoch: stored.epoch, progress: stored.progress, acceptedAt: opts.clock.now() }
+      // Like the record, every op entry counts as changed at the restart: one whose outcome is
+      // known is kept a whole retention from now (longer, never shorter).
+      if (stored) {
+        const at = opts.clock.now()
+        this.state = { held: stored.held, list: stored.list, joint: stored.joint, cfg: stored.cfg, epoch: stored.epoch, progress: stored.progress, acceptedAt: at, ops: stored.ops.map((e) => ({ ...e, at })) }
+      }
     } catch (err) {
       this.broken = err instanceof PermitStoreCorrupt ? err.message : `permit store unreadable: ${(err as Error).message}`
       opts.log?.('error', 'permit witness: refusing every request, its record file is not readable', { witness: this.id, error: this.broken })
@@ -50,7 +56,7 @@ export class PermitWitness {
     const j = judge(this.state, this.id, req.record, now, this.opts.params)
     if (!j.ok) return this.reply(re, false, now, j.reason)
     try {
-      this.opts.store.save({ held: j.next.held, list: j.next.list, joint: j.next.joint, cfg: j.next.cfg, epoch: j.next.epoch, progress: j.next.progress })
+      this.opts.store.save({ held: j.next.held, list: j.next.list, joint: j.next.joint, cfg: j.next.cfg, epoch: j.next.epoch, progress: j.next.progress, ops: j.next.ops.map(plainEntry) })
     } catch (err) {
       // Not durable, so not accepted; the file may now be anything, so stop answering yes.
       this.broken = `save failed: ${(err as Error).message}`
@@ -74,6 +80,7 @@ export class PermitWitness {
       cfg: hide ? null : this.state.cfg,
       epoch: hide ? null : this.state.epoch,
       progress: hide ? null : this.state.progress,
+      ops: hide ? null : this.state.ops.map(plainEntry),
       grantable: hide ? false : grantable(this.state, this.id, now, this.opts.params),
     }
   }

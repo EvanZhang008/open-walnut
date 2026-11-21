@@ -7,10 +7,12 @@
  *
  * Event driven (send now, receive later), so a simulated network can drive it.
  */
-import type { ElapsedClock, PermitParams, PermitRecord, PermitReply, PermitTransport } from './types.js'
+import type { ElapsedClock, OpEntry, PermitParams, PermitRecord, PermitReply, PermitTransport } from './types.js'
 import { genesisConfigId, majorityOf, nextConfigId, recordKey, sameList, sameRecord } from './types.js'
 import { randomBytes } from 'node:crypto'
-import { holderLeaseMs } from './rules.js'
+import { backoffDelayMs, holderLeaseMs } from './rules.js'
+import { OpBook, type OpStatus } from './ops.js'
+import { PairEvidence, planRepair, type PairView, type RepairPlan } from './repair.js'
 
 export interface ClientOptions {
   id: string
@@ -29,6 +31,8 @@ export interface ClientOptions {
   /** Elapsed time that never runs slow: createHolderClock(). */
   clock: ElapsedClock
   params: PermitParams
+  /** Checked on every mayAct(): false stops acting at once (InstanceLock.held). */
+  guard?: () => boolean
 }
 
 export class PermitNotHeld extends Error {
@@ -57,19 +61,22 @@ export class PermitClient {
   /** This process's incarnation: on every record it writes. */
   private readonly nonce: string
   /**
-   * The pair step is known to stand: our own pair record reached both majorities, or a read
-   * showed a majority of each list in the pair (or past it). Only then may the final step
-   * go: a pair learned from a read alone may still be held by a minority of the old list.
+   * Who was seen holding which pair: the final step goes only once a majority of each list
+   * was (an answer to our own pair record counts, and so does a read), and names them.
    */
-  private pairConfirmed = false
+  private evidence = new PairEvidence()
   private pending: Pending | null = null
   private lease: { record: PermitRecord; until: number } | null = null
   /** Set by handover(): acts on nothing until its own cancel is accepted or the handover is known. */
   private frozen = false
+  private stopped: string | null = null
   private top = 0
   private reads = new Map<string, PermitReply>()
   /** The last progress reported: every later record of this machine carries it too. */
   private progress: PermitRecord['progress'] | undefined
+  private readonly ops: OpBook
+  /** Grants proposed since this incarnation last had a record chosen: the back-off grows with it. */
+  private grantTries = 0
 
   constructor(private readonly opts: ClientOptions) {
     this.id = opts.id
@@ -77,10 +84,16 @@ export class PermitClient {
     this.cfg = opts.cfg ?? genesisConfigId(this.list)
     this.epoch = opts.epoch ?? 0
     this.nonce = opts.testNonce ?? randomBytes(8).toString('hex')
+    this.ops = new OpBook({ by: this.id, nonce: this.nonce }, () => opts.clock.now(), opts.params.opRetainMs)
   }
 
   witnessList(): string[] {
     return [...this.list]
+  }
+
+  /** This process's incarnation (the nonce on its records). */
+  incarnation(): string {
+    return this.nonce
   }
 
   /** The configuration this machine judges by: its list, the pair's new list, the id. */
@@ -99,19 +112,70 @@ export class PermitClient {
   }
 
   remainingMs(): number {
-    if (this.frozen || !this.lease || this.lease.record.holder !== this.id) return 0
+    if (this.stopped || this.frozen || !this.lease || this.lease.record.holder !== this.id) return 0
+    if (this.opts.guard && !this.opts.guard()) return 0
     return Math.max(0, this.lease.until - this.opts.clock.now())
   }
 
-  /** The check an outward send makes first: refuses with less than minSendRemainingMs left. */
+  /** The check every write makes first: refuses with less than minSendRemainingMs left. */
   assertMayAct(opId: string, minRemainingMs = this.opts.params.minSendRemainingMs): void {
     const left = this.remainingMs()
-    if (left <= 0) throw new PermitNotHeld(opId, this.frozen ? 'a handover is in progress' : 'no live permission')
+    if (left <= 0) throw new PermitNotHeld(opId, this.stopped ? `stopped: ${this.stopped}` : this.frozen ? 'a handover is in progress' : 'no live permission')
     if (left < minRemainingMs) throw new PermitNotHeld(opId, `only ${Math.round(left)} ms left, ${minRemainingMs} ms needed`)
+  }
+
+  /**
+   * The check an outward send makes first (design section 6): the permission, as assertMayAct,
+   * and the op id registered with a majority by this incarnation, with no outcome reported yet.
+   */
+  assertMaySend(opId: string): void {
+    this.assertMayAct(opId)
+    const st = this.ops.status(opId)
+    if (st !== 'registered') throw new PermitNotHeld(opId, `op ${st === 'pending' || st === 'free' ? 'not registered with a majority' : st}`)
+  }
+
+  /**
+   * Register op ids before their sends: a renew that carries them. Ids any witness reported
+   * (an earlier holder's, sent or of unknown outcome) are refused and returned: never send
+   * them. The rest may be sent once assertMaySend passes.
+   */
+  registerOps(ids: string[]): { record: PermitRecord | null; refused: Array<{ id: string; status: OpStatus }> } {
+    if (!this.mayAct()) throw new PermitNotHeld(ids.join(','), 'no live permission')
+    const refused = this.ops.askRegister(ids)
+    return { record: refused.length === ids.length ? null : this.renew(), refused }
+  }
+
+  /**
+   * After a send: whether it left. `sent: false` only when it surely did not (it never reached
+   * the network); when unsure, report nothing and the op stays unknown. Rides the next renew.
+   * The same reports an outcome the user checked for an op another holder left unknown.
+   */
+  reportOutcome(opId: string, sent: boolean): void {
+    this.ops.askOutcome(opId, sent)
+  }
+
+  opStatus(opId: string): OpStatus {
+    return this.ops.status(opId)
+  }
+
+  /** Ops registered by another machine or an earlier process with no outcome: never resent, to be checked by the user. */
+  unresolvedOps(): OpEntry[] {
+    return this.ops.unresolved()
   }
 
   isFrozen(): boolean {
     return this.frozen
+  }
+
+  /** Stop for good (the instance lock was lost): acts on nothing and proposes nothing again. */
+  stop(reason: string): void {
+    this.stopped = reason
+    this.lease = null
+    this.pending = null
+  }
+
+  stoppedReason(): string | null {
+    return this.stopped
   }
 
   /** The highest record number this machine has seen anywhere. */
@@ -119,14 +183,25 @@ export class PermitClient {
     return this.top
   }
 
+  /**
+   * How long to wait before the next grant (the permission is free and several candidates may
+   * see it at once): random, up to backoffBaseMs, doubling with each grant of this incarnation
+   * that did not stand, to backoffMaxMs.
+   */
+  grantDelayMs(random: () => number = Math.random): number {
+    return backoffDelayMs(this.grantTries, random, this.opts.params)
+  }
+
   /** Extend this machine's permission. null while a handover is open: the old holder never renews then. */
   renew(progress?: PermitRecord['progress']): PermitRecord | null {
-    if (this.frozen) return null
-    return this.propose({ kind: 'renew', holder: this.id, ...(progress ? { progress } : {}) })
+    if (this.frozen || this.stopped) return null
+    const ops = this.ops.changes()
+    return this.propose({ kind: 'renew', holder: this.id, ...(progress ? { progress } : {}), ...(ops ? { ops } : {}) })
   }
 
   /** Ask for the permission when the old one ran out (see mayAskForTakeover for the automatic rule). */
   requestGrant(progress?: PermitRecord['progress']): PermitRecord {
+    this.grantTries++
     return this.propose({ kind: 'grant', holder: this.id, ...(progress ? { progress } : {}) })
   }
 
@@ -146,7 +221,7 @@ export class PermitClient {
    * old and the new list, then, once it reached a majority of both, the final step, sent by
    * itself. Called again for the same new list while the pair step stands, it sends the
    * final step again. `from` names the old list when this machine follows another one (it
-   * finishes a change its holder left half done).
+   * finishes a change its holder left half done; repairChange() finds it by itself).
    */
   changeWitnesses(newList: string[], from?: { list: string[]; cfg: string; epoch: number }): PermitRecord {
     const next = [...newList].sort()
@@ -155,16 +230,43 @@ export class PermitClient {
       this.cfg = from.cfg
       this.epoch = from.epoch
       this.joint = null
-      this.pairConfirmed = false
     }
-    if (this.joint && sameList(this.joint, next)) {
-      return this.pairConfirmed ? this.proposeFinal() : this.propose({ kind: 'members', stage: 'joint', holder: this.id, newList: next }, next)
+    if (this.joint && sameList(this.joint, next) && this.evidence.stands(this.pairView()!)) return this.proposeFinal()
+    return this.propose({ kind: 'members', stage: 'joint', holder: this.id, newList: next, ledger: this.ops.ledger() }, next)
+  }
+
+  /**
+   * Finish a list change left between its two steps, from the latest read (call read() first):
+   * the final step when the pair is known to stand, else the pair step again when enough
+   * witnesses of both lists answer, else nothing (`blocked` names whom it waits for). The
+   * witnesses take it from the live holder, or from anyone once the permission ran out
+   * (mayAskForTakeover with the pair's new list decides when a candidate may).
+   */
+  repairChange(): { plan: RepairPlan; record: PermitRecord | null } {
+    const plan = this.changePlan()
+    if (plan.kind === 'none' || plan.kind === 'blocked' || this.stopped || this.frozen) return { plan, record: null }
+    const p = this.pending
+    if (p && p.record.kind === 'members' && sameList(p.record.newList, plan.pair.next) && this.outcome() === 'open') {
+      this.retransmit()
+      return { plan, record: p.record }
     }
-    return this.propose({ kind: 'members', stage: 'joint', holder: this.id, newList: next }, next)
+    this.joint = [...plan.pair.next]
+    if (plan.kind === 'final') return { plan, record: this.proposeFinal() }
+    return { plan, record: this.propose({ kind: 'members', stage: 'joint', holder: this.id, newList: [...plan.pair.next], ledger: this.ops.ledger() }, plan.pair.next) }
+  }
+
+  /** What repairChange() would do now, without doing it. */
+  changePlan(): RepairPlan {
+    return planRepair({ ...this.config(), reads: this.readBack(), evidence: this.evidence })
+  }
+
+  private pairView(): PairView | null {
+    return this.joint ? { cfg: this.cfg, epoch: this.epoch, list: [...this.list], next: [...this.joint] } : null
   }
 
   private proposeFinal(): PermitRecord {
-    return this.propose({ kind: 'members', stage: 'final', holder: this.id, newList: [...this.joint!] })
+    const pair = this.pairView()!
+    return this.propose({ kind: 'members', stage: 'final', holder: this.id, newList: [...pair.next], pairBy: this.evidence.shown(pair), ledger: this.ops.ledger() })
   }
 
   /** Send the open proposal again to the witnesses that have not accepted it (same record, same start). */
@@ -174,10 +276,17 @@ export class PermitClient {
     for (const w of this.targets(p.record)) if (!p.acks.has(w)) this.opts.transport.send(w, { type: 'propose', record: p.record })
   }
 
-  /** Ask every witness what it holds; answers land in standing() and readBack(). */
+  /**
+   * Ask every witness what it holds; answers land in standing() and readBack(). Besides its
+   * lists, it asks the new witnesses of a change in flight: its own open one, or one the last
+   * read showed (repairChange needs to know whether they answer).
+   */
   read(): void {
+    const p = this.pending?.record
+    const seen = [...this.reads.values()].flatMap((r) => (r.joint && this.list.includes(r.witness) ? r.joint : []))
     this.reads.clear()
-    for (const w of new Set([...this.list, ...(this.joint ?? [])])) this.opts.transport.send(w, { type: 'read' })
+    const to = new Set([...this.list, ...(this.joint ?? []), ...(p?.kind === 'members' ? p.newList! : []), ...seen])
+    for (const w of to) this.opts.transport.send(w, { type: 'read' })
   }
 
   readBack(): PermitReply[] {
@@ -215,7 +324,11 @@ export class PermitClient {
   }
 
   receive(reply: PermitReply): void {
+    if (this.stopped) return
     if (reply.held && reply.held.number > this.top) this.top = reply.held.number
+    // Every answer says where its witness stands and what op ids it holds.
+    this.evidence.note(reply)
+    this.ops.learn(reply.ops)
     if (reply.re === 'read') {
       this.reads.set(reply.witness, reply)
       this.learnFromRead()
@@ -236,10 +349,13 @@ export class PermitClient {
   }
 
   private propose(fields: Omit<PermitRecord, 'number' | 'by' | 'nonce' | 'validMs' | 'list' | 'joint' | 'cfg' | 'epoch'>, joint: string[] | null = this.joint): PermitRecord {
+    if (this.stopped) throw new Error(`permit client stopped: ${this.stopped}`)
     if (fields.progress) this.progress = { ...fields.progress, by: this.id }
+    const kind = this.opts.clock.kind
     const record: PermitRecord = {
       ...fields,
       ...(this.progress ? { progress: this.progress } : {}),
+      ...(kind ? { clock: kind } : {}),
       number: this.top + 1, by: this.id, nonce: this.nonce, validMs: this.opts.params.validMs, list: [...this.list], cfg: this.cfg, epoch: this.epoch,
       ...(joint ? { joint: [...joint] } : {}),
     }
@@ -260,16 +376,14 @@ export class PermitClient {
 
   private onChosen(p: Pending): void {
     const r = p.record
-    if (r.kind === 'members' && r.stage === 'joint') {
-      this.joint = [...r.newList!]
-      this.pairConfirmed = true
-    }
+    this.grantTries = 0
+    this.ops.chosen(r.ops)
+    if (r.kind === 'members' && r.stage === 'joint') this.joint = [...r.newList!]
     if (r.kind === 'members' && r.stage === 'final') {
       this.cfg = nextConfigId(r.cfg, r.newList!)
       this.epoch = r.epoch + 1
       this.list = [...r.newList!]
       this.joint = null
-      this.pairConfirmed = false
     }
     if (r.holder === this.id) {
       const until = p.sentAt + holderLeaseMs(this.opts.params)
@@ -281,21 +395,9 @@ export class PermitClient {
       this.frozen = false
     }
     this.pending = null
-    // The pair step reached both majorities: no majority of the old list alone can form
-    // any more, so the final step may go.
+    // The pair step reached both majorities (its acks are in the evidence): no majority of the
+    // old list alone can form any more, so the final step may go.
     if (r.kind === 'members' && r.stage === 'joint') this.proposeFinal()
-  }
-
-  /**
-   * A majority of `old` and of `next` report this very pair, or the configuration it leads
-   * to (by id: the same list from an earlier configuration is not it).
-   */
-  private pairShownByReads(cfg: string, old: string[], next: string[]): boolean {
-    const target = nextConfigId(cfg, next)
-    const there = (r: PermitReply) =>
-      !!r.list && ((r.cfg === cfg && sameList(r.list, old) && sameList(r.joint, next)) || (r.cfg === target && sameList(r.list, next) && !r.joint))
-    const count = (l: string[]) => l.filter((w) => { const r = this.reads.get(w); return !!r && there(r) }).length
-    return count(old) >= majorityOf(old) && count(next) >= majorityOf(next)
   }
 
   /** The lists a record counts by: its list, and the new list during a change. */
@@ -303,10 +405,13 @@ export class PermitClient {
     return r.joint ? [r.list, r.joint] : [r.list]
   }
 
-  /** Another machine's record above our lease's: stop at once (only ever ends a permission early). */
+  /**
+   * A record above our lease's that this incarnation did not write: stop at once (only ever
+   * ends a permission early). Another process of the same machine counts as another machine.
+   */
   private dropIfSuperseded(reply: PermitReply): void {
     const h = reply.held
-    if (this.lease && h && h.holder !== this.id && h.number > this.lease.record.number) this.lease = null
+    if (this.lease && h && h.number > this.lease.record.number && !(h.by === this.id && h.nonce === this.nonce)) this.lease = null
   }
 
   private learnFromRead(): void {
@@ -329,10 +434,8 @@ export class PermitClient {
         this.joint = c.joint
         this.cfg = c.cfg
         this.epoch = c.epoch
-        this.pairConfirmed = false
       }
     }
-    if (this.joint && !this.pairConfirmed) this.pairConfirmed = this.pairShownByReads(this.cfg, this.list, this.joint)
     // Our handover is known to stand when a majority reports it or a later record of its new holder.
     const s = this.standing()
     if (this.frozen && s && s.holder !== this.id) {

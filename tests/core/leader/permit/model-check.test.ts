@@ -35,6 +35,18 @@ interface Variant {
   pool5?: boolean
   /** One message in ten takes one to five minutes (old change steps arriving late). */
   lateSteps?: boolean
+  /** Candidates ask the instant the rule lets them, with no random back-off. */
+  noBackoff?: boolean
+  /** Holders send outward ops (an op id about every 10 s) and the copy misses half the done marks. */
+  ops?: boolean
+  /** Negative control (ops): send as soon as the registration is proposed. */
+  sendUnregistered?: boolean
+  /** Negative control (ops + members): list changes carry no op entries. */
+  dropLedger?: boolean
+  /** Every machine runs a second process beside the first (same id, its own incarnation). */
+  twins?: boolean
+  /** Negative control (twins): both processes of a machine share one incarnation. */
+  twinsShareNonce?: boolean
 }
 
 function schedule(seed: number, v: Variant = {}): { world: World; totalMs: number } {
@@ -57,23 +69,27 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
     }
   }
   for (const id of M) {
-    const m = world.addMachine(id, W, { drift: drift(-1), wallOffset: (r() * 2 - 1) * 30_000, pureMonotonic: v.pureMonotonic })
+    const m = world.addMachine(id, W, { drift: drift(-1), wallOffset: (r() * 2 - 1) * 30_000, pureMonotonic: v.pureMonotonic, ...(v.twinsShareNonce ? { nonce: `${id}-one` } : {}) })
     if (v.reachableMajority) patchReachableMajority(m.c)
+    if (v.dropLedger) dropLedger(m.c)
+    if (v.twins) world.addMachine(id, W, { key: `${id}#2`, clockOf: id, pureMonotonic: v.pureMonotonic, ...(v.twinsShareNonce ? { nonce: `${id}-one` } : {}) })
   }
-  for (const id of M) {
+  const processes = v.twins ? M.flatMap((id) => [id, `${id}#2`]) : M
+  if (v.ops) {
+    for (let i = 0, t = 0; t < (v.minutes ?? 15) * 60_000; i++, t += 5_000 + r() * 10_000) world.at(t, () => { world.outbox.push(`op-${i}`) })
+  }
+  for (const id of processes) {
     pilot(world, id, {
+      ...(v.ops ? { ops: { markDoneShare: 0.5, sendUnregistered: v.sendUnregistered } } : {}),
       wantsLead: true,
       tickMs: v.tickMs,
+      backoff: !v.noBackoff,
       sparseStamps: v.restarts,
       cancelChance: 0.3,
       onTick: (m) => {
-        // About one manual switch per machine-held 3 minutes, whatever the tick.
-        // A change left between its two steps is finished first.
-        const pairTo = m.c.jointList()
-        if (pairTo && r() < 0.5) {
-          m.c.changeWitnesses(pairTo)
-          return
-        }
+        // About one manual switch per machine-held 3 minutes, whatever the tick. (A change
+        // left between its two steps is finished first: the pilot's repairChange.)
+        if (m.c.jointList()) return
         if (v.members && r() < (v.tickMs ?? 5_000) / (v.pool5 ? 60_000 : 240_000)) {
           const list = m.c.witnessList()
           const out = list[Math.floor(r() * list.length)]
@@ -122,9 +138,10 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
         for (const w of pool) world.partition(a, w, true)
         world.after(180_000 + r() * 240_000, () => { for (const w of pool) world.partition(a, w, false) })
       } else {
-        const id = (v.restarts && world.acting()[0]) || M[Math.floor(r() * 3)]
-        world.restartMachine(id, W, 1_000 + r() * 20_000)
+        const id = (v.restarts && world.acting()[0]) || processes[Math.floor(r() * processes.length)]
+        world.restartMachine(id, W, 1_000 + r() * 20_000, undefined, v.ops)
         if (v.reachableMajority) patchReachableMajority(world.machines.get(id)!.c)
+        if (v.dropLedger) dropLedger(world.machines.get(id)!.c)
       }
     })
   }
@@ -142,32 +159,49 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
   return { world, totalMs }
 }
 
+/** Negative control: list changes carry no op entries to the witnesses that join. */
+function dropLedger(c: object): void {
+  ;(c as { ops: { ledger: () => unknown[] } }).ops.ledger = () => []
+}
+
+/** Op ids sent by more than one process. */
+function doubleSends(world: World): string[] {
+  return [...world.sends.entries()].filter(([, s]) => s.length > 1).map(([id]) => id)
+}
+
 /** The bug the design names in the old takeover: a majority of whoever answered. */
 function patchReachableMajority(c: object): void {
   const x = c as { chosen: (p: { acks: Set<string>; refusals: Map<string, string> }) => boolean }
   x.chosen = (p) => p.acks.size > 0 && p.acks.size * 2 > p.acks.size + p.refusals.size
 }
 
-function sweep(seeds: number, v: Variant = {}, from = 1) {
+/** Async, yielding after every schedule: one long synchronous block starves vitest's worker channel. */
+async function sweep(seeds: number, v: Variant = {}, from = 1, stopAtFirst = false) {
   let violations = 0
   let firstBad: number | null = null
   let active = 0
   let total = 0
+  let sent = 0
+  let unknown = 0
   for (let seed = from; seed < from + seeds; seed++) {
+    await new Promise((res) => setImmediate(res))
     const { world, totalMs } = schedule(seed, v)
-    if (world.violations.length > 0) {
+    sent += world.sends.size
+    unknown += world.unknownSeen.size
+    if (world.violations.length > 0 || doubleSends(world).length > 0) {
       violations++
       firstBad ??= seed
+      if (stopAtFirst) break
     }
     for (const ms of world.activeMs.values()) active += ms
     total += totalMs
   }
-  return { violations, firstBad, activeShare: active / total }
+  return { violations, firstBad, activeShare: active / total, sent, unknown }
 }
 
 describe('write permission: random schedules', () => {
-  it('never lets two machines act at once (300 seeds, faults, drift at the edge of the bound)', () => {
-    const r = sweep(300)
+  it('never lets two machines act at once (300 seeds, faults, drift at the edge of the bound)', async () => {
+    const r = await sweep(300)
     expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
     // Not vacuous: someone held the permission most of the time.
     expect(r.activeShare).toBeGreaterThan(0.5)
@@ -175,44 +209,72 @@ describe('write permission: random schedules', () => {
 
   // Candidates that ask the instant they may, in chunks so no one test holds the worker long.
   for (let from = 1; from <= 100; from += 25) {
-    it(`never lets two machines act at once when candidates ask the instant they may (seeds ${from} to ${from + 24})`, () => {
-      const r = sweep(25, { tickMs: 250 }, from)
+    it(`never lets two machines act at once when candidates ask the instant they may (seeds ${from} to ${from + 24})`, async () => {
+      const r = await sweep(25, { tickMs: 250, noBackoff: true }, from)
       expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
       expect(r.activeShare).toBeGreaterThan(0.5)
     }, 60_000)
   }
 
-  it('never lets two machines act at once when witnesses die after one in ten records they accept (100 seeds)', () => {
-    const r = sweep(100, { crashRate: 0.1 })
+  it('never lets two machines act at once when witnesses die after one in ten records they accept (100 seeds)', async () => {
+    const r = await sweep(100, { crashRate: 0.1 })
     expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
     expect(r.activeShare).toBeGreaterThan(0.3)
   }, 60_000)
 
   // In chunks: one long synchronous block starves vitest's worker channel.
   for (let from = 1; from <= 200; from += 50) {
-    it(`never lets two machines act at once when the holder restarts mid-renew and its records repeat (seeds ${from} to ${from + 49})`, () => {
-      const r = sweep(50, { restarts: true, tickMs: 1_000 }, from)
+    it(`never lets two machines act at once when the holder restarts mid-renew and its records repeat (seeds ${from} to ${from + 49})`, async () => {
+      const r = await sweep(50, { restarts: true, tickMs: 1_000 }, from)
       expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
       expect(r.activeShare).toBeGreaterThan(0.3)
     }, 60_000)
   }
 
-  it('never lets two machines act at once across many list changes over five witnesses, with steps arriving minutes late (100 seeds)', () => {
-    const r = sweep(100, { members: true, pool5: true, lateSteps: true })
+  it('never lets two machines act at once across many list changes over five witnesses, with steps arriving minutes late (100 seeds)', async () => {
+    const r = await sweep(100, { members: true, pool5: true, lateSteps: true })
     expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
   }, 60_000)
 
   // Seed 12 here found the bug of a one-step list change (a witness that took a change no
   // majority of the old list had confirmed served the new list at once): two disjoint
   // majorities. The change is two steps now (rules.ts judge).
-  it('never lets two machines act at once while holders swap witnesses in and out (200 seeds)', () => {
-    const r = sweep(200, { members: true })
+  it('never lets two machines act at once while holders swap witnesses in and out (200 seeds)', async () => {
+    const r = await sweep(200, { members: true })
     expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
     expect(r.activeShare).toBeGreaterThan(0.3)
   }, 60_000)
 
-  it('holds with no faults beyond the network across longer runs', () => {
-    const r = sweep(20, { minutes: 60 })
+  // Ops: no op id is ever sent by two processes, whatever the faults; the unknown ones are seen.
+  it('never sends one op twice: holders register before each send, then crash, restart and take over (100 seeds)', async () => {
+    const r = await sweep(100, { ops: true, restarts: true, tickMs: 1_000 })
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+    expect(r.sent).toBeGreaterThan(2_500)
+    expect(r.unknown).toBeGreaterThan(0)
+  }, 120_000)
+
+  it('never sends one op twice across list changes over five witnesses (60 seeds)', async () => {
+    const r = await sweep(60, { ops: true, members: true, pool5: true, restarts: true, tickMs: 1_000 })
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+    expect(r.sent).toBeGreaterThan(600)
+  }, 120_000)
+
+  // Two processes of every machine (a second server beside the first): the witnesses tell them apart.
+  it('never lets two processes act at once when each machine runs two (60 seeds)', async () => {
+    const r = await sweep(60, { twins: true, tickMs: 1_000 })
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+    expect(r.activeShare).toBeGreaterThan(0.3)
+  }, 120_000)
+
+  // A change left between its steps by a holder that restarted is finished by whoever holds next.
+  it('keeps working when holders restart in the middle of list changes (60 seeds)', async () => {
+    const r = await sweep(60, { members: true, pool5: true, restarts: true, tickMs: 1_000 })
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+    expect(r.activeShare).toBeGreaterThan(0.3)
+  }, 120_000)
+
+  it('holds with no faults beyond the network across longer runs', async () => {
+    const r = await sweep(20, { minutes: 60 })
     expect(r.firstBad).toBeNull()
     expect(r.activeShare).toBeGreaterThan(0.6)
   }, 120_000)
@@ -221,25 +283,38 @@ describe('write permission: random schedules', () => {
     it('margins removed: drift turns it red', async () => {
       let violations = 0
       for (let from = 1; from <= 40 && violations === 0; from += 10) {
-        // Yield between chunks so vitest's worker channel is not starved.
-        await new Promise((res) => setImmediate(res))
-        violations += sweep(10, { params: { holderMarginMs: 0, witnessMarginMs: 0, maxDriftRate: 0 }, tickMs: 250, worstDrift: true, delayMs: [1, 20], splitsOnly: true }, from).violations
+        violations += (await sweep(10, { params: { holderMarginMs: 0, witnessMarginMs: 0, maxDriftRate: 0 }, tickMs: 250, noBackoff: true, worstDrift: true, delayMs: [1, 20], splitsOnly: true }, from)).violations
       }
       expect(violations).toBeGreaterThan(0)
     }, 120_000)
 
-    it('a witness that answers before its record is on disk: crashes turn it red', () => {
-      const r = sweep(300, { lazyStore: true, crashRate: 0.2 })
+    it('a witness that answers before its record is on disk: crashes turn it red', async () => {
+      const r = await sweep(300, { lazyStore: true, crashRate: 0.2 })
       expect(r.violations).toBeGreaterThan(0)
     }, 120_000)
 
-    it('a holder that counts on the monotonic clock alone: sleep turns it red', () => {
-      const r = sweep(300, { pureMonotonic: true })
+    it('a holder that counts on the monotonic clock alone: sleep turns it red', async () => {
+      const r = await sweep(300, { pureMonotonic: true })
       expect(r.violations).toBeGreaterThan(0)
     }, 120_000)
 
-    it('a majority of the witnesses that answered: splits turn it red', () => {
-      const r = sweep(300, { reachableMajority: true })
+    it('a send before its registration stood: crashes and takeovers send ops twice', async () => {
+      const r = await sweep(100, { ops: true, restarts: true, tickMs: 1_000, sendUnregistered: true }, 1, true)
+      expect(r.violations).toBeGreaterThan(0)
+    }, 120_000)
+
+    it('list changes that carry no op entries: an op sent before a change is sent again after', async () => {
+      const r = await sweep(100, { ops: true, members: true, pool5: true, restarts: true, tickMs: 1_000, dropLedger: true }, 1, true)
+      expect(r.violations).toBeGreaterThan(0)
+    }, 120_000)
+
+    it('two processes of a machine with one incarnation: they act at once', async () => {
+      const r = await sweep(100, { twins: true, twinsShareNonce: true, tickMs: 1_000 }, 1, true)
+      expect(r.violations).toBeGreaterThan(0)
+    }, 120_000)
+
+    it('a majority of the witnesses that answered: splits turn it red', async () => {
+      const r = await sweep(300, { reachableMajority: true })
       expect(r.violations).toBeGreaterThan(0)
     }, 120_000)
   })
