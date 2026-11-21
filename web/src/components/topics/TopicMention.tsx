@@ -116,7 +116,7 @@ function MentionChip({ member, written }: { member: Member; written: string }) {
         onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}>
         <MemberAvatar who={{ name: member.name, ref: member.ref }} size={16} />
         {/* A copy of the words keeps the "@" (the avatar is left out of a selection). */}
-        <span className="topic-sr-only">@</span>
+        <span className="topic-mention-at">@</span>
         <span className="topic-mention-label">{shortName(member.name)}</span>
         {member.ref.kind === 'person' && <span className="topic-mention-mail" aria-hidden="true" />}
       </button>

@@ -107,16 +107,19 @@
 
 /* "@Name" in a message: the member's chip (TopicMention.tsx). */
 .topic-mention-slot { display: inline; }
+/* Inline-block, its parts inline: a selection copies it as "@Name" on the line, with no breaks. */
 .topic-mention {
-  display: inline-flex; align-items: center; gap: 4px; max-width: 100%; margin: 0 1px; padding: 1px 6px 1px 2px;
-  border: 0; border-radius: 999px; vertical-align: -3px; cursor: pointer;
+  display: inline-block; max-width: 100%; margin: 0 1px; padding: 1px 6px 1px 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  border: 0; border-radius: 999px; vertical-align: -4px; cursor: pointer; text-align: left;
   background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent);
   font: inherit; font-size: 13px; font-weight: 500; line-height: 18px;
 }
 .topic-mention:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
 .topic-mention:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.topic-mention .topic-avatar, .topic-mention-mail { flex: none; user-select: none; -webkit-user-select: none; }
-.topic-mention-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topic-mention .topic-avatar, .topic-mention-mail { display: inline-flex; vertical-align: -3px; margin-right: 4px; user-select: none; -webkit-user-select: none; }
+.topic-mention-mail { margin: 0 0 0 4px; }
+/* The "@" a copy keeps; nothing on screen. */
+.topic-mention-at { font-size: 0; }
 .topic-mention.is-left { opacity: 0.6; }
 /* A person reached by email: a small envelope after the name. */
 .topic-mention-mail {
