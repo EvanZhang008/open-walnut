@@ -139,3 +139,50 @@ describe('hostCauseKey / hostOfCauseKey', () => {
     expect(hostOfCauseKey('host:')).toBeNull();
   });
 });
+
+/**
+ * Every sentence the host network's dial explainer can say about a host is a
+ * link-down cause naming that host. Driven through every answer the link gives
+ * (offline, online, unknown), so a new sentence there that this file does not
+ * know fails here (2026-11-21: "Host network: clouddev is reachable, but the
+ * Walnut daemon there did not answer" became its own start-failure card).
+ */
+describe('the host network dial sentences are host outages', () => {
+  it('each answer of the link names the host as the cause', async () => {
+    const { explainNetDialFailure } = await import('../../../src/core/hosts/net-link.js');
+    const { namesLinkDown } = await import('../../../src/core/notifications/error-cause.js');
+    const raw = new Error('WebSocket connection failed: ECONNRESET (host=devbox-2, url=ws://127.0.0.1:59116)');
+    for (const up of [true, false, null]) {
+      const err = await explainNetDialFailure(raw, 'devbox-2', 'devbox-2', async () => up);
+      // Unknown (null) hands back the socket's own words, which name no host: the
+      // log line's host hint carries it then, as the start-failure log gives it.
+      const input = up === null ? { text: err.message, host: 'devbox-2' } : { text: err.message };
+      expect(causeKeyForError(input), `${up}: ${err.message}`).toBe('host:devbox-2');
+      if (up !== null) expect(namesLinkDown(err.message), `${up}: ${err.message}`).toBe(true);
+    }
+  });
+
+  it('every sentence net-link.ts throws about a host is a host outage, or listed here with why not', async () => {
+    // Read from the source, so a new sentence there fails here until it is decided.
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { namesLinkDown } = await import('../../../src/core/notifications/error-cause.js');
+    const src = fs.readFileSync(path.resolve('src/core/hosts/net-link.ts'), 'utf8');
+    const sentences = [...src.matchAll(/new Error\(`([^`]+)`\)/g)].map((m) => m[1]!);
+    expect(sentences.length).toBeGreaterThanOrEqual(4);
+    // This machine's own daemon needs a restart: not the host's outage.
+    const notAnOutage = [/has no host network yet/];
+    for (const tpl of sentences) {
+      const text = tpl.replace(/\$\{host\}/g, 'devbox-2').replace(/\$\{[^}]+\}/g, 'x');
+      if (notAnOutage.some((re) => re.test(text))) continue;
+      expect(causeKeyForError({ text }), text).toBe('host:devbox-2');
+      expect(namesLinkDown(text), text).toBe(true);
+    }
+  });
+
+  it('the cause survives the sentence being quoted inside another', () => {
+    expect(causeKeyForError({
+      text: 'Could not reach clouddev: walnut: Walnut cannot reach New big clouddev right now (Host network: devbox is reachable, but the Walnut daemon there did not answer (is Walnut running there?))',
+    })).toBe('host:devbox');
+  });
+});

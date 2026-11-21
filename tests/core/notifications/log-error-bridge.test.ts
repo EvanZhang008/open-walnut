@@ -862,6 +862,42 @@ describe('a host outage folds into one plain card', () => {
     expect(feed[0].recoveryKey).toBe('session:s1');
   });
 
+  it('a start that never reached its host folds by its link-failure kind, whatever its words', async () => {
+    // Every kind is decided here (typed: a new kind must be added): only 'no-link'
+    // (nothing reached the host) is the host's outage; 'lost' and 'no-answer' may
+    // have run on a connected host and stay their own card.
+    const { LINK_FAILURE_KINDS } = await import('../../../src/providers/link-failure.js');
+    const folds = { 'no-link': true, lost: false, 'no-answer': false } satisfies Record<(typeof LINK_FAILURE_KINDS)[number], boolean>;
+    expect(Object.keys(folds).sort()).toEqual([...LINK_FAILURE_KINDS].sort());
+    const session = createSubsystemLogger('session');
+    LINK_FAILURE_KINDS.forEach((kind, i) => {
+      session.error('transport start failed', { host: `box${i}`, taskId: `t${i}`, linkKind: kind, error: 'a dial failure in words nobody listed' });
+    });
+    const feed = await feedAfterCount(LINK_FAILURE_KINDS.length);
+    LINK_FAILURE_KINDS.forEach((kind, i) => {
+      const folded = feed.some(n => n.dedupKey === `logerr:cause:host:box${i}`);
+      expect(folded, kind).toBe(folds[kind]);
+    });
+  });
+
+  it('the start-failure log says its link-failure kind (the producer side of the fold)', () => {
+    const src = fs.readFileSync(path.resolve('src/providers/claude-code-session.ts'), 'utf8');
+    const at = src.indexOf("('transport start failed', {");
+    expect(at).toBeGreaterThan(0);
+    expect(src.slice(at, at + 600)).toContain('linkKind: linkFailure');
+  });
+
+  it('the host network sentence for a silent daemon folds under its host', async () => {
+    const session = createSubsystemLogger('session');
+    session.error('transport start failed', {
+      host: 'devbox', taskId: 't1', isRemote: true,
+      error: 'Host network: devbox is reachable, but the Walnut daemon there did not answer (is Walnut running there?)',
+    });
+    const feed = await feedAfterFlush();
+    expect(feed[0].dedupKey).toBe('logerr:cause:host:devbox');
+    expect(feed[0].title).toBe('Cannot connect to devbox');
+  });
+
   it('a route card that names the host keeps its own condition', async () => {
     const web = createSubsystemLogger('web');
     web.error('GET /api/x → 500', { recoveryKey: 'route:GET /api/x', message: down('devbox') });

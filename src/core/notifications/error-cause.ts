@@ -69,6 +69,14 @@ const CONNECTIVITY_RE = new RegExp(
     // that never came back, with the host named in the same sentence.
     'daemon dir check on \\S+ (?:did not finish|answered without)',
     'getaddrinfo E(?:NOTFOUND|AI_AGAIN)',
+    // The host network's sentences for a link that is not there (net-link.ts):
+    // the machine is offline, it answers but its daemon does not, or no route
+    // opened to it (2026-11-21: a resume right after the Mac woke read the second
+    // and became its own "Couldn't start a session" card). Its "has no host
+    // network yet" is this machine's own daemon needing a restart, not the
+    // host's outage, so it stays its own card.
+    'is not online on the host network',
+    'host network: \\S+ (?:is reachable, but the walnut daemon there )?did not answer',
     'no route to host',
     'host unreachable',
     'ssh tunnel',
@@ -94,6 +102,8 @@ const TEXT_HOST_RES: RegExp[] = [
   // and mint a junk `host:the` group whose recovery signal never arrives.
   /DaemonConnection not connected to ([\w.-]+)/i,
   /daemon dir check on ([\w.-]+) (?:did not finish|answered without)/i,
+  /Host network: ([\w.-]+) (?:is reachable, but the Walnut daemon there )?did not answer/i,
+  /([\w.-]+) is not online on the host network/i,
 ];
 
 /**

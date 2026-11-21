@@ -36,7 +36,7 @@ import { redactSensitiveText } from '../../logging/redact.js';
 import { releaseOutageRepeats } from '../../logging/outage-repeat.js';
 import { upsertNotification } from './store.js';
 import { hostOutageCopy, humanizeErrorNotification, isManagedDaemonUpdateDeferred } from './humanize.js';
-import { causeKeyForError, hostOfCauseKey, namesLinkDown } from './error-cause.js';
+import { causeKeyForError, hostOfCauseKey, linkCauseKey, namesLinkDown } from './error-cause.js';
 import { withOriginNote } from './origin.js';
 import { log } from '../../logging/index.js';
 
@@ -340,10 +340,16 @@ export function installLogErrorNotifications(
     // a secret sitting where a pattern expects a host would otherwise be
     // persisted into the key and rendered as a group heading.
     const redactedCause = redactSensitiveText(causeText);
+    // A producer that holds the error itself says its link-failure kind
+    // (link-failure.ts) in `meta.linkKind`: 'no-link' means the command never
+    // reached the host, whatever words the dial failed with, so it is the host's
+    // outage by kind, not by a wording this file must know. (`linkKind`, since
+    // other producers log a `linkFailure` sentence.)
+    const noLink = payload.meta?.linkKind === 'no-link';
     const causeKey = causeKeyForError({
       text: redactedCause,
       ...(metaHost ? { host: metaHost } : {}),
-    });
+    }) ?? (noLink ? linkCauseKey(metaHost) : undefined);
     // One host outage is ONE card. A dead link to a host fails every session on
     // it at once, and each failure used to be its own card (2026-10-24: seven
     // "Couldn't start a session" and seven "A session hit an error" for one
@@ -351,7 +357,7 @@ export function installLogErrorNotifications(
     // clouddev"), and retired by the cause's recovery: the host reconnecting.
     // Only for wording that says the link itself is down: a command that timed
     // out on a connected host stays its session's card, retired by that session.
-    const outageHost = causeKey && isSessionFamilyKey(recoveryKey) && namesLinkDown(redactedCause)
+    const outageHost = causeKey && isSessionFamilyKey(recoveryKey) && (noLink || namesLinkDown(redactedCause))
       ? hostOfCauseKey(causeKey) : null;
     if (outageHost) dedupKey = `logerr:cause:${causeKey}`;
 
