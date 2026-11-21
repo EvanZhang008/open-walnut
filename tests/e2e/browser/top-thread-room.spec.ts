@@ -166,7 +166,10 @@ test('the top keeps to a third of the panel: the long summary scrolls in its car
   const card = panel.getByTestId('top-thread')
   await expect(card).toHaveAttribute('data-thread-id', ids.thread, { timeout: 30_000 })
   await expect(card.getByTestId('top-thread-pos')).toHaveText('1 / 3')
-  await expect(panel.getByTestId('session-action-needed').locator('[data-testid="action-item"][data-kind="letter"]')).toHaveCount(2)
+  // The two letters are two pages of one card, one shown at a time (ask-pages.ts).
+  const strip = panel.getByTestId('session-action-needed')
+  await expect(strip.locator('[data-testid="action-item"][data-kind="letter"]')).toHaveCount(1)
+  await expect(strip).toHaveAttribute('data-pages', '2')
   await video.caption('Two letters and a thread with a long summary: the top keeps to a third, the chat stays')
 
   // 1. A third at most; the chat, the stepper, the choices, the box and Snooze in sight.
