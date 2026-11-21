@@ -484,9 +484,17 @@ class SqliteStatement implements Statement {
  * writers go on (WAL); bun has loaded SQLite for this process already
  * (bunSqlite), so the worker's is the same library.
  */
+/**
+ * How a worker thread's source (an eval string, which cannot import this module) gets SQLite:
+ * bun:sqlite, the library this process loaded already (bunSqlite) being process-wide. Every
+ * worker that opens SQLite starts with this line, so the one place that opens bun:sqlite stays
+ * this file.
+ */
+export const WORKER_SQLITE = "const { Database } = require('bun:sqlite')"
+
 const VACUUM_WORKER = String.raw`
 const { parentPort, workerData } = require('node:worker_threads')
-const { Database } = require('bun:sqlite')
+${WORKER_SQLITE}
 // A copy nobody waits on: on macOS it runs in the utility band, whatever band
 // the thread that started it runs in (src/lib/loop-thread-qos.ts raises the loop thread).
 if (process.platform === 'darwin') {
@@ -532,9 +540,9 @@ function vacuumIntoOffThread(file: string, temp: string, busyTimeout: number): P
 
 const INSPECT_WORKER = String.raw`
 const { parentPort, workerData } = require('node:worker_threads')
+${WORKER_SQLITE}
 let db
 try {
-  const { Database } = require('bun:sqlite')
   db = new Database(workerData.file, { readonly: true })
   const integrity = db.query('PRAGMA integrity_check').all().map((r) => Object.values(r)[0])
   const ok = integrity.length === 1 && integrity[0] === 'ok'

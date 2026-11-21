@@ -227,6 +227,7 @@ SOURCES=(
   src/lib/daemon-dir.ts
   src/providers/daemon-service-files.ts
   src/utils/file-lock.ts
+  src/utils/write-gate.ts
   src/providers/daemon-service-system.ts
   src/providers/daemon-service-handover.ts
   src/providers/service-launcher-script.ts

@@ -18,12 +18,12 @@
  * Cost: a database is held in the worker's memory while it is written out (its size).
  */
 import { Worker } from 'node:worker_threads'
-import Database from '../../lib/sqlite.js'
+import Database, { WORKER_SQLITE } from '../../lib/sqlite.js'
 import { CHUNK_BYTES, type FileDigest } from './chunks.js'
 
 const PIN_WORKER = String.raw`
 const { parentPort, workerData } = require('node:worker_threads')
-const { Database } = require('bun:sqlite')
+${WORKER_SQLITE}
 const fs = require('node:fs')
 const path = require('node:path')
 const open = []

@@ -34,6 +34,7 @@ const STORE_LOCKS = new Set<string>([
   'src/core/router/route-lock.ts: lock',                        // WALNUT_HOME/router/areas/<area>/items.sqlite route lock
   'src/core/triage/routing-rules.ts: file',                     // WALNUT_HOME/triage/routing-rules.json
   'src/commands/demo.ts: root.state',                           // Walnut's own Demo state, not user content
+  'src/core/standby/target.ts: this.t.state',                   // the standby copy's own state, owner-only, never a person's file
   'src/core/boards/board-store.ts: file',                       // WALNUT_HOME/boards/<task>.json
   'src/core/topics/topics-store.ts: file',                     // WALNUT_HOME/topics/<id>.json
   'src/core/bounded-memory.ts: this.filePath',                  // an agent's memory under WALNUT_HOME

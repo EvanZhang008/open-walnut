@@ -312,6 +312,8 @@ export const DAEMON_SOURCE_FILES = [
   // The store lock daemon-service-files.ts takes, bundled into daemon-service-cli.cjs: a lock
   // change must redeploy every host, or old and new lock code share the service files.
   'src/utils/file-lock.ts',
+  // The write gate file-lock.ts passes through (off unless the standby copy runs).
+  'src/utils/write-gate.ts',
   'src/providers/daemon-service-system.ts',
   'src/providers/daemon-service-handover.ts',
   // The service launcher: its script, its control from walnut daemon, the service heartbeat.
