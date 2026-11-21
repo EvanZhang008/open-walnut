@@ -15,7 +15,7 @@ import { allAlarms, BUILTIN_ALARMS, builtinAlarm, setCustomAlarms } from './alar
 import { CustomMetricRunner, customAlarmDefs, readCustomMetrics } from './custom-metrics.js'
 import { MinuteCollector } from './collect.js'
 import { fillPattern, MINUTE_MS } from './evaluate.js'
-import { effectiveOverride, FIX_TASKS_PER_DAY, HealthMonitor, overrideHolds, type FixMode } from './engine.js'
+import { effectiveOverride, FIX_TASKS_PER_DAY, HealthMonitor, INVESTIGATION_FIX_TASKS_PER_DAY, overrideHolds, type FixMode } from './engine.js'
 import { setGaugeSink } from './gauges.js'
 import { HealthStore } from './store.js'
 import type { AlarmDef, AlarmInstanceState, AlarmOverride, AlarmState } from './types.js'
@@ -265,7 +265,7 @@ export function healthView(m: HealthMonitor): HealthView {
   rows.sort((a, b) => ORDER[a.state] - ORDER[b.state] || b.since - a.since)
   const counts: Record<AlarmState, number> = { OK: 0, ALARM: 0, INSUFFICIENT_DATA: 0 }
   for (const r of rows) counts[r.state]++
-  return { checkedAt: m.now(), actions: actionsOn, counts, fixesToday: m.fixesToday, fixesPerDay: FIX_TASKS_PER_DAY, alarms: rows }
+  return { checkedAt: m.now(), actions: actionsOn, counts, fixesToday: m.fixesToday, fixesPerDay: FIX_TASKS_PER_DAY + INVESTIGATION_FIX_TASKS_PER_DAY, alarms: rows }
 }
 
 export interface AlarmDetail extends AlarmRow {

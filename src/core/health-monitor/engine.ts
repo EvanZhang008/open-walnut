@@ -5,8 +5,10 @@
  *
  * Rules that keep it quiet:
  *  - one fix task per alarm: while its task is open, a new episode reuses it;
- *  - at most `FIX_TASKS_PER_DAY` new fix tasks in 24 hours across all alarms;
- *    an alarm over the cap says so on the Health page and tries again later;
+ *  - at most `FIX_TASKS_PER_DAY` new fix tasks in 24 hours for the built-in alarms, and
+ *    as many again for investigations (log alarms and Walnut Health's own errors), each
+ *    pool counted on its own so a day of log spikes never starves the disk alarm;
+ *    an alarm over its cap says so on the Health page and tries again later;
  *  - an auto-fix runs once per episode; `then` waits its grace after it;
  *  - a muted or disabled alarm still evaluates but does nothing.
  */
@@ -28,10 +30,26 @@ import { effectiveOverride, overrideHolds, ownerOf, patchOverride, type Override
 export { effectiveOverride, overrideHolds } from './overrides.js'
 export { bootOnSameBuild } from './exit-trace.js'
 
+/** New fix tasks a day for the built-in alarms (disk, memory, host links, ...). */
 export const FIX_TASKS_PER_DAY = 5
-/** The share of them Walnut Health's own errors may take (alarm `health.errors`, one per category). */
+/**
+ * New fix tasks a day for investigations: log alarms and Walnut Health's own errors. A pool
+ * of their own, because they are open-ended and come in bursts: on 2026-11-20 five log
+ * spikes filled one shared cap, and the disk alarm rang for 9.5 hours with no fix task.
+ */
+export const INVESTIGATION_FIX_TASKS_PER_DAY = 5
+/** The share of the investigations Walnut Health's own errors may take (alarm `health.errors`, one per category). */
 export const HEALTH_ERRORS_FIX_TASKS_PER_DAY = 3
 const HEALTH_ERRORS_FIX_PREFIX = 'health.errors'
+const LOG_ALARM_PREFIX = 'log.'
+
+/** A `health.errors` instance (`health.errors{category=...}`), by its alarm id. */
+const isHealthErrors = (alarmId: string): boolean => alarmId.startsWith(`${HEALTH_ERRORS_FIX_PREFIX}{`)
+
+/** Is this alarm (instance or definition id) an investigation, counted in its own pool? */
+export function isInvestigation(alarmId: string): boolean {
+  return alarmId.startsWith(LOG_ALARM_PREFIX) || alarmId === HEALTH_ERRORS_FIX_PREFIX || isHealthErrors(alarmId)
+}
 const HISTORY_MAX = 50
 const EVENTS_KEEP_MS = 7 * 86_400_000
 /** An OK log alarm with no open fix task is forgotten after this. */
@@ -412,13 +430,17 @@ export class HealthMonitor {
     this.state.fixes = this.state.fixes.filter((f) => f.at > now - 86_400_000)
     // Walnut Health's own errors take at most a share of the day's fix tasks, so a burst of
     // categories never leaves the disk or a restart alarm without one.
-    const background = this.state.fixes.filter((f) => f.alarmId.startsWith(`${HEALTH_ERRORS_FIX_PREFIX}{`)).length
+    const background = this.state.fixes.filter((f) => isHealthErrors(f.alarmId)).length
     if (inst.defId === HEALTH_ERRORS_FIX_PREFIX && background >= HEALTH_ERRORS_FIX_TASKS_PER_DAY) {
       this.record(inst, done, { ok: false, detail: `waiting: ${HEALTH_ERRORS_FIX_TASKS_PER_DAY} background error investigations were already opened in the last 24 hours` }, now)
       return
     }
-    if (this.state.fixes.length >= FIX_TASKS_PER_DAY) {
-      this.record(inst, done, { ok: false, detail: `waiting: ${FIX_TASKS_PER_DAY} fix tasks were already opened in the last 24 hours` }, now)
+    // Each pool is counted on its own: investigations never use up the built-in alarms' room.
+    const investigation = isInvestigation(inst.id)
+    const cap = investigation ? INVESTIGATION_FIX_TASKS_PER_DAY : FIX_TASKS_PER_DAY
+    if (this.state.fixes.filter((f) => isInvestigation(f.alarmId) === investigation).length >= cap) {
+      const what = investigation ? 'investigations of log alarms and background errors' : 'fix tasks for built-in alarms'
+      this.record(inst, done, { ok: false, detail: `waiting: ${cap} ${what} were already opened in the last 24 hours` }, now)
       return
     }
     try {

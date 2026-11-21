@@ -11,10 +11,10 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { MinuteCollector } from '../../../src/core/health-monitor/collect.js'
-import { bootOnSameBuild, FIX_TASKS_PER_DAY, HealthMonitor, type FixTaskInput, type TellTaskInput } from '../../../src/core/health-monitor/engine.js'
+import { bootOnSameBuild, FIX_TASKS_PER_DAY, HealthMonitor, INVESTIGATION_FIX_TASKS_PER_DAY, isInvestigation, type FixTaskInput, type TellTaskInput } from '../../../src/core/health-monitor/engine.js'
 import { BUILTIN_ALARMS, setCustomAlarms } from '../../../src/core/health-monitor/alarms.js'
 import { customAlarmDefs } from '../../../src/core/health-monitor/custom-metrics.js'
-import { DAY_MS, hourStart, signatureId } from '../../../src/core/health-monitor/log-alarms.js'
+import { DAY_MS, hourStart, logDef, signatureId } from '../../../src/core/health-monitor/log-alarms.js'
 import { HealthStore, type ServerEvent } from '../../../src/core/health-monitor/store.js'
 import { BUILTIN_ALARMS } from '../../../src/core/health-monitor/alarms.js'
 import { signatureKey } from '../../../src/core/health-monitor/signature.js'
@@ -242,6 +242,53 @@ describe('health monitor engine', () => {
     const waiting = hosts.map((x) => h.m.alarms[`host.link{host=${x}}`]).filter((a) => a.actions.some((x) => x.kind === 'fix-task' && !x.ok))
     expect(waiting).toHaveLength(2)
     expect(waiting[0].actions.find((x) => x.kind === 'fix-task')!.detail).toContain('waiting')
+  })
+
+  it('a day of log-alarm and background-error fix tasks never uses up the disk alarm\'s room', async () => {
+    // 2026-11-20: five log spikes filled one shared cap; the disk alarm rang 23:09 to 08:44
+    // with no fix task while the Mac fell to 21 GB.
+    const fixes = [
+      ...Array.from({ length: INVESTIGATION_FIX_TASKS_PER_DAY - 1 }, (_, i) => ({ at: START - (i + 1) * 3_600_000, alarmId: `log.spike:k${i}`, taskId: `spike-${i}` })),
+      { at: START - 600_000, alarmId: 'health.errors{category=sessions}', taskId: 'errors-1' },
+    ]
+    await fs.writeFile(path.join(dir, 'state.json'), JSON.stringify({ version: 1, alarms: {}, overrides: {}, events: [], fixes }))
+    const h = await harness()
+    h.disk.free = 20
+    h.disk.usedPct = 96
+    await minutes(h, 50)
+    expect(h.m.alarms['disk.free'].state).toBe('ALARM')
+    expect(h.fixes.map((f) => f.alarmId)).toEqual(['disk.free'])
+    expect(h.m.fixesToday).toBe(INVESTIGATION_FIX_TASKS_PER_DAY + 1)
+  })
+
+  it('investigations have their own daily cap: a full day of them makes a new log alarm wait, not a built-in one', async () => {
+    const fixes = Array.from({ length: INVESTIGATION_FIX_TASKS_PER_DAY }, (_, i) => ({ at: START - (i + 1) * 3_600_000, alarmId: `log.chronic:k${i}`, taskId: `c-${i}` }))
+    await fs.writeFile(path.join(dir, 'state.json'), JSON.stringify({ version: 1, alarms: {}, overrides: {}, events: [], fixes }))
+    const sig = signatureKey('session', 'gateway relay refused')
+    const hours: Record<string, Record<string, number>> = {}
+    for (let d = 1; d <= 3; d++) hours[String(hourStart(START + 30 * 60_000) - d * DAY_MS)] = { [signatureId(sig)]: 10 }
+    const meta = { [signatureId(sig)]: { sig, level: 'warn', sample: 'session: gateway relay refused', lastAt: START - DAY_MS } }
+    await fs.writeFile(path.join(dir, 'log-hours.json'), JSON.stringify({ version: 1, hours, meta }))
+    const h = await harness()
+    const logger = createSubsystemLogger('session')
+    await minutes(h, 30, () => { for (let k = 0; k < 3; k++) logger.warn('gateway relay refused', { n: k }) })
+    const spike = h.m.alarms[`log.spike:${signatureId(sig)}`]
+    expect(spike?.state).toBe('ALARM')
+    expect(h.fixes).toHaveLength(0)
+    expect(spike.actions.find((a) => a.kind === 'fix-task')).toMatchObject({ ok: false, detail: expect.stringContaining('waiting') })
+  })
+
+  it('every built-in alarm counts in the built-in pool, every log alarm in the investigations pool', () => {
+    // A new built-in alarm must never land in the pool that log spikes can fill; only Walnut
+    // Health's own errors (one investigation per category) are an investigation by design.
+    expect(BUILTIN_ALARMS.filter((d) => isInvestigation(d.id)).map((d) => d.id)).toEqual(['health.errors'])
+    expect(isInvestigation('disk.free')).toBe(false)
+    for (const kind of ['spike', 'chronic'] as const) {
+      const def = logDef(kind, signatureKey('session', 'x'), 'warn')
+      expect(isInvestigation(def.id)).toBe(true)
+      expect(isInvestigation(`${def.id}:${signatureId(signatureKey('session', 'x'))}`)).toBe(true)
+    }
+    expect(isInvestigation('health.errors{category=sessions}')).toBe(true)
   })
 
   it('fix tasks off: the alarm shows, nothing is filed; turned back on, the alarm still ringing gets its task', async () => {
