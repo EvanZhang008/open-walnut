@@ -387,8 +387,9 @@ export class SessionHealthMonitor {
     } catch { /* observability is best-effort */ }
     try {
       // Memory ledger: one sample line per 10 min, a warn for a cache over its budget.
-      const { sampleMemory } = await import('./observability/memory-ledger.js')
+      const { sampleMemory, nudgeGcUnderPressure } = await import('./observability/memory-ledger.js')
       sampleMemory()
+      nudgeGcUnderPressure()
     } catch { /* observability is best-effort */ }
 
     // ── Active-set snapshot per cycle (I1) ───────────────────────────────────

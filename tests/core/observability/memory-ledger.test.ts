@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   registerMemoryHolder, readMemoryHolders, memoryReport, sampleMemory, stringCharsOf,
-  memoryHolderNames, SAMPLE_EVERY_MS, sampledStringChars, _resetMemoryLedgerForTesting,
+  memoryHolderNames, SAMPLE_EVERY_MS, sampledStringChars, nudgeGcUnderPressure, GC_NUDGE_RSS_MB, GC_NUDGE_EVERY_MS, _resetMemoryLedgerForTesting,
 } from '../../../src/core/observability/memory-ledger.js';
 import { log } from '../../../src/logging/index.js';
 
@@ -82,6 +82,33 @@ describe('sampledStringChars', () => {
     expect(sampledStringChars(rows)).toBe(800 * 11);
     expect(sampledStringChars([{ a: 'abc' }])).toBe(4);
     expect(sampledStringChars(null)).toBe(0);
+  });
+});
+
+describe('nudgeGcUnderPressure', () => {
+  it('asks for an async collection over the threshold, at most once per interval, and logs what it freed', () => {
+    const info = vi.spyOn(log.obs, 'info').mockImplementation(() => {});
+    const gc = vi.fn();
+    try {
+      const t0 = 9_000_000_000;
+      nudgeGcUnderPressure(t0, gc, GC_NUDGE_RSS_MB - 1);
+      expect(gc).not.toHaveBeenCalled();
+      nudgeGcUnderPressure(t0, gc, GC_NUDGE_RSS_MB + 500);
+      expect(gc).toHaveBeenCalledTimes(1);
+      expect(gc).toHaveBeenCalledWith(false);
+      nudgeGcUnderPressure(t0 + 30_000, gc, GC_NUDGE_RSS_MB + 100);
+      expect(gc).toHaveBeenCalledTimes(1);
+      expect(info).toHaveBeenCalledWith('memory gc nudge', { beforeMb: GC_NUDGE_RSS_MB + 500, afterMb: GC_NUDGE_RSS_MB + 100, freedMb: 400 });
+      nudgeGcUnderPressure(t0 + GC_NUDGE_EVERY_MS, gc, GC_NUDGE_RSS_MB + 100);
+      expect(gc).toHaveBeenCalledTimes(2);
+    } finally { info.mockRestore(); }
+  });
+
+  it('does nothing when turned off', () => {
+    const gc = vi.fn();
+    process.env.WALNUT_GC_NUDGE = '0';
+    try { nudgeGcUnderPressure(1, gc, 99_999); } finally { delete process.env.WALNUT_GC_NUDGE; }
+    expect(gc).not.toHaveBeenCalled();
   });
 });
 

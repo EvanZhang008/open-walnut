@@ -203,9 +203,48 @@ export function sampleMemory(now = Date.now()): void {
   }
 }
 
+// ── A collection when the process is big ─────────────────────────────────
+//
+// Most of what the live server holds at its peaks is garbage the engine has not
+// collected yet: big list answers, voice drafts (up to 4 MB of base64 each), history
+// tails. On a copy of the maintainer's data RSS stayed at 1.3 GB for 80 s after a burst
+// of list calls and fell to 0.85 GB once a collection ran (2026-11-20). The engine sizes
+// its next collection from the machine's RAM, so on a 48 GB Mac it waits long. When RSS
+// is over GC_NUDGE_RSS_MB, the health tick asks for a collection, at most every
+// GC_NUDGE_EVERY_MS. Bun.gc(false) asks for it asynchronously: the marking runs beside
+// the event loop, never a synchronous full stop. WALNUT_GC_NUDGE=0 turns it off.
+export const GC_NUDGE_RSS_MB = 1536;
+export const GC_NUDGE_EVERY_MS = 3 * 60_000;
+let lastNudgeAt = -Infinity;
+let nudgedFromMb: number | null = null;
+
+type GcFn = (sync: boolean) => void;
+function bunGc(): GcFn | null {
+  const b = (globalThis as { Bun?: { gc?: GcFn } }).Bun;
+  return typeof b?.gc === 'function' ? b.gc.bind(b) : null;
+}
+
+/**
+ * Health-tick hook (every 30 s): ask the engine for a collection when the process is
+ * over GC_NUDGE_RSS_MB, and log what the last one gave back at the next tick.
+ */
+export function nudgeGcUnderPressure(now = Date.now(), gc: GcFn | null = bunGc(), rssMb = processMemoryMb().rssMb): void {
+  if (process.env.WALNUT_GC_NUDGE === '0' || !gc) return;
+  if (nudgedFromMb !== null) {
+    log.obs.info('memory gc nudge', { beforeMb: nudgedFromMb, afterMb: rssMb, freedMb: nudgedFromMb - rssMb });
+    nudgedFromMb = null;
+  }
+  if (rssMb < GC_NUDGE_RSS_MB || now - lastNudgeAt < GC_NUDGE_EVERY_MS) return;
+  lastNudgeAt = now;
+  nudgedFromMb = rssMb;
+  gc(false);
+}
+
 /** Reset sampler state (tests only). */
 export function _resetMemoryLedgerForTesting(): void {
   lastSampleAt = 0;
   lastHeapWalkAt = -Infinity;
+  lastNudgeAt = -Infinity;
+  nudgedFromMb = null;
   overWarnedAt.clear();
 }
